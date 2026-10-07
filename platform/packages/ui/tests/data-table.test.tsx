@@ -5,6 +5,7 @@ import {
   DataTable,
   measureVisibleRowsHeight,
   resolveVisibleRows,
+  shouldRemeasureOnResize,
   stabilizeMeasuredHeight,
   type DataTableColumn,
 } from "../src/components/data/data-table";
@@ -144,6 +145,27 @@ describe("表示行数の計算", () => {
     // 未測定・測れないときは測定値に従う。
     expect(stabilizeMeasuredHeight(undefined, 133)).toBe(133);
     expect(stabilizeMeasuredHeight(133, undefined)).toBeUndefined();
+  });
+
+  it("スクロール領域の高さだけの変化（自分で書いた max-height）では測り直さない（#1232）", () => {
+    const scroller = { id: "scroller" };
+    const table = { id: "table" };
+    const widths: { scroller?: number } = {};
+    const entry = (target: unknown, width: number) => ({ target, contentRect: { width } });
+    // observe の最初の通知（幅が未知）は測り直す。
+    expect(shouldRemeasureOnResize([entry(table, 640), entry(scroller, 640)], scroller, widths)).toBe(true);
+    expect(widths.scroller).toBe(640);
+    // 測った高さを max-height に書いた後の通知は、スクロール領域の幅が同じなので測り直さない（循環を断つ）。
+    expect(shouldRemeasureOnResize([entry(scroller, 640)], scroller, widths)).toBe(false);
+    expect(shouldRemeasureOnResize([entry(scroller, 640)], scroller, widths)).toBe(false);
+    // 幅の変化（横スクロールバーの出入り・分割ペインのドラッグ）は測り直し、次の比較の基準も更新する。
+    expect(shouldRemeasureOnResize([entry(scroller, 626.4)], scroller, widths)).toBe(true);
+    expect(widths.scroller).toBe(626.4);
+    expect(shouldRemeasureOnResize([entry(scroller, 626.4)], scroller, widths)).toBe(false);
+    // 表（内容）の変化は幅が同じでも測り直す（行の追加・折り返し）。
+    expect(shouldRemeasureOnResize([entry(table, 626.4)], scroller, widths)).toBe(true);
+    expect(shouldRemeasureOnResize([entry(scroller, 626.4), entry(table, 626.4)], scroller, widths)).toBe(true);
+    expect(shouldRemeasureOnResize([], scroller, widths)).toBe(false);
   });
 });
 

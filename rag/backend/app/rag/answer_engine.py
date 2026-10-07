@@ -328,6 +328,9 @@ class AnswerEngine:
             citations=[],
             diagnostics={
                 "answer_source": "approved_faq",
+                # 承認済みの回答をそのまま使うので、対応は「答えた」（#1235）。
+                "outcome": "answered",
+                "envelope": {"schema_version": 1, "outcome": "answered"},
                 "approved_faq_question": faq_question,
                 # 回答した時点の承認済みの回答。FAQ が変わっても根拠の原文を出せる(#737)。
                 "approved_faq_answer": faq_answer,
@@ -1180,6 +1183,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "confidence": result.confidence,
         "needs_human_review": result.needs_human_review,
         "insufficient_reason": result.insufficient_reason,
+        # 回答の構造（AnswerEnvelope。#1235）。outcome は回答の対応（answered / conditional / …）。
+        "outcome": (result.envelope or {}).get("outcome"),
+        "envelope": dict(result.envelope or {}),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,

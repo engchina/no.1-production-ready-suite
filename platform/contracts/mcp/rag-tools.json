@@ -446,6 +446,38 @@
       },
       "outputSchema": {
         "$defs": {
+          "AnswerRequest": {
+            "properties": {
+              "id": {
+                "description": "質問の要求単位の ID（Q1 など）。",
+                "title": "Id",
+                "type": "string"
+              },
+              "text": {
+                "description": "要求の原文。",
+                "title": "Text",
+                "type": "string"
+              },
+              "status": {
+                "description": "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。",
+                "enum": [
+                  "addressed",
+                  "partial",
+                  "missing",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "status"
+            ],
+            "title": "AnswerRequest",
+            "type": "object"
+          },
           "EvidenceLocator": {
             "description": "根拠の場所（種類によって空の項目がある）。",
             "properties": {
@@ -697,6 +729,51 @@
             "title": "Guardrail Warnings",
             "type": "array"
           },
+          "outcome": {
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。",
+            "enum": [
+              "answered",
+              "conditional",
+              "needs_clarification",
+              "needs_environment_data",
+              "needs_human",
+              "insufficient_evidence"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "requests": {
+            "description": "質問の要求単位ごとの充足（背景の文は含めない）。",
+            "items": {
+              "$ref": "#/$defs/AnswerRequest"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "conditions": {
+            "description": "回答の説明が成り立つ条件（原文の語句。質問から確かめられないもの）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "gaps": {
+            "description": "資料から確かめられない点。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "confirmations": {
+            "description": "回答を確定するために確かめる現場のデータ・別の資料。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Confirmations",
+            "type": "array"
+          },
           "insufficient_reason": {
             "anyOf": [
               {
@@ -733,6 +810,7 @@
           "answer",
           "trace_id",
           "guardrail_warnings",
+          "outcome",
           "evidence",
           "evidence_omitted"
         ],

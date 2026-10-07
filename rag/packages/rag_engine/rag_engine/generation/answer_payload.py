@@ -238,6 +238,8 @@ def answer_result_payload(
         "evidence_facts": list(result.evidence_facts),
         "generation_trace": result.generation_trace,
         "task_contract": result.task_contract,
+        # 回答の構造（AnswerEnvelope。#1235）。
+        "envelope": result.envelope,
         "rejected_queries": list(result.rejected_queries),
         "primary_source_run_id": result.primary_source_run_id,
         "reasoning_summary": result.reasoning_summary,
