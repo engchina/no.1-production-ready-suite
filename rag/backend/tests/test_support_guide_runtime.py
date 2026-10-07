@@ -116,6 +116,27 @@ def test_match_picks_the_best_guide_and_reads_conditions() -> None:
     # 渡した値（確認の答え）を優先する。不正な値は使わない。
     assert match_guide(GUIDES, "権限を付与", {"target": "個別"}).decision == "answer"  # type: ignore[union-attr]
     assert match_guide(GUIDES, "権限を付与", {"target": "全員"}).decision == "clarify"  # type: ignore[union-attr]
+    # 言い換え（value_aliases）が質問に出れば、その選択肢が分かっているとみなす。
+    aliased = [
+        (
+            "g-a",
+            1,
+            grant_guide(
+                conditions=[
+                    {
+                        "id": "target",
+                        "label": "付与先",
+                        "allowed_values": ["個別", "グループ"],
+                        "question": "どちらですか？",
+                        "value_aliases": {"個別": ["検証用アカウント"]},
+                    }
+                ]
+            ),
+        )
+    ]
+    by_alias = match_guide(aliased, "検証用アカウントにアクセス権限を付与したい")
+    assert by_alias is not None and by_alias.decision == "answer"
+    assert by_alias.summary()["known_conditions"][0]["value"] == "個別"
     # チャット（送信の前に確かめる）では、残った不明の条件は分岐で答える。
     assert match_guide(GUIDES, "権限を付与", interactive=True).decision == "branch"  # type: ignore[union-attr]
 

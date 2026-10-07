@@ -153,8 +153,15 @@ def condition_states(
                 states.append(ConditionState(condition, value, "user"))
                 continue
         if condition.type == "enum":
+            # 選択肢そのものか、その言い換え（value_aliases。#1237）が質問に出た選択肢。
             found = [
-                option for option in condition.allowed_values if _normalized(option) in normalized
+                option
+                for option in condition.allowed_values
+                if any(
+                    _normalized(word) in normalized
+                    for word in (option, *condition.value_aliases.get(option, []))
+                    if _normalized(word)
+                )
             ]
             if len(found) == 1:
                 states.append(ConditionState(condition, found[0], "question"))
