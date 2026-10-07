@@ -558,6 +558,84 @@ for (const viewport of [
       "合格"
     );
     await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("拒答した");
+    // 業務支援の対応（#1231）は、対象のケースが無い評価では出さない。
+    await expect(page.getByTestId("evaluation-perspective-handling")).toHaveCount(0);
+    await expect(table.getByTestId("evaluation-case-handling")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+
+  test(`業務支援の対応の指標と、ケースごとの対応・不足の手順・危険な表現を出す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const base = evaluationMetrics("standard");
+    await mockEvaluationJobs(page, {
+      runResult: () => ({
+        ...base,
+        handling_accuracy: 0.5,
+        step_order_score: 0.6,
+        safe_answer_rate: 0.5,
+        condition_coverage: null,
+        metric_case_counts: {
+          ...base.metric_case_counts,
+          handling_accuracy: 2,
+          step_order_score: 1,
+          safe_answer_rate: 2,
+          condition_coverage: 0,
+        },
+        failure_reason_counts: { step_missing: 1, forbidden_action: 1 },
+        category_breakdown: {
+          clarification_required: {
+            case_count: 1,
+            error_count: 0,
+            answer_pass_rate: null,
+            answer_keyword_hit_rate: null,
+            abstain_rate: 0,
+            refusal_correct_rate: 1,
+            handling_correct_rate: 0,
+            step_order_score: null,
+            safe_answer_rate: 0,
+          },
+        },
+        case_results: [
+          {
+            ...base.case_results[0],
+            observed_outcome: "answered",
+            outcome_source: "inferred",
+            handling_correct: false,
+            step_order_score: 0.6,
+            missing_steps: ["テスト送信"],
+            forbidden_checked: true,
+            forbidden_hits: ["グループに付与してください"],
+          },
+          {
+            ...base.case_results[1],
+            observed_outcome: "insufficient_evidence",
+            outcome_source: "explicit",
+            handling_correct: true,
+          },
+        ],
+      }),
+      autoComplete: true,
+    });
+
+    await page.goto("/evaluation");
+    await page.getByRole("button", { name: "評価実行" }).click();
+
+    const handling = page.getByTestId("evaluation-perspective-handling");
+    await expect(handling.getByRole("heading", { name: "対応", exact: true })).toBeVisible();
+    await expect(page.getByTestId("evaluation-metric-handling_accuracy")).toContainText("50%");
+    await expect(page.getByTestId("evaluation-metric-condition_coverage")).toContainText("—");
+    await expect(page.getByTestId("evaluation-failure-reasons")).toContainText("危険な操作を提示: 1");
+    const categories = page.getByTestId("evaluation-category-breakdown");
+    await expect(categories.getByRole("columnheader", { name: "危険な回答の無さ" })).toBeAttached();
+    const table = page.getByTestId("evaluation-case-scroll-region");
+    const first = table.getByTestId("evaluation-case-handling").first();
+    await expect(first).toContainText("回答（推定）");
+    await expect(first).toContainText("期待と違う");
+    await expect(first).toContainText("不足・順序違いの手順: テスト送信");
+    await expect(first).toContainText("危険な表現: グループに付与してください");
+    await expect(table.getByTestId("evaluation-case-handling").nth(1)).toContainText("根拠不足（拒答）");
     await expectNoPageOverflow(page);
   });
 }

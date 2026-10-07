@@ -19,6 +19,7 @@ RAG のチャットは画面の機能で、MCP では提供しない（#787）�
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException, Request
@@ -156,6 +157,17 @@ class EvidenceLocator(BaseModel):
     row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
     row_end: int | None = Field(default=None, description="シートの終了の行。")
     cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
+    page_label_start: str | None = Field(
+        default=None,
+        description="開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+    )
+    page_label_end: str | None = Field(default=None, description="終了の頁の印刷の頁番号。")
+    bbox: list[float] | None = Field(
+        default=None, description="開始の頁の中の領域 [x0, y0, x1, y1]（分かるときだけ）。"
+    )
+    bbox_unit: str | None = Field(
+        default=None, description="bbox の単位（absolute=頁の座標 / normalized=0〜1）。"
+    )
 
 
 class RagEvidence(BaseModel):
@@ -230,6 +242,15 @@ class SearchOutput(BaseModel):
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
 
 
+class RetrieveEvidenceOutput(BaseModel):
+    trace_id: str
+    guardrail_warnings: list[str]
+    evidence: list[RagEvidence] = Field(
+        description="検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。"
+    )
+    evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+
+
 class ReadSourceOutput(BaseModel):
     evidence_id: str
     document_id: str
@@ -285,7 +306,25 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         row_start=_metadata_int(metadata, "row_start") if sheet_name else None,
         row_end=_metadata_int(metadata, "row_end") if sheet_name else None,
         cell_range=_metadata_str(metadata, "cell_range") if sheet_name else None,
+        page_label_start=_metadata_str(metadata, "page_label_start") if page_start else None,
+        page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
+        bbox=_bbox(metadata.get("bbox")),
+        bbox_unit=_metadata_str(metadata, "bbox_unit") if _bbox(metadata.get("bbox")) else None,
     )
+
+
+def _bbox(value: object) -> list[float] | None:
+    """chunk の metadata の bbox（JSON の文字列か list）を 4 つの数にする。"""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    if not all(isinstance(item, int | float) and not isinstance(item, bool) for item in value):
+        return None
+    return [float(item) for item in value]
 
 
 def _float_or_none(value: object) -> float | None:
@@ -470,6 +509,19 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         return SearchOutput(**_answer_fields(result, arguments.evidence_limit))
 
+    async def retrieve_evidence(arguments: SearchInput) -> RetrieveEvidenceOutput:
+        # 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・生成）は作らない。
+        request = _search_request(arguments).model_copy(update={"generate_answer": False})
+        enforce_rate_limit("search", http_request)
+        result = await search_route._run_search_with_timeout(request)
+        limit = arguments.evidence_limit
+        return RetrieveEvidenceOutput(
+            trace_id=result.trace_id,
+            guardrail_warnings=list(result.guardrail_warnings),
+            evidence=[_evidence(chunk) for chunk in result.citations[:limit]],
+            evidence_omitted=max(0, len(result.citations) - limit),
+        )
+
     return McpServer(
         name=MCP_SERVER_NAME,
         version=get_settings().app_version,
@@ -492,6 +544,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=SearchInput,
                 handler=search,
                 output_model=SearchOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_retrieve_evidence",
+                description=(
+                    "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
+                    "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
+                ),
+                input_model=SearchInput,
+                handler=retrieve_evidence,
+                output_model=RetrieveEvidenceOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(

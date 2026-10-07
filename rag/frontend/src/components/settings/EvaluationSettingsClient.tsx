@@ -240,7 +240,7 @@ function SuiteMetrics({ suite }: { suite: EvaluationSuiteStatusData | null }) {
         {t("settings.evaluation.metrics.title", { suite: suiteLabel(suite.name) })}
       </h2>
       <p className="mt-1 text-xs text-fg-muted">{t("settings.evaluation.metrics.description")}</p>
-      <div className="mt-3 grid gap-4 lg:grid-cols-3">
+      <div className="mt-3 grid gap-4 lg:grid-cols-2">
         {EVALUATION_PERSPECTIVES.map((perspective) => (
           <div key={perspective.id} className="min-w-0">
             <h3 className="text-sm font-semibold text-fg">{perspectiveLabel(perspective.id)}</h3>

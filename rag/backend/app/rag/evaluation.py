@@ -20,12 +20,12 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from time import perf_counter
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
@@ -45,6 +45,12 @@ from app.rag.answer_timeout import (
 )
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.evaluation_handling import (
+    condition_coverage,
+    forbidden_hits,
+    observed_outcome,
+    step_order_score,
+)
 from app.rag.file_processing_evaluation import citation_traceability_coverage
 from app.rag.guardrails import evaluate_groundedness
 from app.rag.observability import (
@@ -207,6 +213,19 @@ class _Aggregate:
         return {metric: len(self.values.get(metric, [])) for metric in EVALUATION_METRIC_NAMES}
 
 
+ProfileResolver = Callable[[SearchRequest, Settings], Awaitable[tuple[SearchRequest, Settings]]]
+
+
+async def _resolve_profile_context(
+    request: SearchRequest, settings: Settings
+) -> tuple[SearchRequest, Settings]:
+    """検索・回答と同じ解決で、プロファイルの KB・回答の設定・業務ガイドを当てる（#1249）。"""
+    from app.api.routes.search import _resolve_query_context
+
+    resolved, resolved_settings, _kb, _view = await _resolve_query_context(request, settings)
+    return resolved, resolved_settings
+
+
 class EvaluationRunner:
     """小規模な golden set を使って検索・根拠・回答の品質を評価する。"""
 
@@ -215,9 +234,11 @@ class EvaluationRunner:
         pipeline: SearchPipeline | None = None,
         settings: Settings | None = None,
         answer_judge: AnswerJudge | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
+        self._profile_resolver = profile_resolver or _resolve_profile_context
         # 既定の pipeline(実環境)では、標準回答のあるケースを LLM で評価する。
         # テストで pipeline を注入したときは、明示した judge だけを使う。
         self._answer_judge: AnswerJudge | None = answer_judge
@@ -233,6 +254,7 @@ class EvaluationRunner:
         thresholds: EvaluationThresholds | None = None,
         rag_overrides: EvaluationRagOverrides | None = None,
         *,
+        search_answer_profile_id: str | None = None,
         time_budget_seconds: float | None = None,
         progress: EvaluationProgressCallback | None = None,
     ) -> EvaluationMetrics:
@@ -243,6 +265,9 @@ class EvaluationRunner:
         その秒数で打ち切る（同期の HTTP の待ちを超えないため）。上限に達したら実行中のケースを
         打ち切り、残りのケースは実行せずに失敗として記録する。`progress` には、ケースを始める
         前と最後のケースの後に進捗を渡す（評価 job。#390）。
+
+        `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
+        設定・用語・ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
         """
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
@@ -280,9 +305,20 @@ class EvaluationRunner:
             limited_by_budget = remaining is not None and remaining < case_limit
             case_started_at = perf_counter()
             try:
+                run_case: Any = partial(pipeline.run, request, trace_id)
+                if search_answer_profile_id:
+                    # プロファイルの解決（KB・回答の設定・業務ガイド）。失敗はケースの失敗にする。
+                    request, case_settings = await self._profile_resolver(
+                        request.model_copy(
+                            update={"search_answer_profile_id": search_answer_profile_id}
+                        ),
+                        effective_settings,
+                    )
+                    case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
+                    run_case = partial(case_pipeline.run, request, trace_id)
                 # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
                 response = await run_answer_with_timeout(
-                    partial(pipeline.run, request, trace_id),
+                    run_case,
                     effective_settings,
                     timeout_seconds=remaining if limited_by_budget else None,
                 )
@@ -396,6 +432,7 @@ class EvaluationRunner:
                 knowledge_base_ids=experiment.knowledge_base_ids,
                 thresholds=thresholds,
                 rag_overrides=experiment.rag_overrides,
+                search_answer_profile_id=experiment.search_answer_profile_id,
                 time_budget_seconds=None if remaining is None else max(0.0, remaining),
                 progress=_experiment_progress(
                     progress,
@@ -545,7 +582,7 @@ def _case_result(
     hits: list[str] = []
     context_recall: float | None = None
     reciprocal_rank: float | None = None
-    if relevant:
+    if relevant and not _skips_retrieval(response):
         hits = [doc_id for doc_id in retrieved_ids if doc_id in relevant]
         context_recall = len(set(hits)) / len(relevant)
         reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
@@ -569,16 +606,17 @@ def _case_result(
         if case.expected_answer_keywords
         else None
     )
+    handling = _handling_scores(case, response, abstained=abstained)
     failure_reasons = _case_failure_reasons(
         answerable=answerable,
-        has_relevant=bool(relevant),
+        has_relevant=bool(relevant) and not _skips_retrieval(response),
         relevant_count=len(relevant),
         hit_count=len(set(hits)),
         abstained=abstained,
         keyword_hit=keyword_hit,
         guardrail_warnings=response.guardrail_warnings,
         judgement=judgement,
-    )
+    ) + _handling_failure_reasons(handling)
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
@@ -595,6 +633,7 @@ def _case_result(
         answer_keyword_hit=keyword_hit,
         abstained=abstained,
         refusal_correct=abstained != answerable,
+        **handling,
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
         failure_reasons=list(failure_reasons),
@@ -603,8 +642,75 @@ def _case_result(
     )
 
 
+def _handling_scores(
+    case: EvaluationCase, response: SearchResponse, *, abstained: bool
+) -> dict[str, Any]:
+    """業務支援の採点（対応・手順・危険な回答・条件。#1231）。期待の無い項目は None / 空。"""
+    observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
+    scores: dict[str, Any] = {
+        "observed_outcome": observed.outcome,
+        "outcome_source": observed.source,
+    }
+    if case.expected_outcomes:
+        scores["handling_correct"] = observed.outcome in case.expected_outcomes
+    if case.expected_steps:
+        score, missing = step_order_score(response.answer, case.expected_steps)
+        scores["step_order_score"] = _round(score)
+        scores["missing_steps"] = missing
+    if case.forbidden_phrases:
+        scores["forbidden_checked"] = True
+        scores["forbidden_hits"] = forbidden_hits(response.answer, case.forbidden_phrases)
+    if case.required_conditions:
+        coverage, missing = condition_coverage(response.answer, case.required_conditions)
+        scores["condition_coverage"] = _round(coverage)
+        scores["missing_conditions"] = missing
+    return scores
+
+
+def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailureReason]:
+    reasons: list[EvaluationFailureReason] = []
+    if scores.get("handling_correct") is False:
+        reasons.append("unexpected_handling")
+    step_score = scores.get("step_order_score")
+    if step_score is not None and step_score < 1.0:
+        reasons.append("step_missing")
+    if scores.get("forbidden_hits"):
+        reasons.append("forbidden_action")
+    if scores.get("missing_conditions"):
+        reasons.append("condition_missing")
+    return reasons
+
+
+def _safe_answer(result: EvaluationCaseResult, checked: bool) -> float | None:
+    if not checked:
+        return None
+    return 0.0 if result.forbidden_hits else 1.0
+
+
+# 検索をせずに利用者へ確かめる・人へ引き継ぐ回答（#1259）。拒答でも検索の取りこぼしでもない。
+_NO_RETRIEVAL_OUTCOMES = frozenset({"needs_clarification", "needs_human"})
+
+
+def _explicit_outcome(response: SearchResponse) -> str | None:
+    details = response.diagnostics.answer or {}
+    outcome = details.get("outcome")
+    return outcome if isinstance(outcome, str) and outcome else None
+
+
+def _skips_retrieval(response: SearchResponse) -> bool:
+    """確認の質問・人への引き継ぎで引用の無い回答（検索の指標の対象外）。"""
+    return _explicit_outcome(response) in _NO_RETRIEVAL_OUTCOMES and not response.citations
+
+
 def is_abstained(response: SearchResponse) -> bool:
-    """回答が「資料から答えられない」旨だけか(拒答)を、回答の記録から判定する。"""
+    """回答が「資料から答えられない」旨だけか(拒答)を、回答の記録から判定する。
+
+    回答の記録が対応（outcome。#1235）を持つときは insufficient_evidence だけを拒答とする（確認の
+    質問・人への引き継ぎは拒答ではない。#1259）。持たない古い記録は本文・引用・不足の理由で判定する。
+    """
+    outcome = _explicit_outcome(response)
+    if outcome is not None:
+        return outcome == "insufficient_evidence"
     details = response.diagnostics.answer or {}
     return is_abstained_answer(
         response.answer, response.citations, str(details.get("insufficient_reason") or "")
@@ -624,6 +730,10 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
         aggregate.add("claim_support_rate", _bool_value(judgement.claims_supported))
         aggregate.add("requirement_coverage", judgement.requirement_coverage)
         aggregate.add("answer_pass_rate", _bool_value(judgement.passed))
+    aggregate.add("handling_accuracy", _bool_value(result.handling_correct))
+    aggregate.add("step_order_score", result.step_order_score)
+    aggregate.add("safe_answer_rate", _safe_answer(result, result.forbidden_checked))
+    aggregate.add("condition_coverage", result.condition_coverage)
 
 
 def _experiment_progress(
@@ -893,6 +1003,10 @@ def _rate(values: list[bool]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+def _mean(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
 def category_breakdown(
     results: list[EvaluationCaseResult],
 ) -> dict[str, EvaluationCategorySummary]:
@@ -932,6 +1046,23 @@ def category_breakdown(
                     for result in succeeded
                     if result.refusal_correct is not None
                 ]
+            ),
+            handling_correct_rate=_rate(
+                [
+                    bool(result.handling_correct)
+                    for result in succeeded
+                    if result.handling_correct is not None
+                ]
+            ),
+            step_order_score=_mean(
+                [
+                    result.step_order_score
+                    for result in succeeded
+                    if result.step_order_score is not None
+                ]
+            ),
+            safe_answer_rate=_rate(
+                [not result.forbidden_hits for result in succeeded if result.forbidden_checked]
             ),
         )
     return breakdown

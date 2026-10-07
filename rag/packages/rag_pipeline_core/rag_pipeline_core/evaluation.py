@@ -11,6 +11,9 @@
 - 回答: answer_keyword_hit_rate(期待する語を含むか)/ refusal_accuracy(答えるべきでないときに
   答えず、答えるべきときに答えたか)/ requirement_coverage(標準回答の必要な項目を網羅したか)/
   answer_pass_rate(標準回答による評価の合格)
+- 対応（業務支援。#1231）: handling_accuracy(期待する対応か)/ step_order_score(手順の網羅と順序)/
+  safe_answer_rate(勧めてはいけない操作を含まないか。どちらの基準でも 100% を求める)/
+  condition_coverage(触れるべき条件に触れたか)
 
 プリセットは「標準」と「厳格」の 2 つ。閾値は、そのケースの集合で測れた指標だけに適用する
 (標準回答の無い golden set では、標準回答による評価の閾値を判定しない)。閾値は素の
@@ -56,6 +59,10 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
             "refusal_accuracy": 0.9,
             "requirement_coverage": 0.8,
             "answer_pass_rate": 0.7,
+            "handling_accuracy": 0.7,
+            "step_order_score": 0.7,
+            "safe_answer_rate": 1.0,
+            "condition_coverage": 0.6,
         },
     ),
     "strict": EvaluationSpec(
@@ -72,6 +79,10 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
             "refusal_accuracy": 1.0,
             "requirement_coverage": 0.9,
             "answer_pass_rate": 0.8,
+            "handling_accuracy": 0.85,
+            "step_order_score": 0.85,
+            "safe_answer_rate": 1.0,
+            "condition_coverage": 0.8,
         },
     ),
 }

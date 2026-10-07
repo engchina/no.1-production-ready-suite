@@ -1,4 +1,9 @@
-import type { EvaluationMetricName, EvaluationMetrics, EvaluationSuiteName } from "@/lib/api";
+import type {
+  EvaluationMetricName,
+  EvaluationMetrics,
+  EvaluationOutcome,
+  EvaluationSuiteName,
+} from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /**
@@ -8,7 +13,7 @@ import { t, type I18nKey } from "@/lib/i18n";
  * 画面は、この並び・名前・説明を共有する。保存済みの古い結果には削除した指標・理由・基準の
  * 名前が残るため、未知の名前は原文のまま表示する（表示を壊さない）。
  */
-export type EvaluationPerspective = "retrieval" | "grounding" | "answer";
+export type EvaluationPerspective = "retrieval" | "grounding" | "answer" | "handling";
 
 export const EVALUATION_PERSPECTIVES: ReadonlyArray<{
   id: EvaluationPerspective;
@@ -29,6 +34,11 @@ export const EVALUATION_PERSPECTIVES: ReadonlyArray<{
       "requirement_coverage",
       "answer_pass_rate",
     ],
+  },
+  // 業務支援の対応（#1231）。期待する対応・手順・禁止の表現・条件のあるケースだけが対象。
+  {
+    id: "handling",
+    metrics: ["handling_accuracy", "step_order_score", "safe_answer_rate", "condition_coverage"],
   },
 ];
 
@@ -78,6 +88,22 @@ const METRIC_KEYS: Record<EvaluationMetricName, { label: I18nKey; description: I
     label: "evaluation.metric.answer_pass_rate",
     description: "evaluation.metric.answer_pass_rate.description",
   },
+  handling_accuracy: {
+    label: "evaluation.metric.handling_accuracy",
+    description: "evaluation.metric.handling_accuracy.description",
+  },
+  step_order_score: {
+    label: "evaluation.metric.step_order_score",
+    description: "evaluation.metric.step_order_score.description",
+  },
+  safe_answer_rate: {
+    label: "evaluation.metric.safe_answer_rate",
+    description: "evaluation.metric.safe_answer_rate.description",
+  },
+  condition_coverage: {
+    label: "evaluation.metric.condition_coverage",
+    description: "evaluation.metric.condition_coverage.description",
+  },
 };
 
 const PERSPECTIVE_KEYS: Record<EvaluationPerspective, { label: I18nKey; description: I18nKey }> = {
@@ -93,6 +119,10 @@ const PERSPECTIVE_KEYS: Record<EvaluationPerspective, { label: I18nKey; descript
     label: "evaluation.perspective.answer",
     description: "evaluation.perspective.answer.description",
   },
+  handling: {
+    label: "evaluation.perspective.handling",
+    description: "evaluation.perspective.handling.description",
+  },
 };
 
 const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
@@ -107,6 +137,10 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   answer_failed: "evaluation.failureReason.answer_failed",
   answer_evaluation_error: "evaluation.failureReason.answer_evaluation_error",
   guardrail_warning: "evaluation.failureReason.guardrail_warning",
+  unexpected_handling: "evaluation.failureReason.unexpected_handling",
+  step_missing: "evaluation.failureReason.step_missing",
+  forbidden_action: "evaluation.failureReason.forbidden_action",
+  condition_missing: "evaluation.failureReason.condition_missing",
   case_error: "evaluation.failureReason.case_error",
 };
 
@@ -195,3 +229,30 @@ export function orderedThresholdEntries(
       (order.get(left) ?? Number.MAX_SAFE_INTEGER) - (order.get(right) ?? Number.MAX_SAFE_INTEGER)
   );
 }
+
+/**
+ * 結果に出す観点か。業務支援の対応（handling）は、対象のケースが 1 件も無い評価では出さない
+ * （期待する対応・手順を持たない評価セットに「対象のケースなし」の欄を並べない。#1231）。
+ */
+export function isPerspectiveShown(
+  metrics: EvaluationMetrics,
+  perspective: (typeof EVALUATION_PERSPECTIVES)[number]
+): boolean {
+  if (perspective.id !== "handling") return true;
+  return perspective.metrics.some((metric) => (metricCaseCount(metrics, metric) ?? 0) > 0);
+}
+
+const OUTCOME_KEYS: Record<EvaluationOutcome, I18nKey> = {
+  answered: "evaluation.outcome.answered",
+  conditional: "evaluation.outcome.conditional",
+  needs_clarification: "evaluation.outcome.needs_clarification",
+  needs_environment_data: "evaluation.outcome.needs_environment_data",
+  needs_human: "evaluation.outcome.needs_human",
+  insufficient_evidence: "evaluation.outcome.insufficient_evidence",
+};
+
+/** 回答の対応の表示名（未知の値は原文のまま）。 */
+export function outcomeLabel(outcome: string): string {
+  return outcome in OUTCOME_KEYS ? t(OUTCOME_KEYS[outcome as EvaluationOutcome]) : outcome;
+}
+

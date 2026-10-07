@@ -1,0 +1,249 @@
+"""評価の合成の資料を取り込み、評価セットの文書の参照を実際の ID に置き換える CLI（#1231）。
+
+評価セット（例: `rag/evaluation/business-support/business-support.json`）の
+`relevant_document_ids` は、配備先ごとに違う文書 ID の代わりに `file:<ファイル名>` で
+資料を指す。この CLI は次を行う。
+
+1. ナレッジベースを作る（`--knowledge-base-id` を渡したときはそれを使う）。
+2. 評価セットが参照するファイルを、評価セットと同じフォルダ（`--corpus-dir` で変更可）から
+   アップロードし、取込を始める。Excel は前処理 `excel_to_json` で読む。
+3. 索引（INDEXED）まで待つ。確認待ち（REVIEW など）のゲートは承認して進める。
+4. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
+
+書き出した評価セットは `python -m app.rag.evaluation_cli <output> --api-base-url …` で実行できる。
+
+    uv run python -m app.rag.evaluation_corpus_cli \\
+        ../evaluation/business-support/business-support.json \\
+        --api-base-url http://127.0.0.1:8000 --output /tmp/business-support.resolved.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import mimetypes
+import sys
+import time
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+FILE_REFERENCE_PREFIX = "file:"
+DEFAULT_API_BASE_URL = "http://localhost:8000"
+DEFAULT_TIMEOUT_SECONDS = 1800.0
+DEFAULT_POLL_INTERVAL_SECONDS = 5.0
+REQUEST_TIMEOUT_SECONDS = 120.0
+# ファイルの拡張子ごとの文書レシピ（前処理）。無い拡張子は全体の既定のまま取り込む。
+RECIPE_BY_EXTENSION: Mapping[str, Mapping[str, Any]] = {
+    ".xlsx": {"preprocess_profile": "excel_to_json"},
+    ".xls": {"preprocess_profile": "excel_to_json"},
+}
+_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+}
+# 承認して先へ進めるゲートと、終わりの状態。
+_GATE_STATUSES = frozenset({"PREPROCESSED", "REVIEW", "CHUNKED"})
+_DONE_STATUS = "INDEXED"
+_FAILED_STATUSES = frozenset({"ERROR", "FAILED"})
+
+
+class CorpusError(RuntimeError):
+    """利用者へ返す失敗（exit code 2）。"""
+
+
+def referenced_files(golden_set: Mapping[str, Any]) -> list[str]:
+    """評価セットが `file:` で参照するファイル名（出てきた順・重複なし）。"""
+    names: list[str] = []
+    for case in golden_set.get("cases", []):
+        for value in case.get("relevant_document_ids", []):
+            if isinstance(value, str) and value.startswith(FILE_REFERENCE_PREFIX):
+                name = value.removeprefix(FILE_REFERENCE_PREFIX)
+                if name and name not in names:
+                    names.append(name)
+    return names
+
+
+def resolve_golden_set(
+    golden_set: Mapping[str, Any], document_ids: Mapping[str, str], knowledge_base_id: str
+) -> dict[str, Any]:
+    """`file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セット。"""
+    resolved: dict[str, Any] = json.loads(json.dumps(golden_set))
+    for case in resolved.get("cases", []):
+        ids: list[str] = []
+        for value in case.get("relevant_document_ids", []):
+            if isinstance(value, str) and value.startswith(FILE_REFERENCE_PREFIX):
+                name = value.removeprefix(FILE_REFERENCE_PREFIX)
+                if name not in document_ids:
+                    raise CorpusError(f"取り込んでいないファイルを参照しています: {name}")
+                ids.append(document_ids[name])
+            else:
+                ids.append(value)
+        case["relevant_document_ids"] = ids
+    resolved["knowledge_base_ids"] = [knowledge_base_id]
+    return resolved
+
+
+class CorpusLoader:
+    """API を呼んで資料を取り込む。HTTP の client と待ち方を差し替えられる（テスト用）。"""
+
+    def __init__(
+        self,
+        client: httpx.Client,
+        api_base_url: str,
+        *,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+        log: Callable[[str], None] = print,
+    ) -> None:
+        self._client = client
+        self._api = api_base_url.rstrip("/") + "/api"
+        self._timeout = timeout_seconds
+        self._interval = poll_interval_seconds
+        self._sleep = sleep
+        self._clock = clock
+        self._log = log
+
+    def _data(self, response: httpx.Response) -> Any:
+        if response.status_code >= 400:
+            raise CorpusError(
+                f"{response.request.method} {response.request.url.path} が失敗しました"
+                f"（HTTP {response.status_code}）: {response.text[:300]}"
+            )
+        return response.json().get("data")
+
+    def create_knowledge_base(self, name: str) -> str:
+        data = self._data(
+            self._client.post(
+                f"{self._api}/knowledge-bases",
+                json={"name": name, "description": "業務支援の評価の合成の資料（評価用）"},
+            )
+        )
+        return str(data["id"])
+
+    def ingest(self, path: Path, knowledge_base_id: str) -> str:
+        """1 ファイルをアップロードして取込を始め、文書 ID を返す。"""
+        content_type = _CONTENT_TYPES.get(path.suffix.lower()) or (
+            mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        )
+        uploaded = self._data(
+            self._client.post(
+                f"{self._api}/documents/upload",
+                files={"file": (path.name, path.read_bytes(), content_type)},
+                data={"knowledge_base_ids": [knowledge_base_id]},
+            )
+        )
+        document_id = str(uploaded.get("document_id") or uploaded.get("id"))
+        recipe_id = self._recipe(document_id)["recipe_id"]
+        recipe = RECIPE_BY_EXTENSION.get(path.suffix.lower())
+        if recipe:
+            self._data(
+                self._client.put(
+                    f"{self._api}/documents/{document_id}/recipes/{recipe_id}", json=dict(recipe)
+                )
+            )
+        self._data(
+            self._client.post(
+                f"{self._api}/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs", json={}
+            )
+        )
+        return document_id
+
+    def _recipe(self, document_id: str) -> Mapping[str, Any]:
+        recipes = self._data(self._client.get(f"{self._api}/documents/{document_id}/recipes"))
+        if not recipes:
+            raise CorpusError(f"文書の処理レシピがありません: {document_id}")
+        recipe: Mapping[str, Any] = recipes[0]
+        return recipe
+
+    def wait_indexed(self, documents: Mapping[str, str]) -> None:
+        """すべての文書が索引まで進むのを待つ（確認待ちのゲートは承認する）。"""
+        pending = dict(documents)
+        approved: set[tuple[str, str]] = set()
+        deadline = self._clock() + self._timeout
+        while pending:
+            for name, document_id in list(pending.items()):
+                recipe = self._recipe(document_id)
+                status = str(recipe.get("status") or "")
+                if status == _DONE_STATUS:
+                    self._log(f"indexed {name}")
+                    pending.pop(name)
+                elif status in _FAILED_STATUSES:
+                    raise CorpusError(
+                        f"取込に失敗しました: {name}（{recipe.get('error_message') or status}）"
+                    )
+                elif status in _GATE_STATUSES and (document_id, status) not in approved:
+                    # 承認の後、次の工程の job が状態を変えるまでは同じゲートを承認し直さない。
+                    approved.add((document_id, status))
+                    self._log(f"approve {name} ({status})")
+                    self._data(
+                        self._client.post(
+                            f"{self._api}/documents/{document_id}/recipes/"
+                            f"{recipe['recipe_id']}/approve",
+                            json={},
+                        )
+                    )
+            if not pending:
+                return
+            if self._clock() >= deadline:
+                raise CorpusError(f"索引まで進みませんでした: {', '.join(sorted(pending))}")
+            self._sleep(self._interval)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("golden_set", type=Path, help="file: で資料を参照する評価セット")
+    parser.add_argument("--corpus-dir", type=Path, help="資料のフォルダ（既定は評価セットと同じ）")
+    parser.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL)
+    parser.add_argument("--knowledge-base-id", help="既存のナレッジベースへ取り込む")
+    parser.add_argument(
+        "--knowledge-base-name", default=f"業務支援の評価 {time.strftime('%Y%m%d-%H%M%S')}"
+    )
+    parser.add_argument("--output", type=Path, required=True, help="置き換えた評価セットの出力先")
+    parser.add_argument("--tenant-id")
+    parser.add_argument("--user-id")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    args = parser.parse_args(argv)
+
+    headers = {"Accept": "application/json"}
+    if args.tenant_id:
+        headers["X-Tenant-ID"] = args.tenant_id
+    if args.user_id:
+        headers["X-User-ID"] = args.user_id
+    try:
+        golden_set = json.loads(args.golden_set.read_text(encoding="utf-8"))
+        corpus_dir = args.corpus_dir or args.golden_set.parent
+        names = referenced_files(golden_set)
+        missing = [name for name in names if not (corpus_dir / name).is_file()]
+        if missing:
+            raise CorpusError(f"資料が見つかりません: {', '.join(missing)}")
+        with httpx.Client(
+            headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, trust_env=False
+        ) as client:
+            loader = CorpusLoader(client, args.api_base_url, timeout_seconds=args.timeout)
+            knowledge_base_id = args.knowledge_base_id or loader.create_knowledge_base(
+                args.knowledge_base_name
+            )
+            print(f"knowledge base {knowledge_base_id}")
+            documents = {
+                name: loader.ingest(corpus_dir / name, knowledge_base_id) for name in names
+            }
+            loader.wait_indexed(documents)
+        resolved = resolve_golden_set(golden_set, documents, knowledge_base_id)
+        args.output.write_text(
+            json.dumps(resolved, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"wrote {args.output}")
+        return 0
+    except (CorpusError, OSError, json.JSONDecodeError, httpx.HTTPError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

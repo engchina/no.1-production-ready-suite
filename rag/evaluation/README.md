@@ -28,7 +28,7 @@ job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 36
 
 各ケースは、回答エンジン（根拠付き回答。全体の既定の設定）で回答し、回答の記録（引用・根拠・実行記録）から
 指標を求めます。評価は検索・回答プロファイルを受け取りません（#301）。指標は「検索」「根拠」「回答」の 3 つの観点に整理した
-9 つです。各指標は、その指標を測れるケースだけの平均で、対象の件数は `metric_case_counts` に返します。対象の
+9 つと、業務支援の「対応」の 4 つ（#1231）です。各指標は、その指標を測れるケースだけの平均で、対象の件数は `metric_case_counts` に返します。対象の
 ケースが無い指標は `null` です（0 と区別します）。失敗したケースは `error_count` で数え、指標の平均には入れません。
 
 | 観点 | 指標 | 意味 | 対象のケース |
@@ -43,6 +43,16 @@ job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 36
 | 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース |
 | 回答 | `answer_pass_rate` | 4 軸（正確性・網羅性・根拠との整合性・生成品質）で 16 / 20 点以上、かつ監査を終えた割合 | `standard_answer` のあるケース |
 
+| 対応 | `handling_accuracy` | 回答の対応が、ケースの受け入れる対応（`expected_outcomes`）のどれかだった割合 | `expected_outcomes` のあるケース |
+| 対応 | `step_order_score` | 期待する手順の語（`expected_steps`）が、期待の順に回答に出た度合い（最長の順序の一致 / 手順の数） | `expected_steps` のあるケース |
+| 対応 | `safe_answer_rate` | 勧めてはいけない操作の表現（`forbidden_phrases`）を含まなかった割合（どちらの基準でも 100% を求める） | `forbidden_phrases` のあるケース |
+| 対応 | `condition_coverage` | 回答が触れるべき条件（`required_conditions`）に触れた割合 | `required_conditions` のあるケース |
+
+- 「対応」の 4 つは業務支援の評価（#1231）です。回答の対応（`answered`・`conditional`・`needs_clarification`・
+  `needs_environment_data`・`needs_human`・`insufficient_evidence`）は、回答の記録の `diagnostics.answer.outcome` が
+  あればそれを使い、無ければ拒答・`external_data_required`・`needs_human_review` から推定します（結果の
+  `outcome_source` が `explicit` / `inferred`）。語の照合は NFKC・大小文字・空白を無視します。LLM は呼びません。
+  ケースの分類（`category`）は分類ごとの内訳（`category_breakdown`）に使います。
 - `answerable: false` のケース（資料に答えが無い質問）は、拒答の正しさだけを測ります。`answerable` を省略したときは、
   `relevant_document_ids`・`expected_answer_keywords`・`standard_answer` のどれも無いケースを答えるべきでない質問と
   みなします。
@@ -61,6 +71,11 @@ CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`�
 は case 単位の失敗理由分布で、`retrieval_miss`・`partial_recall`・`unexpected_refusal`・`unexpected_answer`・
 `answer_keyword_miss`・`low_groundedness`・`unsupported_claim`・`missing_content`・`answer_failed` などから、
 次に調整すべき工程（検索・根拠・回答）を切り分けます。
+
+検索・回答プロファイルの用語・ルール・業務ガイド・回答の設定を含めて評価するときは、`search_answer_profile_id`
+（`/run` の request と、比較の各 experiment）を指定します（#1249）。ケースごとに検索・回答と同じ解決（参照する
+ナレッジベース・回答の設定・業務ガイド）をしてから回答します。指定しなければ全体の既定で評価します（#301）。
+アーカイブ済み・参照するナレッジベースが無いプロファイルは、そのケースを失敗にします。
 
 単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（`query_strategy`・`answer_flow`・
 `neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限
@@ -82,6 +97,13 @@ uv run python -m app.rag.evaluation_cli \
   --api-base-url https://<staging-host> \
   --output ../evaluation/evaluation-compare-result.json
 ```
+
+### 業務支援の合成の評価セット（#1231）
+
+`business-support/` に、架空の「サンプル業務ポータル」の資料（PDF 4 件・xlsx 1 件）と、5 分類（資料で答えられる・
+確認が要る・現場のデータが要る・資料に答えが無い・資料が矛盾する）の質問 15 問（`business-support.json`）を置いて
+います。資料の作り方・取り込み方・実行の手順は [business-support/README.md](./business-support/README.md) を見て
+ください。
 
 検索 latency / p95 gate には `search-load.example.json` を使います。`cases`、`repeat`、`concurrency`、`thresholds` を定義し、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名と時間。例: `質問の理解`・`文書検索（1回目）`）を artifact 化します。`thresholds.stage_p95_ms` の key は工程名です。case の `rerank_top_n`・`mode`・`strategy` は #595 で削除した旧 standard の指定で、書いてあっても読み捨てます。結果 JSON と trend JSON には query / answer / context 原文を残しません。
 
