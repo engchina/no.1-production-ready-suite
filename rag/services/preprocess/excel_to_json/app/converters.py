@@ -1,29 +1,70 @@
-"""Excel(.xls/.xlsx)→構造化 JSON 前処理マイクロサービスの変換実装。
+"""Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの変換実装（#1221）。
 
-engchina/No.1 系の表→JSON 相当を本プロジェクトの前処理契約(`ConvertResponse`)へ
-再マップする。Excel は複数シートを持つため、シート単位で「ヘッダ列をキーにした
-レコード配列」を束ねた JSON を決定論で生成し、後段 parser が表構造として安定して
-扱えるようにする。
+シートごとに「表頭・元の行番号・セル範囲・表示の値」を持つ JSON（`rag_parser_core.sheet_records`）
+を作る。parser のサービスはこの JSON の記録の単位（block）を 1 つずつ要素にし、検索の根拠に
+シートと行の場所が残る。読み方は engchina/no.1-rag の前処理（`utils/office_preprocess_util.py`）
+に合わせる。
 
-- `.xlsx` は openpyxl(read_only / data_only)で計算済み値を読む。
-- `.xls` は xlrd で読む。
+- シートの読み方（`mode`）: `table` は 1 行 1 block。`procedure` は手順書（番号の列と題名の列）
+  を、番号と題名のある行から次の手順までの複数行で 1 block にし、詳細の無い題名の行は章にする。
+  `auto` は番号と題名の列があれば procedure、無ければデータの行の埋まり方（中央値 60% 以上）で
+  table / procedure を決める。
+
+- `.xlsx` は openpyxl で読む（結合セルと表示の書式を読むため read_only にしない）。数式は
+  キャッシュ値を読み、キャッシュの無い数式のセルは空にせず数式の文字列にして診断を残す。マクロは
+  実行しない。
+- `.xls` は xlrd で読む（書式・結合を読むため formatting_info を使う）。日付は日付、真偽は
+  TRUE/FALSE。
+- 表頭は選択肢の `header_row` を優先し、無ければ先頭の行から採点して選ぶ（信頼度と理由を残し、
+  低いときは警告）。表頭より上の行（説明など）は preamble として残す。
+- 空行を消す前に元の行番号を持つ。結合セルは、表頭の中では結合の範囲を埋め、データでは同じ行の
+  横の結合だけを埋める（縦の結合の値を後の行へ漏らさない。手順の境目を増やさない）。普通の空のセルは
+  埋めない。既定は表示されているシートだけを読み、選択肢でシートの指定・除外と列の除外ができる。
 - 形式判定は magic bytes(ZIP=xlsx / OLE2=xls)優先、失敗時は拡張子フォールバック。
-
-依存(openpyxl / xlrd)は本サービス image にのみ含め、他 parser / backend に非干渉。
-未対応・依存欠如・解析失敗・空のときは passthrough(変換せず原本を使う)へ縮退する。
+- 未対応・依存欠如・解析失敗・空のときは passthrough(変換せず原本を使う)へ縮退する。
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import json
+import io
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
 
+from pydantic import ValidationError
 from rag_parser_core.preprocess import ConvertOutcome
+from rag_parser_core.sheet_records import (
+    SHEET_RECORDS_CONTENT_TYPE,
+    ExcelOptions,
+    HeaderDetection,
+    SheetBlock,
+    SheetColumn,
+    SheetDiagnostic,
+    SheetPreambleRow,
+    SheetRecords,
+    SheetRecordsDocument,
+    SkippedSheet,
+)
 from rag_parser_core.source import SourceProfile
 
+CONVERTER_NAME = "excel_to_json"
+CONVERTER_VERSION = "v2"
 # xlsx は ZIP(PK\x03\x04)、xls は OLE2 複合ドキュメント(D0CF11E0...)。
 _XLSX_MAGIC = b"PK\x03\x04"
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# 表頭を探す範囲（先頭の空でない行の数）と、表頭の後の行の一致を見る数。
+_HEADER_SCAN_ROWS = 30
+_HEADER_LOOKAHEAD_ROWS = 5
+# これより低い信頼度の表頭は警告にする（黙って推測しない）。
+HEADER_LOW_CONFIDENCE = 0.6
+# 手順書の表頭に多い語（表頭の行の採点で加点する。no.1-rag と同じ）。
+PROCEDURE_HEADER_HINTS = ("作業項目", "作業内容", "コマンド", "確認ポイント", "確認条件", "備考")
+# auto で table にする、データの行の埋まり方（中央値）の下限と、見る行の数。
+TABLE_DENSITY_THRESHOLD = 0.6
+_DENSITY_SAMPLE_ROWS = 50
+_NUMERIC_TEXT = re.compile(r"^[+-]?[\d,]+(\.\d+)?%?$|^\d{4}-\d{2}-\d{2}([ T][\d:.]+)?$")
 
 
 def openpyxl_available() -> bool:
@@ -42,18 +83,43 @@ def xlrd_available() -> bool:
     return True
 
 
+@dataclass
+class _Grid:
+    """1 シートのセル（1 始まりの行・列 → 表示の文字列）。"""
+
+    name: str
+    hidden: bool
+    cells: dict[tuple[int, int], str] = field(default_factory=dict)
+    merges: list[tuple[int, int, int, int]] = field(default_factory=list)
+    missing_formula_cells: set[tuple[int, int]] = field(default_factory=set)
+
+    @property
+    def max_row(self) -> int:
+        return max((row for row, _ in self.cells), default=0)
+
+    def row_columns(self, row: int) -> list[int]:
+        return sorted(col for (r, col), value in self.cells.items() if r == row and value.strip())
+
+
 def convert(
     source_bytes: bytes,
     content_type: str,
     preprocess_profile: str,
     source_profile: SourceProfile | None,
+    *,
+    options: Mapping[str, Any] | None = None,
 ) -> ConvertOutcome:
     """選択プリセットで変換する。対象外・依存欠如・失敗は passthrough へ縮退する。"""
+    del content_type
     if preprocess_profile != "excel_to_json":
         return ConvertOutcome.passthrough(
             reason=f"preprocess_unsupported_profile:{preprocess_profile}"
         )
-    return _excel_to_json(source_bytes, source_profile)
+    try:
+        parsed = ExcelOptions.model_validate(dict(options or {}))
+    except ValidationError:
+        return ConvertOutcome.passthrough(reason="excel_options_invalid")
+    return _excel_to_records(source_bytes, source_profile, parsed)
 
 
 def _is_xlsx(source_bytes: bytes, source_profile: SourceProfile | None) -> bool:
@@ -65,116 +131,516 @@ def _is_xlsx(source_bytes: bytes, source_profile: SourceProfile | None) -> bool:
     return extension.strip().lower().lstrip(".") == "xlsx"
 
 
-def _excel_to_json(source_bytes: bytes, source_profile: SourceProfile | None) -> ConvertOutcome:
+def _excel_to_records(
+    source_bytes: bytes, source_profile: SourceProfile | None, options: ExcelOptions
+) -> ConvertOutcome:
     if not source_bytes:
         return ConvertOutcome.passthrough(reason="excel_empty")
-    if _is_xlsx(source_bytes, source_profile):
-        sheets, warnings = _read_xlsx(source_bytes)
-    else:
-        sheets, warnings = _read_xls(source_bytes)
-    if sheets is None:
-        # warnings に縮退理由が入っている。
-        return ConvertOutcome.passthrough(reason=warnings[0] if warnings else "excel_parse_failed")
-    if not any(sheet["row_count"] for sheet in sheets):
+    is_xlsx = _is_xlsx(source_bytes, source_profile)
+    grids, failure = _read_xlsx(source_bytes) if is_xlsx else _read_xls(source_bytes)
+    if grids is None:
+        return ConvertOutcome.passthrough(reason=failure or "excel_parse_failed")
+    warnings: list[str] = []
+    sheets: list[SheetRecords] = []
+    skipped: list[SkippedSheet] = []
+    requested = [name.strip() for name in options.sheets if name.strip()]
+    available = {grid.name for grid in grids}
+    for name in requested:
+        if name not in available:
+            warnings.append(f"excel_sheet_not_found:{name}")
+    excluded_sheets = {name.strip().casefold() for name in options.exclude_sheets if name.strip()}
+    for grid in grids:
+        if requested and grid.name not in requested:
+            skipped.append(SkippedSheet(name=grid.name, reason="not_selected"))
+            continue
+        if grid.name.strip().casefold() in excluded_sheets:
+            skipped.append(SkippedSheet(name=grid.name, reason="excluded"))
+            continue
+        if grid.hidden and not options.include_hidden_sheets and grid.name not in requested:
+            skipped.append(SkippedSheet(name=grid.name, reason="hidden"))
+            continue
+        sheet = _sheet_records(grid, options)
+        if sheet is None:
+            skipped.append(SkippedSheet(name=grid.name, reason="empty"))
+            continue
+        for item in sheet.diagnostics:
+            if item.code == "header_low_confidence":
+                warnings.append(f"excel_header_low_confidence:{grid.name}")
+        missing = sum(
+            1 for item in sheet.diagnostics if item.code == "formula_without_cached_value"
+        )
+        if missing:
+            warnings.append(f"excel_formula_without_cached_value:{grid.name}:{missing}")
+        sheets.append(sheet)
+    if not any(sheet.blocks or sheet.preamble for sheet in sheets):
         return ConvertOutcome.passthrough(reason="excel_no_rows")
-    payload = {"sheets": sheets, "sheet_count": len(sheets)}
-    derived = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    document = SheetRecordsDocument(
+        source_format="xlsx" if is_xlsx else "xls", sheets=sheets, skipped_sheets=skipped
+    )
     return ConvertOutcome(
         converted=True,
-        converter_name="excel_to_json",
-        converter_version="v1",
-        derived_bytes=derived,
-        derived_content_type="application/json; charset=utf-8",
+        converter_name=CONVERTER_NAME,
+        converter_version=CONVERTER_VERSION,
+        derived_bytes=document.to_json_bytes(),
+        derived_content_type=SHEET_RECORDS_CONTENT_TYPE,
         warnings=tuple(warnings),
     )
 
 
-def _read_xlsx(source_bytes: bytes) -> tuple[list[dict] | None, list[str]]:
-    try:
-        import io
+# ---- 読み取り ------------------------------------------------------------------------
 
+
+def _read_xlsx(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
+    try:
         import openpyxl
     except Exception:
-        return None, ["openpyxl_unavailable"]
+        return None, "openpyxl_unavailable"
     try:
-        workbook = openpyxl.load_workbook(io.BytesIO(source_bytes), read_only=True, data_only=True)
+        values_book = openpyxl.load_workbook(io.BytesIO(source_bytes), data_only=True)
+        formula_book = openpyxl.load_workbook(io.BytesIO(source_bytes), data_only=False)
     except Exception:
-        return None, ["excel_open_failed"]
-    sheets: list[dict] = []
+        return None, "excel_open_failed"
+    grids: list[_Grid] = []
     try:
-        for worksheet in workbook.worksheets:
-            rows = [
-                [_cell_to_str(value) for value in row]
-                for row in worksheet.iter_rows(values_only=True)
+        for worksheet in values_book.worksheets:
+            formulas = formula_book[worksheet.title]
+            grid = _Grid(name=worksheet.title, hidden=worksheet.sheet_state != "visible")
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    formula = formulas.cell(row=cell.row, column=cell.column).value
+                    is_formula = isinstance(formula, str) and formula.startswith("=")
+                    if cell.value is None:
+                        if is_formula:
+                            # キャッシュの無い数式は空にせず、数式の文字列にして診断を残す。
+                            grid.missing_formula_cells.add((cell.row, cell.column))
+                            grid.cells[(cell.row, cell.column)] = str(formula)
+                        continue
+                    text = _format_value(cell.value, cell.number_format, is_date=cell.is_date)
+                    if text:
+                        grid.cells[(cell.row, cell.column)] = text
+            grid.merges = [
+                (rng.min_row, rng.min_col, rng.max_row, rng.max_col)
+                for rng in worksheet.merged_cells.ranges
             ]
-            sheets.append(_sheet_payload(worksheet.title, rows))
+            grids.append(grid)
     except Exception:
-        return None, ["excel_read_failed"]
+        return None, "excel_read_failed"
     finally:
-        workbook.close()
-    return sheets, []
+        values_book.close()
+        formula_book.close()
+    return grids, None
 
 
-def _read_xls(source_bytes: bytes) -> tuple[list[dict] | None, list[str]]:
+def _read_xls(source_bytes: bytes) -> tuple[list[_Grid] | None, str | None]:
     try:
         import xlrd
     except Exception:
-        return None, ["xlrd_unavailable"]
+        return None, "xlrd_unavailable"
     try:
-        workbook = xlrd.open_workbook(file_contents=source_bytes)
+        book = xlrd.open_workbook(file_contents=source_bytes, formatting_info=True)
     except Exception:
-        return None, ["excel_open_failed"]
-    sheets: list[dict] = []
+        try:
+            book = xlrd.open_workbook(file_contents=source_bytes)
+        except Exception:
+            return None, "excel_open_failed"
+    grids: list[_Grid] = []
     try:
-        for worksheet in workbook.sheets():
-            rows = [
-                [_cell_to_str(worksheet.cell_value(r, c)) for c in range(worksheet.ncols)]
-                for r in range(worksheet.nrows)
+        for sheet in book.sheets():
+            grid = _Grid(name=sheet.name, hidden=getattr(sheet, "visibility", 0) != 0)
+            for row in range(sheet.nrows):
+                for col in range(sheet.ncols):
+                    text = _xls_cell_text(book, sheet, row, col, xlrd)
+                    if text:
+                        grid.cells[(row + 1, col + 1)] = text
+            grid.merges = [
+                (rlo + 1, clo + 1, rhi, chi) for rlo, rhi, clo, chi in sheet.merged_cells
             ]
-            sheets.append(_sheet_payload(worksheet.name, rows))
+            grids.append(grid)
     except Exception:
-        return None, ["excel_read_failed"]
-    return sheets, []
+        return None, "excel_read_failed"
+    return grids, None
 
 
-def _sheet_payload(name: str, rows: list[list[str]]) -> dict:
-    """1 シートの行列を {name, columns, row_count, rows[]} へ整形する。"""
-    rows = [row for row in rows if any(cell.strip() for cell in row)]
-    if not rows:
-        return {"name": name, "columns": [], "row_count": 0, "rows": []}
-    columns = _resolve_columns([cell.strip() for cell in rows[0]])
-    records: list[dict[str, str]] = []
-    for row in rows[1:]:
-        record = {
-            column: (row[index] if index < len(row) else "") for index, column in enumerate(columns)
-        }
-        records.append(record)
-    return {"name": name, "columns": columns, "row_count": len(records), "rows": records}
+def _xls_cell_text(book: Any, sheet: Any, row: int, col: int, xlrd: Any) -> str:
+    cell = sheet.cell(row, col)
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+        return ""
+    if cell.ctype == xlrd.XL_CELL_TEXT:
+        return str(cell.value)
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return "TRUE" if cell.value else "FALSE"
+    if cell.ctype == xlrd.XL_CELL_ERROR:
+        return str(xlrd.error_text_from_code.get(cell.value, "#ERROR"))
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            value = xlrd.xldate_as_datetime(cell.value, book.datemode)
+        except Exception:
+            return _general_number(float(cell.value))
+        return _format_datetime(value)
+    return _format_number(float(cell.value), _xls_number_format(book, sheet, row, col))
 
 
-def _cell_to_str(value: object) -> str:
-    """セル値を決定論で文字列化する(None→空、整数 float は小数点を落とす)。"""
+def _xls_number_format(book: Any, sheet: Any, row: int, col: int) -> str:
+    try:
+        xf = book.xf_list[sheet.cell_xf_index(row, col)]
+        return str(book.format_map[xf.format_key].format_str)
+    except Exception:
+        return "General"
+
+
+# ---- 値の文字列化 ----------------------------------------------------------------------
+
+
+def _format_value(value: object, number_format: str | None, *, is_date: bool) -> str:
     if value is None:
         return ""
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
-    if isinstance(value, float) and value.is_integer():
+    if isinstance(value, _dt.datetime | _dt.date | _dt.time):
+        return _format_datetime(value)
+    if isinstance(value, int | float):
+        if is_date:
+            return _general_number(float(value))
+        return _format_number(value, number_format or "General")
+    return str(value).strip()
+
+
+def _format_datetime(value: _dt.datetime | _dt.date | _dt.time) -> str:
+    if isinstance(value, _dt.datetime):
+        if value.time() == _dt.time(0, 0):
+            return value.date().isoformat()
+        return value.isoformat(sep=" ")
+    return value.isoformat()
+
+
+def _general_number(value: int | float) -> str:
+    if isinstance(value, int):
+        return str(value)
+    if value.is_integer():
         return str(int(value))
-    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
-        return value.isoformat()
-    return str(value)
+    # 浮動小数の誤差（0.1+0.2 など）を出さない。指数表記にもしない。
+    text = f"{value:.15f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
-def _resolve_columns(header: list[str]) -> list[str]:
-    """空・重複のないユニークな列名を決定論で確定する。"""
-    columns: list[str] = []
-    seen: dict[str, int] = {}
-    for index, name in enumerate(header):
-        base = name or f"col_{index + 1}"
-        if base in seen:
-            seen[base] += 1
-            base = f"{base}_{seen[base]}"
+def _format_number(value: int | float, number_format: str) -> str:
+    """表示の書式（ゼロ埋め・桁区切り・小数桁・百分率）で数値を文字列にする。"""
+    pattern = (number_format or "General").split(";", 1)[0].strip()
+    if pattern in {"", "General", "@"} or not re.fullmatch(r"[0#,.%]+", pattern):
+        return _general_number(value)
+    percent = pattern.endswith("%")
+    core = pattern.rstrip("%")
+    integer_part, _, decimal_part = core.partition(".")
+    decimals = len(decimal_part.replace(",", ""))
+    thousands = "," in integer_part
+    min_digits = integer_part.replace(",", "").replace("#", "").count("0")
+    number = float(value) * (100 if percent else 1)
+    sign = "-" if number < 0 else ""
+    if thousands:
+        body = f"{abs(number):,.{decimals}f}"
+    else:
+        body = f"{abs(number):.{decimals}f}"
+        whole, dot, fraction = body.partition(".")
+        body = whole.zfill(min_digits) + dot + fraction
+    return f"{sign}{body}{'%' if percent else ''}"
+
+
+# ---- 表頭・行 --------------------------------------------------------------------------
+
+
+def _column_letter(index: int) -> str:
+    letters = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def _apply_merges(grid: _Grid, header_rows: range) -> None:
+    """結合セルの値を埋める。
+
+    表頭の行の中では結合の範囲（横・縦）を左上の値で埋める。データでは同じ行の横の結合だけを埋め、
+    縦の結合の値は後の行へ漏らさない（no.1-rag と同じ。手順の境目を増やさない）。
+    """
+    for min_row, min_col, max_row, max_col in grid.merges:
+        value = grid.cells.get((min_row, min_col), "")
+        if not value:
+            continue
+        for row in range(min_row, max_row + 1):
+            in_header = row in header_rows and min_row in header_rows
+            if row != min_row and not in_header:
+                continue
+            for col in range(min_col, max_col + 1):
+                grid.cells.setdefault((row, col), value)
+
+
+def _is_textual(value: str) -> bool:
+    return not _NUMERIC_TEXT.match(value.strip())
+
+
+def _detect_header(grid: _Grid, nonempty_rows: list[int]) -> tuple[int, float, str]:
+    widest = max((len(grid.row_columns(row)) for row in nonempty_rows), default=1)
+    best: tuple[float, int, str] | None = None
+    for position, row in enumerate(nonempty_rows[:_HEADER_SCAN_ROWS]):
+        columns = grid.row_columns(row)
+        values = [grid.cells[(row, col)] for col in columns]
+        if not values:
+            continue
+        textish = sum(1 for value in values if _is_textual(value)) / len(values)
+        unique = len(set(values)) / len(values)
+        coverage = len(columns) / widest
+        following = nonempty_rows[position + 1 : position + 1 + _HEADER_LOOKAHEAD_ROWS]
+        if following:
+            consistency = sum(
+                len(set(grid.row_columns(other)) & set(columns)) / len(columns)
+                for other in following
+            ) / len(following)
         else:
-            seen[base] = 0
-        columns.append(base)
-    return columns
+            consistency = 0.0
+        # 1 つのセルだけの行（説明・表題）は、表がそれ 1 列でない限り表頭にしない。
+        if len(columns) == 1 and widest > 1:
+            coverage = 0.0
+        hints = sum(1 for hint in PROCEDURE_HEADER_HINTS if hint in " ".join(values))
+        score = 0.3 * textish + 0.15 * unique + 0.3 * consistency + 0.25 * coverage
+        score += min(0.2, 0.1 * hints)
+        # 数値・日付だけの行はデータの行らしい（表頭の無い表）。文字の割合で下げる。
+        score *= 0.5 + 0.5 * textish
+        reason = (
+            f"{len(columns)} 列・文字 {textish:.0%}・重複なし {unique:.0%}・"
+            f"後続の行の一致 {consistency:.0%}"
+        )
+        if best is None or score > best[0] + 1e-9:
+            best = (score, row, reason)
+    if best is None:
+        return nonempty_rows[0], 0.0, "表頭の候補がありません"
+    score, row, reason = best
+    return row, round(min(max(score, 0.0), 1.0), 3), reason
+
+
+def _column_names(raw: list[tuple[int, str, str]]) -> list[str]:
+    """空の表頭は ``column_<列>``、重複は ``<名前>__<列>``（no.1-rag と同じ）。"""
+    names: list[str] = []
+    seen: set[str] = set()
+    for _, letter, name in raw:
+        candidate = name or f"column_{letter}"
+        if candidate.casefold() in seen:
+            candidate = f"{candidate}__{letter}"
+        seen.add(candidate.casefold())
+        names.append(candidate)
+    return names
+
+
+def _excluded(name: str, letter: str, excludes: set[str]) -> bool:
+    return name.casefold() in excludes or letter.casefold() in excludes
+
+
+def _procedure_columns(
+    grid: _Grid, header_row: int, data_rows: list[int], columns: list[int]
+) -> tuple[int, int] | None:
+    """手順書の番号の列と題名の列を探す（表頭のある最初の列が題名、その左で一緒に埋まる列が番号）。"""
+    labeled = [col for col in columns if grid.cells.get((header_row, col), "").strip()]
+    if not labeled:
+        return None
+    title_column = labeled[0]
+    candidates: list[tuple[int, int]] = []
+    for col in range(1, title_column):
+        together = sum(
+            1
+            for row in data_rows
+            if grid.cells.get((row, col), "").strip()
+            and grid.cells.get((row, title_column), "").strip()
+        )
+        if together >= 2:
+            candidates.append((together, col))
+    if not candidates:
+        return None
+    return max(candidates)[1], title_column
+
+
+def _density(grid: _Grid, data_rows: list[int], columns: list[int]) -> float:
+    sample = data_rows[:_DENSITY_SAMPLE_ROWS]
+    if not sample or not columns:
+        return 0.0
+    ratios = sorted(
+        sum(1 for col in columns if grid.cells.get((row, col), "").strip()) / len(columns)
+        for row in sample
+    )
+    middle = len(ratios) // 2
+    if len(ratios) % 2:
+        return ratios[middle]
+    return (ratios[middle - 1] + ratios[middle]) / 2
+
+
+def _row_range(cols: list[int], row_start: int, row_end: int) -> str:
+    return f"{_column_letter(cols[0])}{row_start}:{_column_letter(cols[-1])}{row_end}"
+
+
+def _table_blocks(
+    grid: _Grid, data_rows: list[int], columns: list[int], names: dict[int, str]
+) -> list[SheetBlock]:
+    blocks: list[SheetBlock] = []
+    for row in data_rows:
+        values = {
+            names[col]: value
+            for col in columns
+            if (value := grid.cells.get((row, col), "").strip())
+        }
+        if values:
+            blocks.append(
+                SheetBlock(
+                    kind="row",
+                    row_start=row,
+                    row_end=row,
+                    cell_range=_row_range(columns, row, row),
+                    values=values,
+                )
+            )
+    return blocks
+
+
+def _procedure_blocks(
+    grid: _Grid,
+    data_rows: list[int],
+    columns: list[int],
+    names: dict[int, str],
+    index_column: int,
+    title_column: int,
+) -> list[SheetBlock]:
+    """番号と題名のある行を手順の始まりにし、次の手順の前までの行を 1 block にする。"""
+    all_columns = sorted({*columns, index_column, title_column})
+    detail_columns = [col for col in all_columns if col not in {index_column, title_column}]
+    boundaries = [
+        row
+        for row in data_rows
+        if grid.cells.get((row, index_column), "").strip()
+        and grid.cells.get((row, title_column), "").strip()
+    ]
+    blocks: list[SheetBlock] = []
+    section_title: str | None = None
+    for position, row_start in enumerate(boundaries):
+        title = grid.cells[(row_start, title_column)].strip()
+        has_detail = any(grid.cells.get((row_start, col), "").strip() for col in detail_columns)
+        if not has_detail:
+            # 詳細の無い題名の行は章の見出し（以降の手順の section_path に入れる）。
+            section_title = title
+            continue
+        next_start = boundaries[position + 1] if position + 1 < len(boundaries) else None
+        rows = [
+            row
+            for row in data_rows
+            if row >= row_start and (next_start is None or row < next_start)
+        ]
+        lines = [f"セクション: {section_title}"] if section_title else []
+        last_row = row_start
+        for row in rows:
+            parts = [
+                f"{names.get(col, f'column_{_column_letter(col)}')}: {value}"
+                for col in all_columns
+                if (value := grid.cells.get((row, col), "").strip())
+            ]
+            if parts:
+                lines.append(" | ".join(parts))
+                last_row = row
+        blocks.append(
+            SheetBlock(
+                kind="procedure_step",
+                row_start=row_start,
+                row_end=last_row,
+                cell_range=_row_range(all_columns, row_start, last_row),
+                section_path=[value for value in (section_title, title) if value],
+                lines=lines,
+            )
+        )
+    return blocks
+
+
+def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
+    nonempty_rows = sorted({row for (row, _), value in grid.cells.items() if value.strip()})
+    if not nonempty_rows:
+        return None
+    diagnostics: list[SheetDiagnostic] = [
+        SheetDiagnostic(code="formula_without_cached_value", cell=f"{_column_letter(col)}{row}")
+        for row, col in sorted(grid.missing_formula_cells)
+    ]
+    header_count = options.header_row_count
+    if options.header_row is not None:
+        header_row = options.header_row
+        detection = HeaderDetection(
+            method="configured", confidence=1.0, reason=f"{header_row} 行目を表頭に指定"
+        )
+        if not grid.row_columns(header_row):
+            diagnostics.append(SheetDiagnostic(code="header_row_empty", detail=str(header_row)))
+    else:
+        header_row, confidence, reason = _detect_header(grid, nonempty_rows)
+        detection = HeaderDetection(method="detected", confidence=confidence, reason=reason)
+        if confidence < HEADER_LOW_CONFIDENCE:
+            diagnostics.append(
+                SheetDiagnostic(code="header_low_confidence", detail=f"{confidence:.2f}")
+            )
+    header_rows = range(header_row, header_row + header_count)
+    data_start = header_row + header_count
+    _apply_merges(grid, header_rows)
+
+    used_columns = sorted(
+        {col for (row, col), value in grid.cells.items() if row >= header_row and value.strip()}
+    )
+    excludes = {item.strip().casefold() for item in options.exclude_columns if item.strip()}
+    raw_names: list[tuple[int, str, str]] = []
+    for col in used_columns:
+        letter = _column_letter(col)
+        parts: list[str] = []
+        for row in header_rows:
+            value = grid.cells.get((row, col), "").strip()
+            if value and (not parts or parts[-1] != value):
+                parts.append(value)
+        name = " / ".join(parts)
+        if not _excluded(name, letter, excludes):
+            raw_names.append((col, letter, name))
+    names = dict(zip([col for col, _, _ in raw_names], _column_names(raw_names), strict=True))
+    columns = [col for col, _, _ in raw_names]
+
+    preamble: list[SheetPreambleRow] = []
+    for row in nonempty_rows:
+        if row >= header_row:
+            break
+        cols = grid.row_columns(row)
+        text = " ".join(grid.cells[(row, col)].strip() for col in cols)
+        preamble.append(
+            SheetPreambleRow(row_number=row, cell_range=_row_range(cols, row, row), text=text)
+        )
+
+    data_rows = [
+        row
+        for row in nonempty_rows
+        if row >= data_start and any(grid.cells.get((row, col), "").strip() for col in columns)
+    ]
+    procedure = _procedure_columns(grid, header_row, data_rows, columns) if columns else None
+    mode = options.mode
+    if mode == "auto":
+        if procedure is not None:
+            mode = "procedure"
+        else:
+            mode = (
+                "table"
+                if _density(grid, data_rows, columns) >= TABLE_DENSITY_THRESHOLD
+                else "procedure"
+            )
+    if mode == "procedure" and procedure is not None:
+        blocks = _procedure_blocks(grid, data_rows, columns, names, *procedure)
+    else:
+        # 番号と題名の列が無い手順書は、no.1-rag と同じく表として 1 行ずつ読む。
+        if mode == "procedure":
+            diagnostics.append(SheetDiagnostic(code="procedure_columns_not_found"))
+        mode = "table"
+        blocks = _table_blocks(grid, data_rows, columns, names)
+    return SheetRecords(
+        name=grid.name,
+        header_row=header_row,
+        header_row_count=header_count,
+        header_detection=detection,
+        mode=mode,
+        columns=[SheetColumn(name=names[col], column=_column_letter(col)) for col in columns],
+        preamble=preamble,
+        blocks=blocks,
+        diagnostics=diagnostics,
+    )

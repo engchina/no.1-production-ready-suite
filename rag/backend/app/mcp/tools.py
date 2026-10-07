@@ -152,6 +152,10 @@ class EvidenceLocator(BaseModel):
     section_path: list[str] = Field(default_factory=list, description="節の見出しの列。")
     page_start: int | None = Field(default=None, description="開始の頁（PDF の物理頁）。")
     page_end: int | None = Field(default=None, description="終了の頁（PDF の物理頁）。")
+    sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
+    row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
+    row_end: int | None = Field(default=None, description="シートの終了の行。")
+    cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
 
 
 class RagEvidence(BaseModel):
@@ -234,7 +238,16 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         path = []
     page_start = _metadata_int(metadata, "page_start") or _metadata_int(metadata, "page_number")
     page_end = _metadata_int(metadata, "page_end") or page_start
-    return EvidenceLocator(section_path=path, page_start=page_start, page_end=page_end)
+    sheet_name = _metadata_str(metadata, "sheet_name")
+    return EvidenceLocator(
+        section_path=path,
+        page_start=page_start,
+        page_end=page_end,
+        sheet_name=sheet_name,
+        row_start=_metadata_int(metadata, "row_start") if sheet_name else None,
+        row_end=_metadata_int(metadata, "row_end") if sheet_name else None,
+        cell_range=_metadata_str(metadata, "cell_range") if sheet_name else None,
+    )
 
 
 def _float_or_none(value: object) -> float | None:

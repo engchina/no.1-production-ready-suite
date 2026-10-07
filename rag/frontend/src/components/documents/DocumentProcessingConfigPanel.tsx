@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw, Save, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -57,10 +57,12 @@ import {
   optionLabel,
   recipeConfigValueLabel,
 } from "./DocumentProcessingConfigPanel.values";
+import { ExcelOptionsRow } from "./ExcelOptionsRow";
 
 function emptyConfig(): DocumentProcessingConfig {
   return {
     preprocess_profile: null,
+    excel_options: null,
     parser_adapter_backend: null,
     parser_docling_enabled: null,
     parser_unstructured_enabled: null,
@@ -183,6 +185,9 @@ export function DocumentProcessingConfigPanel({
 
   const update = (patch: Partial<DocumentProcessingConfig>) =>
     setForm((current) => ({ ...current, ...patch }));
+  // 前処理が excel_to_json のときだけ「Excel の読み方」を出す（#1221）。
+  const excelSelected =
+    (form.preprocess_profile ?? configs?.effective.preprocess_profile ?? null) === "excel_to_json";
 
   const renderEditorRow = (item: RecipeConfigItem) => {
     if (!configs) return null;
@@ -429,7 +434,21 @@ export function DocumentProcessingConfigPanel({
                   <PhaseGroup key={group.phase} group={group} idPrefix={`editor-${documentId}`}>
                     {/* 2 列でも左から右・上から下で処理順に読める(#523)。 */}
                     <div className="grid gap-3 lg:grid-cols-2">
-                      {group.items.map((item) => renderEditorRow(item))}
+                      {group.items.map((item) => (
+                        <Fragment key={item.field}>
+                          {renderEditorRow(item)}
+                          {item.field === "preprocess_profile" && configs && excelSelected ? (
+                            <ExcelOptionsRow
+                              key={`excel-options-${recipeId}`}
+                              documentId={documentId}
+                              value={form.excel_options ?? null}
+                              effectiveValue={configs.effective.excel_options ?? null}
+                              disabled={disabled}
+                              onChange={(value) => update({ excel_options: value })}
+                            />
+                          ) : null}
+                        </Fragment>
+                      ))}
                     </div>
                   </PhaseGroup>
                 ))}

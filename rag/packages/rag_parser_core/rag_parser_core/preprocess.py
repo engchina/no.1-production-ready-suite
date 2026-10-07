@@ -149,6 +149,8 @@ class ConvertHealth(BaseModel):
 
 # converter シグネチャ:
 # (source_bytes, content_type, preprocess_profile, source_profile) -> ConvertOutcome
+# 選択肢を持つ前処理（excel_to_json。#1221）は keyword の `options`（Document Recipe の値の dict）も
+# 受け取る。受け取らない converter には渡さない（`create_preprocess_app` が signature で判定する）。
 # app factory(create_preprocess_app)は fastapi 依存のため `preprocess_service` モジュールへ分離し、
 # 本モジュール(契約 schema)は core 依存(pydantic + charset-normalizer)のみに保つ。
 Converter = Callable[[bytes, str, str, SourceProfile | None], ConvertOutcome]

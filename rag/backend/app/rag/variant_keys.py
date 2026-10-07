@@ -22,6 +22,7 @@ import hashlib
 import json
 
 from app.config import SMALL_TO_BIG_SETTING_FIELDS, Settings
+from app.rag.preprocess_strategy import preprocess_options
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v5"
@@ -123,10 +124,17 @@ def chunk_set_subset(settings: Settings) -> dict[str, object]:
 def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     """ID と同じ非機密 extraction 軸を diagnostics 用に返す。"""
     backend = str(getattr(settings, "rag_parser_adapter_backend", "")).strip().casefold()
-    return {
+    subset: dict[str, object] = {
         **_fields(settings, _COMMON_EXTRACTION_RECIPE_FIELDS),
         **_fields(settings, _BACKEND_EXTRACTION_RECIPE_FIELDS.get(backend, ())),
     }
+    # 前処理 excel_to_json の選択肢は抽出結果を変える(#1221)。excel_to_json のときだけ加え、
+    # 他の前処理の ID は変えない。v2(行の記録)にしたときに Excel の抽出も作り直しになる。
+    profile = getattr(settings, "rag_preprocess_profile", None)
+    if profile == "excel_to_json":
+        subset["rag_preprocess_excel_options"] = preprocess_options(settings, profile)
+        subset["excel_to_json_format"] = "sheet_records_v1"
+    return subset
 
 
 def compute_extraction_recipe_id(source_sha256: str, settings: Settings) -> str:

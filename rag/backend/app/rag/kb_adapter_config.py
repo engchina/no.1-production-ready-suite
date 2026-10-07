@@ -25,6 +25,7 @@ from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rag_parser_core.sheet_records import ExcelOptions
 
 from app.config import (
     CHUNK_CHILD_TARGET_CHARS_MAX,
@@ -63,6 +64,8 @@ AdapterConfigScope = Literal["ingestion", "query"]
 # ここに載っていない Settings フィールドは KB 単位で上書きできない。
 _INGESTION_FIELD_MAP: dict[str, str] = {
     "preprocess_profile": "rag_preprocess_profile",
+    # 前処理 excel_to_json の選択肢(#1221。前処理が excel_to_json のときだけ効く)。
+    "excel_options": "rag_preprocess_excel_options",
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
@@ -172,6 +175,8 @@ class KnowledgeBaseIngestionConfig(BaseModel):
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None
+    # 前処理 excel_to_json の選択肢(#1221)。None はグローバル継承。
+    excel_options: ExcelOptions | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
     parser_unstructured_enabled: bool | None = None

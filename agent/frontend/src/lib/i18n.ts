@@ -520,6 +520,8 @@ const agentJa = {
   "chat.sourceUntitled": "無題の文書",
   "evidence.page": "p.{page}",
   "evidence.pageRange": "p.{start}–{end}",
+  "evidence.row": "{row} 行",
+  "evidence.rowRange": "{start}–{end} 行",
   "chat.tools": "使ったツール（{count}）",
   // 回答の処理の段階（3 製品共通の ChatProgress。#1145 / #1147）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。
   "chat.progress.submit.running": "質問を送信しています",

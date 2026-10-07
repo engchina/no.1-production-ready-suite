@@ -329,6 +329,44 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await expectNoPageOverflow(page);
 });
 
+// 前処理が excel_to_json のときだけ「Excel の読み方」を出し、選択肢を保存する(#1221)。
+test("Excel の読み方を上書きして保存する", async ({ page }) => {
+  const state = await mockWorkspace(page);
+  await page.goto("/documents/doc-1");
+  const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
+  await panel.getByRole("button", { name: "処理設定を編集" }).click();
+  // Office→PDF のあいだは出さない。
+  await expect(panel.getByTestId("document-excel-options")).toHaveCount(0);
+
+  await panel.getByRole("group", { name: "ファイル準備", exact: true }).getByText("上書き").click();
+  await panel.getByRole("combobox", { name: "ファイル準備", exact: true }).click();
+  await page.getByRole("option", { name: "Excel→JSON" }).click();
+  const excel = panel.getByTestId("document-excel-options");
+  await expect(excel).toBeVisible();
+  await expect(excel.getByTestId("document-excel-options-inherited")).toContainText("自動");
+
+  await excel.getByText("上書き", { exact: true }).click();
+  await excel.getByRole("combobox", { name: "読み方" }).click();
+  await page.getByRole("option", { name: "表（1 行ずつ）" }).click();
+  await excel.getByRole("spinbutton", { name: "表頭の行" }).fill("2");
+  await excel.getByRole("textbox", { name: "読まない列" }).fill("備考、F");
+  await excel.getByRole("group", { name: "非表示のシート" }).getByText("読む", { exact: true }).click();
+  await expectNoPageOverflow(page);
+  await panel.getByRole("button", { name: "構築設定を保存" }).click();
+
+  await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
+  expect(state.saved()).toMatchObject({
+    preprocess_profile: "excel_to_json",
+    excel_options: {
+      mode: "table",
+      header_row: 2,
+      header_row_count: 1,
+      exclude_columns: ["備考", "F"],
+      include_hidden_sheets: true,
+    },
+  });
+});
+
 // 要約と上書きの一覧は、同じ項目を取込の処理順に並べる(#523)。
 const PROCESSING_ORDER = [
   "preprocess_profile",
