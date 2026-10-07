@@ -1,7 +1,29 @@
 import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
+/** 回答の対応（#1235。backend の diagnostics.answer.outcome）。 */
+export type AnswerOutcome =
+  | "answered"
+  | "conditional"
+  | "needs_clarification"
+  | "needs_environment_data"
+  | "needs_human"
+  | "insufficient_evidence";
+
+const ANSWER_OUTCOMES: readonly AnswerOutcome[] = [
+  "answered",
+  "conditional",
+  "needs_clarification",
+  "needs_environment_data",
+  "needs_human",
+  "insufficient_evidence",
+];
+
 export type AnswerDiagnostics = {
+  /** 回答の対応（#1235）。古い記録など、無ければ null。 */
+  outcome: AnswerOutcome | null;
+  /** 回答に使った業務ガイド（#1238）。使っていなければ null。 */
+  guide: { title: string; revision: number } | null;
   confidence: string;
   needsHumanReview: boolean | null;
   insufficientReason: string;
@@ -69,7 +91,16 @@ export function parseAnswerDiagnostics(
 ): AnswerDiagnostics | null {
   if (!value || typeof value !== "object") return null;
   const raw = record(value);
+  const outcome = String(raw.outcome ?? "");
+  const guide = record(raw.guide);
   return {
+    outcome: (ANSWER_OUTCOMES as readonly string[]).includes(outcome)
+      ? (outcome as AnswerOutcome)
+      : null,
+    guide:
+      typeof guide.title === "string" && guide.title && num(guide.revision) !== null
+        ? { title: guide.title, revision: num(guide.revision) as number }
+        : null,
     confidence: String(raw.confidence ?? ""),
     needsHumanReview:
       typeof raw.needs_human_review === "boolean"
@@ -253,3 +284,26 @@ export function evaluationOutcome(
     ? { variant: "success", labelKey: "passed" }
     : { variant: "danger", labelKey: "failed" };
 }
+
+type BadgeVariant = "info" | "warning" | "danger";
+
+/** 回答の対応のバッジ（「答えた」は出さない）。#1252。 */
+export function outcomeBadge(
+  outcome: AnswerOutcome | null
+): { variant: BadgeVariant; key: `search.answerDetails.outcome.${Exclude<AnswerOutcome, "answered">}` } | null {
+  switch (outcome) {
+    case "conditional":
+      return { variant: "warning", key: "search.answerDetails.outcome.conditional" };
+    case "needs_clarification":
+      return { variant: "info", key: "search.answerDetails.outcome.needs_clarification" };
+    case "needs_environment_data":
+      return { variant: "warning", key: "search.answerDetails.outcome.needs_environment_data" };
+    case "needs_human":
+      return { variant: "warning", key: "search.answerDetails.outcome.needs_human" };
+    case "insufficient_evidence":
+      return { variant: "danger", key: "search.answerDetails.outcome.insufficient_evidence" };
+    default:
+      return null;
+  }
+}
+

@@ -1776,7 +1776,19 @@ _RELATED_STOPWORDS = frozenset({"変更", "修正", "訂正", "編集", "使用"
                                 "操作", "登録", "出力", "画面", "資料", "処理", "対象", "情報", "データ", "可能", "必要"})
 
 
-def audit_needed_quotes(current: "Round", spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list["CheckedItem"]:
+def _related_terms(question: str) -> set[str]:
+    """質問の語（漢字・カタカナ 2 文字以上の連続。総称語は除く。関連原文の照合に使う）。"""
+    return {t for t in re.findall(r"[一-龯々ァ-ヶー]{2,}", question) if t not in _RELATED_STOPWORDS}
+
+
+def _question_term_hits(terms: set[str], span: dict) -> int:
+    haystack = _compact(span["text"] + "\n" + "\n".join(str(h) for h in span.get("section_path") or ()))
+    # 略称・語順の揺れ（「監査指摘」と「監査からの指摘」）は #700 と同じ判定で一致とみなす。
+    return sum(1 for t in terms if _mentions_term(t, haystack))
+
+
+def audit_needed_quotes(current: "Round", spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT,
+                        question: str | None = None) -> list["CheckedItem"]:
     """公開できる item が無い round で、監査が「回答に必要なのに使われていない」と挙げた根拠を原文のみ提示の item にする。
 
     監査は items が空の草稿も根拠全体を見て監査し（#1014）、必要な根拠を重要な順に `unused_evidence_ids` で返す。
@@ -1784,12 +1796,17 @@ def audit_needed_quotes(current: "Round", spans: Sequence[dict], *, limit: int =
     その名前の手順が無いとして拒答するが、監査は共通の手順を必要な根拠として挙げる。これを示さずに拒答すると、
     手元にある資料の記載が利用者に届かない (#1098)。示すのは原文だけで、適用は未確認として表示する。
     見出しだけ・項目名の列挙だけの根拠は、記載として意味を持たないので除く。
+    ``question`` を渡すと、拒答のときの関連原文と同じく、質問の語を 2 つ以上（語が 1 つならその 1 つ）含む
+    根拠だけを示す。資料に答えの無い質問で、監査が挙げた関係の薄い原文を並べて拒答しなくなるのを防ぐ (#1256)。
     """
     by_id = {span["evidence_id"]: span for span in spans}
+    terms = _related_terms(question) if question is not None else set()
     items: list[CheckedItem] = []
     for ref in current.unused:
         span = by_id.get(str(ref.get("evidence_id") or ""))
         if span is None or _bare_title(span["text"]) or _label_list_like(span["text"]):
+            continue
+        if question is not None and _question_term_hits(terms, span) < min(2, len(terms)):
             continue
         items.append(_quote_item(span, span["text"][:600], "監査が回答に必要とした根拠"))
         if len(items) >= limit:
@@ -1804,7 +1821,7 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
     述べた原文があれば「どの資料のどのページに関連する記載があるか」は示せる。適用の判定はせず、原文と
     出典だけを出す。語は漢字・カタカナ 2 文字以上の連続で、総称語は除く。照合は `_mentions_term`（完全一致か略称）。
     """
-    terms = {t for t in re.findall(r"[一-龯々ァ-ヶー]{2,}", question) if t not in _RELATED_STOPWORDS}
+    terms = _related_terms(question)
     if not terms:
         return []
     scored: list[tuple[int, int, dict]] = []
@@ -1812,9 +1829,7 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
         if ("image_generated" in span.get("tags", ()) or span.get("origin") == "image_extraction"
                 or _bare_title(span["text"]) or _label_list_like(span["text"])):
             continue
-        haystack = _compact(span["text"] + "\n" + "\n".join(str(h) for h in span.get("section_path") or ()))
-        # 略称・語順の揺れ（「監査指摘」と「監査からの指摘」）は #700 と同じ判定で一致とみなす。
-        hits = sum(1 for t in terms if _mentions_term(t, haystack))
+        hits = _question_term_hits(terms, span)
         if hits >= min(2, len(terms)):
             scored.append((-hits, order, span))
     scored.sort(key=lambda entry: entry[:2])

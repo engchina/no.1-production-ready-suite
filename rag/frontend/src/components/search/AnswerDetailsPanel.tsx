@@ -1,7 +1,7 @@
 import { Banner, Disclosure, StatusBadge } from "@engchina/production-ready-ui";
 import { BookCheck } from "lucide-react";
 
-import { confidenceVariant, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
+import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
@@ -27,6 +27,7 @@ export function AnswerDetailsPanel({
 }) {
   const data = parseAnswerDiagnostics(diagnostics);
   if (!data) return null;
+  const outcome = outcomeBadge(data.outcome);
   const models = [
     data.models.llm
       ? {
@@ -60,6 +61,22 @@ export function AnswerDetailsPanel({
         <span className="text-sm font-semibold text-fg">
           {title}
         </span>
+        {outcome ? (
+          <span data-testid="answer-outcome-badge">
+            <StatusBadge variant={outcome.variant} label={t(outcome.key)} />
+          </span>
+        ) : null}
+        {data.guide ? (
+          <span data-testid="answer-guide-badge">
+            <StatusBadge
+              variant="neutral"
+              label={t("search.answerDetails.guide", {
+                title: data.guide.title,
+                revision: data.guide.revision,
+              })}
+            />
+          </span>
+        ) : null}
         {data.confidence ? (
           <StatusBadge
             variant={confidenceVariant(data.confidence)}
