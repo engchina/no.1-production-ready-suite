@@ -1,7 +1,7 @@
 # AGENTS.md — Production Ready NL2SQL
 
 > **NL2SQL（`nl2sql/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
-> Claude Code と Codex の両方が参照します。`CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
+> Claude Code と Codex の両方がこのファイルを直接読みます（`CLAUDE.md` は置かない。#1263）。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
 
 ## GitHub 運用・Issue / PR 規約（NL2SQL 固有の追加分）
 
