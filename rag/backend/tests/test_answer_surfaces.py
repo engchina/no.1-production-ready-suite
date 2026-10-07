@@ -142,7 +142,7 @@ def test_mcp_rag_search_answers_with_answer_engine(monkeypatch: MonkeyPatch) -> 
     result: dict[str, Any] = response.json()["result"]
     assert result["isError"] is False
     assert "登録ボタン" in result["structuredContent"]["answer"]
-    assert result["structuredContent"]["citations"][0]["chunk_id"] == "doc-1:c1"
+    assert result["structuredContent"]["evidence"][0]["chunk_id"] == "doc-1:c1"
 
 
 async def test_evaluation_runs_cases_with_answer_engine() -> None:
