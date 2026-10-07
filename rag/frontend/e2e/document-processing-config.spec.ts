@@ -350,6 +350,7 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await page.getByRole("option", { name: "表（1 行ずつ）" }).click();
   await excel.getByRole("spinbutton", { name: "表頭の行" }).fill("2");
   await excel.getByRole("textbox", { name: "読まない列" }).fill("備考、F");
+  await excel.getByRole("textbox", { name: "読む範囲" }).fill("費目!A2:D200、A1:F50");
   await excel.getByRole("group", { name: "非表示のシート" }).getByText("読む", { exact: true }).click();
   await expectNoPageOverflow(page);
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
@@ -363,6 +364,7 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
       header_row_count: 1,
       exclude_columns: ["備考", "F"],
       include_hidden_sheets: true,
+      ranges: ["費目!A2:D200", "A1:F50"],
     },
   });
 });

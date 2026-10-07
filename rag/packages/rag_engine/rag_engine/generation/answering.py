@@ -134,6 +134,7 @@ from rag_engine.generation.execution_record import (
     _record_answer_execution,
     format_question_display,
 )
+from rag_engine.generation.answer_envelope import build_envelope, envelope_item, fallback_envelope
 from rag_engine.generation.answer_models import (
     ANSWER_FLOWS,
     QUERY_STRATEGY_DISPLAY_SEPARATOR,  # tests/test_answer_execution.py が answering 経由で参照する
@@ -1330,20 +1331,25 @@ def synthesize_grounded_answer(
     gap_items = [grounded.CheckedItem(GroundedItem(kind="gap", text=gap)) for gap in gaps]
     # 回答の確定に必要な実データ・別の資料の確認。どの分岐でも本文の最後の節に出す (#688)。
     confirmations = grounded.confirmation_lines(current.draft, question, spans)
+    # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
+    envelope_entries: list[grounded.CheckedItem] = []
     if actionable:
         # 実行できる説明があっても、監査が未回答とした要求があれば、監査が挙げた根拠のうちまだ示していないものを
         # 手順の後に原文として加える。正しい画面の記載が手元にあるのに示さないことを避ける (#1106)。
         cited = {entry.span["evidence_id"] for entry in published}
         extra = [entry for entry in needed if entry.span["evidence_id"] not in cited] if reviewed_unanswered else []
         shown = [*published, *extra]
+        envelope_entries = shown
         answer_text = grounded.render(current.summary, [*current.checked, *extra], reviewed_unanswered,
                                       confirmations)
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
         # 根拠全体を見た監査が必要と挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
         shown = needed
+        envelope_entries = needed
         answer_text = grounded.render(grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmations)
     elif published:
+        envelope_entries = published
         answer_text = grounded.render(current.summary, current.checked, reviewed_unanswered, confirmations)
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -1375,7 +1381,16 @@ def synthesize_grounded_answer(
         "finalization": {"filtered": bool(current.problems), "citations_synchronized": True, "off_goal": off_goal,
                          "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown}), "retained_passage_ids": []},
     }
+    envelope = build_envelope(
+        requests=current.requests,
+        reviews=[review.model_dump() for review in current.audit.request_reviews] if current.audit else None,
+        items=[envelope_item(entry) for entry in envelope_entries],
+        gaps=gaps, confirmations=confirmations,
+        external_data_required=bool(current.draft.external_data_required or current.draft.external_data_items),
+        reference_materials=_string_list(current.draft.reference_materials), off_goal=off_goal,
+    )
     response = _normalize_answer_response(AnswerResponse(
+        envelope=envelope,
         answer_text=answer_text, confidence=confidence, question_type=tuple(_string_list(current.draft.question_type)),
         used_images=tuple(_used_image_entries([{"image_id": e.span["source_id"], "source": e.span.get("source", ""),
             "page": e.span.get("page", ""), "look_at": "引用", "visible_evidence": e.item.quote[:200]} for e in shown])),
@@ -2461,6 +2476,13 @@ def _answer_question_result(
         generation_trace=parsed.generation_trace,
         task_contract=task_contract(expansion.original_question),
         rejected_queries=expansion.rejected_queries,
+        envelope=parsed.envelope or fallback_envelope(
+            answered=response is not None and bool(parsed.evidence_facts),
+            insufficient_reason=parsed.insufficient_reason,
+            needs_human_review=parsed.needs_human_review,
+            external_data_required=parsed.external_data_required,
+            external_data_items=parsed.external_data_items,
+        ),
         text_search_tokenizer=text_search.tokenizer,
         text_search_tokenizer_label=text_search.tokenizer_label,
         text_search_tokenizer_fingerprint=text_search.tokenizer_fingerprint,

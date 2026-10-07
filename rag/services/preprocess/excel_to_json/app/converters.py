@@ -38,6 +38,7 @@ from rag_parser_core.preprocess import ConvertOutcome
 from rag_parser_core.sheet_records import (
     SHEET_RECORDS_CONTENT_TYPE,
     ExcelOptions,
+    ExcelRange,
     HeaderDetection,
     SheetBlock,
     SheetColumn,
@@ -149,6 +150,10 @@ def _excel_to_records(
         if name not in available:
             warnings.append(f"excel_sheet_not_found:{name}")
     excluded_sheets = {name.strip().casefold() for name in options.exclude_sheets if name.strip()}
+    ranges = options.parsed_ranges()
+    for name in sorted({item.sheet for item in ranges if item.sheet is not None}):
+        if name not in available:
+            warnings.append(f"excel_range_sheet_not_found:{name}")
     for grid in grids:
         if requested and grid.name not in requested:
             skipped.append(SkippedSheet(name=grid.name, reason="not_selected"))
@@ -159,7 +164,8 @@ def _excel_to_records(
         if grid.hidden and not options.include_hidden_sheets and grid.name not in requested:
             skipped.append(SkippedSheet(name=grid.name, reason="hidden"))
             continue
-        sheet = _sheet_records(grid, options)
+        sheet_ranges = _ranges_for(grid.name, ranges)
+        sheet = _sheet_records(_crop(grid, sheet_ranges) if sheet_ranges else grid, options)
         if sheet is None:
             skipped.append(SkippedSheet(name=grid.name, reason="empty"))
             continue
@@ -354,6 +360,40 @@ def _column_letter(index: int) -> str:
         index, remainder = divmod(index - 1, 26)
         letters = chr(65 + remainder) + letters
     return letters
+
+
+def _ranges_for(sheet_name: str, ranges: list[ExcelRange]) -> list[ExcelRange]:
+    """シートに当てる範囲（シート名を付けた範囲があればそれ、無ければシート名の無い範囲）。"""
+    named = [item for item in ranges if item.sheet == sheet_name]
+    return named or [item for item in ranges if item.sheet is None]
+
+
+def _crop(grid: _Grid, ranges: list[ExcelRange]) -> _Grid:
+    """範囲の外のセルを除いたシート（#1229）。
+
+    結合セルは範囲と重なる部分に切り詰め、左上が範囲の外でも値は切り詰めた左上へ移す。
+    """
+
+    def inside(row: int, col: int) -> bool:
+        return any(item.contains(row, col) for item in ranges)
+
+    cropped = _Grid(
+        name=grid.name,
+        hidden=grid.hidden,
+        cells={key: value for key, value in grid.cells.items() if inside(*key)},
+        missing_formula_cells={key for key in grid.missing_formula_cells if inside(*key)},
+    )
+    for min_row, min_col, max_row, max_col in grid.merges:
+        value = grid.cells.get((min_row, min_col), "")
+        for item in ranges:
+            top, left = max(min_row, item.min_row), max(min_col, item.min_col)
+            bottom, right = min(max_row, item.max_row), min(max_col, item.max_col)
+            if top > bottom or left > right:
+                continue
+            cropped.merges.append((top, left, bottom, right))
+            if value:
+                cropped.cells.setdefault((top, left), value)
+    return cropped
 
 
 def _apply_merges(grid: _Grid, header_rows: range) -> None:
@@ -604,7 +644,13 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
         if row >= header_row:
             break
         cols = grid.row_columns(row)
-        text = " ".join(grid.cells[(row, col)].strip() for col in cols)
+        # 横の結合で埋めた同じ値は 1 つにする（結合した見出しの文を繰り返さない）。
+        texts: list[str] = []
+        for col in cols:
+            value = grid.cells[(row, col)].strip()
+            if not texts or texts[-1] != value:
+                texts.append(value)
+        text = " ".join(texts)
         preamble.append(
             SheetPreambleRow(row_number=row, cell_range=_row_range(cols, row, row), text=text)
         )

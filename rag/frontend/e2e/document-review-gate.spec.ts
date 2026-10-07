@@ -159,7 +159,7 @@ function recipeView() {
   };
 }
 
-async function mockReviewWorkspace(page: Page) {
+async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: string[] } = {}) {
   const calls: {
     approve: number;
     save: number;
@@ -167,6 +167,7 @@ async function mockReviewWorkspace(page: Page) {
     saveBody: unknown;
   } = { approve: 0, save: 0, approveBody: null, saveBody: null };
   const extraction = structuredClone(reviewDocumentDetail("REVIEW").extraction);
+  if (options.extractionWarnings) Object.assign(extraction, { warnings: options.extractionWarnings });
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>
@@ -283,6 +284,28 @@ test("REVIEW 文書は確認待ち表示と承認・再処理導線だけを出�
   await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeVisible();
   await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
   await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
+});
+
+// 表頭を推定できなかった Excel のシートがあって確認で止めたときは、理由と次の操作を出す（#1229）。
+test("Excel の表頭を推定できずに止めた REVIEW は、理由と直し方を出す", async ({ page }) => {
+  await mockReviewWorkspace(page, {
+    extractionWarnings: ["excel_header_low_confidence:費目", "excel_header_low_confidence:手順"],
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+
+  await expect(page.getByText("Excel の表頭を確認してください")).toBeVisible();
+  await expect(page.getByText(/索引を作る前に止めました（費目、手順）/)).toBeVisible();
+  await expect(
+    page.getByText("内容を確認し、問題なければ Chunk 作成へ進めてください", { exact: false })
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 800 });
+  await expect(page.getByText("Excel の表頭を確認してください")).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 });
 
 test("承認すると chunk job を投入し成功 toast を出す", async ({ page }) => {

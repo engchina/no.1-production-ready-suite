@@ -295,3 +295,31 @@ def test_answer_records_carry_sheet_location_for_citations() -> None:
     }
     # 別のシートが混ざる親は場所をまとめない（頁と同じく、確かな場所だけを出す）。
     assert _merged_sheet_location([{"sheet_name": "a"}, {"sheet_name": "b"}]) is None
+
+
+def test_low_confidence_header_becomes_extraction_warning_and_ranges_are_validated() -> None:
+    """表頭の推定の信頼度が低いシートは抽出の warning になり、範囲は保存時に検証する（#1229）。"""
+    import pytest
+    from pydantic import ValidationError
+    from rag_parser_core.sheet_records import HeaderDetection, SheetDiagnostic
+
+    from app.schemas.document import DocumentProcessingConfig
+
+    document = _document()
+    document.sheets[0].header_detection = HeaderDetection(
+        method="detected", confidence=0.4, reason="数値の行"
+    )
+    document.sheets[0].diagnostics = [SheetDiagnostic(code="header_low_confidence", detail="0.40")]
+    result = run_external_adapter(
+        "docling", document.to_json_bytes(), _xlsx_profile(), SHEET_RECORDS_CONTENT_TYPE
+    )
+    assert result.extraction is not None
+    assert result.extraction.warnings == ["excel_header_low_confidence:コード表"]
+
+    recipe = DocumentProcessingConfig.model_validate(
+        {"excel_options": {"ranges": [" 手順!A1:D80 ", "A3:F200", ""]}}
+    )
+    assert recipe.excel_options is not None
+    assert recipe.excel_options.ranges == ["手順!A1:D80", "A3:F200"]
+    with pytest.raises(ValidationError):
+        DocumentProcessingConfig.model_validate({"excel_options": {"ranges": ["A1"]}})
