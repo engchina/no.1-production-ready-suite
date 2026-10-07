@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Fragment, useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
+import { stabilizeMeasuredSize } from "../../lib/measured-size";
 import { cn } from "../../lib/utils";
 import { SKELETON_CLASS } from "../ui/skeleton";
 
@@ -163,6 +164,14 @@ export function measureVisibleRowsHeight({
   return Math.ceil(bottom - tableTop + chrome);
 }
 
+/**
+ * 測り直した高さを、今の値との差が 1px 以内なら大きい方に寄せて変えない（#1222）。
+ * 共通の `stabilizeMeasuredSize`（`larger`。中身を収める高さなので欠けさせない）を使う。
+ */
+export function stabilizeMeasuredHeight(current: number | undefined, next: number | undefined) {
+  return stabilizeMeasuredSize(current, next, { prefer: "larger" });
+}
+
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(false);
   useLayoutEffect(() => {
@@ -243,7 +252,10 @@ export function DataTable<T>({
       chrome,
       fill: Boolean(fillVisibleRows),
     });
-    setMeasuredHeight((current) => (current === next ? current : next));
+    setMeasuredHeight((current) => {
+      const stable = stabilizeMeasuredHeight(current, next);
+      return stable === current ? current : stable;
+    });
   }, [rowLimit, fillVisibleRows]);
 
   useLayoutEffect(() => {

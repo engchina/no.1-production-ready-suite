@@ -3,11 +3,26 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { FIXED_SPLIT_STORAGE_PREFIX, FixedSplitPane, fixedSplitStorageKey } from "../src";
+import {
+  FIXED_SPLIT_LAYOUT_HYSTERESIS_PX,
+  FIXED_SPLIT_STORAGE_PREFIX,
+  FixedSplitPane,
+  fixedSplitStorageKey,
+  nextFixedSplitWideEnough,
+} from "../src";
 
 const tokensCss = readFileSync(new URL("../src/styles/tokens.css", import.meta.url), "utf8");
 
 describe("FixedSplitPane", () => {
+  it("横並びと縦積みは境目の近くの幅の揺れで往復しない（#1222）", () => {
+    const threshold = 654;
+    expect(nextFixedSplitWideEnough(false, threshold - 1, threshold)).toBe(false);
+    expect(nextFixedSplitWideEnough(false, threshold, threshold)).toBe(true);
+    // 横並びになった後は、境目より少し狭くなっても横並びのまま（スクロールバー 1 本分の揺れなど）。
+    expect(nextFixedSplitWideEnough(true, threshold - 15, threshold)).toBe(true);
+    expect(nextFixedSplitWideEnough(true, threshold - FIXED_SPLIT_LAYOUT_HYSTERESIS_PX - 1, threshold)).toBe(false);
+  });
+
   it("保存 key の前置きは既定が共通で、製品が上書きできる", () => {
     expect(fixedSplitStorageKey("list")).toBe(`${FIXED_SPLIT_STORAGE_PREFIX}.list`);
     expect(fixedSplitStorageKey("list", "production-ready-nl2sql.fixedSplitPane")).toBe(

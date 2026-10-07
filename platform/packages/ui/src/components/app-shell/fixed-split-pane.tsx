@@ -14,6 +14,7 @@ import {
 
 import {
   FIXED_SPLIT_DIVIDER_SIZE_PX,
+  nextFixedSplitWideEnough,
   FIXED_SPLIT_STORAGE_PREFIX,
   FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
   FIXED_SPLIT_KEYBOARD_FAST_STEP_PX,
@@ -118,6 +119,10 @@ export function FixedSplitPane({
   );
   const [isDragging, setIsDragging] = useState(false);
   const [rootWidth, setRootWidth] = useState(0);
+  // 横並びにできる幅か。境目の近くで幅が揺れても横並びと縦積みを往復しないよう、横並びから
+  // 縦積みへ戻すのは境目より少し狭くなったときだけにする（nextFixedSplitWideEnough。#1222）。
+  const [wideEnough, setWideEnough] = useState(false);
+  const splitThreshold = minLeftPaneWidthPx + FIXED_SPLIT_DIVIDER_SIZE_PX + minRightPaneWidthPx;
   const [isDesktopViewport, setIsDesktopViewport] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(min-width: 1280px)").matches
   );
@@ -146,7 +151,11 @@ export function FixedSplitPane({
     const root = rootRef.current;
     if (!root) return;
 
-    const updateWidth = () => setRootWidth(root.clientWidth);
+    const updateWidth = () => {
+      const width = root.clientWidth;
+      setRootWidth(width);
+      setWideEnough((current) => nextFixedSplitWideEnough(current, width, splitThreshold));
+    };
     updateWidth();
 
     if (typeof ResizeObserver === "undefined") {
@@ -157,7 +166,7 @@ export function FixedSplitPane({
     const observer = new ResizeObserver(updateWidth);
     observer.observe(root);
     return () => observer.disconnect();
-  }, []);
+  }, [splitThreshold]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 1280px)");
@@ -173,9 +182,7 @@ export function FixedSplitPane({
   }, []);
 
   const measuredAvailableWidth = Math.max(rootWidth - FIXED_SPLIT_DIVIDER_SIZE_PX, 1);
-  const splitLayout =
-    isDesktopViewport &&
-    rootWidth >= minLeftPaneWidthPx + FIXED_SPLIT_DIVIDER_SIZE_PX + minRightPaneWidthPx;
+  const splitLayout = isDesktopViewport && wideEnough;
   const constrainedLeftFraction =
     rootWidth > 0
       ? clampFixedSplitFractionToPaneWidths(
