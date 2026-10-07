@@ -1324,7 +1324,7 @@ def synthesize_grounded_answer(
                            for entry in current.unanswered if entry["reviewed"] and entry["status"] == "missing"]
     unanswered = [entry["reason"] for entry in current.unanswered]
     # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
-    needed = [] if off_goal else grounded.audit_needed_quotes(current, spans)
+    needed = [] if off_goal else grounded.audit_needed_quotes(current, spans, question=question)
     actionable = [entry for entry in published if not entry.quote_only]
     # 回答に実際に出す根拠。参照欄と画像の参照はこれに同期する。
     shown = published
