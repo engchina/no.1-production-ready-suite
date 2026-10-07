@@ -137,6 +137,7 @@ for (const viewport of [
       "用語・同義語",
       "ドメインキーワード",
       "回答ルール",
+      "業務ガイド",
     ]);
     await expect(page.getByRole("tab", { name: "Approved FAQ（類似問）" })).toHaveAttribute(
       "aria-selected",

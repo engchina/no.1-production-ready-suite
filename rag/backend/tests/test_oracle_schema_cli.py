@@ -112,6 +112,8 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "answer_prompts",
         "query_history",
         "search_answer_profile_knowledge",
+        "support_guides",
+        "support_guide_revisions",
         "document_sections",
         "conversations",
         "messages",

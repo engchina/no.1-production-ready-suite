@@ -37,7 +37,9 @@ from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.rag.answer_validation import EvidenceRef, validate_answer
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.support_guide_runtime import GuideMatch, clarification_questions, rank_guides
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileStatus
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
@@ -114,6 +116,55 @@ class SearchInput(BaseModel):
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
         description="返す根拠の最大件数（回答に使った根拠を先に返す）。",
+    )
+    conditions: dict[str, str] = Field(
+        default_factory=dict,
+        max_length=30,
+        description=(
+            "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の"
+            " clarifications に利用者が答えた値を入れて呼び直すと、分かっている条件は"
+            "聞き直さない。"
+        ),
+    )
+
+
+class LookupGuidesInput(BaseModel):
+    """質問に当たる業務ガイドを引く条件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(..., min_length=1, max_length=8000, description="質問文（利用者の目的）。")
+    search_answer_profile_id: str = Field(
+        ..., min_length=1, max_length=128, description="検索・回答プロファイルの id。"
+    )
+    conditions: dict[str, str] = Field(
+        default_factory=dict, max_length=30, description="分かっている条件の値（条件の id → 値）。"
+    )
+    limit: int = Field(default=3, ge=1, le=10, description="返す業務ガイドの最大件数。")
+
+
+class EvidenceRefInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(..., min_length=1, max_length=128)
+    chunk_id: str = Field(..., min_length=1, max_length=512)
+
+
+class ValidateAnswerInput(BaseModel):
+    """回答の最終の検証の条件（#1246）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(..., min_length=1, max_length=8000, description="利用者の質問。")
+    answer: str = Field(..., min_length=1, max_length=20000, description="検証する回答の本文。")
+    evidence: list[EvidenceRefInput] = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        description=(
+            "回答の根拠（rag_search / rag_retrieve_evidence が返した document_id と chunk_id）。"
+            "本文はサーバーが今の権限と版で読み直す。"
+        ),
     )
 
 
@@ -213,6 +264,38 @@ class AnswerRequest(BaseModel):
     )
 
 
+class GuideClarification(BaseModel):
+    condition_id: str = Field(description="条件の id（conditions に値を入れて呼び直す）。")
+    label: str = Field(description="条件の名前。")
+    question: str = Field(description="利用者に確かめる問い。")
+    options: list[str] = Field(default_factory=list, description="選択肢（無ければ自由に答える）。")
+
+
+class GuideCondition(BaseModel):
+    id: str
+    label: str
+    value: str | None = None
+    source: str | None = Field(
+        default=None, description="user=利用者が答えた / question=質問の文から読んだ。"
+    )
+    handling: str | None = Field(
+        default=None, description="不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。"
+    )
+
+
+class GuideRef(BaseModel):
+    guide_id: str
+    revision: int = Field(description="使った公開の版。")
+    title: str
+    decision: Literal["answer", "branch", "clarify", "handoff"] = Field(
+        description=(
+            "answer=条件がそろった / branch=分岐で答えた / clarify=確かめる / handoff=人へ。"
+        )
+    )
+    known_conditions: list[GuideCondition] = Field(default_factory=list)
+    unknown_conditions: list[GuideCondition] = Field(default_factory=list)
+
+
 class SearchOutput(BaseModel):
     answer: str
     trace_id: str
@@ -235,12 +318,44 @@ class SearchOutput(BaseModel):
     confirmations: list[str] = Field(
         default_factory=list, description="回答を確定するために確かめる現場のデータ・別の資料。"
     )
+    clarifications: list[GuideClarification] = Field(
+        default_factory=list,
+        description=(
+            "outcome=needs_clarification のとき、利用者に確かめる条件と問い（業務ガイド）。"
+        ),
+    )
+    guide: GuideRef | None = Field(
+        default=None, description="回答に使った業務ガイド（公開の版）。使わなければ null。"
+    )
     insufficient_reason: str | None = Field(
         default=None, description="根拠が足りず答えきれなかった理由（無ければ null）。"
     )
     needs_human_review: bool = Field(default=False, description="人の確認が要る回答か。")
     evidence: list[RagEvidence]
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+
+
+class GuideStepItem(BaseModel):
+    id: str
+    title: str
+    depends_on: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+
+
+class LookupGuideItem(GuideRef):
+    expected_result: str
+    score: int = Field(description="質問との照合の点（大きいほど合う）。")
+    clarifications: list[GuideClarification] = Field(default_factory=list)
+    steps: list[GuideStepItem] = Field(default_factory=list)
+    impact_scope: Literal["individual", "group", "all"]
+    approval_required: bool
+    handoff_contact: str = ""
+
+
+class LookupGuidesOutput(BaseModel):
+    guides: list[LookupGuideItem] = Field(
+        description="質問に当たる公開の業務ガイド（照合の点の高い順）。無ければ空。"
+    )
 
 
 class RetrieveEvidenceOutput(BaseModel):
@@ -250,6 +365,38 @@ class RetrieveEvidenceOutput(BaseModel):
         description="検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。"
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+
+
+class ValidatedClaim(BaseModel):
+    answer_quote: str = Field(description="回答の段落（原文）。")
+    status: str = Field(
+        description=(
+            "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
+            "矛盾 / data_confirmation=実データの確認を促すだけ / unassessed=監査されなかった"
+        )
+    )
+    chunk_id: str | None = Field(default=None, description="裏付け・矛盾の根拠の chunk_id。")
+    reason: str
+
+
+class ValidateAnswerOutput(BaseModel):
+    valid: bool = Field(
+        description=(
+            "矛盾・裏付けの無い主張・読めない根拠が無く、裏付けのある主張が 1 つ以上あるか。"
+        )
+    )
+    status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
+    counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
+    claims: list[ValidatedClaim] = Field(default_factory=list)
+    missing_evidence: list[EvidenceRefInput] = Field(
+        default_factory=list, description="見つからない（削除・権限の外）根拠。"
+    )
+    stale_evidence: list[EvidenceRefInput] = Field(
+        default_factory=list, description="文書の古い版の根拠（検索し直す）。"
+    )
+    evidence_truncated: bool = Field(
+        default=False, description="根拠が多く、後ろの根拠を監査に渡しきれなかったか。"
+    )
 
 
 class ReadSourceOutput(BaseModel):
@@ -394,10 +541,31 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         "conditions": _strings(envelope.get("conditions")),
         "gaps": _strings(envelope.get("gaps")),
         "confirmations": _strings(envelope.get("confirmations")),
+        "clarifications": [
+            item for item in envelope.get("clarifications", []) if isinstance(item, dict)
+        ],
+        "guide": _guide_ref(answer.get("guide")),
         "insufficient_reason": reason.strip() or None if isinstance(reason, str) else None,
         "needs_human_review": answer.get("needs_human_review") is True,
         "evidence": [_evidence(chunk) for chunk in ordered[:evidence_limit]],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
+    }
+
+
+def _guide_conditions(value: object) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _guide_ref(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not value.get("guide_id"):
+        return None
+    return {
+        "guide_id": str(value["guide_id"]),
+        "revision": int(value.get("revision") or 0),
+        "title": str(value.get("title") or ""),
+        "decision": value.get("decision") or "answer",
+        "known_conditions": _guide_conditions(value.get("known_conditions")),
+        "unknown_conditions": _guide_conditions(value.get("unknown_conditions")),
     }
 
 
@@ -463,6 +631,8 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
+    if arguments.conditions:
+        payload["conditions"] = arguments.conditions
     try:
         return SearchRequest.model_validate(payload)
     except ValidationError as exc:
@@ -472,6 +642,29 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
             "検索条件が正しくありません。",
             details={"errors": errors},
         ) from exc
+
+
+def _lookup_item(match: GuideMatch) -> LookupGuideItem:
+    summary = match.summary()
+    content = match.content
+    return LookupGuideItem(
+        **summary,
+        expected_result=content.goal.expected_result,
+        score=match.score,
+        clarifications=[GuideClarification(**item) for item in clarification_questions(match)],
+        steps=[
+            GuideStepItem(
+                id=step.id,
+                title=step.title,
+                depends_on=list(step.depends_on),
+                allowed_tools=list(step.allowed_tools),
+            )
+            for step in content.steps
+        ],
+        impact_scope=content.impact.scope,
+        approval_required=content.impact.approval_required,
+        handoff_contact=content.handoff.contact,
+    )
 
 
 def build_rag_mcp_server(http_request: Request) -> McpServer:
@@ -509,6 +702,21 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         return SearchOutput(**_answer_fields(result, arguments.evidence_limit))
 
+    async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
+        oracle = OracleClient()
+        view = await oracle.get_search_answer_profile(arguments.search_answer_profile_id)
+        if view is None:
+            raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
+        guides = await search_route._published_guides(oracle, view.id)
+        return LookupGuidesOutput(
+            guides=[
+                _lookup_item(match)
+                for match in rank_guides(
+                    guides, arguments.query, arguments.conditions, limit=arguments.limit
+                )
+            ]
+        )
+
     async def retrieve_evidence(arguments: SearchInput) -> RetrieveEvidenceOutput:
         # 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・生成）は作らない。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
@@ -520,6 +728,38 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             guardrail_warnings=list(result.guardrail_warnings),
             evidence=[_evidence(chunk) for chunk in result.citations[:limit]],
             evidence_omitted=max(0, len(result.citations) - limit),
+        )
+
+    async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:
+        enforce_rate_limit("search", http_request)
+        result = await validate_answer(
+            arguments.query,
+            arguments.answer,
+            [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
+            get_settings(),
+        )
+        return ValidateAnswerOutput(
+            valid=result.valid,
+            status=result.status,
+            counts=result.counts,
+            claims=[
+                ValidatedClaim(
+                    answer_quote=str(claim.get("answer_quote") or ""),
+                    status=str(claim.get("status") or ""),
+                    chunk_id=str(claim.get("source_id") or "") or None,
+                    reason=str(claim.get("reason") or ""),
+                )
+                for claim in result.claim_checks
+            ],
+            missing_evidence=[
+                EvidenceRefInput(document_id=ref.document_id, chunk_id=ref.chunk_id)
+                for ref in result.missing_evidence
+            ],
+            stale_evidence=[
+                EvidenceRefInput(document_id=ref.document_id, chunk_id=ref.chunk_id)
+                for ref in result.stale_evidence
+            ],
+            evidence_truncated=result.evidence_truncated,
         )
 
     return McpServer(
@@ -547,6 +787,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(
+                name="rag_lookup_guides",
+                description=(
+                    "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順・影響範囲・"
+                    "引き継ぎ先）を返します。回答は作りません。"
+                ),
+                input_model=LookupGuidesInput,
+                handler=lookup_guides,
+                output_model=LookupGuidesOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
                 name="rag_retrieve_evidence",
                 description=(
                     "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
@@ -555,6 +806,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=SearchInput,
                 handler=retrieve_evidence,
                 output_model=RetrieveEvidenceOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_validate_answer",
+                description=(
+                    "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
+                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。"
+                ),
+                input_model=ValidateAnswerInput,
+                handler=validate,
+                output_model=ValidateAnswerOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(

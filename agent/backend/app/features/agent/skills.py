@@ -158,6 +158,11 @@ skill_registry.register(
             "現場の値・記録）を挙げ、現場の値を推測で断定しない。insufficient_evidence は"
             "資料で確かめられなかったことを伝え、推測で補わない。requests の missing は"
             "答えていない要求として利用者に示す。"
+            "needs_clarification は clarifications の問いを利用者にそのまま確かめ、推測で選ばない。"
+            "答えを得たら conditions（条件の id → 値）に入れて rag_search を呼び直す。"
+            "手順を案内する依頼では、先に rag_lookup_guides で業務ガイド（確かめる条件・手順の順・"
+            "影響範囲・引き継ぎ先）を確かめ、影響範囲が広い操作や承認が要る操作はその旨を示す。"
+            "needs_human は引き継ぎ先を示し、操作を代わりに進めない。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
@@ -166,6 +171,7 @@ skill_registry.register(
                     "rag_search",
                     "rag_list_search_answer_profiles",
                     "rag_read_source",
+                    "rag_lookup_guides",
                     "rag_retrieve_evidence",
                 ],
             )

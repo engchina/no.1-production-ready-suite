@@ -1,0 +1,422 @@
+"""業務ガイド（SupportGuide。#1237）の内容の検証と API（保存はメモリの偽物）。
+
+内容は架空の「サンプル業務ポータル」の例だけを使う。
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from app.api.routes import support_guides as route
+from app.clients.support_guide_store import SupportGuideConflictError, SupportGuideNotFoundError
+from app.main import app
+from app.rag.support_guide import content_sha256, has_errors, validate_content
+from app.schemas.document import FileStatus
+from app.schemas.support_guide import (
+    SupportGuideContent,
+    SupportGuideRevision,
+    SupportGuideRevisionSummary,
+    SupportGuideSummary,
+)
+from tests.support import AsgiTestClient
+
+client = AsgiTestClient(app)
+BASE = "/api/search-answer-profiles/bv-1/support-guides"
+
+
+def guide(**overrides: Any) -> dict[str, Any]:
+    """検証用アカウントの登録と権限の付与の業務ガイド（架空）。"""
+    payload: dict[str, Any] = {
+        "title": "検証用アカウントに権限を付ける",
+        "goal": {
+            "expected_result": "検証用アカウントが対象の機能を使える",
+            "intent_examples": ["検証用アカウントに権限を付けたい"],
+            "match_terms": ["検証用アカウント", "権限"],
+        },
+        "conditions": [
+            {
+                "id": "target",
+                "label": "付与先",
+                "type": "enum",
+                "allowed_values": ["個別", "グループ"],
+                "unknown_handling": "branch",
+                "question": "権限は個別の利用者とグループのどちらに付けますか？",
+            }
+        ],
+        "steps": [
+            {"id": "register", "title": "アカウントを登録する", "allowed_tools": ["rag_search"]},
+            {"id": "grant", "title": "権限を付与する", "depends_on": ["register"]},
+            {"id": "ask", "title": "付与先を確かめる"},
+        ],
+        "branches": [
+            {
+                "id": "b1",
+                "when": {"condition_id": "target", "values": ["個別"]},
+                "goto_step": "grant",
+            },
+            {
+                "id": "b2",
+                "when": {"condition_id": "target", "operator": "unknown"},
+                "goto_step": "ask",
+            },
+        ],
+        "references": [{"document_id": "doc-1", "title": "運用手順書"}],
+        "impact": {"scope": "group", "approval_required": True},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def content(**overrides: Any) -> SupportGuideContent:
+    return SupportGuideContent.model_validate(guide(**overrides))
+
+
+# ---- 内容の検証 ----------------------------------------------------------------------------
+
+
+def test_valid_guide_has_only_the_uncovered_branch_warning() -> None:
+    issues = validate_content(content())
+    assert not has_errors(issues)
+    assert [issue.code for issue in issues] == ["branch_not_covered"]
+    assert "グループ" in issues[0].message
+
+
+def test_structural_errors_are_reported_with_paths() -> None:
+    broken = content(
+        goal={"expected_result": "結果"},
+        steps=[
+            {"id": "a", "title": "A", "depends_on": ["b", "missing"], "allowed_tools": ["shell"]},
+            {"id": "b", "title": "B", "depends_on": ["a"]},
+            {"id": "c", "title": "C"},
+            {"id": "c", "title": "C2"},
+        ],
+        branches=[
+            {
+                "id": "x",
+                "when": {"condition_id": "target", "values": ["全員"]},
+                "goto_step": "nowhere",
+            },
+            {"id": "y", "when": {"condition_id": "nope", "values": ["1"]}, "goto_step": "a"},
+        ],
+        impact={"scope": "all"},
+    )
+    codes = {issue.code for issue in validate_content(broken)}
+    assert {
+        "goal_unmatchable",
+        "duplicate_id",
+        "unknown_dependency",
+        "unknown_tool",
+        "dependency_cycle",
+        "unknown_goto",
+        "unknown_value",
+        "unknown_condition",
+        "unknown_branch_missing",
+        "wide_impact_without_approval",
+    } <= codes
+
+
+def test_content_model_rejects_unsafe_or_inconsistent_values() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):  # 選択肢が 1 つの enum
+        content(conditions=[{"id": "c", "label": "c", "allowed_values": ["a"], "question": "?"}])
+    with pytest.raises(ValidationError):  # 確かめる問いの無い ask
+        content(conditions=[{"id": "c", "label": "c", "type": "text"}])
+    with pytest.raises(ValidationError):  # 宣言にない項目（式・script は受け付けない）
+        content(
+            branches=[
+                {"id": "x", "when": {"condition_id": "target", "expr": "1"}, "goto_step": "a"}
+            ]
+        )
+    with pytest.raises(ValidationError):  # id の形
+        content(steps=[{"id": "1 step", "title": "x"}])
+    with pytest.raises(ValidationError):  # 有効期間の逆転
+        content(applicability={"effective_from": "2026-05-01", "effective_to": "2026-04-01"})
+    # 指紋は内容が同じなら同じ。
+    assert content_sha256(content()) == content_sha256(content())
+    assert content_sha256(content()) != content_sha256(content(title="別"))
+
+
+# ---- API ---------------------------------------------------------------------------------
+
+
+class FakeStore:
+    """SupportGuideStore のメモリの偽物（楽観ロック・公開の版・アーカイブ）。"""
+
+    def __init__(self) -> None:
+        self.heads: dict[str, dict[str, Any]] = {}
+        self.revisions: dict[str, list[SupportGuideRevision]] = {}
+
+    def _summary(self, guide_id: str) -> SupportGuideSummary:
+        head = self.heads[guide_id]
+        published = head["published_revision"]
+        published_sha = (
+            self.revisions[guide_id][published - 1].content_sha256 if published else None
+        )
+        return SupportGuideSummary(
+            guide_id=guide_id,
+            search_answer_profile_id=head["profile"],
+            status=head["status"],
+            title=head["draft"].title,
+            draft_revision=head["draft_revision"],
+            published_revision=published,
+            has_unpublished_changes=published_sha != content_sha256(head["draft"]),
+            updated_at=datetime(2026, 10, 7, tzinfo=UTC),
+            updated_by=head["user"],
+        )
+
+    def _head(self, profile: str, guide_id: str) -> dict[str, Any]:
+        head = self.heads.get(guide_id)
+        if head is None or head["profile"] != profile:
+            raise SupportGuideNotFoundError(guide_id)
+        return head
+
+    async def list_guides(
+        self, profile: str, *, include_archived: bool = False
+    ) -> list[SupportGuideSummary]:
+        return [
+            self._summary(guide_id)
+            for guide_id, head in self.heads.items()
+            if head["profile"] == profile and (include_archived or head["status"] == "active")
+        ]
+
+    async def get_guide(
+        self, profile: str, guide_id: str
+    ) -> tuple[SupportGuideSummary, SupportGuideContent]:
+        head = self._head(profile, guide_id)
+        return self._summary(guide_id), head["draft"]
+
+    async def list_revisions(self, guide_id: str) -> list[SupportGuideRevisionSummary]:
+        return [
+            SupportGuideRevisionSummary(**revision.model_dump(exclude={"content"}))
+            for revision in reversed(self.revisions.get(guide_id, []))
+        ]
+
+    async def get_revision(self, guide_id: str, revision: int) -> SupportGuideRevision:
+        items = self.revisions.get(guide_id, [])
+        if not 1 <= revision <= len(items):
+            raise SupportGuideNotFoundError(guide_id)
+        return items[revision - 1]
+
+    async def published_contents(self, profile: str) -> list[tuple[str, int, SupportGuideContent]]:
+        return [
+            (
+                guide_id,
+                head["published_revision"],
+                self.revisions[guide_id][head["published_revision"] - 1].content,
+            )
+            for guide_id, head in self.heads.items()
+            if head["profile"] == profile
+            and head["status"] == "active"
+            and head["published_revision"]
+        ]
+
+    async def create_guide(
+        self, profile: str, draft: SupportGuideContent, *, user: str | None
+    ) -> str:
+        guide_id = f"g{len(self.heads) + 1}"
+        self.heads[guide_id] = {
+            "profile": profile,
+            "status": "active",
+            "draft": draft,
+            "draft_revision": 1,
+            "published_revision": None,
+            "user": user,
+        }
+        return guide_id
+
+    async def save_draft(
+        self,
+        profile: str,
+        guide_id: str,
+        draft: SupportGuideContent,
+        *,
+        base_revision: int,
+        user: str | None,
+    ) -> int:
+        head = self._head(profile, guide_id)
+        if head["draft_revision"] != base_revision:
+            raise SupportGuideConflictError(head["draft_revision"])
+        head.update(draft=draft, draft_revision=head["draft_revision"] + 1, user=user)
+        return int(head["draft_revision"])
+
+    async def publish(
+        self,
+        profile: str,
+        guide_id: str,
+        draft: SupportGuideContent,
+        *,
+        base_revision: int | None,
+        user: str | None,
+        rollback_from: int | None = None,
+    ) -> int:
+        head = self._head(profile, guide_id)
+        if base_revision is not None and head["draft_revision"] != base_revision:
+            raise SupportGuideConflictError(head["draft_revision"])
+        items = self.revisions.setdefault(guide_id, [])
+        revision = len(items) + 1
+        items.append(
+            SupportGuideRevision(
+                revision=revision,
+                title=draft.title,
+                content_sha256=content_sha256(draft),
+                published_at=datetime(2026, 10, 7, tzinfo=UTC),
+                published_by=user,
+                rollback_from=rollback_from,
+                content=draft,
+            )
+        )
+        head["published_revision"] = revision
+        if rollback_from is not None:
+            head.update(draft=draft, draft_revision=head["draft_revision"] + 1)
+        return revision
+
+    async def set_status(
+        self, profile: str, guide_id: str, status: str, *, user: str | None
+    ) -> None:
+        self._head(profile, guide_id)["status"] = status
+
+
+class FakeOracle:
+    def __init__(self) -> None:
+        self.documents = {"doc-1": (FileStatus.INDEXED, ["kb-1"])}
+
+    async def get_search_answer_profile(self, profile_id: str) -> Any:
+        if profile_id != "bv-1":
+            return None
+        return SimpleNamespace(config=SimpleNamespace(knowledge_base_ids=["kb-1"]))
+
+    async def get_document(self, document_id: str) -> Any:
+        found = self.documents.get(document_id)
+        return SimpleNamespace(status=found[0]) if found else None
+
+    async def list_document_knowledge_bases(self, document_id: str) -> list[Any]:
+        return [SimpleNamespace(id=kb) for kb in self.documents.get(document_id, (None, []))[1]]
+
+
+@pytest.fixture
+def fakes(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeStore, FakeOracle]:
+    store, oracle = FakeStore(), FakeOracle()
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "SupportGuideStore", lambda _oracle=None: store)
+    return store, oracle
+
+
+def test_draft_publish_conflict_and_history(fakes: tuple[FakeStore, FakeOracle]) -> None:
+    created = client.post(BASE, json={"draft": guide()})
+    assert created.status_code == 201
+    detail = created.json()["data"]
+    guide_id = detail["guide_id"]
+    assert (detail["draft_revision"], detail["published_revision"]) == (1, None)
+    assert detail["has_unpublished_changes"] is True
+    assert [issue["code"] for issue in detail["issues"]] == ["branch_not_covered"]
+
+    # 下書きの保存は版を照合する。
+    saved = client.put(
+        f"{BASE}/{guide_id}", json={"draft": guide(title="改訂"), "base_revision": 1}
+    )
+    assert saved.json()["data"]["draft_revision"] == 2
+    stale = client.put(f"{BASE}/{guide_id}", json={"draft": guide(), "base_revision": 1})
+    assert stale.status_code == 409
+    assert "版 2" in stale.json()["error_messages"][0]
+
+    assert client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1}).status_code == 409
+    published = client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 2}).json()["data"]
+    assert published["published_revision"] == 1
+    assert published["published"]["title"] == "改訂"
+    assert published["has_unpublished_changes"] is False
+
+    client.put(f"{BASE}/{guide_id}", json={"draft": guide(title="三訂"), "base_revision": 2})
+    second = client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 3}).json()["data"]
+    assert [item["revision"] for item in second["revisions"]] == [2, 1]
+    assert client.get(f"{BASE}/{guide_id}/revisions/1").json()["data"]["content"]["title"] == "改訂"
+
+    # 古い版を新しい版として公開し直す（下書きもその内容になる）。
+    rolled = client.post(f"{BASE}/{guide_id}/rollback", json={"revision": 1}).json()["data"]
+    assert rolled["published_revision"] == 3
+    assert rolled["revisions"][0]["rollback_from"] == 1
+    assert (rolled["draft"]["title"], rolled["published"]["title"]) == ("改訂", "改訂")
+    assert client.get(f"{BASE}/{guide_id}/revisions/9").status_code == 404
+
+
+def test_publish_is_refused_when_validation_or_references_fail(
+    fakes: tuple[FakeStore, FakeOracle],
+) -> None:
+    _, oracle = fakes
+    broken = guide(steps=[{"id": "a", "title": "A", "depends_on": ["a"]}], branches=[])
+    guide_id = client.post(BASE, json={"draft": broken}).json()["data"]["guide_id"]
+    refused = client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1})
+    assert refused.status_code == 422
+    messages = refused.json()["error_messages"]
+    assert messages[0] == "検証で問題が見つかったため公開できません。"
+    assert any("自分自身に依存" in message for message in messages[1:])
+
+    oracle.documents["doc-1"] = (FileStatus.REVIEW, ["kb-other"])
+    ok_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+    validation = client.post(f"{BASE}/{ok_id}/validate").json()["data"]
+    assert validation["valid"] is False
+    messages = [issue["message"] for issue in validation["issues"] if issue["severity"] == "error"]
+    assert messages == ["資料「運用手順書」: このプロファイルのナレッジベースに含まれていません。"]
+    assert client.post(f"{BASE}/{ok_id}/publish", json={"base_revision": 1}).status_code == 422
+
+
+def test_archive_restore_list_and_export(fakes: tuple[FakeStore, FakeOracle]) -> None:
+    guide_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+    client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1})
+    assert [item["guide_id"] for item in client.get(BASE).json()["data"]] == [guide_id]
+    assert len(client.get(f"{BASE}/export").json()["data"]["guides"]) == 1
+
+    archived = client.post(f"{BASE}/{guide_id}/archive").json()["data"]
+    assert archived["status"] == "archived"
+    assert client.get(BASE).json()["data"] == []
+    assert client.get(f"{BASE}?include_archived=true").json()["data"][0]["status"] == "archived"
+    assert client.get(f"{BASE}/export").json()["data"]["guides"] == []
+    assert client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1}).status_code == 409
+    assert client.post(f"{BASE}/{guide_id}/restore").json()["data"]["status"] == "active"
+    assert client.get("/api/search-answer-profiles/missing/support-guides").status_code == 404
+    assert client.get(f"{BASE}/unknown").status_code == 404
+
+
+def test_import_preview_and_import_create_drafts_only(fakes: tuple[FakeStore, FakeOracle]) -> None:
+    payload = {"guides": [guide(), {"title": "壊れた"}, guide(goal={"expected_result": "x"})]}
+    preview = client.post(f"{BASE}/import/preview", json=payload).json()["data"]
+    assert [item["valid"] for item in preview["items"]] == [True, False, False]
+    assert preview["importable_count"] == 1
+    assert client.post(f"{BASE}/import", json=payload).status_code == 422
+    assert client.get(BASE).json()["data"] == []
+
+    imported = client.post(f"{BASE}/import", json={"guides": [guide()]}).json()["data"]
+    assert imported["created"][0]["published_revision"] is None
+
+
+def test_condition_value_aliases_are_validated() -> None:
+    from pydantic import ValidationError
+
+    ok = content(
+        conditions=[
+            {
+                "id": "target",
+                "label": "付与先",
+                "allowed_values": ["個別", "グループ"],
+                "question": "どちらですか？",
+                "value_aliases": {"個別": [" 検証用アカウント ", ""], "グループ": []},
+            }
+        ]
+    )
+    assert ok.conditions[0].value_aliases == {"個別": ["検証用アカウント"]}
+    with pytest.raises(ValidationError):  # 選択肢に無い値の言い換え
+        content(
+            conditions=[
+                {
+                    "id": "target",
+                    "label": "付与先",
+                    "allowed_values": ["個別", "グループ"],
+                    "question": "どちらですか？",
+                    "value_aliases": {"全員": ["みんな"]},
+                }
+            ]
+        )

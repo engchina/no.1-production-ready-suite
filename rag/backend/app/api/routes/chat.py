@@ -23,6 +23,7 @@ from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginat
 from app.api.routes.search import (
     STREAM_ERROR_MESSAGE,
     _answer_chunks,
+    _published_guides,
     _resolve_query_context,
     _sse_event,
     answer_model_choices,
@@ -60,6 +61,10 @@ from app.rag.search_answer_profile_knowledge import (
     load_runtime_knowledge_payload,
     resolve_clarification,
 )
+from app.rag.support_guide_runtime import (
+    GUIDE_CLARIFICATION_PREFIX,
+    resolve_guide_clarification,
+)
 from app.schemas.chat import (
     ChatAnswerCancelResult,
     ChatMessage,
@@ -77,6 +82,8 @@ from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+# 業務ガイドを選ぶときに含める、前の利用者の発話の数（#1238）。
+GUIDE_CONTEXT_TURNS = 3
 
 CHAT_DISABLED_MESSAGE = "チャット機能は現在無効です。"
 CONVERSATION_NOT_FOUND_MESSAGE = "会話が見つかりません。"
@@ -432,7 +439,27 @@ async def _prepare_chat_turn(
         approved_faq = (record.question, record.approved_answer)
     scope: AnswerScope | None = None
     filters: dict[str, str] = {}
-    if request.clarification is not None:
+    conditions: dict[str, str] = {}
+    if request.clarification is not None and request.clarification.rule_id.startswith(
+        GUIDE_CLARIFICATION_PREFIX
+    ):
+        guide_answer = resolve_guide_clarification(
+            await _published_guides(oracle, search_answer_profile_id),
+            request.clarification.rule_id,
+            request.clarification.option_ids,
+        )
+        # 業務ガイドの条件の確認（#1238）。答えは既知の条件として回答に渡す。
+        if guide_answer is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "選んだ確認の答えが見つかりません。業務ガイドが変わった可能性があります。"
+                    "もう一度送信して選び直してください。"
+                ),
+            )
+        conditions, context = guide_answer
+        scope = AnswerScope(context=context, search_terms=(), label="")
+    elif request.clarification is not None:
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
         resolved = resolve_clarification(
             payload,
@@ -457,17 +484,26 @@ async def _prepare_chat_turn(
         top_k=request.top_k,
         search_answer_profile_id=search_answer_profile_id,
         filters=filters,
+        conditions=conditions,
     )
+    # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
+    prior_messages = await oracle.list_messages(conversation_id)
     (
         effective_request,
         effective_settings,
         _applied_kb,
         _applied_view,
-    ) = await _resolve_query_context(base_request, settings)
+    ) = await _resolve_query_context(
+        base_request,
+        settings,
+        # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
+        guide_context=[message.content for message in prior_messages if message.role == "USER"][
+            -GUIDE_CONTEXT_TURNS:
+        ],
+        interactive=True,
+    )
     guardrails = GuardrailPolicy(effective_settings)
     query_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
-    # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
-    prior_messages = await oracle.list_messages(conversation_id)
     if request.client_message_id and any(
         message.id == request.client_message_id for message in prior_messages
     ):

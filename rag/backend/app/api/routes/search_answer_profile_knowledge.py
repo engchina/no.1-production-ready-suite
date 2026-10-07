@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
 
+from app.api.routes.search import _published_guides
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
@@ -35,6 +36,7 @@ from app.rag.search_answer_profile_knowledge import (
     suggest_clarification,
     suggest_domain_keywords,
 )
+from app.rag.support_guide_runtime import guide_clarification, match_guide
 from app.schemas.common import ApiResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.search_answer_profile_knowledge import (
@@ -505,7 +507,21 @@ async def post_clarification_suggest(
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
     found = await asyncio.to_thread(suggest_clarification, payload, request.query)
     if found is None:
-        return ApiResponse(data=ClarificationSuggestionsData())
+        # 業務ガイドの不明な条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
+        match = match_guide(
+            await _published_guides(oracle, search_answer_profile_id), request.query, {}
+        )
+        guide = guide_clarification(match) if match is not None else None
+        if guide is None:
+            return ApiResponse(data=ClarificationSuggestionsData())
+        rule_id, title, guide_question = guide
+        return ApiResponse(
+            data=ClarificationSuggestionsData(
+                suggestion=ClarificationSuggestionData(
+                    rule_id=rule_id, rule_title=title, clarification=guide_question
+                )
+            )
+        )
     rule, clarification = found
     return ApiResponse(
         data=ClarificationSuggestionsData(

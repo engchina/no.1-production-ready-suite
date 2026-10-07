@@ -2461,6 +2461,10 @@ function jsonBody(body: unknown): RequestInit {
   };
 }
 
+function supportGuidesPath(searchAnswerProfileId: string): string {
+  return `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/support-guides`;
+}
+
 function ingestionJobSearch(force: boolean, phase: IngestionJobPhase): string {
   const search = new URLSearchParams();
   if (force) search.set("force", "true");
@@ -3037,6 +3041,58 @@ export const api = {
       `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/preview`,
       jsonBody({ question }),
     ),
+  // 業務ガイド（#1237）。下書きの保存は base_revision で照合し、違えば 409。
+  listSupportGuides: (id: string, includeArchived: boolean) =>
+    request<SupportGuideSummary[]>(
+      `${supportGuidesPath(id)}${includeArchived ? "?include_archived=true" : ""}`,
+    ),
+  getSupportGuide: (id: string, guideId: string) =>
+    request<SupportGuideDetail>(`${supportGuidesPath(id)}/${encodeURIComponent(guideId)}`),
+  createSupportGuide: (id: string, draft: SupportGuideContent) =>
+    request<SupportGuideDetail>(supportGuidesPath(id), jsonBody({ draft })),
+  saveSupportGuideDraft: (
+    id: string,
+    guideId: string,
+    draft: SupportGuideContent,
+    baseRevision: number,
+  ) =>
+    request<SupportGuideDetail>(`${supportGuidesPath(id)}/${encodeURIComponent(guideId)}`, {
+      ...jsonBody({ draft, base_revision: baseRevision }),
+      method: "PUT",
+    }),
+  validateSupportGuide: (id: string, guideId: string) =>
+    request<SupportGuideValidationData>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/validate`,
+      { method: "POST" },
+    ),
+  publishSupportGuide: (id: string, guideId: string, baseRevision: number) =>
+    request<SupportGuideDetail>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/publish`,
+      jsonBody({ base_revision: baseRevision }),
+    ),
+  getSupportGuideRevision: (id: string, guideId: string, revision: number) =>
+    request<SupportGuideRevision>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/revisions/${revision}`,
+    ),
+  rollbackSupportGuide: (id: string, guideId: string, revision: number) =>
+    request<SupportGuideDetail>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/rollback`,
+      jsonBody({ revision }),
+    ),
+  setSupportGuideArchived: (id: string, guideId: string, archived: boolean) =>
+    request<SupportGuideDetail>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/${archived ? "archive" : "restore"}`,
+      { method: "POST" },
+    ),
+  exportSupportGuides: (id: string) =>
+    request<SupportGuideExportData>(`${supportGuidesPath(id)}/export`),
+  previewSupportGuideImport: (id: string, guides: unknown[]) =>
+    request<SupportGuideImportPreviewData>(
+      `${supportGuidesPath(id)}/import/preview`,
+      jsonBody({ guides }),
+    ),
+  importSupportGuides: (id: string, guides: unknown[]) =>
+    request<SupportGuideImportData>(`${supportGuidesPath(id)}/import`, jsonBody({ guides })),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/suggest`,
@@ -3529,6 +3585,153 @@ export interface RuntimeKnowledgePreviewData {
   expanded_question: string;
   matched_terms: string[];
   matched_rules: string[];
+}
+
+// --- 業務ガイド（SupportGuide。#1237）。型は backend の app/schemas/support_guide.py と同じ ---
+export type SupportGuideStatus = "active" | "archived";
+export type SupportGuideConditionType = "enum" | "text" | "boolean";
+export type SupportGuideConditionSource = "user" | "document" | "tool";
+export type SupportGuideUnknownHandling = "ask" | "branch" | "handoff";
+export type SupportGuideImpactScope = "individual" | "group" | "all";
+export type SupportGuideBranchOperator = "equals" | "in" | "unknown";
+export type SupportGuideTool =
+  | "rag_search"
+  | "rag_read_source"
+  | "rag_retrieve_evidence"
+  | "nl2sql_query";
+
+export interface SupportGuideCondition {
+  id: string;
+  label: string;
+  type: SupportGuideConditionType;
+  allowed_values: string[];
+  required: boolean;
+  source: SupportGuideConditionSource;
+  unknown_handling: SupportGuideUnknownHandling;
+  question: string;
+  /** 選択肢の言い換え（選択肢 → 質問に出る語）。質問にこの語が出れば聞き直さない。 */
+  value_aliases?: Record<string, string[]>;
+}
+
+export interface SupportGuideStep {
+  id: string;
+  title: string;
+  purpose: string;
+  depends_on: string[];
+  retrieval_hints: string[];
+  evidence_requirements: string[];
+  allowed_tools: string[];
+  done_when: string;
+}
+
+export interface SupportGuideBranch {
+  id: string;
+  when: { condition_id: string; operator: SupportGuideBranchOperator; values: string[] };
+  goto_step: string;
+  note: string;
+}
+
+export interface SupportGuideReference {
+  document_id: string;
+  title: string;
+  section_path: string[];
+  version: string;
+}
+
+export interface SupportGuideCompletion {
+  id: string;
+  description: string;
+  check_method: string;
+}
+
+/** 業務ガイドの内容（下書き・公開の版で同じ形）。 */
+export interface SupportGuideContent {
+  schema_version: 1;
+  title: string;
+  description: string;
+  goal: { expected_result: string; intent_examples: string[]; match_terms: string[] };
+  applicability: {
+    business_domains: string[];
+    object_types: string[];
+    versions: string[];
+    effective_from: string | null;
+    effective_to: string | null;
+  };
+  conditions: SupportGuideCondition[];
+  steps: SupportGuideStep[];
+  branches: SupportGuideBranch[];
+  references: SupportGuideReference[];
+  completion: SupportGuideCompletion[];
+  impact: { scope: SupportGuideImpactScope; approval_required: boolean; approval_note: string };
+  handoff: { conditions: string[]; contact: string };
+}
+
+/** 検証で見つけた問題。severity=error は公開できない。 */
+export interface SupportGuideIssue {
+  severity: "error" | "warning";
+  code: string;
+  /** 問題のある項目（例: steps[1].depends_on）。 */
+  path: string;
+  message: string;
+}
+
+export interface SupportGuideRevisionSummary {
+  revision: number;
+  title: string;
+  content_sha256: string;
+  published_at: string;
+  published_by: string | null;
+  rollback_from: number | null;
+}
+
+export interface SupportGuideRevision extends SupportGuideRevisionSummary {
+  content: SupportGuideContent;
+}
+
+export interface SupportGuideSummary {
+  guide_id: string;
+  search_answer_profile_id: string;
+  status: SupportGuideStatus;
+  title: string;
+  draft_revision: number;
+  published_revision: number | null;
+  /** 下書きが公開の版と違うか（公開していなければ true）。 */
+  has_unpublished_changes: boolean;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export interface SupportGuideDetail extends SupportGuideSummary {
+  draft: SupportGuideContent;
+  published: SupportGuideContent | null;
+  revisions: SupportGuideRevisionSummary[];
+  issues: SupportGuideIssue[];
+}
+
+export interface SupportGuideValidationData {
+  valid: boolean;
+  issues: SupportGuideIssue[];
+}
+
+export interface SupportGuideImportItem {
+  index: number;
+  title: string | null;
+  valid: boolean;
+  issues: SupportGuideIssue[];
+}
+
+export interface SupportGuideImportPreviewData {
+  items: SupportGuideImportItem[];
+  importable_count: number;
+}
+
+export interface SupportGuideImportData {
+  created: SupportGuideSummary[];
+}
+
+export interface SupportGuideExportData {
+  schema_version: 1;
+  guides: SupportGuideContent[];
 }
 
 // --- 保存された回答(rag_poc の answer JSON 相当) ---
