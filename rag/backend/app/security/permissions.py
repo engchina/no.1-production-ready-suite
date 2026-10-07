@@ -318,6 +318,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
+    # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
+    ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,

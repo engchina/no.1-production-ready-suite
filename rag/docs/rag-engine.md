@@ -34,8 +34,10 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | global | 検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。検索・回答プロファイルで上書きできる |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
+| 文書の版（この文書を置き換えた新しい版） | 文書のメタデータ | 文書詳細の「版」（`PUT /api/documents/{id}/superseded-by`。#1248） |
 | 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 検索方法「質問履歴」（既定は無効。#593 で回答スタイルの画面から移した） |
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
+| 旧版を含める | 検索要求 | `filters` の `include_superseded=true`（既定は含めない。#1248） |
 
 | 回答生成のプロンプト（`vlm_answer`） | global | 検索・回答設定 > 回答プロンプト（各段のプロンプトは読み取り専用で表示） |
 | 図・画像の読み取りプロンプト（`image_retrieval`） | global | 検索・回答設定 > 文書解析（常に表示。文書のレシピで Vision を有効にしたとき、解析エンジンに関係なく使う） |
@@ -45,6 +47,8 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 編集したプロンプトは `rag_answer_prompts` に保存する（#599 で旧名の表から改名した。migration `20260930_008_answer_prompts_table`）。回答では rag_engine の runtime の `prompt_overrides` で渡し、解析では backend の Vision の段（`app/rag/vision.py`）が読み取りの指示として使う（#497 以前は docling サービスへ `parser_options` で渡していた）。未編集なら rag_poc と同じコードの既定値を使う。画像の読み取りプロンプトの変更は、解析済みの文書には再解析するまで反映しない。
 
 分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを比べる。保存・検索の入力の両方で表記をそろえ（NFKC・前後の空白・連続する空白。`app/schemas/classification.py` の `normalize_category_value`）、比較は先頭の番号の接頭辞（`10_` など）を除いた名前で行う（rag_engine の `_category_label` と同じ。保存値の接頭辞は残す。#547）。文書詳細の分類の入力は、保存済みの分類の値（`GET /api/documents/classification-options`）を候補に出す。既存の文書の分類の表記は `uv run python -m app.rag.classification_normalization --dry-run` で件数を確かめ、Oracle のバックアップ後に `--apply` でそろえる。アップロードはファイル名だけを送り、フォルダの相対パスを持たないため、rag_poc のパスからの分類の推定は移していない。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
+
+文書の版（#1248）: 文書詳細の「版」で、その文書を置き換えた新しい版の文書を選ぶと、その文書は旧版（`rag_documents.superseded_by_document_id` / `superseded_at`）になる。置き換えの記録は文書の属性で、KB の membership・レシピは変えない。旧版の chunk は、既定では回答の検索（`rag_search`・チャット・RAG 検索）の対象から外す（`_oracle_retrieval_where` の `d.superseded_by_document_id IS NULL`）。旧版・変更点を尋ねるときは `filters` の `include_superseded=true` で含め、その根拠の出典の文書名に「（旧版）」を付ける（MCP の根拠は `superseded: true`）。`document_id` で文書を名指しする経路（文書の chunk 数・根拠の前後の補完）と MCP の `rag_read_source` は旧版も読む。自分自身・循環（A→B→A）・見えない文書は新しい版にできない（422）。新しい版の文書を削除すると、旧版は今有効な版に戻る。
 
 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は検索・回答プロファイル・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は rag_engine の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、rag_engine の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。質問の業務名に domain profile の `business_patterns` は使わない（下の `RAG_ENGINE_DOMAIN_PROFILE_FILE`）。
 

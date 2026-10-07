@@ -85,9 +85,11 @@ from app.schemas.knowledge_base import (
 )
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
+    INCLUDE_SUPERSEDED_FILTER_KEY,
     PAGE_RANGES_FILTER_KEY,
     RetrievedChunk,
     SearchMode,
+    include_superseded_filter_value,
     parse_extraction_field_filter,
     parse_page_ranges,
 )
@@ -217,6 +219,8 @@ class StoredDocument:
     extraction: dict[str, object] = field(default_factory=dict)
     error_message: str | None = None
     classification: dict[str, object] | None = None
+    superseded_by_document_id: str | None = None
+    superseded_at: datetime | None = None
 
 
 @dataclass
@@ -697,6 +701,7 @@ class OracleClient:
                     c.chunk_set_id,
                     d.file_name,
                     d.category_name,
+                    d.superseded_by_document_id,
                     0 AS score
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
@@ -721,9 +726,10 @@ class OracleClient:
         """検索と同じ見え方の条件で 1 件の chunk を返す（MCP の ``rag_read_source``。#1219）。
 
         tenant・利用できるナレッジベース・INDEXED の文書・有効な chunk_set に限る。ID を知って
-        いても、検索で見えない chunk は返さない。
+        いても、検索で見えない chunk は返さない。新しい版に置き換えた文書(旧版)も文書としては
+        有効なので読める(#1248。根拠の ``superseded`` で旧版と分かる)。
         """
-        where_sql, binds = _oracle_retrieval_where({})
+        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -736,6 +742,7 @@ class OracleClient:
                 c.chunk_set_id,
                 d.file_name,
                 d.category_name,
+                d.superseded_by_document_id,
                 0 AS score
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
@@ -3913,17 +3920,60 @@ class OracleClient:
                     }
                 ),
             )
-            document = _select_document(connection, document_id)
-            if document is None:
+            return _select_document_detail_with_refs(connection, document_id)
+
+        return await self._run_transaction(operation)
+
+    async def set_document_superseded_by(
+        self,
+        document_id: str,
+        superseded_by_document_id: str | None,
+    ) -> DocumentDetail:
+        """文書を置き換えた新しい版を設定・解除する(#1248)。
+
+        - ``None`` は解除(今有効な版に戻す)。
+        - 自分自身・循環(A→B→A。新しい版の側の置き換えをたどって元の文書に戻る)は
+          ``DocumentSupersessionError``。新しい版の文書が利用者から見えないときも同じ。
+        - 同じ新しい版を設定し直しても、置き換えた日時は変えない。
+        - 文書が見えないときは ``KeyError``。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            # 2 つの文書の行を ID の順にロックし、逆向きの同時の設定(A→B と B→A)が
+            # 両方とも循環の検証を通らないようにする。
+            locked = {
+                lock_id: _select_document_for_update(connection, lock_id) is not None
+                for lock_id in sorted({document_id, superseded_by_document_id or document_id})
+            }
+            if not locked[document_id]:
                 raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
+            if superseded_by_document_id is not None:
+                _validate_superseded_by(connection, document_id, superseded_by_document_id)
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET superseded_at = CASE
+                        WHEN :superseded_by_document_id IS NULL THEN NULL
+                        WHEN superseded_by_document_id = :superseded_by_document_id
+                            THEN superseded_at
+                        ELSE SYSTIMESTAMP
+                    END,
+                    superseded_by_document_id = :superseded_by_document_id
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "superseded_by_document_id": superseded_by_document_id,
+                    }
+                ),
             )
+            return _select_document_detail_with_refs(connection, document_id)
 
         return await self._run_transaction(operation)
 
@@ -5130,6 +5180,7 @@ class OracleClient:
                 r.slot_no AS recipe_slot_no,
                 d.file_name,
                 d.category_name,
+                d.superseded_by_document_id,
                 1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) AS score
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
@@ -5184,6 +5235,7 @@ class OracleClient:
                     r.slot_no AS recipe_slot_no,
                     d.file_name,
                     d.category_name,
+                    d.superseded_by_document_id,
                     SCORE(1) / 100 AS score
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
@@ -5249,6 +5301,7 @@ class OracleClient:
                         c.chunk_set_id,
                         d.file_name,
                         d.category_name,
+                        d.superseded_by_document_id,
                         0 AS score
                     FROM rag_chunks c
                     JOIN rag_documents d ON d.document_id = c.document_id
@@ -6209,18 +6262,27 @@ class OracleClient:
         self,
         documents: Sequence[DocumentT],
     ) -> list[DocumentT]:
-        """DocumentSummary/Detail へ所属 KB 参照を付与する。"""
+        """DocumentSummary/Detail へ所属 KB 参照と、新しい版の文書名(#1248)を付与する。"""
         if not documents:
             return []
         refs_by_document_id = await self._document_knowledge_base_refs_by_document_id_with_oracle(
             [document.id for document in documents]
         )
-        return [
-            document.model_copy(
-                update={"knowledge_bases": refs_by_document_id.get(document.id, [])}
-            )
-            for document in documents
-        ]
+        superseded_ids = _superseded_by_document_ids(documents)
+        file_names: dict[str, str] = {}
+        if superseded_ids:
+            statement, binds = _document_file_names_query(superseded_ids)
+            rows = await self._fetch_all(statement, binds)
+            file_names = {str(row["document_id"]): str(row["file_name"]) for row in rows}
+        return _with_superseded_file_names(
+            [
+                document.model_copy(
+                    update={"knowledge_bases": refs_by_document_id.get(document.id, [])}
+                )
+                for document in documents
+            ],
+            file_names,
+        )
 
     async def _create_ingestion_job_with_oracle(self, job: IngestionJob) -> IngestionJob:
         """Oracle ingestion job table へ job を作成する。"""
@@ -7738,7 +7800,9 @@ class OracleClient:
                 classification,
                 error_message,
                 uploaded_at,
-                indexed_at
+                indexed_at,
+                superseded_by_document_id,
+                superseded_at
             FROM rag_documents
             WHERE document_id = :document_id
               AND {access_predicate}
@@ -8248,6 +8312,22 @@ class OracleClient:
                   AND {tenant_sql}
                 """,
                     # 正本を消す前に FK の参照を外す。利用者の範囲外の複製も対象にする。
+                    tenant_sql=_oracle_tenant_predicate(),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET superseded_by_document_id = NULL,
+                    superseded_at = NULL
+                WHERE superseded_by_document_id = :document_id
+                  AND {tenant_sql}
+                """,
+                    # 新しい版を消したら、それに置き換えられていた文書を今有効な版に戻す(#1248)。
+                    # 参照が残ると、旧版は検索から外れたままになる。
                     tenant_sql=_oracle_tenant_predicate(),
                 ),
                 _with_tenant_bind({"document_id": document_id}),
@@ -9670,7 +9750,9 @@ def _select_document(
             classification,
             error_message,
             uploaded_at,
-            indexed_at
+            indexed_at,
+            superseded_by_document_id,
+            superseded_at
         FROM rag_documents
         WHERE document_id = :document_id
           AND {access_predicate}
@@ -9680,6 +9762,113 @@ def _select_document(
         _with_tenant_bind({"document_id": document_id}),
     )
     return None if not rows else _stored_document_from_row(rows[0])
+
+
+def _select_document_detail_with_refs(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> DocumentDetail:
+    """transaction の中で文書の詳細を、所属 KB と新しい版の文書名付きで読む。"""
+    document = _select_document(connection, document_id)
+    if document is None:
+        raise KeyError(f"document_id={document_id} は存在しません。")
+    detail = _to_document_detail(document).model_copy(
+        update={"knowledge_bases": _select_document_knowledge_base_refs(connection, document_id)}
+    )
+    superseded_ids = _superseded_by_document_ids([detail])
+    if not superseded_ids:
+        return detail
+    statement, binds = _document_file_names_query(superseded_ids)
+    rows = _fetch_all(connection, statement, binds)
+    file_names = {str(row["document_id"]): str(row["file_name"]) for row in rows}
+    return _with_superseded_file_names([detail], file_names)[0]
+
+
+class DocumentSupersessionError(ValueError):
+    """文書の版の置き換えを保存できない(自分自身・循環・見えない新しい版。#1248)。"""
+
+
+# 置き換えの連鎖をたどる上限(循環の検出。通常の版の連鎖はこれより十分短い)。
+_SUPERSESSION_CHAIN_LIMIT = 100
+
+
+def _validate_superseded_by(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+    superseded_by_document_id: str,
+) -> None:
+    """新しい版の文書を検証する(自分自身・見えない文書・循環を拒む。#1248)。"""
+    if superseded_by_document_id == document_id:
+        raise DocumentSupersessionError("文書自身を新しい版にはできません。")
+    if _select_document_state(connection, superseded_by_document_id) is None:
+        raise DocumentSupersessionError("新しい版の文書が見つかりません。")
+    # 新しい版の側の置き換えをたどり、元の文書に戻ったら循環。利用者から見えない文書を
+    # 経由する循環も拒むため、たどるときは tenant だけで絞る。
+    current: str | None = superseded_by_document_id
+    visited: set[str] = set()
+    while current is not None and current not in visited:
+        if len(visited) >= _SUPERSESSION_CHAIN_LIMIT:
+            raise DocumentSupersessionError("版の置き換えの連鎖が長すぎます。")
+        visited.add(current)
+        row = _fetch_one(
+            connection,
+            _render_sql(
+                """
+            SELECT superseded_by_document_id
+            FROM rag_documents
+            WHERE document_id = :chain_document_id
+              AND {tenant_sql}
+            """,
+                tenant_sql=_oracle_tenant_predicate(),
+            ),
+            _with_tenant_bind({"chain_document_id": current}),
+        )
+        current = _optional_str(row.get("superseded_by_document_id")) if row else None
+        if current == document_id:
+            raise DocumentSupersessionError(
+                "新しい版の文書が、この文書に置き換えられています(版の置き換えが循環します)。"
+            )
+
+
+def _superseded_by_document_ids(documents: Sequence[DocumentSummary]) -> list[str]:
+    return _unique_optional_sequence(
+        [
+            document.superseded_by_document_id
+            for document in documents
+            if document.superseded_by_document_id
+        ]
+    )
+
+
+def _document_file_names_query(document_ids: Sequence[str]) -> tuple[str, dict[str, object]]:
+    """利用者が見られる文書の文書名を読む SQL(新しい版の文書名。#1248)。"""
+    in_sql, binds = _oracle_in_predicate("s.document_id", "name_document", document_ids)
+    return (
+        _render_sql(
+            """
+        SELECT s.document_id, s.file_name
+        FROM rag_documents s
+        WHERE {in_sql}
+          AND {access_sql}
+        """,
+            in_sql=in_sql,
+            access_sql=_oracle_access_predicate_sql(alias="s"),
+        ),
+        _with_tenant_bind(binds, alias="s"),
+    )
+
+
+def _with_superseded_file_names[D: DocumentSummary](
+    documents: Sequence[D], file_names: Mapping[str, str]
+) -> list[D]:
+    return [
+        document.model_copy(
+            update={"superseded_by_file_name": file_names.get(document.superseded_by_document_id)}
+        )
+        if document.superseded_by_document_id
+        else document
+        for document in documents
+    ]
 
 
 # rag_documents の JSON 列(extraction / preprocess_artifact / classification / processing_config)を
@@ -9698,7 +9887,9 @@ _DOCUMENT_STATE_COLUMNS_SQL = """
             duplicate_of_document_id,
             error_message,
             uploaded_at,
-            indexed_at
+            indexed_at,
+            superseded_by_document_id,
+            superseded_at
 """
 
 
@@ -10708,6 +10899,8 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 binds.update(kind_binds)
         elif key in _CLASSIFICATION_FILTER_KEYS or key == "as_of":
             continue  # 分類と有効期間は _classification_where でまとめて付ける。
+        elif key == INCLUDE_SUPERSEDED_FILTER_KEY:
+            continue  # 旧版の除外はループの後でまとめて付ける。
         elif key == EXTRACTION_FIELD_FILTER_KEY:
             field_clauses, field_binds = _extraction_field_where(cleaned)
             clauses.extend(field_clauses)
@@ -10717,7 +10910,24 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     classification_clauses, classification_binds = _classification_where(filters)
     clauses.extend(classification_clauses)
     binds.update(classification_binds)
+    if not _includes_superseded_documents(filters):
+        clauses.append(_NOT_SUPERSEDED_SQL)
     return " AND ".join(clauses), binds
+
+
+# 新しい版に置き換えた文書(旧版)を除く述語(#1248)。
+_NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"
+
+
+def _includes_superseded_documents(filters: Mapping[str, str]) -> bool:
+    """旧版の文書を検索に含めるか(#1248)。
+
+    既定では含めない。``include_superseded=true`` のときと、文書を ``document_id`` で
+    名指ししたとき(文書の chunk 数・根拠の前後の補完など、特定の文書を読む経路)は含める。
+    """
+    if (filters.get("document_id") or "").strip():
+        return True
+    return include_superseded_filter_value(filters.get(INCLUDE_SUPERSEDED_FILTER_KEY))
 
 
 _CLASSIFICATION_FILTER_KEYS = CLASSIFICATION_CATEGORY_KEYS
@@ -11383,6 +11593,8 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
         classification=_json_loads(row.get("classification")) or None,
+        superseded_by_document_id=_optional_str(row.get("superseded_by_document_id")),
+        superseded_at=_optional_datetime(row.get("superseded_at")),
     )
 
 
@@ -11544,6 +11756,11 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
     chunk_index = row.get("chunk_index")
     if "chunk_index" not in metadata and chunk_index is not None:
         metadata["chunk_index"] = _int_value(chunk_index)
+    if superseded_by := _optional_str(row.get("superseded_by_document_id")):
+        # 新しい版に置き換えた文書(旧版)の chunk(#1248)。``include_superseded`` で含めたときや
+        # 根拠の本文を読むときだけ出る。回答の出典の文書名に「(旧版)」を付けるのに使う。
+        metadata["document_superseded"] = True
+        metadata["superseded_by_document_id"] = superseded_by
     return RetrievedChunk(
         document_id=str(row["document_id"]),
         chunk_id=str(row["chunk_id"]),
@@ -12832,6 +13049,10 @@ CREATE TABLE {table_name} (
     error_message            VARCHAR2(2000),
     uploaded_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     indexed_at               TIMESTAMP WITH TIME ZONE,
+    -- 文書の版(#1248)。この文書を置き換えた新しい版の文書と、置き換えた日時。NULL は今有効な版。
+    -- 自己参照の FK は持たず、存在・自己参照・循環はアプリで検証する。
+    superseded_by_document_id VARCHAR2(64),
+    superseded_at            TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN (
             'UPLOADED', 'PREPROCESSING', 'PREPROCESSED', 'INGESTING', 'REVIEW',
@@ -13331,6 +13552,8 @@ def _to_document_summary(document: StoredDocument) -> DocumentSummary:
         duplicate_of_document_id=document.duplicate_of_document_id,
         uploaded_at=document.uploaded_at,
         indexed_at=document.indexed_at,
+        superseded_by_document_id=document.superseded_by_document_id,
+        superseded_at=document.superseded_at,
         source_profile=build_source_profile(
             original_file_name=document.file_name,
             sanitized_file_name=document.file_name,
@@ -13354,6 +13577,8 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         duplicate_of_document_id=document.duplicate_of_document_id,
         uploaded_at=document.uploaded_at,
         indexed_at=document.indexed_at,
+        superseded_by_document_id=document.superseded_by_document_id,
+        superseded_at=document.superseded_at,
         object_storage_path=document.object_storage_path,
         preprocess_artifact=(
             DocumentPreprocessArtifact.model_validate(document.preprocess_artifact)
