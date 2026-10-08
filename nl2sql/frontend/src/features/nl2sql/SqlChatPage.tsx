@@ -44,7 +44,7 @@ import {
   useChatAutoScroll,
   useChatHistoryPanel,
   DEFAULT_PAGE_SIZE,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   useWorkspaceActive,
   useWorkspaceIdentity,

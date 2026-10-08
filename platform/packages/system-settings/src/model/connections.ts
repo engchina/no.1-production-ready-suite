@@ -3,7 +3,7 @@
  * （#533 / #542 / #786）。
  * 検証の規則は backend の `pr_system_settings.model.validate_enterprise_ai_connections` と同じ。
  */
-import type { SelectFieldOption } from "@engchina/production-ready-ui";
+import type { SelectFieldOption } from "@production-ready/ui";
 
 import { t } from "./messages";
 import {

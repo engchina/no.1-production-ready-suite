@@ -1,12 +1,12 @@
 import { useCallback, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { SidebarAccountSection } from "@engchina/production-ready-system-settings";
+import { SidebarAccountSection } from "@production-ready/system-settings";
 
 import {
   Sidebar as UiSidebar,
   type NavSection as UiNavSection,
   type SidebarLabels,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";

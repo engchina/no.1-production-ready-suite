@@ -3,7 +3,7 @@ import {
   DEFAULT_API_ERROR_DETAIL_LABELS,
   MessageText,
   apiErrorDetail,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 /**
  * NL2SQL のジョブの失敗の本文（失敗の面の Banner の中に置く）。

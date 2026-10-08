@@ -1,4 +1,4 @@
-import { loadMoreErrorMessage } from "@engchina/production-ready-ui";
+import { loadMoreErrorMessage } from "@production-ready/ui";
 
 import { t } from "./i18n";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "./requestPolicy";

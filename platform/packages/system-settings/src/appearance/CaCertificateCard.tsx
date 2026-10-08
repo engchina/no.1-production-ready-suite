@@ -9,7 +9,7 @@ import {
   EmptyState,
   Skeleton,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 

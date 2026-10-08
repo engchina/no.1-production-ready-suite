@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { ConfirmProvider, useConfirm } from "@engchina/production-ready-ui";
+import { ConfirmProvider, useConfirm } from "@production-ready/ui";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createMemoryRouter, Outlet, RouterProvider, useNavigate } from "react-router-dom";

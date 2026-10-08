@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { t } from "@/lib/i18n";
-import { Disclosure } from "@engchina/production-ready-ui";
+import { Disclosure } from "@production-ready/ui";
 
 export function TechnicalDetails({
   value,

@@ -9,8 +9,8 @@ import {
   useParams,
 } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
-import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
+import { AppShell, PageBody, PageHeader } from "@production-ready/ui";
+import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
 import { ragIdentityKey, useAuth } from "@/components/security/AuthProvider";

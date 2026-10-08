@@ -868,7 +868,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
   await expect(page.getByText("Oracle Profile", { exact: true })).toHaveCount(0);
 
   const actions = page.getByTestId("profile-management-actions");
-  // 共有 PageHeader(@engchina/production-ready-ui)の並び順は danger → utility → secondary → primary(主操作が右端、
+  // 共有 PageHeader(@production-ready/ui)の並び順は danger → utility → secondary → primary(主操作が右端、
   // docs/design-system/README.md §7 #11)。lg 未満では主操作以外を「その他の操作」メニュー(上から重要な順)へ畳む。
   const isCompactHeader = (page.viewportSize()?.width ?? 0) < 1024;
   const createButton = actions.getByRole("button", { name: "新規作成", exact: true });

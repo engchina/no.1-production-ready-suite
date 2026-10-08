@@ -9,7 +9,7 @@
 
 ## 0. 原則
 
-1. **アクションボタンは必ず共通 `Button`（`@engchina/production-ready-ui`）を使う。** 同じ見た目を生 `<button>` で作り直さない。
+1. **アクションボタンは必ず共通 `Button`（`@production-ready/ui`）を使う。** 同じ見た目を生 `<button>` で作り直さない。
 2. **同時に操作する領域の主ボタン（primary）は原則 1 つ**（`primary-action`）。他は secondary / ghost に従わせる。
 3. **類似機能は同じ size・variant・配置・文言 key の規則**にする。
 4. **文言は i18n 経由**、アイコンは Lucide（emoji 禁止）。

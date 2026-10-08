@@ -36,7 +36,7 @@ import {
   ExecutionConfirmationField,
   RowTitleButton,
   LoadMoreFooter,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -53,7 +53,7 @@ import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import type { FixedSplitWidePane } from "@engchina/production-ready-ui";
+import type { FixedSplitWidePane } from "@production-ready/ui";
 import {
   formatDbObjectName,
   parseDbAdminObjectTarget,

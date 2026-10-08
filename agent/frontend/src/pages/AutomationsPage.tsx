@@ -31,7 +31,7 @@ import {
   type StatusVariant,
   ApiErrorBanner,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { OneTimeSecret } from "@/components/OneTimeSecret";

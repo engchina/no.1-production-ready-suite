@@ -364,7 +364,7 @@ const f = <span style={{ animationName: "spin" }} />;
   it("共有の Spinner・loading・回さないアイコン・spin を含む別の語は許す", async () => {
     const messages = await lint(`
 import { RefreshCw, RotateCcw, Clock3 } from "lucide-react";
-import { Spinner, Button } from "@engchina/production-ready-ui";
+import { Spinner, Button } from "@production-ready/ui";
 import { Loader2 } from "./local-loader";
 const a = <Spinner size={14} className="text-accent-fg" />;
 const b = <Button loading={busy} icon={RefreshCw}>再読み込み</Button>;

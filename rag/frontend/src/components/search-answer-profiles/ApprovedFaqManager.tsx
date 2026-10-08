@@ -18,7 +18,7 @@ import {
   useConfirm,
   type SelectFieldOption,
   PagedDataTable,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import {
   api,

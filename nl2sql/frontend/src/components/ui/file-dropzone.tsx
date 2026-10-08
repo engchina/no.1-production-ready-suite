@@ -20,7 +20,7 @@ import {
   Spinner,
   ClearActionButton,
   FieldLabel,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 

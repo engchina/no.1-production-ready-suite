@@ -20,7 +20,7 @@ import {
   usePagination,
   type EntityAction,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { agentPaginationLabels } from "@/components/ListViews";
 import { EvaluationVersionField, usableEvaluationTarget } from "@/components/evaluation/EvaluationVersionField";

@@ -4,7 +4,7 @@ import {
   type DatabaseGateMessages,
   type DatabaseGateRoutes,
   type DatabaseUnavailableNoticeProps,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";

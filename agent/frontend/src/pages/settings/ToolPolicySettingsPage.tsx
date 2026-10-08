@@ -20,7 +20,7 @@ import {
   SelectField,
   type DataTableColumn,
   type SelectFieldOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type ToolDefinition } from "@/lib/api";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";

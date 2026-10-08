@@ -4,10 +4,10 @@ import {
   Disclosure,
   MessageText,
   StatusBadge,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "./messages";
-import { cn } from "@engchina/production-ready-ui";
+import { cn } from "@production-ready/ui";
 
 export type SettingsTestResultTone = "success" | "warning" | "danger";
 export type SettingsTestResultValue = string | number | boolean;

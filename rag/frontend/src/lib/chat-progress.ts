@@ -7,7 +7,7 @@
  * NL2SQL・Agent と同じ）を i18n で付ける。未知の段階は backend の名前をそのまま出す。
  */
 
-import type { ChatProgressStep, ChatProgressStepStatus } from "@engchina/production-ready-ui";
+import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
 import { t } from "./i18n";
 

@@ -1,4 +1,4 @@
-import { SelectField } from "@engchina/production-ready-ui";
+import { SelectField } from "@production-ready/ui";
 
 import type { AgentProfile, EvaluatedAgentVersion, EvaluationTarget } from "@/lib/api";
 import { t } from "@/lib/i18n";

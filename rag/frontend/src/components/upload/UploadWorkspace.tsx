@@ -15,7 +15,7 @@ import {
   FieldLabel,
   Skeleton,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   AlertTriangle,
   Cloud,

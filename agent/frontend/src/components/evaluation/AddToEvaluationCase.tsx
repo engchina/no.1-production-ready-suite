@@ -13,8 +13,8 @@ import {
   toast,
   ApiErrorState,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
-import { useAuth } from "@engchina/production-ready-system-settings";
+} from "@production-ready/ui";
+import { useAuth } from "@production-ready/system-settings";
 import { useNavigate } from "react-router-dom";
 
 import { agentApi, type EvaluationCase, type EvaluationCaseDraft, type EvaluationSetItem } from "@/lib/api";

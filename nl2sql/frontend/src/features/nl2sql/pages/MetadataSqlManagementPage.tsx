@@ -24,7 +24,7 @@ import {
   TextareaField,
   TextField,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";

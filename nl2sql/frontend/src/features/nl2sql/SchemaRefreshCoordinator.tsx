@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { toast } from "@engchina/production-ready-ui";
+import { toast } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";

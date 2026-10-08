@@ -1,4 +1,4 @@
-import { DATABASE_UNAVAILABLE_EVENT } from "@engchina/production-ready-system-settings";
+import { DATABASE_UNAVAILABLE_EVENT } from "@production-ready/system-settings";
 import { appPath, stripAppPath } from "./base-path.ts";
 
 // 通知の event 名は3製品共通の DB ゲートが持つ（#325）。

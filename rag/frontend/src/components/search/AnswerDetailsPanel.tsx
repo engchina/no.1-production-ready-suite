@@ -1,4 +1,4 @@
-import { Banner, Disclosure, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Disclosure, StatusBadge } from "@production-ready/ui";
 import { BookCheck } from "lucide-react";
 
 import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";

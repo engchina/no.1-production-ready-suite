@@ -5,7 +5,7 @@ import {
   Banner,
   logBrowserDiagnostic,
   Button,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 
 interface CardErrorBoundaryProps {

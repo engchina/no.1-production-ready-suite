@@ -3,7 +3,7 @@ import {
   LoadingState,
   EmptyState,
   ErrorState as UiErrorState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 

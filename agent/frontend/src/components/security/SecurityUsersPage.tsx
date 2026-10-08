@@ -1,4 +1,4 @@
-import { UserManagementPage } from "@engchina/production-ready-system-settings";
+import { UserManagementPage } from "@production-ready/system-settings";
 
 import { AGENT_SPLIT_STORAGE_PREFIX } from "@/components/EntityLayout";
 import { MENU_PERMISSIONS } from "@/lib/permissions";

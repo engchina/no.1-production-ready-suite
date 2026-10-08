@@ -1,4 +1,4 @@
-import { StatusBadge } from "@engchina/production-ready-ui";
+import { StatusBadge } from "@production-ready/ui";
 
 import type { SupportGuideIssue } from "@/lib/api";
 import { t } from "@/lib/i18n";

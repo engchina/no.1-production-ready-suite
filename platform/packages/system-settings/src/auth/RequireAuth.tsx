@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { KeyRound } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { ApiErrorState, TimedLoadingState, type SidebarFooterAction } from "@engchina/production-ready-ui";
+import { ApiErrorState, TimedLoadingState, type SidebarFooterAction } from "@production-ready/ui";
 
 import { useAuth } from "./AuthProvider";
 import { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./messages";

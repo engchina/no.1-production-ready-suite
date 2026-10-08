@@ -1,4 +1,4 @@
-import { logBrowserDiagnostic, stripBasePath } from "@engchina/production-ready-ui";
+import { logBrowserDiagnostic, stripBasePath } from "@production-ready/ui";
 import { useContext, useEffect, useLayoutEffect, useRef } from "react";
 import {
   UNSAFE_DataRouterContext,

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Play } from "lucide-react";
-import { Button, ClearActionButton, ExecutionConfirmationField } from "@engchina/production-ready-ui";
+import { Button, ClearActionButton, ExecutionConfirmationField } from "@production-ready/ui";
 import { t } from "../../src/lib/i18n";
 import "../../src/globals.css";
 

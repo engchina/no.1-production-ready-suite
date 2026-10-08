@@ -11,7 +11,7 @@ import {
   ProcessingIndicator,
   TextField,
   toast,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { useAuth } from "./AuthProvider";
 import { AUTH_MESSAGES, type AuthMessages } from "./messages";

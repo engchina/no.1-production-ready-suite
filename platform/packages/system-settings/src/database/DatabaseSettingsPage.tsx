@@ -18,7 +18,7 @@ import {
   TimedLoadingState,
   toast,
   type SelectFieldOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   CloudDownload,
   Database,

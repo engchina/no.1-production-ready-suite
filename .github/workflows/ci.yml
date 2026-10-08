@@ -144,7 +144,7 @@ jobs:
   #   - 共有 UI の dist と Playwright のブラウザは .github/actions/ の composite action がキャッシュする。
 
   platform-ui:
-    name: Platform / UI (@engchina/production-ready-ui)
+    name: Platform / UI (@production-ready/ui)
     needs: changes
     if: needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
@@ -169,20 +169,20 @@ jobs:
       # root の typecheck / test / build はそれぞれ ui を build し直す（ローカルの単発実行のため）。
       # CI では ui を 1 回だけ build し、system-settings の型検査・テストはその dist を使う。
       - name: Build UI (dist/index.js + d.ts + tokens.css)
-        run: npm run build -w @engchina/production-ready-ui
+        run: npm run build -w @production-ready/ui
 
       - name: Type check
         run: |
-          npm run typecheck -w @engchina/production-ready-ui
-          npm run typecheck -w @engchina/production-ready-system-settings
+          npm run typecheck -w @production-ready/ui
+          npm run typecheck -w @production-ready/system-settings
 
       - name: Unit tests
         run: |
-          npm run test -w @engchina/production-ready-ui
-          npm run test -w @engchina/production-ready-system-settings
+          npm run test -w @production-ready/ui
+          npm run test -w @production-ready/system-settings
 
       - name: Build system settings
-        run: npm run build -w @engchina/production-ready-system-settings
+        run: npm run build -w @production-ready/system-settings
 
       # dist が公開契約どおり生成されたことを確認する。
       - name: Verify dist artifacts

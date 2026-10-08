@@ -9,7 +9,7 @@ import {
   TimedLoadingState,
   apiErrorMessage,
   cn,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { agentApi } from "@/lib/api";
 import { t } from "@/lib/i18n";

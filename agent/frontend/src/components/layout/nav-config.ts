@@ -25,7 +25,7 @@ import {
   type HasPermission,
   type SystemSettingsKey,
   type UserRoleKey,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
 import type { I18nKey } from "@/lib/i18n";

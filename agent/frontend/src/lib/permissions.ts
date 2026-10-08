@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useAuth, type HasPermission } from "@engchina/production-ready-system-settings";
+import { useAuth, type HasPermission } from "@production-ready/system-settings";
 
 /**
  * Agent の権限コード（backend `app/security/permissions.py` の `PERMISSION_CATALOG` と同じ。#215）。

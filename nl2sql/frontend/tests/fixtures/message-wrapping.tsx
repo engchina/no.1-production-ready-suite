@@ -11,7 +11,7 @@ import {
   Section,
   Toaster,
   toast,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Save } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import "../../src/globals.css";

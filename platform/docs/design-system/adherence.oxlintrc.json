@@ -15,11 +15,11 @@
             "patterns": [
               {
                 "group": [
-                  "@engchina/production-ready-ui/**",
-                  "!@engchina/production-ready-ui/styles.css",
-                  "!@engchina/production-ready-ui/tokens.css"
+                  "@production-ready/ui/**",
+                  "!@production-ready/ui/styles.css",
+                  "!@production-ready/ui/tokens.css"
                 ],
-                "message": "共有 UI パッケージはルート（@engchina/production-ready-ui）から import する。内部パス（dist/** 等）に依存しない。"
+                "message": "共有 UI パッケージはルート（@production-ready/ui）から import する。内部パス（dist/** 等）に依存しない。"
               }
             ]
           }
@@ -88,19 +88,19 @@
           },
           {
             "selector": "JSXOpeningElement[name.name=/^(?:TextField|input)$/]:has(> JSXAttribute[name.name='type'][value.value='search'])",
-            "message": "一覧の絞り込みの検索欄は SearchField（@engchina/production-ready-ui）で作る。入力に合わせて絞り込み（debounce 300ms・Enter はすぐ）、IME の変換中は絞り込まず、消去と件数の読み上げを持つ。検索ボタンは置かない（UX 契約 page-archetypes.md「一覧の絞り込みの検索」、#535）。LLM・ベクトル検索などの重い検索は type=\"search\" にせず、TextField と明示的な実行（ボタンと isSubmitEnter の Enter）で作る。"
+            "message": "一覧の絞り込みの検索欄は SearchField（@production-ready/ui）で作る。入力に合わせて絞り込み（debounce 300ms・Enter はすぐ）、IME の変換中は絞り込まず、消去と件数の読み上げを持つ。検索ボタンは置かない（UX 契約 page-archetypes.md「一覧の絞り込みの検索」、#535）。LLM・ベクトル検索などの重い検索は type=\"search\" にせず、TextField と明示的な実行（ボタンと isSubmitEnter の Enter）で作る。"
           },
           {
             "selector": "JSXOpeningElement[name.name='textarea']",
-            "message": "複数行の入力欄は <textarea> を手書きせず TextareaField（@engchina/production-ready-ui）を使う。ラベル・必須・エラー・補足・文字数・枠線・フォーカスの表示を TextField と同じ 1 つの実装にそろえる（#584）。元の文書の表を再現して編集するグリッドのセルなど TextareaField で表せない所だけ、理由を添えて局所的に除外する。"
+            "message": "複数行の入力欄は <textarea> を手書きせず TextareaField（@production-ready/ui）を使う。ラベル・必須・エラー・補足・文字数・枠線・フォーカスの表示を TextField と同じ 1 つの実装にそろえる（#584）。元の文書の表を再現して編集するグリッドのセルなど TextareaField で表せない所だけ、理由を添えて局所的に除外する。"
           },
           {
             "selector": "JSXOpeningElement[name.name='select']",
-            "message": "選択欄はネイティブの <select> を手書きせず SelectField（@engchina/production-ready-ui。候補が数十件を超えるなら SearchableSelectField）を使う。開いた一覧の見た目・キーボード操作・typeahead・ダークテーマの一覧の面・ラベル・補足・エラーの関連付け・無効（disabled）を 1 つの実装にそろえる（#631）。<optgroup> や選べない選択肢（<option disabled>）が要るなど SelectField で表せない所だけ、理由を添えて局所的に除外し、fieldControlClassName({ size, width }) で見た目をそろえる。"
+            "message": "選択欄はネイティブの <select> を手書きせず SelectField（@production-ready/ui。候補が数十件を超えるなら SearchableSelectField）を使う。開いた一覧の見た目・キーボード操作・typeahead・ダークテーマの一覧の面・ラベル・補足・エラーの関連付け・無効（disabled）を 1 つの実装にそろえる（#631）。<optgroup> や選べない選択肢（<option disabled>）が要るなど SelectField で表せない所だけ、理由を添えて局所的に除外し、fieldControlClassName({ size, width }) で見た目をそろえる。"
           },
           {
             "selector": "JSXOpeningElement[name.name='details']",
-            "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@engchina/production-ready-ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
+            "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@production-ready/ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
           },
           {
             "selector": ":matches(JSXAttribute[name.name='placeholder'] Literal[value=/任意/], JSXAttribute[name.name='placeholder'] TemplateElement[value.raw=/任意/], Property[key.value=/[Pp]laceholder/] > Literal[value=/任意/], Property[key.name=/[Pp]laceholder/] > Literal[value=/任意/], Literal[value=/[(（]\\s*任意\\s*[)）・、,，]/], TemplateElement[value.raw=/[(（]\\s*任意\\s*[)）・、,，]/], JSXText[value=/[(（]\\s*任意\\s*[)）・、,，]/])",
@@ -124,7 +124,7 @@
           },
           {
             "selector": "JSXOpeningElement[name.name=/^(?:input|select)$/]:not(:has(> JSXAttribute[name.name='type'][value.value=/^(?:checkbox|radio|file|range|color|hidden)$/])) > JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-(?:8|9|10|11|12|14|\\[)/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-(?:8|9|10|11|12|14|\\[)/])",
-            "message": "ネイティブの <input> / <select> の高さを h-* / min-h-* で書かない。TextField / SelectField を使うか、ネイティブの要素を残すときは fieldControlClassName({ size, width })（@engchina/production-ready-ui）で同じ見た目・高さ・幅にする（docs/design-system/README.md §4「操作部品の高さと幅」、#613）。"
+            "message": "ネイティブの <input> / <select> の高さを h-* / min-h-* で書かない。TextField / SelectField を使うか、ネイティブの要素を残すときは fieldControlClassName({ size, width })（@production-ready/ui）で同じ見た目・高さ・幅にする（docs/design-system/README.md §4「操作部品の高さと幅」、#613）。"
           },
           {
             "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] Property[key.name='id'][value.value='back']",
@@ -132,7 +132,7 @@
           },
           {
             "selector": "JSXOpeningElement[name.name=/^(?:table|thead|tbody|tfoot|tr|th|td|colgroup)$/]",
-            "message": "<table> を手書きしない。@engchina/production-ready-ui の DataTable（stickyHeader / visibleRows / selectedRowKey 等）を使う。固定表頭・表示行数・行の選択状態・aria-sort は DataTable が持つ（#129 / #530）。例外は元の文書の表を再現して編集するグリッド（見出し行がなく列数が表ごとに変わるもの）だけで、理由を添えて局所的に除外する。"
+            "message": "<table> を手書きしない。@production-ready/ui の DataTable（stickyHeader / visibleRows / selectedRowKey 等）を使う。固定表頭・表示行数・行の選択状態・aria-sort は DataTable が持つ（#129 / #530）。例外は元の文書の表を再現して編集するグリッド（見出し行がなく列数が表ごとに変わるもの）だけで、理由を添えて局所的に除外する。"
           },
           {
             "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] :matches(JSXElement, JSXFragment)",

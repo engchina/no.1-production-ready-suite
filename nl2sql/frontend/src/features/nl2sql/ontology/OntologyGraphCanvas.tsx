@@ -44,7 +44,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, StatusBadge, isImeComposing, fieldControlClassName } from "@engchina/production-ready-ui";
+import { Button, StatusBadge, isImeComposing, fieldControlClassName } from "@production-ready/ui";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 

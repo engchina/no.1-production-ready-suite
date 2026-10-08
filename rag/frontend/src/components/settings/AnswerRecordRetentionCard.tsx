@@ -9,7 +9,7 @@ import {
   SelectField,
   Skeleton,
   useConfirm,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Archive, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 

@@ -1,4 +1,4 @@
-import { PageBody, PageHeader, Skeleton } from "@engchina/production-ready-ui";
+import { PageBody, PageHeader, Skeleton } from "@production-ready/ui";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { EditorTargetState } from "@/components/layout/EntityLayout";

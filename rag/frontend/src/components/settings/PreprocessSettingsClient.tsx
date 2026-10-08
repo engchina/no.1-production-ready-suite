@@ -11,7 +11,7 @@ import {
   FormStatus,
   TimedLoadingState,
   FormSkeleton,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Shuffle } from "lucide-react";
 

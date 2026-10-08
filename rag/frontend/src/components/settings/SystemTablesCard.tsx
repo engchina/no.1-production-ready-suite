@@ -2,7 +2,7 @@ import {
   SYSTEM_TABLES_MESSAGES,
   SystemTablesCard as SharedSystemTablesCard,
   type SystemTablesMessages,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { DATABASE_GATE_ROUTES, databaseGateMessages } from "@/components/system/DatabaseGate";

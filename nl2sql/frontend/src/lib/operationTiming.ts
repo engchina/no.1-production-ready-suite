@@ -1,4 +1,4 @@
-import { elapsedMsSince, formatElapsedClock } from "@engchina/production-ready-ui";
+import { elapsedMsSince, formatElapsedClock } from "@production-ready/ui";
 
 // 汎用の計算は共有パッケージが持つ。NL2SQL 固有の表示だけをここに置く。
 export {
@@ -7,7 +7,7 @@ export {
   formatElapsedClock,
   operationTimestampMs,
   type OperationTimestamp,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 /** 開始時刻からの経過 seconds。既存 NL2SQL timer との互換用。 */
 export function elapsedSecondsSince(startedAtMs: number, nowMs = Date.now()): number {

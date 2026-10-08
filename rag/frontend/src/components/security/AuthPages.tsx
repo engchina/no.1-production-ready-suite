@@ -5,7 +5,7 @@ import {
   LoginPage as SharedLoginPage,
   PasswordChangePage as SharedPasswordChangePage,
   type HasPermission,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";

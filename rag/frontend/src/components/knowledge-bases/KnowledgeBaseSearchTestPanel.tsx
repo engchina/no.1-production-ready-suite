@@ -13,7 +13,7 @@ import {
   FieldActionRow,
   TextField,
   RunStopButton,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";

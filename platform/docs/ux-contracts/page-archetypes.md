@@ -53,11 +53,11 @@
 
 メトリクスのカード + `StatusBadge` + セクション。編集は最小にする。
 
-> システム設定（OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書）は共有パッケージ `@engchina/production-ready-system-settings` の画面を使い、本規約の対象外。
+> システム設定（OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書）は共有パッケージ `@production-ready/system-settings` の画面を使い、本規約の対象外。
 
 ---
 
-## 2. 共有プリミティブ（`@engchina/production-ready-ui`）
+## 2. 共有プリミティブ（`@production-ready/ui`）
 
 ### Pagination
 
@@ -267,13 +267,13 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 | 行 | 一覧の 1 行 | `RowActionMenu` |
 | コンテンツ | 直下のコード / プレビュー / 結果 | `ContentActionBar` の右側 |
 
-いずれも `@engchina/production-ready-ui` から使う。
+いずれも `@production-ready/ui` から使う。
 
 ---
 
 ## 3. 分割ペイン
 
-`@engchina/production-ready-ui` の `FixedSplitPane` を B / C 型のページで同じ規約で使う。構造 CSS は共有の `tokens.css` が配布する。
+`@production-ready/ui` の `FixedSplitPane` を B / C 型のページで同じ規約で使う。構造 CSS は共有の `tokens.css` が配布する。
 
 - `splitId` は `<feature>-<view>`（例：`table-management-list`）。localStorage の key は部品に任せる。
 - `preferredWidePane`：一覧 + 詳細では詳細側（通常 `right`）を既定で広くする。

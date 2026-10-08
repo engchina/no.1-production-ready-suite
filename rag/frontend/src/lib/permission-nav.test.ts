@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { PermissionDefinition } from "@engchina/production-ready-system-settings";
+import type { PermissionDefinition } from "@production-ready/system-settings";
 import { describe, expect, it } from "vitest";
 
 import { visibleNavSections } from "@/components/layout/nav-config";

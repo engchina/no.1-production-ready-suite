@@ -1,4 +1,4 @@
-import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@engchina/production-ready-system-settings";
+import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** Agent コンソールのルート定義。 */
 export const APP_ROUTES = {

@@ -22,7 +22,7 @@ import {
   type ButtonLinkComponent,
   type FeedbackTone,
   type StatusVariant,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { formatMessage } from "../auth/messages";
 import { DATABASE_MESSAGES, type DatabaseMessageKey } from "../database/messages";

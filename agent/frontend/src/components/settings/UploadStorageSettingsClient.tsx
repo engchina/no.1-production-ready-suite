@@ -1,4 +1,4 @@
-import { UploadStorageSettingsPage } from "@engchina/production-ready-system-settings";
+import { UploadStorageSettingsPage } from "@production-ready/system-settings";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api } from "@/lib/api";

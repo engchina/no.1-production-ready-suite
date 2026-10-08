@@ -1,4 +1,4 @@
-import type { StatusVariant } from "@engchina/production-ready-ui";
+import type { StatusVariant } from "@production-ready/ui";
 
 import type { ApprovalRequest, RunState, RunStep, ToolDefinition, ToolResult } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";

@@ -28,7 +28,7 @@ import {
   type DataTableColumn,
   ApiErrorState,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { PagedDataTable } from "@/components/ListViews";

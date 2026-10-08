@@ -25,7 +25,7 @@ import {
   TableSkeleton,
   type DataTableColumn,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedPage } from "@/components/ListViews";
 import {

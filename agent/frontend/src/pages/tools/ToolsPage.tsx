@@ -15,7 +15,7 @@ import {
   type DataTableColumn,
   PageBody,
   RowTitleButton,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type ToolDefinition } from "@/lib/api";
 import { AgentSplitPane } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";

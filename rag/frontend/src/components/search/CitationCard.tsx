@@ -1,6 +1,6 @@
 import { FileText, History, Layers, LocateFixed } from "lucide-react";
 import { useState } from "react";
-import { Button, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, StatusBadge } from "@production-ready/ui";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import type {

@@ -13,7 +13,7 @@ import {
   ExecutionConfirmationField,
   ProcessingIndicator,
   SelectField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";

@@ -9,7 +9,7 @@
 
 | ディレクトリ | 内容 | 固有ルール |
 |---|---|---|
-| `platform/` | 3製品の共通基盤。`packages/ui`（`@engchina/production-ready-ui`）、`packages/system-settings`（`@engchina/production-ready-system-settings`、共通のシステム設定画面とユーザー管理・ロール管理画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`、共通のシステム設定 API と共通認証基盤（ユーザー・ロール・セッション・ログイン））、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
+| `platform/` | 3製品の共通基盤。`packages/ui`（`@production-ready/ui`）、`packages/system-settings`（`@production-ready/system-settings`、共通のシステム設定画面とユーザー管理・ロール管理画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`、共通のシステム設定 API と共通認証基盤（ユーザー・ロール・セッション・ログイン））、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
 | `rag/` | Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答） | [rag/AGENTS.md](./rag/AGENTS.md) |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
 | `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
@@ -179,14 +179,14 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **UI に触る変更（各製品の `frontend/`）の前に、[platform/docs/design-system/ARCHITECTURE.md](./platform/docs/design-system/ARCHITECTURE.md) を読む。**
   - トークン値・コンポーネント仕様・意図的な見た目の変更点: 同 `README.md`
   - 実装の参照: 同 `components-reference.md`
-- **依存の向きは「デザインシステムの決定 → `@engchina/production-ready-ui`（`platform/packages/ui`）→ 各製品」の一方向。** 製品側でコンポーネントやトークンを新規実装しない。必要になったら `platform/packages/ui` へ入れる Issue を立てる（monorepo なので、同じ PR で platform と製品を同時に変更してよい）。
+- **依存の向きは「デザインシステムの決定 → `@production-ready/ui`（`platform/packages/ui`）→ 各製品」の一方向。** 製品側でコンポーネントやトークンを新規実装しない。必要になったら `platform/packages/ui` へ入れる Issue を立てる（monorepo なので、同じ PR で platform と製品を同時に変更してよい）。
 - **製品が持てるのは次だけ。**
   - ナビ構造（nav config）と業務コピー（i18n）
   - データ取得・状態管理・権限
   - ドメイン enum → コンポーネント prop の対応表（例: 状態 → `StatusBadge` の `variant`）
   - 画面固有の業務レイアウト
   - 1製品しか使わない部品は置いてよい。判断基準は「他の2製品がこれを欲しがるか」で、欲しがるなら `packages/ui` に入れる
-- **色・型・余白・角丸・影・モーション・フォーカス表示・テーマ（light / dark / auto）は `packages/ui` が持つ。** `frontend/src/globals.css` は `@import "tailwindcss"` → `@import "@engchina/production-ready-ui/styles.css"` → `@source "../node_modules/@engchina/production-ready-ui/dist"` と、画面固有のレイアウトだけにする。`main.tsx` から JS で import すると共有ユーティリティが生成されない。
+- **色・型・余白・角丸・影・モーション・フォーカス表示・テーマ（light / dark / auto）は `packages/ui` が持つ。** `frontend/src/globals.css` は `@import "tailwindcss"` → `@import "@production-ready/ui/styles.css"` → `@source "../node_modules/@production-ready/ui/dist"` と、画面固有のレイアウトだけにする。`main.tsx` から JS で import すると共有ユーティリティが生成されない。
 
 ### 禁止事項
 
@@ -203,7 +203,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - 必須の欄の印を手書きする（`*`・独自の「必須」バッジ・`RequiredBadge` の直接の並べ置き）、任意の欄のラベル・placeholder に「(任意)」を書く。必須の欄だけに `TextField` / `SelectField` / `SecretField` の `required`、それ以外の入力は `FieldLabel` / `FieldLegend` / `Fieldset` の `required` で「必須」を出す（design-system README §4「必須の表示」、UX 契約 `messaging.md` §3.2.1。#531）。
 - 製品ごとのアクセント色を作る。製品は wordmark・ナビ・内容で区別する。
 - 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px のみ）。
-- `@engchina/production-ready-ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。
+- `@production-ready/ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。
 
 ### 画面の構成
 
@@ -285,7 +285,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **Oracle の製品名は公式名で書き、名前にバージョン（`26ai` 等）を入れない（#564）。** データベースは「Oracle AI Database」、ベクトル検索は「Oracle AI Vector Search」、マネージドサービスは「Oracle Autonomous AI Database」。文脈で明らかなら「Oracle」「データベース」でよい。対応バージョンは [terraform/README.md](./terraform/README.md) の「Autonomous AI Database（全製品で共有）」の 1 か所にだけ書き、ほかはそこを参照する（Terraform の `adb_db_version` の値や `oracle_26ai` のような API・保存値・識別子は変えない）。
 - 自前のコード（3製品の backend・worker・frontend、RAG の前処理 / parser）は Docker イメージを作らず、ネイティブで動かす（開発は `uv run` / `npm run dev`、本番は Compute 上の systemd + Nginx。各製品の `init_script.sh`）。Dockerfile・compose は持たない（#286 / #356）。Agent の実行も Control Plane の組み込み Runtime（OpenAI Agents SDK。#754）で、Docker を使う第三者の Runtime は持たない。
 - Backend は Python 3.12 + FastAPI + Pydantic v2 + uv、共通基盤は `pr_backend_core`。
-- **Python の版は 3.12 に固定する（#286）。** すべての `pyproject.toml` の `requires-python` は `">=3.12,<3.13"`、リポジトリ直下の `.python-version` は `3.12`。uv は project の中では直下の `.python-version` を読まないため、上限は `requires-python` で掛ける。版を変えるときは、全 `pyproject.toml`・`uv.lock`（`uv lock`）・CI の `python-version`・各製品の `init_script.sh` の `uv python install` / `--python` を同じ PR でそろえる。Frontend は Vite + React Router + TypeScript + Tailwind + `@engchina/production-ready-ui` + TanStack Query + Zustand。
+- **Python の版は 3.12 に固定する（#286）。** すべての `pyproject.toml` の `requires-python` は `">=3.12,<3.13"`、リポジトリ直下の `.python-version` は `3.12`。uv は project の中では直下の `.python-version` を読まないため、上限は `requires-python` で掛ける。版を変えるときは、全 `pyproject.toml`・`uv.lock`（`uv lock`）・CI の `python-version`・各製品の `init_script.sh` の `uv python install` / `--python` を同じ PR でそろえる。Frontend は Vite + React Router + TypeScript + Tailwind + `@production-ready/ui` + TanStack Query + Zustand。
 - シークレット（OCI 認証・DB 接続・ADB wallet 等）は `.env` / secret store 経由。ハードコード・commit・API 応答への展開を禁止する。
 - LLM 出力は Pydantic スキーマで検証してから保存・利用する。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービス検証は手動 / ステージングで行う。

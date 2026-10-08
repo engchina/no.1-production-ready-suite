@@ -22,7 +22,7 @@ import {
   TabPanel,
   type EntityAction,
   type StatusVariant,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   agentApi,
   type Artifact,

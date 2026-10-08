@@ -8,7 +8,7 @@ import {
   type SelectFieldOption,
   TextField,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Plus, Trash2 } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";

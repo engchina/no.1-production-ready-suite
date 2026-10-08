@@ -1,4 +1,4 @@
-import { RoleManagementPage } from "@engchina/production-ready-system-settings";
+import { RoleManagementPage } from "@production-ready/system-settings";
 
 import { RAG_SPLIT_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
 import type { SecurityRole } from "@/lib/api";

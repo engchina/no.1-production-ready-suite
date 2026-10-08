@@ -20,14 +20,14 @@ import { WorkspaceBoundary, WorkspaceDraftWarning, WorkspacePage } from "@/compo
 import { useDatabaseStatus } from "@/lib/queries";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { PageHeader, AppShell, PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
+import { PageHeader, AppShell, PageBody, TimedLoadingState } from "@production-ready/ui";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
 import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { useAuth } from "@/features/security/AuthProvider";
-import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
+import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 import {
   ROUTE_PERMISSIONS,
   defaultEntryRoute,

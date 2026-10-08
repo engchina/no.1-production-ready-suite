@@ -1,4 +1,4 @@
-import { Button, DisclosureChevron } from "@engchina/production-ready-ui";
+import { Button, DisclosureChevron } from "@production-ready/ui";
 import { useMemo, useState } from "react";
 
 import { t } from "@/lib/i18n";

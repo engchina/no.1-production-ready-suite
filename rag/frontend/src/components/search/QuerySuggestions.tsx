@@ -1,4 +1,4 @@
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@production-ready/ui";
 import { History } from "lucide-react";
 
 import { t } from "@/lib/i18n";

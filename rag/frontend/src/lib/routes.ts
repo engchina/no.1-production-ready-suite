@@ -1,4 +1,4 @@
-import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@engchina/production-ready-system-settings";
+import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** RAG コンソールの画面ルート定義。 */
 export const APP_ROUTES = {

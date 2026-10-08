@@ -3,7 +3,7 @@ import {
   FormStatus,
   SearchableSelectField,
   StatusBadge,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { History, Save, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";

@@ -8,7 +8,7 @@ import {
   PageBody,
   PageHeader,
   type ThemePreference,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { CaCertificateCard } from "./CaCertificateCard";
 import { APPEARANCE_MESSAGES, type AppearanceMessages } from "./messages";

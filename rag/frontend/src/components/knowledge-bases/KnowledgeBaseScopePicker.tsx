@@ -3,7 +3,7 @@
 import { useId, useMemo, useState } from "react";
 
 import { KnowledgeBaseMultiSelect } from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
-import { Banner, TimedLoadingState, Skeleton } from "@engchina/production-ready-ui";
+import { Banner, TimedLoadingState, Skeleton } from "@production-ready/ui";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {

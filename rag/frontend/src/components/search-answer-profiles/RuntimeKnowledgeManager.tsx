@@ -16,7 +16,7 @@ import {
   toast,
   useConfirm,
   PagedDataTable,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import {
   api,

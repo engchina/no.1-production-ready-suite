@@ -11,7 +11,7 @@ import {
   ActionResultRegion,
   ExecutionConfirmationField,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import {
   ExecutionActivityPanel,

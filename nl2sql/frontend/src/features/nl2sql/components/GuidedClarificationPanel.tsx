@@ -10,7 +10,7 @@ import {
   ProcessingIndicator,
   FieldLegend,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";

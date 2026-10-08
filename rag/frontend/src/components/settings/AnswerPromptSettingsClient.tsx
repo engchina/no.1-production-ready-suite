@@ -1,6 +1,6 @@
 "use client";
 
-import { FormSkeleton, PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
+import { FormSkeleton, PageBody, TimedLoadingState } from "@production-ready/ui";
 
 import { useAnswerPrompts } from "@/lib/queries";
 import { t } from "@/lib/i18n";

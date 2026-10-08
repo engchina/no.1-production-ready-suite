@@ -10,7 +10,7 @@ import {
   Skeleton,
   StatusBadge,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { CircleStop, ListChecks } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";

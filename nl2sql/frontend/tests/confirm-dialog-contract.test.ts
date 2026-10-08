@@ -10,7 +10,7 @@ test("ConfirmDialog / Toaster は共有パッケージを使い、アプリ内�
     assert.equal(existsSync(new URL(`../src/components/ui/${path}`, import.meta.url)), false, path);
   }
   const main = source("../src/main.tsx");
-  assert.match(main, /import \{ ConfirmProvider, Toaster \} from "@engchina\/production-ready-ui";/u);
+  assert.match(main, /import \{ ConfirmProvider, Toaster \} from "@production-ready\/ui";/u);
   assert.doesNotMatch(main, /@\/components\/ui\/(?:confirm-dialog|toaster)/u);
 });
 

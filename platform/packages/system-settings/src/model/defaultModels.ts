@@ -2,7 +2,7 @@
  * 既定のモデル 2 つ（既定のテキストモデル / 既定の Vision モデル）の選択肢と検証（#499）。
  * 検証の規則は backend の `pr_system_settings.model.validate_default_models` と同じ。
  */
-import type { SelectFieldOption } from "@engchina/production-ready-ui";
+import type { SelectFieldOption } from "@production-ready/ui";
 
 import { t } from "./messages";
 import type {

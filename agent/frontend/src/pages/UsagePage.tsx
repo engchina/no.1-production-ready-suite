@@ -17,7 +17,7 @@ import {
   Tabs,
   type DataTableColumn,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import { ReportSourceNote } from "@/components/ReportSourceNote";

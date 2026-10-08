@@ -1,4 +1,4 @@
-import { DatabaseUnavailableNotice } from "@engchina/production-ready-system-settings";
+import { DatabaseUnavailableNotice } from "@production-ready/system-settings";
 
 import {
   DATABASE_GATE_ROUTES,

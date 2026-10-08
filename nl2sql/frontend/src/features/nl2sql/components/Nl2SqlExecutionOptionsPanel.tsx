@@ -1,4 +1,4 @@
-import { Button, DisclosureChevron } from "@engchina/production-ready-ui";
+import { Button, DisclosureChevron } from "@production-ready/ui";
 import { Eye, FileText, Network, Sparkles } from "lucide-react";
 
 import { t } from "@/lib/i18n";

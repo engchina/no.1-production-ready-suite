@@ -1,4 +1,4 @@
-import { AppearanceSettingsPage } from "@engchina/production-ready-system-settings";
+import { AppearanceSettingsPage } from "@production-ready/system-settings";
 
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";

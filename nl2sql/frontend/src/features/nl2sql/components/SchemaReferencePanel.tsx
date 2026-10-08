@@ -9,7 +9,7 @@ import {
   TimedLoadingState,
   DisclosureChevron,
   SearchField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { SchemaRefreshProcessing } from "./SchemaRefreshFeedback";

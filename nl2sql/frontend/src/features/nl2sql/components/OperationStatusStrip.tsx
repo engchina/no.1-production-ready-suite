@@ -4,7 +4,7 @@ import {
   Button,
   Banner,
   FormStatus,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";

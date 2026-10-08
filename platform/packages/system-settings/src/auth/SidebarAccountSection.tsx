@@ -1,5 +1,5 @@
 import { Bug } from "lucide-react";
-import { SidebarAccountFooter, cn, useSidebarCollapsed } from "@engchina/production-ready-ui";
+import { SidebarAccountFooter, cn, useSidebarCollapsed } from "@production-ready/ui";
 
 import { useSidebarAccount } from "./RequireAuth";
 import { AUTH_MESSAGES, type AuthMessages } from "./messages";

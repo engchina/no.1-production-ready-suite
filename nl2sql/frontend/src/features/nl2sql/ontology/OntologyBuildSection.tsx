@@ -14,7 +14,7 @@ import {
   TimedLoadingState,
   ListSkeleton,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   useCallback,
   useEffect,

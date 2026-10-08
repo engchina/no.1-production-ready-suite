@@ -1,4 +1,4 @@
-import { useCursorPages } from "@engchina/production-ready-ui";
+import { useCursorPages } from "@production-ready/ui";
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 interface LoadedPosition {

@@ -1,4 +1,4 @@
-import { ProcessingIndicator } from "@engchina/production-ready-ui";
+import { ProcessingIndicator } from "@production-ready/ui";
 import { ArrowUpCircle, CheckCircle2, Clock3 } from "lucide-react";
 
 import { t } from "@/lib/i18n";

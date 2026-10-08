@@ -4,13 +4,13 @@ import {
   toast,
   useConfirm,
   RowActionMenu,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { MemoryRouter } from "react-router-dom";
-import { DataTable, type DataTableSort } from "@engchina/production-ready-ui";
+import { DataTable, type DataTableSort } from "@production-ready/ui";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Copy, Eye, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { Button, buttonVariants, FormActionBar, PageHeader, Pagination, TextField } from "@engchina/production-ready-ui";
+import { Button, buttonVariants, FormActionBar, PageHeader, Pagination, TextField } from "@production-ready/ui";
 import { ErrorState } from "../../src/components/StateViews";
 import "../../src/globals.css";
 

@@ -10,7 +10,7 @@
  * `https://`・`blob:`・`data:`・相対パスは変えない。
  */
 
-import { routerBasename, withBasePath } from "@engchina/production-ready-ui";
+import { routerBasename, withBasePath } from "@production-ready/ui";
 
 /** build 時の base（`/` または `/rag/` のような形）。Vite 以外の実行環境（node の単体テスト）では `/`。 */
 // `?.` は import.meta.env を持たない実行環境のため。Vite の build では値に置き換わる。

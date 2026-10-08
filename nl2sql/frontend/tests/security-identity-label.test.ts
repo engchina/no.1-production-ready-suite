@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   identityInlineLabel,
   identitySecondaryName,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 const source = (path: string) =>
   readFileSync(new URL(`../src/features/security/${path}`, import.meta.url), "utf8");

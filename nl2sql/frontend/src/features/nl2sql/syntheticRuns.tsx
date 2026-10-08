@@ -11,7 +11,7 @@ import {
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   SelectField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { apiGet } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useDatabaseStatus } from "@/lib/queries";

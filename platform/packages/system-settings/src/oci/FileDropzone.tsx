@@ -13,12 +13,12 @@ import {
 
 import { t } from "./messages";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "./fileDropzone";
-import { cn, ClearActionButton } from "@engchina/production-ready-ui";
+import { cn, ClearActionButton } from "@production-ready/ui";
 import {
   FieldError,
   FieldLabel,
   Spinner,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 

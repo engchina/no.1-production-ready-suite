@@ -14,7 +14,7 @@ import {
   StatusBadge,
   PageBody,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type RuntimeStorageStatus } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
 import { storageFixKey, storageReasonKey, useRuntimeStorage } from "@/components/system/StorageNotice";

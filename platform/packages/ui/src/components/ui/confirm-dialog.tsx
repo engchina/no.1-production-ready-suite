@@ -89,7 +89,7 @@ export function ConfirmProvider({
   labels?: ConfirmDefaultLabels;
   /**
    * 画面遷移の識別子。値が変わると開いている確認をキャンセル（`false`）で閉じる。遷移先の画面に
-   * 前の画面の確認が残らないようにする。React Router のアプリは `@engchina/production-ready-system-settings`
+   * 前の画面の確認が残らないようにする。React Router のアプリは `@production-ready/system-settings`
    * の `useConfirmNavigationKey()` を渡す（同じパスで URL を書き戻すだけの置き換えでは閉じない。#833）。
    */
   navigationKey?: unknown;

@@ -20,7 +20,7 @@
 
 - i18n の key / 値の変更は UI の変更として扱う。翻訳の diff から古い文言を挙げ、実装だけでなく frontend のテスト全体を検索して、`getByRole` / `getByLabel` / region / 空状態などの locator と期待する文言を同じ変更で直す。一部の spec だけ直して完了にしない。
 - 文言の変更の検証では、その locator を使う Playwright の spec を desktop と `mobile-375` の両方で流す。既存の skip は理由を明記する。build / logic のテストだけでは locator の古さを見つけられない前提で進める。
-- 共有パッケージの画面（`@engchina/production-ready-system-settings` など）の文言を変えるときは、3製品すべての E2E を同じ変更で直す。
+- 共有パッケージの画面（`@production-ready/system-settings` など）の文言を変えるときは、3製品すべての E2E を同じ変更で直す。
 
 ## ページ遷移・未保存変更
 

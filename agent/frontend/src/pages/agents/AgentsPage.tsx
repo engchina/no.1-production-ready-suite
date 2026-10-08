@@ -20,7 +20,7 @@ import {
   RowTitleButton,
   ApiErrorBanner,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type AgentProfile, type AgentVersion } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";

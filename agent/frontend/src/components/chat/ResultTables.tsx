@@ -5,7 +5,7 @@ import {
   splitMarkdownTables,
   type ResultTableLabels,
   type TabularData,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 

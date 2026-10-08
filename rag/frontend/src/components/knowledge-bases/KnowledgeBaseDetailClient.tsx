@@ -26,7 +26,7 @@ import {
   RowActionMenu,
   SearchField,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,

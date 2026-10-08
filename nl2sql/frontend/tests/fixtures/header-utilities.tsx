@@ -1,4 +1,4 @@
-import { AppShell, Button, PageBody, PageHeader, Tabs } from "@engchina/production-ready-ui";
+import { AppShell, Button, PageBody, PageHeader, Tabs } from "@production-ready/ui";
 import { RefreshCw, Upload, Plus } from "lucide-react";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";

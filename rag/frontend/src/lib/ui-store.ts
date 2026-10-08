@@ -1,4 +1,4 @@
-import { createUiStore } from "@engchina/production-ready-ui";
+import { createUiStore } from "@production-ready/ui";
 
 // UI ストア（サイドバー開閉等）は共有 UI パッケージの factory で生成する。
 // 永続化キーは RAG 専用 namespace を維持し、旧バージョンの単独キーから移行する。

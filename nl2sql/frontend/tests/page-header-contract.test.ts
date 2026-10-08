@@ -87,7 +87,7 @@ test("業務プロファイルの schema / DB Profile refresh ボタンは押し
 
 test("移行対象ページは共有 PageHeader を使い、旧トップ概覧カードを表示しない", () => {
   for (const page of migratedPages) {
-    assert.match(page, /\bPageHeader\b[\s\S]*from "@engchina\/production-ready-ui"/u);
+    assert.match(page, /\bPageHeader\b[\s\S]*from "@production-ready\/ui"/u);
     assert.doesNotMatch(page, /from "@\/components\/PageHeader"/u);
     assert.doesNotMatch(page, /<DbObjectManagementStatusBar/u);
     assert.doesNotMatch(page, /<DbObjectStatusBar/u);

@@ -26,7 +26,7 @@ import {
   StatusBadge,
   TimedLoadingState,
   type SelectFieldOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { useSettingsDraftGuard } from "../guards/useSettingsDraftGuard";
 import type { UploadStorageSettingsData } from "../upload-storage/types";

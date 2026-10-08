@@ -35,7 +35,7 @@ import {
   type StatusVariant,
   ApiErrorState,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedPage } from "@/components/ListViews";

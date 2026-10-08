@@ -2,7 +2,7 @@ import {
   RolePermissionsPage,
   type RolePermissionTargetSection,
   type RolePermissionsApi,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { t } from "@/lib/i18n";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";

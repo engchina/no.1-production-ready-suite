@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isChatProgressActive } from "@engchina/production-ready-ui";
+import { isChatProgressActive } from "@production-ready/ui";
 
 import {
   chatJobElapsedMs,

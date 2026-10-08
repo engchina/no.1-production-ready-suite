@@ -5,7 +5,7 @@ import {
   isDatabaseGateExemptPath,
   type DatabaseGateMessages,
   type DatabaseGateRoutes,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { api } from "@/lib/api";

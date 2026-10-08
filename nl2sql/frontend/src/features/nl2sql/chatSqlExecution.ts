@@ -1,7 +1,7 @@
 // チャットのターンの SQL の実行（#1154）の、NL2SQL 固有の変換と文言。
 //
 // 結果の表の表示（要約・プレビュー・打ち切りの明示・すべての行・CSV・NULL・数値の右寄せ）は 3 製品で共通の
-// `ResultTable`（@engchina/production-ready-ui。旧名 `ChatResultTable`）が持つ。ここは NL2SQL の API の形（列名をキーにした行）を
+// `ResultTable`（@production-ready/ui。旧名 `ChatResultTable`）が持つ。ここは NL2SQL の API の形（列名をキーにした行）を
 // 部品の形（列の順の値の配列）にする変換と、会話を開き直したときの要約・「SELECT SQL を実行」への受け渡しだけ。
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。

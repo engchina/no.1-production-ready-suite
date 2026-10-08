@@ -41,7 +41,7 @@ import {
   ApiErrorBanner,
   apiErrorMessage,
   DEFAULT_PAGE_SIZE,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import {
   ApiError,

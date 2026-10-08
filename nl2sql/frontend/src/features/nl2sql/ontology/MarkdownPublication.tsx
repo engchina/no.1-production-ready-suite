@@ -8,7 +8,7 @@ import {
   useConfirm,
   ContentActionBar,
   ProcessingIndicator,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiGet, apiPost } from "@/lib/api";

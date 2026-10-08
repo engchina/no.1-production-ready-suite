@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ApiError, ApiTransportError } from "../src/lib/api.ts";
-import { presentApiError } from "@engchina/production-ready-ui";
+import { presentApiError } from "@production-ready/ui";
 
 test("timeout は日本語の要約・次の操作と、英語の元の文を含む詳細に分ける (#900)", () => {
   const cause = new DOMException("signal timed out", "TimeoutError");

@@ -4,7 +4,7 @@ import {
   SearchableSelectField,
   Skeleton,
   type SearchableSelectOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Search } from "lucide-react";
 import { useMemo } from "react";
 

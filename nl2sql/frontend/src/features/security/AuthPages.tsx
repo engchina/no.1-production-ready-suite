@@ -3,7 +3,7 @@ import {
   ForbiddenPage as SharedForbiddenPage,
   LoginPage as SharedLoginPage,
   PasswordChangePage as SharedPasswordChangePage,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";

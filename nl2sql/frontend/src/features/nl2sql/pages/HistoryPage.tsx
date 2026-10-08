@@ -33,7 +33,7 @@ import {
   TimedLoadingState,
   INFORMATION_LIST_SCROLL_CLASS,
   SelectField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";
 

@@ -1,10 +1,10 @@
-import { toTabularData, type TabularData } from "@engchina/production-ready-ui";
+import { toTabularData, type TabularData } from "@production-ready/ui";
 
 import type { Artifact, RunState, RunStep } from "./api";
 
 /**
  * Run の中の表のデータ（#1158）。ツールの結果・成果物が表の形なら、共通の結果の表の部品で出す。
- * 表の形の判定は `@engchina/production-ready-ui` の `toTabularData`（製品に依存しない）。ここは Run の
+ * 表の形の判定は `@production-ready/ui` の `toTabularData`（製品に依存しない）。ここは Run の
  * どこから取り出すか（完了したツールの結果・成果物）だけを持つ。
  */
 

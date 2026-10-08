@@ -1,7 +1,7 @@
 import {
   DATABASE_STATUS_QUERY_KEY,
   DatabaseSettingsPage,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api } from "@/lib/api";

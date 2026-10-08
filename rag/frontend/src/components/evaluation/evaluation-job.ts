@@ -2,7 +2,7 @@
  * 品質評価の job（#390）の表示のための判定。画面の部品から切り離して単体テストする。
  */
 
-import type { StatusVariant } from "@engchina/production-ready-ui";
+import type { StatusVariant } from "@production-ready/ui";
 
 import type { EvaluationCaseResult, EvaluationJob, EvaluationJobStatus } from "@/lib/api";
 import { answerStageLabel } from "@/lib/answer-progress";

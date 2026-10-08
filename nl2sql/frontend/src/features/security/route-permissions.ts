@@ -1,7 +1,7 @@
 import {
   firstAllowedRoute as sharedFirstAllowedRoute,
   routePermissionMap,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { NAV_SECTIONS } from "@/components/layout/nav-config";
 import { APP_ROUTES } from "@/lib/routes";

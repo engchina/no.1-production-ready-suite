@@ -26,7 +26,7 @@ import {
   RowTitleButton,
   TextField,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   agentApi,
   ApiError,

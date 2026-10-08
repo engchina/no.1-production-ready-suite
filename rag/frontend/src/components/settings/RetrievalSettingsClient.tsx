@@ -1,6 +1,6 @@
 "use client";
 
-import { PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
+import { PageBody, TimedLoadingState } from "@production-ready/ui";
 
 import { AnswerRecordRetentionCard } from "@/components/settings/AnswerRecordRetentionCard";
 import { AnsweringSettingsCard } from "@/components/settings/AnsweringSettingsCard";

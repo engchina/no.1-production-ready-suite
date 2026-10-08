@@ -3,7 +3,7 @@ import {
   AuthProvider as SharedAuthProvider,
   useAuth as useSharedAuth,
   type AuthContextValue,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import type { CurrentUser } from "@/lib/api";
 import { securityApi } from "@/lib/security-api";

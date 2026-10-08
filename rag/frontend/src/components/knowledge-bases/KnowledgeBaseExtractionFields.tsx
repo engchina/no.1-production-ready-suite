@@ -8,7 +8,7 @@ import {
   CardTitle,
   FormSkeleton,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { CopyPlus, ListChecks, Undo2 } from "lucide-react";
 
 import { ExtractionFieldsForm } from "@/components/settings/ExtractionFieldsEditor";

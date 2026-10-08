@@ -191,7 +191,7 @@ toast.error(message, opts?)     // = danger。固定面がない場合だけ。�
 - セクション / ページの先頭に置く横長の通知。トーンは §2、左にアイコン、必要なら閉じる × と action ボタン。共有 UI の `<Banner>` を使う。
 - 主に「設定が終わっていないので機能が使えない」「縮退モード」などの**状況**を出す。一時的な成功には使わない（→ Toast）。
 - **ページ全体が使えない（ブロック状態）**ときは、業務画面の代わりに主領域の中央へ共有 UI の `<BlockedPageNotice>` を出す。見出し（原因）・本文（次の行動）・復旧の操作（設定を開く → 再試行の順）・引き続き使える画面の案内をそろえる。サイドナビは残し、エラー画面（danger）にはしない。
-  - DB の未設定・未起動・初期化待ちは3製品共通の `DatabaseGate`（`@engchina/production-ready-system-settings`）が出す。ゲートを通さない画面はシステム設定の 5 画面だけ。診断コード（状態 API の `check`）は分かるものに補足を添えて出し、接続先に関わる ORA コードは出さない。状態ごとの見出し・導線と、設定を開けない利用者への案内は §3.4.1。
+  - DB の未設定・未起動・初期化待ちは3製品共通の `DatabaseGate`（`@production-ready/system-settings`）が出す。ゲートを通さない画面はシステム設定の 5 画面だけ。診断コード（状態 API の `check`）は分かるものに補足を添えて出し、接続先に関わる ORA コードは出さない。状態ごとの見出し・導線と、設定を開けない利用者への案内は §3.4.1。
 
 #### 3.4.1 DB ゲートの状態と導線（#820）
 
@@ -223,7 +223,7 @@ DB ゲートは、DB が使えない理由を利用者が取り違えないよ�
   - フォーカストラップ。開いたら確認ボタンへフォーカスし、閉じたら trigger に戻す。
   - `Esc` とオーバーレイのクリックでキャンセル（`escape-routes`）。破棄系は誤操作を防ぐためオーバーレイのクリックを無効にしてよい。
   - scrim は共有トークン `--scrim`、overlay は `--z-dialog` で Toast（`--z-toast`）より上。
-  - メニュー（`role="menu"`）の項目から開いた場合は、閉じたあとメニューの trigger にフォーカスを戻す。ルートが変わったら開いている確認はキャンセルする（`@engchina/production-ready-system-settings` の `useConfirmNavigationKey()` を `navigationKey` に渡す）。キャンセルするのは戻る / 進む（POP）・リンクや `navigate()` の遷移（PUSH）・パスの変わる置き換え（REPLACE）で、画面が選択中の対象やページ番号を URL に書き戻すだけの同じパスの置き換えではキャンセルしない（`useLocation().key` をそのまま渡すと、画面を開いた直後に開いた確認が後から届いた書き戻しで閉じる。#833）。
+  - メニュー（`role="menu"`）の項目から開いた場合は、閉じたあとメニューの trigger にフォーカスを戻す。ルートが変わったら開いている確認はキャンセルする（`@production-ready/system-settings` の `useConfirmNavigationKey()` を `navigationKey` に渡す）。キャンセルするのは戻る / 進む（POP）・リンクや `navigate()` の遷移（PUSH）・パスの変わる置き換え（REPLACE）で、画面が選択中の対象やページ番号を URL に書き戻すだけの同じパスの置き換えではキャンセルしない（`useLocation().key` をそのまま渡すと、画面を開いた直後に開いた確認が後から届いた書き戻しで閉じる。#833）。
   - 確認ボタンは操作のトーンに合わせる（削除なら `danger`）。キャンセルを既定のフォーカスにしてもよい。
   - enter は trigger を起点にした scale + fade（`modal-motion`）、`prefers-reduced-motion` ではフェードだけ。
 - **API**：

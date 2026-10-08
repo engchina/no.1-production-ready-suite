@@ -11,7 +11,7 @@ import {
   StatusBadge,
   FormStatus,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { apiPost } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";

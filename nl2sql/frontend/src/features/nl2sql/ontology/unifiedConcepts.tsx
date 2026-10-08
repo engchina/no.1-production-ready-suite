@@ -4,7 +4,7 @@ import type { OntologyBuildJob } from "./types";
 import type { WorkflowProgressStepStatus } from "../components/WorkflowProgressStrip";
 
 import { conceptKinds } from "./conceptModel";
-import { Disclosure } from "@engchina/production-ready-ui";
+import { Disclosure } from "@production-ready/ui";
 export { conceptKinds, conceptGraph, nodeConceptKind } from "./conceptModel";
 export type { ConceptKind } from "./conceptModel";
 

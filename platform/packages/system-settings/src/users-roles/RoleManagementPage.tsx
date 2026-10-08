@@ -44,7 +44,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   TextareaField,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";

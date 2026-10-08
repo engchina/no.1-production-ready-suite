@@ -28,7 +28,7 @@ import {
   TextField,
   useActionPending,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
 import { agentPaginationLabels, listScrollLabel, QueryState } from "@/components/ListViews";
 import { t } from "@/lib/i18n";

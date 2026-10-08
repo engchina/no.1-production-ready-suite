@@ -19,7 +19,7 @@ test("required labels use the shared FieldLabel / FieldLegend instead of an app-
   ]) {
     const page = source(path);
     assert.doesNotMatch(page, /required-field"/u, path);
-    assert.match(page, /\b(?:FieldLabel|FieldLegend),[\s\S]*from "@engchina\/production-ready-ui"/u, path);
+    assert.match(page, /\b(?:FieldLabel|FieldLegend),[\s\S]*from "@production-ready\/ui"/u, path);
     // RequiredBadge を直接ラベルに並べず、共有部品の required で出す。
     assert.doesNotMatch(page, /<RequiredBadge\b|t\("common\.required"\)/u, path);
   }

@@ -17,7 +17,7 @@ import {
   cn,
   toast,
   type SelectFieldOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cloud, HardDrive, RefreshCw, Save, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";

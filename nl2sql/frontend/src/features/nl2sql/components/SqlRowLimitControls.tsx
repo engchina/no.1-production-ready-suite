@@ -1,6 +1,6 @@
 import { useId } from "react";
 
-import { FieldError, TextField } from "@engchina/production-ready-ui";
+import { FieldError, TextField } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 
 export const DEFAULT_SQL_ROW_LIMIT = 100;

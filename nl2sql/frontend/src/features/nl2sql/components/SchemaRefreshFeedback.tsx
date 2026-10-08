@@ -9,7 +9,7 @@ import {
   ProcessingIndicator,
   type ProcessingActivityIcon,
   type ProcessingPlacement,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 export function SchemaRefreshHeaderStatus({ testId }: { testId?: string }) {
   const { error, isStarting, job } = useSchemaRefreshCoordinator();

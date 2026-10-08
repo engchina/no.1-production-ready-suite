@@ -20,13 +20,13 @@ import {
   TextareaField,
   TextField,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   SettingsTestResultPanel,
   toSettingsTestResultDetails,
   type SettingsTestResultDetail,
   type SettingsTestResultTone,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import {
   agentApi,
   ApiError,

@@ -1,4 +1,4 @@
-import { routerBasename, withBasePath } from "@engchina/production-ready-ui";
+import { routerBasename, withBasePath } from "@production-ready/ui";
 
 /**
  * Agent の画面の配信の基点（#1316）。

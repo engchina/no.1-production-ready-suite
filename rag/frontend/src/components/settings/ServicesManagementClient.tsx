@@ -21,7 +21,7 @@ import {
   ListSkeleton,
   presentApiError,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {

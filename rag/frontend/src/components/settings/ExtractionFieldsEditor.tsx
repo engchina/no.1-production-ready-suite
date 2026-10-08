@@ -5,7 +5,7 @@ import {
   SelectField,
   type SelectFieldOption,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState, type ReactNode } from "react";

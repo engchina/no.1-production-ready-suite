@@ -1,6 +1,6 @@
 // #355: 共有 Button の loading（aria-disabled でフォーカスを保つ）・PageHeader のグループの区切り・
 // フォーカスの表示（outline に一本化）を実ブラウザで確かめる fixture。
-import { Button, PageBody, PageHeader, Switch } from "@engchina/production-ready-ui";
+import { Button, PageBody, PageHeader, Switch } from "@production-ready/ui";
 import { Copy, Plus, RefreshCw, Save, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

@@ -19,7 +19,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   OffsetPagination,
   ListToolbar,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";

@@ -1,4 +1,4 @@
-import { DatabaseSettingsPage } from "@engchina/production-ready-system-settings";
+import { DatabaseSettingsPage } from "@production-ready/system-settings";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api } from "@/lib/api";

@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { Info, ShieldCheck } from "lucide-react";
-import { Disclosure, StatusBadge, type StatusVariant } from "@engchina/production-ready-ui";
+import { Disclosure, StatusBadge, type StatusVariant } from "@production-ready/ui";
 
 import type {
   AnswerReview,

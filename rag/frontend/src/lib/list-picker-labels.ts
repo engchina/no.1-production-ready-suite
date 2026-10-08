@@ -1,4 +1,4 @@
-import type { ListPickerLabels } from "@engchina/production-ready-ui";
+import type { ListPickerLabels } from "@production-ready/ui";
 
 import { formatNumber } from "./format";
 import { t } from "./i18n";

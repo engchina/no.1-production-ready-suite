@@ -17,7 +17,7 @@ import {
   type SelectFieldOption,
   ExecutionConfirmationField,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type SelectAiCredentialRegion } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";

@@ -1,6 +1,6 @@
 name: Build shared platform UI
 description: >-
-  platform の npm ci と、共有 UI（@engchina/production-ready-ui / production-ready-system-settings）の dist を用意する。
+  platform の npm ci と、共有 UI（@production-ready/ui / production-ready-system-settings）の dist を用意する。
   dist は platform の frontend のソースと lock の hash でキャッシュし、hit したら build を飛ばす（#339）。
 
 # 製品の frontend は file:../../platform/packages/{ui,system-settings} に依存する。dist が hit しても

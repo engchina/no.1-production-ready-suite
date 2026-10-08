@@ -24,7 +24,7 @@ import {
   StatusBadge as UiStatusBadge,
   OffsetPagination,
   ListToolbar,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Link } from "react-router-dom";
 import { History, RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";

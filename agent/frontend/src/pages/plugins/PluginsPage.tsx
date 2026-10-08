@@ -26,7 +26,7 @@ import {
   RowTitleButton,
   TextareaField,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type PluginManifest, type PluginSummary } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";

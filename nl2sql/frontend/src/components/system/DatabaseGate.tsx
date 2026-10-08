@@ -1,11 +1,11 @@
 import { useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { Banner, PageBody } from "@engchina/production-ready-ui";
+import { Banner, PageBody } from "@production-ready/ui";
 import {
   DatabaseGate as SharedDatabaseGate,
   type DatabaseSecondaryGateProps,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import {
   DATABASE_GATE_ROUTES,
