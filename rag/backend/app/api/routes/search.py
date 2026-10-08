@@ -25,6 +25,7 @@ from app.config import (
     get_settings,
 )
 from app.rag.answer_engine import evaluate_answer_record
+from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
@@ -215,6 +216,10 @@ async def _resolve_query_context(
             effective_request, from_search_answer_profile=not request.knowledge_base_ids
         )
         settings, applied = resolve_search_answer_profile_settings(settings, view.config)
+        # 回答の記録に残す検索・回答プロファイルの版（#1276）。
+        settings = settings.model_copy(
+            update={"rag_search_answer_profile_revision": search_answer_profile_revision(view)}
+        )
         # 検索・回答プロファイルのドメインキーワードは全文検索で 1 語として優先する。
         domain_keywords = await load_domain_keywords(oracle, view.id)
         if domain_keywords:

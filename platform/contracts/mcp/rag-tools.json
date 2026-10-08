@@ -80,6 +80,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "search_answer_profiles": {
             "items": {
               "$ref": "#/$defs/SearchAnswerProfileItem"
@@ -397,6 +403,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "guides": {
             "description": "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。無ければ空。",
             "items": {
@@ -612,6 +624,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "evidence_id": {
             "title": "Evidence Id",
             "type": "string"
@@ -1131,6 +1149,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "trace_id": {
             "title": "Trace Id",
             "type": "string"
@@ -1255,6 +1279,64 @@
       },
       "outputSchema": {
         "$defs": {
+          "AnswerProvenance": {
+            "description": "回答を作った設定の版（回答の記録の provenance。#1276）。",
+            "properties": {
+              "search_answer_profile_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Search Answer Profile Id"
+              },
+              "search_answer_profile_updated_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索・回答プロファイルの更新時刻（版）。",
+                "title": "Search Answer Profile Updated At"
+              },
+              "search_answer_profile_config_sha256": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索・回答プロファイルの設定の sha256。",
+                "title": "Search Answer Profile Config Sha256"
+              },
+              "prompt_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答フローのプロンプトの版（内容の sha256 の先頭）。",
+                "title": "Prompt Version"
+              }
+            },
+            "title": "AnswerProvenance",
+            "type": "object"
+          },
           "AnswerRequest": {
             "properties": {
               "id": {
@@ -1756,6 +1838,12 @@
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "answer": {
             "title": "Answer",
             "type": "string"
@@ -1866,6 +1954,18 @@
             "description": "evidence_limit を超えて返さなかった根拠の数。",
             "title": "Evidence Omitted",
             "type": "integer"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AnswerProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答を作った検索・回答プロファイルとプロンプトの版。"
           }
         },
         "required": [
@@ -1882,7 +1982,7 @@
     },
     {
       "name": "rag_validate_answer",
-      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います（モデルを 1 回呼びます）。",
+      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います（モデルを 1 回呼びます）。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も決定的に確かめます。",
       "inputSchema": {
         "$defs": {
           "EvidenceRefInput": {
@@ -1907,10 +2007,89 @@
             ],
             "title": "EvidenceRefInput",
             "type": "object"
+          },
+          "ValidateGuideInput": {
+            "additionalProperties": false,
+            "description": "回答が沿った業務ガイド（rag_search の guide・rag_lookup_guides の guides の 1 件）。",
+            "properties": {
+              "search_answer_profile_id": {
+                "description": "業務ガイドの検索・回答プロファイルの id。",
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Search Answer Profile Id",
+                "type": "string"
+              },
+              "guide_id": {
+                "description": "業務ガイドの id。",
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Guide Id",
+                "type": "string"
+              },
+              "revision": {
+                "description": "回答に使った公開の版。",
+                "minimum": 1,
+                "title": "Revision",
+                "type": "integer"
+              },
+              "conditions": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "分かっている条件の値（条件の id → 値）。当たらない分岐の手順を見分けるのに使う。",
+                "maxProperties": 30,
+                "title": "Conditions",
+                "type": "object"
+              }
+            },
+            "required": [
+              "search_answer_profile_id",
+              "guide_id",
+              "revision"
+            ],
+            "title": "ValidateGuideInput",
+            "type": "object"
+          },
+          "ValidateRequestInput": {
+            "additionalProperties": false,
+            "description": "AnswerEnvelope の要求 1 件（rag_search の requests と同じ形）。",
+            "properties": {
+              "id": {
+                "description": "要求の ID（Q1 など）。",
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Id",
+                "type": "string"
+              },
+              "text": {
+                "default": "",
+                "description": "要求の原文。",
+                "maxLength": 2000,
+                "title": "Text",
+                "type": "string"
+              },
+              "status": {
+                "description": "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。",
+                "enum": [
+                  "addressed",
+                  "partial",
+                  "missing",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ],
+            "title": "ValidateRequestInput",
+            "type": "object"
           }
         },
         "additionalProperties": false,
-        "description": "回答の最終の検証の条件（#1246）。",
+        "description": "回答の最終の検証の条件（#1246）。\n\nrequests・guide は渡したときだけ決定的に確かめる（#1276）。",
         "properties": {
           "query": {
             "description": "利用者の質問。",
@@ -1935,6 +2114,45 @@
             "minItems": 1,
             "title": "Evidence",
             "type": "array"
+          },
+          "requests": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ValidateRequestInput"
+                },
+                "maxItems": 30,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答の要求ごとの充足（AnswerEnvelope の requests）。渡すと partial・missing の要求を確かめる（回答に不足として示していなければ error）。",
+            "title": "Requests"
+          },
+          "gaps": {
+            "description": "回答に示した資料から確かめられない点（AnswerEnvelope の gaps）。",
+            "items": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Gaps",
+            "type": "array"
+          },
+          "guide": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidateGuideInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
           }
         },
         "required": [
@@ -2010,11 +2228,95 @@
             ],
             "title": "ValidatedClaim",
             "type": "object"
+          },
+          "ValidationFinding": {
+            "properties": {
+              "check": {
+                "description": "検査（requests=要求の充足 / guide=業務ガイドの版 / guide_steps=手順 / impact=影響範囲）。",
+                "enum": [
+                  "requests",
+                  "guide",
+                  "guide_steps",
+                  "impact"
+                ],
+                "title": "Check",
+                "type": "string"
+              },
+              "code": {
+                "description": "request_missing / request_partial / request_unverified / guide_unavailable / guide_revision_stale / guide_steps_unmatched / step_order / step_wrong_branch / step_dependency_missing / step_following_missing / impact_scope_missing / approval_missing",
+                "title": "Code",
+                "type": "string"
+              },
+              "severity": {
+                "description": "error は valid にしない。warning は確かめたい点。",
+                "enum": [
+                  "error",
+                  "warning"
+                ],
+                "title": "Severity",
+                "type": "string"
+              },
+              "message": {
+                "title": "Message",
+                "type": "string"
+              },
+              "request_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Request Id"
+              },
+              "step_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Step Id"
+              },
+              "related_step_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "関係する手順（前の手順・後の手順）。",
+                "title": "Related Step Id"
+              }
+            },
+            "required": [
+              "check",
+              "code",
+              "severity",
+              "message"
+            ],
+            "title": "ValidationFinding",
+            "type": "object"
           }
         },
         "properties": {
+          "schema_version": {
+            "default": 2,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "valid": {
-            "description": "矛盾・裏付けの無い主張・読めない根拠が無く、裏付けのある主張が 1 つ以上あるか。",
+            "description": "矛盾・裏付けの無い主張・読めない根拠・error の finding が無く、裏付けのある主張が 1 つ以上あるか。",
             "title": "Valid",
             "type": "boolean"
           },
@@ -2059,6 +2361,41 @@
             "description": "根拠が多く、後ろの根拠を監査に渡しきれなかったか。",
             "title": "Evidence Truncated",
             "type": "boolean"
+          },
+          "checks": {
+            "description": "行った決定的な検査（requests・guide を渡したときだけ。モデルは呼ばない）。",
+            "items": {
+              "enum": [
+                "requests",
+                "guide",
+                "guide_steps",
+                "impact"
+              ],
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "findings": {
+            "description": "決定的な検査で見つけた点。",
+            "items": {
+              "$ref": "#/$defs/ValidationFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "guide_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検査に使った業務ガイドの今の公開の版。",
+            "title": "Guide Revision"
           }
         },
         "required": [

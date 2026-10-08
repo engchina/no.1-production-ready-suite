@@ -193,6 +193,43 @@ def test_invalid_answer_shows_unverified_points(
     assert (content["status"], content["valid"]) == ("completed", False)
 
 
+def test_invalid_answer_shows_deterministic_findings(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """RAG の決定的な検査の error（#1276）も「確かめられていない点」に出す（warning は除く）。"""
+    output = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
+    output["valid"] = False
+    output["checks"] = ["requests", "guide", "guide_steps", "impact"]
+    output["findings"] = [
+        {
+            "check": "requests",
+            "code": "request_missing",
+            "severity": "error",
+            "message": "要求「更新の手数料」に答えていません。不足も示していません。",
+            "request_id": "Q2",
+        },
+        {
+            "check": "guide_steps",
+            "code": "step_dependency_missing",
+            "severity": "warning",
+            "message": "手順「申し出る」の前の手順「契約を開く」が回答にありません。",
+            "step_id": "s2",
+            "related_step_id": "s1",
+        },
+    ]
+    mcp.outputs["rag_validate_answer"] = output
+
+    run, _ = _searched_run(monkeypatch)
+
+    answer = run_answer_text(run)
+    assert answer is not None
+    section = answer.split("**確かめられていない点**", 1)[1]
+    lines = [line for line in section.strip().splitlines() if line]
+    assert lines == ["- 要求「更新の手数料」に答えていません。不足も示していません。"]
+    content = _validation(run)
+    assert content["result"]["findings"][0]["code"] == "request_missing"
+
+
 def test_validator_failure_keeps_the_answer_with_a_notice(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
