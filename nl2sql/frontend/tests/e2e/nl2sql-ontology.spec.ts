@@ -1568,7 +1568,9 @@ test("AI要件確認は複数の業務対象をCheckboxで選択できる", asyn
 
 test("AI要件確認の残りの必須項目は途中で失敗しても確定した分を画面に残す", async ({ page }) => {
   await mockApi(page);
-  const timeQuestion = guidedSessionData(false).clarification.current_question!;
+  const timeQuestion = (
+    guidedSessionData(false).clarification as { current_question: Record<string, unknown> }
+  ).current_question;
   const granularityQuestion = {
     id: "question-granularity",
     ambiguity_id: "ambiguity-granularity",
@@ -1582,11 +1584,11 @@ test("AI要件確認の残りの必須項目は途中で失敗しても確定し
     allow_free_text: true,
     blocking: true,
   };
-  const manualSession = (version: number, questions: Array<typeof timeQuestion>) => {
+  const manualSession = (version: number, questions: Array<Record<string, unknown>>) => {
     const data = guidedSessionData(false);
     data.session.current_intent_version = version;
     data.clarification = {
-      ...data.clarification,
+      ...(data.clarification as Record<string, unknown>),
       current_question: questions[0],
       remaining_questions: questions,
       required_total: 2,
