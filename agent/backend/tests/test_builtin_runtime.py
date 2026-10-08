@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -721,6 +722,153 @@ def test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues(
     assert step.tool_result.error_code == "mcp.unreachable"
     assert "RAG のサービスが起動しているか" in (step.tool_result.error or "")
     assert mcp_agent.calls_of("rag_search") == []
+
+
+# ---------------------------------------------------------------------------
+# 指示のツールの名前と、無いツールの呼び出し（#1303）
+# ---------------------------------------------------------------------------
+
+BUSINESS_AGENT_ID = "test1303-business-agent"
+_BARE_RAG_TOOL = re.compile(
+    r"(?<![A-Za-z0-9_-])rag_(search|retrieve_evidence|lookup_guides|read_source"
+    r"|list_search_answer_profiles)(?![A-Za-z0-9_-])"
+)
+
+
+@pytest.fixture
+def business_agent(monkeypatch: MonkeyPatch) -> Iterator[Any]:
+    """組み込みのスキル business_rag_research を持つ業務 Agent（fake の RAG の MCP）。"""
+    mcp = fake_product_mcp(monkeypatch)
+    runtime_repository.create_agent(
+        AgentProfile(
+            id=BUSINESS_AGENT_ID,
+            name="業務支援の Agent",
+            instructions="rag_search と rag_retrieve_evidence には profile を必ず渡す。",
+            skill_ids=["business_rag_research"],
+        )
+    )
+    try:
+        yield mcp
+    finally:
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id
+                for run_id, run in repository._runs.items()
+                if run.agent_id == BUSINESS_AGENT_ID
+            ]:
+                repository._runs.pop(run_id)
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(BUSINESS_AGENT_ID)
+
+
+def test_skill_instructions_name_the_tools_given_to_the_model(
+    monkeypatch: MonkeyPatch, business_agent: Any
+) -> None:
+    """スキルの指示の素のツールの名前は、モデルに渡す `<接続>__<ツール>` に書き直す（#1303）。"""
+    model = _script(monkeypatch, [assistant_message("資料に根拠が見つかりませんでした。")])
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="経費の精算の期限は？", agent_id=BUSINESS_AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, run.id)
+
+    tools = {tool.name for tool in model.calls[0].tools}
+    assert {
+        "rag__rag_search",
+        "rag__rag_retrieve_evidence",
+        "rag__rag_lookup_guides",
+        "rag__rag_read_source",
+        "rag__rag_list_search_answer_profiles",
+    } <= tools
+    instructions = str(model.calls[0].system_instructions)
+    # Skill の指示も業務の指示も、モデルが呼べる名前で書いてある（素の名前は残らない）。
+    assert "rag__rag_search の query として扱い" in instructions
+    assert "rag__rag_search と rag__rag_retrieve_evidence には profile" in instructions
+    assert "rag__rag_lookup_guides" in instructions
+    assert _BARE_RAG_TOOL.search(instructions) is None, instructions
+    # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
+    skill = skill_registry.get("business_rag_research")
+    assert skill is not None and "rag_search の query" in skill.instructions
+
+
+def test_bare_tool_name_call_does_not_fail_the_run(
+    monkeypatch: MonkeyPatch, business_agent: Any
+) -> None:
+    """モデルが素の名前でツールを呼んでも Run は落ちず、呼ぶ名前を返して呼び直させる（#1303）。"""
+    model = _script(
+        monkeypatch,
+        [function_call("rag_retrieve_evidence", {"query": "精算の期限"}, call_id="call-bare")],
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "精算の期限"}, call_id="call-prefixed"
+            )
+        ],
+        [assistant_message("精算の期限は翌月 10 日です。")],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="経費の精算の期限は？", agent_id=BUSINESS_AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, run.id)
+
+    finished = runtime_repository.get_run(run.id)
+    assert finished.status == RunStatus.COMPLETED, finished.events[-1].message
+    # 素の名前の呼び出しは実行せず、モデルへ呼ぶ名前を返した。
+    hint = str(model.calls[1].input)
+    assert "ツール「rag_retrieve_evidence」はありません" in hint
+    assert "呼ぶときの名前は「rag__rag_retrieve_evidence」" in hint
+    # 呼び先へ届いたのは、モデルが呼び直した 1 回だけ（Control Plane は読み替えて実行しない）。
+    assert len(business_agent.calls_of("rag_retrieve_evidence")) == 1
+    called = [step.tool_call.name for step in finished.steps if step.tool_call is not None]
+    assert called[0] == "rag__rag_retrieve_evidence"
+    assert "rag_retrieve_evidence" not in called
+
+
+def test_ambiguous_bare_tool_name_is_not_rewritten_or_resolved() -> None:
+    """同じ素の名前が複数の接続にあるときは、指示を書き換えず、案内で候補を並べる（#1303）。"""
+    skill_id = "test1303-ambiguous"
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=skill_id,
+            name="2 つの RAG",
+            instructions="rag_search で調べ、rag_read_source で本文を読む。",
+            mcp_requirements=[
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_search", "rag_read_source"]),
+                SkillMcpRequirement(server_id="rag_hr", tool_names=["rag_search"]),
+            ],
+        )
+    )
+    exposed = ["rag__rag_search", "rag__rag_read_source", "rag_hr__rag_search"]
+    try:
+        assert builtin_runtime.instruction_tool_names([skill_id], exposed) == {
+            "rag_read_source": "rag__rag_read_source"
+        }
+        instructions = builtin_runtime.compose_instructions("", [skill_id], exposed)
+        assert "rag_search で調べ、rag__rag_read_source で本文を読む。" in instructions
+    finally:
+        skill_registry.remove(skill_id)
+
+    message = builtin_runtime.tool_not_found_message("rag_search", exposed)
+    assert "呼ぶときの名前は" not in message
+    assert "rag__rag_search、rag_hr__rag_search" in message
+    # 1 つに決まるものは呼ぶ名前を、決まらない名前は使えるツールを返す。
+    assert "「rag__rag_read_source」" in builtin_runtime.tool_not_found_message(
+        "rag_read_source", exposed
+    )
+    unknown = builtin_runtime.tool_not_found_message("web_search", exposed)
+    assert "使えるツールの名前: rag__rag_read_source、rag__rag_search" in unknown
+
+
+def test_render_tool_names_replaces_whole_names_only() -> None:
+    names = {"rag_search": "rag__rag_search"}
+    text = "rag_search と `rag_search`、rag_searchで。rag_search_x・rag__rag_search・my-rag_search"
+    assert builtin_runtime.render_tool_names(text, names) == (
+        "rag__rag_search と `rag__rag_search`、rag__rag_searchで。"
+        "rag_search_x・rag__rag_search・my-rag_search"
+    )
 
 
 # ---------------------------------------------------------------------------

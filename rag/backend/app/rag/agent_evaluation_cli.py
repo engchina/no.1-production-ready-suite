@@ -68,9 +68,17 @@ SETTLED_STATUSES = frozenset({"completed", "failed", "cancelled", "waiting_appro
 RAG_SEARCH = "rag_search"
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, "rag_retrieve_evidence"})
 MCP_TOOL_SEPARATOR = "__"
+# Agent の組み込みの MCP 接続（RAG）の ID。モデルが呼ぶツールの名前は `<接続>__<ツール>`
+# （Agent #757）。指示にはこの名前を書く（素の名前だと存在しないツールを呼ぶ。#1303）。
+RAG_MCP_CONNECTION = "rag"
 OUTCOME_SOURCE_TOOL = "agent_rag_search"
 OUTCOME_SOURCE_INFERRED = "inferred"
 _QUESTION_ENDINGS = ("？", "?")
+
+
+def agent_tool_name(tool_name: str) -> str:
+    """Agent のモデルが呼ぶ RAG のツールの名前（`rag__rag_search` など。#1303）。"""
+    return f"{RAG_MCP_CONNECTION}{MCP_TOOL_SEPARATOR}{tool_name}"
 
 
 class AgentEvaluationError(RuntimeError):
@@ -308,8 +316,12 @@ class AgentApi:
             "資料と業務ガイドの根拠だけで答え、根拠の無いことは推測で補わない。"
         )
         if search_answer_profile_id:
+            profile_tools = "・".join(
+                agent_tool_name(name)
+                for name in (RAG_SEARCH, "rag_retrieve_evidence", "rag_lookup_guides")
+            )
             instructions += (
-                "RAG のツール（rag_search・rag_retrieve_evidence・rag_lookup_guides）には、"
+                f"RAG のツール（{profile_tools}）には、"
                 f"search_answer_profile_id に「{search_answer_profile_id}」を必ず渡す。"
             )
         created = self._data(
