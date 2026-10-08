@@ -343,7 +343,8 @@ def test_answer_outcome_wins_over_the_last_rag_search() -> None:
     details = answered.response.diagnostics.answer
     assert details is not None
     assert (details["outcome"], answered.outcome_source) == ("conditional", "agent_answer")
-    assert details["agent"]["outcome_source"] == "agent_answer"
+    agent = details["agent"]
+    assert isinstance(agent, dict) and agent["outcome_source"] == "agent_answer"
     # 問いを返していない回答では、rag_search の問いを聞いた条件として数えない。
     assert "clarifications" not in details
     # 確認の質問を返したなら、rag_search の問いを聞いた条件として渡す。
