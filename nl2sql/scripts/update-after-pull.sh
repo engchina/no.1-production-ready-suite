@@ -23,8 +23,22 @@ WALLET_DIR="${WALLET_DIR:-${APP_ROOT}/wallet}"
 RECOVERY_ROOT="${RECOVERY_ROOT:-${APP_ROOT}/recovery}"
 UPDATE_LOG_PATH="${UPDATE_LOG_PATH:-/var/log/nl2sql-update.log}"
 
-BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:8000/api/health}"
-PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-http://127.0.0.1/api/health}"
+# 3 製品は 1 台の Compute にセットで配備する（#1316）。frontend は /nl2sql/ を base に build し、Nginx 経由の health は
+# /nl2sql/health。scheme と port は cloud-init の props（https_enabled.txt / https_port.txt / http_port.txt）から決める。
+SUITE_PROPS_DIR="${SUITE_PROPS_DIR:-${APP_ROOT}/props}"
+read_suite_prop() {
+  tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/$1" || true
+}
+if [ "$(read_suite_prop https_enabled.txt)" = "false" ]; then
+  DEFAULT_PUBLIC_HEALTH_ORIGIN="http://127.0.0.1:$(port="$(read_suite_prop http_port.txt)"; printf '%s' "${port:-80}")"
+else
+  DEFAULT_PUBLIC_HEALTH_ORIGIN="https://127.0.0.1:$(port="$(read_suite_prop https_port.txt)"; printf '%s' "${port:-443}")"
+fi
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"
+
+# backend は 127.0.0.1:8010（RAG の 8000 と分ける。ローカルの開発と同じ。#1316）。
+BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:8010/api/health}"
+PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-${DEFAULT_PUBLIC_HEALTH_ORIGIN}/nl2sql/health}"
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-90}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-2}"
 LOCK_FILE="${LOCK_FILE:-/tmp/production-ready-nl2sql-update.lock}"
@@ -40,6 +54,8 @@ SUDO_REEXEC_ENV_VARS=(
   UPDATE_LOG_PATH
   BACKEND_HEALTH_URL
   PUBLIC_HEALTH_URL
+  FRONTEND_BASE_PATH
+  SUITE_PROPS_DIR
   HEALTHCHECK_TIMEOUT_SECONDS
   HEALTHCHECK_INTERVAL_SECONDS
   LOCK_FILE
@@ -165,8 +181,9 @@ root 起動時も build、依存同期、database CLI は ubuntu へ降権して
 
 Environment overrides:
   PLATFORM_REPO_DIR             共有 platform directory (default: suite の platform/)
-  BACKEND_HEALTH_URL            backend の直接 health URL
-  PUBLIC_HEALTH_URL             Nginx 経由の health URL
+  BACKEND_HEALTH_URL            backend の直接 health URL (default: http://127.0.0.1:8010/api/health)
+  PUBLIC_HEALTH_URL             Nginx 経由の health URL (default: props の scheme と port の /nl2sql/health)
+  FRONTEND_BASE_PATH            frontend の base (default: /nl2sql/)
   HEALTHCHECK_TIMEOUT_SECONDS   health 待機上限秒 (default: 90)
   HEALTHCHECK_INTERVAL_SECONDS  health 再試行間隔秒 (default: 2)
 EOF
@@ -550,7 +567,8 @@ build_frontend_staging() {
     trap - ERR
     cd "${FRONTEND_DIR}"
     run_as_app_user npm ci
-    run_as_app_user npm run build -- --outDir "${FRONTEND_STAGING_DIR}" --emptyOutDir
+    run_as_app_user env FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH}" \
+      npm run build -- --outDir "${FRONTEND_STAGING_DIR}" --emptyOutDir
   )
   require_file "${FRONTEND_STAGING_DIR}/index.html"
   [ -d "${FRONTEND_STAGING_DIR}/assets" ] || \
@@ -636,10 +654,15 @@ run_database_migrations() {
 wait_for_health() {
   local label="$1" url="$2" deadline=$((SECONDS + HEALTHCHECK_TIMEOUT_SECONDS))
   local last_error="" last_status=0
+  local insecure=()
+  # 同じ host の自己確認だけ、証明書の名前（公開 IP・private IP）と 127.0.0.1 の違いを無視する（#1316）。
+  case "${url}" in
+    https://127.0.0.1/* | https://127.0.0.1:*) insecure=(--insecure) ;;
+  esac
   log "${label} health を待機します: ${url}"
   while true; do
     # 起動直後の一時的な接続失敗は retry し、stderr は期限切れ時だけ表示する。
-    if last_error="$(curl -fsS --max-time 5 "${url}" 2>&1 >/dev/null)"; then
+    if last_error="$(curl -fsS ${insecure[@]+"${insecure[@]}"} --max-time 5 "${url}" 2>&1 >/dev/null)"; then
       log "${label} health を確認しました。"
       return 0
     else

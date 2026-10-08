@@ -4,6 +4,8 @@
 # ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成し、
 # 共通認証（PLATFORM_*）と Agent のシステムテーブル（AGENT_*）はアプリの CLI（agent_system_schema）が作成する（#751）。
 # ログインは共通認証（AGENT_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー。#215）。
+# 3 製品は 1 台の Compute にセットで配備する（#1316。単独では配備しない）。platform/deploy/suite-init.sh が呼び、
+# Nginx の site は suite が 1 つだけ書く（ここでは書かない）。frontend は FRONTEND_BASE_PATH（/agent/）を base に build する。
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -23,12 +25,17 @@ BACKEND_DIR="${APP_REPO_DIR}/backend"
 FRONTEND_DIR="${APP_REPO_DIR}/frontend"
 DATA_DIR="${DATA_DIR:-/u01/data/production-ready-agent}"
 WALLET_DIR="${APP_ROOT}/wallet"
-PROPS_DIR="${APP_ROOT}/props"
+PROPS_DIR="${PROPS_DIR:-${APP_ROOT}/props}"
+# backend/.env の元（suite では製品ごとの <製品>.backend.env）。
+BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${PROPS_DIR}/backend.env}"
+# frontend の base（Vite の base・React Router の basename）。Nginx の /agent/ の下で配信する（#1316）。
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/agent/}"
+# true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
+PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8020"
 # checkpoint repository は process 内に状態を持つため、gunicorn は 1 worker に固定する。
 BACKEND_WORKERS="1"
-APPLICATION_PORT="${APPLICATION_PORT:-$(tr -d '[:space:]' < "${PROPS_DIR}/application_port.txt" 2>/dev/null || printf '80')}"
 NODE_MAJOR="22"
 NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
 NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
@@ -38,9 +45,6 @@ NODEJS_OFFICIAL_RELEASE_BASE_URL="${NODEJS_OFFICIAL_RELEASE_BASE_URL:-https://no
 NODEJS_OFFICIAL_INSTALL_DIR="${NODEJS_OFFICIAL_INSTALL_DIR:-/usr/local/lib/nodejs}"
 NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
-NGINX_SITES_AVAILABLE_DIR="${NGINX_SITES_AVAILABLE_DIR:-/etc/nginx/sites-available}"
-NGINX_SITES_ENABLED_DIR="${NGINX_SITES_ENABLED_DIR:-/etc/nginx/sites-enabled}"
-OCI_IMDS_VNICS_URL="${OCI_IMDS_VNICS_URL:-http://169.254.169.254/opc/v2/vnics/}"
 BACKEND_SERVICE="production-ready-agent-backend.service"
 DATABASE_INITIALIZATION_READY=false
 
@@ -124,13 +128,23 @@ install_system_packages() {
 
 # Node.js は NodeSource の apt repository を優先し、失敗時は公式 tarball（SHASUMS256 検証付き）へ fallback する。
 # Agent の CI と同じ Node.js 22 系を使う。
+# 1 台の Compute（#1316）では RAG / NL2SQL が先に Node.js 24 を入れる。Agent は 22 以上なら使う
+# （入れ替えると先に build した製品と版がずれる）。
+node_version_accepted() {
+  local version="$1"
+  local major
+  major="$(printf '%s\n' "${version}" | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')"
+  [ -n "${major}" ] || return 1
+  [ "${major}" -ge "${NODE_MAJOR}" ]
+}
+
 install_nodejs() {
   local installed_version
   local npm_version
 
   if command -v node >/dev/null 2>&1; then
     installed_version="$(node --version)" || return 1
-    if printf '%s\n' "${installed_version}" | grep -q "^v${NODE_MAJOR}\." && command -v npm >/dev/null 2>&1; then
+    if command -v npm >/dev/null 2>&1 && node_version_accepted "${installed_version}"; then
       npm_version="$(npm --version)" || return 1
       log "Node.js ${installed_version} with npm ${npm_version} is already installed."
       return
@@ -357,7 +371,7 @@ install_runtime_env() {
   else
     install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"
   fi
-  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/backend.env" "${BACKEND_DIR}/.env"
+  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${BACKEND_ENV_SOURCE}" "${BACKEND_DIR}/.env"
 
   rm -rf "${WALLET_DIR}"
   install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
@@ -402,13 +416,17 @@ initialize_database_schema() {
 }
 
 build_frontend() {
-  log "Building shared UI package."
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then
+    log "Shared UI package was already built by another product."
+  else
+    log "Building shared UI package."
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  fi
 
-  log "Building Agent frontend."
+  log "Building Agent frontend (base ${FRONTEND_BASE_PATH})."
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm ci"
-  run_as_app_user_in_dir "${FRONTEND_DIR}" "npm run build"
+  run_as_app_user_in_dir "${FRONTEND_DIR}" "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build"
 }
 
 configure_systemd() {
@@ -438,99 +456,6 @@ EOF
   systemctl daemon-reload
   systemctl enable "${BACKEND_SERVICE}"
   systemctl restart "${BACKEND_SERVICE}"
-}
-
-configure_nginx() {
-  # log_format は http context に置く。テストでは conf.d の場所も隔離する。
-  local logging_dir="${NGINX_LOGGING_CONF_DIR:-/etc/nginx/conf.d}"
-  local template_dir
-  template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
-  mkdir -p "${logging_dir}"
-  install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
-  # ログインの API の送信元 IP ごとの緩い上限（limit_req_zone。#1173）。
-  install -m 0644 "${template_dir}/login-rate-limit.conf" "${logging_dir}/production-ready-login-rate-limit.conf"
-  log "Configuring Nginx on port ${APPLICATION_PORT}."
-  cat > "${NGINX_SITES_AVAILABLE_DIR}/production-ready-agent" <<EOF
-server {
-    listen ${APPLICATION_PORT};
-    server_name _;
-
-    root ${FRONTEND_DIR}/dist;
-    index index.html;
-
-    set \$pr_service_name "production-ready-agent";
-    access_log /var/log/nginx/production-ready-agent-access.log production_ready_json if=\$pr_loggable;
-    error_log /var/log/nginx/production-ready-agent-error.log warn;
-
-    client_max_body_size 100M;
-    proxy_connect_timeout 60s;
-    proxy_send_timeout 600s;
-    proxy_read_timeout 600s;
-
-    # 認証は backend の共通認証（Cookie のセッション。#215）。Nginx では認証しない。
-
-    location = /api {
-        return 308 /api/;
-    }
-
-    # ログインの API だけ、送信元 IP ごとに緩く上限を掛ける（#1173。zone は
-    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend
-    # （PLATFORM_AUTH_LOGIN_*）で、ここは大量の要求を照合・DB の前で止める。backend の 429 はそのまま返す。
-    location = /api/auth/login {
-        limit_req zone=pr_login burst=30 nodelay;
-        limit_req_status 429;
-        error_page 429 = @pr_login_rate_limited;
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$http_host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_buffering off;
-        proxy_cache off;
-    }
-
-    location @pr_login_rate_limited {
-        default_type application/json;
-        add_header Retry-After 60 always;
-        return 429 '{"success":false,"data":null,"error_code":"SECURITY_RATE_LIMITED","error_messages":["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"]}';
-    }
-
-    # WebSocket は Origin と Host の一致を確認するため、port を含む Host（\$http_host）を渡す。
-    location /api/ {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$http_host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_buffering off;
-        proxy_cache off;
-    }
-
-    location = /health {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/api/health;
-        proxy_set_header Host \$host;
-        access_log off;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-}
-EOF
-
-  ln -sfn "${NGINX_SITES_AVAILABLE_DIR}/production-ready-agent" "${NGINX_SITES_ENABLED_DIR}/production-ready-agent"
-  rm -f "${NGINX_SITES_ENABLED_DIR}/default"
-  nginx -t
-  systemctl enable nginx
-  systemctl reload nginx || systemctl restart nginx
 }
 
 dump_service_diagnostics() {
@@ -566,9 +491,8 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  configure_nginx
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>/ and log in as system_admin (PLATFORM_ADMIN_LOGIN_USER_PASSWORD)."
+  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH} and log in as system_admin (PLATFORM_ADMIN_LOGIN_USER_PASSWORD)."
 }
 
 if [ "${AGENT_INIT_TEST_MODE:-false}" != "true" ]; then

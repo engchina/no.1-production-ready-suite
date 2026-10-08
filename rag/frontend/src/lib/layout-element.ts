@@ -1,4 +1,5 @@
 import type { DocumentElement } from "@/lib/api";
+import { appPath } from "@/lib/base-path";
 
 /** Docling の要素の Vision 図説明の表示用情報。該当しなければ null。 */
 export type ElementVision = {
@@ -152,5 +153,6 @@ export function elementCropUrl(documentId: string, element: DocumentElement): st
     page_width: String(width),
     page_height: String(height),
   });
-  return `/api/documents/${encodeURIComponent(documentId)}/crop?${search.toString()}`;
+  // `<img src>` に入るので配信の base を付ける（#1316）。
+  return appPath(`/api/documents/${encodeURIComponent(documentId)}/crop?${search.toString()}`);
 }

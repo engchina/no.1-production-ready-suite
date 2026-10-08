@@ -10,14 +10,17 @@ packages:
   - dos2unix
   - git
   - netfilter-persistent
+  - openssl
   - unzip
 write_files:
-  - path: "/u01/aipoc/props/backend.env"
+%{ for product, env in backend_envs ~}
+  - path: "/u01/aipoc/props/${product}.backend.env"
     permissions: "0600"
     owner: "root:root"
     encoding: "gzip+base64"
     content: |
-      ${backend_env}
+      ${env}
+%{ endfor ~}
   - path: "/u01/aipoc/props/platform.env"
     permissions: "0600"
     owner: "root:root"
@@ -30,7 +33,27 @@ write_files:
     encoding: "base64"
     content: |
       ${wallet_content}
-%{ if product == "rag" ~}
+  - path: "/u01/aipoc/props/products.txt"
+    permissions: "0644"
+    content: |
+      ${products}
+  - path: "/u01/aipoc/props/https_enabled.txt"
+    permissions: "0644"
+    content: |
+      ${https_enabled}
+  - path: "/u01/aipoc/props/http_port.txt"
+    permissions: "0644"
+    content: |
+      ${http_port}
+  - path: "/u01/aipoc/props/https_port.txt"
+    permissions: "0644"
+    content: |
+      ${https_port}
+  - path: "/u01/aipoc/props/assign_public_ip.txt"
+    permissions: "0644"
+    content: |
+      ${assign_public_ip}
+%{ if rag_services != "" ~}
   - path: "/u01/aipoc/props/rag_services.txt"
     permissions: "0644"
     content: |
@@ -56,11 +79,7 @@ write_files:
     permissions: "0644"
     content: |
       ${region}
-  - path: "/u01/aipoc/props/application_port.txt"
-    permissions: "0644"
-    content: |
-      ${application_port}
-  - path: "/u01/aipoc/bootstrap-${product}.sh"
+  - path: "/u01/aipoc/bootstrap-suite.sh"
     permissions: "0755"
     owner: "root:root"
     content: |
@@ -70,13 +89,11 @@ write_files:
       export DEBIAN_FRONTEND=noninteractive
 
       APP_ROOT="/u01/aipoc"
-      # 製品（${product}/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
+      # 3 製品（rag/ nl2sql/ agent/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
       SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"
-      APP_REPO_DIR="$${SUITE_REPO_DIR}/${product}"
-      APPLICATION_PORT="${application_port}"
 
       log() {
-        printf '[${product}-bootstrap] %s\n' "$*"
+        printf '[suite-bootstrap] %s\n' "$*"
       }
 
       trap 'status=$?; log "Bootstrap failed at line $${LINENO} with status $${status}: $${BASH_COMMAND}"; exit "$${status}"' ERR
@@ -111,29 +128,21 @@ write_files:
         fi
       }
 
-      # アプリの配備（init_script.sh）より前に、application port を開ける規則だけを保存する。
-      configure_firewall() {
-        if command -v iptables >/dev/null 2>&1; then
-          iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$${APPLICATION_PORT}" -j ACCEPT || true
-          netfilter-persistent save || true
-        fi
-      }
-
-      run_application_init() {
-        local init_script="$${APP_REPO_DIR}/init_script.sh"
+      # 選んだ製品を 1 台に配備する（#1316）。各製品の init_script.sh は suite-init.sh が順に呼び、
+      # Nginx の site（/rag/ /nl2sql/ /agent/、HTTPS）と firewall（80 / 443）は suite-init.sh が 1 つだけ書く。
+      run_suite_init() {
+        local init_script="$${SUITE_REPO_DIR}/platform/deploy/suite-init.sh"
         if [ ! -f "$${init_script}" ]; then
-          log "Missing application init script: $${init_script}"
+          log "Missing suite init script: $${init_script}"
           return 1
         fi
         dos2unix "$${init_script}" || true
-        chmod +x "$${init_script}"
         log "Starting Compute initialization via $${init_script}."
-        APPLICATION_PORT="$${APPLICATION_PORT}" APP_ROOT="$${APP_ROOT}" bash "$${init_script}"
+        APP_ROOT="$${APP_ROOT}" bash "$${init_script}"
       }
 
-      configure_firewall
       clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"
-      run_application_init
-      log "Deployment finished. Nginx listens on TCP port $${APPLICATION_PORT}."
+      run_suite_init
+      log "Deployment finished. See /var/log/suite-init.log."
 runcmd:
-  - "nohup bash /u01/aipoc/bootstrap-${product}.sh >> /var/log/cloud-init-custom.log 2>&1 &"
+  - "nohup bash /u01/aipoc/bootstrap-suite.sh >> /var/log/cloud-init-custom.log 2>&1 &"

@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDate } from "@/pages/shared/page-helpers";
+import { runEventStreamUrl, runEventWebSocketUrl } from "./run-event-urls";
 
 export type RunStreamMode = "sse" | "websocket";
 
@@ -414,7 +415,7 @@ export function useRunEventSource(
 
   useEffect(() => {
     if (!active || !runId) return;
-    const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?follow=true`, {
+    const source = new EventSource(runEventStreamUrl(runId), {
       withCredentials: true,
     });
     const refresh = () => {
@@ -433,15 +434,6 @@ export function useRunEventSource(
 
   const reconnect = useCallback(() => setGeneration((current) => current + 1), []);
   return { status, reconnect };
-}
-
-function runEventWebSocketUrl(runId: string, afterEventId: string | null = null): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const params = new URLSearchParams({ heartbeat_interval_seconds: "1" });
-  if (afterEventId) {
-    params.set("after_event_id", afterEventId);
-  }
-  return `${protocol}//${window.location.host}/api/runs/${runId}/events/ws?${params.toString()}`;
 }
 
 function parseWebSocketMessage(value: string): WebSocketMessage | null {

@@ -113,11 +113,30 @@ def _browser_url(image_url: dict[str, Any]) -> str:
     else:
         raise RunFigureUrlError(502, FAILED_MESSAGE)
     parts = urlsplit(candidate)
+    if _is_same_origin_prefix(public_base) and candidate.startswith(public_base.rstrip("/") + "/"):
+        # 1 台の Compute（#1316）: 起点は同じ origin の path（例 `/rag`）。ブラウザが Agent の
+        # 画面と同じ origin で解決するので host を持たない。起点の後ろは図の path だけを許す。
+        figure_path = candidate[len(public_base.rstrip("/")) :]
+        if (
+            not figure_path.startswith(FIGURE_PATH_PREFIX)
+            or parts.query
+            or parts.fragment
+            or parts.scheme
+            or parts.netloc
+            or "/../" in figure_path
+        ):
+            raise RunFigureUrlError(502, FAILED_MESSAGE)
+        return candidate
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise RunFigureUrlError(502, FAILED_MESSAGE)
     if not parts.path.startswith(FIGURE_PATH_PREFIX) or parts.query or parts.fragment:
         raise RunFigureUrlError(502, FAILED_MESSAGE)
     return candidate
+
+
+def _is_same_origin_prefix(public_base: str) -> bool:
+    """公開の起点が同じ origin の path（`/rag` など。`//host` ではない）か。"""
+    return public_base.startswith("/") and not public_base.startswith("//")
 
 
 def issue_run_figure_url(

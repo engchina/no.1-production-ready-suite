@@ -5,7 +5,7 @@ import viteConfig from "../vite.config";
 
 // BACKEND_URL 未設定で既定の backend（localhost:8020 等）へ proxy する fallback を戻さないための契約テスト。
 // frontend に unit test 基盤がないため、ブラウザを使わない Playwright test として vite.config.ts を直接評価する。
-const ENV_KEYS = ["BACKEND_URL", "PLAYWRIGHT_HERMETIC_API"] as const;
+const ENV_KEYS = ["BACKEND_URL", "PLAYWRIGHT_HERMETIC_API", "FRONTEND_BASE_PATH"] as const;
 type ProxyEnv = Partial<Record<(typeof ENV_KEYS)[number], string>>;
 
 function resolveConfig(env: ProxyEnv): UserConfig {
@@ -61,5 +61,24 @@ test.describe("vite.config /api proxy", () => {
     const { middlewarePaths, warnings } = startDevServer(config);
     expect(middlewarePaths).toEqual(["/api"]);
     expect(warnings).toEqual([]);
+  });
+});
+
+// 1 台の Compute に 3 製品を置く配備（#1316）は build の時だけ FRONTEND_BASE_PATH=/agent/ を渡す。
+// 未指定ではローカルの開発・e2e と同じ `/` のまま（dev サーバ・proxy・hermetic middleware は変えない）。
+test.describe("vite.config base（FRONTEND_BASE_PATH）", () => {
+  test("FRONTEND_BASE_PATH 未指定・空なら base は `/`", () => {
+    expect(resolveConfig({}).base).toBe("/");
+    expect(resolveConfig({ FRONTEND_BASE_PATH: "  " }).base).toBe("/");
+    expect(resolveConfig({ FRONTEND_BASE_PATH: "/" }).base).toBe("/");
+  });
+
+  test("FRONTEND_BASE_PATH は前後の `/` をそろえて base にし、dev の /api の扱いは変えない", () => {
+    expect(resolveConfig({ FRONTEND_BASE_PATH: "/agent/" }).base).toBe("/agent/");
+    expect(resolveConfig({ FRONTEND_BASE_PATH: "agent" }).base).toBe("/agent/");
+    expect(resolveConfig({ FRONTEND_BASE_PATH: "//agent//" }).base).toBe("/agent/");
+    const config = resolveConfig({ FRONTEND_BASE_PATH: "/agent/" });
+    expect(config.server?.port).toBe(3002);
+    expect(startDevServer(config).middlewarePaths).toEqual(["/api"]);
   });
 });

@@ -94,7 +94,7 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_upload_storage": ["システム設定", "アップロード保存先"],
   "menu.settings_model": ["システム設定", "モデル"],
   "menu.settings_database": ["システム設定", "データベース"],
-  "menu.settings_appearance": ["システム設定", "外観"],
+  "menu.settings_appearance": ["システム設定", "外観と証明書"],
 };
 
 // capability のグループは NL2SQL / RAG と同じ「参照権限 / 実行権限 / 管理権限」（#791）。

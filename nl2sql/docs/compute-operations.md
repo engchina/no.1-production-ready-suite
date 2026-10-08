@@ -21,11 +21,20 @@ proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
 application services are ready.
 The bootstrap starts:
 
-- Nginx on the configured application port, default `80`
-- `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8000`
+- `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8010`
+  (the same port as local development; changed from `8000` in #1316 so that RAG
+  can use `8000` on the same Compute)
+- the single Nginx site of the suite (`platform/deploy/suite-init.sh`), on
+  `https_port` (HTTPS, default `443`) or `http_port` (default `80`)
 
-Nginx serves `frontend/dist` at `/` and reverse proxies `/api/` to the backend.
-Only TCP `80` needs to be opened publicly for the application. If ADB uses a
+The stack puts every selected product on one Compute (#1316). Nginx serves the
+NL2SQL `frontend/dist` (built with `FRONTEND_BASE_PATH=/nl2sql/`) at `/nl2sql/`
+and reverse proxies `/nl2sql/api/` to the backend with the `/nl2sql` prefix
+removed. NL2SQL is not deployed on its own: the three products are deployed
+together by the suite, and `nl2sql/init_script.sh` does not write an Nginx site.
+Open TCP `https_port` (and `http_port` for the redirect to HTTPS) publicly in the
+security list or NSG; see `terraform/README.md` for the ports and the HTTPS
+certificate. If ADB uses a
 private endpoint, the selected network must still allow Compute to reach ADB on
 TCP `1522`.
 
@@ -222,10 +231,10 @@ sudo journalctl -u production-ready-nl2sql-schema-refresh-worker -f
 sudo journalctl -u production-ready-nl2sql-quality-evaluation-worker -f
 sudo journalctl -u production-ready-nl2sql-ontology-worker -f
 sudo nginx -t
-sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log
-curl -i http://127.0.0.1:8000/api/health
-curl -i http://127.0.0.1/api/health
-curl -i http://127.0.0.1/health
+sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log /var/log/nginx/production-ready-suite-error.log
+curl -i http://127.0.0.1:8010/api/health
+curl -ik https://127.0.0.1:443/nl2sql/api/health   # https_port を変えた環境はその port。HTTPS が off なら http://127.0.0.1:<http_port>/nl2sql/api/health
+curl -ik https://127.0.0.1:443/nl2sql/health
 ```
 
 ### Validate an updated or repaired Compute instance
@@ -272,7 +281,8 @@ The cloud-init bootstrap:
 8. Builds the shared UI package and `frontend/dist`.
 9. Starts the backend service with systemd and starts external workers only
    when both schema commands succeeded.
-10. Configures Nginx to serve the SPA and same-origin `/api/` path.
+10. Leaves Nginx to `platform/deploy/suite-init.sh`, which serves the SPA at
+    `/nl2sql/` and proxies `/nl2sql/api/` to the backend (#1316).
 
 This Resource Manager deployment is a direct systemd + Nginx installation.
 Docker is not installed or required on the Compute instance.

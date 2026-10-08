@@ -24,8 +24,6 @@ prepare_case() {
   export AGENT_INIT_TEST_MODE=true
   export SYSTEMD_UNIT_DIR="${case_dir}/units"
   export NGINX_LOGGING_CONF_DIR="${case_dir}/conf.d"
-  export NGINX_SITES_AVAILABLE_DIR="${case_dir}/sites-available"
-  export NGINX_SITES_ENABLED_DIR="${case_dir}/sites-enabled"
 }
 
 run_initialization_case() (
@@ -33,7 +31,6 @@ run_initialization_case() (
   local fail_pattern="$2"
   local case_dir="${TEST_TMP_DIR}/${scenario}"
   prepare_case "${case_dir}"
-  export APPLICATION_PORT=80
   # shellcheck source=/dev/null
   source "${REPO_DIR}/init_script.sh"
 
@@ -54,7 +51,6 @@ run_initialization_case() (
 run_systemd_case() (
   local case_dir="${TEST_TMP_DIR}/systemd"
   prepare_case "${case_dir}"
-  export APPLICATION_PORT=80
   # shellcheck source=/dev/null
   source "${REPO_DIR}/init_script.sh"
 
@@ -65,32 +61,13 @@ run_systemd_case() (
   configure_systemd
 )
 
-run_nginx_case() (
-  local case_dir="${TEST_TMP_DIR}/nginx"
-  prepare_case "${case_dir}"
-  export APPLICATION_PORT=8080
-  # shellcheck source=/dev/null
-  source "${REPO_DIR}/init_script.sh"
-
-  touch "${NGINX_SITES_ENABLED_DIR}/default"
-
-  systemctl() {
-    printf '%s\n' "$*" >> "${case_dir}/systemctl.log"
-  }
-  nginx() {
-    printf 'nginx %s\n' "$*" >> "${case_dir}/systemctl.log"
-  }
-
-  configure_nginx
-)
-
 run_install_env_case() (
   local case_dir="${TEST_TMP_DIR}/install-env"
   prepare_case "${case_dir}"
   mkdir -p "${case_dir}/app/no.1-production-ready-suite/platform"
   APP_USER="$(id -un)"
   APP_GROUP="$(id -gn)"
-  export APP_USER APP_GROUP APPLICATION_PORT=80
+  export APP_USER APP_GROUP
   # shellcheck source=/dev/null
   source "${REPO_DIR}/init_script.sh"
 
@@ -148,29 +125,14 @@ if grep -q 'dispatcher' "${unit}"; then
   fail "stack は外部 dispatcher を起動しない"
 fi
 
-# --- Nginx（認証は backend の共通認証。Basic 認証は使わない。#215） ---
-run_nginx_case
-site="${TEST_TMP_DIR}/nginx/sites-available/production-ready-agent"
-grep -Fq 'listen 8080;' "${site}" || fail "application port で listen していない"
-grep -Fq 'proxy_pass http://127.0.0.1:8020;' "${site}" || fail "/api/ が backend 8020 へ proxy されていない"
-if grep -Fq 'auth_basic' "${site}"; then
-  fail "Nginx に Basic 認証が残っている"
-fi
-if grep -Fq 'location /api/mcp/' "${site}"; then
-  fail "外部 Runtime の Binding MCP の location が残っている（#754 で削除）"
-fi
-awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_set_header Host $http_host;' \
-  || fail "/api/ が port を含む Host を渡していない（WebSocket の Origin 検証）"
-awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_set_header Upgrade $http_upgrade;' \
-  || fail "/api/ が WebSocket の upgrade を渡していない"
-test -L "${TEST_TMP_DIR}/nginx/sites-enabled/production-ready-agent" || fail "site が有効化されていない"
-test ! -e "${TEST_TMP_DIR}/nginx/sites-enabled/default" || fail "default site が残っている"
-grep -q '^nginx -t$' "${TEST_TMP_DIR}/nginx/systemctl.log" || fail "nginx -t が実行されていない"
-# ログインの API だけの送信元 IP ごとの緩い上限（#1173。実 HTTP の確認は platform/scripts/tests/nginx-login-limit.test.sh）。
-test -f "${TEST_TMP_DIR}/nginx/conf.d/production-ready-login-rate-limit.conf" \
-  || fail "ログインの上限の zone（login-rate-limit.conf）が置かれていない"
-awk '/location = \/api\/auth\/login \{/,/\}/' "${site}" | grep -Fq 'limit_req zone=pr_login burst=30 nodelay;' \
-  || fail "/api/auth/login に limit_req が掛かっていない"
+# --- Nginx: Agent は単独では配備しない（#1316）。site は platform/deploy/suite-nginx.sh の 1 つだけ ---
+for unexpected in configure_nginx sites-available proxy_pass APPLICATION_PORT; do
+  if grep -Fq "${unexpected}" "${REPO_DIR}/init_script.sh"; then
+    fail "単独の配備の Nginx の設定（${unexpected}）が残っている"
+  fi
+done
+grep -Fq 'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/agent/}"' "${REPO_DIR}/init_script.sh" \
+  || fail "frontend を /agent/ を base に build しない"
 
 # --- 静的な不変条件 ---
 if grep -Eq 'configure_basic_auth|basic_auth_(user|password)|htpasswd' "${REPO_DIR}/init_script.sh"; then

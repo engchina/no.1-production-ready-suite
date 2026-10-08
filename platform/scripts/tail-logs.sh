@@ -17,6 +17,12 @@ case "${TAIL_LOGS_PRODUCT}" in
   ) ;;
   *) echo "不明な製品です" >&2; exit 2 ;;
 esac
+# backend の port（127.0.0.1。1 台の Compute に 3 製品を置くため製品ごとに別。#1316）。
+case "${TAIL_LOGS_PRODUCT}" in
+  rag) BACKEND_PORT=8000 ;;
+  nl2sql) BACKEND_PORT=8010 ;;
+  agent) BACKEND_PORT=8020 ;;
+esac
 BACKEND_SERVICE="production-ready-${TAIL_LOGS_PRODUCT}-backend.service"
 ALL_SERVICES=("${BACKEND_SERVICE}" "${WORKER_SERVICES[@]}")
 
@@ -25,8 +31,21 @@ NGINX_ERROR_LOG="${NGINX_ERROR_LOG:-/var/log/nginx/production-ready-${TAIL_LOGS_
 INIT_LOG_PATH="${INIT_LOG_PATH:-/var/log/${TAIL_LOGS_PRODUCT}-init.log}"
 UPDATE_LOG_PATH="${UPDATE_LOG_PATH:-/var/log/${TAIL_LOGS_PRODUCT}-update.log}"
 
-BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:8000/api/health}"
-PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-http://127.0.0.1/api/health}"
+# Nginx 経由の health は /<製品>/health。scheme と port は cloud-init の props（https_enabled.txt / https_port.txt /
+# http_port.txt。#1316）から決める（HTTPS が on なら https_port、http_port は https への転送だけ）。
+SUITE_PROPS_DIR="${SUITE_PROPS_DIR:-/u01/aipoc/props}"
+suite_prop() {
+  tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/$1" || true
+}
+if [ "$(suite_prop https_enabled.txt)" = "false" ]; then
+  PUBLIC_HEALTH_PORT="$(suite_prop http_port.txt)"
+  PUBLIC_HEALTH_ORIGIN="http://127.0.0.1:${PUBLIC_HEALTH_PORT:-80}"
+else
+  PUBLIC_HEALTH_PORT="$(suite_prop https_port.txt)"
+  PUBLIC_HEALTH_ORIGIN="https://127.0.0.1:${PUBLIC_HEALTH_PORT:-443}"
+fi
+BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:${BACKEND_PORT}/api/health}"
+PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-${PUBLIC_HEALTH_ORIGIN}/${TAIL_LOGS_PRODUCT}/health}"
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-5}"
 
 ACTION="tail"
@@ -426,7 +445,12 @@ cleanup() {
 
 print_health() {
   local url="$1" code
-  code="$(curl -s -o /dev/null -m "${HEALTHCHECK_TIMEOUT_SECONDS}" -w '%{http_code}' "${url}" 2>/dev/null || true)"
+  local insecure=()
+  # 同じ host の自己確認だけ、証明書の名前（公開 IP・private IP）と 127.0.0.1 の違いを無視する。
+  case "${url}" in
+    https://127.0.0.1/* | https://127.0.0.1:*) insecure=(--insecure) ;;
+  esac
+  code="$(curl -s ${insecure[@]+"${insecure[@]}"} -o /dev/null -m "${HEALTHCHECK_TIMEOUT_SECONDS}" -w '%{http_code}' "${url}" 2>/dev/null || true)"
   if [ -z "${code}" ] || [ "${code}" = "000" ]; then
     code="unreachable"
   fi

@@ -10,6 +10,7 @@ import {
 } from "@engchina/production-ready-system-settings";
 
 import { App } from "./App";
+import { ROUTER_BASENAME } from "@/lib/base-path";
 import { installBrowserErrorGuards } from "@/lib/browser-error-guards";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
@@ -72,7 +73,10 @@ function RootLayout() {
 }
 
 // data router にすると、共有の離脱ガードがブラウザの戻る/進むも確認できる（useBlocker。#138）。
-const router = createBrowserRouter([{ path: "*", element: <RootLayout /> }]);
+// basename は配信の前置き（`/nl2sql/` で配信するときは `/nl2sql`。`/` なら undefined で今までどおり。#1316）。
+const router = createBrowserRouter([{ path: "*", element: <RootLayout /> }], {
+  basename: ROUTER_BASENAME,
+});
 
 createRoot(root).render(
   <StrictMode>

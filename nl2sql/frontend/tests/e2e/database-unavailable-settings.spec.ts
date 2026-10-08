@@ -7,7 +7,7 @@ const NOTICE_TITLE = "データベースに接続できません";
 const NOTICE_MESSAGE =
   "データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。";
 const NOTICE_HINT =
-  "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。";
+  "OCI 認証・アップロード保存先・モデル・データベース・外観と証明書の各設定ページは引き続き利用できます。";
 const RAW_DATABASE_ERROR = "Oracle に接続できませんでした (ORA-12514)。";
 
 function envelope(data: unknown) {
@@ -137,9 +137,9 @@ const databaseIndependentScenarios: Scenario[] = [
     },
   },
   {
-    name: "外観",
+    name: "外観と証明書",
     path: "/settings/appearance",
-    heading: "外観",
+    heading: "外観と証明書",
   },
 ];
 

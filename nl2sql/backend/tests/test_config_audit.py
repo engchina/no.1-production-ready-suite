@@ -157,7 +157,9 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     assert "PLATFORM_ORACLE_DRIVER_MODE=thin" in platform_env
     assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=" in platform_env
     # terraform fmt の桁そろえに左右されないよう、空白は問わない（#239 で書き方が変わった）。
-    assert re.search(r"platform_env\s+=\s+base64gzip\(local\.platform_envs\[product\]\)", locals_tf)
+    # 1 台の Compute（#1316）では platform/.env は 3 製品で 1 つ。
+    assert re.search(r"platform_env\s+=\s+base64gzip\(local\.platform_env\)", locals_tf)
+    assert "PLATFORM_AUTH_COOKIE_SECURE=${var.https_enabled}" in platform_env
     assert '"${app_root}/props/platform.env" "${platform_repo_dir}/.env"' in init_script
     assert "instantclient" not in init_script
     # 自前のコードは Docker イメージを作らない（#356）。配備は init_script.sh の unit だけ。
@@ -195,10 +197,8 @@ def test_terraform_env_keys_are_known_settings_in_the_right_file() -> None:
     """
     platform_keys, product_keys = settings_env_keys()
     backend_keys = _rendered_keys(_terraform_env_body("nl2sql_backend_env"))
-    # 共通部分（全製品）と NL2SQL の Compute だけの差分（構成管理者など）が platform.env。
-    platform_env_keys = _rendered_keys(_terraform_env_body("platform_env")) | _rendered_keys(
-        _terraform_env_body("nl2sql")
-    )
+    # 1 台の Compute（#1316）では 3 製品で 1 つの platform.env。
+    platform_env_keys = _rendered_keys(_terraform_env_body("platform_env"))
 
     assert backend_keys, "backend_env から key を抽出できませんでした。"
     assert platform_env_keys, "platform_env から key を抽出できませんでした。"

@@ -11,6 +11,7 @@ import {
 
 import { App } from "./App";
 import { AuthProvider } from "@/components/security/AuthProvider";
+import { ROUTER_BASENAME } from "@/lib/base-path";
 // globals.css が tailwindcss + 共有 tokens.css + @source を取り込む（単一エントリ）。
 import "./globals.css";
 // 書体は @fontsource の woff2 を同一 origin で配信する（外部 CDN に依存しない）。
@@ -58,7 +59,8 @@ const router = createBrowserRouter([
       </AppConfirmProvider>
     ),
   },
-]);
+  // 配信の基点（`/agent/` で配備したとき。#1316）。ローカルの開発・e2e（`/`）では undefined（今までどおり）。
+], { basename: ROUTER_BASENAME });
 
 createRoot(root).render(
   <StrictMode>

@@ -62,6 +62,7 @@ import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
 import { APP_ROUTES } from "@/lib/routes";
+import { appPath } from "@/lib/base-path";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -1312,7 +1313,8 @@ export function FeedbackManagementPage() {
                               id: "open-candidate",
                               label: t("feedbackManagement.appFeedback.openCandidate"),
                               icon: Link2,
-                              href: `${APP_ROUTES.questionClassifierModels}?tab=candidates&history_id=${encodeURIComponent(selectedAppFeedback.id)}`,
+                              // FormActionBar の href は `<a>` のまま描く（router を通らない）ため、配信の前置きを付ける（#1316）。
+                              href: appPath(`${APP_ROUTES.questionClassifierModels}?tab=candidates&history_id=${encodeURIComponent(selectedAppFeedback.id)}`),
                             },
                           ]
                         : []

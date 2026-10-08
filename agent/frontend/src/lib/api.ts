@@ -55,6 +55,7 @@ export type {
 } from "@engchina/production-ready-system-settings";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #215）。
 import { csrfHeader, notifyAuthResponse, type BaseCurrentUser } from "@engchina/production-ready-system-settings";
+import { appPath } from "./base-path";
 import type {
   ModelSettingsData,
   ModelSettingsPayload,
@@ -1236,7 +1237,8 @@ async function fetchWithSession(path: string, init: RequestInit = {}): Promise<R
   new Headers(init.headers).forEach((value, name) => headers.set(name, value));
   let response: Response;
   try {
-    response = await fetch(path, {
+    // 配信の基点（`/agent/` など。#1316）はここで付ける。各 API の path は `/api/...` のまま書く。
+    response = await fetch(appPath(path), {
       ...init,
       credentials: "same-origin",
       headers: withCsrfHeaders(init.method, headers),

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """統合 OCI Resource Manager stack zip の入力契約と配備契約を検証する（#217）。
 
-1つの ADB を全製品で共有し、選んだ製品（RAG / NL2SQL / Agent）ごとに Compute を1台作る stack の、
-Resource Manager フォーム・Terraform・cloud-init と、各製品の init_script.sh / Settings との整合を確かめる。
+1つの ADB を全製品で共有し、選んだ製品（RAG / NL2SQL / Agent）をすべて 1 台の Compute に入れる stack（#1316）の、
+Resource Manager フォーム・Terraform・cloud-init と、platform/deploy の suite の配備（Nginx の prefix・HTTPS）、
+各製品の init_script.sh / Settings との整合を確かめる。
 stdlib だけで動かす（CI と release workflow で追加依存なしに実行するため）。
 """
 
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import math
 import re
 import stat
 import sys
@@ -49,10 +51,8 @@ HIDDEN_VARIABLES = [
     "existing_oracle_wallet_password",
     "adb_is_mtls_connection_required",
     "nl2sql_app_environment",
-    "nl2sql_app_auth_cookie_secure",
     "app_admin_login_user_id",
     "agent_runtime_repository_backend",
-    "agent_app_auth_cookie_secure",
 ]
 SECRET_VARIABLES = [
     "adb_password",
@@ -64,10 +64,27 @@ SECRET_VARIABLES = [
 # 製品ごとの入力は、その製品を選んだときだけフォームに出す（group の visible と、group 内の変数の接頭辞）。
 PRODUCT_GROUPS = {
     "RAG": "rag",
-    "NL2SQL": "nl2sql",
     "NL2SQL Deep Data Security": "nl2sql",
-    "Agent Control Plane": "agent",
 }
+# 1 台の Compute（#1316）で廃止した入力・resource。製品ごとの Compute の大きさ、公開 port（80 / 443 に固定）、
+# 製品ごとの Secure Cookie（https_enabled から決める）。stack に残さない。
+REMOVED_SINGLE_COMPUTE_INPUTS = (
+    "application_port",
+    "rag_instance_",
+    "nl2sql_instance_",
+    "agent_instance_",
+    "rag_app_auth_cookie_secure",
+    "nl2sql_app_auth_cookie_secure",
+    "agent_app_auth_cookie_secure",
+    "oci_core_instance.product",
+    "oci_core_instance.agent",
+)
+# 各製品の backend の port（127.0.0.1。1 台の Compute で衝突しない。ローカルの開発と同じ。#1316）。
+BACKEND_PORTS = {"rag": "8000", "nl2sql": "8010", "agent": "8020"}
+# 証明書の発行者・サーバーの subject は固定（Terraform の変数にしない。#1316）。
+TLS_CA_SUBJECT = "/C=JP/ST=Tokyo/L=Minato-ku/O=Oracle/OU=Production Ready Suite/CN=Production Ready Root CA"
+TLS_SERVER_SUBJECT_PREFIX = "/C=JP/ST=Tokyo/L=Minato-ku/O=Oracle/OU=Production Ready Suite/CN="
+SUITE_DEPLOY_DIR = REPO_ROOT / "platform" / "deploy"
 # 3製品の構成管理者（system_admin。共通 .env の PLATFORM_ADMIN_*）のパスワードは共通の入力（#214 / #215）。
 # 製品を選ばないとフォームから消えるため、Resource Manager では任意入力にして Terraform の precondition で必須にする。
 ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
@@ -136,11 +153,11 @@ REQUIRED_BACKEND_ENV_LINES = {
         "AGENT_AUTH_MODE=production\n",
         "AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}\n",
         "AGENT_RUNTIME_DISPATCH_MODE=in_process\n",
-        # RAG / NL2SQL の MCP は、配備した製品の Compute の private IP だけを入れる（#233）。
-        'AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}\n',
-        'AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}\n',
-        # 画面（ブラウザ）から RAG の図の根拠を開く起点（#1311）。public IP（無い subnet では private IP）。
-        'AGENT_EXTERNAL_RAG_PUBLIC_URL=${lookup(local.product_browser_urls, "rag", "")}\n',
+        # RAG / NL2SQL の MCP は、同じ Compute の backend（127.0.0.1）を直接呼ぶ（#233 / #1316）。
+        'AGENT_EXTERNAL_RAG_MCP_URL=${local.product_mcp_urls["rag"]}\n',
+        'AGENT_EXTERNAL_NL2SQL_MCP_URL=${local.product_mcp_urls["nl2sql"]}\n',
+        # 画面（ブラウザ）から RAG の図の根拠を開く起点（#1311）。1 台の Compute では同じ origin の /rag（#1316）。
+        'AGENT_EXTERNAL_RAG_PUBLIC_URL=${local.product_browser_urls["rag"]}\n',
     ],
 }
 # 全製品の Compute に置く共通 .env（platform/.env、PLATFORM_*。#211）に必ず書く値。
@@ -160,13 +177,9 @@ REQUIRED_PLATFORM_ENV_LINES = [
     "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}\n",
     # 3製品で同じサービス間 token の署名鍵（#233）。stack が1つ生成して全 Compute に配る。
     "PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}\n",
+    # 1 台の Compute では platform/.env は 1 つ。ログインの Cookie は HTTPS が on なら Secure（#1316）。
+    "PLATFORM_AUTH_COOKIE_SECURE=${var.https_enabled}\n",
 ]
-# 製品ごとの共通 .env の差分に必ず書く値（ログインの Cookie を HTTPS 限定にするか）。
-REQUIRED_PLATFORM_ENV_PRODUCT_LINES = {
-    "rag": ["PLATFORM_AUTH_COOKIE_SECURE=${var.rag_app_auth_cookie_secure}\n"],
-    "nl2sql": ["PLATFORM_AUTH_COOKIE_SECURE=${var.nl2sql_app_auth_cookie_secure}\n"],
-    "agent": ["PLATFORM_AUTH_COOKIE_SECURE=${var.agent_app_auth_cookie_secure}\n"],
-}
 PRODUCT_ENV_PREFIXES = {"rag": "RAG_", "nl2sql": "NL2SQL_", "agent": "AGENT_"}
 # 共通の属性名の正本（pr_backend_core.config.env.PLATFORM_SETTING_FIELDS）。stdlib だけで読むため AST で取り出す。
 PLATFORM_ENV_MODULE = (
@@ -179,6 +192,17 @@ SETTINGS_FILES = {
 }
 # pr_backend_core.BaseServiceSettings の共通 field（各製品の Settings には書かれていない）。
 BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins"}
+
+# 1 台の Compute の配備（platform/deploy/suite-init.sh が呼ぶ。#1316。製品は単独では配備しない）の契約。
+# 製品の init_script.sh は Nginx の site を書かず、/<製品>/ を base に frontend を build し、backend/.env は製品ごとの元から作る。
+SUITE_INIT_CONTRACT = [
+    "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build",
+    'BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-',
+    '"${BACKEND_ENV_SOURCE}"',
+    'if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then',
+]
+# 単独の配備（製品ごとの Nginx の site）は持たない。Nginx の location は platform/deploy/suite-nginx.sh の 1 か所だけ。
+REMOVED_STANDALONE_DEPLOY = ("configure_nginx", "PR_SUITE_MODE", "sites-available", "proxy_pass", "APPLICATION_PORT")
 
 # 各製品の init_script.sh が守る配備の契約。
 INIT_SCRIPT_CONTRACTS = {
@@ -199,11 +223,10 @@ INIT_SCRIPT_CONTRACTS = {
         'systemctl enable --now "${unit}"',
         'elif systemctl is-enabled --quiet "${unit}"; then',
         'visudo -cf "${tmp}"',
-        "proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
-        "proxy_buffering off;",
-        "client_max_body_size ${client_max_body_size};",
         "/api/health",
         '"${PROPS_DIR}/platform.env" "${PLATFORM_ENV_FILE}"',
+        'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/rag/}"',
+        *SUITE_INIT_CONTRACT,
     ],
     "nl2sql": [
         'WALLET_DIR="${APP_ROOT}/wallet"',
@@ -218,6 +241,9 @@ INIT_SCRIPT_CONTRACTS = {
         "production-ready-nl2sql-quality-evaluation-worker.service",
         "production-ready-nl2sql-ontology-worker.service",
         '"${APP_ROOT}/props/platform.env" "${PLATFORM_REPO_DIR}/.env"',
+        'BACKEND_PORT="8010"',
+        'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"',
+        *SUITE_INIT_CONTRACT,
     ],
     "agent": [
         'WALLET_DIR="${APP_ROOT}/wallet"',
@@ -226,10 +252,10 @@ INIT_SCRIPT_CONTRACTS = {
         'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "uv run python -m app.cli.agent_system_schema --initialize",
-        "proxy_set_header Host \\$http_host;",
-        "location = /health {",
         "uv sync --locked --no-dev --python 3.12",
         '"${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"',
+        'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/agent/}"',
+        *SUITE_INIT_CONTRACT,
     ],
 }
 INIT_SCRIPT_ORDER = {
@@ -247,12 +273,13 @@ INIT_SCRIPT_ORDER = {
         "  initialize_database_schema\n",
         "  build_frontend\n",
         "  configure_systemd\n",
-        "  configure_nginx\n",
         "  wait_for_backend\n",
     ],
     "nl2sql": [
         "app.cli.nl2sql_system_schema --initialize",
         "app.cli.app_security_migrate --apply --skip-bootstrap",
+        "  configure_systemd\n",
+        "  wait_for_backend\n",
     ],
     "agent": [
         "app.cli.agent_system_schema --initialize",
@@ -261,7 +288,6 @@ INIT_SCRIPT_ORDER = {
         "  initialize_database_schema\n",
         "  build_frontend\n",
         "  configure_systemd\n",
-        "  configure_nginx\n",
         "  wait_for_backend\n",
     ],
 }
@@ -358,19 +384,6 @@ def _settings_env_names(product: str) -> tuple[set[str], set[str]]:
 
 def _env_keys(env: str) -> list[str]:
     return re.findall(r"(?m)^([A-Z][A-Z0-9_]*)=", env)
-
-
-def _platform_env_product(locals_source: str, product: str) -> str:
-    match = re.search(r"(?ms)^  platform_env_product = \{\n(.*?)^  \}$", locals_source)
-    if match is None:
-        raise AssertionError("locals.tf platform_env_product not found")
-    block = match.group(1)
-    if re.search(rf'(?m)^    {product}\s+= ""$', block):
-        return ""
-    heredoc = re.search(rf"(?ms)^    {product}\s+= <<-EOT\n(.*?)^EOT$", block)
-    if heredoc is None:
-        raise AssertionError(f"locals.tf platform_env_product.{product} not found")
-    return heredoc.group(1)
 
 
 def _verify_package_entries(archive: zipfile.ZipFile) -> None:
@@ -487,10 +500,12 @@ def _verify_schema(schema: str, variables: str) -> None:
             '- title: "ネットワーク・アクセス"',
             "- title: RAG",
             '- title: "アプリケーション管理者"',
-            "- title: NL2SQL",
             '- title: "NL2SQL Deep Data Security"',
-            "- title: Agent Control Plane",
             "- title: Compute",
+            "- instance_display_name",
+            "- instance_flex_shape_ocpus",
+            "- instance_flex_shape_memory",
+            "- instance_boot_volume_size",
             "- subnet_ai_subnet_id",
             "- ssh_authorized_keys",
         ],
@@ -565,11 +580,59 @@ def _verify_schema(schema: str, variables: str) -> None:
             f"Resource Manager Compute image regions must be {sorted(SUPPORTED_REGIONS)}: {sorted(image_regions)}"
         )
 
+    # HTTPS（#1316）: on / off だけを入力にし、既定は on。port と証明書の発行者は入力にしない。
+    https_visible, https_members = groups.get("HTTPS", ("", []))
+    if https_visible != "true" or https_members != ["https_enabled", "https_port", "http_port"]:
+        raise AssertionError(f"the HTTPS group must hold https_enabled and the ports: {https_members}")
+    _require_all(
+        _schema_variable(schema, "https_enabled"),
+        ["type: boolean", "required: true", "visible: true", "default: true", "443"],
+        context="https_enabled schema",
+    )
+    _require_all(
+        _terraform_variable(variables, "https_enabled"),
+        ["type        = bool", "default     = true"],
+        context="https_enabled Terraform default",
+    )
+    for name, default in {
+        "instance_flex_shape_ocpus": "4",
+        "instance_flex_shape_memory": "24",
+        "instance_boot_volume_size": "200",
+    }.items():
+        _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
+        _require_all(
+            _terraform_variable(variables, name), [f"default     = {default}"], context=f"{name} Terraform default"
+        )
+    stack_inputs = " ".join(sorted(set(re.findall(r'(?m)^variable "([a-z0-9_]+)" \{', variables))))
+    if re.search(r"(?:^| )(?:tls|ssl|cert|certificate|ca)_", stack_inputs):
+        raise AssertionError("the certificate subject / validity must not be stack inputs")
+    # 公開の port は変数（#1316）。HTTPS が on なら https_port、off なら http_port をフォームに出す。
+    for name, default, visible in (
+        ("https_port", "443", "visible: https_enabled"),
+        ("http_port", "80", "visible:\n      not:\n        - https_enabled"),
+    ):
+        _require_all(
+            _schema_variable(schema, name),
+            ["type: number", "required: true", f"default: {default}", visible],
+            context=f"{name} schema",
+        )
+        _require_all(
+            _terraform_variable(variables, name),
+            [f"default     = {default}", f"var.{name} >= 1 && var.{name} <= 65535"],
+            context=f"{name} Terraform",
+        )
+
     outputs = _schema_section(schema, "outputs")
     for product in PRODUCTS:
         block = re.search(rf"(?ms)^  {product}_application_url:\n.*?(?=^  [a-z]|\Z)", outputs)
         if block is None or f"visible: deploy_{product}" not in block.group(0):
             raise AssertionError(f"{product}_application_url output must be shown only for deploy_{product}")
+    block = re.search(r"(?ms)^  ca_certificate_url:\n.*?(?=^  [a-z]|\Z)", outputs)
+    if block is None or "visible: https_enabled" not in block.group(0):
+        raise AssertionError("ca_certificate_url output must be shown only when https_enabled")
+    for name in ("application_url", "ssh_to_instance"):
+        if not re.search(rf"(?m)^  {name}:\n", outputs):
+            raise AssertionError(f"output {name} is missing from the schema")
 
 
 def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str, outputs: str) -> None:
@@ -626,32 +689,31 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
     _require_all(
         compute,
         [
-            'resource "oci_core_instance" "product" {',
-            "for_each = local.non_agent_products",
+            # 選んだ製品はすべて 1 台の Compute に入れる（#1316）。
+            'resource "oci_core_instance" "suite" {',
             "compartment_id      = var.compartment_ocid",
-            'user_data"           = local.cloud_init_user_data[each.key]',
-            '!contains(["rag", "nl2sql", "agent"], each.key) || trimspace(var.app_admin_login_user_password) != ""',
-            'each.key != "nl2sql" || !var.nl2sql_oracle_deepsec_enabled',
-            # Agent は RAG / NL2SQL の private IP（MCP の URL）を使うため別の resource。既存の state は moved で移す（#233）。
-            'resource "oci_core_instance" "agent" {',
-            "for_each = local.agent_products",
-            'user_data"           = local.agent_cloud_init_user_data',
-            'from = oci_core_instance.product["agent"]',
-            'to   = oci_core_instance.agent["agent"]',
-            # 全 Compute で同じサービス間 token の署名鍵。
+            'user_data"           = local.cloud_init_user_data',
+            "display_name = var.instance_display_name",
+            "memory_in_gbs             = var.instance_flex_shape_memory",
+            "ocpus                     = var.instance_flex_shape_ocpus",
+            "boot_volume_size_in_gbs = var.instance_boot_volume_size",
+            'trimspace(var.app_admin_login_user_password) != ""',
+            # 公開の port に SSH・よく使われる service・Compute の中で使う port を使わせない（#1316）。
+            "condition     = length(local.public_ports_reserved) == 0",
+            '!var.deploy_nl2sql || var.nl2sql_app_environment == "local" || var.https_enabled',
+            "!var.deploy_nl2sql || !var.nl2sql_oracle_deepsec_enabled",
+            # 3製品で同じサービス間 token の署名鍵。
             'resource "random_password" "service_token_secret" {',
             "special = false",
         ],
-        context="Compute per product",
+        context="single Compute",
     )
-    # MCP の通信は subnet の security list（stack の外）で許可する。stack は NSG を作らない（#259）。
+    # 通信は subnet の security list（stack の外）で許可する。stack は NSG を作らない（#259）。
     if "oci_core_network_security_group" in compute or "nsg_ids" in compute:
-        raise AssertionError("The stack must not create NSGs; allow the MCP traffic in the subnet security list")
+        raise AssertionError("The stack must not create NSGs; allow 443 / 80 in the subnet security list")
     instance_resources = re.findall(r'(?m)^resource "oci_core_instance" "([a-z_]+)"', compute)
-    if instance_resources != ["product", "agent"]:
-        raise AssertionError(
-            "Compute instances must be created by the for_each resources product (RAG / NL2SQL) and agent"
-        )
+    if instance_resources != ["suite"] or "for_each" in compute or re.search(r"(?m)^\s*count\s*=", compute):
+        raise AssertionError("every selected product must run on the single Compute instance oci_core_instance.suite")
 
     normalized = re.sub(r"[ \t]+", " ", locals_source)
     _require_all(
@@ -661,29 +723,44 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "rag = var.deploy_rag",
             "nl2sql = var.deploy_nl2sql",
             "agent = var.deploy_agent",
-            "selected_products = toset([for product, enabled in local.product_enabled : product if enabled])",
-            'non_agent_products = toset([for product in local.selected_products : product if product != "agent"])',
-            'agent_products = toset([for product in local.selected_products : product if product == "agent"])',
-            "for product in local.non_agent_products : product =>",
-            "product = product",
-            "backend_env = base64gzip(local.backend_envs[product])",
-            "platform_env = base64gzip(local.platform_envs[product])",
-            'product = "agent"',
-            "backend_env = base64gzip(local.agent_backend_env)",
-            'platform_env = base64gzip(local.platform_envs["agent"])',
-            'for product, extra in local.platform_env_product : product => "${local.platform_env}${extra}"',
-            'rag_services = product == "rag" ? join(" ", local.rag_services) : ""',
+            'selected_products = [for product in ["rag", "nl2sql", "agent"] : product if local.product_enabled[product]]',
+            "backend_envs = { for product in local.selected_products : product => base64gzip(local.backend_envs[product]) }",
+            "platform_env = base64gzip(local.platform_env)",
+            'products = join(" ", local.selected_products)',
+            "https_enabled = tostring(var.https_enabled)",
+            "assign_public_ip = tostring(!local.compute_subnet_prohibits_public_ip)",
+            "http_port = tostring(var.http_port)",
+            "https_port = tostring(var.https_port)",
+            'rag_services = var.deploy_rag ? join(" ", local.rag_services) : ""',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
-            # MCP の URL は同じ subnet の private IP の Nginx（/api/ を backend へ proxy）。
-            "for product, instance in oci_core_instance.product :",
-            'product => "http://${instance.private_ip}${local.application_port_suffix}/api/mcp"',
-            'application_port_suffix = var.application_port == 80 ? "" : ":${var.application_port}"',
+            # MCP は同じ Compute の backend を 127.0.0.1 で直接呼ぶ（Nginx を通さない）。
+            f'rag = var.deploy_rag ? "http://127.0.0.1:{BACKEND_PORTS["rag"]}/api/mcp" : ""',
+            f'nl2sql = var.deploy_nl2sql ? "http://127.0.0.1:{BACKEND_PORTS["nl2sql"]}/api/mcp" : ""',
+            # 画面から RAG の図を開く起点は同じ origin の /rag（#1311 / #1316）。
+            'rag = var.deploy_rag ? "/rag" : ""',
         ],
         context="product selection and cloud-init rendering",
     )
     for product in PRODUCTS:
-        _require_all(outputs, [f'output "{product}_application_url"'], context="outputs")
+        _require_all(
+            outputs,
+            [f'output "{product}_application_url"', f'"${{local.application_base_url}}/{product}/"'],
+            context="outputs",
+        )
+    _require_all(
+        outputs,
+        [
+            'output "application_url"',
+            'output "ca_certificate_url"',
+            '"${local.application_base_url}/platform/ca.crt"',
+            'output "ssh_to_instance"',
+            # 既定でない port は URL に付ける（#1316）。
+            'public_port          = var.https_enabled ? var.https_port : var.http_port',
+            'local.public_port == local.default_public_port ? "" : ":${local.public_port}"',
+        ],
+        context="outputs",
+    )
 
     platform_common = _heredoc(locals_source, "platform_env")
     _require_all(platform_common, REQUIRED_PLATFORM_ENV_LINES, context="platform/.env (common)")
@@ -697,7 +774,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         raise AssertionError("the common platform/.env must not use product inputs")
 
     for product in PRODUCTS:
-        product_names, platform_names = _settings_env_names(product)
+        product_names, _platform_names = _settings_env_names(product)
         env = _heredoc(locals_source, f"{product}_backend_env")
         _require_all(env, REQUIRED_BACKEND_ENV_LINES[product], context=f"{product} backend/.env")
         keys = _env_keys(env)
@@ -707,20 +784,15 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         duplicated = sorted({key for key in keys if keys.count(key) > 1})
         if duplicated:
             raise AssertionError(f"{product} backend/.env keys are duplicated: {duplicated}")
-        extra = _platform_env_product(locals_source, product)
-        _require_all(extra, REQUIRED_PLATFORM_ENV_PRODUCT_LINES[product], context=f"{product} platform/.env")
-        platform_keys = _env_keys(platform_common) + _env_keys(extra)
-        unknown = sorted(key for key in _env_keys(extra) if key not in platform_names)
-        if unknown:
-            raise AssertionError(f"{product} platform/.env keys are not {product} Settings names: {unknown}")
-        duplicated = sorted({key for key in platform_keys if platform_keys.count(key) > 1})
-        if duplicated:
-            raise AssertionError(f"{product} platform/.env keys are duplicated: {duplicated}")
         # 他製品の入力が紛れ込んでいないこと。
-        foreign = re.findall(rf"var\.((?!{product}_)(?:rag|nl2sql|agent)_[a-z0-9_]+)", env + extra)
+        foreign = re.findall(rf"var\.((?!{product}_)(?:rag|nl2sql|agent)_[a-z0-9_]+)", env)
         if foreign:
             raise AssertionError(f"{product} .env uses another product's inputs: {sorted(set(foreign))}")
 
+    platform_keys = _env_keys(platform_common)
+    duplicated = sorted({key for key in platform_keys if platform_keys.count(key) > 1})
+    if duplicated:
+        raise AssertionError(f"platform/.env keys are duplicated: {duplicated}")
     for line in platform_common.splitlines():
         key, _, value = line.partition("=")
         if re.search(r"\$\{local\.effective_oracle_(user|password|dsn|wallet)", value):
@@ -728,7 +800,7 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
                 raise AssertionError(f"platform/.env value must be single-quoted: {key}")
 
     rag_env = _heredoc(locals_source, "rag_backend_env")
-    rag_keys = _env_keys(rag_env) + _env_keys(platform_common) + _env_keys(_platform_env_product(locals_source, "rag"))
+    rag_keys = _env_keys(rag_env) + _env_keys(platform_common)
     unit_owned = sorted(set(rag_keys) & RAG_UNIT_OWNED_ENV_KEYS)
     if unit_owned:
         raise AssertionError(f"RAG .env must not set keys owned by the systemd units / Settings defaults: {unit_owned}")
@@ -793,17 +865,25 @@ def _verify_bootstrap(bootstrap: str) -> None:
         [
             'APP_ROOT="/u01/aipoc"',
             'SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"',
-            'APP_REPO_DIR="$${SUITE_REPO_DIR}/${product}"',
             'clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"',
+            # 1 台の Compute の配備は platform/deploy/suite-init.sh が行う（#1316）。
+            'local init_script="$${SUITE_REPO_DIR}/platform/deploy/suite-init.sh"',
             'bash "$${init_script}"',
-            'path: "/u01/aipoc/bootstrap-${product}.sh"',
-            "nohup bash /u01/aipoc/bootstrap-${product}.sh",
-            "Nginx listens on TCP port",
+            'path: "/u01/aipoc/bootstrap-suite.sh"',
+            "nohup bash /u01/aipoc/bootstrap-suite.sh",
+            "%{ for product, env in backend_envs ~}",
+            'path: "/u01/aipoc/props/${product}.backend.env"',
+            'path: "/u01/aipoc/props/products.txt"',
+            'path: "/u01/aipoc/props/https_enabled.txt"',
+            'path: "/u01/aipoc/props/assign_public_ip.txt"',
+            'path: "/u01/aipoc/props/http_port.txt"',
+            'path: "/u01/aipoc/props/https_port.txt"',
+            "- openssl",
         ],
         context="Compute bootstrap",
     )
     for secret_path in (
-        "/u01/aipoc/props/backend.env",
+        "/u01/aipoc/props/${product}.backend.env",
         "/u01/aipoc/props/platform.env",
         "/u01/aipoc/props/wallet.zip",
     ):
@@ -812,16 +892,124 @@ def _verify_bootstrap(bootstrap: str) -> None:
             bootstrap,
         ):
             raise AssertionError(f"{secret_path} must be written root-only (0600)")
-    # 製品固有のファイルは、その製品の Compute にだけ書く。
-    rag_block = re.search(r'(?ms)^%\{ if product == "rag" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
+    # RAG の前処理 / parser の一覧は、RAG を配備するときだけ書く。
+    rag_block = re.search(r'(?ms)^%\{ if rag_services != "" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
     if rag_block is None or 'path: "/u01/aipoc/props/rag_services.txt"' not in rag_block.group(1):
-        raise AssertionError("rag_services.txt must be written only on the RAG Compute")
+        raise AssertionError("rag_services.txt must be written only when RAG is deployed")
     if "basic_auth" in bootstrap:
         raise AssertionError("the Agent uses the backend login; cloud-init must not write Basic authentication files")
     _require_in_order(
         bootstrap,
-        ["configure_firewall\n", "clone_or_update_repo ", "run_application_init\n"],
-        context="bootstrap order (firewall rules are saved before the application is deployed)",
+        ["clone_or_update_repo ", "run_suite_init\n"],
+        context="bootstrap order",
+    )
+
+
+def _verify_reserved_ports(locals_source: str) -> None:
+    """公開の port に使えない port の一覧を Terraform（locals.tf）と配備のスクリプトでそろえる（#1316）。"""
+    suite_nginx = (SUITE_DEPLOY_DIR / "suite-nginx.sh").read_text(encoding="utf-8")
+    tf_ports = re.search(r"(?m)^  reserved_ports = \[([0-9, ]+)\]$", locals_source)
+    tf_ranges = re.findall(r"\[(\d+), (\d+)\]", (re.search(r"(?m)^  reserved_port_ranges = (.*)$", locals_source) or [""])[0])
+    sh_ports = re.search(r"(?m)^SUITE_RESERVED_PORTS=\(([0-9 ]+)\)$", suite_nginx)
+    sh_ranges = re.findall(r'"(\d+)-(\d+)"', (re.search(r"(?m)^SUITE_RESERVED_PORT_RANGES=\((.*)\)$", suite_nginx) or [""])[0])
+    if tf_ports is None or sh_ports is None:
+        raise AssertionError("reserved ports are missing from locals.tf or platform/deploy/suite-nginx.sh")
+    tf_set = {int(port) for port in tf_ports.group(1).split(",")}
+    sh_set = {int(port) for port in sh_ports.group(1).split()}
+    if tf_set != sh_set or sorted(tf_ranges) != sorted(sh_ranges) or not tf_ranges:
+        raise AssertionError(f"reserved ports differ: Terraform {sorted(tf_set)} {tf_ranges} / suite {sorted(sh_set)} {sh_ranges}")
+    required = {22, *(int(port) for port in BACKEND_PORTS.values())}
+    if not required <= tf_set:
+        raise AssertionError(f"reserved ports must include SSH and the backend ports: {sorted(required - tf_set)}")
+    rag_systemd = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
+    block = re.search(r"(?ms)^RAG_MICROSERVICES=\(\n(.*?)^\)$", rag_systemd)
+    assert block is not None
+    for line in block.group(1).splitlines():
+        port = int(line.strip().strip('"').split("|")[2])
+        if not any(int(low) <= port <= int(high) for low, high in tf_ranges):
+            raise AssertionError(f"RAG service port {port} must be in a reserved range")
+
+
+def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
+    """platform/deploy の 1 台の Compute の配備（Nginx の prefix・HTTPS・証明書。#1316）。"""
+    suite_init = (SUITE_DEPLOY_DIR / "suite-init.sh").read_text(encoding="utf-8")
+    suite_nginx = (SUITE_DEPLOY_DIR / "suite-nginx.sh").read_text(encoding="utf-8")
+    suite_tls = (SUITE_DEPLOY_DIR / "suite-tls.sh").read_text(encoding="utf-8")
+    # backend の port は製品の init_script.sh・Nginx・Agent の MCP の URL で同じ値（衝突しない）。
+    if len(set(BACKEND_PORTS.values())) != len(BACKEND_PORTS):
+        raise AssertionError("backend ports must differ on the single Compute")
+    for product, port in BACKEND_PORTS.items():
+        if f'BACKEND_PORT="{port}"' not in init_sources[product]:
+            raise AssertionError(f"{product}/init_script.sh BACKEND_PORT must be {port}")
+        name = f"SUITE_{product.upper()}_BACKEND_PORT"
+        if f'{name}="${{{name}:-{port}}}"' not in suite_nginx:
+            raise AssertionError(f"platform/deploy/suite-nginx.sh must proxy {product} to 127.0.0.1:{port}")
+    # RAG の前処理 / parser の port（127.0.0.1:18010〜）は backend の port と重ならない。
+    rag_systemd = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
+    block = re.search(r"(?ms)^RAG_MICROSERVICES=\(\n(.*?)^\)$", rag_systemd)
+    if block is None:
+        raise AssertionError("rag/scripts/rag-systemd.sh RAG_MICROSERVICES not found")
+    service_ports = [line.strip().strip('"').split("|")[2] for line in block.group(1).splitlines()]
+    overlap = sorted(set(service_ports) & set(BACKEND_PORTS.values()))
+    if overlap or len(set(service_ports)) != len(service_ports):
+        raise AssertionError(f"RAG service ports must be unique and differ from the backend ports: {overlap}")
+    # Nginx の upload の上限は RAG の backend の RAG_MAX_UPLOAD_BYTES の既定値（rag/backend/app/config.py）+ 余白。
+    rag_config = (REPO_ROOT / "rag" / "backend" / "app" / "config.py").read_text(encoding="utf-8")
+    default = re.search(r"max_upload_bytes: int = Field\(default=([0-9 *]+),", rag_config)
+    default_bytes = math.prod(int(part) for part in default.group(1).split("*")) if default else None
+    if default_bytes is None or f"RAG_DEFAULT_MAX_UPLOAD_BYTES={default_bytes}" not in suite_init:
+        raise AssertionError("platform/deploy/suite-init.sh RAG_DEFAULT_MAX_UPLOAD_BYTES must match rag/backend/app/config.py")
+    # 単独の配備（製品ごとの Nginx の site）は製品の init_script.sh に残さない。
+    for product, source in init_sources.items():
+        leftovers = [name for name in REMOVED_STANDALONE_DEPLOY if name in source]
+        if leftovers:
+            raise AssertionError(f"{product}/init_script.sh must not deploy standalone (#1316): {leftovers}")
+    _require_all(
+        suite_nginx,
+        [
+            "listen ${https_listen} ssl http2 default_server;",
+            "ssl_protocols TLSv1.2 TLSv1.3;",
+            "return 301 https://${https_authority}\\$request_uri;",
+            "location = /platform/ca.crt {",
+            "default_type application/x-x509-ca-cert;",
+            'filename="production-ready-root-ca.crt"',
+            "location /platform/ {",
+            "return 302 ${root_target};",
+            "printf '/agent/\\n'",
+            "limit_req zone=pr_login burst=30 nodelay;",
+            "proxy_buffering off;",
+        ],
+        context="platform/deploy/suite-nginx.sh",
+    )
+    if "Strict-Transport-Security" in suite_nginx:
+        raise AssertionError("HSTS must not be sent (IP certificate signed by a private CA)")
+    if "ca.key" in suite_nginx:
+        raise AssertionError("the CA private key must never be served")
+    _require_all(
+        suite_tls,
+        [
+            f'SUITE_TLS_CA_SUBJECT="{TLS_CA_SUBJECT}"',
+            f'SUITE_TLS_SERVER_SUBJECT_PREFIX="{TLS_SERVER_SUBJECT_PREFIX}"',
+            "SUITE_TLS_KEY_BITS=3072",
+            "SUITE_TLS_CA_DAYS=3650",
+            "SUITE_TLS_SERVER_DAYS=397",
+            'chmod 0600 "${dir}/ca.key" "${dir}/server.key"',
+        ],
+        context="platform/deploy/suite-tls.sh",
+    )
+    if "No.1" in TLS_CA_SUBJECT + TLS_SERVER_SUBJECT_PREFIX:
+        raise AssertionError("the certificate subject must not contain No.1")
+    _require_all(
+        suite_init,
+        [
+            '"FRONTEND_BASE_PATH=/${product}/"',
+            '"BACKEND_ENV_SOURCE=${PROPS_DIR}/${product}.backend.env"',
+            '"SERVICE_USER=${APP_USER}"',
+            "suite_tls_ensure",
+            "suite_nginx_site",
+            'rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/default"',
+        ],
+        context="platform/deploy/suite-init.sh",
     )
 
 
@@ -924,9 +1112,24 @@ def verify(package_path: Path) -> None:
     for removed in REMOVED_RAG_INPUTS:
         if removed in stack_sources:
             raise AssertionError(f"removed RAG stack input / output remains: {removed}")
+    for removed in REMOVED_SINGLE_COMPUTE_INPUTS:
+        if removed in stack_sources:
+            raise AssertionError(f"removed per-product Compute input / resource remains (#1316): {removed}")
     _verify_init_scripts(init_sources)
+    _verify_suite_deploy(init_sources)
+    _verify_reserved_ports(sources["locals.tf"])
     _verify_no_own_container_images()
-    _verify_boundaries({**sources, "bootstrap": bootstrap, **{f"{p}/init_script.sh": s for p, s in init_sources.items()}})
+    deploy_sources = {
+        f"platform/deploy/{path.name}": path.read_text(encoding="utf-8") for path in sorted(SUITE_DEPLOY_DIR.glob("*.sh"))
+    }
+    _verify_boundaries(
+        {
+            **sources,
+            "bootstrap": bootstrap,
+            **{f"{p}/init_script.sh": s for p, s in init_sources.items()},
+            **deploy_sources,
+        }
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

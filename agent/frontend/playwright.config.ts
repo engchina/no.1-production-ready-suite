@@ -53,8 +53,13 @@ export default defineConfig({
         viewport: { width: 375, height: 812 },
         isMobile: true,
       },
-      // 画面幅に関係しない spec（vite の設定・フォントの読み込み・権限カタログの一致）は desktop だけで実行する。
-      testIgnore: ["**/vite-config.spec.ts", "**/self-hosted-fonts.spec.ts", "**/permission-catalog.spec.ts"],
+      // 画面幅に関係しない spec（vite の設定・base path・フォントの読み込み・権限カタログの一致）は desktop だけで実行する。
+      testIgnore: [
+        "**/vite-config.spec.ts",
+        "**/base-path.spec.ts",
+        "**/self-hosted-fonts.spec.ts",
+        "**/permission-catalog.spec.ts",
+      ],
       // spec の中で viewport を回しているテスト（題名に「(desktop」「（mobile）」「mobile-375: 」や「1920px」を含む）は、
       // その中で 375px を確かめているので二重に実行しない。
       grepInvert: /[(（](desktop|mobile)|(desktop|mobile-375): |\d{4}px/,

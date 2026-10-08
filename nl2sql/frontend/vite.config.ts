@@ -5,7 +5,17 @@ import { fileURLToPath, URL } from "node:url";
 const MISSING_BACKEND_URL_WARNING =
   "[nl2sql] BACKEND_URL が未設定のため /api を proxy せず 404 を返します（hermetic）。backend に接続する場合は BACKEND_URL=http://127.0.0.1:8010 npm run dev のように明示してください。";
 
-export default defineConfig(() => {
+/**
+ * 配信のパスの前置き（#1316）。1 台の Compute で 3 製品を Nginx の `/rag/` `/nl2sql/` `/agent/` に分けて
+ * 配信するときに、build の環境変数 `FRONTEND_BASE_PATH=/nl2sql/` で渡す。未設定・空なら `/`（今までどおり）。
+ * 先頭と末尾の `/` は補う（`nl2sql` → `/nl2sql/`）。dev サーバ（e2e を含む）は `/` のまま動かす。
+ */
+export function resolveFrontendBasePath(value: string | undefined): string {
+  const trimmed = (value ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}/` : "/";
+}
+
+export default defineConfig(({ command, isPreview }) => {
   // /api は BACKEND_URL を明示したときだけ proxy する。既定の接続先（localhost:8010 等）は持たない。
   // 未設定のまま起動した dev サーバ（古い worktree、globalSetup の無い Playwright 設定、手動起動）が
   // 利用者の実 backend / Oracle 環境へ接続することを防ぐ。
@@ -16,6 +26,12 @@ export default defineConfig(() => {
   const warnMissingBackendUrl = process.env.PLAYWRIGHT_HERMETIC_API !== "1" && !backendUrl;
 
   return {
+    // build と preview（build の成果物の確認）だけに適用する。dev サーバ（e2e を含む）は常に `/` で動かし、
+    // /api の proxy・hermetic の middleware の経路を変えない。
+    base:
+      command === "build" || isPreview
+        ? resolveFrontendBasePath(process.env.FRONTEND_BASE_PATH)
+        : "/",
     plugins: [
       react(),
       {

@@ -14,6 +14,7 @@ import {
   type SourcePreviewKind,
   type SourceProfile,
 } from "@/lib/api";
+import { appPath } from "@/lib/base-path";
 import {
   type BboxCoordinateMode,
   type BboxOverlayRect,
@@ -481,7 +482,8 @@ function TextPreview({ url }: { url: string }) {
   useEffect(() => {
     const controller = new AbortController();
     const request = { method: "GET", path: url.split("?")[0] };
-    fetch(url, { signal: controller.signal, credentials: "same-origin" })
+    // url は api の URL を作る関数が base を付けて返す。送る所でも通す（何度通しても 1 回だけ付く。#1316）。
+    fetch(appPath(url), { signal: controller.signal, credentials: "same-origin" })
       .then(async (res) => {
         if (!res.ok) {
           // セッション切れはログインへ。経路の権限拒否以外の 403 はプレビュー内の失敗表示にとどめる（#224）。

@@ -13,7 +13,7 @@
 | `rag/` | Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答） | [rag/AGENTS.md](./rag/AGENTS.md) |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
 | `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
-| `terraform/` | 3製品を OCI Resource Manager で配備する統合 stack（ADB 1つ＋選んだ製品ごとの Compute） | [terraform/README.md](./terraform/README.md) |
+| `terraform/` | 3製品を OCI Resource Manager で配備する統合 stack（ADB 1つ＋選んだ製品をすべて入れる 1 台の Compute。Nginx の `/rag/` `/nl2sql/` `/agent/`・HTTPS。#1316） | [terraform/README.md](./terraform/README.md) |
 
 - **依存の向きは `platform/` → 各製品の一方向。** 製品同士はコードで依存しない。製品間の連携（例: Agent が RAG / NL2SQL を呼ぶ）は HTTP API 経由にする。
   - Agent → RAG / NL2SQL は、呼び先の `POST /api/mcp`（MCP）を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`）で呼ぶ。画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する。詳細は [platform/docs/backend-standard.md](./platform/docs/backend-standard.md) の「製品間の連携（MCP とサービストークン）」（#230〜#233）。
@@ -161,7 +161,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - `pip-audit` は、その backend の `uv.lock` / `pyproject.toml`（または `ci.yml`）が変わったときだけ PR / main の CI で実行する。全件は `.github/workflows/dependency-audit-nightly.yml` が毎晩実行する。`bandit` は毎回実行する。
 - nightly（`e2e-nightly.yml`・`rag-evaluation-nightly.yml`・`dependency-audit-nightly.yml`）と main の push の CI が失敗すると、`ci-failure-issue.yml` が Issue（label `ci-failure` と製品の label）を作る。同じ workflow・製品の open な Issue があれば comment で追記する。schedule の workflow を追加したら、`ci-failure-issue.yml` の `workflows` にも追加する。
 - secret 検出は root の `.gitleaks.toml` / `.gitleaksignore`（pre-commit hook は `.pre-commit-config.yaml`）。CI の gitleaks-action は gitleaks 8.24 系のため、allowlist は単一の `[allowlist]` で書く（`[[allowlists]]` は解釈されない）。誤検知の除外は fingerprint 単位で `.gitleaksignore` に理由付きで追加する。
-- OCI Resource Manager の Terraform stack は root の `terraform/stack/` に1つだけ置く（#217）。ADB を1つ（新規 / 既存）作り、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低1つ）ごとに Compute を1台作る。製品固有の入力は `rag_` / `nl2sql_` / `agent_` の接頭辞を付ける。Compute 上の配備手順は各製品の `init_script.sh` が持つ。CI は `Suite / Terraform` job が `terraform/scripts/package_stack.py` と `verify_stack_contract.py` を実行する。
+- OCI Resource Manager の Terraform stack は root の `terraform/stack/` に1つだけ置く（#217）。ADB を1つ（新規 / 既存）作り、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低1つ）をすべて 1 台の Compute に入れる（#1316）。製品固有の入力は `rag_` / `nl2sql_` / `agent_` の接頭辞を付ける。Compute 上の配備は `platform/deploy/suite-init.sh` が各製品の `init_script.sh`（製品ごとの配備手順。製品は単独では配備しない）を順に呼び、Nginx の site（製品の path の prefix・HTTPS・自作の CA・公開の port）を 1 つだけ書く（Nginx の location は `platform/deploy/suite-nginx.sh` の 1 か所だけ）。frontend は build の環境変数 `FRONTEND_BASE_PATH`（`npm run build` で未指定なら `/`。ローカルの開発は変えない。配備は `/<製品>/`）で base を決める。CI は `Suite / Terraform` job が `terraform/scripts/package_stack.py` と `verify_stack_contract.py` と `platform/deploy/tests/` を実行する。
 - Terraform stack の release tag は `suite-v*`（例: `suite-v0.1.0`）。`.github/workflows/terraform-release.yml` が zip と sha256 を公開する。製品ごとの release（`<製品>-v*`、#94）は作らない（既存の `nl2sql-v0.1.32` 等は残す）。README 等では `releases/latest` ではなく tag を固定して参照する。
 - Dependabot（`.github/dependabot.yml`）の patch / minor 更新は `CI OK` 成功後に自動 merge される（`dependabot-auto-merge.yml`）。失敗し続ける major は `ignore` に理由付きで書き、peer dependency で結び付く一式（eslint 等）は major も 1 本の PR にまとめる。group PR が失敗したときの扱いは `dependabot.yml` の冒頭に書く。
 - RAG のマイクロサービス（`rag/services/*`）と `platform/scripts/` は、backend の job の対象外のため、`Lint / services & scripts` の job が venv を作らずに `ruff check` / `ruff format --check` だけを実行する（#517。設定は各サービスの `pyproject.toml` と `platform/scripts/ruff.toml`、版は `rag/backend/uv.lock` の ruff）。
@@ -299,7 +299,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ### 共通の仕組みと製品固有の仕組みの分け方
 
-- **3製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観）とユーザー管理・ロール管理は、画面を `packages/system-settings`、API（または API 契約）を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ（#70 / #206）。
+- **3製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観と証明書）とユーザー管理・ロール管理は、画面を `packages/system-settings`、API（または API 契約）を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ（#70 / #206）。
 - **製品固有の機能は、共通のメニューに混ぜず製品固有のメニューセクションに置く。** 例: NL2SQL の権限管理（ロールごとの機能権限・業務プロファイル利用権限）と Deep Data Security は「セキュリティ設定」。
 - **サイドナビの下部の並びとセクション名は 3 製品で同じにする（#658）**: 製品の業務のセクションの後に「改善・運用」（無い製品は無し）→「セキュリティ設定」（製品固有の権限管理など。旧「◯◯ セキュリティ」）→「ユーザーとロール」→「運用設定」（製品固有の運用。システムテーブルがあれば先頭）→「システム設定」。backend の権限カタログの `group` と並びもナビにそろえる。
 - **ナビのアイコンは、3 製品で同じ機能なら同じアイコン、違う機能なら違うアイコンにする（1 つの製品の中で同じアイコンを 2 つの項目に使わない。#658）。** 共通の項目（システム設定・ユーザーとロール）は `packages/system-settings` のアイコン、製品間で同じ機能（権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・検索・回答プロファイル / 業務プロファイル `BriefcaseBusiness`）はそろえる。重複は各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。

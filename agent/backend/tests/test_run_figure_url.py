@@ -165,6 +165,11 @@ def test_viewer_gets_short_lived_url_issued_as_viewer(
     public = client.get(_url(), headers=headers).json()["data"]
     assert public["url"] == f"https://rag.example.com{RAG_PATH}"
 
+    # 1 台の Compute（#1316）: 起点は同じ origin の /rag（Nginx が /rag/api/ を RAG へ渡す）。
+    monkeypatch.setattr(get_settings(), "agent_external_rag_public_url", "/rag")
+    same_origin = client.get(_url(), headers=headers).json()["data"]
+    assert same_origin["url"] == f"/rag{RAG_PATH}"
+
 
 def test_only_figures_in_the_run_and_accessible_agents_can_be_opened(
     auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState

@@ -1,7 +1,7 @@
 title: "Deploy Production Ready Suite on Oracle Cloud Infrastructure"
-stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database (new or existing) is shared by every product, and each selected product gets its own Compute instance. Configure AI runtime settings after startup from each application's System Settings."
+stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database (new or existing) and one Compute instance are shared by every selected product; Nginx serves them under /rag/, /nl2sql/ and /agent/ (HTTPS on port 443 with a private CA by default). Configure AI runtime settings after startup from each application's System Settings."
 schemaVersion: 1.1.0
-version: "20260927.1"
+version: "20261008.1"
 locale: "en"
 
 variableGroups:
@@ -14,10 +14,8 @@ variableGroups:
       - existing_oracle_wallet_password
       - adb_is_mtls_connection_required
       - nl2sql_app_environment
-      - nl2sql_app_auth_cookie_secure
       - app_admin_login_user_id
       - agent_runtime_repository_backend
-      - agent_app_auth_cookie_secure
 
   - title: Required Configuration
     visible: true
@@ -34,10 +32,12 @@ variableGroups:
       - deploy_nl2sql
       - deploy_agent
 
-  - title: Application Source
+  - title: "HTTPS"
     visible: true
     variables:
-      - application_port
+      - https_enabled
+      - https_port
+      - http_port
 
   - title: Autonomous AI Database
     visible: true
@@ -98,13 +98,8 @@ variableGroups:
   - title: RAG
     visible: deploy_rag
     variables:
-      - rag_app_auth_cookie_secure
       - rag_enable_parser_unstructured
       - rag_enable_oci_cloud_parsers
-      - rag_instance_display_name
-      - rag_instance_flex_shape_ocpus
-      - rag_instance_flex_shape_memory
-      - rag_instance_boot_volume_size
 
   - title: "アプリケーション管理者"
     visible:
@@ -115,33 +110,21 @@ variableGroups:
     variables:
       - app_admin_login_user_password
 
-  - title: NL2SQL
-    visible: deploy_nl2sql
-    variables:
-      - nl2sql_instance_display_name
-      - nl2sql_instance_flex_shape_ocpus
-      - nl2sql_instance_flex_shape_memory
-      - nl2sql_instance_boot_volume_size
-
   - title: "NL2SQL Deep Data Security"
     visible: deploy_nl2sql
     variables:
       - nl2sql_oracle_deepsec_enabled
       - nl2sql_oracle_deepsec_data_user_password
 
-  - title: Agent Control Plane
-    visible: deploy_agent
-    variables:
-      - agent_instance_display_name
-      - agent_instance_flex_shape_ocpus
-      - agent_instance_flex_shape_memory
-      - agent_instance_boot_volume_size
-
   - title: Compute
     visible: true
     variables:
+      - instance_display_name
       - instance_image_source_id
       - instance_shape
+      - instance_flex_shape_ocpus
+      - instance_flex_shape_memory
+      - instance_boot_volume_size
       - instance_boot_volume_vpus
       - subnet_ai_subnet_id
       - ssh_authorized_keys
@@ -195,12 +178,31 @@ variables:
     default: "main"
 
 
-  application_port:
-    type: number
+
+  https_enabled:
+    type: boolean
     required: true
     visible: true
-    title: "Application port"
-    description: "TCP port exposed by host Nginx and the instance firewall of every Compute instance."
+    title: "HTTPS（443）"
+    description: "オンにすると、Nginx が https_port（既定 443）で HTTPS を受け、80 への接続は HTTPS へ転送します。証明書は Compute の中で作る自作の Root CA と、Compute の公開 IP・private IP の証明書です（発行者は固定）。ブラウザの警告を消すには、各製品の「システム設定 > 外観と証明書」から CA の証明書を取り込みます。オフにすると http_port（既定 80）の HTTP だけで、そのまま配信します（転送しません）。subnet の security list（または NSG）で使う port の TCP を許可してください。"
+    default: true
+
+  https_port:
+    type: number
+    required: true
+    visible: https_enabled
+    title: "HTTPS port"
+    description: "Nginx が HTTPS を受ける port（既定 443）。HTTP の 80 への接続は HTTPS へ転送します。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    default: 443
+
+  http_port:
+    type: number
+    required: true
+    visible:
+      not:
+        - https_enabled
+    title: "HTTP port"
+    description: "HTTPS を使わないときに Nginx が HTTP を受ける port（既定 80）。HTTPS へは転送しません。SSH（22）・よく使われる service の port・Compute の中で製品が使う port は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
     default: 80
 
   adb_compartment_ocid:
@@ -561,16 +563,47 @@ variables:
       - "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
     default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
 
+  instance_display_name:
+    type: string
+    required: true
+    visible: true
+    title: "Compute instance name"
+    default: "PRODUCTION_READY_SUITE"
+
   instance_shape:
     type: enum
     required: true
     visible: true
     title: "Compute shape"
-    description: "Shape of every Compute instance. OCPUs, memory, and boot volume size are set per product."
+    description: "Shape of the Compute instance that runs every selected product."
     enum:
       - "VM.Standard.E4.Flex"
       - "VM.Standard.E5.Flex"
     default: "VM.Standard.E5.Flex"
+
+  instance_flex_shape_ocpus:
+    type: number
+    required: true
+    visible: true
+    title: "Compute OCPUs"
+    description: "The selected products share one Compute instance. The RAG CPU document parser (Docling) uses the most; raise it for heavy ingestion."
+    default: 4
+
+  instance_flex_shape_memory:
+    type: number
+    required: true
+    visible: true
+    title: "Compute memory (GB)"
+    description: "The RAG CPU document parser (Docling) loads ML models; raise it for heavy ingestion."
+    default: 24
+
+  instance_boot_volume_size:
+    type: number
+    required: true
+    visible: true
+    title: "Boot volume size (GB)"
+    description: "The per-service Python environments and models of the RAG parsers are large. 200 GB covers the three products (the OS and Node.js are shared)."
+    default: 200
 
   instance_boot_volume_vpus:
     type: number
@@ -584,7 +617,7 @@ variables:
     required: true
     visible: true
     title: "Compute subnet"
-    description: "Subnet of every Compute instance. Select a public or private subnet; public IP assignment is detected automatically. Put the ADB network access rules in line with this subnet."
+    description: "Subnet of the Compute instance. Select a public or private subnet; public IP assignment is detected automatically. Put the ADB network access rules in line with this subnet, and allow TCP 443 (HTTPS) and 80 in its security list."
     dependsOn:
       compartmentId: ${compartment_ocid}
       vcnId: ${vcn_ai_vcn_id}
@@ -601,7 +634,7 @@ variables:
     required: true
     visible: true
     title: "RAG"
-    description: "Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答）を専用の Compute に配備します。少なくとも1つの製品を選択してください。"
+    description: "Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答）を配備します（/rag/）。選んだ製品は 1 台の Compute に入ります。少なくとも1つの製品を選択してください。"
     default: true
 
   deploy_nl2sql:
@@ -609,7 +642,7 @@ variables:
     required: true
     visible: true
     title: "NL2SQL"
-    description: "Production Ready NL2SQL（SQL 専用の自然言語問い合わせ）を専用の Compute に配備します。"
+    description: "Production Ready NL2SQL（SQL 専用の自然言語問い合わせ）を配備します（/nl2sql/）。"
     default: true
 
   deploy_agent:
@@ -617,16 +650,9 @@ variables:
     required: true
     visible: true
     title: "Agent Control Plane"
-    description: "Production Control Plane for AI Agents を専用の Compute に配備します。"
+    description: "Production Control Plane for AI Agents を配備します（/agent/。/ はここへ転送します）。"
     default: true
 
-  rag_app_auth_cookie_secure:
-    type: boolean
-    required: true
-    visible: deploy_rag
-    title: "RAG secure session cookie (HTTPS only)"
-    description: "Written to PLATFORM_AUTH_COOKIE_SECURE in the RAG Compute platform/.env. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS (for example, an OCI Load Balancer) in front."
-    default: false
 
   rag_enable_parser_unstructured:
     type: boolean
@@ -644,55 +670,22 @@ variables:
     description: "Install and start parser-oci-genai-vision and parser-oci-document-understanding as systemd services. The Docling parser (the default document parser) is always installed. They call OCI services and need no GPU. GPU parsers (MinerU / Dots.OCR) are not part of this stack; set their external API hosts in the document parsing settings."
     default: false
 
-  rag_instance_display_name:
-    type: string
-    required: true
-    visible: deploy_rag
-    title: "RAG Compute instance name"
-    default: "RAG_INSTANCE"
 
-  rag_instance_flex_shape_ocpus:
-    type: number
-    required: true
-    visible: deploy_rag
-    title: "RAG Compute OCPUs"
-    default: 4
 
-  rag_instance_flex_shape_memory:
-    type: number
-    required: true
-    visible: deploy_rag
-    title: "RAG Compute memory (GB)"
-    description: "The CPU document parser (Docling) loads ML models. 32 GB or more is recommended."
-    default: 32
 
-  rag_instance_boot_volume_size:
-    type: number
-    required: true
-    visible: deploy_rag
-    title: "RAG boot volume size (GB)"
-    description: "The per-service Python environments and models of the parsers are large. 200 GB or more is recommended."
-    default: 200
 
   nl2sql_app_environment:
     type: enum
     required: true
     visible: false
     title: "NL2SQL application environment"
-    description: "Use local for direct HTTP access. Use production only behind HTTPS and set Secure cookies."
+    description: "Use local for HTTP. staging and production require https_enabled (Secure cookies)."
     enum:
       - "local"
       - "staging"
       - "production"
     default: "local"
 
-  nl2sql_app_auth_cookie_secure:
-    type: boolean
-    required: true
-    visible: false
-    title: "NL2SQL secure auth cookies"
-    description: "Set true when NL2SQL is served through HTTPS."
-    default: false
 
   app_admin_login_user_id:
     type: enum
@@ -717,33 +710,9 @@ variables:
     confirmation: true
     pattern: '^$|^[^"\r\n]{12,30}$'
 
-  nl2sql_instance_display_name:
-    type: string
-    required: true
-    visible: deploy_nl2sql
-    title: "NL2SQL Compute instance name"
-    default: "NL2SQL_INSTANCE"
 
-  nl2sql_instance_flex_shape_ocpus:
-    type: number
-    required: true
-    visible: deploy_nl2sql
-    title: "NL2SQL Compute OCPUs"
-    default: 2
 
-  nl2sql_instance_flex_shape_memory:
-    type: number
-    required: true
-    visible: deploy_nl2sql
-    title: "NL2SQL Compute memory (GB)"
-    default: 16
 
-  nl2sql_instance_boot_volume_size:
-    type: number
-    required: true
-    visible: deploy_nl2sql
-    title: "NL2SQL boot volume size (GB)"
-    default: 100
 
   nl2sql_oracle_deepsec_enabled:
     type: boolean
@@ -767,13 +736,6 @@ variables:
     confirmation: true
     pattern: '^[^"\r\n]{12,256}$'
 
-  agent_app_auth_cookie_secure:
-    type: boolean
-    required: true
-    visible: false
-    title: "Agent secure session cookie (HTTPS only)"
-    description: "Written to PLATFORM_AUTH_COOKIE_SECURE in the Agent Compute platform/.env. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS in front."
-    default: false
 
   agent_runtime_repository_backend:
     type: enum
@@ -786,33 +748,9 @@ variables:
       - "oracle_normalized"
     default: "oracle_checkpoint"
 
-  agent_instance_display_name:
-    type: string
-    required: true
-    visible: deploy_agent
-    title: "Agent Compute instance name"
-    default: "AGENT_INSTANCE"
 
-  agent_instance_flex_shape_ocpus:
-    type: number
-    required: true
-    visible: deploy_agent
-    title: "Agent Compute OCPUs"
-    default: 2
 
-  agent_instance_flex_shape_memory:
-    type: number
-    required: true
-    visible: deploy_agent
-    title: "Agent Compute memory (GB)"
-    default: 16
 
-  agent_instance_boot_volume_size:
-    type: number
-    required: true
-    visible: deploy_agent
-    title: "Agent boot volume size (GB)"
-    default: 100
 
 outputs:
   autonomous_database_ocid:
@@ -827,15 +765,15 @@ outputs:
     type: copyableString
     visible: true
 
+  application_url:
+    title: "Application URL"
+    displayText: "Application URL (/ redirects to the Agent Control Plane, or to the first selected product)"
+    type: copyableString
+    visible: true
+
   rag_application_url:
     title: "RAG URL"
     displayText: "RAG URL"
-    type: copyableString
-    visible: deploy_rag
-
-  rag_ssh_to_instance:
-    title: "RAG SSH command"
-    displayText: "RAG SSH command"
     type: copyableString
     visible: deploy_rag
 
@@ -851,20 +789,20 @@ outputs:
     type: copyableString
     visible: deploy_nl2sql
 
-  nl2sql_ssh_to_instance:
-    title: "NL2SQL SSH command"
-    displayText: "NL2SQL SSH command"
-    type: copyableString
-    visible: deploy_nl2sql
-
   agent_application_url:
     title: "Agent Control Plane URL"
     displayText: "Agent Control Plane URL"
     type: copyableString
     visible: deploy_agent
 
-  agent_ssh_to_instance:
-    title: "Agent SSH command"
-    displayText: "Agent SSH command"
+  ca_certificate_url:
+    title: "CA certificate URL"
+    displayText: "Private root CA certificate to import on client PCs (HTTPS only)"
     type: copyableString
-    visible: deploy_agent
+    visible: https_enabled
+
+  ssh_to_instance:
+    title: "SSH command"
+    displayText: "SSH command"
+    type: copyableString
+    visible: true

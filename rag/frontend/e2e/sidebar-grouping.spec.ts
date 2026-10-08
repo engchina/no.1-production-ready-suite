@@ -81,7 +81,7 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
   // システム設定は3製品で共通の5項目だけを持つ。
   const settingsSection = sidebar.locator("#nav-section-nav-section-settings");
   await expect(settingsSection.getByRole("link")).toHaveCount(5);
-  for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース", "外観"]) {
+  for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース", "外観と証明書"]) {
     await expect(settingsSection.getByText(label, { exact: true })).toBeVisible();
   }
 

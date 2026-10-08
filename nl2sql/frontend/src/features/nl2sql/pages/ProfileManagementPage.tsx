@@ -48,6 +48,7 @@ import { PageNotice } from "@/components/page-notice";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
+import { appPath } from "@/lib/base-path";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useSchemaOwners } from "@/lib/queries";
@@ -2142,7 +2143,7 @@ export function ProfileManagementPage() {
                 onSearchChange={setProfileSearch}
                 onSortChange={toggleSort}
                 onSelect={selectProfile}
-                profileHref={(profile) => `${location.pathname}?${new URLSearchParams({ profile: profile.id })}`}
+                profileHref={(profile) => appPath(`${location.pathname}?${new URLSearchParams({ profile: profile.id })}`)}
                 hasNextPage={Boolean(profilesQuery.hasNextPage)}
                 loadingNextPage={profilesQuery.isFetchingNextPage}
                 loadMoreError={profileLoadMoreError}

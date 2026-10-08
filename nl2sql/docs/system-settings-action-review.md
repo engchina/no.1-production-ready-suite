@@ -1,6 +1,6 @@
 # システム設定のボタン別レビュー（2026-09-11）
 
-対象は OCI 認証、アップロード保存先、モデル、データベース、システムテーブル、外観の6画面。UI の event handler → API payload → backend の認可・状態更新・永続化を確認し、下表の action を desktop 1280×900 / mobile-375 で検証した。
+対象は OCI 認証、アップロード保存先、モデル、データベース、システムテーブル、外観と証明書の6画面。UI の event handler → API payload → backend の認可・状態更新・永続化を確認し、下表の action を desktop 1280×900 / mobile-375 で検証した。
 
 ## 発見した問題と修正
 
@@ -80,7 +80,7 @@
 
 画面（`SystemTablesCard`）と backend の schema manager の骨格（lease・台帳・状態の分類・確認語の検証）は 3 製品共通になった（#325。画面は `@engchina/production-ready-system-settings`、backend は `pr_system_settings.system_schema`）。NL2SQL が持つのは migration ファイル・manifest・外部キーの検証・実行中の job の確認と、確認語 `RECREATE_NL2SQL_SYSTEM_TABLES`・製品固有の文言・所有者付きの object 名の表示だけ。
 
-## 外観
+## 外観と証明書
 
 |操作|確認した挙動|
 |---|---|

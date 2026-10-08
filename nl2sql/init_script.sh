@@ -20,8 +20,15 @@ DATA_DIR="/u01/data/production-ready-nl2sql"
 LEGACY_DATA_DIR="/u01/production-ready-nl2sql"
 WALLET_DIR="${APP_ROOT}/wallet"
 BACKEND_HOST="127.0.0.1"
-BACKEND_PORT="8000"
-APPLICATION_PORT="${APPLICATION_PORT:-$(tr -d '[:space:]' < "${APP_ROOT}/props/application_port.txt" 2>/dev/null || printf '80')}"
+# ローカルの開発（uv run uvicorn --port 8010）と同じ port。1 台の Compute に RAG（8000）・Agent（8020）と
+# 一緒に置くため、以前の 8000 から変えた（#1316）。
+BACKEND_PORT="8010"
+# backend/.env の元（suite では製品ごとの <製品>.backend.env）。
+BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${APP_ROOT}/props/backend.env}"
+# frontend の base（Vite の base・React Router の basename）。Nginx の /nl2sql/ の下で配信する（#1316）。
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"
+# true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
+PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
 NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
 NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
 NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
@@ -405,7 +412,7 @@ prepare_filesystem() {
 
 install_runtime_env() {
   log "Installing backend environment, platform environment and wallet."
-  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${APP_ROOT}/props/backend.env" "${BACKEND_DIR}/.env"
+  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${BACKEND_ENV_SOURCE}" "${BACKEND_DIR}/.env"
   # 3製品共通の設定（PLATFORM_*）は platform の共通 .env（#211）。システム設定画面の保存先でもあるため、
   # 既にあれば上書きしない（画面で保存した値を消さない）。
   if [ -e "${PLATFORM_REPO_DIR}/.env" ]; then
@@ -463,13 +470,17 @@ initialize_database_schema() {
 }
 
 build_frontend() {
-  log "Building shared UI package."
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then
+    log "Shared UI package was already built by another product."
+  else
+    log "Building shared UI package."
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  fi
 
-  log "Building NL2SQL frontend."
+  log "Building NL2SQL frontend (base ${FRONTEND_BASE_PATH})."
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm ci"
-  run_as_app_user_in_dir "${FRONTEND_DIR}" "npm run build"
+  run_as_app_user_in_dir "${FRONTEND_DIR}" "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build"
 }
 
 write_systemd_unit() {
@@ -546,96 +557,6 @@ configure_systemd() {
   fi
 }
 
-configure_nginx() {
-  # log_format は http context に置く。テストでは conf.d の場所も隔離する。
-  local logging_dir="${NGINX_LOGGING_CONF_DIR:-/etc/nginx/conf.d}"
-  local template_dir
-  template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
-  mkdir -p "${logging_dir}"
-  install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
-  # ログインの API の送信元 IP ごとの緩い上限（limit_req_zone。#1173）。
-  install -m 0644 "${template_dir}/login-rate-limit.conf" "${logging_dir}/production-ready-login-rate-limit.conf"
-  log "Configuring Nginx on port ${APPLICATION_PORT}."
-  cat > /etc/nginx/sites-available/production-ready-nl2sql <<EOF
-server {
-    listen ${APPLICATION_PORT};
-    server_name _;
-
-    root ${FRONTEND_DIR}/dist;
-    index index.html;
-
-    set \$pr_service_name "production-ready-nl2sql";
-    access_log /var/log/nginx/production-ready-nl2sql-access.log production_ready_json if=\$pr_loggable;
-    error_log /var/log/nginx/production-ready-nl2sql-error.log warn;
-
-    client_max_body_size 200M;
-    proxy_connect_timeout 60s;
-    proxy_send_timeout 600s;
-    proxy_read_timeout 600s;
-
-    location = /api {
-        return 308 /api/;
-    }
-
-    # ログインの API だけ、送信元 IP ごとに緩く上限を掛ける（#1173。zone は
-    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend
-    # （PLATFORM_AUTH_LOGIN_*）で、ここは大量の要求を照合・DB の前で止める。backend の 429 はそのまま返す。
-    location = /api/auth/login {
-        limit_req zone=pr_login burst=30 nodelay;
-        limit_req_status 429;
-        error_page 429 = @pr_login_rate_limited;
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_buffering off;
-        proxy_cache off;
-    }
-
-    location @pr_login_rate_limited {
-        default_type application/json;
-        add_header Retry-After 60 always;
-        return 429 '{"success":false,"data":null,"error_code":"SECURITY_RATE_LIMITED","error_messages":["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"]}';
-    }
-
-    location /api/ {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_buffering off;
-        proxy_cache off;
-    }
-
-    location = /health {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/api/health;
-        proxy_set_header Host \$host;
-        access_log off;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-}
-EOF
-
-  ln -sfn /etc/nginx/sites-available/production-ready-nl2sql /etc/nginx/sites-enabled/production-ready-nl2sql
-  rm -f /etc/nginx/sites-enabled/default
-  nginx -t
-  systemctl enable nginx
-  systemctl reload nginx || systemctl restart nginx
-}
-
 dump_service_diagnostics() {
   local service="$1"
   log "Diagnostics for ${service}: systemctl status"
@@ -666,9 +587,8 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  configure_nginx
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>/"
+  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH}"
 }
 
 if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then

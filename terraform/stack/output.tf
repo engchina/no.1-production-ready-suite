@@ -1,12 +1,14 @@
 locals {
-  instance_access_ips = {
-    for product, instance in merge(oci_core_instance.product, oci_core_instance.agent) :
-    product => local.compute_subnet_prohibits_public_ip ? instance.private_ip : instance.public_ip
-  }
-  application_urls = {
-    for product, ip in local.instance_access_ips :
-    product => var.application_port == 80 ? "http://${ip}" : "http://${ip}:${var.application_port}"
-  }
+  # 利用者が開く IP（公開 IP があれば公開 IP、private subnet なら private IP）。
+  instance_access_ip = (
+    local.compute_subnet_prohibits_public_ip
+    ? oci_core_instance.suite.private_ip
+    : oci_core_instance.suite.public_ip
+  )
+  # 公開の port（#1316）。既定（HTTPS 443・HTTP 80）でなければ URL に port を付ける。
+  public_port          = var.https_enabled ? var.https_port : var.http_port
+  default_public_port  = var.https_enabled ? 443 : 80
+  application_base_url = "${var.https_enabled ? "https" : "http"}://${local.instance_access_ip}${local.public_port == local.default_public_port ? "" : ":${local.public_port}"}"
 }
 
 output "autonomous_database_ocid" {
@@ -23,39 +25,39 @@ output "autonomous_database_high_connection_string" {
   ) : local.effective_oracle_dsn
 }
 
+output "application_url" {
+  description = "Root URL of the Compute instance. / redirects to the Agent Control Plane (or to the first selected product when the Agent is not deployed)."
+  value       = "${local.application_base_url}/"
+}
+
 # 配備しなかった製品の output は null（Resource Manager では表示されない）。
 
 output "rag_application_url" {
   description = "Production Ready RAG URL (log in with system_admin and app_admin_login_user_password)."
-  value       = lookup(local.application_urls, "rag", null)
-}
-
-output "rag_ssh_to_instance" {
-  description = "SSH command for the RAG Compute instance."
-  value       = contains(keys(local.instance_access_ips), "rag") ? "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ips["rag"]}" : null
+  value       = var.deploy_rag ? "${local.application_base_url}/rag/" : null
 }
 
 output "rag_services" {
-  description = "Preprocessing and parser services installed as systemd units (production-ready-rag-<service>.service) on the RAG Compute instance."
+  description = "Preprocessing and parser services installed as systemd units (production-ready-rag-<service>.service) on the Compute instance."
   value       = var.deploy_rag ? join(", ", local.rag_services) : null
 }
 
 output "nl2sql_application_url" {
   description = "Production Ready NL2SQL URL (log in with system_admin)."
-  value       = lookup(local.application_urls, "nl2sql", null)
-}
-
-output "nl2sql_ssh_to_instance" {
-  description = "SSH command for the NL2SQL Compute instance."
-  value       = contains(keys(local.instance_access_ips), "nl2sql") ? "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ips["nl2sql"]}" : null
+  value       = var.deploy_nl2sql ? "${local.application_base_url}/nl2sql/" : null
 }
 
 output "agent_application_url" {
   description = "Production Ready Agent Control Plane URL (log in with system_admin and app_admin_login_user_password)."
-  value       = lookup(local.application_urls, "agent", null)
+  value       = var.deploy_agent ? "${local.application_base_url}/agent/" : null
 }
 
-output "agent_ssh_to_instance" {
-  description = "SSH command for the Agent Control Plane Compute instance."
-  value       = contains(keys(local.instance_access_ips), "agent") ? "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ips["agent"]}" : null
+output "ca_certificate_url" {
+  description = "Private root CA certificate of the HTTPS server certificate. Import it as a trusted root CA on client PCs to remove the browser warning (also available from System settings > Appearance and certificate)."
+  value       = var.https_enabled ? "${local.application_base_url}/platform/ca.crt" : null
+}
+
+output "ssh_to_instance" {
+  description = "SSH command for the Compute instance."
+  value       = "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ip}"
 }

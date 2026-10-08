@@ -189,7 +189,7 @@ const nl2sqlJa = {
   "nav.settingsConnection": "接続設定",
   "nav.settingsModel": "モデル",
   "nav.settingsDatabase": "データベース",
-  "nav.settingsAppearance": "外観",
+  "nav.settingsAppearance": "外観と証明書",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
   "nav.securityPermissions": "権限管理",

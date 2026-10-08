@@ -141,7 +141,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
     _menu_permission(MENU_SETTINGS_DATABASE, _GROUP_SETTINGS, "データベース"),
-    _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観"),
+    _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観と証明書"),
     _permission(
         SEARCH_ANSWER_PROFILES_MANAGE,
         _GROUP_MANAGE,

@@ -6,6 +6,7 @@
  * - 型はバックエンドの Pydantic スキーマ（snake_case）にそのまま対応させる。
  */
 
+import { appPath } from "./base-path";
 import { t } from "./i18n";
 import {
   ApiTransportError,
@@ -2428,7 +2429,8 @@ async function requestEnvelope<T>(
   if (!headers.has("Accept")) headers.set("Accept", "application/json");
 
   try {
-    const res = await fetch(path, {
+    // 送る URL には配信の base を付ける（`/rag/` の下で配信するとき。#1316）。エラーの表示の path は付けない。
+    const res = await fetch(appPath(path), {
       ...init,
       credentials: "same-origin",
       signal: controller.signal,
@@ -2504,7 +2506,7 @@ function requestUpload<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", path);
+    xhr.open("POST", appPath(path));
     const headers = withCsrfHeaders("POST");
     if (!headers.has("Accept")) headers.set("Accept", "application/json");
     headers.forEach((value, name) => xhr.setRequestHeader(name, value));
@@ -2672,9 +2674,11 @@ export const api = {
     format: DocumentExtractionExportFormat,
   ) => {
     const search = new URLSearchParams({ format, download: "true" });
-    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-      recipeId,
-    )}/extraction-export?${search.toString()}`;
+    return appPath(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-export?${search.toString()}`,
+    );
   },
   listDocumentIngestionJobs: (id: string) =>
     request<IngestionJob[]>(
@@ -2857,7 +2861,7 @@ export const api = {
     if (options.variant) search.set("variant", options.variant);
     if (options.disposition) search.set("disposition", options.disposition);
     const qs = search.toString();
-    return `/api/documents/${encodeURIComponent(id)}/content${qs ? `?${qs}` : ""}`;
+    return appPath(`/api/documents/${encodeURIComponent(id)}/content${qs ? `?${qs}` : ""}`);
   },
   documentRecipeContentUrl: (
     id: string,
@@ -2871,9 +2875,11 @@ export const api = {
     if (options.variant) search.set("variant", options.variant);
     if (options.disposition) search.set("disposition", options.disposition);
     const qs = search.toString();
-    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-      recipeId,
-    )}/content${qs ? `?${qs}` : ""}`;
+    return appPath(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/content${qs ? `?${qs}` : ""}`,
+    );
   },
   /** PDF をページ画像で表示するためのページ一覧（bbox の強調を重ねる。#349）。 */
   getDocumentPreviewPages: (
@@ -2894,7 +2900,7 @@ export const api = {
     if (options.variant) search.set("variant", options.variant);
     if (options.dpi) search.set("dpi", String(options.dpi));
     const qs = search.toString();
-    return `${documentPreviewPagesBase(id, options.recipeId)}/${pageNumber}${qs ? `?${qs}` : ""}`;
+    return appPath(`${documentPreviewPagesBase(id, options.recipeId)}/${pageNumber}${qs ? `?${qs}` : ""}`);
   },
 
   // ナレッジベース

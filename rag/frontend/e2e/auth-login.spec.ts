@@ -249,7 +249,7 @@ test("起動時のログインの確認が 503 ならログイン画面へ移さ
 
   unavailable = false;
   await error.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByRole("heading", { name: "外観", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外観と証明書", level: 1 })).toBeVisible();
   await expect(page).toHaveURL(/\/settings\/appearance$/);
 });
 

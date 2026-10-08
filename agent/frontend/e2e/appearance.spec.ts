@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/mock-api";
 import { openSidebarNav } from "./fixtures/nav";
 
-// 外観（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
+// 外観と証明書（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
 
 async function isDark(page: Page) {
   return page.evaluate(() => document.documentElement.classList.contains("dark"));
@@ -13,12 +13,12 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`外観でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
+  test(`外観と証明書でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto("/settings/appearance");
 
-    await expect(page.getByRole("heading", { name: "外観", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "外観と証明書", level: 1 })).toBeVisible();
     const toggle = page.getByTestId("appearance-theme-toggle");
     await expect(toggle.getByRole("button", { name: "ライト" })).toHaveAttribute("aria-pressed", "true");
     expect(await isDark(page)).toBe(false);
@@ -47,10 +47,50 @@ for (const viewport of [
   });
 }
 
-test("サイドナビのシステム設定に外観がある", async ({ page }) => {
+// HTTPS の証明書（#1316）: 1 台の Compute の Nginx が /platform/ca.crt で CA の証明書を配る。製品は /agent/ の下でも
+// サイトの root の /platform/ca.crt を見る。ローカルの開発（Vite）は配っていないので説明だけを出す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  for (const theme of ["ライト", "ダーク"] as const) {
+    test(`外観と証明書の HTTPS の証明書（${viewport.name}・${theme}）`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/settings/appearance");
+      await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: theme }).click();
+      await expect.poll(() => isDark(page)).toBe(theme === "ダーク");
+
+      // 配っていない環境（ローカルの開発）: 説明だけで、ダウンロードは出さない。
+      const card = page.getByTestId("appearance-ca-certificate");
+      await expect(card.getByText("HTTPS の証明書", { exact: true })).toBeVisible();
+      await expect(card.getByText("この環境では HTTPS の自己署名の証明書を使っていません。")).toBeVisible();
+      await expect(card.getByRole("link", { name: "CA の証明書をダウンロード" })).toHaveCount(0);
+      await page.screenshot({ path: test.info().outputPath("ca-certificate-unavailable.png"), fullPage: true });
+
+      // 配っている環境: ダウンロードのリンクと、端末への取り込み方。
+      await page.route("**/platform/ca.crt", (route) =>
+        route.fulfill({ status: 200, headers: { "Content-Type": "application/x-x509-ca-cert" }, body: "" }),
+      );
+      await page.reload();
+      const download = card.getByRole("link", { name: "CA の証明書をダウンロード" });
+      await expect(download).toHaveAttribute("href", "/platform/ca.crt");
+      await card.getByText("端末への取り込み方").click();
+      for (const os of ["Windows", "macOS", "iPhone / iPad", "Android", "Firefox"]) {
+        await expect(card.getByText(os, { exact: true })).toBeVisible();
+      }
+      await page.screenshot({ path: test.info().outputPath("ca-certificate-available.png"), fullPage: true });
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(0);
+    });
+  }
+}
+
+test("サイドナビのシステム設定に外観と証明書がある", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("link", { name: "外観" })).toHaveAttribute("href", "/settings/appearance");
+  await expect(page.getByRole("link", { name: "外観と証明書" })).toHaveAttribute("href", "/settings/appearance");
 });
 
 for (const viewport of [

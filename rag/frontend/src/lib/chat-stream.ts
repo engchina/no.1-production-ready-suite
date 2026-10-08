@@ -13,6 +13,7 @@
 
 import type { ChatProgressStep } from "@engchina/production-ready-ui";
 
+import { appPath } from "./base-path";
 import { chatProgressStepsFromEvent } from "./chat-progress";
 import { t } from "./i18n";
 import {
@@ -151,7 +152,8 @@ async function openChatStream(
   const request = { method: init.method ?? "GET", path };
   let res: Response;
   try {
-    res = await fetch(path, init);
+    // 送る URL には配信の base を付ける（#1316）。エラーの表示の path は付けない。
+    res = await fetch(appPath(path), init);
   } catch (cause) {
     // 通信断（`TypeError: Failed to fetch`）は利用者向けの文の ApiError にする。中止はそのまま（#906）。
     throw apiErrorFromFetchFailure(cause, request) ?? cause;

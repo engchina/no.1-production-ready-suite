@@ -6,6 +6,7 @@ import { UnsavedChangesBlocker } from "@engchina/production-ready-system-setting
 
 import { App } from "./App";
 import { Providers } from "@/components/providers";
+import { ROUTER_BASENAME } from "@/lib/base-path";
 import "@/fonts.css";
 import "@/globals.css";
 import { useUiStore } from "@/lib/ui-store";
@@ -21,17 +22,21 @@ if (!root) {
 // 既存のルート定義（App の <Routes>）はそのまま、全体を data router の 1 つの splat route に載せる。
 // data router にすると、共有の離脱ガードがブラウザの戻る/進むも確認できる（useBlocker。#138）。
 // blocker はアプリで 1 つ（UnsavedChangesBlocker）にし、各画面のガードはそこへ未保存を登録する（#586）。
-const router = createBrowserRouter([
-  {
-    path: "*",
-    element: (
-      <Providers>
-        <UnsavedChangesBlocker />
-        <App />
-      </Providers>
-    ),
-  },
-]);
+// `/rag/` の下で配信する build では basename を付ける（#1316）。`/` の build は undefined で今までどおり。
+const router = createBrowserRouter(
+  [
+    {
+      path: "*",
+      element: (
+        <Providers>
+          <UnsavedChangesBlocker />
+          <App />
+        </Providers>
+      ),
+    },
+  ],
+  { basename: ROUTER_BASENAME }
+);
 
 createRoot(root).render(
   <StrictMode>
