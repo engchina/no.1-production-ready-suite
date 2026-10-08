@@ -1021,3 +1021,83 @@ def test_unverified_section_keeps_points_but_not_operation_steps() -> None:
     assert "パスワードは 90 日です。" not in non_claim_passages(
         "**確かめられていない点**\nパスワードは 90 日です。\n\nパスワードは 90 日です。"
     )
+
+
+def _answer_outcome(run: RunState) -> dict[str, Any]:
+    [artifact] = [item for item in run.artifacts if item.kind == "answer"]
+    outcome = artifact.content["outcome"]
+    assert isinstance(outcome, dict)
+    return outcome
+
+
+def test_answer_artifact_records_the_outcome_after_the_validation(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    # 回答の対応（#1305）は、最終の検証の後に Control Plane が決めて成果物 answer に残す。
+    run, _ = _searched_run(monkeypatch)
+
+    assert _answer_outcome(run) == {
+        "schema_version": 1,
+        "value": "answered",
+        "basis": "rag_search",
+        "rag_outcome": "answered",
+        "signals": [],
+    }
+
+
+def test_answer_artifact_records_a_clarification_and_a_refusal(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    del mcp
+    _script(
+        monkeypatch,
+        [assistant_message("確認させてください。\n付与先は個別の利用者ですか、グループですか？")],
+    )
+    clarified = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="権限を付けたい", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+    )
+    anyio.run(builtin_runtime.execute_run, clarified.id)
+    outcome = _answer_outcome(runtime_repository.get_run(clarified.id))
+    assert (outcome["value"], outcome["basis"]) == ("needs_clarification", "clarification_question")
+
+    # 根拠を使わない回答は、注記を足す前のモデルの回答の段落で決める。
+    _script(monkeypatch, [assistant_message("ライセンス費用は資料に記載がありません。")])
+    refused = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="ライセンス費用は？", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, refused.id)
+    outcome = _answer_outcome(runtime_repository.get_run(refused.id))
+    assert (outcome["value"], outcome["basis"]) == ("insufficient_evidence", "answer_passages")
+
+
+def test_answer_is_saved_without_an_outcome_when_it_cannot_be_decided(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    def broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(builtin_runtime, "answer_outcome", broken)
+    run, _ = _searched_run(monkeypatch)
+
+    assert run.status == RunStatus.COMPLETED
+    [artifact] = [item for item in run.artifacts if item.kind == "answer"]
+    assert artifact.content == {"text": ANSWER}
+
+
+def test_outcome_is_recorded_when_the_validation_is_disabled(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
+    mcp.outputs["rag_search"] = {
+        **deepcopy(DEFAULT_OUTPUTS["rag_search"]),
+        "outcome": "needs_environment_data",
+    }
+    run, _ = _searched_run(monkeypatch)
+
+    assert mcp.calls_of("rag_validate_answer") == []
+    outcome = _answer_outcome(run)
+    assert (outcome["value"], outcome["rag_outcome"]) == (
+        "needs_environment_data",
+        "needs_environment_data",
+    )

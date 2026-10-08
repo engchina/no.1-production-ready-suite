@@ -77,9 +77,15 @@ D の採点は、RAG の評価ランナーと同じ関数（`app.rag.evaluation.
 
 - 回答は Run の成果物 `answer`（最終の検証の後の本文）。引用は、その Run の `rag_search` / `rag_retrieve_evidence` が
   返した根拠です。根拠の本文は MCP の抜粋（`excerpt`。最大 1000 文字）なので、必要な根拠はその範囲で照合します。
-- 対応（outcome）は、その Run の最後の `rag_search` の `outcome`（結果の `outcome_source=agent_rag_search`）です。
-  `rag_search` を呼ばなかった Run は、回答の最後の行が問い（？）なら確認の質問、それ以外は RAG の評価と同じ推定
-  （根拠の無い回答・拒答の文は拒答）にします（`outcome_source=inferred`）。
+- 対応（outcome）は、Run の成果物 `answer` の `outcome.value` です（結果の `outcome_source=agent_answer`。#1305）。
+  Agent の Control Plane が、最後の `rag_search` の対応・確認の質問だけの回答か・最終の検証の結果・回答の段落の判定・
+  現場のデータの道具の結果から、モデルを呼ばずに RAG の回答の記録と同じ語彙で決めます（決め方は
+  `agent/docs/agent-control-plane-design.md` の「回答の対応」。決めた手がかりは `outcome.basis`）。
+  対応を持たない成果物（#1305 より前の Agent）だけ、その Run の最後の `rag_search` の `outcome`
+  （`outcome_source=agent_rag_search`）、それも無ければ回答の最後の行（最終の検証が足す定型の注記を除く）が問い（？）
+  なら確認の質問、それ以外は RAG の評価と同じ推定（根拠の無い回答・拒答の文は拒答）にします
+  （`outcome_source=inferred`）。結果の `agent.outcome_sources` に出所ごとの Run の数を残すので、推定が混じって
+  いないかを確かめてから A / C と比べます。
 - 往復のあるケースの返答は、同じ会話（`thread_id`）の次の Run として送ります。ケースの既知の条件（`conditions`）は
   Agent に構造化して渡す口が無いため、最初の質問の後ろに「（既知の条件: 付与先は「グループ」）」の文で足します。
 - 1 Run の待ちの上限は `--run-timeout`（既定 900 秒）。終わらない Run は取り消してケースの失敗にします。承認待ちで

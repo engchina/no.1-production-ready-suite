@@ -51,6 +51,7 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
 )
 
+from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
@@ -1002,27 +1003,47 @@ async def _finish(
     answer = (
         output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
     )
+    # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
+    model_answer = answer
+    validation: dict[str, Any] | None = None
     if get_settings().agent_final_validation_enabled:
         try:
-            answer = await _validate_final_answer(run_id, answer, rag_tools=rag_tools)
+            answer, validation = await _validate_final_answer(run_id, answer, rag_tools=rag_tools)
         except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
             logger.warning(
                 "builtin_runtime_answer_validation_failed",
                 extra={"run_id": run_id, "exception_type": type(exc).__name__},
             )
             # 確かめられなかったことを成果物にも残す（#1277。黙って通さない）。
+            validation = validation_content(
+                STATUS_UNVALIDATED,
+                reason=REASON_VALIDATION_ERROR,
+                message="回答の検証の途中で予期しない失敗が起きました。",
+            )
             runtime_repository.save_builtin_artifact(
-                run_id,
-                kind=ANSWER_VALIDATION_KIND,
-                name=ANSWER_VALIDATION_NAME,
-                content=validation_content(
-                    STATUS_UNVALIDATED,
-                    reason=REASON_VALIDATION_ERROR,
-                    message="回答の検証の途中で予期しない失敗が起きました。",
-                ),
+                run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
             )
             answer = with_unverified_notice(answer)
-    runtime_repository.complete_builtin_run(run_id, answer)
+    runtime_repository.complete_builtin_run(
+        run_id, answer, outcome=_answer_outcome(run_id, model_answer, validation)
+    )
+
+
+def _answer_outcome(
+    run_id: str, answer: str, validation: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """回答の対応（#1305。`answer_outcome`）。決められなくても回答は保存する（対応は付けない）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        steps = runtime_repository.get_run(run_id).steps
+        return answer_outcome(answer, steps=steps, validation=validation)
+    except Exception as exc:  # noqa: BLE001 - 対応は補助。決められなくても回答は返す
+        logger.warning(
+            "builtin_runtime_answer_outcome_failed",
+            extra={"run_id": run_id, "exception_type": type(exc).__name__},
+        )
+        return None
 
 
 def _validator_connection(evidence_tool: str) -> McpConnectionConfig | None:
@@ -1049,8 +1070,11 @@ def has_rag_evidence_tools(sdk_agent: Agent[Any] | None, skill_ids: list[str]) -
     )
 
 
-async def _validate_final_answer(run_id: str, answer: str, *, rag_tools: bool = False) -> str:
-    """回答の最終の検証（#1246・#1277）。検証の結果を成果物に残し、利用者に見せる回答を返す。
+async def _validate_final_answer(
+    run_id: str, answer: str, *, rag_tools: bool = False
+) -> tuple[str, dict[str, Any]]:
+    """回答の最終の検証（#1246・#1277）。検証の結果を成果物に残し、利用者に見せる回答と、
+    成果物の内容（回答の対応を決めるのに使う。#1305）を返す。
 
     モデルではなく Control Plane が、根拠を返した RAG の MCP 接続ごとに `rag_validate_answer` を
     呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
@@ -1060,38 +1084,36 @@ async def _validate_final_answer(run_id: str, answer: str, *, rag_tools: bool = 
     """
     from app.features.agent.runtime import runtime_repository
 
-    def save(content: dict[str, Any]) -> None:
+    def save(content: dict[str, Any]) -> dict[str, Any]:
         runtime_repository.save_builtin_artifact(
             run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=content
         )
+        return content
 
     run = runtime_repository.get_run(run_id)
     groups = run_evidence_groups(run.steps)
     if not groups:
         if rag_tools and is_clarification_only(answer):
             # 確認の質問だけの回答は資料の主張を含まない（「確かめていない」を足さない。#1306）。
-            save(validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY))
-            return answer
-        if rag_tools and answer.strip():
-            save(
-                validation_content(
-                    STATUS_UNVALIDATED, reason=REASON_NO_RAG_EVIDENCE, message=NO_EVIDENCE_NOTICE
-                )
+            return answer, save(
+                validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY)
             )
-            return with_no_evidence_notice(answer)
-        save(validation_content(STATUS_SKIPPED, reason=REASON_NO_RAG_EVIDENCE))
-        return answer
+        if rag_tools and answer.strip():
+            content = validation_content(
+                STATUS_UNVALIDATED, reason=REASON_NO_RAG_EVIDENCE, message=NO_EVIDENCE_NOTICE
+            )
+            return with_no_evidence_notice(answer), save(content)
+        return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_NO_RAG_EVIDENCE))
     refs = [ref for _tool, items in groups for ref in items]
     if not answer.strip():
-        save(validation_content(STATUS_SKIPPED, reason=REASON_EMPTY_ANSWER, evidence=refs))
-        return answer
+        content = validation_content(STATUS_SKIPPED, reason=REASON_EMPTY_ANSWER, evidence=refs)
+        return answer, save(content)
     validations = [
         await _validate_with_connection(run, answer, evidence_tool, items)
         for evidence_tool, items in groups
     ]
     content, published = combine_validations(answer, validations)
-    save(content)
-    return published
+    return published, save(content)
 
 
 async def _validate_with_connection(
