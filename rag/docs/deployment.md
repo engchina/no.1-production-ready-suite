@@ -872,7 +872,7 @@ cv2 の headless 版は各サービスの `uv.lock` に固定されている（v
 OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、選んだ製品を 1 台の Compute に入れ
 （#1316）、NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。#286）を作る。Docker は使わない。
 
-1 台の Compute（`platform/deploy/suite-init.sh` が `PR_SUITE_MODE=true` で `rag/init_script.sh` を呼ぶ。#1316）では、下の表と次の点が違う。
+3 製品は 1 台の Compute にセットで配備する（`platform/deploy/suite-init.sh` が `rag/init_script.sh` を呼ぶ。#1316。単独では配備しない）。下の表と次の点が違う。
 
 - 実行ユーザーは NL2SQL / Agent と同じ `ubuntu`（共通の `platform/.env`・Wallet・`~/.oci/config` を 3 製品で読み書きするため）。`ragsvc` は作らない
   （下の表と手順の `sudo -u ragsvc HOME=/var/lib/production-ready-rag` は `sudo -u ubuntu` に読み替える）。sudoers は `ubuntu` に同じ unit の操作を許可する。

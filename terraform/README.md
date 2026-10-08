@@ -109,8 +109,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   配備した前処理 / parser の unit の `systemctl enable --now / disable --now / restart` と `journalctl -u <unit>` を
   sudoers（`/etc/sudoers.d/production-ready-rag-services`）で許可します。利用者が最後に操作した起動 / 停止の状態は、再起動・再配備でも保たれます
   （初めて配備する unit は起動します）。
-- 1 台の Compute（#1316）では、RAG も NL2SQL / Agent と同じユーザー `ubuntu` で動きます（製品ごとの Compute では専用の `ragsvc`）。
-  `rag/init_script.sh` を単独で実行したとき（`PR_SUITE_MODE` が無いとき）は今までどおり `ragsvc` です。
+- RAG も NL2SQL / Agent と同じユーザー `ubuntu` で動きます（#1316。以前の製品ごとの Compute では専用の `ragsvc`）。
 
 | 項目 | 値 |
 |---|---|
@@ -186,8 +185,14 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
   | `/` | `/agent/` へ 302（Agent を配備しないときは、最初に配備した製品へ） |
   | `/platform/ca.crt` | 自作の Root CA の証明書（HTTPS が on のときだけ）。`/platform/` は platform（共通基盤）が配る共有の内容のために予約し、ほかの path は 404 |
 
-- **HTTPS（`https_enabled`、既定 on）**: Nginx が 443 で TLS 1.2 / 1.3 を受け、80 への接続は 301 で https へ転送します。HSTS は付けません（IP の証明書のため）。
-  off にすると 80 の HTTP だけで配信します。port は変数にしません（80 / 443 に固定）。
+- **HTTPS（`https_enabled`、既定 on）**: Nginx が `https_port`（既定 443）で TLS 1.2 / 1.3 を受け、`http_port`（既定 80）への接続は 301 で
+  https（`https_port`）へ転送します（`https_port` を 80 にしたときは転送の server を置きません）。HSTS は付けません（IP の証明書のため）。
+  off にすると `http_port` の HTTP で、そのまま配信します（転送しません）。フォームには on なら `https_port`、off なら `http_port` が出ます。
+  既定でない port は output の URL に付きます（例 `https://<IP>:8443/rag/`）。
+- **使えない port**: SSH（22）・よく使われる service（25 / 53 / 111 / 1521 / 1522 / 3306 / 5432 / 6379 / 9090）・Compute の中で製品が使う port
+  （backend の 8000 / 8010 / 8020、RAG の前処理 / parser の 18000〜18099）と、1〜65535 の外。一覧は `terraform/stack/locals.tf` の
+  `reserved_ports` / `reserved_port_ranges`（apply の precondition）と `platform/deploy/suite-nginx.sh` の `SUITE_RESERVED_PORTS` /
+  `SUITE_RESERVED_PORT_RANGES`（手で配備したときも先に失敗する）が同じ値を持ち、`verify_stack_contract.py` が照合します。
   - 証明書は初回の起動で Compute の中で作ります（`platform/deploy/suite-tls.sh`）。発行者などは固定で、stack の入力にはしません。
 
     | | subject | 鍵・有効期間 |
@@ -202,8 +207,9 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
     公開 IP を指定して作り直す: `sudo bash /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-tls.sh renew --public-ip <公開 IP>`
   - サーバー証明書は、期限の 30 日前から timer（`production-ready-suite-tls-renew.timer`、毎日）が作り直して Nginx を reload します。CA は作り直しません。
     状態は `sudo bash .../platform/deploy/suite-tls.sh status` で確認します。
-- **subnet の security list**（stack の外で管理。stack は NSG を作りません。#259）で、利用者の端末からの TCP 443（HTTPS が off なら 80）を許可してください。
-  HTTPS が on のとき 80 も許可すると、`http://` で開いた利用者を https へ転送できます。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
+- **subnet の security list または NSG**（stack の外で管理。stack は ingress の規則・NSG を作りません。#259）で、利用者の端末からの
+  TCP `https_port`（HTTPS が off なら `http_port`）を許可してください。HTTPS が on のとき `http_port` も許可すると、`http://` で開いた利用者を
+  https へ転送できます。Compute の OS の firewall（iptables）は suite-init.sh が選んだ port を開けます。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
   127.0.0.1 なので、security list は要りません。
 - ログインのセッションの Cookie は製品ごとに名前が違う（`rag_session` / `nl2sql_session` / `agent_session` と、CSRF の `*_csrf`）ため、
   同じ host・port で衝突しません。ログインは製品ごとです（3 製品で同じユーザー・ロールを使いますが、セッションは別）。
@@ -218,7 +224,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 - Compute の中だけにあるもの（アップロードの原本などのローカルの保存、画面で変えた `platform/.env` / `model-settings.json` の値、`~/.oci/config`）は
   引き継がれません。必要なら apply の前に退避し、新しい Compute で各製品の「システム設定」から設定し直してください（data migration の仕組みは持ちません）。
 - 入力の変更: `application_port`・`<製品>_instance_*`・`rag_app_auth_cookie_secure` / `nl2sql_app_auth_cookie_secure` / `agent_app_auth_cookie_secure` は
-  廃止し、`instance_display_name`・`instance_flex_shape_ocpus` / `_memory`・`instance_boot_volume_size`・`https_enabled` を足しました。
+  廃止し、`instance_display_name`・`instance_flex_shape_ocpus` / `_memory`・`instance_boot_volume_size`・`https_enabled`・`http_port`・`https_port` を足しました。
+- 製品の `init_script.sh` を単独で実行する配備（製品ごとの Nginx の site）はやめました（3 製品はこの suite でセットで配備します）。
 - URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークや、外部から Agent の MCP（`/agent/api/mcp`）を呼ぶ設定を更新してください。
 
 ### ログインの試行の回数の共有（#1173）
@@ -262,8 +269,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
    sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
    ```
 
-3. Nginx のログインの API の上限は、1 台の Compute では `platform/deploy/suite-nginx.sh` の site（`/<製品>/api/auth/login`）に入っています
-   （製品ごとの Compute では、各製品の `init_script.sh` の `configure_nginx`）。
+3. Nginx のログインの API の上限は、`platform/deploy/suite-nginx.sh` の site（`/<製品>/api/auth/login`）に入っています。
 4. 確認: backend のログに `auth_login_throttle_shared_store_unavailable` が出ないこと。存在しないログイン ID で 1 回ログインに失敗すると、
    `SELECT COUNT(*) FROM PLATFORM_LOGIN_ATTEMPTS` が 2 増えること（窓を過ぎると、次の失敗のときに消える）。
 
