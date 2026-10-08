@@ -156,9 +156,11 @@ def _text_value(value: object, limit: int) -> str | None:
     return value[:limit] if isinstance(value, str) and value else None
 
 
-def _completed_outputs(steps: list[RunStep], prefix: str, tool: str) -> list[RunStep]:
-    """接続 `prefix` の、成功した `tool` の step（新しい順）。"""
-    found: list[RunStep] = []
+def _completed_outputs(
+    steps: list[RunStep], prefix: str, tool: str
+) -> list[tuple[JsonObject, JsonObject]]:
+    """接続 `prefix` の、成功した `tool` の呼び出しの（引数, 出力）（新しい順）。"""
+    found: list[tuple[JsonObject, JsonObject]] = []
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not result.success or step.status != "completed":
@@ -166,7 +168,7 @@ def _completed_outputs(steps: list[RunStep], prefix: str, tool: str) -> list[Run
         if not isinstance(result.output, dict) or _connection_prefix(call.name) != prefix:
             continue
         if mcp_base_tool_name(call.name) == tool:
-            found.append(step)
+            found.append((call.arguments, result.output))
     return found
 
 
@@ -221,9 +223,7 @@ def connection_check_inputs(steps: list[RunStep], evidence_tool: str) -> JsonObj
     guide: JsonObject | None = None
     searches = _completed_outputs(steps, prefix, RAG_SEARCH)
     if searches:
-        step = searches[0]
-        assert step.tool_call is not None and step.tool_result is not None
-        output, arguments = step.tool_result.output or {}, step.tool_call.arguments
+        arguments, output = searches[0]
         requests = [
             {
                 "id": request_id,
@@ -248,10 +248,8 @@ def connection_check_inputs(steps: list[RunStep], evidence_tool: str) -> JsonObj
     if guide is None:
         lookups = _completed_outputs(steps, prefix, RAG_LOOKUP_GUIDES)
         if lookups:
-            step = lookups[0]
-            assert step.tool_call is not None and step.tool_result is not None
-            guides = (step.tool_result.output or {}).get("guides")
-            arguments = step.tool_call.arguments
+            arguments, output = lookups[0]
+            guides = output.get("guides")
             if isinstance(guides, list) and guides:
                 guide = _guide_input(
                     guides[0],
