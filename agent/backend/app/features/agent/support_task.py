@@ -225,12 +225,24 @@ def _labels(items: object) -> str:
     return "、".join(label for item in _records(items) if (label := _text(item.get("label"), 100)))
 
 
-def guide_check_note(output: JsonObject | None) -> JsonObject | None:
-    """Control Plane の業務ガイドの照合（`rag_lookup_guides`）の結果を、モデルへの短い案内にする。
+# 業務ガイドは答えの根拠ではない（手順・値は資料の根拠で確かめる。#1322）。
+GUIDE_IS_NOT_EVIDENCE = (
+    "業務ガイドは確かめる条件と手順の順を示すもので、資料の根拠ではありません。"
+    "手順・値は rag_retrieve_evidence（または rag_search）で資料の根拠を集めて確かめてから"
+    "答えてください。"
+)
+
+
+def guide_check_note(
+    output: JsonObject | None, *, evidence_gathered: bool = True
+) -> JsonObject | None:
+    """業務ガイドの照合（`rag_lookup_guides`）の結果を、モデルへの短い案内にする（#1322）。
 
     根拠を集めるだけの道具（`rag_retrieve_evidence`）は業務ガイド（確かめる条件・分岐・影響範囲）を
-    見ないので、モデルが業務ガイドを引かずに根拠を集めたとき、その結果に足す（#1322）。最上位の
-    業務ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。
+    見ないので、モデルが業務ガイドを引かずに根拠を集めたとき、Control Plane の照合の結果をその根拠の
+    結果に足す。モデルが自分で業務ガイドを引いたときも、次の手をその結果に足す（`evidence_gathered`
+    が False。答える判断なら、業務ガイドだけで答えず資料の根拠を集めるよう添える）。最上位の業務
+    ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。
     """
     guides = _records(output.get("guides")) if isinstance(output, dict) else []
     if not guides:
@@ -278,7 +290,7 @@ def guide_check_note(output: JsonObject | None) -> JsonObject | None:
             "instruction": (
                 f"業務ガイド「{title}」の条件（{_labels(guide.get('unknown_conditions'))}）が"
                 "分かっていません。断定せず、条件ごとに分けて、どの場合の手順かを示して答えて"
-                "ください。"
+                "ください。" + ("" if evidence_gathered else GUIDE_IS_NOT_EVIDENCE)
             ),
         }
     else:
@@ -295,6 +307,8 @@ def guide_check_note(output: JsonObject | None) -> JsonObject | None:
         )
         if impact:
             parts.append("影響範囲と、実施の前に承認が要るかを示してください。")
+        if not evidence_gathered:
+            parts.append(GUIDE_IS_NOT_EVIDENCE)
         next_step = {
             "action": NEXT_STEP_ANSWER_WITH_GUIDE,
             "reason": "guide_answer",

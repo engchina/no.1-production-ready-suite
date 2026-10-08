@@ -566,6 +566,9 @@ class _ToolRecorder:
     接続のツール）。`rag_search` が回答を確定できないと返したら、モデルへの結果に次の手
     （`next_step`）を足す（#1283。記録する step の結果は RAG の結果のまま）。
 
+    モデルが自分で `rag_lookup_guides` を呼んだときも、最上位の業務ガイドの判断から次の手
+    （`next_step`。答える判断なら資料の根拠を集めてから答える）を結果に足す（#1322）。
+
     業務ガイドの照合（#1322）: モデルが業務ガイド（`rag_lookup_guides`・`rag_search`）を引かずに
     `rag_retrieve_evidence` で根拠を集めたら、Control Plane が同じ接続の `rag_lookup_guides` を
     1 回呼び（step に残す。予算には数えない）、最上位の業務ガイドと次の手（条件が分からなければ
@@ -637,6 +640,11 @@ class _ToolRecorder:
                 note = await self.check_guides(name, call.arguments)
                 if note is not None:
                     output = {**output, "guide_check": note}
+            if base == RAG_LOOKUP_GUIDES and isinstance(output, dict):
+                # モデルが自分で引いた業務ガイドにも次の手を足す（業務ガイドだけで答えさせない）。
+                note = guide_check_note(output, evidence_gathered=False)
+                if note is not None:
+                    output = {**output, "next_step": note["next_step"]}
             return json.dumps(output, ensure_ascii=False, default=str)
         return json.dumps(
             {"error": result.error or "tool failed", "error_code": result.error_code},

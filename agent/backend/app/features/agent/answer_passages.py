@@ -99,6 +99,9 @@ _CITATION_LABEL = re.compile(
 )
 # Markdown の強調（「**根拠**：…」のラベル。出典の判定だけで外す）。
 _EMPHASIS = re.compile(r"\*\*|__|`")
+# 質問の直後の、選択肢を並べた行（「選択肢: **個別**、**グループ**」。#1322 の確認の質問の次の手は
+# 選択肢を添えさせる）。
+_OPTIONS_LINE = re.compile(r"^(?:選択肢|候補)\s*[:：]\s*\S")
 # 根拠の ID の括弧（【証拠 ID: 03ac…:1】・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】）。
 _EVIDENCE_REF = re.compile(
     r"【\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?"
@@ -437,9 +440,15 @@ def asks_environment_data(text: str) -> bool:
 
 
 def _is_option(text: str) -> bool:
-    """質問の直後の選択肢（短い箇条書き。文・操作の指示は除く）。"""
+    """質問の直後の選択肢（短い箇条書きか「選択肢: …」の行。文・操作の指示は除く）。"""
     if not _BULLET.match(text.strip()):
-        return False
+        value = _EMPHASIS.sub("", text).strip()
+        return (
+            bool(_OPTIONS_LINE.match(value))
+            and len(value) <= 80
+            and "。" not in value
+            and not _OPERATION.search(value)
+        )
     value = _strip_bullet(text)
     return (
         0 < len(value) <= 40

@@ -40,6 +40,7 @@ from app.features.agent.runtime import (
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import (
     GUIDE_CHECK_TRACE_PREFIX,
+    GUIDE_IS_NOT_EVIDENCE,
     guide_check_note,
     rag_next_step,
 )
@@ -224,6 +225,16 @@ def test_guide_check_note_turns_the_guide_decision_into_the_next_step() -> None:
     assert guide_check_note({"guides": []}) is None
     assert guide_check_note(None) is None
 
+    # モデルが自分で引いた業務ガイド（根拠を集める前）は、業務ガイドだけで答えさせない。
+    own = guide_check_note(
+        {"guides": [_access_guide("answer", {"target": "グループ"})]}, evidence_gathered=False
+    )
+    assert own is not None and GUIDE_IS_NOT_EVIDENCE in own["next_step"]["instruction"]
+    assert GUIDE_IS_NOT_EVIDENCE not in group["next_step"]["instruction"]
+    own_clarify = guide_check_note({"guides": [_access_guide("clarify")]}, evidence_gathered=False)
+    assert own_clarify is not None
+    assert own_clarify["next_step"]["action"] == "ask_clarification"
+
 
 def test_rag_search_asking_a_clarification_gets_the_question_first() -> None:
     output = {"outcome": "needs_clarification", "clarifications": [TARGET_QUESTION]}
@@ -302,8 +313,8 @@ def test_clarification_only_answer_after_the_guide_check_is_needs_clarification(
 def test_guide_is_not_checked_twice_or_after_the_model_looked_it_up(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    # モデルが自分で業務ガイドを引いたら、Control Plane は照合しない。
-    _script(
+    # モデルが自分で業務ガイドを引いたら、Control Plane は照合しない（引いた結果に次の手を足す）。
+    model = _script(
         monkeypatch,
         [
             function_call(
@@ -317,6 +328,9 @@ def test_guide_is_not_checked_twice_or_after_the_model_looked_it_up(
     )
     _run()
     assert len(mcp.calls_of("rag_lookup_guides")) == 1
+    own = _tool_output(model, 1, "call-lookup")
+    assert own["next_step"]["action"] == "ask_clarification"
+    assert "guide_check" not in _tool_output(model, 2, "call-evidence")
 
     # 根拠を 2 回集めても、照合は 1 回だけ。
     mcp.tool_calls.clear()

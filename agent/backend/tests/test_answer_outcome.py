@@ -740,6 +740,23 @@ def test_clarification_after_the_guide_asked_is_needs_clarification() -> None:
     assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
 
 
+def test_clarification_with_an_options_line_is_needs_clarification() -> None:
+    # #1320 の実環境の D の cr-grant-permission の回答（問いの後に「選択肢: …」の行）。
+    question = (
+        "権限の付与先は、個別の利用者ですか、グループですか？  \n選択肢: **個別**、**グループ**"
+    )
+    content = answer_outcome(
+        question, steps=[_retrieve(), _lookup("clarify", unknown=_TARGET_UNKNOWN)]
+    )
+    assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
+    # 選択肢の行でも、文・操作の指示は主張のまま。
+    for text in (
+        "権限の付与先は、個別の利用者ですか？\n選択肢: 個別を選んで「付与」を押してください。",
+        "権限の付与先は、個別の利用者ですか？\n候補: 個別には詳細画面の権限タブで付与します。",
+    ):
+        assert answer_outcome(text, steps=[_retrieve()])["value"] != "needs_clarification", text
+
+
 def test_guide_decision_before_a_later_rag_search_is_not_used() -> None:
     # 照合の後に条件を渡して rag_search で答えたら、rag_search の対応で決める。
     answer = "承認を得たアカウントは、詳細画面の「削除」から削除します。"
