@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -289,7 +290,7 @@ def parse_sheet_records(source_bytes: bytes) -> SheetRecordsDocument | None:
     return document
 
 
-def _block_text(block: SheetBlock, roles: dict[str, str] | None = None) -> str:
+def _block_text(block: SheetBlock, roles: Mapping[str, str] | None = None) -> str:
     if block.kind == "procedure_step":
         # 手順の行は前処理が役割の表示を付けた列名で作る。
         text = "\n".join(line for line in block.lines if line.strip())
@@ -303,7 +304,7 @@ def _block_text(block: SheetBlock, roles: dict[str, str] | None = None) -> str:
     return text[:_BLOCK_TEXT_MAX_CHARS]
 
 
-def _column_roles_metadata(roles: dict[str, str]) -> str | None:
+def _column_roles_metadata(roles: Mapping[str, str]) -> str | None:
     """要素の metadata に残す列の役割（``列名=役割`` を ``; `` でつなぐ）。
 
     要素の metadata は JSON の scalar だけを持てるので、1 つの文字列にする。
