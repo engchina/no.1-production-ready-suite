@@ -62,6 +62,8 @@ _FILE_NAME = re.compile(r"[^\s「」『』（）()【】\[\]、,，|]+\.(?:pdf|d
 # Markdown の表の区切りの行（`|---|:---:|`）と区切り線（`---`）。
 _TABLE_SEPARATOR = re.compile(r"\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?|\|?\s*:?-{3,}:?\s*|\*{3,}|_{3,}")
 _TABLE_ROW = re.compile(r"\|.*\|")
+# 記号だけの段落（「**」。強調の閉じが句点の後の段落に分かれたもの）。
+_MARKUP_ONLY = re.compile(r"[*_`>#|~\-\s]+")
 _DOCUMENT_MARK = re.compile(
     r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b|\bpage\b|\bp\.\s*\d|\bpp\.|ページ|頁|\bsection\b|\bsheet\b|シート|第\s*[0-9０-９]+\s*(?:章|節|条|項)",
     re.I)
@@ -69,14 +71,15 @@ _BRACKETED = re.compile(r"(?:[【\[（(][^】\]）)\n]{1,200}[】\]）)][\s、,�
 _BRACKET_PART = re.compile(r"[【\[（(]([^】\]）)\n]{1,200})[】\]）)]")
 _LINK_LINE = re.compile(r"(?:\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)[\s、,，]*)+|https?://\S+")
 _SENTENCE_END = re.compile(r"(?:ます|ません|です|でした|ました|ください|ない|無い|ある|する|できる|れる|った|いた|した|だ)[。．.!！]?$")
-_QUESTION = re.compile(r".*[？?]\s*(?:[（(][^）)\n]{1,40}[）)])?\s*。?")
+# 後ろの注記の括弧（「（はい／いいえ）」「【clarification: target】」）は許す (#1317)。
+_QUESTION = re.compile(r".*[？?]\s*(?:[（(【][^）)】\n]{1,40}[）)】]\s*)*。?")
 _INFO_REQUEST = re.compile(r".*(?:教えてください|お知らせください|お教えください|お聞かせください|ご回答ください|お答えください|確認させてください)[。．!！]?")
 _BUNDLED_CLAIM = re.compile(r"ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし")
 
 
 def is_table_rule(text: str) -> bool:
-    """Markdown の表の区切りの行（`|---|---|`）か区切り線（`---`）か (#1317)。"""
-    return bool(_TABLE_SEPARATOR.fullmatch(text.strip()))
+    """Markdown の表の区切りの行（`|---|---|`）・区切り線（`---`）・記号だけの段落（`**`）か (#1317)。"""
+    return bool(_TABLE_SEPARATOR.fullmatch(text.strip()) or _MARKUP_ONLY.fullmatch(text.strip()))
 
 
 def table_header_lines(text: str) -> set[str]:

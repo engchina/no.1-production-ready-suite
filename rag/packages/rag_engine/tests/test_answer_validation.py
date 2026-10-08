@@ -154,6 +154,8 @@ def test_new_non_claim_rules_keep_claims() -> None:
     assert is_non_claim_passage("（*portal-operations-manual.pdf*、セクション「3. アクセス権限の付与」）【証拠1】")
     assert is_non_claim_passage("- 「サンプル業務ポータル 運用手順書 第3版」 6. アカウントの削除")
     assert is_non_claim_passage("| :--- | ---: |")
+    assert is_non_claim_passage("**")
+    assert is_non_claim_passage("権限の付与先は、個別の利用者ですか、グループですか？【clarification: target】")
     # 表の見出しは区切りの行の直前の行だけ。
     assert table_header_lines("| 手順 | 内容 |\n| 1 | 開く |") == set()
     assert table_header_lines("| 手順 | 内容 |\n|---|---|\n| 1 | 開く |") == {"| 手順 | 内容 |"}

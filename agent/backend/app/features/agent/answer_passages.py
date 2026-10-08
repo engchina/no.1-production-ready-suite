@@ -145,7 +145,8 @@ _UNVERIFIED_SECTION = re.compile(
 )
 
 # 「？」で終わる質問（後ろの選択肢の括弧は許す）。
-_QUESTION = re.compile(r".*[？?]\s*(?:[（(][^）)\n]{1,40}[）)])?\s*[。]?")
+# 後ろの注記の括弧（「（はい／いいえ）」「【clarification: target】」。#1317）は許す。
+_QUESTION = re.compile(r".*[？?]\s*(?:[（(【][^）)】\n]{1,40}[）)】]\s*)*[。]?")
 # 情報を求める依頼の文（利用者に答えてもらう）。操作の依頼（「確認してください」など）は含めない。
 _REQUEST = re.compile(
     r".*(?:教えてください|教えていただけますか|お知らせください|お教えください|お聞かせください"
@@ -207,7 +208,16 @@ _ENVIRONMENT_TARGET = re.compile(
 _ENVIRONMENT_CHECK = re.compile(
     r"ご確認ください|(?:確認|照合|比較|突き合わせ|チェック)(?:して(?:ください|下さい|いただ)|します|し[、て])"
     r"|確か(?:めてください|めます|め[、て])"
+    r"|(?:確認|照合|比較|チェック)(?:する必要が(?:あります|ある)|が必要(?:です)?)"
+    r"|確かめる必要が(?:あります|ある)"
 )
+# 出典の行に無い述語（括弧の外にあれば文。「…は **毎月 10 日** です（…）【….pdf】.」。#1317）。
+_PREDICATE_IN = re.compile(r"です|ます|ません|でした|ました|ください")
+_BRACKETS_ANY = re.compile(r"[（(【\[「『][^（()）【】\[\]「」『』\n]*[）)】\]」』]")
+# 括弧で囲まれた段落（「（根拠：検索結果に…記述は含まれていません）」。#1317）。
+_ENCLOSED = re.compile(r"[（(](?P<inner>[^\n]+)[）)]")
+# 記号だけの段落（「**」「---」「>」。強調の閉じが句点の後の段落に分かれたもの。#1317）。
+_MARKUP_ONLY = re.compile(r"[*_`>#|~\-\s]+")
 
 
 def _strip_bullet(text: str) -> str:
@@ -247,9 +257,20 @@ def is_structure(text: str) -> bool:
 
 
 def is_table_rule(text: str) -> bool:
-    """Markdown の表の区切りの行（`|---|---|`）か区切り線（`---`）か（#1317）。"""
+    """表の区切りの行（`|---|---|`）・区切り線（`---`）・記号だけの段落（`**`）か（#1317）。"""
     value = text.strip()
-    return bool(_TABLE_SEPARATOR.fullmatch(value) or _RULE.fullmatch(value))
+    return bool(
+        _TABLE_SEPARATOR.fullmatch(value) or _RULE.fullmatch(value) or _MARKUP_ONLY.fullmatch(value)
+    )
+
+
+def _outside_brackets(value: str) -> str:
+    """括弧（（）【】「」[]）の中を除いた文字列。"""
+    while True:
+        stripped = _BRACKETS_ANY.sub(" ", value)
+        if stripped == value:
+            return value
+        value = stripped
 
 
 def _table_cells(line: str) -> list[str]:
@@ -331,6 +352,9 @@ def is_citation(text: str) -> bool:
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
     if not value or "。" in value.rstrip("。"):
         return False
+    # 括弧の外に述語があれば文（出典を添えた主張）。
+    if _PREDICATE_IN.search(_outside_brackets(value)):
+        return False
     label = _CITATION_LABEL.fullmatch(value)
     if label:
         return not _is_sentence(label.group("rest")) and not _OPERATION.search(label.group("rest"))
@@ -356,9 +380,13 @@ def is_question(text: str) -> bool:
 def is_absence(text: str) -> bool:
     """資料に記載が無い・資料からは確かめられないことだけを述べる文か、答えられないと言い切る拒答の文か。
 
-    強調（`**…**`）と文末の補足の括弧は判定の前に外す（#1317）。
+    強調（`**…**`）・段落を囲む括弧・文末の補足の括弧は判定の前に外す（#1317）。
     """
-    value = _TRAILING_NOTE.sub("", _EMPHASIS.sub("", _strip_bullet(text)))
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    enclosed = _ENCLOSED.fullmatch(value)
+    if enclosed:
+        value = enclosed.group("inner").strip()
+    value = _TRAILING_NOTE.sub("", value)
     absent = (
         (_ABSENCE_SUBJECT.search(value) and _ABSENCE_END.search(value))
         or (_NOT_FOUND_SUBJECT.search(value) and _NOT_FOUND_END.search(value))

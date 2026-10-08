@@ -566,3 +566,64 @@ def test_answer_split_into_branches_without_asking_is_conditional() -> None:
 def test_case_label_is_only_a_heading_or_a_leading_label(text: str) -> None:
     labels = case_labels(text)
     assert labels == ({"削除した場合"} if text == "削除した場合" else set())
+
+
+def test_clarification_question_with_an_annotation_is_needs_clarification() -> None:
+    # cr-grant-permission（2 回目の実行）: 質問の後ろの「【clarification: target】」の注記で、
+    # 確認の質問と見なかった。
+    answer = "権限の付与先は、個別の利用者ですか、グループですか？【clarification: target】"
+    assert _outcome(answer, [_step("rag__rag_lookup_guides", {"guides": []})]) == (
+        "needs_clarification",
+        "clarification_question",
+    )
+
+
+def test_need_to_check_the_log_is_a_data_confirmation() -> None:
+    # ed-error-e1023-cause（2 回目の実行）: 「認証ログ…の記述を確認する必要があります」
+    # 「認証ログの確認が必要です」で結んだ回答。
+    answer = "\n".join(
+        [
+            "エラー **E‑1023**（「処理を続行できません」）の原因は次の 2 つのいずれかです。",
+            "",
+            "1. **認証トークンの期限切れ**（原因 A）  ",
+            "2. **操作対象に対する権限不足**（原因 B）  ",
+            "",
+            "※画面だけではどちらかは判断できず、サーバーの認証ログ（auth.log）で"
+            "「`token expired`」か「`permission denied`」の記述を確認する必要があります。  ",
+            "",
+            "以上が、資料に基づくエラー E‑1023 の原因です。※具体的にどちらかを確定するには、"
+            "認証ログの確認が必要です。",
+        ]
+    )
+    validation = _validated(answer, *_verdicts(answer, {}))
+    content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["data_confirmation"])
+
+
+def test_enclosed_absence_and_a_stray_emphasis_mark_are_not_claims() -> None:
+    # km-password-policy（2 回目の実行）: 「（根拠：検索結果に…記述は含まれていません）」と、
+    # 句点の後に分かれた強調の閉じ「**」。
+    answer = "\n".join(
+        [
+            "資料を検索しましたが、パスワードの文字数要件に関する記載は見つかりませんでした。  ",
+            "**→ 資料で確かめられませんでした。**  ",
+            "",
+            "（根拠：検索結果にパスワード長に関する記述は含まれていません）",
+        ]
+    )
+    validation = _validated(answer, *_verdicts(answer, {"**": "unassessed"}))
+    assert validation["withheld"]["claims"] == 0
+    content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("insufficient_evidence", ["absence"])
+
+
+def test_a_claim_with_a_file_citation_is_still_a_claim() -> None:
+    # cs-closing-day（2 回目の実行）: 句点ではなく「.」で終わる、出典を添えた主張の 1 文が
+    # 出典の行と判定され、主張が無い（拒答）になった。
+    answer = (
+        "地域別集計表の締め日は **毎月 10 日** です（第1版の毎月 5 日から変更されています）"
+        "【regional-report-guide-v2.pdf, 「地域別集計表 出力手順 第2版」 > 「1. 締め日」】."
+    )
+    validation = _validated(answer, _claim(answer, "supported"))
+    assert validation["result"]["claims"][0].get("non_claim") is None
+    assert _outcome(answer, [_retrieve()], validation) == ("answered", "answer_passages")
