@@ -661,9 +661,12 @@ def test_mcp_connection_tools_are_given_to_the_model(
     assert call["claims"]["aud"] == "rag"
     assert call["claims"]["run_id"] == run_id
     assert call["arguments"] == {"query": "契約の更新条件"}
-    [step] = run.steps
+    # 最後の step は、Control Plane が RAG の根拠で回答を確かめる検証（既定 on。#1277）。
+    [step, validation] = run.steps
     assert step.tool_call is not None and step.tool_call.name == "rag__rag_search"
     assert step.status == "completed"
+    assert validation.tool_call is not None
+    assert validation.tool_call.name == "rag__rag_validate_answer"
     # RAG の結果は根拠の成果物として残る。
     evidence = next(item for item in run.artifacts if item.kind == "rag_evidence")
     assert evidence.content["evidence"][0]["file_name"] == "契約書.pdf"

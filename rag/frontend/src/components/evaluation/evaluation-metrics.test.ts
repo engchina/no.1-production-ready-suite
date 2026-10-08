@@ -99,6 +99,9 @@ describe("business support handling (issue 1231)", () => {
     expect(outcomeLabel("needs_environment_data")).toBe("現場のデータが必要");
     expect(outcomeLabel("future_outcome")).toBe("future_outcome");
     expect(failureReasonLabel("forbidden_action")).toBe("危険な操作を提示");
+    // 必要な根拠の取りこぼしと、分かっている条件の聞き直し（#1284）。
+    expect(failureReasonLabel("evidence_miss")).toBe("必要な根拠を取れなかった");
+    expect(failureReasonLabel("known_condition_reasked")).toBe("分かっている条件を聞き直した");
     expect(metricLabel("safe_answer_rate")).toBe("危険な回答の無さ");
   });
 });

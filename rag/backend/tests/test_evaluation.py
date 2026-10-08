@@ -181,7 +181,11 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "step_order_score": 0,
         "safe_answer_rate": 0,
         "condition_coverage": 0,
+        # 参考の集計（#1284）。必要な根拠の無いケースだけなので測らない。
+        "required_evidence_recall": 0,
     }
+    assert metrics.required_evidence_recall is None
+    assert metrics.split_breakdown == {}
     assert metrics.passed is True
     assert metrics.threshold_failures == []
     assert metrics.failure_reason_counts == {}
@@ -1629,7 +1633,7 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
 async def test_profile_evaluation_resolves_each_case_through_the_profile() -> None:
     seen: list[tuple[str | None, str]] = []
 
-    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+    async def resolver(request: Any, settings: Any, guide_context: Any) -> tuple[Any, Any]:
         seen.append((request.search_answer_profile_id, request.query))
         return request.model_copy(update={"knowledge_base_ids": ["kb-profile"]}), settings
 
@@ -1649,7 +1653,7 @@ async def test_profile_evaluation_resolves_each_case_through_the_profile() -> No
 async def test_profile_resolution_failure_fails_only_that_case() -> None:
     from fastapi import HTTPException
 
-    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+    async def resolver(request: Any, settings: Any, guide_context: Any) -> tuple[Any, Any]:
         raise HTTPException(status_code=409, detail="アーカイブ済み")
 
     runner = EvaluationRunner(pipeline=StubPipeline(), profile_resolver=resolver)
@@ -1695,3 +1699,335 @@ def test_clarification_is_not_a_refusal_or_retrieval_miss() -> None:
     assert is_abstained(_response_with_outcome("answered", citations=True)) is False
     # 対応を持たない古い記録は、引用が無ければ拒答（今までどおり）。
     assert is_abstained(_response_with_outcome(None, citations=False)) is True
+
+
+# ---- 既知の条件・往復・別解・区分・必要な根拠（#1284） --------------------------------------
+
+
+def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() -> None:
+    case = EvaluationCase.model_validate(
+        {
+            "id": "mt",
+            "query": "アクセス権限を付与したい",
+            "split": "holdout",
+            "conditions": {" target ": " 個別 ", "empty": " "},
+            "expected_steps": ["詳細画面", "付与"],
+            "acceptable_alternatives": [["権限タブ", "付与"], [" ", ""]],
+            "required_evidence": [
+                {"id": "e1", "document_id": "file:manual.pdf", "text": " 個別の利用者 "},
+                {"id": "e2", "document_id": " ", "text": "付与"},
+            ],
+            "turns": [
+                {
+                    "reply": "  個別の利用者です ",
+                    "conditions": {"approved": "はい"},
+                    "expected_outcomes": ["answered"],
+                }
+            ],
+        }
+    )
+    assert case.split == "holdout"
+    assert case.conditions == {"target": "個別"}
+    assert case.acceptable_alternatives == [["権限タブ", "付与"]]
+    assert case.turns[0].reply == "個別の利用者です"
+    assert case.required_evidence[0].text == "個別の利用者"
+    assert case.required_evidence[1].document_id is None
+    assert case.all_condition_ids() == {"target", "approved"}
+    # 根拠だけのケースも答えるべき質問とみなす。
+    assert EvaluationCase(
+        id="e", query="q", required_evidence=[{"id": "e1", "text": "x"}]
+    ).expects_answer
+    # 既存の評価セット（新しい欄なし）はそのまま読める。
+    legacy = EvaluationCase(id="old", query="q")
+    assert (legacy.split, legacy.conditions, legacy.turns, legacy.required_evidence) == (
+        None,
+        {},
+        [],
+        [],
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"split": "train"},
+        {"acceptable_alternatives": [["付与"]]},
+        {"turns": [{"reply": "はい", "unknown": 1}]},
+        {"turns": [{"reply": " "}]},
+        {"turns": [{"reply": "はい"}] * 6},
+        {"required_evidence": [{"id": "e", "text": "a"}, {"id": "e", "text": "b"}]},
+        {
+            "conditions": {f"c{i}": "v" for i in range(20)},
+            "turns": [{"reply": "r", "conditions": {f"t{i}": "v" for i in range(11)}}],
+        },
+    ],
+    ids=[
+        "unknown-split",
+        "alternatives-without-steps",
+        "turn-extra-field",
+        "blank-reply",
+        "too-many-turns",
+        "duplicate-evidence",
+        "too-many-conditions",
+    ],
+)
+def test_case_schema_rejects_invalid_contract(payload: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        EvaluationCase.model_validate({"id": "x", "query": "q", **payload})
+
+
+def test_nfkc_matching_ignores_width_case_and_whitespace() -> None:
+    from app.rag.evaluation_handling import (
+        best_step_order_score,
+        contains_normalized,
+        forbidden_hits,
+    )
+
+    answer = "ＡＵＴＨ．ＬＯＧ を確認し、\n すぐに　削除して ください。"
+    assert forbidden_hits(answer, ["すぐに削除してください", "auth.log", "承認は不要"]) == [
+        "すぐに削除してください",
+        "auth.log",
+    ]
+    assert contains_normalized("最長 ３０ 日です", "最長30日")
+    assert not contains_normalized("本文", " ")
+    # 別解のうち、いちばん点の高い列で採点する（同点なら期待する手順）。
+    text = "再ログインしてください。"
+    assert best_step_order_score(text, [["ログアウト", "ログインし直"], ["再ログイン"]]) == (
+        1.0,
+        [],
+    )
+    assert best_step_order_score(text, [["ログアウト"], ["サインアウト"]]) == (0.0, ["ログアウト"])
+    assert best_step_order_score(text, []) == (1.0, [])
+
+
+def _turn_response(
+    request: SearchRequest,
+    trace_id: str,
+    *,
+    answer: str,
+    outcome: str,
+    citations: Sequence[RetrievedChunk] = (),
+    clarifications: Sequence[str] = (),
+) -> SearchResponse:
+    details: dict[str, Any] = {"outcome": outcome, "insufficient_reason": ""}
+    if clarifications:
+        details["envelope"] = {
+            "clarifications": [{"condition_id": item} for item in clarifications]
+        }
+    return SearchResponse(
+        answer=answer,
+        citations=list(citations),
+        trace_id=trace_id,
+        elapsed_ms=10.0,
+        diagnostics=SearchDiagnostics(answer=details),
+    )
+
+
+class ConversationPipeline:
+    """最初の質問には確認の質問、返答には根拠付きの回答を返す（会話の履歴と条件を記録する）。"""
+
+    def __init__(self, *, reask: bool = False, fail_on_turn: int | None = None) -> None:
+        self.reask = reask
+        self.fail_on_turn = fail_on_turn
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
+        *,
+        history: Sequence[Any] | None = None,
+    ) -> SearchResponse:
+        assert trace_id
+        turn = len(history or []) // 2
+        self.calls.append(
+            {
+                "query": request.query,
+                "conditions": dict(request.conditions),
+                "history": [(item.role, item.content) for item in history or []],
+                "trace_id": trace_id,
+            }
+        )
+        if turn == self.fail_on_turn:
+            raise RuntimeError("boom")
+        if turn == 0:
+            return _turn_response(
+                request,
+                trace_id,
+                answer="権限は個別の利用者とグループのどちらに付けますか？",
+                outcome="needs_clarification",
+                clarifications=["target"],
+            )
+        return _turn_response(
+            request,
+            trace_id,
+            answer=(
+                "どちらに付けますか？"
+                if self.reask
+                else "利用者の詳細画面の「権限」タブで付与します。"
+            ),
+            outcome="needs_clarification" if self.reask else "answered",
+            clarifications=["target"] if self.reask else (),
+            citations=[
+                RetrievedChunk(
+                    document_id="doc-manual",
+                    chunk_id="doc-manual:3",
+                    text="個別の利用者に付与する場合: 利用者の詳細画面の「権限」タブ",
+                    score=1.0,
+                )
+            ],
+        )
+
+
+def _multi_turn_case(**overrides: Any) -> EvaluationCase:
+    payload: dict[str, Any] = {
+        "id": "mt-grant",
+        "query": "アクセス権限を付与したい",
+        "category": "clarification_required",
+        "split": "dev",
+        "relevant_document_ids": ["doc-manual"],
+        "conditions": {"scope": "本番"},
+        "expected_outcomes": ["needs_clarification"],
+        "required_conditions": ["個別", "グループ"],
+        "required_evidence": [
+            {"id": "grant-individual", "document_id": "doc-manual", "text": "個別の利用者に付与"},
+            {"id": "other-doc", "document_id": "doc-other", "text": "個別の利用者"},
+        ],
+        "turns": [
+            {
+                "reply": "個別の利用者に付けます",
+                "conditions": {"target": "個別"},
+                "expected_outcomes": ["answered", "conditional"],
+                "expected_steps": ["権限タブ", "付与"],
+                "acceptable_alternatives": [["詳細画面", "付与"]],
+                "forbidden_phrases": ["グループに付与してください"],
+            }
+        ],
+    }
+    payload.update(overrides)
+    return EvaluationCase.model_validate(payload)
+
+
+async def test_runner_sends_conditions_and_runs_turns_in_order_with_history() -> None:
+    pipeline = ConversationPipeline()
+    metrics = await EvaluationRunner(pipeline=pipeline).run(cases=[_multi_turn_case()], top_k=5)
+
+    first, second = pipeline.calls
+    # 最初の質問は既知の条件だけ、返答は前の往復の履歴と、足した条件で送る。
+    assert (first["query"], first["conditions"], first["history"]) == (
+        "アクセス権限を付与したい",
+        {"scope": "本番"},
+        [],
+    )
+    assert second["query"] == "個別の利用者に付けます"
+    assert second["conditions"] == {"scope": "本番", "target": "個別"}
+    assert second["history"] == [
+        ("USER", "アクセス権限を付与したい"),
+        ("ASSISTANT", "権限は個別の利用者とグループのどちらに付けますか？"),
+    ]
+    assert first["trace_id"] != second["trace_id"]
+
+    result = metrics.case_results[0]
+    assert result.status == "success"
+    assert [turn.turn for turn in result.turn_results] == [0, 1]
+    clarify, answer = result.turn_results
+    assert (clarify.observed_outcome, clarify.handling_correct) == ("needs_clarification", True)
+    assert clarify.condition_coverage == 1.0
+    # 最初の質問で聞いた target は、まだ渡していない条件なので聞き直しではない。
+    assert clarify.reasked_conditions == []
+    # 「権限タブ」は「「権限」タブ」と一致しないが、別解（詳細画面 → 付与）で満点になる。
+    assert (answer.handling_correct, answer.step_order_score) == (True, 1.0)
+    assert answer.forbidden_checked and answer.forbidden_hits == []
+    # ケースの採点: 対応はすべての往復で正しい、検索・根拠は最後の回答で測る。
+    assert result.observed_outcome == "answered"
+    assert result.handling_correct is True
+    assert result.trace_id == second["trace_id"]
+    assert result.context_recall == 1.0
+    assert result.elapsed_ms == 20.0
+    assert (result.evidence_recall, result.missing_evidence) == (0.5, ["other-doc"])
+    assert result.failure_reasons == ["evidence_miss"]
+    assert metrics.required_evidence_recall == 0.5
+    assert metrics.metric_case_counts["required_evidence_recall"] == 1
+    assert metrics.handling_accuracy == 1.0
+
+
+async def test_runner_flags_reasked_known_condition() -> None:
+    metrics = await EvaluationRunner(pipeline=ConversationPipeline(reask=True)).run(
+        cases=[_multi_turn_case()], top_k=5
+    )
+    result = metrics.case_results[0]
+    assert result.turn_results[1].reasked_conditions == ["target"]
+    assert result.reasked_conditions == ["target"]
+    assert result.handling_correct is False
+    assert {"known_condition_reasked", "unexpected_handling"} <= set(result.failure_reasons)
+
+
+async def test_runner_turn_failure_fails_the_case() -> None:
+    metrics = await EvaluationRunner(pipeline=ConversationPipeline(fail_on_turn=1)).run(
+        cases=[_multi_turn_case()], top_k=5
+    )
+    assert metrics.error_count == 1
+    result = metrics.case_results[0]
+    assert (result.status, result.split, result.failure_reasons) == ("error", "dev", ["case_error"])
+
+
+async def test_profile_evaluation_passes_prior_questions_as_guide_context() -> None:
+    seen: list[tuple[str, list[str], dict[str, str]]] = []
+
+    async def resolver(request: Any, settings: Any, guide_context: Any) -> tuple[Any, Any]:
+        seen.append((request.query, list(guide_context), dict(request.conditions)))
+        return request, settings
+
+    runner = EvaluationRunner(pipeline=ConversationPipeline(), profile_resolver=resolver)
+    await runner.run(cases=[_multi_turn_case()], top_k=5, search_answer_profile_id="bv-1")
+    assert seen == [
+        ("アクセス権限を付与したい", [], {"scope": "本番"}),
+        (
+            "個別の利用者に付けます",
+            ["アクセス権限を付与したい"],
+            {"scope": "本番", "target": "個別"},
+        ),
+    ]
+
+
+async def test_split_breakdown_reports_metrics_per_split() -> None:
+    cases = [
+        EvaluationCase(id="d1", query="承認条件", split="dev", expected_answer_keywords=["120000"]),
+        EvaluationCase(id="d2", query="承認条件", split="dev", expected_answer_keywords=["999"]),
+        EvaluationCase(
+            id="h1", query="承認条件", split="holdout", expected_answer_keywords=["120000"]
+        ),
+        EvaluationCase(id="u1", query="承認条件", expected_answer_keywords=["999"]),
+    ]
+    metrics = await EvaluationRunner(pipeline=StubPipeline()).run(cases=cases, top_k=5)
+
+    assert set(metrics.split_breakdown) == {"dev", "holdout", "unassigned"}
+    dev = metrics.split_breakdown["dev"]
+    assert (dev.case_count, dev.error_count) == (2, 0)
+    assert dev.metrics["answer_keyword_hit_rate"] == 0.5
+    assert dev.metric_case_counts["answer_keyword_hit_rate"] == 2
+    assert dev.failure_reason_counts == {"answer_keyword_miss": 1}
+    assert metrics.split_breakdown["holdout"].metrics["answer_keyword_hit_rate"] == 1.0
+    assert metrics.split_breakdown["unassigned"].metrics["answer_keyword_hit_rate"] == 0.0
+    assert [result.split for result in metrics.case_results] == ["dev", "dev", "holdout", None]
+    # 区分の無い評価セットでは内訳を出さない。
+    plain = await EvaluationRunner(pipeline=StubPipeline()).run(
+        cases=[EvaluationCase(id="p", query="承認条件")], top_k=5
+    )
+    assert plain.split_breakdown == {}
+
+
+def test_trend_includes_split_breakdown_and_evidence_recall() -> None:
+    from app.rag.evaluation_cli import _metrics_trend
+    from app.schemas.evaluation import EvaluationSplitSummary
+
+    trend = _metrics_trend(
+        EvaluationMetrics(
+            case_count=1,
+            required_evidence_recall=0.5,
+            split_breakdown={"holdout": EvaluationSplitSummary(case_count=1, metrics={"mrr": 1.0})},
+        )
+    )
+    assert trend["required_evidence_recall"] == 0.5
+    assert trend["split_breakdown"]["holdout"]["metrics"] == {"mrr": 1.0}
