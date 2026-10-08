@@ -44,7 +44,7 @@ _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
     "unstructured": ("rag_parser_unstructured_enabled",),
     "mineru": (
         "rag_parser_mineru_enabled",
-        "rag_parser_mineru_language",
+        "rag_parser_mineru_tier",
     ),
     "dots_ocr": (
         "rag_parser_dots_ocr_enabled",

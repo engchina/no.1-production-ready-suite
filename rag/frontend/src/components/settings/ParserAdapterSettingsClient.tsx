@@ -971,11 +971,11 @@ function focusConnectionError(key: string) {
 }
 
 function externalProtocol(backend: ExternalParserBackendName) {
-  return backend === "mineru" ? "mineru_file_parse" : "openai_chat_completions";
+  return backend === "mineru" ? "mineru_v1" : "openai_chat_completions";
 }
 
 function connectionProtocolLabel(protocol: string) {
-  return protocol === "mineru_file_parse" ? "MinerU /file_parse" : "OpenAI /v1/chat/completions";
+  return protocol === "mineru_v1" ? "MinerU /v1/parse/jobs" : "OpenAI /v1/chat/completions";
 }
 
 function externalEndpointPlaceholder(backend: ExternalParserBackendName) {

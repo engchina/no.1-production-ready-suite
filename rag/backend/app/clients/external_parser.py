@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import logging
 import math
-from collections.abc import Callable, Iterable, Iterator
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import batched
 from typing import Any, Literal, cast
+from urllib.parse import urljoin
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
@@ -20,12 +23,18 @@ from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
-from app.schemas.document import SourceProfile
+from app.schemas.document import SourceModality, SourceProfile
 
 logger = logging.getLogger(__name__)
 
 ExternalParserBackend = Literal["mineru", "dots_ocr"]
-ExternalParserProtocol = Literal["mineru_file_parse", "openai_chat_completions"]
+ExternalParserProtocol = Literal["mineru_v1", "openai_chat_completions"]
+# MinerU の V1 の parse job（#1329）。ポーリングの待ちと時計はテストで差し替える（待たない）。
+MINERU_TERMINAL_JOB_STATUSES = frozenset({"completed", "partial", "failed", "canceled"})
+MINERU_POLL_INTERVAL_SECONDS = 2.0
+MINERU_MAX_DOWNLOAD_REDIRECTS = 3
+_poll_sleep: Callable[[float], None] = time.sleep
+_poll_clock: Callable[[], float] = time.monotonic
 ExternalParserStatusValue = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
 ]
@@ -125,10 +134,10 @@ class ExternalParserClient:
                 warning_code="external_parser_unconfigured",
             )
         try:
-            if connection.protocol == "mineru_file_parse":
+            if connection.protocol == "mineru_v1":
                 payload = self._request_json(
                     "GET",
-                    f"{connection.endpoint}/health",
+                    f"{connection.endpoint}/v1/health",
                     connection,
                     timeout=self._settings.rag_service_status_probe_timeout_seconds,
                 )
@@ -221,52 +230,150 @@ class ExternalParserClient:
         content_type: str,
         connection: ExternalParserConnection,
     ) -> tuple[object, list[ExtractionPage]]:
+        """MinerU 4.x の V1 API で解析する（#1329）。
+
+        upload → complete → parse job → 終了状態までポーリング → Middle JSON の取得の順に呼ぶ。
+        3.x までの ``/file_parse`` は 4.0 で削除されたため呼ばない。Middle JSON は
+        content list と同じ形の扁平な block へ写し、共通の抽出の変換に渡す。
+        """
         name = source_profile.sanitized_file_name if source_profile else "upload"
-        payload = self._request_json(
+        mime_type = content_type or "application/octet-stream"
+        file_id = self._mineru_upload(source_bytes, name, mime_type, connection)
+        tier = _mineru_tier(self._settings.rag_parser_mineru_tier, source_profile)
+        job = self._request_json(
             "POST",
-            f"{connection.endpoint}/file_parse",
+            f"{connection.endpoint}/v1/parse/jobs",
             connection,
-            files={"files": (name, source_bytes, content_type or "application/octet-stream")},
-            data={
-                "lang_list": self._settings.rag_parser_mineru_language,
-                "backend": "pipeline",
-                "effort": "medium",
-                "parse_method": "auto",
-                "formula_enable": "true",
-                "table_enable": "true",
-                "return_md": "true",
-                "return_content_list": "true",
-                "return_images": "false",
+            json={
+                "files": [{"source": {"type": "file_id", "file_id": file_id}}],
+                "tier": tier,
+                "output_formats": ["middle_json"],
             },
         )
-        results = payload.get("results") if isinstance(payload, dict) else None
-        if not isinstance(results, dict) or not results:
-            raise ValueError("mineru results is empty")
-        document = next(iter(results.values()))
-        if not isinstance(document, dict):
-            raise ValueError("mineru result is invalid")
-        blocks = document.get("content_list") or []
-        if isinstance(blocks, str):
-            blocks = json.loads(blocks)
-        rendered: list[dict[str, object]] = []
-        if isinstance(blocks, list):
-            for block in blocks:
-                if not isinstance(block, dict):
-                    continue
-                rendered_block = dict(block)
-                rendered_block["page_number"] = _positive_int(block.get("page_idx"), offset=1)
-                text = _mineru_block_text(block)
-                if text:
-                    rendered_block["text"] = text
-                if block.get("table_body"):
-                    rendered_block["text_as_html"] = str(block["table_body"])
-                rendered.append(rendered_block)
-        if rendered:
-            return rendered, _pages_from_elements(rendered)
-        markdown = str(document.get("md_content") or "").strip()
-        if not markdown:
+        job = self._mineru_wait_job(job, connection)
+        middle_file_id = _mineru_output_file_id(job)
+        middle_json = self._mineru_download_json(middle_file_id, connection)
+        rendered = mineru_middle_json_blocks(middle_json)
+        if not rendered:
             raise ValueError("mineru output is empty")
-        return markdown, []
+        return rendered, _pages_from_elements(rendered)
+
+    def _mineru_upload(
+        self,
+        source_bytes: bytes,
+        name: str,
+        mime_type: str,
+        connection: ExternalParserConnection,
+    ) -> str:
+        """原本を upload し、File の id を返す。同じ内容が既知なら本体の送信を省く。"""
+        sha256sum = hashlib.sha256(source_bytes).hexdigest()
+        upload = _mapping(
+            self._request_json(
+                "POST",
+                f"{connection.endpoint}/v1/uploads",
+                connection,
+                json={
+                    "filename": name,
+                    "bytes": len(source_bytes),
+                    "mime_type": mime_type,
+                    "sha256sum": sha256sum,
+                },
+            )
+        )
+        if upload.get("status") == "completed":
+            return _required_text(_mapping(upload.get("file")).get("id"), "mineru file id")
+        upload_id = _required_text(upload.get("id"), "mineru upload id")
+        upload_url = urljoin(
+            f"{connection.endpoint}/",
+            _required_text(upload.get("upload_url"), "mineru upload url"),
+        )
+        headers = {
+            str(key): str(value) for key, value in _mapping(upload.get("upload_headers")).items()
+        }
+        self._request(
+            str(upload.get("upload_method") or "PUT"),
+            upload_url,
+            connection,
+            # 別 origin の upload URL（署名付き URL）へ MinerU の API key を送らない。
+            send_api_key=_same_origin(upload_url, connection.endpoint),
+            headers=headers,
+            content=source_bytes,
+        )
+        completed = _mapping(
+            self._request_json(
+                "POST",
+                f"{connection.endpoint}/v1/uploads/{upload_id}/complete",
+                connection,
+                json={"sha256sum": sha256sum},
+            )
+        )
+        return _required_text(_mapping(completed.get("file")).get("id"), "mineru file id")
+
+    def _mineru_wait_job(
+        self, job: object, connection: ExternalParserConnection
+    ) -> Mapping[str, object]:
+        """parse job を終了状態まで待つ。時間切れは job を取り消して timeout にする。"""
+        current = _mapping(job)
+        job_id = _required_text(current.get("job_id"), "mineru job id")
+        deadline = _poll_clock() + float(self._settings.rag_parser_mineru_job_timeout_seconds)
+        while str(current.get("status") or "") not in MINERU_TERMINAL_JOB_STATUSES:
+            if _poll_clock() >= deadline:
+                self._mineru_cancel_job(current, job_id, connection)
+                raise ExternalParserCallError(
+                    "timeout", warning_code=f"{connection.backend}_external_timeout"
+                )
+            _poll_sleep(MINERU_POLL_INTERVAL_SECONDS)
+            current = _mapping(
+                self._request_json(
+                    "GET", f"{connection.endpoint}/v1/parse/jobs/{job_id}", connection
+                )
+            )
+        status = str(current.get("status"))
+        if status == "canceled":
+            raise ExternalParserCallError(
+                "job_canceled", warning_code=f"{connection.backend}_external_job_canceled"
+            )
+        if status == "failed":
+            raise ExternalParserCallError(
+                "job_failed", warning_code=f"{connection.backend}_external_job_failed"
+            )
+        return current
+
+    def _mineru_cancel_job(
+        self,
+        job: Mapping[str, object],
+        job_id: str,
+        connection: ExternalParserConnection,
+    ) -> None:
+        cancel = _mapping(job.get("links")).get("cancel")
+        url = urljoin(
+            f"{connection.endpoint}/",
+            str(cancel or f"/v1/parse/jobs/{job_id}/cancel"),
+        )
+        try:
+            self._request(
+                "POST", url, connection, send_api_key=_same_origin(url, connection.endpoint)
+            )
+        except ExternalParserCallError:
+            # 取り消しは後始末。失敗しても時間切れの扱いは変えない。
+            logger.warning(
+                "mineru_job_cancel_failed",
+                extra={"parser_backend": connection.backend, "job_id": job_id},
+            )
+
+    def _mineru_download_json(self, file_id: str, connection: ExternalParserConnection) -> object:
+        """出力の File を取得する。302 の転送先が別 origin なら API key を付けない。"""
+        url = f"{connection.endpoint}/v1/files/{file_id}/content"
+        send_api_key = True
+        for _ in range(MINERU_MAX_DOWNLOAD_REDIRECTS + 1):
+            response = self._request(
+                "GET", url, connection, send_api_key=send_api_key, redirect_response=True
+            )
+            if not response.is_redirect:
+                return response.json()
+            url = urljoin(url, response.headers.get("location", ""))
+            send_api_key = _same_origin(url, connection.endpoint)
+        raise ValueError("mineru download redirected too many times")
 
     def _parse_dots(
         self,
@@ -399,17 +506,24 @@ class ExternalParserClient:
             raise ValueError("openai message is invalid")
         return _message_text(message.get("content"))
 
-    def _request_json(
+    def _request(
         self,
         method: str,
         url: str,
         connection: ExternalParserConnection,
         *,
         timeout: float | None = None,
+        send_api_key: bool = True,
+        redirect_response: bool = False,
         **kwargs: Any,
-    ) -> object:
+    ) -> httpx.Response:
+        """外部 parser へ 1 回の request を送る（失敗は ExternalParserCallError にそろえる）。
+
+        ``send_api_key=False`` は別 origin の URL（署名付きの upload / download の URL）用。
+        ``redirect_response=True`` は 3xx を失敗にせず返し、転送先の扱いを呼び出し側に任せる。
+        """
         headers = dict(kwargs.pop("headers", {}) or {})
-        if connection.api_key:
+        if send_api_key and connection.api_key:
             headers["Authorization"] = f"Bearer {connection.api_key}"
         try:
             with httpx.Client(
@@ -428,8 +542,9 @@ class ExternalParserClient:
                     headers=headers,
                     **kwargs,
                 )
-                response.raise_for_status()
-                return response.json()
+                if not (redirect_response and response.is_redirect):
+                    response.raise_for_status()
+                return response
         except httpx.TimeoutException as exc:
             raise ExternalParserCallError(
                 "timeout", warning_code=f"{connection.backend}_external_timeout"
@@ -444,6 +559,19 @@ class ExternalParserClient:
             raise ExternalParserCallError(
                 "unreachable", warning_code=f"{connection.backend}_external_unreachable"
             ) from exc
+
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        connection: ExternalParserConnection,
+        *,
+        timeout: float | None = None,
+        **kwargs: Any,
+    ) -> object:
+        response = self._request(method, url, connection, timeout=timeout, **kwargs)
+        try:
+            return response.json()
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             raise ExternalParserCallError(
                 "invalid_response", warning_code=f"{connection.backend}_external_invalid_response"
@@ -469,15 +597,193 @@ def _positive_int(value: object, *, offset: int = 0) -> int:
         return 1
 
 
-def _mineru_block_text(block: dict[str, object]) -> str:
-    values: list[str] = []
-    for key in ("text", "table_body", "latex", "equation", "image_caption", "image_footnote"):
-        value = block.get(key)
-        if isinstance(value, list):
-            value = " ".join(str(item) for item in value if item)
-        if value and str(value).strip():
-            values.append(str(value).strip())
-    return "\n".join(values)
+def _mapping(value: object) -> Mapping[str, object]:
+    return cast(Mapping[str, object], value) if isinstance(value, Mapping) else {}
+
+
+def _list(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value or "").strip() if isinstance(value, str | int) else ""
+    if not text:
+        raise ValueError(f"{label} is missing")
+    return text
+
+
+def _same_origin(url: str, base: str) -> bool:
+    """scheme・host・実効の port が同じか（同じ host でも port が違えば別 origin）。"""
+    target, origin = httpx.URL(url), httpx.URL(base)
+    return (
+        target.scheme == origin.scheme
+        and target.host == origin.host
+        and _effective_port(target) == _effective_port(origin)
+    )
+
+
+def _effective_port(url: httpx.URL) -> int | None:
+    return url.port or {"http": 80, "https": 443}.get(url.scheme)
+
+
+def _mineru_tier(configured: str, source_profile: SourceProfile | None) -> str:
+    """PDF・画像は設定の tier。それ以外（Office など）は MinerU が flash しか持たない（#1329）。"""
+    modality = source_profile.modality if source_profile is not None else None
+    if modality in {SourceModality.PDF, SourceModality.IMAGE, None}:
+        return configured
+    return "flash"
+
+
+def _mineru_output_file_id(job: Mapping[str, object]) -> str:
+    files = job.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError("mineru job has no files")
+    result = _mapping(files[0])
+    if result.get("status") != "completed":
+        raise ExternalParserCallError("job_failed", warning_code="mineru_external_job_failed")
+    output = _mapping(_mapping(result.get("output_files")).get("middle_json"))
+    return _required_text(output.get("file_id"), "mineru middle_json file id")
+
+
+# Middle JSON 2.0（docvortex.middle）の block を、共通の抽出の変換が読む扁平な block へ写す。
+# 頁のヘッダー・フッター・頁番号は本文ではないため出さない
+# （Docling の Page-header / Page-footer と同じ扱い）。
+_MINERU_SKIPPED_BLOCK_TYPES = frozenset({"header", "footer", "page_number"})
+_MINERU_TITLE_BLOCK_TYPES = frozenset({"doc_title", "paragraph_title"})
+_MINERU_VISUAL_BLOCK_TYPES = frozenset({"image", "table", "chart", "code"})
+
+
+def mineru_middle_json_blocks(middle_json: object) -> list[dict[str, object]]:
+    """MinerU の Middle JSON 2.0 を、頁・bbox・表の HTML を持つ扁平な block の列にする。
+
+    bbox は Middle JSON の 0〜1 を content list と同じ 0〜1000 の整数にする（MinerU の
+    content list の換算と同じ。下流の座標系の扱い（docs/rag-engine.md の「座標系」）を変えない）。
+    ``element_id`` は頁と頁内の block の番号で決め、同じ解析の結果なら同じ値になる。
+    """
+    document = _mapping(middle_json)
+    if document.get("schema") != "docvortex.middle" or not str(
+        document.get("schema_version") or ""
+    ).startswith("2."):
+        raise ValueError("mineru middle_json schema is unsupported")
+    blocks: list[dict[str, object]] = []
+    for page in _list(document.get("pages")):
+        page_info = _mapping(page)
+        page_idx = page_info.get("page_idx")
+        if not isinstance(page_idx, int) or isinstance(page_idx, bool) or page_idx < 0:
+            raise ValueError("mineru page_idx is invalid")
+        for block in _list(page_info.get("blocks")):
+            item = _mineru_block(_mapping(block), page_number=page_idx + 1)
+            if item is not None:
+                blocks.append(item)
+    return blocks
+
+
+def _mineru_block(block: Mapping[str, object], *, page_number: int) -> dict[str, object] | None:
+    block_type = str(block.get("type") or "")
+    if not block_type or block_type in _MINERU_SKIPPED_BLOCK_TYPES:
+        return None
+    item: dict[str, object] = {"page_idx": page_number - 1, "page_number": page_number}
+    index = block.get("index")
+    if isinstance(index, int) and not isinstance(index, bool):
+        item["element_id"] = f"mineru-p{page_number}-b{index}"
+        item["mineru_block_index"] = index
+    if bbox := _mineru_bbox(block.get("bbox")):
+        item["bbox"] = bbox
+    content = block.get("content")
+    if block_type in _MINERU_TITLE_BLOCK_TYPES:
+        item.update(type="title", text=_mineru_plain_text(content), level=block.get("level"))
+    elif block_type == "equation":
+        item.update(type="equation", text=str(content or "").strip(), text_format="latex")
+    elif block_type in {"list", "index"}:
+        item.update(type="list", text="\n".join(_mineru_leaf_texts(content)))
+    elif block_type in _MINERU_VISUAL_BLOCK_TYPES:
+        item.update(_mineru_visual_fields(block_type, content))
+    else:
+        # text・ref_text・aside_text・page_footnote など InlineSpan を持つ本文の block。
+        item.update(type="text", text=_mineru_plain_text(content))
+    text = str(item.get("text") or "").strip()
+    if not text and not item.get("table_body") and block_type not in {"image", "chart"}:
+        return None
+    item["text"] = text
+    return item
+
+
+def _mineru_visual_fields(block_type: str, content: object) -> dict[str, object]:
+    """image / table / chart / code の body と caption・footnote を content list の項目名で返す。"""
+    body = ""
+    captions: list[str] = []
+    footnotes: list[str] = []
+    for child in _list(content):
+        child_info = _mapping(child)
+        child_type = str(child_info.get("type") or "")
+        child_content = child_info.get("content")
+        if child_type.endswith("_body"):
+            body = (
+                child_content.strip()
+                if isinstance(child_content, str)
+                else _mineru_plain_text(child_content)
+            )
+        elif child_type.endswith("_caption"):
+            captions.append(_mineru_plain_text(child_content))
+        elif child_type.endswith("_footnote"):
+            footnotes.append(_mineru_plain_text(child_content))
+    captions = [value for value in captions if value]
+    footnotes = [value for value in footnotes if value]
+    fields: dict[str, object] = {"type": block_type}
+    if block_type == "table":
+        fields["table_caption"] = captions
+        fields["table_footnote"] = footnotes
+        if body:
+            fields["table_body"] = body
+            fields["text_as_html"] = body
+        fields["text"] = "\n".join([*captions, body, *footnotes]).strip()
+    elif block_type == "code":
+        fields["code_body"] = body
+        fields["text"] = "\n".join([*captions, body, *footnotes]).strip()
+    else:
+        fields[f"{block_type}_caption"] = captions
+        fields[f"{block_type}_footnote"] = footnotes
+        fields["text"] = "\n".join([*captions, *footnotes]).strip()
+    return fields
+
+
+def _mineru_leaf_texts(content: object) -> list[str]:
+    """list / index の入れ子の block から、葉の本文を読み順に返す。"""
+    texts: list[str] = []
+    for child in _list(content):
+        child_info = _mapping(child)
+        child_content = child_info.get("content")
+        if child_info.get("type") in {"list", "index"}:
+            texts.extend(_mineru_leaf_texts(child_content))
+        elif text := _mineru_plain_text(child_content):
+            texts.append(text)
+    return texts
+
+
+def _mineru_plain_text(content: object) -> str:
+    """InlineSpan の列（text / equation_inline / code_inline / hyperlink）の見える文字列。"""
+    if isinstance(content, str):
+        return content.strip()
+    parts: list[str] = []
+    for span in _list(content):
+        span_info = _mapping(span)
+        span_type = span_info.get("type")
+        span_content = span_info.get("content")
+        if span_type == "hyperlink":
+            parts.append(_mineru_plain_text(span_content))
+        elif span_type == "equation_inline" and isinstance(span_content, str):
+            parts.append(f"${span_content}$")
+        elif isinstance(span_content, str):
+            parts.append(span_content)
+    return "".join(parts).strip()
+
+
+def _mineru_bbox(value: object) -> list[int] | None:
+    if not isinstance(value, list | tuple) or len(value) != 4:
+        return None
+    if not all(isinstance(item, int | float) and not isinstance(item, bool) for item in value):
+        return None
+    return [int(float(item) * 1000) for item in value]
 
 
 def _pages_from_elements(elements: list[dict[str, object]]) -> list[ExtractionPage]:
@@ -675,7 +981,7 @@ def _convert_external_output(
 ENGINE_SPECS = {
     "mineru": ExternalParserEngineSpec(
         backend="mineru",
-        protocol="mineru_file_parse",
+        protocol="mineru_v1",
         capabilities=("pdf", "image", "office"),
         endpoint_field="rag_parser_mineru_api_host",
         model_field=None,

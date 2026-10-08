@@ -708,6 +708,23 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#1329 MinerU 4.0 の V1 API）
+
+文書解析の MinerU（外部で運用する GPU の解析エンジン）の接続を、MinerU 4.x の V1 API に切り替えた。MinerU 4.0 は
+3.x までの `POST /file_parse` を削除したため、3.x 向けのままでは 4.x の API サーバーで解析できない。データの移行（migration）は不要。
+
+1. MinerU の API サーバーを 4.x にする（`mineru-kit api-server`。V1 の `/v1/health`・`/v1/uploads`・`/v1/parse/jobs`・`/v1/files`）。
+   `RAG_PARSER_MINERU_API_HOST` は今までどおり base URL（例: `https://parser.example.com`）を入れる。3.x のサーバーには接続できない（互換は持たない）。
+2. `RAG_PARSER_MINERU_LANGUAGE` は使わなくなった（V1 の request に言語の指定は無く、API サーバーの起動時の `--language` で決まる）。
+   `backend/.env` に残っていても読まない。代わりに解析の品質を `RAG_PARSER_MINERU_TIER`（`flash` / `basic` / `standard` / `advanced`。既定 `basic`）で選ぶ。
+   3.x の `backend=pipeline` は `basic`、`hybrid-*` は `standard`、`vlm-*` は `advanced` に当たる。PDF・画像以外（Office など）は、MinerU が
+   `flash` だけを持つため `flash` で解析する。parse job を待つ上限は `RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`（既定 1800 秒。超えたら job を取り消し、
+   warning `mineru_external_timeout` を残して縮退する）。
+3. 解析の結果の識別子（extraction recipe）の材料を言語から tier に変えたため、MinerU で解析した既存の文書は、文書の取込設定に
+   parser のずれ（再処理が必要）と表示される。今の索引はそのまま検索対象に残る。MinerU 4.x で読み直すときは、その文書を再解析する。
+4. 解析の結果は Middle JSON（schema 2.0）から読む。見出しの block は見出しとして読む（3.x の content list では本文だった）ため、
+   再解析した文書は節の見出しの列（`section_path`）が付く。頁のヘッダー・フッター・頁番号は本文に入れない。
+
 ## 既存環境の更新手順（#1248 文書の版: 新しい版に置き換えた文書を検索から外す）
 
 文書詳細の「版」で、文書を置き換えた新しい版を記録できるようにした。置き換え済み（旧版）の文書の chunk は、既定では回答の検索の対象から外す。
@@ -1073,6 +1090,17 @@ uv run python -m app.rag.file_processing_staging_cli \
   - 外部 adapter の `Formula` / `Equation` block は `latex` / `formula` / `mathml` などの metadata から本文を復元し、`DocumentElement(content_kind=equation)` と chunk metadata の `equation_format` に残す。公式 block が `text` を持たない場合でも検索・citation から落とさない。
   - 外部 adapter の bbox は `x/y/width/height`、`x/y/w/h`、`left/top/right/bottom`、`xmin/ymin/xmax/ymax` などを `DocumentElement.bbox` / `ExtractionTableCell.bbox` / `ExtractionAsset.bbox` の `xyxy` へ正規化し、要素 chunk では `bbox_coordinate_mode` / `bbox_unit` も metadata に残す。preview overlay / citation jump / table cell review は adapter 固有の座標 key に依存しない。
   - 外部 adapter の `Image` / `Picture` / `Figure` block は `DocumentElement(content_kind=figure)` だけでなく `ExtractionAsset` にも昇格し、chunk metadata へ `asset_id` を残す。figure citation から asset export / preview audit へ辿れるようにする。
+- `RAG_PARSER_MINERU_API_HOST` / `RAG_PARSER_MINERU_API_KEY` / `RAG_PARSER_MINERU_TIER` / `RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`、`RAG_PARSER_DOTS_OCR_*`: 外部で運用する GPU の解析エンジン（任意。既定は使わない。この stack は配備しない）。MinerU は 4.x の V1 API（upload → parse job → Middle JSON の取得。#1329）、Dots.OCR は OpenAI 互換 API を backend が直接呼ぶ。MinerU の API key は同じ origin の URL にだけ付け、別 origin の upload URL・302 の転送先には送らない。
+  - **許可（ライセンス）の確認（#1329）**: 有効にする前に、利用者側の法務で次を確かめる。この repo は解析エンジンを同梱・配備せず、HTTP で呼ぶだけで、許可の義務は解析エンジンを運用する側に掛かる。
+
+    | 解析エンジン | コードの許可 | モデルの重みの許可（Hugging Face の model card、2026-10-09 確認） |
+    |---|---|---|
+    | Docling（既定） | MIT | — |
+    | Dots.OCR | MIT（GitHub は `studio-dots-ai/dots.ocr` へ移動） | MIT（`dots-studio/dots.ocr`、後継の `dots-studio/dots.mocr`。旧名 `rednote-hilab/*` は転送される） |
+    | MinerU | MinerU Open Source License（Apache-2.0 に追加の条件） | `opendatalab/MinerU2.5-Pro-2605-1.2B` は apache-2.0。旧版の `MinerU2.5-2509-1.2B` は agpl-3.0 なので使わない |
+
+    MinerU の追加の条件（MinerU の `LICENSE.md`）: (1) 利用者とその関連会社の合算で、月間アクティブユーザーが 1 億を超えるか、月の売上が 2,000 万米ドルを超える場合は、MinerU Team から別途の商用ライセンスが要る。(2) MinerU を使って第三者にオンラインサービスを提供する場合は、画面か公開ドキュメントの目立つ場所に MinerU を使っていると明示する。(3) (1)・(2) を満たさないと、許可は通知なしに自動で終わる。企業の利用者は (1) の基準を超えやすいので、商用ライセンスの要否を先に確かめる。
+  - MinerU の公式の remote 解析（mineru.net）は、文書が環境の外へ出るため推奨しない（接続先は自前で運用する API サーバーにする）。自前の API サーバーでも、MinerU の文書ライブラリ（`mineru` コマンドの doclib）の利用状況の送信は既定で有効なので、使う場合は `mineru telemetry disable` で止める。
 - `GET /api/documents/{document_id}/recipes/{recipe_id}/extraction-export?format=json|markdown|html|chunks`: レシピの保存済み extraction を JSON / Markdown / escaped HTML / chunk view として返す API。`chunks` は embedding を含めず、HTML は原本 HTML を実行せず escaped review source として返す。`download=true` を付けると同じ本文を `Content-Disposition: attachment`（ファイル名は `<文書名>_レシピ<N>.md|.html|.json`、chunk は `<文書名>_レシピ<N>_chunks.json`）で返す（#561）。文書の詳細の「抽出エクスポート」（Markdown / HTML / JSON のダウンロード・コピー）と「Chunk / Citation」（chunk の JSON のダウンロード）、CI artifact、parser adapter 比較の確認に使う。原本再解析や外部 parser の直接呼び出しは行わない。
   - `tables[].cells` がある表は safe `<table>` として再構成し、`data-table-id` / row / col / bbox lineage を保持する。cells がない旧 extraction は escaped `<pre>` に fallback する。
   - `assets[]` は Markdown / HTML 監査 view に `asset_id` / kind / page / bbox / alt text として表示する。HTML export では asset 実体や Object Storage path を埋め込まず、escaped text と `data-asset-id` / `data-kind` / `data-page` / `data-bbox` のみを返す。

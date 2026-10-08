@@ -833,7 +833,7 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               backend: "mineru",
               package_name: "external_api",
               import_name: "external_api",
-              distribution_name: "mineru_file_parse",
+              distribution_name: "mineru_v1",
               install_package: "外部 MinerU API",
               enabled: false,
               selected: false,
@@ -1007,7 +1007,7 @@ function defaultConnections() {
   return [
     {
       backend: "mineru",
-      protocol: "mineru_file_parse",
+      protocol: "mineru_v1",
       endpoint: "",
       model: null,
       api_key_configured: false,

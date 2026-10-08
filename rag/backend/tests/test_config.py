@@ -346,12 +346,14 @@ def test_external_gpu_parser_connection_defaults() -> None:
 
     assert settings.rag_parser_mineru_api_host == ""
     assert settings.rag_parser_dots_ocr_api_host == ""
-    assert settings.rag_parser_mineru_language == "japan"
+    assert settings.rag_parser_mineru_tier == "basic"
+    assert settings.rag_parser_mineru_job_timeout_seconds == 1800.0
     assert settings.rag_parser_dots_ocr_model == "rednote-hilab/dots.mocr"
 
-    assert Settings(rag_parser_mineru_language=" english ").rag_parser_mineru_language == "english"
+    assert Settings(rag_parser_mineru_tier="advanced").rag_parser_mineru_tier == "advanced"
+    # 3.x の解析の方式（pipeline 等）は 4.0 の tier ではない（#1329）。
     with pytest.raises(ValidationError):
-        Settings(rag_parser_mineru_language="   ")
+        Settings(rag_parser_mineru_tier="pipeline")
 
 
 def test_legacy_gpu_service_url_is_not_migrated(monkeypatch: pytest.MonkeyPatch) -> None:

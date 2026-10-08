@@ -154,6 +154,10 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         get_settings(), "rag_service_runtime_env_file", str(tmp_path / "service-runtime.env")
     )
+    # MinerU の parse job のポーリングの待ちはテストでは待たない（#1329）。
+    from app.clients import external_parser
+
+    monkeypatch.setattr(external_parser, "_poll_sleep", lambda _seconds: None)
 
 
 async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
