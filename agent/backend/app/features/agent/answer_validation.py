@@ -24,9 +24,11 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
   `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
   `skipped`（`clarification_only`）にして注記しない（#1306）。
-- 主張ではない段落（見出し・出典の行・利用者への質問・資料に記載が無いことを述べる文・
-  「確かめられていない点」の節）は、RAG の判定にかかわらず外さない（#1306。判定は
-  `answer_passages`。成果物の段落には `non_claim` を付ける）。
+- 主張ではない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・資料に記載が
+  無いことを述べる文と拒答の文・「確かめられていない点」の節）は、RAG の判定にかかわらず外さない
+  （#1306・#1317。判定は `answer_passages`。成果物の段落には `non_claim` を付ける）。利用者に
+  現場のデータ・記録の確認を求める段落には `environment_check` を付ける（#1317。主張のまま
+  確かめて外す。回答の対応が「現場の確認が要る」の印に使う）。
 
 ここは根拠の参照の集め方・判定のまとめ方・成果物の内容・回答の組み立てだけを持つ（呼び出しは
 `builtin_runtime`）。
@@ -38,10 +40,12 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_passages import (
+    environment_check_passages,
     is_heading,
     is_structure,
     non_claim_passages,
     passage_spans,
+    table_header_lines,
 )
 from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
@@ -415,6 +419,11 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     ほかに何も残らなければ空文字を返す（本文を載せない）。
     """
     found: set[str] = set()
+    headers = table_header_lines(answer)
+
+    def structure(text: str) -> bool:
+        return is_structure(text) or text in headers
+
     # （行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
     kept: list[tuple[str, bool, bool] | None] = []
     heading: int | None = None
@@ -434,7 +443,7 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
                 heading, section_content, section_removed = len(kept), False, False
                 kept.append((line, True, False))
                 continue
-            content = any(not is_structure(text) for _s, _e, text in spans)
+            content = any(not structure(text) for _s, _e, text in spans)
             section_content = section_content or content
             kept.append((line, False, content))
             continue
@@ -443,7 +452,7 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
         for start, end, _text in reversed(withheld):
             line = line[:start] + line[end:]
         rest = [text for _s, _e, text in passage_spans(line)]
-        if line.strip() and any(not is_structure(text) for text in rest):
+        if line.strip() and any(not structure(text) for text in rest):
             section_content = True
             kept.append((line.rstrip(), False, True))
     close_section()
@@ -488,22 +497,28 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
 
 
 def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
-    """判定の段落のうち、主張ではない段落（見出し・出典・質問・不足の文・「確かめられていない点」の節）に
+    """判定の段落のうち、主張ではない段落（見出し・出典・表の形・質問・不足の文・「確かめられていない点」の節）に
     `non_claim`（判定の種類）を付けた結果の写しを返す（#1306。`answer_passages.non_claim_passages`）。
 
     RAG の判定（`status`）は変えずに残し、外すかどうかの判断と画面の「確かめられていない点」だけが
-    `non_claim` の段落を除く。
+    `non_claim` の段落を除く。利用者に現場のデータ・記録の確認を求める段落には、判定とは別に
+    `environment_check: true` を付ける（#1317。主張のまま確かめ、回答の対応だけが使う）。
     """
     kinds = non_claim_passages(answer)
+    checks = environment_check_passages(answer)
     claims: list[object] = []
     for item in result.get("claims") or []:
         if isinstance(item, dict):
-            kind = kinds.get(str(item.get("answer_quote") or ""))
-            item = (
-                {**item, "non_claim": kind}
-                if kind
-                else {key: value for key, value in item.items() if key != "non_claim"}
-            )
+            quote = str(item.get("answer_quote") or "")
+            item = {
+                key: value
+                for key, value in item.items()
+                if key not in {"non_claim", "environment_check"}
+            }
+            if kinds.get(quote):
+                item["non_claim"] = kinds[quote]
+            if quote in checks:
+                item["environment_check"] = True
         claims.append(item)
     return {**result, "claims": claims}
 

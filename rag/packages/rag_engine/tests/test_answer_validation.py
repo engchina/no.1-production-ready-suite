@@ -104,3 +104,65 @@ def test_non_claim_passage_rules_keep_claims() -> None:
     assert not is_non_claim_passage("削除できますが、よろしいですか？")
     assert not is_non_claim_passage("【パスワードは 90 日ごとに変更し、変更の履歴は管理画面に残ります】")
     assert not is_non_claim_passage("管理画面で「削除」を押してください。")
+
+
+EVIDENCE_REF = "【証拠 ID: 03ac895f1d744a2b9eab4dd569eb68fc:b245283c90ea80e5d8aadd3283e6027f148113c0aa42c59bbf12923cc59ae01c:1】"
+
+
+def test_location_lines_evidence_ids_and_table_structure_are_not_audited() -> None:
+    """出典の位置のラベル・根拠の ID・表の区切りと見出しは監査に渡さない (#1317)。
+
+    #1305 の実環境の評価で、これらがモデルに unassessed と返され、Agent の最終の検証が外して
+    回答の対応を conditional / insufficient_evidence に誤らせていた（da-trial-account-expiry / -setup）。
+    表の本文の行は主張のまま監査する。
+    """
+    answer = "\n".join([
+        "検証用アカウントの有効期限は **最長 30日** です。",
+        "- セクション: 「サンプル業務ポータル 運用手順書 第3版」 → **2. 検証用アカウントの登録**",
+        "- ページ: 1",
+        "| 手順 | 操作内容 | 根拠 |",
+        "|------|----------|------|",
+        f"| 1. 前提確認 | 本操作は「ポータル管理者」ロールを持つ利用者のみが実施可能です。 | 「1. 前提」 （ページ1）{EVIDENCE_REF} |",
+        "---",
+    ])
+    seen: list[list[str]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        import json
+        payload = json.loads(inputs)
+        seen.append([item["text"] for item in payload["answer_passages"]])
+        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": item["id"], "status": "supported", "evidence_id": evidence_id,
+             "source_id": "", "evidence_quote": "", "reason": "根拠に記載"}
+            for item in payload["answer_passages"]
+        ]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("有効期限は？", answer, EVIDENCE, settings=None)
+    assert seen == [[
+        "検証用アカウントの有効期限は **最長 30日** です。",
+        "| 1. 前提確認 | 本操作は「ポータル管理者」ロールを持つ利用者のみが実施可能です。",
+    ]]
+    assert result["counts"] == {"supported": 2}
+
+
+def test_new_non_claim_rules_keep_claims() -> None:
+    from rag_engine.generation.operation_audit import is_non_claim_passage, table_header_lines
+
+    assert is_non_claim_passage("- **根拠**：regional-report-guide-v2.pdf、2. 出力の手順（ページ1）")
+    assert is_non_claim_passage("（*portal-operations-manual.pdf*、セクション「3. アクセス権限の付与」）【証拠1】")
+    assert is_non_claim_passage("- 「サンプル業務ポータル 運用手順書 第3版」 6. アカウントの削除")
+    assert is_non_claim_passage("| :--- | ---: |")
+    assert is_non_claim_passage("**")
+    assert is_non_claim_passage("権限の付与先は、個別の利用者ですか、グループですか？【clarification: target】")
+    # 表の見出しは区切りの行の直前の行だけ。
+    assert table_header_lines("| 手順 | 内容 |\n| 1 | 開く |") == set()
+    assert table_header_lines("| 手順 | 内容 |\n|---|---|\n| 1 | 開く |") == {"| 手順 | 内容 |"}
+    # 主張・操作を含む段落は監査する。
+    assert not is_non_claim_passage("| 締め日 | 毎月 10 日 |")
+    assert not is_non_claim_passage("- ページ: 管理画面で「削除」を押してください")
+    assert not is_non_claim_passage("- 抜粋: 「…有効期限は最長 30 日です。」")
+    assert not is_non_claim_passage("- 「有効期限は最長 30 日です。」")
+    assert not is_non_claim_passage("- 「検証用」")
+    assert not is_non_claim_passage(f"| 2. 登録 | 1. 「利用者」を開く 2. 「追加」を押す | {EVIDENCE_REF} |")

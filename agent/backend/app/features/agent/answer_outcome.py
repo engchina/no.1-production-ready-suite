@@ -34,10 +34,14 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    無ければ、実データの確認を促していれば needs_environment_data、それ以外は insufficient_evidence。
    主張があり、実データの確認を促すか不足の印があれば conditional、無ければ answered。
 
-不足の印（`signals`）: 資料に記載が無い文（`absence`）・主張に添えた利用者への質問
+不足の印（`signals`）: 資料に記載が無い文・拒答の文（`absence`）・主張に添えた利用者への質問
 （`question`）・回答の中の「確かめられていない点」の節（`unverified_section`）・最終の検証が
-外した段落（`withheld_claims`）・要求の不足などの決定的な検査の error（`check_errors`）・
-実データの確認を促す段落（`data_confirmation`。RAG の `rag_validate_answer` の判定）。
+根拠で確かめられない・根拠と矛盾すると判定して外した段落（`withheld_claims`。`unsupported` /
+`contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317）・要求の不足などの
+決定的な検査の error（`check_errors`）・実データの確認を促す段落（`data_confirmation`。RAG の
+`rag_validate_answer` の判定か、利用者に現場のデータ・記録の確認を求める段落の決定的な判定
+`environment_check_passages`。#1317。外した段落は数えない）・分岐ごとに答えた印（`branches`。
+「…の場合」の見出し・ラベルが 2 つ以上。利用者の条件を確かめずに分岐ごとに答えた。#1317）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -50,6 +54,8 @@ from app.features.agent.answer_passages import (
     KIND_ABSENCE,
     KIND_QUESTION,
     KIND_UNVERIFIED,
+    case_labels,
+    environment_check_passages,
     is_clarification_only,
     non_claim_passages,
     passage_spans,
@@ -102,9 +108,11 @@ SIGNAL_WITHHELD_CLAIMS = "withheld_claims"
 SIGNAL_CHECK_ERRORS = "check_errors"
 SIGNAL_DATA_CONFIRMATION = "data_confirmation"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
+SIGNAL_BRANCHES = "branches"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset(
     {
+        SIGNAL_BRANCHES,
         SIGNAL_ABSENCE,
         SIGNAL_QUESTION,
         SIGNAL_UNVERIFIED_SECTION,
@@ -116,6 +124,10 @@ _GAP_SIGNALS = frozenset(
 _RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 # RAG の `rag_validate_answer` の、実データの確認を促すだけの段落の判定。
 _DATA_CONFIRMATION = "data_confirmation"
+# 不足の印（`withheld_claims`）にする、外した段落の判定（根拠で確かめられない・根拠と矛盾）。
+# 確かめが終わらなかった段落（`unassessed`。出典の行・表の区切りなど）を外しただけでは、回答が
+# 条件・不足を示したことにならない（#1317）。外した段落は本文に載らないので主張にも数えない。
+_DISPUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 _KIND_SIGNALS = {
     KIND_ABSENCE: SIGNAL_ABSENCE,
     KIND_QUESTION: SIGNAL_QUESTION,
@@ -182,18 +194,20 @@ def _guide_decision(steps: list[RunStep]) -> str | None:
 
 def _validation_parts(
     validation: JsonObject | None,
-) -> tuple[set[str], set[str], JsonObject]:
-    """最終の検証から（外した段落, 実データの確認を促す段落, 外した数）を取り出す。
+) -> tuple[set[str], set[str], set[str], JsonObject]:
+    """最終の検証から（外した段落, そのうち確かめられない・矛盾の段落, 実データの確認を促す段落,
+    外した数）を取り出す。
 
     判定が出た（`completed`）ときだけ使う（確かめられなかった検証の段落の判定は使わない）。
     """
     if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
-        return set(), set(), {}
+        return set(), set(), set(), {}
     withheld = validation.get("withheld")
     withheld = withheld if isinstance(withheld, dict) else {}
     result = validation.get("result")
     claims = result.get("claims") if isinstance(result, dict) else None
     removed: set[str] = set()
+    disputed: set[str] = set()
     confirmations: set[str] = set()
     for claim in claims if isinstance(claims, list) else []:
         if not isinstance(claim, dict) or claim.get("non_claim"):
@@ -206,7 +220,9 @@ def _validation_parts(
             confirmations.add(quote)
         elif status in BLOCKING_CLAIM_STATUSES and _count(withheld.get("claims")) > 0:
             removed.add(quote)
-    return removed, confirmations, withheld
+            if status in _DISPUTED_CLAIM_STATUSES:
+                disputed.add(quote)
+    return removed, disputed, confirmations, withheld
 
 
 def _count(value: object) -> int:
@@ -261,14 +277,20 @@ def answer_outcome(
             rag_outcome=rag_outcome,
             signals={SIGNAL_QUESTION},
         )
-    removed, confirmations, withheld = _validation_parts(validation)
+    removed, disputed, confirmations, withheld = _validation_parts(validation)
     claims, signals = _passages(answer)
     if withheld.get("all") is True:
         return _content(
             INSUFFICIENT_EVIDENCE, BASIS_WITHHELD_ALL, rag_outcome=rag_outcome, signals=signals
         )
-    if removed:
+    # 利用者に現場のデータ・記録の確認を求める段落（検証の判定が supported でも。#1317）。
+    # 外した段落は利用者に見えないので数えない。
+    confirmations |= environment_check_passages(answer) - removed
+    if disputed:
         signals.add(SIGNAL_WITHHELD_CLAIMS)
+    # 利用者の条件を確かめずに、分岐ごとに答えた（rag_search の確認の求めに分岐で答えたのと同じ）。
+    if len(case_labels(answer)) >= 2:
+        signals.add(SIGNAL_BRANCHES)
     if _count(withheld.get("findings")) > 0:
         signals.add(SIGNAL_CHECK_ERRORS)
     if confirmations:
