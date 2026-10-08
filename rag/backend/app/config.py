@@ -670,6 +670,20 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=20,
         description="同一 chunk group から anchor ごとに追加する sibling chunk 数の上限。",
     )
+    rag_reference_expansion_enabled: bool = Field(
+        default=True,
+        description=(
+            "回答の検索で、上位の候補の chunk が本文で参照する節(「第3章を参照」など。取込時に"
+            "解決して chunk の metadata に保存)の chunk を rerank の候補に足す(#1280)。"
+            "LLM の呼び出しは増えない。参照の無い候補だけなら SQL も増えない。"
+        ),
+    )
+    rag_reference_expansion_max_chunks: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="交差参照で 1 回の検索に足す参照先の chunk 数の上限(#1280)。",
+    )
     rag_navigation_summary_enabled: bool = Field(
         default=False,
         description=(

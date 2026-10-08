@@ -100,6 +100,34 @@ def test_small_to_big_chunks_keep_parent_search_text_and_element_refs() -> None:
     assert _chunk_search_text(body) == search_text
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ({"vision_model": "vision-model-1", "vision_status": "succeeded"}, "vision"),
+        ({"vision_model": "vision-model-1", "vision_error": "timeout"}, "ocr"),
+        ({}, "ocr"),
+    ],
+)
+def test_small_to_big_figure_records_whether_vlm_wrote_text(
+    raw: dict[str, object], expected: str
+) -> None:
+    """図の chunk に本文の出どころ（VLM の説明か OCR か）と図の領域を残す（#1282）。"""
+    picture = _record(3, "Picture", "申請画面。右上の承認ボタンを押す。", [100, 200, 700, 900])
+    picture["raw"] = raw
+    chunks = build_parent_child_chunks(
+        _extraction([picture, _record(4, "Text", "本文です。", [50, 950, 900, 1000])]),
+        source_name="manual.pdf",
+    )
+
+    figure = next(chunk for chunk in chunks if chunk.metadata["content_kind"] == "figure")
+    text = next(chunk for chunk in chunks if chunk.metadata["content_kind"] == "text")
+    assert figure.metadata["figure_text_source"] == expected
+    assert "figure_text_source" not in text.metadata
+    images = json.loads(str(figure.metadata["engine_metadata_json"]))["image_evidence"]
+    assert images[0]["page"] == 1
+    assert images[0]["bbox"] == [100, 200, 700, 900]
+
+
 def test_small_to_big_strategy_requires_docling_layout() -> None:
     assert normalize_chunking_strategy("small_to_big") == "small_to_big"
     plain = StructuredExtraction(raw_text="本文")
