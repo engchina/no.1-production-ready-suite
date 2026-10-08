@@ -29,7 +29,12 @@ from security_support import (
 )
 
 import app.features.agent.tools as tools_module
-from app.features.agent.config import runtime_config_store
+from app.features.agent.config import (
+    PRODUCT_MCP_CONNECTION_LABELS,
+    McpConnectionConfig,
+    _product_connections,
+    runtime_config_store,
+)
 from app.features.agent.skills import skill_registry
 from app.features.agent.tools import (
     ExternalMcpToolInfo,
@@ -117,6 +122,9 @@ def test_rag_and_nl2sql_are_builtin_service_token_connections() -> None:
         assert config.source == "builtin"
         assert config.effective_auth_mode() == "service_token"
         assert config.audience() == server_id
+    # 表示名は用途の名前に製品名を添える（#1325）。接続 ID（ツール名の接頭辞）は変えない。
+    assert connections["rag"].label == "ナレッジ検索（RAG）"
+    assert connections["nl2sql"].label == "データ問い合わせ（NL2SQL）"
     with pytest.raises(ValueError):
         runtime_config_store.remove_mcp_server("rag")
 
@@ -427,7 +435,7 @@ def test_unreachable_service_returns_a_clear_tool_error(
     assert result.success is False
     assert result.error_code == "mcp.unreachable"
     assert result.error == (
-        "MCP 接続「RAG」に接続できません（RAG のサービスが起動しているか、"
+        "MCP 接続「ナレッジ検索（RAG）」に接続できません（RAG のサービスが起動しているか、"
         "接続の URL が正しいかを確認してください）。"
     )
     max_retries = get_settings().agent_external_mcp_max_retries
@@ -821,6 +829,142 @@ def test_invalid_mcp_responses_are_japanese() -> None:
             response, service_code="mcp", service_label="MCP 接続「erp」", attempt=1
         )
     assert body_error.value.message == "MCP 接続「erp」の応答が JSON の object ではありません。"
+
+
+DEPLOYED_RAG_URL = "http://127.0.0.1:8000/api/mcp"
+DEPLOYED_NL2SQL_URL = "http://127.0.0.1:8100/api/mcp"
+
+
+@pytest.fixture
+def deployed_connections(monkeypatch: MonkeyPatch) -> dict[str, McpConnectionConfig]:
+    """配備（環境変数）が RAG / NL2SQL の MCP の URL を与えた構成の接続（#1325）。"""
+    monkeypatch.setattr(get_settings(), "agent_external_rag_mcp_url", DEPLOYED_RAG_URL)
+    monkeypatch.setattr(get_settings(), "agent_external_nl2sql_mcp_url", f" {DEPLOYED_NL2SQL_URL} ")
+    connections = {config.server_id: config for config in runtime_config_store.list_mcp_servers()}
+    connections.update({config.server_id: config for config in _product_connections()})
+    monkeypatch.setattr(runtime_config_store, "_mcp_servers", connections)
+    return connections
+
+
+def test_deployed_builtin_connection_url_is_locked(
+    deployed_connections: dict[str, McpConnectionConfig],
+) -> None:
+    listed = client.get("/api/settings/mcp-connections")
+    assert listed.status_code == 200, listed.text
+    by_id = {item["server_id"]: item for item in listed.json()["data"]["connections"]}
+    assert by_id["rag"]["base_url"] == DEPLOYED_RAG_URL
+    assert by_id["rag"]["base_url_locked"] is True
+    assert by_id["rag"]["label"] == PRODUCT_MCP_CONNECTION_LABELS["rag"]
+    assert by_id["rag"]["removable"] is False
+    assert by_id["nl2sql"]["base_url"] == DEPLOYED_NL2SQL_URL
+    assert by_id["nl2sql"]["base_url_locked"] is True
+
+    changed = client.patch(
+        "/api/settings/mcp-connections/rag", json={"base_url": "http://other.example.test/api/mcp"}
+    )
+    assert changed.status_code == 400
+    message = changed.json()["error_messages"][0]
+    assert "AGENT_EXTERNAL_RAG_MCP_URL" in message
+    assert "変えられません" in message
+    cleared = client.patch("/api/settings/mcp-connections/nl2sql", json={"base_url": ""})
+    assert cleared.status_code == 400
+    assert "AGENT_EXTERNAL_NL2SQL_MCP_URL" in cleared.json()["error_messages"][0]
+
+    # 今と同じ URL と、timeout など運用の値は変えられる。
+    same = client.patch(
+        "/api/settings/mcp-connections/rag",
+        json={"base_url": DEPLOYED_RAG_URL, "timeout_seconds": 42},
+    )
+    assert same.status_code == 200, same.text
+    assert same.json()["data"]["timeout_seconds"] == 42
+    assert runtime_config_store.get_mcp("rag").base_url == DEPLOYED_RAG_URL
+    assert client.request("DELETE", "/api/settings/mcp-connections/rag").status_code == 400
+    assert runtime_config_store.get_mcp("rag").source == "builtin"
+
+
+def test_builtin_connection_label_cannot_be_changed(
+    deployed_connections: dict[str, McpConnectionConfig],
+) -> None:
+    renamed = client.patch("/api/settings/mcp-connections/nl2sql", json={"label": "売上 DB"})
+    assert renamed.status_code == 400
+    assert "名前" in renamed.json()["error_messages"][0]
+    same = client.patch(
+        "/api/settings/mcp-connections/nl2sql",
+        json={"label": PRODUCT_MCP_CONNECTION_LABELS["nl2sql"]},
+    )
+    assert same.status_code == 200, same.text
+    assert runtime_config_store.get_mcp("nl2sql").label == PRODUCT_MCP_CONNECTION_LABELS["nl2sql"]
+
+
+def test_restore_keeps_deployed_url_and_standard_label(
+    deployed_connections: dict[str, McpConnectionConfig],
+) -> None:
+    # 前の版・前の配備で保存した URL と名前は、配備の値と標準の名前を上書きしない。
+    runtime_config_store.restore_mcp_server(
+        McpConnectionConfig(
+            server_id="rag",
+            label="RAG",
+            base_url="http://old-host/api/mcp",
+            timeout_seconds=15,
+            source="builtin",
+            base_url_locked=False,
+        )
+    )
+    restored = runtime_config_store.get_mcp("rag")
+    assert restored.base_url == DEPLOYED_RAG_URL
+    assert restored.base_url_locked is True
+    assert restored.label == PRODUCT_MCP_CONNECTION_LABELS["rag"]
+    # 運用の値（timeout）は保存した値を戻す。
+    assert restored.timeout_seconds == 15
+
+
+def test_builtin_connection_url_is_editable_without_deployment_url(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    # 配備の環境変数が無い構成（ローカルの開発）は、画面で URL を設定でき、保存した URL を戻す。
+    monkeypatch.setattr(get_settings(), "agent_external_rag_mcp_url", None)
+    monkeypatch.setattr(get_settings(), "agent_external_nl2sql_mcp_url", "  ")
+    connections = {config.server_id: config for config in _product_connections()}
+    assert connections["rag"].base_url_locked is False
+    assert connections["nl2sql"].base_url is None
+    assert connections["nl2sql"].base_url_locked is False
+    monkeypatch.setattr(runtime_config_store, "_mcp_servers", connections)
+
+    patched = client.patch(
+        "/api/settings/mcp-connections/rag", json={"base_url": "http://localhost:8000/api/mcp"}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["data"]["base_url_locked"] is False
+    runtime_config_store.restore_mcp_server(
+        McpConnectionConfig(
+            server_id="nl2sql",
+            label="NL2SQL",
+            base_url="http://localhost:8100/api/mcp",
+            source="builtin",
+        )
+    )
+    restored = runtime_config_store.get_mcp("nl2sql")
+    assert restored.base_url == "http://localhost:8100/api/mcp"
+    assert restored.label == PRODUCT_MCP_CONNECTION_LABELS["nl2sql"]
+
+
+def test_plugin_and_saved_connections_never_lock_the_url() -> None:
+    # 標準の接続でない接続は、保存・プラグインの値に base_url_locked があってもロックしない。
+    runtime_config_store.restore_mcp_server(
+        McpConnectionConfig(
+            server_id="cp1325_saved", base_url="http://saved.example.test/mcp", base_url_locked=True
+        )
+    )
+    runtime_config_store.set_plugin_mcp_servers(
+        "plugin:cp1325",
+        [McpConnectionConfig(server_id="cp1325_plugin", base_url_locked=True)],
+    )
+    try:
+        assert runtime_config_store.get_mcp("cp1325_saved").base_url_locked is False
+        assert runtime_config_store.get_mcp("cp1325_plugin").base_url_locked is False
+    finally:
+        runtime_config_store.remove_mcp_server("cp1325_saved")
+        runtime_config_store.remove_mcp_servers_by_source("plugin:cp1325")
 
 
 def test_builtin_connection_auth_mode_cannot_be_changed() -> None:
