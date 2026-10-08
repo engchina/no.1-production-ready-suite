@@ -33,6 +33,7 @@ jobs:
       nl2sql: ${{ steps.filter.outputs.nl2sql }}
       agent: ${{ steps.filter.outputs.agent }}
       terraform: ${{ steps.filter.outputs.terraform }}
+      scripts: ${{ steps.filter.outputs.scripts == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_frontend: >-
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.ci == 'true'
         || steps.filter.outputs.platform_other == 'true' }}
@@ -87,6 +88,9 @@ jobs:
               - "agent/**"
             terraform:
               - "terraform/**"
+            # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）。
+            scripts:
+              - "scripts/**"
             platform_backend_core_deps:
               - "platform/packages/backend_core/uv.lock"
               - "platform/packages/backend_core/pyproject.toml"
@@ -1211,8 +1215,32 @@ jobs:
           bash platform/deploy/tests/suite-init.test.sh
           bash platform/deploy/tests/suite-nginx.test.sh
 
+  # ---------------------------------------------------------------- root の scripts/
+
+  # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh。#1328）を shellcheck と、
+  # 偽の gh・一時的な git リポジトリのテスト（scripts/tests/）で検査する。GitHub には接続しない。
+  suite-scripts:
+    name: Suite / Scripts
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # shellcheck は GitHub の ubuntu の runner に入っている。
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh scripts/tests/*.sh
+
+      - name: Test pr-merge-check
+        run: bash scripts/tests/pr-merge-check.test.sh
+
   # ---------------------------------------------------------------- 集約
 
+  # job を追加したら、この needs にも追加する（ここに無い job の失敗は CI OK に反映されない）。
+  # すべての job に timeout-minutes を付ける（通常 10〜15 分、e2e は実測の倍程度。既定の 360 分のまま止まると
+  # runner と PR の待ちを長く塞ぐ）。
   ci-ok:
     name: CI OK
     if: always()
@@ -1241,6 +1269,7 @@ jobs:
       - nl2sql-e2e-impact
       - agent-e2e-impact
       - suite-terraform
+      - suite-scripts
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
