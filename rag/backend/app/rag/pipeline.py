@@ -310,6 +310,12 @@ class RagPipeline:
             )
             if guide and request.generate_answer:
                 apply_guide_to_diagnostics(outcome.diagnostics, guide)
+        profile_revision = self._settings.rag_search_answer_profile_revision
+        if profile_revision:
+            # 回答を作った検索・回答プロファイルの版（#1276）。
+            outcome.diagnostics.setdefault("provenance", {})["search_answer_profile"] = dict(
+                profile_revision
+            )
         if request.generate_answer:
             # 回答側の安全チェックも工程として計測し、進捗に出す
             # (チャットの「回答を確認しています」。#1146)。

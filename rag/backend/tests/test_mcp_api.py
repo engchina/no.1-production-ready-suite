@@ -297,6 +297,15 @@ def test_search_maps_evidence_and_uses_token_user_context(
                         "gaps": ["期限の例外"],
                         "confirmations": [],
                     },
+                    # 回答を作った設定の版（#1276）。
+                    "provenance": {
+                        "search_answer_profile": {
+                            "id": "sap-1",
+                            "updated_at": "2026-10-01T00:00:00+00:00",
+                            "config_sha256": "abc",
+                        },
+                        "prompt_version": "prompt-0123456789abcdef",
+                    },
                 }
             ),
         )
@@ -309,8 +318,15 @@ def test_search_maps_evidence_and_uses_token_user_context(
         {**_token(user.user_uuid), "X-RAG-Agent-ID": "spoofed"},
     )
     body = result["structuredContent"]
+    assert body["schema_version"] == 2
     assert body["answer"] == "回答"
     assert body["trace_id"] == "trace-1"
+    assert body["provenance"] == {
+        "search_answer_profile_id": "sap-1",
+        "search_answer_profile_updated_at": "2026-10-01T00:00:00+00:00",
+        "search_answer_profile_config_sha256": "abc",
+        "prompt_version": "prompt-0123456789abcdef",
+    }
     assert body["guardrail_warnings"] == ["注意"]
     assert body["insufficient_reason"] == "期限の例外が資料に無い"
     assert body["needs_human_review"] is True

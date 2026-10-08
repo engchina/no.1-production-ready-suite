@@ -826,6 +826,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "（guide_id・版・判断・既知 / 不明の条件・確認の質問。#1238）。回答フローだけが使う。"
         ),
     )
+    rag_search_answer_profile_revision: dict[str, object] = Field(
+        default_factory=dict,
+        description=(
+            "リクエスト単位で解決した検索・回答プロファイルの版（id・更新時刻・設定の sha256。"
+            "#1276）。回答の記録の provenance に残すだけで、検索・回答の挙動は変えない。"
+        ),
+    )
     rag_domain_keywords: list[str] = Field(
         default_factory=list,
         description=(
