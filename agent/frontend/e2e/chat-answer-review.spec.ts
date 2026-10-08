@@ -138,8 +138,37 @@ const WITHHELD = validation({
   withheld: { claims: 2, findings: 1, all: false },
 });
 
-function answer(text: string) {
-  return { id: `answer-${text.length}`, kind: "answer", name: "回答", created_at: MOCK_NOW, content: { text } };
+function answer(text: string, outcome?: Record<string, unknown>) {
+  return {
+    id: `answer-${text.length}`,
+    kind: "answer",
+    name: "回答",
+    created_at: MOCK_NOW,
+    content: outcome ? { text, outcome } : { text },
+  };
+}
+
+/** 成果物 answer の対応（#1305。backend の `answer_outcome.answer_outcome` の形）。 */
+function outcome(value: string) {
+  return { schema_version: 1, value, basis: "rag_search", rag_outcome: value, signals: ["absence"] };
+}
+
+/** 回答の対応の内部の値（画面に出さない。#1314）。 */
+const OUTCOME_INTERNAL_WORDS = [
+  "answered",
+  "conditional",
+  "needs_clarification",
+  "needs_environment_data",
+  "needs_human",
+  "insufficient_evidence",
+  "rag_search",
+  "basis",
+  "signals",
+];
+
+async function expectNoOutcomeInternalWords(locator: Locator) {
+  const text = await locator.innerText();
+  for (const word of OUTCOME_INTERNAL_WORDS) expect(text, `内部の値「${word}」を出さない`).not.toContain(word);
 }
 
 function seedRun(mockApi: MockApi, id: string, artifacts: unknown[], overrides: Record<string, unknown> = {}) {
@@ -360,4 +389,143 @@ test("実行履歴の詳細では業務の言葉で出し、元の JSON は管�
   await expect(support.getByText("元の JSON")).toHaveCount(0);
   await expectNoInternalWords(support);
   await expectNoInternalWords(validationArtifact);
+});
+
+// #1314: 回答の対応（成果物 answer の outcome）を、RAG の回答の詳細（#1252）と同じ文言・色のバッジで出す。
+for (const viewport of VIEWPORTS) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`回答の対応のバッジを検証のバッジと並べて見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+      seedRun(mockApi, "run-outcome-1", [
+        { ...answer("精算は申請から始めます。", outcome("conditional")), id: "answer-outcome-1" },
+        supportTask(),
+        WITHHELD,
+      ]);
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await useTheme(page, theme);
+      await page.goto("/chat");
+      await openSeedThread(page);
+
+      const turn = page.getByTestId("chat-turn-run-outcome-1");
+      const summary = turn.getByTestId("chat-review-run-outcome-1-summary");
+      await expect(summary).toBeVisible();
+      // 見出し → 対応 → 検証の順に並ぶ（どちらもアイコン付き。色だけに頼らない）。
+      const badges = summary.locator("[data-status-variant]");
+      await expect(badges).toHaveText(["条件付きの回答", "一部を確かめられず省略 2 件"]);
+      const outcomeBadge = turn.getByTestId("chat-review-run-outcome-1-outcome").locator("[data-status-variant]");
+      await expect(outcomeBadge).toHaveAttribute("data-status-variant", "warning");
+      await expect(outcomeBadge.locator("svg")).toHaveCount(1);
+      await expect(badges.nth(1).locator("svg")).toHaveCount(1);
+
+      // 見出しの文字は 1 行のまま、バッジは要約の幅に収まる（はみ出さない・切れない）。
+      const title = summary.getByText("回答の確かめ", { exact: true });
+      const titleBox = await title.boundingBox();
+      const lineHeight = await title.evaluate((node) => parseFloat(getComputedStyle(node).lineHeight));
+      expect(titleBox!.height).toBeLessThanOrEqual(lineHeight + 1);
+      const answerBox = await turn.getByTestId("chat-review-run-outcome-1").boundingBox();
+      for (const badge of await badges.all()) {
+        const box = await badge.boundingBox();
+        expect(box!.x + box!.width).toBeLessThanOrEqual(answerBox!.x + answerBox!.width + 1);
+        expect(await badge.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+      }
+      if (viewport.width < 640) {
+        // 375px では検証のバッジが次の行へ折り返す（見出しの文字を縦に潰さない）。
+        const first = await badges.nth(0).boundingBox();
+        const second = await badges.nth(1).boundingBox();
+        expect(second!.y).toBeGreaterThan(first!.y);
+      }
+      await expectNoOutcomeInternalWords(turn);
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`outcome-chat-${viewport.name}-${theme}.png`), fullPage: true });
+
+      // 実行の詳細の回答にも同じバッジを出す。
+      await page.goto("/runs?id=run-outcome-1");
+      const runBadge = page.getByTestId("run-answer-outcome-answer-outcome-1").locator("[data-status-variant]");
+      await expect(runBadge).toHaveText("条件付きの回答");
+      await expect(runBadge).toHaveAttribute("data-status-variant", "warning");
+      await expect(runBadge.locator("svg")).toHaveCount(1);
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`outcome-run-${viewport.name}-${theme}.png`), fullPage: true });
+    });
+  }
+}
+
+test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、「答えた」・対応の無い古い Run・知らない値では出さない", async ({ page, mockApi }) => {
+  const cases = [
+    ["run-o-conditional", "conditional", "条件付きの回答", "warning"],
+    ["run-o-clarification", "needs_clarification", "確認が必要", "info"],
+    ["run-o-environment", "needs_environment_data", "現場のデータが必要", "warning"],
+    ["run-o-human", "needs_human", "人への引き継ぎ", "warning"],
+    ["run-o-insufficient", "insufficient_evidence", "根拠不足", "danger"],
+  ] as const;
+  const verified = validation({
+    status: "completed",
+    valid: true,
+    result: { status: "completed", valid: true, claims: [] },
+    withheld: { claims: 0, findings: 0, all: false },
+  });
+  cases.forEach(([runId, value], index) => seedRun(mockApi, runId, [answer(`対応の回答 ${index + 1}`, outcome(value)), verified]));
+  seedRun(mockApi, "run-o-answered", [answer("答えた回答", outcome("answered")), verified]);
+  seedRun(mockApi, "run-o-legacy", [answer("古い回答"), verified]);
+  seedRun(mockApi, "run-o-unknown", [answer("知らない対応の回答", outcome("future_value")), verified]);
+  // 検証も支援タスクの状態も無い回答は、開いても中身が無いので、見出しとバッジだけを畳まずに出す。
+  seedRun(mockApi, "run-o-only", [answer("対応だけの回答", outcome("needs_human"))]);
+  // 対応も検証も無い古い Run には、回答の確かめを出さない。
+  seedRun(mockApi, "run-o-plain", [answer("対応も検証も無い回答", outcome("answered"))]);
+  await page.goto("/chat");
+  await openSeedThread(page);
+
+  for (const [runId, , label, variant] of cases) {
+    const turn = page.getByTestId(`chat-turn-${runId}`);
+    const badge = turn.getByTestId(`chat-review-${runId}-outcome`).locator("[data-status-variant]");
+    await expect(badge).toHaveText(label);
+    await expect(badge).toHaveAttribute("data-status-variant", variant);
+    await expect(badge.locator("svg")).toHaveCount(1);
+    // 検証のバッジと並ぶ。
+    await expect(turn.getByTestId(`chat-review-${runId}-summary`).locator("[data-status-variant]")).toHaveText([
+      label,
+      "検証済み",
+    ]);
+    await expectNoOutcomeInternalWords(turn);
+  }
+  for (const runId of ["run-o-answered", "run-o-legacy", "run-o-unknown"]) {
+    const turn = page.getByTestId(`chat-turn-${runId}`);
+    await expect(turn.getByTestId(`chat-review-${runId}-outcome`)).toHaveCount(0);
+    await expect(turn.getByTestId(`chat-review-${runId}-summary`).locator("[data-status-variant]")).toHaveText([
+      "検証済み",
+    ]);
+    await expectNoOutcomeInternalWords(turn);
+  }
+  await expect(page.getByTestId("chat-turn-run-o-unknown")).not.toContainText("future_value");
+
+  const only = page.getByTestId("chat-review-run-o-only");
+  await expect(only).toHaveText("回答の確かめ人への引き継ぎ");
+  await expect(only.locator("summary")).toHaveCount(0);
+  await expect(page.getByTestId("chat-review-run-o-only-outcome").locator("[data-status-variant]")).toHaveAttribute(
+    "data-status-variant",
+    "warning"
+  );
+  await expect(page.getByTestId("chat-review-run-o-plain")).toHaveCount(0);
+  await expect(page.getByTestId("chat-turn-run-o-plain").getByText("対応も検証も無い回答")).toBeVisible();
+});
+
+test("実行の詳細の回答に回答の対応のバッジを出し、対応の無い古い Run では出さない", async ({ page, mockApi }) => {
+  seedRun(mockApi, "run-detail-outcome", [
+    { ...answer("現場の値を確かめてください。", outcome("needs_environment_data")), id: "answer-detail-1" },
+  ]);
+  seedRun(mockApi, "run-detail-legacy", [{ ...answer("古い実行の回答"), id: "answer-detail-2" }]);
+  seedRun(mockApi, "run-detail-answered", [{ ...answer("答えた実行の回答", outcome("answered")), id: "answer-detail-3" }]);
+
+  await page.goto("/runs?id=run-detail-outcome");
+  const badge = page.getByTestId("run-answer-outcome-answer-detail-1").locator("[data-status-variant]");
+  await expect(badge).toHaveText("現場のデータが必要");
+  await expect(badge).toHaveAttribute("data-status-variant", "warning");
+  await expect(badge.locator("svg")).toHaveCount(1);
+
+  await page.goto("/runs?id=run-detail-legacy");
+  await expect(page.getByText("古い実行の回答")).toBeVisible();
+  await expect(page.getByTestId("run-answer-outcome-answer-detail-2")).toHaveCount(0);
+
+  await page.goto("/runs?id=run-detail-answered");
+  await expect(page.getByText("答えた実行の回答")).toBeVisible();
+  await expect(page.getByTestId("run-answer-outcome-answer-detail-3")).toHaveCount(0);
 });
