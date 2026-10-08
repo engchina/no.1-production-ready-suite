@@ -743,6 +743,48 @@
             },
             "title": "EvidenceLocator",
             "type": "object"
+          },
+          "EvidenceReference": {
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
+            "properties": {
+              "label": {
+                "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
+                "title": "Label",
+                "type": "string"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "他の文書への参照の文書名（同じ文書なら null）。",
+                "title": "Document Title"
+              },
+              "section_path": {
+                "description": "同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "resolved": {
+                "description": "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から決めるので false）。",
+                "title": "Resolved",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "resolved"
+            ],
+            "title": "EvidenceReference",
+            "type": "object"
           }
         },
         "properties": {
@@ -903,6 +945,14 @@
             "description": "新しい版に置き換えた文書（旧版）の根拠か。",
             "title": "Superseded",
             "type": "boolean"
+          },
+          "references": {
+            "description": "本文が参照する節・文書（#1280。続きは rag_search で参照先を検索する）。",
+            "items": {
+              "$ref": "#/$defs/EvidenceReference"
+            },
+            "title": "References",
+            "type": "array"
           }
         },
         "required": [
@@ -1227,6 +1277,48 @@
             "title": "EvidenceLocator",
             "type": "object"
           },
+          "EvidenceReference": {
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
+            "properties": {
+              "label": {
+                "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
+                "title": "Label",
+                "type": "string"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "他の文書への参照の文書名（同じ文書なら null）。",
+                "title": "Document Title"
+              },
+              "section_path": {
+                "description": "同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "resolved": {
+                "description": "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から決めるので false）。",
+                "title": "Resolved",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "resolved"
+            ],
+            "title": "EvidenceReference",
+            "type": "object"
+          },
           "RagEvidence": {
             "description": "検索・回答の根拠 1 件。",
             "properties": {
@@ -1383,6 +1475,40 @@
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（filters の include_superseded=true で含める）。",
                 "title": "Superseded",
                 "type": "boolean"
+              },
+              "references": {
+                "description": "この根拠の本文が参照する節・文書（#1280）。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceReference"
+                },
+                "title": "References",
+                "type": "array"
+              },
+              "reference_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id（#1280）。",
+                "title": "Reference From"
+              },
+              "reference_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "reference_from の根拠の本文の参照の表記。",
+                "title": "Reference Label"
               }
             },
             "required": [
@@ -1839,6 +1965,48 @@
             "title": "EvidenceLocator",
             "type": "object"
           },
+          "EvidenceReference": {
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。",
+            "properties": {
+              "label": {
+                "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
+                "title": "Label",
+                "type": "string"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "他の文書への参照の文書名（同じ文書なら null）。",
+                "title": "Document Title"
+              },
+              "section_path": {
+                "description": "同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "resolved": {
+                "description": "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から決めるので false）。",
+                "title": "Resolved",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "resolved"
+            ],
+            "title": "EvidenceReference",
+            "type": "object"
+          },
           "GuideClarification": {
             "properties": {
               "condition_id": {
@@ -2167,6 +2335,40 @@
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（filters の include_superseded=true で含める）。",
                 "title": "Superseded",
                 "type": "boolean"
+              },
+              "references": {
+                "description": "この根拠の本文が参照する節・文書（#1280）。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceReference"
+                },
+                "title": "References",
+                "type": "array"
+              },
+              "reference_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id（#1280）。",
+                "title": "Reference From"
+              },
+              "reference_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "reference_from の根拠の本文の参照の表記。",
+                "title": "Reference Label"
               }
             },
             "required": [
