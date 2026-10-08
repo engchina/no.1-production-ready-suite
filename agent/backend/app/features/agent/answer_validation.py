@@ -58,6 +58,7 @@ REASON_EMPTY_ANSWER = "empty_answer"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
+REASON_VALIDATION_ERROR = "validation_error"
 
 UNVERIFIED_NOTICE = "この回答は検証できませんでした。"
 NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。"

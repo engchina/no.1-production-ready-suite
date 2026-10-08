@@ -264,6 +264,23 @@ def test_validator_timeout_keeps_the_answer_with_a_notice(
     assert _validation(run)["status"] == "unvalidated"
 
 
+def test_unexpected_validation_error_keeps_the_answer_and_records_it(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    def broken(_steps: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(builtin_runtime, "run_evidence_groups", broken)
+
+    run, _ = _searched_run(monkeypatch)
+
+    assert run.status == RunStatus.COMPLETED
+    assert run_answer_text(run) == f"{ANSWER}\n\nこの回答は検証できませんでした。"
+    content = _validation(run)
+    assert content["status"] == "unvalidated"
+    assert content["reason"] == "validation_error"
+
+
 def test_unusable_validator_result_keeps_the_answer_with_a_notice(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:

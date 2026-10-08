@@ -58,6 +58,7 @@ from app.features.agent.answer_validation import (
     REASON_EMPTY_ANSWER,
     REASON_NO_RAG_EVIDENCE,
     REASON_UNUSABLE_RESULT,
+    REASON_VALIDATION_ERROR,
     REASON_VALIDATOR_UNAVAILABLE,
     STATUS_COMPLETED,
     STATUS_SKIPPED,
@@ -861,6 +862,17 @@ async def _finish(
             logger.warning(
                 "builtin_runtime_answer_validation_failed",
                 extra={"run_id": run_id, "exception_type": type(exc).__name__},
+            )
+            # 確かめられなかったことを成果物にも残す（#1277。黙って通さない）。
+            runtime_repository.save_builtin_artifact(
+                run_id,
+                kind=ANSWER_VALIDATION_KIND,
+                name=ANSWER_VALIDATION_NAME,
+                content=validation_content(
+                    STATUS_UNVALIDATED,
+                    reason=REASON_VALIDATION_ERROR,
+                    message="回答の検証の途中で予期しない失敗が起きました。",
+                ),
             )
             answer = with_unverified_notice(answer)
     runtime_repository.complete_builtin_run(run_id, answer)
