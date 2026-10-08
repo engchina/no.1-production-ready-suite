@@ -646,6 +646,8 @@ export interface McpConnectionSettings {
   /** builtin（RAG / NL2SQL）/ env / plugin:<id> / runtime。runtime だけ削除できる。 */
   source: string;
   removable: boolean;
+  /** 配備（環境変数）が URL を決めた標準の接続か（#1325）。true なら URL は変えられない。 */
+  base_url_locked?: boolean;
   /** URL と認証方式に必要な資格情報がそろっているか。 */
   configured: boolean;
   api_key_configured: boolean;

@@ -19,7 +19,16 @@ McpAuthMode = Literal["none", "api_key", "oauth_client_credentials", "service_to
 # RAG / NL2SQL の MCP 接続（#757）。各製品の `POST /api/mcp` を、Run の利用者を `sub` にした
 # サービストークン（aud は製品名）で呼ぶ（#233）。URL は terraform・init_script が書く
 # `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` を初期値にする。
+# 接続 ID はツール名の接頭辞（`rag__` / `nl2sql__`）と評価・記録が使うため変えない。
 PRODUCT_MCP_CONNECTION_IDS: tuple[str, ...] = ("rag", "nl2sql")
+# 標準の接続の表示名（#1325）。製品の略称だけでは用途が伝わらないため、用途の名前に製品名を添える。
+# 名前は配備が決め、画面・API では変えない（保存した名前も復元しない）。
+PRODUCT_MCP_CONNECTION_LABELS: dict[str, str] = {
+    "rag": "ナレッジ検索（RAG）",
+    "nl2sql": "データ問い合わせ（NL2SQL）",
+}
+# 標準の接続の呼び先の製品名（失敗の案内の「〜のサービスが起動しているか」に使う）。
+PRODUCT_MCP_SERVICE_NAMES: dict[str, str] = {"rag": "RAG", "nl2sql": "NL2SQL"}
 
 
 class McpConnectionConfig(BaseModel):
@@ -41,6 +50,9 @@ class McpConnectionConfig(BaseModel):
     timeout_seconds: float = 10.0
     # 由来層: builtin(RAG / NL2SQL) / env(JSON 宣言) / plugin:<id> / runtime(UI/API 追加)
     source: str = "runtime"
+    # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL を画面・API で変えられず、
+    # 保存した URL も復元しない。起動のたびに設定から決める（保存した値は使わない）。
+    base_url_locked: bool = False
 
     def effective_auth_mode(self) -> McpAuthMode:
         if self.auth_mode is not None:
@@ -63,27 +75,35 @@ class ToolPolicyRuntimeConfig(BaseModel):
 
 
 def _product_connections() -> list[McpConnectionConfig]:
+    """標準の接続（RAG / NL2SQL）。配備が URL を与えたら、その URL に固定する（#1325）。
+
+    URL の環境変数が無い構成（ローカルの開発など）は、画面で URL を設定できる。
+    """
     settings = get_settings()
-    return [
-        McpConnectionConfig(
-            server_id="rag",
-            label="RAG",
-            base_url=settings.agent_external_rag_mcp_url or None,
-            auth_mode="service_token",
-            service_audience="rag",
-            timeout_seconds=settings.agent_external_rag_timeout_seconds,
-            source="builtin",
+    targets = (
+        ("rag", settings.agent_external_rag_mcp_url, settings.agent_external_rag_timeout_seconds),
+        (
+            "nl2sql",
+            settings.agent_external_nl2sql_mcp_url,
+            settings.agent_external_nl2sql_timeout_seconds,
         ),
-        McpConnectionConfig(
-            server_id="nl2sql",
-            label="NL2SQL",
-            base_url=settings.agent_external_nl2sql_mcp_url or None,
-            auth_mode="service_token",
-            service_audience="nl2sql",
-            timeout_seconds=settings.agent_external_nl2sql_timeout_seconds,
-            source="builtin",
-        ),
-    ]
+    )
+    connections: list[McpConnectionConfig] = []
+    for server_id, raw_url, timeout_seconds in targets:
+        url = (raw_url or "").strip() or None
+        connections.append(
+            McpConnectionConfig(
+                server_id=server_id,
+                label=PRODUCT_MCP_CONNECTION_LABELS[server_id],
+                base_url=url,
+                auth_mode="service_token",
+                service_audience=server_id,
+                timeout_seconds=timeout_seconds,
+                source="builtin",
+                base_url_locked=url is not None,
+            )
+        )
+    return connections
 
 
 class AgentRuntimeConfigStore:
@@ -168,13 +188,14 @@ class AgentRuntimeConfigStore:
     def restore_mcp_server(self, stored: McpConnectionConfig) -> None:
         """保存した接続を重ねる（#764）。
 
-        RAG / NL2SQL・宣言の接続は、画面で変えた項目だけを上書きする。
+        RAG / NL2SQL・宣言の接続は、画面で変えた項目だけを上書きする。標準の接続（RAG / NL2SQL）の
+        名前・認証と、配備が決めた URL は保存した値で上書きしない（#1325）。
         """
         with self._lock:
             current = self._mcp_servers.get(stored.server_id)
             if current is None:
                 self._mcp_servers[stored.server_id] = stored.model_copy(
-                    deep=True, update={"source": "runtime"}
+                    deep=True, update={"source": "runtime", "base_url_locked": False}
                 )
                 return
             fields = {
@@ -188,7 +209,11 @@ class AgentRuntimeConfigStore:
                 "oauth_client_secret": stored.oauth_client_secret,
                 "oauth_scope": stored.oauth_scope,
             }
-            if current.source != "builtin":
+            if current.source == "builtin":
+                del fields["label"]
+                if current.base_url_locked:
+                    del fields["base_url"]
+            else:
                 fields["auth_mode"] = stored.auth_mode
                 fields["service_audience"] = stored.service_audience
             self._mcp_servers[stored.server_id] = current.model_copy(update=fields)
@@ -211,7 +236,9 @@ class AgentRuntimeConfigStore:
                 sid = config.server_id.strip()
                 if not sid or sid in PRODUCT_MCP_CONNECTION_IDS:
                     continue
-                self._mcp_servers[sid] = config.model_copy(deep=True, update={"source": source})
+                self._mcp_servers[sid] = config.model_copy(
+                    deep=True, update={"source": source, "base_url_locked": False}
+                )
 
     def remove_mcp_servers_by_source(self, source: str) -> None:
         with self._lock:

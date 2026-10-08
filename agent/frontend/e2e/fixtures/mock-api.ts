@@ -2030,14 +2030,33 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
               (body.service_audience != null &&
                 (String(body.service_audience).trim() || third) !== connection.service_audience));
           if (builtinAuthChanged) {
-            throw new HttpError(400, "RAG / NL2SQL の接続の認証方式と audience は変えられません。");
+            throw new HttpError(400, "標準の接続（RAG / NL2SQL）の認証方式と audience は変えられません。");
+          }
+          // 標準の接続の名前と、配備が決めた URL は変えられない（backend と同じ 400。#1325）。
+          if (
+            connection.source === "builtin" &&
+            body.label != null &&
+            (String(body.label).trim() || null) !== connection.label
+          ) {
+            throw new HttpError(400, "標準の接続（RAG / NL2SQL）の名前は変えられません。");
+          }
+          if (
+            connection.base_url_locked &&
+            body.base_url != null &&
+            (String(body.base_url) || null) !== connection.base_url
+          ) {
+            const envName = third === "rag" ? "AGENT_EXTERNAL_RAG_MCP_URL" : "AGENT_EXTERNAL_NL2SQL_MCP_URL";
+            throw new HttpError(
+              400,
+              `この接続の URL は配備（${envName}）で設定しているため、画面・API では変えられません。変えるときは配備の設定を変えて再起動してください。`
+            );
           }
           Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
           return publicMcpConnection(connection);
         }
         if (method === "DELETE") {
           if (!connection.removable) {
-            throw new HttpError(400, "RAG / NL2SQL・宣言・連携機能の MCP 接続は削除できません。");
+            throw new HttpError(400, "標準の接続（RAG / NL2SQL）・宣言・プラグインの MCP 接続は削除できません。");
           }
           store.connections = store.connections.filter((candidate) => candidate.server_id !== third);
           return listData();

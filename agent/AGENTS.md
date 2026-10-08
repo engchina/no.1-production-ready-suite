@@ -61,8 +61,10 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 ## MCP 境界
 
 - RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理する（#757。旧「外部 RAG」「外部 NL2SQL」「外部 MCP」は削除）。
-  RAG / NL2SQL は組み込みの接続 `rag` / `nl2sql`（認証はサービストークン、削除できない）で、URL の初期値は
-  `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`。外部の MCP は認証方式（なし / API キー /
+  RAG / NL2SQL は標準の接続 `rag` / `nl2sql`（画面の名前は「ナレッジ検索（RAG）」「データ問い合わせ（NL2SQL）」。
+  認証はサービストークンで、削除・名前・認証方式の変更はできない。#1325）。URL は `AGENT_EXTERNAL_RAG_MCP_URL` /
+  `AGENT_EXTERNAL_NL2SQL_MCP_URL` で、配備がこれを与えた接続は URL も変えられない（API は 400、`base_url_locked`）。
+  空の構成（ローカルの開発・その製品を配備しない構成）だけ画面で URL を設定できる。外部の MCP は認証方式（なし / API キー /
   OAuth client credentials / サービストークン）を選んで追加する。
 - MCP 接続のツールは、組み込み Runtime から `tool_registry.invoke`（`definition` / `handler` を渡す）を通してだけ呼ぶ
   （policy・masking・監査を再利用する）。承認の要否は MCP の `readOnlyHint` とツール権限（`<接続>__<ツール>` の名前）。

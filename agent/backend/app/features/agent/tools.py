@@ -27,7 +27,11 @@ from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.config import (
+    PRODUCT_MCP_SERVICE_NAMES,
+    McpConnectionConfig,
+    runtime_config_store,
+)
 from app.features.agent.mcp_url import mask_url_credentials, mask_urls_in_text
 from app.features.agent.profile_name_migration import migrate_rag_call
 from app.features.agent.skills import (
@@ -1207,6 +1211,13 @@ class McpConnectionClient:
     def _label(self) -> str:
         return self._config.label or self._config.server_id
 
+    @property
+    def _target_name(self) -> str:
+        """起動を確かめる呼び先の名前（標準の接続は製品名。#1325）。"""
+        if self._config.source == "builtin":
+            return PRODUCT_MCP_SERVICE_NAMES.get(self._config.server_id, self._label)
+        return self._label
+
     def _session(self) -> McpSession:
         config = self._config
         if not config.base_url:
@@ -1250,7 +1261,7 @@ class McpConnectionClient:
             service_code="mcp",
             service_label=f"MCP 接続「{self._label}」",
             session_id=config.session_id,
-            target_name=self._label,
+            target_name=self._target_name,
         )
 
     def _service_token(self) -> str:

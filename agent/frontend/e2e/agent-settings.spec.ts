@@ -401,10 +401,11 @@ test.describe("Agent Runtime settings", () => {
     await page.goto("/settings/mcp-connections");
 
     await expect(page.getByRole("heading", { name: "MCP 接続", level: 1 })).toBeVisible();
-    // RAG / NL2SQL は組み込みの接続として最初から並ぶ。
+    // RAG / NL2SQL は標準の接続として、用途の分かる名前で最初から並ぶ（接続 ID は rag / nl2sql。#1325）。
     const table = page.getByRole("table", { name: "MCP 接続" });
-    await expect(table.getByRole("link", { name: /RAG rag/ })).toBeVisible();
-    await expect(table.getByRole("link", { name: /NL2SQL nl2sql/ })).toBeVisible();
+    await expect(table.getByRole("link", { name: /ナレッジ検索（RAG） rag/ })).toBeVisible();
+    await expect(table.getByRole("link", { name: /データ問い合わせ（NL2SQL） nl2sql/ })).toBeVisible();
+    await expect(table.getByRole("row", { name: /ナレッジ検索（RAG）/ }).getByText("標準", { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole("button", { name: "接続を追加" }).click();
@@ -517,7 +518,14 @@ test.describe("Agent Runtime settings", () => {
   test("RAG / NL2SQL の接続は URL を保存し、サービストークンの準備の状態を表示する", async ({ page, mockApi }) => {
     await page.goto("/settings/mcp-connections?id=rag");
 
-    await expect(page.getByRole("heading", { name: "RAG", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ナレッジ検索（RAG）", level: 1 })).toBeVisible();
+    // 標準の接続は「標準」の印と説明を出し、名前は変えられない。配備で URL が無い構成では URL を設定できる（#1325）。
+    await expect(page.getByText("標準", { exact: true })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "標準の接続" })).toContainText(
+      "配備で URL が設定されていないため、URL はここで設定できます。"
+    );
+    await expect(page.locator("#mcp-server-label")).toBeDisabled();
+    await expect(page.locator("#mcp-server-base-url")).toBeEnabled();
     // 未設定のあいだは、足りないものと直し方を warning の Banner で示す。
     const notice = page.getByRole("status").filter({ hasText: "この接続はまだ使えません" });
     await expect(notice).toContainText("MCP の URL が未設定です");
@@ -537,8 +545,8 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
     await expect(notice).not.toContainText("MCP の URL が未設定です");
     await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
+    // 標準の接続の名前は送らない（配備が決める）。
     expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/rag")?.body).toEqual({
-      label: "RAG",
       base_url: "http://rag-host/api/mcp",
       timeout_seconds: 60,
     });
@@ -552,7 +560,7 @@ test.describe("Agent Runtime settings", () => {
       service_user_configured: true,
     });
     await page.goto("/settings/mcp-connections?id=nl2sql");
-    await expect(page.getByRole("heading", { name: "NL2SQL", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "データ問い合わせ（NL2SQL）", level: 1 })).toBeVisible();
     await expect(page.locator("#mcp-server-base-url")).toHaveValue("http://nl2sql-host/api/mcp");
     await expect(page.getByText("この接続はまだ使えません")).toHaveCount(0);
     await expect(
@@ -562,6 +570,58 @@ test.describe("Agent Runtime settings", () => {
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(page.locator("#mcp-server-base-url")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+  });
+
+  test("配備で URL を設定した標準の接続は、URL・名前を変えられず削除もできない（desktop / 375px。#1325）", async ({ page, mockApi }, testInfo) => {
+    const rag = mockApi.state.mcpConnections.connections.find((item) => item.server_id === "rag")!;
+    Object.assign(rag, {
+      base_url: "http://127.0.0.1:8000/api/mcp",
+      base_url_locked: true,
+      configured: true,
+      service_token_configured: true,
+      service_user_configured: true,
+    });
+    for (const viewport of [
+      { name: "desktop", width: 1280, height: 800 },
+      { name: "375", width: 375, height: 812 },
+    ]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/settings/mcp-connections");
+      const table = page.getByRole("table", { name: "MCP 接続" });
+      const ragRow = table.getByRole("row", { name: /ナレッジ検索（RAG）/ });
+      await expect(ragRow.getByText("標準", { exact: true })).toBeVisible();
+      // 削除できないので、行の操作メニューは使えない。
+      await expect(ragRow.locator('[aria-haspopup="menu"]')).toHaveCount(0);
+      await expectNoHorizontalOverflow(page);
+
+      await page.goto("/settings/mcp-connections?id=rag");
+      await expect(page.getByRole("heading", { name: "ナレッジ検索（RAG）", level: 1 })).toBeVisible();
+      const notice = page.getByRole("status").filter({ hasText: "標準の接続" });
+      await expect(notice).toContainText("配備で設定した接続です。削除と、名前・URL・認証方式の変更はできません。");
+      await expect(page.locator("#mcp-server-base-url")).toBeDisabled();
+      await expect(page.locator("#mcp-server-base-url")).toHaveValue("http://127.0.0.1:8000/api/mcp");
+      await expect(page.locator("#mcp-server-base-url")).toHaveAccessibleDescription(/AGENT_EXTERNAL_RAG_MCP_URL/);
+      await expect(page.locator("#mcp-server-label")).toBeDisabled();
+      await expect(page.locator("#mcp-server-auth-mode")).toBeDisabled();
+      await expect(page.getByTestId("mcp-server-object-actions").getByRole("button")).toHaveCount(0);
+      // 準備ができていれば「ツールを取得」は使える。
+      await expect(page.getByRole("button", { name: "ツールを取得" })).toBeEnabled();
+      await expectNoHorizontalOverflow(page);
+      for (const theme of ["light", "dark"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+        }, theme);
+        await page.screenshot({ path: testInfo.outputPath(`mcp-builtin-locked-${viewport.name}-${theme}.png`), fullPage: true });
+      }
+    }
+
+    // タイムアウトは変えられ、URL と名前は送らない。
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.locator("#mcp-server-timeout").fill("90");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/rag")?.body).toEqual({ timeout_seconds: 90 });
   });
 
   test("スキルを追加・編集・削除でき、ビルトインは保護される", async ({ page }) => {
