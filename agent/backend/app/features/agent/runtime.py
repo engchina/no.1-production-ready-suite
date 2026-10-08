@@ -639,7 +639,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     def request_builtin_approvals(
         self, run_id: str, calls: Sequence[ToolCall], *, state: str
     ) -> RunState: ...
-    def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
+    def complete_builtin_run(
+        self, run_id: str, answer: str, *, outcome: JsonObject | None = None
+    ) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def set_run_feedback(
@@ -1322,13 +1324,22 @@ class AgentRuntimeRepository:
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
-    def complete_builtin_run(self, run_id: str, answer: str) -> RunState:
-        """モデルの最終回答を成果物に残して完了にする。"""
+    def complete_builtin_run(
+        self, run_id: str, answer: str, *, outcome: JsonObject | None = None
+    ) -> RunState:
+        """モデルの最終回答を成果物に残して完了にする。
+
+        `outcome` は回答の対応（#1305。`answer_outcome.answer_outcome`）。あれば成果物の
+        `outcome` に残す。
+        """
         with self._lock:
             run = self._require_run(run_id)
             if _is_terminal(run.status):
                 return run.model_copy(deep=True)
-            artifact = Artifact(name="回答", kind="answer", content={"text": answer})
+            content: JsonObject = {"text": answer}
+            if outcome is not None:
+                content["outcome"] = outcome
+            artifact = Artifact(name="回答", kind="answer", content=content)
             run.artifacts.append(artifact)
             self._append_event(
                 run,
