@@ -263,6 +263,17 @@ class SupportGuideApi {
     if (action === "/rollback") {
       const target = guide.revisions.find((item) => item.revision === body.revision);
       if (!target) return route.fulfill(failure(404, ["業務ガイドが見つかりません。"]));
+      // 下書きを置き換えるので、読み込んだ下書きの版を照合する（#1278）。
+      if (this.conflictNext || body.base_revision !== guide.draft_revision) {
+        this.conflictNext = false;
+        guide.draft = content("別の人が直したタイトル");
+        guide.draft_revision += 1;
+        return route.fulfill(
+          failure(409, [
+            `読み込んだ後にほかの人が業務ガイドを保存しました。最新の内容（版 ${guide.draft_revision}）を読み込み直してから戻してください。`,
+          ]),
+        );
+      }
       guide.draft = target.content;
       guide.draft_revision += 1;
       this.publish(guide, target.revision);
@@ -465,10 +476,39 @@ test("公開の履歴から前の版を見て、その版に戻せる", async ({
   await expect(dialog).toContainText("版 1 の内容を新しい版として公開します。");
   await dialog.getByRole("button", { name: "この版に戻す" }).click();
   await expect(page.getByText("版 1 の内容を版 3 として公開しました。")).toBeVisible();
-  expect(api.requests.find((item) => item.path.endsWith("/rollback"))?.body).toEqual({ revision: 1 });
+  expect(api.requests.find((item) => item.path.endsWith("/rollback"))?.body).toEqual({
+    revision: 1,
+    base_revision: 3,
+  });
   await expect(page.getByRole("rowheader", { name: "版 3 公開中" })).toBeVisible();
   await expect(page.getByText("版 1 に戻した")).toBeVisible();
   await expect(editor.getByLabel("タイトル")).toHaveValue("パスワードの再設定");
+  await expectNoPageOverflow(page);
+});
+
+test("ほかの人が先に下書きを保存していたら、前の版に戻さずに読み込み直しを案内する", async ({ page }) => {
+  const api = await openSupportGuides(page, [publishedGuide()]);
+  await page.getByRole("button", { name: "パスワードの再設定（改訂） を編集" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  await expect(page.getByRole("rowheader", { name: "版 2 公開中" })).toBeVisible();
+
+  api.conflictNext = true;
+  await page.getByRole("button", { name: "版 1 の操作" }).click();
+  await page.getByRole("menuitem", { name: "この版に戻す" }).click();
+  await page
+    .getByRole("alertdialog", { name: "版 1 に戻しますか？" })
+    .getByRole("button", { name: "この版に戻す" })
+    .click();
+  const result = page.getByTestId("support-guide-result");
+  await expect(result.getByText("ほかの人が先に保存しました")).toBeVisible();
+  await expect(result).toContainText("最新の内容（版 4）を読み込み直してから戻してください。");
+  // 戻していない（公開の版は 2 のまま）。
+  await expect(page.getByRole("rowheader", { name: "版 2 公開中" })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: /版 3/ })).toHaveCount(0);
+
+  await result.getByRole("button", { name: "最新の内容を読み込む" }).click();
+  await expect(page.getByText("最新の内容を読み込みました。")).toBeVisible();
+  await expect(editor.getByLabel("タイトル")).toHaveValue("別の人が直したタイトル");
   await expectNoPageOverflow(page);
 });
 
