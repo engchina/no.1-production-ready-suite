@@ -10,7 +10,7 @@
 | `regional-report-guide-v2.pdf` / `-v1.pdf` | 地域別集計表の出力手順。第 2 版（締め日 10 日）が第 1 版（5 日）を置き換える（資料の矛盾） |
 | `error-e1023-notes.pdf` | 障害対応メモ。原因は 2 つのどちらかで、認証ログを見ないと分からない（現場のデータ） |
 | `portal-parameters.xlsx` | パラメータの一覧（既定値・設定例。現場の現在の設定値ではない） |
-| `business-support.json` | 評価セット（15 問）。`relevant_document_ids` は `file:<ファイル名>` |
+| `business-support.json` | 評価セット（19 問。うち往復のあるケース 3 問・既知の条件を渡すケース 1 問）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>` |
 | `sources/*.html` | PDF の原稿 |
 
 ## 資料を作り直す
@@ -37,7 +37,7 @@ uv run python -m app.rag.evaluation_cli /tmp/business-support.resolved.json \
 ```
 
 同じナレッジベースへ取り込み直すときは `--knowledge-base-id` を渡します。質問ごとに回答（モデルの呼び出し 3〜5 回）を
-作るため、15 問で十数分かかります。
+作るため、19 問（往復は返答ごとに回答を作る）で 20 分前後かかります。
 
 ## 採点の考え方
 
@@ -49,3 +49,40 @@ uv run python -m app.rag.evaluation_cli /tmp/business-support.resolved.json \
 - 回答の対応は、回答の記録が `outcome` を持つまでは診断からの推定です（結果の `outcome_source=inferred`）。推定は
   `needs_human_review` を「条件付きの回答」として扱うなど粗いため、分類ごとの内訳を見るときは推定であることに注意して
   ください。
+- 語の照合（手順・危険な表現・条件・必要な根拠）は NFKC・大小文字・空白を無視します（全角の「３０」と「30」、
+  改行の入り方の違いで結果が変わりません）。
+
+## 区分・往復・既知の条件・別解・必要な根拠（#1284。handoff §14.1 / §14.2）
+
+| 欄 | 意味 |
+|---|---|
+| `split` | `dev`（設定・業務ガイドの調整に使ってよい）/ `holdout`（調整に使わず、最後の確認だけに使う）。結果の `split_breakdown` に区分ごとの全指標・件数・失敗理由が出ます |
+| `conditions` | 質問と一緒に渡す既知の条件の値（条件の id → 値）。検索・回答の request の `conditions` に渡します（チャットの確認の答え・MCP の `conditions` と同じ） |
+| `turns` | 確認の質問への返答の列。各往復は `reply`（利用者の次の発話）・`conditions`（返答で分かった条件の値。前の値に足す）と、その往復の回答への期待（`expected_outcomes` / `expected_steps` / `acceptable_alternatives` / `forbidden_phrases` / `required_conditions`）を持ちます |
+| `acceptable_alternatives` | `expected_steps` と同等の別の手順の列（例: 「ログアウト → ログインし直す」と「再ログイン」）。いちばん点の高い列で採点します |
+| `required_evidence` | 最後の回答に必要な根拠（`id`・`document_id`・`text`）。引用のうち、その文書の chunk の本文が `text` を含めば取れたとみなし、ケースの `evidence_recall` と全体の `required_evidence_recall`（参考の集計。閾値には使わない）を出します |
+
+- 往復のあるケースは、チャットと同じく返答を次の質問にし、前の往復（質問と回答）を会話の履歴として順に実行します。
+  検索・回答プロファイルを指定した評価では、前の質問も業務ガイドの照合に使います。ケースの直下の対応・手順・危険な
+  表現・条件の期待は最初の回答を、各往復の期待はその往復の回答を採点し、正解の文書・期待する語・必要な根拠は最後の
+  回答で採点します。往復ごとの採点は結果の `turn_results` にあります。
+- 渡した条件を確認の質問でもう一度聞いたら（回答の記録の `clarifications` の `condition_id`）、失敗理由
+  `known_condition_reasked` を付けます。
+- `conditions` の id は、業務ガイド（#1238）の条件の id に合わせます。この評価セットは、付与先を `target`（個別 /
+  グループ）、部門長の承認を `approved`（はい / いいえ）とする業務ガイドを前提にしています（業務ガイドそのものは
+  リポジトリに置いていません）。業務ガイドを使わない評価（検索・回答プロファイルを指定しない評価）では、条件は回答に
+  影響しません。
+- 区分は、業務の流れ・資料の族ごとに分けています（同じ族の言い換えが dev と holdout に分かれないように）。holdout は
+  アカウントの削除・パラメータの一覧・地域別集計表の版・資料に無いアカウントの自動の無効化の族で、19 問のうち 7 問
+  （5 分類のどれも含む）です。holdout の結果を見て評価セットや業務ガイドを直したら、そのケースは dev に移します。
+- 往復の返答・必要な根拠の語句は、同梱の資料の記載だけから作っています（実在の顧客のデータや、資料に無い値を足して
+  いません）。
+
+## nightly で流さない理由
+
+nightly（`.github/workflows/rag-evaluation-nightly.yml`）の評価は、repo variable の `RAG_EVALUATION_API_BASE_URL`
+が指す配備先の API に評価セットを送るだけで、variable が無ければ skip します（2026-10-08 の時点で未設定）。この
+評価セットは、配備先に資料を取り込み（`evaluation_corpus_cli`。parser と OCI / Oracle が要る）、`file:` の参照を
+文書 ID に置き換えてからでないと採点できず、回答も 1 問 3〜5 回のモデルの呼び出しで 20 分前後かかります（nightly
+の評価の待ちの上限は 15 分）。新しい secret・変数（取り込んだナレッジベースの ID など）と実環境が要るため、nightly
+には入れず、手動（上の「取り込んで評価する」）で流します。

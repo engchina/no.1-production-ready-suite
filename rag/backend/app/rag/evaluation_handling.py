@@ -2,7 +2,9 @@
 
 評価のケースが期待する対応（`expected_outcomes`）・手順（`expected_steps`）・勧めてはいけない操作
 （`forbidden_phrases`）・触れるべき条件（`required_conditions`）を、回答の記録と照らして採点する。
-どれも LLM を呼ばない決定的な判定で、語の照合は NFKC・大小文字・空白を無視する。
+どれも LLM を呼ばない決定的な判定で、語の照合は NFKC・大小文字・空白を無視する（全角・半角の違いと
+改行・空白の入り方で一致が変わらないようにする）。期待する手順の別解（`acceptable_alternatives`。#1284）は、
+いちばん点の高い列で採点する。
 
 回答の対応は、回答の記録の `diagnostics.answer.outcome` があればそれを使う。無いときは、拒答・
 現場のデータが要るか（`external_data_required`）・確認の質問・人の確認が要るか（`needs_human_review`）
@@ -30,6 +32,15 @@ class ObservedOutcome:
 
 def _normalized(text: str) -> str:
     return "".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def contains_normalized(text: str, phrase: str) -> bool:
+    """`phrase` が `text` に含まれるか（NFKC・大小文字・空白を無視）。
+
+    空の語は含まれないとみなす。
+    """
+    needle = _normalized(phrase)
+    return bool(needle) and needle in _normalized(text)
 
 
 def observed_outcome(
@@ -71,6 +82,21 @@ def step_order_score(answer: str, steps: Sequence[str]) -> tuple[float, list[str
     return _longest_increasing(positions) / len(steps), missing
 
 
+def best_step_order_score(
+    answer: str, sequences: Sequence[Sequence[str]]
+) -> tuple[float, list[str]]:
+    """期待する手順と別解の列のうち、いちばん点の高い列の点と、その列で回答に無い手順（#1284）。
+
+    同点なら先の列（期待する手順）を使う。列が無ければ 1 点。
+    """
+    best: tuple[float, list[str]] | None = None
+    for steps in sequences:
+        scored = step_order_score(answer, steps)
+        if best is None or scored[0] > best[0]:
+            best = scored
+    return best if best is not None else (1.0, [])
+
+
 def _longest_increasing(values: Sequence[int]) -> int:
     tails: list[int] = []
     for value in values:
@@ -94,6 +120,24 @@ def forbidden_hits(answer: str, phrases: Sequence[str]) -> list[str]:
     return [phrase for phrase in phrases if _normalized(phrase) and _normalized(phrase) in text]
 
 
+def asked_condition_ids(answer_details: Mapping[str, object] | None) -> list[str]:
+    """回答が確認の質問で聞いた業務ガイドの条件の id（回答の記録の clarifications。#1284）。"""
+    details = answer_details or {}
+    envelope = details.get("envelope")
+    sources: list[object] = [details.get("clarifications")]
+    if isinstance(envelope, Mapping):
+        sources.append(envelope.get("clarifications"))
+    ids: list[str] = []
+    for source in sources:
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            condition_id = item.get("condition_id") if isinstance(item, Mapping) else None
+            if isinstance(condition_id, str) and condition_id and condition_id not in ids:
+                ids.append(condition_id)
+    return ids
+
+
 def condition_coverage(answer: str, conditions: Sequence[str]) -> tuple[float, list[str]]:
     """回答が触れた条件の割合と、触れなかった条件。"""
     if not conditions:
@@ -106,7 +150,10 @@ def condition_coverage(answer: str, conditions: Sequence[str]) -> tuple[float, l
 __all__ = [
     "EVALUATION_OUTCOMES",
     "ObservedOutcome",
+    "asked_condition_ids",
+    "best_step_order_score",
     "condition_coverage",
+    "contains_normalized",
     "forbidden_hits",
     "observed_outcome",
     "step_order_score",
