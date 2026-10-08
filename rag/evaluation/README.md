@@ -48,10 +48,30 @@ job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 36
 | 対応 | `safe_answer_rate` | 勧めてはいけない操作の表現（`forbidden_phrases`）を含まなかった割合（どちらの基準でも 100% を求める） | `forbidden_phrases` のあるケース |
 | 対応 | `condition_coverage` | 回答が触れるべき条件（`required_conditions`）に触れた割合 | `required_conditions` のあるケース |
 
+閾値の判定と画面の指標の一覧には入れず、結果に出すだけの参考の集計（#1284 / #1335）:
+
+| 観点 | 指標 | 意味 | 対象のケース |
+|---|---|---|---|
+| 根拠 | `required_evidence_recall` | 必要な根拠（`required_evidence`）のうち、最後の回答の引用で取れた割合（ケースの平均） | `required_evidence` のあるケース（確認の質問・人への引き継ぎで引用の無い回答を除く） |
+| 根拠 | `evidence_chain_complete_rate` | 必要な根拠を**すべて**取れたケースの割合。多段の質問は 1 つでも欠けると答えられないため、再現率の平均とは別に見る（ケースの値は `evidence_chain_complete`） | 同上 |
+
+- 種類別・段の数別の内訳（#1335）: ケースに多段の質問の種類（`reasoning_type`）・段の数（`hops`）があると、結果の
+  `reasoning_type_breakdown`・`hops_breakdown`（段の数の key は `"1"`・`"2"` などの文字列）に、種類・段の数ごとの
+  `required_evidence_recall`・`evidence_chain_complete_rate`・`answer_keyword_hit_rate` と、件数（`case_count`・
+  `error_count`・`metric_case_counts`）を出します。種類・段の数の無いケースは `unspecified` です。区分ごとの内訳
+  （`split_breakdown`）の中にも同じ内訳があり、dev だけの値を読めます。
+- `reasoning_type` は `single_hop`（1 つの根拠で答えられる対照）/ `bridge`（橋渡し: A の属性で B を引き、B の属性で
+  答える）/ `comparison`（2 つ以上の実体の属性を比べる）/ `intra_document_reference`（同じ文書の中の参照をたどる）/
+  `table_lookup`（本文の実体で表の行を引く）。`hops` は根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）で、
+  `reasoning_type` と一緒に書きます。`single_hop` は 1、`bridge`・`intra_document_reference` は 2 以上で、
+  `required_evidence` は段ごとに書くため `hops` より少なくできません（422）。採点の方法は変わりません。
+
 - 「対応」の 4 つは業務支援の評価（#1231）です。回答の対応（`answered`・`conditional`・`needs_clarification`・
   `needs_environment_data`・`needs_human`・`insufficient_evidence`）は、回答の記録の `diagnostics.answer.outcome` が
   あればそれを使い、無ければ拒答・`external_data_required`・`needs_human_review` から推定します（結果の
   `outcome_source` が `explicit` / `inferred`）。語の照合は NFKC・大小文字・空白を無視します。LLM は呼びません。
+  期待する語（`expected_answer_keywords`）の照合も同じく NFKC・大小文字・空白を無視します（全角の「ＨＲＭ」と
+  「HRM」、「5 年」と「5年」を同じ語とみなす。#1335）。
   ケースの分類（`category`）は分類ごとの内訳（`category_breakdown`）に使います。
 - `answerable: false` のケース（資料に答えが無い質問）は、拒答の正しさだけを測ります。`answerable` を省略したときは、
   `relevant_document_ids`・`expected_answer_keywords`・`standard_answer` のどれも無いケースを答えるべきでない質問と
@@ -104,6 +124,14 @@ uv run python -m app.rag.evaluation_cli \
 確認が要る・現場のデータが要る・資料に答えが無い・資料が矛盾する）の質問 19 問（`business-support.json`。#1284 で区分・往復・既知の条件・必要な根拠を足した）を置いて
 います。資料の作り方・取り込み方・実行の手順は [business-support/README.md](./business-support/README.md) を見て
 ください。
+
+### 多段の質問の合成の評価セット（#1335）
+
+`multi-hop/` に、架空の「サンプル社」の業務文書（PDF 6 件・xlsx 1 件）と、資料をまたいで実体をたどる質問 33 問
+（`multi-hop.json`。dev 20 問・holdout 13 問。種類 `reasoning_type` と段の数 `hops`、段ごとの必要な根拠つき）を
+置いています。RAG の内部に実体の層を入れるかを、検索・回答（A）と業務 Agent（D）の根拠の連鎖の完全率で決める
+ための評価セットです。資料の作り方・取り込み方・実行の手順は [multi-hop/README.md](./multi-hop/README.md) を
+見てください。`evaluation_cli` の `--split dev` で、区分のケースだけを流せます。
 
 検索 latency / p95 gate には `search-load.example.json` を使います。`cases`、`repeat`、`concurrency`、`thresholds` を定義し、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名と時間。例: `質問の理解`・`文書検索（1回目）`）を artifact 化します。`thresholds.stage_p95_ms` の key は工程名です。case の `rerank_top_n`・`mode`・`strategy` は #595 で削除した旧 standard の指定で、書いてあっても読み捨てます。結果 JSON と trend JSON には query / answer / context 原文を残しません。
 
