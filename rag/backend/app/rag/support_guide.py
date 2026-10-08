@@ -10,9 +10,13 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 
+from pydantic import BaseModel
+
 from app.schemas.support_guide import (
     SUPPORT_GUIDE_TOOLS,
+    SupportGuideChange,
     SupportGuideContent,
+    SupportGuideDiffSection,
     SupportGuideIssue,
 )
 
@@ -225,4 +229,121 @@ def has_errors(issues: Sequence[SupportGuideIssue]) -> bool:
     return any(issue.severity == "error" for issue in issues)
 
 
-__all__ = ["content_sha256", "has_errors", "reference_issues", "validate_content"]
+def _changed_fields(before: BaseModel, after: BaseModel) -> list[str]:
+    old, new = before.model_dump(mode="json"), after.model_dump(mode="json")
+    return [name for name in new if old.get(name) != new.get(name)]
+
+
+def _object_change(
+    section: SupportGuideDiffSection,
+    before: BaseModel,
+    after: BaseModel,
+    *,
+    label: str = "",
+) -> list[SupportGuideChange]:
+    fields = _changed_fields(before, after)
+    if not fields:
+        return []
+    return [SupportGuideChange(section=section, kind="changed", label=label, fields=fields)]
+
+
+def _row_changes(
+    section: SupportGuideDiffSection,
+    before: Sequence[BaseModel],
+    after: Sequence[BaseModel],
+    key: Callable[[BaseModel], str],
+    label: Callable[[BaseModel], str],
+) -> list[SupportGuideChange]:
+    """id（資料は document_id）で行を突き合わせ、追加・削除・変更を並べる。
+
+    並びは取り込む側の順で、削除は後ろ。
+    同じ id が重複する行は最初の行で比べる（重複は検証が別に問題として出す）。
+    """
+    old = {key(row): row for row in reversed(before)}
+    new_keys: list[str] = []
+    changes: list[SupportGuideChange] = []
+    for row in after:
+        row_key = key(row)
+        if row_key in new_keys:
+            continue
+        new_keys.append(row_key)
+        previous = old.get(row_key)
+        if previous is None:
+            changes.append(
+                SupportGuideChange(section=section, kind="added", key=row_key, label=label(row))
+            )
+        elif fields := _changed_fields(previous, row):
+            changes.append(
+                SupportGuideChange(
+                    section=section, kind="changed", key=row_key, label=label(row), fields=fields
+                )
+            )
+    seen: set[str] = set()
+    for row in before:
+        row_key = key(row)
+        if row_key in new_keys or row_key in seen:
+            continue
+        seen.add(row_key)
+        changes.append(
+            SupportGuideChange(section=section, kind="removed", key=row_key, label=label(row))
+        )
+    return changes
+
+
+def _attr(name: str) -> Callable[[BaseModel], str]:
+    return lambda row: str(getattr(row, name))
+
+
+def diff_contents(
+    before: SupportGuideContent, after: SupportGuideContent
+) -> list[SupportGuideChange]:
+    """既存のガイド（before）と取り込むガイド（after）の違い（#1288。モデルは呼ばない）。
+
+    条件・手順・分岐・完了の条件は id、資料は document_id で突き合わせる。目的・適用範囲・
+    影響範囲・引き継ぎは項目ごとの変更として出す。同じ内容なら空。
+    """
+    basic = [
+        name for name in ("title", "description") if getattr(before, name) != getattr(after, name)
+    ]
+    changes = (
+        [SupportGuideChange(section="basic", kind="changed", label=after.title, fields=basic)]
+        if basic
+        else []
+    )
+    return [
+        *changes,
+        *_object_change("goal", before.goal, after.goal),
+        *_object_change("applicability", before.applicability, after.applicability),
+        *_row_changes(
+            "conditions", before.conditions, after.conditions, _attr("id"), _attr("label")
+        ),
+        *_row_changes("steps", before.steps, after.steps, _attr("id"), _attr("title")),
+        *_row_changes(
+            "branches",
+            before.branches,
+            after.branches,
+            _attr("id"),
+            lambda row: str(getattr(row, "note", "") or getattr(row, "id", "")),
+        ),
+        *_row_changes(
+            "references",
+            before.references,
+            after.references,
+            _attr("document_id"),
+            lambda row: str(getattr(row, "title", "") or getattr(row, "document_id", "")),
+        ),
+        *_row_changes(
+            "completion", before.completion, after.completion, _attr("id"), _attr("description")
+        ),
+        *_object_change("impact", before.impact, after.impact),
+        *_object_change("handoff", before.handoff, after.handoff),
+    ]
+
+
+__all__ = [
+    "content_sha256",
+    "diff_contents",
+    "has_errors",
+    "reference_issues",
+    "validate_content",
+]

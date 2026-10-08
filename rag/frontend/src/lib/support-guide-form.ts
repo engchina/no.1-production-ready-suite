@@ -8,10 +8,15 @@
  */
 
 import type {
+  SupportGuideAnswerSummary,
   SupportGuideBranchOperator,
+  SupportGuideChange,
+  SupportGuideChangeKind,
+  SupportGuideCondition,
   SupportGuideConditionSource,
   SupportGuideConditionType,
   SupportGuideContent,
+  SupportGuideDiffSection,
   SupportGuideImpactScope,
   SupportGuideIssue,
   SupportGuideSummary,
@@ -636,6 +641,74 @@ export function issuePathLabel(path: string): string {
     if (fieldKey) parts.push(t(fieldKey));
   }
   return parts.join(t("supportGuides.path.separator"));
+}
+
+// ---- 取込の差分（#1288） -------------------------------------------------------------------
+
+/** 差分の種類の表示（色だけに頼らず、ラベルとアイコンの付いた StatusBadge で出す）。 */
+export const SUPPORT_GUIDE_CHANGE_VARIANT = {
+  added: "success",
+  removed: "danger",
+  changed: "warning",
+} as const satisfies Record<SupportGuideChangeKind, string>;
+
+/** 差分の節の名前（基本・確認する条件・手順など。編集の画面の節と同じ言葉）。 */
+export function changeSectionLabel(section: SupportGuideDiffSection): string {
+  return section === "basic" ? t("supportGuides.section.basic") : t(SECTION_LABEL[section]);
+}
+
+/** 変わった項目の名前（編集の画面の欄の名前）。分からない項目は backend の名前のまま。 */
+export function changeFieldLabels(change: SupportGuideChange): string[] {
+  return change.fields.map((field) => {
+    const key = change.section === "basic" ? SECTION_LABEL[field] : FIELD_LABEL[`${change.section}.${field}`];
+    return key ? t(key) : field;
+  });
+}
+
+/** 差分を節ごとにまとめる（backend の並び = 編集の画面の節の順を保つ）。 */
+export function groupChangesBySection(
+  changes: readonly SupportGuideChange[],
+): { section: SupportGuideDiffSection; changes: SupportGuideChange[] }[] {
+  const groups: { section: SupportGuideDiffSection; changes: SupportGuideChange[] }[] = [];
+  for (const change of changes) {
+    const last = groups.at(-1);
+    if (last && last.section === change.section) last.changes.push(change);
+    else groups.push({ section: change.section, changes: [change] });
+  }
+  return groups;
+}
+
+/** 差分の件数（追加・削除・変更）。 */
+export function countChanges(changes: readonly SupportGuideChange[]): Record<SupportGuideChangeKind, number> {
+  const counts: Record<SupportGuideChangeKind, number> = { added: 0, removed: 0, changed: 0 };
+  for (const change of changes) counts[change.kind] += 1;
+  return counts;
+}
+
+// ---- 下書きで試す（#1288） -----------------------------------------------------------------
+
+/** 業務ガイドで答えたときの進め方の表示。 */
+export const SUPPORT_GUIDE_DECISION_VARIANT = {
+  answer: "success",
+  branch: "info",
+  clarify: "warning",
+  handoff: "warning",
+} as const satisfies Record<SupportGuideAnswerSummary["decision"], string>;
+
+/** 試すときに値を選べる条件の選択肢（選択・はい / いいえ）。文字の条件は入力欄にする。 */
+export function tryConditionOptions(condition: SupportGuideCondition): string[] {
+  if (condition.type === "boolean") return ["はい", "いいえ"];
+  if (condition.type === "enum") return [...condition.allowed_values];
+  return [];
+}
+
+/** 試すときに渡す条件（空の値は渡さない = 分からない条件として試す）。 */
+export function tryConditionsPayload(values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values)
+      .map(([id, value]) => [id, value.trim()] as const)
+      .filter(([, value]) => value !== ""),
+  );
 }
 
 export type ParsedImport = { guides: unknown[] } | { error: I18nKey };
