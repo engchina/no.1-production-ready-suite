@@ -41,9 +41,6 @@ import {
   ApiErrorBanner,
   apiErrorMessage,
   DEFAULT_PAGE_SIZE,
-  offsetAfterShrink,
-  offsetForPage,
-  offsetPagination,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -156,19 +153,6 @@ export function ChatPage() {
     // 次のページを取得している間は、表示中のページを出したままにする。
     placeholderData: keepPreviousData,
   });
-  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない）。
-  const shrunkThreadsOffset =
-    threads.data && threads.data.offset === threadsOffset
-      ? offsetAfterShrink({
-          offset: threadsOffset,
-          limit: DEFAULT_PAGE_SIZE,
-          total: threads.data.total,
-          count: threads.data.threads.length,
-        })
-      : null;
-  if (shrunkThreadsOffset !== null) {
-    setThreadsOffset(shrunkThreadsOffset);
-  }
   const thread = useQuery({
     queryKey: ["thread", threadId],
     queryFn: ({ signal }) =>
@@ -350,13 +334,13 @@ export function ChatPage() {
   // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
   const currentThreadId = threadOfOtherAgent ? null : threadId;
   const currentThreadTitle = currentThreadId
-    ? (threads.data?.threads.find((item) => item.thread_id === currentThreadId)?.title ?? runs[0]?.goal)
+    ? (threads.data?.items.find((item) => item.thread_id === currentThreadId)?.title ?? runs[0]?.goal)
     : undefined;
 
   // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。
   const historyContent = (
     <ChatHistoryList
-      items={(threads.data?.threads ?? []).map((item) => ({
+      items={(threads.data?.items ?? []).map((item) => ({
         id: item.thread_id,
         title: item.title,
         meta: `${formatTime(item.updated_at)}・${t("chat.threads.turns", { count: item.run_count })}`,
@@ -367,7 +351,7 @@ export function ChatPage() {
       }))}
       currentId={currentThreadId}
       onSelect={(item) => {
-        const thread = threads.data?.threads.find((candidate) => candidate.thread_id === item.id);
+        const thread = threads.data?.items.find((candidate) => candidate.thread_id === item.id);
         if (thread) openThread(thread);
       }}
       // 業務 Agent の一覧の読み込み中は会話の一覧をまだ取得できない。一覧の形だけを出す（#1153）。
@@ -390,17 +374,18 @@ export function ChatPage() {
         list: "chat-thread-list",
         pagination: "chat-threads-pagination",
       }}
+      // 会話が減って今のページが空になったら、共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
       pagination={
-        threads.data && threads.data.threads.length > 0
+        threads.data
           ? {
-              ...offsetPagination({
-                offset: threads.data.offset,
-                limit: DEFAULT_PAGE_SIZE,
-                total: threads.data.total,
-                count: threads.data.threads.length,
-              }),
-              onPageChange: (next) => setThreadsOffset(offsetForPage(next, DEFAULT_PAGE_SIZE)),
-              labels: { ...agentPaginationLabels(), ariaLabel: t("chat.threads.pagination") },
+              type: "offset",
+              offset: threads.data.offset,
+              limit: DEFAULT_PAGE_SIZE,
+              total: threads.data.total,
+              count: threads.data.items.length,
+              onPageChange: (_page, nextOffset) => setThreadsOffset(nextOffset),
+              labels: agentPaginationLabels(),
+              ariaLabel: t("chat.threads.pagination"),
             }
           : undefined
       }

@@ -18,9 +18,6 @@ import {
   ToggleChip,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
-  offsetAfterShrink,
-  offsetForPage,
-  offsetPagination,
   toast,
   useConfirm,
   ChatUserMessage,
@@ -53,7 +50,6 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import { listPaginationLabels } from "@/components/ListPagination";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "@/components/search/CitationCard";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
@@ -87,6 +83,7 @@ import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
   useSearchAnswerProfiles,
@@ -550,20 +547,8 @@ export function ChatClient() {
     offset: conversationOffset,
   });
   const conversations = conversationsQuery.data?.items ?? [];
-  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない。3 製品共通。#1265）。
+  // 会話が減って今のページが空になったら、ChatHistoryList の共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
   const conversationsData = conversationsQuery.data;
-  const shrunkConversationOffset =
-    conversationsData && conversationsData.offset === conversationOffset
-      ? offsetAfterShrink({
-          offset: conversationOffset,
-          limit: DEFAULT_PAGE_SIZE,
-          total: conversationsData.total,
-          count: conversationsData.items.length,
-        })
-      : null;
-  if (shrunkConversationOffset !== null) {
-    setConversationOffset(shrunkConversationOffset);
-  }
 
   const [activeId, setActiveId] = useWorkspaceState<string | null>(
     "chat.conversationId",
@@ -1444,18 +1429,18 @@ export function ChatClient() {
           </>
         );
       }}
-      // 3 製品共通の会話の履歴のページング（#1265）。次のページを取得している間は、表示中のページの範囲を出す。
+      // 3 製品共通の会話の履歴のページング（#1265 / #1266）。次のページを取得している間は、表示中のページの範囲を出す。
       pagination={
-        conversationsData && conversations.length > 0
+        conversationsData
           ? {
-              ...offsetPagination({
-                offset: conversationsData.offset,
-                limit: DEFAULT_PAGE_SIZE,
-                total: conversationsData.total,
-                count: conversations.length,
-              }),
-              onPageChange: (next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE)),
-              labels: { ...listPaginationLabels(), ariaLabel: t("chat.sessions.pagination") },
+              type: "offset",
+              offset: conversationsData.offset,
+              limit: DEFAULT_PAGE_SIZE,
+              total: conversationsData.total,
+              count: conversations.length,
+              onPageChange: (_page, nextOffset) => setConversationOffset(nextOffset),
+              labels: paginationLabels(),
+              ariaLabel: t("chat.sessions.pagination"),
             }
           : undefined
       }

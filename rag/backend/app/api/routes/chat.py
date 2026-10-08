@@ -13,10 +13,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.api.routes.search import (
     STREAM_ERROR_MESSAGE,
@@ -155,9 +157,8 @@ async def list_compare_models() -> ApiResponse[list[dict[str, str]]]:
 
 @router.get("/conversations", response_model=ApiResponse[Page[ConversationSummary]])
 async def list_conversations(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     search_answer_profile_id: str | None = Query(default=None, max_length=128),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[ConversationSummary]]:
     """会話一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     settings = get_settings()
@@ -166,24 +167,23 @@ async def list_conversations(
 
     async def _load() -> Page[ConversationSummary]:
         items = await oracle.list_conversations(
-            search_answer_profile_id=search_answer_profile_id, limit=limit, offset=offset
+            search_answer_profile_id=search_answer_profile_id,
+            limit=paging.limit,
+            offset=paging.offset,
         )
         total = await oracle.count_conversations(search_answer_profile_id=search_answer_profile_id)
-        return Page(
-            items=[_to_conversation_summary(item) for item in items],
+        return paginate(
+            [_to_conversation_summary(item) for item in items],
             total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
+            limit=paging.limit,
+            offset=paging.offset,
         )
 
-    empty_page: Page[ConversationSummary] = Page(
-        items=[], total=0, limit=limit, offset=offset, has_next=False
-    )
+    fallback: Page[ConversationSummary] = empty_page(paging)
     page, degraded = await load_or_degrade(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=empty_page,
+        fallback=fallback,
         log_label="conversations_list",
     )
     return ApiResponse(data=page, warning_messages=[degraded.message] if degraded else [])

@@ -14,8 +14,14 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pr_backend_core import ApiResponse, Page
+from pr_backend_core.api import (
+    ACCESS_TARGET_PAGE_LIMIT_MAX,
+    OffsetParams,
+    offset_params,
+    paginate_slice,
+)
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 from pr_system_settings.auth.router import build_auth_router
@@ -37,9 +43,6 @@ from .schemas import (
 from .service import get_security_service
 
 router = APIRouter(tags=["security"])
-# 権限管理の「利用できる対象」の候補の 1 ページの上限（#608）。
-# 画面は 50 件ずつ読み、選択済みの名前は `ids` で読む。
-ACCESS_TARGET_PAGE_LIMIT_MAX = 100
 
 
 def _current_user_data(principal: PlatformPrincipal, debug_mode: bool) -> CurrentUserData:
@@ -77,30 +80,20 @@ def _matches_target_query(query: str, *values: str | None) -> bool:
     return not needle or any(needle in (value or "").casefold() for value in values)
 
 
-def _page[T](items: list[T], *, limit: int, offset: int) -> Page[T]:
-    total = len(items)
-    return Page(
-        items=items[offset : offset + limit],
-        total=total,
-        limit=limit,
-        offset=offset,
-        has_next=offset + limit < total,
-    )
-
-
 @router.get("/security/access-targets/agents", response_model=ApiResponse[Page[AgentTargetData]])
 def list_agent_access_targets(
     request: Request,
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=50, max_limit=ACCESS_TARGET_PAGE_LIMIT_MAX))
+    ],
     q: Annotated[str, Query(max_length=200)] = "",
-    limit: Annotated[int, Query(ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
     ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
 ) -> ApiResponse[Page[AgentTargetData]]:
     """権限管理画面で選べるエージェント（Runtime repository の業務 Agent。無効を含む）。
 
-    検索とページング（#608）:
+    検索とページング（#608。1 ページの上限は 3 製品で同じ `ACCESS_TARGET_PAGE_LIMIT_MAX`）:
     - `q`: 名前・ID・説明の部分一致。
-    - `ids`: その ID だけ（ロールに選択済みの対象の名前の解決に使う）。
+    - `ids`: その ID だけ（ロールに選択済みの対象の名前の解決に使う）。画面は 50 件ずつ読む。
     - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `agent.admin` を持つ利用者は全件）。
     """
     principal = as_principal(current_principal(request))
@@ -117,7 +110,7 @@ def list_agent_access_targets(
         and (selected is None or agent.id in selected)
         and _matches_target_query(q, agent.name, agent.id, agent.description)
     ]
-    return ApiResponse(data=_page(agents, limit=limit, offset=offset))
+    return ApiResponse(data=paginate_slice(agents, paging))
 
 
 @router.put("/security/roles/{role_id}/access", response_model=ApiResponse[RoleData])

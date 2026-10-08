@@ -39,7 +39,8 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import Response, StreamingResponse
-from pr_backend_core import ApiResponse
+from pr_backend_core import ApiResponse, Page
+from pr_backend_core.api import OffsetParams, offset_params, paginate, paginate_slice
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
@@ -491,12 +492,10 @@ class ToolCallAuditRecord(ToolAuditRecord):
     run_updated_at: str
 
 
-class ToolCallAuditData(BaseModel):
-    total: int
-    offset: int
-    limit: int
+class ToolCallAuditData(Page[ToolCallAuditRecord]):
+    """ツール監査の 1 ページ（共通の `Page` に絞り込みの条件とツール名を足した形。#1266）。"""
+
     filters: dict[str, object] = Field(default_factory=dict)
-    records: list[ToolCallAuditRecord]
     # 見られる範囲の監査に記録されたツール名（絞り込みの条件に依らない）。
     # 画面のツール名の選択肢に使う。
     # MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ないため（#983）。
@@ -1840,17 +1839,19 @@ async def create_run(
         ) from exc
 
 
+_threads_paging = offset_params(default=10, max_limit=100)
+
+
 @router.get("/threads", response_model=ApiResponse[ThreadsData])
 async def list_threads(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_threads_paging)],
     agent_id: str | None = None,
-    limit: int = Query(default=10, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[ThreadsData]:
     """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。
 
     会話の履歴は 3 製品と同じく、サーバー側でページングする
-    （新しい順、`limit` / `offset` と全件数。#1265）。
+    （新しい順、共通の `offset_params` / `Page`。#1265 / #1266）。
     """
     policy = _actor_policy(request)
     threads = [
@@ -1860,12 +1861,14 @@ async def list_threads(
         )
         if _policy_allows_agent(policy, thread.agent_id)
     ]
+    page = paginate_slice(threads, paging)
     return ApiResponse(
         data=ThreadsData(
-            threads=threads[offset : offset + limit],
-            total=len(threads),
-            limit=limit,
-            offset=offset,
+            items=page.items,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
         )
     )
 
@@ -1950,15 +1953,18 @@ async def put_run_admin_review(
     return ApiResponse(data=updated)
 
 
+# 一覧のページング（`limit` / `offset`。上限を超えると 422。#1266）。
+_feedback_paging = offset_params(default=FEEDBACK_PAGE_SIZE, max_limit=FEEDBACK_PAGE_SIZE_MAX)
+
+
 @router.get("/feedback", response_model=ApiResponse[FeedbackReport])
 async def get_feedback_report(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_feedback_paging)],
     days: int = Query(default=30),
     agent_id: str | None = Query(default=None, max_length=200),
     rating: FeedbackRating | None = None,
     reason: FeedbackReason | None = None,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=FEEDBACK_PAGE_SIZE, ge=1, le=FEEDBACK_PAGE_SIZE_MAX),
 ) -> ApiResponse[FeedbackReport]:
     """フィードバックの集計と一覧（#774）。権限は middleware のメニュー権限（`menu.feedback`）。
 
@@ -1981,8 +1987,8 @@ async def get_feedback_report(
                     agent_id=agent_id or None,
                     rating=rating,
                     reason=reason,
-                    offset=offset,
-                    limit=limit,
+                    offset=paging.offset,
+                    limit=paging.limit,
                     agent_names=agent_names,
                     user_names=user_display_names,
                 )
@@ -2002,8 +2008,8 @@ async def get_feedback_report(
         reason=reason,
         agent_names=agent_names,
         user_names=user_display_names,
-        offset=offset,
-        limit=limit,
+        offset=paging.offset,
+        limit=paging.limit,
     )
     return ApiResponse(data=report)
 
@@ -2507,20 +2513,24 @@ async def create_evaluation(
     return ApiResponse(data=evaluation_store.with_previous(created))
 
 
+_evaluation_jobs_paging = offset_params(
+    default=EVALUATION_JOBS_PAGE_SIZE, max_limit=EVALUATION_JOBS_PAGE_SIZE_MAX
+)
+
+
 @router.get("/evaluations", response_model=ApiResponse[EvaluationJobsData])
 async def list_evaluations(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_evaluation_jobs_paging)],
     set_id: str | None = Query(default=None, max_length=100),
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=EVALUATION_JOBS_PAGE_SIZE, ge=1, le=EVALUATION_JOBS_PAGE_SIZE_MAX),
 ) -> ApiResponse[EvaluationJobsData]:
     """評価の履歴（新しい順のページ。利用できる業務 Agent の評価だけ。保持は 365 日。#794）。"""
     return ApiResponse(
         data=evaluation_store.page(
             set_id=set_id or None,
             allowed=lambda agent_id: _agent_allowed(request, agent_id),
-            offset=offset,
-            limit=limit,
+            offset=paging.offset,
+            limit=paging.limit,
         )
     )
 
@@ -2617,17 +2627,22 @@ async def get_usage_report(
     return ApiResponse(data=report)
 
 
+# 画面の一覧は 1 ページ（既定 100 件・上限 1,000 件）。
+# CSV は 1 ページではなく、条件に合う記録を既定 1,000 件（上限 5,000 件）まで出力する。
+_tool_call_audit_paging = offset_params(default=100, max_limit=1000)
+_tool_call_audit_csv_paging = offset_params(default=1000, max_limit=5000)
+
+
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])
 async def list_tool_call_audit(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_tool_call_audit_paging)],
     run_id: str | None = None,
     tool_name: str | None = None,
     status: str | None = None,
     approval_status: str | None = None,
     error_code: str | None = None,
     has_guardrail_warnings: bool | None = None,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=1000),
     _: None = Depends(require_auditor),
 ) -> ApiResponse[ToolCallAuditData]:
     return ApiResponse(
@@ -2639,8 +2654,7 @@ async def list_tool_call_audit(
             approval_status=approval_status,
             error_code=error_code,
             has_guardrail_warnings=has_guardrail_warnings,
-            offset=offset,
-            limit=limit,
+            paging=paging,
         )
     )
 
@@ -2648,14 +2662,13 @@ async def list_tool_call_audit(
 @router.get("/audit/tool-calls.csv", response_class=Response)
 async def export_tool_call_audit_csv(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_tool_call_audit_csv_paging)],
     run_id: str | None = None,
     tool_name: str | None = None,
     status: str | None = None,
     approval_status: str | None = None,
     error_code: str | None = None,
     has_guardrail_warnings: bool | None = None,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=1000, ge=1, le=5000),
     _: None = Depends(require_auditor),
 ) -> Response:
     data = _tool_call_audit_data(
@@ -2666,11 +2679,10 @@ async def export_tool_call_audit_csv(
         approval_status=approval_status,
         error_code=error_code,
         has_guardrail_warnings=has_guardrail_warnings,
-        offset=offset,
-        limit=limit,
+        paging=paging,
     )
     return Response(
-        _tool_call_audit_csv(data.records),
+        _tool_call_audit_csv(data.items),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="agent-tool-call-audit.csv"'},
     )
@@ -3912,8 +3924,7 @@ def _tool_call_audit_data(
     approval_status: str | None,
     error_code: str | None,
     has_guardrail_warnings: bool | None,
-    offset: int,
-    limit: int,
+    paging: OffsetParams,
 ) -> ToolCallAuditData:
     filters = _audit_filters(
         run_id=run_id,
@@ -3933,19 +3944,23 @@ def _tool_call_audit_data(
                 approval_status=approval_status,
                 error_code=error_code,
                 has_guardrail_warnings=has_guardrail_warnings,
-                offset=offset,
-                limit=limit,
+                offset=paging.offset,
+                limit=paging.limit,
             )
             if isinstance(projection, RuntimeToolCallAuditData):
                 return ToolCallAuditData(
-                    total=projection.total,
-                    offset=projection.offset,
-                    limit=projection.limit,
+                    **dict(
+                        paginate(
+                            [
+                                ToolCallAuditRecord.model_validate(record.model_dump())
+                                for record in projection.items
+                            ],
+                            total=projection.total,
+                            limit=projection.limit,
+                            offset=projection.offset,
+                        )
+                    ),
                     filters=filters,
-                    records=[
-                        ToolCallAuditRecord.model_validate(record.model_dump())
-                        for record in projection.records
-                    ],
                     tool_names=projection.tool_names,
                 )
         except RuntimeError:
@@ -3977,13 +3992,9 @@ def _tool_call_audit_data(
                 has_guardrail_warnings=has_guardrail_warnings,
             ):
                 records.append(enriched)
-    total = len(records)
     return ToolCallAuditData(
-        total=total,
-        offset=offset,
-        limit=limit,
+        **dict(paginate_slice(records, paging)),
         filters=filters,
-        records=records[offset : offset + limit],
         tool_names=sorted(tool_names),
     )
 

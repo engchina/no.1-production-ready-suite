@@ -1,5 +1,6 @@
 import { ListPlus, RefreshCw } from "lucide-react";
 
+import { isTimeoutError } from "../../lib/api-error";
 import { cn } from "../../lib/utils";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
@@ -23,6 +24,8 @@ export interface LoadMoreFooterProps {
   refreshingLabel?: string;
   /** 件数を aria-live（polite）で伝えるか（既定 false。選択のたびに読み上げない）。 */
   announce?: boolean;
+  /** 条件の取り直し中・パネルが無効の間など、続きを読ませない（ボタンを無効にする。消すと高さが変わる。#1266）。 */
+  disabled?: boolean;
   className?: string;
   testId?: string;
 }
@@ -45,6 +48,7 @@ export function LoadMoreFooter({
   refreshing = false,
   refreshingLabel,
   announce = false,
+  disabled = false,
   className,
   testId,
 }: LoadMoreFooterProps) {
@@ -70,6 +74,7 @@ export function LoadMoreFooter({
             icon={ListPlus}
             className="w-full sm:w-auto"
             loading={loadingMore}
+            disabled={disabled}
             onClick={onLoadMore}
             data-testid={testId ? `${testId}-load-more` : undefined}
           >
@@ -89,6 +94,7 @@ export function LoadMoreFooter({
                 icon={RefreshCw}
                 className="w-full sm:w-auto"
                 loading={loadingMore}
+                disabled={disabled}
                 onClick={retry}
               >
                 <span>{retryLabel}</span>
@@ -101,4 +107,16 @@ export function LoadMoreFooter({
       ) : null}
     </div>
   );
+}
+
+/**
+ * 続きの読み込みの失敗の文言（#1266。NL2SQL の `objectListLoadMoreErrorMessage` を共通にした）。
+ * 待ち時間の上限（`TimeoutError`）は `timeoutMessage`、ほかは例外の message、message が無ければ `fallback`。
+ */
+export function loadMoreErrorMessage(
+  error: unknown,
+  { timeoutMessage, fallback }: { timeoutMessage: string; fallback: string }
+) {
+  if (isTimeoutError(error)) return timeoutMessage;
+  return error instanceof Error && error.message ? error.message : fallback;
 }

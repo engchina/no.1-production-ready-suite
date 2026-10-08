@@ -12,9 +12,8 @@ import { ListPlus, RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import { ErrorState } from "@/components/StateViews";
-import { isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
+import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   SchemaRefreshHeaderStatus,
@@ -35,15 +34,6 @@ import type { OntologyMarkdownState } from "../ontology/types";
 /** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
 const ONTOLOGY_SCHEMA_REFRESH_BUILD = "ontology-build";
 const ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND = "ontology-playground";
-
-function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
-  if (isTimeoutError(error)) {
-    return t("objectSelector.loadMoreTimeout", {
-      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
-    });
-  }
-  return error instanceof Error ? error.message : t(fallbackKey);
-}
 
 /**
  * AI 構築、Markdown 下書き確認、質問の接地確認を一続きで扱う単一ページ。

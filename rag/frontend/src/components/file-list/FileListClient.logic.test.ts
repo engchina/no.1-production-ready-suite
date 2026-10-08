@@ -7,7 +7,6 @@ import {
   FILE_LIST_FILTERS,
   INITIAL_FILE_LIST_VIEW,
   isFileListView,
-  outOfRangeOffset,
   summarizeDeleteOutcomes,
   summarizeEnqueueOutcomes,
 } from "./FileListClient.logic";
@@ -47,22 +46,6 @@ describe("FILE_LIST_FILTERS / isFileListView", () => {
   it("不正な offset・状態は復元しない", () => {
     expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, offset: -20 })).toBe(false);
     expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, filter: "UNKNOWN" })).toBe(false);
-  });
-});
-
-describe("outOfRangeOffset", () => {
-  it("範囲内なら補正しない", () => {
-    expect(outOfRangeOffset({ offset: 0, total: 0, limit: 20 })).toBeNull();
-    expect(outOfRangeOffset({ offset: 20, total: 21, limit: 20 })).toBeNull();
-  });
-
-  it("最後のページの最後の 1 件を削除したら、残っている最後のページへ戻す", () => {
-    expect(outOfRangeOffset({ offset: 20, total: 20, limit: 20 })).toBe(0);
-    expect(outOfRangeOffset({ offset: 60, total: 41, limit: 20 })).toBe(40);
-  });
-
-  it("1 件も無くなったら先頭へ戻す", () => {
-    expect(outOfRangeOffset({ offset: 40, total: 0, limit: 20 })).toBe(0);
   });
 });
 

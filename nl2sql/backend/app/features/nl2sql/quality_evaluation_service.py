@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import logging
@@ -20,6 +19,7 @@ from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # type: ignore[import-untyped]
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
+from pr_backend_core.api import decode_offset_cursor, next_offset_cursor
 from pr_backend_core.observability.request_context import bind_log_context
 
 from app.settings import get_settings
@@ -74,26 +74,8 @@ _EMPTY_ROW_STOP_THRESHOLD = 100
 _SQL_NO_SPACE_AROUND = frozenset("(),=<>+-*/")
 
 
-class QualityEvaluationCursorError(ValueError):
-    """SQL生成評価 API のページング cursor が不正な場合のエラー。"""
-
-
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _encode_offset(offset: int) -> str:
-    return base64.urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
-
-
-def _decode_offset(cursor: str | None) -> int:
-    if not cursor:
-        return 0
-    try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        return max(0, int(base64.urlsafe_b64decode(padded).decode("ascii")))
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise QualityEvaluationCursorError("カーソルが不正です。") from exc
 
 
 def _safe_excel_value(value: Any) -> Any:
@@ -569,19 +551,19 @@ class QualityEvaluationService:
         limit: int,
         allowed_profile_ids: set[str] | None = None,
     ) -> QualityEvaluationJobPage:
-        offset = _decode_offset(cursor)
-        page_size = min(max(limit, 1), 100)
+        # カーソルは offset（共通の codec。#1266）。壊れたカーソルは InvalidCursorError
+        # （router が 422 にする）。
+        offset = decode_offset_cursor(cursor)
         jobs, total = self._repository.list_jobs(
             offset=offset,
-            limit=page_size,
+            limit=limit,
             profile_ids=allowed_profile_ids,
         )
-        next_offset = offset + len(jobs)
         for job in jobs:
             self._wake_quality_evaluation_job_if_needed(job)
         return QualityEvaluationJobPage(
             items=[job_summary(item) for item in jobs],
-            next_cursor=_encode_offset(next_offset) if next_offset < total else None,
+            next_cursor=next_offset_cursor(offset=offset, count=len(jobs), total=total),
             total=total,
         )
 
@@ -590,15 +572,11 @@ class QualityEvaluationService:
     ) -> QualityEvaluationResultPage:
         if self._repository.get_job(job_id) is None:
             raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
-        offset = _decode_offset(cursor)
-        page_size = min(max(limit, 1), 100)
-        results, total = self._repository.list_results(
-            job_id=job_id, offset=offset, limit=page_size
-        )
-        next_offset = offset + len(results)
+        offset = decode_offset_cursor(cursor)
+        results, total = self._repository.list_results(job_id=job_id, offset=offset, limit=limit)
         return QualityEvaluationResultPage(
             items=results,
-            next_cursor=_encode_offset(next_offset) if next_offset < total else None,
+            next_cursor=next_offset_cursor(offset=offset, count=len(results), total=total),
             total=total,
         )
 

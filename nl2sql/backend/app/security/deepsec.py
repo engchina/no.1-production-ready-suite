@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
-import json
 import logging
 import re
 from collections.abc import Mapping
@@ -15,6 +12,8 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+from pr_backend_core.api import InvalidCursorError, decode_cursor, encode_cursor
 
 from app.clients.oracle_runtime import (
     OraclePoolManager,
@@ -379,27 +378,22 @@ def _like_pattern(value: str, *, prefix: str, suffix: str) -> str:
 
 
 def _encode_target_object_cursor(owner: str, object_name: str) -> str:
-    payload = json.dumps([owner, object_name], separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    """対象 object の keyset カーソル（共通の codec。#1266）。"""
+    return encode_cursor({"owner": owner, "object_name": object_name})
 
 
 def _decode_target_object_cursor(cursor: str) -> tuple[str, str]:
     try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-        value = json.loads(raw.decode("utf-8"))
-    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as exc:
-        raise SecurityApiError(400, "対象 object の cursor が不正です。") from exc
-    if (
-        not isinstance(value, list)
-        or len(value) != 2
-        or not all(isinstance(item, str) and item.strip() for item in value)
-    ):
-        raise SecurityApiError(400, "対象 object の cursor が不正です。")
+        payload = decode_cursor(cursor, required=("owner", "object_name"))
+    except InvalidCursorError as exc:
+        raise SecurityApiError(422, "対象 object の cursor が不正です。") from exc
+    value = (payload or {}).get("owner"), (payload or {}).get("object_name")
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        raise SecurityApiError(422, "対象 object の cursor が不正です。")
     # cursor はカタログ上の名前（引用符なし・大文字小文字を保持）を持つ。
     return (
-        normalize_object_part(_catalog_identifier_token(value[0])),
-        normalize_object_part(_catalog_identifier_token(value[1])),
+        normalize_object_part(_catalog_identifier_token(str(value[0]))),
+        normalize_object_part(_catalog_identifier_token(str(value[1]))),
     )
 
 

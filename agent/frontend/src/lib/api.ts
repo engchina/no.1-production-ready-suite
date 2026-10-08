@@ -366,13 +366,8 @@ export type EvaluationJobItem = Pick<
   | "finished_at"
 >;
 
-export interface EvaluationJobsPage {
-  jobs: EvaluationJobItem[];
-  /** 対象の評価の件数（ページングの総数）。 */
-  total: number;
-  offset: number;
-  limit: number;
-}
+/** 評価の履歴の 1 ページ（共通の `Page`。`total` は対象の評価の件数。#1266）。 */
+export type EvaluationJobsPage = Page<EvaluationJobItem>;
 
 /** 外部のクライアント向けの API キー（#778。秘密は作成時の応答にだけ入る）。 */
 export interface ApiKey {
@@ -551,12 +546,9 @@ export interface ToolCallAuditRecord extends ToolAuditRecord {
   run_updated_at: string;
 }
 
-export interface ToolCallAuditData {
-  total: number;
-  offset: number;
-  limit: number;
+/** ツール監査の 1 ページ（共通の `Page` に絞り込みの条件とツール名を足した形。#1266）。 */
+export interface ToolCallAuditData extends Page<ToolCallAuditRecord> {
   filters: Record<string, unknown>;
-  records: ToolCallAuditRecord[];
   /** 見られる範囲の監査に記録されたツール名（絞り込みに依らない。MCP 接続のツールを含む。#983）。 */
   tool_names?: string[];
 }
@@ -954,7 +946,12 @@ export interface FeedbackItem {
   updated_at: string;
 }
 
-export interface FeedbackReport {
+/**
+ * フィードバックの集計と一覧（共通の `Page` に集計を足した形。#1266）。
+ * `items` は絞り込みに合う評価のうち `offset` から `limit` 件（新しい順）、`total` は絞り込みに合う評価の件数
+ * （ページングの総数。`summary.total` は期間内の評価の件数で別）。
+ */
+export interface FeedbackReport extends Page<FeedbackItem> {
   days: FeedbackPeriodDays;
   source: ReportSource;
   since: string;
@@ -962,12 +959,6 @@ export interface FeedbackReport {
   summary: FeedbackSummary;
   /** 直前の同じ長さの期間。 */
   previous: FeedbackSummary;
-  /** 絞り込みに合う評価の `offset` から `limit` 件（新しい順。サーバー側のページング。#794）。 */
-  items: FeedbackItem[];
-  /** 絞り込みに合う評価の件数（ページングの総数）。 */
-  matched: number;
-  offset: number;
-  limit: number;
 }
 
 export interface FeedbackFilters {
@@ -990,14 +981,8 @@ export interface ThreadSummary {
   updated_at: string;
 }
 
-export interface ThreadsData {
-  /** 1 ページ分の会話（新しい順。#1265）。 */
-  threads: ThreadSummary[];
-  /** 利用者が見られる会話の全件数。 */
-  total: number;
-  limit: number;
-  offset: number;
-}
+/** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
+export type ThreadsData = Page<ThreadSummary>;
 
 export interface ThreadData {
   thread_id: string;
@@ -1090,14 +1075,17 @@ export interface AgentAccessTarget {
 }
 
 
-/** 権限管理の対象の候補の 1 ページ（検索とページング。#608）。 */
-export interface AccessTargetPage<T> {
+/** サーバー側でページングする一覧の共通の形（backend の `pr_backend_core.Page[T]`。#1266）。 */
+export interface Page<T> {
   items: T[];
   total: number;
   limit: number;
   offset: number;
   has_next: boolean;
 }
+
+/** 権限管理の対象の候補の 1 ページ（検索とページング。#608）。 */
+export type AccessTargetPage<T> = Page<T>;
 
 /** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */
 export interface RoleAccessUpdate {

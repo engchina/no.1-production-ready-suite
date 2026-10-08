@@ -31,6 +31,7 @@ import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
+import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
   DbManagementLoadingSkeleton,
@@ -196,15 +197,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
-      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
-    });
-  }
-  return error instanceof Error ? error.message : t(fallbackKey);
-}
-
-function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
-  if (isTimeoutError(error)) {
-    return t("objectSelector.loadMoreTimeout", {
       seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
     });
   }
@@ -739,7 +731,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             loadingNextPage={objectsQuery.isFetchingNextPage}
             loadMoreError={
               objectsQuery.isFetchNextPageError && objectsQuery.error
-                ? objectListLoadMoreErrorMessage(objectsQuery.error, "metadataSql.error.load")
+                ? listLoadMoreErrorMessage(objectsQuery.error, "metadataSql.error.load")
                 : ""
             }
             onSearchChange={setTargetSearch}

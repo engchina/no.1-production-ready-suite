@@ -129,7 +129,7 @@ def test_report_filters_the_list_by_agent_rating_and_reason() -> None:
     assert (by_agent.summary.total, [item.run_id for item in by_agent.items]) == (1, ["r3"])
     by_rating = _report(runs, rating=bad)
     assert by_rating.summary.total == 3
-    assert ([item.run_id for item in by_rating.items], by_rating.matched) == (["r2", "r3"], 2)
+    assert ([item.run_id for item in by_rating.items], by_rating.total) == (["r2", "r3"], 2)
     by_reason = _report(runs, reason=FeedbackReason.WRONG_ACTION)
     assert [item.run_id for item in by_reason.items] == ["r3"]
     empty = _report([])
@@ -143,11 +143,17 @@ def test_report_pages_the_list_newest_first_and_counts_every_match() -> None:
     first = _report(runs, limit=10)
     third = _report(runs, offset=20, limit=10)
 
-    assert (first.matched, first.summary.total, first.offset, first.limit) == (25, 25, 0, 10)
+    assert (first.total, first.summary.total, first.offset, first.limit, first.has_next) == (
+        25,
+        25,
+        0,
+        10,
+        True,
+    )
     assert [item.run_id for item in first.items] == [f"r{index:02d}" for index in range(10)]
     assert [item.run_id for item in third.items] == [f"r{index:02d}" for index in range(20, 25)]
     beyond = _report(runs, offset=40, limit=10)
-    assert (beyond.items, beyond.matched) == ([], 25)
+    assert (beyond.items, beyond.total, beyond.has_next) == ([], 25, False)
 
 
 def test_long_periods_include_older_ratings() -> None:

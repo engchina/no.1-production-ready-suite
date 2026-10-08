@@ -17,6 +17,7 @@ import {
   toast,
   useConfirm,
   type SelectFieldOption,
+  PagedDataTable,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -26,7 +27,7 @@ import {
   type ApprovedFaqImportPreviewData,
   type ApprovedFaqRecordData,
 } from "@/lib/api";
-import { PagedDataTable } from "@/components/PagedDataTable";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -157,6 +158,7 @@ export function ApprovedFaqManager({
         />
       ) : (
       <PagedDataTable<ApprovedFaqRecordData>
+        paginationLabels={paginationLabels()}
         columns={[
           {
             key: "question",

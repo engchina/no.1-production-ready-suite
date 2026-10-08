@@ -1,3 +1,5 @@
+import { offsetForPage } from "@engchina/production-ready-ui";
+
 import type {
   CitationFeedbackRating,
   CitationFeedbackReason,
@@ -89,7 +91,7 @@ export function feedbackListParams(state: FeedbackUrlState): FeedbackListParams 
     q: state.q || undefined,
     sort_order: state.sortOrder,
     limit: state.pageSize,
-    offset: (state.page - 1) * state.pageSize,
+    offset: offsetForPage(state.page, state.pageSize),
   };
 }
 

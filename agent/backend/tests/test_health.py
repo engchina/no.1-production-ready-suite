@@ -2457,7 +2457,7 @@ def test_runtime_repository_reads_tool_call_audit_from_oracle_projection() -> No
     )
 
     assert data.total == 1
-    record = data.records[0]
+    record = data.items[0]
     assert record.run_id == run.id
     assert record.run_goal == "Oracle projection audit を読む"
     assert record.tool_name == "echo"
@@ -2494,7 +2494,7 @@ def test_oracle_projection_audit_uses_db_side_pagination() -> None:
     assert data.total == 3
     assert data.offset == 1
     assert data.limit == 1
-    assert len(data.records) == 1
+    assert len(data.items) == 1
     assert any("SELECT COUNT(*)" in statement for statement in store.executed_statements)
     assert any(
         "OFFSET :OFFSET ROWS FETCH NEXT :LIMIT ROWS ONLY" in statement
@@ -2657,8 +2657,8 @@ def test_global_tool_call_audit_uses_oracle_projection(monkeypatch: MonkeyPatch)
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["total"] == 1
-    assert data["records"][0]["run_id"] == run.id
-    assert data["records"][0]["trace_id"] == "trace-api-audit"
+    assert data["items"][0]["run_id"] == run.id
+    assert data["items"][0]["trace_id"] == "trace-api-audit"
 
 
 def test_agent_profile_crud_and_tool_allowlist() -> None:
@@ -2958,7 +2958,7 @@ def test_global_tool_call_audit_filters_and_exports_csv() -> None:
     data = audit.json()["data"]
     assert data["total"] == 1
     assert data["filters"]["run_id"] == run["id"]
-    record = data["records"][0]
+    record = data["items"][0]
     assert record["run_id"] == run["id"]
     assert record["run_goal"] == "global audit export"
     assert record["tool_name"] == "echo"
@@ -2990,7 +2990,7 @@ def test_global_tool_call_audit_lists_recorded_tool_names() -> None:
     data = audit.json()["data"]
     assert {"echo", "nl2sql__nl2sql_query"} <= set(data["tool_names"])
     assert data["tool_names"] == sorted(data["tool_names"])
-    assert all(record["tool_name"] == "echo" for record in data["records"])
+    assert all(record["tool_name"] == "echo" for record in data["items"])
     tools = client.get("/api/tools").json()["data"]["tools"]
     assert "nl2sql__nl2sql_query" not in {tool["name"] for tool in tools}
 
@@ -3029,7 +3029,7 @@ def test_global_tool_call_audit_filters_guardrail_warnings() -> None:
     assert audit.status_code == 200
     data = audit.json()["data"]
     assert data["total"] == 1
-    record = data["records"][0]
+    record = data["items"][0]
     assert record["run_id"] == run["id"]
     assert "prompt_injection.ignore_instructions" in record["guardrail_warnings"]
     assert "sensitive_field_masked:api_key" in record["guardrail_warnings"]

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
+from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import (
     DEFAULT_WAIT_TIMEOUT_MS,
@@ -2452,7 +2453,7 @@ class OracleClient:
         where, binds = _answer_record_list_where(
             search_answer_profile_id=search_answer_profile_id, trace_ids=trace_ids
         )
-        binds.update({"limit": limit, "offset": offset})
+        binds.update(offset_fetch_binds(offset=offset, limit=limit))
         rows = await self._fetch_all(
             f"""
             SELECT trace_id, search_answer_profile_id, surface, answer_engine, question,
@@ -2461,7 +2462,7 @@ class OracleClient:
             FROM rag_answer_records
             WHERE {where}
             ORDER BY created_at DESC, trace_id DESC
-            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            {offset_fetch_clause()}
             """,
             binds,
         )
@@ -2967,12 +2968,8 @@ class OracleClient:
         where_sql, binds = _oracle_conversation_where(
             search_answer_profile_id=search_answer_profile_id
         )
-        binds["offset"] = offset
-        if limit is not None:
-            binds["limit"] = limit
-            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
-        else:
-            paging_sql = "OFFSET :offset ROWS"
+        binds.update(offset_fetch_binds(offset=offset, limit=limit))
+        paging_sql = offset_fetch_clause(with_limit=limit is not None)
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -3422,14 +3419,14 @@ class OracleClient:
     ) -> list[StoredConversation]:
         """運用 CLI 用に全 tenant の会話をページングする(API からは使用しない)。"""
         rows = await self._fetch_all(
-            """
+            f"""
             SELECT conversation_id, search_answer_profile_id, tenant_id_hash, user_id_hash,
                    title, status, message_count, created_at, updated_at
             FROM rag_conversations
             ORDER BY created_at ASC, conversation_id ASC
-            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            {offset_fetch_clause()}
             """,
-            {"offset": offset, "limit": limit},
+            offset_fetch_binds(offset=offset, limit=limit),
         )
         return [_stored_conversation_from_row(row) for row in rows]
 
@@ -4598,9 +4595,9 @@ class OracleClient:
              AND NVL(d.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
             WHERE {where_sql}
             ORDER BY {order_sql}
-            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            {offset_fetch_clause()}
             """,
-            _with_tenant_bind({**binds, "offset": offset, "limit": limit}),
+            _with_tenant_bind({**binds, **offset_fetch_binds(offset=offset, limit=limit)}),
         )
         count_row = await self._fetch_one(
             f"""
@@ -5474,12 +5471,8 @@ class OracleClient:
         where_sql, binds = _oracle_knowledge_base_where(
             status=status, query=query, knowledge_base_ids=knowledge_base_ids
         )
-        binds["offset"] = offset
-        if limit is not None:
-            binds["limit"] = limit
-            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
-        else:
-            paging_sql = "OFFSET :offset ROWS"
+        binds.update(offset_fetch_binds(offset=offset, limit=limit))
+        paging_sql = offset_fetch_clause(with_limit=limit is not None)
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -5776,12 +5769,8 @@ class OracleClient:
         where_sql, binds = _oracle_search_answer_profile_where(
             status=status, query=query, search_answer_profile_ids=search_answer_profile_ids
         )
-        binds["offset"] = offset
-        if limit is not None:
-            binds["limit"] = limit
-            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
-        else:
-            paging_sql = "OFFSET :offset ROWS"
+        binds.update(offset_fetch_binds(offset=offset, limit=limit))
+        paging_sql = offset_fetch_clause(with_limit=limit is not None)
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -6429,15 +6418,12 @@ class OracleClient:
         oldest_first: bool = False,
     ) -> list[IngestionJob]:
         """Oracle ingestion job table から job を取得する。"""
-        binds: dict[str, object] = {"offset": offset}
+        binds: dict[str, object] = dict(offset_fetch_binds(offset=offset, limit=limit))
         status_clause = ""
         if status is not None:
             binds["ingestion_job_status"] = status.value
             status_clause = "AND j.status = :ingestion_job_status"
-        limit_clause = "OFFSET :offset ROWS"
-        if limit is not None:
-            binds["limit"] = limit
-            limit_clause += " FETCH NEXT :limit ROWS ONLY"
+        limit_clause = offset_fetch_clause(with_limit=limit is not None)
         order_clause = (
             "ORDER BY j.queued_at ASC, j.job_id ASC"
             if oldest_first
@@ -7583,11 +7569,8 @@ class OracleClient:
             query=query,
             knowledge_base_id=knowledge_base_id,
         )
-        binds["offset"] = offset
-        limit_clause = "OFFSET :offset ROWS"
-        if limit is not None:
-            binds["limit"] = limit
-            limit_clause += " FETCH NEXT :limit ROWS ONLY"
+        binds.update(offset_fetch_binds(offset=offset, limit=limit))
+        limit_clause = offset_fetch_clause(with_limit=limit is not None)
         # 一覧は取込中にポーリングされる。要約に使わない JSON 列(抽出結果など)は読まない(#341)。
         rows = await self._fetch_all(
             _render_sql(

@@ -11,9 +11,10 @@ import {
   TimedLoadingState,
   ToggleChip,
   toast,
+  PagedDataTable,
 } from "@engchina/production-ready-ui";
 
-import { PagedDataTable } from "@/components/PagedDataTable";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { api, ApiError, type SupportGuideSummary } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -95,6 +96,7 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
     />
   ) : (
     <PagedDataTable<SupportGuideSummary>
+      paginationLabels={paginationLabels()}
       columns={[
         {
           key: "title",

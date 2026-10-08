@@ -7,11 +7,11 @@ import { formatChatProgressDuration } from "../feedback/chat-progress";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";
-import { SelectField } from "../ui/select-field";
 import { SideSheet } from "../ui/side-sheet";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { PagedDataTable } from "./paged-data-table";
-import { DEFAULT_PAGE_SIZE, type PaginationRange } from "./pagination";
+import { PageSizeSelect } from "./page-size-select";
+import { DEFAULT_PAGE_SIZE, DEFAULT_PAGINATION_LABELS, type PaginationRange } from "./pagination";
 
 /**
  * ResultTable（#1154 / #1178）— データの結果（読み取りだけの行と列）を出す部品。チャットの回答の吹き出しの中の
@@ -103,10 +103,11 @@ export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
   scrollLabel: "実行結果の表。スクロールできます。",
   pageSize: "1 ページの行数",
   pageSizeOption: (size) => `${size} 行`,
-  pageSummary: (range) => `${range.start}-${range.end} / ${range.total} 件`,
-  pageIndicator: (page, totalPages) => `${page} / ${totalPages} ページ`,
-  prev: "前へ",
-  next: "次へ",
+  // 件数・ページ・前へ / 次へは一覧の共通の文言と同じ（#1266）。
+  pageSummary: DEFAULT_PAGINATION_LABELS.summary,
+  pageIndicator: DEFAULT_PAGINATION_LABELS.pageIndicator!,
+  prev: DEFAULT_PAGINATION_LABELS.prev,
+  next: DEFAULT_PAGINATION_LABELS.next,
 };
 
 /** 吹き出しの中のプレビューに描く行の上限（それより多い行は「すべての行を見る」で見る）。 */
@@ -486,17 +487,14 @@ export function ResultTable({
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <p className="text-sm text-fg">{summary}</p>
                 {rowCount > Math.min(...pageSizeOptions) ? (
-                  <SelectField
+                  <PageSizeSelect
                     id={pageSizeId}
-                    label={labels.pageSize}
-                    value={String(pageSize)}
+                    value={pageSize}
+                    options={pageSizeOptions}
+                    labels={{ label: labels.pageSize, option: labels.pageSizeOption }}
                     size="sm"
                     width="xs"
-                    options={pageSizeOptions.map((size) => ({
-                      value: String(size),
-                      label: labels.pageSizeOption(size),
-                    }))}
-                    onValueChange={(value) => setPageSize(Number(value))}
+                    onValueChange={setPageSize}
                   />
                 ) : null}
               </div>

@@ -1412,7 +1412,7 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
       scrollAriaLabel={t("xxx.scrollLabel")}
       …
     />
-    <Pagination page={page} totalPages={totalPages} onPageChange={setPage} summary={…} prevLabel={…} nextLabel={…} />
+    <Pagination page={page} totalPages={totalPages} range={range} onPageChange={setPage} labels={paginationLabels()} />
   </div>
 )}
 ```
@@ -1420,7 +1420,7 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
 クライアント側で全件を持つ一覧は、上の組み合わせを 1 つにした `PagedDataTable` を使います（#265。RAG・Agent が使う）。
 
 ```tsx
-// packages/ui/src/components/data/paged-data-table.tsx
+// packages/ui/src/components/data/pagination.tsx（`PagedDataTable` と `Pagination` の `labels` が受け取る）
 export interface PaginationLabels {
   summary: (range: PaginationRange) => string;               // 「1 - 10 / 42 件」
   pageIndicator?: (page: number, totalPages: number) => string; // 「1 / 5 ページ」
@@ -1433,7 +1433,7 @@ export interface PaginationLabels {
   rows={rows}                 // 全件。表示する 10 件はこの部品が切り出す
   columns={columns}
   getRowKey={(row) => row.id}
-  paginationLabels={labels}   // 製品の i18n で作る（パッケージは i18n に依存しない）
+  paginationLabels={labels}   // 任意。製品の i18n で作る（省くと共通の既定の日本語）
   scrollAriaLabel={t("xxx.scrollLabel")}
   resetKey={query}            // 任意。検索語・絞り込みが変わったときだけ 1 ページ目へ戻す
   page={page} onPageChange={setPage} // 任意。ページ番号を作業状態に残すとき
@@ -1442,9 +1442,24 @@ export interface PaginationLabels {
 
 - `stickyHeader`・`visibleRows`（`INFORMATION_TABLE_VISIBLE_ROWS`）・行の最小高さ（`INFORMATION_TABLE_ROW_CLASS`。`rowProps` の className と合わせる）はこの部品が付けます。
 - `resetKey` を省くと、再取得で行が変わってもページを戻しません（Agent の Run・承認の 5 秒ごとの再取得など）。行が減って範囲外になったら表示だけ末尾のページに寄せます。
-- 製品は文言だけを渡す薄いラッパーを持ちます（RAG の `components/PagedDataTable.tsx`、Agent の `components/ListViews.tsx`。Agent はページ番号を `sessionStorage` の作業状態に残す `pageKey` を足している）。
-- サーバー側のページング（offset / limit / total）は `DataTable` + `Pagination` に `offsetPagination` の結果を渡します（Agent の監査、RAG の文書一覧・チャットの会話一覧）。
-- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、前へ戻るカーソルを画面が積み、`page`（積んだ数 + 1）・`totalPages`・`range` を `Pagination` に渡します（NL2SQL の SQL生成評価の `cursorPagination`、#403）。
+- `paginationLabels` は任意です（#1266。省くと共通の既定 `DEFAULT_PAGINATION_LABELS`）。製品は i18n の文字列を返す `paginationLabels()` の 1 関数（RAG `lib/pagination-labels.ts`、Agent `components/ListViews.tsx` の `agentPaginationLabels`、NL2SQL `lib/pagination-labels.ts`）だけを持ち、部品を包み直しません（Agent はページ番号を `sessionStorage` の作業状態に残す `pageKey` のラッパーだけ残す）。
+- サーバー側のページング（offset / limit / total）は `DataTable` + `OffsetPagination`（#1266）。今のページが 0 件で返ったら（削除・期間の変更・保存していたページが無くなった）最後のページへ寄せて `onPageChange(page, offset)` を呼ぶので、画面で書き写しません（Agent のフィードバック・評価のジョブ・監査、RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧）。
+
+```tsx
+const [offset, setOffset] = useWorkspaceState(…);       // ページは作業状態に残す（offset でも page でもよい）
+<OffsetPagination offset={offset} limit={limit} total={page.total} count={page.items.length}
+  onPageChange={(_page, nextOffset) => setOffset(nextOffset)} labels={paginationLabels()} ariaLabel={…} testId={…} />
+```
+
+- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266。NL2SQL の SQL生成評価・質問の学習の候補・アプリのフィードバック）。
+
+```tsx
+const pages = useCursorPages({ resetKey: filters });     // pages.cursor を API に送る（最初のページは null）
+<CursorPagination depth={pages.depth} total={data.total ?? 0} count={data.items.length} nextCursor={data.next_cursor}
+  onPrevious={pages.prev} onNext={pages.next} labels={paginationLabels()} ariaLabel={…} testId={…} />
+```
+
+- 1 ページの件数を選べる一覧は `PageSizeSelect`（`value` / `onValueChange` / `options`（既定 `PAGE_SIZE_OPTIONS` = 10 / 50 / 100）/ `labels`（既定「1 ページの件数」「{n} 件」）。幅は `sm`、`ResultTable` は `xs`）。件数の範囲の文言は `paginationRange(page, pageSize, count, total)`、「さらに読み込む」の失敗の文言は `loadMoreErrorMessage(error, { timeoutMessage, fallback })`。
 - 表ではない行リスト（カードの行・選択と連動する一覧）は `INFORMATION_LIST_SCROLL_CLASS` で 5 / 8 行の高さにし、中をスクロールします。行が表より高くても手書きの `max-h-[…]` にしません（NL2SQL の実行履歴、RAG の chunk・抽出セグメント、#403）。
 - 基準から外す一覧（選択と連動する一覧・カーソル型の「さらに読み込む」・分析の一覧の件数の切り替え）と理由は、UX 契約 `page-archetypes.md` の「一覧の型と、基準から外す例外」にあります。
 

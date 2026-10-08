@@ -5,12 +5,13 @@
 
 from .app import create_app
 from .logging import configure_logging
-from .schemas import ApiResponse, HealthData, Page, ReadinessStatus
+from .schemas import ApiResponse, CursorPage, HealthData, Page, ReadinessStatus
 
 __all__ = [
     "create_app",
     "configure_logging",
     "ApiResponse",
+    "CursorPage",
     "HealthData",
     "Page",
     "ReadinessStatus",

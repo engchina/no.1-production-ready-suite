@@ -42,11 +42,12 @@ import {
   CAPABILITY_PERMISSIONS,
   MENU_PERMISSIONS,
 } from "@/features/security/menu-permissions";
-import { ApiError, apiGet, apiPost, isAbortError, isTimeoutError, isTransportError } from "@/lib/api";
+import { ApiError, apiGet, apiPost, isAbortError, isTransportError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
+import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { formatDateTime } from "@/lib/format";
-import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
 import { GuidedClarificationPanel } from "./components/GuidedClarificationPanel";
@@ -151,15 +152,6 @@ function sampleDataMutationFailureMessage(result: SampleDataMutationData) {
     result.statements.find((statement) => statement.error_message.trim())?.error_message ||
     t("nl2sql.sample.importFailed")
   );
-}
-
-function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
-  if (isTimeoutError(error)) {
-    return t("objectSelector.loadMoreTimeout", {
-      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
-    });
-  }
-  return error instanceof Error ? error.message : t(fallbackKey);
 }
 
 export function Nl2SqlWorkbench() {

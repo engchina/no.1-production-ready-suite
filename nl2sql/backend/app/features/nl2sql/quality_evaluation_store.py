@@ -9,6 +9,8 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
+
 from .oracle_lob import configure_clob_fetch_as_text
 from .quality_evaluation_models import (
     QualityEvaluationJobRecord,
@@ -369,9 +371,8 @@ class OracleQualityEvaluationRepository:
             total = int(cursor.fetchone()[0])
             cursor.execute(
                 "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS " + where_sql + " "  # nosec B608
-                "ORDER BY CREATED_AT DESC, JOB_ID DESC OFFSET :offset ROWS "
-                "FETCH NEXT :limit ROWS ONLY",
-                {**filter_binds, "offset": offset, "limit": limit},
+                "ORDER BY CREATED_AT DESC, JOB_ID DESC " + offset_fetch_clause(),
+                {**filter_binds, **offset_fetch_binds(offset=offset, limit=limit)},
             )
             rows = cursor.fetchall()
             raw_jobs = [_read_lob(row[0]) for row in rows]
@@ -561,10 +562,10 @@ class OracleQualityEvaluationRepository:
             )
             total = int(cursor.fetchone()[0])
             cursor.execute(
-                "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id "
-                "ORDER BY CASE_NO, ENGINE, REPETITION_NO OFFSET :offset ROWS "
-                "FETCH NEXT :limit ROWS ONLY",
-                {"job_id": job_id, "offset": offset, "limit": limit},
+                # offset_fetch_clause は bind 名だけの定数の文（利用者の入力は bind で渡す）。
+                "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id "  # nosec B608
+                "ORDER BY CASE_NO, ENGINE, REPETITION_NO " + offset_fetch_clause(),
+                {"job_id": job_id, **offset_fetch_binds(offset=offset, limit=limit)},
             )
             rows = cursor.fetchall()
             raw_results = [_read_lob(row[0]) for row in rows]

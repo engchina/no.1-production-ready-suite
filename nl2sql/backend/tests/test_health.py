@@ -15,6 +15,7 @@ from typing import Any, cast
 import httpx
 import pytest
 from fastapi import HTTPException, Response
+from pr_backend_core.api import CursorParams
 
 from app import settings as app_settings_module
 from app.features.nl2sql import router as nl2sql_router
@@ -2508,7 +2509,9 @@ def test_explicit_select_ai_job_tracks_timing() -> None:
 
 def test_schema_objects_invalid_profile_returns_400() -> None:
     with pytest.raises(HTTPException) as exc:
-        schema_router.search_objects(Response(), profile_id="missing-profile")
+        schema_router.search_objects(
+            Response(), CursorParams(cursor=None, limit=50), profile_id="missing-profile"
+        )
     assert exc.value.status_code == 400
     assert "profile" in str(exc.value.detail)
 

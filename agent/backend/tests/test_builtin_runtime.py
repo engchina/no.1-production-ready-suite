@@ -801,9 +801,10 @@ def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls)
 
     first = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]
     assert (first["total"], first["limit"], first["offset"]) == (before + 12, 10, 0)
-    assert [item["thread_id"] for item in first["threads"]] == created[::-1][:10]
+    assert [item["thread_id"] for item in first["items"]] == created[::-1][:10]
+    assert first["has_next"] is True
     second = client.get(f"/api/threads?agent_id={AGENT_ID}&limit=10&offset=10").json()["data"]
-    assert [item["thread_id"] for item in second["threads"]][:2] == created[1::-1]
+    assert [item["thread_id"] for item in second["items"]][:2] == created[1::-1]
     assert second["total"] == before + 12
     assert client.get("/api/threads?limit=0").status_code == 422
     assert client.get("/api/threads?offset=-1").status_code == 422
@@ -833,7 +834,7 @@ def test_thread_api_lists_and_continues_conversation(
 
     listed = client.get(f"/api/threads?agent_id={AGENT_ID}")
     assert listed.status_code == 200
-    [thread] = [item for item in listed.json()["data"]["threads"] if item["thread_id"] == thread_id]
+    [thread] = [item for item in listed.json()["data"]["items"] if item["thread_id"] == thread_id]
     assert thread["title"] == "最初の質問"
     assert thread["run_count"] == 2
 

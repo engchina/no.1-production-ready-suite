@@ -22,6 +22,8 @@ from threading import Condition, Lock
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from pr_backend_core import Page
+from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
 from pydantic import (
     BaseModel,
@@ -446,13 +448,11 @@ class ThreadSummary(BaseModel):
     updated_at: datetime
 
 
-class ThreadsData(BaseModel):
-    """会話の一覧の 1 ページ（新しい順。#1265）。`total` は利用者が見られる会話の全件数。"""
+class ThreadsData(Page[ThreadSummary]):
+    """会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。
 
-    threads: list[ThreadSummary] = Field(default_factory=list)
-    total: int = 0
-    limit: int = 10
-    offset: int = 0
+    `total` は利用者が見られる会話の全件数。
+    """
 
 
 class ThreadData(BaseModel):
@@ -606,11 +606,9 @@ class RuntimeToolCallAuditRecord(BaseModel):
     run_updated_at: str
 
 
-class RuntimeToolCallAuditData(BaseModel):
-    total: int
-    offset: int
-    limit: int
-    records: list[RuntimeToolCallAuditRecord]
+class RuntimeToolCallAuditData(Page[RuntimeToolCallAuditRecord]):
+    """projection のツール監査の 1 ページ（共通の `Page`。#1266）。"""
+
     # 監査に記録されたツール名（絞り込みの条件に依らない。画面のツール名の選択肢。#983）。
     tool_names: list[str] = Field(default_factory=list)
 
@@ -1966,7 +1964,8 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             tool_names = self._projection_tool_names(cursor)
 
         return RuntimeToolCallAuditData(
-            total=total, offset=offset, limit=limit, records=records, tool_names=tool_names
+            **dict(paginate(records, total=total, limit=limit, offset=offset)),
+            tool_names=tool_names,
         )
 
     def _projection_tool_names(self, cursor: Any) -> list[str]:
@@ -2005,9 +2004,8 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             error_code=error_code,
             has_guardrail_warnings=has_guardrail_warnings,
         )
-        params["offset"] = offset
-        params["limit"] = limit
-        pagination_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+        params.update(offset_fetch_binds(offset=offset, limit=limit))
+        pagination_sql = offset_fetch_clause()
         cursor.execute(
             f"""
             SELECT

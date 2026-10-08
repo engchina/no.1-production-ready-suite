@@ -2582,7 +2582,6 @@ export const ja = {
   "feedback.reasons.title": "低評価の理由",
   "feedback.reasons.empty": "この条件では低評価の理由はありません。",
   "feedback.list.title": "フィードバック明細",
-  "feedback.list.range": "{total}件中 {start}〜{end}件",
   "feedback.list.empty": "フィードバックがありません",
   "feedback.list.emptyHint": "期間や絞り込み条件を変更するか、検索・チャットで回答を評価してください。",
   "feedback.list.unknownSearchAnswerProfile": "検索・回答プロファイル不明（旧データ）",

@@ -427,10 +427,7 @@ function feedbackReportFromRuns(
       admin_not_helpful: 0,
     },
     // 一覧はサーバー側のページング（#794）。
-    items: items.slice(page.offset, page.offset + page.limit),
-    matched: items.length,
-    offset: page.offset,
-    limit: page.limit,
+    ...pageOfItems(items, page),
   };
 }
 
@@ -952,12 +949,19 @@ function accessTargetPage(items: Json[], query: URLSearchParams) {
       (ids.length === 0 || ids.includes(item.id as string)) &&
       (!q || [item.id, item.name, item.description ?? ""].join(" ").toLowerCase().includes(q)),
   );
+  return pageOfItems(matched, { offset, limit });
+}
+
+/** 共通の `Page[T]` の形（backend の `paginate_slice` と同じ。`total` は省略すると items の全件数）。 */
+function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, total?: number) {
+  const pageItems = items.slice(page.offset, page.offset + page.limit);
+  const count = total ?? items.length;
   return {
-    items: matched.slice(offset, offset + limit),
-    total: matched.length,
-    limit,
-    offset,
-    has_next: offset + limit < matched.length,
+    items: pageItems,
+    total: count,
+    limit: page.limit,
+    offset: page.offset,
+    has_next: page.offset + pageItems.length < count,
   };
 }
 
@@ -1137,10 +1141,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return {
         source: "memory",
         ...report,
-        items: items.slice(page.offset, page.offset + page.limit),
-        matched: (report.matched as number | undefined) ?? items.length,
-        offset: page.offset,
-        limit: page.limit,
+        ...pageOfItems(items, page, (report.total as number | undefined) ?? items.length),
       };
     }
     return feedbackReportFromRuns(
@@ -1171,7 +1172,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       created_at: runs[0].created_at,
       updated_at: runs[runs.length - 1].updated_at,
     })).reverse();
-    return { threads: threads.slice(offset, offset + limit), total: threads.length, limit, offset };
+    return pageOfItems(threads, { offset, limit });
   }
   if (method === "GET" && at("threads", "*")) {
     const runs = state.runs.filter((run) => run.thread_id === second);
@@ -1467,10 +1468,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     // 評価の履歴はサーバー側のページング（#794）。
     const page = pageOf(query);
     return {
-      total: state.evaluations.length,
-      offset: page.offset,
-      limit: page.limit,
-      jobs: state.evaluations.slice(page.offset, page.offset + page.limit).map((job) => ({
+      ...pageOfItems(state.evaluations, page),
+      items: state.evaluations.slice(page.offset, page.offset + page.limit).map((job) => ({
         id: job.id,
         agent_id: job.agent_id,
         agent_name: job.agent_name,
@@ -1605,11 +1604,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
           ((record.guardrail_warnings as unknown[] | undefined) ?? []).length > 0 === (warnings === "true"))
     );
     return {
-      total: matched.length,
-      offset,
-      limit,
+      ...pageOfItems(matched, { offset, limit }),
       filters: Object.fromEntries([...query.entries()].filter(([key]) => key !== "offset" && key !== "limit")),
-      records: matched.slice(offset, offset + limit),
       // 絞り込みに依らない、記録されたツール名（#983）。
       tool_names: [...new Set(state.auditRecords.map((record) => String(record.tool_name)))].sort(),
     };

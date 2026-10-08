@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+from pr_backend_core.api import CursorParams
 from pydantic import ValidationError
 from test_nl2sql_job_runtime import _FakeEnterpriseAiClient, _repository, _request, _worker
 
@@ -226,7 +227,7 @@ def test_chat_route_accepts_generation_capability_without_execution(
     actor_request = api_request({"orders-profile"}, permissions={QUERY_GENERATE_PERMISSION})
     created = router.create_job(request(), actor_request).data
     assert created is not None
-    listed = router.list_sql_chats(actor_request).data
+    listed = router.list_sql_chats(actor_request, CursorParams(cursor=None, limit=10)).data
     assert listed is not None and listed.items[0].id == created.job_id
     assert router.get_sql_chat(created.job_id, actor_request).data is not None
     with pytest.raises(SecurityApiError):

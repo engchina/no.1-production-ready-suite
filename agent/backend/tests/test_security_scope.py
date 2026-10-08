@@ -166,7 +166,7 @@ def test_audit_is_scoped_by_principal(auth: ProductionAuth, scope_data: ScopeDat
     assert client.get(f"/api/runs/{scope_data.run_b.id}/audit", headers=headers).status_code == 403
     records = client.get("/api/audit/tool-calls?limit=1000", headers=headers)
     assert records.status_code == 200
-    run_ids = {item["run_id"] for item in records.json()["data"]["records"]}
+    run_ids = {item["run_id"] for item in records.json()["data"]["items"]}
     assert scope_data.run_a1.id in run_ids
     assert scope_data.run_b.id not in run_ids
     csv = client.get("/api/audit/tool-calls.csv?limit=5000", headers=headers)

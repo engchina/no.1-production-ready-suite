@@ -18,6 +18,7 @@ from uuid import uuid4
 from charset_normalizer import from_bytes
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     Form,
     HTTPException,
@@ -27,6 +28,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.api.errors import DocumentFileMissingError
 from app.clients.object_storage import ObjectStorageClient
@@ -509,11 +511,10 @@ async def _delete_orphan_upload_object(storage: ObjectStorageClient, object_path
 
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
 async def list_documents(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     status: FileStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
     knowledge_base_id: str | None = Query(default=None, min_length=1, max_length=128),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[DocumentSummary]]:
     """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
@@ -523,8 +524,8 @@ async def list_documents(
         documents = await oracle.list_documents(
             status=status,
             query=q,
-            limit=limit,
-            offset=offset,
+            limit=paging.limit,
+            offset=paging.offset,
             knowledge_base_id=knowledge_base_id,
         )
         await _mark_layers_rebuild_required(oracle, documents, settings)
@@ -533,21 +534,13 @@ async def list_documents(
             query=q,
             knowledge_base_id=knowledge_base_id,
         )
-        return Page(
-            items=documents,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
-        )
+        return paginate(documents, total=total, limit=paging.limit, offset=paging.offset)
 
-    empty_page: Page[DocumentSummary] = Page(
-        items=[], total=0, limit=limit, offset=offset, has_next=False
-    )
+    fallback: Page[DocumentSummary] = empty_page(paging)
     page, degraded = await load_or_degrade(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=empty_page,
+        fallback=fallback,
         log_label="documents_list",
     )
     return ApiResponse(
@@ -677,32 +670,25 @@ async def document_classification_options() -> ApiResponse[DocumentClassificatio
 
 @router.get("/ingestion-jobs", response_model=ApiResponse[Page[IngestionJob]])
 async def list_ingestion_jobs(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     status: Annotated[IngestionJobStatus | None, Query()] = None,
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[IngestionJob]]:
     """直近の取込 job 一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
     settings = get_settings()
 
     async def _load() -> Page[IngestionJob]:
-        page_items = await oracle.list_ingestion_jobs(status=status, limit=limit, offset=offset)
-        total = await oracle.count_ingestion_jobs(status=status)
-        return Page(
-            items=page_items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
+        page_items = await oracle.list_ingestion_jobs(
+            status=status, limit=paging.limit, offset=paging.offset
         )
+        total = await oracle.count_ingestion_jobs(status=status)
+        return paginate(page_items, total=total, limit=paging.limit, offset=paging.offset)
 
-    empty_page: Page[IngestionJob] = Page(
-        items=[], total=0, limit=limit, offset=offset, has_next=False
-    )
+    fallback: Page[IngestionJob] = empty_page(paging)
     page, degraded = await load_or_degrade(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=empty_page,
+        fallback=fallback,
         log_label="ingestion_jobs_list",
     )
     return ApiResponse(

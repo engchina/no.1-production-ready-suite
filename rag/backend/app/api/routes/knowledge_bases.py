@@ -2,7 +2,8 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.config import get_settings
@@ -77,10 +78,9 @@ async def _refreshed_detail_response(
 
 @router.get("", response_model=ApiResponse[Page[KnowledgeBaseSummary]])
 async def list_knowledge_bases(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     status: KnowledgeBaseStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
     ids: Annotated[
         list[str] | None,
         Query(
@@ -98,24 +98,20 @@ async def list_knowledge_bases(
 
     async def _load() -> Page[KnowledgeBaseSummary]:
         items = await oracle.list_knowledge_bases(
-            status=status, query=q, limit=limit, offset=offset, knowledge_base_ids=ids
+            status=status,
+            query=q,
+            limit=paging.limit,
+            offset=paging.offset,
+            knowledge_base_ids=ids,
         )
         total = await oracle.count_knowledge_bases(status=status, query=q, knowledge_base_ids=ids)
-        return Page(
-            items=items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
-        )
+        return paginate(items, total=total, limit=paging.limit, offset=paging.offset)
 
-    empty_page: Page[KnowledgeBaseSummary] = Page(
-        items=[], total=0, limit=limit, offset=offset, has_next=False
-    )
+    fallback: Page[KnowledgeBaseSummary] = empty_page(paging)
     page, degraded = await load_or_degrade(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=empty_page,
+        fallback=fallback,
         log_label="knowledge_bases_list",
     )
     return ApiResponse(

@@ -22,8 +22,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   StatusBadge as UiStatusBadge,
-  offsetForPage,
-  offsetPagination,
+  OffsetPagination,
   ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
@@ -34,7 +33,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { ListPagination } from "@/components/ListPagination";
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import {
   api,
@@ -62,6 +60,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
 
@@ -71,7 +70,6 @@ import {
   FILE_LIST_QUERY_MAX_LENGTH,
   INITIAL_FILE_LIST_VIEW as INITIAL_VIEW,
   isFileListView,
-  outOfRangeOffset,
   summarizeDeleteOutcomes,
   summarizeEnqueueOutcomes,
   type DeleteOutcome,
@@ -174,18 +172,6 @@ export function FileListClient() {
   const selectedCount = selectedDocuments.length;
   const allSelected = pageIds.length > 0 && selectedCount === pageIds.length;
 
-  // 表示中のページが範囲外になったら（最後のページの最後の行を削除した等）、残っている最後の
-  // ページへ移す。空のページに「該当なし」とだけ出してページ送りも消える状態にしない（#281）。
-  // DB の縮退応答（warning 付きの空一覧）ではページ位置を保つ。
-  const correctedOffset =
-    page && !query.isPlaceholderData && (page.warning_messages?.length ?? 0) === 0
-      ? outOfRangeOffset({ offset, total: page.total, limit: LIMIT })
-      : null;
-  useEffect(() => {
-    if (correctedOffset !== null) {
-      setView((current) => ({ ...current, offset: correctedOffset }));
-    }
-  }, [correctedOffset, setView]);
   const ingestibleSelected = selectedDocuments.filter((d) => INGESTIBLE.has(d.status));
   const bulkBusy = bulkIngest !== null || bulkDelete !== null || deleteImpactPending;
   const allKnowledgeBasesOption = useMemo<SearchableSelectOption>(
@@ -566,9 +552,13 @@ export function FileListClient() {
           >
             <TableSkeleton columns={8} />
           </TimedLoadingState>
-        ) : items.length > 0 ? (
+        ) : (page?.total ?? 0) > 0 ? (
           <div className="grid gap-2">
             <DataTable<DocumentSummary>
+              // 表示中のページが範囲外になったら（最後のページの最後の行を削除した等）、OffsetPagination が残っている
+              // 最後のページへ移す。移る間は空のページに「該当なし」を出さず、表の形の読み込み中にする（#281）。
+              // DB の縮退応答（warning 付きの空一覧）は total が 0 なので、空の案内のままページ位置を保つ。
+              loading={items.length === 0}
               columns={documentColumns({
                 allSelected,
                 onToggleAll: () => selection.toggleAll(pageIds),
@@ -594,12 +584,16 @@ export function FileListClient() {
               scrollTestId="file-list-scroll-region"
               tableClassName="w-full min-w-[70rem] text-sm"
             />
-            <ListPagination
-              {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
-              onPageChange={(next) => {
-                setOffset(offsetForPage(next, LIMIT));
+            <OffsetPagination
+              offset={offset}
+              limit={LIMIT}
+              total={page?.total ?? 0}
+              count={items.length}
+              onPageChange={(_page, nextOffset) => {
+                setOffset(nextOffset);
                 selection.clear();
               }}
+              labels={paginationLabels()}
               testId="file-list-pagination"
             />
           </div>

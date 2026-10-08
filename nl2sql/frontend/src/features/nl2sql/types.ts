@@ -352,7 +352,8 @@ export interface ClassifierTrainingCandidate {
 export interface ClassifierTrainingCandidatesData {
   items: ClassifierTrainingCandidate[];
   total: number;
-  next_cursor: string;
+  /** 続きがあるときだけ非 null。 */
+  next_cursor: string | null;
   pending_count: number;
   added_count: number;
   attention_count: number;
@@ -692,8 +693,8 @@ export interface HistoryItem {
 
 export interface HistoryData {
   items: HistoryItem[];
-  /** 続きがあるときだけ非空。「さらに読み込む」でこの cursor を渡す。 */
-  next_cursor?: string;
+  /** 続きがあるときだけ非 null。「さらに読み込む」でこの cursor を渡す。 */
+  next_cursor: string | null;
   /** フィルタ適用後の総件数(数えられないときは null)。 */
   total?: number | null;
 }
@@ -716,7 +717,8 @@ export interface FeedbackRecord extends HistoryItem {
 export interface FeedbackListData {
   items: FeedbackRecord[];
   total: number;
-  next_cursor: string;
+  /** 続きがあるときだけ非 null。 */
+  next_cursor: string | null;
 }
 
 export interface FeedbackClearData {

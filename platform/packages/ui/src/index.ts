@@ -323,21 +323,34 @@ export {
 } from "./components/data/status-badge";
 export {
   Pagination,
+  OffsetPagination,
+  CursorPagination,
   usePagination,
+  useCursorPages,
   offsetPagination,
   offsetForPage,
+  lastPageOffset,
+  outOfRangeOffset,
   cursorPagination,
-  offsetAfterShrink,
+  paginationRange,
+  formatPaginationNumber,
   DEFAULT_PAGE_SIZE,
+  DEFAULT_PAGINATION_LABELS,
   type PaginationProps,
+  type OffsetPaginationProps,
+  type CursorPaginationProps,
+  type PaginationLabels,
   type PaginationRange,
   type UsePaginationOptions,
 } from "./components/data/pagination";
 export {
-  PagedDataTable,
-  type PagedDataTableProps,
-  type PaginationLabels,
-} from "./components/data/paged-data-table";
+  PageSizeSelect,
+  PAGE_SIZE_OPTIONS,
+  DEFAULT_PAGE_SIZE_SELECT_LABELS,
+  type PageSizeSelectProps,
+  type PageSizeSelectLabels,
+} from "./components/data/page-size-select";
+export { PagedDataTable, type PagedDataTableProps } from "./components/data/paged-data-table";
 export {
   ResultTable,
   ResultCell,
@@ -387,7 +400,7 @@ export {
   type SortDirection,
 } from "./components/data/data-table";
 export { ListToolbar, type ListToolbarProps } from "./components/data/list-toolbar";
-export { LoadMoreFooter, type LoadMoreFooterProps } from "./components/data/load-more-footer";
+export { LoadMoreFooter, loadMoreErrorMessage, type LoadMoreFooterProps } from "./components/data/load-more-footer";
 export {
   ListPicker,
   DEFAULT_LIST_PICKER_LABELS,

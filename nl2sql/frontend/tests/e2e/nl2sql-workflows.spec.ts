@@ -5711,14 +5711,14 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const pagination = page.getByTestId("query-results-all-pagination");
-  await expect(pagination).toContainText("1-10 / 12 件");
+  await expect(pagination).toContainText("1 - 10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   const allTable = page.getByTestId("query-results-all-table");
   await expect(allTable.getByRole("cell", { name: "顧客10" })).toBeVisible();
   await expect(allTable.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11-12 / 12 件");
+  await expect(pagination).toContainText("11 - 12 / 12 件");
   await expect(allTable.getByRole("cell", { name: "顧客12" })).toBeVisible();
   await expect(allTable.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
 
@@ -10153,7 +10153,7 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expect(
     historyPane.getByRole("navigation", { name: "フィードバック履歴一覧のページ切替" })
   ).toBeVisible();
-  await expect(pagination).toContainText("1-20 / 21 件");
+  await expect(pagination).toContainText("1 - 20 / 21 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   const previousButton = pagination.getByRole("button", { name: "前へ" });
   const nextButton = pagination.getByRole("button", { name: "次へ" });
@@ -10169,7 +10169,7 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 21");
   await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 21");
-  await expect(pagination).toContainText("21-21 / 21 件");
+  await expect(pagination).toContainText("21 - 21 / 21 件");
   await expect(pagination).toContainText("2 / 2 ページ");
   await expect(previousButton).toBeEnabled();
   await expect(nextButton).toBeDisabled();
@@ -10184,14 +10184,14 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   expect(api.adminFeedbackPayload).toMatchObject({
     history_id: "cursor-feedback-21",
   });
-  await expect(pagination).toContainText("21-21 / 21 件");
+  await expect(pagination).toContainText("21 - 21 / 21 件");
   await expect(pagination).toContainText("2 / 2 ページ");
 
   await previousButton.focus();
   await expect(previousButton).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(rows).toHaveCount(20);
-  await expect(pagination).toContainText("1-20 / 21 件");
+  await expect(pagination).toContainText("1 - 20 / 21 件");
   await expect(previousButton).toBeDisabled();
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -10530,17 +10530,17 @@ test("question classifier model management page trains classifier and finds lear
   await expect(page.getByTestId("qcm-training-data-table").getByText("CATEGORY")).toBeVisible();
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
   await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toHaveCount(0);
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1-10 / 12 件");
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 - 10 / 12 件");
   await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 / 2 ページ");
   await page.getByTestId("qcm-training-data-pagination").getByRole("button", { name: "次へ" }).click();
   await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toBeVisible();
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toHaveCount(0);
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("11-12 / 12 件");
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("11 - 12 / 12 件");
   await page.getByTestId("qcm-training-data-pagination").getByRole("button", { name: "前へ" }).click();
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
   await page.getByTestId("qcm-training-data-pagination").getByRole("button", { name: "次へ" }).click();
   await page.getByPlaceholder("CATEGORY / TEXT / SOURCE で絞り込み").fill("ページング対象");
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1-10 / 12 件");
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 - 10 / 12 件");
   await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 / 2 ページ");
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
   await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toHaveCount(0);
@@ -11029,7 +11029,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await expect(candidateList).toBeVisible();
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "次へ" }).click();
   await expect(page.getByText(secondPageCandidate.question, { exact: true })).toBeVisible();
-  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("21-21 / 21 件");
+  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("21 - 21 / 21 件");
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "前へ" }).click();
   await expect(page.getByText(initialCandidate.question, { exact: true })).toBeVisible();
 
@@ -11129,7 +11129,7 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByTestId("glossary-term-preview-cell").first().locator("xpath=ancestor::td[1]")).toHaveCSS("vertical-align", "middle");
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.TOTAL_AMOUNT" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語11" })).toHaveCount(0);
-  await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1-10 / 21 件");
+  await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1 - 10 / 21 件");
   await expect(page.getByLabel("用語・同義語データのページ切替")).toBeVisible();
   await page.getByTestId("glossary-terms-pagination").getByRole("button", { name: "次へ" }).click();
   await expect(page.getByTestId("glossary-terms-row-number").first()).toHaveText("11");
@@ -13548,7 +13548,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   const previewSheet = page.getByRole("dialog", { name: "表示結果（100 行）" });
   await expect(previewSheet).toBeVisible();
   const previewSheetPagination = page.getByTestId("query-results-all-pagination");
-  await expect(previewSheetPagination).toContainText("1-10 / 100 件");
+  await expect(previewSheetPagination).toContainText("1 - 10 / 100 件");
   await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
   await previewSheetPagination.getByRole("button", { name: "次へ" }).click();
   await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toBeVisible();

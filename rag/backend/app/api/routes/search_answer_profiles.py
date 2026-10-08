@@ -4,7 +4,10 @@ KB が「文書をどう加工して索引するか」を司るのに対し、�
 どんな検索/生成方針・persona で束ねて回答するか」を司る利用者視点のエンティティ。
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.config import get_settings
@@ -23,10 +26,9 @@ router = APIRouter()
 
 @router.get("", response_model=ApiResponse[Page[SearchAnswerProfileSummary]])
 async def list_search_answer_profiles(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     status: SearchAnswerProfileStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[SearchAnswerProfileSummary]]:
     """検索・回答プロファイル一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
@@ -35,24 +37,16 @@ async def list_search_answer_profiles(
     async def _load() -> Page[SearchAnswerProfileSummary]:
         await oracle.ensure_default_search_answer_profile()
         items = await oracle.list_search_answer_profiles(
-            status=status, query=q, limit=limit, offset=offset
+            status=status, query=q, limit=paging.limit, offset=paging.offset
         )
         total = await oracle.count_search_answer_profiles(status=status, query=q)
-        return Page(
-            items=items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
-        )
+        return paginate(items, total=total, limit=paging.limit, offset=paging.offset)
 
-    empty_page: Page[SearchAnswerProfileSummary] = Page(
-        items=[], total=0, limit=limit, offset=offset, has_next=False
-    )
+    fallback: Page[SearchAnswerProfileSummary] = empty_page(paging)
     page, degraded = await load_or_degrade(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=empty_page,
+        fallback=fallback,
         log_label="search_answer_profiles_list",
     )
     return ApiResponse(

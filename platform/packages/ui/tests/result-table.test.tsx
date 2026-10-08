@@ -172,7 +172,7 @@ describe("ResultTable", () => {
     expect(sheet.getAttribute("role")).toBe("dialog");
     expect(sheet.className).toContain("sm:w-[64rem]");
     expect($('[data-testid="result-all-table"]')!.querySelectorAll("tbody tr")).toHaveLength(10);
-    expect($('[data-testid="result-all-pagination"]')?.textContent).toContain("1-10 / 60 件");
+    expect($('[data-testid="result-all-pagination"]')?.textContent).toContain("1 - 10 / 60 件");
     // 全行の表は折り返して全文を出す。
     const fullCell = $('[data-testid="result-all-table"]')!.querySelectorAll("tbody tr")[1].querySelectorAll("td")[3];
     expect(fullCell.querySelector("span")?.className).toContain("whitespace-pre-wrap");

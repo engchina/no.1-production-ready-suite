@@ -102,4 +102,3 @@ export function qualityEvaluationAttemptTimedOut(
   const timeoutSeconds = Math.max(1, Number(job.attempt_timeout_seconds || 0));
   return startedAt + timeoutSeconds * 1000 <= nowMs;
 }
-

@@ -27,8 +27,11 @@ from importlib import import_module
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
+
 from app.features.agent import storage_backend
 from app.features.agent.feedback import (
+    FeedbackItem,
     FeedbackReport,
     FeedbackSummary,
     build_feedback_report,
@@ -458,7 +461,7 @@ def feedback_page_sql(where: str) -> str:
     return (
         f"SELECT {_FEEDBACK_ITEM_COLUMNS} FROM {RUN_FACTS_TABLE} {where} "  # nosec B608
         "ORDER BY RATED_AT DESC, RUN_ID DESC "
-        "OFFSET :page_offset ROWS FETCH NEXT :page_limit ROWS ONLY"
+        + offset_fetch_clause(offset_bind="page_offset", limit_bind="page_limit")
     )
 
 
@@ -644,58 +647,58 @@ class OracleRunFactsStore:
     ) -> FeedbackReport:
         since = now - timedelta(days=days)
         previous_since = since - timedelta(days=days)
-        report = FeedbackReport(
+        summaries = {1: FeedbackSummary(), 0: FeedbackSummary()}
+        items: list[FeedbackItem] = []
+        total = 0
+        if agent_ids is None or agent_ids:
+            binds: dict[str, Any] = {
+                "since": to_utc_naive(since),
+                "previous_since": to_utc_naive(previous_since),
+                "until": to_utc_naive(now),
+            }
+            filters = feedback_filters(agent_ids=agent_ids, agent_id=agent_id, binds=binds)
+            page_binds = {key: value for key, value in binds.items() if key != "previous_since"}
+            where = feedback_items_where(filters, feedback_match_clause(rating, reason, page_binds))
+            count_binds = dict(page_binds)
+            page_binds.update(
+                offset_fetch_binds(
+                    offset=offset, limit=limit, offset_bind="page_offset", limit_bind="page_limit"
+                )
+            )
+            summary_rows, reason_rows, count_rows, page_rows = self._query(
+                [
+                    (feedback_summary_sql(filters), binds),
+                    (feedback_reasons_sql(filters), binds),
+                    (feedback_count_sql(where), count_binds),
+                    (feedback_page_sql(where), page_binds),
+                ]
+            )
+            reasons: dict[int, dict[FeedbackReason, int]] = {0: {}, 1: {}}
+            for row in reason_rows:
+                reasons[int(row[0])][FeedbackReason(str(row[1]))] = int(row[2] or 0)
+            for row in summary_rows:
+                period = int(row[0])
+                summary = FeedbackSummary(
+                    total=int(row[1] or 0),
+                    helpful=int(row[2] or 0),
+                    not_helpful=int(row[3] or 0),
+                    admin_reviewed=int(row[4] or 0),
+                    admin_not_helpful=int(row[5] or 0),
+                )
+                summaries[period] = finish_summary(summary, reasons[period])
+            total = int(count_rows[0][0] or 0) if count_rows else 0
+            items = feedback_items(
+                [fact_from_feedback_row(row) for row in page_rows], agent_names, user_names, now
+            )
+        return FeedbackReport(
             days=days,
             source="history",
             since=since,
             until=now,
-            summary=FeedbackSummary(),
-            previous=FeedbackSummary(),
-            offset=offset,
-            limit=limit,
+            summary=summaries[1],
+            previous=summaries[0],
+            **dict(paginate(items, total=total, limit=limit, offset=offset)),
         )
-        if agent_ids is not None and not agent_ids:
-            return report
-        binds: dict[str, Any] = {
-            "since": to_utc_naive(since),
-            "previous_since": to_utc_naive(previous_since),
-            "until": to_utc_naive(now),
-        }
-        filters = feedback_filters(agent_ids=agent_ids, agent_id=agent_id, binds=binds)
-        page_binds = {key: value for key, value in binds.items() if key != "previous_since"}
-        where = feedback_items_where(filters, feedback_match_clause(rating, reason, page_binds))
-        count_binds = dict(page_binds)
-        page_binds.update(page_offset=offset, page_limit=limit)
-        summary_rows, reason_rows, count_rows, page_rows = self._query(
-            [
-                (feedback_summary_sql(filters), binds),
-                (feedback_reasons_sql(filters), binds),
-                (feedback_count_sql(where), count_binds),
-                (feedback_page_sql(where), page_binds),
-            ]
-        )
-        reasons: dict[int, dict[FeedbackReason, int]] = {0: {}, 1: {}}
-        for row in reason_rows:
-            reasons[int(row[0])][FeedbackReason(str(row[1]))] = int(row[2] or 0)
-        for row in summary_rows:
-            period = int(row[0])
-            summary = FeedbackSummary(
-                total=int(row[1] or 0),
-                helpful=int(row[2] or 0),
-                not_helpful=int(row[3] or 0),
-                admin_reviewed=int(row[4] or 0),
-                admin_not_helpful=int(row[5] or 0),
-            )
-            finished = finish_summary(summary, reasons[period])
-            if period == 1:
-                report.summary = finished
-            else:
-                report.previous = finished
-        report.matched = int(count_rows[0][0] or 0) if count_rows else 0
-        report.items = feedback_items(
-            [fact_from_feedback_row(row) for row in page_rows], agent_names, user_names, now
-        )
-        return report
 
 
 # ---- バックグラウンドの書き込み ---------------------------------------------------------

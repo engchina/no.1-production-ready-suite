@@ -44,7 +44,6 @@ import {
   useChatAutoScroll,
   useChatHistoryPanel,
   DEFAULT_PAGE_SIZE,
-  cursorPagination,
 } from "@engchina/production-ready-ui";
 import {
   useWorkspaceActive,
@@ -53,6 +52,7 @@ import {
 } from "@/components/WorkspaceState";
 import { apiGet, apiPost, isTransportError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -506,33 +506,20 @@ export function SqlChatPage() {
         list: "sql-chat-history-list",
         pagination: "sql-chat-history-pagination",
       }}
+      // 3 製品共通の会話の履歴のページング（#1265 / #1266）。カーソルの API なので、移れるのは隣のページだけ。
       pagination={
-        history.data && historyItems.length > 0
+        history.data
           ? {
-              ...cursorPagination({
-                depth: historyCursors.length,
-                limit: DEFAULT_PAGE_SIZE,
-                total: history.data.total,
-                count: historyItems.length,
-                hasNext: Boolean(history.data.next_cursor),
-              }),
-              // カーソルの API なので、移れるのは隣のページだけ（前へ / 次へ）。
-              onPageChange: (next) => {
-                const nextCursor = history.data?.next_cursor;
-                if (next <= historyCursors.length) {
-                  setHistoryCursors((current) => current.slice(0, -1));
-                } else if (nextCursor) {
-                  setHistoryCursors((current) => [...current, nextCursor]);
-                }
-              },
-              labels: {
-                summary: (range) => t("chat.historyPagination.range", { ...range }),
-                pageIndicator: (page, total) =>
-                  t("chat.historyPagination.page", { page, total }),
-                prev: t("chat.historyPagination.previous"),
-                next: t("chat.historyPagination.next"),
-                ariaLabel: t("chat.historyPagination.label"),
-              },
+              type: "cursor",
+              depth: historyCursors.length,
+              limit: DEFAULT_PAGE_SIZE,
+              total: history.data.total,
+              count: historyItems.length,
+              nextCursor: history.data.next_cursor,
+              onPrevious: () => setHistoryCursors((current) => current.slice(0, -1)),
+              onNext: (nextCursor) => setHistoryCursors((current) => [...current, nextCursor]),
+              labels: paginationLabels(),
+              ariaLabel: t("chat.historyPagination.label"),
             }
           : undefined
       }

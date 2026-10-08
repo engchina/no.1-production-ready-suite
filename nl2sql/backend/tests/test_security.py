@@ -15,6 +15,7 @@ from typing import Any, cast
 import httpx
 import pytest
 from fastapi import FastAPI, Request, Response
+from pr_backend_core.api import OffsetParams
 
 from app.cli.app_security_migrate import main as security_migrate_main
 from app.cli.app_security_migrate import split_ddl
@@ -5985,15 +5986,9 @@ def test_profile_access_profiles_search_and_page_on_server(
     monkeypatch.setattr(security_router_module, "get_security_service", _service)
 
     def ids_of(**kwargs: Any) -> tuple[list[str], int, bool]:
-        params: dict[str, Any] = {
-            "include_archived": False,
-            "q": "",
-            "limit": 50,
-            "offset": 0,
-            "ids": None,
-            **kwargs,
-        }
-        page = security_router_module.list_profile_access_profiles(**params).data
+        params: dict[str, Any] = {"include_archived": False, "q": "", "ids": None, **kwargs}
+        paging = OffsetParams(limit=params.pop("limit", 50), offset=params.pop("offset", 0))
+        page = security_router_module.list_profile_access_profiles(paging, **params).data
         assert page is not None
         return [item.id for item in page.items if item.id != "default"], page.total, page.has_next
 

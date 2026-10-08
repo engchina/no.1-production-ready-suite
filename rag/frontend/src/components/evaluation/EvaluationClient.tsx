@@ -17,6 +17,7 @@ import {
   TextareaField,
   useConfirm,
   type SelectFieldOption,
+  PagedDataTable,
 } from "@engchina/production-ready-ui";
 import {
   BarChart3,
@@ -30,7 +31,7 @@ import {
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { PagedDataTable } from "@/components/PagedDataTable";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
@@ -776,6 +777,7 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         {t("evaluation.cases")}
       </h3>
       <PagedDataTable<EvaluationCaseResult>
+        paginationLabels={paginationLabels()}
         columns={[
           {
             key: "case_id",

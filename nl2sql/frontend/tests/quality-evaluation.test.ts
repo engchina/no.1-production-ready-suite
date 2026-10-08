@@ -131,4 +131,3 @@ test("attempt timeout waits for the server-provided generation plus judge deadli
   assert.equal(qualityEvaluationAttemptTimedOut(job, judgingNow), false);
   assert.equal(qualityEvaluationAttemptTimedOut(job, deadlineNow), true);
 });
-

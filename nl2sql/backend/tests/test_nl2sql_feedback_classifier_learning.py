@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException, Request
+from pr_backend_core.api import CursorParams
 
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import (
@@ -331,7 +332,7 @@ def test_incremental_feedback_pagination_is_not_limited_to_recent_fifty() -> Non
     assert first_page.total == 38
     assert len(first_page.items) == 20
     assert len(second_page.items) == 18
-    assert second_page.next_cursor == ""
+    assert second_page.next_cursor is None
     assert candidates.total == 38
 
 
@@ -551,9 +552,15 @@ def test_feedback_and_training_candidate_api_contract(
         anon_request,
     )
     feedback = nl2sql_router.list_feedback(
-        anon_request, rating="good", profile_id="default", q="請求"
+        anon_request,
+        CursorParams(cursor=None, limit=20),
+        rating="good",
+        profile_id="default",
+        q="請求",
     )
-    candidates = nl2sql_router.classifier_training_candidates(anon_request)
+    candidates = nl2sql_router.classifier_training_candidates(
+        anon_request, CursorParams(cursor=None, limit=20)
+    )
     imported = nl2sql_router.import_classifier_training_data_from_feedback(
         ClassifierFeedbackImportRequest(
             items=[ClassifierFeedbackSelection(history_id=item.id, profile_id="default")]

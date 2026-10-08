@@ -50,27 +50,6 @@ export function isFileListView(value: unknown): value is FileListView {
   );
 }
 
-/**
- * 表示中のページが範囲外になったとき（最後のページの最後の 1 件を削除した・保存していたページが
- * 他の操作で無くなった）に移るべき offset を返す。範囲内なら null。
- *
- * 1 件もない（total=0）ときは先頭（0）へ戻す。DB の縮退で空になったときも 0 に戻るだけで、
- * 回復後は先頭から表示する。
- */
-export function outOfRangeOffset({
-  offset,
-  total,
-  limit,
-}: {
-  offset: number;
-  total: number;
-  limit: number;
-}): number | null {
-  if (offset === 0 || offset < total) return null;
-  if (total <= 0) return 0;
-  return Math.floor((total - 1) / limit) * limit;
-}
-
 export type EnqueueOutcome =
   | { kind: "queued"; job: IngestionJob }
   | { kind: "skipped"; job: IngestionJob }

@@ -1,26 +1,13 @@
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { DataTable, type DataTableProps } from "./data-table";
-import { DEFAULT_PAGE_SIZE, Pagination, usePagination, type PaginationRange } from "./pagination";
+import { DEFAULT_PAGE_SIZE, Pagination, usePagination, type PaginationLabels } from "./pagination";
 
-/**
- * Pagination の文言（パッケージは i18n に依存しないため、製品が翻訳済みの文字列と整形関数を渡す）。
- * 件数とページ番号は製品の数値の書式（桁区切り等）で整形する。
- */
-export interface PaginationLabels {
-  /** 件数のサマリ（例: 「1 - 10 / 42 件」）。 */
-  summary: (range: PaginationRange) => string;
-  /** 「N / M ページ」（任意）。 */
-  pageIndicator?: (page: number, totalPages: number) => string;
-  prev: string;
-  next: string;
-  /** nav の aria-label（任意。一覧ごとに `paginationAriaLabel` で上書きできる）。 */
-  ariaLabel?: string;
-}
+export type { PaginationLabels } from "./pagination";
 
 export type PagedDataTableProps<T> = Omit<DataTableProps<T>, "stickyHeader" | "visibleRows"> & {
-  /** Pagination の文言。 */
-  paginationLabels: PaginationLabels;
+  /** Pagination の文言（省略時は共通の既定 `DEFAULT_PAGINATION_LABELS`。製品は i18n の文字列を渡す）。 */
+  paginationLabels?: Partial<PaginationLabels>;
   /** 1 ページの件数（既定 10 件）。 */
   pageSize?: number;
   /**
@@ -73,12 +60,10 @@ export function PagedDataTable<T>({
       <Pagination
         page={page}
         totalPages={totalPages}
+        range={range}
         onPageChange={setPage}
-        summary={paginationLabels.summary(range)}
-        pageIndicator={paginationLabels.pageIndicator?.(page, totalPages)}
-        prevLabel={paginationLabels.prev}
-        nextLabel={paginationLabels.next}
-        ariaLabel={paginationAriaLabel ?? paginationLabels.ariaLabel}
+        labels={paginationLabels}
+        ariaLabel={paginationAriaLabel}
         testId={paginationTestId}
       />
     </div>

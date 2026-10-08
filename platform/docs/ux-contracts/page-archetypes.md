@@ -77,8 +77,9 @@ usePagination<T>(items: T[], pageSize?: number)
 - 表は `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）、表ではない行リストは `INFORMATION_LIST_SCROLL_CLASS`。それを超える行は一覧の中で縦スクロールにし、ページ全体を伸ばさない。手書きの `max-h-[…]` で高さを決めない。
 - ページングは一覧の直下の共通 `Pagination`（10 件/ページ）。1 ページしかないときは出さない。
   - クライアント側で全件を持つ一覧: `usePagination` / `PagedDataTable`。
-  - offset / limit / total の API: `offsetPagination` / `offsetForPage`（RAG のチャットの会話一覧など）。
-  - カーソル（`next_cursor`）と `total` を返す API で「前へ / 次へ」だけを送る一覧: 前へ戻るカーソルを画面が積み、ページ番号と件数を `Pagination` に渡す（NL2SQL の SQL生成評価の結果明細・最近の job。`cursorPagination`）。
+  - offset / limit / total の API: `OffsetPagination`（`offsetPagination` / `offsetForPage` を包み、今のページが空で返ったら最後のページへ寄せる。RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧、Agent のフィードバック・評価のジョブ・監査ログ。#1266）。
+  - カーソル（`next_cursor`）と `total` を返す API で「前へ / 次へ」だけを送る一覧: `useCursorPages`（前へ戻るカーソルの履歴）+ `CursorPagination`（NL2SQL の SQL生成評価の結果明細・最近の job、質問の学習の候補、アプリのフィードバック。#1266）。
+  - 1 ページの件数を選べる一覧は `PageSizeSelect`（既定 10 / 50 / 100。`ResultTable` の「すべての行を見る」、RAG のフィードバック）。文言は共通の `Pagination` の既定（「a - b / n 件」「p / n ページ」）に製品の i18n を重ねる。
 
 次の一覧は、理由があって基準から外す。新しく例外を足すときは、ここに理由を書く。
 

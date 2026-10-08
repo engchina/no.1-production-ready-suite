@@ -61,7 +61,7 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   const history = page.getByTestId("sql-chat-history");
   const pager = page.getByTestId("sql-chat-history-pagination");
   await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(10);
-  await expect(pager).toContainText("1-10 / 14 件");
+  await expect(pager).toContainText("1 - 10 / 14 件");
   await expect(pager).toContainText("1 / 2 ページ");
   await expect(pager.getByRole("button", { name: "前へ" })).toBeDisabled();
   expect(requests[0]).toBe("?limit=10");
@@ -69,7 +69,7 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   await pager.getByRole("button", { name: "次へ" }).click();
   await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(4);
   await expect(history.locator('[title="会話 11"]')).toBeVisible();
-  await expect(pager).toContainText("11-14 / 14 件");
+  await expect(pager).toContainText("11 - 14 / 14 件");
   await expect(pager).toContainText("2 / 2 ページ");
   await expect(pager.getByRole("button", { name: "次へ" })).toBeDisabled();
   expect(requests.at(-1)).toBe("?limit=10&cursor=page-2");

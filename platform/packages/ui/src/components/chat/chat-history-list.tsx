@@ -3,8 +3,12 @@ import type { ReactNode } from "react";
 
 import { INFORMATION_LIST_ROW_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
-import { Pagination, type PaginationRange } from "../data/pagination";
-import type { PaginationLabels } from "../data/paged-data-table";
+import {
+  CursorPagination,
+  OffsetPagination,
+  type CursorPaginationProps,
+  type OffsetPaginationProps,
+} from "../data/pagination";
 import { ApiErrorBanner } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
 import { Button } from "../ui/button";
@@ -35,19 +39,13 @@ export interface ChatHistoryListLabels {
 }
 
 /**
- * 会話の履歴のページング（3 製品共通。#1265）。サーバー側のページングの結果を渡す。
- * offset の API は `offsetPagination`、カーソル（`next_cursor` と `total`）の API は前へ戻るカーソルを製品が積んで
- * page / totalPages / range を作る。1 ページしかないときは出さない。
+ * 会話の履歴のページング（3 製品共通。#1265 / #1266）。共通の `OffsetPagination` / `CursorPagination` で出す。
+ * offset の API（RAG・Agent）は `type: "offset"`（今のページが空になったら最後のページへ寄せる）、カーソルと全件数の
+ * API（NL2SQL）は `type: "cursor"`（前へ戻るカーソルは製品が積む）。1 ページしかないときは出さない。
  */
-export interface ChatHistoryPagination {
-  /** 1-based の今のページ。 */
-  page: number;
-  totalPages: number;
-  range: PaginationRange;
-  onPageChange: (page: number) => void;
-  /** 件数・ページ・前へ / 次へ の文言（翻訳済み）。 */
-  labels: PaginationLabels;
-}
+export type ChatHistoryPagination =
+  | ({ type: "offset" } & Omit<OffsetPaginationProps, "testId" | "className">)
+  | ({ type: "cursor" } & Omit<CursorPaginationProps, "testId" | "className">);
 
 export interface ChatHistoryListTestIds {
   /** 対象の一覧を待っている間の形だけの Skeleton（`waiting`）。 */
@@ -98,23 +96,15 @@ export interface ChatHistoryListProps {
  * - パネル・シートの高さまで伸ばし、超えたら一覧の中をスクロールする。`pagination` のページ送りは一覧の下に常に見せる
  *   （3 製品とも 10 件 / ページ。件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。#1265）。
  */
+const HISTORY_PAGINATION_CLASS = "shrink-0 border-t border-border pt-2";
+
 function HistoryPagination({ pagination, testId }: { pagination: ChatHistoryPagination; testId?: string }) {
-  const { page, totalPages, range, onPageChange, labels } = pagination;
-  if (totalPages <= 1) return null;
-  return (
-    <Pagination
-      className="shrink-0 border-t border-border pt-2"
-      page={page}
-      totalPages={totalPages}
-      onPageChange={onPageChange}
-      summary={labels.summary(range)}
-      pageIndicator={labels.pageIndicator?.(page, totalPages)}
-      prevLabel={labels.prev}
-      nextLabel={labels.next}
-      ariaLabel={labels.ariaLabel}
-      testId={testId}
-    />
-  );
+  if (pagination.type === "cursor") {
+    const { type: _type, ...props } = pagination;
+    return <CursorPagination {...props} testId={testId} className={HISTORY_PAGINATION_CLASS} />;
+  }
+  const { type: _type, ...props } = pagination;
+  return <OffsetPagination {...props} testId={testId} className={HISTORY_PAGINATION_CLASS} />;
 }
 
 export function ChatHistoryList({

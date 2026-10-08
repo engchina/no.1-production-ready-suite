@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
+from pr_backend_core import CursorPage
 from pydantic import BaseModel, Field, field_validator
 
 from .models import Nl2SqlEngine
@@ -191,15 +192,15 @@ class QualityEvaluationJobSummary(BaseModel):
     updated_at: str
 
 
-class QualityEvaluationJobPage(BaseModel):
-    items: list[QualityEvaluationJobSummary]
-    next_cursor: str | None = None
+class QualityEvaluationJobPage(CursorPage[QualityEvaluationJobSummary]):
+    """最近の SQL生成評価 job のページ（offset をカーソルにした共通の CursorPage）。"""
+
     total: int
 
 
-class QualityEvaluationResultPage(BaseModel):
-    items: list[QualityEvaluationResult]
-    next_cursor: str | None = None
+class QualityEvaluationResultPage(CursorPage[QualityEvaluationResult]):
+    """SQL生成評価の結果明細のページ（offset をカーソルにした共通の CursorPage）。"""
+
     total: int
 
 

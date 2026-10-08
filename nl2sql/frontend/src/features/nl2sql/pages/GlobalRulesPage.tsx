@@ -20,6 +20,7 @@ import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { downloadBlob } from "../components/DbAdminShared";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
@@ -342,10 +343,8 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
         page={currentPage}
         totalPages={totalPages}
         onPageChange={setPage}
-        summary={t("glossary.pagination.range", { start: range.start, end: range.end, total: range.total })}
-        pageIndicator={t("glossary.pagination.page", { page: currentPage, total: totalPages })}
-        prevLabel={t("glossary.pagination.prev")}
-        nextLabel={t("glossary.pagination.next")}
+        range={range}
+        labels={paginationLabels()}
         ariaLabel={t("globalRules.pagination.label")}
         testId="global-rules-pagination"
       />

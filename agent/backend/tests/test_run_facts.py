@@ -232,7 +232,7 @@ def test_usage_and_feedback_beyond_the_runs_in_memory_come_from_saved_facts() ->
     assert client.get("/api/usage", params={"days": 90}).json()["data"]["totals"]["runs"] == 1
 
     feedback = client.get("/api/feedback", params={"days": 365}).json()["data"]
-    assert (feedback["source"], feedback["matched"]) == ("history", 1)
+    assert (feedback["source"], feedback["total"]) == ("history", 1)
     assert feedback["items"][0]["question"] == "old-794 の質問"
 
 
@@ -504,7 +504,7 @@ def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
         (FeedbackReason.INCORRECT, 2),
     ]
     assert (report.summary.admin_reviewed, report.summary.admin_not_helpful) == (2, 1)
-    assert (report.matched, report.offset, report.limit) == (42, 20, 10)
+    assert (report.total, report.offset, report.limit, report.has_next) == (42, 20, 10, True)
     [item] = report.items
     assert (item.agent_name, item.display_name, item.reviewer_display_name) == (
         "営業の Agent",

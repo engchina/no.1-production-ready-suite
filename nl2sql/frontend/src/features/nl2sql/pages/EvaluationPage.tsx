@@ -17,11 +17,11 @@ import {
   BulkSelectionActions,
   ProcessingIndicator,
   RowActionMenu,
+  CursorPagination,
   DEFAULT_PAGE_SIZE,
-  cursorPagination,
   ListSkeleton,
-  Pagination,
   TableSkeleton,
+  useCursorPages,
   TimedLoadingState,
   FieldLegend,
   SelectField,
@@ -46,6 +46,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -114,10 +115,11 @@ export function EvaluationPage() {
   const [repeatCount, setRepeatCount] = useState(1);
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [startError, setStartError] = useState("");
-  const [jobCursor, setJobCursor] = useState<string | null>(null);
-  const [jobCursorHistory, setJobCursorHistory] = useState<Array<string | null>>([]);
-  const [resultCursor, setResultCursor] = useState<string | null>(null);
-  const [resultCursorHistory, setResultCursorHistory] = useState<Array<string | null>>([]);
+  // 最近の job と結果明細の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。
+  const jobPages = useCursorPages();
+  const resultPages = useCursorPages();
+  const jobCursor = jobPages.cursor;
+  const resultCursor = resultPages.cursor;
   // どのボタンが始めたダウンロードか。スピナーは押したボタンだけが出し、もう一方は無効にするだけ（#819）。
   const [downloading, setDownloading] = useState<"template" | "results" | null>(null);
   const [jobActionError, setJobActionError] = useState<JobActionError>(null);
@@ -169,7 +171,7 @@ export function EvaluationPage() {
   const recentJobs = recentJobsQuery.data?.items ?? [];
   const showRecentJobsPagination = Boolean(
     recentJobsQuery.data &&
-      (recentJobs.length > 0 || recentJobsQuery.data.next_cursor || jobCursorHistory.length > 0)
+      (recentJobs.length > 0 || recentJobsQuery.data.next_cursor || jobPages.canGoPrevious)
   );
   const resultsQuery = useQuery({
     queryKey: ["quality-evaluations", "results", currentJobId, resultCursor],
@@ -191,8 +193,7 @@ export function EvaluationPage() {
   // job が変わったレンダーで結果のページ位置を先頭に戻す。
   const jobChanged = useValuesChanged([currentJobId]);
   if (jobChanged) {
-    setResultCursor(null);
-    setResultCursorHistory([]);
+    resultPages.reset();
     if (jobActionError?.origin === "progress") setJobActionError(null);
   }
 
@@ -245,8 +246,7 @@ export function EvaluationPage() {
         const next = new URLSearchParams(searchParams);
         next.delete("job");
         setSearchParams(next, { replace: true });
-        setResultCursor(null);
-        setResultCursorHistory([]);
+        resultPages.reset();
       }
       toast.success(t("qualityEvaluation.notice.deleted"));
     },
@@ -836,21 +836,17 @@ export function EvaluationPage() {
               <>
                 <ResultTable results={resultsQuery.data.items} />
                 <CursorPagination
-                  depth={resultCursorHistory.length}
-                  total={resultsQuery.data.total}
+                  className="mt-3"
+                  depth={resultPages.depth}
+                  limit={DEFAULT_PAGE_SIZE}
+                  total={resultsQuery.data.total ?? 0}
                   count={resultsQuery.data.items.length}
-                  nextCursor={resultsQuery.data.next_cursor ?? null}
+                  nextCursor={resultsQuery.data.next_cursor}
+                  labels={paginationLabels()}
                   ariaLabel={t("qualityEvaluation.pagination.resultsLabel")}
                   testId="quality-evaluation-results-pagination"
-                  onPrevious={() => {
-                    const history = [...resultCursorHistory];
-                    setResultCursor(history.pop() ?? null);
-                    setResultCursorHistory(history);
-                  }}
-                  onNext={(nextCursor) => {
-                    setResultCursorHistory((history) => [...history, resultCursor]);
-                    setResultCursor(nextCursor);
-                  }}
+                  onPrevious={resultPages.prev}
+                  onNext={resultPages.next}
                 />
               </>
             )}
@@ -977,21 +973,17 @@ export function EvaluationPage() {
                 )}
                 {showRecentJobsPagination && recentJobsQuery.data ? (
                   <CursorPagination
-                    depth={jobCursorHistory.length}
-                    total={recentJobsQuery.data.total}
+                    className="mt-3"
+                    depth={jobPages.depth}
+                    limit={DEFAULT_PAGE_SIZE}
+                    total={recentJobsQuery.data.total ?? 0}
                     count={recentJobs.length}
-                    nextCursor={recentJobsQuery.data.next_cursor ?? null}
+                    nextCursor={recentJobsQuery.data.next_cursor}
+                    labels={paginationLabels()}
                     ariaLabel={t("qualityEvaluation.pagination.jobsLabel")}
                     testId="quality-evaluation-recent-jobs-pagination"
-                    onPrevious={() => {
-                      const history = [...jobCursorHistory];
-                      setJobCursor(history.pop() ?? null);
-                      setJobCursorHistory(history);
-                    }}
-                    onNext={(nextCursor) => {
-                      setJobCursorHistory((history) => [...history, jobCursor]);
-                      setJobCursor(nextCursor);
-                    }}
+                    onPrevious={jobPages.prev}
+                    onNext={jobPages.next}
                   />
                 ) : null}
               </>
@@ -1476,59 +1468,6 @@ function VerdictBadge({
     <StatusBadge
       variant={verdictVariant(verdict)}
       label={`${verdictLabel(verdict)}${count === undefined ? "" : ` ${count}`}`}
-    />
-  );
-}
-
-/**
- * カーソル型の API（next_cursor と total）のページ送りを、共通の Pagination で出す（#403）。
- * 前へ戻るカーソルは呼び出し側が積んで持つので、移動は隣のページだけ（前へ / 次へ）。
- */
-function CursorPagination({
-  depth,
-  total,
-  count,
-  nextCursor,
-  ariaLabel,
-  testId,
-  onPrevious,
-  onNext,
-}: {
-  depth: number;
-  total: number;
-  count: number;
-  nextCursor: string | null;
-  ariaLabel: string;
-  testId: string;
-  onPrevious: () => void;
-  onNext: (nextCursor: string) => void;
-}) {
-  const { page, totalPages, range } = cursorPagination({
-    depth,
-    limit: DEFAULT_PAGE_SIZE,
-    total,
-    count,
-    hasNext: Boolean(nextCursor),
-  });
-  return (
-    <Pagination
-      className="mt-3"
-      page={page}
-      totalPages={totalPages}
-      onPageChange={(next) => {
-        if (next < page) onPrevious();
-        else if (next > page && nextCursor) onNext(nextCursor);
-      }}
-      summary={t("qualityEvaluation.pagination.range", {
-        start: range.start,
-        end: range.end,
-        total: range.total,
-      })}
-      pageIndicator={t("qualityEvaluation.pagination.page", { page, total: totalPages })}
-      prevLabel={t("qualityEvaluation.action.previous")}
-      nextLabel={t("qualityEvaluation.action.next")}
-      ariaLabel={ariaLabel}
-      testId={testId}
     />
   );
 }

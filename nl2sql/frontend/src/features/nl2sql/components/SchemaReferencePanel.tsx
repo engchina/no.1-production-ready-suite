@@ -1,9 +1,10 @@
-import { ListPlus, Plus, RefreshCw, Table2 } from "lucide-react";
+import { Plus, RefreshCw, Table2 } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import {
   Button,
   Banner,
+  LoadMoreFooter,
   Skeleton,
   TimedLoadingState,
   DisclosureChevron,
@@ -256,36 +257,20 @@ export function SchemaReferencePanel({
             onInsert={onInsert}
           />
         ))}
-        {hasMore && onLoadMore && (
-          <Button icon={ListPlus}
-            type="button"
-            variant="secondary"
-            size="sm"
-            // 読み込みに失敗した後は、案内の「再試行」だけを回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-            loading={loadingMore && !(loadMoreError && onRetryLoadMore)}
-            disabled={disabled || (loadingMore && Boolean(loadMoreError && onRetryLoadMore))}
-            onClick={onLoadMore}
-          >
-            {t("profiles.action.loadMore")}
-          </Button>
-        )}
-        {loadMoreError && (
-          <Banner
-            severity="danger"
-            action={onRetryLoadMore ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={loadingMore}
-                disabled={disabled}
-                onClick={onRetryLoadMore} icon={RefreshCw}>
-                <span>{t("common.retry")}</span>
-              </Button>
-            ) : undefined}
-          >
-            {loadMoreError}
-          </Banner>
+        {/* 「さらに読み込む」と失敗の再試行は共通の LoadMoreFooter（#1266）。件数は見出しの側で出すので summary は空。
+            パネルが無効（実行中）の間は操作も無効にする。 */}
+        {((hasMore && onLoadMore) || loadMoreError) && (
+          <LoadMoreFooter
+            summary=""
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            loadMoreError={loadMoreError || undefined}
+            disabled={disabled}
+            onLoadMore={onLoadMore}
+            onRetry={onRetryLoadMore}
+            loadMoreLabel={t("profiles.action.loadMore")}
+            retryLabel={t("common.retry")}
+          />
         )}
       </div>
       )}

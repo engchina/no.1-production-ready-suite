@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from pr_backend_core.api import CursorParams
 
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
@@ -24,6 +25,11 @@ def history_security(monkeypatch: pytest.MonkeyPatch) -> SecurityService:
     security = SecurityService(InMemorySecurityStore(), Settings())
     monkeypatch.setattr(nl2sql_router, "get_security_service", lambda: security)
     return security
+
+
+def _paging(cursor: str | None = None, limit: int = 50) -> CursorParams:
+    """router を直接呼ぶときの cursor / limit（HTTP では cursor_params の依存が作る）。"""
+    return CursorParams(cursor=cursor, limit=limit)
 
 
 def _history(index: int, actor: str) -> HistoryItem:
@@ -108,7 +114,7 @@ def test_list_history_pages_through_all_items(factory: object) -> None:
     third = service.list_history(cursor=second.next_cursor, limit=2)
     # 旧実装は 50 件固定で、51 件目以降には到達できなかった。
     assert [item.id for item in third.items] == ["hist-001"]
-    assert third.next_cursor == ""
+    assert third.next_cursor is None
 
 
 @pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
@@ -121,7 +127,7 @@ def test_list_history_keeps_actor_filter_across_pages(factory: object) -> None:
 
     second = service.list_history(actor_user_uuid="user-1", cursor=first.next_cursor, limit=2)
     assert [item.id for item in second.items] == ["hist-001"]
-    assert second.next_cursor == ""
+    assert second.next_cursor is None
 
 
 @pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
@@ -163,7 +169,7 @@ def test_list_history_filters_query_rating_and_safety_before_paging(factory: obj
 
     assert [item.id for item in page.items] == ["hist-002"]
     assert page.total == 1
-    assert page.next_cursor == ""
+    assert page.next_cursor is None
 
 
 def test_list_history_clamps_limit() -> None:
@@ -179,25 +185,24 @@ def test_history_route_scopes_non_admin_and_passes_cursor(monkeypatch: pytest.Mo
     service = _memory_service(_ITEMS)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
-    own = nl2sql_router.history(_request(_principal(admin=False)), limit=2)  # type: ignore[arg-type]
+    own = nl2sql_router.history(_request(_principal(admin=False)), _paging(limit=2))  # type: ignore[arg-type]
     assert own.data is not None
     assert [item.id for item in own.data.items] == ["hist-005", "hist-003"]
     assert own.data.total == 3
 
     own_rest = nl2sql_router.history(
         _request(_principal(admin=False)),  # type: ignore[arg-type]
-        cursor=own.data.next_cursor,
-        limit=2,
+        _paging(own.data.next_cursor, 2),
     )
     assert own_rest.data is not None
     assert [item.id for item in own_rest.data.items] == ["hist-001"]
 
-    everyone = nl2sql_router.history(_request(_principal(admin=True)), limit=500)  # type: ignore[arg-type]
+    everyone = nl2sql_router.history(_request(_principal(admin=True)), _paging(limit=200))  # type: ignore[arg-type]
     assert everyone.data is not None
     assert everyone.data.total == 5
     assert len(everyone.data.items) == 5
 
-    unauthenticated = nl2sql_router.history(_request(None))  # type: ignore[arg-type]
+    unauthenticated = nl2sql_router.history(_request(None), _paging())  # type: ignore[arg-type]
     assert unauthenticated.data is not None
     assert unauthenticated.data.total == 5
 
@@ -226,7 +231,7 @@ def test_history_route_accepts_server_side_filters(monkeypatch: pytest.MonkeyPat
 
     blocked = nl2sql_router.history(
         _request(_principal(admin=False)),  # type: ignore[arg-type]
-        limit=10,
+        _paging(limit=10),
         q="AUDIT_LOG",
         rating="unrated",
         safety="blocked",
@@ -247,6 +252,7 @@ def test_history_route_rejects_invalid_filters(rating: str, safety: str) -> None
     with pytest.raises(HTTPException) as exc_info:
         nl2sql_router.history(
             _request(_principal(admin=True)),  # type: ignore[arg-type]
+            _paging(),
             rating=rating,
             safety=safety,
         )
@@ -258,7 +264,7 @@ def test_history_route_rejects_broken_cursor(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
     with pytest.raises(HTTPException) as broken:
-        nl2sql_router.history(_request(None), cursor="%%%not-base64%%%")  # type: ignore[arg-type]
+        nl2sql_router.history(_request(None), _paging("%%%not-base64%%%"))  # type: ignore[arg-type]
     assert broken.value.status_code == 422
 
 
@@ -290,7 +296,7 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
     service = factory(original)  # type: ignore[operator]
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     before = service.list_history().model_dump()
-    first = nl2sql_router.history(_request(_principal(admin=True)), limit=2).data  # type: ignore[arg-type]
+    first = nl2sql_router.history(_request(_principal(admin=True)), _paging(limit=2)).data  # type: ignore[arg-type]
     assert first is not None
     assert [(item.actor_user_uuid, item.actor_login_user_id) for item in first.items] == [
         ("", ""),
@@ -298,8 +304,7 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
     ]
     second = nl2sql_router.history(
         _request(_principal(admin=True)),  # type: ignore[arg-type]
-        cursor=first.next_cursor,
-        limit=2,
+        _paging(first.next_cursor, 2),
     ).data
     assert second is not None
     assert [(item.actor_login_user_id, item.actor_display_name) for item in second.items] == [
@@ -317,11 +322,11 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
         status=user.status,
         role_ids=user.role_ids,
     )
-    renamed = nl2sql_router.history(_request(_principal(admin=True))).data  # type: ignore[arg-type]
+    renamed = nl2sql_router.history(_request(_principal(admin=True)), _paging()).data  # type: ignore[arg-type]
     assert renamed is not None
     assert renamed.items[-1].actor_display_name == "変更後の名前"
     store.delete_user("user-2", expected_version=1)
-    after_delete = nl2sql_router.history(_request(_principal(admin=True))).data  # type: ignore[arg-type]
+    after_delete = nl2sql_router.history(_request(_principal(admin=True)), _paging()).data  # type: ignore[arg-type]
     assert after_delete is not None
     deleted = next(item for item in after_delete.items if item.actor_user_uuid == "user-2")
     assert deleted.actor_login_user_id == deleted.actor_display_name == ""
@@ -331,7 +336,7 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
         raise AssertionError("一般ユーザーが他のユーザー情報を取得した")
 
     monkeypatch.setattr(store, "get_user_identities", forbidden_lookup)
-    own = nl2sql_router.history(_request(_principal(admin=False))).data  # type: ignore[arg-type]
+    own = nl2sql_router.history(_request(_principal(admin=False)), _paging()).data  # type: ignore[arg-type]
     assert own is not None
     assert [item.actor_user_uuid for item in own.items] == ["user-1"]
     assert own.items[0].actor_display_name == own.items[0].actor_login_user_id == ""
@@ -373,7 +378,7 @@ def test_history_resolves_configured_admin_without_changing_saved_identity(
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     before = service.list_history().model_dump()
     for viewer in [_principal(admin=True), _principal(admin=True, user_uuid=configured_uuid)]:
-        data = nl2sql_router.history(_request(viewer)).data  # type: ignore[arg-type]
+        data = nl2sql_router.history(_request(viewer), _paging()).data  # type: ignore[arg-type]
         assert data is not None
         items = {item.actor_user_uuid: item for item in data.items}
         assert items[configured_uuid].actor_login_user_id == "system_admin"

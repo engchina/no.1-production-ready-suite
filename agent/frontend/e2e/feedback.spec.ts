@@ -75,7 +75,7 @@ function seedReport(mockApi: MockApi) {
       item("run-a", { feedback: rating("not_helpful", "incomplete", "先月との比較が無い。") }),
       item("run-b"),
     ],
-    matched: 2,
+    total: 2,
   };
 }
 
@@ -167,7 +167,7 @@ for (const viewport of VIEWPORTS) {
     const report = mockApi.state.feedbackReport as Record<string, unknown>;
     report.source = "history";
     report.items = Array.from({ length: 23 }, (_, index) => item(`run-${String(index).padStart(2, "0")}`));
-    report.matched = 23;
+    report.total = 23;
     await page.goto("/feedback");
 
     await expect(page.getByTestId("report-source")).toHaveText("保存した実行の履歴（データベース）から集計しています。");
@@ -202,7 +202,7 @@ test("評価・理由で絞り込み、合う評価が無ければ絞り込み�
   await expect(page.getByRole("table", { name: "フィードバックの一覧" })).toBeVisible();
 
   // 条件に合う評価が無い応答。
-  mockApi.state.feedbackReport = { ...mockApi.state.feedbackReport, items: [], matched: 0 };
+  mockApi.state.feedbackReport = { ...mockApi.state.feedbackReport, items: [], total: 0 };
   await page.locator("#feedback-rating").click();
   await page.getByRole("option", { name: "役に立たなかった" }).click();
   await expect(page.getByText("条件に合う評価はありません")).toBeVisible();

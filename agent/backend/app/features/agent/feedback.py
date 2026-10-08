@@ -15,6 +15,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 
+from pr_backend_core import Page
+from pr_backend_core.api import paginate
 from pydantic import BaseModel, Field
 
 from app.features.agent.run_facts import REPORT_PERIOD_DAYS, RunFact
@@ -65,7 +67,13 @@ class FeedbackItem(BaseModel):
     updated_at: datetime
 
 
-class FeedbackReport(BaseModel):
+class FeedbackReport(Page[FeedbackItem]):
+    """フィードバックの集計と一覧（共通の `Page` に集計を足した形。#1266）。
+
+    `items` は絞り込みに合う評価のうち `offset` から `limit` 件（新しい順）、`total` は
+    絞り込みに合う評価の件数（ページングの総数。`summary.total` は期間内の評価の件数で別）。
+    """
+
     days: int
     source: ReportSource = "memory"
     since: datetime
@@ -73,12 +81,6 @@ class FeedbackReport(BaseModel):
     summary: FeedbackSummary
     # 直前の同じ長さの期間（増減の比較に使う）。
     previous: FeedbackSummary
-    # 絞り込みに合う評価のうち、`offset` から `limit` 件（新しい順）。
-    items: list[FeedbackItem] = Field(default_factory=list)
-    # 絞り込みに合う評価の件数（ページングの総数）。
-    matched: int = 0
-    offset: int = 0
-    limit: int = FEEDBACK_PAGE_SIZE
 
 
 def _matches(fact: RunFact, rating: FeedbackRating | None, reason: FeedbackReason | None) -> bool:
@@ -128,10 +130,14 @@ def build_feedback_report(
         until=now,
         summary=summarize_feedback(current),
         previous=summarize_feedback(previous),
-        items=feedback_items(matched[offset : offset + limit], agent_names, user_names, now),
-        matched=len(matched),
-        offset=offset,
-        limit=limit,
+        **dict(
+            paginate(
+                feedback_items(matched[offset : offset + limit], agent_names, user_names, now),
+                total=len(matched),
+                limit=limit,
+                offset=offset,
+            )
+        ),
     )
 
 

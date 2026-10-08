@@ -1,7 +1,7 @@
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { ListPlus,
+import {
   ArrowDown,
   ArrowDownUp,
   ArrowUp,
@@ -20,6 +20,7 @@ import { useNavigate } from "react-router-dom";
 
 import {
   Button,
+  LoadMoreFooter,
   EmptyState,
   toast,
   StatusBadge,
@@ -399,21 +400,24 @@ function HistoryGrid({
           </div>
         </div>
       )}
-      {!unavailable && <div
-        className="flex flex-col gap-2 rounded-md border border-border bg-surface-sunken p-3 sm:flex-row sm:items-center sm:justify-between"
-        data-testid="history-load-more"
-      >
-        <p className="text-xs leading-5 text-fg-muted">
-          {total === null
-            ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
-            : t("history.list.loaded", { loaded: loadedCount, total })}
-        </p>
-        {hasMore && (
-          <Button icon={ListPlus} type="button" variant="secondary" size="sm" loading={loadingMore} disabled={refreshing} onClick={onLoadMore}>
-            {t("history.action.loadMore")}
-          </Button>
-        )}
-      </div>}
+      {/* 件数と「さらに読み込む」は共通の LoadMoreFooter（#1266）。取り直し（表示を更新）の間は続きを読ませない。 */}
+      {!unavailable && (
+        <LoadMoreFooter
+          summary={
+            total === null
+              ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
+              : t("history.list.loaded", { loaded: loadedCount, total })
+          }
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          disabled={refreshing}
+          onLoadMore={onLoadMore}
+          loadMoreLabel={t("history.action.loadMore")}
+          retryLabel={t("common.action.retry")}
+          className="rounded-md border border-border bg-surface-sunken p-3"
+          testId="history-load-more"
+        />
+      )}
     </section>
   );
 }
