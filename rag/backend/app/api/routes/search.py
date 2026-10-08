@@ -43,11 +43,15 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
+    GUIDE_PREVIEW_TRACE_PREFIX,
     GuideContext,
+    GuidePreview,
     build_guide_context,
     clarification_questions,
+    is_guide_preview_record,
     match_guide,
     short_circuit_answer,
+    with_draft,
     with_guide_rule,
 )
 from app.schemas.common import ApiResponse, Page
@@ -77,6 +81,9 @@ STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
 # `init_script.sh` が生成する設定）はこれより長くし、backend の 504 と理由が画面に
 # 届くようにする（画面が先に諦めた後で backend が評価を保存する、を起こさない）。
 ANSWER_EVALUATION_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+GUIDE_PREVIEW_EVALUATION_MESSAGE = (
+    "業務ガイドの下書きで試した回答は評価できません。公開してから回答を作り直して評価してください。"
+)
 ANSWER_EVALUATION_TIMEOUT_MESSAGE = (
     "標準回答による評価が時間内に終わりませんでした。評価は保存していません。"
     "時間をおいて再度お試しください。"
@@ -182,6 +189,7 @@ async def _resolve_query_context(
     *,
     guide_context: Sequence[str] = (),
     interactive: bool = False,
+    guide_preview: GuidePreview | None = None,
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
@@ -192,6 +200,9 @@ async def _resolve_query_context(
 
     業務ガイド（#1238）は ``guide_context``（チャットの前の発話）と質問で選ぶ。``interactive``
     （チャット）は送信の前に確認の質問を出すので、残った不明の条件は分岐で答える。
+
+    ``guide_preview``（下書きで試す。#1288）は、そのガイドの公開の版の代わりに下書きを、この
+    1 回の回答の照合にだけ使う（保存・公開の版は変えない）。回答の記録に印を残す。
     """
     oracle = OracleClient()
     settings = global_settings
@@ -231,6 +242,9 @@ async def _resolve_query_context(
         # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。適用範囲は質問と検索の
         # 絞り込みの手がかりで確かめる（#1278）。
         guides, guides_failed = await load_published_guides(oracle, view.id)
+        if guide_preview is not None:
+            guides = with_draft(guides, guide_preview)
+            settings = settings.model_copy(update={"rag_guide_preview": guide_preview.marker()})
         guide_text = "\n".join([*guide_context, request.query])
         match = match_guide(
             guides,
@@ -252,6 +266,12 @@ async def _resolve_query_context(
                 update={
                     "rag_support_guide": {
                         **match.summary(),
+                        **(
+                            {"draft": True}
+                            if guide_preview is not None
+                            and match.guide_id == guide_preview.guide_id
+                            else {}
+                        ),
                         "clarifications": clarification_questions(match),
                         "short_answer": (
                             short_circuit_answer(match)
@@ -423,16 +443,21 @@ def _with_knowledge_base_ids(
     return SearchRequest.model_validate(payload)
 
 
-async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
+async def _run_search_with_timeout(
+    request: SearchRequest, *, guide_preview: GuidePreview | None = None
+) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
     pipeline は回答を LLM で生成するため、LLM を何度か呼んでも収まる回答生成の上限を使う。
+    ``guide_preview`` は業務ガイドの下書きで試す回答（#1288。trace_id に接頭辞を付ける）。
     """
     request, settings, applied_kb, applied_view = await _resolve_query_context(
-        request, get_settings()
+        request, get_settings(), guide_preview=guide_preview
     )
     started_at = perf_counter()
     trace_id = new_trace_id()
+    if guide_preview is not None:
+        trace_id = GUIDE_PREVIEW_TRACE_PREFIX + trace_id
     try:
         result = await run_answer_with_timeout(
             lambda tracker: RagPipeline(
@@ -470,6 +495,15 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
             error_stage="timeout",
         )
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
+
+
+async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> SearchResponse:
+    """業務ガイドの下書きで試す回答（#1288）。
+
+    通常の検索・回答と同じ pipeline で 1 回だけ答える（モデルの呼び出しは通常の回答と同じ）。
+    公開の版・保存した下書きは変えず、回答の記録には ``guide_preview`` の印を残す。
+    """
+    return await _run_search_with_timeout(request, guide_preview=preview)
 
 
 async def _stream_search_events_with_timeout(
@@ -748,6 +782,9 @@ async def evaluate_saved_answer(
     row = await oracle.get_answer_record(trace_id)
     if row is None:
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    if is_guide_preview_record(row.get("diagnostics_json")):
+        # 下書きで試した回答は、利用者の回答の評価に混ぜない（#1288）。
+        raise HTTPException(status_code=409, detail=GUIDE_PREVIEW_EVALUATION_MESSAGE)
     evaluation_input = row.get("evaluation_input_json")
     if not isinstance(evaluation_input, dict) or not evaluation_input:
         raise HTTPException(

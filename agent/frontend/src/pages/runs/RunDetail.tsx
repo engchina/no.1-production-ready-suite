@@ -33,8 +33,10 @@ import {
 } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AnswerReviewSections, LimitNote } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
+import { ANSWER_VALIDATION_KIND, SUPPORT_TASK_KIND, answerReview } from "@/lib/answer-review";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
@@ -161,7 +163,7 @@ export function RunDetail({
         ]}
       />
       <TabPanel id="result" value={tab} className="space-y-5">
-        <ArtifactsPanel run={run} onShowProcess={() => setTab("process")} />
+        <ArtifactsPanel run={run} showRawReview={capabilities.admin} onShowProcess={() => setTab("process")} />
         {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}
         {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
           <Card>
@@ -685,7 +687,16 @@ function AuditFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ArtifactsPanel({ run, onShowProcess }: { run: RunState; onShowProcess: () => void }) {
+function ArtifactsPanel({
+  run,
+  showRawReview,
+  onShowProcess,
+}: {
+  run: RunState;
+  /** 支援タスクの状態・回答の検証の元の JSON を出すか（管理者だけ。#1286）。 */
+  showRawReview: boolean;
+  onShowProcess: () => void;
+}) {
   // 最終回答を先に読む。ツールが返した中間成果物は、その後に元の順序で並べる。
   const artifacts = [...run.artifacts].sort((a, b) => Number(b.kind === "answer") - Number(a.kind === "answer"));
   return (
@@ -718,6 +729,8 @@ function ArtifactsPanel({ run, onShowProcess }: { run: RunState; onShowProcess: 
                 />
               ) : artifact.kind === "rag_evidence" ? (
                 <RagEvidenceArtifact artifact={artifact} />
+              ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
+                <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
               ) : artifact.kind === "structured_table" ? (
                 <StructuredArtifactSummary artifact={artifact} />
               ) : (
@@ -743,6 +756,29 @@ function ArtifactsPanel({ run, onShowProcess }: { run: RunState; onShowProcess: 
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 支援タスクの状態・回答の検証（#1286）。業務の利用者にはチャットと同じ業務の言葉で出し、内部の語を含む
+ * 元の JSON は管理者だけに畳んで出す（handoff §13）。
+ */
+function ReviewArtifact({ artifact, showRaw }: { artifact: Artifact; showRaw: boolean }) {
+  const review = answerReview([artifact]);
+  return (
+    <div className="mt-3 min-w-0 space-y-2" data-testid={`run-review-${artifact.id}`}>
+      {review?.limitReached ? <LimitNote testId={`run-review-limit-${artifact.id}`} /> : null}
+      {review ? (
+        <AnswerReviewSections review={review} />
+      ) : (
+        <p className="text-sm text-fg-muted">{t("run.reviewEmpty")}</p>
+      )}
+      {showRaw ? (
+        <Disclosure variant="plain" size="sm" summary={t("run.rawJson")}>
+          <JsonPreview value={artifact.content} />
+        </Disclosure>
+      ) : null}
+    </div>
   );
 }
 

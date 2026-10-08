@@ -93,6 +93,7 @@ import {
 } from "@/lib/support-guide-form";
 
 import { SupportGuideContentView } from "./SupportGuideContentView";
+import { SupportGuideDraftTry } from "./SupportGuideDraftTry";
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
 
 function options<T extends string>(values: readonly T[], prefix: string): SelectFieldOption<T>[] {
@@ -1230,6 +1231,16 @@ function SupportGuideForm({
           ) : null}
         </div>
       </div>
+
+      {/* 下書きで試す（#1288）。保存した下書きで回答を作る（公開の版は変えない）。 */}
+      {detail && !archived ? (
+        <SupportGuideDraftTry
+          searchAnswerProfileId={searchAnswerProfileId}
+          detail={detail}
+          dirty={dirty}
+          disabled={busy}
+        />
+      ) : null}
 
       {detail ? (
         <SupportGuideHistory

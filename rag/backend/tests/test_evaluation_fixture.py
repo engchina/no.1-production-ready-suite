@@ -95,3 +95,73 @@ def test_business_support_set_covers_every_category_and_its_corpus_exists() -> N
         for name in names
         if name.endswith(".pdf")
     )
+
+
+def test_business_support_set_has_splits_turns_and_evidence_from_its_corpus() -> None:
+    """区分・往復・既知の条件・必要な根拠（#1284）は、同梱の資料だけを使う。"""
+    import re
+
+    from app.rag.evaluation_handling import contains_normalized
+
+    corpus = Path(__file__).resolve().parents[2] / "evaluation/business-support"
+    payload = json.loads((corpus / "business-support.json").read_text(encoding="utf-8"))
+    request = EvaluationRunRequest.model_validate(payload)
+
+    # すべてのケースに区分があり、holdout は 3 分の 1 前後で、5 分類のどれも含む。
+    assert all(case.split in {"dev", "holdout"} for case in request.cases)
+    holdout = [case for case in request.cases if case.split == "holdout"]
+    assert 0.25 <= len(holdout) / len(request.cases) <= 0.45
+    assert {case.category for case in holdout} == {
+        "document_answerable",
+        "clarification_required",
+        "environment_data_required",
+        "knowledge_missing",
+        "conflicting_sources",
+    }
+    # 複数往復と既知の条件のケースがある。
+    assert any(case.turns for case in request.cases)
+    assert any(case.conditions for case in request.cases)
+    # 必要な根拠の語句は、指した資料の原稿に実際に書いてある（架空の値を足さない）。
+    evidence = [item for case in request.cases for item in case.required_evidence]
+    assert evidence
+    for item in evidence:
+        assert item.document_id is not None and item.document_id.startswith("file:")
+        source = corpus / "sources" / f"{Path(item.document_id.removeprefix('file:')).stem}.html"
+        text = re.sub(r"<[^>]+>", "", source.read_text(encoding="utf-8"))
+        assert contains_normalized(text, item.text), item.id
+
+
+def test_business_support_guides_are_valid_and_match_the_set() -> None:
+    """C（業務ガイドあり）の業務ガイド（#1289）は、検証を通り、同梱の資料だけを参照する。
+
+    評価セットの条件の id（`target` / `approved`）と値は、業務ガイドの条件の選択肢にある。
+    """
+    from app.rag.support_guide import has_errors, validate_content
+    from app.schemas.support_guide import SupportGuideContent
+
+    corpus = Path(__file__).resolve().parents[2] / "evaluation/business-support"
+    payload = json.loads((corpus / "support-guides.json").read_text(encoding="utf-8"))
+    guides = [SupportGuideContent.model_validate(raw) for raw in payload["guides"]]
+    assert guides
+    for guide in guides:
+        assert not has_errors(validate_content(guide)), guide.title
+        for reference in guide.references:
+            assert reference.document_id.startswith("file:")
+            assert (corpus / reference.document_id.removeprefix("file:")).is_file()
+    allowed = {
+        condition.id: set(condition.allowed_values)
+        for guide in guides
+        for condition in guide.conditions
+    }
+    cases = EvaluationRunRequest.model_validate(
+        json.loads((corpus / "business-support.json").read_text(encoding="utf-8"))
+    ).cases
+    used = [
+        (condition_id, value)
+        for case in cases
+        for conditions in [case.conditions, *(turn.conditions for turn in case.turns)]
+        for condition_id, value in conditions.items()
+    ]
+    assert used
+    for condition_id, value in used:
+        assert value in allowed[condition_id], (condition_id, value)
