@@ -47,6 +47,10 @@ _DRY_RUN_CODE = "evaluation.dry_run"
 
 RAG_SEARCH = "rag_search"
 RAG_RETRIEVE_EVIDENCE = "rag_retrieve_evidence"
+RAG_LOOKUP_GUIDES = "rag_lookup_guides"
+# Control Plane が自分で呼ぶ業務ガイドの照合（#1322）の呼び出しの trace_id の接頭辞。
+# モデルの予算・消費には数えない（回答の最終の検証と同じく Control Plane の呼び出し）。
+GUIDE_CHECK_TRACE_PREFIX = "guide_check_"
 # Run ごとの上限に数える RAG のツール。検索（と rag_search は回答の生成）を行い、1 回が重い
 # （rag_search は 50〜110 秒）もの。rag_lookup_guides（業務ガイドの照合）と rag_read_source
 # （根拠の本文の読み取り）は軽いため数えない（タスクの通しの上限には数える）。
@@ -62,6 +66,13 @@ _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 RAG_CONTINUE_OUTCOMES = frozenset({"needs_environment_data"})
 NEXT_STEP_CONTINUE_WITH_TOOLS = "continue_with_tools"
 NEXT_STEP_ANSWER_WITH_CONFIRMATIONS = "answer_with_confirmations"
+# 利用者に条件を確かめる（手順・分岐の答えを出さない。#1322）。
+NEXT_STEP_ASK_CLARIFICATION = "ask_clarification"
+# 業務ガイドの照合（#1322）の次の手: 人へ引き継ぐ / 条件ごとに答える / 業務ガイドに沿って答える。
+NEXT_STEP_HANDOFF = "handoff"
+NEXT_STEP_ANSWER_BY_CONDITIONS = "answer_by_conditions"
+NEXT_STEP_ANSWER_WITH_GUIDE = "answer_with_guide"
+_MAX_QUESTIONS = 10
 ROUTE_RAG = "rag"
 ROUTE_RAG_THEN_TOOLS = "rag_then_tools"
 ROUTE_TOOLS = "tools"
@@ -121,6 +132,8 @@ def _executed(step: RunStep) -> bool:
         return False
     if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
+    if (step.tool_call.trace_id or "").startswith(GUIDE_CHECK_TRACE_PREFIX):
+        return False
     return step.tool_result.error_code not in {_DRY_RUN_CODE, BUDGET_EXCEEDED_CODE}
 
 
@@ -136,12 +149,51 @@ def is_environment_tool(name: str) -> bool:
     return bool(base) and not base.startswith("rag_")
 
 
+def _questions(clarifications: object) -> list[JsonObject]:
+    """確かめる問い（条件の id・名前・問い・選択肢）。問いの無いものは除く。"""
+    questions: list[JsonObject] = []
+    for item in _records(clarifications)[:_MAX_QUESTIONS]:
+        question = _text(item.get("question"))
+        if not question:
+            continue
+        questions.append(
+            {
+                "condition_id": _text(item.get("condition_id"), 100),
+                "label": _text(item.get("label"), 100),
+                "question": question,
+                "options": [
+                    option for value in item.get("options") or [] if (option := _text(value))
+                ][:10],
+            }
+        )
+    return questions
+
+
+def ask_clarification_step(clarifications: object, *, reason: str) -> JsonObject:
+    """利用者に条件を確かめる次の手（手順・分岐ごとの答えを出させない。#1322）。"""
+    return {
+        "action": NEXT_STEP_ASK_CLARIFICATION,
+        "reason": reason,
+        "tools": [],
+        "questions": _questions(clarifications),
+        "instruction": (
+            "条件によって手順・答えが変わり、その条件がまだ分かっていません。"
+            "手順や、条件ごと（分岐ごと）の答えを並べずに、questions の問いをそのまま利用者に"
+            "確かめてください（選択肢があれば添える。推測で選ばない）。"
+            "利用者が答えたら、その値を conditions（条件の id → 値）に入れて続けてください。"
+        ),
+    }
+
+
 def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObject | None:
     """`rag_search` の結果が回答を確定できないとき、モデルに渡す次の手（決定的。#1283）。
 
     `environment_tools` はこの Run でモデルに渡した、現場のデータを確かめる道具の名前。
+    確認の質問を求められた（`needs_clarification`）ときは、問いを先に返す次の手（#1322）。
     """
     outcome = output.get("outcome")
+    if outcome == "needs_clarification":
+        return ask_clarification_step(output.get("clarifications"), reason=outcome)
     if not isinstance(outcome, str) or outcome not in RAG_CONTINUE_OUTCOMES:
         return None
     tools = list(dict.fromkeys(environment_tools))[:_MAX_ROUTE_TOOLS]
@@ -167,6 +219,89 @@ def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObjec
             "利用者が確かめる点として挙げ、現場の値を推測で断定しないでください。"
         ),
     }
+
+
+def _labels(items: object) -> str:
+    return "、".join(label for item in _records(items) if (label := _text(item.get("label"), 100)))
+
+
+def guide_check_note(output: JsonObject | None) -> JsonObject | None:
+    """Control Plane の業務ガイドの照合（`rag_lookup_guides`）の結果を、モデルへの短い案内にする。
+
+    根拠を集めるだけの道具（`rag_retrieve_evidence`）は業務ガイド（確かめる条件・分岐・影響範囲）を
+    見ないので、モデルが業務ガイドを引かずに根拠を集めたとき、その結果に足す（#1322）。最上位の
+    業務ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。
+    """
+    guides = _records(output.get("guides")) if isinstance(output, dict) else []
+    if not guides:
+        return None
+    guide = guides[0]
+    title = _text(guide.get("title"), 200)
+    decision = _text(guide.get("decision"), 20)
+    summary: JsonObject = {
+        key: guide.get(key)
+        for key in (
+            "guide_id",
+            "revision",
+            "title",
+            "decision",
+            "expected_result",
+            "known_conditions",
+            "unknown_conditions",
+            "steps",
+            "impact_scope",
+            "approval_required",
+            "impact_applies",
+            "handoff_contact",
+        )
+        if key in guide
+    }
+    if decision == "clarify":
+        next_step = ask_clarification_step(guide.get("clarifications"), reason="guide_clarify")
+    elif decision == "handoff":
+        contact = _text(guide.get("handoff_contact"), 200) or "担当の窓口"
+        next_step = {
+            "action": NEXT_STEP_HANDOFF,
+            "reason": "guide_handoff",
+            "tools": [],
+            "instruction": (
+                f"業務ガイド「{title}」は、{_labels(guide.get('unknown_conditions')) or '条件'}が"
+                f"分からないと資料だけでは案内できません。{contact}への引き継ぎを示し、"
+                "操作を代わりに進めないでください。"
+            ),
+        }
+    elif decision == "branch":
+        next_step = {
+            "action": NEXT_STEP_ANSWER_BY_CONDITIONS,
+            "reason": "guide_branch",
+            "tools": [],
+            "instruction": (
+                f"業務ガイド「{title}」の条件（{_labels(guide.get('unknown_conditions'))}）が"
+                "分かっていません。断定せず、条件ごとに分けて、どの場合の手順かを示して答えて"
+                "ください。"
+            ),
+        }
+    else:
+        known = "、".join(
+            f"{_text(item.get('label'), 100) or _text(item.get('id'), 100)}="
+            f"{_text(item.get('value'), _MAX_VALUE_CHARS)}"
+            for item in _records(guide.get("known_conditions"))
+        )
+        parts = [f"業務ガイド「{title}」に沿って答えてください。"]
+        if known:
+            parts.append(f"分かっている条件（{known}）に当たる場合の手順だけを答えてください。")
+        impact = guide.get("impact_applies") is not False and (
+            guide.get("approval_required") is True or guide.get("impact_scope") in {"group", "all"}
+        )
+        if impact:
+            parts.append("影響範囲と、実施の前に承認が要るかを示してください。")
+        next_step = {
+            "action": NEXT_STEP_ANSWER_WITH_GUIDE,
+            "reason": "guide_answer",
+            "tools": [],
+            "instruction": "".join(parts),
+        }
+    return {"guide": summary, "next_step": next_step}
 
 
 def run_route(steps: list[RunStep]) -> JsonObject:
@@ -512,6 +647,36 @@ class _StateBuilder:
         if isinstance(gaps, list):
             self.gaps = [text for item in gaps if (text := _text(item))][:MAX_GAPS]
 
+    def apply_lookup(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
+        """`rag_lookup_guides`（モデル・Control Plane の照合。#1322）の最上位の業務ガイド。
+
+        確かめる判断（clarify）なら問いを確かめ中にし、次の Run が利用者の答えを条件として扱える
+        ようにする。
+        """
+        guides = _records(output.get("guides")) if isinstance(output, dict) else []
+        guide = guides[0] if guides else None
+        if guide is not None:
+            self.add_labels(guide.get("known_conditions"))
+            self.add_labels(guide.get("unknown_conditions"))
+            self.add_labels(guide.get("clarifications"))
+        conditions = arguments.get("conditions")
+        if isinstance(conditions, dict):
+            for condition_id, value in conditions.items():
+                self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
+        if guide is None or not _text(guide.get("guide_id"), 200):
+            return
+        self.guide = {
+            "guide_id": _text(guide.get("guide_id"), 200),
+            "revision": _int(guide.get("revision")),
+            "title": _text(guide.get("title"), 200),
+            "decision": _text(guide.get("decision"), 20),
+        }
+        for item in _records(guide.get("known_conditions")):
+            source = SOURCE_USER_ANSWER if item.get("source") == "user" else SOURCE_RAG_GUIDE
+            self.set_condition(_text(item.get("id"), 100), item.get("value"), source=source, at=at)
+        if guide.get("decision") == "clarify":
+            self.pending = _questions(guide.get("clarifications"))[:MAX_PENDING_CLARIFICATIONS]
+
     def apply_evidence(self, output: JsonObject | None) -> None:
         if output is None:
             return
@@ -568,6 +733,8 @@ def build_support_task(
         at = (step.completed_at or step.started_at or now or _now()).isoformat()
         if base == RAG_SEARCH:
             builder.apply_search(call.arguments, output, at=at)
+        if base == RAG_LOOKUP_GUIDES:
+            builder.apply_lookup(call.arguments, output, at=at)
         if base in _EVIDENCE_TOOLS:
             builder.apply_evidence(output)
     run = run_consumption(steps)

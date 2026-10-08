@@ -368,7 +368,19 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 道具（RAG 以外の MCP 接続のツール）があれば `action="continue_with_tools"`（`tools` に名前）、無ければ
 `"answer_with_confirmations"`。スキルの指示は `next_step` に従うことを書く。支援タスクの状態の `route` に、この Run の
 経路（`rag` / `rag_then_tools` / `tools` / `none`）・理由（最後の `rag_search` の対応）・`environment_data_required`・
-続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。
+続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。`outcome` が `needs_clarification` の
+ときは `action="ask_clarification"`（`questions` に確かめる問い）を足し、手順・分岐ごとの答えより先に問いを返させる
+（#1322）。
+業務ガイドの照合（#1321・#1322）: 根拠を集めるだけの `rag_retrieve_evidence` は業務ガイド（確かめる条件・分岐・影響範囲）を
+見ないため、モデルが業務ガイドを引かずに根拠を集めると、確かめる条件があっても分岐ごとに答えてしまう（#1317 の実環境の
+評価）。モデルがその Run でその接続の `rag_lookup_guides`・`rag_search` を呼ばずに `rag_retrieve_evidence` を呼んだら、
+Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は利用者の質問と根拠を集めた質問。前の Run で問いを
+確かめ中なら前の質問も含める。条件は前の Run までに分かった条件と、根拠を集めた呼び出しの `conditions`。検索・回答
+プロファイルは根拠を集めた呼び出しのもの。モデルのツールと同じ境界を通し、step に残す〔trace_id は `guide_check_` で
+始まる〕。予算・消費には数えない）。最上位の業務ガイドと次の手を、モデルへの根拠の結果に `guide_check` として足す
+（`guide_check_note`。判断が `clarify` なら `ask_clarification`、`handoff` なら引き継ぎ、`branch` なら条件ごとに答える、
+`answer` なら分かっている条件に当たる場合の手順だけを答え、係るときだけ影響範囲・承認を示す）。照合の結果
+（業務ガイド・分かった条件・確かめ中の問い）は支援タスクの状態にも残す。
 回答の最終の検証（#1246・#1277）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 true）が true のとき、RAG の根拠を使った Run の
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
 その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠の参照（新しい呼び出しから順、
@@ -406,7 +418,9 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 外していない `environment_check` の段落。#1317〕を除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、
 それ以外は拒答。主張があり、不足の印〔資料に記載が無い文・拒答の文・主張に添えた質問・「確かめられていない点」の節・
 根拠で確かめられない・矛盾として外した段落〔`unsupported` / `contradicted`。確かめが終わらなかった `unassessed` だけなら
-付けない。#1317〕・決定的な検査の error・実データの確認〕があれば `conditional`、無ければ `answered`）。決められなければ `outcome` を付けずに回答を保存する。業務支援の評価（#1289 の D）は
+付けない。#1317〕・決定的な検査の error・実データの確認・業務ガイドの条件が分からないまま答えた〔`guide_conditions`。
+最後の `rag_search` の後の最も新しい `rag_lookup_guides`〔モデルか Control Plane の照合〕の最上位の業務ガイドの判断が
+`clarify` / `branch` なのに、確認の質問だけで答えなかった。#1321・#1322〕〕があれば `conditional`、無ければ `answered`）。決められなければ `outcome` を付けずに回答を保存する。業務支援の評価（#1289 の D）は
 これで採点する（`rag/evaluation/business-support/README.md`）。モデルに対応を申告させる（構造化出力）方式は、回答の形が
 Agent ごとに変わり、申告と本文の食い違いの扱いも要るため採らない。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する

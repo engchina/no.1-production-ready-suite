@@ -84,16 +84,21 @@ from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,
+    GUIDE_CHECK_TRACE_PREFIX,
+    RAG_LOOKUP_GUIDES,
+    RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
     SupportTaskBudget,
     budget_exceeded_message,
     build_support_task,
+    guide_check_note,
     has_support_task_activity,
     is_environment_tool,
     rag_next_step,
     support_task_instructions,
 )
 from app.features.agent.tools import (
+    MCP_TOOL_SEPARATOR,
     ExternalToolError,
     ToolCall,
     ToolDefinition,
@@ -488,6 +493,69 @@ def _strict_schema(schema: dict[str, Any]) -> bool:
     return schema.get("additionalProperties") is False and required == set(properties)
 
 
+# 業務ガイドの照合（#1322）に渡す条件・質問の上限（`rag_lookup_guides` の契約の上限）。
+GUIDE_CHECK_MAX_CONDITIONS = 30
+GUIDE_CHECK_MAX_QUERY_CHARS = 8000
+
+
+def _connection_prefix(function_name: str) -> str | None:
+    """`<接続>__<ツール>` の接続の部分（MCP 接続のツールでなければ None）。"""
+    if MCP_TOOL_SEPARATOR not in function_name:
+        return None
+    return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
+
+
+def _guide_consulted(steps: list[Any], prefix: str) -> bool:
+    """この Run で、その接続の業務ガイドを引いた（`rag_lookup_guides`・`rag_search` が成功）か。"""
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success:
+            continue
+        if _connection_prefix(call.name) != prefix:
+            continue
+        if mcp_base_tool_name(call.name) in {RAG_LOOKUP_GUIDES, RAG_SEARCH}:
+            return True
+    return False
+
+
+def guide_check_query(goal: str, query: object) -> str:
+    """業務ガイドの照合の質問（利用者の質問と、モデルが根拠を集めた質問。同じなら 1 つ）。
+
+    条件の語（例: 検証用アカウント → 個別）は利用者の質問に、業務ガイドの語はモデルの質問に出る
+    ことがあるので両方を渡す。
+    """
+    parts = [" ".join(goal.split())]
+    if isinstance(query, str) and " ".join(query.split()) not in parts:
+        parts.append(" ".join(query.split()))
+    return "\n".join(part for part in parts if part)[:GUIDE_CHECK_MAX_QUERY_CHARS]
+
+
+def support_task_goal(goal: str, previous: Mapping[str, Any] | None) -> str:
+    """業務ガイドの照合の質問に使う利用者の質問（#1322）。
+
+    前の Run で問いを確かめ中なら、利用者の新しい発言は問いへの答え（「個別の利用者に付けます」）
+    なので、前の質問（目的）も含める（業務ガイドの語は前の質問に出る）。
+    """
+    if isinstance(previous, Mapping) and previous.get("pending_clarifications"):
+        before = previous.get("goal")
+        if isinstance(before, str) and before.strip() and before.strip() != goal.strip():
+            return f"{before.strip()}\n{goal}"
+    return goal
+
+
+def support_task_known_conditions(previous: Mapping[str, Any] | None) -> dict[str, str]:
+    """前の Run までに分かった条件（条件の id → 値）。"""
+    known = previous.get("known_conditions") if isinstance(previous, Mapping) else None
+    if not isinstance(known, Mapping):
+        return {}
+    conditions: dict[str, str] = {}
+    for key, entry in known.items():
+        value = entry.get("value") if isinstance(entry, Mapping) else None
+        if isinstance(key, str) and isinstance(value, str) and value:
+            conditions[key] = value
+    return conditions
+
+
 class _ToolRecorder:
     """function tool の実行を Run の step・イベント・成果物に記録する。
 
@@ -497,12 +565,26 @@ class _ToolRecorder:
     `environment_tools` はこの Run でモデルに渡した、現場のデータを確かめる道具（RAG 以外の MCP
     接続のツール）。`rag_search` が回答を確定できないと返したら、モデルへの結果に次の手
     （`next_step`）を足す（#1283。記録する step の結果は RAG の結果のまま）。
+
+    業務ガイドの照合（#1322）: モデルが業務ガイド（`rag_lookup_guides`・`rag_search`）を引かずに
+    `rag_retrieve_evidence` で根拠を集めたら、Control Plane が同じ接続の `rag_lookup_guides` を
+    1 回呼び（step に残す。予算には数えない）、最上位の業務ガイドと次の手（条件が分からなければ
+    確認の質問）を根拠の結果に `guide_check` として足す。根拠を集める道具は業務ガイドの条件・分岐を
+    見ないため、確かめる条件があってもモデルが分岐ごとに答えてしまう（#1317 の実環境の評価）。
+    `guide_tools` はモデルに渡した `rag_lookup_guides`（接続の接頭辞 → 定義・handler）、
+    `goal` は利用者の質問（前の Run で問いを確かめ中なら、その質問も含む）、`known_conditions` は
+    前の Run までに分かった条件。
     """
 
     def __init__(self, run_id: str, budget: SupportTaskBudget | None = None) -> None:
         self.run_id = run_id
         self.budget = budget
         self.environment_tools: list[str] = []
+        self.guide_tools: dict[str, tuple[ToolDefinition, ToolHandler | None]] = {}
+        self.goal = ""
+        self.known_conditions: dict[str, str] = {}
+        # 照合した（する）接続。並列の呼び出しでも 1 回だけにする。
+        self._guide_checked: set[str] = set()
 
     async def invoke(
         self,
@@ -546,15 +628,72 @@ class _ToolRecorder:
         result = await self.execute(step_id, call, context, definition=definition, handler=handler)
         if result.success:
             output = result.output or {}
-            if mcp_base_tool_name(name) == RAG_SEARCH and isinstance(output, dict):
+            base = mcp_base_tool_name(name)
+            if base == RAG_SEARCH and isinstance(output, dict):
                 next_step = rag_next_step(output, self.environment_tools)
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
+            if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
+                note = await self.check_guides(name, call.arguments)
+                if note is not None:
+                    output = {**output, "guide_check": note}
             return json.dumps(output, ensure_ascii=False, default=str)
         return json.dumps(
             {"error": result.error or "tool failed", "error_code": result.error_code},
             ensure_ascii=False,
         )
+
+    async def check_guides(
+        self, evidence_tool: str, arguments: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """根拠を集めた接続の業務ガイドを照合し、モデルへの案内を返す（#1322。しなければ None）。
+
+        この Run でその接続の業務ガイドを引いていない（`rag_lookup_guides`・`rag_search` を呼んで
+        いない）ときに 1 回だけ呼ぶ。照合の失敗は根拠の結果を変えない（案内を足さないだけ）。
+        """
+        from app.features.agent.runtime import runtime_repository
+
+        prefix = _connection_prefix(evidence_tool)
+        tool = self.guide_tools.get(prefix) if prefix is not None else None
+        profile = arguments.get("search_answer_profile_id")
+        if prefix is None or tool is None or prefix in self._guide_checked:
+            return None
+        if not isinstance(profile, str) or not profile.strip():
+            return None
+        self._guide_checked.add(prefix)
+        if _guide_consulted(runtime_repository.get_run(self.run_id).steps, prefix):
+            return None
+        query = guide_check_query(self.goal, arguments.get("query"))
+        if not query:
+            return None
+        provided = arguments.get("conditions")
+        conditions = dict(self.known_conditions)
+        if isinstance(provided, dict):
+            conditions.update(
+                {
+                    key: value
+                    for key, value in provided.items()
+                    if isinstance(key, str) and isinstance(value, str) and value.strip()
+                }
+            )
+        definition, handler = tool
+        _step_id, result = await self.call(
+            ToolCall(
+                name=definition.name,
+                arguments={
+                    "query": query,
+                    "search_answer_profile_id": profile,
+                    "conditions": dict(list(conditions.items())[:GUIDE_CHECK_MAX_CONDITIONS]),
+                    "limit": 1,
+                },
+                trace_id=f"{GUIDE_CHECK_TRACE_PREFIX}{self.run_id}_{prefix}",
+            ),
+            definition=definition,
+            handler=handler,
+        )
+        if not result.success or not isinstance(result.output, dict):
+            return None
+        return guide_check_note(result.output)
 
     async def call(
         self,
@@ -603,6 +742,9 @@ def build_function_tools(
     mcp_tools: list[McpRuntimeTool] | None = None,
     resource_ids: list[str] | None = None,
     budget: SupportTaskBudget | None = None,
+    *,
+    goal: str = "",
+    known_conditions: Mapping[str, str] | None = None,
 ) -> list[FunctionTool]:
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
@@ -658,6 +800,17 @@ def build_function_tools(
             )
         )
     recorder.environment_tools = [tool.name for tool in tools if is_environment_tool(tool.name)]
+    exposed = {tool.name for tool in tools}
+    for definition, handler in entries:
+        prefix = _connection_prefix(definition.name)
+        if (
+            prefix is not None
+            and definition.name in exposed
+            and mcp_base_tool_name(definition.name) == RAG_LOOKUP_GUIDES
+        ):
+            recorder.guide_tools.setdefault(prefix, (definition, handler))
+    recorder.goal = goal
+    recorder.known_conditions = dict(known_conditions or {})
     return tools
 
 
@@ -672,6 +825,8 @@ def build_sdk_agent(
     user_uuid: str | None = None,
     budget: SupportTaskBudget | None = None,
     support_task: str = "",
+    goal: str = "",
+    known_conditions: Mapping[str, str] | None = None,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
@@ -693,6 +848,8 @@ def build_sdk_agent(
         mcp_tools,
         resource_ids=skill_reference_ids(skill_ids),
         budget=budget,
+        goal=goal,
+        known_conditions=known_conditions,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -879,6 +1036,8 @@ async def execute_run(run_id: str) -> None:
                 user_uuid=run.created_by_user_uuid,
                 budget=task.budget,
                 support_task=task.instructions,
+                goal=support_task_goal(run.goal, task.previous),
+                known_conditions=support_task_known_conditions(task.previous),
             )
             result = await Runner.run(
                 sdk_agent,
@@ -918,6 +1077,8 @@ async def resume_run(run_id: str) -> None:
                 user_uuid=run.created_by_user_uuid,
                 budget=task.budget,
                 support_task=task.instructions,
+                goal=support_task_goal(run.goal, task.previous),
+                known_conditions=support_task_known_conditions(task.previous),
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():

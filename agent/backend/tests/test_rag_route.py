@@ -145,10 +145,13 @@ def test_environment_tool_is_a_non_rag_mcp_tool() -> None:
 
 @pytest.mark.parametrize(
     "outcome",
-    ["answered", "conditional", "needs_clarification", "needs_human", "insufficient_evidence"],
+    ["answered", "conditional", "needs_human", "insufficient_evidence"],
 )
 def test_next_step_only_for_outcomes_the_rag_cannot_finish(outcome: str) -> None:
     assert rag_next_step(_search_output(outcome), ["nl2sql__nl2sql_query"]) is None
+    # 確認の質問を求められたら、道具で続けずに問いを先に返す（#1322。tools は空）。
+    asked = rag_next_step(_search_output("needs_clarification"), ["nl2sql__nl2sql_query"])
+    assert asked is not None and (asked["action"], asked["tools"]) == ("ask_clarification", [])
 
 
 def test_next_step_is_deterministic_from_the_tools_of_the_run() -> None:
