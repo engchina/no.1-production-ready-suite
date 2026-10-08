@@ -36,7 +36,12 @@ from pydantic import (
 
 from app.features.agent import storage_backend
 from app.features.agent.config import runtime_config_store
-from app.features.agent.support_task import SUPPORT_TASK_KIND, SUPPORT_TASK_NAME
+from app.features.agent.support_task import (
+    SUPPORT_TASK_KIND,
+    SUPPORT_TASK_NAME,
+    abandoned_run_consumption,
+    with_abandoned_consumption,
+)
 from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
@@ -1028,6 +1033,8 @@ class AgentRuntimeRepository:
 
         読むのは同じ会話で、同じ持ち主（Run を作った利用者）の、この Run より前の Run だけ。
         会話は持ち主しか続けられない（#768）が、状態の持ち主も確かめる（別の利用者の状態を使わない）。
+        前の完了した Run より後の失敗・取消の Run の消費は、状態の会話の通しの予算に足す
+        （#1277。失敗・取消を繰り返して予算を超えさせない）。
         """
         with self._lock:
             run = self._require_run(run_id)
@@ -1040,8 +1047,18 @@ class AgentRuntimeRepository:
                 and previous.created_at <= run.created_at
             ]
             goal = owned[0].goal if owned else run.goal
+            abandoned: list[JsonObject] = []
+            state: JsonObject | None = None
             for previous in reversed(owned):
-                if previous.id == run.id or previous.status != RunStatus.COMPLETED:
+                if previous.id == run.id:
+                    continue
+                if previous.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
+                    consumed = abandoned_run_consumption(previous.steps)
+                    # ツールを呼ばずに止まった Run は、引き継ぐ状態を作らない。
+                    if consumed["tool_calls"]:
+                        abandoned.append(consumed)
+                    continue
+                if previous.status != RunStatus.COMPLETED:
                     continue
                 content = run_support_task(previous)
                 if (
@@ -1049,8 +1066,14 @@ class AgentRuntimeRepository:
                     and content.get("thread_id") == run.thread_id
                     and content.get("owner_user_uuid") == run.created_by_user_uuid
                 ):
-                    return goal, deepcopy(content)
-            return goal, None
+                    state = deepcopy(content)
+                    break
+            return goal, with_abandoned_consumption(
+                state,
+                abandoned,
+                thread_id=run.thread_id,
+                owner_user_uuid=run.created_by_user_uuid,
+            )
 
     def save_builtin_artifact(
         self, run_id: str, *, kind: str, name: str, content: JsonObject

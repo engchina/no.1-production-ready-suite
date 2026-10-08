@@ -1,20 +1,31 @@
-"""回答の最終の検証（#1246）。
+"""回答の最終の検証（#1246・#1277）。
 
-`agent_final_validation_enabled` のとき、組み込み Runtime は回答を保存する前に、その Run で RAG が
-返した根拠（`rag_search` / `rag_retrieve_evidence` の `document_id`・`chunk_id`）で、RAG の MCP
-`rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく Control Plane で、ツールの境界
+組み込み Runtime は回答を保存する前に（`agent_final_validation_enabled`。既定 on）、その Run で
+RAG が返した根拠（`rag_search` / `rag_retrieve_evidence` の `document_id`・`chunk_id`）で、
+RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく Control Plane で、ツールの境界
 （`tool_registry.invoke` のポリシー・監査、Run の利用者のサービストークン、Run の step）を通す。
 
-- 結果は Run の成果物（kind=`answer_validation`・「回答の検証」）に残す。
-- valid でなければ回答を作り直さず、末尾に「確かめられていない点」を足す。
-- 検証そのものが失敗したら「この回答は検証できませんでした。」を足す（回答は消さない）。
-- RAG の根拠を使っていない Run は検証しない（`skipped` / `no_rag_evidence`）。
+- 根拠の id は返した RAG のものなので、根拠を返した MCP 接続ごとに、その接続の根拠で 1 回ずつ
+  呼び、段落（`answer_quote`）ごとに判定をまとめる。
+- 結果は Run の成果物（kind=`answer_validation`・「回答の検証」）に残す（接続ごとの結果は
+  `connections`）。状態は `completed`（判定が出た）/ `unvalidated`（確かめられなかった）/
+  `skipped`（確かめる対象が無い）。
+- 判定が valid でなければ、根拠で確かめられなかった段落（裏付けが無い・矛盾など）を回答から外し、
+  外した内容と理由を「確かめられていない点」として足す（確かめていない操作の手順を公開しない。
+  handoff §12）。根拠で確かめた段落と、主張ではない行（見出しなど）は残す。
+- 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
+  「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
+- RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
+  （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
+  `skipped`（回答はそのまま）。
 
-ここは根拠の参照の集め方・成果物の内容・回答に足す文だけを持つ（呼び出しは `builtin_runtime`）。
+ここは根拠の参照の集め方・判定のまとめ方・成果物の内容・回答の組み立てだけを持つ（呼び出しは
+`builtin_runtime`）。
 """
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
@@ -34,20 +45,36 @@ MAX_VALIDATION_EVIDENCE = 30
 MAX_QUERY_CHARS = 8000
 MAX_ANSWER_CHARS = 20000
 
+# 判定が出た。
 STATUS_COMPLETED = "completed"
+# 確かめる対象が無い（回答が空・RAG の根拠のツールを持たない Agent の根拠の無い回答）。
 STATUS_SKIPPED = "skipped"
-STATUS_FAILED = "failed"
+# 確かめられなかった（検証の失敗・RAG の根拠を使わなかった回答）。回答に注記を足す。
+STATUS_UNVALIDATED = "unvalidated"
 
 REASON_NO_RAG_EVIDENCE = "no_rag_evidence"
 REASON_VALIDATOR_UNAVAILABLE = "validator_unavailable"
 REASON_EMPTY_ANSWER = "empty_answer"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
+REASON_UNUSABLE_RESULT = "unusable_result"
 
 UNVERIFIED_NOTICE = "この回答は検証できませんでした。"
+NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。"
 UNVERIFIED_HEADING = "確かめられていない点"
-_EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
-_CLAIM_LABELS = {"contradicted": "根拠と矛盾", "unsupported": "根拠で確かめられない"}
+WITHHELD_INTRO = "根拠で確かめられなかった次の内容は、回答に載せていません。"
+NOTHING_CONFIRMED = "根拠で確かめられた内容はありませんでした。"
+EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+# 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。
+BLOCKING_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
+_CLAIM_LABELS = {
+    "contradicted": "根拠と矛盾",
+    "unsupported": "根拠で確かめられない",
+    "citation_error": "出典を確かめられない",
+    "unassessed": "確かめが終わっていない",
+}
+# 判定として使える `rag_validate_answer` の結果の status（それ以外は検証の失敗として扱う）。
+_USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
 _MAX_LISTED_CLAIMS = 5
 _MAX_QUOTE_CHARS = 80
 _MAX_REASON_CHARS = 80
@@ -66,32 +93,27 @@ def _connection_prefix(function_name: str) -> str | None:
     return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
 
 
-def run_evidence_refs(steps: list[RunStep]) -> tuple[str | None, list[JsonObject]]:
-    """その Run で RAG が返した根拠の参照（新しい呼び出しから順、重複なし、最大 30 件）。
+def run_evidence_groups(steps: list[RunStep]) -> list[tuple[str, list[JsonObject]]]:
+    """その Run で RAG が返した根拠の参照を、MCP 接続ごとにまとめる（#1277）。
 
-    根拠の id は返した RAG のものなので、最後に根拠を返した MCP 接続の根拠だけを渡す。返すのは、
-    その接続の根拠のツールの function tool の名前（接続を決める）と、参照の一覧。
+    根拠の id は返した RAG のものなので、接続ごとに分けて検証する。返すのは、接続ごとの
+    （その接続の最も新しい根拠のツールの function tool の名前〔接続を決める〕, 参照の一覧）で、
+    最も新しく根拠を返した接続から順。参照は新しい呼び出しから順、接続の中で重複なし、最大 30 件。
     """
-    tool_name: str | None = None
-    prefix: str | None = None
-    refs: list[JsonObject] = []
-    seen: set[tuple[str, str]] = set()
+    groups: dict[str, tuple[str, list[JsonObject], set[tuple[str, str]]]] = {}
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not result.success or step.status != "completed":
             continue
-        if mcp_base_tool_name(call.name) not in _EVIDENCE_TOOLS:
+        if mcp_base_tool_name(call.name) not in EVIDENCE_TOOLS:
             continue
         evidence = (result.output or {}).get("evidence")
         if not isinstance(evidence, list):
             continue
-        step_prefix = _connection_prefix(call.name)
-        if step_prefix is None:
-            continue
+        prefix = _connection_prefix(call.name)
         if prefix is None:
-            prefix, tool_name = step_prefix, call.name
-        elif step_prefix != prefix:
             continue
+        _tool_name, refs, seen = groups.setdefault(prefix, (call.name, [], set()))
         for item in evidence:
             if not isinstance(item, dict):
                 continue
@@ -102,7 +124,11 @@ def run_evidence_refs(steps: list[RunStep]) -> tuple[str | None, list[JsonObject
                 continue
             seen.add((document_id, chunk_id))
             refs.append({"document_id": document_id, "chunk_id": chunk_id})
-    return tool_name, refs[:MAX_VALIDATION_EVIDENCE]
+    return [
+        (tool_name, refs[:MAX_VALIDATION_EVIDENCE])
+        for tool_name, refs, _seen in groups.values()
+        if refs
+    ]
 
 
 def validation_content(
@@ -116,7 +142,7 @@ def validation_content(
     evidence: list[JsonObject] | None = None,
     result: JsonObject | None = None,
 ) -> JsonObject:
-    """成果物「回答の検証」の内容。"""
+    """成果物「回答の検証」の内容（接続ごとの結果にも使う）。"""
     valid = result.get("valid") if isinstance(result, dict) else None
     return {
         "status": status,
@@ -131,6 +157,11 @@ def validation_content(
     }
 
 
+def usable_result(result: object) -> bool:
+    """`rag_validate_answer` の結果が判定として使えるか（使えなければ検証の失敗として扱う）。"""
+    return isinstance(result, dict) and result.get("status") in _USABLE_RESULT_STATUSES
+
+
 def _refs_count(value: object) -> int:
     return len([item for item in value if isinstance(item, dict)]) if isinstance(value, list) else 0
 
@@ -143,23 +174,125 @@ def _claim_line(claim: JsonObject) -> str:
     return f"- {_CLAIM_LABELS[str(claim.get('status'))]}: 「{quote}」{suffix}"
 
 
-def unverified_points(result: JsonObject) -> list[str] | None:
-    """valid でない検証の結果から、回答の末尾に足す「確かめられていない点」の行。
+def _paragraph_claim(claims: list[JsonObject]) -> JsonObject:
+    """1 つの接続の、同じ段落の判定（段落に複数の主張があれば最も厳しいもの）。"""
+    for claim in claims:
+        if claim.get("status") == "contradicted":
+            return claim
+    for claim in claims:
+        if claim.get("status") in BLOCKING_CLAIM_STATUSES:
+            return claim
+    return next((claim for claim in claims if claim.get("status") == "supported"), claims[0])
 
-    足さなくてよい（valid・確かめる主張が無い）なら None、検証として使えない結果なら空の list。
+
+def merge_results(results: list[JsonObject]) -> JsonObject:
+    """接続ごとの `rag_validate_answer` の結果（判定として使えるもの）を 1 つにまとめる（#1277）。
+
+    どの接続も同じ回答を同じ規則で段落に分けて確かめるので、段落（`answer_quote`）ごとにまとめる。
+    接続の中では段落の最も厳しい判定、接続をまたいでは、どれかの接続が矛盾と判定すれば矛盾、
+    そうでなくどれかの接続が通せば（裏付けあり・確かめる必要が無い行）その判定、どの接続も
+    通さなければ最初の接続の判定（ほかの接続の根拠に無いだけで外さない）。結果が 1 つならそのまま。
     """
-    if result.get("valid") is True:
+    if len(results) == 1:
+        return results[0]
+    per_result: list[dict[str, JsonObject]] = []
+    order: list[str] = []
+    for result in results:
+        grouped: dict[str, list[JsonObject]] = {}
+        for claim in result.get("claims") or []:
+            if not isinstance(claim, dict):
+                continue
+            quote = str(claim.get("answer_quote") or "")
+            if quote not in grouped and quote not in order:
+                order.append(quote)
+            grouped.setdefault(quote, []).append(claim)
+        per_result.append({quote: _paragraph_claim(items) for quote, items in grouped.items()})
+    claims: list[JsonObject] = []
+    for quote in order:
+        judged = [item[quote] for item in per_result if quote in item]
+        chosen = (
+            next((item for item in judged if item.get("status") == "contradicted"), None)
+            or next(
+                (item for item in judged if item.get("status") not in BLOCKING_CLAIM_STATUSES),
+                None,
+            )
+            or judged[0]
+        )
+        claims.append(dict(chosen))
+    counts: dict[str, int] = {}
+    for claim in claims:
+        key = str(claim.get("status"))
+        counts[key] = counts.get(key, 0) + 1
+    stale = [item for result in results for item in result.get("stale_evidence") or []]
+    missing = [item for result in results for item in result.get("missing_evidence") or []]
+    statuses = {result.get("status") for result in results}
+    status = next(item for item in _USABLE_RESULT_STATUSES if item in statuses)
+    valid = (
+        status == "completed"
+        and not stale
+        and not missing
+        and not any(claim.get("status") in BLOCKING_CLAIM_STATUSES for claim in claims)
+        and counts.get("supported", 0) > 0
+    )
+    return {
+        "valid": valid,
+        "status": status,
+        "counts": counts,
+        "claims": claims,
+        "missing_evidence": missing,
+        "stale_evidence": stale,
+        "evidence_truncated": any(bool(result.get("evidence_truncated")) for result in results),
+    }
+
+
+# 回答を段落に分ける規則（RAG の `rag_engine.generation.operation_audit.answer_passages` と同じ。
+# `rag_validate_answer` の `answer_quote` はこの段落の原文。製品をまたいで import しないため写す）。
+_QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
+_SENTENCE = re.compile(r"[^。]+(?:。[」』）)]*|$)")
+_PASSAGE_CHARS = 600
+
+
+def _passage_spans(line: str) -> list[tuple[int, int, str]]:
+    """1 行の段落（行の中の開始・終了の位置と原文）。"""
+    if _QUOTE_ONLY_LINE.fullmatch(line):
+        pieces = [(0, len(line))]
+    else:
+        pieces = [(match.start(), match.end()) for match in _SENTENCE.finditer(line)]
+    spans: list[tuple[int, int, str]] = []
+    for start, end in pieces:
+        raw = line[start:end]
+        value = raw.strip()
+        offset = start + len(raw) - len(raw.lstrip())
+        for index in range(0, len(value), _PASSAGE_CHARS):
+            text = value[index : index + _PASSAGE_CHARS]
+            spans.append((offset + index, offset + index + len(text), text))
+    return spans
+
+
+def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
+    """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
+
+    段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
+    削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。
+    """
+    found: set[str] = set()
+    kept: list[str] = []
+    for line in answer.split("\n"):
+        spans = [span for span in _passage_spans(line) if span[2] in quotes]
+        if not spans:
+            kept.append(line)
+            continue
+        found.update(span[2] for span in spans)
+        for start, end, _text in reversed(spans):
+            line = line[:start] + line[end:]
+        if line.strip():
+            kept.append(line.rstrip())
+    if quotes - found:
         return None
-    status = result.get("status")
-    if status == "no_claims":
-        return None
-    if status not in {"completed", "no_evidence"}:
-        return []
-    claims = [
-        item
-        for item in result.get("claims") or []
-        if isinstance(item, dict) and item.get("status") in _CLAIM_LABELS
-    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
+def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     lines = [_claim_line(item) for item in claims[:_MAX_LISTED_CLAIMS]]
     if len(claims) > _MAX_LISTED_CLAIMS:
         lines.append(f"- ほか {len(claims) - _MAX_LISTED_CLAIMS} 件の主張")
@@ -174,14 +307,72 @@ def unverified_points(result: JsonObject) -> list[str] | None:
     return lines
 
 
-def annotate_answer(answer: str, lines: list[str] | None) -> str:
-    """回答の末尾に「確かめられていない点」を足す（行が無ければ「検証できませんでした」）。"""
-    if lines is None:
-        return answer
-    if not lines:
-        return with_unverified_notice(answer)
-    return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines)
+def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
+    """判定（判定として使える結果）から、利用者に見せる回答と、外した内容の記録を返す。
+
+    valid（または確かめる主張が無い）ならそのまま。そうでなければ、根拠で確かめられなかった段落を
+    外し、外した段落と理由・古い版や見つからない根拠を「確かめられていない点」として足す。
+    根拠を 1 件も読めなかった（`no_evidence`）ときや、段落の位置を決められないときは本文を載せない。
+    """
+    if result.get("valid") is True or result.get("status") == "no_claims":
+        return answer, {"claims": 0, "all": False}
+    blocking = [
+        item
+        for item in result.get("claims") or []
+        if isinstance(item, dict) and item.get("status") in BLOCKING_CLAIM_STATUSES
+    ]
+    body: str | None
+    if result.get("status") == "no_evidence":
+        body = None
+    elif blocking:
+        quotes = {str(item.get("answer_quote") or "") for item in blocking}
+        body = withhold_paragraphs(answer, quotes)
+    else:
+        body = answer.rstrip()
+    lines = _notice_lines(result, blocking)
+    if blocking or body is None:
+        lines.insert(0, WITHHELD_INTRO)
+    text = body or NOTHING_CONFIRMED
+    withheld = {"claims": len(blocking), "all": not body}
+    return f"{text}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
+
+
+def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[JsonObject, str]:
+    """接続ごとの内容（`validation_content`）を 1 つにし、利用者に見せる回答を返す（#1277）。
+
+    - どれかの接続を確かめられなかった（`unvalidated`）: 全体も `unvalidated` で、回答は消さずに
+      「検証できませんでした」を足す（基盤の障害で内容を落とさない）。
+    - すべての接続で判定が出た: 段落ごとにまとめた判定で回答を組み立てる（`publish_answer`）。
+    """
+    single = validations[0] if len(validations) == 1 else None
+    common: JsonObject = {
+        "connection": single["connection"] if single else None,
+        "tool_name": single["tool_name"] if single else None,
+        "step_id": single["step_id"] if single else None,
+        "evidence": [ref for item in validations for ref in item["evidence"]],
+    }
+    failed = next((item for item in validations if item["status"] != STATUS_COMPLETED), None)
+    if failed is not None:
+        content = validation_content(
+            STATUS_UNVALIDATED,
+            reason=failed["reason"],
+            message=failed["message"],
+            result=single["result"] if single else None,
+            **common,
+        )
+        published = with_unverified_notice(answer)
+    else:
+        merged = merge_results([item["result"] for item in validations])
+        content = validation_content(STATUS_COMPLETED, result=merged, **common)
+        published, content["withheld"] = publish_answer(answer, merged)
+    content["connections"] = validations
+    return content, published
 
 
 def with_unverified_notice(answer: str) -> str:
     return f"{answer.rstrip()}\n\n{UNVERIFIED_NOTICE}"
+
+
+def with_no_evidence_notice(answer: str) -> str:
+    """資料の根拠を使わずに作った回答の末尾に、確かめていないことを足す（#1277）。"""
+    return f"{answer.rstrip()}\n\n{NO_EVIDENCE_NOTICE}"
