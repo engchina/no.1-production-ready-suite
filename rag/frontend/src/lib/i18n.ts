@@ -936,6 +936,9 @@ export const ja = {
   "searchAnswerProfiles.field.screenLinking": "画面目録で操作画面を探す",
   "searchAnswerProfiles.field.screenLinkingHelper":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+  "searchAnswerProfiles.field.requestCoverage": "根拠の無い要求を探し直す",
+  "searchAnswerProfiles.field.requestCoverageHelper":
+    "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。全体の既定は有効です。",
   "searchAnswerProfiles.queryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "searchAnswerProfiles.queryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "searchAnswerProfiles.queryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",
@@ -2460,6 +2463,9 @@ export const ja = {
   "settings.answering.screenLinking": "画面目録で操作画面を探す",
   "settings.answering.screenLinkingHint":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
+  "settings.answering.requestCoverage": "根拠の無い要求を探し直す",
+  "settings.answering.requestCoverageHint":
+    "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。",
   "settings.answering.save": "回答の設定を保存",
   "settings.answering.saved": "回答の検索と生成の設定を保存しました。",
   "settings.answering.saveError": "回答の検索と生成の設定を保存できませんでした。",

@@ -844,6 +844,8 @@ export interface KnowledgeBaseQueryConfig {
   rerank_enabled?: boolean | null;
   // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
   screen_linking_enabled?: boolean | null;
+  // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
+  request_coverage_retrieval_enabled?: boolean | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
 }
@@ -1983,6 +1985,7 @@ export interface AnsweringSettingsData {
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;
+  request_coverage_retrieval_enabled: boolean;
   auto_field_filter_enabled: boolean;
   config_source: "runtime";
 }

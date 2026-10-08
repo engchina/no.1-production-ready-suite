@@ -154,6 +154,13 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(autoFieldFilter).toHaveAccessibleDescription(/AI の呼び出しが 1 回増えます/);
   await autoFieldFilter.getByRole("button", { name: "ON" }).click();
+  // 根拠の無い要求を探し直す（#1279）は既定 有効(継承)。AI の呼び出しは増えないことを説明に出す。
+  const requestCoverage = page.getByRole("group", { name: "根拠の無い要求を探し直す" });
+  await expect(
+    requestCoverage.getByRole("button", { name: "グローバル既定を継承" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(requestCoverage).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
+  await requestCoverage.getByRole("button", { name: "OFF" }).click();
   await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
@@ -164,6 +171,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.rerank_enabled).toBe(false);
   expect(query.screen_linking_enabled).toBe(true);
   expect(query.auto_field_filter_enabled).toBe(true);
+  expect(query.request_coverage_retrieval_enabled).toBe(false);
   expect(query.answer_flow ?? null).toBeNull();
 });
 
