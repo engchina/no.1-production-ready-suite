@@ -25,6 +25,7 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException, Request
@@ -56,10 +57,16 @@ from app.rag.cross_references import (
     split_section_path,
 )
 from app.rag.document_crop import (
+    BoundedCrop,
     CropTooLargeError,
     DocumentSourceNotFoundError,
     crop_png_bounded,
     load_parsed_source,
+)
+from app.rag.figure_url import (
+    FIGURE_URL_TTL_SECONDS,
+    FigureUrlUnavailableError,
+    issue_figure_token,
 )
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_runtime import GuideMatch, clarification_questions, rank_guides
@@ -69,7 +76,7 @@ from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
 # ツールの出力の版（出力の形を変えたら上げる。handoff §10。#1276）。
-MCP_OUTPUT_SCHEMA_VERSION = 3
+MCP_OUTPUT_SCHEMA_VERSION = 4
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -88,6 +95,13 @@ IMAGE_MIME_TYPE: Literal["image/png"] = "image/png"
 IMAGE_NOT_AVAILABLE_CODE = "image_not_available"
 IMAGE_TOO_LARGE_CODE = "image_too_large"
 IMAGE_SOURCE_MISSING_CODE = "image_source_missing"
+# 図をブラウザで開く短命の URL（rag_read_source の include_image_url。#1311）。
+IMAGE_URL_NOT_ALLOWED_CODE = "image_url_not_allowed"
+IMAGE_URL_UNAVAILABLE_CODE = "image_url_unavailable"
+# URL を作ってよい呼び出し（Agent の画面の操作）のサービストークンの claim `purpose` の値。
+FIGURE_URL_PURPOSE = "figure_url"
+# 図の画像の読み取りの path（`app.api.routes.figures`。/api の下）。
+FIGURE_URL_PATH_PREFIX = "/api/figures"
 # 根拠の種類（#1282）。figure_description=図を VLM が読んだ説明（元の図で確かめる）/
 # ocr=図の中・周りの文字（解析の OCR・キャプション）。
 EvidenceType = Literal["text", "table", "figure_description", "ocr"]
@@ -291,6 +305,14 @@ class ReadSourceInput(BaseModel):
             "分からない根拠は image_not_available のエラー。"
         ),
     )
+    include_image_url: bool = Field(
+        default=False,
+        description=(
+            "true のとき、図の根拠の元の画像をブラウザで開く短命の URL（image_url）を返す"
+            f"（{FIGURE_URL_TTL_SECONDS} 秒で切れ、読むたびに今の権限・版を確かめる）。Agent の"
+            "画面の操作からだけ使える（それ以外は image_url_not_allowed のエラー）。"
+        ),
+    )
 
 
 # ---- 出力 ----
@@ -390,6 +412,19 @@ class EvidenceImage(BaseModel):
     content_index: int = Field(
         default=1, description="MCP の content の何番目（0 始まり）に画像があるか。"
     )
+
+
+class EvidenceImageUrl(BaseModel):
+    """図の根拠の元の画像をブラウザで開く短命の URL（rag_read_source の include_image_url。#1311）。
+
+    URL は利用者・根拠・版に縛った署名つきのトークンを path に持ち、期限（5 分）で切れる。読むたびに
+    今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。
+    """
+
+    url: str = Field(description="図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。")
+    path: str = Field(description="url の path（RAG の公開の起点に付け替えるときに使う）。")
+    expires_at: str = Field(description="期限（ISO 8601、UTC）。")
+    expires_in_seconds: int = Field(description="発行からの有効な秒数。")
 
 
 class RagEvidence(BaseModel):
@@ -696,6 +731,10 @@ class ReadSourceOutput(VersionedOutput):
             "include_image=true で返した図の画像の大きさ（画像は content の image）。"
             "include_image=false なら null。"
         ),
+    )
+    image_url: EvidenceImageUrl | None = Field(
+        default=None,
+        description="include_image_url=true で返した、図をブラウザで開く短命の URL（#1311）。",
     )
     locator: EvidenceLocator
     text: str = Field(description="offset から最大 max_chars 文字の本文。")
@@ -1038,13 +1077,16 @@ def _text_window(text: str, offset: int, max_chars: int) -> tuple[str, bool, int
     return window, more, (end if more else None)
 
 
-async def _read_image(
+async def crop_figure(
     oracle: OracleClient,
     chunk: RetrievedChunk,
     metadata: dict[str, Any],
     region: _ImageRegion | None,
-) -> tuple[EvidenceImage, dict[str, Any]]:
-    """図の領域を、解析に使ったファイル（処理レシピの artifact）から上限つきで切り出す（#1282）。"""
+) -> BoundedCrop:
+    """図の領域を、解析に使ったファイル（処理レシピの artifact）から上限つきで切り出す（#1282）。
+
+    MCP の content の画像（include_image）と、署名つきの URL の読み取り（#1311）で共用する。
+    """
     if region is None:
         raise McpToolError(
             IMAGE_NOT_AVAILABLE_CODE,
@@ -1061,7 +1103,7 @@ async def _read_image(
             status=404,
         ) from exc
     try:
-        crop = await asyncio.to_thread(
+        return await asyncio.to_thread(
             crop_png_bounded,
             source,
             region.page,
@@ -1081,6 +1123,16 @@ async def _read_image(
             IMAGE_NOT_AVAILABLE_CODE,
             "元の図を切り出せませんでした（ファイルの形式か図の場所が対応していません）。",
         ) from exc
+
+
+async def _read_image(
+    oracle: OracleClient,
+    chunk: RetrievedChunk,
+    metadata: dict[str, Any],
+    region: _ImageRegion | None,
+) -> tuple[EvidenceImage, dict[str, Any]]:
+    """図の領域を切り出し、大きさと MCP の content の image のブロックを返す（#1282）。"""
+    crop = await crop_figure(oracle, chunk, metadata, region)
     image = EvidenceImage(
         width=crop.width,
         height=crop.height,
@@ -1095,30 +1147,94 @@ async def _read_image(
     return image, block
 
 
-async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:
+async def readable_chunk(oracle: OracleClient, document_id: str, chunk_id: str) -> RetrievedChunk:
+    """検索と同じ見え方の条件で chunk を読み直す（見えない・古い版は区別できるエラー）。
+
+    rag_read_source と、図の署名つきの URL の読み取り（#1311）で同じ判定を使う。
+    """
+    chunk = await oracle.retrievable_chunk(document_id, chunk_id)
+    if chunk is not None:
+        return chunk
+    if await oracle.accessible_chunk_exists(document_id, chunk_id):
+        raise McpToolError(
+            SOURCE_STALE_CODE,
+            "この根拠は文書の古い版のものです。rag_search で検索し直してください。",
+        )
+    raise McpToolError(
+        SOURCE_NOT_FOUND_CODE,
+        "根拠が見つかりません（削除されたか、利用できる範囲の外です）。",
+    )
+
+
+def figure_region(metadata: dict[str, Any]) -> _ImageRegion | None:
+    """図の根拠の領域（保存した chunk の metadata から決める。署名つきの URL の読み取りで使う）。"""
+    return _image_region(metadata)
+
+
+@dataclass(frozen=True, slots=True)
+class FigureUrlRequest:
+    """図の署名つきの URL を作る文脈（MCP の呼び出しの利用者と、URL の起点。#1311）。"""
+
+    subject: str
+    base_url: str
+
+
+def _figure_url(
+    issuer: FigureUrlRequest | None,
+    chunk: RetrievedChunk,
+    metadata: dict[str, Any],
+    region: _ImageRegion | None,
+) -> EvidenceImageUrl:
+    if region is None:
+        raise McpToolError(
+            IMAGE_NOT_AVAILABLE_CODE,
+            "この根拠には元の図の画像がありません（図ではないか、図の場所が分かりません）。",
+        )
+    if issuer is None:
+        raise McpToolError(
+            IMAGE_URL_NOT_ALLOWED_CODE,
+            "図を開く URL は、Agent の画面の操作からだけ作れます。",
+            status=403,
+        )
+    try:
+        token, expires_at = issue_figure_token(
+            get_settings().app_service_token_secret,
+            subject=issuer.subject,
+            document_id=chunk.document_id,
+            chunk_id=chunk.chunk_id,
+            chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
+        )
+    except FigureUrlUnavailableError as exc:
+        raise McpToolError(IMAGE_URL_UNAVAILABLE_CODE, str(exc), status=503) from exc
+    path = f"{FIGURE_URL_PATH_PREFIX}/{token}"
+    return EvidenceImageUrl(
+        url=f"{issuer.base_url.rstrip('/')}{path}",
+        path=path,
+        expires_at=datetime.fromtimestamp(expires_at, tz=UTC).isoformat(),
+        expires_in_seconds=FIGURE_URL_TTL_SECONDS,
+    )
+
+
+async def read_source(
+    arguments: ReadSourceInput, *, figure_url_request: FigureUrlRequest | None = None
+) -> ReadSourceOutput | McpToolResult:
     """検索と同じ見え方の条件で根拠の本文を読む（見えない・古い版は区別できるエラー）。
 
     図の画像（include_image）も、読むたびに同じ条件で chunk を読み直してから切り出す。
+    図を開く URL（include_image_url。#1311）は、同じ条件で見える図の根拠にだけ作る。
     """
     oracle = OracleClient()
-    chunk = await oracle.retrievable_chunk(arguments.document_id, arguments.chunk_id)
-    if chunk is None:
-        if await oracle.accessible_chunk_exists(arguments.document_id, arguments.chunk_id):
-            raise McpToolError(
-                SOURCE_STALE_CODE,
-                "この根拠は文書の古い版のものです。rag_search で検索し直してください。",
-            )
-        raise McpToolError(
-            SOURCE_NOT_FOUND_CODE,
-            "根拠が見つかりません（削除されたか、利用できる範囲の外です）。",
-        )
+    chunk = await readable_chunk(oracle, arguments.document_id, arguments.chunk_id)
     metadata = dict(chunk.metadata)
     text, more, next_offset = _text_window(chunk.text, arguments.offset, arguments.max_chars)
     parent = metadata.get("parent_text")
     parent_text = parent if isinstance(parent, str) and parent.strip() else None
     region = _image_region(metadata)
     image: EvidenceImage | None = None
+    image_url: EvidenceImageUrl | None = None
     blocks: tuple[dict[str, Any], ...] = ()
+    if arguments.include_image_url:
+        image_url = _figure_url(figure_url_request, chunk, metadata, region)
     if arguments.include_image:
         image, block = await _read_image(oracle, chunk, metadata, region)
         blocks = (block,)
@@ -1133,6 +1249,7 @@ async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolR
         evidence_type=_evidence_type(metadata),
         image_ref=_image_ref(chunk, metadata, region),
         image=image,
+        image_url=image_url,
         locator=_locator(metadata),
         text=text,
         offset=arguments.offset,
@@ -1191,6 +1308,24 @@ def _lookup_item(match: GuideMatch) -> LookupGuideItem:
         approval_required=content.impact.approval_required,
         handoff_contact=content.handoff.contact,
     )
+
+
+def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
+    """図を開く URL（#1311）を作ってよい呼び出しなら、その利用者と URL の起点を返す。
+
+    URL は Agent の画面の操作（Agent の backend が閲覧者を ``sub`` にし、``purpose`` に
+    ``figure_url`` を入れたサービストークンで呼ぶ）でだけ作る。Run の中でモデルが呼んだときは
+    作らない（URL を Run の記録・モデルの文脈に残さない）。local（認証なし）は確かめない。
+    """
+    principal = getattr(http_request.state, "principal", None)
+    subject = getattr(principal, "user_uuid", None)
+    if not isinstance(subject, str) or not subject:
+        return None
+    if not get_settings().local_debug_enabled:
+        claims = getattr(http_request.state, "service_token_claims", None)
+        if not isinstance(claims, dict) or claims.get("purpose") != FIGURE_URL_PURPOSE:
+            return None
+    return FigureUrlRequest(subject=subject, base_url=str(http_request.base_url))
 
 
 def build_rag_mcp_server(http_request: Request) -> McpServer:
@@ -1274,7 +1409,12 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         if arguments.include_image:
             # 図の切り出しは元のファイルを読んで描くので、検索と同じ上限で守る（#1282）。
             enforce_rate_limit("search", http_request)
-        return await read_source(arguments)
+        return await read_source(
+            arguments,
+            figure_url_request=(
+                _figure_url_request(http_request) if arguments.include_image_url else None
+            ),
+        )
 
     async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:
         enforce_rate_limit("search", http_request)
