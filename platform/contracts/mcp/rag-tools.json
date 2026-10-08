@@ -196,6 +196,17 @@
                 "title": "Label",
                 "type": "string"
               },
+              "state": {
+                "default": "unknown",
+                "description": "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が出ていて決められない。値は candidates）。",
+                "enum": [
+                  "known",
+                  "unknown",
+                  "conflicting"
+                ],
+                "title": "State",
+                "type": "string"
+              },
               "value": {
                 "anyOf": [
                   {
@@ -233,6 +244,14 @@
                 "default": null,
                 "description": "不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。",
                 "title": "Handling"
+              },
+              "candidates": {
+                "description": "state=conflicting のとき、質問に出た値。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Candidates",
+                "type": "array"
               }
             },
             "required": [
@@ -308,11 +327,24 @@
                 "type": "array"
               },
               "unknown_conditions": {
+                "description": "確かめる・分岐する・引き継ぐ条件（不明・矛盾）。",
                 "items": {
                   "$ref": "#/$defs/GuideCondition"
                 },
                 "title": "Unknown Conditions",
                 "type": "array"
+              },
+              "applicability": {
+                "additionalProperties": {
+                  "enum": [
+                    "matched",
+                    "unverified"
+                  ],
+                  "type": "string"
+                },
+                "description": "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。",
+                "title": "Applicability",
+                "type": "object"
               },
               "expected_result": {
                 "title": "Expected Result",
@@ -378,7 +410,7 @@
             "type": "integer"
           },
           "guides": {
-            "description": "質問に当たる公開の業務ガイド（照合の点の高い順）。無ければ空。",
+            "description": "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。無ければ空。",
             "items": {
               "$ref": "#/$defs/LookupGuideItem"
             },
@@ -1697,6 +1729,17 @@
                 "title": "Label",
                 "type": "string"
               },
+              "state": {
+                "default": "unknown",
+                "description": "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が出ていて決められない。値は candidates）。",
+                "enum": [
+                  "known",
+                  "unknown",
+                  "conflicting"
+                ],
+                "title": "State",
+                "type": "string"
+              },
               "value": {
                 "anyOf": [
                   {
@@ -1734,6 +1777,14 @@
                 "default": null,
                 "description": "不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。",
                 "title": "Handling"
+              },
+              "candidates": {
+                "description": "state=conflicting のとき、質問に出た値。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Candidates",
+                "type": "array"
               }
             },
             "required": [
@@ -1777,11 +1828,24 @@
                 "type": "array"
               },
               "unknown_conditions": {
+                "description": "確かめる・分岐する・引き継ぐ条件（不明・矛盾）。",
                 "items": {
                   "$ref": "#/$defs/GuideCondition"
                 },
                 "title": "Unknown Conditions",
                 "type": "array"
+              },
+              "applicability": {
+                "additionalProperties": {
+                  "enum": [
+                    "matched",
+                    "unverified"
+                  ],
+                  "type": "string"
+                },
+                "description": "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。",
+                "title": "Applicability",
+                "type": "object"
               }
             },
             "required": [

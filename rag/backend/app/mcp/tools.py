@@ -67,6 +67,7 @@ READ_SOURCE_MAX_CHARS_DEFAULT = 8000
 READ_SOURCE_MAX_CHARS_LIMIT = 20000
 SOURCE_NOT_FOUND_CODE = "source_not_found"
 SOURCE_STALE_CODE = "source_stale"
+GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした。時間をおいて再度お試しください。"
 
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
@@ -394,12 +395,22 @@ class GuideClarification(BaseModel):
 class GuideCondition(BaseModel):
     id: str
     label: str
+    state: Literal["known", "unknown", "conflicting"] = Field(
+        default="unknown",
+        description=(
+            "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が"
+            "出ていて決められない。値は candidates）。"
+        ),
+    )
     value: str | None = None
     source: str | None = Field(
         default=None, description="user=利用者が答えた / question=質問の文から読んだ。"
     )
     handling: str | None = Field(
         default=None, description="不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。"
+    )
+    candidates: list[str] = Field(
+        default_factory=list, description="state=conflicting のとき、質問に出た値。"
     )
 
 
@@ -413,7 +424,17 @@ class GuideRef(BaseModel):
         )
     )
     known_conditions: list[GuideCondition] = Field(default_factory=list)
-    unknown_conditions: list[GuideCondition] = Field(default_factory=list)
+    unknown_conditions: list[GuideCondition] = Field(
+        default_factory=list, description="確かめる・分岐する・引き継ぐ条件（不明・矛盾）。"
+    )
+    applicability: dict[str, Literal["matched", "unverified"]] = Field(
+        default_factory=dict,
+        description=(
+            "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。"
+            "matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。"
+            "空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。"
+        ),
+    )
 
 
 class AnswerProvenance(BaseModel):
@@ -492,7 +513,10 @@ class LookupGuideItem(GuideRef):
 
 class LookupGuidesOutput(VersionedOutput):
     guides: list[LookupGuideItem] = Field(
-        description="質問に当たる公開の業務ガイド（照合の点の高い順）。無ければ空。"
+        description=(
+            "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。"
+            "無ければ空。"
+        )
     )
 
 
@@ -783,6 +807,9 @@ def _guide_ref(value: object) -> dict[str, Any] | None:
         "decision": value.get("decision") or "answer",
         "known_conditions": _guide_conditions(value.get("known_conditions")),
         "unknown_conditions": _guide_conditions(value.get("unknown_conditions")),
+        "applicability": (
+            dict(value["applicability"]) if isinstance(value.get("applicability"), dict) else {}
+        ),
     }
 
 
@@ -926,12 +953,26 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         view = await oracle.get_search_answer_profile(arguments.search_answer_profile_id)
         if view is None:
             raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
-        guides = await search_route._published_guides(oracle, view.id)
+        # rag_search と同じく、アーカイブ済みのプロファイルは使わない（409。#1278）。
+        search_route.ensure_search_answer_profile_not_archived(
+            view, arguments.search_answer_profile_id
+        )
+        guides, failed = await search_route.load_published_guides(oracle, view.id)
+        if failed:
+            # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
+            raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
+        context = await search_route.support_guide_context(
+            oracle, guides, arguments.query, search_route.profile_scope_filters(view)
+        )
         return LookupGuidesOutput(
             guides=[
                 _lookup_item(match)
                 for match in rank_guides(
-                    guides, arguments.query, arguments.conditions, limit=arguments.limit
+                    guides,
+                    arguments.query,
+                    arguments.conditions,
+                    limit=arguments.limit,
+                    context=context,
                 )
             ]
         )
