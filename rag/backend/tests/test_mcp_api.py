@@ -486,7 +486,12 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     assert (body["outcome"], body["requests"], body["gaps"]) == ("answered", [], [])
 
 
-_FIGURE_PAGE: dict[str, Any] = {"page_start": 2, "page_end": 2, "page_width": 600, "page_height": 800}
+_FIGURE_PAGE: dict[str, Any] = {
+    "page_start": 2,
+    "page_end": 2,
+    "page_width": 600,
+    "page_height": 800,
+}
 
 
 def test_evidence_types_figures_and_points_to_image_region(
@@ -864,11 +869,12 @@ def test_read_source_image_errors_are_distinguishable(
     )
 
     def read(chunk_id: str) -> dict[str, Any]:
-        return _call(
+        body: dict[str, Any] = _call(
             "rag_read_source",
             {"document_id": "d1", "chunk_id": chunk_id, "include_image": True},
             headers,
         )["structuredContent"]
+        return body
 
     # 図でない根拠。
     assert read("c-text")["error_code"] == mcp_tools.IMAGE_NOT_AVAILABLE_CODE
