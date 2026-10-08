@@ -2478,6 +2478,146 @@ def test_prompt_and_profile_versions_follow_content() -> None:
     assert search_answer_profile_revision(view(changed))["config_sha256"] != first["config_sha256"]
 
 
+# --- 要求ごとの根拠の覆域と、根拠の無い要求だけの再検索(#1279) ---
+
+_INVOICE_TEXT = "請求書の再発行は、請求一覧で対象を選び、再発行ボタンを押します。"
+
+
+class CoverageOracle(FakeOracle):
+    """要求「請求書の再発行」だけの文で検索したときだけ請求書の資料を返す検索のスタブ。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.queries: list[str] = []
+        self.order = _doc_chunk("doc-order", "受注番号を入力し、登録ボタンを押します。")
+        self.invoice = _doc_chunk("doc-invoice", _INVOICE_TEXT)
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.queries.append(query)
+        # 原質問・補助の検索文は 2 つの要求を含むので受注の資料だけを返す
+        # (1 回の検索の上位に入らない要求)。
+        return [self.order] if "受注" in query else [self.invoice]
+
+    async def context_group_siblings(
+        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+    ) -> list[RetrievedChunk]:
+        return []
+
+
+async def _answer_with_coverage(
+    monkeypatch: pytest.MonkeyPatch, oracle: CoverageOracle, question: str, **settings: Any
+) -> Any:
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(
+            rag_query_strategy="simple_retrieval",
+            rag_answer_flow="standard_rag",
+            rag_rerank_enabled=False,
+            **settings,
+        ),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    return await engine.run(SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"}))
+
+
+async def test_request_coverage_re_retrieves_only_missing_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """根拠の無い要求だけを要求の文で 1 回検索し、その根拠を回答の材料と診断に足す(#1279)。"""
+    oracle = CoverageOracle()
+
+    outcome = await _answer_with_coverage(
+        monkeypatch, oracle, "受注の登録方法は？請求書の再発行方法は？"
+    )
+
+    coverage = outcome.diagnostics["request_coverage"]
+    statuses = {row["id"]: row["status"] for row in coverage["requests"]}
+    assert statuses == {"Q1": "supported", "Q2": "missing"}
+    re_retrieval = coverage["re_retrieval"]
+    assert re_retrieval["applied"] is True
+    assert [query["request_id"] for query in re_retrieval["queries"]] == ["Q2"]
+    assert re_retrieval["queries"][0]["queries"][0] == "請求書の再発行方法は？"
+    assert coverage["llm_calls"] == 0
+    after = {row["id"]: row.get("status_after") for row in coverage["requests"]}
+    assert after["Q2"] == "supported"
+    # 足した根拠が回答の材料(根拠の木)に入る。
+    assert "doc-invoice:c1" in _evidence_ids(outcome)
+    assert any(
+        step["name"] == "要求ごとの根拠の確認" for step in outcome.diagnostics["execution_steps"]
+    )
+
+
+async def test_request_coverage_disabled_does_not_re_retrieve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """設定で無効なら、判定だけを記録し再検索しない(#1279)。"""
+    oracle = CoverageOracle()
+
+    outcome = await _answer_with_coverage(
+        monkeypatch,
+        oracle,
+        "受注の登録方法は？請求書の再発行方法は？",
+        rag_request_coverage_retrieval_enabled=False,
+    )
+
+    coverage = outcome.diagnostics["request_coverage"]
+    assert coverage["re_retrieval"] == {"applied": False, "skipped": "disabled"}
+    assert "請求書の再発行方法は？" not in oracle.queries
+    assert "doc-invoice:c1" not in _evidence_ids(outcome)
+
+
+def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
+    """根拠の無い要求の再検索の設定と予算を rag_engine の設定へ渡す(#1279)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    custom = build_engine_settings(
+        Settings(
+            rag_request_coverage_retrieval_enabled=False,
+            rag_request_coverage_max_queries=1,
+            rag_request_coverage_max_chunks=2,
+            rag_request_coverage_deadline_seconds=3.5,
+        ),
+        output_dir=tmp_path,
+    )
+
+    assert default.request_coverage_retrieval_enabled is True
+    assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
+    assert default.request_coverage_deadline_seconds == 10.0
+    assert custom.request_coverage_retrieval_enabled is False
+    assert (custom.request_coverage_max_queries, custom.request_coverage_max_chunks) == (1, 2)
+    assert custom.request_coverage_deadline_seconds == 3.5
+
+
+def test_search_answer_profile_overrides_request_coverage() -> None:
+    """検索・回答プロファイルで根拠の無い要求の再検索を上書きできる(#1279)。"""
+    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+    from app.rag.search_answer_profile_config import (
+        SearchAnswerProfileConfig,
+        resolve_search_answer_profile_settings,
+    )
+
+    config = SearchAnswerProfileConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(request_coverage_retrieval_enabled=False),
+    )
+
+    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
+
+    assert settings.rag_request_coverage_retrieval_enabled is False
+    assert Settings().rag_request_coverage_retrieval_enabled is True
+
+
 class HistoryOracle(SavingOracle):
     def __init__(self) -> None:
         super().__init__()

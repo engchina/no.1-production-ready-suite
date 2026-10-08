@@ -56,6 +56,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
+    request_coverage_retrieval_enabled: settings.request_coverage_retrieval_enabled,
     auto_field_filter_enabled: settings.auto_field_filter_enabled,
   };
 }
@@ -170,6 +171,14 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           checked={form.screen_linking_enabled}
           disabled={disabled}
           onChange={(checked) => update({ screen_linking_enabled: checked })}
+        />
+        <SwitchRow
+          id="answering-request-coverage"
+          label={t("settings.answering.requestCoverage")}
+          description={t("settings.answering.requestCoverageHint")}
+          checked={form.request_coverage_retrieval_enabled}
+          disabled={disabled}
+          onChange={(checked) => update({ request_coverage_retrieval_enabled: checked })}
         />
         <SwitchRow
           id="answering-auto-field-filter"

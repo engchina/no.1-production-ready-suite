@@ -6,8 +6,9 @@ import hashlib
 import json
 import re
 import unicodedata
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
+from time import monotonic
 from typing import Any, Callable, Iterable, Sequence
 
 from rag_engine.models.storage import AdbHybridSearchUnavailable
@@ -43,6 +44,17 @@ from rag_engine.retrieval.inquiry_conditions import (
     parse_inquiry_conditions,
 )
 from rag_engine.retrieval.task_contract import task_contract, filter_queries, query_rejection_reason
+from rag_engine.retrieval.request_coverage import (
+    COVERAGE_SCHEMA_VERSION,
+    CoverageBudget,
+    assess_targets,
+    coverage_counts,
+    coverage_targets,
+    evidence_texts,
+    re_retrieval_skip_reason,
+    run_targeted_retrievals,
+    select_new_parents,
+)
 from rag_engine.retrieval.evidence_selection import evidence_spans, record_fingerprint
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
@@ -1408,6 +1420,141 @@ def synthesize_grounded_answer(
     return GroundedAnswer(response, context, tuple(images), mode)
 
 
+def _request_coverage_budget(settings: Settings) -> CoverageBudget:
+    """設定から欠けた要求の再検索の予算を作る (#1279)。"""
+    return CoverageBudget(
+        enabled=bool(getattr(settings, "request_coverage_retrieval_enabled", False)),
+        max_queries=max(0, int(getattr(settings, "request_coverage_max_queries", 0) or 0)),
+        max_chunks=max(0, int(getattr(settings, "request_coverage_max_chunks", 0) or 0)),
+        deadline_seconds=max(0.0, float(getattr(settings, "request_coverage_deadline_seconds", 0.0) or 0.0)),
+    )
+
+
+def _coverage_tokenizer(settings: Settings) -> Callable[[str], Sequence[str]]:
+    """覆域の判定に使う分かち書き。全文検索の質問と同じ tokenizer・業務語を使う。"""
+    config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
+    domain_keywords = (settings.domain_keywords_override if settings.domain_keywords_override is not None
+                       else load_domain_keywords(settings.output_dir))
+    return lambda text: tokenize_text_search_query(text, domain_keywords=domain_keywords, config=config)
+
+
+def _cover_missing_requests(
+    question: str,
+    context: AnswerContext,
+    settings: Settings,
+    *,
+    run_id: Any,
+    preferred_engines: Sequence[str],
+    top_k: int,
+    neighbor_child_count: int,
+    rerank_enabled: bool,
+    inquiry_conditions: InquiryConditionParse | None,
+    retrieval_scope: str,
+    classification_filter: ClassificationFilter | None,
+    runtime_knowledge: RuntimeKnowledgeContext | None,
+    clock: Callable[[], float] = monotonic,
+) -> tuple[AnswerContext, dict[str, Any]]:
+    """要求ごとの根拠の覆域を判定し、根拠の無い要求だけを予算の範囲で 1 回ずつ再検索する (#1279)。
+
+    覆域の判定は決定的（LLM を呼ばない）。再検索は embedding・hybrid 検索・rerank だけで、文書の選択と
+    画面目録（LLM を呼ぶ）は使わない。足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。
+    戻り値は (回答に渡す context, 覆域の記録)。
+    """
+    tokenize = _coverage_tokenizer(settings)
+    targets = coverage_targets(question, tokenize)
+    rows = assess_targets(targets, evidence_texts(context))
+    budget = _request_coverage_budget(settings)
+    trace: dict[str, Any] = {
+        "schema_version": COVERAGE_SCHEMA_VERSION,
+        "requests": rows,
+        "counts": coverage_counts(rows),
+        "budget": asdict(budget),
+        "llm_calls": 0,
+    }
+    skip = re_retrieval_skip_reason(rows, budget)
+    if skip:
+        trace["re_retrieval"] = {"applied": False, "skipped": skip}
+        return context, trace
+
+    # 欠けた要求の検索では、文書の選択（後回し）と画面目録（LLM を呼ぶ）を使わない。
+    search_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
+    per_query = max(1, min(int(top_k), budget.max_chunks))
+
+    def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
+        return build_adb_hybrid_answer_context(
+            text, run_id, preferred_engines, search_settings,
+            top_k=per_query, neighbor_child_count=neighbor_child_count, max_records=per_query,
+            retrieval_queries=queries, rerank_enabled=rerank_enabled, inquiry_conditions=inquiry_conditions,
+            retrieval_scope=retrieval_scope, classification_filter=classification_filter,
+            runtime_knowledge=runtime_knowledge,
+        )
+
+    started = clock()
+    results, stop = run_targeted_retrievals(rows, targets, budget=budget, retrieve=retrieve,
+                                            runtime_knowledge=runtime_knowledge, tokenize=tokenize, clock=clock)
+    existing = {r.chunk_uid or r.id for r in context.records} | {
+        p.record.chunk_uid or p.record.id for p in context.evidence_tree}
+    selected = select_new_parents(results, existing, budget.max_chunks)
+    added_ids: list[str] = []
+    rejected = ""
+    if selected:
+        parents = tuple(replace(parent, reason="request_coverage") for _, parent in selected)
+        added = context_bundle_from_parent_evidence(parents, max_chars=MAX_CONTEXT_CHARS)
+        visible = list(context.records)
+        candidate = _merge_crag_evidence(
+            context, AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence,
+                                   evidence_tree=added.evidence_tree),
+            question, max_records=max(1, len(visible), len(added.records)), max_chars=MAX_CONTEXT_CHARS * 2)
+        merged_keys = {r.chunk_uid or r.id for r in candidate.records}
+        if visible and not {r.chunk_uid or r.id for r in visible} <= merged_keys:
+            rejected = "would_drop_existing_evidence"
+        else:
+            added_ids = [key for key in merged_keys - existing if key]
+            pool = {r.chunk_uid or r.id: r for r in (*context.expansion_records,
+                                                      *(r for res in results for r in res.expansion_records))}
+            context = replace(candidate, expansion_records=tuple(pool.values()),
+                              preferred_child_ids=context.preferred_child_ids,
+                              ranked_candidates=context.ranked_candidates, deferred_records=context.deferred_records,
+                              document_selection=context.document_selection)
+    added_set = set(added_ids)
+    trace["re_retrieval"] = {
+        "applied": bool(added_ids),
+        "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
+        "elapsed_ms": int((clock() - started) * 1000),
+        "queries": [{
+            "request_id": result.request_id,
+            "queries": list(result.queries),
+            "candidates": len(result.parents),
+            "added_chunk_ids": [(p.record.chunk_uid or p.record.id) for rid, p in selected
+                                if rid == result.request_id and (p.record.chunk_uid or p.record.id) in added_set],
+            "elapsed_ms": result.elapsed_ms,
+            **({"error": result.error} if result.error else {}),
+        } for result in results],
+        "added_chunk_ids": sorted(added_set),
+    }
+    if added_ids:
+        after = {row["id"]: row for row in assess_targets(targets, evidence_texts(context))}
+        for row in rows:
+            if row["id"] in after:
+                row["status_after"] = after[row["id"]]["status"]
+                row["evidence_ids_after"] = after[row["id"]]["evidence_ids"]
+        trace["counts_after"] = coverage_counts([after[row["id"]] for row in rows if row["id"] in after])
+    return context, trace
+
+
+def _coverage_step_lines(trace: dict[str, Any]) -> list[str]:
+    """覆域の工程の記録の行。"""
+    labels = {"supported": "根拠あり", "weak": "根拠が一部", "missing": "根拠なし", "unassessed": "判定なし"}
+    lines = [f"{row['id']}: {labels.get(row['status'], row['status'])}"
+             + (f" → {labels.get(row['status_after'], row['status_after'])}" if row.get("status_after") else "")
+             + f"（{_display_query(row['text'])}）" for row in trace.get("requests", ())]
+    re_retrieval = trace.get("re_retrieval") or {}
+    for query in re_retrieval.get("queries", ()):
+        lines.append(f"{query['request_id']} を再検索: 根拠 {len(query['added_chunk_ids'])} 件を追加"
+                     + (f"（失敗: {query['error']}）" if query.get("error") else ""))
+    return lines
+
+
 def _synthesize_answer_from_context(question: str, context: AnswerContext, settings: Settings, **options: Any) -> AnswerResponse:
     """回答だけが必要な呼出元（SDK・手動評価）向け。是正後の文脈や画像は返さない。"""
     return synthesize_grounded_answer(question, context, settings, **options).response
@@ -2235,6 +2382,25 @@ def answer_question_result(
                 retrieval_top_k=chunk_top_k,
             )
 
+        with _execution_step("要求ごとの根拠の確認",
+                             "質問の要求ごとに根拠があるかを確かめ、根拠の無い要求だけを探し直します。") as coverage_step:
+            context, request_coverage = _cover_missing_requests(
+                normalized_question, context, settings,
+                run_id=run_id, preferred_engines=preferred_engine_ids, top_k=chunk_top_k,
+                neighbor_child_count=chunk_neighbor_count, rerank_enabled=effective_rerank_enabled,
+                inquiry_conditions=inquiry_conditions, retrieval_scope=selected_retrieval_scope,
+                classification_filter=selected_classification_filter, runtime_knowledge=runtime_knowledge,
+            )
+            counts = request_coverage["counts"]
+            re_retrieval = request_coverage.get("re_retrieval") or {}
+            if re_retrieval.get("skipped") in {"disabled", "single_request"}:
+                coverage_step.hide()
+            coverage_step.result(
+                f"根拠あり {counts['supported']} 件、一部 {counts['weak']} 件、なし {counts['missing']} 件",
+                *_coverage_step_lines(request_coverage))
+            if re_retrieval.get("applied"):
+                coverage_step.impact(f"根拠の無い要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
+
         with _execution_step("回答に使う画像の確認", "根拠に含まれる画面・図を、回答するモデルへ原画像のまま見せるかを決めます。") as image_step:
             image_evidence = (
                 answer_image_evidence(context.records, settings.output_dir, question=normalized_question)
@@ -2262,6 +2428,8 @@ def answer_question_result(
         )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
+        response = replace(response, generation_trace={**(response.generation_trace or {}),
+                                                       "request_coverage": request_coverage})
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:
             response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
