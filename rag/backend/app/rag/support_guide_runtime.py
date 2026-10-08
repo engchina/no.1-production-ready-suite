@@ -504,6 +504,20 @@ def visible_plan(
     )
 
 
+def impact_applies(match: GuideMatch, steps: Iterable[SupportGuideStep] | None = None) -> bool:
+    """影響範囲・承認が、分かっている条件の場合に係るか（#1320）。
+
+    係る手順（`impact.steps`）を決めていなければ、すべての場合に係る。決めていれば、係る手順の
+    どれかが回答の材料に残る（外れた分岐の行き先でない）ときだけ係る。`steps` は `visible_plan`
+    の手順（渡さなければ求める）。
+    """
+    targets = match.content.impact.steps
+    if not targets:
+        return True
+    visible = {step.id for step in (steps if steps is not None else visible_plan(match)[0])}
+    return any(step in visible for step in targets)
+
+
 def _condition_text(condition: SupportGuideCondition) -> str:
     options = f"（{'／'.join(condition.allowed_values)}）" if condition.allowed_values else ""
     note = f"。{_SOURCE_NOTES[condition.source]}" if condition.source in _SOURCE_NOTES else ""
@@ -575,12 +589,22 @@ def _lines(match: GuideMatch) -> list[str]:
             + (f"（確かめ方: {item.check_method}）" if item.check_method else "")
         )
     impact = content.impact
-    scope = {"individual": "個別", "group": "グループ", "all": "全体"}[impact.scope]
-    lines.append(
-        f"影響範囲: {scope}" + ("。実施の前に承認が要る" if impact.approval_required else "")
-    )
-    if impact.approval_note:
-        lines.append(f"承認について: {impact.approval_note}")
+    # 分かっている条件で影響範囲・承認が係る手順が外れたら、影響範囲・承認を示させない（#1320）。
+    if impact_applies(match, steps):
+        scope = {"individual": "個別", "group": "グループ", "all": "全体"}[impact.scope]
+        titles = {step.id: step.title for step in content.steps}
+        target = (
+            "（手順「" + "」「".join(titles.get(i, i) for i in impact.steps) + "」に係る）"
+            if impact.steps
+            else ""
+        )
+        lines.append(
+            f"影響範囲: {scope}"
+            + ("。実施の前に承認が要る" if impact.approval_required else "")
+            + target
+        )
+        if impact.approval_note:
+            lines.append(f"承認について: {impact.approval_note}")
     if content.handoff.conditions:
         lines.append("人へ引き継ぐ条件: " + "、".join(content.handoff.conditions))
     lines.append(
