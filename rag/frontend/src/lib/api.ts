@@ -3181,6 +3181,17 @@ export const api = {
     ),
   importSupportGuides: (id: string, guides: unknown[]) =>
     request<SupportGuideImportData>(`${supportGuidesPath(id)}/import`, jsonBody({ guides })),
+  /** 保存した下書きで試しに答える（#1288）。回答を作るので回答生成の timeout を使う。 */
+  trySupportGuideDraft: (
+    id: string,
+    guideId: string,
+    body: { query: string; draft_revision: number; conditions: Record<string, string> },
+  ) =>
+    request<SupportGuideDraftTryData>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/try`,
+      jsonBody(body),
+      { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
+    ),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/suggest`,
@@ -3801,11 +3812,77 @@ export interface SupportGuideValidationData {
   issues: SupportGuideIssue[];
 }
 
+/** 取込の差分（#1288）の節。basic = 題名・説明。 */
+export type SupportGuideDiffSection =
+  | "basic"
+  | "goal"
+  | "applicability"
+  | "conditions"
+  | "steps"
+  | "branches"
+  | "references"
+  | "completion"
+  | "impact"
+  | "handoff";
+export type SupportGuideChangeKind = "added" | "removed" | "changed";
+
+/** 既存のガイドと取り込むガイドの違い 1 つ。 */
+export interface SupportGuideChange {
+  section: SupportGuideDiffSection;
+  kind: SupportGuideChangeKind;
+  /** 行の id（資料は document_id）。行の無い節は空。 */
+  key: string;
+  label: string;
+  /** 変わった項目（changed のときだけ）。 */
+  fields: string[];
+}
+
+/** 取り込むガイドと同じ id・名前の既存のガイドとの差分（#1288）。 */
+export interface SupportGuideImportDiff {
+  guide_id: string;
+  title: string;
+  matched_by: "id" | "title";
+  /** 比べた既存の内容（公開の版があれば公開の版、無ければ下書き）。 */
+  base: "published" | "draft";
+  revision: number;
+  status: SupportGuideStatus;
+  changes: SupportGuideChange[];
+}
+
 export interface SupportGuideImportItem {
   index: number;
   title: string | null;
   valid: boolean;
   issues: SupportGuideIssue[];
+  existing?: SupportGuideImportDiff | null;
+}
+
+/** 業務ガイドで答えたときの要約（回答の診断の guide）。 */
+export interface SupportGuideAnswerSummary {
+  guide_id: string;
+  revision: number;
+  title: string;
+  decision: "answer" | "branch" | "clarify" | "handoff";
+  known_conditions: { id: string; label: string; value: string | null; source?: string | null }[];
+  unknown_conditions: { id: string; label: string; handling?: string; state?: string; candidates?: string[] }[];
+  /** 下書きで試し、その下書きを使ったとき true。 */
+  draft?: boolean;
+}
+
+/** 下書きで試した回答（#1288）。利用者の回答の履歴・評価には入らない。 */
+export interface SupportGuideDraftTryData {
+  trace_id: string;
+  guide_id: string;
+  draft_revision: number;
+  published_revision: number | null;
+  /** この下書きのガイドが回答に使われたか。 */
+  guide_used: boolean;
+  guide: SupportGuideAnswerSummary | null;
+  outcome: string | null;
+  answer: string;
+  citations: RetrievedChunk[];
+  clarifications: { condition_id: string; label?: string; question?: string; options?: string[] }[];
+  elapsed_ms: number;
 }
 
 export interface SupportGuideImportPreviewData {

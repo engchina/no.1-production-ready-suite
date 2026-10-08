@@ -1327,6 +1327,25 @@ export function useValidateSupportGuide(searchAnswerProfileId: string) {
 }
 
 /** 取り込み（検証を通ったガイドを下書きとして作る）。 */
+/**
+ * 保存した下書きで試しに答える（#1288）。公開の版・一覧は変わらないので、キャッシュは無効にしない。
+ */
+export function useTrySupportGuideDraft(searchAnswerProfileId: string) {
+  return useMutation({
+    mutationFn: (args: {
+      guideId: string;
+      query: string;
+      draftRevision: number;
+      conditions: Record<string, string>;
+    }) =>
+      api.trySupportGuideDraft(searchAnswerProfileId, args.guideId, {
+        query: args.query,
+        draft_revision: args.draftRevision,
+        conditions: args.conditions,
+      }),
+  });
+}
+
 export function useImportSupportGuides(searchAnswerProfileId: string) {
   const qc = useQueryClient();
   return useMutation({

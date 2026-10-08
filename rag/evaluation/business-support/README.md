@@ -11,6 +11,7 @@
 | `error-e1023-notes.pdf` | 障害対応メモ。原因は 2 つのどちらかで、認証ログを見ないと分からない（現場のデータ） |
 | `portal-parameters.xlsx` | パラメータの一覧（既定値・設定例。現場の現在の設定値ではない） |
 | `business-support.json` | 評価セット（19 問。うち往復のあるケース 3 問・既知の条件を渡すケース 1 問）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>` |
+| `support-guides.json` | C（業務ガイドあり）の業務ガイド 2 つ（アクセス権限の付与: 付与先 `target` 個別 / グループ、アカウントの削除: 部門長の承認 `approved` はい / いいえ）。運用手順書の記載だけから作った（#1289）。参照は `file:<ファイル名>` |
 | `sources/*.html` | PDF の原稿 |
 
 ## 資料を作り直す
@@ -38,6 +39,53 @@ uv run python -m app.rag.evaluation_cli /tmp/business-support.resolved.json \
 
 同じナレッジベースへ取り込み直すときは `--knowledge-base-id` を渡します。質問ごとに回答（モデルの呼び出し 3〜5 回）を
 作るため、19 問（往復は返答ごとに回答を作る）で 20 分前後かかります。
+
+## A / C / D を比べる（handoff §14.3。#1289）
+
+| 経路 | 内容 | 実行 |
+|---|---|---|
+| A | 業務ガイドなし（全体の既定とナレッジベースの指定） | `evaluation_cli` に `--output` の評価セット |
+| C | 業務ガイドあり（検索・回答プロファイルを指定した評価。#1249） | `evaluation_cli` に `--guided-output` の評価セット |
+| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business_rag_research`）の Run | `agent_evaluation_cli run` |
+
+`evaluation_corpus_cli` に `--guides` を渡すと、資料を取り込んだナレッジベースを参照する検索・回答プロファイルを作り、
+`support-guides.json`（参照の `file:` は取り込んだ文書の ID に置き換える）を取り込んで公開し、そのプロファイルで評価する
+評価セットを `--guided-output` に書きます。
+
+```bash
+cd rag/backend
+uv run python -m app.rag.evaluation_corpus_cli ../evaluation/business-support/business-support.json \
+  --api-base-url http://127.0.0.1:8000 --output /tmp/bs.resolved.json \
+  --guides ../evaluation/business-support/support-guides.json --guided-output /tmp/bs.guided.json
+# A / C（RAG の評価 job）
+uv run python -m app.rag.evaluation_cli /tmp/bs.resolved.json --api-base-url http://127.0.0.1:8000 --output /tmp/a.json
+uv run python -m app.rag.evaluation_cli /tmp/bs.guided.json --api-base-url http://127.0.0.1:8000 --output /tmp/c.json
+# D（Agent の Run。C のプロファイルの ID は bs.guided.json の search_answer_profile_id）
+uv run python -m app.rag.agent_evaluation_cli run /tmp/bs.resolved.json \
+  --agent-api-base-url http://127.0.0.1:8020 --create-agent \
+  --search-answer-profile-id <C のプロファイル> \
+  --guides ../evaluation/business-support/support-guides.json --output /tmp/d.json
+# 比べる表（docs/answer-baseline-2026-10.md に貼る）
+uv run python -m app.rag.agent_evaluation_cli summarize A=/tmp/a.json C=/tmp/c.json D=/tmp/d.json
+```
+
+`evaluation_cli` は閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。
+
+D の採点は、RAG の評価ランナーと同じ関数（`app.rag.evaluation.score_case_answers` / `summarize_case_results`）で
+行います。この CLI は RAG の backend にあり、Agent は公開の HTTP API（`POST /api/runs`・`GET /api/runs/{id}`）だけで
+呼びます（Agent のコードは import しません）。Agent の Run を、RAG の採点が読む応答の形にするときの違いは次のとおりです。
+
+- 回答は Run の成果物 `answer`（最終の検証の後の本文）。引用は、その Run の `rag_search` / `rag_retrieve_evidence` が
+  返した根拠です。根拠の本文は MCP の抜粋（`excerpt`。最大 1000 文字）なので、必要な根拠はその範囲で照合します。
+- 対応（outcome）は、その Run の最後の `rag_search` の `outcome`（結果の `outcome_source=agent_rag_search`）です。
+  `rag_search` を呼ばなかった Run は、回答の最後の行が問い（？）なら確認の質問、それ以外は RAG の評価と同じ推定
+  （根拠の無い回答・拒答の文は拒答）にします（`outcome_source=inferred`）。
+- 往復のあるケースの返答は、同じ会話（`thread_id`）の次の Run として送ります。ケースの既知の条件（`conditions`）は
+  Agent に構造化して渡す口が無いため、最初の質問の後ろに「（既知の条件: 付与先は「グループ」）」の文で足します。
+- 1 Run の待ちの上限は `--run-timeout`（既定 900 秒）。終わらない Run は取り消してケースの失敗にします。承認待ちで
+  止まった Run もケースの失敗です。結果の `agent.runs` に Run ごとの状態・時間・対応・最終の検証の状態・モデルの
+  呼び出しの回数・ツールの呼び出しの回数があります。
+- Agent の API は local の認証（`AGENT_AUTH_MODE=local`）で呼びます（RAG の評価の CLI と同じ）。
 
 ## 採点の考え方
 
@@ -69,14 +117,16 @@ uv run python -m app.rag.evaluation_cli /tmp/business-support.resolved.json \
 - 渡した条件を確認の質問でもう一度聞いたら（回答の記録の `clarifications` の `condition_id`）、失敗理由
   `known_condition_reasked` を付けます。
 - `conditions` の id は、業務ガイド（#1238）の条件の id に合わせます。この評価セットは、付与先を `target`（個別 /
-  グループ）、部門長の承認を `approved`（はい / いいえ）とする業務ガイドを前提にしています（業務ガイドそのものは
-  リポジトリに置いていません）。業務ガイドを使わない評価（検索・回答プロファイルを指定しない評価）では、条件は回答に
+  グループ）、部門長の承認を `approved`（はい / いいえ）とする業務ガイドを前提にしています（業務ガイドは
+  `support-guides.json`。#1289）。業務ガイドを使わない評価（検索・回答プロファイルを指定しない評価）では、条件は回答に
   影響しません。
 - 区分は、業務の流れ・資料の族ごとに分けています（同じ族の言い換えが dev と holdout に分かれないように）。holdout は
   アカウントの削除・パラメータの一覧・地域別集計表の版・資料に無いアカウントの自動の無効化の族で、19 問のうち 7 問
   （5 分類のどれも含む）です。holdout の結果を見て評価セットや業務ガイドを直したら、そのケースは dev に移します。
-- 往復の返答・必要な根拠の語句は、同梱の資料の記載だけから作っています（実在の顧客のデータや、資料に無い値を足して
-  いません）。
+- 往復の返答・必要な根拠の語句と業務ガイドは、同梱の資料の記載だけから作っています（実在の顧客のデータや、資料に無い
+  値を足していません）。業務ガイドの質問の例・照合の語には、評価セットの質問（特に holdout）を写していません（handoff
+  §14.1「指南の生成・設定に使った質問は未見のテストにしない」）。アカウントの削除の業務ガイドは holdout の族に当たる
+  ため、holdout の結果を見て業務ガイドを直したら、そのケースは dev に移します。
 
 ## nightly で流さない理由
 
