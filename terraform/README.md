@@ -202,7 +202,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 
   - CA の秘密鍵は `/u01/aipoc/ssl/ca.key`（root の 0600）で、Compute の外へは出しません。利用者には CA の証明書（`/platform/ca.crt`）だけを配ります。
     各製品の「システム設定 > 外観と証明書」の「HTTPS の証明書」から、ダウンロードと端末への取り込み方を確認できます。
-  - 公開 IP は OCI の instance metadata に無いため、Compute に公開 IP があるときだけ外部のサービス（`https://checkip.amazonaws.com` など）に
+  - 公開 IP は OCI の instance metadata に無いため、Compute に公開 IP があるときだけ外部のサービス（既存の No.1-RAG / No.1-SQL-Assist と同じ `http://whatismyip.akamai.com/`、取れなければ `https://checkip.amazonaws.com`）に
     送信元の IP を問い合わせます。分からないときは private IP だけの証明書を作り、`/var/log/suite-init.log` に警告を出します。
     公開 IP を指定して作り直す: `sudo bash /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-tls.sh renew --public-ip <公開 IP>`
   - サーバー証明書は、期限の 30 日前から timer（`production-ready-suite-tls-renew.timer`、毎日）が作り直して Nginx を reload します。CA は作り直しません。

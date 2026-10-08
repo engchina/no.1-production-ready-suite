@@ -101,6 +101,29 @@ fi
 [ "$(SUITE_TLS_PUBLIC_IP=198.51.100.7 suite_tls_detect_public_ip)" = "198.51.100.7" ] || fail "明示した公開 IP"
 printf '198.51.100.8\n' > "${SUITE_TLS_PROPS_DIR}/public_ip.txt"
 [ "$(suite_tls_detect_public_ip)" = "198.51.100.8" ] || fail "props の公開 IP"
+# 既定の問い合わせ先は既存の製品（No.1-RAG / No.1-SQL-Assist）と同じ akamai を先に、checkip.amazonaws.com を 1 つだけ。
+[ "${SUITE_TLS_PUBLIC_IP_URLS}" = "http://whatismyip.akamai.com/ https://checkip.amazonaws.com" ] \
+  || fail "公開 IP の問い合わせ先: ${SUITE_TLS_PUBLIC_IP_URLS}"
+# 公開 IP がある Compute では、問い合わせの結果が IPv4 でなければ次へ進み、どれも取れなければ失敗（private IP だけにする）。
+rm -f "${SUITE_TLS_PROPS_DIR}/public_ip.txt"
+printf 'true\n' > "${SUITE_TLS_PROPS_DIR}/assign_public_ip.txt"
+fake_bin="${task_dir}/fake-bin"
+mkdir -p "${fake_bin}"
+cat > "${fake_bin}/curl" <<'CURL'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "${arg}" in
+    http://whatismyip.akamai.com/) printf '<html>blocked</html>'; exit 0 ;;
+    https://checkip.amazonaws.com) printf '198.51.100.9\n'; exit 0 ;;
+  esac
+done
+exit 7
+CURL
+chmod +x "${fake_bin}/curl"
+[ "$(PATH="${fake_bin}:${PATH}" suite_tls_detect_public_ip)" = "198.51.100.9" ] || fail "akamai の後に checkip.amazonaws.com を試さない"
+if PATH="${fake_bin}:${PATH}" SUITE_TLS_PUBLIC_IP_URLS="http://whatismyip.akamai.com/" suite_tls_detect_public_ip >/dev/null 2>&1; then
+  fail "IPv4 でない応答を公開 IP にした"
+fi
 if SUITE_TLS_PUBLIC_IP="not-an-ip" suite_tls_detect_public_ip >/dev/null 2>&1; then
   fail "IPv4 でない指定を受け入れた"
 fi

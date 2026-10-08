@@ -25,8 +25,10 @@ SUITE_TLS_DIR="${SUITE_TLS_DIR:-/u01/aipoc/ssl}"
 SUITE_TLS_PROPS_DIR="${SUITE_TLS_PROPS_DIR:-/u01/aipoc/props}"
 SUITE_TLS_IMDS_VNICS_URL="${SUITE_TLS_IMDS_VNICS_URL:-http://169.254.169.254/opc/v2/vnics/}"
 # 公開 IP は OCI の IMDS に無いため、Compute に公開 IP があるとき（assign_public_ip.txt が true）だけ、
-# 外向きの通信の送信元の IP を返すサービスに問い合わせる（IGW 経由なら公開 IP と同じ）。
-SUITE_TLS_PUBLIC_IP_URLS="${SUITE_TLS_PUBLIC_IP_URLS:-https://checkip.amazonaws.com https://ifconfig.me/ip}"
+# 外向きの通信の送信元の IP を返すサービスに問い合わせる（IGW 経由なら公開 IP と同じ）。既存の製品
+# （No.1-RAG / No.1-SQL-Assist の init_script.sh の `curl -s -m 10 http://whatismyip.akamai.com/`）と同じ akamai を先に使い、
+# 取れなければ checkip.amazonaws.com を 1 つだけ試す。どちらも IPv4 でなければ使わず、private IP だけの証明書にする。
+SUITE_TLS_PUBLIC_IP_URLS="${SUITE_TLS_PUBLIC_IP_URLS:-http://whatismyip.akamai.com/ https://checkip.amazonaws.com}"
 SUITE_TLS_OPENSSL="${SUITE_TLS_OPENSSL:-openssl}"
 
 suite_tls_log() {
