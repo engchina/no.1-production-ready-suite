@@ -1,6 +1,7 @@
 """解析結果プレビュー用の crop API(PDF / 画像の bbox 切り出し)。"""
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import fitz  # type: ignore[import-untyped]
 import pytest
@@ -276,3 +277,88 @@ def test_recipe_preview_pages_use_recipe_prepared_artifact(
     assert _size(image.content) == (600, 800)
     missing = client.get("/api/documents/doc-1/recipes/other/preview-pages")
     assert missing.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# MCP の図の画像（上限つきの切り出しと、処理レシピのファイル。#1282）
+# ---------------------------------------------------------------------------
+
+
+def test_crop_png_bounded_limits_long_edge_and_upscales_small_figures() -> None:
+    data = _pdf_bytes()
+
+    # 頁全体(600x800 pt)を長い辺 400 px 以下にする。
+    whole = document_crop.crop_png_bounded(
+        data, 1, (0, 0, 600, 800), (600, 800), max_edge=400, max_bytes=1_000_000
+    )
+    assert (whole.width, whole.height) == _size(whole.png)
+    assert max(whole.width, whole.height) <= 400
+    # 小さな図(200x100 pt)は max_dpi まで拡大する(200 dpi で約 556x278 px)。
+    small = document_crop.crop_png_bounded(
+        data, 1, (100, 100, 300, 200), (600, 800), max_edge=1568, max_bytes=1_000_000
+    )
+    assert 540 <= small.width <= 560
+    assert 270 <= small.height <= 285
+
+
+def test_crop_png_bounded_rejects_too_large_and_invalid_regions() -> None:
+    data = _pdf_bytes()
+
+    with pytest.raises(document_crop.CropTooLargeError):
+        document_crop.crop_png_bounded(
+            data, 1, (0, 0, 600, 800), (600, 800), max_edge=1568, max_bytes=10
+        )
+    with pytest.raises(ValueError, match="切り出し範囲"):
+        document_crop.crop_png_bounded(
+            data, 1, (0, 0, 700, 800), (600, 800), max_edge=400, max_bytes=1_000_000
+        )
+    with pytest.raises(ValueError, match="ページ番号"):
+        document_crop.crop_png_bounded(
+            data, 2, (0, 0, 600, 800), (600, 800), max_edge=400, max_bytes=1_000_000
+        )
+
+
+async def test_load_parsed_source_uses_recipe_prepared_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """図の bbox はレシピが解析したファイルの座標なので、そのレシピの artifact を読む。"""
+    detail = SimpleNamespace(object_storage_path="docs/doc-1/source.docx", preprocess_artifact=None)
+    read: list[str] = []
+
+    class FakeOracle:
+        async def get_document(self, document_id: str) -> object | None:
+            return detail if document_id == "doc-1" else None
+
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
+            if recipe_id != "recipe-1":
+                return None
+            return {
+                "preprocess_artifact": {
+                    "derivation_id": "d-1",
+                    "profile": "office_to_pdf",
+                    "converted": True,
+                    "object_storage_path": "docs/doc-1/recipe-1/prepared.pdf",
+                    "content_type": "application/pdf",
+                    "file_name": "prepared.pdf",
+                }
+            }
+
+    class FakeStorage:
+        async def get(self, path: str) -> bytes:
+            read.append(path)
+            return b"pdf"
+
+    monkeypatch.setattr(document_crop, "ObjectStorageClient", FakeStorage)
+    oracle = cast(Any, FakeOracle())
+
+    await document_crop.load_parsed_source(oracle, "doc-1", "recipe-1")
+    # レシピが無ければ文書のファイル(ここでは原本)。
+    await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
+    await document_crop.load_parsed_source(oracle, "doc-1")
+    assert read == [
+        "docs/doc-1/recipe-1/prepared.pdf",
+        "docs/doc-1/source.docx",
+        "docs/doc-1/source.docx",
+    ]
+    with pytest.raises(document_crop.DocumentSourceNotFoundError):
+        await document_crop.load_parsed_source(oracle, "doc-2", "recipe-1")

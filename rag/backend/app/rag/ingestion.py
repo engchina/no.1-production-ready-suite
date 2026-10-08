@@ -57,6 +57,7 @@ from app.rag.chunking_small_to_big import (
     small_to_big_fallback_needed,
 )
 from app.rag.chunking_strategy import resolve_chunking_params
+from app.rag.cross_references import annotate_cross_references
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     extract_fields_from_extraction,
@@ -1261,6 +1262,8 @@ class IngestionPipeline:
         # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
         chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
         apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))
+        # 本文の交差参照(「第3章を参照」など)を同じ文書の節に解決して metadata に残す(#1280)。
+        annotate_cross_references(chunks, document_title=source_name)
         return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
 
     async def _run_index_phase(
