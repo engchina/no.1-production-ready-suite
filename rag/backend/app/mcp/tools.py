@@ -43,6 +43,12 @@ from app.rag.answer_validation import (
     GuideProfileNotFoundError,
     validate_answer,
 )
+from app.rag.cross_references import (
+    REFERENCE_FROM_KEY,
+    REFERENCE_LABEL_KEY,
+    reference_targets,
+    split_section_path,
+)
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_runtime import GuideMatch, clarification_questions, rank_guides
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
@@ -297,6 +303,25 @@ class EvidenceLocator(BaseModel):
     )
 
 
+class EvidenceReference(BaseModel):
+    """根拠の本文が参照する節・文書（「第3章を参照」など。取込時に抜き出す。#1280）。"""
+
+    label: str = Field(description="本文の参照の表記（例: 第3章、別紙1、「権限」）。")
+    document_title: str | None = Field(
+        default=None, description="他の文書への参照の文書名（同じ文書なら null）。"
+    )
+    section_path: list[str] = Field(
+        default_factory=list,
+        description="同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
+    )
+    resolved: bool = Field(
+        description=(
+            "参照先の節を取込時に決められたか（他の文書への参照は回答のときに検索範囲から"
+            "決めるので false）。"
+        )
+    )
+
+
 class RagEvidence(BaseModel):
     """検索・回答の根拠 1 件。"""
 
@@ -323,6 +348,19 @@ class RagEvidence(BaseModel):
             "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない"
             "（filters の include_superseded=true で含める）。"
         ),
+    )
+    references: list[EvidenceReference] = Field(
+        default_factory=list, description="この根拠の本文が参照する節・文書（#1280）。"
+    )
+    reference_from: str | None = Field(
+        default=None,
+        description=(
+            "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の"
+            " evidence_id（#1280）。"
+        ),
+    )
+    reference_label: str | None = Field(
+        default=None, description="reference_from の根拠の本文の参照の表記。"
     )
 
 
@@ -557,6 +595,10 @@ class ReadSourceOutput(VersionedOutput):
     superseded: bool = Field(
         default=False, description="新しい版に置き換えた文書（旧版）の根拠か。"
     )
+    references: list[EvidenceReference] = Field(
+        default_factory=list,
+        description="本文が参照する節・文書（#1280。続きは rag_search で参照先を検索する）。",
+    )
 
 
 def _metadata_str(metadata: dict[str, Any], key: str) -> str | None:
@@ -601,6 +643,19 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     )
 
 
+def _references(metadata: dict[str, Any]) -> list[EvidenceReference]:
+    """chunk の metadata に保存した交差参照（#1280）を根拠の参照にする。"""
+    return [
+        EvidenceReference(
+            label=target.label,
+            document_title=target.document_title,
+            section_path=list(split_section_path(target.section_path)),
+            resolved=target.resolved,
+        )
+        for target in reference_targets(metadata)
+    ]
+
+
 def _bbox(value: object) -> list[float] | None:
     """chunk の metadata の bbox（JSON の文字列か list）を 4 つの数にする。"""
     if isinstance(value, str):
@@ -642,6 +697,9 @@ def _evidence(chunk: RetrievedChunk) -> RagEvidence:
         if chunk.rerank_score is not None
         else _float_or_none(metadata.get("rerank_score")),
         superseded=metadata.get("document_superseded") is True,
+        references=_references(metadata),
+        reference_from=_metadata_str(metadata, REFERENCE_FROM_KEY),
+        reference_label=_metadata_str(metadata, REFERENCE_LABEL_KEY),
     )
 
 
@@ -778,6 +836,7 @@ async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput:
         parent_text=parent_text[: arguments.max_chars] if parent_text else None,
         parent_truncated=bool(parent_text) and len(parent_text or "") > arguments.max_chars,
         superseded=metadata.get("document_superseded") is True,
+        references=_references(metadata),
     )
 
 
