@@ -95,3 +95,37 @@ def test_business_support_set_covers_every_category_and_its_corpus_exists() -> N
         for name in names
         if name.endswith(".pdf")
     )
+
+
+def test_business_support_set_has_splits_turns_and_evidence_from_its_corpus() -> None:
+    """区分・往復・既知の条件・必要な根拠（#1284）は、同梱の資料だけを使う。"""
+    import re
+
+    from app.rag.evaluation_handling import contains_normalized
+
+    corpus = Path(__file__).resolve().parents[2] / "evaluation/business-support"
+    payload = json.loads((corpus / "business-support.json").read_text(encoding="utf-8"))
+    request = EvaluationRunRequest.model_validate(payload)
+
+    # すべてのケースに区分があり、holdout は 3 分の 1 前後で、5 分類のどれも含む。
+    assert all(case.split in {"dev", "holdout"} for case in request.cases)
+    holdout = [case for case in request.cases if case.split == "holdout"]
+    assert 0.25 <= len(holdout) / len(request.cases) <= 0.45
+    assert {case.category for case in holdout} == {
+        "document_answerable",
+        "clarification_required",
+        "environment_data_required",
+        "knowledge_missing",
+        "conflicting_sources",
+    }
+    # 複数往復と既知の条件のケースがある。
+    assert any(case.turns for case in request.cases)
+    assert any(case.conditions for case in request.cases)
+    # 必要な根拠の語句は、指した資料の原稿に実際に書いてある（架空の値を足さない）。
+    evidence = [item for case in request.cases for item in case.required_evidence]
+    assert evidence
+    for item in evidence:
+        assert item.document_id is not None and item.document_id.startswith("file:")
+        source = corpus / "sources" / f"{Path(item.document_id.removeprefix('file:')).stem}.html"
+        text = re.sub(r"<[^>]+>", "", source.read_text(encoding="utf-8"))
+        assert contains_normalized(text, item.text), item.id
