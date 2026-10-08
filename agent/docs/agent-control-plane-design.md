@@ -377,10 +377,13 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 使っていない Run は、Agent が RAG の根拠のツールを持てば `unvalidated`（`no_rag_evidence`）にして「資料と照らし合わせて
 確かめていません」を足し、持たなければ `skipped` で回答はそのまま。ただし利用者への確認の質問だけの回答は、
 資料の主張を含まないので `skipped`（`clarification_only`）にして注記しない（#1306）。主張ではない段落（見出し・
-出典の行・利用者への質問・資料に記載が無いことだけを述べる文・「確かめられていない点」の節）は、RAG の判定に
-かかわらず外さない（#1306。`answer_passages` が決定的に判定し、成果物の段落に `non_claim` を付ける。迷うもの・
-数量や操作を抱き合わせた文は主張として扱う）。RAG の `rag_validate_answer` も、見出し・出典の行・質問は監査せず
-`claims` に含めない。段落を外した後に見出し・出典だけが残れば、それも消す。
+出典の行〔「セクション:」「ページ:」などの位置のラベル・根拠の ID の括弧を含む。#1317〕・Markdown の表の区切りと
+見出しの行〔#1317。表の本文の行は主張のまま〕・利用者への質問・資料に記載が無いことだけを述べる文と答えられないと
+言い切る拒答の文〔#1317〕・「確かめられていない点」の節）は、RAG の判定にかかわらず外さない（#1306。`answer_passages`
+が決定的に判定し、成果物の段落に `non_claim` を付ける。迷うもの・数量や操作を抱き合わせた文は主張として扱う）。RAG の
+`rag_validate_answer` も、見出し・出典の行・表の区切りと見出し・質問は監査せず `claims` に含めない。段落を外した後に
+見出し・出典・表の形だけが残れば、それも消す。利用者に現場のデータ・記録（ログ・設定値・明細など）の確認を求める段落
+には、判定とは別に `environment_check` を付ける（#1317。主張のまま確かめて外す。回答の対応の「実データの確認」の印）。
 回答の対応（#1305）: Control Plane は最終の検証の後、回答の成果物（`kind="answer"`）の `outcome` に、RAG の回答の記録
 （AnswerEnvelope）と同じ語彙の対応（`answered` / `conditional` / `needs_clarification` / `needs_environment_data` /
 `needs_human` / `insufficient_evidence`）を、モデルを呼ばずに決めて残す（`answer_outcome`。内容は `value`・決めた手がかりの
@@ -389,10 +392,11 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 根拠を集め直していない）ならその対応（`needs_environment_data` の後に現場のデータの道具が成功したら `answered` /
 `conditional`、確認を求められたが質問だけでなく答えたら `conditional`、`answered` でも回答が不足を示せば `conditional`）、
 `rag_search` に拠らず業務ガイドの判断が人への引き継ぎなら `needs_human`、それ以外は Agent が自分で組み立てた回答として
-段落で決める（主張の段落〔最終の検証で外した段落と、実データの確認を促すだけの段落〔RAG の判定 `data_confirmation`〕を
-除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、それ以外は拒答。主張があり、不足の印〔資料に
-記載が無い文・主張に添えた質問・「確かめられていない点」の節・外した段落・決定的な検査の error・実データの確認〕があれば
-`conditional`、無ければ `answered`）。決められなければ `outcome` を付けずに回答を保存する。業務支援の評価（#1289 の D）は
+段落で決める（主張の段落〔最終の検証で外した段落と、実データの確認を促す段落〔RAG の判定 `data_confirmation` か、
+外していない `environment_check` の段落。#1317〕を除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、
+それ以外は拒答。主張があり、不足の印〔資料に記載が無い文・拒答の文・主張に添えた質問・「確かめられていない点」の節・
+根拠で確かめられない・矛盾として外した段落〔`unsupported` / `contradicted`。確かめが終わらなかった `unassessed` だけなら
+付けない。#1317〕・決定的な検査の error・実データの確認〕があれば `conditional`、無ければ `answered`）。決められなければ `outcome` を付けずに回答を保存する。業務支援の評価（#1289 の D）は
 これで採点する（`rag/evaluation/business-support/README.md`）。モデルに対応を申告させる（構造化出力）方式は、回答の形が
 Agent ごとに変わり、申告と本文の食い違いの扱いも要るため採らない。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
