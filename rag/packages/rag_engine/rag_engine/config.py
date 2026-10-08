@@ -263,6 +263,12 @@ class Settings:
     retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K_SETTING
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
+    # 要求ごとの根拠の覆域を判定し、根拠の無い要求だけを 1 回ずつ再検索する (#1279)。LLM は呼ばない
+    # （embedding・hybrid 検索・rerank だけ）。回数・足す根拠の数・期限で抑える。
+    request_coverage_retrieval_enabled: bool = True
+    request_coverage_max_queries: int = 2
+    request_coverage_max_chunks: int = 4
+    request_coverage_deadline_seconds: float = 10.0
 
     @property
     def vision_model(self) -> str:
@@ -408,6 +414,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
+        request_coverage_retrieval_enabled=_env_bool(env, "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL", True),
+        request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
+        request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),
+        request_coverage_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS", 10.0)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,

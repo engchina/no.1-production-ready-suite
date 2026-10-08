@@ -225,6 +225,15 @@ def build_engine_settings(
         "RAG_ENGINE_ANSWER_IMAGES": "1" if answer_images_enabled(settings) else "0",
         # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
         "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
+        # 根拠の無い要求だけの再検索と予算(#1279)。
+        "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": (
+            "1" if settings.rag_request_coverage_retrieval_enabled else "0"
+        ),
+        "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": str(settings.rag_request_coverage_max_queries),
+        "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": str(settings.rag_request_coverage_max_chunks),
+        "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
+            settings.rag_request_coverage_deadline_seconds
+        ),
     }
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -1430,6 +1439,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "generated_queries": list(result.generated_queries),
         "text_search_tokens": list(result.text_search_tokens),
         "crag_attempt_count": len(result.crag_attempts or ()),
+        # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
+        "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }
