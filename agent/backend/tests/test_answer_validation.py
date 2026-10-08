@@ -1023,6 +1023,103 @@ def test_unverified_section_keeps_points_but_not_operation_steps() -> None:
     )
 
 
+EVIDENCE_REF = (
+    "【証拠 ID: 03ac895f1d744a2b9eab4dd569eb68fc:"
+    "b245283c90ea80e5d8aadd3283e6027f148113c0aa42c59bbf12923cc59ae01c:1】"
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        # 出典の位置のラベル（#1317。da-trial-account-expiry）。
+        (
+            "- セクション: 「サンプル業務ポータル 運用手順書 第3版」 → "
+            "**2. 検証用アカウントの登録**",
+            "citation",
+        ),
+        ("- ページ: 1  ", "citation"),
+        ("- **根拠**：regional-report-guide-v2.pdf、2. 出力の手順（ページ1）", "citation"),
+        # 表のセルに分かれた出典（da-trial-account-setup）。
+        (f"| 「1. 前提」 （ページ1）{EVIDENCE_REF} |", "citation"),
+        (
+            "（*portal-operations-manual.pdf*、セクション「3. アクセス権限の付与」）【証拠1】",
+            "citation",
+        ),
+        ("- 「サンプル業務ポータル 運用手順書 第3版」 6. アカウントの削除", "citation"),
+        # 表の区切りの行・区切り線。
+        ("|------|----------|------|", "table"),
+        ("| :--- | ---: |", "table"),
+        ("---", "table"),
+        # 拒答の文（km-license-fee・km-password-policy）と、検索結果に該当が無かった文。
+        ("推測で金額を示すことはできません。", "absence"),
+        (
+            "そのため、パスワードは何文字以上にすべきかについて根拠のある回答はできません。",
+            "absence",
+        ),
+        (
+            "- rag__rag_lookup_guides の検索結果でも、今回の質問に該当する業務ガイドは"
+            "返ってきませんでした。",
+            "absence",
+        ),
+        # 主張のまま（外す対象）。
+        ("- ページ: 管理画面で「削除」を押してください", None),
+        ("- 抜粋: 「…有効期限は最長 30 日です。」", None),
+        ("- 「有効期限は最長 30 日です。」", None),
+        ("- 「検証用」", None),
+        ("| 締め日 | 毎月 10 日 |", None),
+        ("この機能では、アカウントを削除することはできません。", None),
+        ("利用者を検索してもヒットしません。", None),
+        ("年間ライセンス費用は 120,000 円のため、それ以上の金額はお示しできません。", None),
+        (f"| 2. 登録 | 1. 「利用者」を開く 2. 「追加」を押す | {EVIDENCE_REF} |", None),
+    ],
+    ids=[f"case{index}" for index in range(21)],
+)
+def test_citations_tables_and_refusals_are_not_claims(text: str, kind: str | None) -> None:
+    # #1317: #1306 の判定から漏れて unassessed で外れ、回答の対応を誤らせていた段落。
+    assert non_claim_passages(text).get(text.strip()) == kind
+
+
+TABLE_HEADER = "| 手順 | 操作内容 | 根拠 |"
+TABLE_SEPARATOR = "|------|----------|------|"
+TABLE_ROW = "| 1. 前提確認 | 「ポータル管理者」ロールが要ります | 「1. 前提」（ページ1） |"
+
+
+def test_table_header_is_structure_only_before_a_separator() -> None:
+    answer = f"検証用アカウントの登録の手順です。\n\n{TABLE_HEADER}\n{TABLE_SEPARATOR}\n{TABLE_ROW}"
+    kinds = non_claim_passages(answer)
+    assert kinds[TABLE_HEADER] == "table"
+    assert kinds[TABLE_SEPARATOR] == "table"
+    # 表の本文の行は主張のまま。区切りの行が後ろに無い行は見出しにしない。
+    assert TABLE_ROW not in kinds
+    assert TABLE_HEADER not in non_claim_passages(f"{TABLE_HEADER}\n{TABLE_ROW}")
+    # 本文の行をすべて外したら、表の見出しと区切りだけを本文として出さない。
+    lead = "検証用アカウントの登録の手順です。"
+    assert withhold_paragraphs(answer, {lead, TABLE_ROW}) == ""
+    assert (
+        withhold_paragraphs(answer, {TABLE_ROW}) == f"{lead}\n\n{TABLE_HEADER}\n{TABLE_SEPARATOR}"
+    )
+
+
+def test_table_and_location_lines_are_not_withheld() -> None:
+    # da-trial-account-setup: 表の見出し・区切り・出典のセルが unassessed で外れ、
+    # 本文から消えていた。
+    citation = f"| 「1. 前提」 （ページ1）{EVIDENCE_REF} |"
+    row = "| 1. 前提確認 | 本操作は「ポータル管理者」ロールを持つ利用者のみが実施可能です。"
+    answer = "\n".join([TABLE_HEADER, TABLE_SEPARATOR, f"{row} {citation}"])
+    result = _verdict(
+        _claim(TABLE_HEADER, "unassessed", "テーブルのヘッダー。"),
+        _claim(TABLE_SEPARATOR, "unassessed", "テーブルの区切り線。"),
+        _claim(row, "supported", "根拠に記載。"),
+        _claim(citation, "unassessed", "引用情報の記載。"),
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    assert published == answer
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+
 def _answer_outcome(run: RunState) -> dict[str, Any]:
     [artifact] = [item for item in run.artifacts if item.kind == "answer"]
     outcome = artifact.content["outcome"]

@@ -24,7 +24,7 @@ from rag_engine.evaluation.answer_eval import (
     _parse_checked,
 )
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
-from rag_engine.generation.operation_audit import is_non_claim_passage
+from rag_engine.generation.operation_audit import is_non_claim_passage, table_header_lines
 
 VALIDATION_RUBRIC_VERSION = 1
 
@@ -87,11 +87,13 @@ def validate_answer_claims(
 
     evidence_items は ``{id, source, page_start, page_end, text}``（id は chunk の id）。
     戻り値は status（completed / no_claims / input_too_large）・claim_checks・件数・切り詰め。
-    見出し・出典の行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306）。
+    見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
     """
-    # 見出し・出典の行・利用者への質問は主張ではないので、決定的に除いてから監査する（#1306。
-    # モデルが not_a_claim にしても見出しと判定できない出典・質問が「監査されなかった」になっていた）。
-    passages = [passage for passage in _answer_passages(answer_text) if not is_non_claim_passage(passage["text"])]
+    # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
+    # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
+    headers = table_header_lines(answer_text)
+    passages = [passage for passage in _answer_passages(answer_text)
+                if not is_non_claim_passage(passage["text"], table_headers=headers)]
     base: dict[str, Any] = {"rubric_version": VALIDATION_RUBRIC_VERSION, "claim_checks": []}
     if not passages:
         return {**base, "status": "no_claims"}
