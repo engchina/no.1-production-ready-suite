@@ -51,6 +51,7 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
 )
 
+from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
     ANSWER_VALIDATION_NAME,
@@ -59,6 +60,7 @@ from app.features.agent.answer_validation import (
     MAX_QUERY_CHARS,
     NO_EVIDENCE_NOTICE,
     REASON_ANSWER_TOO_LONG,
+    REASON_CLARIFICATION_ONLY,
     REASON_CONNECTION_NOT_FOUND,
     REASON_EMPTY_ANSWER,
     REASON_NO_RAG_EVIDENCE,
@@ -1066,6 +1068,10 @@ async def _validate_final_answer(run_id: str, answer: str, *, rag_tools: bool = 
     run = runtime_repository.get_run(run_id)
     groups = run_evidence_groups(run.steps)
     if not groups:
+        if rag_tools and is_clarification_only(answer):
+            # 確認の質問だけの回答は資料の主張を含まない（「確かめていない」を足さない。#1306）。
+            save(validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY))
+            return answer
         if rag_tools and answer.strip():
             save(
                 validation_content(

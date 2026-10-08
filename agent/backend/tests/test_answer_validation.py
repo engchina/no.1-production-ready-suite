@@ -22,6 +22,7 @@ from pr_backend_core.mcp import McpServer
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
+from app.features.agent.answer_passages import non_claim_passages
 from app.features.agent.answer_validation import (
     connection_check_inputs,
     merge_results,
@@ -748,3 +749,275 @@ def test_withhold_removes_only_the_listed_paragraphs() -> None:
     )
     # 位置を決められない段落があれば本文を載せない。
     assert withhold_paragraphs(answer, {"どこにも無い。"}) is None
+
+
+# ---- 主張ではない段落を外さない（#1306） ------------------------------------------------
+# #1289 の業務支援の評価（D）で、見出し・出典の行・利用者への質問・「資料に記載が無い」の文まで
+# 「確かめられていない点」に移り、回答が読みにくく、拒答が拒答に見えなくなった。
+
+TRIAL_HEADING = "## 試用アカウントの有効期限"
+TRIAL_FACT = "試用アカウントの有効期限は、発行日から最長 30 日です。"
+TRIAL_STEPS = "**延長の手順**"
+TRIAL_STEP_OK = "1. ポータルの「アカウント管理」を開きます。"
+# 根拠に無い手順（外す）。
+TRIAL_STEP_UNSUPPORTED = "2. 「延長」を押して、有効期限を 90 日まで延長します。"
+TRIAL_CITATION = "【portal-operations-manual.pdf, section 2. アカウント管理, page 1】"
+TRIAL_SOURCE = "出典: portal-operations-manual.pdf p.2"
+TRIAL_ABSENCE = "延長の上限日数については、資料に記載がありません。"
+TRIAL_QUESTION = "所属部署の部門長の承認は得ていますか？（はい／いいえ）"
+TRIAL_ANSWER = "\n".join(
+    [
+        TRIAL_HEADING,
+        "",
+        TRIAL_FACT,
+        "",
+        TRIAL_STEPS,
+        TRIAL_STEP_OK,
+        TRIAL_STEP_UNSUPPORTED,
+        TRIAL_CITATION,
+        TRIAL_SOURCE,
+        "",
+        TRIAL_ABSENCE,
+        TRIAL_QUESTION,
+    ]
+)
+
+
+def _claim(quote: str, status: str, reason: str = "") -> dict[str, Any]:
+    claim: dict[str, Any] = {"answer_quote": quote, "status": status, "reason": reason}
+    if status in {"supported", "contradicted"}:
+        claim["chunk_id"] = "chunk-1"
+    return claim
+
+
+def _verdict(*claims: dict[str, Any]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for claim in claims:
+        counts[claim["status"]] = counts.get(claim["status"], 0) + 1
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
+    output.update({"valid": False, "status": "completed", "counts": counts, "claims": list(claims)})
+    return output
+
+
+def test_non_claim_passages_are_kept_and_unsupported_steps_are_still_withheld(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    mcp.outputs["rag_validate_answer"] = _verdict(
+        _claim(TRIAL_HEADING, "unassessed", "見出しのため監査しない。"),
+        _claim(TRIAL_FACT, "supported", "根拠に記載。"),
+        _claim(TRIAL_STEPS, "unassessed", "見出し。"),
+        _claim(TRIAL_STEP_OK, "supported", "根拠に記載。"),
+        _claim(TRIAL_STEP_UNSUPPORTED, "unsupported", "根拠に延長の操作が無い。"),
+        _claim(
+            TRIAL_CITATION,
+            "unassessed",
+            "本文を見出しとして監査から除外できません。参照情報のみで、具体的な主張を含まない",
+        ),
+        _claim(TRIAL_SOURCE, "unassessed", "出典の行。"),
+        _claim(TRIAL_ABSENCE, "unsupported", "根拠で確かめられない。"),
+        _claim(TRIAL_QUESTION, "unassessed", "This passage is a question to the user."),
+    )
+
+    run, _ = _searched_run(monkeypatch, answer=TRIAL_ANSWER)
+
+    answer = run_answer_text(run)
+    assert answer is not None
+    body, section = answer.split("\n\n**確かめられていない点**\n\n", 1)
+    # 見出し・出典・不足の文・質問は残し、根拠に無い手順だけを外す。
+    assert body == "\n".join(
+        [
+            TRIAL_HEADING,
+            "",
+            TRIAL_FACT,
+            "",
+            TRIAL_STEPS,
+            TRIAL_STEP_OK,
+            TRIAL_CITATION,
+            TRIAL_SOURCE,
+            "",
+            TRIAL_ABSENCE,
+            TRIAL_QUESTION,
+        ]
+    )
+    assert section.splitlines() == [
+        "根拠で確かめられなかった次の内容は、回答に載せていません。",
+        f"- 根拠で確かめられない: 「{TRIAL_STEP_UNSUPPORTED}」（根拠に延長の操作が無い。）",
+    ]
+    content = _validation(run)
+    assert content["withheld"] == {"claims": 1, "findings": 0, "all": False}
+    # RAG の判定は変えず、主張ではない段落に non_claim を付けて残す（画面が同じ判断をする）。
+    marked = {item["answer_quote"]: item.get("non_claim") for item in content["result"]["claims"]}
+    assert marked == {
+        TRIAL_HEADING: "heading",
+        TRIAL_FACT: None,
+        TRIAL_STEPS: "heading",
+        TRIAL_STEP_OK: None,
+        TRIAL_STEP_UNSUPPORTED: None,
+        TRIAL_CITATION: "citation",
+        TRIAL_SOURCE: "citation",
+        TRIAL_ABSENCE: "absence",
+        TRIAL_QUESTION: "question",
+    }
+    assert [item["status"] for item in content["result"]["claims"]].count("unassessed") == 5
+
+
+def test_refusal_that_the_documents_lack_the_answer_is_kept_as_a_refusal(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    # km-license-fee: 資料に答えが無い質問。拒答の文を外すと
+    # 「確かめられた内容はありません」だけになる。
+    refusal = "\n".join(
+        [
+            "**ライセンス費用について**",
+            "取得した資料には、ライセンス費用の記載は見つかりませんでした。",
+            "資料からは、費用の金額や支払い方法は確かめられません。",
+            "契約の担当部署に問い合わせてください。",
+        ]
+    )
+    mcp.outputs["rag_validate_answer"] = _verdict(
+        _claim("**ライセンス費用について**", "unassessed", "見出し。"),
+        _claim(
+            "取得した資料には、ライセンス費用の記載は見つかりませんでした。",
+            "unsupported",
+            "根拠で確かめられない。",
+        ),
+        _claim(
+            "資料からは、費用の金額や支払い方法は確かめられません。",
+            "unsupported",
+            "根拠で確かめられない。",
+        ),
+        _claim("契約の担当部署に問い合わせてください。", "data_confirmation", "問い合わせ先。"),
+    )
+
+    run, _ = _searched_run(monkeypatch, answer=refusal)
+
+    assert run_answer_text(run) == refusal
+    assert _validation(run)["withheld"] == {"claims": 0, "findings": 0, "all": False}
+
+
+def test_refusal_mixed_with_an_unsupported_fee_still_withholds_the_fee() -> None:
+    answer = (
+        "ライセンス費用は、資料に記載がありません。\n"
+        "ライセンス費用は月額 1,000 円で、資料には記載がありません。"
+    )
+    result = _verdict(
+        _claim("ライセンス費用は、資料に記載がありません。", "unsupported", "確かめられない。"),
+        _claim(
+            "ライセンス費用は月額 1,000 円で、資料には記載がありません。",
+            "unsupported",
+            "金額が根拠に無い。",
+        ),
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    # 金額の主張を抱き合わせた文は「記載が無い」の文として扱わず、外す。
+    body, section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    assert body == "ライセンス費用は、資料に記載がありません。"
+    assert "月額 1,000 円" in section
+    assert withheld == {"claims": 1, "findings": 0, "all": False}
+
+
+def test_headings_and_citations_left_alone_are_not_published() -> None:
+    # 手順をすべて外した後に、見出しと出典の行だけを本文として出さない。
+    step = "1. 管理画面で「削除」を押します。"
+    answer = f"## アカウントの削除の手順\n{step}\n【admin-guide.pdf p.12】"
+    result = _verdict(
+        _claim("## アカウントの削除の手順", "unassessed", "見出し。"),
+        _claim(step, "unsupported", "根拠に無い。"),
+        _claim("【admin-guide.pdf p.12】", "unassessed", "出典。"),
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    body, _section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    assert body == "根拠で確かめられた内容はありませんでした。"
+    assert withheld == {"claims": 1, "findings": 0, "all": True}
+    # 段落を外した行に残った出典、中身をすべて外した節の見出しも消す。
+    kept = withhold_paragraphs(
+        f"{TRIAL_FACT}\n\n## 削除の手順\n{step}【admin-guide.pdf p.12】"
+        "\n\n## 注意\n- 元に戻せません。",
+        {step},
+    )
+    assert kept == f"{TRIAL_FACT}\n\n## 注意\n- 元に戻せません。"
+
+
+def test_clarification_only_answer_without_evidence_has_no_notice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    # cr-delete-account: 根拠を使わない確認の質問だけの回答に「確かめていません」を足さない。
+    question = "\n".join(
+        [
+            "アカウントの削除の前に、次を確認させてください。",
+            "所属部署の部門長の承認は得ていますか？（はい／いいえ）",
+            "削除するのはどちらのアカウントですか？",
+            "- 自分のアカウント",
+            "- 部下のアカウント",
+        ]
+    )
+    _script(monkeypatch, [assistant_message(question)])
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="アカウントを削除したい", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert mcp.calls_of("rag_validate_answer") == []
+    assert run_answer_text(run) == question
+    content = _validation(run)
+    assert (content["status"], content["reason"]) == ("skipped", "clarification_only")
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("## 確認手順", "heading"),
+        ("**手順**", "heading"),
+        ("確認が必要な点：", "heading"),
+        ("【portal-operations-manual.pdf, section 2. アカウント管理, page 1】", "citation"),
+        ("- 出典：admin-guide.pdf 第3章", "citation"),
+        ("（参照: security-policy.docx p.4）", "citation"),
+        ("[運用マニュアル](https://example.com/manual.pdf)", "citation"),
+        ("所属部署の部門長の承認は得ていますか？（はい／いいえ）", "question"),
+        ("付与先の部署名を教えてください。", "question"),
+        ("ライセンス費用については、資料に記載がありません。", "absence"),
+        ("取得した資料からは、今の設定値は確かめられません。", "absence"),
+        # 主張・操作の手順（外す対象のまま）。
+        ("**30 日以内に申請してください**", None),
+        ("## 管理画面で「削除」を押します", None),
+        ("根拠: 契約書の第 5 条により、30 日前までに申し出る必要があります", None),
+        ("削除できますが、よろしいですか？", None),
+        ("ライセンス費用は月額 1,000 円で、資料には記載がありません。", None),
+        ("資料には記載がありませんが、設定画面で削除できます。", None),
+        ("管理画面で「削除」を押してください。", None),
+        ("パスワードは 90 日ごとに変更します。", None),
+    ],
+    ids=[f"case{index}" for index in range(19)],
+)
+def test_passage_kind_is_conservative(text: str, kind: str | None) -> None:
+    assert non_claim_passages(text).get(text) == kind
+
+
+def test_unverified_section_keeps_points_but_not_operation_steps() -> None:
+    answer = "\n".join(
+        [
+            "**確かめられていない点**",
+            "- 承認の要否は、資料に記載がありません。",
+            "- 復元できる期限は確かめられていません",
+            "- 管理画面で「削除」を押してください。",
+        ]
+    )
+
+    kinds = non_claim_passages(answer)
+
+    assert kinds == {
+        "**確かめられていない点**": "unverified_section",
+        "- 承認の要否は、資料に記載がありません。": "absence",
+        "- 復元できる期限は確かめられていません": "unverified_section",
+    }
+    # 同じ文が別の場所で主張なら、主張として扱う。
+    assert "パスワードは 90 日です。" not in non_claim_passages(
+        "**確かめられていない点**\nパスワードは 90 日です。\n\nパスワードは 90 日です。"
+    )
