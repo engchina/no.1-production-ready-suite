@@ -112,9 +112,10 @@ def test_structural_errors_are_reported_with_paths() -> None:
             },
             {"id": "y", "when": {"condition_id": "nope", "values": ["1"]}, "goto_step": "a"},
         ],
-        impact={"scope": "all"},
+        impact={"scope": "all", "steps": ["a", "gone"]},
     )
-    codes = {issue.code for issue in validate_content(broken)}
+    issues = validate_content(broken)
+    codes = {issue.code for issue in issues}
     assert {
         "goal_unmatchable",
         "duplicate_id",
@@ -126,7 +127,12 @@ def test_structural_errors_are_reported_with_paths() -> None:
         "unknown_condition",
         "unknown_branch_missing",
         "wide_impact_without_approval",
+        "unknown_impact_step",
     } <= codes
+    # 影響範囲・承認が係る手順は、手順の id で決める（#1320）。
+    impact = next(issue for issue in issues if issue.code == "unknown_impact_step")
+    assert (impact.path, impact.severity) == ("impact.steps", "error")
+    assert "gone" in impact.message and "「a" not in impact.message
 
 
 def test_content_model_rejects_unsafe_or_inconsistent_values() -> None:

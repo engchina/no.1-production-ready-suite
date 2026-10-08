@@ -119,7 +119,7 @@ async def _guide_findings(
             )
         )
     findings += check_guide_steps(answer, content, guide.conditions)
-    findings += check_impact(answer, content)
+    findings += check_impact(answer, content, guide.conditions)
     return findings, ["guide", "guide_steps", "impact"], revision
 
 

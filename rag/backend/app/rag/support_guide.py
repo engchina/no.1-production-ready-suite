@@ -190,6 +190,15 @@ def validate_content(content: SupportGuideContent) -> list[SupportGuideIssue]:
                         f"条件「{condition.label}」の「{'、'.join(missing)}」に当たる分岐がありません。",
                     )
                 )
+    unknown_impact_steps = [step for step in content.impact.steps if step not in step_ids]
+    if unknown_impact_steps:
+        issues.append(
+            _error(
+                "unknown_impact_step",
+                "impact.steps",
+                f"影響範囲・承認が係る手順「{'、'.join(unknown_impact_steps)}」がありません。",
+            )
+        )
     if content.impact.scope != "individual" and not content.impact.approval_required:
         issues.append(
             _warning(

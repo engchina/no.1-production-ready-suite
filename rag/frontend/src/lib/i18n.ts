@@ -3061,6 +3061,9 @@ export const ja = {
   "supportGuides.field.impactScope": "影響の範囲",
   "supportGuides.field.approvalRequired": "承認を求める",
   "supportGuides.field.approvalNote": "承認のメモ",
+  "supportGuides.field.impactSteps": "影響範囲・承認が係る手順",
+  "supportGuides.field.impactStepsHelp":
+    "特定の分岐の手順だけに係るときに選びます。分かっている条件でこの手順がすべて外れる回答には、影響範囲・承認を求めません。選ばなければ、すべての場合に係ります。",
   "supportGuides.field.handoffConditions": "人へ引き継ぐ条件",
   "supportGuides.field.handoffContact": "引き継ぎ先（窓口の名前）",
   "supportGuides.select.choose": "選んでください",
@@ -3188,6 +3191,7 @@ export const ja = {
   "supportGuides.view.none": "なし",
   "supportGuides.view.approvalRequired": "承認が要る",
   "supportGuides.view.approvalNotRequired": "承認は要らない",
+  "supportGuides.view.allCases": "すべての場合",
   "supportGuides.view.branchRule": "{condition} が {operator}{values} → {step}",
   // 取り込み
   "supportGuides.importPanel.title": "JSON から取り込む",

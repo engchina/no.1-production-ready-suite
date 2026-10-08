@@ -105,6 +105,8 @@ export type GuideForm = {
   impactScope: SupportGuideImpactScope;
   approvalRequired: boolean;
   approvalNote: string;
+  /** 影響範囲と承認が係る手順の id（#1320）。 */
+  impactSteps: string[];
   handoffConditions: string;
   handoffContact: string;
 };
@@ -148,6 +150,7 @@ export function emptyGuideForm(): GuideForm {
     impactScope: "individual",
     approvalRequired: false,
     approvalNote: "",
+    impactSteps: [],
     handoffConditions: "",
     handoffContact: "",
   };
@@ -213,6 +216,7 @@ export function guideFormFromContent(content: SupportGuideContent): GuideForm {
     impactScope: content.impact.scope,
     approvalRequired: content.impact.approval_required,
     approvalNote: content.impact.approval_note,
+    impactSteps: [...(content.impact.steps ?? [])],
     handoffConditions: joinLines(content.handoff.conditions),
     handoffContact: content.handoff.contact,
   };
@@ -288,6 +292,7 @@ export function guideContentFromForm(form: GuideForm): SupportGuideContent {
       scope: form.impactScope,
       approval_required: form.approvalRequired,
       approval_note: form.approvalNote.trim(),
+      steps: [...new Set(form.impactSteps)],
     },
     handoff: {
       conditions: splitLines(form.handoffConditions),
@@ -392,6 +397,7 @@ export function renameStepId(form: GuideForm, oldId: string, newId: string): Gui
     branches: form.branches.map((branch) =>
       branch.gotoStep === oldId ? { ...branch, gotoStep: newId } : branch,
     ),
+    impactSteps: form.impactSteps.map((id) => (id === oldId ? newId : id)),
   };
 }
 
@@ -407,7 +413,10 @@ export function renameConditionId(form: GuideForm, oldId: string, newId: string)
   };
 }
 
-/** 手順を外したとき、ほかの手順の依存からも外す（分岐の行き先は残し、検証で知らせる）。 */
+/**
+ * 手順を外したとき、ほかの手順の依存と、影響範囲・承認が係る手順からも外す（分岐の行き先は残し、
+ * 検証で知らせる）。
+ */
 export function removeStep(form: GuideForm, index: number): GuideForm {
   const removed = form.steps[index];
   if (!removed) return form;
@@ -421,6 +430,7 @@ export function removeStep(form: GuideForm, index: number): GuideForm {
           ...step,
           dependsOn: step.dependsOn.filter((id) => id !== removed.id),
         })),
+    impactSteps: stillUsed ? form.impactSteps : form.impactSteps.filter((id) => id !== removed.id),
   };
 }
 
@@ -610,6 +620,7 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "impact.scope": "supportGuides.field.impactScope",
   "impact.approval_required": "supportGuides.field.approvalRequired",
   "impact.approval_note": "supportGuides.field.approvalNote",
+  "impact.steps": "supportGuides.field.impactSteps",
   "handoff.conditions": "supportGuides.field.handoffConditions",
   "handoff.contact": "supportGuides.field.handoffContact",
 };
