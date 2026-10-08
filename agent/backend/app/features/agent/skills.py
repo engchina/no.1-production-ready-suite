@@ -169,6 +169,12 @@ skill_registry.register(
             "答えを得たら conditions（条件の id → 値）に入れて rag_search を呼び直す。"
             "手順を案内する依頼では、先に rag_lookup_guides で業務ガイド（確かめる条件・手順の順・"
             "影響範囲・引き継ぎ先）を確かめ、影響範囲が広い操作や承認が要る操作はその旨を示す。"
+            "業務ガイドを引かずに rag_retrieve_evidence で根拠を集めると、結果の guide_check に"
+            "当たる業務ガイドと次の手（next_step）が付く。ツールの結果の next_step.action が"
+            " ask_clarification なら、手順や条件ごと（分岐ごと）の答えを書かずに、questions の問い"
+            "だけを利用者に返す（すべての場合を並べて答えない）。answer_by_conditions は条件ごとに"
+            "分けて答え、answer_with_guide は分かっている条件に当たる場合の手順だけを答える。"
+            "handoff は引き継ぎ先を示す。"
             "needs_human は引き継ぎ先を示し、操作を代わりに進めない。"
         ),
         mcp_requirements=[
