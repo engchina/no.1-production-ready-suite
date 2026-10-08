@@ -253,8 +253,8 @@ function SupportGuideForm({
   );
   const rollback = useSupportGuideMutation(
     searchAnswerProfileId,
-    (args: { guideId: string; revision: number }) =>
-      api.rollbackSupportGuide(searchAnswerProfileId, args.guideId, args.revision),
+    (args: { guideId: string; revision: number; base: number }) =>
+      api.rollbackSupportGuide(searchAnswerProfileId, args.guideId, args.revision, args.base),
   );
   const setArchived = useSupportGuideMutation(
     searchAnswerProfileId,
@@ -393,7 +393,7 @@ function SupportGuideForm({
     });
     if (!ok) return;
     rollback.mutate(
-      { guideId: detail.guide_id, revision },
+      { guideId: detail.guide_id, revision, base: detail.draft_revision },
       {
         onSuccess: (rolled) => {
           loadSaved(rolled);

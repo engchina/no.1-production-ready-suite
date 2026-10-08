@@ -13,10 +13,14 @@ from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profile_knowledge as knowledge_route
+from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.support_guide_runtime import (
+    GUIDE_LOAD_FAILED_KEY,
     apply_guide_to_diagnostics,
+    build_guide_context,
     clarification_questions,
     guide_clarification,
     guide_rule,
@@ -25,9 +29,10 @@ from app.rag.support_guide_runtime import (
     rank_guides,
     resolve_guide_clarification,
     short_circuit_answer,
+    visible_plan,
     with_guide_rule,
 )
-from app.schemas.search import SearchDiagnostics, SearchResponse
+from app.schemas.search import SearchDiagnostics, SearchRequest, SearchResponse
 from app.schemas.support_guide import SupportGuideContent
 from tests.support import AsgiTestClient
 from tests.test_mcp_api import _call, _token, auth  # noqa: F401 - fixture を使う
@@ -110,8 +115,9 @@ def test_match_picks_the_best_guide_and_reads_conditions() -> None:
         "label": "付与先",
         "value": "グループ",
         "source": "question",
+        "state": "known",
     }
-    # 両方出たら決めつけない。
+    # 両方出たら決めつけない（矛盾。#1278 で別に確かめる）。
     assert match_guide(GUIDES, "個別とグループの権限を付与したい").decision == "clarify"  # type: ignore[union-attr]
     # 渡した値（確認の答え）を優先する。不正な値は使わない。
     assert match_guide(GUIDES, "権限を付与", {"target": "個別"}).decision == "answer"  # type: ignore[union-attr]
@@ -238,6 +244,290 @@ def test_chat_clarification_round_trip() -> None:
     assert resolve_guide_clarification(GUIDES, "R1", ["o1"]) is None
 
 
+# ---- 適用範囲・条件の出所・矛盾・分岐の絞り込み（#1278） ---------------------------------
+
+
+def _scoped(guide_id: str, **applicability: Any) -> tuple[str, int, SupportGuideContent]:
+    return (guide_id, 1, grant_guide(applicability=applicability))
+
+
+def test_applicability_excludes_guides_named_out_of_scope() -> None:
+    hr = _scoped("g-hr", business_domains=["人事"], versions=["v2"], object_types=["アカウント"])
+    # 手がかりが無い項目は確かめていない（unverified）として使い、要約に出す。
+    match = match_guide([hr], "グループにアクセス権限を付与したい")
+    assert match is not None
+    assert match.applicability == {
+        "business_domains": "unverified",
+        "object_types": "unverified",
+        "versions": "unverified",
+    }
+    assert match.summary()["applicability"]["business_domains"] == "unverified"
+    rule = guide_rule(match)["content"]
+    assert "適用範囲のうち質問から確かめられていない項目: 業務（人事）" in rule
+    assert "資料・システムの版（v2）" in rule
+
+    # 質問・絞り込みが名指しした値と合えば matched、別の値だけを名指ししていれば使わない。
+    named = match_guide([hr], "人事のアカウントにアクセス権限を付与したい（v2）")
+    assert named is not None
+    assert named.applicability == {
+        "business_domains": "matched",
+        "object_types": "matched",
+        "versions": "matched",
+    }
+    context = build_guide_context(
+        "経理のアクセス権限を付与したい", [hr], business_vocabulary=["01_人事", "02_経理"]
+    )
+    assert context.business_domains == frozenset({"経理"})
+    assert match_guide([hr], "経理のアクセス権限を付与したい", context=context) is None
+    # 英数字の版は語の途中に当てない（v2 を v20 の中に見つけない）。v20 だけなら版は名指しなし。
+    v20 = build_guide_context("v20 でアクセス権限を付与したい", [hr])
+    assert v20.versions == frozenset()
+    # 絞り込み（large_category・document_version）も手がかりにする（番号の接頭辞は外して比べる）。
+    filtered = build_guide_context(
+        "アクセス権限を付与したい",
+        [hr],
+        filters={"large_category": "10_人事", "document_version": "V3"},
+    )
+    assert (filtered.business_domains, filtered.versions) == (
+        frozenset({"人事"}),
+        frozenset({"v3"}),
+    )
+    assert match_guide([hr], "アクセス権限を付与したい", context=filtered) is None
+
+    # 空の項目は「このプロファイルの中」で制限なし（状態に出さない）。
+    unscoped = match_guide(GUIDES, "経理のアクセス権限を付与したい", context=context)
+    assert unscoped is not None and unscoped.applicability == {}
+    # rank_guides も同じ判定（範囲の外のガイドを返さない）。
+    ranked = rank_guides([hr, *GUIDES], "経理のアクセス権限を付与", context=context)
+    assert [item.guide_id for item in ranked] == ["g-grant"]
+
+
+def test_document_and_tool_conditions_ignore_user_claims() -> None:
+    content = grant_guide(
+        conditions=[
+            {
+                "id": "target",
+                "label": "付与先",
+                "allowed_values": ["個別", "グループ"],
+                "source": "document",
+            },
+            {
+                "id": "plan",
+                "label": "契約の種類",
+                "allowed_values": ["標準", "上位"],
+                "source": "tool",
+                "unknown_handling": "handoff",
+                "required": False,
+            },
+        ],
+        branches=[],
+    )
+    guides = [("g-doc", 1, content)]
+    # 質問の文・渡した値では、資料・道具が出所の条件を既知にしない（不明のまま）。
+    match = match_guide(
+        guides, "グループにアクセス権限を付与したい（上位プラン）", {"target": "個別"}
+    )
+    assert match is not None
+    assert [state.status for state in match.states] == ["unknown", "unknown"]
+    # 利用者に聞いても決まらないので確かめず、分岐で答える（聞き直しを繰り返さない）。
+    assert match.decision == "branch"
+    assert [item["condition_id"] for item in clarification_questions(match)] == ["target"]
+    content_text = guide_rule(match)["content"]
+    assert "付与先（個別／グループ）。資料で確かめる" in content_text
+    assert "契約の種類（標準／上位）。現場の記録・道具で確かめる" in content_text
+
+
+def test_conflicting_values_are_clarified_with_the_named_values() -> None:
+    three = grant_guide(
+        conditions=[
+            {
+                "id": "target",
+                "label": "付与先",
+                "allowed_values": ["個別", "グループ", "全員"],
+                "question": "権限はどこに付けますか？",
+            }
+        ],
+        branches=[],
+    )
+    guides = [("g-3", 1, three)]
+    match = match_guide(guides, "個別とグループのどちらにアクセス権限を付与？")
+    assert match is not None
+    state = match.state_of("target")
+    assert state is not None
+    assert (state.status, state.candidates) == ("conflicting", ("個別", "グループ"))
+    assert match.decision == "clarify"
+    questions = clarification_questions(match)
+    assert questions[0]["options"] == ["個別", "グループ"]
+    assert questions[0]["question"] == (
+        "質問に付与先の「個別」と「グループ」が出ています。権限はどこに付けますか？"
+    )
+    assert "（個別／グループ）" in short_circuit_answer(match)
+    assert match.summary()["unknown_conditions"] == [
+        {
+            "id": "target",
+            "label": "付与先",
+            "handling": "ask",
+            "state": "conflicting",
+            "candidates": ["個別", "グループ"],
+        }
+    ]
+    # チャットの確認は質問に出た値だけを出し、選択肢の id は全選択肢の中の位置（答えを引き直せる）。
+    found = guide_clarification(match)
+    assert found is not None
+    rule_id, _, clarification = found
+    assert [(o.id, o.label) for o in clarification.options] == [("o1", "個別"), ("o2", "グループ")]
+    resolved = resolve_guide_clarification(guides, rule_id, ["o2"])
+    assert resolved is not None and resolved[0] == {"target": "グループ"}
+    # 利用者が値を渡せば矛盾は解ける。チャット（送信の前に確かめる）では分岐で答える。
+    given = match_guide(guides, "個別とグループのどちらにアクセス権限を付与？", {"target": "全員"})
+    assert given is not None and given.decision == "answer"
+    chat = match_guide(guides, "個別とグループのどちらにアクセス権限を付与？", interactive=True)
+    assert chat is not None and chat.decision == "branch"
+    assert (
+        "質問に複数の値が出ている条件（どれかに決めつけず、値ごとに分けて示す）: "
+        "付与先（個別／グループ）"
+    ) in guide_rule(chat)["content"]
+
+
+def _route_guide() -> SupportGuideContent:
+    return grant_guide(
+        conditions=[
+            {
+                "id": "target",
+                "label": "付与先",
+                "allowed_values": ["個別", "グループ"],
+                "question": "どちらですか？",
+            },
+            {
+                "id": "approved",
+                "label": "部門長の承認",
+                "type": "boolean",
+                "required": False,
+                "unknown_handling": "branch",
+            },
+        ],
+        steps=[
+            {"id": "open", "title": "詳細画面の権限タブを開く", "retrieval_hints": ["権限タブ"]},
+            {
+                "id": "user",
+                "title": "利用者を選んで付与する",
+                "depends_on": ["open"],
+                "retrieval_hints": ["利用者の追加"],
+            },
+            {
+                "id": "group",
+                "title": "グループを選んで付与する",
+                "depends_on": ["open"],
+                "retrieval_hints": ["グループの追加"],
+            },
+            {"id": "notify", "title": "グループの全員へ知らせる", "depends_on": ["group"]},
+            {"id": "ask", "title": "部門長に承認を依頼する"},
+            {"id": "done", "title": "付与の結果を確かめる"},
+        ],
+        branches=[
+            {
+                "id": "b-user",
+                "when": {"condition_id": "target", "values": ["個別"]},
+                "goto_step": "user",
+            },
+            {
+                "id": "b-group",
+                "when": {"condition_id": "target", "values": ["グループ"]},
+                "goto_step": "group",
+            },
+            {
+                "id": "b-unknown",
+                "when": {"condition_id": "approved", "operator": "unknown"},
+                "goto_step": "ask",
+            },
+            {
+                "id": "b-yes",
+                "when": {"condition_id": "approved", "values": ["true"]},
+                "goto_step": "done",
+            },
+        ],
+    )
+
+
+def test_known_conditions_narrow_steps_to_the_matched_branch() -> None:
+    guides = [("g-route", 1, _route_guide())]
+    match = match_guide(guides, "グループにアクセス権限を付与したい")
+    assert match is not None and match.decision == "answer"
+    steps, branches = visible_plan(match)
+    # 個別の分岐の行き先（user）は外し、グループの分岐の行き先と依存先・共通の手順は残す。
+    # 承認は不明なので、unknown の分岐（ask）は当たり、値の分岐（done）は決まらないので残す。
+    assert [step.id for step in steps] == ["open", "group", "notify", "ask", "done"]
+    assert [(branch.id, applies) for branch, applies in branches] == [
+        ("b-group", True),
+        ("b-unknown", True),
+        ("b-yes", None),
+    ]
+    rule = guide_rule(match)
+    assert "利用者を選んで付与する" not in rule["content"]
+    assert (
+        "分岐: 付与先 が グループ に当たるため「グループを選んで付与する」へ進む。"
+        in (rule["content"])
+    )
+    assert "付与先 が 個別" not in rule["content"]
+    assert rule["triggers"] == ["権限タブ", "グループの追加"]
+
+    # 個別なら、グループの行き先とそれだけに依存する手順（notify）を外す。
+    # 承認が分かれば unknown の分岐の行き先（ask）も外す。
+    single = match_guide(guides, "個別の利用者にアクセス権限を付与したい", {"approved": "yes"})
+    assert single is not None
+    assert [step.id for step in visible_plan(single)[0]] == ["open", "user", "done"]
+    assert "グループを選んで付与する" not in guide_rule(single)["content"]
+
+    # 付与先が分からなければ（分岐で答える）全部の場合を残す。
+    unknown = match_guide(guides, "アクセス権限を付与したい", interactive=True)
+    assert unknown is not None and unknown.decision == "branch"
+    assert [step.id for step in visible_plan(unknown)[0]] == [
+        "open",
+        "user",
+        "group",
+        "notify",
+        "ask",
+        "done",
+    ]
+
+
+def test_guide_load_failure_is_recorded_in_answer_diagnostics() -> None:
+    diagnostics: dict[str, Any] = {"outcome": "answered", "envelope": {"outcome": "answered"}}
+    apply_guide_to_diagnostics(diagnostics, {GUIDE_LOAD_FAILED_KEY: True})
+    assert diagnostics[GUIDE_LOAD_FAILED_KEY] is True
+    assert "guide" not in diagnostics
+    assert diagnostics["outcome"] == "answered"
+
+
+async def test_resolve_query_context_records_guide_load_failure(monkeypatch: MonkeyPatch) -> None:
+    fake = FakeKnowledgeOracle()
+    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
+
+    class _BrokenStore:
+        def __init__(self, _oracle: object) -> None:
+            pass
+
+        async def published_contents(self, _profile: str) -> list[Any]:
+            raise RuntimeError("support guide table is missing")
+
+    monkeypatch.setattr(search_route, "SupportGuideStore", _BrokenStore)
+    request = SearchRequest(query="アクセス権限を付与したい", search_answer_profile_id="bv-1")
+    _, settings, _, applied = await search_route._resolve_query_context(request, get_settings())
+    assert applied == "bv-1"
+    assert settings.rag_support_guide == {GUIDE_LOAD_FAILED_KEY: True}
+
+    # 読めれば失敗は残さず、選んだガイドの要約（適用範囲を含む）を渡す。
+    class _Store(_BrokenStore):
+        async def published_contents(self, _profile: str) -> list[Any]:
+            return GUIDES
+
+    monkeypatch.setattr(search_route, "SupportGuideStore", _Store)
+    _, settings, _, _ = await search_route._resolve_query_context(request, get_settings())
+    assert settings.rag_support_guide["guide_id"] == "g-grant"
+    assert settings.rag_support_guide["applicability"] == {}
+    assert GUIDE_LOAD_FAILED_KEY not in settings.rag_support_guide
+
+
 # ---- API ---------------------------------------------------------------------------------
 
 
@@ -264,6 +554,8 @@ def test_clarification_suggest_falls_back_to_guide_conditions(monkeypatch: Monke
 
 class _Profile:
     id = "bv-1"
+    status = "ACTIVE"
+    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])
 
 
 class _FakeOracle:
@@ -273,11 +565,11 @@ class _FakeOracle:
 
 @pytest.mark.usefixtures("auth")
 def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    async def published(_oracle: object, _profile: str) -> list[Any]:
-        return GUIDES
+    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
+        return GUIDES, False
 
     monkeypatch.setattr(mcp_tools, "OracleClient", _FakeOracle)
-    monkeypatch.setattr(search_route, "_published_guides", published)
+    monkeypatch.setattr(search_route, "load_published_guides", published)
     user = auth.user_with_permissions("searcher", ["menu.search"])
     body = _call(
         "rag_lookup_guides",

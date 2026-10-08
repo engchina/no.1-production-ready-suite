@@ -64,12 +64,12 @@ def _not_found() -> HTTPException:
     return HTTPException(status_code=404, detail="業務ガイドが見つかりません。")
 
 
-def _conflict(error: SupportGuideConflictError) -> HTTPException:
+def _conflict(error: SupportGuideConflictError, action: str = "保存") -> HTTPException:
     return HTTPException(
         status_code=409,
         detail=(
             "読み込んだ後にほかの人が業務ガイドを保存しました。"
-            f"最新の内容（版 {error.current_revision}）を読み込み直してから保存してください。"
+            f"最新の内容（版 {error.current_revision}）を読み込み直してから{action}してください。"
         ),
     )
 
@@ -339,7 +339,11 @@ async def rollback_support_guide(
     guide_id: str,
     body: SupportGuideRollbackRequest,
 ) -> ApiResponse[SupportGuideDetail]:
-    """古い公開の版を新しい版として公開し直す（下書きもその内容になる）。参照は今の状態で検証する。"""
+    """古い公開の版を新しい版として公開し直す（下書きもその内容になる）。参照は今の状態で検証する。
+
+    下書きを置き換えるので、読み込んだ下書きの版（``base_revision``）を照合し、違えば 409
+    （ほかの人の保存した下書きを黙って失わない。#1278）。
+    """
     oracle = OracleClient()
     profile = await _profile(oracle, search_answer_profile_id)
     store = SupportGuideStore(oracle)
@@ -350,17 +354,22 @@ async def rollback_support_guide(
         raise _not_found() from error
     if summary.status != "active":
         raise HTTPException(status_code=409, detail="アーカイブした業務ガイドは公開できません。")
+    if summary.draft_revision != body.base_revision:
+        raise _conflict(SupportGuideConflictError(summary.draft_revision), "戻")
     issues = await _publish_issues(oracle, profile, target.content)
     if has_errors(issues):
         raise _refused("戻す版は、今の資料の状態では検証に通りません。", issues)
-    await store.publish(
-        search_answer_profile_id,
-        guide_id,
-        target.content,
-        base_revision=None,
-        user=_user(request),
-        rollback_from=body.revision,
-    )
+    try:
+        await store.publish(
+            search_answer_profile_id,
+            guide_id,
+            target.content,
+            base_revision=body.base_revision,
+            user=_user(request),
+            rollback_from=body.revision,
+        )
+    except SupportGuideConflictError as error:
+        raise _conflict(error, "戻") from error
     return ApiResponse(data=await _detail(store, search_answer_profile_id, guide_id))
 
 

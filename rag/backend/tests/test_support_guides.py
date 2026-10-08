@@ -250,12 +250,12 @@ class FakeStore:
         guide_id: str,
         draft: SupportGuideContent,
         *,
-        base_revision: int | None,
+        base_revision: int,
         user: str | None,
         rollback_from: int | None = None,
     ) -> int:
         head = self._head(profile, guide_id)
-        if base_revision is not None and head["draft_revision"] != base_revision:
+        if head["draft_revision"] != base_revision:
             raise SupportGuideConflictError(head["draft_revision"])
         items = self.revisions.setdefault(guide_id, [])
         revision = len(items) + 1
@@ -335,9 +335,26 @@ def test_draft_publish_conflict_and_history(fakes: tuple[FakeStore, FakeOracle])
     assert [item["revision"] for item in second["revisions"]] == [2, 1]
     assert client.get(f"{BASE}/{guide_id}/revisions/1").json()["data"]["content"]["title"] == "改訂"
 
-    # 古い版を新しい版として公開し直す（下書きもその内容になる）。
-    rolled = client.post(f"{BASE}/{guide_id}/rollback", json={"revision": 1}).json()["data"]
+    # 古い版を新しい版として公開し直す（下書きもその内容になる）。下書きを置き換えるので、
+    # 読み込んだ下書きの版を照合する（ほかの人の保存した下書きを黙って失わない。#1278）。
+    client.put(
+        f"{BASE}/{guide_id}", json={"draft": guide(title="別の人の下書き"), "base_revision": 3}
+    )
+    stale_rollback = client.post(
+        f"{BASE}/{guide_id}/rollback", json={"revision": 1, "base_revision": 3}
+    )
+    assert stale_rollback.status_code == 409
+    assert "版 4" in stale_rollback.json()["error_messages"][0]
+    assert "読み込み直してから戻してください" in stale_rollback.json()["error_messages"][0]
+    kept = client.get(f"{BASE}/{guide_id}").json()["data"]
+    assert (kept["draft"]["title"], kept["published_revision"]) == ("別の人の下書き", 2)
+    # 照合の版は必須（省略は 422）。
+    assert client.post(f"{BASE}/{guide_id}/rollback", json={"revision": 1}).status_code == 422
+    rolled = client.post(
+        f"{BASE}/{guide_id}/rollback", json={"revision": 1, "base_revision": 4}
+    ).json()["data"]
     assert rolled["published_revision"] == 3
+    assert rolled["draft_revision"] == 5
     assert rolled["revisions"][0]["rollback_from"] == 1
     assert (rolled["draft"]["title"], rolled["published"]["title"]) == ("改訂", "改訂")
     assert client.get(f"{BASE}/{guide_id}/revisions/9").status_code == 404
