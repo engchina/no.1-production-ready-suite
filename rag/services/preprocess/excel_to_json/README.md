@@ -26,6 +26,7 @@ parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記�
 | 結合セル | 表頭の中は結合の範囲を埋める。データは同じ行の横の結合だけを埋め、縦の結合の値は後の行へ漏らさない |
 | シート・列 | 既定は表示されているシート。`sheets`(読む)・`exclude_sheets`(読まない)・`include_hidden_sheets`・`exclude_columns`(列名か列の記号) |
 | 読む範囲 | `ranges`(`A3:F200` は選んだすべてのシート、`シート名!A3:F200` / `'名前 1'!A3:F200` はそのシートだけ。シート名を付けた範囲があるシートはそれだけを使う)。範囲の外のセルは表頭の推定にも記録にも使わない。結合セルは範囲と重なる部分に切り詰める。無いシート名は警告 `excel_range_sheet_not_found` |
+| 列の役割(#1281) | 設定値の表の列に役割(`definition` 説明 / `default` 既定値 / `example` 例示 / `current` 記載時点の設定値 / `recommended` 推奨値 / `allowed` 設定できる範囲)を付け、`columns[].role`・`role_method`(`configured` / `detected`)・`role_term` に残す。`column_role_detection=auto`(既定)は表頭の語(既定値・初期値・デフォルト・記入例・設定例・サンプル・現在値・本番値・推奨値・設定可能範囲・説明 など。英語も)で決める。語が完全に一致(括弧の単位は無視)か、3 文字以上の語が表頭の末尾にあるときだけ付け、「設定値」「値」のように資料ごとに意味の違う語(`column_role_uncertain`)・2 つの役割の語を含む表頭(`column_role_ambiguous`)・役割の列が 1 つだけのシート(`column_role_not_corroborated`)・表頭の推定の信頼度が低いシート(`column_roles_skipped_low_header_confidence`)には付けない。`column_roles`(列名か列の記号 → 役割。`none` は付けない)は判定より優先し、どのシートにも無い列は警告 `excel_column_role_target_not_found`。parser は値の列の本文に `既定値［資料の既定値］: 30` のように役割の表示を付ける(`rag_parser_core.sheet_records.COLUMN_ROLE_TEXT_LABELS`) |
 | 縮退 | 空・依存欠如・解析失敗・記録 0・選択肢の誤りのときは passthrough |
 
 ## テスト
