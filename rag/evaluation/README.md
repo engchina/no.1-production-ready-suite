@@ -101,7 +101,7 @@ uv run python -m app.rag.evaluation_cli \
 ### 業務支援の合成の評価セット（#1231）
 
 `business-support/` に、架空の「サンプル業務ポータル」の資料（PDF 4 件・xlsx 1 件）と、5 分類（資料で答えられる・
-確認が要る・現場のデータが要る・資料に答えが無い・資料が矛盾する）の質問 15 問（`business-support.json`）を置いて
+確認が要る・現場のデータが要る・資料に答えが無い・資料が矛盾する）の質問 19 問（`business-support.json`。#1284 で区分・往復・既知の条件・必要な根拠を足した）を置いて
 います。資料の作り方・取り込み方・実行の手順は [business-support/README.md](./business-support/README.md) を見て
 ください。
 

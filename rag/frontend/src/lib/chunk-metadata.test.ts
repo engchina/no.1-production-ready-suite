@@ -27,6 +27,30 @@ describe("citationMetadataChips", () => {
     ]);
   });
 
+  it("資料に印刷されたページ番号があれば物理頁と並べる（issue 1287）", () => {
+    expect(citationMetadataChips({ page_start: 12, page_label_start: "3-4" })).toEqual([
+      { id: "page", value: "12", printed: "3-4" },
+    ]);
+    expect(
+      citationMetadataChips({
+        page_start: 12,
+        page_end: 13,
+        page_label_start: "3-4",
+        page_label_end: "3-5",
+      })
+    ).toEqual([{ id: "page", value: "12-13", printed: "3-4〜3-5" }]);
+    // 印刷の番号が無い・空・物理頁と同じ表記なら物理頁だけ。
+    expect(citationMetadataChips({ page_start: 12 })).toEqual([{ id: "page", value: "12" }]);
+    expect(citationMetadataChips({ page_start: 12, page_label_start: " " })).toEqual([
+      { id: "page", value: "12" },
+    ]);
+    expect(citationMetadataChips({ page_start: 12, page_label_start: "12" })).toEqual([
+      { id: "page", value: "12" },
+    ]);
+    // 物理頁が無ければ印刷の番号だけでは出さない（MCP の locator と同じ）。
+    expect(citationMetadataChips({ page_label_start: "ii" })).toEqual([]);
+  });
+
   it("欠損値や非文字列 metadata は表示対象にしない", () => {
     expect(
       citationMetadataChips({

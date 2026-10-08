@@ -673,6 +673,8 @@ _GUIDE_SUMMARY_KEYS = (
     "known_conditions",
     "unknown_conditions",
     "applicability",
+    # 下書きで試した回答で、下書きの版を使ったとき True（#1288）。
+    "draft",
 )
 
 
@@ -739,6 +741,50 @@ def apply_guide_to_diagnostics(diagnostics: dict[str, Any], guide: Mapping[str, 
 
 
 GUIDE_CLARIFICATION_PREFIX = "guide:"
+
+# 下書きで試す（#1288）。回答の記録・診断の key と、trace_id の接頭辞（利用者の回答の履歴・
+# フィードバック・評価から外すのに使う。uuid の hex 32 字と合わせて 64 字に収まる）。
+GUIDE_PREVIEW_KEY = "guide_preview"
+GUIDE_PREVIEW_TRACE_PREFIX = "guide-preview-"
+
+
+@dataclass(frozen=True)
+class GuidePreview:
+    """公開の版の代わりに、1 回の回答だけに使う下書き（#1288）。公開の版・保存は変えない。"""
+
+    guide_id: str
+    draft_revision: int
+    content: SupportGuideContent
+    published_revision: int | None = None
+
+    def marker(self) -> dict[str, Any]:
+        """回答の記録・診断に残す印（どのガイドのどの下書きの版で試したか）。"""
+        return {
+            "guide_id": self.guide_id,
+            "draft_revision": self.draft_revision,
+            "published_revision": self.published_revision,
+        }
+
+
+def with_draft(guides: Iterable[GuideTriple], preview: GuidePreview) -> list[GuideTriple]:
+    """公開のガイドのうち、試すガイドだけを下書きに置き換えた一覧（未公開なら足す）。
+
+    照合はほかの公開のガイドと同じ規則で行い、公開したときと同じガイドが選ばれるかを確かめる。
+    """
+    return [
+        *(item for item in guides if item[0] != preview.guide_id),
+        (preview.guide_id, preview.draft_revision, preview.content),
+    ]
+
+
+def is_guide_preview_trace(trace_id: str) -> bool:
+    """下書きで試した回答の trace_id か。"""
+    return trace_id.startswith(GUIDE_PREVIEW_TRACE_PREFIX)
+
+
+def is_guide_preview_record(diagnostics: object) -> bool:
+    """回答の記録の診断が、下書きで試した回答のものか。"""
+    return isinstance(diagnostics, Mapping) and bool(diagnostics.get(GUIDE_PREVIEW_KEY))
 
 
 def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
@@ -810,10 +856,13 @@ def resolve_guide_clarification(
 __all__ = [
     "GUIDE_CLARIFICATION_PREFIX",
     "GUIDE_LOAD_FAILED_KEY",
+    "GUIDE_PREVIEW_KEY",
+    "GUIDE_PREVIEW_TRACE_PREFIX",
     "MATCH_THRESHOLD",
     "ConditionState",
     "GuideContext",
     "GuideMatch",
+    "GuidePreview",
     "applicability_status",
     "apply_guide_to_diagnostics",
     "build_guide_context",
@@ -824,10 +873,13 @@ __all__ = [
     "guide_rule",
     "guide_score",
     "guide_short_circuit_outcome",
+    "is_guide_preview_record",
+    "is_guide_preview_trace",
     "match_guide",
     "rank_guides",
     "resolve_guide_clarification",
     "short_circuit_answer",
     "visible_plan",
+    "with_draft",
     "with_guide_rule",
 ]

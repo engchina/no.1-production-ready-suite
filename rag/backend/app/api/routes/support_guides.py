@@ -3,30 +3,42 @@
 検索・回答プロファイルの知識の 1 つ。下書きを保存（楽観ロック）・検証し、公開した版だけを回答に
 使う。公開・ロールバックは新しい版を作り、前の版は履歴に残る。取り込みは下書きとして作るだけで、
 公開は管理者が検証してから行う。
+
+公開の前に、下書きで試しに答えられる（#1288。公開の版は変えない）。取り込みの確認は、同じ id・
+名前の既存のガイドとの差分を示す。
 """
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import ValidationError
 
+from app.api.routes import search as search_route
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import (
     SupportGuideConflictError,
     SupportGuideNotFoundError,
     SupportGuideStore,
 )
-from app.rag.support_guide import has_errors, reference_issues, validate_content
+from app.rag.rate_limit import enforce_rate_limit
+from app.rag.support_guide import diff_contents, has_errors, reference_issues, validate_content
+from app.rag.support_guide_runtime import GuidePreview
 from app.schemas.common import ApiResponse
 from app.schemas.document import FileStatus
+from app.schemas.search import SearchRequest
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.support_guide import (
     SupportGuideContent,
     SupportGuideCreateRequest,
     SupportGuideDetail,
+    SupportGuideDraftTryData,
+    SupportGuideDraftTryRequest,
     SupportGuideDraftUpdate,
     SupportGuideExportData,
     SupportGuideImportData,
+    SupportGuideImportDiff,
     SupportGuideImportItem,
     SupportGuideImportPreviewData,
     SupportGuideImportRequest,
@@ -163,11 +175,19 @@ async def export_support_guides(
     return ApiResponse(data=SupportGuideExportData(guides=[content for _, _, content in published]))
 
 
+# 取り込む JSON の各ガイドに付けてよい、既存のガイドの id（差分の突き合わせだけに使う。#1288）。
+_IMPORT_GUIDE_ID_KEY = "guide_id"
+
+
 def _import_items(
     body: SupportGuideImportRequest,
-) -> list[tuple[SupportGuideImportItem, SupportGuideContent | None]]:
-    items: list[tuple[SupportGuideImportItem, SupportGuideContent | None]] = []
-    for index, raw in enumerate(body.guides):
+) -> list[tuple[SupportGuideImportItem, SupportGuideContent | None, str | None]]:
+    """各ガイドの検証の結果・内容・既存のガイドの id（JSON にあれば）。"""
+    items: list[tuple[SupportGuideImportItem, SupportGuideContent | None, str | None]] = []
+    for index, original in enumerate(body.guides):
+        raw = dict(original)
+        hint = raw.pop(_IMPORT_GUIDE_ID_KEY, None)
+        guide_id = hint.strip() if isinstance(hint, str) and hint.strip() else None
         try:
             content = SupportGuideContent.model_validate(raw)
         except ValidationError as error:
@@ -182,7 +202,11 @@ def _import_items(
             ]
             title = raw.get("title") if isinstance(raw.get("title"), str) else None
             items.append(
-                (SupportGuideImportItem(index=index, title=title, valid=False, issues=issues), None)
+                (
+                    SupportGuideImportItem(index=index, title=title, valid=False, issues=issues),
+                    None,
+                    guide_id,
+                )
             )
             continue
         issues = validate_content(content)
@@ -192,18 +216,78 @@ def _import_items(
                     index=index, title=content.title, valid=not has_errors(issues), issues=issues
                 ),
                 content,
+                guide_id,
             )
         )
     return items
+
+
+def _existing_guide(
+    guides: list[SupportGuideSummary], content: SupportGuideContent, guide_id: str | None
+) -> tuple[SupportGuideSummary, Literal["id", "title"]] | None:
+    """取り込むガイドと同じ id、無ければ同じ名前の既存のガイド。
+
+    同じ名前が複数あれば、アーカイブしたものより使っているものを先にする。
+    """
+    if guide_id:
+        found = next((guide for guide in guides if guide.guide_id == guide_id), None)
+        if found is not None:
+            return found, "id"
+    title = content.title.strip()
+    same = [guide for guide in guides if guide.title.strip() == title]
+    same.sort(key=lambda guide: guide.status != "active")
+    return (same[0], "title") if same else None
+
+
+async def _import_diff(
+    store: SupportGuideStore,
+    search_answer_profile_id: str,
+    guides: list[SupportGuideSummary],
+    content: SupportGuideContent,
+    guide_id: str | None,
+) -> SupportGuideImportDiff | None:
+    """既存のガイド（公開の版、無ければ下書き）と取り込むガイドの差分。同じものが無ければ None。"""
+    found = _existing_guide(guides, content, guide_id)
+    if found is None:
+        return None
+    summary, matched_by = found
+    try:
+        if summary.published_revision is not None:
+            base: Literal["published", "draft"] = "published"
+            revision = summary.published_revision
+            existing = (await store.get_revision(summary.guide_id, revision)).content
+        else:
+            base, revision = "draft", summary.draft_revision
+            existing = (await store.get_guide(search_answer_profile_id, summary.guide_id))[1]
+    except SupportGuideNotFoundError:
+        return None
+    return SupportGuideImportDiff(
+        guide_id=summary.guide_id,
+        title=summary.title,
+        matched_by=matched_by,
+        base=base,
+        revision=revision,
+        status=summary.status,
+        changes=diff_contents(existing, content),
+    )
 
 
 @router.post(_BASE + "/import/preview", response_model=ApiResponse[SupportGuideImportPreviewData])
 async def preview_support_guide_import(
     search_answer_profile_id: str, body: SupportGuideImportRequest
 ) -> ApiResponse[SupportGuideImportPreviewData]:
-    """取り込む前に、各ガイドの内容を検証して示す。"""
-    await _profile(OracleClient(), search_answer_profile_id)
-    items = [item for item, _ in _import_items(body)]
+    """取り込む前に、各ガイドの内容を検証し、同じ id・名前の既存のガイドとの差分を示す（#1288）。"""
+    oracle = OracleClient()
+    await _profile(oracle, search_answer_profile_id)
+    store = SupportGuideStore(oracle)
+    existing = await store.list_guides(search_answer_profile_id, include_archived=True)
+    items: list[SupportGuideImportItem] = []
+    for item, content, guide_id in _import_items(body):
+        if content is not None:
+            item.existing = await _import_diff(
+                store, search_answer_profile_id, existing, content, guide_id
+            )
+        items.append(item)
     return ApiResponse(
         data=SupportGuideImportPreviewData(
             items=items, importable_count=sum(item.valid for item in items)
@@ -219,7 +303,7 @@ async def import_support_guides(
     oracle = OracleClient()
     await _profile(oracle, search_answer_profile_id)
     items = _import_items(body)
-    invalid = [item.index for item, content in items if content is None or not item.valid]
+    invalid = [item.index for item, content, _ in items if content is None or not item.valid]
     if invalid:
         numbers = ", ".join(str(i + 1) for i in invalid)
         raise HTTPException(
@@ -228,7 +312,7 @@ async def import_support_guides(
     store = SupportGuideStore(oracle)
     user = _user(request)
     created: list[SupportGuideSummary] = []
-    for _, content in items:
+    for _, content, _ in items:
         assert content is not None
         guide_id = await store.create_guide(search_answer_profile_id, content, user=user)
         created.append((await store.get_guide(search_answer_profile_id, guide_id))[0])
@@ -315,6 +399,78 @@ async def publish_support_guide(
     except SupportGuideConflictError as error:
         raise _conflict(error) from error
     return ApiResponse(data=await _detail(store, search_answer_profile_id, guide_id))
+
+
+@router.post(_GUIDE + "/try", response_model=ApiResponse[SupportGuideDraftTryData])
+async def try_support_guide_draft(
+    http_request: Request,
+    search_answer_profile_id: str,
+    guide_id: str,
+    body: SupportGuideDraftTryRequest,
+) -> ApiResponse[SupportGuideDraftTryData]:
+    """保存した下書きで試しに答える（#1288）。公開の版は変えない。
+
+    権限は業務ガイドの管理と同じ（manifest）。検索・回答は通常の回答と同じ流れで、照合の時だけ
+    このガイドの公開の版の代わりに下書きを使う。回答の記録には ``guide_preview`` を残し、利用者の
+    回答の履歴・フィードバック・評価に混ぜない。読み込んだ下書きの版（``draft_revision``）が今の版と
+    違えば 409、下書きが構造の検証に通らなければ 422。
+    """
+    enforce_rate_limit("search", http_request)
+    oracle = OracleClient()
+    await _profile(oracle, search_answer_profile_id)
+    store = SupportGuideStore(oracle)
+    try:
+        summary, draft = await store.get_guide(search_answer_profile_id, guide_id)
+    except SupportGuideNotFoundError as error:
+        raise _not_found() from error
+    if summary.status != "active":
+        raise HTTPException(status_code=409, detail="アーカイブした業務ガイドは試せません。")
+    if summary.draft_revision != body.draft_revision:
+        raise _conflict(SupportGuideConflictError(summary.draft_revision), "試")
+    issues = validate_content(draft)
+    if has_errors(issues):
+        raise _refused("検証で問題が見つかったため、この下書きでは試せません。", issues)
+    preview = GuidePreview(
+        guide_id=guide_id,
+        draft_revision=summary.draft_revision,
+        content=draft,
+        published_revision=summary.published_revision,
+    )
+    result = await search_route.run_guide_preview(
+        SearchRequest(
+            query=body.query,
+            search_answer_profile_id=search_answer_profile_id,
+            conditions=body.conditions,
+        ),
+        preview,
+    )
+    answer = result.diagnostics.answer or {}
+    raw_guide = answer.get("guide")
+    guide = dict(raw_guide) if isinstance(raw_guide, dict) else None
+    envelope = answer.get("envelope")
+    raw_clarifications = envelope.get("clarifications") if isinstance(envelope, dict) else None
+    outcome = answer.get("outcome")
+    return ApiResponse(
+        data=SupportGuideDraftTryData(
+            trace_id=result.trace_id,
+            guide_id=guide_id,
+            draft_revision=summary.draft_revision,
+            published_revision=summary.published_revision,
+            guide_used=bool(
+                guide and guide.get("guide_id") == guide_id and guide.get("draft") is True
+            ),
+            guide=guide,
+            outcome=outcome if isinstance(outcome, str) else None,
+            answer=result.answer,
+            citations=result.citations,
+            clarifications=[
+                dict(item) for item in raw_clarifications or [] if isinstance(item, dict)
+            ]
+            if isinstance(raw_clarifications, list)
+            else [],
+            elapsed_ms=result.elapsed_ms,
+        )
+    )
 
 
 @router.get(_GUIDE + "/revisions/{revision}", response_model=ApiResponse[SupportGuideRevision])

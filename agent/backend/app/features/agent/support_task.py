@@ -14,10 +14,13 @@
   呼び出し（`agent_max_tool_calls_per_task`）。超える呼び出しは実行せず、ツールの結果
   （`budget_exceeded`）でモデルに知らせる（Run は失敗にしない）。
 - ツールは MCP 接続の名前（`<接続>__<ツール>`）のツールの部分で判定する（接続の名前に依らない）。
+- 失敗・取消の Run（#1277）は状態を残さないが、消費は次の Run の会話の通しの予算に数える
+  （`with_abandoned_consumption`。失敗する Run を繰り返して上限を超えさせない）。
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -143,6 +146,75 @@ def previous_task_consumption(previous: JsonObject | None) -> JsonObject:
         "tool_seconds": _float(task.get("tool_seconds")),
         "rag_seconds": _float(task.get("rag_seconds")),
     }
+
+
+def _in_flight(step: RunStep) -> bool:
+    """結果を受け取る前に Run が止まった（失敗・取消）ツールの呼び出しか。
+
+    呼び先には届いている見込みが高いので消費に数える。承認を待っていた step（承認待ちのまま
+    取り消した）と、Control Plane の検証は数えない。
+    """
+    if step.tool_call is None or step.tool_result is not None:
+        return False
+    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
+        return False
+    if step.status == "running":
+        return True
+    return step.status == "cancelled" and step.approval_id is None
+
+
+def abandoned_run_consumption(steps: list[RunStep]) -> JsonObject:
+    """失敗・取消の Run の消費（実行したツールと、結果を受け取る前に止まった呼び出し。#1277）。"""
+    consumed = run_consumption(steps)
+    for step in steps:
+        if not _in_flight(step) or step.tool_call is None:
+            continue
+        consumed["tool_calls"] += 1
+        if mcp_base_tool_name(step.tool_call.name) in RAG_BUDGET_TOOLS:
+            consumed["rag_calls"] += 1
+    return consumed
+
+
+def with_abandoned_consumption(
+    previous: JsonObject | None,
+    abandoned: list[JsonObject],
+    *,
+    thread_id: str | None,
+    owner_user_uuid: str | None,
+) -> JsonObject | None:
+    """前の完了した Run の状態に、その後の失敗・取消の Run の消費を足した状態（#1277）。
+
+    足した値は、次に完了する Run の状態（`build_support_task`）にそのまま引き継がれる。
+    失敗・取消の Run が無ければ `previous` をそのまま返す。前の状態が無ければ、予算だけの
+    状態を作る。
+    """
+    if not abandoned:
+        return previous
+    state: JsonObject = (
+        deepcopy(previous)
+        if isinstance(previous, dict)
+        else {
+            "schema_version": SUPPORT_TASK_SCHEMA_VERSION,
+            "thread_id": thread_id,
+            "owner_user_uuid": owner_user_uuid,
+        }
+    )
+    before = previous_task_consumption(state)
+    budget = state.get("budget")
+    budget = dict(budget) if isinstance(budget, dict) else {}
+    budget["task"] = {
+        "runs": before["runs"] + len(abandoned),
+        "tool_calls": before["tool_calls"] + sum(item["tool_calls"] for item in abandoned),
+        "rag_calls": before["rag_calls"] + sum(item["rag_calls"] for item in abandoned),
+        "tool_seconds": round(
+            before["tool_seconds"] + sum(item["tool_seconds"] for item in abandoned), 1
+        ),
+        "rag_seconds": round(
+            before["rag_seconds"] + sum(item["rag_seconds"] for item in abandoned), 1
+        ),
+    }
+    state["budget"] = budget
+    return state
 
 
 class SupportTaskBudget:

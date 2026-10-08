@@ -27,6 +27,8 @@ class SkillMcpRequirement(BaseModel):
 
     `server_id` は MCP 接続の ID（`rag` / `nl2sql` / 登録した接続）。`control-plane` は
     Control Plane のツール（`tool_registry`）。`tool_names` が空なら接続のすべてのツールを使う。
+    `tool_names` は MCP のツールの素の名前（`rag_search`）。Skill の指示も素の名前で書いてよく、
+    組み込み Runtime が Run のときにモデルへ渡す名前（`rag__rag_search`）へ書き直す（#1303）。
     """
 
     server_id: str

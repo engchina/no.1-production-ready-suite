@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { SupportGuideContent } from "./api";
+import type { SupportGuideChange, SupportGuideContent } from "./api";
 import {
   aliasesToText,
+  changeFieldLabels,
+  changeSectionLabel,
+  countChanges,
+  groupChangesBySection,
+  tryConditionOptions,
+  tryConditionsPayload,
   textToAliases,
   emptyGuideForm,
   guideContentFromForm,
@@ -267,3 +273,40 @@ describe("言い換え（value_aliases）", () => {
   });
 });
 
+
+describe("取込の差分と下書きで試す", () => {
+  const changes: SupportGuideChange[] = [
+    { section: "basic", kind: "changed", key: "", label: "題", fields: ["title", "description"] },
+    { section: "steps", kind: "changed", key: "grant", label: "付与", fields: ["depends_on", "unknown"] },
+    { section: "steps", kind: "added", key: "notify", label: "知らせる", fields: [] },
+    { section: "impact", kind: "changed", key: "", label: "", fields: ["scope"] },
+  ];
+
+  it("節ごとにまとめ、件数と項目の名前を利用者の言葉にする", () => {
+    expect(groupChangesBySection(changes).map((group) => [group.section, group.changes.length])).toEqual([
+      ["basic", 1],
+      ["steps", 2],
+      ["impact", 1],
+    ]);
+    expect(countChanges(changes)).toEqual({ added: 1, removed: 0, changed: 3 });
+    expect(changeSectionLabel("basic")).toBe("基本");
+    expect(changeSectionLabel("steps")).toBe("手順");
+    expect(changeFieldLabels(changes[0])).toEqual(["タイトル", "説明"]);
+    // 分からない項目は backend の名前のまま。
+    expect(changeFieldLabels(changes[1])).toEqual(["依存する手順", "unknown"]);
+    expect(changeFieldLabels(changes[3])).toEqual(["影響の範囲"]);
+  });
+
+  it("試す条件の選択肢と、空の値を渡さない条件", () => {
+    expect(tryConditionOptions(content.conditions[0])).toEqual(content.conditions[0].allowed_values);
+    expect(tryConditionOptions({ ...content.conditions[0], type: "boolean", allowed_values: [] })).toEqual([
+      "はい",
+      "いいえ",
+    ]);
+    expect(tryConditionOptions({ ...content.conditions[0], type: "text", allowed_values: [] })).toEqual([]);
+    expect(tryConditionsPayload({ target: "個別", other: "  ", note: " 承認済み " })).toEqual({
+      target: "個別",
+      note: "承認済み",
+    });
+  });
+});

@@ -240,7 +240,10 @@ function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
   return (
     <div className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80">
       <dt className="sr-only">{chipLabel(chip)}</dt>
-      <dd className="truncate">{chipValue(chip)}</dd>
+      {/* 幅で切れたときも全文を確かめられるよう title に同じ文を入れる。 */}
+      <dd className="truncate" title={chipValue(chip)}>
+        {chipValue(chip)}
+      </dd>
     </div>
   );
 }
@@ -248,7 +251,10 @@ function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
 function chipValue(chip: CitationMetadataChip): string {
   switch (chip.id) {
     case "page":
-      return t("search.citation.page", { page: chip.value });
+      // 印刷のページ番号があれば物理頁と並べる（「p.12（資料の表記: 3-4）」。#1287）。
+      return chip.printed
+        ? t("search.citation.pageWithLabel", { page: chip.value, label: chip.printed })
+        : t("search.citation.page", { page: chip.value });
     case "content_kind":
       return t("search.citation.contentKindValue", {
         kind: contentKindLabel(chip.value),

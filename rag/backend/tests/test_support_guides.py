@@ -5,23 +5,33 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE
 
+from app.api.routes import search as search_route
 from app.api.routes import support_guides as route
 from app.clients.support_guide_store import SupportGuideConflictError, SupportGuideNotFoundError
 from app.main import app
-from app.rag.support_guide import content_sha256, has_errors, validate_content
+from app.rag.support_guide import content_sha256, diff_contents, has_errors, validate_content
+from app.rag.support_guide_runtime import (
+    GUIDE_PREVIEW_KEY,
+    GUIDE_PREVIEW_TRACE_PREFIX,
+    GuidePreview,
+)
 from app.schemas.document import FileStatus
+from app.schemas.search import SearchDiagnostics, SearchRequest, SearchResponse
 from app.schemas.support_guide import (
     SupportGuideContent,
     SupportGuideRevision,
     SupportGuideRevisionSummary,
     SupportGuideSummary,
 )
+from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -437,3 +447,255 @@ def test_condition_value_aliases_are_validated() -> None:
                 }
             ]
         )
+
+
+# ---- 取込の差分（#1288） ------------------------------------------------------------------
+
+
+def test_diff_contents_lists_added_removed_and_changed_rows() -> None:
+    before = content()
+    after = content(
+        description="説明を足した",
+        conditions=[
+            {
+                "id": "target",
+                "label": "付与先",
+                "type": "enum",
+                "allowed_values": ["個別", "グループ", "全員"],
+                "unknown_handling": "branch",
+                "question": "権限は個別の利用者とグループのどちらに付けますか？",
+            }
+        ],
+        steps=[
+            {"id": "register", "title": "アカウントを登録する", "allowed_tools": ["rag_search"]},
+            {"id": "grant", "title": "権限を付与する（承認の後）", "depends_on": ["register"]},
+            {"id": "notify", "title": "利用者に知らせる"},
+        ],
+        branches=[
+            {
+                "id": "b1",
+                "when": {"condition_id": "target", "values": ["個別"]},
+                "goto_step": "grant",
+            }
+        ],
+        references=[{"document_id": "doc-2", "title": "新しい手順書"}],
+        impact={"scope": "all", "approval_required": True},
+    )
+    changes = [
+        (change.section, change.kind, change.key, change.fields)
+        for change in diff_contents(before, after)
+    ]
+    assert changes == [
+        ("basic", "changed", "", ["description"]),
+        ("conditions", "changed", "target", ["allowed_values"]),
+        ("steps", "changed", "grant", ["title"]),
+        ("steps", "added", "notify", []),
+        ("steps", "removed", "ask", []),
+        ("branches", "removed", "b2", []),
+        ("references", "added", "doc-2", []),
+        ("references", "removed", "doc-1", []),
+        ("impact", "changed", "", ["scope"]),
+    ]
+    labels = {(change.section, change.key): change.label for change in diff_contents(before, after)}
+    assert labels[("steps", "notify")] == "利用者に知らせる"
+    assert labels[("references", "doc-1")] == "運用手順書"
+    assert diff_contents(before, content()) == []
+
+
+def test_import_preview_compares_with_the_existing_guide(
+    fakes: tuple[FakeStore, FakeOracle],
+) -> None:
+    store, _ = fakes
+    guide_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+    client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1})
+    # 公開の後に下書きを変えても、比べるのは公開の版。
+    client.put(
+        f"{BASE}/{guide_id}", json={"draft": guide(description="下書き"), "base_revision": 1}
+    )
+    draft_only = client.post(BASE, json={"draft": guide(title="未公開のガイド")}).json()["data"]
+
+    changed = guide(steps=[*guide()["steps"], {"id": "notify", "title": "知らせる"}])
+    renamed = {**guide(title="名前を変えた"), "guide_id": guide_id}
+    payload = {
+        "guides": [
+            changed,
+            renamed,
+            guide(title="新しいガイド"),
+            guide(title="未公開のガイド"),
+            {"title": "壊れた"},
+        ]
+    }
+    items = client.post(f"{BASE}/import/preview", json=payload).json()["data"]["items"]
+
+    by_title = items[0]["existing"]
+    assert (by_title["guide_id"], by_title["matched_by"]) == (guide_id, "title")
+    assert (by_title["base"], by_title["revision"], by_title["status"]) == (
+        "published",
+        1,
+        "active",
+    )
+    assert by_title["changes"] == [
+        {"section": "steps", "kind": "added", "key": "notify", "label": "知らせる", "fields": []}
+    ]
+    by_id = items[1]["existing"]
+    assert (by_id["guide_id"], by_id["matched_by"]) == (guide_id, "id")
+    assert by_id["changes"][0]["fields"] == ["title"]
+    assert items[2]["existing"] is None
+    unpublished = items[3]["existing"]
+    assert (unpublished["guide_id"], unpublished["base"], unpublished["revision"]) == (
+        draft_only["guide_id"],
+        "draft",
+        1,
+    )
+    assert unpublished["changes"] == []
+    assert items[4]["existing"] is None and items[4]["valid"] is False
+    # 差分を出すだけで、既存のガイドは変えない。取り込みは別の下書きとして作る。
+    assert store.heads[guide_id]["draft"].description == "下書き"
+    imported = client.post(f"{BASE}/import", json={"guides": [renamed]}).json()["data"]
+    assert imported["created"][0]["guide_id"] not in {guide_id, draft_only["guide_id"]}
+    assert imported["created"][0]["title"] == "名前を変えた"
+
+
+# ---- 下書きで試す（#1288） ----------------------------------------------------------------
+
+
+def _preview_response(preview: GuidePreview, *, used: bool = True) -> SearchResponse:
+    guide_summary = {
+        "guide_id": preview.guide_id if used else "other",
+        "revision": preview.draft_revision if used else 3,
+        "title": preview.content.title,
+        "decision": "branch",
+        "known_conditions": [],
+        "unknown_conditions": [{"id": "target", "label": "付与先", "state": "unknown"}],
+        "applicability": {},
+        **({"draft": True} if used else {}),
+    }
+    return SearchResponse(
+        answer="権限は詳細画面の権限タブで付与します。",
+        citations=[],
+        trace_id=GUIDE_PREVIEW_TRACE_PREFIX + "0" * 32,
+        elapsed_ms=12.0,
+        diagnostics=SearchDiagnostics(
+            answer={
+                "outcome": "conditional",
+                "guide": guide_summary,
+                "envelope": {"clarifications": [{"condition_id": "target", "options": ["個別"]}]},
+                GUIDE_PREVIEW_KEY: preview.marker(),
+            }
+        ),
+    )
+
+
+async def _async(value: Any) -> Any:
+    return value
+
+
+def test_try_draft_answers_with_the_draft_and_leaves_published_unchanged(
+    fakes: tuple[FakeStore, FakeOracle], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[SearchRequest, GuidePreview]] = []
+
+    async def fake_preview(request: SearchRequest, preview: GuidePreview) -> SearchResponse:
+        calls.append((request, preview))
+        return _preview_response(preview)
+
+    monkeypatch.setattr(search_route, "run_guide_preview", fake_preview)
+    guide_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+    client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1})
+    client.put(f"{BASE}/{guide_id}", json={"draft": guide(title="改訂"), "base_revision": 1})
+
+    response = client.post(
+        f"{BASE}/{guide_id}/try",
+        json={"query": "検証用アカウントに権限を付けたい", "draft_revision": 2, "conditions": {}},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert (data["guide_used"], data["draft_revision"], data["published_revision"]) == (
+        True,
+        2,
+        1,
+    )
+    assert data["trace_id"].startswith(GUIDE_PREVIEW_TRACE_PREFIX)
+    assert data["outcome"] == "conditional"
+    assert data["guide"]["decision"] == "branch"
+    assert data["clarifications"][0]["condition_id"] == "target"
+    request, preview = calls[0]
+    assert request.search_answer_profile_id == "bv-1"
+    assert request.query == "検証用アカウントに権限を付けたい"
+    assert (preview.guide_id, preview.draft_revision, preview.content.title) == (
+        guide_id,
+        2,
+        "改訂",
+    )
+    assert preview.published_revision == 1
+
+    # 公開の版・下書きの版は変わらない（試しは保存しない）。
+    detail = client.get(f"{BASE}/{guide_id}").json()["data"]
+    assert (detail["published_revision"], detail["draft_revision"]) == (1, 2)
+    assert detail["published"]["title"] == "検証用アカウントに権限を付ける"
+    assert [item["revision"] for item in detail["revisions"]] == [1]
+
+    # 別のガイドで答えたときは「使われなかった」と返す。
+    monkeypatch.setattr(
+        search_route,
+        "run_guide_preview",
+        lambda request, preview: _async(_preview_response(preview, used=False)),
+    )
+    unused = client.post(
+        f"{BASE}/{guide_id}/try", json={"query": "別の質問", "draft_revision": 2}
+    ).json()["data"]
+    assert unused["guide_used"] is False
+
+
+def test_try_draft_refuses_stale_broken_or_archived_drafts(
+    fakes: tuple[FakeStore, FakeOracle], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_preview(request: SearchRequest, preview: GuidePreview) -> SearchResponse:
+        raise AssertionError("回答を作らない")
+
+    monkeypatch.setattr(search_route, "run_guide_preview", fake_preview)
+    guide_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
+    stale = client.post(f"{BASE}/{guide_id}/try", json={"query": "権限", "draft_revision": 9})
+    assert stale.status_code == 409
+    assert "読み込み直してから試してください" in stale.json()["error_messages"][0]
+    empty = client.post(f"{BASE}/{guide_id}/try", json={"query": "", "draft_revision": 1})
+    assert empty.status_code == 422
+
+    broken = guide(steps=[{"id": "a", "title": "A", "depends_on": ["a"]}], branches=[])
+    broken_id = client.post(BASE, json={"draft": broken}).json()["data"]["guide_id"]
+    refused = client.post(f"{BASE}/{broken_id}/try", json={"query": "権限", "draft_revision": 1})
+    assert refused.status_code == 422
+    assert refused.json()["error_messages"][0] == (
+        "検証で問題が見つかったため、この下書きでは試せません。"
+    )
+
+    client.post(f"{BASE}/{guide_id}/archive")
+    archived = client.post(f"{BASE}/{guide_id}/try", json={"query": "権限", "draft_revision": 1})
+    assert archived.status_code == 409
+    missing = client.post(f"{BASE}/missing/try", json={"query": "権限", "draft_revision": 1})
+    assert missing.status_code == 404
+
+
+def test_try_draft_requires_the_guide_management_permission(
+    fakes: tuple[FakeStore, FakeOracle], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """検索・チャットの権限だけの利用者は試せない（403）。業務ガイドの管理者は試せる。"""
+    store, _ = fakes
+
+    async def fake_preview(request: SearchRequest, preview: GuidePreview) -> SearchResponse:
+        return _preview_response(preview)
+
+    monkeypatch.setattr(search_route, "run_guide_preview", fake_preview)
+    guide_id = asyncio.run(store.create_guide("bv-1", content(), user=None))
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("searcher", ["menu.search", "menu.chat"])
+    auth.user_with_permissions("guide-admin", ["menu.search_answer_profiles"])
+    body = {"query": "検証用アカウントに権限を付けたい", "draft_revision": 1}
+
+    denied = client.post(f"{BASE}/{guide_id}/try", json=body, headers=login(client, "searcher"))
+    assert denied.status_code == 403
+    assert denied.json()["error_code"] == ROUTE_FORBIDDEN_CODE
+    admin = login(client, "guide-admin")
+    allowed = client.post(f"{BASE}/{guide_id}/try", json=body, headers=admin)
+    assert allowed.status_code == 200
+    assert allowed.json()["data"]["guide_used"] is True

@@ -5,7 +5,9 @@ Control Plane の中で業務 Agent を実行する。外部の Runtime・Bindin
 - モデル: システム設定 > モデル の OCI Enterprise AI（Agent の `model_id`、無ければ既定の
   テキストモデル）。
   SDK の tracing は無効にする（業務データを外部へ送らない）。
-- 指示: Agent の指示と、割り当てた Skill の指示を合わせる。
+- 指示: Agent の指示と、割り当てた Skill の指示を合わせる。指示の中の MCP のツールの素の名前は、
+  モデルに渡す名前（`<接続>__<ツール>`）に書き直す。無い名前のツールを呼んだら、呼ぶ名前をモデルへ
+  返して呼び直させる（Run は落とさない。#1303）。
 - ツール: Skill が必要とするツールを function tool にする（#757）。`control-plane` は
   `tool_registry` のツール、それ以外の server_id は MCP 接続（RAG / NL2SQL / 外部 MCP）の
   `tools/list` のツール（名前は `<接続>__<ツール>`、一覧は Run の利用者の権限で絞られる）。
@@ -21,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
@@ -33,10 +36,12 @@ from agents import (
     Model,
     ModelSettings,
     OpenAIResponsesModel,
+    RunConfig,
     Runner,
     RunState,
     set_tracing_disabled,
 )
+from agents.run_config import ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
 from openai import APIStatusError, AsyncOpenAI, BadRequestError
 from pr_backend_core.observability.request_context import bind_log_context
@@ -49,21 +54,27 @@ from pr_system_settings.model import (
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
     ANSWER_VALIDATION_NAME,
+    EVIDENCE_TOOLS,
     MAX_ANSWER_CHARS,
     MAX_QUERY_CHARS,
+    NO_EVIDENCE_NOTICE,
     REASON_ANSWER_TOO_LONG,
     REASON_CONNECTION_NOT_FOUND,
     REASON_EMPTY_ANSWER,
     REASON_NO_RAG_EVIDENCE,
+    REASON_UNUSABLE_RESULT,
+    REASON_VALIDATION_ERROR,
     REASON_VALIDATOR_UNAVAILABLE,
     STATUS_COMPLETED,
-    STATUS_FAILED,
     STATUS_SKIPPED,
+    STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
-    annotate_answer,
-    run_evidence_refs,
-    unverified_points,
+    combine_validations,
+    connection_check_inputs,
+    run_evidence_groups,
+    usable_result,
     validation_content,
+    with_no_evidence_notice,
     with_unverified_notice,
 )
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
@@ -373,19 +384,78 @@ def discover_mcp_tools(
     return tools, warnings
 
 
-def compose_instructions(agent_instructions: str, skill_ids: list[str]) -> str:
-    """Agent の指示と Skill の指示（AgentSkills の本文）を 1 つの system の指示にする。"""
+# 指示の中のツールの名前の前後に来ない文字（function tool の名前に使える文字。#1303）。
+_TOOL_NAME_BOUNDARY = "A-Za-z0-9_-"
+
+
+def instruction_tool_names(skill_ids: list[str], exposed: Collection[str]) -> dict[str, str]:
+    """指示に書いた MCP のツールの素の名前 → モデルに渡す名前（`<接続>__<ツール>`。#1303）。
+
+    Skill の指示は MCP のツールを接頭辞の無い名前（`rag_search`）で書くが、モデルに渡す
+    function tool の名前は `<接続>__<ツール>`（#757）。指示の名前のまま呼ぶと SDK が
+    `ModelBehaviorError` で Run を落とすため、指示を Run のツールの名前で書き直す。
+
+    対象は Skill の requirement が名前で宣言したツールのうち、この Run でモデルに渡すもの
+    だけ（ポリシーで拒否したもの・一覧に無いものは書き換えない）。同じ素の名前が複数の接続に
+    あって 1 つに決まらないものと、素の名前のままのツールがあるものは書き換えない。
+    """
+    exposed_names = set(exposed)
+    candidates: dict[str, set[str]] = {}
+    for skill_id in skill_ids:
+        skill = skill_registry.get(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        for requirement in skill.mcp_requirements:
+            server_id = requirement.server_id.strip()
+            if not server_id or server_id == CONTROL_PLANE_SERVER_ID:
+                continue
+            for tool_name in requirement.tool_names:
+                function_name = mcp_function_name(server_id, tool_name)
+                if function_name in exposed_names and tool_name not in exposed_names:
+                    candidates.setdefault(tool_name, set()).add(function_name)
+    return {name: next(iter(found)) for name, found in candidates.items() if len(found) == 1}
+
+
+def render_tool_names(text: str, names: Mapping[str, str]) -> str:
+    """指示の中の素のツールの名前を、モデルに渡す名前に置き換える（語の一部は置き換えない）。"""
+    if not names or not text:
+        return text
+    alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    pattern = re.compile(
+        rf"(?<![{_TOOL_NAME_BOUNDARY}])({alternatives})(?![{_TOOL_NAME_BOUNDARY}])"
+    )
+    return pattern.sub(lambda match: names[match.group(1)], text)
+
+
+def compose_instructions(
+    agent_instructions: str,
+    skill_ids: list[str],
+    exposed_tool_names: Collection[str] | None = None,
+) -> str:
+    """Agent の指示と Skill の指示（AgentSkills の本文）を 1 つの system の指示にする。
+
+    `exposed_tool_names`（この Run でモデルに渡すツールの名前）を渡すと、指示の中の MCP の
+    ツールの素の名前を、モデルが呼ぶ名前（`<接続>__<ツール>`）に書き直す（#1303）。
+    """
+    exposed = exposed_tool_names or ()
     sections = [
         "あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。"
         "ツールの結果に無いことは推測で補わず、分からないと答えてください。"
     ]
     if agent_instructions.strip():
-        sections.append("# 業務の指示\n" + agent_instructions.strip())
+        agent_names = instruction_tool_names(skill_ids, exposed)
+        sections.append(
+            "# 業務の指示\n" + render_tool_names(agent_instructions.strip(), agent_names)
+        )
     for skill_id in skill_ids:
         skill = skill_registry.get(skill_id)
         if skill is None or not skill.enabled or not skill.instructions.strip():
             continue
-        sections.append(f"# Skill: {skill.name}\n{skill.instructions.strip()}")
+        # Skill の指示は、その Skill が宣言した接続のツールの名前で書き直す。
+        skill_names = instruction_tool_names([skill_id], exposed)
+        sections.append(
+            f"# Skill: {skill.name}\n{render_tool_names(skill.instructions.strip(), skill_names)}"
+        )
         # 本文へ全参照文書を詰めず、割り当て済みの文書の索引だけを渡す（#862）。
         from app.features.agent.plugins import plugin_resource_registry
 
@@ -600,23 +670,82 @@ def build_sdk_agent(
     )
     for warning in warnings:
         runtime_repository.note_builtin_warning(run_id, warning)
-    composed = compose_instructions(instructions, skill_ids)
+    tools = build_function_tools(
+        run_id,
+        agent_tool_names(skill_ids),
+        mcp_tools,
+        resource_ids=skill_reference_ids(skill_ids),
+        budget=budget,
+    )
+    # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
+    exposed = [tool.name for tool in tools]
+    composed = compose_instructions(instructions, skill_ids, exposed)
     if support_task:
-        composed = f"{composed}\n\n{support_task}"
+        support_names = instruction_tool_names(skill_ids, exposed)
+        composed = f"{composed}\n\n{render_tool_names(support_task, support_names)}"
     return Agent(
         name=name or "agent",
         instructions=composed,
-        tools=list(
-            build_function_tools(
-                run_id,
-                agent_tool_names(skill_ids),
-                mcp_tools,
-                resource_ids=skill_reference_ids(skill_ids),
-                budget=budget,
-            )
-        ),
+        tools=list(tools),
         model=model_factory(target),
         model_settings=ModelSettings(store=False),
+    )
+
+
+# 無いツールの呼び出しの返答で、候補として並べるツールの数の上限（#1303）。
+_TOOL_NOT_FOUND_LIST_MAX = 20
+
+
+def tool_not_found_message(called: str, exposed: Collection[str]) -> str:
+    """モデルが渡していないツールを呼んだときに返す案内（呼ぶ名前を示す。#1303）。
+
+    素の名前（`rag_search`）や別の接頭辞で呼んだときは、ツールの部分が同じ名前を候補にする。
+    候補が 1 つなら呼び直す名前を、複数（同じツールの名前が複数の接続にある）なら候補を並べ、
+    どれかを選ばせる（Control Plane がどれかに決めて実行することはしない）。
+    """
+    base = mcp_base_tool_name(called)
+    names = sorted(set(exposed))
+    candidates = [name for name in names if name != called and mcp_base_tool_name(name) == base]
+    if len(candidates) == 1:
+        return (
+            f"ツール「{called}」はありません。呼ぶときの名前は「{candidates[0]}」です。"
+            f"同じ引数で「{candidates[0]}」を呼び直してください。"
+        )
+    if candidates:
+        return (
+            f"ツール「{called}」はありません。同じ名前のツールが複数の接続にあります"
+            f"（{'、'.join(candidates)}）。目的に合う接続のツールの名前で呼んでください。"
+        )
+    if not names:
+        return f"ツール「{called}」はありません。この実行で使えるツールはありません。"
+    listed = "、".join(names[:_TOOL_NOT_FOUND_LIST_MAX])
+    more = "ほか" if len(names) > _TOOL_NOT_FOUND_LIST_MAX else ""
+    return f"ツール「{called}」はありません。使えるツールの名前: {listed}{more}。"
+
+
+def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
+    """Run の SDK の設定。無いツールの呼び出しで Run を落とさず、モデルへ案内を返す（#1303）。
+
+    SDK の既定（`raise_error`）は、モデルが渡していない名前のツールを 1 回呼んだだけで
+    `ModelBehaviorError` にして Run 全体を失敗させる。呼ぶ名前を返して、モデルに呼び直させる。
+    素の名前を Control Plane が別のツールへ読み替えて実行することはしない（呼び出し・承認・監査は
+    モデルが呼んだ名前のまま。同じ名前が複数の接続にあるときに誤った接続を呼ばない）。
+    """
+    exposed = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+
+    def format_error(args: ToolErrorFormatterArgs[Any]) -> str | None:
+        if args.kind != "tool_not_found":
+            return None
+        message = tool_not_found_message(args.tool_name, exposed)
+        logger.warning(
+            "builtin_runtime_tool_not_found",
+            extra={"run_id": run_id, "tool_name": args.tool_name, "call_id": args.call_id},
+        )
+        return message
+
+    return RunConfig(
+        tool_not_found_behavior="return_error_to_model",
+        tool_error_formatter=format_error,
     )
 
 
@@ -735,11 +864,16 @@ async def execute_run(run_id: str) -> None:
                 support_task=task.instructions,
             )
             result = await Runner.run(
-                sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
+                sdk_agent,
+                conversation_input(run_id, run.goal),
+                max_turns=_max_turns(),
+                run_config=_run_config(run_id, sdk_agent),
             )
             result = await _dry_run_approvals(run, sdk_agent, result)
             _record_usage(run_id, result, agent.model_id)
-            await _finish(run_id, result, task)
+            await _finish(
+                run_id, result, task, rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids)
+            )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
@@ -775,10 +909,14 @@ async def resume_run(run_id: str) -> None:
                     state.approve(item)
                 else:
                     state.reject(item)
-            result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+            result = await Runner.run(
+                sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
+            )
             result = await _dry_run_approvals(run, sdk_agent, result)
             _record_usage(run_id, result, agent.model_id)
-            await _finish(run_id, result, task)
+            await _finish(
+                run_id, result, task, rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids)
+            )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
@@ -816,11 +954,15 @@ async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> An
         state = result.to_state()
         for item in interruptions:
             state.reject(item, rejection_message=EVALUATION_DRY_RUN_MESSAGE)
-        result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+        result = await Runner.run(
+            sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run.id, sdk_agent)
+        )
     return result
 
 
-async def _finish(run_id: str, result: Any, task: _SupportTaskRun | None = None) -> None:
+async def _finish(
+    run_id: str, result: Any, task: _SupportTaskRun | None = None, *, rag_tools: bool = False
+) -> None:
     from app.features.agent.runtime import runtime_repository
 
     # 承認待ちで止めるときも残す（再開した Run は同じ成果物を上書きする。#1243）。
@@ -846,11 +988,22 @@ async def _finish(run_id: str, result: Any, task: _SupportTaskRun | None = None)
     )
     if get_settings().agent_final_validation_enabled:
         try:
-            answer = await _validate_final_answer(run_id, answer)
+            answer = await _validate_final_answer(run_id, answer, rag_tools=rag_tools)
         except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
             logger.warning(
                 "builtin_runtime_answer_validation_failed",
                 extra={"run_id": run_id, "exception_type": type(exc).__name__},
+            )
+            # 確かめられなかったことを成果物にも残す（#1277。黙って通さない）。
+            runtime_repository.save_builtin_artifact(
+                run_id,
+                kind=ANSWER_VALIDATION_KIND,
+                name=ANSWER_VALIDATION_NAME,
+                content=validation_content(
+                    STATUS_UNVALIDATED,
+                    reason=REASON_VALIDATION_ERROR,
+                    message="回答の検証の途中で予期しない失敗が起きました。",
+                ),
             )
             answer = with_unverified_notice(answer)
     runtime_repository.complete_builtin_run(run_id, answer)
@@ -865,13 +1018,29 @@ def _validator_connection(evidence_tool: str) -> McpConnectionConfig | None:
     return None
 
 
-async def _validate_final_answer(run_id: str, answer: str) -> str:
-    """回答の最終の検証（#1246）。検証の結果を成果物に残し、利用者に見せる回答を返す。
+def has_rag_evidence_tools(sdk_agent: Agent[Any] | None, skill_ids: list[str]) -> bool:
+    """Agent が RAG の根拠のツール（`rag_search` / `rag_retrieve_evidence`）を持つか（#1277）。
 
-    モデルではなく Control Plane が、根拠を返した RAG の MCP 接続の `rag_validate_answer` を呼ぶ
-    （ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
-    valid でなければ「確かめられていない点」を、検証が失敗したら「検証できませんでした」を
-    末尾に足す（回答は消さない・作り直さない）。
+    Run に渡したツールにあるか、Skill の requirement が名前で求めていれば持つとみなす（RAG の
+    接続のツールを取れなかった Run でも、根拠を使えなかった回答として注記するため）。
+    """
+    tools = list(getattr(sdk_agent, "tools", []) or [])
+    if any(mcp_base_tool_name(str(getattr(tool, "name", ""))) in EVIDENCE_TOOLS for tool in tools):
+        return True
+    return any(
+        allowed is not None and bool(allowed & EVIDENCE_TOOLS)
+        for allowed in agent_mcp_requirements(skill_ids).values()
+    )
+
+
+async def _validate_final_answer(run_id: str, answer: str, *, rag_tools: bool = False) -> str:
+    """回答の最終の検証（#1246・#1277）。検証の結果を成果物に残し、利用者に見せる回答を返す。
+
+    モデルではなく Control Plane が、根拠を返した RAG の MCP 接続ごとに `rag_validate_answer` を
+    呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
+    判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
+    「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
+    `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -881,104 +1050,103 @@ async def _validate_final_answer(run_id: str, answer: str) -> str:
         )
 
     run = runtime_repository.get_run(run_id)
-    evidence_tool, refs = run_evidence_refs(run.steps)
-    if evidence_tool is None or not refs:
+    groups = run_evidence_groups(run.steps)
+    if not groups:
+        if rag_tools and answer.strip():
+            save(
+                validation_content(
+                    STATUS_UNVALIDATED, reason=REASON_NO_RAG_EVIDENCE, message=NO_EVIDENCE_NOTICE
+                )
+            )
+            return with_no_evidence_notice(answer)
         save(validation_content(STATUS_SKIPPED, reason=REASON_NO_RAG_EVIDENCE))
         return answer
+    refs = [ref for _tool, items in groups for ref in items]
     if not answer.strip():
         save(validation_content(STATUS_SKIPPED, reason=REASON_EMPTY_ANSWER, evidence=refs))
         return answer
+    validations = [
+        await _validate_with_connection(run, answer, evidence_tool, items)
+        for evidence_tool, items in groups
+    ]
+    content, published = combine_validations(answer, validations)
+    save(content)
+    return published
+
+
+async def _validate_with_connection(
+    run: Any, answer: str, evidence_tool: str, refs: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """1 つの MCP 接続の根拠で `rag_validate_answer` を呼び、接続ごとの内容を返す。
+
+    判定が出たら `completed`、呼べない・失敗した・判定として使えない応答なら `unvalidated`。
+    """
+
+    def unvalidated(reason: str, message: str | None, **extra: Any) -> dict[str, Any]:
+        return validation_content(
+            STATUS_UNVALIDATED, reason=reason, message=message, evidence=refs, **extra
+        )
+
     config = _validator_connection(evidence_tool)
     if config is None:
-        save(
-            validation_content(
-                STATUS_FAILED,
-                reason=REASON_CONNECTION_NOT_FOUND,
-                message="根拠を返した MCP 接続が見つかりません。",
-                evidence=refs,
-            )
-        )
-        return with_unverified_notice(answer)
+        return unvalidated(REASON_CONNECTION_NOT_FOUND, "根拠を返した MCP 接続が見つかりません。")
+    connection: dict[str, Any] = {"connection": config.server_id}
     if len(answer) > MAX_ANSWER_CHARS:
-        save(
-            validation_content(
-                STATUS_FAILED,
-                reason=REASON_ANSWER_TOO_LONG,
-                message=f"回答が長すぎるため検証できません（{MAX_ANSWER_CHARS} 文字まで）。",
-                connection=config.server_id,
-                evidence=refs,
-            )
+        return unvalidated(
+            REASON_ANSWER_TOO_LONG,
+            f"回答が長すぎるため検証できません（{MAX_ANSWER_CHARS} 文字まで）。",
+            **connection,
         )
-        return with_unverified_notice(answer)
     context = ToolInvocationContext(
-        run_id=run_id, agent_id=run.agent_id, user_uuid=run.created_by_user_uuid
+        run_id=run.id, agent_id=run.agent_id, user_uuid=run.created_by_user_uuid
     )
     try:
         listed = await asyncio.to_thread(
             list_mcp_connection_tools, config.server_id, context=context
         )
     except KeyError:
-        save(
-            validation_content(
-                STATUS_FAILED,
-                reason=REASON_CONNECTION_NOT_FOUND,
-                message="根拠を返した MCP 接続が見つかりません。",
-                connection=config.server_id,
-                evidence=refs,
-            )
+        return unvalidated(
+            REASON_CONNECTION_NOT_FOUND, "根拠を返した MCP 接続が見つかりません。", **connection
         )
-        return with_unverified_notice(answer)
     except ExternalToolError as exc:
-        save(
-            validation_content(
-                STATUS_FAILED,
-                reason=exc.code,
-                message=exc.message,
-                connection=config.server_id,
-                evidence=refs,
-            )
-        )
-        return with_unverified_notice(answer)
+        return unvalidated(exc.code, exc.message, **connection)
     tool = next((item for item in listed.tools if item.name == VALIDATE_ANSWER_TOOL), None)
     if tool is None:
-        # 検証のツールを持たない（#1246 より前の）RAG。検証せずに回答を出す。
-        save(
-            validation_content(
-                STATUS_SKIPPED,
-                reason=REASON_VALIDATOR_UNAVAILABLE,
-                message=(
-                    f"MCP 接続「{config.label or config.server_id}」は"
-                    "回答の検証を提供していません。"
-                ),
-                connection=config.server_id,
-                evidence=refs,
-            )
+        return unvalidated(
+            REASON_VALIDATOR_UNAVAILABLE,
+            f"MCP 接続「{config.label or config.server_id}」は回答の検証を提供していません。",
+            **connection,
         )
-        return answer
     definition = mcp_tool_definition(config, tool)
-    step_id, result = await _ToolRecorder(run_id).call(
+    step_id, result = await _ToolRecorder(run.id).call(
         ToolCall(
             name=definition.name,
-            arguments={"query": run.goal[:MAX_QUERY_CHARS], "answer": answer, "evidence": refs},
-            trace_id=f"answer_validation_{run_id}",
+            arguments={
+                "query": run.goal[:MAX_QUERY_CHARS],
+                "answer": answer,
+                "evidence": refs,
+                # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
+                **connection_check_inputs(run.steps, evidence_tool),
+            },
+            trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),
         definition=definition,
         handler=mcp_tool_handler(config, tool),
     )
-    common: dict[str, Any] = {
-        "connection": config.server_id,
-        "tool_name": definition.name,
-        "step_id": step_id,
-        "evidence": refs,
-    }
+    common: dict[str, Any] = {**connection, "tool_name": definition.name, "step_id": step_id}
     if not result.success or not isinstance(result.output, dict):
         reason = result.error_code or (
             "policy_denied" if result.policy_decision == ToolPolicyDecision.DENY else "tool_failed"
         )
-        save(validation_content(STATUS_FAILED, reason=reason, message=result.error, **common))
-        return with_unverified_notice(answer)
-    save(validation_content(STATUS_COMPLETED, result=result.output, **common))
-    return annotate_answer(answer, unverified_points(result.output))
+        return unvalidated(reason, result.error, **common)
+    if not usable_result(result.output):
+        return unvalidated(
+            REASON_UNUSABLE_RESULT,
+            f"検証の結果（{result.output.get('status')}）を判定に使えません。",
+            result=result.output,
+            **common,
+        )
+    return validation_content(STATUS_COMPLETED, result=result.output, evidence=refs, **common)
 
 
 def _record_usage(run_id: str, source: object, model_id: str) -> None:
