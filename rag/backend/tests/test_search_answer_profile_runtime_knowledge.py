@@ -123,3 +123,7 @@ def test_search_context_carries_search_answer_profile_runtime_knowledge(
     settings = search_tests.RecordingPipeline.captured_settings
     assert settings is not None
     assert settings.rag_runtime_knowledge == payload
+    # 回答の記録に残す検索・回答プロファイルの版（#1276）。
+    revision = settings.rag_search_answer_profile_revision
+    assert revision["id"] == "bv-1"
+    assert isinstance(revision["updated_at"], str) and revision["config_sha256"]

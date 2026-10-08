@@ -6,7 +6,8 @@
 （`tool_registry.invoke` のポリシー・監査、Run の利用者のサービストークン、Run の step）を通す。
 
 - 結果は Run の成果物（kind=`answer_validation`・「回答の検証」）に残す。
-- valid でなければ回答を作り直さず、末尾に「確かめられていない点」を足す。
+- valid でなければ回答を作り直さず、末尾に「確かめられていない点」を足す（主張の監査の結果と、
+  RAG の決定的な検査の error の finding（要求の漏れ・手順の順序など。#1276）の両方）。
 - 検証そのものが失敗したら「この回答は検証できませんでした。」を足す（回答は消さない）。
 - RAG の根拠を使っていない Run は検証しない（`skipped` / `no_rag_evidence`）。
 
@@ -51,6 +52,8 @@ _CLAIM_LABELS = {"contradicted": "根拠と矛盾", "unsupported": "根拠で確
 _MAX_LISTED_CLAIMS = 5
 _MAX_QUOTE_CHARS = 80
 _MAX_REASON_CHARS = 80
+_MAX_LISTED_FINDINGS = 5
+_MAX_FINDING_CHARS = 120
 
 
 def _short(value: object, limit: int) -> str:
@@ -163,6 +166,18 @@ def unverified_points(result: JsonObject) -> list[str] | None:
     lines = [_claim_line(item) for item in claims[:_MAX_LISTED_CLAIMS]]
     if len(claims) > _MAX_LISTED_CLAIMS:
         lines.append(f"- ほか {len(claims) - _MAX_LISTED_CLAIMS} 件の主張")
+    # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
+    findings = [
+        item
+        for item in result.get("findings") or []
+        if isinstance(item, dict) and item.get("severity") == "error" and item.get("message")
+    ]
+    lines += [
+        f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
+        for item in findings[:_MAX_LISTED_FINDINGS]
+    ]
+    if len(findings) > _MAX_LISTED_FINDINGS:
+        lines.append(f"- ほか {len(findings) - _MAX_LISTED_FINDINGS} 件の指摘")
     stale = _refs_count(result.get("stale_evidence"))
     if stale:
         lines.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")

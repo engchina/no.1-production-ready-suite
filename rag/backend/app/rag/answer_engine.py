@@ -48,6 +48,7 @@ from app.config import (
 )
 from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
+from app.rag.answer_provenance import answer_prompt_version
 from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.field_filter_reader import merge_field_conditions
@@ -299,6 +300,10 @@ class AnswerEngine:
                 )
         outcome.diagnostics["models"] = self._models_used(
             vision=getattr(result, "image_prompt_mode", "") == "vision_attachments"
+        )
+        # 回答を作ったプロンプトの版（編集した内容とコードのプロンプト。#1276）。
+        outcome.diagnostics.setdefault("provenance", {})["prompt_version"] = answer_prompt_version(
+            overrides
         )
         if state.auto_field_conditions:
             outcome.diagnostics["auto_field_filter"] = {
