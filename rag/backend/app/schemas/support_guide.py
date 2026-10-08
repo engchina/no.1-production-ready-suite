@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.search import RetrievedChunk
 
 SUPPORT_GUIDE_SCHEMA_VERSION: Literal[1] = 1
 # 使ってよい道具（handoff §10。手順の allowed_tools はこの中から選ぶ）。
@@ -297,11 +299,56 @@ class SupportGuideImportRequest(BaseModel):
     guides: list[dict[str, object]] = Field(min_length=1, max_length=100)
 
 
+# 取込の差分（#1288）の節。basic = 題名・説明。
+SupportGuideDiffSection = Literal[
+    "basic",
+    "goal",
+    "applicability",
+    "conditions",
+    "steps",
+    "branches",
+    "references",
+    "completion",
+    "impact",
+    "handoff",
+]
+SupportGuideChangeKind = Literal["added", "removed", "changed"]
+
+
+class SupportGuideChange(BaseModel):
+    """既存のガイドと取り込むガイドの違い 1 つ。"""
+
+    section: SupportGuideDiffSection
+    kind: SupportGuideChangeKind
+    key: str = Field(default="", description="行の id（資料は document_id）。行の無い節は空。")
+    label: str = Field(default="", description="表示名（条件の名前・手順の題名など）。")
+    fields: list[str] = Field(
+        default_factory=list, description="変わった項目（changed のときだけ）。"
+    )
+
+
+class SupportGuideImportDiff(BaseModel):
+    """取り込むガイドと同じ id・名前の既存のガイドとの差分（#1288）。
+
+    取り込みは既存のガイドを書き換えず、別の下書きとして作る。差分は比べるための表示だけ。
+    """
+
+    guide_id: str
+    title: str
+    matched_by: Literal["id", "title"]
+    # 比べた既存の内容（公開の版があれば公開の版、無ければ下書き）。
+    base: Literal["published", "draft"]
+    revision: int
+    status: SupportGuideStatus
+    changes: list[SupportGuideChange]
+
+
 class SupportGuideImportItem(BaseModel):
     index: int
     title: str | None = None
     valid: bool
     issues: list[SupportGuideIssue]
+    existing: SupportGuideImportDiff | None = None
 
 
 class SupportGuideImportPreviewData(BaseModel):
@@ -311,6 +358,46 @@ class SupportGuideImportPreviewData(BaseModel):
 
 class SupportGuideImportData(BaseModel):
     created: list[SupportGuideSummary]
+
+
+class SupportGuideDraftTryRequest(BaseModel):
+    """下書きで試す（#1288）。保存した下書きの版を指定し、公開の版を変えずに回答を作る。"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str = Field(min_length=1, max_length=2000)
+    draft_revision: int = Field(ge=1, description="試す下書きの draft_revision。")
+    conditions: dict[str, str] = Field(
+        default_factory=dict, description="分かっている条件の値（条件 id → 値）。"
+    )
+
+    @field_validator("conditions")
+    @classmethod
+    def _limit_conditions(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 30:
+            raise ValueError("条件は 30 個までです。")
+        return value
+
+
+class SupportGuideDraftTryData(BaseModel):
+    """下書きで試した回答。
+
+    回答の記録には ``guide_preview`` を残し、利用者の履歴・評価に混ぜない。
+    """
+
+    trace_id: str
+    guide_id: str
+    draft_revision: int
+    published_revision: int | None = None
+    # この下書きのガイドが回答に使われたか（別のガイド・ガイドなしで答えたときは False）。
+    guide_used: bool
+    # 回答に使った業務ガイドの要約（guide_id・版・判断・既知 / 不明の条件）。無ければ None。
+    guide: dict[str, Any] | None = None
+    outcome: str | None = None
+    answer: str
+    citations: list[RetrievedChunk] = Field(default_factory=list)
+    clarifications: list[dict[str, Any]] = Field(default_factory=list)
+    elapsed_ms: float
 
 
 class SupportGuideExportData(BaseModel):

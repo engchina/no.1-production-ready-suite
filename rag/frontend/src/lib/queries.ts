@@ -176,7 +176,6 @@ export const queryKeys = {
   feedback: (params: FeedbackListParams) => ["feedback", params] as const,
   feedbackDetail: (id: string) => ["feedback", "detail", id] as const,
   compareModels: ["chat", "models"] as const,
-  chatAgentLink: ["chat", "agent-link"] as const,
   searchAnswerModels: ["search", "models"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
@@ -1328,6 +1327,25 @@ export function useValidateSupportGuide(searchAnswerProfileId: string) {
 }
 
 /** 取り込み（検証を通ったガイドを下書きとして作る）。 */
+/**
+ * 保存した下書きで試しに答える（#1288）。公開の版・一覧は変わらないので、キャッシュは無効にしない。
+ */
+export function useTrySupportGuideDraft(searchAnswerProfileId: string) {
+  return useMutation({
+    mutationFn: (args: {
+      guideId: string;
+      query: string;
+      draftRevision: number;
+      conditions: Record<string, string>;
+    }) =>
+      api.trySupportGuideDraft(searchAnswerProfileId, args.guideId, {
+        query: args.query,
+        draft_revision: args.draftRevision,
+        conditions: args.conditions,
+      }),
+  });
+}
+
 export function useImportSupportGuides(searchAnswerProfileId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -1670,20 +1688,6 @@ export function useCompareModels(enabled = true) {
     queryFn: () => api.listCompareModels(),
     enabled,
     staleTime: 5 * 60 * 1000,
-  });
-}
-
-/**
- * Agent のチャットの URL（#1283）。現場の実データの確認が要る回答で「Agent のチャットで続ける」を出す。
- * 取得に失敗したら出さない（導線は補助。チャットを止めない）。
- */
-export function useChatAgentLink(enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.chatAgentLink,
-    queryFn: () => api.getChatAgentLink(),
-    enabled,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
   });
 }
 

@@ -226,12 +226,12 @@ GUARDRAIL_FINDINGS = Counter(
     "RAG guardrail の検出件数",
     ["surface", "code", "severity", "action"],
 )
-# 回答の経路の理由と、Agent で続ける提案の有無（#1283）。
+# 回答の経路の理由と、現場のデータの確認の要否（#1283）。
 # 理由は回答の対応の 7 値だけ（低 cardinality）。
 ANSWER_ROUTES = Counter(
     "rag_answer_routes_total",
-    "回答の経路の理由（回答の対応）と Agent で続ける提案の有無",
-    ["reason", "escalation_suggested"],
+    "回答の経路の理由（回答の対応）と現場のデータの確認の要否",
+    ["reason", "requires_environment_data"],
 )
 RATE_LIMIT_DECISIONS = Counter(
     "rag_rate_limit_decisions_total",
@@ -309,10 +309,11 @@ def record_guardrail_findings(
         ).inc()
 
 
-def record_answer_route(reason: str, escalation_suggested: bool) -> None:
+def record_answer_route(reason: str, requires_environment_data: bool) -> None:
     """回答の経路の理由を記録する（#1283）。"""
     ANSWER_ROUTES.labels(
-        reason=reason, escalation_suggested="true" if escalation_suggested else "false"
+        reason=reason,
+        requires_environment_data="true" if requires_environment_data else "false",
     ).inc()
 
 

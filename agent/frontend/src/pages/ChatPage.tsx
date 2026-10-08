@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -55,15 +54,10 @@ import {
   type ThreadSummary,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
-import {
-  CHAT_HANDOFF_PARAMS,
-  chatEntryMetadata,
-  isChatEntry,
-  readChatHandoff,
-  type ChatEntry,
-} from "@/lib/chat-handoff";
+import { answerReview } from "@/lib/answer-review";
 import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -132,16 +126,6 @@ export function ChatPage() {
     isNullableString
   );
   const [draft, setDraft] = useWorkspaceState("chat", "draft", "", isString);
-  // 下書きがほかの製品（RAG のチャット）から引き継いだ質問なら、その入口と理由（#1283）。送った Run の
-  // metadata に残し、送ったら消す。再読込しても送るまで残す。
-  const [entry, setEntry] = useWorkspaceState<"chat", ChatEntry | null>(
-    "chat",
-    "entry",
-    null,
-    (value): value is ChatEntry | null => value === null || isChatEntry(value)
-  );
-  const [searchParams, setSearchParams] = useSearchParams();
-  const focusComposerAfterHandoffRef = useRef(false);
   // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
   // 作れなかったときは残して「再送信」を出す（入力を失わない）。
   const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
@@ -248,12 +232,11 @@ export function ChatPage() {
   });
 
   const send = useMutation({
-    mutationFn: ({ goal, metadata }: { goal: string; generation: number; metadata?: Record<string, string> }) =>
+    mutationFn: ({ goal }: { goal: string; generation: number }) =>
       agentApi.createRun({
         goal,
         agent_id: selectedAgentId,
         thread_id: threadId ?? undefined,
-        metadata,
       }),
     onSuccess: (run, { generation }) => {
       const stopRequested = stopAfterCreateRef.current === generation;
@@ -324,8 +307,7 @@ export function ChatPage() {
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
     cancel.reset();
-    send.mutate({ goal, generation: viewGenerationRef.current, metadata: chatEntryMetadata(entry) });
-    setEntry(null);
+    send.mutate({ goal, generation: viewGenerationRef.current });
   }
 
   /** 送れなかった質問を、そのままもう一度送る（#907）。 */
@@ -333,11 +315,7 @@ export function ChatPage() {
     if (!pending || !selectedAgentId || running || waitingApproval || send.isPending) return;
     setPending(withOptimisticChatStatus(pending, "sending"));
     cancel.reset();
-    send.mutate({
-      goal: pending.content,
-      generation: viewGenerationRef.current,
-      metadata: send.variables?.metadata,
-    });
+    send.mutate({ goal: pending.content, generation: viewGenerationRef.current });
   }
 
   function stop() {
@@ -429,29 +407,6 @@ export function ChatPage() {
       }
     />
   );
-
-  // ほかの製品から引き継いだ質問（`?question=&entry=&reason=`。#1283）。新しい会話の入力欄に入れるだけで、
-  // 送信は利用者が行う。読んだ query は URL から外す（再読込・戻るで下書きを上書きしない）。
-  useEffect(() => {
-    const handoff = readChatHandoff(searchParams);
-    if (!CHAT_HANDOFF_PARAMS.some((name) => searchParams.has(name))) return;
-    const next = new URLSearchParams(searchParams);
-    for (const name of CHAT_HANDOFF_PARAMS) next.delete(name);
-    setSearchParams(next, { replace: true });
-    if (!handoff) return;
-    // 新しい会話で始める（送信中の質問の表示は、新しい会話では出さない。viewGeneration で切り離す）。
-    viewGenerationRef.current += 1;
-    setThreadId(null);
-    setDraft(handoff.question);
-    setEntry(handoff.entry);
-    focusComposerAfterHandoffRef.current = true;
-  }, [searchParams, setSearchParams, setThreadId, setDraft, setEntry]);
-  // 引き継いだ質問は、入力欄が使えるようになってから（業務 Agent の一覧の読み込み後に）フォーカスする。
-  useEffect(() => {
-    if (!focusComposerAfterHandoffRef.current || agentsLoading) return;
-    focusComposerAfterHandoffRef.current = false;
-    requestAnimationFrame(() => composerRef.current?.focus());
-  }, [agentsLoading, draft]);
 
   const composerBlocked = running || waitingApproval;
   // 送信と停止は同じボタン。送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
@@ -548,11 +503,7 @@ export function ChatPage() {
                   id="chat-composer"
                   textareaRef={composerRef}
                   value={draft}
-                  onValueChange={(value) => {
-                    setDraft(value);
-                    // 下書きを消したら、引き継いだ質問の入口も外す（#1283）。
-                    if (!value.trim()) setEntry(null);
-                  }}
+                  onValueChange={setDraft}
                   onSubmit={submit}
                   onStop={stop}
                   running={stoppable}
@@ -567,11 +518,6 @@ export function ChatPage() {
                     cancel.error ? (
                       // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
                       <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
-                    ) : entry && draft.trim() ? (
-                      // RAG のチャットから引き継いだ質問（#1283）。自動では送らず、確かめてから送ってもらう。
-                      <div data-testid="chat-handoff-notice">
-                        <Banner severity="info">{t("chat.handoff.ragEscalation")}</Banner>
-                      </div>
                     ) : null
                   }
                 />
@@ -666,6 +612,8 @@ function RunChatTurn({
   const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   const failure = run.status === "failed" ? failureMessage(run) : null;
+  // 回答の確かめ（確かめた条件・確認待ちの質問・業務ガイド・資料で確かめた結果。#1286）。作成中は出さない。
+  const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 処理の経過の状態を追う（3 製品共通。#1160）。回答の作成中（取り直している間）に会話の取得が途絶えたら
   // 取り直し、終端まで追う。承認待ちは利用者の判断を待つ間なので取り直さない。
   const progress = useChatProgressTracker({
@@ -744,6 +692,8 @@ function RunChatTurn({
             </div>
           </Banner>
         ))}
+
+        {review ? <AnswerReviewPanel review={review} testId={`chat-review-${run.id}`} /> : null}
 
         {citations.length > 0 ? (
           <Disclosure

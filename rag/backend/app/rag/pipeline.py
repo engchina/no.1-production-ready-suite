@@ -36,7 +36,11 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
-from app.rag.support_guide_runtime import apply_guide_to_diagnostics, guide_short_circuit_outcome
+from app.rag.support_guide_runtime import (
+    GUIDE_PREVIEW_KEY,
+    apply_guide_to_diagnostics,
+    guide_short_circuit_outcome,
+)
 from app.schemas.common import JsonValue
 from app.schemas.search import (
     ExtractionFieldCondition,
@@ -318,11 +322,15 @@ class RagPipeline:
             outcome.diagnostics.setdefault("provenance", {})["search_answer_profile"] = dict(
                 profile_revision
             )
+        guide_preview = self._settings.rag_guide_preview
+        if guide_preview:
+            # 業務ガイドの下書きで試した回答（#1288）。回答の記録に残し、履歴・評価から外す。
+            outcome.diagnostics[GUIDE_PREVIEW_KEY] = dict(guide_preview)
         if request.generate_answer:
-            # 回答の経路（固定の RAG）と理由、Agent で続ける提案を記録する（#1283。決定的）。
+            # 回答の経路（固定の RAG）と理由、現場のデータの確認の要否を記録する（#1283）。
             route = answer_route(outcome.diagnostics)
             outcome.diagnostics["route"] = route
-            record_answer_route(route["reason"], route["escalation_suggested"])
+            record_answer_route(route["reason"], route["requires_environment_data"])
         if request.generate_answer:
             # 回答側の安全チェックも工程として計測し、進捗に出す
             # (チャットの「回答を確認しています」。#1146)。
@@ -392,7 +400,8 @@ class RagPipeline:
                 surface="search" if history is None else "chat",
                 evaluation_input=outcome.evaluation_input,
             )
-        if outcome_label == "success":
+        # 下書きで試した質問は、利用者の質問の候補（質問履歴）に入れない（#1288）。
+        if outcome_label == "success" and not self._settings.rag_guide_preview:
             await self._record_query_history(
                 request, query_guardrail.sanitized_text, chat=history is not None
             )

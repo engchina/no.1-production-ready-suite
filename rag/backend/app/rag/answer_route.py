@@ -1,22 +1,15 @@
-"""回答の経路（固定の RAG と Agent の振り分け。#1283、handoff §5 / §13）。
+"""回答の経路と理由の記録（#1283、handoff §5 / §13）。
 
-振り分けのモデル:
-
-- 経路は利用者が製品で選ぶ（RAG のチャット・検索なら固定の RAG、Agent のチャットなら
-  Agent）。質問ごとにモデルで経路を選ぶ自動の振り分け（LLM router）は置かない。
-  モデルの呼び出しと待ち時間が増え、Agent の効果（評価の経路 D）がまだ測れていないため。
-- 固定の RAG は、回答の対応（AnswerEnvelope の outcome）から経路の理由を決定的に記録する
+- 回答の経路は、利用者が使う画面・呼び出し元で決まる（このサービスの回答は固定の RAG）。
+  質問ごとにモデルで経路を選ぶ振り分けは置かない。
+- 回答の対応（AnswerEnvelope の outcome）を経路の理由として、決定的に記録する
   （モデルは呼ばない）。
-- 固定の RAG では完了できないと outcome が示すとき（今は ``needs_environment_data`` =
-  現場の実データの確認が要る）だけ、Agent で続けることを提案する
-  （``escalation_suggested``）。Agent は許可された読み取りの道具（NL2SQL など）で現場の
-  値を確かめられる。
-- 確認の質問（needs_clarification）は RAG のチャットで答えれば続けられる。人への引き継ぎ
-  （needs_human）と資料の不足（insufficient_evidence）は Agent でも埋められないので
-  提案しない（handoff §1）。
+- 資料だけでは回答を確定できず、現場の値・記録の確認が要る対応（``needs_environment_data``）は
+  ``requires_environment_data`` を立てる。続け方（現場のデータを読む道具を使うかどうか）は
+  呼び出し元が決める。このサービスは呼び出し元・ほかのサービスを呼ばず、案内もしない。
 
 記録は回答の診断（``diagnostics.answer.route``）に入り、回答の記録（trace）に残る。
-Prometheus には理由と提案の有無だけを数える（業務の原文は送らない）。
+Prometheus には理由と現場のデータの要否だけを数える（業務の原文は送らない）。
 """
 
 from __future__ import annotations
@@ -37,8 +30,8 @@ ROUTE_REASONS = frozenset(
         "unknown",
     }
 )
-# 固定の RAG では完了できず、Agent で続けることを提案する対応。
-ESCALATION_OUTCOMES = frozenset({"needs_environment_data"})
+# 資料だけでは回答を確定できず、現場の値・記録の確認が要る対応。
+ENVIRONMENT_DATA_OUTCOMES = frozenset({"needs_environment_data"})
 
 
 def answer_route(answer_diagnostics: Mapping[str, Any]) -> dict[str, Any]:
@@ -50,16 +43,14 @@ def answer_route(answer_diagnostics: Mapping[str, Any]) -> dict[str, Any]:
     signals = [
         str(value) for value in envelope.get("handoff_reasons") or () if isinstance(value, str)
     ]
-    escalate = reason in ESCALATION_OUTCOMES
     return {
         "schema_version": ROUTE_SCHEMA_VERSION,
         "path": "rag",
         "reason": reason,
-        # outcome を決めた手がかり（AnswerEnvelope の handoff_reasons）。振り分けの評価に使う。
+        # outcome を決めた手がかり（AnswerEnvelope の handoff_reasons）。経路の評価に使う。
         "signals": signals,
-        "escalation_suggested": escalate,
-        "escalation_reason": reason if escalate else "",
+        "requires_environment_data": reason in ENVIRONMENT_DATA_OUTCOMES,
     }
 
 
-__all__ = ["ESCALATION_OUTCOMES", "ROUTE_REASONS", "ROUTE_SCHEMA_VERSION", "answer_route"]
+__all__ = ["ENVIRONMENT_DATA_OUTCOMES", "ROUTE_REASONS", "ROUTE_SCHEMA_VERSION", "answer_route"]

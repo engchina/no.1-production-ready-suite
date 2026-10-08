@@ -66,8 +66,6 @@ from app.rag.support_guide_runtime import (
     resolve_guide_clarification,
 )
 from app.schemas.chat import (
-    AGENT_CHAT_PATH,
-    ChatAgentLink,
     ChatAnswerCancelResult,
     ChatMessage,
     ChatMessageRequest,
@@ -155,20 +153,6 @@ async def list_compare_models() -> ApiResponse[list[dict[str, str]]]:
             [] if models else ["生成モデルが未設定です。システム設定 > モデルで登録してください。"]
         ),
     )
-
-
-@router.get("/agent-link", response_model=ApiResponse[ChatAgentLink])
-async def get_agent_link() -> ApiResponse[ChatAgentLink]:
-    """Agent のチャットの URL（#1283）。
-
-    現場の実データの確認が要る回答で「Agent のチャットで続ける」を出すために使う。Agent の画面の URL
-    （`RAG_AGENT_APP_URL`）が未設定なら null（画面は何も出さない）。質問は画面が query に入れる。
-    """
-    settings = get_settings()
-    _require_chat_enabled(settings)
-    base = settings.rag_agent_app_url
-    url = f"{base}{AGENT_CHAT_PATH}" if base else None
-    return ApiResponse(data=ChatAgentLink(agent_chat_url=url))
 
 
 @router.get("/conversations", response_model=ApiResponse[Page[ConversationSummary]])

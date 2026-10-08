@@ -66,18 +66,6 @@ class ChatAnswerCancelResult(BaseModel):
     cancelled: bool
 
 
-# Agent のチャットの画面の path（Agent の frontend の APP_ROUTES.chat。#1283）。
-# 製品のコードは import せず、画面の URL の約束（`?question=&entry=rag_escalation&reason=`）
-# だけで連携する。
-AGENT_CHAT_PATH = "/chat"
-
-
-class ChatAgentLink(BaseModel):
-    """Agent のチャットへの導線（#1283）。Agent の画面の URL が未設定なら null。"""
-
-    agent_chat_url: str | None = None
-
-
 class ConversationSummary(BaseModel):
     """会話一覧用の要約。"""
 

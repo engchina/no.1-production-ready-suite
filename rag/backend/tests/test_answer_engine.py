@@ -236,11 +236,11 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert response.diagnostics.retrieval_strategy == "hybrid"
     assert response.diagnostics.answer is not None
     assert response.diagnostics.answer["evidence_tree"]
-    # 回答の経路（固定の RAG）と理由を記録する。答えられた回答では Agent を提案しない（#1283）。
+    # 回答の経路（固定の RAG）と理由を記録する。答えられた回答は現場のデータを求めない（#1283）。
     route = cast(dict[str, Any], response.diagnostics.answer["route"])
     assert route["path"] == "rag"
     assert route["reason"] == response.diagnostics.answer["outcome"]
-    assert route["escalation_suggested"] is False
+    assert route["requires_environment_data"] is False
 
 
 async def test_answer_engine_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2476,3 +2476,60 @@ def test_prompt_and_profile_versions_follow_content() -> None:
     assert first == search_answer_profile_revision(view(SearchAnswerProfileConfig()))
     changed = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])
     assert search_answer_profile_revision(view(changed))["config_sha256"] != first["config_sha256"]
+
+
+class HistoryOracle(SavingOracle):
+    def __init__(self) -> None:
+        super().__init__()
+        self.history: list[dict[str, Any]] = []
+
+    async def append_query_history(self, record: dict[str, Any]) -> None:
+        self.history.append(dict(record))
+
+    async def purge_query_history(self, retention_days: int) -> int:
+        return 0
+
+
+async def test_guide_preview_is_recorded_without_history_or_extra_model_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """下書きで試す回答（#1288）: 記録に印を残し、質問履歴に入れない。モデルの呼び出しは同じ。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.rag.pipeline import RagPipeline
+    from app.rag.support_guide_runtime import GUIDE_PREVIEW_KEY
+
+    calls: list[str] = []
+
+    def counting_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        calls.append(schema.__name__)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", counting_llm)
+    request = SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1")
+
+    normal_oracle = HistoryOracle()
+    await RagPipeline(
+        settings=Settings(rag_query_history_enabled=True),
+        oracle=normal_oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    ).run(request, trace_id="trace-normal")
+    normal_calls = list(calls)
+    calls.clear()
+
+    marker = {"guide_id": "g-1", "draft_revision": 3, "published_revision": 2}
+    preview_oracle = HistoryOracle()
+    response = await RagPipeline(
+        settings=Settings(rag_query_history_enabled=True, rag_guide_preview=marker),
+        oracle=preview_oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    ).run(request, trace_id="guide-preview-trace")
+
+    assert calls == normal_calls
+    assert len(normal_oracle.history) == 1
+    assert preview_oracle.history == []
+    saved = preview_oracle.saved[0]
+    assert saved["diagnostics"][GUIDE_PREVIEW_KEY] == marker
+    assert GUIDE_PREVIEW_KEY not in normal_oracle.saved[0]["diagnostics"]
+    assert response.diagnostics.answer is not None
+    assert response.diagnostics.answer[GUIDE_PREVIEW_KEY] == marker

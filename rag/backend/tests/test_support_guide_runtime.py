@@ -19,17 +19,23 @@ from app.mcp import tools as mcp_tools
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
+    GUIDE_PREVIEW_KEY,
+    GUIDE_PREVIEW_TRACE_PREFIX,
+    GuidePreview,
     apply_guide_to_diagnostics,
     build_guide_context,
     clarification_questions,
     guide_clarification,
     guide_rule,
     guide_short_circuit_outcome,
+    is_guide_preview_record,
+    is_guide_preview_trace,
     match_guide,
     rank_guides,
     resolve_guide_clarification,
     short_circuit_answer,
     visible_plan,
+    with_draft,
     with_guide_rule,
 )
 from app.schemas.search import SearchDiagnostics, SearchRequest, SearchResponse
@@ -526,6 +532,73 @@ async def test_resolve_query_context_records_guide_load_failure(monkeypatch: Mon
     assert settings.rag_support_guide["guide_id"] == "g-grant"
     assert settings.rag_support_guide["applicability"] == {}
     assert GUIDE_LOAD_FAILED_KEY not in settings.rag_support_guide
+
+
+async def test_resolve_query_context_uses_the_draft_only_for_the_preview(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """下書きで試す（#1288）: 照合だけ下書きを使い、公開の版の一覧は変えない。"""
+    fake = FakeKnowledgeOracle()
+    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
+    # 公開の版は「権限」の質問に当たらない（照合の語が違う）。
+    published = [
+        (
+            "g-grant",
+            2,
+            grant_guide(goal={"expected_result": "x", "match_terms": ["別の業務"]}),
+        ),
+        ("g-export", 1, export_guide()),
+    ]
+
+    class _Store:
+        def __init__(self, _oracle: object) -> None:
+            pass
+
+        async def published_contents(self, _profile: str) -> list[Any]:
+            return list(published)
+
+    monkeypatch.setattr(search_route, "SupportGuideStore", _Store)
+    request = SearchRequest(query="アクセス権限を付与したい", search_answer_profile_id="bv-1")
+    _, settings, _, _ = await search_route._resolve_query_context(request, get_settings())
+    assert settings.rag_support_guide == {}
+    assert settings.rag_guide_preview == {}
+
+    preview = GuidePreview("g-grant", 7, grant_guide(), published_revision=2)
+    _, settings, _, _ = await search_route._resolve_query_context(
+        request, get_settings(), guide_preview=preview
+    )
+    guide = settings.rag_support_guide
+    assert (guide["guide_id"], guide["revision"], guide["draft"]) == ("g-grant", 7, True)
+    assert settings.rag_guide_preview == {
+        "guide_id": "g-grant",
+        "draft_revision": 7,
+        "published_revision": 2,
+    }
+    # 公開の版の一覧（保存）はそのまま。
+    assert published[0][1] == 2
+    assert published[0][2].goal.match_terms == ["別の業務"]
+
+    # 別のガイドが選ばれたときは draft の印を付けない（下書きが使われなかったと分かる）。
+    other = GuidePreview("g-export", 3, export_guide())
+    _, settings, _, _ = await search_route._resolve_query_context(
+        request, get_settings(), guide_preview=other
+    )
+    assert "draft" not in settings.rag_support_guide
+    assert settings.rag_guide_preview["guide_id"] == "g-export"
+
+
+def test_with_draft_replaces_or_adds_the_guide_and_marks_preview_records() -> None:
+    preview = GuidePreview("g-grant", 5, grant_guide(title="改訂"))
+    replaced = with_draft(GUIDES, preview)
+    assert [(gid, rev) for gid, rev, _ in replaced] == [("g-export", 1), ("g-grant", 5)]
+    added = with_draft([GUIDES[1]], preview)
+    assert [gid for gid, _, _ in added] == ["g-export", "g-grant"]
+    assert is_guide_preview_trace(GUIDE_PREVIEW_TRACE_PREFIX + "a" * 32)
+    assert len(GUIDE_PREVIEW_TRACE_PREFIX + "a" * 32) <= 64
+    assert not is_guide_preview_trace("a" * 32)
+    assert is_guide_preview_record({GUIDE_PREVIEW_KEY: preview.marker()})
+    assert not is_guide_preview_record({"confidence": "high"})
+    assert not is_guide_preview_record(None)
 
 
 # ---- API ---------------------------------------------------------------------------------

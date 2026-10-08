@@ -3,6 +3,7 @@ import { BookCheck } from "lucide-react";
 
 import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
+import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
@@ -67,7 +68,7 @@ export function AnswerDetailsPanel({
           </span>
         ) : null}
         {data.guide ? (
-          <span data-testid="answer-guide-badge">
+          <span data-testid="answer-guide-badge" data-guide-id={data.guide.guideId || undefined}>
             <StatusBadge
               variant="neutral"
               label={t("search.answerDetails.guide", {
@@ -75,12 +76,6 @@ export function AnswerDetailsPanel({
                 revision: data.guide.revision,
               })}
             />
-          </span>
-        ) : null}
-        {data.route?.escalationSuggested ? (
-          // 固定の RAG では完了できず、Agent で続けることを提案した回答（#1283）。
-          <span data-testid="answer-route-badge">
-            <StatusBadge variant="info" label={t("search.answerDetails.route.agentSuggested")} />
           </span>
         ) : null}
         {data.confidence ? (
@@ -106,6 +101,15 @@ export function AnswerDetailsPanel({
           />
         ))}
       </div>
+      {data.guide ? <AnswerGuideConditions guide={data.guide} /> : null}
+      {data.guideLoadFailed ? (
+        // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
+        <div data-testid="answer-guide-load-failed">
+          <Banner severity="warning" title={t("search.answerDetails.guideLoadFailed.title")}>
+            <p>{t("search.answerDetails.guideLoadFailed.body")}</p>
+          </Banner>
+        </div>
+      ) : null}
       {data.approvedFaq ? (
         // 承認済み FAQ から回答したときの出典。生成した回答と照らし合わせられるよう、回答した時点の
         // 原文を言い換えずに出す（#737）。

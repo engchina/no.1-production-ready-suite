@@ -117,7 +117,7 @@
 
 | 画面 | 保存する field | 戻ったときの検証 |
 |---|---|---|
-| チャット | 選んだ業務 Agent（`chat.agentId`）、会話（`chat.threadId`）、送る前の下書き（`chat.draft`）、デスクトップの履歴の開閉（`chat.historyOpen`。既定で閉じる）、会話の履歴のページ（`chat.historyPage`。業務 Agent と offset。別の業務 Agent では 1 ページ目。#1265）、RAG のチャットから引き継いだ下書きの入口（`chat.entry`。`?question=&entry=rag_escalation&reason=` で開いたとき。送るか下書きを消すまで残す。#1283） | 会話が無くなっていれば新しい会話にする |
+| チャット | 選んだ業務 Agent（`chat.agentId`）、会話（`chat.threadId`）、送る前の下書き（`chat.draft`）、デスクトップの履歴の開閉（`chat.historyOpen`。既定で閉じる）、会話の履歴のページ（`chat.historyPage`。業務 Agent と offset。別の業務 Agent では 1 ページ目。#1265） | 会話が無くなっていれば新しい会話にする |
 | 実行履歴 | 目標の下書き（`runs.goal`）、選択中の実行（`runs.selectedRunId`）、イベント購読方式（`runs.streamMode`） | 詳細の対象は URL が正本。一覧へ戻ると最後に選んだ行へフォーカスを戻す。対象が無い場合は説明を出す。業務 Agent は実行条件なので保存しない |
 | 承認 | 最後に開いた承認（`approvals.selectedId`） | 詳細の対象は URL が正本。一覧へ戻る時の行のフォーカスにだけ使い、判断は確認し直す |
 | フィードバック / 品質評価 / 利用状況 | 絞り込み（`feedback.*`）、業務 Agent と表示中の評価（`evaluation.*`）、期間と内訳のタブ（`usage.*`） | 期間・対象で取り直す |

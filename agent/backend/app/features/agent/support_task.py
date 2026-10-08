@@ -14,14 +14,24 @@
   呼び出し（`agent_max_tool_calls_per_task`）。超える呼び出しは実行せず、ツールの結果
   （`budget_exceeded`）でモデルに知らせる（Run は失敗にしない）。
 - ツールは MCP 接続の名前（`<接続>__<ツール>`）のツールの部分で判定する（接続の名前に依らない）。
+- 失敗・取消の Run（#1277）は状態を残さないが、消費は次の Run の会話の通しの予算に数える
+  （`with_abandoned_consumption`。失敗する Run を繰り返して上限を超えさせない）。
+
+回答の経路（#1283。handoff §5）: 固定の RAG（`rag_search`）が回答を確定できないと対応
+（outcome）で示したとき（`needs_environment_data` = 現場の値・記録の確認が要る）、Agent は
+自分の道具（RAG 以外の MCP 接続のツール。NL2SQL など）で続ける。続け方は Control Plane が
+決定的に決め、`rag_search` の結果に `next_step` を足してモデルに伝える（`rag_next_step`）。
+この Run の経路と理由は状態の `route` に残す（`run_route`）。RAG は経路を知らない
+（RAG から Agent へは呼ばない・案内しない）。
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from app.features.agent.tools import mcp_base_tool_name
+from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
     from app.features.agent.runtime import RunStep
@@ -45,6 +55,18 @@ RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 _UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+
+# 固定の RAG では回答を確定できず、Agent が自分の道具で続ける対応（#1283）。確認の質問
+# （needs_clarification）は利用者に聞けば続けられ、人への引き継ぎ（needs_human）と資料の不足
+# （insufficient_evidence）は道具でも埋められないので含めない。
+RAG_CONTINUE_OUTCOMES = frozenset({"needs_environment_data"})
+NEXT_STEP_CONTINUE_WITH_TOOLS = "continue_with_tools"
+NEXT_STEP_ANSWER_WITH_CONFIRMATIONS = "answer_with_confirmations"
+ROUTE_RAG = "rag"
+ROUTE_RAG_THEN_TOOLS = "rag_then_tools"
+ROUTE_TOOLS = "tools"
+ROUTE_NONE = "none"
+_MAX_ROUTE_TOOLS = 10
 
 # 状態の大きさの上限（指示に足すため、増え続けないようにする）。
 MAX_KNOWN_CONDITIONS = 30
@@ -102,6 +124,94 @@ def _executed(step: RunStep) -> bool:
     return step.tool_result.error_code not in {_DRY_RUN_CODE, BUDGET_EXCEEDED_CODE}
 
 
+def is_environment_tool(name: str) -> bool:
+    """現場のデータを確かめる道具か（RAG 以外の MCP 接続のツール。#1283）。
+
+    Control Plane のツール（`skill_reference_read` など）と RAG のツール（`rag_*`）は含めない。
+    書き込みのツールも含むが、呼ぶときはツール権限（承認）を通る。
+    """
+    if MCP_TOOL_SEPARATOR not in name:
+        return False
+    base = mcp_base_tool_name(name)
+    return bool(base) and not base.startswith("rag_")
+
+
+def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObject | None:
+    """`rag_search` の結果が回答を確定できないとき、モデルに渡す次の手（決定的。#1283）。
+
+    `environment_tools` はこの Run でモデルに渡した、現場のデータを確かめる道具の名前。
+    """
+    outcome = output.get("outcome")
+    if not isinstance(outcome, str) or outcome not in RAG_CONTINUE_OUTCOMES:
+        return None
+    tools = list(dict.fromkeys(environment_tools))[:_MAX_ROUTE_TOOLS]
+    if tools:
+        return {
+            "action": NEXT_STEP_CONTINUE_WITH_TOOLS,
+            "reason": outcome,
+            "tools": tools,
+            "instruction": (
+                "資料だけでは回答を確定できません（現場の値・記録の確認が要ります）。"
+                "confirmations の点を、tools のツールで確かめてから答えてください。"
+                "確かめた値はツールの結果を出所として示し、ツールで確かめられなかった点は"
+                "確かめる点として挙げ、推測で断定しないでください。"
+            ),
+        }
+    return {
+        "action": NEXT_STEP_ANSWER_WITH_CONFIRMATIONS,
+        "reason": outcome,
+        "tools": [],
+        "instruction": (
+            "資料だけでは回答を確定できません（現場の値・記録の確認が要ります）。"
+            "この実行には現場のデータを確かめるツールが無いため、confirmations の点を"
+            "利用者が確かめる点として挙げ、現場の値を推測で断定しないでください。"
+        ),
+    }
+
+
+def run_route(steps: list[RunStep]) -> JsonObject:
+    """この Run の回答の経路と理由（ツールの step から決定的に作る。#1283）。
+
+    - `path`: `rag`（RAG だけ）/ `rag_then_tools`（RAG が確定できず、現場のデータの道具で続けた）/
+      `tools`（RAG を呼ばずにツールを使った）/ `none`（ツールを使っていない）。
+    - `reason`: 最後の `rag_search` の対応（outcome）。呼んでいなければ空。
+    - `environment_data_required`: `rag_search` が現場のデータの確認を求めたか。
+    - `continued_with`: その後に呼んだ、現場のデータを確かめる道具（呼んだ順）。
+    """
+    rag_searches = 0
+    executed = 0
+    reason = ""
+    required = False
+    continued: list[str] = []
+    for step in steps:
+        if not _executed(step) or step.tool_call is None or step.tool_result is None:
+            continue
+        executed += 1
+        name = step.tool_call.name
+        if mcp_base_tool_name(name) == RAG_SEARCH:
+            rag_searches += 1
+            output = step.tool_result.output if step.tool_result.success else None
+            outcome = output.get("outcome") if isinstance(output, dict) else None
+            if isinstance(outcome, str) and outcome:
+                reason = _text(outcome, 40)
+                required = required or outcome in RAG_CONTINUE_OUTCOMES
+            continue
+        if required and is_environment_tool(name) and name not in continued:
+            continued.append(name)
+    if continued:
+        path = ROUTE_RAG_THEN_TOOLS
+    elif rag_searches:
+        path = ROUTE_RAG
+    else:
+        path = ROUTE_TOOLS if executed else ROUTE_NONE
+    return {
+        "path": path,
+        "reason": reason,
+        "environment_data_required": required,
+        "continued_with": continued[:_MAX_ROUTE_TOOLS],
+    }
+
+
 def _budget_blocked(step: RunStep) -> bool:
     return step.tool_result is not None and step.tool_result.error_code == BUDGET_EXCEEDED_CODE
 
@@ -143,6 +253,75 @@ def previous_task_consumption(previous: JsonObject | None) -> JsonObject:
         "tool_seconds": _float(task.get("tool_seconds")),
         "rag_seconds": _float(task.get("rag_seconds")),
     }
+
+
+def _in_flight(step: RunStep) -> bool:
+    """結果を受け取る前に Run が止まった（失敗・取消）ツールの呼び出しか。
+
+    呼び先には届いている見込みが高いので消費に数える。承認を待っていた step（承認待ちのまま
+    取り消した）と、Control Plane の検証は数えない。
+    """
+    if step.tool_call is None or step.tool_result is not None:
+        return False
+    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
+        return False
+    if step.status == "running":
+        return True
+    return step.status == "cancelled" and step.approval_id is None
+
+
+def abandoned_run_consumption(steps: list[RunStep]) -> JsonObject:
+    """失敗・取消の Run の消費（実行したツールと、結果を受け取る前に止まった呼び出し。#1277）。"""
+    consumed = run_consumption(steps)
+    for step in steps:
+        if not _in_flight(step) or step.tool_call is None:
+            continue
+        consumed["tool_calls"] += 1
+        if mcp_base_tool_name(step.tool_call.name) in RAG_BUDGET_TOOLS:
+            consumed["rag_calls"] += 1
+    return consumed
+
+
+def with_abandoned_consumption(
+    previous: JsonObject | None,
+    abandoned: list[JsonObject],
+    *,
+    thread_id: str | None,
+    owner_user_uuid: str | None,
+) -> JsonObject | None:
+    """前の完了した Run の状態に、その後の失敗・取消の Run の消費を足した状態（#1277）。
+
+    足した値は、次に完了する Run の状態（`build_support_task`）にそのまま引き継がれる。
+    失敗・取消の Run が無ければ `previous` をそのまま返す。前の状態が無ければ、予算だけの
+    状態を作る。
+    """
+    if not abandoned:
+        return previous
+    state: JsonObject = (
+        deepcopy(previous)
+        if isinstance(previous, dict)
+        else {
+            "schema_version": SUPPORT_TASK_SCHEMA_VERSION,
+            "thread_id": thread_id,
+            "owner_user_uuid": owner_user_uuid,
+        }
+    )
+    before = previous_task_consumption(state)
+    budget = state.get("budget")
+    budget = dict(budget) if isinstance(budget, dict) else {}
+    budget["task"] = {
+        "runs": before["runs"] + len(abandoned),
+        "tool_calls": before["tool_calls"] + sum(item["tool_calls"] for item in abandoned),
+        "rag_calls": before["rag_calls"] + sum(item["rag_calls"] for item in abandoned),
+        "tool_seconds": round(
+            before["tool_seconds"] + sum(item["tool_seconds"] for item in abandoned), 1
+        ),
+        "rag_seconds": round(
+            before["rag_seconds"] + sum(item["rag_seconds"] for item in abandoned), 1
+        ),
+    }
+    state["budget"] = budget
+    return state
 
 
 class SupportTaskBudget:
@@ -412,6 +591,8 @@ def build_support_task(
         "outcome": builder.outcome,
         "gaps": builder.gaps,
         "evidence": builder.evidence,
+        # この Run の経路と理由（会話の通しではなく Run ごと。#1283）。
+        "route": run_route(steps),
         "budget": {
             "run": run,
             "task": task,

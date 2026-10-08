@@ -383,20 +383,6 @@ def test_chat_endpoints_return_404_when_disabled(
         == 404
     )
     assert client.get("/api/chat/models").status_code == 404
-    assert client.get("/api/chat/agent-link").status_code == 404
-
-
-def test_agent_link_follows_agent_app_url(monkeypatch: MonkeyPatch) -> None:
-    """Agent のチャットの URL は RAG_AGENT_APP_URL から作り、未設定なら null（#1283）。"""
-    monkeypatch.setattr(get_settings(), "rag_agent_app_url", "")
-    response = client.get("/api/chat/agent-link")
-    assert response.status_code == 200
-    assert response.json()["data"] == {"agent_chat_url": None}
-
-    monkeypatch.setattr(get_settings(), "rag_agent_app_url", "https://agent.example.com")
-    assert client.get("/api/chat/agent-link").json()["data"] == {
-        "agent_chat_url": "https://agent.example.com/chat"
-    }
 
 
 # --------------------------------------------------------------------------- #

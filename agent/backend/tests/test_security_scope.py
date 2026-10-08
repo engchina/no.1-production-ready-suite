@@ -324,59 +324,6 @@ def test_run_creation_keeps_unreserved_metadata(
     assert metadata["ticket"] == "T-1"
 
 
-def test_run_creation_records_rag_escalation_entry(
-    auth: ProductionAuth, scope_data: ScopeData, monkeypatch: MonkeyPatch
-) -> None:
-    """RAG のチャットから引き継いだ質問は、入口と理由を Run の metadata に残す（#1283）。"""
-
-    async def record(run_id: str) -> None:
-        return None
-
-    monkeypatch.setattr(builtin_runtime, "execute_run", record)
-    _scoped_user(auth, "rag-escalation-operator", ["agent.runs.operate"])
-    headers = login("rag-escalation-operator")
-
-    response = client.post(
-        "/api/runs",
-        json={
-            "goal": "今の設定値を確かめたい",
-            "agent_id": AGENT_A,
-            "metadata": {"entry": "rag_escalation", "entry_reason": "needs_environment_data"},
-        },
-        headers=headers,
-    )
-
-    assert response.status_code == 200, response.text
-    metadata = response.json()["data"]["metadata"]
-    assert (metadata["entry"], metadata["entry_reason"]) == (
-        "rag_escalation",
-        "needs_environment_data",
-    )
-
-
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        {"entry": "unknown"},
-        {"entry_reason": "needs_environment_data"},
-        {"entry": "rag_escalation", "entry_reason": "Needs Data!"},
-        {"entry": "rag_escalation", "entry_reason": 1},
-    ],
-    ids=["unknown-entry", "reason-without-entry", "reason-format", "reason-type"],
-)
-def test_run_creation_rejects_invalid_entry(
-    auth: ProductionAuth, scope_data: ScopeData, metadata: dict[str, object]
-) -> None:
-    _scoped_user(auth, "invalid-entry-operator", ["agent.runs.operate"])
-    headers = login("invalid-entry-operator")
-    response = client.post(
-        "/api/runs",
-        json={"goal": "入口", "agent_id": AGENT_A, "metadata": metadata},
-        headers=headers,
-    )
-    assert response.status_code == 422, response.text
-
-
 def test_agent_list_is_scoped(auth: ProductionAuth, scope_data: ScopeData) -> None:
     _scoped_user(auth, "scoped-agents", ["agent.runs.operate", "menu.agents"])
     headers = login("scoped-agents")

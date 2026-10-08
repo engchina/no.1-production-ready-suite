@@ -54,7 +54,6 @@ import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/
 import { CitationCard } from "@/components/search/CitationCard";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
-import { AgentEscalationAction } from "./AgentEscalationAction";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
@@ -235,7 +234,6 @@ function AssistantColumn({
   errorMessage,
   guardrailWarnings,
   answerDiagnostics = null,
-  question = "",
   savedAnswer = false,
   progress = null,
   stoppedMessage = null,
@@ -252,8 +250,6 @@ function AssistantColumn({
   errorMessage: string | null;
   guardrailWarnings: string[];
   answerDiagnostics?: unknown;
-  /** この回答の質問（Agent のチャットへ引き継ぐ。#1283）。 */
-  question?: string;
   /** 保存された回答がある(trace_id から回答の実行記録を開ける)。 */
   savedAnswer?: boolean;
   /**
@@ -335,10 +331,6 @@ function AssistantColumn({
           <span className="font-medium">{t("chat.guardrail")}: </span>
           {guardrailWarnings.join(" / ")}
         </Banner>
-      ) : null}
-      {finished && answerDiagnostics && question ? (
-        // 固定の RAG では完了できない回答から Agent のチャットへ続ける導線（#1283）。
-        <AgentEscalationAction diagnostics={answerDiagnostics} question={question} />
       ) : null}
       {/* 根拠の構成・工程などの実行記録。引用の一覧は下の「根拠 N 件」の 1 か所だけに出す（#1202）。 */}
       {finished && answerDiagnostics ? (
@@ -481,7 +473,6 @@ function MessageTurn({
               errorMessage={column.errorMessage}
               guardrailWarnings={column.guardrailWarnings}
               answerDiagnostics={column.answerDiagnostics}
-              question={user.content}
               savedAnswer={column.savedAnswer}
               progress={column.progress}
               stoppedMessage={column.stoppedMessage}

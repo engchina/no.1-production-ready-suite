@@ -380,11 +380,11 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/support-guides/{{guide_id}}/rollback"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/support-guides/{{guide_id}}/archive"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/support-guides/{{guide_id}}/restore"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    # 下書きで試す（#1288）。回答を作るが、業務ガイドの管理者だけ（検索の権限では使えない）。
+    ("POST", f"{_BV}/support-guides/{{guide_id}}/try"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: チャット ----
     ("GET", "/chat/models"): _any(MENU_CHAT),
-    # 現場の実データの確認が要る回答から Agent のチャットへ続ける導線（#1283）。
-    ("GET", "/chat/agent-link"): _any(MENU_CHAT),
     ("GET", "/chat/conversations"): _any(MENU_CHAT),
     ("POST", "/chat/conversations"): _any(MENU_CHAT),
     ("GET", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
