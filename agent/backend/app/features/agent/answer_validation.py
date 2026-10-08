@@ -22,7 +22,11 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
-  `skipped`（回答はそのまま）。
+  `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
+  `skipped`（`clarification_only`）にして注記しない（#1306）。
+- 主張ではない段落（見出し・出典の行・利用者への質問・資料に記載が無いことを述べる文・
+  「確かめられていない点」の節）は、RAG の判定にかかわらず外さない（#1306。判定は
+  `answer_passages`。成果物の段落には `non_claim` を付ける）。
 
 ここは根拠の参照の集め方・判定のまとめ方・成果物の内容・回答の組み立てだけを持つ（呼び出しは
 `builtin_runtime`）。
@@ -33,6 +37,12 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from app.features.agent.answer_passages import (
+    is_heading,
+    is_structure,
+    non_claim_passages,
+    passage_spans,
+)
 from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
@@ -70,6 +80,8 @@ WITHHOLDING_CHECKS = frozenset({"guide", "guide_steps", "impact"})
 REASON_NO_RAG_EVIDENCE = "no_rag_evidence"
 REASON_VALIDATOR_UNAVAILABLE = "validator_unavailable"
 REASON_EMPTY_ANSWER = "empty_answer"
+# 利用者への確認の質問だけの回答（資料の主張を含まないので、根拠が無くても注記しない。#1306）。
+REASON_CLARIFICATION_ONLY = "clarification_only"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
@@ -394,51 +406,53 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
     }
 
 
-# 回答を段落に分ける規則（RAG の `rag_engine.generation.operation_audit.answer_passages` と同じ。
-# `rag_validate_answer` の `answer_quote` はこの段落の原文。製品をまたいで import しないため写す）。
-_QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
-_SENTENCE = re.compile(r"[^。]+(?:。[」』）)]*|$)")
-_PASSAGE_CHARS = 600
-
-
-def _passage_spans(line: str) -> list[tuple[int, int, str]]:
-    """1 行の段落（行の中の開始・終了の位置と原文）。"""
-    if _QUOTE_ONLY_LINE.fullmatch(line):
-        pieces = [(0, len(line))]
-    else:
-        pieces = [(match.start(), match.end()) for match in _SENTENCE.finditer(line)]
-    spans: list[tuple[int, int, str]] = []
-    for start, end in pieces:
-        raw = line[start:end]
-        value = raw.strip()
-        offset = start + len(raw) - len(raw.lstrip())
-        for index in range(0, len(value), _PASSAGE_CHARS):
-            text = value[index : index + _PASSAGE_CHARS]
-            spans.append((offset + index, offset + index + len(text), text))
-    return spans
-
-
 def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
-    削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。
+    削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
+    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306）。見出し・出典の
+    ほかに何も残らなければ空文字を返す（本文を載せない）。
     """
     found: set[str] = set()
-    kept: list[str] = []
+    # （行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
+    kept: list[tuple[str, bool, bool] | None] = []
+    heading: int | None = None
+    section_content = False
+    section_removed = False
+
+    def close_section() -> None:
+        if heading is not None and section_removed and not section_content:
+            kept[heading] = None
+
     for line in answer.split("\n"):
-        spans = [span for span in _passage_spans(line) if span[2] in quotes]
-        if not spans:
-            kept.append(line)
+        spans = passage_spans(line)
+        withheld = [span for span in spans if span[2] in quotes]
+        if not withheld:
+            if len(spans) == 1 and is_heading(spans[0][2]):
+                close_section()
+                heading, section_content, section_removed = len(kept), False, False
+                kept.append((line, True, False))
+                continue
+            content = any(not is_structure(text) for _s, _e, text in spans)
+            section_content = section_content or content
+            kept.append((line, False, content))
             continue
-        found.update(span[2] for span in spans)
-        for start, end, _text in reversed(spans):
+        found.update(span[2] for span in withheld)
+        section_removed = True
+        for start, end, _text in reversed(withheld):
             line = line[:start] + line[end:]
-        if line.strip():
-            kept.append(line.rstrip())
+        rest = [text for _s, _e, text in passage_spans(line)]
+        if line.strip() and any(not is_structure(text) for text in rest):
+            section_content = True
+            kept.append((line.rstrip(), False, True))
+    close_section()
     if quotes - found:
         return None
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    lines = [item for item in kept if item is not None]
+    if not any(content for _line, _heading, content in lines):
+        return ""
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(line for line, _h, _c in lines)).strip()
 
 
 def error_findings(result: JsonObject) -> list[JsonObject]:
@@ -473,10 +487,34 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     return lines
 
 
+def mark_non_claims(answer: str, result: JsonObject) -> JsonObject:
+    """判定の段落のうち、主張ではない段落（見出し・出典・質問・不足の文・「確かめられていない点」の節）に
+    `non_claim`（判定の種類）を付けた結果の写しを返す（#1306。`answer_passages.non_claim_passages`）。
+
+    RAG の判定（`status`）は変えずに残し、外すかどうかの判断と画面の「確かめられていない点」だけが
+    `non_claim` の段落を除く。
+    """
+    kinds = non_claim_passages(answer)
+    claims: list[object] = []
+    for item in result.get("claims") or []:
+        if isinstance(item, dict):
+            kind = kinds.get(str(item.get("answer_quote") or ""))
+            item = (
+                {**item, "non_claim": kind}
+                if kind
+                else {key: value for key, value in item.items() if key != "non_claim"}
+            )
+        claims.append(item)
+    return {**result, "claims": claims}
+
+
 def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     """判定（判定として使える結果）から、利用者に見せる回答と、外した内容の記録を返す。
 
-    valid（または確かめる主張も error の指摘も無い）ならそのまま。そうでなければ、根拠で確かめられ
+    valid（または確かめる主張も error の指摘も無い）ならそのまま。主張ではない段落（見出し・
+    出典の行・利用者への質問・資料に記載が無いことを述べる文・「確かめられていない点」の節。
+    #1306）は判定にかかわらず外さず、ほかに確かめられない段落・error・読めない根拠が無ければ（裏付けのある主張が
+    あるか、主張ではない段落だけなら）回答をそのまま載せる。そうでなければ、根拠で確かめられ
     なかった段落を外し、外した段落と理由・決定的な検査の error・古い版や見つからない根拠を
     「確かめられていない点」として足す。根拠を 1 件も読めなかった（`no_evidence`）とき、段落の位置を
     決められないとき、手順・影響範囲・業務ガイドの版の error があるとき（どの段落の手順が誤りかを
@@ -484,13 +522,26 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     示していない）は本文を残し、不足として示す。
     """
     errors = error_findings(result)
+    unchanged = {"claims": 0, "findings": 0, "all": False}
     if result.get("valid") is True or (result.get("status") == "no_claims" and not errors):
-        return answer, {"claims": 0, "findings": 0, "all": False}
+        return answer, unchanged
+    claims = [item for item in mark_non_claims(answer, result)["claims"] if isinstance(item, dict)]
     blocking = [
         item
-        for item in result.get("claims") or []
-        if isinstance(item, dict) and item.get("status") in BLOCKING_CLAIM_STATUSES
+        for item in claims
+        if item.get("status") in BLOCKING_CLAIM_STATUSES and not item.get("non_claim")
     ]
+    unreadable = _refs_count(result.get("stale_evidence")) + _refs_count(
+        result.get("missing_evidence")
+    )
+    if (
+        result.get("status") == "completed"
+        and not errors
+        and not blocking
+        and not unreadable
+        and any(item.get("status") == "supported" or item.get("non_claim") for item in claims)
+    ):
+        return answer, unchanged
     guide_errors = any(item.get("check") in WITHHOLDING_CHECKS for item in errors)
     body: str | None
     if result.get("status") == "no_evidence" or guide_errors:
@@ -501,7 +552,7 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     else:
         body = answer.rstrip()
     lines = _notice_lines(result, blocking)
-    if blocking or (body is None and not guide_errors):
+    if blocking or (not body and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)
     text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
     withheld = {"claims": len(blocking), "findings": len(errors), "all": not body}
@@ -533,7 +584,7 @@ def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[Jso
         )
         published = with_unverified_notice(answer)
     else:
-        merged = merge_results([item["result"] for item in validations])
+        merged = mark_non_claims(answer, merge_results([item["result"] for item in validations]))
         content = validation_content(STATUS_COMPLETED, result=merged, **common)
         published, content["withheld"] = publish_answer(answer, merged)
     content["connections"] = validations
