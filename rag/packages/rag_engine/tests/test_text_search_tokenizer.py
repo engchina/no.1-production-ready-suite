@@ -16,6 +16,7 @@ from rag_engine.retrieval.text_search_tokenizer import (
     _sudachi_available,
     build_oracle_text_query,
     escape_oracle_text_term,
+    normalize_text_search_index_text,
     normalize_text_search_text,
     oracle_text_query_for_question,
     tokenize_text_search_query,
@@ -38,6 +39,22 @@ def _weighted(query, *, domain_keywords=None, latin_stemmer="none"):
 class TextSearchTokenizerTests(unittest.TestCase):
     def test_normalize_text_unifies_width_space_and_dash_variants(self):
         self.assertEqual(normalize_text_search_text("ＯＲＡ−０１５５５　再起動"), "ora-01555 再起動")
+
+    def test_index_text_uses_same_characters_as_question_terms(self):
+        # 索引の側も質問の側と同じ文字の形にする（#1336）。WORLD_LEXER が同一視しない互換文字を含む。
+        for raw in ("手順①", "第Ⅴ章", "㈱サンプル", "５㌔", "２５℃", "１～３", "Ａ－１２３"):
+            index_text = normalize_text_search_index_text(raw)
+            self.assertEqual(index_text.casefold(), normalize_text_search_text(raw), raw)
+        self.assertEqual(normalize_text_search_index_text("手順①"), "手順1")
+        self.assertEqual(normalize_text_search_index_text("㈱サンプル"), "(株)サンプル")
+
+    def test_index_text_keeps_line_breaks_and_case(self):
+        # 語の区切りと大文字小文字の無視は Oracle Text の lexer が行うため、索引の文字列では変えない。
+        self.assertEqual(
+            normalize_text_search_index_text("規程.pdf > 申請\nＶＰＮ\t接続\x00"),
+            "規程.pdf > 申請\nVPN\t接続 ",
+        )
+        self.assertEqual(normalize_text_search_index_text(None), "")
 
     def test_oracle_text_query_escapes_reserved_characters_with_braces(self):
         self.assertEqual(escape_oracle_text_term("ORA-01555"), "{ora-01555}")

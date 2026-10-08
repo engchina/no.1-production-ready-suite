@@ -9486,7 +9486,10 @@ def _feedback_detail_binds(
     comment = _audit_optional_str(details, "comment_text")
     corrected_answer = _audit_optional_str(details, "corrected_answer_text")
     search_text = (
-        "\n".join(value for value in (question, answer, comment, corrected_answer) if value) or None
+        _text_search_index_text(
+            "\n".join(value for value in (question, answer, comment, corrected_answer) if value)
+        )
+        or None
     )
     citations = details.get("citations", [])
     if not isinstance(citations, Sequence) or isinstance(citations, str | bytes | bytearray):
@@ -11872,13 +11875,27 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
 
 
 def _chunk_search_text(chunk: Chunk) -> str:
-    """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。"""
+    """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。
+
+    索引する文字列は、質問の側と同じ文字の形（NFKC・波線・ダッシュ）にそろえる（#1336）。
+    WORLD_LEXER は全角 / 半角の違いは同一視するが、互換文字（``①`` ``Ⅴ`` ``㈱`` ``㌔`` ``℃``）は
+    同一視しない。質問の側はこれらを NFKC で ``1`` ``V`` などにするため、索引の側がそのままだと
+    当たらない。
+    表示の本文（``chunk_text``）・親の本文・引用の原文は正規化しない（原文の照合と位置がずれるため）。
+    """
     if search_text := engine_search_text(chunk.metadata):
         # 親子階層の chunk は、文書・節・親要約・表/図文脈を前置した rag_poc の search_text を
         # 索引する。
-        return search_text
+        return _text_search_index_text(search_text)
     header = str(chunk.metadata.get("context_header") or "").strip()
-    return f"{header}\n{chunk.text}" if header else chunk.text
+    return _text_search_index_text(f"{header}\n{chunk.text}" if header else chunk.text)
+
+
+def _text_search_index_text(text: str) -> str:
+    """Oracle Text の索引に入れる文字列を、質問の語と同じ形に正規化する（#1336）。"""
+    from rag_engine.retrieval.text_search_tokenizer import normalize_text_search_index_text
+
+    return normalize_text_search_index_text(text)
 
 
 def _document_chunk_view_from_row(row: Mapping[str, object]) -> DocumentChunkView:

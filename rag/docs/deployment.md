@@ -708,6 +708,23 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#1336 全文検索の索引の文字の正規化）
+
+全文検索（Oracle Text）に索引する文字列（`rag_chunks.search_text`・`rag_feedback_details.search_text`）を、保存の時点で質問の語と同じ
+文字の形（NFKC と波線・ダッシュの同一視）にした。これまでは、本文に互換文字（`①` `Ⅴ` `㈱` `㌔` `℃` など）があると、質問の側だけが
+NFKC で `1` `V` `(株)` などになり、全文検索で当たらなかった（全角 / 半角の英数字・半角のカタカナは lexer が同一視するので当たっていた）。
+schema の変更は無い。表示の本文・embedding は変えない。
+
+1. backend を更新すると、それ以降に取り込む文書・作り直す chunk・保存するフィードバックは正規化した値で索引される。
+2. 既存の行は、次の CLI で直す（Oracle の SQL には NFKC が無いため、行を読んで値が変わる行だけを更新する。索引は `SYNC (ON COMMIT)` で更新される）。
+   先に `--dry-run` で件数を確かめる。同じ CLI を何度実行しても結果は変わらない。
+
+   ```bash
+   cd rag/backend
+   uv run python -m app.rag.text_search_index_cli normalize --dry-run
+   uv run python -m app.rag.text_search_index_cli normalize
+   ```
+
 ## 既存環境の更新手順（#1329 MinerU 4.0 の V1 API）
 
 文書解析の MinerU（外部で運用する GPU の解析エンジン）の接続を、MinerU 4.x の V1 API に切り替えた。MinerU 4.0 は
