@@ -1,8 +1,8 @@
 """評価の合成の資料を取り込み、評価セットの文書の参照を実際の ID に置き換える CLI（#1231）。
 
 評価セット（例: `rag/evaluation/business-support/business-support.json`）の
-`relevant_document_ids` は、配備先ごとに違う文書 ID の代わりに `file:<ファイル名>` で
-資料を指す。この CLI は次を行う。
+`relevant_document_ids` と `required_evidence[].document_id`（#1284）は、配備先ごとに違う文書 ID の
+代わりに `file:<ファイル名>` で資料を指す。この CLI は次を行う。
 
 1. ナレッジベースを作る（`--knowledge-base-id` を渡したときはそれを使う）。
 2. 評価セットが参照するファイルを、評価セットと同じフォルダ（`--corpus-dir` で変更可）から
@@ -55,16 +55,35 @@ class CorpusError(RuntimeError):
     """利用者へ返す失敗（exit code 2）。"""
 
 
+def _document_references(case: Mapping[str, Any]) -> list[object]:
+    """ケースの文書の参照（正解の文書と、必要な根拠の文書。#1284）。"""
+    values: list[object] = list(case.get("relevant_document_ids", []))
+    for evidence in case.get("required_evidence", []):
+        if isinstance(evidence, Mapping):
+            values.append(evidence.get("document_id"))
+    return values
+
+
 def referenced_files(golden_set: Mapping[str, Any]) -> list[str]:
     """評価セットが `file:` で参照するファイル名（出てきた順・重複なし）。"""
     names: list[str] = []
     for case in golden_set.get("cases", []):
-        for value in case.get("relevant_document_ids", []):
+        for value in _document_references(case):
             if isinstance(value, str) and value.startswith(FILE_REFERENCE_PREFIX):
                 name = value.removeprefix(FILE_REFERENCE_PREFIX)
                 if name and name not in names:
                     names.append(name)
     return names
+
+
+def _resolve_reference(value: object, document_ids: Mapping[str, str]) -> object:
+    """`file:<ファイル名>` を取り込んだ文書の ID にする（それ以外の値はそのまま）。"""
+    if not (isinstance(value, str) and value.startswith(FILE_REFERENCE_PREFIX)):
+        return value
+    name = value.removeprefix(FILE_REFERENCE_PREFIX)
+    if name not in document_ids:
+        raise CorpusError(f"取り込んでいないファイルを参照しています: {name}")
+    return document_ids[name]
 
 
 def resolve_golden_set(
@@ -73,16 +92,13 @@ def resolve_golden_set(
     """`file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セット。"""
     resolved: dict[str, Any] = json.loads(json.dumps(golden_set))
     for case in resolved.get("cases", []):
-        ids: list[str] = []
-        for value in case.get("relevant_document_ids", []):
-            if isinstance(value, str) and value.startswith(FILE_REFERENCE_PREFIX):
-                name = value.removeprefix(FILE_REFERENCE_PREFIX)
-                if name not in document_ids:
-                    raise CorpusError(f"取り込んでいないファイルを参照しています: {name}")
-                ids.append(document_ids[name])
-            else:
-                ids.append(value)
-        case["relevant_document_ids"] = ids
+        case["relevant_document_ids"] = [
+            _resolve_reference(value, document_ids)
+            for value in case.get("relevant_document_ids", [])
+        ]
+        for evidence in case.get("required_evidence", []):
+            if isinstance(evidence, dict) and "document_id" in evidence:
+                evidence["document_id"] = _resolve_reference(evidence["document_id"], document_ids)
     resolved["knowledge_base_ids"] = [knowledge_base_id]
     return resolved
 

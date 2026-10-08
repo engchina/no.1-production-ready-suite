@@ -354,6 +354,11 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
         "standard_answer_hash": (
             _hash_text(case.standard_answer) if case.standard_answer is not None else None
         ),
+        # 区分・往復・条件・必要な根拠（#1284）。返答・条件の値・根拠の語句は残さない。
+        "split": case.split,
+        "turn_count": len(case.turns),
+        "condition_ids": sorted(case.all_condition_ids()),
+        "required_evidence_ids": [evidence.id for evidence in case.required_evidence],
     }
 
 

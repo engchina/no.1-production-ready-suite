@@ -2914,6 +2914,8 @@ export const ja = {
   "evaluation.failureReason.step_missing": "手順の不足・順序の誤り",
   "evaluation.failureReason.forbidden_action": "危険な操作を提示",
   "evaluation.failureReason.condition_missing": "条件に触れていない",
+  "evaluation.failureReason.evidence_miss": "必要な根拠を取れなかった",
+  "evaluation.failureReason.known_condition_reasked": "分かっている条件を聞き直した",
 
   // 業務ガイド（SupportGuide。#1237）。下書きを検証して公開した版だけを回答に使う。
   "supportGuides.title": "業務ガイド",
