@@ -456,6 +456,12 @@ def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
             failure.model_dump(mode="json") for failure in metrics.threshold_failures
         ],
         "failure_reason_counts": dict(metrics.failure_reason_counts),
+        # 参考の集計と区分（dev / holdout）ごとの内訳（#1284）。ケースの詳細は含めない。
+        "required_evidence_recall": metrics.required_evidence_recall,
+        "split_breakdown": {
+            split: summary.model_dump(mode="json")
+            for split, summary in metrics.split_breakdown.items()
+        },
     }
 
 

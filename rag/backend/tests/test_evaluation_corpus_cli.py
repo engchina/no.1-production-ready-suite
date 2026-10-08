@@ -127,3 +127,27 @@ def test_main_rejects_missing_corpus_files(
     code = main([str(golden), "--output", str(tmp_path / "out.json")])
     assert code == 2
     assert "資料が見つかりません" in capsys.readouterr().err
+
+
+def test_required_evidence_file_references_are_collected_and_resolved() -> None:
+    """必要な根拠の文書（#1284）も `file:` で参照でき、取込の対象と置き換えの対象になる。"""
+    golden_set = {
+        "cases": [
+            {
+                "id": "a",
+                "query": "q",
+                "relevant_document_ids": ["file:manual.pdf"],
+                "required_evidence": [
+                    {"id": "e1", "document_id": "file:notes.pdf", "text": "token expired"},
+                    {"id": "e2", "document_id": "doc-fixed", "text": "x"},
+                    {"id": "e3", "text": "y"},
+                ],
+            }
+        ]
+    }
+    assert referenced_files(golden_set) == ["manual.pdf", "notes.pdf"]
+    resolved = resolve_golden_set(golden_set, {"manual.pdf": "d1", "notes.pdf": "d2"}, "kb-1")
+    evidence = resolved["cases"][0]["required_evidence"]
+    assert [item.get("document_id") for item in evidence] == ["d2", "doc-fixed", None]
+    with pytest.raises(CorpusError):
+        resolve_golden_set(golden_set, {"manual.pdf": "d1"}, "kb-1")

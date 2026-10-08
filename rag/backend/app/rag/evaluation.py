@@ -16,6 +16,11 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 対象外、期待する語の無いケースは answer_keyword_hit_rate の対象外)。失敗したケースは error_count
 で数え、指標の平均には入れない(1 件でも失敗があれば不合格)。標準回答による評価(LLM を複数回
 呼ぶ)は、標準回答のあるケースだけで行う。
+
+業務支援の評価の契約（#1284。handoff §14.1 / §14.2）: ケースの既知の条件（`conditions`）は
+検索・回答の request の `conditions` に渡す。確認の質問への返答（`turns`）は、チャットと同じく
+返答を次の質問にし、前の往復を会話の履歴として順に実行する。結果は区分（dev / holdout）ごとの
+内訳と、必要な根拠ごとの再現率（`required_evidence_recall`。参考の集計）を持つ。
 """
 
 import asyncio
@@ -46,10 +51,12 @@ from app.rag.answer_timeout import (
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.evaluation_handling import (
+    asked_condition_ids,
+    best_step_order_score,
     condition_coverage,
+    contains_normalized,
     forbidden_hits,
     observed_outcome,
-    step_order_score,
 )
 from app.rag.file_processing_evaluation import citation_traceability_coverage
 from app.rag.guardrails import evaluate_groundedness
@@ -60,9 +67,11 @@ from app.rag.observability import (
     record_evaluation_case,
     record_rag_request,
 )
-from app.rag.pipeline import RagPipeline, SearchStageProgressCallback
+from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
+    EVALUATION_REPORT_ONLY_METRIC_NAMES,
+    EVALUATION_UNASSIGNED_SPLIT,
     EVALUATION_UNCATEGORIZED,
     EvaluationAnswerJudgement,
     EvaluationCase,
@@ -72,11 +81,14 @@ from app.schemas.evaluation import (
     EvaluationExperiment,
     EvaluationExperimentResult,
     EvaluationFailureReason,
+    EvaluationHandlingExpectation,
     EvaluationMetricName,
     EvaluationMetrics,
     EvaluationRagOverrides,
+    EvaluationSplitSummary,
     EvaluationThresholdFailure,
     EvaluationThresholds,
+    EvaluationTurnResult,
 )
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 
@@ -94,6 +106,9 @@ ANSWER_JUDGE_UNAVAILABLE_MESSAGE = (
 )
 ANSWER_JUDGE_TIMEOUT_MESSAGE = "標準回答による評価が時間内に終わりませんでした。"
 ANSWER_JUDGE_ERROR_MESSAGE = "標準回答による評価を完了できませんでした。"
+# 返答の往復で、業務ガイドの照合に足す前の質問の数
+# （チャットの GUIDE_CONTEXT_TURNS と同じ。#1238 / #1284）。
+EVALUATION_GUIDE_CONTEXT_TURNS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -189,13 +204,20 @@ async def judge_answer_with_standard(
     return evaluation
 
 
+# 集計する指標（閾値の判定に使う指標と、結果に出すだけの参考の集計。#1284）。
+_AGGREGATED_METRIC_NAMES: tuple[str, ...] = (
+    *EVALUATION_METRIC_NAMES,
+    *EVALUATION_REPORT_ONLY_METRIC_NAMES,
+)
+
+
 @dataclass
 class _Aggregate:
     """指標ごとに、測れたケースの値を集める。"""
 
     values: dict[str, list[float]] = field(default_factory=dict)
 
-    def add(self, metric: EvaluationMetricName, value: float | None) -> None:
+    def add(self, metric: str, value: float | None) -> None:
         if value is not None:
             self.values.setdefault(metric, []).append(float(value))
 
@@ -206,24 +228,49 @@ class _Aggregate:
                 if self.values.get(metric)
                 else None
             )
-            for metric in EVALUATION_METRIC_NAMES
+            for metric in _AGGREGATED_METRIC_NAMES
         }
 
     def counts(self) -> dict[str, int]:
-        return {metric: len(self.values.get(metric, [])) for metric in EVALUATION_METRIC_NAMES}
+        return {metric: len(self.values.get(metric, [])) for metric in _AGGREGATED_METRIC_NAMES}
 
 
-ProfileResolver = Callable[[SearchRequest, Settings], Awaitable[tuple[SearchRequest, Settings]]]
+@dataclass(frozen=True)
+class _TurnRun:
+    """1 回の回答と、その質問・返答までに渡した条件（#1284）。"""
+
+    response: SearchResponse
+    conditions: Mapping[str, str] = field(default_factory=dict)
+
+
+# (検索・回答の request, Settings, 業務ガイドの照合に足す前の質問) → 解決した request と Settings。
+ProfileResolver = Callable[
+    [SearchRequest, Settings, Sequence[str]], Awaitable[tuple[SearchRequest, Settings]]
+]
 
 
 async def _resolve_profile_context(
-    request: SearchRequest, settings: Settings
+    request: SearchRequest, settings: Settings, guide_context: Sequence[str] = ()
 ) -> tuple[SearchRequest, Settings]:
-    """検索・回答と同じ解決で、プロファイルの KB・回答の設定・業務ガイドを当てる（#1249）。"""
+    """検索・回答と同じ解決で、プロファイルの KB・回答の設定・業務ガイドを当てる（#1249）。
+
+    返答の往復（#1284）では、チャットと同じく前の質問も業務ガイドの照合に使う。確認の質問は回答として
+    測るため、検索の API と同じく ``interactive`` にしない（不明の条件は確認の質問になる）。
+    """
     from app.api.routes.search import _resolve_query_context
 
-    resolved, resolved_settings, _kb, _view = await _resolve_query_context(request, settings)
+    resolved, resolved_settings, _kb, _view = await _resolve_query_context(
+        request, settings, guide_context=guide_context
+    )
     return resolved, resolved_settings
+
+
+def _case_queries(case: EvaluationCase) -> list[tuple[str, dict[str, str]]]:
+    """最初の質問と返答を、送る順に（質問・返答, その発話で分かった条件）で返す（#1284）。"""
+    return [
+        (case.query, dict(case.conditions)),
+        *((turn.reply, dict(turn.conditions)) for turn in case.turns),
+    ]
 
 
 class EvaluationRunner:
@@ -286,12 +333,6 @@ class EvaluationRunner:
                     current_case_id=case.id,
                     current_experiment_id=None,
                 )
-            request = SearchRequest(
-                query=case.query,
-                top_k=top_k,
-                filters=filters or {},
-                knowledge_base_ids=list(knowledge_base_ids or []),
-            )
             trace_id = new_trace_id()
             remaining = _remaining_seconds(deadline)
             if remaining is not None and remaining <= 0:
@@ -301,72 +342,110 @@ class EvaluationRunner:
                 case_results.append(skipped_result)
                 error_count += 1
                 continue
-            case_limit = answer_timeout_seconds(effective_settings)
-            limited_by_budget = remaining is not None and remaining < case_limit
             case_started_at = perf_counter()
-            try:
-                run_case: Any = partial(pipeline.run, request, trace_id)
-                if search_answer_profile_id:
-                    # プロファイルの解決（KB・回答の設定・業務ガイド）。失敗はケースの失敗にする。
-                    request, case_settings = await self._profile_resolver(
-                        request.model_copy(
-                            update={"search_answer_profile_id": search_answer_profile_id}
-                        ),
-                        effective_settings,
+            # 最初の質問と、確認の質問への返答（#1284）を順に送る。返答はチャットと同じく、
+            # 前の往復を会話の履歴と業務ガイドの照合の文脈にし、分かった条件を足して渡す。
+            turn_runs: list[_TurnRun] = []
+            history: list[ChatTurn] = []
+            prior_queries: list[str] = []
+            conditions: dict[str, str] = {}
+            error_result: EvaluationCaseResult | None = None
+            for turn_index, (query, turn_conditions) in enumerate(_case_queries(case)):
+                conditions = {**conditions, **turn_conditions}
+                request = SearchRequest(
+                    query=query,
+                    top_k=top_k,
+                    filters=dict(filters or {}),
+                    knowledge_base_ids=list(knowledge_base_ids or []),
+                    conditions=dict(conditions),
+                )
+                turn_trace_id = trace_id if turn_index == 0 else new_trace_id()
+                remaining = _remaining_seconds(deadline)
+                if remaining is not None and remaining <= 0:
+                    # 往復の途中で評価全体の上限に達した。ケースは失敗にする。
+                    error_result = _case_skipped_result(
+                        case=case, trace_id=turn_trace_id, partially_run=True
                     )
-                    case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
-                    run_case = partial(case_pipeline.run, request, trace_id)
-                # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
-                response = await run_answer_with_timeout(
-                    run_case,
-                    effective_settings,
-                    timeout_seconds=remaining if limited_by_budget else None,
+                    break
+                case_limit = answer_timeout_seconds(effective_settings)
+                limited_by_budget = remaining is not None and remaining < case_limit
+                try:
+                    run_case: Any = partial(pipeline.run, request, turn_trace_id)
+                    if search_answer_profile_id:
+                        # プロファイルの解決（KB・回答の設定・業務ガイド）。
+                        # 失敗はケースの失敗にする。
+                        request, case_settings = await self._profile_resolver(
+                            request.model_copy(
+                                update={"search_answer_profile_id": search_answer_profile_id}
+                            ),
+                            effective_settings,
+                            prior_queries[-EVALUATION_GUIDE_CONTEXT_TURNS:],
+                        )
+                        case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
+                        run_case = partial(case_pipeline.run, request, turn_trace_id)
+                    if history:
+                        # 返答はチャットと同じく、会話の履歴を踏まえて単独の質問に
+                        # 書き換えてから答える。
+                        run_case = partial(run_case, history=list(history))
+                    # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
+                    response = await run_answer_with_timeout(
+                        run_case,
+                        effective_settings,
+                        timeout_seconds=remaining if limited_by_budget else None,
+                    )
+                except AnswerTimeoutError as exc:
+                    elapsed = elapsed_ms(case_started_at)
+                    record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
+                    _record_case_error_audit(
+                        trace_id=turn_trace_id,
+                        request=request,
+                        elapsed=elapsed,
+                        # 監査と結果の error_type は、従来どおり元の TimeoutError にする。
+                        error=exc.original_error,
+                        settings=effective_settings,
+                        error_stage="timeout",
+                    )
+                    error_result = _case_error_result(
+                        case=case,
+                        trace_id=turn_trace_id,
+                        elapsed=elapsed,
+                        error=exc.original_error,
+                        error_stage=exc.stage,
+                        error_message=_case_timeout_message(
+                            exc,
+                            # 工程の中の時間切れ（LLM 1 回の timeout など）は、全体の上限ではない。
+                            limited_by_budget=limited_by_budget and exc.timeout_seconds is not None,
+                        ),
+                    )
+                    break
+                except Exception as exc:
+                    elapsed = elapsed_ms(case_started_at)
+                    record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
+                    _record_case_error_audit(
+                        trace_id=turn_trace_id,
+                        request=request,
+                        elapsed=elapsed,
+                        error=exc,
+                        settings=effective_settings,
+                        error_stage="evaluation",
+                    )
+                    error_result = _case_error_result(
+                        case=case,
+                        trace_id=turn_trace_id,
+                        elapsed=elapsed,
+                        error=exc,
+                    )
+                    break
+                turn_runs.append(_TurnRun(response=response, conditions=dict(conditions)))
+                history.extend(
+                    [
+                        ChatTurn(role="USER", content=query),
+                        ChatTurn(role="ASSISTANT", content=response.answer),
+                    ]
                 )
-            except AnswerTimeoutError as exc:
-                elapsed = elapsed_ms(case_started_at)
-                record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
-                _record_case_error_audit(
-                    trace_id=trace_id,
-                    request=request,
-                    elapsed=elapsed,
-                    # 監査と結果の error_type は、従来どおり元の TimeoutError にする。
-                    error=exc.original_error,
-                    settings=effective_settings,
-                    error_stage="timeout",
-                )
-                error_result = _case_error_result(
-                    case=case,
-                    trace_id=trace_id,
-                    elapsed=elapsed,
-                    error=exc.original_error,
-                    error_stage=exc.stage,
-                    error_message=_case_timeout_message(
-                        exc,
-                        # 工程の中の時間切れ（LLM 1 回の timeout など）は、全体の上限ではない。
-                        limited_by_budget=limited_by_budget and exc.timeout_seconds is not None,
-                    ),
-                )
-                _accumulate_failure_reasons(failure_reason_counts, error_result.failure_reasons)
-                case_results.append(error_result)
-                error_count += 1
-                continue
-            except Exception as exc:
-                elapsed = elapsed_ms(case_started_at)
-                record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
-                _record_case_error_audit(
-                    trace_id=trace_id,
-                    request=request,
-                    elapsed=elapsed,
-                    error=exc,
-                    settings=effective_settings,
-                    error_stage="evaluation",
-                )
-                error_result = _case_error_result(
-                    case=case,
-                    trace_id=trace_id,
-                    elapsed=elapsed,
-                    error=exc,
-                )
+                prior_queries.append(query)
+
+            if error_result is not None:
                 _accumulate_failure_reasons(failure_reason_counts, error_result.failure_reasons)
                 case_results.append(error_result)
                 error_count += 1
@@ -377,8 +456,9 @@ class EvaluationRunner:
                 "success",
                 elapsed_ms(case_started_at) / 1000,
             )
-            judgement = await self._judge(case, response, deadline)
-            result = _case_result(case, response, judgement)
+            final_response = turn_runs[-1].response
+            judgement = await self._judge(case, final_response, deadline)
+            result = _case_result(case, final_response, judgement, turn_runs=turn_runs)
             if judgement is not None and judgement.status != "completed":
                 judge_incomplete_count += 1
             _accumulate_case_metrics(aggregate, result)
@@ -397,6 +477,7 @@ class EvaluationRunner:
             case_count=len(cases),
             error_count=error_count,
             category_breakdown=category_breakdown(case_results),
+            split_breakdown=split_breakdown(case_results),
             # 失敗したケースや、標準回答で評価できなかったケースがあれば合格にしない。
             passed=not threshold_failures and error_count == 0 and judge_incomplete_count == 0,
             threshold_failures=threshold_failures,
@@ -571,8 +652,15 @@ def _case_result(
     case: EvaluationCase,
     response: SearchResponse,
     judgement: EvaluationAnswerJudgement | None,
+    *,
+    turn_runs: Sequence[_TurnRun] | None = None,
 ) -> EvaluationCaseResult:
-    """1 ケースの回答から、測れる指標と失敗理由を求める。"""
+    """1 ケースの回答から、測れる指標と失敗理由を求める。
+
+    `response` は最後の回答。`turn_runs`（#1284）は最初の質問からの全部の回答で、省略したときは
+    `response` だけの 1 往復とみなす。
+    """
+    runs = list(turn_runs) if turn_runs else [_TurnRun(response, dict(case.conditions))]
     retrieved_ids = _unique_in_order([chunk.document_id for chunk in response.citations])
     relevant = set(case.relevant_document_ids)
     # 答えるべきでない質問(#301)は拒答の正しさだけを測る。正解の文書が無いケースは検索の
@@ -606,7 +694,13 @@ def _case_result(
         if case.expected_answer_keywords
         else None
     )
-    handling = _handling_scores(case, response, abstained=abstained)
+    evidence_recall, missing_evidence = _evidence_scores(case, response)
+    expectations: list[EvaluationHandlingExpectation] = [case, *case.turns]
+    turn_results = [
+        _turn_result(index, expectation, run)
+        for index, (expectation, run) in enumerate(zip(expectations, runs, strict=False))
+    ]
+    handling = _combine_turn_results(turn_results)
     failure_reasons = _case_failure_reasons(
         answerable=answerable,
         has_relevant=bool(relevant) and not _skips_retrieval(response),
@@ -617,10 +711,13 @@ def _case_result(
         guardrail_warnings=response.guardrail_warnings,
         judgement=judgement,
     ) + _handling_failure_reasons(handling)
+    if missing_evidence:
+        failure_reasons.append("evidence_miss")
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
         category=case.category,
+        split=case.split,
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=_unique_in_order(hits),
@@ -634,37 +731,107 @@ def _case_result(
         abstained=abstained,
         refusal_correct=abstained != answerable,
         **handling,
+        evidence_recall=_round(evidence_recall),
+        missing_evidence=missing_evidence,
+        turn_results=turn_results if case.turns else [],
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
         failure_reasons=list(failure_reasons),
         diagnostics=response.diagnostics,
-        elapsed_ms=response.elapsed_ms,
+        elapsed_ms=round(sum(run.response.elapsed_ms for run in runs), 3),
     )
 
 
-def _handling_scores(
-    case: EvaluationCase, response: SearchResponse, *, abstained: bool
-) -> dict[str, Any]:
-    """業務支援の採点（対応・手順・危険な回答・条件。#1231）。期待の無い項目は None / 空。"""
-    observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
+def _turn_result(
+    index: int, expectation: EvaluationHandlingExpectation, run: _TurnRun
+) -> EvaluationTurnResult:
+    """1 回の回答の業務支援の採点（#1231 / #1284）。
+
+    対応・手順と別解・危険な回答・条件・渡した条件の聞き直しを採点する。
+    """
+    response = run.response
+    observed = observed_outcome(response.diagnostics.answer, abstained=is_abstained(response))
     scores: dict[str, Any] = {
+        "turn": index,
+        "trace_id": response.trace_id,
         "observed_outcome": observed.outcome,
         "outcome_source": observed.source,
+        "elapsed_ms": response.elapsed_ms,
     }
-    if case.expected_outcomes:
-        scores["handling_correct"] = observed.outcome in case.expected_outcomes
-    if case.expected_steps:
-        score, missing = step_order_score(response.answer, case.expected_steps)
+    if expectation.expected_outcomes:
+        scores["handling_correct"] = observed.outcome in expectation.expected_outcomes
+    if expectation.expected_steps:
+        score, missing = best_step_order_score(
+            response.answer, [expectation.expected_steps, *expectation.acceptable_alternatives]
+        )
         scores["step_order_score"] = _round(score)
         scores["missing_steps"] = missing
-    if case.forbidden_phrases:
+    if expectation.forbidden_phrases:
         scores["forbidden_checked"] = True
-        scores["forbidden_hits"] = forbidden_hits(response.answer, case.forbidden_phrases)
-    if case.required_conditions:
-        coverage, missing = condition_coverage(response.answer, case.required_conditions)
+        scores["forbidden_hits"] = forbidden_hits(response.answer, expectation.forbidden_phrases)
+    if expectation.required_conditions:
+        coverage, missing = condition_coverage(response.answer, expectation.required_conditions)
         scores["condition_coverage"] = _round(coverage)
         scores["missing_conditions"] = missing
-    return scores
+    if run.conditions:
+        scores["reasked_conditions"] = [
+            condition_id
+            for condition_id in asked_condition_ids(response.diagnostics.answer)
+            if condition_id in run.conditions
+        ]
+    return EvaluationTurnResult(**scores)
+
+
+def _combine_turn_results(turn_results: Sequence[EvaluationTurnResult]) -> dict[str, Any]:
+    """往復ごとの採点をケースの採点にまとめる（1 往復ならその往復の採点のまま）。"""
+    final = turn_results[-1]
+    handling = [item.handling_correct for item in turn_results if item.handling_correct is not None]
+    steps = [item.step_order_score for item in turn_results if item.step_order_score is not None]
+    coverages = [
+        item.condition_coverage for item in turn_results if item.condition_coverage is not None
+    ]
+    return {
+        "observed_outcome": final.observed_outcome,
+        "outcome_source": final.outcome_source,
+        "handling_correct": all(handling) if handling else None,
+        "step_order_score": _mean(steps),
+        "missing_steps": _unique_in_order(
+            [step for item in turn_results for step in item.missing_steps]
+        ),
+        "forbidden_checked": any(item.forbidden_checked for item in turn_results),
+        "forbidden_hits": _unique_in_order(
+            [hit for item in turn_results for hit in item.forbidden_hits]
+        ),
+        "condition_coverage": _mean(coverages),
+        "missing_conditions": _unique_in_order(
+            [condition for item in turn_results for condition in item.missing_conditions]
+        ),
+        "reasked_conditions": _unique_in_order(
+            [condition for item in turn_results for condition in item.reasked_conditions]
+        ),
+    }
+
+
+def _evidence_scores(
+    case: EvaluationCase, response: SearchResponse
+) -> tuple[float | None, list[str]]:
+    """必要な根拠の再現率と、取れなかった根拠の id（#1284）。
+
+    根拠の無いケースと、検索をしない回答（確認の質問・人への引き継ぎで引用の無い回答）は対象外。
+    """
+    if not case.required_evidence or _skips_retrieval(response):
+        return None, []
+    missing = [
+        evidence.id
+        for evidence in case.required_evidence
+        if not any(
+            (evidence.document_id is None or chunk.document_id == evidence.document_id)
+            and contains_normalized(chunk.text, evidence.text)
+            for chunk in response.citations
+        )
+    ]
+    total = len(case.required_evidence)
+    return (total - len(missing)) / total, missing
 
 
 def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailureReason]:
@@ -678,6 +845,8 @@ def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailu
         reasons.append("forbidden_action")
     if scores.get("missing_conditions"):
         reasons.append("condition_missing")
+    if scores.get("reasked_conditions"):
+        reasons.append("known_condition_reasked")
     return reasons
 
 
@@ -734,6 +903,7 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
     aggregate.add("step_order_score", result.step_order_score)
     aggregate.add("safe_answer_rate", _safe_answer(result, result.forbidden_checked))
     aggregate.add("condition_coverage", result.condition_coverage)
+    aggregate.add("required_evidence_recall", result.evidence_recall)
 
 
 def _experiment_progress(
@@ -834,6 +1004,7 @@ def _case_error_result(
     return EvaluationCaseResult(
         case_id=case.id,
         category=case.category,
+        split=case.split,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -845,11 +1016,22 @@ def _case_error_result(
     )
 
 
-def _case_skipped_result(*, case: EvaluationCase, trace_id: str) -> EvaluationCaseResult:
-    """評価全体の上限に達して実行しなかったケースを、失敗として記録する（#383）。"""
+def _case_skipped_result(
+    *, case: EvaluationCase, trace_id: str, partially_run: bool = False
+) -> EvaluationCaseResult:
+    """評価全体の上限に達して実行しなかったケースを、失敗として記録する（#383）。
+
+    `partially_run` は、複数往復のケースの途中の返答で上限に達したとき（#1284）。
+    """
+    skipped = (
+        "このケースの残りの返答は実行していません。"
+        if partially_run
+        else "このケースは実行していません。"
+    )
     return EvaluationCaseResult(
         case_id=case.id,
         category=case.category,
+        split=case.split,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -857,9 +1039,7 @@ def _case_skipped_result(*, case: EvaluationCase, trace_id: str) -> EvaluationCa
         elapsed_ms=0.0,
         error_type=EVALUATION_TIME_BUDGET_ERROR_TYPE,
         error_message=(
-            EVALUATION_TIME_BUDGET_MESSAGE_PREFIX
-            + "このケースは実行していません。"
-            + EVALUATION_TIME_BUDGET_MESSAGE_SUFFIX
+            EVALUATION_TIME_BUDGET_MESSAGE_PREFIX + skipped + EVALUATION_TIME_BUDGET_MESSAGE_SUFFIX
         ),
     )
 
@@ -1064,5 +1244,33 @@ def category_breakdown(
             safe_answer_rate=_rate(
                 [not result.forbidden_hits for result in succeeded if result.forbidden_checked]
             ),
+        )
+    return breakdown
+
+
+def split_breakdown(results: list[EvaluationCaseResult]) -> dict[str, EvaluationSplitSummary]:
+    """区分（dev / holdout）ごとの結果（#1284）。区分のあるケースが 1 つも無ければ空にする。
+
+    指標は全体と同じく、成功したケースのうち測れたものだけの平均。区分の無いケースは unassigned。
+    """
+    if not any(result.split for result in results):
+        return {}
+    grouped: dict[str, list[EvaluationCaseResult]] = {}
+    for result in results:
+        grouped.setdefault(result.split or EVALUATION_UNASSIGNED_SPLIT, []).append(result)
+    breakdown: dict[str, EvaluationSplitSummary] = {}
+    for split, members in grouped.items():
+        aggregate = _Aggregate()
+        failure_reason_counts: dict[str, int] = {}
+        for result in members:
+            if result.status == "success":
+                _accumulate_case_metrics(aggregate, result)
+            _accumulate_failure_reasons(failure_reason_counts, result.failure_reasons)
+        breakdown[split] = EvaluationSplitSummary(
+            case_count=len(members),
+            error_count=sum(1 for result in members if result.status != "success"),
+            metrics=aggregate.means(),
+            metric_case_counts=aggregate.counts(),
+            failure_reason_counts=failure_reason_counts,
         )
     return breakdown
