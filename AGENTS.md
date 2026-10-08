@@ -79,7 +79,7 @@
 - `ToggleChip` をタブに使う（見方の切り替えは `Tabs`、絞り込みは `ToggleChip`）。
 - `loading` 中のボタンのラベルの差し替え。アイコンは `icon={Upload}` で渡し、`loading` を渡す `Button` は必ず `icon` を持つ。
 - `Spinner` 以外の回転するアイコン（`animate-spin` / `animate-[spin…]`・inline style の `animation: spin`・lucide の `Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel`）。処理中は `Spinner`、ボタンは `loading`、領域は `ProcessingIndicator` / `TimedLoadingState`。`Spinner` の形と箱は変えない（README §4「`Spinner`」、e2e の `expectSpinnerStable`）。
-- `focus(-visible):ring-*` のフォーカス表示と `focus(-visible):outline-none`。表示はグローバルの `:focus-visible` に任せ、調整は `focus-visible:outline-*` / `-outline-offset-*`。
+- `focus(-visible|-within):ring-*` のフォーカス表示と `focus(-visible):outline-none`。表示はグローバルの `:focus-visible` に任せ、調整は `focus-visible:outline-*` / `-outline-offset-*`。
 - 必須の印の手書き（`*`・独自のバッジ・`RequiredBadge` の直置き）と「(任意)」。必須の欄だけに部品の `required`（入力は `TextField` / `SelectField` / `SecretField`、それ以外は `FieldLabel` / `FieldLegend` / `Fieldset`。README §4「必須の表示」）。
 - 製品ごとのアクセント色（製品は wordmark・ナビ・内容で区別する）。
 - 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px）。
@@ -177,7 +177,7 @@
 - **サイドナビの下部は 3 製品で同じ並びと名前**: 業務のセクション →「改善・運用」（あれば）→「セキュリティ設定」→「ユーザーとロール」→「運用設定」（システムテーブルが先頭）→「システム設定」。backend の権限カタログの `group` と並びもそろえる。
 - **ナビのアイコンは、同じ機能なら 3 製品で同じ、違う機能なら違うもの**（1 製品の中で重ねない）。共通の項目は `packages/system-settings` のアイコン、製品間で同じ機能は 権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・検索・回答プロファイル / 業務プロファイル `BriefcaseBusiness`。各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。
 - ロールの基本情報は共通のロール管理が、ロールの権限は製品の権限管理が扱う（共通のロール API は権限を変えない）。
-- **権限管理のメニューの一覧は左のナビを正本にする**: 製品の `nav-config.ts` から `permissionNavSections` / `arrangePermissionsByNav` で作り、backend の `group` / `label` を画面に使わない（名前はサイドナビの表示名）。ナビに無い capability はナビの後ろに置く。画面のあるメニュー権限は必ずナビの項目にし、ずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。
+- **権限管理のメニューの一覧は左のナビを正本にする**: 製品の `nav-config.ts` から `permissionNavSections` / `arrangePermissionsByNav`（製品の `PERMISSIONS_API.permissions` を通す）で作り、backend の `group` / `label` を画面に使わない（名前はサイドナビの表示名。`sidebarLabelKey` があればそれ）。ナビに無い capability はナビの後ろに置く。画面のあるメニュー権限は必ずナビの項目にし、ずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。
 
 ### 設定（`.env`）とデータベース object の命名
 
