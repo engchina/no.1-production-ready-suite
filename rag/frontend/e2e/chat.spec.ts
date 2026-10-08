@@ -780,6 +780,124 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(citationButton).toBeFocused();
 });
 
+// #1283: 固定の RAG では完了できない回答（現場の実データの確認が要る）から Agent のチャットへ続ける導線。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`現場のデータが要る回答では Agent のチャットで続ける導線を出す (${viewport.name})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const diagnostics = (escalation: boolean) => ({
+      outcome: escalation ? "needs_environment_data" : "answered",
+      original_question: "それの今の値は？",
+      rewritten_question: "経費精算の今の上限額は？",
+      route: {
+        schema_version: 1,
+        path: "rag",
+        reason: escalation ? "needs_environment_data" : "answered",
+        signals: escalation ? ["environment_data"] : [],
+        escalation_suggested: escalation,
+        escalation_reason: escalation ? "needs_environment_data" : "",
+      },
+      models: { llm: { model_id: "m1", label: "MODEL 1" }, vision: null, embedding: "", rerank: "" },
+    });
+    const body = (escalation: boolean) =>
+      [
+        sseStart,
+        `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は業務システムの設定で確かめる必要があります。" })}\n\n`,
+        `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: diagnostics(escalation) })}\n\n`,
+        `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+      ].join("");
+    await mockChat(page, "ready", [], { streamBody: body(true) });
+    await page.route("**/api/chat/agent-link", (route) =>
+      route.fulfill({ json: { success: true, data: { agent_chat_url: "https://agent.example.com/chat" } } })
+    );
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill("それの今の値は？");
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const escalationRow = page.getByTestId("chat-agent-escalation");
+    await expect(escalationRow).toContainText("現場の実データの確認が必要です");
+    const link = escalationRow.getByRole("link", { name: "Agent のチャットで続ける" });
+    await expect(link).toBeVisible();
+    // 会話の流れから補った質問（前の会話を読まなくても通じる）を、入口と理由とともに渡す。
+    const href = new URL((await link.getAttribute("href")) ?? "");
+    expect(href.origin + href.pathname).toBe("https://agent.example.com/chat");
+    expect(href.searchParams.get("question")).toBe("経費精算の今の上限額は？");
+    expect(href.searchParams.get("entry")).toBe("rag_escalation");
+    expect(href.searchParams.get("reason")).toBe("needs_environment_data");
+    await expect(page.getByTestId("answer-route-badge")).toHaveText("Agent で続けることを提案");
+    // 操作部品の高さは入力方式で決まる（タッチは 44px）。
+    const box = await link.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(viewport.width < 640 ? 44 : 32);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`agent-escalation-${viewport.name}.png`), fullPage: true });
+
+  });
+}
+
+test("Agent の画面の URL が未設定なら、提案があっても導線を出さない（#1283）", async ({ page }) => {
+  const diagnostics = {
+    outcome: "needs_environment_data",
+    route: {
+      path: "rag",
+      reason: "needs_environment_data",
+      escalation_suggested: true,
+      escalation_reason: "needs_environment_data",
+    },
+  };
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "業務システムで確かめてください。" })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: diagnostics })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody });
+  await page.route("**/api/chat/agent-link", (route) =>
+    route.fulfill({ json: { success: true, data: { agent_chat_url: null } } })
+  );
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("今の値は？");
+  await page.getByRole("button", { name: "送信" }).click();
+  await expect(page.getByTestId("answer-route-badge")).toBeVisible();
+  await expect(page.getByTestId("chat-agent-escalation")).toHaveCount(0);
+});
+
+test("答えられた回答では Agent のチャットへの導線を出さない（#1283）", async ({ page }) => {
+  const answered = {
+    outcome: "answered",
+    route: { path: "rag", reason: "answered", escalation_suggested: false, escalation_reason: "" },
+  };
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。" })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answered })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  let linkRequests = 0;
+  await mockChat(page, "ready", [], { streamBody });
+  await page.route("**/api/chat/agent-link", (route) => {
+    linkRequests += 1;
+    return route.fulfill({ json: { success: true, data: { agent_chat_url: "https://agent.example.com/chat" } } });
+  });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("経費の上限は？");
+  await page.getByRole("button", { name: "送信" }).click();
+  await expect(page.getByTestId("answer-text")).toContainText("上限は 10 万円です。");
+  await expect(page.getByTestId("chat-agent-escalation")).toHaveCount(0);
+  await expect(page.getByTestId("answer-route-badge")).toHaveCount(0);
+  // 提案の無い回答では Agent の URL を取りに行かない。
+  expect(linkRequests).toBe(0);
+});
+
 test("IME の変換を確定する Enter では送信しない（#459）", async ({ page }) => {
   await mockChat(page);
   let calls = 0;

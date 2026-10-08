@@ -272,6 +272,14 @@ class AgentProfilePatch(BaseModel):
     enabled: bool | None = None
 
 
+# Run の入口（#1283）。利用者の画面から来た Run が、どこから引き継がれたか（`metadata.entry`）。
+# rag_escalation = RAG のチャットで現場の実データの確認が要る回答から
+# 「Agent のチャットで続ける」で来た質問。理由（`metadata.entry_reason`）は RAG の回答の対応
+# （例 needs_environment_data）。経路の評価に使う。
+RUN_ENTRIES = frozenset({"rag_escalation"})
+_RUN_ENTRY_REASON = re.compile(r"^[a-z][a-z_]{0,63}$")
+
+
 class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
@@ -288,6 +296,20 @@ class RunCreateRequest(BaseModel):
         # Oracle の goal 列は NOT NULL。。
         if not value.strip():
             raise ValueError("ゴールを入力してください。")
+        return value
+
+    @field_validator("metadata")
+    @classmethod
+    def _validate_entry(cls, value: JsonObject) -> JsonObject:
+        # 入口と理由は決まった形だけを残す（振り分けの評価で集計するため。#1283）。
+        entry = value.get("entry")
+        if entry is not None and entry not in RUN_ENTRIES:
+            raise ValueError("metadata.entry の値が正しくありません。")
+        reason = value.get("entry_reason")
+        if reason is not None and (
+            entry is None or not isinstance(reason, str) or not _RUN_ENTRY_REASON.match(reason)
+        ):
+            raise ValueError("metadata.entry_reason の値が正しくありません。")
         return value
 
 

@@ -506,6 +506,8 @@ const agentJa = {
   "chat.empty.hint": "同じ会話の中では、前の質問と回答を踏まえて答えます。",
   "chat.composer.label": "質問",
   "chat.composer.placeholder": "質問を入力（Enter で送信、Shift+Enter で改行）",
+  "chat.handoff.ragEscalation":
+    "RAG のチャットから引き継いだ質問です。資料だけでは確定できず、現場のデータの確認が必要と判断されました。内容を確かめてから送信してください。",
   "chat.send": "送信",
   "chat.stop": "停止",
   "chat.stopFailed": "回答を停止できませんでした。もう一度「停止」を押してください。",
