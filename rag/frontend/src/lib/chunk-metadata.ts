@@ -11,6 +11,11 @@ export type CitationMetadataChipId =
 export interface CitationMetadataChip {
   id: CitationMetadataChipId;
   value: string;
+  /**
+   * page のときだけ: 資料に印刷されたページ番号（PDF のページラベル。#1244）。物理頁と違うときだけ
+   * 入る（backend の `page_label_start` / `page_label_end`。無ければ省く）。
+   */
+  printed?: string;
 }
 
 /** 引用カードで表示する低 cardinality metadata を抽出する。 */
@@ -19,7 +24,10 @@ export function citationMetadataChips(
 ): CitationMetadataChip[] {
   const chips: CitationMetadataChip[] = [];
   const page = pageRange(metadata);
-  if (page) chips.push({ id: "page", value: page });
+  if (page) {
+    const printed = printedPageRange(metadata, page);
+    chips.push(printed ? { id: "page", value: page, printed } : { id: "page", value: page });
+  }
   for (const id of ["content_kind", "section_title", "section_path", "chunk_profile"] as const) {
     const value = stringMetadata(metadata, id);
     if (value) chips.push({ id, value });
@@ -47,6 +55,19 @@ function pageRange(metadata: RetrievedChunk["metadata"]): string {
   const end = integerMetadata(metadata, "page_end") ?? start;
   if (start == null) return "";
   return end != null && end > start ? `${start}-${end}` : String(start);
+}
+
+/**
+ * 資料に印刷されたページ番号の範囲（#1244）。backend は物理頁と違うラベルがあるときだけ
+ * `page_label_start` / `page_label_end` を入れる。印刷の番号は「3-4」のようにハイフンを含むことが
+ * あるため、範囲は「〜」でつなぐ。物理頁と同じ表記になるときは出さない（空文字）。
+ */
+export function printedPageRange(metadata: RetrievedChunk["metadata"], physical: string): string {
+  const start = stringMetadata(metadata, "page_label_start");
+  if (!start) return "";
+  const end = stringMetadata(metadata, "page_label_end") || start;
+  const printed = end !== start ? `${start}〜${end}` : start;
+  return printed === physical ? "" : printed;
 }
 
 function integerMetadata(metadata: RetrievedChunk["metadata"], key: string): number | null {
