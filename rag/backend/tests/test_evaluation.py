@@ -181,7 +181,11 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "step_order_score": 0,
         "safe_answer_rate": 0,
         "condition_coverage": 0,
+        # 参考の集計（#1284）。必要な根拠の無いケースだけなので測らない。
+        "required_evidence_recall": 0,
     }
+    assert metrics.required_evidence_recall is None
+    assert metrics.split_breakdown == {}
     assert metrics.passed is True
     assert metrics.threshold_failures == []
     assert metrics.failure_reason_counts == {}
@@ -1629,7 +1633,7 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
 async def test_profile_evaluation_resolves_each_case_through_the_profile() -> None:
     seen: list[tuple[str | None, str]] = []
 
-    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+    async def resolver(request: Any, settings: Any, guide_context: Any) -> tuple[Any, Any]:
         seen.append((request.search_answer_profile_id, request.query))
         return request.model_copy(update={"knowledge_base_ids": ["kb-profile"]}), settings
 
@@ -1649,7 +1653,7 @@ async def test_profile_evaluation_resolves_each_case_through_the_profile() -> No
 async def test_profile_resolution_failure_fails_only_that_case() -> None:
     from fastapi import HTTPException
 
-    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+    async def resolver(request: Any, settings: Any, guide_context: Any) -> tuple[Any, Any]:
         raise HTTPException(status_code=409, detail="アーカイブ済み")
 
     runner = EvaluationRunner(pipeline=StubPipeline(), profile_resolver=resolver)

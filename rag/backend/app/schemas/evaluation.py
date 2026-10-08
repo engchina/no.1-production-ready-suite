@@ -39,6 +39,17 @@ EvaluationCaseCategory = Literal[
 ]
 EVALUATION_UNCATEGORIZED = "uncategorized"
 
+# 評価のケースの区分（#1284。handoff §14.1）。dev は設定・業務ガイドの調整に使ってよいケース、
+# holdout は調整に使わず最後の確認だけに使うケース。同じ業務の流れ・資料の族のケースは同じ区分に
+# する（言い換えの漏れを防ぐ）。区分の無いケースは内訳で unassigned にする。
+EvaluationCaseSplit = Literal["dev", "holdout"]
+EVALUATION_UNASSIGNED_SPLIT = "unassigned"
+
+# 1 ケースの往復の上限（最初の質問を除く）と、往復をまたいだ条件の数の上限
+# （SearchRequest.conditions と同じ）。
+EVALUATION_MAX_TURNS = 5
+EVALUATION_MAX_CONDITIONS = 30
+
 # 回答の対応（#1231。業務支援の評価）。評価のケースは受け入れる対応を複数持てる
 # （例: 確認が要る質問は、確認の質問か、条件ごとに分けた回答のどちらでもよい）。
 # - answered: 資料にもとづいて答えた
@@ -74,6 +85,10 @@ EvaluationFailureReason = Literal[
     "step_missing",
     "forbidden_action",
     "condition_missing",
+    # 必要な根拠（required_evidence）の一部を最後の回答の引用で取れなかった（#1284）。
+    "evidence_miss",
+    # 質問・前の返答で渡した条件を、確認の質問でもう一度聞いた（#1284）。
+    "known_condition_reasked",
     "case_error",
 ]
 
@@ -109,8 +124,136 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "condition_coverage",
 )
 
+# 閾値の判定に使わず、結果に出すだけの集計（#1284）。必要な根拠の再現率は、根拠を持つ評価セットが
+# まだ少ないため、基準（閾値）と画面の指標の一覧には入れない。
+EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ("required_evidence_recall",)
 
-class EvaluationCase(BaseModel):
+# 期待する手順の別解の上限（列の数）。
+EVALUATION_MAX_STEP_ALTERNATIVES = 5
+
+
+def _clean_phrase_list(value: list[str]) -> list[str]:
+    """前後の空白を除き、空の語を捨てる。"""
+    return [item.strip() for item in value if item.strip()]
+
+
+def _clean_conditions(value: dict[str, str]) -> dict[str, str]:
+    """条件の id と値の前後の空白を除き、空の id・値を捨てる。"""
+    cleaned: dict[str, str] = {}
+    for key, item in value.items():
+        condition_id, condition_value = key.strip(), item.strip()
+        if condition_id and condition_value:
+            cleaned[condition_id] = condition_value
+    return cleaned
+
+
+def _clean_alternatives(value: list[list[str]]) -> list[list[str]]:
+    """別解の各列の語を整え、空になった列を捨てる。"""
+    return [steps for steps in (_clean_phrase_list(item) for item in value) if steps]
+
+
+class EvaluationHandlingExpectation(BaseModel):
+    """1 つの回答への業務支援の期待（#1231。往復の回答にも使う。#1284）。
+
+    どれも空ならその採点の対象外。
+    """
+
+    # 受け入れる回答の対応（1 つでも一致すれば正しい）。
+    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list, max_length=6)
+    # 回答に出るべき手順の語（期待の順）。網羅と順序を採点する。
+    expected_steps: list[str] = Field(default_factory=list, max_length=30)
+    # expected_steps と同等の別の手順の列（#1284。handoff §14.1「可接受替代方案」）。
+    # いちばん点の高い列で採点する。同じ目的に根拠のある別の方法・別の画面の呼び方があるときに使う。
+    acceptable_alternatives: list[list[str]] = Field(
+        default_factory=list, max_length=EVALUATION_MAX_STEP_ALTERNATIVES
+    )
+    # 勧めてはいけない操作の表現（影響範囲を広げる操作など）。回答に含まれたら危険な回答。
+    forbidden_phrases: list[str] = Field(default_factory=list, max_length=30)
+    # 回答が触れるべき条件（確かめる条件・適用の前提）。
+    required_conditions: list[str] = Field(default_factory=list, max_length=30)
+
+    @field_validator("expected_steps", "forbidden_phrases", "required_conditions")
+    @classmethod
+    def validate_phrases(cls, value: list[str]) -> list[str]:
+        """前後の空白を除き、空の語を捨てる。"""
+        return _clean_phrase_list(value)
+
+    @field_validator("acceptable_alternatives")
+    @classmethod
+    def validate_alternatives(cls, value: list[list[str]]) -> list[list[str]]:
+        """別解の列ごとに語を整える（1 列は 30 語まで）。"""
+        if any(len(item) > 30 for item in value):
+            raise ValueError("手順の別解は 1 つの列につき 30 語までにしてください。")
+        return _clean_alternatives(value)
+
+    @model_validator(mode="after")
+    def validate_alternatives_need_steps(self) -> Self:
+        """別解は期待する手順の別の書き方なので、期待する手順が無ければ受け付けない。"""
+        if self.acceptable_alternatives and not self.expected_steps:
+            raise ValueError("acceptable_alternatives は expected_steps と一緒に指定してください。")
+        return self
+
+
+class EvaluationTurn(EvaluationHandlingExpectation):
+    """確認の質問への返答の 1 往復（#1284。handoff §14.1「允许的澄清回应」）。
+
+    ランナーはチャットと同じく、`reply` を次の質問にし、前の往復（質問と回答）を会話の履歴として
+    渡す。`conditions` は返答で分かった条件の値で、前までの条件に足して渡す（チャットの確認の答え・
+    MCP の `conditions` と同じ）。期待（対応・手順・危険な表現・条件）は、この往復の回答だけを採点
+    する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reply: str = Field(..., min_length=1, max_length=8000)
+    conditions: dict[str, str] = Field(default_factory=dict, max_length=EVALUATION_MAX_CONDITIONS)
+
+    @field_validator("reply")
+    @classmethod
+    def validate_reply(cls, value: str) -> str:
+        """SearchRequest の query と同じ規則で返答を正規化する。"""
+        return normalize_query_text(value)
+
+    @field_validator("conditions")
+    @classmethod
+    def validate_conditions(cls, value: dict[str, str]) -> dict[str, str]:
+        """条件の id と値の前後の空白を除く。"""
+        return _clean_conditions(value)
+
+
+class EvaluationEvidence(BaseModel):
+    """回答に必要な根拠（#1284。handoff §14.2 の「各必需证据召回」）。
+
+    最後の回答の引用（chunk）のうち、`document_id`（省略時はどの文書でもよい）の chunk の本文が
+    `text` を含めば、この根拠を取れたとみなす（NFKC・大小文字・空白を無視）。文書 ID は評価セット
+    では `file:<ファイル名>` で書き、`evaluation_corpus_cli` が配備先の ID に置き換える。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1, max_length=80)
+    document_id: str | None = Field(default=None, max_length=200)
+    text: str = Field(..., min_length=1, max_length=300)
+
+    @field_validator("id", "text")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        """前後の空白を除き、空の値を拒否する。"""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("根拠の id と語句を入力してください。")
+        return cleaned
+
+    @field_validator("document_id")
+    @classmethod
+    def validate_document_id(cls, value: str | None) -> str | None:
+        """空の文書 ID は指定なしとして扱う。"""
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class EvaluationCase(EvaluationHandlingExpectation):
     """1 件の評価ケース。
 
     `answerable=false` のケース(資料に答えが無い質問)は、拒答の正しさだけを測る。省略したときは、
@@ -118,6 +261,10 @@ class EvaluationCase(BaseModel):
     `standard_answer` があるケースは、回答を標準回答と LLM で比較する(4 軸の採点・主張の監査・
     必要な項目の網羅)。削除した期待値の欄(`expected_content_kind`・`expected_section_paths`。
     #591)は、既存の golden set を読めるように無視する。
+
+    複数往復のケース（`turns`。#1284）では、ケースの直下の業務支援の期待（対応・手順・別解・危険な
+    表現・条件）は最初の質問への回答を、各往復の期待はその往復の回答を採点する。正解の文書・期待する
+    語・標準回答・答えるべきか・必要な根拠は、最後の回答（往復を終えた後の回答）で採点する。
     """
 
     # 結果の表・job の実行中のケース（`rag_evaluation_jobs.current_case_id` は 200 文字）で
@@ -130,15 +277,16 @@ class EvaluationCase(BaseModel):
     answerable: bool | None = None
     # 分類（任意。#1226）。結果の分類ごとの内訳に使う。採点の方法は変えない。
     category: EvaluationCaseCategory | None = None
-    # 業務支援の採点（任意。#1231）。どれも空ならその指標の対象外。
-    # 受け入れる回答の対応（1 つでも一致すれば正しい）。
-    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list, max_length=6)
-    # 回答に出るべき手順の語（期待の順）。網羅と順序を採点する。
-    expected_steps: list[str] = Field(default_factory=list, max_length=30)
-    # 勧めてはいけない操作の表現（影響範囲を広げる操作など）。回答に含まれたら危険な回答。
-    forbidden_phrases: list[str] = Field(default_factory=list, max_length=30)
-    # 回答が触れるべき条件（確かめる条件・適用の前提）。
-    required_conditions: list[str] = Field(default_factory=list, max_length=30)
+    # 区分（任意。#1284）。結果の区分ごとの内訳に使う。採点の方法は変えない。
+    split: EvaluationCaseSplit | None = None
+    # 質問と一緒に渡す既知の条件の値（条件の id → 値。#1284）。チャットの確認の答え・MCP の
+    # conditions と同じく SearchRequest.conditions に渡す。業務ガイドの条件の id に合わせて書き、
+    # 業務ガイドを使わない評価（検索・回答プロファイルを指定しない評価）では回答に影響しない。
+    conditions: dict[str, str] = Field(default_factory=dict, max_length=EVALUATION_MAX_CONDITIONS)
+    # 確認の質問への返答の列（#1284）。最初の質問の後に順に送る。
+    turns: list[EvaluationTurn] = Field(default_factory=list, max_length=EVALUATION_MAX_TURNS)
+    # 最後の回答に必要な根拠（#1284）。根拠ごとの再現率を求める。
+    required_evidence: list[EvaluationEvidence] = Field(default_factory=list, max_length=30)
 
     @property
     def expects_answer(self) -> bool:
@@ -146,7 +294,10 @@ class EvaluationCase(BaseModel):
         if self.answerable is not None:
             return self.answerable
         return bool(
-            self.relevant_document_ids or self.expected_answer_keywords or self.standard_answer
+            self.relevant_document_ids
+            or self.expected_answer_keywords
+            or self.standard_answer
+            or self.required_evidence
         )
 
     @field_validator("id")
@@ -164,12 +315,6 @@ class EvaluationCase(BaseModel):
         """SearchRequest と同じ規則で query を正規化する。"""
         return normalize_query_text(query)
 
-    @field_validator("expected_steps", "forbidden_phrases", "required_conditions")
-    @classmethod
-    def validate_phrases(cls, value: list[str]) -> list[str]:
-        """前後の空白を除き、空の語を捨てる。"""
-        return [item.strip() for item in value if item.strip()]
-
     @field_validator("standard_answer")
     @classmethod
     def validate_standard_answer(cls, value: str | None) -> str | None:
@@ -178,6 +323,32 @@ class EvaluationCase(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("conditions")
+    @classmethod
+    def validate_conditions(cls, value: dict[str, str]) -> dict[str, str]:
+        """条件の id と値の前後の空白を除く。"""
+        return _clean_conditions(value)
+
+    @model_validator(mode="after")
+    def validate_case_contract(self) -> Self:
+        """根拠の id の重複と、往復をまたいだ条件の数の上限（SearchRequest と同じ）を確かめる。"""
+        evidence_ids = [item.id for item in self.required_evidence]
+        duplicates = sorted({item for item in evidence_ids if evidence_ids.count(item) > 1})
+        if duplicates:
+            raise ValueError(f"必要な根拠の id が重複しています: {', '.join(duplicates)}")
+        if len(self.all_condition_ids()) > EVALUATION_MAX_CONDITIONS:
+            raise ValueError(
+                f"条件は往復をまたいで {EVALUATION_MAX_CONDITIONS} 個までにしてください。"
+            )
+        return self
+
+    def all_condition_ids(self) -> set[str]:
+        """質問と往復で渡す条件の id の集合。"""
+        ids = set(self.conditions)
+        for turn in self.turns:
+            ids.update(turn.conditions)
+        return ids
 
 
 class EvaluationAnswerJudgement(BaseModel):
@@ -196,12 +367,41 @@ class EvaluationAnswerJudgement(BaseModel):
     message: str | None = None
 
 
+class EvaluationTurnResult(BaseModel):
+    """複数往復のケースの 1 回の回答の採点（#1284）。
+
+    turn 0 は最初の質問への回答。期待の無い項目は None / 空。
+    """
+
+    turn: int
+    trace_id: str
+    observed_outcome: EvaluationOutcome | None = None
+    outcome_source: str | None = None
+    handling_correct: bool | None = None
+    step_order_score: float | None = None
+    missing_steps: list[str] = Field(default_factory=list)
+    forbidden_checked: bool = False
+    forbidden_hits: list[str] = Field(default_factory=list)
+    condition_coverage: float | None = None
+    missing_conditions: list[str] = Field(default_factory=list)
+    # 渡した条件のうち、確認の質問でもう一度聞いた条件の id。
+    reasked_conditions: list[str] = Field(default_factory=list)
+    elapsed_ms: float = 0.0
+
+
 class EvaluationCaseResult(BaseModel):
-    """1 評価ケースごとの診断結果。測れない指標は None。"""
+    """1 評価ケースごとの診断結果。測れない指標は None。
+
+    複数往復のケース（#1284）では、検索・根拠・回答の指標は最後の回答で求め、業務支援の対応は
+    往復ごと（`turn_results`）に採点してまとめる（対応はすべての往復で正しいとき正しい、手順・条件は
+    往復の平均、危険な表現・聞き直しは往復の和）。`observed_outcome` は最後の回答の対応、`trace_id`
+    は最後の回答の記録、`elapsed_ms` は往復の合計。
+    """
 
     case_id: str
     trace_id: str
     category: EvaluationCaseCategory | None = None
+    split: EvaluationCaseSplit | None = None
     status: Literal["success", "error"] = "success"
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
@@ -228,6 +428,14 @@ class EvaluationCaseResult(BaseModel):
     forbidden_hits: list[str] = Field(default_factory=list)
     condition_coverage: float | None = None
     missing_conditions: list[str] = Field(default_factory=list)
+    # 渡した条件のうち、確認の質問でもう一度聞いた条件の id（#1284）。
+    reasked_conditions: list[str] = Field(default_factory=list)
+    # 必要な根拠の再現率と、取れなかった根拠の id（#1284）。
+    # 根拠の無いケース・検索をしない回答は None。
+    evidence_recall: float | None = None
+    missing_evidence: list[str] = Field(default_factory=list)
+    # 往復ごとの採点（往復のあるケースだけ。#1284）。
+    turn_results: list[EvaluationTurnResult] = Field(default_factory=list)
     answer_evaluation: EvaluationAnswerJudgement | None = None
     guardrail_warnings: list[str] = Field(default_factory=list)
     failure_reasons: list[str] = Field(default_factory=list)
@@ -264,6 +472,20 @@ class EvaluationCategorySummary(BaseModel):
     safe_answer_rate: float | None = None
 
 
+class EvaluationSplitSummary(BaseModel):
+    """区分（dev / holdout）ごとの結果（#1284）。
+
+    `metrics` は全体と同じ指標（と参考の集計 `required_evidence_recall`）を、その区分のケースだけで
+    求めた値（測れなければ None）。
+    """
+
+    case_count: int
+    error_count: int = 0
+    metrics: dict[str, float | None] = Field(default_factory=dict)
+    metric_case_counts: dict[str, int] = Field(default_factory=dict)
+    failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class EvaluationMetrics(BaseModel):
     """評価結果の集計指標(#591)。
 
@@ -287,12 +509,16 @@ class EvaluationMetrics(BaseModel):
     step_order_score: float | None = None
     safe_answer_rate: float | None = None
     condition_coverage: float | None = None
+    # 必要な根拠ごとの再現率（ケースの平均。参考の集計で閾値の判定には使わない。#1284）。
+    required_evidence_recall: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool = True
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
     # 分類ごとの内訳（ケースに分類があるときだけ。分類の無いケースは uncategorized。#1226）。
     category_breakdown: dict[str, EvaluationCategorySummary] = Field(default_factory=dict)
+    # 区分ごとの内訳（ケースに区分があるときだけ。区分の無いケースは unassigned。#1284）。
+    split_breakdown: dict[str, EvaluationSplitSummary] = Field(default_factory=dict)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
 
 
