@@ -216,6 +216,16 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   初期値。画面の「MCP 接続」で URL・タイムアウトを変更でき（保存先に残り、.env の値より優先する。#764）、署名鍵と
   サービス利用者は設定済みかどうかだけを表示する。旧「外部 MCP」の単一の設定（`AGENT_EXTERNAL_MCP_BASE_URL` 等）・
   既定のサーバー・NL2SQL の既定取得件数（`AGENT_EXTERNAL_NL2SQL_DEFAULT_LIMIT`）は #757 で削除した。
+- **RAG の図の根拠を画面で開く（#1311）**: チャットの出典・実行の詳細の根拠のうち、RAG の `rag_search` の根拠に
+  `image_ref` がある図は「図を開く」を出す。押すと `GET /api/runs/{run_id}/figure-url`（実行の詳細と同じ権限・対象範囲）が、
+  Run の `rag_evidence` の成果物にその図があることを確かめてから、組み込みの接続 `rag` の `rag_read_source` を
+  `include_image_url=true` で呼ぶ。サービストークンの `sub` は **画面を見ている利用者**（Run を見られる管理者が Run の
+  利用者の権限を借りないように）、claim に `purpose=figure_url` を入れる（RAG はこの印の無い呼び出し、つまり Run の中で
+  モデルが呼んだときは URL を作らない）。画面の操作で Run のツール呼び出しではないので `tool_registry` を通さず、
+  URL（トークンを含む）は保存・ログに残さない（応答も `Cache-Control: private, no-store`）。RAG は利用者・chunk・版に
+  縛った 5 分の HMAC 署名の URL（`GET /api/figures/{token}`）を返し、読むたびに権限・版を確かめ直す。ブラウザから
+  開く起点は `AGENT_EXTERNAL_RAG_PUBLIC_URL`（空なら RAG が返す URL。MCP の URL の host）で、画面は開くたびに
+  URL を取り直し、画像を読めなければ（期限切れ・資料の更新・権限）取り直しの操作を出す。
 
 ## 5. Dispatcher and persistence
 

@@ -143,12 +143,20 @@ AGENT_ARTIFACT_STORAGE_PATH=${local.agent_data_dir_host}/artifacts
 
 AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}
 AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}
+AGENT_EXTERNAL_RAG_PUBLIC_URL=${lookup(local.product_browser_urls, "rag", "")}
 EOT
 
   # Agent が RAG / NL2SQL の MCP（POST /api/mcp）を呼ぶ URL（#233）。配備した製品だけ。
   # 同じ subnet の private IP の Nginx（/api/ を backend へ proxy）へ送る。通信は subnet の security list（stack の外）で許可する（#259）。
   # 認証は呼び出しごとのサービストークン（共通 .env の PLATFORM_SERVICE_TOKEN_SECRET）。
   application_port_suffix = var.application_port == 80 ? "" : ":${var.application_port}"
+  # 利用者のブラウザから RAG / NL2SQL を開く起点（#1311）。Agent の画面で RAG の図の根拠を開く短命の URL の
+  # path をこの起点に付ける（MCP の URL の private IP はブラウザから届かないことがあるため）。public IP が無い
+  # subnet では private IP（output の application_urls と同じ規則。Agent の resource を参照しないよう別に書く）。
+  product_browser_urls = {
+    for product, instance in oci_core_instance.product :
+    product => "http://${local.compute_subnet_prohibits_public_ip ? instance.private_ip : instance.public_ip}${local.application_port_suffix}"
+  }
   product_mcp_urls = {
     for product, instance in oci_core_instance.product :
     product => "http://${instance.private_ip}${local.application_port_suffix}/api/mcp"
