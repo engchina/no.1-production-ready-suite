@@ -121,6 +121,15 @@ export function SupportGuideContentView({ content }: { content: SupportGuideCont
                 : "supportGuides.view.approvalNotRequired",
             )}
           </Item>
+          <Item label={t("supportGuides.field.impactSteps")}>
+            {(content.impact.steps ?? []).length > 0
+              ? joined(
+                  (content.impact.steps ?? []).map(
+                    (id) => content.steps.find((step) => step.id === id)?.title ?? id,
+                  ),
+                )
+              : t("supportGuides.view.allCases")}
+          </Item>
           <Item label={t("supportGuides.field.handoffContact")}>
             {content.handoff.contact || t("supportGuides.view.none")}
           </Item>

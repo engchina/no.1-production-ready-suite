@@ -69,14 +69,19 @@ from app.rag.figure_url import (
     issue_figure_token,
 )
 from app.rag.rate_limit import enforce_rate_limit
-from app.rag.support_guide_runtime import GuideMatch, clarification_questions, rank_guides
+from app.rag.support_guide_runtime import (
+    GuideMatch,
+    clarification_questions,
+    impact_applies,
+    rank_guides,
+)
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileStatus
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
 # ツールの出力の版（出力の形を変えたら上げる。handoff §10。#1276）。
-MCP_OUTPUT_SCHEMA_VERSION = 4
+MCP_OUTPUT_SCHEMA_VERSION = 5
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -625,6 +630,17 @@ class LookupGuideItem(GuideRef):
     steps: list[GuideStepItem] = Field(default_factory=list)
     impact_scope: Literal["individual", "group", "all"]
     approval_required: bool
+    impact_steps: list[str] = Field(
+        default_factory=list,
+        description="影響範囲と承認が係る手順の id（空なら業務ガイドのすべての場合に係る）。",
+    )
+    impact_applies: bool = Field(
+        default=True,
+        description=(
+            "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに"
+            "係るので、回答に影響範囲・承認を書かない。#1320）。"
+        ),
+    )
     handoff_contact: str = ""
 
 
@@ -1306,6 +1322,8 @@ def _lookup_item(match: GuideMatch) -> LookupGuideItem:
         ],
         impact_scope=content.impact.scope,
         approval_required=content.impact.approval_required,
+        impact_steps=list(content.impact.steps),
+        impact_applies=impact_applies(match),
         handoff_contact=content.handoff.contact,
     )
 

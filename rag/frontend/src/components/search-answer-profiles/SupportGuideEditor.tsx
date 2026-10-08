@@ -462,6 +462,15 @@ function SupportGuideForm({
       .map((id) => ({ value: id, label: t("supportGuides.missingOption", { id }) }));
     return [...known, ...missing];
   };
+  // 影響範囲・承認が係る手順（#1320）。消えた手順の id も選んだまま見せ、検証で知らせる。
+  const impactStepOptions: SearchableSelectOption[] = [
+    ...form.steps
+      .filter((step) => step.id.trim())
+      .map((step) => ({ value: step.id, label: step.title || step.id, description: step.id })),
+    ...form.impactSteps
+      .filter((id) => !form.steps.some((step) => step.id === id))
+      .map((id) => ({ value: id, label: t("supportGuides.missingOption", { id }) })),
+  ];
   const gotoOptions: SelectFieldOption[] = form.steps
     .filter((step) => step.id.trim())
     .map((step) => ({ value: step.id, label: step.title ? `${step.title}（${step.id}）` : step.id }));
@@ -1076,6 +1085,18 @@ function SupportGuideForm({
                 maxLength={2000}
                 rows={2}
                 onChange={(event) => update({ approvalNote: event.target.value })}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <SearchableMultiSelect
+                id={domId("impact.steps")}
+                label={t("supportGuides.field.impactSteps")}
+                helper={t("supportGuides.field.impactStepsHelp")}
+                options={impactStepOptions}
+                value={form.impactSteps}
+                error={errorAt("impact.steps")}
+                disabled={archived || busy}
+                onValueChange={(value) => update({ impactSteps: value })}
               />
             </div>
             <TextareaField

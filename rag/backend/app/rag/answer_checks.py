@@ -8,7 +8,8 @@
   いれば error。
 - guide_steps: 業務ガイドの公開の版の手順。回答に出た手順の順序が依存（depends_on）と逆でないか、
   既知の条件に当たらない分岐の手順を含まないか、依存の手順・続きの手順を落としていないか。
-- impact: 業務ガイドの影響範囲（グループ / 全体）と承認の要否を回答に書いているか。
+- impact: 業務ガイドの影響範囲（グループ / 全体）と承認の要否を回答に書いているか。影響範囲・
+  承認が係る手順（`impact.steps`）が、分かっている条件で外れた分岐の手順だけなら確かめない（#1320）。
 
 手順・語の照合は、NFKC・大文字小文字・空白を揃えた文字列の部分一致で行う（言い換えは見つけられない）。
 手順の名前が回答に 1 つも見つからなければ、順序は確かめられないことを warning で示す。
@@ -124,9 +125,14 @@ def excluded_steps(content: SupportGuideContent, conditions: Mapping[str, str]) 
     known = {key: _value(value) for key, value in conditions.items() if value and value.strip()}
     taken: set[str] = set()
     skipped: set[str] = set()
-    for branch in content.branches:
-        matched = _branch_matches(branch.when, known)
-        (skipped if matched is False else taken).add(branch.goto_step)
+    decided = [(branch, _branch_matches(branch.when, known)) for branch in content.branches]
+    # どの分岐にも当たらない値（選択肢に無い値など）は、分岐を決められない（外さない。#1320）。
+    matched_conditions = {branch.when.condition_id for branch, matched in decided if matched}
+    for branch, matched in decided:
+        if matched is False and branch.when.condition_id in matched_conditions:
+            skipped.add(branch.goto_step)
+        else:
+            taken.add(branch.goto_step)
     excluded = skipped - taken
     changed = True
     while changed:
@@ -222,8 +228,30 @@ def check_guide_steps(
     return findings
 
 
-def check_impact(answer: str, content: SupportGuideContent) -> list[AnswerFinding]:
-    """業務ガイドの影響範囲（グループ / 全体）と承認の要否を回答に書いているか。"""
+def impact_applies(content: SupportGuideContent, conditions: Mapping[str, str]) -> bool:
+    """業務ガイドの影響範囲・承認が、分かっている条件の場合に係るか（#1320）。
+
+    影響範囲・承認が係る手順（`impact.steps`）を決めていない業務ガイドは、すべての場合に係る。
+    決めていれば、分かっている条件で外れた分岐の手順（`excluded_steps`）だけのときに係らない。
+    条件が分からず分岐を決められないときは外れた手順が無いので、係る（安全側）。
+    """
+    steps = content.impact.steps
+    if not steps:
+        return True
+    excluded = excluded_steps(content, conditions)
+    return not all(step in excluded for step in steps)
+
+
+def check_impact(
+    answer: str, content: SupportGuideContent, conditions: Mapping[str, str] | None = None
+) -> list[AnswerFinding]:
+    """業務ガイドの影響範囲（グループ / 全体）と承認の要否を回答に書いているか。
+
+    分かっている条件（`conditions`）で影響範囲・承認が係る手順が当たらなければ確かめない
+    （例: 個別の利用者に付与する回答に、グループへの付与の承認を求めない。#1320）。
+    """
+    if not impact_applies(content, conditions or {}):
+        return []
     normalized = _normalized(answer)
     impact = content.impact
     findings: list[AnswerFinding] = []
@@ -255,4 +283,5 @@ __all__ = [
     "check_impact",
     "check_requests",
     "excluded_steps",
+    "impact_applies",
 ]

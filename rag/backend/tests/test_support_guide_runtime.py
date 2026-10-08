@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,6 +30,7 @@ from app.rag.support_guide_runtime import (
     guide_clarification,
     guide_rule,
     guide_short_circuit_outcome,
+    impact_applies,
     is_guide_preview_record,
     is_guide_preview_trace,
     match_guide,
@@ -497,6 +500,41 @@ def test_known_conditions_narrow_steps_to_the_matched_branch() -> None:
     ]
 
 
+def test_impact_is_shown_only_for_the_branch_it_applies_to() -> None:
+    """承認・影響範囲が係る手順が、分かっている条件で外れたら示させない（#1320）。"""
+    data = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "evaluation/business-support/support-guides.json"
+        ).read_text(encoding="utf-8")
+    )
+    content = SupportGuideContent.model_validate(
+        next(item for item in data["guides"] if item["title"] == "アクセス権限の付与")
+    )
+    guides = [("g-access", 1, content)]
+    # 検証用アカウント（個別の言い換え）: グループへの付与の承認は係らない。
+    single = match_guide(guides, "検証用アカウントを登録し、アクセス権限を付けて")
+    assert single is not None and single.decision == "answer"
+    assert impact_applies(single) is False
+    assert "影響範囲" not in guide_rule(single)["content"]
+    assert "承認について" not in guide_rule(single)["content"]
+    # グループ: 係る手順を添えて示す。
+    group = match_guide(guides, "グループにアクセス権限を付与したい")
+    assert group is not None and impact_applies(group) is True
+    assert (
+        "影響範囲: グループ。実施の前に承認が要る（手順「付与の前に部門長の承認を得る」"
+        "「グループの詳細画面の「権限」タブで付与する」に係る）" in guide_rule(group)["content"]
+    )
+    # 付与先が分からなければ（分岐で答える）、係る手順が残るので示す。
+    unknown = match_guide(guides, "アクセス権限を付与したい", interactive=True)
+    assert unknown is not None and unknown.decision == "branch"
+    assert impact_applies(unknown) is True
+    assert "影響範囲: グループ" in guide_rule(unknown)["content"]
+    # 係る手順を決めていない業務ガイドは、今までどおり常に示す。
+    plain = match_guide(GUIDES, "個別の利用者にアクセス権限を付与したい")
+    assert plain is not None and impact_applies(plain) is True
+    assert "影響範囲: グループ。実施の前に承認が要る" in guide_rule(plain)["content"]
+
+
 def test_guide_load_failure_is_recorded_in_answer_diagnostics() -> None:
     diagnostics: dict[str, Any] = {"outcome": "answered", "envelope": {"outcome": "answered"}}
     apply_guide_to_diagnostics(diagnostics, {GUIDE_LOAD_FAILED_KEY: True})
@@ -654,6 +692,7 @@ def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: Mon
     assert guide["clarifications"][0]["options"] == ["個別", "グループ"]
     assert [step["id"] for step in guide["steps"]] == ["open", "grant"]
     assert (guide["impact_scope"], guide["approval_required"]) == ("group", True)
+    assert (guide["impact_steps"], guide["impact_applies"]) == ([], True)
     known = _call(
         "rag_lookup_guides",
         {
