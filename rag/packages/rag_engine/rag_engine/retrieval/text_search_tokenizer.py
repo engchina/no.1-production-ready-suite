@@ -71,9 +71,13 @@ _EXTRA_PATTERNS = (
     re.compile(r"\d+[a-z][a-z0-9]*"),
     re.compile(r"v?\d+(?:\.\d+)+"),
 )
-_REWRITE_RULES = (
+# 文字の同一視（質問の側と索引の側で共通。#1336）。
+_SYMBOL_REWRITE_RULES = (
     (re.compile(r"[〜～]"), "~"),
     (re.compile(r"[－‐‑–—―−]"), "-"),
+)
+_REWRITE_RULES = (
+    *_SYMBOL_REWRITE_RULES,
     (re.compile(r"[　\s]+"), " "),
 )
 
@@ -309,6 +313,19 @@ def normalize_text_search_text(text: Any) -> str:
         normalized = pattern.sub(replacement, normalized)
     normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", normalized)
     return normalized.casefold().strip()
+
+
+def normalize_text_search_index_text(text: Any) -> str:
+    """Oracle Text に索引する文字列を、質問の語と同じ文字の形にそろえます（#1336）。
+
+    NFKC と波線・ダッシュの同一視は ``normalize_text_search_text`` と同じにし、索引の側だけが互換文字
+    （``①`` ``Ⅴ`` ``㈱`` ``㌔`` ``℃`` など。WORLD_LEXER は同一視しない）を残して当たらないことを防ぎます。
+    改行と大文字小文字は残します（Oracle Text の語の区切りと大文字小文字の無視は lexer が行う）。
+    """
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    for pattern, replacement in _SYMBOL_REWRITE_RULES:
+        normalized = pattern.sub(replacement, normalized)
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f]+", " ", normalized)
 
 
 def tokenize_text_search_query(

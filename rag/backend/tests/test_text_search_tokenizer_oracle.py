@@ -13,7 +13,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import _oracle_text_query, oracle_text_index_parameters_sql
+from app.clients.oracle import (
+    _oracle_text_query,
+    _text_search_index_text,
+    oracle_text_index_parameters_sql,
+)
 from app.config import Settings
 from tests import _oracle_test_db
 
@@ -161,3 +165,67 @@ def test_text_search_query_ranks_expected_documents_on_real_oracle() -> None:
     # 「見積もりを依頼したい」は、見積もり・依頼の両方を含む別の文書が 1 位になる(既知の制約)。
     assert top1 >= len(CASES) - 1
     assert mrr >= 0.95
+
+
+# 互換文字を含む本文（#1336）。WORLD_LEXER は全角 / 半角の違いは同一視するが、
+# 互換文字は同一視しない。
+# 質問の側は NFKC でこれらを 1・V・(株) などにするため、索引の側も同じ形にして初めて当たる。
+COMPATIBILITY_DOCUMENTS = {
+    "c01": "手順①で申請書を作成し、手順②で上長に提出します。",
+    "c02": "第Ⅴ章の定例処理では、月次の締めを行います。",
+    "c03": "㈱サンプル商事との契約は、法務部が確認します。",
+    "c04": "荷物の重さの上限は５㌔です。",
+    "c05": "サーバー室の温度は２５℃以下に保ちます。",
+    "c06": "エラーＥ１０２３が出たら認証ログを確かめます。",
+}
+COMPATIBILITY_CASES = [
+    ("手順1で何をしますか", "c01"),
+    ("第V章の定例処理", "c02"),
+    ("(株)サンプル商事との契約", "c03"),
+    ("荷物の重さの上限は何キロ", "c04"),
+    ("サーバー室の温度は何°C以下", "c05"),
+    ("E1023のエラー", "c06"),
+]
+
+
+@pytest.mark.usefixtures("oracle_db")
+def test_compatibility_characters_hit_when_index_text_is_normalized_on_real_oracle() -> None:
+    """索引する文字列を正規化（``_text_search_index_text``）すると互換文字にも当たる（#1336）。"""
+    table = f"RAG_TMP_TOKENIZER_{uuid4().hex[:8].upper()}"
+    connection = _oracle_test_db._connect()
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                f"CREATE TABLE {table} (doc_id VARCHAR2(16) PRIMARY KEY, body VARCHAR2(4000))"
+            )
+            cursor.executemany(
+                f"INSERT INTO {table} (doc_id, body) VALUES (:1, :2)",
+                [
+                    (doc_id, _text_search_index_text(body))
+                    for doc_id, body in COMPATIBILITY_DOCUMENTS.items()
+                ],
+            )
+            connection.commit()
+            cursor.execute(
+                f"CREATE INDEX {table}_TX ON {table} (body) INDEXTYPE IS CTXSYS.CONTEXT "
+                + oracle_text_index_parameters_sql()
+            )
+            misses: list[str] = []
+            for question, expected in COMPATIBILITY_CASES:
+                query = _oracle_text_query(question, settings=Settings(rag_domain_keywords=[]))
+                assert query is not None, question
+                cursor.execute(
+                    f"SELECT doc_id, SCORE(1) FROM {table} WHERE CONTAINS(body, :q, 1) > 0",
+                    {"q": query},
+                )
+                hits = [(str(row[0]), float(row[1])) for row in cursor.fetchall()]
+                rank = _rank(hits, expected)
+                if rank is None or rank > 1:
+                    misses.append(question)
+        finally:
+            cursor.execute(f"DROP TABLE {table} PURGE")
+    finally:
+        connection.close()
+
+    assert misses == []

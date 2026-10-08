@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
+from rag_engine.retrieval.text_search_tokenizer import normalize_text_search_index_text
 
 from app.api.routes import documents as documents_route
 from app.api.routes.documents import (
@@ -187,8 +188,11 @@ def test_small_to_big_first_page_context_is_kept_once_without_picture_ocr_and_tr
     for chunk in chunks:
         document = json.loads(str(chunk.metadata["engine_metadata_json"]))["document"]
         assert "first_page_context" not in document
-    # 検索の文(Oracle Text・embedding の入力)は rag_engine の search_text のまま。
-    assert _chunk_search_text(chunks[0]) == chunks[0].metadata[ENGINE_SEARCH_TEXT_KEY]
+    # 検索の文は rag_engine の search_text。Oracle Text へは質問と同じ文字の形（NFKC）にして
+    # 索引する（#1336。embedding の入力は ingestion が engine_search_text をそのまま使う）。
+    assert _chunk_search_text(chunks[0]) == normalize_text_search_index_text(
+        chunks[0].metadata[ENGINE_SEARCH_TEXT_KEY]
+    )
 
 
 def _long_extraction(sentences: int = 60) -> StructuredExtraction:
