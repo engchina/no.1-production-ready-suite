@@ -155,7 +155,7 @@ _REQUEST = re.compile(
 _ADVERSATIVE = re.compile(r"(?:ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし)")
 
 _ABSENCE_SUBJECT = re.compile(
-    r"資料|文書|マニュアル|ドキュメント|規程|規定|ガイド|ナレッジ|検索|記載|記述|根拠|手順書"
+    r"資料|文書|マニュアル|ドキュメント|規程|規定|ガイド|ナレッジ|検索|記載|記述|根拠|証拠|手順書"
 )
 _ABSENCE_END = re.compile(
     r"(?:記載|記述|説明|情報|言及|該当(?:する)?(?:箇所|内容|資料|記載)?|根拠|定め|規定)"
@@ -165,7 +165,11 @@ _ABSENCE_END = re.compile(
     r"|確かめられません(?:でした)?[。．]?$"
     r"|(?:分かり|わかり)ません(?:でした)?[。．]?$"
     r"|(?:お答え|回答|ご案内|案内)(?:でき|出来)ません(?:でした)?[。．]?$"
+    # 資料に記載が無いので分からない（#1317。「…資料に記載がないため、不明です。」）。
+    r"|不明(?:です|でした)?[。．]?$"
 )
+# 文末の補足の括弧（「…含まれていませんでした（取得した全証拠の抜粋を参照）。」。#1317）。
+_TRAILING_NOTE = re.compile(r"\s*[（(][^（()）\n]{1,60}[）)](?=\s*[。．]?\s*$)")
 # 検索の結果・資料に該当が無かった文（#1317。「検索結果でも、該当する業務ガイドは返ってきません
 # でした。」）。画面の検索の振る舞い（「利用者を検索してもヒットしません」）と区別するため、主語を
 # 検索の結果・資料に限る。
@@ -175,8 +179,8 @@ _NOT_FOUND_END = re.compile(r"(?:返って(?:き|こ)|返され|ヒットし|得
 # できません。」）。答える・示す動詞に限る（「削除することはできません」のような事実の主張は除く）。
 _REFUSAL_END = re.compile(
     r"(?:(?:示す|お示しする|提示する|明示する|答える|お答えする|回答する|案内する|ご案内する"
-    r"|断定する)こと(?:は|が|も)?"
-    r"|(?:回答|ご回答|お答え|ご案内|案内|お示し|提示|明示|断定)(?:は|を|も)?)"
+    r"|伝える|お伝えする|断定する)こと(?:は|が|も)?"
+    r"|(?:回答|ご回答|お答え|ご案内|案内|お示し|提示|明示|お伝え|断定)(?:は|を|も)?)"
     r"(?:でき|出来)(?:ません|かねます)(?:でした)?[。．]?$"
     r"|(?:示せ|答えられ)ません(?:でした)?[。．]?$"
 )
@@ -185,6 +189,13 @@ _ABSENCE_CLAIM = re.compile(
     r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年|名|人|GB|MB)"
     r"|ますが|ですが|ものの|けれど|けど|ただし"
     r"|(?:は|が)[^。、]{1,20}(?:で|であり|となり)、"
+)
+# 分岐の見出し・ラベル（#1317。「個別利用者に付与する場合」「原因 A の場合の対処：」）。
+_CASE_LABEL = re.compile(
+    r"(?P<label>[^。\n]{1,40}?(?:場合|とき)(?:の(?:手順|対処|操作|対応|方法))?)\s*(?:は)?\s*[:：]?"
+)
+_CASE_LEAD = re.compile(
+    r"(?P<label>[^。:：\n]{1,40}?(?:場合|とき)(?:の(?:手順|対処|操作|対応|方法))?)\s*[:：]"
 )
 # 現場のデータ・記録の確認を求める段落（#1317）の、確かめる対象と確かめる依頼の語。
 # 「ログイン」「ログアウト」はログではない。文書・資料を読むよう促す文（知識の不足）は含めない。
@@ -343,8 +354,11 @@ def is_question(text: str) -> bool:
 
 
 def is_absence(text: str) -> bool:
-    """資料に記載が無い・資料からは確かめられないことだけを述べる文か、答えられないと言い切る拒答の文か。"""
-    value = _strip_bullet(text)
+    """資料に記載が無い・資料からは確かめられないことだけを述べる文か、答えられないと言い切る拒答の文か。
+
+    強調（`**…**`）と文末の補足の括弧は判定の前に外す（#1317）。
+    """
+    value = _TRAILING_NOTE.sub("", _EMPHASIS.sub("", _strip_bullet(text)))
     absent = (
         (_ABSENCE_SUBJECT.search(value) and _ABSENCE_END.search(value))
         or (_NOT_FOUND_SUBJECT.search(value) and _NOT_FOUND_END.search(value))
@@ -353,6 +367,30 @@ def is_absence(text: str) -> bool:
     if not absent:
         return False
     return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
+
+
+def case_label(text: str) -> str | None:
+    """分岐の見出し・ラベル（「2. **個別に付与する場合**」「- グループの場合: …」）の語（#1317）。
+
+    見出し・ラベルだけの段落か、段落の先頭の「…場合：」のラベルで、「場合」「とき」で終わるもの。
+    文（述語のあるもの）は分岐のラベルにしない。
+    """
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    match = _CASE_LABEL.fullmatch(value) or _CASE_LEAD.match(value)
+    if not match:
+        return None
+    label = match.group("label").strip()
+    return None if _is_sentence(label) or _OPERATION.search(label) else label
+
+
+def case_labels(answer: str) -> set[str]:
+    """回答の中の、分岐の見出し・ラベルの語（異なる語の集合。#1317）。"""
+    return {
+        label
+        for line in answer.split("\n")
+        for _start, _end, text in passage_spans(line)
+        if (label := case_label(text)) is not None
+    }
 
 
 def asks_environment_data(text: str) -> bool:
@@ -484,6 +522,8 @@ __all__ = [
     "KIND_TABLE",
     "KIND_UNVERIFIED",
     "asks_environment_data",
+    "case_label",
+    "case_labels",
     "environment_check_passages",
     "is_absence",
     "is_citation",

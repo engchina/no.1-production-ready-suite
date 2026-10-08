@@ -40,7 +40,8 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 `contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317）・要求の不足などの
 決定的な検査の error（`check_errors`）・実データの確認を促す段落（`data_confirmation`。RAG の
 `rag_validate_answer` の判定か、利用者に現場のデータ・記録の確認を求める段落の決定的な判定
-`environment_check_passages`。#1317。外した段落は数えない）。
+`environment_check_passages`。#1317。外した段落は数えない）・分岐ごとに答えた印（`branches`。
+「…の場合」の見出し・ラベルが 2 つ以上。利用者の条件を確かめずに分岐ごとに答えた。#1317）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -53,6 +54,7 @@ from app.features.agent.answer_passages import (
     KIND_ABSENCE,
     KIND_QUESTION,
     KIND_UNVERIFIED,
+    case_labels,
     environment_check_passages,
     is_clarification_only,
     non_claim_passages,
@@ -106,9 +108,11 @@ SIGNAL_WITHHELD_CLAIMS = "withheld_claims"
 SIGNAL_CHECK_ERRORS = "check_errors"
 SIGNAL_DATA_CONFIRMATION = "data_confirmation"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
+SIGNAL_BRANCHES = "branches"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset(
     {
+        SIGNAL_BRANCHES,
         SIGNAL_ABSENCE,
         SIGNAL_QUESTION,
         SIGNAL_UNVERIFIED_SECTION,
@@ -284,6 +288,9 @@ def answer_outcome(
     confirmations |= environment_check_passages(answer) - removed
     if disputed:
         signals.add(SIGNAL_WITHHELD_CLAIMS)
+    # 利用者の条件を確かめずに、分岐ごとに答えた（rag_search の確認の求めに分岐で答えたのと同じ）。
+    if len(case_labels(answer)) >= 2:
+        signals.add(SIGNAL_BRANCHES)
     if _count(withheld.get("findings")) > 0:
         signals.add(SIGNAL_CHECK_ERRORS)
     if confirmations:

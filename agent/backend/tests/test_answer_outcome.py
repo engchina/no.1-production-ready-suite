@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from app.features.agent.answer_outcome import ANSWER_OUTCOMES, answer_outcome
-from app.features.agent.answer_passages import asks_environment_data, passage_spans
+from app.features.agent.answer_passages import asks_environment_data, case_labels, passage_spans
 from app.features.agent.answer_validation import (
     REASON_CLARIFICATION_ONLY,
     REASON_NO_RAG_EVIDENCE,
@@ -463,3 +463,106 @@ def test_paragraph_asking_to_check_logs_needs_environment_data_even_if_supported
 )
 def test_environment_check_is_only_for_data_and_records(text: str) -> None:
     assert asks_environment_data(text) is False
+
+
+# ---- #1317 の変更の後の実環境の D で、新たに外れた回答の形 ------------------------------
+
+PASSWORD_REFUSAL_WITH_NOTE = "\n".join(
+    [
+        "**回答**  ",
+        "パスワードの文字数要件について、提供された資料（「サンプル業務ポータル 運用手順書 "
+        "第3版」）の中に該当する記載は見つかりませんでした。したがって、資料に基づいて正確な文字数要件を"
+        "お伝えすることはできません。",
+        "",
+        "**根拠**  ",
+        "- 取得した証拠は、主に「アクセス権限の付与」「検証用アカウントの登録」などの手順に関する"
+        "内容であり、パスワードの文字数に関する情報は含まれていませんでした（取得した全証拠の抜粋を"
+        "参照）。",
+        "",
+        "**結論**  ",
+        "資料にパスワードの最低文字数に関する記載がなく、根拠がないため回答できません。"
+        "必要であれば、別の関連ドキュメントやポリシーを確認してください。",
+    ]
+)
+
+
+def test_refusal_with_other_wording_and_a_trailing_note_is_insufficient_evidence() -> None:
+    # km-password-policy: 「お伝えすることはできません」と、文末の補足の括弧の付いた
+    # 「…含まれていませんでした（…を参照）。」が主張として数えられた。
+    advice = "必要であれば、別の関連ドキュメントやポリシーを確認してください。"
+    validation = _validated(
+        PASSWORD_REFUSAL_WITH_NOTE,
+        *_verdicts(PASSWORD_REFUSAL_WITH_NOTE, {advice: "unassessed"}),
+    )
+    content = answer_outcome(PASSWORD_REFUSAL_WITH_NOTE, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("insufficient_evidence", ["absence"])
+
+
+def test_unknown_current_value_is_a_gap() -> None:
+    # ed-current-session-timeout: 既定値を答え、今の値は「資料に記載がないため、**不明**です」と
+    # 示した回答（answered になっていた）。
+    answer = "\n".join(
+        [
+            "この資料では **session_timeout_minutes の既定値は 30 分、設定例は 60 分** と記載されて"
+            "いますが、各環境ごとの現在の設定値は示されていません。",
+            "",
+            "現時点での実際の設定値は資料に記載がないため、**不明**です。",
+        ]
+    )
+    validation = _validated(answer, *_verdicts(answer, {}))
+    content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["absence"])
+
+
+GRANT_BRANCHES = "\n".join(
+    [
+        "**アクセス権限の付与手順**",
+        "",
+        "1. **対象の選択**  ",
+        "   - 権限付与は「個別の利用者」か「グループ」のいずれかで行います。",
+        "2. **個別利用者に付与する場合**  ",
+        "   - 「権限」タブを選択し、付与したい権限をチェックして **「付与」** ボタンを"
+        "クリックする。",
+        "3. **グループに付与する場合**  ",
+        "   - 「権限」タブで付与したい権限を選び **「付与」** する。",
+        "4. **検証用アカウントの場合**  ",
+        "   - 検証用アカウントは個別に権限を付与し、グループへの付与は行いません。",
+    ]
+)
+
+
+def test_answer_split_into_branches_without_asking_is_conditional() -> None:
+    # cr-grant-permission: 付与先を確かめずに分岐ごとに答えた回答。分岐の見出しは unassessed で
+    # 外れるだけなので、#1317 の前は withheld_claims で偶然 conditional になっていた。
+    statuses = {
+        "1. **対象の選択**": "unassessed",
+        "2. **個別利用者に付与する場合**": "unassessed",
+        "3. **グループに付与する場合**": "unassessed",
+        "4. **検証用アカウントの場合**": "unassessed",
+    }
+    validation = _validated(GRANT_BRANCHES, *_verdicts(GRANT_BRANCHES, statuses))
+    content = answer_outcome(GRANT_BRANCHES, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["branches"])
+    assert case_labels(GRANT_BRANCHES) == {
+        "個別利用者に付与する場合",
+        "グループに付与する場合",
+        "検証用アカウントの場合",
+    }
+    # 分岐のラベルが 1 つだけなら、条件を添えた回答として answered のまま。
+    single = "検証用アカウントは最長 30 日です。\n- 延長する場合: 新しく登録し直します。"
+    assert case_labels(single) == {"延長する場合"}
+    assert _outcome(single, [_retrieve()]) == ("answered", "answer_passages")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "15 分を過ぎても反映されない場合は、サポート窓口へ起票してください。",
+        "グループに付与する場合は部門長の承認が要ります。",
+        "削除した場合",
+    ],
+    ids=["sentence", "claim", "too-short-context"],
+)
+def test_case_label_is_only_a_heading_or_a_leading_label(text: str) -> None:
+    labels = case_labels(text)
+    assert labels == ({"削除した場合"} if text == "削除した場合" else set())
