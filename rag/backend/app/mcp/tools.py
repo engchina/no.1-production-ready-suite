@@ -11,7 +11,8 @@
 - `rag_search`（`menu.search`）: `search._run_search_with_timeout`。根拠は `evidence`（場所・版・
   回答に使ったか・切り詰めの有無。#1219）で返す。
 - `rag_read_source`（`menu.search`）: 根拠の本文の続きと親の本文を読む（検索と同じ見え方の
-  条件。#1219）
+  条件。#1219）。`include_image=true` で図の根拠の元の画像の領域を、上限つきの PNG で MCP の
+  content の image として返す（読むたびに同じ見え方の条件を確かめ直す。#1282）
 
 RAG のチャットは画面の機能で、MCP では提供しない（#787）。MCP で提供するのは検索と根拠の
 読み取りだけにする。
@@ -19,7 +20,11 @@ RAG のチャットは画面の機能で、MCP では提供しない（#787）�
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
 import json
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException, Request
@@ -30,6 +35,7 @@ from pr_backend_core.mcp import (
     McpServer,
     McpTool,
     McpToolError,
+    McpToolResult,
 )
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
@@ -43,6 +49,12 @@ from app.rag.answer_validation import (
     GuideProfileNotFoundError,
     validate_answer,
 )
+from app.rag.document_crop import (
+    CropTooLargeError,
+    DocumentSourceNotFoundError,
+    crop_png_bounded,
+    load_parsed_source,
+)
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_runtime import GuideMatch, clarification_questions, rank_guides
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
@@ -51,7 +63,7 @@ from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
 # ツールの出力の版（出力の形を変えたら上げる。handoff §10。#1276）。
-MCP_OUTPUT_SCHEMA_VERSION = 2
+MCP_OUTPUT_SCHEMA_VERSION = 3
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -61,6 +73,18 @@ READ_SOURCE_MAX_CHARS_DEFAULT = 8000
 READ_SOURCE_MAX_CHARS_LIMIT = 20000
 SOURCE_NOT_FOUND_CODE = "source_not_found"
 SOURCE_STALE_CODE = "source_stale"
+# 図の元の画像（rag_read_source の include_image。#1282）。長い辺は VLM が縮めずに読める大きさ、
+# バイト数は 1 回の応答に収まる大きさにする。画像は structuredContent に入れず、MCP の content の
+# image で返す（呼び出し側のモデルの文脈を base64 で膨らませない）。
+IMAGE_MAX_EDGE_PX = 1568
+IMAGE_MAX_BYTES = 1_500_000
+IMAGE_MIME_TYPE: Literal["image/png"] = "image/png"
+IMAGE_NOT_AVAILABLE_CODE = "image_not_available"
+IMAGE_TOO_LARGE_CODE = "image_too_large"
+IMAGE_SOURCE_MISSING_CODE = "image_source_missing"
+# 根拠の種類（#1282）。figure_description=図を VLM が読んだ説明（元の図で確かめる）/
+# ocr=図の中・周りの文字（解析の OCR・キャプション）。
+EvidenceType = Literal["text", "table", "figure_description", "ocr"]
 GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした。時間をおいて再度お試しください。"
 
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
@@ -73,6 +97,8 @@ INSTRUCTIONS = (
     "渡してください。回答の根拠は evidence にあり、used_in_answer が回答に使った根拠です。"
     "根拠の excerpt が切り詰められている（truncated）ときや、前後の文脈が要るときは、"
     "rag_read_source に document_id と chunk_id を渡して本文と親の本文を読んでください。"
+    "evidence_type が figure_description の根拠は図を AI が読んだ説明です。元の図で確かめるときは"
+    " rag_read_source に include_image=true を渡すと、図の領域の画像を返します。"
 )
 
 
@@ -250,6 +276,15 @@ class ReadSourceInput(BaseModel):
         le=READ_SOURCE_MAX_CHARS_LIMIT,
         description="返す本文の最大文字数。",
     )
+    include_image: bool = Field(
+        default=False,
+        description=(
+            "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。画像は MCP の"
+            f" content の image（PNG。長い辺 {IMAGE_MAX_EDGE_PX} px 以下・{IMAGE_MAX_BYTES} バイト"
+            "以下）で返し、structuredContent の image には大きさだけを入れる。図でない・場所が"
+            "分からない根拠は image_not_available のエラー。"
+        ),
+    )
 
 
 # ---- 出力 ----
@@ -298,6 +333,40 @@ class EvidenceLocator(BaseModel):
     )
 
 
+class EvidenceImageRef(BaseModel):
+    """図の根拠の元の画像の領域（#1282）。
+
+    場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と
+    include_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した
+    場所から決める）。文書の版（chunk_set）が変わると source_stale になる。
+    """
+
+    document_id: str
+    chunk_id: str
+    chunk_set_id: str | None = Field(default=None, description="領域を記録した処理の版。")
+    page: int = Field(description="図のある頁（PDF の物理頁。画像ファイルは 1）。")
+    page_label: str | None = Field(
+        default=None, description="印刷の頁番号（物理頁と違うときだけ。#1244）。"
+    )
+    bbox: list[float] = Field(description="頁の中の図の領域 [x0, y0, x1, y1]。")
+    bbox_unit: Literal["absolute", "ratio", "percent"] = Field(
+        description="bbox の単位（absolute=頁の座標 / ratio=0〜1 / percent=0〜100）。"
+    )
+
+
+class EvidenceImage(BaseModel):
+    """rag_read_source が content の image で返した図の画像の大きさ（#1282）。"""
+
+    mime_type: Literal["image/png"] = IMAGE_MIME_TYPE
+    width: int = Field(description="画像の幅（px）。")
+    height: int = Field(description="画像の高さ（px）。")
+    byte_size: int = Field(description="画像のバイト数。")
+    sha256: str = Field(description="画像の sha256（content の image と同じか確かめる）。")
+    content_index: int = Field(
+        default=1, description="MCP の content の何番目（0 始まり）に画像があるか。"
+    )
+
+
 class RagEvidence(BaseModel):
     """検索・回答の根拠 1 件。"""
 
@@ -308,6 +377,19 @@ class RagEvidence(BaseModel):
     chunk_set_id: str | None = Field(default=None, description="根拠を作った処理の版。")
     recipe_id: str | None = Field(default=None, description="根拠を作った処理レシピ。")
     content_kind: str | None = Field(default=None, description="内容の種類（text / table など）。")
+    evidence_type: EvidenceType = Field(
+        default="text",
+        description=(
+            "根拠の種類（text=本文 / table=表 / figure_description=図を AI（VLM）が読んだ説明。"
+            "原文ではないので元の図で確かめる / ocr=図の中・周りの文字（OCR・キャプション））。"
+        ),
+    )
+    image_ref: EvidenceImageRef | None = Field(
+        default=None,
+        description=(
+            "図の元の画像の領域（rag_read_source の include_image で読む）。無ければ null。"
+        ),
+    )
     locator: EvidenceLocator
     excerpt: str = Field(description=f"本文の先頭（最大 {EVIDENCE_EXCERPT_MAX_CHARS} 文字）。")
     truncated: bool = Field(description="excerpt が本文の一部だけか。")
@@ -568,6 +650,15 @@ class ReadSourceOutput(VersionedOutput):
     chunk_set_id: str | None = None
     recipe_id: str | None = None
     content_kind: str | None = None
+    evidence_type: EvidenceType = "text"
+    image_ref: EvidenceImageRef | None = None
+    image: EvidenceImage | None = Field(
+        default=None,
+        description=(
+            "include_image=true で返した図の画像の大きさ（画像は content の image）。"
+            "include_image=false なら null。"
+        ),
+    )
     locator: EvidenceLocator
     text: str = Field(description="offset から最大 max_chars 文字の本文。")
     offset: int
@@ -645,6 +736,123 @@ def _float_or_none(value: object) -> float | None:
     return float(value)
 
 
+def _evidence_type(metadata: dict[str, Any]) -> EvidenceType:
+    """根拠の種類（#1282）。
+
+    図の本文の出どころが分からない古い記録は、VLM の説明として扱う（原文として扱わず、元の図で
+    確かめる側に倒す）。
+    """
+    kind = _metadata_str(metadata, "content_kind")
+    if kind == "table":
+        return "table"
+    if kind == "figure":
+        return "ocr" if metadata.get("figure_text_source") == "ocr" else "figure_description"
+    return "text"
+
+
+BboxUnit = Literal["absolute", "ratio", "percent"]
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageRegion:
+    page: int
+    bbox: tuple[float, float, float, float]
+    unit: BboxUnit
+    page_size: tuple[float, float]
+
+
+def _positive(value: object) -> float | None:
+    number = _float_or_none(value)
+    return number if number is not None and number > 0 else None
+
+
+def _engine_image_bbox(metadata: dict[str, Any], page: int) -> list[float] | None:
+    """親子階層（small-to-big）の chunk の image_evidence から、その頁の図の bbox を取る。"""
+    raw = metadata.get("engine_metadata_json")
+    try:
+        engine = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    images = engine.get("image_evidence") if isinstance(engine, dict) else None
+    for image in images if isinstance(images, list) else []:
+        if not isinstance(image, dict) or _metadata_int(image, "page") != page:
+            continue
+        if (bbox := _bbox(image.get("bbox"))) is not None:
+            return bbox
+    return None
+
+
+def _bbox_unit_value(value: str | None) -> BboxUnit | None:
+    if value in (None, "absolute"):
+        return "absolute"
+    if value in {"ratio", "normalized"}:
+        return "ratio"
+    if value == "percent":
+        return "percent"
+    return None
+
+
+def _image_region(metadata: dict[str, Any]) -> _ImageRegion | None:
+    """図の根拠の元の画像の領域を、保存した chunk の metadata から決める（#1282）。
+
+    利用者が渡した座標は使わない。頁・領域・頁の大きさのどれかが分からない、頁が回転している、
+    領域が頁からはみ出す根拠は、画像を返さない（None）。
+    """
+    if _metadata_str(metadata, "content_kind") != "figure":
+        return None
+    page = _metadata_int(metadata, "page_start") or _metadata_int(metadata, "page_number")
+    if not page or page < 1:
+        return None
+    rotation = _metadata_int(metadata, "page_rotation")
+    if rotation is not None and rotation % 360 != 0:
+        return None
+    unit: BboxUnit | None
+    engine_bbox = _engine_image_bbox(metadata, page)
+    if engine_bbox is not None:
+        bbox, unit = engine_bbox, "absolute"
+    else:
+        stored = _bbox(metadata.get("bbox"))
+        if stored is None:
+            return None
+        bbox, unit = stored, _bbox_unit_value(_metadata_str(metadata, "bbox_unit"))
+        if _metadata_str(metadata, "bbox_coordinate_mode") == "xywh":
+            bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+    if unit == "absolute":
+        width = _positive(metadata.get("page_width"))
+        height = _positive(metadata.get("page_height"))
+        if width is None or height is None:
+            return None
+        page_size = (width, height)
+    elif unit == "ratio":
+        page_size = (1.0, 1.0)
+    elif unit == "percent":
+        page_size = (100.0, 100.0)
+    else:
+        return None
+    x0, y0, x1, y1 = bbox
+    if x0 < 0 or y0 < 0 or x1 <= x0 or y1 <= y0:
+        return None
+    if x1 > page_size[0] * 1.001 or y1 > page_size[1] * 1.001:
+        return None
+    return _ImageRegion(page=page, bbox=(x0, y0, x1, y1), unit=unit, page_size=page_size)
+
+
+def _image_ref(
+    chunk: RetrievedChunk, metadata: dict[str, Any], region: _ImageRegion | None
+) -> EvidenceImageRef | None:
+    if region is None:
+        return None
+    return EvidenceImageRef(
+        document_id=chunk.document_id,
+        chunk_id=chunk.chunk_id,
+        chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
+        page=region.page,
+        page_label=_metadata_str(metadata, "page_label_start"),
+        bbox=list(region.bbox),
+        bbox_unit=region.unit,
+    )
+
+
 def _evidence(chunk: RetrievedChunk) -> RagEvidence:
     metadata = dict(chunk.metadata)
     return RagEvidence(
@@ -655,6 +863,8 @@ def _evidence(chunk: RetrievedChunk) -> RagEvidence:
         chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
         recipe_id=_metadata_str(metadata, "recipe_id"),
         content_kind=_metadata_str(metadata, "content_kind"),
+        evidence_type=_evidence_type(metadata),
+        image_ref=_image_ref(chunk, metadata, _image_region(metadata)),
         locator=_locator(metadata),
         excerpt=chunk.text[:EVIDENCE_EXCERPT_MAX_CHARS],
         truncated=len(chunk.text) > EVIDENCE_EXCERPT_MAX_CHARS,
@@ -770,8 +980,68 @@ def _text_window(text: str, offset: int, max_chars: int) -> tuple[str, bool, int
     return window, more, (end if more else None)
 
 
-async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput:
-    """検索と同じ見え方の条件で根拠の本文を読む（見えない・古い版は区別できるエラー）。"""
+async def _read_image(
+    oracle: OracleClient,
+    chunk: RetrievedChunk,
+    metadata: dict[str, Any],
+    region: _ImageRegion | None,
+) -> tuple[EvidenceImage, dict[str, Any]]:
+    """図の領域を、解析に使ったファイル（処理レシピの artifact）から上限つきで切り出す（#1282）。"""
+    if region is None:
+        raise McpToolError(
+            IMAGE_NOT_AVAILABLE_CODE,
+            "この根拠には元の図の画像がありません（図ではないか、図の場所が分かりません）。",
+        )
+    try:
+        source = await load_parsed_source(
+            oracle, chunk.document_id, _metadata_str(metadata, "recipe_id")
+        )
+    except (DocumentSourceNotFoundError, ValueError) as exc:
+        raise McpToolError(
+            IMAGE_SOURCE_MISSING_CODE,
+            "図を切り出す元のファイルが見つかりません。文書を再処理してください。",
+            status=404,
+        ) from exc
+    try:
+        crop = await asyncio.to_thread(
+            crop_png_bounded,
+            source,
+            region.page,
+            region.bbox,
+            region.page_size,
+            max_edge=IMAGE_MAX_EDGE_PX,
+            max_bytes=IMAGE_MAX_BYTES,
+        )
+    except CropTooLargeError as exc:
+        raise McpToolError(
+            IMAGE_TOO_LARGE_CODE,
+            "図の画像が大きすぎて返せません。頁と領域（image_ref）で元の文書を確かめてください。",
+            status=413,
+        ) from exc
+    except ValueError as exc:
+        raise McpToolError(
+            IMAGE_NOT_AVAILABLE_CODE,
+            "元の図を切り出せませんでした（ファイルの形式か図の場所が対応していません）。",
+        ) from exc
+    image = EvidenceImage(
+        width=crop.width,
+        height=crop.height,
+        byte_size=len(crop.png),
+        sha256=hashlib.sha256(crop.png).hexdigest(),
+    )
+    block = {
+        "type": "image",
+        "data": base64.b64encode(crop.png).decode("ascii"),
+        "mimeType": IMAGE_MIME_TYPE,
+    }
+    return image, block
+
+
+async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:
+    """検索と同じ見え方の条件で根拠の本文を読む（見えない・古い版は区別できるエラー）。
+
+    図の画像（include_image）も、読むたびに同じ条件で chunk を読み直してから切り出す。
+    """
     oracle = OracleClient()
     chunk = await oracle.retrievable_chunk(arguments.document_id, arguments.chunk_id)
     if chunk is None:
@@ -788,7 +1058,13 @@ async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput:
     text, more, next_offset = _text_window(chunk.text, arguments.offset, arguments.max_chars)
     parent = metadata.get("parent_text")
     parent_text = parent if isinstance(parent, str) and parent.strip() else None
-    return ReadSourceOutput(
+    region = _image_region(metadata)
+    image: EvidenceImage | None = None
+    blocks: tuple[dict[str, Any], ...] = ()
+    if arguments.include_image:
+        image, block = await _read_image(oracle, chunk, metadata, region)
+        blocks = (block,)
+    output = ReadSourceOutput(
         evidence_id=chunk.chunk_id,
         document_id=chunk.document_id,
         chunk_id=chunk.chunk_id,
@@ -796,6 +1072,9 @@ async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput:
         chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
         recipe_id=_metadata_str(metadata, "recipe_id"),
         content_kind=_metadata_str(metadata, "content_kind"),
+        evidence_type=_evidence_type(metadata),
+        image_ref=_image_ref(chunk, metadata, region),
+        image=image,
         locator=_locator(metadata),
         text=text,
         offset=arguments.offset,
@@ -806,6 +1085,7 @@ async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput:
         parent_truncated=bool(parent_text) and len(parent_text or "") > arguments.max_chars,
         superseded=metadata.get("document_superseded") is True,
     )
+    return McpToolResult(output=output, content=blocks) if blocks else output
 
 
 def _search_request(arguments: SearchInput) -> SearchRequest:
@@ -931,6 +1211,12 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             evidence_omitted=max(0, len(result.citations) - limit),
         )
 
+    async def read(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:
+        if arguments.include_image:
+            # 図の切り出しは元のファイルを読んで描くので、検索と同じ上限で守る（#1282）。
+            enforce_rate_limit("search", http_request)
+        return await read_source(arguments)
+
     async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:
         enforce_rate_limit("search", http_request)
         guide = arguments.guide
@@ -1051,10 +1337,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_read_source",
                 description=(
                     "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。"
-                    "検索と同じ利用範囲の根拠だけを読めます。"
+                    "検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の"
+                    "元の画像の領域を画像（content の image）で返します。"
                 ),
                 input_model=ReadSourceInput,
-                handler=read_source,
+                handler=read,
                 output_model=ReadSourceOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),

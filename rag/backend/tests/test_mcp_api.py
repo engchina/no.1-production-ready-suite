@@ -320,7 +320,7 @@ def test_search_maps_evidence_and_uses_token_user_context(
         {**_token(user.user_uuid), "X-RAG-Agent-ID": "spoofed"},
     )
     body = result["structuredContent"]
-    assert body["schema_version"] == 2
+    assert body["schema_version"] == mcp_tools.MCP_OUTPUT_SCHEMA_VERSION
     assert body["answer"] == "回答"
     assert body["trace_id"] == "trace-1"
     assert body["provenance"] == {
