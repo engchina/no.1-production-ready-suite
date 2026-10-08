@@ -148,7 +148,7 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         _token(user.user_uuid),
     )["structuredContent"]
     assert body["valid"] is False
-    assert body["schema_version"] == 2
+    assert body["schema_version"] == mcp_tools.MCP_OUTPUT_SCHEMA_VERSION
     assert (body["checks"], body["findings"], body["guide_revision"]) == ([], [], None)
     assert [claim["status"] for claim in body["claims"]] == ["supported", "unsupported"]
     assert body["claims"][0]["chunk_id"] == "c1" and body["claims"][1]["chunk_id"] is None

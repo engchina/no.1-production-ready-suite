@@ -348,6 +348,37 @@ def test_chunk_extraction_groups_figure_with_caption() -> None:
     assert figure_chunk.metadata["section_title"] == "アーキテクチャ"
     assert figure_chunk.metadata["page_start"] == 4
     assert figure_chunk.metadata["page_end"] == 4
+    # Vision が読んでいない図の本文は解析の OCR・キャプション（#1282）。
+    assert figure_chunk.metadata["figure_text_source"] == "ocr"
+
+
+@pytest.mark.parametrize(
+    ("vision_status", "expected"),
+    [("succeeded", "vision"), ("failed", "ocr"), ("skipped", "ocr")],
+)
+def test_chunk_extraction_records_whether_vlm_wrote_figure_text(
+    vision_status: str, expected: str
+) -> None:
+    """図の本文を Vision（VLM）が書いたかを chunk に残す（根拠の evidence_type。#1282）。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="figure",
+                text="申請画面。右上の「承認」ボタンを押す。",
+                element_id="fig-1",
+                page_number=2,
+                metadata={"vision_status": vision_status},
+            ),
+            DocumentElement(kind="text", text="本文です。", page_number=2),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=120, overlap=8)
+
+    figure = next(chunk for chunk in chunks if "承認" in chunk.text)
+    text = next(chunk for chunk in chunks if "本文です" in chunk.text)
+    assert figure.metadata["figure_text_source"] == expected
+    assert "figure_text_source" not in text.metadata
 
 
 def test_chunk_extraction_adds_parent_group_metadata_to_split_table() -> None:
