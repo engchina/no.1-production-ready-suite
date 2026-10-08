@@ -794,7 +794,7 @@ def _verdict(*claims: dict[str, Any]) -> dict[str, Any]:
     counts: dict[str, int] = {}
     for claim in claims:
         counts[claim["status"]] = counts.get(claim["status"], 0) + 1
-    output = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
     output.update({"valid": False, "status": "completed", "counts": counts, "claims": list(claims)})
     return output
 
