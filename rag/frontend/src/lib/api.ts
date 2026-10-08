@@ -801,7 +801,21 @@ export interface ExcelOptions {
   exclude_columns: string[];
   /** 読む範囲（`A3:F200` か `シート名!A3:F200`。空はシート全体。#1229）。 */
   ranges: string[];
+  /** 列の役割（既定値・例示など）を表頭の語から決めるか（#1281）。 */
+  column_role_detection?: "auto" | "off";
+  /** 列の役割の指定（列名か列の記号 → 役割。none は付けない。#1281）。 */
+  column_roles?: Record<string, ExcelColumnRoleSetting>;
 }
+
+/** Excel の列の役割（#1281。backend の `ColumnRoleSetting`）。 */
+export type ExcelColumnRoleSetting =
+  | "definition"
+  | "default"
+  | "example"
+  | "current"
+  | "recommended"
+  | "allowed"
+  | "none";
 
 export interface KnowledgeBaseIngestionConfig {
   preprocess_profile: PreprocessProfileName | null;
