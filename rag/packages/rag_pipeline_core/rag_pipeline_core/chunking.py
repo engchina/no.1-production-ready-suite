@@ -89,6 +89,8 @@ class _ElementSpan:
     sheet_row_end: int | None = None
     sheet_column_start: str | None = None
     sheet_column_end: str | None = None
+    # 図の本文を Vision（VLM）が書いたか（解析の OCR・キャプションのままなら False。#1282）。
+    vision_described: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,10 @@ TEXT_CHUNK_PROFILE = "text_v1"
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 NON_INDEXED_ELEMENT_KINDS = {"header", "footer"}
 FIGURE_ELEMENT_KINDS = {"figure", "figure_caption"}
+# 図の chunk の本文の出どころ（MCP の根拠の evidence_type に使う。#1282）。
+FIGURE_TEXT_SOURCE_KEY = "figure_text_source"
+FIGURE_TEXT_SOURCE_VISION = "vision"
+FIGURE_TEXT_SOURCE_OCR = "ocr"
 BBOX_COORDINATE_MODE_KEYS = (
     "bbox_coordinate_mode",
     "bbox_mode",
@@ -782,6 +788,8 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                 sheet_column_end=_metadata_label(
                     element.metadata.get("cell_column_end"), max_length=4
                 ),
+                vision_described=element.kind == "figure"
+                and str(element.metadata.get("vision_status") or "") == "succeeded",
             )
         )
     return spans
@@ -1875,6 +1883,13 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     if pages:
         metadata["page_start"] = pages[0]
         metadata["page_end"] = pages[-1]
+    if first.content_kind == "figure":
+        # 図の本文の出どころ（根拠の種類。vision=VLM の説明 / ocr=解析の OCR・キャプション。#1282）。
+        metadata[FIGURE_TEXT_SOURCE_KEY] = (
+            FIGURE_TEXT_SOURCE_VISION
+            if any(span.vision_described for span in group)
+            else FIGURE_TEXT_SOURCE_OCR
+        )
     metadata.update(_sheet_location_metadata(group))
     return metadata
 

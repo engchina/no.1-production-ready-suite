@@ -19,6 +19,7 @@ from pr_backend_core.mcp import (
     McpServer,
     McpTool,
     McpToolError,
+    McpToolResult,
     mcp_error_from_exception,
     mcp_http_response,
 )
@@ -164,6 +165,42 @@ def test_tools_call_returns_structured_content() -> None:
     assert "こんにちは" in result["content"][0]["text"]
     shouted = _call(_client({"a", "b"}), "hi", name="shout")
     assert shouted["structuredContent"] == {"echoed": "HI"}
+
+
+def test_tools_call_can_add_content_blocks_outside_structured_content() -> None:
+    """画像などの content は structuredContent に入れず、text の後ろに足す（#1282）。"""
+
+    def picture(arguments: _EchoInput) -> McpToolResult:
+        return McpToolResult(
+            output=_EchoOutput(echoed=arguments.text),
+            content=({"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},),
+        )
+
+    server = McpServer(
+        name="picture",
+        version="1",
+        tools=[
+            McpTool(
+                name="picture",
+                description="画像付き",
+                input_model=_EchoInput,
+                handler=picture,
+                output_model=_EchoOutput,
+            )
+        ],
+    )
+    app = FastAPI()
+
+    @app.post("/mcp")
+    async def mcp(request: Request) -> Response:
+        return await mcp_http_response(request, server, has_any_permission=lambda _group: True)
+
+    result = _call(TestClient(app), "図", name="picture")
+    assert result["isError"] is False
+    assert result["structuredContent"] == {"echoed": "図"}
+    assert [block["type"] for block in result["content"]] == ["text", "image"]
+    assert result["content"][1] == {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"}
+    assert "aGVsbG8=" not in result["content"][0]["text"]
 
 
 def test_tools_call_errors() -> None:
