@@ -383,6 +383,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: チャット ----
     ("GET", "/chat/models"): _any(MENU_CHAT),
+    # 現場の実データの確認が要る回答から Agent のチャットへ続ける導線（#1283）。
+    ("GET", "/chat/agent-link"): _any(MENU_CHAT),
     ("GET", "/chat/conversations"): _any(MENU_CHAT),
     ("POST", "/chat/conversations"): _any(MENU_CHAT),
     ("GET", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),

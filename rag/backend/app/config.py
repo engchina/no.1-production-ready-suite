@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Self
+from urllib.parse import urlparse
 
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
@@ -1459,6 +1460,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "回答の作成は SSE の接続が切れても続くので、送信を重ねて LLM を使い過ぎないよう抑える。"
         ),
     )
+    rag_agent_app_url: str = Field(
+        default="",
+        description=(
+            "Agent の画面の URL（例 https://agent.example.com。#1283）。設定すると、チャットで"
+            "現場の実データの確認が要る回答（固定の RAG では完了できない回答）に"
+            "「Agent のチャットで続ける」を出し、質問を入れた Agent のチャットを開く"
+            "（送信は利用者が行う）。空（既定）なら出さない。"
+        ),
+    )
 
     # --- レート制限（高コスト API の保護）---
     rate_limit_enabled: bool = Field(default=True)
@@ -1494,6 +1504,22 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     def normalize_model_settings_file(cls, value: str) -> str:
         """空指定は共通 `.env` と同じ階層の既定ファイルへ戻す。"""
         return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
+
+    @field_validator("rag_agent_app_url")
+    @classmethod
+    def normalize_agent_app_url(cls, value: str) -> str:
+        """Agent の画面の URL は http(s) の絶対 URL だけを受け付け、末尾の / を外す（#1283）。"""
+        url = value.strip().rstrip("/")
+        if not url:
+            return ""
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(
+                "RAG_AGENT_APP_URL は http:// か https:// で始まる URL にしてください。"
+            )
+        if parsed.query or parsed.fragment:
+            raise ValueError("RAG_AGENT_APP_URL に ? や # を含めないでください。")
+        return url
 
     @field_validator("huggingface_endpoint")
     @classmethod

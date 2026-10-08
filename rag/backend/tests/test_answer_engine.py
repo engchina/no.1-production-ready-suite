@@ -236,6 +236,11 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert response.diagnostics.retrieval_strategy == "hybrid"
     assert response.diagnostics.answer is not None
     assert response.diagnostics.answer["evidence_tree"]
+    # 回答の経路（固定の RAG）と理由を記録する。答えられた回答では Agent を提案しない（#1283）。
+    route = cast(dict[str, Any], response.diagnostics.answer["route"])
+    assert route["path"] == "rag"
+    assert route["reason"] == response.diagnostics.answer["outcome"]
+    assert route["escalation_suggested"] is False
 
 
 async def test_answer_engine_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPatch) -> None:
