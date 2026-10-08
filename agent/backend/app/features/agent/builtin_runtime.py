@@ -5,7 +5,9 @@ Control Plane の中で業務 Agent を実行する。外部の Runtime・Bindin
 - モデル: システム設定 > モデル の OCI Enterprise AI（Agent の `model_id`、無ければ既定の
   テキストモデル）。
   SDK の tracing は無効にする（業務データを外部へ送らない）。
-- 指示: Agent の指示と、割り当てた Skill の指示を合わせる。
+- 指示: Agent の指示と、割り当てた Skill の指示を合わせる。指示の中の MCP のツールの素の名前は、
+  モデルに渡す名前（`<接続>__<ツール>`）に書き直す。無い名前のツールを呼んだら、呼ぶ名前をモデルへ
+  返して呼び直させる（Run は落とさない。#1303）。
 - ツール: Skill が必要とするツールを function tool にする（#757）。`control-plane` は
   `tool_registry` のツール、それ以外の server_id は MCP 接続（RAG / NL2SQL / 外部 MCP）の
   `tools/list` のツール（名前は `<接続>__<ツール>`、一覧は Run の利用者の権限で絞られる）。
@@ -21,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
@@ -33,10 +36,12 @@ from agents import (
     Model,
     ModelSettings,
     OpenAIResponsesModel,
+    RunConfig,
     Runner,
     RunState,
     set_tracing_disabled,
 )
+from agents.run_config import ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
 from openai import APIStatusError, AsyncOpenAI, BadRequestError
 from pr_backend_core.observability.request_context import bind_log_context
@@ -379,19 +384,78 @@ def discover_mcp_tools(
     return tools, warnings
 
 
-def compose_instructions(agent_instructions: str, skill_ids: list[str]) -> str:
-    """Agent の指示と Skill の指示（AgentSkills の本文）を 1 つの system の指示にする。"""
+# 指示の中のツールの名前の前後に来ない文字（function tool の名前に使える文字。#1303）。
+_TOOL_NAME_BOUNDARY = "A-Za-z0-9_-"
+
+
+def instruction_tool_names(skill_ids: list[str], exposed: Collection[str]) -> dict[str, str]:
+    """指示に書いた MCP のツールの素の名前 → モデルに渡す名前（`<接続>__<ツール>`。#1303）。
+
+    Skill の指示は MCP のツールを接頭辞の無い名前（`rag_search`）で書くが、モデルに渡す
+    function tool の名前は `<接続>__<ツール>`（#757）。指示の名前のまま呼ぶと SDK が
+    `ModelBehaviorError` で Run を落とすため、指示を Run のツールの名前で書き直す。
+
+    対象は Skill の requirement が名前で宣言したツールのうち、この Run でモデルに渡すもの
+    だけ（ポリシーで拒否したもの・一覧に無いものは書き換えない）。同じ素の名前が複数の接続に
+    あって 1 つに決まらないものと、素の名前のままのツールがあるものは書き換えない。
+    """
+    exposed_names = set(exposed)
+    candidates: dict[str, set[str]] = {}
+    for skill_id in skill_ids:
+        skill = skill_registry.get(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        for requirement in skill.mcp_requirements:
+            server_id = requirement.server_id.strip()
+            if not server_id or server_id == CONTROL_PLANE_SERVER_ID:
+                continue
+            for tool_name in requirement.tool_names:
+                function_name = mcp_function_name(server_id, tool_name)
+                if function_name in exposed_names and tool_name not in exposed_names:
+                    candidates.setdefault(tool_name, set()).add(function_name)
+    return {name: next(iter(found)) for name, found in candidates.items() if len(found) == 1}
+
+
+def render_tool_names(text: str, names: Mapping[str, str]) -> str:
+    """指示の中の素のツールの名前を、モデルに渡す名前に置き換える（語の一部は置き換えない）。"""
+    if not names or not text:
+        return text
+    alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    pattern = re.compile(
+        rf"(?<![{_TOOL_NAME_BOUNDARY}])({alternatives})(?![{_TOOL_NAME_BOUNDARY}])"
+    )
+    return pattern.sub(lambda match: names[match.group(1)], text)
+
+
+def compose_instructions(
+    agent_instructions: str,
+    skill_ids: list[str],
+    exposed_tool_names: Collection[str] | None = None,
+) -> str:
+    """Agent の指示と Skill の指示（AgentSkills の本文）を 1 つの system の指示にする。
+
+    `exposed_tool_names`（この Run でモデルに渡すツールの名前）を渡すと、指示の中の MCP の
+    ツールの素の名前を、モデルが呼ぶ名前（`<接続>__<ツール>`）に書き直す（#1303）。
+    """
+    exposed = exposed_tool_names or ()
     sections = [
         "あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。"
         "ツールの結果に無いことは推測で補わず、分からないと答えてください。"
     ]
     if agent_instructions.strip():
-        sections.append("# 業務の指示\n" + agent_instructions.strip())
+        agent_names = instruction_tool_names(skill_ids, exposed)
+        sections.append(
+            "# 業務の指示\n" + render_tool_names(agent_instructions.strip(), agent_names)
+        )
     for skill_id in skill_ids:
         skill = skill_registry.get(skill_id)
         if skill is None or not skill.enabled or not skill.instructions.strip():
             continue
-        sections.append(f"# Skill: {skill.name}\n{skill.instructions.strip()}")
+        # Skill の指示は、その Skill が宣言した接続のツールの名前で書き直す。
+        skill_names = instruction_tool_names([skill_id], exposed)
+        sections.append(
+            f"# Skill: {skill.name}\n{render_tool_names(skill.instructions.strip(), skill_names)}"
+        )
         # 本文へ全参照文書を詰めず、割り当て済みの文書の索引だけを渡す（#862）。
         from app.features.agent.plugins import plugin_resource_registry
 
@@ -606,23 +670,82 @@ def build_sdk_agent(
     )
     for warning in warnings:
         runtime_repository.note_builtin_warning(run_id, warning)
-    composed = compose_instructions(instructions, skill_ids)
+    tools = build_function_tools(
+        run_id,
+        agent_tool_names(skill_ids),
+        mcp_tools,
+        resource_ids=skill_reference_ids(skill_ids),
+        budget=budget,
+    )
+    # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
+    exposed = [tool.name for tool in tools]
+    composed = compose_instructions(instructions, skill_ids, exposed)
     if support_task:
-        composed = f"{composed}\n\n{support_task}"
+        support_names = instruction_tool_names(skill_ids, exposed)
+        composed = f"{composed}\n\n{render_tool_names(support_task, support_names)}"
     return Agent(
         name=name or "agent",
         instructions=composed,
-        tools=list(
-            build_function_tools(
-                run_id,
-                agent_tool_names(skill_ids),
-                mcp_tools,
-                resource_ids=skill_reference_ids(skill_ids),
-                budget=budget,
-            )
-        ),
+        tools=list(tools),
         model=model_factory(target),
         model_settings=ModelSettings(store=False),
+    )
+
+
+# 無いツールの呼び出しの返答で、候補として並べるツールの数の上限（#1303）。
+_TOOL_NOT_FOUND_LIST_MAX = 20
+
+
+def tool_not_found_message(called: str, exposed: Collection[str]) -> str:
+    """モデルが渡していないツールを呼んだときに返す案内（呼ぶ名前を示す。#1303）。
+
+    素の名前（`rag_search`）や別の接頭辞で呼んだときは、ツールの部分が同じ名前を候補にする。
+    候補が 1 つなら呼び直す名前を、複数（同じツールの名前が複数の接続にある）なら候補を並べ、
+    どれかを選ばせる（Control Plane がどれかに決めて実行することはしない）。
+    """
+    base = mcp_base_tool_name(called)
+    names = sorted(set(exposed))
+    candidates = [name for name in names if name != called and mcp_base_tool_name(name) == base]
+    if len(candidates) == 1:
+        return (
+            f"ツール「{called}」はありません。呼ぶときの名前は「{candidates[0]}」です。"
+            f"同じ引数で「{candidates[0]}」を呼び直してください。"
+        )
+    if candidates:
+        return (
+            f"ツール「{called}」はありません。同じ名前のツールが複数の接続にあります"
+            f"（{'、'.join(candidates)}）。目的に合う接続のツールの名前で呼んでください。"
+        )
+    if not names:
+        return f"ツール「{called}」はありません。この実行で使えるツールはありません。"
+    listed = "、".join(names[:_TOOL_NOT_FOUND_LIST_MAX])
+    more = "ほか" if len(names) > _TOOL_NOT_FOUND_LIST_MAX else ""
+    return f"ツール「{called}」はありません。使えるツールの名前: {listed}{more}。"
+
+
+def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
+    """Run の SDK の設定。無いツールの呼び出しで Run を落とさず、モデルへ案内を返す（#1303）。
+
+    SDK の既定（`raise_error`）は、モデルが渡していない名前のツールを 1 回呼んだだけで
+    `ModelBehaviorError` にして Run 全体を失敗させる。呼ぶ名前を返して、モデルに呼び直させる。
+    素の名前を Control Plane が別のツールへ読み替えて実行することはしない（呼び出し・承認・監査は
+    モデルが呼んだ名前のまま。同じ名前が複数の接続にあるときに誤った接続を呼ばない）。
+    """
+    exposed = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+
+    def format_error(args: ToolErrorFormatterArgs[Any]) -> str | None:
+        if args.kind != "tool_not_found":
+            return None
+        message = tool_not_found_message(args.tool_name, exposed)
+        logger.warning(
+            "builtin_runtime_tool_not_found",
+            extra={"run_id": run_id, "tool_name": args.tool_name, "call_id": args.call_id},
+        )
+        return message
+
+    return RunConfig(
+        tool_not_found_behavior="return_error_to_model",
+        tool_error_formatter=format_error,
     )
 
 
@@ -741,7 +864,10 @@ async def execute_run(run_id: str) -> None:
                 support_task=task.instructions,
             )
             result = await Runner.run(
-                sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
+                sdk_agent,
+                conversation_input(run_id, run.goal),
+                max_turns=_max_turns(),
+                run_config=_run_config(run_id, sdk_agent),
             )
             result = await _dry_run_approvals(run, sdk_agent, result)
             _record_usage(run_id, result, agent.model_id)
@@ -783,7 +909,9 @@ async def resume_run(run_id: str) -> None:
                     state.approve(item)
                 else:
                     state.reject(item)
-            result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+            result = await Runner.run(
+                sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
+            )
             result = await _dry_run_approvals(run, sdk_agent, result)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
@@ -826,7 +954,9 @@ async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> An
         state = result.to_state()
         for item in interruptions:
             state.reject(item, rejection_message=EVALUATION_DRY_RUN_MESSAGE)
-        result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+        result = await Runner.run(
+            sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run.id, sdk_agent)
+        )
     return result
 
 
