@@ -180,10 +180,10 @@ def is_citation(text: str) -> bool:
     label = _CITATION_LABEL.fullmatch(value)
     if label:
         return not _is_sentence(label.group("rest")) and not _OPERATION.search(label.group("rest"))
-    if _BRACKETED.fullmatch(value):
-        return all(_DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value))
     if _LINK_LINE.fullmatch(value):
         return True
+    if _BRACKETED.fullmatch(value):
+        return all(_DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value))
     return bool(_FILE_LINE.fullmatch(value)) and not _is_sentence(value)
 
 
@@ -233,16 +233,21 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     """回答の中の、主張ではない段落（原文 → 判定）。
 
     同じ原文の段落が、ある場所では主張ではなく、別の場所では主張なら、主張として扱う（外すかどうかは
-    原文で決めるため）。節（「確かめられていない点」・出典）は、次の見出しまで続く。
+    原文で決めるため）。節（「確かめられていない点」・出典）は、次の見出しか、空行の後の箇条書きでは
+    ない行まで続く。
     """
     kinds: dict[str, str] = {}
     claims: set[str] = set()
     section: str | None = None
     options = False
+    blank = False
     for line in answer.split("\n"):
         if not line.strip():
-            options = False
+            options, blank = False, True
             continue
+        if blank and not _BULLET.match(line.strip()):
+            section = None
+        blank = False
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])
