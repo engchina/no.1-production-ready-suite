@@ -14,7 +14,7 @@ from typing import cast
 
 from fastapi import Request
 
-from app.mcp.tools import build_rag_mcp_server
+from app.mcp.tools import MCP_OUTPUT_SCHEMA_VERSION, build_rag_mcp_server
 
 CONTRACT = Path(__file__).resolve().parents[3] / "platform/contracts/mcp/rag-tools.json"
 
@@ -35,3 +35,13 @@ def test_rag_mcp_tools_match_platform_contract() -> None:
         "MCP ツールの定義が契約と違います。"
         "意図した変更なら UPDATE_MCP_CONTRACT=1 で契約を更新してください。"
     )
+
+
+def test_rag_mcp_tool_outputs_have_schema_version() -> None:
+    """ツールの出力はすべて出力の形の版（schema_version）を持つ（handoff §10。#1276）。"""
+    server = build_rag_mcp_server(cast(Request, None))
+    for tool in server.tools.values():
+        schema = tool.descriptor()["outputSchema"]
+        version = schema["properties"].get("schema_version")
+        assert version is not None, tool.name
+        assert version["default"] == MCP_OUTPUT_SCHEMA_VERSION, tool.name

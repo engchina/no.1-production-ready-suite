@@ -67,10 +67,27 @@ class RagEvidenceRefIn(_ContractInput):
     chunk_id: str = Field(min_length=1, max_length=512)
 
 
+class RagValidateRequestIn(_ContractInput):
+    id: str = Field(min_length=1, max_length=64)
+    text: str = Field(default="", max_length=2000)
+    status: Literal["addressed", "partial", "missing", "unknown"]
+
+
+class RagValidateGuideIn(_ContractInput):
+    search_answer_profile_id: str = Field(min_length=1, max_length=128)
+    guide_id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(ge=1)
+    conditions: dict[str, str] | None = None
+
+
 class RagValidateAnswerIn(_ContractInput):
     query: str = Field(min_length=1, max_length=8000)
     answer: str = Field(min_length=1, max_length=20000)
     evidence: list[RagEvidenceRefIn] = Field(min_length=1, max_length=30)
+    # 決定的な検査の任意の入力（#1276）。
+    requests: list[RagValidateRequestIn] | None = Field(default=None, max_length=30)
+    gaps: list[str] | None = Field(default=None, max_length=30)
+    guide: RagValidateGuideIn | None = None
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):
@@ -131,8 +148,12 @@ _EVIDENCE = {
     "rerank_score": None,
 }
 
+# RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
+RAG_OUTPUT_SCHEMA_VERSION = 2
+
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "answer": "根拠付き回答",
         "trace_id": "rag-trace-1",
         "guardrail_warnings": [],
@@ -147,6 +168,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "evidence_omitted": 0,
     },
     "rag_read_source": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "evidence_id": "chunk-1",
         "document_id": "doc-1",
         "chunk_id": "chunk-1",
@@ -164,6 +186,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "parent_truncated": False,
     },
     "rag_list_search_answer_profiles": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "search_answer_profiles": [
             {
                 "id": "bv-sales",
@@ -172,9 +195,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "status": "ACTIVE",
                 "knowledge_base_count": 2,
             }
-        ]
+        ],
     },
     "rag_lookup_guides": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "guides": [
             {
                 "guide_id": "guide-1",
@@ -200,9 +224,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "approval_required": False,
                 "handoff_contact": "",
             }
-        ]
+        ],
     },
     "rag_retrieve_evidence": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "trace_id": "rag-trace-2",
         "guardrail_warnings": [],
         "evidence": [{**_EVIDENCE, "used_in_answer": False}],
@@ -210,6 +235,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
     },
     # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
     "rag_validate_answer": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "valid": True,
         "status": "completed",
         "counts": {"supported": 1, "unsupported": 0, "contradicted": 0},
@@ -224,6 +250,9 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "missing_evidence": [],
         "stale_evidence": [],
         "evidence_truncated": False,
+        "checks": [],
+        "findings": [],
+        "guide_revision": None,
     },
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
