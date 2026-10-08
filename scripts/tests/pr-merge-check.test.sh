@@ -29,7 +29,14 @@ cat >"${work}/bin/gh" <<'EOF'
 echo "$*" >>"${FAKE_LOG}"
 case "$1 $2" in
   "pr view")
-    if [[ "$*" == *statusCheckRollup* ]]; then printf '%s\n' "${FAKE_CI_OK}"; else echo "${FAKE_PR_INFO}"; fi
+    if [[ "$*" == *statusCheckRollup* ]]; then
+      printf '%s\n' "${FAKE_CI_OK}"
+    elif [[ "$*" == *"-q .headRefOid"* ]]; then
+      # 判定の後の今の head（FAKE_HEAD_NOW が無ければ最初と同じ）。
+      echo "${FAKE_HEAD_NOW:-${FAKE_PR_INFO##* }}"
+    else
+      echo "${FAKE_PR_INFO}"
+    fi
     ;;
   "run list")
     # FAKE_RUNS は「;」区切りの応答の列。呼ばれるたびに次へ進み、最後の応答を繰り返す。
@@ -101,6 +108,17 @@ FAKE_FILES="rag/a.py" FAKE_CI_OK="FAILURE" FAKE_RUNS="11 2026-10-01T04:00:00Z co
   run_case "CI OK が成功ではない" ci-failed 1 1
 FAKE_FILES="rag/a.py" FAKE_CI_OK="" FAKE_RUNS="11 2026-10-01T04:00:00Z completed success" \
   run_case "CI OK が無い" ci-failed 1 1
+if grep -q "新しい commit" "${work}/stderr"; then
+  echo "FAIL head が変わっていないのに新しい commit の案内を出した"
+  failures=$((failures + 1))
+fi
+FAKE_FILES="rag/a.py" FAKE_CI_OK="" FAKE_HEAD_NOW="def456" \
+  FAKE_RUNS="11 2026-10-01T04:00:00Z completed cancelled" \
+  run_case "待つ間に push されて run が取り消された" ci-failed 1 1
+grep -q "新しい commit（def456）" "${work}/stderr" || {
+  echo "FAIL 新しい commit の案内が無い"
+  failures=$((failures + 1))
+}
 
 FAKE_FILES="nl2sql/a.py" FAKE_RUNS="11 2026-10-01T01:00:00Z in_progress " \
   run_case "--no-wait で実行中" ci-pending 4 --no-wait 1

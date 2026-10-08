@@ -96,6 +96,10 @@ ci_ok="$(gh pr view "${pr}" --json statusCheckRollup \
   -q '.statusCheckRollup[] | select(.name=="CI OK") | .conclusion' | sort -u | tr '\n' ' ')"
 if [ "${conclusion}" != "success" ] || [ "${ci_ok}" != "SUCCESS " ]; then
   log "CI OK: ${ci_ok:-無し}"
+  latest="$(gh pr view "${pr}" --json headRefOid -q .headRefOid)"
+  if [ "${latest}" != "${head_sha}" ]; then
+    log "待っている間に新しい commit（${latest:0:12}）が push されました。もう一度実行してください"
+  fi
   echo "ci-failed"
   exit 1
 fi
