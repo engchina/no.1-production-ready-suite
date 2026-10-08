@@ -325,8 +325,10 @@ def is_citation(text: str) -> bool:
         return not _is_sentence(label.group("rest")) and not _OPERATION.search(label.group("rest"))
     if _LINK_LINE.fullmatch(value):
         return True
-    if _BRACKETED.fullmatch(value):
-        return all(_DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value))
+    if _BRACKETED.fullmatch(value) and all(
+        _DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value)
+    ):
+        return True
     if _FILE_LINE.fullmatch(value) and not _is_sentence(value):
         return True
     return _is_reference_only(value)
