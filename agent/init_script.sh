@@ -4,6 +4,8 @@
 # ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成し、
 # 共通認証（PLATFORM_*）と Agent のシステムテーブル（AGENT_*）はアプリの CLI（agent_system_schema）が作成する（#751）。
 # ログインは共通認証（AGENT_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー。#215）。
+# 1 台の Compute に 3 製品を置く配備（#1316）では platform/deploy/suite-init.sh が PR_SUITE_MODE=true で呼ぶ。
+# そのときは Nginx の site を書かず（suite が 1 つだけ書く）、frontend を FRONTEND_BASE_PATH（/agent/）を base に build する。
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -23,7 +25,15 @@ BACKEND_DIR="${APP_REPO_DIR}/backend"
 FRONTEND_DIR="${APP_REPO_DIR}/frontend"
 DATA_DIR="${DATA_DIR:-/u01/data/production-ready-agent}"
 WALLET_DIR="${APP_ROOT}/wallet"
-PROPS_DIR="${APP_ROOT}/props"
+PROPS_DIR="${PROPS_DIR:-${APP_ROOT}/props}"
+# backend/.env の元（suite では製品ごとの <製品>.backend.env）。
+BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${PROPS_DIR}/backend.env}"
+# 1 台の Compute の配備（#1316）。true なら Nginx の site を書かない。
+PR_SUITE_MODE="${PR_SUITE_MODE:-false}"
+# frontend の base（Vite の base・React Router の basename）。製品ごとの Compute では /。
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/}"
+# true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
+PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8020"
 # checkpoint repository は process 内に状態を持つため、gunicorn は 1 worker に固定する。
@@ -124,13 +134,27 @@ install_system_packages() {
 
 # Node.js は NodeSource の apt repository を優先し、失敗時は公式 tarball（SHASUMS256 検証付き）へ fallback する。
 # Agent の CI と同じ Node.js 22 系を使う。
+# 1 台の Compute（#1316）では RAG / NL2SQL が先に Node.js 24 を入れる。Agent は 22 以上なら使う
+# （入れ替えると先に build した製品と版がずれる）。製品ごとの Compute では今までどおり 22 系だけ。
+node_version_accepted() {
+  local version="$1"
+  local major
+  major="$(printf '%s\n' "${version}" | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')"
+  [ -n "${major}" ] || return 1
+  if [ "${PR_SUITE_MODE}" = "true" ]; then
+    [ "${major}" -ge "${NODE_MAJOR}" ]
+  else
+    [ "${major}" -eq "${NODE_MAJOR}" ]
+  fi
+}
+
 install_nodejs() {
   local installed_version
   local npm_version
 
   if command -v node >/dev/null 2>&1; then
     installed_version="$(node --version)" || return 1
-    if printf '%s\n' "${installed_version}" | grep -q "^v${NODE_MAJOR}\." && command -v npm >/dev/null 2>&1; then
+    if command -v npm >/dev/null 2>&1 && node_version_accepted "${installed_version}"; then
       npm_version="$(npm --version)" || return 1
       log "Node.js ${installed_version} with npm ${npm_version} is already installed."
       return
@@ -357,7 +381,7 @@ install_runtime_env() {
   else
     install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"
   fi
-  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/backend.env" "${BACKEND_DIR}/.env"
+  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${BACKEND_ENV_SOURCE}" "${BACKEND_DIR}/.env"
 
   rm -rf "${WALLET_DIR}"
   install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
@@ -402,13 +426,17 @@ initialize_database_schema() {
 }
 
 build_frontend() {
-  log "Building shared UI package."
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then
+    log "Shared UI package was already built by another product."
+  else
+    log "Building shared UI package."
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  fi
 
-  log "Building Agent frontend."
+  log "Building Agent frontend (base ${FRONTEND_BASE_PATH})."
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm ci"
-  run_as_app_user_in_dir "${FRONTEND_DIR}" "npm run build"
+  run_as_app_user_in_dir "${FRONTEND_DIR}" "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build"
 }
 
 configure_systemd() {
@@ -566,9 +594,13 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  configure_nginx
+  if [ "${PR_SUITE_MODE}" = "true" ]; then
+    log "Skipping the Agent Nginx site; platform/deploy/suite-init.sh writes the single site (#1316)."
+  else
+    configure_nginx
+  fi
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>/ and log in as system_admin (PLATFORM_ADMIN_LOGIN_USER_PASSWORD)."
+  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH} and log in as system_admin (PLATFORM_ADMIN_LOGIN_USER_PASSWORD)."
 }
 
 if [ "${AGENT_INIT_TEST_MODE:-false}" != "true" ]; then

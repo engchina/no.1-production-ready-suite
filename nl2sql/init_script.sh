@@ -20,7 +20,17 @@ DATA_DIR="/u01/data/production-ready-nl2sql"
 LEGACY_DATA_DIR="/u01/production-ready-nl2sql"
 WALLET_DIR="${APP_ROOT}/wallet"
 BACKEND_HOST="127.0.0.1"
-BACKEND_PORT="8000"
+# ローカルの開発（uv run uvicorn --port 8010）と同じ port。1 台の Compute に RAG（8000）・Agent（8020）と
+# 一緒に置くため、以前の 8000 から変えた（#1316）。
+BACKEND_PORT="8010"
+# backend/.env の元（suite では製品ごとの <製品>.backend.env）。
+BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${APP_ROOT}/props/backend.env}"
+# 1 台の Compute の配備（#1316。platform/deploy/suite-init.sh が true で呼ぶ）。true なら Nginx の site を書かない。
+PR_SUITE_MODE="${PR_SUITE_MODE:-false}"
+# frontend の base（Vite の base・React Router の basename）。製品ごとの Compute では /。
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/}"
+# true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
+PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
 APPLICATION_PORT="${APPLICATION_PORT:-$(tr -d '[:space:]' < "${APP_ROOT}/props/application_port.txt" 2>/dev/null || printf '80')}"
 NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
 NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
@@ -405,7 +415,7 @@ prepare_filesystem() {
 
 install_runtime_env() {
   log "Installing backend environment, platform environment and wallet."
-  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${APP_ROOT}/props/backend.env" "${BACKEND_DIR}/.env"
+  install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${BACKEND_ENV_SOURCE}" "${BACKEND_DIR}/.env"
   # 3製品共通の設定（PLATFORM_*）は platform の共通 .env（#211）。システム設定画面の保存先でもあるため、
   # 既にあれば上書きしない（画面で保存した値を消さない）。
   if [ -e "${PLATFORM_REPO_DIR}/.env" ]; then
@@ -463,13 +473,17 @@ initialize_database_schema() {
 }
 
 build_frontend() {
-  log "Building shared UI package."
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then
+    log "Shared UI package was already built by another product."
+  else
+    log "Building shared UI package."
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
+    run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
+  fi
 
-  log "Building NL2SQL frontend."
+  log "Building NL2SQL frontend (base ${FRONTEND_BASE_PATH})."
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm ci"
-  run_as_app_user_in_dir "${FRONTEND_DIR}" "npm run build"
+  run_as_app_user_in_dir "${FRONTEND_DIR}" "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build"
 }
 
 write_systemd_unit() {
@@ -666,9 +680,13 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  configure_nginx
+  if [ "${PR_SUITE_MODE}" = "true" ]; then
+    log "Skipping the NL2SQL Nginx site; platform/deploy/suite-init.sh writes the single site (#1316)."
+  else
+    configure_nginx
+  fi
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>/"
+  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH}"
 }
 
 if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then

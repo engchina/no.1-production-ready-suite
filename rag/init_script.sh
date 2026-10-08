@@ -11,6 +11,9 @@
 # 再配備・再起動でもその状態に戻す。初めて配備する unit は起動する。
 # ADB の DDL は持たない。RAG の system schema はアプリの CLI（app.rag.system_schema_cli）で適用する。
 # GPU の service（ASR）は扱わない。
+# 1 台の Compute に 3 製品を置く配備（#1316）では platform/deploy/suite-init.sh が PR_SUITE_MODE=true で呼ぶ。
+# そのときは Nginx の site を書かず（suite が 1 つだけ書く）、frontend を FRONTEND_BASE_PATH（/rag/）を base に build し、
+# プロセスは NL2SQL / Agent と同じユーザー（SERVICE_USER=ubuntu）で動かす（共通の platform/.env・Wallet を共有するため）。
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -45,7 +48,15 @@ DATA_DIR="${DATA_DIR:-/u01/data/production-ready-rag}"
 # サービス管理が起動 / 再起動の前に書く、マイクロサービスの実行用 env（backend の RAG_SERVICE_RUNTIME_ENV_FILE の既定値）。
 SERVICE_RUNTIME_ENV_FILE="${BACKEND_DIR}/service-runtime.env"
 WALLET_DIR="${APP_ROOT}/wallet"
-PROPS_DIR="${APP_ROOT}/props"
+PROPS_DIR="${PROPS_DIR:-${APP_ROOT}/props}"
+# backend/.env の元（suite では製品ごとの <製品>.backend.env）。
+BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${PROPS_DIR}/backend.env}"
+# 1 台の Compute の配備（#1316）。true なら Nginx の site を書かない。
+PR_SUITE_MODE="${PR_SUITE_MODE:-false}"
+# frontend の base（Vite の base・React Router の basename）。製品ごとの Compute では /。
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/}"
+# true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
+PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8000"
 APPLICATION_PORT="${APPLICATION_PORT:-$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/application_port.txt" || printf '80')}"
@@ -598,7 +609,7 @@ install_runtime_env() {
   chmod 0600 "${PLATFORM_ENV_FILE}"
 
   log "Installing backend environment."
-  install -m 0600 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${PROPS_DIR}/backend.env" "${env_file}"
+  install -m 0600 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${BACKEND_ENV_SOURCE}" "${env_file}"
 
   current="$(sed -n 's/^RAG_AUDIT_CONTEXT_HASH_SALT=//p' "${env_file}" | tail -n 1)"
   if [ -z "${current}" ]; then
@@ -662,13 +673,17 @@ initialize_database_schema() {
 
 # frontend は file:../../platform/packages/ui に依存するため、platform を先に build する。
 build_frontend() {
-  log "Building shared UI package."
-  run_as_app_user_in_dir "${PLATFORM_DIR}" "npm ci"
-  run_as_app_user_in_dir "${PLATFORM_DIR}" "npm run build"
+  if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then
+    log "Shared UI package was already built by another product."
+  else
+    log "Building shared UI package."
+    run_as_app_user_in_dir "${PLATFORM_DIR}" "npm ci"
+    run_as_app_user_in_dir "${PLATFORM_DIR}" "npm run build"
+  fi
 
-  log "Building RAG frontend."
+  log "Building RAG frontend (base ${FRONTEND_BASE_PATH})."
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm ci"
-  run_as_app_user_in_dir "${FRONTEND_DIR}" "npm run build"
+  run_as_app_user_in_dir "${FRONTEND_DIR}" "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build"
   test -f "${FRONTEND_DIR}/dist/index.html"
 }
 
@@ -969,9 +984,13 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  configure_nginx
+  if [ "${PR_SUITE_MODE}" = "true" ]; then
+    log "Skipping the RAG Nginx site; platform/deploy/suite-init.sh writes the single site (#1316)."
+  else
+    configure_nginx
+  fi
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>/ and log in with the login user."
+  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH} and log in with the login user."
   log "Then configure OCI authentication and models in System settings."
 }
 
