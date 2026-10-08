@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import {
+  expectedControlHeight,
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
@@ -833,7 +834,7 @@ for (const viewport of [
     await expect(page.getByTestId("answer-route-badge")).toHaveText("Agent で続けることを提案");
     // 操作部品の高さは入力方式で決まる（タッチは 44px）。
     const box = await link.boundingBox();
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(viewport.width < 640 ? 44 : 32);
+    expect(Math.round(box?.height ?? 0)).toBe(await expectedControlHeight(page, "sm"));
     await expectNoPageOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-escalation-${viewport.name}.png`), fullPage: true });
 
@@ -891,7 +892,8 @@ test("答えられた回答では Agent のチャットへの導線を出さな�
   await page.getByRole("button", { name: "新しい会話" }).click();
   await page.getByRole("textbox", { name: "質問", exact: true }).fill("経費の上限は？");
   await page.getByRole("button", { name: "送信" }).click();
-  await expect(page.getByTestId("answer-text")).toContainText("上限は 10 万円です。");
+  await expect(page.getByText("上限は 10 万円です。")).toBeVisible();
+  await expect(page.getByRole("region", { name: "回答の実行記録" })).toBeVisible();
   await expect(page.getByTestId("chat-agent-escalation")).toHaveCount(0);
   await expect(page.getByTestId("answer-route-badge")).toHaveCount(0);
   // 提案の無い回答では Agent の URL を取りに行かない。

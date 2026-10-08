@@ -19,6 +19,7 @@
 | handoff | 要求 | 状態 | Issue / PR | 推奨案・判断 |
 |---|---|---|---|---|
 | §5 | RAG と Agent で同じ根拠の形・回答の契約 | 済（一部確認待ち） | #1219、#1235、#1238 | 根拠（evidence）と回答の構造（AnswerEnvelope）を RAG が持ち、Agent は MCP で同じものを使う |
+| §5 | 固定の RAG と Agent の振り分け・理由の記録 | 確認待ち | #1283 | 経路は利用者が製品で選ぶ（自動の LLM の振り分けは置かない）。RAG は回答の対応（outcome）を経路の理由として記録し、現場の実データの確認が要る回答（`needs_environment_data`）だけ「Agent のチャットで続ける」を出す。Agent は入口と理由を Run に残す（下の「振り分けのモデル」） |
 | §6.1 | 設定の責任と解決の順 | 済 | 既存 | 文書レシピ / KB / プロファイルの 3 層は変えない。業務ガイドはプロファイルの知識 |
 | §6.2 | 業務ガイド（SupportGuide） | 確認待ち | #1237（PR #1239） | 宣言的な内容だけ（分岐は equals / in / unknown）。式・script は受け付けない。条件に選択肢の言い換え（value_aliases）を持てる（比較で聞き過ぎが分かったため） |
 | §6.3 | 下書き・検証・公開・履歴・ロールバック・楽観ロック | 確認待ち | #1237（PR #1239） | 頭（下書き）＋公開の版の 2 表。回答は公開の版だけ。回答の記録にガイドの版を残す（#1238） |
@@ -46,6 +47,29 @@
 | §14.2 | 層ごとの指標 | 済 | #1226、#1231 | 対応・手順・危険な回答・条件の 4 指標と分類ごとの内訳 |
 | §14.3 | 対照の実験（A〜E） | 一部 | #1249、#1259 | A（ガイドなし）と C（ガイドあり）を同じ評価セットで比べた（対応の正しさ 0.93 → 1.00。結果は answer-baseline-2026-10.md）。B（資料処理の改善の前後）・D / E（Agent・現場の道具）は未実施 |
 | §16 P5 | 現場の参照の道具 | 見送り（任意の段） | — | Agent の既存の NL2SQL の skill（構造化データの照会）を使う。業務の記録の道具は配備先ごと |
+
+## 振り分けのモデル（#1283。handoff §5 / §13）
+
+- **経路は利用者が製品で選ぶ。** RAG のチャット・RAG 検索は固定の RAG、Agent のチャットは Agent。質問ごとにモデルで
+  経路を選ぶ自動の振り分け（LLM router）は置かない。モデルの呼び出しと待ち時間が毎回増えるうえ、Agent の効果
+  （評価の経路 D）がまだ測れていないため。
+- **RAG は経路の理由を決定的に記録する。** 回答の診断（`diagnostics.answer.route`。回答の記録に残る）に、経路
+  （`path=rag`）・理由（回答の対応 = AnswerEnvelope の `outcome`）・手がかり（`signals` = `handoff_reasons`）・
+  Agent で続ける提案（`escalation_suggested` / `escalation_reason`）を入れる（`rag/backend/app/rag/answer_route.py`。
+  モデルは呼ばない）。Prometheus の `rag_answer_routes_total{reason, escalation_suggested}` は理由と提案の有無だけを数える。
+- **Agent で続けることを提案するのは、固定の RAG では完了できないと対応が示すときだけ。** 今は `needs_environment_data`
+  （回答の確定に現場の実データの確認が要る）だけ。Agent は許可された読み取りの道具（NL2SQL など）で確かめられる。
+  確認の質問（`needs_clarification`）は RAG のチャットで答えれば続けられ、人への引き継ぎ（`needs_human`）と資料の
+  不足（`insufficient_evidence`）は Agent でも埋められないので提案しない。条件付きの回答（`conditional`）も提案しない
+  （手順は答えられている）。
+- **画面**: RAG のチャットは、提案のある回答で、Agent の画面の URL（`RAG_AGENT_APP_URL`。未設定なら何も出さない）が
+  あるときだけ「Agent のチャットで続ける」（`ButtonLink`）を出す。押すと
+  `<Agent>/chat?question=<質問>&entry=rag_escalation&reason=<理由>` を同じタブで開く（会話の流れから補った質問が
+  あればそれを渡す。2,000 文字まで）。Agent のチャットは質問を新しい会話の入力欄に入れるだけで、自動では送らない。
+  送ると Run の `metadata` に `entry=rag_escalation` と `entry_reason` を残す（backend が値を検証する）。
+- **見直す条件**: Agent の経路 D の評価で、固定の RAG より Agent が正しく答えられる問いの分類（例: 条件付きの回答の
+  うち未回答の要求があるもの）が分かったら、その分類を提案の対象に足す。自動で Agent へ回す振り分けは、提案から
+  Agent で続けた Run（`entry=rag_escalation`）の結果を見てから決める。
 
 ## 計測と評価で分かったこと（2026-10-07）
 
