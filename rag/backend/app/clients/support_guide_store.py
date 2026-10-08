@@ -296,21 +296,22 @@ class SupportGuideStore:
         guide_id: str,
         content: SupportGuideContent,
         *,
-        base_revision: int | None,
+        base_revision: int,
         user: str | None,
         rollback_from: int | None = None,
     ) -> int:
         """内容を新しい公開の版にし、その版の番号を返す。
 
-        通常の公開は ``base_revision``（公開する下書きの版）を照合する。ロールバックは古い版の内容を
-        新しい版として公開し、下書きもその内容に置き換える（``base_revision`` は照合しない）。
+        ``base_revision``（読み込んだ下書きの版）を照合し、違えば ``SupportGuideConflictError``。
+        ロールバックは古い版の内容を新しい版として公開し、下書きもその内容に置き換える（ほかの人の
+        保存した下書きを黙って失わないよう、ロールバックも照合する。#1278）。
         """
         sha = content_sha256(content)
         content_json = _json_bind(content.model_dump(mode="json"))
 
         def operation(connection: OracleConnectionProtocol) -> int:
             current = self._lock(connection, search_answer_profile_id, guide_id)
-            if base_revision is not None and current != base_revision:
+            if current != base_revision:
                 raise SupportGuideConflictError(current)
             row = _fetch_one(
                 connection,
