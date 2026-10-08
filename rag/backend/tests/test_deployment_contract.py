@@ -29,11 +29,14 @@ def test_frontend_build_uses_reproducible_install() -> None:
         '"${PLATFORM_DIR}" "npm ci"',
         '"${PLATFORM_DIR}" "npm run build"',
         '"${FRONTEND_DIR}" "npm ci"',
-        '"${FRONTEND_DIR}" "npm run build"',
+        # 1 台の Compute（#1316）では /rag/ を base に build する（単独の配備は /）。
+        '"${FRONTEND_DIR}" "FRONTEND_BASE_PATH=\'${FRONTEND_BASE_PATH}\' npm run build"',
     ]
     positions = [build.index(step) for step in steps]
     assert positions == sorted(positions)
     assert "npm install" not in _init_script()
+    # suite で先の製品が共有 UI を build したときだけ build し直さない。
+    assert 'if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then' in build
 
 
 def test_frontend_is_served_as_static_assets_by_nginx() -> None:
