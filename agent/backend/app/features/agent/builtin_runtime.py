@@ -65,6 +65,7 @@ from app.features.agent.answer_validation import (
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
     combine_validations,
+    connection_check_inputs,
     run_evidence_groups,
     usable_result,
     validation_content,
@@ -990,7 +991,13 @@ async def _validate_with_connection(
     step_id, result = await _ToolRecorder(run.id).call(
         ToolCall(
             name=definition.name,
-            arguments={"query": run.goal[:MAX_QUERY_CHARS], "answer": answer, "evidence": refs},
+            arguments={
+                "query": run.goal[:MAX_QUERY_CHARS],
+                "answer": answer,
+                "evidence": refs,
+                # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
+                **connection_check_inputs(run.steps, evidence_tool),
+            },
             trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),
         definition=definition,

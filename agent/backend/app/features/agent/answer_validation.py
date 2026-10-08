@@ -57,6 +57,16 @@ STATUS_SKIPPED = "skipped"
 # 確かめられなかった（検証の失敗・RAG の根拠を使わなかった回答）。回答に注記を足す。
 STATUS_UNVALIDATED = "unvalidated"
 
+# 決定的な検査の入力（`requests`・`gaps`・`guide.conditions`）の件数の上限（契約の maxItems）。
+MAX_CHECK_ITEMS = 30
+RAG_LOOKUP_GUIDES = "rag_lookup_guides"
+REQUEST_STATUSES = frozenset({"addressed", "partial", "missing", "unknown"})
+# 回答に手順を書く業務ガイドの判断（手順・影響範囲を確かめる）。
+GUIDE_DECISIONS = frozenset({"answer", "branch"})
+# 本文を載せない決定的な検査の error（手順・影響範囲・業務ガイドの版。
+# 確かめていない手順を出さない）。
+WITHHOLDING_CHECKS = frozenset({"guide", "guide_steps", "impact"})
+
 REASON_NO_RAG_EVIDENCE = "no_rag_evidence"
 REASON_VALIDATOR_UNAVAILABLE = "validator_unavailable"
 REASON_EMPTY_ANSWER = "empty_answer"
@@ -70,6 +80,9 @@ NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資�
 UNVERIFIED_HEADING = "確かめられていない点"
 WITHHELD_INTRO = "根拠で確かめられなかった次の内容は、回答に載せていません。"
 NOTHING_CONFIRMED = "根拠で確かめられた内容はありませんでした。"
+GUIDE_WITHHELD = (
+    "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
+)
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。
 BLOCKING_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
@@ -137,6 +150,117 @@ def run_evidence_groups(steps: list[RunStep]) -> list[tuple[str, list[JsonObject
         for tool_name, refs, _seen in groups.values()
         if refs
     ]
+
+
+def _text_value(value: object, limit: int) -> str | None:
+    return value[:limit] if isinstance(value, str) and value else None
+
+
+def _completed_outputs(steps: list[RunStep], prefix: str, tool: str) -> list[RunStep]:
+    """接続 `prefix` の、成功した `tool` の step（新しい順）。"""
+    found: list[RunStep] = []
+    for step in reversed(steps):
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        if not isinstance(result.output, dict) or _connection_prefix(call.name) != prefix:
+            continue
+        if mcp_base_tool_name(call.name) == tool:
+            found.append(step)
+    return found
+
+
+def _guide_input(guide: object, profile_id: object, conditions: object) -> JsonObject | None:
+    """`rag_validate_answer` の `guide`（手順を示す判断の業務ガイドで、プロファイルが分かるとき）。
+
+    確かめる質問・担当への引き継ぎの判断（`clarify` / `handoff`）では回答に手順が無いので渡さない
+    （影響範囲・承認の検査が、手順を書かない回答を誤って止めるため）。
+    """
+    if not isinstance(guide, dict) or guide.get("decision", "answer") not in GUIDE_DECISIONS:
+        return None
+    guide_id = _text_value(guide.get("guide_id"), 64)
+    revision = guide.get("revision")
+    profile = _text_value(profile_id, 128)
+    if guide_id is None or profile is None or not isinstance(revision, int) or revision < 1:
+        return None
+    known: dict[str, str] = {}
+    if isinstance(conditions, dict):
+        known.update(
+            {
+                key: value
+                for key, value in conditions.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+        )
+    for item in guide.get("known_conditions") or []:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            value = item.get("value")
+            if isinstance(value, str) and value:
+                known[item["id"]] = value
+    content: JsonObject = {
+        "search_answer_profile_id": profile,
+        "guide_id": guide_id,
+        "revision": revision,
+    }
+    if known:
+        content["conditions"] = dict(list(known.items())[:MAX_CHECK_ITEMS])
+    return content
+
+
+def connection_check_inputs(steps: list[RunStep], evidence_tool: str) -> JsonObject:
+    """`rag_validate_answer` の決定的な検査の入力（`requests`・`gaps`・`guide`。#1276・#1277）。
+
+    根拠を返した接続の最も新しい `rag_search` の要求ごとの充足・不足・業務ガイドを渡す。
+    `rag_search` が業務ガイドを返さなければ、同じ接続の最も新しい `rag_lookup_guides` の最上位の
+    業務ガイドを使う。分からない項目は渡さない（その検査は RAG が行わない）。
+    """
+    prefix = _connection_prefix(evidence_tool)
+    if prefix is None:
+        return {}
+    inputs: JsonObject = {}
+    guide: JsonObject | None = None
+    searches = _completed_outputs(steps, prefix, RAG_SEARCH)
+    if searches:
+        step = searches[0]
+        assert step.tool_call is not None and step.tool_result is not None
+        output, arguments = step.tool_result.output or {}, step.tool_call.arguments
+        requests = [
+            {
+                "id": request_id,
+                "text": _text_value(item.get("text"), 2000) or "",
+                "status": item["status"],
+            }
+            for item in output.get("requests") or []
+            if isinstance(item, dict)
+            and (request_id := _text_value(item.get("id"), 64))
+            and item.get("status") in REQUEST_STATUSES
+        ]
+        if requests:
+            inputs["requests"] = requests[:MAX_CHECK_ITEMS]
+        gaps = [gap for item in output.get("gaps") or [] if (gap := _text_value(item, 2000))]
+        if gaps:
+            inputs["gaps"] = gaps[:MAX_CHECK_ITEMS]
+        provenance = output.get("provenance")
+        profile = (
+            provenance.get("search_answer_profile_id") if isinstance(provenance, dict) else None
+        ) or arguments.get("search_answer_profile_id")
+        guide = _guide_input(output.get("guide"), profile, arguments.get("conditions"))
+    if guide is None:
+        lookups = _completed_outputs(steps, prefix, RAG_LOOKUP_GUIDES)
+        if lookups:
+            step = lookups[0]
+            assert step.tool_call is not None and step.tool_result is not None
+            guides = (step.tool_result.output or {}).get("guides")
+            arguments = step.tool_call.arguments
+            if isinstance(guides, list) and guides:
+                guide = _guide_input(
+                    guides[0],
+                    arguments.get("search_answer_profile_id"),
+                    arguments.get("conditions"),
+                )
+    if guide is not None:
+        inputs["guide"] = guide
+    return inputs
 
 
 def validation_content(
@@ -235,14 +359,33 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
     missing = [item for result in results for item in result.get("missing_evidence") or []]
     statuses = {result.get("status") for result in results}
     status = next(item for item in _USABLE_RESULT_STATUSES if item in statuses)
+    # 決定的な検査の指摘は接続ごとに同じ回答を確かめたものなので、重複を除いてすべて残す。
+    findings: list[JsonObject] = []
+    seen_findings: set[tuple[str, str, str]] = set()
+    for result in results:
+        for item in result.get("findings") or []:
+            if not isinstance(item, dict):
+                continue
+            finding_key = (
+                str(item.get("check")),
+                str(item.get("code")),
+                str(item.get("message")),
+            )
+            if finding_key not in seen_findings:
+                seen_findings.add(finding_key)
+                findings.append(item)
+    checks = sorted({str(item) for result in results for item in result.get("checks") or []})
     valid = (
         status == "completed"
         and not stale
         and not missing
         and not any(claim.get("status") in BLOCKING_CLAIM_STATUSES for claim in claims)
+        and not error_findings({"findings": findings})
         and counts.get("supported", 0) > 0
     )
     return {
+        "checks": checks,
+        "findings": findings,
         "valid": valid,
         "status": status,
         "counts": counts,
@@ -300,16 +443,21 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
+def error_findings(result: JsonObject) -> list[JsonObject]:
+    """決定的な検査の error の指摘（valid にしない。warning は確かめたい点なので出さない）。"""
+    return [
+        item
+        for item in result.get("findings") or []
+        if isinstance(item, dict) and item.get("severity") == "error"
+    ]
+
+
 def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     lines = [_claim_line(item) for item in claims[:_MAX_LISTED_CLAIMS]]
     if len(claims) > _MAX_LISTED_CLAIMS:
         lines.append(f"- ほか {len(claims) - _MAX_LISTED_CLAIMS} 件の主張")
     # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
-    findings = [
-        item
-        for item in result.get("findings") or []
-        if isinstance(item, dict) and item.get("severity") == "error" and item.get("message")
-    ]
+    findings = [item for item in error_findings(result) if item.get("message")]
     lines += [
         f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
         for item in findings[:_MAX_LISTED_FINDINGS]
@@ -330,19 +478,24 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
 def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     """判定（判定として使える結果）から、利用者に見せる回答と、外した内容の記録を返す。
 
-    valid（または確かめる主張が無い）ならそのまま。そうでなければ、根拠で確かめられなかった段落を
-    外し、外した段落と理由・古い版や見つからない根拠を「確かめられていない点」として足す。
-    根拠を 1 件も読めなかった（`no_evidence`）ときや、段落の位置を決められないときは本文を載せない。
+    valid（または確かめる主張も error の指摘も無い）ならそのまま。そうでなければ、根拠で確かめられ
+    なかった段落を外し、外した段落と理由・決定的な検査の error・古い版や見つからない根拠を
+    「確かめられていない点」として足す。根拠を 1 件も読めなかった（`no_evidence`）とき、段落の位置を
+    決められないとき、手順・影響範囲・業務ガイドの版の error があるとき（どの段落の手順が誤りかを
+    決められず、確かめていない手順を出さない）は本文を載せない。要求の error（答えていない要求を
+    示していない）は本文を残し、不足として示す。
     """
-    if result.get("valid") is True or result.get("status") == "no_claims":
-        return answer, {"claims": 0, "all": False}
+    errors = error_findings(result)
+    if result.get("valid") is True or (result.get("status") == "no_claims" and not errors):
+        return answer, {"claims": 0, "findings": 0, "all": False}
     blocking = [
         item
         for item in result.get("claims") or []
         if isinstance(item, dict) and item.get("status") in BLOCKING_CLAIM_STATUSES
     ]
+    guide_errors = any(item.get("check") in WITHHOLDING_CHECKS for item in errors)
     body: str | None
-    if result.get("status") == "no_evidence":
+    if result.get("status") == "no_evidence" or guide_errors:
         body = None
     elif blocking:
         quotes = {str(item.get("answer_quote") or "") for item in blocking}
@@ -350,10 +503,10 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     else:
         body = answer.rstrip()
     lines = _notice_lines(result, blocking)
-    if blocking or body is None:
+    if blocking or (body is None and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)
-    text = body or NOTHING_CONFIRMED
-    withheld = {"claims": len(blocking), "all": not body}
+    text = body or (GUIDE_WITHHELD if guide_errors else NOTHING_CONFIRMED)
+    withheld = {"claims": len(blocking), "findings": len(errors), "all": not body}
     return f"{text}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
 
 

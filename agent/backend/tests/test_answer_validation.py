@@ -22,7 +22,12 @@ from pr_backend_core.mcp import McpServer
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_validation import merge_results, withhold_paragraphs
+from app.features.agent.answer_validation import (
+    connection_check_inputs,
+    merge_results,
+    publish_answer,
+    withhold_paragraphs,
+)
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
@@ -30,12 +35,14 @@ from app.features.agent.runtime import (
     RunCreateRequest,
     RunState,
     RunStatus,
+    RunStep,
+    StepStatus,
     run_answer_text,
     run_support_task,
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
-from app.features.agent.tools import ToolPolicy
+from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
 from app.settings import Settings, get_settings
 
 SKILL_ID = "test1246-skill"
@@ -132,6 +139,8 @@ def test_valid_answer_is_kept_and_the_result_is_saved(
         "query": "契約の更新の期限は？",
         "answer": ANSWER,
         "evidence": [{"document_id": "doc-1", "chunk_id": "chunk-1"}],
+        # rag_search の要求ごとの充足（決定的な検査。#1276）。
+        "requests": [{"id": "Q1", "text": "契約条項", "status": "addressed"}],
     }
     assert call["claims"]["sub"] == USER_UUID
     assert call["claims"]["run_id"] == run.id
@@ -205,7 +214,7 @@ def test_failed_verdict_withholds_unsupported_steps_with_a_notice(
     assert len(lines) == 4
     content = _validation(run)
     assert (content["status"], content["valid"]) == ("completed", False)
-    assert content["withheld"] == {"claims": 2, "all": False}
+    assert content["withheld"] == {"claims": 2, "findings": 0, "all": False}
 
 
 def test_verdict_without_readable_evidence_withholds_the_whole_answer(
@@ -228,7 +237,7 @@ def test_verdict_without_readable_evidence_withholds_the_whole_answer(
         "根拠で確かめられなかった次の内容は、回答に載せていません。\n"
         "- 根拠の 1 件は見つかりません（削除された・参照できない）。"
     )
-    assert _validation(run)["withheld"] == {"claims": 0, "all": True}
+    assert _validation(run)["withheld"] == {"claims": 0, "findings": 0, "all": True}
 
 
 def test_invalid_answer_shows_deterministic_findings(
@@ -583,6 +592,150 @@ def test_merge_keeps_contradictions_and_strictest_claim_of_a_connection() -> Non
         ("B。", "contradicted"),
     ]
     assert merged["valid"] is False
+
+
+GUIDE_STEP_ERROR = {
+    "check": "guide_steps",
+    "code": "step_order",
+    "severity": "error",
+    "message": "手順「申し出る」を、先に行う手順「契約を開く」より前に書いています。",
+    "step_id": "s2",
+    "related_step_id": "s1",
+}
+
+
+def test_search_guide_and_requests_are_checked_and_step_errors_withhold_the_answer(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """rag_search の要求・不足・業務ガイドを渡し、手順の error は本文を載せない（#1276・#1277）。"""
+    search = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+    search["requests"] = [{"id": "Q1", "text": "更新の期限", "status": "partial"}]
+    search["gaps"] = ["更新の手数料"]
+    search["guide"] = {
+        "guide_id": "guide-1",
+        "revision": 3,
+        "title": "契約の更新",
+        "decision": "answer",
+        "known_conditions": [{"id": "kind", "label": "契約の種類", "value": "年間"}],
+        "unknown_conditions": [],
+    }
+    search["provenance"] = {"search_answer_profile_id": "bv-sales"}
+    mcp.outputs["rag_search"] = search
+    output = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
+    output.update(
+        valid=False,
+        checks=["requests", "guide", "guide_steps", "impact"],
+        findings=[GUIDE_STEP_ERROR],
+        guide_revision=3,
+    )
+    mcp.outputs["rag_validate_answer"] = output
+
+    run, _ = _searched_run(monkeypatch)
+
+    [call] = mcp.calls_of("rag_validate_answer")
+    assert call["arguments"]["requests"] == [
+        {"id": "Q1", "text": "更新の期限", "status": "partial"}
+    ]
+    assert call["arguments"]["gaps"] == ["更新の手数料"]
+    assert call["arguments"]["guide"] == {
+        "search_answer_profile_id": "bv-sales",
+        "guide_id": "guide-1",
+        "revision": 3,
+        "conditions": {"kind": "年間"},
+    }
+    # どの段落の手順が誤りかを決められないので、確かめていない手順を出さない（handoff §12）。
+    assert run_answer_text(run) == (
+        "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
+        "\n\n**確かめられていない点**\n\n"
+        "- 手順「申し出る」を、先に行う手順「契約を開く」より前に書いています。"
+    )
+    assert _validation(run)["withheld"] == {"claims": 0, "findings": 1, "all": True}
+
+
+def _step(name: str, arguments: dict[str, Any], output: dict[str, Any]) -> RunStep:
+    return RunStep(
+        run_id="run-1",
+        status=StepStatus.COMPLETED,
+        tool_call=ToolCall(name=name, arguments=arguments),
+        tool_result=ToolResult(name=name, success=True, output=output),
+    )
+
+
+def test_lookup_guide_is_used_only_when_it_gives_steps() -> None:
+    """rag_search が業務ガイドを返さなければ、同じ接続の rag_lookup_guides の最上位を使う。"""
+    lookup = deepcopy(DEFAULT_OUTPUTS["rag_lookup_guides"])
+    lookup["guides"][0]["decision"] = "branch"
+    steps = [
+        _step(
+            "rag__rag_lookup_guides",
+            {"query": "q", "search_answer_profile_id": "bv-sales", "conditions": {"kind": "月額"}},
+            lookup,
+        ),
+        # 別の接続の業務ガイドは使わない。
+        _step("rag2__rag_lookup_guides", {"search_answer_profile_id": "other"}, lookup),
+        _step("rag__rag_search", {"query": "q"}, deepcopy(DEFAULT_OUTPUTS["rag_search"])),
+    ]
+
+    inputs = connection_check_inputs(steps, "rag__rag_search")
+
+    assert inputs == {
+        "requests": [{"id": "Q1", "text": "契約条項", "status": "addressed"}],
+        "guide": {
+            "search_answer_profile_id": "bv-sales",
+            "guide_id": "guide-1",
+            "revision": 1,
+            "conditions": {"kind": "月額"},
+        },
+    }
+    # 確かめる質問の判断（手順を書かない回答）では、手順・影響範囲を確かめさせない。
+    lookup["guides"][0]["decision"] = "clarify"
+    assert "guide" not in connection_check_inputs(steps, "rag__rag_search")
+    # プロファイルが分からなければ業務ガイドは渡さない。
+    lookup["guides"][0]["decision"] = "answer"
+    steps[0].tool_call = ToolCall(name="rag__rag_lookup_guides", arguments={"query": "q"})
+    assert "guide" not in connection_check_inputs(steps, "rag__rag_search")
+
+
+def test_request_errors_keep_the_answer_and_merge_across_connections() -> None:
+    claim = {"answer_quote": ANSWER, "status": "supported", "reason": "根拠あり"}
+    request_error = {
+        "check": "requests",
+        "code": "request_missing",
+        "severity": "error",
+        "message": "要求「更新の手数料」に答えていません。不足も示していません。",
+    }
+    warning = {**GUIDE_STEP_ERROR, "code": "step_dependency_missing", "severity": "warning"}
+    first = {
+        "valid": False,
+        "status": "completed",
+        "claims": [claim],
+        "checks": ["requests"],
+        "findings": [request_error],
+    }
+    second = {
+        "valid": True,
+        "status": "completed",
+        "claims": [claim],
+        "checks": ["guide_steps", "requests"],
+        "findings": [request_error, warning],
+    }
+
+    merged = merge_results([first, second])
+
+    # 同じ指摘は 1 つにし、error があれば valid にしない。
+    assert merged["findings"] == [request_error, warning]
+    assert merged["checks"] == ["guide_steps", "requests"]
+    assert merged["valid"] is False
+    published, withheld = publish_answer(ANSWER, merged)
+    # 要求の error は本文を残し、不足として示す（warning は出さない）。
+    assert published == (
+        f"{ANSWER}\n\n**確かめられていない点**\n\n"
+        "- 要求「更新の手数料」に答えていません。不足も示していません。"
+    )
+    assert withheld == {"claims": 0, "findings": 1, "all": False}
+    # 確かめる主張が無くても error の指摘があれば示す。
+    no_claims = {"valid": False, "status": "no_claims", "claims": [], "findings": [request_error]}
+    assert publish_answer(ANSWER, no_claims)[0].endswith("不足も示していません。")
 
 
 def test_withhold_removes_only_the_listed_paragraphs() -> None:
