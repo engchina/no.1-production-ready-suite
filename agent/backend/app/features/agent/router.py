@@ -16,6 +16,7 @@ from asyncio import sleep, wait_for
 from collections.abc import Callable, Iterable, Mapping
 from csv import DictWriter
 from datetime import UTC, datetime
+from functools import partial
 from importlib import import_module
 from io import StringIO
 from pathlib import Path
@@ -172,6 +173,12 @@ from app.features.agent.plugins import (
     marketplace_registry,
     plugin_registry,
     reload_declared_plugins,
+)
+from app.features.agent.rag_figures import (
+    RAG_EVIDENCE_KIND,
+    RunFigureUrlData,
+    RunFigureUrlError,
+    issue_run_figure_url,
 )
 from app.features.agent.run_facts import fact_from_run
 from app.features.agent.runtime import (
@@ -2716,6 +2723,53 @@ async def get_run_artifact(
         return ApiResponse(data=runtime_repository.get_artifact(run_id, artifact_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
+
+
+@router.get("/runs/{run_id}/figure-url", response_model=ApiResponse[RunFigureUrlData])
+async def get_run_figure_url(
+    run_id: str,
+    request: Request,
+    response: Response,
+    document_id: Annotated[str, Query(min_length=1, max_length=128)],
+    chunk_id: Annotated[str, Query(min_length=1, max_length=512)],
+    _: None = Depends(require_viewer),
+) -> ApiResponse[RunFigureUrlData]:
+    """Run の RAG の図の根拠を開く短命の URL（#1311）。
+
+    画面を見ている利用者として RAG に作らせる（Run の利用者の権限は借りない）。URL は保存せず、
+    期限（5 分）が切れたら画面が取り直す。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    _require_agent_access(request, run.agent_id)
+    viewer = _run_creator_user_uuid(request)
+    if not viewer:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    artifacts = [
+        runtime_repository.get_artifact(run_id, artifact.id)
+        if artifact.content_ref is not None
+        else artifact
+        for artifact in run.artifacts
+        if artifact.kind == RAG_EVIDENCE_KIND
+    ]
+    try:
+        data = await run_in_threadpool(
+            partial(
+                issue_run_figure_url,
+                run,
+                artifacts,
+                document_id=document_id,
+                chunk_id=chunk_id,
+                viewer_user_uuid=viewer,
+            )
+        )
+    except RunFigureUrlError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from None
+    # URL はトークンを含むので、ブラウザ・中継の cache に残さない。
+    response.headers["Cache-Control"] = "private, no-store"
+    return ApiResponse(data=data)
 
 
 @router.get("/runs/{run_id}/events")

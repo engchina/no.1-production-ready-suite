@@ -139,6 +139,8 @@ REQUIRED_BACKEND_ENV_LINES = {
         # RAG / NL2SQL の MCP は、配備した製品の Compute の private IP だけを入れる（#233）。
         'AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}\n',
         'AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}\n',
+        # 画面（ブラウザ）から RAG の図の根拠を開く起点（#1311）。public IP（無い subnet では private IP）。
+        'AGENT_EXTERNAL_RAG_PUBLIC_URL=${lookup(local.product_browser_urls, "rag", "")}\n',
     ],
 }
 # 全製品の Compute に置く共通 .env（platform/.env、PLATFORM_*。#211）に必ず書く値。
