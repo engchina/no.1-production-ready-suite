@@ -3097,10 +3097,11 @@ export const api = {
     request<SupportGuideRevision>(
       `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/revisions/${revision}`,
     ),
-  rollbackSupportGuide: (id: string, guideId: string, revision: number) =>
+  // 下書きを戻す版の内容で置き換えるので、読み込んだ下書きの版を照合する（違えば 409。#1278）。
+  rollbackSupportGuide: (id: string, guideId: string, revision: number, baseRevision: number) =>
     request<SupportGuideDetail>(
       `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/rollback`,
-      jsonBody({ revision }),
+      jsonBody({ revision, base_revision: baseRevision }),
     ),
   setSupportGuideArchived: (id: string, guideId: string, archived: boolean) =>
     request<SupportGuideDetail>(
