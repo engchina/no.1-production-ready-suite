@@ -278,6 +278,12 @@ class SupportGuideRollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     revision: int = Field(ge=1, description="戻す公開の版。新しい版として公開する。")
+    base_revision: int = Field(
+        ge=1,
+        description=(
+            "読み込んだときの draft_revision（下書きを戻す版の内容で置き換えるため照合する）。"
+        ),
+    )
 
 
 class SupportGuideValidationData(BaseModel):
