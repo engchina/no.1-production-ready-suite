@@ -53,3 +53,32 @@ test("サイドナビのシステム設定に外観と接続がある", async ({
   await page.goto("/settings/appearance");
   await expect(page.getByRole("link", { name: "外観と接続" })).toHaveAttribute("href", "/settings/appearance");
 });
+
+// HTTPS の証明書（#1316）: 1 台の Compute の Nginx が /platform/ca.crt で CA の証明書を配る。製品は /<製品>/ の下でも
+// サイトの root の /platform/ca.crt を見る。ローカルの開発（Vite）は配っていないので説明だけを出す。
+for (const theme of ["ライト", "ダーク"] as const) {
+  test(`外観と接続の HTTPS の証明書（${theme}）`, async ({ page }) => {
+    await page.goto("/settings/appearance");
+    await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: theme }).click();
+    await expect(page.locator("html")).toHaveClass(theme === "ダーク" ? /dark/ : /^(?!.*\bdark\b).*$/);
+
+    const card = page.getByTestId("appearance-ca-certificate");
+    await expect(card.getByText("HTTPS の証明書", { exact: true })).toBeVisible();
+    await expect(card.getByText("この環境では HTTPS の自己署名の証明書を使っていません。")).toBeVisible();
+    await expect(card.getByRole("link", { name: "CA の証明書をダウンロード" })).toHaveCount(0);
+
+    await page.route("**/platform/ca.crt", (route) =>
+      route.fulfill({ status: 200, headers: { "Content-Type": "application/x-x509-ca-cert" }, body: "" }),
+    );
+    await page.reload();
+    await expect(card.getByRole("link", { name: "CA の証明書をダウンロード" })).toHaveAttribute("href", "/platform/ca.crt");
+    await card.getByText("端末への取り込み方").click();
+    for (const os of ["Windows", "macOS", "iPhone / iPad", "Android", "Firefox"]) {
+      await expect(card.getByText(os, { exact: true })).toBeVisible();
+    }
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+}
