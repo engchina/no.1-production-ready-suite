@@ -1150,7 +1150,7 @@ jobs:
 
   # ---------------------------------------------------------------- terraform
 
-  # OCI Resource Manager の統合 stack（#217）。ADB 1つ＋選んだ製品ごとの Compute。
+  # OCI Resource Manager の統合 stack（#217）。ADB 1つ＋選んだ製品をすべて入れる 1 台の Compute（#1316）。
   # 契約検証は各製品の init_script.sh・Settings と、自前の Dockerfile・compose が無いこと（Agent の第三者 Runtime の
   # compose だけ。#356）も確かめるため、どの製品の変更でも実行する。
   # 実テナンシーへの配備確認は手動で行う。
@@ -1198,6 +1198,18 @@ jobs:
 
       - name: Verify stack contract
         run: python scripts/verify_stack_contract.py /tmp/production-ready-suite-terraform-stack.zip
+
+      # 1 台の Compute の配備（platform/deploy。#1316）: suite-init の振る舞い、自作の CA と IP の証明書（openssl）、
+      # Nginx の site（prefix・SSE・MCP・login の上限・/ → /agent/・HTTPS on / off）を隔離した Nginx で検証する。
+      - name: Test single-Compute deployment (platform/deploy)
+        working-directory: .
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx openssl
+          bash -n platform/deploy/suite-init.sh platform/deploy/suite-nginx.sh platform/deploy/suite-tls.sh
+          bash platform/deploy/tests/suite-tls.test.sh
+          bash platform/deploy/tests/suite-init.test.sh
+          bash platform/deploy/tests/suite-nginx.test.sh
 
   # ---------------------------------------------------------------- 集約
 

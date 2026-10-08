@@ -352,8 +352,14 @@ variable "adb_is_mtls_connection_required" {
   default     = true
 }
 
+variable "instance_display_name" {
+  description = "Display name of the Compute instance that runs every selected product."
+  type        = string
+  default     = "PRODUCTION_READY_SUITE"
+}
+
 variable "instance_shape" {
-  description = "Shape of every Compute instance."
+  description = "Shape of the Compute instance that runs every selected product."
   type        = string
   default     = "VM.Standard.E5.Flex"
 
@@ -363,8 +369,44 @@ variable "instance_shape" {
   }
 }
 
+# 選んだ製品は 1 台の Compute に入れる（#1316）。既定は以前の製品ごとの既定の合計
+# （OCPU: RAG 4 + NL2SQL 2 + Agent 2、メモリ: 32 + 16 + 16 GB）。boot volume は OS・Node.js・uv の Python を
+# 共有するため、合計（200 + 100 + 100 GB）より小さい 300 GB にする。
+variable "instance_flex_shape_ocpus" {
+  description = "OCPUs of the Compute instance. The default is the total of the previous per-product defaults (RAG 4, NL2SQL 2, Agent 2)."
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.instance_flex_shape_ocpus > 0
+    error_message = "instance_flex_shape_ocpus must be greater than 0."
+  }
+}
+
+variable "instance_flex_shape_memory" {
+  description = "Memory in GB of the Compute instance. The default is the total of the previous per-product defaults (RAG 32, NL2SQL 16, Agent 16)."
+  type        = number
+  default     = 64
+
+  validation {
+    condition     = var.instance_flex_shape_memory > 0
+    error_message = "instance_flex_shape_memory must be greater than 0."
+  }
+}
+
+variable "instance_boot_volume_size" {
+  description = "Boot volume size in GB of the Compute instance. The per-service Python environments and models of the RAG parsers are large."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.instance_boot_volume_size >= 50 && var.instance_boot_volume_size <= 32768
+    error_message = "instance_boot_volume_size must be between 50 and 32768 GB."
+  }
+}
+
 variable "instance_boot_volume_vpus" {
-  description = "Boot volume VPUs/GB of every Compute instance."
+  description = "Boot volume VPUs/GB of the Compute instance."
   type        = number
   default     = 10
 
@@ -375,13 +417,13 @@ variable "instance_boot_volume_vpus" {
 }
 
 variable "instance_image_source_id" {
-  description = "Ubuntu image OCID of every Compute instance."
+  description = "Ubuntu image OCID of the Compute instance."
   type        = string
   default     = "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
 }
 
 variable "subnet_ai_subnet_id" {
-  description = "Subnet OCID of every Compute instance."
+  description = "Subnet OCID of the Compute instance."
   type        = string
   default     = ""
 }
@@ -392,15 +434,13 @@ variable "ssh_authorized_keys" {
   default     = ""
 }
 
-variable "application_port" {
-  description = "TCP port exposed by host Nginx and the instance firewall of every Compute instance."
-  type        = number
-  default     = 80
-
-  validation {
-    condition     = floor(var.application_port) == var.application_port && var.application_port >= 1 && var.application_port <= 65535
-    error_message = "application_port must be an integer between 1 and 65535."
-  }
+# HTTPS（#1316）。on なら Nginx が 443 で TLS 1.2 / 1.3 を受け、80 は 301 で https へ転送する。
+# 証明書は Compute の中で作る自作の Root CA と、公開 IP・private IP の証明書。port と証明書の発行者は変数にしない
+# （platform/deploy/suite-tls.sh の固定値）。on のとき共通 .env の PLATFORM_AUTH_COOKIE_SECURE を true にする。
+variable "https_enabled" {
+  description = "Serve the products over HTTPS on port 443 with a private root CA and an IP address certificate generated on the Compute instance (HTTP on port 80 redirects to HTTPS). When false, the products are served over HTTP on port 80."
+  type        = bool
+  default     = true
 }
 
 variable "application_git_url" {
@@ -415,7 +455,7 @@ variable "application_git_url" {
 }
 
 variable "application_git_ref" {
-  description = "Git branch or tag of the Production Ready suite deployed to every Compute instance."
+  description = "Git branch or tag of the Production Ready suite deployed to the Compute instance."
   type        = string
   default     = "main"
 
@@ -426,73 +466,28 @@ variable "application_git_ref" {
 }
 
 # ---------------------------------------------------------------- 配備する製品
-# 製品ごとに Compute を1台ずつ作る。最低1つは選ぶ（compute.tf の locals と adb.tf の precondition で検証する）。
-# ADB と Wallet は1つだけ作り、選んだ製品すべての Compute で共有する。
+# 選んだ製品は 1 台の Compute に入れる（#1316）。最低1つは選ぶ（adb.tf の precondition で検証する）。
+# ADB と Wallet は1つだけ作り、選んだ製品すべてで共有する。
 
 variable "deploy_rag" {
-  description = "Deploy Production Ready RAG on its own Compute instance."
+  description = "Deploy Production Ready RAG (served under /rag/) on the shared Compute instance."
   type        = bool
   default     = true
 }
 
 variable "deploy_nl2sql" {
-  description = "Deploy Production Ready NL2SQL on its own Compute instance."
+  description = "Deploy Production Ready NL2SQL (served under /nl2sql/) on the shared Compute instance."
   type        = bool
   default     = true
 }
 
 variable "deploy_agent" {
-  description = "Deploy the Production Ready Agent Control Plane on its own Compute instance."
+  description = "Deploy the Production Ready Agent Control Plane (served under /agent/; / redirects to it) on the shared Compute instance."
   type        = bool
   default     = true
 }
 
 # ---------------------------------------------------------------- RAG
-
-variable "rag_instance_display_name" {
-  description = "Display name of the RAG Compute instance."
-  type        = string
-  default     = "RAG_INSTANCE"
-}
-
-variable "rag_instance_flex_shape_ocpus" {
-  description = "OCPUs of the RAG Compute instance. The CPU document parsers need more CPU than the other products."
-  type        = number
-  default     = 4
-
-  validation {
-    condition     = var.rag_instance_flex_shape_ocpus > 0
-    error_message = "rag_instance_flex_shape_ocpus must be greater than 0."
-  }
-}
-
-variable "rag_instance_flex_shape_memory" {
-  description = "Memory in GB of the RAG Compute instance."
-  type        = number
-  default     = 32
-
-  validation {
-    condition     = var.rag_instance_flex_shape_memory > 0
-    error_message = "rag_instance_flex_shape_memory must be greater than 0."
-  }
-}
-
-variable "rag_instance_boot_volume_size" {
-  description = "Boot volume size in GB of the RAG Compute instance. The per-service Python environments and models of the parsers are large."
-  type        = number
-  default     = 200
-
-  validation {
-    condition     = var.rag_instance_boot_volume_size >= 50 && var.rag_instance_boot_volume_size <= 32768
-    error_message = "rag_instance_boot_volume_size must be between 50 and 32768 GB."
-  }
-}
-
-variable "rag_app_auth_cookie_secure" {
-  description = "Send the RAG login session cookies only over HTTPS (PLATFORM_AUTH_COOKIE_SECURE in the RAG Compute platform/.env). Keep false while the application is served over plain HTTP."
-  type        = bool
-  default     = false
-}
 
 # 文書解析（parser）は CPU のマイクロサービスだけを配備する。parser-docling（既定の解析エンジン。
 # RAG_PARSER_ADAPTER_BACKEND=docling。PDF と画像）は常に配備し、ここでは任意の parser だけを選ぶ。
@@ -514,47 +509,8 @@ variable "rag_enable_oci_cloud_parsers" {
 
 # ---------------------------------------------------------------- NL2SQL
 
-variable "nl2sql_instance_display_name" {
-  description = "Display name of the NL2SQL Compute instance."
-  type        = string
-  default     = "NL2SQL_INSTANCE"
-}
-
-variable "nl2sql_instance_flex_shape_ocpus" {
-  description = "OCPUs of the NL2SQL Compute instance."
-  type        = number
-  default     = 2
-
-  validation {
-    condition     = var.nl2sql_instance_flex_shape_ocpus > 0
-    error_message = "nl2sql_instance_flex_shape_ocpus must be greater than 0."
-  }
-}
-
-variable "nl2sql_instance_flex_shape_memory" {
-  description = "Memory in GB of the NL2SQL Compute instance."
-  type        = number
-  default     = 16
-
-  validation {
-    condition     = var.nl2sql_instance_flex_shape_memory > 0
-    error_message = "nl2sql_instance_flex_shape_memory must be greater than 0."
-  }
-}
-
-variable "nl2sql_instance_boot_volume_size" {
-  description = "Boot volume size in GB of the NL2SQL Compute instance."
-  type        = number
-  default     = 100
-
-  validation {
-    condition     = var.nl2sql_instance_boot_volume_size >= 50 && var.nl2sql_instance_boot_volume_size <= 32768
-    error_message = "nl2sql_instance_boot_volume_size must be between 50 and 32768 GB."
-  }
-}
-
 variable "nl2sql_app_environment" {
-  description = "NL2SQL application environment (NL2SQL_ENVIRONMENT). Direct HTTP deployments use local with NL2SQL_DEBUG=false; production requires nl2sql_app_auth_cookie_secure=true (PLATFORM_AUTH_COOKIE_SECURE)."
+  description = "NL2SQL application environment (NL2SQL_ENVIRONMENT). HTTP deployments use local with NL2SQL_DEBUG=false; staging and production require https_enabled=true (PLATFORM_AUTH_COOKIE_SECURE=true)."
   type        = string
   default     = "local"
 
@@ -562,12 +518,6 @@ variable "nl2sql_app_environment" {
     condition     = contains(["local", "staging", "production"], var.nl2sql_app_environment)
     error_message = "nl2sql_app_environment must be local, staging, or production."
   }
-}
-
-variable "nl2sql_app_auth_cookie_secure" {
-  description = "Set true when NL2SQL is served through HTTPS."
-  type        = bool
-  default     = false
 }
 
 variable "app_admin_login_user_id" {
@@ -632,51 +582,6 @@ variable "nl2sql_oracle_deepsec_data_user_password" {
 }
 
 # ---------------------------------------------------------------- Agent
-
-variable "agent_instance_display_name" {
-  description = "Display name of the Agent Control Plane Compute instance."
-  type        = string
-  default     = "AGENT_INSTANCE"
-}
-
-variable "agent_instance_flex_shape_ocpus" {
-  description = "OCPUs of the Agent Control Plane Compute instance."
-  type        = number
-  default     = 2
-
-  validation {
-    condition     = var.agent_instance_flex_shape_ocpus > 0
-    error_message = "agent_instance_flex_shape_ocpus must be greater than 0."
-  }
-}
-
-variable "agent_instance_flex_shape_memory" {
-  description = "Memory in GB of the Agent Control Plane Compute instance."
-  type        = number
-  default     = 16
-
-  validation {
-    condition     = var.agent_instance_flex_shape_memory > 0
-    error_message = "agent_instance_flex_shape_memory must be greater than 0."
-  }
-}
-
-variable "agent_instance_boot_volume_size" {
-  description = "Boot volume size in GB of the Agent Control Plane Compute instance."
-  type        = number
-  default     = 100
-
-  validation {
-    condition     = var.agent_instance_boot_volume_size >= 50 && var.agent_instance_boot_volume_size <= 32768
-    error_message = "agent_instance_boot_volume_size must be between 50 and 32768 GB."
-  }
-}
-
-variable "agent_app_auth_cookie_secure" {
-  description = "Send the Agent login session cookies only over HTTPS (PLATFORM_AUTH_COOKIE_SECURE in the Agent Compute platform/.env). Keep false while the application is served over plain HTTP."
-  type        = bool
-  default     = false
-}
 
 variable "agent_runtime_repository_backend" {
   description = "Oracle repository for Agent runs, business agents and screen-edited definitions (AGENT_RUNTIME_REPOSITORY_BACKEND). The tables are created by the Agent system tables (init_script.sh runs agent_system_schema --initialize); the application does not run DDL."
