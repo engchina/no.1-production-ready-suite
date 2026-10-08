@@ -36,7 +36,9 @@ SECTION_PATH_SEPARATOR = " > "
 # 参照の表記の直前を遡る文字数の上限(手がかりの語から前へ)。
 _LOOKBACK_CHARS = 80
 
-type ReferenceKind = Literal["chapter", "section", "jsection", "article", "appendix", "title", "document"]
+type ReferenceKind = Literal[
+    "chapter", "section", "jsection", "article", "appendix", "title", "document"
+]
 
 _KANJI_DIGITS = {
     "〇": 0,
@@ -143,9 +145,7 @@ _HEAD_APPENDIX = re.compile(
     rf"^({_APPENDIX_WORDS}|appendix|annex)\s*(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
     re.IGNORECASE,
 )
-_HEAD_EN = re.compile(
-    r"^(chapter|section|sec\.|§|article|clause)\s*(\d+(?:\.\d+)*)", re.IGNORECASE
-)
+_HEAD_EN = re.compile(r"^(chapter|section|sec\.|§|article|clause)\s*(\d+(?:\.\d+)*)", re.IGNORECASE)
 # 見出しの番号の部分(題名の鍵を作るときに外す)。
 _HEAD_NUMBERING = re.compile(
     rf"^(?:第\s*{_NUM}\s*[章節条](?:\s*第\s*{_NUM}\s*[節項])?"
@@ -548,13 +548,18 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
         citing = split_section_path(metadata.get("section_path"))
         targets: list[ReferenceTarget] = []
         for spec in specs:
-            if spec.document_title and document_title:
-                if same_document_title(spec.document_title, document_title):
-                    if spec.kind == "document":
-                        continue
-                    spec = replace(spec, document_title=None)
+            if (
+                spec.document_title
+                and document_title
+                and same_document_title(spec.document_title, document_title)
+            ):
+                if spec.kind == "document":
+                    continue
+                spec = replace(spec, document_title=None)
             if spec.document_title:
-                targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title))
+                targets.append(
+                    ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title)
+                )
                 continue
             if spec.kind == "document":
                 continue

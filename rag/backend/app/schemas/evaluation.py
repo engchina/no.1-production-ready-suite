@@ -320,7 +320,8 @@ class EvaluationRagOverrides(BaseModel):
     """評価 experiment ごとに一時適用する非 secret の回答設定(#591)。
 
     回答エンジンの全体の既定(質問拡張戦略・回答生成フロー・近傍 child 数・rerank)と、検索の
-    RRF 定数・同じ group から足す child の上限・ベクトル検索の target accuracy を上書きする。
+    RRF 定数・同じ group から足す child の上限・交差参照で足す chunk(#1280)・ベクトル検索の
+    target accuracy を上書きする。
     削除したキー(query_expansion_* / context_window_chars など)は受け付けない。
     """
 
@@ -332,6 +333,8 @@ class EvaluationRagOverrides(BaseModel):
     rerank_enabled: bool | None = None
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
     context_group_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    reference_expansion_enabled: bool | None = None
+    reference_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
 
 

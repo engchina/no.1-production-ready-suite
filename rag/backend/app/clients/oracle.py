@@ -723,6 +723,112 @@ class OracleClient:
         )
         return [_retrieved_chunk_from_row(row) for row in rows]
 
+    async def retrieval_reference_chunks(
+        self,
+        filters: dict[str, str],
+        *,
+        document_id: str,
+        section_path: str,
+        chunk_set_id: str | None = None,
+        limit: int,
+    ) -> list[RetrievedChunk]:
+        """交差参照の参照先の節(``section_path`` とその下の節)の chunk を読み順に返す(#1280)。
+
+        見え方は検索と同じ条件(tenant・利用できるナレッジベース・有効な chunk_set)。
+        ``chunk_set_id`` を渡すと、その版(参照元と同じレシピの出力)だけを読む。
+        chunk_set ごとにまとめて並べるので、先頭の chunk_set の chunk から順に返る。
+        """
+        scoped = {**filters, "document_id": document_id}
+        if chunk_set_id:
+            scoped["chunk_set_id"] = chunk_set_id
+        where_sql, binds = _oracle_retrieval_where(scoped)
+        prefix = f"{section_path} > "
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT * FROM (
+                SELECT
+                    c.document_id,
+                    c.chunk_id,
+                    c.chunk_text,
+                    c.metadata_json,
+                    c.chunk_index,
+                    c.chunk_set_id,
+                    d.file_name,
+                    d.category_name,
+                    d.superseded_by_document_id,
+                    0 AS score
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND (
+                      JSON_VALUE(c.metadata_json, '$.section_path') = :reference_section_path
+                      OR SUBSTR(
+                          JSON_VALUE(c.metadata_json, '$.section_path'),
+                          1,
+                          :reference_prefix_length
+                      ) = :reference_section_prefix
+                  )
+                ORDER BY c.chunk_set_id, c.chunk_index, c.chunk_id
+            ) WHERE ROWNUM <= :reference_limit
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                "reference_section_path": section_path,
+                "reference_section_prefix": prefix,
+                "reference_prefix_length": len(prefix),
+                "reference_limit": max(1, int(limit)),
+            },
+        )
+        return [_retrieved_chunk_from_row(row) for row in rows]
+
+    async def retrieval_reference_documents(
+        self, filters: dict[str, str], *, title: str, limit: int
+    ) -> list[tuple[str, str]]:
+        """検索と同じ条件の文書のうち、文書名に ``title`` を含むものを(id, 文書名)で返す(#1280)。
+
+        ``title`` は ``cross_references.title_key`` の形(小文字・空白と区切りの記号を除く)で渡す。
+
+        他の文書への交差参照(「経費精算マニュアルの「権限」を参照」)の参照先の文書を、検索範囲
+        (ナレッジベース)の中だけから探す。旧版の文書は検索と同じく既定では含めない。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT * FROM (
+                SELECT d.document_id, d.file_name
+                FROM rag_documents d
+                WHERE INSTR(
+                    TRANSLATE(LOWER(d.file_name), :reference_strip_from, 'x'), :reference_title
+                ) > 0
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunks c
+                      WHERE c.document_id = d.document_id
+                        AND {where_sql}
+                  )
+                ORDER BY LENGTH(d.file_name), d.document_id
+            ) WHERE ROWNUM <= :reference_limit
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                # 文書名の空白・区切りの記号を除いて比べる(title は title_key で同じ形にしたもの)。
+                "reference_title": title,
+                "reference_strip_from": "x" + _REFERENCE_TITLE_NOISE_CHARS,
+                "reference_limit": max(1, int(limit)),
+            },
+        )
+        return [
+            (str(row["document_id"]), str(row["file_name"]))
+            for row in rows
+            if row.get("document_id") and row.get("file_name")
+        ]
+
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
         """検索と同じ見え方の条件で 1 件の chunk を返す（MCP の ``rag_read_source``。#1219）。
 
@@ -10897,6 +11003,9 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         clauses.append(_NOT_SUPERSEDED_SQL)
     return " AND ".join(clauses), binds
 
+
+# 交差参照の文書名の照合で文書名から除く文字(title_key の NFKC 前の形も含む。#1280)。
+_REFERENCE_TITLE_NOISE_CHARS = " \u3000_-・:、。,.()[]「」『』【】（）＿－：，．"
 
 # 新しい版に置き換えた文書(旧版)を除く述語(#1248)。
 _NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"

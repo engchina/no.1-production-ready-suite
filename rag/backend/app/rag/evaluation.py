@@ -559,6 +559,8 @@ def evaluation_settings(
             "rerank_enabled": "rag_rerank_enabled",
             "rrf_k": "rag_rrf_k",
             "context_group_max_chunks": "rag_context_group_max_chunks",
+            "reference_expansion_enabled": "rag_reference_expansion_enabled",
+            "reference_expansion_max_chunks": "rag_reference_expansion_max_chunks",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
         }
         update.update(
