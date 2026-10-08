@@ -14,7 +14,8 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 |---|---|
 | `packages/rag_engine` | rag_poc の解析・分割・検索・回答の実装を、`entrypoints`（Gradio / HTTP）を除いてそのまま移したもの。package と import パスは `rag_engine`（#599）。backend と docling サービスが依存する。回帰テストは CI の `RAG / Engine` ジョブで実行する |
 | `services/parsers/docling` | rag_poc から移した Docling 解析（読み順・段組補正、表セル補修、図内 OCR の集約）。`parser_artifacts.layout_records` に LayoutRecord を保持する。Vision は行わない（#497） |
-| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。Docling は結果を `layout_records` の record にも書き戻す（#497） |
+| `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。`layout_records` の record がある文書（Docling・MinerU）は、その record を入力にし、結果を record にも書き戻す（#497・#1334） |
+| `backend/app/clients/mineru_layout.py` | MinerU の Middle JSON から、Docling と同じ形の LayoutRecord（`parser_artifacts.layout_records`）を作る（#1334。下の「MinerU の LayoutRecord」） |
 | `backend/app/rag/chunking_small_to_big.py` | チャンク戦略 `small_to_big`（画面の表示名は「親子階層（small-to-big）」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/answer_engine.py` | 回答フロー（rag_poc の回答フローを backend の検索・rerank で駆動。#594 から回答はこれだけ） |
 | `backend/app/rag/search_answer_profile_knowledge.py` | 検索・回答プロファイル単位の知識（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール） |
@@ -55,7 +56,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 ## 使い方（推奨の流れ）
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、文書のレシピで Vision（図・画像を AI で読み取る）を有効にする（Docling 以外の解析エンジンでも使える）。有効にすると、画像 1 枚ごとに Vision モデルの呼び出しと時間がかかる。
-2. **分割**：文書分割は既定で親子階層（`small_to_big`。#594 で既定にした）。親子の分割は Docling の解析結果（`parser_artifacts.layout_records`）を入力にする。解析結果が Docling でない文書（Unstructured・MinerU・dots.ocr・OCI の解析結果など）では、失敗させずに「構造認識」（`structure_aware`。chunk size・overlap・最小文字数は文書分割の設定値）で分割する（#300）。縮退したことは各 chunk の metadata（`chunk_strategy=structure_aware`、`chunk_strategy_requested=small_to_big`、`chunk_strategy_fallback_reason=layout_missing`）と取込の trace（`effective_chunk_strategy`）に残り、文書詳細の Chunk タブと分割プレビューに「構造認識で分割しました」と表示する。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直す。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
+2. **分割**：文書分割は既定で親子階層（`small_to_big`。#594 で既定にした）。親子の分割は Docling と MinerU の解析結果（`parser_artifacts.layout_records`）を入力にする（MinerU は #1334 から。PDF と画像のとき）。解析結果が Docling・MinerU でない文書（Unstructured・dots.ocr・OCI の解析結果など。MinerU でも Office の文書など頁の寸法の無い結果）では、失敗させずに「構造認識」（`structure_aware`。chunk size・overlap・最小文字数は文書分割の設定値）で分割する（#300）。縮退したことは各 chunk の metadata（`chunk_strategy=structure_aware`、`chunk_strategy_requested=small_to_big`、`chunk_strategy_fallback_reason=layout_missing`）と取込の trace（`effective_chunk_strategy`）に残り、文書詳細の Chunk タブと分割プレビューに「構造認識で分割しました」と表示する。親子で分割するには、文書解析を Docling か MinerU にして再解析し、Chunk を作り直す（#1334 より前に MinerU で解析した文書も、再解析すると親子で分割できる）。子・親の大きさは同じ画面の「戦略別パラメータ」で変えられる（下の設定一覧）。
 3. **確認**：文書詳細の抽出タブで、次を確認できる。
    - 要素の種別と bbox
    - 表のテキスト化
@@ -122,6 +123,19 @@ Docling 以外の解析エンジンの bbox は単位が違うため、Vision �
 | MinerU | ページに対して 0-1000 に正規化した座標（左上原点） | V1 API の Middle JSON（schema 2.0）の 0-1 の bbox を、backend（`app/clients/external_parser.py` の `mineru_middle_json_blocks`）が content list と同じ 0-1000 の整数にする（#1329）。1000 を超えれば不明。根拠は下の「座標系の根拠」（この repo の実サービスでは未確認。ai-foundations-lab の検証と一致。#512） |
 | OCI Enterprise AI の VLM 解析 | 0-1 または 0-100 | 構造化抽出の prompt の指定。100 を超えれば不明 |
 | 全ての解析エンジン | 値が全て 1 以下なら 0-1 | 画像ファイル全体の `source_image` の asset も含む |
+
+### MinerU の LayoutRecord（#1334）
+
+MinerU の解析（V1 API の Middle JSON 2.0）からは、要素（`mineru_middle_json_blocks`）に加えて、Docling と同じ形の LayoutRecord を `parser_artifacts.layout_records`（`version` / `pages` / `records`）に作る（`backend/app/clients/mineru_layout.py`）。親子階層の分割（rag_engine）は変えず、その入力の形にそろえる。
+
+- 座標: Docling と同じ `image_top_left` のページ画像の px。PDF は Middle JSON の `extensions.docvortex_layout.pages` の寸法（`width_pt` / `height_pt`。bbox と同じ向き）を 300 dpi（Docling サービスの既定の `RAG_ENGINE_RENDER_DPI`）の px にし、`pages` に `width` / `height`（px）と `pdf_width` / `pdf_height`（pt）を入れる。画像ファイルは元の画像の px（EXIF の向きを直した寸法）。Middle JSON の 0-1 の bbox にその寸法を掛ける。要素の bbox（0-1000）を上の表の換算でページ画像の px にした値と一致する（#512 の例でテストしている）。寸法の分からない頁や bbox の無い block（Office の文書など）がある文書は record を作らず、親子階層は構造認識へ縮退する。
+- 種類の対応（1 か所の表 `MINERU_LAYOUT_CATEGORIES`）: `doc_title` → `Title`、`paragraph_title` → `Section-header`、`text` / `ref_text` / `aside_text` → `Text`、`list` / `index` → `List-item`、`table` → `Table`（本文は `table_body` の HTML）、`image` / `chart` → `Picture`（本文を空にして Vision の対象にし、図の中の文字（`image_body` / `chart_body`）は同じ bbox の `picture_ocr_text`）、`*_caption` → `Caption`、`*_footnote` / `page_footnote` → `Footnote`、`equation` → `Formula`、`code` → `Text`（`raw_type=code`・`raw.code`）、`header` → `Page-header`、`footer` / `page_number` → `Page-footer`。表に無い種類は `Text` にし、`raw_type` に元の種類を残す。
+- 頁のヘッダー・フッター・頁番号は、要素（本文）には入れない（#1329 のまま）が、record にはする。分割が Docling と同じく頁の定型（毎頁の柱・著作権表示・頁番号）として本文から外し、頁番号を論理頁に使う。
+- 見出しの深さ: MinerU の `level`（`doc_title`=1、`paragraph_title`=2〜6）は `raw.mineru_level` に残すだけで、分割の見出しの深さには使わない。分割の深さは Docling と同じく本文の番号の形（「1.」「1.2」「第1章」など）から決めていて、尺度が違う（章 0・英字 6・丸数字 8）。
+- 頁をまたいで続く本文・表（Middle JSON の `continues_prev`）は、Docling と同じく頁ごとの別の record のままにし、`raw.continues_prev` に印を残す。分割は頁をまたいで同じ子・親にまとめる。
+- record の `id` は要素の `element_id`（`mineru-p{頁}-b{block の番号}`）と同じで、`raw` に MinerU の元の block の番号（`mineru_block_index`）・頁（`mineru_page_idx`）・種類（`mineru_type`）を残す。caption・footnote・図の中の文字は、親の id に `-caption{n}` / `-footnote{n}` / `-ocr` を付けた別の record にする。chunk の `source_parser` は `mineru_layout`（Docling は `docling_layout`）。
+- Vision は record を入力にし（Docling と同じ読み取り・切り出し）、結果を record に書き戻す。要素・asset は共通の抽出の変換で作ったものなので、ほかの解析エンジンと同じ形（図の本文を説明に置き換え、元の本文を `vision_source_text` に残す）でも書き戻し、構造認識など record を読まない分割方式でも説明を使う。読み取る前に説明の無かった図・表だけを書き戻す（読み取り済みの説明を元の本文として残したり、表の説明を二重に足したりしない）。
+- 実サービスの MinerU での確認は未実施（CI は MinerU 4.0 の公開の契約の形の固定の例で確かめる）。dots.ocr も頁ごとの種類と bbox を返すので同じ方法で record を作れる見込みだが、未確認（今回は MinerU だけ）。
 
 座標系の根拠（#502。ローカルに接続先がない MinerU と Dots.OCR は公式のソースで確認した）:
 
@@ -192,8 +206,8 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 
 - 保存済みの `hierarchical_parent_child`（`backend/.env` の `RAG_CHUNKING_STRATEGY`、文書・レシピの処理設定、KB の構築設定）は、読み込み時に `small_to_big` として扱う。子サイズ `chunk_child_size` / `RAG_CHUNK_CHILD_SIZE` は読まない。DB の移行は不要で、次に保存すると新しい値だけが残る（文書分割の設定を保存すると `.env` から `RAG_CHUNK_CHILD_SIZE` の行も消える）。
 - 親子階層で作った配信中の chunk はそのまま検索対象に残り、自動では作り直さない。レシピ一覧の「再処理が必要」は設定の revision で判定するため、読み替えだけでは表示しない（文書単位の処理設定の保存 API と、その応答の差分（drift）は #488 で削除した）。親子階層（small-to-big）で作り直すには、その文書の Chunk を再作成する。
-- 親子階層（small-to-big）は Docling の解析結果で親子に分割する。旧「親子階層」は Docling 以外の解析結果でも動いていたため、そうした文書の Chunk を作り直すと、失敗させずに構造認識で分割する（上の「使い方」2.。#300 より前は失敗していた）。親子で分割したい文書は、文書解析を Docling にして再解析する。
-- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は親子階層（small-to-big）として読み、後者は無視する）。Docling を使わない環境では、Chunk は構造認識で作られる。最初から構造認識として扱いたい場合は `RAG_CHUNKING_STRATEGY` を `structure_aware` へ変えておく。
+- 親子階層（small-to-big）は Docling と MinerU（#1334）の解析結果で親子に分割する。旧「親子階層」は Docling 以外の解析結果でも動いていたため、そうした文書の Chunk を作り直すと、失敗させずに構造認識で分割する（上の「使い方」2.。#300 より前は失敗していた）。親子で分割したい文書は、文書解析を Docling か MinerU にして再解析する。
+- 既存環境の更新手順：`backend/.env` の `RAG_CHUNKING_STRATEGY=hierarchical_parent_child` と `RAG_CHUNK_CHILD_SIZE` は、そのままでも起動する（前者は親子階層（small-to-big）として読み、後者は無視する）。Docling も MinerU も使わない環境では、Chunk は構造認識で作られる。最初から構造認識として扱いたい場合は `RAG_CHUNKING_STRATEGY` を `structure_aware` へ変えておく。
 
 ## rag_poc との差分
 

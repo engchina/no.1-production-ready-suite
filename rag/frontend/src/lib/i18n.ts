@@ -310,7 +310,7 @@ export const ja = {
     "章節→文→文字の順に固定長で分割(LangChain 風)",
   "settings.chunking.strategy.small_to_big": "親子階層（small-to-big）",
   "settings.chunking.strategy.small_to_big.description":
-    "Docling の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling の文書だけ。それ以外の文書は構造認識で分割します。既定）",
+    "Docling・MinerU の解析結果から見出し・表・図を保ったまま子を切り出して索引し、親の節を回答文脈に使う（文書解析が Docling か MinerU の PDF・画像だけ。それ以外の文書は構造認識で分割します。既定）",
   "settings.chunking.strategy.markdown_heading": "見出し単位",
   "settings.chunking.strategy.markdown_heading.description":
     "見出しを境界にまとめ、長大な章節だけ見出し内で再分割",
@@ -1786,7 +1786,7 @@ export const ja = {
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.smallToBigFallbackTitle": "構造認識で分割しました",
   "flow.chunks.smallToBigFallback":
-    "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling ではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
+    "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling・MinerU のレイアウトではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling か MinerU にして再解析し、Chunk を作り直してください。",
   "flow.chunks.loadError": "chunk を取得できません",
   "flow.chunks.loadErrorHint": "索引状態を確認して再読み込みしてください。",
   "flow.chunks.noElements": "element 未紐付け",

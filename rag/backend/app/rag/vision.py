@@ -11,8 +11,10 @@
 - 装飾画像(ロゴ・帯・小さなアイコン)は読み取らない。
 - prompt に bbox・周辺の record・表の既存 HTML などの metadata を入れる。
 
-Docling は ``parser_artifacts["layout_records"]`` の record をそのまま入力にし、結果を record にも
-書き戻す(親子階層（small-to-big）の分割と画面の「Vision の読み取り内容」がその record を読む)。
+``parser_artifacts["layout_records"]`` の record がある解析エンジン(Docling と MinerU。#1334)は、
+その record をそのまま入力にし、結果を record にも書き戻す(親子階層（small-to-big）の分割と画面の
+「Vision の読み取り内容」がその record を読む)。MinerU の要素・asset は共通の抽出の変換で作るので、
+record に加えて、ほかの解析エンジンと同じ形(図の本文を説明に置き換える)でも書き戻す。
 ほかの解析エンジンは、要素と図の asset の bbox をページ画像の px へそろえた LayoutRecord を作る。
 bbox の単位は解析エンジンごとに違い、確かでないものは切り出さずに warning を残す
 (``_bbox_scale`` の表)。画像の件数の上限は設けない。
@@ -29,7 +31,7 @@ import logging
 import mimetypes
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -62,6 +64,8 @@ logger = logging.getLogger(__name__)
 
 LAYOUT_ARTIFACT = "layout_records"
 DOCLING_ENGINE = "docling"
+# layout_records を作るが、要素・asset は共通の抽出の変換で作る解析エンジン(#1334)。
+LAYOUT_ADAPTER_ENGINES = frozenset({"mineru"})
 # Docling 以外のページ画像の解像度。Docling サービスの既定(RAG_ENGINE_RENDER_DPI=300)にそろえる。
 VISION_RENDER_DPI = 300
 # 図として読み取る asset の種類(source_image は画像ファイル全体を 1 枚の図として扱う)。
@@ -265,8 +269,10 @@ def read_figures_with_vision(
     from rag_engine.parsing.picture_descriptions import describe_layout_pictures
 
     suffix = _source_suffix(content_type, file_name)
-    docling = _docling_layout(extraction) is not None
-    engine = DOCLING_ENGINE if docling else (parser_backend.strip().casefold() or "parser")
+    layout_engine = _layout_engine(extraction)
+    has_layout = layout_engine is not None
+    engine = layout_engine or (parser_backend.strip().casefold() or "parser")
+    pending_ids: set[str] = set()
     if suffix is None:
         if not _has_vision_candidates(extraction):
             return extraction
@@ -280,7 +286,7 @@ def read_figures_with_vision(
         source_path = run_dir / f"input{suffix}"
         source_path.write_bytes(source_bytes)
         page_count = get_source_page_count(source_path)
-        if docling:
+        if has_layout:
             layout = _docling_records(extraction)
             pages_wanted = sorted(
                 {
@@ -290,7 +296,10 @@ def read_figures_with_vision(
                 }
             )
             if not pages_wanted:
-                return extraction
+                if engine == DOCLING_ENGINE:
+                    return extraction
+                return _with_bbox_missing(extraction, engine)
+            pending_ids = _pending_layout_target_ids(layout.records)
             pdf_path, pages = _render_docling_pages(
                 source_path, pages_wanted, run_dir, _docling_layout_pages(extraction)
             )
@@ -321,8 +330,10 @@ def read_figures_with_vision(
             prompt_template=prompt_template,
             cancel_check=cancel_check,
         )
-    if docling:
+    if has_layout and engine == DOCLING_ENGINE:
         updated = _write_back_docling(extraction, layout)
+    elif has_layout:
+        updated = _write_back_layout_adapter(extraction, layout, pending_ids)
     else:
         updated = _write_back_adapter(extraction, layout)
     return _apply_skips(updated, layout, engine=engine, stats=stats)
@@ -359,10 +370,27 @@ def _has_vision_candidates(extraction: StructuredExtraction) -> bool:
 
 
 def _docling_layout(extraction: StructuredExtraction) -> Mapping[str, Any] | None:
+    """``layout_records``(Docling・MinerU の LayoutRecord)。record が無ければ None。"""
     layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
     if isinstance(layout, Mapping) and layout.get("records"):
         return layout
     return None
+
+
+def _layout_engine(extraction: StructuredExtraction) -> str | None:
+    """layout_records の record の engine(``describe_layout_pictures`` が対象を選ぶ engine)。
+
+    record の engine は 1 つの解析エンジンの名前。``LAYOUT_ADAPTER_ENGINES`` に無ければ Docling
+    (Docling サービスの record)とみなし、Docling の読み取り・書き戻しを変えない。
+    """
+    layout = _docling_layout(extraction)
+    if layout is None:
+        return None
+    for record in layout.get("records") or []:
+        if isinstance(record, Mapping):
+            engine = str(record.get("engine") or "").strip().casefold()
+            return engine if engine in LAYOUT_ADAPTER_ENGINES else DOCLING_ENGINE
+    return DOCLING_ENGINE
 
 
 _LAYOUT_RECORD_FIELDS = frozenset(item.name for item in fields(LayoutRecord))
@@ -507,6 +535,76 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
             "parser_artifacts": artifacts,
         }
     )
+
+
+# --- Docling 以外の layout_records(MinerU。#1334)---------------------------------------------
+
+
+def _pending_layout_target_ids(records: Sequence[LayoutRecord]) -> set[str]:
+    """読み取る前に、まだ読み取っていない図と、表内画像の説明が無い表の record の id。
+
+    書き戻しをこの record だけにし、読み取り済みの図の本文(Vision の説明)を元の本文として
+    残したり、表の説明を二重に足したりしない。
+    """
+    return {
+        record.id
+        for record in records
+        if (
+            record.category == "Picture"
+            and record.raw_type == "picture"
+            and not record.text.strip()
+        )
+        or (record.category == "Table" and not str(record.raw.get("table_vision_text") or ""))
+    }
+
+
+def _write_back_layout_adapter(
+    extraction: StructuredExtraction, layout: _Layout, pending_ids: set[str]
+) -> StructuredExtraction:
+    """Vision の結果を layout_records の record と、要素・asset へ書き戻す(Docling 以外)。
+
+    record は Docling と同じく丸ごと書き戻す(親子階層の分割が読む)。要素・asset は共通の抽出の
+    変換で作ったもので、record と ``element_id`` で対応する。ほかの解析エンジンと同じ形で書き戻し、
+    構造認識など record を読まない分割方式でも Vision の説明を使えるようにする。
+    """
+    element_index_by_id = {
+        element.element_id: index
+        for index, element in enumerate(extraction.elements)
+        if element.element_id
+    }
+    asset_index_by_id: dict[str, int] = {}
+    for index, asset in enumerate(extraction.assets):
+        element_id = str(asset.metadata.get("element_id") or "")
+        if element_id and asset.kind.casefold() in VISION_ASSET_KINDS:
+            asset_index_by_id.setdefault(element_id, index)
+    targets: list[_Target] = []
+    last_element_index: int | None = None
+    for record in sorted(layout.records, key=lambda item: (item.page, item.seq_no)):
+        element_index = element_index_by_id.get(record.id)
+        if record.id in pending_ids:
+            if record.category == "Picture":
+                asset_index = asset_index_by_id.get(record.id)
+                if element_index is not None or asset_index is not None:
+                    targets.append(
+                        _Target(
+                            record,
+                            element_index=element_index,
+                            asset_index=asset_index,
+                            anchor_element_index=(
+                                last_element_index if element_index is None else None
+                            ),
+                        )
+                    )
+            elif element_index is not None:
+                targets.append(_Target(record, element_index=element_index))
+        if element_index is not None:
+            last_element_index = element_index
+    updated = _write_back_adapter(extraction, replace(layout, targets=targets))
+    artifacts = dict(updated.parser_artifacts)
+    layout_artifact = dict(_docling_layout(extraction) or {})
+    layout_artifact["records"] = [_json_value(record.to_dict()) for record in layout.records]
+    artifacts[LAYOUT_ARTIFACT] = layout_artifact
+    return updated.model_copy(update={"parser_artifacts": artifacts})
 
 
 # --- Docling 以外(要素と asset から LayoutRecord を作る)------------------------------------

@@ -103,7 +103,7 @@ function formatVisionValue(value: unknown): string {
 
 /**
  * 抽出 JSON の layout_records から要素(record)の Vision 説明を引き、値のある項目だけ返す。
- * 装飾・アイコンとして除外された図は reason に理由を返す。Docling（layout_records）以外の抽出では null。
+ * 装飾・アイコンとして除外された図は reason に理由を返す。layout_records(Docling・MinerU)の無い抽出では null。
  */
 export function layoutVisionDetails(
   extraction: Record<string, unknown>,
