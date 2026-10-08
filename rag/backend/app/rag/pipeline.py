@@ -19,6 +19,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
 from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answer_step_stage
+from app.rag.answer_route import answer_route
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
@@ -28,6 +29,7 @@ from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
     new_trace_id,
+    record_answer_route,
     record_guardrail_findings,
     record_rag_request,
     record_rag_stage,
@@ -324,6 +326,11 @@ class RagPipeline:
         if guide_preview:
             # 業務ガイドの下書きで試した回答（#1288）。回答の記録に残し、履歴・評価から外す。
             outcome.diagnostics[GUIDE_PREVIEW_KEY] = dict(guide_preview)
+        if request.generate_answer:
+            # 回答の経路（固定の RAG）と理由、現場のデータの確認の要否を記録する（#1283）。
+            route = answer_route(outcome.diagnostics)
+            outcome.diagnostics["route"] = route
+            record_answer_route(route["reason"], route["requires_environment_data"])
         if request.generate_answer:
             # 回答側の安全チェックも工程として計測し、進捗に出す
             # (チャットの「回答を確認しています」。#1146)。
