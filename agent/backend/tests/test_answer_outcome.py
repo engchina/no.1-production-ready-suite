@@ -755,6 +755,17 @@ def test_clarification_with_an_options_line_is_needs_clarification() -> None:
         "ご回答をお願いします。"
     )
     assert answer_outcome(asked, steps=[_retrieve()])["value"] == "needs_clarification"
+    # 選んでもらう依頼を添えた確認の質問（同じく run3 の cr-grant-permission）。
+    choose = (
+        "権限の付与先はどちらですか？\n\n- 個別の利用者  \n- グループ  \n\n"
+        "ご希望の方をお選びください。"
+    )
+    assert answer_outcome(choose, steps=[_retrieve()])["value"] == "needs_clarification"
+    # 画面の操作の指示は主張のまま。
+    operation = (
+        "権限の付与先はどちらですか？\n権限タブで付与する権限を選び、「付与」を押してください。"
+    )
+    assert answer_outcome(operation, steps=[_retrieve()])["value"] != "needs_clarification"
     # 選択肢の行でも、文・操作の指示は主張のまま。
     for text in (
         "権限の付与先は、個別の利用者ですか？\n選択肢: 個別を選んで「付与」を押してください。",
