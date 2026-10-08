@@ -187,6 +187,17 @@ class SupportGuideImpact(_Strict):
     scope: ImpactScope = "individual"
     approval_required: bool = False
     approval_note: str = Field(default="", max_length=_TEXT)
+    steps: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description=(
+            "影響範囲と承認が係る手順の id（#1320）。空なら業務ガイドのすべての場合に係る。"
+            "分かっている条件でこの手順がすべて当たらない（外れた分岐の手順だけ）なら、"
+            "影響範囲・承認を求めない。例: グループに付与する分岐の手順だけに承認が要る。"
+        ),
+    )
+
+    _clean = field_validator("steps")(_clean_list)
 
 
 class SupportGuideHandoff(_Strict):
