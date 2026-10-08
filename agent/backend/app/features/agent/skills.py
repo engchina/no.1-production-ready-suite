@@ -156,8 +156,13 @@ skill_registry.register(
             "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
             "rag_search の outcome で答え方を決める。answered は根拠に沿って答える。"
             "conditional は conditions（説明が成り立つ条件）と gaps（資料で確かめられない点）を"
-            "示し、条件ごとに分けて答える。needs_environment_data は confirmations（確かめる"
-            "現場の値・記録）を挙げ、現場の値を推測で断定しない。insufficient_evidence は"
+            "示し、条件ごとに分けて答える。"
+            "needs_environment_data は資料だけでは回答を確定できない（現場の値・記録の確認が"
+            "要る）。結果の next_step に従う。next_step.action が continue_with_tools なら、"
+            "confirmations（確かめる現場の値・記録）を next_step.tools のツールで確かめてから答え、"
+            "確かめた値はツールの結果を出所として示す。answer_with_confirmations なら"
+            "confirmations を利用者が確かめる点として挙げる。どちらでも、確かめられなかった現場の"
+            "値を推測で断定しない。insufficient_evidence は"
             "資料で確かめられなかったことを伝え、推測で補わない。requests の missing は"
             "答えていない要求として利用者に示す。"
             "needs_clarification は clarifications の問いを利用者にそのまま確かめ、推測で選ばない。"
@@ -214,7 +219,13 @@ skill_registry.register(
         id="rag_then_structured_data",
         name="RAG 後に構造化データ照会",
         description="業務 RAG で文脈を確認した後、NL2SQL へ同じ目的を渡す。",
-        instructions="非構造文脈と構造化表の両方が必要な調査に使う。",
+        instructions=(
+            "非構造文脈と構造化表の両方が必要な調査に使う。先に rag_search で資料の文脈を確かめる。"
+            "rag_search の outcome が needs_environment_data（資料だけでは確定できない）なら、"
+            "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える"
+            "（nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る）。"
+            "確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。"
+        ),
         mcp_requirements=[
             SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
             SkillMcpRequirement(server_id="nl2sql", tool_names=["nl2sql_query", "nl2sql_get_job"]),

@@ -81,10 +81,13 @@ from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,
+    RAG_SEARCH,
     SupportTaskBudget,
     budget_exceeded_message,
     build_support_task,
     has_support_task_activity,
+    is_environment_tool,
+    rag_next_step,
     support_task_instructions,
 )
 from app.features.agent.tools import (
@@ -487,11 +490,16 @@ class _ToolRecorder:
 
     `budget` があれば、呼ぶ前に支援タスクの予算を数え、超える呼び出しは実行せずに
     `budget_exceeded` の結果を返す（#1243）。
+
+    `environment_tools` はこの Run でモデルに渡した、現場のデータを確かめる道具（RAG 以外の MCP
+    接続のツール）。`rag_search` が回答を確定できないと返したら、モデルへの結果に次の手
+    （`next_step`）を足す（#1283。記録する step の結果は RAG の結果のまま）。
     """
 
     def __init__(self, run_id: str, budget: SupportTaskBudget | None = None) -> None:
         self.run_id = run_id
         self.budget = budget
+        self.environment_tools: list[str] = []
 
     async def invoke(
         self,
@@ -534,7 +542,12 @@ class _ToolRecorder:
         # 承認は SDK の needs_approval で済んでいる（拒否のツールは渡していない）。
         result = await self.execute(step_id, call, context, definition=definition, handler=handler)
         if result.success:
-            return json.dumps(result.output or {}, ensure_ascii=False, default=str)
+            output = result.output or {}
+            if mcp_base_tool_name(name) == RAG_SEARCH and isinstance(output, dict):
+                next_step = rag_next_step(output, self.environment_tools)
+                if next_step is not None:
+                    output = {**output, "next_step": next_step}
+            return json.dumps(output, ensure_ascii=False, default=str)
         return json.dumps(
             {"error": result.error or "tool failed", "error_code": result.error_code},
             ensure_ascii=False,
@@ -641,6 +654,7 @@ def build_function_tools(
                 timeout_seconds=max(definition.timeout_seconds, 1.0) * 2,
             )
         )
+    recorder.environment_tools = [tool.name for tool in tools if is_environment_tool(tool.name)]
     return tools
 
 
