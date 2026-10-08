@@ -1383,8 +1383,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_validate_answer",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
-                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。requests（要求の"
-                    "充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も"
+                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。見出し・出典の行・"
+                    "利用者への質問の段落は主張ではないので監査せず、claims に含めません。"
+                    "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と"
+                    "分岐・影響範囲も"
                     "決定的に確かめます。"
                 ),
                 input_model=ValidateAnswerInput,

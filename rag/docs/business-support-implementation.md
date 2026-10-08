@@ -23,7 +23,7 @@
 | handoff | 要求 | 状態 | Issue / PR | 推奨案・判断 |
 |---|---|---|---|---|
 | §5 | RAG と Agent で同じ根拠の形・回答の契約 | 済 | #1219、#1235、#1238 | 根拠（evidence）と回答の構造（AnswerEnvelope）を RAG が持ち、Agent は MCP で同じものを使う |
-| §5 | RAG と Agent の振り分け | 確認待ち | #1283（draft PR #1296） | 自動の LLM の振り分けは置かない。固定の RAG が完了できない（現場のデータが要る）と outcome で分かったときだけ、Agent で続ける導線を出し、理由を記録する。提案する outcome の範囲などを確認待ち |
+| §5 | RAG と Agent の振り分け・理由の記録 | 済（人の判断で確定） | #1283（PR #1296） | Agent は RAG を使うが、RAG から Agent へは呼ばない・案内しない（2026-10-08 の判断）。RAG は回答の対応（outcome）を経路の理由として製品に中立に記録する（`requires_environment_data`）。振り分けは Agent の側で決定的に行う: `rag_search` が `needs_environment_data` なら、Agent は自分の道具（RAG 以外の MCP 接続のツール）で確かめてから答え、経路と理由を Run に残す（下の「振り分けのモデル」） |
 | §6.1 | 設定の責任と解決の順 | 済 | 既存 | 文書レシピ / KB / プロファイルの 3 層は変えない。業務ガイドはプロファイルの知識 |
 | §6.2 | 業務ガイド（SupportGuide） | 済 | #1237（PR #1239）、#1278（PR #1292） | 宣言的な内容だけ（分岐は equals / in / unknown）。式・script は受け付けない。条件に選択肢の言い換え（value_aliases）を持てる（比較で聞き過ぎが分かったため） |
 | §6.3 | 下書き・検証・公開・履歴・ロールバック・楽観ロック・下書きで試す・取込の差分 | 済 | #1237（PR #1239）、#1278（PR #1292）、#1288（PR #1300） | 頭（下書き）＋公開の版の 2 表。回答は公開の版だけ。回答の記録にガイドの版を残す（#1238）。ロールバックも読み込んだ版で楽観ロックする（#1278）。管理者は保存した下書きで回答を試せ、試しの記録は履歴・フィードバック・評価に入れない。取込は既存のガイドとの差分を出す（#1288） |
@@ -52,6 +52,35 @@
 | §14.2 | 層ごとの指標 | 済 | #1226、#1231、#1284 | 対応・手順・危険な回答・条件の 4 指標、分類ごと・区分（dev / holdout）ごとの内訳、必要な根拠ごとの再現率、既知の条件の聞き直し |
 | §14.3 | 対照の実験（A〜E） | 一部 | #1249、#1259、#1289 | 19 問の評価セットで A（ガイドなし）・C（ガイドあり）・D（業務 Agent の経路）を実環境で比べた（2026-10-08。対応の正しさ A 0.79 / C 0.84 / D 0.58、手順 0.60 / 0.60 / 0.72、危険な回答 0 / 0 / 0 件、時間の中央値 47 / 38 / 21 秒。結果は answer-baseline-2026-10.md）。D は `rag_search` を呼ばない Run が多く対応が推定になり、まだ A / C と比べられない（スキルの指示のツール名 #1303・Agent の回答の対応 #1305・最終の検証の扱い #1306）。B（資料処理の改善の前後）・E（現場の道具）は未実施 |
 | §16 P5 | 現場の参照の道具 | 見送り（任意の段） | — | Agent の既存の NL2SQL の skill（構造化データの照会）を使う。業務の記録の道具は配備先ごと |
+
+## 振り分けのモデル（#1283。handoff §5 / §13）
+
+- **依存の向き（2026-10-08 の判断）**: Agent は RAG を使う（MCP の `rag_search` など）。RAG から Agent へは
+  呼ばない・リンクしない・案内しない。RAG のコード・設定・画面は Agent の製品を知らない。
+- **自動の LLM の振り分けは置かない。** 質問ごとにモデルで経路を選ぶと、モデルの呼び出しと待ち時間が毎回増える。
+  RAG のチャット・RAG 検索は固定の RAG、Agent のチャットは Agent の経路で、利用者が使う画面で決まる。
+- **RAG は経路の理由を決定的に記録するだけ。** 回答の診断（`diagnostics.answer.route`。回答の記録に残る）に、
+  経路（`path=rag`）・理由（回答の対応 = AnswerEnvelope の `outcome`）・手がかり（`signals` = `handoff_reasons`）・
+  現場のデータの確認の要否（`requires_environment_data`。`outcome=needs_environment_data` のとき true）を入れる
+  （`rag/backend/app/rag/answer_route.py`。モデルは呼ばない）。Prometheus の
+  `rag_answer_routes_total{reason, requires_environment_data}` は理由と要否だけを数える。RAG の画面は、既存の
+  回答の対応の表示（確かめる現場の値・記録）で「資料だけでは確定できない」ことを業務の言葉で伝え、どこへもリンクしない。
+- **振り分けは Agent の側で決定的に行う。** Agent が `rag_search` を呼び、結果の `outcome` が
+  `needs_environment_data` のとき、Control Plane がモデルへの結果に `next_step` を足す
+  （`agent/backend/app/features/agent/support_task.py` の `rag_next_step`。記録する step の結果は RAG の結果のまま）。
+  - この Run に現場のデータを確かめる道具（RAG 以外の MCP 接続のツール。NL2SQL・登録した接続）があれば
+    `continue_with_tools`（`confirmations` の点を `tools` のツールで確かめてから答える）。
+  - 無ければ `answer_with_confirmations`（`confirmations` を利用者が確かめる点として挙げ、推測で断定しない）。
+  - スキル「業務 RAG 調査」「RAG 後に構造化データ照会」の指示は `next_step` に従うことを明記する。道具の呼び出しは
+    今までどおりツール権限（承認）を通る。
+  - 確認の質問（`needs_clarification`）は利用者に聞けば続けられ、人への引き継ぎ（`needs_human`）と資料の不足
+    （`insufficient_evidence`）は道具でも埋められないので対象にしない。条件付きの回答（`conditional`）も対象にしない
+    （手順は答えられている）。
+- **Agent は経路と理由を Run に残す。** 支援タスクの状態（Run の成果物 `support_task`）の `route` に、この Run の経路
+  （`rag` / `rag_then_tools` / `tools` / `none`）・理由（最後の `rag_search` の対応）・`environment_data_required`・
+  続けた道具（`continued_with`）を、Run の step から決定的に作って入れる（`run_route`）。
+- **見直す条件**: Agent の経路 D の評価で、固定の RAG では完了できず道具で正しく答えられる分類（例: 条件付きの回答の
+  うち未回答の要求があるもの）が分かったら、`RAG_CONTINUE_OUTCOMES`（Agent の側）に足す。
 
 ## 計測と評価で分かったこと（2026-10-07）
 

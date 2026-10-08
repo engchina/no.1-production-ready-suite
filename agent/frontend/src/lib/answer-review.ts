@@ -48,7 +48,7 @@ export interface ReviewGuide {
 export type ValidationState = "verified" | "withheld" | "unvalidated" | "skipped";
 
 /** 確かめられなかった理由（画面の文言を選ぶため。内部の reason の値そのものは出さない）。 */
-export type ValidationCause = "noEvidence" | "emptyAnswer" | "failure" | null;
+export type ValidationCause = "noEvidence" | "emptyAnswer" | "clarification" | "failure" | null;
 
 /** 根拠で確かめられなかった段落の判定（RAG の `rag_validate_answer` の claim の status）。 */
 export type UnverifiedClaimKind = "contradicted" | "unsupported" | "citation_error" | "unassessed";
@@ -157,6 +157,7 @@ function limitReached(state: Record<string, unknown>): boolean {
 function cause(reason: unknown): ValidationCause {
   if (reason === "no_rag_evidence") return "noEvidence";
   if (reason === "empty_answer") return "emptyAnswer";
+  if (reason === "clarification_only") return "clarification";
   return reason ? "failure" : null;
 }
 
@@ -164,11 +165,32 @@ function errorFindings(result: Record<string, unknown>): Record<string, unknown>
   return records(result.findings).filter((item) => item.severity === "error");
 }
 
+/**
+ * 回答から外す段落の判定（確かめられない段落）。主張ではない段落（見出し・出典の行・利用者への質問・
+ * 資料に記載が無いことを述べる文。backend が `non_claim` を付ける。#1306）は除く。
+ */
+function blockingClaims(result: Record<string, unknown>): Record<string, unknown>[] {
+  return records(result.claims).filter(
+    (claim) => BLOCKING_CLAIMS.has(claim.status as UnverifiedClaimKind) && !claim.non_claim,
+  );
+}
+
+/** 確かめられない点が無く、回答をそのまま載せたか（backend の `publish_answer` と同じ判定）。 */
+function publishedAsIs(result: Record<string, unknown>): boolean {
+  if (result.valid === true) return true;
+  if (errorFindings(result).length > 0) return false;
+  if (result.status === "no_claims") return true;
+  if (result.status !== "completed") return false;
+  if (records(result.stale_evidence).length > 0 || records(result.missing_evidence).length > 0) return false;
+  const claims = records(result.claims);
+  if (blockingClaims(result).length > 0) return false;
+  return claims.some((claim) => claim.status === "supported" || Boolean(claim.non_claim));
+}
+
 function unverifiedPoints(result: Record<string, unknown>): UnverifiedPoint[] {
   const points: UnverifiedPoint[] = [];
-  for (const claim of records(result.claims)) {
+  for (const claim of blockingClaims(result)) {
     const status = claim.status as UnverifiedClaimKind;
-    if (!BLOCKING_CLAIMS.has(status)) continue;
     points.push({ kind: "claim", claim: status, quote: text(claim.answer_quote), reason: text(claim.reason) });
   }
   for (const finding of errorFindings(result)) {
@@ -194,8 +216,7 @@ export function validationReview(content: Record<string, unknown>): ReviewValida
   }
   if (status !== "completed") return null;
   const result = record(content.result) ?? {};
-  const verified = result.valid === true || (result.status === "no_claims" && errorFindings(result).length === 0);
-  if (verified) {
+  if (publishedAsIs(result)) {
     return { state: "verified", cause: null, withheldClaims: 0, withheldAll: false, points: [] };
   }
   const withheld = record(content.withheld);

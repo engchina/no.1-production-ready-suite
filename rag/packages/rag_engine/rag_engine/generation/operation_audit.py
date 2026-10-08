@@ -41,6 +41,48 @@ def is_heading(text: str) -> bool:
     return bool(re.fullmatch(r"\s*(?:#{1,6}\s+[^。]{1,35}|【[^】]{1,25}】|\*\*[^*。]{1,30}\*\*[:：]?|[^。\n:：]{0,28}(?:内容|点|事項|操作|手順|条件|規則|結果|確認)(?:[（(][^）)\n]{1,20}[）)])?[:：]|(?:操作)?手順|確認事項|注意事項|関連操作|未確定事項)\s*", text))
 
 
+_LIST_MARK = re.compile(r"^(?:[-*+・•]\s*|[0-9０-９]{1,3}[.)．）]\s*)")
+_CITATION_LABEL = re.compile(
+    r"[（(【\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース|sources?|references?|citations?)\s*[:：]\s*(?P<rest>.+?)\s*[）)】\]]?",
+    re.I)
+_DOCUMENT_MARK = re.compile(
+    r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b|\bpage\b|\bp\.\s*\d|\bpp\.|ページ|頁|\bsection\b|\bsheet\b|シート|第\s*[0-9０-９]+\s*(?:章|節|条|項)",
+    re.I)
+_BRACKETED = re.compile(r"(?:[【\[（(][^】\]）)\n]{1,200}[】\]）)][\s、,，]*)+")
+_BRACKET_PART = re.compile(r"[【\[（(]([^】\]）)\n]{1,200})[】\]）)]")
+_LINK_LINE = re.compile(r"(?:\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)[\s、,，]*)+|https?://\S+")
+_SENTENCE_END = re.compile(r"(?:ます|ません|です|でした|ました|ください|ない|無い|ある|する|できる|れる|った|いた|した|だ)[。．.!！]?$")
+_QUESTION = re.compile(r".*[？?]\s*(?:[（(][^）)\n]{1,40}[）)])?\s*。?")
+_INFO_REQUEST = re.compile(r".*(?:教えてください|お知らせください|お教えください|お聞かせください|ご回答ください|お答えください|確認させてください)[。．!！]?")
+_BUNDLED_CLAIM = re.compile(r"ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし")
+
+
+def is_citation_line(text: str) -> bool:
+    """出典の行（出典のラベル・文書名・頁・節の括弧・リンクだけの段落）か。主張を含む文は出典にしない (#1306)。"""
+    value = _LIST_MARK.sub("", text.strip(), count=1).strip()
+    if not value or "。" in value.rstrip("。"):
+        return False
+    label = _CITATION_LABEL.fullmatch(value)
+    if label:
+        return not _SENTENCE_END.search(label.group("rest")) and not is_operation_instruction(label.group("rest"))
+    if _LINK_LINE.fullmatch(value):
+        return True
+    return bool(_BRACKETED.fullmatch(value)) and all(_DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value))
+
+
+def is_question_to_user(text: str) -> bool:
+    """利用者への確認の質問・情報を求める依頼の文か。主張を抱き合わせた文（「〜できますが、〜か？」）は除く (#1306)。"""
+    value = _LIST_MARK.sub("", text.strip(), count=1).strip()
+    if not (_QUESTION.fullmatch(value) or _INFO_REQUEST.fullmatch(value)):
+        return False
+    return not _BUNDLED_CLAIM.search(value)
+
+
+def is_non_claim_passage(text: str) -> bool:
+    """回答の最終の検証で主張として監査しない段落（見出し・出典の行・利用者への質問）か (#1306)。"""
+    return is_heading(text) or is_citation_line(text) or is_question_to_user(text)
+
+
 def is_operation_instruction(text: str) -> bool:
     """具体的な操作指示を確認留保として無引用で通さないための補助判定。"""
     return bool(re.search(
