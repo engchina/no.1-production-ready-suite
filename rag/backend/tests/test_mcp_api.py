@@ -363,6 +363,8 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "page_label_end": "2-2",
         "bbox": [10.0, 20.0, 110.0, 220.0],
         "bbox_unit": "absolute",
+        # 要素の ID の無い chunk は定位子を持たない（#1330）。
+        "element_locator": None,
     }
     assert len(evidence["excerpt"]) == 1000
     assert evidence["truncated"] is True
@@ -425,6 +427,7 @@ def test_search_evidence_locates_spreadsheet_rows(
         "page_label_end": None,
         "bbox": None,
         "bbox_unit": None,
+        "element_locator": None,
     }
 
 
@@ -612,6 +615,21 @@ class _SourceOracle:
     async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
         return (document_id, chunk_id) in self.stale
 
+    # 要素の定位子（#1330）: 解析の結果 er_1 の要素 el-2 は、作り直した chunk c1 にある。
+    async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
+        return {chunk_set_id: "er_1" for chunk_set_id in chunk_set_ids if chunk_set_id == "cs-1"}
+
+    async def retrievable_element_chunk(
+        self, document_id: str, extraction_recipe_id: str, element_id: str
+    ) -> RetrievedChunk | None:
+        self.contexts.append(current_audit_request_context())
+        if (document_id, extraction_recipe_id, element_id) == ("d1", "er_1", "el-2"):
+            return self.visible[("d1", "c1")]
+        return None
+
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        return document_id == "d1"
+
 
 @pytest.fixture
 def source_oracle(monkeypatch: MonkeyPatch) -> type[_SourceOracle]:
@@ -623,6 +641,7 @@ def source_oracle(monkeypatch: MonkeyPatch) -> type[_SourceOracle]:
             page_start=2,
             chunk_set_id="cs-1",
             parent_text="親の本文" * 3,
+            element_ids="el-1,el-2",
         )
     }
     _SourceOracle.stale = {("d1", "c-old")}
@@ -681,6 +700,56 @@ def test_read_source_distinguishes_missing_and_stale(
         "rag_read_source", {"document_id": "d1", "chunk_id": "c1", "max_chars": 0}, headers
     )
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+
+
+def test_read_source_by_locator_returns_current_chunk_of_the_element(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    """要素の定位子で読むと、同じ解析の結果の同じ要素を含む今の chunk を返す（#1330）。"""
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    by_chunk = _call("rag_read_source", {"document_id": "d1", "chunk_id": "c1"}, headers)
+    locator = by_chunk["structuredContent"]["locator"]["element_locator"]
+    # 先頭の要素の定位子（chunk_set の解析の結果の ID と、chunk の開始の頁）。
+    assert locator == "doc:d1/ext:er_1/page:2/el:el-1"
+
+    result = _call(
+        "rag_read_source",
+        {"document_id": "d1", "locator": "doc:d1/ext:er_1/page:2/el:el-2", "max_chars": 4},
+        headers,
+    )
+    assert result["isError"] is False, result
+    body = result["structuredContent"]
+    assert (body["chunk_id"], body["text"]) == ("c1", "あいうえ")
+    assert body["locator"]["element_locator"] == "doc:d1/ext:er_1/page:2/el:el-1"
+    assert source_oracle.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+
+def test_read_source_by_locator_distinguishes_stale_missing_and_invalid(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    del source_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    stale = _call(
+        "rag_read_source", {"document_id": "d1", "locator": "doc:d1/ext:er_old/el:el-2"}, headers
+    )
+    assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
+    # 見えない（無い・利用できる範囲の外の）文書の定位子。
+    missing = _call(
+        "rag_read_source", {"document_id": "d9", "locator": "doc:d9/ext:er_1/el:el-2"}, headers
+    )
+    assert missing["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+    for arguments in (
+        {"document_id": "d1"},
+        {"document_id": "d1", "chunk_id": "c1", "locator": "doc:d1/ext:er_1/el:el-2"},
+        {"document_id": "d1", "locator": "doc:d2/ext:er_1/el:el-2"},
+        {"document_id": "d1", "locator": "d1:c1"},
+    ):
+        invalid = _call("rag_read_source", arguments, headers)
+        assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID", arguments
 
 
 # ---------------------------------------------------------------------------

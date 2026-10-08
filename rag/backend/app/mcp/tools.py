@@ -24,6 +24,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, get_args
@@ -38,7 +39,7 @@ from pr_backend_core.mcp import (
     McpToolError,
     McpToolResult,
 )
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
@@ -63,6 +64,11 @@ from app.rag.document_crop import (
     crop_png_bounded,
     load_parsed_source,
 )
+from app.rag.element_locator import (
+    LOCATOR_MAX_LENGTH,
+    chunk_element_locator,
+    parse_element_locator,
+)
 from app.rag.figure_url import (
     FIGURE_URL_TTL_SECONDS,
     FigureUrlUnavailableError,
@@ -79,9 +85,12 @@ from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileStatus
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
+logger = logging.getLogger(__name__)
+
 MCP_SERVER_NAME = "production-ready-rag"
 # ツールの出力の版（出力の形を変えたら上げる。handoff §10。#1276）。
-MCP_OUTPUT_SCHEMA_VERSION = 5
+# 6: 根拠の場所に要素の定位子（locator.element_locator）を足した（#1330）。
+MCP_OUTPUT_SCHEMA_VERSION = 6
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -288,12 +297,28 @@ class ValidateAnswerInput(BaseModel):
 
 
 class ReadSourceInput(BaseModel):
-    """根拠の本文を読む条件（rag_search の evidence の document_id と chunk_id）。"""
+    """根拠の本文を読む条件（evidence の document_id と、chunk_id か要素の定位子）。"""
 
     model_config = ConfigDict(extra="forbid")
 
     document_id: str = Field(..., min_length=1, max_length=128, description="文書の id。")
-    chunk_id: str = Field(..., min_length=1, max_length=512, description="根拠の chunk の id。")
+    chunk_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        description="根拠の chunk の id。locator とどちらか一方を渡す。",
+    )
+    locator: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=LOCATOR_MAX_LENGTH,
+        description=(
+            "根拠の要素の定位子（evidence の locator.element_locator。#1330）。文書分割の設定を"
+            "変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。"
+            "解析をやり直した後の古い定位子は source_stale のエラー。"
+            "chunk_id とどちらか一方を渡す。"
+        ),
+    )
     offset: int = Field(default=0, ge=0, description="本文の読み始めの位置（文字数）。")
     max_chars: int = Field(
         default=READ_SOURCE_MAX_CHARS_DEFAULT,
@@ -318,6 +343,20 @@ class ReadSourceInput(BaseModel):
             "画面の操作からだけ使える（それ以外は image_url_not_allowed のエラー）。"
         ),
     )
+
+    @model_validator(mode="after")
+    def _one_reference(self) -> ReadSourceInput:
+        if (self.chunk_id is None) == (self.locator is None):
+            raise ValueError("chunk_id と locator のどちらか一方だけを渡してください。")
+        if self.locator is not None:
+            parsed = parse_element_locator(self.locator)
+            if parsed is None:
+                raise ValueError(
+                    "locator の形が違います（doc:{document_id}/ext:{…}/page:{頁}/el:{要素}）。"
+                )
+            if parsed.document_id != self.document_id:
+                raise ValueError("locator の文書が document_id と違います。")
+        return self
 
 
 # ---- 出力 ----
@@ -363,6 +402,14 @@ class EvidenceLocator(BaseModel):
     )
     bbox_unit: str | None = Field(
         default=None, description="bbox の単位（absolute=頁の座標 / normalized=0〜1）。"
+    )
+    element_locator: str | None = Field(
+        default=None,
+        description=(
+            "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。"
+            "文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。"
+            "要素を持たない分割の根拠は null。"
+        ),
     )
 
 
@@ -810,7 +857,42 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
         bbox=_bbox(metadata.get("bbox")),
         bbox_unit=_metadata_str(metadata, "bbox_unit") if _bbox(metadata.get("bbox")) else None,
+        element_locator=str(element) if (element := chunk_element_locator(metadata)) else None,
     )
+
+
+async def _with_extraction_recipe_ids(
+    oracle: OracleClient | None, chunks: list[RetrievedChunk]
+) -> list[RetrievedChunk]:
+    """根拠の chunk の metadata に解析の結果の ID を入れる（要素の定位子を作るため。#1330）。
+
+    chunk の行には解析の結果の ID が無く、chunk_set の列にある。読めなかったときは定位子を
+    付けずに続ける（検索の結果は返す）。
+    """
+    chunk_set_ids = [
+        value for chunk in chunks if (value := _metadata_str(chunk.metadata, "chunk_set_id"))
+    ]
+    if not chunk_set_ids:
+        return chunks
+    try:
+        client = oracle if oracle is not None else OracleClient()
+        extraction_ids = await client.chunk_set_extraction_recipe_ids(chunk_set_ids)
+    except Exception:  # noqa: BLE001 - 定位子は補助の情報。検索の結果を止めない
+        logger.warning("rag_mcp_extraction_recipe_lookup_failed", exc_info=True)
+        return chunks
+    enriched: list[RetrievedChunk] = []
+    for chunk in chunks:
+        extraction_id = extraction_ids.get(_metadata_str(chunk.metadata, "chunk_set_id") or "")
+        if extraction_id is None:
+            enriched.append(chunk)
+            continue
+        metadata = {
+            "document_id": chunk.document_id,
+            **chunk.metadata,
+            "extraction_recipe_id": extraction_id,
+        }
+        enriched.append(chunk.model_copy(update={"metadata": metadata}))
+    return enriched
 
 
 def _references(metadata: dict[str, Any]) -> list[EvidenceReference]:
@@ -1182,6 +1264,34 @@ async def readable_chunk(oracle: OracleClient, document_id: str, chunk_id: str) 
     )
 
 
+async def readable_element_chunk(
+    oracle: OracleClient, document_id: str, locator: str
+) -> RetrievedChunk:
+    """要素の定位子が指す要素を含む今の chunk を、検索と同じ見え方の条件で読む（#1330）。"""
+    parsed = parse_element_locator(locator)
+    if parsed is None or parsed.document_id != document_id:
+        raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の定位子の形が違います。")
+    chunk = await oracle.retrievable_element_chunk(
+        document_id, parsed.extraction_recipe_id, parsed.element_id
+    )
+    if chunk is not None:
+        metadata = {
+            "document_id": chunk.document_id,
+            **chunk.metadata,
+            "extraction_recipe_id": parsed.extraction_recipe_id,
+        }
+        return chunk.model_copy(update={"metadata": metadata})
+    if await oracle.accessible_document_exists(document_id):
+        raise McpToolError(
+            SOURCE_STALE_CODE,
+            "この根拠は文書の古い解析の結果のものです。rag_search で検索し直してください。",
+        )
+    raise McpToolError(
+        SOURCE_NOT_FOUND_CODE,
+        "根拠が見つかりません（削除されたか、利用できる範囲の外です）。",
+    )
+
+
 def figure_region(metadata: dict[str, Any]) -> _ImageRegion | None:
     """図の根拠の領域（保存した chunk の metadata から決める。署名つきの URL の読み取りで使う）。"""
     return _image_region(metadata)
@@ -1240,7 +1350,11 @@ async def read_source(
     図を開く URL（include_image_url。#1311）は、同じ条件で見える図の根拠にだけ作る。
     """
     oracle = OracleClient()
-    chunk = await readable_chunk(oracle, arguments.document_id, arguments.chunk_id)
+    if arguments.locator is not None:
+        chunk = await readable_element_chunk(oracle, arguments.document_id, arguments.locator)
+    else:
+        chunk = await readable_chunk(oracle, arguments.document_id, arguments.chunk_id or "")
+        chunk = (await _with_extraction_recipe_ids(oracle, [chunk]))[0]
     metadata = dict(chunk.metadata)
     text, more, next_offset = _text_window(chunk.text, arguments.offset, arguments.max_chars)
     parent = metadata.get("parent_text")
@@ -1379,6 +1493,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
         result = await search_route._run_search_with_timeout(request)
+        citations = await _with_extraction_recipe_ids(None, list(result.citations))
+        result = result.model_copy(update={"citations": citations})
         return SearchOutput(**_answer_fields(result, arguments.evidence_limit))
 
     async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
@@ -1416,10 +1532,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         enforce_rate_limit("search", http_request)
         result = await search_route._run_search_with_timeout(request)
         limit = arguments.evidence_limit
+        citations = await _with_extraction_recipe_ids(None, result.citations[:limit])
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
-            evidence=[_evidence(chunk) for chunk in result.citations[:limit]],
+            evidence=[_evidence(chunk) for chunk in citations],
             evidence_omitted=max(0, len(result.citations) - limit),
         )
 

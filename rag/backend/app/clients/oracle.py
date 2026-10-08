@@ -886,6 +886,107 @@ class OracleClient:
         )
         return row is not None
 
+    async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: Sequence[str]) -> dict[str, str]:
+        """chunk_set_id ごとの解析の結果の ID（根拠の要素の定位子に使う。#1330）。"""
+        ids = _unique_optional_sequence(list(chunk_set_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("cs.chunk_set_id", "locator_chunk_set", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT cs.chunk_set_id, cs.extraction_recipe_id
+            FROM rag_chunk_sets cs
+            WHERE {in_sql}
+              AND cs.extraction_recipe_id IS NOT NULL
+            """,
+                in_sql=in_sql,
+            ),
+            binds,
+        )
+        return {
+            str(row["chunk_set_id"]): str(row["extraction_recipe_id"])
+            for row in rows
+            if row.get("chunk_set_id") and row.get("extraction_recipe_id")
+        }
+
+    async def retrievable_element_chunk(
+        self, document_id: str, extraction_recipe_id: str, element_id: str
+    ) -> RetrievedChunk | None:
+        """要素の定位子が指す要素を含む、今の有効な chunk を返す（#1330）。
+
+        ``retrievable_chunk`` と同じ見え方の条件（tenant・ナレッジベース・INDEXED・
+        有効な chunk_set）に、同じ解析の結果（``extraction_recipe_id``）の chunk_set を加える。
+        文書分割の設定を変えて chunk を作り直しても、同じ要素を含む chunk を返す。
+        1 つの要素が複数の chunk に分かれたときは、文書の中で最初の chunk を返す。
+        """
+        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                d.superseded_by_document_id,
+                0 AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            JOIN rag_chunk_sets locator_cs
+              ON locator_cs.chunk_set_id = c.chunk_set_id
+             AND locator_cs.extraction_recipe_id = :read_extraction_recipe_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND DBMS_LOB.INSTR(
+                  JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :read_element_id
+              ) > 0
+            ORDER BY c.chunk_index
+            FETCH FIRST 50 ROWS ONLY
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                "read_document_id": document_id,
+                "read_extraction_recipe_id": extraction_recipe_id,
+                "read_element_id": element_id,
+            },
+        )
+        from app.rag.element_locator import chunk_element_ids
+
+        for row in rows:
+            chunk = _retrieved_chunk_from_row(row)
+            # INSTR は部分一致なので、要素の ID の完全一致で確かめる
+            # （p1-1 と p1-10 を取り違えない）。
+            if element_id in chunk_element_ids(chunk.metadata):
+                return chunk
+        return None
+
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        """利用者が見られる文書か（要素の定位子が今の解析の結果に無いときの判定。#1330）。
+
+        解析をやり直すと古い解析の結果の chunk_set は消えるため、古い定位子かどうかは、文書が
+        見えるかどうかで分ける（見える文書の、今は無い要素 = 古い版）。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT 1 AS found
+            FROM rag_documents d
+            WHERE d.document_id = :read_document_id
+              AND {access_predicate}
+            """,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"read_document_id": document_id}),
+        )
+        return row is not None
+
     async def chunk_set_first_page_contexts(
         self, chunk_set_ids: Sequence[str]
     ) -> dict[str, dict[str, object]]:
