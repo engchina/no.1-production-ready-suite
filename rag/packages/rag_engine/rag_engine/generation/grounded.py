@@ -1892,6 +1892,29 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
     黙って落ちる（insufficient_reason には残っていたが本文には出ていなかった）(#622)。
     confirmations は回答の確定に必要な実データ・別の資料の確認（`confirmation_lines`）。最後の節に出す (#688)。
     """
+    return render_with_citations(summary, checked, unanswered, confirmations)[0]
+
+
+def citation_line_ref(span: dict) -> dict[str, Any]:
+    """本文の出典行が指す根拠（画面が出典行を根拠の chunk に結ぶため。#1330）。"""
+    return {
+        "evidence_id": span.get("evidence_id", ""),
+        "source_id": span.get("source_id", ""),
+        "scope_source_ids": list(span.get("scope_source_ids") or ()),
+        "page": span.get("page"),
+        "page_end": span.get("page_end"),
+    }
+
+
+def render_with_citations(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (),
+                          confirmations: Sequence[str] = ()) -> tuple[str, list[dict[str, Any]]]:
+    """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
+
+    出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
+    結び、ファイル名と頁で推測しない。
+    """
+    citation_spans: list[dict] = []
+
     def lines(entries: Sequence[CheckedItem], numbered: bool) -> list[str]:
         out: list[str] = []
         for number, entry in enumerate(entries, 1):
@@ -1908,6 +1931,7 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
             if entry.span and (following is None or following.span is None
                                or _citation(following.span) != _citation(entry.span)):
                 out.append(_citation(entry.span))
+                citation_spans.append(entry.span)
         return out
 
     verified = [entry for entry in checked if entry.span and not entry.quote_only]
@@ -1954,7 +1978,8 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
     if confirmations:
         sections.append((CONFIRMATIONS_SECTION_TITLE, [f"・{line}" for line in confirmations]))
     body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)
-    return "\n\n".join(part for part in (summary.strip(), body) if part)
+    text = "\n\n".join(part for part in (summary.strip(), body) if part)
+    return text, [citation_line_ref(span) for span in citation_spans]
 
 
 # ---- 生成・監査・是正 ---------------------------------------------------------

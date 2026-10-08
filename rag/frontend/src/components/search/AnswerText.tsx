@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
 import {
-  matchCitation,
+  matchCitationLine,
   parseAnswerText,
   parseCitationLine,
   type AnswerTextEntry,
@@ -17,6 +17,7 @@ import { CitationPreviewDialog } from "./CitationPreviewDialog";
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
  * 生成中と、書式に合わない本文（根拠不足の案内など）はそのままの文字列で出す。
  * 根拠の行は、当たる引用（`citations`）があれば押せるようにし、その引用の原文のプレビューを開く（#657）。
+ * 当たる引用は、回答エンジンが付けた出典行の番号で決める（無ければファイル名と頁。#1330）。
  */
 export function AnswerText({
   text,
@@ -73,9 +74,9 @@ export function AnswerText({
     </div>
   );
 
-  function renderCitation(citation: string) {
+  function renderCitation(citation: string, ordinal: number | undefined) {
     const ref = parseCitationLine(citation);
-    const index = ref ? matchCitation(ref, citations) : -1;
+    const index = matchCitationLine(ordinal, ref, citations);
     if (index < 0) {
       return (
         <span key={citation} className="mt-0.5 flex items-center gap-1 text-xs text-fg-muted">
@@ -113,7 +114,7 @@ export function AnswerText({
     return (
       <li key={index} className="whitespace-pre-wrap">
         {entry.text}
-        {entry.citations.map(renderCitation)}
+        {entry.citations.map((citation, position) => renderCitation(citation, entry.citationLines[position]))}
       </li>
     );
   }
