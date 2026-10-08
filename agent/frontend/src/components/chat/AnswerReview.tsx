@@ -5,6 +5,7 @@ import { Disclosure, StatusBadge, type StatusVariant } from "@engchina/productio
 import type {
   AnswerReview,
   ConditionSource,
+  ReviewOutcome,
   ReviewValidation,
   UnverifiedClaimKind,
   UnverifiedPoint,
@@ -14,8 +15,8 @@ import { t, type I18nKey } from "@/lib/i18n";
 /**
  * 回答の確かめ（#1286）。回答の下に、確かめた条件・確認待ちの質問・使った業務ガイド・資料で確かめた結果を
  * 業務の言葉で畳んで出す（出典・使ったツールと同じ plain の Disclosure）。資料で確かめた結果は畳んでいても
- * 見出しの StatusBadge で分かるようにする。成果物の JSON・内部の語は出さない（handoff §13。元の JSON は
- * 実行の詳細の成果物で管理者だけが見る）。
+ * 見出しの StatusBadge で分かるようにする。回答の対応（条件付きの回答・確認が必要など。#1314）も、検証のバッジと
+ * 並べて見出しに出す。成果物の JSON・内部の語は出さない（handoff §13。元の JSON は実行の詳細の成果物で管理者だけが見る）。
  */
 export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; testId: string }) {
   const hasDetails =
@@ -24,6 +25,14 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
     review.clarifications.length > 0 ||
     review.guide !== null ||
     review.gaps.length > 0;
+  // 見出しとバッジは同じ行に置き、狭い幅ではバッジを次の行へ折り返す（見出しの文字を縦に潰さない）。
+  const heading = (
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+      <span className="whitespace-nowrap">{t("chat.review.title")}</span>
+      {review.outcome ? <OutcomeBadge outcome={review.outcome} testId={`${testId}-outcome`} /> : null}
+      {review.validation ? <ValidationBadge validation={review.validation} /> : null}
+    </span>
+  );
   return (
     <>
       {review.limitReached ? <LimitNote testId={`${testId}-limit`} /> : null}
@@ -32,18 +41,18 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
           variant="plain"
           size="sm"
           icon={ShieldCheck}
-          // 見出しとバッジは同じ行に置き、狭い幅ではバッジを次の行へ折り返す（見出しの文字を縦に潰さない）。
-          summary={
-            <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
-              <span className="whitespace-nowrap">{t("chat.review.title")}</span>
-              {review.validation ? <ValidationBadge validation={review.validation} /> : null}
-            </span>
-          }
+          summary={heading}
           summaryProps={{ "data-testid": `${testId}-summary` }}
           data-testid={testId}
         >
           <AnswerReviewSections review={review} />
         </Disclosure>
+      ) : review.outcome ? (
+        // 対応だけがある回答（検証も支援タスクの状態も無い）は、開いても中身が無いので畳まずに見出しだけを出す。
+        <p className="flex items-center gap-1.5 text-xs font-medium text-fg" data-testid={testId}>
+          <ShieldCheck size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
+          <span className="min-w-0 break-words">{heading}</span>
+        </p>
       ) : null}
     </>
   );
@@ -194,6 +203,28 @@ const CLAIM_LABEL: Record<UnverifiedClaimKind, I18nKey> = {
 
 function sourceLabel(source: Exclude<ConditionSource, null>): string {
   return source === "user" ? t("chat.review.source.user") : t("chat.review.source.question");
+}
+
+/**
+ * 回答の対応 → StatusBadge の対応表（#1314）。文言と色は RAG の回答の詳細（`outcomeBadge`。#1252）と同じにする
+ * （3 製品で同じ機能は同じ書き方）。「答えた」は出さない（`ReviewOutcome` に含めない）。
+ */
+const OUTCOME_BADGE: Record<ReviewOutcome, { variant: StatusVariant; label: I18nKey }> = {
+  conditional: { variant: "warning", label: "chat.review.outcome.conditional" },
+  needs_clarification: { variant: "info", label: "chat.review.outcome.needsClarification" },
+  needs_environment_data: { variant: "warning", label: "chat.review.outcome.needsEnvironmentData" },
+  needs_human: { variant: "warning", label: "chat.review.outcome.needsHuman" },
+  insufficient_evidence: { variant: "danger", label: "chat.review.outcome.insufficientEvidence" },
+};
+
+/** 回答の対応のバッジ（チャットの回答の確かめの見出しと、実行の詳細の回答で使う。アイコン付き）。 */
+export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; testId: string }) {
+  const { variant, label } = OUTCOME_BADGE[outcome];
+  return (
+    <span className="inline-flex" data-testid={testId}>
+      <StatusBadge variant={variant} label={t(label)} />
+    </span>
+  );
 }
 
 /** 資料で確かめた結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。 */

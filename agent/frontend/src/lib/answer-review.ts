@@ -12,6 +12,26 @@ import type { Artifact } from "@/lib/api";
 
 export const SUPPORT_TASK_KIND = "support_task";
 export const ANSWER_VALIDATION_KIND = "answer_validation";
+export const ANSWER_KIND = "answer";
+
+/**
+ * 回答の対応（#1305 / #1314）。成果物 `answer` の `outcome.value`（RAG の AnswerEnvelope の `outcome` と同じ語彙）の
+ * うち、画面にバッジで出すもの。「答えた（answered）」は RAG の回答の詳細（#1252）と同じく出さない。
+ */
+export type ReviewOutcome =
+  | "conditional"
+  | "needs_clarification"
+  | "needs_environment_data"
+  | "needs_human"
+  | "insufficient_evidence";
+
+const REVIEW_OUTCOMES = new Set<string>([
+  "conditional",
+  "needs_clarification",
+  "needs_environment_data",
+  "needs_human",
+  "insufficient_evidence",
+]);
 
 /** 条件の出所（`user_answer` = 利用者の答え、`rag_guide` = RAG が質問の文から読んだ）。 */
 export type ConditionSource = "user" | "question" | null;
@@ -77,6 +97,8 @@ export interface AnswerReview {
   /** この回答で、資料を調べる回数の上限に達して調べなかった呼び出しがあったか。 */
   limitReached: boolean;
   validation: ReviewValidation | null;
+  /** 回答の対応（出すものだけ。対応の無い古い Run・「答えた」は null）。 */
+  outcome: ReviewOutcome | null;
 }
 
 const BLOCKING_CLAIMS = new Set<UnverifiedClaimKind>(["contradicted", "unsupported", "citation_error", "unassessed"]);
@@ -229,10 +251,20 @@ export function validationReview(content: Record<string, unknown>): ReviewValida
   };
 }
 
+/**
+ * 成果物 `answer` の内容から、画面に出す回答の対応を取り出す。対応の無い古い Run・知らない値・「答えた」は null
+ * （内部の値をそのまま画面に出さない）。
+ */
+export function answerOutcome(content: Record<string, unknown> | null): ReviewOutcome | null {
+  const value = record(content?.outcome)?.value;
+  return typeof value === "string" && REVIEW_OUTCOMES.has(value) ? (value as ReviewOutcome) : null;
+}
+
 /** Run の成果物から、回答の確かめを作る。出すものが何も無ければ null。 */
 export function answerReview(artifacts: Artifact[]): AnswerReview | null {
   const state = latest(artifacts, SUPPORT_TASK_KIND);
   const validationContent = latest(artifacts, ANSWER_VALIDATION_KIND);
+  const outcome = answerOutcome(latest(artifacts, ANSWER_KIND));
   const review: AnswerReview = {
     conditions: state ? conditions(state) : [],
     clarifications: state ? clarifications(state) : [],
@@ -240,6 +272,7 @@ export function answerReview(artifacts: Artifact[]): AnswerReview | null {
     gaps: state && Array.isArray(state.gaps) ? state.gaps.map(text).filter(Boolean) : [],
     limitReached: state ? limitReached(state) : false,
     validation: validationContent ? validationReview(validationContent) : null,
+    outcome,
   };
   const empty =
     review.conditions.length === 0 &&
@@ -247,6 +280,7 @@ export function answerReview(artifacts: Artifact[]): AnswerReview | null {
     review.guide === null &&
     review.gaps.length === 0 &&
     !review.limitReached &&
-    review.validation === null;
+    review.validation === null &&
+    review.outcome === null;
   return empty ? null : review;
 }
