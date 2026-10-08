@@ -1563,3 +1563,117 @@ def test_unanswerable_session_does_not_request_manual_completion() -> None:
     assert state.status == ClarificationStatus.UNANSWERABLE
     assert state.manual_completion_required is False
     assert state.can_generate_sql is False
+
+
+def _expire_after_ttl(created: QuerySessionData) -> Any:
+    from datetime import timedelta
+
+    ttl = get_settings().nl2sql_query_session_idle_ttl_seconds
+    return created.session.updated_at + timedelta(seconds=ttl + 1)
+
+
+def test_idle_guided_session_expires_after_ttl_and_rejects_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import timedelta
+
+    from app.features.nl2sql.ontology_service import QUERY_SESSION_EXPIRED_CODE
+
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    assert created.clarification and created.clarification.current_question
+    question = created.clarification.current_question
+    ttl = get_settings().nl2sql_query_session_idle_ttl_seconds
+
+    # 期限内は変えない。
+    assert (
+        runtime.expire_idle_sessions(now=created.session.updated_at + timedelta(seconds=ttl - 1))
+        == 0
+    )
+    assert runtime.get_session(created.session.id).session.status != QuerySessionStatus.CANCELLED
+
+    assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 1
+    expired = runtime.get_session(created.session.id).session
+    assert expired.status == QuerySessionStatus.CANCELLED
+    assert expired.error_code == QUERY_SESSION_EXPIRED_CODE
+    assert expired.cancelled_at is not None
+    # 2 回目の掃除では数えない（終了済み）。
+    assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 0
+
+    # 自由入力の回答でも、AI の再解釈を呼ぶ前に期限切れを返す。
+    def unexpected_interpret(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("expired session must not be reinterpreted")
+
+    monkeypatch.setattr(runtime, "_interpret_question", unexpected_interpret)
+    with pytest.raises(OntologyStateConflictError) as raised:
+        runtime.answer_clarification(
+            created.session.id,
+            ClarificationAnswerRequest(base_version=1, question_id=question.id, free_text="今月"),
+        )
+    assert raised.value.code == QUERY_SESSION_EXPIRED_CODE
+    assert "一定時間操作がなかった" in raised.value.message_ja
+    # 画面の「閉じる」（中止）は、終了済みの session でもそのまま成功する。
+    assert runtime.cancel_session(created.session.id).session.status == QuerySessionStatus.CANCELLED
+
+
+@pytest.mark.parametrize(
+    "status",
+    [QuerySessionStatus.EXECUTING, QuerySessionStatus.DONE, QuerySessionStatus.ERROR],
+)
+def test_session_expiry_skips_executing_and_finished_sessions(status: QuerySessionStatus) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    session = created.session.model_copy(deep=True, update={"status": status})
+    runtime.sessions.replace_session(session)
+    runtime._persist_session(session)
+
+    assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 0
+    assert runtime.get_session(created.session.id).session.status == status
+
+
+def test_session_expiry_skips_sessions_updated_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql.ontology_store import OntologyVersionConflict
+
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    original_save = runtime._save
+
+    def conflicting_save(collection: Any, document: Any, **kwargs: Any) -> Any:
+        if collection == "query_sessions":
+            raise OntologyVersionConflict("changed", current_etag="other", current_version=9)
+        return original_save(collection, document, **kwargs)
+
+    monkeypatch.setattr(runtime, "_save", conflicting_save)
+
+    assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 0
+    monkeypatch.setattr(runtime, "_save", original_save)
+    assert runtime.get_session(created.session.id).session.status != QuerySessionStatus.CANCELLED
+
+
+def test_session_expiry_runs_on_create_at_most_once_per_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime()
+    calls: list[int] = []
+
+    def counting_expire(**kwargs: Any) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(runtime, "expire_idle_sessions", counting_expire)
+    _create_guided(runtime)
+    _create_guided(runtime)
+    assert len(calls) == 1
+
+    # 間隔を過ぎたら、次の作成でもう一度掃除する。失敗しても作成は止めない。
+    runtime._last_session_sweep_at = (runtime._last_session_sweep_at or 0.0) - 901.0
+
+    def failing_expire(**kwargs: Any) -> int:
+        calls.append(1)
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(runtime, "expire_idle_sessions", failing_expire)
+    assert _create_guided(runtime).session.id
+    assert len(calls) == 2

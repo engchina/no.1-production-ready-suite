@@ -1708,6 +1708,45 @@ test("AI要件確認の途中で再読込するとサーバーの確認を中止
   await expect.poll(() => payloads.cancel, { timeout: 10_000 }).toBe(true);
 });
 
+test("AI要件確認は期限切れで終わった確認の質問を出さず、理由と閉じるだけを出す", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page);
+  const expiredMessage =
+    "一定時間操作がなかったため、この確認は終了しました。閉じてから、もう一度始めてください。";
+  // mockApi より後に登録した route が優先される。
+  await page.route("**/api/nl2sql/query-sessions/*/clarification-answers", (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: { code: "QUERY_SESSION_EXPIRED", message_ja: expiredMessage } }),
+    })
+  );
+  await page.route(/\/api\/nl2sql\/query-sessions\/[^/]+$/, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const data = guidedSessionData(false);
+    data.session.status = "cancelled";
+    Object.assign(data.session, { error_code: "QUERY_SESSION_EXPIRED", error_message_ja: expiredMessage });
+    await fulfill(route, data);
+  });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await panel.getByRole("radio", { name: /今月/ }).check();
+  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
+
+  await expect(panel.getByText(expiredMessage)).toHaveCount(1);
+  await expect(panel.getByRole("heading", { name: "どの期間を対象にしますか？" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "選んだ内容で次へ" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "確認内容を質問に反映" })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("guided-clarification-expired.png"), fullPage: true });
+
+  // 終了済みの確認は、中止を送らずに閉じる。
+  await panel.getByRole("button", { name: "確認を中止して閉じる" }).click();
+  await expect(panel).toHaveCount(0);
+  expect(payloads.cancel).toBeUndefined();
+});
+
 test("AI要件確認の中止は主操作の右側から元のクエリを保って閉じる", async ({ page }) => {
   const payloads = await mockApi(page);
   await page.goto("/query");

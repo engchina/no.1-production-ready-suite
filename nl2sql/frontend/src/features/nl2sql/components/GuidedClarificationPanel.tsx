@@ -86,7 +86,9 @@ export function GuidedClarificationPanel({
     sessionRef.current = session;
   }, [session]);
 
-  const clarification = session?.clarification ?? null;
+  // 中止・期限切れなどで終わった確認は、質問と回答の欄を出さず、理由と「閉じる」だけを出す（#1274）。
+  const sessionEnded = session?.status === "cancelled" || session?.status === "error";
+  const clarification = sessionEnded ? null : session?.clarification ?? null;
   const currentQuestion = clarification?.current_question ?? null;
   const intent = latestIntent(session);
   const confirmedIntentSummary = clarification?.intent_summary.filter((item) => item.confirmed) ?? [];
@@ -420,7 +422,12 @@ export function GuidedClarificationPanel({
         {clarification?.message_ja}
       </div>
 
-      {error ? <Banner severity="danger">{error}</Banner> : null}
+      {error && !sessionEnded ? <Banner severity="danger">{error}</Banner> : null}
+      {sessionEnded ? (
+        <Banner severity="warning">
+          {session?.error_message_ja || t("nl2sql.clarification.ended")}
+        </Banner>
+      ) : null}
 
       {busyAction === "start" ? (
         <div

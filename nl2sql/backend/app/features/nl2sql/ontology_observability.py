@@ -75,7 +75,7 @@ _SOURCE_STATUSES = frozenset({"extracted", "failed", "duplicate"})
 _RECOMMENDATION_OUTCOMES = frozenset(
     {"with_candidates", "no_candidates", "accepted", "manually_changed"}
 )
-_CLARIFICATION_OUTCOMES = frozenset({"started", "answered", "ready", "cancelled"})
+_CLARIFICATION_OUTCOMES = frozenset({"started", "answered", "ready", "cancelled", "expired"})
 _CLARIFICATION_CATEGORIES = frozenset(
     {"business_meaning", "relationship_path", "filter_value", "time_range", "granularity", "output"}
 )

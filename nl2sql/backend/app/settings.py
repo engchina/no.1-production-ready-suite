@@ -225,6 +225,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # チャットのジョブの中で実行した結果の行を、画面が受け取るまで置いておく上限（秒。#1176）。
     # 行は会話に残さない（受け取ったら消す。期限を過ぎたら要約と「もう一度実行」を出す）。
     nl2sql_chat_result_retention_seconds: int = Field(default=600, ge=30, le=86_400)
+    # 操作が途絶えた未完了の query session（AI要件確認など）を中止するまでの時間（秒）。
+    # 画面の中止・再読込の後始末が届かなかった session（ブラウザの異常終了・通信断）を残さない。
+    nl2sql_query_session_idle_ttl_seconds: int = Field(default=86_400, ge=600, le=2_592_000)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""
