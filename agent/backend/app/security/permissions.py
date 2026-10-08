@@ -400,6 +400,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_RUN}/audit"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts/{{artifact_id}}"): _RUN_DETAIL,
+    # RAG の図の根拠を開く短命の URL（#1311。閲覧者として RAG に作らせる）。
+    ("GET", f"{_RUN}/figure-url"): _RUN_DETAIL,
     ("GET", f"{_RUN}/events"): _any(MENU_RUNS, MENU_APPROVALS),
     ("POST", f"{_RUN}/cancel"): _OPERATE,
     ("POST", f"{_RUN}/resume"): _OPERATE,

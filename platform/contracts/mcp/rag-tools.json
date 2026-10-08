@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -404,7 +404,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -465,6 +465,12 @@
             "default": false,
             "description": "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。画像は MCP の content の image（PNG。長い辺 1568 px 以下・1500000 バイト以下）で返し、structuredContent の image には大きさだけを入れる。図でない・場所が分からない根拠は image_not_available のエラー。",
             "title": "Include Image",
+            "type": "boolean"
+          },
+          "include_image_url": {
+            "default": false,
+            "description": "true のとき、図の根拠の元の画像をブラウザで開く短命の URL（image_url）を返す（300 秒で切れ、読むたびに今の権限・版を確かめる）。Agent の画面の操作からだけ使える（それ以外は image_url_not_allowed のエラー）。",
+            "title": "Include Image Url",
             "type": "boolean"
           }
         },
@@ -594,6 +600,39 @@
               "bbox_unit"
             ],
             "title": "EvidenceImageRef",
+            "type": "object"
+          },
+          "EvidenceImageUrl": {
+            "description": "図の根拠の元の画像をブラウザで開く短命の URL（rag_read_source の include_image_url。#1311）。\n\nURL は利用者・根拠・版に縛った署名つきのトークンを path に持ち、期限（5 分）で切れる。読むたびに\n今の権限・版を確かめ直す（版が変われば 409、見えなければ 404）。",
+            "properties": {
+              "url": {
+                "description": "図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。",
+                "title": "Url",
+                "type": "string"
+              },
+              "path": {
+                "description": "url の path（RAG の公開の起点に付け替えるときに使う）。",
+                "title": "Path",
+                "type": "string"
+              },
+              "expires_at": {
+                "description": "期限（ISO 8601、UTC）。",
+                "title": "Expires At",
+                "type": "string"
+              },
+              "expires_in_seconds": {
+                "description": "発行からの有効な秒数。",
+                "title": "Expires In Seconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "url",
+              "path",
+              "expires_at",
+              "expires_in_seconds"
+            ],
+            "title": "EvidenceImageUrl",
             "type": "object"
           },
           "EvidenceLocator": {
@@ -789,7 +828,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -887,6 +926,18 @@
             ],
             "default": null,
             "description": "include_image=true で返した図の画像の大きさ（画像は content の image）。include_image=false なら null。"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EvidenceImageUrl"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "include_image_url=true で返した、図をブラウザで開く短命の URL（#1311）。"
           },
           "locator": {
             "$ref": "#/$defs/EvidenceLocator"
@@ -1527,7 +1578,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2387,7 +2438,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2858,7 +2909,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

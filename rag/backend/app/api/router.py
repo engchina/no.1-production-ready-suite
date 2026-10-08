@@ -13,6 +13,7 @@ from app.api.routes import (
     documents,
     evaluation,
     feedback,
+    figures,
     health,
     knowledge_bases,
     mcp,
@@ -61,3 +62,6 @@ api_router.include_router(settings.router, prefix="/settings", tags=["settings"]
 api_router.include_router(services.router, prefix="/services", tags=["services"])
 # Agent から利用者として呼ぶ MCP（サービストークンで認証。#232）。
 api_router.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
+# MCP（rag_read_source の include_image_url）が作る、図を開く短命の署名つきの URL（#1311）。
+# Cookie もサービストークンも使わず、path のトークンで route が認証する（manifest では公開 path）。
+api_router.include_router(figures.router, prefix="/figures", tags=["mcp"])

@@ -155,6 +155,8 @@ REQUIRED_BACKEND_ENV_LINES = {
         # RAG / NL2SQL の MCP は、同じ Compute の backend（127.0.0.1）を直接呼ぶ（#233 / #1316）。
         'AGENT_EXTERNAL_RAG_MCP_URL=${local.product_mcp_urls["rag"]}\n',
         'AGENT_EXTERNAL_NL2SQL_MCP_URL=${local.product_mcp_urls["nl2sql"]}\n',
+        # 画面（ブラウザ）から RAG の図の根拠を開く起点（#1311）。1 台の Compute では同じ origin の /rag（#1316）。
+        'AGENT_EXTERNAL_RAG_PUBLIC_URL=${local.product_browser_urls["rag"]}\n',
     ],
 }
 # 全製品の Compute に置く共通 .env（platform/.env、PLATFORM_*。#211）に必ず書く値。
@@ -721,6 +723,8 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             # MCP は同じ Compute の backend を 127.0.0.1 で直接呼ぶ（Nginx を通さない）。
             f'rag = var.deploy_rag ? "http://127.0.0.1:{BACKEND_PORTS["rag"]}/api/mcp" : ""',
             f'nl2sql = var.deploy_nl2sql ? "http://127.0.0.1:{BACKEND_PORTS["nl2sql"]}/api/mcp" : ""',
+            # 画面から RAG の図を開く起点は同じ origin の /rag（#1311 / #1316）。
+            'rag = var.deploy_rag ? "/rag" : ""',
         ],
         context="product selection and cloud-init rendering",
     )

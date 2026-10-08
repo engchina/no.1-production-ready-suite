@@ -67,6 +67,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 - MCP 接続のツールは、組み込み Runtime から `tool_registry.invoke`（`definition` / `handler` を渡す）を通してだけ呼ぶ
   （policy・masking・監査を再利用する）。承認の要否は MCP の `readOnlyHint` とツール権限（`<接続>__<ツール>` の名前）。
   外部 API key・token を snapshot、API、ログ、Artifact に出さない。
+  例外は画面の操作の「RAG の図の根拠を開く」（#1311。`GET /api/runs/{run_id}/figure-url`）だけで、Run のツール呼び出しでは
+  ないため `tool_registry` を通さず、**画面を見ている利用者**を `sub`・`purpose=figure_url` にしたサービストークンで RAG の
+  `rag_read_source`（`include_image_url`）を呼び、返った短命の URL を保存しない（`features/agent/rag_figures.py`）。
 - サービストークンは呼び出しごとの `issue_service_token`（`sub` = Run の利用者 `RunState.created_by_user_uuid`、なければ
   `AGENT_MCP_SERVICE_USER_LOGIN_ID` のサービス利用者。`aud` = 接続の audience）。承認後の実行も承認者ではなく Run の利用者で呼ぶ。
   再試行（#854）は、送信前の失敗と 429 / 503 は全メッセージ、502 / 504 は手順と読み取り専用（`readOnlyHint`）のツールだけで、

@@ -149,6 +149,8 @@ sudo systemctl restart production-ready-rag-backend.service
   `http://127.0.0.1:8010/api/mcp`。Nginx を通さない。#1316）を書きます。
   これは Agent の「MCP 接続」の `rag` / `nl2sql` の初期値です（#757）。配備しなかった製品の URL は空で、後から画面の「MCP 接続」で設定できます。Agent は Run を作った利用者として
   呼び、認証は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（stack が生成して全 Compute に同じ値を配る）で署名した短命の token です。
+  あわせて `AGENT_EXTERNAL_RAG_PUBLIC_URL=/rag` を書きます。Agent の画面で RAG の図の根拠を開く短命の URL（#1311）を、
+  同じ origin の `/rag` の下（Nginx が `/rag/api/` を RAG の backend へ渡す）に付け替えます（#1316）。
 - Agent の実行は Control Plane の組み込み Runtime（OpenAI Agents SDK と OCI Enterprise AI の Responses API。#754）。外部の Runtime と Docker は使いません。
   モデルは「システム設定 > モデル」の OCI Enterprise AI の接続と既定のテキストモデルです。
 - Runtime 状態（Run・業務 Agent）と画面で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）は Oracle に保存します（`oracle_checkpoint`。接続は共通の `PLATFORM_ORACLE_*`、table は `init_script.sh` の `agent_system_schema --initialize` が作成。#764）。旧 `AGENT_RUNTIME_ORACLE_*` は書きません。gunicorn は 1 worker、dispatcher は `in_process` に固定します。

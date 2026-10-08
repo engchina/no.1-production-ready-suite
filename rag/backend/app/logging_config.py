@@ -45,8 +45,29 @@ class _ServiceStatusAccessFilter(logging.Filter):
         )
 
 
+# 図を開く署名つきの URL（`/api/figures/{token}`。#1311）のトークン。access log には残さない。
+_FIGURE_TOKEN_PATH = re.compile(r"(/api/figures/)[^/?#\s\"]+")
+FIGURE_TOKEN_MASK = "{token}"  # nosec B105 - ログで伏せた後の表記で秘密ではない
+
+
+class _FigureTokenAccessFilter(logging.Filter):
+    """図の URL のトークンを access log で伏せる（行は落とさない）。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            client, method, path, version, status = record.args
+            if isinstance(path, str) and "/api/figures/" in path:
+                masked = _FIGURE_TOKEN_PATH.sub(rf"\g<1>{FIGURE_TOKEN_MASK}", path)
+                record.args = (client, method, masked, version, status)
+        elif isinstance(record.msg, str) and "/api/figures/" in record.msg:
+            record.msg = _FIGURE_TOKEN_PATH.sub(rf"\g<1>{FIGURE_TOKEN_MASK}", record.msg)
+        return True
+
+
 def _install_uvicorn_access_filters() -> None:
     access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, _FigureTokenAccessFilter) for item in access_logger.filters):
+        access_logger.addFilter(_FigureTokenAccessFilter())
     if any(isinstance(item, _ServiceStatusAccessFilter) for item in access_logger.filters):
         return
     access_logger.addFilter(_ServiceStatusAccessFilter())

@@ -60,8 +60,9 @@ class RagReadSourceIn(_ContractInput):
     chunk_id: str
     offset: int = Field(default=0, ge=0)
     max_chars: int = Field(default=8000, ge=1, le=20000)
-    # 図の根拠の元の画像（#1282）。
+    # 図の根拠の元の画像（#1282）と、画面で開く短命の URL（#1311）。
     include_image: bool = False
+    include_image_url: bool = False
 
 
 class RagEvidenceRefIn(_ContractInput):
@@ -153,7 +154,7 @@ _EVIDENCE = {
 }
 
 # RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
-RAG_OUTPUT_SCHEMA_VERSION = 3
+RAG_OUTPUT_SCHEMA_VERSION = 4
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -183,6 +184,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "evidence_type": "text",
         "image_ref": None,
         "image": None,
+        "image_url": None,
         "locator": _LOCATOR,
         "text": "契約条項の全文",
         "offset": 0,

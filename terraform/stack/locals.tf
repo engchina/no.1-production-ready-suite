@@ -119,6 +119,7 @@ AGENT_ARTIFACT_STORAGE_PATH=${local.agent_data_dir_host}/artifacts
 
 AGENT_EXTERNAL_RAG_MCP_URL=${local.product_mcp_urls["rag"]}
 AGENT_EXTERNAL_NL2SQL_MCP_URL=${local.product_mcp_urls["nl2sql"]}
+AGENT_EXTERNAL_RAG_PUBLIC_URL=${local.product_browser_urls["rag"]}
 EOT
 
   # Agent が RAG / NL2SQL の MCP（POST /api/mcp）を呼ぶ URL（#233）。配備した製品だけ。
@@ -128,6 +129,12 @@ EOT
   product_mcp_urls = {
     rag    = var.deploy_rag ? "http://127.0.0.1:8000/api/mcp" : ""
     nl2sql = var.deploy_nl2sql ? "http://127.0.0.1:8010/api/mcp" : ""
+  }
+  # 利用者のブラウザから RAG を開く起点（#1311）。Agent の画面で RAG の図の根拠を開く短命の URL の path をこの起点に
+  # 付ける。1 台の Compute（#1316）では同じ origin の /rag なので、host を含まない path にする（Terraform は
+  # instance 自身の IP を user_data に書けない。ブラウザは Agent の画面と同じ origin で解決する）。
+  product_browser_urls = {
+    rag = var.deploy_rag ? "/rag" : ""
   }
 
   # ---------------------------------------------------------------- 共通 .env（platform/.env。#211）

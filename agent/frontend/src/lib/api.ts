@@ -565,6 +565,12 @@ export interface ToolCallAuditFilters {
   limit?: number;
 }
 
+/** RAG の図の根拠を開く短命の URL（#1311。期限が切れたら取り直す。保存しない）。 */
+export interface RunFigureUrl {
+  url: string;
+  expires_at: string;
+}
+
 export interface Artifact {
   id: string;
   name: string;
@@ -1344,6 +1350,14 @@ export const agentApi = {
       body: JSON.stringify(payload),
     }),
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
+  /** Run の RAG の図の根拠を開く短命の URL（#1311。画面を見ている利用者として RAG が作る）。 */
+  getRunFigureUrl: (runId: string, documentId: string, chunkId: string) =>
+    request<RunFigureUrl>(
+      `/api/runs/${encodeURIComponent(runId)}/figure-url?${new URLSearchParams({
+        document_id: documentId,
+        chunk_id: chunkId,
+      }).toString()}`
+    ),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
   listAgentTemplates: () => request<{ templates: AgentTemplate[] }>("/api/agent-templates"),

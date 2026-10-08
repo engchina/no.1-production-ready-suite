@@ -8,6 +8,24 @@ export interface RagEvidenceView {
   location: string | null;
   text: string;
   usedInAnswer: boolean;
+  /** 図の根拠の元の図（`image_ref`。#1282 / #1311）。図でなければ null。 */
+  figure: RagFigureRef | null;
+  /** 図を AI（VLM）が読んだ説明の根拠か（`evidence_type=figure_description`）。 */
+  aiFigureDescription: boolean;
+}
+
+/** 図を開くときに RAG へ渡す根拠（場所は RAG が保存した記録から決める）。 */
+export interface RagFigureRef {
+  documentId: string;
+  chunkId: string;
+}
+
+function figureRef(value: unknown): RagFigureRef | null {
+  const ref = record(value);
+  if (!ref) return null;
+  const documentId = typeof ref.document_id === "string" ? ref.document_id : "";
+  const chunkId = typeof ref.chunk_id === "string" ? ref.chunk_id : "";
+  return documentId && chunkId ? { documentId, chunkId } : null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -73,6 +91,8 @@ export function ragEvidenceItems(content: Record<string, unknown>): RagEvidenceV
       location: evidenceLocation(evidence.locator),
       text: typeof evidence.excerpt === "string" ? evidence.excerpt : "",
       usedInAnswer: evidence.used_in_answer === true,
+      figure: figureRef(evidence.image_ref),
+      aiFigureDescription: evidence.evidence_type === "figure_description",
     });
   });
   return views;
