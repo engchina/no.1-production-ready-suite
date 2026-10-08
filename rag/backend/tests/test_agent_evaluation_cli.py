@@ -52,14 +52,18 @@ def _run(
     steps: list[dict[str, Any]],
     status: str = "completed",
     thread_id: str = "thread_" + "a" * 32,
+    outcome: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    content: dict[str, Any] = {"text": answer}
+    if outcome is not None:
+        content["outcome"] = outcome
     return {
         "id": run_id,
         "status": status,
         "thread_id": thread_id,
         "steps": steps,
         "artifacts": [
-            {"kind": "answer", "content": {"text": answer}},
+            {"kind": "answer", "content": content},
             {"kind": "answer_validation", "content": {"status": "completed"}},
         ],
         "usage": {"requests": 3},
@@ -283,6 +287,105 @@ def test_answer_ending_with_a_question_without_rag_search_is_a_clarification() -
     assert turn.response.trace_id == "run-1"
 
 
+def _outcome(value: str, basis: str = "answer_passages") -> dict[str, Any]:
+    return {"schema_version": 1, "value": value, "basis": basis, "rag_outcome": None, "signals": []}
+
+
+def test_outcome_recorded_on_the_answer_artifact_is_used_for_scoring() -> None:
+    # ed-current-session-timeout: rag_search を呼ばない Run も、Agent が回答に付けた対応で採点する
+    # （推定は「回答」と取り違えた。#1305）。
+    case = {
+        "id": "ed-current-session-timeout",
+        "category": "environment_data_required",
+        "query": "今のセッションの有効期限は何分ですか？",
+        "expected_outcomes": ["needs_environment_data", "conditional"],
+    }
+    run = _run(
+        "run-1",
+        answer="既定値は 30 分です。\n今の設定値は資料からは確認できません。",
+        steps=[_step("rag_retrieve_evidence", {"evidence": []})],
+        outcome=_outcome("conditional"),
+    )
+    fake = FakeAgent([[run]])
+    metrics, records = evaluate(
+        _api(fake),
+        _request([case]),
+        agent_id="agent-1",
+        labels={},
+        run_timeout_seconds=60,
+        log=lambda _: None,
+    )
+    result = metrics.case_results[0]
+    assert (result.observed_outcome, result.outcome_source) == ("conditional", "agent_answer")
+    assert result.handling_correct is True
+    assert (records[0].outcome, records[0].outcome_source) == ("conditional", "agent_answer")
+
+
+def test_answer_outcome_wins_over_the_last_rag_search() -> None:
+    search = _step(
+        "rag_search",
+        {
+            "outcome": "needs_clarification",
+            "clarifications": [{"condition_id": "target", "question": "どちら？"}],
+            "evidence": [],
+        },
+    )
+    # Agent が確認を求められたが分岐ごとに答えた（Agent の対応は conditional）。
+    answered = agent_turn(
+        _run(
+            "run-1",
+            answer="個別なら利用者の詳細画面、グループならグループの詳細画面で付与します。",
+            steps=[search],
+            outcome=_outcome("conditional", "rag_search"),
+        ),
+        elapsed_ms=1.0,
+    )
+    details = answered.response.diagnostics.answer
+    assert details is not None
+    assert (details["outcome"], answered.outcome_source) == ("conditional", "agent_answer")
+    assert details["agent"]["outcome_source"] == "agent_answer"
+    # 問いを返していない回答では、rag_search の問いを聞いた条件として数えない。
+    assert "clarifications" not in details
+    # 確認の質問を返したなら、rag_search の問いを聞いた条件として渡す。
+    asked = agent_turn(
+        _run(
+            "run-2",
+            answer="付与先は個別の利用者ですか、グループですか？",
+            steps=[search],
+            outcome=_outcome("needs_clarification", "clarification_question"),
+        ),
+        elapsed_ms=1.0,
+    )
+    assert asked.response.diagnostics.answer is not None
+    assert asked.response.diagnostics.answer["clarifications"] == [
+        {"condition_id": "target", "question": "どちら？"}
+    ]
+    # 語彙に無い対応は使わず、前の決め方（rag_search の対応）に戻る。
+    unknown = agent_turn(
+        _run("run-3", answer="答え", steps=[search], outcome=_outcome("maybe")),
+        elapsed_ms=1.0,
+    )
+    assert unknown.outcome_source == "agent_rag_search"
+
+
+def test_inference_ignores_the_notices_of_the_final_validation() -> None:
+    # 対応を持たない成果物（#1305 より前）の推定は、最終の検証が足した注記を除いて最後の行を見る。
+    turn = agent_turn(
+        _run(
+            "run-1",
+            answer=(
+                "付与先は個別の利用者ですか、グループですか？\n\n"
+                "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。"
+            ),
+            steps=[],
+        ),
+        elapsed_ms=1.0,
+    )
+    assert turn.response.diagnostics.answer is not None
+    assert turn.response.diagnostics.answer["outcome"] == "needs_clarification"
+    assert turn.outcome_source == "inferred"
+
+
 def test_failed_and_timed_out_runs_are_case_errors() -> None:
     failed = _run("run-1", answer="", steps=[], status="failed")
     running = {**_run("run-2", answer="", steps=[]), "status": "running"}
@@ -362,7 +465,7 @@ def test_main_creates_agent_runs_and_writes_result(
         ),
         encoding="utf-8",
     )
-    fake = FakeAgent([[_run("run-1", answer="答え", steps=[])]])
+    fake = FakeAgent([[_run("run-1", answer="答え", steps=[], outcome=_outcome("answered"))]])
     real_client = httpx.Client
 
     def client(**kwargs: Any) -> httpx.Client:
@@ -393,6 +496,8 @@ def test_main_creates_agent_runs_and_writes_result(
     assert payload["agent"]["agent_id"] == "agent-eval"
     assert payload["data"]["case_count"] == 1
     assert payload["agent"]["runs"][0]["run_id"] == "run-1"
+    assert payload["agent"]["runs"][0]["outcome_source"] == "agent_answer"
+    assert payload["agent"]["outcome_sources"] == {"agent_answer": 1}
     created_agent = next(body for method, path, body in fake.calls if path == "/agents")
     assert created_agent["skill_ids"] == ["business_rag_research"]
     assert "sap-1" in created_agent["instructions"]
