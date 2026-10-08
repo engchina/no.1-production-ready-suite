@@ -27,12 +27,19 @@ from app.features.agent.runtime import (
     RunCreateRequest,
     RunState,
     RunStatus,
+    RunStep,
+    StepStatus,
     run_support_task,
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
-from app.features.agent.support_task import SUPPORT_TASK_KIND, SUPPORT_TASK_NAME
+from app.features.agent.support_task import (
+    SUPPORT_TASK_KIND,
+    SUPPORT_TASK_NAME,
+    abandoned_run_consumption,
+)
 from app.features.agent.tools import (
+    ToolCall,
     ToolDefinition,
     ToolInvocationContext,
     ToolPermissionLevel,
@@ -362,7 +369,8 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     assert len(env.mcp.calls_of("rag_search")) == 1
     assert len(env.mcp.calls_of("rag_read_source")) == 1
-    assert [step.status for step in run.steps] == ["completed", "failed", "completed"]
+    # 最後の step は回答の最終の検証（既定 on。予算には数えない。#1277）。
+    assert [step.status for step in run.steps] == ["completed", "failed", "completed", "completed"]
     blocked = run.steps[1].tool_result
     assert blocked is not None
     assert blocked.error_code == "budget_exceeded"
@@ -454,3 +462,87 @@ def test_resume_after_approval_keeps_the_consumption(monkeypatch: MonkeyPatch, e
         "tool_seconds": state["budget"]["task"]["tool_seconds"],
         "rag_seconds": 0.0,
     }
+
+
+def test_failed_runs_count_toward_the_task_budget(monkeypatch: MonkeyPatch, env: _Env) -> None:
+    """失敗する Run を同じ会話で繰り返しても、会話の通しの上限を超えない（#1277）。"""
+    monkeypatch.setattr(get_settings(), "agent_max_tool_calls_per_task", 3)
+    model = _script(
+        monkeypatch,
+        _lookup("call-1"),
+        _lookup("call-2"),
+        RuntimeError("model down"),
+        _lookup("call-3"),
+        _lookup("call-4"),
+        RuntimeError("model down"),
+        _lookup("call-5"),
+        [assistant_message("上限に達したため、ここまでの結果で答えます。")],
+    )
+
+    first = _run("今月の売上は？")
+    assert first.status == RunStatus.FAILED
+    second = _run("もう一度", thread_id=first.thread_id)
+    assert second.status == RunStatus.FAILED
+    third = _run("もう一度", thread_id=first.thread_id)
+
+    assert third.status == RunStatus.COMPLETED, third.events[-1].message
+    # 失敗した Run の呼び出しも数える（2 回 + 1 回で上限の 3 回。以降は呼ばない）。
+    assert env.calls == [LOOKUP, LOOKUP, LOOKUP]
+    blocked = second.steps[-1].tool_result
+    assert blocked is not None and blocked.error_code == "budget_exceeded"
+    assert "残り 1 回（上限 3 回）" in str(model.calls[3].system_instructions)
+    assert "残り 0 回（上限 3 回）" in str(model.calls[6].system_instructions)
+    state = _state(third)
+    assert state["budget"]["run"]["tool_calls"] == 0
+    assert state["budget"]["run"]["budget_exceeded"] == 1
+    assert state["budget"]["task"]["tool_calls"] == 3
+    assert state["budget"]["task"]["runs"] == 3
+
+
+def test_cancelled_run_counts_toward_the_task_budget(monkeypatch: MonkeyPatch, env: _Env) -> None:
+    """取り消した Run の実行済みの呼び出しも数え、承認待ちのまま取り消した呼び出しは数えない。"""
+    monkeypatch.setattr(get_settings(), "agent_max_tool_calls_per_task", 2)
+    _script(
+        monkeypatch,
+        _lookup("call-1"),
+        _lookup("call-w", WRITE),
+        _lookup("call-2"),
+        _lookup("call-3"),
+        [assistant_message("ここまでの結果で答えます。")],
+    )
+    first = _run("調べて登録して")
+    assert first.status == RunStatus.WAITING_APPROVAL
+    runtime_repository.cancel_run(first.id)
+
+    second = _run("やはり調べるだけ", thread_id=first.thread_id)
+
+    assert second.status == RunStatus.COMPLETED, second.events[-1].message
+    assert env.calls == [LOOKUP, LOOKUP]
+    blocked = second.steps[-1].tool_result
+    assert blocked is not None and blocked.error_code == "budget_exceeded"
+    state = _state(second)
+    assert state["budget"]["task"]["tool_calls"] == 2
+    assert state["budget"]["task"]["runs"] == 2
+
+
+def test_abandoned_run_consumption_counts_calls_stopped_before_the_result() -> None:
+    def step(name: str, status: str, approval_id: str | None = None) -> RunStep:
+        return RunStep(
+            run_id="run-1",
+            status=StepStatus(status),
+            tool_call=ToolCall(name=name, arguments={}),
+            approval_id=approval_id,
+        )
+
+    consumed = abandoned_run_consumption(
+        [
+            # 結果を受け取る前に Run が失敗・取消になった呼び出し（呼び先には届いている見込み）。
+            step("rag__rag_search", "running"),
+            step(LOOKUP, "cancelled"),
+            # 承認待ちのまま取り消した呼び出しと、Control Plane の検証は数えない。
+            step(WRITE, "cancelled", approval_id="approval-1"),
+            step("rag__rag_validate_answer", "running"),
+        ]
+    )
+
+    assert (consumed["tool_calls"], consumed["rag_calls"]) == (2, 1)

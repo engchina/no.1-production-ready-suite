@@ -10,7 +10,11 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
 
-from app.api.routes.search import _published_guides
+from app.api.routes.search import (
+    _published_guides,
+    profile_scope_filters,
+    support_guide_context,
+)
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
@@ -503,13 +507,20 @@ async def post_clarification_suggest(
 ) -> ApiResponse[ClarificationSuggestionsData]:
     """質問に出す確認(一致したルールのうち確認を持つ最初の 1 件。#717)。"""
     oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    view = await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
     found = await asyncio.to_thread(suggest_clarification, payload, request.query)
     if found is None:
-        # 業務ガイドの不明な条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
+        # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
+        # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
+        guides = await _published_guides(oracle, search_answer_profile_id)
         match = match_guide(
-            await _published_guides(oracle, search_answer_profile_id), request.query, {}
+            guides,
+            request.query,
+            {},
+            context=await support_guide_context(
+                oracle, guides, request.query, profile_scope_filters(view)
+            ),
         )
         guide = guide_clarification(match) if match is not None else None
         if guide is None:

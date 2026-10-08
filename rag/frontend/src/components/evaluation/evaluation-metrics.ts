@@ -141,6 +141,8 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   step_missing: "evaluation.failureReason.step_missing",
   forbidden_action: "evaluation.failureReason.forbidden_action",
   condition_missing: "evaluation.failureReason.condition_missing",
+  evidence_miss: "evaluation.failureReason.evidence_miss",
+  known_condition_reasked: "evaluation.failureReason.known_condition_reasked",
   case_error: "evaluation.failureReason.case_error",
 };
 

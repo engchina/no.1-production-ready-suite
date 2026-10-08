@@ -113,6 +113,13 @@ Claude Code の全機能の互換性や、Skill が業務のモデル・ツー�
   Project OCID）。`OpenAIResponsesModel` に OCI の OpenAI 互換の base URL を渡す。xAI のモデルは空の `tools` を
   拒否するため、ツールが無い呼び出しでは `tools` / `tool_choice` を送らない（`OciResponsesModel`）。
 - 指示: 共通の前置き（日本語・根拠・推測しない）＋ Agent の指示 ＋ 割り当てた Skill の指示。
+  Skill の指示は MCP のツールを素の名前（`rag_search`）で書いてよい。Run を作るときに、Skill の requirement が
+  名前で宣言し、この Run でモデルに渡すツールの名前（`rag__rag_search`）へ書き直す（Agent の指示・支援タスクの指示も同じ。
+  同じ素の名前が複数の接続にあって 1 つに決まらないものは書き換えない。#1303）。
+- 無いツールの呼び出し: モデルが渡していない名前のツールを呼んでも Run を落とさない（SDK の
+  `tool_not_found_behavior="return_error_to_model"`）。モデルへは「呼ぶときの名前は `<接続>__<ツール>`」
+  （候補が複数なら候補の一覧）を返して呼び直させる。Control Plane が素の名前を別のツールへ読み替えて実行することは
+  しない（呼び出し・承認・監査はモデルが呼んだ名前のまま。#1303）。
 - ツール: Skill の requirement が要求するツールを `FunctionTool` にする。`control-plane` は `tool_registry` の
   ツール、それ以外は MCP 接続の `tools/list`（Run の利用者として取得。名前は `<接続>__<ツール>`、英数字・`_`・`-`
   で 64 文字以内）。取得できない接続は飛ばして Run に `runtime.event`（warning）を残す（#757）。
@@ -342,16 +349,26 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 予算は `AGENT_MAX_RAG_CALLS_PER_RUN`（既定 4。Run ごとの `rag_search`・`rag_retrieve_evidence`）と
 `AGENT_MAX_TOOL_CALLS_PER_TASK`（既定 60。同じ会話の通しのツールの呼び出し）。超える呼び出しは実行せず、ツールの結果
 （`error_code="budget_exceeded"`、step は失敗）でモデルに知らせ、Run は失敗にしない。消費は Run の step から数えるため、
-承認の後の再開で 0 に戻らない。
-回答の最終の検証（#1246）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 false）が true のとき、RAG の根拠を使った Run の
-回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続の `rag_validate_answer` を呼ぶ。渡すのは
-その Run の質問・回答と、`rag_search` / `rag_retrieve_evidence` が返した根拠の参照（新しい呼び出しから順、重複なし、
-30 件まで。最後に根拠を返した接続の根拠だけ）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の
-利用者のサービストークン・step）を通し、「承認」は待たない。予算には数えない。結果は成果物（`kind="answer_validation"`・
-「回答の検証」）に残す。valid でなければ回答は作り直さず、末尾に「確かめられていない点」（裏付けの無い・矛盾する段落
-〔80 文字まで〕と理由、古い版・見つからない根拠の件数）を足す。検証が失敗したら「この回答は検証できませんでした。」を
-足す。RAG の根拠を使っていない Run は `skipped`（`no_rag_evidence`）、接続が検証を提供しなければ `skipped`
-（`validator_unavailable`）で、回答はそのまま。
+承認の後の再開で 0 に戻らない。失敗・取消の Run は状態を残さないが、その消費（実行したツールと、結果を受け取る前に
+止まった呼び出し）は、前の完了した Run の状態に足して次の Run の会話の通しの予算に数える（#1277。失敗する Run を
+繰り返して上限を超えさせない）。
+回答の最終の検証（#1246・#1277）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 true）が true のとき、RAG の根拠を使った Run の
+回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
+その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠の参照（新しい呼び出しから順、
+重複なし、接続ごとに 30 件まで）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
+無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
+分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
+影響範囲・承認。#1276）も動かす。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
+サービストークン・step）を通し、「承認」は待たない。予算には数えない。接続ごとの判定は段落（`answer_quote`）ごとに
+まとめ（どれかの接続が矛盾と判定すれば矛盾、そうでなくどれかの接続が裏付ければ裏付けあり）、結果は成果物
+（`kind="answer_validation"`・「回答の検証」。接続ごとの結果は `connections`）に残す。valid でなければ、根拠で確かめられ
+なかった段落を回答から外し（確かめていない手順を公開しない。handoff §12）、外した段落〔80 文字まで〕と理由、古い版・
+見つからない根拠の件数を「確かめられていない点」として足す。決定的な検査の error も同じく扱い、手順・影響範囲・
+業務ガイドの版の error はどの段落の手順が誤りかを決められないので本文を載せず、要求の error（答えていない要求を
+示していない）は本文を残して不足を示す（warning は出さない）。検証そのもの（接続・呼び出し・応答）が失敗したら、または
+接続が検証を提供しなければ、`unvalidated` にして回答は消さずに「この回答は検証できませんでした。」を足す。RAG の根拠を
+使っていない Run は、Agent が RAG の根拠のツールを持てば `unvalidated`（`no_rag_evidence`）にして「資料と照らし合わせて
+確かめていません」を足し、持たなければ `skipped` で回答はそのまま。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
 （`agent.approvals.decide` を持つ利用者だけ）。実行中・承認待ちのあいだは次の質問を送れない（前の回答を履歴に含めるため）。
 Run は Agent とゴールだけを受け取る（実行先の選択は無い）。Runtime 画面は組み込み Runtime の状態（SDK の版・既定のモデル・

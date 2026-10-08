@@ -2406,3 +2406,125 @@ async def test_answer_engine_passes_the_clarification_scope(
     assert captured["scope"] == ("選んだ答え: 受注", ("受注登録",))
     assert outcome.answer.endswith("（対象: 「受注手順」の「登録」（p.2））")
     assert outcome.diagnostics["scope"]["label"] == "「受注手順」の「登録」（p.2）"
+
+
+async def test_answer_diagnostics_record_profile_and_prompt_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答の記録に検索・回答プロファイルの版とプロンプトの版を残す(#1276)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.rag.answer_provenance import answer_prompt_version
+    from app.rag.pipeline import RagPipeline
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    revision = {"id": "sap-1", "updated_at": "2026-10-01T00:00:00+00:00", "config_sha256": "abc"}
+    pipeline = RagPipeline(
+        settings=Settings(rag_search_answer_profile_revision=revision),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+    answer = response.diagnostics.answer
+    assert answer is not None
+    # FakeOracle は編集したプロンプトを読めないので、既定のプロンプトの版になる。
+    assert answer["provenance"] == {
+        "prompt_version": answer_prompt_version({}),
+        "search_answer_profile": revision,
+    }
+
+    # 検索・回答プロファイルを使わない検索は、プロファイルの版を残さない。
+    plain = RagPipeline(
+        settings=Settings(),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    plain_answer = (await plain.run(SearchRequest(query="受注の登録方法は？"))).diagnostics.answer
+    assert plain_answer is not None
+    assert plain_answer["provenance"] == {"prompt_version": answer_prompt_version({})}
+
+
+def test_prompt_and_profile_versions_follow_content() -> None:
+    from datetime import UTC, datetime
+
+    from rag_engine.knowledge.prompt_files import VLM_ANSWER_PROMPT_KEY
+
+    from app.rag.answer_prompts import default_prompt
+    from app.rag.answer_provenance import answer_prompt_version, search_answer_profile_revision
+    from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+
+    default = answer_prompt_version({})
+    assert default.startswith("prompt-") and len(default) == len("prompt-") + 16
+    # 既定と同じ内容の上書きは同じ版、内容を変えると別の版。
+    same = {VLM_ANSWER_PROMPT_KEY: default_prompt(VLM_ANSWER_PROMPT_KEY)}
+    assert answer_prompt_version(same) == default
+    edited = {VLM_ANSWER_PROMPT_KEY: default_prompt(VLM_ANSWER_PROMPT_KEY) + "\n追記"}
+    assert answer_prompt_version(edited) != default
+
+    def view(config: SearchAnswerProfileConfig) -> Any:
+        updated = datetime(2026, 10, 1, tzinfo=UTC)
+        return type("View", (), {"id": "sap-1", "updated_at": updated, "config": config})()
+
+    first = search_answer_profile_revision(view(SearchAnswerProfileConfig()))
+    assert first["id"] == "sap-1"
+    assert first["updated_at"] == "2026-10-01T00:00:00+00:00"
+    assert first == search_answer_profile_revision(view(SearchAnswerProfileConfig()))
+    changed = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])
+    assert search_answer_profile_revision(view(changed))["config_sha256"] != first["config_sha256"]
+
+
+class HistoryOracle(SavingOracle):
+    def __init__(self) -> None:
+        super().__init__()
+        self.history: list[dict[str, Any]] = []
+
+    async def append_query_history(self, record: dict[str, Any]) -> None:
+        self.history.append(dict(record))
+
+    async def purge_query_history(self, retention_days: int) -> int:
+        return 0
+
+
+async def test_guide_preview_is_recorded_without_history_or_extra_model_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """下書きで試す回答（#1288）: 記録に印を残し、質問履歴に入れない。モデルの呼び出しは同じ。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    from app.rag.pipeline import RagPipeline
+    from app.rag.support_guide_runtime import GUIDE_PREVIEW_KEY
+
+    calls: list[str] = []
+
+    def counting_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        calls.append(schema.__name__)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", counting_llm)
+    request = SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1")
+
+    normal_oracle = HistoryOracle()
+    await RagPipeline(
+        settings=Settings(rag_query_history_enabled=True),
+        oracle=normal_oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    ).run(request, trace_id="trace-normal")
+    normal_calls = list(calls)
+    calls.clear()
+
+    marker = {"guide_id": "g-1", "draft_revision": 3, "published_revision": 2}
+    preview_oracle = HistoryOracle()
+    response = await RagPipeline(
+        settings=Settings(rag_query_history_enabled=True, rag_guide_preview=marker),
+        oracle=preview_oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    ).run(request, trace_id="guide-preview-trace")
+
+    assert calls == normal_calls
+    assert len(normal_oracle.history) == 1
+    assert preview_oracle.history == []
+    saved = preview_oracle.saved[0]
+    assert saved["diagnostics"][GUIDE_PREVIEW_KEY] == marker
+    assert GUIDE_PREVIEW_KEY not in normal_oracle.saved[0]["diagnostics"]
+    assert response.diagnostics.answer is not None
+    assert response.diagnostics.answer[GUIDE_PREVIEW_KEY] == marker

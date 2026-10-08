@@ -37,7 +37,12 @@ from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oracle import OracleClient
 from app.config import get_settings
-from app.rag.answer_validation import EvidenceRef, validate_answer
+from app.rag.answer_validation import (
+    EvidenceRef,
+    GuideCheckRef,
+    GuideProfileNotFoundError,
+    validate_answer,
+)
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_runtime import GuideMatch, clarification_questions, rank_guides
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
@@ -45,6 +50,8 @@ from app.schemas.search_answer_profile import SearchAnswerProfileStatus
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
+# ツールの出力の版（出力の形を変えたら上げる。handoff §10。#1276）。
+MCP_OUTPUT_SCHEMA_VERSION = 2
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -54,6 +61,7 @@ READ_SOURCE_MAX_CHARS_DEFAULT = 8000
 READ_SOURCE_MAX_CHARS_LIMIT = 20000
 SOURCE_NOT_FOUND_CODE = "source_not_found"
 SOURCE_STALE_CODE = "source_stale"
+GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした。時間をおいて再度お試しください。"
 
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
@@ -154,8 +162,44 @@ class EvidenceRefInput(BaseModel):
     chunk_id: str = Field(..., min_length=1, max_length=512)
 
 
+class ValidateRequestInput(BaseModel):
+    """AnswerEnvelope の要求 1 件（rag_search の requests と同じ形）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1, max_length=64, description="要求の ID（Q1 など）。")
+    text: str = Field(default="", max_length=2000, description="要求の原文。")
+    status: Literal["addressed", "partial", "missing", "unknown"] = Field(
+        description=(
+            "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。"
+        )
+    )
+
+
+class ValidateGuideInput(BaseModel):
+    """回答が沿った業務ガイド（rag_search の guide・rag_lookup_guides の guides の 1 件）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    search_answer_profile_id: str = Field(
+        ..., min_length=1, max_length=128, description="業務ガイドの検索・回答プロファイルの id。"
+    )
+    guide_id: str = Field(..., min_length=1, max_length=64, description="業務ガイドの id。")
+    revision: int = Field(..., ge=1, description="回答に使った公開の版。")
+    conditions: dict[str, str] = Field(
+        default_factory=dict,
+        max_length=30,
+        description=(
+            "分かっている条件の値（条件の id → 値）。当たらない分岐の手順を見分けるのに使う。"
+        ),
+    )
+
+
 class ValidateAnswerInput(BaseModel):
-    """回答の最終の検証の条件（#1246）。"""
+    """回答の最終の検証の条件（#1246）。
+
+    requests・guide は渡したときだけ決定的に確かめる（#1276）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -168,6 +212,26 @@ class ValidateAnswerInput(BaseModel):
         description=(
             "回答の根拠（rag_search / rag_retrieve_evidence が返した document_id と chunk_id）。"
             "本文はサーバーが今の権限と版で読み直す。"
+        ),
+    )
+    requests: list[ValidateRequestInput] | None = Field(
+        default=None,
+        max_length=30,
+        description=(
+            "回答の要求ごとの充足（AnswerEnvelope の requests）。渡すと partial・missing の要求を"
+            "確かめる（回答に不足として示していなければ error）。"
+        ),
+    )
+    gaps: list[Annotated[str, Field(max_length=2000)]] = Field(
+        default_factory=list,
+        max_length=30,
+        description="回答に示した資料から確かめられない点（AnswerEnvelope の gaps）。",
+    )
+    guide: ValidateGuideInput | None = Field(
+        default=None,
+        description=(
+            "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・"
+            "承認の記載を確かめる。"
         ),
     )
 
@@ -199,7 +263,15 @@ class SearchAnswerProfileItem(BaseModel):
     knowledge_base_count: int
 
 
-class ListSearchAnswerProfilesOutput(BaseModel):
+class VersionedOutput(BaseModel):
+    """ツールの出力の共通部分（出力の形の版）。"""
+
+    schema_version: int = Field(
+        default=MCP_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
+    )
+
+
+class ListSearchAnswerProfilesOutput(VersionedOutput):
     search_answer_profiles: list[SearchAnswerProfileItem]
 
 
@@ -285,12 +357,22 @@ class GuideClarification(BaseModel):
 class GuideCondition(BaseModel):
     id: str
     label: str
+    state: Literal["known", "unknown", "conflicting"] = Field(
+        default="unknown",
+        description=(
+            "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が"
+            "出ていて決められない。値は candidates）。"
+        ),
+    )
     value: str | None = None
     source: str | None = Field(
         default=None, description="user=利用者が答えた / question=質問の文から読んだ。"
     )
     handling: str | None = Field(
         default=None, description="不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。"
+    )
+    candidates: list[str] = Field(
+        default_factory=list, description="state=conflicting のとき、質問に出た値。"
     )
 
 
@@ -304,10 +386,35 @@ class GuideRef(BaseModel):
         )
     )
     known_conditions: list[GuideCondition] = Field(default_factory=list)
-    unknown_conditions: list[GuideCondition] = Field(default_factory=list)
+    unknown_conditions: list[GuideCondition] = Field(
+        default_factory=list, description="確かめる・分岐する・引き継ぐ条件（不明・矛盾）。"
+    )
+    applicability: dict[str, Literal["matched", "unverified"]] = Field(
+        default_factory=dict,
+        description=(
+            "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。"
+            "matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。"
+            "空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。"
+        ),
+    )
 
 
-class SearchOutput(BaseModel):
+class AnswerProvenance(BaseModel):
+    """回答を作った設定の版（回答の記録の provenance。#1276）。"""
+
+    search_answer_profile_id: str | None = None
+    search_answer_profile_updated_at: str | None = Field(
+        default=None, description="検索・回答プロファイルの更新時刻（版）。"
+    )
+    search_answer_profile_config_sha256: str | None = Field(
+        default=None, description="検索・回答プロファイルの設定の sha256。"
+    )
+    prompt_version: str | None = Field(
+        default=None, description="回答フローのプロンプトの版（内容の sha256 の先頭）。"
+    )
+
+
+class SearchOutput(VersionedOutput):
     answer: str
     trace_id: str
     guardrail_warnings: list[str]
@@ -344,6 +451,9 @@ class SearchOutput(BaseModel):
     needs_human_review: bool = Field(default=False, description="人の確認が要る回答か。")
     evidence: list[RagEvidence]
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+    provenance: AnswerProvenance | None = Field(
+        default=None, description="回答を作った検索・回答プロファイルとプロンプトの版。"
+    )
 
 
 class GuideStepItem(BaseModel):
@@ -363,13 +473,16 @@ class LookupGuideItem(GuideRef):
     handoff_contact: str = ""
 
 
-class LookupGuidesOutput(BaseModel):
+class LookupGuidesOutput(VersionedOutput):
     guides: list[LookupGuideItem] = Field(
-        description="質問に当たる公開の業務ガイド（照合の点の高い順）。無ければ空。"
+        description=(
+            "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。"
+            "無ければ空。"
+        )
     )
 
 
-class RetrieveEvidenceOutput(BaseModel):
+class RetrieveEvidenceOutput(VersionedOutput):
     trace_id: str
     guardrail_warnings: list[str]
     evidence: list[RagEvidence] = Field(
@@ -390,10 +503,37 @@ class ValidatedClaim(BaseModel):
     reason: str
 
 
-class ValidateAnswerOutput(BaseModel):
+class ValidationFinding(BaseModel):
+    check: Literal["requests", "guide", "guide_steps", "impact"] = Field(
+        description=(
+            "検査（requests=要求の充足 / guide=業務ガイドの版 / guide_steps=手順 / "
+            "impact=影響範囲）。"
+        )
+    )
+    code: str = Field(
+        description=(
+            "request_missing / request_partial / request_unverified / guide_unavailable / "
+            "guide_revision_stale / guide_steps_unmatched / step_order / step_wrong_branch / "
+            "step_dependency_missing / step_following_missing / impact_scope_missing / "
+            "approval_missing"
+        )
+    )
+    severity: Literal["error", "warning"] = Field(
+        description="error は valid にしない。warning は確かめたい点。"
+    )
+    message: str
+    request_id: str | None = None
+    step_id: str | None = None
+    related_step_id: str | None = Field(
+        default=None, description="関係する手順（前の手順・後の手順）。"
+    )
+
+
+class ValidateAnswerOutput(VersionedOutput):
     valid: bool = Field(
         description=(
-            "矛盾・裏付けの無い主張・読めない根拠が無く、裏付けのある主張が 1 つ以上あるか。"
+            "矛盾・裏付けの無い主張・読めない根拠・error の finding が無く、裏付けのある主張が"
+            " 1 つ以上あるか。"
         )
     )
     status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
@@ -408,9 +548,19 @@ class ValidateAnswerOutput(BaseModel):
     evidence_truncated: bool = Field(
         default=False, description="根拠が多く、後ろの根拠を監査に渡しきれなかったか。"
     )
+    checks: list[Literal["requests", "guide", "guide_steps", "impact"]] = Field(
+        default_factory=list,
+        description="行った決定的な検査（requests・guide を渡したときだけ。モデルは呼ばない）。",
+    )
+    findings: list[ValidationFinding] = Field(
+        default_factory=list, description="決定的な検査で見つけた点。"
+    )
+    guide_revision: int | None = Field(
+        default=None, description="検査に使った業務ガイドの今の公開の版。"
+    )
 
 
-class ReadSourceOutput(BaseModel):
+class ReadSourceOutput(VersionedOutput):
     evidence_id: str
     document_id: str
     chunk_id: str
@@ -564,6 +714,24 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         "needs_human_review": answer.get("needs_human_review") is True,
         "evidence": [_evidence(chunk) for chunk in ordered[:evidence_limit]],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
+        "provenance": _provenance(answer.get("provenance")),
+    }
+
+
+def _provenance(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    profile = value.get("search_answer_profile")
+    profile = profile if isinstance(profile, dict) else {}
+
+    def text(item: object) -> str | None:
+        return item if isinstance(item, str) and item else None
+
+    return {
+        "search_answer_profile_id": text(profile.get("id")),
+        "search_answer_profile_updated_at": text(profile.get("updated_at")),
+        "search_answer_profile_config_sha256": text(profile.get("config_sha256")),
+        "prompt_version": text(value.get("prompt_version")),
     }
 
 
@@ -581,6 +749,9 @@ def _guide_ref(value: object) -> dict[str, Any] | None:
         "decision": value.get("decision") or "answer",
         "known_conditions": _guide_conditions(value.get("known_conditions")),
         "unknown_conditions": _guide_conditions(value.get("unknown_conditions")),
+        "applicability": (
+            dict(value["applicability"]) if isinstance(value.get("applicability"), dict) else {}
+        ),
     }
 
 
@@ -723,12 +894,26 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         view = await oracle.get_search_answer_profile(arguments.search_answer_profile_id)
         if view is None:
             raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
-        guides = await search_route._published_guides(oracle, view.id)
+        # rag_search と同じく、アーカイブ済みのプロファイルは使わない（409。#1278）。
+        search_route.ensure_search_answer_profile_not_archived(
+            view, arguments.search_answer_profile_id
+        )
+        guides, failed = await search_route.load_published_guides(oracle, view.id)
+        if failed:
+            # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
+            raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
+        context = await search_route.support_guide_context(
+            oracle, guides, arguments.query, search_route.profile_scope_filters(view)
+        )
         return LookupGuidesOutput(
             guides=[
                 _lookup_item(match)
                 for match in rank_guides(
-                    guides, arguments.query, arguments.conditions, limit=arguments.limit
+                    guides,
+                    arguments.query,
+                    arguments.conditions,
+                    limit=arguments.limit,
+                    context=context,
                 )
             ]
         )
@@ -748,12 +933,34 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
 
     async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:
         enforce_rate_limit("search", http_request)
-        result = await validate_answer(
-            arguments.query,
-            arguments.answer,
-            [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
-            get_settings(),
-        )
+        guide = arguments.guide
+        try:
+            result = await validate_answer(
+                arguments.query,
+                arguments.answer,
+                [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
+                get_settings(),
+                requests=(
+                    [item.model_dump() for item in arguments.requests]
+                    if arguments.requests is not None
+                    else None
+                ),
+                gaps=arguments.gaps,
+                guide=(
+                    GuideCheckRef(
+                        guide.search_answer_profile_id,
+                        guide.guide_id,
+                        guide.revision,
+                        dict(guide.conditions),
+                    )
+                    if guide is not None
+                    else None
+                ),
+            )
+        except GuideProfileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404, detail="検索・回答プロファイルが見つかりません。"
+            ) from exc
         return ValidateAnswerOutput(
             valid=result.valid,
             status=result.status,
@@ -776,6 +983,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 for ref in result.stale_evidence
             ],
             evidence_truncated=result.evidence_truncated,
+            checks=result.checks,
+            findings=[ValidationFinding.model_validate(item.as_dict()) for item in result.findings],
+            guide_revision=result.guide_revision,
         )
 
     return McpServer(
@@ -828,7 +1038,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_validate_answer",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
-                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。"
+                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。requests（要求の"
+                    "充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も"
+                    "決定的に確かめます。"
                 ),
                 input_model=ValidateAnswerInput,
                 handler=validate,

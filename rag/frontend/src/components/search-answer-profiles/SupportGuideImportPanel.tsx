@@ -11,11 +11,23 @@ import {
   toast,
 } from "@engchina/production-ready-ui";
 
-import { api, ApiError, type SupportGuideImportPreviewData } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type SupportGuideImportDiff,
+  type SupportGuideImportPreviewData,
+} from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useImportSupportGuides } from "@/lib/queries";
-import { parseSupportGuideImport } from "@/lib/support-guide-form";
+import {
+  changeFieldLabels,
+  changeSectionLabel,
+  countChanges,
+  groupChangesBySection,
+  parseSupportGuideImport,
+  SUPPORT_GUIDE_CHANGE_VARIANT,
+} from "@/lib/support-guide-form";
 
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
 
@@ -199,12 +211,111 @@ export function SupportGuideImportPanel({
                     </span>
                   </div>
                   <SupportGuideIssueList issues={item.issues} />
+                  {item.existing ? (
+                    <SupportGuideImportDiffView diff={item.existing} index={item.index} />
+                  ) : item.valid ? (
+                    <p className="text-xs text-fg-muted" data-testid={`support-guide-import-new-${item.index}`}>
+                      {t("supportGuides.importPanel.diff.new")}
+                    </p>
+                  ) : null}
                 </li>
               ))}
             </ul>
           </div>
         ) : null}
       </div>
+    </section>
+  );
+}
+
+/**
+ * 取り込むガイドと、同じ ID・名前の既存のガイドとの違い（#1288）。節ごとに追加・削除・変更を並べる。
+ * 種類は色だけでなくラベル付きの StatusBadge で示す。
+ */
+function SupportGuideImportDiffView({ diff, index }: { diff: SupportGuideImportDiff; index: number }) {
+  const counts = countChanges(diff.changes);
+  const titleId = `support-guide-import-diff-title-${index}`;
+  return (
+    <section
+      className="min-w-0 space-y-2 rounded-md border border-border bg-surface-sunken p-2"
+      aria-labelledby={titleId}
+      data-testid={`support-guide-import-diff-${index}`}
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <h5 id={titleId} className="min-w-0 break-words text-sm font-medium text-fg">
+          {t("supportGuides.importPanel.diff.title", { title: diff.title })}
+        </h5>
+        <StatusBadge
+          variant="neutral"
+          label={t(
+            diff.matched_by === "id"
+              ? "supportGuides.importPanel.diff.matchedById"
+              : "supportGuides.importPanel.diff.matchedByTitle",
+          )}
+        />
+        {diff.status === "archived" ? (
+          <StatusBadge variant="neutral" label={t("supportGuides.importPanel.diff.archived")} />
+        ) : null}
+      </div>
+      <p className="text-xs leading-relaxed text-fg-muted">
+        {t(
+          diff.base === "published"
+            ? "supportGuides.importPanel.diff.basePublished"
+            : "supportGuides.importPanel.diff.baseDraft",
+          { revision: diff.revision },
+        )}
+        {t("supportGuides.path.separator")}
+        {t("supportGuides.importPanel.diff.note")}
+      </p>
+      {diff.changes.length === 0 ? (
+        <p className="text-sm text-fg">{t("supportGuides.importPanel.diff.same")}</p>
+      ) : (
+        <>
+          <p className="tnum text-xs text-fg-muted">
+            {t("supportGuides.importPanel.diff.counts", {
+              added: counts.added,
+              removed: counts.removed,
+              changed: counts.changed,
+            })}
+          </p>
+          <ul className="space-y-2">
+            {groupChangesBySection(diff.changes).map((group) => (
+              <li key={group.section} className="min-w-0 space-y-1">
+                <p className="text-xs font-semibold text-fg">{changeSectionLabel(group.section)}</p>
+                <ul className="space-y-1">
+                  {group.changes.map((change) => {
+                    const fields = changeFieldLabels(change);
+                    const name = change.label || change.key;
+                    return (
+                      <li
+                        key={`${change.kind}-${change.key}-${change.label}`}
+                        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-fg"
+                        data-change-kind={change.kind}
+                      >
+                        <StatusBadge
+                          variant={SUPPORT_GUIDE_CHANGE_VARIANT[change.kind]}
+                          label={t(`supportGuides.change.${change.kind}`)}
+                        />
+                        {name ? <span className="min-w-0 break-words">{name}</span> : null}
+                        {change.key && change.key !== name ? (
+                          <span className="font-mono text-xs text-fg-muted">{change.key}</span>
+                        ) : null}
+                        {fields.length > 0 ? (
+                          <span className="min-w-0 break-words text-xs text-fg-muted">
+                            {t("supportGuides.change.fields", {
+                              fields: fields.join(t("supportGuides.change.fieldSeparator")),
+                            })}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </section>
   );
 }

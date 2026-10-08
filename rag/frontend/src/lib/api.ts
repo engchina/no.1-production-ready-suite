@@ -184,6 +184,8 @@ export type EvaluationFailureReason =
   | "step_missing"
   | "forbidden_action"
   | "condition_missing"
+  | "evidence_miss"
+  | "known_condition_reasked"
   | "case_error";
 /** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
 export type EvaluationMetricName =
@@ -1411,8 +1413,39 @@ export interface EvaluationCase {
   /** 業務支援の採点（#1231）。受け入れる対応・手順の語（順）・勧めてはいけない表現・触れるべき条件。 */
   expected_outcomes?: EvaluationOutcome[];
   expected_steps?: string[];
+  /** expected_steps と同等の別の手順の列（#1284）。いちばん点の高い列で採点する。 */
+  acceptable_alternatives?: string[][];
   forbidden_phrases?: string[];
   required_conditions?: string[];
+  /** 区分（#1284）。dev は調整に使うケース、holdout は最後の確認だけに使うケース。 */
+  split?: EvaluationCaseSplit | null;
+  /** 質問と一緒に渡す既知の条件の値（条件の id → 値。#1284）。 */
+  conditions?: Record<string, string>;
+  /** 確認の質問への返答の列（#1284）。 */
+  turns?: EvaluationTurn[];
+  /** 最後の回答に必要な根拠（#1284）。 */
+  required_evidence?: EvaluationEvidence[];
+}
+
+/** 評価のケースの区分（#1284）。 */
+export type EvaluationCaseSplit = "dev" | "holdout";
+
+/** 確認の質問への返答の 1 往復（#1284）。期待はこの往復の回答だけを採点する。 */
+export interface EvaluationTurn {
+  reply: string;
+  conditions?: Record<string, string>;
+  expected_outcomes?: EvaluationOutcome[];
+  expected_steps?: string[];
+  acceptable_alternatives?: string[][];
+  forbidden_phrases?: string[];
+  required_conditions?: string[];
+}
+
+/** 回答に必要な根拠（#1284）。引用の chunk の本文が text を含めば取れたとみなす。 */
+export interface EvaluationEvidence {
+  id: string;
+  document_id?: string | null;
+  text: string;
 }
 
 export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number | null>>;
@@ -1461,6 +1494,32 @@ export interface EvaluationCategorySummary {
   safe_answer_rate?: number | null;
 }
 
+/** 複数往復のケースの 1 回の回答の採点（#1284）。turn 0 は最初の質問への回答。 */
+export interface EvaluationTurnResult {
+  turn: number;
+  trace_id: string;
+  observed_outcome?: EvaluationOutcome | null;
+  outcome_source?: string | null;
+  handling_correct?: boolean | null;
+  step_order_score?: number | null;
+  missing_steps?: string[];
+  forbidden_checked?: boolean;
+  forbidden_hits?: string[];
+  condition_coverage?: number | null;
+  missing_conditions?: string[];
+  reasked_conditions?: string[];
+  elapsed_ms: number;
+}
+
+/** 区分ごとの結果（#1284）。metrics は全体と同じ指標をその区分のケースだけで求めた値。 */
+export interface EvaluationSplitSummary {
+  case_count: number;
+  error_count: number;
+  metrics: Partial<Record<string, number | null>>;
+  metric_case_counts: Partial<Record<string, number>>;
+  failure_reason_counts: Partial<Record<string, number>>;
+}
+
 /** 1 ケースの結果。測れない指標は null（保存済みの古い結果では欄が無いことがある）。 */
 export interface EvaluationCaseResult {
   case_id: string;
@@ -1487,6 +1546,12 @@ export interface EvaluationCaseResult {
   forbidden_hits?: string[];
   condition_coverage?: number | null;
   missing_conditions?: string[];
+  /** 区分・聞き直し・必要な根拠・往復ごとの採点（#1284。保存済みの古い結果には無い）。 */
+  split?: EvaluationCaseSplit | null;
+  reasked_conditions?: string[];
+  evidence_recall?: number | null;
+  missing_evidence?: string[];
+  turn_results?: EvaluationTurnResult[];
   answer_evaluation?: EvaluationAnswerJudgement | null;
   guardrail_warnings: string[];
   failure_reasons: string[];
@@ -1517,6 +1582,10 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   failure_reason_counts: Partial<Record<string, number>>;
   /** 分類ごとの内訳（ケースに分類があるときだけ。分類の無いケースは uncategorized。#1226）。 */
   category_breakdown?: Partial<Record<string, EvaluationCategorySummary>>;
+  /** 区分ごとの内訳（ケースに区分があるときだけ。区分の無いケースは unassigned。#1284）。 */
+  split_breakdown?: Partial<Record<string, EvaluationSplitSummary>>;
+  /** 必要な根拠ごとの再現率（参考の集計。閾値の判定には使わない。#1284）。 */
+  required_evidence_recall?: number | null;
   case_results: EvaluationCaseResult[];
 };
 
@@ -3106,10 +3175,11 @@ export const api = {
     request<SupportGuideRevision>(
       `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/revisions/${revision}`,
     ),
-  rollbackSupportGuide: (id: string, guideId: string, revision: number) =>
+  // 下書きを戻す版の内容で置き換えるので、読み込んだ下書きの版を照合する（違えば 409。#1278）。
+  rollbackSupportGuide: (id: string, guideId: string, revision: number, baseRevision: number) =>
     request<SupportGuideDetail>(
       `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/rollback`,
-      jsonBody({ revision }),
+      jsonBody({ revision, base_revision: baseRevision }),
     ),
   setSupportGuideArchived: (id: string, guideId: string, archived: boolean) =>
     request<SupportGuideDetail>(
@@ -3125,6 +3195,17 @@ export const api = {
     ),
   importSupportGuides: (id: string, guides: unknown[]) =>
     request<SupportGuideImportData>(`${supportGuidesPath(id)}/import`, jsonBody({ guides })),
+  /** 保存した下書きで試しに答える（#1288）。回答を作るので回答生成の timeout を使う。 */
+  trySupportGuideDraft: (
+    id: string,
+    guideId: string,
+    body: { query: string; draft_revision: number; conditions: Record<string, string> },
+  ) =>
+    request<SupportGuideDraftTryData>(
+      `${supportGuidesPath(id)}/${encodeURIComponent(guideId)}/try`,
+      jsonBody(body),
+      { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
+    ),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/suggest`,
@@ -3745,11 +3826,77 @@ export interface SupportGuideValidationData {
   issues: SupportGuideIssue[];
 }
 
+/** 取込の差分（#1288）の節。basic = 題名・説明。 */
+export type SupportGuideDiffSection =
+  | "basic"
+  | "goal"
+  | "applicability"
+  | "conditions"
+  | "steps"
+  | "branches"
+  | "references"
+  | "completion"
+  | "impact"
+  | "handoff";
+export type SupportGuideChangeKind = "added" | "removed" | "changed";
+
+/** 既存のガイドと取り込むガイドの違い 1 つ。 */
+export interface SupportGuideChange {
+  section: SupportGuideDiffSection;
+  kind: SupportGuideChangeKind;
+  /** 行の id（資料は document_id）。行の無い節は空。 */
+  key: string;
+  label: string;
+  /** 変わった項目（changed のときだけ）。 */
+  fields: string[];
+}
+
+/** 取り込むガイドと同じ id・名前の既存のガイドとの差分（#1288）。 */
+export interface SupportGuideImportDiff {
+  guide_id: string;
+  title: string;
+  matched_by: "id" | "title";
+  /** 比べた既存の内容（公開の版があれば公開の版、無ければ下書き）。 */
+  base: "published" | "draft";
+  revision: number;
+  status: SupportGuideStatus;
+  changes: SupportGuideChange[];
+}
+
 export interface SupportGuideImportItem {
   index: number;
   title: string | null;
   valid: boolean;
   issues: SupportGuideIssue[];
+  existing?: SupportGuideImportDiff | null;
+}
+
+/** 業務ガイドで答えたときの要約（回答の診断の guide）。 */
+export interface SupportGuideAnswerSummary {
+  guide_id: string;
+  revision: number;
+  title: string;
+  decision: "answer" | "branch" | "clarify" | "handoff";
+  known_conditions: { id: string; label: string; value: string | null; source?: string | null }[];
+  unknown_conditions: { id: string; label: string; handling?: string; state?: string; candidates?: string[] }[];
+  /** 下書きで試し、その下書きを使ったとき true。 */
+  draft?: boolean;
+}
+
+/** 下書きで試した回答（#1288）。利用者の回答の履歴・評価には入らない。 */
+export interface SupportGuideDraftTryData {
+  trace_id: string;
+  guide_id: string;
+  draft_revision: number;
+  published_revision: number | null;
+  /** この下書きのガイドが回答に使われたか。 */
+  guide_used: boolean;
+  guide: SupportGuideAnswerSummary | null;
+  outcome: string | null;
+  answer: string;
+  citations: RetrievedChunk[];
+  clarifications: { condition_id: string; label?: string; question?: string; options?: string[] }[];
+  elapsed_ms: number;
 }
 
 export interface SupportGuideImportPreviewData {

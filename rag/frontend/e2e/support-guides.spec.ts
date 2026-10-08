@@ -109,6 +109,10 @@ class SupportGuideApi {
   /** 次の下書きの保存を 409 にする（ほかの人が先に保存した）。 */
   conflictNext = false;
   requests: { method: string; path: string; body: unknown }[] = [];
+  /** 下書きで試したとき、この下書きのガイドで答えたか（#1288）。 */
+  tryUsesDraft = true;
+  /** 下書きで試す応答を遅らせる時間（ms。処理中の表示を確かめる）。 */
+  tryDelayMs = 0;
 
   detail(guide: Guide) {
     const published = guide.revisions.find((item) => item.revision === guide.published_revision);
@@ -190,6 +194,8 @@ class SupportGuideApi {
     if (rest === "/import/preview") {
       const items = (body.guides as Content[]).map((item, index) => {
         const valid = typeof item.goal === "object" && item.goal !== null;
+        // 同じ名前の既存のガイドとの差分（#1288。backend の diff_contents の形）。
+        const existing = valid ? this.guides.find((guide) => guide.draft.title === item.title) : undefined;
         return {
           index,
           title: item.title ?? null,
@@ -197,6 +203,29 @@ class SupportGuideApi {
           issues: valid
             ? []
             : [{ severity: "error", code: "invalid_content", path: "goal", message: "入力してください。" }],
+          existing: existing
+            ? {
+                guide_id: existing.guide_id,
+                title: existing.draft.title,
+                matched_by: "title",
+                base: existing.published_revision != null ? "published" : "draft",
+                revision: existing.published_revision ?? existing.draft_revision,
+                status: existing.status,
+                changes: [
+                  { section: "basic", kind: "changed", key: "", label: item.title, fields: ["description"] },
+                  {
+                    section: "conditions",
+                    kind: "changed",
+                    key: "account",
+                    label: "アカウントの種類",
+                    fields: ["allowed_values"],
+                  },
+                  { section: "steps", kind: "added", key: "notify", label: "利用者に知らせる", fields: [] },
+                  { section: "steps", kind: "removed", key: "step1", label: "本人を確かめる", fields: [] },
+                  { section: "impact", kind: "changed", key: "", label: "", fields: ["scope"] },
+                ],
+              }
+            : null,
         };
       });
       return route.fulfill({
@@ -238,6 +267,57 @@ class SupportGuideApi {
       guide.draft_revision += 1;
       return route.fulfill({ json: envelope(this.detail(guide)) });
     }
+    if (action === "/try") {
+      // 下書きで試す（#1288）。公開の版・下書きは変えない。
+      if (body.draft_revision !== guide.draft_revision) {
+        return route.fulfill(
+          failure(409, [
+            `読み込んだ後にほかの人が業務ガイドを保存しました。最新の内容（版 ${guide.draft_revision}）を読み込み直してから試してください。`,
+          ]),
+        );
+      }
+      if (this.tryDelayMs) await new Promise((resolve) => setTimeout(resolve, this.tryDelayMs));
+      const conditions = body.conditions as Record<string, string>;
+      return route.fulfill({
+        json: envelope({
+          trace_id: "guide-preview-0001",
+          guide_id: guide.guide_id,
+          draft_revision: guide.draft_revision,
+          published_revision: guide.published_revision,
+          guide_used: this.tryUsesDraft,
+          guide: this.tryUsesDraft
+            ? {
+                guide_id: guide.guide_id,
+                revision: guide.draft_revision,
+                title: guide.draft.title,
+                decision: conditions.account ? "answer" : "branch",
+                known_conditions: conditions.account
+                  ? [{ id: "account", label: "アカウントの種類", value: conditions.account, source: "user" }]
+                  : [],
+                unknown_conditions: conditions.account ? [] : [{ id: "account", label: "アカウントの種類" }],
+                applicability: {},
+                draft: true,
+              }
+            : null,
+          outcome: "answered",
+          answer: "社員の場合は、ポータルの「パスワードを忘れた」から再設定します。",
+          citations: [
+            {
+              document_id: "doc-1",
+              chunk_id: "doc-1:c1",
+              text: "パスワードを忘れた場合は、ログイン画面のリンクから再設定する。",
+              score: 0.91,
+              rerank_score: null,
+              file_name: "運用手順書.pdf",
+              category_name: null,
+              metadata: {},
+            },
+          ],
+          clarifications: [],
+          elapsed_ms: 4200,
+        }),
+      });
+    }
     if (action === "/validate") {
       const issues = [...(this.referenceBroken ? [referenceError] : []), ...this.contentIssues(guide.draft)];
       return route.fulfill({
@@ -263,6 +343,17 @@ class SupportGuideApi {
     if (action === "/rollback") {
       const target = guide.revisions.find((item) => item.revision === body.revision);
       if (!target) return route.fulfill(failure(404, ["業務ガイドが見つかりません。"]));
+      // 下書きを置き換えるので、読み込んだ下書きの版を照合する（#1278）。
+      if (this.conflictNext || body.base_revision !== guide.draft_revision) {
+        this.conflictNext = false;
+        guide.draft = content("別の人が直したタイトル");
+        guide.draft_revision += 1;
+        return route.fulfill(
+          failure(409, [
+            `読み込んだ後にほかの人が業務ガイドを保存しました。最新の内容（版 ${guide.draft_revision}）を読み込み直してから戻してください。`,
+          ]),
+        );
+      }
       guide.draft = target.content;
       guide.draft_revision += 1;
       this.publish(guide, target.revision);
@@ -465,10 +556,39 @@ test("公開の履歴から前の版を見て、その版に戻せる", async ({
   await expect(dialog).toContainText("版 1 の内容を新しい版として公開します。");
   await dialog.getByRole("button", { name: "この版に戻す" }).click();
   await expect(page.getByText("版 1 の内容を版 3 として公開しました。")).toBeVisible();
-  expect(api.requests.find((item) => item.path.endsWith("/rollback"))?.body).toEqual({ revision: 1 });
+  expect(api.requests.find((item) => item.path.endsWith("/rollback"))?.body).toEqual({
+    revision: 1,
+    base_revision: 3,
+  });
   await expect(page.getByRole("rowheader", { name: "版 3 公開中" })).toBeVisible();
   await expect(page.getByText("版 1 に戻した")).toBeVisible();
   await expect(editor.getByLabel("タイトル")).toHaveValue("パスワードの再設定");
+  await expectNoPageOverflow(page);
+});
+
+test("ほかの人が先に下書きを保存していたら、前の版に戻さずに読み込み直しを案内する", async ({ page }) => {
+  const api = await openSupportGuides(page, [publishedGuide()]);
+  await page.getByRole("button", { name: "パスワードの再設定（改訂） を編集" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  await expect(page.getByRole("rowheader", { name: "版 2 公開中" })).toBeVisible();
+
+  api.conflictNext = true;
+  await page.getByRole("button", { name: "版 1 の操作" }).click();
+  await page.getByRole("menuitem", { name: "この版に戻す" }).click();
+  await page
+    .getByRole("alertdialog", { name: "版 1 に戻しますか？" })
+    .getByRole("button", { name: "この版に戻す" })
+    .click();
+  const result = page.getByTestId("support-guide-result");
+  await expect(result.getByText("ほかの人が先に保存しました")).toBeVisible();
+  await expect(result).toContainText("最新の内容（版 4）を読み込み直してから戻してください。");
+  // 戻していない（公開の版は 2 のまま）。
+  await expect(page.getByRole("rowheader", { name: "版 2 公開中" })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: /版 3/ })).toHaveCount(0);
+
+  await result.getByRole("button", { name: "最新の内容を読み込む" }).click();
+  await expect(page.getByText("最新の内容を読み込みました。")).toBeVisible();
+  await expect(editor.getByLabel("タイトル")).toHaveValue("別の人が直したタイトル");
   await expectNoPageOverflow(page);
 });
 
@@ -503,4 +623,117 @@ test("JSON の取り込みは確認で各ガイドの可否を示し、すべて
   await expect(page.getByRole("rowheader", { name: "取り込むガイド" })).toBeVisible();
   await expect(page.getByTestId("support-guide-import")).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+/** アプリの外観の設定（localStorage）でテーマを切り替える（`emulateMedia` では切り替わらない）。 */
+async function useTheme(page: Page, theme: "light" | "dark") {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+  }, theme);
+}
+
+/** 公開の版 2 と、利用者に確かめる条件を足した下書き（版 3）を持つガイド。 */
+function guideWithConditionDraft(): Guide {
+  const guide = publishedGuide();
+  guide.draft = content("パスワードの再設定（改訂）", {
+    conditions: [
+      {
+        id: "account",
+        label: "アカウントの種類",
+        type: "enum",
+        allowed_values: ["社員", "派遣"],
+        required: true,
+        source: "user",
+        unknown_handling: "ask",
+        question: "社員ですか、派遣ですか？",
+        value_aliases: {},
+      },
+    ],
+  });
+  return guide;
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`下書きで試すと、公開の版を変えずに下書きで答えた回答を示す（${theme}）`, async ({ page }, testInfo) => {
+    await useTheme(page, theme);
+    const api = await openSupportGuides(page, [guideWithConditionDraft()]);
+    api.tryDelayMs = 400;
+    await page.getByRole("button", { name: "パスワードの再設定（改訂） を編集" }).click();
+    const editor = page.getByTestId("support-guide-editor");
+    const panel = editor.getByTestId("support-guide-try");
+    await expect(panel.getByRole("heading", { name: "下書きで試す" })).toBeVisible();
+    await expect(panel).toContainText("保存した下書き（版 3）で回答を作り");
+
+    // 質問が空なら送らずに欄の直下で知らせる。
+    await panel.getByRole("button", { name: "試す", exact: true }).click();
+    await expect(panel.getByText("質問を入れてください。")).toBeVisible();
+    expect(api.requests.filter((item) => item.path.endsWith("/try"))).toHaveLength(0);
+
+    // 分かっている条件を選んで試す。
+    await panel.getByRole("combobox", { name: /^アカウントの種類/ }).click();
+    await page.getByRole("option", { name: "社員" }).click();
+    await panel.getByRole("textbox", { name: /^質問/ }).fill("パスワードを忘れた");
+    await panel.getByRole("button", { name: "試す", exact: true }).click();
+    await expect(panel.getByTestId("support-guide-try-processing")).toBeVisible();
+    const result = panel.getByTestId("support-guide-try-answer");
+    await expect(result.getByText("下書き（版 3）の業務ガイドで答えました。")).toBeVisible();
+    await expect(result).toContainText("利用者の回答の履歴・フィードバック・評価には入りません。");
+    await expect(result).toContainText("所要時間: 4.2 秒");
+    await expect(result.getByText("手順どおりに答えた")).toBeVisible();
+    await expect(result.getByTestId("support-guide-try-known")).toHaveText("アカウントの種類: 社員");
+    await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
+    await expect(result.getByRole("heading", { name: "根拠（1 件）" })).toBeVisible();
+    expect(api.requests.find((item) => item.path.endsWith("/try"))?.body).toEqual({
+      query: "パスワードを忘れた",
+      draft_revision: 3,
+      conditions: { account: "社員" },
+    });
+    // 公開の版は 2 のまま（試しは保存しない）。
+    await expect(page.getByRole("rowheader", { name: "版 2 公開中" })).toBeVisible();
+    expect(api.requests.some((item) => /\/(publish|rollback)$/.test(item.path))).toBe(false);
+    await expectNoPageOverflow(page);
+    await panel.screenshot({ path: testInfo.outputPath(`support-guide-try-${theme}.png`) });
+
+    // この下書きのガイドが使われなかったときは、見直す点を出す。
+    api.tryUsesDraft = false;
+    api.tryDelayMs = 0;
+    await panel.getByRole("button", { name: "試す", exact: true }).click();
+    await expect(result.getByText("この質問では、業務ガイドを使わずに答えました。")).toBeVisible();
+    await expect(result).toContainText("質問の例・照合の語・適用範囲");
+
+    // 保存していない変更があるうちは、保存した下書きでしか試せないので押せない。
+    await editor.getByLabel("タイトル").fill("手元で直したタイトル");
+    await expect(panel.getByRole("button", { name: "試す", exact: true })).toBeDisabled();
+    await expect(panel.getByTestId("support-guide-try-save-first")).toBeVisible();
+  });
+}
+
+test("取り込みの確認で、同じ名前の既存のガイドとの違いを節ごとに示す", async ({ page }, testInfo) => {
+  await openSupportGuides(page, [publishedGuide()]);
+  await page.getByRole("button", { name: "取り込み" }).click();
+  const panel = page.getByTestId("support-guide-import");
+  await panel
+    .getByRole("textbox", { name: /^JSON/ })
+    .fill(
+      JSON.stringify({
+        schema_version: 1,
+        guides: [content("パスワードの再設定（改訂）"), content("新しいガイド")],
+      }),
+    );
+  await panel.getByRole("button", { name: "確認" }).click();
+  const diff = panel.getByTestId("support-guide-import-diff-0");
+  await expect(diff.getByRole("heading", { name: "既存のガイド「パスワードの再設定（改訂）」との違い" })).toBeVisible();
+  await expect(diff).toContainText("名前が同じ");
+  await expect(diff).toContainText("公開の版 2 と比べています");
+  await expect(diff).toContainText("取り込んでも既存のガイドは変わらず、別の下書きとして作ります。");
+  await expect(diff).toContainText("追加 1・削除 1・変更 3");
+  await expect(diff).toContainText("確認する条件");
+  await expect(diff).toContainText("変わった項目: 選択肢");
+  await expect(diff.locator('[data-change-kind="added"]')).toContainText("利用者に知らせる");
+  await expect(diff.locator('[data-change-kind="removed"]')).toContainText("本人を確かめる");
+  await expect(diff).toContainText("変わった項目: 影響の範囲");
+  await expect(panel.getByTestId("support-guide-import-new-1")).toContainText("同じ ID・名前のガイドはありません。");
+  await expect(panel.getByRole("button", { name: "取り込む" })).toBeEnabled();
+  await expectNoPageOverflow(page);
+  await panel.screenshot({ path: testInfo.outputPath("support-guide-import-diff.png") });
 });
