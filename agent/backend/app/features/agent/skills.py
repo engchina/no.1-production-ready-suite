@@ -154,6 +154,11 @@ skill_registry.register(
             "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
             "根拠の excerpt が切り詰められている（truncated）か、前後の条件・例外を確かめる必要が"
             "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
+            "検索で当たらなかった前後の章・「第 3 章を参照」の先・長い文書の続きは、"
+            "rag_outline で文書の節の構成を見て、rag_read_document で読む（page・section・"
+            "locator で読み始め、続きは next_cursor を渡す）。根拠の locator.element_locator は"
+            " rag_read_source と rag_read_document の locator に渡せ、chunk が作り直されても"
+            "同じ箇所を読める。"
             "rag_search の outcome で答え方を決める。answered は根拠に沿って答える。"
             "conditional は conditions（説明が成り立つ条件）と gaps（資料で確かめられない点）を"
             "示し、条件ごとに分けて答える。"
@@ -186,6 +191,8 @@ skill_registry.register(
                     "rag_read_source",
                     "rag_lookup_guides",
                     "rag_retrieve_evidence",
+                    "rag_outline",
+                    "rag_read_document",
                 ],
             )
         ],
