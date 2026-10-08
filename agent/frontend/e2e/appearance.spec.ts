@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/mock-api";
 import { openSidebarNav } from "./fixtures/nav";
 
-// 外観（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
+// 外観と接続（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
 
 async function isDark(page: Page) {
   return page.evaluate(() => document.documentElement.classList.contains("dark"));
@@ -13,12 +13,12 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`外観でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
+  test(`外観と接続でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto("/settings/appearance");
 
-    await expect(page.getByRole("heading", { name: "外観", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "外観と接続", level: 1 })).toBeVisible();
     const toggle = page.getByTestId("appearance-theme-toggle");
     await expect(toggle.getByRole("button", { name: "ライト" })).toHaveAttribute("aria-pressed", "true");
     expect(await isDark(page)).toBe(false);
@@ -47,10 +47,10 @@ for (const viewport of [
   });
 }
 
-test("サイドナビのシステム設定に外観がある", async ({ page }) => {
+test("サイドナビのシステム設定に外観と接続がある", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("link", { name: "外観" })).toHaveAttribute("href", "/settings/appearance");
+  await expect(page.getByRole("link", { name: "外観と接続" })).toHaveAttribute("href", "/settings/appearance");
 });
 
 for (const viewport of [

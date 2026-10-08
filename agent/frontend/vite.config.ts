@@ -2,6 +2,16 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
 
+/**
+ * 画面の配信の基点（Vite の `base`。#1316）。1 台の Compute に 3 製品を置く配備では、Nginx が `/agent/` で
+ * Agent を分けるため、build の時だけ `FRONTEND_BASE_PATH=/agent/` を渡す。未指定・空は `/`（ローカルの開発・e2e は今までどおり）。
+ * 前後の `/` はそろえる（`agent` → `/agent/`）。
+ */
+export function frontendBasePath(value: string | undefined): string {
+  const trimmed = (value ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}/` : "/";
+}
+
 const MISSING_BACKEND_URL_WARNING =
   "[agent] BACKEND_URL が未設定のため /api を proxy せず 404 を返します（hermetic）。backend に接続する場合は BACKEND_URL=http://127.0.0.1:8020 npm run dev のように明示してください。";
 
@@ -17,6 +27,7 @@ export default defineConfig(() => {
   const warnMissingBackendUrl = process.env.PLAYWRIGHT_HERMETIC_API !== "1" && !backendUrl;
 
   return {
+    base: frontendBasePath(process.env.FRONTEND_BASE_PATH),
     plugins: [
       react(),
       {

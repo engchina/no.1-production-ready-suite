@@ -33,6 +33,7 @@ import {
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { PagedDataTable } from "@/components/ListViews";
 import { OneTimeSecret } from "@/components/OneTimeSecret";
+import { appUrl } from "@/lib/base-path";
 import { agentApi, type ApiKey, type ApiKeyCreated, type ApiKeyExpiryDays } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -141,7 +142,8 @@ export function ApiKeysPage() {
     if (ok) remove.mutate(key);
   }
 
-  const endpoint = `${window.location.origin}/api/mcp`;
+  // 外の MCP クライアントが呼ぶ URL なので、配信の基点（`/agent/` など。#1316）を含める。
+  const endpoint = appUrl("/api/mcp");
   return (
     <>
       <PageHeader wide title={t("nav.settingsApiKeys")} subtitle={t("page.apiKeys.subtitle")} />

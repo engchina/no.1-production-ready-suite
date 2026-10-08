@@ -477,8 +477,7 @@ const agentJa = {
   "settings.database.systemTables.confirm.description":
     "管理対象の Agent のテーブルを削除して再作成します。ロールに付けた Agent の権限と利用できるエージェントは復元できません。",
   "nav.section.settings": "システム設定",
-  "nav.settingsAppearance": "外観",
-  "appearance.subtitle": "配色テーマ（ライト / ダーク）を切り替えます。既定はライトです。",
+  "nav.settingsAppearance": "外観と接続",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",

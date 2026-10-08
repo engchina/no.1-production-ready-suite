@@ -48,6 +48,7 @@ import {
   type ScheduleFrequency,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
+import { appUrl } from "@/lib/base-path";
 import { useEditorRoute } from "@/lib/editor-route";
 import { focusFirstInvalidField } from "@/lib/field-validation";
 import { formatDateTime } from "@/lib/format";
@@ -572,7 +573,8 @@ function AutomationEditor({
           { id: "delete", label: t("automation.delete"), icon: Trash2, tone: "danger", onSelect: () => void confirmDelete(automation) },
         ]
       : [];
-  const webhookUrl = automation ? `${window.location.origin}/api/hooks/${automation.id}` : null;
+  // 外から呼ぶ URL なので、配信の基点（`/agent/` など。#1316）を含める。
+  const webhookUrl = automation ? appUrl(`/api/hooks/${automation.id}`) : null;
 
   return (
     <>

@@ -181,7 +181,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
     _menu_permission(MENU_SETTINGS_DATABASE, _GROUP_SETTINGS, "データベース"),
-    _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観"),
+    _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観と接続"),
     # capability は従来の 5 ロール（viewer / operator / approver / auditor / admin）に対応する。
     # 名前は利用者の言葉にし、ロール名は docs/security-rbac.md の対応表に書く（#791）。
     _permission(
