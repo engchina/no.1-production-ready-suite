@@ -352,6 +352,13 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await excel.getByRole("textbox", { name: "読まない列" }).fill("備考、F");
   await excel.getByRole("textbox", { name: "読む範囲" }).fill("費目!A2:D200、A1:F50");
   await excel.getByRole("group", { name: "非表示のシート" }).getByText("読む", { exact: true }).click();
+  // 列の役割（#1281）: 判定の有無と列ごとの指定。読めない指定は欄の下に示し、保存しない。
+  await excel.getByRole("group", { name: "列の役割", exact: true }).getByText("判定しない").click();
+  const roles = excel.getByRole("textbox", { name: "列の役割の指定" });
+  await roles.fill("D=例示、設定値=現在値、E=実際");
+  await expect(excel.getByText("読めない指定があります: E=実際")).toBeVisible();
+  await roles.fill("D=例示、設定値=現在値");
+  await expect(excel.getByText(/読めない指定があります/)).toHaveCount(0);
   await expectNoPageOverflow(page);
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
 
@@ -365,6 +372,8 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
       exclude_columns: ["備考", "F"],
       include_hidden_sheets: true,
       ranges: ["費目!A2:D200", "A1:F50"],
+      column_role_detection: "off",
+      column_roles: { D: "example", 設定値: "current" },
     },
   });
 });

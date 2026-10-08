@@ -1839,6 +1839,17 @@ export const ja = {
   "documents.excelOptions.ranges.hint":
     "「A3:F200」（すべてのシート）か「シート名!A3:F200」を「、」で区切って入力します。範囲の外の行・列は読みません。空欄ならシート全体。",
   "documents.excelOptions.summary.ranges": "範囲: {ranges}",
+  "documents.excelOptions.columnRoleDetection": "列の役割",
+  "documents.excelOptions.columnRoleDetection.hint":
+    "既定値・記入例・現在値などの列を表頭の語から見分け、回答で資料の既定値や例を今の値と取り違えないようにします。語があいまいな列には付けません。",
+  "documents.excelOptions.columnRoleDetection.auto": "表頭の語から判定する",
+  "documents.excelOptions.columnRoleDetection.off": "判定しない",
+  "documents.excelOptions.columnRoles": "列の役割の指定",
+  "documents.excelOptions.columnRoles.hint":
+    "列名か列の記号と役割を「=」でつなぎ、「、」で区切ります（例: D=例示、設定値=現在値、E=なし）。役割は 説明・既定値・例示・現在値・推奨値・範囲・なし。指定は判定より優先します。",
+  "documents.excelOptions.columnRoles.invalid": "読めない指定があります: {items}",
+  "documents.excelOptions.summary.columnRolesOff": "列の役割は判定しない",
+  "documents.excelOptions.summary.columnRoles": "列の役割の指定: {roles}",
   "documents.excelWarning.headerLowConfidence":
     "シート「{sheet}」の表頭を推定できませんでした（信頼度が低い）。",
   "documents.excelWarning.formulaWithoutValue":

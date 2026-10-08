@@ -323,3 +323,68 @@ def test_low_confidence_header_becomes_extraction_warning_and_ranges_are_validat
     assert recipe.excel_options.ranges == ["手順!A1:D80", "A3:F200"]
     with pytest.raises(ValidationError):
         DocumentProcessingConfig.model_validate({"excel_options": {"ranges": ["A1"]}})
+
+
+def test_column_roles_label_values_in_chunks_and_match_the_answer_prompt() -> None:
+    """列の役割（#1281）は値の列の本文に表示され、回答の生成の規則と同じ表示を使う。"""
+    import pytest
+    from pydantic import ValidationError
+    from rag_engine.generation.grounded import GENERATE_SYSTEM_PROMPT
+    from rag_parser_core.sheet_records import COLUMN_ROLE_TEXT_LABELS, SheetColumn
+
+    from app.schemas.document import DocumentProcessingConfig
+
+    document = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="パラメータ一覧",
+                header_row=3,
+                columns=[
+                    SheetColumn(name="パラメータ名", column="A"),
+                    SheetColumn(name="既定値", column="B", role="default", role_method="detected"),
+                    SheetColumn(name="設定例", column="C", role="example", role_method="detected"),
+                    SheetColumn(name="説明", column="D", role="definition", role_method="detected"),
+                ],
+                blocks=[
+                    SheetBlock(
+                        kind="row",
+                        row_start=4,
+                        row_end=4,
+                        cell_range="A4:D4",
+                        values={
+                            "パラメータ名": "session_timeout_minutes",
+                            "既定値": "30",
+                            "設定例": "60",
+                            "説明": "ログインが切れるまでの分数",
+                        },
+                    )
+                ],
+            )
+        ],
+    )
+    result = run_external_adapter(
+        "docling", document.to_json_bytes(), _xlsx_profile(), SHEET_RECORDS_CONTENT_TYPE
+    )
+    assert result.extraction is not None
+    chunks = chunk_extraction_with_strategy(
+        result.extraction, strategy="structure_aware", chunk_size=800, overlap=0
+    )
+    assert any(
+        "既定値［資料の既定値］: 30 / 設定例［例示の値］: 60 / 説明: ログイン" in chunk.text
+        for chunk in chunks
+    )
+    # 回答の生成の規則は、本文に付く表示と同じ文字で列の種類を説明する。
+    for label in COLUMN_ROLE_TEXT_LABELS.values():
+        assert f"［{label}］" in GENERATE_SYSTEM_PROMPT
+
+    # 文書レシピの選択肢で、判定の有無と列ごとの役割を指定できる。役割の名前は検証する。
+    recipe = DocumentProcessingConfig.model_validate(
+        {"excel_options": {"column_role_detection": "off", "column_roles": {" D ": "example"}}}
+    )
+    assert recipe.excel_options is not None
+    assert recipe.excel_options.column_roles == {"D": "example"}
+    with pytest.raises(ValidationError):
+        DocumentProcessingConfig.model_validate(
+            {"excel_options": {"column_roles": {"D": "actual"}}}
+        )
