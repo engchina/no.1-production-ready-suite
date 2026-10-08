@@ -1453,3 +1453,113 @@ def test_runtime_free_text_output_correction_is_persisted_without_old_column(
     saved = runtime.get_session(session.id)
     assert [d.name_ja for d in saved.session.intents[-1].dimensions] == ["受注ID"]
     assert "受注状態" not in saved.session.intents[-1].question_effective
+
+
+@pytest.mark.parametrize(
+    ("granularity", "label"),
+    [("day", "日別"), ("month", "月別"), ("year", "年別"), ("none", "集計のみ")],
+)
+def test_granularity_confirmation_uses_business_label(granularity: str, label: str) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.granularity = granularity
+    session = created.session.model_copy(deep=True, update={"intents": [intent]})
+
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    question = next(q for q in state.remaining_questions if q.summary_key == "granularity")
+    assert question.prompt_ja == f"集計単位は「{label}」で合っていますか？"
+    summary = next(item for item in state.intent_summary if item.key == "granularity")
+    assert summary.value_ja == label
+
+
+def test_filter_confirmation_uses_business_condition_text() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.filters = [
+        IntentFilter(id="status", label_ja="受注状態", operator="in", value=["受付", "出荷"]),
+        IntentFilter(id="amount", label_ja="受注金額", operator="gte", value=100),
+        IntentFilter(id="note", label_ja="備考", operator="is_null", value=None),
+    ]
+    session = created.session.model_copy(deep=True, update={"intents": [intent]})
+
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    expected = "受注状態が「受付」、「出荷」のいずれか、受注金額が100以上、備考が未設定"
+    summary = next(item for item in state.intent_summary if item.key == "filters")
+    assert summary.value_ja == expected
+    question = next(q for q in state.remaining_questions if q.summary_key == "filters")
+    assert question.prompt_ja == f"絞り込み条件は「{expected}」で合っていますか？"
+
+    updated = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
+        ontology,
+    )
+    # 「はい」の確認で、演算子や None の表記が質問文の条件に足されない。
+    assert " in " not in updated.question_effective
+    assert "gte" not in updated.question_effective
+    assert "None" not in updated.question_effective
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["multiple_candidate_tables", "metric_candidates_ambiguous", "update_target_unclear"],
+)
+def test_ambiguity_code_category_does_not_match_inside_words(code: str) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.metrics = []
+    intent.ambiguities = [
+        IntentAmbiguity(id=f"ambiguity-{code}", code=code, message_ja="候補が複数あります。")
+    ]
+    session = created.session.model_copy(deep=True, update={"intents": [intent]})
+
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    question = next(q for q in state.remaining_questions if q.ambiguity_id)
+    assert question.category != ClarificationCategory.TIME_RANGE
+    assert question.prompt_ja != "どの期間を対象にしますか？"
+
+
+def test_unanswerable_session_does_not_request_manual_completion() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    assert created.clarification and created.clarification.current_question
+    question = created.clarification.current_question
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.candidate_paths = []
+    intent.ambiguities = [
+        IntentAmbiguity(
+            id="relationship-without-path",
+            code="relationship_path_required",
+            message_ja="関係を確定できません。",
+        )
+    ]
+    answer = ClarificationAnswer(
+        question_id=question.id, selected_option_ids=[question.options[0].id]
+    )
+    session = created.session.model_copy(
+        deep=True,
+        update={
+            "intents": [intent],
+            "clarification_turns": [
+                ClarificationTurn(question=question, answer=answer, intent_version=index + 2)
+                for index in range(4)
+            ],
+        },
+    )
+
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    assert state.status == ClarificationStatus.UNANSWERABLE
+    assert state.manual_completion_required is False
+    assert state.can_generate_sql is False

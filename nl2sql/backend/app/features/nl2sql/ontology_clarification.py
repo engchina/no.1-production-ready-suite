@@ -7,6 +7,7 @@ LLM は ``ontology_router._interpret_question`` で構造化 intent を作る責
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -138,8 +139,9 @@ def build_clarification_state(
         missing_required=missing,
         assumptions=_assumptions(session, intent),
         turn_count=len(session.clarification_turns),
+        # 確認できない状態では回答のフォームを出さない（回答できる選択肢・入力が無い）。
         manual_completion_required=len(session.clarification_turns) >= MAX_GUIDED_TURNS
-        and bool(questions),
+        and status == ClarificationStatus.NEEDS_ANSWER,
         can_generate_sql=status == ClarificationStatus.READY_TO_CONFIRM,
         schema_version=CLARIFICATION_SCHEMA_VERSION,
         message_ja=message,
@@ -585,18 +587,22 @@ def merge_free_text_reinterpretation(
     return updated
 
 
+_CATEGORY_STEMS: tuple[tuple[ClarificationCategory, tuple[str, ...]], ...] = (
+    (ClarificationCategory.RELATIONSHIP_PATH, ("join", "relationship", "path")),
+    (ClarificationCategory.TIME_RANGE, ("time", "period", "date")),
+    (ClarificationCategory.GRANULARITY, ("granularity", "grain", "aggregate")),
+    (ClarificationCategory.FILTER_VALUE, ("filter", "value")),
+    (ClarificationCategory.OUTPUT, ("output", "sort", "limit")),
+)
+
+
 def _category(code: str) -> ClarificationCategory:
-    lowered = code.lower()
-    if "join" in lowered or "relationship" in lowered or "path" in lowered:
-        return ClarificationCategory.RELATIONSHIP_PATH
-    if "time" in lowered or "period" in lowered or "date" in lowered:
-        return ClarificationCategory.TIME_RANGE
-    if "granularity" in lowered or "grain" in lowered or "aggregate" in lowered:
-        return ClarificationCategory.GRANULARITY
-    if "filter" in lowered or "value" in lowered:
-        return ClarificationCategory.FILTER_VALUE
-    if "output" in lowered or "sort" in lowered or "limit" in lowered:
-        return ClarificationCategory.OUTPUT
+    # LLM が返す code は自由形式。部分文字列で判定すると `candidate`（date）や
+    # `update` が期間の質問になるため、英数字の語の先頭で判定する（#1270）。
+    words = [word for word in re.split(r"[^0-9a-z]+", code.lower()) if word]
+    for category, stems in _CATEGORY_STEMS:
+        if any(word.startswith(stems) for word in words):
+            return category
     return ClarificationCategory.BUSINESS_MEANING
 
 
@@ -1107,7 +1113,12 @@ def _intent_summary(
         add(
             "filters",
             "絞り込み",
-            "、".join(f"{item.label_ja} {item.operator} {item.value}" for item in intent.filters),
+            # 質問文と同じ業務の言葉で出す。演算子や Python の値の表記を見せない（#1270）。
+            "、".join(
+                _format_filter_condition(item.label_ja, item.operator, item.value)
+                or f"{item.label_ja} {item.operator} {item.value}"
+                for item in intent.filters
+            ),
             ClarificationCategory.FILTER_VALUE,
             [part for item in intent.filters for part in (item.label_ja, item.value)],
         )
@@ -1123,12 +1134,14 @@ def _intent_summary(
             [selected_path.name_ja],
         )
     if intent.granularity:
+        # `month` などの内部の値は「月別」で出す（質問文の `_display_granularity` と同じ）。
+        granularity = _display_granularity(intent.granularity)
         add(
             "granularity",
             "集計単位",
-            intent.granularity,
+            granularity,
             ClarificationCategory.GRANULARITY,
-            [intent.granularity],
+            [granularity],
         )
     if intent.limit is not None:
         result.append(

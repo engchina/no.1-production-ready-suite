@@ -1566,6 +1566,85 @@ test("AI要件確認は複数の業務対象をCheckboxで選択できる", asyn
   });
 });
 
+test("AI要件確認の残りの必須項目は途中で失敗しても確定した分を画面に残す", async ({ page }) => {
+  await mockApi(page);
+  const timeQuestion = (
+    guidedSessionData(false).clarification as { current_question: Record<string, unknown> }
+  ).current_question;
+  const granularityQuestion = {
+    id: "question-granularity",
+    ambiguity_id: "ambiguity-granularity",
+    category: "granularity",
+    prompt_ja: "どの単位で集計しますか？",
+    reason_ja: "日別・月別など、選んだ単位で結果のまとまり方が変わります。",
+    answer_kind: "single_select",
+    options: [
+      { id: "option-month", label_ja: "月別", structured_value: "month", source: "default" },
+    ],
+    allow_free_text: true,
+    blocking: true,
+  };
+  const manualSession = (version: number, questions: Array<Record<string, unknown>>) => {
+    const data = guidedSessionData(false);
+    data.session.current_intent_version = version;
+    data.clarification = {
+      ...(data.clarification as Record<string, unknown>),
+      current_question: questions[0],
+      remaining_questions: questions,
+      required_total: 2,
+      required_confirmed: 2 - questions.length,
+      turn_count: 4 + (2 - questions.length),
+      manual_completion_required: true,
+    };
+    return data;
+  };
+  const answers: Array<Record<string, unknown>> = [];
+  // mockApi より後に登録した route が優先される。
+  await page.route("**/api/nl2sql/query-sessions", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await fulfill(route, manualSession(1, [timeQuestion, granularityQuestion]));
+  });
+  await page.route("**/api/nl2sql/query-sessions/*/clarification-answers", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    answers.push(body);
+    if (answers.length === 1) {
+      return fulfill(route, manualSession(2, [granularityQuestion]));
+    }
+    if (answers.length === 2) {
+      return route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({ error_messages: ["回答を反映できませんでした。"] }),
+      });
+    }
+    const ready = guidedSessionData(true);
+    ready.session.current_intent_version = 3;
+    return fulfill(route, ready);
+  });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await expect(panel.getByRole("heading", { name: "残りの必須項目" })).toBeVisible();
+  await panel.getByRole("radio", { name: /今月/ }).check();
+  await panel.getByRole("radio", { name: /月別/ }).check();
+  await panel.getByRole("button", { name: "必須項目を確認" }).click();
+
+  // 1 件目は確定済み。画面は 2 件目だけを残し、入力した回答も保つ。
+  await expect(panel.getByText("回答を反映できませんでした。")).toBeVisible();
+  await expect(panel.getByRole("radio", { name: /今月/ })).toHaveCount(0);
+  await expect(panel.getByRole("radio", { name: /月別/ })).toBeChecked();
+  await panel.getByRole("button", { name: "必須項目を確認" }).click();
+
+  await expect(panel.getByText("確認完了").first()).toBeVisible();
+  expect(answers.map((item) => [item.base_version, item.question_id])).toEqual([
+    [1, "question-time-range"],
+    [2, "question-granularity"],
+    [2, "question-granularity"],
+  ]);
+});
+
 test("AI要件確認の中止は主操作の右側から元のクエリを保って閉じる", async ({ page }) => {
   const payloads = await mockApi(page);
   await page.goto("/query");

@@ -222,15 +222,20 @@ export function GuidedClarificationPanel({
     if (!session || !manualAnswersReady || busyAction) return;
     setBusyAction("answer");
     setError("");
+    let updated = session;
     try {
-      let updated = session;
       // 画面上は一括フォームだが、公開 API の version / current-question 契約を維持して
       // 1 件ずつ順序通りに確定する。
+      let allAnswered = true;
       for (let index = 0; index < manualQuestions.length; index += 1) {
         const questionToAnswer = updated.clarification?.current_question;
         if (!questionToAnswer) break;
         const value = manualAnswers[questionToAnswer.id];
-        if (!value) throw new Error(t("nl2sql.clarification.answerRequired"));
+        // 自由入力の再解釈で確認項目が増えたときは、そこで止めて新しい項目をフォームに出す（#1270）。
+        if (!value) {
+          allAnswered = false;
+          break;
+        }
         updated = await answerQuerySessionClarification(updated.id, {
           base_version: updated.current_intent_version ?? 1,
           question_id: questionToAnswer.id,
@@ -239,7 +244,7 @@ export function GuidedClarificationPanel({
         });
       }
       setSession(updated);
-      setManualAnswers({});
+      if (allAnswered) setManualAnswers({});
     } catch (cause) {
       if (cause instanceof QuerySessionVersionConflictError) {
         try {
@@ -247,6 +252,9 @@ export function GuidedClarificationPanel({
         } catch {
           if (cause.session) setSession(cause.session);
         }
+      } else if (updated !== session) {
+        // 途中まで確定した分を画面へ反映する。古い version のままだと次の送信が競合になる（#1270）。
+        setSession(updated);
       }
       setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.answer"));
     } finally {
