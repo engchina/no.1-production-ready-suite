@@ -354,7 +354,7 @@ def test_update_external_parser_connection_retains_and_clears_secret(
     )
     assert connection == {
         "backend": "mineru",
-        "protocol": "mineru_file_parse",
+        "protocol": "mineru_v1",
         "endpoint": "https://mineru.example.com",
         "model": None,
         "api_key_configured": True,

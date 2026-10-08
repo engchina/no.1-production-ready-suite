@@ -62,7 +62,7 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
     # 外部 native API の接続設定を実装証跡として扱う。
     "mineru": ParserAdapterPackageSpec(
         import_name="external_api",
-        distribution_names=("mineru_file_parse",),
+        distribution_names=("mineru_v1",),
         install_package="外部 MinerU API",
     ),
     # 外部 OpenAI 互換 API の接続設定を実装証跡として扱う。

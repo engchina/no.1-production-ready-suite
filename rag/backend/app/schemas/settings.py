@@ -116,7 +116,7 @@ ParserAdapterBackendName = Literal[
     "dots_ocr",
 ]
 ExternalParserBackendName = Literal["mineru", "dots_ocr"]
-ExternalParserProtocol = Literal["mineru_file_parse", "openai_chat_completions"]
+ExternalParserProtocol = Literal["mineru_v1", "openai_chat_completions"]
 ExternalParserConnectionStatus = Literal[
     "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
 ]

@@ -177,6 +177,7 @@ AnswerFlow = Literal["crag", "standard_rag"]
 # single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
 # source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
 ServingMode = Literal["single", "fused", "routed"]
+MineruTier = Literal["flash", "basic", "standard", "advanced"]
 GuardrailPolicyName = Literal[
     "standard",
     "strict",
@@ -1137,13 +1138,26 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
     # は読まず、誤った protocol への自動移行を避ける。
     rag_parser_mineru_api_host: str = Field(
-        default="", description="MinerU native /file_parse API の base URL。"
+        default="", description="MinerU 4.x の V1 API（/v1/parse/jobs）の base URL。"
     )
     rag_parser_mineru_api_key: str = Field(default="", repr=False)
-    rag_parser_mineru_language: str = Field(
-        default="japan",
-        max_length=64,
-        description="MinerU /file_parse の言語コード。",
+    # MinerU 4.0 は解析の方式（pipeline / vlm / hybrid）を品質の tier にまとめた（#1329）。
+    # OCR の言語は MinerU の API サーバーの起動時の設定で、V1 の request には無い。
+    rag_parser_mineru_tier: MineruTier = Field(
+        default="basic",
+        description=(
+            "MinerU の解析の品質（flash / basic / standard / advanced）。basic は小さな"
+            "モデルで CPU でも動く（3.x の pipeline 相当）。"
+            "PDF・画像以外は MinerU が flash だけを持つ。"
+        ),
+    )
+    rag_parser_mineru_job_timeout_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        le=86400,
+        description=(
+            "MinerU の parse job を終了まで待つ上限（秒）。超えたら job を取り消して縮退する。"
+        ),
     )
     rag_parser_dots_ocr_api_host: str = Field(
         default="", description="Dots.OCR OpenAI 互換 API の base URL。"
@@ -1574,15 +1588,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ``local`` を既定エンジン(``docling``)のサービスへマップし、in-process 解析は実行しない。
         """
         return normalize_parser_adapter_backend_value(value)
-
-    @field_validator("rag_parser_mineru_language")
-    @classmethod
-    def normalize_mineru_language(cls, value: str) -> str:
-        """MinerU の言語コードは空白を除去し、空値を拒否する。"""
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("RAG_PARSER_MINERU_LANGUAGE は空にできません。")
-        return normalized
 
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod

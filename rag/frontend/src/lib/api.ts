@@ -232,7 +232,7 @@ export type ParserAdapterBackendName =
   | "dots_ocr";
 export type ExternalParserBackendName = "mineru" | "dots_ocr";
 export type ExternalParserProtocol =
-  "mineru_file_parse" | "openai_chat_completions";
+  "mineru_v1" | "openai_chat_completions";
 export type ExternalParserConnectionStatus =
   | "available"
   | "unconfigured"
