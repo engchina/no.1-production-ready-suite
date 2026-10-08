@@ -22,7 +22,7 @@ export const ja = {
   "dbGate.setupRequired.message":
     "データベースには接続できています。RAG に必要なテーブル・索引が不足しているか、未適用の更新があります。運用設定の「システムテーブル」で「作成・更新」を実行してから、再試行してください。",
   "dbGate.setupRequired.settingsHint":
-    "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
+    "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観と接続の各設定ページは引き続き利用できます。",
   "common.delete": "削除",
   "common.retry": "再試行",
   "common.skipToMain": "本文へスキップ",
@@ -118,8 +118,8 @@ export const ja = {
   "nav.section.improve": "改善・運用",
   "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
-  "nav.settingsAppearance": "外観",
-  "appearance.subtitle": "配色テーマ（ライト / ダーク）を切り替えます。既定はライトです。",
+  // 「外観と接続」は配色テーマと HTTPS の証明書を扱う（#1316）。副題・カードの文言は platform の既定を使う。
+  "nav.settingsAppearance": "外観と接続",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",
   "appearance.theme.light": "ライト",

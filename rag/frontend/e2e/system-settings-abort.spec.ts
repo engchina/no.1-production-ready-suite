@@ -30,7 +30,7 @@ for (const { path, api } of CASES) {
 
     await page.goto(path);
     await requested;
-    await page.getByRole("link", { name: "外観" }).click();
+    await page.getByRole("link", { name: "外観と接続" }).click();
     await expect(page).toHaveURL(/\/settings\/appearance$/);
 
     const failed = await aborted;

@@ -4,6 +4,7 @@
  * stream を始めた後の失敗（timeout・回答形式の検証の失敗・内部エラー）は `error` event で届く。
  */
 
+import { appPath } from "./base-path";
 import {
   ApiError,
   apiErrorFromEnvelope,
@@ -69,7 +70,8 @@ export async function streamSearch(
   const request = { method: "POST", path: SEARCH_STREAM_PATH };
   let res: Response;
   try {
-    res = await fetch(SEARCH_STREAM_PATH, {
+    // 送る URL には配信の base を付ける（#1316）。エラーの表示の path は付けない。
+    res = await fetch(appPath(SEARCH_STREAM_PATH), {
       method: "POST",
       // Cookie セッションの CSRF（#214）。
       headers: withCsrfHeaders("POST", {

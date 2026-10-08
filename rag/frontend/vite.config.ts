@@ -16,6 +16,16 @@ const hermeticApiMiddleware: Connect.NextHandleFunction = (req, res) => {
   );
 };
 
+/**
+ * 画面の配信の基点（#1316）。1 台の Compute に 3 製品を置く配備では Nginx が RAG を `/rag/` の下で配信するため、
+ * `FRONTEND_BASE_PATH=/rag/ npm run build` で build する。未設定・空は `/`（ローカルの開発・e2e・製品ごとの配備）。
+ * 前後の `/` はそろえる（`rag` → `/rag/`）。
+ */
+function frontendBasePath(value: string | undefined): string {
+  const trimmed = (value ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}/` : "/";
+}
+
 const MISSING_BACKEND_URL_WARNING =
   "[rag] BACKEND_URL が未設定のため /api を proxy せず 404 を返します（hermetic）。backend に接続する場合は BACKEND_URL=http://localhost:8000 npm run dev のように明示してください。";
 
@@ -33,6 +43,7 @@ export default defineConfig(() => {
   const apiProxy = () => (hermeticApi ? undefined : { "/api": { target: backendUrl, changeOrigin: true } });
 
   return {
+    base: frontendBasePath(process.env.FRONTEND_BASE_PATH),
     plugins: [
       react(),
       {
