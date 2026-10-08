@@ -397,6 +397,11 @@ function mcpAuthLabel(mode?: McpAuthMode | null): string {
   return t("settings.mcpServers.authNone");
 }
 
+/** 標準の接続（RAG / NL2SQL）の URL を決める配備の環境変数（backend の `_PRODUCT_MCP_URL_ENV` と同じ。#1325）。 */
+function productMcpUrlEnv(serverId: string): string {
+  return serverId === "nl2sql" ? "AGENT_EXTERNAL_NL2SQL_MCP_URL" : "AGENT_EXTERNAL_RAG_MCP_URL";
+}
+
 function mcpSourceLabel(source: string): string {
   if (source === "builtin") return t("settings.mcpConnections.sourceBuiltin");
   if (source === "env") return t("settings.mcpConnections.sourceEnv");
@@ -644,20 +649,25 @@ function McpConnectionEditor({
   // 保存した回数。保存し直したら、前の設定（秘密を含む）でのツールの取得の結果を消す（messaging.md §10.4。#1014）。
   const [savedCount, setSavedCount] = useState(0);
   const editingId = connection?.server_id ?? null;
-  // RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ接続（認証方式は変えられない）。
+  // RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ標準の接続（名前・認証方式は変えられない）。
   const builtin = connection?.source === "builtin";
+  // 配備（環境変数）が URL を決めた標準の接続は、URL も変えられない（#1325）。
+  const urlLocked = Boolean(connection?.base_url_locked);
 
   // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
   const saveMutation = useMutation({
     mutationFn: (current: McpConnectionFormState) => {
       const payload: McpConnectionWritePayload = {
-        label: current.label || null,
         timeout_seconds: Number(current.timeoutSeconds),
         session_id: current.sessionId || undefined,
       };
+      // 標準の接続の名前は配備が決める（送らない。#1325）。
+      if (!builtin) {
+        payload.label = current.label || null;
+      }
       // URL は変えたときだけ送る。保存済みの URL の資格情報は伏せて返るため、そのまま送り返すと
       // 伏せた値で上書きしてしまう（#1056）。
-      if (baseUrlChanged(current)) {
+      if (!urlLocked && baseUrlChanged(current)) {
         payload.base_url = current.baseUrl.trim();
       }
       if (!builtin) {
@@ -707,7 +717,7 @@ function McpConnectionEditor({
     const nextServerIdError =
       !editingId && !form.serverId.trim() ? t("settings.mcpServers.idRequired") : null;
     // 保存済みの（伏せて表示している）URL のままなら検証しない（変えた URL だけを送る）。
-    const nextBaseUrlError = baseUrlChanged(form) ? mcpUrlError(form.baseUrl) : null;
+    const nextBaseUrlError = !urlLocked && baseUrlChanged(form) ? mcpUrlError(form.baseUrl) : null;
     // 空のタイムアウトを 0 として保存しない。規則は backend（McpConnectionCreate / Patch）と同じ（#540）。
     const nextTimeoutError = numberFieldError(form.timeoutSeconds, {
       label: t("settings.timeout"),
@@ -806,6 +816,11 @@ function McpConnectionEditor({
                   {`${t("settings.mcpServers.auth")}: ${mcpAuthLabel(connection.auth_mode)}`}
                 </span>
               </div>
+              {builtin ? (
+                <Banner severity="info" title={t("settings.mcpConnections.builtinTitle")}>
+                  {urlLocked ? t("settings.mcpConnections.builtinLocked") : t("settings.mcpConnections.builtinUnlocked")}
+                </Banner>
+              ) : null}
               <McpConnectionNotice connection={connection} />
             </div>
           </Section>
@@ -833,6 +848,8 @@ function McpConnectionEditor({
                   id="mcp-server-label"
                   label={t("settings.mcpServers.label")}
                   className="min-w-0"
+                  helper={builtin ? t("settings.mcpConnections.labelHintBuiltin") : undefined}
+                  disabled={builtin}
                   value={form.label}
                   onValueChange={(value) => setForm({ ...form, label: value })}
                 />
@@ -841,12 +858,17 @@ function McpConnectionEditor({
                     id="mcp-server-base-url"
                     label={t("settings.mcpConnections.url")}
                     helper={[
-                      builtin ? t("settings.mcpConnections.urlHintBuiltin") : t("settings.mcpConnections.urlHint"),
+                      urlLocked
+                        ? t("settings.mcpConnections.urlHintLocked", { env: productMcpUrlEnv(connection?.server_id ?? "") })
+                        : builtin
+                          ? t("settings.mcpConnections.urlHintBuiltin", { env: productMcpUrlEnv(connection?.server_id ?? "") })
+                          : t("settings.mcpConnections.urlHint"),
                       connection?.base_url_masked ? t("settings.mcpConnections.urlMaskedHint") : null,
                     ]
                       .filter(Boolean)
                       .join("")}
                     error={baseUrlError ?? undefined}
+                    disabled={urlLocked}
                     value={form.baseUrl}
                     onValueChange={(value) => {
                       setForm({ ...form, baseUrl: value });

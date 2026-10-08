@@ -342,6 +342,8 @@ class McpConnectionSettings(BaseModel):
     # 由来: builtin(RAG / NL2SQL) / env / plugin:<id> / runtime。runtime だけ削除できる。
     source: str
     removable: bool
+    # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL は変えられない。
+    base_url_locked: bool = False
     # URL と認証方式に必要な資格情報がそろい、呼び出せる状態か。
     configured: bool
     api_key_configured: bool = False
@@ -3142,6 +3144,7 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
         timeout_seconds=config.timeout_seconds,
         source=config.source,
         removable=config.source == "runtime",
+        base_url_locked=config.base_url_locked,
         configured=bool(config.base_url) and credentials_ready,
         api_key_configured=bool(config.api_key),
         oauth_configured=oauth_configured,
@@ -3159,6 +3162,13 @@ def _mcp_connections_response() -> McpConnectionsData:
     )
 
 
+# 標準の接続（RAG / NL2SQL）の URL を決める配備の環境変数（#1325）。
+_PRODUCT_MCP_URL_ENV: dict[str, str] = {
+    "rag": "AGENT_EXTERNAL_RAG_MCP_URL",
+    "nl2sql": "AGENT_EXTERNAL_NL2SQL_MCP_URL",
+}
+
+
 def _changes_builtin_auth(current: McpConnectionConfig, patch: McpConnectionPatch) -> bool:
     """組み込みの接続（RAG / NL2SQL）の認証方式・audience を今と違う値にする変更か。"""
     if patch.auth_mode is not None and patch.auth_mode != current.effective_auth_mode():
@@ -3166,6 +3176,29 @@ def _changes_builtin_auth(current: McpConnectionConfig, patch: McpConnectionPatc
     return patch.service_audience is not None and (
         (patch.service_audience.strip() or current.server_id) != current.audience()
     )
+
+
+def _builtin_patch_error(current: McpConnectionConfig, patch: McpConnectionPatch) -> str | None:
+    """標準の接続（RAG / NL2SQL）に変えられない項目を変える変更なら、その理由（#1325）。
+
+    今と同じ値を送るのは受け付ける（画面は変えた項目だけを送るが、API の利用者は全項目を送りうる）。
+    """
+    if _changes_builtin_auth(current, patch):
+        # Run の利用者のサービストークンで呼ぶ（再起動の後の復元も認証方式を戻す）。
+        return "標準の接続（RAG / NL2SQL）の認証方式と audience は変えられません。"
+    if patch.label is not None and (patch.label.strip() or None) != current.label:
+        return "標準の接続（RAG / NL2SQL）の名前は変えられません。"
+    if (
+        current.base_url_locked
+        and patch.base_url is not None
+        and (patch.base_url or None) != current.base_url
+    ):
+        env_name = _PRODUCT_MCP_URL_ENV.get(current.server_id, "配備の環境変数")
+        return (
+            f"この接続の URL は配備（{env_name}）で設定しているため、画面・API では変えられません。"
+            "変えるときは配備の設定を変えて再起動してください。"
+        )
+    return None
 
 
 def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpConnectionConfig:
@@ -3336,12 +3369,9 @@ async def patch_mcp_connection(
         current = runtime_config_store.get_mcp(server_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
-    if current.source == "builtin" and _changes_builtin_auth(current, patch):
-        # RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ（再起動の後の復元も認証方式を戻す）。
-        raise HTTPException(
-            status_code=400,
-            detail="RAG / NL2SQL の接続の認証方式と audience は変えられません。",
-        )
+    builtin_error = _builtin_patch_error(current, patch) if current.source == "builtin" else None
+    if builtin_error:
+        raise HTTPException(status_code=400, detail=builtin_error)
     config = _upsert_mcp_connection(server_id, patch)
     return ApiResponse(data=_mcp_connection_settings(config))
 
@@ -3360,7 +3390,7 @@ async def delete_mcp_connection(
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail="RAG / NL2SQL・宣言・連携機能の MCP 接続は削除できません。",
+            detail="標準の接続（RAG / NL2SQL）・宣言・プラグインの MCP 接続は削除できません。",
         ) from exc
     _persist(lambda: control_plane_store.delete_mcp_connection(server_id))
     return ApiResponse(data=_mcp_connections_response())

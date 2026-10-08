@@ -149,14 +149,14 @@ for (const viewport of VIEWPORTS) {
       });
       await page.goto("/settings/mcp-connections");
       const table = page.getByRole("table", { name: "MCP 接続" });
-      // 見出しの行 + RAG / NL2SQL（組み込み）+ CRM。
+      // 見出しの行 + RAG / NL2SQL（標準の接続）+ CRM。
       await expect(table.getByRole("row")).toHaveCount(4);
 
       // 各行のボタンは「対象名」と「操作メニュー」だけ（文字ボタンを並べない）。
-      // RAG / NL2SQL（組み込みの接続）は削除できず、使える操作が無いので行メニューを出さない。
+      // RAG / NL2SQL（標準の接続）は削除できず、使える操作が無いので行メニューを出さない。
       for (const row of await table.getByRole("row").all()) {
         if ((await row.getByRole("columnheader").count()) > 0) continue;
-        const builtin = (await row.getByText("組み込み").count()) > 0;
+        const builtin = (await row.getByText("標準", { exact: true }).count()) > 0;
         await expect(row.locator('[aria-haspopup="menu"]')).toHaveCount(builtin ? 0 : 1);
         expect(await row.getByRole("button").count()).toBeLessThanOrEqual(2);
       }
