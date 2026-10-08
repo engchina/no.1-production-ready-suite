@@ -64,10 +64,25 @@ class McpToolError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class McpToolResult:
+    """`structuredContent` に加えて、`content` に足すブロック（画像など）を返すときの結果。
+
+    `output` は通常の handler の戻り値と同じ（`structuredContent` と `content` の text になる）。
+    `content` は MCP の content ブロック（例: `{"type": "image", "data": <base64>,
+    "mimeType": "image/png"}`）で、text の後ろに足す。大きなデータ（画像）を
+    `structuredContent` に入れず、呼び出し側のモデルの文脈を膨らませないために使う（#1282）。
+    """
+
+    output: Any
+    content: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class McpTool:
     """公開するツール。
 
-    - `handler`: 検証済みの `input_model` を受け取り、`BaseModel` か dict を返す。
+    - `handler`: 検証済みの `input_model` を受け取り、`BaseModel` か dict を返す（画像などの
+      content を足すときは `McpToolResult`）。
       同期関数は threadpool で実行する（FastAPI の同期 route と同じ）。
     - `permissions`: すべてのグループを満たすこと（グループ内はどれか 1 つ）。
       例: `(frozenset({"a"}), frozenset({"b"}))` は a と b の両方が必要。
@@ -232,12 +247,18 @@ def _http_error(exc: Exception) -> dict[str, Any] | None:
 
 
 def tool_result(output: Any) -> dict[str, Any]:
+    extra: tuple[dict[str, Any], ...] = ()
+    if isinstance(output, McpToolResult):
+        output, extra = output.output, output.content
     body = output.model_dump(mode="json") if isinstance(output, BaseModel) else output
     body = jsonable_encoder(body)
     if not isinstance(body, dict):
         body = {"result": body}
     return {
-        "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}],
+        "content": [
+            {"type": "text", "text": json.dumps(body, ensure_ascii=False)},
+            *(dict(block) for block in extra),
+        ],
         "structuredContent": body,
         "isError": False,
     }
