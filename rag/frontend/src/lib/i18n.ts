@@ -2268,6 +2268,10 @@ export const ja = {
   "chat.clarify.answer": "この条件で回答する",
   "chat.clarify.skip": "選ばずに回答する",
   "chat.clarify.askUnscoped": "範囲を指定せずに質問し直す",
+  // 固定の RAG では完了できない回答から Agent のチャットへ続ける導線（#1283）。
+  "chat.agentEscalation.note":
+    "この質問は、資料だけでは答えを確定できず、現場の実データの確認が必要です。Agent のチャットでは、許可された道具でデータを確かめながら続けられます。",
+  "chat.agentEscalation.action": "Agent のチャットで続ける",
   "chat.faq.title": "近い承認済み FAQ（類似問）があります",
   "chat.faq.description":
     "質問と同じ趣旨の類似問を選ぶと、資料を検索せずに、その承認済みの回答をもとに回答します。当てはまるものが無ければ「どれでもない」を選ぶと、資料を検索して回答します。",
@@ -2320,6 +2324,7 @@ export const ja = {
   "search.answerDetails.outcome.needs_human": "人への引き継ぎ",
   "search.answerDetails.outcome.insufficient_evidence": "根拠不足",
   "search.answerDetails.guide": "業務ガイド: {title}（版 {revision}）",
+  "search.answerDetails.route.agentSuggested": "Agent で続けることを提案",
   "search.answerDetails.humanReview": "人手確認が必要",
   "search.answerDetails.faqSource.badge": "承認済み FAQ から回答",
   "search.answerDetails.faqSource.title": "回答の出典: 承認済み FAQ",

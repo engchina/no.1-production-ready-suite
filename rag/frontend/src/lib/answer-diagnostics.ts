@@ -19,9 +19,22 @@ const ANSWER_OUTCOMES: readonly AnswerOutcome[] = [
   "insufficient_evidence",
 ];
 
+/**
+ * 回答の経路（#1283。backend の diagnostics.answer.route）。経路は利用者が製品で選び（ここでは固定の RAG）、
+ * 理由は回答の対応。固定の RAG では完了できない回答（現場の実データの確認が要る）だけ Agent で続けることを提案する。
+ */
+export type AnswerRoute = {
+  path: string;
+  reason: string;
+  escalationSuggested: boolean;
+  escalationReason: string;
+};
+
 export type AnswerDiagnostics = {
   /** 回答の対応（#1235）。古い記録など、無ければ null。 */
   outcome: AnswerOutcome | null;
+  /** 回答の経路（#1283）。記録の無い回答では null。 */
+  route: AnswerRoute | null;
   /** 回答に使った業務ガイド（#1238）。使っていなければ null。 */
   guide: { title: string; revision: number } | null;
   confidence: string;
@@ -97,6 +110,7 @@ export function parseAnswerDiagnostics(
     outcome: (ANSWER_OUTCOMES as readonly string[]).includes(outcome)
       ? (outcome as AnswerOutcome)
       : null,
+    route: parseAnswerRoute(raw.route),
     guide:
       typeof guide.title === "string" && guide.title && num(guide.revision) !== null
         ? { title: guide.title, revision: num(guide.revision) as number }
@@ -148,6 +162,19 @@ export function parseAnswerDiagnostics(
         }),
       };
     }),
+  };
+}
+
+/** diagnostics.answer.route を読む（#1283）。経路の無い回答では null。 */
+export function parseAnswerRoute(value: unknown): AnswerRoute | null {
+  const raw = record(value);
+  const path = String(raw.path ?? "");
+  if (!path) return null;
+  return {
+    path,
+    reason: String(raw.reason ?? ""),
+    escalationSuggested: raw.escalation_suggested === true,
+    escalationReason: String(raw.escalation_reason ?? ""),
   };
 }
 

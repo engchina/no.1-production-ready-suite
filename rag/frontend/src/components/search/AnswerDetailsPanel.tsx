@@ -77,6 +77,12 @@ export function AnswerDetailsPanel({
             />
           </span>
         ) : null}
+        {data.route?.escalationSuggested ? (
+          // 固定の RAG では完了できず、Agent で続けることを提案した回答（#1283）。
+          <span data-testid="answer-route-badge">
+            <StatusBadge variant="info" label={t("search.answerDetails.route.agentSuggested")} />
+          </span>
+        ) : null}
         {data.confidence ? (
           <StatusBadge
             variant={confidenceVariant(data.confidence)}

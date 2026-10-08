@@ -1194,6 +1194,11 @@ export interface ClarificationAnswer {
 }
 
 /** 回答に選べるモデル（既定のテキストモデルと既定の Vision モデルだけ。先頭が既定。#675）。 */
+/** Agent のチャットへの導線（#1283。backend の ChatAgentLink）。 */
+export interface ChatAgentLink {
+  agent_chat_url: string | null;
+}
+
 export interface CompareModel {
   model_id: string;
   display_name: string;
@@ -3160,6 +3165,8 @@ export const api = {
       { method: "POST" },
     ),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
+  /** Agent のチャットの URL（#1283）。Agent の画面の URL が未設定なら null。 */
+  getChatAgentLink: () => request<ChatAgentLink>("/api/chat/agent-link"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
 
   // 検索
