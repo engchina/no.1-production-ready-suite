@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import secrets
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
@@ -115,6 +116,8 @@ from .ontology_observability import (
 from .ontology_reasoning import OntologyPublishService
 from .ontology_semantics import build_semantic_artifacts
 from .ontology_service import (
+    QUERY_SESSION_EXPIRED_CODE,
+    QUERY_SESSION_EXPIRED_MESSAGE_JA,
     OntologyGateBlockedError,
     OntologyIntegrityError,
     OntologyNotFoundError,
@@ -142,6 +145,16 @@ from .service import nl2sql_service
 from .structured_outputs import format_schema, strict_schema
 
 logger = logging.getLogger(__name__)
+
+# 操作が途絶えた query session の掃除（#1274）。実行中（executing）と終了済みは対象にしない。
+_EXPIRABLE_QUERY_SESSION_STATUSES = (
+    QuerySessionStatus.INTERPRETING,
+    QuerySessionStatus.AWAITING_INTENT_CONFIRMATION,
+    QuerySessionStatus.GENERATING_SQL,
+    QuerySessionStatus.AWAITING_SQL_CONFIRMATION,
+)
+# 掃除は session の作成のたびではなく、1 プロセスでこの間隔に 1 回だけ行う。
+_QUERY_SESSION_SWEEP_INTERVAL_SECONDS = 900.0
 
 
 ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5
@@ -594,6 +607,8 @@ class OntologyApiRuntime:
         self._previews: dict[str, PreviewData] = {}
         self._results: dict[str, QueryResults] = {}
         self._plans: dict[str, ExplainPlanData] = {}
+        self._session_sweep_lock = RLock()
+        self._last_session_sweep_at: float | None = None
         self._embeddings: dict[str, dict[str, list[float]]] = {}
         self._store_etags: dict[tuple[OntologyCollection, tuple[str, ...]], str] = {}
 
@@ -2846,6 +2861,7 @@ class OntologyApiRuntime:
         from .ontology_markdown_workspace import MarkdownOntologyWorkspace
         from .ontology_published_context import published_context
 
+        self._maybe_expire_idle_sessions()
         with self._lock:
             profile = self._strict_profile(request.profile_id)
             ontology = self._query_ontology(request.profile_id)
@@ -3911,6 +3927,8 @@ class OntologyApiRuntime:
         with self._lock:
             self._ensure_store()
             current = self._ensure_session_loaded(session_id)
+            # 終了した（期限切れを含む）session には、AI の再解釈を呼ぶ前に答えを返す。
+            OntologyQuerySessionService._assert_session_mutable(current)
             if request.base_version != current.current_intent_version:
                 raise OntologyVersionConflictError(
                     "INTENT_VERSION_CONFLICT",
@@ -4018,6 +4036,88 @@ class OntologyApiRuntime:
                 turns=len(session.clarification_turns),
             )
             return self._session_data(session)
+
+    def _maybe_expire_idle_sessions(self) -> None:
+        """前回の掃除から間隔が空いていれば、操作が途絶えた session を終了する。"""
+
+        if not self._session_sweep_lock.acquire(blocking=False):
+            return
+        try:
+            now = time.monotonic()
+            last = self._last_session_sweep_at
+            if last is not None and now - last < _QUERY_SESSION_SWEEP_INTERVAL_SECONDS:
+                return
+            self._last_session_sweep_at = now
+            try:
+                self.expire_idle_sessions()
+            except Exception:
+                logger.warning("nl2sql_query_session_expiry_failed", exc_info=True)
+        finally:
+            self._session_sweep_lock.release()
+
+    def expire_idle_sessions(self, *, now: datetime | None = None) -> int:
+        """最後の更新から TTL を過ぎた未完了の session を cancelled にし、件数を返す（#1274）。
+
+        画面の中止（閉じる・unmount・pagehide）が届かなかった session を残さない。保存は
+        一覧で読んだ ETag の CAS で行い、同時に更新された session は飛ばす（次の掃除で見直す）。
+        """
+
+        self._ensure_store()
+        current_time = now or utc_now()
+        deadline = current_time - timedelta(
+            seconds=int(get_settings().nl2sql_query_session_idle_ttl_seconds)
+        )
+        expired = 0
+        for status in _EXPIRABLE_QUERY_SESSION_STATUSES:
+            documents = self.store.list_documents(
+                "query_sessions", {"status": status.value}, include_embedding=False
+            )
+            for document in documents:
+                try:
+                    session = QuerySession.model_validate(
+                        self._stored_payload(document, collection="query session")
+                    )
+                except (OntologyIntegrityError, ValidationError):
+                    logger.warning(
+                        "nl2sql_query_session_expiry_invalid_payload",
+                        extra={"session_id": document.get("session_id")},
+                    )
+                    continue
+                updated_at = session.updated_at
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=UTC)
+                if updated_at > deadline:
+                    continue
+                session.status = QuerySessionStatus.CANCELLED
+                session.cancelled_at = current_time
+                session.updated_at = current_time
+                session.error_code = QUERY_SESSION_EXPIRED_CODE
+                session.error_message_ja = QUERY_SESSION_EXPIRED_MESSAGE_JA
+                replacement = {
+                    key: value for key, value in document.items() if key not in {"version", "etag"}
+                }
+                replacement["status"] = session.status.value
+                replacement["payload"] = session.model_dump(mode="json")
+                try:
+                    self._save("query_sessions", replacement, expected_etag=str(document["etag"]))
+                except OntologyVersionConflict:
+                    continue
+                expired += 1
+                with self._lock:
+                    # この process の cache を捨てる。次の操作は store から読み直す。
+                    self._previews.pop(session.id, None)
+                    self._results.pop(session.id, None)
+                    self._plans.pop(session.id, None)
+                record_transition(
+                    session_id=session.id,
+                    revision_id=session.ontology_revision_id,
+                    state=session.status.value,
+                )
+                if session.clarification_mode == ClarificationMode.GUIDED:
+                    record_clarification(outcome="expired", turns=len(session.clarification_turns))
+        if expired:
+            logger.info("nl2sql_query_sessions_expired", extra={"count": expired})
+        return expired
 
     def generate_sql(
         self,

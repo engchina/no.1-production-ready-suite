@@ -100,6 +100,13 @@ class OntologyStateConflictError(OntologyServiceError):
     pass
 
 
+# 操作が途絶えて中止した query session の error_code と、利用者への案内（#1274）。
+QUERY_SESSION_EXPIRED_CODE = "QUERY_SESSION_EXPIRED"
+QUERY_SESSION_EXPIRED_MESSAGE_JA = (
+    "一定時間操作がなかったため、この確認は終了しました。閉じてから、もう一度始めてください。"
+)
+
+
 def _canonical_hash(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
@@ -2568,6 +2575,13 @@ class OntologyQuerySessionService:
 
     @staticmethod
     def _assert_session_mutable(session: QuerySession) -> None:
+        if (
+            session.status == QuerySessionStatus.CANCELLED
+            and session.error_code == QUERY_SESSION_EXPIRED_CODE
+        ):
+            raise OntologyStateConflictError(
+                QUERY_SESSION_EXPIRED_CODE, QUERY_SESSION_EXPIRED_MESSAGE_JA
+            )
         if session.status in {
             QuerySessionStatus.EXECUTING,
             QuerySessionStatus.DONE,

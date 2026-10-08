@@ -1247,6 +1247,7 @@ const nl2sqlJa = {
   "nl2sql.clarification.applied":
     "確認内容を質問に反映しました。内容を確認して「SQL を生成して実行」を押してください。",
   "nl2sql.clarification.confirmed": "確認済み",
+  "nl2sql.clarification.ended": "この確認は終了しました。閉じてから、もう一度始めてください。",
   "nl2sql.clarification.error.start": "AI 要件確認を開始できませんでした。",
   "nl2sql.clarification.error.answer": "回答を反映できませんでした。",
   "nl2sql.clarification.error.apply":
