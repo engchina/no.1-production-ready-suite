@@ -749,6 +749,12 @@ def test_clarification_with_an_options_line_is_needs_clarification() -> None:
         question, steps=[_retrieve(), _lookup("clarify", unknown=_TARGET_UNKNOWN)]
     )
     assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
+    # 回答を求める依頼を添えた確認の質問（#1320 の実環境の D の run2 の cr-grant-permission）。
+    asked = (
+        "権限の付与先は、個別の利用者ですか、グループですか？  \n\n- 個別  \n- グループ\n\n"
+        "ご回答をお願いします。"
+    )
+    assert answer_outcome(asked, steps=[_retrieve()])["value"] == "needs_clarification"
     # 選択肢の行でも、文・操作の指示は主張のまま。
     for text in (
         "権限の付与先は、個別の利用者ですか？\n選択肢: 個別を選んで「付与」を押してください。",
