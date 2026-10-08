@@ -234,8 +234,8 @@ function validationMessage(validation: ReviewValidation): string {
         ? t("chat.review.message.noEvidence")
         : t("chat.review.message.unvalidated");
     case "skipped":
-      return validation.cause === "emptyAnswer"
-        ? t("chat.review.message.skippedEmpty")
-        : t("chat.review.message.skipped");
+      if (validation.cause === "emptyAnswer") return t("chat.review.message.skippedEmpty");
+      if (validation.cause === "clarification") return t("chat.review.message.skippedClarification");
+      return t("chat.review.message.skipped");
   }
 }

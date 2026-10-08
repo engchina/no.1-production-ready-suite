@@ -783,6 +783,32 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "検索・回答プロファイルで上書きできる。"
         ),
     )
+    rag_request_coverage_retrieval_enabled: bool = Field(
+        default=True,
+        description=(
+            "回答の生成の前に、質問の要求ごとに根拠があるかを語の一致で確かめ(LLM は呼ばない)、"
+            "根拠の無い要求だけを要求の文で 1 回ずつ検索し直して回答の材料に足す(#1279)。"
+            "検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_request_coverage_max_queries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="根拠の無い要求の再検索の回数の上限(1 要求 1 回。#1279)。",
+    )
+    rag_request_coverage_max_chunks: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description="根拠の無い要求の再検索で回答の材料に足す根拠(親 chunk)の数の上限(#1279)。",
+    )
+    rag_request_coverage_deadline_seconds: float = Field(
+        default=10.0,
+        ge=0,
+        le=60,
+        description=("根拠の無い要求の再検索の期限(秒)。過ぎたら次の要求の検索を始めない(#1279)。"),
+    )
     rag_auto_field_filter_enabled: bool = Field(
         default=False,
         description=(
@@ -1025,7 +1051,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default_factory=ExcelOptions,
         description=(
             "前処理 excel_to_json の選択肢(#1221。読み方 auto/table/procedure・表頭の行と行数・"
-            "読むシート・読まないシート・非表示のシート・読まない列)。文書レシピの excel_options で"
+            "読むシート・読まないシート・非表示のシート・読まない列・列の役割の判定と指定(#1281))。"
+            "文書レシピの excel_options で"
             '上書きできる。環境変数は JSON(例: {"mode": "table", "header_row": 2})。'
         ),
     )

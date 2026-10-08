@@ -70,6 +70,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "neighbor_child_count": resolved_settings.rag_neighbor_child_count,
         "rerank_enabled": resolved_settings.rag_rerank_enabled,
         "screen_linking_enabled": resolved_settings.rag_screen_linking_enabled,
+        "request_coverage_retrieval_enabled": (
+            resolved_settings.rag_request_coverage_retrieval_enabled
+        ),
         "reference_expansion_enabled": resolved_settings.rag_reference_expansion_enabled,
         "reference_expansion_max_chunks": resolved_settings.rag_reference_expansion_max_chunks,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,

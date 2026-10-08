@@ -967,6 +967,16 @@ function SearchAnswerProfileEditor({
                         }
                       />
                       <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.requestCoverage")}
+                        description={t("searchAnswerProfiles.field.requestCoverageHelper")}
+                        descriptionId="search-answer-profile-request-coverage-helper"
+                        value={config.query.request_coverage_retrieval_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ request_coverage_retrieval_enabled: value })
+                        }
+                      />
+                      <QueryToggleRow
                         label={t("searchAnswerProfiles.field.autoFieldFilter")}
                         description={t("searchAnswerProfiles.field.autoFieldFilterHelper")}
                         descriptionId="search-answer-profile-auto-field-filter-helper"

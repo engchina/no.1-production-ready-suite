@@ -3574,6 +3574,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
     monkeypatch.setattr(settings, "rag_rerank_enabled", True)
     monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
+    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", True)
     monkeypatch.setattr(settings, "rag_auto_field_filter_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
@@ -3583,6 +3584,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "neighbor_child_count": 3,
         "rerank_enabled": True,
         "screen_linking_enabled": False,
+        "request_coverage_retrieval_enabled": True,
         "auto_field_filter_enabled": False,
         "config_source": "runtime",
     }
@@ -3593,6 +3595,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
             "query_strategy": "rag_fusion",
             "neighbor_child_count": 5,
             "rerank_enabled": False,
+            "request_coverage_retrieval_enabled": False,
             "auto_field_filter_enabled": True,
         },
     )
@@ -3615,6 +3618,10 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert data["auto_field_filter_enabled"] is True
     assert settings.rag_auto_field_filter_enabled is True
     assert "RAG_AUTO_FIELD_FILTER_ENABLED=true" in env_text
+    # 根拠の無い要求だけの再検索(#1279)。
+    assert data["request_coverage_retrieval_enabled"] is False
+    assert settings.rag_request_coverage_retrieval_enabled is False
+    assert "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED=false" in env_text
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

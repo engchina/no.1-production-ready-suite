@@ -803,7 +803,21 @@ export interface ExcelOptions {
   exclude_columns: string[];
   /** 読む範囲（`A3:F200` か `シート名!A3:F200`。空はシート全体。#1229）。 */
   ranges: string[];
+  /** 列の役割（既定値・例示など）を表頭の語から決めるか（#1281）。 */
+  column_role_detection?: "auto" | "off";
+  /** 列の役割の指定（列名か列の記号 → 役割。none は付けない。#1281）。 */
+  column_roles?: Record<string, ExcelColumnRoleSetting>;
 }
+
+/** Excel の列の役割（#1281。backend の `ColumnRoleSetting`）。 */
+export type ExcelColumnRoleSetting =
+  | "definition"
+  | "default"
+  | "example"
+  | "current"
+  | "recommended"
+  | "allowed"
+  | "none";
 
 export interface KnowledgeBaseIngestionConfig {
   preprocess_profile: PreprocessProfileName | null;
@@ -846,6 +860,8 @@ export interface KnowledgeBaseQueryConfig {
   rerank_enabled?: boolean | null;
   // 画面目録で操作画面を探す(LLM の呼び出しが 1 回増える。#554)。
   screen_linking_enabled?: boolean | null;
+  // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
+  request_coverage_retrieval_enabled?: boolean | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
 }
@@ -2052,6 +2068,7 @@ export interface AnsweringSettingsData {
   neighbor_child_count: number;
   rerank_enabled: boolean;
   screen_linking_enabled: boolean;
+  request_coverage_retrieval_enabled: boolean;
   auto_field_filter_enabled: boolean;
   config_source: "runtime";
 }

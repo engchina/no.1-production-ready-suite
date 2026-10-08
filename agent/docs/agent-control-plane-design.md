@@ -362,6 +362,13 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 承認の後の再開で 0 に戻らない。失敗・取消の Run は状態を残さないが、その消費（実行したツールと、結果を受け取る前に
 止まった呼び出し）は、前の完了した Run の状態に足して次の Run の会話の通しの予算に数える（#1277。失敗する Run を
 繰り返して上限を超えさせない）。
+回答の経路（#1283。RAG から Agent へは呼ばない・案内しない）: `rag_search` の結果の `outcome` が
+`needs_environment_data`（資料だけでは確定できず、現場の値・記録の確認が要る）のとき、Control Plane がモデルへの
+結果に `next_step` を足す（`rag_next_step`。記録する step の結果は RAG の結果のまま）。この Run に現場のデータを確かめる
+道具（RAG 以外の MCP 接続のツール）があれば `action="continue_with_tools"`（`tools` に名前）、無ければ
+`"answer_with_confirmations"`。スキルの指示は `next_step` に従うことを書く。支援タスクの状態の `route` に、この Run の
+経路（`rag` / `rag_then_tools` / `tools` / `none`）・理由（最後の `rag_search` の対応）・`environment_data_required`・
+続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。
 回答の最終の検証（#1246・#1277）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 true）が true のとき、RAG の根拠を使った Run の
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
 その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠の参照（新しい呼び出しから順、
@@ -378,7 +385,12 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 示していない）は本文を残して不足を示す（warning は出さない）。検証そのもの（接続・呼び出し・応答）が失敗したら、または
 接続が検証を提供しなければ、`unvalidated` にして回答は消さずに「この回答は検証できませんでした。」を足す。RAG の根拠を
 使っていない Run は、Agent が RAG の根拠のツールを持てば `unvalidated`（`no_rag_evidence`）にして「資料と照らし合わせて
-確かめていません」を足し、持たなければ `skipped` で回答はそのまま。
+確かめていません」を足し、持たなければ `skipped` で回答はそのまま。ただし利用者への確認の質問だけの回答は、
+資料の主張を含まないので `skipped`（`clarification_only`）にして注記しない（#1306）。主張ではない段落（見出し・
+出典の行・利用者への質問・資料に記載が無いことだけを述べる文・「確かめられていない点」の節）は、RAG の判定に
+かかわらず外さない（#1306。`answer_passages` が決定的に判定し、成果物の段落に `non_claim` を付ける。迷うもの・
+数量や操作を抱き合わせた文は主張として扱う）。RAG の `rag_validate_answer` も、見出し・出典の行・質問は監査せず
+`claims` に含めない。段落を外した後に見出し・出典だけが残れば、それも消す。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
 （`agent.approvals.decide` を持つ利用者だけ）。実行中・承認待ちのあいだは次の質問を送れない（前の回答を履歴に含めるため）。
 Run は Agent とゴールだけを受け取る（実行先の選択は無い）。Runtime 画面は組み込み Runtime の状態（SDK の版・既定のモデル・
