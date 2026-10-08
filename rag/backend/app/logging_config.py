@@ -47,7 +47,7 @@ class _ServiceStatusAccessFilter(logging.Filter):
 
 # 図を開く署名つきの URL（`/api/figures/{token}`。#1311）のトークン。access log には残さない。
 _FIGURE_TOKEN_PATH = re.compile(r"(/api/figures/)[^/?#\s\"]+")
-FIGURE_TOKEN_MASK = "{token}"
+FIGURE_TOKEN_MASK = "{token}"  # nosec B105 - ログで伏せた後の表記で秘密ではない
 
 
 class _FigureTokenAccessFilter(logging.Filter):

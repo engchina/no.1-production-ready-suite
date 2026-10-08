@@ -30,7 +30,7 @@ FIGURE_URL_MAX_TTL_SECONDS = 300
 # 発行時刻が未来に寄っているときに許す秒数（同じ RAG の worker 間の時計のずれ）。
 FIGURE_URL_LEEWAY_SECONDS = 30
 FIGURE_URL_MIN_SECRET_LENGTH = 32
-_TOKEN_VERSION = "f1"
+_TOKEN_VERSION = "f1"  # nosec B105 - トークンの形式の版で秘密ではない
 _HKDF_SALT = b"production-ready-rag"
 _HKDF_INFO = b"rag-figure-url-v1"
 
