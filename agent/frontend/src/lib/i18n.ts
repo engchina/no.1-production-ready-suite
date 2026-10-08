@@ -1105,7 +1105,7 @@ const agentJa = {
   "settings.mcpServers.oauthScope": "OAuth Scope",
   "settings.mcpConnections.title": "MCP 接続",
   "settings.mcpConnections.description":
-    "業務 Agent がスキルから使う MCP の接続先です。RAG と NL2SQL は組み込みの接続で、実行を作った利用者として呼びます。",
+    "業務 Agent がスキルから使う MCP の接続先です。RAG と NL2SQL は標準の接続で、実行を作った利用者として呼びます。",
   "settings.mcpConnections.add": "接続を追加",
   "settings.mcpConnections.addTitle": "MCP 接続を追加",
   "settings.mcpConnections.empty": "MCP 接続はありません",
@@ -1115,9 +1115,17 @@ const agentJa = {
   "settings.mcpConnections.url": "MCP の URL",
   "settings.mcpConnections.urlHint": "接続先の MCP（streamable HTTP）の URL を http:// または https:// から入力します。",
   "settings.mcpConnections.urlHintBuiltin":
-    "製品の /api/mcp です。初期値は配備の .env（AGENT_EXTERNAL_RAG_MCP_URL / AGENT_EXTERNAL_NL2SQL_MCP_URL）で、画面で保存した値が優先します。",
+    "製品の /api/mcp です。配備では {env} で設定して変えられなくなります。この環境では未設定のため、ここで設定できます。",
+  "settings.mcpConnections.urlHintLocked":
+    "配備（{env}）で設定した URL です。変えるときは配備の設定を変えて、Agent を再起動します。",
+  "settings.mcpConnections.labelHintBuiltin": "標準の接続の名前は変えられません。",
+  "settings.mcpConnections.builtinTitle": "標準の接続",
+  "settings.mcpConnections.builtinLocked":
+    "RAG / NL2SQL を呼ぶために配備で設定した接続です。削除と、名前・URL・認証方式の変更はできません。タイムアウトは変えられます。",
+  "settings.mcpConnections.builtinUnlocked":
+    "RAG / NL2SQL を呼ぶ標準の接続です。削除と、名前・認証方式の変更はできません。配備で URL が設定されていないため、URL はここで設定できます。",
   "settings.mcpConnections.source": "由来",
-  "settings.mcpConnections.sourceBuiltin": "組み込み",
+  "settings.mcpConnections.sourceBuiltin": "標準",
   "settings.mcpConnections.sourceEnv": ".env の宣言",
   "settings.mcpConnections.sourcePlugin": "プラグイン",
   "settings.mcpConnections.sourceRuntime": "画面で追加",
