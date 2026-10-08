@@ -9,6 +9,9 @@ RAG のチャットは MCP で提供しない（#787）。
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,7 +24,7 @@ from app.api.routes import search_answer_profiles as search_answer_profiles_rout
 from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
-from app.rag import request_context
+from app.rag import document_crop, request_context
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchRequest, SearchResponse
@@ -483,6 +486,108 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     assert (body["outcome"], body["requests"], body["gaps"]) == ("answered", [], [])
 
 
+_FIGURE_PAGE: dict[str, Any] = {"page_start": 2, "page_end": 2, "page_width": 600, "page_height": 800}
+
+
+def test_evidence_types_figures_and_points_to_image_region(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """根拠の種類を本文・表・図の VLM の説明・OCR に分け、図には元の画像の領域を付ける（#1282）。"""
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="",
+            citations=[
+                _chunk(
+                    "c-vision",
+                    content_kind="figure",
+                    figure_text_source="vision",
+                    chunk_set_id="cs-1",
+                    page_label_start="ii",
+                    bbox="[60, 80, 300, 200]",
+                    bbox_unit="absolute",
+                    **_FIGURE_PAGE,
+                ),
+                _chunk(
+                    "c-ocr",
+                    content_kind="figure",
+                    figure_text_source="ocr",
+                    page_start=3,
+                    bbox="[0.1, 0.2, 0.5, 0.6]",
+                    bbox_unit="ratio",
+                ),
+                # 本文の出どころが分からない古い記録は VLM の説明として扱い、頁の大きさが無ければ
+                # 画像の領域は出さない。
+                _chunk("c-legacy", content_kind="figure", page_start=4, bbox="[1, 2, 30, 40]"),
+                _chunk(
+                    "c-rotated",
+                    content_kind="figure",
+                    figure_text_source="vision",
+                    page_rotation=90,
+                    bbox="[60, 80, 300, 200]",
+                    bbox_unit="absolute",
+                    **_FIGURE_PAGE,
+                ),
+                _chunk(
+                    "c-outside",
+                    content_kind="figure",
+                    bbox="[60, 80, 900, 200]",
+                    bbox_unit="absolute",
+                    **_FIGURE_PAGE,
+                ),
+                # 親子階層（small-to-big）は image_evidence の図の bbox を使う。
+                _chunk(
+                    "c-s2b",
+                    content_kind="figure",
+                    figure_text_source="vision",
+                    bbox="[10, 10, 590, 790]",
+                    bbox_unit="absolute",
+                    engine_metadata_json=json.dumps(
+                        {"image_evidence": [{"page": 2, "bbox": [100, 200, 400, 500]}]}
+                    ),
+                    **_FIGURE_PAGE,
+                ),
+                _chunk("c-table", content_kind="table", bbox="[1, 2, 3, 4]", **_FIGURE_PAGE),
+                _chunk("c-text", content_kind="text"),
+                _chunk("c-none"),
+            ],
+            trace_id="trace-f",
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call("rag_retrieve_evidence", {"query": "承認ボタン"}, _token(user.user_uuid))[
+        "structuredContent"
+    ]
+    evidence = {item["chunk_id"]: item for item in body["evidence"]}
+    assert {key: item["evidence_type"] for key, item in evidence.items()} == {
+        "c-vision": "figure_description",
+        "c-ocr": "ocr",
+        "c-legacy": "figure_description",
+        "c-rotated": "figure_description",
+        "c-outside": "figure_description",
+        "c-s2b": "figure_description",
+        "c-table": "table",
+        "c-text": "text",
+        "c-none": "text",
+    }
+    assert evidence["c-vision"]["image_ref"] == {
+        "document_id": "d1",
+        "chunk_id": "c-vision",
+        "chunk_set_id": "cs-1",
+        "page": 2,
+        "page_label": "ii",
+        "bbox": [60.0, 80.0, 300.0, 200.0],
+        "bbox_unit": "absolute",
+    }
+    assert evidence["c-ocr"]["image_ref"]["bbox_unit"] == "ratio"
+    assert evidence["c-s2b"]["image_ref"]["bbox"] == [100.0, 200.0, 400.0, 500.0]
+    for key in ("c-legacy", "c-rotated", "c-outside", "c-table", "c-text", "c-none"):
+        assert evidence[key]["image_ref"] is None, key
+
+
 # ---------------------------------------------------------------------------
 # 根拠の読み取り（rag_read_source。#1219）
 # ---------------------------------------------------------------------------
@@ -571,6 +676,217 @@ def test_read_source_distinguishes_missing_and_stale(
         "rag_read_source", {"document_id": "d1", "chunk_id": "c1", "max_chars": 0}, headers
     )
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# 図の元の画像（rag_read_source の include_image。#1282）
+# ---------------------------------------------------------------------------
+
+
+def _figure_pdf() -> bytes:
+    import fitz  # type: ignore[import-untyped]
+
+    document = fitz.open()
+    document.new_page(width=600, height=800)
+    # 図は 2 頁目にある。
+    page = document.new_page(width=600, height=800)
+    page.draw_rect(fitz.Rect(60, 80, 300, 200), color=(0, 0, 1), fill=(0, 0, 1))
+    data: bytes = document.tobytes()
+    document.close()
+    return data
+
+
+class _FigureSourceOracle(_SourceOracle):
+    """図の chunk と、処理レシピのファイル準備後の artifact を持つ fake。"""
+
+    async def get_document(self, document_id: str) -> object | None:
+        if document_id != "d1":
+            return None
+        return SimpleNamespace(object_storage_path="docs/d1/source.pdf", preprocess_artifact=None)
+
+    async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
+        del document_id
+        if recipe_id != "r-1":
+            return None
+        return {
+            "preprocess_artifact": {
+                "derivation_id": "dv-1",
+                "profile": "pdf_normalize",
+                "converted": True,
+                "object_storage_path": "docs/d1/r-1/prepared.pdf",
+                "content_type": "application/pdf",
+                "file_name": "prepared.pdf",
+            }
+        }
+
+
+class _FigureStorage:
+    files: dict[str, bytes] = {}
+    reads: list[str] = []
+
+    async def get(self, path: str) -> bytes:
+        self.reads.append(path)
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+
+@pytest.fixture
+def figure_source(monkeypatch: MonkeyPatch) -> type[_FigureSourceOracle]:
+    _FigureSourceOracle.visible = {
+        ("d1", "c-fig"): _chunk(
+            "c-fig",
+            text="申請画面。右上の「承認」ボタンを押す。",
+            content_kind="figure",
+            figure_text_source="vision",
+            chunk_set_id="cs-1",
+            recipe_id="r-1",
+            bbox="[60, 80, 300, 200]",
+            bbox_unit="absolute",
+            **_FIGURE_PAGE,
+        ),
+        ("d1", "c-text"): _chunk("c-text", content_kind="text", page_start=1),
+    }
+    _FigureSourceOracle.stale = set()
+    _FigureSourceOracle.contexts = []
+    _FigureStorage.files = {"docs/d1/r-1/prepared.pdf": _figure_pdf()}
+    _FigureStorage.reads = []
+    monkeypatch.setattr(mcp_tools, "OracleClient", _FigureSourceOracle)
+    monkeypatch.setattr(document_crop, "ObjectStorageClient", _FigureStorage)
+    return _FigureSourceOracle
+
+
+def _png_size(data: bytes) -> tuple[int, int]:
+    import fitz
+
+    pixmap = fitz.Pixmap(data)
+    return pixmap.width, pixmap.height
+
+
+def test_read_source_returns_bounded_figure_image_rechecked_on_every_read(
+    auth: ProductionAuth, figure_source: type[_FigureSourceOracle]
+) -> None:
+    """図の画像は content の image で返し、読むたびに今の見え方の条件で chunk を読み直す。"""
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    text_only = _call("rag_read_source", {"document_id": "d1", "chunk_id": "c-fig"}, headers)
+    assert [block["type"] for block in text_only["content"]] == ["text"]
+    assert text_only["structuredContent"]["image"] is None
+    assert text_only["structuredContent"]["evidence_type"] == "figure_description"
+    assert text_only["structuredContent"]["image_ref"]["page"] == 2
+    # 画像を求めなければ元のファイルは読まない。
+    assert _FigureStorage.reads == []
+
+    result = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "c-fig", "include_image": True},
+        headers,
+    )
+    assert result["isError"] is False, result
+    body = result["structuredContent"]
+    image_block = result["content"][body["image"]["content_index"]]
+    assert (image_block["type"], image_block["mimeType"]) == ("image", "image/png")
+    png = base64.b64decode(image_block["data"])
+    assert body["image"] == {
+        "mime_type": "image/png",
+        "width": _png_size(png)[0],
+        "height": _png_size(png)[1],
+        "byte_size": len(png),
+        "sha256": hashlib.sha256(png).hexdigest(),
+        "content_index": 1,
+    }
+    assert max(_png_size(png)) <= mcp_tools.IMAGE_MAX_EDGE_PX
+    assert len(png) <= mcp_tools.IMAGE_MAX_BYTES
+    # 画像のデータは structuredContent（呼び出し側のモデルの文脈）に入れない。
+    assert image_block["data"] not in json.dumps(body)
+    assert image_block["data"] not in result["content"][0]["text"]
+    # レシピが解析したファイル（ファイル準備後の artifact）から切り出す。
+    assert _FigureStorage.reads == ["docs/d1/r-1/prepared.pdf"]
+    # 読むたびに token の利用者の範囲で chunk を読み直す。
+    assert len(figure_source.contexts) == 2
+    assert figure_source.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+    # 版が変わった（chunk_set が有効でない）根拠は、画像も返さず source_stale。
+    figure_source.visible = {}
+    figure_source.stale = {("d1", "c-fig")}
+    stale = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "c-fig", "include_image": True},
+        headers,
+    )
+    assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
+    assert [block["type"] for block in stale["content"]] == ["text"]
+    assert _FigureStorage.reads == ["docs/d1/r-1/prepared.pdf"]
+    # 見えなくなった根拠も同じ（ID を知っていても読めない）。
+    figure_source.stale = set()
+    gone = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "c-fig", "include_image": True},
+        headers,
+    )
+    assert gone["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+
+
+def test_read_source_image_rejects_client_regions_and_unauthorized_users(
+    auth: ProductionAuth, figure_source: type[_FigureSourceOracle]
+) -> None:
+    del figure_source
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    # 領域はサーバーが保存した場所から決める。利用者は座標・パスを渡せない。
+    for extra in ({"bbox": [0, 0, 600, 800]}, {"page": 1}, {"path": "docs/other.pdf"}):
+        invalid = _call(
+            "rag_read_source",
+            {"document_id": "d1", "chunk_id": "c-fig", "include_image": True, **extra},
+            _token(user.user_uuid),
+        )
+        assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    viewer = auth.user_with_permissions("viewer", ["menu.upload"])
+    denied = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "c-fig", "include_image": True},
+        _token(viewer.user_uuid),
+    )
+    assert denied["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
+    assert _FigureStorage.reads == []
+
+
+def test_read_source_image_errors_are_distinguishable(
+    auth: ProductionAuth,
+    figure_source: type[_FigureSourceOracle],
+    monkeypatch: MonkeyPatch,
+) -> None:
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    scopes: list[str] = []
+    monkeypatch.setattr(
+        mcp_tools, "enforce_rate_limit", lambda scope, _request: scopes.append(scope)
+    )
+
+    def read(chunk_id: str) -> dict[str, Any]:
+        return _call(
+            "rag_read_source",
+            {"document_id": "d1", "chunk_id": chunk_id, "include_image": True},
+            headers,
+        )["structuredContent"]
+
+    # 図でない根拠。
+    assert read("c-text")["error_code"] == mcp_tools.IMAGE_NOT_AVAILABLE_CODE
+    # 上限まで縮めても大きすぎる画像。
+    monkeypatch.setattr(mcp_tools, "IMAGE_MAX_BYTES", 10)
+    too_large = read("c-fig")
+    assert (too_large["error_code"], too_large["status"]) == (mcp_tools.IMAGE_TOO_LARGE_CODE, 413)
+    # 元のファイルが無い（「根拠が無い」とは区別する）。
+    _FigureStorage.files = {}
+    missing = read("c-fig")
+    assert (missing["error_code"], missing["status"]) == (
+        mcp_tools.IMAGE_SOURCE_MISSING_CODE,
+        404,
+    )
+    # 画像の読み取りは検索と同じ rate limit で守る（本文だけの読み取りは数えない）。
+    _call("rag_read_source", {"document_id": "d1", "chunk_id": "c-fig"}, headers)
+    assert scopes == ["search", "search", "search"]
+    del figure_source
 
 
 # ---------------------------------------------------------------------------
