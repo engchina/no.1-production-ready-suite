@@ -10,9 +10,14 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 - 結果は Run の成果物（kind=`answer_validation`・「回答の検証」）に残す（接続ごとの結果は
   `connections`）。状態は `completed`（判定が出た）/ `unvalidated`（確かめられなかった）/
   `skipped`（確かめる対象が無い）。
+- 接続ごとに、その接続の最も新しい `rag_search` の `requests`・`gaps`・`guide`（無ければ
+  `rag_lookup_guides` の最上位の業務ガイド）も渡し、RAG の決定的な検査（要求の充足・手順の順序と
+  分岐・影響範囲・承認。#1276）を動かす。
 - 判定が valid でなければ、根拠で確かめられなかった段落（裏付けが無い・矛盾など）を回答から外し、
   外した内容と理由を「確かめられていない点」として足す（確かめていない操作の手順を公開しない。
-  handoff §12）。根拠で確かめた段落と、主張ではない行（見出しなど）は残す。
+  handoff §12）。根拠で確かめた段落と、主張ではない行（見出しなど）は残す。決定的な検査の error も
+  同じく扱う: 手順・影響範囲の error は手順を確かめられないので本文を載せず、要求の error（答えて
+  いない要求を示していない）は本文を残して不足を示す。warning は出さない。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
   「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
@@ -79,6 +84,8 @@ _USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
 _MAX_LISTED_CLAIMS = 5
 _MAX_QUOTE_CHARS = 80
 _MAX_REASON_CHARS = 80
+_MAX_LISTED_FINDINGS = 5
+_MAX_FINDING_CHARS = 120
 
 
 def _short(value: object, limit: int) -> str:
@@ -297,6 +304,18 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     lines = [_claim_line(item) for item in claims[:_MAX_LISTED_CLAIMS]]
     if len(claims) > _MAX_LISTED_CLAIMS:
         lines.append(f"- ほか {len(claims) - _MAX_LISTED_CLAIMS} 件の主張")
+    # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
+    findings = [
+        item
+        for item in result.get("findings") or []
+        if isinstance(item, dict) and item.get("severity") == "error" and item.get("message")
+    ]
+    lines += [
+        f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
+        for item in findings[:_MAX_LISTED_FINDINGS]
+    ]
+    if len(findings) > _MAX_LISTED_FINDINGS:
+        lines.append(f"- ほか {len(findings) - _MAX_LISTED_FINDINGS} 件の指摘")
     stale = _refs_count(result.get("stale_evidence"))
     if stale:
         lines.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")
