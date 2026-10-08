@@ -3778,7 +3778,13 @@ export interface SupportGuideContent {
   branches: SupportGuideBranch[];
   references: SupportGuideReference[];
   completion: SupportGuideCompletion[];
-  impact: { scope: SupportGuideImpactScope; approval_required: boolean; approval_note: string };
+  impact: {
+    scope: SupportGuideImpactScope;
+    approval_required: boolean;
+    approval_note: string;
+    /** 影響範囲と承認が係る手順の id（空なら業務ガイドのすべての場合に係る。#1320）。 */
+    steps: string[];
+  };
   handoff: { conditions: string[]; contact: string };
 }
 

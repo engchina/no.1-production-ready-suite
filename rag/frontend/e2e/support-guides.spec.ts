@@ -82,7 +82,7 @@ function content(title: string, overrides: Partial<Content> = {}): Content {
     branches: [],
     references: [],
     completion: [],
-    impact: { scope: "individual", approval_required: false, approval_note: "" },
+    impact: { scope: "individual", approval_required: false, approval_note: "", steps: [] },
     handoff: { conditions: [], contact: "" },
     ...overrides,
   };
@@ -465,6 +465,11 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
   await branch.getByRole("combobox", { name: /^行き先の手順/ }).click();
   await page.getByRole("option", { name: "再設定する（step2）" }).click();
 
+  // 影響範囲・承認が係る手順（#1320）は、手順の題名で選ぶ。
+  await editor.getByRole("combobox", { name: /^影響範囲・承認が係る手順/ }).click();
+  await page.getByRole("option", { name: /再設定する/ }).click();
+  await page.keyboard.press("Escape");
+
   await editor.getByRole("button", { name: "資料を足す" }).click();
   const reference = editor.getByRole("listitem", { name: "資料 1" });
   await reference.getByLabel("文書 ID").fill("doc-1");
@@ -479,6 +484,7 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
       goal: { intent_examples: ["パスワードを忘れた", "ログインできない"] },
       conditions: [{ id: "cond1", allowed_values: ["社員", "派遣"] }],
       branches: [{ when: { condition_id: "cond1", operator: "equals", values: ["社員"] }, goto_step: "step2" }],
+      impact: { steps: ["step2"] },
     },
   });
   await expect(editor.getByRole("heading", { name: "編集中: パスワードの再設定" })).toBeVisible();

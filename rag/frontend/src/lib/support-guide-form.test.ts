@@ -92,7 +92,7 @@ const content: SupportGuideContent = {
   ],
   references: [{ document_id: "doc-1", title: "運用手順書", section_path: ["3 章"], version: "" }],
   completion: [{ id: "done", description: "入れたことを確かめた", check_method: "" }],
-  impact: { scope: "individual", approval_required: false, approval_note: "" },
+  impact: { scope: "individual", approval_required: true, approval_note: "", steps: ["reset"] },
   handoff: { conditions: ["本人を確かめられない"], contact: "ヘルプデスク" },
 };
 
@@ -156,6 +156,9 @@ describe("行の操作", () => {
     expect(renamed.branches[0].gotoStep).toBe("reset2");
     const renamedCheck = renameStepId(form, "check", "verify");
     expect(renamedCheck.steps[1].dependsOn).toEqual(["verify"]);
+    // 影響範囲・承認が係る手順も付け替える（#1320）。
+    expect(renamed.impactSteps).toEqual(["reset2"]);
+    expect(guideContentFromForm(renamed).impact.steps).toEqual(["reset2"]);
     // 空の ID（新しい行）からは付け替えない。
     expect(renameStepId(form, "", "x")).toBe(form);
   });
@@ -170,6 +173,9 @@ describe("行の操作", () => {
     const removed = removeStep(form, 0);
     expect(removed.steps.map((step) => step.id)).toEqual(["reset"]);
     expect(removed.steps[0].dependsOn).toEqual([]);
+    // 影響範囲・承認が係る手順からも外す（#1320）。
+    expect(removeStep(form, 1).impactSteps).toEqual([]);
+    expect(removed.impactSteps).toEqual(["reset"]);
   });
 });
 

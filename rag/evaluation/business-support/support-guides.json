@@ -99,7 +99,8 @@
       "impact": {
         "scope": "group",
         "approval_required": true,
-        "approval_note": "グループに付与する場合は、付与の前に部門長の承認を得る。"
+        "approval_note": "グループに付与する場合は、付与の前に部門長の承認を得る。",
+        "steps": ["group-approval", "group"]
       },
       "handoff": {
         "conditions": ["15 分を過ぎても権限が反映されない"],

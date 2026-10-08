@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -16,6 +18,7 @@ from app.rag.answer_checks import (
     check_impact,
     check_requests,
     excluded_steps,
+    impact_applies,
 )
 from app.rag.answer_validation import (
     AnswerValidation,
@@ -28,6 +31,10 @@ from app.rag.answer_validation import (
 from app.schemas.search import RetrievedChunk
 from app.schemas.support_guide import SupportGuideContent
 from tests.test_mcp_api import _call, _token, auth  # noqa: F401 - fixture を使う
+
+SUPPORT_GUIDES = (
+    Path(__file__).resolve().parents[2] / "evaluation/business-support/support-guides.json"
+)
 
 
 def test_validity_rules() -> None:
@@ -236,6 +243,8 @@ def test_excluded_steps_follow_known_branch_conditions() -> None:
     # 個別なら、グループの分岐の手順とそれだけに依存する手順を除く（確認は利用者の分岐にも依存）。
     assert excluded_steps(guide, {"target": "個別"}) == {"group", "group_save"}
     assert excluded_steps(guide, {"target": " ｸﾞﾙｰﾌﾟ "}) == {"user"}
+    # どの分岐にも当たらない値では分岐を決められないので、除かない（#1320）。
+    assert excluded_steps(guide, {"target": "全員"}) == set()
 
 
 def test_check_guide_steps_order_branch_and_omissions() -> None:
@@ -277,6 +286,67 @@ def test_check_impact_requires_scope_and_approval() -> None:
     everyone = _guide(impact={"scope": "all"})
     assert _codes(check_impact("権限タブを開く", everyone)) == [("impact_scope_missing", "error")]
     assert check_impact("すべての利用者に反映されます。", everyone) == []
+
+
+def _access_guide() -> SupportGuideContent:
+    """評価セットの業務ガイド「アクセス権限の付与」（承認はグループに付与する分岐だけ）。"""
+    data = json.loads(SUPPORT_GUIDES.read_text(encoding="utf-8"))
+    payload = next(item for item in data["guides"] if item["title"] == "アクセス権限の付与")
+    return SupportGuideContent.model_validate(payload)
+
+
+# #1317 の実環境の D（run3）の da-trial-account-setup の回答（個別の利用者の分岐で答えた）。
+_TRIAL_SETUP_ANSWER = """**検証用アカウントの登録 → アクセス権限付与 → 通知設定の手順**
+
+1. **検証用アカウントを登録**
+   - 管理画面で「利用者」メニューを開き「追加」ボタンを押す。
+   - 「利用者種別」から **「検証用」** を選択。
+   - 有効期限（最長30日）を入力し、保存する。
+
+2. **アクセス権限を付与**
+   - 登録した検証用アカウントの詳細画面を開き、タブから **「権限」** を選択。
+   - 必要な権限をチェックし、「付与」ボタンを押す。
+
+3. **通知を設定**
+   - 同じ詳細画面の **「通知」** タブを開く。
+   - 通知先メールアドレスを入力して保存する。
+   - 「テスト送信」ボタンを押し、テストメールが届くことを確認する。"""
+
+
+def test_check_impact_skips_the_approval_of_a_branch_that_does_not_apply() -> None:
+    guide = _access_guide()
+    assert guide.impact.steps == ["group-approval", "group"]
+    # 個別の利用者の分岐で答えた回答に、グループへの付与の影響範囲・承認を求めない（#1320）。
+    assert impact_applies(guide, {"target": "個別"}) is False
+    assert check_impact(_TRIAL_SETUP_ANSWER, guide, {"target": "個別"}) == []
+    # グループの分岐なら、今までどおり影響範囲と承認を求める。
+    assert impact_applies(guide, {"target": "グループ"}) is True
+    assert _codes(check_impact(_TRIAL_SETUP_ANSWER, guide, {"target": "グループ"})) == [
+        ("impact_scope_missing", "error"),
+        ("approval_missing", "error"),
+    ]
+
+
+def test_check_impact_stays_strict_when_the_branch_is_unknown() -> None:
+    guide = _access_guide()
+    # 付与先が分からない（分岐を決められない）ときは、今までどおり一律に確かめる（安全側）。
+    for conditions in ({}, None, {"target": "不明な値"}, {"other": "個別"}):
+        assert _codes(check_impact(_TRIAL_SETUP_ANSWER, guide, conditions)) == [
+            ("impact_scope_missing", "error"),
+            ("approval_missing", "error"),
+        ], conditions
+    # 係る手順を決めていない業務ガイドは、条件が分かっていてもすべての場合に確かめる。
+    whole = _guide(impact={"scope": "group", "approval_required": True})
+    assert impact_applies(whole, {"target": "個別"}) is True
+    assert _codes(check_impact("権限タブを開く", whole, {"target": "個別"})) == [
+        ("impact_scope_missing", "error"),
+        ("approval_missing", "error"),
+    ]
+    # 係る手順の一部でも当たる分岐に残れば確かめる（共通の手順に係るとき）。
+    shared = _guide(
+        impact={"scope": "group", "approval_required": True, "steps": ["group", "verify"]}
+    )
+    assert impact_applies(shared, {"target": "個別"}) is True
 
 
 class _GuideOracle(_Oracle):

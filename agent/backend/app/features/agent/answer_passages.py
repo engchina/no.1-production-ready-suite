@@ -99,6 +99,9 @@ _CITATION_LABEL = re.compile(
 )
 # Markdown の強調（「**根拠**：…」のラベル。出典の判定だけで外す）。
 _EMPHASIS = re.compile(r"\*\*|__|`")
+# 質問の直後の、選択肢を並べた行（「選択肢: **個別**、**グループ**」。#1322 の確認の質問の次の手は
+# 選択肢を添えさせる）。
+_OPTIONS_LINE = re.compile(r"^(?:選択肢|候補)\s*[:：]\s*\S")
 # 根拠の ID の括弧（【証拠 ID: 03ac…:1】・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】）。
 _EVIDENCE_REF = re.compile(
     r"【\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?"
@@ -150,7 +153,11 @@ _QUESTION = re.compile(r".*[？?]\s*(?:[（(【][^）)】\n]{1,40}[）)】]\s*)*
 # 情報を求める依頼の文（利用者に答えてもらう）。操作の依頼（「確認してください」など）は含めない。
 _REQUEST = re.compile(
     r".*(?:教えてください|教えていただけますか|お知らせください|お教えください|お聞かせください"
-    r"|ご回答ください|ご返答ください|お答えください|確認させてください|お伺いします|伺います)[。．!！]?"
+    r"|ご回答ください|ご返答ください|お答えください|確認させてください|お伺いします|伺います"
+    # 確認の質問に添える回答の依頼（「ご回答をお願いします。」。#1322）。
+    r"|(?:ご回答|ご返答|お答え|お返事|ご返信)を?お願い(?:します|いたします|致します)"
+    # 選択肢から選んでもらう依頼（「ご希望の方をお選びください。」。#1322）。
+    r"|(?:どちらか|いずれか|ご希望の(?:方|もの))を?お選びください)[。．!！]?"
 )
 # 質問に抱き合わせた主張（「〜できますが、よろしいですか？」）。
 _ADVERSATIVE = re.compile(r"(?:ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし)")
@@ -437,9 +444,15 @@ def asks_environment_data(text: str) -> bool:
 
 
 def _is_option(text: str) -> bool:
-    """質問の直後の選択肢（短い箇条書き。文・操作の指示は除く）。"""
+    """質問の直後の選択肢（短い箇条書きか「選択肢: …」の行。文・操作の指示は除く）。"""
     if not _BULLET.match(text.strip()):
-        return False
+        value = _EMPHASIS.sub("", text).strip()
+        return (
+            bool(_OPTIONS_LINE.match(value))
+            and len(value) <= 80
+            and "。" not in value
+            and not _OPERATION.search(value)
+        )
     value = _strip_bullet(text)
     return (
         0 < len(value) <= 40
@@ -479,7 +492,8 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     blank = False
     for line in answer.split("\n"):
         if not line.strip():
-            options, blank = False, True
+            # 質問と選択肢の間の空行では、選択肢の続きを切らない（#1322）。
+            blank = True
             continue
         if blank and not _BULLET.match(line.strip()):
             section = None
@@ -514,7 +528,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
             else:
                 kinds.setdefault(text, kind)
             line_question = kind == KIND_QUESTION
-        # 質問の直後の箇条書きは選択肢として扱う。
+        # 質問の直後の箇条書き（空行を挟んでもよい）は選択肢として扱う。
         options = line_question or (options and bool(_BULLET.match(line.strip())))
     return {text: kind for text, kind in kinds.items() if text not in claims}
 

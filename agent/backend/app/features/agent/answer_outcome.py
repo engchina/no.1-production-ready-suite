@@ -41,7 +41,12 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 決定的な検査の error（`check_errors`）・実データの確認を促す段落（`data_confirmation`。RAG の
 `rag_validate_answer` の判定か、利用者に現場のデータ・記録の確認を求める段落の決定的な判定
 `environment_check_passages`。#1317。外した段落は数えない）・分岐ごとに答えた印（`branches`。
-「…の場合」の見出し・ラベルが 2 つ以上。利用者の条件を確かめずに分岐ごとに答えた。#1317）。
+「…の場合」の見出し・ラベルが 2 つ以上。利用者の条件を確かめずに分岐ごとに答えた。#1317）・
+業務ガイドの条件が分からないまま答えた印（`guide_conditions`。最後の `rag_search` の後の、最も新しい
+`rag_lookup_guides`（モデルか Control Plane の照合。#1322）の最上位の業務ガイドの判断が、条件を
+確かめる（clarify）・条件ごとに答える（branch）なのに、確認の質問だけで答えなかった。回答の前提が
+利用者の分かっていない条件に拠るので、条件付きの回答（conditional）にする。`rag_search` が確認を
+求めたのに答えたときと同じ扱い。#1321・#1322）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -109,10 +114,12 @@ SIGNAL_CHECK_ERRORS = "check_errors"
 SIGNAL_DATA_CONFIRMATION = "data_confirmation"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
 SIGNAL_BRANCHES = "branches"
+SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset(
     {
         SIGNAL_BRANCHES,
+        SIGNAL_GUIDE_CONDITIONS,
         SIGNAL_ABSENCE,
         SIGNAL_QUESTION,
         SIGNAL_UNVERIFIED_SECTION,
@@ -122,6 +129,8 @@ _GAP_SIGNALS = frozenset(
     }
 )
 _RAG_LOOKUP_GUIDES = "rag_lookup_guides"
+# 業務ガイドの判断のうち、利用者の分かっていない条件に答えが拠るもの（#1321・#1322）。
+_GUIDE_CONDITIONAL_DECISIONS = frozenset({"clarify", "branch"})
 # RAG の `rag_validate_answer` の、実データの確認を促すだけの段落の判定。
 _DATA_CONFIRMATION = "data_confirmation"
 # 不足の印（`withheld_claims`）にする、外した段落の判定（根拠で確かめられない・根拠と矛盾）。
@@ -291,6 +300,11 @@ def answer_outcome(
     # 利用者の条件を確かめずに、分岐ごとに答えた（rag_search の確認の求めに分岐で答えたのと同じ）。
     if len(case_labels(answer)) >= 2:
         signals.add(SIGNAL_BRANCHES)
+    # 業務ガイドが条件を確かめる・条件ごとに答えると判断したのに、確認の質問だけで答えなかった
+    # （最後の rag_search の後の照合だけを見る。rag_search の対応は下で扱う。#1321・#1322）。
+    after_search = last_search[0] + 1 if last_search is not None else 0
+    if _guide_decision(steps[after_search:]) in _GUIDE_CONDITIONAL_DECISIONS:
+        signals.add(SIGNAL_GUIDE_CONDITIONS)
     if _count(withheld.get("findings")) > 0:
         signals.add(SIGNAL_CHECK_ERRORS)
     if confirmations:

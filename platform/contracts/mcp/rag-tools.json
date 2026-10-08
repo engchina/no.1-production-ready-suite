@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -382,6 +382,20 @@
                 "title": "Approval Required",
                 "type": "boolean"
               },
+              "impact_steps": {
+                "description": "影響範囲と承認が係る手順の id（空なら業務ガイドのすべての場合に係る）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Impact Steps",
+                "type": "array"
+              },
+              "impact_applies": {
+                "default": true,
+                "description": "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに係るので、回答に影響範囲・承認を書かない。#1320）。",
+                "title": "Impact Applies",
+                "type": "boolean"
+              },
               "handoff_contact": {
                 "default": "",
                 "title": "Handoff Contact",
@@ -404,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -828,7 +842,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1578,7 +1592,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2438,7 +2452,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2909,7 +2923,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 4,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
