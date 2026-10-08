@@ -181,10 +181,14 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "step_order_score": 0,
         "safe_answer_rate": 0,
         "condition_coverage": 0,
-        # 参考の集計（#1284）。必要な根拠の無いケースだけなので測らない。
+        # 参考の集計（#1284 / #1335）。必要な根拠の無いケースだけなので測らない。
         "required_evidence_recall": 0,
+        "evidence_chain_complete_rate": 0,
     }
     assert metrics.required_evidence_recall is None
+    assert metrics.evidence_chain_complete_rate is None
+    assert metrics.reasoning_type_breakdown == {}
+    assert metrics.hops_breakdown == {}
     assert metrics.split_breakdown == {}
     assert metrics.passed is True
     assert metrics.threshold_failures == []

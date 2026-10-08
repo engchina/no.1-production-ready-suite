@@ -21,6 +21,10 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 検索・回答の request の `conditions` に渡す。確認の質問への返答（`turns`）は、チャットと同じく
 返答を次の質問にし、前の往復を会話の履歴として順に実行する。結果は区分（dev / holdout）ごとの
 内訳と、必要な根拠ごとの再現率（`required_evidence_recall`。参考の集計）を持つ。
+
+多段の質問の評価（#1335）: 必要な根拠をすべて取れたケースの割合（`evidence_chain_complete_rate`。
+参考の集計）と、ケースの種類（`reasoning_type`）別・段の数（`hops`）別の内訳（必要な根拠の再現率・
+根拠の連鎖の完全率・期待する語の一致率）を持つ。
 """
 
 import asyncio
@@ -70,9 +74,11 @@ from app.rag.observability import (
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
+    EVALUATION_REASONING_METRIC_NAMES,
     EVALUATION_REPORT_ONLY_METRIC_NAMES,
     EVALUATION_UNASSIGNED_SPLIT,
     EVALUATION_UNCATEGORIZED,
+    EVALUATION_UNSPECIFIED_REASONING,
     EvaluationAnswerJudgement,
     EvaluationCase,
     EvaluationCaseResult,
@@ -85,6 +91,7 @@ from app.schemas.evaluation import (
     EvaluationMetricName,
     EvaluationMetrics,
     EvaluationRagOverrides,
+    EvaluationReasoningSummary,
     EvaluationSplitSummary,
     EvaluationThresholdFailure,
     EvaluationThresholds,
@@ -653,6 +660,8 @@ def summarize_case_results(
         error_count=error_count,
         category_breakdown=category_breakdown(results),
         split_breakdown=split_breakdown(results),
+        reasoning_type_breakdown=reasoning_type_breakdown(results),
+        hops_breakdown=hops_breakdown(results),
         passed=not threshold_failures and error_count == 0 and judge_incomplete_count == 0,
         threshold_failures=threshold_failures,
         failure_reason_counts=failure_reason_counts,
@@ -694,6 +703,8 @@ def case_error_result(
         case_id=case.id,
         category=case.category,
         split=case.split,
+        reasoning_type=case.reasoning_type,
+        hops=case.hops,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -775,6 +786,8 @@ def _case_result(
         trace_id=response.trace_id,
         category=case.category,
         split=case.split,
+        reasoning_type=case.reasoning_type,
+        hops=case.hops,
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=_unique_in_order(hits),
@@ -790,6 +803,7 @@ def _case_result(
         **handling,
         evidence_recall=_round(evidence_recall),
         missing_evidence=missing_evidence,
+        evidence_chain_complete=None if evidence_recall is None else not missing_evidence,
         turn_results=turn_results if case.turns else [],
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
@@ -961,6 +975,7 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
     aggregate.add("safe_answer_rate", _safe_answer(result, result.forbidden_checked))
     aggregate.add("condition_coverage", result.condition_coverage)
     aggregate.add("required_evidence_recall", result.evidence_recall)
+    aggregate.add("evidence_chain_complete_rate", _bool_value(result.evidence_chain_complete))
 
 
 def _experiment_progress(
@@ -1062,6 +1077,8 @@ def _case_error_result(
         case_id=case.id,
         category=case.category,
         split=case.split,
+        reasoning_type=case.reasoning_type,
+        hops=case.hops,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -1089,6 +1106,8 @@ def _case_skipped_result(
         case_id=case.id,
         category=case.category,
         split=case.split,
+        reasoning_type=case.reasoning_type,
+        hops=case.hops,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -1188,8 +1207,11 @@ def _accumulate_failure_reasons(counts: dict[str, int], reasons: Sequence[str]) 
 
 
 def _answer_contains_keywords(answer: str, keywords: list[str]) -> bool:
-    normalized = answer.lower()
-    return all(keyword.lower() in normalized for keyword in keywords)
+    """期待する語をすべて含むか（NFKC・大小文字・空白を無視。#1335）。
+
+    全角の「ＨＲＭ」と「HRM」、「5 年」と「5年」を同じ語とみなす（手順・必要な根拠の照合と同じ）。
+    """
+    return all(contains_normalized(answer, keyword) for keyword in keywords if keyword.strip())
 
 
 def _threshold_failures(
@@ -1329,5 +1351,66 @@ def split_breakdown(results: list[EvaluationCaseResult]) -> dict[str, Evaluation
             metrics=aggregate.means(),
             metric_case_counts=aggregate.counts(),
             failure_reason_counts=failure_reason_counts,
+            reasoning_type_breakdown=reasoning_type_breakdown(members),
+            hops_breakdown=hops_breakdown(members),
+        )
+    return breakdown
+
+
+def reasoning_type_breakdown(
+    results: Sequence[EvaluationCaseResult],
+) -> dict[str, EvaluationReasoningSummary]:
+    """多段の質問の種類ごとの結果（#1335）。種類のあるケースが 1 つも無ければ空にする。
+
+    種類の無いケースは unspecified。
+    """
+    if not any(result.reasoning_type for result in results):
+        return {}
+    return _reasoning_breakdown(
+        results, lambda result: result.reasoning_type or EVALUATION_UNSPECIFIED_REASONING
+    )
+
+
+def hops_breakdown(
+    results: Sequence[EvaluationCaseResult],
+) -> dict[str, EvaluationReasoningSummary]:
+    """段の数ごとの結果（#1335。key は "1"・"2" などで、段の数の順）。
+
+    段の数のあるケースが 1 つも無ければ空にする。段の数の無いケースは unspecified（最後）。
+    """
+    if not any(result.hops is not None for result in results):
+        return {}
+    ordered = sorted(results, key=lambda result: (result.hops is None, result.hops or 0))
+    return _reasoning_breakdown(
+        ordered,
+        lambda result: (
+            str(result.hops) if result.hops is not None else EVALUATION_UNSPECIFIED_REASONING
+        ),
+    )
+
+
+def _reasoning_breakdown(
+    results: Sequence[EvaluationCaseResult],
+    key: Callable[[EvaluationCaseResult], str],
+) -> dict[str, EvaluationReasoningSummary]:
+    """ケースを key で分け、根拠と回答の指標を成功したケースのうち測れたものだけで求める。"""
+    grouped: dict[str, list[EvaluationCaseResult]] = {}
+    for result in results:
+        grouped.setdefault(key(result), []).append(result)
+    breakdown: dict[str, EvaluationReasoningSummary] = {}
+    for name, members in grouped.items():
+        aggregate = _Aggregate()
+        for result in members:
+            if result.status == "success":
+                _accumulate_case_metrics(aggregate, result)
+        means = aggregate.means()
+        counts = aggregate.counts()
+        breakdown[name] = EvaluationReasoningSummary(
+            case_count=len(members),
+            error_count=sum(1 for result in members if result.status != "success"),
+            metrics={metric: means[metric] for metric in EVALUATION_REASONING_METRIC_NAMES},
+            metric_case_counts={
+                metric: counts[metric] for metric in EVALUATION_REASONING_METRIC_NAMES
+            },
         )
     return breakdown
