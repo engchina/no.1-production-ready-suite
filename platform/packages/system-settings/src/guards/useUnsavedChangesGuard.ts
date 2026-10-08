@@ -1,8 +1,9 @@
-import { logBrowserDiagnostic } from "@engchina/production-ready-ui";
+import { logBrowserDiagnostic, stripBasePath } from "@engchina/production-ready-ui";
 import { useContext, useEffect, useLayoutEffect, useRef } from "react";
 import {
   UNSAFE_DataRouterContext,
   useBlocker,
+  useHref,
   useNavigate,
   type BlockerFunction,
 } from "react-router-dom";
@@ -43,6 +44,9 @@ export function useUnsavedChangesGuard(
   confirmLeave: () => Promise<boolean>
 ): void {
   const navigate = useNavigate();
+  // router の basename（製品を /rag/ などの prefix で配信するとき。#1316）。<a> の href は basename を含むので、
+  // navigate() に渡す前に外す（外さないと /rag/rag/... に移動する）。basename が無ければ "/"。
+  const rootHref = useHref("/");
   const confirmLeaveRef = useRef(confirmLeave);
   confirmLeaveRef.current = confirmLeave;
   const inDataRouter = useContext(UNSAFE_DataRouterContext) !== null;
@@ -89,7 +93,7 @@ export function useUnsavedChangesGuard(
       event.stopPropagation();
       // 未保存のフォームが複数あっても、確認は 1 回だけ（最初の listener が defaultPrevented にする）。
       void confirmLeaveRef.current().then((confirmed) => {
-        if (confirmed) navigate(destination);
+        if (confirmed) navigate(stripBasePath(destination, rootHref));
       });
     };
 
@@ -99,7 +103,7 @@ export function useUnsavedChangesGuard(
       window.removeEventListener("beforeunload", handleBeforeUnload);
       document.removeEventListener("click", handleClick, true);
     };
-  }, [enabled, navigate]);
+  }, [enabled, navigate, rootHref]);
 }
 
 /** 未保存の画面があるとき、戻る/進むによる別 URL への移動を止める。 */
