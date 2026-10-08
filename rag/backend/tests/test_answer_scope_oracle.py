@@ -227,3 +227,90 @@ async def test_retrievable_chunk_follows_search_visibility_on_real_oracle() -> N
     assert await client.accessible_chunk_exists(document_id, old.chunk_id) is (
         old.chunk_id in remaining
     )
+
+
+def _element_chunk(index: int, text: str, element_ids: str) -> Chunk:
+    return Chunk(
+        index=index,
+        text=text,
+        start_offset=0,
+        end_offset=len(text),
+        metadata={"element_ids": element_ids, "page_start": 1},
+    )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_element_locator_follows_rechunking_on_real_oracle() -> None:
+    """要素の定位子は、同じ解析の結果で chunk を作り直しても同じ要素を含む chunk を返す（#1330）。
+
+    要素の ID は部分一致ではなく完全一致で選ぶ（``p1-1`` で ``p1-10`` を返さない）。解析の結果が
+    変わった（古い定位子）ことは、文書が見えるか（``accessible_document_exists``）で見分ける。
+    """
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    extraction_id = f"er_loc_{token}"
+    document_id = await _indexed_document(
+        client,
+        file_name=f"locator-{token}.pdf",
+        chunks=[_element_chunk(0, "第1条の本文", "docling-p1-10")],
+    )
+    recipes = await client.list_document_recipes(document_id)
+    recipe_id = str(recipes[0]["recipe_id"])
+    revision = int(str(recipes[0].get("config_revision") or 1))
+
+    async def rechunk(chunks: list[Chunk], extraction_recipe_id: str) -> str:
+        chunk_set_id = f"cs_loc_{uuid4().hex[:16]}"
+        await client.upsert_chunk_set(
+            chunk_set_id=chunk_set_id,
+            document_id=document_id,
+            recipe_id=recipe_id,
+            extraction_recipe_id=extraction_recipe_id,
+        )
+        await client.save_index(
+            document_id,
+            StructuredExtraction(raw_text="本文", confidence=0.9),
+            chunks,
+            [_EMBEDDING] * len(chunks),
+            chunk_set_id=chunk_set_id,
+        )
+        await client.mark_chunk_set_indexed(
+            chunk_set_id=chunk_set_id, chunk_count=len(chunks), vector_count=len(chunks)
+        )
+        await client.activate_recipe_chunk_set(
+            recipe_id=recipe_id, chunk_set_id=chunk_set_id, materialized_revision=revision
+        )
+        return chunk_set_id
+
+    first_set = await rechunk(
+        [
+            _element_chunk(0, "第1条と第2条", "docling-p1-1,docling-p1-2"),
+            _element_chunk(1, "第10条", "docling-p1-10"),
+        ],
+        extraction_id,
+    )
+    found = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2")
+    assert found is not None
+    assert (found.text, found.metadata["chunk_set_id"]) == ("第1条と第2条", first_set)
+    assert await client.chunk_set_extraction_recipe_ids([first_set]) == {first_set: extraction_id}
+    # 部分一致（p1-1 は p1-10 の先頭と同じ）で別の要素の chunk を返さない。
+    only_ten = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-10")
+    assert only_ten is not None and only_ten.text == "第10条"
+
+    # 文書分割だけを変えて作り直す（同じ解析の結果）。chunk の ID は変わるが、同じ要素を返す。
+    second_set = await rechunk(
+        [_element_chunk(0, "第1条から第10条まで", "docling-p1-1,docling-p1-2,docling-p1-10")],
+        extraction_id,
+    )
+    again = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2")
+    assert again is not None
+    assert again.metadata["chunk_set_id"] == second_set
+    assert again.chunk_id != found.chunk_id
+
+    # 解析をやり直した（別の解析の結果）後は、古い定位子では読めず、古い版と分かる。
+    await rechunk([_element_chunk(0, "再解析後", "docling-p1-1")], f"er_new_{token}")
+    assert (
+        await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2") is None
+    )
+    # 文書は見えるので、今の解析の結果に無い定位子は古い版（source_stale）と分かる。
+    assert await client.accessible_document_exists(document_id) is True
+    assert await client.accessible_document_exists(f"missing-{token}") is False

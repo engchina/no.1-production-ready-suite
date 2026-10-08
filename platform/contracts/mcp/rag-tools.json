@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 5,
+            "default": 6,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -418,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 5,
+            "default": 6,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -444,7 +444,7 @@
       "description": "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の元の画像の領域を画像（content の image）で返します。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "根拠の本文を読む条件（rag_search の evidence の document_id と chunk_id）。",
+        "description": "根拠の本文を読む条件（evidence の document_id と、chunk_id か要素の定位子）。",
         "properties": {
           "document_id": {
             "description": "文書の id。",
@@ -454,11 +454,34 @@
             "type": "string"
           },
           "chunk_id": {
-            "description": "根拠の chunk の id。",
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Chunk Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠の chunk の id。locator とどちらか一方を渡す。",
+            "title": "Chunk Id"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠の要素の定位子（evidence の locator.element_locator。#1330）。文書分割の設定を変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。解析をやり直した後の古い定位子は source_stale のエラー。chunk_id とどちらか一方を渡す。",
+            "title": "Locator"
           },
           "offset": {
             "default": 0,
@@ -489,8 +512,7 @@
           }
         },
         "required": [
-          "document_id",
-          "chunk_id"
+          "document_id"
         ],
         "title": "ReadSourceInput",
         "type": "object"
@@ -792,6 +814,19 @@
                 "default": null,
                 "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
                 "title": "Bbox Unit"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "title": "Element Locator"
               }
             },
             "title": "EvidenceLocator",
@@ -842,7 +877,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 5,
+            "default": 6,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1337,6 +1372,19 @@
                 "default": null,
                 "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
                 "title": "Bbox Unit"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "title": "Element Locator"
               }
             },
             "title": "EvidenceLocator",
@@ -1592,7 +1640,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 5,
+            "default": 6,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2025,6 +2073,19 @@
                 "default": null,
                 "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
                 "title": "Bbox Unit"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の先頭の要素の定位子（#1330。doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "title": "Element Locator"
               }
             },
             "title": "EvidenceLocator",
@@ -2452,7 +2513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 5,
+            "default": 6,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2923,7 +2984,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 5,
+            "default": 6,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

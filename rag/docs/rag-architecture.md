@@ -106,6 +106,7 @@
    - 進捗の stage は `history_rewrite`（会話履歴による質問の書き換え）・`answer`（回答フロー）と、その中の入れ子の工程 `answer_step:<工程名>`（「質問の理解」「文書検索（1回目）」など）、検索だけの経路の `retrieval` を通知する（#375 / #593）。画面（RAG 検索・チャット）は今の工程と経過時間を出す。
    - stage は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。回答フローの工程ごとの時間は `diagnostics.answer.execution_steps` に残る（負荷試験 CLI `search_load_cli` はこれで工程の p95 を集計する）。
    - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。MCP の `rag_search` は `citations` を根拠の `evidence[]`（場所・版・回答に使ったか・切り詰めの有無）に写し、本文の続きは `rag_read_source` で読む（#1219。契約は `platform/contracts/mcp/rag-tools.json`）。
+   - 根拠の場所（`locator`）には、根拠の先頭の要素の定位子 `element_locator`（`doc:{document_id}/ext:{解析の結果の ID}/page:{頁}/el:{要素の ID}`。`app/rag/element_locator.py`）を入れる（#1330）。解析の結果の ID（`rag_chunk_sets.extraction_recipe_id`）は、文書分割の設定だけを変えて chunk を作り直しても変わらないため、`rag_read_source` に `locator` を渡すと、同じ要素を含む今の chunk を読める（chunk の ID は作り直すたびに変わる）。解析をやり直した後の古い定位子は `source_stale`。要素の ID を持たない分割（文字数・区切り文字・Markdown の見出し）の根拠は `null`。
    - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は工程ごとの `started` / `success` / `error` と低機密 attributes を表す。回答 token は完全生成、PII マスク、groundedness、回答検査の後にだけ `delta` 分割する。
 
 ## Agent からの呼び出し（MCP）
