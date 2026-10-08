@@ -30,7 +30,7 @@ from rag_engine.retrieval.task_contract import task_contract
 COVERAGE_SCHEMA_VERSION = 1
 # 根拠が要求の語のこの割合以上を含めば supported、WEAK_RATIO 以上なら weak。
 SUPPORTED_RATIO = 0.6
-WEAK_RATIO = 0.34
+WEAK_RATIO = 0.33
 # 1 要求の再検索に足す手がかり（用語の別名・業務ガイドの検索の手がかり）の上限。
 MAX_HINTS = 3
 # 1 要求の記録に残す根拠の数。
@@ -41,6 +41,11 @@ CoverageStatus = Literal["supported", "weak", "missing", "unassessed"]
 # 要求単位の文の中の「原文: …」以降は判定に使わない（親の要求の原文の写し）。
 _FACET_TARGET = re.compile(r"対象「(.+?)」の(.+?)を個別に回答する")
 _DEFINITION_TARGET = re.compile(r"項目「(.+?)」")
+# 問い方の語。資料の本文に現れないことが普通で、覆域の判定に使うと根拠があっても割合が下がる。
+_QUESTION_FORM_TERMS = frozenset({
+    "方法", "手順", "やり方", "仕方", "可否", "必要", "可能", "場合", "とき", "教え", "知り", "意味",
+    "どう", "どこ", "なぜ", "いつ", "何", "について", "ください",
+})
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,19 @@ def _focus_text(unit: Mapping[str, Any]) -> str:
     return ""
 
 
+def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
+    """判定に使う語。2 文字以上で、問い方の語を除き、部分の語が揃う複合語（「登録方法」）は部分に任せる。
+
+    分かち書きは複合語とその部分の両方を返す。複合語のまま数えると、資料が「登録」「方法」を別々に書く
+    ときに一致しないので、部分の語がある複合語は数えない。
+    """
+    terms = [t for t in dict.fromkeys(_normalize(term).strip() for term in raw_terms)
+             if len(t) >= 2 and t not in _QUESTION_FORM_TERMS]
+    candidates = set(terms) | {_normalize(t).strip() for t in raw_terms}
+    return tuple(t for t in terms
+                 if not any(other != t and len(other) >= 2 and other in t for other in candidates))
+
+
 def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) -> list[RequestTarget]:
     """質問契約の要求単位から、覆域を判定する要求を返す。語の集合が同じ要求は 1 つにまとめる。"""
     targets: list[RequestTarget] = []
@@ -102,7 +120,7 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
             raw_terms = tokenize(focus)
         except Exception:  # noqa: BLE001 - 分かち書きの失敗は判定しない（unassessed）にする。
             raw_terms = ()
-        terms = tuple(dict.fromkeys(t for t in (_normalize(term).strip() for term in raw_terms) if len(t) >= 2))
+        terms = _content_terms(raw_terms)
         key = tuple(sorted(terms))
         if terms and key in seen:
             continue

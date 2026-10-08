@@ -99,6 +99,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "neighbor_child_count": "rag_neighbor_child_count",
     "rerank_enabled": "rag_rerank_enabled",
     "screen_linking_enabled": "rag_screen_linking_enabled",
+    "request_coverage_retrieval_enabled": "rag_request_coverage_retrieval_enabled",
     "auto_field_filter_enabled": "rag_auto_field_filter_enabled",
 }
 
@@ -269,6 +270,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     rerank_enabled: bool | None = None
     # 画面目録で操作画面を探す(#554)。LLM の呼び出しが 1 回増える。
     screen_linking_enabled: bool | None = None
+    # 根拠の無い要求だけを再検索する(#1279)。LLM は呼ばない(検索が 1 要求 1 回増える)。
+    request_coverage_retrieval_enabled: bool | None = None
     # 質問から抽出項目の条件を読み取る(#652)。LLM の呼び出しが 1 回増える。
     auto_field_filter_enabled: bool | None = None
 

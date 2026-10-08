@@ -464,6 +464,10 @@ async def update_answering_settings(
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
             ("rag_screen_linking_enabled", payload.screen_linking_enabled),
+            (
+                "rag_request_coverage_retrieval_enabled",
+                payload.request_coverage_retrieval_enabled,
+            ),
             ("rag_auto_field_filter_enabled", payload.auto_field_filter_enabled),
         )
         if value is not None
@@ -479,6 +483,9 @@ async def update_answering_settings(
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
                 "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
                     candidate.rag_screen_linking_enabled
+                ),
+                "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED": _format_env_bool(
+                    candidate.rag_request_coverage_retrieval_enabled
                 ),
                 "RAG_AUTO_FIELD_FILTER_ENABLED": _format_env_bool(
                     candidate.rag_auto_field_filter_enabled
@@ -499,6 +506,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         screen_linking_enabled=settings.rag_screen_linking_enabled,
+        request_coverage_retrieval_enabled=settings.rag_request_coverage_retrieval_enabled,
         auto_field_filter_enabled=settings.rag_auto_field_filter_enabled,
     )
 
