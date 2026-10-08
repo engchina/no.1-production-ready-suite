@@ -320,11 +320,7 @@ class EvaluationRunner:
         effective_settings = evaluation_settings(self._settings, rag_overrides)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
 
-        aggregate = _Aggregate()
-        error_count = 0
-        judge_incomplete_count = 0
         case_results: list[EvaluationCaseResult] = []
-        failure_reason_counts: dict[str, int] = {}
 
         for case_index, case in enumerate(cases):
             if progress is not None:
@@ -337,10 +333,7 @@ class EvaluationRunner:
             remaining = _remaining_seconds(deadline)
             if remaining is not None and remaining <= 0:
                 # 評価全体の上限に達した。残りのケースは pipeline を呼ばずに失敗として記録する。
-                skipped_result = _case_skipped_result(case=case, trace_id=trace_id)
-                _accumulate_failure_reasons(failure_reason_counts, skipped_result.failure_reasons)
-                case_results.append(skipped_result)
-                error_count += 1
+                case_results.append(_case_skipped_result(case=case, trace_id=trace_id))
                 continue
             case_started_at = perf_counter()
             # 最初の質問と、確認の質問への返答（#1284）を順に送る。返答はチャットと同じく、
@@ -446,9 +439,7 @@ class EvaluationRunner:
                 prior_queries.append(query)
 
             if error_result is not None:
-                _accumulate_failure_reasons(failure_reason_counts, error_result.failure_reasons)
                 case_results.append(error_result)
-                error_count += 1
                 continue
 
             record_evaluation_case(
@@ -458,12 +449,7 @@ class EvaluationRunner:
             )
             final_response = turn_runs[-1].response
             judgement = await self._judge(case, final_response, deadline)
-            result = _case_result(case, final_response, judgement, turn_runs=turn_runs)
-            if judgement is not None and judgement.status != "completed":
-                judge_incomplete_count += 1
-            _accumulate_case_metrics(aggregate, result)
-            _accumulate_failure_reasons(failure_reason_counts, result.failure_reasons)
-            case_results.append(result)
+            case_results.append(_case_result(case, final_response, judgement, turn_runs=turn_runs))
 
         if progress is not None:
             await progress(
@@ -471,21 +457,7 @@ class EvaluationRunner:
                 current_case_id=None,
                 current_experiment_id=None,
             )
-        aggregate_values = aggregate.means()
-        threshold_failures = _threshold_failures(thresholds, aggregate_values)
-        return EvaluationMetrics(
-            case_count=len(cases),
-            error_count=error_count,
-            category_breakdown=category_breakdown(case_results),
-            split_breakdown=split_breakdown(case_results),
-            # 失敗したケースや、標準回答で評価できなかったケースがあれば合格にしない。
-            passed=not threshold_failures and error_count == 0 and judge_incomplete_count == 0,
-            threshold_failures=threshold_failures,
-            failure_reason_counts=failure_reason_counts,
-            metric_case_counts=aggregate.counts(),
-            case_results=case_results,
-            **aggregate_values,
-        )
+        return summarize_case_results(case_results, thresholds=thresholds)
 
     async def compare(
         self,
@@ -646,6 +618,89 @@ def evaluation_settings(
             {mapping[key]: value for key, value in overrides.model_dump(exclude_none=True).items()}
         )
     return settings.model_copy(update=update)
+
+
+def summarize_case_results(
+    case_results: Sequence[EvaluationCaseResult],
+    *,
+    thresholds: EvaluationThresholds | None = None,
+) -> EvaluationMetrics:
+    """ケースの結果を集計して評価の結果にする（評価ランナーと、外部の回答の採点で共通。#1289）。
+
+    指標は成功したケースのうち測れたものだけの平均。失敗したケースや、標準回答で評価できなかった
+    ケースがあれば合格にしない。
+    """
+    results = list(case_results)
+    aggregate = _Aggregate()
+    failure_reason_counts: dict[str, int] = {}
+    error_count = 0
+    judge_incomplete_count = 0
+    for result in results:
+        _accumulate_failure_reasons(failure_reason_counts, result.failure_reasons)
+        if result.status != "success":
+            error_count += 1
+            continue
+        judgement = result.answer_evaluation
+        if judgement is not None and judgement.status != "completed":
+            judge_incomplete_count += 1
+        _accumulate_case_metrics(aggregate, result)
+    aggregate_values = aggregate.means()
+    threshold_failures = _threshold_failures(thresholds, aggregate_values)
+    return EvaluationMetrics(
+        case_count=len(results),
+        error_count=error_count,
+        category_breakdown=category_breakdown(results),
+        split_breakdown=split_breakdown(results),
+        passed=not threshold_failures and error_count == 0 and judge_incomplete_count == 0,
+        threshold_failures=threshold_failures,
+        failure_reason_counts=failure_reason_counts,
+        metric_case_counts=aggregate.counts(),
+        case_results=results,
+        **aggregate_values,
+    )
+
+
+def score_case_answers(
+    case: EvaluationCase,
+    answers: Sequence[tuple[SearchResponse, Mapping[str, str]]],
+    judgement: EvaluationAnswerJudgement | None = None,
+) -> EvaluationCaseResult:
+    """外部で作った回答（Agent の Run など。#1289）を、評価ランナーと同じ採点にかける。
+
+    `answers` は最初の質問から順の（回答, その発話までに渡した既知の条件）。採点（対応・手順と別解・
+    危険な回答・条件・正解の文書・必要な根拠）は `EvaluationRunner.run` のケースと同じ関数で行う。
+    """
+    if not answers:
+        raise ValueError("採点する回答がありません。")
+    runs = [
+        _TurnRun(response=response, conditions=dict(conditions)) for response, conditions in answers
+    ]
+    return _case_result(case, runs[-1].response, judgement, turn_runs=runs)
+
+
+def case_error_result(
+    case: EvaluationCase,
+    *,
+    trace_id: str,
+    elapsed_ms: float,
+    error_type: str,
+    error_message: str,
+    error_stage: str | None = None,
+) -> EvaluationCaseResult:
+    """回答を得られなかったケースの結果（質問の本文は含めない。外部の回答の採点で使う。#1289）。"""
+    return EvaluationCaseResult(
+        case_id=case.id,
+        category=case.category,
+        split=case.split,
+        trace_id=trace_id,
+        status="error",
+        relevant_document_ids=list(case.relevant_document_ids),
+        failure_reasons=["case_error"],
+        elapsed_ms=elapsed_ms,
+        error_type=error_type,
+        error_stage=error_stage,
+        error_message=error_message,
+    )
 
 
 def _case_result(
