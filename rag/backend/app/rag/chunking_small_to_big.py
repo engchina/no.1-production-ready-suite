@@ -21,7 +21,12 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from rag_parser_core.extraction import StructuredExtraction
-from rag_pipeline_core.chunking import Chunk
+from rag_pipeline_core.chunking import (
+    FIGURE_TEXT_SOURCE_KEY,
+    FIGURE_TEXT_SOURCE_OCR,
+    FIGURE_TEXT_SOURCE_VISION,
+    Chunk,
+)
 
 if TYPE_CHECKING:
     from rag_engine.chunking.constants import ChunkingConfig, DocumentChunk
@@ -186,12 +191,19 @@ def _backend_chunk(
     width, height = page_sizes.get(child.page_start, (None, None))
     bbox = _first_region_bbox(metadata, child.page_start)
     group_id = child.parent_chunk_id or child.chunk_id
+    content_kind = _content_kind(metadata)
     return Chunk(
         text=child.text,
         index=index,
         start_offset=0,
         end_offset=len(child.text),
         metadata={
+            # 図の本文の出どころ（根拠の種類。#1282）。図の chunk だけに付ける。
+            **(
+                {FIGURE_TEXT_SOURCE_KEY: _figure_text_source(child.source_record_refs)}
+                if content_kind == "figure"
+                else {}
+            ),
             "source_parser": LAYOUT_SOURCE_PARSER,
             "chunk_strategy": SMALL_TO_BIG_STRATEGY,
             "engine_chunk_id": child.chunk_id,
@@ -200,7 +212,7 @@ def _backend_chunk(
             "chunk_group_kind": "small_to_big_parent",
             "parent_text": parent.text if parent is not None else "",
             ENGINE_SEARCH_TEXT_KEY: child.retrieval_text,
-            "content_kind": _content_kind(metadata),
+            "content_kind": content_kind,
             "section_path": " > ".join(section_path) or None,
             "page_number": child.page_start or None,
             "page_start": child.page_start or None,
@@ -236,6 +248,21 @@ def _without_first_page_context(metadata: Mapping[str, Any]) -> Mapping[str, Any
         **metadata,
         "document": {key: value for key, value in document.items() if key != "first_page_context"},
     }
+
+
+def _figure_text_source(refs: object) -> str:
+    """図の本文を Vision（VLM）が書いたか(vision)、解析の OCR・キャプションのままか(ocr)。
+
+    図の record に Vision のモデルが残り、失敗の印が無ければ VLM の説明とみなす。
+    """
+    for ref in refs if isinstance(refs, list) else []:
+        if not isinstance(ref, Mapping) or str(ref.get("category") or "") != "Picture":
+            continue
+        if str(ref.get("raw_type") or "") == "picture_ocr_text":
+            continue
+        if str(ref.get("vision_model") or "").strip() and not ref.get("vision_error"):
+            return FIGURE_TEXT_SOURCE_VISION
+    return FIGURE_TEXT_SOURCE_OCR
 
 
 def _content_kind(metadata: Mapping[str, Any]) -> str:

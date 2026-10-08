@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -404,7 +404,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -427,7 +427,7 @@
     },
     {
       "name": "rag_read_source",
-      "description": "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。検索と同じ利用範囲の根拠だけを読めます。",
+      "description": "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の元の画像の領域を画像（content の image）で返します。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "根拠の本文を読む条件（rag_search の evidence の document_id と chunk_id）。",
@@ -460,6 +460,12 @@
             "minimum": 1,
             "title": "Max Chars",
             "type": "integer"
+          },
+          "include_image": {
+            "default": false,
+            "description": "true のとき、図の根拠（image_ref がある根拠）の元の画像の領域を返す。画像は MCP の content の image（PNG。長い辺 1568 px 以下・1500000 バイト以下）で返し、structuredContent の image には大きさだけを入れる。図でない・場所が分からない根拠は image_not_available のエラー。",
+            "title": "Include Image",
+            "type": "boolean"
           }
         },
         "required": [
@@ -474,6 +480,122 @@
       },
       "outputSchema": {
         "$defs": {
+          "EvidenceImage": {
+            "description": "rag_read_source が content の image で返した図の画像の大きさ（#1282）。",
+            "properties": {
+              "mime_type": {
+                "const": "image/png",
+                "default": "image/png",
+                "title": "Mime Type",
+                "type": "string"
+              },
+              "width": {
+                "description": "画像の幅（px）。",
+                "title": "Width",
+                "type": "integer"
+              },
+              "height": {
+                "description": "画像の高さ（px）。",
+                "title": "Height",
+                "type": "integer"
+              },
+              "byte_size": {
+                "description": "画像のバイト数。",
+                "title": "Byte Size",
+                "type": "integer"
+              },
+              "sha256": {
+                "description": "画像の sha256（content の image と同じか確かめる）。",
+                "title": "Sha256",
+                "type": "string"
+              },
+              "content_index": {
+                "default": 1,
+                "description": "MCP の content の何番目（0 始まり）に画像があるか。",
+                "title": "Content Index",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "width",
+              "height",
+              "byte_size",
+              "sha256"
+            ],
+            "title": "EvidenceImage",
+            "type": "object"
+          },
+          "EvidenceImageRef": {
+            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "領域を記録した処理の版。",
+                "title": "Chunk Set Id"
+              },
+              "page": {
+                "description": "図のある頁（PDF の物理頁。画像ファイルは 1）。",
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "印刷の頁番号（物理頁と違うときだけ。#1244）。",
+                "title": "Page Label"
+              },
+              "bbox": {
+                "description": "頁の中の図の領域 [x0, y0, x1, y1]。",
+                "items": {
+                  "type": "number"
+                },
+                "title": "Bbox",
+                "type": "array"
+              },
+              "bbox_unit": {
+                "description": "bbox の単位（absolute=頁の座標 / ratio=0〜1 / percent=0〜100）。",
+                "enum": [
+                  "absolute",
+                  "ratio",
+                  "percent"
+                ],
+                "title": "Bbox Unit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "page",
+              "bbox",
+              "bbox_unit"
+            ],
+            "title": "EvidenceImageRef",
+            "type": "object"
+          },
           "EvidenceLocator": {
             "description": "根拠の場所（種類によって空の項目がある）。",
             "properties": {
@@ -625,7 +747,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -689,6 +811,40 @@
             ],
             "default": null,
             "title": "Content Kind"
+          },
+          "evidence_type": {
+            "default": "text",
+            "enum": [
+              "text",
+              "table",
+              "figure_description",
+              "ocr"
+            ],
+            "title": "Evidence Type",
+            "type": "string"
+          },
+          "image_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EvidenceImageRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EvidenceImage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "include_image=true で返した図の画像の大きさ（画像は content の image）。include_image=false なら null。"
           },
           "locator": {
             "$ref": "#/$defs/EvidenceLocator"
@@ -852,6 +1008,77 @@
       },
       "outputSchema": {
         "$defs": {
+          "EvidenceImageRef": {
+            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "領域を記録した処理の版。",
+                "title": "Chunk Set Id"
+              },
+              "page": {
+                "description": "図のある頁（PDF の物理頁。画像ファイルは 1）。",
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "印刷の頁番号（物理頁と違うときだけ。#1244）。",
+                "title": "Page Label"
+              },
+              "bbox": {
+                "description": "頁の中の図の領域 [x0, y0, x1, y1]。",
+                "items": {
+                  "type": "number"
+                },
+                "title": "Bbox",
+                "type": "array"
+              },
+              "bbox_unit": {
+                "description": "bbox の単位（absolute=頁の座標 / ratio=0〜1 / percent=0〜100）。",
+                "enum": [
+                  "absolute",
+                  "ratio",
+                  "percent"
+                ],
+                "title": "Bbox Unit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "page",
+              "bbox",
+              "bbox_unit"
+            ],
+            "title": "EvidenceImageRef",
+            "type": "object"
+          },
           "EvidenceLocator": {
             "description": "根拠の場所（種類によって空の項目がある）。",
             "properties": {
@@ -1067,6 +1294,30 @@
                 "description": "内容の種類（text / table など）。",
                 "title": "Content Kind"
               },
+              "evidence_type": {
+                "default": "text",
+                "description": "根拠の種類（text=本文 / table=表 / figure_description=図を AI（VLM）が読んだ説明。原文ではないので元の図で確かめる / ocr=図の中・周りの文字（OCR・キャプション））。",
+                "enum": [
+                  "text",
+                  "table",
+                  "figure_description",
+                  "ocr"
+                ],
+                "title": "Evidence Type",
+                "type": "string"
+              },
+              "image_ref": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceImageRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "図の元の画像の領域（rag_read_source の include_image で読む）。無ければ null。"
+              },
               "locator": {
                 "$ref": "#/$defs/EvidenceLocator"
               },
@@ -1150,7 +1401,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1367,6 +1618,77 @@
               "status"
             ],
             "title": "AnswerRequest",
+            "type": "object"
+          },
+          "EvidenceImageRef": {
+            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "領域を記録した処理の版。",
+                "title": "Chunk Set Id"
+              },
+              "page": {
+                "description": "図のある頁（PDF の物理頁。画像ファイルは 1）。",
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "印刷の頁番号（物理頁と違うときだけ。#1244）。",
+                "title": "Page Label"
+              },
+              "bbox": {
+                "description": "頁の中の図の領域 [x0, y0, x1, y1]。",
+                "items": {
+                  "type": "number"
+                },
+                "title": "Bbox",
+                "type": "array"
+              },
+              "bbox_unit": {
+                "description": "bbox の単位（absolute=頁の座標 / ratio=0〜1 / percent=0〜100）。",
+                "enum": [
+                  "absolute",
+                  "ratio",
+                  "percent"
+                ],
+                "title": "Bbox Unit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "page",
+              "bbox",
+              "bbox_unit"
+            ],
+            "title": "EvidenceImageRef",
             "type": "object"
           },
           "EvidenceLocator": {
@@ -1756,6 +2078,30 @@
                 "description": "内容の種類（text / table など）。",
                 "title": "Content Kind"
               },
+              "evidence_type": {
+                "default": "text",
+                "description": "根拠の種類（text=本文 / table=表 / figure_description=図を AI（VLM）が読んだ説明。原文ではないので元の図で確かめる / ocr=図の中・周りの文字（OCR・キャプション））。",
+                "enum": [
+                  "text",
+                  "table",
+                  "figure_description",
+                  "ocr"
+                ],
+                "title": "Evidence Type",
+                "type": "string"
+              },
+              "image_ref": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceImageRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "図の元の画像の領域（rag_read_source の include_image で読む）。無ければ null。"
+              },
               "locator": {
                 "$ref": "#/$defs/EvidenceLocator"
               },
@@ -1839,7 +2185,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2310,7 +2656,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
