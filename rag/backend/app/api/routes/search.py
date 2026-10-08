@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from time import perf_counter
@@ -42,6 +42,9 @@ from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.support_guide_runtime import (
+    GUIDE_LOAD_FAILED_KEY,
+    GuideContext,
+    build_guide_context,
     clarification_questions,
     match_guide,
     short_circuit_answer,
@@ -56,7 +59,9 @@ from app.schemas.search import (
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
+    format_search_id_filter,
 )
+from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.settings import FieldDefinitionData, SearchExtractionFieldsData
 from app.schemas.support_guide import SupportGuideContent
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
@@ -223,13 +228,24 @@ async def _resolve_query_context(
         runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
             view.id, RUNTIME_KNOWLEDGE_KIND
         )
-        # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。
+        # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。適用範囲は質問と検索の
+        # 絞り込みの手がかりで確かめる（#1278）。
+        guides, guides_failed = await load_published_guides(oracle, view.id)
+        guide_text = "\n".join([*guide_context, request.query])
         match = match_guide(
-            await _published_guides(oracle, view.id),
-            "\n".join([*guide_context, request.query]),
+            guides,
+            guide_text,
             request.conditions,
             interactive=interactive,
+            context=await support_guide_context(
+                oracle, guides, guide_text, effective_request.filters
+            ),
         )
+        if guides_failed:
+            # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
+            settings = settings.model_copy(
+                update={"rag_support_guide": {GUIDE_LOAD_FAILED_KEY: True}}
+            )
         if match is not None:
             runtime_knowledge = with_guide_rule(runtime_knowledge, match)
             settings = settings.model_copy(
@@ -254,15 +270,58 @@ async def _resolve_query_context(
     return request, settings, None, None
 
 
+async def load_published_guides(
+    oracle: OracleClient, search_answer_profile_id: str
+) -> tuple[list[tuple[str, int, SupportGuideContent]], bool]:
+    """公開した業務ガイドと、読めなかったか。
+
+    読めなければ（表をまだ作っていない環境など）使わずに答え、呼び出し元が失敗を回答の診断・MCP の
+    エラーに出す（#1278）。
+    """
+    try:
+        guides = await SupportGuideStore(oracle).published_contents(search_answer_profile_id)
+    except Exception:  # noqa: BLE001 - 業務ガイドは補助。読めなくても検索・回答は続ける。
+        logger.warning("support guides load failed", exc_info=True)
+        return [], True
+    return guides, False
+
+
 async def _published_guides(
     oracle: OracleClient, search_answer_profile_id: str
 ) -> list[tuple[str, int, SupportGuideContent]]:
-    """公開した業務ガイド。読めなければ（表をまだ作っていない環境など）使わずに答える。"""
-    try:
-        return await SupportGuideStore(oracle).published_contents(search_answer_profile_id)
-    except Exception:  # noqa: BLE001 - 業務ガイドは補助。読めなくても検索・回答は続ける。
-        logger.warning("support guides load failed", exc_info=True)
-        return []
+    """公開した業務ガイド（読めなければ空。確認の質問の候補・チャットの答えの引き直しに使う）。"""
+    guides, _ = await load_published_guides(oracle, search_answer_profile_id)
+    return guides
+
+
+def profile_scope_filters(view: SearchAnswerProfileDetail) -> dict[str, str] | None:
+    """検索・回答プロファイルの参照 KB のうち利用者が使える KB の絞り込み（無ければ None）。"""
+    knowledge_base_ids = view.config.normalized_knowledge_base_ids()
+    permitted = permitted_knowledge_base_ids(knowledge_base_ids)
+    scoped = knowledge_base_ids if permitted is None else permitted
+    return {"knowledge_base_id": format_search_id_filter(scoped)} if scoped else None
+
+
+async def support_guide_context(
+    oracle: OracleClient,
+    guides: Sequence[tuple[str, int, SupportGuideContent]],
+    text: str,
+    filters: Mapping[str, str] | None,
+) -> GuideContext:
+    """業務ガイドの適用範囲の手がかり（#1278）。
+
+    業務の名指しは、検索範囲（``filters``。KB の範囲を含む）の文書の大分類の語でも探す（#553 と同じ
+    一覧）。ガイドに業務の指定が無い・範囲が無いときは読まない。読めなければガイドの語だけで探す。
+    """
+    vocabulary: list[str] = []
+    if filters is not None and any(
+        content.applicability.business_domains for _, _, content in guides
+    ):
+        try:
+            vocabulary = await oracle.retrieval_large_categories(dict(filters))
+        except Exception:  # noqa: BLE001 - 手がかりは補助。読めなければガイドの語だけで探す。
+            logger.warning("business names load failed for support guides", exc_info=True)
+    return build_guide_context(text, guides, filters=filters, business_vocabulary=vocabulary)
 
 
 def ensure_search_answer_profile_not_archived(view: object, search_answer_profile_id: str) -> None:

@@ -9,6 +9,7 @@ RAG のチャットは MCP で提供しない（#787）。
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,6 +23,7 @@ from app.main import app
 from app.mcp import tools as mcp_tools
 from app.rag import request_context
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchRequest, SearchResponse
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
 from tests.security_support import ProductionAuth, enable_production_auth, login
@@ -574,6 +576,56 @@ def test_read_source_distinguishes_missing_and_stale(
 # ---------------------------------------------------------------------------
 # チャット（MCP では提供しない。#787）
 # ---------------------------------------------------------------------------
+
+
+class _GuideProfileOracle:
+    """rag_lookup_guides 用の検索・回答プロファイルだけを返す fake（状態を変えられる）。"""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+
+    async def get_search_answer_profile(self, profile_id: str) -> Any:
+        if profile_id != "bv-1":
+            return None
+        return SimpleNamespace(
+            id="bv-1",
+            status=SimpleNamespace(value=self.status),
+            config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"]),
+        )
+
+
+def test_lookup_guides_refuses_archived_profile_and_reports_load_failure(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """アーカイブ済みのプロファイルは 409、ガイドを読めなければ 503（0 件と区別する。#1278）。"""
+    loaded: list[str] = []
+    failed = {"value": False}
+
+    async def published(_oracle: object, profile_id: str) -> tuple[list[Any], bool]:
+        loaded.append(profile_id)
+        return [], failed["value"]
+
+    monkeypatch.setattr(search_route, "load_published_guides", published)
+    headers = _token(auth.user_with_permissions("searcher", ["menu.search"]).user_uuid)
+    arguments = {"query": "権限を付与したい", "search_answer_profile_id": "bv-1"}
+
+    monkeypatch.setattr(mcp_tools, "OracleClient", lambda: _GuideProfileOracle("ARCHIVED"))
+    archived = _call("rag_lookup_guides", arguments, headers)
+    assert archived["isError"] is True
+    assert archived["structuredContent"]["status"] == 409
+    assert "アーカイブ済み" in archived["structuredContent"]["message"]
+    assert loaded == []
+
+    monkeypatch.setattr(mcp_tools, "OracleClient", lambda: _GuideProfileOracle("ACTIVE"))
+    ok = _call("rag_lookup_guides", arguments, headers)
+    assert ok["isError"] is False
+    assert ok["structuredContent"]["guides"] == []
+
+    failed["value"] = True
+    unavailable = _call("rag_lookup_guides", arguments, headers)
+    assert unavailable["isError"] is True
+    assert unavailable["structuredContent"]["status"] == 503
+    assert unavailable["structuredContent"]["message"] == mcp_tools.GUIDES_UNAVAILABLE_MESSAGE
 
 
 @pytest.mark.parametrize("name", ["rag_chat_send_message", "rag_chat_get_conversation"])
