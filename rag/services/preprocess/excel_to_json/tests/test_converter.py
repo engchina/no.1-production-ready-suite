@@ -13,7 +13,11 @@ from typing import Any
 
 import openpyxl
 import pytest
-from rag_parser_core.sheet_records import SHEET_RECORDS_CONTENT_TYPE
+from rag_parser_core.sheet_records import (
+    SHEET_RECORDS_CONTENT_TYPE,
+    SheetRecordsDocument,
+    sheet_records_extraction,
+)
 
 from app import converters
 from app.converters import convert
@@ -44,7 +48,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == SHEET_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v2"
+    assert outcome.converter_version == "v3"
     payload: dict[str, Any] = json.loads(outcome.derived_bytes.decode("utf-8"))
     return payload
 
@@ -346,6 +350,253 @@ def test_passthrough_cases() -> None:
         _xlsx_bytes({"S": [["a"], ["1"]]}), "", "excel_to_json", None, options={"header_row": 0}
     )
     assert (invalid.converted, invalid.warnings) == (False, ("excel_options_invalid",))
+
+
+# ---- 列の役割（#1281） ------------------------------------------------------------------
+
+# 評価セットの portal-parameters.xlsx と同じ形（説明の 2 行・表頭・パラメータの行）。架空の値。
+_PARAMETER_SHEET = {
+    "パラメータ一覧": [
+        ["サンプル業務ポータルのパラメータの一覧"],
+        ["既定値は出荷時の値、設定例は書き方の例です。"],
+        ["パラメータ名", "既定値", "設定例", "説明"],
+        ["session_timeout_minutes", "30", "60", "操作が無いときにログインが切れるまでの分数"],
+        ["max_upload_mb", "20", "100", "1 ファイルのアップロードの上限（MB）"],
+    ]
+}
+
+
+def _roles(sheet: dict[str, Any]) -> dict[str, tuple[str | None, str | None]]:
+    return {
+        column["name"]: (column.get("role"), column.get("role_method"))
+        for column in sheet["columns"]
+    }
+
+
+def _extraction_texts(payload: dict[str, Any]) -> list[str]:
+    extraction = sheet_records_extraction(
+        SheetRecordsDocument.model_validate(payload),
+        source_parser="test",
+        parser_backend="test",
+        parser_version="0",
+    )
+    return [element.text for element in extraction.elements]
+
+
+def test_parameter_table_columns_get_roles_and_labels_in_text() -> None:
+    """既定値・設定例・説明の列に役割を付け、本文の値の列名の後に役割の表示を付ける。"""
+    payload = _payload(_xlsx_bytes(_PARAMETER_SHEET))
+    sheet = _sheet(payload)
+    assert _roles(sheet) == {
+        "パラメータ名": (None, None),
+        "既定値": ("default", "detected"),
+        "設定例": ("example", "detected"),
+        "説明": ("definition", "detected"),
+    }
+    assert sheet["diagnostics"] == []
+    # 行の値（values）は列名のまま。役割の表示は本文だけに付ける。
+    assert sheet["blocks"][0]["values"]["既定値"] == "30"
+    texts = _extraction_texts(payload)
+    assert (
+        "パラメータ名: session_timeout_minutes / 既定値［資料の既定値］: 30 / "
+        "設定例［例示の値］: 60 / 説明: 操作が無いときにログインが切れるまでの分数"
+    ) in texts
+    extraction = sheet_records_extraction(
+        SheetRecordsDocument.model_validate(payload),
+        source_parser="test",
+        parser_backend="test",
+        parser_version="0",
+    )
+    row = next(
+        item for item in extraction.elements if item.metadata.get("sheet_block_kind") == "row"
+    )
+    assert row.metadata["sheet_column_roles"] == "既定値=default; 設定例=example; 説明=definition"
+
+
+@pytest.mark.parametrize(
+    ("header", "role"),
+    [
+        ("既定値", "default"),
+        ("既定値（分）", "default"),
+        ("デフォルト値", "default"),
+        ("初期値", "default"),
+        ("Default Value", "default"),
+        ("タイムアウトの既定値", "default"),
+        ("記入例", "example"),
+        ("Example", "example"),
+        ("e.g.", "example"),
+        ("サンプル値", "example"),
+        ("現在値", "current"),
+        ("本番設定値", "current"),
+        ("Current value", "current"),
+        ("推奨値", "recommended"),
+        ("設定可能範囲", "allowed"),
+        ("Allowed values", "allowed"),
+        ("説明", "definition"),
+        ("Description", "definition"),
+        # 複数行の表頭は下の行（具体的な語）から見る。下の行に語が無ければ上の行で決める。
+        ("設定 / 既定値", "default"),
+        ("既定値 / Windows", "default"),
+    ],
+)
+def test_detect_column_role_from_header_vocabulary(header: str, role: str) -> None:
+    detected, confidence, _, reason = converters.detect_column_role(header)
+    assert (detected, reason) == (role, None)
+    assert confidence >= converters.COLUMN_ROLE_MIN_CONFIDENCE
+
+
+@pytest.mark.parametrize(
+    ("header", "reason"),
+    [
+        # 「設定値」は現場の値のことも、選べる値の一覧のこともある。推測しない。
+        ("設定値", "uncertain"),
+        ("Value", "uncertain"),
+        # 2 つの役割の語を含む表頭は 1 つに決めない。
+        ("既定値の説明", "ambiguous"),
+        ("既定値／推奨値", "ambiguous"),
+        # 役割の語を含むが値の列ではない。
+        ("既定値の変更履歴", "uncertain"),
+        # 役割の語に当たらない。
+        ("パラメータ名", None),
+        ("事例", None),
+        ("適用範囲", None),
+        ("作業内容", None),
+    ],
+)
+def test_detect_column_role_does_not_guess(header: str, reason: str | None) -> None:
+    detected, _, _, why = converters.detect_column_role(header)
+    assert (detected, why) == (None, reason)
+
+
+def test_uncertain_and_ambiguous_columns_get_no_role_but_diagnostics() -> None:
+    payload = _payload(
+        _xlsx_bytes(
+            {
+                "S": [
+                    ["項目", "設定値", "既定値の説明", "既定値", "説明"],
+                    ["timeout", "45", "出荷時は 30", "30", "分数"],
+                ]
+            }
+        )
+    )
+    sheet = _sheet(payload)
+    assert _roles(sheet) == {
+        "項目": (None, None),
+        "設定値": (None, None),
+        "既定値の説明": (None, None),
+        "既定値": ("default", "detected"),
+        "説明": ("definition", "detected"),
+    }
+    assert {(item["code"], item["detail"]) for item in sheet["diagnostics"]} == {
+        ("column_role_uncertain", "B:設定値"),
+        ("column_role_ambiguous", "C:既定値の説明"),
+    }
+    assert (
+        "設定値: 45 / 既定値の説明: 出荷時は 30 / 既定値［資料の既定値］: 30"
+        in (_extraction_texts(payload)[0])
+    )
+
+
+def test_single_role_column_is_not_corroborated() -> None:
+    """役割の語に当たる列が 1 つだけの表（検体の「サンプル」）は設定値の表と言い切れない。"""
+    payload = _payload(
+        _xlsx_bytes({"検体": [["検体ID", "サンプル", "結果"], ["K-1", "血液", "陰性"]]})
+    )
+    sheet = _sheet(payload)
+    assert all(column.get("role") is None for column in sheet["columns"])
+    assert [(item["code"], item["detail"]) for item in sheet["diagnostics"]] == [
+        ("column_role_not_corroborated", "B:サンプル")
+    ]
+    assert _extraction_texts(payload) == ["検体ID: K-1 / サンプル: 血液 / 結果: 陰性"]
+
+
+def test_configured_column_roles_win_and_detection_can_be_turned_off() -> None:
+    source = _xlsx_bytes(
+        {
+            "S": [
+                ["項目", "設定値", "設定例", "説明"],
+                ["timeout", "45", "60", "分数"],
+            ]
+        }
+    )
+    # 指定（列名か列の記号）は判定より優先し、none は役割を付けない。
+    configured = _sheet(_payload(source, column_roles={"設定値": "current", "c": "none"}))
+    assert _roles(configured) == {
+        "項目": (None, None),
+        "設定値": ("current", "configured"),
+        "設定例": (None, None),
+        "説明": ("definition", "detected"),
+    }
+    # off は指定だけを使う。
+    off = _payload(source, column_role_detection="off", column_roles={"B": "current"})
+    assert _roles(_sheet(off)) == {
+        "項目": (None, None),
+        "設定値": ("current", "configured"),
+        "設定例": (None, None),
+        "説明": (None, None),
+    }
+    assert _extraction_texts(off) == [
+        "項目: timeout / 設定値［記載時点の設定値］: 45 / 設定例: 60 / 説明: 分数"
+    ]
+    # 無効にすると表の本文は役割の表示の無い元の形になる。
+    plain = _payload(source, column_role_detection="off")
+    assert _extraction_texts(plain) == ["項目: timeout / 設定値: 45 / 設定例: 60 / 説明: 分数"]
+
+
+def test_configured_column_role_for_missing_column_warns() -> None:
+    outcome = convert(
+        _xlsx_bytes(_PARAMETER_SHEET),
+        "",
+        "excel_to_json",
+        None,
+        options={"column_roles": {"現在値": "current"}},
+    )
+    assert outcome.converted is True
+    assert "excel_column_role_target_not_found:現在値" in outcome.warnings
+
+
+def test_invalid_column_role_option_is_rejected() -> None:
+    outcome = convert(
+        _xlsx_bytes(_PARAMETER_SHEET),
+        "",
+        "excel_to_json",
+        None,
+        options={"column_roles": {"B": "actual"}},
+    )
+    assert (outcome.converted, outcome.warnings) == (False, ("excel_options_invalid",))
+
+
+def test_low_confidence_header_skips_role_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """表頭が確かでないシートでは、表頭の語で役割を決めない（指定の役割は使う）。"""
+    monkeypatch.setattr(converters, "_detect_header", lambda grid, rows: (3, 0.3, "低い"))
+    sheet = _sheet(_payload(_xlsx_bytes(_PARAMETER_SHEET), column_roles={"B": "default"}))
+    assert _roles(sheet)["既定値"] == ("default", "configured")
+    assert _roles(sheet)["設定例"] == (None, None)
+    assert "column_roles_skipped_low_header_confidence" in {
+        item["code"] for item in sheet["diagnostics"]
+    }
+
+
+def test_procedure_lines_label_role_columns() -> None:
+    payload = _payload(
+        _xlsx_bytes(
+            {
+                "手順": [
+                    ["", "作業項目", "既定値", "記入例"],
+                    [1, "タイムアウトを設定する", "30", "60"],
+                    ["", "", "", "90"],
+                    [2, "上限を設定する", "20", "100"],
+                ]
+            }
+        ),
+        mode="procedure",
+    )
+    sheet = _sheet(payload)
+    assert sheet["mode"] == "procedure"
+    assert sheet["blocks"][0]["lines"][0] == (
+        "column_A: 1 | 作業項目: タイムアウトを設定する | 既定値［資料の既定値］: 30 | "
+        "記入例［例示の値］: 60"
+    )
 
 
 # ---- .xls（xlrd）の値 -----------------------------------------------------------------

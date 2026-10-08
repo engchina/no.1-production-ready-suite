@@ -12,6 +12,10 @@
 - 要素の metadata に `sheet_name`・`row_start` / `row_end`・`cell_range`・`cell_column_start` /
   `cell_column_end`・`header_row` を持ち、chunking が chunk の場所にまとめる。
 - 選択肢（`ExcelOptions`）は Document Recipe の `excel_options` から前処理へ渡る。
+- 列の役割（`SheetColumn.role`。#1281）: 設定値の表の「説明・既定値・例示・現在値・推奨値・
+  設定できる範囲」の列を、前処理が表頭の語（または選択肢の `column_roles`）で決める。値の列は
+  本文で列名の後に役割の表示（`既定値［資料の既定値］: 30`）を付け、回答の生成が資料の既定値・
+  例を利用者の環境の現在の値と取り違えないようにする。決められない列には役割を付けない（推測しない）。
 """
 
 from __future__ import annotations
@@ -82,6 +86,42 @@ def parse_excel_range(text: str) -> ExcelRange:
     )
 
 
+# 列の役割（#1281）。definition=説明・定義、default=既定値（出荷時・初期値）、
+# example=例示（記入例・設定例・サンプル）、current=記載時点の設定値（現在値・本番値）、
+# recommended=推奨値、allowed=設定できる範囲・選択肢。
+ColumnRole = Literal["definition", "default", "example", "current", "recommended", "allowed"]
+COLUMN_ROLES: tuple[str, ...] = (
+    "definition",
+    "default",
+    "example",
+    "current",
+    "recommended",
+    "allowed",
+)
+# 選択肢の `column_roles` で「役割を付けない」を指定する値（表頭の語で決まる役割を打ち消す）。
+COLUMN_ROLE_NONE = "none"
+ColumnRoleSetting = Literal[
+    "definition", "default", "example", "current", "recommended", "allowed", "none"
+]
+# 本文で列名の後に付ける役割の表示。値の列だけに付ける（説明の列は値ではないので付けない）。
+# 「資料の」「記載時点の」は、資料に書かれた値で、利用者の環境の今の値ではないことを示す。
+COLUMN_ROLE_TEXT_LABELS: dict[str, str] = {
+    "default": "資料の既定値",
+    "example": "例示の値",
+    "current": "記載時点の設定値",
+    "recommended": "資料の推奨値",
+    "allowed": "設定できる範囲",
+}
+
+
+def column_display_name(name: str, role: str | None) -> str:
+    """本文に出す列名（値の列は役割の表示を付ける。例: ``既定値［資料の既定値］``）。"""
+    label = COLUMN_ROLE_TEXT_LABELS.get(role or "")
+    if not label or name.strip() == label:
+        return name
+    return f"{name}［{label}］"
+
+
 class ExcelOptions(BaseModel):
     """Excel の前処理の選択肢（Document Recipe の `excel_options`）。"""
 
@@ -124,6 +164,28 @@ class ExcelOptions(BaseModel):
         ),
     )
 
+    column_role_detection: Literal["auto", "off"] = Field(
+        default="auto",
+        description=(
+            "列の役割（説明・既定値・例示・現在値・推奨値・設定できる範囲）を表頭の語から"
+            "決めるか（#1281）。auto は語が一致した列だけに付け、あいまいな列には付けない。"
+            "off は column_roles の指定だけを使う。"
+        ),
+    )
+    column_roles: dict[str, ColumnRoleSetting] = Field(
+        default_factory=dict,
+        max_length=200,
+        description=(
+            "列の役割の指定（列名か列の記号 → 役割。none は役割を付けない）。"
+            "表頭の語の判定より優先する。"
+        ),
+    )
+
+    @field_validator("column_roles")
+    @classmethod
+    def _clean_column_roles(cls, value: dict[str, str]) -> dict[str, str]:
+        return {key.strip(): role for key, role in value.items() if key.strip()}
+
     @field_validator("ranges")
     @classmethod
     def _valid_ranges(cls, value: list[str]) -> list[str]:
@@ -145,6 +207,15 @@ class HeaderDetection(BaseModel):
 class SheetColumn(BaseModel):
     name: str
     column: str = Field(description="列の記号（A, B, …）。")
+    role: ColumnRole | None = Field(
+        default=None, description="列の役割（決められない列は None。#1281）。"
+    )
+    role_method: Literal["configured", "detected"] | None = Field(
+        default=None, description="役割の決め方（選択肢の指定か、表頭の語の判定か）。"
+    )
+    role_term: str | None = Field(
+        default=None, description="役割を決めた表頭の語（判定のとき）か、指定の key。"
+    )
 
 
 class SheetPreambleRow(BaseModel):
@@ -218,14 +289,28 @@ def parse_sheet_records(source_bytes: bytes) -> SheetRecordsDocument | None:
     return document
 
 
-def _block_text(block: SheetBlock) -> str:
+def _block_text(block: SheetBlock, roles: dict[str, str] | None = None) -> str:
     if block.kind == "procedure_step":
+        # 手順の行は前処理が役割の表示を付けた列名で作る。
         text = "\n".join(line for line in block.lines if line.strip())
     else:
+        roles = roles or {}
         text = " / ".join(
-            f"{name}: {value}" for name, value in block.values.items() if value.strip()
+            f"{column_display_name(name, roles.get(name))}: {value}"
+            for name, value in block.values.items()
+            if value.strip()
         )
     return text[:_BLOCK_TEXT_MAX_CHARS]
+
+
+def _column_roles_metadata(roles: dict[str, str]) -> str | None:
+    """要素の metadata に残す列の役割（``列名=役割`` を ``; `` でつなぐ）。
+
+    要素の metadata は JSON の scalar だけを持てるので、1 つの文字列にする。
+    """
+    if not roles:
+        return None
+    return "; ".join(f"{name}={role}" for name, role in roles.items())
 
 
 def _column_bounds(cell_range: str) -> tuple[str | None, str | None]:
@@ -248,6 +333,8 @@ def sheet_records_extraction(
     order = 0
     for sheet_index, sheet in enumerate(document.sheets):
         section_path = [sheet.name]
+        roles = {column.name: column.role for column in sheet.columns if column.role}
+        roles_metadata = _column_roles_metadata(roles)
         # シート名は節（section_path）と chunk の文脈の見出しに入るので、見出しだけの要素は作らない
         # （シート名だけの場所の無い小さな chunk を作らない）。
         heading_id = f"sheet-{sheet_index:03d}"
@@ -277,7 +364,7 @@ def sheet_records_extraction(
             raw_lines.append(preamble.text)
             order += 1
         for block in sheet.blocks:
-            text = _block_text(block)
+            text = _block_text(block, roles)
             if not text:
                 continue
             column_start, column_end = _column_bounds(block.cell_range)
@@ -300,6 +387,7 @@ def sheet_records_extraction(
                         "cell_column_end": column_end,
                         "header_row": sheet.header_row,
                         "sheet_block_kind": block.kind,
+                        **({"sheet_column_roles": roles_metadata} if roles_metadata else {}),
                     },
                 )
             )
@@ -337,11 +425,16 @@ def sheet_records_extraction(
 
 
 __all__ = [
+    "COLUMN_ROLES",
+    "COLUMN_ROLE_NONE",
+    "COLUMN_ROLE_TEXT_LABELS",
     "EXCEL_HEADER_LOW_CONFIDENCE_WARNING",
     "SHEET_RECORDS_CONTENT_TYPE",
     "SHEET_RECORDS_FORMAT",
     "SHEET_RECORDS_FORMAT_VERSION",
     "SHEET_RECORD_CONTENT_KIND",
+    "ColumnRole",
+    "ColumnRoleSetting",
     "ExcelOptions",
     "ExcelRange",
     "HeaderDetection",
@@ -352,6 +445,7 @@ __all__ = [
     "SheetRecordsDocument",
     "SheetBlock",
     "SkippedSheet",
+    "column_display_name",
     "is_sheet_records_content_type",
     "parse_excel_range",
     "parse_sheet_records",

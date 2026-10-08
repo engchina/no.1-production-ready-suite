@@ -20,6 +20,12 @@
 - 空行を消す前に元の行番号を持つ。結合セルは、表頭の中では結合の範囲を埋め、データでは同じ行の
   横の結合だけを埋める（縦の結合の値を後の行へ漏らさない。手順の境目を増やさない）。普通の空のセルは
   埋めない。既定は表示されているシートだけを読み、選択肢でシートの指定・除外と列の除外ができる。
+- 列の役割（#1281）: 設定値の表の列を、表頭の語（既定値・記入例・現在値・推奨値・設定範囲・
+  説明 など。英語の語も）で決め、`SheetColumn.role` に残す。parser は値の列の本文に役割の表示を
+  付ける。語が完全に一致すれば信頼度 1.0、表頭の末尾が語なら 0.8。0.75 未満・複数の役割に当たる・
+  意味が資料ごとに違う語（「設定値」「値」）の列には付けず、診断を残す（推測しない）。表頭の推定の
+  信頼度が低いシート・役割の列が 1 つだけのシートでは語の判定を使わない。選択肢の `column_roles`
+  （列名か列の記号 → 役割）は判定より優先する。
 - 形式判定は magic bytes(ZIP=xlsx / OLE2=xls)優先、失敗時は拡張子フォールバック。
 - 未対応・依存欠如・解析失敗・空のときは passthrough(変換せず原本を使う)へ縮退する。
 """
@@ -29,14 +35,17 @@ from __future__ import annotations
 import datetime as _dt
 import io
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 from rag_parser_core.preprocess import ConvertOutcome
 from rag_parser_core.sheet_records import (
+    COLUMN_ROLE_NONE,
     SHEET_RECORDS_CONTENT_TYPE,
+    ColumnRole,
     ExcelOptions,
     ExcelRange,
     HeaderDetection,
@@ -47,11 +56,12 @@ from rag_parser_core.sheet_records import (
     SheetRecords,
     SheetRecordsDocument,
     SkippedSheet,
+    column_display_name,
 )
 from rag_parser_core.source import SourceProfile
 
 CONVERTER_NAME = "excel_to_json"
-CONVERTER_VERSION = "v2"
+CONVERTER_VERSION = "v3"
 # xlsx は ZIP(PK\x03\x04)、xls は OLE2 複合ドキュメント(D0CF11E0...)。
 _XLSX_MAGIC = b"PK\x03\x04"
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -65,6 +75,120 @@ PROCEDURE_HEADER_HINTS = ("作業項目", "作業内容", "コマンド", "確�
 # auto で table にする、データの行の埋まり方（中央値）の下限と、見る行の数。
 TABLE_DENSITY_THRESHOLD = 0.6
 _DENSITY_SAMPLE_ROWS = 50
+# 列の役割（#1281）を決める表頭の語（正規化した形。`_normalize_header` を参照）。
+# 語の選び方: 設定値の表で意味がほぼ 1 つに決まる語だけを置く。資料ごとに意味の違う語は
+# `COLUMN_ROLE_UNCERTAIN_TERMS` に置き、役割を付けずに診断だけを残す。
+COLUMN_ROLE_TERMS: dict[str, tuple[str, ...]] = {
+    "default": (
+        "既定値",
+        "既定",
+        "デフォルト",
+        "デフォルト値",
+        "初期値",
+        "初期設定",
+        "初期設定値",
+        "出荷時設定",
+        "出荷時の値",
+        "出荷時設定値",
+        "標準値",
+        "default",
+        "defaultvalue",
+        "defaults",
+        "initialvalue",
+        "factorydefault",
+    ),
+    "example": (
+        "例",
+        "記入例",
+        "入力例",
+        "設定例",
+        "記述例",
+        "記載例",
+        "値の例",
+        "例示",
+        "例示値",
+        "サンプル",
+        "サンプル値",
+        "example",
+        "examples",
+        "examplevalue",
+        "sample",
+        "samplevalue",
+        "eg",
+    ),
+    "current": (
+        "現在値",
+        "現在の値",
+        "現在の設定値",
+        "現在設定値",
+        "現行値",
+        "現行設定値",
+        "実設定値",
+        "本番値",
+        "本番設定値",
+        "実績値",
+        "currentvalue",
+        "currentsetting",
+        "actualvalue",
+        "configuredvalue",
+    ),
+    "recommended": (
+        "推奨値",
+        "推奨",
+        "推奨設定",
+        "推奨設定値",
+        "recommended",
+        "recommendedvalue",
+    ),
+    "allowed": (
+        "設定範囲",
+        "設定可能範囲",
+        "設定可能値",
+        "設定できる値",
+        "値の範囲",
+        "有効範囲",
+        "許容値",
+        "許容範囲",
+        "取りうる値",
+        "取り得る値",
+        "有効値",
+        "選択肢",
+        "allowedvalues",
+        "validvalues",
+        "validrange",
+    ),
+    "definition": (
+        "説明",
+        "定義",
+        "内容",
+        "概要",
+        "意味",
+        "用途",
+        "解説",
+        "項目説明",
+        "パラメータ説明",
+        "description",
+        "definition",
+        "meaning",
+    ),
+}
+# 表頭の一部に含まれるときに見る語の最短の長さ（「タイムアウトの既定値」「Windows 既定値」）。
+# 短い語（「例」「既定」「内容」「推奨」）は「事例」「既定外」「作業内容」のように別の意味の語にも
+# 含まれるので、表頭全体が一致したときだけ使う。
+_COLUMN_ROLE_SUFFIX_MIN_CHARS = 3
+# 資料ごとに意味の違う語（「設定値」は現場の値のことも、選べる値の一覧のこともある）。
+# 役割を付けない。
+COLUMN_ROLE_UNCERTAIN_TERMS = ("設定値", "値", "設定", "value", "values", "setting")
+COLUMN_ROLE_EXACT_CONFIDENCE = 1.0
+COLUMN_ROLE_SUFFIX_CONFIDENCE = 0.8
+# これより低い信頼度の判定は役割にしない（黙って推測しない）。
+COLUMN_ROLE_MIN_CONFIDENCE = 0.75
+# 役割が決まった列（判定と指定の合計）がこれより少ないシートでは、判定を使わない。設定値の表は
+# 説明の列と値の列、または複数の値の列を持つ。1 列だけ当たる表（検体の「サンプル」、作業の
+# 「内容」）は設定値の表とは限らない。
+COLUMN_ROLE_MIN_DETECTED_COLUMNS = 2
+_HEADER_BRACKETS = re.compile(r"[（(［\[【〔<＜][^）)］\]】〕>＞]*[）)］\]】〕>＞]")
+_HEADER_NOISE = re.compile(r"[\s_\-・:：.。、,/／※*＊]+")
 _NUMERIC_TEXT = re.compile(r"^[+-]?[\d,]+(\.\d+)?%?$|^\d{4}-\d{2}-\d{2}([ T][\d:.]+)?$")
 
 
@@ -178,6 +302,14 @@ def _excel_to_records(
         if missing:
             warnings.append(f"excel_formula_without_cached_value:{grid.name}:{missing}")
         sheets.append(sheet)
+    for key in options.column_roles:
+        # 指定した列がどのシートにも無ければ警告する（列名の書き違いに気付けるように）。
+        if not any(
+            key.casefold() in {column.name.casefold(), column.column.casefold()}
+            for sheet in sheets
+            for column in sheet.columns
+        ):
+            warnings.append(f"excel_column_role_target_not_found:{key}")
     if not any(sheet.blocks or sheet.preamble for sheet in sheets):
         return ConvertOutcome.passthrough(reason="excel_no_rows")
     document = SheetRecordsDocument(
@@ -594,6 +726,111 @@ def _procedure_blocks(
     return blocks
 
 
+def _normalize_header(text: str) -> str:
+    """表頭の語の比較用の形（全角半角・大小をそろえ、括弧の単位・注記と区切りを除く）。"""
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    folded = _HEADER_BRACKETS.sub("", folded)
+    return _HEADER_NOISE.sub("", folded)
+
+
+def detect_column_role(header: str) -> tuple[str | None, float, str | None, str | None]:
+    """表頭の語から列の役割を決める（役割・信頼度・当たった語・役割を付けない理由）。
+
+    複数行の表頭（「設定 / 既定値」）は下の行（具体的な語）から順に見て、最初に当たった行で決める。
+    """
+    for part in reversed([item for item in header.split(" / ") if item.strip()]):
+        normalized = _normalize_header(part)
+        if not normalized:
+            continue
+        exact = [role for role, terms in COLUMN_ROLE_TERMS.items() if normalized in terms]
+        if len(exact) == 1:
+            return exact[0], COLUMN_ROLE_EXACT_CONFIDENCE, part.strip(), None
+        if normalized in COLUMN_ROLE_UNCERTAIN_TERMS:
+            return None, 0.0, part.strip(), "uncertain"
+        # 長い語（3 文字以上）が表頭のどこかに含まれる役割を集める。2 つ以上なら「既定値の説明」
+        # 「既定値／推奨値」のように 1 つに決められない。1 つでも、表頭の末尾がその語でなければ
+        # （「既定値の変更履歴」）値の列とは言えないので付けない。
+        # 短い語（2 文字。「説明」「推奨」）は役割を決めるのには使わないが、末尾にあれば
+        # 1 つに決められない理由にはする（「既定値の説明」）。
+        contained: dict[str, bool] = {}
+        short_suffix: set[str] = set()
+        for role, terms in COLUMN_ROLE_TERMS.items():
+            for term in terms:
+                if len(term) >= _COLUMN_ROLE_SUFFIX_MIN_CHARS and term in normalized:
+                    contained[role] = contained.get(role, False) or normalized.endswith(term)
+                elif len(term) >= 2 and normalized.endswith(term):
+                    short_suffix.add(role)
+        if contained and len(set(contained) | short_suffix) > 1:
+            return None, 0.0, part.strip(), "ambiguous"
+        if len(contained) == 1:
+            role, at_end = next(iter(contained.items()))
+            if at_end:
+                return role, COLUMN_ROLE_SUFFIX_CONFIDENCE, part.strip(), None
+            return None, 0.0, part.strip(), "uncertain"
+    return None, 0.0, None, None
+
+
+def _column_roles(
+    columns: list[tuple[int, str, str, str]],
+    configured: Mapping[str, str],
+    *,
+    detect: bool,
+) -> tuple[list[SheetColumn], list[SheetDiagnostic]]:
+    """列（列番号・記号・列名・表頭の文字）の役割を、指定 → 表頭の語の順に決める。"""
+    by_key = {key.casefold(): (key, role) for key, role in configured.items()}
+    result: list[SheetColumn] = []
+    diagnostics: list[SheetDiagnostic] = []
+    detected: list[int] = []
+    for _, letter, name, header in columns:
+        match = by_key.get(name.casefold()) or by_key.get(letter.casefold())
+        if match is not None:
+            key, role = match
+            if role == COLUMN_ROLE_NONE:
+                result.append(SheetColumn(name=name, column=letter))
+            else:
+                result.append(
+                    SheetColumn(
+                        name=name,
+                        column=letter,
+                        role=cast(ColumnRole, role),
+                        role_method="configured",
+                        role_term=key,
+                    )
+                )
+            continue
+        result.append(SheetColumn(name=name, column=letter))
+        if not detect:
+            continue
+        role, confidence, term, reason = detect_column_role(header)
+        if role is not None and confidence >= COLUMN_ROLE_MIN_CONFIDENCE:
+            result[-1] = SheetColumn(
+                name=name,
+                column=letter,
+                role=cast(ColumnRole, role),
+                role_method="detected",
+                role_term=term,
+            )
+            detected.append(len(result) - 1)
+        elif reason is not None:
+            diagnostics.append(
+                SheetDiagnostic(code=f"column_role_{reason}", detail=f"{letter}:{term or name}")
+            )
+    configured_count = sum(1 for item in result if item.role_method == "configured")
+    if len(detected) > 0 and len(detected) + configured_count < COLUMN_ROLE_MIN_DETECTED_COLUMNS:
+        # 1 列だけ当たったシートは設定値の表と言い切れない。役割を外して診断だけを残す
+        # （指定した役割の列があれば、設定値の表として判定を使う）。
+        for index in detected:
+            column = result[index]
+            diagnostics.append(
+                SheetDiagnostic(
+                    code="column_role_not_corroborated",
+                    detail=f"{column.column}:{column.role_term or column.name}",
+                )
+            )
+            result[index] = SheetColumn(name=column.name, column=column.column)
+    return result, diagnostics
+
+
 def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
     nonempty_rows = sorted({row for (row, _), value in grid.cells.items() if value.strip()})
     if not nonempty_rows:
@@ -638,6 +875,22 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
             raw_names.append((col, letter, name))
     names = dict(zip([col for col, _, _ in raw_names], _column_names(raw_names), strict=True))
     columns = [col for col, _, _ in raw_names]
+    detect_roles = options.column_role_detection == "auto"
+    if (
+        detect_roles
+        and detection.method == "detected"
+        and detection.confidence < HEADER_LOW_CONFIDENCE
+    ):
+        # 表頭が確かでないシートでは、表頭の語で列の役割を決めない（指定の役割だけを使う）。
+        detect_roles = False
+        diagnostics.append(SheetDiagnostic(code="column_roles_skipped_low_header_confidence"))
+    sheet_columns, role_diagnostics = _column_roles(
+        [(col, _column_letter(col), names[col], header) for col, _, header in raw_names],
+        options.column_roles,
+        detect=detect_roles,
+    )
+    diagnostics.extend(role_diagnostics)
+    roles = {item.name: item.role for item in sheet_columns if item.role}
 
     preamble: list[SheetPreambleRow] = []
     for row in nonempty_rows:
@@ -672,7 +925,8 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
                 else "procedure"
             )
     if mode == "procedure" and procedure is not None:
-        blocks = _procedure_blocks(grid, data_rows, columns, names, *procedure)
+        display = {col: column_display_name(name, roles.get(name)) for col, name in names.items()}
+        blocks = _procedure_blocks(grid, data_rows, columns, display, *procedure)
     else:
         # 番号と題名の列が無い手順書は、no.1-rag と同じく表として 1 行ずつ読む。
         if mode == "procedure":
@@ -685,7 +939,7 @@ def _sheet_records(grid: _Grid, options: ExcelOptions) -> SheetRecords | None:
         header_row_count=header_count,
         header_detection=detection,
         mode=mode,
-        columns=[SheetColumn(name=names[col], column=_column_letter(col)) for col in columns],
+        columns=sheet_columns,
         preamble=preamble,
         blocks=blocks,
         diagnostics=diagnostics,
