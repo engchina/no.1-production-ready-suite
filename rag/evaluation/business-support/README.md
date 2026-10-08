@@ -13,14 +13,16 @@
 | `business-support.json` | 評価セット（19 問。うち往復のあるケース 3 問・既知の条件を渡すケース 1 問）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>` |
 | `support-guides.json` | C（業務ガイドあり）の業務ガイド 2 つ（アクセス権限の付与: 付与先 `target` 個別 / グループ、アカウントの削除: 部門長の承認 `approved` はい / いいえ）。運用手順書の記載だけから作った（#1289）。参照は `file:<ファイル名>`。アクセス権限の付与の承認・影響範囲（グループ）は、グループに付与する分岐の手順だけに係る（`impact.steps`。#1320） |
 | `sources/*.html` | PDF の原稿 |
+| `sources/portal-parameters.workbook.json` | `portal-parameters.xlsx` の原稿（シートの前書き・表頭・行） |
 
 ## 資料を作り直す
 
-原稿（`sources/*.html`）を直したら、リポジトリ直下から次で PDF / xlsx を作り直して commit します（LibreOffice と
-日本語のフォントが要ります）。
+原稿（`sources/*.html` と `sources/*.workbook.json`）を直したら、リポジトリ直下から次で PDF / xlsx を作り直して
+commit します（PDF の生成には LibreOffice と日本語のフォントが要ります。xlsx だけなら `--xlsx-only`）。生成の script は
+多段の質問の評価セット（[../multi-hop/](../multi-hop/README.md)。#1335）と共通です。
 
 ```bash
-uv run --project rag/backend python rag/scripts/generate_business_support_corpus.py
+uv run --project rag/backend python rag/scripts/generate_evaluation_corpus.py rag/evaluation/business-support
 ```
 
 ## 取り込んで評価する

@@ -73,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
-        request = _load_evaluation_request(args.golden_set)
+        request = _load_evaluation_request(args.golden_set, split=args.split)
         response_payload = _post_evaluation_request(
             api_url=_resolve_api_url(args.api_url, args.api_base_url, request.kind),
             payload=request.payload,
@@ -140,6 +140,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"評価 job の状態を取得する間隔（秒）。既定値: {DEFAULT_POLL_INTERVAL_SECONDS}",
     )
     parser.add_argument(
+        "--split",
+        choices=["dev", "holdout"],
+        help="評価セットのうち、この区分のケースだけを流します（#1335。未指定なら全部）。",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="評価 API レスポンス JSON の保存先。未指定なら stdout に出力します。",
@@ -165,8 +170,11 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_evaluation_request(path: Path) -> LoadedEvaluationRequest:
-    """golden set JSON を読み、API request schema として検証する。"""
+def _load_evaluation_request(path: Path, *, split: str | None = None) -> LoadedEvaluationRequest:
+    """golden set JSON を読み、API request schema として検証する。
+
+    `split` を渡すと、その区分（dev / holdout）のケースだけを残す（#1335）。
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -185,6 +193,11 @@ def _load_evaluation_request(path: Path) -> LoadedEvaluationRequest:
         raise EvaluationGateError(
             "評価ファイルの形式が不正です: " + _safe_validation_error_summary(exc)
         ) from exc
+    if split is not None:
+        cases = [case for case in request.cases if case.split == split]
+        if not cases:
+            raise EvaluationGateError(f"区分 {split} のケースがありません。")
+        request = request.model_copy(update={"cases": cases})
     return LoadedEvaluationRequest(kind=kind, payload=request.model_dump(mode="json"))
 
 
@@ -462,6 +475,16 @@ def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
             split: summary.model_dump(mode="json")
             for split, summary in metrics.split_breakdown.items()
         },
+        # 根拠の連鎖の完全率と、多段の質問の種類別・段の数別の内訳（#1335）。
+        "evidence_chain_complete_rate": metrics.evidence_chain_complete_rate,
+        "reasoning_type_breakdown": {
+            name: summary.model_dump(mode="json")
+            for name, summary in metrics.reasoning_type_breakdown.items()
+        },
+        "hops_breakdown": {
+            name: summary.model_dump(mode="json")
+            for name, summary in metrics.hops_breakdown.items()
+        },
     }
 
 
@@ -478,11 +501,34 @@ def _gate_summary(gate: GateEvaluation, *, passed: bool) -> str:
         if gate.ranking_metric is not None:
             prefix += f", ranking_metric={gate.ranking_metric}"
     values = ", ".join(f"{metric}={getattr(metrics, metric)}" for metric in EVALUATION_METRIC_NAMES)
-    return (
+    summary = (
         f"{prefix}: "
         f"cases={metrics.case_count}, errors={metrics.error_count}, {values}, "
         f"threshold_failures={len(metrics.threshold_failures)}"
     )
+    lines = [summary, *_reasoning_summary_lines(metrics)]
+    return "\n".join(lines)
+
+
+def _reasoning_summary_lines(metrics: EvaluationMetrics) -> list[str]:
+    """必要な根拠の集計と、多段の質問の種類別・段の数別の内訳の行（#1335。無ければ空）。"""
+    lines: list[str] = []
+    if metrics.metric_case_counts.get("required_evidence_recall"):
+        lines.append(
+            "required_evidence: "
+            f"required_evidence_recall={metrics.required_evidence_recall}, "
+            f"evidence_chain_complete_rate={metrics.evidence_chain_complete_rate}"
+        )
+    for label, breakdown in (
+        ("reasoning_type", metrics.reasoning_type_breakdown),
+        ("hops", metrics.hops_breakdown),
+    ):
+        for name, item in breakdown.items():
+            values = ", ".join(f"{metric}={value}" for metric, value in item.metrics.items())
+            lines.append(
+                f"{label}={name}: cases={item.case_count}, errors={item.error_count}, {values}"
+            )
+    return lines
 
 
 def _request_headers(tenant_id: str | None, user_id: str | None) -> dict[str, str]:
