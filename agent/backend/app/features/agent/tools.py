@@ -12,7 +12,7 @@ import logging
 import re
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
@@ -1123,9 +1123,17 @@ class McpConnectionClient:
     サービス利用者。`aud` = 接続の audience）。呼び先は `sub` の利用者の権限で実行する（#233）。
     """
 
-    def __init__(self, config: McpConnectionConfig, *, context: ToolInvocationContext) -> None:
+    def __init__(
+        self,
+        config: McpConnectionConfig,
+        *,
+        context: ToolInvocationContext,
+        extra_claims: Mapping[str, str] | None = None,
+    ) -> None:
         self._config = config
         self._context = context
+        # サービストークンに足す claim（画面の操作の印 `purpose` など。#1311）。
+        self._extra_claims = dict(extra_claims or {})
 
     @property
     def server_id(self) -> str:
@@ -1247,7 +1255,11 @@ class McpConnectionClient:
 
     def _service_token(self) -> str:
         subject = _mcp_subject(self._context, code="mcp")
-        claims = {"run_id": self._context.run_id, "agent_id": self._context.agent_id}
+        claims = {
+            **self._extra_claims,
+            "run_id": self._context.run_id,
+            "agent_id": self._context.agent_id,
+        }
         try:
             return issue_service_token(
                 get_settings().app_service_token_secret,
