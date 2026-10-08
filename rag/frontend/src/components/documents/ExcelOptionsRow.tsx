@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { SelectField, TextField, ToggleChip, type SelectFieldOption } from "@engchina/production-ready-ui";
-import type { ExcelOptions } from "@/lib/api";
+import type { ExcelColumnRoleSetting, ExcelOptions } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /** 前処理 excel_to_json の選択肢の既定（backend の `ExcelOptions` と同じ）。 */
@@ -16,7 +16,58 @@ export const DEFAULT_EXCEL_OPTIONS: ExcelOptions = {
   include_hidden_sheets: false,
   exclude_columns: [],
   ranges: [],
+  column_role_detection: "auto",
+  column_roles: {},
 };
+
+/**
+ * 列の役割の指定の書き方で使う役割の名前（#1281）。入力の語なので i18n ではなく、backend の役割の値と
+ * 1 対 1 に対応させる（英語の値もそのまま受け付ける）。
+ */
+const COLUMN_ROLE_NAMES: Record<ExcelColumnRoleSetting, string> = {
+  definition: "説明",
+  default: "既定値",
+  example: "例示",
+  current: "現在値",
+  recommended: "推奨値",
+  allowed: "範囲",
+  none: "なし",
+};
+
+const COLUMN_ROLE_BY_NAME = new Map<string, ExcelColumnRoleSetting>(
+  (Object.entries(COLUMN_ROLE_NAMES) as [ExcelColumnRoleSetting, string][]).flatMap(
+    ([role, name]): [string, ExcelColumnRoleSetting][] => [
+      [name, role],
+      [role, role],
+    ],
+  ),
+);
+
+/** 「D=例示、設定値=現在値」を役割の指定にする（読めない項目は invalid に返す）。 */
+export function parseColumnRoles(text: string): {
+  roles: Record<string, ExcelColumnRoleSetting>;
+  invalid: string[];
+} {
+  const roles: Record<string, ExcelColumnRoleSetting> = {};
+  const invalid: string[] = [];
+  for (const item of parseNameList(text)) {
+    const [key, name, ...rest] = item.split(/[=＝]/).map((part) => part.trim());
+    const role = name ? COLUMN_ROLE_BY_NAME.get(name.toLowerCase()) : undefined;
+    if (!key || !role || rest.length) {
+      invalid.push(item);
+      continue;
+    }
+    roles[key] = role;
+  }
+  return { roles, invalid };
+}
+
+/** 役割の指定を入力欄の文字列にする。 */
+export function formatColumnRoles(roles: Record<string, ExcelColumnRoleSetting> | undefined): string {
+  return Object.entries(roles ?? {})
+    .map(([key, role]) => `${key}=${COLUMN_ROLE_NAMES[role] ?? role}`)
+    .join("、");
+}
 
 const MODE_OPTIONS: SelectFieldOption<ExcelOptions["mode"]>[] = [
   { value: "auto", label: t("documents.excelOptions.mode.auto") },
@@ -53,6 +104,10 @@ export function excelOptionsSummary(options: ExcelOptions | null | undefined): s
   if (value.ranges?.length) {
     parts.push(t("documents.excelOptions.summary.ranges", { ranges: value.ranges.join("、") }));
   }
+  if (value.column_role_detection === "off") parts.push(t("documents.excelOptions.summary.columnRolesOff"));
+  if (Object.keys(value.column_roles ?? {}).length) {
+    parts.push(t("documents.excelOptions.summary.columnRoles", { roles: formatColumnRoles(value.column_roles) }));
+  }
   return parts.join(" · ");
 }
 
@@ -82,6 +137,8 @@ export function ExcelOptionsRow({
     exclude_columns: current.exclude_columns.join("、"),
     ranges: (current.ranges ?? []).join("、"),
   }));
+  const [columnRolesText, setColumnRolesText] = useState(() => formatColumnRoles(current.column_roles));
+  const columnRolesInvalid = parseColumnRoles(columnRolesText).invalid;
   const [headerRowText, setHeaderRowText] = useState(current.header_row ? String(current.header_row) : "");
   const labelId = `document-excel-options-${documentId}`;
   const update = (patch: Partial<ExcelOptions>) => onChange({ ...current, ...patch });
@@ -182,6 +239,49 @@ export function ExcelOptionsRow({
               disabled={disabled}
               spellCheck={false}
               onChange={(event) => updateList("ranges", event.target.value)}
+            />
+          </div>
+          <div className="space-y-1 sm:col-span-2">
+            <span id={`${labelId}-role-detection`} className="text-sm font-medium text-fg">
+              {t("documents.excelOptions.columnRoleDetection")}
+            </span>
+            <div className="flex flex-wrap gap-1" role="group" aria-labelledby={`${labelId}-role-detection`}>
+              <ToggleChip
+                selected={(current.column_role_detection ?? "auto") === "auto"}
+                disabled={disabled}
+                onClick={() => update({ column_role_detection: "auto" })}
+              >
+                {t("documents.excelOptions.columnRoleDetection.auto")}
+              </ToggleChip>
+              <ToggleChip
+                selected={current.column_role_detection === "off"}
+                disabled={disabled}
+                onClick={() => update({ column_role_detection: "off" })}
+              >
+                {t("documents.excelOptions.columnRoleDetection.off")}
+              </ToggleChip>
+            </div>
+            <p className="text-xs text-fg-muted">{t("documents.excelOptions.columnRoleDetection.hint")}</p>
+          </div>
+          <div className="sm:col-span-2">
+            <TextField
+              id={`${labelId}-column-roles`}
+              label={t("documents.excelOptions.columnRoles")}
+              helper={t("documents.excelOptions.columnRoles.hint")}
+              error={
+                columnRolesInvalid.length
+                  ? t("documents.excelOptions.columnRoles.invalid", { items: columnRolesInvalid.join("、") })
+                  : undefined
+              }
+              value={columnRolesText}
+              disabled={disabled}
+              spellCheck={false}
+              onChange={(event) => {
+                const text = event.target.value;
+                setColumnRolesText(text);
+                // 読めた項目だけを保存する（読めない項目は欄の下に示す）。
+                update({ column_roles: parseColumnRoles(text).roles });
+              }}
             />
           </div>
           <div className="space-y-1 sm:col-span-2">

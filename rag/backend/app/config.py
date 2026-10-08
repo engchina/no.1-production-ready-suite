@@ -1025,7 +1025,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default_factory=ExcelOptions,
         description=(
             "前処理 excel_to_json の選択肢(#1221。読み方 auto/table/procedure・表頭の行と行数・"
-            "読むシート・読まないシート・非表示のシート・読まない列)。文書レシピの excel_options で"
+            "読むシート・読まないシート・非表示のシート・読まない列・列の役割の判定と指定(#1281))。"
+            "文書レシピの excel_options で"
             '上書きできる。環境変数は JSON(例: {"mode": "table", "header_row": 2})。'
         ),
     )
