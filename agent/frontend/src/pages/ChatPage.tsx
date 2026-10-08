@@ -57,6 +57,7 @@ import { isRunnableAgent } from "@/lib/agent-availability";
 import { answerReview } from "@/lib/answer-review";
 import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { RagFigureButton } from "@/components/evidence/RagFigure";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
@@ -719,6 +720,23 @@ function RunChatTurn({
                   ) : null}
                   {citation.text ? (
                     <p className="mt-1 line-clamp-3 break-words text-fg-muted">{citation.text}</p>
+                  ) : null}
+                  {citation.figure ? (
+                    // 図の根拠は元の図を開いて確かめられる（#1311）。AI が読んだ説明ならその旨を添える。
+                    <div className="mt-2 space-y-1">
+                      {citation.aiFigureDescription ? (
+                        <p className="text-fg-muted" data-testid="chat-source-figure-description">
+                          {t("evidence.figureDescription")}
+                        </p>
+                      ) : null}
+                      <RagFigureButton
+                        runId={run.id}
+                        figure={citation.figure}
+                        title={citation.title}
+                        location={citation.location}
+                        testId={`chat-source-figure-${index}`}
+                      />
+                    </div>
                   ) : null}
                 </li>
               ))}

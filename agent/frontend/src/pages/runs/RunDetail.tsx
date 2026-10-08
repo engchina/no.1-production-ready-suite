@@ -41,6 +41,7 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
 import { ragEvidenceItems } from "@/lib/rag-evidence";
+import { RagFigureButton } from "@/components/evidence/RagFigure";
 import { artifactTable, runToolResultTables, stepResultTable, type ToolResultTable } from "@/lib/run-tables";
 import {
   approvalStatusView,
@@ -728,7 +729,7 @@ function ArtifactsPanel({
                   testId={`run-answer-${artifact.id}`}
                 />
               ) : artifact.kind === "rag_evidence" ? (
-                <RagEvidenceArtifact artifact={artifact} />
+                <RagEvidenceArtifact artifact={artifact} runId={run.id} />
               ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
                 <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
               ) : artifact.kind === "structured_table" ? (
@@ -782,7 +783,7 @@ function ReviewArtifact({ artifact, showRaw }: { artifact: Artifact; showRaw: bo
   );
 }
 
-function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
+function RagEvidenceArtifact({ artifact, runId }: { artifact: Artifact; runId: string }) {
   const answer = typeof artifact.content.answer === "string" ? artifact.content.answer : null;
   const evidence = ragEvidenceItems(artifact.content);
   const contexts = arrayOfRecords(artifact.content.contexts);
@@ -812,6 +813,18 @@ function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
                     : item.location
                 }
                 detail={item.text}
+                action={
+                  item.figure ? (
+                    // 図の根拠は元の図を開いて確かめられる（#1311）。
+                    <RagFigureButton
+                      runId={runId}
+                      figure={item.figure}
+                      title={item.title}
+                      location={item.location}
+                      testId={`run-evidence-figure-${item.key}`}
+                    />
+                  ) : null
+                }
               />
             ))}
           </div>
@@ -907,10 +920,13 @@ function EvidenceItem({
   title,
   subtitle,
   detail,
+  action,
 }: {
   title: string;
   subtitle?: string | null;
   detail?: string | null;
+  /** 根拠への操作（図を開くなど。#1311）。 */
+  action?: ReactNode;
 }) {
   return (
     <div className="min-w-0 rounded-md bg-surface-sunken p-3">
@@ -919,6 +935,7 @@ function EvidenceItem({
       {detail ? (
         <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">{detail}</p>
       ) : null}
+      {action ? <div className="mt-2">{action}</div> : null}
     </div>
   );
 }
