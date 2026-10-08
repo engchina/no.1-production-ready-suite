@@ -869,8 +869,15 @@ cv2 の headless 版は各サービスの `uv.lock` に固定されている（v
 
 ## 本番構成
 
-OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、RAG 用の Compute 1 台に
-NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。#286）を作る。Docker は使わない。
+OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/stack/`](../../terraform/README.md)、#217）は、選んだ製品を 1 台の Compute に入れ
+（#1316）、NL2SQL / Agent と同じネイティブ配備（uv の venv + systemd + Nginx。#286）を作る。Docker は使わない。
+
+1 台の Compute（`platform/deploy/suite-init.sh` が `PR_SUITE_MODE=true` で `rag/init_script.sh` を呼ぶ。#1316）では、下の表と次の点が違う。
+
+- 実行ユーザーは NL2SQL / Agent と同じ `ubuntu`（共通の `platform/.env`・Wallet・`~/.oci/config` を 3 製品で読み書きするため）。`ragsvc` は作らない
+  （下の表と手順の `sudo -u ragsvc HOME=/var/lib/production-ready-rag` は `sudo -u ubuntu` に読み替える）。sudoers は `ubuntu` に同じ unit の操作を許可する。
+- frontend は `FRONTEND_BASE_PATH=/rag/` で build し、Nginx の 1 つの site（suite）が `/rag/` で配信して `/rag/api/` を prefix を外して backend へ proxy する
+  （SSE・MCP の長い timeout・ログインの上限・upload の上限は同じ）。RAG の `init_script.sh` は Nginx の site を書かない。
 ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL / Agent と共有する）、RAG の system schema はアプリの CLI（`app.rag.system_schema_cli initialize`）で適用する。
 
 | 構成要素 | 内容 |

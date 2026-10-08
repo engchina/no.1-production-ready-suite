@@ -21,11 +21,17 @@ proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
 application services are ready.
 The bootstrap starts:
 
-- Nginx on the configured application port, default `80`
-- `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8000`
+- `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8010`
+  (the same port as local development; changed from `8000` in #1316 so that RAG
+  can use `8000` on the same Compute)
+- the single Nginx site of the suite (`platform/deploy/suite-init.sh`), on `443`
+  (HTTPS, default) or `80`
 
-Nginx serves `frontend/dist` at `/` and reverse proxies `/api/` to the backend.
-Only TCP `80` needs to be opened publicly for the application. If ADB uses a
+The stack puts every selected product on one Compute (#1316). Nginx serves the
+NL2SQL `frontend/dist` (built with `FRONTEND_BASE_PATH=/nl2sql/`) at `/nl2sql/`
+and reverse proxies `/nl2sql/api/` to the backend with the `/nl2sql` prefix
+removed. Open TCP `443` (and `80` for the redirect to HTTPS) publicly; see
+`terraform/README.md` for the HTTPS certificate. If ADB uses a
 private endpoint, the selected network must still allow Compute to reach ADB on
 TCP `1522`.
 
@@ -222,10 +228,10 @@ sudo journalctl -u production-ready-nl2sql-schema-refresh-worker -f
 sudo journalctl -u production-ready-nl2sql-quality-evaluation-worker -f
 sudo journalctl -u production-ready-nl2sql-ontology-worker -f
 sudo nginx -t
-sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log
-curl -i http://127.0.0.1:8000/api/health
-curl -i http://127.0.0.1/api/health
-curl -i http://127.0.0.1/health
+sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log /var/log/nginx/production-ready-suite-error.log
+curl -i http://127.0.0.1:8010/api/health
+curl -ik https://127.0.0.1/nl2sql/api/health   # HTTPS が off の環境は http://127.0.0.1/nl2sql/api/health
+curl -ik https://127.0.0.1/nl2sql/health
 ```
 
 ### Validate an updated or repaired Compute instance
