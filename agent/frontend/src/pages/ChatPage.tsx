@@ -54,8 +54,10 @@ import {
   type ThreadSummary,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
+import { answerReview } from "@/lib/answer-review";
 import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -610,6 +612,8 @@ function RunChatTurn({
   const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   const failure = run.status === "failed" ? failureMessage(run) : null;
+  // 回答の確かめ（確かめた条件・確認待ちの質問・業務ガイド・資料で確かめた結果。#1286）。作成中は出さない。
+  const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 処理の経過の状態を追う（3 製品共通。#1160）。回答の作成中（取り直している間）に会話の取得が途絶えたら
   // 取り直し、終端まで追う。承認待ちは利用者の判断を待つ間なので取り直さない。
   const progress = useChatProgressTracker({
@@ -688,6 +692,8 @@ function RunChatTurn({
             </div>
           </Banner>
         ))}
+
+        {review ? <AnswerReviewPanel review={review} testId={`chat-review-${run.id}`} /> : null}
 
         {citations.length > 0 ? (
           <Disclosure
