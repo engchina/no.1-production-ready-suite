@@ -19,10 +19,14 @@ Agent の回答の組み立て:
 - 回答: Run の成果物 `answer` の本文（最終の検証 `answer_validation` の後の本文）。
 - 引用: その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠（出てきた順・重複なし）。
   本文は MCP の `excerpt`（最大 1000 文字）なので、必要な根拠の照合は抜粋の範囲で行う。
-- 対応（outcome）: その Run の最後の `rag_search` の `outcome`
-  （`outcome_source=agent_rag_search`）。
-  `rag_search` を呼ばなかった Run は、回答の最後の行が問い（？）なら確認の質問、それ以外は RAG の
-  評価と同じ推定（拒答の文か）にする（`outcome_source=inferred`）。
+- 対応（outcome）: Run の成果物 `answer` の `outcome.value`（Agent の Control Plane が最終の
+  回答に決定的に付けた対応。RAG の AnswerEnvelope と同じ語彙。#1305。
+  `outcome_source=agent_answer`）。
+  対応を持たない成果物（#1305 より前の Agent）は、その Run の最後の `rag_search` の `outcome`
+  （`outcome_source=agent_rag_search`）。`rag_search` も呼ばなかった Run だけ、回答の最後の行
+  （最終の検証が足す定型の注記を除く）が問い（？）なら確認の質問、それ以外は RAG の評価と同じ
+  推定（拒答の文か）にする（`outcome_source=inferred`。推定は補助で、結果の
+  `agent.outcome_sources` に件数を残す）。
 
     uv run python -m app.rag.agent_evaluation_cli run /tmp/business-support.resolved.json \\
         --agent-api-base-url http://127.0.0.1:8020 --create-agent \\
@@ -50,6 +54,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.rag.evaluation import case_error_result, score_case_answers, summarize_case_results
+from app.rag.evaluation_handling import EVALUATION_OUTCOMES
 from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
@@ -71,9 +76,17 @@ MCP_TOOL_SEPARATOR = "__"
 # Agent の組み込みの MCP 接続（RAG）の ID。モデルが呼ぶツールの名前は `<接続>__<ツール>`
 # （Agent #757）。指示にはこの名前を書く（素の名前だと存在しないツールを呼ぶ。#1303）。
 RAG_MCP_CONNECTION = "rag"
+OUTCOME_SOURCE_ANSWER = "agent_answer"
 OUTCOME_SOURCE_TOOL = "agent_rag_search"
 OUTCOME_SOURCE_INFERRED = "inferred"
 _QUESTION_ENDINGS = ("？", "?")
+# Agent の最終の検証が回答の末尾に足す定型の注記（推定で最後の行を見るときに除く。#1305）。
+_AGENT_NOTICES = frozenset(
+    {
+        "この回答は検証できませんでした。",
+        "この回答は資料の根拠を使っておらず、資料と照らし合わせて確かめていません。",
+    }
+)
 
 
 def agent_tool_name(tool_name: str) -> str:
@@ -179,6 +192,14 @@ def answer_text(run: Mapping[str, Any]) -> str:
     return text if isinstance(text, str) else ""
 
 
+def answer_outcome(run: Mapping[str, Any]) -> str | None:
+    """成果物 `answer` の対応（`outcome.value`。#1305）。無い・語彙に無ければ None。"""
+    content = _artifact(run, "answer")
+    outcome = content.get("outcome") if content else None
+    value = outcome.get("value") if isinstance(outcome, Mapping) else None
+    return value if isinstance(value, str) and value in EVALUATION_OUTCOMES else None
+
+
 def validation_status(run: Mapping[str, Any]) -> str | None:
     content = _artifact(run, "answer_validation")
     status = content.get("status") if content else None
@@ -213,7 +234,11 @@ def evidence_citations(run: Mapping[str, Any]) -> list[RetrievedChunk]:
 
 
 def _asks_question(answer: str) -> bool:
-    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    lines = [
+        line.strip()
+        for line in answer.splitlines()
+        if line.strip() and line.strip() not in _AGENT_NOTICES
+    ]
     return bool(lines) and lines[-1].endswith(_QUESTION_ENDINGS)
 
 
@@ -224,19 +249,28 @@ def agent_turn(run: Mapping[str, Any], *, elapsed_ms: float) -> AgentTurn:
     last = searches[-1] if searches else None
     details: dict[str, Any] = {}
     outcome_source = OUTCOME_SOURCE_INFERRED
-    if last is not None and isinstance(last.get("outcome"), str) and last.get("outcome"):
+    recorded = answer_outcome(run)
+    if recorded is not None:
+        details["outcome"] = recorded
+        outcome_source = OUTCOME_SOURCE_ANSWER
+    elif last is not None and isinstance(last.get("outcome"), str) and last.get("outcome"):
         details["outcome"] = last["outcome"]
-        details["clarifications"] = list(_records(last.get("clarifications")))
-        if last.get("insufficient_reason"):
-            details["insufficient_reason"] = last["insufficient_reason"]
         outcome_source = OUTCOME_SOURCE_TOOL
     elif _asks_question(answer):
         details["outcome"] = "needs_clarification"
+    if last is not None and outcome_source != OUTCOME_SOURCE_INFERRED:
+        # 確認の質問で聞いた条件（聞き直しの採点）は、確認の質問を返したときだけ
+        # rag_search の問いを使う（Agent が問いを返していない回答で聞き直しを数えない）。
+        if details["outcome"] == "needs_clarification":
+            details["clarifications"] = list(_records(last.get("clarifications")))
+        if last.get("insufficient_reason"):
+            details["insufficient_reason"] = last["insufficient_reason"]
     usage = run.get("usage")
     details["agent"] = {
         "run_id": run.get("id"),
         "status": run.get("status"),
         "validation_status": validation_status(run),
+        "outcome_source": outcome_source,
         "tool_calls": tool_call_counts(run),
         "model_requests": usage.get("requests") if isinstance(usage, Mapping) else None,
     }
@@ -495,9 +529,19 @@ def evaluate(
         log(
             f"[{index}/{len(request.cases)}] {case.id}: {outcome.result.status} "
             f"outcome={outcome.result.observed_outcome} "
+            f"source={outcome.result.outcome_source} "
             f"handling={outcome.result.handling_correct}"
         )
     return summarize_case_results(results, thresholds=request.thresholds), records
+
+
+def outcome_source_counts(records: Sequence[RunRecord]) -> dict[str, int]:
+    """完了した Run の対応の出所ごとの数（agent_answer / agent_rag_search / inferred）。"""
+    counts: dict[str, int] = {}
+    for record in records:
+        if record.outcome_source:
+            counts[record.outcome_source] = counts.get(record.outcome_source, 0) + 1
+    return counts
 
 
 # ---- 比較の要約 ---------------------------------------------------------------------------
@@ -713,6 +757,8 @@ def _run_command(args: argparse.Namespace) -> int:
             "agent_id": agent_id,
             "search_answer_profile_id": args.search_answer_profile_id,
             "runs": [record.as_json() for record in records],
+            # 対応の出所ごとの Run の数（推定 inferred が残っていないかを確かめる。#1305）。
+            "outcome_sources": outcome_source_counts(records),
             "summary": summarize_result(data),
         },
     }

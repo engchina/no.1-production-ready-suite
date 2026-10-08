@@ -186,7 +186,17 @@ def test_run_calls_tool_and_records_answer(monkeypatch: MonkeyPatch, calls: _Cal
     assert step.status == "completed"
     assert step.tool_call is not None and step.tool_call.trace_id == "call-1"
     answer = next(item for item in run.artifacts if item.kind == "answer")
-    assert answer.content == {"text": "今月の売上は 3 件です。"}
+    # 回答の対応（#1305）。Control Plane のツールは現場のデータの道具に数えない。
+    assert answer.content == {
+        "text": "今月の売上は 3 件です。",
+        "outcome": {
+            "schema_version": 1,
+            "value": "answered",
+            "basis": "answer_passages",
+            "rag_outcome": None,
+            "signals": [],
+        },
+    }
     # モデルには Agent と Skill の指示と、ツールの結果を渡している。
     first, second = model.calls
     assert "経理の質問に答える。" in str(first.system_instructions)

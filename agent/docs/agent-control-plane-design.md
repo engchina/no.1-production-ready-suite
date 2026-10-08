@@ -381,6 +381,20 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 かかわらず外さない（#1306。`answer_passages` が決定的に判定し、成果物の段落に `non_claim` を付ける。迷うもの・
 数量や操作を抱き合わせた文は主張として扱う）。RAG の `rag_validate_answer` も、見出し・出典の行・質問は監査せず
 `claims` に含めない。段落を外した後に見出し・出典だけが残れば、それも消す。
+回答の対応（#1305）: Control Plane は最終の検証の後、回答の成果物（`kind="answer"`）の `outcome` に、RAG の回答の記録
+（AnswerEnvelope）と同じ語彙の対応（`answered` / `conditional` / `needs_clarification` / `needs_environment_data` /
+`needs_human` / `insufficient_evidence`）を、モデルを呼ばずに決めて残す（`answer_outcome`。内容は `value`・決めた手がかりの
+`basis`・最後の `rag_search` の対応 `rag_outcome`・不足の印 `signals`）。決め方は上から順に、空の回答 → 拒答、確認の質問
+だけの回答 → `needs_clarification`、最終の検証が本文をすべて載せなかった → 拒答、回答が最後の `rag_search` に拠る（その後に
+根拠を集め直していない）ならその対応（`needs_environment_data` の後に現場のデータの道具が成功したら `answered` /
+`conditional`、確認を求められたが質問だけでなく答えたら `conditional`、`answered` でも回答が不足を示せば `conditional`）、
+`rag_search` に拠らず業務ガイドの判断が人への引き継ぎなら `needs_human`、それ以外は Agent が自分で組み立てた回答として
+段落で決める（主張の段落〔最終の検証で外した段落と、実データの確認を促すだけの段落〔RAG の判定 `data_confirmation`〕を
+除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、それ以外は拒答。主張があり、不足の印〔資料に
+記載が無い文・主張に添えた質問・「確かめられていない点」の節・外した段落・決定的な検査の error・実データの確認〕があれば
+`conditional`、無ければ `answered`）。決められなければ `outcome` を付けずに回答を保存する。業務支援の評価（#1289 の D）は
+これで採点する（`rag/evaluation/business-support/README.md`）。モデルに対応を申告させる（構造化出力）方式は、回答の形が
+Agent ごとに変わり、申告と本文の食い違いの扱いも要るため採らない。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
 （`agent.approvals.decide` を持つ利用者だけ）。実行中・承認待ちのあいだは次の質問を送れない（前の回答を履歴に含めるため）。
 Run は Agent とゴールだけを受け取る（実行先の選択は無い）。Runtime 画面は組み込み Runtime の状態（SDK の版・既定のモデル・
