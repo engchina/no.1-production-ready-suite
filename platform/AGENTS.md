@@ -1,68 +1,36 @@
 # AGENTS.md — Production Ready Platform
 
-> **共通基盤（`platform/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
-> Claude Code と Codex の両方がこのファイルを直接読みます（`CLAUDE.md` は置かない。#1263）。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
-> 共有パッケージの運用ルール（版管理・変更時の確認範囲）は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
-> Issue には `platform` label を付け、PR title の scope は `platform` にする。`platform/` の変更は統合 CI で全製品の job を実行する（frontend 側（`packages/ui`・`packages/system-settings`・`docs/design-system/`）の変更は各製品の frontend / e2e の job、backend 側（`packages/backend_core`・`packages/system_settings_backend`）の変更は各製品の backend の job。#339）。
+> 共通基盤（`platform/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステムの共通ルール・共通の技術方針は、root の [../AGENTS.md](../AGENTS.md) を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集する。
+> 共有パッケージの運用（版管理・変更時の確認範囲）は [CONTRIBUTING.md](./CONTRIBUTING.md)。Issue の label と PR title の scope は `platform`。
 
 ## デザインシステム / UI
 
-- **UI に触る変更（`packages/ui` および各製品（`rag/` `nl2sql/` `agent/`）の `frontend/`）では、`docs/design-system/` を正本とする。** 作業前に [ARCHITECTURE.md](./docs/design-system/ARCHITECTURE.md) を読む。トークン値・コンポーネント仕様・意図的な見た目の変更点は [README.md](./docs/design-system/README.md) に、実装の参照は [components-reference.md](./docs/design-system/components-reference.md) にある。
-- **依存の向きを逆流させない。** デザインシステムの決定 → `packages/ui` → 各製品（`file:../../platform/packages/ui` リンク）の一方向のみ。製品側でコンポーネントやトークンを新規実装してはならない。必要になった場合は `packages/ui` に入れる Issue を立てる。
-- **各製品が持てるのは `nav-config.ts`（ナビ構造）、`i18n.ts`（業務コピー）、データ取得・状態管理・権限、ドメイン enum → コンポーネント prop の対応表、画面固有の業務レイアウトのみ。** 色・型・余白・角丸・影・モーションは `packages/ui` が持つ。
-- 共通の権限管理（`packages/system-settings` の `RolePermissionsPage`）は、渡された権限の一覧の順にグループを並べる。一覧は製品が `permissionNavSections` / `arrangePermissionsByNav` で左のナビにそろえてから渡す（規則は [../AGENTS.md](../AGENTS.md)「共通の仕組みと製品固有の仕組みの分け方」。#567）。
-- 1製品しか使わないもの（`WorkflowProgressStrip`、オントロジーグラフ等）はその製品のディレクトリに置いてよい。判断基準は **「他の2製品がこれを欲しがるか」** — 欲しがるなら `packages/ui` に入れる。
+- **`packages/ui` と各製品の `frontend/` の UI は `docs/design-system/` が正本。** 依存の向き・製品が持てるもの・禁止事項・画面の構成・UI 変更の検証は root の「デザインシステム / UI」に従う。
+- 共通の権限管理（`packages/system-settings` の `RolePermissionsPage`）は、渡された権限の一覧の順にグループを並べる。一覧は製品が `permissionNavSections` / `arrangePermissionsByNav` で左のナビにそろえてから渡す（root「共通の仕組みと製品固有の仕組みの分け方」）。
+- 1 製品しか使わないもの（`WorkflowProgressStrip`、オントロジーグラフ等）はその製品に置いてよい。
 
-### 禁止事項
+### `packages/ui` の実装の規則
 
-- 生の hex（`#1a73c1` 等）と生の px を書く。トークンを `var()` で参照する。
-- 製品の `globals.css` に色トークンを定義する。`globals.css` で `@import "tailwindcss"` の後に `@import "@production-ready/ui/styles.css"` する（`main.tsx` から JS で import すると共有ユーティリティが生成されない）。
-- `TextField` / `PageHeader` / ボタン等の共有コンポーネントを再実装する。
-- `<table>` を手書きする。`DataTable` を使う。例外は「元の文書の表を再現して編集するグリッド」（見出し行がなく、列数が表ごとに変わるもの。RAG の `ReviewTextEditor.tsx`）だけで、使う理由をコードのコメントに書く（#129）。
-- `<div style={{ padding: "1.5rem 2rem" }}>` のような余白コンテナを手書きする。`PageBody` を使う。
-- `ToggleChip` をタブ代わりに使う。タブ＝ビュー切替は `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
-- `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、先頭アイコンがスピナーに置き換わる。
-- 回転するアイコン（スピナー）を共有の `Spinner` 以外で作る。`packages/ui` の部品の中でも、回すのは `Spinner` だけ（`Button` の `loading`・`ProcessingIndicator` / `TimedLoadingState`・`ChatProgress`・`LoadMoreFooter` などは `Spinner` を通す）。`Spinner` の形（全周のトラック + 180 度対称の 2 本のアーク）と箱（回転しない固定の正方形の `span.pr-spinner` の中で svg だけが回る）を崩さない。1 本のアーク・欠けた円弧にすると、回転で見た目の重心が回って上下に揺れて見える（#1180。旧 NL2SQL の `StableLoadingIcon` の対称のアークを共有化のときに失い、再発した）。
-- **製品ごとのアクセント色を作る。** 製品は wordmark・ナビ・内容で区別する。
-- 絵文字と手描き SVG。アイコンは `lucide-react` のコンポーネントを使い、共有コンポーネントには `icon={Upload}` のように `LucideIcon` として渡す（Lucide 名の文字列では渡さない）。
-- コンポーネント内部パス（`components/core/**` 等）への直 import。パッケージのルートから import する。
+- **回すのは `Spinner` だけ。** `packages/ui` の部品の中でも、`Button` の `loading`・`ProcessingIndicator` / `TimedLoadingState`・`ChatProgress`・`LoadMoreFooter` などは `Spinner` を通す。`Spinner` の形（全周のトラック + 180 度対称の 2 本のアーク）と箱（回転しない固定の正方形の `span.pr-spinner` の中で svg だけが回る）を崩さない（理由は README §4「`Spinner`」。#1180）。
+- アイコンは `lucide-react` のコンポーネントを `LucideIcon` として受け取る（`icon={Upload}`。Lucide 名の文字列では受け取らない）。
+- `wide` の画面では、カードの中身も 100% の幅を使う。フォーム・危険な操作の区画・検索欄のコンテナに max-width を付けず、フォームは grid の段組み、検索欄はツールバーの比率で埋める（README §4「wide 画面の 100% 充填」）。
 
-### 画面の構成
+### `packages/ui` の変更の検証
 
-すべての画面は次の構成に従う。この順序を外れた画面は review で差し戻す。
-
-```tsx
-<AppShell sidebar={<Sidebar … />}>
-  <PageHeader title="…" actions={…} tabs={<Tabs … />} />
-  <PageBody>
-    <Section title="…">
-      …
-    </Section>
-  </PageBody>
-</AppShell>
-```
-
-- `PageHeader` と `PageBody` に `wide` を渡す場合は**必ず両方に同じ値**を渡す。片方だけだと 1920px で左端が 240px ずれる。
-- `wide` 画面では**カードの中身も 100% の幅を使う**。フォーム・危険な操作区画・検索欄のコンテナに max-width を付けず、フォームは grid の段組み、検索欄は toolbar の比率配分で埋める（README §4「wide 画面の 100% 充填」）。
-- 単位の境界: **文字サイズとコントロール高さは px**（ルート非依存）、**余白とレイアウト寸法は rem**（14px ルート）。
-
-### UI 変更の検証
-
-- `packages/ui` の変更は、**ライト / ダークの両テーマ**と、**1280px / 1920px の両幅**で確認する。
-- 色・コントラストに関わる変更では、`docs/design-system/reference/*.html` をブラウザで開いて実測値と突き合わせる。
-- キーボード操作（Tab 順、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。
-- 状態を表す UI は**色だけに依存しない**こと。`StatusBadge` / `Banner` / `Toast` はアイコンで冗長に符号化する。グレースケールにして判別できるか確認する。
+- ライト / ダーク、1280px / 1920px、キーボード操作（Tab 順・フォーカスリング・`Tabs` の ← → / Home / End）を確かめる。
+- 色・コントラストに関わる変更は、`docs/design-system/reference/*.html` をブラウザで開いて実測値と突き合わせる。
+- 状態を表す UI はアイコンでも符号化し、グレースケールでも判別できるか確かめる。
 - `docs/design-system/README.md` §9 の検収基準を PR の `検証結果` に転記する。
 
 ### lint
 
-`docs/design-system/adherence.oxlintrc.json` が、デザインシステム遵守ルールの正本である。**新規コードにこの lint を通すことが、デザインシステムからのドリフトを止める唯一の現実的な手段である。**
+`docs/design-system/adherence.oxlintrc.json` がデザインシステムの遵守ルールの正本。新しいコードにこの lint を通すことで、デザインシステムからのずれを止める。
 
-- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出するのは次の 11 個: 生の hex、inline style の生の px、デザインシステムに無い書体、文字サイズ・行間・字間・角丸の任意値（`text-[10px]` 等）、旧トークン名（ユーティリティ / CSS 変数）、`@production-ready/ui` の内部パス import、`loading` 中の `Button` ラベルの差し替え、`loading` があるのに `icon` が無い `Button`、フォーカスの表示の ring（`focus(-visible|-within):ring-*`）と `focus(-visible):outline-none`（#355。フォーカスの表示は outline に一本化）、アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-7`〜`pl-12` / `ps-*` / `pl-[…]` を持つ `<input>`。#384。`TextField` の `leadingIcon` を使う）、`type="search"` の `TextField` / `<input>`（#535。一覧の絞り込みは `SearchField`、重い検索は `type="search"` にしない）。ほかに `<details>` の手書き（#397）、「(任意)」・必須の表示の手書き（#531）、`<textarea>` の手書き（#584。`TextareaField` を使う）、ネイティブの `<select>`（#631。`SelectField` / `SearchableSelectField` を使う）、操作部品の高さと幅の手書き（#613。`touchTarget`、共有の操作部品への `h-*` / `min-h-*`、入力欄・選択欄への `w-*` / `max-w-*`、ネイティブの `<input>` / `<select>` への `h-*` / `min-h-*`。`size` / `width` / `fieldControlClassName` を使う）、`PageHeader` の `actions` の中の「一覧へ戻る」（#618。`back` を使う）、手書きの `<table>`（#800。NL2SQL の製品のルール #530 から移した。例外は RAG の `ReviewTextEditor.tsx` の元の文書の表を再現するグリッドだけ）、`PageHeader` の `actions` の中の JSX（#800。配列で渡す）、`rgba()` / `rgb()` / `hsl()` / `oklch()` などの生の色（#800）、文字サイズ・行間・字間の数値と inline style の余白・角丸の数値（#800）、`TextareaField` の `textareaClassName` の `h-*` / `min-h-*`（#800。`rows` を使う）、回転するアイコンの手書き（`animate-spin` / `animate-[spin…]` の className、inline style の `animation: spin`、回転用の lucide のアイコン `Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel` の import。#395 / #1180。共有の `Spinner` とボタンの `loading` を使う）も検出する。
+- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出する規則の一覧と理由は、adherence の各ルールの `message` と README の表（§0）にある。
 - 規則のテストは RAG の `frontend/src/design-system-adherence.test.ts`（ESLint の `lintText` で検出と許容の例を確かめる）。規則を足すときは同じテストに例を足す。
-- prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない（コンポーネントごとの許可 prop 一覧は廃止した）。
-- oxlint にはネイティブの `no-restricted-syntax` が無い。そのため、同じ `{selector, message}` 形式を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を platform に置き、adherence 設定から相対パスで読み込む。
-- **各製品はルールもプラグインもコピーせず、platform の設定を相対パス（`../../platform/docs/design-system/…`）で参照する。** monorepo なので CI でもローカルでも同じパスで解決できる。コピーすると、ルール変更が各製品に届かない。
+- prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない。
+- oxlint にはネイティブの `no-restricted-syntax` が無いため、同じ `{selector, message}` を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を置き、adherence 設定から相対パスで読み込む。
+- **各製品はルールもプラグインもコピーせず、相対パス（`../../platform/docs/design-system/…`）で参照する**（コピーすると変更が届かない）。
 
 ```jsonc
 // oxlint（frontend/.oxlintrc.json）
@@ -87,21 +55,23 @@ export default [
 ];
 ```
 
-- adherence 設定は oxlint と ESLint の両方が読むため、コメントや独自キーを書かない純粋な JSON に保つ（`x-omelette` のような未知のキーがあると、oxlint 1.82.0 は読み込みに失敗する）。
-- ルールを変えるときは、NL2SQL（oxlint）と RAG / Agent（ESLint）の `src` で違反件数を確認し、PR の `検証結果` に書く。違反が残る場合は、同じ PR で製品側を直すか、製品ごとの追従 Issue を作ってから merge する。
-- 製品固有のルールは各製品の設定に追加してよい。ただし、同じルール名（`design-system/restricted-syntax` / `no-restricted-syntax`）を上書きすると adherence のセレクタが消えるので、別のルール名にする。
+- adherence 設定は oxlint と ESLint の両方が読むため、コメントや独自キーの無い純粋な JSON に保つ（未知のキーがあると oxlint が読み込みに失敗する）。
+- ルールを変えるときは、NL2SQL（oxlint）と RAG / Agent（ESLint）の `src` で違反件数を確かめて PR の `検証結果` に書く。違反が残るなら、同じ PR で製品を直すか、製品ごとの追従 Issue を作ってから merge する。
+- 製品固有のルールは各製品の設定に足してよいが、同じルール名（`design-system/restricted-syntax` / `no-restricted-syntax`）は上書きしない（adherence のセレクタが消える）。
 
 ## CI / 検証コマンド
 
-PR の CI は suite root の `.github/workflows/ci.yml`（`Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` job と、影響を受ける全製品の job）で実行される。ローカルでは変更した package の command を実行し、影響を受ける製品の全件の検査は CI の job 結果を PR の `検証結果` に引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。pip-audit は PR では lock / pyproject の変更時だけ CI が実行し、全件は `dependency-audit-nightly.yml` が毎晩実行する。
+CI の job は `Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` と、影響を受ける全製品の job（root「CI」）。ローカルでは変更した package の command を実行し、製品の全件の検査は CI の job の結果を引用してよい。
 
 ```bash
-# frontend (@production-ready/ui) — platform/ で実行
+# frontend（共有 UI）— platform/ で実行
 npm ci && npm run typecheck && npm test && npm run build
 
-# backend (production-ready-backend-core)
+# backend（production-ready-backend-core）
 cd packages/backend_core
 uv sync --locked --dev
 uv run ruff format --check . && uv run ruff check . && uv run mypy src
 uv run pytest --cov=pr_backend_core && uv run bandit -r src && uv run pip-audit
 ```
+
+- 1 台の Compute の配備（`deploy/`）のテストは `for t in deploy/tests/*.test.sh; do bash "$t"; done`（nginx と openssl が要る。CI は `Suite / Terraform`）。

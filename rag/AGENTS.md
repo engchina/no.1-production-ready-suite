@@ -1,132 +1,84 @@
 # AGENTS.md — Production Ready RAG
 
-> **RAG（`rag/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
-> Claude Code と Codex の両方がこのファイルを直接読みます（`CLAUDE.md` は置かない。#1263）。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
-
-## GitHub 運用・Issue / PR 規約（RAG 固有の追加分）
-
-- 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
-- ユーザー向け概念は `ナレッジ構築` / `検索・回答プロファイル` / `検索・回答設定` を使い、`pipeline` / `adapter` などの工程語は code identifier を指す場合に限る。
-- 「DocRAG」は rag_poc から移したときの名前で、画面・API のメッセージ・docs の地の文（#598）にも、コードの識別子・設定（env）・API・DB の名前（#599）にも使わない。回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）など RAG の標準の用語・名前で呼ぶ（package は `rag_engine`、回答は `app/rag/answer_engine.py`、分割方式は `small_to_big`、回答の設定は `RAG_QUERY_STRATEGY` など）。旧名は migration（保存値・表の改名）と docs/deployment.md の更新手順にだけ残す。
-- 3 層モデル(文書レシピ / KB スコープ / Search Answer Profile)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
-- PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff format --check .` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
+> RAG（`rag/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針（言語・AI / DB の分担・シークレット・LLM 出力の検証・ローカルの検証の範囲）は、root の [../AGENTS.md](../AGENTS.md) を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集する。
+> Issue の label は `product:rag`、PR title の scope は `rag`。
 
 ## プロジェクト概要
 
-**A production-ready RAG reference implementation for enterprise knowledge search, document ingestion, grounding, answer generation, evaluation, observability, and deployment on Oracle / OCI.**
+文書とナレッジベースを構築し、業務ごとの **Search Answer Profile** から検索・回答する RAG を本番品質で提供する（ingestion・grounding・回答生成・評価・観測・Oracle / OCI への配備）。SQL 専用の自然言語問い合わせは `../nl2sql/` の責務で、`rag/` へ機能・UI・API・設定を混在させない。
 
-本プロジェクトは、文書とナレッジベースを構築し、業務ごとの **Search Answer Profile** から検索・回答する RAG システムを本番品質で提供することを目標とする。SQL 専用の自然言語問い合わせプロダクトは同じ monorepo の `../nl2sql/` の責務であり、`rag/` へ機能・UI・設定を混在させない。
+## 用語
 
-SQL 専用プロダクトの設計・実装は `../nl2sql/` 側で扱い、`rag/` へ UI / API / 設定を混在させない。
+- ユーザー向けの主概念は **ナレッジ構築** / **検索・回答プロファイル** / **検索・回答設定**。「検索・回答プロファイル」は正式な製品語で、parser / source profile 等の工程の技術語とは区別する（KB membership・文書レシピの責務を移さない）。
+- `producer` / `consumer` / `Pipeline` / `Adapter` / `Profile` / `Runtime` / `Backend` などの技術語は、code identifier・コード内部・開発者向けの診断パネルに限る。
+- `SearchAnswerProfile` は正式な code / API 名として維持し、ユーザー表示は「検索・回答プロファイル」。
+- **「DocRAG」は使わない。** rag_poc から移したときの名前で、画面・API のメッセージ・docs の地の文にも、コードの識別子・設定（env）・API・DB の名前にも使わない。RAG の標準の用語・名前で呼ぶ（回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）。package は `rag_engine`、回答は `app/rag/answer_engine.py`、分割方式は `small_to_big`、回答の設定は `RAG_QUERY_STRATEGY` など）。旧名は migration（保存値・表の改名）と docs/deployment.md の更新手順にだけ残す。
+- 3 層モデル（文書レシピ / KB スコープ / Search Answer Profile）に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に書く。
 
-RAG の製品語は **ナレッジ構築**、**検索・回答プロファイル**、**検索・回答設定** を優先する。`producer / consumer / pipeline / adapter` などの工程語は、コード内部または開発者向け診断に限定する。
+## 技術スタック（RAG 固有の分）
 
-## 言語・ローカライズ方針
-
-- **システムの主要言語は日本語**。UI 文言・エラーメッセージ・通知・LLM への指示/出力・回答説明は日本語を前提とする。
-- 国際化は最初から考慮する。ユーザー向け文言はハードコードせず i18n 経由で管理する。
-- コード内のコメント/ドキュメントは日本語で可。識別子・型名は英語。
-
-## 技術スタック(確定)
-
-### AI / ML 層
-
-| 用途 | 採用 | 重要な制約 |
+| 用途 | 採用 | 制約 |
 |---|---|---|
-| 回答生成・構造化抽出・クエリ計画 | OCI Enterprise AI | アプリ側 LLM の主経路。モデル設定は環境変数/設定 API 経由 |
-| 埋め込み | OCI Generative AI Cohere Embed v4 | 多言語(日本語可)。Oracle Vector Search と次元数を一致させる |
-| リランク | OCI Generative AI Cohere Rerank v4 fast | 検索精度改善のための rerank |
-| 画像/文書理解 | OCI Document Understanding / Enterprise AI Vision | OCR・ページ解析・VLM 入力に使う |
+| 回答生成・構造化抽出・クエリ計画 | OCI Enterprise AI | モデル設定は環境変数 / 設定 API 経由 |
+| 埋め込み / リランク | OCI Generative AI（Cohere Embed v4 / Rerank v4 fast） | 埋め込みの次元数を Oracle AI Vector Search とそろえる |
+| 画像・文書理解 | OCI Document Understanding / Enterprise AI Vision | OCR・ページ解析・VLM 入力 |
 
-### データ層
+- データ: Oracle Autonomous AI Database / Oracle AI Vector Search（チャンク・引用・文書構造・評価結果・監査ログ・ベクトル検索の正本）と OCI Object Storage（原本・変換済み artifact・レビュー済み文書・評価 artifact）。
+- SDK は `oci` / `python-oracledb`。Frontend は共有 UI に加えて shadcn/ui、通信は REST + SSE / WebSocket。
+- 観測は Langfuse + Prometheus + OpenTelemetry。品質は pytest / pytest-cov / ruff / mypy / bandit / pip-audit / Vitest / Playwright。
+- **配備**: backend・取込 worker・前処理・parser はサービスごとの uv の venv（`uv sync --locked --no-dev --python 3.12`）と systemd の unit で動かす。unit の定義は `scripts/rag-systemd.sh`（本番の `init_script.sh` と開発の `scripts/rag-services.sh` が共通で使う）。Compute には root の「配備」のとおり他の製品と同じ 1 台に入る（CPU parser のみ）。Dockerfile・compose は作り直さない。開発の起動は backend が `uv run uvicorn`、前処理 / parser が `scripts/rag-services.sh`、frontend が `npm run dev`（docs/deployment.md「ローカル開発」）。
+- **サービス管理画面**は systemd の unit を操作する（起動 = `enable --now`、停止 = `disable --now` で最後に操作した状態を保つ）。backend が実行してよいのは、sudoers で許可した allowlist の unit の `systemctl` / `journalctl` だけ（argv 固定・shell を通さない。`app/services/systemd.py`）。前処理 / parser を足すときは、catalog・`scripts/rag-systemd.sh` の `RAG_MICROSERVICES`・URL 設定の既定値（`127.0.0.1:<port>`）をそろえる（テストで照合する）。
 
-- **Oracle Autonomous AI Database / Oracle AI Vector Search** — チャンク、引用、文書構造、評価結果、監査ログ、ベクトル検索の正本。
-- **OCI Object Storage** — 原本、変換済み artifact、レビュー済み文書、評価 artifact の保管。
-- **外部ベクトル DB は導入しない**。必要な意味検索は Oracle AI Vector Search に集約する。
+## UI/UX
 
-### バックエンド
-
-- **Python 3.12 + FastAPI**。共有 backend core(`pr_backend_core` / production-ready-backend-core)を土台にする。
-- **Pydantic v2**。LLM 出力・設定・API payload はスキーマで検証する。
-- SDK: **oci** / **python-oracledb**。
-- 依存管理: **uv**。
-
-### フロントエンド
-
-- **Vite + React Router + TypeScript**。
-- **Tailwind CSS + shadcn/ui** と共有 UI package `@production-ready/ui`。
-- 通信: REST + SSE/WebSocket。
-- 状態管理: TanStack Query + Zustand。
-
-### 横断
-
-- 観測性: Langfuse + Prometheus + OpenTelemetry。
-- 品質: pytest / pytest-cov / ruff（lint・整形）/ mypy / bandit / pip-audit / Vitest / Playwright。
-- インフラ: 自前のコードは Docker を使わずネイティブで動かす(#286)。backend・取込 worker・前処理・parser はサービスごとの uv の venv(Python 3.12、`uv sync --locked --no-dev --python 3.12`)と systemd の unit で動かし、unit の定義は `scripts/rag-systemd.sh`(本番の `init_script.sh` と開発の `scripts/rag-services.sh` が共通で使う)に置く。OCI Resource Manager の統合 Terraform stack(monorepo root の `terraform/stack/`、#217。RAG の Compute 1 台 + 共有 ADB、CPU parser のみ)で配備する。自前のコードの `docker-compose*.yml`・Dockerfile は #356 で削除した(作り直さない)。開発の起動は backend が `uv run uvicorn`、前処理 / parser が `scripts/rag-services.sh`、frontend が `npm run dev`(docs/deployment.md の「ローカル開発」)。以前の Docker の環境からの移行は docs/deployment.md の #286 の手順。
-- サービス管理画面は systemd の unit を操作する(起動 = `enable --now`、停止 = `disable --now` で最後に操作した状態を保つ)。backend が実行してよいのは、sudoers で許可した allowlist の unit の `systemctl` / `journalctl` だけ(argv 固定・shell を通さない。`app/services/systemd.py`)。前処理 / parser を足すときは、catalog・`scripts/rag-systemd.sh` の `RAG_MICROSERVICES`・URL 設定の既定値(`127.0.0.1:<port>`)をそろえる(テストで照合する)。
-
-## UI/UX 開発ルール
-
-- **UI/UX に関する作業(設計・実装・レビュー・改善)は必ず `ui-ux-pro-max` skill を使う。**
-- デザインは日本語 UI 前提で検証する。本文は日本語第一フォントスタック `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文ベース `14px` を基本とする。
-- SaaS / 業務ツールとして、静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォーム状態を優先する。
-- UI/UX 変更ごとに Playwright で実画面を確認し、desktop と 375px 幅を最低限検証する。
-- ナビゲーションは折りたたみ可能なサイドナビを正とし、主要セクションは以下とする。
+- 静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォームの状態を優先する（SaaS / 業務ツール）。
+- サイドナビ（折りたたみ可）の主なセクション:
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース、検索・回答プロファイル。
   - **AI 活用**: チャット、RAG 検索。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
   - **改善・運用**: 品質評価、フィードバック。
-  - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース。RAG 固有。#214。セクション名は 3 製品で同じ。#658）。
-  - **ユーザーとロール**: ユーザー管理、ロール管理（3製品で共通。画面と API は platform の共有パッケージ）。
-  - **運用設定**: システムテーブル管理（NL2SQL と同じく先頭。#658）、HuggingFace 設定、サービス管理（RAG 固有の運用項目）。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`。#638）。
-  - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、外観と証明書（3製品で共通。画面と API は platform の共有パッケージ）。
-- ナビ・ルート・ページ内の操作は権限（`rag/backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
-- 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。RAG 固有の差分は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の保持の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md)（各ページのページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）に書く。
-- ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [UX 契約 buttons.md](../platform/docs/ux-contracts/buttons.md) に従う。
-
-## デザインシステム / UI
-
-- 共通ルール（platform が正本・禁止事項・画面の構成・lint・UI 変更の検証）は [../AGENTS.md](../AGENTS.md)「デザインシステム / UI」に従う。lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
-- 本ディレクトリの `docs/frontend-messaging-spec.md` は、デザインシステムと UX 契約が規定しない範囲でのみ有効とする。
-
-### RAG 固有
-
-- 移行時に `ToggleChip` をタブとして使っている箇所（ビューの切替）を `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。
-- `--font-mono`（ID・ログ・SQL の等幅書体）は platform の共有 tokens が定義する。書体ファイルは `frontend/src/fonts.css` で `@fontsource/google-sans-code` を自前ホストする。
+  - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース）。
+  - **ユーザーとロール** / **システム設定**（OCI 認証、アップロード保存先、モデル、データベース、外観と証明書）: 3 製品で共通（platform の共有パッケージ）。
+  - **運用設定**: システムテーブル管理（先頭）、HuggingFace 設定、サービス管理。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`）。
+- ナビ・ルート・ページ内の操作は権限（`backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
+- RAG 固有の画面の差分: [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md)（ページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）。
+- lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
+- `ToggleChip` をタブとして使っている箇所（ビューの切替）は `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。
+- `--font-mono`（ID・ログ・SQL の等幅書体）は共有の tokens が定義し、書体ファイルは `frontend/src/fonts.css` で `@fontsource/google-sans-code` を自前ホストする。
 
 ## RAG 設定責務
 
-> **3 層モデル(確定)**: 文書 = 処理レシピを持つ / KB = 純スコープ(コレクション)/ Search Answer Profile → KB。
+> **3 層モデル（確定）**: 文書 = 処理レシピを持つ / KB = 純スコープ（コレクション）/ Search Answer Profile → KB。
 > KB は「レシピ」と「検索スコープ」を兼任しない。レシピは文書単位、検索・回答設定は Search Answer Profile。
 
-### 文書(Document)= レシピ
+### 文書（Document）= レシピ
 
-文書は中身に加えて **1〜3 件の独立した処理レシピ(preprocess / parser / chunking)** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
+文書は中身に加えて **1〜3 件の独立した処理レシピ（preprocess / parser / chunking）** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
-- ファイル準備(preprocess)。
-- 文書解析(parser / OCR engine)と、図・画像の読み取り(Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ。#497)。global の既定エンジンは Docling(#286。PDF と画像だけ)。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない(判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは既定では配備しない)。
-- 文書分割(chunking strategy、chunk size、overlap、parent-child)。
-- 索引構築(vector index build、GraphRAG、navigation summary、field extraction)。
-- 品質 gate(解析品質、chunk 品質、公開前チェック)。
+- ファイル準備（preprocess）。
+- 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは既定では配備しない）。
+- 文書分割（chunking strategy、chunk size、overlap、parent-child）。
+- 索引構築（vector index build、GraphRAG、navigation summary、field extraction）。
+- 品質 gate（解析品質、chunk 品質、公開前チェック）。
 
-レシピの既定値は **global(「検索・回答設定」配下の ファイル準備 / 文書解析 / 文書分割 など)** から解決し、各レシピが選んだ値で上書きする。**KB からは解決しない**。embedding / HNSW は単一固定。同じ文書のジョブは直列実行し、異なる文書のジョブは並行実行できる。
+レシピの既定値は **global（「検索・回答設定」配下の ファイル準備 / 文書解析 / 文書分割 など）** から解決し、各レシピが選んだ値で上書きする。**KB からは解決しない**。embedding / HNSW は単一固定。同じ文書のジョブは直列実行し、異なる文書のジョブは並行実行できる。
 
-### ナレッジベース(KB)= コレクション(純スコープ)
+### ナレッジベース（KB）= コレクション（純スコープ）
 
-KB は **どの文書を検索対象にするか(membership)だけ**を持つ純スコープ。**レシピ(preprocess / parser / chunking)も検索・回答設定も持たない**。
+KB は **どの文書を検索対象にするか（membership）だけ**を持つ純スコープ。**レシピ（preprocess / parser / chunking）も検索・回答設定も持たない**。
 
-- 文書 membership(N:N。1 文書が複数 KB に所属可、1 KB が複数文書を束ねる)。
+- 文書 membership（N:N。1 文書が複数 KB に所属可、1 KB が複数文書を束ねる）。
 - 名称 / 説明 / スコープ。
-- 例外として、項目抽出の項目の定義(何を取り出すか)は KB ごとに持てる(#548。無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a)。項目抽出を行うかどうかは今までどおり文書レシピ / global が決める。
+- 例外として、項目抽出の項目の定義（何を取り出すか）は KB ごとに持てる（無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a）。項目抽出を行うかどうかは文書レシピ / global が決める。
 
-文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない(再プラン/materialize/GC を起こさない)。KB UI から preprocess/parser/chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
+文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない（再プラン / materialize / GC を起こさない）。KB UI から preprocess / parser / chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
 
 ### Search Answer Profile
 
 Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 - 参照 KB scope。
-- 検索方法(回答の検索と生成)、安全チェック。
+- 検索方法（回答の検索と生成）、安全チェック。
 - feedback 集計。
 
 設定責務は次の通りとし、検索・回答プロファイルには Sidebar 全項目を複製しない。
@@ -139,17 +91,17 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-関係情報の構築(構築する / しない。文書と章・節の見出しのつながり)は文書レシピで選ぶ(ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張は #595、claims / community summary の構築は #621 で削除した)。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
+関係情報の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピで選ぶ（ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
-検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB の legacy query override は使わない。
+検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB の legacy query override は使わない（保存時にも新規保存しない）。
 
-### 複数レシピ融合(精度向上)
+### 複数レシピ融合（精度向上）
 
-同じ文書の検索精度を上げたい場合はレシピを最大3件まで追加し、それぞれを独立して materialize する。**各レシピの直近成功した active chunk_set はすべて検索対象**とし、既存の hybrid RRF + rerank + source-span 重複除去で融合する。主レシピ、候補、配信中、昇格の概念は持たず、`single / routed` は runtime で使わない。設定変更後の再処理中や再処理失敗時も、直前の active chunk_set を検索対象として維持する。KB membership を変えてもレシピ集合や chunk_set は変わらない。
+同じ文書の検索精度を上げたい場合はレシピを最大 3 件まで追加し、それぞれを独立して materialize する。**各レシピの直近成功した active chunk_set はすべて検索対象**とし、既存の hybrid RRF + rerank + source-span 重複除去で融合する。主レシピ、候補、配信中、昇格の概念は持たず、`single / routed` は runtime で使わない。設定変更後の再処理中や再処理失敗時も、直前の active chunk_set を検索対象として維持する。KB membership を変えてもレシピ集合や chunk_set は変わらない。
 
-レシピ追加・削除は親文書行をロックして **最少1件・最大3件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。
+レシピ追加・削除は親文書行をロックして **最少 1 件・最大 3 件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。
 
-GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI/API diagnostics にその状態を表示する。
+GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI / API diagnostics にその状態を表示する。
 
 ## ディレクトリ構成
 
@@ -177,43 +129,28 @@ services/                 parser / preprocess / pipeline(chunking / graphrag / v
 ```bash
 # backend
 cd backend && uv sync
-uv run pytest
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy .
+uv run pytest tests/test_<対象>.py   # 関係するテスト（全件・mypy . ・pip-audit は CI）
+uv run ruff format --check . && uv run ruff check . && uv run mypy .
 uv run uvicorn app.main:app --reload
 
 # frontend
 cd frontend && npm install
-npm run lint
-npm run build
-npm run test
+npm run lint && npm run build
+npx vitest related <変更したファイル>   # または npm run test（全件）
+npx playwright test e2e/<対象>.spec.ts  # 関係する spec だけ（smoke・全件は CI と nightly）
 npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（未指定なら 404 の hermetic モード）
 ```
 
+CI の job は `RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等。
+
 ## テスト/検証方針
 
-- 実装と同時に対応するテストを追加・更新する。backend は pytest、frontend ロジックは Vitest、UI/UX は Playwright。
-- OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ/録画応答でテストする。実サービス検証は手動/ステージングとする。
-- 変更後は該当範囲の lint・型チェック・テストを実行し、完了報告に実行結果を明記する。
-- ローカルは変更範囲の検査にする（#339）。backend は関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`、frontend は `npm run lint` / `npm run build` と `npx vitest related <変更したファイル>`（または `npx vitest --changed`）、e2e は関係する spec だけ（`npx playwright test e2e/<対象>.spec.ts`）。backend の全テスト・`mypy .`・`pip-audit`、Playwright の smoke / 全件は CI と nightly に任せる。
-- UI/UX 変更は Playwright で desktop と mobile 幅を確認する。空/読込/エラー/ブロック状態も必要に応じて確認する。
-- **実 Oracle のテスト（`oracle_db` の fixture）は、共有の開発 DB ではなくテスト専用の schema（DB ユーザー）で流すことを推奨する（#619）。** fixture はテストの開始時に未適用の migration を当て、テストが作った行を消すため、共有の DB では並行作業のチェックアウトの migration が手元のデータに当たる。接続先は共通 `.env` の `PLATFORM_ORACLE_*` を読むので、テスト専用のユーザーを書いた別のファイルを `PLATFORM_ENV_FILE=<ファイル> uv run pytest` で渡す。データを削除する migration（テーブルの DROP・行の DELETE）が未適用なら、fixture は何も当てずに実 Oracle のテストを skip し、理由を出す（適用は書き出しの後に `system_schema_cli initialize --allow-destructive` で行う。docs/deployment.md の「既存環境の更新手順の共通の注意」）。
+- backend は pytest、frontend のロジックは Vitest、UI/UX は Playwright。
+- **実 Oracle のテスト（`oracle_db` の fixture）は、共有の開発 DB ではなくテスト専用の schema（DB ユーザー）で流すことを推奨する（#619）。** fixture はテストの開始時に未適用の migration を当て、テストが作った行を消すため、共有の DB では並行作業のチェックアウトの migration が手元のデータに当たる。接続先は共通 `.env` の `PLATFORM_ORACLE_*` を読むので、テスト専用のユーザーを書いた別のファイルを `PLATFORM_ENV_FILE=<ファイル> uv run pytest` で渡す。データを削除する migration（テーブルの DROP・行の DELETE）が未適用なら、fixture は何も当てずに実 Oracle のテストを skip し、理由を出す（適用は書き出しの後に `system_schema_cli initialize --allow-destructive` で行う。docs/deployment.md「既存環境の更新手順の共通の注意」）。
 - データを削除する migration を足すときは、`oracle_schema.py` の `OracleSchemaSection` に `destructive_note`（削除されるデータと、前にする書き出し）を書く。付け忘れは `tests/test_system_schema_manager.py` が SQL から検出する。
 
-## コーディング規約・重要ルール
+## コーディング規約
 
-1. RAG の検索・回答は Oracle AI Vector Search、OCI Enterprise AI、OCI GenAI embedding/rerank を中心に構成する。
-2. 外部ベクトル DB、別 LLM provider、別 RAG SaaS を導入しない。逸脱が必要な場合は理由を添えてユーザ確認する。
-3. シークレット(OCI 認証・DB 接続・ADB wallet 等)は `.env` 経由。ハードコード禁止、コミットしない。
-4. LLM 出力は Pydantic スキーマで検証してから保存・利用する。
-5. ユーザー向け UI では `ナレッジ構築`、`検索・回答プロファイル`、`検索・回答設定` を主概念にする。
-6. `Pipeline / Adapter / Profile / Runtime / Backend` などの技術語は、コード内部または高度な診断パネルに限定する。
-7. `SearchAnswerProfile` は正式な code/API 名として維持する。ユーザー表示は `検索・回答プロファイル` を使う。
-8. KB query legacy config は runtime で無視し、保存時に新規保存しない。
-9. 機能開発では、既存パターン・既存 API・既存 UI コンポーネントを優先する。
-10. UI 作業は `ui-ux-pro-max` skill を使用する。
-11. 変更後は該当 lint・型チェック・テストを実行してから完了する。
-12. `main` へ直接 commit / push しない。Issue → 作業ブランチ → PR → CI/checks → merge の流れと、Issue / PR の記述規約（[../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」）に従う。
-
-「検索・回答プロファイル」は正式な製品語（#860）。parser / source profile 等の工程の技術語とは区別し、KB membership・文書レシピの責務を移さない。
+1. RAG の検索・回答は Oracle AI Vector Search、OCI Enterprise AI、OCI GenAI の embedding / rerank を中心に構成する（別 RAG SaaS も入れない）。
+2. KB の query の legacy config は runtime で無視し、保存時に新規保存しない。
+3. 機能開発では、既存のパターン・API・UI コンポーネントを優先する。

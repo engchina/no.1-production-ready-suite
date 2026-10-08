@@ -16,7 +16,7 @@
 | LLM・VLM | OCI Enterprise AI |
 | Embedding・Rerank | OCI Generative AI（Cohere） |
 | Observability | Prometheus metrics + JSON logging + request-id |
-| Test / Lint / Type | pytest(+asyncio,cov) / Ruff + Black / mypy strict |
+| Test / Lint / Type | pytest(+asyncio,cov) / Ruff（lint・整形。black は使わない）/ mypy strict |
 | Security | Bandit + pip-audit + gitleaks |
 | CI | GitHub Actions（`uv sync --locked`） |
 
@@ -175,3 +175,20 @@ production-ready-backend-core = { path = "../../platform/packages/backend_core",
 ## 共通の診断ログ
 
 API・worker・RAG の独立微サービス・browser の共通 schema、JST 時刻、相関、例外の安全化、HTTP summary と運用方法は [logging-standard.md](./logging-standard.md) を正本とする（#858）。`configure_logging` を各 process の bootstrap で呼び、製品の自由な handler / format を追加しない。
+
+## 設定（`.env`）の変数名（#211）
+
+規則の要点（共通の `platform/.env` と製品の `backend/.env` の分け方）はルートの `AGENTS.md`「設定（`.env`）とデータベース object の命名」。
+
+- 環境変数名は Settings の属性名から `pr_backend_core.config.product_settings_config` が決める。共通の属性（`PLATFORM_SETTING_FIELDS`）は `PLATFORM_` + 属性名（先頭の `app_` は除く）、それ以外は製品の接頭辞（`RAG_` / `NL2SQL_` / `AGENT_`）+ 属性名（接頭辞で始まる属性には重ねない）。
+- 3 製品共通の設定を足すときは、`PLATFORM_SETTING_FIELDS` と `platform/.env.example` に加える。
+- 既存環境の `.env` は `platform/scripts/migrate_env_to_platform.py` で移す。ユーザー・ロール・セッションのテーブルは `PLATFORM_*` へ移した（#212）。
+
+## テストの並列実行（pytest-xdist、#344）
+
+CI は backend の pytest を pytest-xdist で並列に実行する（`uv run pytest -n auto`。Agent は `scripts/check-all.sh` に `PYTEST_ARGS="-n auto"` を渡す）。テストは並列でも直列でも通るように書く。
+
+- 書き出すファイルは `tmp_path` に置く（backend 直下など固定のパスを、別のテストと共有しない）。
+- `parametrize` のテスト ID を、実行のたびに変わる値（作成時刻を含む zip / xlsx / docx の bytes 等）から作らない。worker ごとに ID が変わり収集が失敗するので、`ids=` で固定する。
+- retry / backoff の待ちは `time.sleep` を直接呼ばず、module 変数などで差し替えられるようにし、テストは conftest で待たない関数にする（例: NL2SQL の `reverse_generation._retry_sleep`）。
+- 同時に動かせないテスト（RAG の実 Oracle のテスト）は `xdist_group` で 1 つの worker にまとめる（RAG は `--dist loadgroup` を pyproject の `addopts` に入れている）。
