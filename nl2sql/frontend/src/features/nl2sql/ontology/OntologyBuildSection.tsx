@@ -717,6 +717,12 @@ export function OntologyBuildSection({
   const activeMarkdown =
     activeMarkdownTab === "draft" ? draftMarkdown : publishedMarkdown;
   const canEditDraftRevision = draftRevision?.status === "draft";
+  // 実行中の構築が新しい下書き revision をまだ出していない間は、今の下書きを編集させない。
+  // 構築の結果は別の revision として下書きを置き換え、その間の変更は残らないため。
+  // 構築の revision を読み込んだ後は、残りの段階の実行中でも編集・保存できる（同じ revision の
+  // 未保存の変更は applyBuildJobMarkdownOutput が上書きしない）。
+  const draftReplacedByBuild =
+    jobRunning && (job?.draft_revision_id ?? "") !== (draftRevision?.id ?? "");
 
   const applyMarkdownState = useCallback((
     next: OntologyMarkdownState,
@@ -1226,6 +1232,18 @@ export function OntologyBuildSection({
 
   const startBuild = async () => {
     if (busy || jobRunning || publishRunning) return;
+    // 構築の結果は下書きを置き換える。保存していない変更を黙って失わせない。
+    if (
+      draftDirtyRef.current &&
+      !(await confirm({
+        title: t("profiles.ontologyBuild.dirtyDraftConfirm.title"),
+        description: t("profiles.ontologyBuild.dirtyDraftConfirm.description"),
+        confirmLabel: t("profiles.ontologyBuild.dirtyDraftConfirm.confirm"),
+        tone: "warning",
+      }))
+    ) {
+      return;
+    }
     const targetProfileId = profileId;
     const hasBusinessTextInput = businessText.trim().length > 0;
     const hasSourceFilesInput = sourceFiles.length > 0;
@@ -1845,6 +1863,7 @@ export function OntologyBuildSection({
               activeMarkdownTab !== "draft" ||
               !canEditDraftRevision ||
               !draftDirty ||
+              draftReplacedByBuild ||
               publishRunning ||
               (busy !== "" && busy !== "save-draft")
             }
@@ -1929,7 +1948,12 @@ export function OntologyBuildSection({
                   spellCheck={false}
                   placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
                   readOnly={!canEditDraftRevision}
-                  disabled={busy !== "" || publishRunning}
+                  disabled={busy !== "" || publishRunning || draftReplacedByBuild}
+                  helper={
+                    draftReplacedByBuild
+                      ? t("profiles.ontologyBuild.markdownLockedDuringBuild")
+                      : undefined
+                  }
                   onChange={(event) => {
                     if (!canEditDraftRevision) return;
                     const nextDraftMarkdown = event.currentTarget.value;

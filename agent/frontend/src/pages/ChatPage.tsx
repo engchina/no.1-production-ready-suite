@@ -212,8 +212,13 @@ export function ChatPage() {
     );
   }
 
+  // 会話・エージェントを切り替えるたびに進める。送信の要求中に切り替えたら、その応答で
+  // 元の会話へ引き戻したり、切り替え先の送信中・失敗の表示を書き換えたりしない（send.reset() では
+  // useMutation の onSuccess / onError は止まらない）。
+  const viewGenerationRef = useRef(0);
   // 送信の要求中に「停止」を押したら、Run ができた直後に止める（Run の id は応答で分かる。#805）。
-  const stopAfterCreateRef = useRef(false);
+  // 押したときの viewGeneration を持ち、その送信の応答でだけ止める。
+  const stopAfterCreateRef = useRef<number | null>(null);
   const cancel = useMutation({
     mutationFn: (runId: string) => agentApi.cancelRun(runId),
     onSuccess: (updated) => {
@@ -225,13 +230,22 @@ export function ChatPage() {
   });
 
   const send = useMutation({
-    mutationFn: (goal: string) =>
+    mutationFn: ({ goal }: { goal: string; generation: number }) =>
       agentApi.createRun({
         goal,
         agent_id: selectedAgentId,
         thread_id: threadId ?? undefined,
       }),
-    onSuccess: (run) => {
+    onSuccess: (run, { generation }) => {
+      const stopRequested = stopAfterCreateRef.current === generation;
+      if (stopRequested) stopAfterCreateRef.current = null;
+      if (generation !== viewGenerationRef.current) {
+        // 別の会話へ移った後の応答。Run は元の会話に残り、履歴から開ける。
+        void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
+        void queryClient.invalidateQueries({ queryKey: ["threads"] });
+        if (stopRequested) cancel.mutate(run.id);
+        return;
+      }
       if (run.thread_id) {
         // 作られた Run を会話に入れてから、送った質問（仮）を外す。取り直しを待たず、二重にも出さない（#907）。
         const createdThreadId = run.thread_id;
@@ -245,13 +259,11 @@ export function ChatPage() {
       setPending(null);
       void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
-      if (stopAfterCreateRef.current) {
-        stopAfterCreateRef.current = false;
-        cancel.mutate(run.id);
-      }
+      if (stopRequested) cancel.mutate(run.id);
     },
-    onError: () => {
-      stopAfterCreateRef.current = false;
+    onError: (_error, { generation }) => {
+      if (stopAfterCreateRef.current === generation) stopAfterCreateRef.current = null;
+      if (generation !== viewGenerationRef.current) return;
       // 送れなかった質問は会話の欄に残し、理由と「再送信」を出す（入力欄には戻さない。#907）。
       setPending((current) => (current ? withOptimisticChatStatus(current, "failed") : current));
     },
@@ -293,7 +305,7 @@ export function ChatPage() {
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
     cancel.reset();
-    send.mutate(goal);
+    send.mutate({ goal, generation: viewGenerationRef.current });
   }
 
   /** 送れなかった質問を、そのままもう一度送る（#907）。 */
@@ -301,19 +313,20 @@ export function ChatPage() {
     if (!pending || !selectedAgentId || running || waitingApproval || send.isPending) return;
     setPending(withOptimisticChatStatus(pending, "sending"));
     cancel.reset();
-    send.mutate(pending.content);
+    send.mutate({ goal: pending.content, generation: viewGenerationRef.current });
   }
 
   function stop() {
     if (cancel.isPending) return;
     if (send.isPending) {
-      stopAfterCreateRef.current = true;
+      stopAfterCreateRef.current = viewGenerationRef.current;
       return;
     }
     if (stoppableRun) cancel.mutate(stoppableRun.id);
   }
 
   function startNewThread() {
+    viewGenerationRef.current += 1;
     setThreadId(null);
     setPending(null);
     send.reset();
@@ -325,6 +338,7 @@ export function ChatPage() {
   function openThread(item: ThreadSummary) {
     // lg 未満のシートは、会話を選んだら閉じる（SideSheet が開閉ボタンへフォーカスを戻す）。
     history.closeSheet();
+    viewGenerationRef.current += 1;
     setThreadId(item.thread_id);
     setPending(null);
     send.reset();
@@ -443,6 +457,7 @@ export function ChatPage() {
                   description: agent.description || undefined,
                 }))}
                 onValueChange={(value) => {
+                  viewGenerationRef.current += 1;
                   setAgentId(value);
                   setThreadId(null);
                   setPending(null);

@@ -47,6 +47,10 @@ interface ManualAnswerValue {
 
 type ClarificationStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
 
+function isSessionOpen(session: QuerySession | null): session is QuerySession {
+  return Boolean(session && session.status !== "done" && session.status !== "cancelled");
+}
+
 function latestIntent(session: QuerySession | null) {
   if (!session?.intents?.length) return null;
   const version = session.current_intent_version ?? 1;
@@ -73,6 +77,14 @@ export function GuidedClarificationPanel({
   const startedRef = useRef(false);
   const startControllerRef = useRef<AbortController | null>(null);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
+  // 画面を離れた（unmount・再読込）ときに、サーバーの session を中止するための参照。
+  const sessionRef = useRef<QuerySession | null>(null);
+  // 「確認を中止して閉じる」で中止済み、または確認内容を質問に反映した session は中止しない。
+  const releasedRef = useRef(false);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   const clarification = session?.clarification ?? null;
   const currentQuestion = clarification?.current_question ?? null;
@@ -96,6 +108,8 @@ export function GuidedClarificationPanel({
       { signal }
     );
     setStartPhase("prepare_questions");
+    // 作成の request は中断しない。送った後に中断すると、サーバーに作られた session の ID が
+    // 分からず中止できないため、応答を待ってから中止する。
     const created = await createQuerySession({
       question,
       profile_id: targetProfileId,
@@ -103,12 +117,44 @@ export function GuidedClarificationPanel({
       engine,
       profile_confirmation_token: confirmation_token,
       clarification_mode: "guided",
-    }, { signal });
-    if (signal.aborted) return;
+    });
+    if (signal.aborted) {
+      void cancelQuerySession(created.id).catch(() => undefined);
+      return;
+    }
+    sessionRef.current = created;
     setSession(created);
     setRecommendation(null);
     setError("");
   };
+
+  // パネルを閉じずに画面を離れた（別のページへ移動・再読込・タブを閉じる）ときは、
+  // 開始の処理を止め、進行中の session をサーバーで中止する。
+  useEffect(() => {
+    mountedRef.current = true;
+    const handlePageHide = (event: PageTransitionEvent) => {
+      // bfcache に入るだけなら戻ってきたときに続けられるので中止しない。
+      if (event.persisted) return;
+      const current = sessionRef.current;
+      if (releasedRef.current || !isSessionOpen(current)) return;
+      releasedRef.current = true;
+      void cancelQuerySession(current.id, { keepalive: true }).catch(() => undefined);
+    };
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      mountedRef.current = false;
+      window.removeEventListener("pagehide", handlePageHide);
+      // StrictMode の検証用の unmount → 再 mount では中止しない（再 mount で true に戻る）。
+      window.setTimeout(() => {
+        if (mountedRef.current) return;
+        startControllerRef.current?.abort();
+        const current = sessionRef.current;
+        if (releasedRef.current || !isSessionOpen(current)) return;
+        releasedRef.current = true;
+        void cancelQuerySession(current.id).catch(() => undefined);
+      }, 0);
+    };
+  }, []);
 
   // 開始は 1 回だけ。最新の startSession を commit 時に ref へ入れて呼ぶ（startSession は毎レンダーで作り直される）。
   const startSessionRef = useRef(startSession);
@@ -296,6 +342,7 @@ export function GuidedClarificationPanel({
       return;
     }
     setError("");
+    releasedRef.current = true;
     onApplyQuestion(clarifiedQuestion, session.profile_id);
   };
 
@@ -306,7 +353,7 @@ export function GuidedClarificationPanel({
       return;
     }
     if (busyAction) return;
-    if (!session || session.status === "done" || session.status === "cancelled") {
+    if (!isSessionOpen(session)) {
       onClose();
       return;
     }
@@ -314,6 +361,7 @@ export function GuidedClarificationPanel({
     setError("");
     try {
       await cancelQuerySession(session.id);
+      releasedRef.current = true;
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.cancel"));

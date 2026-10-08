@@ -1658,6 +1658,52 @@ test("下書き成果物の保存後は job 完了前でも Markdown 下書き�
   );
 });
 
+test("保存していない下書きがあるときの構築は確認し、新しい下書きができるまで今の下書きを編集させない", async ({ page }) => {
+  const state = await mockApi(page);
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown))
+  );
+  // 構築はまだ新しい下書き revision を出していない（draft_revision_id が空）。
+  await page.unroute("**/api/nl2sql/ontology-build/*");
+  await page.route("**/api/nl2sql/ontology-build/*", (route) =>
+    fulfillJson(route, buildJob("running", "running"))
+  );
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+
+  const markdown = page.getByTestId("ontology-build-markdown");
+  const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
+  await expect(draftEditor).toHaveValue(/# オントロジー下書き/, { timeout: 20000 });
+  await expect(draftEditor).toBeEnabled();
+  const editedMarkdown = `${generatedDraftMarkdown}\n\n## 手動メモ`;
+  await draftEditor.fill(editedMarkdown);
+  await expect(markdown.getByText("未保存")).toBeVisible();
+
+  const section = page.getByTestId("profile-ontology-build");
+  const runButton = section.getByRole("button", { name: "AI 構築を実行" });
+  await runButton.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("保存していない下書きの変更があります");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(state.startCalls).toBe(0);
+  await expect(draftEditor).toHaveValue(editedMarkdown);
+
+  await runButton.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "変更を破棄して構築" }).click();
+  await expect.poll(() => state.startCalls).toBe(1);
+  await expect(page.getByTestId("ontology-build-steps")).toHaveAttribute(
+    "data-job-status",
+    "running",
+    { timeout: 15000 }
+  );
+  // 構築の結果が下書きを置き換えるまで、今の下書きは編集・保存できない。理由を欄の下に出す。
+  await expect(draftEditor).toBeDisabled();
+  await expect(markdown.getByText("AI 構築が新しい下書きを作るまで、今の下書きは編集できません。", { exact: false })).toBeVisible();
+  await expect(markdown.getByRole("button", { name: "Markdown 下書きを保存" })).toBeDisabled();
+});
+
 test("Markdown 下書き保存後は stale refresh でエディタ値を戻さない", async ({ page }) => {
   await mockApi(page);
   let saved = false;

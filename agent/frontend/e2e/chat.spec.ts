@@ -788,3 +788,40 @@ test("会話の履歴の読み込みに失敗したら「まだ会話があり�
   await expect(history.getByRole("button", { name: /契約の更新条件は？/ })).toBeVisible();
   await expect(error).toHaveCount(0);
 });
+
+// 送信の要求中に別の会話へ移ったら、Run の作成の応答で元の会話へ引き戻さない。
+// 作られた Run は止めず、元の会話に残す（Run は会話の履歴として続く）。
+test("送信の要求中に新しい会話へ移っても、作成の応答で元の会話へ戻らない", async ({ page, mockApi }) => {
+  seedThread(mockApi, { status: "completed" });
+  let releaseCreate!: () => void;
+  const pendingCreate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+  let created = false;
+  await page.route("**/api/runs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await pendingCreate;
+    created = true;
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await openSeedThread(page);
+  await expect(page.getByTestId("chat-turn-run-chat-seed")).toBeVisible();
+  const composer = page.getByRole("textbox", { name: "質問" });
+  await composer.fill("今月の売上は？");
+  await composer.press("Enter");
+  await expect(page.getByTestId("chat-pending-turn")).toContainText("今月の売上は？");
+
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await expect(page.getByTestId("chat-turn-run-chat-seed")).toHaveCount(0);
+  await composer.fill("次の質問の下書き");
+  releaseCreate();
+  await expect.poll(() => created).toBe(true);
+  await expect.poll(() => mockApi.lastRequest("POST", "/api/runs")).toBeTruthy();
+
+  // 新しい会話のまま。元の会話の Run も、送った質問の仮の表示も出さず、下書きも残す。
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId("chat-turn-run-chat-seed")).toHaveCount(0);
+  await expect(page.getByTestId("chat-turn-run-chat-1")).toHaveCount(0);
+  await expect(page.getByTestId("chat-pending-turn")).toHaveCount(0);
+  await expect(composer).toHaveValue("次の質問の下書き");
+  expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
+});

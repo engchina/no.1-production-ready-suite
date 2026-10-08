@@ -32,6 +32,8 @@ interface RequestOptions {
   signal?: AbortSignal;
   idempotencyKey?: string;
   ifMatch?: string;
+  // ページを離れる（再読込・タブを閉じる）ときも送り切る。
+  keepalive?: boolean;
 }
 
 // HTTP status を保持するエラー(ポーリング側で 404 = job 消失を判別するため)
@@ -136,6 +138,7 @@ async function request<T>(
   const response = await apiFetch(path, {
     method,
     signal: options.signal,
+    keepalive: options.keepalive,
     headers: {
       Accept: "application/json",
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
