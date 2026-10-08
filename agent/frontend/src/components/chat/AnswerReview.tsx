@@ -32,8 +32,13 @@ export function AnswerReviewPanel({ review, testId }: { review: AnswerReview; te
           variant="plain"
           size="sm"
           icon={ShieldCheck}
-          summary={t("chat.review.title")}
-          meta={review.validation ? <ValidationBadge validation={review.validation} /> : undefined}
+          // 見出しとバッジは同じ行に置き、狭い幅ではバッジを次の行へ折り返す（見出しの文字を縦に潰さない）。
+          summary={
+            <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span className="whitespace-nowrap">{t("chat.review.title")}</span>
+              {review.validation ? <ValidationBadge validation={review.validation} /> : null}
+            </span>
+          }
           summaryProps={{ "data-testid": `${testId}-summary` }}
           data-testid={testId}
         >
