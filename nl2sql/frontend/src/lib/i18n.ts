@@ -1664,6 +1664,12 @@ const nl2sqlJa = {
     "60 分以上、Markdown 下書き生成の更新がありません。バックグラウンド job が継続中ならこのまま監視できます。必要な場合だけ中止して再実行してください。",
   "profiles.ontologyBuild.elapsed": "経過 {time}",
   "profiles.ontologyBuild.cancel": "中止",
+  "profiles.ontologyBuild.dirtyDraftConfirm.title": "保存していない下書きの変更があります",
+  "profiles.ontologyBuild.dirtyDraftConfirm.description":
+    "AI 構築の結果で Markdown 下書きが置き換わり、保存していない変更は失われます。変更を残す場合は、先に下書きを保存してください。",
+  "profiles.ontologyBuild.dirtyDraftConfirm.confirm": "変更を破棄して構築",
+  "profiles.ontologyBuild.markdownLockedDuringBuild":
+    "AI 構築が新しい下書きを作るまで、今の下書きは編集できません。作られた下書きはこの欄に表示され、編集できます。",
   "profiles.ontologyBuild.cancelConfirm.title": "構築を中止しますか?",
   "profiles.ontologyBuild.cancelConfirm.description":
     "実行中の AI オントロジー構築を中止します。保存済みの Markdown 下書きはそのまま残ります。必要なら入力内容を確認して「AI 構築を実行」でやり直せます。",

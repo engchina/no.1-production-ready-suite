@@ -1343,6 +1343,8 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   });
   await runCurrentOntologySearch(page);
   expect(payloads.job).toMatchObject({ question: clarifiedQuestion });
+  // 確認内容を反映して閉じた session は中止しない（中止の件数に数えない）。
+  expect(payloads.cancel).toBeUndefined();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification.png"), fullPage: true });
@@ -1643,6 +1645,67 @@ test("AI要件確認の残りの必須項目は途中で失敗しても確定し
     [2, "question-granularity"],
     [2, "question-granularity"],
   ]);
+});
+
+// 375px ではサイドナビが畳まれるため、ナビのリンクと同じ client-side の遷移を history で起こす。
+async function navigateInApp(page: Page, path: string) {
+  await page.evaluate((target) => {
+    window.history.pushState({}, "", target);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, path);
+  await expect(page).toHaveURL(new RegExp(`${path}$`));
+}
+
+test("AI要件確認は別の画面へ移って戻ると同じ確認を続けられ、確認中は質問を変えられない", async ({ page }) => {
+  const payloads = await mockApi(page);
+  await page.goto("/query");
+
+  const questionInput = page.locator("#nl2sql-question-input");
+  await questionInput.fill("受注件数を表示");
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  const heading = panel.getByRole("heading", { name: "どの期間を対象にしますか？" });
+  await expect(heading).toBeVisible();
+  // 確認は開始時の質問で進むため、確認中は質問の入力と「新しい質問を開始」を使えない。
+  await expect(questionInput).toBeDisabled();
+  await expect(page.getByRole("button", { name: "新しい質問を開始" })).toBeDisabled();
+
+  // SQL 生成の画面は keep-alive。別の画面へ移っても確認は中止せず、戻ると続きから答えられる。
+  await navigateInApp(page, "/chat");
+  await expect(panel).toBeHidden();
+  await navigateInApp(page, "/query");
+  await expect(heading).toBeVisible();
+  await expect(questionInput).toHaveValue("受注件数を表示");
+  expect(payloads.cancel).toBeUndefined();
+});
+
+test("AI要件確認は作成の途中で閉じても、作成された確認をサーバーで中止する", async ({ page }) => {
+  const payloads = await mockApi(page, "time", { guidedStartDelayMs: 1_000 });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  // 作成の request がサーバーへ届いた後（応答の前）に閉じる。
+  await expect.poll(() => payloads.create, { timeout: 10_000 }).toBeDefined();
+  await panel.getByRole("button", { name: "確認を中止して閉じる" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => payloads.cancel, { timeout: 10_000 }).toBe(true);
+});
+
+test("AI要件確認の途中で再読込するとサーバーの確認を中止する", async ({ page }) => {
+  const payloads = await mockApi(page);
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  await expect(
+    page.getByTestId("nl2sql-guided-clarification").getByRole("heading", { name: "どの期間を対象にしますか？" })
+  ).toBeVisible();
+  expect(payloads.cancel).toBeUndefined();
+
+  await page.reload();
+  await expect.poll(() => payloads.cancel, { timeout: 10_000 }).toBe(true);
 });
 
 test("AI要件確認の中止は主操作の右側から元のクエリを保って閉じる", async ({ page }) => {
