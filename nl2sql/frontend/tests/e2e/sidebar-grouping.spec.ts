@@ -442,7 +442,7 @@ test("SQL 生成権限がない既定入口は root から最初の許可画面�
 
   await expect(page).toHaveURL(/\/settings\/appearance$/);
   const sidebar = await openSidebarNav(page);
-  await expect(sidebar.getByRole("link", { name: "外観" })).toHaveAttribute(
+  await expect(sidebar.getByRole("link", { name: "外観と接続" })).toHaveAttribute(
     "aria-current",
     "page"
   );

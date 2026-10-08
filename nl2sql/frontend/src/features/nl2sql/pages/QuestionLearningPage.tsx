@@ -58,6 +58,7 @@ import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
 import { APP_ROUTES } from "@/lib/routes";
+import { appPath } from "@/lib/base-path";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
@@ -849,7 +850,8 @@ function TrainingDataPanel({
             onChange={onSearchChange}
           />
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
-            <a className={linkButtonClass} href="/api/nl2sql/classifier/training-data/export.xlsx">
+            {/* ブラウザが直接開く URL のため、配信の前置き（`/nl2sql/` など。#1316）を付ける。 */}
+            <a className={linkButtonClass} href={appPath("/api/nl2sql/classifier/training-data/export.xlsx")}>
               <Download size={16} aria-hidden="true" />
               <span>{t("learning.classifier.exportXlsx")}</span>
             </a>
@@ -1557,7 +1559,7 @@ function TrainingCandidatesPanel({
                   <div className="min-w-0 xl:justify-self-end xl:pt-1">
                     <a
                       className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
-                      href={`${APP_ROUTES.feedbackManagement}?tab=appFeedback&history_id=${encodeURIComponent(item.history_id)}`}
+                      href={appPath(`${APP_ROUTES.feedbackManagement}?tab=appFeedback&history_id=${encodeURIComponent(item.history_id)}`)}
                     >
                       <Link2 size={16} aria-hidden="true" />
                       <span>{t("qcm.candidates.openFeedback")}</span>

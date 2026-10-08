@@ -1,4 +1,5 @@
 import { DATABASE_UNAVAILABLE_EVENT } from "@engchina/production-ready-system-settings";
+import { appPath, stripAppPath } from "./base-path.ts";
 
 // 通知の event 名は3製品共通の DB ゲートが持つ（#325）。
 export { DATABASE_UNAVAILABLE_EVENT };
@@ -79,10 +80,11 @@ export function reportDatabaseOperationalFailure(failure: DatabaseOperationalFai
 
 /** readiness 自体の失敗から再帰的に readiness を呼ばないための判定。 */
 export function isDatabaseReadinessRequest(path: string): boolean {
+  // 配信の前置き（`/nl2sql/` など。#1316）が付いた path でも同じに判定する。
   try {
-    return new URL(path, "http://localhost").pathname === DATABASE_READINESS_PATH;
+    return stripAppPath(new URL(path, "http://localhost").pathname) === DATABASE_READINESS_PATH;
   } catch {
-    return path.split(/[?#]/, 1)[0] === DATABASE_READINESS_PATH;
+    return stripAppPath(path.split(/[?#]/, 1)[0] ?? path) === DATABASE_READINESS_PATH;
   }
 }
 
@@ -108,7 +110,7 @@ export function confirmDatabaseUnavailable(
   let probe: Promise<DatabaseOperationalFailure | null>;
   const checked = (async () => {
     try {
-      const response = await fetchReadiness(DATABASE_READINESS_PATH, {
+      const response = await fetchReadiness(appPath(DATABASE_READINESS_PATH), {
         method: "GET",
         headers: { Accept: "application/json" },
         credentials: "include",
@@ -127,7 +129,7 @@ export function confirmDatabaseUnavailable(
         return failure;
       }
 
-      const persistenceResponse = await fetchReadiness(PERSISTENCE_STATUS_PATH, {
+      const persistenceResponse = await fetchReadiness(appPath(PERSISTENCE_STATUS_PATH), {
         method: "GET",
         headers: { Accept: "application/json" },
         credentials: "include",

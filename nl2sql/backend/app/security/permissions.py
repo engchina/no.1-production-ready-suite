@@ -255,7 +255,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
             PERSISTENCE_RECOVER_PERMISSION,
         ),
     ),
-    _menu_permission("menu.settings_appearance", "システム設定", "外観"),
+    _menu_permission("menu.settings_appearance", "システム設定", "外観と接続"),
     # ここから下はナビに無い権限（画面の中の操作を許可する capability）。
     _permission(
         "nl2sql.ontology.capabilities.manage",

@@ -53,7 +53,7 @@
 
 メトリクスのカード + `StatusBadge` + セクション。編集は最小にする。
 
-> システム設定（OCI 認証 / アップロード保存先 / モデル / データベース / 外観）は共有パッケージ `@engchina/production-ready-system-settings` の画面を使い、本規約の対象外。
+> システム設定（OCI 認証 / アップロード保存先 / モデル / データベース / 外観と接続）は共有パッケージ `@engchina/production-ready-system-settings` の画面を使い、本規約の対象外。
 
 ---
 

@@ -10,8 +10,9 @@ export {
   type UserRoleNavItem,
 } from "./paths";
 
-// 外観（#95）
+// 外観と接続（#95。HTTPS の CA 証明書は #1316）
 export { AppearanceSettingsPage, type AppearanceSettingsPageProps } from "./appearance/AppearanceSettingsPage";
+export { CA_CERTIFICATE_PATH, probeCaCertificate } from "./appearance/CaCertificateCard";
 export { APPEARANCE_MESSAGES, type AppearanceMessages } from "./appearance/messages";
 
 // 未保存変更の離脱ガード（NL2SQL から移設。#97）。戻る / 進むの blocker はアプリで 1 つ（#586）。

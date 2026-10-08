@@ -6,6 +6,7 @@ import {
   shouldConfirmDatabaseUnavailable,
   type DatabaseOperationalFailure,
 } from "./database-load-error.ts";
+import { appPath } from "./base-path.ts";
 import { t } from "./i18n";
 import {
   ApiTransportError,
@@ -204,7 +205,7 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
       ...csrfHeader(CSRF_COOKIE_NAME, "POST"),
     });
     try {
-      const response = await fetch(PERSISTENCE_RECOVERY_PATH, {
+      const response = await fetch(appPath(PERSISTENCE_RECOVERY_PATH), {
         method: "POST",
         headers,
         credentials: "include",
@@ -250,7 +251,7 @@ async function recoverAndRetrySafeRequest(
     return null;
   }
   try {
-    return await fetch(path, init);
+    return await fetch(appPath(path), init);
   } catch {
     return null;
   }
@@ -304,6 +305,8 @@ async function confirmDatabaseUnavailableFor(
 
 /**
  * アプリ全体の API 境界。Cookie セッション、CSRF、認証状態イベントを一箇所で扱う。
+ * `path` は画面の書く `/api/...` のまま受け取り、送る直前に配信の前置き（`/nl2sql/` など。#1316）を付ける。
+ * 判定・エラーの文（readiness の判定・transport の失敗の path）は前置きの無い `path` で行う。
  */
 export async function apiFetch(
   path: string,
@@ -322,7 +325,7 @@ export async function apiFetch(
   } satisfies RequestInit;
   let response: Response;
   try {
-    response = await fetch(path, requestInit);
+    response = await fetch(appPath(path), requestInit);
   } catch (cause) {
     if (isAbortError(cause)) throw cause;
     if (isTimeoutError(cause)) {

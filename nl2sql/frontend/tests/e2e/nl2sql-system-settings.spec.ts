@@ -2877,7 +2877,7 @@ test("Select AI Credential API 失敗は固定 alert だけに表示し Toast �
 
 test("外観設定でダーク/ライト/自動テーマを切り替えられる", async ({ page }) => {
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外観と接続" })).toBeVisible();
   const html = page.locator("html");
   // dev サーバでは getPropertyValue が "light-dark(a, b)" 文字列を返すため、変数の文字列ではなく
   // 実際に解決された色（body の背景色 / 変数を塗ったプローブ要素の background-color）を検証する。
@@ -2917,7 +2917,7 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   expect(await tokenVar("--color-border-control")).toBe(hexToRgb("#5d6878"));
   expect(await tokenVar("--color-accent-emphasis")).toBe(hexToRgb("#286abd"));
   await expect(toggle.getByRole("button", { name: "ダーク" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("heading", { name: "外観" })).toHaveCSS(
+  await expect(page.getByRole("heading", { name: "外観と接続" })).toHaveCSS(
     "color",
     "rgb(242, 244, 247)"
   );
@@ -2942,7 +2942,7 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
 
 test("テーマ切替は transition で旧テーマの色から補間せず、一度で切り替える (#571)", async ({ page }) => {
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外観と接続" })).toBeVisible();
 
   for (const label of ["ダーク", "ライト"]) {
     // クリックと同じタスク内で次のフレームまで待ち、実行中の CSS transition を集める。

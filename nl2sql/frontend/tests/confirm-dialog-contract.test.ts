@@ -23,7 +23,11 @@ test("ConfirmProvider には NL2SQL の文言とルート遷移の key を渡す
   assert.doesNotMatch(main, /navigationKey=\{location\.key\}/u);
   // data router（#138）の splat route の中に ConfirmProvider を置く。
   assert.match(main, /function RootLayout\(\)[\s\S]*<AppConfirmProvider>[\s\S]*<\/AppConfirmProvider>/u);
-  assert.match(main, /createBrowserRouter\(\[\{ path: "\*", element: <RootLayout \/> \}\]\)/u);
+  // 配信の前置き（`/nl2sql/` など）は router の basename で渡す（#1316）。
+  assert.match(
+    main,
+    /createBrowserRouter\(\[\{ path: "\*", element: <RootLayout \/> \}\], \{\s*basename: ROUTER_BASENAME,\s*\}\)/u
+  );
   assert.match(main, /<RouterProvider router=\{router\} \/>/u);
 });
 
