@@ -274,7 +274,7 @@ describe("言い換え（value_aliases）", () => {
 });
 
 
-describe("取込の差分と下書きで試す（#1288）", () => {
+describe("取込の差分と下書きで試す", () => {
   const changes: SupportGuideChange[] = [
     { section: "basic", kind: "changed", key: "", label: "題", fields: ["title", "description"] },
     { section: "steps", kind: "changed", key: "grant", label: "付与", fields: ["depends_on", "unknown"] },
