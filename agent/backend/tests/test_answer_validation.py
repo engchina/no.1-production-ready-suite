@@ -439,7 +439,7 @@ def test_evidence_of_each_rag_connection_is_validated_and_merged(
     )
 
     def search(argument: Any) -> dict[str, Any]:
-        output = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
         chunk = "chunk-a" if argument.query == "更新の期限" else "chunk-b"
         output["evidence"] = [{**output["evidence"][0], "evidence_id": chunk, "chunk_id": chunk}]
         return output
