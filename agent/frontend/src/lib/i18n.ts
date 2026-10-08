@@ -563,6 +563,7 @@ const agentJa = {
     "資料との照らし合わせが途中で止まったため、この回答は確かめられていません。内容を資料で確かめてから使ってください。",
   "chat.review.message.skipped": "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedEmpty": "回答が空のため、資料との照らし合わせの対象外です。",
+  "chat.review.message.skippedClarification": "確認の質問だけの回答のため、資料との照らし合わせの対象外です。",
   "chat.review.limitReached":
     "資料を調べられる回数の上限に達したため、ここまでに集めた資料で答えています。足りない点は、質問を分けて聞き直してください。",
   // 回答の処理の段階（3 製品共通の ChatProgress。#1145 / #1147）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。

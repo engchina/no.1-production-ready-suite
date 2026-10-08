@@ -125,6 +125,8 @@ const WITHHELD = validation({
       { answer_quote: "申請は部長の承認が要ります。", status: "supported", reason: "" },
       { answer_quote: "上限は 10 万円です。", status: "contradicted", reason: "規程では 5 万円" },
       { answer_quote: "翌月払いです。", status: "unsupported", reason: "根拠に記載が無い" },
+      // 主張ではない段落（出典の行。#1306）は、RAG が確かめていなくても確かめられていない点に出さない。
+      { answer_quote: "【経費規程.pdf p.3】", status: "unassessed", reason: "出典の行", non_claim: "citation" },
     ],
     findings: [
       { check: "requests", code: "request_missing", severity: "error", message: "「締め日」の質問に答えていません。" },
@@ -249,6 +251,29 @@ test("資料で確かめた結果は、検証済み・本文を省略・検証�
   ]);
   seedRun(mockApi, "run-no-evidence", [answer("回答 4"), validation({ status: "unvalidated", reason: "no_rag_evidence" })]);
   seedRun(mockApi, "run-skipped", [answer("回答 5"), validation({ status: "skipped", reason: "no_rag_evidence" })]);
+  // 資料に答えが無い質問の拒答（「記載がありません」の文は主張ではない。#1306）。
+  seedRun(mockApi, "run-refusal", [
+    answer("回答 6"),
+    validation({
+      status: "completed",
+      valid: false,
+      result: {
+        status: "completed",
+        valid: false,
+        claims: [
+          { answer_quote: "資料に記載がありません。", status: "unsupported", reason: "", non_claim: "absence" },
+        ],
+        findings: [],
+        stale_evidence: [],
+        missing_evidence: [],
+      },
+      withheld: { claims: 0, findings: 0, all: false },
+    }),
+  ]);
+  seedRun(mockApi, "run-clarification", [
+    answer("回答 7"),
+    validation({ status: "skipped", reason: "clarification_only" }),
+  ]);
   await page.goto("/chat");
   await openSeedThread(page);
 
@@ -258,6 +283,8 @@ test("資料で確かめた結果は、検証済み・本文を省略・検証�
     ["run-failed", "検証できませんでした", "warning", "資料との照らし合わせが途中で止まったため、この回答は確かめられていません。"],
     ["run-no-evidence", "検証できませんでした", "warning", "この回答は資料を使わずに作ったため、資料と照らし合わせて確かめていません。"],
     ["run-skipped", "検証の対象外", "neutral", "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。"],
+    ["run-refusal", "検証済み", "success", "回答の内容を、使った資料と照らし合わせて確かめました。"],
+    ["run-clarification", "検証の対象外", "neutral", "確認の質問だけの回答のため、資料との照らし合わせの対象外です。"],
   ] as const;
   for (const [runId, label, variant, message] of cases) {
     const turn = page.getByTestId(`chat-turn-${runId}`);
