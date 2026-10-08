@@ -24,7 +24,7 @@ def _parent(parent_uid: str, *children: tuple[str, bool]) -> dict[str, Any]:
     }
 
 
-def _lines(citations: list[RetrievedChunk]) -> dict[str, list[int]]:
+def _lines(citations: list[RetrievedChunk]) -> dict[str, Any]:
     return {
         chunk.chunk_id: chunk.metadata[ANSWER_CITATION_LINES_KEY]
         for chunk in citations
