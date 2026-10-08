@@ -101,8 +101,8 @@ EOF
 set -euo pipefail
 for arg in "$@"; do
   case "${arg}" in
-    *127.0.0.1:8000*) printf '200'; exit 0 ;;
-    http://127.0.0.1/api/health) printf '000'; exit 7 ;;
+    *127.0.0.1:8010*) printf '200'; exit 0 ;;
+    http://127.0.0.1/nl2sql/health) printf '000'; exit 7 ;;
   esac
 done
 printf '000'
@@ -216,7 +216,7 @@ assert_contains "${result}" "${BACKEND_UNIT}" "--status に backend unit が出�
 assert_contains "${result}" "${ONTOLOGY_UNIT}" "--status に ontology worker が出ない"
 assert_contains "${result}" "active" "--status に稼働状態が出ない"
 assert_contains "${result}" "failed" "--status に停止中 unit の状態が出ない"
-assert_contains "${result}" "http://127.0.0.1:8000/api/health" "--status に backend ヘルス URL が出ない"
+assert_contains "${result}" "http://127.0.0.1:8010/api/health" "--status に backend ヘルス URL が出ない"
 assert_contains "${result}" "200" "--status にヘルスチェックの HTTP status が出ない"
 assert_contains "${result}" "unreachable" "--status で到達不可の URL が表示されない"
 
