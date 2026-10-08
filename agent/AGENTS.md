@@ -100,7 +100,7 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
 - 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ 実行環境（組み込み Runtime の状態）/
   MCP 接続（#757）/ API キー（#778）/ バックアップと復元（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
-  データベース / 外観と接続（3製品で共通。画面と API は platform の共有パッケージ）。
+  データベース / 外観と証明書（3製品で共通。画面と API は platform の共有パッケージ）。
   ツール権限はナビに出さない（Control Plane 化で外した方針を維持）。Command Policy・Runtime Safety の画面と
   コマンド実行ツール（`sandbox_command_run`）は #756 で削除した。
 - ログインと権限（#215）: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」

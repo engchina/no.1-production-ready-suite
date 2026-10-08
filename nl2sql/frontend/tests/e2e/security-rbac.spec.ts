@@ -774,7 +774,7 @@ test("ローカル DEBUG はログインせず SYSTEM_ADMIN として入り、�
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
 });
 
-test("外観と接続のページは専用権限だけで表示でき、権限なしでは直達できない", async ({ page }) => {
+test("外観と証明書のページは専用権限だけで表示でき、権限なしでは直達できない", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/auth/me");
   await page.route("**/api/auth/me", (route) =>
@@ -792,10 +792,10 @@ test("外観と接続のページは専用権限だけで表示でき、権限�
 
   await page.goto("/");
   await expect(page).toHaveURL(/\/settings\/appearance$/);
-  await expect(page.getByRole("heading", { name: "外観と接続" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外観と証明書" })).toBeVisible();
   // 375px ではナビがドロワー（#367）。開いてから読む。
   const sidebar = await openSidebarNav(page);
-  await expect(sidebar.getByRole("link", { name: "外観と接続" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "外観と証明書" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
@@ -2859,8 +2859,8 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
     {
       code: "menu.settings_appearance",
       group: "システム設定",
-      label: "外観と接続",
-      description: "外観と接続を表示し、関連操作を利用できます。",
+      label: "外観と証明書",
+      description: "外観と証明書を表示し、関連操作を利用できます。",
       implies: [],
     },
     {
@@ -2964,12 +2964,12 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await expect(page.getByText("ダッシュボード表示", { exact: true })).toHaveCount(0);
   await expect(page.getByText("security.users.view", { exact: true })).toHaveCount(0);
   await expect(page.getByText("security.users.manage", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("checkbox", { name: /外観と接続/ })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /外観と証明書/ })).toBeVisible();
   const permissionBulkActions = page.getByTestId("security-roles-permission-selection-actions");
   await expect(permissionBulkActions.getByRole("button", { name: "すべて選択" })).toBeEnabled();
   await expect(permissionBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeEnabled();
   await permissionBulkActions.getByRole("button", { name: "すべて選択" }).click();
-  await expect(page.getByRole("checkbox", { name: /外観と接続/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /外観と証明書/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /^ロール管理/ })).toBeChecked();
   // 機能の一覧は左のナビのグループ・名前にそろえる（Issue 567）。backend のグループ「セキュリティ管理」・

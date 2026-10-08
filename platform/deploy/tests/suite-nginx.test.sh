@@ -55,7 +55,7 @@ source "${repo}/platform/deploy/suite-nginx.sh"
 
 # ---------------------------------------------------------------- 1. 静的な検査
 
-site_all_https="$(suite_nginx_site true /srv/suite /srv/ssl 210M rag nl2sql agent)"
+site_all_https="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 rag nl2sql agent)"
 assert_contains "${site_all_https}" "listen 443 ssl http2 default_server;" "HTTPS は 443"
 assert_contains "${site_all_https}" 'return 301 https://$host$request_uri;' "80 は https へ 301"
 assert_contains "${site_all_https}" "ssl_protocols TLSv1.2 TLSv1.3;" "TLS 1.2 / 1.3 だけ"
@@ -75,24 +75,48 @@ assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8010\$pr_suite_
 assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8020\$pr_suite_upstream_uri;" "Agent の backend は 8020"
 assert_contains "${site_all_https}" "|mcp)\$ {" "RAG の MCP は長い timeout"
 
-site_http="$(suite_nginx_site false /srv/suite /srv/ssl 210M rag nl2sql agent)"
+site_http="$(suite_nginx_site false /srv/suite /srv/ssl 210M 80 443 rag nl2sql agent)"
 assert_contains "${site_http}" "listen 80 default_server;" "HTTP は 80"
 assert_not_contains "${site_http}" "ssl" "HTTPS が off なら TLS を設定しない"
 assert_not_contains "${site_http}" "location = /platform/ca.crt" "HTTPS が off なら CA 証明書を配らない"
 assert_not_contains "${site_http}" "return 301 https" "HTTPS が off なら転送しない"
 
-site_rag_only="$(suite_nginx_site true /srv/suite /srv/ssl 210M rag)"
+site_rag_only="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 rag)"
 assert_contains "${site_rag_only}" "return 302 /rag/;" "Agent が無いときは最初の製品へ"
 assert_not_contains "${site_rag_only}" "/agent/api/" "配備しない製品の location は書かない"
 assert_not_contains "${site_rag_only}" "/nl2sql/api/" "配備しない製品の location は書かない"
-site_nl2sql_agent="$(suite_nginx_site true /srv/suite /srv/ssl 210M nl2sql agent)"
+site_nl2sql_agent="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 nl2sql agent)"
 assert_contains "${site_nl2sql_agent}" "return 302 /agent/;" "Agent を優先する"
-if suite_nginx_site true /srv/suite /srv/ssl 210M >/dev/null 2>&1; then
+if suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 >/dev/null 2>&1; then
   fail "製品が 0 件なら失敗する"
 fi
-if suite_nginx_site true /srv/suite /srv/ssl 210M rag platform >/dev/null 2>&1; then
+if suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 rag platform >/dev/null 2>&1; then
   fail "未知の製品なら失敗する"
 fi
+
+# port は変数（#1316）。既定でない port は listen と https への転送の先に入る。HTTPS が off なら http_port で直接配信する。
+site_custom="$(suite_nginx_site true /srv/suite /srv/ssl 210M 8080 8443 rag nl2sql agent)"
+assert_contains "${site_custom}" "listen 8443 ssl http2 default_server;" "https_port で listen する"
+assert_contains "${site_custom}" "listen 8080 default_server;" "http_port は https への転送"
+assert_contains "${site_custom}" 'return 301 https://$host:8443$request_uri;' "転送の先に https_port を付ける"
+site_same_port="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 80 rag)"
+assert_contains "${site_same_port}" "listen 80 ssl http2 default_server;" "https_port が 80 なら 80 で HTTPS"
+assert_not_contains "${site_same_port}" "return 301 https" "https_port と http_port が同じなら転送の server を置かない"
+site_http_custom="$(suite_nginx_site false /srv/suite /srv/ssl 210M 8080 22 rag)"
+assert_contains "${site_http_custom}" "listen 8080 default_server;" "HTTPS が off なら http_port で配信する"
+assert_not_contains "${site_http_custom}" "return 301 https" "HTTPS が off なら転送しない"
+# 使えない port（範囲外・SSH・よく使われる service・Compute の中で使う port）は拒む。
+for port in 0 65536 abc 22 25 53 111 1521 1522 3306 5432 6379 9090 8000 8010 8020 18000 18010 18028 18099; do
+  if suite_validate_public_port http_port "${port}" 2>/dev/null; then
+    fail "使えない port ${port} を受け入れた"
+  fi
+  if suite_nginx_site true /srv/suite /srv/ssl 210M 80 "${port}" rag >/dev/null 2>&1; then
+    fail "https_port ${port} で site を作った"
+  fi
+done
+for port in 80 443 8080 8443 17999 18100 65535; do
+  suite_validate_public_port http_port "${port}" || fail "使える port ${port} を拒んだ"
+done
 echo "suite-nginx: 静的な検査: pass"
 
 # ---------------------------------------------------------------- 2. 実 HTTP / HTTPS
@@ -177,12 +201,11 @@ run_case() {
   local http_port https_port
   http_port="$(free_port)"
   https_port="$(free_port)"
-  export SUITE_HTTP_LISTEN="127.0.0.1:${http_port}"
-  export SUITE_HTTPS_LISTEN="127.0.0.1:${https_port}"
-  export SUITE_HTTPS_PORT="${https_port}"
+  export SUITE_LISTEN_ADDRESS=127.0.0.1
   export SUITE_NGINX_LOG_DIR="${task_dir}/logs-${https_enabled}"
   mkdir -p "${SUITE_NGINX_LOG_DIR}"
-  suite_nginx_site "${https_enabled}" "${task_dir}/suite" "${task_dir}/ssl" 210M rag nl2sql agent > "${task_dir}/site.conf"
+  suite_nginx_site "${https_enabled}" "${task_dir}/suite" "${task_dir}/ssl" 210M "${http_port}" "${https_port}" \
+    rag nl2sql agent > "${task_dir}/site.conf"
   cat > "${task_dir}/nginx.conf" <<CONF
 pid ${task_dir}/nginx.pid;
 error_log ${task_dir}/error.log warn;

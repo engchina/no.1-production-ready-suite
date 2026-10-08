@@ -22,7 +22,7 @@ for (const { path, api } of CASES) {
     await page.goto(path);
     await requested;
     const nav = await openSidebarNav(page);
-    await nav.getByRole("link", { name: "外観と接続" }).click();
+    await nav.getByRole("link", { name: "外観と証明書" }).click();
     await expect(page).toHaveURL(/\/settings\/appearance$/);
 
     const failed = await aborted;

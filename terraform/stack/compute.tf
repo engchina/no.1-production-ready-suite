@@ -61,6 +61,10 @@ resource "oci_core_instance" "suite" {
       error_message = "app_admin_login_user_password must be configured when deploy_rag, deploy_nl2sql, or deploy_agent is true. Every product requires a login (system_admin and the users created in User Management)."
     }
     precondition {
+      condition     = length(local.public_ports_reserved) == 0
+      error_message = "http_port / https_port must not be SSH, a well-known service port, or a port the suite uses on the Compute instance (22, 25, 53, 111, 1521, 1522, 3306, 5432, 6379, 9090, 8000, 8010, 8020, 18000-18099)."
+    }
+    precondition {
       condition     = !var.deploy_nl2sql || var.nl2sql_app_environment == "local" || var.https_enabled
       error_message = "https_enabled must be true when nl2sql_app_environment is staging or production (NL2SQL requires Secure cookies)."
     }

@@ -31,15 +31,21 @@ NGINX_ERROR_LOG="${NGINX_ERROR_LOG:-/var/log/nginx/production-ready-${TAIL_LOGS_
 INIT_LOG_PATH="${INIT_LOG_PATH:-/var/log/${TAIL_LOGS_PRODUCT}-init.log}"
 UPDATE_LOG_PATH="${UPDATE_LOG_PATH:-/var/log/${TAIL_LOGS_PRODUCT}-update.log}"
 
-# Nginx 経由の health は /<製品>/health。HTTPS が on（stack の既定）なら 443（80 は https への転送だけ）。
+# Nginx 経由の health は /<製品>/health。scheme と port は cloud-init の props（https_enabled.txt / https_port.txt /
+# http_port.txt。#1316）から決める（HTTPS が on なら https_port、http_port は https への転送だけ）。
 SUITE_PROPS_DIR="${SUITE_PROPS_DIR:-/u01/aipoc/props}"
-if [ "$(tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/https_enabled.txt" || true)" = "true" ]; then
-  PUBLIC_HEALTH_SCHEME=https
+suite_prop() {
+  tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/$1" || true
+}
+if [ "$(suite_prop https_enabled.txt)" = "false" ]; then
+  PUBLIC_HEALTH_PORT="$(suite_prop http_port.txt)"
+  PUBLIC_HEALTH_ORIGIN="http://127.0.0.1:${PUBLIC_HEALTH_PORT:-80}"
 else
-  PUBLIC_HEALTH_SCHEME=http
+  PUBLIC_HEALTH_PORT="$(suite_prop https_port.txt)"
+  PUBLIC_HEALTH_ORIGIN="https://127.0.0.1:${PUBLIC_HEALTH_PORT:-443}"
 fi
 BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:${BACKEND_PORT}/api/health}"
-PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-${PUBLIC_HEALTH_SCHEME}://127.0.0.1/${TAIL_LOGS_PRODUCT}/health}"
+PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-${PUBLIC_HEALTH_ORIGIN}/${TAIL_LOGS_PRODUCT}/health}"
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-5}"
 
 ACTION="tail"

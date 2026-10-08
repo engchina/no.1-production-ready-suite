@@ -11,7 +11,7 @@ test.describe("md 未満のナビのドロワー (mobile-375)", () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto("/settings/appearance");
-    await expect(page.getByRole("heading", { name: "外観と接続", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "外観と証明書", level: 1 })).toBeVisible();
   });
 
   test("閉じている間はサイドバーを出さず、上端のバーに「メニュー」と製品名を出す", async ({ page }) => {

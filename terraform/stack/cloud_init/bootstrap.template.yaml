@@ -41,6 +41,14 @@ write_files:
     permissions: "0644"
     content: |
       ${https_enabled}
+  - path: "/u01/aipoc/props/http_port.txt"
+    permissions: "0644"
+    content: |
+      ${http_port}
+  - path: "/u01/aipoc/props/https_port.txt"
+    permissions: "0644"
+    content: |
+      ${https_port}
   - path: "/u01/aipoc/props/assign_public_ip.txt"
     permissions: "0644"
     content: |

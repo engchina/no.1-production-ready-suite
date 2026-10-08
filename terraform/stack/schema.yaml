@@ -36,6 +36,8 @@ variableGroups:
     visible: true
     variables:
       - https_enabled
+      - https_port
+      - http_port
 
   - title: Autonomous AI Database
     visible: true
@@ -182,8 +184,26 @@ variables:
     required: true
     visible: true
     title: "HTTPS（443）"
-    description: "オンにすると、Nginx が 443 で HTTPS を受け、80 への接続は HTTPS へ転送します。証明書は Compute の中で作る自作の Root CA と、Compute の公開 IP・private IP の証明書です（発行者は固定）。ブラウザの警告を消すには、各製品の「システム設定 > 外観と接続」から CA の証明書を取り込みます。オフにすると 80 の HTTP だけで配信します。subnet の security list で 443（と 80）の TCP を許可してください。"
+    description: "オンにすると、Nginx が https_port（既定 443）で HTTPS を受け、80 への接続は HTTPS へ転送します。証明書は Compute の中で作る自作の Root CA と、Compute の公開 IP・private IP の証明書です（発行者は固定）。ブラウザの警告を消すには、各製品の「システム設定 > 外観と証明書」から CA の証明書を取り込みます。オフにすると http_port（既定 80）の HTTP だけで、そのまま配信します（転送しません）。subnet の security list（または NSG）で使う port の TCP を許可してください。"
     default: true
+
+  https_port:
+    type: number
+    required: true
+    visible: https_enabled
+    title: "HTTPS port"
+    description: "Nginx が HTTPS を受ける port（既定 443）。HTTP の 80 への接続は HTTPS へ転送します。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    default: 443
+
+  http_port:
+    type: number
+    required: true
+    visible:
+      not:
+        - https_enabled
+    title: "HTTP port"
+    description: "HTTPS を使わないときに Nginx が HTTP を受ける port（既定 80）。HTTPS へは転送しません。SSH（22）・よく使われる service の port・Compute の中で製品が使う port は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    default: 80
 
   adb_compartment_ocid:
     type: oci:identity:compartment:id
@@ -566,24 +586,24 @@ variables:
     required: true
     visible: true
     title: "Compute OCPUs"
-    description: "The selected products share one Compute instance. 8 OCPUs is the total of the previous per-product defaults (RAG 4, NL2SQL 2, Agent 2); the RAG CPU document parser (Docling) uses the most."
-    default: 8
+    description: "The selected products share one Compute instance. The RAG CPU document parser (Docling) uses the most; raise it for heavy ingestion."
+    default: 4
 
   instance_flex_shape_memory:
     type: number
     required: true
     visible: true
     title: "Compute memory (GB)"
-    description: "64 GB is the total of the previous per-product defaults (RAG 32, NL2SQL 16, Agent 16). The RAG CPU document parser (Docling) loads ML models."
-    default: 64
+    description: "The RAG CPU document parser (Docling) loads ML models; raise it for heavy ingestion."
+    default: 24
 
   instance_boot_volume_size:
     type: number
     required: true
     visible: true
     title: "Boot volume size (GB)"
-    description: "The per-service Python environments and models of the RAG parsers are large. 300 GB covers the three products (the OS and Node.js are shared)."
-    default: 300
+    description: "The per-service Python environments and models of the RAG parsers are large. 200 GB covers the three products (the OS and Node.js are shared)."
+    default: 200
 
   instance_boot_volume_vpus:
     type: number

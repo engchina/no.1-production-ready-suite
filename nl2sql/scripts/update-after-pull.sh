@@ -23,26 +23,22 @@ WALLET_DIR="${WALLET_DIR:-${APP_ROOT}/wallet}"
 RECOVERY_ROOT="${RECOVERY_ROOT:-${APP_ROOT}/recovery}"
 UPDATE_LOG_PATH="${UPDATE_LOG_PATH:-/var/log/nl2sql-update.log}"
 
-# 1 台の Compute に 3 製品を置く配備（#1316）。cloud-init の props（products.txt / https_enabled.txt）で判定する。
-# frontend は /nl2sql/ を base に build し、Nginx 経由の health は /nl2sql/health（HTTPS が on なら 443）。
+# 3 製品は 1 台の Compute にセットで配備する（#1316）。frontend は /nl2sql/ を base に build し、Nginx 経由の health は
+# /nl2sql/health。scheme と port は cloud-init の props（https_enabled.txt / https_port.txt / http_port.txt）から決める。
 SUITE_PROPS_DIR="${SUITE_PROPS_DIR:-${APP_ROOT}/props}"
-if [ -f "${SUITE_PROPS_DIR}/products.txt" ]; then
-  DEFAULT_FRONTEND_BASE_PATH="/nl2sql/"
-  DEFAULT_PUBLIC_HEALTH_PATH="/nl2sql/health"
+read_suite_prop() {
+  tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/$1" || true
+}
+if [ "$(read_suite_prop https_enabled.txt)" = "false" ]; then
+  DEFAULT_PUBLIC_HEALTH_ORIGIN="http://127.0.0.1:$(port="$(read_suite_prop http_port.txt)"; printf '%s' "${port:-80}")"
 else
-  DEFAULT_FRONTEND_BASE_PATH="/"
-  DEFAULT_PUBLIC_HEALTH_PATH="/api/health"
+  DEFAULT_PUBLIC_HEALTH_ORIGIN="https://127.0.0.1:$(port="$(read_suite_prop https_port.txt)"; printf '%s' "${port:-443}")"
 fi
-if [ "$(tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/https_enabled.txt" || true)" = "true" ]; then
-  DEFAULT_PUBLIC_HEALTH_SCHEME="https"
-else
-  DEFAULT_PUBLIC_HEALTH_SCHEME="http"
-fi
-FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-${DEFAULT_FRONTEND_BASE_PATH}}"
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"
 
 # backend は 127.0.0.1:8010（RAG の 8000 と分ける。ローカルの開発と同じ。#1316）。
 BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-http://127.0.0.1:8010/api/health}"
-PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-${DEFAULT_PUBLIC_HEALTH_SCHEME}://127.0.0.1${DEFAULT_PUBLIC_HEALTH_PATH}}"
+PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-${DEFAULT_PUBLIC_HEALTH_ORIGIN}/nl2sql/health}"
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-90}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-2}"
 LOCK_FILE="${LOCK_FILE:-/tmp/production-ready-nl2sql-update.lock}"
@@ -186,8 +182,8 @@ root 起動時も build、依存同期、database CLI は ubuntu へ降権して
 Environment overrides:
   PLATFORM_REPO_DIR             共有 platform directory (default: suite の platform/)
   BACKEND_HEALTH_URL            backend の直接 health URL (default: http://127.0.0.1:8010/api/health)
-  PUBLIC_HEALTH_URL             Nginx 経由の health URL (1 台の Compute では /nl2sql/health)
-  FRONTEND_BASE_PATH            frontend の base (1 台の Compute では /nl2sql/、それ以外は /)
+  PUBLIC_HEALTH_URL             Nginx 経由の health URL (default: props の scheme と port の /nl2sql/health)
+  FRONTEND_BASE_PATH            frontend の base (default: /nl2sql/)
   HEALTHCHECK_TIMEOUT_SECONDS   health 待機上限秒 (default: 90)
   HEALTHCHECK_INTERVAL_SECONDS  health 再試行間隔秒 (default: 2)
 EOF

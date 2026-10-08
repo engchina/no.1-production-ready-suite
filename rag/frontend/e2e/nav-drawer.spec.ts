@@ -57,7 +57,7 @@ test.describe("md 未満のナビのドロワー", () => {
     // Tab の回数で止まる位置はナビの項目数で変わる（#412 で「改善・運用」が増え、40 回でちょうど閉じるボタンへ戻るようになった）。
     // 閉じるボタンはアイコンだけのボタンで、キーボードのフォーカスで Tooltip が出て、1 回目の Escape は吹き出しだけを閉じる（#372）。
     // ここではナビのリンク（Tooltip なし）から Escape で閉じることを確かめる。閉じるボタンの場合は下のテストで確かめる。
-    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "外観と接続" }).focus();
+    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "外観と証明書" }).focus();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
@@ -117,7 +117,7 @@ test.describe("md 未満のナビのドロワー", () => {
   test("今のページのリンクを選んでも閉じ、メニューボタンへフォーカスを戻す", async ({ page }) => {
     const trigger = page.getByRole("button", { name: "メニュー", exact: true });
     await trigger.click();
-    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "外観と接続" }).click();
+    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "外観と証明書" }).click();
     await expect(page.getByRole("dialog", { name: "メニュー" })).toBeHidden();
     await expect(page).toHaveURL(/\/settings\/appearance$/);
     await expect(trigger).toBeFocused();

@@ -31,8 +31,6 @@ prepare_case() {
   export SYSTEMD_UNIT_DIR="${case_dir}/units"
   export SUDOERS_DIR="${case_dir}/sudoers.d"
   export NGINX_LOGGING_CONF_DIR="${case_dir}/conf.d"
-  export NGINX_SITES_AVAILABLE_DIR="${case_dir}/sites-available"
-  export NGINX_SITES_ENABLED_DIR="${case_dir}/sites-enabled"
   export DATA_DIR="${case_dir}/data"
   export SERVICE_HOME="${case_dir}/service-home"
   export LEGACY_COMPOSE_WRAPPER="${case_dir}/bin/rag-compose"
@@ -207,32 +205,6 @@ EOF
   # 2 回目は何もしない（既にデータがある場所は上書きしない）。
   printf 'changed\n' > "${DOCKER_VOLUMES_DIR}/production-ready-rag_backend-local-storage/_data/uploads/a.pdf"
   migrate_from_docker_compose >> "${case_dir}/migration.log" 2>&1
-)
-
-run_nginx_case() (
-  local scenario="$1"
-  local max_upload_line="$2"
-  local case_dir="${TEST_TMP_DIR}/${scenario}"
-  prepare_case "${case_dir}"
-  export APPLICATION_PORT=8080
-  # shellcheck source=/dev/null
-  source "${REPO_DIR}/init_script.sh"
-  trap - ERR
-  touch "${NGINX_SITES_ENABLED_DIR}/default"
-  printf 'RAG_AUTH_MODE=production\n%s\n' "${max_upload_line}" > "${BACKEND_DIR}/.env"
-
-  systemctl() {
-    printf '%s\n' "$*" >> "${case_dir}/systemctl.log"
-  }
-  nginx() {
-    printf 'nginx %s\n' "$*" >> "${case_dir}/systemctl.log"
-  }
-
-  if configure_nginx > "${case_dir}/nginx.log" 2>&1; then
-    echo ok > "${case_dir}/result"
-  else
-    echo failed > "${case_dir}/result"
-  fi
 )
 
 # --- 配備する前処理 / parser（CPU / OCI だけ。GPU と未知の service は拒否する） ---
@@ -417,76 +389,29 @@ test "$(cat "${migration_dir}/data/uploads/a.pdf")" = "original" \
   || fail "アップロード原本を docker volume から移していない、または 2 回目で上書きした"
 test -f "${migration_dir}/service-home/.oci/config" || fail "OCI の設定を docker volume から移していない"
 
-# --- Nginx（認証は backend の login。Nginx は配信と proxy だけ。upload の上限は backend から作る） ---
-run_nginx_case nginx ""
-site="${TEST_TMP_DIR}/nginx/sites-available/production-ready-rag"
-grep -Fq 'listen 8080;' "${site}" || fail "application port で listen していない"
-grep -Fq 'proxy_pass http://127.0.0.1:8000;' "${site}" || fail "/api/ が backend 8000 へ proxy されていない"
-grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
-awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
-# LLM を複数回呼ぶ処理（評価 #304・チャット / 検索の回答生成と MCP #375・品質評価 #383・チャットの作成中の回答の
-# 再購読 #1175）の待ち時間。
-llm_location_line='    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)$ {'
-grep -Fqx "${llm_location_line}" "${site}" \
-  || fail "評価・回答生成・MCP の待ち時間を延ばす location がない"
-evaluation_location="$(awk -v start="${llm_location_line}" '$0 == start {found = 1} found {print} found && /^ *\}$/ {exit}' "${site}")"
-test -n "${evaluation_location}" || fail "保存済みの回答の評価の location がない"
-printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_read_timeout 660s;' \
-  || fail "評価・回答生成の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
-printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_buffering off;' \
-  || fail "回答生成の SSE のため proxy buffering を無効にしていない"
-printf '%s\n' "${evaluation_location}" | grep -Fq 'proxy_pass http://127.0.0.1:8000;' \
-  || fail "評価・回答生成が backend へ proxy されていない"
-# location の正規表現が、実際の path（評価・検索・検索の SSE・チャットの SSE・MCP）に当たり、
-# ほかの API（検索の回答の一覧など）には当たらないこと（Nginx の正規表現は PCRE。grep -E で近似する）。
-llm_location_regex='^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)$'
-for path in /api/search /api/search/stream /api/search/answers/trace-1/evaluation \
-  /api/evaluation/run /api/evaluation/compare \
-  /api/chat/conversations/conv-1/messages/stream /api/mcp; do
-  printf '%s\n' "${path}" | grep -Eq "${llm_location_regex}" || fail "${path} の待ち時間が延びない"
-done
-for path in /api/search/answers /api/chat/conversations /api/search/citation-feedback \
-  /api/evaluation/runs; do
-  if printf '%s\n' "${path}" | grep -Eq "${llm_location_regex}"; then
-    fail "${path} まで待ち時間を延ばしている"
+# --- Nginx: RAG は単独では配備しない（#1316）。site は platform/deploy/suite-nginx.sh の 1 つだけ ---
+# （/rag/ の location・回答生成と MCP の待ち時間・SSE・ログインの上限・upload の上限は platform/deploy/tests/ が確かめる）
+for unexpected in configure_nginx nginx_client_max_body_size sites-available proxy_pass APPLICATION_PORT; do
+  if grep -Fq "${unexpected}" "${REPO_DIR}/init_script.sh"; then
+    fail "単独の配備の Nginx の設定（${unexpected}）が残っている"
   fi
 done
-# backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の設定の上限）が Nginx・画面より短いこと。
+grep -Fq 'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/rag/}"' "${REPO_DIR}/init_script.sh" \
+  || fail "frontend を /rag/ を base に build しない"
+suite_nginx="${REPO_DIR}/../platform/deploy/suite-nginx.sh"
+grep -Fq 'location ~ ^/rag/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)\$ {' "${suite_nginx}" \
+  || fail "評価・回答生成・MCP の待ち時間を延ばす location がない"
+grep -Fq 'proxy_read_timeout 660s;' "${suite_nginx}" \
+  || fail "評価・回答生成の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
+# backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の設定の上限）が Nginx（660 秒）・画面（630 秒）より短いこと。
 answer_timeout_max="$(sed -n 's/^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = \([0-9]*\)\.0$/\1/p' "${REPO_DIR}/backend/app/config.py")"
 test "${answer_timeout_max}" = "600" || fail "LLM 1 回の timeout の上限（回答生成の上限）が 600 秒ではない"
 awk '/rag_answer_timeout_seconds: float = Field\(/ {found = 1} found {print} found && /^    \)$/ {exit}' \
   "${REPO_DIR}/backend/app/config.py" | grep -Fq 'le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,' \
   || fail "回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS）が LLM 1 回の timeout の上限で抑えられていない"
-# upload の上限: backend の RAG_MAX_UPLOAD_BYTES（既定 200 MiB）+ multipart の余白 10 MiB（#306）。
-# Nginx の既定（1m）のままだと 1 MB を超える文書を送れない（#280）。
-grep -Fq 'client_max_body_size 210M;' "${site}" \
-  || fail "既定の upload の上限が backend の RAG_MAX_UPLOAD_BYTES（200 MiB）+ 余白になっていない"
-grep -Fq 'proxy_read_timeout 600s;' "${site}" || fail "Nginx が大きな upload の保存を待てない"
-# 上限の値は init_script.sh が生成する 1 か所だけにする（固定値を持つ別の Nginx 設定を置かない。#306）。
-# frontend/nginx.conf.template は Docker の frontend image 用だった（#356 で Dockerfile を削除）。
+# 上限の値は suite の Nginx の 1 か所だけにする（固定値を持つ別の Nginx 設定を置かない。#306）。
 test ! -e "${REPO_DIR}/frontend/nginx.conf.template" \
   || fail "使われない frontend/nginx.conf.template が固定の upload の上限を持ったまま残っている"
-run_nginx_case nginx-custom-upload "RAG_MAX_UPLOAD_BYTES=524288000"
-grep -Fq 'client_max_body_size 510M;' "${TEST_TMP_DIR}/nginx-custom-upload/sites-available/production-ready-rag" \
-  || fail "backend/.env の RAG_MAX_UPLOAD_BYTES（500 MiB）から Nginx の上限を作っていない"
-run_nginx_case nginx-rounded-upload "RAG_MAX_UPLOAD_BYTES='1000000'"
-grep -Fq 'client_max_body_size 11M;' "${TEST_TMP_DIR}/nginx-rounded-upload/sites-available/production-ready-rag" \
-  || fail "RAG_MAX_UPLOAD_BYTES を MiB へ切り上げていない、または引用符を扱えない"
-run_nginx_case nginx-invalid-upload "RAG_MAX_UPLOAD_BYTES=200MB"
-test "$(cat "${TEST_TMP_DIR}/nginx-invalid-upload/result")" = "failed" \
-  || fail "不正な RAG_MAX_UPLOAD_BYTES で Nginx の設定を作った"
-awk '/location = \/health \{/,/\}/' "${site}" | grep -Fq '/api/health;' || fail "/health が backend の /api/health を返していない"
-if grep -Fq 'auth_basic' "${site}"; then
-  fail "RAG は backend の login を使う（Nginx の Basic 認証は置かない）"
-fi
-test -L "${TEST_TMP_DIR}/nginx/sites-enabled/production-ready-rag" || fail "site が有効化されていない"
-test ! -e "${TEST_TMP_DIR}/nginx/sites-enabled/default" || fail "default site が残っている"
-grep -q '^nginx -t$' "${TEST_TMP_DIR}/nginx/systemctl.log" || fail "nginx -t が実行されていない"
-# ログインの API だけの送信元 IP ごとの緩い上限（#1173。実 HTTP の確認は platform/scripts/tests/nginx-login-limit.test.sh）。
-test -f "${TEST_TMP_DIR}/nginx/conf.d/production-ready-login-rate-limit.conf" \
-  || fail "ログインの上限の zone（login-rate-limit.conf）が置かれていない"
-awk '/location = \/api\/auth\/login \{/,/\}/' "${site}" | grep -Fq 'limit_req zone=pr_login burst=30 nodelay;' \
-  || fail "/api/auth/login に limit_req が掛かっていない"
 
 # --- 静的な不変条件 ---
 init_script="${REPO_DIR}/init_script.sh"
@@ -504,10 +429,11 @@ if grep -Eq '^\s*(docker|docker-compose)\b|docker-ce|docker-compose-plugin|downl
 fi
 grep -Fq 'uv sync --locked --no-dev --python ${RAG_PYTHON_VERSION}' "${init_script}" \
   || fail "backend の venv を Python 3.12 の lock どおりに作っていない"
-# Nginx の既定の上限の元（init_script.sh の既定値）は backend の max_upload_bytes の既定値と同じ。
-grep -Fq 'RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200' "${init_script}" || fail "RAG_MAX_UPLOAD_BYTES の既定値が変わった"
+# Nginx の既定の上限の元（suite-init.sh の既定値）は backend の max_upload_bytes の既定値と同じ（#1316）。
+grep -Fq 'RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200' "${REPO_DIR}/../platform/deploy/suite-init.sh" \
+  || fail "RAG_MAX_UPLOAD_BYTES の既定値が変わった"
 grep -Fq 'max_upload_bytes: int = Field(default=200 * 1024 * 1024' "${REPO_DIR}/backend/app/config.py" \
-  || fail "backend の RAG_MAX_UPLOAD_BYTES の既定値が init_script.sh と合っていない"
+  || fail "backend の RAG_MAX_UPLOAD_BYTES の既定値が suite-init.sh と合っていない"
 
 # --- 開発環境（scripts/rag-services.sh）も本番と同じ unit と sudoers を作る ---
 dev_dir="${TEST_TMP_DIR}/dev-render"

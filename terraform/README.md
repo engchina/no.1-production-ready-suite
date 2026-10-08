@@ -174,9 +174,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 
 ### Compute・Nginx・HTTPS（3 製品で共通。#1316）
 
-- Compute は 1 台です。既定は **8 OCPU / 64 GB / boot volume 300 GB**（以前の製品ごとの既定の合計: OCPU 4 + 2 + 2、メモリ 32 + 16 + 16 GB。
-  boot volume は OS・Node.js・uv の Python を共有するため合計の 400 GB より小さくした）。RAG の CPU の parser（Docling）が最も多く使います。
-  選ぶ製品が少ないときは小さくしてかまいません。
+- Compute は 1 台です。既定は **4 OCPU / 24 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
+  文書の取込が多いときは OCPU とメモリを上げてください。
 - Nginx は 1 つの site（`/etc/nginx/sites-available/production-ready-suite`。`platform/deploy/suite-nginx.sh` が生成）で、製品を path の prefix で分けます。
 
   | path | 内容 |
@@ -197,7 +196,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
     | サーバー | `C=JP, ST=Tokyo, L=Minato-ku, O=Oracle, OU=Production Ready Suite, CN=<公開 IP>`、SAN = 公開 IP + private IP | RSA 3072・SHA-256・397 日 |
 
   - CA の秘密鍵は `/u01/aipoc/ssl/ca.key`（root の 0600）で、Compute の外へは出しません。利用者には CA の証明書（`/platform/ca.crt`）だけを配ります。
-    各製品の「システム設定 > 外観と接続」の「HTTPS の証明書」から、ダウンロードと端末への取り込み方を確認できます。
+    各製品の「システム設定 > 外観と証明書」の「HTTPS の証明書」から、ダウンロードと端末への取り込み方を確認できます。
   - 公開 IP は OCI の instance metadata に無いため、Compute に公開 IP があるときだけ外部のサービス（`https://checkip.amazonaws.com` など）に
     送信元の IP を問い合わせます。分からないときは private IP だけの証明書を作り、`/var/log/suite-init.log` に警告を出します。
     公開 IP を指定して作り直す: `sudo bash /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-tls.sh renew --public-ip <公開 IP>`

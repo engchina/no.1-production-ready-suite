@@ -102,7 +102,7 @@ set -euo pipefail
 for arg in "$@"; do
   case "${arg}" in
     *127.0.0.1:8010*) printf '200'; exit 0 ;;
-    http://127.0.0.1/nl2sql/health) printf '000'; exit 7 ;;
+    https://127.0.0.1:443/nl2sql/health) printf '000'; exit 7 ;;
   esac
 done
 printf '000'

@@ -17,12 +17,12 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`外観と接続でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
+  test(`外観と証明書でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto("/settings/appearance");
 
-    await expect(page.getByRole("heading", { name: "外観と接続", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "外観と証明書", level: 1 })).toBeVisible();
     const toggle = page.getByTestId("appearance-theme-toggle");
     await expect(toggle.getByRole("button", { name: "ライト" })).toHaveAttribute("aria-pressed", "true");
     expect(await isDark(page)).toBe(false);
@@ -48,16 +48,16 @@ for (const viewport of [
   });
 }
 
-test("サイドナビのシステム設定に外観と接続がある", async ({ page }) => {
+test("サイドナビのシステム設定に外観と証明書がある", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("link", { name: "外観と接続" })).toHaveAttribute("href", "/settings/appearance");
+  await expect(page.getByRole("link", { name: "外観と証明書" })).toHaveAttribute("href", "/settings/appearance");
 });
 
 // HTTPS の証明書（#1316）: 1 台の Compute の Nginx が /platform/ca.crt で CA の証明書を配る。製品は /<製品>/ の下でも
 // サイトの root の /platform/ca.crt を見る。ローカルの開発（Vite）は配っていないので説明だけを出す。
 for (const theme of ["ライト", "ダーク"] as const) {
-  test(`外観と接続の HTTPS の証明書（${theme}）`, async ({ page }) => {
+  test(`外観と証明書の HTTPS の証明書（${theme}）`, async ({ page }) => {
     await page.goto("/settings/appearance");
     await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: theme }).click();
     await expect(page.locator("html")).toHaveClass(theme === "ダーク" ? /dark/ : /^(?!.*\bdark\b).*$/);

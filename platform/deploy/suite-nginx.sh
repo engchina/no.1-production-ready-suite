@@ -8,7 +8,9 @@
 #   /platform/...             platform の共有の内容のために予約する（今は ca.crt 以外は 404）
 #   /                         /agent/ へ 302（Agent を配備しないときは、最初に配備した製品へ）
 #
-# HTTPS が on のとき: 443 で TLS 1.2 / 1.3、80 はすべて 301 で https へ。HSTS は付けない（IP の証明書のため）。
+# HTTPS が on のとき: https_port（既定 443）で TLS 1.2 / 1.3、http_port（既定 80）はすべて 301 で https へ
+# （http_port と https_port が同じなら転送の server は置かない）。HSTS は付けない（IP の証明書のため）。
+# HTTPS が off のとき: http_port で HTTP をそのまま配信する（転送しない）。port は stack の変数（#1316）。
 # backend へは $request_uri から prefix だけを外した URI をそのまま渡す（%2F などのエンコードを変えない）。
 
 # 各製品の backend の port（127.0.0.1 だけで listen する）。ローカルの開発の port と同じ（#1316 で NL2SQL を 8000 → 8010）。
@@ -19,6 +21,40 @@ SUITE_NL2SQL_BACKEND_PORT="${SUITE_NL2SQL_BACKEND_PORT:-8010}"
 SUITE_AGENT_BACKEND_PORT="${SUITE_AGENT_BACKEND_PORT:-8020}"
 # 1 台に置く製品の並び（Nginx の location の順。/ の転送先は agent を優先する）。
 SUITE_PRODUCTS_ORDER=(rag nl2sql agent)
+
+# 公開の port（http_port / https_port）に使えない port（#1316）。Terraform の locals.tf の reserved_ports と
+# reserved_port_ranges と同じ値にする（verify_stack_contract.py が照合する。手で実行したときも先に失敗させる）。
+#   22: SSH / 25: SMTP / 53: DNS / 111: rpcbind / 1521・1522: Oracle の listener（ADB の接続と紛らわしい）/
+#   3306: MySQL / 5432: PostgreSQL / 6379: Redis / 9090: Prometheus など運用の道具 /
+#   8000・8010・8020: 各製品の backend（127.0.0.1）
+SUITE_RESERVED_PORTS=(22 25 53 111 1521 1522 3306 5432 6379 9090 8000 8010 8020)
+# RAG の前処理 / parser（127.0.0.1:18010〜18028。rag/scripts/rag-systemd.sh）とその予備。
+SUITE_RESERVED_PORT_RANGES=("18000-18099")
+
+# 公開の port として使えるか（1〜65535 の整数で、予約していない）。使えなければ理由を stderr に書いて 1。
+suite_validate_public_port() {
+  local name="$1"
+  local port="$2"
+  local reserved range low high
+  if ! [[ "${port}" =~ ^[0-9]{1,5}$ ]] || [ "${port}" -lt 1 ] || [ "${port}" -gt 65535 ]; then
+    echo "${name} must be an integer between 1 and 65535: ${port}" >&2
+    return 1
+  fi
+  for reserved in "${SUITE_RESERVED_PORTS[@]}"; do
+    if [ "${port}" -eq "${reserved}" ]; then
+      echo "${name} ${port} is reserved (SSH, well-known services, or a port the suite uses on the Compute)." >&2
+      return 1
+    fi
+  done
+  for range in "${SUITE_RESERVED_PORT_RANGES[@]}"; do
+    low="${range%-*}"
+    high="${range#*-}"
+    if [ "${port}" -ge "${low}" ] && [ "${port}" -le "${high}" ]; then
+      echo "${name} ${port} is reserved for the RAG preprocessing / parser services (${range})." >&2
+      return 1
+    fi
+  done
+}
 
 suite_backend_port() {
   case "$1" in
@@ -262,19 +298,20 @@ EOF
 
 # site を標準出力に書く。
 #   $1: HTTPS（true / false）  $2: suite の repository  $3: 証明書の directory  $4: RAG の API の client_max_body_size
-#   $5...: 配備する製品（rag / nl2sql / agent）
-# 環境変数 SUITE_HTTP_LISTEN / SUITE_HTTPS_LISTEN / SUITE_HTTPS_PORT は test が隔離した port を使うためのもの
-# （本番は 80 / 443。stack の変数にはしない）。
+#   $5: http_port  $6: https_port  $7...: 配備する製品（rag / nl2sql / agent）
+# 環境変数 SUITE_LISTEN_ADDRESS は test が 127.0.0.1 だけで listen するためのもの（本番は全 address）。
 suite_nginx_site() {
   local https_enabled="$1"
   local repo_dir="$2"
   local ssl_dir="$3"
   local rag_body_size="$4"
-  shift 4
+  local http_port="$5"
+  local https_port="$6"
+  shift 6
   local products=("$@")
-  local http_listen="${SUITE_HTTP_LISTEN:-80}"
-  local https_listen="${SUITE_HTTPS_LISTEN:-443}"
-  local https_port="${SUITE_HTTPS_PORT:-443}"
+  local address="${SUITE_LISTEN_ADDRESS:-}"
+  local http_listen="${address:+${address}:}${http_port}"
+  local https_listen="${address:+${address}:}${https_port}"
   local https_authority='$host'
   local product
 
@@ -288,6 +325,10 @@ suite_nginx_site() {
       return 1
     fi
   done
+  suite_validate_public_port http_port "${http_port}" || return 1
+  if [ "${https_enabled}" = "true" ]; then
+    suite_validate_public_port https_port "${https_port}" || return 1
+  fi
   if [ "${https_port}" != "443" ]; then
     https_authority="\$host:${https_port}"
   fi
@@ -304,6 +345,9 @@ EOF
   if [ "${https_enabled}" = "true" ]; then
     cat <<EOF
 
+EOF
+    if [ "${http_port}" != "${https_port}" ]; then
+      cat <<EOF
 # HTTP は HTTPS へ転送するだけ（HSTS は付けない。IP の証明書と自作の CA のため）。
 server {
     listen ${http_listen} default_server;
@@ -312,6 +356,9 @@ server {
     return 301 https://${https_authority}\$request_uri;
 }
 
+EOF
+    fi
+    cat <<EOF
 server {
     listen ${https_listen} ssl http2 default_server;
 

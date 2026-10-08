@@ -216,7 +216,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 const DATABASE_UNAVAILABLE_MESSAGE =
   "データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。";
 const DATABASE_SETTINGS_HINT =
-  "OCI 認証・アップロード保存先・モデル・データベース・外観と接続の各設定ページは引き続き利用できます。";
+  "OCI 認証・アップロード保存先・モデル・データベース・外観と証明書の各設定ページは引き続き利用できます。";
 
 async function expectDatabaseGate(
   page: Page,
@@ -340,7 +340,7 @@ test("migration 未適用では通常機能を止め、システムテーブル�
     actionName: "システムテーブルを開く",
     actionHref: "/settings/system-tables",
     settingsHint:
-      "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観と接続の各設定ページは引き続き利用できます。",
+      "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観と証明書の各設定ページは引き続き利用できます。",
   });
 
   await page.route("**/api/settings/database/system-tables", (route) =>

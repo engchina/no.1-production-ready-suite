@@ -4,16 +4,16 @@
 #   - backend / ingestion-worker: rag/backend の venv。backend は 127.0.0.1:8000 だけで listen する
 #   - 前処理 / CPU parser: サービスごとの venv（rag/services/*/*/.venv）と systemd の unit。127.0.0.1:<port>
 #     （unit の定義は rag/scripts/rag-systemd.sh。開発環境の rag/scripts/rag-services.sh と共通）
-#   - frontend: host の Node.js で静的 build し、Nginx が配信して /api/ を backend へ proxy する
+#   - frontend: host の Node.js で静的 build する。配信と /rag/api/ の proxy は suite の Nginx（platform/deploy）
 # アプリのプロセスは専用のユーザー（SERVICE_USER）で動かし、backend にはサービス管理画面から操作する
 # unit の systemctl / journalctl だけを sudoers で許可する。
 # 前処理 / parser の起動 / 停止は利用者が最後に操作した状態（systemd の enable / disable）を保ち、
 # 再配備・再起動でもその状態に戻す。初めて配備する unit は起動する。
 # ADB の DDL は持たない。RAG の system schema はアプリの CLI（app.rag.system_schema_cli）で適用する。
 # GPU の service（ASR）は扱わない。
-# 1 台の Compute に 3 製品を置く配備（#1316）では platform/deploy/suite-init.sh が PR_SUITE_MODE=true で呼ぶ。
-# そのときは Nginx の site を書かず（suite が 1 つだけ書く）、frontend を FRONTEND_BASE_PATH（/rag/）を base に build し、
-# プロセスは NL2SQL / Agent と同じユーザー（SERVICE_USER=ubuntu）で動かす（共通の platform/.env・Wallet を共有するため）。
+# 3 製品は 1 台の Compute にセットで配備する（#1316。単独では配備しない）。platform/deploy/suite-init.sh が呼び、
+# Nginx の site は suite が 1 つだけ書く（ここでは書かない）。frontend は FRONTEND_BASE_PATH（/rag/）を base に build し、
+# プロセスは NL2SQL / Agent と同じユーザー（SERVICE_USER=ubuntu。suite が渡す）で動かす（共通の platform/.env・Wallet を共有するため）。
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -51,19 +51,14 @@ WALLET_DIR="${APP_ROOT}/wallet"
 PROPS_DIR="${PROPS_DIR:-${APP_ROOT}/props}"
 # backend/.env の元（suite では製品ごとの <製品>.backend.env）。
 BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${PROPS_DIR}/backend.env}"
-# 1 台の Compute の配備（#1316）。true なら Nginx の site を書かない。
-PR_SUITE_MODE="${PR_SUITE_MODE:-false}"
-# frontend の base（Vite の base・React Router の basename）。製品ごとの Compute では /。
-FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/}"
+# frontend の base（Vite の base・React Router の basename）。Nginx の /rag/ の下で配信する（#1316）。
+FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/rag/}"
 # true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
 PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8000"
-APPLICATION_PORT="${APPLICATION_PORT:-$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/application_port.txt" || printf '80')}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 SUDOERS_DIR="${SUDOERS_DIR:-/etc/sudoers.d}"
-NGINX_SITES_AVAILABLE_DIR="${NGINX_SITES_AVAILABLE_DIR:-/etc/nginx/sites-available}"
-NGINX_SITES_ENABLED_DIR="${NGINX_SITES_ENABLED_DIR:-/etc/nginx/sites-enabled}"
 # uv が入れる Python は、SERVICE_USER からも読める共有の場所に置く（APP_USER の home は他のユーザーが読めない）。
 UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/opt/uv/python}"
 BACKEND_UNIT="production-ready-rag-backend.service"
@@ -73,10 +68,6 @@ WORKER_UNIT="production-ready-rag-ingestion-worker.service"
 # TimeoutStopSec は grace + 子の停止待ち + 戻す DB の処理より長くする（テストで照合する）。
 WORKER_SHUTDOWN_GRACE_SECONDS=60
 WORKER_TIMEOUT_STOP_SEC=90
-# backend の RAG_MAX_UPLOAD_BYTES の既定値（rag/backend/app/config.py の max_upload_bytes。テストで照合する）。
-RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200
-# Nginx の client_max_body_size は backend の上限に multipart の境界・header の余白を足す（Refs #306）。
-NGINX_UPLOAD_MARGIN_MIB=10
 NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
 NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
 NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
@@ -816,135 +807,6 @@ configure_sudoers() {
   log "Installed ${target}."
 }
 
-# backend の RAG_MAX_UPLOAD_BYTES（backend/.env。無ければ既定値）から Nginx の client_max_body_size を作る
-# （backend の上限 + multipart の余白。単位は MiB で切り上げ。Refs #306）。
-nginx_client_max_body_size() {
-  local env_file="${BACKEND_DIR}/.env"
-  local bytes
-  bytes="$(sed -n 's/^RAG_MAX_UPLOAD_BYTES=//p' "${env_file}" 2>/dev/null | tail -n 1 | tr -d "[:space:]'\"")"
-  bytes="${bytes:-${RAG_DEFAULT_MAX_UPLOAD_BYTES}}"
-  if ! printf '%s\n' "${bytes}" | grep -Eq '^[1-9][0-9]*$'; then
-    log "RAG_MAX_UPLOAD_BYTES must be a positive integer: ${bytes}"
-    return 1
-  fi
-  printf '%sM\n' "$(( (bytes + 1048575) / 1048576 + NGINX_UPLOAD_MARGIN_MIB ))"
-}
-
-# RAG の backend は共通認証の login（RAG_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー）で UI と API を保護する。
-# Nginx には認証を置かず、frontend の配信と /api/ の proxy（SSE のため buffering 無効）だけを行う。
-configure_nginx() {
-  # log_format は http context に置く。テストでは conf.d の場所も隔離する。
-  local logging_dir="${NGINX_LOGGING_CONF_DIR:-/etc/nginx/conf.d}"
-  local template_dir
-  template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
-  mkdir -p "${logging_dir}"
-  install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
-  # ログインの API の送信元 IP ごとの緩い上限（limit_req_zone。#1173）。
-  install -m 0644 "${template_dir}/login-rate-limit.conf" "${logging_dir}/production-ready-login-rate-limit.conf"
-  local client_max_body_size
-  client_max_body_size="$(nginx_client_max_body_size)" || return 1
-  log "Configuring Nginx on port ${APPLICATION_PORT} (client_max_body_size ${client_max_body_size})."
-  cat > "${NGINX_SITES_AVAILABLE_DIR}/production-ready-rag" <<EOF
-server {
-    listen ${APPLICATION_PORT};
-    server_name _;
-
-    root ${FRONTEND_DIR}/dist;
-    index index.html;
-
-    set \$pr_service_name "production-ready-rag";
-    access_log /var/log/nginx/production-ready-rag-access.log production_ready_json if=\$pr_loggable;
-    error_log /var/log/nginx/production-ready-rag-error.log warn;
-
-    # backend の RAG_MAX_UPLOAD_BYTES + multipart の余白（Refs #306）。
-    client_max_body_size ${client_max_body_size};
-    proxy_connect_timeout 60s;
-    proxy_send_timeout 600s;
-    proxy_read_timeout 600s;
-
-    location = /api {
-        return 308 /api/;
-    }
-
-    # LLM を複数回呼ぶ処理だけ待ち時間を延ばす。backend の上限（LLM 1 回の timeout の設定の上限
-    # 600 秒）と画面の timeout（630 秒）より長くし、backend の 504 と理由を画面に届ける。
-    # - 保存済みの回答の評価（標準回答による評価。#304）: 画面が失敗を出した後で評価を保存しない。
-    # - チャット・RAG 検索の回答生成（RAG_ANSWER_TIMEOUT_SECONDS。上限 600 秒。#375）と、
-    #   同じ回答生成を呼ぶ MCP（rag_search）。チャットの作成中の回答の再購読（#1175）も同じ。
-    # - 品質評価（golden set。/api/evaluation/run・/compare。#383）: backend は評価全体を 600 秒で
-    #   打ち切り、残りのケースを失敗として結果を返す。
-    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)\$ {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_send_timeout 660s;
-        proxy_read_timeout 660s;
-    }
-
-    # ログインの API だけ、送信元 IP ごとに緩く上限を掛ける（#1173。zone は
-    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend
-    # （PLATFORM_AUTH_LOGIN_*）で、ここは大量の要求を照合・DB の前で止める。backend の 429 はそのまま返す。
-    location = /api/auth/login {
-        limit_req zone=pr_login burst=30 nodelay;
-        limit_req_status 429;
-        error_page 429 = @pr_login_rate_limited;
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_cache off;
-    }
-
-    location @pr_login_rate_limited {
-        default_type application/json;
-        add_header Retry-After 60 always;
-        return 429 '{"success":false,"data":null,"error_code":"SECURITY_RATE_LIMITED","error_messages":["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"]}';
-    }
-
-    location /api/ {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Request-ID \$pr_request_id;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_cache off;
-    }
-
-    location = /health {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/api/health;
-        proxy_set_header Host \$host;
-        access_log off;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-}
-EOF
-
-  ln -sfn "${NGINX_SITES_AVAILABLE_DIR}/production-ready-rag" "${NGINX_SITES_ENABLED_DIR}/production-ready-rag"
-  rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/default"
-  nginx -t
-  systemctl enable nginx
-  systemctl reload nginx || systemctl restart nginx
-}
-
 dump_service_diagnostics() {
   local unit="$1"
   log "Diagnostics for ${unit}: systemctl status"
@@ -984,11 +846,6 @@ main() {
   initialize_database_schema
   build_frontend
   configure_systemd
-  if [ "${PR_SUITE_MODE}" = "true" ]; then
-    log "Skipping the RAG Nginx site; platform/deploy/suite-init.sh writes the single site (#1316)."
-  else
-    configure_nginx
-  fi
   wait_for_backend
   log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH} and log in with the login user."
   log "Then configure OCI authentication and models in System settings."

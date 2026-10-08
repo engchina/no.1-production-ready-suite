@@ -5,8 +5,10 @@ locals {
     ? oci_core_instance.suite.private_ip
     : oci_core_instance.suite.public_ip
   )
-  # HTTPS は 443、HTTP は 80（port は変数にしない。#1316）。
-  application_base_url = "${var.https_enabled ? "https" : "http"}://${local.instance_access_ip}"
+  # 公開の port（#1316）。既定（HTTPS 443・HTTP 80）でなければ URL に port を付ける。
+  public_port          = var.https_enabled ? var.https_port : var.http_port
+  default_public_port  = var.https_enabled ? 443 : 80
+  application_base_url = "${var.https_enabled ? "https" : "http"}://${local.instance_access_ip}${local.public_port == local.default_public_port ? "" : ":${local.public_port}"}"
 }
 
 output "autonomous_database_ocid" {
@@ -51,7 +53,7 @@ output "agent_application_url" {
 }
 
 output "ca_certificate_url" {
-  description = "Private root CA certificate of the HTTPS server certificate. Import it as a trusted root CA on client PCs to remove the browser warning (also available from System settings > Appearance and connection)."
+  description = "Private root CA certificate of the HTTPS server certificate. Import it as a trusted root CA on client PCs to remove the browser warning (also available from System settings > Appearance and certificate)."
   value       = var.https_enabled ? "${local.application_base_url}/platform/ca.crt" : null
 }
 

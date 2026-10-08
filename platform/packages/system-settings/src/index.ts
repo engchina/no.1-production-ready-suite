@@ -10,7 +10,7 @@ export {
   type UserRoleNavItem,
 } from "./paths";
 
-// 外観と接続（#95。HTTPS の CA 証明書は #1316）
+// 外観と証明書（#95。HTTPS の CA 証明書は #1316）
 export { AppearanceSettingsPage, type AppearanceSettingsPageProps } from "./appearance/AppearanceSettingsPage";
 export { CA_CERTIFICATE_PATH, probeCaCertificate } from "./appearance/CaCertificateCard";
 export { APPEARANCE_MESSAGES, type AppearanceMessages } from "./appearance/messages";

@@ -369,13 +369,12 @@ variable "instance_shape" {
   }
 }
 
-# 選んだ製品は 1 台の Compute に入れる（#1316）。既定は以前の製品ごとの既定の合計
-# （OCPU: RAG 4 + NL2SQL 2 + Agent 2、メモリ: 32 + 16 + 16 GB）。boot volume は OS・Node.js・uv の Python を
-# 共有するため、合計（200 + 100 + 100 GB）より小さい 300 GB にする。
+# 選んだ製品は 1 台の Compute に入れる（#1316）。既定は 4 OCPU / 24 GB / boot volume 200 GB（利用者の決定。
+# 2026-10-08）。RAG の CPU の parser（Docling）が最も多く使うので、負荷に合わせて上げる。
 variable "instance_flex_shape_ocpus" {
-  description = "OCPUs of the Compute instance. The default is the total of the previous per-product defaults (RAG 4, NL2SQL 2, Agent 2)."
+  description = "OCPUs of the Compute instance that runs every selected product."
   type        = number
-  default     = 8
+  default     = 4
 
   validation {
     condition     = var.instance_flex_shape_ocpus > 0
@@ -384,9 +383,9 @@ variable "instance_flex_shape_ocpus" {
 }
 
 variable "instance_flex_shape_memory" {
-  description = "Memory in GB of the Compute instance. The default is the total of the previous per-product defaults (RAG 32, NL2SQL 16, Agent 16)."
+  description = "Memory in GB of the Compute instance that runs every selected product."
   type        = number
-  default     = 64
+  default     = 24
 
   validation {
     condition     = var.instance_flex_shape_memory > 0
@@ -397,7 +396,7 @@ variable "instance_flex_shape_memory" {
 variable "instance_boot_volume_size" {
   description = "Boot volume size in GB of the Compute instance. The per-service Python environments and models of the RAG parsers are large."
   type        = number
-  default     = 300
+  default     = 200
 
   validation {
     condition     = var.instance_boot_volume_size >= 50 && var.instance_boot_volume_size <= 32768
@@ -441,6 +440,31 @@ variable "https_enabled" {
   description = "Serve the products over HTTPS on port 443 with a private root CA and an IP address certificate generated on the Compute instance (HTTP on port 80 redirects to HTTPS). When false, the products are served over HTTP on port 80."
   type        = bool
   default     = true
+}
+
+# 公開の port（#1316）。HTTPS が on なら https_port で HTTPS を受け、http_port は https への転送だけ（同じ値なら転送しない）。
+# HTTPS が off なら http_port で HTTP をそのまま配信する。SSH・よく使われる service・Compute の中で使う port は
+# locals.tf の reserved_ports / reserved_port_ranges で拒む（compute.tf の precondition。配備のスクリプトも同じ一覧で確かめる）。
+variable "http_port" {
+  description = "Public HTTP port of Nginx. Serves the products when https_enabled is false; redirects to HTTPS when https_enabled is true (unless it equals https_port)."
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = floor(var.http_port) == var.http_port && var.http_port >= 1 && var.http_port <= 65535
+    error_message = "http_port must be an integer between 1 and 65535."
+  }
+}
+
+variable "https_port" {
+  description = "Public HTTPS port of Nginx when https_enabled is true."
+  type        = number
+  default     = 443
+
+  validation {
+    condition     = floor(var.https_port) == var.https_port && var.https_port >= 1 && var.https_port <= 65535
+    error_message = "https_port must be an integer between 1 and 65535."
+  }
 }
 
 variable "application_git_url" {

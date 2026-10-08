@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppearanceSettingsPage } from "../src/appearance/AppearanceSettingsPage";
 import { CA_CERTIFICATE_PATH, probeCaCertificate } from "../src/appearance/CaCertificateCard";
 
-// #1316: 1 台の Compute の HTTPS の自作の Root CA の証明書を、外観と接続の画面から取得する。
+// #1316: 1 台の Compute の HTTPS の自作の Root CA の証明書を、外観と証明書の画面から取得する。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -63,10 +63,10 @@ describe("probeCaCertificate", () => {
   });
 });
 
-describe("外観と接続の HTTPS の証明書", () => {
-  it("画面の名前は「外観と接続」", async () => {
+describe("外観と証明書の HTTPS の証明書", () => {
+  it("画面の名前は「外観と証明書」", async () => {
     await render(async () => false);
-    expect(host.querySelector("h1")?.textContent).toBe("外観と接続");
+    expect(host.querySelector("h1")?.textContent).toBe("外観と証明書");
   });
 
   it("証明書を配っていれば、ダウンロードのリンクと取り込み方を出す", async () => {

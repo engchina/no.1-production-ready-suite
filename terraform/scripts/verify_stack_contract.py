@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import math
 import re
 import stat
 import sys
@@ -192,17 +193,16 @@ SETTINGS_FILES = {
 # pr_backend_core.BaseServiceSettings の共通 field（各製品の Settings には書かれていない）。
 BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins"}
 
-# 1 台の Compute の配備（platform/deploy/suite-init.sh が PR_SUITE_MODE=true で呼ぶ。#1316）の契約。
-# suite では Nginx の site を書かず、/<製品>/ を base に frontend を build し、backend/.env は製品ごとの元から作る。
+# 1 台の Compute の配備（platform/deploy/suite-init.sh が呼ぶ。#1316。製品は単独では配備しない）の契約。
+# 製品の init_script.sh は Nginx の site を書かず、/<製品>/ を base に frontend を build し、backend/.env は製品ごとの元から作る。
 SUITE_INIT_CONTRACT = [
-    'PR_SUITE_MODE="${PR_SUITE_MODE:-false}"',
-    'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/}"',
     "FRONTEND_BASE_PATH='${FRONTEND_BASE_PATH}' npm run build",
     'BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-',
     '"${BACKEND_ENV_SOURCE}"',
     'if [ "${PR_SUITE_SKIP_PLATFORM_UI_BUILD}" = "true" ]; then',
 ]
-SUITE_MAIN_NGINX = ['  if [ "${PR_SUITE_MODE}" = "true" ]; then\n', "  else\n", "    configure_nginx\n", "  fi\n"]
+# 単独の配備（製品ごとの Nginx の site）は持たない。Nginx の location は platform/deploy/suite-nginx.sh の 1 か所だけ。
+REMOVED_STANDALONE_DEPLOY = ("configure_nginx", "PR_SUITE_MODE", "sites-available", "proxy_pass", "APPLICATION_PORT")
 
 # 各製品の init_script.sh が守る配備の契約。
 INIT_SCRIPT_CONTRACTS = {
@@ -223,11 +223,9 @@ INIT_SCRIPT_CONTRACTS = {
         'systemctl enable --now "${unit}"',
         'elif systemctl is-enabled --quiet "${unit}"; then',
         'visudo -cf "${tmp}"',
-        "proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
-        "proxy_buffering off;",
-        "client_max_body_size ${client_max_body_size};",
         "/api/health",
         '"${PROPS_DIR}/platform.env" "${PLATFORM_ENV_FILE}"',
+        'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/rag/}"',
         *SUITE_INIT_CONTRACT,
     ],
     "nl2sql": [
@@ -244,6 +242,7 @@ INIT_SCRIPT_CONTRACTS = {
         "production-ready-nl2sql-ontology-worker.service",
         '"${APP_ROOT}/props/platform.env" "${PLATFORM_REPO_DIR}/.env"',
         'BACKEND_PORT="8010"',
+        'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"',
         *SUITE_INIT_CONTRACT,
     ],
     "agent": [
@@ -253,10 +252,9 @@ INIT_SCRIPT_CONTRACTS = {
         'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "uv run python -m app.cli.agent_system_schema --initialize",
-        "proxy_set_header Host \\$http_host;",
-        "location = /health {",
         "uv sync --locked --no-dev --python 3.12",
         '"${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"',
+        'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/agent/}"',
         *SUITE_INIT_CONTRACT,
     ],
 }
@@ -275,14 +273,12 @@ INIT_SCRIPT_ORDER = {
         "  initialize_database_schema\n",
         "  build_frontend\n",
         "  configure_systemd\n",
-        *SUITE_MAIN_NGINX,
         "  wait_for_backend\n",
     ],
     "nl2sql": [
         "app.cli.nl2sql_system_schema --initialize",
         "app.cli.app_security_migrate --apply --skip-bootstrap",
         "  configure_systemd\n",
-        *SUITE_MAIN_NGINX,
         "  wait_for_backend\n",
     ],
     "agent": [
@@ -292,7 +288,6 @@ INIT_SCRIPT_ORDER = {
         "  initialize_database_schema\n",
         "  build_frontend\n",
         "  configure_systemd\n",
-        *SUITE_MAIN_NGINX,
         "  wait_for_backend\n",
     ],
 }
@@ -587,8 +582,8 @@ def _verify_schema(schema: str, variables: str) -> None:
 
     # HTTPS（#1316）: on / off だけを入力にし、既定は on。port と証明書の発行者は入力にしない。
     https_visible, https_members = groups.get("HTTPS", ("", []))
-    if https_visible != "true" or https_members != ["https_enabled"]:
-        raise AssertionError(f"the HTTPS group must hold only https_enabled: {https_members}")
+    if https_visible != "true" or https_members != ["https_enabled", "https_port", "http_port"]:
+        raise AssertionError(f"the HTTPS group must hold https_enabled and the ports: {https_members}")
     _require_all(
         _schema_variable(schema, "https_enabled"),
         ["type: boolean", "required: true", "visible: true", "default: true", "443"],
@@ -600,17 +595,32 @@ def _verify_schema(schema: str, variables: str) -> None:
         context="https_enabled Terraform default",
     )
     for name, default in {
-        "instance_flex_shape_ocpus": "8",
-        "instance_flex_shape_memory": "64",
-        "instance_boot_volume_size": "300",
+        "instance_flex_shape_ocpus": "4",
+        "instance_flex_shape_memory": "24",
+        "instance_boot_volume_size": "200",
     }.items():
         _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
         _require_all(
             _terraform_variable(variables, name), [f"default     = {default}"], context=f"{name} Terraform default"
         )
     stack_inputs = " ".join(sorted(set(re.findall(r'(?m)^variable "([a-z0-9_]+)" \{', variables))))
-    if re.search(r"(?:^| )(?:tls|ssl|cert|certificate|ca)_|(?:^| )https?_port(?: |$)", stack_inputs):
-        raise AssertionError("the certificate subject / validity and the HTTP(S) ports must not be stack inputs")
+    if re.search(r"(?:^| )(?:tls|ssl|cert|certificate|ca)_", stack_inputs):
+        raise AssertionError("the certificate subject / validity must not be stack inputs")
+    # 公開の port は変数（#1316）。HTTPS が on なら https_port、off なら http_port をフォームに出す。
+    for name, default, visible in (
+        ("https_port", "443", "visible: https_enabled"),
+        ("http_port", "80", "visible:\n      not:\n        - https_enabled"),
+    ):
+        _require_all(
+            _schema_variable(schema, name),
+            ["type: number", "required: true", f"default: {default}", visible],
+            context=f"{name} schema",
+        )
+        _require_all(
+            _terraform_variable(variables, name),
+            [f"default     = {default}", f"var.{name} >= 1 && var.{name} <= 65535"],
+            context=f"{name} Terraform",
+        )
 
     outputs = _schema_section(schema, "outputs")
     for product in PRODUCTS:
@@ -688,6 +698,8 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "ocpus                     = var.instance_flex_shape_ocpus",
             "boot_volume_size_in_gbs = var.instance_boot_volume_size",
             'trimspace(var.app_admin_login_user_password) != ""',
+            # 公開の port に SSH・よく使われる service・Compute の中で使う port を使わせない（#1316）。
+            "condition     = length(local.public_ports_reserved) == 0",
             '!var.deploy_nl2sql || var.nl2sql_app_environment == "local" || var.https_enabled',
             "!var.deploy_nl2sql || !var.nl2sql_oracle_deepsec_enabled",
             # 3製品で同じサービス間 token の署名鍵。
@@ -717,6 +729,8 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             'products = join(" ", local.selected_products)',
             "https_enabled = tostring(var.https_enabled)",
             "assign_public_ip = tostring(!local.compute_subnet_prohibits_public_ip)",
+            "http_port = tostring(var.http_port)",
+            "https_port = tostring(var.https_port)",
             'rag_services = var.deploy_rag ? join(" ", local.rag_services) : ""',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
@@ -741,7 +755,9 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             'output "ca_certificate_url"',
             '"${local.application_base_url}/platform/ca.crt"',
             'output "ssh_to_instance"',
-            '"${var.https_enabled ? "https" : "http"}://${local.instance_access_ip}"',
+            # 既定でない port は URL に付ける（#1316）。
+            'public_port          = var.https_enabled ? var.https_port : var.http_port',
+            'local.public_port == local.default_public_port ? "" : ":${local.public_port}"',
         ],
         context="outputs",
     )
@@ -860,6 +876,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
             'path: "/u01/aipoc/props/products.txt"',
             'path: "/u01/aipoc/props/https_enabled.txt"',
             'path: "/u01/aipoc/props/assign_public_ip.txt"',
+            'path: "/u01/aipoc/props/http_port.txt"',
+            'path: "/u01/aipoc/props/https_port.txt"',
             "- openssl",
         ],
         context="Compute bootstrap",
@@ -887,6 +905,31 @@ def _verify_bootstrap(bootstrap: str) -> None:
     )
 
 
+def _verify_reserved_ports(locals_source: str) -> None:
+    """公開の port に使えない port の一覧を Terraform（locals.tf）と配備のスクリプトでそろえる（#1316）。"""
+    suite_nginx = (SUITE_DEPLOY_DIR / "suite-nginx.sh").read_text(encoding="utf-8")
+    tf_ports = re.search(r"(?m)^  reserved_ports = \[([0-9, ]+)\]$", locals_source)
+    tf_ranges = re.findall(r"\[(\d+), (\d+)\]", (re.search(r"(?m)^  reserved_port_ranges = (.*)$", locals_source) or [""])[0])
+    sh_ports = re.search(r"(?m)^SUITE_RESERVED_PORTS=\(([0-9 ]+)\)$", suite_nginx)
+    sh_ranges = re.findall(r'"(\d+)-(\d+)"', (re.search(r"(?m)^SUITE_RESERVED_PORT_RANGES=\((.*)\)$", suite_nginx) or [""])[0])
+    if tf_ports is None or sh_ports is None:
+        raise AssertionError("reserved ports are missing from locals.tf or platform/deploy/suite-nginx.sh")
+    tf_set = {int(port) for port in tf_ports.group(1).split(",")}
+    sh_set = {int(port) for port in sh_ports.group(1).split()}
+    if tf_set != sh_set or sorted(tf_ranges) != sorted(sh_ranges) or not tf_ranges:
+        raise AssertionError(f"reserved ports differ: Terraform {sorted(tf_set)} {tf_ranges} / suite {sorted(sh_set)} {sh_ranges}")
+    required = {22, *(int(port) for port in BACKEND_PORTS.values())}
+    if not required <= tf_set:
+        raise AssertionError(f"reserved ports must include SSH and the backend ports: {sorted(required - tf_set)}")
+    rag_systemd = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
+    block = re.search(r"(?ms)^RAG_MICROSERVICES=\(\n(.*?)^\)$", rag_systemd)
+    assert block is not None
+    for line in block.group(1).splitlines():
+        port = int(line.strip().strip('"').split("|")[2])
+        if not any(int(low) <= port <= int(high) for low, high in tf_ranges):
+            raise AssertionError(f"RAG service port {port} must be in a reserved range")
+
+
 def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
     """platform/deploy の 1 台の Compute の配備（Nginx の prefix・HTTPS・証明書。#1316）。"""
     suite_init = (SUITE_DEPLOY_DIR / "suite-init.sh").read_text(encoding="utf-8")
@@ -910,11 +953,17 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
     overlap = sorted(set(service_ports) & set(BACKEND_PORTS.values()))
     if overlap or len(set(service_ports)) != len(service_ports):
         raise AssertionError(f"RAG service ports must be unique and differ from the backend ports: {overlap}")
-    # Nginx の upload の上限は RAG の init_script.sh と同じ規則。
-    for name in ("RAG_DEFAULT_MAX_UPLOAD_BYTES", "NGINX_UPLOAD_MARGIN_MIB"):
-        value = re.search(rf"(?m)^{name}=(\d+)$", init_sources["rag"])
-        if value is None or f"{name}={value.group(1)}" not in suite_init:
-            raise AssertionError(f"platform/deploy/suite-init.sh {name} must match rag/init_script.sh")
+    # Nginx の upload の上限は RAG の backend の RAG_MAX_UPLOAD_BYTES の既定値（rag/backend/app/config.py）+ 余白。
+    rag_config = (REPO_ROOT / "rag" / "backend" / "app" / "config.py").read_text(encoding="utf-8")
+    default = re.search(r"max_upload_bytes: int = Field\(default=([0-9 *]+),", rag_config)
+    default_bytes = math.prod(int(part) for part in default.group(1).split("*")) if default else None
+    if default_bytes is None or f"RAG_DEFAULT_MAX_UPLOAD_BYTES={default_bytes}" not in suite_init:
+        raise AssertionError("platform/deploy/suite-init.sh RAG_DEFAULT_MAX_UPLOAD_BYTES must match rag/backend/app/config.py")
+    # 単独の配備（製品ごとの Nginx の site）は製品の init_script.sh に残さない。
+    for product, source in init_sources.items():
+        leftovers = [name for name in REMOVED_STANDALONE_DEPLOY if name in source]
+        if leftovers:
+            raise AssertionError(f"{product}/init_script.sh must not deploy standalone (#1316): {leftovers}")
     _require_all(
         suite_nginx,
         [
@@ -953,7 +1002,6 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
     _require_all(
         suite_init,
         [
-            '"PR_SUITE_MODE=true"',
             '"FRONTEND_BASE_PATH=/${product}/"',
             '"BACKEND_ENV_SOURCE=${PROPS_DIR}/${product}.backend.env"',
             '"SERVICE_USER=${APP_USER}"',
@@ -1069,6 +1117,7 @@ def verify(package_path: Path) -> None:
             raise AssertionError(f"removed per-product Compute input / resource remains (#1316): {removed}")
     _verify_init_scripts(init_sources)
     _verify_suite_deploy(init_sources)
+    _verify_reserved_ports(sources["locals.tf"])
     _verify_no_own_container_images()
     deploy_sources = {
         f"platform/deploy/{path.name}": path.read_text(encoding="utf-8") for path in sorted(SUITE_DEPLOY_DIR.glob("*.sh"))

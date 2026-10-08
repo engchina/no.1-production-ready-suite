@@ -40,11 +40,18 @@ def test_frontend_build_uses_reproducible_install() -> None:
 
 
 def test_frontend_is_served_as_static_assets_by_nginx() -> None:
-    """frontend は build 済みの静的 assets を host の Nginx が配信する(node_modules は出さない)。"""
-    nginx = _function_body(_init_script(), "configure_nginx")
+    """frontend の build 済みの静的 assets を suite の Nginx が /rag/ で配信する。
 
-    assert "root ${FRONTEND_DIR}/dist;" in nginx
-    assert "node_modules" not in nginx
+    RAG は単独では配備しない(#1316)。Nginx の site は platform/deploy/suite-nginx.sh の 1 つだけ。
+    """
+    suite_nginx = (REPO_ROOT.parent / "platform" / "deploy" / "suite-nginx.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "configure_nginx" not in _init_script()
+    assert "alias ${dist_dir}/;" in suite_nginx
+    assert '"${repo_dir}/${product}/frontend/dist"' in suite_nginx
+    assert "node_modules" not in suite_nginx
 
 
 def test_services_run_as_dedicated_non_root_user() -> None:
@@ -279,8 +286,12 @@ def test_native_deployment_defaults_match_backend_settings() -> None:
     from app.config import BACKEND_ROOT, DEFAULT_LOCAL_STORAGE_DIR, Settings
 
     init_script = (REPO_ROOT / "init_script.sh").read_text(encoding="utf-8")
+    suite_init = (REPO_ROOT.parent / "platform" / "deploy" / "suite-init.sh").read_text(
+        encoding="utf-8"
+    )
     fields = Settings.model_fields
-    assert f"RAG_DEFAULT_MAX_UPLOAD_BYTES={fields['max_upload_bytes'].default}" in init_script
+    # Nginx の upload の上限の元は suite の配備(#1316)。
+    assert f"RAG_DEFAULT_MAX_UPLOAD_BYTES={fields['max_upload_bytes'].default}" in suite_init
     assert fields["rag_service_runtime_env_file"].default == str(
         BACKEND_ROOT / "service-runtime.env"
     )

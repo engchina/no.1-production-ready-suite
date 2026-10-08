@@ -15,7 +15,7 @@ const VIEWPORTS = [
 ] as const;
 
 const SETTINGS_HINT =
-  "OCI 認証・アップロード保存先・モデル・データベース・外観と接続の各設定ページは引き続き利用できます。";
+  "OCI 認証・アップロード保存先・モデル・データベース・外観と証明書の各設定ページは引き続き利用できます。";
 
 type DbStatus = "ok" | "not_configured" | "unreachable" | "setup_required";
 
@@ -179,7 +179,7 @@ for (const viewport of VIEWPORTS) {
         { path: "/settings/upload-storage", title: "アップロード保存先" },
         { path: "/settings/model", title: "モデル設定" },
         { path: "/settings/database", title: "データベース設定" },
-        { path: "/settings/appearance", title: "外観と接続" },
+        { path: "/settings/appearance", title: "外観と証明書" },
       ]) {
         await page.goto(path);
         await expect(page.getByRole("heading", { level: 1, name: title }), path).toBeVisible();

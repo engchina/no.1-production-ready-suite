@@ -2877,7 +2877,7 @@ test("Select AI Credential API 失敗は固定 alert だけに表示し Toast �
 
 test("外観設定でダーク/ライト/自動テーマを切り替えられる", async ({ page }) => {
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("heading", { name: "外観と接続" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外観と証明書" })).toBeVisible();
   const html = page.locator("html");
   // dev サーバでは getPropertyValue が "light-dark(a, b)" 文字列を返すため、変数の文字列ではなく
   // 実際に解決された色（body の背景色 / 変数を塗ったプローブ要素の background-color）を検証する。
@@ -2917,7 +2917,7 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   expect(await tokenVar("--color-border-control")).toBe(hexToRgb("#5d6878"));
   expect(await tokenVar("--color-accent-emphasis")).toBe(hexToRgb("#286abd"));
   await expect(toggle.getByRole("button", { name: "ダーク" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("heading", { name: "外観と接続" })).toHaveCSS(
+  await expect(page.getByRole("heading", { name: "外観と証明書" })).toHaveCSS(
     "color",
     "rgb(242, 244, 247)"
   );
@@ -2942,7 +2942,7 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
 
 test("テーマ切替は transition で旧テーマの色から補間せず、一度で切り替える (#571)", async ({ page }) => {
   await page.goto("/settings/appearance");
-  await expect(page.getByRole("heading", { name: "外観と接続" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外観と証明書" })).toBeVisible();
 
   for (const label of ["ダーク", "ライト"]) {
     // クリックと同じタスク内で次のフレームまで待ち、実行中の CSS transition を集める。
@@ -3307,7 +3307,7 @@ test.afterEach(async ({ page }, testInfo) => {
 // HTTPS の証明書（#1316）: 1 台の Compute の Nginx が /platform/ca.crt で CA の証明書を配る。製品は /<製品>/ の下でも
 // サイトの root の /platform/ca.crt を見る。ローカルの開発（Vite）は配っていないので説明だけを出す。
 for (const theme of ["ライト", "ダーク"] as const) {
-  test(`外観と接続の HTTPS の証明書（${theme}）`, async ({ page }) => {
+  test(`外観と証明書の HTTPS の証明書（${theme}）`, async ({ page }) => {
     await page.goto("/settings/appearance");
     await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: theme }).click();
     await expect(page.locator("html")).toHaveClass(theme === "ダーク" ? /dark/ : /^(?!.*\bdark\b).*$/);

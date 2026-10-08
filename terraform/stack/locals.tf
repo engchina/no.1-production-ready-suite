@@ -6,6 +6,21 @@ locals {
 
   wallet_dir_host = "/u01/aipoc/wallet"
 
+  # 公開の port（http_port / https_port）に使えない port（#1316）。platform/deploy/suite-nginx.sh の
+  # SUITE_RESERVED_PORTS / SUITE_RESERVED_PORT_RANGES と同じ値にする（verify_stack_contract.py が照合する）。
+  #   22: SSH / 25: SMTP / 53: DNS / 111: rpcbind / 1521・1522: Oracle の listener（ADB の接続と紛らわしい）/
+  #   3306: MySQL / 5432: PostgreSQL / 6379: Redis / 9090: Prometheus など運用の道具 /
+  #   8000・8010・8020: 各製品の backend（127.0.0.1）
+  reserved_ports = [22, 25, 53, 111, 1521, 1522, 3306, 5432, 6379, 9090, 8000, 8010, 8020]
+  # RAG の前処理 / parser（127.0.0.1:18010〜18028。rag/scripts/rag-systemd.sh）とその予備。
+  reserved_port_ranges = [[18000, 18099]]
+  # 実際に公開する port（HTTPS が off なら http_port だけ）。
+  public_ports = var.https_enabled ? distinct([var.http_port, var.https_port]) : [var.http_port]
+  public_ports_reserved = [
+    for port in local.public_ports : port
+    if contains(local.reserved_ports, port) || anytrue([for range in local.reserved_port_ranges : port >= range[0] && port <= range[1]])
+  ]
+
   # 配備する製品。すべて 1 台の Compute（compute.tf の oci_core_instance.suite）に入れる（#1316）。
   product_enabled = {
     rag    = var.deploy_rag
@@ -193,6 +208,8 @@ EOT
     compartment_ocid    = var.compartment_ocid
     db_dsn              = local.effective_oracle_dsn
     https_enabled       = tostring(var.https_enabled)
+    http_port           = tostring(var.http_port)
+    https_port          = tostring(var.https_port)
     platform_env        = base64gzip(local.platform_env)
     products            = join(" ", local.selected_products)
     rag_services        = var.deploy_rag ? join(" ", local.rag_services) : ""

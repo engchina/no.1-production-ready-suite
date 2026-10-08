@@ -2,16 +2,18 @@
 # 1 台の Compute に、選んだ製品（RAG / NL2SQL / Agent）を配備する（#1316）。
 # OCI Resource Manager の統合 stack（terraform/stack）の cloud-init から呼ぶ。
 #
-# - 各製品の配備（uv の venv・systemd の unit・DB の初期化・frontend の build）は、今までどおり各製品の
-#   init_script.sh が持つ。ここからは PR_SUITE_MODE=true で呼び、製品の Nginx の site は書かせない。
+# - 3 製品はこの suite でセットで配備する（単独では配備しない）。各製品の配備（uv の venv・systemd の unit・
+#   DB の初期化・frontend の build）は各製品の init_script.sh が持ち、ここから順に呼ぶ。Nginx の site は書かない。
 #   frontend は /<製品>/ を base に build させる（FRONTEND_BASE_PATH）。backend・worker・port は製品ごとに独立
 #   （RAG 8000・NL2SQL 8010・Agent 8020。RAG の前処理 / parser は 18010〜18028。すべて 127.0.0.1）。
 # - Nginx の site は 1 つだけ（platform/deploy/suite-nginx.sh）。/rag/ /nl2sql/ /agent/ と、/ → /agent/。
-# - HTTPS（既定 on）: 自作の Root CA と IP のサーバー証明書（platform/deploy/suite-tls.sh）で 443。80 は 301 で https へ。
+# - HTTPS（既定 on）: 自作の Root CA と IP のサーバー証明書（platform/deploy/suite-tls.sh）で https_port（既定 443）。
+#   http_port（既定 80）は 301 で https へ。HTTPS が off なら http_port でそのまま配信する。
 #   CA の証明書は /platform/ca.crt で配る（CA の秘密鍵は Compute の中だけ）。
 #
 # cloud-init が /u01/aipoc/props に置くもの:
-#   products.txt（配備する製品。空白区切り）・https_enabled.txt（true / false）・assign_public_ip.txt（true / false）
+#   products.txt（配備する製品。空白区切り）・https_enabled.txt（true / false）・http_port.txt / https_port.txt（公開の port）・
+#   assign_public_ip.txt（true / false）
 #   platform.env（3 製品で共通の platform/.env）・<製品>.backend.env（各製品の backend/.env）・rag_services.txt・wallet.zip など
 set -euo pipefail
 
@@ -86,11 +88,33 @@ https_enabled() {
   [ "${value:-true}" != "false" ]
 }
 
-# OS の firewall で 80（と HTTPS が on なら 443）を開ける。subnet の security list は stack の外で管理する。
-configure_firewall() {
-  local port ports=(80)
+# 公開の port（cloud-init の props。無ければ 80 / 443）。
+http_port() {
+  local value
+  value="$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/http_port.txt" || true)"
+  printf '%s\n' "${value:-80}"
+}
+
+https_port() {
+  local value
+  value="$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/https_port.txt" || true)"
+  printf '%s\n' "${value:-443}"
+}
+
+# 公開の port が使えるか（SSH・よく使われる service・Compute の中で使う port を拒む）を、配備の前に確かめる。
+validate_ports() {
+  suite_validate_public_port http_port "$(http_port)" || return 1
   if https_enabled; then
-    ports+=(443)
+    suite_validate_public_port https_port "$(https_port)" || return 1
+  fi
+}
+
+# OS の firewall で http_port（と HTTPS が on なら https_port）を開ける。subnet の security list は stack の外で管理する。
+configure_firewall() {
+  local port ports
+  ports=("$(http_port)")
+  if https_enabled; then
+    ports+=("$(https_port)")
   fi
   if ! command -v iptables >/dev/null 2>&1; then
     return 0
@@ -108,7 +132,6 @@ product_init_env() {
   local product="$1"
   local skip_platform_ui_build="$2"
   printf '%s\n' \
-    "PR_SUITE_MODE=true" \
     "APP_ROOT=${APP_ROOT}" \
     "APP_USER=${APP_USER}" \
     "APP_GROUP=${APP_GROUP}" \
@@ -224,10 +247,11 @@ configure_nginx() {
   install -m 0644 "${template_dir}/logging.conf" "${NGINX_CONF_DIR}/production-ready-logging.conf"
   install -m 0644 "${template_dir}/login-rate-limit.conf" "${NGINX_CONF_DIR}/production-ready-login-rate-limit.conf"
   log "Configuring Nginx (HTTPS: ${https}, products: ${SUITE_PRODUCTS[*]})."
-  suite_nginx_site "${https}" "${SUITE_REPO_DIR}" "${SSL_DIR}" "${body_size}" "${SUITE_PRODUCTS[@]}" > "${site}.tmp"
+  suite_nginx_site "${https}" "${SUITE_REPO_DIR}" "${SSL_DIR}" "${body_size}" "$(http_port)" "$(https_port)" \
+    "${SUITE_PRODUCTS[@]}" > "${site}.tmp"
   mv -f "${site}.tmp" "${site}"
   ln -sfn "${site}" "${NGINX_SITES_ENABLED_DIR}/${SUITE_SITE_NAME}"
-  # 製品ごとの Compute の site（製品の init_script.sh が書いていたもの）と既定の site は使わない。
+  # 以前の製品ごとの Compute の site（製品の init_script.sh が書いていたもの）と既定の site は使わない。
   rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/default"
   for product in "${SUITE_PRODUCTS_ORDER[@]}"; do
     rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/production-ready-${product}"
@@ -239,24 +263,39 @@ configure_nginx() {
   systemctl reload nginx || systemctl restart nginx
 }
 
-report_urls() {
-  local host scheme=http product
+# 利用者が開く URL の起点（既定の port 80 / 443 は書かない）。
+public_base_url() {
+  local host="$1"
+  local scheme=http port
+  port="$(http_port)"
   if https_enabled; then
     scheme=https
+    port="$(https_port)"
   fi
+  if { [ "${scheme}" = "http" ] && [ "${port}" = "80" ]; } || { [ "${scheme}" = "https" ] && [ "${port}" = "443" ]; }; then
+    printf '%s://%s\n' "${scheme}" "${host}"
+  else
+    printf '%s://%s:%s\n' "${scheme}" "${host}" "${port}"
+  fi
+}
+
+report_urls() {
+  local host base product
   host="$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/public_ip.txt" || true)"
   host="${host:-$(suite_tls_detect_private_ip || printf '<compute-ip>')}"
+  base="$(public_base_url "${host}")"
   for product in "${SUITE_PRODUCTS[@]}"; do
-    log "  ${product}: ${scheme}://${host}/${product}/"
+    log "  ${product}: ${base}/${product}/"
   done
   if https_enabled; then
-    log "  CA certificate: ${scheme}://${host}/platform/ca.crt (import it as a trusted root CA on client PCs)"
+    log "  CA certificate: ${base}/platform/ca.crt (import it as a trusted root CA on client PCs)"
   fi
 }
 
 main() {
   log "Starting single-Compute deployment."
   load_products
+  validate_ports
   configure_firewall
   deploy_products
   configure_tls

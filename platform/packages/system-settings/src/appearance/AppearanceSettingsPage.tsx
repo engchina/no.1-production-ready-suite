@@ -31,7 +31,7 @@ export interface AppearanceSettingsPageProps {
 }
 
 /**
- * 外観と接続（#95・#1316）。配色テーマ（ライト / ダーク / 自動）と、HTTPS の CA 証明書の取得。3製品共通。
+ * 外観と証明書（#95・#1316）。配色テーマ（ライト / ダーク / 自動）と、HTTPS の CA 証明書の取得。3製品共通。
  */
 export function AppearanceSettingsPage({ theme, onThemeChange, messages, probeCaCertificate }: AppearanceSettingsPageProps) {
   const m = { ...APPEARANCE_MESSAGES, ...messages };
