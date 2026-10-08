@@ -29,6 +29,8 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 - 指示は「Agent の指示 + 割り当てた Skill の指示」。ツールは Skill の requirement が必要とするものだけを
   function tool として渡す。`server_id="control-plane"` は `tool_registry` のツール、それ以外は MCP 接続
   （`rag` / `nl2sql` / 登録した接続）の `tools/list` のツール（名前は `<接続>__<ツール>`。#757）。
+  Skill の指示は MCP のツールを素の名前（`rag_search`）で書いてよく、Run のときにモデルへ渡す名前へ書き直す。
+  モデルが無い名前のツールを呼んでも Run は落とさず、呼ぶ名前をモデルへ返して呼び直させる（読み替えて実行はしない。#1303）。
 - ツールの実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物）を必ず通す。
   - ポリシーが「拒否」のツールはモデルに渡さない。
   - 「承認」のツールは SDK の `needs_approval` で中断する。中断した Run は `waiting_approval` にし、SDK の状態を Run に保存する。

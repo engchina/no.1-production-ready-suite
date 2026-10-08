@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -395,6 +396,18 @@ def test_main_creates_agent_runs_and_writes_result(
     created_agent = next(body for method, path, body in fake.calls if path == "/agents")
     assert created_agent["skill_ids"] == ["business_rag_research"]
     assert "sap-1" in created_agent["instructions"]
+    # 指示のツールの名前は、Agent のモデルが呼ぶ `<接続>__<ツール>`（#1303）。
+    assert (
+        "rag__rag_search・rag__rag_retrieve_evidence・rag__rag_lookup_guides"
+        in created_agent["instructions"]
+    )
+    assert (
+        re.search(
+            r"(?<![A-Za-z0-9_-])rag_(search|retrieve_evidence|lookup_guides)(?![A-Za-z0-9_-])",
+            created_agent["instructions"],
+        )
+        is None
+    )
     assert ("POST", "/agents/agent-eval/publish", {"note": "業務支援の評価"}) in fake.calls
 
     code = main(["summarize", f"D={output}"])
