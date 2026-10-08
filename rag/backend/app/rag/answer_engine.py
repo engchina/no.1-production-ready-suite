@@ -50,6 +50,16 @@ from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
 from app.rag.answer_provenance import answer_prompt_version
 from app.rag.chunking_small_to_big import engine_search_text
+from app.rag.cross_references import (
+    REFERENCE_FROM_KEY,
+    REFERENCE_LABEL_KEY,
+    ReferenceTarget,
+    SectionIndex,
+    reference_targets,
+    same_document_title,
+    section_path_within,
+    title_key,
+)
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.field_filter_reader import merge_field_conditions
 from app.schemas.classification import category_label, normalize_category_value
@@ -79,6 +89,19 @@ _SCREEN_CATALOG_CACHE_SIZE = 32
 _SECTION_PATH_SEPARATOR = " > "
 # 回答フローの工程の通知(進捗)1 件を待つ上限(秒)。通知は補助なので、超えたら待たずに続ける。
 _STEP_NOTIFY_TIMEOUT_SECONDS = 5.0
+# 交差参照(#1280): 参照先を辿る起点にする検索候補の数(RRF の上位から)。
+_REFERENCE_SOURCE_ANCHORS = 5
+# 交差参照: 1 つの参照先の節から足す chunk の数の上限(節の先頭から。親子階層では親本文も入る)。
+_REFERENCE_CHUNKS_PER_TARGET = 2
+# 交差参照: 参照先の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
+_REFERENCE_SCORE_DECAY = 0.5
+# 交差参照: 他の文書への参照で、文書名が合う文書を探す数の上限。
+_REFERENCE_DOCUMENT_CANDIDATES = 5
+# 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベースと旧版の扱いだけ)。文書名・ページ・
+# 分類などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を止めない。§7.2)。
+_REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded", "serving_mode")
+# 診断に出す交差参照の件数の上限。
+_REFERENCE_DIAGNOSTICS_LIMIT = 10
 
 # 回答フローの工程の通知: (工程名, "started" / "success" / "error", 経過秒)。
 type StepCallback = Callable[[str, str, float], Awaitable[None]]
@@ -144,6 +167,10 @@ class _SearchState:
     # 文書の 1 ページ目の本文(rag_chunk_sets.first_page_context)を chunk_set_id ごとに持つ(#557)。
     first_page_contexts: dict[str, dict[str, object]] = field(default_factory=dict)
     loaded_first_page_chunk_set_ids: set[str] = field(default_factory=set)
+    # 交差参照(#1280)の参照先の chunk(参照先ごと。CRAG の各回で同じ参照先を読み直さない)と、
+    # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
+    reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
+    reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 def answer_images_enabled(settings: Settings) -> bool:
@@ -314,6 +341,12 @@ class AnswerEngine:
         outcome.diagnostics.setdefault("provenance", {})["prompt_version"] = answer_prompt_version(
             overrides
         )
+        if state.reference_expansions:
+            outcome.diagnostics["reference_expansion"] = {
+                "added_count": len(state.reference_expansions),
+                "max_chunks": self._settings.rag_reference_expansion_max_chunks,
+                "chunks": list(state.reference_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
+            }
         if state.auto_field_conditions:
             outcome.diagnostics["auto_field_filter"] = {
                 "conditions": [condition.model_dump() for condition in state.auto_field_conditions],
@@ -390,6 +423,8 @@ class AnswerEngine:
             state,
             retrieval_queries=[request.query],
             candidate_limit=max(1, int(request.top_k)),
+            # 検索だけの結果は上位 top_k 件の候補なので、交差参照の chunk は足さない(#1280)。
+            expand_references=False,
         )
         return [
             state.chunks[child.chunk_uid]
@@ -496,6 +531,7 @@ class AnswerEngine:
         vector_only_queries: Sequence[str] = (),
         inquiry_conditions: Any = None,
         settings: Any = None,
+        expand_references: bool = True,
         **_: object,
     ) -> Any:
         from rag_engine.models.storage import HybridSearchResult
@@ -561,22 +597,50 @@ class AnswerEngine:
         )
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
+        # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
+        references = (
+            await self._reference_expansion(
+                request,
+                state,
+                anchors,
+                existing={chunk.chunk_id for chunk in [*anchors, *siblings]},
+            )
+            if expand_references
+            else {}
+        )
+        referenced = [chunk for chunks in references.values() for chunk in chunks]
+        if referenced:
+            await self._load_classifications(referenced, state)
         if answer_images_enabled(self._settings):
-            for chunk in [*anchors, *siblings]:
+            for chunk in [*anchors, *siblings, *referenced]:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
-        await self._load_first_page_contexts([*anchors, *siblings], state)
+            references = {
+                anchor_id: [state.chunks.get(chunk.chunk_id, chunk) for chunk in chunks]
+                for anchor_id, chunks in references.items()
+            }
+        await self._load_first_page_contexts([*anchors, *siblings, *referenced], state)
         classifications = state.classifications
-        children = [
-            _stored_child(
-                chunk,
-                rrf_score=fused.get(chunk.chunk_id, 0.0),
-                classification=classifications.get(chunk.document_id),
-                first_page_context=_first_page_context(chunk, state),
+        children = []
+        for chunk in anchors:
+            children.append(
+                _stored_child(
+                    chunk,
+                    rrf_score=fused.get(chunk.chunk_id, 0.0),
+                    classification=classifications.get(chunk.document_id),
+                    first_page_context=_first_page_context(chunk, state),
+                )
             )
-            for chunk in anchors
-        ]
+            children.extend(
+                _stored_child(
+                    reference,
+                    rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
+                    classification=classifications.get(reference.document_id),
+                    first_page_context=_first_page_context(reference, state),
+                )
+                for reference in references.get(chunk.chunk_id, ())
+            )
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
             all_children.setdefault(
@@ -592,6 +656,156 @@ class AnswerEngine:
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _reference_expansion(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        anchors: Sequence[RetrievedChunk],
+        *,
+        existing: set[str],
+    ) -> dict[str, list[RetrievedChunk]]:
+        """上位の候補が本文で参照する節の chunk を、上限まで集める(起点の chunk_id ごと。#1280)。
+
+        参照先は取込時に chunk の metadata(``reference_targets_json``)へ解決してある。参照の無い
+        候補だけなら DB を読まない。足す chunk は 1 回の検索で合計
+        ``rag_reference_expansion_max_chunks`` 件まで、参照先 1 つにつき節の先頭から
+        ``_REFERENCE_CHUNKS_PER_TARGET`` 件まで。順位は rag_engine の rerank が決める(LLM は
+        呼ばない)。参照先の範囲は検索範囲のナレッジベース(と利用者の権限)で、文書名・ページ・
+        分類の絞り込みは使わない。読めない参照先は足さない(回答は続ける)。
+        """
+        if not self._settings.rag_reference_expansion_enabled:
+            return {}
+        budget = self._settings.rag_reference_expansion_max_chunks
+        scope = {
+            key: value
+            for key, value in request.filters.items()
+            if key in _REFERENCE_SCOPE_FILTER_KEYS and value.strip()
+        }
+        seen = set(existing)
+        added: dict[str, list[RetrievedChunk]] = {}
+        count = 0
+        for anchor in anchors[:_REFERENCE_SOURCE_ANCHORS]:
+            for target in reference_targets(anchor.metadata):
+                if count >= budget:
+                    return added
+                try:
+                    chunks = await self._reference_target_chunks(scope, state, anchor, target)
+                except Exception:  # noqa: BLE001 - 参照先は補助。この参照先を足さずに続ける。
+                    logger.warning("reference target load failed", exc_info=True)
+                    continue
+                fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen]
+                for chunk in fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]:
+                    seen.add(chunk.chunk_id)
+                    marked = state.chunks.setdefault(
+                        chunk.chunk_id,
+                        chunk.model_copy(
+                            update={
+                                "metadata": {
+                                    **chunk.metadata,
+                                    REFERENCE_FROM_KEY: anchor.chunk_id,
+                                    REFERENCE_LABEL_KEY: target.label,
+                                }
+                            }
+                        ),
+                    )
+                    added.setdefault(anchor.chunk_id, []).append(marked)
+                    state.reference_expansions.setdefault(
+                        chunk.chunk_id,
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "document_id": chunk.document_id,
+                            "from_chunk_id": anchor.chunk_id,
+                            "label": target.label,
+                            "document_title": target.document_title,
+                            "section_path": str(chunk.metadata.get("section_path") or ""),
+                        },
+                    )
+                    count += 1
+        return added
+
+    async def _reference_target_chunks(
+        self,
+        scope: dict[str, str],
+        state: _SearchState,
+        anchor: RetrievedChunk,
+        target: ReferenceTarget,
+    ) -> list[RetrievedChunk]:
+        """参照先の節の chunk(読み順)。同じ文書は参照元と同じ版(chunk_set)から読む。"""
+        limit = _REFERENCE_CHUNKS_PER_TARGET + _REFERENCE_SOURCE_ANCHORS
+        if target.document_title is None:
+            if target.section_path is None:
+                return []
+            chunk_set_id = str(anchor.metadata.get("chunk_set_id") or "")
+            key = ("same", anchor.document_id, chunk_set_id, target.section_path)
+            if key not in state.reference_chunks:
+                rows = await self._oracle.retrieval_reference_chunks(
+                    scope,
+                    document_id=anchor.document_id,
+                    section_path=target.section_path,
+                    chunk_set_id=chunk_set_id or None,
+                    limit=limit,
+                )
+                state.reference_chunks[key] = [
+                    row
+                    for row in rows
+                    if section_path_within(row.metadata.get("section_path"), target.section_path)
+                ]
+            return state.reference_chunks[key]
+        if target.kind == "document":
+            # 文書全体への参照は、どの節を足すか決まらないので辿らない。
+            return []
+        key = ("document", title_key(target.document_title), target.kind, target.key)
+        if key not in state.reference_chunks:
+            state.reference_chunks[key] = await self._other_document_reference_chunks(
+                scope, anchor, target, limit=limit
+            )
+        return state.reference_chunks[key]
+
+    async def _other_document_reference_chunks(
+        self,
+        scope: dict[str, str],
+        anchor: RetrievedChunk,
+        target: ReferenceTarget,
+        *,
+        limit: int,
+    ) -> list[RetrievedChunk]:
+        """他の文書への参照を検索範囲の文書から解決し、参照先の節の chunk を返す(#1280)。
+
+        文書名が合う文書のうち、名前が文書名とそろうものを優先し、無ければ名前の短いものを選ぶ。
+        節は、その文書の見出しの列から取込時と同じ規則で決める。版は 1 つの chunk_set にそろえる。
+        """
+        title = target.document_title or ""
+        documents = await self._oracle.retrieval_reference_documents(
+            scope, title=title_key(title), limit=_REFERENCE_DOCUMENT_CANDIDATES
+        )
+        candidates = [
+            (document_id, file_name)
+            for document_id, file_name in documents
+            if document_id != anchor.document_id and same_document_title(title, file_name)
+        ]
+        if not candidates:
+            return []
+        exact = [item for item in candidates if title_key(title) == _file_stem(item[1])]
+        document_id = (exact or candidates)[0][0]
+        sections = await self._oracle.retrieval_screen_sections(
+            {**scope, "document_id": document_id}
+        )
+        section_path = SectionIndex(path for _name, path, _count in sections).resolve(target.spec)
+        if section_path is None:
+            return []
+        rows = await self._oracle.retrieval_reference_chunks(
+            scope, document_id=document_id, section_path=section_path, limit=limit
+        )
+        rows = [
+            row
+            for row in rows
+            if section_path_within(row.metadata.get("section_path"), section_path)
+        ]
+        if not rows:
+            return []
+        first_set = rows[0].metadata.get("chunk_set_id")
+        return [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
 
     async def _question_filters(
         self, filters: dict[str, str], inquiry_conditions: Any
@@ -886,6 +1100,11 @@ def _document_run_id(document_id: str) -> str:
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:120]
+
+
+def _file_stem(file_name: str) -> str:
+    """文書名から拡張子を除いた比較形(交差参照の文書名の照合。#1280)。"""
+    return title_key(re.sub(r"\.[A-Za-z0-9]{1,5}$", "", file_name))
 
 
 def _section_headings(section_path: str) -> list[str]:

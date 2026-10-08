@@ -86,6 +86,7 @@
    - 本番は OCI Generative AI Cohere Rerank v4 fast。回答フローは融合した検索候補を rerank で並べ替える（`RAG_RERANK_ENABLED`。既定は有効）。
    - OCI rerank の返却 index は候補範囲内・重複なし、返却件数は `top_n` 以内、score は finite number であることを検証し、不正な rerank 結果は fail fast する。
    - 根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文（`parent_text`）で親子を復元し（small-to-big）、根拠の child の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`、既定 3）を文脈に足す。
+   - 上位の候補の本文が参照する節（「第3章を参照」など。取込で解決して chunk の metadata に保存）の chunk を、上限付き（`RAG_REFERENCE_EXPANSION_MAX_CHUNKS`、既定 4）で参照元の直後に rerank の候補として足す（#1280。[rag-engine.md の設定一覧](./rag-engine.md#設定一覧)）。
    - 旧 standard の検索後処理（本文 hash の重複除去・MMR の多様化・近傍 / 依存 chunk の追加・圧縮と、`RAG_CONTEXT_WINDOW_CHARS` などの設定）は #595 で削除した。
 
 9. AIDB Memory Engineering
