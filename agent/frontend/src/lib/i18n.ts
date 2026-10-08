@@ -568,6 +568,12 @@ const agentJa = {
   "chat.review.state.unverifiedPoints": "確かめられない点あり",
   "chat.review.state.unvalidated": "検証できませんでした",
   "chat.review.state.skipped": "検証の対象外",
+  // 回答の対応（#1314）。RAG の回答の詳細の対応のバッジ（search.answerDetails.outcome.*。#1252）と同じ文言。
+  "chat.review.outcome.conditional": "条件付きの回答",
+  "chat.review.outcome.needsClarification": "確認が必要",
+  "chat.review.outcome.needsEnvironmentData": "現場のデータが必要",
+  "chat.review.outcome.needsHuman": "人への引き継ぎ",
+  "chat.review.outcome.insufficientEvidence": "根拠不足",
   "chat.review.message.verified": "回答の内容を、使った資料と照らし合わせて確かめました。",
   "chat.review.message.withheld": "資料で確かめられなかった {count} 件の内容は、回答に載せていません。",
   "chat.review.message.withheldAll": "資料で確かめられる内容が無かったため、回答の本文は載せていません。",

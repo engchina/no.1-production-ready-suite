@@ -33,10 +33,16 @@ import {
 } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
-import { AnswerReviewSections, LimitNote } from "@/components/chat/AnswerReview";
+import { AnswerReviewSections, LimitNote, OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
-import { ANSWER_VALIDATION_KIND, SUPPORT_TASK_KIND, answerReview } from "@/lib/answer-review";
+import {
+  ANSWER_KIND,
+  ANSWER_VALIDATION_KIND,
+  SUPPORT_TASK_KIND,
+  answerOutcome,
+  answerReview,
+} from "@/lib/answer-review";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
@@ -708,42 +714,49 @@ function ArtifactsPanel({
       </CardHeader>
       <CardContent className="space-y-4">
         {run.artifacts.length ? (
-          artifacts.map((artifact) => (
-            <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
-                  <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
+          artifacts.map((artifact) => {
+            // 回答の対応（#1314。チャットの回答の確かめと同じバッジ）。対応の無い古い Run・「答えた」は出さない。
+            const outcome = artifact.kind === ANSWER_KIND ? answerOutcome(artifact.content) : null;
+            return (
+              <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
+                    <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {outcome ? <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${artifact.id}`} /> : null}
+                    <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
+                  </div>
                 </div>
-                <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
+                {artifact.kind === ANSWER_KIND && typeof (artifact.content.text ?? artifact.content.answer) === "string" ? (
+                  // 回答の Markdown の表は共通の結果の表で出す（チャットと同じ。#1158）。
+                  <AnswerBody
+                    text={String(artifact.content.text ?? artifact.content.answer)}
+                    renderText={(text) => (
+                      <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
+                        {text}
+                      </p>
+                    )}
+                    testId={`run-answer-${artifact.id}`}
+                  />
+                ) : artifact.kind === "rag_evidence" ? (
+                  <RagEvidenceArtifact artifact={artifact} runId={run.id} />
+                ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
+                  <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
+                ) : artifact.kind === "structured_table" ? (
+                  <StructuredArtifactSummary artifact={artifact} />
+                ) : (
+                  <ToolOutput
+                    output={artifact.content}
+                    table={artifactTable(artifact)}
+                    name={artifact.name}
+                    testId={`run-artifact-table-${artifact.id}`}
+                  />
+                )}
               </div>
-              {artifact.kind === "answer" && typeof (artifact.content.text ?? artifact.content.answer) === "string" ? (
-                // 回答の Markdown の表は共通の結果の表で出す（チャットと同じ。#1158）。
-                <AnswerBody
-                  text={String(artifact.content.text ?? artifact.content.answer)}
-                  renderText={(text) => (
-                    <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
-                      {text}
-                    </p>
-                  )}
-                  testId={`run-answer-${artifact.id}`}
-                />
-              ) : artifact.kind === "rag_evidence" ? (
-                <RagEvidenceArtifact artifact={artifact} runId={run.id} />
-              ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
-                <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
-              ) : artifact.kind === "structured_table" ? (
-                <StructuredArtifactSummary artifact={artifact} />
-              ) : (
-                <ToolOutput
-                  output={artifact.content}
-                  table={artifactTable(artifact)}
-                  name={artifact.name}
-                  testId={`run-artifact-table-${artifact.id}`}
-                />
-              )}
-            </div>
-          ))
+            );
+          })
         ) : (
           <EmptyState
             title={t("run.noArtifacts")}
