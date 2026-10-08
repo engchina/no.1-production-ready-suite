@@ -1191,6 +1191,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
     }
     if (method === "GET" && at("runs", "*", "artifacts")) return { artifacts: [] };
+    // RAG の図の根拠を開く短命の URL（#1311）。spec は `http://rag.e2e.test/**` を page.route で応答する。
+    if (method === "GET" && at("runs", "*", "figure-url")) {
+      return {
+        url: `http://rag.e2e.test/api/figures/f1.${encodeURIComponent(query.get("chunk_id") ?? "")}.sig`,
+        expires_at: "2026-06-28T00:05:00+00:00",
+      };
+    }
     // Run から評価ケースの下書きを作る（#810）。
     if (method === "GET" && at("runs", "*", "evaluation-case")) {
       const agent = state.agents.find((item) => item.id === run.agent_id);

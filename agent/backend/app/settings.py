@@ -120,6 +120,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 呼び出しがあるため、タイムアウトは NL2SQL の待ち時間（最大 45 秒）より長くする。
     agent_external_rag_mcp_url: str | None = None
     agent_external_rag_timeout_seconds: float = 60.0
+    # 画面（ブラウザ）から RAG を開く起点（例: http://rag-host）。RAG の図の根拠を開く短命の URL
+    # （#1311）の path をこの起点に付ける。空なら RAG が MCP の呼び出しを受けた起点（MCP の URL の
+    # host。private IP のことがある）のまま使う。
+    agent_external_rag_public_url: str | None = None
     agent_external_nl2sql_mcp_url: str | None = None
     agent_external_nl2sql_timeout_seconds: float = 60.0
     # NL2SQL のジョブが pending / running のまま返ったとき、ツールの中で完了を待つ合計の上限
