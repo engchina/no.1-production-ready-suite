@@ -46,9 +46,9 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル3行
-    // (回答の Rerank・画面目録・質問から項目の条件を読み取る(#652))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(7);
+    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル4行
+    // (回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・質問から項目の条件を読み取る(#652))。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(8);
     await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(4);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
