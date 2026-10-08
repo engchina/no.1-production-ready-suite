@@ -123,7 +123,7 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
 
 | 画面 | URL | menu 権限 | 扱う内容 | 実装 |
 |---|---|---|---|---|
-| ユーザー管理 | `/settings/security/users` | `menu.security_users` | ユーザー、割り当てロール、ロック、一時パスワード | 3製品共通（`@engchina/production-ready-system-settings`） |
+| ユーザー管理 | `/settings/security/users` | `menu.security_users` | ユーザー、割り当てロール、ロック、一時パスワード | 3製品共通（`@production-ready/system-settings`） |
 | ロール管理 | `/settings/security/roles` | `menu.security_roles` | ロールコード・名称・説明、アーカイブ・復元・削除 | 3製品共通（同上） |
 | 権限管理 | `/settings/security/permissions` | `menu.security_permissions` | ロールごとの機能権限（`menu.*` / capability）と業務プロファイル利用権限 | NL2SQL 固有 |
 | Deep Data Security | `/settings/security/deepsec` | `menu.security_deepsec` | ロールごとの Data Grant | NL2SQL 固有 |

@@ -22,7 +22,7 @@ import {
   Skeleton,
   StatusBadge,
   RunStopButton,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   Clock3,
   Plus,

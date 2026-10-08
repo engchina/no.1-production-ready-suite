@@ -24,7 +24,7 @@ import {
   cn,
   toast,
   useConfirm,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Cpu,

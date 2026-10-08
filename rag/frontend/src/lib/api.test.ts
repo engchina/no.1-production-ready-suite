@@ -11,7 +11,7 @@ import {
   ApiTransportError,
   DEFAULT_API_TRANSPORT_MESSAGES,
   presentApiError,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 function timeoutMessage(timeoutMs: number): string {
   return (

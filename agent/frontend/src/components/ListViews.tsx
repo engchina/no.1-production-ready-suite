@@ -5,7 +5,7 @@ import {
   type PagedDataTableProps as SharedPagedDataTableProps,
   type PaginationLabels,
   ApiErrorState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { useWorkspaceState, type WorkspaceField, type WorkspaceValidator } from "@/lib/workspace-state";

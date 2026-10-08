@@ -2,7 +2,7 @@ import {
   firstAllowedRoute as sharedFirstAllowedRoute,
   routePermissionMap,
   type HasPermission,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { NAV_ITEMS, NAV_SECTIONS } from "@/components/layout/nav-config";
 import { MENU_PERMISSIONS } from "./permissions";

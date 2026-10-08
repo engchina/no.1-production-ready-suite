@@ -1,7 +1,7 @@
 import { ExternalLink, FileText, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@production-ready/ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { useAuth } from "@/components/security/AuthProvider";

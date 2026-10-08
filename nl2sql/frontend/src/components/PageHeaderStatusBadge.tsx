@@ -1,4 +1,4 @@
-import { StatusBadge, type StatusVariant } from "@engchina/production-ready-ui";
+import { StatusBadge, type StatusVariant } from "@production-ready/ui";
 
 /**
  * ヘッダー横の短いページ状態。頻繁に変わる件数などを見た目に出しつつ、

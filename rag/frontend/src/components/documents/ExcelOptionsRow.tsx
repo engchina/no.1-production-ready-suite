@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { SelectField, TextField, ToggleChip, type SelectFieldOption } from "@engchina/production-ready-ui";
+import { SelectField, TextField, ToggleChip, type SelectFieldOption } from "@production-ready/ui";
 import type { ExcelColumnRoleSetting, ExcelOptions } from "@/lib/api";
 import { t } from "@/lib/i18n";
 

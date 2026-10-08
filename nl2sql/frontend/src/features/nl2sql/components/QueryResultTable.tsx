@@ -8,7 +8,7 @@ import {
   StatusBadge,
   toast,
   type ResultTableLabels,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import {

@@ -1,6 +1,6 @@
 "use client";
 
-import { PageBody } from "@engchina/production-ready-ui";
+import { PageBody } from "@production-ready/ui";
 import { Link } from "react-router-dom";
 
 import { settingsSubtitleKey, visibleNavSections, type NavItem } from "@/components/layout/nav-config";

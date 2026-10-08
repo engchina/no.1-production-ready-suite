@@ -15,7 +15,7 @@ NPM_CALL_LOG="${TEST_TMP_DIR}/npm-calls.log"
 
 mkdir -p \
   "${APP_DIR}/scripts" \
-  "${APP_DIR}/frontend/node_modules/@engchina/production-ready-ui" \
+  "${APP_DIR}/frontend/node_modules/@production-ready/ui" \
   "${UI_DIR}" \
   "${MOCK_BIN_DIR}"
 cp "${START_FRONTEND_SCRIPT}" "${APP_DIR}/scripts/start-frontend.sh"
@@ -25,7 +25,7 @@ chmod +x "${MOCK_BIN_DIR}/npm"
 : > "${PLATFORM_DIR}/package.json"
 : > "${PLATFORM_DIR}/package-lock.json"
 : > "${UI_DIR}/package.json"
-: > "${APP_DIR}/frontend/node_modules/@engchina/production-ready-ui/package.json"
+: > "${APP_DIR}/frontend/node_modules/@production-ready/ui/package.json"
 
 PATH="${MOCK_BIN_DIR}:${PATH}" \
 NPM_CALL_LOG="${NPM_CALL_LOG}" \

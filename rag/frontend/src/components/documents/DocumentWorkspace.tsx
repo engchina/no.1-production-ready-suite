@@ -85,7 +85,7 @@ import {
   TextField,
   TimedLoadingState,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
   api,

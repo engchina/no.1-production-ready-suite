@@ -7,7 +7,7 @@ import {
   type RolePermissionTargetQuery,
   type RolePermissionTargetSection,
   type RolePermissionsApi,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { NAV_SECTIONS } from "@/components/layout/nav-config";
 import type { AccessTargetPage, AgentAccessTarget, SecurityRole } from "./api";

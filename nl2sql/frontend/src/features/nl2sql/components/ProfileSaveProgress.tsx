@@ -6,7 +6,7 @@ import {
   Button,
   buttonVariants,
   StatusBadge,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";

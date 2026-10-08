@@ -11,7 +11,7 @@ import {
   toast,
   type ButtonLinkComponent,
   type ChatResultTableLabels,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { useWorkspaceIdentity } from "@/components/WorkspaceState";
 import { apiPost } from "@/lib/api";

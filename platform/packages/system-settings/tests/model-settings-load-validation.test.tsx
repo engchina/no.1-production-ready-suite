@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { ConfirmProvider } from "@engchina/production-ready-ui";
+import { ConfirmProvider } from "@production-ready/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";

@@ -18,7 +18,7 @@ import {
   FormStatus,
   ContentActionBar,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";

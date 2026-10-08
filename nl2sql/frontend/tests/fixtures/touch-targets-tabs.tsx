@@ -1,6 +1,6 @@
 // #364: タッチ端末での ToggleChip / Switch の当たり判定（44px）と、Tabs の横スクロールのフェード・
 // キーボードで選んだタブのスクロールを実ブラウザで確かめる fixture。
-import { PageBody, PageHeader, Switch, TabPanel, Tabs, ToggleChip } from "@engchina/production-ready-ui";
+import { PageBody, PageHeader, Switch, TabPanel, Tabs, ToggleChip } from "@production-ready/ui";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../src/globals.css";

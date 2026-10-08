@@ -1,6 +1,6 @@
 // #351: 共有 Toaster の一時停止・既定の表示時間と、Banner の閉じるボタンを実ブラウザで確かめる fixture。
 // 通知は上端に出す（#411）ため、製品の画面と同じく AppShell と PageHeader の下に操作を置く。
-import { AppShell, Banner, Button, PageBody, PageHeader, Toaster, toast } from "@engchina/production-ready-ui";
+import { AppShell, Banner, Button, PageBody, PageHeader, Toaster, toast } from "@production-ready/ui";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../src/globals.css";

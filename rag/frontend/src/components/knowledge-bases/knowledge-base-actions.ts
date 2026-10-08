@@ -1,4 +1,4 @@
-import type { EntityAction } from "@engchina/production-ready-ui";
+import type { EntityAction } from "@production-ready/ui";
 import { Archive } from "lucide-react";
 
 import { useAuth } from "@/components/security/AuthProvider";

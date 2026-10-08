@@ -21,7 +21,7 @@ export default defineConfig({
         "react-router-dom",
         "@tanstack/react-query",
         "lucide-react",
-        "@engchina/production-ready-ui",
+        "@production-ready/ui",
       ],
     },
     sourcemap: true,

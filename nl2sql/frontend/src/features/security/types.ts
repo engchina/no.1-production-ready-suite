@@ -2,7 +2,7 @@ import type {
   AssignedRole,
   SecurityRole as SharedSecurityRole,
   SecurityUser,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 export type { AssignedRole, SecurityUser };
 

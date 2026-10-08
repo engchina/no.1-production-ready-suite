@@ -1,4 +1,4 @@
-import { offsetForPage } from "@engchina/production-ready-ui";
+import { offsetForPage } from "@production-ready/ui";
 
 import type {
   CitationFeedbackRating,

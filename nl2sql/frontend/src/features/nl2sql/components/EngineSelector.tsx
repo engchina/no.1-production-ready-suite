@@ -1,7 +1,7 @@
 import { Bot, Check, DatabaseZap, Sparkles } from "lucide-react";
 import { useId } from "react";
 
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import type { Nl2SqlEngine } from "../types";

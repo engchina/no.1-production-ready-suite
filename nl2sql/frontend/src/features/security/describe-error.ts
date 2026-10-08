@@ -1,4 +1,4 @@
-import type { DescribeApiError } from "@engchina/production-ready-system-settings";
+import type { DescribeApiError } from "@production-ready/system-settings";
 
 import { ApiError } from "@/lib/api";
 

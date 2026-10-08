@@ -1,4 +1,4 @@
-import { Banner } from "@engchina/production-ready-ui";
+import { Banner } from "@production-ready/ui";
 
 /**
  * API の応答が返す警告（取込・プレビュー・生成・詳細の warnings）を、1 つの warning の Banner にまとめて出す。

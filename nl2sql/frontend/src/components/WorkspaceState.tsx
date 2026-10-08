@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState
 import { useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
-import { Banner } from "@engchina/production-ready-ui";
+import { Banner } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { draftKey, readDraft, writeDraft } from "@/lib/workspace-drafts";

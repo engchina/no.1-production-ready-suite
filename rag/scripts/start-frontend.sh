@@ -147,7 +147,7 @@ dependencies_changed() {
   [ ! -f "${installed}" ] || [ package-lock.json -nt "${installed}" ] || [ package.json -nt "${installed}" ]
 }
 
-if [ ! -d node_modules ] || [ ! -e node_modules/@engchina/production-ready-ui/package.json ]; then
+if [ ! -d node_modules ] || [ ! -e node_modules/@production-ready/ui/package.json ]; then
   echo "[frontend] 依存をインストールします (npm install)..."
   npm install
 elif dependencies_changed; then

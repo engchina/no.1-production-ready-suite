@@ -23,7 +23,7 @@ import {
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   useCallback,
   useEffect,

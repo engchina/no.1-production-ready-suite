@@ -54,7 +54,7 @@ RAG の製品語は **ナレッジ構築**、**検索・回答プロファイル
 ### フロントエンド
 
 - **Vite + React Router + TypeScript**。
-- **Tailwind CSS + shadcn/ui** と共有 UI package `@engchina/production-ready-ui`。
+- **Tailwind CSS + shadcn/ui** と共有 UI package `@production-ready/ui`。
 - 通信: REST + SSE/WebSocket。
 - 状態管理: TanStack Query + Zustand。
 

@@ -12,7 +12,7 @@ import {
   toast,
   type EntityAction,
   type SelectFieldOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ArrowDown, ArrowUp, Eye, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
 

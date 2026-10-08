@@ -168,7 +168,7 @@ test("DeepSec object picker は総件数未取得時に loaded 件数のみ表�
 });
 
 test("DeepSec Data Grant editor は必須表示を共有の SelectField / FieldLegend で統一する (#531 / #631)", () => {
-  assert.match(pageSource, /SelectField,\s*TextField,\s*FieldLegend,\s*\} from "@engchina\/production-ready-ui"/u);
+  assert.match(pageSource, /SelectField,\s*TextField,\s*FieldLegend,\s*\} from "@production-ready\/ui"/u);
   assert.doesNotMatch(pageSource, /required-field"|<RequiredBadge\b/u);
   // 対象 object は検索できる選択欄（Issue 608）。「必須」は選択欄の required（ラベルの印と aria-required）で出す。
   assert.match(objectPicker, /<SearchableSelectField[\s\S]*\brequired\b/u);
@@ -183,7 +183,7 @@ test("DeepSec Data Grant editor は必須表示を共有の SelectField / FieldL
 });
 
 test("DeepSec 許可列は一括選択バーと明示的な余白を持つ", () => {
-  assert.match(pageSource, /import \{[^}]*\bBulkSelectionActions\b[^}]*\} from "@engchina\/production-ready-ui"/u);
+  assert.match(pageSource, /import \{[^}]*\bBulkSelectionActions\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(entitlementsPanel, /selectLabel=\{t\("common\.selection\.selectAll"\)\}/u);
   assert.match(entitlementsPanel, /clearLabel=\{t\("common\.selection\.clearAll"\)\}/u);
   assert.match(

@@ -26,7 +26,7 @@ import {
   FieldLegend,
   SelectField,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

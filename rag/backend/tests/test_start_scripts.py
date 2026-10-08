@@ -238,7 +238,7 @@ def _frontend_with_shared_ui(startup: tuple[Path, dict[str, str]]) -> tuple[Path
         path.write_text("{}")
     for name in ("index.js", "index.d.ts", "tokens.css"):
         (ui / "dist" / name).touch()
-    linked_ui = scripts.parent / "frontend" / "node_modules" / "@engchina" / "production-ready-ui"
+    linked_ui = scripts.parent / "frontend" / "node_modules" / "@production-ready" / "ui"
     linked_ui.mkdir(parents=True)
     (linked_ui / "package.json").write_text("{}")
     _executable(Path(env["TEST_DIR"]) / "bin" / "npm", 'printf "%s\\n" "$*" >> "$TEST_EVENTS"\n')

@@ -1,8 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
-import { initTheme } from "@engchina/production-ready-ui";
-import { UnsavedChangesBlocker } from "@engchina/production-ready-system-settings";
+import { initTheme } from "@production-ready/ui";
+import { UnsavedChangesBlocker } from "@production-ready/system-settings";
 
 import { App } from "./App";
 import { Providers } from "@/components/providers";

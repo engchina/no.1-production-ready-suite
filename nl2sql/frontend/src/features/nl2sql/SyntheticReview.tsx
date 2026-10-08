@@ -8,7 +8,7 @@ import {
   ProcessingIndicator,
   useConfirm,
   ExecutionConfirmationField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useResetExecutionConsent, useWorkspaceActive } from "@/components/WorkspaceState";
 import { apiPost } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";

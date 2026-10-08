@@ -1,6 +1,6 @@
 # Handoff: 基盤トークン再設計 + タイプスケール + 新コンポーネント
 
-**対象リポジトリ:** `engchina/no.1-production-ready-suite` の `platform/packages/ui` (`@engchina/production-ready-ui`)
+**対象リポジトリ:** `engchina/no.1-production-ready-suite` の `platform/packages/ui` (`@production-ready/ui`)
 **影響範囲:** `packages/ui` + 消費側3アプリ（RAG / NL2SQL / Agent）
 **種別:** 基盤リファクタリング（見た目の意図的な変更を多数含む）
 **忠実度:** **hifi** — 全値が確定済み。ここに書かれた hex・px・トークン名をそのまま実装してください。
@@ -641,7 +641,7 @@ import { Search } from "lucide-react";
 一覧を絞り込む検索の操作が画面ごとに違いました。RAG の検索・回答プロファイルの一覧は検索欄の隣に「名前・説明で検索」のボタンがあり、ボタンか Enter で検索、ナレッジベース・文書の一覧は Enter か blur で検索、フィードバックは入力に合わせて（300ms）、NL2SQL は入力のたびに（一部は各ページの 250ms の debounce）、学習候補・アプリ内フィードバックは「絞り込み」ボタン、Agent のメモリは入力のたびに問い合わせていました。日本語入力の変換中の読み（「じ」「じん」…）でも問い合わせる画面がありました。`TextField` を包んだ `SearchField` にそろえます。規則（どの検索を入力に合わせるか・明示実行にするか・例外）は UX 契約 [page-archetypes.md「一覧の絞り込みの検索」](../ux-contracts/page-archetypes.md#一覧の絞り込みの検索535)。
 
 ```jsx
-import { SearchField } from "@engchina/production-ready-ui";
+import { SearchField } from "@production-ready/ui";
 
 // value には作業状態に保存している「適用中」の検索語を渡す。入力中の文字は部品が持つ。
 <SearchField id="search-answer-profile-search" label="名前・説明で検索" labelHidden
@@ -663,7 +663,7 @@ import { SearchField } from "@engchina/production-ready-ui";
 | 既定で `autocomplete="off"`・`enterkeyhint="search"` | ブラウザの入力履歴の候補を一覧の上に重ねない。モバイルのキーボードの Enter を「検索」にする |
 
 - **adherence の lint が、`type="search"` の `TextField` / `<input>` を検出します。** 一覧の絞り込みは `SearchField` で作ってください。重い検索（LLM・ベクトル検索・SQL の生成）の質問欄は `type="search"` にせず、`TextField` と明示的な実行（ボタンと `isSubmitEnter` の Enter）で作ります。
-- IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` も `@engchina/production-ready-ui` から使います（RAG の `@/lib/keyboard` は再 export）。
+- IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` も `@production-ready/ui` から使います（RAG の `@/lib/keyboard` は再 export）。
 
 ### 操作部品の角丸（新設）— `--radius-control`（#384）
 
@@ -730,7 +730,7 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 - 外枠は `fixed inset-0` で視口に収め、本文は `main#pr-main` の中でスクロールする（#855）。document 側に第2の縦スクロールを作らない。長い一覧・詳細・設定の本文は切り捨てず、main のスクロールを維持する。
 - **スクロールバーによる幅変更を防ぐ（#867）**: `AppShell` の本文・ナビ、`DataTable`、一覧・候補選択、SideSheet・Dialog の縦スクロール領域には `scrollbar-gutter: stable` を指定する。通常の scrollbar が出たり消えたりしても本文幅・折り返し・表示行数の測定を変えない。overlay scrollbar では余白は増えない。横だけをスクロールする Tabs や操作部品には追加しない。表の動的な高さは利用可能な内幅を一定にしたうえで測定する。
-- **測った大きさの書き戻し（#1222）**: DOM で測った大きさ（`ResizeObserver`・`getBoundingClientRect`・`offsetHeight` / `clientWidth` など）を state・style（高さ・幅・`max-height`・段組み）に書き戻す処理は、必ず `stabilizeMeasuredSize` / `stabilizeMeasuredBox`（`@engchina/production-ready-ui`）を通し、差が 1px 以内の測り直しでは値を変えない。拡大 125% などで大きさが小数になると、整数への丸めが書き換えのたびに変わり、測定が 2 つの値を往復して画面が揺れ続ける（RAG の利用者フィードバック画面で報告）。中身を収める大きさ（表の `max-height`）は `prefer: "larger"`、容れ物の内側に置く大きさの上限（プレビューのページ）は `prefer: "smaller"` にし、内側に置く大きさには 1px の余裕（`MEASURED_SIZE_TOLERANCE_PX`）を残す。測った幅で配置を切り替える処理（横並び / 縦積み）は、戻すときだけ境目より狭い値にする（`nextFixedSplitWideEnough`）。はみ出しの判定（`scrollHeight > clientHeight` など）は 1px の余裕を持たせる。**`ResizeObserver` は自分の書き込みの結果に反応させない（#1232）**: 測った大きさを書く先（またはその容れ物）を observe するときは、書き込みで変わる軸（表の `max-height` なら高さ）の変化を無視し、別の原因で変わる軸（幅）と中身の変化だけで測り直す（`DataTable` の `shouldRemeasureOnResize`）。ヒステリシスは 1px の往復しか止めず、丸めが 2px 違えば循環が続くため、循環そのものを断つ。
+- **測った大きさの書き戻し（#1222）**: DOM で測った大きさ（`ResizeObserver`・`getBoundingClientRect`・`offsetHeight` / `clientWidth` など）を state・style（高さ・幅・`max-height`・段組み）に書き戻す処理は、必ず `stabilizeMeasuredSize` / `stabilizeMeasuredBox`（`@production-ready/ui`）を通し、差が 1px 以内の測り直しでは値を変えない。拡大 125% などで大きさが小数になると、整数への丸めが書き換えのたびに変わり、測定が 2 つの値を往復して画面が揺れ続ける（RAG の利用者フィードバック画面で報告）。中身を収める大きさ（表の `max-height`）は `prefer: "larger"`、容れ物の内側に置く大きさの上限（プレビューのページ）は `prefer: "smaller"` にし、内側に置く大きさには 1px の余裕（`MEASURED_SIZE_TOLERANCE_PX`）を残す。測った幅で配置を切り替える処理（横並び / 縦積み）は、戻すときだけ境目より狭い値にする（`nextFixedSplitWideEnough`）。はみ出しの判定（`scrollHeight > clientHeight` など）は 1px の余裕を持たせる。**`ResizeObserver` は自分の書き込みの結果に反応させない（#1232）**: 測った大きさを書く先（またはその容れ物）を observe するときは、書き込みで変わる軸（表の `max-height` なら高さ）の変化を無視し、別の原因で変わる軸（幅）と中身の変化だけで測り直す（`DataTable` の `shouldRemeasureOnResize`）。ヒステリシスは 1px の往復しか止めず、丸めが 2px 違えば循環が続くため、循環そのものを断つ。
 - チャットは会話の内部スクロールと入力欄を分ける。自動移動・引用への移動は会話コンテナの `scrollTo` で行い、祖先まで動かす `scrollIntoView` を使わない。狭い画面では会話の高さを制限し、長い回答でページを無限に伸ばさない。
 
 - **`.pr-skip-link`（本文へスキップ）と `<main id="pr-main" tabIndex={-1}>` を出力。** サイドバーが20項目を超えるため、キーボード利用者が毎ページ全 nav を Tab 通過していました
@@ -1115,13 +1115,13 @@ QA に事前共有してください。**80点あります。**
 | 表の形の判定（#1158） | **新規 export。** `toTabularData` / `splitMarkdownTables` / `TabularData` / `TabularColumn`（= `ResultTableColumn`）/ `TabularCellValue` / `MarkdownTableSegment` |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |
-| `@engchina/production-ready-system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@engchina/production-ready-ui`）を使う |
+| `@production-ready/system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@production-ready/ui`）を使う |
 | `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える。#531 で `label` を省略可（既定「必須」）にし、`DEFAULT_REQUIRED_LABEL` を export |
 | `FieldLabel` / `FieldLegend` / `Fieldset`（#531） | **新規 export**（`FieldsetProps` も）。TextField 以外の入力の必須表示。NL2SQL の `components/ui/required-field.tsx` と system-settings の `oci/required-field.tsx` は削除。`TextField` / `SelectField` / `SecretField` の `requiredLabel` は既定「必須」（省略可）になった |
 | `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 | `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
 | `TextField`（#547） | `suggestions`（`readonly string[]`）プロップ新設。渡すとネイティブの `<datalist>` で候補を選べる自由入力（role=combobox）になり、既定で `autoComplete="off"`。`list` 属性は受け取らない（`TextFieldProps` から除いた）。既存の props・id・aria は変えない |
-| `SearchField`（#535） | **新規 export。** `SearchField` / `SearchFieldProps` / `SEARCH_FIELD_DEBOUNCE_MS` / `trimSearchValue`、IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` / `KeyboardEventLike`。`@engchina/production-ready-system-settings` の `SecuritySearchField` は `SearchField` で作り直し（`onChange` は確定した値で呼ぶ）、`resultCountLabel` と 0 件の「検索語をクリア」の `SecurityClearSearchAction` を追加 |
+| `SearchField`（#535） | **新規 export。** `SearchField` / `SearchFieldProps` / `SEARCH_FIELD_DEBOUNCE_MS` / `trimSearchValue`、IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` / `KeyboardEventLike`。`@production-ready/system-settings` の `SecuritySearchField` は `SearchField` で作り直し（`onChange` は確定した値で呼ぶ）、`resultCountLabel` と 0 件の「検索語をクリア」の `SecurityClearSearchAction` を追加 |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
 | `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
 | `Tabs`（#542） | `TabItem` に `invalid` / `invalidLabel` を追加し、`DEFAULT_TAB_INVALID_LABEL` を export。`invalid` のタブは `data-invalid` と、`aria-describedby` に `<idPrefix>-tab-<id>-invalid` を持つ（バッジがあればバッジの id と並べる）。既存の props・id・キー操作は変えない |
@@ -1133,8 +1133,8 @@ QA に事前共有してください。**80点あります。**
 | `InfoTip` / `Tooltip`（#901） | **新規 export** `InfoTip` / `InfoTipProps` / `INFO_TIP_SHOW_DELAY_MS`。`Tooltip` の props・見た目・振る舞いは変えない（内部の開閉の状態機械に、押して開いたまま固定する `press` / `dismiss` と開いたきっかけ `press` を足し、吹き出しの描画を `InfoTip` と共有した） |
 | `RowTitleButton`（#583） | `href?: string` を追加（渡すと `<a href>` のリンクの形。修飾キーの無いクリックは `onClick`、修飾キー付き・中クリックはブラウザの既定）。`ref` の型は `Ref<HTMLButtonElement \| HTMLAnchorElement>`。E2E で題名を `getByRole("button")` で探している一覧は、`href` を渡すと `getByRole("link")` になる |
 | `TextareaField`（#584） | **新規 export。** `TextareaField` / `TextareaFieldProps` / `defaultTextareaCount`。adherence の lint（`design-system/restricted-syntax`）が製品の JSX の `<textarea>` を検出する |
-| `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
-| `@engchina/production-ready-system-settings` の `RolePermissionTargetSection`（#608） | `load`（全件を読む）を**削除**し、`query(query, { signal })` に置き換え。`query` は `RolePermissionTargetQuery`（`q` / `limit` / `offset` / `ids`）を受けて `RolePermissionTargetPage`（`items` / `total` / `warning`）を返す。クエリ文字列は `rolePermissionTargetSearchParams` で作る。`RolePermissionTargetLoadResult` / `targetLoadRows` は削除。新規 export `resolveTargetItems`（選択済みの ID の名前を 100 件ずつ `ids` で読む）/ `TARGET_PAGE_SIZE`。3 製品の backend は対象ごとの API（RAG / Agent: `GET /api/security/access-targets/{kind}`、NL2SQL: `GET /api/security/profile-access/profiles`）で `Page` を返す |
+| `@production-ready/system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
+| `@production-ready/system-settings` の `RolePermissionTargetSection`（#608） | `load`（全件を読む）を**削除**し、`query(query, { signal })` に置き換え。`query` は `RolePermissionTargetQuery`（`q` / `limit` / `offset` / `ids`）を受けて `RolePermissionTargetPage`（`items` / `total` / `warning`）を返す。クエリ文字列は `rolePermissionTargetSearchParams` で作る。`RolePermissionTargetLoadResult` / `targetLoadRows` は削除。新規 export `resolveTargetItems`（選択済みの ID の名前を 100 件ずつ `ids` で読む）/ `TARGET_PAGE_SIZE`。3 製品の backend は対象ごとの API（RAG / Agent: `GET /api/security/access-targets/{kind}`、NL2SQL: `GET /api/security/profile-access/profiles`）で `Page` を返す |
 | `ListToolbar` / `ListPicker` / `LoadMoreFooter`（#600） | **新規 export。** `ListToolbar` / `ListToolbarProps` / `ListPicker` / `ListPickerProps` / `ListPickerItem` / `ListPickerGroup` / `ListPickerLabels` / `ListPickerSearch` / `DEFAULT_LIST_PICKER_LABELS` / `LoadMoreFooter` / `LoadMoreFooterProps`。NL2SQL の `profileVirtualList.ts`（仮想スクロールの計算）は削除し、`packages/ui` の `lib/list-window.ts` に移した。`DbObjectSelectorFooter` の props は変えない（中身は `LoadMoreFooter`） |
 | `SelectField` / `SearchableSelectField` / `FieldActionRow`（#631） | 追加のみ（既存の props・id・aria は変えない）。`SelectField` に `disabled`（ネイティブの disabled。開かない・Tab で止まらない・typeahead も効かない）・`labelHidden`・`data-testid`（ボタン）を追加し、ボタンと選択肢に値の `data-value` を出す。`SearchableSelectField` は無効のときのホバー・シェブロン・文字の色と「開いているときに無効になったら閉じる」を `SelectField` にそろえた。`FieldActionRow` は `actions` が null / false なら操作の列を描かない |
 | `SelectField` / `SearchableSelectField`（#647） | 追加のみ（既存の props・id・aria は変えない）。`SelectField` に `emptyOptionLabel`（任意の欄で未選択へ戻す、先頭の空の値の選択肢。`required` の欄・`options` に空の値がある欄では出さない。値の型 `T` が `""` を含むときだけ渡せる）を追加。`SelectField` / `SearchableSelectField` に `describedBy`（欄の外の説明の id。`helper`・`error` の id の後ろに足して `aria-describedby` に渡す）を追加 |
@@ -1142,7 +1142,7 @@ QA に事前共有してください。**80点あります。**
 | `SearchableSelectField`（#635） | `leadingIcon?: LucideIcon` を追加（任意。ボタンの先頭の 16px のアイコン、読み上げない）。渡さなければ見た目は変わらない |
 | `RunStopButton` / `FeedbackControls`（#805） | **新規 export。** `RunStopButton` / `RunStopButtonProps` / `runStopClickAction` / `isRepeatedActivationKey` / `RunStopAction`（RAG の `components/RunStopButton.tsx` と `lib/run-stop.ts` から移した）と、`FeedbackControls` / `FeedbackControlsProps` / `FeedbackControlsLabels` / `FeedbackControlsValue` / `FeedbackControlsSubmission` / `FeedbackRating` / `FeedbackReasonOption` / `isSameFeedback`。既存の部品の props は変えない |
 | `PageHeader`（#823） | `actions` の型を `PageHeaderAction[] \| ReactNode` から `PageHeaderAction[]` にした（JSX の `<Button>` 等を渡す後方互換を**削除**。3 製品は #800 で配列に移した）。空の配列は操作の群れを描かない |
-| `@engchina/production-ready-system-settings` の `RoleManagementPage`（#823） | `renderRoleDetailExtra` を**削除。** ロールの詳細の末尾は `permissionSummary`（機能権限の件数と権限管理への導線。#800）だけにする |
+| `@production-ready/system-settings` の `RoleManagementPage`（#823） | `renderRoleDetailExtra` を**削除。** ロールの詳細の末尾は `permissionSummary`（機能権限の件数と権限管理への導線。#800）だけにする |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 
 ---

@@ -30,7 +30,7 @@ import {
   TextareaField,
   TextField,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
 import { SyntheticReview } from "../SyntheticReview";

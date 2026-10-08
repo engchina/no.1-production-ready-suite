@@ -1,8 +1,8 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader, TimedLoadingState } from "@engchina/production-ready-ui";
-import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
+import { AppShell, PageBody, PageHeader, TimedLoadingState } from "@production-ready/ui";
+import { RequireAuth, useForbiddenRedirect } from "@production-ready/system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";

@@ -7,7 +7,7 @@ import {
   Skeleton,
   useConfirm,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";

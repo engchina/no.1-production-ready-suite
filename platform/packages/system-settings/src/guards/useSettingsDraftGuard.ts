@@ -1,4 +1,4 @@
-import { useConfirm } from "@engchina/production-ready-ui";
+import { useConfirm } from "@production-ready/ui";
 
 import { useUnsavedChangesGuard } from "./useUnsavedChangesGuard";
 

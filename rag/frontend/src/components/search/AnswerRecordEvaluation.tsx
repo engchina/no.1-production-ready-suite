@@ -7,7 +7,7 @@ import {
   ProcessingIndicator,
   StatusBadge,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ClipboardCheck } from "lucide-react";
 import { useState } from "react";
 

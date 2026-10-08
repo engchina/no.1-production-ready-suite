@@ -3,11 +3,11 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { ConfirmProvider, Toaster, initTheme } from "@engchina/production-ready-ui";
+import { ConfirmProvider, Toaster, initTheme } from "@production-ready/ui";
 import {
   UnsavedChangesBlocker,
   useConfirmNavigationKey,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { App } from "./App";
 import { AuthProvider } from "@/components/security/AuthProvider";

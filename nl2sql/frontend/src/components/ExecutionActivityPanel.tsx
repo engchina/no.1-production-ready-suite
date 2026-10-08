@@ -5,7 +5,7 @@ import { useWorkspaceActive } from "@/components/WorkspaceState";
 import { formatDateTime } from "@/lib/format";
 
 import { t } from "@/lib/i18n";
-import { useOperationTiming, type UseOperationTimingOptions } from "@engchina/production-ready-ui";
+import { useOperationTiming, type UseOperationTimingOptions } from "@production-ready/ui";
 
 export type ExecutionActivityStatus = "running" | "success" | "error";
 type ExecutionActivityTone = "info" | "success" | "danger";

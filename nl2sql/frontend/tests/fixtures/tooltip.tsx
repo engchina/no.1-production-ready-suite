@@ -1,5 +1,5 @@
 // #372: 共有の Tooltip（アイコンだけの Button の説明）を実ブラウザで確かめる fixture。
-import { Button, PageBody, PageHeader, Section } from "@engchina/production-ready-ui";
+import { Button, PageBody, PageHeader, Section } from "@production-ready/ui";
 import { ChevronLeft, CircleHelp, Download, Plus, Settings, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

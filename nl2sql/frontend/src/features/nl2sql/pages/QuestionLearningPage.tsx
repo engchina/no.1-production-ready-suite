@@ -25,7 +25,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   useEffect,
   useLayoutEffect,

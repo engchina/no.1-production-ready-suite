@@ -39,7 +39,7 @@ import {
   type ListPickerGroup,
   type ListPickerItem,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 

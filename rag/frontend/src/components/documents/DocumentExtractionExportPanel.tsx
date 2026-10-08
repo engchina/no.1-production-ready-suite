@@ -9,7 +9,7 @@ import {
   FormStatus,
   ListSkeleton,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { EmptyState } from "@/components/StateViews";
 import { api, type DocumentExtractionExportFormat } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";

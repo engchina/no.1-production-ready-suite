@@ -7,7 +7,7 @@ import {
   SelectField,
   TextField,
   useConfirm,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ErrorState } from "@/components/StateViews";
 import { useId, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";

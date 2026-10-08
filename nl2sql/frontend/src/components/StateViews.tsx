@@ -6,7 +6,7 @@ import {
   TimedLoadingState,
   type ProcessingActivityIcon,
   type ProcessingPlacement,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 

@@ -12,7 +12,7 @@ import {
   TextareaField,
   TextField,
   useConfirm,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 

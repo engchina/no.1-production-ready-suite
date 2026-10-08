@@ -10,12 +10,12 @@ import {
   cn,
   type FixedSplitWidePane,
   type RowTitleButtonProps,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { t } from "./messages";
 import type { ApiErrorDetails, ApiFieldProblem, DescribeApiError } from "./types";
 
-// 一覧の表示密度（表示行数・行の高さ・スクロール）は @engchina/production-ready-ui の INFORMATION_* を使う（#265 で一本化）。
+// 一覧の表示密度（表示行数・行の高さ・スクロール）は @production-ready/ui の INFORMATION_* を使う（#265 で一本化）。
 
 // ---- ID と表示名 ----
 

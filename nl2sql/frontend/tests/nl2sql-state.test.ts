@@ -38,7 +38,7 @@ import {
   nextFixedSplitStateFromFraction,
   parseFixedSplitStorageValue,
   serializeFixedSplitState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "../src/lib/ui-store.ts";
 import {
   previewExecutePayload,

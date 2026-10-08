@@ -8,7 +8,7 @@ import {
   toast,
   StatusBadge,
   ContentActionBar,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { LogicalStepsList } from "./LogicalStepsList";
 import { copyTextToClipboard } from "@/lib/clipboard";

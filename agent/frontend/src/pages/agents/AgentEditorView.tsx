@@ -25,7 +25,7 @@ import {
   type SelectFieldOption,
   ApiErrorBanner,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   agentApi,
   type AgentProfile,

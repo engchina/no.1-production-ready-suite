@@ -11,7 +11,7 @@
  * 受け取った event の連番（`id:`）から `resumeChatStream` で続きを購読し直す。
  */
 
-import type { ChatProgressStep } from "@engchina/production-ready-ui";
+import type { ChatProgressStep } from "@production-ready/ui";
 
 import { appPath } from "./base-path";
 import { chatProgressStepsFromEvent } from "./chat-progress";

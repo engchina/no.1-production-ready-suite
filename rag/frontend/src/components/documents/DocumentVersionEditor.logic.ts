@@ -1,4 +1,4 @@
-import type { SearchableSelectOption } from "@engchina/production-ready-ui";
+import type { SearchableSelectOption } from "@production-ready/ui";
 
 import type { DocumentSummary } from "@/lib/api";
 

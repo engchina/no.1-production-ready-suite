@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ClearActionButton, EmptyState, SearchField } from "@engchina/production-ready-ui";
+import { ClearActionButton, EmptyState, SearchField } from "@production-ready/ui";
 
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";

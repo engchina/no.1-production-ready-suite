@@ -11,7 +11,7 @@ import {
   SaveErrorBanner,
   StatusBadge,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Database, Library, RotateCcw, Save } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 

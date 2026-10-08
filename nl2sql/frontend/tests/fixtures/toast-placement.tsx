@@ -2,7 +2,7 @@
 // PageHeader の右端にページの操作、ページの末尾の右にコンテンツの操作（NL2SQL のコメント管理の「SQL 生成」と同じ位置）を置く。
 // 本文の先頭の右にも内容の面の操作（ContentActionBar。ObjectActionBar と同じ位置）を置く。
 // 通知は PageHeader に重ねてページの操作のすぐ左に出る（desktop）。375px は上端のバーに重なる。
-import { AppShell, Button, ContentActionBar, PageBody, PageHeader, Section, Toaster, toast } from "@engchina/production-ready-ui";
+import { AppShell, Button, ContentActionBar, PageBody, PageHeader, Section, Toaster, toast } from "@production-ready/ui";
 import { Copy, RefreshCw, Save, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";

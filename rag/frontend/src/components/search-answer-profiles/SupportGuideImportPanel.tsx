@@ -9,7 +9,7 @@ import {
   StatusBadge,
   TextareaField,
   toast,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import {
   api,

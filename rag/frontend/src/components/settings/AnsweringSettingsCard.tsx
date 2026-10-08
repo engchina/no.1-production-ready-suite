@@ -10,7 +10,7 @@ import {
   type SelectFieldOption,
   Skeleton,
   Switch,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { MessageSquareText, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 

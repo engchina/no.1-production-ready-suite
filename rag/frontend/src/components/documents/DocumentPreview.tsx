@@ -34,7 +34,7 @@ import {
   cn,
   Skeleton,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import {
   bboxOverlayStyle,

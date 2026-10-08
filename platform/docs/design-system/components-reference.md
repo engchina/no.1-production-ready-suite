@@ -1052,7 +1052,7 @@ export declare const toast: {
 
 ## BlockedPageNotice — **新規**（#325）
 
-ページ全体が使えない（ブロック状態）ときに、業務画面の代わりに主領域の中央へ出す案内カードです。RAG と NL2SQL の DB ゲートが別々に手書きしていた見た目を `packages/ui` にまとめました（3製品の DB ゲートは `@engchina/production-ready-system-settings` の `DatabaseGate` がこれを使います）。製品で全画面の案内カードを再実装しないでください。
+ページ全体が使えない（ブロック状態）ときに、業務画面の代わりに主領域の中央へ出す案内カードです。RAG と NL2SQL の DB ゲートが別々に手書きしていた見た目を `packages/ui` にまとめました（3製品の DB ゲートは `@production-ready/system-settings` の `DatabaseGate` がこれを使います）。製品で全画面の案内カードを再実装しないでください。
 
 | 決めたこと | 理由 |
 |---|---|
@@ -1253,7 +1253,7 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 アイコンだけのボタンの説明に使う吹き出しです。WAI-ARIA APG の Tooltip パターンに従います（振る舞いの表は README §4「`Tooltip`」）。**`iconOnly` の `Button` は既定で `aria-label` と同じ文言を出す**ので、通常は `Tooltip` を直接書きません。
 
 ```tsx
-import { Button, Tooltip } from "@engchina/production-ready-ui";
+import { Button, Tooltip } from "@production-ready/ui";
 import { ChevronLeft, X } from "lucide-react";
 
 // 既定: aria-label と同じ文言を出す（aria-describedby は付けない。二重に読み上げない）
@@ -1310,7 +1310,7 @@ export interface TooltipProps {
 操作・欄の補足の説明を常設せず、ラベル（または操作）の横の info アイコン（lucide `Info`、16px）から吹き出しで出します。振る舞いの表・業界の指針・常設の hint との使い分けは README §4「`InfoTip`」。作業に欠かせない情報（入力の条件・押せない理由・エラー・結果）には使いません。
 
 ```tsx
-import { InfoTip, SelectField } from "@engchina/production-ready-ui";
+import { InfoTip, SelectField } from "@production-ready/ui";
 
 // ラベルの横に置く（ラベルとアイコンは inline-flex でまとめ、行が折り返しても離さない）
 <span className="inline-flex items-center gap-0.5">
@@ -1544,7 +1544,7 @@ export declare function ExecutionConfirmationField(props: ExecutionConfirmationF
 先頭アイコン（`leadingIcon`）・後置スロット（`trailing`）・クリア（`onClear`）を足しました。検索欄は製品で手書きせず、これで作ります（決めたことの表は README §4「`TextField` の先頭アイコン・後置スロット」）。既存の props・id・aria は変えていません。
 
 ```tsx
-import { TextField } from "@engchina/production-ready-ui";
+import { TextField } from "@production-ready/ui";
 import { Search } from "lucide-react";
 
 // 一覧の絞り込みの検索欄は TextField ではなく SearchField で作る（下の「SearchField」、#535）。
@@ -1637,7 +1637,7 @@ export type TextFieldProps = {
 複数行の入力欄。3 製品が `<textarea>` を手書きしていて、地（`bg-surface` / `bg-surface-sunken`）・角丸（`rounded-md`）・余白・フォーカスの枠線・disabled の見た目（`opacity-50` など）・ラベルと必須とエラーの付け方・文字数の表示が画面ごとに違いました。`TextField` と同じ見た目と API の部品にそろえます。
 
 ```tsx
-import { TextareaField } from "@engchina/production-ready-ui";
+import { TextareaField } from "@production-ready/ui";
 
 <TextareaField
   id="search-answer-profile-system-prompt"
@@ -1771,7 +1771,7 @@ export declare const DEFAULT_TAB_INVALID_LABEL: string;
 ```
 
 ```tsx
-import { Disclosure } from "@engchina/production-ready-ui";
+import { Disclosure } from "@production-ready/ui";
 import { Wrench } from "lucide-react";
 
 // 受控: 開閉を URL や作業状態に残すとき
@@ -1846,7 +1846,7 @@ export interface DisclosureChevronProps extends Omit<LucideProps, "aria-hidden">
 一覧の行の先頭セル（または 375px のカード）に置く対象名のボタンです。仕様と判断の理由は README §4「`RowTitleButton`」。
 
 ```tsx
-import { DataTable, RowTitleButton } from "@engchina/production-ready-ui";
+import { DataTable, RowTitleButton } from "@production-ready/ui";
 
 <DataTable<Feedback>
   columns={[
@@ -1917,7 +1917,7 @@ export interface RowTitleButtonProps
 3 製品と system-settings のフォームで、必須の欄の見せ方と読み上げを 1 通りにします。仕様と判断の理由は README §4「必須の表示」、画面の振る舞い（未入力のエラー・フォーカス）は UX 契約 `messaging.md` §3.2.1。
 
 ```tsx
-import { FieldLabel, FieldLegend, Fieldset, SelectField, TextField } from "@engchina/production-ready-ui";
+import { FieldLabel, FieldLegend, Fieldset, SelectField, TextField } from "@production-ready/ui";
 
 // 1 行の入力・選択・secret: required だけで「必須」のタグと aria-required が付く（requiredLabel の既定は「必須」）
 <TextField id="profile-name" label={t("profiles.field.name")} required value={name} onValueChange={setName}
@@ -2015,7 +2015,7 @@ export type FieldsetProps = {
 一覧の絞り込み（画面上の一覧・表を名前などで絞る）の検索欄。入力に合わせて絞り込み（debounce 300ms、Enter はすぐ）、IME の変換中は絞り込まず、消去と件数の読み上げを持ちます。検索ボタンは置きません。決めたことの表は README §4「`SearchField`」、どの検索に使うか（重い検索は明示実行）は UX 契約 [page-archetypes.md「一覧の絞り込みの検索」](../ux-contracts/page-archetypes.md#一覧の絞り込みの検索535)。
 
 ```tsx
-import { ClearActionButton, EmptyState, SearchField } from "@engchina/production-ready-ui";
+import { ClearActionButton, EmptyState, SearchField } from "@production-ready/ui";
 
 // サーバー側で絞り込む一覧（RAG の検索・回答プロファイル）。q は作業状態に保存した適用中の検索語。
 const [view, setView] = useWorkspaceState("searchAnswerProfiles.view", INITIAL_VIEW, isView);
@@ -2097,7 +2097,7 @@ export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "E
 数十〜数百件の選択肢から検索して選ぶ部品（単一・複数）。十数件までの固定の選択肢は `SelectField`、大量の候補から一覧で見比べて選ぶもの（表・ビューの選択など）は別の一覧型の部品にする。見た目の変更は README §7 の 50。
 
 ```tsx
-import { SearchableMultiSelect, SearchableSelectField } from "@engchina/production-ready-ui";
+import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/ui";
 
 // 複数選択: 検索欄（combobox）＋ 候補の一覧（開いている間だけ）＋ 選択済みの chip
 <SearchableMultiSelect
@@ -2216,7 +2216,7 @@ type SaveErrorBannerProps = {
 一覧の上のツールバー（検索欄の位置）と、数千〜数万件の候補から一覧で複数を選ぶ部品。数十〜数百件を選択欄で選ぶものは `SearchableSelectField` / `SearchableMultiSelect`（#578）。規則は UX 契約 page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」、見た目の変更は README §7 の 53。
 
 ```tsx
-import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@engchina/production-ready-ui";
+import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production-ready/ui";
 
 // 一覧のツールバー: 左に検索（先頭）→ 絞り込み、右に件数 → 一覧への操作。検索欄に幅の class を付けない。
 <ListToolbar
@@ -2266,7 +2266,7 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@engchina/p
 入力欄・選択欄・ボタンの高さと、入力欄・選択欄の幅を部品の prop で決めます（規則は README §4「操作部品の高さと幅」）。製品は `h-*` / `min-h-*` / `w-*` を書かず、`touchTarget` を使いません（adherence の lint が検出する）。
 
 ```tsx
-import { FieldActionRow, SelectField, TextField, TextareaField, fieldControlClassName } from "@engchina/production-ready-ui";
+import { FieldActionRow, SelectField, TextField, TextareaField, fieldControlClassName } from "@production-ready/ui";
 
 // 高さ: 同じ行の部品に同じ size（既定 md）。幅: 値の長さで選ぶ（grid のセルに置く欄は指定しない）
 <SelectField id="retention" label="保存期間" value={v} options={o} onValueChange={set} size="lg" width="md" />
@@ -2324,7 +2324,7 @@ export function fieldWidthClass(width?: FieldWidth): string | undefined;
 画面の中の補助的な一覧・詳細（RAG のチャットの会話の履歴など）を、狭い画面で本文の上に重ねて出すモーダルの side sheet です。振る舞いの表は README §4「`SideSheet`」。広い画面では製品が同じ中身を本文の横にインラインで置き、狭い画面だけ `SideSheet` で開きます（どちらか一方だけを描く）。
 
 ```tsx
-import { Button, SideSheet } from "@engchina/production-ready-ui";
+import { Button, SideSheet } from "@production-ready/ui";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 const inline = useMediaQuery("(min-width: 1024px)"); // 製品が決める
@@ -2388,7 +2388,7 @@ export interface SideSheetProps {
 その場で結果を待つ操作（検索・チャットの送信・検索テスト）の「実行」と「停止」を 1 つのボタンで出す部品。規則は UX 契約 buttons.md §3.1「その場の実行と停止」。
 
 ```tsx
-import { FieldActionRow, RunStopButton, TextareaField, isSubmitEnter } from "@engchina/production-ready-ui";
+import { FieldActionRow, RunStopButton, TextareaField, isSubmitEnter } from "@production-ready/ui";
 import { SendHorizontal } from "lucide-react";
 
 <FieldActionRow
@@ -2456,7 +2456,7 @@ export function isRepeatedActivationKey(event: { key: string; repeat?: boolean }
 回答・引用への評価（役に立った / 役に立たなかった）の部品。RAG の回答・引用の評価と、Agent のチャットの回答の評価・管理者の評価（#774）が同じ部品を使う。保存の API・payload・権限は製品が `onSubmit` で持ち、部品は業務の文言を持たない（`labels`）。
 
 ```tsx
-import { FeedbackControls, toast } from "@engchina/production-ready-ui";
+import { FeedbackControls, toast } from "@production-ready/ui";
 
 <FeedbackControls<FeedbackReason>
   value={current ? { rating: current.rating, reason: current.reason, comment: current.comment } : null}
@@ -2530,7 +2530,7 @@ export function isSameFeedback(value, submission): boolean; // 空白を除い�
 `Button` の `loading` は押したボタンだけが持つ（UX 契約 buttons.md §8）。押したボタンが始めた処理の間だけ `true` になる状態を作る hook。
 
 ```ts
-import { useActionPending } from "@engchina/production-ready-ui";
+import { useActionPending } from "@production-ready/ui";
 
 export interface ActionPending {
   pending: boolean;                                        // track に渡した処理のどれかが終わっていない間だけ true
@@ -2563,7 +2563,7 @@ import {
   createOptimisticChatMessage,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
 
@@ -2613,7 +2613,7 @@ function submit() {
 AG-UI の `STEP_STARTED` / `STEP_FINISHED` / `TOOL_CALL_*` / `RUN_ERROR` に倣う。backend は製品の既存の配信（polling / SSE / WebSocket）で、この形の一覧を画面へ渡す（画面が backend の値からこの形を作ってもよい。NL2SQL はジョブの `steps` から作る）。
 
 ```ts
-import type { ChatProgressStep } from "@engchina/production-ready-ui";
+import type { ChatProgressStep } from "@production-ready/ui";
 
 type ChatProgressStep = {
   id: string;                 // 段階の識別子（例: "classify" / "schema" / "generate_sql" / "execute" / "summarize" / "tool:<name>"）
@@ -2631,7 +2631,7 @@ type ChatProgressStep = {
 ### 使い方
 
 ```tsx
-import { ChatProgress } from "@engchina/production-ready-ui";
+import { ChatProgress } from "@production-ready/ui";
 
 <Card>
   <CardContent className="space-y-3">
@@ -2688,7 +2688,7 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 3 製品のチャットが「処理の経過」の状態を追う処理を 1 つにした hook。表示は `ChatProgress`、終端の判定と、配信が途絶えたときの取り直しはこの hook が持つ。製品は自分の配信を hook の入力に合わせる薄いアダプタだけを持つ。
 
 ```tsx
-import { ChatProgress, useChatProgressTracker } from "@engchina/production-ready-ui";
+import { ChatProgress, useChatProgressTracker } from "@production-ready/ui";
 
 const progress = useChatProgressTracker({
   key: job.id,                      // 追う対象（ジョブ ID・Run ID・保存した質問の ID）。変わったら数え直す
@@ -2727,7 +2727,7 @@ const progress = useChatProgressTracker({
 データの結果（読み取りだけの行と列）を出す部品です（3 製品で共通）。チャットの回答の吹き出しの中の SQL・ツールの実行の結果と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行に使います（#1178。合う画面の基準は UX 契約 `page-archetypes.md`「データの結果の型」）。振る舞いの表は README §4「`ResultTable`」。旧名 `ChatResultTable` などは別名として残しています（非推奨）。製品は列・取得した行・打ち切りの有無を渡すだけで、要約・プレビュー・打ち切りの明示・すべての行・CSV・NULL・数値の右寄せは部品が持ちます。実行中（`ProcessingIndicator`）・失敗（danger の `Banner`）・実行の操作（`Button`）は製品が部品の外に置きます。
 
 ```tsx
-import { ResultTable, toast } from "@engchina/production-ready-ui";
+import { ResultTable, toast } from "@production-ready/ui";
 
 <ResultTable
   columns={[{ name: "CATEGORY" }, { name: "AMOUNT", type: "number" }]}
@@ -2783,7 +2783,7 @@ export interface ResultTableProps {
 ツールの結果・成果物の JSON と、回答の本文の Markdown の表を `ResultTable` の列と行にします。製品に依存しない規則なので、製品で判定を書かず、この関数を通します（使う所: Agent のチャットと実行履歴の詳細）。
 
 ```tsx
-import { MessageText, ResultTable, splitMarkdownTables, toTabularData } from "@engchina/production-ready-ui";
+import { MessageText, ResultTable, splitMarkdownTables, toTabularData } from "@production-ready/ui";
 
 // JSON: 表の形なら列と行、そうでなければ null（今の JSON の表示のまま）。
 const table = toTabularData(step.tool_result.output);
@@ -2815,7 +2815,7 @@ splitMarkdownTables(answer).map((segment) =>
 チャットの骨格（3 製品共通）。会話の履歴（lg 以上は本文の横の `<aside>`、未満はモーダルの `SideSheet`）と、会話の領域（上端の行・`role="log"` の会話の欄・入力欄の領域）を 1 つの部品で描く。画面の型は UX 契約 [page-archetypes.md §6](../ux-contracts/page-archetypes.md#6-チャット会話の画面1161)。製品は履歴の中身・往復の表示・入力欄・文言を渡す。
 
 ```tsx
-import { ChatLayout, useChatHistoryPanel } from "@engchina/production-ready-ui";
+import { ChatLayout, useChatHistoryPanel } from "@production-ready/ui";
 
 // lg 以上のインラインの開閉は製品の作業状態に残す（lg 未満のシートは残さない）。
 const [historyOpen, setHistoryOpen] = useWorkspaceState("chat.historyOpen", false);
@@ -2876,7 +2876,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、2 行）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
 
 ```tsx
-import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui";
+import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
 
 <ChatComposer
   id="chat-composer"
@@ -2989,7 +2989,7 @@ function submit() {
 チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。回答の中身（処理の段階 `ChatProgress`・本文・引用・SQL・ツール・承認・評価）は製品が子要素で渡す。
 
 ```tsx
-import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@engchina/production-ready-ui";
+import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 // 確定した往復
 <ChatTurn question={turn.question} testId="sql-chat-turn">

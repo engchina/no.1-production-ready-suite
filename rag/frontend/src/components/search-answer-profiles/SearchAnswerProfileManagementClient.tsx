@@ -33,7 +33,7 @@ import {
   SearchField,
   TextField,
   ListToolbar,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 

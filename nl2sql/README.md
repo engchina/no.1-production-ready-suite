@@ -71,7 +71,7 @@ pull が成功するまで再デプロイへ進まないでください。
 引数なしで実行すると、共有コンポーネントの更新を次のように反映します。
 
 - **共有 UI**: platform で `npm ci` と
-  `npm run build --workspace @engchina/production-ready-ui` を実行した後、
+  `npm run build --workspace @production-ready/ui` を実行した後、
   NL2SQL frontend の依存を同期し、再ビルドした成果物を公開します。
 - **共有 backend core**: NL2SQL backend は platform の `packages/backend_core` を
   ローカルの editable 依存として参照しています。`uv sync --locked --no-dev --python 3.12`

@@ -10,7 +10,7 @@ import {
   TimedLoadingState,
   toast,
   type EntityAction,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   ArrowDown,
   ArrowUp,

@@ -1,5 +1,5 @@
 {
-  "name": "@engchina/production-ready-platform",
+  "name": "@production-ready/platform",
   "version": "0.1.0",
   "private": true,
   "description": "Shared frontend (UI, system settings pages) + backend (Python) single source of truth for the No.1 Production Ready product family (RAG / NL2SQL / Agent). The Python backend_core package is managed separately with uv under packages/backend_core.",
@@ -8,8 +8,8 @@
     "packages/system-settings"
   ],
   "scripts": {
-    "build": "npm run build -w @engchina/production-ready-ui && npm run build -w @engchina/production-ready-system-settings",
-    "test": "npm run test -w @engchina/production-ready-ui && npm run build -w @engchina/production-ready-ui && npm run test -w @engchina/production-ready-system-settings",
-    "typecheck": "npm run typecheck -w @engchina/production-ready-ui && npm run build -w @engchina/production-ready-ui && npm run typecheck -w @engchina/production-ready-system-settings"
+    "build": "npm run build -w @production-ready/ui && npm run build -w @production-ready/system-settings",
+    "test": "npm run test -w @production-ready/ui && npm run build -w @production-ready/ui && npm run test -w @production-ready/system-settings",
+    "typecheck": "npm run typecheck -w @production-ready/ui && npm run build -w @production-ready/ui && npm run typecheck -w @production-ready/system-settings"
   }
 }

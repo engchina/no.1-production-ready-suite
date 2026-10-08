@@ -9,7 +9,7 @@ import {
   FormStatus,
   StatusBadge,
   Switch,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ListChecks, ListTree, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";

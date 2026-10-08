@@ -24,7 +24,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   ExecutionConfirmationField,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   useEffect,
   useId,

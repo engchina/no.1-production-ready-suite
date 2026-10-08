@@ -12,7 +12,7 @@ import {
   ToggleChip,
   toast,
   PagedDataTable,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";

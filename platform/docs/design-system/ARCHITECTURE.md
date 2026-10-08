@@ -15,7 +15,7 @@ Claude Design（design system プロジェクト）
         │
         │  ハンドオフ → docs/design-system/ にコミット（以降ここが正本）
         ↓
-packages/ui  =  @engchina/production-ready-ui
+packages/ui  =  @production-ready/ui
     唯一の実装。3アプリが共有する 1 パッケージ。
         │
         │  file:../../platform/packages/ui
@@ -37,8 +37,8 @@ RAG / NL2SQL / Agent
 ```css
 /* frontend/src/globals.css */
 @import "tailwindcss";
-@import "@engchina/production-ready-ui/styles.css";
-@source "../node_modules/@engchina/production-ready-ui/dist";
+@import "@production-ready/ui/styles.css";
+@source "../node_modules/@production-ready/ui/dist";
 ```
 
 **`main.tsx` から JS で import しないでください。** `@tailwindcss/postcss` は JS から import した CSS を
@@ -85,7 +85,7 @@ document.documentElement.dataset.theme = "dark";   // "light" | "dark" | "auto"
 import {
   AppShell, Sidebar, PageHeader, PageBody, Section,
   Tabs, TabPanel, DataTable, Pagination, Button, StatusBadge,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { RefreshCw, Upload } from "lucide-react";
 
 export function DocumentIndexScreen() {
@@ -186,7 +186,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - デザインシステムに無い書体 → `var(--font-sans)` / `var(--font-mono)`
 - 文字サイズ・行間・字間・角丸の任意値（`text-[10px]` / `rounded-[3px]`）→ `text-xs` / `rounded-md` 等のトークン
 - 旧トークン名（`bg-card` / `var(--primary)` 等。§5 の表の左列）→ 新名
-- `@engchina/production-ready-ui/dist/**` など内部パスへの直 import → パッケージのルートから import する
+- `@production-ready/ui/dist/**` など内部パスへの直 import → パッケージのルートから import する
 - `loading` 中に `Button` のラベルを差し替える → ラベルは固定する
 - アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-*` を持つ `<input>`）→ `TextField` の `leadingIcon` / `trailing` / `onClear`
 - 開閉できる領域の手書き（JSX の `<details>`）→ `Disclosure`（開閉の状態は `DisclosureChevron`。#397）

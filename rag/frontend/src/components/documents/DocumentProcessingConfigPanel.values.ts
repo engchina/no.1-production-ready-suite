@@ -1,4 +1,4 @@
-import type { SelectFieldOption } from "@engchina/production-ready-ui";
+import type { SelectFieldOption } from "@production-ready/ui";
 
 import type {
   ChunkingStrategyName,

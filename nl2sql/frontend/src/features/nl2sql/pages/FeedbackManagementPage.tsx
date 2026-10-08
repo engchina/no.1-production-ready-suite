@@ -49,7 +49,7 @@ import {
   type FeedbackTone,
   TextareaField,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 

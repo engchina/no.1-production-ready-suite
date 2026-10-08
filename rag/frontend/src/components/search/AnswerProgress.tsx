@@ -1,4 +1,4 @@
-import { ProcessingIndicator, type ProcessingActivityIcon } from "@engchina/production-ready-ui";
+import { ProcessingIndicator, type ProcessingActivityIcon } from "@production-ready/ui";
 
 import { answerProgressLabel, type AnswerStageEvent } from "@/lib/answer-progress";
 import { t } from "@/lib/i18n";

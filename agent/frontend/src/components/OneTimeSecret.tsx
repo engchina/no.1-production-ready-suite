@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
-import { Banner, Button, FieldActionRow, FormStatus, TextField, toast } from "@engchina/production-ready-ui";
+import { Banner, Button, FieldActionRow, FormStatus, TextField, toast } from "@production-ready/ui";
 
 // 作成・発行の直後に 1 回だけ見せる秘密（API キー・Webhook の秘密。#790）。
 // - 秘密は読み取り専用の入力欄だけに出す。Toast・console・Banner の本文には出さない

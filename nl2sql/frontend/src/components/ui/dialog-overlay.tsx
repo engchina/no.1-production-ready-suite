@@ -1,7 +1,7 @@
 import { type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import { cn } from "@engchina/production-ready-ui";
+import { cn } from "@production-ready/ui";
 
 interface DialogOverlayPortalProps {
   children: ReactNode;

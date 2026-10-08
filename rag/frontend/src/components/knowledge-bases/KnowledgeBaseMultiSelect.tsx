@@ -5,7 +5,7 @@ import {
   type SearchableMultiSelectLabels,
   type SearchableSelectLabels,
   type SearchableSelectOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useMemo } from "react";
 
 import { DEFAULT_KNOWLEDGE_BASE_NAME, type KnowledgeBaseSummary } from "@/lib/api";

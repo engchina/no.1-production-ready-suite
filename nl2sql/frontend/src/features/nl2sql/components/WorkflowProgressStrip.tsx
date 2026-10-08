@@ -14,7 +14,7 @@ import {
   StatusBadge,
   useOperationTiming,
   DisclosureChevron,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 import { activitySpinnerTarget } from "./workflowProgressSpinner";

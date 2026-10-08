@@ -50,7 +50,7 @@ import {
   Skeleton,
   cn,
   stabilizeMeasuredBox,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 export type PreviewViewerPage = {
   pageNumber: number;

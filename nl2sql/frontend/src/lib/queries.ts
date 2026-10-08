@@ -3,7 +3,7 @@ import {
   DATABASE_STATUS_QUERY_KEY,
   SYSTEM_TABLES_QUERY_KEY,
   useDatabaseStatus as useSharedDatabaseStatus,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import {
   api,

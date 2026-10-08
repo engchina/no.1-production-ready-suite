@@ -33,7 +33,7 @@ import {
   USER_ROLE_NAV_ITEMS,
   type SystemSettingsKey,
   type UserRoleKey,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
 

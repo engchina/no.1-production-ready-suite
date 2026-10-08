@@ -1,4 +1,4 @@
-import { StatusBadge as UiStatusBadge, type StatusVariant } from "@engchina/production-ready-ui";
+import { StatusBadge as UiStatusBadge, type StatusVariant } from "@production-ready/ui";
 import { Hourglass, type LucideIcon } from "lucide-react";
 
 import { t } from "@/lib/i18n";

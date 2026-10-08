@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { HardDrive } from "lucide-react";
-import { Banner, ButtonLink } from "@engchina/production-ready-ui";
+import { Banner, ButtonLink } from "@production-ready/ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi, type RuntimeStorageStatus } from "@/lib/api";

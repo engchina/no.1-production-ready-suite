@@ -6,7 +6,7 @@ import {
   type RoleDraft,
   type RolePermissionTargetQuery,
   type UserDraft,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import type {
   CurrentUser,

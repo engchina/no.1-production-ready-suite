@@ -1,4 +1,4 @@
-import { FeedbackControls as SharedFeedbackControls } from "@engchina/production-ready-ui";
+import { FeedbackControls as SharedFeedbackControls } from "@production-ready/ui";
 import {
   ApiError,
   type CitationFeedbackReason,

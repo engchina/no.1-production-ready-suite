@@ -13,7 +13,7 @@ import {
   Skeleton,
   TextField,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { HardDriveDownload, Save } from "lucide-react";
 import { useState } from "react";
 
@@ -44,7 +44,7 @@ const EMPTY_FORM: HuggingFaceForm = {
 /**
  * HuggingFace モデルダウンロード（token / ミラー）の設定（#287）。
  *
- * 共通のシステム設定の画面（`@engchina/production-ready-system-settings` のモデル設定・アップロード保存先）と
+ * 共通のシステム設定の画面（`@production-ready/system-settings` のモデル設定・アップロード保存先）と
  * 同じ構成にそろえる。
  * - 読み込み中は TimedLoadingState + Skeleton、取得の失敗は ErrorState（再試行）
  * - 保存中は入力と再送信を止め、成功は Toast、失敗は操作行の FormStatus に出す

@@ -1,5 +1,5 @@
-import { Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
-import { DatabaseSettingsPage } from "@engchina/production-ready-system-settings";
+import { Skeleton, TimedLoadingState } from "@production-ready/ui";
+import { DatabaseSettingsPage } from "@production-ready/system-settings";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api } from "@/lib/api";

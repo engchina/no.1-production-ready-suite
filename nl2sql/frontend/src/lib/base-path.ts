@@ -3,7 +3,7 @@ import {
   routerBasename,
   stripBasePath,
   withBasePath,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 /**
  * 配信のパスの前置き（#1316）。build の `FRONTEND_BASE_PATH`（vite.config.ts の `base`）が

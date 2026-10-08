@@ -1,4 +1,4 @@
-import { RoleManagementPage } from "@engchina/production-ready-system-settings";
+import { RoleManagementPage } from "@production-ready/system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";

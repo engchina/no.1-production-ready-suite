@@ -1,6 +1,6 @@
-// @engchina/production-ready-ui — 公開 API バレル
+// @production-ready/ui — 公開 API バレル
 //
-// デザイントークン CSS は別 export（"@engchina/production-ready-ui/tokens.css"）で取り込む。
+// デザイントークン CSS は別 export（"@production-ready/ui/tokens.css"）で取り込む。
 
 // --- lib ---
 export { cn } from "./lib/utils";

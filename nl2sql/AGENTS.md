@@ -59,7 +59,7 @@ Oracle AI Database の業務データに、自然言語で SQL を生成・検�
 
 ### フロントエンド
 - **Vite + React Router + TypeScript**。
-- **Tailwind CSS v4 + `@engchina/production-ready-ui`**(共有コンポーネント)。関係グラフは `@xyflow/react`。
+- **Tailwind CSS v4 + `@production-ready/ui`**(共有コンポーネント)。関係グラフは `@xyflow/react`。
 - 通信: REST(時間のかかる処理は永続 job のポーリング)。
 - 状態管理: TanStack Query + Zustand。
 
@@ -79,7 +79,7 @@ Oracle AI Database の業務データに、自然言語で SQL を生成・検�
 
 **基本原則:**
 - **レイアウト/UI 構造**(情報設計・画面構成・ナビ導線・状態遷移・文言設計)は、本プロジェクト内の `frontend/src` と `src/lib/i18n` / `src/lib/routes` を正本として継続的に整備する。**見た目(トークン)と共有コンポーネントは platform の `docs/design-system/` を正本とする**(「デザインシステム / UI」節)。
-- **技術選定は本 AGENTS.md の確定スタックを正とする。** フロントエンドのフレームワーク・ライブラリ・パターンは Vite + React Router + TypeScript + Tailwind + `@engchina/production-ready-ui` + TanStack Query + Zustand を採用する。
+- **技術選定は本 AGENTS.md の確定スタックを正とする。** フロントエンドのフレームワーク・ライブラリ・パターンは Vite + React Router + TypeScript + Tailwind + `@production-ready/ui` + TanStack Query + Zustand を採用する。
 
 **ナビゲーション/画面構成**:
 - 折りたたみ可能な**サイドナビ**。構成の正本は `frontend/src/components/layout/nav-config.ts`:
@@ -99,7 +99,7 @@ Oracle AI Database の業務データに、自然言語で SQL を生成・検�
 
 **タイポグラフィ/デザイン原則**:
 - **日本語第一フォントスタック**: `"Noto Sans JP", "Roboto", system-ui, sans-serif`。本文ベース `font-size: 14px`。
-- 落ち着いた業務系トーンを `@engchina/production-ready-ui` のトークンで再現する(本リポジトリで色トークンを定義しない)。
+- 落ち着いた業務系トーンを `@production-ready/ui` のトークンで再現する(本リポジトリで色トークンを定義しない)。
 - 文言は日本語(i18n 経由)で管理する。
 
 ## デザインシステム / UI
@@ -140,7 +140,7 @@ backend/                  FastAPI アプリ（uv の venv。pyproject.toml に r
   migrations/             Oracle の DDL（番号順）
   scripts/                実 Oracle / Select AI への手動の接続確認
   tests/                  pytest
-frontend/                 Vite + React Router + Tailwind v4 + @engchina/production-ready-ui
+frontend/                 Vite + React Router + Tailwind v4 + @production-ready/ui
   src/App.tsx             ルート定義
   src/features/nl2sql/    NL2SQL の画面・状態・ロジック（ontology/ はオントロジーの画面）
   src/features/security/  ログイン・権限管理・Deep Data Security の画面

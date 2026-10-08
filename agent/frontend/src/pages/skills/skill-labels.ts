@@ -1,5 +1,5 @@
 // スキルの出所の表示（スキルの一覧と業務 Agent のエディタで使う。#818）。
-import { type StatusVariant } from "@engchina/production-ready-ui";
+import { type StatusVariant } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 
 export function skillSourceLabel(source: string): string {

@@ -17,7 +17,7 @@ import {
   Button,
   Disclosure,
   FormStatus,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import type {
   DocumentElement,
   DocumentNavigationNode,

@@ -32,7 +32,7 @@ test("ExecutionConfirmationField is the shared packages/ui component, not a prod
   ];
   for (const path of usages) {
     const text = source(path);
-    const uiImport = text.match(/import \{[^}]*\} from "@engchina\/production-ready-ui";/u)?.[0] ?? "";
+    const uiImport = text.match(/import \{[^}]*\} from "@production-ready\/ui";/u)?.[0] ?? "";
     assert.match(uiImport, /\bExecutionConfirmationField\b/u, path);
     assert.match(text, /<ExecutionConfirmationField\b/u, path);
   }

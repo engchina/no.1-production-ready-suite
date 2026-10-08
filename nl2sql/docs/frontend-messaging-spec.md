@@ -37,7 +37,7 @@
 
 ```
 src/components/ui/feedback-tone.ts   FeedbackTone(4 トーン)+ アイコン/色/role マップ
-@engchina/production-ready-ui        <Toaster/> / toast / <ConfirmProvider> / useConfirm() / <SelectField/>
+@production-ready/ui        <Toaster/> / toast / <ConfirmProvider> / useConfirm() / <SelectField/>
 src/components/ui/banner.tsx         <Banner severity title? action? onDismiss? />
 src/components/ui/field-error.tsx    <FieldError id message />
 src/components/ui/form-status.tsx    <FormStatus tone message />

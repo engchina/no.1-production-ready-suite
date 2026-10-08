@@ -1,4 +1,4 @@
-import { Disclosure, StatusBadge } from "@engchina/production-ready-ui";
+import { Disclosure, StatusBadge } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import type { OntologyFinding } from "./types";
 

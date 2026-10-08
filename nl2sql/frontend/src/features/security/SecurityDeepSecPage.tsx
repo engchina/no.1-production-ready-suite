@@ -26,7 +26,7 @@ import {
   SelectField,
   TextField,
   FieldLegend,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDatabaseStatus } from "@/lib/queries";
@@ -74,7 +74,7 @@ import {
   SecurityIdentityLines,
   SecuritySearchField,
   identitySecondaryName,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import { securityApi } from "./api";
 import type {
   DataEntitlement,

@@ -1,4 +1,4 @@
-import { OciSettingsPage } from "@engchina/production-ready-system-settings";
+import { OciSettingsPage } from "@production-ready/system-settings";
 
 import { ApiError, api } from "@/lib/api";
 

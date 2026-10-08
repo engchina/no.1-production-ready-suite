@@ -29,7 +29,7 @@ import {
   FieldActionRow,
   isImeComposing,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { ErrorState } from "@/components/StateViews";
 
 import { t } from "@/lib/i18n";

@@ -8,7 +8,7 @@ import type {
   ChatProgressLabels,
   ChatProgressStep,
   ChatProgressStepStatus,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import { t } from "../../lib/i18n";

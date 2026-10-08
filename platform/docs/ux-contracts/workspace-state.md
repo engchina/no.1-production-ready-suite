@@ -28,4 +28,4 @@
   - `useUnsavedChangesGuard` は `useBlocker` を呼ばず、dirty の間だけ自分の確認関数を共有の一覧に登録する。blocker はその一覧に 1 つでも未保存があれば止める。1 画面に未保存のフォームが複数あっても、確認は最初に登録したものの 1 回だけにする。
   - `navigate()` で画面を離れる操作（ログアウトなど）は、移動の前に同じ一覧を使う `confirmUnsavedChanges()`（製品の `confirmPendingLeave`）を通す。製品で別の一覧を持たない。
 - 画面内のボタンが自分で確認してから `navigate` する流れ（PUSH / REPLACE）は hook で止めない（二重に確認しないため）。そのようなボタンは、移動の前に必ず同じ確認を通す。
-- 共有パッケージの画面（`@engchina/production-ready-system-settings` など）は、離脱の確認の文言を props（`draftGuardMessages` など）で受け取る。
+- 共有パッケージの画面（`@production-ready/system-settings` など）は、離脱の確認の文言を props（`draftGuardMessages` など）で受け取る。

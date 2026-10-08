@@ -6,7 +6,7 @@ import {
   CardHeader,
   CardTitle,
   TextareaField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { MessageCircleQuestion, MessageSquareText, Send } from "lucide-react";
 import { useId, useState } from "react";
 

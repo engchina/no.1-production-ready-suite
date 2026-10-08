@@ -1,4 +1,4 @@
-import { UserManagementPage } from "@engchina/production-ready-system-settings";
+import { UserManagementPage } from "@production-ready/system-settings";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { useAuth } from "./AuthProvider";

@@ -24,7 +24,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   paginationRange,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   BookmarkPlus,
   ChevronLeft,

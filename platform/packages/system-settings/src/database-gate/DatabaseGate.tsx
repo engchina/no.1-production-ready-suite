@@ -1,7 +1,7 @@
 import { useEffect, type ComponentType, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
-import { TimedLoadingState } from "@engchina/production-ready-ui";
+import { TimedLoadingState } from "@production-ready/ui";
 
 import { SYSTEM_SETTINGS_PATHS } from "../paths";
 import { DatabaseUnavailableNotice } from "./DatabaseUnavailableNotice";

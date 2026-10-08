@@ -1,4 +1,4 @@
-import { ConfirmProvider } from "@engchina/production-ready-ui";
+import { ConfirmProvider } from "@production-ready/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";

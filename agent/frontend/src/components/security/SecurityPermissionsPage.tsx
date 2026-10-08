@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { RolePermissionsPage } from "@engchina/production-ready-system-settings";
+import { RolePermissionsPage } from "@production-ready/system-settings";
 
 import { AGENT_SPLIT_STORAGE_PREFIX } from "@/components/EntityLayout";
 import type { SecurityRole } from "@/lib/api";

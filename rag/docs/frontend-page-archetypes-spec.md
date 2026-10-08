@@ -90,7 +90,7 @@
 
 ## 4. 分割ペイン
 
-一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@engchina/production-ready-ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。
+一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@production-ready/ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。
 
 | 画面 | `splitId` | 既定で広い側 | 補足 |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
-import { ListSkeleton, Section, TimedLoadingState, ApiErrorBanner } from "@engchina/production-ready-ui";
+import { ListSkeleton, Section, TimedLoadingState, ApiErrorBanner } from "@production-ready/ui";
 
 import { agentApi, type AgentTemplate } from "@/lib/api";
 import { t } from "@/lib/i18n";

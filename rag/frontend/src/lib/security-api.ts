@@ -6,7 +6,7 @@
  * 通信（Cookie セッション・CSRF・401 / 403 の通知・エラー形式）は `request`（lib/api.ts）が持つ。
  */
 
-import { apiErrorMessage } from "@engchina/production-ready-ui";
+import { apiErrorMessage } from "@production-ready/ui";
 import {
   rolePermissionTargetSearchParams,
   type AuthApi,
@@ -19,7 +19,7 @@ import {
   type UserDraft,
   type UserManagementApi,
   type UserWithTemporaryPassword,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import {
   ApiError,

@@ -1,4 +1,4 @@
-import { formatPaginationNumber, type PaginationLabels } from "@engchina/production-ready-ui";
+import { formatPaginationNumber, type PaginationLabels } from "@production-ready/ui";
 
 import { t } from "./i18n";
 

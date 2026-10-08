@@ -10,7 +10,7 @@ import {
   PageHeader,
   TimedLoadingState,
   type FixedSplitWidePane,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import { ApiError } from "@/lib/api";

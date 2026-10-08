@@ -2,7 +2,7 @@ import {
   type FieldWidth,
   SearchField,
   SelectField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useId } from "react";
 
 import { t } from "@/lib/i18n";

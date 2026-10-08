@@ -26,7 +26,7 @@ import {
   type EntityAction,
   PageBody,
   RowTitleButton,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type ApprovalRequest, type RunState } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";

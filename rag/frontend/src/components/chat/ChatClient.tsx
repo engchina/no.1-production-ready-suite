@@ -29,7 +29,7 @@ import {
   type ChatProgressStep,
   useChatAutoScroll,
   useChatHistoryPanel,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   Check,
   Pencil,

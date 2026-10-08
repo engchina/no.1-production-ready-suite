@@ -17,7 +17,7 @@ import {
   ProcessingIndicator,
   TextareaField,
   useActionPending,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";

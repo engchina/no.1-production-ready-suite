@@ -7,7 +7,7 @@ import { expectSpinnerStable } from "./_helpers/spinner-stability";
  *
  * 旧実装は lucide `Loader2`（288 度の欠けた円弧）をそのまま回していたため、
  * インクの重心とシルエットが回転角ごとに動き、中心がずれて上下に揺れて見えていた。
- * デザインシステム移行（#529）後は共有パッケージ `@engchina/production-ready-ui` の
+ * デザインシステム移行（#529）後は共有パッケージ `@production-ready/ui` の
  * `Spinner`（全周トラック circle + 270° arc、`svg.animate-spin`）を使う。
  * 移行のときに旧 `StableLoadingIcon` の「180° 対称 active arc の重心」の検証を削除したため、共有 Spinner の
  * 270° の 1 本のアークで重心が回り、上下に揺れて見える状態に戻っていた（#1180）。共有 Spinner を 180° 対称の

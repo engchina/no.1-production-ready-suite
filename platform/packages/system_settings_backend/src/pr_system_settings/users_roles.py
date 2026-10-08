@@ -1,6 +1,6 @@
 """ユーザー管理・ロール管理の API 契約（3製品共通。NL2SQL の実装を基準に移設。#206）。
 
-共有画面（`@engchina/production-ready-system-settings` のユーザー管理・ロール管理）が送受信する
+共有画面（`@production-ready/system-settings` のユーザー管理・ロール管理）が送受信する
 request / response の形と、パスワードポリシーを持つ。永続化・認証・認可は製品が持つ。
 
 - ロールはここでは「コード・名称・説明・アーカイブ状態」だけを扱う。ロールに付ける権限は製品ごとに

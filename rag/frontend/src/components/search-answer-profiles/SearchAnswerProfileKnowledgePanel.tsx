@@ -15,7 +15,7 @@ import {
   TextareaField,
   toast,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { ApiError } from "@/lib/api";

@@ -98,7 +98,7 @@
 
 ## 2. 未保存変更の離脱ガード
 
-共有パッケージ `@engchina/production-ready-system-settings` の `useUnsavedChangesGuard` / `useSettingsDraftGuard` を `frontend/src/lib/leave-guard.ts` で Agent の i18n 文言に包んで使う。dirty のときだけ、サイドナビ・内部リンクの移動を確認ダイアログで止め、再読込・タブを閉じる操作を `beforeunload` で止める。dirty は保存済みの基準との比較で判定し、保存に成功したら基準を更新する。
+共有パッケージ `@production-ready/system-settings` の `useUnsavedChangesGuard` / `useSettingsDraftGuard` を `frontend/src/lib/leave-guard.ts` で Agent の i18n 文言に包んで使う。dirty のときだけ、サイドナビ・内部リンクの移動を確認ダイアログで止め、再読込・タブを閉じる操作を `beforeunload` で止める。dirty は保存済みの基準との比較で判定し、保存に成功したら基準を更新する。
 
 | 画面 | フック | dirty の対象 |
 |---|---|---|

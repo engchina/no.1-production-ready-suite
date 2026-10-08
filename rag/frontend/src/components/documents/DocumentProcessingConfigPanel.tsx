@@ -14,7 +14,7 @@ import {
   Skeleton,
   ToggleChip,
   TimedLoadingState,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { canOpenNavRoute } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
 import {

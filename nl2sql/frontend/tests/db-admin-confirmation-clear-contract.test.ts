@@ -42,7 +42,7 @@ test("DDL/comment/annotation runners expose a shared clear action that resets gu
     "/** 検索フィルタ付き",
   );
 
-  assert.match(dbAdminShared, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
+  assert.match(dbAdminShared, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(runner, /const canClearRunner = Boolean\(sql \|\| confirmation \|\| result \|\| message \|\| executionRun\)/u);
   assert.match(
     runner,
@@ -63,7 +63,7 @@ test("clear actions match the same-row height with size (no mouse-only 44px, #61
 test("table import wizard clear action resets import form, result, and dropzone validation state", () => {
   const importWizard = section(tableManagementPage, "function ImportWizard", "function schemaRefreshRequiresFull");
 
-  assert.match(tableManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
+  assert.match(tableManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(importWizard, /resetSignal=\{fileResetSignal\}/u);
   assert.match(
     importWizard,
@@ -83,7 +83,7 @@ test("data management CSV and synthetic guarded actions expose clear buttons", (
   const csvWorkspace = section(dataManagementPage, "function CsvUploadWorkspace", "function SyntheticWorkspace");
   const syntheticWorkspace = section(dataManagementPage, "function SyntheticWorkspace", "function DbProfileRefreshNotice");
 
-  assert.match(dataManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
+  assert.match(dataManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(csvWorkspace, /resetSignal=\{fileResetSignal\}/u);
   assert.match(
     csvWorkspace,
@@ -117,7 +117,7 @@ test("business profile clear action resets only the Oracle execution gate and jo
     "  const editor = (",
   );
 
-  assert.match(profileManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
+  assert.match(profileManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(editor, /canClearOracleExecution: boolean/u);
   assert.match(editor, /onOracleExecutionClear: \(\) => void/u);
   assert.match(

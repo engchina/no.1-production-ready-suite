@@ -14,7 +14,7 @@ import {
   ProcessingIndicator,
   Pagination,
   useConfirm,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";

@@ -1,4 +1,4 @@
-import { Toaster as UiToaster } from "@engchina/production-ready-ui";
+import { Toaster as UiToaster } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 

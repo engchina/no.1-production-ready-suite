@@ -1,4 +1,4 @@
-import { Button } from "@engchina/production-ready-ui";
+import { Button } from "@production-ready/ui";
 import { FileText } from "lucide-react";
 import { useState, type ReactNode } from "react";
 

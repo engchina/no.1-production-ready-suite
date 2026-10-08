@@ -7,7 +7,7 @@ import { Share2 } from "lucide-react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Disclosure, Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
+import { Disclosure, Skeleton, TimedLoadingState } from "@production-ready/ui";
 import type { KnowledgeBaseGraphData } from "@/lib/api";
 import { useKnowledgeBaseGraph } from "@/lib/queries";
 import { t } from "@/lib/i18n";

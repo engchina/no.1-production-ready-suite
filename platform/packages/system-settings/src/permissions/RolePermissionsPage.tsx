@@ -34,7 +34,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { formatMessage } from "../auth/messages";
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";

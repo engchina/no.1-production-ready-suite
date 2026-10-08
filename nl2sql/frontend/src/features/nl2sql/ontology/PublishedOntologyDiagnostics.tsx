@@ -1,4 +1,4 @@
-import { Banner, Button } from "@engchina/production-ready-ui";
+import { Banner, Button } from "@production-ready/ui";
 import { Download } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { OntologyFindings } from "./OntologyFindings";

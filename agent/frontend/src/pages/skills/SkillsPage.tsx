@@ -27,7 +27,7 @@ import {
   TextareaField,
   TextField,
   apiErrorMessage,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { agentApi, type AgentSkill } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Banner, PageBody, PageHeader } from "@engchina/production-ready-ui";
+import { Banner, PageBody, PageHeader } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 

@@ -5,8 +5,8 @@ monorepo `no.1-production-ready-suite` の `platform/`。No.1 Production Ready �
 
 ```
 packages/
-  ui/             @engchina/production-ready-ui    — 共有フロント UI/UX（Vite library / React 19 / Tailwind v4）
-  system-settings/ @engchina/production-ready-system-settings — 3製品共通のシステム設定画面（外観と証明書ほか。#70）とユーザー管理・ロール管理画面（#206）
+  ui/             @production-ready/ui    — 共有フロント UI/UX（Vite library / React 19 / Tailwind v4）
+  system-settings/ @production-ready/system-settings — 3製品共通のシステム設定画面（外観と証明書ほか。#70）とユーザー管理・ロール管理画面（#206）
   backend_core/   production-ready-backend-core    — 共有 FastAPI インフラ（Python 3.12 / pydantic v2 / uv）
   system_settings_backend/ production-ready-system-settings-backend — 3製品共通のシステム設定 API と、共通認証基盤（ユーザー・ロール・セッション・ログイン。PLATFORM_* テーブル。pr_system_settings。#70 / #206 / #212）
 templates/
@@ -25,7 +25,7 @@ docs/
 
 ---
 
-# @engchina/production-ready-ui（フロント共有 UI）
+# @production-ready/ui（フロント共有 UI）
 
 3 プロジェクトが共有する UI/UX の single source of truth。
 デザイントークン・基本コンポーネント・アプリシェル(Sidebar / AppShell / PageHeader / Breadcrumbs)・
@@ -75,7 +75,7 @@ npm run build         # dist/index.js + dist/index.d.ts + dist/tokens.css
 ```jsonc
 // frontend/package.json
 "dependencies": {
-  "@engchina/production-ready-ui": "file:../../platform/packages/ui"
+  "@production-ready/ui": "file:../../platform/packages/ui"
 }
 ```
 
@@ -94,15 +94,15 @@ resolve: { dedupe: ["react", "react-dom"] }
 ```css
 /* src/globals.css */
 @import "tailwindcss";
-@import "@engchina/production-ready-ui/tokens.css";
+@import "@production-ready/ui/tokens.css";
 /* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める */
-@source "../node_modules/@engchina/production-ready-ui/dist";
+@source "../node_modules/@production-ready/ui/dist";
 ```
 
 ### 4. アプリシェル
 
 ```tsx
-import { AppShell, Sidebar } from "@engchina/production-ready-ui";
+import { AppShell, Sidebar } from "@production-ready/ui";
 
 <AppShell sidebar={<AppSidebar />}>
   <Routes>…</Routes>

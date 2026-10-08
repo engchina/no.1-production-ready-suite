@@ -3,7 +3,7 @@ import {
   useSettingsDraftGuard,
   useUnsavedChangesGuard,
   type DraftGuardMessages,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { t } from "@/lib/i18n";
 

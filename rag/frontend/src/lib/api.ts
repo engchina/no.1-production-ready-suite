@@ -17,10 +17,10 @@ import {
   type ApiErrorPresentable,
   type ApiErrorPresentation,
   type ApiTransportRequest,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
-import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@engchina/production-ready-system-settings";
-import type { BaseCurrentUser } from "@engchina/production-ready-system-settings";
+import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@production-ready/system-settings";
+import type { BaseCurrentUser } from "@production-ready/system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
@@ -36,7 +36,7 @@ export type {
   DatabaseSettingsData,
   DatabaseSettingsUpdate,
   DatabaseWalletDownloadData,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import type {
   AdbInfoData,
   AdbSettingsUpdate,
@@ -44,7 +44,7 @@ import type {
   DatabaseSettingsData,
   DatabaseSettingsUpdate,
   DatabaseWalletDownloadData,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 export type {
   EnterpriseAiConfiguredModel,
   EnterpriseAiModelSettings,
@@ -57,13 +57,13 @@ export type {
   ModelSettingsTestResult,
   ModelSettingsTestStatus,
   ModelSettingsTestTargetType,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import type {
   ModelSettingsData,
   ModelSettingsPayload,
   ModelSettingsTestRequest,
   ModelSettingsTestResult,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 export type {
   OciConfigField,
   OciConfigReadData,
@@ -79,7 +79,7 @@ export type {
   OciPrivateKeyUploadData,
   OciSettingsData,
   OciSettingsUpdate,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import type {
   OciConfigReadData,
   OciConfigReadRequest,
@@ -90,18 +90,18 @@ import type {
   OciPrivateKeyUploadData,
   OciSettingsData,
   OciSettingsUpdate,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
   UploadStorageBackend,
   UploadStorageSettingsData,
   UploadStorageSettingsUpdate,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import type {
   UploadStorageSettingsData,
   UploadStorageSettingsUpdate,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   import.meta.env.VITE_API_TIMEOUT_MS,

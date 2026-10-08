@@ -16,7 +16,7 @@
 ### 禁止事項
 
 - 生の hex（`#1a73c1` 等）と生の px を書く。トークンを `var()` で参照する。
-- 製品の `globals.css` に色トークンを定義する。`globals.css` で `@import "tailwindcss"` の後に `@import "@engchina/production-ready-ui/styles.css"` する（`main.tsx` から JS で import すると共有ユーティリティが生成されない）。
+- 製品の `globals.css` に色トークンを定義する。`globals.css` で `@import "tailwindcss"` の後に `@import "@production-ready/ui/styles.css"` する（`main.tsx` から JS で import すると共有ユーティリティが生成されない）。
 - `TextField` / `PageHeader` / ボタン等の共有コンポーネントを再実装する。
 - `<table>` を手書きする。`DataTable` を使う。例外は「元の文書の表を再現して編集するグリッド」（見出し行がなく、列数が表ごとに変わるもの。RAG の `ReviewTextEditor.tsx`）だけで、使う理由をコードのコメントに書く（#129）。
 - `<div style={{ padding: "1.5rem 2rem" }}>` のような余白コンテナを手書きする。`PageBody` を使う。
@@ -58,7 +58,7 @@
 
 `docs/design-system/adherence.oxlintrc.json` が、デザインシステム遵守ルールの正本である。**新規コードにこの lint を通すことが、デザインシステムからのドリフトを止める唯一の現実的な手段である。**
 
-- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出するのは次の 11 個: 生の hex、inline style の生の px、デザインシステムに無い書体、文字サイズ・行間・字間・角丸の任意値（`text-[10px]` 等）、旧トークン名（ユーティリティ / CSS 変数）、`@engchina/production-ready-ui` の内部パス import、`loading` 中の `Button` ラベルの差し替え、`loading` があるのに `icon` が無い `Button`、フォーカスの表示の ring（`focus(-visible|-within):ring-*`）と `focus(-visible):outline-none`（#355。フォーカスの表示は outline に一本化）、アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-7`〜`pl-12` / `ps-*` / `pl-[…]` を持つ `<input>`。#384。`TextField` の `leadingIcon` を使う）、`type="search"` の `TextField` / `<input>`（#535。一覧の絞り込みは `SearchField`、重い検索は `type="search"` にしない）。ほかに `<details>` の手書き（#397）、「(任意)」・必須の表示の手書き（#531）、`<textarea>` の手書き（#584。`TextareaField` を使う）、ネイティブの `<select>`（#631。`SelectField` / `SearchableSelectField` を使う）、操作部品の高さと幅の手書き（#613。`touchTarget`、共有の操作部品への `h-*` / `min-h-*`、入力欄・選択欄への `w-*` / `max-w-*`、ネイティブの `<input>` / `<select>` への `h-*` / `min-h-*`。`size` / `width` / `fieldControlClassName` を使う）、`PageHeader` の `actions` の中の「一覧へ戻る」（#618。`back` を使う）、手書きの `<table>`（#800。NL2SQL の製品のルール #530 から移した。例外は RAG の `ReviewTextEditor.tsx` の元の文書の表を再現するグリッドだけ）、`PageHeader` の `actions` の中の JSX（#800。配列で渡す）、`rgba()` / `rgb()` / `hsl()` / `oklch()` などの生の色（#800）、文字サイズ・行間・字間の数値と inline style の余白・角丸の数値（#800）、`TextareaField` の `textareaClassName` の `h-*` / `min-h-*`（#800。`rows` を使う）、回転するアイコンの手書き（`animate-spin` / `animate-[spin…]` の className、inline style の `animation: spin`、回転用の lucide のアイコン `Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel` の import。#395 / #1180。共有の `Spinner` とボタンの `loading` を使う）も検出する。
+- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出するのは次の 11 個: 生の hex、inline style の生の px、デザインシステムに無い書体、文字サイズ・行間・字間・角丸の任意値（`text-[10px]` 等）、旧トークン名（ユーティリティ / CSS 変数）、`@production-ready/ui` の内部パス import、`loading` 中の `Button` ラベルの差し替え、`loading` があるのに `icon` が無い `Button`、フォーカスの表示の ring（`focus(-visible|-within):ring-*`）と `focus(-visible):outline-none`（#355。フォーカスの表示は outline に一本化）、アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-7`〜`pl-12` / `ps-*` / `pl-[…]` を持つ `<input>`。#384。`TextField` の `leadingIcon` を使う）、`type="search"` の `TextField` / `<input>`（#535。一覧の絞り込みは `SearchField`、重い検索は `type="search"` にしない）。ほかに `<details>` の手書き（#397）、「(任意)」・必須の表示の手書き（#531）、`<textarea>` の手書き（#584。`TextareaField` を使う）、ネイティブの `<select>`（#631。`SelectField` / `SearchableSelectField` を使う）、操作部品の高さと幅の手書き（#613。`touchTarget`、共有の操作部品への `h-*` / `min-h-*`、入力欄・選択欄への `w-*` / `max-w-*`、ネイティブの `<input>` / `<select>` への `h-*` / `min-h-*`。`size` / `width` / `fieldControlClassName` を使う）、`PageHeader` の `actions` の中の「一覧へ戻る」（#618。`back` を使う）、手書きの `<table>`（#800。NL2SQL の製品のルール #530 から移した。例外は RAG の `ReviewTextEditor.tsx` の元の文書の表を再現するグリッドだけ）、`PageHeader` の `actions` の中の JSX（#800。配列で渡す）、`rgba()` / `rgb()` / `hsl()` / `oklch()` などの生の色（#800）、文字サイズ・行間・字間の数値と inline style の余白・角丸の数値（#800）、`TextareaField` の `textareaClassName` の `h-*` / `min-h-*`（#800。`rows` を使う）、回転するアイコンの手書き（`animate-spin` / `animate-[spin…]` の className、inline style の `animation: spin`、回転用の lucide のアイコン `Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel` の import。#395 / #1180。共有の `Spinner` とボタンの `loading` を使う）も検出する。
 - 規則のテストは RAG の `frontend/src/design-system-adherence.test.ts`（ESLint の `lintText` で検出と許容の例を確かめる）。規則を足すときは同じテストに例を足す。
 - prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない（コンポーネントごとの許可 prop 一覧は廃止した）。
 - oxlint にはネイティブの `no-restricted-syntax` が無い。そのため、同じ `{selector, message}` 形式を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を platform に置き、adherence 設定から相対パスで読み込む。
@@ -96,7 +96,7 @@ export default [
 PR の CI は suite root の `.github/workflows/ci.yml`（`Platform / UI`・`Platform / backend_core`・`Platform / system_settings_backend` job と、影響を受ける全製品の job）で実行される。ローカルでは変更した package の command を実行し、影響を受ける製品の全件の検査は CI の job 結果を PR の `検証結果` に引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。pip-audit は PR では lock / pyproject の変更時だけ CI が実行し、全件は `dependency-audit-nightly.yml` が毎晩実行する。
 
 ```bash
-# frontend (@engchina/production-ready-ui) — platform/ で実行
+# frontend (@production-ready/ui) — platform/ で実行
 npm ci && npm run typecheck && npm test && npm run build
 
 # backend (production-ready-backend-core)

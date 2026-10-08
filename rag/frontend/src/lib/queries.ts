@@ -5,7 +5,7 @@
 import {
   DATABASE_STATUS_QUERY_KEY,
   SYSTEM_TABLES_QUERY_KEY,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import {
   keepPreviousData,
   useInfiniteQuery,

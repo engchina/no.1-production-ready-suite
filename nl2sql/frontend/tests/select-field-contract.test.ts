@@ -18,7 +18,7 @@ test("SelectField は共有パッケージから import し、アプリ内に再
     .filter((text) => /<SelectField\b/u.test(text));
   assert.ok(users.length > 0);
   for (const text of users) {
-    assert.match(text, /\bSelectField,[\s\S]*\} from "@engchina\/production-ready-ui";/u);
+    assert.match(text, /\bSelectField,[\s\S]*\} from "@production-ready\/ui";/u);
   }
   for (const file of sourceFiles(new URL("../src/", import.meta.url))) {
     assert.doesNotMatch(readFileSync(file, "utf8"), /@\/components\/ui\/(?:select-field|confirm-dialog|toaster)/u, file.pathname);

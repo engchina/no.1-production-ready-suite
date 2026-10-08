@@ -2,7 +2,7 @@ import {
   SYSTEM_TABLES_MESSAGES,
   SystemTablesCard as SharedSystemTablesCard,
   type SystemTablesMessages,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { DATABASE_GATE_ROUTES, databaseGateMessages } from "@/components/system/DatabaseUnavailableNotice";
 import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";

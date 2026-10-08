@@ -7,7 +7,7 @@ import {
   FieldActionRow,
   FieldError,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 export interface InputActionFieldAction {
   label: ReactNode;

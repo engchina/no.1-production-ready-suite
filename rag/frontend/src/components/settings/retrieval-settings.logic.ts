@@ -3,7 +3,7 @@
  * 範囲は backend の `QueryHistorySettingsData` / `AnswerRecordSettingsUpdate` と同じにする。
  */
 
-import type { SelectFieldOption } from "@engchina/production-ready-ui";
+import type { SelectFieldOption } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { numberRangeError } from "@/lib/required-fields";

@@ -5,7 +5,7 @@ import {
   PageHeader,
   PageBody,
   SelectField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus, RefreshCw, Target } from "lucide-react";

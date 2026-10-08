@@ -1,6 +1,6 @@
 // Run のイベントの購読（SSE / WebSocket）と WebSocket のコマンド（#215 / #814。旧 AgentRuntimePages.tsx から分けた。#818）。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { apiErrorMessage, type StatusVariant } from "@engchina/production-ready-ui";
+import { apiErrorMessage, type StatusVariant } from "@production-ready/ui";
 import { type RunEvent, type RunState } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { securityApi } from "@/lib/security-api";

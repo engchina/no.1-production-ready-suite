@@ -1,4 +1,4 @@
-import { apiErrorMessage, FeedbackControls, toast } from "@engchina/production-ready-ui";
+import { apiErrorMessage, FeedbackControls, toast } from "@production-ready/ui";
 
 import {
   agentApi,

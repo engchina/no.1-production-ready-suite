@@ -7,7 +7,7 @@ import {
   TextareaField,
   TextField,
   toast,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { MessageCircleQuestion, Plus, Save, Trash2, Undo2, X } from "lucide-react";
 import { useState } from "react";

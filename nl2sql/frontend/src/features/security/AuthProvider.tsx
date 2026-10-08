@@ -4,7 +4,7 @@ import {
   useAuth as useSharedAuth,
   type AuthContextValue,
   type HasPermission,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { bindWorkspaceOwner, clearWorkspaceDrafts } from "@/lib/workspace-drafts";
 import { securityApi } from "./api";

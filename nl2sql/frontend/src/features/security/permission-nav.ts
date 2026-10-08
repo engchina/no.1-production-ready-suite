@@ -2,7 +2,7 @@ import {
   arrangePermissionsByNav,
   permissionNavSections,
   type PermissionDefinition,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 
 import { NAV_SECTIONS } from "@/components/layout/nav-config";
 import { t } from "@/lib/i18n";

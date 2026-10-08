@@ -1,4 +1,4 @@
-import { Button, ClearActionButton, StatusBadge } from "@engchina/production-ready-ui";
+import { Button, ClearActionButton, StatusBadge } from "@production-ready/ui";
 import { FileText, Upload, X } from "lucide-react";
 
 import { t, type I18nKey } from "@/lib/i18n";

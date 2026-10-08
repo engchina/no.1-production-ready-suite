@@ -6,7 +6,7 @@
  * 承認が要るツールがあったときだけ）→「回答の作成（respond）」。
  */
 
-import type { ChatProgressStep, ChatProgressStepStatus } from "@engchina/production-ready-ui";
+import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
 import type { ApprovalRequest, RunEvent, RunState, RunStep } from "./api";
 import { t } from "./i18n";

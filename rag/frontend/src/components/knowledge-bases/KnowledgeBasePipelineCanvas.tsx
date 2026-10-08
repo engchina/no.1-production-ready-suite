@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Background, Controls, Position, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Workflow } from "lucide-react";
-import { Disclosure } from "@engchina/production-ready-ui";
+import { Disclosure } from "@production-ready/ui";
 
 import type { KnowledgeBaseAdapterConfig } from "@/lib/api";
 import { ja, t, type I18nKey } from "@/lib/i18n";

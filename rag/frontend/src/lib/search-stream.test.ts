@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiTransportError, DEFAULT_API_TRANSPORT_MESSAGES } from "@engchina/production-ready-ui";
+import { ApiTransportError, DEFAULT_API_TRANSPORT_MESSAGES } from "@production-ready/ui";
 
 import { ApiError } from "./api";
 import { streamSearch } from "./search-stream";

@@ -15,7 +15,7 @@ import {
   TextField,
   isSubmitEnter,
   type SelectFieldOption,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerText } from "@/components/search/AnswerText";

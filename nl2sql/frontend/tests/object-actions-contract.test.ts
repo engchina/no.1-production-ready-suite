@@ -6,7 +6,7 @@ import {
   splitObjectActions,
   visibleEntityActions,
   type EntityAction,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 
 const source = readFileSync(new URL("../../../platform/packages/ui/src/components/data/object-actions.tsx", import.meta.url), "utf8");
 const floatingSource = readFileSync(

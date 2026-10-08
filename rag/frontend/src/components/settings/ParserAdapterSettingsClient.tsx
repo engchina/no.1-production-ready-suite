@@ -15,12 +15,12 @@ import {
   FormSkeleton,
   StatusBadge,
   TextField,
-} from "@engchina/production-ready-ui";
+} from "@production-ready/ui";
 import {
   SettingsTestResultPanel,
   toSettingsTestResultDetails,
   type SettingsTestResultTone,
-} from "@engchina/production-ready-system-settings";
+} from "@production-ready/system-settings";
 import { useMemo, useState } from "react";
 import {
   Plug,
