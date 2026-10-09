@@ -8,6 +8,7 @@ from rag_engine.retrieval.context_builder import ContextParentEvidence, context_
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_packet, evidence_relevance
 from rag_engine.retrieval.task_contract import task_contract, query_rejection_reason
 from rag_engine.retrieval.context_recovery import recover_context_records
+from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers, render_prompt_template
 from rag_engine.generation.answer_images import _prompt_safe_warnings, _trim_generated_text, prompt_injection_warnings_for_records
 from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS, _answer_context_from_ranked
@@ -147,13 +148,13 @@ def _build_crag_grade_prompt(
     )
     contract = task_contract(question)
     return render_prompt_template(CRAG_GRADE_PROMPT_TEMPLATE, {
-        "question": question.strip(),
+        "question": fold_width(question).strip(),
         "recovery_options": json.dumps(recovery_options, ensure_ascii=False),
         "task_contract": json.dumps(contract, ensure_ascii=False),
         "active_query": active_query.strip(),
         "retrieval_queries": json.dumps(list(_dedupe_queries(retrieval_queries)), ensure_ascii=False, indent=2),
         "prompt_injection_warnings": json.dumps(_prompt_safe_warnings(prompt_warnings), ensure_ascii=False, indent=2),
-        "candidates": neutralize_boundary_markers(json.dumps(candidates, ensure_ascii=False, indent=2)),
+        "candidates": neutralize_boundary_markers(json.dumps(_model_candidates(candidates), ensure_ascii=False, indent=2)),
     })
 
 def _crag_grade_candidates(context: AnswerContext, question: str = "") -> list[dict[str, Any]]:
@@ -239,6 +240,26 @@ def _crag_grade_record_candidate(record: Any, text: str) -> dict[str, Any]:
         "section": " > ".join(str(h) for h in (getattr(record, "metadata", None) or {}).get("section_path") or [] if h),
         "text": text,
     }
+
+
+# 評価器に渡すときに文字の形をそろえる候補の欄（見出しと本文）。
+_CANDIDATE_TEXT_KEYS = ("section", "text")
+
+
+def _model_candidates(candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """評価器に渡す候補の写し。見出しと本文を回答の生成と同じ文字の形（``fold_width``）にそろえる (#1350)。
+
+    資料の全角の ``ＨＲＭ`` を質問の ``HRM`` と同じ語と読ませるため。識別子（chunk_uid・source など）は評価器の
+    判定を候補へ結び付けるのでそろえず、候補そのもの（評価の記録・草稿ラベルに使う）も変えない。
+    """
+    def view(candidate: dict[str, Any]) -> dict[str, Any]:
+        copied = {key: fold_width(value) if key in _CANDIDATE_TEXT_KEYS and isinstance(value, str) else value
+                  for key, value in candidate.items()}
+        for key in ("retrieved_anchor_children", "context_children"):
+            if isinstance(copied.get(key), list):
+                copied[key] = [view(child) if isinstance(child, dict) else child for child in copied[key]]
+        return copied
+    return [view(candidate) for candidate in candidates]
 
 def _refine_crag_context(
     context: AnswerContext,

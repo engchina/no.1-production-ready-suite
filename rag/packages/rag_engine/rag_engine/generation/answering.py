@@ -43,6 +43,7 @@ from rag_engine.retrieval.inquiry_conditions import (
     inquiry_retrieval_queries,
     parse_inquiry_conditions,
 )
+from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract, filter_queries, query_rejection_reason
 from rag_engine.retrieval.request_coverage import (
     COVERAGE_SCHEMA_VERSION,
@@ -1106,7 +1107,8 @@ def _grounded_prompt(question: str, spans: Sequence[dict[str, Any]], context: An
         if query_expansion is not None and query_expansion.routing_data_items else "",
     ) if section)
     return render_prompt_template(read_prompt(VLM_ANSWER_PROMPT_KEY) if template is None else template, {
-        "question": question.strip(),
+        # 質問も根拠と同じ文字の形で渡す（全角の ＨＲＭ と根拠の HRM を同じ語と読ませる。#1350）。
+        "question": fold_width(question).strip(),
         # source などの文字列値は文書由来なので、TRUSTED ブロックを閉じる表記を残さない。
         "image_metadata": neutralize_boundary_markers(
             json.dumps(_answer_image_metadata(context.records, image_evidence=images), ensure_ascii=False, indent=2)),

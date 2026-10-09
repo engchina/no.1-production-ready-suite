@@ -22,6 +22,7 @@ from rag_engine.evaluation.answer_eval import (
     _evidence_fragments,
     _json,
     _parse_checked,
+    model_request,
 )
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
 from rag_engine.generation.operation_audit import is_non_claim_passage, table_header_lines
@@ -68,7 +69,8 @@ def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]]) -> tup
     chosen: list[dict[str, Any]] = []
     for fragment in fragments:
         candidate = {**fixed, "evidence_items": [*chosen, fragment]}
-        size = len((VALIDATION_SYSTEM_PROMPT + _json(candidate) + schema).encode("utf-8")) + 1024
+        # 予算はモデルに渡す形（根拠の本文の文字の形をそろえた後。#1350）で測る。
+        size = len((VALIDATION_SYSTEM_PROMPT + _json(model_request(candidate)) + schema).encode("utf-8")) + 1024
         if size > MAX_EVALUATION_INPUT_BYTES:
             return chosen, True
         chosen.append(fragment)

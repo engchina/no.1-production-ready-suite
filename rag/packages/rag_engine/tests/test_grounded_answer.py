@@ -125,7 +125,7 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel([lambda prompt: draft(item(next(iter(ids(context(top)).values())), "引当照会から最新の引当を選択します。", "①引当照会から最新の引当を選択します。"))], [audit()])
         result = run(model, ctx)
         first_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedDraft")
-        self.assertIn("④出荷数量を０にします。", first_prompt)
+        self.assertIn("④出荷数量を0にします。", first_prompt)  # 全角の数字はそろえ、丸数字は残す (#1350)
         self.assertNotIn("得意先区分を通常に変更します。", first_prompt)
         self.assertEqual(result.response.generation_trace["same_unit_fill"]["added_chunk_ids"], ["run:r1"])
 
