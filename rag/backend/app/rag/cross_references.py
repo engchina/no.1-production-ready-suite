@@ -1,11 +1,15 @@
 """文書の交差参照の抽出と解決(#1280。handoff §7.2)。
 
 「第3章を参照」「3.2 節参照」「別紙1のとおり」「経費精算マニュアルの「権限」を参照」
-「see Section 3.2」のような参照の表記を、chunk の本文から決定論で抜き出す(LLM は使わない)。
+「see Section 3.2」のような参照の表記と、手がかりの語の無い「第2章の共通の保守枠で保守します」
+(番号の付いた章・条の直後の「の」+ 名詞。#1382)を、chunk の本文から決定論で抜き出す
+(LLM は使わない)。
 
 - 取込: 同じ文書の見出しの列(chunk の ``section_path``)に照らして参照先の節を決め、
   chunk の metadata(``reference_targets_json``)に残す(``annotate_cross_references``)。
-  参照が無い chunk の metadata は変えない。
+  参照が無い chunk の metadata は変えない。参照が自分の節だけなら空の列を残す(解決済みの印)。
+- 印の無い chunk(#1382 より前に取り込んだ chunk)は、回答のときに本文から抜き出し、その文書の
+  見出しの列で解決する(``answer_engine``。再処理しなくても参照を辿れる)。
 - 他の文書への参照は、文書名と節の表記だけを残す(未解決)。文書がどのナレッジベースに
   属するかは chunk に焼き込まない(KB は純スコープ。所属を変えても chunk に波及しない)ため、
   回答のときに検索範囲(KB)の中の文書から解決する(``answer_engine``)。
@@ -109,6 +113,10 @@ _DOC_BEFORE = re.compile(
 _SAME_DOC_BEFORE = re.compile(
     rf"(?:本|当|この|同)\s*(?:{_DOC_SUFFIX}|書|文書|資料)\s*(?:の|における|内の|中の)?\s*$"
 )
+# 手がかりの語の無い参照(#1382): 番号の付いた章・節・条・別紙の直後の「の」+ 名詞
+# (「第2章の共通の保守枠で保守します」「第4章の代理の規定」)。地の文の「第3章では」「全12章の構成」
+# (「第」の無い章)・「第2条の2」(枝番)・「第2章の第3節」(続く表記に任せる)は拾わない。
+_POSSESSIVE_TAIL = re.compile(r"\s*の\s*(?![\s、。,.!?()\[\]「」『』]|第|\d)")
 # 文書名の前に付いた語(「詳細は」など)を外す区切り(助詞)。
 _DOC_PREFIX_SPLIT = re.compile(r"[はがをにでもへ]")
 _SENTENCE_END = re.compile(r"[。\n!?]")
@@ -281,42 +289,71 @@ def extract_references(text: str) -> list[ReferenceSpec]:
 def _extract_japanese(text: str) -> list[ReferenceSpec]:
     specs: list[ReferenceSpec] = []
     for cue in _JA_CUE.finditer(text):
-        start = max(0, cue.start() - _LOOKBACK_CHARS)
-        boundary = max(
-            (match.end() for match in _SENTENCE_END.finditer(text, start, cue.start())),
-            default=start,
-        )
-        segment = text[boundary : cue.start()]
-        labels = list(_LABEL.finditer(segment))
-        accepted: list[re.Match[str]] = []
-        cursor = len(segment)
-        for match in reversed(labels):
-            if not _CONNECTOR.fullmatch(segment[match.end() : cursor]):
-                break
-            accepted.insert(0, match)
-            cursor = match.start()
-        if not accepted:
-            continue
-        document_title = _document_before(segment[:cursor])
-        for index, match in enumerate(accepted):
-            spec = _label_spec(match)
-            if spec is None:
-                continue
-            following = accepted[index + 1] if index + 1 < len(accepted) else None
-            if spec.kind == "title" and _document_like(match):
-                if following is not None and re.fullmatch(
-                    r"\s*(?:の|における|内の|中の)\s*",
-                    segment[match.end() : following.start()],
-                ):
-                    # 『経費精算マニュアル』の「権限」: 前の『』は後ろの表記の文書名。
-                    document_title = match.group("title").strip()
-                    continue
-                specs.append(
-                    ReferenceSpec(match.group(0), "document", "", match.group("title").strip())
-                )
-                continue
-            specs.append(replace(spec, document_title=document_title or None))
+        specs.extend(_specs_before(text, cue.start()))
+    for label in _LABEL.finditer(text):
+        # 「第2章の共通の保守枠で」: 手がかりの語の代わりに、直後の「の」+ 名詞を手がかりにする。
+        if _possessive_label(label) and _POSSESSIVE_TAIL.match(text, label.end()):
+            specs.extend(_specs_before(text, label.end()))
     return specs
+
+
+def _specs_before(text: str, cue_start: int) -> list[ReferenceSpec]:
+    """手がかりの位置(``cue_start``)の直前に並んだ参照の表記(同じ文の中だけ)。"""
+    start = max(0, cue_start - _LOOKBACK_CHARS)
+    boundary = max(
+        (match.end() for match in _SENTENCE_END.finditer(text, start, cue_start)),
+        default=start,
+    )
+    segment = text[boundary:cue_start]
+    labels = list(_LABEL.finditer(segment))
+    accepted: list[re.Match[str]] = []
+    cursor = len(segment)
+    for match in reversed(labels):
+        if not _CONNECTOR.fullmatch(segment[match.end() : cursor]):
+            break
+        accepted.insert(0, match)
+        cursor = match.start()
+    if not accepted:
+        return []
+    specs: list[ReferenceSpec] = []
+    document_title = _document_before(segment[:cursor])
+    for index, match in enumerate(accepted):
+        spec = _label_spec(match)
+        if spec is None:
+            continue
+        following = accepted[index + 1] if index + 1 < len(accepted) else None
+        if spec.kind == "title" and _document_like(match):
+            if following is not None and re.fullmatch(
+                r"\s*(?:の|における|内の|中の)\s*",
+                segment[match.end() : following.start()],
+            ):
+                # 『経費精算マニュアル』の「権限」: 前の『』は後ろの表記の文書名。
+                document_title = match.group("title").strip()
+                continue
+            specs.append(
+                ReferenceSpec(match.group(0), "document", "", match.group("title").strip())
+            )
+            continue
+        specs.append(replace(spec, document_title=document_title or None))
+    return specs
+
+
+def _possessive_label(match: re.Match[str]) -> bool:
+    """「の」+ 名詞を手がかりにしてよい表記か(「第」の付いた章・節・条、番号付きの別紙、「3.2節」)。
+
+    「第」の無い「12章」(「全12章の構成」)、番号の無い「別紙」、「節」「項」の付かない「3.2」
+    (版の番号と区別できない)と、題名(「」)は、手がかりの語があるときだけ拾う。
+    """
+    label = match.group(0).strip()
+    if match.group("chapter"):
+        return label.startswith("第")
+    if match.group("article") or match.group("jsection"):
+        return True
+    if match.group("appendix"):
+        return bool(match.group("app_no"))
+    if match.group("numbered"):
+        return label.endswith(("節", "項"))
+    return False
 
 
 def _document_like(match: re.Match[str]) -> bool:
@@ -545,37 +582,57 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
         specs = extract_references(chunk.text)
         if not specs:
             continue
-        citing = split_section_path(metadata.get("section_path"))
-        targets: list[ReferenceTarget] = []
-        for spec in specs:
-            if (
-                spec.document_title
-                and document_title
-                and same_document_title(spec.document_title, document_title)
-            ):
-                if spec.kind == "document":
-                    continue
-                spec = replace(spec, document_title=None)
-            if spec.document_title:
-                targets.append(
-                    ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title)
-                )
-                continue
-            if spec.kind == "document":
-                continue
-            path = index.resolve(spec, citing_path=citing)
-            if path is not None and citing[: len(split_section_path(path))] == split_section_path(
-                path
-            ):
-                # 自分の節・祖先の節への参照は、根拠を足さないので残さない。
-                continue
-            targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, None, path))
+        targets = resolve_reference_specs(
+            specs,
+            index,
+            citing_path=split_section_path(metadata.get("section_path")),
+            document_title=document_title,
+        )
+        # 参照が自分の節・祖先の節だけでも空の列を残す(取込で解決済みの印。回答のときに
+        # 本文から抜き出し直さない。#1382)。
+        metadata[REFERENCE_TARGETS_KEY] = json.dumps(
+            [target.to_dict() for target in targets], ensure_ascii=False
+        )
         if targets:
-            metadata[REFERENCE_TARGETS_KEY] = json.dumps(
-                [target.to_dict() for target in targets], ensure_ascii=False
-            )
             annotated += 1
     return annotated
+
+
+def resolve_reference_specs(
+    specs: Sequence[ReferenceSpec],
+    index: SectionIndex,
+    *,
+    citing_path: Sequence[str] = (),
+    document_title: str = "",
+) -> list[ReferenceTarget]:
+    """参照の表記を参照先にする(取込と、取込で解決していない chunk の回答のときに使う)。
+
+    同じ文書の参照は ``index``(その文書の見出しの列)で節を決め、自分の節・祖先の節への参照は
+    残さない。参照の文書名が ``document_title``(参照元の文書名)に当たれば同じ文書として扱う。
+    他の文書への参照は文書名と節の表記だけを残す(回答のときに検索範囲から解決する)。
+    """
+    citing = tuple(citing_path)
+    targets: list[ReferenceTarget] = []
+    for spec in specs:
+        if (
+            spec.document_title
+            and document_title
+            and same_document_title(spec.document_title, document_title)
+        ):
+            if spec.kind == "document":
+                continue
+            spec = replace(spec, document_title=None)
+        if spec.document_title:
+            targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title))
+            continue
+        if spec.kind == "document":
+            continue
+        path = index.resolve(spec, citing_path=citing)
+        if path is not None and citing[: len(split_section_path(path))] == split_section_path(path):
+            # 自分の節・祖先の節への参照は、根拠を足さないので残さない。
+            continue
+        targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, None, path))
+    return targets
 
 
 def reference_targets(metadata: Mapping[str, object]) -> list[ReferenceTarget]:
@@ -604,6 +661,7 @@ __all__ = [
     "extract_references",
     "heading_keys",
     "reference_targets",
+    "resolve_reference_specs",
     "same_document_title",
     "section_path_within",
     "split_section_path",

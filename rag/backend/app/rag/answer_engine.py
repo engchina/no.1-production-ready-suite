@@ -53,11 +53,15 @@ from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
+    extract_references,
     reference_targets,
+    resolve_reference_specs,
     same_document_title,
     section_path_within,
+    split_section_path,
     title_key,
 )
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
@@ -173,6 +177,10 @@ class _SearchState:
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
     reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
+    # 取込で参照先を解決していない chunk の参照先(#1382。chunk_id ごと)と、その解決に使う
+    # 文書の見出しの列((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
+    query_reference_targets: dict[str, list[ReferenceTarget]] = field(default_factory=dict)
+    reference_section_indexes: dict[tuple[str, str], SectionIndex] = field(default_factory=dict)
 
 
 def answer_images_enabled(settings: Settings) -> bool:
@@ -688,7 +696,12 @@ class AnswerEngine:
         added: dict[str, list[RetrievedChunk]] = {}
         count = 0
         for anchor in anchors[:_REFERENCE_SOURCE_ANCHORS]:
-            for target in reference_targets(anchor.metadata):
+            try:
+                targets = await self._anchor_reference_targets(scope, state, anchor)
+            except Exception:  # noqa: BLE001 - 参照先は補助。この候補の参照を辿らずに続ける。
+                logger.warning("reference target resolution failed", exc_info=True)
+                continue
+            for target in targets:
                 if count >= budget:
                     return added
                 try:
@@ -721,10 +734,58 @@ class AnswerEngine:
                             "label": target.label,
                             "document_title": target.document_title,
                             "section_path": str(chunk.metadata.get("section_path") or ""),
+                            "resolved_at": (
+                                "query"
+                                if anchor.chunk_id in state.query_reference_targets
+                                else "ingest"
+                            ),
                         },
                     )
                     count += 1
         return added
+
+    async def _anchor_reference_targets(
+        self, scope: dict[str, str], state: _SearchState, anchor: RetrievedChunk
+    ) -> list[ReferenceTarget]:
+        """候補の chunk の参照先。取込で解決した参照先が無ければ本文から抜き出して解決する(#1382)。
+
+        取込は参照の表記のある chunk に ``reference_targets_json`` を残す(参照が自分の節だけでも
+        空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
+        あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
+        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。RAPTOR の要約 chunk は辿らない。
+        """
+        metadata = anchor.metadata
+        if REFERENCE_TARGETS_KEY in metadata:
+            return reference_targets(metadata)
+        if anchor.chunk_id in state.query_reference_targets:
+            return state.query_reference_targets[anchor.chunk_id]
+        specs = [] if metadata.get("raptor_summary") else extract_references(anchor.text)
+        targets: list[ReferenceTarget] = []
+        if specs:
+            file_name = anchor.file_name or ""
+            chunk_set_id = str(metadata.get("chunk_set_id") or "")
+            key = (anchor.document_id, chunk_set_id)
+            same_document = any(
+                not spec.document_title or same_document_title(spec.document_title, file_name)
+                for spec in specs
+            )
+            if same_document and key not in state.reference_section_indexes:
+                filters = {**scope, "document_id": anchor.document_id}
+                if chunk_set_id:
+                    filters["chunk_set_id"] = chunk_set_id
+                sections = await self._oracle.retrieval_screen_sections(filters)
+                state.reference_section_indexes[key] = SectionIndex(
+                    path for _name, path, _count in sections
+                )
+            targets = resolve_reference_specs(
+                specs,
+                # 他の文書への参照だけなら、この文書の見出しは読まない(参照先は検索範囲から探す)。
+                state.reference_section_indexes[key] if same_document else SectionIndex(()),
+                citing_path=split_section_path(metadata.get("section_path")),
+                document_title=file_name,
+            )
+        state.query_reference_targets[anchor.chunk_id] = targets
+        return targets
 
     async def _reference_target_chunks(
         self,
