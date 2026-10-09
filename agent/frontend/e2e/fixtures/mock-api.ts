@@ -477,6 +477,24 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** データの範囲の候補の既定（#1378）。NL2SQL は 3 件、RAG は 2 件。 */
+const DATA_SCOPE_CANDIDATES: Record<string, Json[]> = {
+  nl2sql: [
+    { id: "profile-sales", name: "売上", description: "売上の集計" },
+    { id: "profile-cost", name: "原価", description: "原価と粗利" },
+    { id: "profile-hr", name: "人事", description: "人員と勤怠" },
+  ],
+  rag: [
+    { id: "bv-sales", name: "営業の検索・回答プロファイル", description: "営業部門の文書" },
+    { id: "bv-legal", name: "法務の検索・回答プロファイル", description: "契約と規程" },
+  ],
+};
+
+const DATA_SCOPE_LABELS: Record<string, string> = {
+  nl2sql: "データ問い合わせ（NL2SQL）",
+  rag: "ナレッジ検索（RAG）",
+};
+
 function createState() {
   const d = clone(defaults) as Record<string, Json & Json[]>;
   return {
@@ -493,6 +511,10 @@ function createState() {
     auditRecords: [] as Json[],
     // 業種テンプレート（`GET /api/agent-templates`。#780）。
     agentTemplates: clone(AGENT_TEMPLATES) as Json[],
+    // データの範囲に選べるプロファイル（`GET /api/agent-data-scopes/{接続}/candidates`。#1378）。
+    // 編集者が使えるものだけ（backend は編集者として MCP に問い合わせる）。`dataScopeCandidateErrors` は接続ごとの失敗。
+    dataScopeCandidates: clone(DATA_SCOPE_CANDIDATES) as Record<string, Json[]>,
+    dataScopeCandidateErrors: {} as Record<string, { status: number; message: string }>,
     // フィードバック（`GET /api/feedback`。#774）。null なら Run の評価から作る。
     feedbackReport: null as Json | null,
     // 自動実行（#784）。`automationRuns` は自動実行ごとの実行履歴。
@@ -1338,6 +1360,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     throw new HttpError(404, `approval not found: ${second}`);
   }
   if (method === "GET" && at("agent-templates")) return { templates: state.agentTemplates };
+  // データの範囲の候補（#1378）。backend と同じく範囲を持てる接続だけ。
+  if (method === "GET" && at("agent-data-scopes", "*", "candidates")) {
+    const connection = String(second);
+    if (!(connection in DATA_SCOPE_LABELS)) throw new HttpError(404, "データの範囲を設定できない接続です。");
+    const failure = state.dataScopeCandidateErrors[connection];
+    if (failure) throw new HttpError(failure.status, failure.message);
+    return {
+      connection,
+      label: DATA_SCOPE_LABELS[connection],
+      profiles: state.dataScopeCandidates[connection] ?? [],
+    };
+  }
   // --- 品質評価（#776） ---
   // --- 評価セット（#776） ---
   if (method === "GET" && at("evaluation-sets")) {
@@ -1640,7 +1674,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   // --- 業務 Agent ---
   if (head === "agents") {
     // 版に残す項目（#770）と、登録されていないスキルの検証（backend の `_validate_agent_skills`。#925）。
-    const VERSIONED = ["name", "description", "instructions", "skill_ids", "model_id"] as const;
+    const VERSIONED = ["name", "description", "instructions", "skill_ids", "model_id", "data_scopes"] as const;
+    // 範囲に新しく加えるプロファイルは、編集者が使える（候補にある）ものだけ（backend の `_verify_data_scopes`。#1378）。
+    const requireUsableScopes = (requested: unknown, current: unknown) => {
+      const scopes = (requested ?? {}) as Record<string, { profile_ids?: string[] }>;
+      const before = (current ?? {}) as Record<string, { profile_ids?: string[] }>;
+      for (const [connection, scope] of Object.entries(scopes)) {
+        const known = new Set((state.dataScopeCandidates[connection] ?? []).map((item) => String(item.id)));
+        const existing = new Set(before[connection]?.profile_ids ?? []);
+        const missing = (scope.profile_ids ?? []).filter((id) => !existing.has(id) && !known.has(id));
+        if (missing.length) {
+          throw new HttpError(400, `プロファイル「${missing.join("、")}」は、あなたが使えないか見つかりません。候補から選んでください。`);
+        }
+      }
+    };
     const requireKnownSkills = (skillIds: unknown) => {
       const known = new Set(state.skills.map((skill) => String(skill.id)));
       const unknown = [...new Set(((skillIds as string[] | undefined) ?? []).filter((id) => !known.has(id)))].sort();
@@ -1654,7 +1701,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         (item) => item.version === agent.published_version
       );
       if (!published) return true;
-      return VERSIONED.some((field) => JSON.stringify(agent[field] ?? null) !== JSON.stringify(published[field] ?? null));
+      // データの範囲は、無い・空（{}）を同じとみなす（backend は空の範囲を {} で持つ）。
+      const comparable = (field: string, value: unknown) =>
+        field === "data_scopes" && (!value || Object.keys(value as Json).length === 0) ? null : (value ?? null);
+      return VERSIONED.some(
+        (field) => JSON.stringify(comparable(field, agent[field])) !== JSON.stringify(comparable(field, published[field]))
+      );
     };
     // 一覧は利用者の対象範囲の業務 Agent だけ（backend の list_agents）。
     if (method === "GET" && at("agents")) return { agents: state.agents.filter((agent) => agentAllowed(state, agent.id)) };
@@ -1673,6 +1725,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         throw new HttpError(400, "業種テンプレートが見つかりません。");
       }
       requireKnownSkills(body.skill_ids);
+      requireUsableScopes(body.data_scopes, null);
       const agent = {
         id,
         description: "",
@@ -1699,8 +1752,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         throw new HttpError(422, "業務 Agent の名前を入力してください。");
       }
       if (body.skill_ids !== undefined) requireKnownSkills(body.skill_ids);
+      if (body.data_scopes !== undefined) requireUsableScopes(body.data_scopes, agent.data_scopes);
       // 変えられるのは AgentProfilePatch の項目だけ（版・由来などは送られても変えない）。
-      const patchable = ["name", "description", "instructions", "skill_ids", "model_id", "tool_names", "enabled"];
+      const patchable = ["name", "description", "instructions", "skill_ids", "model_id", "data_scopes", "tool_names", "enabled"];
       const patch = Object.fromEntries(
         Object.entries(body).filter(([key, value]) => patchable.includes(key) && value !== null && value !== undefined)
       );
@@ -1718,7 +1772,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       const versions = (agent.versions as Json[] | undefined) ?? [];
       const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;
       const snapshot: Json = { version, note: body.note ?? "", published_at: MOCK_NOW, published_by: "local" };
-      for (const field of VERSIONED) snapshot[field] = clone(agent[field] ?? (field === "skill_ids" ? [] : ""));
+      for (const field of VERSIONED) {
+        snapshot[field] = clone(agent[field] ?? (field === "skill_ids" ? [] : field === "data_scopes" ? {} : ""));
+      }
       agent.versions = [...versions, snapshot];
       agent.published_version = version;
       agent.unpublished_changes = false;
