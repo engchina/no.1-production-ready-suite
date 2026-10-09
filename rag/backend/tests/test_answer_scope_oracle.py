@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, _oracle_retrieval_where
 from app.rag.chunking import Chunk
 from app.schemas.document import DocumentClassification, FileStatus
 from app.schemas.extraction import StructuredExtraction
@@ -22,12 +22,16 @@ async def _indexed_document(
     file_name: str,
     chunks: list[Chunk],
     large_category: str | None = None,
+    duplicate_of_document_id: str | None = None,
+    knowledge_base_ids: list[str] | None = None,
 ) -> str:
     """検索対象(INDEXED・active な chunk_set)の文書を 1 件作る。"""
     detail = await client.create_document(
         file_name=file_name,
         object_storage_path=f"local://{file_name}",
         content_type="application/pdf",
+        duplicate_of_document_id=duplicate_of_document_id,
+        knowledge_base_ids=knowledge_base_ids,
     )
     document_id = detail.id
     recipes = await client.list_document_recipes(document_id)
@@ -386,3 +390,81 @@ async def test_document_reading_index_and_chunks_on_real_oracle() -> None:
         )
     finally:
         reset_audit_request_context(scoped)
+
+
+async def _retrieval_document_ids(client: OracleClient, filters: dict[str, str]) -> set[str]:
+    """検索と同じ条件(`_oracle_retrieval_where`)で chunk の取れる文書の ID。"""
+    where_sql, binds = _oracle_retrieval_where(filters)
+    rows = await client._fetch_all(  # noqa: SLF001 - 検索の範囲の述語を実 DB で評価する
+        "SELECT DISTINCT d.document_id FROM rag_chunks c "
+        "JOIN rag_documents d ON d.document_id = c.document_id WHERE " + where_sql,
+        binds,
+    )
+    return {str(row["document_id"]) for row in rows}
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_duplicate_with_own_index_stays_in_its_kb_on_real_oracle() -> None:
+    """別の KB に同じ内容の文書があっても、自前の索引を持つ重複は自分の chunk で検索する(#1381)。
+
+    取込を省いた重複(自前の索引が無い)は正本の chunk を使い、旧版として登録した重複からは
+    正本へ届かない(include_superseded=true のときは届く)。
+    """
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    earlier = await client.create_knowledge_base(name=f"評価 前回 {token}")
+    current = await client.create_knowledge_base(name=f"評価 今回 {token}")
+    skipped = await client.create_knowledge_base(name=f"重複の取込を省いた {token}")
+    canonical = await _indexed_document(
+        client,
+        file_name=f"rules-{token}.pdf",
+        chunks=[_chunk(0, "前回の本文")],
+        knowledge_base_ids=[earlier.id],
+    )
+    canonical_old = await _indexed_document(
+        client,
+        file_name=f"rules-{token}-2023.pdf",
+        chunks=[_chunk(0, "前回の旧版の本文")],
+        knowledge_base_ids=[earlier.id],
+    )
+    duplicate = await _indexed_document(
+        client,
+        file_name=f"rules-{token}.pdf",
+        chunks=[_chunk(0, "今回の本文")],
+        duplicate_of_document_id=canonical,
+        knowledge_base_ids=[current.id],
+    )
+    duplicate_old = await _indexed_document(
+        client,
+        file_name=f"rules-{token}-2023.pdf",
+        chunks=[_chunk(0, "今回の旧版の本文")],
+        duplicate_of_document_id=canonical_old,
+        knowledge_base_ids=[current.id],
+    )
+    await client.set_document_superseded_by(duplicate_old, duplicate)
+
+    assert await _retrieval_document_ids(client, {"knowledge_base_id": current.id}) == {duplicate}
+    assert await _retrieval_document_ids(
+        client, {"knowledge_base_id": current.id, "include_superseded": "true"}
+    ) == {duplicate, duplicate_old}
+
+    # 取込を省いた重複(自前の索引が無い)は正本の chunk を使う。旧版の重複からは届かない。
+    reused = await client.create_document(
+        file_name=f"rules-{token}.pdf",
+        object_storage_path=f"local://rules-{token}-reused.pdf",
+        content_type="application/pdf",
+        duplicate_of_document_id=canonical,
+        knowledge_base_ids=[skipped.id],
+    )
+    reused_old = await client.create_document(
+        file_name=f"rules-{token}-2023.pdf",
+        object_storage_path=f"local://rules-{token}-2023-reused.pdf",
+        content_type="application/pdf",
+        duplicate_of_document_id=canonical_old,
+        knowledge_base_ids=[skipped.id],
+    )
+    await client.set_document_superseded_by(reused_old.id, reused.id)
+    assert await _retrieval_document_ids(client, {"knowledge_base_id": skipped.id}) == {canonical}
+    assert await _retrieval_document_ids(
+        client, {"knowledge_base_id": skipped.id, "include_superseded": "true"}
+    ) == {canonical, canonical_old}

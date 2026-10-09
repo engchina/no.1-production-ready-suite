@@ -128,6 +128,24 @@ def test_retrieval_where_allows_duplicate_kb_membership_to_reuse_canonical_chunk
     assert "duplicate_d.duplicate_of_document_id = d.document_id" in sql
 
 
+def test_retrieval_where_reuses_canonical_only_for_duplicates_without_own_index() -> None:
+    """自前の索引を持つ重複は正本を範囲に入れない。旧版の重複からは正本へ届かない(#1381)。"""
+    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
+    reuse = sql.split("FROM rag_documents duplicate_d", 1)[1]
+    assert "NOT EXISTS (" in reuse
+    assert "FROM rag_chunk_sets own_cs" in reuse
+    assert "own_cs.document_id = duplicate_d.document_id" in reuse
+    assert "own_cs.is_active = 1" in reuse
+    assert "own_cs.status = 'INDEXED'" in reuse
+    assert "duplicate_d.superseded_by_document_id IS NULL" in reuse
+
+    included, _ = _oracle_retrieval_where(
+        {"knowledge_base_id": "kb-1", "include_superseded": "true"}
+    )
+    assert "FROM rag_chunk_sets own_cs" in included
+    assert "duplicate_d.superseded_by_document_id IS NULL" not in included
+
+
 def test_retrieval_where_keeps_active_recipe_filter_without_kb_scope() -> None:
     """KB 未指定でも stale chunk_set を混ぜず active レシピだけを検索する。"""
     sql, _ = _oracle_retrieval_where({})
