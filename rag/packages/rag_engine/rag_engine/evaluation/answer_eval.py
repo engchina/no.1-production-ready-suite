@@ -25,6 +25,7 @@ from rag_engine.generation.grounded import (
     verbatim_quote_lines,
 )
 from rag_engine.generation.operation_audit import answer_passages, is_heading
+from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
 logger = logging.getLogger(__name__)
@@ -162,9 +163,24 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def model_request(inputs: dict[str, Any]) -> dict[str, Any]:
+    """評価・検証のモデルに渡す入力。根拠（evidence_items）の本文だけを ``fold_width``（全角・半角の違いだけ）の文字の形にそろえる (#1350)。
+
+    回答の生成と同じく、資料の全角の ``ＨＲＭ`` と回答の半角の ``HRM`` をモデルが同じ語と読めるようにする。
+    根拠の ID（evidence_id。原文から計算する）・目録・記録する原文は元のまま。回答・段落・標準回答も、
+    モデルが返す引用を原文のまま照合する（``answer_quote not in answer_text``）のでそろえない。
+    """
+    items = inputs.get("evidence_items")
+    if not items:
+        return inputs
+    return {**inputs, "evidence_items": [
+        {**item, "text": fold_width(item.get("text") or "")} if isinstance(item, dict) else item for item in items]}
+
+
 def _input_bytes(inputs: dict[str, Any]) -> int:
     """固定指示・JSON・schema と再試行の指摘欄を含む UTF-8 予算を返す。"""
-    return EVALUATION_RETRY_RESERVE_BYTES + len((SYSTEM_PROMPT + _json(inputs) + _json(AnswerEvaluationOutput.model_json_schema())).encode("utf-8"))
+    return EVALUATION_RETRY_RESERVE_BYTES + len((SYSTEM_PROMPT + _json(model_request(inputs))
+                                                 + _json(AnswerEvaluationOutput.model_json_schema())).encode("utf-8"))
 
 
 def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
@@ -216,8 +232,8 @@ def _next_batch(fixed: dict[str, Any], pending: deque, previous, batch_index: in
 
 
 def _parse_checked(system, inputs, settings, schema, provider_id, check):
-    """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。"""
-    request = dict(inputs)
+    """同じ根拠と採点範囲を保ち、違反内容を指摘して1回だけ再試行する。根拠の本文は ``model_request`` の形で渡す。"""
+    request = dict(model_request(inputs))
     for attempt in range(2):
         size = len((system + _json(request) + _json(schema.model_json_schema())).encode("utf-8"))
         if size > MAX_EVALUATION_INPUT_BYTES:
