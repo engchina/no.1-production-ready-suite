@@ -8,11 +8,15 @@
 2. 評価セットが参照するファイルを、評価セットと同じフォルダ（`--corpus-dir` で変更可）から
    アップロードし、取込を始める。Excel は前処理 `excel_to_json` で読む。
 3. 索引（INDEXED）まで待つ。確認待ち（REVIEW など）のゲートは承認して進める。
-4. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
-5. `--entity-index` を渡したとき（#1362）は、すべての文書のレシピで実体の抽出（文書レシピの
+4. 評価セットに文書の版（`document_versions`。#1366）があれば、旧版の文書を新しい版に置き換えた
+   文書として登録する（文書詳細の「版」と同じ。旧版は既定で回答の検索から外れる）。
+   `--keep-superseded-active` を渡すと登録せず、旧版も今有効な文書のまま検索させる
+   （旧版の紛らわしさの測定）。
+5. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
+6. `--entity-index` を渡したとき（#1362）は、すべての文書のレシピで実体の抽出（文書レシピの
    任意の処理 ``entity_index_enabled``）を選んで取り込む。実体の層の有り / 無しを、別のナレッジ
    ベースに取り込んで比べる。
-6. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
+7. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
    業務ガイド（`support-guides.json`。参照の `file:` も文書 ID に置き換える）を取り込んで公開し、
    `search_answer_profile_id` を入れた評価セット（業務ガイドあり = C）を `--guided-output` に書く。
 
@@ -71,6 +75,35 @@ def recipe_for(path: Path, *, entity_index: bool = False) -> dict[str, Any]:
     return recipe
 
 
+def _file_reference_name(entry: object, key: str) -> str:
+    """文書の版の 1 件の `file:<ファイル名>` の参照からファイル名を取り出す。"""
+    value = entry.get(key) if isinstance(entry, Mapping) else None
+    name = value.removeprefix(FILE_REFERENCE_PREFIX) if isinstance(value, str) else ""
+    if not (isinstance(value, str) and value.startswith(FILE_REFERENCE_PREFIX) and name):
+        raise CorpusError(f"document_versions の {key} は file:<ファイル名> で書いてください。")
+    return name
+
+
+def document_versions(golden_set: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """評価セットの文書の版（#1366）を（旧版のファイル名, 新しい版のファイル名）の列で返す。
+
+    `document_versions` は `[{"document_id": "file:<旧版>", "superseded_by": "file:<新しい版>"}]`。
+    """
+    raw = golden_set.get("document_versions", [])
+    if not isinstance(raw, list):
+        raise CorpusError("document_versions は配列にしてください。")
+    versions: list[tuple[str, str]] = []
+    for entry in raw:
+        old_name = _file_reference_name(entry, "document_id")
+        new_name = _file_reference_name(entry, "superseded_by")
+        if old_name == new_name:
+            raise CorpusError(f"文書を自分自身の新しい版にはできません: {old_name}")
+        if old_name in {name for name, _ in versions}:
+            raise CorpusError(f"旧版の文書が重複しています: {old_name}")
+        versions.append((old_name, new_name))
+    return versions
+
+
 def _document_references(case: Mapping[str, Any]) -> list[object]:
     """ケースの文書の参照（正解の文書と、必要な根拠の文書。#1284）。"""
     values: list[object] = list(case.get("relevant_document_ids", []))
@@ -103,10 +136,28 @@ def _resolve_reference(value: object, document_ids: Mapping[str, str]) -> object
 
 
 def resolve_golden_set(
-    golden_set: Mapping[str, Any], document_ids: Mapping[str, str], knowledge_base_id: str
+    golden_set: Mapping[str, Any],
+    document_ids: Mapping[str, str],
+    knowledge_base_id: str,
+    *,
+    versions_registered: bool = True,
 ) -> dict[str, Any]:
-    """`file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セット。"""
+    """`file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セット。
+
+    文書の版（#1366）は、登録したときは文書 ID に置き換えて残し、登録しなかったとき
+    （`--keep-superseded-active`）は外す（書き出した評価セットが取り込んだ状態を表すように）。
+    """
     resolved: dict[str, Any] = json.loads(json.dumps(golden_set))
+    if versions_registered and "document_versions" in resolved:
+        resolved["document_versions"] = [
+            {
+                key: _resolve_reference(f"{FILE_REFERENCE_PREFIX}{name}", document_ids)
+                for key, name in (("document_id", old), ("superseded_by", new))
+            }
+            for old, new in document_versions(golden_set)
+        ]
+    else:
+        resolved.pop("document_versions", None)
     for case in resolved.get("cases", []):
         case["relevant_document_ids"] = [
             _resolve_reference(value, document_ids)
@@ -261,6 +312,15 @@ class CorpusLoader:
         )
         return document_id
 
+    def register_document_version(self, document_id: str, superseded_by_document_id: str) -> None:
+        """文書を新しい版に置き換えた文書（旧版）として登録する（#1366。文書詳細の「版」と同じ）。"""
+        self._data(
+            self._client.put(
+                f"{self._api}/documents/{document_id}/superseded-by",
+                json={"superseded_by_document_id": superseded_by_document_id},
+            )
+        )
+
     def _recipe(self, document_id: str) -> Mapping[str, Any]:
         recipes = self._data(self._client.get(f"{self._api}/documents/{document_id}/recipes"))
         if not recipes:
@@ -337,6 +397,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="すべての文書のレシピで実体の抽出（実体の層。#1362）を選んで取り込む",
     )
+    parser.add_argument(
+        "--keep-superseded-active",
+        action="store_true",
+        help=(
+            "評価セットの文書の版（document_versions）を登録せず、旧版も今有効な文書のまま"
+            "検索させる（旧版の紛らわしさを測る。#1366）"
+        ),
+    )
     parser.add_argument("--tenant-id")
     parser.add_argument("--user-id")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
@@ -357,8 +425,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not guides:
                 raise CorpusError(f"業務ガイドがありません: {args.guides}")
         corpus_dir = args.corpus_dir or args.golden_set.parent
+        versions = document_versions(golden_set)
         names = referenced_files(golden_set)
         names += [name for name in guide_referenced_files(guides) if name not in names]
+        for name in (name for pair in versions for name in pair):
+            if name not in names:
+                names.append(name)
         missing = [name for name in names if not (corpus_dir / name).is_file()]
         if missing:
             raise CorpusError(f"資料が見つかりません: {', '.join(missing)}")
@@ -379,6 +451,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 name: loader.ingest(corpus_dir / name, knowledge_base_id) for name in names
             }
             loader.wait_indexed(documents)
+            register_versions = bool(versions) and not args.keep_superseded_active
+            if register_versions:
+                for old, new in versions:
+                    loader.register_document_version(documents[old], documents[new])
+                    print(f"superseded {old} by {new}")
             profile_id: str | None = None
             if guides:
                 profile_id = loader.create_search_answer_profile(
@@ -386,7 +463,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 print(f"search answer profile {profile_id}")
                 loader.import_guides(profile_id, resolve_guides(guides, documents))
-        resolved = resolve_golden_set(golden_set, documents, knowledge_base_id)
+        resolved = resolve_golden_set(
+            golden_set,
+            documents,
+            knowledge_base_id,
+            versions_registered=register_versions,
+        )
         _write(args.output, resolved)
         if profile_id is not None:
             _write(args.guided_output, guided_golden_set(resolved, profile_id))

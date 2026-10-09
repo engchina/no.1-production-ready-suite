@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -689,7 +690,7 @@ async def test_oracle_store_writes_only_under_own_lease() -> None:
     assert connection.calls[0].parameters["case_started"] == 1
     assert "heartbeat_at = SYSTIMESTAMP" in heartbeat
     assert "finished_at = SYSTIMESTAMP" in finish
-    assert connection.calls[2].parameters["result_json"] == {"case_count": 4}
+    assert json.loads(cast(str, connection.calls[2].parameters["result_json"])) == {"case_count": 4}
     assert "result_json" in connection.calls[2].input_sizes
 
     connection.rowcount = 0

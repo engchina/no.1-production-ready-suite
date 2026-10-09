@@ -22,12 +22,12 @@
 | `access-request-procedure.pdf` | 利用権限の申請手順（機密区分ごとの権限の承認者、権限の見直し。情報セキュリティ部は通称「情セキ」で書く） |
 | `backup-rules.pdf` | バックアップ規程（重要度ごとの頻度と世代、復元） |
 | `system-operation-guide.pdf` | システム運用要領（台帳の 80 システムの章。利用時間・連携元と受け取るデータ・運用の注意） |
-| `approval-rules-2023.pdf` | **旧版**の承認規程（2023年度版。廃止済み。期限・記録の保管が今の版と違う） |
-| `maintenance-plan-2025.pdf` | **旧版**の定期保守計画（2025年度。今の計画と同じシステムで別の時間帯） |
+| `approval-rules-2023.pdf` | **旧版**の承認規程（2023年度版。廃止済み。期限・記録の保管が今の版と違う）。取り込みで `approval-rules.pdf` に置き換えた文書として登録する（下の「旧版の扱い」） |
+| `maintenance-plan-2025.pdf` | **旧版**の定期保守計画（2025年度。今の計画と同じシステムで別の時間帯）。取り込みで `maintenance-plan.pdf` に置き換えた文書として登録する |
 | `purchase-approval-rules.pdf` | **似た承認の規程**（購買の申請。システムの変更の申請とは別の承認者・期限） |
 | `logistics-organization-rules.pdf` | **別の会社**（サンプル物流社）の組織規程（略号「経」「総」「情」がサンプル社と衝突する） |
 | `logistics-system-ledger.xlsx` | **別の会社**のシステム台帳（20 行。略称 `OMS`・`BMS`・`DMS` がサンプル社と衝突する） |
-| `multi-hop.json` | 評価セット（69 問。dev 40 問・holdout 29 問。先頭の 33 問は #1335 のまま）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>` |
+| `multi-hop.json` | 評価セット（69 問。dev 40 問・holdout 29 問。先頭の 33 問は #1335 のまま）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>`。文書の版（旧版 → 新しい版）は `document_versions`（#1366） |
 | `sources/*.html` | PDF の原稿（`multi_hop_corpus.py` が作る） |
 | `sources/*.workbook.json` | xlsx の原稿（シートの前書き・表頭・行。`multi_hop_corpus.py` が作る） |
 
@@ -136,11 +136,32 @@ uv run --project rag/backend python rag/scripts/generate_evaluation_corpus.py ra
 - 原稿が変わらなかった PDF は、作り直すとバイトが変わる（作成時刻が入る）ため、`git checkout` で戻して差分を原稿が
   変わったものだけにします。
 
+## 旧版の扱い（#1366）
+
+旧版の 2 文書は、製品で旧版を扱うときと同じく、**新しい版に置き換えた文書（旧版）**として取り込みます。評価セットの
+`document_versions` に旧版と新しい版を書き（`{"document_id": "file:<旧版>", "superseded_by": "file:<新しい版>"}`。
+`multi_hop_corpus.py` の `DOCUMENT_VERSIONS` から作る）、`evaluation_corpus_cli` が索引の後に、文書詳細の「版」と同じ
+API（`PUT /api/documents/{document_id}/superseded-by`）で登録します。旧版は既定で回答の検索から外れるため、今の版を
+尋ねる問に旧版の期限・保守枠が混ざりません（#1335 の再評価では、登録していなかったために旧版を使った誤答が A 2 件・
+D 2 件あった）。
+
+- 旧版の文を根拠にする問（版の比較: `cmp-approval-deadline-versions`・`cmp-hrm-maintenance-versions`）は
+  `include_superseded: true` を持ち、A はそのケースだけ利用者が旧版・変更点を尋ねるときと同じく `filters` の
+  `include_superseded=true` で旧版も検索します。D（業務 Agent）は、質問から旧版が要ると判断して `rag_search` の
+  `filters` に `include_superseded=true` を自分で渡す必要があります（渡さなければ旧版の根拠が欠けます）。
+- **旧版を除かない評価（紛らわしさの測定）**: `evaluation_corpus_cli` に `--keep-superseded-active` を渡すと、版を
+  登録せずに取り込み、旧版も今有効な文書のまま検索させます（書き出す評価セットから `document_versions` を外す）。
+  版の登録が無い運用（旧版を置き換えずに残した資料）で、旧版に検索が引かれる度合いを見るためのもので、判断の基準
+  （下の「実体の層を入れるかの判断」）は既定（版を登録する）の結果で決めます。両方を流すときは、別のナレッジベース
+  に取り込みます（同じナレッジベースに 2 回取り込むと、同じ内容の文書が 2 組入るため。`--knowledge-base-id` で
+  既存のナレッジベースを渡さない）。
+
 ## 取り込んで評価する（A: RAG の回答）
 
 業務支援の評価セット（[../business-support/README.md](../business-support/README.md)）と同じ道具を使います。
 `evaluation_corpus_cli` がナレッジベースを作り、資料をアップロードして索引まで待ち（確認待ちのゲートは承認する。
-Excel は前処理 `excel_to_json`）、`file:` の参照を文書 ID に置き換えた評価セットを書き出します。A は全体の既定の
+Excel は前処理 `excel_to_json`）、旧版を新しい版に置き換えた文書として登録し（上の「旧版の扱い」）、`file:` の参照を
+文書 ID に置き換えた評価セットを書き出します。A は全体の既定の
 設定とナレッジベースの指定で回答します。判断の基準は dev で決めるため、まず `--split dev` で流します。
 
 ```bash
@@ -149,6 +170,10 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
   --api-base-url http://127.0.0.1:8000 --output /tmp/multi-hop.resolved.json
 uv run python -m app.rag.evaluation_cli /tmp/multi-hop.resolved.json --split dev \
   --api-base-url http://127.0.0.1:8000 --output /tmp/multi-hop.a.json
+# 旧版を除かない評価（紛らわしさの測定）。別のナレッジベースに取り込む。
+uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop.json \
+  --api-base-url http://127.0.0.1:8000 --keep-superseded-active \
+  --output /tmp/multi-hop.keep-superseded.resolved.json
 ```
 
 `evaluation_cli` は、終わったときに標準エラーへ全体の指標と、`required_evidence`・`reasoning_type=<種類>`・

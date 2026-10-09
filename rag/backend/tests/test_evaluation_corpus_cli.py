@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ import pytest
 from app.rag.evaluation_corpus_cli import (
     CorpusError,
     CorpusLoader,
+    document_versions,
     guide_referenced_files,
     guided_golden_set,
     main,
@@ -262,3 +264,127 @@ def test_loader_selects_entity_index_recipe_for_every_document(tmp_path: Path) -
             {"preprocess_profile": "excel_to_json", "entity_index_enabled": True},
         ),
     ]
+
+
+# ---- 文書の版（旧版の登録。#1366） ------------------------------------------------------
+
+VERSIONED_SET: dict[str, Any] = {
+    "document_versions": [
+        {"document_id": "file:rules-2023.pdf", "superseded_by": "file:rules.pdf"},
+    ],
+    "cases": [{"id": "a", "query": "q", "relevant_document_ids": ["file:rules.pdf"]}],
+}
+
+
+def test_document_versions_are_read_and_resolved() -> None:
+    assert document_versions(VERSIONED_SET) == [("rules-2023.pdf", "rules.pdf")]
+    assert document_versions({"cases": []}) == []
+    ids = {"rules.pdf": "d-new", "rules-2023.pdf": "d-old"}
+    resolved = resolve_golden_set(VERSIONED_SET, ids, "kb-1")
+    assert resolved["document_versions"] == [{"document_id": "d-old", "superseded_by": "d-new"}]
+    # 登録しなかったとき（--keep-superseded-active）は、書き出す評価セットから外す。
+    kept = resolve_golden_set(VERSIONED_SET, ids, "kb-1", versions_registered=False)
+    assert "document_versions" not in kept
+    # 元の評価セットは変えない。
+    assert VERSIONED_SET["document_versions"][0]["document_id"] == "file:rules-2023.pdf"
+
+
+@pytest.mark.parametrize(
+    ("versions", "message"),
+    [
+        ({"document_id": "file:a.pdf"}, "superseded_by は file:"),
+        ({"document_id": "a.pdf", "superseded_by": "file:b.pdf"}, "document_id は file:"),
+        ({"document_id": "file:a.pdf", "superseded_by": "file:a.pdf"}, "自分自身"),
+        ("file:a.pdf", "document_id は file:"),
+    ],
+    ids=["missing-new", "not-file-reference", "self", "not-object"],
+)
+def test_document_versions_reject_invalid_entries(versions: object, message: str) -> None:
+    with pytest.raises(CorpusError, match=message):
+        document_versions({"document_versions": [versions]})
+
+
+def test_document_versions_reject_duplicate_old_versions() -> None:
+    entry = {"document_id": "file:a.pdf", "superseded_by": "file:b.pdf"}
+    with pytest.raises(CorpusError, match="重複"):
+        document_versions({"document_versions": [entry, entry]})
+    with pytest.raises(CorpusError, match="配列"):
+        document_versions({"document_versions": entry})
+
+
+class VersionApi:
+    """main の取込の API（どのファイルもすぐ INDEXED になる）。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, Any]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path.removeprefix("/api")
+        body: Any = None
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = json.loads(request.content or b"{}")
+        self.calls.append((request.method, path, body))
+        if path == "/knowledge-bases":
+            return httpx.Response(200, json={"data": {"id": "kb-new"}})
+        if path == "/documents/upload":
+            match = re.search(rb'filename="([^"]+)"', request.content)
+            assert match is not None
+            return httpx.Response(
+                200, json={"data": {"document_id": f"doc-{match.group(1).decode()}"}}
+            )
+        if path.endswith("/recipes") and request.method == "GET":
+            return httpx.Response(200, json={"data": [{"recipe_id": "r1", "status": "INDEXED"}]})
+        return httpx.Response(200, json={"data": {}})
+
+
+def _run_main_with_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *extra: str
+) -> tuple[int, VersionApi, dict[str, Any]]:
+    for name in ("rules.pdf", "rules-2023.pdf"):
+        (tmp_path / name).write_bytes(b"%PDF-1.4")
+    golden = tmp_path / "set.json"
+    golden.write_text(json.dumps(VERSIONED_SET), encoding="utf-8")
+    output = tmp_path / "out.json"
+    api = VersionApi()
+    real_client = httpx.Client
+
+    def client(**kwargs: Any) -> httpx.Client:
+        return real_client(transport=httpx.MockTransport(api), **kwargs)
+
+    # main が作る client だけを差し替える（module の httpx.Client を置き換える）。
+    monkeypatch.setattr("app.rag.evaluation_corpus_cli.httpx.Client", client)
+    code = main([str(golden), "--api-base-url", "http://test", "--output", str(output), *extra])
+    resolved = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
+    return code, api, resolved
+
+
+def test_main_registers_old_versions_as_superseded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """旧版は問が参照しなくても取り込み、索引の後に新しい版に置き換えた文書として登録する。"""
+    code, api, resolved = _run_main_with_api(tmp_path, monkeypatch)
+
+    assert code == 0
+    uploads = [call for call in api.calls if call[1] == "/documents/upload"]
+    assert len(uploads) == 2
+    assert [call for call in api.calls if call[1].endswith("/superseded-by")] == [
+        (
+            "PUT",
+            "/documents/doc-rules-2023.pdf/superseded-by",
+            {"superseded_by_document_id": "doc-rules.pdf"},
+        )
+    ]
+    assert resolved["document_versions"] == [
+        {"document_id": "doc-rules-2023.pdf", "superseded_by": "doc-rules.pdf"}
+    ]
+
+
+def test_main_keeps_old_versions_active_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--keep-superseded-active は旧版を登録しない（旧版の紛らわしさを測る評価）。"""
+    code, api, resolved = _run_main_with_api(tmp_path, monkeypatch, "--keep-superseded-active")
+
+    assert code == 0
+    assert not [call for call in api.calls if call[1].endswith("/superseded-by")]
+    assert "document_versions" not in resolved

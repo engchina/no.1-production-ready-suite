@@ -100,6 +100,10 @@ MCP_OUTPUT_SCHEMA_VERSION = 7
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
+# rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
+# top_k の既定 20）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。rag_search は回答に
+# 使った根拠が先に並ぶので 12 のまま。
+RETRIEVE_EVIDENCE_LIMIT_DEFAULT = 20
 # rag_read_source が 1 回で返す本文・親の本文の上限。
 READ_SOURCE_MAX_CHARS_DEFAULT = 8000
 READ_SOURCE_MAX_CHARS_LIMIT = 20000
@@ -208,6 +212,20 @@ class SearchInput(BaseModel):
             "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の"
             " clarifications に利用者が答えた値を入れて呼び直すと、分かっている条件は"
             "聞き直さない。"
+        ),
+    )
+
+
+class RetrieveEvidenceInput(SearchInput):
+    """根拠の収集の条件（rag_search と同じ。返す根拠の件数の既定だけが違う）。"""
+
+    evidence_limit: int = Field(
+        default=RETRIEVE_EVIDENCE_LIMIT_DEFAULT,
+        ge=1,
+        le=EVIDENCE_LIMIT_MAX,
+        description=(
+            "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。"
+            "省略時は検索する件数（top_k。省略時 20）と同じで、検索で当たった根拠を全部返す。"
         ),
     )
 
@@ -1249,6 +1267,17 @@ def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChu
     return [chunk for _, chunk in sorted(enumerate(citations), key=key)]
 
 
+def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
+    """rag_retrieve_evidence が返す根拠の件数（#1365）。
+
+    evidence_limit を省略して top_k を既定より大きくしたときは top_k まで返す（検索で当たった
+    chunk を全部返す。上限は EVIDENCE_LIMIT_MAX）。渡した evidence_limit はそのまま使う。
+    """
+    if "evidence_limit" in arguments.model_fields_set or arguments.top_k is None:
+        return arguments.evidence_limit
+    return min(max(arguments.evidence_limit, arguments.top_k), EVIDENCE_LIMIT_MAX)
+
+
 def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any]:
     # 回答に使った根拠を先に、検索で当たった chunk、前後の文脈の順にする（#1348）。
     ordered = mcp_evidence_order(result.citations)
@@ -1912,12 +1941,12 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ]
         )
 
-    async def retrieve_evidence(arguments: SearchInput) -> RetrieveEvidenceOutput:
+    async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
         # 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・生成）は作らない。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
         enforce_rate_limit("search", http_request)
         result = await search_route._run_search_with_timeout(request)
-        limit = arguments.evidence_limit
+        limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
         ordered = mcp_evidence_order(result.citations)
         citations = await _with_extraction_recipe_ids(None, ordered[:limit])
@@ -2037,7 +2066,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
                     "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
                 ),
-                input_model=SearchInput,
+                input_model=RetrieveEvidenceInput,
                 handler=retrieve_evidence,
                 output_model=RetrieveEvidenceOutput,
                 permissions=(SEARCH_PERMISSIONS,),

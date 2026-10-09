@@ -177,6 +177,8 @@ test("RAG 検索画面には回答履歴の一覧を出さない（#444）", asy
   await expect(page.getByRole("navigation", { name: "回答履歴のページ" })).toHaveCount(0);
 });
 
+// 会話の回答の引用は、画面と評価が使う項目だけを保存した形で返る（#1371。親の本文・索引の内部の
+// 項目は無く、要素の表示領域は display_regions）。
 const citationChunk = {
   document_id: "d1",
   chunk_id: "ch1",
@@ -185,7 +187,34 @@ const citationChunk = {
   rerank_score: 0.82,
   file_name: "経費規程.pdf",
   category_name: null,
-  metadata: {},
+  metadata: {
+    page_start: 2,
+    page_end: 2,
+    page_number: 2,
+    section_path: "第3条 経費の上限",
+    content_kind: "text",
+    evidence_model_used: true,
+    evidence_role: "retrieved_anchor",
+    rerank_rank: 1,
+    bbox: "[120.0, 340.0, 980.0, 420.0]",
+    bbox_unit: "absolute",
+    page_width: 1240,
+    page_height: 1754,
+    display_regions: [
+      {
+        page: 2,
+        boxes: [
+          {
+            record_id: "docling-p2-3",
+            seq_no: 3,
+            category: "Text",
+            bbox: [120.0, 340.0, 980.0, 420.0],
+            text_preview: "経費の上限は 10 万円です。",
+          },
+        ],
+      },
+    ],
+  },
 };
 
 function chatMessage(role: "USER" | "ASSISTANT", id: string, traceId: string | null) {
@@ -299,6 +328,10 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   const citationSummary = page.locator("summary").filter({ hasText: "根拠 1 件" });
   await citationSummary.click();
   await expect(page.getByText("経費規程.pdf")).toHaveCount(1);
+  // 保存した形の引用でも、頁・章節・回答に使った根拠の印を出す（#1371）。
+  await expect(citationSummary).toContainText("回答に使用 1 件");
+  await expect(page.getByText("第3条 経費の上限", { exact: true })).toBeVisible();
+  await expect(page.getByText("Rerank #1", { exact: true })).toBeVisible();
   // 回答の評価は、根拠を確かめた後に答えられるよう「根拠 N 件」の後ろに出す（#1202）。
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
   await expect(feedback).toBeVisible();

@@ -1480,7 +1480,7 @@
       "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "検索・回答の条件。旧 scope を含む未定義項目は拒否する。",
+        "description": "根拠の収集の条件（rag_search と同じ。返す根拠の件数の既定だけが違う）。",
         "properties": {
           "query": {
             "description": "質問文。",
@@ -1536,8 +1536,8 @@
             "type": "object"
           },
           "evidence_limit": {
-            "default": 12,
-            "description": "返す根拠の最大件数。回答に使った根拠、検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。",
+            "default": 20,
+            "description": "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。省略時は検索する件数（top_k。省略時 20）と同じで、検索で当たった根拠を全部返す。",
             "maximum": 50,
             "minimum": 1,
             "title": "Evidence Limit",
@@ -1556,7 +1556,7 @@
         "required": [
           "query"
         ],
-        "title": "SearchInput",
+        "title": "RetrieveEvidenceInput",
         "type": "object"
       },
       "annotations": {

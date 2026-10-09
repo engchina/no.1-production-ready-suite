@@ -318,6 +318,9 @@ class EvaluationCase(EvaluationHandlingExpectation):
     # 変えない。段の数は、根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）。
     reasoning_type: EvaluationReasoningType | None = None
     hops: int | None = Field(default=None, ge=1, le=EVALUATION_MAX_HOPS)
+    # 新しい版に置き換えた文書（旧版）も検索して答えるケース（版の比較など。#1366）。true なら、
+    # 利用者が旧版・変更点を尋ねるときと同じく filters に include_superseded=true を足して回答する。
+    include_superseded: bool = False
 
     @property
     def expects_answer(self) -> bool:
