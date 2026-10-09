@@ -61,6 +61,7 @@ from app.rag.search_answer_profile_knowledge import (
     load_runtime_knowledge_payload,
     resolve_clarification,
 )
+from app.rag.stored_answer import stored_citation, stored_citations
 from app.rag.support_guide_runtime import (
     GUIDE_CLARIFICATION_PREFIX,
     resolve_guide_clarification,
@@ -124,7 +125,8 @@ def _to_chat_message(message: StoredMessage) -> ChatMessage:
     citations: list[RetrievedChunk] = []
     for raw in message.citations:
         with suppress(Exception):
-            citations.append(RetrievedChunk.model_validate(raw))
+            # 以前に保存した会話の回答も、保存するときと同じ項目だけを返す（#1371）。
+            citations.append(stored_citation(RetrievedChunk.model_validate(raw)))
     return ChatMessage(
         message_id=message.id,
         conversation_id=message.conversation_id,
@@ -596,7 +598,8 @@ async def _generate_chat_answer(
             role="ASSISTANT",
             model=model_id or None,
             content=result.answer,
-            citations=[citation.model_dump(mode="json") for citation in result.citations],
+            # 画面が使う項目だけを保存する（索引の内部の項目・親の本文を持たない。#1371）。
+            citations=stored_citations(result.citations),
             guardrail_warnings=result.guardrail_warnings,
             trace_id=result.trace_id,
             status="COMPLETE",
