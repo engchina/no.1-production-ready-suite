@@ -652,22 +652,31 @@ def test_xls_round_trip_when_xlwt_is_available() -> None:
     assert _sheet(payload)["blocks"][0]["values"] == {"name": "Carol", "score": "99"}
 
 
-def test_system_ledger_of_the_evaluation_set_is_eight_row_records() -> None:
-    """評価セットの台帳（multi-hop の system-ledger.xlsx）は前書き 2 行と 8 行の記録（#1349）。"""
+def test_system_ledger_of_the_evaluation_set_is_row_records() -> None:
+    """評価セットの台帳（multi-hop の system-ledger.xlsx）は前書き 2 行と 1 行ずつの記録（#1349）。
+
+    行の数とシステム ID は台帳の原稿（`sources/system-ledger.workbook.json`。#1352 で 80 行）
+    から決める。
+    """
+    import json
     from pathlib import Path
 
     rag_dir = Path(__file__).resolve().parents[4]
     source = rag_dir / "evaluation" / "multi-hop" / "system-ledger.xlsx"
+    workbook = json.loads(
+        (source.parent / "sources" / "system-ledger.workbook.json").read_text(encoding="utf-8")
+    )
+    ledger_ids = [row[0] for row in workbook["sheets"][0]["rows"]]
     sheet = _sheet(_payload(source.read_bytes()))
     assert sheet["name"] == "システム台帳"
     assert (sheet["header_row"], sheet["mode"]) == (3, "table")
     assert [row["cell_range"] for row in sheet["preamble"]] == ["A1:A1", "A2:A2"]
     blocks = sheet["blocks"]
-    assert [block["cell_range"] for block in blocks] == [f"A{row}:F{row}" for row in range(4, 12)]
-    assert all(block["kind"] == "row" for block in blocks)
-    assert [block["values"]["システムID"] for block in blocks] == [
-        f"SYS-{number}" for number in range(101, 109)
+    assert [block["cell_range"] for block in blocks] == [
+        f"A{row}:F{row}" for row in range(4, 4 + len(ledger_ids))
     ]
+    assert all(block["kind"] == "row" for block in blocks)
+    assert [block["values"]["システムID"] for block in blocks] == ledger_ids
     assert list(blocks[0]["values"]) == [
         "システムID",
         "正式名",
