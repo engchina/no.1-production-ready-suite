@@ -98,6 +98,8 @@ from app.features.agent.support_task import (
     has_support_task_activity,
     is_environment_tool,
     rag_next_step,
+    raised_evidence_limit,
+    repeated_query_note,
     support_task_instructions,
     text_references,
 )
@@ -608,9 +610,13 @@ class _ToolRecorder:
             parsed = json.loads(arguments or "{}")
         except json.JSONDecodeError:
             parsed = {}
-        call = ToolCall(
-            name=name, arguments=parsed if isinstance(parsed, dict) else {}, trace_id=call_id
-        )
+        call_arguments: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+        if definition is not None and mcp_base_tool_name(name) in RAG_BUDGET_TOOLS:
+            # 既定より小さい evidence_limit は既定に引き上げる（#1351）。step には送った値を残す。
+            raised = raised_evidence_limit(call_arguments, definition.input_schema)
+            if raised is not None:
+                call_arguments = {**call_arguments, "evidence_limit": raised}
+        call = ToolCall(name=name, arguments=call_arguments, trace_id=call_id)
         # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
         exceeded = self.budget.reserve(name) if self.budget is not None else None
         step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
@@ -650,24 +656,36 @@ class _ToolRecorder:
                 if note is not None:
                     output = {**output, "next_step": note["next_step"]}
             if isinstance(output, dict):
-                output = self.hop_hints(base, output)
+                output = self.hop_hints(call, output, step_id=step_id)
             return json.dumps(output, ensure_ascii=False, default=str)
         return json.dumps(
             {"error": result.error or "tool failed", "error_code": result.error_code},
             ensure_ascii=False,
         )
 
-    def hop_hints(self, tool: str, output: dict[str, Any]) -> dict[str, Any]:
+    def hop_hints(self, call: ToolCall, output: dict[str, Any], *, step_id: str) -> dict[str, Any]:
         """多段の質問の案内をモデルへの結果に足す（#1345。記録する step の結果は RAG のまま）。
 
         根拠を集める・読むツールの本文に同じ文書の別の箇所への参照があれば読む先（`references`）を、
-        RAG の予算があればこの Run で残る検索の回数（`rag_calls_remaining`）を足す。
+        この Run で同じ（ほぼ同じ）query の検索を繰り返したら繰り返しを止める案内
+        （`repeated_query`。#1351）を、RAG の予算があればこの Run で残る検索の回数
+        （`rag_calls_remaining`）を足す。
         """
+        from app.features.agent.runtime import runtime_repository
+
+        tool = mcp_base_tool_name(call.name)
         if tool not in RAG_BUDGET_TOOLS and tool not in {RAG_READ_SOURCE, RAG_READ_DOCUMENT}:
             return output
         references = text_references(tool, output)
         if references:
             output = {**output, "references": references}
+        if tool in RAG_BUDGET_TOOLS:
+            steps = runtime_repository.get_run(self.run_id).steps
+            repeated = repeated_query_note(
+                call.name, call.arguments, steps, current_step_id=step_id
+            )
+            if repeated is not None:
+                output = {**output, "repeated_query": repeated}
         remaining = self.budget.rag_calls_remaining if self.budget is not None else None
         if remaining is not None:
             output = {**output, "rag_calls_remaining": remaining}

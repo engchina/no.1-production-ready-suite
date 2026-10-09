@@ -375,11 +375,21 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。`outcome` が `needs_clarification` の
 ときは `action="ask_clarification"`（`questions` に確かめる問い）を足し、手順・分岐ごとの答えより先に問いを返させる
 （#1322）。
-多段の質問（#1345。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business_rag_research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を 1 回呼び、
-比べる質問は実体ごとに引き、同じ文書の中の参照は `rag_outline` → `rag_read_document` で読み、最後に質問全体で `rag_search` を
-呼び直さずに集めた根拠で答える手順を書く。Control Plane は根拠を集める・読むツールの結果に、本文の「第 N 章を参照」
-「別表 N 参照」など同じ文書の別の箇所への参照（`references`。文書・参照・読み方。`text_references`）と、この Run で残る
-RAG の検索の回数（`rag_calls_remaining`）をモデルへの結果に足す（記録する step の結果は RAG の結果のまま）。
+多段の質問（#1345・#1351。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business_rag_research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を呼び、
+段の query は質問全体ではなく「実体（正式名・略号・ID）＋引く属性」だけにし（`evidence_limit` は既定より小さくしない）、
+資料が台帳・一覧で確かめると示したらその実体でその台帳・一覧を引き、同じ段で 2 回言い換えても根拠が出なければその段を
+確かめられなかった点として次へ進み、比べる質問は実体ごとに引き、同じ文書の中の参照は `rag_outline` → `rag_read_document`
+で読み、最後に質問全体で `rag_search` を呼び直さずに集めた根拠で答える手順を書く。Control Plane は根拠を集める・読む
+ツールの結果に、本文の「第 N 章を参照」「別表 N 参照」など同じ文書の別の箇所への参照（`references`。文書・参照・読み方。
+`text_references`）と、この Run で残る RAG の検索の回数（`rag_calls_remaining`）をモデルへの結果に足す（記録する step の
+結果は RAG の結果のまま）。
+段の検索の決定的な補助（#1351。#1335 の評価で、Agent が `evidence_limit=5` を選んで答えの chunk が上限で切れ、同じ話題の
+言い換えを繰り返して予算に達した）: (1) モデルが `rag_search`・`rag_retrieve_evidence` の `evidence_limit` を既定（ツールの
+入力 schema の `default`。RAG の契約の 12）より小さくしたら、Control Plane が既定に引き上げて呼ぶ（step には送った値を
+残す。既定より大きい値は変えない）。(2) 同じ Run で、同じツール・同じ範囲（検索・回答プロファイル・ナレッジベース・
+フィルター・条件）の成功した検索と query が同じかほぼ同じ（NFKC・大文字小文字・空白・句読点と記号・助詞を除いて、
+文字の 2-gram の Jaccard 係数が 0.8 以上。`repeated_query_note`）なら、モデルへの結果に繰り返しを止める案内
+（`repeated_query`。回数・似た query・次の手）を足す（記録する step の結果は RAG の結果のまま。呼び出しは止めない）。
 業務ガイドの照合（#1321・#1322）: 根拠を集めるだけの `rag_retrieve_evidence` は業務ガイド（確かめる条件・分岐・影響範囲）を
 見ないため、モデルが業務ガイドを引かずに根拠を集めると、確かめる条件があっても分岐ごとに答えてしまう（#1317 の実環境の
 評価）。モデルがその Run でその接続の `rag_lookup_guides`・`rag_search` を呼ばずに `rag_retrieve_evidence` を呼んだら、
