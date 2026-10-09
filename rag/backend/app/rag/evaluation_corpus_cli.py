@@ -348,13 +348,17 @@ class CorpusLoader:
                     # 承認の後、次の工程の job が状態を変えるまでは同じゲートを承認し直さない。
                     approved.add((document_id, status))
                     self._log(f"approve {name} ({status})")
-                    self._data(
-                        self._client.post(
-                            f"{self._api}/documents/{document_id}/recipes/"
-                            f"{recipe['recipe_id']}/approve",
-                            json={},
-                        )
+                    response = self._client.post(
+                        f"{self._api}/documents/{document_id}/recipes/"
+                        f"{recipe['recipe_id']}/approve",
+                        json={},
                     )
+                    if response.status_code == 409:
+                        # 読んだ後に自動の進行で次の工程へ進んだ（確認待ちでなくなった）。次の
+                        # 読み取りで新しい状態を見る（#1362 の評価で、前処理の後のゲートで起きた）。
+                        self._log(f"skip approve {name} ({status}: 状態が進んだ)")
+                        continue
+                    self._data(response)
             if not pending:
                 return
             if self._clock() >= deadline:
