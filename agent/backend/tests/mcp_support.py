@@ -129,6 +129,15 @@ class Nl2SqlGetJobIn(_ContractInput):
     wait_seconds: int = Field(default=0, ge=0, le=45)
 
 
+class Nl2SqlListProfilesIn(_ContractInput):
+    query: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class Nl2SqlRecommendProfileIn(_ContractInput):
+    question: str = Field(min_length=1, max_length=4000)
+
+
 def _job(status: str = "done") -> dict[str, Any]:
     return {
         "job_id": "job-1",
@@ -334,6 +343,21 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
     },
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
+    "nl2sql_list_profiles": {
+        "profiles": [
+            {
+                "id": "profile-sales",
+                "name": "売上",
+                "category": "営業",
+                "description": "売上の集計",
+            }
+        ]
+    },
+    "nl2sql_recommend_profile": {
+        "recommended_profile_id": "profile-sales",
+        "rewritten_question": None,
+        "candidates": [{"id": "profile-sales", "name": "売上", "reason": None, "score": 0.9}],
+    },
 }
 
 Product = Literal["rag", "nl2sql"]
@@ -386,6 +410,8 @@ class FakeProductMcp:
                 tools=[
                     self._tool("nl2sql_query", Nl2SqlQueryIn, read_only=False),
                     self._tool("nl2sql_get_job", Nl2SqlGetJobIn),
+                    self._tool("nl2sql_list_profiles", Nl2SqlListProfilesIn),
+                    self._tool("nl2sql_recommend_profile", Nl2SqlRecommendProfileIn),
                 ],
             ),
         }

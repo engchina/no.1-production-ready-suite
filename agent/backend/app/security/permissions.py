@@ -377,6 +377,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/agent-templates"): _any(MENU_AGENTS),
     # 業務 Agent の公開・前の版に戻す（#770）。
     ("POST", "/agents/{agent_id}/publish"): _ADMIN_ONLY,
+    # データの範囲に選べるプロファイル（#1378。編集者として RAG / NL2SQL の MCP に問い合わせる）。
+    ("GET", "/agent-data-scopes/{connection}/candidates"): _ADMIN_ONLY,
     ("POST", "/agents/{agent_id}/versions/{version}/restore"): _ADMIN_ONLY,
     # ---- Control Plane: スキル ----
     ("GET", "/skills"): _any(MENU_SKILLS, MENU_AGENTS),

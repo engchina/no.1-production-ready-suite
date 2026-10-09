@@ -72,6 +72,9 @@ class ToolCall(BaseModel):
     name: str
     arguments: JsonObject = Field(default_factory=dict)
     trace_id: str | None = None
+    # 業務 Agent のデータの範囲を当てた記録（#1378。接続・使ったプロファイル・埋めた / 上書きした /
+    # 拒否した / 絞った）。呼び先へは送らない（送るのは arguments だけ）。範囲が効かなければ None。
+    data_scope: JsonObject | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -45,6 +45,7 @@ from pydantic import (
 from app.features.agent import storage_backend
 from app.features.agent.chat_progress import record_run_progress
 from app.features.agent.config import runtime_config_store
+from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
 from app.features.agent.support_task import (
     SUPPORT_TASK_KIND,
     SUPPORT_TASK_NAME,
@@ -184,6 +185,7 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "instructions",
     "skill_ids",
     "model_id",
+    "data_scopes",
 )
 
 
@@ -196,6 +198,7 @@ class AgentVersion(BaseModel):
     instructions: str = ""
     skill_ids: list[str] = Field(default_factory=list)
     model_id: str = ""
+    data_scopes: AgentDataScopes = Field(default_factory=dict)
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
@@ -210,6 +213,9 @@ class AgentProfile(BaseModel):
     # 組み込み Runtime で使うモデル（OCI Enterprise AI の model_id）。
     # 空なら既定のテキストモデル（#754）。
     model_id: str = ""
+    # データの範囲（MCP 接続 → 使えるプロファイルの一覧と既定。#1378）。空の接続は範囲なし
+    # （Run の利用者が使えるすべてのプロファイルから、モデルが選ぶ）。
+    data_scopes: AgentDataScopes = Field(default_factory=dict)
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
@@ -227,6 +233,11 @@ class AgentProfile(BaseModel):
     published_version: int | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+    @field_validator("data_scopes")
+    @classmethod
+    def _normalize_data_scopes(cls, value: AgentDataScopes) -> AgentDataScopes:
+        return normalize_data_scopes(value)
 
     def published(self) -> AgentVersion | None:
         return next(
@@ -282,8 +293,14 @@ class AgentProfilePatch(BaseModel):
     instructions: str | None = None
     skill_ids: list[str] | None = None
     model_id: str | None = None
+    data_scopes: AgentDataScopes | None = None
     tool_names: list[str] | None = None
     enabled: bool | None = None
+
+    @field_validator("data_scopes")
+    @classmethod
+    def _normalize_data_scopes(cls, value: AgentDataScopes | None) -> AgentDataScopes | None:
+        return normalize_data_scopes(value) if value is not None else None
 
 
 class RunCreateRequest(BaseModel):
@@ -1252,6 +1269,11 @@ class AgentRuntimeRepository:
             if step is None:
                 step = RunStep(run_id=run_id, tool_call=call)
                 run.steps.append(step)
+            elif step.tool_call is not None and call.data_scope is not None:
+                # 承認済みの step は、データの範囲を当てて実際に送る引数を残す（#1378）。
+                step.tool_call = step.tool_call.model_copy(
+                    update={"arguments": call.arguments, "data_scope": call.data_scope}
+                )
             step.status = StepStatus.RUNNING
             step.started_at = _now()
             self._append_event(
