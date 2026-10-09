@@ -408,8 +408,7 @@ class Document:
 def _page(title: str, heading: str, meta: str, chapters: Sequence[tuple[str, str]]) -> str:
     parts = [
         "<!doctype html>",
-        '<html lang="ja"><head><meta charset="utf-8">'
-        f"<title>{html.escape(title)}</title>",
+        f'<html lang="ja"><head><meta charset="utf-8"><title>{html.escape(title)}</title>',
         f"<style>{_STYLE}</style></head>",
         "<body>",
         f"<h1>{html.escape(heading)}</h1>",
@@ -481,7 +480,8 @@ def _organization() -> Document:
             ),
             (
                 "承認者の代理",
-                "<p>承認者が 3 営業日以上不在のときは、その部署が属する本部の本部長が代理で承認します。"
+                "<p>承認者が 3 営業日以上不在のときは、その部署が属する本部の本部長が"
+                "代理で承認します。"
                 f"{evidence['org-proxy-exec']}。本部に属さない部署の承認者が不在のときと、"
                 f"{evidence['org-proxy-direct']}。</p>",
             ),
@@ -530,7 +530,8 @@ def _approval() -> Document:
             (
                 "期限を過ぎたとき",
                 f"<p>期限を過ぎても承認されないときは、{evidence['ap-overdue']}（部長の 1 つ上は"
-                "本部長、本部長の 1 つ上は担当役員です）。催促を依頼した日から 2 営業日以内に承認され"
+                "本部長、本部長の 1 つ上は担当役員です）。催促を依頼した日から 2 営業日"
+                "以内に承認され"
                 "なければ、申請は取り下げとして扱います。</p>",
             ),
             ("承認の記録", f"<p>{evidence['ap-record']}。</p>"),
@@ -638,7 +639,8 @@ def _change() -> Document:
                 "申請書の項目",
                 "<ol>\n<li>変更の内容と理由</li>\n<li>影響を受けるシステムと利用者</li>\n"
                 f"<li>{evidence['ch-item-rollback']}</li>\n<li>作業の日時</li>\n</ol>\n"
-                "<p>経費 Portal の変更では、上の 4 項目に加えて「月次の締め処理への影響」を書きます。</p>",
+                "<p>経費 Portal の変更では、上の 4 項目に加えて「月次の締め処理への影響」"
+                "を書きます。</p>",
             ),
             (
                 "作業の時間帯",
@@ -647,7 +649,8 @@ def _change() -> Document:
             ),
             (
                 "利用者への告知",
-                "<p>システムの停止を伴う変更は、作業の 5 営業日前までに社内ポータルのお知らせで利用者に"
+                "<p>システムの停止を伴う変更は、作業の 5 営業日前までに社内ポータルの"
+                "お知らせで利用者に"
                 "告知します。ただし、重要度 A のシステムは 10 営業日前までに告知します。</p>",
             ),
         ],
@@ -706,13 +709,16 @@ def _incident() -> Document:
     escalations = []
     for key, number, reason, contact in ESCALATIONS:
         evidence[key] = (
-            f"{fullwidth(SYSTEM_BY_NUMBER[number].sys_id)} の障害は、{reason}、{contact}にも連絡します"
+            f"{fullwidth(SYSTEM_BY_NUMBER[number].sys_id)} の障害は、{reason}、"
+            f"{contact}にも連絡します"
         )
         escalations.append(evidence[key] + "。")
     evidence.update(
         {
             "in-means-ref": "連絡の手段は第 3 章を参照してください",
-            "in-means": "社内チャットの障害チャンネル（#incident）に書き込み、15 分ごとに電話をかけ直します",
+            "in-means": (
+                "社内チャットの障害チャンネル（#incident）に書き込み、15 分ごとに電話をかけ直します"
+            ),
         }
     )
     content = _page(
@@ -724,7 +730,10 @@ def _incident() -> Document:
                 "最初の連絡",
                 "<p>障害を見つけた人は、システムの重要度に応じて次のとおり連絡します。システムの重要度は、"
                 "システム台帳の「重要度」の列で確かめます。</p>\n"
-                + _ul(f"重要度 {severity}: {text}。" for severity, (_k, text, _w) in FIRST_CONTACT.items())
+                + _ul(
+                    f"重要度 {severity}: {text}。"
+                    for severity, (_k, text, _w) in FIRST_CONTACT.items()
+                )
                 + "\n<p>"
                 + "".join(escalations)
                 + f"{evidence['in-means-ref']}。</p>",
@@ -773,7 +782,8 @@ def _retention() -> Document:
             ),
             (
                 "閲覧の記録",
-                "<p>極秘のデータを扱うシステムは、閲覧の記録（アクセスログ）を 3 年間保管します。</p>",
+                "<p>極秘のデータを扱うシステムは、閲覧の記録（アクセスログ）を 3 年間"
+                "保管します。</p>",
             ),
             (
                 "データの消去",
@@ -1062,9 +1072,7 @@ def _case(
     keywords: Sequence[str],
     evidence: Sequence[str],
 ) -> CaseSpec:
-    return CaseSpec(
-        case_id, split, reasoning_type, hops, query, tuple(keywords), tuple(evidence)
-    )
+    return CaseSpec(case_id, split, reasoning_type, hops, query, tuple(keywords), tuple(evidence))
 
 
 # #1335 の 33 問（ID・質問・期待する語は変えない。根拠の文は資料の原稿から引く）。
@@ -1417,7 +1425,9 @@ def _department_filter_case(case_id: str, split: str, code: str, severity: str) 
     systems = [item for item in SYSTEMS if item.dept == code and item.severity == severity]
     if not systems:
         raise ValueError(f"{case_id}: 該当するシステムがありません。")
-    query = f"{dept.name}が担当するシステムのうち、重要度が {severity} のものをすべて挙げてください。"
+    query = (
+        f"{dept.name}が担当するシステムのうち、重要度が {severity} のものをすべて挙げてください。"
+    )
     evidence = [f"org-code-{dept.slug}"] + [f"ledger-{item.number}" for item in systems]
     return _case(
         case_id, split, "table_lookup", 2, query, [item.name for item in systems], evidence
@@ -1448,9 +1458,7 @@ def _version_maintenance_case(case_id: str, split: str, slug: str) -> CaseSpec:
     old = next(item for item in MAINTENANCE_2025 if item.slug == slug)
     query = f"定期保守計画の 2025 年度と 2026 年度では、{now.label} の保守枠はどう変わりましたか？"
     keywords = [window_keyword(old.window), window_keyword(now.window)]
-    return _case(
-        case_id, split, "comparison", 1, query, keywords, [f"mt-{slug}", f"mt2025-{slug}"]
-    )
+    return _case(case_id, split, "comparison", 1, query, keywords, [f"mt-{slug}", f"mt2025-{slug}"])
 
 
 def _new_cases() -> list[CaseSpec]:
@@ -1476,7 +1484,10 @@ def _new_cases() -> list[CaseSpec]:
             "Supplier Portal を担当する部署の正式名は何ですか？",
         ),
         _change_window_case(
-            "br-wms-change-window", "dev", 121, "倉庫管理システムの本番の変更は、いつ作業できますか？"
+            "br-wms-change-window",
+            "dev",
+            121,
+            "倉庫管理システムの本番の変更は、いつ作業できますか？",
         ),
         _change_window_case(
             "br-purchase-pms-change-window",
@@ -1521,7 +1532,8 @@ def _new_cases() -> list[CaseSpec]:
             "dev",
             "comparison",
             1,
-            "今の承認規程と 2023 年度版の承認規程では、本部長が承認する申請の期限はどう変わりましたか？",
+            "今の承認規程と 2023 年度版の承認規程では、本部長が承認する申請の期限は"
+            "どう変わりましたか？",
             [f"{ROLE_DEADLINE_DAYS['本部長']}営業日", "7営業日"],
             ["ap-honbucho", "ap2023-honbucho"],
         ),
@@ -1654,7 +1666,11 @@ def _check_constraints() -> None:
         if item.dept not in DEPARTMENT_BY_CODE:
             raise ValueError(f"{item.sys_id} の担当部署の略号がありません。")
     # 重要度 A かつ極秘のシステム（両社）は SYS-103・108 だけ（tl-severity-a-top-secret）。
-    top = [s.sys_id for s in (*SYSTEMS, *LOGISTICS_SYSTEMS) if (s.severity, s.confidentiality) == ("A", "極秘")]
+    top = [
+        s.sys_id
+        for s in (*SYSTEMS, *LOGISTICS_SYSTEMS)
+        if (s.severity, s.confidentiality) == ("A", "極秘")
+    ]
     if top != ["SYS-103", "SYS-108"]:
         raise ValueError(f"重要度 A かつ極秘のシステムが変わりました: {top}")
     # 情報システム部が担当するシステムは SYS-107 だけ（tl-it-department-system）。
@@ -1674,9 +1690,9 @@ def _check_constraints() -> None:
         windows = {item.slug: window_keyword(item.window) for item in plan}
         if not windows["hrm"] < windows["oms"]:
             raise ValueError("HRM と OMS の保守の順が変わりました。")
-    for item in MAINTENANCE_2026:
-        if _system(item.system).severity != "A" and item.slug != "doc":
-            raise ValueError(f"{item.label} は重要度 A ではありません。")
+    for window in MAINTENANCE_2026:
+        if _system(window.system).severity != "A" and window.slug != "doc":
+            raise ValueError(f"{window.label} は重要度 A ではありません。")
 
 
 def _case_payload(spec: CaseSpec, evidence: Mapping[str, tuple[str, str]]) -> dict[str, Any]:
@@ -1761,9 +1777,7 @@ def write_sources(corpus_dir: Path) -> list[Path]:
         path.write_text(document.content, encoding="utf-8")
         written.append(path)
     golden = corpus_dir / GOLDEN_SET_NAME
-    golden.write_text(
-        json.dumps(golden_set, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    golden.write_text(json.dumps(golden_set, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     written.append(golden)
     return written
 

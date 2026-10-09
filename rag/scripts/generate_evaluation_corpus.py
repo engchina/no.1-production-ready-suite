@@ -173,9 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"原稿のフォルダがありません: {corpus_dir / SOURCES_DIRNAME}", file=sys.stderr)
         return 2
     try:
-        written = build_corpus(
-            corpus_dir, xlsx_only=args.xlsx_only, sources_only=args.sources_only
-        )
+        written = build_corpus(corpus_dir, xlsx_only=args.xlsx_only, sources_only=args.sources_only)
     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         return 1
