@@ -681,6 +681,45 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=20,
         description="交差参照で 1 回の検索に足す参照先の chunk 数の上限(#1280)。",
     )
+    rag_entity_index_enabled: bool = Field(
+        default=False,
+        description=(
+            "取込の索引の保存の後に、chunk から実体（表の行の名前・属性の値、本文の定義の形・"
+            "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
+            "rag_entity_aliases / rag_entity_chunks に保存する（#1362。既定 OFF。文書レシピで"
+            "選ぶ任意の処理。LLM は使わない）。回答の検索は、この表との SQL の join で関連する"
+            " chunk を 1 段だけ足す（RAG_ENTITY_EXPANSION_ENABLED）。"
+        ),
+    )
+    rag_entity_name_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "実体の抽出で、表の行の名前（同じ実体の別名）にする列名（#1362）。空なら列名で"
+            "決める（ID・番号・コード・正式名・名称・〜名・略称・別表記・通称）。"
+        ),
+    )
+    rag_entity_attribute_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "実体の抽出で、表の行の属性の値を実体にする列名（#1362。担当部署・重要度など）。"
+            "空なら名前の列・長い本文の列（説明・備考など）・日付や数値の列を除いた列。"
+        ),
+    )
+    rag_entity_expansion_enabled: bool = Field(
+        default=True,
+        description=(
+            "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
+            "関連する chunk を 1 段だけ足す（#1362）。実体は文書レシピで実体の抽出"
+            "（rag_entity_index_enabled）を選んだ文書にだけあるため、選んだ文書が検索範囲に"
+            "無ければ何も足さない。LLM の呼び出しは増えない。"
+        ),
+    )
+    rag_entity_expansion_max_chunks: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362）。",
+    )
     rag_navigation_summary_enabled: bool = Field(
         default=False,
         description=(

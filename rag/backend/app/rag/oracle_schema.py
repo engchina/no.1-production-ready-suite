@@ -7,12 +7,14 @@ Oracle DDL は staging / production でレビュー済み artifact として適�
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
@@ -46,7 +48,7 @@ from app.rag.search_answer_profile_migration import rename_sql as search_answer_
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "3"
-MIGRATION_ARTIFACT_VERSION = "20261007_001"
+MIGRATION_ARTIFACT_VERSION = "20261009_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -262,6 +264,13 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_graph_entities",
             sql=oracle_knowledge_graph_schema_sql(),
         ),
+        # 実体の層（#1362）。実体・別名・実体と chunk の関連。rag_chunk_sets / rag_chunks
+        # を参照する。
+        OracleSchemaSection(
+            name="entities",
+            table_name="rag_entities",
+            sql=oracle_entity_schema_sql(),
+        ),
         OracleSchemaSection(
             name="citation_feedback",
             table_name="rag_citation_feedback",
@@ -336,7 +345,59 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=document_superseded_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261009_001_entity_layer",
+            table_name="rag_entities",
+            sql=entity_layer_migration_sql(),
+        )
+    )
     return sections
+
+
+def entity_layer_migration_sql() -> str:
+    """実体の層の表(rag_entities / rag_entity_aliases /
+    rag_entity_chunks)と索引を無ければ作る(#1362)。
+
+    表と索引を足すだけでデータは変えない。DDL は正本(``oracle_entity_schema_sql``)から作る。
+    """
+    blocks: list[str] = []
+    for statement in split_sql_statements(oracle_entity_schema_sql()):
+        match = _CREATE_OBJECT_PATTERN.match(statement)
+        if match is None:
+            raise ValueError(f"実体の層の DDL に表・索引以外の文があります: {statement[:60]}")
+        kind, name = match.group(1).upper(), match.group(2).upper()
+        dictionary = (
+            "user_tables WHERE table_name" if kind == "TABLE" else "user_indexes WHERE index_name"
+        )
+        literal_lines = _ddl_literal_lines(statement.replace("'", "''"))
+        lines = "\n".join(
+            f"            {'|| ' if index else ''}'{line}'"
+            for index, line in enumerate(literal_lines)
+        )
+        blocks.append(
+            f"""    SELECT COUNT(*) INTO v_count FROM {dictionary} = '{name}';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+{lines};
+    END IF;"""
+        )
+    body = "\n".join(blocks)
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+{body}
+END;
+/"""
+
+
+_CREATE_OBJECT_PATTERN = re.compile(r"^CREATE\s+(TABLE|INDEX)\s+([A-Za-z0-9_]+)", re.IGNORECASE)
+
+
+def _ddl_literal_lines(statement: str) -> list[str]:
+    """DDL を EXECUTE IMMEDIATE の文字列の行にする(行の間は空白 1 つでつなぐ)。"""
+    lines = [line.strip() for line in statement.splitlines() if line.strip()]
+    return [line + " " if index < len(lines) - 1 else line for index, line in enumerate(lines)]
 
 
 def document_superseded_migration_sql() -> str:

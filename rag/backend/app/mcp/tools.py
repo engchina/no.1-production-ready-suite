@@ -626,7 +626,12 @@ class RagEvidence(BaseModel):
     text_length: int = Field(description="本文の文字数。")
     used_in_answer: bool = Field(description="回答の生成に使った根拠か。")
     role: str | None = Field(
-        default=None, description="根拠の役割（retrieved_anchor / parent_context など）。"
+        default=None,
+        description=(
+            "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。"
+            "entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から"
+            "実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。"
+        ),
     )
     score: float | None = None
     rerank_score: float | None = None
@@ -777,7 +782,8 @@ class SearchOutput(VersionedOutput):
     evidence: list[RagEvidence] = Field(
         description=(
             "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠"
-            "（role=retrieved_anchor。関連度の順）、前後の文脈（neighbor_context など）の順。"
+            "（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、"
+            "前後の文脈（neighbor_context など）の順。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -828,7 +834,8 @@ class RetrieveEvidenceOutput(VersionedOutput):
     guardrail_warnings: list[str]
     evidence: list[RagEvidence] = Field(
         description=(
-            "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）を先に、前後の文脈"
+            "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった"
+            "根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈"
             "（neighbor_context など）をその後ろに並べる。回答は作らないので used_in_answer は"
             " false。"
         )
@@ -1209,6 +1216,9 @@ def _answer_diagnostics(result: SearchResponse) -> dict[str, Any]:
 
 # 検索で当たった chunk（関連度の順位を持つ）の役割。前後の文脈（neighbor_context など）と分ける。
 RETRIEVED_ANCHOR_ROLE = "retrieved_anchor"
+# 実体の 1 段の拡張で足した chunk の役割（#1362）。検索で当たった chunk と同じく順位を持つ。
+ENTITY_EXPANSION_ROLE = "entity_expansion"
+_RANKED_ROLES = frozenset({RETRIEVED_ANCHOR_ROLE, ENTITY_EXPANSION_ROLE})
 
 
 def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -1219,8 +1229,9 @@ def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChu
     埋まり、検索で当たった chunk が落ちる。MCP では次の順にしてから切る。
 
     1. 回答に使った根拠（used_in_answer）。回答に使った順（citations の順）を保つ。
-    2. 検索で当たった chunk（role=retrieved_anchor と、役割の無い根拠）。関連度の順位
-       （rerank の後の順。``evidence_retrieval_rank``）の順で、順位が無ければ citations の順。
+    2. 検索で当たった chunk（role=retrieved_anchor と、役割の無い根拠）と、実体からたどった chunk
+       （role=entity_expansion。#1362）。関連度の順位（rerank の後の順。実体の拡張は候補の中の位置。
+       ``evidence_retrieval_rank``）の順で、順位が無ければ citations の順。
     3. 前後の文脈（neighbor_context / same_page_context / parent_context など）。citations の順。
     """
 
@@ -1230,7 +1241,7 @@ def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChu
         if metadata.get("evidence_model_used") is True:
             return (0, 0, position)
         role = _metadata_str(metadata, "evidence_role")
-        if role is not None and role != RETRIEVED_ANCHOR_ROLE:
+        if role is not None and role not in _RANKED_ROLES:
             return (2, 0, position)
         rank = _metadata_int(metadata, "evidence_retrieval_rank")
         return (1, rank if rank is not None and rank > 0 else sys.maxsize, position)

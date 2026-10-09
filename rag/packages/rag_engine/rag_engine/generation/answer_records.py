@@ -396,6 +396,15 @@ def _split_text_rerank_candidates(
                 reason="image_vector_only",
             )
             continue
+        if is_entity_expansion_record(record):
+            # 実体の 1 段の拡張で足した根拠（#1362）は、質問の語と重ならない橋渡しの行（台帳の行・略号の表）で、
+            # 質問との類似度で並べると context に入る順位まで上がらない。候補の位置を保つ。
+            protected[index] = _record_with_rerank_skip_metadata(
+                record,
+                candidate_index=index,
+                reason="entity_expansion",
+            )
+            continue
         rerankable.append(record)
         rerankable_indices.append(index)
     return protected, rerankable, rerankable_indices
@@ -418,6 +427,12 @@ def _merge_text_rerank_candidates(
             continue
     merged.extend(reranked_iter)
     return merged
+
+def is_entity_expansion_record(record: Any) -> bool:
+    """実体の 1 段の拡張で足した根拠か（backend が metadata の ``entity_expansion`` に理由を付ける。#1362）。"""
+    metadata = getattr(record, "metadata", None)
+    return isinstance(metadata, dict) and isinstance(metadata.get("entity_expansion"), dict)
+
 
 def _image_vector_only_candidate(record: AnswerRecord) -> bool:
     channels = _retrieval_channels(record)
