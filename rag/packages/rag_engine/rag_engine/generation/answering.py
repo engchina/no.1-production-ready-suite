@@ -1352,17 +1352,19 @@ def synthesize_grounded_answer(
         extra = [entry for entry in needed if entry.span["evidence_id"] not in cited] if reviewed_unanswered else []
         shown = [*published, *extra]
         envelope_entries = shown
-        answer_text = grounded.render(current.summary, [*current.checked, *extra], reviewed_unanswered,
-                                      confirmations)
+        answer_text, citation_lines = grounded.render_with_citations(
+            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmations)
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
         # 根拠全体を見た監査が必要と挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
         shown = needed
         envelope_entries = needed
-        answer_text = grounded.render(grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmations)
+        answer_text, citation_lines = grounded.render_with_citations(
+            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmations)
     elif published:
         envelope_entries = published
-        answer_text = grounded.render(current.summary, current.checked, reviewed_unanswered, confirmations)
+        answer_text, citation_lines = grounded.render_with_citations(
+            current.summary, current.checked, reviewed_unanswered, confirmations)
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
         # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
@@ -1371,7 +1373,7 @@ def synthesize_grounded_answer(
         # 拒答文では要求ごとの missing 行を重ねない。拒答文と gap がすでに「答えていない」ことを述べており、gap だけの
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
-        answer_text = grounded.render(
+        answer_text, citation_lines = grounded.render_with_citations(
             grounded.CONFIRMATION_ONLY_SUMMARY if confirmations
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items], confirmations=confirmations)
@@ -1389,6 +1391,8 @@ def synthesize_grounded_answer(
         "same_unit_fill": unit_fill,
         "rounds": rounds, "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
         "final_fact_count": len(published),
+        # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
+        "citation_lines": citation_lines,
         # 参照欄は公開した引用だけに同期する。
         "finalization": {"filtered": bool(current.problems), "citations_synchronized": True, "off_goal": off_goal,
                          "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown}), "retained_passage_ids": []},

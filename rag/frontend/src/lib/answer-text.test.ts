@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "./api";
-import { matchCitation, parseAnswerText, parseCitationLine } from "./answer-text";
+import { matchCitation, matchCitationLine, parseAnswerText, parseCitationLine } from "./answer-text";
 
 describe("parseAnswerText", () => {
   it("回答エンジンの本文を要約・節・説明・根拠に分ける", () => {
@@ -29,22 +29,34 @@ describe("parseAnswerText", () => {
         kind: "section",
         title: "確認できる内容",
         ordered: false,
-        entries: [{ kind: "item", text: "受注番号は自動で採番されます。", citations: ["根拠：受注マニュアル.pdf p.3"] }],
+        entries: [
+          {
+            kind: "item",
+            text: "受注番号は自動で採番されます。",
+            citations: ["根拠：受注マニュアル.pdf p.3"],
+            citationLines: [1],
+          },
+        ],
       },
       {
         kind: "section",
         title: "操作手順（受注入力）",
         ordered: true,
         entries: [
-          { kind: "item", text: "受注入力画面を開きます。", citations: [] },
-          { kind: "item", text: "登録ボタンを押します。", citations: ["根拠：受注マニュアル.pdf p.5"] },
+          { kind: "item", text: "受注入力画面を開きます。", citations: [], citationLines: [] },
+          {
+            kind: "item",
+            text: "登録ボタンを押します。",
+            citations: ["根拠：受注マニュアル.pdf p.5"],
+            citationLines: [2],
+          },
         ],
       },
       {
         kind: "section",
         title: "資料からは確認できない点",
         ordered: false,
-        entries: [{ kind: "item", text: "既存の受注の修正方法", citations: [] }],
+        entries: [{ kind: "item", text: "既存の受注の修正方法", citations: [], citationLines: [] }],
       },
     ]);
   });
@@ -131,6 +143,43 @@ describe("matchCitation", () => {
   it("同じファイルの引用が無ければ -1", () => {
     expect(matchCitation({ fileName: "missing.pdf", page: 1 }, citations)).toBe(-1);
     expect(matchCitation({ fileName: "manual.pdf", page: 1 }, [])).toBe(-1);
+  });
+});
+
+// 出典行の番号で引用を結ぶ（#1330）。
+describe("matchCitationLine", () => {
+  function numbered(fileName: string, page: number, lines: number[]): RetrievedChunk {
+    const base = chunk(fileName, page);
+    return { ...base, metadata: { ...base.metadata, answer_citation_lines: lines } };
+  }
+
+  it("本文の n 番目の根拠の行は、回答エンジンが n を付けた引用に結ぶ（同じ頁・同じファイルでも取り違えない）", () => {
+    const citations = [numbered("規程.pdf", 2, [2]), numbered("規程.pdf", 2, [1, 3])];
+    const ref = { fileName: "規程.pdf", page: 2 };
+
+    expect(matchCitationLine(1, ref, citations)).toBe(1);
+    expect(matchCitationLine(2, ref, citations)).toBe(0);
+    expect(matchCitationLine(3, ref, citations)).toBe(1);
+  });
+
+  it("番号の無い回答（古い記録）はファイル名と頁で選ぶ", () => {
+    const citations = [chunk("規程.pdf", 2), chunk("規程.pdf", 5)];
+
+    expect(matchCitationLine(1, { fileName: "規程.pdf", page: 5 }, citations)).toBe(1);
+    expect(matchCitationLine(undefined, { fileName: "規程.pdf", page: 2 }, citations)).toBe(0);
+    expect(matchCitationLine(undefined, null, citations)).toBe(-1);
+  });
+
+  it("出典行の番号は、項目に付かない根拠の行も含めて本文の順に数える", () => {
+    const blocks = parseAnswerText(
+      ["確認できる内容", "", "・説明 A", "根拠：a.pdf p.1", "続きの文", "根拠：a.pdf p.2", "・説明 B", "根拠：b.pdf p.3"].join(
+        "\n",
+      ),
+    );
+    const section = blocks?.[0];
+    const items = section?.kind === "section" ? section.entries.filter((entry) => entry.kind === "item") : [];
+
+    expect(items.map((entry) => (entry.kind === "item" ? entry.citationLines : []))).toEqual([[1], [3]]);
   });
 });
 

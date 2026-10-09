@@ -1723,6 +1723,23 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         self.assertEqual(body.count("操作手順（出力様式設定）"), 1)  # 別文書を挟んでも同じ文書の手順は 1 つの節
         self.assertIn("操作手順（帳票設定）\n\n・名前を直接入力します。", body)
 
+    def test_render_with_citations_returns_one_ref_per_citation_line_in_text_order(self):
+        """本文の出典行ごとの根拠を本文の順に返す。同じ出典が続いて出典行を省いた分は返さない (#1330)。"""
+        a1 = self.entry("対象を選択します。", "出力様式設定", "架空変更手順.pdf")
+        b1 = self.entry("名前を直接入力します。", "帳票設定", "架空管理説明書.pdf")
+        a2 = self.entry("実行ボタンを押します。", "出力様式設定", "架空変更手順.pdf")
+        for entry, source_id in ((a1, "P-a1"), (b1, "P-b1"), (a2, "P-a2")):
+            entry.span.update(evidence_id="E" + source_id, source_id=source_id)
+        a2.span["scope_source_ids"] = ["c-a2"]
+        body, refs = grounded.render_with_citations("", [b1, a1, a2])
+        self.assertEqual(body, grounded.render("", [b1, a1, a2]))
+        lines = [line for line in body.split("\n") if line.startswith(grounded.CITATION_PREFIX)]
+        self.assertEqual(len(refs), len(lines))
+        # a1 と a2 は同じ出典・頁が続くので出典行は a2 の後の 1 行。主文書の手順が先。
+        self.assertEqual([ref["source_id"] for ref in refs], ["P-a2", "P-b1"])
+        self.assertEqual(refs[0]["scope_source_ids"], ["c-a2"])
+        self.assertEqual((refs[1]["evidence_id"], refs[1]["page"]), ("EP-b1", 1))
+
     def setUp(self):
         self.ctx = context(replace(record(0, self.SELECT + "\n" + self.RUN, "出力様式設定", source="架空変更手順.pdf"),
                                    metadata={"section_path": ["架空変更手順", "出力様式設定"]}),
