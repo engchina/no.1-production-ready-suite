@@ -628,8 +628,11 @@ function RunChatTurn({
     fetchEvents: fetchProgress,
     active: stoppable,
     // 途絶えの判定は共通の既定（15 秒。SSE の heartbeat の 10 秒より長い）。
-    // 終わったら、回答・成果物を会話の取り直しを待たずに取りに行く。
-    onTerminal: onProgressTerminal,
+    // 段階の配信で先に終わりが届いたら、回答・成果物を会話の取り直しを待たずに取りに行く（会話の取得で
+    // 終わった Run を開いたときは取り直さない）。
+    onTerminal: () => {
+      if (stoppable) onProgressTerminal();
+    },
   });
 
   return (

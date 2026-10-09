@@ -144,6 +144,16 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-approval-${viewport.name}-${theme}.png`) });
       // 考えている・ツール・承認待ちの段階を通る間、経過時間は減らない（段階ごとに 0 に戻さない）。
+      // 段階のイベントは SSE ですぐ届くので、記録（100ms ごと）が承認待ちを 1 回は拾うまで待ってから確かめる。
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            ((window as unknown as { __progressTimerSamples?: string[] }).__progressTimerSamples ?? []).some((sample) =>
+              sample.startsWith("approval_wait|")
+            )
+          )
+        )
+        .toBe(true);
       await expectProgressTimerMonotonic(page, 3);
 
       // 4. 承認後に実行して完了。回答の上に「処理の経過」の 1 行に畳む（既定は閉じる）。承認待ちの間も段階の配信
