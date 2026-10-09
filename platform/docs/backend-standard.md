@@ -102,6 +102,15 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
 - ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248）。RAG / NL2SQL の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp_contract.py` が送る引数の収まりと、読む出力の項目（入れ子を含む）が呼び先の出力にあることを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
 
+## チャットの処理の段階の配信（#1359）
+
+チャットの回答の処理の段階（画面の `ChatProgress`）は、3 製品とも `pr_backend_core.chat_progress` の追記型のイベントで記録・配信する。段階の一覧の snapshot を置き換えて配らない（古い snapshot が新しい表示を上書きしても、受け取る側が見分けられない）。
+
+- **契約**: `platform/contracts/chat-progress/chat-progress-events.json`（`tests/test_chat_progress_contract.py` が model から生成し一致を確かめる。形を変えたら `UPDATE_CHAT_PROGRESS_CONTRACT=1`）。段階のイベント（`seq`〔対象ごとに 1 から連続〕・`target_id`・`attempt`・`step_id`・`kind`・`status` pending / running / done / failed / skipped・`started_at` / `finished_at`・`detail`・`params`）と終端のイベント（`status` done / failed / cancelled）。段階のイベントはその段階の今の状態の全体を持つ。名前（文言）は入れず、画面が製品の段階の定義（`kind` → i18n）で付ける。`detail` は件数などの短い補足だけ（SQL・ORA コード・例外の種類は入れない）。
+- **記録**: `ChatProgressRecorder(target_id, attempt=, events=保存済み, sink=)`。製品は「どこで `declare`（待機中として先に出す。並びを決める）・`start`（`exclusive=True` でほかの実行中を完了）・`finish`・`update` するか」と、終わりの `complete(done / failed / cancelled)` だけを書く。番号・時刻・状態を戻さない（完了した段階を実行中に戻す呼び出しは何もしない）・終端の確定は記録が持つ。保存は製品の既存の保存（RAG: 回答のメッセージの `progress_json`、NL2SQL: ジョブ、Agent: Run）に `events` を書く。保存済みの `events` から作り直せば続きの番号から記録する（引き継いだ実行は `new_attempt`）。補足・値の引数は既定の `UNCHANGED` で前の値のまま、`None` で消す。
+- **配信**: polling は `GET …/progress?since=<seq>` で `chat_progress_page`（`ChatProgressPage`: `events` / `last_seq` / `terminal`）、SSE は `GET …/progress/stream` で `chat_progress_sse_response(fetch, since=, last_event_id=)`（`id:` に `seq`、`event: chat_progress`、イベントの無い間は 10 秒ごとに `event: heartbeat`、終端を送ったら閉じ、終わった対象を続きから求められたら 204）。SSE は保存先を読み直して送る（1 秒ごと）ので、別の worker・プロセスが記録していても届く。読み直し・heartbeat・1 本の接続の最長（600 秒）の間隔は `configure_chat_progress_sse(...)`（起動時・テスト。テストは `restore_chat_progress_sse` で戻す）か引数で変える。イベントの値の無い任意の項目は、API の応答・保存・SSE のどれでも省く（null を出さない。契約の `absent_fields: omitted`）。応答の header は `X-Accel-Buffering: no`（Nginx の buffering を切る）。対象の権限の判定（404 / 403）は製品が `fetch` の前に行う。
+- 画面は `@production-ready/ui` の `useChatProgressStream`（[components-reference.md](./design-system/components-reference.md)「useChatProgressStream」）。
+
 ## 内部の HTTP と環境のプロキシ（#852）
 
 OCI に届くために `HTTP_PROXY` / `HTTPS_PROXY`（社内プロキシ）を設定した環境でも、同じマシン・private network の

@@ -1,16 +1,29 @@
-"""チャットの処理の段階（`ChatProgressStep`。#1146）の組み立てのテスト。"""
+"""チャットの処理の段階（3 製品共通の段階のイベント。#1146 / #1359）の記録のテスト。
+
+内部の工程 → 段階の対応、段階を戻さないこと（#1358）、実行中は 1 つ、rerank 無効、補正検索の回数、
+完了・失敗・停止・中断の終端を、`ChatProgressTracker` の記録したイベントで確かめる。
+"""
 
 import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pr_backend_core.chat_progress import (
+    ChatProgressStepEvent,
+    ChatProgressTerminalEvent,
+    fold_chat_progress_events,
+    parse_chat_progress_events,
+)
 
+from app.rag.chat_answer_runs import close_saved_chat_progress
 from app.rag.chat_progress import (
-    CHAT_PROGRESS_STEPS,
+    CHAT_PROGRESS_STEP_IDS,
     ChatProgressTracker,
     chat_progress_step_id,
 )
 from app.rag.pipeline import SearchStageProgress
+
+MESSAGE_ID = "a" * 32
 
 
 def _progress(stage: str, outcome: str) -> SearchStageProgress:
@@ -20,7 +33,7 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
 
 
 class _Clock:
-    """1 回呼ぶごとに 1 秒進む時計（startedAt / finishedAt と所要時間を決定的にする）。"""
+    """1 回呼ぶごとに 1 秒進む時計（started_at / finished_at と所要時間を決定的にする）。"""
 
     def __init__(self) -> None:
         self.now = datetime(2026, 10, 4, 12, 0, 0, tzinfo=UTC)
@@ -38,31 +51,53 @@ class _Clock:
 def _tracker(*, rerank_enabled: bool = True) -> ChatProgressTracker:
     clock = _Clock()
     return ChatProgressTracker(
-        rerank_enabled=rerank_enabled, model_id="m1", clock=clock.clock, timer=clock.timer
+        MESSAGE_ID,
+        rerank_enabled=rerank_enabled,
+        model_id="m1",
+        clock=clock.clock,
+        timer=clock.timer,
     )
 
 
 def _statuses(tracker: ChatProgressTracker) -> dict[str, str]:
-    return {step["id"]: step["status"] for step in tracker.snapshot()}
+    fold = fold_chat_progress_events(tracker.events)
+    return {step.step_id: step.status for step in fold.step_list()}
+
+
+def _step(tracker: ChatProgressTracker, step_id: str) -> ChatProgressStepEvent:
+    return [
+        event
+        for event in tracker.events
+        if isinstance(event, ChatProgressStepEvent) and event.step_id == step_id
+    ][-1]
 
 
 def _feed(tracker: ChatProgressTracker, events: list[tuple[str, str]]) -> list[bool]:
     return [tracker.observe(_progress(stage, outcome)) for stage, outcome in events]
 
 
-def test_steps_follow_the_contract_and_start_pending() -> None:
-    """段階は契約の 5 つ（id / label / status）で、最初はすべて未開始。"""
-    snapshot = _tracker().snapshot()
-    assert [step["id"] for step in snapshot] == [
+def test_declares_five_pending_steps_in_order_without_labels() -> None:
+    """最初に 5 段階を待機中として記録する（並びを決める）。名前（文言）は記録に入れない。"""
+    tracker = _tracker()
+    events = tracker.events
+    assert [event.seq for event in events] == [1, 2, 3, 4, 5]
+    assert all(isinstance(event, ChatProgressStepEvent) for event in events)
+    assert [event.step_id for event in events if isinstance(event, ChatProgressStepEvent)] == list(
+        CHAT_PROGRESS_STEP_IDS
+    )
+    assert CHAT_PROGRESS_STEP_IDS == (
         "rewrite_query",
         "retrieve",
         "rerank",
         "generate_answer",
         "check_guardrail",
-    ]
-    assert [step["label"] for step in snapshot] == [label for _, label in CHAT_PROGRESS_STEPS]
-    assert all(step["status"] == "pending" for step in snapshot)
-    assert all(set(step) == {"id", "label", "status"} for step in snapshot)
+    )
+    assert {event.target_id for event in events} == {MESSAGE_ID}
+    assert set(_statuses(tracker).values()) == {"pending"}
+    dumped = tracker.dump()
+    assert all("label" not in event and "detail" not in event for event in dumped)
+    # 保存の JSON から同じイベントに戻せる。
+    assert parse_chat_progress_events(dumped) == events
 
 
 @pytest.mark.parametrize(
@@ -96,17 +131,20 @@ def test_stage_mapping(stage: str, expected: str | None) -> None:
 
 
 def test_rerank_disabled_is_skipped_and_rerank_step_counts_as_retrieval() -> None:
-    """rerank が無効なら並べ替えは skipped。回答フローの「Rerank」の工程は検索の一部にする。"""
+    """rerank が無効なら並べ替えはスキップ。回答フローの「Rerank」の工程は検索の一部にする。"""
     assert chat_progress_step_id("answer_step:Rerank", rerank_enabled=False) == "retrieve"
     tracker = _tracker(rerank_enabled=False)
-    assert _statuses(tracker)["rerank"] == "skipped"
+    rerank = _step(tracker, "rerank")
+    assert rerank.status == "skipped"
+    # 始まらなかった段階には時刻を付けない（所要時間を出さない）。
+    assert rerank.started_at is None and rerank.finished_at is None
     _feed(tracker, [("answer_step:文書検索", "started"), ("answer_step:Rerank", "started")])
     assert _statuses(tracker)["retrieve"] == "running"
     assert _statuses(tracker)["rerank"] == "skipped"
 
 
 def test_full_answer_flow_moves_one_running_step_at_a_time() -> None:
-    """回答フローの工程の順に、実行中の段階は 1 つだけで進み、完了で残りは skipped。"""
+    """回答フローの工程の順に、実行中の段階は 1 つだけで進み、完了の終端で残りはスキップ。"""
     tracker = _tracker()
     changed = _feed(
         tracker,
@@ -118,7 +156,7 @@ def test_full_answer_flow_moves_one_running_step_at_a_time() -> None:
             ("answer_step:質問拡張戦略", "success"),
         ],
     )
-    # 全体を包む工程・工程の終わり・同じ段階の 2 つ目の工程では変わらない
+    # 全体を包む工程・工程の終わり・同じ段階の 2 つ目の工程では記録しない
     # （完了と実行中を行き来しない）。
     assert changed == [False, True, False, False, False]
     assert _statuses(tracker)["rewrite_query"] == "running"
@@ -131,7 +169,7 @@ def test_full_answer_flow_moves_one_running_step_at_a_time() -> None:
     # 文書検索の中の Rerank が始まったら、検索は終わったものとして並べ替えを実行中にする。
     assert statuses["retrieve"] == "done"
     assert statuses["rerank"] == "running"
-    assert [status for status in statuses.values()].count("running") == 1
+    assert list(statuses.values()).count("running") == 1
 
     _feed(
         tracker,
@@ -152,20 +190,28 @@ def test_full_answer_flow_moves_one_running_step_at_a_time() -> None:
         "check_guardrail": "running",
     }
     tracker.finish(citation_count=3)
-    snapshot = {step["id"]: step for step in tracker.snapshot()}
-    assert snapshot["check_guardrail"]["status"] == "done"
-    assert snapshot["retrieve"]["detail"] == "根拠 3 件"
-    # 時刻は ISO 8601（UTC）。開始は終了より前。
-    assert snapshot["rewrite_query"]["startedAt"].endswith("Z")
-    assert snapshot["rewrite_query"]["startedAt"] < snapshot["rewrite_query"]["finishedAt"]
+    assert tracker.terminal == "done"
+    assert isinstance(tracker.events[-1], ChatProgressTerminalEvent)
+    assert _statuses(tracker)["check_guardrail"] == "done"
+    # 根拠の件数は値で付ける（文言は画面の i18n）。
+    retrieve = _step(tracker, "retrieve")
+    assert retrieve.params == {"citations": 3}
+    assert retrieve.detail is None
+    rewrite = _step(tracker, "rewrite_query")
+    assert rewrite.started_at is not None and rewrite.finished_at is not None
+    assert rewrite.started_at < rewrite.finished_at
+    # 番号は 1 から連続する。
+    assert [event.seq for event in tracker.events] == list(range(1, len(tracker.events) + 1))
 
 
 def test_finish_marks_steps_that_never_ran_as_skipped() -> None:
-    """会話の書き換えも回答フローも通らない（安全チェックで止めた）回答は、すべて skipped。"""
+    """会話の書き換えも回答フローも通らない（安全チェックで止めた）回答は、すべてスキップ。"""
     tracker = _tracker()
     tracker.finish(citation_count=0)
     assert set(_statuses(tracker).values()) == {"skipped"}
-    assert all("detail" not in step for step in tracker.snapshot())
+    # 検索をしていないので根拠の件数は付けない。
+    assert _step(tracker, "retrieve").params is None
+    assert tracker.terminal == "done"
 
 
 def test_steps_only_move_forward_when_the_flow_returns_to_retrieval() -> None:
@@ -185,7 +231,7 @@ def test_steps_only_move_forward_when_the_flow_returns_to_retrieval() -> None:
         "answer_step:回答文の生成と根拠確認（1回目）",
     ):
         _feed(tracker, [(stage, "started")])
-        finished.append([step["id"] for step in tracker.snapshot() if step["status"] == "done"])
+        finished.append([step for step, status in _statuses(tracker).items() if status == "done"])
     assert finished == [
         [],
         ["rewrite_query"],
@@ -198,10 +244,18 @@ def test_steps_only_move_forward_when_the_flow_returns_to_retrieval() -> None:
     statuses = _statuses(tracker)
     assert statuses["generate_answer"] == "running"
     assert list(statuses.values()).count("running") == 1
+    # 記録したイベントのどれも、終わった段階を実行中に戻さない。
+    seen_done: set[str] = set()
+    for event in tracker.events:
+        if not isinstance(event, ChatProgressStepEvent):
+            continue
+        if event.status == "done":
+            seen_done.add(event.step_id)
+        assert not (event.step_id in seen_done and event.status in {"running", "pending"})
 
 
-def test_corrective_retrieval_keeps_steps_forward_with_attempt_detail() -> None:
-    """補正検索（CRAG の 2 回目の文書検索）は段階を戻さず、回数を検索の補足に出す（#1358）。"""
+def test_corrective_retrieval_keeps_steps_forward_with_attempt_param() -> None:
+    """補正検索（CRAG の 2 回目の文書検索）は段階を戻さず、回数を検索の値に付ける（#1358）。"""
     tracker = _tracker()
     _feed(
         tracker,
@@ -222,16 +276,19 @@ def test_corrective_retrieval_keeps_steps_forward_with_attempt_detail() -> None:
             ("answer_step:文書検索（2回目）", "started"),
         ],
     )
-    # 補足が変わったので一覧を送り直す（段階の状態は変えない）。
+    # 値が変わったので記録する（段階の状態は変えない）。
     assert changed == [False, True]
-    retrieve = next(step for step in tracker.snapshot() if step["id"] == "retrieve")
-    assert retrieve["status"] == "done"
-    assert retrieve["detail"] == "2 回目"
+    retrieve = _step(tracker, "retrieve")
+    assert retrieve.status == "done"
+    assert retrieve.params == {"attempt": 2}
     assert _statuses(tracker)["rerank"] == "running"
+    # 完了すると、回数に根拠の件数が加わる。
+    tracker.finish(citation_count=4)
+    assert _step(tracker, "retrieve").params == {"attempt": 2, "citations": 4}
 
 
 def test_corrective_retrieval_without_rerank_stays_on_retrieve() -> None:
-    """並べ替えを使わない設定では、補正検索の間も検索の段階が実行中のまま回数を出す。"""
+    """並べ替えを使わない設定では、補正検索の間も検索の段階が実行中のまま回数を付ける。"""
     tracker = _tracker(rerank_enabled=False)
     _feed(
         tracker,
@@ -242,9 +299,9 @@ def test_corrective_retrieval_without_rerank_stays_on_retrieve() -> None:
             ("answer_step:文書検索（2回目）", "started"),
         ],
     )
-    retrieve = next(step for step in tracker.snapshot() if step["id"] == "retrieve")
-    assert retrieve["status"] == "running"
-    assert retrieve["detail"] == "2 回目"
+    retrieve = _step(tracker, "retrieve")
+    assert retrieve.status == "running"
+    assert retrieve.params == {"attempt": 2}
 
 
 def test_inner_step_error_does_not_fail_the_step() -> None:
@@ -256,8 +313,8 @@ def test_inner_step_error_does_not_fail_the_step() -> None:
     assert _statuses(tracker)["generate_answer"] == "done"
 
 
-def test_fail_marks_running_step_failed_even_after_cancel_event() -> None:
-    """時間切れで工程が中断された（cancelled）ときは、その段階を failed にする。"""
+def test_fail_marks_running_step_failed_and_ends_with_failed_terminal() -> None:
+    """時間切れで工程が中断された（cancelled）ときは、その段階を失敗にして失敗の終端にする。"""
     tracker = _tracker()
     _feed(
         tracker,
@@ -270,14 +327,14 @@ def test_fail_marks_running_step_failed_even_after_cancel_event() -> None:
     tracker.fail()
     statuses = _statuses(tracker)
     assert statuses["retrieve"] == "failed"
-    # 始まらなかった段階は未開始のまま（実行していない）。
-    assert statuses["rerank"] == "pending"
-    retrieve = next(step for step in tracker.snapshot() if step["id"] == "retrieve")
-    assert "finishedAt" in retrieve
+    # 始まらなかった段階はスキップ（実行していない）。
+    assert statuses["rerank"] == "skipped"
+    assert _step(tracker, "retrieve").finished_at is not None
+    assert tracker.terminal == "failed"
 
 
-def test_fail_keeps_done_steps_and_fails_first_step_when_nothing_started() -> None:
-    """失敗では終わった段階を残し、実行中の段階だけを failed にする。何も始まっていなければ先頭。"""
+def test_fail_keeps_done_steps_and_fails_next_step_when_nothing_running() -> None:
+    """失敗では終わった段階を残す。何も実行中でなければ次の段階（何も始まっていなければ先頭）。"""
     tracker = _tracker()
     _feed(
         tracker,
@@ -294,13 +351,76 @@ def test_fail_keeps_done_steps_and_fails_first_step_when_nothing_started() -> No
     untouched = _tracker()
     untouched.fail()
     assert _statuses(untouched)["rewrite_query"] == "failed"
-    assert "startedAt" not in untouched.snapshot()[0]
+    assert _step(untouched, "rewrite_query").started_at is None
+    assert untouched.terminal == "failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "running_status"),
+    [("cancelled", "skipped"), ("failed", "failed")],
+    ids=["stop", "interrupt"],
+)
+def test_close_records_stop_and_interrupt_terminal(status: str, running_status: str) -> None:
+    """停止（cancelled）・中断（failed）の終端。終端の後は何も記録しない。"""
+    tracker = _tracker()
+    _feed(tracker, [("answer_step:文書検索", "started")])
+    tracker.close(status)  # type: ignore[arg-type]
+    assert tracker.terminal == status
+    assert _statuses(tracker)["retrieve"] == running_status
+    assert _statuses(tracker)["generate_answer"] == "skipped"
+    last_seq = tracker.last_seq
+    # 終端の後の工程・完了・もう一度の停止は記録しない。
+    _feed(tracker, [("answer_step:回答文の生成", "started")])
+    tracker.finish(citation_count=1)
+    tracker.close("failed")
+    assert tracker.last_seq == last_seq
+
+
+def test_attached_sink_receives_events_after_attach() -> None:
+    """記録の送り先は付けた後の記録から受け取る（最初の待機中は呼び出し元が送る）。"""
+    tracker = _tracker()
+    received: list[int] = []
+    tracker.attach(lambda event: received.append(event.seq))
+    _feed(tracker, [("answer_step:質問の理解", "started")])
+    tracker.finish(citation_count=0)
+    assert received == list(range(6, tracker.last_seq + 1))
+
+
+def test_resumes_from_saved_events() -> None:
+    """保存済みのイベントから作り直すと、続きの番号で記録する（待機中を出し直さない）。"""
+    first = _tracker()
+    _feed(first, [("answer_step:文書検索", "started")])
+    resumed = ChatProgressTracker(MESSAGE_ID, events=first.events)
+    assert resumed.last_seq == first.last_seq
+    resumed.close("failed")
+    assert [event.seq for event in resumed.events] == list(range(1, resumed.last_seq + 1))
+
+
+def test_close_saved_progress_continues_numbering_and_drops_snapshot() -> None:
+    """別のプロセスの停止・中断の後始末は、保存済みのイベントの続きで終端を記録する。"""
+    tracker = _tracker()
+    _feed(tracker, [("answer_step:文書検索", "started")])
+    saved = tracker.dump()
+    closed = close_saved_chat_progress(saved, message_id=MESSAGE_ID, status="cancelled")
+    assert closed[: len(saved)] == saved
+    assert closed[-1]["type"] == "terminal"
+    assert closed[-1]["status"] == "cancelled"
+    assert [event["seq"] for event in closed] == list(range(1, len(closed) + 1))
+    # 既に終端なら変えない。
+    assert close_saved_chat_progress(closed, message_id=MESSAGE_ID, status="failed") == closed
+    # 旧形式（段階の snapshot）は捨てて終端だけにする。
+    legacy = close_saved_chat_progress(
+        [{"id": "retrieve", "label": "文書を探しています", "status": "running"}],
+        message_id=MESSAGE_ID,
+        status="failed",
+    )
+    assert [(event["type"], event["seq"]) for event in legacy] == [("terminal", 1)]
 
 
 def test_logs_step_start_and_end_with_duration_and_request_id(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """段階の開始・終了を INFO で残す（request_id・trace_id・所要時間）。"""
+    """段階の開始・終了を INFO で残す（request_id・trace_id・回答の id・所要時間）。"""
     from pr_backend_core.observability import request_id_var
 
     token = request_id_var.set("req-1146")
@@ -321,5 +441,6 @@ def test_logs_step_start_and_end_with_duration_and_request_id(
     assert started.__dict__["status"] == "running"
     assert started.__dict__["request_id"] == "req-1146"
     assert started.__dict__["trace_id"] == "trace-1"
+    assert started.__dict__["message_id"] == MESSAGE_ID
     assert finished.__dict__["status"] == "done"
     assert finished.__dict__["duration_ms"] == 1000.0

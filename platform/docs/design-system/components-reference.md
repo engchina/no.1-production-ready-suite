@@ -2658,7 +2658,7 @@ import { ChatProgress } from "@production-ready/ui";
 | `startedAt` | `string \| number \| null` | 段階の最初の開始 | 実行中の経過時間の起点（処理全体の開始。#1176）。どちらも無いときは表示が処理中になった時刻から数える |
 | `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
 | `defaultOpen` | `boolean` | 失敗があれば `true` | 完了後の 1 行を最初から開くか |
-| `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressTracker` の `progressProps` で渡す |
+| `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
 | `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
 
@@ -2681,7 +2681,7 @@ import { ChatProgress } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1145」のテスト（応答を遅らせて、送信・開始待ち・実行中・完了・失敗の段階を desktop / 375px・light / dark で確かめる）。
-- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）、RAG の `components/chat/ChatClient.tsx`（SSE の `progress`）、Agent の `pages/ChatPage.tsx`（Run から `lib/chat-progress.ts`）。
+- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`、RAG の `components/chat/ChatClient.tsx`、Agent の `pages/ChatPage.tsx`。段階は 3 製品とも `useChatProgressStream`（下の節）で backend の段階のイベントから作り、名前は製品の段階の定義（NL2SQL `features/nl2sql/chatProgress.ts`・RAG `lib/chat-progress.ts`・Agent `lib/chat-progress.ts`）で付ける（#1359）。
 
 ### useChatProgressTracker — 処理の経過の状態を追う（#1160）
 
@@ -2719,8 +2719,53 @@ const progress = useChatProgressTracker({
 | 案内は遅延の案内と同じ予約した行に出す | 案内が出ても今の段階の行・経過時間は動かない |
 
 - 単体テストは `packages/ui/tests/chat-progress-tracker.test.tsx`。
-- 製品のアダプタ: NL2SQL（会話の polling。`refresh` は応答しない取得を打ち切る `refetch({ cancelRefetch: true })`）、RAG（SSE。`touch()` は受け取ったバイトごと、`all_done` の前に終わったら `refreshNow()` で「接続を確認しています。」を出し、最後に受け取った event の連番から続きを購読し直す。`refresh` は途絶えた接続を閉じて張り直させる。続きを購読できなければ保存済みの作成中の回答に引き継ぎ、会話の polling で完了を待つ（#1175。作成は接続が切れても続く）。backend は event の無い間 10 秒ごとに heartbeat を送る）、Agent（Run の polling。`waiting_approval` の間は `enabled: false`）。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat-progress-refresh.spec.ts`・RAG `e2e/chat-progress-refresh.spec.ts`・Agent `e2e/chat-progress-refresh.spec.ts`。
+- 製品はこの hook を直接使わず、配信を含めた `useChatProgressStream`（次の節）を使う（#1359）。
+
+### useChatProgressStream — 処理の段階のイベントを受け取り、段階の一覧にまとめる（#1359）
+
+3 製品のチャットの処理の段階は、段階の一覧の snapshot ではなく**追記型のイベント**で配る（契約の正本は `platform/contracts/chat-progress/chat-progress-events.json`、backend は `pr_backend_core.chat_progress`。[backend-standard.md](../backend-standard.md)「チャットの処理の段階の配信」）。この hook は配信（SSE を優先し polling に縮退）・途絶えの取り直し（中で `useChatProgressTracker` を使う）・イベントの組み立て（`reduceChatProgressEvents`）・名前付け（製品の段階の定義）を 1 つにしたもの。製品は段階の定義（`kind` → i18n の名前）と API の URL だけを渡す。
+
+```tsx
+import { ChatProgress, useChatProgressStream, type ChatProgressStepDefinitions } from "@production-ready/ui";
+
+const definitions: ChatProgressStepDefinitions = {
+  generate_sql: { label: (status) => t(`chat.progress.generate_sql.${chatProgressLabelState(status)}`) },
+  tool: { label: (status, params) => t(`chat.progress.tool.${chatProgressLabelState(status)}`, { tool: String(params.tool) }) },
+};
+
+const progress = useChatProgressStream({
+  key: job.job_id,                                        // 対象（target_id）。変わったら作り直す
+  definitions,
+  events: job.progress_events,                            // 保存済みの記録（会話の取得に入っているもの）
+  streamUrl: inFlight ? `/api/jobs/${id}/progress/stream` : null, // SSE（hook が since を付ける）
+  fetchEvents: (since, signal) => getProgress(id, since, signal), // polling・取り直し（since より後）
+  active: inFlight,                                       // 終端のイベントが届いたら関係なく終わり
+  onTerminal: () => conversation.refetch(),               // 結果の取り直し
+});
+
+<ChatProgress {...progress.progressProps} labels={labels} testId="chat-progress" />;
+```
+
+| 入力 / 戻り値 | 説明 |
+|---|---|
+| `streamUrl` | SSE。`EventSource` で `?since=<cursor>` を付けて開く。切れたらブラウザが `Last-Event-ID` で続きから張り直す。応答が SSE でない（4xx / 5xx・終わった対象の 204）か、続けて 3 回失敗したら `fetchEvents` の polling に縮退する |
+| `fetchEvents(since, signal)` | `since` より後のイベント（`ChatProgressPage`）。polling（`pollIntervalMs`、既定 2 秒）・途絶えの取り直し・番号の飛びの穴埋めに使う。応答は `since` の後をすべて含むものとして扱う |
+| `events` | 製品が受け取ったイベント（保存済みの記録、RAG の回答の配信の `chat_progress`）。増えるたびに積む（重複は捨てる） |
+| `pollEvents` | 既定 `true`（SSE が無いとき `fetchEvents` で polling する）。`false` は製品の自前の配信（RAG の作成中の回答の SSE）が段階を運ぶとき: `fetchEvents` は途絶えの取り直しと番号の飛びの穴埋めにだけ使い、取り直しの成功を配信の再開に数えない |
+| `touch()` / `onStalled` | 製品の自前の配信（RAG の回答の SSE）のバイトを受け取ったら `touch()`。途絶えたら `onStalled` で製品の配信を張り直す |
+| `transport` | `sse` / `polling` / `push`（`events` だけ）/ `idle`（終わった・追わない） |
+| `progressProps` | `ChatProgress` へ渡す。`progressKey` は `<対象>#<試行>`（試行が変わったら作り直す） |
+
+| 決めたこと | 理由 |
+|---|---|
+| イベントは `seq` の順に、前の番号の次から続けて適用する。古い・重複は捨て、番号が飛んだら取り直しで埋める | 古い snapshot・取り直しの応答・再接続・複数 worker で、新しい表示が古い更新で上書きされない（#1359。snapshot の置き換えでは順序を見分けられなかった） |
+| 段階は `step_id` で結び、最初に出た順に並べる。状態は進む方へだけ変える（#1358 の規則をイベントに当てはめたもの）。試行（`attempt`）と対象が変わったら作り直す | 処理中に一度出した段階が消えない・戻らない。引き継いだ実行は段階を初めからにする |
+| 名前は契約に入れず、製品の段階の定義（`kind` と `params`）で付ける | 利用者向けの文言は製品の i18n が正本。backend は id・状態・値だけを記録する |
+| SSE を優先し、polling に縮退する | 段階はすぐ届き、中継・ブラウザが SSE を通さない環境でも止まらない |
+
+- 製品の対応: RAG（回答のメッセージ。作成中の回は回答の配信の SSE の `chat_progress` が運び、保存済みの作成中の回答は `GET /api/chat/conversations/{id}/messages/{回答の id}/progress[/stream]`）、NL2SQL（ジョブ。`GET /api/nl2sql/jobs/{job_id}/progress[/stream]`）、Agent（Run。`GET /api/runs/{run_id}/progress[/stream]`）。NL2SQL・Agent は終端で `onTerminal` から結果（会話・Run）を取り直す。
+- 単体テストは `packages/ui/tests/chat-progress-events.test.ts`（契約との一致・古い / 重複 / 順序の入れ替わり・試行・終端・対象の切り替え）と `tests/chat-progress-stream.test.tsx`（SSE・縮退・途絶えと張り直し・穴埋め・終端）。
 
 ## ResultTable — **新規**（#1154 / #1178。旧名 ChatResultTable）
 

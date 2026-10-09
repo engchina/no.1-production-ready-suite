@@ -18,7 +18,7 @@ import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
  */
 
 /** 状態の進み具合（完了・失敗・スキップは終わった段階として同じ）。 */
-const STATUS_RANK: Record<ChatProgressStepStatus, number> = {
+export const CHAT_PROGRESS_STATUS_RANK: Readonly<Record<ChatProgressStepStatus, number>> = {
   pending: 0,
   running: 1,
   done: 2,
@@ -97,7 +97,7 @@ export function mergeChatProgressSteps(
     if (!after) return before as ChatProgressStep;
     if (!before) return after;
     // 戻る更新（完了 → 実行中・待機中、実行中 → 待機中）は前の段階を残す。
-    return STATUS_RANK[after.status] >= STATUS_RANK[before.status] ? after : before;
+    return CHAT_PROGRESS_STATUS_RANK[after.status] >= CHAT_PROGRESS_STATUS_RANK[before.status] ? after : before;
   });
   return sameSteps(merged, previous) ? (previous as ChatProgressStep[]) : merged;
 }
