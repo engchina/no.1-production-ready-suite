@@ -66,6 +66,14 @@ from app.rag.cross_references import (
 )
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.element_locator import chunk_element_ids
+from app.rag.entity_expansion import (
+    ENTITY_EXPANSION_KEY,
+    ENTITY_EXPANSION_ROLE,
+    ENTITY_SEED_ANCHORS,
+    EntityExpansionStore,
+    expansion_metadata,
+    plan_entity_expansion,
+)
 from app.rag.field_filter_reader import merge_field_conditions
 from app.rag.stored_answer import stored_evaluation_input
 from app.schemas.classification import category_label, normalize_category_value
@@ -108,6 +116,13 @@ _REFERENCE_DOCUMENT_CANDIDATES = 5
 _REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded")
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
+# 実体の 1 段の拡張(#1362)で足した chunk を置く候補の位置(先頭からこの件数の後ろ)。rag_engine は
+# この chunk を rerank で並べ替えず(位置を保つ)、文書の選択で後回しにしない。
+_ENTITY_INSERT_AFTER = 3
+# 実体の拡張の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
+_ENTITY_SCORE_DECAY = 0.5
+# 実体の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベースと旧版の扱いだけ)。
+_ENTITY_SCOPE_FILTER_KEYS = _REFERENCE_SCOPE_FILTER_KEYS
 
 # 回答フローの工程の通知: (工程名, "started" / "success" / "error", 経過秒)。
 type StepCallback = Callable[[str, str, float], Awaitable[None]]
@@ -177,6 +192,10 @@ class _SearchState:
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
     reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
+    # 実体の 1 段の拡張(#1362)で足した chunk の記録(診断に出す。chunk_id → 実体・段・起点)と、
+    # 同じ起点での計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
+    entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
+    entity_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     # 取込で参照先を解決していない chunk の参照先(#1382。chunk_id ごと)と、その解決に使う
     # 文書の見出しの列((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     query_reference_targets: dict[str, list[ReferenceTarget]] = field(default_factory=dict)
@@ -277,9 +296,12 @@ class AnswerEngine:
         auto_field_conditions: Sequence[ExtractionFieldCondition] = (),
         approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
+        entity_store: EntityExpansionStore | None = None,
     ) -> None:
         self._settings = settings
         self._oracle = oracle
+        # 実体の表を読む SQL(#1362)。None は Oracle(``EntityStore``)。テストは同じ規則の表を渡す。
+        self._entity_store = entity_store
         self._genai = genai
         self._runtime_knowledge_payload = runtime_knowledge_payload
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
@@ -351,6 +373,12 @@ class AnswerEngine:
         outcome.diagnostics.setdefault("provenance", {})["prompt_version"] = answer_prompt_version(
             overrides
         )
+        if state.entity_expansions:
+            outcome.diagnostics["entity_expansion"] = {
+                "added_count": len(state.entity_expansions),
+                "max_chunks": self._settings.rag_entity_expansion_max_chunks,
+                "chunks": list(state.entity_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
+            }
         if state.reference_expansions:
             outcome.diagnostics["reference_expansion"] = {
                 "added_count": len(state.reference_expansions),
@@ -619,10 +647,15 @@ class AnswerEngine:
             else {}
         )
         referenced = [chunk for chunks in references.values() for chunk in chunks]
-        if referenced:
-            await self._load_classifications(referenced, state)
+        # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
+        entity_chunks = (
+            await self._entity_expansion(request, state, anchors) if expand_references else []
+        )
+        entity_ids = {chunk.chunk_id for chunk in entity_chunks}
+        if referenced or entity_chunks:
+            await self._load_classifications([*referenced, *entity_chunks], state)
         if answer_images_enabled(self._settings):
-            for chunk in [*anchors, *siblings, *referenced]:
+            for chunk in [*anchors, *siblings, *referenced, *entity_chunks]:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
@@ -630,10 +663,16 @@ class AnswerEngine:
                 anchor_id: [state.chunks.get(chunk.chunk_id, chunk) for chunk in chunks]
                 for anchor_id, chunks in references.items()
             }
-        await self._load_first_page_contexts([*anchors, *siblings, *referenced], state)
+            entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
+        await self._load_first_page_contexts(
+            [*anchors, *siblings, *referenced, *entity_chunks], state
+        )
         classifications = state.classifications
         children = []
         for chunk in anchors:
+            if chunk.chunk_id in entity_ids:
+                # 実体の拡張で足す chunk は、拡張の位置に置く(下)。
+                continue
             children.append(
                 _stored_child(
                     chunk,
@@ -650,7 +689,20 @@ class AnswerEngine:
                     first_page_context=_first_page_context(reference, state),
                 )
                 for reference in references.get(chunk.chunk_id, ())
+                if reference.chunk_id not in entity_ids
             )
+        if entity_chunks:
+            insert_at = min(len(children), _ENTITY_INSERT_AFTER)
+            base_score = fused.get(anchors[0].chunk_id, 0.0) if anchors else 0.0
+            children[insert_at:insert_at] = [
+                _stored_child(
+                    chunk,
+                    rrf_score=base_score * _ENTITY_SCORE_DECAY,
+                    classification=classifications.get(chunk.document_id),
+                    first_page_context=_first_page_context(chunk, state),
+                )
+                for chunk in entity_chunks
+            ]
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
             all_children.setdefault(
@@ -666,6 +718,71 @@ class AnswerEngine:
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _entity_expansion(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        anchors: Sequence[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        """質問と上位の候補の実体から、関連する chunk を 1 段だけ足す(#1362)。
+
+        実体は文書レシピで実体の抽出を選んだ文書にだけある。足す chunk は検索範囲のナレッジベース(と
+        利用者の権限・旧版の扱い)の中だけで、合計 ``rag_entity_expansion_max_chunks`` 件まで。
+        上位の候補(起点)は足さない(すでに候補の先頭にある)。読めないとき(実体の表が無い古い
+        schema など)は足さずに回答を続ける。LLM は呼ばない。
+        """
+        if not self._settings.rag_entity_expansion_enabled:
+            return []
+        scope = {
+            key: value
+            for key, value in request.filters.items()
+            if key in _ENTITY_SCOPE_FILTER_KEYS and value.strip()
+        }
+        seeds = list(anchors[:ENTITY_SEED_ANCHORS])
+        key = (
+            request.query,
+            json.dumps(scope, ensure_ascii=False, sort_keys=True),
+            *(chunk.chunk_id for chunk in seeds),
+        )
+        plan = state.entity_plans.get(key)
+        if plan is None:
+            try:
+                plan = await plan_entity_expansion(
+                    self._entity_store_or_default(),
+                    scope,
+                    question=request.query,
+                    seed_chunks=seeds,
+                    exclude_chunk_ids={chunk.chunk_id for chunk in seeds},
+                    max_chunks=self._settings.rag_entity_expansion_max_chunks,
+                )
+            except Exception:  # noqa: BLE001 - 実体の拡張は補助。足さずに回答を続ける。
+                logger.warning("entity expansion failed", exc_info=True)
+                plan = []
+            state.entity_plans[key] = plan
+        added: list[RetrievedChunk] = []
+        for item in plan:
+            marked = expansion_metadata(
+                state.chunks.get(item.chunk.chunk_id, item.chunk), item.info
+            )
+            state.chunks[item.chunk.chunk_id] = marked
+            state.entity_expansions.setdefault(
+                item.chunk.chunk_id,
+                {
+                    "chunk_id": item.chunk.chunk_id,
+                    "document_id": item.chunk.document_id,
+                    **item.info,
+                },
+            )
+            added.append(marked)
+        return added
+
+    def _entity_store_or_default(self) -> EntityExpansionStore:
+        if self._entity_store is None:
+            from app.clients.entity_store import EntityStore
+
+            self._entity_store = EntityStore(self._oracle)
+        return self._entity_store
 
     async def _reference_expansion(
         self,
@@ -1287,6 +1404,10 @@ def _stored_child(
     if element_ids := chunk_element_ids(chunk.metadata):
         # 解析の要素の ID。複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめる(#1331)。
         metadata["element_ids"] = element_ids
+    if isinstance(expansion := chunk.metadata.get(ENTITY_EXPANSION_KEY), dict):
+        # 実体の 1 段の拡張で足した chunk(#1362)。rag_engine は rerank で位置を変えず、文書の選択で
+        # 後回しにせず、文脈の親の枠を確保する。
+        metadata["entity_expansion"] = dict(expansion)
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,
@@ -1504,6 +1625,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
         }
+        if ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {"retrieved_anchor", ""}:
+            # 実体の 1 段の拡張で足した chunk は、検索で当たった chunk と分ける(#1362)。
+            metadata["evidence_role"] = ENTITY_EXPANSION_ROLE
         if retrieval_rank > 0:
             # MCP の根拠は当たった子を関連度の順に先にする（画面の並びは変えない。#1348）。
             metadata["evidence_retrieval_rank"] = retrieval_rank

@@ -114,6 +114,7 @@ from rag_engine.generation.answer_records import (
     _search_terms_for_queries,
     _split_text_rerank_candidates,
     _stored_chunk_answer_record,
+    is_entity_expansion_record,
     load_answer_records,
     preferred_records,
     rank_records,
@@ -532,8 +533,9 @@ def select_documents(ranked_children: Sequence[AnswerRecord], settings: Settings
     for key in sorted(scores, key=lambda k: -scores[k]):
         entry = {"source": sources[key], "score": round(scores[key], 4), "hits": hits[key]}
         trace["deferred" if key in excluded else "selected"].append(entry)
-    kept = [r for r in ranked_children if document_context_key(r) not in excluded]
-    deferred = [r for r in ranked_children if document_context_key(r) in excluded]
+    # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。
+    kept = [r for r in ranked_children if document_context_key(r) not in excluded or is_entity_expansion_record(r)]
+    deferred = [r for r in ranked_children if document_context_key(r) in excluded and not is_entity_expansion_record(r)]
     if step is not None:
         step.add(f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
                  + (f"（{'、'.join(e['source'] for e in trace['deferred'])}）" if excluded else ""))

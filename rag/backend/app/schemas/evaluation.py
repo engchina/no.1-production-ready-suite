@@ -651,6 +651,9 @@ class EvaluationRagOverrides(BaseModel):
     context_group_max_chunks: int | None = Field(default=None, ge=1, le=20)
     reference_expansion_enabled: bool | None = None
     reference_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    # 実体の 1 段の拡張(#1362)。実体の抽出を選んだ文書で、拡張の有り / 無しを比べる。
+    entity_expansion_enabled: bool | None = None
+    entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
 
 

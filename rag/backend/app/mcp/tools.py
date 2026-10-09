@@ -30,6 +30,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -659,7 +660,12 @@ class RagEvidence(BaseModel):
     text_length: int = Field(description="本文の文字数。")
     used_in_answer: bool = Field(description="回答の生成に使った根拠か。")
     role: str | None = Field(
-        default=None, description="根拠の役割（retrieved_anchor / parent_context など）。"
+        default=None,
+        description=(
+            "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。"
+            "entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から"
+            "実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。"
+        ),
     )
     score: float | None = None
     rerank_score: float | None = None
@@ -810,7 +816,10 @@ class SearchOutput(VersionedOutput):
     evidence: list[RagEvidence] = Field(
         description=(
             "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠"
-            "（role=retrieved_anchor。関連度の順）、前後の文脈（neighbor_context など）の順。"
+            "（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、"
+            "前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割に"
+            "なったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に"
+            "入れる。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -861,9 +870,11 @@ class RetrieveEvidenceOutput(VersionedOutput):
     guardrail_warnings: list[str]
     evidence: list[RagEvidence] = Field(
         description=(
-            "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）を先に、前後の文脈"
-            "（neighbor_context など）をその後ろに並べる。回答は作らないので used_in_answer は"
-            " false。"
+            "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった"
+            "根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈"
+            "（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の"
+            "役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで"
+            "上限の内に入れる。回答は作らないので used_in_answer は false。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -1242,9 +1253,32 @@ def _answer_diagnostics(result: SearchResponse) -> dict[str, Any]:
 
 # 検索で当たった chunk（関連度の順位を持つ）の役割。前後の文脈（neighbor_context など）と分ける。
 RETRIEVED_ANCHOR_ROLE = "retrieved_anchor"
+# 実体の 1 段の拡張で足した chunk の役割（#1362）。検索で当たった chunk と同じく順位を持つ。
+ENTITY_EXPANSION_ROLE = "entity_expansion"
+_RANKED_ROLES = frozenset({RETRIEVED_ANCHOR_ROLE, ENTITY_EXPANSION_ROLE})
 
 
-def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChunk]:
+# evidence_limit のうち、実体の 1 段の拡張で足した根拠に確保する割合（#1362）。
+ENTITY_EXPANSION_LIMIT_SHARE = 0.3
+
+
+def _is_entity_expansion(chunk: RetrievedChunk) -> bool:
+    """実体の 1 段の拡張で足した根拠か（役割が前後の文脈になったものも含む。#1362）。"""
+    metadata = chunk.metadata
+    return _metadata_str(metadata, "evidence_role") == ENTITY_EXPANSION_ROLE or isinstance(
+        metadata.get("entity_expansion"), dict
+    )
+
+
+def _evidence_group(chunk: RetrievedChunk) -> tuple[str, str] | None:
+    """根拠の親のかたまり（文書と chunk_group_id）。無ければ None。"""
+    group = _metadata_str(chunk.metadata, "chunk_group_id")
+    return (chunk.document_id, group) if group else None
+
+
+def mcp_evidence_order(
+    citations: Sequence[RetrievedChunk], limit: int | None = None
+) -> list[RetrievedChunk]:
     """MCP の根拠の並び（evidence_limit で切る前。#1348）。
 
     検索の結果（citations）は、文書ごとのかたまりの中を文書の順（前後の文脈を含む）に並べている
@@ -1252,9 +1286,17 @@ def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChu
     埋まり、検索で当たった chunk が落ちる。MCP では次の順にしてから切る。
 
     1. 回答に使った根拠（used_in_answer）。回答に使った順（citations の順）を保つ。
-    2. 検索で当たった chunk（role=retrieved_anchor と、役割の無い根拠）。関連度の順位
-       （rerank の後の順。``evidence_retrieval_rank``）の順で、順位が無ければ citations の順。
+    2. 検索で当たった chunk（role=retrieved_anchor と、役割の無い根拠）と、実体からたどった chunk
+       （role=entity_expansion。#1362）。関連度の順位（rerank の後の順。実体の拡張は候補の中の位置。
+       ``evidence_retrieval_rank``）の順で、順位が無ければ citations の順。
     3. 前後の文脈（neighbor_context / same_page_context / parent_context など）。citations の順。
+
+    ``limit``（evidence_limit）を渡すと、実体の 1 段の拡張で足した根拠（台帳の行・略号の表。親の
+    文脈の役割になったものも含む）を、上限の ``ENTITY_EXPANSION_LIMIT_SHARE`` の割合（最低 1 件）
+    まで上限の内に入れる（#1362）。拡張の根拠と同じ親のかたまり（文書と ``chunk_group_id``）の前後の
+    文脈（略号の表の続きなど）も、拡張の根拠の後に同じ枠で入れる。置く位置は 2 の検索で当たった
+    chunk の後・3 の前の文脈の前で、上限の内に収まらないときは上限の末尾。すでに上限の内にある
+    根拠は動かさない。
     """
 
     def key(item: tuple[int, RetrievedChunk]) -> tuple[int, int, int]:
@@ -1263,12 +1305,42 @@ def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChu
         if metadata.get("evidence_model_used") is True:
             return (0, 0, position)
         role = _metadata_str(metadata, "evidence_role")
-        if role is not None and role != RETRIEVED_ANCHOR_ROLE:
+        if role is not None and role not in _RANKED_ROLES:
             return (2, 0, position)
         rank = _metadata_int(metadata, "evidence_retrieval_rank")
         return (1, rank if rank is not None and rank > 0 else sys.maxsize, position)
 
-    return [chunk for _, chunk in sorted(enumerate(citations), key=key)]
+    keyed = sorted(enumerate(citations), key=key)
+    ordered = [chunk for _, chunk in keyed]
+    if limit is None or limit <= 0 or len(ordered) <= limit:
+        return ordered
+    expansions = [index for index, chunk in enumerate(ordered) if _is_entity_expansion(chunk)]
+    if not expansions:
+        return ordered
+    # 拡張の根拠と同じ親のかたまりの前後の文脈（略号の表の続きなど）も、拡張の根拠の後に確保する。
+    groups = {_evidence_group(ordered[index]) for index in expansions} - {None}
+    expansion_set = set(expansions)
+    contexts = [
+        index
+        for index, chunk in enumerate(ordered)
+        if index not in expansion_set
+        and key((0, chunk))[0] == 2
+        and _evidence_group(chunk) in groups
+    ]
+    reserved = [*expansions, *contexts]
+    quota = min(len(reserved), max(1, math.ceil(limit * ENTITY_EXPANSION_LIMIT_SHARE)))
+    inside = [index for index in reserved if index < limit]
+    moved = [index for index in reserved if index >= limit][: max(0, quota - len(inside))]
+    if not moved:
+        return ordered
+    moving = {id(ordered[index]) for index in moved}
+    rest = [chunk for chunk in ordered if id(chunk) not in moving]
+    # 2 の終わり（前後の文脈の始まり）。前後の文脈が無ければ末尾。
+    ranked_end = next(
+        (index for index, chunk in enumerate(rest) if key((0, chunk))[0] == 2), len(rest)
+    )
+    position = min(ranked_end, limit - len(moved))
+    return [*rest[:position], *(ordered[index] for index in moved), *rest[position:]]
 
 
 def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
@@ -1284,7 +1356,7 @@ def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
 
 def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any]:
     # 回答に使った根拠を先に、検索で当たった chunk、前後の文脈の順にする（#1348）。
-    ordered = mcp_evidence_order(result.citations)
+    ordered = mcp_evidence_order(result.citations, evidence_limit)
     answer = _answer_diagnostics(result)
     reason = answer.get("insufficient_reason")
     raw_envelope = answer.get("envelope")
@@ -1975,7 +2047,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
-        ordered = mcp_evidence_order(result.citations)
+        ordered = mcp_evidence_order(result.citations, limit)
         citations = await _with_extraction_recipe_ids(None, ordered[:limit])
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,

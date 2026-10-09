@@ -370,7 +370,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
     # 同一parentだけでは、スクリーンショットと別parentの操作説明が切り離される。
     # 検索済み主根拠は落とさず、明示された補助枠または空き枠を前後の操作説明に使う。
     # 上限まで候補がある場合も、既存の同一操作を並べてbatch境界の分断を減らす。
-    primary = ranked_groups[:request.max_records]
+    primary = _reserve_entity_expansion_groups(ranked_groups, request.max_records)
     support_limit = min(3, max(0, request.max_records - len(primary), request.support_record_limit), max(0, request.neighbor_child_count))
     selected_ids = {record_context_key(group.record) for group in primary}
     # 全候補を集めてから機能別に選ぶ。上位画面が補助枠を独占しない。
@@ -442,6 +442,42 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         selected = ordered
     evidence_tree = _finalize_parent_evidence(selected)
     return _context_bundle_from_parent_evidence(evidence_tree, max_chars=request.max_chars)
+
+
+def _is_entity_expansion(record: Any) -> bool:
+    metadata = getattr(record, "metadata", None)
+    return isinstance(metadata, dict) and isinstance(metadata.get("entity_expansion"), dict)
+
+
+def _group_has_entity_expansion(group: _ParentEvidenceBuilder) -> bool:
+    """実体の 1 段の拡張の根拠（#1362）を起点に持つ親か。"""
+    return any(child.role == "retrieved_anchor" and _is_entity_expansion(child.record) for child in group.children.values())
+
+
+def _reserve_entity_expansion_groups(
+    ranked_groups: Sequence[_ParentEvidenceBuilder], max_records: int
+) -> list[_ParentEvidenceBuilder]:
+    """context の親の枠（``max_records``）に、実体の 1 段の拡張の根拠の親を確保する（#1362）。
+
+    拡張の根拠（台帳の行・略号の表）は rerank の分数を持たないため、分数の順で切ると落ちる。枠の外に落ちた
+    拡張の親を、枠の後ろ（拡張でない親の分数の低い側）と入れ替える。入れ替えるのは枠の半分まで（検索で
+    当たった主根拠を半分より多くは落とさない）。拡張の根拠が無ければ今までと同じ。
+    """
+    primary = list(ranked_groups[:max_records])
+    reserved = [group for group in ranked_groups[max_records:] if _group_has_entity_expansion(group)]
+    if not reserved:
+        return primary
+    room = max(0, max_records - max(1, max_records // 2) - sum(_group_has_entity_expansion(g) for g in primary))
+    reserved = reserved[:room]
+    if not reserved:
+        return primary
+    kept = list(primary)
+    for _ in reserved:
+        for index in range(len(kept) - 1, -1, -1):
+            if not _group_has_entity_expansion(kept[index]):
+                del kept[index]
+                break
+    return [*kept, *reserved]
 
 
 def _operation_labels(record: Any) -> set[str]:

@@ -187,6 +187,44 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 出します。閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。質問ごとに回答（モデルの呼び出し
 3〜5 回）を作るため、dev の 40 問で 40 分前後かかります（#1335 の 33 問の実測から見積もり）。
 
+## 実体の層の有り / 無しで比べる（#1362）
+
+実体の層（文書レシピの任意の処理「実体の抽出」と、回答の検索の 1 段の拡張。
+[../../docs/rag-engine.md](../../docs/rag-engine.md) の `RAG_ENTITY_INDEX_ENABLED`）の効果は、同じ資料を
+**別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます。拡張は既定で OFF なので、
+評価の backend は `RAG_ENTITY_EXPANSION_ENABLED=true` で起動します（実体を持たないナレッジベースでは何も
+足さない）（同じ文書を両方に入れると、実体を
+持つ文書が両方の検索範囲に入るため）。
+
+```bash
+cd rag/backend
+# レシピ無し（既定のレシピ。上の「取り込んで評価する」と同じ）
+uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop.json \
+  --api-base-url http://127.0.0.1:8000 --knowledge-base-name "評価: 多段 実体なし" \
+  --output /tmp/multi-hop.plain.json
+# レシピ有り（すべての文書のレシピで実体の抽出を選ぶ）
+uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop.json \
+  --api-base-url http://127.0.0.1:8000 --knowledge-base-name "評価: 多段 実体あり" --entity-index \
+  --output /tmp/multi-hop.entity.json
+for variant in plain entity; do
+  for split in dev holdout; do
+    uv run python -m app.rag.evaluation_cli /tmp/multi-hop.$variant.json --split $split \
+      --api-base-url http://127.0.0.1:8000 --output /tmp/multi-hop.a.$variant.$split.json
+  done
+done
+```
+
+- 見る値: dev の `bridge` の `evidence_chain_complete_rate`（#1362 の完了条件は 0.8 以上）と、1 段の対照
+  （`single_hop`）が下がらないこと。足した根拠は回答の診断の `entity_expansion`（足した chunk・実体・段・起点・
+  `ambiguous`）で確かめます。
+- 同じ実体のナレッジベースで拡張だけを外して比べるときは、品質評価の `rag_overrides` の
+  `entity_expansion_enabled: false` を使います。
+- 決定論の確認（CI）: `rag/backend/tests/test_entity_layer.py` が、この資料の原稿から作った chunk で、bridge の
+  全問の台帳の行・組織規程の略号と承認者の根拠が 1 段の拡張で足されることを確かめます（上位の候補には、台帳・
+  組織規程以外の必要な根拠の chunk を置く）。取れないのは、運用要領の連携元から 2 段たどる 1 件
+  （`br-wms-link-department` の受発注管理システムの行）です。組織規程の第 4 章（承認者の代理）は実体では
+  つながらない（同じ文書の中の参照）ため、実体の層の対象にしていません。
+
 ## 業務 Agent と比べる（D）
 
 D は、同じナレッジベースを参照する検索・回答プロファイルを使う業務 Agent（スキル `business_rag_research`）の Run です。

@@ -760,6 +760,22 @@ schema の変更は無い。表示の本文・embedding は変えない。
 4. 解析の結果は Middle JSON（schema 2.0）から読む。見出しの block は見出しとして読む（3.x の content list では本文だった）ため、
    再解析した文書は節の見出しの列（`section_path`）が付く。頁のヘッダー・フッター・頁番号は本文に入れない。
 
+## 既存環境の更新手順（#1362 実体の層: 実体の表と、検索の 1 段の拡張）
+
+文書レシピの任意の処理「実体の抽出」（`entity_index_enabled`。既定は使わない）と、回答の検索の実体の 1 段の
+拡張を足した。
+
+1. システムテーブルを更新する（migration `20261009_001_entity_layer`。表 `rag_entities`・`rag_entity_aliases`・
+   `rag_entity_chunks` と索引を無ければ作る。データを削除しないので承認は要らない）。更新するまで、回答の検索は
+   実体の表を読めずに拡張を行わない（回答は続ける。backend のログに `entity expansion failed`）。実体の抽出を
+   選んだレシピの取込は、表が無いため「実体の抽出の保存に失敗しました」で止まる。
+2. backend を再起動する。拡張は既定で OFF（`RAG_ENTITY_EXPANSION_ENABLED=false`）で、既存の文書は実体を
+   持たないため、検索の結果は変わらない。
+3. 使うときは、`backend/.env` に `RAG_ENTITY_EXPANSION_ENABLED=true` を書いて backend を再起動し、文書レシピの
+   処理設定で `entity_index_enabled` を有効にして（API の
+   `PUT /api/documents/{document_id}/recipes/{recipe_id}`。画面の項目は未対応）、その文書を再処理する。
+   列名は `entity_name_columns` / `entity_attribute_columns` で選べる（無ければ列名で決める）。
+
 ## 既存環境の更新手順（#1248 文書の版: 新しい版に置き換えた文書を検索から外す）
 
 文書詳細の「版」で、文書を置き換えた新しい版を記録できるようにした。置き換え済み（旧版）の文書の chunk は、既定では回答の検索の対象から外す。

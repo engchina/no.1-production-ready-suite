@@ -16,7 +16,10 @@
    `--keep-superseded-active` を渡すと登録せず、旧版も今有効な文書のまま検索させる
    （旧版の紛らわしさの測定）。
 5. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
-6. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
+6. `--entity-index` を渡したとき（#1362）は、すべての文書のレシピで実体の抽出（文書レシピの
+   任意の処理 ``entity_index_enabled``）を選んで取り込む。実体の層の有り / 無しを、別のナレッジ
+   ベースに取り込んで比べる。
+7. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
    業務ガイド（`support-guides.json`。参照の `file:` も文書 ID に置き換える）を取り込んで公開し、
    `search_answer_profile_id` を入れた評価セット（業務ガイドあり = C）を `--guided-output` に書く。
 
@@ -65,6 +68,14 @@ _FAILED_STATUSES = frozenset({"ERROR", "FAILED"})
 
 class CorpusError(RuntimeError):
     """利用者へ返す失敗（exit code 2）。"""
+
+
+def recipe_for(path: Path, *, entity_index: bool = False) -> dict[str, Any]:
+    """ファイルの文書レシピ（拡張子ごとの前処理と、選んだときは実体の抽出。#1362）。"""
+    recipe: dict[str, Any] = dict(RECIPE_BY_EXTENSION.get(path.suffix.lower(), {}))
+    if entity_index:
+        recipe["entity_index_enabled"] = True
+    return recipe
 
 
 def _file_reference_name(entry: object, key: str) -> str:
@@ -213,8 +224,11 @@ class CorpusLoader:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         log: Callable[[str], None] = print,
+        entity_index: bool = False,
     ) -> None:
         self._client = client
+        # すべての文書のレシピで実体の抽出を選ぶ（#1362）。
+        self._entity_index = entity_index
         self._api = api_base_url.rstrip("/") + "/api"
         self._timeout = timeout_seconds
         self._interval = poll_interval_seconds
@@ -294,7 +308,7 @@ class CorpusLoader:
                 "（このナレッジベースの文書として索引を作ります）"
             )
         recipe_id = self._recipe(document_id)["recipe_id"]
-        recipe = RECIPE_BY_EXTENSION.get(path.suffix.lower())
+        recipe = recipe_for(path, entity_index=self._entity_index)
         if recipe:
             self._data(
                 self._client.put(
@@ -344,13 +358,17 @@ class CorpusLoader:
                     # 承認の後、次の工程の job が状態を変えるまでは同じゲートを承認し直さない。
                     approved.add((document_id, status))
                     self._log(f"approve {name} ({status})")
-                    self._data(
-                        self._client.post(
-                            f"{self._api}/documents/{document_id}/recipes/"
-                            f"{recipe['recipe_id']}/approve",
-                            json={},
-                        )
+                    response = self._client.post(
+                        f"{self._api}/documents/{document_id}/recipes/"
+                        f"{recipe['recipe_id']}/approve",
+                        json={},
                     )
+                    if response.status_code == 409:
+                        # 読んだ後に自動の進行で次の工程へ進んだ（確認待ちでなくなった）。次の
+                        # 読み取りで新しい状態を見る（#1362 の評価で、前処理の後のゲートで起きた）。
+                        self._log(f"skip approve {name} ({status}: 状態が進んだ)")
+                        continue
+                    self._data(response)
             if not pending:
                 return
             if self._clock() >= deadline:
@@ -387,6 +405,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--search-answer-profile-name",
         default=f"業務支援の評価 業務ガイドあり {time.strftime('%Y%m%d-%H%M%S')}",
+    )
+    parser.add_argument(
+        "--entity-index",
+        action="store_true",
+        help="すべての文書のレシピで実体の抽出（実体の層。#1362）を選んで取り込む",
     )
     parser.add_argument(
         "--keep-superseded-active",
@@ -428,7 +451,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         with httpx.Client(
             headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, trust_env=False
         ) as client:
-            loader = CorpusLoader(client, args.api_base_url, timeout_seconds=args.timeout)
+            loader = CorpusLoader(
+                client,
+                args.api_base_url,
+                timeout_seconds=args.timeout,
+                entity_index=args.entity_index,
+            )
             knowledge_base_id = args.knowledge_base_id or loader.create_knowledge_base(
                 args.knowledge_base_name
             )

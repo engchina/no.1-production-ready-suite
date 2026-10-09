@@ -263,6 +263,38 @@ def test_main_requires_guides_and_guided_output_together(
     assert "一緒に渡してください" in capsys.readouterr().err
 
 
+def test_loader_selects_entity_index_recipe_for_every_document(tmp_path: Path) -> None:
+    """``--entity-index``（#1362）はすべての文書のレシピで実体の抽出を選ぶ（Excel は前処理も）。
+
+    実体の層の有り / 無しは、別のナレッジベースに取り込んで比べる。
+    """
+    (tmp_path / "manual.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "params.xlsx").write_bytes(b"PK")
+    api = FakeApi({"manual.pdf": ["UPLOADED"], "params.xlsx": ["UPLOADED"]})
+    client = httpx.Client(transport=httpx.MockTransport(api), base_url="http://test")
+    loader = CorpusLoader(
+        client,
+        "http://test",
+        poll_interval_seconds=0,
+        sleep=lambda _: None,
+        log=lambda _: None,
+        entity_index=True,
+    )
+
+    for name in ("manual.pdf", "params.xlsx"):
+        loader.ingest(tmp_path / name, "kb-1")
+
+    puts = [call for call in api.calls if call[0] == "PUT"]
+    assert puts == [
+        ("PUT", "/documents/doc-manual.pdf/recipes/r1", {"entity_index_enabled": True}),
+        (
+            "PUT",
+            "/documents/doc-params.xlsx/recipes/r1",
+            {"preprocess_profile": "excel_to_json", "entity_index_enabled": True},
+        ),
+    ]
+
+
 # ---- 文書の版（旧版の登録。#1366） ------------------------------------------------------
 
 VERSIONED_SET: dict[str, Any] = {
@@ -385,3 +417,28 @@ def test_main_keeps_old_versions_active_when_asked(
     assert code == 0
     assert not [call for call in api.calls if call[1].endswith("/superseded-by")]
     assert "document_versions" not in resolved
+
+
+def test_loader_skips_approve_when_the_gate_already_moved(tmp_path: Path) -> None:
+    """読んだ後に自動で次の工程へ進んだゲートの承認（HTTP 409）は失敗にせず、次の読み取りで進む。"""
+    (tmp_path / "manual.pdf").write_bytes(b"%PDF-1.4")
+    api = FakeApi({"manual.pdf": ["UPLOADED", "PREPROCESSED", "INDEXED"]})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/approve"):
+            api.calls.append((request.method, request.url.path.removeprefix("/api"), None))
+            return httpx.Response(
+                409, json={"error_messages": ["確認待ちのレシピのみ承認できます。"]}
+            )
+        return api(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://test")
+    loader = CorpusLoader(
+        client, "http://test", poll_interval_seconds=0, sleep=lambda _: None, log=lambda _: None
+    )
+    documents = {"manual.pdf": loader.ingest(tmp_path / "manual.pdf", "kb-1")}
+
+    loader.wait_indexed(documents)
+
+    approvals = [call[1] for call in api.calls if call[1].endswith("/approve")]
+    assert approvals == ["/documents/doc-manual.pdf/recipes/r1/approve"]

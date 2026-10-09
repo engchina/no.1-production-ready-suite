@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from rag_parser_core.sheet_records import ExcelOptions
 
 from app.config import (
@@ -58,6 +58,11 @@ logger = logging.getLogger(__name__)
 
 ADAPTER_CONFIG_VERSION = 2
 
+# 実体の抽出で名前・属性にする列名（文書レシピの選択肢。#1362）。
+EntityColumnName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+]
+
 AdapterConfigScope = Literal["ingestion", "query"]
 
 # KB 設定フィールド -> Settings フィールドのマッピング(scope ごとの allowlist)。
@@ -86,6 +91,10 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
     "graph_profile": "rag_graph_profile",
+    # 実体の層（#1362。既定 OFF）。索引の保存の後に実体と「実体と chunk の関連」を作る。
+    "entity_index_enabled": "rag_entity_index_enabled",
+    "entity_name_columns": "rag_entity_name_columns",
+    "entity_attribute_columns": "rag_entity_attribute_columns",
     "field_extraction_enabled": "rag_field_extraction_enabled",
     "navigation_summary_enabled": "rag_navigation_summary_enabled",
     "auto_parse_after_preprocess_enabled": "rag_auto_parse_after_preprocess_enabled",
@@ -211,6 +220,10 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     )
     # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
     graph_profile: GraphProfile | None = None
+    # 実体の層（#1362）。None はグローバル継承（既定 OFF）。列名は表の行の名前・属性にする列。
+    entity_index_enabled: bool | None = None
+    entity_name_columns: list[EntityColumnName] | None = Field(default=None, max_length=20)
+    entity_attribute_columns: list[EntityColumnName] | None = Field(default=None, max_length=40)
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
     auto_parse_after_preprocess_enabled: bool | None = None
