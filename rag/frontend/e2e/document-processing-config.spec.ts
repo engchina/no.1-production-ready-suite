@@ -1049,7 +1049,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`Docling 以外の解析結果で親子階層（small-to-big）を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
+  test(`Docling・MinerU 以外の解析結果で親子階層（small-to-big）を選ぶと、構造認識で分割したことを示す (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1072,7 +1072,7 @@ for (const viewport of [
     // 失敗させず構造認識で分割し、その事実と親子で分割する方法を Chunk 一覧の上に出す(#300)。
     const notice = page.getByRole("status").filter({ hasText: "構造認識で分割しました" });
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText("文書解析を Docling にして再解析");
+    await expect(notice).toContainText("文書解析を Docling か MinerU にして再解析");
     await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。")).toBeVisible();
     await expectNoPageOverflow(page);
   });
