@@ -7,6 +7,7 @@
 from datetime import datetime
 from enum import StrEnum
 
+from pr_backend_core.chat_progress import ChatProgressEvent
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.search import RetrievedChunk
@@ -55,9 +56,9 @@ class ChatMessage(BaseModel):
     status: MessageStatus = MessageStatus.COMPLETE
     reply_to_message_id: str | None = None
     created_at: datetime
-    # 回答の処理の段階（3 製品共通の ChatProgressStep。#1146 / #1175）。
-    # 作成中（STREAMING）は今の段階、終わった後は処理の経過。段階を保存していないメッセージは None。
-    progress: list[dict[str, object]] | None = None
+    # 回答の処理の段階のイベント（3 製品共通の契約 `pr_backend_core.chat_progress`。#1359）。
+    # 作成中（STREAMING）は記録の途中、終わった後は終端まで。段階を保存していないメッセージは None。
+    progress: list[ChatProgressEvent] | None = None
 
 
 class ChatAnswerCancelResult(BaseModel):

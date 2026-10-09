@@ -26,6 +26,7 @@ import {
   type CurrentUserPayload,
 } from "./auth";
 import { maskUrlCredentials, mcpUrlCredentialProblem } from "../../src/lib/mcp-url";
+import { progressEventsForStatus } from "./chat-progress-events";
 
 type Json = Record<string, unknown>;
 
@@ -1191,6 +1192,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
     }
     if (method === "GET" && at("runs", "*", "artifacts")) return { artifacts: [] };
+    // チャットの処理の段階のイベント（polling。`since` より後。#1359）。
+    if (method === "GET" && at("runs", "*", "progress")) {
+      return progressPage(run, Number(query.get("since") ?? 0));
+    }
     // RAG の図の根拠を開く短命の URL（#1311）。spec は `http://rag.e2e.test/**` を page.route で応答する。
     if (method === "GET" && at("runs", "*", "figure-url")) {
       return {
@@ -1225,6 +1230,19 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (method === "POST" && at("runs", "*", "cancel")) {
       run.status = "cancelled";
+      // spec が積んだ処理の段階のイベントには、backend と同じく停止の終端を足す（#1359）。
+      const events = run.progress_events;
+      if (Array.isArray(events) && !events.some((event) => (event as Json).type === "terminal")) {
+        events.push({
+          schema_version: 1,
+          type: "terminal",
+          seq: events.length + 1,
+          target_id: run.id,
+          attempt: 0,
+          emitted_at: new Date().toISOString(),
+          status: "cancelled",
+        });
+      }
       return run;
     }
     if (method === "POST" && at("runs", "*", "resume")) {
@@ -2151,6 +2169,73 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   return undefined;
 }
 
+/** Run の処理の段階のイベント（spec が入れていなければ、状態から作る最小のイベント。#1359）。 */
+function runProgressEvents(run: Json): Json[] {
+  return Array.isArray(run.progress_events) ? (run.progress_events as Json[]) : progressEventsForStatus(run);
+}
+
+/** polling の応答（backend の `chat_progress_page`）。 */
+function progressPage(run: Json, since: number): Json {
+  const events = runProgressEvents(run);
+  return {
+    target_id: run.id,
+    attempt: 0,
+    events: events.filter((event) => Number(event.seq) > since),
+    last_seq: events.length > 0 ? Number(events[events.length - 1].seq) : 0,
+    terminal: events.some((event) => event.type === "terminal"),
+  };
+}
+
+function isRunPayload(value: unknown): value is Json {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Json).goal === "string" &&
+    typeof (value as Json).status === "string" &&
+    Array.isArray((value as Json).steps)
+  );
+}
+
+/** 応答の Run（単体・`runs` の一覧）に処理の段階のイベントを入れる（state は書き換えない）。 */
+function withRunProgress(data: unknown): unknown {
+  const decorate = (run: Json): Json => ({ ...run, progress_events: runProgressEvents(run) });
+  if (isRunPayload(data)) return decorate(data);
+  if (typeof data === "object" && data !== null && Array.isArray((data as Json).runs)) {
+    return { ...(data as Json), runs: ((data as Json).runs as unknown[]).map((run) => (isRunPayload(run) ? decorate(run) : run)) };
+  }
+  return data;
+}
+
+/**
+ * 処理の段階の SSE（backend の `chat_progress_sse_response`）。e2e は stream を保てないため、続き（`since` と
+ * `Last-Event-ID` の大きい方）のイベントと heartbeat を送って閉じる。ブラウザが `retry` の後に `Last-Event-ID` で
+ * 張り直すので、続けて届く。終わった Run を続きから求めたら 204。
+ */
+async function fulfillProgressStream(route: Route, state: MockApiState, runId: string, url: URL, headers: Record<string, string>) {
+  const run = state.runs.find((candidate) => candidate.id === runId);
+  if (!run) {
+    await fulfillHttpError(route, new HttpError(404, "実行が見つかりません。"));
+    return;
+  }
+  if (!agentAllowed(state, run.agent_id)) {
+    await fulfillHttpError(route, new HttpError(403, "この業務 Agent を使う権限がありません。"));
+    return;
+  }
+  const lastEventId = Number(headers["last-event-id"] ?? 0);
+  const cursor = Math.max(Number(url.searchParams.get("since") ?? 0), Number.isFinite(lastEventId) ? lastEventId : 0);
+  const page = progressPage(run, cursor);
+  if (page.terminal && cursor >= Number(page.last_seq)) {
+    await route.fulfill({ status: 204, headers: { "Cache-Control": "no-cache" }, body: "" });
+    return;
+  }
+  const lines = ["retry: 500\n\n"];
+  for (const event of page.events as Json[]) {
+    lines.push(`id: ${String(event.seq)}\nevent: chat_progress\ndata: ${JSON.stringify(event)}\n\n`);
+  }
+  lines.push(`event: heartbeat\ndata: ${JSON.stringify({ last_seq: page.last_seq })}\n\n`);
+  await route.fulfill({ status: 200, contentType: "text/event-stream", headers: { "Cache-Control": "no-cache" }, body: lines.join("") });
+}
+
 async function fulfillJson(route: Route, status: number, payload: unknown) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(payload) });
 }
@@ -2216,6 +2301,11 @@ export async function installMockApi(page: Page): Promise<MockApi> {
       });
       return;
     }
+    const progressStream = /^\/api\/runs\/([^/]+)\/progress\/stream$/.exec(url.pathname);
+    if (method === "GET" && progressStream) {
+      await fulfillProgressStream(route, mockApi.state, decodeURIComponent(progressStream[1]), url, await request.allHeaders());
+      return;
+    }
     if (method === "GET" && /^\/api\/runs\/[^/]+\/events$/.test(url.pathname)) {
       await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
       return;
@@ -2237,7 +2327,7 @@ export async function installMockApi(page: Page): Promise<MockApi> {
         });
         return;
       }
-      await fulfillJson(route, 200, { data, error_messages: [], warning_messages: [] });
+      await fulfillJson(route, 200, { data: withRunProgress(data), error_messages: [], warning_messages: [] });
     } catch (error) {
       if (error instanceof HttpError) {
         await fulfillHttpError(route, error);

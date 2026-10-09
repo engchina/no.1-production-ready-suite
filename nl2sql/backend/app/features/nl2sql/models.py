@@ -13,6 +13,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pr_backend_core import CursorPage
+from pr_backend_core.chat_progress import ChatProgressEvent
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -1249,6 +1250,9 @@ class JobCreateData(BaseModel):
     status: JobStatus
     created_at: str
     steps: list[JobStepData] = Field(default_factory=list)
+    # 作成時の処理の段階のイベント（開始待ちと 5 段階。#1359）。画面は会話を取り直す前から
+    # 段階を出す。
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
 class SqlChatExecutionSummary(BaseModel):
@@ -1329,10 +1333,15 @@ class JobData(BaseModel):
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
     # 実行の回数（worker が claim するたびに増える。0 は未着手）。lease の切れたジョブを別の実行が
-    # 引き継ぐと段階は初めからになるので、画面は attempt が変わったら段階の一覧を作り直す（#1358）。
+    # 引き継ぐと段階は初めからになる（#1358）。処理の段階のイベントの試行（`attempt`）は
+    # これより 1 小さい（最初の実行が 0。#1359）。
     attempt: int = 0
     # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
     last_execution: SqlChatExecutionSummary | None = None
+    # 処理の段階のイベント（3 製品共通の契約。#1359）。チャットの段階（`ChatProgress`）はこれを
+    # 積んで出す。差分は `GET /jobs/{job_id}/progress`（polling）・`/progress/stream`（SSE）。
+    # SQL 生成の画面の工程の表示は `steps` のまま。
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
 class SqlChatSummary(BaseModel):

@@ -17,7 +17,12 @@
 - 実行の規則は SQL 生成の画面の自動実行と同じ: 安全検査（SELECT だけ。DML・DDL などは `SQL_BLOCKED` で遮断し、ジョブは失敗。実行しない。SQL 生成の画面にも DML の確認の流れは無い）、業務プロファイルの範囲、権限（`nl2sql.sql.execute`）、DeepSec・接続の分離（#904。worker の `actor_scope`）、上限、監査（実行履歴）。SELECT だけを実行するので確認語は使わない（確認語は管理 SQL の書き込み・削除だけ）。
 - 実行の権限が無い利用者（`menu.chat` だけ）の送信は、拒否せず生成だけにする（route が `generation_only` にする）。バッジは「安全検査済み・未実行」、吹き出しに理由（「SQL を実行するには…」）。
 - 実行の失敗（Oracle のエラー）はジョブを失敗にしない。生成した SQL を残し、実行の段階を失敗、吹き出しに失敗の `Banner`（1 文目は SQL 生成のジョブと同じ利用者向けの文、ORA は「詳細」）と「もう一度実行」を出す。
-- 処理の段階（`ChatProgress`）は、ジョブの全段階（開始待ち・準備・生成・安全性の確認・実行・結果の整形）を出し、終端まで今の段階の行が必ずある（`features/nl2sql/chatProgress.ts`。#1176）。経過時間は送信から数え続ける。
+- 処理の段階（`ChatProgress`）は、ジョブの全段階（開始待ち・準備・生成・安全性の確認・実行・結果の整形）を出し、終端まで今の段階の行が必ずある（#1176）。経過時間は送信から数え続ける。
+  - 段階は backend がジョブの処理の段階のイベント（3 製品共通の契約。`pr_backend_core.chat_progress`。ジョブの `progress_events`）として記録する（#1359）。記録の位置は `service.py` の `_record_job_progress_*` だけ: 作成で開始待ちと 5 段階を待機中で出して開始待ちを実行中（ジョブの作成時刻から）、worker の開始で開始待ちを完了・準備を実行中、`_transition_job_steps` で段階の終了（完了・失敗・未実行）と次の開始、完了は結果の整形を完了にして終端（SQL の遮断・実行の失敗は `failed`）、例外の失敗は実行中の段階を失敗、停止（`JOB_CANCELLED`）は実行中の段階に停止の印（`params.stopped`）を付けて未実行にして終端 `cancelled`。worker が始める前の失敗・停止は開始待ちが失敗・停止になる。最後の段階（結果の整形）は結果の保存まで実行中のまま（終端と同じ保存で記録する）。
+  - 補足は `params` に値だけを入れ、文言は画面が付ける: 生成の段階に生成方法（`engine`）、安全性の確認の完了に参照した表（先頭 3 件の `tables` と `table_count`）、実行の完了に取得した行数（`rows`）。
+  - 試行（`attempt`）はジョブの `attempt` より 1 小さい（最初の実行が 0）。lease の切れたジョブを引き継いだ実行（2 回目以降の claim）は新しい試行で段階を出し直し、画面は段階の一覧を作り直す（#1358）。番号（`seq`）は続ける。
+  - 画面（`SqlChatPage.tsx` の `SqlChatTurn`）は共有の `useChatProgressStream` で、処理中は `GET /api/nl2sql/jobs/{job_id}/progress/stream`（SSE）を受け取り、使えなければ `GET …/progress?since=` の polling に縮退する。会話の取り直し（`GET /api/nl2sql/chats/{id}`。結果の取得）に入っている `progress_events` も積む。投入の応答（`POST /api/nl2sql/jobs`）にも作成時のイベントが入り、会話を取り直す前から開始待ちの段階を出す（取り直しで段階の行が増えて会話の欄の末尾がずれない）。`features/nl2sql/chatProgress.ts` は段階の定義（名前の i18n と補足）だけを持つ。
+  - SQL 生成の画面の工程の表示（`WorkflowProgressStrip`）はジョブの `steps` のまま。
 - #1176 より前のチャットのターン（`generation_only` だけを持つ）は、今までどおり会話として開け、続けられる（実行は「未実行」のまま。「実行」で実行できる）。
 
 ## 生成した SQL の実行の表示（#1154 / #1176）
@@ -45,6 +50,7 @@
 - `GET /api/nl2sql/chats`: 本人の会話の先頭ジョブを、現在利用可能な業務プロファイルで絞って 50 件ずつ返す。続きは `next_cursor`。
 - `GET /api/nl2sql/chats/{conversation_id}`: 本人の会話と各ターンの永続ジョブを返す。ID は先頭のジョブ ID。
 - 停止は既存の `POST /api/nl2sql/jobs/{job_id}/cancel`。既存の worker・lease・fence・再起動時の復旧を使う。
+- 処理の段階（#1359）: `GET /api/nl2sql/jobs/{job_id}/progress?since=<seq>`（polling。`ChatProgressPage`）と `GET /api/nl2sql/jobs/{job_id}/progress/stream?since=<seq>`（SSE。`Last-Event-ID` も受ける。`id:` に `seq`、イベントの無い間は 10 秒ごとに heartbeat、終端を送ったら閉じ、終わったジョブを続きから求めたら 204）。権限・所有者・業務プロファイルの判定は `GET /api/nl2sql/jobs/{job_id}` と同じ。SSE はジョブの文書を `run_sync_io` で 1 秒ごとに読み直すので、worker が別のプロセスでも届く。
 
 Oracle の既存 `NL2SQL_STATE_DOCUMENTS` の `jobs` を正本にする。新しい表や製品間コード依存は増やさない。ジョブに会話 ID・親ジョブと先頭マーカーを保存する。`sessionStorage` はユーザー・DB context ごとの選択 ID と未送信草稿だけに使い、会話の本文は保存しない。
 
@@ -56,4 +62,4 @@ Oracle の既存 `NL2SQL_STATE_DOCUMENTS` の `jobs` を正本にする。新し
 
 ## 検証
 
-`backend/tests/test_sql_chat_job_execution.py` が送信のジョブの中の実行（#1176: 同じジョブで実行・行は 1 回だけ受け取る・期限と掃除・DML の遮断・実行の失敗・権限が無いと生成だけ・#1176 より前のターンの継続）を、`test_nl2sql_db_roundtrips.py` の `test_business_sql_connection_follows_job_actor`（`chat_turn`）がその接続の種類を、`frontend/tests/sql-chat-progress.test.ts` が終端まで今の段階があることを確認する。`backend/tests/test_sql_chat_execute.py`・`test_nl2sql_db_roundtrips.py` の `test_chat_execution_connection_follows_requesting_actor` がチャットの実行（同じ経路・権限・上限・失敗・接続の種類・要約の保存）を、`frontend/tests/e2e/sql-chat-execution.spec.ts` が実行の画面（実行中・成功・0 行・打ち切り・失敗・DML・権限・開き直し）を確認する。`backend/tests/test_sql_chat.py` が生成のみ（Select AI Agent を含む）、文脈、別 worker での復元、所有者・プロファイル、古い会話、元の実行動作と安全検査を確認する。`frontend/tests/e2e/sql-chat.spec.ts` が desktop / 375px の多輪送信・履歴開閉・復元・停止・失敗・生成だけの権限・生成方法の選択と送る値・業務プロファイルの欄の形を確認する。実 Oracle / OCI 接続の動作確認と、決定論スタブによる CI の確認を区別する。
+`backend/tests/test_sql_chat_job_execution.py` が送信のジョブの中の実行（#1176: 同じジョブで実行・行は 1 回だけ受け取る・期限と掃除・DML の遮断・実行の失敗・権限が無いと生成だけ・#1176 より前のターンの継続）を、`test_nl2sql_db_roundtrips.py` の `test_business_sql_connection_follows_job_actor`（`chat_turn`）がその接続の種類を、`backend/tests/test_nl2sql_job_progress.py` が処理の段階のイベントの記録の位置（作成・開始・各段階・完了・失敗・停止・引き継いだ試行・終端まで今の段階があること）と配信（polling・SSE の続き・204・権限）を、`frontend/tests/sql-chat-progress.test.ts` が段階の名前と補足を確認する。`backend/tests/test_sql_chat_execute.py`・`test_nl2sql_db_roundtrips.py` の `test_chat_execution_connection_follows_requesting_actor` がチャットの実行（同じ経路・権限・上限・失敗・接続の種類・要約の保存）を、`frontend/tests/e2e/sql-chat-execution.spec.ts` が実行の画面（実行中・成功・0 行・打ち切り・失敗・DML・権限・開き直し）を確認する。`backend/tests/test_sql_chat.py` が生成のみ（Select AI Agent を含む）、文脈、別 worker での復元、所有者・プロファイル、古い会話、元の実行動作と安全検査を確認する。`frontend/tests/e2e/sql-chat.spec.ts` が desktop / 375px の多輪送信・履歴開閉・復元・停止・失敗・生成だけの権限・生成方法の選択と送る値・業務プロファイルの欄の形を確認する。実 Oracle / OCI 接続の動作確認と、決定論スタブによる CI の確認を区別する。

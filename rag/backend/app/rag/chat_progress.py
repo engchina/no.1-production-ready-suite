@@ -1,13 +1,17 @@
-"""チャットの処理の段階（3 製品共通の `ChatProgressStep`。#1146）。
+"""チャットの処理の段階（3 製品共通の契約 `pr_backend_core.chat_progress`。#1146 / #1359）。
 
 回答の生成の内部の工程（``SearchStageProgress``。`history_rewrite` / `field_filter` / 回答フローの
 ``answer_step:<工程名>`` / `answer_guardrail`）を、利用者向けの粗い段階
-（質問の整理 → 文書の検索 → 並べ替え → 回答の作成 → 回答の確認）へまとめる。
+（質問の整理 → 文書の検索 → 並べ替え → 回答の作成 → 回答の確認）へまとめ、段階のイベントとして
+記録する（記録・番号・状態の進み方・終端は共通の `ChatProgressRecorder` が持つ）。
 
-段階の形は NL2SQL・Agent と同じ契約（platform の `ChatProgress` の `ChatProgressStep`）:
-``{"id", "label", "status": "pending" | "running" | "done" | "failed" | "skipped",
-"startedAt"?, "finishedAt"?, "detail"?}``。detail には件数・回数などの短い補足だけを入れ、
-技術的な詳細（例外の種類・内部の工程名）は入れない。
+対象（`target_id`）は作成中の ASSISTANT のメッセージの id。記録したイベントの一覧は、
+そのメッセージの `progress_json` に保存し、回答の配信（SSE の `chat_progress`）と、段階の
+polling / SSE の endpoint（`GET .../messages/{回答の id}/progress[/stream]`）で配る。
+
+段階の名前（利用者向けの文言）は記録に入れない。画面が段階の id から i18n で付ける
+（`frontend/src/lib/chat-progress.ts`）。補足は値（`params`）だけを入れる: 補正検索の回数
+（`{"attempt": n}`）・回答の根拠の件数（`{"citations": n}`）。
 """
 
 from __future__ import annotations
@@ -15,11 +19,18 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Literal
+from typing import Any
 
+from pr_backend_core.chat_progress import (
+    ChatProgressRecorder,
+    ChatProgressSink,
+    ChatProgressStepEvent,
+    ChatProgressTerminalEvent,
+    ChatProgressTerminalStatus,
+    dump_chat_progress_events,
+)
 from pr_backend_core.observability import request_id_var
 
 from app.rag.answer_engine import ANSWER_STEP_STAGE_PREFIX
@@ -27,21 +38,19 @@ from app.rag.pipeline import SearchStageProgress
 
 logger = logging.getLogger(__name__)
 
-type ChatProgressStatus = Literal["pending", "running", "done", "failed", "skipped"]
-
 REWRITE_QUERY = "rewrite_query"
 RETRIEVE = "retrieve"
 RERANK = "rerank"
 GENERATE_ANSWER = "generate_answer"
 CHECK_GUARDRAIL = "check_guardrail"
 
-# 段階の id と利用者向けの文言（画面にそのまま出す。並びは処理の順）。
-CHAT_PROGRESS_STEPS: tuple[tuple[str, str], ...] = (
-    (REWRITE_QUERY, "質問を整理しています"),
-    (RETRIEVE, "関係する文書を探しています"),
-    (RERANK, "並べ替えています"),
-    (GENERATE_ANSWER, "回答を作っています"),
-    (CHECK_GUARDRAIL, "回答を確認しています"),
+# 段階の id（並びは処理の順。最初に待機中として出し、画面の並びを決める）。名前は画面の i18n。
+CHAT_PROGRESS_STEP_IDS: tuple[str, ...] = (
+    REWRITE_QUERY,
+    RETRIEVE,
+    RERANK,
+    GENERATE_ANSWER,
+    CHECK_GUARDRAIL,
 )
 
 # パイプラインの工程（`app/rag/pipeline.py` の `_observe_stage`）→ 段階。
@@ -95,171 +104,206 @@ def chat_progress_step_id(stage: str, *, rerank_enabled: bool = True) -> str | N
     return None
 
 
-def _now_iso(now: datetime) -> str:
-    return now.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-@dataclass
-class _StepState:
-    id: str
-    label: str
-    status: ChatProgressStatus = "pending"
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    detail: str | None = None
-    # 今の「実行中」が始まった時刻（ログの所要時間）。
-    running_since: float | None = None
-
-    def to_payload(self) -> dict[str, str]:
-        payload = {"id": self.id, "label": self.label, "status": self.status}
-        if self.started_at is not None:
-            payload["startedAt"] = _now_iso(self.started_at)
-        if self.finished_at is not None:
-            payload["finishedAt"] = _now_iso(self.finished_at)
-        if self.detail:
-            payload["detail"] = self.detail
-        return payload
+type ChatProgressEventItem = ChatProgressStepEvent | ChatProgressTerminalEvent
 
 
 class ChatProgressTracker:
-    """1 モデル分の回答の段階を、内部の工程の進捗から組み立てる。
+    """1 モデル分の回答（作成中の ASSISTANT のメッセージ）の段階を、内部の工程の進捗から記録する。
 
     実行中の段階は 1 つだけにする（別の段階の工程が始まったら、前の実行中の段階は終わったと
-    する）。工程は入れ子になる（例: 文書検索の中の Rerank）ので、内側の工程が始まった時点で
-    外側の段階は終える。
+    する。`start(..., exclusive=True)`）。工程は入れ子になる（例: 文書検索の中の Rerank）ので、
+    内側の工程が始まった時点で外側の段階は終える。
     段階は先へだけ進める（#1358）。回答フローは前の段階の工程へ戻ることがある（Rerank の後の
     文書の選択・根拠確認、補正検索（CRAG）の 2 回目の文書検索）。戻るたびに完了した段階を実行中に
     戻すと、画面の「N ステップ完了」の一覧から段階が消えて、また現れる。前の段階の工程は今の段階の
-    続きとして扱い、補正検索の回数だけを検索の段階の補足に出す。
+    続きとして扱い、補正検索の回数だけを検索の段階の値（`attempt`）に出す。
+
+    記録したイベントは `sink`（`attach` で後から付けられる）に 1 件ずつ渡す。保存は呼び出し元が
+    `dump()` で行う。スレッドから同時に呼ばない（イベントループの中で呼ぶ）。
     """
 
     def __init__(
         self,
+        message_id: str,
         *,
         rerank_enabled: bool = True,
         model_id: str = "",
+        events: list[ChatProgressEventItem] | None = None,
+        sink: ChatProgressSink | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         timer: Callable[[], float] = perf_counter,
     ) -> None:
         self._rerank_enabled = rerank_enabled
         self._model_id = model_id
-        self._clock = clock
         self._timer = timer
         self._trace_id: str | None = None
-        self._steps = [
-            _StepState(id=step_id, label=label) for step_id, label in CHAT_PROGRESS_STEPS
-        ]
-        self._by_id = {step.id: step for step in self._steps}
-        self._last_touched: _StepState | None = None
+        self._sink = sink
+        # 段階が実行中になった時刻（ログの所要時間）。
+        self._running_since: dict[str, float] = {}
+        # 最後に始めた段階（戻りの判定）。
+        self._last_index: int | None = None
+        self._recorder = ChatProgressRecorder(
+            message_id, events=events or (), sink=self._on_event, clock=clock
+        )
+        self._recorder.declare(*CHAT_PROGRESS_STEP_IDS)
         if not rerank_enabled:
-            self._by_id[RERANK].status = "skipped"
+            self._recorder.finish(RERANK, "skipped")
 
-    def snapshot(self) -> list[dict[str, str]]:
-        """契約の形（`ChatProgressStep[]`）の今の段階の一覧。"""
-        return [step.to_payload() for step in self._steps]
+    @property
+    def message_id(self) -> str:
+        return self._recorder.target_id
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    @property
+    def events(self) -> list[ChatProgressEventItem]:
+        """記録したイベントの全体（`seq` の順）。"""
+        return self._recorder.events
+
+    @property
+    def last_seq(self) -> int:
+        return self._recorder.last_seq
+
+    @property
+    def terminal(self) -> ChatProgressTerminalStatus | None:
+        return self._recorder.terminal
+
+    def dump(self) -> list[dict[str, Any]]:
+        """保存の JSON（`progress_json`）。"""
+        return dump_chat_progress_events(self._recorder.events)
+
+    def attach(self, sink: ChatProgressSink) -> None:
+        """記録の送り先を付ける（これより後に記録したイベントを渡す）。"""
+        self._sink = sink
 
     def observe(self, progress: SearchStageProgress) -> bool:
-        """内部の工程の開始・終了を段階へ反映する。段階の一覧が変わったら True。"""
+        """内部の工程の開始・終了を段階へ反映する。イベントを記録したら True。"""
         self._trace_id = progress.trace_id or self._trace_id
         step_id = chat_progress_step_id(progress.stage, rerank_enabled=self._rerank_enabled)
-        if step_id is None:
-            return False
-        if progress.outcome != "started":
+        if step_id is None or progress.outcome != "started":
             # 段階は次の段階が始まるまで（または回答ができるまで）実行中のままにする。工程の
             # 終わりごとに完了へ変えると、同じ段階の工程が続くたびに表示が完了と実行中を行き来する。
             # 工程の中の失敗は回答フローが続けることがある（補正・是正）ので、ここでは失敗にしない。
             # 回答の生成そのものの失敗（時間切れを含む）は `fail()` で反映する。
             return False
-        step = self._by_id[step_id]
-        detail = _retrieval_attempt_detail(progress.stage)
-        current = self._last_touched
-        if current is not None and self._steps.index(step) < self._steps.index(current):
+        before = self._recorder.last_seq
+        attempt = _retrieval_attempt(progress.stage)
+        index = CHAT_PROGRESS_STEP_IDS.index(step_id)
+        if self._last_index is not None and index < self._last_index:
             # 前の段階の工程（戻り）。完了した段階を実行中に戻さない（#1358）。
-            if detail and step.detail != detail:
-                step.detail = detail
-                return True
-            return False
-        self._last_touched = step
-        changed = self._start(step)
-        if detail and step.detail != detail:
-            step.detail = detail
-            changed = True
-        return changed
+            # 補正検索の回数だけ出す。
+            if attempt is not None:
+                self._recorder.update(step_id, params=self._params(step_id, attempt=attempt))
+            return self._recorder.last_seq != before
+        self._last_index = index
+        if attempt is not None:
+            self._recorder.start(
+                step_id, exclusive=True, params=self._params(step_id, attempt=attempt)
+            )
+        else:
+            self._recorder.start(step_id, exclusive=True)
+        return self._recorder.last_seq != before
 
     def finish(self, *, citation_count: int) -> None:
-        """回答ができた。実行中の段階を終わらせ、始まらなかった段階を `skipped` にする。"""
-        for step in self._steps:
-            if step.status == "running":
-                self._end(step, "done")
-            elif step.status == "pending":
-                step.status = "skipped"
-        retrieve = self._by_id[RETRIEVE]
-        if retrieve.status == "done":
-            retrieve.detail = f"根拠 {citation_count} 件"
+        """回答ができた。根拠の件数を検索の段階に付けてから、終端（完了）にする。
+
+        実行中の段階は完了、始まらなかった段階はスキップになる（`complete("done")`）。
+        """
+        retrieve = self._recorder.step(RETRIEVE)
+        if retrieve is not None and retrieve.status in {"running", "done"}:
+            self._recorder.update(RETRIEVE, params=self._params(RETRIEVE, citations=citation_count))
+        self._recorder.complete("done")
 
     def fail(self) -> None:
-        """回答の生成が失敗した（時間切れを含む）。実行中の段階を `failed` にする。
+        """回答の生成が失敗した（時間切れを含む）。実行中の段階を失敗にして終端（失敗）にする。
 
         実行中の段階が無いときは、最後に動いた段階の次の段階（何も始まっていなければ先頭）を
-        `failed` にする。
+        失敗にする（どこで止まったかを示す）。
         """
-        running = [step for step in self._steps if step.status == "running"]
-        if running:
-            for step in running:
-                self._end(step, "failed")
+        if self._recorder.terminal is not None:
             return
-        start = self._steps.index(self._last_touched) + 1 if self._last_touched is not None else 0
-        for step in self._steps[start:]:
-            if step.status == "pending":
-                self._end(step, "failed")
+        steps = {step.step_id: step for step in self._recorder.steps()}
+        if not any(step.status == "running" for step in steps.values()):
+            start = self._last_index + 1 if self._last_index is not None else 0
+            target = next(
+                (
+                    step_id
+                    for step_id in CHAT_PROGRESS_STEP_IDS[start:]
+                    if step_id in steps and steps[step_id].status == "pending"
+                ),
+                None,
+            )
+            if target is None and self._last_index is not None:
+                target = CHAT_PROGRESS_STEP_IDS[self._last_index]
+            if target is not None:
+                self._recorder.finish(target, "failed")
+        self._recorder.complete("failed")
+
+    def close(self, status: ChatProgressTerminalStatus) -> None:
+        """作成を止めた（`cancelled`）・中断した（`failed`）。終端を記録する（終端の後は何もしない）。"""
+        self._recorder.complete(status)
+
+    def _params(
+        self, step_id: str, *, attempt: int | None = None, citations: int | None = None
+    ) -> dict[str, str | int | float | bool]:
+        step = self._recorder.step(step_id)
+        params: dict[str, str | int | float | bool] = dict(step.params or {}) if step else {}
+        if attempt is not None:
+            params["attempt"] = attempt
+        if citations is not None:
+            params["citations"] = citations
+        return params
+
+    def _on_event(self, event: ChatProgressEventItem) -> None:
+        if isinstance(event, ChatProgressStepEvent):
+            self._log(event)
+        if self._sink is not None:
+            self._sink(event)
+
+    def _log(self, event: ChatProgressStepEvent) -> None:
+        if event.status == "running":
+            if event.step_id in self._running_since:
                 return
-        if self._last_touched is not None:
-            self._end(self._last_touched, "failed")
-
-    def _start(self, step: _StepState) -> bool:
-        if step.status == "running":
-            return False
-        for other in self._steps:
-            if other is not step and other.status == "running":
-                self._end(other, "done")
-        step.status = "running"
-        step.started_at = step.started_at or self._clock()
-        step.finished_at = None
-        step.running_since = self._timer()
-        logger.info(
-            "チャットの段階を開始しました",
-            extra={**self._log_fields(step), "status": "running"},
-        )
-        return True
-
-    def _end(self, step: _StepState, status: ChatProgressStatus) -> None:
-        step.status = status
-        step.finished_at = self._clock()
-        duration_ms = (
-            round((self._timer() - step.running_since) * 1000, 3)
-            if step.running_since is not None
-            else None
-        )
-        step.running_since = None
+            self._running_since[event.step_id] = self._timer()
+            logger.info(
+                "チャットの段階を開始しました",
+                extra={**self._log_fields(event.step_id), "status": "running"},
+            )
+            return
+        if event.status == "pending":
+            return
+        since = self._running_since.pop(event.step_id, None)
+        if since is None and event.status != "failed":
+            # 始まらなかった段階のスキップ（rerank 無効・回答の完了）は記録しない。
+            return
         logger.log(
-            logging.WARNING if status == "failed" else logging.INFO,
+            logging.WARNING if event.status == "failed" else logging.INFO,
             "チャットの段階が終わりました",
-            extra={**self._log_fields(step), "status": status, "duration_ms": duration_ms},
+            extra={
+                **self._log_fields(event.step_id),
+                "status": event.status,
+                "duration_ms": (
+                    round((self._timer() - since) * 1000, 3) if since is not None else None
+                ),
+            },
         )
 
-    def _log_fields(self, step: _StepState) -> dict[str, object]:
+    def _log_fields(self, step_id: str) -> dict[str, object]:
         return {
             "event": "chat_progress_step",
             "request_id": request_id_var.get(),
             "trace_id": self._trace_id,
             "model_id": self._model_id,
-            "step_id": step.id,
+            "message_id": self._recorder.target_id,
+            "step_id": step_id,
         }
 
 
-def _retrieval_attempt_detail(stage: str) -> str | None:
-    """補正検索（2 回目以降の文書検索）の回数の補足。"""
+def _retrieval_attempt(stage: str) -> int | None:
+    """補正検索（2 回目以降の文書検索）の回数。"""
     match = _RETRIEVAL_ATTEMPT.match(stage.removeprefix(ANSWER_STEP_STAGE_PREFIX).strip())
     if match is None or int(match.group(1)) < 2:
         return None
-    return f"{int(match.group(1))} 回目"
+    return int(match.group(1))

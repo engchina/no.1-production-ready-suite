@@ -1,11 +1,13 @@
 import type { Page } from "@playwright/test";
 
+import { ProgressLog } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./fixtures/progress-timer";
 import { expectSpinnerStable } from "./fixtures/spinner-stability";
 
 // #1147: チャットの回答の場所に、Run の処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成）を
-// 共有の ChatProgress（3 製品共通。#1145）で出す。会話の取り直し（polling）で段階が進むことを確かめる。
+// 共有の ChatProgress（3 製品共通。#1145）で出す。段階は backend が記録したイベント（#1359）で、実行中は SSE で受け取り、
+// 承認待ちの間も途絶えずに進むことを確かめる。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -32,6 +34,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 function seedRunningRun(mockApi: MockApi) {
   const startedAt = iso(-3_000);
+  const progress = new ProgressLog(RUN_ID).step("plan", "running", { startedAt });
   mockApi.state.runs.push({
     id: RUN_ID,
     goal: "契約の更新条件を調べて",
@@ -50,8 +53,9 @@ function seedRunningRun(mockApi: MockApi) {
     thread_id: THREAD_ID,
     created_at: startedAt,
     updated_at: startedAt,
+    progress_events: progress.events,
   });
-  return mockApi.state.runs.at(-1) as Record<string, unknown>;
+  return { run: mockApi.state.runs.at(-1) as Record<string, unknown>, progress };
 }
 
 async function openThread(page: Page) {
@@ -80,7 +84,7 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
     test(`回答の作成中は今の段階を 1 行で出し、ツール・承認待ち・完了へ進む (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
-      const run = seedRunningRun(mockApi);
+      const { run, progress: log } = seedRunningRun(mockApi);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       await page.goto("/chat");
@@ -104,6 +108,7 @@ for (const viewport of VIEWPORTS) {
 
       // 2. ツールを呼んでいる（取り直しで進む）。完了した段階は畳んだ見出しに数える。
       run.steps = [toolStep("step-search", "rag__rag_search", "running", { completed_at: null })];
+      log.step("plan", "done").step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } });
       await expect(current).toHaveAttribute("data-step-id", "tool:rag__rag_search");
       await expect(current).toContainText("ツール rag__rag_search を呼んでいます");
       await expect(turn.getByTestId("chat-progress-completed")).toHaveText("1 ステップ完了");
@@ -126,15 +131,33 @@ for (const viewport of VIEWPORTS) {
           created_at: iso(-500),
         },
       ];
+      // backend の記録と同じ: ツールの後に回答の作成を始め、承認を求めたら進め方の検討の完了に変える。
+      log
+        .step("tool:rag__rag_search", "done")
+        .step("respond", "running")
+        .step("respond", "done", { kind: "plan" })
+        .step("approval_wait", "running", { params: { tools: "nl2sql__execute" } })
+        .step("tool:nl2sql__execute", "pending", { params: { tool: "nl2sql__execute" } });
       await expect(current).toHaveAttribute("data-step-id", "approval_wait");
       await expect(current).toContainText("承認を待っています（nl2sql__execute）");
       await expect(turn.getByRole("button", { name: "承認して実行" })).toBeVisible();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-approval-${viewport.name}-${theme}.png`) });
       // 考えている・ツール・承認待ちの段階を通る間、経過時間は減らない（段階ごとに 0 に戻さない）。
+      // 段階のイベントは SSE ですぐ届くので、記録（100ms ごと）が承認待ちを 1 回は拾うまで待ってから確かめる。
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            ((window as unknown as { __progressTimerSamples?: string[] }).__progressTimerSamples ?? []).some((sample) =>
+              sample.startsWith("approval_wait|")
+            )
+          )
+        )
+        .toBe(true);
       await expectProgressTimerMonotonic(page, 3);
 
-      // 4. 承認後に実行して完了。回答の上に「処理の経過」の 1 行に畳む（既定は閉じる）。
+      // 4. 承認後に実行して完了。回答の上に「処理の経過」の 1 行に畳む（既定は閉じる）。承認待ちの間も段階の配信
+      // （SSE）は続くので、開き直さなくても終端が届き、会話を取り直して回答を出す（#1359）。
       run.status = "completed";
       run.steps = [
         toolStep("step-search", "rag__rag_search", "completed"),
@@ -142,30 +165,46 @@ for (const viewport of VIEWPORTS) {
       ];
       run.approvals = [{ ...(run.approvals as Record<string, unknown>[])[0], status: "approved", decided_at: iso(-200) }];
       run.artifacts = [{ id: "answer-progress", kind: "answer", name: "回答", content: { text: "契約は 1 年ごとに更新します。" } }];
+      log
+        .step("approval_wait", "done")
+        .step("tool:nl2sql__execute", "running")
+        .step("tool:nl2sql__execute", "done")
+        .step("respond#2", "running")
+        .step("respond#2", "done")
+        .terminal("done");
       run.events = [
         ...(run.events as Record<string, unknown>[]),
         { id: "ev-done", run_id: RUN_ID, type: "run.completed", message: "実行を完了しました。", payload: {}, created_at: iso(0) },
       ];
-      // 承認待ちの間は会話を取り直さない（承認の操作で取り直す）ので、開き直して完了を読む。
-      await page.reload();
       await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
       await expect(current).toHaveCount(0);
       const summary = turn.getByTestId("chat-progress-summary");
-      await expect(summary).toContainText("処理の経過（5 ステップ・");
+      await expect(summary).toContainText("処理の経過（6 ステップ・");
       // 既定は閉じる（段階の一覧は見えない）。
-      await expect(turn.getByTestId("chat-progress-step-respond")).toBeHidden();
+      await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeHidden();
       await expect(turn.getByText("契約は 1 年ごとに更新します。")).toBeVisible();
       await summary.click();
       await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("ツール nl2sql__execute を呼びました");
-      await expect(turn.getByTestId("chat-progress-step-respond")).toHaveAttribute("data-status", "done");
+      await expect(turn.getByTestId("chat-progress-step-respond#2")).toHaveAttribute("data-status", "done");
+      // 回答の作成の後にツールを呼んだ段階は、進め方の検討の完了として残る（#1358）。
+      await expect(turn.getByTestId("chat-progress-step-respond")).toContainText("進め方を決めました");
+      // 終端が届いたら、承認待ちの後も会話を取り直して回答を出す（開き直さない）。
+      expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/progress/stream`)).toBe(true);
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-done-${viewport.name}-${theme}.png`) });
     });
 
     test(`失敗した回答は止まった段階を開いて出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
-      const run = seedRunningRun(mockApi);
+      const { run, progress: log } = seedRunningRun(mockApi);
       run.status = "failed";
       run.steps = [toolStep("step-search", "rag__rag_search", "completed")];
+      log
+        .step("plan", "done")
+        .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search" } })
+        .step("tool:rag__rag_search", "done")
+        .step("respond", "running")
+        .step("respond", "failed")
+        .terminal("failed");
       run.events = [
         ...(run.events as Record<string, unknown>[]),
         { id: "ev-failed", run_id: RUN_ID, type: "runtime.failed", message: "モデルの呼び出しに失敗しました（APIError）。", payload: {}, created_at: iso(0) },
