@@ -9,7 +9,7 @@
 
 業務 Agent の定義、Skill と Marketplace（Plugin）、実行（組み込み Runtime）、共通の Run・Event・Artifact・Approval・Audit を 1 つの製品で持つ。主要概念と依存方向（`業務 Agent → Skill → ツール（MCP / resource）`）:
 
-1. **業務 Agent** — 業務の指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）。
+1. **業務 Agent** — 業務の指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）、データの範囲（`data_scopes`。RAG / NL2SQL の使えるプロファイルと既定。空なら利用者が使えるすべて。#1378）。
 2. **Skill** — AgentSkills 互換の指示本体。必要なツール（MCP / Control Plane のツール）を宣言する。
 3. **Plugin** — Skill と MCP の接続をまとめた配布単位（Marketplace から入れる）。
 
@@ -59,7 +59,7 @@
 - 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」、Plugin → 「プラグイン」（表は docs/frontend-page-archetypes-spec.md §1）。
 - チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime がモデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
 - ログインと権限: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」。メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` / `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
-- 業務 Agent の編集画面は指示・スキル・モデルを選ぶ。実行（Run）は業務 Agent と目標だけで作る（実行先の選択は無い）。
+- 業務 Agent の編集画面は指示・スキル・モデル・データの範囲を選ぶ（範囲の強制は組み込み Runtime の tool handler。モデルの指示に頼らない。docs/agent-control-plane-design.md §2）。実行（Run）は業務 Agent と目標だけで作る（実行先の選択は無い）。
 - 空、読込、エラー、モデル未設定（組み込み Runtime が実行できない）、承認待ちを明示する。
 - 各ページの型（A〜D）の割り当て、離脱ガードの対象画面、作業状態として残す field は [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。
 - サイドバーのアカウント領域（ユーザー・ロール・ログアウト・テーマ切替）は `SidebarAccountFooter` を `Sidebar` の `footer` に渡す。ダークテーマ（`data-theme="dark"`）に追従するため、色の直書きを残さない。

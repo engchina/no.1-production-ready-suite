@@ -43,6 +43,7 @@ import {
   answerOutcome,
   answerReview,
 } from "@/lib/answer-review";
+import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
@@ -213,6 +214,12 @@ export function RunDetail({
                         <span className="text-sm font-medium text-fg">{step.tool_call?.name ?? step.kind}</span>
                         <StatusBadge {...stepStatusView(step.status)} />
                       </div>
+                      {/* データの範囲を当てた記録（使ったプロファイルと補完・上書き・拒否・絞り込み。#1378）。 */}
+                      {dataScopeNotes(step.tool_call?.data_scope).map((note) => (
+                        <p key={note} className="mt-1 text-xs text-fg-muted" data-testid={`run-step-data-scope-${step.id}`}>
+                          {note}
+                        </p>
+                      ))}
                       {step.tool_result?.error ? (
                         <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
                       ) : null}

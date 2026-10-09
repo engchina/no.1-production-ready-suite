@@ -233,7 +233,8 @@ skill_registry.register(
         description="NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
         instructions=(
             "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。"
-            "業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ。"
+            "業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ"
+            "（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。"
             "nl2sql_query / nl2sql_get_job は、ジョブが終わるまでツールの中で待ってから返す。"
             "それでも status が pending / running なら、nl2sql_get_job に job_id と "
             "wait_seconds=40 を渡して続きを取る。結果が出ないまま答えるときは、"
