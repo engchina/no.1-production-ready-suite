@@ -10,10 +10,13 @@
 
 - 見出し: Markdown の見出し・太字だけの行・【…】・「…：」で終わる短いラベル。述語で終わる文や
   操作の指示を含むものは見出しにしない。
-- 出典: 「出典：…」「根拠：…」「セクション：…」「ページ：…」などのラベルの行（ラベルの太字は許す）、
-  文書名・頁・節を示す括弧だけの行、文書名だけの行、リンクだけの行、根拠の ID（【証拠 ID: …】）と
-  文の無い「…」の題・頁の括弧だけの行（表の区切りの `|` は許す）、出典の節（見出しが「出典」
-  「参考資料」など）の行（#1317）。
+- 出典: 「出典：…」「根拠：…」「セクション：…」「ページ：…」「*Locator*: …」などの
+  ラベルの行（ラベルの太字・斜体は許す）、文書名・頁・節を示す括弧だけの行、文書名だけの行、
+  リンクだけの行、根拠の ID（【証拠 ID: …】・〔証拠 ID: …〕）と文の無い「…」の題・頁の括弧
+  だけの行（表の区切りの `|` は許す）、文書名と場所の括弧だけの行（「**システム変更手順書**
+  （第 2章 申請）」。#1370）、出典の節（見出しが「出典」「参考資料」など）の行（#1317）。
+  規則は RAG の `operation_audit.is_citation_line` とそろえ、両方のテストが
+  platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる。
 - 表の形: Markdown の表の区切りの行（`|---|---|`）・区切り線（`---`）と、区切りの行の直前の
   見出しの行（短い語だけのセル）。表の本文の行は主張のまま（#1317）。
 - 質問: 「？」で終わる文（後ろの「（はい／いいえ）」などの選択肢の括弧は許す）と、情報を
@@ -90,22 +93,26 @@ _BRACKET_HEADING = re.compile(r"【(?P<title>[^】。\n]{1,30})】\s*[:：]?")
 _LABEL_HEADING = re.compile(r"(?P<title>[^。！？!?\n:：]{1,30})[:：]")
 
 _CITATION_LABEL = re.compile(
-    r"[（(【\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース"
+    r"[（(【〔\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース"
     r"|sources?|references?|citations?"
     # 出典の位置のラベル（#1317。「- セクション: 「…」 → 2. …」「- ページ: 1」）。
     r"|セクション|節|章|ページ|頁|文書名|資料名|ファイル名|シート|証拠|証拠\s*ID"
-    r"|evidence(?:[ _]?id)?|page|section|document)\s*[:：]\s*(?P<rest>.+?)\s*[）)】\]]?",
+    r"|evidence(?:[ _]?id)?|page|section|document"
+    # 要素の定位子のラベル（#1370。「*Locator*: `doc:…/page:3/el:12`」。#1330）。
+    r"|locator|ロケータ|ロケーター|定位子)\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?",
     re.IGNORECASE,
 )
-# Markdown の強調（「**根拠**：…」のラベル。出典の判定だけで外す）。
-_EMPHASIS = re.compile(r"\*\*|__|`")
+# Markdown の強調（「**根拠**：…」「*Locator*:」のラベル。出典の判定だけで外す。
+# #1370 で斜体の `*` も外す）。
+_EMPHASIS = re.compile(r"\*{1,2}|__|`")
 # 質問の直後の、選択肢を並べた行（「選択肢: **個別**、**グループ**」。#1322 の確認の質問の次の手は
 # 選択肢を添えさせる）。
 _OPTIONS_LINE = re.compile(r"^(?:選択肢|候補)\s*[:：]\s*\S")
-# 根拠の ID の括弧（【証拠 ID: 03ac…:1】・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】）。
+# 根拠の ID の括弧（【証拠 ID: 03ac…:1】・〔証拠 ID: 07e8…:5〕・【証拠ID cb0a…:2】・【証拠1】・
+# 【evidence_id: …】。〔〕［］[] は #1370）。
 _EVIDENCE_REF = re.compile(
-    r"【\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?"
-    r"[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}】",
+    r"[【〔［\[]\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?"
+    r"[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}[】〕］\]]",
     re.IGNORECASE,
 )
 # 「…」の題（文ではないもの）。
@@ -220,7 +227,7 @@ _ENVIRONMENT_CHECK = re.compile(
 )
 # 出典の行に無い述語（括弧の外にあれば文。「…は **毎月 10 日** です（…）【….pdf】.」。#1317）。
 _PREDICATE_IN = re.compile(r"です|ます|ません|でした|ました|ください")
-_BRACKETS_ANY = re.compile(r"[（(【\[「『][^（()）【】\[\]「」『』\n]*[）)】\]」』]")
+_BRACKETS_ANY = re.compile(r"[（(【〔\[「『][^（()）【】〔〕\[\]「」『』\n]*[）)】〕\]」』]")
 # 括弧で囲まれた段落（「（根拠：検索結果に…記述は含まれていません）」。#1317）。
 _ENCLOSED = re.compile(r"[（(](?P<inner>[^\n]+)[）)]")
 # 記号だけの段落（「**」「---」「>」。強調の閉じが句点の後の段落に分かれたもの。#1317）。
@@ -354,8 +361,49 @@ def _is_reference_only(value: str) -> bool:
     return not rest or bool(_SECTION_REF.fullmatch(rest) and not _is_sentence(rest))
 
 
+# 行末の場所の括弧（「（第 2章 申請）」「（p.12）」。#1370）。
+_LOCATION_TAIL = re.compile(r"[（(〔\[]([^（()）〔〕\[\]\n]{1,80})[）)〕\]]\s*$")
+# 文書名に無い、言い切りの助詞（「承認者は課長（第 3 章）」「申請先は規程が定める承認者」は主張）。
+_STATEMENT_PARTICLE = re.compile(r"[はがを]")
+
+
+def _is_document_location(value: str) -> bool:
+    """文書名と場所の括弧だけの段落か（#1370）。
+
+    「システム変更手順書（第 2章 申請）」「運用マニュアル（p.12）」。
+
+    行末の場所の括弧（章・節・頁・シートなどの印を含むもの）を外した残りが、文書を示す語（手順書・規程・
+    ファイル名など）を含む短い名前で、述語・操作・言い切りの助詞（は・が・を）を含まないときだけ出典にする。
+    場所の後に本文が続く行（「…（第 2章）では、…」）は主張のまま。RAG の
+    `operation_audit._is_document_location` と同じ規則。
+    """
+    rest = value.strip().rstrip("。．").strip()
+    found = False
+    while match := _LOCATION_TAIL.search(rest):
+        location = match.group(1)
+        if (
+            not _DOCUMENT_MARK.search(location)
+            or _is_sentence(location)
+            or _OPERATION.search(location)
+        ):
+            break
+        rest, found = rest[: match.start()].strip(), True
+    if not found or not rest or len(rest) > 80 or "。" in rest:
+        return False
+    if _is_sentence(rest) or _OPERATION.search(rest):
+        return False
+    if _STATEMENT_PARTICLE.search(_outside_brackets(rest)):
+        return False
+    return bool(_document_title(rest) or _FILE_NAME.search(rest))
+
+
 def is_citation(text: str) -> bool:
-    """出典の行（出典のラベル・文書名・頁・節の括弧・文書名・リンク・根拠の ID だけの段落）か。"""
+    """出典の行か。
+
+    出典・定位子のラベル・文書名・頁・節の括弧・リンク・根拠の ID・文書名と場所だけの段落。
+    RAG の `operation_audit.is_citation_line` と同じ規則で、両方のテストが
+    platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる（#1370）。
+    """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
     if not value or "。" in value.rstrip("。"):
         return False
@@ -373,7 +421,7 @@ def is_citation(text: str) -> bool:
         return True
     if _FILE_LINE.fullmatch(value) and not _is_sentence(value):
         return True
-    return _is_reference_only(value)
+    return _is_reference_only(value) or _is_document_location(value)
 
 
 def is_question(text: str) -> bool:

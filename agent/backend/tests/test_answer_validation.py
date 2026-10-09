@@ -9,8 +9,10 @@ Control Plane が（モデルではなく）`rag_validate_answer` を、その R
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Iterator
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -22,7 +24,7 @@ from pr_backend_core.mcp import McpServer
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_passages import non_claim_passages
+from app.features.agent.answer_passages import non_claim_passages, passage_kind
 from app.features.agent.answer_validation import (
     connection_check_inputs,
     merge_results,
@@ -1241,6 +1243,51 @@ def test_table_and_location_lines_are_not_withheld() -> None:
         _claim(TABLE_SEPARATOR, "unassessed", "テーブルの区切り線。"),
         _claim(row, "supported", "根拠に記載。"),
         _claim(citation, "unassessed", "引用情報の記載。"),
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    assert published == answer
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+
+# 出典の行の事例（RAG と Agent の両方のテストが読む。#1370）。
+CITATION_CASES_PATH = "platform/contracts/answer-passages/citation-lines.json"
+CITATION_CASES: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / CITATION_CASES_PATH).read_text("utf-8")
+)
+
+
+@pytest.mark.parametrize(
+    "case", CITATION_CASES["citation_passages"], ids=lambda case: str(case["id"])
+)
+def test_citation_only_passages_are_not_claims(case: dict[str, str]) -> None:
+    """定位子・根拠の ID・文書名と場所だけの行は出典の行（#1370）。"""
+    text = case["passage"]
+    assert passage_kind(text) == "citation"
+    assert non_claim_passages(text).get(text) == "citation"
+
+
+@pytest.mark.parametrize("case", CITATION_CASES["claim_passages"], ids=lambda case: str(case["id"]))
+def test_passages_with_body_after_the_location_stay_claims(case: dict[str, str]) -> None:
+    """場所・ラベルの後に本文が続く行は主張のまま確かめる（取りこぼさない。#1370）。"""
+    text = case["passage"]
+    assert passage_kind(text) is None
+    assert text not in non_claim_passages(text)
+
+
+@pytest.mark.parametrize("case", CITATION_CASES["answers"], ids=lambda case: str(case["id"]))
+def test_citation_lines_left_unassessed_do_not_withhold_the_answer(case: dict[str, Any]) -> None:
+    """#1335 の再評価の回答で、RAG が出典の行を unassessed にしても、回答を外さない（#1370）。"""
+    answer = case["answer"]
+    kinds = non_claim_passages(answer)
+    assert {text: kinds.get(text) for text in case["citation_passages"]} == {
+        text: "citation" for text in case["citation_passages"]
+    }
+    assert not set(case["claim_passages"]) & set(kinds)
+    result = _verdict(
+        *[_claim(text, "supported", "根拠に記載。") for text in case["claim_passages"]],
+        *[_claim(text, "unassessed", "ロケータの提示のみ。") for text in case["citation_passages"]],
     )
 
     published, withheld = publish_answer(answer, result)

@@ -1,5 +1,9 @@
 """回答の最終の検証（#1246）。モデルはスタブ。標準回答を使わず主張だけを監査する。"""
+import json
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from rag_engine.evaluation.answer_validation import ClaimAuditOutput, validate_answer_claims
 
@@ -218,3 +222,63 @@ def test_unknown_or_unquoted_ids_in_a_list_stay_citation_errors() -> None:
         [claim] = _bridge_validation(written, evidence_quote=quote)["claim_checks"]
         assert claim["status"] == "citation_error", written
         assert claim["reason"].startswith("未登録の原文ID。")
+
+
+# 出典の行の事例（RAG と Agent の両方のテストが読む。#1370）。
+CITATION_CASES = json.loads(
+    (Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/citation-lines.json").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("case", CITATION_CASES["citation_passages"], ids=lambda case: case["id"])
+def test_citation_only_passages_are_not_claims(case: dict) -> None:
+    """定位子・根拠の ID・文書名と場所だけの行は出典の行で、主張として監査しない (#1370)。"""
+    from rag_engine.generation.operation_audit import is_citation_line, is_non_claim_passage
+
+    assert is_citation_line(case["passage"])
+    assert is_non_claim_passage(case["passage"])
+
+
+@pytest.mark.parametrize("case", CITATION_CASES["claim_passages"], ids=lambda case: case["id"])
+def test_passages_with_body_after_the_location_stay_claims(case: dict) -> None:
+    """場所・ラベルの後に本文が続く行は主張のまま監査する（取りこぼさない。#1370）。"""
+    from rag_engine.generation.operation_audit import is_non_claim_passage
+
+    assert not is_non_claim_passage(case["passage"])
+
+
+@pytest.mark.parametrize("case", CITATION_CASES["answers"], ids=lambda case: case["id"])
+def test_citation_lines_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
+    """#1335 の再評価の回答の出典の行を監査に渡さず、unassessed にしない (#1370)。"""
+    seen: list[list[str]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append([item["text"] for item in payload["answer_passages"]])
+        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": item["id"], "status": "supported", "evidence_id": evidence_id,
+             "source_id": "", "evidence_quote": "", "reason": "根拠に記載"}
+            for item in payload["answer_passages"]
+        ]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("質問", case["answer"], EVIDENCE, settings=None)
+    [audited] = seen
+    assert not set(case["citation_passages"]) & set(audited)
+    assert set(case["claim_passages"]) <= set(audited)
+    assert set(result["counts"]) == {"supported"}
+
+
+def test_citation_line_marked_not_a_claim_is_not_unassessed() -> None:
+    """品質評価の主張の監査でも、モデルが not_a_claim にした出典の行は unassessed にしない (#1370)。"""
+    from rag_engine.evaluation.answer_eval import _bind_claims
+
+    passages = [{"id": "A1", "text": "*Locator*: `doc:1b5b/page:3/el:12`"},
+                {"id": "A2", "text": "承認者は運行管理課長です。"}]
+    output = ClaimAuditOutput.model_validate({"claim_checks": [
+        {"answer_quote": item["text"], "answer_passage_id": item["id"], "status": "not_a_claim", "evidence_id": "",
+         "source_id": "", "evidence_quote": "", "reason": "主張ではない"}
+        for item in passages
+    ]})
+    bound = _bind_claims(output, {}, passages)
+    assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "unassessed"]
