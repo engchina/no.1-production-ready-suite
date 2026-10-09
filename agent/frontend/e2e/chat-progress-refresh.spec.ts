@@ -1,9 +1,10 @@
 import type { Page } from "@playwright/test";
 
+import { ProgressLog } from "./fixtures/chat-progress-events";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #1160: チャットの回答の作成中に、会話の取得（Run の取り直し）が応答しない・失敗し続けても、画面を止めない。
-// 「接続を確認しています」を出して取り直し、完了・失敗の終端まで追う。
+// #1160: チャットの回答の作成中に、処理の段階の配信（#1359。SSE の `/progress/stream` と polling の `/progress`）が
+// 応答しない・失敗し続けても、画面を止めない。「接続を確認しています」を出して取り直し、完了・失敗の終端まで追う。
 
 const THREAD_ID = `thread_${"c".repeat(32)}`;
 const RUN_ID = "run-refresh";
@@ -20,6 +21,7 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 
 function seedRunningRun(mockApi: MockApi) {
   const startedAt = iso(-3_000);
+  const progress = new ProgressLog(RUN_ID).step("plan", "running", { startedAt });
   mockApi.state.runs.push({
     id: RUN_ID,
     goal: "契約の更新条件を調べて",
@@ -38,12 +40,14 @@ function seedRunningRun(mockApi: MockApi) {
     thread_id: THREAD_ID,
     created_at: startedAt,
     updated_at: startedAt,
+    progress_events: progress.events,
   });
-  return mockApi.state.runs.at(-1) as Record<string, unknown>;
+  return { run: mockApi.state.runs.at(-1) as Record<string, unknown>, progress };
 }
 
-function complete(run: Record<string, unknown>) {
+function complete(run: Record<string, unknown>, progress: ProgressLog) {
   run.status = "completed";
+  progress.step("plan", "done").step("respond", "done").terminal("done");
   run.artifacts = [{ id: "answer-refresh", kind: "answer", name: "回答", content: { text: "契約は 1 年ごとに更新します。" } }];
   run.events = [
     ...(run.events as Record<string, unknown>[]),
@@ -51,10 +55,13 @@ function complete(run: Record<string, unknown>) {
   ];
 }
 
-/** 会話の取得（`GET /api/threads/{id}`）を、応答しない・失敗させる。それ以外は mock-api に任せる。 */
-async function controlThreadFetch(page: Page) {
+/**
+ * 処理の段階の配信（SSE と polling。`GET /api/runs/{id}/progress…`）を、応答しない・失敗させる。それ以外は
+ * mock-api に任せる。会話の取得（回答・成果物）は止めない。
+ */
+async function controlProgressFetch(page: Page) {
   const control = { hang: 0, fail: 0, requests: 0 };
-  await page.route(`**/api/threads/${THREAD_ID}`, async (route) => {
+  await page.route(`**/api/runs/${RUN_ID}/progress**`, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     control.requests += 1;
     if (control.hang > 0) {
@@ -81,13 +88,13 @@ async function openThread(page: Page) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`会話の取得が応答しなくなったら「接続を確認しています」を出して取り直し、完了が出る（${theme}）`, async ({
+  test(`段階の配信が応答しなくなったら「接続を確認しています」を出して取り直し、完了が出る（${theme}）`, async ({
     page,
     mockApi,
   }, testInfo) => {
     test.setTimeout(90_000);
-    const run = seedRunningRun(mockApi);
-    const control = await controlThreadFetch(page);
+    const { run, progress } = seedRunningRun(mockApi);
+    const control = await controlProgressFetch(page);
     await useTheme(page, theme);
     await page.goto("/chat");
     await openThread(page);
@@ -95,24 +102,25 @@ for (const theme of ["light", "dark"] as const) {
     const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
     const current = turn.getByTestId("chat-progress-current");
     await expect(current).toContainText("考えています");
-    // 応答を止める（2 回）。修正前は 1 回目の取得を待ったまま取り直しが止まった。
-    control.hang = 2;
+    // 応答を止める（SSE の張り直し・途絶えの後の SSE の張り直し・取り直しの 3 回）。修正前（#1160）は 1 回目の取得を
+    // 待ったまま取り直しが止まった。
+    control.hang = 3;
     const reconnecting = turn.getByTestId("chat-progress-reconnecting");
-    await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 20_000 });
+    await expect(reconnecting).toHaveText("接続を確認しています。", { timeout: 30_000 });
     await expect(current).toHaveAttribute("data-reconnecting", "true");
     await expect(turn.getByTestId("chat-progress-timer")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`progress-reconnecting-${theme}.png`) });
-    complete(run);
+    complete(run, progress);
     await expect(turn.getByText("契約は 1 年ごとに更新します。")).toBeVisible({ timeout: 40_000 });
     await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
     await expect(reconnecting).toHaveCount(0);
     await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
   });
 
-  test(`会話の取得の失敗が続いても backoff して再開し、失敗の終端が出る（${theme}）`, async ({ page, mockApi }) => {
+  test(`段階の配信の失敗が続いても backoff して再開し、失敗の終端が出る（${theme}）`, async ({ page, mockApi }) => {
     test.setTimeout(90_000);
-    const run = seedRunningRun(mockApi);
-    const control = await controlThreadFetch(page);
+    const { run, progress } = seedRunningRun(mockApi);
+    const control = await controlProgressFetch(page);
     await useTheme(page, theme);
     await page.goto("/chat");
     await openThread(page);
@@ -122,6 +130,7 @@ for (const theme of ["light", "dark"] as const) {
     control.fail = 6;
     await expect.poll(() => control.fail, { timeout: 60_000 }).toBe(0);
     run.status = "failed";
+    progress.step("plan", "failed").terminal("failed");
     run.events = [
       ...(run.events as Record<string, unknown>[]),
       { id: "ev-failed", run_id: RUN_ID, type: "runtime.failed", message: "モデルの呼び出しに失敗しました（APIError）。", payload: {}, created_at: iso(0) },
