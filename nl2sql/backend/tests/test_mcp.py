@@ -259,13 +259,20 @@ def users(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Users]:
         reset_security_service()
 
 
-def _token(user_uuid: str, *, audience: str = "nl2sql", secret: str = SECRET) -> str:
+def _token(
+    user_uuid: str,
+    *,
+    audience: str = "nl2sql",
+    secret: str = SECRET,
+    profile_ids: list[str] | None = None,
+) -> str:
     return issue_service_token(
         secret,
         subject=user_uuid,
         audience=audience,
         issuer="agent",
         claims={"run_id": "run-1", "agent_id": "agent-1"},
+        profile_ids=profile_ids,
     )
 
 
@@ -468,10 +475,122 @@ def test_query_rejects_profile_outside_scope(
     assert is_error is True
     assert content["status"] == 403
     assert "業務プロファイル" in content["message"]
-    # profile_id 省略は既定の業務プロファイル（default）の範囲で判定する。
-    is_error, _ = _structured(_run(_call("nl2sql_query", {"question": "社員一覧"}), token=token))
-    assert is_error is True
     assert fake_service.started == []
+
+
+@pytest.mark.parametrize("profile_id", [None, "", "  "], ids=["omitted", "empty", "blank"])
+def test_query_requires_profile_id(
+    users: _Users, fake_service: _FakeNl2SqlService, profile_id: str | None
+) -> None:
+    """MCP の nl2sql_query は profile_id が必須（"default" に黙って切り替えない。#1379）。"""
+    user = users.create(
+        "mcp.query", permissions={"menu.query"}, allowed_profile_ids={"default", "sales"}
+    )
+    arguments: dict[str, Any] = {"question": "社員一覧"}
+    if profile_id is not None:
+        arguments["profile_id"] = profile_id
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_query", arguments), token=_token(user.user_uuid))
+    )
+
+    assert is_error is True
+    assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    assert [error["loc"] for error in content["details"]["errors"]] == ["profile_id"]
+    assert fake_service.started == []
+
+
+def test_profile_scope_claim_limits_query_list_and_recommend(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    """claim（業務 Agent のデータの範囲。#1379）があれば「利用者の権限 ∩ claim」で判定する。
+
+    Agent の Runtime を通さず POST /api/mcp を直接呼んでも、範囲外は 403 になる。
+    """
+    user = users.create(
+        "mcp.query", permissions={"menu.query"}, allowed_profile_ids={"default", "sales", "hr"}
+    )
+    token = _token(user.user_uuid, profile_ids=["sales", "finance"])
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_query", {"question": "社員一覧", "profile_id": "hr"}), token=token)
+    )
+    assert is_error is True
+    assert (content["status"], content["error_code"]) == (403, "PROFILE_SCOPE_FORBIDDEN")
+    assert "hr" in content["message"]
+    assert fake_service.started == []
+    # claim にあっても利用者が使えない業務プロファイルは、今までどおり権限の 403。
+    is_error, content = _structured(
+        _run(_call("nl2sql_query", {"question": "売上", "profile_id": "finance"}), token=token)
+    )
+    assert (is_error, content["status"]) == (True, 403)
+    assert content["error_code"] != "PROFILE_SCOPE_FORBIDDEN"
+    assert fake_service.started == []
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_query", {"question": "売上", "profile_id": "sales"}), token=token)
+    )
+    assert (is_error, content["profile_id"]) == (False, "sales")
+
+    _, listed = _structured(_run(_call("nl2sql_list_profiles", {}), token=token))
+    assert [item["id"] for item in listed["profiles"]] == ["sales"]
+
+    # 推薦は範囲の中からだけ（fake の推薦は sales・候補は sales / hr）。
+    _, recommended = _structured(
+        _run(_call("nl2sql_recommend_profile", {"question": "人事の売上"}), token=token)
+    )
+    assert recommended["recommended_profile_id"] == "sales"
+    assert [item["id"] for item in recommended["candidates"]] == ["sales"]
+    # 候補の一覧が範囲と重ならなければ推薦しない（範囲の外を推薦しない）。
+    _, recommended = _structured(
+        _run(
+            _call("nl2sql_recommend_profile", {"question": "人事", "profile_ids": ["hr"]}),
+            token=token,
+        )
+    )
+    assert recommended == {
+        "recommended_profile_id": None,
+        "rewritten_question": None,
+        "candidates": [],
+    }
+
+
+def test_recommend_profile_limits_to_requested_candidates(
+    users: _Users, fake_service: _FakeNl2SqlService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """profile_ids（候補の一覧。#1379）を渡すと、その中からだけ推薦する。"""
+    user = users.create(
+        "mcp.query", permissions={"menu.query"}, allowed_profile_ids={"default", "sales", "hr"}
+    )
+    received: list[set[str] | None] = []
+    original = fake_service.recommend_profile
+
+    def recommend(
+        request: ProfileRecommendationRequest, *, allowed_profile_ids: set[str] | None = None
+    ) -> ProfileRecommendationData:
+        received.append(allowed_profile_ids)
+        return original(request, allowed_profile_ids=allowed_profile_ids)
+
+    monkeypatch.setattr(fake_service, "recommend_profile", recommend)
+    token = _token(user.user_uuid)
+
+    _, content = _structured(
+        _run(
+            _call(
+                "nl2sql_recommend_profile",
+                {"question": "人事の売上", "profile_ids": ["hr", "unknown"]},
+            ),
+            token=token,
+        )
+    )
+    # 利用者が使えない ID（unknown）は候補にしない。推薦（sales）は候補の外なので null。
+    assert received == [{"hr"}]
+    assert content["recommended_profile_id"] is None
+    assert [item["id"] for item in content["candidates"]] == ["hr"]
+
+    empty = _call("nl2sql_recommend_profile", {"question": "売上", "profile_ids": []})
+    is_error, content = _structured(_run(empty, token=token))
+    assert (is_error, content["error_code"]) == (True, "MCP_TOOL_ARGUMENTS_INVALID")
 
 
 def test_query_passes_row_limit_and_actor_and_returns_result(
@@ -657,7 +776,12 @@ def test_local_mode_uses_local_debug_user_without_token(
                     "/api/mcp",
                     json=_call(
                         "nl2sql_query",
-                        {"question": "社員一覧を確認したい", "row_limit": 2, "wait_seconds": 10},
+                        {
+                            "question": "社員一覧を確認したい",
+                            "profile_id": "default",
+                            "row_limit": 2,
+                            "wait_seconds": 10,
+                        },
                     ),
                 )
                 is_error, content = _structured(response)

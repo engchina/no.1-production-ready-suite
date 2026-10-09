@@ -305,18 +305,11 @@
             "type": "string"
           },
           "profile_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "使う業務プロファイルの ID。省略時は既定の業務プロファイル",
-            "title": "Profile Id"
+            "description": "使う業務プロファイルの ID（必須）。分からないときは nl2sql_list_profiles / nl2sql_recommend_profile で選ぶ",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile Id",
+            "type": "string"
           },
           "row_limit": {
             "default": 100,
@@ -336,7 +329,8 @@
           }
         },
         "required": [
-          "question"
+          "question",
+          "profile_id"
         ],
         "title": "QueryInput",
         "type": "object"
@@ -524,7 +518,7 @@
     },
     {
       "name": "nl2sql_recommend_profile",
-      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null です。",
+      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null です。profile_ids を渡すと、その中からだけ推薦します。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -534,6 +528,24 @@
             "minLength": 1,
             "title": "Question",
             "type": "string"
+          },
+          "profile_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "推薦の候補にする業務プロファイルの ID（省略時は使えるすべて）",
+            "title": "Profile Ids"
           }
         },
         "required": [

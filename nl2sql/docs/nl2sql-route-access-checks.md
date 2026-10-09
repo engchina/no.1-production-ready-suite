@@ -28,8 +28,8 @@ NL2SQL の運用系 API は、ルート認可だけでなく profile 単位の�
 | Quality evaluation | `GET /api/nl2sql/quality-evaluations` | 許可 profile の job だけを返し、許可後にのみ in-process worker を wake する。 |
 | Quality evaluation | `GET /api/nl2sql/quality-evaluations/{job_id}*` | job record を wake せず peek して profile 確認後、必要な read のみ wake する。 |
 | Quality evaluation | `POST/DELETE /api/nl2sql/quality-evaluations/{job_id}*` | profile 確認に加え、profile 管理者以外は `actor_user_uuid` の所有者一致を要求する。 |
-| MCP | `POST /api/mcp` の `nl2sql_list_profiles` / `nl2sql_recommend_profile` | 画面の route と同じ `allowed_profile_ids_for_request` の範囲だけを返す（#231）。 |
-| MCP | `POST /api/mcp` の `nl2sql_query` | ジョブ作成前に `assert_profile_access`（`profile_id` 省略時は default）で確認し、token の利用者を actor にする。 |
+| MCP | `POST /api/mcp` の `nl2sql_list_profiles` / `nl2sql_recommend_profile` | 画面の route と同じ `allowed_profile_ids_for_request` の範囲だけを返す（#231）。サービストークンの claim `profile_ids` があれば claim との積（#1379）。 |
+| MCP | `POST /api/mcp` の `nl2sql_query` | `profile_id` は必須（#1379）。ジョブ作成前に claim の範囲（範囲外は 403 `PROFILE_SCOPE_FORBIDDEN`）と `assert_profile_access` で確認し、token の利用者を actor にする。 |
 | MCP | `POST /api/mcp` の `nl2sql_get_job` | 本人のジョブだけ（`actor_can_manage=False`）。他人のジョブは 404。 |
 
 ## 未確認時の原則
