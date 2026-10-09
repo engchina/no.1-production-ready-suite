@@ -32,6 +32,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -42,6 +43,11 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse, Page
 from pr_backend_core.api import OffsetParams, offset_params, paginate, paginate_slice
+from pr_backend_core.chat_progress import (
+    ChatProgressPage,
+    chat_progress_page,
+    chat_progress_sse_response,
+)
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
@@ -2795,6 +2801,61 @@ async def stream_run_events(
     if not follow:
         return Response("".join(_sse_events(events)), media_type="text/event-stream")
     return StreamingResponse(_sse_events(events), media_type="text/event-stream")
+
+
+def _readable_run(request: Request, run_id: str) -> RunState:
+    """画面が読む Run（無ければ 404、業務 Agent の対象外なら 403）。
+
+    `GET /runs/{run_id}` と同じ判定。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    _require_agent_access(request, run.agent_id)
+    return run
+
+
+@router.get("/runs/{run_id}/progress", response_model=ApiResponse[ChatProgressPage])
+async def get_run_progress(
+    run_id: str,
+    request: Request,
+    since: Annotated[int, Query(ge=0)] = 0,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[ChatProgressPage]:
+    """チャットの処理の段階のイベント（`since` より後。3 製品共通の契約。#1359）。
+
+    SSE（`/progress/stream`）が使えないときの polling と、途絶え・番号の飛びの取り直しに使う。
+    """
+    run = await run_in_threadpool(_readable_run, request, run_id)
+    return ApiResponse(data=chat_progress_page(run.id, run.progress_events, since=since))
+
+
+@router.get("/runs/{run_id}/progress/stream")
+async def stream_run_progress(
+    run_id: str,
+    request: Request,
+    since: Annotated[int | None, Query(ge=0)] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    _: None = Depends(require_viewer),
+) -> Response:
+    """チャットの処理の段階のイベントの SSE（3 製品共通の契約。#1359）。
+
+    `id:` は記録の番号で、ブラウザは `Last-Event-ID`（最初は `since`）で続きから受け取る。
+    保存先の Run を 1 秒ごとに読み直して送るので、承認待ちの間も heartbeat で途絶えず、
+    runtime-dispatcher が実行していても今の polling と同じ一貫性で届く。終わった Run を続きから
+    求めたら 204。
+    """
+    await run_in_threadpool(_readable_run, request, run_id)
+
+    async def fetch(cursor: int) -> ChatProgressPage | None:
+        try:
+            run = await run_in_threadpool(runtime_repository.get_run, run_id)
+        except KeyError:
+            return None
+        return chat_progress_page(run.id, run.progress_events, since=cursor)
+
+    return await chat_progress_sse_response(fetch, since=since, last_event_id=last_event_id)
 
 
 @router.websocket("/runs/{run_id}/events/ws")

@@ -322,6 +322,7 @@ _DECIDE = _any(APPROVALS_DECIDE, ADMIN)
 # 画面の読み取り（メニュー権限。capability は関連メニューを暗黙に含む）。
 _RUN_LIST = _any(MENU_RUNS, MENU_APPROVALS)
 _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
+_RUN_PROGRESS = _any(MENU_CHAT, MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
 # 業務 Agent を選ぶ・名前で示す画面（自動実行・品質評価・フィードバックの絞り込み）も読む。
 # 読めないと開いた直後の 403（経路の権限拒否）で権限なしの画面へ移る（#1113。対象範囲で絞る）。
 _AGENT_READ = _any(
@@ -403,6 +404,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # RAG の図の根拠を開く短命の URL（#1311。閲覧者として RAG に作らせる）。
     ("GET", f"{_RUN}/figure-url"): _RUN_DETAIL,
     ("GET", f"{_RUN}/events"): _any(MENU_RUNS, MENU_APPROVALS),
+    # チャットの処理の段階（#1359）。チャットと、Run を見る画面が読む（handler が対象範囲で絞る）。
+    ("GET", f"{_RUN}/progress"): _RUN_PROGRESS,
+    ("GET", f"{_RUN}/progress/stream"): _RUN_PROGRESS,
     ("POST", f"{_RUN}/cancel"): _OPERATE,
     ("POST", f"{_RUN}/resume"): _OPERATE,
     ("POST", f"{_RUN}/replay"): _OPERATE,
