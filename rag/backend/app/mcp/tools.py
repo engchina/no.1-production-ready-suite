@@ -803,7 +803,8 @@ class SearchOutput(VersionedOutput):
             "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠"
             "（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、"
             "前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割に"
-            "なったものも含む）は evidence_limit の 3 割まで、上限の内に入れる。"
+            "なったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に"
+            "入れる。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -857,8 +858,8 @@ class RetrieveEvidenceOutput(VersionedOutput):
             "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった"
             "根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈"
             "（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の"
-            "役割になったものも含む）は evidence_limit の 3 割まで、上限の内に入れる。回答は"
-            "作らないので used_in_answer は false。"
+            "役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで"
+            "上限の内に入れる。回答は作らないので used_in_answer は false。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -1254,6 +1255,12 @@ def _is_entity_expansion(chunk: RetrievedChunk) -> bool:
     )
 
 
+def _evidence_group(chunk: RetrievedChunk) -> tuple[str, str] | None:
+    """根拠の親のかたまり（文書と chunk_group_id）。無ければ None。"""
+    group = _metadata_str(chunk.metadata, "chunk_group_id")
+    return (chunk.document_id, group) if group else None
+
+
 def mcp_evidence_order(
     citations: Sequence[RetrievedChunk], limit: int | None = None
 ) -> list[RetrievedChunk]:
@@ -1271,8 +1278,10 @@ def mcp_evidence_order(
 
     ``limit``（evidence_limit）を渡すと、実体の 1 段の拡張で足した根拠（台帳の行・略号の表。親の
     文脈の役割になったものも含む）を、上限の ``ENTITY_EXPANSION_LIMIT_SHARE`` の割合（最低 1 件）
-    まで上限の内に入れる（#1362）。置く位置は 2 の検索で当たった chunk の後・3 の前の文脈の前で、
-    上限の内に収まらないときは上限の末尾。すでに上限の内にある拡張の根拠は動かさない。
+    まで上限の内に入れる（#1362）。拡張の根拠と同じ親のかたまり（文書と ``chunk_group_id``）の前後の
+    文脈（略号の表の続きなど）も、拡張の根拠の後に同じ枠で入れる。置く位置は 2 の検索で当たった
+    chunk の後・3 の前の文脈の前で、上限の内に収まらないときは上限の末尾。すでに上限の内にある
+    根拠は動かさない。
     """
 
     def key(item: tuple[int, RetrievedChunk]) -> tuple[int, int, int]:
@@ -1293,9 +1302,20 @@ def mcp_evidence_order(
     expansions = [index for index, chunk in enumerate(ordered) if _is_entity_expansion(chunk)]
     if not expansions:
         return ordered
-    quota = min(len(expansions), max(1, math.ceil(limit * ENTITY_EXPANSION_LIMIT_SHARE)))
-    inside = [index for index in expansions if index < limit]
-    moved = [index for index in expansions if index >= limit][: max(0, quota - len(inside))]
+    # 拡張の根拠と同じ親のかたまりの前後の文脈（略号の表の続きなど）も、拡張の根拠の後に確保する。
+    groups = {_evidence_group(ordered[index]) for index in expansions} - {None}
+    expansion_set = set(expansions)
+    contexts = [
+        index
+        for index, chunk in enumerate(ordered)
+        if index not in expansion_set
+        and key((0, chunk))[0] == 2
+        and _evidence_group(chunk) in groups
+    ]
+    reserved = [*expansions, *contexts]
+    quota = min(len(reserved), max(1, math.ceil(limit * ENTITY_EXPANSION_LIMIT_SHARE)))
+    inside = [index for index in reserved if index < limit]
+    moved = [index for index in reserved if index >= limit][: max(0, quota - len(inside))]
     if not moved:
         return ordered
     moving = {id(ordered[index]) for index in moved}

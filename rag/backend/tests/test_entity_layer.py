@@ -962,3 +962,23 @@ def test_mcp_order_caps_the_reserved_share_and_keeps_expansion_already_inside() 
         "inside",
         "hit-3",
     ]
+
+
+def test_mcp_order_also_reserves_context_in_the_same_parent_as_entity_expansion() -> None:
+    """拡張の根拠（第 3 章の承認者）と同じ親のかたまりの前後の文脈（第 2 章の略号の表）も、上限の
+    内に入れる。別の親の前後の文脈は動かさない。
+    """
+    from app.mcp.tools import mcp_evidence_order
+
+    def grouped(chunk: RetrievedChunk, group: str) -> RetrievedChunk:
+        return chunk.model_copy(update={"metadata": {**chunk.metadata, "chunk_group_id": group}})
+
+    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 23)]
+    approver = grouped(_mcp_chunk("org-approver", ENTITY_EXPANSION_ROLE, 25, expansion=True), "org")
+    code_table = grouped(_mcp_chunk("org-code", "neighbor_context"), "org")
+    other = grouped(_mcp_chunk("other-ctx", "neighbor_context"), "other")
+
+    ordered = mcp_evidence_order([*hits, other, code_table, approver], 20)
+
+    assert _ids_of(ordered[:20])[-2:] == ["org-approver", "org-code"]
+    assert "other-ctx" not in _ids_of(ordered[:20])
