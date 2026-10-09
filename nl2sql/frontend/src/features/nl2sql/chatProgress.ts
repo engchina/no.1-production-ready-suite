@@ -207,6 +207,14 @@ export function chatJobProgressSteps(job: JobData, engine?: Nl2SqlEngine): ChatP
   return steps;
 }
 
+/**
+ * チャットの段階の一覧の対象（ジョブ ID と実行の回数）。処理中は一度出した段階を消さない（共有の
+ * `ChatProgress`。#1358）が、引き継いだ実行（attempt が変わった）は段階を初めからにするので作り直す。
+ */
+export function chatJobProgressKey(job: Pick<JobData, "job_id" | "attempt">): string {
+  return `${job.job_id}#${job.attempt ?? 0}`;
+}
+
 /** 完了後の全体の所要時間（ジョブの作成から終了まで）。段階の時刻が無い古いジョブにも出す。 */
 export function chatJobElapsedMs(job: JobData): number | null {
   if (job.status !== "done" && job.status !== "error") return null;

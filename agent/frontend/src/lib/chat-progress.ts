@@ -4,6 +4,10 @@
  * 新しい配信は作らず、チャットが取り直している Run（状態・ツールの step・承認・イベント）から作る。
  * 段階は「進め方の検討（plan）」→ ツールの呼び出し（`tool:<ツール名>`）→ 承認待ち（`approval_wait`。
  * 承認が要るツールがあったときだけ）→「回答の作成（respond）」。
+ *
+ * 承認待ちは、承認を求めた回ごとに 1 つの段階にする（2 回目からは `approval_wait#2` …。#1358）。1 つの段階に
+ * まとめると、承認の後に別のツールの承認を求めたとき、完了した承認待ちが実行中に戻り、「N ステップ完了」の
+ * 一覧から消えて、また現れていた。
  */
 
 import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
@@ -68,11 +72,16 @@ export function runProgressSteps(run: RunState): ChatProgressStep[] {
   );
 
   const steps: DraftStep[] = [plan, ...tools];
-  if (run.approvals.length > 0) {
-    // 承認待ちは、承認が要った最初のツールの前に置く（承認の後にそのツールを実行する）。
-    const firstApprovalTool = toolSteps.findIndex((step) => step.approval_id);
-    steps.splice(firstApprovalTool >= 0 ? firstApprovalTool + 1 : steps.length, 0, approvalProgressStep(run.approvals, pendingApprovals));
-  }
+  // 承認待ちは回ごとに、その回で承認が要った最初のツールの前に置く（承認の後にそのツールを実行する）。
+  // 後ろの位置から入れて、前の位置をずらさない。
+  approvalRounds(run.approvals)
+    .map((round, index) => {
+      const ids = new Set(round.map((approval) => approval.id));
+      const toolIndex = toolSteps.findIndex((step) => step.approval_id && ids.has(step.approval_id));
+      return { at: toolIndex >= 0 ? toolIndex + 1 : steps.length, index, step: approvalProgressStep(round, index) };
+    })
+    .sort((a, b) => b.at - a.at || b.index - a.index)
+    .forEach(({ at, step }) => steps.splice(at, 0, step));
   steps.push(respond);
   return finishSteps(steps, run.status, endedAt).map(({ kind, tool, ...step }) => ({
     ...step,
@@ -146,8 +155,30 @@ function toolProgressStep(step: RunStep, id: string, approvals: ApprovalRequest[
   return withTimes(draft, ran ? step.started_at : undefined, ran ? step.completed_at : undefined);
 }
 
-function approvalProgressStep(approvals: ApprovalRequest[], pending: ApprovalRequest[]): DraftStep {
-  const draft: DraftStep = { id: "approval_wait", kind: "approval", status: pending.length > 0 ? "running" : "done" };
+/**
+ * 承認を求めた回（同じ中断で求めた承認）に分ける。前の回の承認がすべて決まった後に求めた承認は次の回にする。
+ */
+function approvalRounds(approvals: ApprovalRequest[]): ApprovalRequest[][] {
+  const sorted = [...approvals].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const rounds: ApprovalRequest[][] = [];
+  for (const approval of sorted) {
+    const current = rounds.at(-1);
+    const createdAt = Date.parse(approval.created_at);
+    const closed =
+      current !== undefined &&
+      current.every(
+        (item) => item.status !== "pending" && typeof item.decided_at === "string" && Date.parse(item.decided_at) <= createdAt
+      );
+    if (current === undefined || closed) rounds.push([approval]);
+    else current.push(approval);
+  }
+  return rounds;
+}
+
+function approvalProgressStep(approvals: ApprovalRequest[], round: number): DraftStep {
+  const pending = approvals.filter((approval) => approval.status === "pending");
+  const id = round === 0 ? "approval_wait" : `approval_wait#${round + 1}`;
+  const draft: DraftStep = { id, kind: "approval", status: pending.length > 0 ? "running" : "done" };
   if (pending.length > 0) {
     draft.detail = pending.map((approval) => approval.tool_call.name).join("、");
   }

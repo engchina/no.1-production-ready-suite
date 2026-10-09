@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isChatProgressActive } from "@production-ready/ui";
+import {
+  isChatProgressActive,
+  reduceChatProgressSteps,
+  type ChatProgressStepsState,
+} from "@production-ready/ui";
 
 import {
   chatJobElapsedMs,
+  chatJobProgressKey,
   chatJobProgressSteps,
   chatSubmitProgressSteps,
 } from "../src/features/nl2sql/chatProgress.ts";
@@ -294,4 +299,72 @@ test("終端のジョブは実行中・待機中の段階を残さない", () =>
     );
     assert.ok(!steps.some((step) => step.status === "running" || step.status === "pending"));
   }
+});
+
+// #1358: 会話の polling の応答から作った段階の一覧を、共有の規則（ChatProgress が内部で使う）に流す。
+function displayed(jobs: JobData[]): string[][] {
+  let state: ChatProgressStepsState | null = null;
+  return jobs.map((item) => {
+    state = reduceChatProgressSteps(state, {
+      key: chatJobProgressKey(item),
+      steps: chatJobProgressSteps(item),
+      active: item.status === "pending" || item.status === "running",
+    });
+    return summary(state.steps);
+  });
+}
+
+const stagesWith = (statuses: JobStepStatus[]) =>
+  (["prepare_context", "generate_sql", "safety_check", "execute_sql", "format_results"] as const).map(
+    (stage, index) => ({ stage, status: statuses[index] }),
+  );
+
+test("古い応答（取り直しの前の snapshot）が届いても、完了した段階を戻さない（#1358）", () => {
+  const newer = job({
+    status: "running",
+    started_at: created,
+    attempt: 1,
+    steps: stagesWith(["done", "done", "running", "pending", "pending"]),
+  });
+  const older = job({
+    status: "running",
+    started_at: created,
+    attempt: 1,
+    steps: stagesWith(["done", "running", "pending", "pending", "pending"]),
+  });
+  const [, afterOlder] = displayed([newer, older]);
+  assert.deepEqual(afterOlder, [
+    "queue:done",
+    "prepare_context:done",
+    "generate_sql:done",
+    "safety_check:running",
+    "execute_sql:pending",
+    "format_results:pending",
+  ]);
+});
+
+test("引き継いだ実行（attempt が変わった）では段階の一覧を作り直す（#1358）", () => {
+  const first = job({
+    status: "running",
+    started_at: created,
+    attempt: 1,
+    steps: stagesWith(["done", "done", "running", "pending", "pending"]),
+  });
+  const reclaimed = job({
+    status: "running",
+    started_at: created,
+    attempt: 2,
+    steps: stagesWith(["running", "pending", "pending", "pending", "pending"]),
+  });
+  assert.equal(chatJobProgressKey(first), "j1#1");
+  assert.equal(chatJobProgressKey({ job_id: "j1" }), "j1#0");
+  const [, afterReclaim] = displayed([first, reclaimed]);
+  assert.deepEqual(afterReclaim, [
+    "queue:done",
+    "prepare_context:running",
+    "generate_sql:pending",
+    "safety_check:pending",
+    "execute_sql:pending",
+    "format_results:pending",
+  ]);
 });

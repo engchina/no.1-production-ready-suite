@@ -1328,6 +1328,9 @@ class JobData(BaseModel):
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
+    # 実行の回数（worker が claim するたびに増える。0 は未着手）。lease の切れたジョブを別の実行が
+    # 引き継ぐと段階は初めからになるので、画面は attempt が変わったら段階の一覧を作り直す（#1358）。
+    attempt: int = 0
     # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
     last_execution: SqlChatExecutionSummary | None = None
 

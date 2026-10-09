@@ -41,6 +41,8 @@ async function setup(page: Page) {
     requests: [] as Record<string, unknown>[],
     failSend: false,
     pending: false,
+    // 投入したジョブを、backend と同じく worker の開始前（status: pending・段階はすべて待機中）で作る。
+    queued: false,
   };
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({
@@ -90,10 +92,10 @@ async function setup(page: Page) {
       job_id: id,
       question: body.question,
       engine: body.engine,
-      status: state.pending ? "running" : "done",
+      status: state.queued ? "pending" : state.pending ? "running" : "done",
       // 実行中のジョブは今の時刻に作る（処理の経過の経過時間はジョブの作成から数える）。
-      created_at: state.pending ? new Date().toISOString() : now,
-      steps: [],
+      created_at: state.pending || state.queued ? new Date().toISOString() : now,
+      steps: state.queued ? pendingSteps() : [],
       result: state.pending ? null : result,
     };
     state.turns.push(turn);
@@ -921,6 +923,8 @@ for (const width of [1280, 375]) {
     await page.setViewportSize({ width, height: 900 });
     const state = await setup(page);
     state.pending = true;
+    // 段階は進む方へだけ表示する（#1358）ので、開始待ちから始まるジョブを投入する（backend の start_job と同じ）。
+    state.queued = true;
     await page.goto("/chat");
     // #1176: 段階が進む間、右上の経過時間（処理全体の通算）が減らないことを記録する。
     await startProgressTimerSampler(page, "sql-chat-progress");
@@ -1006,7 +1010,17 @@ for (const width of [1280, 375]) {
     await expect(completed).toHaveText("5 ステップ完了");
     expect(await seconds()).toBeGreaterThanOrEqual(before);
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
-    // 送信・開始待ち・生成・結果の整形の段階を通る間、経過時間は減らない。
+    // 送信・開始待ち・生成・結果の整形の段階を通る間、経過時間は減らない。記録（100ms ごと）が
+    // 結果の整形の段階を拾ってから確かめる（開始待ちから始まるので、通る段階は開始待ち・生成・整形）。
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as unknown as { __progressTimerSamples: string[] }).__progressTimerSamples.some(
+            (sample) => sample.startsWith("format_results|"),
+          ),
+        ),
+      )
+      .toBe(true);
     await expectProgressTimerMonotonic(page, 3);
 
     // 完了: 回答の上に「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。

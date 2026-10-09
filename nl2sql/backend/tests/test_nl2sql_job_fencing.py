@@ -103,6 +103,49 @@ def test_reclaimed_sql_job_discards_late_generation_and_returns_new_state(
     assert visible is not None and visible.status == JobStatus.DONE
 
 
+def test_reclaimed_sql_job_restarts_steps_from_the_beginning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1358: 引き継いだ実行は前の実行の段階を残さず、段階を初めから進める。
+
+    前の実行の段階（生成は完了、安全性の確認は実行中）を残すと、引き継いだ実行が準備から
+    やり直す間、後の段階が実行中のまま残り、チャットの段階の一覧が前後していた。
+    """
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repo = _repository()
+    old, new = _worker(repo), _worker(repo)
+    job = old.start_job(_request())
+    assert old._claim_nl2sql_job(worker_id="old", job_id=job.job_id) is not None
+    old._transition_job_steps(job.job_id, running_stage="prepare_context")
+    old._transition_job_steps(
+        job.job_id, completed_stage="prepare_context", running_stage="generate_sql"
+    )
+    old._transition_job_steps(
+        job.job_id, completed_stage="generate_sql", running_stage="safety_check"
+    )
+    expire(repo, job.job_id)
+
+    original = new._generate_selected_engine
+    seen: dict[str, Any] = {}
+
+    def generate(**kwargs: Any) -> Any:
+        seen.update(repo.get_document("jobs", job.job_id) or {})
+        return original(**kwargs)
+
+    monkeypatch.setattr(new, "_generate_selected_engine", generate)
+    assert new.run_next_nl2sql_job(job_id=job.job_id, worker_id="new")
+    assert seen["attempt"] == 2
+    assert [(step["stage"], step["status"]) for step in seen["steps"]] == [
+        ("prepare_context", "done"),
+        ("generate_sql", "running"),
+        ("safety_check", "pending"),
+        ("execute_sql", "pending"),
+        ("format_results", "pending"),
+    ]
+    visible = new.get_job(job.job_id)
+    assert visible is not None and visible.attempt == 2
+
+
 def test_reclaim_between_final_check_and_commit_cannot_add_old_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
