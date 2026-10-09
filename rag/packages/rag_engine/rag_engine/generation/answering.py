@@ -1244,8 +1244,8 @@ def synthesize_grounded_answer(
     best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
     feedback: dict[str, Any] | None = None
     expanded = corrected = False
-    # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか)。
-    summary_flags: list[tuple[int, bool]] = []
+    # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか, 草稿の summary)。
+    summary_flags: list[tuple[int, bool, str]] = []
     best_number = 0
     image_decision = {"reason": "already_multimodal" if mode == "vision_attachments" else "not_needed",
                       "regeneration_calls": 0, "source_provider": source_provider}
@@ -1283,7 +1283,7 @@ def synthesize_grounded_answer(
             best = (current, context, spans, images, mode)
             best_number = number
         if current.audit is not None and not current.audit.summary_supported:
-            summary_flags.append((number, current.unpublished_claims))
+            summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         feedback = best[0].feedback()
@@ -1322,10 +1322,14 @@ def synthesize_grounded_answer(
     current, context, spans, images, mode = best
     # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary も公開しない。
     # 初回の監査が見逃した保証（「〜により対象者を確認できる」）が、後続 round の指摘に関係なく残っていた (#621)。
-    # ただし、不支持の round に公開しなかった主張（降格・除外）があり、その後の是正 round が採用されて自身の監査が
-    # summary を支持したなら、不支持の理由は summary が頼る item を公開できなかったことで、是正で直っている。
-    # 多段の結論の段を 1 つの item に混ぜた初回の不支持が残り、段を分けて直した結論まで外していた (#1383)。
-    summary_flagged = any(not (unpublished and number < best_number) for number, unpublished in summary_flags)
+    # 引き継ぐのは、採用 round の summary が不支持の summary の文を繰り返すときだけ（別の結論に書き直した summary は
+    # 採用 round の監査の判定に従う）。また、不支持の round に公開しなかった主張（降格・除外）があり、その後の是正
+    # round が採用されて自身の監査が summary を支持したなら、不支持の理由は summary が頼る item を公開できなかった
+    # ことで、是正で直っている。多段の結論の段を 1 つの item に混ぜた初回の不支持が残り、段を分けて直した結論まで
+    # 外していた (#1383)。
+    summary_flagged = any(not (unpublished and number < best_number)
+                          and grounded.repeats_summary(str(current.draft.summary), flagged)
+                          for number, unpublished, flagged in summary_flags)
     if summary_flagged and current.summary != grounded.NEUTRAL_SUMMARY:
         current = replace(current, summary=grounded.NEUTRAL_SUMMARY)
     if image_decision["reason"] == "attempted":

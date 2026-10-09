@@ -208,6 +208,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- 観測結果から原因・成功・解消を断定する text も、quote にその因果がなければ unsupported。\n"
     "3.2 applicability（質問へ適用できるか）\n"
     "- 質問の対象・変更項目・発生条件と quote の前提が一致すれば matched。quote が同じ業務・機能の種類の一般手順・規則で、質問固有の値（コード名・グループ名・回数・メニュー名の言い回し）が無いだけなら matched とする（資料は一般手順を書く）。\n"
+    "- applicability は quote の対象が質問の対象と一致するかで決め、その item 1 つが質問のすべて（承認者・期限・時間帯など）に答えているかでは決めない。「この item だけでは質問に直接答えていない」は not_applicable の理由にならない（答えの充足は request_reviews で判定する）。\n"
     "- 原文に適用条件・限定が明記され、その成立が質問から確認できなければ conditional とし condition に原文の条件を書く。別の対象・項目・業務向けなら not_applicable。\n"
     "- 質問の対象（画面・機能・業務）と quote の対象が別で、共通の操作語（登録・入力・選択・番号・実行）だけが一致する場合は not_applicable（例: マスタの新規登録を尋ねた質問に、伝票入力で既存のマスタを選択する操作。分類の番号入力を別の登録画面の番号入力として説明する text）。\n"
     "- 特定の機能・業務・担当者にだけ適用される条件・制限（『〜機能のみ』『〜の場合は修正不可』『〜担当者が行う』）を、別の機能・設定を対象とする text に適用していれば not_applicable。質問が機能・業務を特定しておらず quote の限定が特定の機能・業務のものなら conditional とし、condition に原文の機能・業務名を写す。\n"
@@ -608,6 +609,25 @@ def summary_asserts_denied(summary: str, denied: Sequence[str], verified: Sequen
             if len(present) >= _DENIED_CLAIM_MIN_BIGRAMS and len(present) / len(claim) >= _DENIED_CLAIM_RATIO:
                 return "降格した主張を summary が断定: " + text[:60]
     return ""
+
+
+# 不支持とされた summary の文の語（漢字・カタカナ・英数字の連なり）のうち、別の round の summary の 1 文に
+# この割合以上が現れれば、その文を繰り返しているとみなす。値（承認者・日数）が 1 つでも違えば下回る。
+_REPEATED_SUMMARY_RATIO = 0.9
+
+
+def repeats_summary(summary: str, flagged: str) -> bool:
+    """summary が、監査が不支持とした別の round の summary（flagged）の文を繰り返しているか (#621, #1383)。
+
+    同じ保証の文が残っていれば、言い回しの揺れ（読点・助詞）があっても繰り返しとみなす。別の値・別の結論へ
+    書き直した summary は繰り返しではない（例: 「管理本部長が 5 営業日」から「労務部長が 3 営業日」へ直した結論）。
+    語の並びで判定し、意味は見ない。
+    """
+    def sentences(value: str) -> list[set[str]]:
+        parts = re.split(r"(?<=[。．])|\n", fold_width(value or ""))
+        return [words for part in parts if (words := set(re.findall(r"[一-龯々ァ-ヶーA-Za-z0-9]+", part)))]
+    current = sentences(summary)
+    return any(len(old & new) / len(old) >= _REPEATED_SUMMARY_RATIO for old in sentences(flagged) for new in current)
 
 
 def _check_unexplained_guarantee(question: str, item: GroundedItem, span: dict) -> str:

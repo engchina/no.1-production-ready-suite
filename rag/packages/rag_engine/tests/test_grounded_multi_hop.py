@@ -93,6 +93,28 @@ def test_summary_rejected_while_every_item_was_supported_stays_unpublished():
     assert guarantee not in result.answer_text
 
 
+def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accepted_round():
+    """不支持の summary（別の時間帯を結論にした）を是正で別の結論に書き直したら、採用した回の監査に従う (#1383)。
+
+    #621 の引き継ぎは同じ文を繰り返す summary だけに掛ける。不支持の文が残る summary は公開しない。
+    """
+    ctx = _context()
+    by_text = ids(ctx, QUESTION)
+    hops = _hops(by_text)
+    wrong = "人事給与システムの変更は管理本部長が承認し、受付から 5 営業日以内に承認します。"
+    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")],
+                  summary_supported=False)
+    model = FakeModel([draft(*hops[:2], summary=wrong), draft(*hops, summary=CONCLUSION)], [first, _supported(4)])
+
+    result = run(model, ctx, QUESTION).response
+
+    assert result.answer_text.startswith(CONCLUSION)
+    assert wrong not in result.answer_text
+    assert grounded.repeats_summary("一覧を出力します。" + wrong, wrong)
+    assert grounded.repeats_summary(wrong.replace("、", ""), wrong)  # 読点の揺れは同じ文
+    assert not grounded.repeats_summary(CONCLUSION, wrong)
+
+
 def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
     """台帳の段が根拠に無ければ、つないだ結論を断定しない（足りない段を推測で埋めない）。"""
     ctx = context(record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
@@ -146,6 +168,7 @@ def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     assert "1 段 1 item" in generate
     assert "足りない段を推測で埋めない" in generate
     assert "その item だけで最終の答えにならないこと" in audit_prompt
+    assert "「この item だけでは質問に直接答えていない」は not_applicable の理由にならない" in audit_prompt
     assert "つなぐ段のどれかが supported な item に無ければ false" in audit_prompt
     # 監査の prompt は 1 行 1 規則（節見出しと空行を除く）。
     assert all(line.startswith("- ") or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
