@@ -1,10 +1,11 @@
-"""多段の質問の案内（#1345・#1351）の決定論テスト。
+"""多段の質問の案内（#1345・#1351・#1365）の決定論テスト。
 
 RAG は部品（根拠・構成・順に読む）を出し、多段の組み立ては Agent が行う。Control Plane は、根拠を
 集める・読むツールの本文に同じ文書の別の箇所への参照（「第 4 章を参照」）があれば読む先を、同じ
 （ほぼ同じ）query の検索を繰り返したら繰り返しを止める案内を、RAG の予算があればこの Run で残る
 検索の回数を、モデルへの結果に足す（記録する step の結果は RAG のまま）。モデルが既定より小さくした
-`evidence_limit` は既定に引き上げる（#1351）。
+`evidence_limit` は既定に引き上げる（#1351）。query の実体に当たる台帳・一覧の行に略号・区分の
+短い値があれば、その意味を引く次の段を案内する（#1365）。
 SDK の `ScriptedModel` と契約どおりの fake の RAG の MCP（`mcp_support`）で確かめる。
 """
 
@@ -14,12 +15,19 @@ import contextlib
 import json
 from collections.abc import Iterator
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import anyio
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
-from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, fake_product_mcp
+from mcp_support import (
+    DEFAULT_OUTPUTS,
+    FakeProductMcp,
+    RagRetrieveEvidenceIn,
+    RagSearchIn,
+    fake_product_mcp,
+)
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
@@ -37,11 +45,14 @@ from app.features.agent.skills import (
     skill_registry,
 )
 from app.features.agent.support_task import (
+    MAX_RECORD_CODES,
     MAX_REFERENCES,
+    RECORD_CODE_HINT,
     REFERENCE_READ_HINT,
     REPEATED_QUERY_HINT,
     normalized_query,
     raised_evidence_limit,
+    record_codes,
     repeated_query_note,
     similar_queries,
     text_references,
@@ -374,14 +385,14 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
     )
     run = _run()
 
-    # 既定より小さい evidence_limit は既定（RAG の契約の 12）に引き上げ、大きい値は変えない。
+    # 既定より小さい evidence_limit は既定（RAG の契約の 20。#1365）に引き上げ、既定以上は変えない。
     sent = [
         call["arguments"].get("evidence_limit") for call in mcp.calls_of("rag_retrieve_evidence")
     ]
-    assert sent == [12, 20, None]
+    assert sent == [20, 20, None]
     # step には送った値を残す。
     recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
-    assert recorded[0]["evidence_limit"] == 12
+    assert recorded[0]["evidence_limit"] == 20
 
     assert "repeated_query" not in _tool_output(model, 1, "call-1")
     assert _tool_output(model, 2, "call-2")["repeated_query"] == {
@@ -404,7 +415,9 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
     # 台帳を示されたらその実体で台帳を引く・繰り返しの案内に従う（#1351）。
     for phrase in (
         "実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）と引く属性だけ",
-        "evidence_limit は既定（12）より小さくしない",
+        "evidence_limit は既定より小さくしない",
+        "record_codes",
+        "1 回目の結果だけで答えず、その意味を次の段で引く",
         "言い換えて 2 回引いても根拠が出なければ",
         "その台帳・一覧の名前と実体と属性で次の段を引く",
         "repeated_query",
@@ -412,3 +425,162 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
         "references",
     ):
         assert phrase in instructions, phrase
+
+
+# ---- 台帳の行の略号・区分（#1365） --------------------------------------------------------------
+
+CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
+
+
+def _record(excerpt: str, chunk_id: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "document_id": "doc-ledger",
+        "file_name": "system-ledger.xlsx",
+        "chunk_id": chunk_id,
+        "content_kind": "record",
+        "excerpt": excerpt,
+        **extra,
+    }
+
+
+# #1335 の再評価の D の形: 「経費精算ポータル 担当部署」の 1 回目の結果に、台帳の行（担当部署が
+# 略号の「経」）と別のシステムの行、略号の表を指さない規程の本文が並ぶ。
+_LEDGER_EVIDENCE: dict[str, Any] = {
+    "evidence": [
+        {
+            "document_id": "doc-guide",
+            "chunk_id": "guide-1",
+            "content_kind": "text",
+            "excerpt": "変更の承認は担当部署: 経 の承認者が行う。",
+        },
+        _record(
+            "システムID: SYS-102 / 正式名: 勤怠管理システム / 担当部署: 人 / 重要度: A",
+            "ledger-102",
+        ),
+        _record(
+            "システムID: SYS-101 / 正式名: 経費精算ポータル / 略称・別表記: 経費 Portal"
+            " / 担当部署: 経 / 重要度: B / 機密区分: 社外秘 / 保管年数: 7",
+            "ledger-101",
+        ),
+    ]
+}
+
+
+def test_record_codes_point_to_short_values_of_the_matching_row() -> None:
+    note = record_codes(_LEDGER_EVIDENCE, "経費精算ポータル 担当部署", [])
+    assert note == {
+        "values": [
+            {
+                "field": "担当部署",
+                "value": "経",
+                "record_of": "経費精算ポータル",
+                "document_id": "doc-ledger",
+                "file_name": "system-ledger.xlsx",
+                "chunk_id": "ledger-101",
+            },
+            {
+                "field": "重要度",
+                "value": "B",
+                "record_of": "経費精算ポータル",
+                "document_id": "doc-ledger",
+                "file_name": "system-ledger.xlsx",
+                "chunk_id": "ledger-101",
+            },
+        ],
+        "next_step": RECORD_CODE_HINT,
+    }
+    # 略称・全角の表記でも同じ行に当たる。数字だけの値・長い値は略号ではない。
+    by_alias = record_codes(_LEDGER_EVIDENCE, "経費 Ｐｏｒｔａｌ 担当部署", [])
+    assert by_alias is not None
+    assert [(item["field"], item["value"]) for item in by_alias["values"]] == [
+        ("担当部署", "経"),
+        ("重要度", "B"),
+    ]
+
+
+def test_record_codes_skip_values_already_searched_and_unrelated_rows() -> None:
+    # この Run で「担当部署 経」を引いた後は、その値を案内しない。
+    note = record_codes(_LEDGER_EVIDENCE, "経費精算ポータル 担当部署", ["担当部署 経 正式名"])
+    assert note is not None
+    assert [item["value"] for item in note["values"]] == ["B"]
+    # query の実体に当たる行が無い・記録の無い結果・query の無い呼び出しは案内しない。
+    assert record_codes(_LEDGER_EVIDENCE, "予算管理システム 担当部署", []) is None
+    assert (
+        record_codes({"evidence": _LEDGER_EVIDENCE["evidence"][:1]}, "経費精算ポータル", []) is None
+    )
+    assert record_codes(_LEDGER_EVIDENCE, "", []) is None
+    assert record_codes({}, "経費精算ポータル", []) is None
+
+
+def test_record_codes_read_multi_row_headers_and_sheet_rows_without_kind() -> None:
+    # 複数行の表頭（「 / 」でつないだ列名）と、種類の無い表計算の 1 行の根拠。
+    row = {
+        "document_id": "doc-ledger",
+        "chunk_id": "row-5",
+        "excerpt": "システム名: 予算管理システム / 区分 / 重要度: S / 担当部署: 企",
+        "locator": {"sheet_name": "台帳", "row_start": 5, "row_end": 5},
+    }
+    note = record_codes({"evidence": [row]}, "予算管理システム 重要度", [])
+    assert note is not None
+    assert [(item["field"], item["value"]) for item in note["values"]] == [
+        ("区分 / 重要度", "S"),
+        ("担当部署", "企"),
+    ]
+    # 複数の行の範囲（表のかたまり）は 1 行の記録ではない。
+    block = {**row, "locator": {"sheet_name": "台帳", "row_start": 5, "row_end": 9}}
+    assert record_codes({"evidence": [block]}, "予算管理システム 重要度", []) is None
+
+
+def test_record_codes_are_bounded() -> None:
+    excerpt = "正式名: 経費精算ポータル / " + " / ".join(f"項目{n}: {n}a" for n in range(10))
+    note = record_codes({"evidence": [_record(excerpt, "wide")]}, "経費精算ポータル", [])
+    assert note is not None
+    assert len(note["values"]) == MAX_RECORD_CODES
+
+
+def test_ledger_row_with_codes_gets_a_next_hop_hint(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output["evidence"] = deepcopy(_LEDGER_EVIDENCE["evidence"])
+    mcp.outputs["rag_retrieve_evidence"] = output
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "経費精算ポータル 担当部署"}, call_id="c1"
+            )
+        ],
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "担当部署 経 正式名"}, call_id="c2"
+            )
+        ],
+        [assistant_message("担当部署は経理部です。")],
+    )
+    run = _run()
+
+    first = _tool_output(model, 1, "c1")
+    assert [item["value"] for item in first["record_codes"]["values"]] == ["経", "B"]
+    assert first["record_codes"]["next_step"] == RECORD_CODE_HINT
+    # 略号を引く次の段（「担当部署 経 正式名」）は台帳の行の実体に当たらないので案内しない。
+    second = _tool_output(model, 2, "c2")
+    assert "record_codes" not in second
+    # 記録する step の結果は RAG の結果のまま。
+    recorded = [step.tool_result.output for step in run.steps if step.tool_result is not None]
+    assert all("record_codes" not in (output or {}) for output in recorded)
+
+
+def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
+    """fake の既定の件数は RAG の契約と同じ（rag_retrieve_evidence 20・rag_search 12。#1365）。"""
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    defaults = {
+        tool["name"]: tool["inputSchema"]["properties"]["evidence_limit"]["default"]
+        for tool in contract["tools"]
+        if tool["name"] in {"rag_search", "rag_retrieve_evidence"}
+    }
+    assert defaults == {
+        "rag_search": RagSearchIn.model_fields["evidence_limit"].default,
+        "rag_retrieve_evidence": RagRetrieveEvidenceIn.model_fields["evidence_limit"].default,
+    }
+    assert defaults == {"rag_search": 12, "rag_retrieve_evidence": 20}
