@@ -148,12 +148,33 @@ skill_registry.register(
         instructions=(
             "ユーザーの目的を rag_search の query として扱い、根拠（evidence）に基づいて答える。"
             "答える前に根拠だけを集める段（子目標ごとの調べ物など）では、回答を作らない"
-            " rag_retrieve_evidence を使い、最後に答えるときだけ rag_search を呼ぶ。"
+            " rag_retrieve_evidence を使い、最後に答えるときだけ rag_search "
+            "を呼ぶ（多段の質問は次の手順で、最後に rag_search を呼ばない）。"
+            "複数の根拠をつないで初めて答えられる質問（多段の質問。例: システムの担当部署 → "
+            "その部署の承認者 → 承認者の承認の期限、2 つの実体の比較）は、次の順で進める。1) "
+            "答えに要る事実を段に分け、前の段の答えが次の段の検索の語になる順に並べる。2) 段ごとに "
+            "rag_retrieve_evidence を 1 回呼ぶ。query は質問全体ではなく、その段で引く事実と、"
+            "前の段で分かった実体（正式名・略号・ID・役職名を根拠の表記のまま）にする。"
+            "比べる質問は実体ごとに引く。表（台帳など）の行は ID・正式名で引き、"
+            "略称・別表記しか分からなければ両方を入れる。3) 根拠の本文が同じ文書の別の箇所（「第 4 "
+            "章を参照」など）を指すときは、結果の references のとおり rag_outline で節を確かめ、"
+            "rag_read_document（節の cursor）で読む。4) 全部の段の根拠がそろったら、質問全体で "
+            "rag_search を呼び直さず（質問の語で引き直すと前の段の根拠が落ちる）、"
+            "集めた根拠だけで答え、段ごとに確かめた文書と場所（節・頁）を示す。5) "
+            "根拠が見つからない段は推測で補わず、確かめられなかった点として示し、"
+            "分かった段までを答える。結果の rag_calls_remaining（この実行で残る検索の回数）"
+            "が段の数より少なければ、段をまとめるか、読み取り（rag_read_document・rag_read_source。"
+            "回数に数えない）で補う。"
             "対象の検索・回答プロファイルが分からなければ "
             "rag_list_search_answer_profiles で確かめる。"
             "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
             "根拠の excerpt が切り詰められている（truncated）か、前後の条件・例外を確かめる必要が"
             "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
+            "検索で当たらなかった前後の章・「第 3 章を参照」の先・長い文書の続きは、"
+            "rag_outline で文書の節の構成を見て、rag_read_document で読む（page・section・"
+            "locator で読み始め、続きは next_cursor を渡す）。根拠の locator.element_locator は"
+            " rag_read_source と rag_read_document の locator に渡せ、chunk が作り直されても"
+            "同じ箇所を読める。"
             "rag_search の outcome で答え方を決める。answered は根拠に沿って答える。"
             "conditional は conditions（説明が成り立つ条件）と gaps（資料で確かめられない点）を"
             "示し、条件ごとに分けて答える。"
@@ -186,6 +207,8 @@ skill_registry.register(
                     "rag_read_source",
                     "rag_lookup_guides",
                     "rag_retrieve_evidence",
+                    "rag_outline",
+                    "rag_read_document",
                 ],
             )
         ],

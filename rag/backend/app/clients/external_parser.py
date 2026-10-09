@@ -11,7 +11,7 @@ import math
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import batched
 from typing import Any, Literal, cast
 from urllib.parse import urljoin
@@ -48,8 +48,21 @@ class ExternalParserEngineSpec:
     endpoint_field: str
     model_field: str | None
     api_key_field: str
-    call: Callable[..., tuple[object, list[ExtractionPage]]]
+    call: Callable[..., ExternalParserOutput]
     convert: Callable[..., ParserRegistryResult]
+
+
+@dataclass(frozen=True)
+class ExternalParserOutput:
+    """解析エンジンの出力（共通の抽出の変換に渡す block の列と頁）。
+
+    ``layout_records`` は親子階層（small-to-big）が読む LayoutRecord の容れ物
+    （``parser_artifacts["layout_records"]``。Docling と同じ形）。作れないエンジン・文書は None。
+    """
+
+    rendered: object
+    pages: list[ExtractionPage]
+    layout_records: dict[str, Any] | None = None
 
 
 ENGINE_SPECS: dict[ExternalParserBackend, ExternalParserEngineSpec]
@@ -187,15 +200,13 @@ class ExternalParserClient:
             raise ExternalParserCallError("unconfigured", warning_code=f"{backend}_unconfigured")
         try:
             spec = ENGINE_SPECS[backend]
-            rendered, pages = spec.call(
-                self, source_bytes, source_profile, content_type, connection
-            )
+            output = spec.call(self, source_bytes, source_profile, content_type, connection)
             result = spec.convert(
-                rendered,
+                output.rendered,
                 backend=backend,
                 source_profile=source_profile,
                 parser_version=f"external:{connection.model or 'native'}",
-                pages=pages,
+                pages=output.pages,
                 extra_artifacts={
                     "external_protocol": connection.protocol,
                     "external_model": connection.model,
@@ -205,6 +216,8 @@ class ExternalParserClient:
                 raise ExternalParserCallError(
                     "adapter_empty_result", warning_code=f"{backend}_adapter_empty"
                 )
+            if output.layout_records is not None:
+                result = _with_layout_records(result, output.layout_records)
             return result
         except ExternalParserCallError:
             raise
@@ -229,12 +242,13 @@ class ExternalParserClient:
         source_profile: SourceProfile | None,
         content_type: str,
         connection: ExternalParserConnection,
-    ) -> tuple[object, list[ExtractionPage]]:
+    ) -> ExternalParserOutput:
         """MinerU 4.x の V1 API で解析する（#1329）。
 
         upload → complete → parse job → 終了状態までポーリング → Middle JSON の取得の順に呼ぶ。
         3.x までの ``/file_parse`` は 4.0 で削除されたため呼ばない。Middle JSON は
-        content list と同じ形の扁平な block へ写し、共通の抽出の変換に渡す。
+        content list と同じ形の扁平な block へ写し、共通の抽出の変換に渡す。親子階層
+        （small-to-big）の分割のために、同じ Middle JSON から LayoutRecord も作る（#1334）。
         """
         name = source_profile.sanitized_file_name if source_profile else "upload"
         mime_type = content_type or "application/octet-stream"
@@ -256,7 +270,16 @@ class ExternalParserClient:
         rendered = mineru_middle_json_blocks(middle_json)
         if not rendered:
             raise ValueError("mineru output is empty")
-        return rendered, _pages_from_elements(rendered)
+        # 循環 import を避けて使うときに読む（mineru_layout は本モジュールの helper を使う）。
+        from app.clients.mineru_layout import mineru_layout_records
+
+        layout_records = mineru_layout_records(
+            middle_json,
+            source_bytes=source_bytes,
+            content_type=content_type,
+            source_profile=source_profile,
+        )
+        return ExternalParserOutput(rendered, _pages_from_elements(rendered), layout_records)
 
     def _mineru_upload(
         self,
@@ -381,7 +404,7 @@ class ExternalParserClient:
         source_profile: SourceProfile | None,
         content_type: str,
         connection: ExternalParserConnection,
-    ) -> tuple[object, list[ExtractionPage]]:
+    ) -> ExternalParserOutput:
         rendered_pages = self._source_images(
             source_bytes, source_profile, content_type, self._settings.rag_parser_dots_ocr_dpi
         )
@@ -412,7 +435,7 @@ class ExternalParserClient:
                 )
         if not elements:
             raise ValueError("dots output is empty")
-        return elements, pages
+        return ExternalParserOutput(elements, pages)
 
     def _source_images(
         self,
@@ -953,6 +976,17 @@ _DOTS_PROMPT = (
     "5. Final Output: The entire output must be a single JSON object.\n"
 )
 _DOTS_IMAGE_TOKENS = "<|img|><|imgpad|><|endofimg|>"
+
+
+def _with_layout_records(
+    result: ParserRegistryResult, layout_records: dict[str, Any]
+) -> ParserRegistryResult:
+    """共通の抽出の変換の結果に、親子階層が読む LayoutRecord（#1334）を載せる。"""
+    extraction = result.extraction
+    if extraction is None:
+        return result
+    artifacts = {**extraction.parser_artifacts, "layout_records": layout_records}
+    return replace(result, extraction=extraction.model_copy(update={"parser_artifacts": artifacts}))
 
 
 def _convert_external_output(

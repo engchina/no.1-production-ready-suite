@@ -94,6 +94,14 @@ RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備�
 - [デプロイメント](./docs/deployment.md)
 - [参考 RAG プロジェクト](./docs/reference-rag-projects.md)
 
+## TODO
+
+- [ ] **実際の MinerU 4.x の API サーバーでの確認（未実施）**: #1329 の V1 API（`/v1/uploads` → `/v1/parse/jobs` → `/v1/files`）と
+  #1334 の Middle JSON からの親子階層（small-to-big）の分割は、記録した応答のスタブでだけ確かめている。GPU の MinerU 4.x
+  （`mineru-kit api-server`）を用意できたら、tier ごと（`flash` / `basic` / `standard` / `advanced`）に PDF・画像・Office の文書を
+  取り込み、解析の待ち・取り消し・結果の取得（302 の転送）・見出しの階層・頁と bbox・要素の定位子を確かめる
+  （手順は [docs/deployment.md](./docs/deployment.md)「既存環境の更新手順（#1329 MinerU 4.0 の V1 API）」）。
+
 ## シークレット混入防止(gitleaks)
 
 `.env` 等の機微値を扱うため、コミット前に **gitleaks** でシークレット混入を検出する pre-commit hook を用意している。設定は `.gitleaks.toml`(誤検知の test/E2E fixture のみ allowlist)。各開発者は一度だけ以下を実行する。

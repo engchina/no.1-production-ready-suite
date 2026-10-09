@@ -62,6 +62,8 @@ READ_ONLY = {
     "rag_read_source": True,
     "rag_lookup_guides": True,
     "rag_retrieve_evidence": True,
+    "rag_outline": True,
+    "rag_read_document": True,
     "rag_validate_answer": True,
     "nl2sql_query": False,
     "nl2sql_get_job": True,

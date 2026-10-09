@@ -65,6 +65,20 @@ class RagReadSourceIn(_ContractInput):
     include_image_url: bool = False
 
 
+class RagOutlineIn(_ContractInput):
+    document_id: str = Field(min_length=1, max_length=128)
+
+
+class RagReadDocumentIn(_ContractInput):
+    # 文書を順に読む（#1332）。読み始めの位置はどれか 1 つ。
+    document_id: str = Field(min_length=1, max_length=128)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
+    locator: str | None = Field(default=None, min_length=1, max_length=1024)
+    page: int | None = Field(default=None, ge=1)
+    section: str | None = Field(default=None, min_length=1, max_length=512)
+    max_chars: int = Field(default=8000, ge=1, le=20000)
+
+
 class RagEvidenceRefIn(_ContractInput):
     document_id: str = Field(min_length=1, max_length=128)
     chunk_id: str = Field(min_length=1, max_length=512)
@@ -194,6 +208,56 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "parent_text": None,
         "parent_truncated": False,
     },
+    "rag_outline": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
+        "document_id": "doc-1",
+        "file_name": "契約書.pdf",
+        "chunk_set_id": "cs-1",
+        "chunk_count": 2,
+        "page_start": 1,
+        "page_end": 4,
+        "sections": [
+            {
+                "section_path": ["契約書", "第5条（更新）"],
+                "page_start": 3,
+                "page_end": 3,
+                "chunk_count": 1,
+                "chars": 7,
+                "cursor": "cursor-section-5",
+            }
+        ],
+        "sections_omitted": 0,
+        "superseded": False,
+    },
+    "rag_read_document": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
+        "document_id": "doc-1",
+        "file_name": "契約書.pdf",
+        "chunk_set_id": "cs-1",
+        "text": "--- p.3 ---\n契約条項の全文\n更新の条件",
+        "chunks": [
+            {
+                "chunk_id": "chunk-3",
+                "element_locator": None,
+                "section_path": ["契約書", "第5条（更新）"],
+                "page_start": 3,
+                "page_end": 3,
+                "start": 12,
+                "end": 19,
+            },
+            {
+                "chunk_id": "chunk-4",
+                "element_locator": None,
+                "section_path": ["契約書", "第5条（更新）"],
+                "page_start": 3,
+                "page_end": 3,
+                "start": 20,
+                "end": 25,
+            },
+        ],
+        "next_cursor": None,
+        "superseded": False,
+    },
     "rag_list_search_answer_profiles": {
         "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "search_answer_profiles": [
@@ -306,6 +370,8 @@ class FakeProductMcp:
                     self._tool("rag_read_source", RagReadSourceIn),
                     self._tool("rag_lookup_guides", RagLookupGuidesIn),
                     self._tool("rag_retrieve_evidence", RagSearchIn),
+                    self._tool("rag_outline", RagOutlineIn),
+                    self._tool("rag_read_document", RagReadDocumentIn),
                     self._tool("rag_validate_answer", RagValidateAnswerIn),
                 ],
             ),

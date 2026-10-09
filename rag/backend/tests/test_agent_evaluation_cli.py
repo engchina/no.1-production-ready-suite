@@ -15,6 +15,7 @@ from app.rag.agent_evaluation_cli import (
     AgentApi,
     agent_turn,
     evaluate,
+    evidence_citations,
     known_conditions_text,
     main,
     summarize_result,
@@ -532,3 +533,62 @@ def test_main_rejects_unresolved_file_references(
     code = main(["run", str(golden), "--agent-id", "x", "--output", str(tmp_path / "o.json")])
     assert code == 2
     assert "file:" in capsys.readouterr().err
+
+
+def test_chunks_read_by_the_agent_count_as_evidence() -> None:
+    # 多段の質問（#1345）: 段の事実を rag_read_source・rag_read_document で読んだ chunk も
+    # 根拠に数える。
+    text = "--- p.2 ---\n第 4 章 承認者の代理\n代理は管理本部長。"
+    run = _run(
+        "run_" + "1" * 32,
+        answer="代理は管理本部長です。",
+        steps=[
+            _step("rag_retrieve_evidence", {"evidence": [_evidence("doc-1", "c-1", "台帳")]}),
+            _step(
+                "rag_read_source",
+                {
+                    "document_id": "doc-2",
+                    "chunk_id": "c-2",
+                    "text": "承認者は部長",
+                    "file_name": "a.pdf",
+                },
+            ),
+            _step(
+                "rag_read_document",
+                {
+                    "document_id": "doc-3",
+                    "file_name": "組織規程.pdf",
+                    "text": text,
+                    "chunks": [
+                        {
+                            "chunk_id": "c-3",
+                            "section_path": ["第 4 章 承認者の代理"],
+                            "page_start": 2,
+                            "page_end": 2,
+                            "start": 12,
+                            "end": len(text),
+                        },
+                        # 既に数えた chunk は重ねない。
+                        {"chunk_id": "c-3", "start": 0, "end": 0},
+                    ],
+                },
+            ),
+            _step("rag_outline", {"document_id": "doc-3", "sections": []}),
+        ],
+    )
+
+    citations = evidence_citations(run)
+
+    assert [(item.document_id, item.chunk_id) for item in citations] == [
+        ("doc-1", "c-1"),
+        ("doc-2", "c-2"),
+        ("doc-3", "c-3"),
+    ]
+    assert citations[1].text == "承認者は部長"
+    assert citations[2].text == "第 4 章 承認者の代理\n代理は管理本部長。"
+    assert citations[2].file_name == "組織規程.pdf"
+    assert citations[2].metadata == {
+        "section_path": ["第 4 章 承認者の代理"],
+        "page_start": 2,
+        "page_end": 2,
+    }

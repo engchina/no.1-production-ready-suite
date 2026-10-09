@@ -85,7 +85,10 @@ from app.features.agent.skills import skill_registry
 from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,
     GUIDE_CHECK_TRACE_PREFIX,
+    RAG_BUDGET_TOOLS,
     RAG_LOOKUP_GUIDES,
+    RAG_READ_DOCUMENT,
+    RAG_READ_SOURCE,
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
     SupportTaskBudget,
@@ -96,6 +99,7 @@ from app.features.agent.support_task import (
     is_environment_tool,
     rag_next_step,
     support_task_instructions,
+    text_references,
 )
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
@@ -645,11 +649,29 @@ class _ToolRecorder:
                 note = guide_check_note(output, evidence_gathered=False)
                 if note is not None:
                     output = {**output, "next_step": note["next_step"]}
+            if isinstance(output, dict):
+                output = self.hop_hints(base, output)
             return json.dumps(output, ensure_ascii=False, default=str)
         return json.dumps(
             {"error": result.error or "tool failed", "error_code": result.error_code},
             ensure_ascii=False,
         )
+
+    def hop_hints(self, tool: str, output: dict[str, Any]) -> dict[str, Any]:
+        """多段の質問の案内をモデルへの結果に足す（#1345。記録する step の結果は RAG のまま）。
+
+        根拠を集める・読むツールの本文に同じ文書の別の箇所への参照があれば読む先（`references`）を、
+        RAG の予算があればこの Run で残る検索の回数（`rag_calls_remaining`）を足す。
+        """
+        if tool not in RAG_BUDGET_TOOLS and tool not in {RAG_READ_SOURCE, RAG_READ_DOCUMENT}:
+            return output
+        references = text_references(tool, output)
+        if references:
+            output = {**output, "references": references}
+        remaining = self.budget.rag_calls_remaining if self.budget is not None else None
+        if remaining is not None:
+            output = {**output, "rag_calls_remaining": remaining}
+        return output
 
     async def check_guides(
         self, evidence_tool: str, arguments: dict[str, Any]

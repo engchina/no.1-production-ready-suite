@@ -27,6 +27,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -48,6 +50,9 @@ _DRY_RUN_CODE = "evaluation.dry_run"
 RAG_SEARCH = "rag_search"
 RAG_RETRIEVE_EVIDENCE = "rag_retrieve_evidence"
 RAG_LOOKUP_GUIDES = "rag_lookup_guides"
+# 本文を読むツール（#1330・#1332）。軽いので Run ごとの RAG の上限には数えない。
+RAG_READ_SOURCE = "rag_read_source"
+RAG_READ_DOCUMENT = "rag_read_document"
 # Control Plane が自分で呼ぶ業務ガイドの照合（#1322）の呼び出しの trace_id の接頭辞。
 # モデルの予算・消費には数えない（回答の最終の検証と同じく Control Plane の呼び出し）。
 GUIDE_CHECK_TRACE_PREFIX = "guide_check_"
@@ -59,6 +64,18 @@ RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 _UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+
+# 本文の中の、同じ文書の別の箇所を指す参照（「第 4 章を参照」「別表 2 参照」など。#1345）。
+# 根拠の本文は NFKC にしてから探す（全角の数字・空白を同じに扱う）。
+_REFERENCE_PATTERN = re.compile(
+    r"(第\s*[0-9一二三四五六七八九十百]+\s*[章節条項部編]|別表\s*[0-9一二三四五六七八九十]*"
+    r"|付録\s*[0-9A-Za-z一二三四五六七八九十]*)\s*(?:を|も)?\s*(?:ご)?参照"
+)
+MAX_REFERENCES = 5
+REFERENCE_READ_HINT = (
+    "rag_outline でこの文書の節の構成を確かめ、"
+    "当たる節の cursor を rag_read_document に渡して読む。"
+)
 
 # 固定の RAG では回答を確定できず、Agent が自分の道具で続ける対応（#1283）。確認の質問
 # （needs_clarification）は利用者に聞けば続けられ、人への引き継ぎ（needs_human）と資料の不足
@@ -183,6 +200,63 @@ def ask_clarification_step(clarifications: object, *, reason: str) -> JsonObject
             "利用者が答えたら、その値を conditions（条件の id → 値）に入れて続けてください。"
         ),
     }
+
+
+def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | None, str]]:
+    """参照を探す（document_id, file_name, 本文）。根拠を集める・読むツールの出力だけ。"""
+
+    def source(item: JsonObject, *keys: str) -> tuple[str, str | None, str] | None:
+        document_id = item.get("document_id")
+        if not isinstance(document_id, str) or not document_id:
+            return None
+        file_name = item.get("file_name")
+        text = "\n".join(value for key in keys if isinstance(value := item.get(key), str))
+        return document_id, file_name if isinstance(file_name, str) else None, text
+
+    if tool == RAG_RETRIEVE_EVIDENCE:
+        evidence = output.get("evidence")
+        items = (
+            [item for item in evidence if isinstance(item, dict)]
+            if isinstance(evidence, list)
+            else []
+        )
+        found = [source(item, "excerpt") for item in items]
+    elif tool == RAG_READ_SOURCE:
+        found = [source(output, "text", "parent_text")]
+    elif tool == RAG_READ_DOCUMENT:
+        found = [source(output, "text")]
+    else:
+        return []
+    return [item for item in found if item is not None]
+
+
+def text_references(tool: str, output: JsonObject) -> list[JsonObject]:
+    """根拠の本文の中の、同じ文書の別の箇所を指す参照と読み方（#1345。見つからなければ空）。
+
+    多段の質問では「第 4 章を参照」の先が次の段の根拠になるが、検索の語では当たらないことが多い。
+    決定的に見つけて読む先を案内するだけで、読むかはモデルが決める（planner は作らない。#756）。
+    """
+    references: list[JsonObject] = []
+    seen: set[tuple[str, str]] = set()
+    for document_id, file_name, text in _reference_sources(tool, output):
+        for match in _REFERENCE_PATTERN.finditer(unicodedata.normalize("NFKC", text)):
+            label = " ".join(match.group(1).split())
+            # 空白の違い（「第4章」と「第 4 章」）は同じ参照にする。
+            key = (document_id, "".join(label.split()))
+            if key in seen:
+                continue
+            seen.add(key)
+            references.append(
+                {
+                    "document_id": document_id,
+                    "file_name": file_name,
+                    "reference": label,
+                    "how_to_read": REFERENCE_READ_HINT,
+                }
+            )
+            if len(references) >= MAX_REFERENCES:
+                return references
+    return references
 
 
 def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObject | None:
@@ -517,6 +591,13 @@ class SupportTaskBudget:
     @property
     def task_tool_calls(self) -> int:
         return self.task_tool_calls_before + self.run_tool_calls
+
+    @property
+    def rag_calls_remaining(self) -> int | None:
+        """この Run で残る RAG の検索の回数（上限が無ければ None。#1345）。"""
+        if self.max_rag_calls_per_run <= 0:
+            return None
+        return max(self.max_rag_calls_per_run - self.run_rag_calls, 0)
 
     def reserve(self, tool_name: str) -> JsonObject | None:
         """呼び出しを 1 回数える。上限を超えるなら数えずに、超えた上限（scope・limit・used）を返す。

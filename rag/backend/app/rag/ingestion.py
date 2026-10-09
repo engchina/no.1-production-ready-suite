@@ -1172,7 +1172,7 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
-        # 親子階層（small-to-big）は Docling の解析結果(layout_records)を入力にする。
+        # 親子階層（small-to-big）は Docling・MinerU の解析結果(layout_records。#1334)を入力にする。
         # それがない文書は失敗させず構造認識で分割し、縮退したことを chunk metadata と trace に
         # 残す(#300)。
         small_to_big_fallback = small_to_big_fallback_needed(chunking_params.strategy, extraction)
