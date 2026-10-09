@@ -389,6 +389,8 @@ export function SqlChatPage() {
             ...(previous?.turns ?? []),
             {
               ...job,
+              // 作成時の段階（開始待ち）を、会話を取り直す前から出す（取り直しで段階の行が増えて動かない。#1359）。
+              progress_events: parseChatProgressEvents(job.progress_events),
               question,
               profile_id: selectedProfileId,
               conversation_id: id,

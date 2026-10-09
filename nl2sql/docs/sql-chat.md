@@ -21,7 +21,7 @@
   - 段階は backend がジョブの処理の段階のイベント（3 製品共通の契約。`pr_backend_core.chat_progress`。ジョブの `progress_events`）として記録する（#1359）。記録の位置は `service.py` の `_record_job_progress_*` だけ: 作成で開始待ちと 5 段階を待機中で出して開始待ちを実行中（ジョブの作成時刻から）、worker の開始で開始待ちを完了・準備を実行中、`_transition_job_steps` で段階の終了（完了・失敗・未実行）と次の開始、完了は結果の整形を完了にして終端（SQL の遮断・実行の失敗は `failed`）、例外の失敗は実行中の段階を失敗、停止（`JOB_CANCELLED`）は実行中の段階に停止の印（`params.stopped`）を付けて未実行にして終端 `cancelled`。worker が始める前の失敗・停止は開始待ちが失敗・停止になる。最後の段階（結果の整形）は結果の保存まで実行中のまま（終端と同じ保存で記録する）。
   - 補足は `params` に値だけを入れ、文言は画面が付ける: 生成の段階に生成方法（`engine`）、安全性の確認の完了に参照した表（先頭 3 件の `tables` と `table_count`）、実行の完了に取得した行数（`rows`）。
   - 試行（`attempt`）はジョブの `attempt` より 1 小さい（最初の実行が 0）。lease の切れたジョブを引き継いだ実行（2 回目以降の claim）は新しい試行で段階を出し直し、画面は段階の一覧を作り直す（#1358）。番号（`seq`）は続ける。
-  - 画面（`SqlChatPage.tsx` の `SqlChatTurn`）は共有の `useChatProgressStream` で、処理中は `GET /api/nl2sql/jobs/{job_id}/progress/stream`（SSE）を受け取り、使えなければ `GET …/progress?since=` の polling に縮退する。会話の取り直し（`GET /api/nl2sql/chats/{id}`。結果の取得）に入っている `progress_events` も積む。`features/nl2sql/chatProgress.ts` は段階の定義（名前の i18n と補足）だけを持つ。
+  - 画面（`SqlChatPage.tsx` の `SqlChatTurn`）は共有の `useChatProgressStream` で、処理中は `GET /api/nl2sql/jobs/{job_id}/progress/stream`（SSE）を受け取り、使えなければ `GET …/progress?since=` の polling に縮退する。会話の取り直し（`GET /api/nl2sql/chats/{id}`。結果の取得）に入っている `progress_events` も積む。投入の応答（`POST /api/nl2sql/jobs`）にも作成時のイベントが入り、会話を取り直す前から開始待ちの段階を出す（取り直しで段階の行が増えて会話の欄の末尾がずれない）。`features/nl2sql/chatProgress.ts` は段階の定義（名前の i18n と補足）だけを持つ。
   - SQL 生成の画面の工程の表示（`WorkflowProgressStrip`）はジョブの `steps` のまま。
 - #1176 より前のチャットのターン（`generation_only` だけを持つ）は、今までどおり会話として開け、続けられる（実行は「未実行」のまま。「実行」で実行できる）。
 

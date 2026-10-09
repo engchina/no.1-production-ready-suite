@@ -109,9 +109,12 @@ def assert_contiguous(events: list[Event]) -> None:
 
 def test_created_job_waits_in_queue_from_creation(jobs: Fixture) -> None:
     service, repository = jobs
-    job_id = start(service)
+    created = service.start_job(chat_turn(), actor_user_uuid="user-1", actor_is_system_admin=True)
+    job_id = created.job_id
     job = service.get_job(job_id, actor_user_uuid="user-1")
     assert job is not None and job.status == JobStatus.PENDING
+    # 投入の応答にも作成時のイベントを入れる（画面は会話を取り直す前から段階を出す）。
+    assert created.progress_events == job.progress_events
 
     events = job.progress_events
     assert_contiguous(events)

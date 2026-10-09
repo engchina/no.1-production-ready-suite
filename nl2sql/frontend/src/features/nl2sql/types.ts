@@ -591,6 +591,8 @@ export interface JobCreateData {
   status: JobStatus;
   created_at: string;
   steps: JobStepData[];
+  /** 作成時の処理の段階のイベント（開始待ちと 5 段階。#1359）。未検証の入力なので `parseChatProgressEvents` を通す。 */
+  progress_events?: ChatProgressEvent[];
 }
 
 export interface JobData {

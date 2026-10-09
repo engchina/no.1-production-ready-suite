@@ -7932,6 +7932,7 @@ class Nl2SqlService:
             status=job.status,
             created_at=job.created_at,
             steps=[step.model_copy() for step in job.steps],
+            progress_events=list(job.progress_events),
         )
         dispatched = self._wake_nl2sql_job_if_needed(job)
         # 投入の受付（job ID）。worker の claim（`nl2sql_job_claimed`）・段階のログと job_id で
@@ -7980,6 +7981,7 @@ class Nl2SqlService:
             status=existing.status,
             created_at=existing.created_at,
             steps=[step.model_copy() for step in existing.steps],
+            progress_events=list(existing.progress_events),
         )
 
     @staticmethod

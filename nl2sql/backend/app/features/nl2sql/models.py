@@ -1250,6 +1250,9 @@ class JobCreateData(BaseModel):
     status: JobStatus
     created_at: str
     steps: list[JobStepData] = Field(default_factory=list)
+    # 作成時の処理の段階のイベント（開始待ちと 5 段階。#1359）。画面は会話を取り直す前から
+    # 段階を出す。
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
 class SqlChatExecutionSummary(BaseModel):
