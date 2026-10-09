@@ -41,7 +41,8 @@ def test_crag_candidates_carry_the_section_heading_and_the_prompt_checks_the_cha
     candidates = _crag_grade_candidates(context, "拠点の電話番号を変更する手順は")
     assert [c["section"] for c in candidates] == ["拠点情報の変更手順 > （１）拠点名の変更", ""]
     prompt = _build_crag_grade_prompt("拠点の電話番号を変更する手順は", "拠点 電話番号 変更", ["拠点 電話番号 変更"], context)
-    assert '"section": "拠点情報の変更手順 > （１）拠点名の変更"' in prompt
+    # 候補（評価の記録）は原文のまま、評価器への入力は全角・半角の違いをそろえる（#1350）。
+    assert '"section": "拠点情報の変更手順 > (1)拠点名の変更"' in prompt
     rules = [line for line in CRAG_GRADE_PROMPT_TEMPLATE.splitlines() if line.startswith("- ")]
     assert any("section（機能見出し" in line and "変更項目" in line for line in rules)
     assert any("別の変更項目の手順" in line and "missing" in line for line in rules)

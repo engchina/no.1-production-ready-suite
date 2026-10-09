@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 from rag_engine.knowledge.domain_keywords import extract_domain_keywords
+from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_text
 from rag_engine.retrieval.definition_evidence import definition_labels
 
 logger = logging.getLogger(__name__)
@@ -71,15 +72,9 @@ _EXTRA_PATTERNS = (
     re.compile(r"\d+[a-z][a-z0-9]*"),
     re.compile(r"v?\d+(?:\.\d+)+"),
 )
-# 文字の同一視（質問の側と索引の側で共通。#1336）。
-_SYMBOL_REWRITE_RULES = (
-    (re.compile(r"[〜～]"), "~"),
-    (re.compile(r"[－‐‑–—―−]"), "-"),
-)
-_REWRITE_RULES = (
-    *_SYMBOL_REWRITE_RULES,
-    (re.compile(r"[　\s]+"), " "),
-)
+# 文字の同一視（質問の側と索引の側、回答のモデルに渡す根拠で共通。#1336・#1350）。波線・ダッシュは
+# ``character_forms.SYMBOL_FOLD``、質問の側だけが空白の連続を 1 つにまとめる。
+_WHITESPACE_RUN = re.compile(r"[　\s]+")
 
 _KEEP_POS1 = {"名詞", "動詞", "形容詞", "形状詞", "副詞"}
 _DROP_POS2 = {"非自立可能", "助動詞語幹"}
@@ -308,9 +303,8 @@ _local = threading.local()
 
 def normalize_text_search_text(text: Any) -> str:
     """Oracle Text token 化前の文字列を NFKC と空白規則で正規化します。"""
-    normalized = unicodedata.normalize("NFKC", str(text or ""))
-    for pattern, replacement in _REWRITE_RULES:
-        normalized = pattern.sub(replacement, normalized)
+    normalized = unicodedata.normalize("NFKC", str(text or "")).translate(SYMBOL_FOLD)
+    normalized = _WHITESPACE_RUN.sub(" ", normalized)
     normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", normalized)
     return normalized.casefold().strip()
 
@@ -321,11 +315,9 @@ def normalize_text_search_index_text(text: Any) -> str:
     NFKC と波線・ダッシュの同一視は ``normalize_text_search_text`` と同じにし、索引の側だけが互換文字
     （``①`` ``Ⅴ`` ``㈱`` ``㌔`` ``℃`` など。WORLD_LEXER は同一視しない）を残して当たらないことを防ぎます。
     改行と大文字小文字は残します（Oracle Text の語の区切りと大文字小文字の無視は lexer が行う）。
+    回答のモデルに渡す根拠も同じ規則でそろえる（``character_forms.fold_text``。#1350）。
     """
-    normalized = unicodedata.normalize("NFKC", str(text or ""))
-    for pattern, replacement in _SYMBOL_REWRITE_RULES:
-        normalized = pattern.sub(replacement, normalized)
-    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f]+", " ", normalized)
+    return fold_text(text)
 
 
 def tokenize_text_search_query(
