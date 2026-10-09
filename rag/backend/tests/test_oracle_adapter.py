@@ -6,6 +6,7 @@ from array import array
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -51,6 +52,7 @@ from app.rag.search_answer_profile_config import (
     dump_search_answer_profile_config,
 )
 from app.schemas.document import (
+    DocumentPreprocessArtifact,
     DocumentProcessingConfig,
     FileStatus,
     IngestionJob,
@@ -1847,7 +1849,9 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
     assert "COALESCE(:extraction_json, t.extraction_json)" not in call.statement
     assert "t.extraction_json" not in matched_update
     assert call.parameters["extraction_json"] is None
-    assert call.parameters["recipe_subset"] == {"rag_parser_adapter_backend": "mineru"}
+    assert json.loads(cast(str, call.parameters["recipe_subset"])) == {
+        "rag_parser_adapter_backend": "mineru"
+    }
     assert (
         call.input_sizes["extraction_json"]
         == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
@@ -1855,7 +1859,7 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
 
 
 async def test_upsert_chunk_set_binds_recipe_subset_as_json() -> None:
-    """COALESCE で既存 JSON 列と比較できるよう recipe を JSON bind する。"""
+    """recipe は JSON の文字列を CLOB で渡し、COALESCE は JSON(:x) で列と型をそろえる(#1363)。"""
     pool = FakeOraclePool()
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
@@ -1866,7 +1870,10 @@ async def test_upsert_chunk_set_binds_recipe_subset_as_json() -> None:
     )
 
     call = pool.connection.calls[0]
-    assert call.parameters["recipe_subset"] == {"chunking_strategy": "structure_aware"}
+    assert json.loads(cast(str, call.parameters["recipe_subset"])) == {
+        "chunking_strategy": "structure_aware"
+    }
+    assert "COALESCE(JSON(:recipe_subset), t.recipe_subset)" in call.statement
     assert (
         call.input_sizes["recipe_subset"]
         == oracle_module._json_input_sizes("recipe_subset")["recipe_subset"]
@@ -1892,7 +1899,9 @@ async def test_upsert_extraction_artifact_updates_payload_when_provided() -> Non
         1,
     )[0]
     assert "t.extraction_json = :extraction_json" in matched_update
-    assert call.parameters["extraction_json"] == {"elements": [{"text": "本文"}]}
+    assert json.loads(cast(str, call.parameters["extraction_json"])) == {
+        "elements": [{"text": "本文"}]
+    }
     assert (
         call.input_sizes["extraction_json"]
         == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
@@ -1900,7 +1909,7 @@ async def test_upsert_extraction_artifact_updates_payload_when_provided() -> Non
 
 
 async def test_upsert_extraction_artifact_binds_large_payload_as_json() -> None:
-    """大きい抽出 payload も VARCHAR2 ではなく JSON bind で渡す。"""
+    """大きい抽出 payload も VARCHAR2 ではなく CLOB の bind で渡す(OSON は使わない。#1363)。"""
     pool = FakeOraclePool()
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     large_text = "x" * 40000
@@ -1914,12 +1923,92 @@ async def test_upsert_extraction_artifact_binds_large_payload_as_json() -> None:
     )
 
     call = pool.connection.calls[0]
-    assert len(json.dumps(call.parameters["extraction_json"])) > 32767
-    assert call.parameters["extraction_json"] == {"elements": [{"text": large_text}]}
+    assert len(cast(str, call.parameters["extraction_json"])) > 32767
+    assert json.loads(cast(str, call.parameters["extraction_json"])) == {
+        "elements": [{"text": large_text}]
+    }
     assert (
         call.input_sizes["extraction_json"]
         == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
     )
+
+
+def test_json_bind_passes_json_text_with_clob_bind_not_oson() -> None:
+    """JSON 列へは JSON の文字列を CLOB で渡し、OSON(DB_TYPE_JSON)を使わない(#1363)。
+
+    thin の OSON の符号化は数百 KB を超える値で極端に遅く、GIL を持ったまま backend 全体を止める。
+    """
+    oracledb = pytest.importorskip("oracledb")
+
+    assert oracle_module._json_bind(None) is None
+    bound = oracle_module._json_bind(
+        {"score": Decimal("0.5"), "count": Decimal("3"), "at": datetime(2026, 10, 9, tzinfo=UTC)}
+    )
+    assert isinstance(bound, str)
+    assert json.loads(bound) == {"score": 0.5, "count": 3, "at": "2026-10-09T00:00:00+00:00"}
+    assert oracle_module._json_bind({"text": "本文"}) == '{"text":"本文"}'
+    sizes = oracle_module._json_input_sizes("a", "b")
+    assert sizes == {"a": oracledb.DB_TYPE_CLOB, "b": oracledb.DB_TYPE_CLOB}
+    assert oracledb.DB_TYPE_JSON not in sizes.values()
+
+
+async def test_save_answer_record_binds_large_citations_as_clob_json_text() -> None:
+    """1MB 程度の citations も JSON の文字列を CLOB で bind して保存する(#1363)。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    citations = [
+        {"chunk_id": f"c-{index}", "text": "受注管理規程の本文" * 100, "score": 0.5}
+        for index in range(400)
+    ]
+
+    await client.save_answer_record(
+        {
+            "trace_id": "trace-large",
+            "surface": "search",
+            "answer_engine": "grounded",
+            "question": "質問",
+            "answer": "回答",
+            "citations": citations,
+            "diagnostics": {"elapsed_ms": 10},
+        }
+    )
+
+    (call,) = pool.connection.calls
+    citations_text = call.parameters["citations_json"]
+    assert isinstance(citations_text, str)
+    assert len(citations_text.encode()) > 1_000_000
+    assert json.loads(citations_text) == citations
+    assert json.loads(cast(str, call.parameters["diagnostics_json"])) == {"elapsed_ms": 10}
+    assert call.parameters["evaluation_input_json"] is None
+    assert call.input_sizes == oracle_module._json_input_sizes(
+        "citations_json", "diagnostics_json", "evaluation_input_json"
+    )
+
+
+async def test_update_recipe_status_coalesces_preprocess_artifact_as_json() -> None:
+    """CLOB の bind は JSON 型の列と COALESCE できないため、JSON(:x) で型をそろえる(#1363)。"""
+    pool = FakeOraclePool(execute_results=[])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    artifact = DocumentPreprocessArtifact(
+        derivation_id="der-1",
+        profile="passthrough",
+        file_name="policy.pdf",
+        object_storage_path="local://prepared/policy.pdf",
+        content_type="application/pdf",
+    )
+
+    await client.update_document_recipe_status(
+        recipe_id="recipe-1",
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=artifact,
+    )
+
+    call = pool.connection.calls[0]
+    assert "COALESCE(JSON(:preprocess_artifact), preprocess_artifact)" in call.statement
+    assert json.loads(cast(str, call.parameters["preprocess_artifact"])) == artifact.model_dump(
+        mode="json"
+    )
+    assert call.input_sizes == oracle_module._json_input_sizes("preprocess_artifact")
 
 
 async def test_oracle_replace_document_graph_index_replaces_document_scope() -> None:
@@ -2176,7 +2265,7 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
         assert len(merges) == 1
         assert merges[0].parameters["chunk_set_id"] == "cs-1"
         assert merges[0].parameters["document_id"] == "doc-1"
-        assert merges[0].parameters["first_page_context"] == first_page
+        assert json.loads(cast(str, merges[0].parameters["first_page_context"])) == first_page
         assert "first_page_context" in merges[0].input_sizes
         assert pool.connection.commits == 1
 
