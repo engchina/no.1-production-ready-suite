@@ -547,7 +547,19 @@ class _FakePipeline:
         _FakePipeline.filters.append(dict(request.filters))
         return SearchResponse(
             answer="回答",
-            citations=[RetrievedChunk(document_id="d1", chunk_id="ch1", text="根拠", score=0.9)],
+            citations=[
+                RetrievedChunk(
+                    document_id="d1",
+                    chunk_id="ch1",
+                    text="根拠",
+                    score=0.9,
+                    metadata={
+                        "page_start": 1,
+                        "parent_text": "親の本文",
+                        "engine_search_text": "索引の文字列",
+                    },
+                )
+            ],
             trace_id=trace_id or "trace",
             elapsed_ms=1.0,
         )
@@ -607,7 +619,9 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     assistant = fake.messages["conv-x"][1]
     assert assistant.content == "回答"
     assert assistant.reply_to_message_id == fake.messages["conv-x"][0].id
-    assert assistant.citations  # 引用が保存される
+    # 引用は画面が使う項目だけを保存する（親の本文・索引の内部の項目を持たない。#1371）。
+    assert [citation["metadata"] for citation in assistant.citations] == [{"page_start": 1}]
+    assert assistant.citations[0]["text"] == "根拠"
 
 
 def _chat_conversation(fake: FakeChatOracle, conversation_id: str) -> None:

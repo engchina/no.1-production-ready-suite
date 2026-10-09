@@ -14,6 +14,7 @@ from rag_engine.models.llm import (
 
 from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
+from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
@@ -858,6 +859,15 @@ class SavingOracle(FakeOracle):
         return 0
 
 
+def _walk_evidence(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """評価の入力の根拠を、子も含めて順に返す。"""
+    walked: list[dict[str, Any]] = []
+    for item in items:
+        walked.append(item)
+        walked.extend(_walk_evidence(item.get("children") or []))
+    return walked
+
+
 async def test_answer_record_is_saved_per_surface(monkeypatch: pytest.MonkeyPatch) -> None:
     import rag_engine.adapters.oci as engine_oci
 
@@ -889,6 +899,25 @@ async def test_answer_record_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     assert evaluation_input["question"] == "受注の登録方法は？"
     assert "登録ボタン" in evaluation_input["answer_text"]
     assert "登録ボタン" in json.dumps(evaluation_input["evidence_items"], ensure_ascii=False)
+    # 引用は画面・評価が使う項目だけを保存し、索引の内部の項目と親の本文を持たない（#1371）。
+    # 応答の引用（MCP・品質評価が同じプロセスで読む）は検索の結果のまま。
+    assert "parent_text" in response.citations[0].metadata
+    for citation in first["citations"]:
+        assert citation["metadata"].keys() <= STORED_CITATION_METADATA_KEYS
+        assert citation["text"]
+    assert first["citations"][0]["metadata"]["page_start"] == 1
+    # 評価の入力の根拠も、評価が読む項目（ID・出典・頁・本文・子）だけにする。
+    for item in _walk_evidence(evaluation_input["evidence_items"]):
+        assert item.keys() <= {
+            "id",
+            "chunk_uid",
+            "source",
+            "source_run_id",
+            "page_start",
+            "page_end",
+            "text",
+            "children",
+        }
     assert second["surface"] == "chat"
     assert oracle.purged == [90, 90]  # 既定の保持日数で保存のたびに期限切れを削除する
 
