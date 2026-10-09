@@ -987,6 +987,120 @@ class OracleClient:
         )
         return row is not None
 
+    async def document_reading_index(
+        self, document_id: str, *, chunk_set_id: str | None = None, limit: int = 5000
+    ) -> tuple[str | None, list[dict[str, object]]]:
+        """文書を順に読むための chunk の目次（本文は読まない。#1332）。
+
+        MCP の rag_outline / rag_read_document が使う。検索と同じ見え方の条件（tenant・
+        ナレッジベース・INDEXED・有効な chunk_set）で、文書の 1 つの chunk_set（``chunk_set_id``
+        が無ければ、有効な chunk_set のうちレシピの番号が最も小さいもの）の chunk を、chunk の順に
+        ``chunk_index`` / ``chunk_id`` / ``section_path`` / ``page_start`` / ``page_end`` /
+        ``chars`` で返す。複数レシピの文書は同じ本文を別の分け方で持つだけなので、1 つだけを読む。
+        """
+        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        chunk_set_sql = (
+            ":read_chunk_set_id"
+            if chunk_set_id is not None
+            else """(
+                SELECT primary_cs.chunk_set_id
+                FROM rag_chunk_sets primary_cs
+                JOIN rag_document_recipes primary_r ON primary_r.recipe_id = primary_cs.recipe_id
+                WHERE primary_cs.document_id = :read_document_id
+                  AND primary_cs.is_active = 1
+                  AND primary_cs.status = 'INDEXED'
+                ORDER BY primary_r.slot_no, primary_cs.chunk_set_id
+                FETCH FIRST 1 ROWS ONLY
+            )"""
+        )
+        query_binds: dict[str, object] = {
+            **binds,
+            "read_document_id": document_id,
+            "read_limit": max(1, int(limit)),
+        }
+        if chunk_set_id is not None:
+            query_binds["read_chunk_set_id"] = chunk_set_id
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.chunk_set_id,
+                c.chunk_index,
+                c.chunk_id,
+                JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER) AS page_start,
+                JSON_VALUE(c.metadata_json, '$.page_end' RETURNING NUMBER) AS page_end,
+                DBMS_LOB.GETLENGTH(c.chunk_text) AS chars
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND c.chunk_set_id = {chunk_set_sql}
+            ORDER BY c.chunk_index
+            FETCH FIRST :read_limit ROWS ONLY
+            """,
+                where_sql=where_sql,
+                chunk_set_sql=chunk_set_sql,
+            ),
+            query_binds,
+        )
+        if not rows:
+            return None, []
+        return str(rows[0]["chunk_set_id"]), [
+            {
+                "chunk_index": _int_value(row.get("chunk_index")),
+                "chunk_id": str(row["chunk_id"]),
+                "section_path": _optional_str(row.get("section_path")),
+                "page_start": _optional_int(row.get("page_start")),
+                "page_end": _optional_int(row.get("page_end")),
+                "chars": _int_value(row.get("chars")),
+            }
+            for row in rows
+        ]
+
+    async def readable_document_chunks(
+        self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
+    ) -> list[RetrievedChunk]:
+        """文書の 1 つの chunk_set の chunk を、``from_index`` から chunk の順に読む（#1332）。
+
+        見え方の条件は ``document_reading_index`` と同じ。chunk_set が有効でなくなっていれば空。
+        """
+        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                d.superseded_by_document_id,
+                0 AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND c.chunk_set_id = :read_chunk_set_id
+              AND c.chunk_index >= :read_from_index
+            ORDER BY c.chunk_index
+            FETCH FIRST :read_limit ROWS ONLY
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                "read_document_id": document_id,
+                "read_chunk_set_id": chunk_set_id,
+                "read_from_index": max(0, int(from_index)),
+                "read_limit": max(1, int(limit)),
+            },
+        )
+        return [_retrieved_chunk_from_row(row) for row in rows]
+
     async def chunk_set_first_page_contexts(
         self, chunk_set_ids: Sequence[str]
     ) -> dict[str, dict[str, object]]:

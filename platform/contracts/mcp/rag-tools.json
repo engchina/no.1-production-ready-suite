@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -418,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -436,6 +436,412 @@
           "guides"
         ],
         "title": "LookupGuidesOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "rag_outline",
+      "description": "文書の節の構成（節の見出し・頁・chunk の数と、その節から読む cursor）を返します。長い文書のどこを読むかを決めるときに使います。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "文書の節の構成を読む条件（#1332）。",
+        "properties": {
+          "document_id": {
+            "description": "文書の id。",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "OutlineInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "OutlineSection": {
+            "description": "文書の 1 つの節（続く chunk のまとまり）。",
+            "properties": {
+              "section_path": {
+                "description": "節の見出しの列。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "節の開始の頁。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "節の終了の頁。",
+                "title": "Page End"
+              },
+              "chunk_count": {
+                "description": "節の chunk の数。",
+                "title": "Chunk Count",
+                "type": "integer"
+              },
+              "chars": {
+                "description": "節の本文の文字数。",
+                "title": "Chars",
+                "type": "integer"
+              },
+              "cursor": {
+                "description": "この節から読む rag_read_document の cursor。",
+                "title": "Cursor",
+                "type": "string"
+              }
+            },
+            "required": [
+              "chunk_count",
+              "chars",
+              "cursor"
+            ],
+            "title": "OutlineSection",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "default": 7,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Name"
+          },
+          "chunk_set_id": {
+            "description": "読んだ chunk_set（続きの cursor はこの chunk_set に縛る）。",
+            "title": "Chunk Set Id",
+            "type": "string"
+          },
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "page_start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page Start"
+          },
+          "page_end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page End"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/$defs/OutlineSection"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "sections_omitted": {
+            "default": 0,
+            "description": "上限を超えて省いた節の数。",
+            "title": "Sections Omitted",
+            "type": "integer"
+          },
+          "superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）か。",
+            "title": "Superseded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_set_id",
+          "chunk_count",
+          "sections"
+        ],
+        "title": "OutlineOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "rag_read_document",
+      "description": "文書の本文を、頁・節・根拠の定位子・続きの cursor の位置から順に読みます（頁の区切り付き。続きは next_cursor）。検索で当たらなかった前後の章や、「第 3 章を参照」の先を確かめるときに使います。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "文書の本文を順に読む条件（#1332）。読み始めの位置はどれか 1 つ（無ければ文書の先頭）。",
+        "properties": {
+          "document_id": {
+            "description": "文書の id。",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続きの位置（前の rag_read_document の next_cursor、または rag_outline の節の cursor）。",
+            "title": "Cursor"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠の要素の定位子（evidence の locator.element_locator）。その要素の chunk から読む。",
+            "title": "Locator"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "この頁（PDF の物理頁）から読む。",
+            "title": "Page"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "この節（見出しの列を「 > 」でつないだもの。前方一致）から読む。",
+            "title": "Section"
+          },
+          "max_chars": {
+            "default": 8000,
+            "description": "返す本文の最大文字数（頁の区切りの行を含む）。",
+            "maximum": 20000,
+            "minimum": 1,
+            "title": "Max Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ReadDocumentInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ReadDocumentChunk": {
+            "description": "返した本文に含まれる chunk（根拠として引用するときの場所）。",
+            "properties": {
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Element Locator"
+              },
+              "section_path": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page End"
+              },
+              "start": {
+                "description": "返した本文の中の開始の位置（文字数）。",
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "description": "返した本文の中の終了の位置（文字数）。",
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "chunk_id",
+              "start",
+              "end"
+            ],
+            "title": "ReadDocumentChunk",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "default": 7,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Name"
+          },
+          "chunk_set_id": {
+            "title": "Chunk Set Id",
+            "type": "string"
+          },
+          "text": {
+            "description": "本文。頁が変わる所に「--- p.N ---」の行を入れる。",
+            "title": "Text",
+            "type": "string"
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/$defs/ReadDocumentChunk"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続きを読む cursor（文書の最後まで読んだら null）。",
+            "title": "Next Cursor"
+          },
+          "superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）か。",
+            "title": "Superseded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_set_id",
+          "text",
+          "chunks"
+        ],
+        "title": "ReadDocumentOutput",
         "type": "object"
       }
     },
@@ -877,7 +1283,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1640,7 +2046,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2513,7 +2919,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2984,7 +3390,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 6,
+            "default": 7,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
