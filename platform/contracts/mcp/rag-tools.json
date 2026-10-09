@@ -1537,7 +1537,7 @@
           },
           "evidence_limit": {
             "default": 12,
-            "description": "返す根拠の最大件数（回答に使った根拠を先に返す）。",
+            "description": "返す根拠の最大件数。回答に使った根拠、検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。",
             "maximum": 50,
             "minimum": 1,
             "title": "Evidence Limit",
@@ -2063,7 +2063,7 @@
             "type": "array"
           },
           "evidence": {
-            "description": "検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。",
+            "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。回答は作らないので used_in_answer は false。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },
@@ -2148,7 +2148,7 @@
           },
           "evidence_limit": {
             "default": 12,
-            "description": "返す根拠の最大件数（回答に使った根拠を先に返す）。",
+            "description": "返す根拠の最大件数。回答に使った根拠、検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。",
             "maximum": 50,
             "minimum": 1,
             "title": "Evidence Limit",
@@ -3024,6 +3024,7 @@
             "type": "boolean"
           },
           "evidence": {
+            "description": "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠（role=retrieved_anchor。関連度の順）、前後の文脈（neighbor_context など）の順。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },

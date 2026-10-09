@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from copy import deepcopy
@@ -257,6 +258,116 @@ def text_references(tool: str, output: JsonObject) -> list[JsonObject]:
             if len(references) >= MAX_REFERENCES:
                 return references
     return references
+
+
+def raised_evidence_limit(arguments: JsonObject, input_schema: JsonObject) -> int | None:
+    """モデルが既定より小さくした `evidence_limit` を引き上げる値（#1351。引き上げなければ None）。
+
+    多段の質問では、答えの chunk が上位の文書の前置き・前の章の後ろに並ぶことが多く、小さい上限で
+    切れて言い換えを繰り返す（#1335 の評価で、欠けた根拠はすべて上限で切れていた）。既定は
+    ツールの入力 schema の `default`（RAG の契約の値）を使い、既定より大きい値は変えない。
+    """
+    properties = input_schema.get("properties")
+    spec = properties.get("evidence_limit") if isinstance(properties, dict) else None
+    default = spec.get("default") if isinstance(spec, dict) else None
+    value = arguments.get("evidence_limit")
+    if not isinstance(default, int) or isinstance(default, bool):
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value >= default:
+        return None
+    return default
+
+
+# 同じ段の言い換えの繰り返し（#1351）。正規化した query の文字の 2-gram の Jaccard 係数がこれ以上
+# なら、ほぼ同じ query とする。「勤怠管理システムの担当部署は？」と「勤怠管理システム 担当 部署」は
+# 同じ。「経費精算ポータル 担当部署」と「経費精算ポータル 承認者」
+# 「経費精算ポータル 担当部署 承認者」は別の段。
+REPEATED_QUERY_SIMILARITY = 0.8
+# 比べるときに除く助詞（「〜の担当部署」と「〜 担当部署」を同じにする。比べるためだけの正規化）。
+_QUERY_PARTICLES = frozenset("のはがをにでともへや")
+MAX_REPEATED_QUERIES = 3
+REPEATED_QUERY_HINT = (
+    "この実行で同じ（ほぼ同じ）query を既に引いているので、呼び直しても新しい根拠は出にくい。"
+    "この段の答えが集めた根拠にあれば次の段へ進む。無ければ言い換えを続けず、"
+    "この段を確かめられなかった点として次の段へ進む。"
+)
+# 比べる範囲を決める引数（query・件数以外。条件を足した呼び直し〔#1322〕は繰り返しではない）。
+_QUERY_SCOPE_KEYS = ("search_answer_profile_id", "knowledge_base_ids", "filters", "conditions")
+
+
+def normalized_query(query: object) -> str:
+    """比べるための query（NFKC・大文字小文字・空白・句読点と記号・助詞の違いを除く）。"""
+    if not isinstance(query, str):
+        return ""
+    text = unicodedata.normalize("NFKC", query).casefold()
+    return "".join(
+        char
+        for char in text
+        if not char.isspace()
+        and char not in _QUERY_PARTICLES
+        and not unicodedata.category(char).startswith(("P", "S"))
+    )
+
+
+def _bigrams(text: str) -> set[str]:
+    return {text[index : index + 2] for index in range(len(text) - 1)}
+
+
+def similar_queries(left: str, right: str) -> bool:
+    """正規化した 2 つの query が同じか、ほぼ同じか（決定的）。"""
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    left_grams, right_grams = _bigrams(left), _bigrams(right)
+    if not left_grams or not right_grams:
+        return False
+    union = left_grams | right_grams
+    return len(left_grams & right_grams) / len(union) >= REPEATED_QUERY_SIMILARITY
+
+
+def _query_scope(arguments: JsonObject) -> str:
+    def canonical(value: object) -> object:
+        if value in (None, "", [], {}):
+            return None
+        if isinstance(value, list):
+            return sorted(str(item) for item in value)
+        return value
+
+    scope = {key: canonical(arguments.get(key)) for key in _QUERY_SCOPE_KEYS}
+    return json.dumps(scope, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def repeated_query_note(
+    tool_name: str, arguments: JsonObject, steps: list[RunStep], *, current_step_id: str
+) -> JsonObject | None:
+    """同じ Run で同じ（ほぼ同じ）query の検索を繰り返したときの案内（#1351。無ければ None）。
+
+    比べるのは、この Run で成功した同じツール（同じ接続の `rag_search`・`rag_retrieve_evidence`）の
+    呼び出しのうち、検索・回答プロファイル・ナレッジベース・フィルター・条件が同じもの。案内だけで、
+    呼び出しは止めない（続けるかはモデルが決める。planner は作らない。#756）。
+    """
+    query = normalized_query(arguments.get("query"))
+    if mcp_base_tool_name(tool_name) not in RAG_BUDGET_TOOLS or not query:
+        return None
+    scope = _query_scope(arguments)
+    similar: list[str] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if step.id == current_step_id or call is None or result is None or not result.success:
+            continue
+        if call.name != tool_name or _query_scope(call.arguments) != scope:
+            continue
+        previous = call.arguments.get("query")
+        if isinstance(previous, str) and similar_queries(query, normalized_query(previous)):
+            similar.append(previous)
+    if not similar:
+        return None
+    return {
+        "count": len(similar),
+        "similar_queries": similar[-MAX_REPEATED_QUERIES:],
+        "next_step": REPEATED_QUERY_HINT,
+    }
 
 
 def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObject | None:
