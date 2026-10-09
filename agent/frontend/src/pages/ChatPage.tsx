@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -19,7 +19,7 @@ import {
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
-  useChatProgressTracker,
+  useChatProgressStream,
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
@@ -41,11 +41,13 @@ import {
   ApiErrorBanner,
   apiErrorMessage,
   DEFAULT_PAGE_SIZE,
+  type ChatProgressEvent,
 } from "@production-ready/ui";
 
 import {
   ApiError,
   agentApi,
+  runProgressStreamUrl,
   type ApprovalRequest,
   type Artifact,
   type RunState,
@@ -55,7 +57,7 @@ import {
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
 import { answerReview } from "@/lib/answer-review";
-import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
+import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
@@ -80,11 +82,8 @@ const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
 /** 「停止」で止められる Run（回答の作成中と、ツールの承認待ち。#805）。 */
 const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "waiting_approval"]);
 const POLL_INTERVAL_MS = 1500;
-/**
- * 会話の取り直しが成功しないまま、この時間が過ぎたら取り直し直す（#1160）。取り直しは
- * {@link POLL_INTERVAL_MS} ごとなので、その数回分。応答しない取得を打ち切って新しく取り直す。
- */
-const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
+/** 処理の段階の記録が無い Run（同じ参照を渡し、描画ごとに積み直さない）。 */
+const NO_PROGRESS_EVENTS: readonly ChatProgressEvent[] = [];
 /** 会話の 1 回の取得の上限（応答が返らない取得で取り直しを止めない。#1160）。 */
 const THREAD_FETCH_TIMEOUT_MS = 30_000;
 
@@ -190,7 +189,8 @@ export function ChatPage() {
   const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
   const prerequisitesLoading = agentsLoading || threadLoading;
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
-  // 処理の経過の取り直し（#1160）。応答しない取得（取得中は interval が次を始めない）を打ち切って取り直す。
+  // 処理の段階の終端が届いたら、回答・成果物を待たずに取り直す（#1359）。応答しない取得（取得中は interval が
+  // 次を始めない）は打ち切って取り直す（#1160）。
   const refetchThread = thread.refetch;
   const refreshThread = () => refetchThread({ cancelRefetch: true, throwOnError: false });
   const running = runs.some((run) => ACTIVE_STATUSES.has(run.status));
@@ -566,8 +566,7 @@ export function ChatPage() {
                   deciding={decide.isPending}
                   onDecide={(approval, approved) => decide.mutate({ approval, approved })}
                   onFeedbackSaved={replaceRun}
-                  receivedAt={thread.dataUpdatedAt}
-                  refresh={refreshThread}
+                  onProgressTerminal={refreshThread}
                 />
               ))
             )}
@@ -593,8 +592,7 @@ function RunChatTurn({
   deciding,
   onDecide,
   onFeedbackSaved,
-  receivedAt,
-  refresh,
+  onProgressTerminal,
 }: {
   run: RunState;
   canDecide: boolean;
@@ -602,10 +600,8 @@ function RunChatTurn({
   deciding: boolean;
   onDecide: (approval: ApprovalRequest, approved: boolean) => void;
   onFeedbackSaved: (run: RunState) => void;
-  /** 会話を最後に取得できた時刻（TanStack Query の dataUpdatedAt）。 */
-  receivedAt: number;
-  /** 会話を取り直す（応答しない取得は打ち切る）。 */
-  refresh: () => Promise<unknown>;
+  /** 処理の段階の終端が届いた（回答・成果物を待たずに取り直す）。 */
+  onProgressTerminal: () => void;
 }) {
   const answer = answerText(run.artifacts);
   const citations = runCitations(run.artifacts);
@@ -615,16 +611,25 @@ function RunChatTurn({
   const failure = run.status === "failed" ? failureMessage(run) : null;
   // 回答の確かめ（確かめた条件・確認待ちの質問・業務ガイド・資料で確かめた結果。#1286）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
-  // 処理の経過の状態を追う（3 製品共通。#1160）。回答の作成中（取り直している間）に会話の取得が途絶えたら
-  // 取り直し、終端まで追う。承認待ちは利用者の判断を待つ間なので取り直さない。
-  const progress = useChatProgressTracker({
+  // 処理の段階（3 製品共通のイベント。#1359）。backend が Run の状態から記録したイベントを、実行中は SSE で受け取り
+  // （承認待ちの間も heartbeat で途絶えない）、使えなければ polling に縮退する。会話の取り直しに入っている記録も積む。
+  // 途絶えたら共通の hook が取り直し、「接続を確認しています」を出す（#1160）。
+  const stoppable = STOPPABLE_STATUSES.has(run.status);
+  const runId = run.id;
+  const fetchProgress = useCallback(
+    (since: number, signal: AbortSignal) => agentApi.getRunProgress(runId, since, { signal }),
+    [runId]
+  );
+  const progress = useChatProgressStream({
     key: run.id,
-    steps: runProgressSteps(run),
-    active: STOPPABLE_STATUSES.has(run.status),
-    receivedAt,
-    refresh,
-    staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
-    enabled: ACTIVE_STATUSES.has(run.status),
+    definitions: AGENT_CHAT_PROGRESS_STEPS,
+    events: run.progress_events ?? NO_PROGRESS_EVENTS,
+    streamUrl: stoppable ? runProgressStreamUrl(run.id) : null,
+    fetchEvents: fetchProgress,
+    active: stoppable,
+    // 途絶えの判定は共通の既定（15 秒。SSE の heartbeat の 10 秒より長い）。
+    // 終わったら、回答・成果物を会話の取り直しを待たずに取りに行く。
+    onTerminal: onProgressTerminal,
   });
 
   return (
@@ -632,7 +637,7 @@ function RunChatTurn({
     <ChatTurn question={run.goal} testId={`chat-turn-${run.id}`}>
       <ChatAnswer live>
         {/*
-          処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。Run の取り直しで更新し、
+          処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。共通のイベントの配信で更新し（#1359）、
           完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
         */}
         {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
