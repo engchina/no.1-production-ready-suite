@@ -494,6 +494,109 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     assert (body["outcome"], body["requests"], body["gaps"]) == ("answered", [], [])
 
 
+# 承認規程の文書のかたまり（文書の順）と、別の文書のかたまり（#1348 の sh-approval-record-retention
+# 型）。答えの「第 5 章 承認の記録」は関連度 1 位で当たったが、かたまりの 6 番目にある。
+_APPROVAL_CITATIONS: list[tuple[str, str, int | None]] = [
+    ("approval-preface", "parent_context", None),
+    ("approval-ch1", "retrieved_anchor", 3),
+    ("approval-ch2", "neighbor_context", None),
+    ("approval-ch3", "same_page_context", None),
+    ("approval-ch4", "neighbor_context", None),
+    ("approval-ch5-records", "retrieved_anchor", 1),
+    ("other-anchor", "retrieved_anchor", 2),
+    ("other-next", "neighbor_context", None),
+]
+
+
+def _approval_citations(used: frozenset[str] = frozenset()) -> list[Any]:
+    citations = []
+    for chunk_id, role, rank in _APPROVAL_CITATIONS:
+        metadata: dict[str, Any] = {"evidence_role": role}
+        if rank is not None:
+            metadata["evidence_retrieval_rank"] = rank
+        citations.append(_chunk(chunk_id, used=chunk_id in used, **metadata))
+    return citations
+
+
+def test_retrieve_evidence_returns_retrieved_anchors_before_context(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。"""
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="", citations=_approval_citations(), trace_id="trace-a", elapsed_ms=1.0
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {"query": "承認の記録の保存", "evidence_limit": 5},
+        _token(user.user_uuid),
+    )["structuredContent"]
+    # かたまりの 6 番目の「第 5 章」も上限の中に入る。文脈はその後ろに citations の順で入る。
+    assert [item["chunk_id"] for item in body["evidence"]] == [
+        "approval-ch5-records",
+        "other-anchor",
+        "approval-ch1",
+        "approval-preface",
+        "approval-ch2",
+    ]
+    assert [item["role"] for item in body["evidence"][:3]] == ["retrieved_anchor"] * 3
+    assert body["evidence_omitted"] == 3
+
+
+def test_search_orders_used_then_anchors_then_context(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """rag_search は回答に使った根拠、当たった chunk（関連度の順）、前後の文脈の順（#1348）。"""
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        del request
+        # 回答に使った根拠は citations の先頭（回答に使った順）に来る（answer_engine の並び）。
+        citations = _approval_citations(used=frozenset({"approval-ch4", "approval-ch1"}))
+        used = [chunk for chunk in citations if chunk.chunk_id == "approval-ch4"]
+        used += [chunk for chunk in citations if chunk.chunk_id == "approval-ch1"]
+        rest = [chunk for chunk in citations if chunk not in used]
+        return SearchResponse(
+            answer="回答", citations=used + rest, trace_id="trace-u", elapsed_ms=1.0
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_search", {"query": "承認の記録", "evidence_limit": 5}, _token(user.user_uuid)
+    )["structuredContent"]
+    assert [(item["chunk_id"], item["used_in_answer"]) for item in body["evidence"]] == [
+        ("approval-ch4", True),
+        ("approval-ch1", True),
+        ("approval-ch5-records", False),
+        ("other-anchor", False),
+        ("approval-preface", False),
+    ]
+    assert body["evidence_omitted"] == 3
+
+
+def test_mcp_evidence_order_keeps_unranked_hits_and_unknown_roles() -> None:
+    """順位の無い当たり・役割の無い根拠は順位のある当たりの後ろで citations の順（#1348）。"""
+    citations = [
+        _chunk("context", evidence_role="neighbor_context"),
+        _chunk("no-role"),
+        _chunk("anchor-unranked", evidence_role="retrieved_anchor"),
+        _chunk("anchor-2", evidence_role="retrieved_anchor", evidence_retrieval_rank=2),
+        _chunk("anchor-1", evidence_role="retrieved_anchor", evidence_retrieval_rank="1"),
+    ]
+    assert [chunk.chunk_id for chunk in mcp_tools.mcp_evidence_order(citations)] == [
+        "anchor-1",
+        "anchor-2",
+        "no-role",
+        "anchor-unranked",
+        "context",
+    ]
+
+
 _FIGURE_PAGE: dict[str, Any] = {
     "page_start": 2,
     "page_end": 2,

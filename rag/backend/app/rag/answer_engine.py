@@ -1370,7 +1370,8 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
     tree: list[dict[str, Any]] = []
-    ordered: list[tuple[int, str, dict[str, Any]]] = []
+    # (並びの順位, chunk_id, 根拠の子, 検索で当たった子の関連度の順位（無ければ 0）)。
+    ordered: list[tuple[int, str, dict[str, Any], int]] = []
     # rerank の結果(chunk_id → (順位, 関連度))。rag_engine は rerank した候補の record に
     # ``metadata["rerank"]`` を載せ、根拠の child に ``rerank_rank`` / ``rerank_score`` として出す。
     # 引用へ写さないと、rerank を実行しても画面は「Rerank 未実行」になる(#662)。
@@ -1394,7 +1395,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                 }
             )
             rank = _int(child.get("model_usage_rank"), 10_000) if used else 10_000 + position
-            ordered.append((rank, chunk_id, children[-1]))
+            # 当たった子（retrieved_anchor）の関連度の順位は rerank の後の順（#1348）。
+            ordered.append((rank, chunk_id, children[-1], _int(child.get("retrieval_rank"))))
         tree.append(
             {
                 "parent_id": str(parent.get("chunk_id") or parent.get("id") or ""),
@@ -1406,7 +1408,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         )
     citations: list[RetrievedChunk] = []
     seen: set[str] = set()
-    for _, chunk_id, evidence in sorted(ordered, key=lambda item: item[0]):
+    for _, chunk_id, evidence, retrieval_rank in sorted(ordered, key=lambda item: item[0]):
         chunk = state.chunks.get(chunk_id)
         if chunk is None or chunk_id in seen:
             continue
@@ -1416,6 +1418,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
         }
+        if retrieval_rank > 0:
+            # MCP の根拠は当たった子を関連度の順に先にする（画面の並びは変えない。#1348）。
+            metadata["evidence_retrieval_rank"] = retrieval_rank
         update: dict[str, Any] = {"metadata": metadata}
         if chunk_id in reranked:
             rerank_rank, rerank_score = reranked[chunk_id]

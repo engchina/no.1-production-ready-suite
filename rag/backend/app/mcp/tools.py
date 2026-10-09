@@ -27,6 +27,8 @@ import base64
 import hashlib
 import json
 import logging
+import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, get_args
@@ -194,7 +196,10 @@ class SearchInput(BaseModel):
         default=EVIDENCE_LIMIT_DEFAULT,
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
-        description="返す根拠の最大件数（回答に使った根拠を先に返す）。",
+        description=(
+            "返す根拠の最大件数。回答に使った根拠、検索で当たった根拠（関連度の順）、前後の文脈の"
+            "順に並べてから切る。"
+        ),
     )
     conditions: dict[str, str] = Field(
         default_factory=dict,
@@ -769,7 +774,12 @@ class SearchOutput(VersionedOutput):
         default=None, description="根拠が足りず答えきれなかった理由（無ければ null）。"
     )
     needs_human_review: bool = Field(default=False, description="人の確認が要る回答か。")
-    evidence: list[RagEvidence]
+    evidence: list[RagEvidence] = Field(
+        description=(
+            "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠"
+            "（role=retrieved_anchor。関連度の順）、前後の文脈（neighbor_context など）の順。"
+        )
+    )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
     provenance: AnswerProvenance | None = Field(
         default=None, description="回答を作った検索・回答プロファイルとプロンプトの版。"
@@ -817,7 +827,11 @@ class RetrieveEvidenceOutput(VersionedOutput):
     trace_id: str
     guardrail_warnings: list[str]
     evidence: list[RagEvidence] = Field(
-        description="検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。"
+        description=(
+            "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）を先に、前後の文脈"
+            "（neighbor_context など）をその後ろに並べる。回答は作らないので used_in_answer は"
+            " false。"
+        )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
 
@@ -1193,12 +1207,40 @@ def _answer_diagnostics(result: SearchResponse) -> dict[str, Any]:
     return dict(answer) if isinstance(answer, dict) else {}
 
 
+# 検索で当たった chunk（関連度の順位を持つ）の役割。前後の文脈（neighbor_context など）と分ける。
+RETRIEVED_ANCHOR_ROLE = "retrieved_anchor"
+
+
+def mcp_evidence_order(citations: Sequence[RetrievedChunk]) -> list[RetrievedChunk]:
+    """MCP の根拠の並び（evidence_limit で切る前。#1348）。
+
+    検索の結果（citations）は、文書ごとのかたまりの中を文書の順（前後の文脈を含む）に並べている
+    （画面の検索結果・回答の文脈の並び）。そのまま上限で切ると、上位の文書の前置き・前の章で枠が
+    埋まり、検索で当たった chunk が落ちる。MCP では次の順にしてから切る。
+
+    1. 回答に使った根拠（used_in_answer）。回答に使った順（citations の順）を保つ。
+    2. 検索で当たった chunk（role=retrieved_anchor と、役割の無い根拠）。関連度の順位
+       （rerank の後の順。``evidence_retrieval_rank``）の順で、順位が無ければ citations の順。
+    3. 前後の文脈（neighbor_context / same_page_context / parent_context など）。citations の順。
+    """
+
+    def key(item: tuple[int, RetrievedChunk]) -> tuple[int, int, int]:
+        position, chunk = item
+        metadata = chunk.metadata
+        if metadata.get("evidence_model_used") is True:
+            return (0, 0, position)
+        role = _metadata_str(metadata, "evidence_role")
+        if role is not None and role != RETRIEVED_ANCHOR_ROLE:
+            return (2, 0, position)
+        rank = _metadata_int(metadata, "evidence_retrieval_rank")
+        return (1, rank if rank is not None and rank > 0 else sys.maxsize, position)
+
+    return [chunk for _, chunk in sorted(enumerate(citations), key=key)]
+
+
 def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any]:
-    # 回答に使った根拠を先にし、その中は検索の順（rerank の順）を保つ。
-    ordered = sorted(
-        result.citations,
-        key=lambda chunk: chunk.metadata.get("evidence_model_used") is not True,
-    )
+    # 回答に使った根拠を先に、検索で当たった chunk、前後の文脈の順にする（#1348）。
+    ordered = mcp_evidence_order(result.citations)
     answer = _answer_diagnostics(result)
     reason = answer.get("insufficient_reason")
     raw_envelope = answer.get("envelope")
@@ -1865,7 +1907,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         enforce_rate_limit("search", http_request)
         result = await search_route._run_search_with_timeout(request)
         limit = arguments.evidence_limit
-        citations = await _with_extraction_recipe_ids(None, result.citations[:limit])
+        # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
+        ordered = mcp_evidence_order(result.citations)
+        citations = await _with_extraction_recipe_ids(None, ordered[:limit])
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
