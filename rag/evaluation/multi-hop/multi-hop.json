@@ -1,0 +1,1161 @@
+{
+  "top_k": 20,
+  "cases": [
+    {
+      "id": "sh-approval-record-retention",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "single_hop",
+      "hops": 1,
+      "query": "承認の記録は何年間保管しますか？",
+      "relevant_document_ids": [
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "5年"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ap-record",
+          "document_id": "file:approval-rules.pdf",
+          "text": "承認の記録は、承認した日から 5 年間保管します"
+        }
+      ]
+    },
+    {
+      "id": "sh-confidential-retention",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "single_hop",
+      "hops": 1,
+      "query": "社外秘のデータは何年間保管しますか？",
+      "relevant_document_ids": [
+        "file:data-retention-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "7年"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "dr-shagaihi",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "社外秘のデータは 7 年間保管します"
+        }
+      ]
+    },
+    {
+      "id": "sh-severity-c-report",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "single_hop",
+      "hops": 1,
+      "query": "重要度 C のシステムで障害が起きたら、いつまでにどこへ報告しますか？",
+      "relevant_document_ids": [
+        "file:incident-contact-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "翌営業日",
+        "担当部署"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "in-c",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "重要度 C: 翌営業日までに、担当部署に報告します"
+        }
+      ]
+    },
+    {
+      "id": "sh-ledger-sys107",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "single_hop",
+      "hops": 1,
+      "query": "システム ID が SYS-107 のシステムの略称と担当部署の略号を教えてください。",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "AMS",
+        "情"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-107",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-107"
+        }
+      ]
+    },
+    {
+      "id": "tl-second-saturday-confidentiality",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "table_lookup",
+      "hops": 2,
+      "query": "定期保守計画で毎月第 2 土曜日に保守するシステムの機密区分は何ですか？",
+      "relevant_document_ids": [
+        "file:maintenance-plan.pdf",
+        "file:system-ledger.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "極秘"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "mt-hrm",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "ＨＲＭ: 毎月第 2 土曜日の 22:00〜翌 2:00"
+        },
+        {
+          "id": "ledger-103",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-103"
+        }
+      ]
+    },
+    {
+      "id": "tl-wednesday-department",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "table_lookup",
+      "hops": 2,
+      "query": "毎週水曜日に定期保守をするシステムは、どの部署の略号で台帳に載っていますか？",
+      "relevant_document_ids": [
+        "file:maintenance-plan.pdf",
+        "file:system-ledger.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "総"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "mt-doc",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "Document Portal: 毎週水曜日の 20:00〜22:00"
+        },
+        {
+          "id": "ledger-105",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-105"
+        }
+      ]
+    },
+    {
+      "id": "tl-severity-a-top-secret",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "table_lookup",
+      "hops": 1,
+      "query": "重要度が A で、機密区分が極秘のシステムをすべて挙げてください。",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "人事評価システム",
+        "予算管理システム"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-103",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-103"
+        },
+        {
+          "id": "ledger-108",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-108"
+        }
+      ]
+    },
+    {
+      "id": "tl-sales-escalation-system",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "table_lookup",
+      "hops": 2,
+      "query": "障害連絡規程で、営業本部長にも連絡するとされているシステムの正式名は何ですか？",
+      "relevant_document_ids": [
+        "file:incident-contact-rules.pdf",
+        "file:system-ledger.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "受発注管理システム"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "in-oms",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "ＳＹＳ－１０４ の障害は、取引先に影響するため、営業本部長にも連絡します"
+        },
+        {
+          "id": "ledger-104",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-104"
+        }
+      ]
+    },
+    {
+      "id": "tl-it-department-system",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "table_lookup",
+      "hops": 2,
+      "query": "情報システム部が担当するシステムの正式名と機密区分を教えてください。",
+      "relevant_document_ids": [
+        "file:organization-rules.pdf",
+        "file:system-ledger.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "資産管理システム",
+        "社外秘"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "org-code-jo",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「情」: 情報システム部。管理本部に属します"
+        },
+        {
+          "id": "ledger-107",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-107"
+        }
+      ]
+    },
+    {
+      "id": "br-expense-approver-deadline",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 4,
+      "query": "経費精算ポータルの変更の申請は、誰が承認し、受付から何営業日以内に承認されますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf",
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "管理本部長",
+        "5営業日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-101",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-101"
+        },
+        {
+          "id": "org-code-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「経」: 経理部。管理本部に属します"
+        },
+        {
+          "id": "org-appr-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "経理部の承認者は管理本部長です"
+        },
+        {
+          "id": "ap-honbucho",
+          "document_id": "file:approval-rules.pdf",
+          "text": "本部長が承認する申請は、受付から 5 営業日以内に承認します"
+        }
+      ]
+    },
+    {
+      "id": "br-attendance-deadline",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 4,
+      "query": "勤怠管理システムの変更を申請したら、受付から何営業日以内に承認されますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf",
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "3営業日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-102",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-102"
+        },
+        {
+          "id": "org-code-jin",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「人」: 人事部。管理本部に属します"
+        },
+        {
+          "id": "org-appr-jin",
+          "document_id": "file:organization-rules.pdf",
+          "text": "人事部の承認者は人事部長です"
+        },
+        {
+          "id": "ap-bucho",
+          "document_id": "file:approval-rules.pdf",
+          "text": "部長が承認する申請は、受付から 3 営業日以内に承認します"
+        }
+      ]
+    },
+    {
+      "id": "br-order-approver-deadline",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "bridge",
+      "hops": 4,
+      "query": "受発注管理システムの変更の承認者と、承認の期限を教えてください。",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf",
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "営業本部長",
+        "5営業日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-104",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-104"
+        },
+        {
+          "id": "org-code-ei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「営」: 営業企画部。営業本部に属します"
+        },
+        {
+          "id": "org-appr-ei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "営業企画部の承認者は営業本部長です"
+        },
+        {
+          "id": "ap-honbucho",
+          "document_id": "file:approval-rules.pdf",
+          "text": "本部長が承認する申請は、受付から 5 営業日以内に承認します"
+        }
+      ]
+    },
+    {
+      "id": "br-room-booking-department",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 2,
+      "query": "会議室予約システムを担当する部署の正式名は何ですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "総務部"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-106",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-106"
+        },
+        {
+          "id": "org-code-so",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「総」: 総務部。管理本部に属します"
+        }
+      ]
+    },
+    {
+      "id": "br-hr-evaluation-retention",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 2,
+      "query": "人事評価システムのデータは何年間保管しますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:data-retention-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "10年"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-103",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-103"
+        },
+        {
+          "id": "dr-gokuhi",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "極秘のデータは 10 年間保管します"
+        }
+      ]
+    },
+    {
+      "id": "br-document-portal-retention",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "bridge",
+      "hops": 2,
+      "query": "ドキュメントポータルのデータの保管期間は何年ですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:data-retention-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "3年"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-105",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-105"
+        },
+        {
+          "id": "dr-shanai",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "社内限りのデータは 3 年間保管します"
+        }
+      ]
+    },
+    {
+      "id": "br-budget-incident-contact",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 4,
+      "query": "予算管理システムで障害が起きたら、何分以内に誰へ連絡しますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:incident-contact-rules.pdf",
+        "file:organization-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "30分",
+        "管理本部長"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-108",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-108"
+        },
+        {
+          "id": "in-a",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "検知から 30 分以内に、担当部署の承認者と情シス部長に電話で連絡します"
+        },
+        {
+          "id": "org-code-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「経」: 経理部。管理本部に属します"
+        },
+        {
+          "id": "org-appr-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "経理部の承認者は管理本部長です"
+        }
+      ]
+    },
+    {
+      "id": "br-asset-recovery-target",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "bridge",
+      "hops": 2,
+      "query": "資産管理システムで障害が起きたときの復旧の目標はどれくらいですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:incident-contact-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "1営業日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-107",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-107"
+        },
+        {
+          "id": "in-recover-b",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "重要度 B のシステムは 1 営業日以内に復旧します"
+        }
+      ]
+    },
+    {
+      "id": "br-hr-evaluation-change-window",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 3,
+      "query": "人事評価システムの本番の変更は、いつ作業できますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:change-procedure.pdf",
+        "file:maintenance-plan.pdf"
+      ],
+      "expected_answer_keywords": [
+        "第2土曜"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-103",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-103"
+        },
+        {
+          "id": "ch-window-a",
+          "document_id": "file:change-procedure.pdf",
+          "text": "重要度 A のシステムの変更は、定期保守の時間帯にだけ作業します"
+        },
+        {
+          "id": "mt-hrm",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "ＨＲＭ: 毎月第 2 土曜日の 22:00〜翌 2:00"
+        }
+      ]
+    },
+    {
+      "id": "br-budget-change-window",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 4,
+      "query": "予算管理システムの本番の変更は、いつ作業できますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:change-procedure.pdf",
+        "file:maintenance-plan.pdf"
+      ],
+      "expected_answer_keywords": [
+        "最終金曜"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-108",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-108"
+        },
+        {
+          "id": "ch-window-a",
+          "document_id": "file:change-procedure.pdf",
+          "text": "重要度 A のシステムの変更は、定期保守の時間帯にだけ作業します"
+        },
+        {
+          "id": "mt-common-ref",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "この章に無いシステムは、第 2 章の共通の保守枠で保守します"
+        },
+        {
+          "id": "mt-common",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "共通の保守枠は、毎月最終金曜日の 20:00〜24:00 です"
+        }
+      ]
+    },
+    {
+      "id": "br-order-change-window",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "bridge",
+      "hops": 3,
+      "query": "受発注管理システムの変更作業ができる時間帯はいつですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:change-procedure.pdf",
+        "file:maintenance-plan.pdf"
+      ],
+      "expected_answer_keywords": [
+        "第4日曜"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-104",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-104"
+        },
+        {
+          "id": "ch-window-a",
+          "document_id": "file:change-procedure.pdf",
+          "text": "重要度 A のシステムの変更は、定期保守の時間帯にだけ作業します"
+        },
+        {
+          "id": "mt-oms",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "ＯＭＳ: 毎月第 4 日曜日の 1:00〜5:00"
+        }
+      ]
+    },
+    {
+      "id": "br-room-booking-proxy",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "bridge",
+      "hops": 3,
+      "query": "会議室予約システムの変更の承認者が 3 営業日以上不在のとき、だれが代理で承認しますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "管理本部長"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-106",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-106"
+        },
+        {
+          "id": "org-code-so",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「総」: 総務部。管理本部に属します"
+        },
+        {
+          "id": "org-proxy",
+          "document_id": "file:organization-rules.pdf",
+          "text": "その部署が属する本部の本部長が代理で承認します"
+        }
+      ]
+    },
+    {
+      "id": "br-expense-approver-proxy",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "bridge",
+      "hops": 5,
+      "query": "経費精算ポータルの変更を承認する人が不在のときは、だれが代理で承認しますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "担当役員"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-101",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-101"
+        },
+        {
+          "id": "org-code-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「経」: 経理部。管理本部に属します"
+        },
+        {
+          "id": "org-appr-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "経理部の承認者は管理本部長です"
+        },
+        {
+          "id": "org-proxy-ref",
+          "document_id": "file:organization-rules.pdf",
+          "text": "承認者が不在のときの代理は第 4 章を参照してください"
+        },
+        {
+          "id": "org-proxy-exec",
+          "document_id": "file:organization-rules.pdf",
+          "text": "本部長が不在のときは、担当役員が代理で承認します"
+        }
+      ]
+    },
+    {
+      "id": "ir-overdue-approval",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "intra_document_reference",
+      "hops": 2,
+      "query": "申請が承認の期限までに承認されないとき、申請者は何をすればよいですか？",
+      "relevant_document_ids": [
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "催促"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ap-overdue-ref",
+          "document_id": "file:approval-rules.pdf",
+          "text": "期限までに承認されないときの扱いは第 4 章を参照してください"
+        },
+        {
+          "id": "ap-overdue",
+          "document_id": "file:approval-rules.pdf",
+          "text": "申請者は承認者の 1 つ上の役職に催促を依頼します"
+        }
+      ]
+    },
+    {
+      "id": "ir-room-booking-maintenance",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "intra_document_reference",
+      "hops": 2,
+      "query": "会議室予約システムの定期保守はいつ行いますか？",
+      "relevant_document_ids": [
+        "file:maintenance-plan.pdf"
+      ],
+      "expected_answer_keywords": [
+        "最終金曜"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "mt-common-ref",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "この章に無いシステムは、第 2 章の共通の保守枠で保守します"
+        },
+        {
+          "id": "mt-common",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "共通の保守枠は、毎月最終金曜日の 20:00〜24:00 です"
+        }
+      ]
+    },
+    {
+      "id": "ir-change-application-items",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "intra_document_reference",
+      "hops": 2,
+      "query": "本番環境の設定を変えるときの申請には、何を書けばよいですか？",
+      "relevant_document_ids": [
+        "file:change-procedure.pdf"
+      ],
+      "expected_answer_keywords": [
+        "切り戻し"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ch-items-ref",
+          "document_id": "file:change-procedure.pdf",
+          "text": "申請書に書く項目は第 3 章を参照してください"
+        },
+        {
+          "id": "ch-item-rollback",
+          "document_id": "file:change-procedure.pdf",
+          "text": "切り戻しの手順"
+        }
+      ]
+    },
+    {
+      "id": "ir-incident-phone-unreachable",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "intra_document_reference",
+      "hops": 2,
+      "query": "障害の最初の連絡で、電話がつながらないときはどうしますか？",
+      "relevant_document_ids": [
+        "file:incident-contact-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "#incident"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "in-means-ref",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "連絡の手段は第 3 章を参照してください"
+        },
+        {
+          "id": "in-means",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "社内チャットの障害チャンネル（#incident）に書き込み、15 分ごとに電話をかけ直します"
+        }
+      ]
+    },
+    {
+      "id": "ir-emergency-change",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "intra_document_reference",
+      "hops": 2,
+      "query": "緊急の変更を承認の前に作業したときは、そのあと何をしますか？",
+      "relevant_document_ids": [
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "24時間",
+        "事後"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ap-emergency-ref",
+          "document_id": "file:approval-rules.pdf",
+          "text": "緊急の変更は第 3 章の手順で進めます"
+        },
+        {
+          "id": "ap-emergency",
+          "document_id": "file:approval-rules.pdf",
+          "text": "作業の後 24 時間以内に承認者へ事後の承認を申請します"
+        }
+      ]
+    },
+    {
+      "id": "ir-expired-data-erasure",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "intra_document_reference",
+      "hops": 2,
+      "query": "保管期間を過ぎたデータは、どのように消せばよいですか？",
+      "relevant_document_ids": [
+        "file:data-retention-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "承認",
+        "総務部"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "dr-erase-ref",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "保管期間を過ぎたデータの消し方は第 3 章を参照してください"
+        },
+        {
+          "id": "dr-erase",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "システムを担当する部署の承認者の承認を得てから消去します"
+        },
+        {
+          "id": "dr-erase-report",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "消去の記録は総務部に提出します"
+        }
+      ]
+    },
+    {
+      "id": "cmp-expense-vs-attendance-deadline",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "comparison",
+      "hops": 4,
+      "query": "経費精算ポータルと勤怠管理システムでは、変更の承認の期限はどちらが長いですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:organization-rules.pdf",
+        "file:approval-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "経費精算ポータル"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-101",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-101"
+        },
+        {
+          "id": "ledger-102",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-102"
+        },
+        {
+          "id": "org-code-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「経」: 経理部。管理本部に属します"
+        },
+        {
+          "id": "org-code-jin",
+          "document_id": "file:organization-rules.pdf",
+          "text": "略号「人」: 人事部。管理本部に属します"
+        },
+        {
+          "id": "org-appr-kei",
+          "document_id": "file:organization-rules.pdf",
+          "text": "経理部の承認者は管理本部長です"
+        },
+        {
+          "id": "org-appr-jin",
+          "document_id": "file:organization-rules.pdf",
+          "text": "人事部の承認者は人事部長です"
+        },
+        {
+          "id": "ap-honbucho",
+          "document_id": "file:approval-rules.pdf",
+          "text": "本部長が承認する申請は、受付から 5 営業日以内に承認します"
+        },
+        {
+          "id": "ap-bucho",
+          "document_id": "file:approval-rules.pdf",
+          "text": "部長が承認する申請は、受付から 3 営業日以内に承認します"
+        }
+      ]
+    },
+    {
+      "id": "cmp-hr-vs-attendance-retention",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "comparison",
+      "hops": 2,
+      "query": "人事評価システムと勤怠管理システムでは、どちらのデータを長く保管しますか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:data-retention-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "人事評価システム",
+        "10年"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-103",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-103"
+        },
+        {
+          "id": "ledger-102",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-102"
+        },
+        {
+          "id": "dr-gokuhi",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "極秘のデータは 10 年間保管します"
+        },
+        {
+          "id": "dr-shagaihi",
+          "document_id": "file:data-retention-rules.pdf",
+          "text": "社外秘のデータは 7 年間保管します"
+        }
+      ]
+    },
+    {
+      "id": "cmp-hrm-vs-oms-maintenance",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "comparison",
+      "hops": 1,
+      "query": "HRM と OMS では、どちらの定期保守が月の早い時期にありますか？",
+      "relevant_document_ids": [
+        "file:maintenance-plan.pdf"
+      ],
+      "expected_answer_keywords": [
+        "HRM"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "mt-hrm",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "ＨＲＭ: 毎月第 2 土曜日の 22:00〜翌 2:00"
+        },
+        {
+          "id": "mt-oms",
+          "document_id": "file:maintenance-plan.pdf",
+          "text": "ＯＭＳ: 毎月第 4 日曜日の 1:00〜5:00"
+        }
+      ]
+    },
+    {
+      "id": "cmp-hr-vs-asset-first-contact",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "comparison",
+      "hops": 2,
+      "query": "人事評価システムと資産管理システムでは、障害のときの最初の連絡の期限はどちらが短いですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:incident-contact-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "人事評価システム",
+        "30分"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-103",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-103"
+        },
+        {
+          "id": "ledger-107",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-107"
+        },
+        {
+          "id": "in-a",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "検知から 30 分以内に、担当部署の承認者と情シス部長に電話で連絡します"
+        },
+        {
+          "id": "in-b",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "検知から 2 時間以内に、担当部署の承認者に連絡します"
+        }
+      ]
+    },
+    {
+      "id": "cmp-document-vs-room-recovery",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "comparison",
+      "hops": 2,
+      "query": "ドキュメントポータルと会議室予約システムでは、障害からの復旧の目標はどちらが短いですか？",
+      "relevant_document_ids": [
+        "file:system-ledger.xlsx",
+        "file:incident-contact-rules.pdf"
+      ],
+      "expected_answer_keywords": [
+        "ドキュメントポータル",
+        "1営業日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "ledger-105",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-105"
+        },
+        {
+          "id": "ledger-106",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "SYS-106"
+        },
+        {
+          "id": "in-recover-b",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "重要度 B のシステムは 1 営業日以内に復旧します"
+        },
+        {
+          "id": "in-recover-c",
+          "document_id": "file:incident-contact-rules.pdf",
+          "text": "重要度 C のシステムは 3 営業日以内に復旧します"
+        }
+      ]
+    }
+  ]
+}
