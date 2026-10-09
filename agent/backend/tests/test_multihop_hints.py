@@ -526,6 +526,11 @@ def test_record_codes_read_multi_row_headers_and_sheet_rows_without_kind() -> No
         ("区分 / 重要度", "S"),
         ("担当部署", "企"),
     ]
+    # 手順書の手順（1 行に 1 つの「列名: 値」）も同じに読む。
+    step = _record("手順名: 予算管理システムの再起動\n担当: 企\n所要時間: 30", "step-1")
+    steps_note = record_codes({"evidence": [step]}, "予算管理システムの再起動 担当", [])
+    assert steps_note is not None
+    assert [(item["field"], item["value"]) for item in steps_note["values"]] == [("担当", "企")]
     # 複数の行の範囲（表のかたまり）は 1 行の記録ではない。
     block = {**row, "locator": {"sheet_name": "台帳", "row_start": 5, "row_end": 9}}
     assert record_codes({"evidence": [block]}, "予算管理システム 重要度", []) is None

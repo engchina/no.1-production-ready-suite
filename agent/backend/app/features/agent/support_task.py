@@ -265,8 +265,9 @@ def text_references(tool: str, output: JsonObject) -> list[JsonObject]:
 # 区分ごとの規則）は別の資料（略号の表・区分の定義・規程）にあることが多く、1 回目の検索の結果には
 # 前後の文脈としてしか出ない（#1335 の再評価の D で、略号の表は MCP の並びの 21〜142 位）。
 RECORD_CONTENT_KIND = "record"
-# 記録の本文の形（rag_parser_core.sheet_records。「列名: 値 / 列名: 値」）。
-_RECORD_FIELD_SEPARATOR = " / "
+# 記録の本文の形（rag_parser_core.sheet_records。表の行は「列名: 値 / 列名: 値」、手順書の手順は
+# 1 行に 1 つの「列名: 値」）。
+_RECORD_FIELD_SEPARATOR = re.compile(r" / |\n")
 _RECORD_VALUE_SEPARATOR = ": "
 MAX_CODE_VALUE_CHARS = 2
 # 質問の語と記録の値を結び付ける最小の長さ（値が query に含まれる側 / query の語が値に含まれる側）。
@@ -301,10 +302,11 @@ def _record_fields(text: str) -> list[tuple[str, str]]:
     """記録の本文の（列名, 値）。複数行の表頭（「 / 」でつないだ列名）の前の部分は列名につなぐ。"""
     fields: list[tuple[str, str]] = []
     prefix: list[str] = []
-    for part in text.split(_RECORD_FIELD_SEPARATOR):
+    for part in _RECORD_FIELD_SEPARATOR.split(text):
         name, separator, value = part.partition(_RECORD_VALUE_SEPARATOR)
         if not separator:
-            prefix.append(part.strip())
+            if part.strip():
+                prefix.append(part.strip())
             continue
         fields.append((" / ".join([*prefix, name.strip()]).strip(" /"), value.strip()))
         prefix = []
