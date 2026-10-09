@@ -108,6 +108,11 @@ TEXT_CHUNK_PROFILE = "text_v1"
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 NON_INDEXED_ELEMENT_KINDS = {"header", "footer"}
 FIGURE_ELEMENT_KINDS = {"figure", "figure_caption"}
+# 表計算の行の記録（前処理 excel_to_json。rag_parser_core.sheet_records の content_kind）。
+# 1 記録（表の 1 行・手順書の 1 手順）を 1 chunk にし、他の記録・要素と結合せず、途中で切らない
+# （#1349。engchina/no.1-rag の「1 行 = 1 chunk」に合わせる）。
+SHEET_RECORD_CONTENT_KIND = "record"
+SHEET_RECORD_GROUP_KIND = "sheet_record"
 # 図の chunk の本文の出どころ（MCP の根拠の evidence_type に使う。#1282）。
 FIGURE_TEXT_SOURCE_KEY = "figure_text_source"
 FIGURE_TEXT_SOURCE_VISION = "vision"
@@ -226,6 +231,12 @@ def chunk_extraction(
         if span.content_kind == "table":
             flush_buffer()
             chunks.extend(_chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks)))
+            continue
+        if span.content_kind == SHEET_RECORD_CONTENT_KIND:
+            # 表計算の 1 行（1 記録）は単独の chunk にする。列名つきの値を 1 つの chunk に保ち、
+            # 1 行の実体で検索したときに他の行と混ざって埋もれないようにする（#1349）。
+            flush_buffer()
+            chunks.append(_chunk_record_span(span, start_index=len(chunks)))
             continue
         if not buffer:
             buffer = [span]
@@ -527,6 +538,10 @@ def _chunk_page_level(
     )
 
 
+# 微小 chunk の吸収の対象にしない種類（表と、表計算の 1 行の記録。#1349）。
+_UNABSORBED_CONTENT_KINDS = frozenset({"table", SHEET_RECORD_CONTENT_KIND})
+
+
 def _absorb_small_chunks(
     chunks: list[Chunk],
     *,
@@ -542,8 +557,8 @@ def _absorb_small_chunks(
         if (
             previous is not None
             and len(chunk.text) < min_chars
-            and chunk.metadata.get("content_kind") != "table"
-            and previous.metadata.get("content_kind") != "table"
+            and chunk.metadata.get("content_kind") not in _UNABSORBED_CONTENT_KINDS
+            and previous.metadata.get("content_kind") not in _UNABSORBED_CONTENT_KINDS
             and previous.metadata.get("chunk_group_id") == chunk.metadata.get("chunk_group_id")
             and previous.metadata.get("chunk_group_id") is not None
         ):
@@ -1166,6 +1181,28 @@ def _chunk_table_span(
     )
 
 
+def _chunk_record_span(span: _ElementSpan, *, start_index: int) -> Chunk:
+    """表計算の 1 記録を 1 chunk にする（結合も分割もしない。場所は記録の行・セル範囲）。
+
+    記録ごとに別の chunk group にし、同じ group の兄弟として他の行を文脈に足さない。
+    長い記録は chunk_size を超えても切らない（``atomic_block``。本文の上限は parser が持つ）。
+    """
+    metadata = _span_group_metadata([span])
+    return _with_chunk_group_metadata(
+        [
+            Chunk(
+                text=span.text,
+                index=start_index,
+                start_offset=span.start_offset,
+                end_offset=span.end_offset,
+                metadata=metadata,
+            )
+        ],
+        group_kind=SHEET_RECORD_GROUP_KIND,
+        group_text=span.text,
+    )[0]
+
+
 def _chunks_from_table_parts(
     parts: list[_TablePart],
     *,
@@ -1513,7 +1550,7 @@ def _with_chunk_size_compliance_metadata(
 def _chunk_size_overflow_reason(chunk: Chunk) -> str | None:
     """構造を壊さないために chunk_size を超えることを許容できる理由を返す。"""
     content_kind = chunk.metadata.get("content_kind")
-    if content_kind in {"table", "code", "equation", "figure"}:
+    if content_kind in {"table", "code", "equation", "figure", SHEET_RECORD_CONTENT_KIND}:
         return "atomic_block"
     return None
 

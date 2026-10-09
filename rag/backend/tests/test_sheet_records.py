@@ -1,4 +1,4 @@
-"""Excel の行の記録（前処理 excel_to_json v2）を要素・chunk にし、場所を残す（#1221）。
+"""Excel の行の記録（前処理 excel_to_json v2）を要素・chunk にし、場所を残す（#1221・#1349）。
 
 前処理のサービス（openpyxl）は別の venv で動くため、ここでは前処理が作る JSON
 （`SheetRecordsDocument`）を直接作り、parser の側（rag_parser_core）と chunking
@@ -8,11 +8,18 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
-from typing import Any
+import re
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient
 from rag_parser_core.capabilities import adapter_supports_source
+from rag_parser_core.extraction import StructuredExtraction
 from rag_parser_core.preprocess import ConvertHealth, ConvertOutcome, ConvertResponse
 from rag_parser_core.preprocess_service import create_preprocess_app
 from rag_parser_core.registry import run_external_adapter
@@ -27,6 +34,8 @@ from rag_parser_core.source import SourceProfile
 
 from app.rag.chunking import chunk_extraction_with_strategy
 from app.rag.source_profile import build_source_profile
+
+RAG_DIR = Path(__file__).resolve().parents[2]
 
 
 def _xlsx_profile() -> SourceProfile:
@@ -128,29 +137,287 @@ def test_every_adapter_accepts_sheet_records_without_external_parser() -> None:
     assert "sheet_records_invalid" in broken.warnings
 
 
-def test_chunks_carry_sheet_rows_and_cell_ranges() -> None:
+def _extraction(document: SheetRecordsDocument | None = None) -> StructuredExtraction:
     result = run_external_adapter(
-        "docling", _document().to_json_bytes(), _xlsx_profile(), SHEET_RECORDS_CONTENT_TYPE
+        "docling",
+        (document or _document()).to_json_bytes(),
+        _xlsx_profile(),
+        SHEET_RECORDS_CONTENT_TYPE,
     )
     assert result.extraction is not None
+    return result.extraction
 
+
+def test_chunks_carry_sheet_rows_and_cell_ranges() -> None:
+    """1 行（1 記録）を 1 chunk にし、行・前書きと結合しない（#1349）。"""
     chunks = chunk_extraction_with_strategy(
-        result.extraction, strategy="structure_aware", chunk_size=800, overlap=0
+        _extraction(), strategy="structure_aware", chunk_size=800, overlap=120, min_chars=120
     )
 
-    by_text = {chunk.text.splitlines()[0]: chunk.metadata for chunk in chunks}
-    rows = next(meta for text, meta in by_text.items() if text.startswith("コード: A03"))
-    # 同じシートの行は 1 chunk にまとまり、行の範囲とセル範囲が残る（空行の 5 行目も範囲に含む）。
-    assert rows["sheet_name"] == "コード表"
-    assert (rows["row_start"], rows["row_end"], rows["cell_range"]) == (3, 6, "A3:C6")
-    # 表頭より上の説明は本文の chunk になる。シート名だけの chunk は作らない。
-    preamble = next(chunk.metadata for chunk in chunks if "費目のコードの一覧" in chunk.text)
+    rows = [chunk for chunk in chunks if chunk.text.startswith("コード: ")]
+    # 行ごとに 1 chunk。場所はその行（空行の 5 行目は記録にならず、元の行番号のまま）。
+    assert [chunk.text for chunk in rows] == [
+        "コード: A03 / 名称: 費目3 / 区分: 旅費",
+        "コード: A04 / 名称: 費目4 / 区分: 旅費",
+        "コード: A06 / 名称: 費目6 / 区分: 旅費",
+    ]
+    assert [
+        (meta["sheet_name"], meta["row_start"], meta["row_end"], meta["cell_range"])
+        for meta in (chunk.metadata for chunk in rows)
+    ] == [("コード表", 3, 3, "A3:C3"), ("コード表", 4, 4, "A4:C4"), ("コード表", 6, 6, "A6:C6")]
+    assert all(chunk.metadata["content_kind"] == "record" for chunk in rows)
+    # 行ごとに別の group にし、兄弟として他の行を文脈に足さない（min_chars の吸収もしない）。
+    assert len({chunk.metadata["chunk_group_id"] for chunk in rows}) == len(rows)
+    assert {chunk.metadata["chunk_group_kind"] for chunk in rows} == {"sheet_record"}
+    # 表頭より上の説明は本文の chunk になり、行と混ざらない。シート名だけの chunk は作らない。
+    preamble = next(chunk for chunk in chunks if "費目のコードの一覧" in chunk.text)
+    assert preamble.text == "費目のコードの一覧"
+    assert (preamble.metadata["row_start"], preamble.metadata["cell_range"]) == (1, "A1:A1")
     assert all(chunk.metadata.get("sheet_name") for chunk in chunks)
-    assert (preamble["row_start"], preamble["cell_range"]) == (1, "A1:A1")
-    step = next(meta for text, meta in by_text.items() if text == "セクション: 事前準備")
+    step = next(chunk.metadata for chunk in chunks if chunk.text.startswith("セクション: "))
     assert step["sheet_name"] == "手順"
     assert (step["row_start"], step["row_end"], step["cell_range"]) == (3, 4, "A3:D4")
     assert step["section_path"] == "手順 > 事前準備 > アカウントの登録"
+    assert len(chunks) == 5
+
+
+def test_long_record_stays_in_one_chunk() -> None:
+    """chunk_size を超える 1 行も途中で切らない（構造を壊さない理由つきの超過）。"""
+    long_value = "長い説明。" * 80
+    document = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="説明",
+                header_row=1,
+                blocks=[
+                    SheetBlock(
+                        kind="row",
+                        row_start=2,
+                        row_end=2,
+                        cell_range="A2:B2",
+                        values={"項目": "保管", "説明": long_value},
+                    )
+                ],
+            )
+        ],
+    )
+    chunks = chunk_extraction_with_strategy(
+        _extraction(document), strategy="structure_aware", chunk_size=200, overlap=20
+    )
+    assert len(chunks) == 1
+    assert chunks[0].text == f"項目: 保管 / 説明: {long_value}"
+    assert chunks[0].metadata["chunk_size_compliance"] == "overflow_justified"
+    assert chunks[0].metadata["chunk_size_overflow_reason"] == "atomic_block"
+
+
+def test_small_to_big_uses_rows_as_children_and_table_parts_as_parents() -> None:
+    """親子階層は行を子、同じシートの続く行（表の一部）を親にする。縮退しない（#1349）。"""
+    from app.rag.chunking_small_to_big import (
+        CHUNK_STRATEGY_FALLBACK_REASON_KEY,
+        build_parent_child_chunks,
+        small_to_big_fallback_needed,
+    )
+    from app.rag.chunking_strategy import SmallToBigParams
+
+    rows = [
+        SheetBlock(
+            kind="row",
+            row_start=row,
+            row_end=row,
+            cell_range=f"A{row}:B{row}",
+            values={"コード": f"C{row}", "名称": f"品目{row}"},
+        )
+        for row in range(3, 8)
+    ]
+    document = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="品目",
+                header_row=2,
+                preamble=[SheetPreambleRow(row_number=1, cell_range="A1:A1", text="品目の一覧")],
+                blocks=rows,
+            ),
+            SheetRecords(
+                name="別表",
+                header_row=1,
+                blocks=[
+                    SheetBlock(
+                        kind="row",
+                        row_start=2,
+                        row_end=2,
+                        cell_range="A2:B2",
+                        values={"コード": "Z1", "名称": "別品目"},
+                    )
+                ],
+            ),
+        ],
+    )
+    extraction = _extraction(document)
+    assert small_to_big_fallback_needed("small_to_big", extraction) is False
+
+    chunks = build_parent_child_chunks(
+        extraction, params=SmallToBigParams(parent_target_chars=6000, parent_max_children=3)
+    )
+
+    assert [chunk.index for chunk in chunks] == list(range(len(chunks)))
+    assert all(chunk.metadata["chunk_strategy"] == "small_to_big" for chunk in chunks)
+    assert all(CHUNK_STRATEGY_FALLBACK_REASON_KEY not in chunk.metadata for chunk in chunks)
+    # 子は 1 行 1 chunk（前書き 1・品目の 5 行・別表の 1 行）。
+    assert [chunk.metadata["cell_range"] for chunk in chunks] == [
+        "A1:A1",
+        "A3:B3",
+        "A4:B4",
+        "A5:B5",
+        "A6:B6",
+        "A7:B7",
+        "A2:B2",
+    ]
+    groups: dict[str, list[Any]] = {}
+    for chunk in chunks:
+        groups.setdefault(str(chunk.metadata["chunk_group_id"]), []).append(chunk)
+    # 親は前書き（自分だけ）・品目の 3 行（件数の上限）・残りの 2 行・別表（シートをまたがない）。
+    assert [len(members) for members in groups.values()] == [1, 3, 2, 1]
+    preamble, first, second, other = groups.values()
+    assert preamble[0].metadata["parent_text"] == "品目の一覧"
+    assert first[0].metadata["parent_text"] == "\n".join(chunk.text for chunk in first)
+    assert [chunk.metadata["chunk_part_index"] for chunk in first] == [1, 2, 3]
+    assert {chunk.metadata["chunk_part_count"] for chunk in first} == {3}
+    assert {chunk.metadata["chunk_group_kind"] for chunk in chunks} == {"small_to_big_parent"}
+    assert {
+        (
+            chunk.metadata["parent_row_start"],
+            chunk.metadata["parent_row_end"],
+            chunk.metadata["parent_cell_range"],
+        )
+        for chunk in second
+    } == {(6, 7, "A6:B7")}
+    assert other[0].metadata["sheet_name"] == "別表"
+    assert other[0].metadata["parent_text"] == "コード: Z1 / 名称: 別品目"
+
+    # 親の本文の上限（文字数）でも分ける。
+    small = build_parent_child_chunks(
+        extraction, params=SmallToBigParams(parent_target_chars=40, parent_max_children=12)
+    )
+    sizes = [
+        sum(1 for chunk in small if chunk.metadata["chunk_group_id"] == group_id)
+        for group_id in dict.fromkeys(chunk.metadata["chunk_group_id"] for chunk in small)
+    ]
+    assert sizes == [1, 2, 2, 1, 1]
+    assert all(len(str(chunk.metadata["parent_text"])) <= 40 for chunk in small)
+
+
+def test_small_to_big_groups_procedure_steps_by_chapter() -> None:
+    """手順書は同じ章の手順だけを 1 つの親にする。"""
+    from app.rag.chunking_small_to_big import build_parent_child_chunks
+
+    def step(row: int, chapter: str, title: str) -> SheetBlock:
+        return SheetBlock(
+            kind="procedure_step",
+            row_start=row,
+            row_end=row,
+            cell_range=f"A{row}:C{row}",
+            section_path=[chapter, title],
+            lines=[f"作業項目: {title}"],
+        )
+
+    document = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="手順",
+                header_row=1,
+                mode="procedure",
+                blocks=[
+                    step(2, "準備", "登録"),
+                    step(3, "準備", "確認"),
+                    step(4, "実施", "起動"),
+                ],
+            )
+        ],
+    )
+    chunks = build_parent_child_chunks(_extraction(document))
+    assert [chunk.metadata["chunk_part_count"] for chunk in chunks] == [2, 2, 1]
+    assert chunks[0].metadata["chunk_group_id"] == chunks[1].metadata["chunk_group_id"]
+    assert chunks[2].metadata["chunk_group_id"] != chunks[1].metadata["chunk_group_id"]
+
+
+def _excel_to_json_converter() -> ModuleType:
+    """前処理のサービスの変換（別の venv で動く）を、ファイルの場所から読み込む。"""
+    pytest.importorskip("openpyxl")
+    path = RAG_DIR / "services" / "preprocess" / "excel_to_json" / "app" / "converters.py"
+    name = "excel_to_json_converters_1349"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # dataclass の定義が module を引くため、読み込みの間だけ登録する。
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    return module
+
+
+@pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big"])
+def test_system_ledger_becomes_eight_row_chunks_and_preamble(strategy: str) -> None:
+    """評価セットの台帳（8 行）は前書きと 8 つの行の chunk になり、行は列名と値を持つ（#1349）。"""
+    from rag_parser_core.sheet_records import parse_sheet_records, sheet_records_extraction
+
+    from app.rag.chunking_small_to_big import build_parent_child_chunks
+
+    converter = _excel_to_json_converter()
+    source = RAG_DIR / "evaluation" / "multi-hop" / "system-ledger.xlsx"
+    outcome = converter.convert(
+        source.read_bytes(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "excel_to_json",
+        None,
+    )
+    assert outcome.converted is True
+    document = parse_sheet_records(outcome.derived_bytes)
+    assert document is not None
+    extraction = sheet_records_extraction(
+        document, source_parser="sheet_records", parser_backend="docling", parser_version="v1"
+    )
+    if strategy == "small_to_big":
+        chunks = build_parent_child_chunks(extraction)
+    else:
+        chunks = chunk_extraction_with_strategy(
+            extraction, strategy=strategy, chunk_size=800, overlap=120, min_chars=120
+        )
+
+    assert len(chunks) == 9
+    preamble, *rows = chunks
+    assert preamble.metadata["content_kind"] == "text"
+    assert preamble.metadata["cell_range"] == "A1:A2"
+    assert preamble.text.startswith("サンプル社のシステム台帳")
+    assert "SYS-" not in preamble.text
+    columns = ["システムID", "正式名", "略称・別表記", "担当部署", "重要度", "機密区分"]
+    assert [chunk.metadata["cell_range"] for chunk in rows] == [
+        f"A{row}:F{row}" for row in range(4, 12)
+    ]
+    for number, chunk in enumerate(rows, start=101):
+        assert chunk.metadata["content_kind"] == "record"
+        assert chunk.metadata["sheet_name"] == "システム台帳"
+        assert chunk.metadata["section_path"] == "システム台帳"
+        assert chunk.text.startswith(f"システムID: SYS-{number} / 正式名: ")
+        assert [part.split(": ", 1)[0] for part in chunk.text.split(" / ")] == columns
+        # 他の行のシステム ID は入らない（1 行の根拠を引用で数えられる）。
+        assert re.findall(r"SYS-\d+", chunk.text) == [f"SYS-{number}"]
+    assert rows[2].text == (
+        "システムID: SYS-103 / 正式名: 人事評価システム / 略称・別表記: HRM / 担当部署: 人"
+        " / 重要度: A / 機密区分: 極秘"
+    )
+    if strategy == "small_to_big":
+        # 8 行は 1 つの親（表全体 A4:F11）の子。前書きは自分だけの親。
+        assert len({chunk.metadata["chunk_group_id"] for chunk in rows}) == 1
+        assert {chunk.metadata["parent_cell_range"] for chunk in rows} == {"A4:F11"}
+        assert rows[0].metadata["parent_text"] == "\n".join(chunk.text for chunk in rows)
+        assert preamble.metadata["chunk_group_id"] != rows[0].metadata["chunk_group_id"]
+    else:
+        assert len({chunk.metadata["chunk_group_id"] for chunk in chunks}) == 9
 
 
 def test_preprocess_service_passes_options_only_to_converters_that_take_them() -> None:
@@ -295,6 +562,54 @@ def test_answer_records_carry_sheet_location_for_citations() -> None:
     }
     # 別のシートが混ざる親は場所をまとめない（頁と同じく、確かな場所だけを出す）。
     assert _merged_sheet_location([{"sheet_name": "a"}, {"sheet_name": "b"}]) is None
+
+
+def test_answer_parent_of_sheet_rows_uses_the_table_part_location() -> None:
+    """行の記録の親（表の一部）は、見つかった子ではなく親の本文の範囲を場所にする（#1349）。"""
+    from app.rag.answer_engine import _parent_sheet_location, _stored_child, _stored_parents
+    from app.schemas.search import RetrievedChunk
+
+    assert _parent_sheet_location(
+        {
+            "sheet_name": "台帳",
+            "parent_row_start": 4,
+            "parent_row_end": 11,
+            "parent_cell_range": "A4:F11",
+        }
+    ) == {"sheet_name": "台帳", "row_start": 4, "row_end": 11, "cell_range": "A4:F11"}
+    assert _parent_sheet_location({"sheet_name": "台帳", "parent_cell_range": "A4"}) is None
+
+    chunk = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="doc-1:cs:5",
+        text="システムID: SYS-105",
+        score=1.0,
+        metadata={
+            "sheet_name": "台帳",
+            "row_start": 8,
+            "row_end": 8,
+            "cell_range": "A8:F8",
+            "chunk_group_id": "g1",
+            "parent_text": "システムID: SYS-104\nシステムID: SYS-105",
+            "parent_row_start": 7,
+            "parent_row_end": 8,
+            "parent_cell_range": "A7:F8",
+        },
+    )
+
+    class _State:
+        chunks = {chunk.chunk_id: chunk}
+
+    child = _stored_child(chunk, rrf_score=1.0)
+    assert child.metadata["sheet_location"]["cell_range"] == "A8:F8"
+    (parent,) = _stored_parents([child], cast(Any, _State()))
+    assert parent.text == "システムID: SYS-104\nシステムID: SYS-105"
+    assert parent.metadata["sheet_location"] == {
+        "sheet_name": "台帳",
+        "row_start": 7,
+        "row_end": 8,
+        "cell_range": "A7:F8",
+    }
 
 
 def test_low_confidence_header_becomes_extraction_warning_and_ranges_are_validated() -> None:
