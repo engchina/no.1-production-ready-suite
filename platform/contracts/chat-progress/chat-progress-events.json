@@ -1,0 +1,554 @@
+{
+  "name": "chat-progress",
+  "schema_version": 1,
+  "statuses": [
+    "pending",
+    "running",
+    "done",
+    "failed",
+    "skipped"
+  ],
+  "terminal_statuses": [
+    "done",
+    "failed",
+    "cancelled"
+  ],
+  "sse": {
+    "event": "chat_progress",
+    "heartbeat_event": "heartbeat",
+    "id": "seq",
+    "resume": [
+      "Last-Event-ID",
+      "since"
+    ],
+    "finished_status": 204
+  },
+  "polling": {
+    "query": "since"
+  },
+  "event": {
+    "$defs": {
+      "ChatProgressParamValue": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "ChatProgressStepEvent": {
+        "additionalProperties": false,
+        "description": "1 つの段階の今の状態（状態・時刻・補足の全体）。",
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "description": "イベントの形の版。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "seq": {
+            "description": "対象ごとに 1 から連続して増える番号（SSE の `id:`）。",
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target_id": {
+            "description": "対象（RAG の回答のメッセージ・NL2SQL のジョブ・Agent の Run）の id。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "attempt": {
+            "default": 0,
+            "description": "試行。引き継いだ実行で増え、増えたら段階の一覧を作り直す。",
+            "minimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "emitted_at": {
+            "description": "記録した時刻（ISO 8601）。",
+            "format": "date-time",
+            "title": "Emitted At",
+            "type": "string"
+          },
+          "type": {
+            "const": "step",
+            "default": "step",
+            "title": "Type",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "段階の id（対象の中で一意）。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Step Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "段階の定義の種類（画面の名前の key）。省略時は step_id。",
+            "title": "Kind"
+          },
+          "status": {
+            "$ref": "#/$defs/ChatProgressStepStatus"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Finished At"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "短い補足（件数・回数など）。",
+            "title": "Detail"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ChatProgressParamValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "画面が名前・補足を組み立てる値（ツール名・件数など）。",
+            "title": "Params"
+          }
+        },
+        "required": [
+          "seq",
+          "target_id",
+          "emitted_at",
+          "step_id",
+          "status"
+        ],
+        "title": "ChatProgressStepEvent",
+        "type": "object"
+      },
+      "ChatProgressStepStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed",
+          "skipped"
+        ],
+        "type": "string"
+      },
+      "ChatProgressTerminalEvent": {
+        "additionalProperties": false,
+        "description": "対象の処理の終わり（完了・失敗・停止）。この後、同じ試行の段階のイベントは来ない。",
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "description": "イベントの形の版。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "seq": {
+            "description": "対象ごとに 1 から連続して増える番号（SSE の `id:`）。",
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target_id": {
+            "description": "対象（RAG の回答のメッセージ・NL2SQL のジョブ・Agent の Run）の id。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "attempt": {
+            "default": 0,
+            "description": "試行。引き継いだ実行で増え、増えたら段階の一覧を作り直す。",
+            "minimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "emitted_at": {
+            "description": "記録した時刻（ISO 8601）。",
+            "format": "date-time",
+            "title": "Emitted At",
+            "type": "string"
+          },
+          "type": {
+            "const": "terminal",
+            "default": "terminal",
+            "title": "Type",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/ChatProgressTerminalStatus"
+          }
+        },
+        "required": [
+          "seq",
+          "target_id",
+          "emitted_at",
+          "status"
+        ],
+        "title": "ChatProgressTerminalEvent",
+        "type": "object"
+      },
+      "ChatProgressTerminalStatus": {
+        "enum": [
+          "done",
+          "failed",
+          "cancelled"
+        ],
+        "type": "string"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "step": "#/$defs/ChatProgressStepEvent",
+        "terminal": "#/$defs/ChatProgressTerminalEvent"
+      },
+      "propertyName": "type"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/ChatProgressStepEvent"
+      },
+      {
+        "$ref": "#/$defs/ChatProgressTerminalEvent"
+      }
+    ]
+  },
+  "page": {
+    "$defs": {
+      "ChatProgressParamValue": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "ChatProgressStepEvent": {
+        "additionalProperties": false,
+        "description": "1 つの段階の今の状態（状態・時刻・補足の全体）。",
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "description": "イベントの形の版。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "seq": {
+            "description": "対象ごとに 1 から連続して増える番号（SSE の `id:`）。",
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target_id": {
+            "description": "対象（RAG の回答のメッセージ・NL2SQL のジョブ・Agent の Run）の id。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "attempt": {
+            "default": 0,
+            "description": "試行。引き継いだ実行で増え、増えたら段階の一覧を作り直す。",
+            "minimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "emitted_at": {
+            "description": "記録した時刻（ISO 8601）。",
+            "format": "date-time",
+            "title": "Emitted At",
+            "type": "string"
+          },
+          "type": {
+            "const": "step",
+            "default": "step",
+            "title": "Type",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "段階の id（対象の中で一意）。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Step Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "段階の定義の種類（画面の名前の key）。省略時は step_id。",
+            "title": "Kind"
+          },
+          "status": {
+            "$ref": "#/$defs/ChatProgressStepStatus"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Finished At"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "短い補足（件数・回数など）。",
+            "title": "Detail"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ChatProgressParamValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "画面が名前・補足を組み立てる値（ツール名・件数など）。",
+            "title": "Params"
+          }
+        },
+        "required": [
+          "seq",
+          "target_id",
+          "emitted_at",
+          "step_id",
+          "status"
+        ],
+        "title": "ChatProgressStepEvent",
+        "type": "object"
+      },
+      "ChatProgressStepStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed",
+          "skipped"
+        ],
+        "type": "string"
+      },
+      "ChatProgressTerminalEvent": {
+        "additionalProperties": false,
+        "description": "対象の処理の終わり（完了・失敗・停止）。この後、同じ試行の段階のイベントは来ない。",
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "description": "イベントの形の版。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "seq": {
+            "description": "対象ごとに 1 から連続して増える番号（SSE の `id:`）。",
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target_id": {
+            "description": "対象（RAG の回答のメッセージ・NL2SQL のジョブ・Agent の Run）の id。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "attempt": {
+            "default": 0,
+            "description": "試行。引き継いだ実行で増え、増えたら段階の一覧を作り直す。",
+            "minimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "emitted_at": {
+            "description": "記録した時刻（ISO 8601）。",
+            "format": "date-time",
+            "title": "Emitted At",
+            "type": "string"
+          },
+          "type": {
+            "const": "terminal",
+            "default": "terminal",
+            "title": "Type",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/ChatProgressTerminalStatus"
+          }
+        },
+        "required": [
+          "seq",
+          "target_id",
+          "emitted_at",
+          "status"
+        ],
+        "title": "ChatProgressTerminalEvent",
+        "type": "object"
+      },
+      "ChatProgressTerminalStatus": {
+        "enum": [
+          "done",
+          "failed",
+          "cancelled"
+        ],
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "description": "polling の応答（`since` より後のイベント）。",
+    "properties": {
+      "target_id": {
+        "title": "Target Id",
+        "type": "string"
+      },
+      "attempt": {
+        "description": "今の試行。",
+        "minimum": 0,
+        "title": "Attempt",
+        "type": "integer"
+      },
+      "events": {
+        "items": {
+          "discriminator": {
+            "mapping": {
+              "step": "#/$defs/ChatProgressStepEvent",
+              "terminal": "#/$defs/ChatProgressTerminalEvent"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ChatProgressStepEvent"
+            },
+            {
+              "$ref": "#/$defs/ChatProgressTerminalEvent"
+            }
+          ]
+        },
+        "title": "Events",
+        "type": "array"
+      },
+      "last_seq": {
+        "description": "記録の最後の番号（次の `since` に使う）。",
+        "minimum": 0,
+        "title": "Last Seq",
+        "type": "integer"
+      },
+      "terminal": {
+        "description": "今の試行が終わったか。",
+        "title": "Terminal",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "target_id",
+      "attempt",
+      "last_seq",
+      "terminal"
+    ],
+    "title": "ChatProgressPage",
+    "type": "object"
+  }
+}
