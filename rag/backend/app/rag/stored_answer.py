@@ -63,6 +63,10 @@ _EVIDENCE_KEYS = (
     "recipe_id",
     "recipe_slot_no",
     "document_superseded",
+    # 監査・検索の調査（#1376）: 使った分割の版（文書の作り直しで古い chunk_set を片付けた後も
+    # どの版の chunk かが分かる）と、ベクトル検索と全文検索を統合した値。
+    "chunk_set_id",
+    "rrf_score",
 )
 _PREVIEW_KEYS = (
     # 根拠のプレビューで開く要素・表のセル。
