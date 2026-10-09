@@ -133,10 +133,14 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
   既に `graph_layers` / `nav_layers` / `metadata_layers` を返すのでそのまま流用。
 
 ### Phase C — 配信モード(検索・回答プロファイル層)
-- `single`(= Phase A の is_serving、実装済みの素地)→ `fused`(複数 variant を RRF 融合 +
-  **source-span(page/bbox/element_id)単位の重複除去**)→ `routed`(既存 Router で query ごと variant 選択)。
-- ポリシーは検索・回答プロファイルの overlay JSON(`variant_policy`)に持つ(DDL 不要)。`fused` の二重ヒット除去は
-  storage dedup とは別問題なので citation/context 構築で対応。
+- **実装済み(配信モードは持たない)**: 文書の全 active レシピを常に RRF 融合する。配信モードの設定
+  (`rag_serving_mode` / 検索・回答プロファイルの `serving_mode`)は runtime で使っていなかったため #1331 で削除した。
+  `routed` は作らない。
+- 二重ヒットの除去は storage dedup とは別問題なので、回答に渡す根拠の選択(`rag_engine` の `evidence_spans`)で行う
+  (#1331)。同じ文書で要素の ID(`element_ids`)が小さい側の 8 割以上重なり、短い側の本文の 9 割以上がもう一方に
+  含まれる根拠を 1 つにまとめ、まとめた chunk_id は `source_aliases` に残す。要素の ID はレシピごとの解析の結果の
+  番号で、解析の設定が違うと同じ ID が別の箇所を指すため、本文でも確かめる。page / bbox だけでの判定はしない
+  (要素の ID の無い分割は、本文が同じ根拠だけをまとめる)。
 
 ---
 

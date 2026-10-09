@@ -278,11 +278,11 @@ def test_archived_search_answer_profile_is_rejected(monkeypatch: MonkeyPatch) ->
     assert "アーカイブ済み" in response.json()["error_messages"][0]
 
 
-def test_search_answer_profile_serving_mode_flows_to_settings_and_diagnostics(
+def test_search_answer_profile_flows_to_settings_and_diagnostics(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """検索・回答プロファイルの serving_mode=fused が pipeline settings へ流れる。"""
-    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], serving_mode="fused")
+    """検索・回答プロファイルの設定が pipeline settings と診断へ流れる。"""
+    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])
     _install(monkeypatch, {"bv-1": config})
 
     response = client.post(
@@ -293,7 +293,6 @@ def test_search_answer_profile_serving_mode_flows_to_settings_and_diagnostics(
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_serving_mode == "fused"
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["search_answer_profile_applied"] == "bv-1"
 

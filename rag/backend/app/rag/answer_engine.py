@@ -61,6 +61,7 @@ from app.rag.cross_references import (
     title_key,
 )
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
+from app.rag.element_locator import chunk_element_ids
 from app.rag.field_filter_reader import merge_field_conditions
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
@@ -99,7 +100,7 @@ _REFERENCE_SCORE_DECAY = 0.5
 _REFERENCE_DOCUMENT_CANDIDATES = 5
 # 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベースと旧版の扱いだけ)。文書名・ページ・
 # 分類などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を止めない。§7.2)。
-_REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded", "serving_mode")
+_REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded")
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
 
@@ -1221,6 +1222,9 @@ def _stored_child(
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
         metadata["sheet_location"] = location
+    if element_ids := chunk_element_ids(chunk.metadata):
+        # 解析の要素の ID。複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめる(#1331)。
+        metadata["element_ids"] = element_ids
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,
@@ -1323,6 +1327,13 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         text = parent_text or "\n\n".join(child.text for child in members)
         metadata = dict(members[0].metadata)
         metadata.pop("rrf_score", None)
+        if element_ids := list(
+            dict.fromkeys(
+                element_id for child in members for element_id in chunk_element_ids(child.metadata)
+            )
+        ):
+            # 親の範囲は今回見つかった子の要素の和(#1331)。
+            metadata["element_ids"] = element_ids
         if location := _merged_sheet_location(
             [child.metadata.get("sheet_location") for child in members]
         ):

@@ -5,7 +5,7 @@ import re
 import hashlib
 import json
 import unicodedata
-from typing import Any, Sequence
+from typing import Any, Collection, Sequence
 
 from rag_engine.retrieval.task_contract import task_contract, current_request_text, goal_retrieval_queries
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
@@ -147,6 +147,121 @@ def record_fingerprint(record: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+# 複数レシピ融合の根拠の重複除去（#1331）。同じ文書の active なレシピ（最大 3 つ）の分割が違うと、同じ箇所の
+# 本文が少しずつ違う根拠として並び、原文の文字予算を同じ箇所で使ってしまう。元の文書の範囲（解析の要素の ID）が
+# 大きく重なり、本文もほぼ含まれる根拠を 1 つにまとめる。
+# 要素の集合の重なりの下限（小さい側の要素の数に対する割合）。
+SOURCE_SPAN_ELEMENT_OVERLAP_MIN = 0.8
+# 本文の照合の下限（短い側の本文の 3 文字組のうち、もう一方の本文に含まれる割合）。要素の ID は解析の結果
+# ごとの番号で、解析の設定が違うレシピでは同じ ID が別の箇所を指すことがあるため、本文でも確かめる。
+SOURCE_SPAN_TEXT_CONTAINMENT_MIN = 0.9
+_SOURCE_SPAN_SHINGLE_CHARS = 3
+
+
+def record_element_ids(record: Any) -> frozenset[str]:
+    """record が含む解析の要素の ID。metadata の ``element_ids``、無ければ ``source_record_refs`` の record_id。
+
+    文字数・区切り文字・Markdown の見出しでの分割の chunk は要素の ID を持たず、空を返す。
+    """
+    value = (getattr(record, "metadata", {}) or {}).get("element_ids")
+    items: list[Any] = value.split(",") if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else []
+    ids = {text for item in items if (text := str(item).strip())}
+    if not ids:
+        ids = {text for ref in getattr(record, "source_record_refs", ()) or ()
+               if isinstance(ref, dict) and (text := str(ref.get("record_id") or "").strip())}
+    return frozenset(ids)
+
+
+def _span_shingles(record: Any, cache: dict[int, frozenset[str]]) -> frozenset[str]:
+    """本文（空白を除いた NFKC の小文字）の 3 文字組の集合。同じ呼び出しの中では record ごとに 1 回だけ作る。"""
+    found = cache.get(id(record))
+    if found is None:
+        text = str(getattr(record, "body_text", "") or getattr(record, "text", "") or "")
+        compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).lower()
+        size = _SOURCE_SPAN_SHINGLE_CHARS
+        found = frozenset(compact[i:i + size] for i in range(len(compact) - size + 1)) or frozenset({compact} - {""})
+        cache[id(record)] = found
+    return found
+
+
+def _same_source_document(left: Any, right: Any) -> bool:
+    from rag_engine.retrieval.metadata_context import document_context_key
+    if document_context_key(left) != document_context_key(right):
+        return False
+    ids = [str((getattr(record, "metadata", {}) or {}).get("document_id") or "") for record in (left, right)]
+    return not all(ids) or ids[0] == ids[1]
+
+
+def source_span_relation(kept: Any, other: Any, cache: dict[int, frozenset[str]] | None = None) -> str | None:
+    """2 つの根拠の元の文書の範囲の関係（#1331）。まとめられなければ None。
+
+    - ``"same"``: 互いの本文をほぼ含む（同じ範囲）。
+    - ``"kept_in_other"``: kept の本文が other にほぼ含まれ、other のほうが広い。
+    - ``"other_in_kept"``: other の本文が kept にほぼ含まれ、kept のほうが広い。
+
+    同じ文書で、要素の ID の集合が小さい側の ``SOURCE_SPAN_ELEMENT_OVERLAP_MIN`` 以上重なり、短い側の本文の
+    ``SOURCE_SPAN_TEXT_CONTAINMENT_MIN`` 以上がもう一方に含まれるときだけまとめる。要素の ID が無い根拠は
+    判定しない（本文が同じ根拠を統合する ``record_fingerprint`` の規則だけが働く）。
+    """
+    left_ids, right_ids = record_element_ids(kept), record_element_ids(other)
+    if not left_ids or not right_ids or not _same_source_document(kept, other):
+        return None
+    if len(left_ids & right_ids) < SOURCE_SPAN_ELEMENT_OVERLAP_MIN * min(len(left_ids), len(right_ids)):
+        return None
+    cache = {} if cache is None else cache
+    left, right = _span_shingles(kept, cache), _span_shingles(other, cache)
+    if not left or not right:
+        return None
+    left_inside = len(left & right) / len(left) >= SOURCE_SPAN_TEXT_CONTAINMENT_MIN
+    right_inside = len(left & right) / len(right) >= SOURCE_SPAN_TEXT_CONTAINMENT_MIN
+    if left_inside and right_inside:
+        return "same"
+    if left_inside:
+        return "kept_in_other"
+    if right_inside:
+        return "other_in_kept"
+    return None
+
+
+def collapse_source_spans(records: Sequence[Any]) -> list[tuple[Any, list[Any]]]:
+    """順位順の根拠を、元の文書の範囲が同じものごとに 1 つにまとめる（#1331）。
+
+    返り値は (残す根拠, まとめた根拠の順位順の list) を、まとめた中で最も順位の高い根拠の位置に並べたもの。
+    残すのは順位の高いほう。ただし順位の低いほうが高いほうの本文を含んでさらに広いときは、範囲の広いほうを
+    残す（狭いほうを残すと、広いほうにだけある本文を落とす）。
+    """
+    cache: dict[int, frozenset[str]] = {}
+    groups: list[tuple[list[Any], list[Any]]] = []
+    for record in records:
+        for kept, members in groups:
+            relation = source_span_relation(kept[0], record, cache)
+            if relation is None:
+                continue
+            members.append(record)
+            if relation == "kept_in_other":
+                kept[0] = record
+            break
+        else:
+            groups.append(([record], [record]))
+    return [(kept[0], members) for kept, members in groups]
+
+
+def new_evidence_count(records: Sequence[Any], seen: Sequence[Any]) -> int:
+    """seen に無い根拠の数。本文が同じ根拠と、元の文書の範囲が同じ根拠（#1331）は新しいと数えない。"""
+    cache: dict[int, frozenset[str]] = {}
+    keys = {record_fingerprint(record) for record in seen}
+    known = list(seen)
+    count = 0
+    for record in records:
+        key = record_fingerprint(record)
+        if key in keys or any(source_span_relation(item, record, cache) for item in known):
+            continue
+        keys.add(key)
+        known.append(record)
+        count += 1
+    return count
+
+
 # 回答生成に渡す原文の総予算（文字）。親 6,000 字の候補を複数の機能・文書から入れられる大きさ (#665)。
 EVIDENCE_BUDGET_CHARS = 48000
 # 後続候補のために取り置く短い原文範囲の上限（親ごと）。
@@ -163,12 +278,22 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
     definitions_onlyは予算競合時の再切出し用で、定義以外の窓を追加しない。
     scope_recordsは取得済みchildの所属照合専用で、全文の予算優先には使わない。
     """
+    # 本文が同じ根拠（record_fingerprint）を先にまとめる。
+    same_text: dict[str, list[Any]] = {}
+    for record in records:
+        same_text.setdefault(record_fingerprint(record), []).append(record)
+    first_keys = {id(members[0]): key for key, members in same_text.items()}
+    # 複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめ、まとめた根拠の ID は別名に残す (#1331)。
     unique: dict[str, Any] = {}
     aliases: dict[str, list[str]] = {}
-    for record in records:
-        key = record_fingerprint(record)
-        unique.setdefault(key, record)
-        aliases.setdefault(key, []).append(getattr(record, "chunk_uid", "") or record.id)
+    member_keys: dict[str, set[str]] = {}
+    for kept, members in collapse_source_spans([members[0] for members in same_text.values()]):
+        key = first_keys[id(kept)]
+        grouped = [item for member in members for item in same_text[first_keys[id(member)]]]
+        unique[key] = kept
+        aliases[key] = [getattr(item, "chunk_uid", "") or item.id for item in grouped]
+        member_keys[key] = {value for item in grouped
+                            for value in (getattr(item, "chunk_uid", ""), getattr(item, "chunk_id", ""), item.id) if value}
     labels = definition_labels(question)
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
     remaining = max(0, budget)
@@ -195,11 +320,13 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
         context_remaining -= len(prefix)
         remaining -= len(prefix)
         required = definition_windows(text, labels)
-        located = _child_ranges(record, anchors)
+        # まとめた根拠（#1331）の child も、本文が残す根拠の中に一意に見つかれば位置と頁に使う。
+        parent_keys = member_keys[key]
+        located = _child_ranges(record, anchors, parent_keys=parent_keys)
         scoped = [(a, b, page, child) for child in scope_records
-                  for a, b, page in _child_ranges(record, [child])]
+                  for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys)]
         image_ranges = _child_ranges(record, [a for a in anchors if any(
-            ref.get('category') == 'Picture' for ref in getattr(a, 'source_record_refs', ()))])
+            ref.get('category') == 'Picture' for ref in getattr(a, 'source_record_refs', ()))], parent_keys=parent_keys)
         native_ranges = _native_ranges(record)
         # CRAGのchild本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
         pinned = [] if definitions_only else [(a, b) for a, b, _ in located]
@@ -366,13 +493,17 @@ def _span_origin(record: Any, start: int, end: int,
     return 'unclassified'
 
 
-def _child_ranges(parent: Any, anchors: Sequence[Any]) -> list[tuple[int, int, Any]]:
-    """同文書・同版・親子関係と本文一致を検証してからchildの位置と頁を返す。"""
+def _child_ranges(parent: Any, anchors: Sequence[Any], *,
+                  parent_keys: Collection[str] = ()) -> list[tuple[int, int, Any]]:
+    """同文書・同版・親子関係と本文一致を検証してからchildの位置と頁を返す。
+
+    parent_keysは parent にまとめた根拠（#1331）の ID。その child も本文一致を検証してから使う。
+    """
     found = []
     parent_key = getattr(parent, 'chunk_uid', '') or parent.id
     for child in anchors:
         key = getattr(child, 'parent_chunk_uid', '') or getattr(child, 'parent_chunk_id', '')
-        if key not in {parent_key, getattr(parent, 'chunk_id', '')}:
+        if key not in {parent_key, getattr(parent, 'chunk_id', ''), *parent_keys}:
             continue
         if (not getattr(parent, 'source', '') or getattr(child, 'source', '') != getattr(parent, 'source', '')
                 or getattr(child, 'source_run_id', '') != getattr(parent, 'source_run_id', '')

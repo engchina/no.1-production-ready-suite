@@ -332,7 +332,6 @@ async function mockSearchAnswerProfiles(
           guardrail_policy: null,
           evaluation_suite: null,
         },
-        serving_mode: "fused",
       },
       knowledge_bases: refs,
       missing_knowledge_base_ids: missing,

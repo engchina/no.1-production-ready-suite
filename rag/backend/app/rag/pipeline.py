@@ -174,9 +174,6 @@ class RagPipeline:
         """
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
-        # 配信モードを retrieval where へ伝播する(filters 経由)。fused は chunk_set 制限を外し、
-        # 複数 chunk_set を横断検索する。
-        request.filters["serving_mode"] = self._settings.rag_serving_mode
         if query_guardrail_result is None:
             query_guardrail = await asyncio.to_thread(
                 self._guardrails.validate_query, request.query

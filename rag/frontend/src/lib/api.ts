@@ -941,16 +941,13 @@ export interface SearchAnswerProfileRef {
   name: string;
 }
 
-/** 配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。 */
-export type ServingMode = "single" | "fused" | "routed";
-
 /** Search Answer Profile の設定一式。query は検索・回答設定。 */
 export interface SearchAnswerProfileConfig {
   version: number;
   knowledge_base_ids: string[];
   query: KnowledgeBaseQueryConfig;
   // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
-  serving_mode: ServingMode;
+  // 配信モード（serving_mode）は #1331 で削除した（文書の全 active レシピを常に融合する）。
 }
 
 export interface SearchAnswerProfileSummary extends SearchAnswerProfileRef {
