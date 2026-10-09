@@ -2382,7 +2382,9 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     for path in ("/nl2sql/chats", "/nl2sql/chats/{conversation_id}"):
         assert ROUTE_PERMISSIONS[("GET", path)] == frozenset({QUERY_GENERATE_PERMISSION})
     for path in ("/nl2sql/jobs/{job_id}/progress", "/nl2sql/jobs/{job_id}/progress/stream"):
-        assert ROUTE_PERMISSIONS[("GET", path)] == ROUTE_PERMISSIONS[("GET", "/nl2sql/jobs/{job_id}")]
+        assert (
+            ROUTE_PERMISSIONS[("GET", path)] == ROUTE_PERMISSIONS[("GET", "/nl2sql/jobs/{job_id}")]
+        )
     assert set(ROUTE_PERMISSIONS).isdisjoint(OPEN_API_OPERATIONS)
     assert set(ROUTE_PERMISSIONS) | set(OPEN_API_OPERATIONS) == mounted
     for key, permissions in ROUTE_PERMISSIONS.items():
