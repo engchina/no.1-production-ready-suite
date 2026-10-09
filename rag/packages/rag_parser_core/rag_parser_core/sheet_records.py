@@ -10,7 +10,14 @@
 - 節はシート名と、手順なら章・手順の題名（`section_path=[シート名, …]`）。表頭より上の行
   （説明など）は本文の要素にする。シート名だけの見出しの要素は作らない。
 - 要素の metadata に `sheet_name`・`row_start` / `row_end`・`cell_range`・`cell_column_start` /
-  `cell_column_end`・`header_row` を持ち、chunking が chunk の場所にまとめる。
+  `cell_column_end`・`header_row` を持ち、chunking が chunk の場所にする。
+- 分割（#1349。engchina/no.1-rag の「1 行 = 1 chunk」に合わせる）: 記録（`content_kind=record`）は
+  1 つずつ単独の chunk にし、他の記録・前書きと結合せず、途中で切らない
+  （`rag_pipeline_core.chunking`）。
+  各 chunk の本文は表頭の列名つきの値（「列名: 値 / 列名: 値」。複数行の表頭は前処理が「 / 」で
+  つないだ列名）で、シート名は節（`section_path`）として検索の文脈の見出しに入る。親子階層では、
+  同じシート（手順書は同じ章）の続く記録をまとめた表の一部を親にする
+  （backend の `app.rag.chunking_small_to_big`）。
 - 選択肢（`ExcelOptions`）は Document Recipe の `excel_options` から前処理へ渡る。
 - 列の役割（`SheetColumn.role`。#1281）: 設定値の表の「説明・既定値・例示・現在値・推奨値・
   設定できる範囲」の列を、前処理が表頭の語（または選択肢の `column_roles`）で決める。値の列は

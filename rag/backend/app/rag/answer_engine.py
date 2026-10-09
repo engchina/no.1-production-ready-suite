@@ -1312,6 +1312,29 @@ def _merged_sheet_location(locations: list[object]) -> dict[str, object] | None:
     return location
 
 
+def _parent_sheet_location(metadata: Mapping[str, object]) -> dict[str, object] | None:
+    """行の記録の子が持つ、親(表の一部)の場所(#1349)。無ければ None。"""
+    sheet = metadata.get("sheet_name")
+    cell_range = metadata.get("parent_cell_range")
+    row_start = metadata.get("parent_row_start")
+    row_end = metadata.get("parent_row_end")
+    if (
+        not isinstance(sheet, str)
+        or not sheet.strip()
+        or not isinstance(cell_range, str)
+        or not _CELL_RANGE.match(cell_range.strip())
+        or not isinstance(row_start, int)
+        or not isinstance(row_end, int)
+    ):
+        return None
+    return {
+        "sheet_name": sheet.strip(),
+        "row_start": row_start,
+        "row_end": row_end,
+        "cell_range": cell_range.strip(),
+    }
+
+
 def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
     """子の metadata に保持した親本文から親 chunk を復元する。"""
     from rag_engine.models.storage import StoredChunk
@@ -1334,9 +1357,10 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         ):
             # 親の範囲は今回見つかった子の要素の和(#1331)。
             metadata["element_ids"] = element_ids
-        if location := _merged_sheet_location(
-            [child.metadata.get("sheet_location") for child in members]
-        ):
+        if location := (
+            _parent_sheet_location(source.metadata if source else {}) if parent_text else None
+        ) or _merged_sheet_location([child.metadata.get("sheet_location") for child in members]):
+            # 親の本文が表の一部(行の記録の親子。#1349)なら、その本文の範囲を親の場所にする。
             metadata["sheet_location"] = location
         parents.append(
             StoredChunk(

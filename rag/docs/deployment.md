@@ -708,6 +708,24 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#1349 Excel の表を 1 行 1 chunk にする）
+
+Excel（前処理 `excel_to_json`）の行の記録の分割を変えた。これまでは同じシートの行を `chunk_size` までまとめて 1 つの chunk にしていた
+（例: 8 行の台帳が `A4:F11` の 1 chunk）ため、1 行の実体（システム名など）で検索しても、その行が他の行に埋もれて上位に出なかった。
+
+- 文書分割が構造認識（`structure_aware`）のときは、1 記録（表の 1 行・手順書の 1 手順）を 1 chunk にする。本文は表頭の列名つきの値、
+  引用の場所はその行のセル範囲（`A5:F5`）。他の行・前書き（表頭より上の行）と結合せず、`chunk_size` を超える行も途中で切らない。
+- 親子階層（`small_to_big`。既定）のときは、これまでは構造認識へ縮退していた（`chunk_strategy_fallback_reason=layout_missing`）が、
+  行を子、同じシート（手順書は同じ章）の続く行をまとめた表の一部（`RAG_CHUNK_PARENT_TARGET_CHARS` /
+  `RAG_CHUNK_PARENT_MAX_CHILDREN` まで）を親にして分割する。検索は行で当て、回答の文脈には親の本文（表の一部）を渡す。
+- それ以外の分割方式（`recursive_character` など本文の文字列で分ける方式）は変えていない。
+
+schema の変更・migration は無い。解析の結果（抽出）は変わらないので、再解析は要らない。
+
+1. backend を更新して再起動すると、それ以降に取り込む Excel の文書と、作り直す chunk から新しい分割になる。
+2. 既存の Excel の文書の chunk は自動では作り直さない（今の chunk のまま検索の対象に残る）。反映するには、文書の詳細のレシピで
+   Chunk の工程から処理し直す（抽出は使い回す）。chunk が変わるので embedding をやり直す（OCI Generative AI の利用が増える）。
+
 ## 既存環境の更新手順（#1336 全文検索の索引の文字の正規化）
 
 全文検索（Oracle Text）に索引する文字列（`rag_chunks.search_text`・`rag_feedback_details.search_text`）を、保存の時点で質問の語と同じ
