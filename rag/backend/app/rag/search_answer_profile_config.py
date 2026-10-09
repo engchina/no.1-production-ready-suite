@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import ServingMode, Settings
+from app.config import Settings
 from app.rag.kb_adapter_config import (
     KnowledgeBaseQueryConfig,
     compose_query_settings,
@@ -49,10 +49,6 @@ class SearchAnswerProfileConfig(BaseModel):
         description="束ねる参照 KB の ID 群(多対多)。検索時にこの集合を検索対象へ展開する。",
     )
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
-    serving_mode: ServingMode = Field(
-        default="fused",
-        description="互換読取用。保存・runtime は全レシピ融合(fused)へ正規化する。",
-    )
 
     def normalized_knowledge_base_ids(self) -> list[str]:
         """参照 KB ID の前後空白・重複を取り除く。"""
@@ -76,7 +72,7 @@ def parse_search_answer_profile_config(
 
 def dump_search_answer_profile_config(config: SearchAnswerProfileConfig) -> dict[str, object]:
     """検索・回答プロファイル設定を ``profile_config`` カラムへ保存する dict へ変換する。"""
-    return config.model_copy(update={"serving_mode": "fused"}).model_dump(mode="json")
+    return config.model_dump(mode="json")
 
 
 def resolve_search_answer_profile_settings(
@@ -89,11 +85,7 @@ def resolve_search_answer_profile_settings(
     戻り値 2 番目は上書きが実際に効いたかどうか。
     """
     overlays: list[KnowledgeBaseQueryConfig] = [config.query]
-    merged, applied = compose_query_settings(global_settings, overlays)
-    if merged.rag_serving_mode != "fused":
-        merged = merged.model_copy(update={"rag_serving_mode": "fused"})
-        applied = True
-    return merged, applied
+    return compose_query_settings(global_settings, overlays)
 
 
 def _unique_clean_ids(values: Sequence[str]) -> list[str]:

@@ -28,7 +28,6 @@ const profileDetail = {
     version: 1,
     knowledge_base_ids: ["kb-1"],
     query: { guardrail_policy: null, answer_engine: "grounded" },
-    serving_mode: "single",
   },
   knowledge_bases: [{ id: "kb-1", name: "受注マニュアル" }],
 };

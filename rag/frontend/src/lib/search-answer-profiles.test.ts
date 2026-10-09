@@ -54,7 +54,6 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
           guardrail_policy: null,
           query_strategy: "rag_fusion",
         },
-        serving_mode: "fused",
       },
     });
 

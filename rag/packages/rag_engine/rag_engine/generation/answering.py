@@ -55,7 +55,7 @@ from rag_engine.retrieval.request_coverage import (
     run_targeted_retrievals,
     select_new_parents,
 )
-from rag_engine.retrieval.evidence_selection import evidence_spans, record_fingerprint
+from rag_engine.retrieval.evidence_selection import evidence_spans, new_evidence_count as _new_evidence_count
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
 from rag_engine.dependencies import parse_multimodal_response, parse_text_response, rerank_text_with_scores
@@ -711,7 +711,8 @@ def build_crag_answer_context(
     rewrites: list[str] = []
     attempts: list[CragRetrievalAttempt] = []
     best_context = AnswerContext(records=[], text="")
-    seen_evidence: set[str] = set()
+    # 取得済みの根拠。本文が同じ根拠と、元の文書の範囲が同じ別レシピの根拠 (#1331) は新しいと数えない。
+    seen_evidence: list[AnswerRecord] = []
     pending_context: AnswerContext | None = None
     # 評価器が relevant=false と明示した候補の累積。後の評価で relevant になった候補は外す (#1010)。
     rejected: tuple[str, ...] = ()
@@ -746,8 +747,7 @@ def build_crag_answer_context(
                     vector_only_queries=vector_only_queries,
                 )
                 step.result(f"回答に渡す根拠 {len(context.records)} 件")
-        identities = {record_fingerprint(record) for record in context.records}
-        new_evidence_count = len(identities - seen_evidence)
+        new_evidence_count = _new_evidence_count(context.records, seen_evidence)
         if attempt_number > 1 and best_context.records and not new_evidence_count:
             # rewrite が同じ本文を返した場合も、未閲覧の同一機能文脈を試してから停止する。
             # 追加候補の存在は回答支持とは扱わず、この回の評価器に再判定させる。
@@ -760,9 +760,8 @@ def build_crag_answer_context(
                     reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。"))
                 break
             context = recovered
-            identities = {record_fingerprint(record) for record in context.records}
-            new_evidence_count = len(identities - seen_evidence)
-        seen_evidence.update(identities)
+            new_evidence_count = _new_evidence_count(context.records, seen_evidence)
+        seen_evidence.extend(context.records)
         if context.records and context.text.strip():
             # 評価器は前の回の根拠を起点に文脈の追加を選ぶことがある。pool は置き換えず全回の和集合にする。
             pool = tuple({record.chunk_uid or record.id: record

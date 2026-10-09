@@ -97,7 +97,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 ### 複数レシピ融合（精度向上）
 
-同じ文書の検索精度を上げたい場合はレシピを最大 3 件まで追加し、それぞれを独立して materialize する。**各レシピの直近成功した active chunk_set はすべて検索対象**とし、既存の hybrid RRF + rerank + source-span 重複除去で融合する。主レシピ、候補、配信中、昇格の概念は持たず、`single / routed` は runtime で使わない。設定変更後の再処理中や再処理失敗時も、直前の active chunk_set を検索対象として維持する。KB membership を変えてもレシピ集合や chunk_set は変わらない。
+同じ文書の検索精度を上げたい場合はレシピを最大 3 件まで追加し、それぞれを独立して materialize する。**各レシピの直近成功した active chunk_set はすべて検索対象**とし、hybrid RRF + rerank で融合する。回答に渡す根拠の選択（`rag_engine` の `evidence_spans`）では、本文が同じ根拠に加えて、同じ文書で解析の要素の ID（`element_ids`。親子分割の親は子の `source_record_refs`）が小さい側の 8 割以上重なり、短い側の本文の 9 割以上がもう一方に含まれる根拠を 1 つにまとめる（source-span 重複除去。順位の高い位置に範囲の広いほうを残し、まとめた chunk_id は `source_aliases` に残す。要素の ID の無い分割は本文が同じものだけをまとめる。#1331）。主レシピ、候補、配信中、昇格の概念は持たず、配信モード（`single / fused / routed`）の設定も持たない。設定変更後の再処理中や再処理失敗時も、直前の active chunk_set を検索対象として維持する。KB membership を変えてもレシピ集合や chunk_set は変わらない。
 
 レシピ追加・削除は親文書行をロックして **最少 1 件・最大 3 件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。
 

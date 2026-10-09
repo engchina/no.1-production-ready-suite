@@ -134,34 +134,29 @@ def test_dump_parse_roundtrip() -> None:
     config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", " kb-1 ", "kb-2"],
         query=KnowledgeBaseQueryConfig(screen_linking_enabled=True),
-        serving_mode="fused",
     )
     restored = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
     assert restored.query.screen_linking_enabled is True
-    assert restored.serving_mode == "fused"
     # 正規化で重複・空白は取り除かれる。
     assert restored.normalized_knowledge_base_ids() == ["kb-1", "kb-2"]
 
 
-def test_serving_mode_defaults_to_fused() -> None:
-    """全 active レシピ融合が既定で、不要な上書きを作らない。"""
+def test_default_config_does_not_override_settings() -> None:
+    """上書きの無い設定は global の Settings をそのまま使う。"""
     settings = get_settings()
-    config = SearchAnswerProfileConfig()
-    assert config.serving_mode == "fused"
-    merged, applied = resolve_search_answer_profile_settings(settings, config)
+    merged, applied = resolve_search_answer_profile_settings(settings, SearchAnswerProfileConfig())
     assert applied is False
-    assert merged.rag_serving_mode == "fused"
+    assert merged == settings
 
 
-def test_legacy_single_is_normalized_to_fused() -> None:
-    """互換読取した single も runtime と次回保存では fused へ正規化する。"""
-    settings = get_settings()
-    assert settings.rag_serving_mode == "fused"
-    config = SearchAnswerProfileConfig(serving_mode="single")
-    merged, _applied = resolve_search_answer_profile_settings(settings, config)
-    assert merged.rag_serving_mode == "fused"
-    assert dump_search_answer_profile_config(config)["serving_mode"] == "fused"
-    assert settings.rag_serving_mode == "fused"
+def test_saved_serving_mode_is_ignored_and_not_saved_again() -> None:
+    """配信モード(serving_mode)は削除した(#1331)。保存済みの値は読み捨て、次回保存で書かない。"""
+    config = parse_search_answer_profile_config(
+        {"version": 1, "knowledge_base_ids": ["kb-1"], "serving_mode": "single"}
+    )
+    assert config.normalized_knowledge_base_ids() == ["kb-1"]
+    assert "serving_mode" not in dump_search_answer_profile_config(config)
+    assert not hasattr(get_settings(), "rag_serving_mode")
 
 
 def test_parse_tolerates_broken_payload() -> None:

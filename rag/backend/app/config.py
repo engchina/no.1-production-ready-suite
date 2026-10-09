@@ -173,10 +173,6 @@ QueryStrategy = Literal[
     "hyde",
 ]
 AnswerFlow = Literal["crag", "standard_rag"]
-# 配信モード(検索・回答プロファイル層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
-# single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
-# source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
-ServingMode = Literal["single", "fused", "routed"]
 MineruTier = Literal["flash", "basic", "standard", "advanced"]
 GuardrailPolicyName = Literal[
     "standard",
@@ -939,10 +935,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_pdf_max_pages_per_segment: int = Field(default=10, ge=1, le=50)
     rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
-    rag_serving_mode: ServingMode = Field(
-        default="fused",
-        description="文書内の全 active レシピを RRF 融合し source-span 重複除去する。",
-    )
     rag_guardrail_policy: GuardrailPolicyName = Field(
         default="standard",
         description=(

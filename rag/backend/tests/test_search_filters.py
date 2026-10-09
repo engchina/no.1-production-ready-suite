@@ -135,20 +135,19 @@ def test_retrieval_where_keeps_active_recipe_filter_without_kb_scope() -> None:
     assert "active_cs.is_active = 1" in sql
 
 
-def test_retrieval_where_fused_reads_all_active_recipes() -> None:
-    """fused は全 chunk_set ではなく、各レシピの active 出力だけを横断する。"""
-    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "fused"})
+def test_retrieval_where_reads_all_active_recipes() -> None:
+    """全 chunk_set ではなく、各レシピの active 出力だけを横断する。"""
+    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
     assert "rag_kb_chunk_set_bindings b" not in sql
     assert "active_cs.is_active = 1" in sql
     # KB スコープ自体(所属 KB の EXISTS)は維持する。
     assert "rag_document_knowledge_bases dkb" in sql
 
 
-def test_retrieval_where_normalizes_legacy_single_to_active_recipe_filter() -> None:
-    """互換入力 single も runtime では全 active レシピ融合へ正規化する。"""
-    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "single"})
-    assert "active_cs.is_active = 1" in sql
-    assert "is_serving = 1" not in sql
+def test_retrieval_where_rejects_removed_serving_mode_filter() -> None:
+    """配信モード(serving_mode)は削除した(#1331)。検索の条件として受け付けない。"""
+    with pytest.raises(ValueError, match="serving_mode"):
+        _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "single"})
 
 
 def test_retrieval_where_explicit_chunk_set_filters_and_bypasses_serving() -> None:

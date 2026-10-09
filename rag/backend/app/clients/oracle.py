@@ -10931,7 +10931,6 @@ _CHUNK_PAGE_END_SQL = (
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
-    _ = (filters.get("serving_mode") or "fused").strip().lower()
     # 実験: chunk_set_id を明示すると is_serving に関係なくその chunk_set だけを検索する。
     explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
     if not explicit_chunk_set_id:
@@ -11016,8 +11015,6 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
             binds["filter_category_name"] = _like_pattern(cleaned)
         elif key == "knowledge_base_id":
             continue
-        elif key == "serving_mode":
-            continue  # フィルタ値ではなく配信モード制御。chunk_set 制限の有無で既に処理済み。
         elif key == "content_kind":
             clauses.append(
                 "LOWER(JSON_VALUE(c.metadata_json, '$.content_kind')) = :filter_content_kind"

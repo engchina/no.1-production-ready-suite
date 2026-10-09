@@ -32,7 +32,6 @@ const detail = {
       guardrail_policy: null,
       answer_engine: "grounded",
     },
-    serving_mode: "single",
   },
   knowledge_bases: [{ id: "kb-1", name: "受注マニュアル" }],
 };

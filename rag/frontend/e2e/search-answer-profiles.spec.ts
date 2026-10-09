@@ -102,8 +102,8 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
     "vector_index_profile" in
       ((createBody?.config as { query?: Record<string, unknown> })?.query ?? {})
   ).toBe(false);
-  // 3 層モデルでは配信モード UI を持たず、常に全 recipe を融合する。
-  expect((createBody?.config as { serving_mode?: string })?.serving_mode).toBe("fused");
+  // 配信モード（serving_mode）は持たない（文書の全 active レシピを常に融合する。#1331）。
+  expect("serving_mode" in config).toBe(false);
 
   // 作成に成功したら作成した検索・回答プロファイルのエディタへ replace で移る（戻るで空の新規フォームへ戻らない）。
   await expect(page).toHaveURL(/\/search-answer-profiles\?id=bv-new$/);
@@ -692,7 +692,6 @@ async function mockSearchAnswerProfiles(
           query: {
             guardrail_policy: null,
           },
-          serving_mode: "fused",
         },
         knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
       },
@@ -825,7 +824,6 @@ async function mockDefaultSearchAnswerProfile(
     query: {
       guardrail_policy: null,
     },
-    serving_mode: "single",
   };
 
   await page.route("**/api/search-answer-profiles**", async (route) => {
@@ -900,7 +898,6 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
       version: 1,
       knowledge_base_ids: ["kb-1"],
       query: { guardrail_policy: "strict", query_strategy: "hyde" },
-      serving_mode: "fused",
     },
     knowledge_bases: [{ id: "kb-1", name: "社内規程", status: "ACTIVE" }],
   };

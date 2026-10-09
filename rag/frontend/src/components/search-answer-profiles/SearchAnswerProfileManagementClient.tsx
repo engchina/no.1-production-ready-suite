@@ -192,7 +192,6 @@ function emptyConfig(): SearchAnswerProfileConfig {
     version: 1,
     knowledge_base_ids: [],
     query: emptyQueryConfig(),
-    serving_mode: "fused",
   };
 }
 
