@@ -23,6 +23,9 @@ const RECIPE_DEFAULTS = {
   chunk_min_chars: 120,
   chunk_context_header_enabled: true,
   graph_profile: "off",
+  entity_index_enabled: false,
+  entity_name_columns: [],
+  entity_attribute_columns: [],
   field_extraction_enabled: false,
   navigation_summary_enabled: false,
 };
@@ -136,7 +139,7 @@ test("サイドバーの検索・回答設定の名前と順番は設定の概�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 12 項目を、選択中レシピの設定と同じ処理順で出す。
+// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（実体の索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
@@ -149,11 +152,12 @@ const PROCESSING_ORDER = [
   "chunking_strategy",
   "chunk_context_header_enabled",
   "auto_index_after_chunk_enabled",
+  "entity_index_enabled",
   "graph_profile",
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは 12 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは 13 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -200,6 +204,10 @@ for (const scheme of ["light", "dark"] as const) {
       items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/chunking");
     await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(9);
+    // 実体の索引は文書ごとに選ぶ（全体の既定は無効。変える画面は持たない。#1388）。
+    const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
+    await expect(entityIndex).toContainText("無効");
+    await expect(entityIndex.getByRole("link")).toHaveCount(0);
 
     // 工程の間の 3 つのスイッチ。
     const parseGate = items.getByRole("switch", { name: "ファイル準備後に抽出へ進む" });

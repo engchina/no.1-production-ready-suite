@@ -103,7 +103,7 @@ export function EntityExpansionRow({
             id="search-answer-profile-entity-expansion-max-chunks"
             label={t("searchAnswerProfiles.entityExpansion.maxChunks")}
             helper={t("searchAnswerProfiles.entityExpansion.maxChunksHelper")}
-            width="sm"
+            width="md"
             value={String(value.entity_expansion_max_chunks ?? ENTITY_EXPANSION_MAX_CHUNKS_DEFAULT)}
             options={MAX_CHUNKS_OPTIONS}
             disabled={disabled}
