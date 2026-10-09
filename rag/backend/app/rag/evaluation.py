@@ -97,7 +97,12 @@ from app.schemas.evaluation import (
     EvaluationThresholds,
     EvaluationTurnResult,
 )
-from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search import (
+    INCLUDE_SUPERSEDED_FILTER_KEY,
+    RetrievedChunk,
+    SearchRequest,
+    SearchResponse,
+)
 
 EVALUATION_CASE_ERROR_MESSAGE = (
     "評価ケースの検索処理に失敗しました。trace_id で監査ログを確認してください。"
@@ -280,6 +285,14 @@ def _case_queries(case: EvaluationCase) -> list[tuple[str, dict[str, str]]]:
     ]
 
 
+def _case_filters(case: EvaluationCase, filters: Mapping[str, str] | None) -> dict[str, str]:
+    """ケースの検索条件。旧版も検索するケース（#1366）は include_superseded=true を足す。"""
+    case_filters = dict(filters or {})
+    if case.include_superseded:
+        case_filters[INCLUDE_SUPERSEDED_FILTER_KEY] = "true"
+    return case_filters
+
+
 class EvaluationRunner:
     """小規模な golden set を使って検索・根拠・回答の品質を評価する。"""
 
@@ -355,7 +368,7 @@ class EvaluationRunner:
                 request = SearchRequest(
                     query=query,
                     top_k=top_k,
-                    filters=dict(filters or {}),
+                    filters=_case_filters(case, filters),
                     knowledge_base_ids=list(knowledge_base_ids or []),
                     conditions=dict(conditions),
                 )

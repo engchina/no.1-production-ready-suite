@@ -166,3 +166,55 @@ def test_new_non_claim_rules_keep_claims() -> None:
     assert not is_non_claim_passage("- 「有効期限は最長 30 日です。」")
     assert not is_non_claim_passage("- 「検証用」")
     assert not is_non_claim_passage(f"| 2. 登録 | 1. 「利用者」を開く 2. 「追加」を押す | {EVIDENCE_REF} |")
+
+
+# 多段の質問の評価の Run の形（#1364。cmp-hr-vs-attendance-retention）: 台帳の行（機密区分）と規程（保管期間）。
+LEDGER = {"id": "doc-ledger:set:3", "source": "system-ledger.xlsx", "page_start": None, "page_end": None,
+          "text": "システムID: SYS-103 / 正式名: 人事評価システム / 機密区分: 極秘"}
+RETENTION = {"id": "doc-retention:set:1", "source": "data-retention.pdf", "page_start": 1, "page_end": 1,
+             "text": "極秘のデータは 10 年間保管します。社外秘のデータは 7 年間保管します。"}
+BRIDGE_ANSWER = "人事評価システムは「極秘」扱いなので、データは **10 年間** 保管されます。"
+
+
+def _bridge_validation(evidence_id: str, *, evidence_quote: str = "") -> dict:
+    def parse(system, inputs, settings, schema, provider_id=None):
+        import json
+        payload = json.loads(inputs)
+        ids = {item["id"]: item["evidence_id"] for item in payload["evidence_items"]}
+        assert "「,」で区切って evidence_id に書く" in system
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": payload["answer_passages"][0]["id"], "status": "supported",
+             "evidence_id": evidence_id.format(ledger=ids[LEDGER["id"]], retention=ids[RETENTION["id"]]),
+             "source_id": "", "evidence_quote": evidence_quote,
+             "reason": "台帳で極秘、規程で極秘は 10 年と確かめられる。"},
+        ]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        return validate_answer_claims("人事評価システムのデータの保管期間は？", BRIDGE_ANSWER, [LEDGER, RETENTION],
+                                      settings=None)
+
+
+def test_claim_supported_by_two_evidence_ids_is_not_a_citation_error() -> None:
+    """2 つの根拠を合わせて裏付ける結論の evidence_id に ID を並べても「未登録の原文ID」にしない (#1364)。"""
+    for written in ("{ledger},{retention}", "{ledger}, {retention}", "{ledger}、{retention}",
+                    "[{ledger} / {retention}]",
+                    # chunk の id（MCP の evidence_id）を並べたもの・括弧で囲んだ 1 つの ID も同じ。
+                    "doc-ledger:set:3, doc-retention:set:1", "【{ledger}】"):
+        result = _bridge_validation(written)
+        [claim] = result["claim_checks"]
+        assert claim["status"] == "supported", written
+        assert claim["source_id"] in {LEDGER["id"], RETENTION["id"]}
+        assert result["counts"] == {"supported": 1}
+    # 結び付けた片段の ID をすべて残す（最初の根拠を出典にする）。
+    [claim] = _bridge_validation("{ledger}, {retention}")["claim_checks"]
+    assert claim["source_id"] == LEDGER["id"] and claim["evidence_quote"] == LEDGER["text"]
+    assert len(claim["evidence_id"].split(",")) == 2
+
+
+def test_unknown_or_unquoted_ids_in_a_list_stay_citation_errors() -> None:
+    """並べた ID の 1 つでも根拠に無い・引用がどの根拠にも無いときは、今までどおり引用エラー (#1364)。"""
+    for written, quote in (("{ledger}, E0000000000000000000", ""), ("{ledger} {retention}", "根拠に無い文"),
+                           ("E0000000000000000000", "")):
+        [claim] = _bridge_validation(written, evidence_quote=quote)["claim_checks"]
+        assert claim["status"] == "citation_error", written
+        assert claim["reason"].startswith("未登録の原文ID。")

@@ -65,6 +65,9 @@ job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 36
   `table_lookup`（本文の実体で表の行を引く）。`hops` は根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）で、
   `reasoning_type` と一緒に書きます。`single_hop` は 1、`bridge`・`intra_document_reference` は 2 以上で、
   `required_evidence` は段ごとに書くため `hops` より少なくできません（422）。採点の方法は変わりません。
+- ケースの `include_superseded: true`（#1366）は、新しい版に置き換えた文書（旧版）も検索して答えるケース（版の
+  比較など）です。そのケースだけ、利用者が旧版・変更点を尋ねるときと同じく `filters` に `include_superseded=true` を
+  足して回答します（既定は `false` で、旧版は検索から外れます）。
 
 - 「対応」の 4 つは業務支援の評価（#1231）です。回答の対応（`answered`・`conditional`・`needs_clarification`・
   `needs_environment_data`・`needs_human`・`insufficient_evidence`）は、回答の記録の `diagnostics.answer.outcome` が
@@ -132,7 +135,9 @@ uv run python -m app.rag.evaluation_cli \
 `reasoning_type` と段の数 `hops`、段ごとの必要な根拠つき）を置いています。資料と評価セットは
 `rag/scripts/multi_hop_corpus.py` が実体のデータから作ります。RAG の内部に実体の層を入れるかを、検索・回答（A）と業務 Agent（D）の根拠の連鎖の完全率で決める
 ための評価セットです。資料の作り方・取り込み方・実行の手順は [multi-hop/README.md](./multi-hop/README.md) を
-見てください。`evaluation_cli` の `--split dev` で、区分のケースだけを流せます。
+見てください。`evaluation_cli` の `--split dev` で、区分のケースだけを流せます。評価セットの文書の版
+（`document_versions`。#1366）は、`evaluation_corpus_cli` が取り込みのときに旧版を新しい版に置き換えた文書として
+登録します（`--keep-superseded-active` で登録しない）。
 
 検索 latency / p95 gate には `search-load.example.json` を使います。`cases`、`repeat`、`concurrency`、`thresholds` を定義し、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名と時間。例: `質問の理解`・`文書検索（1回目）`）を artifact 化します。`thresholds.stage_p95_ms` の key は工程名です。case の `rerank_top_n`・`mode`・`strategy` は #595 で削除した旧 standard の指定で、書いてあっても読み捨てます。結果 JSON と trend JSON には query / answer / context 原文を残しません。
 

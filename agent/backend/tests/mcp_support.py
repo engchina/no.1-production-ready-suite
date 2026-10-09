@@ -48,6 +48,11 @@ class RagSearchIn(_ContractInput):
     conditions: dict[str, str] | None = None
 
 
+class RagRetrieveEvidenceIn(RagSearchIn):
+    # 根拠の収集は検索する件数（top_k の既定 20）と同じ件数を既定で返す（#1365）。
+    evidence_limit: int = Field(default=20, ge=1, le=50)
+
+
 class RagLookupGuidesIn(_ContractInput):
     query: str
     search_answer_profile_id: str
@@ -369,7 +374,7 @@ class FakeProductMcp:
                     self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
                     self._tool("rag_read_source", RagReadSourceIn),
                     self._tool("rag_lookup_guides", RagLookupGuidesIn),
-                    self._tool("rag_retrieve_evidence", RagSearchIn),
+                    self._tool("rag_retrieve_evidence", RagRetrieveEvidenceIn),
                     self._tool("rag_outline", RagOutlineIn),
                     self._tool("rag_read_document", RagReadDocumentIn),
                     self._tool("rag_validate_answer", RagValidateAnswerIn),
