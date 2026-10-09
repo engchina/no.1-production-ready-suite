@@ -28,6 +28,7 @@ import {
 } from "@production-ready/ui";
 import {
   agentApi,
+  type AgentDataScopes,
   type AgentProfile,
   type AgentTemplate,
   type AgentProfilePatchPayload,
@@ -35,6 +36,7 @@ import {
   type BuiltinRuntimeModel,
 } from "@/lib/api";
 import { matchesSearch } from "@/components/ListFilters";
+import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
 import { useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { formatNumber } from "@/lib/format";
@@ -51,6 +53,8 @@ interface AgentDraft {
   instructions: string;
   skill_ids: string[];
   model_id: string;
+  /** データの範囲（#1378。ID を並べ替え、空の接続は持たない形）。 */
+  data_scopes: AgentDataScopes;
 }
 
 function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
@@ -61,6 +65,7 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     // Skill の選択は集合なので並べ替えて比べる。
     skill_ids: [...(agent?.skill_ids ?? [])].sort(),
     model_id: agent?.model_id ?? "",
+    data_scopes: normalizeDataScopes(agent?.data_scopes),
   };
 }
 
@@ -120,6 +125,7 @@ export function AgentEditorView({
   const [newEnabled, setNewEnabled] = useState(true);
   const [skillIds, setSkillIds] = useState<string[]>(saved.skill_ids);
   const [modelId, setModelId] = useState(saved.model_id);
+  const [dataScopes, setDataScopes] = useState<AgentDataScopes>(saved.data_scopes);
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [nameError, setNameError] = useState<string | null>(null);
   // 新規作成で選んだ業種テンプレート（#780）。作成した業務 Agent に残す（#810）。
@@ -188,6 +194,7 @@ export function AgentEditorView({
         instructions: payload.instructions ?? "",
         skill_ids: [...(payload.skill_ids ?? [])].sort(),
         model_id: payload.model_id ?? "",
+        data_scopes: normalizeDataScopes(payload.data_scopes),
       });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
@@ -205,6 +212,7 @@ export function AgentEditorView({
     setInstructions(next.instructions);
     setSkillIds(next.skill_ids);
     setModelId(next.model_id);
+    setDataScopes(next.data_scopes);
     setBaseline(next);
     setNameError(null);
   }
@@ -215,6 +223,7 @@ export function AgentEditorView({
     instructions,
     skill_ids: [...skillIds].sort(),
     model_id: modelId,
+    data_scopes: normalizeDataScopes(dataScopes),
   };
   // Agent のフォームの dirty を 1 つの離脱ガードで守る（#87）。
   const dirtySources = useDirtySources();
@@ -240,6 +249,7 @@ export function AgentEditorView({
     setInstructions(baseline.instructions);
     setSkillIds(baseline.skill_ids);
     setModelId(baseline.model_id);
+    setDataScopes(baseline.data_scopes);
     setNewEnabled(true);
     setNameError(null);
     setTemplateId(null);
@@ -301,6 +311,7 @@ export function AgentEditorView({
       instructions: instructions.trim(),
       skill_ids: skillIds,
       model_id: modelId,
+      data_scopes: normalizeDataScopes(dataScopes),
     };
     if (agent) {
       setName(payload.name);
@@ -507,6 +518,13 @@ export function AgentEditorView({
               <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
             )}
           </Section>
+          <AgentDataScopeSection
+            fieldId={fieldId}
+            value={dataScopes}
+            onChange={setDataScopes}
+            readOnly={readOnly}
+            disabled={pending}
+          />
         </fieldset>
         {agent ? <AgentVersionsSection agent={agent} readOnly={readOnly} /> : null}
       </PageBody>
