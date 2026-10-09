@@ -1,11 +1,12 @@
 import { CheckCircle2, Circle, Clock3, ListChecks, MinusCircle, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
 import { Disclosure } from "../ui/disclosure";
 import { Spinner } from "../ui/spinner";
+import { reduceChatProgressSteps, type ChatProgressStepsState } from "./chat-progress-steps";
 import { useOperationTiming } from "./processing-state";
 
 const DEFAULT_SLOW_AFTER_MS = 10_000;
@@ -113,6 +114,12 @@ export interface ChatProgressProps {
    * 製品は `useChatProgressTracker` の結果（`progressProps`）をそのまま渡す。
    */
   reconnecting?: boolean;
+  /**
+   * 段階の一覧の対象（送信・Run・ジョブの ID など。#1358）。処理中は一度出した段階を消さず、状態を戻さない
+   * （`useChatProgressSteps`）。この値が変わったら（と終端で）渡された一覧で作り直す。
+   * `useChatProgressTracker` の `progressProps` は追う対象の `key` を渡す。省略時は、この表示の間は同じ対象。
+   */
+  progressKey?: string | null;
   labels?: Partial<ChatProgressLabels>;
   className?: string;
   testId?: string;
@@ -127,6 +134,34 @@ export function isChatProgressActive(steps: readonly ChatProgressStep[]): boolea
   if (steps.some((step) => step.status === "running")) return true;
   if (steps.some((step) => step.status === "failed")) return false;
   return steps.some((step) => step.status === "pending");
+}
+
+export interface UseChatProgressStepsOptions {
+  /** 対象（送信・Run・ジョブの ID など）。変わったら作り直す。 */
+  key?: string | null;
+  /** 配信の最新の状態から作った段階の一覧。 */
+  steps: readonly ChatProgressStep[];
+  /** 処理中か。省略時は段階から決める（`isChatProgressActive`）。false（終端）なら渡された一覧で確定する。 */
+  active?: boolean;
+}
+
+/**
+ * 処理中は一度出した段階を消さず、状態を戻さない段階の一覧（3 製品共通。#1358）。規則は
+ * `reduceChatProgressSteps`（純粋な関数）が持ち、この hook は描画のたびにそれを呼ぶだけ。`ChatProgress` が
+ * 内部で呼ぶので、製品は `ChatProgress` に配信の最新の一覧を渡せばよい。
+ */
+export function useChatProgressSteps({ key = null, steps, active }: UseChatProgressStepsOptions): ChatProgressStep[] {
+  // 描画に使った（画面に出した）状態。描画の中では書き換えず、確定（commit）の後に進める。
+  const committed = useRef<ChatProgressStepsState | null>(null);
+  const state = reduceChatProgressSteps(committed.current, {
+    key,
+    steps,
+    active: active ?? isChatProgressActive(steps),
+  });
+  useLayoutEffect(() => {
+    committed.current = state;
+  });
+  return state.steps;
 }
 
 function stepDurationMs(step: ChatProgressStep): number | null {
@@ -322,23 +357,28 @@ function CurrentStep({
  * - 完了後: 「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。失敗した段階があれば開いて出す。
  * - 段階の切り替わりは polite で読み上げる（経過時間の毎秒の更新は読み上げない）。状態はアイコンと文字で示す。
  * - 動くスピナーは今の段階の 1 つだけ（同じ処理のスピナーは 1 つ。messaging.md §3.7）。
+ * - 処理中は一度出した段階を消さず、状態を戻さない（古い snapshot・段階が実行中に戻る組み立てでも、
+ *   完了した段階の一覧が揺れない。`useChatProgressSteps`。#1358）。終端・`progressKey` の変化で作り直す。
  *
  * SQL 生成の画面のような詳細な工程の表示（NL2SQL の WorkflowProgressStrip）より情報を絞る。
  */
 export function ChatProgress({
-  steps,
+  steps: incomingSteps,
   active: activeProp,
   elapsedMs,
   startedAt,
   slowAfterMs = DEFAULT_SLOW_AFTER_MS,
   defaultOpen,
   reconnecting = false,
+  progressKey = null,
   labels: labelOverrides,
   className,
   testId,
 }: ChatProgressProps) {
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
-  const active = activeProp ?? isChatProgressActive(steps);
+  // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
+  const active = activeProp ?? isChatProgressActive(incomingSteps);
+  const steps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });
   const failed = steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : failed ? "failed" : "done";
   // 実行中の段階が無い（段階の間・開始前）ときは、次に進む段階を今の段階として出す。

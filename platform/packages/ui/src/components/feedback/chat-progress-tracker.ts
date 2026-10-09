@@ -66,6 +66,8 @@ export interface ChatProgressTrackerProps {
   active: boolean;
   elapsedMs?: number | null;
   reconnecting: boolean;
+  /** 追う対象（`key`）。`ChatProgress` は対象が変わったら段階の一覧を作り直す（処理中は消さない。#1358）。 */
+  progressKey: string | null;
 }
 
 export interface ChatProgressTracker {
@@ -253,6 +255,6 @@ export function useChatProgressTracker({
     reconnecting,
     touch,
     refreshNow,
-    progressProps: { steps, active, elapsedMs, reconnecting },
+    progressProps: { steps, active, elapsedMs, reconnecting, progressKey: key },
   };
 }

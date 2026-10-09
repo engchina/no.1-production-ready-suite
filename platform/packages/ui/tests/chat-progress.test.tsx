@@ -272,3 +272,44 @@ describe("ChatProgress", () => {
     expect(q("p-summary")!.textContent).toBe("Steps 0 / 1 分 1 秒");
   });
 });
+
+describe("ChatProgress の段階の一覧の安定（#1358）", () => {
+  const completedIds = () =>
+    Array.from(host.querySelectorAll<HTMLElement>("li[data-status]")).map((item) =>
+      item.dataset.testid?.replace("p-step-", "")
+    );
+  const snapshot = (statuses: Record<string, ChatProgressStep["status"]>): ChatProgressStep[] =>
+    Object.entries(statuses).map(([id, status]) => ({ id, label: id, status }));
+
+  it("処理中は、完了した段階が実行中に戻った一覧を受け取っても、完了の一覧から消さない", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(5)));
+    render(<ChatProgress steps={snapshot({ step1: "done", step2: "done", step3: "running", step4: "pending" })} testId="p" />);
+    act(() => {
+      q("p-completed")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(completedIds()).toEqual(["step1", "step2"]);
+    // 段階が実行中に戻る（RAG の検索 → 並べ替え → 根拠確認）・古い snapshot が届いた。
+    render(<ChatProgress steps={snapshot({ step1: "done", step2: "running", step3: "done", step4: "pending" })} testId="p" />);
+    expect(completedIds()).toEqual(["step1", "step2", "step3"]);
+    expect(q("p-current")!.dataset.stepId).toBe("step4");
+    render(<ChatProgress steps={snapshot({ step1: "done", step2: "done", step3: "done", step4: "running" })} testId="p" />);
+    expect(completedIds()).toEqual(["step1", "step2", "step3"]);
+    expect(q("p-current")!.dataset.stepId).toBe("step4");
+  });
+
+  it("progressKey が変わったら（対象の切り替え）渡された一覧で作り直す", () => {
+    render(<ChatProgress steps={snapshot({ submit: "running" })} progressKey="submit" testId="p" />);
+    expect(q("p-current")!.dataset.stepId).toBe("submit");
+    render(<ChatProgress steps={snapshot({ plan: "running" })} progressKey="run-1" testId="p" />);
+    expect(q("p-current")!.dataset.stepId).toBe("plan");
+    expect(q("p-completed")).toBeNull();
+  });
+
+  it("終端の一覧は渡されたとおりに確定する", () => {
+    render(<ChatProgress steps={snapshot({ a: "done", b: "running" })} testId="p" />);
+    render(<ChatProgress steps={snapshot({ a: "done", c: "done" })} testId="p" />);
+    expect(q("p")!.dataset.chatProgressState).toBe("done");
+    expect(q("p-summary")!.textContent).toContain("2 ステップ");
+  });
+});
