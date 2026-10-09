@@ -52,6 +52,12 @@ BACKUP = "backup-rules.pdf"
 GUIDE = "system-operation-guide.pdf"
 LOGISTICS_ORGANIZATION = "logistics-organization-rules.pdf"
 LOGISTICS_LEDGER = "logistics-system-ledger.xlsx"
+# 文書の版（#1366）: 旧版 → 置き換えた新しい版。取り込み（`evaluation_corpus_cli`）が旧版を
+# 「新しい版に置き換えた文書」として登録し、既定の検索から外す（製品で旧版を扱うときと同じ）。
+DOCUMENT_VERSIONS: tuple[tuple[str, str], ...] = (
+    (APPROVAL_2023, APPROVAL),
+    (MAINTENANCE_PREVIOUS, MAINTENANCE),
+)
 
 _STYLE = (
     'body{font-family:"Noto Sans CJK JP","Noto Sans JP",sans-serif;font-size:11pt;line-height:1.6}'
@@ -1704,7 +1710,7 @@ def _case_payload(spec: CaseSpec, evidence: Mapping[str, tuple[str, str]]) -> di
         document = f"file:{evidence[key][0]}"
         if document not in documents:
             documents.append(document)
-    return {
+    payload: dict[str, Any] = {
         "id": spec.id,
         "category": "document_answerable",
         "split": spec.split,
@@ -1719,6 +1725,11 @@ def _case_payload(spec: CaseSpec, evidence: Mapping[str, tuple[str, str]]) -> di
             for key in spec.evidence
         ],
     }
+    superseded = {f"file:{old}" for old, _ in DOCUMENT_VERSIONS}
+    if superseded & set(documents):
+        # 旧版の文を根拠にする問（版の比較）は、利用者が旧版を尋ねるときと同じく旧版も検索する。
+        payload["include_superseded"] = True
+    return payload
 
 
 def _document_text(document: Document) -> str:
@@ -1758,7 +1769,14 @@ def build_golden_set(documents: Sequence[Document]) -> dict[str, Any]:
     if unused:
         # 評価の CLI は評価セットが参照するファイルだけを取り込む。紛らわしい資料も 1 問は参照する。
         raise ValueError(f"どの問も参照しない資料があります: {unused}")
-    return {"top_k": TOP_K, "cases": cases}
+    return {
+        "top_k": TOP_K,
+        "document_versions": [
+            {"document_id": f"file:{old}", "superseded_by": f"file:{new}"}
+            for old, new in DOCUMENT_VERSIONS
+        ],
+        "cases": cases,
+    }
 
 
 def source_path(corpus_dir: Path, document: Document) -> Path:

@@ -44,16 +44,20 @@ def is_heading(text: str) -> bool:
 
 _LIST_MARK = re.compile(r"^(?:[-*+・•]\s*|[0-9０-９]{1,3}[.)．）]\s*)")
 _CITATION_LABEL = re.compile(
-    r"[（(【\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース|sources?|references?|citations?"
+    r"[（(【〔\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース|sources?|references?|citations?"
     # 出典の位置のラベル（#1317。「- セクション: 「…」 → 2. …」「- ページ: 1」）。
-    r"|セクション|節|章|ページ|頁|文書名|資料名|ファイル名|シート|証拠|証拠\s*ID|evidence(?:[ _]?id)?|page|section|document)"
-    r"\s*[:：]\s*(?P<rest>.+?)\s*[）)】\]]?",
+    r"|セクション|節|章|ページ|頁|文書名|資料名|ファイル名|シート|証拠|証拠\s*ID|evidence(?:[ _]?id)?|page|section|document"
+    # 要素の定位子のラベル（#1370。「*Locator*: `doc:…/page:3/el:12`」。#1330 の要素の定位子）。
+    r"|locator|ロケータ|ロケーター|定位子)"
+    r"\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?",
     re.I)
-# Markdown の強調（「**根拠**：…」のラベル。出典の判定だけで外す）。
-_EMPHASIS = re.compile(r"\*\*|__|`")
-# 根拠の ID の括弧（【証拠 ID: 03ac…:1】・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】）。
+# Markdown の強調（「**根拠**：…」「*Locator*:」のラベル。出典の判定だけで外す。#1370 で斜体の `*` も外す）。
+_EMPHASIS = re.compile(r"\*{1,2}|__|`")
+# 根拠の ID の括弧（【証拠 ID: 03ac…:1】・〔証拠 ID: 07e8…:5〕・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】。
+# 〔〕［］[] は #1370）。
 _EVIDENCE_REF = re.compile(
-    r"【\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}】", re.I)
+    r"[【〔［\[]\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}[】〕］\]]",
+    re.I)
 _TITLE_QUOTE = re.compile(r"[「『]([^「」『』\n]{1,80})[」』]")
 _DOCUMENT_TITLE = re.compile(r"手順書|マニュアル|ガイド|規程|規定|資料|文書|メモ|第\s*[0-9０-９]+\s*版")
 _SECTION_REF = re.compile(r"(?:第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+(?:\.[0-9０-９]+)*[.．]\s*)[^。\n]{0,30}")
@@ -128,8 +132,45 @@ def _is_reference_only(value: str) -> bool:
     return found and (not rest or bool(_SECTION_REF.fullmatch(rest) and not _SENTENCE_END.search(rest)))
 
 
+# 行末の場所の括弧（「（第 2章 申請）」「（p.12）」）。
+_LOCATION_TAIL = re.compile(r"[（(〔\[]([^（()）〔〕\[\]\n]{1,80})[）)〕\]]\s*$")
+# 文書名に無い、言い切りの助詞（「承認者は課長（第 3 章）」「申請先は規程が定める承認者」は主張）。
+_STATEMENT_PARTICLE = re.compile(r"[はがを]")
+_ANY_BRACKET = re.compile(r"[（(【〔\[「『][^（()）【】〔〕\[\]「」『』\n]*[）)】〕\]」』]")
+
+
+def _is_document_location(value: str) -> bool:
+    """文書名と場所の括弧だけの段落か（#1370。「システム変更手順書（第 2章 申請）」「運用マニュアル（p.12）」）。
+
+    行末の場所の括弧（章・節・頁・シートなどの印を含むもの）を外した残りが、文書を示す語（手順書・規程・
+    ファイル名など）を含む短い名前で、述語・操作・言い切りの助詞（は・が・を）を含まないときだけ出典にする。
+    場所の後に本文が続く行（「…（第 2章）では、…」）は主張のまま。
+    """
+    rest = value.strip().rstrip("。．").strip()
+    found = False
+    while match := _LOCATION_TAIL.search(rest):
+        location = match.group(1)
+        if not _DOCUMENT_MARK.search(location) or _SENTENCE_END.search(location) or is_operation_instruction(location):
+            break
+        rest, found = rest[:match.start()].strip(), True
+    if not found or not rest or len(rest) > 80 or "。" in rest:
+        return False
+    if _SENTENCE_END.search(rest) or is_operation_instruction(rest):
+        return False
+    outside = rest
+    while (stripped := _ANY_BRACKET.sub(" ", outside)) != outside:
+        outside = stripped
+    if _STATEMENT_PARTICLE.search(outside):
+        return False
+    return bool(_DOCUMENT_TITLE.search(rest) or _FILE_NAME.search(rest))
+
+
 def is_citation_line(text: str) -> bool:
-    """出典の行（出典のラベル・文書名・頁・節の括弧・リンク・根拠の ID だけの段落）か。主張を含む文は出典にしない (#1306 / #1317)。"""
+    """出典の行（出典・定位子のラベル・文書名・頁・節の括弧・リンク・根拠の ID・文書名と場所だけの段落）か。
+
+    主張を含む文は出典にしない (#1306 / #1317 / #1370)。Agent の ``answer_passages.is_citation`` と同じ規則で、
+    両方のテストが platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる。
+    """
     value = _EMPHASIS.sub("", _LIST_MARK.sub("", text.strip(), count=1)).strip()
     if not value or "。" in value.rstrip("。"):
         return False
@@ -140,7 +181,7 @@ def is_citation_line(text: str) -> bool:
         return True
     if _BRACKETED.fullmatch(value) and all(_DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value)):
         return True
-    return _is_reference_only(value)
+    return _is_reference_only(value) or _is_document_location(value)
 
 
 def is_question_to_user(text: str) -> bool:

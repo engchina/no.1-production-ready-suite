@@ -1768,7 +1768,7 @@ class OracleClient:
                 SET status = :status,
                     failed_phase = :failed_phase,
                     error_message = :error_message,
-                    preprocess_artifact = COALESCE(:preprocess_artifact, preprocess_artifact),
+                    preprocess_artifact = COALESCE(JSON(:preprocess_artifact), preprocess_artifact),
                     active_extraction_recipe_id = COALESCE(
                         :active_extraction_recipe_id, active_extraction_recipe_id
                     ),
@@ -1983,7 +1983,7 @@ class OracleClient:
                     t.recipe_id = COALESCE(:recipe_id, t.recipe_id),
                     t.extraction_recipe_id =
                         COALESCE(:extraction_recipe_id, t.extraction_recipe_id),
-                    t.recipe_subset = COALESCE(:recipe_subset, t.recipe_subset),
+                    t.recipe_subset = COALESCE(JSON(:recipe_subset), t.recipe_subset),
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
                     (chunk_set_id, document_id, recipe_id, extraction_recipe_id, tenant_id_hash,
@@ -12293,11 +12293,16 @@ def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
 
 
-def _json_bind(value: object | None) -> object | None:
+def _json_bind(value: object | None) -> str | None:
+    """JSON 型の列へ書く値を、JSON の文字列にする(``_json_input_sizes`` の CLOB で bind する)。
+
+    OSON(``DB_TYPE_JSON``)で bind すると、python-oracledb(thin)の OSON の符号化が数百 KB を
+    超える値で極端に遅く(800KB で約 48 秒)、GIL を持ったまま backend 全体を止める(#1363)。
+    JSON の文字列を CLOB で渡し、DB 側で JSON 型にする(読み出しの形は変わらない)。
+    """
     if value is None:
         return None
-    decoded: object = json.loads(_json_dumps(value))
-    return decoded
+    return _json_dumps(value)
 
 
 def _knowledge_base_extraction_fields(
@@ -12308,8 +12313,13 @@ def _knowledge_base_extraction_fields(
 
 
 def _json_input_sizes(*names: str) -> dict[str, object]:
+    """``_json_bind`` の値の bind 型。32KB を超える文字列も渡せるよう CLOB にする(#1363)。
+
+    OSON(``DB_TYPE_JSON``)は使わない(``_json_bind`` の説明)。``COALESCE`` など JSON 型の列と
+    型をそろえる式では、SQL の側で ``JSON(:name)`` にする。
+    """
     oracledb = importlib.import_module("oracledb")
-    return {name: oracledb.DB_TYPE_JSON for name in names}
+    return {name: oracledb.DB_TYPE_CLOB for name in names}
 
 
 def _json_loads(value: object) -> dict[str, object]:

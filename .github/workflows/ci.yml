@@ -45,6 +45,8 @@ jobs:
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.platform_backend == 'true'
         || steps.filter.outputs.ci == 'true' || steps.filter.outputs.platform_other == 'true' }}
       nl2sql_frontend_contract: ${{ steps.filter.outputs.nl2sql_frontend_contract }}
+      # RAG / Engine のテストが読む、回答の段落の判定の共通の事例（#1370。Agent / Backend は platform_other で動く）。
+      answer_passages_contract: ${{ steps.filter.outputs.answer_passages_contract }}
       # pip-audit は依存（uv.lock / pyproject.toml）が変わったときだけ実行する。全件は dependency-audit-nightly.yml。
       # `--skip-editable`: 自分たちの package（editable で入る backend と platform の package）は PyPI に無いので問い合わせない。
       # PyPI が存在しない名前に 404 ではなく 503 を返し続け、pip-audit が失敗したため（#344）。
@@ -80,6 +82,9 @@ jobs:
             nl2sql_frontend_contract:
               - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
+            # RAG / Engine と Agent / Backend のテストが読む、回答の出典の行の事例（#1370）。
+            answer_passages_contract:
+              - "platform/contracts/answer-passages/**"
             rag:
               - "rag/**"
             nl2sql:
@@ -387,7 +392,7 @@ jobs:
   rag-engine:
     name: RAG / Engine
     needs: changes
-    if: needs.changes.outputs.rag == 'true'
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
