@@ -219,7 +219,6 @@ function DataScopeCard({
               value={ids}
               onValueChange={setIds}
               disabled={disabled || readOnly}
-              invalid={missing.length > 0}
               labels={{
                 empty: candidates.error ? t("agent.dataScope.emptyOnError") : t("agent.dataScope.empty"),
                 searchPlaceholder: t("agent.dataScope.search"),
