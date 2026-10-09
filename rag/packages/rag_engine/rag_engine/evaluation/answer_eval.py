@@ -11,6 +11,7 @@ from rag_engine.generation.answer_policy import OPERATION_GUIDANCE_POLICY, OPERA
 import json
 import hashlib
 import logging
+import re
 from collections import deque
 from typing import Any, Literal
 
@@ -356,14 +357,49 @@ def _span_for_misnamed_id(claim, catalog):
     return matches[0] if matches and len({span.get("id") for span in matches}) == 1 else None
 
 
+# 1 つの evidence_id の欄に複数の根拠を書いたときの区切り（「E…, E…」「E… / E…」「[E…、E…]」）。
+# 根拠の ID（片段の「E + 16 進」・chunk の id「文書:chunk_set:番号」）は空白・句読点・括弧を含まない。
+_EVIDENCE_ID_SEPARATOR = re.compile(r"[\s,，、;；/／|｜・\[\]【】()（）「」]+")
+
+
+def _spans_for_ids(claim, catalog):
+    """evidence_id の欄に区切って書いた複数の根拠を、それぞれ片段へ結び付ける (#1364)。
+
+    多段の結論（台帳の行で担当部署を引き、規程で承認者を引く）は 2 つ以上の根拠を合わせて裏付けるため、
+    モデルは evidence_id に複数の ID を並べることがある。全体を 1 つの ID として引くと「未登録の原文ID」に
+    なり、正しい結論が引用エラーで外されていた。書いた ID がすべて片段（evidence_id）か chunk の id に
+    一致するときだけ結び付け、1 つでも一致しなければ None（従来どおり引用エラー）。括弧で囲んだ 1 つの ID も同じ。
+    引用（evidence_quote）を返したときは、結び付けた片段のどれかに引用が含まれることも求める。
+    """
+    tokens = [token for token in _EVIDENCE_ID_SEPARATOR.split(claim.evidence_id or "") if token]
+    if not tokens or tokens == [claim.evidence_id]:
+        return None
+    spans = []
+    for token in tokens:
+        span = catalog.get(token) or next(
+            (item for item in catalog.values() if token == str(item.get("id") or "")), None)
+        if span is None:
+            return None
+        if span not in spans:
+            spans.append(span)
+    quote = (claim.evidence_quote or "").strip()
+    if quote and not any(quote_in_text(quote, span["text"]) for span in spans):
+        return None
+    return spans
+
+
 def _bind_claims(output, catalog, passages):
     """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。"""
     bound = []
     for claim in output.claim_checks:
         if claim.evidence_id and claim.status in {"supported", "contradicted"}:
             span = catalog.get(claim.evidence_id) or _span_for_misnamed_id(claim, catalog)
-            if span:
-                claim = claim.model_copy(update={"source_id": span["id"], "evidence_quote": span["text"]})
+            spans = [span] if span else _spans_for_ids(claim, catalog)
+            if spans:
+                # 複数の根拠は最初の根拠を出典にし、evidence_id には結び付けた片段の ID をすべて残す。
+                claim = claim.model_copy(update={
+                    "source_id": spans[0]["id"], "evidence_quote": spans[0]["text"],
+                    "evidence_id": claim.evidence_id if span else ",".join(item["evidence_id"] for item in spans)})
             else:
                 claim = claim.model_copy(update={"status": "citation_error", "reason": "未登録の原文ID。" + claim.reason})
         if not claim.answer_passage_id:

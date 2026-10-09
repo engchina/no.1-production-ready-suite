@@ -228,6 +228,26 @@ async def test_evaluation_runner_passes_knowledge_base_scope_to_search_request()
     assert request.filters["knowledge_base_id"] == "kb-1,kb-2"
 
 
+async def test_evaluation_runner_includes_superseded_documents_only_for_marked_cases() -> None:
+    """旧版も検索するケース（版の比較。#1366）だけ include_superseded=true を足す。"""
+    pipeline = StubPipeline()
+    runner = EvaluationRunner(pipeline=pipeline)
+
+    await runner.run(
+        cases=[
+            EvaluationCase(id="current", query="今の承認の期限"),
+            EvaluationCase(id="versions", query="旧版との違い", include_superseded=True),
+        ],
+        top_k=5,
+        filters={"status": "indexed"},
+    )
+
+    assert [request.filters for request in pipeline.requests] == [
+        {"status": "INDEXED"},
+        {"status": "INDEXED", "include_superseded": "true"},
+    ]
+
+
 async def test_metrics_skip_cases_without_expectations() -> None:
     """期待値を持たないケースは、その指標の分母に入れない(rag_poc と同じ)。"""
     runner = EvaluationRunner(pipeline=StubPipeline())

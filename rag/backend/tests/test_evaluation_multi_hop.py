@@ -615,6 +615,29 @@ def test_multi_hop_corpus_has_confusing_entities_and_documents() -> None:
     assert "サンプル物流社だけに適用します" in _html_text("logistics-organization-rules.pdf")
 
 
+def test_multi_hop_set_declares_superseded_versions() -> None:
+    """旧版の 2 文書は、新しい版に置き換えた文書として取り込む（#1366）。
+
+    旧版の文を根拠にする問（版の比較）だけが、旧版も検索する（`include_superseded`）。
+    """
+    payload, request = _load_set()
+    assert payload["document_versions"] == [
+        {"document_id": "file:approval-rules-2023.pdf", "superseded_by": "file:approval-rules.pdf"},
+        {
+            "document_id": "file:maintenance-plan-2025.pdf",
+            "superseded_by": "file:maintenance-plan.pdf",
+        },
+    ]
+    superseded = {entry["document_id"] for entry in payload["document_versions"]}
+    marked = {case.id for case in request.cases if case.include_superseded}
+    uses_old = {
+        case.id
+        for case in request.cases
+        if superseded & {item.document_id for item in case.required_evidence}
+    }
+    assert marked == uses_old == {"cmp-approval-deadline-versions", "cmp-hrm-maintenance-versions"}
+
+
 def test_source_builder_rejects_a_change_that_breaks_original_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

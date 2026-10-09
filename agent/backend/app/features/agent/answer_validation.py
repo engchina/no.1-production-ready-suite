@@ -166,7 +166,17 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[tuple[str, str]]:
     return refs
 
 
-def run_evidence_groups(steps: list[RunStep]) -> list[tuple[str, list[JsonObject]]]:
+def _cited_in(answer: str, chunk_id: str) -> bool:
+    """回答が根拠の id（MCP の `evidence_id` は `chunk_id` と同じ）を書いているか。
+
+    `…:1` が `…:19` の先頭に一致しないよう、後ろが数字で続くものは数えない。
+    """
+    return bool(re.search(re.escape(chunk_id) + r"(?!\d)", answer))
+
+
+def run_evidence_groups(
+    steps: list[RunStep], answer: str = ""
+) -> list[tuple[str, list[JsonObject]]]:
     """その Run で RAG が返した根拠の参照を、MCP 接続ごとにまとめる（#1277）。
 
     根拠の id は返した RAG のものなので、接続ごとに分けて検証する。返すのは、接続ごとの
@@ -174,6 +184,9 @@ def run_evidence_groups(steps: list[RunStep]) -> list[tuple[str, list[JsonObject
     最も新しく根拠を返した接続から順。参照は新しい呼び出しから順、接続の中で重複なし、最大 30 件。
     `rag_read_source`・`rag_read_document` で読んだ chunk も根拠に入れる（#1345。多段の質問は段の
     事実を読んで確かめる）。
+    `answer` を渡すと、回答が引用した根拠（`chunk_id` を回答に書いたもの）を接続の中で先にする
+    （#1364。多段の質問は前の段の根拠が古い呼び出しにあり、上限で切ると回答が使った根拠が検証に
+    入らず、正しい結論が「確かめられない」になる）。
     """
     groups: dict[str, tuple[str, list[JsonObject], set[tuple[str, str]]]] = {}
     for step in reversed(steps):
@@ -195,11 +208,15 @@ def run_evidence_groups(steps: list[RunStep]) -> list[tuple[str, list[JsonObject
                 continue
             seen.add(ref)
             refs.append({"document_id": ref[0], "chunk_id": ref[1]})
-    return [
-        (tool_name, refs[:MAX_VALIDATION_EVIDENCE])
-        for tool_name, refs, _seen in groups.values()
-        if refs
-    ]
+    grouped: list[tuple[str, list[JsonObject]]] = []
+    for tool_name, refs, _seen in groups.values():
+        if not refs:
+            continue
+        if answer:
+            cited = [ref for ref in refs if _cited_in(answer, ref["chunk_id"])]
+            refs = cited + [ref for ref in refs if ref not in cited]
+        grouped.append((tool_name, refs[:MAX_VALIDATION_EVIDENCE]))
+    return grouped
 
 
 def _text_value(value: object, limit: int) -> str | None:

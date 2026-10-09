@@ -1314,7 +1314,8 @@ async def _validate_final_answer(
         return content
 
     run = runtime_repository.get_run(run_id)
-    groups = run_evidence_groups(run.steps)
+    # 回答が引用した根拠を先にして、上限で切っても検証に入れる（#1364）。
+    groups = run_evidence_groups(run.steps, answer)
     if not groups:
         if rag_tools and is_clarification_only(answer):
             # 確認の質問だけの回答は資料の主張を含まない（「確かめていない」を足さない。#1306）。

@@ -410,8 +410,9 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 回答の最終の検証（#1246・#1277）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 true）が true のとき、RAG の根拠を使った Run の
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
 その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠と `rag_read_source` / `rag_read_document`
-で読んだ chunk の参照（#1345。多段の質問は段の事実を読んで確かめるため。新しい呼び出しから順、
-重複なし、接続ごとに 30 件まで）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
+で読んだ chunk の参照（#1345。多段の質問は段の事実を読んで確かめるため。回答が引用した根拠（`chunk_id` を回答に
+書いたもの）を先に、残りは新しい呼び出しから順、重複なし、接続ごとに 30 件まで。#1364。前の段の根拠を上限で
+落とさない）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
 分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
 影響範囲・承認。#1276）も動かす。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
