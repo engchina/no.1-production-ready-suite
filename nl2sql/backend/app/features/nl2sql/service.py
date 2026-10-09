@@ -20205,9 +20205,10 @@ class Nl2SqlService:
             job.started_at = job.started_at or _utc_now()
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
             if job.attempt > 1:
-                # lease の切れたジョブを引き継いだ実行（2 回目以降の attempt）は、段階を初めからにする。
-                # 前の実行の段階（完了・実行中）を残すと、準備から実行し直す間に後の段階が実行中のまま
-                # 残り、チャットの段階の一覧が前後する（#1358。画面は attempt で一覧を作り直す）。
+                # lease の切れたジョブを引き継いだ実行（2 回目以降の attempt）は、段階を
+                # 初めからにする。前の実行の段階（完了・実行中）を残すと、準備から実行し直す間に
+                # 後の段階が実行中のまま残り、チャットの段階の一覧が前後する（#1358。画面は
+                # attempt で一覧を作り直す）。
                 job.steps = _new_job_steps()
             job.steps[0] = job.steps[0].model_copy(
                 update={
