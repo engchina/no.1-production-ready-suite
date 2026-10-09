@@ -859,3 +859,106 @@ def test_outcome_marks_entity_expansion_role_for_mcp_and_answer() -> None:
 
     roles = {chunk.chunk_id: chunk.metadata["evidence_role"] for chunk in outcome.citations}
     assert roles == {hit.chunk_id: "retrieved_anchor", row.chunk_id: ENTITY_EXPANSION_ROLE}
+
+
+# ---- MCP の根拠の並びで、実体の拡張の根拠を evidence_limit の内に入れる（#1362。D の holdout）
+
+
+def _mcp_chunk(
+    chunk_id: str, role: str, rank: int | None = None, *, expansion: bool = False
+) -> RetrievedChunk:
+    metadata: dict[str, Any] = {"evidence_role": role}
+    if rank is not None:
+        metadata["evidence_retrieval_rank"] = rank
+    if expansion:
+        metadata[ENTITY_EXPANSION_KEY] = {"entity": chunk_id, "hop": 1}
+    return RetrievedChunk(
+        document_id="d", chunk_id=chunk_id, text=chunk_id, score=0.0, metadata=metadata
+    )
+
+
+def _ids_of(chunks: list[RetrievedChunk]) -> list[str]:
+    return [chunk.chunk_id for chunk in chunks]
+
+
+def test_mcp_order_reserves_limit_for_entity_expansion_after_many_hits() -> None:
+    """評価の D の holdout の形: 当たった chunk が 20 件を超え、拡張の根拠（略号の表など）が親の
+    文脈の役割で 21〜38 位にある。evidence_limit 20 の内の末尾（上限の 3 割まで）に入れる。
+    """
+    from app.mcp.tools import mcp_evidence_order
+
+    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 23)]
+    context = [_mcp_chunk(f"ctx-{n}", "neighbor_context") for n in range(10)]
+    expanded = [
+        _mcp_chunk("ledger-row", ENTITY_EXPANSION_ROLE, 30, expansion=True),
+        _mcp_chunk("org-code", "neighbor_context", expansion=True),
+        _mcp_chunk("org-approver", "parent_context", expansion=True),
+    ]
+    citations = [*context[:4], *hits, *expanded[1:], *context[4:], expanded[0]]
+
+    ordered = mcp_evidence_order(citations, 20)
+
+    assert _ids_of(ordered[:20]) == [
+        *(f"hit-{n}" for n in range(1, 18)),
+        "ledger-row",
+        "org-code",
+        "org-approver",
+    ]
+    # 押し出した当たりは上限の後ろに残り、前後の文脈はその後。
+    assert _ids_of(ordered[20:25]) == ["hit-18", "hit-19", "hit-20", "hit-21", "hit-22"]
+    assert len(ordered) == len(citations)
+    # 上限を渡さない（従来の）並びでは、拡張の文脈の根拠は前後の文脈の中に残る。
+    plain = _ids_of(mcp_evidence_order(citations))
+    assert plain.index("org-code") > 20
+
+
+def test_mcp_order_puts_entity_expansion_before_context_when_hits_are_few() -> None:
+    from app.mcp.tools import mcp_evidence_order
+
+    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 6)]
+    context = [_mcp_chunk(f"ctx-{n}", "neighbor_context") for n in range(30)]
+    expanded = _mcp_chunk("org-code", "neighbor_context", expansion=True)
+
+    ordered = mcp_evidence_order([*hits, *context, expanded], 20)
+
+    assert _ids_of(ordered[:7]) == [
+        "hit-1",
+        "hit-2",
+        "hit-3",
+        "hit-4",
+        "hit-5",
+        "org-code",
+        "ctx-0",
+    ]
+
+
+def test_mcp_order_caps_the_reserved_share_and_keeps_expansion_already_inside() -> None:
+    from app.mcp.tools import ENTITY_EXPANSION_LIMIT_SHARE, mcp_evidence_order
+
+    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 25)]
+    inside = _mcp_chunk("inside", ENTITY_EXPANSION_ROLE, 2, expansion=True)
+    outside = [_mcp_chunk(f"exp-{n}", "neighbor_context", expansion=True) for n in range(10)]
+
+    ordered = mcp_evidence_order([*hits, inside, *outside], 20)
+
+    head = _ids_of(ordered[:20])
+    # 上限 20 の 3 割 = 6 件まで（上限の内に元からある 1 件を含む）。
+    assert ENTITY_EXPANSION_LIMIT_SHARE == 0.3
+    assert [cid for cid in head if cid.startswith(("exp-", "inside"))] == [
+        "inside",
+        "exp-0",
+        "exp-1",
+        "exp-2",
+        "exp-3",
+        "exp-4",
+    ]
+    assert head.index("inside") == 2
+    # 拡張の根拠が無い・上限に収まるときは従来どおり。
+    assert _ids_of(mcp_evidence_order(hits, 20)) == _ids_of(hits)
+    # 同じ順位の当たりがあれば、citations の順（当たりが先）。
+    assert _ids_of(mcp_evidence_order([*hits[:3], inside], 20)) == [
+        "hit-1",
+        "hit-2",
+        "inside",
+        "hit-3",
+    ]
