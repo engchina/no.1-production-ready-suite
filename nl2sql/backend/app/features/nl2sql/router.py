@@ -20,8 +20,10 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.responses import StreamingResponse
 from pr_backend_core import ApiResponse
 from pr_backend_core.api import CursorParams, InvalidCursorError, cursor_params
+from pr_backend_core.chat_progress import ChatProgressPage, chat_progress_sse_response
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 
 from app.api.concurrency import run_sync_io
@@ -190,6 +192,7 @@ from .quality_evaluation_service import (
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
     JobIdConflictError,
+    JobProgressData,
     ProfileNameConflict,
     ProfileOracleCleanupFailed,
     ProfileScopePermissionError,
@@ -639,6 +642,78 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
     if job.chat:
         _assert_profile_access(request, job.profile_id)
     return ApiResponse(data=job)
+
+
+_JOB_PROGRESS_FORBIDDEN_DETAIL = "他のユーザーのジョブを参照する権限がありません。"
+_JOB_PROGRESS_NOT_FOUND_DETAIL = "指定されたジョブが見つかりません。"
+
+
+def _job_progress_for_request(job_id: str, request: Request, since: int) -> JobProgressData:
+    """ジョブの処理の段階のイベント（`since` より後）。
+
+    アクセスの判定は `GET /jobs/{job_id}` と同じ（本人のジョブ・管理の権限・業務プロファイル）。
+    """
+    try:
+        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+        progress = nl2sql_service.get_job_progress(
+            job_id,
+            since=since,
+            actor_user_uuid=access.actor_user_uuid,
+            actor_can_manage=access.actor_can_manage,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=_JOB_PROGRESS_FORBIDDEN_DETAIL) from exc
+    if progress is None:
+        raise HTTPException(status_code=404, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL)
+    if progress.chat:
+        _assert_profile_access(request, progress.profile_id)
+    return progress
+
+
+@router.get("/jobs/{job_id}/progress", response_model=ApiResponse[ChatProgressPage])
+def get_job_progress(
+    job_id: str,
+    request: Request,
+    since: Annotated[int, Query(ge=0, description="この番号より後のイベントを返す。")] = 0,
+) -> ApiResponse[ChatProgressPage]:
+    """ジョブの処理の段階のイベント（polling。3 製品共通の契約。#1359）。"""
+    return ApiResponse(data=_job_progress_for_request(job_id, request, since).page)
+
+
+@router.get(
+    "/jobs/{job_id}/progress/stream",
+    response_class=StreamingResponse,
+    responses={204: {"description": "終わったジョブを続きから求めた（配信するイベントが無い）。"}},
+)
+async def stream_job_progress(
+    job_id: str,
+    request: Request,
+    since: Annotated[int | None, Query(ge=0, description="この番号より後から送る。")] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> Response:
+    """ジョブの処理の段階のイベントを SSE で送る（3 製品共通の契約。#1359）。
+
+    アクセス（404 / 403・業務プロファイルの利用権限）は配信の前に `GET /jobs/{job_id}` と同じく
+    判定する。配信は永続の job の文書を 1 秒ごとに読み直すので、worker が別のプロセスでも届く。
+    job の読み直しは同期 I/O なので threadpool で行う（backend-concurrency-contract）。
+    """
+    await run_sync_io(_job_progress_for_request, job_id, request, since or 0)
+    access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+
+    async def fetch(cursor: int) -> ChatProgressPage | None:
+        try:
+            progress = await run_sync_io(
+                nl2sql_service.get_job_progress,
+                job_id,
+                since=cursor,
+                actor_user_uuid=access.actor_user_uuid,
+                actor_can_manage=access.actor_can_manage,
+            )
+        except PermissionError:
+            return None
+        return progress.page if progress is not None else None
+
+    return await chat_progress_sse_response(fetch, since=since, last_event_id=last_event_id)
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[JobData])

@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
+import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 
 const profile = {
   id: "sales",
@@ -147,7 +148,7 @@ async function setup(
                 total: state.turns.length ? 1 : 0,
                 limit: 10,
               }
-            : { conversation, turns: state.turns },
+            : { conversation, turns: state.turns.map(withJobProgress) },
       },
     });
   });
@@ -180,7 +181,16 @@ async function setup(
       },
     });
     return route.fulfill({
-      json: { data: { job_id: id, status: safe ? "done" : "error", created_at: now, steps: [] } },
+      json: {
+        data: {
+          job_id: id,
+          status: safe ? "done" : "error",
+          created_at: now,
+          steps: [],
+          // 作成時の処理の段階のイベント（#1359。mock は完了したジョブを返す）。
+          progress_events: turnProgressEvents(state.turns.at(-1)!),
+        },
+      },
     });
   });
   await page.route("**/api/nl2sql/jobs/*/execute", async (route) => {
