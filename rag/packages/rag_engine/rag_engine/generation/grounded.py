@@ -215,7 +215,8 @@ AUDIT_SYSTEM_PROMPT = (
     "- text と quote が同じ画面・同じ項目に対する操作で、違いが新規登録か既存の変更か（登録／変更／修正の別）だけなら not_applicable にせず conditional とし、condition に原文の前提（「新規登録の手順」など）を写す。\n"
     "- unknown は quote の対象の種類が質問と同じか判断できない場合だけ。質問固有の値が quote に無いことを unknown や conditional の理由にしない（unknown と、原文の条件を書けない conditional は「今回の対象への適用は未確認」として公開される）。\n"
     # 途中の段を「承認者を述べていない」として not_applicable にし、結論が未確認に回っていた (#1383)。
-    "- 多段の質問（対象から答えまでを複数の根拠でつなぐ）では、item が途中の段（対象の台帳の行・略号と部署の対応・部署の承認者・役職ごとの期限など）を示していれば、その item だけで最終の答えにならないこと（承認者・期限を述べていない等）を not_applicable・conditional・unknown の理由にしない。質問の対象、または他の item がつなぐ段の値（略号・部署・役職）について述べた quote は matched。\n"
+    "- 多段の質問（対象から答えまでを複数の根拠でつなぐ）では、item が途中の段（対象の台帳の行・略号と部署の対応・部署の承認者・役職ごとの期限など）を示していれば、その item だけで最終の答えにならないこと（承認者・期限を述べていない等）を not_applicable・conditional・unknown の理由にしない。質問の対象、または他の item がつなぐ段の値（略号・部署・役職）について述べた quote は matched（例: 「A システムの変更の承認の期限は？」に対する「A システムの担当部署: 経」「略号「経」: 経理部」「経理部の承認者は管理本部長」は、どれも期限を述べていないが途中の段なので matched）。\n"
+    "- applicability の「質問の対象」は質問が尋ねている物（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者・時間帯・保管期間）ではない。尋ねている項目を quote が述べていないことは not_applicable の理由にならない。\n"
     "3.3 heading と function_context の扱い\n"
     "- heading は quote が属する文書の見出し（〔マスタ管理⇒マスタ管理2タブ⇒基本設定〕のような画面経路を含む）。文書の見出し分類と番号表記から推定した参考情報で、誤り得る。"
     "text がその画面名・経路・語を使っていることを理由に unsupported にしない。heading が text の画面・機能と違うことだけを理由に unsupported や not_applicable にもしない（判定は quote と function_context の本文で行う）。\n"
@@ -1343,7 +1344,11 @@ def miscopied_sentence(item: GroundedItem, spans: Sequence[dict]) -> dict[str, s
         rest = rest.lstrip().lstrip("。．")  # 照合で無視した句点は前の文に属する
         following = re.match(r"\s*([^。．\n]*[。．]?)", rest)
         original = following.group(1).strip() if following else ""
-        return {"quoted": sentences[count], "original": original} if original else {}
+        if not original:
+            return {}
+        # 写し直す引用の候補（一致した先頭の文と原文の続き）。指摘だけでは是正の回も同じ語を写し誤った。
+        verbatim = (_original_range_at(text, positions, start, start + len(prefix)) + original).strip()
+        return {"quoted": sentences[count], "original": original, "verbatim_quote": verbatim}
     return {}
 
 
@@ -2247,8 +2252,8 @@ _VERBATIM_HINT = ("quote は 1 つの Evidence の連続した原文をそのま
                   "その範囲だけを述べる item にする。")
 
 _MISCOPIED_HINT = ("miscopied.quoted の文は、指した Evidence の原文のその位置では miscopied.original と続いている"
-                   "（隣の行の語の写し誤りか、離れた行のつなぎ合わせ）。原文どおりに写し直すか、離れた行は別の item にするか、"
-                   "その文を quote から外す。")
+                   "（隣の行の語の写し誤りか、離れた行のつなぎ合わせ）。写し直すなら miscopied.verbatim_quote をそのまま quote にする。"
+                   "離れた行は別の item にするか、その文を quote から外す。")
 
 
 def _operation_hint(entry: CheckedItem) -> dict:

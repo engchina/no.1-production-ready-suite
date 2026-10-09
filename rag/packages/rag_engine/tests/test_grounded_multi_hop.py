@@ -144,7 +144,8 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
     result = run(model, ctx, QUESTION).response
 
     dropped = result.generation_trace["rounds"][0]["dropped"]
-    assert dropped[0]["miscopied"] == {"quoted": "管理本部に属します。", "original": "生産本部に属します。"}
+    assert dropped[0]["miscopied"] == {"quoted": "管理本部に属します。", "original": "生産本部に属します。",
+                                       "verbatim_quote": "略号「製」: 製造部。生産本部に属します。"}
     feedback = next(prompt for name, prompt in model.prompts[2:] if name == "GroundedDraft")
     assert '"original": "生産本部に属します。"' in feedback
 
@@ -155,7 +156,8 @@ def test_miscopied_sentence_needs_a_verbatim_first_sentence_in_the_named_evidenc
     def miscopied(evidence_id, quote):
         return grounded.miscopied_sentence(GroundedItem(kind="rule", text="t", evidence_id=evidence_id, quote=quote), spans)
 
-    assert miscopied("E1", "略号「労」: 労務部。生産本部に属します。") == {"quoted": "生産本部に属します。", "original": "管理本部に属します。"}
+    assert miscopied("E1", "略号「労」: 労務部。生産本部に属します。") == {
+        "quoted": "生産本部に属します。", "original": "管理本部に属します。", "verbatim_quote": "略号「労」: 労務部。管理本部に属します。"}
     assert miscopied("E1", "略号「労」: 総務部。管理本部に属します。") == {}  # 先頭の文から違う
     assert miscopied("E2", "略号「労」: 労務部。生産本部に属します。") == {}  # 指した根拠に無い
     assert miscopied("", "略号「労」: 労務部。生産本部に属します。") == {}  # 根拠を指していない
@@ -169,6 +171,7 @@ def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     assert "足りない段を推測で埋めない" in generate
     assert "その item だけで最終の答えにならないこと" in audit_prompt
     assert "「この item だけでは質問に直接答えていない」は not_applicable の理由にならない" in audit_prompt
+    assert "尋ねている項目を quote が述べていないことは not_applicable の理由にならない" in audit_prompt
     assert "つなぐ段のどれかが supported な item に無ければ false" in audit_prompt
     # 監査の prompt は 1 行 1 規則（節見出しと空行を除く）。
     assert all(line.startswith("- ") or line[:1].isdigit() or not line for line in audit_prompt.splitlines())
