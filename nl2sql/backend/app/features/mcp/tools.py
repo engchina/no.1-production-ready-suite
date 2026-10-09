@@ -5,9 +5,16 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
 入る。ここでは画面の route と同じ service 層・業務プロファイルの範囲・ジョブの所有者の判定を使う。
 
 - `nl2sql_list_profiles`: `GET /nl2sql/profiles/search` と同じ範囲の業務プロファイル一覧
-- `nl2sql_recommend_profile`: `POST /nl2sql/recommend-profile`（しきい値未満は推薦なし）
-- `nl2sql_query`: `POST /nl2sql/jobs` でジョブを作り、`wait_seconds` まで結果を待つ
+- `nl2sql_recommend_profile`: `POST /nl2sql/recommend-profile`（しきい値未満は推薦なし。
+  `profile_ids` を渡すとその候補の中からだけ推薦する）
+- `nl2sql_query`: `POST /nl2sql/jobs` でジョブを作り、`wait_seconds` まで結果を待つ。
+  `profile_id` は必須（画面の API と違い、既定の業務プロファイル `"default"` に黙って切り替えない。
+  #1379）
 - `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ）
+
+サービストークンにプロファイルの範囲の claim（`profile_ids`。業務 Agent のデータの範囲。#1379）が
+あれば、業務プロファイルは「利用者の権限 ∩ claim」で判定する: 範囲外の `profile_id` は 403
+（`PROFILE_SCOPE_FORBIDDEN`）、一覧・推薦は範囲で絞る。claim の無い呼び出しは今までどおり。
 """
 
 from __future__ import annotations
@@ -20,6 +27,13 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
+from pr_system_settings.auth.dependencies import service_token_profile_scope
+from pr_system_settings.auth.errors import SecurityApiError
+from pr_system_settings.auth.service_token import (
+    PROFILE_SCOPE_FORBIDDEN_CODE,
+    PROFILE_SCOPE_MAX_IDS,
+    narrow_to_profile_scope,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.concurrency import run_sync_io
@@ -62,7 +76,8 @@ _JOB_NOT_FOUND_MESSAGE = "指定されたジョブが見つかりません。"
 
 _INSTRUCTIONS = (
     "Production Ready NL2SQL のツールです。利用者が使える業務プロファイルの範囲で、"
-    "自然言語の質問から SQL を生成・実行します。業務プロファイルが分からないときは "
+    "自然言語の質問から SQL を生成・実行します。nl2sql_query には業務プロファイルの ID"
+    "（profile_id）が必須です。分からないときは "
     "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。"
     "nl2sql_query が pending / running を返したら、"
     "job_id と wait_seconds（最大 45 秒）を nl2sql_get_job に渡し、"
@@ -89,21 +104,46 @@ def _require_question(value: str) -> str:
     return value
 
 
+def _require_profile_id(value: str) -> str:
+    # 空白だけの ID を既定の業務プロファイルとして扱わない（#1379）。
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("業務プロファイルの ID を指定してください。")
+    return stripped
+
+
 class RecommendProfileInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
+    profile_ids: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=PROFILE_SCOPE_MAX_IDS,
+        description="推薦の候補にする業務プロファイルの ID（省略時は使えるすべて）",
+    )
 
     _validate_question = field_validator("question")(_require_question)
+
+    @field_validator("profile_ids")
+    @classmethod
+    def _validate_profile_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return list(dict.fromkeys(_require_profile_id(item) for item in value))
 
 
 class QueryInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
 
     _validate_question = field_validator("question")(_require_question)
-    profile_id: str | None = Field(
-        default=None,
+    profile_id: str = Field(
+        min_length=1,
         max_length=128,
-        description="使う業務プロファイルの ID。省略時は既定の業務プロファイル",
+        description=(
+            "使う業務プロファイルの ID（必須）。分からないときは nl2sql_list_profiles / "
+            "nl2sql_recommend_profile で選ぶ"
+        ),
     )
+    _validate_profile_id = field_validator("profile_id")(_require_profile_id)
     row_limit: int = Field(
         default=DEFAULT_ROW_LIMIT, ge=1, le=MAX_ROW_LIMIT, description="取得する行数の上限"
     )
@@ -245,8 +285,28 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
     return output
 
 
+def _profile_scope_forbidden(profile_id: str) -> SecurityApiError:
+    return SecurityApiError(
+        403,
+        f"業務プロファイル「{profile_id}」は、この呼び出し元（業務 Agent）の"
+        "データの範囲の外です。nl2sql_list_profiles で使える業務プロファイルを確かめてください。",
+        code=PROFILE_SCOPE_FORBIDDEN_CODE,
+    )
+
+
 def build_mcp_server(request: Request) -> McpServer:
     """リクエストの利用者で判定するツールを持つ MCP サーバーを作る。"""
+
+    def scope() -> frozenset[str] | None:
+        """呼び出し元の範囲（サービストークンの claim。#1379）。None は範囲なし。"""
+        return service_token_profile_scope(request)
+
+    def allowed_profile_ids() -> set[str] | None:
+        """使える業務プロファイル（利用者の権限 ∩ claim）。None は制限なし。"""
+        allowed = narrow_to_profile_scope(
+            allowed_profile_ids_for_request(request, nl2sql_service), scope()
+        )
+        return set(allowed) if allowed is not None else None
 
     def own_job(job_id: str) -> JobData:
         actor_user_uuid, _ = _actor(request)
@@ -278,7 +338,7 @@ def build_mcp_server(request: Request) -> McpServer:
                 limit=arguments.limit,
                 query=arguments.query or "",
                 include_archived=False,
-                allowed_profile_ids=allowed_profile_ids_for_request(request, nl2sql_service),
+                allowed_profile_ids=allowed_profile_ids(),
             )
             return ListProfilesOutput(
                 profiles=[
@@ -297,7 +357,15 @@ def build_mcp_server(request: Request) -> McpServer:
     @_translate_domain_errors
     async def recommend_profile(arguments: RecommendProfileInput) -> RecommendProfileOutput:
         def run() -> RecommendProfileOutput:
-            allowed = allowed_profile_ids_for_request(request, nl2sql_service)
+            allowed = allowed_profile_ids()
+            if arguments.profile_ids is not None:
+                # 候補の一覧（#1379）。権限・claim の外の ID は候補にしない（積）。
+                requested = set(arguments.profile_ids)
+                allowed = requested if allowed is None else allowed & requested
+            if allowed is not None and not allowed:
+                return RecommendProfileOutput(
+                    recommended_profile_id=None, rewritten_question=None, candidates=[]
+                )
             try:
                 data = nl2sql_service.recommend_profile(
                     ProfileRecommendationRequest(question=arguments.question),
@@ -333,13 +401,16 @@ def build_mcp_server(request: Request) -> McpServer:
 
     @_translate_domain_errors
     async def query(arguments: QueryInput) -> Nl2SqlJobResult:
-        assert_profile_access(request, arguments.profile_id, default_profile=True)
+        scoped = scope()
+        if scoped is not None and arguments.profile_id not in scoped:
+            raise _profile_scope_forbidden(arguments.profile_id)
+        assert_profile_access(request, arguments.profile_id)
         actor_user_uuid, actor_is_system_admin = _actor(request)
         # 画面の既定値（engine / use_ontology_context 等は JobCreateRequest の既定）で作る。
         # row_limit は必ず渡す（None だと全件を取得する）。
         job_request = JobCreateRequest(
             question=arguments.question,
-            profile_id=arguments.profile_id or None,
+            profile_id=arguments.profile_id,
             row_limit=arguments.row_limit,
         )
         try:
@@ -368,7 +439,10 @@ def build_mcp_server(request: Request) -> McpServer:
         ),
         McpTool(
             name="nl2sql_recommend_profile",
-            description="質問に合う業務プロファイルを推薦します。推薦できないときは null です。",
+            description=(
+                "質問に合う業務プロファイルを推薦します。推薦できないときは null です。"
+                "profile_ids を渡すと、その中からだけ推薦します。"
+            ),
             input_model=RecommendProfileInput,
             handler=recommend_profile,
             output_model=RecommendProfileOutput,

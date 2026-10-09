@@ -94,13 +94,28 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - 認証: 呼び出し元は `pr_system_settings.auth.service_token.issue_service_token` で `sub` = 利用者の `user_uuid`、`aud` = 呼び先（`rag` / `nl2sql`）の短命の token（HS256、既定 60 秒）を作り、`Authorization: Bearer` で送る。鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（32 文字以上。空なら 503）。
 - 呼び先は `authorize_request(..., service_token_paths={"/mcp"}, service_token_audience="<製品>")` を渡す。その path では Cookie の代わりに token の利用者を `principal_for_worker` で組み立てる（現在のロール・権限・対象範囲を使い、無効・初回パスワード変更待ちの利用者は 403）。Cookie を使わないので CSRF は照合しない。claims（`run_id` など）は `request.state.service_token_claims`。
 - ツールの権限と対象範囲（検索・回答プロファイル / KB / 業務プロファイル / DeepSec）は、画面と同じ service 層で判定する。
+- 呼び出し元の用途による範囲（#1379）: Agent は業務 Agent の定義でデータの範囲（使える RAG の検索・回答プロファイル /
+  NL2SQL の業務プロファイル）を設定したとき、その接続（= `aud`）の ID を任意の claim `profile_ids` に入れる
+  （`issue_service_token(..., profile_ids=...)`。範囲が未設定なら claim を付けない。名前と形の正本は
+  `pr_system_settings.auth.service_token` の `PROFILE_SCOPE_CLAIM`）。claim は 1〜50 件の 128 文字以内の ID の一覧で、
+  形が違う token は 401（壊れた範囲を「範囲なし」として通さない）。
+  - 呼び先は「利用者の権限 ∩ claim」で判定する（`service_token_profile_scope(request)` と `narrow_to_profile_scope`）。
+    claim は利用者の権限を広げない。claim の無い呼び出しの判定は変えない。
+  - claim の範囲外のプロファイルを指定した呼び出し（と、範囲があるのにプロファイルの指定が無い呼び出し）は 403
+    （`structuredContent.error_code` が `PROFILE_SCOPE_FORBIDDEN`。`PROFILE_SCOPE_FORBIDDEN_CODE`）。一覧・推薦のツールは
+    範囲で絞る。RAG はナレッジベースも範囲のプロファイルの参照先に絞り、文書を読むツールも範囲の中だけを読む
+    （RAG の `docs/rag-architecture.md`「Agent からの呼び出し（MCP）」、NL2SQL の `docs/security-rbac-deepsec.md`
+    「業務 Agent のデータの範囲」）。
+  - 呼び出し元（Agent の組み込み Runtime）も同じ範囲を tool handler で強制する（多層の防御。Agent の
+    `features/agent/data_scope.py`）。呼び先の強制は、Runtime の不具合・新しいツールの追加漏れ・Runtime を通さない
+    呼び出しでも範囲を越えさせないためのもの。
 - 呼び先がブラウザで開く短命の URL を返すとき（RAG の図の根拠。#1311）は、呼び出し元の画面の操作だけに限るため claim の
   `purpose`（例: `figure_url`）を確かめ、Run の中でモデルが呼んだ token（`purpose` 無し）では作らない。URL のトークンは
   サービストークンの鍵そのものでは署名せず、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で用途の印を変えて導いた鍵で
   署名し、利用者・対象・版・期限（5 分以内）に縛る。トークンは URL の path に置いてアクセスログで伏せ、読むたびに
   利用者の今の権限と対象の版を確かめ直す（RAG の `app/rag/figure_url.py`・`app/api/routes/figures.py`）。
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
-- ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248）。RAG / NL2SQL の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp_contract.py` が送る引数の収まりと、読む出力の項目（入れ子を含む）が呼び先の出力にあることを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
+- ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248）。RAG / NL2SQL の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp.py` が組み込み Skill の使うツールが契約にあることと、契約どおりの fake の MCP（`tests/mcp_support.py`）の引数が契約（必須の項目・項目の名前）と合うことを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
 
 ## チャットの処理の段階の配信（#1359）
 

@@ -638,6 +638,14 @@ class _ToolRecorder:
         if scoped is not None and scoped.error is not None:
             # 範囲外は呼び先へ送らない（予算にも数えない）。step には拒否を残す。
             return self.reject_out_of_scope(call, scoped)
+        missing = (
+            data_scope.missing_profile_error(name, call_arguments)
+            if definition is not None
+            else None
+        )
+        if missing is not None:
+            # 必須のプロファイルが無い（#1379）: 呼び先へ送らずに、選ぶツールを案内する。
+            return self.reject_call(call, missing)
         # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
         exceeded = self.budget.reserve(name) if self.budget is not None else None
         step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
@@ -688,9 +696,13 @@ class _ToolRecorder:
 
     def reject_out_of_scope(self, call: ToolCall, scoped: data_scope.ScopeEnforcement) -> str:
         """範囲の外のプロファイルの呼び出しを、呼び先へ送らずにツールのエラーにする（#1378）。"""
+        return self.reject_call(call, scoped.error_payload())
+
+    def reject_call(self, call: ToolCall, payload: dict[str, Any]) -> str:
+        """呼び先へ送らずにツールのエラーにする（step に拒否を残し、モデルへ案内を返す）。"""
         from app.features.agent.runtime import runtime_repository
 
-        payload = scoped.error_payload()
+        error_code = str(payload.get("error_code") or "")
         step_id, _context = runtime_repository.start_builtin_tool_step(self.run_id, call)
         runtime_repository.finish_builtin_tool_step(
             self.run_id,
@@ -698,14 +710,14 @@ class _ToolRecorder:
             ToolResult(
                 name=call.name,
                 success=False,
-                error=scoped.error,
-                error_code=data_scope.DATA_SCOPE_VIOLATION_CODE,
+                error=str(payload.get("error") or ""),
+                error_code=error_code,
                 error_details={key: value for key, value in payload.items() if key != "error"},
             ),
         )
         logger.info(
-            "builtin_runtime_data_scope_rejected",
-            extra={"run_id": self.run_id, "tool_name": call.name},
+            "builtin_runtime_tool_call_rejected",
+            extra={"run_id": self.run_id, "tool_name": call.name, "error_code": error_code},
         )
         return json.dumps(payload, ensure_ascii=False)
 
@@ -831,6 +843,11 @@ class _ToolRecorder:
     ) -> ToolResult:
         from app.features.agent.runtime import runtime_repository
 
+        if self.data_scopes:
+            # 呼び先でも範囲を強制させる（サービストークンの claim `profile_ids`。#1379）。
+            context = context.model_copy(
+                update={"profile_scopes": data_scope.token_profile_scopes(self.data_scopes)}
+            )
         result = await asyncio.to_thread(
             tool_registry.invoke,
             call,
@@ -1331,7 +1348,9 @@ async def _finish(
     validation: dict[str, Any] | None = None
     if get_settings().agent_final_validation_enabled:
         try:
-            answer, validation = await _validate_final_answer(run_id, answer, rag_tools=rag_tools)
+            answer, validation = await _validate_final_answer(
+                run_id, answer, rag_tools=rag_tools, data_scopes=data_scopes
+            )
         except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
             logger.warning(
                 "builtin_runtime_answer_validation_failed",
@@ -1394,7 +1413,11 @@ def has_rag_evidence_tools(sdk_agent: Agent[Any] | None, skill_ids: list[str]) -
 
 
 async def _validate_final_answer(
-    run_id: str, answer: str, *, rag_tools: bool = False
+    run_id: str,
+    answer: str,
+    *,
+    rag_tools: bool = False,
+    data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """回答の最終の検証（#1246・#1277）。検証の結果を成果物に残し、利用者に見せる回答と、
     成果物の内容（回答の対応を決めるのに使う。#1305）を返す。
@@ -1433,7 +1456,7 @@ async def _validate_final_answer(
         content = validation_content(STATUS_SKIPPED, reason=REASON_EMPTY_ANSWER, evidence=refs)
         return answer, save(content)
     validations = [
-        await _validate_with_connection(run, answer, evidence_tool, items)
+        await _validate_with_connection(run, answer, evidence_tool, items, data_scopes)
         for evidence_tool, items in groups
     ]
     content, published = combine_validations(answer, validations)
@@ -1441,7 +1464,11 @@ async def _validate_final_answer(
 
 
 async def _validate_with_connection(
-    run: Any, answer: str, evidence_tool: str, refs: list[dict[str, Any]]
+    run: Any,
+    answer: str,
+    evidence_tool: str,
+    refs: list[dict[str, Any]],
+    data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> dict[str, Any]:
     """1 つの MCP 接続の根拠で `rag_validate_answer` を呼び、接続ごとの内容を返す。
 
@@ -1484,7 +1511,10 @@ async def _validate_with_connection(
             **connection,
         )
     definition = mcp_tool_definition(config, tool)
-    step_id, result = await _ToolRecorder(run.id).call(
+    recorder = _ToolRecorder(run.id)
+    # 根拠の読み直しも Run と同じデータの範囲で行う（サービストークンの claim。#1379）。
+    recorder.data_scopes = dict(data_scopes or {})
+    step_id, result = await recorder.call(
         ToolCall(
             name=definition.name,
             arguments={

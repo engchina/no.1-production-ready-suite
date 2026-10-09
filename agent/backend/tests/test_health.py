@@ -3062,7 +3062,10 @@ def test_tool_guardrail_masks_sensitive_fields_and_audits_injection(
     config = runtime_config_store.get_mcp("nl2sql")
     info = ExternalMcpToolInfo(name="nl2sql_query", function_name="nl2sql__nl2sql_query")
     result = tool_registry.invoke(
-        ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "危険な出力を確認"}),
+        ToolCall(
+            name="nl2sql__nl2sql_query",
+            arguments={"question": "危険な出力を確認", "profile_id": "profile-sales"},
+        ),
         policy=ToolPolicy(allow={"nl2sql__nl2sql_query"}),
         context=ToolInvocationContext(user_uuid="user-guardrail"),
         definition=mcp_tool_definition(config, info),

@@ -3,7 +3,7 @@
 `pr_backend_core.mcp.McpServer` で契約（#230〜#233）のツールを持つサーバーを作り、
 `httpx.MockTransport` で Agent の `httpx.Client` の送信先にする。サービストークンは
 `verify_service_token` で検証し、呼び出しごとの claims（`sub` / `aud` / `run_id` /
-`agent_id`）を記録する。
+`agent_id` / データの範囲の `profile_ids`。#1379）を記録する。
 """
 
 from __future__ import annotations
@@ -62,7 +62,9 @@ class RagLookupGuidesIn(_ContractInput):
 
 class RagReadSourceIn(_ContractInput):
     document_id: str
-    chunk_id: str
+    # chunk_id か要素の定位子（locator。#1330）のどちらかで読む。
+    chunk_id: str | None = None
+    locator: str | None = Field(default=None, min_length=1, max_length=1024)
     offset: int = Field(default=0, ge=0)
     max_chars: int = Field(default=8000, ge=1, le=20000)
     # 図の根拠の元の画像（#1282）と、画面で開く短命の URL（#1311）。
@@ -119,7 +121,8 @@ class RagListSearchAnswerProfilesIn(_ContractInput):
 
 class Nl2SqlQueryIn(_ContractInput):
     question: str = Field(min_length=1, max_length=4000)
-    profile_id: str | None = None
+    # 契約どおり必須（"default" に切り替えない。#1379）。
+    profile_id: str = Field(min_length=1, max_length=128)
     row_limit: int = Field(default=100, ge=1, le=1000)
     wait_seconds: int = Field(default=40, ge=0, le=45)
 
@@ -136,6 +139,7 @@ class Nl2SqlListProfilesIn(_ContractInput):
 
 class Nl2SqlRecommendProfileIn(_ContractInput):
     question: str = Field(min_length=1, max_length=4000)
+    profile_ids: list[str] | None = Field(default=None, min_length=1, max_length=50)
 
 
 def _job(status: str = "done") -> dict[str, Any]:

@@ -18,6 +18,9 @@
 
 RAG のチャットは画面の機能で、MCP では提供しない（#787）。MCP で提供するのは検索と根拠の
 読み取りだけにする。
+
+サービストークンにデータの範囲の claim（`profile_ids`。業務 Agent の定義。#1379）があれば、
+すべてのツールを「利用者の権限 ∩ 範囲」で判定する（`app.mcp.profile_scope`）。
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import hashlib
 import json
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, get_args
@@ -49,6 +52,12 @@ from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.mcp.profile_scope import (
+    ProfileScope,
+    check_profile,
+    check_search,
+    within_profile_scope,
+)
 from app.rag.answer_validation import (
     EvidenceRef,
     GuideCheckRef,
@@ -181,12 +190,18 @@ class SearchInput(BaseModel):
     search_answer_profile_id: OptionalText = Field(
         default=None,
         max_length=128,
-        description="検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。",
+        description=(
+            "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。"
+            "呼び出し元（業務 Agent）にデータの範囲があるときは必須。"
+        ),
     )
     knowledge_base_ids: list[str] = Field(
         default_factory=list,
         max_length=200,
-        description="検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。",
+        description=(
+            "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。"
+            "呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。"
+        ),
     )
     top_k: int | None = Field(default=None, ge=1, le=100, description="検索する件数。")
     filters: dict[str, str] = Field(
@@ -1864,8 +1879,31 @@ def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
     return FigureUrlRequest(subject=subject, base_url=str(http_request.base_url))
 
 
+def _check_search_scope(scope: ProfileScope | None, arguments: SearchInput) -> None:
+    check_search(scope, arguments.search_answer_profile_id, arguments.knowledge_base_ids)
+
+
+def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput) -> None:
+    check_profile(scope, arguments.search_answer_profile_id)
+
+
+def _check_validate_scope(scope: ProfileScope | None, arguments: ValidateAnswerInput) -> None:
+    if arguments.guide is not None:
+        check_profile(scope, arguments.guide.search_answer_profile_id)
+
+
 def build_rag_mcp_server(http_request: Request) -> McpServer:
-    """1 リクエスト分の MCP サーバー（rate limit に呼び出し元の request を使う）。"""
+    """1 リクエスト分の MCP サーバー（rate limit に呼び出し元の request を使う）。
+
+    handler はデータの範囲（サービストークンの claim。#1379）の判定と、範囲に絞った監査 context の
+    中で実行する（`within_profile_scope`。claim が無ければ今までどおり）。
+    """
+
+    def scoped[A, R](
+        handler: Callable[[A], Awaitable[R]],
+        check: Callable[[ProfileScope | None, A], None] | None = None,
+    ) -> Callable[[A], Awaitable[R]]:
+        return within_profile_scope(http_request, handler, check)
 
     async def list_search_answer_profiles(
         arguments: ListSearchAnswerProfilesInput,
@@ -2023,7 +2061,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_list_search_answer_profiles",
                 description="利用できる検索・回答プロファイル（ACTIVE）の一覧を返します。",
                 input_model=ListSearchAnswerProfilesInput,
-                handler=list_search_answer_profiles,
+                handler=scoped(list_search_answer_profiles),
                 output_model=ListSearchAnswerProfilesOutput,
                 permissions=(SEARCH_ANSWER_PROFILE_READ_PERMISSIONS,),
             ),
@@ -2034,7 +2072,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "回答に使ったか付き）と回答を返します。"
                 ),
                 input_model=SearchInput,
-                handler=search,
+                handler=scoped(search, _check_search_scope),
                 output_model=SearchOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -2045,7 +2083,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "引き継ぎ先）を返します。回答は作りません。"
                 ),
                 input_model=LookupGuidesInput,
-                handler=lookup_guides,
+                handler=scoped(lookup_guides, _check_guides_scope),
                 output_model=LookupGuidesOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -2056,7 +2094,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
                 ),
                 input_model=RetrieveEvidenceInput,
-                handler=retrieve_evidence,
+                handler=scoped(retrieve_evidence, _check_search_scope),
                 output_model=RetrieveEvidenceOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -2071,7 +2109,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "決定的に確かめます。"
                 ),
                 input_model=ValidateAnswerInput,
-                handler=validate,
+                handler=scoped(validate, _check_validate_scope),
                 output_model=ValidateAnswerOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -2083,7 +2121,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "元の画像の領域を画像（content の image）で返します。"
                 ),
                 input_model=ReadSourceInput,
-                handler=read,
+                handler=scoped(read),
                 output_model=ReadSourceOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -2095,7 +2133,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "長い文書のどこを読むかを決めるときに使います。"
                 ),
                 input_model=OutlineInput,
-                handler=outline_document,
+                handler=scoped(outline_document),
                 output_model=OutlineOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -2107,7 +2145,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "「第 3 章を参照」の先を確かめるときに使います。"
                 ),
                 input_model=ReadDocumentInput,
-                handler=read_document,
+                handler=scoped(read_document),
                 output_model=ReadDocumentOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
