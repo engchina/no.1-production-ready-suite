@@ -550,6 +550,46 @@ def test_evidence_groups_take_read_source_and_read_document_chunks() -> None:
     ]
 
 
+def test_evidence_groups_keep_chunks_the_answer_cited_within_the_limit() -> None:
+    """多段の質問の評価の Run の形（#1364）: 3 回の検索で 36 件の根拠を集め、回答が 1 回目の
+    検索の根拠（台帳の行）を引用した。新しい順の 30 件で切ると台帳の行が検証に入らず、正しい結論が
+    「確かめられない」になっていた。回答が引用した根拠は上限の中に入れる。"""
+
+    def evidence(call: int) -> dict[str, Any]:
+        return {
+            "evidence": [
+                {"document_id": f"doc-{call}", "chunk_id": f"doc-{call}:set:{index}"}
+                for index in range(1, 13)
+            ]
+        }
+
+    steps = [
+        _step("rag__rag_retrieve_evidence", {"query": f"段 {call}"}, evidence(call))
+        for call in (1, 2, 3)
+    ]
+    # `doc-1:set:1` は `doc-1:set:12` の先頭と同じだが、回答が書いたのは :12 だけ。
+    answer = (
+        "台帳の行で担当部署は経理部です【evidence_id:doc-1:set:12】。"
+        "経理部の承認者は管理本部長です【evidence_id: doc-2:set:3】。"
+    )
+
+    [(tool_name, refs)] = run_evidence_groups(steps, answer)
+
+    assert tool_name == "rag__rag_retrieve_evidence"
+    assert len(refs) == 30
+    # 回答が引用した根拠を先に（新しい呼び出しから順）、残りは新しい呼び出しから順。
+    assert refs[:2] == [
+        {"document_id": "doc-2", "chunk_id": "doc-2:set:3"},
+        {"document_id": "doc-1", "chunk_id": "doc-1:set:12"},
+    ]
+    # 残りは新しい呼び出しから順（1 回目の検索は前から 5 件まで）。
+    assert refs[2] == {"document_id": "doc-3", "chunk_id": "doc-3:set:1"}
+    assert refs[-1] == {"document_id": "doc-1", "chunk_id": "doc-1:set:5"}
+    # 回答を渡さなければ今までどおり新しい順の 30 件（1 回目の検索の後ろ 6 件は入らない）。
+    [(_name, newest)] = run_evidence_groups(steps)
+    assert {"document_id": "doc-1", "chunk_id": "doc-1:set:12"} not in newest
+
+
 PARAGRAPH_A = "契約の更新は 30 日前までに申し出ます。"
 PARAGRAPH_B = "更新の手数料は無料です。"
 
