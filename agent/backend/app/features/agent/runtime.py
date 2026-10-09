@@ -24,17 +24,26 @@ from uuid import uuid4
 
 from pr_backend_core import Page
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
+from pr_backend_core.chat_progress import (
+    ChatProgressEvent,
+    ChatProgressStepEvent,
+    ChatProgressTerminalEvent,
+    dump_chat_progress_events,
+    parse_chat_progress_events,
+)
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
 from pydantic import (
     BaseModel,
     Field,
     ValidationError,
     computed_field,
+    field_serializer,
     field_validator,
     model_validator,
 )
 
 from app.features.agent import storage_backend
+from app.features.agent.chat_progress import record_run_progress
 from app.features.agent.config import runtime_config_store
 from app.features.agent.support_task import (
     SUPPORT_TASK_KIND,
@@ -435,8 +444,29 @@ class RunState(BaseModel):
     admin_review: RunFeedback | None = None
     # モデルの利用量（#772）。組み込み Runtime がモデルを呼ぶ前の Run・#772 より前の Run は None。
     usage: RunUsage | None = None
+    # チャットの処理の段階のイベント（3 製品共通の契約。#1359）。Run のイベントを足すたびに
+    # `chat_progress.record_run_progress` が Run の状態から記録する。checkpoint の snapshot に入る
+    # ので、memory / file / Oracle のどの保存先でも Run と一緒に残る。
+    progress_events: list[ChatProgressEvent] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+    @field_validator("progress_events", mode="before")
+    @classmethod
+    def _parse_progress_events(cls, value: object) -> object:
+        # 形の違う要素は捨てる（壊れた記録で Run の読み込みを止めない・退避しない）。
+        if isinstance(value, list) and all(
+            isinstance(item, ChatProgressStepEvent | ChatProgressTerminalEvent) for item in value
+        ):
+            return value
+        return parse_chat_progress_events(value)
+
+    @field_serializer("progress_events")
+    def _dump_progress_events(
+        self, value: list[ChatProgressStepEvent | ChatProgressTerminalEvent]
+    ) -> list[JsonObject]:
+        # 値の無い項目は出さない（契約の JSON と同じ形）。
+        return dump_chat_progress_events(value)
 
 
 class ThreadNotFoundError(LookupError):
@@ -1754,6 +1784,8 @@ class AgentRuntimeRepository:
             payload=payload or {},
         )
         run.events.append(event)
+        # 処理の段階（#1359）は Run の状態から照合して記録する（変わらなければ記録しない）。
+        record_run_progress(run)
         record_runtime_event(event.type.value, {"run_id": run.id, **event.payload})
         self._condition.notify_all()
 
@@ -3202,6 +3234,8 @@ def _repair_run(run: RunState) -> list[str]:
                 payload={"source": "storage_repair", "repairs": list(repairs)},
             )
         )
+        # 直した状態（失敗にした Run など）を処理の段階にも反映する（#1359）。
+        record_run_progress(run)
     return repairs
 
 
