@@ -128,7 +128,11 @@ describe("streamChatMessage", () => {
     const encoder = new TextEncoder();
     const chunks = [
       ": keepalive\n\n",
-      `event: progress\ndata: ${JSON.stringify({ model_id: "m1", steps: [] })}\n\n`,
+      `event: chat_progress\ndata: ${JSON.stringify({
+        model_id: "m1",
+        message_id: "a1",
+        event: { schema_version: 1, seq: 1, target_id: "a1", attempt: 0, emitted_at: "", type: "step", step_id: "retrieve", status: "pending" },
+      })}\n\n`,
       ": keepalive\n\n",
       `event: all_done\ndata: ${JSON.stringify({ conversation_id: "c1" })}\n\n`,
     ];
@@ -143,12 +147,12 @@ describe("streamChatMessage", () => {
       vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }))
     );
     const onActivity = vi.fn();
-    const onProgress = vi.fn();
-    const outcome = await streamChatMessage("c1", { content: "質問" }, { onActivity, onProgress });
+    const onChatProgress = vi.fn();
+    const outcome = await streamChatMessage("c1", { content: "質問" }, { onActivity, onChatProgress });
     expect(outcome).toEqual({ completed: true });
     // 応答の受け取り（1 回）と、届いたバイトごと。
     expect(onActivity.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onChatProgress).toHaveBeenCalledTimes(1);
   });
 
   it("非 2xx は ApiError を投げる", async () => {

@@ -22,10 +22,15 @@ import {
   useConfirm,
   ChatUserMessage,
   createOptimisticChatMessage,
-  useChatProgressTracker,
+  chatProgressStepsFromEvents,
+  parseChatProgressEvents,
+  parseChatProgressPage,
+  useChatProgressStream,
   withOptimisticChatStatus,
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
+  type ChatProgressEvent,
+  type ChatProgressPage,
   type ChatProgressStep,
   useChatAutoScroll,
   useChatHistoryPanel,
@@ -70,8 +75,9 @@ import type {
 import { api, ApiError } from "@/lib/api";
 import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
 import { ClarificationChoice } from "./ClarificationChoice";
-import { chatProgressStepsFromEvent, chatSubmitProgressSteps } from "@/lib/chat-progress";
+import { CHAT_PROGRESS_DEFINITIONS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import {
+  chatAnswerProgressStreamUrl,
   isChatStreamGone,
   newChatClientMessageId,
   resumeChatStream,
@@ -168,8 +174,10 @@ interface LiveColumn {
   guardrailWarnings: string[];
   /** 回答の根拠・実行記録(無い回答では null)。 */
   answerDiagnostics: unknown;
-  /** 処理の段階（3 製品共通の ChatProgressStep。#1146）。最初の `progress` が届くまでは空。 */
-  progressSteps: ChatProgressStep[];
+  /** 作成中の回答のメッセージ（段階のイベントの対象）。`start` が届くまでは null。 */
+  messageId: string | null;
+  /** 処理の段階のイベント（3 製品共通の契約。#1359）。最初の `chat_progress` が届くまでは空。 */
+  progressEvents: ChatProgressEvent[];
   startedAtMs: number;
 }
 
@@ -620,9 +628,9 @@ export function ChatClient() {
   });
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
-  // この画面で送って保存された回答の処理の段階（message_id → 段階。#1146）。段階は保存しないので、
-  // 会話を取り直した後も、この画面を開いている間は回答の上に「処理の経過」を残す。
-  const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressStep[]>>({});
+  // この画面で送って保存された回答の処理の段階のイベント（message_id → イベント。#1146 / #1359）。保存済みの
+  // 回答の段階（`progress`）が無いとき（保存に失敗した・取り直しが間に合わない）も、この画面の間は「処理の経過」を残す。
+  const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressEvent[]>>({});
   const [errorText, setErrorText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
@@ -676,8 +684,6 @@ export function ChatClient() {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // 回答の配信（SSE）の状態を追う（3 製品共通の useChatProgressTracker。#1160）。質問が保存された（start）後に
-  // 配信が途絶えたら接続を張り直し、切れたら続きから購読し直す（#1175。回答の作成は接続が切れても続く）。
   const liveTurnRef = useRef<LiveTurn | null>(liveTurn);
   const activeIdRef = useRef(activeId);
   useLayoutEffect(() => {
@@ -688,13 +694,6 @@ export function ChatClient() {
   const connectionRef = useRef<AbortController | null>(null);
   /** 最後に配信のバイト（event・heartbeat）が届いた時刻。 */
   const streamActivityAtRef = useRef(0);
-  const streamTracker = useChatProgressTracker({
-    key: liveTurn?.user?.message_id ?? null,
-    steps: liveTurn?.columns[0]?.progressSteps ?? [],
-    active: sending && liveTurn?.user != null && liveTurn.pending.status === "sending",
-    refresh: reconnectStalledStream,
-    staleAfterMs: CHAT_STREAM_STALE_AFTER_MS,
-  });
 
   /** 配信を閉じて送信中の状態を解く（回答がそろった・保存済みの会話に引き継いだとき）。 */
   function finishStream() {
@@ -774,6 +773,70 @@ export function ChatClient() {
   const savedStreamingUserId =
     turns.find((turn) => turn.replies.some((reply) => reply.status === "STREAMING"))?.user.message_id ?? null;
   const answerInProgress = sending || savedStreamingUserId !== null;
+
+  // 処理の段階の配信を受け取る（3 製品共通の useChatProgressStream。#1359）。追う対象は 1 つ:
+  // - 作成中の今のターン（`start` の後）: 最初の列の回答。段階のイベントは回答の配信（SSE の `chat_progress`）で届く
+  //   （`events`）。配信のバイトが途絶えたら接続を張り直し、切れたら続きから購読し直す（#1160 / #1175）。ほかの列は
+  //   受け取ったイベントから組み立てる。
+  // - 保存済みの作成中の回答（再読込の後・別の worker に引き継いだ後）: 段階の SSE（保存済みの記録を読み直す）で
+  //   受け取り、使えなければ polling に縮退する。完了は会話の取り直しで保存済みの回答に置き換える。
+  const liveProgressColumn = liveTurn?.user ? liveTurn.columns[0] : undefined;
+  const liveProgressKey = liveProgressColumn?.messageId ?? null;
+  const savedProgress = useMemo(() => {
+    if (liveProgressKey !== null || savedStreamingUserId === null) return null;
+    const reply = turns
+      .find((turn) => turn.user.message_id === savedStreamingUserId)
+      ?.replies.find((candidate) => candidate.status === "STREAMING");
+    return reply ? { messageId: reply.message_id, events: parseChatProgressEvents(reply.progress) } : null;
+  }, [turns, savedStreamingUserId, liveProgressKey]);
+  const savedProgressReplyId = savedProgress?.messageId ?? null;
+  const savedProgressConversationId = savedProgressReplyId !== null ? activeId : null;
+  const progressStream = useChatProgressStream({
+    key: liveProgressKey ?? savedProgressReplyId,
+    definitions: CHAT_PROGRESS_DEFINITIONS,
+    events: liveProgressKey !== null ? liveProgressColumn?.progressEvents : savedProgress?.events,
+    streamUrl:
+      savedProgressConversationId && savedProgressReplyId
+        ? chatAnswerProgressStreamUrl(savedProgressConversationId, savedProgressReplyId)
+        : null,
+    fetchEvents:
+      savedProgressConversationId && savedProgressReplyId
+        ? (since, signal) => fetchAnswerProgress(savedProgressConversationId, savedProgressReplyId, since, signal)
+        : undefined,
+    active:
+      liveProgressKey !== null
+        ? sending && liveTurn?.pending.status === "sending" && liveProgressColumn?.status === "streaming"
+        : undefined,
+    onStalled: liveProgressKey !== null ? reconnectStalledStream : undefined,
+    onTerminal: () => {
+      // 保存済みの作成中の回答が終わった。会話を取り直して保存済みの回答に置き換える（polling を待たない）。
+      if (liveTurnRef.current === null && activeIdRef.current) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(activeIdRef.current) });
+      }
+    },
+    staleAfterMs: CHAT_STREAM_STALE_AFTER_MS,
+  });
+
+  /** 段階の polling（SSE が使えないとき）。回答が無ければ null（追うのをやめる）。 */
+  async function fetchAnswerProgress(
+    conversationId: string,
+    messageId: string,
+    since: number,
+    signal: AbortSignal
+  ): Promise<ChatProgressPage | null> {
+    try {
+      return parseChatProgressPage(await api.getChatAnswerProgress(conversationId, messageId, since, signal));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  /** 列の段階（追っている対象は配信の hook、ほかはイベントから組み立てる）。 */
+  function columnProgressSteps(messageId: string | null, events: readonly ChatProgressEvent[]): ChatProgressStep[] {
+    if (messageId !== null && messageId === (liveProgressKey ?? savedProgressReplyId)) return progressStream.steps;
+    return chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS, messageId);
+  }
 
   function selectConversation(id: string) {
     // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
@@ -919,7 +982,8 @@ export function ChatClient() {
       errorMessage: null,
       guardrailWarnings: [],
       answerDiagnostics: null,
-      progressSteps: [],
+      messageId: null,
+      progressEvents: [],
       startedAtMs,
     }));
   }
@@ -1092,8 +1156,8 @@ export function ChatClient() {
     let lastEventId = 0;
     let eventsOnConnection = 0;
     stampNow(streamActivityAtRef);
-    // モデルごとの最新の処理の段階（完了した回答の上に残すため。#1146）。
-    const latestProgress = new Map<string, ChatProgressStep[]>();
+    // モデルごとの処理の段階のイベント（完了した回答の上に残すため。#1146 / #1359）。
+    const latestProgress = new Map<string, ChatProgressEvent[]>();
     const handlers: ChatStreamHandlers = {
       onStart: ({ user_message, columns }) => {
         started = true;
@@ -1117,16 +1181,33 @@ export function ChatClient() {
                   errorMessage: null,
                   guardrailWarnings: [],
                   answerDiagnostics: null,
-                  progressSteps: [],
+                  messageId: column.message_id ?? null,
+                  progressEvents: [],
                   startedAtMs: current.pending.sentAtMs,
                 })),
               }
             : current
         );
       },
-      onProgress: (modelId, steps) => {
-        latestProgress.set(modelId, steps);
-        updateColumn(modelId, { progressSteps: steps });
+      onChatProgress: ({ model_id, message_id, event }) => {
+        latestProgress.set(model_id, [...(latestProgress.get(model_id) ?? []), event]);
+        // イベントを列に積む（重複・古いものは組み立て〔seq〕で捨てる）。
+        setLiveTurn((current) =>
+          current
+            ? {
+                ...current,
+                columns: current.columns.map((column) =>
+                  column.model_id === model_id
+                    ? {
+                        ...column,
+                        messageId: column.messageId ?? message_id,
+                        progressEvents: [...column.progressEvents, event],
+                      }
+                    : column
+                ),
+              }
+            : current
+        );
       },
       onDelta: (modelId, text) => {
         setLiveTurn((current) => {
@@ -1149,9 +1230,9 @@ export function ChatClient() {
       onModelDone: ({ model_id, message_id }) => {
         updateColumn(model_id, { status: "done" });
         // 取り直した会話（保存した回答）でも、この画面の間は処理の経過を回答の上に残す（#1146）。
-        const steps = latestProgress.get(model_id);
-        if (message_id && steps?.length) {
-          setFinishedProgress((current) => ({ ...current, [message_id]: steps }));
+        const events = latestProgress.get(model_id);
+        if (message_id && events?.length) {
+          setFinishedProgress((current) => ({ ...current, [message_id]: events }));
         }
       },
       onModelError: ({ model_id, message, cancelled }) =>
@@ -1167,7 +1248,7 @@ export function ChatClient() {
       },
       onActivity: () => {
         stampNow(streamActivityAtRef);
-        streamTracker.touch();
+        progressStream.touch();
       },
       onEventId: (id) => {
         lastEventId = id;
@@ -1220,7 +1301,7 @@ export function ChatClient() {
           if (connectionRef.current === connection) connectionRef.current = null;
         }
         // 質問の保存の後に接続が切れた。回答の作成は続いているので、「接続を確認しています」を出して購読し直す。
-        streamTracker.refreshNow();
+        progressStream.refreshNow();
         resumeFailures = eventsOnConnection > 0 ? 1 : resumeFailures + 1;
         if (gone || resumeFailures > CHAT_STREAM_RESUME_ATTEMPTS) {
           // この接続先では続きを購読できない。保存済みの会話（作成中の回答）に引き継いで polling で待つ。
@@ -1308,10 +1389,10 @@ export function ChatClient() {
         guardrailWarnings: column.guardrailWarnings,
         answerDiagnostics: column.answerDiagnostics,
         progress: {
-          steps: column.progressSteps,
+          steps: columnProgressSteps(column.messageId, column.progressEvents),
           startedAtMs: column.startedAtMs,
-          // 配信が途絶え、保存済みの回答を取り直している間は「接続を確認しています」（#1160）。
-          reconnecting: streamTracker.reconnecting && column.status === "streaming",
+          // 配信が途絶え、接続を張り直している間は「接続を確認しています」（#1160）。
+          reconnecting: progressStream.reconnecting && column.status === "streaming",
         },
       }))
     : [];
@@ -1664,10 +1745,14 @@ export function ChatClient() {
                     }
                     testId={turn.user.message_id === savedStreamingUserId ? "chat-saved-streaming-turn" : undefined}
                     columns={turn.replies.map((reply) => {
-                      // 保存した処理の段階（#1175）。無ければ、この画面で受け取った段階（#1146）。
-                      const savedSteps = chatProgressStepsFromEvent(reply.progress);
-                      const steps = savedSteps.length > 0 ? savedSteps : finishedProgress[reply.message_id];
+                      // 保存した処理の段階のイベント（#1175 / #1359）。無ければ、この画面で受け取ったイベント（#1146）。
+                      const savedEvents = parseChatProgressEvents(reply.progress);
+                      const steps = columnProgressSteps(
+                        reply.message_id,
+                        savedEvents.length > 0 ? savedEvents : (finishedProgress[reply.message_id] ?? [])
+                      );
                       const streaming = reply.status === "STREAMING";
+                      const tracked = streaming && reply.message_id === savedProgressReplyId;
                       return {
                         key: reply.message_id,
                         // 保存した回答は model_id を持つ。生成中と同じ表示名に引き直す（#649）。
@@ -1685,10 +1770,12 @@ export function ChatClient() {
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
                         progress:
-                          streaming || steps?.length
+                          streaming || steps.length
                             ? {
-                                steps: steps ?? [],
+                                steps,
                                 startedAtMs: Date.parse(reply.created_at) || Date.now(),
+                                // 段階の配信が途絶え、取り直している間は「接続を確認しています」（#1160）。
+                                reconnecting: tracked && progressStream.reconnecting,
                               }
                             : null,
                       };
