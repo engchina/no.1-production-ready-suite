@@ -755,7 +755,8 @@ async def test_search_inserts_entity_expansion_after_top_candidates() -> None:
     ]
     child = result.child_chunks[3]
     assert child.metadata["entity_expansion"]["entity"] == "経費精算ポータル"
-    assert state.chunks[expanded[1]].metadata[ENTITY_EXPANSION_KEY]["match"] == "経"
+    marker = state.chunks[expanded[1]].metadata[ENTITY_EXPANSION_KEY]
+    assert isinstance(marker, dict) and marker["match"] == "経"
     assert store.calls[:3] == ["seed", "definition", "hop"]
 
 

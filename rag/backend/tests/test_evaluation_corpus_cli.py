@@ -230,3 +230,35 @@ def test_main_requires_guides_and_guided_output_together(
     code = main([str(golden), "--output", str(tmp_path / "out.json"), "--guides", str(guides)])
     assert code == 2
     assert "一緒に渡してください" in capsys.readouterr().err
+
+
+def test_loader_selects_entity_index_recipe_for_every_document(tmp_path: Path) -> None:
+    """``--entity-index``（#1362）はすべての文書のレシピで実体の抽出を選ぶ（Excel は前処理も）。
+
+    実体の層の有り / 無しは、別のナレッジベースに取り込んで比べる。
+    """
+    (tmp_path / "manual.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "params.xlsx").write_bytes(b"PK")
+    api = FakeApi({"manual.pdf": ["UPLOADED"], "params.xlsx": ["UPLOADED"]})
+    client = httpx.Client(transport=httpx.MockTransport(api), base_url="http://test")
+    loader = CorpusLoader(
+        client,
+        "http://test",
+        poll_interval_seconds=0,
+        sleep=lambda _: None,
+        log=lambda _: None,
+        entity_index=True,
+    )
+
+    for name in ("manual.pdf", "params.xlsx"):
+        loader.ingest(tmp_path / name, "kb-1")
+
+    puts = [call for call in api.calls if call[0] == "PUT"]
+    assert puts == [
+        ("PUT", "/documents/doc-manual.pdf/recipes/r1", {"entity_index_enabled": True}),
+        (
+            "PUT",
+            "/documents/doc-params.xlsx/recipes/r1",
+            {"preprocess_profile": "excel_to_json", "entity_index_enabled": True},
+        ),
+    ]

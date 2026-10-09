@@ -125,9 +125,9 @@ async def plan_entity_expansion(
     """質問と検索の上位の chunk から、実体の 1 段の拡張で足す chunk を順に返す。
 
     順は起点の実体ごとに「名寄せ → その 1 段」で、起点の実体は (1) 質問の長い別名 → (2) 質問の短い
-    別名 → (3) 上位の chunk（順位の順。同じ chunk の中は質問と語の重なる行の実体を先に）の順。1 段で
-    足す実体は質問と本文の語の重なり（文字の 2-gram）の多い順にし、同じ実体の chunk はまとめて足す。``exclude_chunk_ids``（起点の chunk など、すでに候補の上位に
-    ある chunk）は足さない。
+    別名 → (3) 上位の chunk（順位の順。同じ chunk の中は質問と語の重なる行の実体を先に）の順。1 段
+    で足す実体は質問と本文の語の重なり（文字の 2-gram）の多い順にし、同じ実体の chunk はまとめて足
+    す。``exclude_chunk_ids``（起点の chunk など、すでに候補の上位にある chunk）は足さない。
     """
     if max_chunks <= 0:
         return []
@@ -155,7 +155,7 @@ async def plan_entity_expansion(
         (seed for seed in seeds if not seed.question_keys and seed.seed_rank is not None),
         key=lambda seed: (
             seed.seed_rank,
-            *_best_line_score(line_scores.get(seed.seed_rank or 0, {}), seed.alias_keys),
+            *_best_line_score(line_scores.get(seed.seed_rank or 0, []), seed.alias_keys),
             seed.entity_id,
         ),
     )
@@ -170,16 +170,17 @@ async def plan_entity_expansion(
         question_seeds, preferred=question_scopes or context_scopes
     )
     planner = _Planner(question_key=question_key, exclude=set(exclude_chunk_ids))
-    # 起点の実体ごとの組（名寄せの chunk と、その chunk から 1 段でたどる元）。並びは、質問の長い別名
-    # （3 文字以上・英数字の名前）→ 質問の短い別名（2 文字の語。「受付」など質問の別の語にも含まれやすい）
-    # → 上位の chunk の順位の順（その chunk 自身の属性の実体を先に、次にその chunk の実体）。
+    # 起点の実体ごとの組（名寄せの chunk と、その chunk から 1 段でたどる元）。並びは、質問の長い
+    # 別名（3 文字以上・英数字の名前）→ 質問の短い別名（2 文字の語。「受付」など質問の別の語にも含
+    # まれやすい）→ 上位の chunk の順位の順（その chunk 自身の属性の実体を先に、次にその chunk の
+    # 実体）。
     groups: list[tuple[str, list[EntityExpansion], list[str]]] = []
     for tier_seeds in (
         [seed for seed in question_seeds if _strong_question_seed(seed)],
         [seed for seed in question_seeds if not _strong_question_seed(seed)],
     ):
-        # 質問が名指しした実体は、全部の名寄せを先に足してから 1 段をたどる（比べる質問の 2 つ目の実体を
-        # 1 つ目の 1 段で押し出さない）。
+        # 質問が名指しした実体は、全部の名寄せを先に足してから 1 段をたどる（比べる質問の 2 つ目の
+        # 実体を 1 つ目の 1 段で押し出さない）。
         tier_items = [
             item
             for items in planner.resolve(
@@ -220,8 +221,8 @@ def _seed_line_scores(
 ) -> dict[int, list[tuple[str, float, int]]]:
     """起点の chunk ごとの行（正規化した本文・質問との語の重なり・位置）。
 
-    1 つの起点の chunk に多くの実体があるとき（保守計画の章に 8 つのシステム）、質問と語の重なる行の実体を
-    先にし、同じなら本文の順にする（質問の「第 2 土曜日」の行の「ＨＲＭ」を先にする）。
+    1 つの起点の chunk に多くの実体があるとき（保守計画の章に 8 つのシステム）、質問と語の重なる行
+    の実体を先にし、同じなら本文の順にする（質問の「第 2 土曜日」の行の「ＨＲＭ」を先にする）。
     """
     return {
         rank: [
@@ -314,10 +315,10 @@ class _Planner:
             result.append(
                 [
                     self._expansion(
-                    row,
-                    seed_kind=seed_kind,
-                    hop=0,
-                    ambiguous=ambiguous or seed.entity_id in ambiguous_seeds,
+                        row,
+                        seed_kind=seed_kind,
+                        hop=0,
+                        ambiguous=ambiguous or seed.entity_id in ambiguous_seeds,
                         matched=(seed.question_keys or [row.match_key])[0],
                     )
                     for row in chosen
@@ -413,9 +414,9 @@ def _choose_scope(
 ) -> tuple[list[EntityDefinitionRow], bool]:
     """会社（``scope_label``）をまたぐ候補から、起点（``scope``）と同じ会社の候補を選ぶ。
 
-    戻り値の 2 つ目は決められなかった印。起点の会社が分かれば、同じ会社と会社の名前の無い資料の候補
-    だけを返す（別の会社の台帳・組織規程を橋渡しに使わない）。起点の会社が分からなければ全部を返し、
-    候補が 2 つ以上の会社にまたがれば印を付ける（勝手に 1 つに決めない）。
+    戻り値の 2 つ目は決められなかった印。起点の会社が分かれば、同じ会社と会社の名前の無い資料の候
+    補だけを返す（別の会社の台帳・組織規程を橋渡しに使わない）。起点の会社が分からなければ全部を返
+    し、候補が 2 つ以上の会社にまたがれば印を付ける（勝手に 1 つに決めない）。
     """
     if scope is None:
         return list(rows), len({row.scope_label for row in rows} - {None}) > 1
