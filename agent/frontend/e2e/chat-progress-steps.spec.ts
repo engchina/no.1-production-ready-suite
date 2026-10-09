@@ -145,6 +145,61 @@ test.describe("runProgressSteps（desktop）", () => {
     expect(steps[2].detail).toBe("承認されませんでした");
   });
 
+  test("承認の後に別のツールの承認を求めたら、次の承認待ちの段階にし、完了した承認待ちを実行中に戻さない（#1358）", () => {
+    const approval = (id: string, tool: string, status: "pending" | "approved", createdAt: string, decidedAt?: string) => ({
+      id,
+      run_id: "run-1",
+      step_id: `step-${tool}`,
+      tool_call: { name: tool, arguments: {} },
+      status,
+      reason: "",
+      created_at: createdAt,
+      decided_at: decidedAt ?? null,
+    });
+    // 1 回目の承認（A）を承認して A を実行した後、モデルが B を呼び、B の承認を求めた。
+    const steps = runProgressSteps(
+      run({
+        status: "waiting_approval",
+        steps: [
+          toolStep("nl2sql__execute", "completed", { approval_id: "ap-1" }),
+          toolStep("rag__rag_search", "waiting_approval", { approval_id: "ap-2", started_at: T4, completed_at: null }),
+        ],
+        approvals: [
+          approval("ap-1", "nl2sql__execute", "approved", T1, T2),
+          approval("ap-2", "rag__rag_search", "pending", T4),
+        ],
+      })
+    );
+    expect(summary(steps)).toEqual([
+      "plan:done",
+      "approval_wait:done",
+      "tool:nl2sql__execute:done",
+      "approval_wait#2:running",
+      "tool:rag__rag_search:pending",
+      "respond:pending",
+    ]);
+    expect(steps[3]).toMatchObject({ label: "承認を待っています", detail: "rag__rag_search", startedAt: T4 });
+
+    // 同じ中断で求めた承認（どれも決まる前に求めた）は 1 つの段階にまとめる。
+    const together = runProgressSteps(
+      run({
+        status: "waiting_approval",
+        steps: [
+          toolStep("nl2sql__execute", "waiting_approval", { approval_id: "ap-1" }),
+          toolStep("rag__rag_search", "waiting_approval", { approval_id: "ap-2" }),
+        ],
+        approvals: [approval("ap-1", "nl2sql__execute", "approved", T2, T3), approval("ap-2", "rag__rag_search", "pending", T2)],
+      })
+    );
+    expect(summary(together)).toEqual([
+      "plan:done",
+      "approval_wait:running",
+      "tool:nl2sql__execute:pending",
+      "tool:rag__rag_search:pending",
+      "respond:pending",
+    ]);
+  });
+
   test("ツールを呼ばずに答えたら、考えている段階と回答の段階が完了", () => {
     const steps = runProgressSteps(run({ status: "completed", events: [...run().events, endEvent("run.completed")] }));
     expect(summary(steps)).toEqual(["plan:done", "respond:done"]);

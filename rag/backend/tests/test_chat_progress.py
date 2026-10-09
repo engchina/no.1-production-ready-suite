@@ -168,8 +168,40 @@ def test_finish_marks_steps_that_never_ran_as_skipped() -> None:
     assert all("detail" not in step for step in tracker.snapshot())
 
 
-def test_corrective_retrieval_returns_to_retrieve_with_attempt_detail() -> None:
-    """補正検索（CRAG の 2 回目の文書検索）は検索の段階を再び実行中にし、回数を補足に出す。"""
+def test_steps_only_move_forward_when_the_flow_returns_to_retrieval() -> None:
+    """#1358 の再現: Rerank の後の文書の選択・根拠確認で、検索の段階を実行中に戻さない。
+
+    戻すと、完了の一覧が「質問の整理・検索」→「質問の整理・並べ替え」（検索が消える）→
+    「質問の整理・検索・並べ替え」と揺れていた。
+    """
+    tracker = _tracker()
+    finished: list[list[str]] = []
+    for stage in (
+        "answer_step:質問の理解",
+        "answer_step:文書検索（1回目）",
+        "answer_step:Rerank",
+        "answer_step:文書の選択",
+        "answer_step:根拠確認（1回目）",
+        "answer_step:回答文の生成と根拠確認（1回目）",
+    ):
+        _feed(tracker, [(stage, "started")])
+        finished.append([step["id"] for step in tracker.snapshot() if step["status"] == "done"])
+    assert finished == [
+        [],
+        ["rewrite_query"],
+        ["rewrite_query", "retrieve"],
+        ["rewrite_query", "retrieve"],
+        ["rewrite_query", "retrieve"],
+        ["rewrite_query", "retrieve", "rerank"],
+    ]
+    # 戻りの間も実行中の段階は 1 つだけで、回答の作成へ進む。
+    statuses = _statuses(tracker)
+    assert statuses["generate_answer"] == "running"
+    assert list(statuses.values()).count("running") == 1
+
+
+def test_corrective_retrieval_keeps_steps_forward_with_attempt_detail() -> None:
+    """補正検索（CRAG の 2 回目の文書検索）は段階を戻さず、回数を検索の補足に出す（#1358）。"""
     tracker = _tracker()
     _feed(
         tracker,
@@ -181,12 +213,32 @@ def test_corrective_retrieval_returns_to_retrieve_with_attempt_detail() -> None:
             ("answer_step:根拠確認（1回目）", "started"),
         ],
     )
-    assert _statuses(tracker)["retrieve"] == "running"
-    assert _statuses(tracker)["rerank"] == "done"
-    _feed(
+    assert _statuses(tracker)["retrieve"] == "done"
+    assert _statuses(tracker)["rerank"] == "running"
+    changed = _feed(
         tracker,
         [
             ("answer_step:根拠確認（1回目）", "success"),
+            ("answer_step:文書検索（2回目）", "started"),
+        ],
+    )
+    # 補足が変わったので一覧を送り直す（段階の状態は変えない）。
+    assert changed == [False, True]
+    retrieve = next(step for step in tracker.snapshot() if step["id"] == "retrieve")
+    assert retrieve["status"] == "done"
+    assert retrieve["detail"] == "2 回目"
+    assert _statuses(tracker)["rerank"] == "running"
+
+
+def test_corrective_retrieval_without_rerank_stays_on_retrieve() -> None:
+    """並べ替えを使わない設定では、補正検索の間も検索の段階が実行中のまま回数を出す。"""
+    tracker = _tracker(rerank_enabled=False)
+    _feed(
+        tracker,
+        [
+            ("answer_step:文書検索（1回目）", "started"),
+            ("answer_step:Rerank", "started"),
+            ("answer_step:根拠確認（1回目）", "started"),
             ("answer_step:文書検索（2回目）", "started"),
         ],
     )

@@ -617,6 +617,11 @@ export interface JobData {
   warning_message?: string | null;
   timing?: TimingEnvelope | null;
   steps: JobStepData[];
+  /**
+   * 実行の回数（worker が claim するたびに増える。0 は未着手）。lease の切れたジョブを別の実行が引き継ぐと
+   * 段階は初めからになるので、チャットは attempt が変わったら段階の一覧を作り直す（#1358）。
+   */
+  attempt?: number;
   /** チャットのターンの SQL を最後に実行したときの要約（行は保存しない。#1154）。 */
   last_execution?: SqlChatExecutionSummary | null;
 }

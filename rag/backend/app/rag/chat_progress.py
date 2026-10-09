@@ -127,7 +127,10 @@ class ChatProgressTracker:
     実行中の段階は 1 つだけにする（別の段階の工程が始まったら、前の実行中の段階は終わったと
     する）。工程は入れ子になる（例: 文書検索の中の Rerank）ので、内側の工程が始まった時点で
     外側の段階は終える。
-    補正検索（CRAG）で検索に戻ったときは、検索の段階を再び実行中にする。
+    段階は先へだけ進める（#1358）。回答フローは前の段階の工程へ戻ることがある（Rerank の後の
+    文書の選択・根拠確認、補正検索（CRAG）の 2 回目の文書検索）。戻るたびに完了した段階を実行中に
+    戻すと、画面の「N ステップ完了」の一覧から段階が消えて、また現れる。前の段階の工程は今の段階の
+    続きとして扱い、補正検索の回数だけを検索の段階の補足に出す。
     """
 
     def __init__(
@@ -168,9 +171,16 @@ class ChatProgressTracker:
             # 回答の生成そのものの失敗（時間切れを含む）は `fail()` で反映する。
             return False
         step = self._by_id[step_id]
+        detail = _retrieval_attempt_detail(progress.stage)
+        current = self._last_touched
+        if current is not None and self._steps.index(step) < self._steps.index(current):
+            # 前の段階の工程（戻り）。完了した段階を実行中に戻さない（#1358）。
+            if detail and step.detail != detail:
+                step.detail = detail
+                return True
+            return False
         self._last_touched = step
         changed = self._start(step)
-        detail = _retrieval_attempt_detail(progress.stage)
         if detail and step.detail != detail:
             step.detail = detail
             changed = True

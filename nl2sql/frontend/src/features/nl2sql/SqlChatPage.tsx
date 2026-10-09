@@ -73,6 +73,7 @@ import {
 import {
   CHAT_PROGRESS_LABELS,
   chatJobElapsedMs,
+  chatJobProgressKey,
   chatJobProgressSteps,
   chatSubmitProgressSteps,
 } from "./chatProgress";
@@ -854,7 +855,8 @@ function SqlChatTurn({
   const result = turn.result;
   // 処理の経過の状態を追う（3 製品共通。#1160）。会話の取得が途絶えたら取り直し、終端まで追う。
   const progress = useChatProgressTracker({
-    key: turn.job_id,
+    // 引き継いだ実行（attempt が変わった）では段階の一覧を作り直す（#1358）。
+    key: chatJobProgressKey(turn),
     steps: chatJobProgressSteps(turn, turn.engine),
     active: inFlight(turn),
     elapsedMs: chatJobElapsedMs(turn),
