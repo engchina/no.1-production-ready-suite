@@ -166,7 +166,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
     # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence。1 回が重い検索と回答の生成）。
-    agent_max_rag_calls_per_run: int = 4
+    # 既定 6 は 5 段の多段の質問（段ごとに 1 回）と 1 回の言い換え（#1345）。
+    # 本文を読むツール（rag_read_source・rag_outline・rag_read_document）は数えない。
+    agent_max_rag_calls_per_run: int = 6
     # 同じ会話（thread）の通しのツールの呼び出し。前の Run の支援タスクの状態に積む。
     agent_max_tool_calls_per_task: int = 60
     # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、

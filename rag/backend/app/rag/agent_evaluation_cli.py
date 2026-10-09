@@ -72,6 +72,11 @@ BUSINESS_SUPPORT_SKILL_ID = "business_rag_research"
 SETTLED_STATUSES = frozenset({"completed", "failed", "cancelled", "waiting_approval"})
 RAG_SEARCH = "rag_search"
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, "rag_retrieve_evidence"})
+# 本文を読むツール（#1330・#1332）。多段の質問では段の事実を読んで確かめるため、読んだ chunk も
+# 根拠に数える（Agent の最終の検証と同じ。#1345）。
+RAG_READ_SOURCE = "rag_read_source"
+RAG_READ_DOCUMENT = "rag_read_document"
+READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT})
 MCP_TOOL_SEPARATOR = "__"
 # Agent の組み込みの MCP 接続（RAG）の ID。モデルが呼ぶツールの名前は `<接続>__<ツール>`
 # （Agent #757）。指示にはこの名前を書く（素の名前だと存在しないツールを呼ぶ。#1303）。
@@ -152,20 +157,28 @@ def _records(value: object) -> list[Mapping[str, Any]]:
     return [item for item in value if isinstance(item, Mapping)] if isinstance(value, list) else []
 
 
-def _tool_outputs(run: Mapping[str, Any], tools: frozenset[str]) -> list[Mapping[str, Any]]:
-    """成功したツールの呼び出しの出力（呼んだ順）。"""
-    outputs: list[Mapping[str, Any]] = []
+def _tool_results(
+    run: Mapping[str, Any], tools: frozenset[str]
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """成功したツールの呼び出しの（素のツールの名前, 出力）（呼んだ順）。"""
+    results: list[tuple[str, Mapping[str, Any]]] = []
     for step in _records(run.get("steps")):
         call = step.get("tool_call")
         result = step.get("tool_result")
         if not isinstance(call, Mapping) or not isinstance(result, Mapping):
             continue
-        if base_tool_name(str(call.get("name") or "")) not in tools:
+        tool = base_tool_name(str(call.get("name") or ""))
+        if tool not in tools:
             continue
         output = result.get("output")
         if result.get("success") and isinstance(output, Mapping):
-            outputs.append(output)
-    return outputs
+            results.append((tool, output))
+    return results
+
+
+def _tool_outputs(run: Mapping[str, Any], tools: frozenset[str]) -> list[Mapping[str, Any]]:
+    """成功したツールの呼び出しの出力（呼んだ順）。"""
+    return [output for _tool, output in _tool_results(run, tools)]
 
 
 def tool_call_counts(run: Mapping[str, Any]) -> dict[str, int]:
@@ -206,12 +219,54 @@ def validation_status(run: Mapping[str, Any]) -> str | None:
     return status if isinstance(status, str) else None
 
 
+def _read_items(tool: str, output: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """本文を読むツールの出力を、根拠の項目（document_id・chunk_id・excerpt・locator）にする。"""
+    document_id = output.get("document_id")
+    file_name = output.get("file_name")
+    if tool == RAG_READ_SOURCE:
+        return [
+            {
+                "document_id": document_id,
+                "chunk_id": output.get("chunk_id"),
+                "excerpt": output.get("text"),
+                "file_name": file_name,
+                "locator": output.get("locator"),
+            }
+        ]
+    text = output.get("text")
+    text = text if isinstance(text, str) else ""
+    items: list[dict[str, Any]] = []
+    for chunk in _records(output.get("chunks")):
+        start, end = chunk.get("start"), chunk.get("end")
+        excerpt = text[start:end] if isinstance(start, int) and isinstance(end, int) else ""
+        items.append(
+            {
+                "document_id": document_id,
+                "chunk_id": chunk.get("chunk_id"),
+                "excerpt": excerpt,
+                "file_name": file_name,
+                "locator": {
+                    key: chunk[key]
+                    for key in ("element_locator", "section_path", "page_start", "page_end")
+                    if chunk.get(key) is not None
+                },
+            }
+        )
+    return items
+
+
 def evidence_citations(run: Mapping[str, Any]) -> list[RetrievedChunk]:
-    """その Run の RAG の根拠のツールが返した根拠（出てきた順・重複なし）。"""
+    """その Run の RAG の根拠のツールが返した根拠と、読み取りのツールで読んだ chunk（出てきた順・
+    重複なし。#1345）。"""
     citations: list[RetrievedChunk] = []
     seen: set[tuple[str, str]] = set()
-    for output in _tool_outputs(run, EVIDENCE_TOOLS):
-        for item in _records(output.get("evidence")):
+    for tool, output in _tool_results(run, EVIDENCE_TOOLS | READ_EVIDENCE_TOOLS):
+        items = (
+            _records(output.get("evidence"))
+            if tool in EVIDENCE_TOOLS
+            else _read_items(tool, output)
+        )
+        for item in items:
             document_id = str(item.get("document_id") or "")
             chunk_id = str(item.get("chunk_id") or item.get("evidence_id") or "")
             if not document_id or not chunk_id or (document_id, chunk_id) in seen:

@@ -47,7 +47,12 @@ from app.features.agent.answer_passages import (
     passage_spans,
     table_header_lines,
 )
-from app.features.agent.support_task import RAG_RETRIEVE_EVIDENCE, RAG_SEARCH
+from app.features.agent.support_task import (
+    RAG_READ_DOCUMENT,
+    RAG_READ_SOURCE,
+    RAG_RETRIEVE_EVIDENCE,
+    RAG_SEARCH,
+)
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -100,6 +105,9 @@ GUIDE_WITHHELD = (
     "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
 )
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+# 本文を読むツール（#1330・#1332）。多段の質問では段の事実を読んで確かめるため、読んだ chunk も
+# 最終の検証の根拠に入れる（#1345）。
+READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT})
 # 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。
 BLOCKING_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
 _CLAIM_LABELS = {
@@ -130,37 +138,63 @@ def _connection_prefix(function_name: str) -> str | None:
     return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
 
 
+def _evidence_refs(tool: str, output: JsonObject) -> list[tuple[str, str]]:
+    """根拠を集める・読むツールの出力の（document_id, chunk_id）（出てきた順）。"""
+    items: list[object]
+    if tool in EVIDENCE_TOOLS:
+        evidence = output.get("evidence")
+        items = evidence if isinstance(evidence, list) else []
+    elif tool == RAG_READ_SOURCE:
+        items = [output]
+    elif tool == RAG_READ_DOCUMENT:
+        chunks = output.get("chunks")
+        document_id = output.get("document_id")
+        items = [
+            {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
+            for chunk in (chunks if isinstance(chunks, list) else [])
+            if isinstance(chunk, dict)
+        ]
+    else:
+        return []
+    refs: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
+        if isinstance(document_id, str) and isinstance(chunk_id, str) and document_id and chunk_id:
+            refs.append((document_id, chunk_id))
+    return refs
+
+
 def run_evidence_groups(steps: list[RunStep]) -> list[tuple[str, list[JsonObject]]]:
     """その Run で RAG が返した根拠の参照を、MCP 接続ごとにまとめる（#1277）。
 
     根拠の id は返した RAG のものなので、接続ごとに分けて検証する。返すのは、接続ごとの
     （その接続の最も新しい根拠のツールの function tool の名前〔接続を決める〕, 参照の一覧）で、
     最も新しく根拠を返した接続から順。参照は新しい呼び出しから順、接続の中で重複なし、最大 30 件。
+    `rag_read_source`・`rag_read_document` で読んだ chunk も根拠に入れる（#1345。多段の質問は段の
+    事実を読んで確かめる）。
     """
     groups: dict[str, tuple[str, list[JsonObject], set[tuple[str, str]]]] = {}
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not result.success or step.status != "completed":
             continue
-        if mcp_base_tool_name(call.name) not in EVIDENCE_TOOLS:
+        tool = mcp_base_tool_name(call.name)
+        if tool not in EVIDENCE_TOOLS and tool not in READ_EVIDENCE_TOOLS:
             continue
-        evidence = (result.output or {}).get("evidence")
-        if not isinstance(evidence, list):
+        if not isinstance(result.output, dict):
             continue
+        refs_found = _evidence_refs(tool, result.output)
         prefix = _connection_prefix(call.name)
-        if prefix is None:
+        if prefix is None or not refs_found:
             continue
         _tool_name, refs, seen = groups.setdefault(prefix, (call.name, [], set()))
-        for item in evidence:
-            if not isinstance(item, dict):
+        for ref in refs_found:
+            if ref in seen:
                 continue
-            document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
-            if not isinstance(document_id, str) or not isinstance(chunk_id, str):
-                continue
-            if not document_id or not chunk_id or (document_id, chunk_id) in seen:
-                continue
-            seen.add((document_id, chunk_id))
-            refs.append({"document_id": document_id, "chunk_id": chunk_id})
+            seen.add(ref)
+            refs.append({"document_id": ref[0], "chunk_id": ref[1]})
     return [
         (tool_name, refs[:MAX_VALIDATION_EVIDENCE])
         for tool_name, refs, _seen in groups.values()

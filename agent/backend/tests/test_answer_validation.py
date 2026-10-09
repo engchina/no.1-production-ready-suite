@@ -27,6 +27,7 @@ from app.features.agent.answer_validation import (
     connection_check_inputs,
     merge_results,
     publish_answer,
+    run_evidence_groups,
     withhold_paragraphs,
 )
 from app.features.agent.builtin_runtime import ModelTarget
@@ -458,6 +459,94 @@ def test_evidence_of_all_rag_calls_is_passed_newest_first(
     assert call["arguments"]["evidence"] == [
         {"document_id": "doc-1", "chunk_id": "chunk-1"},
         {"document_id": "doc-1", "chunk_id": "chunk-2"},
+    ]
+
+
+def test_chunks_read_in_a_multi_hop_run_are_validation_evidence(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    # 多段の質問（#1345）: 段の事実を rag_read_document で読んで答えたら、読んだ chunk も検証する。
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=SKILL_ID,
+            name="検証の Skill",
+            instructions="RAG で段ごとに調べて答える。",
+            mcp_requirements=[
+                SkillMcpRequirement(
+                    server_id="rag",
+                    tool_names=["rag_search", "rag_retrieve_evidence", "rag_read_document"],
+                )
+            ],
+        )
+    )
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_retrieve_evidence", {"query": "契約"}, call_id="call-1")],
+        [
+            function_call(
+                "rag__rag_read_document",
+                {"document_id": "doc-1", "cursor": "cursor-section-5"},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message(ANSWER)],
+    )
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="契約の更新の期限は？", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    [call] = mcp.calls_of("rag_validate_answer")
+    # 新しい呼び出し（読んだ本文の chunk）から順に、根拠と合わせて渡す。
+    assert call["arguments"]["evidence"] == [
+        {"document_id": "doc-1", "chunk_id": "chunk-3"},
+        {"document_id": "doc-1", "chunk_id": "chunk-4"},
+        {"document_id": "doc-1", "chunk_id": "chunk-1"},
+    ]
+
+
+def test_evidence_groups_take_read_source_and_read_document_chunks() -> None:
+    steps = [
+        _step(
+            "rag__rag_retrieve_evidence",
+            {"query": "台帳"},
+            {"evidence": [{"document_id": "doc-1", "chunk_id": "c-1"}]},
+        ),
+        _step(
+            "rag__rag_read_source",
+            {"document_id": "doc-2", "chunk_id": "c-9"},
+            {"document_id": "doc-2", "chunk_id": "c-9", "text": "第 4 章を参照"},
+        ),
+        _step(
+            "other__rag_read_document",
+            {"document_id": "doc-3"},
+            {"document_id": "doc-3", "chunks": [{"chunk_id": "c-a"}, {"chunk_id": "c-b"}]},
+        ),
+        # 形の違う出力・chunk の無い読み取りは根拠にしない。
+        _step("rag__rag_read_document", {"document_id": "doc-4"}, {"chunks": "x"}),
+        _step("rag__rag_outline", {"document_id": "doc-1"}, {"document_id": "doc-1"}),
+    ]
+    failed = _step("rag__rag_read_source", {}, {"document_id": "doc-5", "chunk_id": "c-5"})
+    failed.tool_result = ToolResult(name="rag__rag_read_source", success=False, error="x")
+    steps.append(failed)
+
+    assert run_evidence_groups(steps) == [
+        (
+            "other__rag_read_document",
+            [
+                {"document_id": "doc-3", "chunk_id": "c-a"},
+                {"document_id": "doc-3", "chunk_id": "c-b"},
+            ],
+        ),
+        (
+            "rag__rag_read_source",
+            [
+                {"document_id": "doc-2", "chunk_id": "c-9"},
+                {"document_id": "doc-1", "chunk_id": "c-1"},
+            ],
+        ),
     ]
 
 

@@ -359,7 +359,8 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 ツール・RAG の呼び出しの回数と時間）。同じ会話の次の Run は、同じ持ち主の前の完了した Run の状態を読み、短い
 「支援タスクの状態」として指示の末尾に足す（条件は聞き直さず `conditions` に入れ、新しい発言の値で上書きする）。
 状態は補助で、正本は RAG の回答と根拠。ツールを呼ばず、引き継ぐ状態も無い Run には残さない。
-予算は `AGENT_MAX_RAG_CALLS_PER_RUN`（既定 4。Run ごとの `rag_search`・`rag_retrieve_evidence`）と
+予算は `AGENT_MAX_RAG_CALLS_PER_RUN`（既定 6〔#1345。5 段の多段の質問と 1 回の言い換え〕。Run ごとの `rag_search`・`rag_retrieve_evidence`。
+本文を読む `rag_read_source`・`rag_outline`・`rag_read_document` は軽いので数えない）と
 `AGENT_MAX_TOOL_CALLS_PER_TASK`（既定 60。同じ会話の通しのツールの呼び出し）。超える呼び出しは実行せず、ツールの結果
 （`error_code="budget_exceeded"`、step は失敗）でモデルに知らせ、Run は失敗にしない。消費は Run の step から数えるため、
 承認の後の再開で 0 に戻らない。失敗・取消の Run は状態を残さないが、その消費（実行したツールと、結果を受け取る前に
@@ -374,6 +375,11 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。`outcome` が `needs_clarification` の
 ときは `action="ask_clarification"`（`questions` に確かめる問い）を足し、手順・分岐ごとの答えより先に問いを返させる
 （#1322）。
+多段の質問（#1345。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business_rag_research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を 1 回呼び、
+比べる質問は実体ごとに引き、同じ文書の中の参照は `rag_outline` → `rag_read_document` で読み、最後に質問全体で `rag_search` を
+呼び直さずに集めた根拠で答える手順を書く。Control Plane は根拠を集める・読むツールの結果に、本文の「第 N 章を参照」
+「別表 N 参照」など同じ文書の別の箇所への参照（`references`。文書・参照・読み方。`text_references`）と、この Run で残る
+RAG の検索の回数（`rag_calls_remaining`）をモデルへの結果に足す（記録する step の結果は RAG の結果のまま）。
 業務ガイドの照合（#1321・#1322）: 根拠を集めるだけの `rag_retrieve_evidence` は業務ガイド（確かめる条件・分岐・影響範囲）を
 見ないため、モデルが業務ガイドを引かずに根拠を集めると、確かめる条件があっても分岐ごとに答えてしまう（#1317 の実環境の
 評価）。モデルがその Run でその接続の `rag_lookup_guides`・`rag_search` を呼ばずに `rag_retrieve_evidence` を呼んだら、
@@ -386,7 +392,8 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 （業務ガイド・分かった条件・確かめ中の問い）は支援タスクの状態にも残す。モデルが自分で `rag_lookup_guides` を呼んだときも、同じ次の手を結果に `next_step` として足す（答える判断なら、業務ガイドは資料の根拠ではないので、根拠を集めて確かめてから答えるよう添える）。
 回答の最終の検証（#1246・#1277）: `AGENT_FINAL_VALIDATION_ENABLED`（既定 true）が true のとき、RAG の根拠を使った Run の
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
-その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠の参照（新しい呼び出しから順、
+その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠と `rag_read_source` / `rag_read_document`
+で読んだ chunk の参照（#1345。多段の質問は段の事実を読んで確かめるため。新しい呼び出しから順、
 重複なし、接続ごとに 30 件まで）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
 分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
