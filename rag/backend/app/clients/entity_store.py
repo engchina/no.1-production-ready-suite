@@ -1,7 +1,9 @@
 """実体の層（#1362）の Oracle の表と SQL。
 
-- ``rag_entities``: 実体（chunk_set ごと。正規化した名前・表示名・種類・会社の名前）。chunk_set・
-  文書の削除で消える（``ON DELETE CASCADE``）。
+- ``rag_entities``: 実体（chunk_set ごと。正規化した名前・表示名・種類・会社の名前）。文書の削除
+  で消える（``ON DELETE CASCADE``）。chunk_set には FK を張らない（取込は chunk を保存した後で
+  chunk_set の行を作る経路がある）。chunk_set の GC では chunk の削除で関連が消え、関連の無い実体は
+  次の実体の保存（同じ文書）で消す。
 - ``rag_entity_aliases``: 実体の別名（正規化した形。名寄せの join の key）。実体の削除で消える。
 - ``rag_entity_chunks``: 実体と chunk の関連（定義する行 / 属性 / 言及）。実体と chunk の削除で消
   える（再索引で chunk を作り直すと、その chunk の関連も消える）。
@@ -72,8 +74,6 @@ CREATE TABLE {ENTITIES_TABLE} (
     entity_type     VARCHAR2(16) NOT NULL,
     scope_label     VARCHAR2(200 CHAR),
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT {ENTITIES_TABLE}_chunk_set_fk
-        FOREIGN KEY (chunk_set_id) REFERENCES rag_chunk_sets (chunk_set_id) ON DELETE CASCADE,
     CONSTRAINT {ENTITIES_TABLE}_document_fk
         FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
     CONSTRAINT {ENTITIES_TABLE}_type_ck
@@ -131,6 +131,7 @@ class EntityStore:
 
         def operation(connection: OracleConnectionProtocol) -> None:
             _delete_chunk_set_entities(connection, chunk_set_id)
+            _delete_unlinked_document_entities(connection, document_id)
             if not index.entities:
                 return
             tenant_id_hash = _current_tenant_id_hash()
@@ -390,6 +391,23 @@ def _delete_chunk_set_entities(connection: OracleConnectionProtocol, chunk_set_i
         connection,
         f"DELETE FROM {ENTITIES_TABLE} WHERE chunk_set_id = :chunk_set_id",
         {"chunk_set_id": chunk_set_id},
+    )
+
+
+def _delete_unlinked_document_entities(
+    connection: OracleConnectionProtocol, document_id: str
+) -> None:
+    # 文書の古い chunk_set（GC で chunk が消えた版）の、関連の無い実体を消す（検索に使われない行）。
+    _execute(
+        connection,
+        f"""
+        DELETE FROM {ENTITIES_TABLE} e
+        WHERE e.document_id = :document_id
+          AND NOT EXISTS (
+              SELECT 1 FROM {ENTITY_CHUNKS_TABLE} ec WHERE ec.entity_id = e.entity_id
+          )
+        """,
+        {"document_id": document_id},
     )
 
 

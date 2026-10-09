@@ -503,7 +503,10 @@ def test_recipe_option_maps_to_ingestion_settings() -> None:
 
 
 def test_schema_defines_cascading_foreign_keys_and_indexes() -> None:
-    """文書・chunk_set・chunk の削除と再索引で、実体・別名・関連が残らない（ON DELETE CASCADE）。"""
+    """文書・chunk の削除と再索引で、実体・別名・関連が残らない（ON DELETE CASCADE）。
+
+    chunk_set には FK を張らない（取込は chunk を保存した後で chunk_set の行を作る経路がある）。
+    """
     from app.rag.oracle_schema import oracle_schema_migration_sections, oracle_schema_sections
     from app.rag.system_schema import (
         MANAGED_FOREIGN_KEYS,
@@ -524,7 +527,6 @@ def test_schema_defines_cascading_foreign_keys_and_indexes() -> None:
         if spec.table_name.startswith("RAG_ENTIT") and spec.delete_rule == "CASCADE"
     }
     assert cascades == {
-        ("RAG_ENTITIES", "RAG_CHUNK_SETS"),
         ("RAG_ENTITIES", "RAG_DOCUMENTS"),
         ("RAG_ENTITY_ALIASES", "RAG_ENTITIES"),
         ("RAG_ENTITY_CHUNKS", "RAG_ENTITIES"),
@@ -589,12 +591,15 @@ async def test_replace_entity_index_deletes_the_chunk_set_rows_first() -> None:
 
     statements = [statement for statement, _ in oracle.connection.statements]
     assert statements[0] == "DELETE FROM rag_entities WHERE chunk_set_id = :chunk_set_id"
-    assert statements[1].startswith("INSERT INTO rag_entities")
-    assert statements[2].startswith("INSERT INTO rag_entity_aliases")
-    assert statements[3].startswith("INSERT INTO rag_entity_chunks")
-    entity_rows = cast(list[dict[str, object]], oracle.connection.statements[1][1])
+    # 古い chunk_set の、関連の無い実体（同じ文書）も消す。
+    assert statements[1].startswith("DELETE FROM rag_entities e WHERE e.document_id = :document_id")
+    assert "NOT EXISTS" in statements[1]
+    assert statements[2].startswith("INSERT INTO rag_entities")
+    assert statements[3].startswith("INSERT INTO rag_entity_aliases")
+    assert statements[4].startswith("INSERT INTO rag_entity_chunks")
+    entity_rows = cast(list[dict[str, object]], oracle.connection.statements[2][1])
     assert {row["chunk_set_id"] for row in entity_rows} == {"cs-9"}
-    link_rows = cast(list[dict[str, object]], oracle.connection.statements[3][1])
+    link_rows = cast(list[dict[str, object]], oracle.connection.statements[4][1])
     assert all(
         str(row["chunk_id"]).startswith(f"{document.document_id}:cs-9:") for row in link_rows
     )

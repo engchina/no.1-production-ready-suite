@@ -149,6 +149,31 @@ async def test_entity_expansion_joins_on_real_oracle() -> None:
         chunk_set_id=org_cs,
     )
     assert await _count(client, links_sql, {"cs": org_cs}) == 0
+    # chunk_set の行を作る前に chunk を保存する取込の経路でも保存できる（chunk_set に FK が無い）。
+    early_cs = f"cs_entity_early_{uuid4().hex[:12]}"
+    early_chunks = corpus["organization-rules.pdf"].chunks
+    await client.save_index(
+        org_id,
+        StructuredExtraction(raw_text="本文", confidence=0.9),
+        early_chunks,
+        [_EMBEDDING] * len(early_chunks),
+        chunk_set_id=early_cs,
+    )
+    await store.replace_chunk_set_entity_index(
+        org_id,
+        early_cs,
+        build_entity_index(document_id=org_id, chunks=early_chunks, chunk_set_id=early_cs),
+    )
+    # 関連の消えた古い chunk_set の実体は、同じ文書の次の保存で消える。
+    assert (
+        await _count(
+            client,
+            "SELECT COUNT(*) AS n FROM rag_entities WHERE chunk_set_id = :cs",
+            {"cs": org_cs},
+        )
+        == 0
+    )
+    assert await _count(client, links_sql, {"cs": early_cs}) > 0
     entities_sql = "SELECT COUNT(*) AS n FROM rag_entities WHERE document_id = :d"
     aliases_sql = (
         "SELECT COUNT(*) AS n FROM rag_entity_aliases a "
