@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pr_backend_core.chat_progress import (
     CHAT_PROGRESS_SSE_EVENT,
     CHAT_PROGRESS_SSE_HEARTBEAT_EVENT,
+    UNCHANGED,
     ChatProgressPage,
     ChatProgressRecorder,
     ChatProgressStepEvent,
@@ -21,9 +22,12 @@ from pr_backend_core.chat_progress import (
     chat_progress_page,
     chat_progress_sse_response,
     chat_progress_sse_stream,
+    chat_progress_sse_timing,
+    configure_chat_progress_sse,
     dump_chat_progress_events,
     fold_chat_progress_events,
     parse_chat_progress_events,
+    restore_chat_progress_sse,
 )
 
 T0 = datetime(2026, 10, 9, 1, 0, 0, tzinfo=UTC)
@@ -372,3 +376,64 @@ def test_sse_response_streams_and_returns_204_when_finished() -> None:
     # 張り直し（`Last-Event-ID` が終端の番号）は 204。ブラウザの EventSource は張り直しをやめる。
     finished = client.get("/progress/stream", headers={"Last-Event-ID": str(recorder.last_seq)})
     assert finished.status_code == 204
+
+
+def test_unchanged_keeps_values_and_none_clears_them() -> None:
+    recorder = _recorder()
+    recorder.start("a", detail="1 回目", params={"attempt": 1})
+    recorder.update("a", detail=UNCHANGED, params={"attempt": 2})
+    step = recorder.step("a")
+    assert step is not None and step.detail == "1 回目" and step.params == {"attempt": 2}
+    recorder.finish("a", detail=None)
+    step = recorder.step("a")
+    assert step is not None and step.detail is None and step.params == {"attempt": 2}
+
+
+def test_serialized_events_and_pages_omit_absent_fields() -> None:
+    recorder = _recorder()
+    recorder.declare("a")
+    event = recorder.events[0].model_dump(mode="json")
+    assert "detail" not in event and "started_at" not in event and "kind" not in event
+    page = json.loads(recorder.page().model_dump_json())
+    assert all(None not in item.values() for item in page["events"])
+    assert page["events"][0]["step_id"] == "a"
+
+
+def test_configure_sse_timing_changes_defaults_and_restores() -> None:
+    with pytest.raises(ValueError):
+        configure_chat_progress_sse(poll_seconds=0)
+    previous = configure_chat_progress_sse(poll_seconds=0.01, heartbeat_seconds=0.02)
+    try:
+        timing = chat_progress_sse_timing()
+        assert (timing.poll_seconds, timing.heartbeat_seconds) == (0.01, 0.02)
+        assert timing.max_seconds == previous.max_seconds
+    finally:
+        restore_chat_progress_sse(previous)
+    assert chat_progress_sse_timing() == previous
+
+
+async def test_sse_stream_uses_configured_timing() -> None:
+    recorder = _recorder()
+    recorder.start("a")
+    now = [0.0]
+    slept: list[float] = []
+
+    async def fetch(cursor: int) -> ChatProgressPage:
+        return recorder.page(since=cursor)
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    previous = configure_chat_progress_sse(poll_seconds=2, max_seconds=5)
+    try:
+        chunks = [
+            chunk
+            async for chunk in chat_progress_sse_stream(
+                fetch, sleep=sleep, monotonic=lambda: now[0]
+            )
+        ]
+    finally:
+        restore_chat_progress_sse(previous)
+    assert slept and set(slept) == {2}
+    assert len([c for c in chunks if c.startswith("id: ")]) == 1

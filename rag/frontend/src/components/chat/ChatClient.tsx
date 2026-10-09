@@ -791,6 +791,12 @@ export function ChatClient() {
   }, [turns, savedStreamingUserId, liveProgressKey]);
   const savedProgressReplyId = savedProgress?.messageId ?? null;
   const savedProgressConversationId = savedProgressReplyId !== null ? activeId : null;
+  const progressFetchTarget =
+    liveProgressKey !== null && activeId
+      ? { conversationId: activeId, messageId: liveProgressKey }
+      : savedProgressConversationId && savedProgressReplyId
+        ? { conversationId: savedProgressConversationId, messageId: savedProgressReplyId }
+        : null;
   const progressStream = useChatProgressStream({
     key: liveProgressKey ?? savedProgressReplyId,
     definitions: CHAT_PROGRESS_DEFINITIONS,
@@ -799,10 +805,13 @@ export function ChatClient() {
       savedProgressConversationId && savedProgressReplyId
         ? chatAnswerProgressStreamUrl(savedProgressConversationId, savedProgressReplyId)
         : null,
-    fetchEvents:
-      savedProgressConversationId && savedProgressReplyId
-        ? (since, signal) => fetchAnswerProgress(savedProgressConversationId, savedProgressReplyId, since, signal)
-        : undefined,
+    // 作成中の今のターンは回答の配信が段階を運ぶ。保存済みの記録は、途絶えの取り直しと番号の飛びの穴埋めに
+    // だけ使う（polling しない。途絶えは回答の配信のバイトで判定し、onStalled で張り直す）。
+    fetchEvents: progressFetchTarget
+      ? (since, signal) =>
+          fetchAnswerProgress(progressFetchTarget.conversationId, progressFetchTarget.messageId, since, signal)
+      : undefined,
+    pollEvents: liveProgressKey === null,
     active:
       liveProgressKey !== null
         ? sending && liveTurn?.pending.status === "sending" && liveProgressColumn?.status === "streaming"

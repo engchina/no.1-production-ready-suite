@@ -45,6 +45,13 @@ export interface ChatProgressStreamOptions {
   /** `since` より後のイベントを取る（polling・取り直し）。対象が無ければ null。 */
   fetchEvents?: (since: number, signal: AbortSignal) => Promise<ChatProgressPage | null>;
   /**
+   * SSE が無いとき `fetchEvents` で polling するか。既定 true。
+   * false は製品の自前の配信（RAG の回答の SSE）が段階を運ぶとき: `fetchEvents` は途絶えの取り直しと番号の飛びの
+   * 穴埋めにだけ使い、定期の取得はしない。取り直しの成功は配信の再開として数えない（途絶えは製品の配信の
+   * `touch()` だけで判定し、`onStalled` で製品の配信を張り直させる）。
+   */
+  pollEvents?: boolean;
+  /**
    * 処理中か（製品が対象の状態で知っているとき）。終端のイベントが届いたら、この値に関係なく終わり。
    * 省略時は、終端のイベントが届くまで処理中。
    */
@@ -114,6 +121,7 @@ export function useChatProgressStream({
   events,
   streamUrl,
   fetchEvents,
+  pollEvents = true,
   active: activeProp,
   enabled = true,
   elapsedMs,
@@ -182,7 +190,9 @@ export function useChatProgressStream({
   const [sseGeneration, setSseGeneration] = useState(0);
   const sseAvailable = Boolean(streamUrl) && (typeof EventSource !== "undefined" || createEventSource !== defaultEventSource);
   const useSse = following && sseAvailable && sseFailedKey !== key;
-  const usePolling = following && !useSse && fetchEvents !== undefined;
+  const usePolling = following && !useSse && fetchEvents !== undefined && pollEvents;
+  // 製品の自前の配信だけが段階を運ぶ（取り直しは穴埋めだけ）。
+  const pushOnly = !useSse && !pollEvents;
   const transport: ChatProgressTransport = !following
     ? "idle"
     : useSse
@@ -193,14 +203,16 @@ export function useChatProgressStream({
 
   // 途絶えの判定と取り直し（#1160 の hook を中で使う）。
   const useSseRef = useRef(useSse);
+  const pushOnlyRef = useRef(pushOnly);
   useLayoutEffect(() => {
     useSseRef.current = useSse;
+    pushOnlyRef.current = pushOnly;
   });
   const refresh = useCallback(
     async (signal: AbortSignal) => {
       onStalledRef.current?.();
       if (useSseRef.current) setSseGeneration((value) => value + 1);
-      if (await pull(signal)) touchRef.current();
+      if ((await pull(signal)) && !pushOnlyRef.current) touchRef.current();
     },
     [pull]
   );

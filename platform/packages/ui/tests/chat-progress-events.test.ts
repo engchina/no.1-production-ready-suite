@@ -32,6 +32,7 @@ const contract = JSON.parse(
   readFileSync(resolve(here, "../../../contracts/chat-progress/chat-progress-events.json"), "utf-8")
 ) as {
   schema_version: number;
+  absent_fields: string;
   statuses: string[];
   terminal_statuses: string[];
   sse: { event: string; heartbeat_event: string };
@@ -79,6 +80,8 @@ const statuses = (state: ChatProgressEventsState) => Object.fromEntries(state.st
 describe("契約（platform/contracts/chat-progress）", () => {
   it("状態・終端・SSE のイベントの名前・版が backend の契約と同じ", () => {
     expect(contract.schema_version).toBe(CHAT_PROGRESS_SCHEMA_VERSION);
+    // 値の無い任意の項目は省く（null を送らない。parse は null も無いものとして扱う）。
+    expect(contract.absent_fields).toBe("omitted");
     expect(contract.statuses).toEqual([...CHAT_PROGRESS_STEP_STATUSES]);
     expect(contract.terminal_statuses).toEqual([...CHAT_PROGRESS_TERMINAL_STATUSES]);
     expect(contract.sse.event).toBe(CHAT_PROGRESS_SSE_EVENT);

@@ -20,8 +20,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 from pr_backend_core.chat_progress import (
-    CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS,
-    CHAT_PROGRESS_SSE_POLL_SECONDS,
     ChatProgressEvent,
     ChatProgressPage,
     chat_progress_page,
@@ -658,10 +656,6 @@ async def _generate_chat_answer(
 SSE_HEARTBEAT_SECONDS = 10.0
 SSE_HEARTBEAT = ": keepalive\n\n"
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-# 回答の処理の段階の SSE（#1359）が保存済みの記録を読み直す間隔と heartbeat。
-# 共通の既定（テストで短くする）。
-ANSWER_PROGRESS_SSE_POLL_SECONDS = CHAT_PROGRESS_SSE_POLL_SECONDS
-ANSWER_PROGRESS_SSE_HEARTBEAT_SECONDS = CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS
 
 
 async def _start_answer_run(
@@ -1119,6 +1113,4 @@ async def stream_answer_progress(
         fetch,
         since=since,
         last_event_id=last_event_id,
-        poll_seconds=ANSWER_PROGRESS_SSE_POLL_SECONDS,
-        heartbeat_seconds=ANSWER_PROGRESS_SSE_HEARTBEAT_SECONDS,
     )

@@ -34,9 +34,17 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from enum import Enum
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    model_serializer,
+)
 from starlette.responses import Response, StreamingResponse
 
 CHAT_PROGRESS_SCHEMA_VERSION = 1
@@ -53,6 +61,52 @@ CHAT_PROGRESS_SSE_POLL_SECONDS = 1.0
 CHAT_PROGRESS_SSE_MAX_SECONDS = 600.0
 # ブラウザが張り直すまでの待ち（ms。SSE の `retry:`）。
 CHAT_PROGRESS_SSE_RETRY_MS = 2000
+
+
+@dataclass(frozen=True, slots=True)
+class ChatProgressSseTiming:
+    """SSE の配信の間隔（秒）。`configure_chat_progress_sse` で process 全体の既定を変えられる。"""
+
+    poll_seconds: float = CHAT_PROGRESS_SSE_POLL_SECONDS
+    heartbeat_seconds: float = CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS
+    max_seconds: float = CHAT_PROGRESS_SSE_MAX_SECONDS
+
+
+_sse_timing = ChatProgressSseTiming()
+
+
+def chat_progress_sse_timing() -> ChatProgressSseTiming:
+    """今の SSE の配信の間隔（引数で渡さなかった値に使う）。"""
+    return _sse_timing
+
+
+def configure_chat_progress_sse(
+    *,
+    poll_seconds: float | None = None,
+    heartbeat_seconds: float | None = None,
+    max_seconds: float | None = None,
+) -> ChatProgressSseTiming:
+    """SSE の配信の間隔の既定を変える（起動時の設定・テスト）。前の値を返す（テストで戻す）。"""
+    global _sse_timing
+    previous = _sse_timing
+    for value in (poll_seconds, heartbeat_seconds, max_seconds):
+        if value is not None and value <= 0:
+            raise ValueError("配信の間隔は 0 より大きい値にしてください。")
+    _sse_timing = ChatProgressSseTiming(
+        poll_seconds=poll_seconds if poll_seconds is not None else previous.poll_seconds,
+        heartbeat_seconds=(
+            heartbeat_seconds if heartbeat_seconds is not None else previous.heartbeat_seconds
+        ),
+        max_seconds=max_seconds if max_seconds is not None else previous.max_seconds,
+    )
+    return previous
+
+
+def restore_chat_progress_sse(timing: ChatProgressSseTiming) -> None:
+    """`configure_chat_progress_sse` の前の値に戻す。"""
+    global _sse_timing
+    _sse_timing = timing
+
 
 type ChatProgressStepStatus = Literal["pending", "running", "done", "failed", "skipped"]
 type ChatProgressTerminalStatus = Literal["done", "failed", "cancelled"]
@@ -72,6 +126,12 @@ def _utc_now() -> datetime:
 
 class _EventBase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """値の無い任意の項目（None）は出さない（契約: 省く。API の応答・保存・SSE で同じ形）。"""
+        data: dict[str, Any] = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
 
     schema_version: Literal[1] = Field(default=1, description="イベントの形の版。")
     seq: int = Field(ge=1, description="対象ごとに 1 から連続して増える番号（SSE の `id:`）。")
@@ -261,7 +321,17 @@ def apply_chat_progress_event(
 
 type ChatProgressSink = Callable[[ChatProgressStepEvent | ChatProgressTerminalEvent], None]
 
-_UNSET: Any = object()
+
+class Unchanged(Enum):
+    """`start` / `finish` / `update` の補足・値を「前の値のまま」にする印（`UNCHANGED`）。
+
+    None は「消す」、`UNCHANGED`（既定）は「変えない」。
+    """
+
+    UNCHANGED = "unchanged"
+
+
+UNCHANGED: Final = Unchanged.UNCHANGED
 
 
 class ChatProgressRecorder:
@@ -363,8 +433,8 @@ class ChatProgressRecorder:
         step_id: str,
         *,
         kind: str | None = None,
-        detail: str | None = _UNSET,
-        params: dict[str, ChatProgressParamValue] | None = _UNSET,
+        detail: str | None | Unchanged = UNCHANGED,
+        params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
         exclusive: bool = False,
         at: datetime | None = None,
     ) -> ChatProgressStepEvent | None:
@@ -396,8 +466,8 @@ class ChatProgressRecorder:
         status: Literal["done", "failed", "skipped"] = "done",
         *,
         kind: str | None = None,
-        detail: str | None = _UNSET,
-        params: dict[str, ChatProgressParamValue] | None = _UNSET,
+        detail: str | None | Unchanged = UNCHANGED,
+        params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
         at: datetime | None = None,
     ) -> ChatProgressStepEvent | None:
         """段階を終える（完了・失敗・スキップ）。同じ状態で変わりが無ければ記録しない。"""
@@ -427,8 +497,8 @@ class ChatProgressRecorder:
         step_id: str,
         *,
         kind: str | None = None,
-        detail: str | None = _UNSET,
-        params: dict[str, ChatProgressParamValue] | None = _UNSET,
+        detail: str | None | Unchanged = UNCHANGED,
+        params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
     ) -> ChatProgressStepEvent | None:
         """状態を変えずに補足・種類を変える（出ていない段階は何もしない）。"""
         before = self._fold.steps.get(step_id)
@@ -475,10 +545,10 @@ class ChatProgressRecorder:
         *,
         status: ChatProgressStepStatus,
         kind: str | None = None,
-        started_at: datetime | None = _UNSET,
-        finished_at: datetime | None = _UNSET,
-        detail: str | None = _UNSET,
-        params: dict[str, ChatProgressParamValue] | None = _UNSET,
+        started_at: datetime | None | Unchanged = UNCHANGED,
+        finished_at: datetime | None | Unchanged = UNCHANGED,
+        detail: str | None | Unchanged = UNCHANGED,
+        params: dict[str, ChatProgressParamValue] | None | Unchanged = UNCHANGED,
     ) -> ChatProgressStepEvent | None:
         before = self._fold.steps.get(step_id)
         if before is not None and STATUS_RANK[status] < STATUS_RANK[before.status]:
@@ -493,13 +563,13 @@ class ChatProgressRecorder:
             kind=None if resolved_kind == step_id else resolved_kind,
             status=status,
             started_at=(before.started_at if before else None)
-            if started_at is _UNSET
+            if started_at is UNCHANGED
             else started_at,
             finished_at=(before.finished_at if before else None)
-            if finished_at is _UNSET
+            if finished_at is UNCHANGED
             else finished_at,
-            detail=(before.detail if before else None) if detail is _UNSET else detail,
-            params=(before.params if before else None) if params is _UNSET else params,
+            detail=(before.detail if before else None) if detail is UNCHANGED else detail,
+            params=(before.params if before else None) if params is UNCHANGED else params,
         )
         if before is not None and _same_step(before, event):
             return None
@@ -591,9 +661,9 @@ async def chat_progress_sse_stream(
     *,
     since: int = 0,
     first: ChatProgressPage | None = None,
-    poll_seconds: float = CHAT_PROGRESS_SSE_POLL_SECONDS,
-    heartbeat_seconds: float = CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS,
-    max_seconds: float = CHAT_PROGRESS_SSE_MAX_SECONDS,
+    poll_seconds: float | None = None,
+    heartbeat_seconds: float | None = None,
+    max_seconds: float | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> AsyncIterator[str]:
@@ -605,8 +675,13 @@ async def chat_progress_sse_stream(
     - イベントの無い間は `heartbeat_seconds` ごとに `heartbeat` のイベント
       （`{"last_seq": N}`）を送る。
     - `max_seconds` を超えたら閉じる（ブラウザが `Last-Event-ID` で続きから張り直す）。
+    - 間隔の引数を省いたら `chat_progress_sse_timing()`（`configure_chat_progress_sse`）の値。
     """
 
+    timing = chat_progress_sse_timing()
+    poll = poll_seconds if poll_seconds is not None else timing.poll_seconds
+    heartbeat = heartbeat_seconds if heartbeat_seconds is not None else timing.heartbeat_seconds
+    limit = max_seconds if max_seconds is not None else timing.max_seconds
     started = monotonic()
     last_sent = started
     cursor = since
@@ -626,13 +701,13 @@ async def chat_progress_sse_stream(
         if page.terminal and cursor >= page.last_seq:
             return
         now = monotonic()
-        if now - started >= max_seconds:
+        if now - started >= limit:
             return
-        if now - last_sent >= heartbeat_seconds:
+        if now - last_sent >= heartbeat:
             last_sent = now
             yield format_sse(data={"last_seq": cursor}, event=CHAT_PROGRESS_SSE_HEARTBEAT_EVENT)
         page = None
-        await sleep(poll_seconds)
+        await sleep(poll)
 
 
 async def chat_progress_sse_response(
@@ -640,9 +715,9 @@ async def chat_progress_sse_response(
     *,
     since: int | None = None,
     last_event_id: str | None = None,
-    poll_seconds: float = CHAT_PROGRESS_SSE_POLL_SECONDS,
-    heartbeat_seconds: float = CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS,
-    max_seconds: float = CHAT_PROGRESS_SSE_MAX_SECONDS,
+    poll_seconds: float | None = None,
+    heartbeat_seconds: float | None = None,
+    max_seconds: float | None = None,
 ) -> Response:
     """SSE の応答。終わった対象を続きから求められたら 204。
 
@@ -684,6 +759,7 @@ def chat_progress_contract() -> dict[str, Any]:
             "finished_status": 204,
         },
         "polling": {"query": "since"},
+        "absent_fields": "omitted",
         "event": CHAT_PROGRESS_EVENT_ADAPTER.json_schema(),
         "page": ChatProgressPage.model_json_schema(),
     }
@@ -699,10 +775,13 @@ __all__ = [
     "CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS",
     "CHAT_PROGRESS_SSE_MAX_SECONDS",
     "CHAT_PROGRESS_SSE_POLL_SECONDS",
+    "UNCHANGED",
     "STATUS_RANK",
     "ChatProgressEvent",
     "ChatProgressFold",
     "ChatProgressPage",
+    "ChatProgressSseTiming",
+    "Unchanged",
     "ChatProgressRecorder",
     "ChatProgressSink",
     "ChatProgressStepEvent",
@@ -716,6 +795,9 @@ __all__ = [
     "chat_progress_page",
     "chat_progress_sse_response",
     "chat_progress_sse_stream",
+    "chat_progress_sse_timing",
+    "configure_chat_progress_sse",
+    "restore_chat_progress_sse",
     "dump_chat_progress_events",
     "fold_chat_progress_events",
     "format_chat_progress_sse",

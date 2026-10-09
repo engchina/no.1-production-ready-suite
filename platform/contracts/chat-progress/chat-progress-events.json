@@ -26,6 +26,7 @@
   "polling": {
     "query": "since"
   },
+  "absent_fields": "omitted",
   "event": {
     "$defs": {
       "ChatProgressParamValue": {

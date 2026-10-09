@@ -9,12 +9,18 @@
 
 import asyncio
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
-from pr_backend_core.chat_progress import ChatProgressRecorder, dump_chat_progress_events
+from pr_backend_core.chat_progress import (
+    ChatProgressRecorder,
+    configure_chat_progress_sse,
+    dump_chat_progress_events,
+    restore_chat_progress_sse,
+)
 from pytest import MonkeyPatch
 
 from app.api.routes import chat as chat_route
@@ -46,10 +52,15 @@ def fake(monkeypatch: MonkeyPatch, service: ChatAnswerRunService) -> FakeChatOra
     oracle = FakeChatOracle()
     _chat_conversation(oracle, "conv-p")
     monkeypatch.setattr(chat_route, "OracleClient", lambda *a, **k: oracle)
-    # SSE の読み直しと heartbeat を短くする（テストの時間）。
-    monkeypatch.setattr(chat_route, "ANSWER_PROGRESS_SSE_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(chat_route, "ANSWER_PROGRESS_SSE_HEARTBEAT_SECONDS", 0.05)
     return oracle
+
+
+@pytest.fixture(autouse=True)
+def short_sse_timing() -> Iterator[None]:
+    """SSE の読み直しと heartbeat を短くする（テストの時間。共通の設定で変える）。"""
+    previous = configure_chat_progress_sse(poll_seconds=0.01, heartbeat_seconds=0.05)
+    yield
+    restore_chat_progress_sse(previous)
 
 
 def _recorder(*, running: str | None = "retrieve") -> ChatProgressRecorder:

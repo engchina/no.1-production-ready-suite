@@ -269,6 +269,24 @@ describe("useChatProgressStream", () => {
     expect(latest.reconnecting).toBe(true);
   });
 
+  it("pollEvents が false なら polling せず、途絶えの取り直しと穴埋めにだけ fetchEvents を使う", async () => {
+    const onStalled = vi.fn();
+    const fetchEvents = vi.fn(async (since: number) => page([step(2, "prepare", "done")].filter((e) => e.seq > since)));
+    const options = { active: true, onStalled, fetchEvents, pollEvents: false, staleAfterMs: 5_000 };
+    render({ ...options, events: [step(1, "prepare", "running")] });
+    expect(latest.transport).toBe("push");
+    await advance(4_000);
+    expect(fetchEvents).not.toHaveBeenCalled();
+    await advance(2_000);
+    // 途絶えた: 製品の配信を張り直させ、記録から取り直す。取り直しの成功では途絶えを解かない。
+    expect(onStalled).toHaveBeenCalled();
+    expect(fetchEvents).toHaveBeenCalledWith(1, expect.any(AbortSignal));
+    expect(statuses()).toEqual({ prepare: "done" });
+    expect(latest.reconnecting).toBe(true);
+    act(() => latest.touch());
+    expect(latest.reconnecting).toBe(false);
+  });
+
   it("試行が変わったら作り直し、progressKey に試行を入れる", () => {
     render({ events: [step(1, "prepare", "done"), step(2, "generate", "running")] });
     expect(latest.progressProps.progressKey).toBe("job-1#0");
