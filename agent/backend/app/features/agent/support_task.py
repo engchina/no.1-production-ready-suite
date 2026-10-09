@@ -260,6 +260,134 @@ def text_references(tool: str, output: JsonObject) -> list[JsonObject]:
     return references
 
 
+# 台帳・一覧の行（表計算の 1 行 = 1 chunk の記録。RAG の根拠の content_kind=record。#1349）の値の
+# うち、略号・区分のような短い値（「担当部署: 経」「重要度: B」。#1365）。値の意味（正式な名前・
+# 区分ごとの規則）は別の資料（略号の表・区分の定義・規程）にあることが多く、1 回目の検索の結果には
+# 前後の文脈としてしか出ない（#1335 の再評価の D で、略号の表は MCP の並びの 21〜142 位）。
+RECORD_CONTENT_KIND = "record"
+# 記録の本文の形（rag_parser_core.sheet_records。表の行は「列名: 値 / 列名: 値」、手順書の手順は
+# 1 行に 1 つの「列名: 値」）。
+_RECORD_FIELD_SEPARATOR = re.compile(r" / |\n")
+_RECORD_VALUE_SEPARATOR = ": "
+MAX_CODE_VALUE_CHARS = 2
+# 質問の語と記録の値を結び付ける最小の長さ（値が query に含まれる側 / query の語が値に含まれる側）。
+_MIN_MATCH_VALUE_CHARS = 2
+_MIN_MATCH_TOKEN_CHARS = 3
+MAX_RECORD_CODES = 5
+RECORD_CODE_HINT = (
+    "query の実体に当たる台帳・一覧の行に、略号・区分のような短い値がある。その意味（正式な名前・"
+    "区分ごとの規則）は別の資料（略号の表・区分の定義・規程）にあることが多い。答えにこの値の意味が"
+    "要るなら、値のまま答えたり一般の規則で補ったりせず、「項目 値」（例: 「担当部署 経」）と"
+    "その意味を定める資料の語で次の段を rag_retrieve_evidence で引いて確かめてから答える。"
+)
+
+
+def _compact(text: str) -> str:
+    """比べるための文字列（NFKC・大文字小文字・空白と句読点・記号を除く）。"""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(
+        char
+        for char in normalized
+        if not char.isspace() and not unicodedata.category(char).startswith(("P", "S"))
+    )
+
+
+def _query_tokens(query: object) -> set[str]:
+    if not isinstance(query, str):
+        return set()
+    return {token for part in query.split() if (token := _compact(part))}
+
+
+def _record_fields(text: str) -> list[tuple[str, str]]:
+    """記録の本文の（列名, 値）。複数行の表頭（「 / 」でつないだ列名）の前の部分は列名につなぐ。"""
+    fields: list[tuple[str, str]] = []
+    prefix: list[str] = []
+    for part in _RECORD_FIELD_SEPARATOR.split(text):
+        name, separator, value = part.partition(_RECORD_VALUE_SEPARATOR)
+        if not separator:
+            if part.strip():
+                prefix.append(part.strip())
+            continue
+        fields.append((" / ".join([*prefix, name.strip()]).strip(" /"), value.strip()))
+        prefix = []
+    return fields
+
+
+def _is_record(item: JsonObject) -> bool:
+    if item.get("content_kind") == RECORD_CONTENT_KIND:
+        return True
+    # 種類の無い古い根拠でも、表計算の 1 行の場所（同じ行の範囲）なら記録とみなす。
+    locator = item.get("locator")
+    if not isinstance(locator, dict) or not locator.get("sheet_name"):
+        return False
+    row_start = locator.get("row_start")
+    return isinstance(row_start, int) and row_start == locator.get("row_end")
+
+
+def _is_code(value: str) -> bool:
+    compact = _compact(value)
+    return 0 < len(compact) <= MAX_CODE_VALUE_CHARS and not compact.isdigit()
+
+
+def _matched_value(fields: list[tuple[str, str]], query: str, tokens: set[str]) -> str | None:
+    """記録の値のうち、この呼び出しの query の実体に当たるもの（無ければ None）。"""
+    compact_query = _compact(query)
+    for _name, value in fields:
+        compact = _compact(value)
+        if len(compact) >= _MIN_MATCH_VALUE_CHARS and compact in compact_query:
+            return value
+        if any(len(token) >= _MIN_MATCH_TOKEN_CHARS and token in compact for token in tokens):
+            return value
+    return None
+
+
+def record_codes(output: JsonObject, query: object, run_queries: list[object]) -> JsonObject | None:
+    """根拠の台帳・一覧の行の、意味を引く次の段が要りそうな短い値の案内（#1365。無ければ None）。
+
+    対象は、この呼び出しの query の実体（正式名・略称・ID）が値に当たる記録だけ。その記録の
+    略号・区分のような短い値（数字だけの値は除く）のうち、この Run の検索の query にまだ語として
+    出ていない値を、根拠の順に挙げる。案内だけで、引くかはモデルが決める
+    （planner は作らない。#756）。
+    """
+    if not isinstance(query, str) or not query.strip():
+        return None
+    evidence = output.get("evidence")
+    if not isinstance(evidence, list):
+        return None
+    tokens = _query_tokens(query)
+    searched = set().union(*(_query_tokens(item) for item in [query, *run_queries]))
+    values: list[JsonObject] = []
+    seen: set[tuple[str, str]] = set()
+    for item in evidence:
+        if not isinstance(item, dict) or not _is_record(item):
+            continue
+        excerpt = item.get("excerpt")
+        fields = _record_fields(excerpt) if isinstance(excerpt, str) else []
+        matched = _matched_value(fields, query, tokens)
+        if matched is None:
+            continue
+        for name, value in fields:
+            if not name or not _is_code(value) or _compact(value) in searched:
+                continue
+            key = (_compact(name), _compact(value))
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(
+                {
+                    "field": _text(name, 100),
+                    "value": _text(value, 20),
+                    "record_of": _text(matched, 100),
+                    "document_id": item.get("document_id"),
+                    "file_name": item.get("file_name"),
+                    "chunk_id": item.get("chunk_id"),
+                }
+            )
+            if len(values) >= MAX_RECORD_CODES:
+                return {"values": values, "next_step": RECORD_CODE_HINT}
+    return {"values": values, "next_step": RECORD_CODE_HINT} if values else None
+
+
 def raised_evidence_limit(arguments: JsonObject, input_schema: JsonObject) -> int | None:
     """モデルが既定より小さくした `evidence_limit` を引き上げる値（#1351。引き上げなければ None）。
 

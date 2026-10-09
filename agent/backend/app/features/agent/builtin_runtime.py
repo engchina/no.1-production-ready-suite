@@ -99,6 +99,7 @@ from app.features.agent.support_task import (
     is_environment_tool,
     rag_next_step,
     raised_evidence_limit,
+    record_codes,
     repeated_query_note,
     support_task_instructions,
     text_references,
@@ -668,8 +669,9 @@ class _ToolRecorder:
 
         根拠を集める・読むツールの本文に同じ文書の別の箇所への参照があれば読む先（`references`）を、
         この Run で同じ（ほぼ同じ）query の検索を繰り返したら繰り返しを止める案内
-        （`repeated_query`。#1351）を、RAG の予算があればこの Run で残る検索の回数
-        （`rag_calls_remaining`）を足す。
+        （`repeated_query`。#1351）を、query の実体に当たる台帳・一覧の行に略号・区分のような
+        短い値があればその意味を引く次の段の案内（`record_codes`。#1365）を、RAG の予算があれば
+        この Run で残る検索の回数（`rag_calls_remaining`）を足す。
         """
         from app.features.agent.runtime import runtime_repository
 
@@ -686,6 +688,18 @@ class _ToolRecorder:
             )
             if repeated is not None:
                 output = {**output, "repeated_query": repeated}
+            codes = record_codes(
+                output,
+                call.arguments.get("query"),
+                [
+                    step.tool_call.arguments.get("query")
+                    for step in steps
+                    if step.tool_call is not None
+                    and mcp_base_tool_name(step.tool_call.name) in RAG_BUDGET_TOOLS
+                ],
+            )
+            if codes is not None:
+                output = {**output, "record_codes": codes}
         remaining = self.budget.rag_calls_remaining if self.budget is not None else None
         if remaining is not None:
             output = {**output, "rag_calls_remaining": remaining}
