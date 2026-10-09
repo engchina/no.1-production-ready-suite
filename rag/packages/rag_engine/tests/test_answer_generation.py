@@ -160,7 +160,8 @@ class AnswerGenerationTests(unittest.TestCase):
             self.assertEqual(draft_call.args[0], grounded.GENERATE_SYSTEM_PROMPT)
             for policy in ("未提供の外部データ", "帳票名・項目番号", "今回の原因を断定しない"):
                 self.assertIn(policy, draft_call.args[0])
-            self.assertIn("独自方針 今回の原因は？", draft_call.args[1])
+            # 質問は根拠と同じく全角・半角の違いをそろえて渡す（？ → ?。#1350）。
+            self.assertIn("独自方針 今回の原因は?", draft_call.args[1])
             self.assertIn("文書の操作手順", draft_call.args[1])
             # 監査は引用と言い換えの照合だけなので、画像添付時も文字だけで行う。
             self.assertEqual(text.call_args_list[-1].args[0], grounded.AUDIT_SYSTEM_PROMPT)

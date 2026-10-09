@@ -7,6 +7,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from rag_engine.retrieval.character_forms import fold_text
+
 from app.config import Settings, get_settings
 from app.rag.guardrail_adapter import resolve_guardrail_adapter
 
@@ -501,9 +503,13 @@ def evaluate_groundedness(
 
 
 def _grounding_features(text: str) -> set[str]:
-    """日本語・英数字の token と日本語 n-gram を groundedness 用特徴にする。"""
+    """日本語・英数字の token と日本語 n-gram を groundedness 用特徴にする。
+
+    文字の形は全文検索の索引と同じ ``fold_text``（NFKC・波線とダッシュ）でそろえる。
+    根拠の全角の ``ＨＲＭ`` と回答の半角の ``HRM`` を同じ token にするため (#1350)。
+    """
     features: set[str] = set()
-    for match in GROUNDING_TOKEN_PATTERN.finditer(text):
+    for match in GROUNDING_TOKEN_PATTERN.finditer(fold_text(text)):
         token = match.group(0).lower()
         if len(token) < 2 or token in GROUNDING_STOPWORDS:
             continue
