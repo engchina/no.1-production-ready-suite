@@ -9,6 +9,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest
@@ -30,6 +31,7 @@ from tests.test_chat_api import (
     FakeChatOracle,
     _chat_conversation,
     _FakePipeline,
+    _progress_events,
     _sse_events,
     _stub_stream,
 )
@@ -182,6 +184,48 @@ def _client() -> httpx.AsyncClient:
     )
 
 
+def _final_statuses(events: list[dict[str, Any]]) -> set[str]:
+    """段階のイベントを畳んだ、段階ごとの最後の状態の集合。"""
+    last: dict[str, str] = {}
+    for event in events:
+        if event["type"] == "step":
+            last[str(event["step_id"])] = str(event["status"])
+    return set(last.values())
+
+
+def _saved_events(message_id: str, *, running: str = "retrieve") -> list[dict[str, object]]:
+    """保存済みの段階のイベント（5 段階を待機中で出し、1 つを実行中にした記録）。"""
+    at = "2026-10-09T00:00:00Z"
+    steps = ["rewrite_query", "retrieve", "rerank", "generate_answer", "check_guardrail"]
+    events: list[dict[str, object]] = [
+        {
+            "schema_version": 1,
+            "seq": index + 1,
+            "target_id": message_id,
+            "attempt": 0,
+            "emitted_at": at,
+            "type": "step",
+            "step_id": step,
+            "status": "pending",
+        }
+        for index, step in enumerate(steps)
+    ]
+    events.append(
+        {
+            "schema_version": 1,
+            "seq": len(events) + 1,
+            "target_id": message_id,
+            "attempt": 0,
+            "emitted_at": at,
+            "type": "step",
+            "step_id": running,
+            "status": "running",
+            "started_at": at,
+        }
+    )
+    return events
+
+
 def _assistant(fake: FakeChatOracle, conversation_id: str = "conv-r") -> StoredMessage:
     replies = [m for m in fake.messages[conversation_id] if m.role == "ASSISTANT"]
     assert len(replies) == 1
@@ -214,9 +258,11 @@ async def test_disconnect_does_not_stop_answer_and_saves_it(
     assert assistant.reply_to_message_id == CLIENT_MESSAGE_ID
     assert assistant.citations
     assert gated.cancelled == []
-    # 処理の経過（終わった段階）も保存する（再読込の後も回答の上に出せる）。
+    # 処理の経過（段階のイベントの一覧。完了の終端まで）も保存する（再読込の後も回答の上に出せる）。
     assert assistant.progress is not None
-    assert {step["status"] for step in assistant.progress} <= {"done", "skipped"}
+    assert assistant.progress[-1]["type"] == "terminal"
+    assert assistant.progress[-1]["status"] == "done"
+    assert _final_statuses(assistant.progress) <= {"done", "skipped"}
 
 
 async def test_start_event_carries_the_streaming_message_ids(
@@ -263,8 +309,12 @@ async def test_resume_stream_continues_after_last_event_id(
     # 続きの event から、重複も欠けもなく受け取る。
     resumed_ids = [int(line[4:]) for line in body.splitlines() if line.startswith("id: ")]
     assert resumed_ids == list(range(last_id + 1, last_id + 1 + len(resumed_ids)))
-    for name in ("progress", "delta", "citations", "done", "all_done"):
+    for name in ("chat_progress", "delta", "citations", "done", "all_done"):
         assert f"event: {name}" in body
+    # 段階のイベントも続きから届き、完了の終端で終わる（#1359）。
+    progress = _progress_events(body)
+    assert progress[-1]["type"] == "terminal"
+    assert progress[-1]["status"] == "done"
     done = _sse_events(body, "done")[0]
     assert done["message_id"] == _assistant(fake).id
     # `after` の指定も同じ（作成が終わった後も、記録を残す間は最初から読める）。
@@ -319,6 +369,13 @@ async def test_cancel_stops_answer_and_marks_it_cancelled(
     error = _sse_events(replay.text, "error")[0]
     assert error["cancelled"] is True
     assert "event: all_done" in replay.text
+    # 処理の段階は停止の終端まで記録して送り、保存する（実行中の段階はスキップ。#1359）。
+    progress = _progress_events(replay.text)
+    assert progress[-1]["type"] == "terminal"
+    assert progress[-1]["status"] == "cancelled"
+    assert assistant.progress == progress
+    assert _final_statuses(progress) == {"skipped"}
+    assert replay.text.rindex("event: chat_progress") < replay.text.index("event: error")
     # 会話の取得では停止として返る（再読込しても作成中にしない）。
     async with _client() as client:
         detail = (await client.get("/api/chat/conversations/conv-r")).json()["data"]
@@ -363,12 +420,24 @@ async def test_cancel_from_another_process_closes_streaming_answer(
             lease_owner="other-host:1:abc",
             heartbeat_at=now,
             created_at=now,
+            progress=_saved_events("a-1"),
         ),
     ]
     async with _client() as client:
         response = await client.post("/api/chat/conversations/conv-r/messages/u-1/cancel")
     assert response.json()["data"] == {"cancelled": True}
-    assert fake.messages["conv-r"][1].status == "CANCELLED"
+    stopped = fake.messages["conv-r"][1]
+    assert stopped.status == "CANCELLED"
+    # 保存済みの段階の続きの番号で、停止の終端を記録する（#1359）。
+    assert stopped.progress is not None
+    assert [event["seq"] for event in stopped.progress] == list(range(1, 13))
+    assert stopped.progress[-1] == {
+        **stopped.progress[-1],
+        "type": "terminal",
+        "status": "cancelled",
+        "target_id": "a-1",
+    }
+    assert _final_statuses(stopped.progress) == {"skipped"}
 
 
 async def test_heartbeat_stops_the_task_when_cancelled_elsewhere(
@@ -413,7 +482,7 @@ async def test_interrupted_streaming_answers_become_errors_on_get(
             lease_owner=owner,
             heartbeat_at=heartbeat,
             created_at=now,
-            progress=[{"id": "retrieve", "label": "文書を探しています", "status": "running"}],
+            progress=_saved_events(message_id),
         )
 
     def question(message_id: str) -> StoredMessage:
@@ -437,7 +506,37 @@ async def test_interrupted_streaming_answers_become_errors_on_get(
     assert by_id["a-stale"]["status"] == "ERROR"
     assert by_id["a-live"]["status"] == "STREAMING"
     # 作成中の段階は会話の取得でも返す（再読込で「作成中」と今の段階を出す）。
-    assert by_id["a-live"]["progress"][0]["status"] == "running"
+    assert by_id["a-live"]["progress"][-1]["status"] == "running"
+    assert by_id["a-live"]["progress"][-1]["step_id"] == "retrieve"
+    # 中断の失敗にした回答は、段階も失敗の終端にする（実行中の段階は失敗。#1359）。
+    for message_id in ("a-own", "a-stale"):
+        events = by_id[message_id]["progress"]
+        assert events[-1]["type"] == "terminal"
+        assert events[-1]["status"] == "failed"
+        retrieve = [event for event in events if event.get("step_id") == "retrieve"][-1]
+        assert retrieve["status"] == "failed"
+
+
+async def test_saved_snapshot_progress_is_dropped(
+    fake: FakeChatOracle, service: ChatAnswerRunService
+) -> None:
+    """旧形式（段階の snapshot）の保存は捨てて空にする（未リリースのため互換を持たない。#1359）。"""
+    now = datetime.now(UTC)
+    fake.messages["conv-r"] = [
+        StoredMessage(id="u-1", conversation_id="conv-r", role="USER", content="q", created_at=now),
+        StoredMessage(
+            id="a-1",
+            conversation_id="conv-r",
+            role="ASSISTANT",
+            content="回答",
+            reply_to_message_id="u-1",
+            created_at=now,
+            progress=[{"id": "retrieve", "label": "文書を探しています", "status": "done"}],
+        ),
+    ]
+    async with _client() as client:
+        detail = (await client.get("/api/chat/conversations/conv-r")).json()["data"]
+    assert detail["messages"][1]["progress"] == []
 
 
 async def test_active_answers_per_user_are_limited(
@@ -495,6 +594,12 @@ async def test_shutdown_marks_running_answers_interrupted(
     await service.shutdown()
     assistant = _assistant(fake)
     assert (assistant.status, assistant.content) == ("ERROR", CHAT_ANSWER_INTERRUPTED_MESSAGE)
+    # 処理の段階は中断の失敗の終端まで記録して保存する（実行中の検索は失敗。#1359）。
+    assert assistant.progress is not None
+    assert assistant.progress[-1]["type"] == "terminal"
+    assert assistant.progress[-1]["status"] == "failed"
+    retrieve = [event for event in assistant.progress if event.get("step_id") == "retrieve"][-1]
+    assert retrieve["status"] == "failed"
 
 
 def test_message_schema_and_migration_add_answer_run_columns() -> None:
@@ -574,3 +679,48 @@ def test_close_streaming_sql_only_touches_streaming_rows(monkeypatch: MonkeyPatc
     assert binds["stale_seconds"] == 60.0
     with pytest.raises(ValueError):
         asyncio.run(client.close_streaming_chat_message("a-1", status="COMPLETE", content=""))
+
+
+def test_close_streaming_sql_locks_row_to_finalize_progress(monkeypatch: MonkeyPatch) -> None:
+    """段階を終端にして閉じるときは、行を lock して読み、同じ transaction で段階も書く（#1359）。"""
+    from collections.abc import Mapping
+
+    from app.clients import oracle as oracle_module
+
+    fetched: list[str] = []
+    updated: list[tuple[str, Mapping[str, object]]] = []
+
+    def fake_fetch_one(
+        _connection: object, statement: str, _binds: Mapping[str, object]
+    ) -> dict[str, object]:
+        fetched.append(statement)
+        return {"progress_json": json.dumps(_saved_events("a-1"))}
+
+    def fake_execute_count(_connection: object, statement: str, binds: Mapping[str, object]) -> int:
+        updated.append((statement, binds))
+        return 1
+
+    class _Client(oracle_module.OracleClient):
+        async def _run_transaction(self, operation):  # type: ignore[no-untyped-def]
+            return operation(object())
+
+    monkeypatch.setattr(oracle_module, "_fetch_one", fake_fetch_one)
+    monkeypatch.setattr(oracle_module, "_execute_count", fake_execute_count)
+    client = _Client.__new__(_Client)
+    assert asyncio.run(
+        client.close_streaming_chat_message(
+            "a-1",
+            status="CANCELLED",
+            content="停止",
+            scoped=False,
+            finalize_progress=chat_answer_runs.chat_progress_closer("a-1", "cancelled"),
+        )
+    )
+    assert fetched[0].endswith("FOR UPDATE")
+    assert "m.status = 'STREAMING'" in fetched[0]
+    statement, binds = updated[0]
+    assert "m.progress_json = :progress_json" in statement
+    saved = json.loads(str(binds["progress_json"]))
+    assert saved[-1]["type"] == "terminal"
+    assert saved[-1]["status"] == "cancelled"
+    assert saved[-1]["seq"] == 12

@@ -293,8 +293,9 @@ class StoredMessage:
     elapsed_ms: float | None = None
     tenant_id_hash: str | None = None
     user_id_hash: str | None = None
-    # 回答の処理の段階（3 製品共通の ChatProgressStep の一覧。#1146 / #1175）。作成中は今の段階、
-    # 終わった後は処理の経過。段階の無いメッセージ（USER・#1175 より前の回答）は None。
+    # 回答の処理の段階のイベントの一覧（`pr_backend_core.chat_progress` の JSON。#1359）。
+    # 作成中は記録の途中、終わった後は終端まで。段階の無いメッセージ（USER）は None。読むときは
+    # `parse_chat_progress_events` を通す（旧形式の段階の snapshot は捨てる）。
     progress: list[dict[str, Any]] | None = None
     # 作成中（STREAMING）の回答を作っているプロセスと、その最後の heartbeat（#1175）。
     lease_owner: str | None = None
@@ -3684,6 +3685,7 @@ class OracleClient:
         lease_owner: str | None = None,
         stale_seconds: float | None = None,
         scoped: bool = True,
+        finalize_progress: Callable[[object], list[dict[str, Any]] | None] | None = None,
     ) -> bool:
         """作成中(``STREAMING``)の回答を停止(``CANCELLED``)・中断(``ERROR``)にする(#1175)。
 
@@ -3692,6 +3694,9 @@ class OracleClient:
           ``stale_seconds`` を超えて途絶えた行だけ(会話の取得のときの中断の判定)。
         - どちらも無し: ``STREAMING`` の行(利用者の停止)。
         ``scoped`` のときは会話の範囲(tenant・作成した利用者・検索・回答プロファイル)に閉じる。
+        ``finalize_progress`` は、保存済みの処理の段階(``progress_json`` の JSON の値)から、
+        閉じるときに保存する段階(終端まで記録したイベントの一覧。#1359)を作る。行を lock して
+        読み、同じ transaction で書く(別のプロセスの記録と入れ違えない)。
         """
         if status not in {"CANCELLED", "ERROR"}:
             raise ValueError(f"status={status} では閉じられません。")
@@ -3726,15 +3731,67 @@ class OracleClient:
                 )
             )
             binds = _with_conversation_access_bind(binds)
+        where_sql = " AND ".join(conditions)
         statement = (
-            "UPDATE rag_messages m SET m.status = :status, m.content = :content WHERE "
-            + " AND ".join(conditions)
+            "UPDATE rag_messages m SET m.status = :status, m.content = :content"
+            + (", m.progress_json = :progress_json" if finalize_progress is not None else "")
+            + " WHERE "
+            + where_sql
         )
 
         def operation(connection: OracleConnectionProtocol) -> int:
-            return _execute_count(connection, statement, binds)
+            if finalize_progress is None:
+                return _execute_count(connection, statement, binds)
+            row = _fetch_one(
+                connection,
+                "SELECT m.progress_json FROM rag_messages m WHERE " + where_sql + " FOR UPDATE",
+                binds,
+            )
+            if row is None:
+                return 0
+            saved = row.get("progress_json")
+            progress = finalize_progress(None if saved is None else _json_object_list(saved))
+            return _execute_count(
+                connection,
+                statement,
+                {**binds, "progress_json": None if progress is None else _json_dumps(progress)},
+            )
 
         return await self._run_transaction(operation) > 0
+
+    async def get_chat_message(self, conversation_id: str, message_id: str) -> StoredMessage | None:
+        """会話の 1 つのメッセージ(tenant/user scope)。段階の polling / SSE で読み直す(#1359)。
+
+        引用などの大きい列は読まない(段階・状態・作成しているプロセスだけ)。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT
+                m.message_id,
+                m.conversation_id,
+                m.reply_to_message_id,
+                m.role,
+                m.model,
+                m.status,
+                m.progress_json,
+                m.lease_owner,
+                m.heartbeat_at,
+                m.created_at
+            FROM rag_messages m
+            JOIN rag_conversations c
+              ON c.conversation_id = m.conversation_id
+            WHERE m.conversation_id = :conversation_id
+              AND m.message_id = :message_id
+              AND {access_sql}
+            """,
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
+            ),
+            _with_conversation_access_bind(
+                {"conversation_id": conversation_id, "message_id": message_id}
+            ),
+        )
+        return None if row is None else _stored_message_from_row(row)
 
     async def list_conversations_for_guardrail_migration(
         self, *, limit: int, offset: int
