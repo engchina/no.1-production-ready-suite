@@ -255,6 +255,20 @@ describe("useChatProgressStream", () => {
     expect(statuses()).toEqual({ prepare: "done", generate: "running" });
   });
 
+  it("events に新しい番号が届いたら、配信を受け取ったとして途絶えを数え直す", async () => {
+    const onStalled = vi.fn();
+    const events = [step(1, "prepare", "running")];
+    render({ events, active: true, onStalled, staleAfterMs: 5_000 });
+    await advance(4_000);
+    render({ events: [...events, step(2, "prepare", "done")], active: true, onStalled, staleAfterMs: 5_000 });
+    await advance(4_000);
+    expect(onStalled).not.toHaveBeenCalled();
+    expect(latest.reconnecting).toBe(false);
+    await advance(2_000);
+    expect(onStalled).toHaveBeenCalled();
+    expect(latest.reconnecting).toBe(true);
+  });
+
   it("試行が変わったら作り直し、progressKey に試行を入れる", () => {
     render({ events: [step(1, "prepare", "done"), step(2, "generate", "running")] });
     expect(latest.progressProps.progressKey).toBe("job-1#0");

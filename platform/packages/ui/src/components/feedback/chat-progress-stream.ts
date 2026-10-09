@@ -141,9 +141,11 @@ export function useChatProgressStream({
     setState((previous) => reduceChatProgressEvents(previous, { key: keyRef.current, events: incoming, since }));
   }, []);
 
-  // 製品が受け取ったイベント（と対象の切り替え）を積む。
+  // 製品が受け取ったイベント（と対象の切り替え）を積む。新しい番号が届いたら、配信を受け取ったとして数える。
+  const touchRef = useRef<() => void>(() => undefined);
   useLayoutEffect(() => {
     setState((previous) => reduceChatProgressEvents(previous, { key, events: events ?? [] }));
+    if (events?.some((event) => event.target_id === key && event.seq > cursorRef.current)) touchRef.current();
   }, [key, events]);
 
   const terminal = current.terminal;
@@ -190,7 +192,6 @@ export function useChatProgressStream({
         : "push";
 
   // 途絶えの判定と取り直し（#1160 の hook を中で使う）。
-  const touchRef = useRef<() => void>(() => undefined);
   const useSseRef = useRef(useSse);
   useLayoutEffect(() => {
     useSseRef.current = useSse;
