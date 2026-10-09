@@ -1267,6 +1267,7 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
     モデルは表示ID・出典ID・レコードIDを取り違えることがある。原文照合は決定的なので、
     IDの誤記だけで正しい引用を捨てない。複数の根拠に一致する引用は推測で選ばない。
     完全一致の規則で結び付かない引用は最後に文単位の近似一致（#711）を試し、`match["kind"]` に "fuzzy" を残す。
+    規則の item で続く文だけを写し誤った引用は、逐語の先頭の文に結び付け、`match["kind"]` に "prefix" を残す (#1383)。
     """
     named = [s for s in spans if item.evidence_id and item.evidence_id in {
         s["evidence_id"], s.get("label"), s.get("source_id"), *s.get("source_aliases", ())}]
@@ -1301,6 +1302,11 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
             if span is not None and match is not None:
                 match["kind"] = "fuzzy"
             return span, quote
+    span, quote = _prefix_bound_quote(item, spans)
+    if span is not None:
+        if match is not None:
+            match["kind"] = "prefix"
+        return span, quote
     if nearest and match is not None:
         # 結び付けるほど似ていないが近い原文がある。削除せず原文のみ提示にし、是正の feedback にも示す。
         span, quote, ratio = max(nearest, key=lambda entry: entry[2])
@@ -1317,39 +1323,76 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
     return None, "quote がどの Evidence の原文とも一致しない"
 
 
+def _verbatim_prefix(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict, list[str], int, int, int, list[int]] | None:
+    """引用の先頭の文（1 文以上）が、指した根拠の 1 か所に逐語であり、続く文が原文と違う引用の一致を返す (#1383)。
+
+    戻り値は (根拠, 引用の文, 一致した文の数, 照合用文字列での開始・終了, 位置の対応)。指した根拠が 1 つに
+    決まらない・2 文未満・先頭の文から違う・先頭の文が根拠の中で 1 か所に決まらない場合は None。
+    """
+    named = [s for s in spans if item.evidence_id and item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id")}]
+    sentences = [part.strip() for part in re.split(r"(?<=[。．])", item.quote or "") if part.strip()]
+    if len(named) != 1 or len(sentences) < 2:
+        return None
+    canonical_text, positions = _canonical(named[0]["text"])
+    for count in range(len(sentences) - 1, 0, -1):
+        prefix = _canonical("".join(sentences[:count]))[0]
+        if len(prefix) < _QUOTE_SENTENCE_MIN_CHARS:
+            return None
+        start = canonical_text.find(prefix)
+        if start < 0:
+            continue
+        if canonical_text.find(prefix, start + 1) >= 0:
+            return None
+        return named[0], sentences, count, start, start + len(prefix), positions
+    return None
+
+
 def miscopied_sentence(item: GroundedItem, spans: Sequence[dict]) -> dict[str, str]:
     """引用の先頭の文は指した根拠に逐語であるのに、続く文が原文と違うとき、その文と原文の続きを返す (#1383)。
 
     繰り返しの多い表（「略号「製」: 製造部。生産本部に属します。」が並ぶ略号の表）で、モデルは隣の行の語
     （「管理本部」）を写し誤る。理由の「一致しない」だけでは是正の回も同じ誤りを繰り返したので、どの文を
-    どう写し誤ったかを示す。結び付け（公開の可否）には使わない: 原文にない文を含む引用は従来どおり落とす (#678)。
-    先頭の文から違う・指した根拠が 1 つに決まらない・先頭の文が根拠の中で 1 か所に決まらない場合は空。
+    どう写し誤ったかと、写し直す引用の候補（一致した先頭の文と原文の続き）を示す。
     """
-    named = [s for s in spans if item.evidence_id and item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id")}]
-    sentences = [part.strip() for part in re.split(r"(?<=[。．])", item.quote or "") if part.strip()]
-    if len(named) != 1 or len(sentences) < 2:
+    found = _verbatim_prefix(item, spans)
+    if found is None:
         return {}
-    text = named[0]["text"]
-    canonical_text, positions = _canonical(text)
-    for count in range(len(sentences) - 1, 0, -1):
-        prefix = _canonical("".join(sentences[:count]))[0]
-        if len(prefix) < _QUOTE_SENTENCE_MIN_CHARS:
-            return {}
-        start = canonical_text.find(prefix)
-        if start < 0:
-            continue
-        if canonical_text.find(prefix, start + 1) >= 0:
-            return {}
-        rest = text[positions[start + len(prefix) - 1] + 1:]
-        rest = rest.lstrip().lstrip("。．")  # 照合で無視した句点は前の文に属する
-        following = re.match(r"\s*([^。．\n]*[。．]?)", rest)
-        original = following.group(1).strip() if following else ""
-        if not original:
-            return {}
-        # 写し直す引用の候補（一致した先頭の文と原文の続き）。指摘だけでは是正の回も同じ語を写し誤った。
-        verbatim = (_original_range_at(text, positions, start, start + len(prefix)) + original).strip()
-        return {"quoted": sentences[count], "original": original, "verbatim_quote": verbatim}
-    return {}
+    span, sentences, count, start, end, positions = found
+    text = span["text"]
+    rest = text[positions[end - 1] + 1:].lstrip().lstrip("。．")  # 照合で無視した句点は前の文に属する
+    following = re.match(r"\s*([^。．\n]*[。．]?)", rest)
+    original = following.group(1).strip() if following else ""
+    if not original:
+        return {}
+    verbatim = (_original_range_at(text, positions, start, end) + original).strip()
+    return {"quoted": sentences[count], "original": original, "verbatim_quote": verbatim}
+
+
+_CLAIM_WORD = re.compile(r"[一-龯々ァ-ヶーA-Za-z0-9]{2,}")
+
+
+def _prefix_bound_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict | None, str]:
+    """規則の item で、引用の先頭の文が指した根拠に逐語で、続く文だけを写し誤り、説明がその続きの語を使っていなければ、
+    逐語の先頭の文だけを引用として結び付ける (#1383)。
+
+    略号の表（「略号「購」: 購買部。生産本部に属します。」）の続きの文を隣の行の語（「管理本部」）で写し誤ると、
+    説明（「略号「購」は購買部」）を裏付ける先頭の文まで落ち、多段の結論が 1 段欠けていた。結び付けるのは
+    逐語の範囲だけで、写し誤った文は表示にも監査にも渡さない。説明が写し誤った文の語（先頭の文にない語）を
+    使っていれば結び付けない（原文にない内容を説明で公開しない）。操作の手順は対象にしない: 原文にない手順を
+    含む引用は従来どおり落とす (#678)。
+    """
+    if item.kind != "rule":
+        return None, ""
+    found = _verbatim_prefix(item, spans)
+    if found is None:
+        return None, ""
+    span, sentences, count, start, end, positions = found
+    prefix_words = set(_CLAIM_WORD.findall(fold_width("".join(sentences[:count]))))
+    rest_words = set(_CLAIM_WORD.findall(fold_width("".join(sentences[count:])))) - prefix_words
+    text = fold_width(item.text)
+    if any(word in text for word in rest_words):
+        return None, ""
+    return span, _original_range_at(span["text"], positions, start, end)
 
 
 # 最長の連続断片で引用元を決めるときの下限（照合用文字列の字数と、引用に占める割合）(#1092)。短い定型句

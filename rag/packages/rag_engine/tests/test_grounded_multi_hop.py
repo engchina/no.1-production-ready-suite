@@ -137,7 +137,9 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
     """略号の表の隣の行の語を写し誤った引用は従来どおり落とし、是正には原文の続きを示す (#1383)。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
-    miscopied = item(by_text[CODES], "略号「製」は製造部です。", "略号「製」: 製造部。管理本部に属します。", kind="rule", request_id="Q1")
+    # 説明が写し誤った文の語（管理本部）を使うので、逐語の先頭の文にも結び付けない。
+    miscopied = item(by_text[CODES], "略号「製」は製造部で、管理本部に属します。", "略号「製」: 製造部。管理本部に属します。",
+                     kind="rule", request_id="Q1")
     model = FakeModel([draft(miscopied, *_hops(by_text)[1:], summary=CONCLUSION)],
                       [_supported(3)])
 
@@ -148,6 +150,34 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
                                        "verbatim_quote": "略号「製」: 製造部。生産本部に属します。"}
     feedback = next(prompt for name, prompt in model.prompts[2:] if name == "GroundedDraft")
     assert '"original": "生産本部に属します。"' in feedback
+
+
+def test_rule_quote_with_a_miscopied_trailing_sentence_binds_to_its_verbatim_first_sentence():
+    """規則の item で、説明が使わない続きの文だけを写し誤った引用は、逐語の先頭の文に結び付けて段を残す (#1383)。
+
+    説明が写し誤った文の語を使う item と、操作の手順（原文にない手順を含む引用は落とす #678）は結び付けない。
+    """
+    ctx = _context()
+    by_text = ids(ctx, QUESTION)
+    hops = list(_hops(by_text))
+    hops[1] = item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。研究本部に属します。", kind="rule", request_id="Q1")
+    model = FakeModel([draft(*hops, summary=CONCLUSION)], [_supported(4)])
+
+    result = run(model, ctx, QUESTION).response
+
+    assert result.answer_text.startswith(CONCLUSION)
+    assert "研究本部" not in result.answer_text
+    assert result.generation_trace["rounds"][0]["dropped"] == []
+    assert result.generation_trace["rounds"][0]["items"][1]["quote_match"] == "prefix"
+    spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}]
+
+    def bound(kind, text):
+        return grounded.resolve_evidence(GroundedItem(kind=kind, text=text, evidence_id="E1",
+                                                      quote="略号「労」: 労務部。研究本部に属します。"), spans)
+
+    assert bound("rule", "略号「労」は労務部です。") == (spans[0], "略号「労」: 労務部。")
+    assert bound("rule", "略号「労」は労務部で、研究本部に属します。")[0] is None  # 写し誤った語を説明に使う
+    assert bound("operation", "略号「労」は労務部です。")[0] is None  # 手順は従来どおり
 
 
 def test_miscopied_sentence_needs_a_verbatim_first_sentence_in_the_named_evidence():
