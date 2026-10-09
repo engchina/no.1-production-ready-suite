@@ -71,6 +71,7 @@ def test_stored_citation_metadata_takes_display_regions_like_the_screen() -> Non
 
 
 def test_stored_citation_metadata_drops_null_and_unknown_keys() -> None:
+    # 分割の版と統合の値は監査・調査のために残す（#1376）。
     assert stored_citation_metadata(
         {
             "page_start": 3,
@@ -81,7 +82,7 @@ def test_stored_citation_metadata_drops_null_and_unknown_keys() -> None:
             "text_sha256": "x",
             "context_header": "a > b",
         }
-    ) == {"page_start": 3}
+    ) == {"page_start": 3, "rrf_score": 0.01, "chunk_set_id": "cs-1"}
 
 
 def _evaluation_input() -> dict[str, Any]:

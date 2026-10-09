@@ -74,6 +74,7 @@
           "vector_rank": 3,
           "page_end": 1,
           "evidence_role": "neighbor_context",
+          "chunk_set_id": "14d7e71f39bc2c88c296b231fe59daad256b83a6a6ece2f13216f711fd8818e7",
           "page_height": 3508,
           "evidence_model_used": true,
           "recipe_id": "edd307a0fe983863da384019cc66edf70c11c25a1d5dc8928e3a21bb6eae4939",
@@ -81,6 +82,7 @@
           "bbox_unit": "absolute",
           "page_width": 2481,
           "recipe_slot_no": 1,
+          "rrf_score": 0.031746,
           "page_number": 1,
           "bbox": "[236.7, 168.2, 2039.8, 467.0]",
           "section_path": "障害連絡規程",
@@ -188,6 +190,7 @@
           "element_ids": "sheet-000-r40",
           "evidence_role": "neighbor_context",
           "chunk_profile": "structure_v1",
+          "chunk_set_id": "fd4ee32634b407075c67b2e88d824d7c327f4c0fe746899e7fb0d76cdabbb22b",
           "row_end": 40,
           "section_title": "システム台帳",
           "evidence_model_used": false,
@@ -277,6 +280,7 @@
           "vector_rank": 1,
           "page_end": 1,
           "evidence_role": "retrieved_anchor",
+          "chunk_set_id": "14d7e71f39bc2c88c296b231fe59daad256b83a6a6ece2f13216f711fd8818e7",
           "page_height": 3508,
           "evidence_model_used": true,
           "recipe_id": "edd307a0fe983863da384019cc66edf70c11c25a1d5dc8928e3a21bb6eae4939",
@@ -284,6 +288,7 @@
           "bbox_unit": "absolute",
           "page_width": 2481,
           "recipe_slot_no": 1,
+          "rrf_score": 0.032787,
           "answer_citation_lines": [
             1
           ],
@@ -406,6 +411,7 @@
           "vector_rank": 1,
           "page_end": 1,
           "evidence_role": "retrieved_anchor",
+          "chunk_set_id": "14d7e71f39bc2c88c296b231fe59daad256b83a6a6ece2f13216f711fd8818e7",
           "page_height": 3508,
           "evidence_model_used": true,
           "recipe_id": "edd307a0fe983863da384019cc66edf70c11c25a1d5dc8928e3a21bb6eae4939",
@@ -413,6 +419,7 @@
           "bbox_unit": "absolute",
           "page_width": 2481,
           "recipe_slot_no": 1,
+          "rrf_score": 0.032787,
           "answer_citation_lines": [
             1
           ],
@@ -524,6 +531,7 @@
           "element_ids": "sheet-000-r40",
           "evidence_role": "neighbor_context",
           "chunk_profile": "structure_v1",
+          "chunk_set_id": "fd4ee32634b407075c67b2e88d824d7c327f4c0fe746899e7fb0d76cdabbb22b",
           "row_end": 40,
           "section_title": "システム台帳",
           "evidence_model_used": false,
@@ -613,6 +621,7 @@
           "context_role": "evidence",
           "evidence_model_used": false,
           "keyword_rank": 4,
+          "rrf_score": 0.01,
           "display_regions": [
             {
               "page": 2,
