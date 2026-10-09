@@ -50,6 +50,8 @@ class FakeApi:
         self.statuses = statuses
         self.calls: list[tuple[str, str, Any]] = []
         self.documents: dict[str, str] = {}
+        # 前の評価で同じ内容を取り込んだファイル → 重複の元の文書 ID（#1381）。
+        self.duplicates: dict[str, str] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path.removeprefix("/api")
@@ -65,7 +67,10 @@ class FakeApi:
             name = "params.xlsx" if b'filename="params.xlsx"' in request.content else "manual.pdf"
             document_id = f"doc-{name}"
             self.documents[document_id] = name
-            return httpx.Response(200, json={"data": {"document_id": document_id}})
+            data = {"document_id": document_id}
+            if name in self.duplicates:
+                data["duplicate_of_document_id"] = self.duplicates[name]
+            return httpx.Response(200, json={"data": data})
         document_id = path.split("/")[2]
         name = self.documents[document_id]
         if path.endswith("/recipes") and request.method == "GET":
@@ -113,6 +118,30 @@ def test_loader_uploads_sets_excel_recipe_and_approves_gates(tmp_path: Path) -> 
     approvals = [call[1] for call in api.calls if call[1].endswith("/approve")]
     # 同じゲートは 1 回だけ承認する。
     assert approvals == ["/documents/doc-manual.pdf/recipes/r1/approve"]
+
+
+def test_loader_ingests_duplicate_content_as_its_own_document(tmp_path: Path) -> None:
+    """前の評価と同じ内容のファイルも取込を進め、この KB の文書 ID を使う(#1381)。"""
+    (tmp_path / "manual.pdf").write_bytes(b"%PDF-1.4")
+    api = FakeApi({"manual.pdf": ["UPLOADED", "INDEXED"]})
+    api.duplicates["manual.pdf"] = "doc-earlier-kb"
+    lines: list[str] = []
+    client = httpx.Client(transport=httpx.MockTransport(api), base_url="http://test")
+    loader = CorpusLoader(
+        client, "http://test", poll_interval_seconds=0, sleep=lambda _: None, log=lines.append
+    )
+
+    document_id = loader.ingest(tmp_path / "manual.pdf", "kb-new")
+    loader.wait_indexed({"manual.pdf": document_id})
+
+    assert document_id == "doc-manual.pdf"
+    jobs = [call[1] for call in api.calls if call[1].endswith("/ingestion-jobs")]
+    assert jobs == ["/documents/doc-manual.pdf/recipes/r1/ingestion-jobs"]
+    assert any("duplicate manual.pdf" in line and "doc-earlier-kb" in line for line in lines)
+    resolved = resolve_golden_set(
+        GOLDEN_SET, {"manual.pdf": document_id, "params.xlsx": "d2"}, "kb"
+    )
+    assert resolved["cases"][0]["relevant_document_ids"] == ["doc-manual.pdf", "doc-fixed"]
 
 
 def test_loader_reports_failed_ingestion(tmp_path: Path) -> None:

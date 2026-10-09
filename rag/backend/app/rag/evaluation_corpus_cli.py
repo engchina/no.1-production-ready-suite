@@ -6,7 +6,10 @@
 
 1. ナレッジベースを作る（`--knowledge-base-id` を渡したときはそれを使う）。
 2. 評価セットが参照するファイルを、評価セットと同じフォルダ（`--corpus-dir` で変更可）から
-   アップロードし、取込を始める。Excel は前処理 `excel_to_json` で読む。
+   アップロードし、取込を始める。Excel は前処理 `excel_to_json` で読む。前の評価で同じ内容の
+   ファイルを取り込んでいても（重複の文書。`duplicate_of_document_id`）、取込を進めてこの
+   ナレッジベースの文書として索引を作る。自前の索引を持つ重複の検索は自分の chunk だけで、
+   前の評価の文書（重複の元）は検索の範囲に入らない（#1381）。
 3. 索引（INDEXED）まで待つ。確認待ち（REVIEW など）のゲートは承認して進める。
 4. 評価セットに文書の版（`document_versions`。#1366）があれば、旧版の文書を新しい版に置き換えた
    文書として登録する（文書詳細の「版」と同じ。旧版は既定で回答の検索から外れる）。
@@ -297,6 +300,13 @@ class CorpusLoader:
             )
         )
         document_id = str(uploaded.get("document_id") or uploaded.get("id"))
+        duplicate_of = uploaded.get("duplicate_of_document_id")
+        if duplicate_of:
+            # 取込を進めて自前の索引を作るので、重複の元（前の評価の文書）は検索に入らない。
+            self._log(
+                f"duplicate {path.name}: 既存の文書 {duplicate_of} と同じ内容です"
+                "（このナレッジベースの文書として索引を作ります）"
+            )
         recipe_id = self._recipe(document_id)["recipe_id"]
         recipe = recipe_for(path, entity_index=self._entity_index)
         if recipe:
