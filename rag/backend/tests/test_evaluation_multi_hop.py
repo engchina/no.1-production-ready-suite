@@ -1,10 +1,11 @@
-"""多段の質問（multi-hop）の評価セットと指標のテスト（#1335）。
+"""多段の質問（multi-hop）の評価セットと指標のテスト（#1335・#1352）。
 
 - 評価セット（`rag/evaluation/multi-hop/multi-hop.json`）が今の評価のスキーマで読め、必要な根拠の
   語句が、指した資料の原稿（HTML / 表の原稿）と同梱の PDF / xlsx に実際に書いてある。
 - 根拠の連鎖の完全率（`evidence_chain_complete_rate`）と、種類別・段の数別の内訳。
 - 資料の生成の script（`rag/scripts/generate_evaluation_corpus.py`）が、表の原稿から同梱と同じ
-  xlsx を作る。
+  xlsx を作る。多段の資料の原稿と評価セットは、実体のデータ（`rag/scripts/multi_hop_corpus.py`）から
+  同梱と同じものができる（#1352）。
 """
 
 import importlib.util
@@ -31,6 +32,9 @@ from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchResponse
 RAG_DIR = Path(__file__).resolve().parents[2]
 CORPUS = RAG_DIR / "evaluation" / "multi-hop"
 GENERATOR = RAG_DIR / "scripts" / "generate_evaluation_corpus.py"
+SOURCE_BUILDER = RAG_DIR / "scripts" / "multi_hop_corpus.py"
+# #1335 の 33 問（#1352 で資料を増やしても ID・質問・期待する語を変えない）。
+ORIGINAL_CASE_COUNT = 33
 
 
 def _generator() -> ModuleType:
@@ -38,6 +42,12 @@ def _generator() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _source_builder() -> ModuleType:
+    module: ModuleType | None = _generator().source_builder(CORPUS)
+    assert module is not None
     return module
 
 
@@ -79,10 +89,10 @@ def _xlsx_cells(path: Path) -> list[tuple[str, list[list[tuple[Any, str]]]]]:
 
 
 def test_multi_hop_set_has_every_reasoning_type_and_both_splits() -> None:
-    """30 問前後で、種類（対照の 1 段を含む）と区分がそろい、各ケースが段ごとの根拠を持つ。"""
+    """60 問以上で、種類（対照の 1 段を含む）と区分がそろい、各ケースが段ごとの根拠を持つ。"""
     _payload, request = _load_set()
     cases = request.cases
-    assert 28 <= len(cases) <= 36
+    assert 60 <= len(cases) <= 90
     assert len({case.id for case in cases}) == len(cases)
     assert {case.reasoning_type for case in cases} == {
         "single_hop",
@@ -120,7 +130,8 @@ def test_multi_hop_evidence_is_written_in_its_sources_and_corpus() -> None:
 
     payload, request = _load_set()
     names = referenced_files(payload)
-    assert len(names) == 7
+    # 紛らわしい資料（旧版・別の会社・似た承認の規程）も、評価の CLI が取り込むよう 1 問は参照する。
+    assert len(names) == 15
     assert all((CORPUS / name).is_file() for name in names)
     pdf_text = {
         name: "\n".join(page.extract_text() for page in PdfReader(CORPUS / name).pages)
@@ -531,3 +542,92 @@ def test_generator_rejects_rows_that_do_not_match_the_header(tmp_path: Path) -> 
     )
     with pytest.raises(ValueError, match="列の数"):
         generator.load_workbook_spec(spec_path)
+
+
+# ---- 多段の資料の原稿と評価セットの生成（#1352） ------------------------------------------
+
+
+def test_source_builder_rebuilds_committed_sources_and_set(tmp_path: Path) -> None:
+    """実体のデータから作った原稿と評価セットは、同梱のものと同じ（作り直しても同じ）。"""
+    builder = _source_builder()
+    corpus_dir = tmp_path / "multi-hop"
+    first = builder.write_sources(corpus_dir)
+    second = builder.write_sources(corpus_dir)
+    assert [path.name for path in first] == [path.name for path in second]
+    committed = sorted(path.name for path in (CORPUS / "sources").iterdir())
+    assert sorted(path.name for path in (corpus_dir / "sources").iterdir()) == committed
+    for path in first:
+        relative = path.relative_to(corpus_dir)
+        assert path.read_bytes() == (CORPUS / relative).read_bytes(), relative
+
+
+def test_generator_sources_only_writes_sources_and_set(tmp_path: Path) -> None:
+    """`multi-hop` は変換の前に原稿と評価セットを作る（`--sources-only` はそこまで）。"""
+    corpus_dir = tmp_path / "multi-hop"
+    written = _generator().build_corpus(corpus_dir, sources_only=True)
+    assert written[-1] == corpus_dir / "multi-hop.json"
+    assert all(path.is_file() for path in written)
+    assert not list(corpus_dir.glob("*.pdf")) and not list(corpus_dir.glob("*.xlsx"))
+
+
+def test_multi_hop_set_keeps_the_original_cases() -> None:
+    """#1335 の 33 問が先頭に同じ順で残り、#1352 の問は dev / holdout の両方にある。"""
+    builder = _source_builder()
+    _payload, request = _load_set()
+    original = [spec.id for spec in builder.ORIGINAL_CASES]
+    assert len(original) == ORIGINAL_CASE_COUNT
+    assert [case.id for case in request.cases[:ORIGINAL_CASE_COUNT]] == original
+    for spec, case in zip(builder.ORIGINAL_CASES, request.cases, strict=False):
+        assert (case.query, case.expected_answer_keywords) == (spec.query, list(spec.keywords))
+    added = request.cases[ORIGINAL_CASE_COUNT:]
+    assert len(added) >= 30
+    assert {case.split for case in added} == {"dev", "holdout"}
+
+
+def test_multi_hop_corpus_is_larger_than_the_default_context() -> None:
+    """既定の top_k で資料の全部が文脈に入らない大きさ（子 chunk の見積もりが 200 以上）。"""
+    builder = _source_builder()
+    payload, _request = _load_set()
+    counts = builder.estimate_chunks(builder.build_documents())
+    assert sum(counts.values()) >= 200
+    assert sum(counts.values()) >= 10 * payload["top_k"]
+    # システム台帳は 50〜100 行。
+    assert 50 <= len(builder.SYSTEMS) <= 100
+
+
+def test_multi_hop_corpus_has_confusing_entities_and_documents() -> None:
+    """名前の似たシステム・部署、略称の衝突、旧版・別の会社・似た承認の規程がある。"""
+    ledger = _workbook_cells(CORPUS / "sources" / "system-ledger.workbook.json")
+    logistics = _workbook_cells(CORPUS / "sources" / "logistics-system-ledger.workbook.json")
+    organization = _html_text("organization-rules.pdf")
+    # 名前の似たシステム・部署。
+    similar = {"経費精算ポータル", "交通費精算ポータル", "人事評価システム", "人材評価分析システム"}
+    assert similar <= set(ledger)
+    assert "経理部" in organization and "財務部" in organization
+    assert "人事部" in organization and "労務部" in organization
+    # 略称の衝突（同じ会社の中・別の会社との間）。
+    assert ledger.count("PMS") == 2 and ledger.count("TMS") == 2
+    assert "OMS" in logistics and "OMS、受発注" in ledger
+    # 旧版・似た承認の規程・別の会社の組織規程。
+    assert "廃止: 2026年3月31日" in _html_text("approval-rules-2023.pdf")
+    assert "終了: 2026年3月31日" in _html_text("maintenance-plan-2025.pdf")
+    assert "システムの変更の申請は承認規程で扱い" in _html_text("purchase-approval-rules.pdf")
+    assert "サンプル物流社だけに適用します" in _html_text("logistics-organization-rules.pdf")
+
+
+def test_source_builder_rejects_a_change_that_breaks_original_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """資料を増やして #1335 の問の正解が変わる（重要度 A かつ極秘が増える）と、作らずに止める。"""
+    builder = _source_builder()
+    extra = builder.System(999, "評価用の追加システム", "追加", "総", "A", "極秘")
+    monkeypatch.setattr(builder, "SYSTEMS", (*builder.SYSTEMS, extra))
+    with pytest.raises(ValueError, match="重要度 A かつ極秘"):
+        builder.build_golden_set(builder.build_documents())
+
+
+def test_source_builder_rejects_evidence_missing_from_the_document() -> None:
+    builder = _source_builder()
+    document = builder.Document("x.pdf", "x", "<p>本文</p>", {"x-1": "書いていない文"})
+    with pytest.raises(ValueError, match="根拠の文がありません"):
+        builder.evidence_registry([document])

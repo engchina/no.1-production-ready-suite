@@ -361,8 +361,11 @@ def _excel_to_json_converter() -> ModuleType:
 
 
 @pytest.mark.parametrize("strategy", ["structure_aware", "small_to_big"])
-def test_system_ledger_becomes_eight_row_chunks_and_preamble(strategy: str) -> None:
-    """評価セットの台帳（8 行）は前書きと 8 つの行の chunk になり、行は列名と値を持つ（#1349）。"""
+def test_system_ledger_becomes_row_chunks_and_preamble(strategy: str) -> None:
+    """評価セットの台帳は前書きと、1 行ずつの chunk になり、行は列名と値を持つ（#1349）。
+
+    行の数は台帳の原稿（`sources/system-ledger.workbook.json`。#1352 で 80 行）から決める。
+    """
     from rag_parser_core.sheet_records import parse_sheet_records, sheet_records_extraction
 
     from app.rag.chunking_small_to_big import build_parent_child_chunks
@@ -388,7 +391,12 @@ def test_system_ledger_becomes_eight_row_chunks_and_preamble(strategy: str) -> N
             extraction, strategy=strategy, chunk_size=800, overlap=120, min_chars=120
         )
 
-    assert len(chunks) == 9
+    workbook = json.loads(
+        (source.parent / "sources" / "system-ledger.workbook.json").read_text(encoding="utf-8")
+    )
+    ledger_ids = [row[0] for row in workbook["sheets"][0]["rows"]]
+    last_row = 3 + len(ledger_ids)
+    assert len(chunks) == 1 + len(ledger_ids)
     preamble, *rows = chunks
     assert preamble.metadata["content_kind"] == "text"
     assert preamble.metadata["cell_range"] == "A1:A2"
@@ -396,28 +404,41 @@ def test_system_ledger_becomes_eight_row_chunks_and_preamble(strategy: str) -> N
     assert "SYS-" not in preamble.text
     columns = ["システムID", "正式名", "略称・別表記", "担当部署", "重要度", "機密区分"]
     assert [chunk.metadata["cell_range"] for chunk in rows] == [
-        f"A{row}:F{row}" for row in range(4, 12)
+        f"A{row}:F{row}" for row in range(4, last_row + 1)
     ]
-    for number, chunk in enumerate(rows, start=101):
+    for system_id, chunk in zip(ledger_ids, rows, strict=True):
         assert chunk.metadata["content_kind"] == "record"
         assert chunk.metadata["sheet_name"] == "システム台帳"
         assert chunk.metadata["section_path"] == "システム台帳"
-        assert chunk.text.startswith(f"システムID: SYS-{number} / 正式名: ")
+        assert chunk.text.startswith(f"システムID: {system_id} / 正式名: ")
         assert [part.split(": ", 1)[0] for part in chunk.text.split(" / ")] == columns
         # 他の行のシステム ID は入らない（1 行の根拠を引用で数えられる）。
-        assert re.findall(r"SYS-\d+", chunk.text) == [f"SYS-{number}"]
+        assert re.findall(r"SYS-\d+", chunk.text) == [system_id]
     assert rows[2].text == (
         "システムID: SYS-103 / 正式名: 人事評価システム / 略称・別表記: HRM / 担当部署: 人"
         " / 重要度: A / 機密区分: 極秘"
     )
     if strategy == "small_to_big":
-        # 8 行は 1 つの親（表全体 A4:F11）の子。前書きは自分だけの親。
-        assert len({chunk.metadata["chunk_group_id"] for chunk in rows}) == 1
-        assert {chunk.metadata["parent_cell_range"] for chunk in rows} == {"A4:F11"}
-        assert rows[0].metadata["parent_text"] == "\n".join(chunk.text for chunk in rows)
-        assert preamble.metadata["chunk_group_id"] != rows[0].metadata["chunk_group_id"]
+        # 行は表の連続した一部（親）の子。親の範囲は行の範囲をつないだもので、親の本文は子の本文。
+        # 前書きは自分だけの親。
+        groups: dict[str, list[Any]] = {}
+        for chunk in rows:
+            groups.setdefault(str(chunk.metadata["chunk_group_id"]), []).append(chunk)
+        for children in groups.values():
+            first = children[0].metadata["cell_range"].split(":")[0]
+            last = children[-1].metadata["cell_range"].split(":")[1]
+            assert {child.metadata["parent_cell_range"] for child in children} == {
+                f"{first}:{last}"
+            }
+            assert children[0].metadata["parent_text"] == "\n".join(
+                child.text for child in children
+            )
+        assert [str(chunk.metadata["chunk_group_id"]) for chunk in rows] == [
+            group_id for group_id, children in groups.items() for _ in children
+        ]
+        assert str(preamble.metadata["chunk_group_id"]) not in groups
     else:
-        assert len({chunk.metadata["chunk_group_id"] for chunk in chunks}) == 9
+        assert len({chunk.metadata["chunk_group_id"] for chunk in chunks}) == len(chunks)
 
 
 def test_preprocess_service_passes_options_only_to_converters_that_take_them() -> None:

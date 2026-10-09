@@ -125,11 +125,12 @@ uv run python -m app.rag.evaluation_cli \
 います。資料の作り方・取り込み方・実行の手順は [business-support/README.md](./business-support/README.md) を見て
 ください。
 
-### 多段の質問の合成の評価セット（#1335）
+### 多段の質問の合成の評価セット（#1335・#1352）
 
-`multi-hop/` に、架空の「サンプル社」の業務文書（PDF 6 件・xlsx 1 件）と、資料をまたいで実体をたどる質問 33 問
-（`multi-hop.json`。dev 20 問・holdout 13 問。種類 `reasoning_type` と段の数 `hops`、段ごとの必要な根拠つき）を
-置いています。RAG の内部に実体の層を入れるかを、検索・回答（A）と業務 Agent（D）の根拠の連鎖の完全率で決める
+`multi-hop/` に、架空の「サンプル社」（と子会社）の業務文書（PDF 13 件・xlsx 2 件。旧版・別の会社・似た規程を含む
+子 chunk 約 240）と、資料をまたいで実体をたどる質問 69 問（`multi-hop.json`。dev 40 問・holdout 29 問。種類
+`reasoning_type` と段の数 `hops`、段ごとの必要な根拠つき）を置いています。資料と評価セットは
+`rag/scripts/multi_hop_corpus.py` が実体のデータから作ります。RAG の内部に実体の層を入れるかを、検索・回答（A）と業務 Agent（D）の根拠の連鎖の完全率で決める
 ための評価セットです。資料の作り方・取り込み方・実行の手順は [multi-hop/README.md](./multi-hop/README.md) を
 見てください。`evaluation_cli` の `--split dev` で、区分のケースだけを流せます。
 
