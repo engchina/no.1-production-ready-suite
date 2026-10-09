@@ -58,7 +58,8 @@ def test_document_ddl_and_migration_add_superseded_columns() -> None:
     assert "ADD (superseded_by_document_id VARCHAR2(64))" in migration.sql
     assert "ADD (superseded_at TIMESTAMP WITH TIME ZONE)" in migration.sql
     assert "FOREIGN KEY" not in migration.sql
-    assert oracle_schema.MIGRATION_ARTIFACT_VERSION == "20261007_001"
+    # 後の migration（#1362 など）で上がる。この migration 以降の版であること。
+    assert oracle_schema.MIGRATION_ARTIFACT_VERSION >= "20261007_001"
 
 
 def test_document_summary_exposes_superseded_state() -> None:
