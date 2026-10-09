@@ -25,7 +25,7 @@ from rag_engine.generation.grounded import (
     quote_in_text,
     verbatim_quote_lines,
 )
-from rag_engine.generation.operation_audit import answer_passages, is_heading
+from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -406,7 +406,8 @@ def _bind_claims(output, catalog, passages):
             matches = [p["id"] for p in passages if p["text"] == claim.answer_quote]
             if len(matches) == 1:
                 claim = claim.model_copy(update={"answer_passage_id": matches[0]})
-        if claim.status == "not_a_claim" and not is_heading(claim.answer_quote):
+        # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。
+        if claim.status == "not_a_claim" and not (is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote)):
             claim = claim.model_copy(update={"status": "unassessed", "reason": "本文を見出しとして監査から除外できません。" + claim.reason})
         bound.append(claim)
     return output.model_copy(update={"claim_checks": bound})
