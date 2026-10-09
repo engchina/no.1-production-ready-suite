@@ -117,6 +117,9 @@ Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streama
 
 - 入口と認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=Run の利用者の `user_uuid`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`）。Cookie / CSRF は使わない。route manifest では `/mcp` を「認証済みなら通す」とし、権限はツールごとに判定する。
 - 利用者: token の利用者の現在のロール・権限・検索・回答プロファイル / ナレッジベースの対象範囲を画面と同じ判定で使う。回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
+- 業務 Agent のデータの範囲（#1379）: token に任意の claim `profile_ids`（業務 Agent の定義の、使える検索・回答プロファイルの ID）があれば、すべてのツールを「利用者の権限 ∩ 範囲」で判定する（`app/mcp/profile_scope.py`。claim の無い token は今までどおり）。
+  - ツールは、監査 context の検索・回答プロファイルを「利用者の範囲 ∩ claim」、ナレッジベースを「利用者の範囲 ∩ 範囲のプロファイルの参照先」に絞った中で実行する。一覧（`rag_list_search_answer_profiles`）は範囲で絞られ、文書を読むツール（`rag_read_source` / `rag_outline` / `rag_read_document`）と `rag_validate_answer` の根拠の読み直しは、検索と同じ見え方の条件（文書の KB の所属）なので範囲の外の文書を「見つからない」（`source_not_found`）にする。範囲のプロファイルを読めないときは 503（範囲なしとして通さない）。
+  - `rag_search` / `rag_retrieve_evidence` は `search_answer_profile_id` が要る（`knowledge_base_ids` だけの検索は 403）。範囲の外の `search_answer_profile_id`（`rag_lookup_guides`・`rag_validate_answer` の `guide` も）と、指定したプロファイルの参照先の外の `knowledge_base_ids` は 403（`structuredContent.error_code` が `PROFILE_SCOPE_FORBIDDEN`）。claim にあっても利用者が使えないプロファイルは今までどおり 404。
 - ツール: `rag_list_search_answer_profiles`（検索・回答プロファイル一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
 - チャットは MCP で提供しない（#787）。チャットは画面（SSE の `POST /api/chat/conversations/{id}/messages/stream`）だけの機能で、MCP で提供するのは検索だけ。
 - チャットの回答の作成は SSE の接続から切り離している（#1175。`app/rag/chat_answer_runs.py`）。送信を受けたプロセスの中の task が作成し、作成中の回答（`STREAMING`）・段階・最終の回答は `rag_messages` に保存する。SSE はその task の event を購読するだけで、接続が切れても作成は続く。画面は `GET /api/chat/conversations/{id}/messages/{質問の id}/stream`（`Last-Event-ID`）で続きを購読し直し、できなければ保存済みの会話を取り直す。停止は `POST .../messages/{質問の id}/cancel` の明示の取消。

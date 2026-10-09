@@ -16,6 +16,7 @@ import httpx
 import pytest
 from mcp_support import (
     SERVICE_TOKEN_SECRET,
+    FakeProductMcp,
     McpToolError,
     fake_product_mcp,
 )
@@ -148,6 +149,27 @@ def test_builtin_skills_use_tools_in_product_contracts() -> None:
             assert set(requirement.tool_names) <= contract_tools[requirement.server_id], skill.id
             used += 1
     assert used >= 3
+
+
+def test_fake_product_mcp_follows_the_input_contracts() -> None:
+    """fake の RAG / NL2SQL の引数が製品の MCP の契約と合う（必須の項目・項目の名前。#1379）。
+
+    契約で必須の引数（例: nl2sql_query の profile_id）を Agent が送らない誤りを、fake が拒否して
+    検出できるようにする。
+    """
+    fake = FakeProductMcp()
+    checked = 0
+    for product, server in fake.servers.items():
+        contract = {
+            tool["name"]: tool["inputSchema"]
+            for tool in json.loads((CONTRACTS / f"{product}-tools.json").read_text())["tools"]
+        }
+        for name, tool in server.tools.items():
+            schema = tool.input_model.model_json_schema()
+            assert set(schema.get("required", [])) == set(contract[name].get("required", [])), name
+            assert set(schema["properties"]) <= set(contract[name]["properties"]), name
+            checked += 1
+    assert checked == len(READ_ONLY) + 2  # + nl2sql_list_profiles / nl2sql_recommend_profile
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +356,7 @@ def test_write_tool_calls_are_not_retried_after_reaching_the_server(
     mcp = fake_product_mcp(monkeypatch)
     mcp.tool_call_statuses.extend([status, status])
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     expected = "timeout" if status == "timeout" else "http_error"
     assert result.error_code == f"mcp.{expected}"
@@ -378,7 +400,7 @@ def test_tool_calls_retry_503(monkeypatch: MonkeyPatch) -> None:
     mcp = fake_product_mcp(monkeypatch)
     mcp.tool_call_statuses.append(503)
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     assert result.success is True, result.error
     assert [call["name"] for call in mcp.tool_calls] == ["nl2sql_query", "nl2sql_query"]
@@ -388,7 +410,7 @@ def test_retry_after_is_honored(monkeypatch: MonkeyPatch, sleeps: list[float]) -
     mcp = fake_product_mcp(monkeypatch)
     mcp.tool_call_statuses.append((429, {"Retry-After": "3"}))
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     assert result.success is True, result.error
     assert sleeps == [3.0]
@@ -419,7 +441,7 @@ def test_write_tool_calls_retry_when_the_request_did_not_reach_the_server(
     mcp = fake_product_mcp(monkeypatch)
     mcp.method_failures["tools/call"] = [failure, failure]
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     assert result.success is True, result.error
     assert [call["name"] for call in mcp.tool_calls] == ["nl2sql_query"]
@@ -494,7 +516,12 @@ def test_write_tools_require_approval_by_default(monkeypatch: MonkeyPatch) -> No
     mcp = fake_product_mcp(monkeypatch)
     default_policy = ToolPolicy()
 
-    query = _invoke("nl2sql", "nl2sql_query", {"question": "売上"}, policy=default_policy)
+    query = _invoke(
+        "nl2sql",
+        "nl2sql_query",
+        {"question": "売上", "profile_id": "profile-sales"},
+        policy=default_policy,
+    )
     search = _invoke("rag", "rag_search", {"query": "契約"}, policy=default_policy)
 
     assert query.approval_required is True
@@ -545,7 +572,7 @@ def test_running_nl2sql_job_is_awaited_inside_the_tool(monkeypatch: MonkeyPatch)
     result = _invoke(
         "nl2sql",
         "nl2sql_query",
-        {"question": "部門別の売上", "wait_seconds": 45},
+        {"question": "部門別の売上", "profile_id": "profile-sales", "wait_seconds": 45},
         context=ToolInvocationContext(user_uuid=USER_UUID, run_id=None, trace_id="call-1"),
     )
 
@@ -596,7 +623,7 @@ def test_job_wait_stops_at_the_total_budget(monkeypatch: MonkeyPatch) -> None:
 
     monkeypatch.setattr(tools_module, "monotonic", fake_monotonic)
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     # 上限を超えたら running のまま返す（モデルが job_id で続きを取れる）。
     assert result.output is not None
@@ -610,7 +637,7 @@ def test_job_wait_is_disabled_with_zero_budget(monkeypatch: MonkeyPatch) -> None
     mcp = fake_product_mcp(monkeypatch, outputs={"nl2sql_query": _job_output("pending")})
     monkeypatch.setattr(get_settings(), "agent_nl2sql_job_wait_seconds", 0.0)
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     assert result.output is not None
     assert result.output["status"] == "pending"
@@ -639,7 +666,7 @@ def test_job_wait_stops_when_the_run_is_cancelled(monkeypatch: MonkeyPatch) -> N
     result = _invoke(
         "nl2sql",
         "nl2sql_query",
-        {"question": "売上"},
+        {"question": "売上", "profile_id": "profile-sales"},
         context=ToolInvocationContext(user_uuid=USER_UUID, run_id="run-1"),
     )
 
@@ -653,7 +680,7 @@ def test_job_wait_failure_returns_the_last_result(monkeypatch: MonkeyPatch) -> N
     mcp = fake_product_mcp(monkeypatch, outputs={"nl2sql_query": _job_output("running")})
     mcp.outputs["nl2sql_get_job"] = McpToolError("NL2SQL_UNAVAILABLE", "一時的に利用できません。")
 
-    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上", "profile_id": "profile-sales"})
 
     assert result.success is True, result.error
     assert result.output is not None

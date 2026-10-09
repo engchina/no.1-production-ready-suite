@@ -51,8 +51,16 @@ flowchart TD
   - 記録: step の `tool_call.data_scope`（接続・使える ID・使った ID・モデルが求めた ID・`filled` / `overridden` /
     `kept` / `rejected` / `filtered`・使わなかったナレッジベース）と、絞った件数（`tool_result.audit_metadata.data_scope`）。
     承認待ちの呼び出しも、実行するときと同じ（範囲を当てた）引数で承認に出す。モデルへの指示に「データの範囲」の節を足す。
-  - Agent の範囲は利用者の権限を広げない（呼び先は Run の利用者の権限で判定する。積で効く）。呼び先でも範囲を強制する
-    サービストークンの claim は #1379。
+  - Agent の範囲は利用者の権限を広げない（呼び先は Run の利用者の権限で判定する。積で効く）。
+  - 推薦（`nl2sql_recommend_profile`）の候補の一覧（`profile_ids`）は Runtime が範囲で埋める（モデルが範囲の中の候補を
+    渡していれば、その中に絞る。schema から除く）。
+- 呼び先でも強制する（多層の防御。#1379）: Run のツールの呼び出し（回答の最終の検証の `rag_validate_answer` を含む）の
+  サービストークンに、その接続の範囲の ID を claim `profile_ids` として入れる（`ToolInvocationContext.profile_scopes`。
+  範囲の無い接続・外部の MCP には付けない。`tools/list` には付けない）。RAG / NL2SQL は「利用者の権限 ∩ claim」で判定し、
+  範囲外は 403（`PROFILE_SCOPE_FORBIDDEN`）にする（platform の `docs/backend-standard.md`「製品間の連携」）。
+- `nl2sql_query` の `profile_id` は MCP の契約で必須（#1379）。範囲の無い Agent でモデルが渡さないときは、呼び先へ送らずに
+  ツールのエラー（`agent_profile_required`。`next_tools` に `nl2sql_recommend_profile` / `nl2sql_list_profiles` の
+  モデルに渡す名前）で選ぶツールを案内する。
 
 版（#770）: 名前・説明・指示・Skill・モデルは「下書き」で、`POST /agents/{id}/publish` で版（`AgentVersion`: 版の番号・
 内容・公開日時・公開者・メモ）を作り、`published_version` にする。通常の Run は公開中の版の内容で実行し

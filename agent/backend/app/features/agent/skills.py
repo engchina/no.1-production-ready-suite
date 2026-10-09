@@ -233,7 +233,9 @@ skill_registry.register(
         description="NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
         instructions=(
             "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。"
-            "業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ"
+            "nl2sql_query には業務プロファイルの ID（profile_id）が必須。"
+            "業務プロファイルが分からなければ nl2sql_recommend_profile（候補を絞るときは "
+            "profile_ids）か nl2sql_list_profiles で選び、その id を profile_id に渡す"
             "（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。"
             "nl2sql_query / nl2sql_get_job は、ジョブが終わるまでツールの中で待ってから返す。"
             "それでも status が pending / running なら、nl2sql_get_job に job_id と "
@@ -264,12 +266,22 @@ skill_registry.register(
             "非構造文脈と構造化表の両方が必要な調査に使う。先に rag_search で資料の文脈を確かめる。"
             "rag_search の outcome が needs_environment_data（資料だけでは確定できない）なら、"
             "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える"
-            "（nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る）。"
+            "（nl2sql_query には業務プロファイルの ID（profile_id）が必須。分からなければ "
+            "nl2sql_recommend_profile か nl2sql_list_profiles で選ぶ。"
+            "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る）。"
             "確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
-            SkillMcpRequirement(server_id="nl2sql", tool_names=["nl2sql_query", "nl2sql_get_job"]),
+            SkillMcpRequirement(
+                server_id="nl2sql",
+                tool_names=[
+                    "nl2sql_query",
+                    "nl2sql_get_job",
+                    "nl2sql_list_profiles",
+                    "nl2sql_recommend_profile",
+                ],
+            ),
         ],
         tags=["rag", "nl2sql", "business-data"],
     )

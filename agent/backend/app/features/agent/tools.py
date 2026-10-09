@@ -145,6 +145,10 @@ class ToolInvocationContext(BaseModel):
     # サービス利用者で呼ぶ。
     run_id: str | None = None
     user_uuid: str | None = None
+    # 業務 Agent のデータの範囲（標準の接続 → 使えるプロファイルの ID。#1379）。その接続の
+    # サービストークンの claim `profile_ids` に入れ、呼び先でも範囲を強制させる。範囲の無い接続は
+    # claim を付けない。
+    profile_scopes: dict[str, list[str]] = Field(default_factory=dict)
 
 
 ToolHandler = Callable[[JsonObject, ToolInvocationContext], JsonObject]
@@ -1274,6 +1278,12 @@ class McpConnectionClient:
             "run_id": self._context.run_id,
             "agent_id": self._context.agent_id,
         }
+        # データの範囲（#1379）は標準の接続（RAG / NL2SQL）にだけ渡す（外部の MCP には送らない）。
+        profile_ids = (
+            self._context.profile_scopes.get(self._config.server_id)
+            if self._config.source == "builtin"
+            else None
+        )
         try:
             return issue_service_token(
                 get_settings().app_service_token_secret,
@@ -1281,6 +1291,7 @@ class McpConnectionClient:
                 audience=self._config.audience(),
                 issuer="agent",
                 claims={key: value for key, value in claims.items() if value},
+                profile_ids=profile_ids or None,
             )
         except SecurityApiError as exc:
             raise ExternalToolError(
