@@ -11099,6 +11099,35 @@ _CHUNK_PAGE_END_SQL = (
 )
 
 
+# 重複の文書(同じ内容のアップロード)が自前の索引を持つか(#1381)。持つ重複は自分の chunk で
+# 検索され、正本(`duplicate_of_document_id`)を検索の範囲に入れない。
+_DUPLICATE_HAS_OWN_INDEX_SQL = """
+    EXISTS (
+        SELECT 1
+        FROM rag_chunk_sets own_cs
+        JOIN rag_document_recipes own_r
+          ON own_r.recipe_id = own_cs.recipe_id
+        WHERE own_cs.document_id = duplicate_d.document_id
+          AND own_cs.is_active = 1
+          AND own_cs.status = 'INDEXED'
+    )
+"""
+
+
+def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
+    """KB に属する重複の文書が、正本の chunk を検索に使う条件(#1381)。
+
+    重複の取込を省いた文書(自前の索引が無い)だけが正本の chunk を使う。自前の索引を持つ重複
+    (取込を進めた文書)まで正本を範囲に入れると、別のナレッジベースの同じ内容の文書(版の登録・
+    レシピの違う文書)が検索に混ざる。旧版の除外は KB に属する重複の側の登録で判定する
+    (重複を旧版として登録したら、その重複から正本へは届かない)。
+    """
+    predicates = [f"NOT {_DUPLICATE_HAS_OWN_INDEX_SQL.strip()}"]
+    if not include_superseded:
+        predicates.append("duplicate_d.superseded_by_document_id IS NULL")
+    return " AND ".join(predicates)
+
+
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
@@ -11153,6 +11182,7 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                         WHERE duplicate_d.document_id = dkb.document_id
                           AND duplicate_d.duplicate_of_document_id = d.document_id
                           AND {duplicate_document_access_sql}
+                          AND {duplicate_reuse_sql}
                     )
                 )
                   AND kb.status = 'ACTIVE'
@@ -11161,6 +11191,9 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
             )
             """.format(
                 duplicate_document_access_sql=_oracle_access_predicate_sql(alias="duplicate_d"),
+                duplicate_reuse_sql=_duplicate_reuses_canonical_sql(
+                    include_superseded=_includes_superseded_documents(filters)
+                ),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
                 knowledge_base_filter_sql=knowledge_base_filter_sql,
             )

@@ -337,6 +337,30 @@ def test_evidence_chain_complete_rate_counts_cases_with_all_evidence() -> None:
     assert metrics.split_breakdown["dev"].metrics["evidence_chain_complete_rate"] == 0.5
 
 
+def test_required_evidence_matches_only_the_document_of_the_evaluation_set() -> None:
+    """必要な根拠は評価セットの文書 ID で照合し、同じ内容の別の文書の引用では数えない(#1381)。
+
+    評価のナレッジベースの文書は、前の評価で取り込んだ同じ内容の文書と別の文書になる。検索の範囲は
+    そのナレッジベースの文書だけ(`_oracle_retrieval_where`)なので、別の文書の引用は範囲の漏れであり、
+    数えずに欠けとして出す(ファイル名・内容のハッシュで同じとみなすと、旧版の登録の無い文書の漏れが
+    隠れる)。
+    """
+    case = _chain_case("other-kb", "bridge", 2)
+    leaked = _scored(
+        case,
+        _response(
+            [
+                ("ledger", "SYS-101 経費精算ポータル 経"),
+                ("org-earlier-kb", "経理部の承認者は管理本部長です。"),
+            ],
+            answer="管理本部長が承認します。",
+        ),
+    )
+
+    assert (leaked.evidence_recall, leaked.missing_evidence) == (0.5, ["org"])
+    assert leaked.evidence_chain_complete is False
+
+
 def test_reasoning_and_hops_breakdowns() -> None:
     """種類別・段の数別に、根拠の再現率・連鎖の完全率・期待する語の一致率と件数を出す。"""
     bridge_ok = _scored(
