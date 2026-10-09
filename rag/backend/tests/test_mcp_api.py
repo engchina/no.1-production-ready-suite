@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.api import encode_cursor
 from pr_system_settings.auth.service_token import issue_service_token
 from pytest import MonkeyPatch
 
@@ -793,7 +794,7 @@ class _DocumentOracle:
         self.contexts.append(current_audit_request_context())
         if document_id != "d1" or chunk_set_id not in {None, "cs-1"}:
             return None, []
-        return "cs-1", [
+        rows: list[dict[str, object]] = [
             {
                 "chunk_index": chunk.metadata["chunk_index"],
                 "chunk_id": chunk.chunk_id,
@@ -803,14 +804,17 @@ class _DocumentOracle:
                 "chars": len(chunk.text),
             }
             for chunk in self.chunks
-        ][:limit]
+        ]
+        return "cs-1", rows[:limit]
 
     async def readable_document_chunks(
         self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
     ) -> list[RetrievedChunk]:
         if document_id != "d1" or chunk_set_id != "cs-1":
             return []
-        rows = [chunk for chunk in self.chunks if int(chunk.metadata["chunk_index"]) >= from_index]
+        rows = [
+            chunk for chunk in self.chunks if int(str(chunk.metadata["chunk_index"])) >= from_index
+        ]
         return rows[:limit]
 
     async def accessible_document_exists(self, document_id: str) -> bool:
@@ -938,7 +942,7 @@ def test_read_document_errors(auth: ProductionAuth, document_oracle: type[_Docum
         assert body["isError"] is True, body
         return str(body["structuredContent"]["error_code"])
 
-    stale_cursor = mcp_tools.encode_cursor({"cs": "cs-old", "i": 0, "o": 0})
+    stale_cursor = encode_cursor({"cs": "cs-old", "i": 0, "o": 0})
     assert error({"document_id": "d1", "cursor": stale_cursor}) == mcp_tools.SOURCE_STALE_CODE
     assert error({"document_id": "d1", "cursor": "not-a-cursor"}) == mcp_tools.CURSOR_INVALID_CODE
     assert error({"document_id": "d9"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
