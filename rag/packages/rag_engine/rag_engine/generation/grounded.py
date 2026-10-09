@@ -144,6 +144,16 @@ GENERATE_SYSTEM_PROMPT = (
     "システムの検査で降格・除外される。原文にない語・操作・値を text に足さない。\n"
     "- 原文が『〜が選択可能になります』『〜できるようになります』のような可否・状態の記述なら、操作（kind=operation）に書き換えず kind=rule として原文の語で書く"
     "（「〜に変更し」のような原文にない操作語は降格される）。\n"
+    # 多段の質問で、途中の段を「適用は未確認」に回して結論を書かない回答があった (#1383)。
+    "4.8 複数の根拠をつなぐ答え（多段）\n"
+    "- 質問の対象から答えまでを複数の根拠でつなぐ質問（例: システム → 台帳の担当部署の略号 → 略号が指す部署 → その部署の承認者 → 承認者の役職の期限）は、"
+    "各段を、その段を述べた原文を quote にした別の item にする（台帳の行・略号の表・承認者の表・期限の規則を 1 段 1 item）。\n"
+    "- 1 つの item の text に別の根拠の事実を足さない（「〜システムは〇〇部が担当で、〇〇部長が承認します」は台帳の item と承認者の item に分ける）。"
+    "text はその quote が支持する範囲だけを、質問の対象の語で書く。\n"
+    "- 途中の段の item（対象の台帳の行など）は、それだけで最終の答えにならなくても質問の対象についての記載なので applies=matched にし、gap にも conditional にもしない。\n"
+    "- 各段の item がそろったら、summary にそれらをつないだ最終の答え（質問が尋ねる承認者・期限・部署名などの値）を書く。"
+    "根拠の段でつないだ結論は推測ではないので、gap や「確認できない」にしない。\n"
+    "- どれかの段の根拠が無ければ、その段を kind=gap にし、summary で最終の答えを断定しない（足りない段を推測で埋めない）。\n"
     "\n"
     "5. 出力\n"
     "5.1 方針と items の対応\n"
@@ -166,7 +176,8 @@ GENERATE_SYSTEM_PROMPT = (
     "- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば kind=rule / operation の item にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。\n"
     "- user message の「検索評価で未確認の観点」は、根拠があれば答え、無ければその観点の gap を書く。\n"
     "5.5 summary と言語\n"
-    "- summary は items で裏付けた結論だけを1〜2文で述べる。見出し・番号・出典表記・Markdown は書かない（体裁はシステムが組み立てる）。\n"
+    "- summary は items で裏付けた結論だけを1〜2文で述べる（複数の item をつないだ多段の結論（4.8）も items で裏付けた結論）。"
+    "見出し・番号・出典表記・Markdown は書かない（体裁はシステムが組み立てる）。\n"
     "- summary・text は質問と同じ言語で書く。quote、原文の語句を写す condition、逐語にする text（multi_condition）は原文の言語のままにする。\n")
 
 # 生成側と同じ番号付きの節（役割 / 入力 / 判定規則 / 出力）。UI に読み取り専用で表示する (#932)。
@@ -197,11 +208,15 @@ AUDIT_SYSTEM_PROMPT = (
     "- 観測結果から原因・成功・解消を断定する text も、quote にその因果がなければ unsupported。\n"
     "3.2 applicability（質問へ適用できるか）\n"
     "- 質問の対象・変更項目・発生条件と quote の前提が一致すれば matched。quote が同じ業務・機能の種類の一般手順・規則で、質問固有の値（コード名・グループ名・回数・メニュー名の言い回し）が無いだけなら matched とする（資料は一般手順を書く）。\n"
+    "- applicability は quote の対象が質問の対象と一致するかで決め、その item 1 つが質問のすべて（承認者・期限・時間帯など）に答えているかでは決めない。「この item だけでは質問に直接答えていない」は not_applicable の理由にならない（答えの充足は request_reviews で判定する）。\n"
     "- 原文に適用条件・限定が明記され、その成立が質問から確認できなければ conditional とし condition に原文の条件を書く。別の対象・項目・業務向けなら not_applicable。\n"
     "- 質問の対象（画面・機能・業務）と quote の対象が別で、共通の操作語（登録・入力・選択・番号・実行）だけが一致する場合は not_applicable（例: マスタの新規登録を尋ねた質問に、伝票入力で既存のマスタを選択する操作。分類の番号入力を別の登録画面の番号入力として説明する text）。\n"
     "- 特定の機能・業務・担当者にだけ適用される条件・制限（『〜機能のみ』『〜の場合は修正不可』『〜担当者が行う』）を、別の機能・設定を対象とする text に適用していれば not_applicable。質問が機能・業務を特定しておらず quote の限定が特定の機能・業務のものなら conditional とし、condition に原文の機能・業務名を写す。\n"
     "- text と quote が同じ画面・同じ項目に対する操作で、違いが新規登録か既存の変更か（登録／変更／修正の別）だけなら not_applicable にせず conditional とし、condition に原文の前提（「新規登録の手順」など）を写す。\n"
     "- unknown は quote の対象の種類が質問と同じか判断できない場合だけ。質問固有の値が quote に無いことを unknown や conditional の理由にしない（unknown と、原文の条件を書けない conditional は「今回の対象への適用は未確認」として公開される）。\n"
+    # 途中の段を「承認者を述べていない」として not_applicable にし、結論が未確認に回っていた (#1383)。
+    "- 多段の質問（対象から答えまでを複数の根拠でつなぐ）では、item が途中の段（対象の台帳の行・略号と部署の対応・部署の承認者・役職ごとの期限など）を示していれば、その item だけで最終の答えにならないこと（承認者・期限を述べていない等）を not_applicable・conditional・unknown の理由にしない。質問の対象、または他の item がつなぐ段の値（略号・部署・役職）について述べた quote は matched（例: 「A システムの変更の承認の期限は？」に対する「A システムの担当部署: 経」「略号「経」: 経理部」「経理部の承認者は管理本部長」は、どれも期限を述べていないが途中の段なので matched）。\n"
+    "- applicability の「質問の対象」は質問が尋ねている物（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者・時間帯・保管期間）ではない。尋ねている項目を quote が述べていないことは not_applicable の理由にならない。\n"
     "3.3 heading と function_context の扱い\n"
     "- heading は quote が属する文書の見出し（〔マスタ管理⇒マスタ管理2タブ⇒基本設定〕のような画面経路を含む）。文書の見出し分類と番号表記から推定した参考情報で、誤り得る。"
     "text がその画面名・経路・語を使っていることを理由に unsupported にしない。heading が text の画面・機能と違うことだけを理由に unsupported や not_applicable にもしない（判定は quote と function_context の本文で行う）。\n"
@@ -214,11 +229,12 @@ AUDIT_SYSTEM_PROMPT = (
     "\n"
     "4. 出力\n"
     "- reviews: 各 item の index、support、applicability、condition、reason。\n"
-    "- request_reviews: request_units の各 id について、items が答えていれば addressed、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
+    "- request_reviews: request_units の各 id について、items が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
     "- unused_evidence_ids: 未使用根拠のうち、質問への回答に必要なのに items で使われていないものだけを、重要な順に最大8件挙げる。"
     "unused_evidence の text は各根拠の先頭の抜粋で全文ではない。抜粋から必要と読み取れるものだけを挙げ、続きを推測して挙げない。\n"
     "- items が空の草稿（gap だけ、または全 item が検査で降格）も同じ入力で監査する。items が答えていない要求は unused_evidence に答えがあっても missing とし、その根拠を unused_evidence_ids に挙げる（拒答の妥当性の確認）。\n"
     "- summary_supported: summary が items の範囲を超える断定をしていなければ true。質問が原因・理由を尋ねている場合、summary が supported な item の quote にない原因や可能性を挙げていれば false（「〜のいずれかが原因と考えられます」のような列挙も同じ）。\n"
+    "- summary が supported な複数の item の事実をつないだ結論（「A の担当は略号 X」「X は〇〇部」「〇〇部の承認者は Y」→「A の変更は Y が承認」）なら、items の範囲を超える断定ではないので summary_supported=true。つなぐ段のどれかが supported な item に無ければ false。\n"
     "- goal_alignment: items 全体が task_contract の goal と current_request に答えていれば aligned。"
     "目的の一部にしか答えていない、または背景・仮説の説明が中心なら partial。別の対象・業務・目的に答えていれば off_target。"
     "個案の最終判断に必要な実データが未閲覧という理由だけで partial や off_target にしない。known_gaps に当たる要求の不足だけを理由に off_target にしない（partial でよい）。\n")
@@ -596,6 +612,25 @@ def summary_asserts_denied(summary: str, denied: Sequence[str], verified: Sequen
     return ""
 
 
+# 不支持とされた summary の文の語（漢字・カタカナ・英数字の連なり）のうち、別の round の summary の 1 文に
+# この割合以上が現れれば、その文を繰り返しているとみなす。値（承認者・日数）が 1 つでも違えば下回る。
+_REPEATED_SUMMARY_RATIO = 0.9
+
+
+def repeats_summary(summary: str, flagged: str) -> bool:
+    """summary が、監査が不支持とした別の round の summary（flagged）の文を繰り返しているか (#621, #1383)。
+
+    同じ保証の文が残っていれば、言い回しの揺れ（読点・助詞）があっても繰り返しとみなす。別の値・別の結論へ
+    書き直した summary は繰り返しではない（例: 「管理本部長が 5 営業日」から「労務部長が 3 営業日」へ直した結論）。
+    語の並びで判定し、意味は見ない。
+    """
+    def sentences(value: str) -> list[set[str]]:
+        parts = re.split(r"(?<=[。．])|\n", fold_width(value or ""))
+        return [words for part in parts if (words := set(re.findall(r"[一-龯々ァ-ヶーA-Za-z0-9]+", part)))]
+    current = sentences(summary)
+    return any(len(old & new) / len(old) >= _REPEATED_SUMMARY_RATIO for old in sentences(flagged) for new in current)
+
+
 def _check_unexplained_guarantee(question: str, item: GroundedItem, span: dict) -> str:
     return guarantees_unexplained(item.text, item.quote, span.get("limits", ()))
 
@@ -951,6 +986,9 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
         if span is None:
             # 次の生成は前回の草稿を見られないため、どの item への指摘かを本文で示す。
             entry = {"index": index, "evidence_id": item.evidence_id, "reason": quote, "text": item.text, "quote": item.quote}
+            miscopied = miscopied_sentence(item, spans)
+            if miscopied:
+                entry["miscopied"] = miscopied
             nearest = match.get("nearest")
             if nearest:
                 # 結び付けるほど似ていないが近い原文がある。言い換えは公開せず、その原文を原文のみ提示にする。
@@ -1229,6 +1267,7 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
     モデルは表示ID・出典ID・レコードIDを取り違えることがある。原文照合は決定的なので、
     IDの誤記だけで正しい引用を捨てない。複数の根拠に一致する引用は推測で選ばない。
     完全一致の規則で結び付かない引用は最後に文単位の近似一致（#711）を試し、`match["kind"]` に "fuzzy" を残す。
+    規則の item で続く文だけを写し誤った引用は、逐語の先頭の文に結び付け、`match["kind"]` に "prefix" を残す (#1383)。
     """
     named = [s for s in spans if item.evidence_id and item.evidence_id in {
         s["evidence_id"], s.get("label"), s.get("source_id"), *s.get("source_aliases", ())}]
@@ -1263,6 +1302,11 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
             if span is not None and match is not None:
                 match["kind"] = "fuzzy"
             return span, quote
+    span, quote = _prefix_bound_quote(item, spans)
+    if span is not None:
+        if match is not None:
+            match["kind"] = "prefix"
+        return span, quote
     if nearest and match is not None:
         # 結び付けるほど似ていないが近い原文がある。削除せず原文のみ提示にし、是正の feedback にも示す。
         span, quote, ratio = max(nearest, key=lambda entry: entry[2])
@@ -1277,6 +1321,78 @@ def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict |
         match["nearest"] = {"span": span, "quote": quote, "ratio": round(share, 2)}
         return None, f"引用が原文と一致せず、引用元と定まる原文（{span.get('label', span['evidence_id'])}、連続断片 {share:.0%}）を原文のみ提示"
     return None, "quote がどの Evidence の原文とも一致しない"
+
+
+def _verbatim_prefix(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict, list[str], int, int, int, list[int]] | None:
+    """引用の先頭の文（1 文以上）が、指した根拠の 1 か所に逐語であり、続く文が原文と違う引用の一致を返す (#1383)。
+
+    戻り値は (根拠, 引用の文, 一致した文の数, 照合用文字列での開始・終了, 位置の対応)。指した根拠が 1 つに
+    決まらない・2 文未満・先頭の文から違う・先頭の文が根拠の中で 1 か所に決まらない場合は None。
+    """
+    named = [s for s in spans if item.evidence_id and item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id")}]
+    sentences = [part.strip() for part in re.split(r"(?<=[。．])", item.quote or "") if part.strip()]
+    if len(named) != 1 or len(sentences) < 2:
+        return None
+    canonical_text, positions = _canonical(named[0]["text"])
+    for count in range(len(sentences) - 1, 0, -1):
+        prefix = _canonical("".join(sentences[:count]))[0]
+        if len(prefix) < _QUOTE_SENTENCE_MIN_CHARS:
+            return None
+        start = canonical_text.find(prefix)
+        if start < 0:
+            continue
+        if canonical_text.find(prefix, start + 1) >= 0:
+            return None
+        return named[0], sentences, count, start, start + len(prefix), positions
+    return None
+
+
+def miscopied_sentence(item: GroundedItem, spans: Sequence[dict]) -> dict[str, str]:
+    """引用の先頭の文は指した根拠に逐語であるのに、続く文が原文と違うとき、その文と原文の続きを返す (#1383)。
+
+    繰り返しの多い表（「略号「製」: 製造部。生産本部に属します。」が並ぶ略号の表）で、モデルは隣の行の語
+    （「管理本部」）を写し誤る。理由の「一致しない」だけでは是正の回も同じ誤りを繰り返したので、どの文を
+    どう写し誤ったかと、写し直す引用の候補（一致した先頭の文と原文の続き）を示す。
+    """
+    found = _verbatim_prefix(item, spans)
+    if found is None:
+        return {}
+    span, sentences, count, start, end, positions = found
+    text = span["text"]
+    rest = text[positions[end - 1] + 1:].lstrip().lstrip("。．")  # 照合で無視した句点は前の文に属する
+    following = re.match(r"\s*([^。．\n]*[。．]?)", rest)
+    original = following.group(1).strip() if following else ""
+    if not original:
+        return {}
+    verbatim = (_original_range_at(text, positions, start, end) + original).strip()
+    return {"quoted": sentences[count], "original": original, "verbatim_quote": verbatim}
+
+
+_CLAIM_WORD = re.compile(r"[一-龯々ァ-ヶーA-Za-z0-9]{2,}")
+
+
+def _prefix_bound_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict | None, str]:
+    """規則の item で、引用の先頭の文が指した根拠に逐語で、続く文だけを写し誤り、説明がその続きの語を使っていなければ、
+    逐語の先頭の文だけを引用として結び付ける (#1383)。
+
+    略号の表（「略号「購」: 購買部。生産本部に属します。」）の続きの文を隣の行の語（「管理本部」）で写し誤ると、
+    説明（「略号「購」は購買部」）を裏付ける先頭の文まで落ち、多段の結論が 1 段欠けていた。結び付けるのは
+    逐語の範囲だけで、写し誤った文は表示にも監査にも渡さない。説明が写し誤った文の語（先頭の文にない語）を
+    使っていれば結び付けない（原文にない内容を説明で公開しない）。操作の手順は対象にしない: 原文にない手順を
+    含む引用は従来どおり落とす (#678)。
+    """
+    if item.kind != "rule":
+        return None, ""
+    found = _verbatim_prefix(item, spans)
+    if found is None:
+        return None, ""
+    span, sentences, count, start, end, positions = found
+    prefix_words = set(_CLAIM_WORD.findall(fold_width("".join(sentences[:count]))))
+    rest_words = set(_CLAIM_WORD.findall(fold_width("".join(sentences[count:])))) - prefix_words
+    text = fold_width(item.text)
+    if any(word in text for word in rest_words):
+        return None, ""
+    return span, _original_range_at(span["text"], positions, start, end)
 
 
 # 最長の連続断片で引用元を決めるときの下限（照合用文字列の字数と、引用に占める割合）(#1092)。短い定型句
@@ -2106,12 +2222,23 @@ class Round:
     def verified(self) -> int:
         return sum(1 for entry in self.checked if entry.span and not entry.quote_only)
 
+    @property
+    def unpublished_claims(self) -> bool:
+        """草稿の主張のうち公開しなかったもの（検査・監査で降格、原文と一致せず除外）があるか (#1383)。
+
+        この round の監査が summary を不支持としたとき、summary が頼る段の item を公開できなかったことが理由の
+        ことがある（多段の結論の途中の段を 1 つの item に混ぜた・引用を写し誤った）。
+        """
+        return any(entry.quote_only and not entry.added for entry in self.checked) \
+            or any(not d.get("ignored") for d in self.dropped)
+
     def feedback(self) -> dict:
         """次の生成へ渡す具体的な不足。何もなければ空。"""
         audit = self.audit
         result = {
             # 原文と照合できず削除した引用には、写し方を添える。理由だけでは同じ形の引用が返ってくる (#1076)。
-            "dropped_items": [{**d, "hint": _VERBATIM_HINT} if "原文とも一致しない" in str(d.get("reason")) else d
+            "dropped_items": [{**d, "hint": _VERBATIM_HINT + (_MISCOPIED_HINT if d.get("miscopied") else "")}
+                              if "原文とも一致しない" in str(d.get("reason")) else d
                               for d in self.dropped if not d.get("ignored")],
             "downgraded_items": [{"text": e.item.text, "reasons": e.reasons, **_operation_hint(e)} for e in self.checked
                                  if e.quote_only and not e.added],
@@ -2166,6 +2293,10 @@ _SPLIT_HINT = ("この item は引用が支持する範囲より広い。引用�
 _VERBATIM_HINT = ("quote は 1 つの Evidence の連続した原文をそのまま写す。離れた箇所を繋いだり、"
                   "要約・言い換えをしたりすると照合できず削除される。写せる範囲が短いなら、"
                   "その範囲だけを述べる item にする。")
+
+_MISCOPIED_HINT = ("miscopied.quoted の文は、指した Evidence の原文のその位置では miscopied.original と続いている"
+                   "（隣の行の語の写し誤りか、離れた行のつなぎ合わせ）。写し直すなら miscopied.verbatim_quote をそのまま quote にする。"
+                   "離れた行は別の item にするか、その文を quote から外す。")
 
 
 def _operation_hint(entry: CheckedItem) -> dict:
