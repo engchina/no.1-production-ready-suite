@@ -177,13 +177,30 @@ platform の `docs/backend-standard.md`「製品間の連携（MCP とサービ�
 
 | ツール | 必要な権限 | 画面の route と同じ判定 |
 |---|---|---|
-| `nl2sql_list_profiles` | `nl2sql.profiles.read` | `GET /api/nl2sql/profiles/search` と同じ業務プロファイルの範囲 |
-| `nl2sql_recommend_profile` | `nl2sql.query.generate` | `POST /api/nl2sql/recommend-profile`。範囲外・しきい値未満の推薦は `null` |
-| `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。範囲外の業務プロファイルは 403。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
+| `nl2sql_list_profiles` | `nl2sql.profiles.read` | `GET /api/nl2sql/profiles/search` と同じ業務プロファイルの範囲（claim があれば claim との積） |
+| `nl2sql_recommend_profile` | `nl2sql.query.generate` | `POST /api/nl2sql/recommend-profile`。任意の `profile_ids`（候補の一覧）を渡すとその中からだけ推薦する（候補は利用者の範囲・claim との積。積が空なら推薦なし）。範囲外・しきい値未満の推薦は `null` |
+| `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。**`profile_id` は必須**（省略・空白は `MCP_TOOL_ARGUMENTS_INVALID`。画面の API と違い `"default"` に切り替えない。#1379）。claim の範囲外は 403（`PROFILE_SCOPE_FORBIDDEN`）、利用者の範囲外の業務プロファイルは 403。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
 | `nl2sql_get_job` | `nl2sql.query.generate` | `GET /api/nl2sql/jobs/{job_id}`。ただし管理権限があっても本人のジョブだけ（他人・不明は 404） |
 
 `menu.query` はすべてのツールを使える。`menu.direct_sql` だけのロールはどのツールも使えない
 （生成できないため）。`menu.evaluation` のように生成だけできるロールには `nl2sql_query` を出さない。
+
+### 業務 Agent のデータの範囲（サービストークンの claim、#1379）
+
+Agent の業務 Agent の定義でデータの範囲（使える業務プロファイル）を設定したとき、Agent はサービストークンの
+任意の claim `profile_ids` にその業務プロファイルの ID を入れる（範囲を設定していない Agent は claim を付けない）。
+NL2SQL は Agent の Runtime の強制とは別に、呼び先でも同じ範囲を強制する（多層の防御）。
+
+- 使える業務プロファイルは「利用者の権限（`allowed_profile_ids_for_request`）∩ claim」。claim は利用者の権限を
+  広げない（claim にあっても利用者が使えない業務プロファイルは、今までどおり権限の 403）。
+- `nl2sql_query` の claim の範囲外の `profile_id` は 403（`structuredContent.error_code` が
+  `PROFILE_SCOPE_FORBIDDEN`）。ジョブは作らない。
+- `nl2sql_list_profiles` と `nl2sql_recommend_profile` は範囲で絞る（範囲の外を一覧・推薦しない）。
+- `nl2sql_get_job` は変えない（本人のジョブだけの判定のまま）。
+- claim の無い呼び出し（範囲を設定していない Agent・画面の API）の判定は変えない。DeepSec・Data Grant の判定も
+  変えない。
+- claim の形（1〜50 件の 128 文字以内の ID の一覧）が違う token は 401（壊れた範囲を「範囲なし」として通さない）。
+  名前・形の正本は `pr_system_settings.auth.service_token`（`PROFILE_SCOPE_CLAIM`）。
 
 ## ユーザー・ロールの物理削除
 

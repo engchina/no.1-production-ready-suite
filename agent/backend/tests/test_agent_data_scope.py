@@ -415,9 +415,117 @@ def test_agent_without_scope_keeps_the_model_choice(
 
     [call] = mcp.calls_of("rag_search")
     assert call["arguments"] == {"query": "契約", "knowledge_base_ids": ["kb-1"]}
+    # 範囲の無い Agent はサービストークンに範囲の claim を付けない（#1379）。
+    assert "profile_ids" not in call["claims"]
     assert "# データの範囲" not in str(model.calls[0].system_instructions)
     step = runtime_repository.get_run(run_id).steps[0]
     assert step.tool_call is not None and step.tool_call.data_scope is None
+
+
+def test_scope_is_sent_to_the_product_as_a_token_claim(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """呼び先でも範囲を強制させるため、接続ごとの範囲をサービストークンの claim に入れる。
+
+    #1379。
+    """
+    _agent(
+        nl2sql=_scope("profile-sales", "profile-cost", default="profile-sales"),
+        rag=_scope("bv-sales"),
+    )
+    model = _script(
+        monkeypatch,
+        [
+            function_call("nl2sql__nl2sql_query", {"question": "売上"}, call_id="call-1"),
+            function_call(
+                "nl2sql__nl2sql_recommend_profile",
+                {"question": "原価", "profile_ids": ["profile-cost", "profile-hr"]},
+                call_id="call-2",
+            ),
+            function_call("rag__rag_search", {"query": "契約"}, call_id="call-3"),
+        ],
+        [assistant_message("売上は 1200 です。")],
+    )
+    run_id = _run()
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [query] = mcp.calls_of("nl2sql_query")
+    assert query["claims"]["profile_ids"] == ["profile-sales", "profile-cost"]
+    [recommend] = mcp.calls_of("nl2sql_recommend_profile")
+    assert recommend["claims"]["profile_ids"] == ["profile-sales", "profile-cost"]
+    # 推薦の候補は範囲の中だけ（範囲外の profile-hr は外す）。
+    assert recommend["arguments"]["profile_ids"] == ["profile-cost"]
+    params = _tools(model)["nl2sql__nl2sql_recommend_profile"].params_json_schema
+    assert "profile_ids" not in params["properties"]
+    # 接続ごとの範囲だけを入れる（RAG の token に NL2SQL の範囲を入れない）。
+    [search] = mcp.calls_of("rag_search")
+    assert search["claims"]["profile_ids"] == ["bv-sales"]
+    assert all("profile_ids" in call["claims"] for call in mcp.tool_calls)
+
+
+def test_final_validation_uses_the_scope_claim(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """回答の最終の検証（根拠の読み直し）も、Run と同じ範囲の token で呼ぶ（#1379）。"""
+    _agent(rag=_scope("bv-sales"))
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "契約"}, call_id="call-1")],
+        [assistant_message("契約の更新は第 5 条で定めています。")],
+    )
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
+    run_id = _run()
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [validate] = mcp.calls_of("rag_validate_answer")
+    assert validate["claims"]["profile_ids"] == ["bv-sales"]
+
+
+def test_missing_profile_id_is_guided_without_calling_the_product(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """範囲の無い Agent で profile_id の無い nl2sql_query は送らず、選ぶツールを案内する。
+
+    #1379。
+    """
+    _agent()
+    model = _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", {"question": "売上"}, call_id="call-1")],
+        [
+            function_call(
+                "nl2sql__nl2sql_query",
+                {"question": "売上", "profile_id": "profile-sales"},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("売上は 1200 です。")],
+    )
+    run_id = _run()
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    # 1 回目は呼び先へ送らない（"default" で実行させない）。
+    assert [call["arguments"]["profile_id"] for call in mcp.calls_of("nl2sql_query")] == [
+        "profile-sales"
+    ]
+    rejected, called = run.steps
+    assert rejected.status == "failed"
+    assert rejected.tool_result is not None
+    assert rejected.tool_result.error_code == data_scope.PROFILE_REQUIRED_CODE
+    assert rejected.tool_result.error_details["next_tools"] == [
+        "nl2sql__nl2sql_recommend_profile",
+        "nl2sql__nl2sql_list_profiles",
+    ]
+    assert called.status == "completed"
+    tool_output = str(model.calls[1].input)
+    assert data_scope.PROFILE_REQUIRED_CODE in tool_output
+    assert "nl2sql__nl2sql_recommend_profile" in tool_output
+    # 契約どおり、モデルに見せる schema でも profile_id は必須。
+    params = _tools(model)["nl2sql__nl2sql_query"].params_json_schema
+    assert "profile_id" in params["required"]
 
 
 # ---------------------------------------------------------------------------

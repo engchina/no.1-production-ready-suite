@@ -23,6 +23,7 @@ from .errors import (
     SecurityApiError,
 )
 from .service import AuthService
+from .service_token import profile_scope_from_claims
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 UNCLASSIFIED_PERMISSION = "__unclassified__"
@@ -176,3 +177,12 @@ def request_context(request: Request) -> tuple[str, str]:
     request_id = request.headers.get("X-Request-ID", "")[:128]
     client_ip = request.client.host[:128] if request.client else ""
     return request_id, client_ip
+
+
+def service_token_profile_scope(request: Request) -> frozenset[str] | None:
+    """サービストークンの呼び出しで使ってよいプロファイル（#1379）。claim が無ければ None。
+
+    Cookie の画面の呼び出しと local（token を見ない）は None（範囲なし）。
+    """
+    claims = getattr(request.state, "service_token_claims", None)
+    return profile_scope_from_claims(claims if isinstance(claims, dict) else None)

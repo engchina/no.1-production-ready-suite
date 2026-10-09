@@ -16,7 +16,11 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from pr_system_settings.auth import service as auth_service
-from pr_system_settings.auth.dependencies import authorize_request, permission_route_path
+from pr_system_settings.auth.dependencies import (
+    authorize_request,
+    permission_route_path,
+    service_token_profile_scope,
+)
 from pr_system_settings.auth.domain import (
     CONFIGURED_SYSTEM_ADMIN_USER_UUID,
     SYSTEM_ADMIN_ROLE_ID,
@@ -35,7 +39,15 @@ from pr_system_settings.auth.migrations import (
     apply_platform_auth_schema,
 )
 from pr_system_settings.auth.service import AuthService
-from pr_system_settings.auth.service_token import issue_service_token, verify_service_token
+from pr_system_settings.auth.service_token import (
+    PROFILE_SCOPE_CLAIM,
+    _segment,
+    _signature,
+    issue_service_token,
+    narrow_to_profile_scope,
+    profile_scope_from_claims,
+    verify_service_token,
+)
 from pr_system_settings.auth.store import (
     PRODUCT_ROLE_PERMISSION_TABLES,
     InMemoryAuthStore,
@@ -401,9 +413,11 @@ def _authorize_app(
 
     @app.post("/probe", dependencies=[Depends(dependency)])
     def probe_post(request: Request) -> dict[str, Any]:
+        scope = service_token_profile_scope(request)
         return {
             "user_uuid": request.state.principal.user_uuid,
             "run_id": request.state.service_token_claims.get("run_id"),
+            "profile_scope": sorted(scope) if scope is not None else None,
         }
 
     return TestClient(app)
@@ -499,6 +513,76 @@ def test_service_token_round_trip_and_rejections() -> None:
     assert exc.value.status_code == 503
 
 
+def test_service_token_profile_scope_claim() -> None:
+    """プロファイルの範囲（#1379）は任意の claim。未設定なら付けず、形の違う claim は 401。"""
+    plain = issue_service_token(
+        SERVICE_SECRET, subject="u1", audience="rag", issuer="agent", profile_ids=[]
+    )
+    claims = verify_service_token(SERVICE_SECRET, plain, audience="rag")
+    assert PROFILE_SCOPE_CLAIM not in claims
+    assert profile_scope_from_claims(claims) is None
+    assert profile_scope_from_claims(None) is None
+
+    scoped = issue_service_token(
+        SERVICE_SECRET,
+        subject="u1",
+        audience="rag",
+        issuer="agent",
+        # claims で渡した範囲は使わない（範囲は profile_ids だけで付ける）。
+        claims={PROFILE_SCOPE_CLAIM: ["spoofed"]},
+        profile_ids=["p-1", " p-2 ", "p-1"],
+    )
+    claims = verify_service_token(SERVICE_SECRET, scoped, audience="rag")
+    assert claims[PROFILE_SCOPE_CLAIM] == ["p-1", "p-2"]
+    assert profile_scope_from_claims(claims) == frozenset({"p-1", "p-2"})
+
+    with pytest.raises(ValueError):
+        issue_service_token(
+            SERVICE_SECRET, subject="u1", audience="rag", issuer="agent", profile_ids=[""]
+        )
+    with pytest.raises(ValueError):
+        issue_service_token(
+            SERVICE_SECRET,
+            subject="u1",
+            audience="rag",
+            issuer="agent",
+            profile_ids=[f"p-{index}" for index in range(51)],
+        )
+
+    def signed(payload: dict[str, object]) -> str:
+        header = _segment({"alg": "HS256", "typ": "JWT"})
+        signing_input = f"{header}.{_segment(payload)}"
+        return f"{signing_input}.{_signature(SERVICE_SECRET, signing_input)}"
+
+    now = int(time.time())
+    base = {"sub": "u1", "aud": "rag", "iss": "agent", "iat": now, "exp": now + 60}
+    # 鍵を持つ呼び出し元が作っても、壊れた範囲（空・文字列・数値）は「範囲なし」として通さない。
+    for broken in ([], "p-1", [1], [""], ["x" * 129]):
+        with pytest.raises(SecurityApiError) as exc:
+            verify_service_token(
+                SERVICE_SECRET, signed({**base, PROFILE_SCOPE_CLAIM: broken}), audience="rag"
+            )
+        assert exc.value.status_code == 401
+    assert profile_scope_from_claims({PROFILE_SCOPE_CLAIM: "broken"}) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("allowed", "scope", "expected"),
+    [
+        (None, None, None),
+        ({"a", "b"}, None, frozenset({"a", "b"})),
+        (None, frozenset({"a"}), frozenset({"a"})),
+        ({"a", "b"}, frozenset({"b", "c"}), frozenset({"b"})),
+        ({"a"}, frozenset({"c"}), frozenset()),
+    ],
+    ids=["no-limit", "user-only", "claim-only", "intersection", "disjoint"],
+)
+def test_narrow_to_profile_scope(
+    allowed: set[str] | None, scope: frozenset[str] | None, expected: frozenset[str] | None
+) -> None:
+    assert narrow_to_profile_scope(allowed, scope) == expected
+
+
 def test_authenticate_service_token_uses_current_user_permissions() -> None:
     service, store = _service()
     admin = _admin(service)
@@ -549,7 +633,21 @@ def test_authorize_request_accepts_service_token_only_on_service_paths() -> None
     # Cookie も CSRF もなしで、token の利用者として通る。
     response = client.post("/probe", headers=headers)
     assert response.status_code == 200
-    assert response.json() == {"user_uuid": admin.user_uuid, "run_id": "run-1"}
+    assert response.json() == {
+        "user_uuid": admin.user_uuid,
+        "run_id": "run-1",
+        "profile_scope": None,
+    }
+    # プロファイルの範囲（#1379）は claim から読む。
+    scoped = issue_service_token(
+        SERVICE_SECRET,
+        subject=admin.user_uuid,
+        audience="rag",
+        issuer="agent",
+        profile_ids=["p-2", "p-1"],
+    )
+    response = client.post("/probe", headers={"Authorization": f"Bearer {scoped}"})
+    assert response.json()["profile_scope"] == ["p-1", "p-2"]
     assert client.post("/probe").status_code == 401
     assert client.post("/probe", headers={"Authorization": "Bearer bad"}).status_code == 401
     # サービス用の path でなければ token は使えない（Cookie が必要）。

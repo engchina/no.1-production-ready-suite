@@ -2,7 +2,8 @@
 
 契約は Agent が呼ぶツールの名前と inputSchema の正本。ツールを変えたら
 `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、
-Agent のテスト（`agent/backend/tests/test_product_mcp_contract.py`）も通ることを確認する。
+Agent のテスト（`agent/backend/tests/test_product_mcp.py`。fake の MCP は `tests/mcp_support.py`）も
+通ることを確認する。
 """
 
 from __future__ import annotations

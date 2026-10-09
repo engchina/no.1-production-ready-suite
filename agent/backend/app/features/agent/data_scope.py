@@ -23,8 +23,15 @@
 
 Agent の範囲は利用者の権限を広げない（呼び先は今までどおり Run の利用者の権限で判定する。
 積で効く）。
-呼び先でも範囲を強制する（サービストークンの claim）のは後続の #1379。範囲は接続（= audience）ごとの
-ID の一覧なので、そのまま claim に入れられる。
+
+呼び先でも範囲を強制する（多層の防御。#1379）: Run のツールの呼び出しのサービストークンに、
+その接続（= audience）の範囲の ID を claim `profile_ids` として入れる（``token_profile_scopes``。
+範囲の無い接続は claim を付けない）。RAG / NL2SQL の MCP は「利用者の権限 ∩ claim」で判定し、
+範囲外は 403（``PROFILE_SCOPE_FORBIDDEN``）にする。
+
+NL2SQL の ``nl2sql_query`` は ``profile_id`` が必須（#1379）。範囲の無い Agent でモデルが渡さない
+ときは、呼び先へ送らずに ``nl2sql_recommend_profile`` / ``nl2sql_list_profiles`` を案内するツールの
+エラーにする（``missing_profile_error``）。
 """
 
 from __future__ import annotations
@@ -55,6 +62,17 @@ MAX_PROFILE_ID_CHARS = 128
 
 # 範囲の外のプロファイルを指定したツールのエラー（呼び先へは送らない）。
 DATA_SCOPE_VIOLATION_CODE = "agent_data_scope_violation"
+# 必須のプロファイル（nl2sql_query の profile_id。#1379）が無いツールのエラー
+# （呼び先へは送らない）。
+PROFILE_REQUIRED_CODE = "agent_profile_required"
+# プロファイルが必須のツール → 引数の名前と、選ぶのに使うツール（素の名前）。
+_REQUIRED_PROFILE_ARGUMENTS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
+    NL2SQL_CONNECTION_ID: {
+        "nl2sql_query": ("profile_id", ("nl2sql_recommend_profile", "nl2sql_list_profiles")),
+    },
+}
+# 推薦の候補の一覧の引数（範囲を設定したら範囲の ID を入れる。#1379）。
+RECOMMEND_CANDIDATES_ARGUMENT = "profile_ids"
 
 # 接続ごとの、プロファイルの呼び方（エラー・指示の文言）。
 _PROFILE_NOUNS: dict[str, str] = {
@@ -220,6 +238,9 @@ def scoped_input_schema(
                 prop["description"] = f"{described} {note}".strip()
     if tool in _KNOWLEDGE_BASE_TOOLS.get(connection, frozenset()):
         removed.add(KNOWLEDGE_BASE_ARGUMENT)
+    if tool in _RECOMMEND_TOOLS.get(connection, frozenset()):
+        # 推薦の候補は Runtime が範囲で埋める（#1379）。
+        removed.add(RECOMMEND_CANDIDATES_ARGUMENT)
     for name in removed:
         updated_properties.pop(name, None)
     required = updated.get("required")
@@ -318,6 +339,15 @@ def enforce(
         enforcement._list_tool = list_tool
         note["action"] = "filtered"
     if recommend_tool:
+        # 候補の一覧を範囲にする（呼び先が範囲の中からだけ推薦する。#1379）。モデルが範囲の中の
+        # 候補を渡していれば、その中に絞る。
+        requested = updated.get(RECOMMEND_CANDIDATES_ARGUMENT)
+        narrowed = (
+            [item for item in requested if item in scope.profile_ids]
+            if isinstance(requested, list)
+            else []
+        )
+        updated[RECOMMEND_CANDIDATES_ARGUMENT] = narrowed or list(scope.profile_ids)
         note["action"] = "filtered"
     return enforcement
 
@@ -358,6 +388,49 @@ def _enforce_profile(enforcement: ScopeEnforcement, argument: str) -> None:
     arguments[argument] = chosen
     note["profile_id"] = chosen
     note["action"] = action
+
+
+def token_profile_scopes(scopes: AgentDataScopes | None) -> dict[str, list[str]]:
+    """サービストークンの claim に入れる範囲（接続 → プロファイルの ID。#1379）。
+
+    範囲の無い接続は除く。
+    """
+    return {
+        connection: list(scope.profile_ids)
+        for connection, scope in (scopes or {}).items()
+        if connection in DATA_SCOPE_CONNECTIONS and scope.profile_ids
+    }
+
+
+def missing_profile_error(function_name: str, arguments: JsonObject) -> JsonObject | None:
+    """必須のプロファイルが無い呼び出しのツールのエラー（#1379）。あれば None。
+
+    範囲を設定した接続は ``enforce`` が既定を埋めるので、ここに来るのは範囲の無い接続だけ。呼び先へ
+    送らずに、プロファイルを選ぶツールを案内する（ツールの名前はモデルに渡す名前）。
+    """
+    connection = _connection_of(function_name)
+    if connection is None:
+        return None
+    required = _REQUIRED_PROFILE_ARGUMENTS.get(connection, {}).get(
+        mcp_base_tool_name(function_name)
+    )
+    if required is None:
+        return None
+    argument, choosers = required
+    value = arguments.get(argument)
+    if isinstance(value, str) and value.strip():
+        return None
+    noun = _PROFILE_NOUNS.get(connection, "プロファイル")
+    tools = [f"{connection}{MCP_TOOL_SEPARATOR}{name}" for name in choosers]
+    return {
+        "error": (
+            f"{mcp_base_tool_name(function_name)} には{noun}の ID（{argument}）が必要です。"
+            f"{' か '.join(tools)} で{noun}を選び、{argument} を渡して呼び直してください。"
+        ),
+        "error_code": PROFILE_REQUIRED_CODE,
+        "argument": argument,
+        "next_tools": tools,
+    }
 
 
 def scope_instructions(scopes: AgentDataScopes | None, exposed: list[str]) -> str:
