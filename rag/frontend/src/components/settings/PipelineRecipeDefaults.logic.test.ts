@@ -34,11 +34,11 @@ describe("設定の概要の取込の流れ", () => {
         items: ["文書分割", "文脈ヘッダを検索対象へ追加"],
         gate: "Chunk 後に Embedding / 索引へ進む",
       },
-      { phase: "Embedding / 索引", items: ["関係情報の構築"], gate: null },
+      { phase: "Embedding / 索引", items: ["実体の索引", "関係情報の構築"], gate: null },
     ]);
   });
 
-  it("つなげると 12 項目の処理順に戻り、ゲートは 3 つ", () => {
+  it("つなげると 13 項目の処理順に戻り、ゲートは 3 つ", () => {
     const groups = recipeConfigGroups();
     const flattened = groups.flatMap((group) => {
       const { items, gate } = splitGateItems(group.items);
@@ -47,7 +47,7 @@ describe("設定の概要の取込の流れ", () => {
     expect(flattened.map((item) => item.field)).toEqual(
       groups.flatMap((group) => group.items.map((item) => item.field))
     );
-    expect(flattened).toHaveLength(12);
+    expect(flattened).toHaveLength(13);
     expect(flattened.filter(isAutoAdvanceItem).map((item) => item.field)).toEqual([
       "auto_parse_after_preprocess_enabled",
       "auto_chunk_after_extract_enabled",
