@@ -14,11 +14,16 @@
 
 `--xlsx-only` は Excel だけを作る（LibreOffice の無い環境で表の原稿だけを直したとき）。xlsx は
 作成時刻を固定するため、同じ原稿からは同じセルの値・書式の xlsx ができる（テストで照合する）。
+
+原稿を実体のデータから作る資料のフォルダ（`SOURCE_BUILDERS`。多段の質問 `multi-hop` は
+`multi_hop_corpus.py`。#1352）は、変換の前に原稿（`sources/`）と評価セットを作り直す。
+`--sources-only` は原稿と評価セットだけを作る（PDF / xlsx は作らない）。
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import shutil
 import subprocess  # nosec B404 - soffice を固定の引数で呼ぶだけ
@@ -27,12 +32,31 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 SOURCES_DIRNAME = "sources"
 WORKBOOK_SUFFIX = ".workbook.json"
 # xlsx の作成・更新の時刻（作り直しても同じ内容にする）。
 FIXED_TIMESTAMP = datetime(2026, 4, 1)
+# 原稿を実体のデータから作る資料のフォルダ（フォルダ名 → この script と同じフォルダの module）。
+SOURCE_BUILDERS = {"multi-hop": "multi_hop_corpus.py"}
+
+
+def source_builder(corpus_dir: Path) -> ModuleType | None:
+    """資料のフォルダの原稿を作る module（`write_sources(corpus_dir)` を持つ）。無ければ None。"""
+    module_name = SOURCE_BUILDERS.get(corpus_dir.name)
+    if module_name is None:
+        return None
+    path = Path(__file__).resolve().parent / module_name
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"原稿を作る module を読めません: {path}")
+    module = importlib.util.module_from_spec(spec)
+    # dataclass が module を sys.modules から引くため、実行の前に登録する。
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def workbook_name(spec_path: Path) -> str:
@@ -104,9 +128,19 @@ def convert_html_to_pdf(soffice: str, sources: Sequence[Path], outdir: Path) -> 
         )
 
 
-def build_corpus(corpus_dir: Path, *, xlsx_only: bool = False) -> list[Path]:
-    """資料のフォルダの原稿から PDF / xlsx を作り、作ったファイルを返す。"""
+def build_corpus(
+    corpus_dir: Path, *, xlsx_only: bool = False, sources_only: bool = False
+) -> list[Path]:
+    """資料のフォルダの原稿から PDF / xlsx を作り、作ったファイルを返す。
+
+    原稿を実体のデータから作るフォルダ（`SOURCE_BUILDERS`）は、先に原稿と評価セットを作り直す
+    （`sources_only` ならそこで終える）。
+    """
     sources_dir = corpus_dir / SOURCES_DIRNAME
+    builder = source_builder(corpus_dir)
+    generated: list[Path] = list(builder.write_sources(corpus_dir)) if builder else []
+    if sources_only:
+        return generated
     html_sources = sorted(sources_dir.glob("*.html"))
     workbook_specs = sorted(sources_dir.glob(f"*{WORKBOOK_SUFFIX}"))
     written: list[Path] = []
@@ -123,20 +157,25 @@ def build_corpus(corpus_dir: Path, *, xlsx_only: bool = False) -> list[Path]:
     missing = [path for path in written if not path.is_file()]
     if missing:
         raise RuntimeError("作れませんでした: " + ", ".join(path.name for path in missing))
-    return written
+    return generated + written
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("corpus_dir", type=Path, help="資料のフォルダ（sources/ を持つ）")
     parser.add_argument("--xlsx-only", action="store_true", help="Excel だけを作る")
+    parser.add_argument(
+        "--sources-only", action="store_true", help="実体のデータから原稿と評価セットだけを作る"
+    )
     args = parser.parse_args(argv)
     corpus_dir = args.corpus_dir.resolve()
-    if not (corpus_dir / SOURCES_DIRNAME).is_dir():
+    if corpus_dir.name not in SOURCE_BUILDERS and not (corpus_dir / SOURCES_DIRNAME).is_dir():
         print(f"原稿のフォルダがありません: {corpus_dir / SOURCES_DIRNAME}", file=sys.stderr)
         return 2
     try:
-        written = build_corpus(corpus_dir, xlsx_only=args.xlsx_only)
+        written = build_corpus(
+            corpus_dir, xlsx_only=args.xlsx_only, sources_only=args.sources_only
+        )
     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         return 1
