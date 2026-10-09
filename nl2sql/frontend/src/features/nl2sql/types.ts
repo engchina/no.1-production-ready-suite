@@ -1,3 +1,5 @@
+import type { ChatProgressEvent } from "@production-ready/ui";
+
 import type { OntologyGraph } from "./ontology/types";
 
 export type Nl2SqlEngine = "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
@@ -619,11 +621,16 @@ export interface JobData {
   steps: JobStepData[];
   /**
    * 実行の回数（worker が claim するたびに増える。0 は未着手）。lease の切れたジョブを別の実行が引き継ぐと
-   * 段階は初めからになるので、チャットは attempt が変わったら段階の一覧を作り直す（#1358）。
+   * 段階は初めからになる（#1358。チャットの段階はイベントの試行で作り直す）。
    */
   attempt?: number;
   /** チャットのターンの SQL を最後に実行したときの要約（行は保存しない。#1154）。 */
   last_execution?: SqlChatExecutionSummary | null;
+  /**
+   * 処理の段階のイベント（3 製品共通の契約。#1359）。チャットの段階（`ChatProgress`）はこれを積んで出す。
+   * API の応答は未検証の入力なので `parseChatProgressEvents` を通す。
+   */
+  progress_events?: ChatProgressEvent[];
 }
 
 /** チャットのターンの SQL を最後に実行したときの要約（#1154）。 */

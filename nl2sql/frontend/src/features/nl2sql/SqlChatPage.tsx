@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -37,20 +37,24 @@ import {
   StatusBadge,
   TimedLoadingState,
   createOptimisticChatMessage,
-  useChatProgressTracker,
+  parseChatProgressEvents,
+  parseChatProgressPage,
+  useChatProgressStream,
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
   useChatAutoScroll,
   useChatHistoryPanel,
   DEFAULT_PAGE_SIZE,
+  type ChatProgressPage,
 } from "@production-ready/ui";
 import {
   useWorkspaceActive,
   useWorkspaceIdentity,
   useWorkspaceState,
 } from "@/components/WorkspaceState";
-import { apiGet, apiPost, isTransportError } from "@/lib/api";
+import { ApiError, apiGet, apiPost, isTransportError } from "@/lib/api";
+import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -72,9 +76,8 @@ import {
 } from "./incrementalQueries";
 import {
   CHAT_PROGRESS_LABELS,
+  CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
-  chatJobProgressKey,
-  chatJobProgressSteps,
   chatSubmitProgressSteps,
 } from "./chatProgress";
 import type { JobCreateData, JobData, Nl2SqlEngine } from "./types";
@@ -101,10 +104,43 @@ const inFlight = (job: JobData | undefined) =>
 /** 会話の取り直しの間隔。 */
 const CHAT_POLL_INTERVAL_MS = 1500;
 /**
- * 会話の取り直しが成功しないまま、この時間が過ぎたら取り直し直す（#1160）。取り直しは
+ * 処理の経過の配信（SSE・会話の取り直し）が届かないまま、この時間が過ぎたら取り直す（#1160）。会話の取り直しは
  * {@link CHAT_POLL_INTERVAL_MS} ごとなので、その数回分。応答しない取得を打ち切って新しく取り直す。
  */
 const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
+
+/** ジョブの処理の段階のイベントの API（#1359）。 */
+const jobProgressPath = (jobId: string) =>
+  `/api/nl2sql/jobs/${encodeURIComponent(jobId)}/progress`;
+
+/** 会話の応答のターンの処理の段階のイベントは未検証の入力なので、共通の検証を通す（#1359）。 */
+function parseConversation(data: ConversationData): ConversationData {
+  return {
+    ...data,
+    turns: data.turns.map((turn) => ({
+      ...turn,
+      progress_events: parseChatProgressEvents(turn.progress_events),
+    })),
+  };
+}
+
+/** `since` より後の処理の段階のイベント（polling・取り直し）。ジョブが無ければ null。 */
+async function fetchJobProgress(
+  jobId: string,
+  since: number,
+  signal: AbortSignal,
+): Promise<ChatProgressPage | null> {
+  try {
+    const page = await apiGet<unknown>(`${jobProgressPath(jobId)}?since=${since}`, {
+      signal,
+      timeoutMs: API_TIMEOUT_MS.interactiveDetail,
+    });
+    return parseChatProgressPage(page);
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 404) return null;
+    throw cause;
+  }
+}
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
@@ -304,10 +340,12 @@ export function SqlChatPage() {
   const conversation = useQuery({
     queryKey: conversationKey,
     enabled: active && Boolean(conversationId),
-    queryFn: ({ signal }) =>
-      apiGet<ConversationData>(
-        `/api/nl2sql/chats/${encodeURIComponent(conversationId)}`,
-        { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail },
+    queryFn: async ({ signal }) =>
+      parseConversation(
+        await apiGet<ConversationData>(
+          `/api/nl2sql/chats/${encodeURIComponent(conversationId)}`,
+          { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail },
+        ),
       ),
     refetchInterval: (query) =>
       active && query.state.data?.turns.some(inFlight)
@@ -853,18 +891,34 @@ function SqlChatTurn({
 }) {
   const [copyError, setCopyError] = useState("");
   const result = turn.result;
-  // 処理の経過の状態を追う（3 製品共通。#1160）。会話の取得が途絶えたら取り直し、終端まで追う。
-  const progress = useChatProgressTracker({
-    // 引き継いだ実行（attempt が変わった）では段階の一覧を作り直す（#1358）。
-    key: chatJobProgressKey(turn),
-    steps: chatJobProgressSteps(turn, turn.engine),
-    active: inFlight(turn),
-    elapsedMs: chatJobElapsedMs(turn),
-    receivedAt,
-    refresh,
-    staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
+  const running = inFlight(turn);
+  const jobId = turn.job_id;
+  const fetchEvents = useCallback(
+    (since: number, signal: AbortSignal) => fetchJobProgress(jobId, since, signal),
+    [jobId],
+  );
+  // 処理の段階は backend が記録したイベントを積んで出す（3 製品共通。#1359）。処理中は SSE で受け取り
+  // （使えなければ polling）、会話の取り直しに入っている記録も積む。引き継いだ実行（試行が変わった）では
+  // 段階の一覧を作り直す（#1358）。配信が途絶えたら会話も取り直し、終端まで追う（#1160）。
+  const progress = useChatProgressStream({
+    key: jobId,
+    definitions: CHAT_PROGRESS_STEP_DEFINITIONS,
+    events: turn.progress_events,
+    streamUrl: running ? appPath(`${jobProgressPath(jobId)}/stream`) : null,
+    fetchEvents,
+    active: running,
     enabled: tracking,
+    elapsedMs: chatJobElapsedMs(turn),
+    staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
+    onStalled: () => void refresh(),
+    // 終端が配信で先に届いたら、結果を待たずに会話を取り直す（開き直した会話の完了したターンでは取り直さない）。
+    onTerminal: running ? () => void refresh() : undefined,
   });
+  // 会話の取得（保存済みのイベントを含む）が届いたら、配信を受け取ったとして数える。
+  const touchProgress = progress.touch;
+  useEffect(() => {
+    touchProgress();
+  }, [receivedAt, touchProgress]);
   // 送信のジョブが実行まで行い（#1176）、結果の行はここで 1 回だけ受け取る。「もう一度実行」は明示の
   // 操作（#1154）。安全検査を通った生成 SQL だけを実行できる。
   const execution = useChatSqlExecution(
