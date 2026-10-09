@@ -706,12 +706,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_entity_expansion_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
-            "関連する chunk を 1 段だけ足す（#1362）。実体は文書レシピで実体の抽出"
-            "（rag_entity_index_enabled）を選んだ文書にだけあるため、選んだ文書が検索範囲に"
-            "無ければ何も足さない。LLM の呼び出しは増えない。"
+            "関連する chunk を 1 段だけ足す（#1362。既定 OFF。実体のデータが無い環境で毎回の"
+            "検索に SQL を足さない）。実体は文書レシピで実体の抽出（rag_entity_index_enabled）を"
+            "選んだ文書にだけあるため、使うときはこの env と文書レシピの両方を有効にする。"
+            "LLM の呼び出しは増えない。"
         ),
     )
     rag_entity_expansion_max_chunks: int = Field(

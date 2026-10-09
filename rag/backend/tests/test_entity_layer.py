@@ -470,7 +470,8 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 def test_settings_default_off_for_the_recipe_and_bounded_budget() -> None:
     settings = Settings()
     assert settings.rag_entity_index_enabled is False
-    assert settings.rag_entity_expansion_enabled is True
+    # 拡張も既定 OFF（実体のデータが無い環境で毎回の検索に SQL を足さない）。
+    assert settings.rag_entity_expansion_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
@@ -713,7 +714,7 @@ def _engine(store: InMemoryEntityStore, hits: list[RetrievedChunk], **settings: 
     from tests.test_cross_references import FakeGenAi, ReferenceOracle
 
     return AnswerEngine(
-        Settings(**settings),
+        Settings(**{"rag_entity_expansion_enabled": True, **settings}),
         oracle=cast(Any, ReferenceOracle(hits, [])),
         genai=cast(Any, FakeGenAi()),
         entity_store=store,

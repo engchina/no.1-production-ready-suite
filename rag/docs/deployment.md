@@ -769,8 +769,10 @@ schema の変更は無い。表示の本文・embedding は変えない。
    `rag_entity_chunks` と索引を無ければ作る。データを削除しないので承認は要らない）。更新するまで、回答の検索は
    実体の表を読めずに拡張を行わない（回答は続ける。backend のログに `entity expansion failed`）。実体の抽出を
    選んだレシピの取込は、表が無いため「実体の抽出の保存に失敗しました」で止まる。
-2. backend を再起動する。既存の文書は実体を持たないため、検索の結果は変わらない。
-3. 使うときは、文書レシピの処理設定で `entity_index_enabled` を有効にして（API の
+2. backend を再起動する。拡張は既定で OFF（`RAG_ENTITY_EXPANSION_ENABLED=false`）で、既存の文書は実体を
+   持たないため、検索の結果は変わらない。
+3. 使うときは、`backend/.env` に `RAG_ENTITY_EXPANSION_ENABLED=true` を書いて backend を再起動し、文書レシピの
+   処理設定で `entity_index_enabled` を有効にして（API の
    `PUT /api/documents/{document_id}/recipes/{recipe_id}`。画面の項目は未対応）、その文書を再処理する。
    列名は `entity_name_columns` / `entity_attribute_columns` で選べる（無ければ列名で決める）。
 

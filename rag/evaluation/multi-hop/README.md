@@ -185,7 +185,9 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 
 実体の層（文書レシピの任意の処理「実体の抽出」と、回答の検索の 1 段の拡張。
 [../../docs/rag-engine.md](../../docs/rag-engine.md) の `RAG_ENTITY_INDEX_ENABLED`）の効果は、同じ資料を
-**別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます（同じ文書を両方に入れると、実体を
+**別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます。拡張は既定で OFF なので、
+評価の backend は `RAG_ENTITY_EXPANSION_ENABLED=true` で起動します（実体を持たないナレッジベースでは何も
+足さない）（同じ文書を両方に入れると、実体を
 持つ文書が両方の検索範囲に入るため）。
 
 ```bash
