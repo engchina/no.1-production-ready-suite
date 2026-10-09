@@ -1500,11 +1500,11 @@
               }
             ],
             "default": null,
-            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。",
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。",
             "title": "Search Answer Profile Id"
           },
           "knowledge_base_ids": {
-            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。",
+            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。",
             "items": {
               "type": "string"
             },
@@ -2111,11 +2111,11 @@
               }
             ],
             "default": null,
-            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。",
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。",
             "title": "Search Answer Profile Id"
           },
           "knowledge_base_ids": {
-            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。",
+            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。",
             "items": {
               "type": "string"
             },
