@@ -7,6 +7,7 @@ import {
   mockLocalAuth,
   selectSearchAnswerProfile,
 } from "./_helpers";
+import { chatProgressRecorder, type ChatStepId, type ChatStepParams, type ChatStepStatus } from "./_chat-progress";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./_progress-timer";
 
 /**
@@ -321,28 +322,26 @@ async function screenshotBothThemes(page: Page, path: (theme: string) => string)
   }
 }
 
-const CHAT_STEP_IDS = ["rewrite_query", "retrieve", "rerank", "generate_answer", "check_guardrail"] as const;
-
-/** 処理の段階（3 製品共通の ChatProgressStep。#1146）。`statuses` に無い段階は未開始。 */
-function chatProgress(statuses: Partial<Record<(typeof CHAT_STEP_IDS)[number], string>>) {
-  // 配信した時刻に置き換える（mockStreams）。
-  const now = "__NOW__";
-  return sse("progress", {
-    model_id: "m1",
-    steps: CHAT_STEP_IDS.map((id) => {
-      const status = statuses[id] ?? "pending";
-      return {
-        id,
-        // 画面は段階の id と状態から名前を付ける（backend の名前は未知の段階だけに使う）。
-        label: `backend の名前 ${id}`,
-        status,
-        ...(status === "pending" || status === "skipped" ? {} : { startedAt: now }),
-        ...(status === "done" || status === "failed" ? { finishedAt: now } : {}),
-        ...(id === "retrieve" && status === "done" ? { detail: "根拠 1 件" } : {}),
-      };
-    }),
-  });
+/**
+ * 処理の段階のイベント（3 製品共通の契約。#1359）を回答の配信（`chat_progress`）で送る。回答（`messageId`）ごとに
+ * 番号を続け、状態が変わった段階だけを送る。時刻は配信した時刻に置き換える（mockStreams）。
+ */
+function chatProgressStream(messageId: string) {
+  const recorder = chatProgressRecorder(messageId, () => "__NOW__");
+  const send = (events: unknown[]) =>
+    events.map((event) => sse("chat_progress", { model_id: "m1", message_id: messageId, event })).join("");
+  return {
+    declare: () => send(recorder.declare()),
+    set: (
+      statuses: Partial<Record<ChatStepId, ChatStepStatus>>,
+      params: Partial<Record<ChatStepId, ChatStepParams>> = {}
+    ) => send(recorder.set(statuses, params)),
+    terminal: (status: "done" | "failed" | "cancelled") => send(recorder.terminal(status)),
+  };
 }
+
+const timedOutProgress = chatProgressStream("a1");
+const okProgress = chatProgressStream("a2");
 
 const timedOutChatStream: TimedChunk[] = [
   {
@@ -353,10 +352,10 @@ const timedOutChatStream: TimedChunk[] = [
         user_message: userMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
-      chatProgress({}),
+      timedOutProgress.declare(),
       chatStage("answer", "started"),
       chatStage("answer_step:質問の理解", "started"),
-      chatProgress({ rewrite_query: "running" }),
+      timedOutProgress.set({ rewrite_query: "running" }),
     ].join(""),
   },
   {
@@ -364,7 +363,7 @@ const timedOutChatStream: TimedChunk[] = [
     text: [
       chatStage("answer_step:質問の理解", "success", 1500),
       chatStage("answer_step:文書検索", "started"),
-      chatProgress({ rewrite_query: "done", retrieve: "running" }),
+      timedOutProgress.set({ rewrite_query: "done", retrieve: "running" }),
     ].join(""),
   },
   {
@@ -372,7 +371,8 @@ const timedOutChatStream: TimedChunk[] = [
     text: [
       chatStage("answer_step:文書検索", "cancelled", 1500),
       chatStage("answer", "cancelled", 1500),
-      chatProgress({ rewrite_query: "done", retrieve: "failed" }),
+      timedOutProgress.set({ retrieve: "failed", rerank: "skipped", generate_answer: "skipped", check_guardrail: "skipped" }),
+      timedOutProgress.terminal("failed"),
       sse("error", {
         model_id: "m1",
         message: TIMEOUT_MESSAGE,
@@ -398,20 +398,26 @@ const okChatStream: TimedChunk[] = [
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
       chatStage("answer", "started"),
-      chatProgress({ rewrite_query: "running" }),
+      okProgress.declare(),
+      okProgress.set({ rewrite_query: "running" }),
     ].join(""),
   },
   {
     afterMs: 500,
     text: [
       chatStage("answer", "success", 500),
-      chatProgress({
-        rewrite_query: "done",
-        retrieve: "done",
-        rerank: "done",
-        generate_answer: "done",
-        check_guardrail: "done",
-      }),
+      okProgress.set(
+        {
+          rewrite_query: "done",
+          retrieve: "done",
+          rerank: "done",
+          generate_answer: "done",
+          check_guardrail: "done",
+        },
+        // 根拠の件数は値で届き、画面が i18n で補足にする。
+        { retrieve: { citations: 1 } }
+      ),
+      okProgress.terminal("done"),
       sse("metadata", {
         model_id: "m1",
         message_id: "a2",
