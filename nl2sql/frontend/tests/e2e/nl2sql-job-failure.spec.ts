@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { withJobProgress } from "./_helpers/job-progress";
 
 /**
  * NL2SQL のジョブの失敗の文（#1072）。1 文目は利用者の言葉（何が起きたか・次の操作）にし、
@@ -51,7 +52,7 @@ async function mockChatWithFailedTurn(page: Page) {
         data:
           new URL(route.request().url()).pathname === "/api/nl2sql/chats"
             ? { items: [conversation], next_cursor: null, total: 1, limit: 10 }
-            : { conversation, turns: [turn] },
+            : { conversation, turns: [turn].map(withJobProgress) },
       },
     }),
   );

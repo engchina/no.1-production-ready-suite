@@ -9,8 +9,10 @@
   文脈（利用者・対象範囲。監査にも使う）を引き継ぐ。取込の worker（別プロセスの batch）は
   使わない（チャットは低遅延と段階の配信が要るため）。
 - 状態は会話のメッセージ（`rag_messages`）に保存する。`start` の前に ASSISTANT のメッセージを
-  `STREAMING` で作り、段階（`progress_json`）・実行中のプロセス（`lease_owner`）・heartbeat
-  （`heartbeat_at`）を書く。最終の回答・失敗・停止は同じメッセージを更新して保存する。
+  `STREAMING` で作り、処理の段階のイベント（`progress_json`。3 製品共通の
+  `pr_backend_core.chat_progress`。#1359）・実行中のプロセス（`lease_owner`）・heartbeat
+  （`heartbeat_at`）を書く。最終の回答・失敗・停止は同じメッセージを更新して保存し、段階は終端の
+  イベント（完了・失敗・停止）まで記録する。
 - SSE は task の event の記録（`ChatAnswerRun.events`）を購読するだけ。event には連番を付け、
   再購読（`Last-Event-ID`）では続きから送る。購読が切れても task は止めない。終わった run の
   記録は `CHAT_ANSWER_RETENTION_SECONDS` だけ残す（作成が終わった直後の再購読に応える）。
@@ -36,6 +38,13 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+from pr_backend_core.chat_progress import (
+    ChatProgressRecorder,
+    ChatProgressTerminalStatus,
+    dump_chat_progress_events,
+    parse_chat_progress_events,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +72,18 @@ CHAT_ANSWER_LIMIT_MESSAGE = (
 )
 
 
+# 保存済みの段階（`progress_json` の値）から、閉じるときに保存する段階を作る（終端を記録する）。
+type ChatProgressFinalizer = Callable[[object], list[dict[str, Any]] | None]
+
+
+class ChatAnswerProgress(Protocol):
+    """作成中のメッセージの処理の段階の記録（`app.rag.chat_progress.ChatProgressTracker`）。"""
+
+    def close(self, status: ChatProgressTerminalStatus) -> None: ...
+
+    def dump(self) -> list[dict[str, Any]]: ...
+
+
 class ChatAnswerStore(Protocol):
     """作成中の回答（`STREAMING` の ASSISTANT のメッセージ）の保存先（`OracleClient`）。"""
 
@@ -81,6 +102,7 @@ class ChatAnswerStore(Protocol):
         lease_owner: str | None = None,
         stale_seconds: float | None = None,
         scoped: bool = True,
+        finalize_progress: ChatProgressFinalizer | None = None,
     ) -> bool: ...
 
 
@@ -108,6 +130,8 @@ class ChatAnswerRun:
     store: ChatAnswerStore
     # model_id → 作成中の ASSISTANT のメッセージの id。
     message_ids: dict[str, str] = field(default_factory=dict)
+    # 作成中のメッセージの id → 処理の段階の記録（閉じるときに終端を記録する。#1359）。
+    progress: dict[str, ChatAnswerProgress] = field(default_factory=dict)
     events: list[ChatAnswerEvent] = field(default_factory=list)
     done: bool = False
     finished_at: float | None = None
@@ -354,6 +378,10 @@ class ChatAnswerRunService:
             message = CHAT_ANSWER_CANCELLED_MESSAGE if stopped else CHAT_ANSWER_INTERRUPTED_MESSAGE
             for model_id, message_id in run.open_message_ids().items():
                 run.mark_closed(message_id)
+                # 処理の段階も終端（停止・中断の失敗）にして一緒に保存する（#1359）。
+                progress = run.progress.get(message_id)
+                if progress is not None:
+                    progress.close("cancelled" if stopped else "failed")
                 with contextlib.suppress(Exception):
                     await asyncio.shield(
                         run.store.close_streaming_chat_message(
@@ -362,6 +390,13 @@ class ChatAnswerRunService:
                             content=message,
                             lease_owner=self.worker_id,
                             scoped=False,
+                            finalize_progress=(
+                                _dump_progress(progress)
+                                if progress is not None
+                                else chat_progress_closer(
+                                    message_id, "cancelled" if stopped else "failed"
+                                )
+                            ),
                         )
                     )
                 run.publish(
@@ -410,6 +445,32 @@ class ChatAnswerRunService:
                 if run_task is not None:
                     run_task.cancel()
                 return
+
+
+def _dump_progress(progress: ChatAnswerProgress) -> ChatProgressFinalizer:
+    """このプロセスの記録（終端まで記録した）をそのまま保存する。"""
+    events = progress.dump()
+    return lambda _saved: events
+
+
+def close_saved_chat_progress(
+    saved: object, *, message_id: str, status: ChatProgressTerminalStatus
+) -> list[dict[str, Any]]:
+    """保存済みの段階（`progress_json` の値）を終端にした一覧（#1359）。
+
+    実行中の段階は状態に合わせて終え（失敗なら失敗、停止ならスキップ）、待機中の段階はスキップに
+    してから終端を記録する。既に終端なら変えない。旧形式（段階の snapshot）は捨てて終端だけにする。
+    """
+    recorder = ChatProgressRecorder(message_id, events=parse_chat_progress_events(saved))
+    recorder.complete(status)
+    return dump_chat_progress_events(recorder.events)
+
+
+def chat_progress_closer(
+    message_id: str, status: ChatProgressTerminalStatus
+) -> ChatProgressFinalizer:
+    """保存済みの段階を終端にする（このプロセスに記録が無い: 別のプロセスの停止・中断の後始末）。"""
+    return lambda saved: close_saved_chat_progress(saved, message_id=message_id, status=status)
 
 
 _SERVICE = ChatAnswerRunService()

@@ -10,6 +10,7 @@ import {
   expectProgressTimerMonotonic,
   startProgressTimerSampler,
 } from "./_helpers/progress-timer";
+import { jobProgressEvents, turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 
 const profile = {
   id: "sales",
@@ -69,7 +70,7 @@ async function setup(page: Page) {
                 total: state.turns.length ? 1 : 0,
                 limit: 10,
               }
-            : { conversation, turns: state.turns },
+            : { conversation, turns: state.turns.map(withJobProgress) },
       },
     });
   });
@@ -101,7 +102,14 @@ async function setup(page: Page) {
     state.turns.push(turn);
     return route.fulfill({
       json: {
-        data: { job_id: id, status: turn.status, created_at: turn.created_at, steps: [] },
+        data: {
+          job_id: id,
+          status: turn.status,
+          created_at: turn.created_at,
+          steps: [],
+          // 作成時の処理の段階のイベント（backend の start_job と同じ。#1359）。
+          progress_events: turnProgressEvents(turn),
+        },
       },
     });
   });
@@ -776,8 +784,17 @@ async function loseJobSubmitResponse(
         },
       });
     if (control.lose) return route.abort("failed");
+    const created = state.turns.find((turn) => turn.job_id === id)!;
     return route.fulfill({
-      json: { data: { job_id: id, status: "done", created_at: now, steps: [] } },
+      json: {
+        data: {
+          job_id: id,
+          status: "done",
+          created_at: now,
+          steps: [],
+          progress_events: turnProgressEvents(created),
+        },
+      },
     });
   });
   // 取り直しも届かない（通信が戻る前）。
@@ -997,6 +1014,8 @@ for (const width of [1280, 375]) {
       ));
     const before = await seconds();
     Object.assign(state.turns[0], {
+      // 安全性の確認の完了で backend が記録する参照した表（mock の backend が補足の値にする。#1359）。
+      referenced_tables: ["APP.EMPLOYEE"],
       steps: [
         { stage: "prepare_context", status: "done", started_at: iso(19_000), finished_at: iso(18_000) },
         { stage: "generate_sql", status: "done", started_at: iso(18_000), finished_at: iso(2_000) },
@@ -1147,3 +1166,76 @@ test("上を読んでいる間に回答が届いても引き戻さず「最新�
   await expect.poll(distanceFromBottom).toBeLessThan(48);
   await expect(latest).toHaveCount(0);
 });
+
+// #1359: 処理の段階は backend が記録したイベントを SSE で受け取る（会話の取り直しを待たない）。
+for (const width of [1280, 375]) {
+  test(`処理中の段階を SSE で受け取り、会話の記録の続きから積む (#1359, ${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const state = await setup(page);
+    state.queued = true;
+    const createdAt = iso(5_000);
+    const generating = jobProgressEvents("chat-1", {
+      at: createdAt,
+      steps: {
+        queue: "done",
+        prepare_context: "done",
+        generate_sql: { status: "running", params: { engine: "select_ai" } },
+      },
+    });
+    const streams: { since: number; lastEventId: string | undefined }[] = [];
+    await page.route("**/api/nl2sql/jobs/*/progress/stream**", (route) => {
+      const url = new URL(route.request().url());
+      const since = Number(url.searchParams.get("since") ?? 0);
+      const lastEventId = route.request().headers()["last-event-id"];
+      streams.push({ since, lastEventId });
+      const cursor = Math.max(since, Number(lastEventId ?? 0));
+      const events = generating.filter((event) => Number(event.seq) > cursor);
+      // 送るものが無ければ 204（ブラウザは張り直しをやめ、画面は polling に縮退する）。
+      if (events.length === 0) return route.fulfill({ status: 204 });
+      const body = [
+        "retry: 2000\n\n",
+        ...events.map((event) => `id: ${event.seq}\nevent: chat_progress\ndata: ${JSON.stringify(event)}\n\n`),
+      ].join("");
+      return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body });
+    });
+    await page.route("**/api/nl2sql/jobs/*/progress?**", (route) =>
+      route.fulfill({
+        json: { data: { target_id: "chat-1", attempt: 0, events: [], last_seq: generating.length, terminal: false } },
+      }),
+    );
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill("カテゴリ別売上");
+    await composer.press("Enter");
+    await expect.poll(() => state.turns.length).toBe(1);
+    // 会話の取り直しは開始待ちのまま（記録の 7 件目まで）。続きは SSE だけが届ける。
+    Object.assign(state.turns[0], {
+      status: "running",
+      engine: "select_ai",
+      created_at: createdAt,
+      started_at: createdAt,
+      progress_events: generating.slice(0, 7),
+    });
+    const current = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress-current");
+    await expect(current).toHaveAttribute("data-step-id", "generate_sql");
+    await expect(current).toContainText("SQL を生成しています（Select AI）");
+    // SSE は受け取った記録の続き（`since`）から開く。
+    expect(streams.length).toBeGreaterThan(0);
+    // 完了は会話の取り直しで届く（記録に終端が入る）。
+    Object.assign(state.turns[0], {
+      status: "done",
+      finished_at: iso(0),
+      progress_events: undefined,
+      steps: [],
+      result: {
+        generated_sql: "SELECT CATEGORY, SUM(AMOUNT) FROM APP.SALES GROUP BY CATEGORY",
+        original_question: "カテゴリ別売上",
+        explanation: "",
+        safety: { is_safe: true, referenced_tables: ["APP.SALES"] },
+      },
+    });
+    const progress = page.getByTestId("sql-chat-turn").getByTestId("sql-chat-progress");
+    await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+    await expect(progress.getByTestId("sql-chat-progress-summary")).toHaveText(/^処理の経過（6 ステップ・/);
+  });
+}

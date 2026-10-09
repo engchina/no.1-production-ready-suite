@@ -611,6 +611,8 @@ export const ja = {
   "chat.progress.retrieve.done": "関係する文書を探しました",
   "chat.progress.retrieve.failed": "関係する文書を探せませんでした",
   "chat.progress.retrieve.idle": "関係する文書の検索",
+  "chat.progress.retrieve.citations": "根拠 {count} 件",
+  "chat.progress.retrieve.attempt": "{count} 回目",
   "chat.progress.rerank.running": "並べ替えています",
   "chat.progress.rerank.done": "並べ替えました",
   "chat.progress.rerank.failed": "並べ替えられませんでした",

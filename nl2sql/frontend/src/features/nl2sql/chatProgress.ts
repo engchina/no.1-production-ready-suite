@@ -1,38 +1,33 @@
-// チャットのジョブの段階を、3 製品共通の段階の形（ChatProgressStep）にする（#1145）。
+// チャットのジョブの処理の段階の定義（#1145 / #1359）。
 //
-// SQL 生成の画面の工程の表示（WorkflowProgressStrip）より情報を絞る。チャットも SQL 生成の画面と同じく
-// 生成した SQL を同じジョブで実行するので（#1176）、ジョブの全段階（開始待ち・準備・生成・安全性の確認・
-// 実行・結果の整形）を写す。写し漏らした段階の間は、今の段階の行が消えて「N ステップ完了」だけになる
-// （#1176 の指摘）。実行の権限が無い利用者のターン・#1176 より前のターンは、実行を「未実行」にする。
-import type {
-  ChatProgressLabels,
-  ChatProgressStep,
-  ChatProgressStepStatus,
+// 段階は backend がジョブの処理の段階のイベント（3 製品共通の契約。`progress_events`）として記録する（開始待ち・
+// 準備・生成・安全性の確認・実行・結果の整形。並びは backend の記録の順）。画面はイベントを共有の
+// `useChatProgressStream` で積み、ここで段階の名前（i18n）と補足（生成方法・参照した表・行数・停止）を付けるだけ
+// にする。段階の状態（開始前の失敗・停止・終端の未実行・終端まで今の段階がある〔#1176〕）は backend が決める。
+import {
+  chatProgressLabelState,
+  type ChatProgressLabels,
+  type ChatProgressLabelState,
+  type ChatProgressParams,
+  type ChatProgressStep,
+  type ChatProgressStepDefinitions,
+  type ChatProgressStepStatus,
 } from "@production-ready/ui";
 
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import { t } from "../../lib/i18n";
-import { normalizeNl2SqlJobSteps } from "./jobProgressState";
-import type { JobData, JobStepStatus, Nl2SqlEngine } from "./types";
+import type { JobData, Nl2SqlEngine } from "./types";
 
 type ChatStage =
+  | "queue"
   | "prepare_context"
   | "generate_sql"
   | "safety_check"
   | "execute_sql"
   | "format_results";
 
-/** チャットで出す工程（backend のジョブの段階 `_NL2SQL_JOB_STAGES` と同じ。#1176）。 */
-const CHAT_STAGES: readonly ChatStage[] = [
-  "prepare_context",
-  "generate_sql",
-  "safety_check",
-  "execute_sql",
-  "format_results",
-];
-
 /** 段階の名前（実行中・完了・失敗・未実行）。i18n の key は静的に書く（辞書の検査が key を見つけられるように）。 */
-const STAGE_LABELS: Record<ChatStage | "queue", Record<"running" | "done" | "failed" | "idle", string>> = {
+const STAGE_LABELS: Record<ChatStage, Record<ChatProgressLabelState, string>> = {
   queue: {
     running: t("chat.progress.queue.running"),
     done: t("chat.progress.queue.done"),
@@ -92,30 +87,78 @@ export const CHAT_PROGRESS_LABELS: Partial<ChatProgressLabels> = {
   },
 };
 
-function labelFor(stage: ChatStage | "queue", status: ChatProgressStepStatus): string {
-  const labels = STAGE_LABELS[stage];
-  if (status === "running") return labels.running;
-  if (status === "done") return labels.done;
-  if (status === "failed") return labels.failed;
-  return labels.idle;
+function label(stage: ChatStage) {
+  return (status: ChatProgressStepStatus) => STAGE_LABELS[stage][chatProgressLabelState(status)];
 }
 
-function toChatStatus(status: JobStepStatus): ChatProgressStepStatus {
-  return status === "error" ? "failed" : status;
+function count(value: ChatProgressParams[string] | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
+
+/** 止めた段階（backend の停止の印）は「停止しました」。停止は失敗ではないので、状態は「未実行」。 */
+function stoppedDetail(params: ChatProgressParams): string | undefined {
+  return params.stopped === true ? t("chat.progress.stopped") : undefined;
+}
+
+/** 生成方法の名前（未知の値は出さない）。 */
+function engineDetail(params: ChatProgressParams): string | undefined {
+  const engine = params.engine;
+  return typeof engine === "string" && Object.prototype.hasOwnProperty.call(ENGINE_LABELS, engine)
+    ? ENGINE_LABELS[engine as Nl2SqlEngine]
+    : undefined;
+}
+
+/** 参照した表を短く（backend が渡す最初の数件と「ほか N 件」）。 */
+function tablesDetail(params: ChatProgressParams): string | undefined {
+  const tables = typeof params.tables === "string" ? params.tables : "";
+  if (!tables) return undefined;
+  const shown = tables.split(",").filter((name) => name.trim()).length;
+  const total = count(params.table_count) ?? shown;
+  return total > shown ? t("chat.progress.tablesMore", { tables, count: total - shown }) : tables;
+}
+
+/** 実行で取得した行数。 */
+function rowsDetail(params: ChatProgressParams): string | undefined {
+  const rows = count(params.rows);
+  return rows === null ? undefined : t("chat.progress.rows", { count: rows.toLocaleString("ja-JP") });
+}
+
+/**
+ * チャットのジョブの段階の定義（`kind` = backend の段階の id → 名前と補足）。並びは backend の記録の順。
+ *
+ * - 開始待ち（ジョブの作成から worker が処理を始めるまで）: worker が起動していない・混んでいるときに、生成では
+ *   なく開始を待っていることが分かる。
+ * - 生成の段階の補足は生成方法、安全性の確認（完了）は参照した表、実行（完了）は取得した行数。
+ * - 止めた段階は「停止しました」（ほかの補足より先）。
+ */
+export const CHAT_PROGRESS_STEP_DEFINITIONS: ChatProgressStepDefinitions = {
+  queue: { label: label("queue"), detail: (_status, params) => stoppedDetail(params) },
+  prepare_context: {
+    label: label("prepare_context"),
+    detail: (_status, params) => stoppedDetail(params),
+  },
+  generate_sql: {
+    label: label("generate_sql"),
+    detail: (_status, params) => stoppedDetail(params) ?? engineDetail(params),
+  },
+  safety_check: {
+    label: label("safety_check"),
+    detail: (status, params) =>
+      stoppedDetail(params) ?? (status === "done" ? tablesDetail(params) : undefined),
+  },
+  execute_sql: {
+    label: label("execute_sql"),
+    detail: (status, params) =>
+      stoppedDetail(params) ?? (status === "done" ? rowsDetail(params) : undefined),
+  },
+  format_results: {
+    label: label("format_results"),
+    detail: (_status, params) => stoppedDetail(params),
+  },
+};
 
 function isoFromMs(ms: number): string {
   return new Date(ms).toISOString();
-}
-
-/** 参照した表を短く（最初の 3 件と「ほか N 件」）。 */
-function tablesDetail(tables: string[] | undefined): string | undefined {
-  const names = (tables ?? []).filter(Boolean);
-  if (names.length === 0) return undefined;
-  const shown = names.slice(0, 3).join(", ");
-  return names.length > 3
-    ? t("chat.progress.tablesMore", { tables: shown, count: names.length - 3 })
-    : shown;
 }
 
 /** 送信の応答（ジョブの投入）を待つ間の段階。投入が遅いときに、どこで待っているかを示す。 */
@@ -128,91 +171,6 @@ export function chatSubmitProgressSteps(sentAtMs: number): ChatProgressStep[] {
       startedAt: isoFromMs(sentAtMs),
     },
   ];
-}
-
-/**
- * チャットのジョブを段階の一覧にする。
- *
- * - 先頭に「開始待ち」（ジョブの作成から worker が処理を始めるまで）を置く。worker が起動していない・
- *   混んでいるときに、生成ではなく開始を待っていることが分かる。
- * - ジョブが終わった（完了・失敗・停止）のに待機中のまま残った段階は「未実行」にする。
- * - 停止（JOB_CANCELLED）は失敗ではないので、止めた段階は「未実行」と補足「停止しました」にする。
- */
-export function chatJobProgressSteps(job: JobData, engine?: Nl2SqlEngine): ChatProgressStep[] {
-  const terminal = job.status === "done" || job.status === "error";
-  const cancelled = job.error_code === "JOB_CANCELLED";
-  const reported = new Map((job.steps ?? []).map((step) => [step.stage, step]));
-  const normalized = new Map(normalizeNl2SqlJobSteps(job).map((step) => [step.stage, step]));
-
-  const queueStatus: ChatProgressStepStatus =
-    job.status === "pending"
-      ? "running"
-      : job.started_at || job.status !== "error"
-        ? "done"
-        : cancelled
-          ? "skipped"
-          : "failed";
-  const firstStageStartedAt = reported.get("prepare_context")?.started_at ?? undefined;
-  const steps: ChatProgressStep[] = [
-    {
-      id: "queue",
-      label: labelFor("queue", queueStatus),
-      status: queueStatus,
-      startedAt: job.created_at,
-      finishedAt:
-        queueStatus === "running" ? undefined : (job.started_at ?? firstStageStartedAt ?? undefined),
-      detail: queueStatus === "skipped" ? t("chat.progress.stopped") : undefined,
-    },
-  ];
-
-  for (const stage of CHAT_STAGES) {
-    const step = normalized.get(stage);
-    let status = toChatStatus(step?.status ?? "pending");
-    // ジョブが待機中の間は、段階は開始待ちの後ろで待つ。
-    if (job.status === "pending") status = "pending";
-    let detail: string | undefined;
-    if (terminal && (status === "pending" || status === "running")) status = "skipped";
-    if (cancelled && status === "failed") {
-      status = "skipped";
-      detail = t("chat.progress.stopped");
-    }
-    if (!detail && stage === "generate_sql" && engine) detail = ENGINE_LABELS[engine];
-    if (!detail && stage === "safety_check" && status === "done")
-      detail = tablesDetail(job.result?.safety.referenced_tables);
-    // 実行で取得した行数（ジョブの中の実行の要約。#1176）。
-    if (!detail && stage === "execute_sql" && status === "done" && job.last_execution)
-      detail = t("chat.progress.rows", { count: job.last_execution.row_count.toLocaleString("ja-JP") });
-    const timing = reported.get(stage);
-    steps.push({
-      id: stage,
-      label: labelFor(stage, status),
-      status,
-      startedAt: timing?.started_at ?? undefined,
-      finishedAt: status === "running" ? undefined : (timing?.finished_at ?? undefined),
-      detail,
-    });
-  }
-  // 終端でないのに実行中・待機中の段階が無い（最後の段階を終えた後、結果の保存の間など）ときは、
-  // 最後の段階（結果の整形）を今の段階として続ける。終端でないのに全段階が完了に見える状態を作らない（#1176）。
-  if (!terminal && !steps.some((step) => step.status === "running" || step.status === "pending")) {
-    const last = steps.length - 1;
-    const stage = steps[last].id as ChatStage;
-    steps[last] = {
-      ...steps[last],
-      status: "running",
-      label: labelFor(stage, "running"),
-      finishedAt: undefined,
-    };
-  }
-  return steps;
-}
-
-/**
- * チャットの段階の一覧の対象（ジョブ ID と実行の回数）。処理中は一度出した段階を消さない（共有の
- * `ChatProgress`。#1358）が、引き継いだ実行（attempt が変わった）は段階を初めからにするので作り直す。
- */
-export function chatJobProgressKey(job: Pick<JobData, "job_id" | "attempt">): string {
-  return `${job.job_id}#${job.attempt ?? 0}`;
 }
 
 /** 完了後の全体の所要時間（ジョブの作成から終了まで）。段階の時刻が無い古いジョブにも出す。 */

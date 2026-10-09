@@ -120,6 +120,7 @@ Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streama
 - ツール: `rag_list_search_answer_profiles`（検索・回答プロファイル一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
 - チャットは MCP で提供しない（#787）。チャットは画面（SSE の `POST /api/chat/conversations/{id}/messages/stream`）だけの機能で、MCP で提供するのは検索だけ。
 - チャットの回答の作成は SSE の接続から切り離している（#1175。`app/rag/chat_answer_runs.py`）。送信を受けたプロセスの中の task が作成し、作成中の回答（`STREAMING`）・段階・最終の回答は `rag_messages` に保存する。SSE はその task の event を購読するだけで、接続が切れても作成は続く。画面は `GET /api/chat/conversations/{id}/messages/{質問の id}/stream`（`Last-Event-ID`）で続きを購読し直し、できなければ保存済みの会話を取り直す。停止は `POST .../messages/{質問の id}/cancel` の明示の取消。
+- チャットの処理の段階（質問の整理 → 文書の検索 → 並べ替え → 回答の作成 → 回答の確認）は、3 製品共通の段階のイベント（`pr_backend_core.chat_progress`。#1359）で記録する（`app/rag/chat_progress.py` の `ChatProgressTracker`。対象は作成中の回答のメッセージ）。最初に 5 段階を待機中で出し、状態が変わった段階だけを番号（`seq`）つきで記録して、完了・失敗・停止・中断の終端まで `progress_json` に保存する。名前（文言）は記録に入れず、補足は値（補正検索の回数 `attempt`・根拠の件数 `citations`）にして画面が i18n で付ける（`frontend/src/lib/chat-progress.ts`）。配信は 3 つ: 回答の配信の SSE の `chat_progress`（作成中の今のターン）、保存済みの回答の `progress`（会話の取得）、段階の polling（`GET .../messages/{回答の id}/progress?since=`）と SSE（`.../progress/stream`。保存済みの記録を 1 秒ごとに読み直すので、別の worker が作成している回答・再読込の後でも段階が届く）。画面は `useChatProgressStream` で受け取る。
 
 ## Oracle AI Database DDL 例
 
