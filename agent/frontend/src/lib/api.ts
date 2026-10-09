@@ -123,6 +123,19 @@ export interface ToolCall {
   name: string;
   arguments: Record<string, unknown>;
   trace_id?: string;
+  /** 業務 Agent のデータの範囲を当てた記録（#1378。範囲が効かなければ null）。 */
+  data_scope?: ToolCallDataScope | null;
+}
+
+/** データの範囲を当てた記録（使ったプロファイルと、埋めた / 上書きした / 拒否した / 絞った）。 */
+export interface ToolCallDataScope {
+  connection: string;
+  allowed_profile_ids: string[];
+  action?: "filled" | "overridden" | "kept" | "rejected" | "filtered";
+  argument?: string;
+  profile_id?: string;
+  requested_profile_id?: string;
+  ignored_knowledge_base_ids?: string[];
 }
 
 export interface ToolResult {
@@ -610,10 +623,35 @@ export interface AgentProfile {
   unpublished_changes: boolean;
   /** 作成に使った業種テンプレート（#810。空は使っていない）。 */
   template_id?: string;
+  /** データの範囲（#1378。接続 → 使えるプロファイルと既定）。無い接続は範囲なし。 */
+  data_scopes?: AgentDataScopes;
   tool_names?: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** データの範囲を持てる接続（標準の MCP 接続。#1378）。 */
+export type AgentDataScopeConnection = "nl2sql" | "rag";
+
+export interface AgentDataScope {
+  profile_ids: string[];
+  default_profile_id: string;
+}
+
+export type AgentDataScopes = Partial<Record<AgentDataScopeConnection, AgentDataScope>>;
+
+/** データの範囲に選べるプロファイル（編集者が使えるもの。#1378）。 */
+export interface DataScopeCandidate {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface DataScopeCandidates {
+  connection: AgentDataScopeConnection;
+  label: string;
+  profiles: DataScopeCandidate[];
 }
 
 export interface AgentProfileWritePayload {
@@ -623,6 +661,7 @@ export interface AgentProfileWritePayload {
   instructions?: string;
   skill_ids: string[];
   model_id?: string;
+  data_scopes?: AgentDataScopes;
   enabled: boolean;
   /** 作成に使った業種テンプレート（#810）。 */
   template_id?: string;
@@ -634,6 +673,7 @@ export interface AgentProfilePatchPayload {
   instructions?: string;
   skill_ids?: string[];
   model_id?: string;
+  data_scopes?: AgentDataScopes;
   enabled?: boolean;
 }
 
@@ -1500,6 +1540,9 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  /** データの範囲に選べるプロファイル（#1378。編集者として RAG / NL2SQL に問い合わせる）。 */
+  listDataScopeCandidates: (connection: AgentDataScopeConnection) =>
+    request<DataScopeCandidates>(`/api/agent-data-scopes/${encodeURIComponent(connection)}/candidates`),
   getTracePolicySettings: () =>
     request<TracePolicySettings>("/api/settings/trace-policy"),
   patchTracePolicySettings: (payload: Partial<TracePolicySettings>) =>

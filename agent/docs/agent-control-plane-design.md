@@ -26,7 +26,33 @@ flowchart TD
 
 ### Business Agent
 
-`AgentProfile` の正式な編集対象は `name / description / instructions / skill_ids / model_id / enabled`。
+`AgentProfile` の正式な編集対象は `name / description / instructions / skill_ids / model_id / data_scopes / enabled`。
+
+データの範囲（`data_scopes`。#1378）: 標準の MCP 接続（`nl2sql` / `rag`）ごとに、使えるプロファイルの ID の一覧と既定
+（`AgentDataScope`: `profile_ids` / `default_profile_id`。1 つなら既定はそれ、複数なら一覧の中の 1 つ）を持つ。一覧が空の
+接続は「範囲なし」で、今までどおり Run の利用者が使えるすべてのプロファイルからモデルが選ぶ。範囲は版に入る（下書き → 公開）。
+保存は Agent と同じく snapshot（`AGENT_RUNTIME_CHECKPOINTS`）で、システムテーブルの DDL は変えない（古い snapshot は空の範囲で
+読める）。
+
+- 編集画面の候補は `GET /agent-data-scopes/{接続}/candidates`（Agent 管理）。MCP の `nl2sql_list_profiles` /
+  `rag_list_search_answer_profiles` を**編集者**のサービストークン（`sub` = 編集者）で上限の件数まで呼ぶので、編集者が
+  使えるものだけが出る。`POST /agents`・`PATCH /agents/{id}` は、範囲に**新しく加えた** ID を同じ一覧で確かめ、
+  無ければ 400（`agent_data_scope_forbidden`）、一覧を取れなければ 409 / 502（保存しない）。既に範囲にある ID と範囲を
+  外す変更は確かめない（別の編集者が加えた ID を残したまま、ほかの項目を保存できる）。
+- 組み込み Runtime の強制（`features/agent/data_scope.py`。tool handler で、モデルの指示に頼らない）:
+  - 1 つ: `nl2sql_query` の `profile_id`・`rag_search` / `rag_retrieve_evidence` / `rag_lookup_guides` の
+    `search_answer_profile_id` を Runtime が埋め、モデルが渡した値は上書きする。モデルに見せる schema からその引数を除く
+    （`tool_registry.invoke` に渡す定義は呼び先の契約のまま）。
+  - 複数: 範囲外の値はツールのエラー（`agent_data_scope_violation`。使える ID と既定を返す）で、呼び先へ送らず予算にも
+    数えない。値が無ければ Agent の既定（NL2SQL の `"default"` には落とさない）。schema の説明に使える ID を足す。
+  - 一覧（`nl2sql_list_profiles` / `rag_list_search_answer_profiles`）は呼び先に上限の件数を求め、範囲で絞ってから
+    モデルが求めた件数に切る。`nl2sql_recommend_profile` の推薦が範囲外なら `null`、候補も範囲で絞る。
+  - RAG で範囲を設定したら `knowledge_base_ids` を使わない（schema から除き、渡されたら外す）。
+  - 記録: step の `tool_call.data_scope`（接続・使える ID・使った ID・モデルが求めた ID・`filled` / `overridden` /
+    `kept` / `rejected` / `filtered`・使わなかったナレッジベース）と、絞った件数（`tool_result.audit_metadata.data_scope`）。
+    承認待ちの呼び出しも、実行するときと同じ（範囲を当てた）引数で承認に出す。モデルへの指示に「データの範囲」の節を足す。
+  - Agent の範囲は利用者の権限を広げない（呼び先は Run の利用者の権限で判定する。積で効く）。呼び先でも範囲を強制する
+    サービストークンの claim は #1379。
 
 版（#770）: 名前・説明・指示・Skill・モデルは「下書き」で、`POST /agents/{id}/publish` で版（`AgentVersion`: 版の番号・
 内容・公開日時・公開者・メモ）を作り、`published_version` にする。通常の Run は公開中の版の内容で実行し

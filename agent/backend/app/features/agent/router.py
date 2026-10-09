@@ -119,6 +119,14 @@ from app.features.agent.control_plane_store import (
     get_control_plane_store,
     save_api_key,
 )
+from app.features.agent.data_scope import (
+    AgentDataScopes,
+    DataScopeCandidatesData,
+    DataScopeCandidatesError,
+    added_profile_ids,
+    list_candidates,
+    verify_editor_can_use,
+)
 from app.features.agent.evaluation import (
     EVALUATION_EXPECTED_MAX_CHARS,
     EVALUATION_EXPECTED_TOOLS_MAX,
@@ -3074,9 +3082,63 @@ def _require_agent_name(name: str) -> None:
         raise HTTPException(status_code=422, detail="業務 Agent の名前を入力してください。")
 
 
+@router.get(
+    "/agent-data-scopes/{connection}/candidates",
+    response_model=ApiResponse[DataScopeCandidatesData],
+)
+async def list_agent_data_scope_candidates(
+    connection: str,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[DataScopeCandidatesData]:
+    """業務 Agent のデータの範囲に選べるプロファイル（#1378）。
+
+    MCP の一覧のツール（`nl2sql_list_profiles` / `rag_list_search_answer_profiles`）を
+    **編集者**のサービストークンで呼ぶので、編集者が使えるプロファイルだけが返る。
+    """
+    try:
+        data = await run_in_threadpool(
+            partial(list_candidates, connection, user_uuid=_run_creator_user_uuid(request))
+        )
+    except DataScopeCandidatesError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}
+        ) from None
+    return ApiResponse(data=data)
+
+
+async def _verify_data_scopes(
+    request: Request, current: AgentDataScopes | None, requested: AgentDataScopes
+) -> None:
+    """保存で範囲に加えるプロファイルを、編集者が使えるかを MCP で確かめる（#1378）。
+
+    使えない（見つからない）プロファイルは 400、候補を確かめられないときは候補の取得と同じ status。
+    """
+    added = added_profile_ids(current, requested)
+    if not added:
+        return
+    try:
+        await run_in_threadpool(
+            partial(verify_editor_can_use, added, user_uuid=_run_creator_user_uuid(request))
+        )
+    except DataScopeCandidatesError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": f"データの範囲を確かめられないため保存できません。{exc.message}",
+            },
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail={"code": "agent_data_scope_forbidden", "message": str(exc)}
+        ) from None
+
+
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
 async def create_agent(
     agent: AgentProfile,
+    request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
     _require_agent_name(agent.name)
@@ -3104,6 +3166,7 @@ async def create_agent(
     # 作成に使った業種テンプレート（#810）。知らないテンプレートは保存しない（400）。
     if draft.template_id and find_template(draft.template_id) is None:
         raise HTTPException(status_code=400, detail="業種テンプレートが見つかりません。")
+    await _verify_data_scopes(request, None, draft.data_scopes)
     try:
         return ApiResponse(data=runtime_repository.create_agent(draft))
     except ValueError as exc:
@@ -3152,10 +3215,18 @@ async def restore_agent_version(
 async def patch_agent(
     agent_id: str,
     patch: AgentProfilePatch,
+    request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
     if patch.name is not None:
         _require_agent_name(patch.name)
+    if patch.data_scopes is not None:
+        current = next(
+            (item for item in runtime_repository.list_agents() if item.id == agent_id), None
+        )
+        if current is None:
+            raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE)
+        await _verify_data_scopes(request, current.data_scopes, patch.data_scopes)
     try:
         return ApiResponse(data=runtime_repository.patch_agent(agent_id, patch))
     except KeyError as exc:

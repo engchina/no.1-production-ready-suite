@@ -51,6 +51,7 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
 )
 
+from app.features.agent import data_scope
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_validation import (
@@ -593,6 +594,8 @@ class _ToolRecorder:
         self.guide_tools: dict[str, tuple[ToolDefinition, ToolHandler | None]] = {}
         self.goal = ""
         self.known_conditions: dict[str, str] = {}
+        # 業務 Agent のデータの範囲（#1378。接続 → 使えるプロファイル）。空は範囲なし。
+        self.data_scopes: data_scope.AgentDataScopes = {}
         # 照合した（する）接続。並列の呼び出しでも 1 回だけにする。
         self._guide_checked: set[str] = set()
 
@@ -617,7 +620,24 @@ class _ToolRecorder:
             raised = raised_evidence_limit(call_arguments, definition.input_schema)
             if raised is not None:
                 call_arguments = {**call_arguments, "evidence_limit": raised}
-        call = ToolCall(name=name, arguments=call_arguments, trace_id=call_id)
+        # データの範囲（#1378）: プロファイルを埋める・上書きする・範囲外を拒否する。MCP 接続の
+        # ツールだけ（Control Plane のツールは範囲の対象ではない）。
+        scoped = (
+            data_scope.enforce(name, call_arguments, self.data_scopes)
+            if definition is not None
+            else None
+        )
+        if scoped is not None:
+            call_arguments = scoped.arguments
+        call = ToolCall(
+            name=name,
+            arguments=call_arguments,
+            trace_id=call_id,
+            data_scope=scoped.note if scoped is not None else None,
+        )
+        if scoped is not None and scoped.error is not None:
+            # 範囲外は呼び先へ送らない（予算にも数えない）。step には拒否を残す。
+            return self.reject_out_of_scope(call, scoped)
         # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
         exceeded = self.budget.reserve(name) if self.budget is not None else None
         step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
@@ -639,7 +659,9 @@ class _ToolRecorder:
                 ensure_ascii=False,
             )
         # 承認は SDK の needs_approval で済んでいる（拒否のツールは渡していない）。
-        result = await self.execute(step_id, call, context, definition=definition, handler=handler)
+        result = await self.execute(
+            step_id, call, context, definition=definition, handler=handler, scoped=scoped
+        )
         if result.success:
             output = result.output or {}
             base = mcp_base_tool_name(name)
@@ -663,6 +685,29 @@ class _ToolRecorder:
             {"error": result.error or "tool failed", "error_code": result.error_code},
             ensure_ascii=False,
         )
+
+    def reject_out_of_scope(self, call: ToolCall, scoped: data_scope.ScopeEnforcement) -> str:
+        """範囲の外のプロファイルの呼び出しを、呼び先へ送らずにツールのエラーにする（#1378）。"""
+        from app.features.agent.runtime import runtime_repository
+
+        payload = scoped.error_payload()
+        step_id, _context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        runtime_repository.finish_builtin_tool_step(
+            self.run_id,
+            step_id,
+            ToolResult(
+                name=call.name,
+                success=False,
+                error=scoped.error,
+                error_code=data_scope.DATA_SCOPE_VIOLATION_CODE,
+                error_details={key: value for key, value in payload.items() if key != "error"},
+            ),
+        )
+        logger.info(
+            "builtin_runtime_data_scope_rejected",
+            extra={"run_id": self.run_id, "tool_name": call.name},
+        )
+        return json.dumps(payload, ensure_ascii=False)
 
     def hop_hints(self, call: ToolCall, output: dict[str, Any], *, step_id: str) -> dict[str, Any]:
         """多段の質問の案内をモデルへの結果に足す（#1345。記録する step の結果は RAG のまま）。
@@ -782,6 +827,7 @@ class _ToolRecorder:
         *,
         definition: ToolDefinition | None = None,
         handler: ToolHandler | None = None,
+        scoped: data_scope.ScopeEnforcement | None = None,
     ) -> ToolResult:
         from app.features.agent.runtime import runtime_repository
 
@@ -794,6 +840,19 @@ class _ToolRecorder:
             definition=definition,
             handler=handler,
         )
+        if scoped is not None and result.success and isinstance(result.output, dict):
+            # 一覧・推薦の結果は範囲で絞ってから記録し、モデルへ返す（#1378）。
+            output, removed = scoped.filter_output(result.output)
+            if output is not result.output:
+                result = result.model_copy(
+                    update={
+                        "output": output,
+                        "audit_metadata": {
+                            **result.audit_metadata,
+                            "data_scope": {"filtered_out": removed},
+                        },
+                    }
+                )
         runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
         return result
 
@@ -807,9 +866,11 @@ def build_function_tools(
     *,
     goal: str = "",
     known_conditions: Mapping[str, str] | None = None,
+    data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> list[FunctionTool]:
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
+    recorder.data_scopes = dict(data_scopes or {})
     entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
     for name in tool_names:
         registered = tool_registry.get(name)
@@ -849,7 +910,11 @@ def build_function_tools(
                 handler=_handler,
             )
 
-        schema = dict(definition.input_schema)
+        # データの範囲が 1 つなら、プロファイルの引数をモデルに見せない（#1378）。実行の定義
+        # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
+        schema = data_scope.scoped_input_schema(
+            definition.name, dict(definition.input_schema), recorder.data_scopes
+        )
         tools.append(
             FunctionTool(
                 name=definition.name,
@@ -889,6 +954,7 @@ def build_sdk_agent(
     support_task: str = "",
     goal: str = "",
     known_conditions: Mapping[str, str] | None = None,
+    data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
@@ -912,10 +978,16 @@ def build_sdk_agent(
         budget=budget,
         goal=goal,
         known_conditions=known_conditions,
+        data_scopes=data_scopes,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
     composed = compose_instructions(instructions, skill_ids, exposed)
+    # データの範囲の案内（#1378。強制は tool handler がする）。
+    scope_text = data_scope.scope_instructions(data_scopes, exposed)
+    if scope_text:
+        scope_names = instruction_tool_names(skill_ids, exposed)
+        composed = f"{composed}\n\n{render_tool_names(scope_text, scope_names)}"
     if support_task:
         support_names = instruction_tool_names(skill_ids, exposed)
         composed = f"{composed}\n\n{render_tool_names(support_task, support_names)}"
@@ -1100,6 +1172,7 @@ async def execute_run(run_id: str) -> None:
                 support_task=task.instructions,
                 goal=support_task_goal(run.goal, task.previous),
                 known_conditions=support_task_known_conditions(task.previous),
+                data_scopes=agent.data_scopes,
             )
             result = await Runner.run(
                 sdk_agent,
@@ -1107,10 +1180,14 @@ async def execute_run(run_id: str) -> None:
                 max_turns=_max_turns(),
                 run_config=_run_config(run_id, sdk_agent),
             )
-            result = await _dry_run_approvals(run, sdk_agent, result)
+            result = await _dry_run_approvals(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
-                run_id, result, task, rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids)
+                run_id,
+                result,
+                task,
+                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids),
+                data_scopes=agent.data_scopes,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
@@ -1141,6 +1218,7 @@ async def resume_run(run_id: str) -> None:
                 support_task=task.instructions,
                 goal=support_task_goal(run.goal, task.previous),
                 known_conditions=support_task_known_conditions(task.previous),
+                data_scopes=agent.data_scopes,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
@@ -1152,17 +1230,38 @@ async def resume_run(run_id: str) -> None:
             result = await Runner.run(
                 sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
             )
-            result = await _dry_run_approvals(run, sdk_agent, result)
+            result = await _dry_run_approvals(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
-                run_id, result, task, rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids)
+                run_id,
+                result,
+                task,
+                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids),
+                data_scopes=agent.data_scopes,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
 
 
-async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> Any:
+def _scoped_call(call: ToolCall, data_scopes: data_scope.AgentDataScopes | None) -> ToolCall:
+    """承認・dry-run に記録する呼び出しに、データの範囲を当てる（実行するときと同じ引数。#1378）。
+
+    範囲外（拒否）の呼び出しはモデルの引数のまま記録する（実行するときにツールのエラーになる）。
+    """
+    scoped = data_scope.enforce(call.name, call.arguments, data_scopes)
+    if scoped is None:
+        return call
+    arguments = call.arguments if scoped.error is not None else scoped.arguments
+    return call.model_copy(update={"arguments": arguments, "data_scope": scoped.note})
+
+
+async def _dry_run_approvals(
+    run: Any,
+    sdk_agent: Agent[Any],
+    result: Any,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> Any:
     """品質評価の Run（#776）は、承認が要るツールを実行せずに続ける（dry-run）。
 
     呼ぼうとしたツールは step に残し（ツールの選択の判定に使う）、モデルへは「評価中のため実行して
@@ -1182,14 +1281,7 @@ async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> An
             return result
         runtime_repository.record_builtin_dry_run_steps(
             run.id,
-            [
-                ToolCall(
-                    name=str(getattr(item, "tool_name", "") or getattr(item, "name", "") or "tool"),
-                    arguments=_arguments(getattr(item, "arguments", None)),
-                    trace_id=str(getattr(item, "call_id", "") or ""),
-                )
-                for item in interruptions
-            ],
+            [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions],
         )
         state = result.to_state()
         for item in interruptions:
@@ -1200,8 +1292,22 @@ async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> An
     return result
 
 
+def _interruption_call(item: Any) -> ToolCall:
+    """SDK の中断（承認待ち）の項目を、記録する呼び出しにする。"""
+    return ToolCall(
+        name=str(getattr(item, "tool_name", "") or getattr(item, "name", "") or "tool"),
+        arguments=_arguments(getattr(item, "arguments", None)),
+        trace_id=str(getattr(item, "call_id", "") or ""),
+    )
+
+
 async def _finish(
-    run_id: str, result: Any, task: _SupportTaskRun | None = None, *, rag_tools: bool = False
+    run_id: str,
+    result: Any,
+    task: _SupportTaskRun | None = None,
+    *,
+    rag_tools: bool = False,
+    data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> None:
     from app.features.agent.runtime import runtime_repository
 
@@ -1210,14 +1316,8 @@ async def _finish(
         _save_support_task(run_id, task)
     interruptions = list(getattr(result, "interruptions", []) or [])
     if interruptions:
-        calls = [
-            ToolCall(
-                name=str(getattr(item, "tool_name", "") or getattr(item, "name", "") or "tool"),
-                arguments=_arguments(getattr(item, "arguments", None)),
-                trace_id=str(getattr(item, "call_id", "") or ""),
-            )
-            for item in interruptions
-        ]
+        # 承認で見せる引数は、実行するときと同じくデータの範囲を当てたもの（#1378）。
+        calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
         runtime_repository.request_builtin_approvals(
             run_id, calls, state=result.to_state().to_string()
         )
