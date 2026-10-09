@@ -1130,8 +1130,8 @@ export interface ChatMessage {
   reply_to_message_id: string | null;
   created_at: string;
   /**
-   * 回答の処理の段階（3 製品共通の ChatProgressStep の形。#1175）。作成中は今の段階、終わった後は処理の経過。
-   * 未検証の入力として `chatProgressStepsFromEvent` で読む。段階を保存していない回答は null / 未指定。
+   * 回答の処理の段階のイベント（3 製品共通の契約。#1359）。作成中は記録の途中、終わった後は終端まで。
+   * 未検証の入力として `parseChatProgressEvents` で読む。段階を保存していない回答は null / 未指定。
    */
   progress?: unknown[] | null;
 }
@@ -3259,6 +3259,15 @@ export const api = {
     request<{ cancelled: boolean }>(
       `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/cancel`,
       { method: "POST" },
+    ),
+  /**
+   * 回答（`messageId` は ASSISTANT のメッセージ）の処理の段階のイベントのうち、`since` より後（#1359）。応答は
+   * 未検証の入力として `parseChatProgressPage` で読む。
+   */
+  getChatAnswerProgress: (conversationId: string, messageId: string, since: number, signal?: AbortSignal) =>
+    request<unknown>(
+      `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/progress?since=${since}`,
+      { signal },
     ),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),

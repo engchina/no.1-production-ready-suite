@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
 
+import { chatProgressRecorder, type ChatProgressEventJson } from "./_chat-progress";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
 /**
@@ -9,6 +10,9 @@ import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAns
  * 続きを購読し直す（`GET .../messages/{質問の id}/stream`・`Last-Event-ID`）。購読できない（別の worker・
  * 再起動の後）ときは保存済みの会話（作成中の回答）に引き継ぎ、会話の取り直しで完了に変わる。ページを読み込み
  * 直しても作成中の回答は「作成中」で出る。停止は取消の API で止める。
+ *
+ * 処理の段階は 3 製品共通の段階のイベント（#1359）。作成中の今のターンは回答の配信の `chat_progress` で、保存済みの
+ * 作成中の回答は段階の SSE（`GET .../messages/{回答の id}/progress/stream`。保存済みの記録を読み直す）で受け取る。
  *
  * `page.route` の fulfill は本文を一度に返すため、画面の fetch を init script で差し替えて、SSE を時間をおいて
  * 流す・途中で閉じる・閉じずに止める（answer-progress.spec.ts と同じ方式）。質問の id は画面が決めるので、
@@ -64,21 +68,34 @@ function userMessage(id: string) {
   };
 }
 
-const STEP_IDS = ["rewrite_query", "retrieve", "rerank", "generate_answer", "check_guardrail"] as const;
-type StepId = (typeof STEP_IDS)[number];
+/** 回答の配信の event の連番（`id:`。再購読の位置）。chunk を作る順に振る。 */
+let runEventId = 0;
+function runEvent(event: string, data: unknown): string {
+  runEventId += 1;
+  return sse(runEventId, event, data);
+}
 
-function steps(statuses: Partial<Record<StepId, string>>) {
-  const now = new Date().toISOString();
-  return STEP_IDS.map((id) => {
-    const status = statuses[id] ?? "pending";
-    return {
-      id,
-      label: id,
-      status,
-      ...(status === "pending" ? {} : { startedAt: now }),
-      ...(status === "done" ? { finishedAt: now } : {}),
-    };
-  });
+/** 回答（a1）の段階のイベント。配信と保存済みの会話で同じ記録を使う（番号は回答ごとに 1 から）。 */
+const answerProgress = chatProgressRecorder("a1");
+const declared = answerProgress.declare();
+const rewriting = answerProgress.set({ rewrite_query: "running" });
+const retrieving = answerProgress.set({ rewrite_query: "done", retrieve: "running" });
+/** 段階の SSE だけが先に届ける段階（会話の取得はまだ前の段階。別の worker の記録を読み直す SSE を確かめる）。 */
+const reranking = answerProgress.set({ retrieve: "done", rerank: "running" });
+const finished = answerProgress.set(
+  { rerank: "done", generate_answer: "done", check_guardrail: "done" },
+  { retrieve: { citations: 1 } }
+);
+const completed = answerProgress.terminal("done");
+const STREAMING_PROGRESS = [...declared, ...rewriting, ...retrieving];
+const COMPLETE_PROGRESS = [...STREAMING_PROGRESS, ...reranking, ...finished, ...completed];
+const CANCELLED_PROGRESS = [
+  ...STREAMING_PROGRESS,
+  ...chatProgressRecorder("a1").terminal("cancelled").map((event) => ({ ...event, seq: STREAMING_PROGRESS.length + 1 })),
+];
+
+function progressEvents(events: ChatProgressEventJson[]): string {
+  return events.map((event) => runEvent("chat_progress", { model_id: "m1", message_id: "a1", event })).join("");
 }
 
 type ReplyState = "streaming" | "complete" | "cancelled";
@@ -97,27 +114,27 @@ function reply(userId: string, state: ReplyState) {
     reply_to_message_id: userId,
     created_at: new Date(Date.now() - 4_000).toISOString(),
     progress:
-      state === "streaming"
-        ? steps({ rewrite_query: "done", retrieve: "running" })
-        : steps({ rewrite_query: "done", retrieve: "done", rerank: "done", generate_answer: "done", check_guardrail: "done" }),
+      state === "streaming" ? STREAMING_PROGRESS : state === "complete" ? COMPLETE_PROGRESS : CANCELLED_PROGRESS,
   };
 }
 
-/** 質問を保存して段階を 2 つ進めたところまで（連番 1〜3）。 */
+/** 質問を保存して段階を 2 つ進めたところまで（連番 1〜`STARTED_LAST_EVENT_ID`）。 */
 const startedChunks: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
-      sse(1, "start", {
+      runEvent("start", {
         conversation_id: "conv-1",
         user_message: { ...userMessage(USER_ID), created_at: "2026-01-01T00:00:00Z" },
         columns: [{ model_id: "m1", label: "MODEL 1", message_id: "a1" }],
       }),
-      sse(2, "progress", { model_id: "m1", steps: steps({ rewrite_query: "running" }) }),
+      progressEvents([...declared, ...rewriting]),
     ].join(""),
   },
-  { afterMs: 800, text: sse(3, "progress", { model_id: "m1", steps: steps({ rewrite_query: "done", retrieve: "running" }) }) },
+  { afterMs: 800, text: progressEvents(retrieving) },
 ];
+/** 切れるまでに受け取った最後の event の連番（再購読はこの次から）。 */
+const STARTED_LAST_EVENT_ID = String(runEventId);
 
 /**
  * 続き（連番 4〜）。回答の後、`all_done` は少し待ってから送る（回答が再購読の配信で出たことを確かめてから、
@@ -127,17 +144,14 @@ const restChunks: TimedChunk[] = [
   {
     afterMs: 300,
     text: [
-      sse(4, "progress", {
-        model_id: "m1",
-        steps: steps({ rewrite_query: "done", retrieve: "done", rerank: "done", generate_answer: "done", check_guardrail: "done" }),
-      }),
-      sse(5, "metadata", { model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 1200, guardrail_warnings: [] }),
-      sse(6, "delta", { model_id: "m1", text: ANSWER }),
-      sse(7, "citations", { model_id: "m1", citations: [] }),
-      sse(8, "done", { model_id: "m1", message_id: "a1" }),
+      progressEvents([...reranking, ...finished, ...completed]),
+      runEvent("metadata", { model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 1200, guardrail_warnings: [] }),
+      runEvent("delta", { model_id: "m1", text: ANSWER }),
+      runEvent("citations", { model_id: "m1", citations: [] }),
+      runEvent("done", { model_id: "m1", message_id: "a1" }),
     ].join(""),
   },
-  { afterMs: 2_000, text: sse(9, "all_done", { conversation_id: "conv-1" }) },
+  { afterMs: 2_000, text: runEvent("all_done", { conversation_id: "conv-1" }) },
 ];
 
 async function mockStream(page: Page, scenario: StreamScenario): Promise<void> {
@@ -203,6 +217,18 @@ interface ChatState {
   conversationFails: boolean;
   /** 最初から会話に質問がある（再読込のテスト）。 */
   existingUserId: string | null;
+  /** 段階の SSE だけが先に届ける段階（会話の取得より新しい記録）。 */
+  streamAhead: ChatProgressEventJson[];
+  /** 段階の SSE・polling の要求（path と続きの位置）。 */
+  progressRequests: { path: string; since: number }[];
+}
+
+/** 保存済みの段階の記録（段階の SSE・polling が読み直す）。 */
+function savedProgress(state: ChatState): ChatProgressEventJson[] {
+  if (state.reply === "streaming") return [...STREAMING_PROGRESS, ...state.streamAhead];
+  if (state.reply === "complete") return COMPLETE_PROGRESS;
+  if (state.reply === "cancelled") return CANCELLED_PROGRESS;
+  return [];
 }
 
 async function mockChatPage(page: Page, scenario: StreamScenario | null, initial: Partial<ChatState> = {}) {
@@ -212,6 +238,8 @@ async function mockChatPage(page: Page, scenario: StreamScenario | null, initial
     cancelRequests: [],
     conversationFails: false,
     existingUserId: null,
+    streamAhead: [],
+    progressRequests: [],
     ...initial,
   };
   await mockDatabaseReady(page);
@@ -236,6 +264,37 @@ async function mockChatPage(page: Page, scenario: StreamScenario | null, initial
       state.cancelRequests.push(path);
       state.reply = "cancelled";
       await route.fulfill({ json: { data: { cancelled: true }, error_messages: [], warning_messages: [] } });
+      return;
+    }
+    const url = new URL(request.url());
+    if (/\/messages\/a1\/progress(\/stream)?$/.test(path)) {
+      // 段階の SSE と polling（保存済みの記録から `since` / `Last-Event-ID` より後を返す。#1359）。
+      const since = Math.max(Number(url.searchParams.get("since") ?? 0), Number(request.headers()["last-event-id"] ?? 0));
+      state.progressRequests.push({ path, since });
+      const events = savedProgress(state);
+      const lastSeq = events.at(-1)?.seq ?? 0;
+      const terminal = events.some((event) => event.type === "terminal");
+      const after = events.filter((event) => event.seq > since);
+      if (path.endsWith("/stream")) {
+        if (terminal && since >= lastSeq) {
+          await route.fulfill({ status: 204 });
+          return;
+        }
+        // fulfill は本文を一度に返して閉じるので、ブラウザは `retry:` の後に続きから張り直す（続けて切れたら
+        // 画面の hook が polling に縮退する）。
+        const body =
+          "retry: 300\n\n" +
+          after.map((event) => `id: ${event.seq}\nevent: chat_progress\ndata: ${JSON.stringify(event)}\n\n`).join("");
+        await route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          data: { target_id: "a1", attempt: 0, events: after, last_seq: lastSeq, terminal },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
       return;
     }
     const userId =
@@ -334,7 +393,10 @@ for (const colorScheme of ["light", "dark"] as const) {
         const requests = await resumeRequests(page);
         const clientId = await page.evaluate(() => (window as unknown as { __clientMessageId: string }).__clientMessageId);
         expect(clientId).toMatch(/^[0-9a-f]{32}$/);
-        expect(requests[0]).toEqual({ path: `/api/chat/conversations/conv-1/messages/${clientId}/stream`, lastEventId: "3" });
+        expect(requests[0]).toEqual({
+          path: `/api/chat/conversations/conv-1/messages/${clientId}/stream`,
+          lastEventId: STARTED_LAST_EVENT_ID,
+        });
         await expect(page.getByTestId("chat-send-failure")).toHaveCount(0);
         await expect(page.getByTestId("chat-answer-progress-current")).toHaveCount(0);
         await expect(page.getByRole("button", { name: "送信" })).toBeVisible();
@@ -377,6 +439,17 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("関係する文書を探しています", {
           timeout: 10_000,
         });
+        // 段階の SSE（使えなければ polling）は保存済みの記録を読み直して届ける（別の worker の記録。#1359）。会話の
+        // 取得がまだ前の段階でも、新しい段階を出し、会話の取り直しで前の段階に戻さない。
+        await expect.poll(() => state.progressRequests.some((item) => item.path.endsWith("/progress/stream"))).toBe(true);
+        state.streamAhead = reranking;
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("並べ替えています", {
+          timeout: 10_000,
+        });
+        await expect(saved.getByTestId("chat-answer-progress-completed")).toHaveText("2 ステップ完了");
+        const conversationReads = state.conversationRequests;
+        await expect.poll(() => state.conversationRequests, { timeout: 10_000 }).toBeGreaterThan(conversationReads);
+        await expect(saved.getByTestId("chat-answer-progress-current")).toContainText("並べ替えています");
         await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("停止");
         await applyTheme(page, colorScheme);
         await expectNoPageOverflow(page);
@@ -458,7 +531,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await expectNoPageOverflow(page);
       // 回答の作成は続いていた。張り直した接続で続き（連番 4〜）を受け取り、回答が出る。
       await expect(page.getByTestId("chat-live-turn").getByText(ANSWER)).toBeVisible({ timeout: 20_000 });
-      expect((await resumeRequests(page))[0]?.lastEventId).toBe("3");
+      expect((await resumeRequests(page))[0]?.lastEventId).toBe(STARTED_LAST_EVENT_ID);
       state.reply = "complete";
       await expect(page.getByTestId("chat-live-turn")).toHaveCount(0, { timeout: 10_000 });
       await expect(reconnecting).toHaveCount(0);
