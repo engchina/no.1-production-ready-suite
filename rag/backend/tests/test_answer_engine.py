@@ -183,6 +183,14 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     assert outcome.citations
     assert outcome.citations[0].chunk_id == "doc-1:c1"
     assert "evidence_role" in outcome.citations[0].metadata
+    # 検索で当たった子は関連度の順位を持ち、前後の文脈は持たない（MCP の根拠の並び。#1348）。
+    for citation in outcome.citations:
+        rank = citation.metadata.get("evidence_retrieval_rank")
+        if citation.metadata["evidence_role"] == "retrieved_anchor":
+            assert isinstance(rank, int) and rank >= 1
+        else:
+            assert rank is None
+    assert any(c.metadata["evidence_role"] == "retrieved_anchor" for c in outcome.citations)
     diagnostics = outcome.diagnostics
     # rag_poc の回答 viewer と同じく外部データの確認・問い合わせ型も診断に載せる(#651)。
     assert diagnostics["external_data_items"] == []
