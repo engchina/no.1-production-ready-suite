@@ -18,7 +18,10 @@
 5. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
 6. `--entity-index` を渡したとき（#1362）は、すべての文書のレシピで実体の抽出（文書レシピの
    任意の処理 ``entity_index_enabled``）を選んで取り込む。実体の層の有り / 無しを、別のナレッジ
-   ベースに取り込んで比べる。
+   ベースに取り込んで比べる。回答の検索の 1 段の拡張は検索・回答プロファイルで選ぶ（#1388。
+   全体の環境変数は持たない）ため、書き出す評価セットの `rag_overrides` に
+   `entity_expansion_enabled: true` を入れ（明示した値は変えない）、`--guides` で作る検索・回答
+   プロファイルでも拡張を選ぶ。
 7. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
    業務ガイド（`support-guides.json`。参照の `file:` も文書 ID に置き換える）を取り込んで公開し、
    `search_answer_profile_id` を入れた評価セット（業務ガイドあり = C）を `--guided-output` に書く。
@@ -173,6 +176,26 @@ def resolve_golden_set(
     return resolved
 
 
+def with_entity_expansion(golden_set: Mapping[str, Any]) -> dict[str, Any]:
+    """実体の 1 段の拡張を選んだ評価セット（#1388）。
+
+    拡張は検索・回答プロファイルで選ぶ（全体の環境変数は持たない）ため、プロファイルを使わない評価
+    （A）は評価の `rag_overrides` で選ぶ。比較の評価セットは各 experiment に入れる。評価セットが
+    明示した `entity_expansion_enabled` は変えない。
+    """
+    resolved: dict[str, Any] = json.loads(json.dumps(dict(golden_set)))
+    experiments = resolved.get("experiments")
+    targets = experiments if isinstance(experiments, list) else [resolved]
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        overrides = target.get("rag_overrides")
+        overrides = dict(overrides) if isinstance(overrides, Mapping) else {}
+        overrides.setdefault("entity_expansion_enabled", True)
+        target["rag_overrides"] = overrides
+    return resolved
+
+
 def resolve_guides(
     guides: Sequence[Mapping[str, Any]], document_ids: Mapping[str, str]
 ) -> list[dict[str, Any]]:
@@ -254,13 +277,17 @@ class CorpusLoader:
         return str(data["id"])
 
     def create_search_answer_profile(self, name: str, knowledge_base_id: str) -> str:
+        config: dict[str, Any] = {"knowledge_base_ids": [knowledge_base_id]}
+        if self._entity_index:
+            # 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（#1388）。
+            config["query"] = {"entity_expansion_enabled": True}
         data = self._data(
             self._client.post(
                 f"{self._api}/search-answer-profiles",
                 json={
                     "name": name,
                     "description": "業務支援の評価の業務ガイドあり（評価用）",
-                    "config": {"knowledge_base_ids": [knowledge_base_id]},
+                    "config": config,
                 },
             )
         )
@@ -409,7 +436,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--entity-index",
         action="store_true",
-        help="すべての文書のレシピで実体の抽出（実体の層。#1362）を選んで取り込む",
+        help=(
+            "すべての文書のレシピで実体の抽出（実体の層。#1362）を選んで取り込み、評価セットと"
+            "作る検索・回答プロファイルで実体の 1 段の拡張を選ぶ（#1388）"
+        ),
     )
     parser.add_argument(
         "--keep-superseded-active",
@@ -483,6 +513,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             knowledge_base_id,
             versions_registered=register_versions,
         )
+        if args.entity_index:
+            resolved = with_entity_expansion(resolved)
         _write(args.output, resolved)
         if profile_id is not None:
             _write(args.guided_output, guided_golden_set(resolved, profile_id))

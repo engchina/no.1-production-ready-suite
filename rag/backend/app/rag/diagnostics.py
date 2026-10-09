@@ -75,7 +75,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "reference_expansion_enabled": resolved_settings.rag_reference_expansion_enabled,
         "reference_expansion_max_chunks": resolved_settings.rag_reference_expansion_max_chunks,
-        # 実体の 1 段の拡張(#1362)。
+        # 実体の 1 段の拡張(#1362)。検索・回答プロファイルで選ぶ(#1388)。
         "entity_expansion_enabled": resolved_settings.rag_entity_expansion_enabled,
         "entity_expansion_max_chunks": resolved_settings.rag_entity_expansion_max_chunks,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,

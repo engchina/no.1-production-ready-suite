@@ -733,6 +733,7 @@ class AnswerEngine:
         schema など)は足さずに回答を続ける。LLM は呼ばない。
         """
         if not self._settings.rag_entity_expansion_enabled:
+            # 検索・回答プロファイル(と評価の rag_overrides)で選んだときだけ(#1388)。
             return []
         scope = {
             key: value

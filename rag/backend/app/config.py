@@ -6,7 +6,7 @@
 
 import logging
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -16,6 +16,7 @@ from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
     platform_env_file,
     product_settings_config,
+    settings_env_name,
 )
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
@@ -34,7 +35,7 @@ from pr_system_settings.model import (
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from rag_parser_core.sheet_records import ExcelOptions
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
@@ -214,6 +215,33 @@ DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
+# 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
+# プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
+# 項目として持つが、全体の既定は持たない（環境変数 / .env からは読まない）。止めるときは
+# プロファイルの開閉を off にする（再起動は要らない）。値の範囲は Settings の検証で持つ。
+PROFILE_ONLY_SETTING_FIELDS = frozenset(
+    {"rag_entity_expansion_enabled", "rag_entity_expansion_max_chunks"}
+)
+
+
+def _without_profile_only_fields(
+    source: PydanticBaseSettingsSource,
+) -> Callable[[], dict[str, Any]]:
+    """環境変数 / .env の source から、プロファイルだけで決める項目を除く。"""
+    excluded = {
+        name.casefold()
+        for field in PROFILE_ONLY_SETTING_FIELDS
+        for name in (field, settings_env_name("RAG_", field))
+    }
+
+    def read() -> dict[str, Any]:
+        return {key: value for key, value in source().items() if key.casefold() not in excluded}
+
+    # pydantic-settings は source の名前ごとに読んだ値を持つ（debug の表示）。元の名前を保つ。
+    read.__name__ = type(source).__name__
+    return read
+
+
 class _PersistedParserAdapterSettings(BaseModel):
     """UI から保存された文書解析 backend と外部接続設定。"""
 
@@ -244,6 +272,26 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
 
     # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
     model_config = product_settings_config(prefix="RAG_", backend_dir=BACKEND_ROOT)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[Any, ...]:
+        """共通の source（旧名を読まない）から、プロファイルだけで決める項目を除く（#1388）。"""
+        init, env, dotenv, secrets = super().settings_customise_sources(
+            settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+        )
+        return (
+            init,
+            _without_profile_only_fields(env),
+            _without_profile_only_fields(dotenv),
+            secrets,
+        )
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
@@ -688,7 +736,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
             "rag_entity_aliases / rag_entity_chunks に保存する（#1362。既定 OFF。文書レシピで"
             "選ぶ任意の処理。LLM は使わない）。回答の検索は、この表との SQL の join で関連する"
-            " chunk を 1 段だけ足す（RAG_ENTITY_EXPANSION_ENABLED）。"
+            " chunk を 1 段だけ足す（検索・回答プロファイルの entity_expansion_enabled。#1388）。"
         ),
     )
     rag_entity_name_columns: list[str] = Field(
@@ -705,21 +753,25 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "空なら名前の列・長い本文の列（説明・備考など）・日付や数値の列を除いた列。"
         ),
     )
+    # 次の 2 つは、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答の検索へ渡すための
+    # 項目で、環境変数 / .env からは読まない（PROFILE_ONLY_SETTING_FIELDS。#1388）。
     rag_entity_expansion_enabled: bool = Field(
         default=False,
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
-            "関連する chunk を 1 段だけ足す（#1362。既定 OFF。実体のデータが無い環境で毎回の"
-            "検索に SQL を足さない）。実体は文書レシピで実体の抽出（rag_entity_index_enabled）を"
-            "選んだ文書にだけあるため、使うときはこの env と文書レシピの両方を有効にする。"
-            "LLM の呼び出しは増えない。"
+            "関連する chunk を 1 段だけ足す（#1362）。検索・回答プロファイルの"
+            " entity_expansion_enabled で選ぶ（既定 OFF。#1388）。実体は文書レシピで実体の抽出"
+            "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),
     )
     rag_entity_expansion_max_chunks: int = Field(
         default=6,
         ge=1,
         le=20,
-        description="実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362）。",
+        description=(
+            "実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362）。検索・回答プロファイルの"
+            " entity_expansion_max_chunks で選ぶ（#1388）。"
+        ),
     )
     rag_navigation_summary_enabled: bool = Field(
         default=False,
