@@ -124,9 +124,9 @@ async def plan_entity_expansion(
 ) -> list[EntityExpansion]:
     """質問と検索の上位の chunk から、実体の 1 段の拡張で足す chunk を順に返す。
 
-    順は (1) 質問の実体の名寄せ → (2) その 1 段 → (3) 上位の chunk の実体の名寄せ（chunk の順位の
-    順）→ (4) その 1 段。同じ層の中は、質問と本文の語の重なり（文字の 2-gram）の多い実体を先にし、
-    同じ実体の chunk はまとめて足す。``exclude_chunk_ids``（起点の chunk など、すでに候補の上位に
+    順は起点の実体ごとに「名寄せ → その 1 段」で、起点の実体は (1) 質問の長い別名 → (2) 質問の短い
+    別名 → (3) 上位の chunk（順位の順。同じ chunk の中は質問と語の重なる行の実体を先に）の順。1 段で
+    足す実体は質問と本文の語の重なり（文字の 2-gram）の多い順にし、同じ実体の chunk はまとめて足す。``exclude_chunk_ids``（起点の chunk など、すでに候補の上位に
     ある chunk）は足さない。
     """
     if max_chunks <= 0:
@@ -146,10 +146,18 @@ async def plan_entity_expansion(
     if not seeds:
         return []
     context_scopes = {seed.scope_label for seed in seeds if seed.seed_rank is not None}
-    question_seeds = [seed for seed in seeds if seed.question_keys]
+    question_seeds = sorted(
+        (seed for seed in seeds if seed.question_keys),
+        key=lambda seed: (-max(len(key) for key in seed.question_keys), seed.entity_id),
+    )
+    line_scores = _seed_line_scores(seed_chunks[:ENTITY_SEED_ANCHORS], question_key)
     chunk_seeds = sorted(
         (seed for seed in seeds if not seed.question_keys and seed.seed_rank is not None),
-        key=lambda seed: (seed.seed_rank, seed.entity_id),
+        key=lambda seed: (
+            seed.seed_rank,
+            *_best_line_score(line_scores.get(seed.seed_rank or 0, {}), seed.alias_keys),
+            seed.entity_id,
+        ),
     )
     keys = list(
         dict.fromkeys(key for seed in [*question_seeds, *chunk_seeds] for key in seed.alias_keys)
@@ -162,14 +170,34 @@ async def plan_entity_expansion(
         question_seeds, preferred=question_scopes or context_scopes
     )
     planner = _Planner(question_key=question_key, exclude=set(exclude_chunk_ids))
-    question_resolved = planner.resolve(
-        resolved_rows, question_seeds, ambiguous_seeds=ambiguous_seeds, seed_kind=SEED_QUESTION
-    )
-    chunk_resolved = planner.resolve(
+    # 起点の実体ごとの組（名寄せの chunk と、その chunk から 1 段でたどる元）。並びは、質問の長い別名
+    # （3 文字以上・英数字の名前）→ 質問の短い別名（2 文字の語。「受付」など質問の別の語にも含まれやすい）
+    # → 上位の chunk の順位の順（その chunk 自身の属性の実体を先に、次にその chunk の実体）。
+    groups: list[tuple[str, list[EntityExpansion], list[str]]] = []
+    for tier_seeds in (
+        [seed for seed in question_seeds if _strong_question_seed(seed)],
+        [seed for seed in question_seeds if not _strong_question_seed(seed)],
+    ):
+        # 質問が名指しした実体は、全部の名寄せを先に足してから 1 段をたどる（比べる質問の 2 つ目の実体を
+        # 1 つ目の 1 段で押し出さない）。
+        tier_items = [
+            item
+            for items in planner.resolve(
+                resolved_rows, tier_seeds, ambiguous_seeds=ambiguous_seeds, seed_kind=SEED_QUESTION
+            )
+            for item in items
+        ]
+        groups.append((SEED_QUESTION, tier_items, [item.chunk.chunk_id for item in tier_items]))
+    resolved_chunk_seeds = planner.resolve(
         resolved_rows, chunk_seeds, ambiguous_seeds=set(), seed_kind=SEED_CHUNK
     )
-    sources = [item.chunk.chunk_id for item in [*question_resolved, *chunk_resolved]]
-    sources += [chunk_id for chunk_id in seed_ids if chunk_id not in sources]
+    for rank, seed_id in enumerate(seed_ids):
+        # 上位の chunk の属性の実体（台帳の行の「担当部署: 経」）を 1 段でたどる。
+        groups.append((SEED_CHUNK, [], [seed_id]))
+        for seed, items in zip(chunk_seeds, resolved_chunk_seeds, strict=True):
+            if seed.seed_rank == rank:
+                groups.append((SEED_CHUNK, items, [item.chunk.chunk_id for item in items]))
+    sources = list(dict.fromkeys(chunk_id for _, _, ids in groups for chunk_id in ids))
     hop_rows = (
         await store.entity_attribute_definition_chunks(
             filters, source_chunk_ids=sources, limit=candidate_limit
@@ -177,15 +205,50 @@ async def plan_entity_expansion(
         if sources
         else []
     )
-    question_sources = {item.chunk.chunk_id for item in question_resolved}
-    question_hops = planner.hop(
-        [row for row in hop_rows if row.via_chunk_id in question_sources], SEED_QUESTION
-    )
-    chunk_hops = planner.hop(
-        [row for row in hop_rows if row.via_chunk_id not in question_sources], SEED_CHUNK
-    )
-    ordered = [*question_resolved, *question_hops, *chunk_resolved, *chunk_hops]
+    ordered: list[EntityExpansion] = []
+    claimed: set[str] = set()
+    for kind, items, ids in groups:
+        wanted = {chunk_id for chunk_id in ids if chunk_id not in claimed}
+        claimed.update(wanted)
+        ordered.extend(items)
+        ordered.extend(planner.hop([row for row in hop_rows if row.via_chunk_id in wanted], kind))
     return planner.take(ordered, max_chunks)
+
+
+def _seed_line_scores(
+    seed_chunks: Sequence[RetrievedChunk], question_key: str
+) -> dict[int, list[tuple[str, float, int]]]:
+    """起点の chunk ごとの行（正規化した本文・質問との語の重なり・位置）。
+
+    1 つの起点の chunk に多くの実体があるとき（保守計画の章に 8 つのシステム）、質問と語の重なる行の実体を
+    先にし、同じなら本文の順にする（質問の「第 2 土曜日」の行の「ＨＲＭ」を先にする）。
+    """
+    return {
+        rank: [
+            (entity_key(line), _overlap(question_key, line), position)
+            for position, line in enumerate(chunk.text.splitlines())
+            if line.strip()
+        ]
+        for rank, chunk in enumerate(seed_chunks)
+    }
+
+
+def _best_line_score(
+    lines: Sequence[tuple[str, float, int]], alias_keys: Sequence[str]
+) -> tuple[float, int]:
+    """実体の別名を含む行のうち、質問との重なりが最も多い行の (-重なり, 位置)。無ければ末尾。"""
+    best: tuple[float, int] | None = None
+    for line_key, overlap, position in lines:
+        if any(key and key in line_key for key in alias_keys):
+            score = (-overlap, position)
+            if best is None or score < best:
+                best = score
+    return best if best is not None else (0.0, 1_000_000)
+
+
+def _strong_question_seed(seed: _SeedEntity) -> bool:
+    """質問に 3 文字以上の別名か、2 文字以上の英数字の別名（「HRM」「GL」）で出てくる実体か。"""
+    return any(len(key) >= 3 or key.isascii() for key in seed.question_keys)
 
 
 def _seed_entities(rows: Sequence[EntitySeedRow], question_key: str) -> list[_SeedEntity]:
@@ -236,27 +299,29 @@ class _Planner:
         *,
         ambiguous_seeds: set[str],
         seed_kind: str,
-    ) -> list[EntityExpansion]:
-        """起点の実体の別名を定義する chunk（名寄せ）。起点の順に、起点と同じ会社の候補を選ぶ。"""
+    ) -> list[list[EntityExpansion]]:
+        """起点の実体ごとに、別名を定義する chunk（名寄せ）。起点と同じ会社の候補を選ぶ。"""
         by_key: dict[str, list[EntityDefinitionRow]] = {}
         for row in rows:
             by_key.setdefault(row.match_key, []).append(row)
-        result: list[EntityExpansion] = []
+        result: list[list[EntityExpansion]] = []
         for seed in seeds:
             candidates: dict[str, EntityDefinitionRow] = {}
             for key in seed.alias_keys:
                 for row in by_key.get(key, ()):
                     candidates.setdefault(row.chunk.chunk_id, row)
             chosen, ambiguous = _choose_scope(list(candidates.values()), scope=seed.scope_label)
-            result.extend(
-                self._expansion(
+            result.append(
+                [
+                    self._expansion(
                     row,
                     seed_kind=seed_kind,
                     hop=0,
                     ambiguous=ambiguous or seed.entity_id in ambiguous_seeds,
-                    matched=(seed.question_keys or [row.match_key])[0],
-                )
-                for row in chosen
+                        matched=(seed.question_keys or [row.match_key])[0],
+                    )
+                    for row in chosen
+                ]
             )
         return result
 
@@ -348,17 +413,13 @@ def _choose_scope(
 ) -> tuple[list[EntityDefinitionRow], bool]:
     """会社（``scope_label``）をまたぐ候補から、起点（``scope``）と同じ会社の候補を選ぶ。
 
-    戻り値の 2 つ目は決められなかった印。候補が 1 つの会社だけなら全部、起点と同じ会社の候補があれ
-    ばそれだけを返す。起点に会社の名前が無い・同じ会社の候補が無いときは全部を返して印を付ける（勝
-    手に 1 つに決めない）。
+    戻り値の 2 つ目は決められなかった印。起点の会社が分かれば、同じ会社と会社の名前の無い資料の候補
+    だけを返す（別の会社の台帳・組織規程を橋渡しに使わない）。起点の会社が分からなければ全部を返し、
+    候補が 2 つ以上の会社にまたがれば印を付ける（勝手に 1 つに決めない）。
     """
-    if len({row.scope_label for row in rows}) <= 1:
-        return list(rows), False
-    if scope is not None:
-        narrowed = [row for row in rows if row.scope_label == scope]
-        if narrowed:
-            return narrowed, False
-    return list(rows), True
+    if scope is None:
+        return list(rows), len({row.scope_label for row in rows} - {None}) > 1
+    return [row for row in rows if row.scope_label in {scope, None}], False
 
 
 def _bigrams(text: str) -> set[str]:
