@@ -41,6 +41,7 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
+from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
     GUIDE_PREVIEW_TRACE_PREFIX,
@@ -760,12 +761,24 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
     return AnswerRecordDetail.model_validate(
         {
             **row,
-            "citations": row.get("citations_json") or [],
+            "citations": _stored_citation_rows(row.get("citations_json")),
             "answer_diagnostics": row.get("diagnostics_json") or {},
             "evaluation_available": bool(row.get("evaluation_input_json")),
             "evaluation": row.get("evaluation_json") or None,
         }
     )
+
+
+def _stored_citation_rows(value: object) -> list[dict[str, object]]:
+    """保存した引用を、保存するときと同じ項目だけにして返す（以前の記録も同じ形にする。#1371）。"""
+    if not isinstance(value, list):
+        return []
+    return [
+        {**item, "metadata": stored_citation_metadata(item["metadata"])}
+        if isinstance(item, dict) and isinstance(item.get("metadata"), dict)
+        else item
+        for item in value
+    ]
 
 
 @router.post("/answers/{trace_id}/evaluation", response_model=ApiResponse[AnswerRecordDetail])

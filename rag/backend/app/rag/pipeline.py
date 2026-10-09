@@ -36,6 +36,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
+from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
 from app.rag.support_guide_runtime import (
     GUIDE_PREVIEW_KEY,
     apply_guide_to_diagnostics,
@@ -493,6 +494,11 @@ class RagPipeline:
     ) -> None:
         """回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
         search_answer_profile_id = request.search_answer_profile_id
+        # 引用は画面・評価が使う項目だけを保存する（索引の内部の項目・親の本文を持たない。#1371）。
+        stored = stored_citations(citations)
+        warn_if_large_answer_record(
+            trace_id=trace_id, citations=stored, evaluation_input=evaluation_input
+        )
         try:
             await self._oracle.save_answer_record(
                 {
@@ -503,7 +509,7 @@ class RagPipeline:
                     "question": question,
                     "rewritten_question": rewritten_question,
                     "answer": answer,
-                    "citations": [citation.model_dump(mode="json") for citation in citations],
+                    "citations": stored,
                     "diagnostics": dict(diagnostics),
                     "evaluation_input": evaluation_input,
                 }

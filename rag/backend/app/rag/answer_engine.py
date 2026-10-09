@@ -63,6 +63,7 @@ from app.rag.cross_references import (
 from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.rag.element_locator import chunk_element_ids
 from app.rag.field_filter_reader import merge_field_conditions
+from app.rag.stored_answer import stored_evaluation_input
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     ExtractionFieldCondition,
@@ -1586,7 +1587,8 @@ def _evaluation_input(result: Any) -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001 - 評価の入力は補助。回答の返却を止めない。
         logger.warning("evaluation input build failed", exc_info=True)
         return None
-    return {key: payload.get(key) for key in EVALUATION_INPUT_KEYS}
+    # 根拠は評価が読む項目だけにする（回答の記録にもこの形で保存する。#1371）。
+    return stored_evaluation_input({key: payload.get(key) for key in EVALUATION_INPUT_KEYS})
 
 
 def evaluate_answer_record(
