@@ -45,7 +45,7 @@ import json
 import statistics
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -552,9 +552,33 @@ SUMMARY_METRICS: tuple[tuple[str, str], ...] = (
     ("safe_answer_rate", "危険な回答の無さ"),
     ("condition_coverage", "条件への言及"),
     ("required_evidence_recall", "必要な根拠の再現率"),
+    ("evidence_chain_complete_rate", "根拠の連鎖の完全率"),
     ("refusal_accuracy", "拒答の正しさ"),
     ("context_recall", "正解文書の再現率"),
 )
+# 多段の質問の種類別・段の数別の内訳に出す指標（#1335。RAG の評価の内訳と同じ）。
+REASONING_SUMMARY_METRICS: tuple[tuple[str, str], ...] = (
+    ("evidence_chain_complete_rate", "根拠の連鎖の完全率"),
+    ("required_evidence_recall", "必要な根拠の再現率"),
+    ("answer_keyword_hit_rate", "期待する語の一致率"),
+)
+
+
+def _reasoning_summary(breakdown: object) -> dict[str, dict[str, Any]]:
+    """種類別・段の数別の内訳（`reasoning_type_breakdown` / `hops_breakdown`）の要約。"""
+    summary: dict[str, dict[str, Any]] = {}
+    if not isinstance(breakdown, Mapping):
+        return summary
+    for name, item in breakdown.items():
+        if not isinstance(item, Mapping):
+            continue
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+        summary[str(name)] = {
+            "case_count": item.get("case_count"),
+            "error_count": item.get("error_count"),
+            **{metric: (metrics or {}).get(metric) for metric, _ in REASONING_SUMMARY_METRICS},
+        }
+    return summary
 
 
 def _median_seconds(values: Sequence[float]) -> float | None:
@@ -581,6 +605,9 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "splits": {},
         "categories": {},
+        # 多段の質問の種類別・段の数別（#1335）。
+        "reasoning_types": _reasoning_summary(data.get("reasoning_type_breakdown")),
+        "hops": _reasoning_summary(data.get("hops_breakdown")),
     }
     splits = data.get("split_breakdown")
     if isinstance(splits, Mapping):
@@ -592,6 +619,7 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
                 "case_count": item.get("case_count"),
                 "error_count": item.get("error_count"),
                 **{metric: (metrics or {}).get(metric) for metric, _ in SUMMARY_METRICS},
+                "reasoning_types": _reasoning_summary(item.get("reasoning_type_breakdown")),
             }
     categories = data.get("category_breakdown")
     if isinstance(categories, Mapping):
@@ -640,6 +668,7 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
                 f"{split}: {name}",
                 [summaries[label].get("splits", {}).get(split, {}).get(metric) for label in labels],
             )
+    _reasoning_rows(summaries, labels, row)
     categories = sorted(
         {category for summary in summaries.values() for category in summary.get("categories", {})}
     )
@@ -655,6 +684,48 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
             ],
         )
     return "\n".join(rows) + "\n"
+
+
+def _reasoning_rows(
+    summaries: Mapping[str, Mapping[str, Any]],
+    labels: Sequence[str],
+    row: Callable[[str, Sequence[object]], None],
+) -> None:
+    """多段の質問の種類別・段の数別の行（#1335）と、区分ごとの種類別の根拠の連鎖の完全率の行。"""
+    for key, suffix in (("reasoning_types", ""), ("hops", " 段")):
+        groups = {label: summaries[label].get(key, {}) for label in labels}
+        for name in _ordered_names(groups.values()):
+            for metric, metric_name in REASONING_SUMMARY_METRICS:
+                row(
+                    f"{name}{suffix}: {metric_name}",
+                    [groups[label].get(name, {}).get(metric) for label in labels],
+                )
+    splits = sorted(
+        {split for summary in summaries.values() for split in summary.get("splits", {})}
+    )
+    for split in splits:
+        groups = {
+            label: summaries[label].get("splits", {}).get(split, {}).get("reasoning_types", {})
+            for label in labels
+        }
+        for name in _ordered_names(groups.values()):
+            row(
+                f"{split} / {name}: 根拠の連鎖の完全率",
+                [
+                    groups[label].get(name, {}).get("evidence_chain_complete_rate")
+                    for label in labels
+                ],
+            )
+
+
+def _ordered_names(groups: Iterable[Mapping[str, Any]]) -> list[str]:
+    """内訳の名前（出てきた順・重複なし）。"""
+    names: list[str] = []
+    for group in groups:
+        for name in group:
+            if name not in names:
+                names.append(name)
+    return names
 
 
 def _load_result(path: Path) -> Mapping[str, Any]:

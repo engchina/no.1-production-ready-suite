@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.api import encode_cursor
 from pr_system_settings.auth.service_token import issue_service_token
 from pytest import MonkeyPatch
 
@@ -44,6 +45,8 @@ ALL_TOOLS = [
     "rag_retrieve_evidence",
     "rag_validate_answer",
     "rag_read_source",
+    "rag_outline",
+    "rag_read_document",
 ]
 
 
@@ -142,6 +145,8 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_retrieve_evidence",
         "rag_validate_answer",
         "rag_read_source",
+        "rag_outline",
+        "rag_read_document",
     ]
     # チャットは MCP で提供しない（#787）。チャット
     # だけの利用者は検索・回答プロファイルの一覧だけを使える。
@@ -363,6 +368,8 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "page_label_end": "2-2",
         "bbox": [10.0, 20.0, 110.0, 220.0],
         "bbox_unit": "absolute",
+        # 要素の ID の無い chunk は定位子を持たない（#1330）。
+        "element_locator": None,
     }
     assert len(evidence["excerpt"]) == 1000
     assert evidence["truncated"] is True
@@ -425,6 +432,7 @@ def test_search_evidence_locates_spreadsheet_rows(
         "page_label_end": None,
         "bbox": None,
         "bbox_unit": None,
+        "element_locator": None,
     }
 
 
@@ -612,6 +620,21 @@ class _SourceOracle:
     async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
         return (document_id, chunk_id) in self.stale
 
+    # 要素の定位子（#1330）: 解析の結果 er_1 の要素 el-2 は、作り直した chunk c1 にある。
+    async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
+        return {chunk_set_id: "er_1" for chunk_set_id in chunk_set_ids if chunk_set_id == "cs-1"}
+
+    async def retrievable_element_chunk(
+        self, document_id: str, extraction_recipe_id: str, element_id: str
+    ) -> RetrievedChunk | None:
+        self.contexts.append(current_audit_request_context())
+        if (document_id, extraction_recipe_id, element_id) == ("d1", "er_1", "el-2"):
+            return self.visible[("d1", "c1")]
+        return None
+
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        return document_id == "d1"
+
 
 @pytest.fixture
 def source_oracle(monkeypatch: MonkeyPatch) -> type[_SourceOracle]:
@@ -623,6 +646,7 @@ def source_oracle(monkeypatch: MonkeyPatch) -> type[_SourceOracle]:
             page_start=2,
             chunk_set_id="cs-1",
             parent_text="親の本文" * 3,
+            element_ids="el-1,el-2",
         )
     }
     _SourceOracle.stale = {("d1", "c-old")}
@@ -681,6 +705,255 @@ def test_read_source_distinguishes_missing_and_stale(
         "rag_read_source", {"document_id": "d1", "chunk_id": "c1", "max_chars": 0}, headers
     )
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+
+
+def test_read_source_by_locator_returns_current_chunk_of_the_element(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    """要素の定位子で読むと、同じ解析の結果の同じ要素を含む今の chunk を返す（#1330）。"""
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    by_chunk = _call("rag_read_source", {"document_id": "d1", "chunk_id": "c1"}, headers)
+    locator = by_chunk["structuredContent"]["locator"]["element_locator"]
+    # 先頭の要素の定位子（chunk_set の解析の結果の ID と、chunk の開始の頁）。
+    assert locator == "doc:d1/ext:er_1/page:2/el:el-1"
+
+    result = _call(
+        "rag_read_source",
+        {"document_id": "d1", "locator": "doc:d1/ext:er_1/page:2/el:el-2", "max_chars": 4},
+        headers,
+    )
+    assert result["isError"] is False, result
+    body = result["structuredContent"]
+    assert (body["chunk_id"], body["text"]) == ("c1", "あいうえ")
+    assert body["locator"]["element_locator"] == "doc:d1/ext:er_1/page:2/el:el-1"
+    assert source_oracle.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+
+def test_read_source_by_locator_distinguishes_stale_missing_and_invalid(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    del source_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    stale = _call(
+        "rag_read_source", {"document_id": "d1", "locator": "doc:d1/ext:er_old/el:el-2"}, headers
+    )
+    assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
+    # 見えない（無い・利用できる範囲の外の）文書の定位子。
+    missing = _call(
+        "rag_read_source", {"document_id": "d9", "locator": "doc:d9/ext:er_1/el:el-2"}, headers
+    )
+    assert missing["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+    for arguments in (
+        {"document_id": "d1"},
+        {"document_id": "d1", "chunk_id": "c1", "locator": "doc:d1/ext:er_1/el:el-2"},
+        {"document_id": "d1", "locator": "doc:d2/ext:er_1/el:el-2"},
+        {"document_id": "d1", "locator": "d1:c1"},
+    ):
+        invalid = _call("rag_read_source", arguments, headers)
+        assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID", arguments
+
+
+# ---------------------------------------------------------------------------
+# 文書を順に読む（rag_outline / rag_read_document。#1332）
+# ---------------------------------------------------------------------------
+
+
+def _doc_chunk(index: int, text: str, section: str, page: int, **metadata: Any) -> RetrievedChunk:
+    return RetrievedChunk(
+        document_id="d1",
+        chunk_id=f"d1:cs-1:{index}",
+        text=text,
+        score=0.0,
+        file_name="規程.pdf",
+        metadata={
+            "document_id": "d1",
+            "chunk_set_id": "cs-1",
+            "chunk_index": index,
+            "section_path": section,
+            "page_start": page,
+            "page_end": page,
+            "element_ids": f"el-{index}",
+            **metadata,
+        },
+    )
+
+
+class _DocumentOracle:
+    """1 つの文書（有効な chunk_set は cs-1）だけを持つ fake。"""
+
+    chunks: list[RetrievedChunk] = []
+    contexts: list[AuditRequestContext] = []
+
+    async def document_reading_index(
+        self, document_id: str, *, chunk_set_id: str | None = None, limit: int = 5000
+    ) -> tuple[str | None, list[dict[str, object]]]:
+        self.contexts.append(current_audit_request_context())
+        if document_id != "d1" or chunk_set_id not in {None, "cs-1"}:
+            return None, []
+        rows: list[dict[str, object]] = [
+            {
+                "chunk_index": chunk.metadata["chunk_index"],
+                "chunk_id": chunk.chunk_id,
+                "section_path": chunk.metadata["section_path"],
+                "page_start": chunk.metadata["page_start"],
+                "page_end": chunk.metadata["page_end"],
+                "chars": len(chunk.text),
+            }
+            for chunk in self.chunks
+        ]
+        return "cs-1", rows[:limit]
+
+    async def readable_document_chunks(
+        self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
+    ) -> list[RetrievedChunk]:
+        if document_id != "d1" or chunk_set_id != "cs-1":
+            return []
+        rows = [
+            chunk for chunk in self.chunks if int(str(chunk.metadata["chunk_index"])) >= from_index
+        ]
+        return rows[:limit]
+
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        return document_id == "d1"
+
+    async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
+        return {"cs-1": "er_1"} if "cs-1" in chunk_set_ids else {}
+
+    async def retrievable_element_chunk(
+        self, document_id: str, extraction_recipe_id: str, element_id: str
+    ) -> RetrievedChunk | None:
+        for chunk in self.chunks:
+            if (document_id, extraction_recipe_id, chunk.metadata["element_ids"]) == (
+                "d1",
+                "er_1",
+                element_id,
+            ):
+                return chunk
+        return None
+
+
+@pytest.fixture
+def document_oracle(monkeypatch: MonkeyPatch) -> type[_DocumentOracle]:
+    _DocumentOracle.chunks = [
+        _doc_chunk(0, "総則の本文。", "規程 > 第1章 総則", 1),
+        _doc_chunk(1, "目的の本文。", "規程 > 第1章 総則", 1),
+        _doc_chunk(2, "申請の本文。" * 3, "規程 > 第2章 申請", 2),
+        _doc_chunk(3, "承認の本文。", "規程 > 第3章 承認", 3),
+    ]
+    _DocumentOracle.contexts = []
+    monkeypatch.setattr(mcp_tools, "OracleClient", _DocumentOracle)
+    return _DocumentOracle
+
+
+def _read_all(arguments: dict[str, Any], headers: dict[str, str]) -> list[dict[str, Any]]:
+    pages: list[dict[str, Any]] = []
+    while True:
+        result = _call("rag_read_document", arguments, headers)
+        assert result["isError"] is False, result
+        pages.append(result["structuredContent"])
+        cursor = pages[-1]["next_cursor"]
+        if cursor is None:
+            return pages
+        arguments = {"document_id": "d1", "cursor": cursor, "max_chars": arguments["max_chars"]}
+
+
+def test_outline_groups_chunks_into_sections_with_cursors(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    result = _call("rag_outline", {"document_id": "d1"}, headers)
+
+    assert result["isError"] is False, result
+    body = result["structuredContent"]
+    assert (body["file_name"], body["chunk_set_id"], body["chunk_count"]) == ("規程.pdf", "cs-1", 4)
+    assert (body["page_start"], body["page_end"]) == (1, 3)
+    assert [section["section_path"][-1] for section in body["sections"]] == [
+        "第1章 総則",
+        "第2章 申請",
+        "第3章 承認",
+    ]
+    assert [section["chunk_count"] for section in body["sections"]] == [2, 1, 1]
+    # 節の cursor から読むと、その節の先頭の chunk から始まる。
+    second = _call(
+        "rag_read_document",
+        {"document_id": "d1", "cursor": body["sections"][1]["cursor"], "max_chars": 1000},
+        headers,
+    )["structuredContent"]
+    assert second["chunks"][0]["chunk_id"] == "d1:cs-1:2"
+    assert document_oracle.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+
+def test_read_document_reads_whole_document_in_order_without_gaps(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    whole = _read_all({"document_id": "d1", "max_chars": 1000}, headers)
+    assert len(whole) == 1
+    text = whole[0]["text"]
+    assert text.startswith("--- p.1 ---\n総則の本文。\n\n目的の本文。\n\n--- p.2 ---\n申請の本文。")
+    assert text.endswith("--- p.3 ---\n承認の本文。")
+    for chunk in whole[0]["chunks"]:
+        source = next(item for item in document_oracle.chunks if item.chunk_id == chunk["chunk_id"])
+        assert text[chunk["start"] : chunk["end"]] == source.text
+    assert whole[0]["chunks"][0]["element_locator"] == "doc:d1/ext:er_1/page:1/el:el-0"
+
+    # 小さい上限で続けて読むと、本文を重複も欠けも無く読み切る（長い chunk は途中で切って続ける）。
+    pages = _read_all({"document_id": "d1", "max_chars": 14}, headers)
+    assert len(pages) > 3
+    read = "".join(page["text"] for page in pages)
+    for source in document_oracle.chunks:
+        assert source.text in read.replace("\n", "").replace("--- p.1 ---", "").replace(
+            "--- p.2 ---", ""
+        ).replace("--- p.3 ---", "")
+    assert all(len(page["text"]) <= 14 for page in pages)
+
+
+def test_read_document_starts_from_page_section_or_locator(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    def first_chunk(arguments: dict[str, Any]) -> str:
+        body = _call("rag_read_document", {"document_id": "d1", **arguments}, headers)
+        return str(body["structuredContent"]["chunks"][0]["chunk_id"])
+
+    assert first_chunk({"page": 3}) == "d1:cs-1:3"
+    assert first_chunk({"section": "規程 > 第2章 申請"}) == "d1:cs-1:2"
+    assert first_chunk({"locator": "doc:d1/ext:er_1/el:el-1"}) == "d1:cs-1:1"
+
+
+def test_read_document_errors(auth: ProductionAuth, document_oracle: type[_DocumentOracle]) -> None:
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    def error(arguments: dict[str, Any]) -> str:
+        body = _call("rag_read_document", arguments, headers)
+        assert body["isError"] is True, body
+        return str(body["structuredContent"]["error_code"])
+
+    stale_cursor = encode_cursor({"cs": "cs-old", "i": 0, "o": 0})
+    assert error({"document_id": "d1", "cursor": stale_cursor}) == mcp_tools.SOURCE_STALE_CODE
+    assert error({"document_id": "d1", "cursor": "not-a-cursor"}) == mcp_tools.CURSOR_INVALID_CODE
+    assert error({"document_id": "d9"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert error({"document_id": "d1", "page": 9}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert (
+        error({"document_id": "d1", "page": 1, "section": "規程"}) == "MCP_TOOL_ARGUMENTS_INVALID"
+    )
+    assert (
+        _call("rag_outline", {"document_id": "d9"}, headers)["structuredContent"]["error_code"]
+        == mcp_tools.SOURCE_NOT_FOUND_CODE
+    )
 
 
 # ---------------------------------------------------------------------------

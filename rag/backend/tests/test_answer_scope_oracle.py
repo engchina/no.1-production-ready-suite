@@ -227,3 +227,162 @@ async def test_retrievable_chunk_follows_search_visibility_on_real_oracle() -> N
     assert await client.accessible_chunk_exists(document_id, old.chunk_id) is (
         old.chunk_id in remaining
     )
+
+
+def _element_chunk(index: int, text: str, element_ids: str) -> Chunk:
+    return Chunk(
+        index=index,
+        text=text,
+        start_offset=0,
+        end_offset=len(text),
+        metadata={"element_ids": element_ids, "page_start": 1},
+    )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_element_locator_follows_rechunking_on_real_oracle() -> None:
+    """要素の定位子は、同じ解析の結果で chunk を作り直しても同じ要素を含む chunk を返す（#1330）。
+
+    要素の ID は部分一致ではなく完全一致で選ぶ（``p1-1`` で ``p1-10`` を返さない）。解析の結果が
+    変わった（古い定位子）ことは、文書が見えるか（``accessible_document_exists``）で見分ける。
+    """
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    extraction_id = f"er_loc_{token}"
+    document_id = await _indexed_document(
+        client,
+        file_name=f"locator-{token}.pdf",
+        chunks=[_element_chunk(0, "第1条の本文", "docling-p1-10")],
+    )
+    recipes = await client.list_document_recipes(document_id)
+    recipe_id = str(recipes[0]["recipe_id"])
+    revision = int(str(recipes[0].get("config_revision") or 1))
+
+    async def rechunk(chunks: list[Chunk], extraction_recipe_id: str) -> str:
+        chunk_set_id = f"cs_loc_{uuid4().hex[:16]}"
+        await client.upsert_chunk_set(
+            chunk_set_id=chunk_set_id,
+            document_id=document_id,
+            recipe_id=recipe_id,
+            extraction_recipe_id=extraction_recipe_id,
+        )
+        await client.save_index(
+            document_id,
+            StructuredExtraction(raw_text="本文", confidence=0.9),
+            chunks,
+            [_EMBEDDING] * len(chunks),
+            chunk_set_id=chunk_set_id,
+        )
+        await client.mark_chunk_set_indexed(
+            chunk_set_id=chunk_set_id, chunk_count=len(chunks), vector_count=len(chunks)
+        )
+        await client.activate_recipe_chunk_set(
+            recipe_id=recipe_id, chunk_set_id=chunk_set_id, materialized_revision=revision
+        )
+        return chunk_set_id
+
+    first_set = await rechunk(
+        [
+            _element_chunk(0, "第1条と第2条", "docling-p1-1,docling-p1-2"),
+            _element_chunk(1, "第10条", "docling-p1-10"),
+        ],
+        extraction_id,
+    )
+    found = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2")
+    assert found is not None
+    assert (found.text, found.metadata["chunk_set_id"]) == ("第1条と第2条", first_set)
+    assert await client.chunk_set_extraction_recipe_ids([first_set]) == {first_set: extraction_id}
+    # 部分一致（p1-1 は p1-10 の先頭と同じ）で別の要素の chunk を返さない。
+    only_ten = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-10")
+    assert only_ten is not None and only_ten.text == "第10条"
+
+    # 文書分割だけを変えて作り直す（同じ解析の結果）。chunk の ID は変わるが、同じ要素を返す。
+    second_set = await rechunk(
+        [_element_chunk(0, "第1条から第10条まで", "docling-p1-1,docling-p1-2,docling-p1-10")],
+        extraction_id,
+    )
+    again = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2")
+    assert again is not None
+    assert again.metadata["chunk_set_id"] == second_set
+    assert again.chunk_id != found.chunk_id
+
+    # 解析をやり直した（別の解析の結果）後は、古い定位子では読めず、古い版と分かる。
+    await rechunk([_element_chunk(0, "再解析後", "docling-p1-1")], f"er_new_{token}")
+    assert (
+        await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2") is None
+    )
+    # 文書は見えるので、今の解析の結果に無い定位子は古い版（source_stale）と分かる。
+    assert await client.accessible_document_exists(document_id) is True
+    assert await client.accessible_document_exists(f"missing-{token}") is False
+
+
+def _page_chunk(index: int, text: str, section_path: str, page: int) -> Chunk:
+    return Chunk(
+        index=index,
+        text=text,
+        start_offset=0,
+        end_offset=len(text),
+        metadata={"section_path": section_path, "page_start": page, "page_end": page},
+    )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_document_reading_index_and_chunks_on_real_oracle() -> None:
+    """文書を順に読む目次と本文（MCP の rag_outline / rag_read_document。#1332）。
+
+    目次は本文を読まずに節・頁・文字数を chunk の順に返し、本文は指定した位置から順に返す。
+    利用できるナレッジベースの外の文書は、検索と同じく読めない。
+    """
+    from dataclasses import replace
+
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    document_id = await _indexed_document(
+        client,
+        file_name=f"reading-{token}.pdf",
+        chunks=[
+            _page_chunk(0, "総則の本文。", "規程 > 第1章", 1),
+            _page_chunk(1, "申請の本文です。", "規程 > 第2章", 2),
+            _page_chunk(2, "承認の本文。", "規程 > 第3章", 3),
+        ],
+    )
+
+    chunk_set_id, rows = await client.document_reading_index(document_id)
+    assert chunk_set_id is not None
+    assert [row["section_path"] for row in rows] == ["規程 > 第1章", "規程 > 第2章", "規程 > 第3章"]
+    assert [(row["page_start"], row["page_end"]) for row in rows] == [(1, 1), (2, 2), (3, 3)]
+    assert [row["chars"] for row in rows] == [6, 8, 6]
+    indexes = [int(str(row["chunk_index"])) for row in rows]
+
+    tail = await client.readable_document_chunks(
+        document_id, chunk_set_id=chunk_set_id, from_index=indexes[1], limit=10
+    )
+    assert [chunk.text for chunk in tail] == ["申請の本文です。", "承認の本文。"]
+    assert tail[0].file_name == f"reading-{token}.pdf"
+    # 有効でない chunk_set の位置からは読めない（古い cursor）。
+    assert (
+        await client.readable_document_chunks(
+            document_id, chunk_set_id="cs_missing", from_index=0, limit=10
+        )
+        == []
+    )
+
+    scoped = set_audit_request_context(
+        replace(current_audit_request_context(), allowed_knowledge_base_ids=frozenset({"kb-none"}))
+    )
+    try:
+        assert await client.document_reading_index(document_id) == (None, [])
+        assert (
+            await client.readable_document_chunks(
+                document_id, chunk_set_id=chunk_set_id, from_index=0, limit=10
+            )
+            == []
+        )
+    finally:
+        reset_audit_request_context(scoped)

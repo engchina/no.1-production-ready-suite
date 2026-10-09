@@ -1412,6 +1412,11 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             if rerank_rank is not None:
                 metadata["rerank_rank"] = rerank_rank
         citations.append(chunk.model_copy(update=update))
+    citations = _with_citation_lines(
+        citations,
+        result.evidence_items or (),
+        (result.generation_trace or {}).get("citation_lines"),
+    )
     steps = [
         {
             "name": str(step.get("name") or ""),
@@ -1453,6 +1458,83 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         context_text=context_text,
         evaluation_input=_evaluation_input(result),
     )
+
+
+# 本文の出典行（「根拠：」）の順番（1 始まり）を、出典行が指す根拠の chunk の metadata に
+# 入れる key（#1330）。画面は n 番目の出典行を、この list に n を持つ根拠に結ぶ
+# （ファイル名と頁で推測しない）。
+ANSWER_CITATION_LINES_KEY = "answer_citation_lines"
+
+
+def _with_citation_lines(
+    citations: list[RetrievedChunk], evidence_items: Any, refs: Any
+) -> list[RetrievedChunk]:
+    """出典行ごとの根拠（rag_engine の ``citation_lines``）を、引用の chunk に結ぶ（#1330）。
+
+    出典行の根拠は親の範囲（``source_id``）で、引用は子の chunk。引用の位置が 1 つの子に
+    決まっていれば（``scope_source_ids``）その子、決まっていなければ親の子のうち回答に使った・
+    頁の合うものを選ぶ。
+    """
+    if not isinstance(refs, list) or not refs or not citations:
+        return citations
+    citation_ids = [chunk.chunk_id for chunk in citations]
+    pages = {chunk.chunk_id: _chunk_page_range(chunk) for chunk in citations}
+    children_by_parent: dict[str, list[tuple[str, bool]]] = {}
+    for parent in evidence_items:
+        if not isinstance(parent, Mapping):
+            continue
+        children = [
+            (str(child.get("chunk_id") or child.get("id") or ""), bool(child.get("is_model_used")))
+            for child in parent.get("children") or []
+            if isinstance(child, Mapping)
+        ]
+        for key in ("chunk_uid", "id", "chunk_id"):
+            if value := str(parent.get(key) or ""):
+                children_by_parent.setdefault(value, children)
+    lines: dict[str, list[int]] = {}
+    for ordinal, ref in enumerate(refs, 1):
+        if not isinstance(ref, Mapping):
+            continue
+        scoped = [str(item) for item in ref.get("scope_source_ids") or () if str(item) in pages]
+        if scoped:
+            candidates = scoped
+        else:
+            children = [
+                (chunk_id, used)
+                for chunk_id, used in children_by_parent.get(str(ref.get("source_id") or ""), [])
+                if chunk_id in pages
+            ]
+            page = _int(ref.get("page"))
+            candidates = [
+                chunk_id
+                for chunk_id, _used in sorted(
+                    children,
+                    key=lambda item: (
+                        not item[1],
+                        not (page and pages[item[0]][0] <= page <= pages[item[0]][1]),
+                        citation_ids.index(item[0]),
+                    ),
+                )
+            ]
+        if candidates:
+            lines.setdefault(candidates[0], []).append(ordinal)
+    if not lines:
+        return citations
+    return [
+        chunk.model_copy(
+            update={
+                "metadata": {**chunk.metadata, ANSWER_CITATION_LINES_KEY: lines[chunk.chunk_id]}
+            }
+        )
+        if chunk.chunk_id in lines
+        else chunk
+        for chunk in citations
+    ]
+
+
+def _chunk_page_range(chunk: RetrievedChunk) -> tuple[int, int]:
+    start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
+    return start, max(start, _int(chunk.metadata.get("page_end"), start))
 
 
 def _evaluation_input(result: Any) -> dict[str, Any] | None:

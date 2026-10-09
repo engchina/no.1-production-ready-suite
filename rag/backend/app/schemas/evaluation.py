@@ -45,6 +45,27 @@ EVALUATION_UNCATEGORIZED = "uncategorized"
 EvaluationCaseSplit = Literal["dev", "holdout"]
 EVALUATION_UNASSIGNED_SPLIT = "unassigned"
 
+# 多段の質問（multi-hop）の種類（#1335）。複数の根拠をつないで初めて答えられる質問を、つなぎ方で
+# 分けて見る。採点の方法は変えない。
+# - single_hop: 1 つの根拠で答えられる（対照）
+# - bridge: 橋渡し（A の属性で B を引き、B の属性で答える）
+# - comparison: 2 つ以上の実体の属性を比べる
+# - intra_document_reference: 同じ文書の中の参照（「第 3 章を参照」）をたどる
+# - table_lookup: 本文の実体で表の行を引く（表の中の絞り込みを含む）
+EvaluationReasoningType = Literal[
+    "single_hop",
+    "bridge",
+    "comparison",
+    "intra_document_reference",
+    "table_lookup",
+]
+EVALUATION_UNSPECIFIED_REASONING = "unspecified"
+# 段の数の上限と、2 段以上を求める種類（比べる・表を引くは 1 段でもよい）。
+EVALUATION_MAX_HOPS = 10
+EVALUATION_MULTI_HOP_REASONING_TYPES: frozenset[str] = frozenset(
+    {"bridge", "intra_document_reference"}
+)
+
 # 1 ケースの往復の上限（最初の質問を除く）と、往復をまたいだ条件の数の上限
 # （SearchRequest.conditions と同じ）。
 EVALUATION_MAX_TURNS = 5
@@ -125,8 +146,13 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
 )
 
 # 閾値の判定に使わず、結果に出すだけの集計（#1284）。必要な根拠の再現率は、根拠を持つ評価セットが
-# まだ少ないため、基準（閾値）と画面の指標の一覧には入れない。
-EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ("required_evidence_recall",)
+# まだ少ないため、基準（閾値）と画面の指標の一覧には入れない。根拠の連鎖の完全率（#1335）は、必要な
+# 根拠をすべて取れたケースの割合（多段の質問は 1 つでも欠けると答えられないため、再現率の平均とは
+# 別に見る）。
+EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
+    "required_evidence_recall",
+    "evidence_chain_complete_rate",
+)
 
 # 期待する手順の別解の上限（列の数）。
 EVALUATION_MAX_STEP_ALTERNATIVES = 5
@@ -285,8 +311,13 @@ class EvaluationCase(EvaluationHandlingExpectation):
     conditions: dict[str, str] = Field(default_factory=dict, max_length=EVALUATION_MAX_CONDITIONS)
     # 確認の質問への返答の列（#1284）。最初の質問の後に順に送る。
     turns: list[EvaluationTurn] = Field(default_factory=list, max_length=EVALUATION_MAX_TURNS)
-    # 最後の回答に必要な根拠（#1284）。根拠ごとの再現率を求める。
+    # 最後の回答に必要な根拠（#1284）。根拠ごとの再現率を求める。多段の質問（#1335）は段ごとの
+    # 根拠を全部書く。
     required_evidence: list[EvaluationEvidence] = Field(default_factory=list, max_length=30)
+    # 多段の質問の種類と段の数（任意。#1335）。結果の種類別・段の数別の内訳に使う。採点の方法は
+    # 変えない。段の数は、根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）。
+    reasoning_type: EvaluationReasoningType | None = None
+    hops: int | None = Field(default=None, ge=1, le=EVALUATION_MAX_HOPS)
 
     @property
     def expects_answer(self) -> bool:
@@ -341,7 +372,28 @@ class EvaluationCase(EvaluationHandlingExpectation):
             raise ValueError(
                 f"条件は往復をまたいで {EVALUATION_MAX_CONDITIONS} 個までにしてください。"
             )
+        self._validate_reasoning()
         return self
+
+    def _validate_reasoning(self) -> None:
+        """多段の質問の種類と段の数の組み合わせを確かめる（#1335）。
+
+        段の数は種類と一緒に書く。1 段の質問（single_hop）は 1 段、橋渡し・文書の中の参照は 2 段
+        以上。段ごとの根拠を書くため、必要な根拠があるときは段の数より少なくしない。
+        """
+        if self.hops is None:
+            return
+        if self.reasoning_type is None:
+            raise ValueError("hops は reasoning_type と一緒に指定してください。")
+        if self.reasoning_type == "single_hop" and self.hops != 1:
+            raise ValueError("single_hop の質問の hops は 1 にしてください。")
+        if self.reasoning_type in EVALUATION_MULTI_HOP_REASONING_TYPES and self.hops < 2:
+            raise ValueError(f"{self.reasoning_type} の質問の hops は 2 以上にしてください。")
+        if self.required_evidence and len(self.required_evidence) < self.hops:
+            raise ValueError(
+                "必要な根拠は段ごとに書いてください"
+                f"（hops={self.hops}、根拠 {len(self.required_evidence)} 件）。"
+            )
 
     def all_condition_ids(self) -> set[str]:
         """質問と往復で渡す条件の id の集合。"""
@@ -402,6 +454,9 @@ class EvaluationCaseResult(BaseModel):
     trace_id: str
     category: EvaluationCaseCategory | None = None
     split: EvaluationCaseSplit | None = None
+    # 多段の質問の種類と段の数（ケースの値。#1335）。
+    reasoning_type: EvaluationReasoningType | None = None
+    hops: int | None = None
     status: Literal["success", "error"] = "success"
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
@@ -434,6 +489,8 @@ class EvaluationCaseResult(BaseModel):
     # 根拠の無いケース・検索をしない回答は None。
     evidence_recall: float | None = None
     missing_evidence: list[str] = Field(default_factory=list)
+    # 必要な根拠をすべて取れたか（#1335。evidence_recall が 1 のとき True）。測れないときは None。
+    evidence_chain_complete: bool | None = None
     # 往復ごとの採点（往復のあるケースだけ。#1284）。
     turn_results: list[EvaluationTurnResult] = Field(default_factory=list)
     answer_evaluation: EvaluationAnswerJudgement | None = None
@@ -472,6 +529,27 @@ class EvaluationCategorySummary(BaseModel):
     safe_answer_rate: float | None = None
 
 
+class EvaluationReasoningSummary(BaseModel):
+    """多段の質問の種類別・段の数別の結果（#1335）。
+
+    `metrics` は根拠と回答の指標（`EVALUATION_REASONING_METRIC_NAMES`）を、そのケースだけで求めた値
+    （測れなければ None）。
+    """
+
+    case_count: int
+    error_count: int = 0
+    metrics: dict[str, float | None] = Field(default_factory=dict)
+    metric_case_counts: dict[str, int] = Field(default_factory=dict)
+
+
+# 種類別・段の数別の内訳に出す指標（#1335）。
+EVALUATION_REASONING_METRIC_NAMES: tuple[str, ...] = (
+    "required_evidence_recall",
+    "evidence_chain_complete_rate",
+    "answer_keyword_hit_rate",
+)
+
+
 class EvaluationSplitSummary(BaseModel):
     """区分（dev / holdout）ごとの結果（#1284）。
 
@@ -484,6 +562,9 @@ class EvaluationSplitSummary(BaseModel):
     metrics: dict[str, float | None] = Field(default_factory=dict)
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+    # 区分の中の多段の質問の種類別・段の数別の内訳（#1335。ケースに種類・段の数があるときだけ）。
+    reasoning_type_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
+    hops_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
 
 
 class EvaluationMetrics(BaseModel):
@@ -511,6 +592,8 @@ class EvaluationMetrics(BaseModel):
     condition_coverage: float | None = None
     # 必要な根拠ごとの再現率（ケースの平均。参考の集計で閾値の判定には使わない。#1284）。
     required_evidence_recall: float | None = None
+    # 必要な根拠をすべて取れたケースの割合（参考の集計で閾値の判定には使わない。#1335）。
+    evidence_chain_complete_rate: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool = True
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
@@ -519,6 +602,10 @@ class EvaluationMetrics(BaseModel):
     category_breakdown: dict[str, EvaluationCategorySummary] = Field(default_factory=dict)
     # 区分ごとの内訳（ケースに区分があるときだけ。区分の無いケースは unassigned。#1284）。
     split_breakdown: dict[str, EvaluationSplitSummary] = Field(default_factory=dict)
+    # 多段の質問の種類別・段の数別の内訳（ケースに種類・段の数があるときだけ。無いケースは
+    # unspecified。段の数の key は "1"・"2" などの文字列。#1335）。
+    reasoning_type_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
+    hops_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
 
 

@@ -9,7 +9,8 @@ import { integerMetadataValue } from "./table-cell-focus";
  */
 
 export type AnswerTextEntry =
-  | { kind: "item"; text: string; citations: string[] }
+  /** `citationLines` は各根拠の行が本文の何番目（1 始まり）の「根拠：」の行か（#1330）。 */
+  | { kind: "item"; text: string; citations: string[]; citationLines: number[] }
   | { kind: "text"; text: string };
 
 export type AnswerTextBlock =
@@ -29,6 +30,8 @@ export function parseAnswerText(text: string): AnswerTextBlock[] | null {
   const blocks: AnswerTextBlock[] = [];
   let section: Extract<AnswerTextBlock, { kind: "section" }> | null = null;
   let paragraph: string[] = [];
+  // 本文の「根拠：」の行の順番（1 始まり）。回答エンジンが出典行ごとの根拠に付ける番号と同じ数え方（#1330）。
+  let citationOrdinal = 0;
   const flushParagraph = () => {
     const joined = paragraph.join("\n").trim();
     paragraph = [];
@@ -42,6 +45,7 @@ export function parseAnswerText(text: string): AnswerTextBlock[] | null {
       flushParagraph();
       continue;
     }
+    if (CITATION.test(line)) citationOrdinal += 1;
     if (SECTION_TITLE.test(line)) {
       flushParagraph();
       section = { kind: "section", title: line, ordered: true, entries: [] };
@@ -51,12 +55,18 @@ export function parseAnswerText(text: string): AnswerTextBlock[] | null {
     if (section && (BULLET.test(line) || NUMBERED.test(line))) {
       flushParagraph();
       if (!NUMBERED.test(line)) section.ordered = false;
-      section.entries.push({ kind: "item", text: line.replace(BULLET, "").replace(NUMBERED, ""), citations: [] });
+      section.entries.push({
+        kind: "item",
+        text: line.replace(BULLET, "").replace(NUMBERED, ""),
+        citations: [],
+        citationLines: [],
+      });
       continue;
     }
     const last = section?.entries[section.entries.length - 1];
     if (CITATION.test(line) && last?.kind === "item" && paragraph.length === 0) {
       last.citations.push(line);
+      last.citationLines.push(citationOrdinal);
       continue;
     }
     paragraph.push(line);
@@ -164,4 +174,24 @@ function matchSheetCitation(
     return chunkStart != null && chunkEnd != null && chunkStart <= end && start <= chunkEnd;
   });
   return (overlapping ?? sameSheet[0]).index;
+}
+
+/**
+ * 本文の n 番目（1 始まり）の根拠の行に当たる引用の位置（#1330）。回答エンジンが引用の metadata の
+ * `answer_citation_lines` に出典行の番号を付けていれば、その番号で結ぶ（ファイル名と頁で推測しない）。
+ * 番号の無い回答（古い記録・別の回答方式）は、ファイル名と頁で選ぶ（`matchCitation`）。
+ */
+export function matchCitationLine(
+  ordinal: number | undefined,
+  ref: AnswerCitationRef | null,
+  citations: readonly RetrievedChunk[],
+): number {
+  if (ordinal != null) {
+    const index = citations.findIndex((chunk) => {
+      const lines = chunk.metadata.answer_citation_lines;
+      return Array.isArray(lines) && lines.includes(ordinal);
+    });
+    if (index >= 0) return index;
+  }
+  return ref ? matchCitation(ref, citations) : -1;
 }
