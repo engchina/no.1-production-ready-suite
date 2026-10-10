@@ -128,6 +128,9 @@ class RunRecord:
     validation_status: str | None = None
     model_requests: int | None = None
     tool_calls: dict[str, int] = field(default_factory=dict)
+    # 旧版も含めて検索した（`include_superseded: true` の）根拠のツールの成功した
+    # 呼び出しの数（#1392）。
+    superseded_searches: int = 0
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -142,6 +145,7 @@ class RunRecord:
             "validation_status": self.validation_status,
             "model_requests": self.model_requests,
             "tool_calls": dict(self.tool_calls),
+            "superseded_searches": self.superseded_searches,
         }
 
 
@@ -189,6 +193,45 @@ def tool_call_counts(run: Mapping[str, Any]) -> dict[str, int]:
             name = base_tool_name(str(call["name"]))
             counts[name] = counts.get(name, 0) + 1
     return counts
+
+
+def superseded_search_count(run: Mapping[str, Any]) -> int:
+    """旧版も含めて検索した（`include_superseded: true`）根拠のツールの成功した呼び出しの数。
+
+    #1392。失敗した呼び出しと、根拠のツール以外（本文を読むツールなど）は数えない。
+    """
+    count = 0
+    for step in _records(run.get("steps")):
+        call = step.get("tool_call")
+        result = step.get("tool_result")
+        if not isinstance(call, Mapping) or not isinstance(result, Mapping):
+            continue
+        arguments = call.get("arguments")
+        if (
+            base_tool_name(str(call.get("name") or "")) in EVIDENCE_TOOLS
+            and result.get("success")
+            and isinstance(arguments, Mapping)
+            and arguments.get("include_superseded") is True
+        ):
+            count += 1
+    return count
+
+
+def superseded_case_summary(
+    cases: Sequence[EvaluationCase], records: Sequence[RunRecord]
+) -> dict[str, Any]:
+    """旧版も検索して答えるケース（`include_superseded: true`。#1366）で Agent が旧版を検索したか。
+
+    A（RAG の評価）はそのケースだけ旧版を含めて検索するが、D は Agent が質問から判断して
+    `include_superseded` を渡す（#1392）。渡さなかったケースは旧版の根拠が欠ける。
+    """
+    searched = {record.case_id for record in records if record.superseded_searches}
+    marked = [case.id for case in cases if case.include_superseded]
+    return {
+        "case_count": len(marked),
+        "searched_case_ids": [case_id for case_id in marked if case_id in searched],
+        "missed_case_ids": [case_id for case_id in marked if case_id not in searched],
+    }
 
 
 def _artifact(run: Mapping[str, Any], kind: str) -> Mapping[str, Any] | None:
@@ -539,6 +582,7 @@ def evaluate_case(
         requests = usage.get("requests") if isinstance(usage, Mapping) else None
         record.model_requests = requests if isinstance(requests, int) else None
         record.tool_calls = tool_call_counts(run)
+        record.superseded_searches = superseded_search_count(run)
         answers.append((turn.response, conditions))
         sources.append(turn.outcome_source)
     result = score_case_answers(case, answers)
@@ -885,6 +929,8 @@ def _run_command(args: argparse.Namespace) -> int:
             "runs": [record.as_json() for record in records],
             # 対応の出所ごとの Run の数（推定 inferred が残っていないかを確かめる。#1305）。
             "outcome_sources": outcome_source_counts(records),
+            # 旧版も検索して答えるケースで、Agent が旧版を検索したか（#1392）。
+            "superseded_cases": superseded_case_summary(request.cases, records),
             "summary": summarize_result(data),
         },
     }

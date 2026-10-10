@@ -35,7 +35,8 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    主張があり、実データの確認を促すか不足の印があれば conditional、無ければ answered。
 
 不足の印（`signals`）: 資料に記載が無い文・拒答の文（`absence`）・主張に添えた利用者への質問
-（`question`）・回答の中の「確かめられていない点」の節（`unverified_section`）・最終の検証が
+（`question`）・回答の中の「確かめられていない点」の節（`unverified_section`。最終の検証が
+本文を残して確かめきれなかった点を示したときも。#1391）・最終の検証が
 根拠で確かめられない・根拠と矛盾すると判定して外した段落（`withheld_claims`。`unsupported` /
 `contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317）・要求の不足などの
 決定的な検査の error（`check_errors`）・実データの確認を促す段落（`data_confirmation`。RAG の
@@ -307,6 +308,9 @@ def answer_outcome(
         signals.add(SIGNAL_GUIDE_CONDITIONS)
     if _count(withheld.get("findings")) > 0:
         signals.add(SIGNAL_CHECK_ERRORS)
+    # 本文を残して、確かめきれなかった点（出典を照合できない段落など）を示した（#1391）。
+    if _count(withheld.get("unverified")) > 0:
+        signals.add(SIGNAL_UNVERIFIED_SECTION)
     if confirmations:
         signals.add(SIGNAL_DATA_CONFIRMATION)
     gaps = bool(signals & _GAP_SIGNALS)

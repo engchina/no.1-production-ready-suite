@@ -47,7 +47,15 @@ from pr_backend_core.mcp import (
     McpToolError,
     McpToolResult,
 )
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 
 from app.api.routes import search as search_route
@@ -97,7 +105,12 @@ from app.rag.support_guide_runtime import (
     impact_applies,
     rank_guides,
 )
-from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search import (
+    INCLUDE_SUPERSEDED_FILTER_KEY,
+    RetrievedChunk,
+    SearchRequest,
+    SearchResponse,
+)
 from app.schemas.search_answer_profile import SearchAnswerProfileStatus
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
@@ -210,8 +223,16 @@ class SearchInput(BaseModel):
     filters: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "検索フィルター（例: category_name）。新しい版に置き換えた文書（旧版）は既定で"
-            "検索しない。旧版・変更点を尋ねるときは include_superseded に true を渡す。"
+            "検索フィルター（例: category_name）。旧版を含める指定は filters ではなく"
+            " include_superseded で渡す。"
+        ),
+    )
+    include_superseded: bool = Field(
+        default=False,
+        description=(
+            "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。"
+            "旧版・変更点・改定前との違いを尋ねるときは true を渡す（検索の範囲は変わらず、"
+            "検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。"
         ),
     )
     evidence_limit: int = Field(
@@ -232,6 +253,17 @@ class SearchInput(BaseModel):
             "聞き直さない。"
         ),
     )
+
+    @field_validator("filters")
+    @classmethod
+    def _superseded_is_not_a_filter(cls, value: dict[str, str]) -> dict[str, str]:
+        # 旧版を含める指定は専用の真偽値の引数（#1392）。filters に書いた指定は黙って
+        # 読み替えず、呼び直す引数を返す（モデルが同じ誤りを繰り返さないように）。
+        if INCLUDE_SUPERSEDED_FILTER_KEY in value:
+            raise ValueError(
+                "旧版を含めるときは filters ではなく include_superseded に true を渡してください。"
+            )
+        return value
 
 
 class RetrieveEvidenceInput(SearchInput):
@@ -675,7 +707,7 @@ class RagEvidence(BaseModel):
         default=False,
         description=(
             "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない"
-            "（filters の include_superseded=true で含める）。"
+            "（include_superseded に true を渡すと含める）。"
         ),
     )
     references: list[EvidenceReference] = Field(
@@ -2015,6 +2047,9 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         "knowledge_base_ids": arguments.knowledge_base_ids,
         "filters": arguments.filters,
     }
+    if arguments.include_superseded:
+        # 検索の要求の中では旧版の扱いは filters の 1 つ（画面の検索と同じ。#1248）。
+        payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
     if arguments.search_answer_profile_id is not None:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if arguments.top_k is not None:

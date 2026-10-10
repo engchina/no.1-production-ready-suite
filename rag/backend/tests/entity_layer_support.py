@@ -4,8 +4,8 @@
   chunk を作る（台帳は 1 行 = 1 chunk の「列名: 値 / 列名: 値」（#1349）、PDF の原稿は章ごとに 1
   chunk）。
 - ``InMemoryEntityStore``: ``app.clients.entity_store.EntityStore`` の 3 つの SQL と同じ規則（join
-  の向き・役割・ナレッジベースの範囲）を Python の表で行う。実 Oracle の SQL は
-  ``test_entity_layer_oracle.py``。
+  の向き・役割・ナレッジベースの範囲・ラベルの別名の扱い（#1393））を Python の表で行う。実
+  Oracle の SQL は ``test_entity_layer_oracle.py``。
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ from app.rag.entity_expansion import (
     EntitySeedRow,
 )
 from app.rag.entity_index import (
+    ALIAS_KIND_LABEL,
+    EntityAlias,
     EntityIndex,
     EntityIndexOptions,
     EntityRecord,
@@ -33,6 +35,7 @@ from app.rag.entity_index import (
 from app.schemas.search import RetrievedChunk
 
 MULTI_HOP_DIR = Path(__file__).resolve().parents[2] / "evaluation" / "multi-hop"
+BUSINESS_SUPPORT_DIR = Path(__file__).resolve().parents[2] / "evaluation" / "business-support"
 CHUNK_SET_ID = "cs-1"
 
 
@@ -93,8 +96,17 @@ def _workbook_chunks(path: Path) -> list[Chunk]:
 
 def multi_hop_corpus() -> list[CorpusDocument]:
     """評価セットの 15 文書（PDF の原稿は章ごと、xlsx の原稿は 1 行ずつの chunk）。"""
+    return _corpus(MULTI_HOP_DIR)
+
+
+def business_support_corpus() -> list[CorpusDocument]:
+    """多段ではない評価セット ``rag/evaluation/business-support`` の 5 文書（#1393）。"""
+    return _corpus(BUSINESS_SUPPORT_DIR)
+
+
+def _corpus(directory: Path) -> list[CorpusDocument]:
     documents: list[CorpusDocument] = []
-    for source in sorted((MULTI_HOP_DIR / "sources").iterdir()):
+    for source in sorted((directory / "sources").iterdir()):
         if source.suffix == ".html":
             file_name = f"{source.stem}.pdf"
             chunks = _html_chunks(source)
@@ -181,8 +193,31 @@ class InMemoryEntityStore:
         wanted = {value for value in filters.get("knowledge_base_id", "").split(",") if value}
         return not wanted or bool(self.memberships.get(chunk.document_id, set()) & wanted)
 
-    def _aliases(self, entity_id: str) -> list[str]:
-        return [alias.alias_key for alias in self.entities[entity_id].aliases]
+    def _aliases(self, entity_id: str, filters: dict[str, str] | None = None) -> list[str]:
+        """実体の別名。``filters`` を渡すと、拡張に使える別名だけ（``_usable_alias_sql``）。"""
+        return [
+            alias.alias_key
+            for alias in self.entities[entity_id].aliases
+            if filters is None or self._usable_alias(entity_id, alias, filters)
+        ]
+
+    def _usable_alias(self, entity_id: str, alias: EntityAlias, filters: dict[str, str]) -> bool:
+        """ラベルの別名は、別の文書の実体がラベル以外の種類で同じ別名を持つときだけ使う（#1393）。"""
+        if alias.alias_kind != ALIAS_KIND_LABEL:
+            return True
+        document_id = _document_of(entity_id)
+        return any(
+            _document_of(other_id) != document_id
+            and any(
+                other.alias_key == alias.alias_key and other.alias_kind != ALIAS_KIND_LABEL
+                for other in entity.aliases
+            )
+            and any(
+                link_entity == other_id and self._in_scope(chunk_id, filters)
+                for link_entity, chunk_id, _ in self.links
+            )
+            for other_id, entity in self.entities.items()
+        )
 
     def _definition_rows(
         self, filters: dict[str, str], entity_id: str, match_key: str
@@ -240,7 +275,7 @@ class InMemoryEntityStore:
                 seed_rank=rank,
             )
             for entity_id, rank in ranks.items()
-            for key in self._aliases(entity_id)
+            for key in self._aliases(entity_id, filters)
         ]
         return rows[:limit]
 
@@ -252,7 +287,7 @@ class InMemoryEntityStore:
         rows = [
             row
             for entity_id in self.entities
-            for key in self._aliases(entity_id)
+            for key in self._aliases(entity_id, filters)
             if key in keys
             for row in self._definition_rows(filters, entity_id, key)
         ]
@@ -269,7 +304,7 @@ class InMemoryEntityStore:
                     continue
                 for key in self._aliases(src_entity):
                     for entity_id in self.entities:
-                        if entity_id == src_entity or key not in self._aliases(entity_id):
+                        if entity_id == src_entity or key not in self._aliases(entity_id, filters):
                             continue
                         rows.extend(
                             EntityDefinitionRow(
@@ -284,6 +319,11 @@ class InMemoryEntityStore:
                             for row in self._definition_rows(filters, entity_id, key)
                         )
         return rows[:limit]
+
+
+def _document_of(entity_id: str) -> str:
+    """store の実体の ID（``文書 ID|実体の ID``）の文書 ID。"""
+    return entity_id.split("|", 1)[0]
 
 
 def corpus_store(**kwargs: object) -> InMemoryEntityStore:

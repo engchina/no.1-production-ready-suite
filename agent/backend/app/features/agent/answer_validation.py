@@ -17,7 +17,9 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   外した内容と理由を「確かめられていない点」として足す（確かめていない操作の手順を公開しない。
   handoff §12）。根拠で確かめた段落と、主張ではない行（見出しなど）は残す。決定的な検査の error も
   同じく扱う: 手順・影響範囲の error は手順を確かめられないので本文を載せず、要求の error（答えて
-  いない要求を示していない）は本文を残して不足を示す。warning は出さない。
+  いない要求を示していない）は本文を残して不足を示す。warning は出さない。根拠で否定された段落
+  （裏付けが無い・矛盾）が無いのに、出典を照合できない・確かめが終わらない段落を外すと本文が空に
+  なるときは、検証が確かめきれなかったものとして本文を残し、確かめきれなかった点を示す（#1391）。
 - 検証そのもの（呼び出し・接続・応答）が失敗したら `unvalidated` にし、回答は消さずに
   「この回答は検証できませんでした。」を足す（基盤の障害で内容を落とさない）。
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
@@ -101,6 +103,11 @@ NO_EVIDENCE_NOTICE = "この回答は資料の根拠を使っておらず、資�
 UNVERIFIED_HEADING = "確かめられていない点"
 WITHHELD_INTRO = "根拠で確かめられなかった次の内容は、回答に載せていません。"
 NOTHING_CONFIRMED = "根拠で確かめられた内容はありませんでした。"
+# 根拠で否定された段落が無いのに、出典を照合できない段落を外すと本文が空になるとき（#1391）。
+UNVERIFIED_KEPT_INTRO = (
+    "次の内容は、根拠の出典と照らし合わせられず確かめきれませんでした。"
+    "根拠と矛盾する・根拠に無いという判定ではないため、回答の本文は載せています。"
+)
 GUIDE_WITHHELD = (
     "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
 )
@@ -116,6 +123,10 @@ _CLAIM_LABELS = {
     "citation_error": "出典を確かめられない",
     "unassessed": "確かめが終わっていない",
 }
+# 根拠で否定した判定（根拠に無い・根拠と矛盾）。出典を照合できない（`citation_error`）・
+# 確かめが終わらない（`unassessed`）は、根拠が主張を否定したのではなく、検証が確かめ
+# きれなかったもの（#1391）。
+REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 # 判定として使える `rag_validate_answer` の結果の status（それ以外は検証の失敗として扱う）。
 _USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
 _MAX_LISTED_CLAIMS = 5
@@ -585,7 +596,10 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
     「確かめられていない点」として足す。根拠を 1 件も読めなかった（`no_evidence`）とき、段落の位置を
     決められないとき、手順・影響範囲・業務ガイドの版の error があるとき（どの段落の手順が誤りかを
     決められず、確かめていない手順を出さない）は本文を載せない。要求の error（答えていない要求を
-    示していない）は本文を残し、不足として示す。
+    示していない）は本文を残し、不足として示す。根拠で否定された段落（`unsupported` /
+    `contradicted`）が無く、出典を照合できない（`citation_error`）・確かめが終わらない
+    （`unassessed`）段落を外すと本文が空になるときは、本文を残して確かめきれなかった点を示す
+    （記録の `withheld.unverified`。#1391）。
     """
     errors = error_findings(result)
     unchanged = {"claims": 0, "findings": 0, "all": False}
@@ -617,6 +631,19 @@ def publish_answer(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         body = withhold_paragraphs(answer, quotes)
     else:
         body = answer.rstrip()
+    if (
+        body == ""
+        and blocking
+        and not errors
+        and not unreadable
+        and not any(item.get("status") in REFUTED_CLAIM_STATUSES for item in blocking)
+    ):
+        # 根拠で否定された段落が無いのに、出典を照合できない（`citation_error`）・確かめが終わらない
+        # （`unassessed`）段落を外すと本文が空になる: 検証が確かめきれなかったので、本文は消さずに
+        # 確かめきれなかった点を示す（検証の失敗で内容を落とさないのと同じ。#1391）。
+        lines = [UNVERIFIED_KEPT_INTRO, *_notice_lines(result, blocking)]
+        withheld = {"claims": 0, "findings": 0, "all": False, "unverified": len(blocking)}
+        return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
     lines = _notice_lines(result, blocking)
     if blocking or (not body and not guide_errors):
         lines.insert(0, WITHHELD_INTRO)

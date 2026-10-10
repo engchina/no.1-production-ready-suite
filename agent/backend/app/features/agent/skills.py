@@ -175,6 +175,8 @@ skill_registry.register(
             "確かめられなかった段は推測で補わず、その点を示して分かった段までを答える。"
             "結果の rag_calls_remaining（この実行で残る検索の回数）が残りの段の数より少なければ、"
             "段をまとめるか、読み取り（rag_read_document・rag_read_source。回数に数えない）で補う。"
+            "旧版・変更点・改定前との違いを尋ねる質問では、rag_search・rag_retrieve_evidence に"
+            " include_superseded: true を渡して旧版も検索する（既定は今の版だけ）。"
             "対象の検索・回答プロファイルが分からなければ "
             "rag_list_search_answer_profiles で確かめる。"
             "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"

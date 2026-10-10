@@ -139,6 +139,40 @@ def test_claim_limits_search_to_scoped_profiles_and_their_knowledge_bases(
     assert _call(tool, {"query": "規程", "knowledge_base_ids": ["kb-1"]}, plain)["isError"] is False
 
 
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_including_superseded_keeps_the_claim_scope(auth: ProductionAuth, tool: str) -> None:
+    """旧版を含めても（include_superseded。#1392）、範囲の判定と検索の KB は変わらない。"""
+    user = auth.user_with_permissions(
+        "searcher",
+        ["menu.search"],
+        search_answer_profile_ids=["bv-1", "bv-2"],
+        knowledge_base_ids=["kb-1", "kb-2", "kb-3"],
+    )
+    scoped = _headers(user.user_uuid, ["bv-1"])
+    old = {"query": "旧版との違い", "include_superseded": True}
+
+    # 範囲の外の検索・回答プロファイル・KB と、プロファイルの無い検索は、旧版を含めても 403。
+    _forbidden(_call(tool, {**old, "search_answer_profile_id": "bv-2"}, scoped))
+    _forbidden(_call(tool, {**old, "knowledge_base_ids": ["kb-3"]}, scoped))
+    _forbidden(_call(tool, old, scoped))
+    assert "kb-3" in _forbidden(
+        _call(
+            tool,
+            {**old, "search_answer_profile_id": "bv-1", "knowledge_base_ids": ["kb-3"]},
+            scoped,
+        )
+    )
+    assert RecordingPipeline.captured_request is None
+
+    ok = _call(tool, {**old, "search_answer_profile_id": "bv-1"}, scoped)
+    assert ok["isError"] is False, ok
+    captured = RecordingPipeline.captured_request
+    assert captured is not None
+    assert _captured_knowledge_base_ids() == ["kb-1", "kb-2"]
+    # 検索の要求の旧版の扱いは、範囲（KB）の述語と一緒に Oracle の検索へ渡る。
+    assert captured.filters == {"include_superseded": "true", "knowledge_base_id": "kb-1,kb-2"}
+
+
 def test_claim_does_not_widen_user_permissions(auth: ProductionAuth) -> None:
     """claim にあっても利用者が使えない検索・回答プロファイルは、今までどおり 404。"""
     user = auth.user_with_permissions(
