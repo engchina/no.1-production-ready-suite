@@ -1531,9 +1531,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "検索フィルター（例: category_name）。新しい版に置き換えた文書（旧版）は既定で検索しない。旧版・変更点を尋ねるときは include_superseded に true を渡す。",
+            "description": "検索フィルター（例: category_name）。旧版を含める指定は filters ではなく include_superseded で渡す。",
             "title": "Filters",
             "type": "object"
+          },
+          "include_superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるときは true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。",
+            "title": "Include Superseded",
+            "type": "boolean"
           },
           "evidence_limit": {
             "default": 20,
@@ -1991,7 +1997,7 @@
               },
               "superseded": {
                 "default": false,
-                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（filters の include_superseded=true で含める）。",
+                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
                 "title": "Superseded",
                 "type": "boolean"
               },
@@ -2142,9 +2148,15 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "検索フィルター（例: category_name）。新しい版に置き換えた文書（旧版）は既定で検索しない。旧版・変更点を尋ねるときは include_superseded に true を渡す。",
+            "description": "検索フィルター（例: category_name）。旧版を含める指定は filters ではなく include_superseded で渡す。",
             "title": "Filters",
             "type": "object"
+          },
+          "include_superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるときは true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。",
+            "title": "Include Superseded",
+            "type": "boolean"
           },
           "evidence_limit": {
             "default": 12,
@@ -2864,7 +2876,7 @@
               },
               "superseded": {
                 "default": false,
-                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（filters の include_superseded=true で含める）。",
+                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
                 "title": "Superseded",
                 "type": "boolean"
               },

@@ -419,8 +419,15 @@ REPEATED_QUERY_HINT = (
     "この段の答えが集めた根拠にあれば次の段へ進む。無ければ言い換えを続けず、"
     "この段を確かめられなかった点として次の段へ進む。"
 )
-# 比べる範囲を決める引数（query・件数以外。条件を足した呼び直し〔#1322〕は繰り返しではない）。
-_QUERY_SCOPE_KEYS = ("search_answer_profile_id", "knowledge_base_ids", "filters", "conditions")
+# 比べる範囲を決める引数（query・件数以外。条件を足した呼び直し〔#1322〕と、旧版も含めた
+# 呼び直し〔#1392〕は繰り返しではない）。
+_QUERY_SCOPE_KEYS = (
+    "search_answer_profile_id",
+    "knowledge_base_ids",
+    "filters",
+    "conditions",
+    "include_superseded",
+)
 
 
 def normalized_query(query: object) -> str:
@@ -456,7 +463,8 @@ def similar_queries(left: str, right: str) -> bool:
 
 def _query_scope(arguments: JsonObject) -> str:
     def canonical(value: object) -> object:
-        if value in (None, "", [], {}):
+        # 既定の値（include_superseded の false を含む）は省いた引数と同じに扱う。
+        if value is False or value in (None, "", [], {}):
             return None
         if isinstance(value, list):
             return sorted(str(item) for item in value)
