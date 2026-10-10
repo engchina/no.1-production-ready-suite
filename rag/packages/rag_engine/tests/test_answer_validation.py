@@ -290,7 +290,8 @@ PORTAL_EVIDENCE = [
     {"id": f"{PORTAL}:2", "source": "portal-operations-manual.pdf", "page_start": 1, "page_end": 1,
      "text": "2. 検証用アカウントの登録\n1.管理画面の「利用者」を開き、「追加」を押します。\n2.利用者種別で「検証用」を選びます。"},
     {"id": f"{PORTAL}:3", "source": "portal-operations-manual.pdf", "page_start": 1, "page_end": 1,
-     "text": "3. アクセス権限の付与\n個別の利用者に付与する場合: 利用者の詳細画面の「権限」タブで、付与する権限を選んで「付与」を押します。"},
+     "text": "3. アクセス権限の付与\n個別の利用者に付与する場合: 利用者の詳細画面の「権限」タブで、"
+             "付与する権限を選んで「付与」を押します。"},
     {"id": f"{PORTAL}:4", "source": "portal-operations-manual.pdf", "page_start": 1, "page_end": 1,
      "text": "4. 通知の設定\n1.権限を付与した後、利用者の詳細画面の「通知」タブを開きます。"},
 ]
@@ -383,8 +384,18 @@ def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model(
     assert result["counts"] == {"supported": 3}
     assert [claim["source_id"] for claim in result["claim_checks"]] == [
         PORTAL_LEDGER["id"], f"{RETENTION_SET}:1", PORTAL_LEDGER["id"]]
+    # 実サービスで流し直すと、モデルは「…」を落として写した（「…fffa:1」）。部分ごとに照合して結び付ける。
+    dropped = ABBREVIATED_CHUNK_ID.replace("…", "")
+    result = _retention_validation([f"{PORTAL_LEDGER['id']},{dropped}", dropped, f"{PORTAL_LEDGER['id'][:20]}…:5"])
+    assert result["counts"] == {"supported": 3}
+    assert result["claim_checks"][1]["source_id"] == f"{RETENTION_SET}:1"
+    assert result["claim_checks"][2]["source_id"] == PORTAL_LEDGER["id"]
     # 省いた所の後ろ（番号）が違えば根拠に無い chunk、番号まで省けば 2 つの chunk のどちらか決まらない。
     # 回答に書かれた ID でない語（「record_codes.values[1]」）も、今までどおり引用エラー。
     result = _retention_validation([ABBREVIATED_CHUNK_ID.replace(":1", ":9"), f"{RETENTION_SET[:40]}…",
                                     "record_codes.values[1]"])
+    assert result["counts"] == {"citation_error": 3}
+    # 「…」を落とした ID も、番号が違う・残した部分が短い・部分の数が違うものは結び付けない。
+    result = _retention_validation([dropped.replace(":1", ":9"), f"{RETENTION_SET.split(':')[0]}:16f112:1",
+                                    f"{RETENTION_SET}:extra:1"])
     assert result["counts"] == {"citation_error": 3}

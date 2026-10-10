@@ -370,21 +370,40 @@ _SPAN_ID_PREFIX = re.compile(r"E[0-9a-f]+", re.IGNORECASE)
 _MIN_ABBREVIATED_ID_CHARS = 7
 
 
-def _abbreviated_id_matches(written: str, actual: str) -> bool:
-    """省いて書いた ID（後ろを切った片段の ID・途中を「…」で省いた ID）が actual を指すか (#1391)。
+def _abbreviated_part_matches(written: str, actual: str) -> bool:
+    """ID の 1 つの部分（片段の ID 全体・chunk の id の「:」で区切った部分）を、後ろを切って・途中を「…」で省いて書いたか。"""
+    pieces = _ID_ELLIPSIS.split(written)
+    # 残した先頭が短いと別の根拠と区別しにくい。省いた所には 1 文字以上が入る。
+    if len(pieces[0]) < _MIN_ABBREVIATED_ID_CHARS:
+        return False
+    if len(pieces) == 1:
+        return len(written) < len(actual) and actual.startswith(written)
+    return re.fullmatch(".+".join(re.escape(piece) for piece in pieces), actual) is not None
 
-    モデルは 20 桁の片段の ID を「E0d7d982」のように後ろを切って書いたり、回答に書かれた
-    「文書:chunk_set の前半…:番号」を写したりする。大文字・小文字は区別しない。
+
+def _abbreviated_id_matches(written: str, actual: str) -> bool:
+    """省いて書いた ID（後ろを切った片段の ID・途中を省いた chunk の id）が actual を指すか (#1391)。
+
+    モデルは 21 文字の片段の ID を「E0d7d982」のように後ろを切って書いたり、回答に書かれた
+    「文書:chunk_set の前半…:番号」を写したり（「…」を落として「文書:chunk_set の前半:番号」と書くこともある）する。
+    chunk の id は「:」で区切った部分ごとに照合し、最後の部分（chunk の番号）はそのまま一致することを求める。
+    大文字・小文字は区別しない。
     """
     written, actual = written.lower(), actual.lower()
-    pieces = _ID_ELLIPSIS.split(written)
-    if len(pieces) > 1:
-        # 省いた所には 1 文字以上が入る。残した部分（先頭と末尾）はそのまま一致すること。
-        if len(pieces[0]) < _MIN_ABBREVIATED_ID_CHARS:
+    if written == actual:
+        return True
+    if ":" not in actual:
+        # 片段の ID（「E + 16 進」）。「…」の無い後ろの切り捨ては、片段の ID の形のときだけ。
+        if not _ID_ELLIPSIS.search(written) and _SPAN_ID_PREFIX.fullmatch(written) is None:
             return False
-        return re.fullmatch(".+".join(re.escape(piece) for piece in pieces), actual) is not None
-    return (_SPAN_ID_PREFIX.fullmatch(written) is not None and len(written) >= _MIN_ABBREVIATED_ID_CHARS
-            and len(written) < len(actual) and actual.startswith(written))
+        return _abbreviated_part_matches(written, actual)
+    # 「:」をまたいで省いた ID（「文書の前半…:番号」）は全体で照合する。
+    if _ID_ELLIPSIS.search(written) and _abbreviated_part_matches(written, actual):
+        return True
+    written_parts, actual_parts = written.split(":"), actual.split(":")
+    if len(written_parts) != len(actual_parts) or written_parts[-1] != actual_parts[-1]:
+        return False
+    return all(w == a or _abbreviated_part_matches(w, a) for w, a in zip(written_parts[:-1], actual_parts[:-1], strict=True))
 
 
 def _span_for_token(token, catalog):
