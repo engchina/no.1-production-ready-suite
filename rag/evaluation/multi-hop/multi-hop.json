@@ -1621,6 +1621,11 @@
           "id": "ledger-120",
           "document_id": "file:system-ledger.xlsx",
           "text": "SYS-120"
+        },
+        {
+          "id": "ledger-severity-order",
+          "document_id": "file:system-ledger.xlsx",
+          "text": "重要度は A・B・C の 3 段階です。A が最も高く、B、C の順に低くなります。"
         }
       ]
     },
