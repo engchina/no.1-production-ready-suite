@@ -128,7 +128,8 @@ class RunRecord:
     validation_status: str | None = None
     model_requests: int | None = None
     tool_calls: dict[str, int] = field(default_factory=dict)
-    # 旧版も含めて検索した（`include_superseded: true` の）根拠のツールの成功した呼び出しの数（#1392）。
+    # 旧版も含めて検索した（`include_superseded: true` の）根拠のツールの成功した
+    # 呼び出しの数（#1392）。
     superseded_searches: int = 0
 
     def as_json(self) -> dict[str, Any]:
@@ -195,7 +196,10 @@ def tool_call_counts(run: Mapping[str, Any]) -> dict[str, int]:
 
 
 def superseded_search_count(run: Mapping[str, Any]) -> int:
-    """旧版も含めて検索した（`include_superseded: true`）根拠のツールの成功した呼び出しの数（#1392）。"""
+    """旧版も含めて検索した（`include_superseded: true`）根拠のツールの成功した呼び出しの数。
+
+    #1392。失敗した呼び出しと、根拠のツール以外（本文を読むツールなど）は数えない。
+    """
     count = 0
     for step in _records(run.get("steps")):
         call = step.get("tool_call")

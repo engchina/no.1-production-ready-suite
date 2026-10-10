@@ -355,6 +355,24 @@ def test_repeated_query_compares_the_same_tool_and_scope_only() -> None:
     )
 
 
+def test_query_with_superseded_versions_is_not_a_repeat() -> None:
+    """旧版も含めた呼び直し（include_superseded: true。#1392）は繰り返しではない。"""
+    tool = "rag__rag_search"
+    query = "承認の期限 旧版との違い"
+    current = _step(tool, {"query": query, "include_superseded": True})
+    steps = [_step(tool, {"query": query}), current]
+    assert (
+        repeated_query_note(
+            tool, {"query": query, "include_superseded": True}, steps, current_step_id=current.id
+        )
+        is None
+    )
+    # 既定の false は省いたときと同じ範囲。
+    assert repeated_query_note(
+        tool, {"query": query, "include_superseded": False}, steps, current_step_id="x"
+    ) == {"count": 1, "similar_queries": [query], "next_step": REPEATED_QUERY_HINT}
+
+
 def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
@@ -423,6 +441,8 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
         "repeated_query",
         "rag_calls_remaining",
         "references",
+        # 旧版・変更点を尋ねる質問は旧版も検索する（#1392）。
+        "include_superseded: true",
     ):
         assert phrase in instructions, phrase
 
@@ -589,3 +609,21 @@ def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
         "rag_retrieve_evidence": RagRetrieveEvidenceIn.model_fields["evidence_limit"].default,
     }
     assert defaults == {"rag_search": 12, "rag_retrieve_evidence": 20}
+
+
+def test_fake_rag_search_inputs_match_the_contract() -> None:
+    """fake の検索の引数は RAG の契約と同じ（旧版の指定は真偽値の include_superseded。#1392）。"""
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    tools = {tool["name"]: tool["inputSchema"] for tool in contract["tools"]}
+    for name, model in (
+        ("rag_search", RagSearchIn),
+        ("rag_retrieve_evidence", RagRetrieveEvidenceIn),
+    ):
+        schema = tools[name]
+        assert set(schema["properties"]) == set(model.model_fields), name
+        assert schema["properties"]["include_superseded"] == {
+            **schema["properties"]["include_superseded"],
+            "type": "boolean",
+            "default": False,
+        }
+        assert model.model_fields["include_superseded"].default is False
