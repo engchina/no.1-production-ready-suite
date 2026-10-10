@@ -842,6 +842,13 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_parent_max_pages?: number | null;
   chunk_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
+  /**
+   * 実体の索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
+   * 既定（有効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
+   */
+  entity_index_enabled?: boolean | null;
+  entity_name_columns?: string[] | null;
+  entity_attribute_columns?: string[] | null;
   field_extraction_enabled: boolean | null;
   navigation_summary_enabled: boolean | null;
   auto_parse_after_preprocess_enabled: boolean | null;
@@ -865,6 +872,18 @@ export interface KnowledgeBaseQueryConfig {
   request_coverage_retrieval_enabled?: boolean | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
+  /**
+   * 実体でつながる根拠を 1 段広げる(#1388。LLM は呼ばない)。全体の既定は持たず、null / false は使わない。
+   * 文書レシピで実体の索引を有効にした文書にだけ効く。
+   */
+  entity_expansion_enabled?: boolean | null;
+  /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
+  entity_expansion_max_chunks?: number | null;
+}
+
+/** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */
+export interface EntityIndexCoverageData {
+  document_count: number;
 }
 
 export type QueryStrategyName =
@@ -3010,6 +3029,12 @@ export const api = {
   getSearchAnswerProfile: (id: string) =>
     request<SearchAnswerProfileDetail>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}`,
+    ),
+  /** 参照するナレッジベースで実体の索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
+  entityIndexCoverage: (knowledgeBaseIds: string[]) =>
+    request<EntityIndexCoverageData>(
+      "/api/search-answer-profiles/entity-index-coverage",
+      jsonBody({ knowledge_base_ids: knowledgeBaseIds }),
     ),
   createSearchAnswerProfile: (body: SearchAnswerProfileCreateRequest) =>
     request<SearchAnswerProfileDetail>("/api/search-answer-profiles", jsonBody(body)),

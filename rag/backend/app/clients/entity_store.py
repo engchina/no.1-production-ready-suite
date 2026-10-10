@@ -238,6 +238,34 @@ class EntityStore:
             lambda connection: _delete_chunk_set_entities(connection, chunk_set_id)
         )
 
+    async def count_entity_documents(self, knowledge_base_ids: Sequence[str]) -> int:
+        """ナレッジベースの中で実体の索引を持つ文書の数（#1388）。
+
+        検索・回答プロファイルの画面が、実体の 1 段の拡張の開閉の横に「効く文書が無い」ことを案内
+        するために使う。見え方は回答の検索と同じ条件（tenant・権限・有効な chunk_set・ナレッジ
+        ベース）で数える。ナレッジベースを渡さなければ 0（範囲の外を数えない）。
+        """
+        ids = [value for value in dict.fromkeys(knowledge_base_ids) if value.strip()]
+        if not ids:
+            return 0
+        where_sql, binds = _oracle_retrieval_where(
+            {"knowledge_base_id": ",".join(ids[:_MAX_IN_VALUES])}
+        )
+        rows = await self._oracle._fetch_all(
+            _render_sql(
+                f"""
+            SELECT COUNT(DISTINCT c.document_id) AS document_count
+            FROM {ENTITY_CHUNKS_TABLE} ec
+            JOIN rag_chunks c ON c.chunk_id = ec.chunk_id
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {{where_sql}}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return _int(rows[0].get("document_count")) if rows else 0
+
     async def entity_seed_aliases(
         self,
         filters: dict[str, str],

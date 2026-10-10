@@ -36,6 +36,7 @@ for (const viewport of [
       "回答の生成方式",
       "根拠の前後から加える数",
       "回答の検索のオプション",
+      "実体でつながる根拠",
       "安全チェック",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -173,6 +174,137 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.auto_field_filter_enabled).toBe(true);
   expect(query.request_coverage_retrieval_enabled).toBe(false);
   expect(query.answer_flow ?? null).toBeNull();
+});
+
+// #1388: 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（既定 off。全体の環境変数は持たない）。
+async function mockEntityIndexCoverage(
+  page: Page,
+  respond: (knowledgeBaseIds: string[]) => Promise<{ status?: number; count?: number }>
+) {
+  const requests: string[][] = [];
+  await page.route("**/api/search-answer-profiles/entity-index-coverage", async (route) => {
+    const body = route.request().postDataJSON() as { knowledge_base_ids: string[] };
+    requests.push(body.knowledge_base_ids);
+    const { status = 200, count = 0 } = await respond(body.knowledge_base_ids);
+    await route.fulfill(
+      status === 200
+        ? { json: { data: { document_count: count }, error_messages: [], warning_messages: [] } }
+        : {
+            status,
+            json: { data: null, error_messages: ["読み込めませんでした。"], warning_messages: [] },
+          }
+    );
+  });
+  return requests;
+}
+
+test("実体でつながる根拠の開閉と上限を保存し、実体の索引の無い参照先では案内する", async ({ page }) => {
+  let createBody: Record<string, unknown> | null = null;
+  await mockSearchAnswerProfiles(page, [], (body) => {
+    createBody = body;
+  });
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requests = await mockEntityIndexCoverage(page, async () => {
+    await pending;
+    return { count: 0 };
+  });
+  await page.goto("/search-answer-profiles?id=new");
+
+  const entity = page.getByTestId("search-answer-profile-entity-expansion");
+  const toggle = entity.getByRole("switch", { name: "実体でつながる根拠を 1 段広げる" });
+  // 既定は off（このプロファイルの検索だけに効く）。上限は on のときだけ出す。
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(toggle).toHaveAccessibleDescription(/文書レシピで実体の索引を有効にした文書にだけ効きます/);
+  await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toHaveCount(0);
+  // 参照先を選ぶまでは数えない。
+  expect(requests).toEqual([]);
+
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+  await expect.poll(() => requests.length).toBeGreaterThan(0);
+  expect(requests.at(-1)).toEqual(["kb-1"]);
+  // 数えている間は案内を出さない（読み込み中に「無い」と言わない）。
+  const coverage = entity.getByTestId("search-answer-profile-entity-expansion-coverage");
+  await expect(coverage).toHaveCount(0);
+  release();
+  await expect(coverage).toHaveText(
+    "参照先のナレッジベースに、実体の索引のある文書がありません。文書レシピで実体の索引を有効にすると効きます。"
+  );
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(toggle).toHaveAccessibleDescription(/実体の索引のある文書がありません/);
+  const maxChunks = entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" });
+  await expect(maxChunks).toHaveText(/6 件（既定）/);
+  await maxChunks.click();
+  await page.getByRole("option", { name: "10 件", exact: true }).click();
+  await expect(maxChunks).toHaveText(/10 件/);
+  await expectNoPageOverflow(page);
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+    await entity.screenshot({
+      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-entity-expansion-${test.info().project.name}.png`,
+    });
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "dark";
+    });
+    await entity.screenshot({
+      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-entity-expansion-${test.info().project.name}-dark.png`,
+    });
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.theme;
+    });
+  }
+
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("台帳ビュー");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("台帳と規程をつないで回答します");
+  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+
+  await expect.poll(() => createBody?.name).toBe("台帳ビュー");
+  const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
+  expect(query.entity_expansion_enabled).toBe(true);
+  expect(query.entity_expansion_max_chunks).toBe(10);
+});
+
+test("実体の索引のある参照先・数えられないときは案内を出さず、off は上限も外す", async ({ page }) => {
+  let createBody: Record<string, unknown> | null = null;
+  await mockSearchAnswerProfiles(page, [], (body) => {
+    createBody = body;
+  });
+  let failing = false;
+  await mockEntityIndexCoverage(page, async () => (failing ? { status: 503 } : { count: 2 }));
+  await page.goto("/search-answer-profiles?id=new");
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+
+  const entity = page.getByTestId("search-answer-profile-entity-expansion");
+  const toggle = entity.getByRole("switch", { name: "実体でつながる根拠を 1 段広げる" });
+  await toggle.click();
+  await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toBeVisible();
+  await expect(entity.getByTestId("search-answer-profile-entity-expansion-coverage")).toHaveCount(0);
+
+  // 参照先を変えて数えられなかったとき（503）も、推測で「無い」とは言わない。
+  failing = true;
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await page.getByRole("option", { name: /DEFAULT/ }).click();
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+  await expect(entity.getByTestId("search-answer-profile-entity-expansion-coverage")).toHaveCount(0);
+
+  // off に戻すと上限の欄を閉じ、どちらも保存しない（使わない）。
+  await toggle.click();
+  await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toHaveCount(0);
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("規程ビュー");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("規程に回答します");
+  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await expect.poll(() => createBody?.name).toBe("規程ビュー");
+  const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
+  expect(query.entity_expansion_enabled ?? null).toBeNull();
+  expect(query.entity_expansion_max_chunks ?? null).toBeNull();
+  await expectNoPageOverflow(page);
 });
 
 for (const viewport of [

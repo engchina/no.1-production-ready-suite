@@ -135,6 +135,11 @@ async def test_entity_expansion_joins_on_real_oracle() -> None:
     assert {item.chunk.document_id for item in other_plan} == {
         saved["logistics-system-ledger.xlsx"][0]
     }
+    # 検索・回答プロファイルの案内（#1388）: 実体の索引を持つ文書を、ナレッジベースの範囲で数える。
+    # 承認規程（approval-rules.pdf）は実体を持たない（台帳・組織規程の 3 文書だけ）。
+    assert await store.count_entity_documents([kb.id]) == 3
+    assert await store.count_entity_documents([other_kb.id]) == 1
+    assert await store.count_entity_documents([kb.id, other_kb.id]) == 4
 
     # 再索引（chunk の作り直し）で関連が消え、文書の削除で実体と別名も消える（ON DELETE CASCADE）。
     links_sql = (

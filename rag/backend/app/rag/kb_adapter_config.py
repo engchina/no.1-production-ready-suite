@@ -91,7 +91,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
     "graph_profile": "rag_graph_profile",
-    # 実体の層（#1362。既定 OFF）。索引の保存の後に実体と「実体と chunk の関連」を作る。
+    # 実体の層（#1362。既定 ON。#1388）。索引の保存の後に実体と「実体と chunk の関連」を作る。
     "entity_index_enabled": "rag_entity_index_enabled",
     "entity_name_columns": "rag_entity_name_columns",
     "entity_attribute_columns": "rag_entity_attribute_columns",
@@ -110,6 +110,9 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "screen_linking_enabled": "rag_screen_linking_enabled",
     "request_coverage_retrieval_enabled": "rag_request_coverage_retrieval_enabled",
     "auto_field_filter_enabled": "rag_auto_field_filter_enabled",
+    # 実体の 1 段の拡張(#1388)。全体の既定は持たない(None は使わない / 既定の上限)。
+    "entity_expansion_enabled": "rag_entity_expansion_enabled",
+    "entity_expansion_max_chunks": "rag_entity_expansion_max_chunks",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -220,7 +223,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     )
     # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
     graph_profile: GraphProfile | None = None
-    # 実体の層（#1362）。None はグローバル継承（既定 OFF）。列名は表の行の名前・属性にする列。
+    # 実体の層（#1362）。None はグローバル継承（既定 ON。#1388）。列名は表の行の名前・属性にする列。
     entity_index_enabled: bool | None = None
     entity_name_columns: list[EntityColumnName] | None = Field(default=None, max_length=20)
     entity_attribute_columns: list[EntityColumnName] | None = Field(default=None, max_length=40)
@@ -287,6 +290,12 @@ class KnowledgeBaseQueryConfig(BaseModel):
     request_coverage_retrieval_enabled: bool | None = None
     # 質問から抽出項目の条件を読み取る(#652)。LLM の呼び出しが 1 回増える。
     auto_field_filter_enabled: bool | None = None
+    # 質問と上位の候補の実体から、実体の表との SQL の join で関連する chunk を 1 段だけ足す
+    # (#1362 / #1388)。LLM は呼ばない。全体の既定は持たず、None は使わない(既定 OFF)。実体は
+    # 文書レシピで実体の抽出を選んだ文書にだけある。全体の環境変数は持たない。
+    entity_expansion_enabled: bool | None = None
+    # 1 回の検索で足す chunk 数の上限。None は既定(6)。
+    entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

@@ -57,6 +57,7 @@ import {
   optionLabel,
   recipeConfigValueLabel,
 } from "./DocumentProcessingConfigPanel.values";
+import { EntityIndexColumnsRow } from "./EntityIndexColumnsRow";
 import { ExcelOptionsRow } from "./ExcelOptionsRow";
 
 function emptyConfig(): DocumentProcessingConfig {
@@ -75,6 +76,9 @@ function emptyConfig(): DocumentProcessingConfig {
     chunk_min_chars: null,
     chunk_context_header_enabled: null,
     graph_profile: null,
+    entity_index_enabled: null,
+    entity_name_columns: null,
+    entity_attribute_columns: null,
     section_rules_mode: null,
     field_extraction_enabled: null,
     navigation_summary_enabled: null,
@@ -100,6 +104,7 @@ const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
   chunking_strategy: "chunking",
   chunk_context_header_enabled: "context-header",
   auto_index_after_chunk_enabled: "auto-index",
+  entity_index_enabled: "entity-index",
   graph_profile: "graph",
   section_rules_mode: "section-rules",
 };
@@ -185,6 +190,9 @@ export function DocumentProcessingConfigPanel({
 
   const update = (patch: Partial<DocumentProcessingConfig>) =>
     setForm((current) => ({ ...current, ...patch }));
+  // 実体の索引が実効 ON のときだけ「実体の索引の列」を出す（#1388）。
+  const entityIndexSelected =
+    form.entity_index_enabled ?? configs?.effective.entity_index_enabled ?? false;
   // 前処理が excel_to_json のときだけ「Excel の読み方」を出す（#1221）。
   const excelSelected =
     (form.preprocess_profile ?? configs?.effective.preprocess_profile ?? null) === "excel_to_json";
@@ -194,9 +202,10 @@ export function DocumentProcessingConfigPanel({
     const id = `document-${EDITOR_ID_SUFFIX[item.field]}-${documentId}`;
     const label = t(item.label);
     // 「グローバル設定に従う」の値を変える画面（#528）。権限のない画面へのリンクは出さない。
-    const globalHref = canOpenNavRoute(item.globalSettings.route, hasPermission)
-      ? globalSettingsHref(item)
-      : null;
+    const globalHref =
+      item.globalSettings && canOpenNavRoute(item.globalSettings.route, hasPermission)
+        ? globalSettingsHref(item)
+        : null;
     switch (item.field) {
       case "preprocess_profile":
         return (
@@ -297,6 +306,8 @@ export function DocumentProcessingConfigPanel({
             hint={
               field === "vision_enabled"
                 ? t("knowledgeBases.adapter.field.vision.hint")
+                : field === "entity_index_enabled"
+                  ? t("knowledgeBases.adapter.field.entityIndex.hint")
                 : field === "field_extraction_enabled" && fieldSchemaStandard
                   ? t("documents.processingConfig.fieldSchemaStandard")
                   : null
@@ -445,6 +456,23 @@ export function DocumentProcessingConfigPanel({
                               effectiveValue={configs.effective.excel_options ?? null}
                               disabled={disabled}
                               onChange={(value) => update({ excel_options: value })}
+                            />
+                          ) : null}
+                          {item.field === "entity_index_enabled" && configs && entityIndexSelected ? (
+                            <EntityIndexColumnsRow
+                              key={`entity-columns-${recipeId}`}
+                              documentId={documentId}
+                              value={{
+                                entity_name_columns: form.entity_name_columns ?? null,
+                                entity_attribute_columns: form.entity_attribute_columns ?? null,
+                              }}
+                              effectiveValue={{
+                                entity_name_columns: configs.effective.entity_name_columns ?? null,
+                                entity_attribute_columns:
+                                  configs.effective.entity_attribute_columns ?? null,
+                              }}
+                              disabled={disabled}
+                              onChange={update}
                             />
                           ) : null}
                         </Fragment>

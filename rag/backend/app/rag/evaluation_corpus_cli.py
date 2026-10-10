@@ -16,9 +16,13 @@
    `--keep-superseded-active` を渡すと登録せず、旧版も今有効な文書のまま検索させる
    （旧版の紛らわしさの測定）。
 5. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
-6. `--entity-index` を渡したとき（#1362）は、すべての文書のレシピで実体の抽出（文書レシピの
-   任意の処理 ``entity_index_enabled``）を選んで取り込む。実体の層の有り / 無しを、別のナレッジ
-   ベースに取り込んで比べる。
+6. 実体の層（#1362）: 実体の抽出（文書レシピの ``entity_index_enabled``）は全体の既定で ON
+   （#1388）。`--entity-index` を渡すと、すべての文書のレシピで実体の抽出を明示して取り込み、回答の
+   検索の 1 段の拡張も選ぶ（拡張は検索・回答プロファイルで選び、全体の環境変数は持たないため、書き
+   出す評価セットの `rag_overrides` に `entity_expansion_enabled: true` を入れ（明示した値は変え
+   ない）、`--guides` で作る検索・回答プロファイルでも拡張を選ぶ）。`--no-entity-index` を渡すと、
+   すべての文書のレシピで実体の抽出を無効にする（実体の層の無しの比較）。どちらも渡さなければ
+   レシピは全体の既定に従い、拡張は選ばない。有り / 無しは別のナレッジベースに取り込んで比べる。
 7. `--guides` を渡したとき（#1289）は、そのナレッジベースを参照する検索・回答プロファイルを作り、
    業務ガイド（`support-guides.json`。参照の `file:` も文書 ID に置き換える）を取り込んで公開し、
    `search_answer_profile_id` を入れた評価セット（業務ガイドあり = C）を `--guided-output` に書く。
@@ -70,11 +74,14 @@ class CorpusError(RuntimeError):
     """利用者へ返す失敗（exit code 2）。"""
 
 
-def recipe_for(path: Path, *, entity_index: bool = False) -> dict[str, Any]:
-    """ファイルの文書レシピ（拡張子ごとの前処理と、選んだときは実体の抽出。#1362）。"""
+def recipe_for(path: Path, *, entity_index: bool | None = None) -> dict[str, Any]:
+    """ファイルの文書レシピ（拡張子ごとの前処理と、指定したときは実体の抽出の有無。#1362）。
+
+    ``entity_index`` が None ならレシピに書かず、全体の既定（ON。#1388）に従う。
+    """
     recipe: dict[str, Any] = dict(RECIPE_BY_EXTENSION.get(path.suffix.lower(), {}))
-    if entity_index:
-        recipe["entity_index_enabled"] = True
+    if entity_index is not None:
+        recipe["entity_index_enabled"] = entity_index
     return recipe
 
 
@@ -173,6 +180,26 @@ def resolve_golden_set(
     return resolved
 
 
+def with_entity_expansion(golden_set: Mapping[str, Any]) -> dict[str, Any]:
+    """実体の 1 段の拡張を選んだ評価セット（#1388）。
+
+    拡張は検索・回答プロファイルで選ぶ（全体の環境変数は持たない）ため、プロファイルを使わない評価
+    （A）は評価の `rag_overrides` で選ぶ。比較の評価セットは各 experiment に入れる。評価セットが
+    明示した `entity_expansion_enabled` は変えない。
+    """
+    resolved: dict[str, Any] = json.loads(json.dumps(dict(golden_set)))
+    experiments = resolved.get("experiments")
+    targets = experiments if isinstance(experiments, list) else [resolved]
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        overrides = target.get("rag_overrides")
+        overrides = dict(overrides) if isinstance(overrides, Mapping) else {}
+        overrides.setdefault("entity_expansion_enabled", True)
+        target["rag_overrides"] = overrides
+    return resolved
+
+
 def resolve_guides(
     guides: Sequence[Mapping[str, Any]], document_ids: Mapping[str, str]
 ) -> list[dict[str, Any]]:
@@ -224,10 +251,10 @@ class CorpusLoader:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         log: Callable[[str], None] = print,
-        entity_index: bool = False,
+        entity_index: bool | None = None,
     ) -> None:
         self._client = client
-        # すべての文書のレシピで実体の抽出を選ぶ（#1362）。
+        # すべての文書のレシピで実体の抽出を有効 / 無効にする（#1362。None は全体の既定）。
         self._entity_index = entity_index
         self._api = api_base_url.rstrip("/") + "/api"
         self._timeout = timeout_seconds
@@ -254,13 +281,17 @@ class CorpusLoader:
         return str(data["id"])
 
     def create_search_answer_profile(self, name: str, knowledge_base_id: str) -> str:
+        config: dict[str, Any] = {"knowledge_base_ids": [knowledge_base_id]}
+        if self._entity_index is True:
+            # 実体の 1 段の拡張は検索・回答プロファイルで選ぶ（#1388）。
+            config["query"] = {"entity_expansion_enabled": True}
         data = self._data(
             self._client.post(
                 f"{self._api}/search-answer-profiles",
                 json={
                     "name": name,
                     "description": "業務支援の評価の業務ガイドあり（評価用）",
-                    "config": {"knowledge_base_ids": [knowledge_base_id]},
+                    "config": config,
                 },
             )
         )
@@ -408,8 +439,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--entity-index",
-        action="store_true",
-        help="すべての文書のレシピで実体の抽出（実体の層。#1362）を選んで取り込む",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "すべての文書のレシピで実体の抽出（実体の層。#1362）を明示して取り込み、評価セットと"
+            "作る検索・回答プロファイルで実体の 1 段の拡張を選ぶ（#1388）。--no-entity-index は"
+            "実体の抽出を無効にする（無しの比較）。省略時はレシピは全体の既定（ON）に従う"
+        ),
     )
     parser.add_argument(
         "--keep-superseded-active",
@@ -483,6 +519,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             knowledge_base_id,
             versions_registered=register_versions,
         )
+        if args.entity_index is True:
+            resolved = with_entity_expansion(resolved)
         _write(args.output, resolved)
         if profile_id is not None:
             _write(args.guided_output, guided_golden_set(resolved, profile_id))

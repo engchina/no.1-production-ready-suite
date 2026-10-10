@@ -467,14 +467,82 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 # ---- 設定・レシピ ----
 
 
-def test_settings_default_off_for_the_recipe_and_bounded_budget() -> None:
+def test_settings_default_on_for_the_recipe_and_off_for_the_expansion() -> None:
     settings = Settings()
-    assert settings.rag_entity_index_enabled is False
-    # 拡張も既定 OFF（実体のデータが無い環境で毎回の検索に SQL を足さない）。
+    # 抽出は既定 ON（#1388。決定的な規則だけで LLM を呼ばない。拡張 off なら検索に影響しない）。
+    assert settings.rag_entity_index_enabled is True
+    assert settings.rag_entity_name_columns == []
+    assert settings.rag_entity_attribute_columns == []
+    # 拡張は既定 OFF（検索・回答プロファイルで選ぶ。#1390 の後に既定を見直す）。
     assert settings.rag_entity_expansion_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
+
+
+def test_entity_expansion_is_not_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """拡張の開閉と上限は検索・回答プロファイルで選ぶ。環境変数 / .env は読まない（#1388）。"""
+    from app.config import PROFILE_ONLY_SETTING_FIELDS
+
+    assert {
+        "rag_entity_expansion_enabled",
+        "rag_entity_expansion_max_chunks",
+    } == PROFILE_ONLY_SETTING_FIELDS
+    monkeypatch.setenv("RAG_ENTITY_EXPANSION_ENABLED", "true")
+    monkeypatch.setenv("RAG_ENTITY_EXPANSION_MAX_CHUNKS", "3")
+    # 同じ source のほかの項目は今までどおり読む。
+    monkeypatch.setenv("RAG_ENTITY_INDEX_ENABLED", "false")
+    env_file = tmp_path / "backend.env"
+    env_file.write_text(
+        "RAG_ENTITY_EXPANSION_ENABLED=true\nRAG_ENTITY_EXPANSION_MAX_CHUNKS=2\n"
+        "RAG_REFERENCE_EXPANSION_MAX_CHUNKS=7\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+
+    assert settings.rag_entity_expansion_enabled is False
+    assert settings.rag_entity_expansion_max_chunks == 6
+    assert settings.rag_entity_index_enabled is False
+    assert settings.rag_reference_expansion_max_chunks == 7
+    # 属性名での生成（テスト・評価の上書き）は受け付ける。
+    assert Settings(rag_entity_expansion_enabled=True).rag_entity_expansion_enabled is True
+
+
+def test_search_answer_profile_selects_entity_expansion_and_budget() -> None:
+    """プロファイルの ``query.entity_expansion_*`` がそのプロファイルの検索だけに効く（#1388）。"""
+    from app.rag.search_answer_profile_config import (
+        parse_search_answer_profile_config,
+        resolve_search_answer_profile_settings,
+    )
+
+    base = Settings()
+    selected, applied = resolve_search_answer_profile_settings(
+        base,
+        parse_search_answer_profile_config(
+            {
+                "knowledge_base_ids": ["kb-1"],
+                "query": {"entity_expansion_enabled": True, "entity_expansion_max_chunks": 3},
+            }
+        ),
+    )
+    assert applied is True
+    assert selected.rag_entity_expansion_enabled is True
+    assert selected.rag_entity_expansion_max_chunks == 3
+    # 全体の設定は変えない（ほかのプロファイルの検索には効かない）。
+    assert base.rag_entity_expansion_enabled is False
+    other, _ = resolve_search_answer_profile_settings(
+        base, parse_search_answer_profile_config({"knowledge_base_ids": ["kb-2"]})
+    )
+    assert other.rag_entity_expansion_enabled is False
+    assert other.rag_entity_expansion_max_chunks == 6
+    # 上限の範囲はコードの検証で持つ（1〜20）。範囲の外の保存値は読まない（空の設定へ縮退）。
+    broken = parse_search_answer_profile_config(
+        {"knowledge_base_ids": ["kb-1"], "query": {"entity_expansion_max_chunks": 21}}
+    )
+    assert broken.query.entity_expansion_max_chunks is None
 
 
 def test_recipe_option_maps_to_ingestion_settings() -> None:
@@ -697,15 +765,17 @@ async def _save_index(settings: Settings) -> _IngestOracle:
     return oracle
 
 
-async def test_default_recipe_does_not_touch_the_entity_tables() -> None:
-    oracle = await _save_index(Settings(rag_graph_profile="off"))
+async def test_recipe_without_entity_index_does_not_touch_the_entity_tables() -> None:
+    """文書レシピで実体の索引を無効にした文書は、実体の表に触らない（SQL も実行しない）。"""
+    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=False))
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 0
 
 
-async def test_entity_recipe_saves_the_entity_index_after_the_index() -> None:
-    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=True))
+async def test_default_recipe_saves_the_entity_index_after_the_index() -> None:
+    """実体の索引は既定 ON（#1388）。列の指定が無くても、索引の保存の後に実体を保存する。"""
+    oracle = await _save_index(Settings(rag_graph_profile="off"))
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 1
@@ -982,3 +1052,67 @@ def test_mcp_order_also_reserves_context_in_the_same_parent_as_entity_expansion(
 
     assert _ids_of(ordered[:20])[-2:] == ["org-approver", "org-code"]
     assert "other-ctx" not in _ids_of(ordered[:20])
+
+
+# ---- 検索・回答プロファイルの案内（実体の索引を持つ文書の数。#1388）----
+
+
+async def test_count_entity_documents_uses_the_retrieval_scope() -> None:
+    from app.clients.entity_store import EntityStore
+
+    class CountingOracle:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        async def _fetch_all(self, sql: str, binds: dict[str, object]) -> list[dict[str, object]]:
+            self.calls.append((sql, binds))
+            return [{"document_count": 2}]
+
+    oracle = CountingOracle()
+    store = EntityStore(cast(Any, oracle))
+
+    assert await store.count_entity_documents([]) == 0
+    assert await store.count_entity_documents([" ", ""]) == 0
+    assert oracle.calls == []
+    assert await store.count_entity_documents(["kb-1", "kb-2", "kb-1"]) == 2
+    sql, binds = oracle.calls[0]
+    assert "COUNT(DISTINCT c.document_id)" in sql
+    assert "rag_entity_chunks" in sql
+    # 回答の検索と同じ見え方（有効な chunk_set・索引済みの文書・ナレッジベース）で数える。
+    assert "d.status = 'INDEXED'" in sql
+    assert "active_cs.is_active = 1" in sql
+    assert sorted(str(v) for k, v in binds.items() if k.startswith("filter_knowledge")) == [
+        "kb-1",
+        "kb-2",
+    ]
+
+
+def test_entity_index_coverage_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.clients import entity_store
+    from app.main import app
+    from app.security.permissions import ROUTE_PERMISSIONS
+    from tests.support import AsgiTestClient
+
+    seen: list[list[str]] = []
+
+    async def count(self: Any, knowledge_base_ids: list[str]) -> int:
+        seen.append(list(knowledge_base_ids))
+        return 0
+
+    monkeypatch.setattr(entity_store.EntityStore, "count_entity_documents", count)
+    client = AsgiTestClient(app)
+
+    response = client.post(
+        "/api/search-answer-profiles/entity-index-coverage",
+        json={"knowledge_base_ids": ["kb-1", "kb-2"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"document_count": 0}
+    assert seen == [["kb-1", "kb-2"]]
+    assert ("POST", "/search-answer-profiles/entity-index-coverage") in ROUTE_PERMISSIONS
+    too_many = client.post(
+        "/api/search-answer-profiles/entity-index-coverage",
+        json={"knowledge_base_ids": [f"kb-{index}" for index in range(201)]},
+    )
+    assert too_many.status_code == 422

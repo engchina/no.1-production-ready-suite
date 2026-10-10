@@ -216,7 +216,11 @@ function PhaseCard({
       <dl className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {items.map((item) => {
           const name = t(item.label);
-          const canOpen = canOpenNavRoute(item.globalSettings.route, hasPermission);
+          // 全体の既定を変える画面の無い項目（実体の索引。#1388）はリンクを出さない。
+          const href =
+            item.globalSettings && canOpenNavRoute(item.globalSettings.route, hasPermission)
+              ? globalSettingsHref(item)
+              : null;
           return (
             <div
               key={item.field}
@@ -227,10 +231,10 @@ function PhaseCard({
               <dd className="mt-0.5 break-words text-sm font-medium text-fg">
                 {recipeConfigValueLabel(item, data.recipe_defaults)}
               </dd>
-              {canOpen ? (
+              {href ? (
                 <dd className="mt-1">
                   <Link
-                    to={globalSettingsHref(item)}
+                    to={href}
                     aria-label={t("settings.pipeline.flow.openSettingsAria", { name })}
                     className="inline-flex min-h-6 items-center text-xs font-medium text-accent-fg underline-offset-2 hover:underline"
                   >
@@ -259,7 +263,7 @@ function GateConnector({
   onChange: (checked: boolean) => void;
 }) {
   // hash の移動先（レシピの「グローバル設定を開く」。#528）は、このゲートの行。
-  const anchor = item.globalSettings.anchor ?? `pipeline-gate-${item.field}`;
+  const anchor = item.globalSettings?.anchor ?? `pipeline-gate-${item.field}`;
   const labelId = `${anchor}-label`;
   const hintId = `${anchor}-hint`;
   return (

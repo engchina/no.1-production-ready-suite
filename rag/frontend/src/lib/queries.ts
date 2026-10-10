@@ -165,6 +165,8 @@ export const queryKeys = {
     offset?: number;
   }) => ["search-answer-profiles", params] as const,
   searchAnswerProfile: (id: string) => ["search-answer-profiles", id] as const,
+  entityIndexCoverage: (knowledgeBaseIds: readonly string[]) =>
+    ["search-answer-profiles", "entity-index-coverage", ...knowledgeBaseIds] as const,
   conversations: (params: {
     search_answer_profile_id?: string;
     limit?: number;
@@ -1159,6 +1161,20 @@ export function useSearchAnswerProfile(id: string | null) {
     enabled: id != null,
     // URL の `?id=` の対象が無い（404）ときは再試行せず、すぐ「見つかりません」を出す。
     retry: retryUnlessNotFound,
+  });
+}
+
+/**
+ * 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。実体の 1 段の拡張を選んだときだけ引き、
+ * 0 件なら開閉の横に「文書レシピで実体の索引を有効にすると効きます」と案内する。
+ */
+export function useEntityIndexCoverage(knowledgeBaseIds: readonly string[], enabled: boolean) {
+  const ids = [...knowledgeBaseIds].sort();
+  return useQuery({
+    queryKey: queryKeys.entityIndexCoverage(ids),
+    queryFn: () => api.entityIndexCoverage(ids),
+    enabled: enabled && ids.length > 0,
+    staleTime: 30_000,
   });
 }
 
