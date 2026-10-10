@@ -14,6 +14,7 @@ from rag_engine.config import get_settings
 from rag_engine.generation.answer_records import is_entity_expansion_record
 from rag_engine.retrieval.entity_expansion import (
     ENTITY_EXPANSION_CHUNK_SEED_MIN_RELEVANCE,
+    ENTITY_EXPANSION_HOP_MIN_RELEVANCE,
     ENTITY_EXPANSION_MIN_RELEVANCE,
     entity_expansion_relevant,
     is_reserved_entity_expansion,
@@ -108,8 +109,12 @@ def test_low_relevance_entity_expansion_is_ordered_by_rerank(monkeypatch):
 def test_relevance_rule_keeps_expansion_when_rerank_did_not_run():
     assert ENTITY_EXPANSION_MIN_RELEVANCE == 0.24
     assert entity_expansion_relevant(None)
-    assert entity_expansion_relevant(0.24, {"seed": "question"})
-    assert not entity_expansion_relevant(0.23, {"seed": "question"})
+    assert entity_expansion_relevant(0.24, {"seed": "question", "hop": 0})
+    assert not entity_expansion_relevant(0.23, {"seed": "question", "hop": 0})
+    # 質問の実体の属性から 1 段でたどった根拠は、名寄せより少し高い下限。
+    assert ENTITY_EXPANSION_HOP_MIN_RELEVANCE == 0.28
+    assert not entity_expansion_relevant(0.27, {"seed": "question", "hop": 1})
+    assert entity_expansion_relevant(0.28, {"seed": "question", "hop": 1})
     # 上位の chunk の実体から足した根拠は、検索で当たった chunk と同じ程度の関連度を求める。
     assert ENTITY_EXPANSION_CHUNK_SEED_MIN_RELEVANCE == 0.45
     assert not entity_expansion_relevant(0.44, {"seed": "chunk"})
@@ -173,17 +178,17 @@ def test_context_does_not_swap_hit_parents_for_low_relevance_expansion():
     """評価の ``br-budget-change-window``（「予算管理システムの本番の変更は、いつ作業できますか？」）の形。
 
     当たった親は変更手順書（第 4 章 作業の時間帯）・運用要領・定期保守計画（共通の保守枠）。拡張の根拠は、
-    質問の「予算管理システム」の台帳の行（関連度 0.45）と、その行の担当部署・重要度から 1 段でたどった組織規程
-    （略号・承認者）と障害連絡規程（関連度 0.05〜0.08。質問の「いつ作業できるか」と関係しない）。修正前は 3 つの
-    拡張の親が枠の後ろの親と入れ替わり、定期保守計画の親（共通の保守枠）が文脈から落ちた。関連度の低い拡張の
-    親は入れ替えない。
+    質問の「予算管理システム」の台帳の行（関連度 0.3）と、その行の担当部署・重要度から 1 段でたどった組織規程
+    （略号・承認者。関連度 0.06〜0.08）と障害連絡規程（重要度 A から 1 段。実サービスの関連度 0.267。質問の
+    「いつ作業できるか」と関係しない）。修正前は 3 つの拡張の親が枠の後ろの親と入れ替わり、定期保守計画の親
+    （共通の保守枠）が文脈から落ちた。関連度の低い拡張の親は入れ替えない。
     """
     hits = [_child("change-ch4", score=0.8), _child("ops-ch9", score=0.7),
             _child("maintenance-common", score=0.6), _child("ops-ch43", score=0.5), _child("ops-ch59", score=0.45)]
     expansions = [_child("ledger-sys108", expansion=True, score=0.3),
                   _child("org-codes", expansion=True, score=0.08),
                   _child("org-approvers", expansion=True, score=0.06),
-                  _child("incident-severity-a", expansion=True, score=0.05)]
+                  _child("incident-severity-a", expansion=True, score=0.267)]
     names = [record.id for record in [*hits, *expansions]]
     parents = [_parent(name) for name in names]
 
