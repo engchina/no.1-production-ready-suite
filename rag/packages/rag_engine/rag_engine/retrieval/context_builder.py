@@ -11,6 +11,7 @@ from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL
 from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
 from rag_engine.retrieval.task_contract import task_contract
 from rag_engine.retrieval.evidence_selection import evidence_relevance
+from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.knowledge.document_metadata import document_context_text
 from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
 from rag_engine.parsing.decorative_pictures import (
@@ -323,6 +324,9 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         if _child_role_priority(role) < _child_role_priority(existing.role):
             existing.role = role
             existing.reason = reason
+            # 先に前後の文脈として入った chunk が起点になったときは、rerank の結果（関連度）を持つ候補の
+            # record に替える（同じ親の別の起点の前後の文脈に先に入ると、関連度が失われていた。#1390）。
+            existing.record = child
         if retrieval_rank is not None and (
             existing.retrieval_rank is None or retrieval_rank < existing.retrieval_rank
         ):
@@ -444,14 +448,12 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
     return _context_bundle_from_parent_evidence(evidence_tree, max_chars=request.max_chars)
 
 
-def _is_entity_expansion(record: Any) -> bool:
-    metadata = getattr(record, "metadata", None)
-    return isinstance(metadata, dict) and isinstance(metadata.get("entity_expansion"), dict)
-
-
 def _group_has_entity_expansion(group: _ParentEvidenceBuilder) -> bool:
-    """実体の 1 段の拡張の根拠（#1362）を起点に持つ親か。"""
-    return any(child.role == "retrieved_anchor" and _is_entity_expansion(child.record) for child in group.children.values())
+    """枠を確保する実体の 1 段の拡張の根拠（#1362。関連度が下限以上。#1390）を起点に持つ親か。"""
+    return any(
+        child.role == "retrieved_anchor" and is_reserved_entity_expansion(child.record)
+        for child in group.children.values()
+    )
 
 
 def _reserve_entity_expansion_groups(
@@ -459,9 +461,11 @@ def _reserve_entity_expansion_groups(
 ) -> list[_ParentEvidenceBuilder]:
     """context の親の枠（``max_records``）に、実体の 1 段の拡張の根拠の親を確保する（#1362）。
 
-    拡張の根拠（台帳の行・略号の表）は rerank の分数を持たないため、分数の順で切ると落ちる。枠の外に落ちた
-    拡張の親を、枠の後ろ（拡張でない親の分数の低い側）と入れ替える。入れ替えるのは枠の半分まで（検索で
-    当たった主根拠を半分より多くは落とさない）。拡張の根拠が無ければ今までと同じ。
+    拡張の根拠（台帳の行・略号の表）は質問の語と重ならず rerank の分数が低いため、分数の順で切ると落ちる。枠の
+    外に落ちた拡張の親を、枠の後ろ（拡張でない親の分数の低い側）と入れ替える。入れ替えるのは枠の半分まで（検索
+    で当たった主根拠を半分より多くは落とさない）。確保するのは関連度が下限（``ENTITY_EXPANSION_MIN_RELEVANCE``）
+    以上の拡張の根拠の親だけで、質問と関係の薄い属性の chunk の親で、検索で当たった親（前後の文脈・章の参照の先
+    を持つ）を入れ替えない（#1390）。拡張の根拠が無ければ今までと同じ。
     """
     primary = list(ranked_groups[:max_records])
     reserved = [group for group in ranked_groups[max_records:] if _group_has_entity_expansion(group)]

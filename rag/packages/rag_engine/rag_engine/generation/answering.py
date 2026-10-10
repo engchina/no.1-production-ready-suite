@@ -105,6 +105,7 @@ from rag_engine.generation.answer_records import (
     _bool_metadata_value,
     _chunk_answer_record,
     _context_neighbors,
+    _keep_entity_expansion_positions,
     _merge_text_rerank_candidates,
     _preferred_chunk_records,
     _records_by_rerank_ranks,
@@ -114,7 +115,7 @@ from rag_engine.generation.answer_records import (
     _search_terms_for_queries,
     _split_text_rerank_candidates,
     _stored_chunk_answer_record,
-    is_entity_expansion_record,
+    is_reserved_entity_expansion,
     load_answer_records,
     preferred_records,
     rank_records,
@@ -396,6 +397,10 @@ def _rerank_records(
         settings,
         candidate_indices=rerankable_indices,
     )
+    # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
+    protected_candidates, reranked_candidates = _keep_entity_expansion_positions(
+        protected_candidates, reranked_candidates
+    )
     return _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
 
 
@@ -533,9 +538,10 @@ def select_documents(ranked_children: Sequence[AnswerRecord], settings: Settings
     for key in sorted(scores, key=lambda k: -scores[k]):
         entry = {"source": sources[key], "score": round(scores[key], 4), "hits": hits[key]}
         trace["deferred" if key in excluded else "selected"].append(entry)
-    # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。
-    kept = [r for r in ranked_children if document_context_key(r) not in excluded or is_entity_expansion_record(r)]
-    deferred = [r for r in ranked_children if document_context_key(r) in excluded and not is_entity_expansion_record(r)]
+    # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。関連度が
+    # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
+    kept = [r for r in ranked_children if document_context_key(r) not in excluded or is_reserved_entity_expansion(r)]
+    deferred = [r for r in ranked_children if document_context_key(r) in excluded and not is_reserved_entity_expansion(r)]
     if step is not None:
         step.add(f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
                  + (f"（{'、'.join(e['source'] for e in trace['deferred'])}）" if excluded else ""))

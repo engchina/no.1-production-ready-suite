@@ -56,6 +56,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
@@ -77,6 +78,7 @@ from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
     reference_targets,
+    section_path_within,
     split_section_path,
 )
 from app.rag.document_crop import (
@@ -1292,6 +1294,12 @@ _RANKED_ROLES = frozenset({RETRIEVED_ANCHOR_ROLE, ENTITY_EXPANSION_ROLE})
 
 # evidence_limit のうち、実体の 1 段の拡張で足した根拠に確保する割合（#1362）。
 ENTITY_EXPANSION_LIMIT_SHARE = 0.3
+# evidence_limit のうち、検索で当たった上位の chunk の前後の文脈・章の参照の先に確保する割合
+# （#1390）。
+LINKED_CONTEXT_LIMIT_SHARE = 0.3
+# 前後の文脈・章の参照の先をたどる、検索で当たった上位の chunk の数（回答の検索で参照をたどる起点
+# と同じ 5 件。``answer_engine._REFERENCE_SOURCE_ANCHORS``）。
+LINKED_CONTEXT_ANCHORS = 5
 
 
 def _is_entity_expansion(chunk: RetrievedChunk) -> bool:
@@ -1302,10 +1310,103 @@ def _is_entity_expansion(chunk: RetrievedChunk) -> bool:
     )
 
 
+def _rerank_score(chunk: RetrievedChunk) -> float | None:
+    if chunk.rerank_score is not None:
+        return chunk.rerank_score
+    return _float_or_none(chunk.metadata.get("rerank_score"))
+
+
+def _is_reserved_entity_expansion(chunk: RetrievedChunk, *, reranked: bool) -> bool:
+    """evidence_limit の内に枠を確保する拡張の根拠か（#1362・#1390）。
+
+    回答の文脈の枠（rag_engine の ``is_reserved_entity_expansion``）と同じ規則で、rerank の関連度
+    が起点の種類（質問の実体 / 上位の chunk の実体）の下限以上のもの。質問と関係の薄い属性の
+    chunk（別のシステムの台帳の行・質問と別の章）で枠を使わない。関連度の無い拡張の根拠は、
+    rerank を実行した検索（``reranked``）では起点にならず前後の文脈に入ったもの（同じ親の確保
+    する根拠があればその文脈として確保する）で、rerank を実行しなかった検索では確保する（#1362
+    と同じ）。
+    """
+    if not _is_entity_expansion(chunk):
+        return False
+    score = _rerank_score(chunk)
+    if score is None:
+        return not reranked
+    return entity_expansion_relevant(score, chunk.metadata.get("entity_expansion"))
+
+
 def _evidence_group(chunk: RetrievedChunk) -> tuple[str, str] | None:
     """根拠の親のかたまり（文書と chunk_group_id）。無ければ None。"""
     group = _metadata_str(chunk.metadata, "chunk_group_id")
     return (chunk.document_id, group) if group else None
+
+
+def _same_version(left: RetrievedChunk, right: RetrievedChunk) -> bool:
+    """同じ文書の同じ版（chunk_set）の chunk か（版の分からない chunk は文書だけで比べる）。"""
+    if left.document_id != right.document_id:
+        return False
+    left_set = _metadata_str(left.metadata, "chunk_set_id")
+    right_set = _metadata_str(right.metadata, "chunk_set_id")
+    return left_set is None or right_set is None or left_set == right_set
+
+
+def _same_document_targets(chunk: RetrievedChunk) -> list[str]:
+    """chunk が本文で参照する、同じ文書の節（見出しの列。#1280・#1382）。"""
+    return [
+        target.section_path
+        for target in reference_targets(chunk.metadata)
+        if target.document_title is None and target.section_path
+    ]
+
+
+def _references_between(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
+    """当たった chunk と前後の文脈が章の参照でつながるか（#1390）。
+
+    当たった chunk が参照する節の chunk（「第 2 章の共通の保守枠で保守します」→ 第 2 章）、
+    当たった chunk の節を参照する chunk（「連絡の手段は第 3 章を参照」→ 当たった第 3 章）、
+    回答の検索が当たった chunk の参照先として足した chunk（``reference_from_chunk_id``。他の
+    文書の参照も含む）。
+    """
+    if _metadata_str(context.metadata, REFERENCE_FROM_KEY) == hit.chunk_id:
+        return True
+    if not _same_version(hit, context):
+        return False
+    context_path = context.metadata.get("section_path")
+    hit_path = hit.metadata.get("section_path")
+    outgoing = any(section_path_within(context_path, path) for path in _same_document_targets(hit))
+    return outgoing or any(
+        section_path_within(hit_path, path) for path in _same_document_targets(context)
+    )
+
+
+def _adjacent(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
+    """同じ文書の同じ版で、当たった chunk のすぐ前・すぐ後の chunk か（chunk の番号の差が 1）。"""
+    if not _same_version(hit, context):
+        return False
+    left = _metadata_int(hit.metadata, "chunk_index")
+    right = _metadata_int(context.metadata, "chunk_index")
+    return left is not None and right is not None and abs(left - right) == 1
+
+
+def _linked_contexts(ordered: Sequence[RetrievedChunk], tiers: Sequence[int]) -> list[int]:
+    """検索で当たった上位の chunk の章の参照の先と前後の文脈（``ordered`` の位置。#1390）。
+
+    起点は当たった chunk（回答に使った根拠と、関連度の順位を持つ根拠。拡張の根拠は除く）の上位
+    ``LINKED_CONTEXT_ANCHORS`` 件。確保する順は、先に章の参照でつながる chunk（起点の順）、次に
+    すぐ前・すぐ後の chunk（起点の順）。対象は前後の文脈（3 の段）の根拠だけ。
+    """
+    hits = [
+        chunk
+        for chunk, tier in zip(ordered, tiers, strict=True)
+        if tier < 2 and not _is_entity_expansion(chunk)
+    ][:LINKED_CONTEXT_ANCHORS]
+    contexts = [index for index, tier in enumerate(tiers) if tier == 2]
+    linked: list[int] = []
+    for related in (_references_between, _adjacent):
+        for hit in hits:
+            linked.extend(
+                index for index in contexts if index not in linked and related(hit, ordered[index])
+            )
+    return linked
 
 
 def mcp_evidence_order(
@@ -1323,12 +1424,17 @@ def mcp_evidence_order(
        ``evidence_retrieval_rank``）の順で、順位が無ければ citations の順。
     3. 前後の文脈（neighbor_context / same_page_context / parent_context など）。citations の順。
 
-    ``limit``（evidence_limit）を渡すと、実体の 1 段の拡張で足した根拠（台帳の行・略号の表。親の
-    文脈の役割になったものも含む）を、上限の ``ENTITY_EXPANSION_LIMIT_SHARE`` の割合（最低 1 件）
-    まで上限の内に入れる（#1362）。拡張の根拠と同じ親のかたまり（文書と ``chunk_group_id``）の前後の
-    文脈（略号の表の続きなど）も、拡張の根拠の後に同じ枠で入れる。置く位置は 2 の検索で当たった
-    chunk の後・3 の前の文脈の前で、上限の内に収まらないときは上限の末尾。すでに上限の内にある
-    根拠は動かさない。
+    ``limit``（evidence_limit）を渡すと、上限の内に次の枠をこの順に確保する（すでに上限の内の 2 の
+    根拠は動かさない。確保した根拠は 2 の後・3 の前に置き、上限の内に収まらないときは上限の末尾に
+    置く）。
+
+    - 検索で当たった上位の chunk の章の参照の先・すぐ前とすぐ後の chunk（3 の段の根拠）を、上限の
+      ``LINKED_CONTEXT_LIMIT_SHARE`` の割合（最低 1 件）まで（#1390。``_linked_contexts``）。
+    - 実体の 1 段の拡張で足した根拠（台帳の行・略号の表。親の文脈の役割になったものも含む）のうち、
+      rerank の関連度が下限以上のもの（``_is_reserved_entity_expansion``）と、その根拠と同じ親の
+      かたまり（文書と ``chunk_group_id``）の前後の文脈（略号の表の続きなど）を、上限の
+      ``ENTITY_EXPANSION_LIMIT_SHARE`` の割合（最低 1 件）まで（#1362）。関連度の低い拡張の根拠は
+      確保せず、2 の関連度の順位のまま。
     """
 
     def key(item: tuple[int, RetrievedChunk]) -> tuple[int, int, int]:
@@ -1346,33 +1452,51 @@ def mcp_evidence_order(
     ordered = [chunk for _, chunk in keyed]
     if limit is None or limit <= 0 or len(ordered) <= limit:
         return ordered
-    expansions = [index for index, chunk in enumerate(ordered) if _is_entity_expansion(chunk)]
-    if not expansions:
-        return ordered
+    tiers = [key((0, chunk))[0] for chunk in ordered]
+    # rerank を実行した検索か（関連度を持つ根拠がある）。
+    reranked = any(_rerank_score(chunk) is not None for chunk in ordered)
+    expansions = [
+        index
+        for index, chunk in enumerate(ordered)
+        if _is_reserved_entity_expansion(chunk, reranked=reranked)
+    ]
     # 拡張の根拠と同じ親のかたまりの前後の文脈（略号の表の続きなど）も、拡張の根拠の後に確保する。
     groups = {_evidence_group(ordered[index]) for index in expansions} - {None}
     expansion_set = set(expansions)
     contexts = [
         index
         for index, chunk in enumerate(ordered)
-        if index not in expansion_set
-        and key((0, chunk))[0] == 2
-        and _evidence_group(chunk) in groups
+        if index not in expansion_set and tiers[index] == 2 and _evidence_group(chunk) in groups
     ]
-    reserved = [*expansions, *contexts]
-    quota = min(len(reserved), max(1, math.ceil(limit * ENTITY_EXPANSION_LIMIT_SHARE)))
-    inside = [index for index in reserved if index < limit]
-    moved = [index for index in reserved if index >= limit][: max(0, quota - len(inside))]
-    if not moved:
+    # 確保する根拠（上限の内の 2 の根拠はその位置のまま、それ以外は 2 の後へ移す）。
+    fixed: set[int] = set()
+    moved: list[int] = []
+    for reserved, share in (
+        (_linked_contexts(ordered, tiers), LINKED_CONTEXT_LIMIT_SHARE),
+        ([*expansions, *contexts], ENTITY_EXPANSION_LIMIT_SHARE),
+    ):
+        candidates = [index for index in reserved if index not in fixed and index not in moved]
+        quota = min(len(candidates), max(1, math.ceil(limit * share)))
+        for index in candidates[:quota]:
+            if index < limit and tiers[index] < 2:
+                fixed.add(index)
+            else:
+                moved.append(index)
+    if not any(index >= limit for index in moved):
         return ordered
-    moving = {id(ordered[index]) for index in moved}
-    rest = [chunk for chunk in ordered if id(chunk) not in moving]
-    # 2 の終わり（前後の文脈の始まり）。前後の文脈が無ければ末尾。
-    ranked_end = next(
-        (index for index, chunk in enumerate(rest) if key((0, chunk))[0] == 2), len(rest)
-    )
-    position = min(ranked_end, limit - len(moved))
-    return [*rest[:position], *(ordered[index] for index in moved), *rest[position:]]
+    # 上限の内: 確保しない根拠を上限の残りの数だけ元の順で残し、2 の段（と上限の内の確保した 2 の
+    # 根拠）、確保して移す根拠、残した 3 の段の順に並べる。残りは元の順で後ろへ。
+    selected = fixed | set(moved)
+    others = [index for index in range(len(ordered)) if index not in selected]
+    kept = set(others[: max(0, limit - len(selected))])
+    head = [
+        index
+        for index in range(len(ordered))
+        if (index in fixed or index in kept) and tiers[index] < 2
+    ]
+    tail = [index for index in others if index in kept and tiers[index] == 2]
+    after = [index for index in others if index not in kept]
+    return [ordered[index] for index in (*head, *moved, *tail, *after)]
 
 
 def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
