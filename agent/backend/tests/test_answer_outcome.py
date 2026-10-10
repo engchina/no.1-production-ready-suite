@@ -323,6 +323,21 @@ def test_only_unsupported_or_contradicted_withheld_paragraphs_are_a_gap() -> Non
         assert (content["value"], content["signals"]) == ("conditional", ["withheld_claims"])
 
 
+def test_answer_kept_with_unresolved_citations_is_conditional() -> None:
+    # #1391（br-document-portal-retention）: 出典を照合できない段落だけで本文が空になるときは、
+    # 本文を残して確かめきれなかった点を示す。拒答（insufficient_evidence）にせず、条件付きの
+    # 回答にする。
+    fact = "ドキュメントポータルの機密区分は「社内限り」で、データは **3 年間** 保管します。"
+    conclusion = "したがって、ドキュメントポータルのデータの保管期間は **3 年** です。"
+    answer = f"{fact}\n\n{conclusion}"
+    validation = _validated(
+        answer, _claim(fact, "citation_error"), _claim(conclusion, "citation_error")
+    )
+    assert validation["withheld"] == {"claims": 0, "findings": 0, "all": False, "unverified": 2}
+    content = answer_outcome(answer, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["unverified_section"])
+
+
 def test_withheld_unassessed_claims_are_not_counted_as_claims() -> None:
     # 外した段落（unassessed も）は利用者に見えないので主張に数えない（拒答のまま）。
     absence = "パスワードの文字数要件は、資料に記載がありません。"

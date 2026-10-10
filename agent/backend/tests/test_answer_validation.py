@@ -26,6 +26,7 @@ from pytest import MonkeyPatch
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import non_claim_passages, passage_kind
 from app.features.agent.answer_validation import (
+    UNVERIFIED_KEPT_INTRO,
     connection_check_inputs,
     merge_results,
     publish_answer,
@@ -1071,6 +1072,87 @@ def test_headings_and_citations_left_alone_are_not_published() -> None:
         {step},
     )
     assert kept == f"{TRIAL_FACT}\n\n## 注意\n- 元に戻せません。"
+
+
+# #1362 の評価の Run の形（#1391）。br-document-portal-retention: 台帳と規程を合わせた結論を、
+# 検証のモデルは「根拠で裏付けられる」と判定したが、ID を照合できず `citation_error` になった。
+PORTAL_RETENTION_LEDGER = (
+    "- システム台帳 《system‑ledger.xlsx》: 「機密区分: 社内限り」【record_codes.values[1]】"
+)
+PORTAL_RETENTION_ANSWER = "\n".join(
+    [
+        "ドキュメントポータル（SYS‑105）の機密区分は「社内限り」（システム台帳）であり、"
+        "機密区分「社内限り」のデータは **3 年間** 保管することが定められています。",
+        "",
+        PORTAL_RETENTION_LEDGER,
+        "- データ保管規程 《data‑retention‑rules.pdf》: 「社内限りのデータは 3 年間保管します」"
+        "【evidence_id af257c62c85d45cd9211a098fdca6fb4:16f11273eede4c4f508dcc4453985fffa…:1】",
+        "",
+        "したがって、ドキュメントポータルのデータの保管期間は **3 年** です。",
+    ]
+)
+# 「未登録の原文ID。」は RAG が付ける理由の前置き。理由の文は根拠を認めている。
+UNRESOLVED_REASON = "未登録の原文ID。台帳と規程で主張は根拠で裏付けられます。"
+
+
+def _portal_retention_claims(first_status: str = "citation_error") -> list[dict[str, Any]]:
+    """評価の Run の判定（台帳の行は通り、ほかの 3 段落が `citation_error`）。
+
+    最初の段落の判定だけ変えられる。
+    """
+    paragraphs = [line for line in PORTAL_RETENTION_ANSWER.split("\n") if line]
+    statuses = [first_status, "supported", "citation_error", "citation_error"]
+    return [
+        _claim(line, status, UNRESOLVED_REASON)
+        for line, status in zip(paragraphs, statuses, strict=True)
+    ]
+
+
+def test_answer_is_kept_when_only_unresolved_citations_would_empty_it() -> None:
+    """根拠で否定された段落が無いのに、出典を照合できない段落を外すと本文が空になるときは、
+    本文を残して確かめきれなかった点を示す（#1391。評価では本文が「確かめられた内容は
+    ありませんでした」だけになった）。"""
+    result = _verdict(*_portal_retention_claims())
+    blocking = {
+        claim["answer_quote"] for claim in result["claims"] if claim["status"] == "citation_error"
+    }
+    assert withhold_paragraphs(PORTAL_RETENTION_ANSWER, blocking) == ""
+
+    published, withheld = publish_answer(PORTAL_RETENTION_ANSWER, result)
+
+    body, section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    assert body == PORTAL_RETENTION_ANSWER
+    assert section.startswith(UNVERIFIED_KEPT_INTRO)
+    assert "- 出典を確かめられない: 「したがって、ドキュメントポータル" in section
+    assert withheld == {"claims": 0, "findings": 0, "all": False, "unverified": 3}
+    # 確かめが終わらない段落（見出しなど）が混じっても同じ（da-trial-account-setup の
+    # 手順の見出し）。
+    heading = "1. **検証用アカウントを登録**"
+    step = "- 管理画面の「利用者」メニューを開き「追加」ボタンを押す。"
+    published, withheld = publish_answer(
+        f"{heading}\n{step}",
+        _verdict(_claim(heading, "unassessed", "見出し。"), _claim(step, "citation_error", "")),
+    )
+    assert published.startswith(f"{heading}\n{step}\n\n**確かめられていない点**")
+    assert withheld["unverified"] == 2 and withheld["all"] is False
+
+
+def test_refuted_paragraphs_still_withhold_the_answer_with_unresolved_citations() -> None:
+    """根拠で否定された段落（裏付けが無い・矛盾）があれば、今までどおり外す（#1391）。"""
+    claims = _portal_retention_claims("unsupported")
+    published, withheld = publish_answer(PORTAL_RETENTION_ANSWER, _verdict(*claims))
+    body, _section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    assert body == "根拠で確かめられた内容はありませんでした。"
+    assert withheld == {"claims": 3, "findings": 0, "all": True}
+    # 本文が残る（外したのが一部の段落だけ）ときは、出典を照合できない段落も今までどおり外す。
+    fact = "検証用アカウントの有効期限は最長 30 日です。"
+    step = "- 管理画面の「利用者」メニューを開き「追加」ボタンを押す。"
+    published, withheld = publish_answer(
+        f"{fact}\n\n{step}",
+        _verdict(_claim(fact, "supported"), _claim(step, "citation_error", "")),
+    )
+    assert published.startswith(f"{fact}\n\n**確かめられていない点**")
+    assert withheld == {"claims": 1, "findings": 0, "all": False}
 
 
 def test_clarification_only_answer_without_evidence_has_no_notice(
