@@ -53,6 +53,7 @@ from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_RANK_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
@@ -854,7 +855,8 @@ class AnswerEngine:
                     logger.warning("reference target load failed", exc_info=True)
                     continue
                 fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen]
-                for chunk in fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]:
+                selected = fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]
+                for rank, chunk in enumerate(selected, start=1):
                     seen.add(chunk.chunk_id)
                     # 下位の候補・前後の文脈として読んだ chunk にも、参照の起点の印を付ける。
                     marked = state.chunks.get(chunk.chunk_id, chunk)
@@ -865,6 +867,7 @@ class AnswerEngine:
                                     **marked.metadata,
                                     REFERENCE_FROM_KEY: anchor.chunk_id,
                                     REFERENCE_LABEL_KEY: target.label,
+                                    REFERENCE_RANK_KEY: rank,
                                 }
                             }
                         )
@@ -1110,7 +1113,7 @@ class AnswerEngine:
         try:
             ranked = await self._genai.rerank(
                 request.query,
-                [engine_search_text(row.metadata) or row.text for row in rows],
+                [_reference_rerank_document(row) for row in rows],
                 len(rows),
             )
         except Exception:  # noqa: BLE001 - 並べ替えは補助。検索の順のまま足す。
@@ -1413,6 +1416,17 @@ def _document_run_id(document_id: str) -> str:
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:120]
+
+
+def _reference_rerank_document(chunk: RetrievedChunk) -> str:
+    """文書名だけの参照の参照先を rerank にかける本文(見出しの列を先に置く。#1400)。
+
+    rag_engine の rerank(``_rerank_document``)と同じく見出しを先頭に置く。検索用の本文
+    (``engine_search_text``)は先頭に文書名・ページの見出しが付き、同じ文書の chunk の関連度の差が
+    小さくなる(dev の評価の KB で、定期保守計画の 4 つの章がどれも 0.85〜0.88 だった)。
+    """
+    path = str(chunk.metadata.get("section_path") or "").strip()
+    return f"見出し: {path}\n\n{chunk.text}" if path else chunk.text
 
 
 def _document_name_targets(

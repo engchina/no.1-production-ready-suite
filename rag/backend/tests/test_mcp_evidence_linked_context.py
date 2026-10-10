@@ -17,7 +17,7 @@ from app.mcp.tools import (
     LINKED_CONTEXT_LIMIT_SHARE,
     mcp_evidence_order,
 )
-from app.rag.cross_references import REFERENCE_FROM_KEY, REFERENCE_LABEL_KEY
+from app.rag.cross_references import REFERENCE_FROM_KEY, REFERENCE_LABEL_KEY, REFERENCE_RANK_KEY
 from app.rag.entity_expansion import ENTITY_EXPANSION_KEY, ENTITY_EXPANSION_ROLE
 from app.schemas.search import RetrievedChunk
 
@@ -350,6 +350,7 @@ def _named(
     text: str = "",
     rank: int | None = None,
     reference_from: str | None = None,
+    reference_rank: int = 1,
 ) -> RetrievedChunk:
     """文書名・見出しの列・本文を持つ根拠（文書名の参照の照合に使う。#1400）。"""
     document = file_name.rsplit(".", 1)[0]
@@ -365,6 +366,7 @@ def _named(
     if reference_from is not None:
         metadata[REFERENCE_FROM_KEY] = reference_from
         metadata[REFERENCE_LABEL_KEY] = "定期保守計画"
+        metadata[REFERENCE_RANK_KEY] = reference_rank
     return RetrievedChunk(
         document_id=document,
         chunk_id=chunk_id,
@@ -380,8 +382,9 @@ def _sales_change_window_citations() -> list[RetrievedChunk]:
 
     当たった 3 位は変更手順書の第 4 章（「時間帯は定期保守計画で確かめます」）。回答の検索は、
     運用要領の第 1 章（前後の文脈で、当たった上位ではない）の文書名の参照から、定期保守計画の
-    質問に関連の高い chunk（第 2 章 共通の保守枠と第 3 章）を足した。第 2 章は同じ親の前後の文脈、
-    第 3 章は関連度の順位 47 位で、どちらも上限 20 の外にあった（#1400。修正前は 93 位）。
+    質問に関連の高い chunk（1 件目が第 2 章 共通の保守枠、2 件目が第 3 章）を足した。第 2 章は
+    同じ親の前後の文脈、第 3 章は関連度の順位 47 位で、どちらも上限 20 の外にあった（#1400。
+    修正前の第 2 章は 93 位）。
     """
     plan = "定期保守計画 2026年度"
     origin = "ops-ch1"
@@ -441,6 +444,7 @@ def _sales_change_window_citations() -> list[RetrievedChunk]:
             index=3,
             rank=47,
             reference_from=origin,
+            reference_rank=2,
         ),
     ]
     # 参照先として足したが、当たった chunk が文書名で参照しない文書（システム台帳の行）。
@@ -463,7 +467,8 @@ def test_sales_change_window_reserves_the_document_named_by_a_hit() -> None:
     head = _ids(ordered[:20])
 
     assert "mt-ch2-common" in head
-    assert "mt-ch3-change" in head
+    # 参照先 1 つにつき最も関連の高い 1 件だけを確保する（2 件目の第 3 章は関連度の順位のまま）。
+    assert "mt-ch3-change" not in head
     # 当たった上位の chunk は動かない。
     assert head[:3] == ["ops-ch54", "ops-ch20", "change-ch4"]
     # 参照先として足していない章（質問に関連の高い chunk として選ばれなかった）は確保しない。
@@ -484,4 +489,3 @@ def test_document_name_link_needs_the_name_in_the_hit() -> None:
     head = _ids(mcp_evidence_order(citations, 20)[:20])
 
     assert "mt-ch2-common" not in head
-    assert "mt-ch3-change" not in head

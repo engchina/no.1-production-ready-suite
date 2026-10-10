@@ -40,6 +40,8 @@ REFERENCE_TARGETS_KEY = "reference_targets_json"
 # 回答で参照先として足した chunk に付ける印(起点の chunk_id と参照の表記)。
 REFERENCE_FROM_KEY = "reference_from_chunk_id"
 REFERENCE_LABEL_KEY = "reference_label"
+# 参照先 1 つの中で足した順(1 始まり。文書名だけの参照では質問に関連の高い順。#1400)。
+REFERENCE_RANK_KEY = "reference_rank"
 # 1 つの chunk から残す参照の数の上限(目次や索引のような参照だらけの chunk を抑える)。
 MAX_REFERENCES_PER_CHUNK = 6
 # 見出しの列の区切り(chunking が「 > 」でつないで保存する)。
@@ -893,6 +895,7 @@ __all__ = [
     "MIN_DOCUMENT_NAME_CHARS",
     "REFERENCE_FROM_KEY",
     "REFERENCE_LABEL_KEY",
+    "REFERENCE_RANK_KEY",
     "REFERENCE_TARGETS_KEY",
     "ReferenceSpec",
     "ReferenceTarget",

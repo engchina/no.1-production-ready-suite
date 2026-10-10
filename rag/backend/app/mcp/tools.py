@@ -77,6 +77,7 @@ from app.rag.answer_validation import (
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_RANK_KEY,
     document_name_match,
     document_name_references,
     reference_targets,
@@ -1378,11 +1379,14 @@ def _referenced_by_name(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
 
     参照先として足した chunk（``reference_from_chunk_id``）は、回答の検索が参照先の文書の中から
     質問に関連の高い順に選んだもの。起点が別の候補でも、文書名で参照する当たった chunk の参照の
-    先として確保する（参照先の文書の前置き・質問と関係の無い節は確保しない）。文書は文書名と
-    タイトル（見出しの列の先頭）で照合する（``document_name_match``）。
+    先として確保する。確保するのは参照先 1 つにつき最も関連の高い 1 件（``reference_rank`` が 1）
+    だけ（2 件目は質問と関係の薄い節・台帳の別の行が多く、当たった chunk を上限の外へ押し出す）。
+    文書は文書名とタイトル（見出しの列の先頭）で照合する（``document_name_match``）。
     """
-    if context.document_id == hit.document_id or not _metadata_str(
-        context.metadata, REFERENCE_FROM_KEY
+    if (
+        context.document_id == hit.document_id
+        or not _metadata_str(context.metadata, REFERENCE_FROM_KEY)
+        or _metadata_int(context.metadata, REFERENCE_RANK_KEY) != 1
     ):
         return False
     root = split_section_path(context.metadata.get("section_path"))[:1]

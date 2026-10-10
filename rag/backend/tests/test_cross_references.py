@@ -16,6 +16,7 @@ from app.rag.cross_references import (
     MAX_REFERENCES_PER_CHUNK,
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_RANK_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceSpec,
     ReferenceTarget,
@@ -1085,6 +1086,9 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     added = state.chunks["doc-plan:cs-plan:1"]
     assert added.metadata[REFERENCE_FROM_KEY] == window.chunk_id
     assert added.metadata[REFERENCE_LABEL_KEY] == "定期保守計画"
+    # 参照先の中の関連の順(MCP の根拠の並びは 1 件目だけを確保する)。
+    assert added.metadata[REFERENCE_RANK_KEY] == 1
+    assert state.chunks["doc-plan:cs-plan:0"].metadata[REFERENCE_RANK_KEY] == 2
     assert {item["kind"] for item in state.reference_expansions.values()} == {"document"}
     expected_resolved_at = "ingest" if resolved_at == "ingest" else "query"
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {
@@ -1102,7 +1106,12 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     ]
     ((rerank_query, documents),) = genai.rerank_calls
     assert rerank_query == case["query"]
-    assert len(documents) == 3
+    # 見出しの列を先に置いた本文で並べる(rag_engine の rerank と同じ)。
+    assert [document.split("\n", 1)[0] for document in documents] == [
+        "見出し: 定期保守計画 2026年度 > 第 1 章 個別の保守枠",
+        "見出し: 定期保守計画 2026年度 > 第 2 章 共通の保守枠",
+        "見出し: 定期保守計画 2026年度 > 第 3 章 保守枠の変更",
+    ]
 
 
 async def test_document_name_reference_outside_scope_adds_nothing() -> None:
