@@ -22,6 +22,12 @@ LLM は使わない（チャンクごとに LLM で事件を抜き出す取込�
     ``通称「情シス」`` は別名。
   - ID の形（``SYS-104``）・英字の名前（``HRM``・``Document Portal``）・語尾がシステム / ポータル
     / 部 / 課 / 室 / 本部の語・かぎ括弧の語（2 文字以上）を「言及」（``mention``）にする。
+- **見出し・列挙のラベル**（本文の「語＋1 文字の英字か 1〜2 桁の数字」。``原因 A``・``手順 1``・
+  ``案 B``・``Step 2``）は、その文書の中だけで使う記号のことが多いため、それだけでは実体にしない。別
+  名の種類を ``label`` にして保存し、検索のときは、別の文書が同じ別名をラベル以外の種類（表の値・定
+  義の形・ID や名前）で持つとき（台帳の「重要度: A」と障害連絡規程の「重要度 A: …」）だけ、拡張の起
+  点・経路に使う（#1393。``app.clients.entity_store``）。表の値（``重要度A``）・定義の形・1 文字の
+  部署の略号・ID・正式名は従来どおり実体にする。
 
 名寄せは ``entity_key``（NFKC・波線とダッシュの同一視・大文字小文字と空白の無視。全文検索の索引と
 同じ ``fold_text``。#1336・#1350）でそろえた別名の表で行う。``ＨＲＭ`` と ``HRM``、
@@ -60,6 +66,9 @@ SHEET_RECORD_CONTENT_KIND = "record"
 # 実体の種類（同じ名前が複数の種類で出たときは強いほうにする）。record: 表の行、defined:本文の定義
 # の形、value: 表の属性の列の値、term: 本文の言及・行の先頭の名前。
 _TYPE_PRIORITY: dict[str, int] = {"record": 0, "defined": 1, "value": 2, "term": 3}
+# 本文の見出し・列挙のラベル（「原因 A」）の別名の種類（#1393）。検索のときは、別の文書がこの別名を
+# ラベル以外の種類で持つときだけ拡張に使う（``app.clients.entity_store``）。
+ALIAS_KIND_LABEL = "label"
 
 # 1 つの chunk_set から作る実体・1 つの実体の別名・1 つの chunk の言及の上限（巨大な文書の安全弁）。
 MAX_ENTITIES_PER_CHUNK_SET = 5000
@@ -125,6 +134,11 @@ _ENTITY_SHAPED = (
     re.compile(rf"^[{_CJK}]{{1,16}}(?:システム|ポータル|本部|部|課|室|センター)$"),
 )
 _TRAILING_PAREN = re.compile(r"\((?P<inner>[^)]{1,20})\)$")
+# 見出し・列挙のラベルの形（「原因 A」「手順 1」「案 B」「Step 2」。#1393）。語（かな・漢字 8 文字
+# まで、または頭文字だけ大文字の英単語）＋1 文字の英字か 1〜2 桁の数字。``fold_text`` でそろえた表記
+# に当てる（全角の「原因　Ａ」「手順１」も同じ）。英字の略語（「HRM」）・ID（「SYS-104」）・2 文字以
+# 上の英字の続く名前（「経費 Portal」）は当たらない。
+_LABEL_SHAPED = re.compile(rf"^(?:[{_CJK}]{{1,8}} ?|[A-Z][a-z]{{1,11}} )(?:[A-Za-z]|[0-9]{{1,2}})$")
 # 文書の会社の名前（題名・前書き。「サンプル社」「サンプル物流社」）。
 _SCOPE_CHARS = r"\u30a0-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヶA-Za-z0-9"
 _SCOPE_LABEL = re.compile(rf"(?<![{_SCOPE_CHARS}])(?P<label>[{_SCOPE_CHARS}]{{1,20}}社)")
@@ -154,6 +168,11 @@ def entity_key(text: object) -> str:
     同じ形になる。
     """
     return "".join(fold_text(text).casefold().split())
+
+
+def is_label_shaped(text: object) -> bool:
+    """見出し・列挙のラベルの形（「原因 A」「手順 1」「案 B」）か（#1393）。"""
+    return bool(_LABEL_SHAPED.match(" ".join(fold_text(text).split())))
 
 
 def entity_chunk_id(document_id: str, chunk: Chunk, *, chunk_set_id: str | None) -> str:
@@ -229,7 +248,9 @@ class _Builder:
         self._entities: dict[str, _EntityDraft] = {}
         self._links: dict[tuple[str, str], EntityChunkLink] = {}
 
-    def entity(self, name: str, *, entity_type: str) -> _EntityDraft | None:
+    def entity(
+        self, name: str, *, entity_type: str, alias_kind: str = "name"
+    ) -> _EntityDraft | None:
         key = entity_key(name)
         if not key or len(key) > _MAX_NAME_CHARS:
             return None
@@ -242,7 +263,7 @@ class _Builder:
                 return None
             draft = _EntityDraft(key=key, display_name=_display(name), entity_type=entity_type)
             self._entities[key] = draft
-        self.alias(draft, name, kind="name")
+        self.alias(draft, name, kind=alias_kind)
         return draft
 
     def alias(self, draft: _EntityDraft, text: str, *, kind: str) -> None:
@@ -486,10 +507,12 @@ def _index_subject_lines(builder: _Builder, chunk_id: str, text: str) -> None:
             qualifier = _TRAILING_PAREN.search(subject)
             base = subject[: qualifier.start()].strip() if qualifier else subject
             if _entity_shaped(base):
-                draft = builder.entity(subject, entity_type="term")
+                draft = builder.entity(
+                    subject, entity_type="term", alias_kind=_prose_alias_kind(subject, "name")
+                )
                 if draft is not None:
                     if qualifier:
-                        builder.alias(draft, base, kind="alias")
+                        builder.alias(draft, base, kind=_prose_alias_kind(base, "alias"))
                     builder.link(draft, chunk_id, ENTITY_ROLE_DEFINITION)
                 continue
         match = _SUBJECT_ATTRIBUTE.match(line)
@@ -512,11 +535,20 @@ def _index_mentions(builder: _Builder, chunk_id: str, text: str) -> None:
         # 本文の言及は 2 文字以上（1 文字の実体は表の値と定義する行からだけ作る）。
         if len(key) < 2 or count >= MAX_MENTIONS_PER_CHUNK:
             continue
-        draft = builder.entity(term, entity_type="term")
+        draft = builder.entity(term, entity_type="term", alias_kind=_prose_alias_kind(term, "name"))
         if draft is None:
             continue
         builder.link(draft, chunk_id, ENTITY_ROLE_MENTION)
         count += 1
+
+
+def _prose_alias_kind(text: str, kind: str) -> str:
+    """本文の言及・行の先頭の名前の別名の種類。ラベルの形（「原因 A」）は ``label`` にする。
+
+    同じ文書の表の値・定義の形が先に同じ別名を作っていれば、その種類が残る（``_Builder.alias`` は
+    同じ別名を上書きしない）。
+    """
+    return ALIAS_KIND_LABEL if is_label_shaped(text) else kind
 
 
 def _entity_shaped(text: str) -> bool:
@@ -528,6 +560,7 @@ def _display(text: object) -> str:
 
 
 __all__ = [
+    "ALIAS_KIND_LABEL",
     "ENTITY_ROLE_ATTRIBUTE",
     "ENTITY_ROLE_DEFINITION",
     "ENTITY_ROLE_MENTION",
@@ -541,5 +574,6 @@ __all__ = [
     "document_scope_label",
     "entity_chunk_id",
     "entity_key",
+    "is_label_shaped",
     "record_fields",
 ]

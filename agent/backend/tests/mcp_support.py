@@ -44,6 +44,8 @@ class RagSearchIn(_ContractInput):
     knowledge_base_ids: list[str] | None = None
     top_k: int | None = Field(default=None, ge=1, le=100)
     filters: dict[str, str] | None = None
+    # 旧版も検索するかは専用の真偽値（#1392。filters の値は文字列だけ）。
+    include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
 

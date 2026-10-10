@@ -20,6 +20,7 @@ from app.rag.agent_evaluation_cli import (
     main,
     summarize_result,
     summary_markdown,
+    superseded_case_summary,
 )
 from app.schemas.evaluation import EvaluationRunRequest
 
@@ -231,6 +232,61 @@ def test_multi_turn_case_follows_the_thread_and_uses_the_rag_scoring() -> None:
         ("run-2", "completed", 3),
     ]
     assert records[1].tool_calls == {"rag_search": 1}
+
+
+def test_superseded_cases_record_whether_the_agent_searched_old_versions() -> None:
+    """旧版も検索して答えるケース（#1366）で、Agent が include_superseded を渡したか（#1392）。"""
+    evidence = {"outcome": "answered", "evidence": [_evidence("doc-old", "c1", "旧版の期限")]}
+    searched = _run(
+        "run-1",
+        answer="旧版の期限は 5 営業日、今の版は 3 営業日です。",
+        steps=[
+            _step("rag_retrieve_evidence", evidence, arguments={"query": "期限"}),
+            _step(
+                "rag_retrieve_evidence",
+                evidence,
+                arguments={"query": "期限 旧版", "include_superseded": True},
+            ),
+            # 失敗した呼び出しと、根拠のツール以外は数えない。
+            {
+                "status": "failed",
+                "tool_call": {
+                    "name": "rag__rag_search",
+                    "arguments": {"query": "期限", "include_superseded": True},
+                },
+                "tool_result": {"name": "rag_search", "success": False, "output": None},
+            },
+            _step("rag_read_source", {"text": "本文"}, arguments={"include_superseded": True}),
+        ],
+    )
+    missed = _run(
+        "run-2",
+        answer="今の版の保守枠は月 1 回です。",
+        steps=[_step("rag_search", evidence, arguments={"include_superseded": False})],
+    )
+    current = _run("run-3", answer="今の版の期限は 3 営業日です。", steps=[])
+    cases: list[dict[str, Any]] = [
+        {"id": "versions-a", "query": "期限は旧版から変わった？", "include_superseded": True},
+        {"id": "versions-b", "query": "保守枠の改定前との違いは？", "include_superseded": True},
+        {"id": "current", "query": "期限は？"},
+    ]
+    request = _request(cases)
+    _, records = evaluate(
+        _api(FakeAgent([[searched], [missed], [current]])),
+        request,
+        agent_id="agent-1",
+        labels={},
+        run_timeout_seconds=60,
+        log=lambda _: None,
+    )
+
+    assert [record.superseded_searches for record in records] == [1, 0, 0]
+    assert records[0].as_json()["superseded_searches"] == 1
+    assert superseded_case_summary(request.cases, records) == {
+        "case_count": 2,
+        "searched_case_ids": ["versions-a"],
+        "missed_case_ids": ["versions-b"],
+    }
 
 
 def test_known_conditions_are_added_to_the_first_question_with_guide_labels() -> None:
@@ -500,6 +556,11 @@ def test_main_creates_agent_runs_and_writes_result(
     assert payload["agent"]["runs"][0]["run_id"] == "run-1"
     assert payload["agent"]["runs"][0]["outcome_source"] == "agent_answer"
     assert payload["agent"]["outcome_sources"] == {"agent_answer": 1}
+    assert payload["agent"]["superseded_cases"] == {
+        "case_count": 0,
+        "searched_case_ids": [],
+        "missed_case_ids": [],
+    }
     created_agent = next(body for method, path, body in fake.calls if path == "/agents")
     assert created_agent["skill_ids"] == ["business_rag_research"]
     assert "sap-1" in created_agent["instructions"]

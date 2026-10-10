@@ -468,3 +468,73 @@ async def test_duplicate_with_own_index_stays_in_its_kb_on_real_oracle() -> None
     assert await _retrieval_document_ids(
         client, {"knowledge_base_id": skipped.id, "include_superseded": "true"}
     ) == {canonical, canonical_old}
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_including_superseded_stays_within_allowed_knowledge_bases_on_real_oracle() -> None:
+    """旧版を含めても、利用者の範囲(許可した KB)の外の文書は入らない(#1392)。
+
+    MCP の include_superseded=true は検索の要求の filters の include_superseded になる。業務 Agent
+    のデータの範囲(#1379)と利用者の権限は KB の範囲(allowed_knowledge_base_ids と
+    knowledge_base_id)に落ちるので、範囲の外の KB の旧版・重複の正本(#1381)は検索に入らない。
+    """
+    from dataclasses import replace
+
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    inside = await client.create_knowledge_base(name=f"範囲の中 {token}")
+    outside = await client.create_knowledge_base(name=f"範囲の外 {token}")
+    # 範囲の外の KB: 今の版と旧版(どちらも範囲の中の重複の正本)。
+    outside_current = await _indexed_document(
+        client,
+        file_name=f"policy-{token}.pdf",
+        chunks=[_chunk(0, "範囲の外の今の版")],
+        knowledge_base_ids=[outside.id],
+    )
+    outside_old = await _indexed_document(
+        client,
+        file_name=f"policy-{token}-2023.pdf",
+        chunks=[_chunk(0, "範囲の外の旧版")],
+        knowledge_base_ids=[outside.id],
+    )
+    await client.set_document_superseded_by(outside_old, outside_current)
+    # 範囲の中の KB: 自前の索引を持つ重複(今の版と旧版)。
+    inside_current = await _indexed_document(
+        client,
+        file_name=f"policy-{token}.pdf",
+        chunks=[_chunk(0, "範囲の中の今の版")],
+        duplicate_of_document_id=outside_current,
+        knowledge_base_ids=[inside.id],
+    )
+    inside_old = await _indexed_document(
+        client,
+        file_name=f"policy-{token}-2023.pdf",
+        chunks=[_chunk(0, "範囲の中の旧版")],
+        duplicate_of_document_id=outside_old,
+        knowledge_base_ids=[inside.id],
+    )
+    await client.set_document_superseded_by(inside_old, inside_current)
+
+    scoped = set_audit_request_context(
+        replace(current_audit_request_context(), allowed_knowledge_base_ids=frozenset({inside.id}))
+    )
+    try:
+        included = {"include_superseded": "true"}
+        assert await _retrieval_document_ids(client, included) == {inside_current, inside_old}
+        assert await _retrieval_document_ids(
+            client, {**included, "knowledge_base_id": inside.id}
+        ) == {inside_current, inside_old}
+        # 範囲の外の KB を名指ししても、許可の外なので何も取れない。
+        assert (
+            await _retrieval_document_ids(client, {**included, "knowledge_base_id": outside.id})
+            == set()
+        )
+        assert await _retrieval_document_ids(client, {}) == {inside_current}
+    finally:
+        reset_audit_request_context(scoped)
