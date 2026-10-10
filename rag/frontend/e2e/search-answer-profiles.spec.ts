@@ -218,7 +218,7 @@ test("実体でつながる根拠の開閉と上限を保存し、実体の索�
   // 既定は on（#1402。このプロファイルの検索だけに効く）。上限は on のときだけ出す。
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(toggle).toHaveAccessibleDescription(/文書レシピで実体の索引を有効にした文書にだけ効きます/);
-  await expect(toggle).toHaveAccessibleDescription(/既定は有効です/);
+  await expect(toggle).toHaveAccessibleDescription(/既定は有効で、このプロファイルの検索だけに効きます/);
   const maxChunks = entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" });
   await expect(maxChunks).toHaveText(/6 件（既定）/);
   // 参照先を選ぶまでは数えない。
@@ -285,6 +285,8 @@ test("実体の索引のある参照先・数えられないときは案内を�
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toBeVisible();
   await expect(entity.getByTestId("search-answer-profile-entity-expansion-coverage")).toHaveCount(0);
+  // 参照先の選択欄からフォーカスを外す（開いたままの選択欄を押し直すと閉じるため）。
+  await toggle.focus();
 
   // 参照先を変えて数えられなかったとき（503）も、推測で「無い」とは言わない。
   failing = true;
