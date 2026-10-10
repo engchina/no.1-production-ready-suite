@@ -1406,7 +1406,9 @@ def _references_between(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
     （「時間帯は定期保守計画で確かめます」→ 定期保守計画の共通の保守枠。#1400）。
     """
     if _metadata_str(context.metadata, REFERENCE_FROM_KEY) == hit.chunk_id:
-        return True
+        # 文書名だけの参照の参照先は、最も関連の高い 1 件だけ（2 件目以降は確保しない。#1400）。
+        rank = _metadata_int(context.metadata, REFERENCE_RANK_KEY)
+        return rank is None or rank == 1
     if _referenced_by_name(hit, context):
         return True
     if not _same_version(hit, context):

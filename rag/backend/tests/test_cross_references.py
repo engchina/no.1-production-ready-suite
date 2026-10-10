@@ -850,6 +850,8 @@ async def test_multi_hop_common_window_reference_reaches_chapter_two(resolved_at
     added = state.chunks["doc-plan:cs-plan:1"]
     assert added.metadata[REFERENCE_FROM_KEY] == chapter_one.chunk_id
     assert added.metadata[REFERENCE_LABEL_KEY] == "第 2 章"
+    # 章の参照の参照先には、関連の順(文書名だけの参照の印)を付けない。
+    assert REFERENCE_RANK_KEY not in added.metadata
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {resolved_at}
     # 参照先は KB の範囲と参照元の版(chunk_set)だけで読む(文書名などの絞り込みは外す)。
     assert all(

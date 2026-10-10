@@ -489,3 +489,49 @@ def test_document_name_link_needs_the_name_in_the_hit() -> None:
     head = _ids(mcp_evidence_order(citations, 20)[:20])
 
     assert "mt-ch2-common" not in head
+
+
+def test_second_document_name_target_of_a_hit_is_not_reserved() -> None:
+    """当たった chunk 自身が起点の文書名の参照でも、参照先の 2 件目以降は確保しない（#1400）。
+
+    評価の ``tl-first-tuesday-department`` で、当たった運用要領の第 1 章（「システム台帳で
+    確かめます」）の参照先の 2 件目（質問と別のシステムの台帳の行）が上限の内に入り、当たった
+    台帳の行（SYS-121。関連度の順位 33 位）を上限の外へ押し出した形。
+    """
+    origin = _named(
+        "ops-ch1",
+        "retrieved_anchor",
+        file_name="ops.pdf",
+        section="システム運用要領 > 第 1 章 この要領の使い方",
+        index=1,
+        rank=1,
+        text="担当部署・重要度・機密区分はシステム台帳で確かめます。",
+    )
+    hits = [
+        _named(
+            f"hit-{rank}",
+            "retrieved_anchor",
+            file_name="ops.pdf",
+            section="x",
+            index=rank + 10,
+            rank=rank,
+        )
+        for rank in range(2, 30)
+    ]
+    first, second = (
+        _named(
+            f"ledger-{rank}",
+            "neighbor_context",
+            file_name="system-ledger.xlsx",
+            section="システム台帳",
+            index=50 + rank,
+            reference_from="ops-ch1",
+            reference_rank=rank,
+        )
+        for rank in (1, 2)
+    )
+
+    head = _ids(mcp_evidence_order([origin, *hits, first, second], 20)[:20])
+
+    assert "ledger-1" in head
+    assert "ledger-2" not in head

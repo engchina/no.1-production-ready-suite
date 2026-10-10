@@ -867,7 +867,12 @@ class AnswerEngine:
                                     **marked.metadata,
                                     REFERENCE_FROM_KEY: anchor.chunk_id,
                                     REFERENCE_LABEL_KEY: target.label,
-                                    REFERENCE_RANK_KEY: rank,
+                                    # 文書名だけの参照は、参照先の文書の中の関連の順(#1400)。
+                                    **(
+                                        {REFERENCE_RANK_KEY: rank}
+                                        if target.kind == "document"
+                                        else {}
+                                    ),
                                 }
                             }
                         )
