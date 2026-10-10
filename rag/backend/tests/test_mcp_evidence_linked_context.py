@@ -17,6 +17,7 @@ from app.mcp.tools import (
     LINKED_CONTEXT_LIMIT_SHARE,
     mcp_evidence_order,
 )
+from app.rag.cross_references import REFERENCE_FROM_KEY, REFERENCE_LABEL_KEY
 from app.rag.entity_expansion import ENTITY_EXPANSION_KEY, ENTITY_EXPANSION_ROLE
 from app.schemas.search import RetrievedChunk
 
@@ -337,3 +338,150 @@ def test_expansion_from_top_chunk_entities_needs_hit_level_relevance() -> None:
 
     assert "ledger-named" in head
     assert "ledger-listed" not in head
+
+
+def _named(
+    chunk_id: str,
+    role: str,
+    *,
+    file_name: str,
+    section: str,
+    index: int,
+    text: str = "",
+    rank: int | None = None,
+    reference_from: str | None = None,
+) -> RetrievedChunk:
+    """文書名・見出しの列・本文を持つ根拠（文書名の参照の照合に使う。#1400）。"""
+    document = file_name.rsplit(".", 1)[0]
+    metadata: dict[str, Any] = {
+        "evidence_role": role,
+        "chunk_index": index,
+        "chunk_set_id": f"{document}-set",
+        "chunk_group_id": f"{document}-p1",
+        "section_path": section,
+    }
+    if rank is not None:
+        metadata["evidence_retrieval_rank"] = rank
+    if reference_from is not None:
+        metadata[REFERENCE_FROM_KEY] = reference_from
+        metadata[REFERENCE_LABEL_KEY] = "定期保守計画"
+    return RetrievedChunk(
+        document_id=document,
+        chunk_id=chunk_id,
+        text=text or chunk_id,
+        score=0.0,
+        file_name=file_name,
+        metadata=metadata,
+    )
+
+
+def _sales_change_window_citations() -> list[RetrievedChunk]:
+    """評価の ``br-sales-change-window``（販売管理システムの変更作業の時間帯）の検索の結果の形。
+
+    当たった 3 位は変更手順書の第 4 章（「時間帯は定期保守計画で確かめます」）。回答の検索は、
+    運用要領の第 1 章（前後の文脈で、当たった上位ではない）の文書名の参照から、定期保守計画の
+    質問に関連の高い chunk（第 2 章 共通の保守枠と第 3 章）を足した。第 2 章は同じ親の前後の文脈、
+    第 3 章は関連度の順位 47 位で、どちらも上限 20 の外にあった（#1400。修正前は 93 位）。
+    """
+    plan = "定期保守計画 2026年度"
+    origin = "ops-ch1"
+    window = (
+        "重要度 A のシステムの変更は、定期保守の時間帯にだけ作業します。"
+        "時間帯は定期保守計画で確かめま す。"
+    )
+    hits = [
+        _named("ops-ch54", "retrieved_anchor", file_name="ops.pdf", section="54", index=54, rank=1),
+        _named("ops-ch20", "retrieved_anchor", file_name="ops.pdf", section="20", index=20, rank=2),
+        _named(
+            "change-ch4",
+            "retrieved_anchor",
+            file_name="change-procedure.pdf",
+            section="システム変更手順書 > 第 4 章 作業の時間帯",
+            index=4,
+            rank=3,
+            text=window,
+        ),
+        *[
+            _named(
+                f"ops-hit-{rank}",
+                "retrieved_anchor",
+                file_name="ops.pdf",
+                section=str(rank + 30),
+                index=rank + 30,
+                rank=rank,
+            )
+            for rank in range(4, 40)
+        ],
+    ]
+    contexts = [
+        _named(f"ops-ctx-{n}", "neighbor_context", file_name="ops.pdf", section="9", index=n + 100)
+        for n in range(30)
+    ]
+    plan_chunks = [
+        _named(
+            "mt-ch1",
+            "neighbor_context",
+            file_name="maintenance-plan.pdf",
+            section=f"{plan} > 第 1 章 個別の保守枠",
+            index=1,
+        ),
+        _named(
+            "mt-ch2-common",
+            "neighbor_context",
+            file_name="maintenance-plan.pdf",
+            section=f"{plan} > 第 2 章 共通の保守枠",
+            index=2,
+            reference_from=origin,
+        ),
+        _named(
+            "mt-ch3-change",
+            "retrieved_anchor",
+            file_name="maintenance-plan.pdf",
+            section=f"{plan} > 第 3 章 保守枠の変更",
+            index=3,
+            rank=47,
+            reference_from=origin,
+        ),
+    ]
+    # 参照先として足したが、当たった chunk が文書名で参照しない文書（システム台帳の行）。
+    ledger = _named(
+        "ledger-row",
+        "neighbor_context",
+        file_name="system-ledger.xlsx",
+        section="システム台帳",
+        index=53,
+        reference_from=origin,
+    )
+    return [*hits, *contexts, *plan_chunks, ledger]
+
+
+def test_sales_change_window_reserves_the_document_named_by_a_hit() -> None:
+    """当たった chunk が文書名で参照する文書の、参照先として足した chunk を上限の内に確保する。"""
+    citations = _sales_change_window_citations()
+
+    ordered = mcp_evidence_order(citations, 20)
+    head = _ids(ordered[:20])
+
+    assert "mt-ch2-common" in head
+    assert "mt-ch3-change" in head
+    # 当たった上位の chunk は動かない。
+    assert head[:3] == ["ops-ch54", "ops-ch20", "change-ch4"]
+    # 参照先として足していない章（質問に関連の高い chunk として選ばれなかった）は確保しない。
+    assert "mt-ch1" not in head
+    # 当たった chunk が文書名で参照しない文書は、参照先として足した chunk でも確保しない。
+    assert "ledger-row" not in head
+    assert len(ordered) == len(citations)
+
+
+def test_document_name_link_needs_the_name_in_the_hit() -> None:
+    """当たった chunk が文書名を挙げなければ、参照先として足した別の文書の chunk も確保しない。"""
+    plain = "重要度 A のシステムの変更は、保守の時間帯に作業します。"
+    citations = [
+        chunk.model_copy(update={"text": plain}) if chunk.chunk_id == "change-ch4" else chunk
+        for chunk in _sales_change_window_citations()
+    ]
+
+    head = _ids(mcp_evidence_order(citations, 20)[:20])
+
+    assert "mt-ch2-common" not in head
+    assert "mt-ch3-change" not in head

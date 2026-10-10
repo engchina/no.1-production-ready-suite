@@ -899,11 +899,16 @@ class AnswerEngine:
         空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
         あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
         有効な chunk_set)で 1 回読み、取込と同じ規則で決める。RAPTOR の要約 chunk は辿らない。
+        印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata
         if REFERENCE_TARGETS_KEY in metadata:
             stored = reference_targets(metadata)
-            return stored + _document_name_targets(anchor, stored)
+            extra = _document_name_targets(anchor, stored)
+            if extra:
+                # 本文から足した参照がある起点(診断の resolved_at は query)。
+                state.query_reference_targets[anchor.chunk_id] = [*stored, *extra]
+            return [*stored, *extra]
         if anchor.chunk_id in state.query_reference_targets:
             return state.query_reference_targets[anchor.chunk_id]
         specs = [] if metadata.get("raptor_summary") else extract_references(anchor.text)
