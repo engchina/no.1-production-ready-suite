@@ -29,7 +29,8 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, table_he
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
 # 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
-VALIDATION_RUBRIC_VERSION = 3
+# 4: 回答の段落が書いた根拠の ID でも根拠に結び付け、ID の照合はシステムが行うことを指示に足した（#1404）。
+VALIDATION_RUBRIC_VERSION = 4
 
 VALIDATION_SYSTEM_PROMPT = (
     """1. 役割と目的
@@ -49,6 +50,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - supported: evidence_items がその主張を明確に裏付ける。矛盾がないだけでは supported にしない。evidence_id に evidence_items の evidence_id を指定する。
 - 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
 - evidence_id は evidence_items の evidence_id の値を省かず・短くせずにそのまま書く。
+- 回答に書かれた根拠の ID（【証拠 ID …】など）は evidence_items の id に当たる。ID の照合はシステムが行うので、ID の書き方ではなく裏付けの有無で判定する。
 - contradicted: 根拠と矛盾する。evidence_id を指定する。
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
@@ -131,7 +133,8 @@ def validate_answer_claims(
     except EvaluationInputTooLarge:
         return {**base, "status": "input_too_large"}
     catalog = {item["evidence_id"]: item for item in evidence}
-    bound = _bind_claims(output, catalog, passages)
+    # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
+    bound = _bind_claims(output, catalog, passages, passage_citations=True)
     checked = {claim.answer_passage_id for claim in bound.claim_checks}
     claims = [
         *bound.claim_checks,

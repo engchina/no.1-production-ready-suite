@@ -392,10 +392,103 @@ def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model(
     assert result["claim_checks"][2]["source_id"] == PORTAL_LEDGER["id"]
     # 省いた所の後ろ（番号）が違えば根拠に無い chunk、番号まで省けば 2 つの chunk のどちらか決まらない。
     # 回答に書かれた ID でない語（「record_codes.values[1]」）も、今までどおり引用エラー。
+    # ただし 2 つ目の段落は段落そのものが根拠の ID（「…fffa…:1」）を書いているので、その根拠に結び付ける（#1404）。
     result = _retention_validation([ABBREVIATED_CHUNK_ID.replace(":1", ":9"), f"{RETENTION_SET[:40]}…",
                                     "record_codes.values[1]"])
-    assert result["counts"] == {"citation_error": 3}
+    assert [claim["status"] for claim in result["claim_checks"]] == ["citation_error", "supported", "citation_error"]
+    assert result["claim_checks"][1]["source_id"] == f"{RETENTION_SET}:1"
     # 「…」を落とした ID も、番号が違う・残した部分が短い・部分の数が違うものは結び付けない。
     result = _retention_validation([dropped.replace(":1", ":9"), f"{RETENTION_SET.split(':')[0]}:16f112:1",
                                     f"{RETENTION_SET}:extra:1"])
-    assert result["counts"] == {"citation_error": 3}
+    assert [claim["status"] for claim in result["claim_checks"]] == ["citation_error", "supported", "citation_error"]
+
+
+# #1362 の再評価の Run run_f45cb461c85946459d604dd08561d626（cmp-mes-vs-qms-deadline）の形（#1404。ID は合成した値）。
+# 回答は根拠の chunk の id を完全な形で「【証拠 ID 文書:chunk_set:番号】」と書き、検証に渡した根拠にも同じ id がある。
+MES = "5c61673c22be4d39b075223c6de78e14:3f574968" + "0" * 56 + ":2"
+QMS = "49b9784f8b60426fb3195672b40bd6b7:ed020e40" + "1" * 56 + ":3"
+DEADLINE_EVIDENCE = [
+    {"id": MES, "source": "mes-operation-rules.pdf", "page_start": 2, "page_end": 2,
+     "text": "第 3 章 変更の申請\n製造実行システムの変更は、実施日の 5 営業日前までに申請します。"},
+    {"id": QMS, "source": "qms-operation-rules.pdf", "page_start": 3, "page_end": 3,
+     "text": "第 4 章 変更の申請\n品質管理システムの変更は、実施日の 3 営業日前までに申請します。"},
+    {"id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9:" + "2" * 64 + ":1", "source": "system-ledger.xlsx",
+     "page_start": None, "page_end": None, "text": "システムID: SYS-101 / 正式名: 製造実行システム / 担当部署: 製造部"},
+]
+DEADLINE_ANSWER = "\n\n".join([
+    f"製造実行システムの変更は、実施日の 5 営業日前までに申請します【証拠 ID {MES}】。",
+    f"品質管理システムの変更は、実施日の 3 営業日前までに申請します【証拠 ID {QMS}】。",
+    f"申請の期限は、製造実行システムが 5 営業日前、品質管理システムが 3 営業日前です【証拠 ID {MES}】【証拠 ID {QMS}】。",
+    "したがって、申請の期限は製造実行システムの方が長い（5 営業日）です。",
+])
+
+
+def _deadline_validation(claims: list[tuple[str, str]], answer: str = DEADLINE_ANSWER) -> dict:
+    """段落ごとに（status, evidence_id）を返すモデルのスタブ。理由はどれも「裏付けられる」。"""
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        assert "ID の照合はシステムが行う" in system
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": status, "evidence_id": evidence_id,
+             "source_id": "", "evidence_quote": "", "reason": "主張は根拠で裏付けられる。"}
+            for passage, (status, evidence_id) in zip(payload["answer_passages"], claims, strict=True)]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        return validate_answer_claims("製造実行システムと品質管理システムでは、変更の申請の期限はどちらが長いですか？",
+                                      answer, DEADLINE_EVIDENCE, settings=None)
+
+
+def test_full_chunk_ids_written_in_the_answer_are_not_citation_errors() -> None:
+    """根拠の id と完全に一致する ID を引用した段落を「未登録の原文ID」にしない (#1404)。
+
+    モデルは evidence_id に回答の「【証拠 ID …】」をラベルごと写したり、片段の ID を写し損ねたりする。
+    ラベル・ID でない語は除いて照合し、それでも決まらなければ段落そのものが書いた ID で根拠に結び付ける。
+    """
+    result = _deadline_validation([
+        ("supported", f"【証拠 ID {MES}】"),
+        ("supported", "E9f9f9f9f9f9f9f9f9f9f"),  # 根拠に無い片段の ID: 段落の ID（QMS）で結び付ける。
+        ("supported", f"【証拠 ID {MES}】、【証拠ID: {QMS}】"),
+        ("supported", f"{MES}（第 3 章）, {QMS}"),
+    ])
+    assert result["counts"] == {"supported": 4}
+    assert [claim["source_id"] for claim in result["claim_checks"]] == [MES, QMS, MES, MES]
+    # 結び付けた片段の完全な ID を残す。
+    assert all(token.startswith("E") and len(token) == 21
+               for claim in result["claim_checks"][1:] for token in claim["evidence_id"].split(","))
+    # evidence_id を空で返しても、段落が書いた ID（完全一致・途中を省いた形・部分ごとの前方一致）で結び付ける。
+    mes_document, mes_set, _ = MES.split(":")
+    answer = DEADLINE_ANSWER.replace(f"【証拠 ID {QMS}】。", f"【証拠 ID {QMS[:40]}…:3】。", 1).replace(
+        f"【証拠 ID {MES}】【", f"【証拠 ID {mes_document}:{mes_set[:12]}:2】【", 1)
+    result = _deadline_validation([("supported", ""), ("supported", ""), ("supported", ""),
+                                   ("supported", f"【証拠 ID {MES}】")], answer=answer)
+    assert result["counts"] == {"supported": 4}
+    assert [claim["source_id"] for claim in result["claim_checks"]] == [MES, QMS, MES, MES]
+
+
+def test_model_citation_errors_with_resolved_ids_are_not_kept() -> None:
+    """モデルが citation_error を返しても、引用した ID がすべて根拠に決まれば出典の誤りにしない (#1404)。
+
+    裏付けの判定はモデルから返っていないので、supported にはせず unassessed（確かめが終わっていない）にする。
+    """
+    result = _deadline_validation([("citation_error", ""), ("citation_error", f"【証拠 ID {QMS}】"),
+                                   ("supported", MES), ("citation_error", "")])
+    statuses = [claim["status"] for claim in result["claim_checks"]]
+    # 4 つ目の段落は ID を書いておらず、モデルの evidence_id も空なので出典を照合できない。
+    assert statuses == ["unassessed", "unassessed", "supported", "citation_error"]
+    assert result["claim_checks"][0]["reason"].startswith("引用した ID は根拠に一致しますが")
+
+
+def test_unresolved_ids_in_the_answer_stay_citation_errors() -> None:
+    """段落の ID が根拠に無い・1 つでも決まらないときは、今までどおり引用エラー (#1404)。"""
+    unknown = "ffffffffffffffffffffffffffffffff:" + "3" * 64 + ":9"
+    answer = "\n\n".join([
+        f"製造実行システムの変更は、実施日の 5 営業日前までに申請します【証拠 ID {unknown}】。",
+        f"品質管理システムの変更は、実施日の 3 営業日前までに申請します【証拠 ID {QMS}】【証拠 ID {unknown}】。",
+        "したがって、申請の期限は製造実行システムの方が長い（5 営業日）です。",
+        # 途中を省いた ID でも、番号が違えば根拠に無い chunk。
+        f"両システムとも申請が要ります【証拠 ID {MES.split(':')[0][:10]}…:7】。",
+    ])
+    result = _deadline_validation([("supported", "E9f9f9f9f9f9f9f9f9f9f"), ("supported", "証拠"),
+                                   ("supported", "第 3 章"), ("citation_error", "")], answer=answer)
+    assert result["counts"] == {"citation_error": 4}
+    assert all(claim["reason"].startswith("未登録の原文ID。") for claim in result["claim_checks"][:3])

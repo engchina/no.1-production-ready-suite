@@ -31,19 +31,24 @@ export interface EntityExpansionValue {
 }
 
 /**
- * 開閉を切り替えたときの query の差分。全体の既定は持たないため、off は null（使わない）に戻し、
- * 上限も一緒に外す（#1388）。
+ * 開閉を切り替えたときの query の差分。既定（使う。#1402）と同じ on は null で保存して既定に
+ * 追従させ、off だけを false で保存する。どちらも上限を一緒に外す（#1388）。
  */
 export function entityExpansionPatch(enabled: boolean): Required<EntityExpansionValue> {
   return enabled
-    ? { entity_expansion_enabled: true, entity_expansion_max_chunks: null }
-    : { entity_expansion_enabled: null, entity_expansion_max_chunks: null };
+    ? { entity_expansion_enabled: null, entity_expansion_max_chunks: null }
+    : { entity_expansion_enabled: false, entity_expansion_max_chunks: null };
+}
+
+/** 保存値から開閉を読む。null / 未指定は既定（使う。#1402）で、false だけが使わない。 */
+export function isEntityExpansionEnabled(value: EntityExpansionValue): boolean {
+  return value.entity_expansion_enabled !== false;
 }
 
 /**
  * 検索・回答プロファイルの「実体でつながる根拠を 1 段広げる」（#1362 / #1388）。
  *
- * 全体の既定（環境変数）は持たず、このプロファイルの検索だけに効く（既定 off）。実体は文書レシピで
+ * 環境変数は持たず、このプロファイルの検索だけに効く（既定 on。#1402）。実体は文書レシピで
  * 実体の索引を有効にした文書にだけあるため、参照先のナレッジベースにその文書が 1 つも無いときは、
  * 開閉の下に案内を出す（効かない設定を黙って受け付けない）。
  */
@@ -58,7 +63,7 @@ export function EntityExpansionRow({
   disabled: boolean;
   onChange: (patch: EntityExpansionValue) => void;
 }) {
-  const enabled = value.entity_expansion_enabled === true;
+  const enabled = isEntityExpansionEnabled(value);
   const coverage = useEntityIndexCoverage(knowledgeBaseIds, knowledgeBaseIds.length > 0);
   const noEntityDocuments = coverage.data?.document_count === 0;
   const labelId = "search-answer-profile-entity-expansion-label";

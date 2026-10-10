@@ -361,7 +361,13 @@ def _span_for_misnamed_id(claim, catalog):
 # 根拠の ID（片段の「E + 16 進」・chunk の id「文書:chunk_set:番号」）は空白・句読点・括弧を含まない。
 _EVIDENCE_ID_SEPARATOR = re.compile(r"[\s,，、;；/／|｜・\[\]【】()（）「」`'\"]+")
 # ID の前に付けたラベル（「evidence_id: E…」「evidence_id E…」「chunk_id=…」）。
-_EVIDENCE_ID_LABEL = re.compile(r"^(?:evidence[_-]?ids?|chunk[_-]?ids?|ids?|原文ID|根拠ID)(?:[:：=]|$)", re.IGNORECASE)
+_EVIDENCE_ID_LABEL = re.compile(
+    r"^(?:evidence[_-]?ids?|chunk[_-]?ids?|ids?|原文ID|根拠ID|証拠ID|証拠|根拠|出典)(?:[:：=]|$)", re.IGNORECASE)
+# ID の形の語（「:」で区切った chunk の id・16 進の 6 文字以上の並び）。回答から写した「【証拠 ID …】」の
+# 「証拠」や「第3章」のような ID でない語は ID として数えない（#1404）。
+_ID_SHAPE = re.compile(r":|[0-9a-f]{6,}", re.IGNORECASE)
+# 回答の段落に書かれた chunk の id（「文書:chunk_set:番号」。途中を「…」で省いたものを含む。#1404）。
+_CITED_CHUNK_ID = re.compile(r"(?<![0-9A-Za-z])[0-9A-Fa-f]{6,}(?:[0-9A-Fa-f:…‥]|\.{2,})*:[0-9]+(?![0-9A-Za-z])")
 # ID の途中・末尾を省いた印（「af25…:1」「E0d7d98...」）。
 _ID_ELLIPSIS = re.compile(r"…+|‥+|\.{2,}")
 # 片段の ID（「E + 16 進」）。モデルは後ろを切って短く書くことがある（「E0d7d982」。#1391）。
@@ -441,9 +447,16 @@ def _spans_for_ids(claim, catalog):
     1 つでも決まらなければ None（従来どおり引用エラー）。括弧で囲んだ 1 つの ID・ラベルを付けた ID も同じ。
     引用（evidence_quote）を返したときは、結び付けた片段のどれかに引用が含まれることも求める。
     """
-    # ラベルだけの語（「evidence_id E…」の「evidence_id」）は ID ではないので除く。
+    # ラベルだけの語（「evidence_id E…」の「evidence_id」）と、ID の形でない語（回答から写した「【証拠 ID …】」の
+    # 「証拠」など。#1404）は ID ではないので除く。根拠の id にそのまま一致する語は形にかかわらず ID として扱う。
     tokens = [token for token in _EVIDENCE_ID_SEPARATOR.split(claim.evidence_id or "")
-              if token and _EVIDENCE_ID_LABEL.sub("", token)]
+              if token and (stripped := _EVIDENCE_ID_LABEL.sub("", token))
+              and (_ID_SHAPE.search(stripped) or _span_for_token(token, catalog) is not None)]
+    return _resolve_tokens(tokens, claim, catalog)
+
+
+def _resolve_tokens(tokens, claim, catalog):
+    """ID の語をすべて片段へ結び付ける（1 つでも決まらない・語が無い・引用がどの片段にも無ければ None）。"""
     if not tokens:
         return None
     spans = []
@@ -459,13 +472,36 @@ def _spans_for_ids(claim, catalog):
     return spans
 
 
-def _bind_claims(output, catalog, passages):
-    """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。"""
+def _spans_for_passage_citations(claim, catalog):
+    """回答の段落そのものが書いた根拠の ID（「【証拠 ID 文書:chunk_set:番号】」）を片段へ結び付ける (#1404)。
+
+    段落の引用は回答が決めたもので、モデルが evidence_id に何を書いたかに左右されない。モデルが根拠の ID を
+    写し損ねても（ラベルごと写す・別の表記にする）、段落の ID が完全一致・前方一致・途中を省いた形（#1391）で
+    根拠の 1 つにすべて決まれば、その根拠に結び付ける。段落に ID が無い・1 つでも根拠に無い ID があれば None。
+    """
+    tokens = list(dict.fromkeys(match.group(0) for match in _CITED_CHUNK_ID.finditer(claim.answer_quote or "")))
+    return _resolve_tokens(tokens, claim, catalog)
+
+
+def _bind_claims(output, catalog, passages, *, passage_citations: bool = False):
+    """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。
+
+    passage_citations（最終の検証。#1404）では、モデルの evidence_id で決まらないとき、回答の段落が書いた
+    根拠の ID でも結び付ける。モデルが citation_error を返した段落も、引用した ID（evidence_id か段落の ID）が
+    すべて根拠に決まれば出典の誤りではないので citation_error を採らず、裏付けの判定が無い unassessed にする。
+    """
     bound = []
     for claim in output.claim_checks:
-        if claim.evidence_id and claim.status in {"supported", "contradicted"}:
-            span = catalog.get(claim.evidence_id) or _span_for_misnamed_id(claim, catalog)
+        if passage_citations and claim.status == "citation_error" and (
+                _spans_for_ids(claim, catalog) or _spans_for_passage_citations(claim, catalog)):
+            claim = claim.model_copy(update={"status": "unassessed", "reason":
+                "引用した ID は根拠に一致しますが、裏付けの判定が返されませんでした。" + claim.reason})
+        if claim.status in {"supported", "contradicted"} and (claim.evidence_id or passage_citations):
+            span = (catalog.get(claim.evidence_id) or _span_for_misnamed_id(claim, catalog)) if claim.evidence_id else None
             spans = [span] if span else _spans_for_ids(claim, catalog)
+            if not spans and passage_citations:
+                # 段落の ID で結び付けたときも、evidence_id は結び付けた片段の ID にする。
+                spans = _spans_for_passage_citations(claim, catalog)
             if spans:
                 # 複数の根拠は最初の根拠を出典にし、evidence_id には結び付けた片段の ID をすべて残す。
                 claim = claim.model_copy(update={

@@ -944,7 +944,7 @@ export const ja = {
   "searchAnswerProfiles.entityExpansion.title": "実体でつながる根拠",
   "searchAnswerProfiles.entityExpansion.enabled": "実体でつながる根拠を 1 段広げる",
   "searchAnswerProfiles.entityExpansion.helper":
-    "質問と上位の根拠に出てくるシステム・部署の略号などの実体から、台帳の行やその略号を定義した規程など、実体でつながる根拠を 1 段だけ加えます。文書レシピで実体の索引を有効にした文書にだけ効きます。AI の呼び出しは増えません。既定は無効で、このプロファイルの検索だけに効きます。",
+    "質問と上位の根拠に出てくるシステム・部署の略号などの実体から、台帳の行やその略号を定義した規程など、実体でつながる根拠を 1 段だけ加えます。文書レシピで実体の索引を有効にした文書にだけ効きます。AI の呼び出しは増えません。既定は有効で、このプロファイルの検索だけに効きます。",
   "searchAnswerProfiles.entityExpansion.noEntityDocuments":
     "参照先のナレッジベースに、実体の索引のある文書がありません。文書レシピで実体の索引を有効にすると効きます。",
   "searchAnswerProfiles.entityExpansion.maxChunks": "1 回の検索で加える根拠の上限",

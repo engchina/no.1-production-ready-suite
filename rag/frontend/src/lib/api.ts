@@ -873,7 +873,7 @@ export interface KnowledgeBaseQueryConfig {
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
   /**
-   * 実体でつながる根拠を 1 段広げる(#1388。LLM は呼ばない)。全体の既定は持たず、null / false は使わない。
+   * 実体でつながる根拠を 1 段広げる(#1388。LLM は呼ばない)。null / 未指定は既定(使う。#1402)、false は使わない。
    * 文書レシピで実体の索引を有効にした文書にだけ効く。
    */
   entity_expansion_enabled?: boolean | null;

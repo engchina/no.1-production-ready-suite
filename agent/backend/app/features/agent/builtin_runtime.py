@@ -84,6 +84,7 @@ from app.features.agent.answer_validation import (
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.support_task import (
+    ADJUSTED_LIMITS_HINT,
     BUDGET_EXCEEDED_CODE,
     GUIDE_CHECK_TRACE_PREFIX,
     RAG_BUDGET_TOOLS,
@@ -93,15 +94,16 @@ from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
     SupportTaskBudget,
+    adjusted_search_limits,
     budget_exceeded_message,
     build_support_task,
     guide_check_note,
     has_support_task_activity,
     is_environment_tool,
     rag_next_step,
-    raised_evidence_limit,
     record_codes,
     repeated_query_note,
+    search_limit_schema,
     superseded_versions_note,
     support_task_instructions,
     text_references,
@@ -616,11 +618,24 @@ class _ToolRecorder:
         except json.JSONDecodeError:
             parsed = {}
         call_arguments: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+        adjusted_limits: dict[str, dict[str, int]] = {}
         if definition is not None and mcp_base_tool_name(name) in RAG_BUDGET_TOOLS:
-            # 既定より小さい evidence_limit は既定に引き上げる（#1351）。step には送った値を残す。
-            raised = raised_evidence_limit(call_arguments, definition.input_schema)
-            if raised is not None:
-                call_arguments = {**call_arguments, "evidence_limit": raised}
+            # 既定より小さい件数（top_k・evidence_limit）は既定に引き上げ、上限を超える値は上限に
+            # 丸める（#1351・#1403）。step には送った値を残し、モデルへの結果に直したことを足す。
+            adjusted_limits = adjusted_search_limits(call_arguments, definition.input_schema)
+            if adjusted_limits:
+                call_arguments = {
+                    **call_arguments,
+                    **{key: value["sent"] for key, value in adjusted_limits.items()},
+                }
+                logger.info(
+                    "builtin_runtime_search_limits_adjusted",
+                    extra={
+                        "run_id": self.run_id,
+                        "tool_name": name,
+                        "adjusted_limits": adjusted_limits,
+                    },
+                )
         # データの範囲（#1378）: プロファイルを埋める・上書きする・範囲外を拒否する。MCP 接続の
         # ツールだけ（Control Plane のツールは範囲の対象ではない）。
         scoped = (
@@ -688,7 +703,9 @@ class _ToolRecorder:
                 if note is not None:
                     output = {**output, "next_step": note["next_step"]}
             if isinstance(output, dict):
-                output = self.hop_hints(call, output, step_id=step_id)
+                output = self.hop_hints(
+                    call, output, step_id=step_id, adjusted_limits=adjusted_limits
+                )
             return json.dumps(output, ensure_ascii=False, default=str)
         return json.dumps(
             {"error": result.error or "tool failed", "error_code": result.error_code},
@@ -722,15 +739,24 @@ class _ToolRecorder:
         )
         return json.dumps(payload, ensure_ascii=False)
 
-    def hop_hints(self, call: ToolCall, output: dict[str, Any], *, step_id: str) -> dict[str, Any]:
+    def hop_hints(
+        self,
+        call: ToolCall,
+        output: dict[str, Any],
+        *,
+        step_id: str,
+        adjusted_limits: dict[str, dict[str, int]] | None = None,
+    ) -> dict[str, Any]:
         """多段の質問の案内をモデルへの結果に足す（#1345。記録する step の結果は RAG のまま）。
 
         根拠を集める・読むツールの本文に同じ文書の別の箇所への参照があれば読む先（`references`）を、
         この Run で同じ（ほぼ同じ）query の検索を繰り返したら繰り返しを止める案内
         （`repeated_query`。#1351）を、query の実体に当たる台帳・一覧の行に略号・区分のような
-        短い値があればその意味を引く次の段の案内（`record_codes`。#1365）を、質問が名指しする
-        年度・版が当たった文書の旧版に当たり、旧版を検索していなければ旧版も含めた検索し直しの案内
-        （`superseded_versions`。#1405）を、RAG の予算があればこの Run で残る検索の回数
+        短い値があればその意味を引く次の段の案内（`record_codes`。#1365）を、Runtime が件数
+        （`top_k`・`evidence_limit`）を既定に引き上げた・上限に丸めたらその値と次から省略する案内
+        （`adjusted_limits`。#1403）を、質問が名指しする年度・版が当たった文書の旧版に当たり、
+        旧版を検索していなければ旧版も含めた検索し直しの案内（`superseded_versions`。#1405）を、
+        RAG の予算があればこの Run で残る検索の回数
         （`rag_calls_remaining`）を足す。
         """
         from app.features.agent.runtime import runtime_repository
@@ -760,6 +786,11 @@ class _ToolRecorder:
             )
             if codes is not None:
                 output = {**output, "record_codes": codes}
+            if adjusted_limits:
+                output = {
+                    **output,
+                    "adjusted_limits": {**adjusted_limits, "next_step": ADJUSTED_LIMITS_HINT},
+                }
             superseded = superseded_versions_note(
                 call.arguments, output, [self.goal, call.arguments.get("query")]
             )
@@ -937,8 +968,12 @@ def build_function_tools(
 
         # データの範囲が 1 つなら、プロファイルの引数をモデルに見せない（#1378）。実行の定義
         # （`tool_registry.invoke` に渡す schema）は呼び先の契約のまま。
-        schema = data_scope.scoped_input_schema(
-            definition.name, dict(definition.input_schema), recorder.data_scopes
+        # 根拠のツールの件数の説明には「多段の質問では省略する」を足す（#1403）。
+        schema = search_limit_schema(
+            definition.name,
+            data_scope.scoped_input_schema(
+                definition.name, dict(definition.input_schema), recorder.data_scopes
+            ),
         )
         tools.append(
             FunctionTool(
