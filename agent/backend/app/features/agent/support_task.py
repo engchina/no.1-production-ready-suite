@@ -388,22 +388,101 @@ def record_codes(output: JsonObject, query: object, run_queries: list[object]) -
     return {"values": values, "next_step": RECORD_CODE_HINT} if values else None
 
 
-def raised_evidence_limit(arguments: JsonObject, input_schema: JsonObject) -> int | None:
-    """モデルが既定より小さくした `evidence_limit` を引き上げる値（#1351。引き上げなければ None）。
+# 検索する件数（`top_k`）の既定。RAG の契約の `top_k` の `default` は null で、省略すると RAG が
+# 検索の要求の既定の 20 を使う（契約の `rag_retrieve_evidence` の `evidence_limit` の説明
+# 「top_k。省略時 20」）。契約に整数の `default` があればそちらを使う（#1403）。
+RAG_TOP_K_DEFAULT = 20
+# 根拠のツールの件数の引数（既定より小さい値は既定に引き上げ、上限を超える値は上限に丸める）。
+SEARCH_LIMIT_ARGUMENTS = ("top_k", "evidence_limit")
+SEARCH_LIMIT_SCHEMA_NOTE = (
+    "多段の質問では省略する（既定より小さくすると段の根拠が欠けるため、"
+    "実行環境が既定に引き上げる）。"
+)
+ADJUSTED_LIMITS_HINT = (
+    "件数（top_k・evidence_limit）を既定より小さくすると多段の質問の段の根拠が欠けるため、"
+    "実行環境が既定に引き上げた（上限を超える値は上限にした）。次の呼び出しでは件数を省略する。"
+)
 
-    多段の質問では、答えの chunk が上位の文書の前置き・前の章の後ろに並ぶことが多く、小さい上限で
-    切れて言い換えを繰り返す（#1335 の評価で、欠けた根拠はすべて上限で切れていた）。既定は
-    ツールの入力 schema の `default`（RAG の契約の値）を使い、既定より大きい値は変えない。
-    """
+
+def _is_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _integer_spec(input_schema: JsonObject, name: str) -> tuple[int | None, int | None]:
+    """入力 schema の整数の引数の既定と上限（`anyOf` の null 許容の形も読む）。"""
     properties = input_schema.get("properties")
-    spec = properties.get("evidence_limit") if isinstance(properties, dict) else None
-    default = spec.get("default") if isinstance(spec, dict) else None
-    value = arguments.get("evidence_limit")
-    if not isinstance(default, int) or isinstance(default, bool):
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value >= default:
-        return None
-    return default
+    spec = properties.get(name) if isinstance(properties, dict) else None
+    if not isinstance(spec, dict):
+        return None, None
+    default = spec.get("default")
+    maximum = spec.get("maximum")
+    if not _is_integer(maximum):
+        variants = spec.get("anyOf")
+        maxima = [
+            item.get("maximum")
+            for item in (variants if isinstance(variants, list) else [])
+            if isinstance(item, dict) and _is_integer(item.get("maximum"))
+        ]
+        maximum = maxima[0] if maxima else None
+    return (default if _is_integer(default) else None), maximum
+
+
+def adjusted_search_limits(
+    arguments: JsonObject, input_schema: JsonObject
+) -> dict[str, dict[str, int]]:
+    """根拠のツールの件数の引数を直す値（#1351・#1403。直さなければ空）。
+
+    多段の質問では、答えの chunk が上位の文書の前置き・前の章の後ろに並ぶことが多く、小さい件数で
+    切れて段を取りこぼす（#1335 の評価で、欠けた根拠はすべて上限で切れていた。#1362 の再評価では
+    データの範囲を固定した業務 Agent が `top_k` 5 / 10 を渡して台帳の行が検索の結果に出なかった）。
+    既定より小さい値は既定（入力 schema の `default`。`top_k` は契約の default が null なので
+    `RAG_TOP_K_DEFAULT`）に引き上げ、上限（schema の `maximum`）を超える値は上限に丸める
+    （呼び先の入力検証で失敗させない）。既定以上・上限以下の値と、渡していない引数は変えない。
+    戻り値は引数の名前 → `{"requested": モデルの値, "sent": 送る値}`。
+    """
+    adjusted: dict[str, dict[str, int]] = {}
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return adjusted
+    for name in SEARCH_LIMIT_ARGUMENTS:
+        value = arguments.get(name)
+        if name not in properties or not isinstance(value, int) or isinstance(value, bool):
+            continue
+        default, maximum = _integer_spec(input_schema, name)
+        if default is None and name == "top_k":
+            default = RAG_TOP_K_DEFAULT
+        sent = value
+        if default is not None and sent < default:
+            sent = default
+        if maximum is not None and sent > maximum:
+            sent = maximum
+        if sent != value:
+            adjusted[name] = {"requested": value, "sent": sent}
+    return adjusted
+
+
+def search_limit_schema(function_name: str, schema: JsonObject) -> JsonObject:
+    """モデルに見せる根拠のツールの schema の件数の説明に「多段の質問では省略する」を足す（#1403）。
+
+    実行の定義（呼び先へ送る schema）は契約のまま。根拠のツール以外と、件数の引数が無い schema は
+    元のまま返す。
+    """
+    if mcp_base_tool_name(function_name) not in RAG_BUDGET_TOOLS:
+        return schema
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not any(
+        isinstance(properties.get(name), dict) for name in SEARCH_LIMIT_ARGUMENTS
+    ):
+        return schema
+    updated = deepcopy(schema)
+    for name in SEARCH_LIMIT_ARGUMENTS:
+        prop = updated["properties"].get(name)
+        if not isinstance(prop, dict):
+            continue
+        described = str(prop.get("description") or "").strip()
+        if SEARCH_LIMIT_SCHEMA_NOTE not in described:
+            prop["description"] = f"{described} {SEARCH_LIMIT_SCHEMA_NOTE}".strip()
+    return updated
 
 
 # 同じ段の言い換えの繰り返し（#1351）。正規化した query の文字の 2-gram の Jaccard 係数がこれ以上

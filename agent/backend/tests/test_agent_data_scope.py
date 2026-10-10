@@ -363,6 +363,44 @@ def test_rag_scope_ignores_knowledge_base_ids(
     assert step.tool_call.data_scope["ignored_knowledge_base_ids"] == ["kb-hr"]
 
 
+def test_single_rag_profile_raises_small_top_k_to_the_default(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    # プロファイルを固定した業務 Agent では、モデルが残りの任意の引数（top_k）を小さく埋めやすい
+    # （#1403）。既定より小さい top_k は既定（20）に引き上げ、モデルへの結果に残す。
+    _agent(rag=_scope("bv-sales"))
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "システム台帳 販売管理システム 担当部署", "top_k": 5},
+                call_id="call-1",
+            )
+        ],
+        [assistant_message("担当部署は営業部です。")],
+    )
+    run_id = _run()
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [call] = mcp.calls_of("rag_retrieve_evidence")
+    assert call["arguments"] == {
+        "query": "システム台帳 販売管理システム 担当部署",
+        "top_k": 20,
+        "search_answer_profile_id": "bv-sales",
+    }
+    params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
+    assert "search_answer_profile_id" not in params["properties"]
+    assert "多段の質問では省略する" in params["properties"]["top_k"]["description"]
+    output = next(
+        item["output"]
+        for item in model.calls[1].input
+        if isinstance(item, dict) and item.get("call_id") == "call-1" and "output" in item
+    )
+    assert '"adjusted_limits"' in str(output)
+
+
 def test_approval_shows_the_scoped_arguments(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
     _agent(nl2sql=_scope("profile-sales"))
     # 既定のポリシー（nl2sql_query は承認が要る）。
