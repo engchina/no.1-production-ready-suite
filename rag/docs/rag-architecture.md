@@ -89,7 +89,7 @@
    - OCI rerank の返却 index は候補範囲内・重複なし、返却件数は `top_n` 以内、score は finite number であることを検証し、不正な rerank 結果は fail fast する。
    - 根拠の child と同じ `chunk_group_id` の兄弟 chunk（上限 `RAG_CONTEXT_GROUP_MAX_CHUNKS`）と親本文（`parent_text`）で親子を復元し（small-to-big）、根拠の child の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`、既定 3）を文脈に足す。
    - 上位の候補の本文が参照する節（「第3章を参照」など。取込で解決して chunk の metadata に保存）の chunk を、上限付き（`RAG_REFERENCE_EXPANSION_MAX_CHUNKS`、既定 4）で参照元の直後に rerank の候補として足す（#1280。[rag-engine.md の設定一覧](./rag-engine.md#設定一覧)）。文書名だけで別の文書を指す文（「時間帯は定期保守計画で確かめます」）は、検索範囲の文書のタイトル・文書名で文書を決め、その文書の質問に関連の高い chunk（文書の中の検索と rerank）を足す（#1400）。参照先が下位の候補・前後の文脈にあるときも参照元の直後へ移す。
-   - 実体の層（#1362）: 実体の索引のある文書（文書レシピの「実体の索引」。既定 on。#1388）では、検索・回答プロファイルで拡張を選ぶと、質問と上位の候補の実体（システム・部署の略号など）から、Oracle の実体の表（`rag_entities` / `rag_entity_aliases` / `rag_entity_chunks`）との SQL の join で、台帳の行（名寄せ）とその属性の実体を定義する chunk（1 段）を上限付き（既定 6）で足す。拡張の開閉（既定 off）と上限は検索・回答プロファイルが持ち（3 層: 文書レシピ = 実体の索引を作るか、KB = 対象の文書、プロファイル = 検索と回答の振る舞い。全体の環境変数は持たない。#1388）、実体の索引は文書レシピの「実体の索引」で文書ごとに無効にできる（拡張を選ばなければ検索に使わない）。外部のグラフ DB・LLM の抽出は使わない（[rag-engine.md の設定一覧](./rag-engine.md#設定一覧)）。
+   - 実体の層（#1362）: 実体の索引のある文書（文書レシピの「実体の索引」。既定 on。#1388）では、回答の検索の拡張（既定 on。#1402）が、質問と上位の候補の実体（システム・部署の略号など）から、Oracle の実体の表（`rag_entities` / `rag_entity_aliases` / `rag_entity_chunks`）との SQL の join で、台帳の行（名寄せ）とその属性の実体を定義する chunk（1 段）を上限付き（既定 6）で足す。拡張の開閉（既定 on。#1402）と上限は検索・回答プロファイルが持ち（3 層: 文書レシピ = 実体の索引を作るか、KB = 対象の文書、プロファイル = 検索と回答の振る舞い。全体の環境変数は持たない。#1388）、実体の索引は文書レシピの「実体の索引」で文書ごとに無効にできる（拡張を off にしたプロファイルの検索では使わない）。外部のグラフ DB・LLM の抽出は使わない（[rag-engine.md の設定一覧](./rag-engine.md#設定一覧)）。
    - 旧 standard の検索後処理（本文 hash の重複除去・MMR の多様化・近傍 / 依存 chunk の追加・圧縮と、`RAG_CONTEXT_WINDOW_CHARS` などの設定）は #595 で削除した。
 
 9. AIDB Memory Engineering
