@@ -506,6 +506,85 @@ def repeated_query_note(
     }
 
 
+# 旧版の年度・版を名指しする質問（#1405）。RAG の根拠の結果の older_versions（当たった今の版の
+# 文書を置き換えた旧版。旧版を検索しなかったときだけ返る）のタイトル・文書名に、質問の年度・版が
+# 当たれば、旧版も含めた検索し直しを案内する（#1362 の再評価の D で、「2025 年度と 2026 年度」の
+# 比較で include_superseded を渡さず、今の版だけで答えていた）。
+MAX_OLDER_VERSIONS = 5
+_YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+_ERA_PATTERN = re.compile(r"(令和|平成)\s*(\d{1,2}|元)\s*年")
+_EDITION_PATTERN = re.compile(r"第\s*(\d+)\s*版")
+# 年度・版を名指ししないが旧版を尋ねる語（今の版の検索で当たった文書の旧版がすべて当たる）。
+_OLD_VERSION_WORDS = ("旧版", "改定前", "改訂前", "変更前", "前の版", "以前の版", "旧規程")
+OLD_VERSION_WORD_MATCH = "旧版"
+SUPERSEDED_VERSION_HINT = (
+    "質問が名指しする年度・版（matched）か改定前の版は、検索で当たった文書の旧版（新しい版に"
+    "置き換えた文書）に当たる。旧版は include_superseded を渡さない検索には出ない。旧版の根拠が"
+    "要るなら、同じ query（年度・版の語を入れてよい）に include_superseded: true を足して"
+    " rag_retrieve_evidence（または rag_search）で検索し直し、今の版（superseded=false）と"
+    "旧版（superseded=true）の根拠を比べて答える。旧版の根拠が無いまま今の版だけで答えない。"
+)
+
+
+def _version_tokens(text: str) -> list[str]:
+    """質問の年度・版の語（西暦の年・和暦の年・第 N 版。出てきた順に重複なく）。"""
+    normalized = unicodedata.normalize("NFKC", text)
+    tokens = [match.group(1) for match in _YEAR_PATTERN.finditer(normalized)]
+    tokens += [f"{era}{number}年" for era, number in _ERA_PATTERN.findall(normalized)]
+    tokens += [f"第{number}版" for number in _EDITION_PATTERN.findall(normalized)]
+    return list(dict.fromkeys(tokens))
+
+
+def _version_label_matches(token: str, label: str) -> bool:
+    return re.search(rf"(?<!\d){re.escape(token)}(?!\d)", label) is not None
+
+
+def superseded_versions_note(
+    arguments: JsonObject, output: JsonObject, questions: list[object]
+) -> JsonObject | None:
+    """旧版の年度・版を名指しする質問で、旧版も含めた検索し直しを勧める案内（#1405）。
+
+    旧版を検索しなかった（``include_superseded`` が true でない）根拠の結果の ``older_versions``
+    のうち、タイトル・文書名に質問（利用者の質問とこの呼び出しの query）の年度・版の語が当たる
+    旧版（質問が旧版・改定前を尋ねるなら全部）を挙げる。当たらなければ None（今の版を尋ねる
+    質問には出さない）。案内だけで、呼び直すかはモデルが決める（planner は作らない。#756）。
+    """
+    if arguments.get("include_superseded") is True:
+        return None
+    older = output.get("older_versions")
+    if not isinstance(older, list) or not older:
+        return None
+    text = "\n".join(item for item in questions if isinstance(item, str))
+    tokens = _version_tokens(text)
+    compact_text = _compact(text)
+    asks_old = any(_compact(word) in compact_text for word in _OLD_VERSION_WORDS)
+    if not tokens and not asks_old:
+        return None
+    versions: list[JsonObject] = []
+    for item in older:
+        if not isinstance(item, dict):
+            continue
+        title, file_name = item.get("title"), item.get("file_name")
+        label = _compact(" ".join(value for value in (title, file_name) if isinstance(value, str)))
+        matched = [token for token in tokens if _version_label_matches(_compact(token), label)]
+        if not matched and not asks_old:
+            continue
+        versions.append(
+            {
+                "document_id": item.get("document_id"),
+                "file_name": file_name,
+                "title": title,
+                "superseded_by_document_id": item.get("superseded_by_document_id"),
+                "matched": matched or [OLD_VERSION_WORD_MATCH],
+            }
+        )
+        if len(versions) >= MAX_OLDER_VERSIONS:
+            break
+    if not versions:
+        return None
+    return {"versions": versions, "next_step": SUPERSEDED_VERSION_HINT}
+
+
 def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObject | None:
     """`rag_search` の結果が回答を確定できないとき、モデルに渡す次の手（決定的。#1283）。
 

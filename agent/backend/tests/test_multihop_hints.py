@@ -50,11 +50,13 @@ from app.features.agent.support_task import (
     RECORD_CODE_HINT,
     REFERENCE_READ_HINT,
     REPEATED_QUERY_HINT,
+    SUPERSEDED_VERSION_HINT,
     normalized_query,
     raised_evidence_limit,
     record_codes,
     repeated_query_note,
     similar_queries,
+    superseded_versions_note,
     text_references,
 )
 from app.features.agent.tools import ToolCall, ToolResult
@@ -121,9 +123,9 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
     return model
 
 
-def _run() -> RunState:
+def _run(goal: str = GOAL) -> RunState:
     run = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal=GOAL, agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+        RunCreateRequest(goal=goal, agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
     )
     anyio.run(builtin_runtime.execute_run, run.id)
     return runtime_repository.get_run(run.id)
@@ -443,6 +445,10 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
         "references",
         # 旧版・変更点を尋ねる質問は旧版も検索する（#1392）。
         "include_superseded: true",
+        # 旧版の年度を名指しする質問の例と、旧版の結果・案内（#1405）。
+        "「2025 年度と 2026 年度では」",
+        "older_versions",
+        "superseded_versions",
     ):
         assert phrase in instructions, phrase
 
@@ -627,3 +633,124 @@ def test_fake_rag_search_inputs_match_the_contract() -> None:
             "default": False,
         }
         assert model.model_fields["include_superseded"].default is False
+
+
+# ---- 旧版の年度・版を名指しする質問（#1405） ----------------------------------------------------
+
+_PLAN_2025 = {
+    "document_id": "plan-2025",
+    "file_name": "maintenance-plan-2025.pdf",
+    "title": "定期保守計画 2025年度",
+    "superseded_by_document_id": "plan",
+}
+_RULES_2023 = {
+    "document_id": "rules-2023",
+    "file_name": "approval-rules-2023.pdf",
+    "title": "承認規程（2023年度版）",
+    "superseded_by_document_id": "rules",
+}
+VERSION_GOAL = "定期保守計画の 2025 年度と 2026 年度では、ＨＲＭ の保守枠はどう変わりましたか？"
+
+
+def _older(*versions: dict[str, Any]) -> dict[str, Any]:
+    return {"evidence": [], "older_versions": [dict(version) for version in versions]}
+
+
+def test_superseded_versions_note_matches_the_named_year_or_edition() -> None:
+    """質問の年度・版が旧版のタイトル・文書名に当たるときだけ、旧版の検索し直しを勧める。"""
+    output = _older(_PLAN_2025, _RULES_2023)
+    query = {"query": "定期保守計画 ＨＲＭ 保守枠"}
+    note = superseded_versions_note(query, output, [VERSION_GOAL, query["query"]])
+    # 2026 年度（今の版）は旧版に当たらない。2023 年度版の規程は質問に無い。
+    assert note == {
+        "versions": [{**_PLAN_2025, "matched": ["2025"]}],
+        "next_step": SUPERSEDED_VERSION_HINT,
+    }
+    # 旧版も検索した呼び出し・旧版の無い結果には出さない。
+    assert (
+        superseded_versions_note({**query, "include_superseded": True}, output, [VERSION_GOAL])
+        is None
+    )
+    assert superseded_versions_note(query, _older(), [VERSION_GOAL]) is None
+    assert superseded_versions_note(query, {"evidence": []}, [VERSION_GOAL]) is None
+    # 今の版を尋ねる質問（年度・版を名指ししない・今の版の年度だけ）には出さない。
+    for question in ("ＨＲＭ の保守枠はいつですか？", "2026 年度の ＨＲＭ の保守枠は？"):
+        assert superseded_versions_note(query, output, [question]) is None, question
+    # 全角の数字・文書名だけの年・和暦・第 N 版も当たる。
+    title_less = {**_PLAN_2025, "title": None}
+    note = superseded_versions_note(query, _older(title_less), ["２０２５年度の保守枠は？"])
+    assert note is not None
+    assert note["versions"][0]["matched"] == ["2025"]
+    reiwa = {**_RULES_2023, "title": "承認規程（令和5年度版）"}
+    note = superseded_versions_note(query, _older(reiwa), ["令和 5 年度版の承認規程の期限は？"])
+    assert note is not None
+    assert note["versions"][0]["matched"] == ["令和5年"]
+    edition = {**_RULES_2023, "title": "承認規程 第2版"}
+    note = superseded_versions_note(query, _older(edition), ["承認規程の第 2 版との違いは？"])
+    assert note is not None
+    assert note["versions"][0]["matched"] == ["第2版"]
+    # 年の数字の一部（20250 など）は当たらない。
+    other = {**_PLAN_2025, "title": "保守計画 20250", "file_name": "plan.pdf"}
+    assert superseded_versions_note(query, _older(other), ["2025 年度の保守枠は？"]) is None
+    # 旧版・改定前を尋ねる質問は、年度を名指ししなくても当たった文書の旧版を全部挙げる。
+    note = superseded_versions_note(query, output, ["承認の期限は改定前と比べてどう変わった？"])
+    assert note is not None
+    assert [version["matched"] for version in note["versions"]] == [["旧版"], ["旧版"]]
+
+
+def test_named_old_year_gets_a_superseded_search_hint(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """旧版の年度を名指しする質問で旧版を検索しなければ、旧版も含めた検索し直しを勧める。"""
+
+    def evidence(argument: Any) -> dict[str, Any]:
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+        # RAG は旧版を検索しなかったときだけ、当たった文書の旧版を返す。
+        if not argument.include_superseded:
+            output["older_versions"] = [dict(_PLAN_2025)]
+        return output
+
+    mcp.outputs["rag_retrieve_evidence"] = evidence
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "定期保守計画 ＨＲＭ 保守枠"},
+                call_id="call-1",
+            )
+        ],
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "定期保守計画 2025年度 ＨＲＭ 保守枠", "include_superseded": True},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("2025 年度は第 1 土曜日、2026 年度は第 2 土曜日です。")],
+    )
+    run = _run(VERSION_GOAL)
+
+    assert _tool_output(model, 1, "call-1")["superseded_versions"] == {
+        "versions": [{**_PLAN_2025, "matched": ["2025"]}],
+        "next_step": SUPERSEDED_VERSION_HINT,
+    }
+    assert "superseded_versions" not in _tool_output(model, 2, "call-2")
+    assert [
+        call["arguments"].get("include_superseded")
+        for call in mcp.calls_of("rag_retrieve_evidence")
+    ] == [None, True]
+    # 記録する step の結果は RAG の結果のまま。
+    outputs = [step.tool_result.output for step in run.steps if step.tool_result is not None]
+    assert all("superseded_versions" not in (output or {}) for output in outputs)
+
+
+def test_fake_rag_evidence_outputs_match_the_contract() -> None:
+    """fake の根拠の結果の項目は RAG の契約の出力にある（旧版の older_versions を含む。#1405）。"""
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    tools = {tool["name"]: tool["outputSchema"] for tool in contract["tools"]}
+    for name in ("rag_search", "rag_retrieve_evidence"):
+        properties = tools[name]["properties"]
+        assert set(DEFAULT_OUTPUTS[name]) <= set(properties), name
+        assert "older_versions" in DEFAULT_OUTPUTS[name], name
+        assert properties["older_versions"]["type"] == "array", name

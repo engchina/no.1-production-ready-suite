@@ -102,6 +102,7 @@ from app.features.agent.support_task import (
     raised_evidence_limit,
     record_codes,
     repeated_query_note,
+    superseded_versions_note,
     support_task_instructions,
     text_references,
 )
@@ -727,8 +728,10 @@ class _ToolRecorder:
         根拠を集める・読むツールの本文に同じ文書の別の箇所への参照があれば読む先（`references`）を、
         この Run で同じ（ほぼ同じ）query の検索を繰り返したら繰り返しを止める案内
         （`repeated_query`。#1351）を、query の実体に当たる台帳・一覧の行に略号・区分のような
-        短い値があればその意味を引く次の段の案内（`record_codes`。#1365）を、RAG の予算があれば
-        この Run で残る検索の回数（`rag_calls_remaining`）を足す。
+        短い値があればその意味を引く次の段の案内（`record_codes`。#1365）を、質問が名指しする
+        年度・版が当たった文書の旧版に当たり、旧版を検索していなければ旧版も含めた検索し直しの案内
+        （`superseded_versions`。#1405）を、RAG の予算があればこの Run で残る検索の回数
+        （`rag_calls_remaining`）を足す。
         """
         from app.features.agent.runtime import runtime_repository
 
@@ -757,6 +760,11 @@ class _ToolRecorder:
             )
             if codes is not None:
                 output = {**output, "record_codes": codes}
+            superseded = superseded_versions_note(
+                call.arguments, output, [self.goal, call.arguments.get("query")]
+            )
+            if superseded is not None:
+                output = {**output, "superseded_versions": superseded}
         remaining = self.budget.rag_calls_remaining if self.budget is not None else None
         if remaining is not None:
             output = {**output, "rag_calls_remaining": remaining}

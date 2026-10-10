@@ -125,7 +125,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 RAG のチャット（会話の作成・送信・取得）は画面の機能で、MCP では提供しません（#787）。MCP で提供するのは検索（`rag_search`）と、その対象を選ぶための検索・回答プロファイルの一覧だけです。
 
-新しい版に置き換えた文書（旧版。#1248）は、既定では検索しません。旧版・変更点を尋ねるときは、`rag_search` / `rag_retrieve_evidence` の真偽値の引数 `include_superseded: true` を渡します（既定 `false`。`filters` に `include_superseded` を書くと入力の誤り `MCP_TOOL_ARGUMENTS_INVALID`。#1392）。旧版を含めても検索の範囲（検索・回答プロファイル・ナレッジベース・業務 Agent のデータの範囲）は変わらず、範囲の中の旧版だけが加わります。旧版の根拠は `superseded: true` で返します（`rag_read_source` は旧版の根拠も読めます）。
+新しい版に置き換えた文書（旧版。#1248）は、既定では検索しません。旧版・変更点を尋ねるときは、`rag_search` / `rag_retrieve_evidence` の真偽値の引数 `include_superseded: true` を渡します（既定 `false`。`filters` に `include_superseded` を書くと入力の誤り `MCP_TOOL_ARGUMENTS_INVALID`。#1392）。旧版を含めても検索の範囲（検索・回答プロファイル・ナレッジベース・業務 Agent のデータの範囲）は変わらず、範囲の中の旧版だけが加わります。旧版の根拠は `superseded: true` で返します（`rag_read_source` は旧版の根拠も読めます）。旧版を含めずに検索したとき、当たった今の版の文書に旧版があれば、結果の `older_versions` に旧版（`document_id`・`file_name`・`title`（先頭の見出し。「定期保守計画 2025年度」のように版・年度を含むことが多い）・`superseded_by_document_id`。旧版を含めた検索と同じ範囲の中だけ、最大 10 件）を返します。旧版の年度を名指しする質問（「2025 年度と 2026 年度では」）で `include_superseded` を渡す手がかりです（#1405。Agent はこれと質問の年度・版を照らして、旧版も含めた検索し直しを案内します）。
 
 ツールの業務エラーは `isError: true` の `structuredContent` に `error_code` / `message` / `status` で返します（例: 範囲外の検索・回答プロファイルは `status: 404`、KB の範囲外は `error_code: RAG_SCOPE_FORBIDDEN`、タイムアウトは `status: 504`、rate limit は `status: 429`）。
 
