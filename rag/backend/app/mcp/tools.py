@@ -1288,17 +1288,18 @@ def _is_reserved_entity_expansion(chunk: RetrievedChunk, *, reranked: bool) -> b
     """evidence_limit の内に枠を確保する拡張の根拠か（#1362・#1390）。
 
     回答の文脈の枠（rag_engine の ``is_reserved_entity_expansion``）と同じ規則で、rerank の関連度
-    が ``ENTITY_EXPANSION_MIN_RELEVANCE`` 以上のもの。質問と関係の薄い属性の chunk（別のシステムの
-    台帳の行・質問と別の章）で枠を使わない。関連度の無い拡張の根拠は、rerank を実行した検索
-    （``reranked``）では起点にならず前後の文脈に入ったもの（同じ親の確保する根拠があればその文脈と
-    して確保する）で、rerank を実行しなかった検索では確保する（#1362 と同じ）。
+    が起点の種類（質問の実体 / 上位の chunk の実体）の下限以上のもの。質問と関係の薄い属性の
+    chunk（別のシステムの台帳の行・質問と別の章）で枠を使わない。関連度の無い拡張の根拠は、
+    rerank を実行した検索（``reranked``）では起点にならず前後の文脈に入ったもの（同じ親の確保
+    する根拠があればその文脈として確保する）で、rerank を実行しなかった検索では確保する（#1362
+    と同じ）。
     """
     if not _is_entity_expansion(chunk):
         return False
     score = _rerank_score(chunk)
     if score is None:
         return not reranked
-    return entity_expansion_relevant(score)
+    return entity_expansion_relevant(score, chunk.metadata.get("entity_expansion"))
 
 
 def _evidence_group(chunk: RetrievedChunk) -> tuple[str, str] | None:

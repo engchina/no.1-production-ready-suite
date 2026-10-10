@@ -13,6 +13,7 @@ import rag_engine.generation.answering as answering
 from rag_engine.config import get_settings
 from rag_engine.generation.answer_records import is_entity_expansion_record
 from rag_engine.retrieval.entity_expansion import (
+    ENTITY_EXPANSION_CHUNK_SEED_MIN_RELEVANCE,
     ENTITY_EXPANSION_MIN_RELEVANCE,
     entity_expansion_relevant,
     is_reserved_entity_expansion,
@@ -105,10 +106,14 @@ def test_low_relevance_entity_expansion_is_ordered_by_rerank(monkeypatch):
 
 
 def test_relevance_rule_keeps_expansion_when_rerank_did_not_run():
-    assert ENTITY_EXPANSION_MIN_RELEVANCE == 0.2
+    assert ENTITY_EXPANSION_MIN_RELEVANCE == 0.24
     assert entity_expansion_relevant(None)
-    assert entity_expansion_relevant(0.2)
-    assert not entity_expansion_relevant(0.19)
+    assert entity_expansion_relevant(0.24, {"seed": "question"})
+    assert not entity_expansion_relevant(0.23, {"seed": "question"})
+    # 上位の chunk の実体から足した根拠は、検索で当たった chunk と同じ程度の関連度を求める。
+    assert ENTITY_EXPANSION_CHUNK_SEED_MIN_RELEVANCE == 0.45
+    assert not entity_expansion_relevant(0.44, {"seed": "chunk"})
+    assert entity_expansion_relevant(0.45, {"seed": "chunk"})
     # rerank の関連度が無い拡張の根拠（rerank の無効・失敗）は確保する（#1362 と同じ）。
     assert is_reserved_entity_expansion(_child("e", expansion=True))
     assert not is_reserved_entity_expansion(_child("e", expansion=True, score=0.05))

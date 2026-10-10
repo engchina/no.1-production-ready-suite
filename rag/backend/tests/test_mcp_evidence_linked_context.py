@@ -38,6 +38,7 @@ def _chunk(
     section: str = "",
     targets: list[str] | None = None,
     expansion: bool = False,
+    seed: str = "question",
     group: str | None = None,
 ) -> RetrievedChunk:
     metadata: dict[str, Any] = {
@@ -59,7 +60,7 @@ def _chunk(
             ensure_ascii=False,
         )
     if expansion:
-        metadata[ENTITY_EXPANSION_KEY] = {"entity": chunk_id, "hop": 1, "seed": "question"}
+        metadata[ENTITY_EXPANSION_KEY] = {"entity": chunk_id, "hop": 1, "seed": seed}
     return RetrievedChunk(
         document_id=document,
         chunk_id=chunk_id,
@@ -298,3 +299,41 @@ def test_expansion_without_relevance_after_rerank_is_not_reserved_alone() -> Non
     assert "stray-expansion" not in _ids(mcp_evidence_order([*scored, stray], 20)[:20])
     assert "stray-expansion" in _ids(mcp_evidence_order([*hits, stray], 20)[:20])
     assert ENTITY_EXPANSION_LIMIT_SHARE == 0.3
+
+
+def test_expansion_from_top_chunk_entities_needs_hit_level_relevance() -> None:
+    """上位の chunk の実体から足した根拠（保守計画の章に並ぶ別のシステムの台帳の行など）は、検索で
+    当たった chunk と同じ程度の関連度が無ければ確保しない。質問の実体から足した根拠は低い関連度でも
+    確保する（橋渡しの行）。
+    """
+    hits = [
+        _chunk(f"hit-{rank}", "retrieved_anchor", document=f"doc-{rank}", index=0, rank=rank)
+        for rank in range(1, 24)
+    ]
+    hits[0] = hits[0].model_copy(update={"rerank_score": 0.9})
+    question_row = _chunk(
+        "ledger-named",
+        ENTITY_EXPANSION_ROLE,
+        document=LEDGER,
+        index=1,
+        rank=30,
+        rerank=0.3,
+        expansion=True,
+        group="ledger-a",
+    )
+    chunk_row = _chunk(
+        "ledger-listed",
+        ENTITY_EXPANSION_ROLE,
+        document=LEDGER,
+        index=5,
+        rank=31,
+        rerank=0.4,
+        expansion=True,
+        seed="chunk",
+        group="ledger-b",
+    )
+
+    head = _ids(mcp_evidence_order([*hits, question_row, chunk_row], 20)[:20])
+
+    assert "ledger-named" in head
+    assert "ledger-listed" not in head
