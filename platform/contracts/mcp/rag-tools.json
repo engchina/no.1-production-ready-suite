@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -418,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -529,7 +529,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -778,7 +778,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1283,7 +1283,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1537,7 +1537,7 @@
           },
           "include_superseded": {
             "default": false,
-            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるときは true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。",
+            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるとき、旧版の年度・版を名指しするとき（「2025 年度と 2026 年度では」「2023 年度版の規程では」）は true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。結果の older_versions に、当たった文書の旧版（文書名・タイトル）が出る。",
             "title": "Include Superseded",
             "type": "boolean"
           },
@@ -1844,6 +1844,53 @@
             "title": "EvidenceReference",
             "type": "object"
           },
+          "OlderVersion": {
+            "description": "検索で当たった文書を置き換えた旧版（#1405）。",
+            "properties": {
+              "document_id": {
+                "description": "旧版の文書の id。",
+                "title": "Document Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "旧版の文書名。",
+                "title": "File Name"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "旧版のタイトル（文書の先頭の見出し。版・年度を含むことが多い。例: 「定期保守計画 2025年度」）。見出しが無ければ null。",
+                "title": "Title"
+              },
+              "superseded_by_document_id": {
+                "description": "この旧版を置き換えた新しい版（検索で当たった根拠の文書）の id。",
+                "title": "Superseded By Document Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "superseded_by_document_id"
+            ],
+            "title": "OlderVersion",
+            "type": "object"
+          },
           "RagEvidence": {
             "description": "検索・回答の根拠 1 件。",
             "properties": {
@@ -2052,7 +2099,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2080,6 +2127,14 @@
             "description": "evidence_limit を超えて返さなかった根拠の数。",
             "title": "Evidence Omitted",
             "type": "integer"
+          },
+          "older_versions": {
+            "description": "検索で当たった今の版の文書に、新しい版に置き換えた旧版があれば、その旧版（検索の範囲の中のもの。最大 10 件）。include_superseded を渡さない検索だけで返し、旧版の根拠は検索していない。質問が旧版の年度・版（タイトル・文書名の「2025年度」など）や改定前との違いを尋ねるなら、include_superseded に true を渡して検索し直す。無ければ空。",
+            "items": {
+              "$ref": "#/$defs/OlderVersion"
+            },
+            "title": "Older Versions",
+            "type": "array"
           }
         },
         "required": [
@@ -2154,7 +2209,7 @@
           },
           "include_superseded": {
             "default": false,
-            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるときは true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。",
+            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるとき、旧版の年度・版を名指しするとき（「2025 年度と 2026 年度では」「2023 年度版の規程では」）は true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。結果の older_versions に、当たった文書の旧版（文書名・タイトル）が出る。",
             "title": "Include Superseded",
             "type": "boolean"
           },
@@ -2723,6 +2778,53 @@
             "title": "GuideRef",
             "type": "object"
           },
+          "OlderVersion": {
+            "description": "検索で当たった文書を置き換えた旧版（#1405）。",
+            "properties": {
+              "document_id": {
+                "description": "旧版の文書の id。",
+                "title": "Document Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "旧版の文書名。",
+                "title": "File Name"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "旧版のタイトル（文書の先頭の見出し。版・年度を含むことが多い。例: 「定期保守計画 2025年度」）。見出しが無ければ null。",
+                "title": "Title"
+              },
+              "superseded_by_document_id": {
+                "description": "この旧版を置き換えた新しい版（検索で当たった根拠の文書）の id。",
+                "title": "Superseded By Document Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "superseded_by_document_id"
+            ],
+            "title": "OlderVersion",
+            "type": "object"
+          },
           "RagEvidence": {
             "description": "検索・回答の根拠 1 件。",
             "properties": {
@@ -2931,7 +3033,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3047,6 +3149,14 @@
             "description": "evidence_limit を超えて返さなかった根拠の数。",
             "title": "Evidence Omitted",
             "type": "integer"
+          },
+          "older_versions": {
+            "description": "検索で当たった今の版の文書に、新しい版に置き換えた旧版があれば、その旧版（検索の範囲の中のもの。最大 10 件）。include_superseded を渡さない検索だけで返し、旧版の根拠は検索していない。質問が旧版の年度・版（タイトル・文書名の「2025年度」など）や改定前との違いを尋ねるなら、include_superseded に true を渡して検索し直す。無ければ空。",
+            "items": {
+              "$ref": "#/$defs/OlderVersion"
+            },
+            "title": "Older Versions",
+            "type": "array"
           },
           "provenance": {
             "anyOf": [
@@ -3403,7 +3513,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 7,
+            "default": 8,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

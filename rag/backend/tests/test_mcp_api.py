@@ -22,6 +22,7 @@ from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
+from app.clients.oracle import OlderDocumentVersion
 from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
@@ -302,6 +303,120 @@ def test_include_superseded_is_a_boolean_argument(
         assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
     assert "include_superseded" in json.dumps(invalid["structuredContent"], ensure_ascii=False)
     assert RecordingPipeline.captured_request is None
+
+
+class _OlderVersionsOracle:
+    """根拠の文書の旧版を返す fake（#1405）。呼び出しの条件を記録する。"""
+
+    calls: list[tuple[dict[str, str], list[str]]] = []
+    fail = False
+
+    async def get_search_answer_profile(self, profile_id: str) -> Any:
+        return SimpleNamespace(
+            id=profile_id, config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1", "kb-2"])
+        )
+
+    async def retrieval_older_versions(
+        self, filters: dict[str, str], document_ids: list[str], *, limit: int
+    ) -> list[Any]:
+        _OlderVersionsOracle.calls.append((dict(filters), list(document_ids)))
+        if _OlderVersionsOracle.fail:
+            raise RuntimeError("db down")
+        assert limit == mcp_tools.OLDER_VERSIONS_MAX
+        return [
+            OlderDocumentVersion(
+                document_id="plan-2025",
+                file_name="maintenance-plan-2025.pdf",
+                title="定期保守計画 2025年度",
+                superseded_by_document_id="plan",
+            )
+        ]
+
+    async def chunk_set_extraction_recipe_ids(self, _ids: Any) -> dict[str, str]:
+        return {}
+
+
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_evidence_results_show_older_versions_of_hit_documents(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, tool: str
+) -> None:
+    """当たった文書に旧版があれば、旧版を検索しない結果に older_versions で示す（#1405）。"""
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        return SearchResponse(
+            answer="回答",
+            citations=[
+                RetrievedChunk(
+                    document_id="plan",
+                    chunk_id="c-plan",
+                    text="ＨＲＭ: 毎月第 2 土曜日",
+                    score=0.9,
+                    file_name="maintenance-plan.pdf",
+                    metadata={"evidence_role": "retrieved_anchor"},
+                ),
+                # 旧版の根拠（旧版も検索したときだけ当たる）の文書は、旧版を探す対象にしない。
+                RetrievedChunk(
+                    document_id="rules-2023",
+                    chunk_id="c-old",
+                    text="7 営業日",
+                    score=0.5,
+                    file_name="approval-rules-2023.pdf",
+                    metadata={"document_superseded": True},
+                ),
+            ],
+            trace_id="trace-1",
+            guardrail_warnings=[],
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    monkeypatch.setattr(mcp_tools, "OracleClient", _OlderVersionsOracle)
+    monkeypatch.setattr(_OlderVersionsOracle, "calls", [])
+    user = auth.user_with_permissions(
+        "searcher",
+        ["menu.search"],
+        search_answer_profile_ids=["bv-1"],
+        knowledge_base_ids=["kb-1", "kb-2", "kb-3"],
+    )
+    headers = _token(user.user_uuid)
+    query = "定期保守計画の 2025 年度と 2026 年度では、ＨＲＭ の保守枠はどう変わりましたか？"
+
+    body = _call(
+        tool,
+        {"query": query, "search_answer_profile_id": "bv-1", "filters": {"category_name": "計画"}},
+        headers,
+    )["structuredContent"]
+    assert body["older_versions"] == [
+        {
+            "document_id": "plan-2025",
+            "file_name": "maintenance-plan-2025.pdf",
+            "title": "定期保守計画 2025年度",
+            "superseded_by_document_id": "plan",
+        }
+    ]
+    # 旧版を含めて検索し直したときと同じ範囲（filters と検索・回答プロファイルの参照 KB）で探す。
+    assert _OlderVersionsOracle.calls == [
+        ({"category_name": "計画", "knowledge_base_id": "kb-1,kb-2"}, ["plan"])
+    ]
+
+    # ナレッジベースを名指しした検索は、その KB の中で探す。
+    _OlderVersionsOracle.calls.clear()
+    _call(tool, {"query": query, "knowledge_base_ids": ["kb-3"]}, headers)
+    assert _OlderVersionsOracle.calls == [({"knowledge_base_id": "kb-3"}, ["plan"])]
+
+    # 旧版も検索したときは示さない（探さない）。
+    _OlderVersionsOracle.calls.clear()
+    body = _call(tool, {"query": query, "include_superseded": True}, headers)["structuredContent"]
+    assert body["older_versions"] == []
+    assert _OlderVersionsOracle.calls == []
+
+    # 読めなければ示さずに、検索の結果は返す。
+    monkeypatch.setattr(_OlderVersionsOracle, "fail", True)
+    result = _call(tool, {"query": query}, headers)
+    assert result["isError"] is False, result
+    assert result["structuredContent"]["older_versions"] == []
+    assert result["structuredContent"]["evidence"]
 
 
 def _chunk(chunk_id: str, *, text: str = "本文", used: bool | None = None, **metadata: Any) -> Any:

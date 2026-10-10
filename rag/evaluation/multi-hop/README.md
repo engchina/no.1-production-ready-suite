@@ -152,8 +152,9 @@ D 2 件あった）。
   `include_superseded: true` を持ち、A はそのケースだけ利用者が旧版・変更点を尋ねるときと同じく `filters` の
   `include_superseded=true` で旧版も検索します。D（業務 Agent）は、質問から旧版が要ると判断して `rag_search` /
   `rag_retrieve_evidence` の真偽値の引数 `include_superseded: true` を自分で渡す必要があります（渡さなければ旧版の
-  根拠が欠けます。#1392 より前は `filters` に真偽値を渡して入力の検証で拒否されていました）。D の結果の
-  `agent.superseded_cases` に、このケースのうち旧版も検索したケース（`searched_case_ids`）と、検索しなかった
+  根拠が欠けます。#1392 より前は `filters` に真偽値を渡して入力の検証で拒否されていました）。旧版を含めない検索の
+  結果には当たった文書の旧版（`older_versions`）が出て、質問の年度・版が旧版のタイトル・文書名に当たると、Agent が
+  旧版も含めた検索し直しを案内します（`superseded_versions`。#1405）。D の結果の `agent.superseded_cases` に、このケースのうち旧版も検索したケース（`searched_case_ids`）と、検索しなかった
   ケース（`missed_case_ids`）を出します（Run ごとの回数は `runs[].superseded_searches`）。
 - **旧版を除かない評価（紛らわしさの測定）**: `evaluation_corpus_cli` に `--keep-superseded-active` を渡すと、版を
   登録せずに取り込み、旧版も今有効な文書のまま検索させます（書き出す評価セットから `document_versions` を外す）。
@@ -195,12 +196,12 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 
 ## 実体の層の有り / 無しで比べる（#1362）
 
-実体の層（文書レシピの「実体の抽出」（既定 on。#1388）と、回答の検索の 1 段の拡張（既定 off）。
+実体の層（文書レシピの「実体の抽出」（既定 on。#1388）と、回答の検索の 1 段の拡張（既定 on。#1402）。
 [../../docs/rag-engine.md](../../docs/rag-engine.md) の `RAG_ENTITY_INDEX_ENABLED`）の効果は、同じ資料を
 **別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます（同じ文書を両方に入れると、
-実体を持つ文書が両方の検索範囲に入るため）。拡張は検索・回答プロファイルで選び、全体の環境変数は持たない
-（#1388）ため、`--entity-index` で書き出す評価セットには `rag_overrides` の `entity_expansion_enabled: true`
-が入ります（`--guides` で作る検索・回答プロファイルでも拡張を選びます）。実体の抽出は全体の既定で on のため、
+実体を持つ文書が両方の検索範囲に入るため）。拡張は既定 on で、検索・回答プロファイルで選び、全体の環境変数は
+持たない（#1388 / #1402）。`--entity-index` で書き出す評価セットには、既定に頼らず `rag_overrides` の
+`entity_expansion_enabled: true` が入ります（`--guides` で作る検索・回答プロファイルでも拡張を明示します）。実体の抽出は全体の既定で on のため、
 無しの側は `--no-entity-index` でレシピの実体の抽出を無効にします。実体を持たないナレッジベースでは何も
 足しません。
 

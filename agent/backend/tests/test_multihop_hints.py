@@ -4,7 +4,8 @@ RAG は部品（根拠・構成・順に読む）を出し、多段の組み立�
 集める・読むツールの本文に同じ文書の別の箇所への参照（「第 4 章を参照」）があれば読む先を、同じ
 （ほぼ同じ）query の検索を繰り返したら繰り返しを止める案内を、RAG の予算があればこの Run で残る
 検索の回数を、モデルへの結果に足す（記録する step の結果は RAG のまま）。モデルが既定より小さくした
-`evidence_limit` は既定に引き上げる（#1351）。query の実体に当たる台帳・一覧の行に略号・区分の
+`evidence_limit`・`top_k` は既定に引き上げ、上限を超える値は上限に丸め、直したことをモデルへの結果に
+残す（#1351・#1403）。query の実体に当たる台帳・一覧の行に略号・区分の
 短い値があれば、その意味を引く次の段を案内する（#1365）。
 SDK の `ScriptedModel` と契約どおりの fake の RAG の MCP（`mcp_support`）で確かめる。
 """
@@ -20,6 +21,7 @@ from typing import Any
 
 import anyio
 import pytest
+from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import (
     DEFAULT_OUTPUTS,
@@ -45,16 +47,21 @@ from app.features.agent.skills import (
     skill_registry,
 )
 from app.features.agent.support_task import (
+    ADJUSTED_LIMITS_HINT,
     MAX_RECORD_CODES,
     MAX_REFERENCES,
     RECORD_CODE_HINT,
     REFERENCE_READ_HINT,
     REPEATED_QUERY_HINT,
+    SEARCH_LIMIT_SCHEMA_NOTE,
+    SUPERSEDED_VERSION_HINT,
+    adjusted_search_limits,
     normalized_query,
-    raised_evidence_limit,
     record_codes,
     repeated_query_note,
+    search_limit_schema,
     similar_queries,
+    superseded_versions_note,
     text_references,
 )
 from app.features.agent.tools import ToolCall, ToolResult
@@ -121,9 +128,9 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
     return model
 
 
-def _run() -> RunState:
+def _run(goal: str = GOAL) -> RunState:
     run = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal=GOAL, agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+        RunCreateRequest(goal=goal, agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
     )
     anyio.run(builtin_runtime.execute_run, run.id)
     return runtime_repository.get_run(run.id)
@@ -298,13 +305,86 @@ def test_similar_queries_are_deterministic(left: str, right: str, similar: bool)
 
 def test_evidence_limit_below_the_default_is_raised_to_the_schema_default() -> None:
     schema = {"properties": {"evidence_limit": {"type": "integer", "default": 12}}}
-    assert raised_evidence_limit({"evidence_limit": 5}, schema) == 12
+    assert adjusted_search_limits({"evidence_limit": 5}, schema) == {
+        "evidence_limit": {"requested": 5, "sent": 12}
+    }
     # 既定以上・指定なし・schema に既定が無いときは変えない。
-    assert raised_evidence_limit({"evidence_limit": 12}, schema) is None
-    assert raised_evidence_limit({"evidence_limit": 20}, schema) is None
-    assert raised_evidence_limit({}, schema) is None
-    assert raised_evidence_limit({"evidence_limit": 5}, {"properties": {}}) is None
-    assert raised_evidence_limit({"evidence_limit": True}, schema) is None
+    assert adjusted_search_limits({"evidence_limit": 12}, schema) == {}
+    assert adjusted_search_limits({"evidence_limit": 20}, schema) == {}
+    assert adjusted_search_limits({}, schema) == {}
+    assert adjusted_search_limits({"evidence_limit": 5}, {"properties": {}}) == {}
+    assert adjusted_search_limits({"evidence_limit": True}, schema) == {}
+
+
+def _contract_schema(tool_name: str) -> dict[str, Any]:
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    [schema] = [tool["inputSchema"] for tool in contract["tools"] if tool["name"] == tool_name]
+    loaded: dict[str, Any] = schema
+    return loaded
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"top_k": 5}, {"top_k": {"requested": 5, "sent": 20}}),
+        (
+            {"top_k": 10, "evidence_limit": 5},
+            {
+                "top_k": {"requested": 10, "sent": 20},
+                "evidence_limit": {"requested": 5, "sent": 20},
+            },
+        ),
+        (
+            {"top_k": 100, "evidence_limit": 100},
+            {
+                "evidence_limit": {"requested": 100, "sent": 50},
+            },
+        ),
+        ({"top_k": 500}, {"top_k": {"requested": 500, "sent": 100}}),
+        ({"top_k": 0}, {"top_k": {"requested": 0, "sent": 20}}),
+        ({"top_k": 20, "evidence_limit": 30}, {}),
+        ({"top_k": None}, {}),
+        ({"query": "勤怠管理システム 担当部署"}, {}),
+    ],
+    ids=["small", "both-small", "over-max", "top-k-over-max", "zero", "default", "null", "none"],
+)
+def test_search_limits_follow_the_rag_contract(
+    arguments: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    # 既定と上限は RAG の契約から取る（top_k は契約の default が null なので 20。#1403）。
+    schema = _contract_schema("rag_retrieve_evidence")
+    assert adjusted_search_limits(arguments, schema) == expected
+
+
+def test_rag_search_evidence_limit_default_stays_at_the_contract_value() -> None:
+    schema = _contract_schema("rag_search")
+    assert adjusted_search_limits({"top_k": 5, "evidence_limit": 5}, schema) == {
+        "top_k": {"requested": 5, "sent": 20},
+        "evidence_limit": {"requested": 5, "sent": 12},
+    }
+
+
+def test_contract_top_k_default_is_twenty_when_omitted() -> None:
+    # 契約の top_k の default は null で、RAG は省略時に 20 を使う（evidence_limit の説明にある）。
+    # RAG がこの既定を変えたら RAG_TOP_K_DEFAULT も合わせる。
+    schema = _contract_schema("rag_retrieve_evidence")
+    assert schema["properties"]["top_k"]["default"] is None
+    assert "top_k。省略時 20" in schema["properties"]["evidence_limit"]["description"]
+
+
+def test_search_limit_schema_tells_the_model_to_omit_the_limits() -> None:
+    schema = _contract_schema("rag_retrieve_evidence")
+    shown = search_limit_schema("rag__rag_retrieve_evidence", schema)
+    for name in ("top_k", "evidence_limit"):
+        description = shown["properties"][name]["description"]
+        assert description.endswith(SEARCH_LIMIT_SCHEMA_NOTE)
+        assert "多段の質問では省略する" in description
+    # 呼び先の契約（元の schema）は変えない。2 回通しても重ねない。
+    assert SEARCH_LIMIT_SCHEMA_NOTE not in schema["properties"]["top_k"]["description"]
+    assert search_limit_schema("rag__rag_retrieve_evidence", shown) == shown
+    # 根拠のツール以外は元のまま。
+    guides = _contract_schema("rag_lookup_guides")
+    assert search_limit_schema("rag__rag_lookup_guides", guides) is guides
 
 
 def _step(name: str, arguments: dict[str, Any], *, success: bool = True) -> RunStep:
@@ -413,6 +493,11 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
     assert recorded[0]["evidence_limit"] == 20
 
     assert "repeated_query" not in _tool_output(model, 1, "call-1")
+    assert _tool_output(model, 1, "call-1")["adjusted_limits"]["evidence_limit"] == {
+        "requested": 5,
+        "sent": 20,
+    }
+    assert "adjusted_limits" not in _tool_output(model, 2, "call-2")
     assert _tool_output(model, 2, "call-2")["repeated_query"] == {
         "count": 1,
         "similar_queries": ["勤怠管理システム 担当部署"],
@@ -425,15 +510,82 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
     assert all("repeated_query" not in (output or {}) for output in outputs)
 
 
+def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "システム台帳 販売管理システム エスカレーション先", "top_k": 5},
+                call_id="call-1",
+            )
+        ],
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "第三日曜 停止 システム", "top_k": 100, "evidence_limit": 100},
+                call_id="call-2",
+            )
+        ],
+        [
+            function_call(
+                "rag__rag_search",
+                {"query": "注文の承認者 期限", "top_k": 10},
+                call_id="call-3",
+            )
+        ],
+        [assistant_message("エスカレーション先は営業部です。")],
+    )
+    run = _run()
+
+    # 既定（20）より小さい top_k は既定に引き上げ、上限（evidence_limit 50）を超える値は上限に
+    # 丸める。呼び先の入力検証（fake は契約の上限で検証する）で失敗させない（#1403）。
+    sent = [call["arguments"] for call in mcp.calls_of("rag_retrieve_evidence")]
+    assert [(args.get("top_k"), args.get("evidence_limit")) for args in sent] == [
+        (20, None),
+        (100, 50),
+    ]
+    [searched] = mcp.calls_of("rag_search")
+    assert searched["arguments"]["top_k"] == 20
+    assert all(step.tool_result is not None and step.tool_result.success for step in run.steps)
+    # step には送った値を残す。
+    recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
+    assert recorded[0]["top_k"] == 20
+    assert recorded[1]["evidence_limit"] == 50
+    # モデルへの結果に、直した値と次から省略する案内を残す（記録する step の結果は RAG のまま）。
+    assert _tool_output(model, 1, "call-1")["adjusted_limits"] == {
+        "top_k": {"requested": 5, "sent": 20},
+        "next_step": ADJUSTED_LIMITS_HINT,
+    }
+    assert _tool_output(model, 2, "call-2")["adjusted_limits"] == {
+        "evidence_limit": {"requested": 100, "sent": 50},
+        "next_step": ADJUSTED_LIMITS_HINT,
+    }
+    assert _tool_output(model, 3, "call-3")["adjusted_limits"]["top_k"] == {
+        "requested": 10,
+        "sent": 20,
+    }
+    outputs = [step.tool_result.output for step in run.steps if step.tool_result is not None]
+    assert all("adjusted_limits" not in (output or {}) for output in outputs)
+    # モデルに見せる schema の件数の説明に「多段の質問では省略する」を足す。
+    tools = {tool.name: tool for tool in model.calls[0].tools if isinstance(tool, FunctionTool)}
+    for name in ("rag__rag_retrieve_evidence", "rag__rag_search"):
+        properties = tools[name].params_json_schema["properties"]
+        assert SEARCH_LIMIT_SCHEMA_NOTE in properties["top_k"]["description"]
+        assert SEARCH_LIMIT_SCHEMA_NOTE in properties["evidence_limit"]["description"]
+
+
 def test_business_rag_research_instructions_cover_hop_queries() -> None:
     skill = skill_registry.get("business_rag_research")
     assert skill is not None
     instructions = skill.instructions
-    # 段の query は実体と属性だけ・evidence_limit は既定より小さくしない・言い換えは 2 回まで・
+    # 段の query は実体と属性だけ・件数は既定より小さくしない・言い換えは 2 回まで・
     # 台帳を示されたらその実体で台帳を引く・繰り返しの案内に従う（#1351）。
     for phrase in (
         "実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）と引く属性だけ",
-        "evidence_limit は既定より小さくしない",
+        "件数（top_k・evidence_limit）は既定より小さくしない（多段の質問では省略する）",
         "record_codes",
         "1 回目の結果だけで答えず、その意味を次の段で引く",
         "言い換えて 2 回引いても根拠が出なければ",
@@ -443,6 +595,10 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
         "references",
         # 旧版・変更点を尋ねる質問は旧版も検索する（#1392）。
         "include_superseded: true",
+        # 旧版の年度を名指しする質問の例と、旧版の結果・案内（#1405）。
+        "「2025 年度と 2026 年度では」",
+        "older_versions",
+        "superseded_versions",
     ):
         assert phrase in instructions, phrase
 
@@ -627,3 +783,124 @@ def test_fake_rag_search_inputs_match_the_contract() -> None:
             "default": False,
         }
         assert model.model_fields["include_superseded"].default is False
+
+
+# ---- 旧版の年度・版を名指しする質問（#1405） ----------------------------------------------------
+
+_PLAN_2025 = {
+    "document_id": "plan-2025",
+    "file_name": "maintenance-plan-2025.pdf",
+    "title": "定期保守計画 2025年度",
+    "superseded_by_document_id": "plan",
+}
+_RULES_2023 = {
+    "document_id": "rules-2023",
+    "file_name": "approval-rules-2023.pdf",
+    "title": "承認規程（2023年度版）",
+    "superseded_by_document_id": "rules",
+}
+VERSION_GOAL = "定期保守計画の 2025 年度と 2026 年度では、ＨＲＭ の保守枠はどう変わりましたか？"
+
+
+def _older(*versions: dict[str, Any]) -> dict[str, Any]:
+    return {"evidence": [], "older_versions": [dict(version) for version in versions]}
+
+
+def test_superseded_versions_note_matches_the_named_year_or_edition() -> None:
+    """質問の年度・版が旧版のタイトル・文書名に当たるときだけ、旧版の検索し直しを勧める。"""
+    output = _older(_PLAN_2025, _RULES_2023)
+    query = {"query": "定期保守計画 ＨＲＭ 保守枠"}
+    note = superseded_versions_note(query, output, [VERSION_GOAL, query["query"]])
+    # 2026 年度（今の版）は旧版に当たらない。2023 年度版の規程は質問に無い。
+    assert note == {
+        "versions": [{**_PLAN_2025, "matched": ["2025"]}],
+        "next_step": SUPERSEDED_VERSION_HINT,
+    }
+    # 旧版も検索した呼び出し・旧版の無い結果には出さない。
+    assert (
+        superseded_versions_note({**query, "include_superseded": True}, output, [VERSION_GOAL])
+        is None
+    )
+    assert superseded_versions_note(query, _older(), [VERSION_GOAL]) is None
+    assert superseded_versions_note(query, {"evidence": []}, [VERSION_GOAL]) is None
+    # 今の版を尋ねる質問（年度・版を名指ししない・今の版の年度だけ）には出さない。
+    for question in ("ＨＲＭ の保守枠はいつですか？", "2026 年度の ＨＲＭ の保守枠は？"):
+        assert superseded_versions_note(query, output, [question]) is None, question
+    # 全角の数字・文書名だけの年・和暦・第 N 版も当たる。
+    title_less = {**_PLAN_2025, "title": None}
+    note = superseded_versions_note(query, _older(title_less), ["２０２５年度の保守枠は？"])
+    assert note is not None
+    assert note["versions"][0]["matched"] == ["2025"]
+    reiwa = {**_RULES_2023, "title": "承認規程（令和5年度版）"}
+    note = superseded_versions_note(query, _older(reiwa), ["令和 5 年度版の承認規程の期限は？"])
+    assert note is not None
+    assert note["versions"][0]["matched"] == ["令和5年"]
+    edition = {**_RULES_2023, "title": "承認規程 第2版"}
+    note = superseded_versions_note(query, _older(edition), ["承認規程の第 2 版との違いは？"])
+    assert note is not None
+    assert note["versions"][0]["matched"] == ["第2版"]
+    # 年の数字の一部（20250 など）は当たらない。
+    other = {**_PLAN_2025, "title": "保守計画 20250", "file_name": "plan.pdf"}
+    assert superseded_versions_note(query, _older(other), ["2025 年度の保守枠は？"]) is None
+    # 旧版・改定前を尋ねる質問は、年度を名指ししなくても当たった文書の旧版を全部挙げる。
+    note = superseded_versions_note(query, output, ["承認の期限は改定前と比べてどう変わった？"])
+    assert note is not None
+    assert [version["matched"] for version in note["versions"]] == [["旧版"], ["旧版"]]
+
+
+def test_named_old_year_gets_a_superseded_search_hint(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """旧版の年度を名指しする質問で旧版を検索しなければ、旧版も含めた検索し直しを勧める。"""
+
+    def evidence(argument: Any) -> dict[str, Any]:
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+        # RAG は旧版を検索しなかったときだけ、当たった文書の旧版を返す。
+        if not argument.include_superseded:
+            output["older_versions"] = [dict(_PLAN_2025)]
+        return output
+
+    mcp.outputs["rag_retrieve_evidence"] = evidence
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "定期保守計画 ＨＲＭ 保守枠"},
+                call_id="call-1",
+            )
+        ],
+        [
+            function_call(
+                "rag__rag_retrieve_evidence",
+                {"query": "定期保守計画 2025年度 ＨＲＭ 保守枠", "include_superseded": True},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("2025 年度は第 1 土曜日、2026 年度は第 2 土曜日です。")],
+    )
+    run = _run(VERSION_GOAL)
+
+    assert _tool_output(model, 1, "call-1")["superseded_versions"] == {
+        "versions": [{**_PLAN_2025, "matched": ["2025"]}],
+        "next_step": SUPERSEDED_VERSION_HINT,
+    }
+    assert "superseded_versions" not in _tool_output(model, 2, "call-2")
+    assert [
+        call["arguments"].get("include_superseded")
+        for call in mcp.calls_of("rag_retrieve_evidence")
+    ] == [None, True]
+    # 記録する step の結果は RAG の結果のまま。
+    outputs = [step.tool_result.output for step in run.steps if step.tool_result is not None]
+    assert all("superseded_versions" not in (output or {}) for output in outputs)
+
+
+def test_fake_rag_evidence_outputs_match_the_contract() -> None:
+    """fake の根拠の結果の項目は RAG の契約の出力にある（旧版の older_versions を含む。#1405）。"""
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    tools = {tool["name"]: tool["outputSchema"] for tool in contract["tools"]}
+    for name in ("rag_search", "rag_retrieve_evidence"):
+        properties = tools[name]["properties"]
+        assert set(DEFAULT_OUTPUTS[name]) <= set(properties), name
+        assert "older_versions" in DEFAULT_OUTPUTS[name], name
+        assert properties["older_versions"]["type"] == "array", name

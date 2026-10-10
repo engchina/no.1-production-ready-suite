@@ -217,8 +217,9 @@ DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 # 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
 # プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
-# 項目として持つが、全体の既定は持たない（環境変数 / .env からは読まない）。止めるときは
-# プロファイルの開閉を off にする（再起動は要らない）。値の範囲は Settings の検証で持つ。
+# 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定。拡張は on。
+# #1402）。止めるときはプロファイルの開閉を off にする（再起動は要らない）。値の範囲は Settings の
+# 検証で持つ。
 PROFILE_ONLY_SETTING_FIELDS = frozenset(
     {"rag_entity_expansion_enabled", "rag_entity_expansion_max_chunks"}
 )
@@ -757,11 +758,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # 次の 2 つは、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答の検索へ渡すための
     # 項目で、環境変数 / .env からは読まない（PROFILE_ONLY_SETTING_FIELDS。#1388）。
     rag_entity_expansion_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
             "関連する chunk を 1 段だけ足す（#1362）。検索・回答プロファイルの"
-            " entity_expansion_enabled で選ぶ（既定 OFF。#1388）。実体は文書レシピで実体の抽出"
+            " entity_expansion_enabled で選ぶ（既定 ON。#1402）。実体は文書レシピで実体の抽出"
             "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),
     )

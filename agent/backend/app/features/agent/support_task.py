@@ -388,22 +388,101 @@ def record_codes(output: JsonObject, query: object, run_queries: list[object]) -
     return {"values": values, "next_step": RECORD_CODE_HINT} if values else None
 
 
-def raised_evidence_limit(arguments: JsonObject, input_schema: JsonObject) -> int | None:
-    """モデルが既定より小さくした `evidence_limit` を引き上げる値（#1351。引き上げなければ None）。
+# 検索する件数（`top_k`）の既定。RAG の契約の `top_k` の `default` は null で、省略すると RAG が
+# 検索の要求の既定の 20 を使う（契約の `rag_retrieve_evidence` の `evidence_limit` の説明
+# 「top_k。省略時 20」）。契約に整数の `default` があればそちらを使う（#1403）。
+RAG_TOP_K_DEFAULT = 20
+# 根拠のツールの件数の引数（既定より小さい値は既定に引き上げ、上限を超える値は上限に丸める）。
+SEARCH_LIMIT_ARGUMENTS = ("top_k", "evidence_limit")
+SEARCH_LIMIT_SCHEMA_NOTE = (
+    "多段の質問では省略する（既定より小さくすると段の根拠が欠けるため、"
+    "実行環境が既定に引き上げる）。"
+)
+ADJUSTED_LIMITS_HINT = (
+    "件数（top_k・evidence_limit）を既定より小さくすると多段の質問の段の根拠が欠けるため、"
+    "実行環境が既定に引き上げた（上限を超える値は上限にした）。次の呼び出しでは件数を省略する。"
+)
 
-    多段の質問では、答えの chunk が上位の文書の前置き・前の章の後ろに並ぶことが多く、小さい上限で
-    切れて言い換えを繰り返す（#1335 の評価で、欠けた根拠はすべて上限で切れていた）。既定は
-    ツールの入力 schema の `default`（RAG の契約の値）を使い、既定より大きい値は変えない。
-    """
+
+def _is_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _integer_spec(input_schema: JsonObject, name: str) -> tuple[int | None, int | None]:
+    """入力 schema の整数の引数の既定と上限（`anyOf` の null 許容の形も読む）。"""
     properties = input_schema.get("properties")
-    spec = properties.get("evidence_limit") if isinstance(properties, dict) else None
-    default = spec.get("default") if isinstance(spec, dict) else None
-    value = arguments.get("evidence_limit")
-    if not isinstance(default, int) or isinstance(default, bool):
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value >= default:
-        return None
-    return default
+    spec = properties.get(name) if isinstance(properties, dict) else None
+    if not isinstance(spec, dict):
+        return None, None
+    default = spec.get("default")
+    maximum = spec.get("maximum")
+    if not _is_integer(maximum):
+        variants = spec.get("anyOf")
+        maxima = [
+            item.get("maximum")
+            for item in (variants if isinstance(variants, list) else [])
+            if isinstance(item, dict) and _is_integer(item.get("maximum"))
+        ]
+        maximum = maxima[0] if maxima else None
+    return (default if _is_integer(default) else None), maximum
+
+
+def adjusted_search_limits(
+    arguments: JsonObject, input_schema: JsonObject
+) -> dict[str, dict[str, int]]:
+    """根拠のツールの件数の引数を直す値（#1351・#1403。直さなければ空）。
+
+    多段の質問では、答えの chunk が上位の文書の前置き・前の章の後ろに並ぶことが多く、小さい件数で
+    切れて段を取りこぼす（#1335 の評価で、欠けた根拠はすべて上限で切れていた。#1362 の再評価では
+    データの範囲を固定した業務 Agent が `top_k` 5 / 10 を渡して台帳の行が検索の結果に出なかった）。
+    既定より小さい値は既定（入力 schema の `default`。`top_k` は契約の default が null なので
+    `RAG_TOP_K_DEFAULT`）に引き上げ、上限（schema の `maximum`）を超える値は上限に丸める
+    （呼び先の入力検証で失敗させない）。既定以上・上限以下の値と、渡していない引数は変えない。
+    戻り値は引数の名前 → `{"requested": モデルの値, "sent": 送る値}`。
+    """
+    adjusted: dict[str, dict[str, int]] = {}
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return adjusted
+    for name in SEARCH_LIMIT_ARGUMENTS:
+        value = arguments.get(name)
+        if name not in properties or not isinstance(value, int) or isinstance(value, bool):
+            continue
+        default, maximum = _integer_spec(input_schema, name)
+        if default is None and name == "top_k":
+            default = RAG_TOP_K_DEFAULT
+        sent = value
+        if default is not None and sent < default:
+            sent = default
+        if maximum is not None and sent > maximum:
+            sent = maximum
+        if sent != value:
+            adjusted[name] = {"requested": value, "sent": sent}
+    return adjusted
+
+
+def search_limit_schema(function_name: str, schema: JsonObject) -> JsonObject:
+    """モデルに見せる根拠のツールの schema の件数の説明に「多段の質問では省略する」を足す（#1403）。
+
+    実行の定義（呼び先へ送る schema）は契約のまま。根拠のツール以外と、件数の引数が無い schema は
+    元のまま返す。
+    """
+    if mcp_base_tool_name(function_name) not in RAG_BUDGET_TOOLS:
+        return schema
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not any(
+        isinstance(properties.get(name), dict) for name in SEARCH_LIMIT_ARGUMENTS
+    ):
+        return schema
+    updated = deepcopy(schema)
+    for name in SEARCH_LIMIT_ARGUMENTS:
+        prop = updated["properties"].get(name)
+        if not isinstance(prop, dict):
+            continue
+        described = str(prop.get("description") or "").strip()
+        if SEARCH_LIMIT_SCHEMA_NOTE not in described:
+            prop["description"] = f"{described} {SEARCH_LIMIT_SCHEMA_NOTE}".strip()
+    return updated
 
 
 # 同じ段の言い換えの繰り返し（#1351）。正規化した query の文字の 2-gram の Jaccard 係数がこれ以上
@@ -504,6 +583,85 @@ def repeated_query_note(
         "similar_queries": similar[-MAX_REPEATED_QUERIES:],
         "next_step": REPEATED_QUERY_HINT,
     }
+
+
+# 旧版の年度・版を名指しする質問（#1405）。RAG の根拠の結果の older_versions（当たった今の版の
+# 文書を置き換えた旧版。旧版を検索しなかったときだけ返る）のタイトル・文書名に、質問の年度・版が
+# 当たれば、旧版も含めた検索し直しを案内する（#1362 の再評価の D で、「2025 年度と 2026 年度」の
+# 比較で include_superseded を渡さず、今の版だけで答えていた）。
+MAX_OLDER_VERSIONS = 5
+_YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+_ERA_PATTERN = re.compile(r"(令和|平成)\s*(\d{1,2}|元)\s*年")
+_EDITION_PATTERN = re.compile(r"第\s*(\d+)\s*版")
+# 年度・版を名指ししないが旧版を尋ねる語（今の版の検索で当たった文書の旧版がすべて当たる）。
+_OLD_VERSION_WORDS = ("旧版", "改定前", "改訂前", "変更前", "前の版", "以前の版", "旧規程")
+OLD_VERSION_WORD_MATCH = "旧版"
+SUPERSEDED_VERSION_HINT = (
+    "質問が名指しする年度・版（matched）か改定前の版は、検索で当たった文書の旧版（新しい版に"
+    "置き換えた文書）に当たる。旧版は include_superseded を渡さない検索には出ない。旧版の根拠が"
+    "要るなら、同じ query（年度・版の語を入れてよい）に include_superseded: true を足して"
+    " rag_retrieve_evidence（または rag_search）で検索し直し、今の版（superseded=false）と"
+    "旧版（superseded=true）の根拠を比べて答える。旧版の根拠が無いまま今の版だけで答えない。"
+)
+
+
+def _version_tokens(text: str) -> list[str]:
+    """質問の年度・版の語（西暦の年・和暦の年・第 N 版。出てきた順に重複なく）。"""
+    normalized = unicodedata.normalize("NFKC", text)
+    tokens = [match.group(1) for match in _YEAR_PATTERN.finditer(normalized)]
+    tokens += [f"{era}{number}年" for era, number in _ERA_PATTERN.findall(normalized)]
+    tokens += [f"第{number}版" for number in _EDITION_PATTERN.findall(normalized)]
+    return list(dict.fromkeys(tokens))
+
+
+def _version_label_matches(token: str, label: str) -> bool:
+    return re.search(rf"(?<!\d){re.escape(token)}(?!\d)", label) is not None
+
+
+def superseded_versions_note(
+    arguments: JsonObject, output: JsonObject, questions: list[object]
+) -> JsonObject | None:
+    """旧版の年度・版を名指しする質問で、旧版も含めた検索し直しを勧める案内（#1405）。
+
+    旧版を検索しなかった（``include_superseded`` が true でない）根拠の結果の ``older_versions``
+    のうち、タイトル・文書名に質問（利用者の質問とこの呼び出しの query）の年度・版の語が当たる
+    旧版（質問が旧版・改定前を尋ねるなら全部）を挙げる。当たらなければ None（今の版を尋ねる
+    質問には出さない）。案内だけで、呼び直すかはモデルが決める（planner は作らない。#756）。
+    """
+    if arguments.get("include_superseded") is True:
+        return None
+    older = output.get("older_versions")
+    if not isinstance(older, list) or not older:
+        return None
+    text = "\n".join(item for item in questions if isinstance(item, str))
+    tokens = _version_tokens(text)
+    compact_text = _compact(text)
+    asks_old = any(_compact(word) in compact_text for word in _OLD_VERSION_WORDS)
+    if not tokens and not asks_old:
+        return None
+    versions: list[JsonObject] = []
+    for item in older:
+        if not isinstance(item, dict):
+            continue
+        title, file_name = item.get("title"), item.get("file_name")
+        label = _compact(" ".join(value for value in (title, file_name) if isinstance(value, str)))
+        matched = [token for token in tokens if _version_label_matches(_compact(token), label)]
+        if not matched and not asks_old:
+            continue
+        versions.append(
+            {
+                "document_id": item.get("document_id"),
+                "file_name": file_name,
+                "title": title,
+                "superseded_by_document_id": item.get("superseded_by_document_id"),
+                "matched": matched or [OLD_VERSION_WORD_MATCH],
+            }
+        )
+        if len(versions) >= MAX_OLDER_VERSIONS:
+            break
+    if not versions:
+        return None
+    return {"versions": versions, "next_step": SUPERSEDED_VERSION_HINT}
 
 
 def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObject | None:

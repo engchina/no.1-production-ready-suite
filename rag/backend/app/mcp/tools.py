@@ -123,7 +123,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 # ツールの出力の版（出力の形を変えたら上げる。handoff §10。#1276）。
 # 6: 根拠の場所に要素の定位子（locator.element_locator）を足した（#1330）。
 # 7: 文書を順に読むツール（rag_outline / rag_read_document）を足した（#1332）。
-MCP_OUTPUT_SCHEMA_VERSION = 7
+# 8: 根拠の結果に、当たった文書の旧版（older_versions）を足した（#1405）。
+MCP_OUTPUT_SCHEMA_VERSION = 8
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -132,6 +133,8 @@ EVIDENCE_LIMIT_MAX = 50
 # top_k の既定 20）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。rag_search は回答に
 # 使った根拠が先に並ぶので 12 のまま。
 RETRIEVE_EVIDENCE_LIMIT_DEFAULT = 20
+# 根拠の結果に示す旧版（older_versions。#1405）の最大件数。
+OLDER_VERSIONS_MAX = 10
 # rag_read_source が 1 回で返す本文・親の本文の上限。
 READ_SOURCE_MAX_CHARS_DEFAULT = 8000
 READ_SOURCE_MAX_CHARS_LIMIT = 20000
@@ -234,8 +237,10 @@ class SearchInput(BaseModel):
         default=False,
         description=(
             "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。"
-            "旧版・変更点・改定前との違いを尋ねるときは true を渡す（検索の範囲は変わらず、"
-            "検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。"
+            "旧版・変更点・改定前との違いを尋ねるとき、旧版の年度・版を名指しするとき"
+            "（「2025 年度と 2026 年度では」「2023 年度版の規程では」）は true を渡す（検索の"
+            "範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。"
+            "結果の older_versions に、当たった文書の旧版（文書名・タイトル）が出る。"
         ),
     )
     evidence_limit: int = Field(
@@ -728,6 +733,31 @@ class RagEvidence(BaseModel):
     )
 
 
+class OlderVersion(BaseModel):
+    """検索で当たった文書を置き換えた旧版（#1405）。"""
+
+    document_id: str = Field(description="旧版の文書の id。")
+    file_name: str | None = Field(default=None, description="旧版の文書名。")
+    title: str | None = Field(
+        default=None,
+        description=(
+            "旧版のタイトル（文書の先頭の見出し。版・年度を含むことが多い。"
+            "例: 「定期保守計画 2025年度」）。見出しが無ければ null。"
+        ),
+    )
+    superseded_by_document_id: str = Field(
+        description="この旧版を置き換えた新しい版（検索で当たった根拠の文書）の id。"
+    )
+
+
+OLDER_VERSIONS_DESCRIPTION = (
+    "検索で当たった今の版の文書に、新しい版に置き換えた旧版があれば、その旧版（検索の範囲の"
+    "中のもの。最大 10 件）。include_superseded を渡さない検索だけで返し、旧版の根拠は検索して"
+    "いない。質問が旧版の年度・版（タイトル・文書名の「2025年度」など）や改定前との違いを尋ねる"
+    "なら、include_superseded に true を渡して検索し直す。無ければ空。"
+)
+
+
 AnswerOutcome = Literal[
     "answered",
     "conditional",
@@ -860,6 +890,9 @@ class SearchOutput(VersionedOutput):
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+    older_versions: list[OlderVersion] = Field(
+        default_factory=list, description=OLDER_VERSIONS_DESCRIPTION
+    )
     provenance: AnswerProvenance | None = Field(
         default=None, description="回答を作った検索・回答プロファイルとプロンプトの版。"
     )
@@ -915,6 +948,9 @@ class RetrieveEvidenceOutput(VersionedOutput):
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+    older_versions: list[OlderVersion] = Field(
+        default_factory=list, description=OLDER_VERSIONS_DESCRIPTION
+    )
 
 
 class ValidatedClaim(BaseModel):
@@ -2121,6 +2157,49 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         ) from exc
 
 
+async def _older_versions(
+    arguments: SearchInput, request: SearchRequest, citations: Sequence[RetrievedChunk]
+) -> list[OlderVersion]:
+    """根拠の文書（今の版）を置き換えた旧版（#1405。旧版を検索しなかったときだけ）。
+
+    旧版を含めて検索し直したときと同じ範囲（検索の filters と、検索・回答プロファイルの参照
+    ナレッジベース。利用者の権限・データの範囲は Oracle の条件が絞る）の中の旧版だけを返す。
+    読めなかったときは返さずに続ける（検索の結果は返す）。
+    """
+    if arguments.include_superseded:
+        return []
+    current = [
+        chunk.document_id
+        for chunk in citations
+        if chunk.document_id and chunk.metadata.get("document_superseded") is not True
+    ]
+    if not current:
+        return []
+    try:
+        oracle = OracleClient()
+        filters = dict(request.filters)
+        if not request.knowledge_base_ids and request.search_answer_profile_id:
+            # 検索は検索・回答プロファイルの参照 KB を範囲にする（_resolve_query_context と同じ）。
+            view = await oracle.get_search_answer_profile(request.search_answer_profile_id)
+            scope = search_route.profile_scope_filters(view) if view is not None else None
+            if scope is None:
+                return []
+            filters.update(scope)
+        versions = await oracle.retrieval_older_versions(filters, current, limit=OLDER_VERSIONS_MAX)
+    except Exception:  # noqa: BLE001 - 旧版の案内は補助の情報。検索の結果を止めない
+        logger.warning("rag_mcp_older_versions_lookup_failed", exc_info=True)
+        return []
+    return [
+        OlderVersion(
+            document_id=version.document_id,
+            file_name=version.file_name,
+            title=version.title,
+            superseded_by_document_id=version.superseded_by_document_id,
+        )
+        for version in versions
+    ]
+
+
 def _lookup_item(match: GuideMatch) -> LookupGuideItem:
     summary = match.summary()
     content = match.content
@@ -2222,7 +2301,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
-        return SearchOutput(**_answer_fields(result, arguments.evidence_limit))
+        return SearchOutput(
+            **_answer_fields(result, arguments.evidence_limit),
+            older_versions=await _older_versions(arguments, request, citations),
+        )
 
     async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
         oracle = OracleClient()
@@ -2267,6 +2349,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             guardrail_warnings=list(result.guardrail_warnings),
             evidence=[_evidence(chunk) for chunk in citations],
             evidence_omitted=max(0, len(result.citations) - limit),
+            older_versions=await _older_versions(arguments, request, result.citations),
         )
 
     async def read(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:

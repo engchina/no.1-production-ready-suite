@@ -467,14 +467,14 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 # ---- 設定・レシピ ----
 
 
-def test_settings_default_on_for_the_recipe_and_off_for_the_expansion() -> None:
+def test_settings_default_on_for_the_recipe_and_the_expansion() -> None:
     settings = Settings()
-    # 抽出は既定 ON（#1388。決定的な規則だけで LLM を呼ばない。拡張 off なら検索に影響しない）。
+    # 抽出は既定 ON（#1388。決定的な規則だけで LLM を呼ばない）。
     assert settings.rag_entity_index_enabled is True
     assert settings.rag_entity_name_columns == []
     assert settings.rag_entity_attribute_columns == []
-    # 拡張は既定 OFF（検索・回答プロファイルで選ぶ。#1390 の後に既定を見直す）。
-    assert settings.rag_entity_expansion_enabled is False
+    # 拡張も既定 ON（#1402。#1362 の再評価で基準を満たした）。止めるのは検索・回答プロファイルで。
+    assert settings.rag_entity_expansion_enabled is True
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
@@ -490,25 +490,25 @@ def test_entity_expansion_is_not_read_from_the_environment(
         "rag_entity_expansion_enabled",
         "rag_entity_expansion_max_chunks",
     } == PROFILE_ONLY_SETTING_FIELDS
-    monkeypatch.setenv("RAG_ENTITY_EXPANSION_ENABLED", "true")
+    monkeypatch.setenv("RAG_ENTITY_EXPANSION_ENABLED", "false")
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_MAX_CHUNKS", "3")
     # 同じ source のほかの項目は今までどおり読む。
     monkeypatch.setenv("RAG_ENTITY_INDEX_ENABLED", "false")
     env_file = tmp_path / "backend.env"
     env_file.write_text(
-        "RAG_ENTITY_EXPANSION_ENABLED=true\nRAG_ENTITY_EXPANSION_MAX_CHUNKS=2\n"
+        "RAG_ENTITY_EXPANSION_ENABLED=false\nRAG_ENTITY_EXPANSION_MAX_CHUNKS=2\n"
         "RAG_REFERENCE_EXPANSION_MAX_CHUNKS=7\n",
         encoding="utf-8",
     )
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.rag_entity_expansion_enabled is False
+    assert settings.rag_entity_expansion_enabled is True
     assert settings.rag_entity_expansion_max_chunks == 6
     assert settings.rag_entity_index_enabled is False
     assert settings.rag_reference_expansion_max_chunks == 7
     # 属性名での生成（テスト・評価の上書き）は受け付ける。
-    assert Settings(rag_entity_expansion_enabled=True).rag_entity_expansion_enabled is True
+    assert Settings(rag_entity_expansion_enabled=False).rag_entity_expansion_enabled is False
 
 
 def test_search_answer_profile_selects_entity_expansion_and_budget() -> None:
@@ -524,20 +524,23 @@ def test_search_answer_profile_selects_entity_expansion_and_budget() -> None:
         parse_search_answer_profile_config(
             {
                 "knowledge_base_ids": ["kb-1"],
-                "query": {"entity_expansion_enabled": True, "entity_expansion_max_chunks": 3},
+                "query": {"entity_expansion_enabled": False, "entity_expansion_max_chunks": 3},
             }
         ),
     )
     assert applied is True
-    assert selected.rag_entity_expansion_enabled is True
+    assert selected.rag_entity_expansion_enabled is False
     assert selected.rag_entity_expansion_max_chunks == 3
     # 全体の設定は変えない（ほかのプロファイルの検索には効かない）。
-    assert base.rag_entity_expansion_enabled is False
-    other, _ = resolve_search_answer_profile_settings(
-        base, parse_search_answer_profile_config({"knowledge_base_ids": ["kb-2"]})
-    )
-    assert other.rag_entity_expansion_enabled is False
-    assert other.rag_entity_expansion_max_chunks == 6
+    assert base.rag_entity_expansion_enabled is True
+    # 選んでいない（未指定 / null）プロファイルは既定の on（#1402）。明示した true もそのまま。
+    for query in ({}, {"entity_expansion_enabled": None}, {"entity_expansion_enabled": True}):
+        other, _ = resolve_search_answer_profile_settings(
+            base,
+            parse_search_answer_profile_config({"knowledge_base_ids": ["kb-2"], "query": query}),
+        )
+        assert other.rag_entity_expansion_enabled is True
+        assert other.rag_entity_expansion_max_chunks == 6
     # 上限の範囲はコードの検証で持つ（1〜20）。範囲の外の保存値は読まない（空の設定へ縮退）。
     broken = parse_search_answer_profile_config(
         {"knowledge_base_ids": ["kb-1"], "query": {"entity_expansion_max_chunks": 21}}
