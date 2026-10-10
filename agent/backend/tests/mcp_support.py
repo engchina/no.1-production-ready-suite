@@ -205,6 +205,8 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "needs_human_review": False,
         "evidence": [_EVIDENCE],
         "evidence_omitted": 0,
+        # 当たった文書の旧版（旧版を検索しなかったときだけ。#1405）。
+        "older_versions": [],
     },
     "rag_read_source": {
         "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
@@ -325,6 +327,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "guardrail_warnings": [],
         "evidence": [{**_EVIDENCE, "used_in_answer": False}],
         "evidence_omitted": 0,
+        "older_versions": [],
     },
     # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
     "rag_validate_answer": {

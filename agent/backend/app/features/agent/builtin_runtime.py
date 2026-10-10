@@ -104,6 +104,7 @@ from app.features.agent.support_task import (
     record_codes,
     repeated_query_note,
     search_limit_schema,
+    superseded_versions_note,
     support_task_instructions,
     text_references,
 )
@@ -753,7 +754,9 @@ class _ToolRecorder:
         （`repeated_query`。#1351）を、query の実体に当たる台帳・一覧の行に略号・区分のような
         短い値があればその意味を引く次の段の案内（`record_codes`。#1365）を、Runtime が件数
         （`top_k`・`evidence_limit`）を既定に引き上げた・上限に丸めたらその値と次から省略する案内
-        （`adjusted_limits`。#1403）を、RAG の予算があればこの Run で残る検索の回数
+        （`adjusted_limits`。#1403）を、質問が名指しする年度・版が当たった文書の旧版に当たり、
+        旧版を検索していなければ旧版も含めた検索し直しの案内（`superseded_versions`。#1405）を、
+        RAG の予算があればこの Run で残る検索の回数
         （`rag_calls_remaining`）を足す。
         """
         from app.features.agent.runtime import runtime_repository
@@ -788,6 +791,11 @@ class _ToolRecorder:
                     **output,
                     "adjusted_limits": {**adjusted_limits, "next_step": ADJUSTED_LIMITS_HINT},
                 }
+            superseded = superseded_versions_note(
+                call.arguments, output, [self.goal, call.arguments.get("query")]
+            )
+            if superseded is not None:
+                output = {**output, "superseded_versions": superseded}
         remaining = self.budget.rag_calls_remaining if self.budget is not None else None
         if remaining is not None:
             output = {**output, "rag_calls_remaining": remaining}
