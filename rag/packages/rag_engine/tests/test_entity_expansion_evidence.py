@@ -196,3 +196,22 @@ def test_context_does_not_swap_hit_parents_for_low_relevance_expansion():
     # 関連度の分からない（rerank を実行しなかった）拡張の根拠は、今までどおり枠の半分まで入れ替える。
     unscored = [_child(record.id) for record in hits] + [_child(record.id, expansion=True) for record in expansions]
     assert "maintenance-common-p" not in build(unscored)
+
+
+def test_anchor_first_seen_as_neighbor_keeps_its_rerank_relevance():
+    """同じ親の 2 つの拡張の根拠（組織規程の略号の表と承認者）のうち、後の根拠が先の根拠の前後の文脈として
+    先に入っても、起点の record は rerank の関連度を持つ候補にする。関連度が低ければ枠を確保しない（#1390）。
+    """
+    hits = [_child("h0", score=0.9), _child("h1", score=0.8), _child("h2", score=0.7)]
+    codes = _child("org-codes", parent="org", expansion=True, score=0.05)
+    approvers = _child("org-approvers", parent="org", expansion=True, score=0.05)
+    # backend が渡す同じ chunk の record（前後の文脈の元。rerank の結果は持たない）。
+    stored = [_child("org-codes", parent="org", expansion=True),
+              _child("org-approvers", parent="org", expansion=True)]
+    parents = [_parent("h0"), _parent("h1"), _parent("h2"), _parent("org")]
+
+    bundle = build_chunk_context_bundle(ContextBuildRequest(
+        question="質問", ranked_children=[*hits, codes, approvers], active_records=[*hits, *stored, *parents],
+        top_k=10, neighbor_child_count=1, max_records=3, max_chars=5000))
+
+    assert [record.id for record in bundle.records] == ["h0-p", "h1-p", "h2-p"]

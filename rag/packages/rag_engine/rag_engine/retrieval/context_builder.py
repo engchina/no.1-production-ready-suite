@@ -324,6 +324,9 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         if _child_role_priority(role) < _child_role_priority(existing.role):
             existing.role = role
             existing.reason = reason
+            # 先に前後の文脈として入った chunk が起点になったときは、rerank の結果（関連度）を持つ候補の
+            # record に替える（同じ親の別の起点の前後の文脈に先に入ると、関連度が失われていた。#1390）。
+            existing.record = child
         if retrieval_rank is not None and (
             existing.retrieval_rank is None or retrieval_rank < existing.retrieval_rank
         ):
