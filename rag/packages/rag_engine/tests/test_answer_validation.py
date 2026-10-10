@@ -364,17 +364,29 @@ RETENTION_ANSWER = "\n".join([
 ])
 
 
-def _retention_validation(written: list[str]) -> dict:
+def _retention_validation(written: list[str], rechecks: list[dict] | None = None) -> dict:
+    """段落ごとに written の evidence_id を返すモデルのスタブ。
+
+    2 回目の呼び出し（ID を書かない段落の確かめ直し。#1412）は、確かめ直す段落に evidence_id を空で返し
+    （出典が決まらない）、入力を rechecks に残す。
+    """
+    calls = []
+
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
+        calls.append(payload)
+        answers = written if len(calls) == 1 else [""] * len(payload["answer_passages"])
         return ClaimAuditOutput.model_validate({"claim_checks": [
             {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": "supported", "evidence_id": evidence_id,
              "source_id": "", "evidence_quote": "", "reason": "台帳と規程で裏付けられます。"}
-            for passage, evidence_id in zip(payload["answer_passages"], written, strict=True)]})
+            for passage, evidence_id in zip(payload["answer_passages"], answers, strict=True)]})
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        return validate_answer_claims("ドキュメントポータルのデータの保管期間は何年ですか？", RETENTION_ANSWER,
-                                      [PORTAL_LEDGER, *RETENTION_RULES], settings=None)
+        result = validate_answer_claims("ドキュメントポータルのデータの保管期間は何年ですか？", RETENTION_ANSWER,
+                                        [PORTAL_LEDGER, *RETENTION_RULES], settings=None)
+    if rechecks is not None:
+        rechecks.extend(calls[1:])
+    return result
 
 
 def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model() -> None:
@@ -393,10 +405,16 @@ def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model(
     # 省いた所の後ろ（番号）が違えば根拠に無い chunk、番号まで省けば 2 つの chunk のどちらか決まらない。
     # 回答に書かれた ID でない語（「record_codes.values[1]」）も、今までどおり引用エラー。
     # ただし 2 つ目の段落は段落そのものが根拠の ID（「…fffa…:1」）を書いているので、その根拠に結び付ける（#1404）。
+    # ID を書かない 1・3 つ目の段落は、2 つ目の段落が引いた根拠だけで確かめ直し、出典が決まらなければそのまま（#1412）。
+    rechecks: list[dict] = []
     result = _retention_validation([ABBREVIATED_CHUNK_ID.replace(":1", ":9"), f"{RETENTION_SET[:40]}…",
-                                    "record_codes.values[1]"])
+                                    "record_codes.values[1]"], rechecks)
     assert [claim["status"] for claim in result["claim_checks"]] == ["citation_error", "supported", "citation_error"]
     assert result["claim_checks"][1]["source_id"] == f"{RETENTION_SET}:1"
+    [recheck] = rechecks
+    assert [passage["id"] for passage in recheck["answer_passages"]] == ["A1", "A3"]
+    assert [item["id"] for item in recheck["evidence_items"]] == [f"{RETENTION_SET}:1"]
+    assert result["rechecked_passage_ids"] == []
     # 「…」を落とした ID も、番号が違う・残した部分が短い・部分の数が違うものは結び付けない。
     result = _retention_validation([dropped.replace(":1", ":9"), f"{RETENTION_SET.split(':')[0]}:16f112:1",
                                     f"{RETENTION_SET}:extra:1"])
@@ -423,15 +441,29 @@ DEADLINE_ANSWER = "\n\n".join([
 ])
 
 
-def _deadline_validation(claims: list[tuple[str, str]], answer: str = DEADLINE_ANSWER) -> dict:
-    """段落ごとに（status, evidence_id）を返すモデルのスタブ。理由はどれも「裏付けられる」。"""
+def _deadline_validation(claims: list[tuple[str, str]], answer: str = DEADLINE_ANSWER,
+                         recheck: list[tuple[str, str]] | None = None, calls: list[dict] | None = None) -> dict:
+    """段落ごとに（status, evidence_id）を返すモデルのスタブ。理由はどれも「裏付けられる」。
+
+    2 回目の呼び出し（ID を書かない段落の確かめ直し。#1412）には recheck を返す。evidence_id の
+    「{0}」「{1}」は、確かめ直しに渡した根拠の片段の ID。recheck が無ければ 2 回目の呼び出しを認めない。
+    """
+    seen: list[dict] = [] if calls is None else calls
+
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
+        seen.append(payload)
         assert "ID の照合はシステムが行う" in system
+        if len(seen) == 1:
+            answers = claims
+        else:
+            assert recheck is not None, "確かめ直しを想定していない"
+            ids = [item["evidence_id"] for item in payload["evidence_items"]]
+            answers = [(status, evidence_id.format(*ids)) for status, evidence_id in recheck]
         return ClaimAuditOutput.model_validate({"claim_checks": [
             {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": status, "evidence_id": evidence_id,
              "source_id": "", "evidence_quote": "", "reason": "主張は根拠で裏付けられる。"}
-            for passage, (status, evidence_id) in zip(payload["answer_passages"], claims, strict=True)]})
+            for passage, (status, evidence_id) in zip(payload["answer_passages"], answers, strict=True)]})
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         return validate_answer_claims("製造実行システムと品質管理システムでは、変更の申請の期限はどちらが長いですか？",
@@ -470,12 +502,19 @@ def test_model_citation_errors_with_resolved_ids_are_not_kept() -> None:
 
     裏付けの判定はモデルから返っていないので、supported にはせず unassessed（確かめが終わっていない）にする。
     """
-    result = _deadline_validation([("citation_error", ""), ("citation_error", f"【証拠 ID {QMS}】"),
-                                   ("supported", MES), ("citation_error", "")])
+    first = [("citation_error", ""), ("citation_error", f"【証拠 ID {QMS}】"), ("supported", MES), ("citation_error", "")]
+    # 4 つ目の段落は ID を書いておらず、モデルの evidence_id も空なので出典を照合できない。他の段落が引いた根拠
+    # （MES・QMS）で確かめ直しても出典が決まらなければ、citation_error のまま（#1412）。
+    result = _deadline_validation(first, recheck=[("citation_error", "")])
     statuses = [claim["status"] for claim in result["claim_checks"]]
-    # 4 つ目の段落は ID を書いておらず、モデルの evidence_id も空なので出典を照合できない。
     assert statuses == ["unassessed", "unassessed", "supported", "citation_error"]
     assert result["claim_checks"][0]["reason"].startswith("引用した ID は根拠に一致しますが")
+    # 確かめ直しで候補の根拠に裏付けられれば supported（出典は候補の根拠）。
+    calls: list[dict] = []
+    result = _deadline_validation(first, recheck=[("supported", "{0},{1}")], calls=calls)
+    assert [claim["status"] for claim in result["claim_checks"]] == ["unassessed", "unassessed", "supported", "supported"]
+    assert result["claim_checks"][3]["source_id"] == MES and result["rechecked_passage_ids"] == ["A4"]
+    assert [item["id"] for item in calls[1]["evidence_items"]] == [MES, QMS]
 
 
 def test_unresolved_ids_in_the_answer_stay_citation_errors() -> None:
@@ -488,7 +527,137 @@ def test_unresolved_ids_in_the_answer_stay_citation_errors() -> None:
         # 途中を省いた ID でも、番号が違えば根拠に無い chunk。
         f"両システムとも申請が要ります【証拠 ID {MES.split(':')[0][:10]}…:7】。",
     ])
+    # ID を書かない 3 つ目の段落は、他の段落が引いた ID がどれも根拠に決まらないので確かめ直さない（#1412）。
+    calls: list[dict] = []
     result = _deadline_validation([("supported", "E9f9f9f9f9f9f9f9f9f9f"), ("supported", "証拠"),
-                                   ("supported", "第 3 章"), ("citation_error", "")], answer=answer)
-    assert result["counts"] == {"citation_error": 4}
+                                   ("supported", "第 3 章"), ("citation_error", "")], answer=answer, calls=calls)
+    assert result["counts"] == {"citation_error": 4} and len(calls) == 1
     assert all(claim["reason"].startswith("未登録の原文ID。") for claim in result["claim_checks"][:3])
+
+
+# #1362 の確認の Run run_3b7a1c0ff119477781a0042ea2a8dd23（holdout br-customer-portal-change-window）の形
+# （#1412。ID と本文は合成した値）。結論とまとめの段落は根拠の ID を書かず、「根拠」の 2 段落が完全な ID を書く。
+PLAN = "815d7759aaaa4887b1b070379e2958af:a657c65a" + "4" * 56
+CHANGE = "2a5ec48abbbb4c81989a580a5676476a:58fa1e8c" + "5" * 56
+WINDOW_LEDGER = "95e6cc20cccc4339a8e32763c996ce5c:28fb4739" + "6" * 56 + ":28"
+WINDOW_EVIDENCE = [
+    {"id": f"{PLAN}:0", "source": "maintenance-plan.pdf", "page_start": 1, "page_end": 1,
+     "text": "定期保守計画 2026年度\n発行: 2026年4月1日 作成: 情シス"},
+    {"id": f"{PLAN}:1", "source": "maintenance-plan.pdf", "page_start": 1, "page_end": 1,
+     "text": "第 1 章 定期保守の時間帯\nCustomer Portal: 毎月第 1 日曜日の 0:00〜4:00"},
+    {"id": WINDOW_LEDGER, "source": "system-ledger.xlsx", "page_start": None, "page_end": None,
+     "text": "システムID: SYS-128 / 正式名: カスタマーポータル / 略称・別表記: Customer Portal / 重要度: A"},
+    {"id": f"{CHANGE}:4", "source": "change-procedure.pdf", "page_start": 1, "page_end": 1,
+     "text": "第 4 章 作業の時間帯\n重要度 A のシステムの変更は、定期保守の時間帯にだけ作業します。"},
+    {"id": f"{CHANGE}:5", "source": "change-procedure.pdf", "page_start": 1, "page_end": 1,
+     "text": "第 5 章 利用者への告知\nシステムの停止を伴う変更は、作業の 5 営業日前までに告知します。"},
+]
+WINDOW_ANSWER = (
+    "**回答**  \nCustomer Portal（SYS‑128）の本番環境での変更作業は、**毎月第 1 日曜日の 0:00 〜 4:00 の定期保守枠**で"
+    "実施できます。\n\n**根拠**  \n"
+    f"1. 【定期保守計画 2026年度】「Customer Portal: 毎月第 1 日曜日の 0:00〜4:00」​【evidence_id: {PLAN}:1】  \n"
+    f"2. 【システム変更手順書】重要度 A のシステムは「定期保守の時間帯にだけ作業します」​【evidence_id: {CHANGE}:4】\n\n"
+    "以上の資料に基づき、Customer Portal の本番変更は上記の保守時間帯に行うことが規定されています。")
+# 実サービスの最初の判定の形: 結論（A2）は supported で evidence_id が空、まとめ（A6）は citation_error。
+WINDOW_FIRST = {"A2": ("supported", ""), "A4": ("supported", f"{PLAN}:1"), "A5": ("supported", f"{CHANGE}:4"),
+                "A6": ("citation_error", "")}
+
+
+def _window_validation(first: dict[str, tuple[str, str]], recheck: dict[str, tuple[str, str]] | Exception | None,
+                       answer: str = WINDOW_ANSWER) -> tuple[dict, list[tuple[str, dict]]]:
+    """段落の ID ごとに（status, evidence_id）を返すモデルのスタブ。
+
+    evidence_id の「@chunk の id」は、その chunk の片段の ID（その呼び出しに渡した根拠の中のもの）。
+    2 回目の呼び出し（確かめ直し）には recheck を返す（例外なら送出し、None なら確かめ直しを認めない）。
+    """
+    calls: list[tuple[str, dict]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        calls.append((system, payload))
+        answers = first if len(calls) == 1 else recheck
+        assert answers is not None, "確かめ直しを想定していない"
+        if isinstance(answers, Exception):
+            raise answers
+        ids = {item["id"]: item["evidence_id"] for item in payload["evidence_items"]}
+
+        def written(passage_id: str) -> str:
+            text = answers[passage_id][1]
+            for chunk_id, evidence_id in ids.items():
+                text = text.replace("@" + chunk_id, evidence_id)
+            return text
+
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": answers[passage["id"]][0],
+             "evidence_id": written(passage["id"]), "source_id": "", "evidence_quote": "",
+             "reason": "定期保守計画と変更手順書で根拠で裏付けられています。"}
+            for passage in payload["answer_passages"]]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("Customer Portal の本番の変更は、いつ作業できますか？", answer,
+                                        WINDOW_EVIDENCE, settings=None)
+    return result, calls
+
+
+def _cite(*chunk_ids: str) -> str:
+    """スタブの evidence_id の書式（chunk の片段の ID を「,」で並べる）。"""
+    return ",".join("@" + chunk_id for chunk_id in chunk_ids)
+
+
+def test_unreferenced_conclusions_are_rechecked_with_evidence_cited_by_other_passages() -> None:
+    """ID を書かない結論・まとめの段落の出典が決まらなければ、他の段落が引いた根拠で確かめ直す (#1412)。"""
+    both = _cite(f"{PLAN}:1", f"{CHANGE}:4")
+    result, calls = _window_validation(WINDOW_FIRST, {"A2": ("supported", both), "A6": ("supported", both)})
+    assert result["counts"] == {"supported": 4}
+    assert [claim["answer_passage_id"] for claim in result["claim_checks"]] == ["A2", "A4", "A5", "A6"]
+    assert [claim["source_id"] for claim in result["claim_checks"]] == [
+        f"{PLAN}:1", f"{PLAN}:1", f"{CHANGE}:4", f"{PLAN}:1"]
+    assert result["rechecked_passage_ids"] == ["A2", "A6"]
+    # 確かめ直しには ID を書かない 2 段落と、他の段落が引いた 2 つの根拠だけを渡す（質問・回答の全文は同じ）。
+    (system, first), (_, recheck) = calls
+    assert "段落に ID が無いことを citation_error にしない" in system
+    assert "その evidence_id を evidence_id に書く" in system
+    assert [passage["id"] for passage in first["answer_passages"]] == ["A2", "A4", "A5", "A6"]
+    assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
+    assert [item["id"] for item in recheck["evidence_items"]] == [f"{PLAN}:1", f"{CHANGE}:4"]
+    assert recheck["answer_text"] == WINDOW_ANSWER and recheck["question"] == first["question"]
+
+
+def test_recheck_keeps_the_first_result_unless_it_finds_support() -> None:
+    """確かめ直しで出典が決まらない・否定の判定・呼び出しの失敗は、最初の判定のまま (#1412)。"""
+    for recheck in ({"A2": ("supported", ""), "A6": ("citation_error", "")},
+                    # 根拠を絞った判定なので、否定の判定は採らない。
+                    {"A2": ("unsupported", ""), "A6": ("contradicted", _cite(f"{CHANGE}:4"))},
+                    # 候補でない根拠（台帳の行）・根拠に無い片段の ID は、確かめ直しでは出典が決まらない。
+                    {"A2": ("supported", WINDOW_LEDGER), "A6": ("supported", "E" + "0" * 20)},
+                    TimeoutError("確かめ直しの呼び出しが失敗")):
+        result, calls = _window_validation(WINDOW_FIRST, recheck)
+        assert [claim["status"] for claim in result["claim_checks"]] == [
+            "citation_error", "supported", "supported", "citation_error"], recheck
+        assert result["claim_checks"][0]["reason"].startswith("未登録の原文ID。")
+        assert result["rechecked_passage_ids"] == [] and len(calls) == 2
+    # 片方だけ裏付けられれば、その段落だけ替える。
+    result, _ = _window_validation(WINDOW_FIRST, {"A2": ("supported", _cite(f"{PLAN}:1")), "A6": ("unsupported", "")})
+    assert [claim["status"] for claim in result["claim_checks"]] == [
+        "supported", "supported", "supported", "citation_error"]
+    assert result["rechecked_passage_ids"] == ["A2"]
+
+
+def test_written_ids_missing_from_the_evidence_stay_citation_errors_and_are_not_rechecked() -> None:
+    """段落が書いた ID が根拠に無い citation_error は確かめ直さず、その ID を候補にもしない (#1412)。"""
+    unknown = "ffffffffffffffffffffffffffffffff:" + "7" * 64 + ":9"
+    answer = WINDOW_ANSWER.replace(f"{PLAN}:1】", f"{unknown}】")
+    first = {**WINDOW_FIRST, "A4": ("supported", unknown)}
+    result, calls = _window_validation(first, {"A2": ("supported", _cite(f"{CHANGE}:4")),
+                                               "A6": ("supported", _cite(f"{CHANGE}:4"))}, answer=answer)
+    assert [claim["status"] for claim in result["claim_checks"]] == [
+        "supported", "citation_error", "supported", "supported"]
+    assert result["claim_checks"][1]["reason"].startswith("未登録の原文ID。")
+    # 確かめ直しの段落に A4（ID を書いた段落）は入らず、候補は A5 が引いた根拠だけ。
+    recheck = calls[1][1]
+    assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
+    assert [item["id"] for item in recheck["evidence_items"]] == [f"{CHANGE}:4"]
+    # 他の段落が引いた根拠がどれも決まらなければ、確かめ直さない。
+    answer = answer.replace(f"{CHANGE}:4】", f"{unknown}】")
+    result, calls = _window_validation({**first, "A5": ("supported", unknown)}, None, answer=answer)
+    assert result["counts"] == {"citation_error": 4} and len(calls) == 1
