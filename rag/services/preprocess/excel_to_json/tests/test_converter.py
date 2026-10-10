@@ -653,10 +653,10 @@ def test_xls_round_trip_when_xlwt_is_available() -> None:
 
 
 def test_system_ledger_of_the_evaluation_set_is_row_records() -> None:
-    """評価セットの台帳（multi-hop の system-ledger.xlsx）は前書き 2 行と 1 行ずつの記録（#1349）。
+    """評価セットの台帳（multi-hop の system-ledger.xlsx）は前書きと 1 行ずつの記録（#1349）。
 
-    行の数とシステム ID は台帳の原稿（`sources/system-ledger.workbook.json`。#1352 で 80 行）
-    から決める。
+    前書きの行数・行の数とシステム ID は台帳の原稿（`sources/system-ledger.workbook.json`。#1352
+    で 80 行。#1406 で前書きに重要度の順位を足して 3 行）から決める。
     """
     import json
     from pathlib import Path
@@ -667,13 +667,17 @@ def test_system_ledger_of_the_evaluation_set_is_row_records() -> None:
         (source.parent / "sources" / "system-ledger.workbook.json").read_text(encoding="utf-8")
     )
     ledger_ids = [row[0] for row in workbook["sheets"][0]["rows"]]
+    preamble_rows = len(workbook["sheets"][0]["preamble"])
+    header_row = preamble_rows + 1
     sheet = _sheet(_payload(source.read_bytes()))
     assert sheet["name"] == "システム台帳"
-    assert (sheet["header_row"], sheet["mode"]) == (3, "table")
-    assert [row["cell_range"] for row in sheet["preamble"]] == ["A1:A1", "A2:A2"]
+    assert (sheet["header_row"], sheet["mode"]) == (header_row, "table")
+    assert [row["cell_range"] for row in sheet["preamble"]] == [
+        f"A{row}:A{row}" for row in range(1, header_row)
+    ]
     blocks = sheet["blocks"]
     assert [block["cell_range"] for block in blocks] == [
-        f"A{row}:F{row}" for row in range(4, 4 + len(ledger_ids))
+        f"A{row}:F{row}" for row in range(header_row + 1, header_row + 1 + len(ledger_ids))
     ]
     assert all(block["kind"] == "row" for block in blocks)
     assert [block["values"]["システムID"] for block in blocks] == ledger_ids

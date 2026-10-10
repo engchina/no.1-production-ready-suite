@@ -395,16 +395,21 @@ def test_system_ledger_becomes_row_chunks_and_preamble(strategy: str) -> None:
         (source.parent / "sources" / "system-ledger.workbook.json").read_text(encoding="utf-8")
     )
     ledger_ids = [row[0] for row in workbook["sheets"][0]["rows"]]
-    last_row = 3 + len(ledger_ids)
+    # 前書きの行（#1406 で重要度の順位を足して 3 行）→ 表頭 → 台帳の行。
+    preamble_rows = len(workbook["sheets"][0]["preamble"])
+    first_row = preamble_rows + 2
+    last_row = preamble_rows + 1 + len(ledger_ids)
     assert len(chunks) == 1 + len(ledger_ids)
     preamble, *rows = chunks
     assert preamble.metadata["content_kind"] == "text"
-    assert preamble.metadata["cell_range"] == "A1:A2"
+    assert preamble.metadata["cell_range"] == f"A1:A{preamble_rows}"
     assert preamble.text.startswith("サンプル社のシステム台帳")
+    # 重要度の順位は前書きの chunk に入る（重要度を比べる問の根拠。#1406）。
+    assert "A が最も高く、B、C の順に低くなります" in preamble.text
     assert "SYS-" not in preamble.text
     columns = ["システムID", "正式名", "略称・別表記", "担当部署", "重要度", "機密区分"]
     assert [chunk.metadata["cell_range"] for chunk in rows] == [
-        f"A{row}:F{row}" for row in range(4, last_row + 1)
+        f"A{row}:F{row}" for row in range(first_row, last_row + 1)
     ]
     for system_id, chunk in zip(ledger_ids, rows, strict=True):
         assert chunk.metadata["content_kind"] == "record"

@@ -963,6 +963,12 @@ def _ledger_sheet(title: str, preamble: Sequence[str], systems: Sequence[System]
     }
 
 
+# 重要度の順位（#1406）。重要度を比べる問（`cmp-pms-severity`）の結論の根拠。検証は記号の
+# 一般的な順位を資料に無い推論として通さないため、台帳の前書きに書く（前書きの 1 つのセルで、
+# 根拠はセルの全文）。
+LEDGER_SEVERITY_ORDER = "重要度は A・B・C の 3 段階です。A が最も高く、B、C の順に低くなります。"
+
+
 def _ledger() -> Document:
     sheet = _ledger_sheet(
         "システム台帳",
@@ -970,10 +976,12 @@ def _ledger() -> Document:
             "サンプル社のシステム台帳（架空の会社。評価用の合成資料）",
             "担当部署は部署の略号（漢字 1 文字）で書きます。略号と部署の正式名は組織規程の第 2 章を"
             "参照してください。",
+            LEDGER_SEVERITY_ORDER,
         ],
         SYSTEMS,
     )
     evidence = {f"ledger-{s.number}": s.sys_id for s in SYSTEMS}
+    evidence["ledger-severity-order"] = LEDGER_SEVERITY_ORDER
     return Document(LEDGER, "system-ledger", _workbook_json([sheet]), evidence)
 
 
@@ -1399,7 +1407,8 @@ def _compare_alias_severity_case(case_id: str, split: str, alias: str) -> CaseSp
         raise ValueError(f"{case_id}: 略称 {alias} の 2 つのシステムを比べられません。")
     winner = min(systems, key=lambda item: order.index(item.severity))
     query = f"略称が {alias} のシステムは 2 つあります。重要度が高いのはどちらですか？"
-    evidence = [f"ledger-{item.number}" for item in systems]
+    # 2 つの行と、どちらが高いかを決める重要度の順位（台帳の前書き。#1406）。
+    evidence = [f"ledger-{item.number}" for item in systems] + ["ledger-severity-order"]
     return _case(case_id, split, "comparison", 1, query, [winner.name], evidence)
 
 

@@ -662,6 +662,25 @@ def test_multi_hop_set_declares_superseded_versions() -> None:
     assert marked == uses_old == {"cmp-approval-deadline-versions", "cmp-hrm-maintenance-versions"}
 
 
+def test_severity_comparison_requires_the_ranking_written_in_the_ledger() -> None:
+    """重要度の高低を比べる問は、台帳の前書きの重要度の順位を根拠に持つ（#1406）。
+
+    最終の検証は資料に無い推論（記号 A > B の一般的な順位）を通さないため、順位を資料に書き、
+    必要な根拠にも入れる（根拠が欠けたら連鎖の完全率で分かる）。
+    """
+    builder = _source_builder()
+    _payload, request = _load_set()
+    ledger = _workbook_cells(CORPUS / "sources" / "system-ledger.workbook.json")
+    assert builder.LEDGER_SEVERITY_ORDER in ledger
+    severity_cases = [case for case in request.cases if re.search(r"重要度が(高|低)い", case.query)]
+    assert [case.id for case in severity_cases] == ["cmp-pms-severity"]
+    for case in severity_cases:
+        ranking = [item for item in case.required_evidence if item.id == "ledger-severity-order"]
+        assert [(item.document_id, item.text) for item in ranking] == [
+            ("file:system-ledger.xlsx", builder.LEDGER_SEVERITY_ORDER)
+        ]
+
+
 def test_source_builder_rejects_a_change_that_breaks_original_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
