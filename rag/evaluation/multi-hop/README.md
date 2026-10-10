@@ -192,18 +192,20 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 
 ## 実体の層の有り / 無しで比べる（#1362）
 
-実体の層（文書レシピの任意の処理「実体の抽出」と、回答の検索の 1 段の拡張。
+実体の層（文書レシピの「実体の抽出」（既定 on。#1388）と、回答の検索の 1 段の拡張（既定 off）。
 [../../docs/rag-engine.md](../../docs/rag-engine.md) の `RAG_ENTITY_INDEX_ENABLED`）の効果は、同じ資料を
-**別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます。拡張は既定で OFF なので、
-評価の backend は `RAG_ENTITY_EXPANSION_ENABLED=true` で起動します（実体を持たないナレッジベースでは何も
-足さない）（同じ文書を両方に入れると、実体を
-持つ文書が両方の検索範囲に入るため）。
+**別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます（同じ文書を両方に入れると、
+実体を持つ文書が両方の検索範囲に入るため）。拡張は検索・回答プロファイルで選び、全体の環境変数は持たない
+（#1388）ため、`--entity-index` で書き出す評価セットには `rag_overrides` の `entity_expansion_enabled: true`
+が入ります（`--guides` で作る検索・回答プロファイルでも拡張を選びます）。実体の抽出は全体の既定で on のため、
+無しの側は `--no-entity-index` でレシピの実体の抽出を無効にします。実体を持たないナレッジベースでは何も
+足しません。
 
 ```bash
 cd rag/backend
-# レシピ無し（既定のレシピ。上の「取り込んで評価する」と同じ）
+# レシピ無し（すべての文書のレシピで実体の抽出を無効にする。実体の抽出は全体の既定で on。#1388）
 uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop.json \
-  --api-base-url http://127.0.0.1:8000 --knowledge-base-name "評価: 多段 実体なし" \
+  --api-base-url http://127.0.0.1:8000 --knowledge-base-name "評価: 多段 実体なし" --no-entity-index \
   --output /tmp/multi-hop.plain.json
 # レシピ有り（すべての文書のレシピで実体の抽出を選ぶ）
 uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop.json \

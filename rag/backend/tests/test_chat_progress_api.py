@@ -218,8 +218,14 @@ async def test_sse_streams_events_written_by_another_worker_until_terminal(
     recorder = _recorder()
     message = _answer(fake, recorder)
 
+    reads_before = fake.message_reads
+
     async def other_worker() -> None:
-        # 別の worker が記録を進めて保存する（この worker のメモリには無い）。
+        # 別の worker が記録を進めて保存する（この worker のメモリには無い）。SSE が保存先を
+        # 読み直し始めてから、heartbeat の間隔より長く待つ（時間ではなく状態で合わせる。
+        # 単独の実行では app の初回の起動が遅く、接続より前に待ちが終わっていた。#1397）。
+        while fake.message_reads < reads_before + 2:
+            await asyncio.sleep(0.005)
         await asyncio.sleep(0.12)
         recorder.start("rerank", exclusive=True)
         message.progress = dump_chat_progress_events(recorder.events)

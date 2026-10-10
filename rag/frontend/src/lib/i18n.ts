@@ -941,6 +941,17 @@ export const ja = {
   "searchAnswerProfiles.field.requestCoverage": "根拠の無い要求を探し直す",
   "searchAnswerProfiles.field.requestCoverageHelper":
     "質問に複数の要求があるとき、要求ごとに根拠があるかを確かめ、根拠の無い要求だけをその要求の文で 1 回ずつ探し直して回答の材料に加えます。AI の呼び出しは増えませんが、探し直すたびに数秒かかります。全体の既定は有効です。",
+  "searchAnswerProfiles.entityExpansion.title": "実体でつながる根拠",
+  "searchAnswerProfiles.entityExpansion.enabled": "実体でつながる根拠を 1 段広げる",
+  "searchAnswerProfiles.entityExpansion.helper":
+    "質問と上位の根拠に出てくるシステム・部署の略号などの実体から、台帳の行やその略号を定義した規程など、実体でつながる根拠を 1 段だけ加えます。文書レシピで実体の索引を有効にした文書にだけ効きます。AI の呼び出しは増えません。既定は無効で、このプロファイルの検索だけに効きます。",
+  "searchAnswerProfiles.entityExpansion.noEntityDocuments":
+    "参照先のナレッジベースに、実体の索引のある文書がありません。文書レシピで実体の索引を有効にすると効きます。",
+  "searchAnswerProfiles.entityExpansion.maxChunks": "1 回の検索で加える根拠の上限",
+  "searchAnswerProfiles.entityExpansion.maxChunksHelper":
+    "多くすると関係の遠い根拠も回答の材料に入ります。",
+  "searchAnswerProfiles.entityExpansion.maxChunksValue": "{count} 件",
+  "searchAnswerProfiles.entityExpansion.maxChunksDefault": "{count} 件（既定）",
   "searchAnswerProfiles.queryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "searchAnswerProfiles.queryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "searchAnswerProfiles.queryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",
@@ -1320,6 +1331,9 @@ export const ja = {
   "knowledgeBases.adapter.field.vision.hint":
     "解析の後に、図や画像を含む表を既定の画像対応モデルで説明し、検索できる本文にします。どの解析エンジンでも使えます。画像 1 枚ごとに画像対応モデルの呼び出しと時間がかかります。",
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
+  "knowledgeBases.adapter.field.entityIndex": "実体の索引",
+  "knowledgeBases.adapter.field.entityIndex.hint":
+    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、システム・部署などの実体とその根拠を記録します。AI は使いません。全体の既定は有効で（列の指定が無ければ列名で決めます）、使わない文書は無効にします。記録した実体を検索に使うのは、検索・回答プロファイルで「実体でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",
@@ -1814,6 +1828,18 @@ export const ja = {
   "flow.buildConfig.loading": "構築設定を読み込んでいます",
   "flow.buildConfig.loadError": "構築設定を取得できません",
   "flow.buildConfig.loadErrorHint": "時間をおいて再試行してください。",
+  "documents.entityIndex.columns.title": "実体の索引の列",
+  "documents.entityIndex.columns.names": "名前の列",
+  "documents.entityIndex.columns.names.hint":
+    "表の行の名前（同じ実体の別名）にする列名を「、」で区切って入力します。空欄なら列名で決めます（ID・正式名・名称・略称など）。",
+  "documents.entityIndex.columns.attributes": "属性の列",
+  "documents.entityIndex.columns.attributes.hint":
+    "値を属性の実体にする列名（担当部署・重要度など）を「、」で区切って入力します。空欄なら、名前の列・説明や備考の列・日付や数値の列を除いた列です。",
+  "documents.entityIndex.columns.auto": "列名で決める",
+  "documents.entityIndex.columns.summary.names": "名前の列: {names}",
+  "documents.entityIndex.columns.summary.attributes": "属性の列: {names}",
+  "documents.entityIndex.columns.tooMany": "列名は {max} 個までです。",
+  "documents.entityIndex.columns.tooLong": "列名は 1 つ {max} 文字までです。",
   "documents.excelOptions.title": "Excel の読み方",
   "documents.excelOptions.inherited": "全体の既定に従う（{summary}）",
   "documents.excelOptions.mode": "読み方",

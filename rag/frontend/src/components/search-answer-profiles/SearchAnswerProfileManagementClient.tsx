@@ -87,6 +87,7 @@ import {
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useWorkspaceState } from "@/lib/workspace-state";
+import { EntityExpansionRow } from "./EntityExpansionRow";
 import { SearchAnswerProfileKnowledgePanel } from "./SearchAnswerProfileKnowledgePanel";
 
 const LIMIT = DEFAULT_PAGE_SIZE;
@@ -987,6 +988,12 @@ function SearchAnswerProfileEditor({
                       />
                     </div>
                   </div>
+                  <EntityExpansionRow
+                    value={config.query}
+                    knowledgeBaseIds={config.knowledge_base_ids}
+                    disabled={locked}
+                    onChange={updateQuery}
+                  />
                   <QuerySelectRow
                     id="search-answer-profile-guardrail"
                     label={t("searchAnswerProfiles.field.guardrail")}

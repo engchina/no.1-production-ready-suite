@@ -2404,9 +2404,10 @@ class IngestionPipeline:
         *,
         chunk_set_id: str | None,
     ) -> None:
-        """文書レシピで実体の抽出を選んだときだけ、実体と「実体と chunk の関連」を保存する(#1362)。
+        """実体の抽出が有効なとき(既定。#1388)、実体と「実体と chunk の関連」を保存する(#1362)。
 
-        選ばない文書(既定)は何もしない(SQL も実行しない)。実体は chunk_set ごとに置き換える。
+        文書レシピで無効にした文書は何もしない(SQL も実行しない)。実体は chunk_set ごとに
+        置き換える。
         chunk_set の無い旧い保存(未タグの chunk)は対象にしない。
         """
         if not self._settings.rag_entity_index_enabled or chunk_set_id is None:

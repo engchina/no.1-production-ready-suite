@@ -19,8 +19,8 @@ import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
  * - CHUNK: 文書分割 → 文脈ヘッダ（`_chunks_with_context_headers` は分割の直後に chunk metadata へ付ける）
  *   → 「Chunk 後に Embedding / 索引へ進む」のゲート（CHUNKED で止まり、
  *   `rag_auto_index_after_chunk_enabled` なら INDEX の job を積む）
- * - INDEX: embedding と索引の保存の後に関係情報（`_save_index` / `_save_embeddings_for_chunk_set`
- *   の `graph_indexing`）を作る
+ * - INDEX: embedding と索引の保存の後に実体の索引（`_save_entity_index_if_enabled`。#1362）と
+ *   関係情報（`_save_index` / `_save_embeddings_for_chunk_set` の `graph_indexing`）を作る
  */
 
 type SelectConfigField =
@@ -37,7 +37,8 @@ type BooleanConfigField =
   | "navigation_summary_enabled"
   | "auto_chunk_after_extract_enabled"
   | "chunk_context_header_enabled"
-  | "auto_index_after_chunk_enabled";
+  | "auto_index_after_chunk_enabled"
+  | "entity_index_enabled";
 
 /**
  * 全体の既定（グローバル設定）を変える画面（#528）。レシピの「グローバル設定を開く」と、
@@ -52,7 +53,11 @@ export interface GlobalSettingsLocation {
 type RecipeConfigItemBase = {
   label: I18nKey;
   phase: IngestionJobPhase;
-  globalSettings: GlobalSettingsLocation;
+  /**
+   * 全体の既定を変える画面。null は画面を持たない項目（実体の索引は文書ごとに選ぶ。全体の既定は
+   * backend/.env の `RAG_ENTITY_INDEX_ENABLED`（既定は有効）。#1388）。
+   */
+  globalSettings: GlobalSettingsLocation | null;
 };
 
 export type RecipeConfigItem =
@@ -149,6 +154,15 @@ export const RECIPE_CONFIG_ITEMS = [
     phase: "CHUNK",
     globalSettings: { route: APP_ROUTES.settingsPipeline, anchor: SETTINGS_ANCHORS.autoIndexGate },
   },
+  // 実体の索引（#1362 / #1388）。索引の保存の後に作る。検索・回答プロファイルの「実体でつながる
+  // 根拠を 1 段広げる」が使う。名前・属性の列は、この項目が有効なときに下の行で選ぶ。
+  {
+    field: "entity_index_enabled",
+    kind: "boolean",
+    label: "knowledgeBases.adapter.field.entityIndex",
+    phase: "INDEX",
+    globalSettings: null,
+  },
   {
     field: "graph_profile",
     kind: "select",
@@ -158,8 +172,12 @@ export const RECIPE_CONFIG_ITEMS = [
   },
 ] as const satisfies readonly RecipeConfigItem[];
 
-/** 全体の既定を変える画面の URL（`/settings/parser-adapters#post-parse-vision` など）。 */
-export function globalSettingsHref(item: RecipeConfigItem): string {
+/**
+ * 全体の既定を変える画面の URL（`/settings/parser-adapters#post-parse-vision` など）。画面を持たない
+ * 項目は null。
+ */
+export function globalSettingsHref(item: RecipeConfigItem): string | null {
+  if (!item.globalSettings) return null;
   const { route, anchor } = item.globalSettings;
   return anchor ? `${route}#${anchor}` : route;
 }
