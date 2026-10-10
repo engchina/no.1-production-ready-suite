@@ -19,7 +19,8 @@ from app.rag.entity_expansion import plan_entity_expansion
 from app.rag.entity_index import build_entity_index
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
-from tests.entity_layer_support import multi_hop_corpus
+from app.schemas.search import RetrievedChunk
+from tests.entity_layer_support import business_support_corpus, multi_hop_corpus
 
 _EMBEDDING = [0.1] * 1536
 
@@ -183,3 +184,67 @@ async def test_entity_expansion_joins_on_real_oracle() -> None:
     assert await client.delete_document(ledger_id)
     assert await _count(client, entities_sql, {"d": ledger_id}) == 0
     assert await _count(client, aliases_sql, {"d": ledger_id}) == 0
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_entity_labels_need_another_document_on_real_oracle() -> None:
+    """本文の見出しのラベル（「原因 A」）は拡張に使わず、台帳と同じ「重要度 C」は使う（#1393）。"""
+    client = OracleClient()
+    store = EntityStore(client)
+    token = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"entity-label-{token}")
+    corpus = {
+        document.file_name: document
+        for document in [*multi_hop_corpus(), *business_support_corpus()]
+    }
+    saved: dict[str, tuple[str, str]] = {}
+    for name in ("system-ledger.xlsx", "incident-contact-rules.pdf", "error-e1023-notes.pdf"):
+        document = corpus[name]
+        document_id, chunk_set_id = await _indexed_document(
+            client,
+            file_name=f"entity-label-{token}-{name}",
+            chunks=document.chunks,
+            knowledge_base_id=kb.id,
+        )
+        await store.replace_chunk_set_entity_index(
+            document_id,
+            chunk_set_id,
+            build_entity_index(
+                document_id=document_id,
+                chunks=document.chunks,
+                chunk_set_id=chunk_set_id,
+                document_title=document.chunks[0].text,
+            ),
+        )
+        saved[name] = (document_id, chunk_set_id)
+
+    # 障害メモの「対処」の章（「原因 A の場合: …」）が上位に入っても、「原因 A」で章を足さない。
+    notes_id, notes_cs = saved["error-e1023-notes.pdf"]
+    remedy = RetrievedChunk(
+        document_id=notes_id,
+        chunk_id=f"{notes_id}:{notes_cs}:3",
+        text=corpus["error-e1023-notes.pdf"].chunks[3].text,
+        score=0.0,
+        file_name="error-e1023-notes.pdf",
+    )
+    unrelated = await plan_entity_expansion(
+        store,
+        {"knowledge_base_id": kb.id},
+        question="アカウントを削除するにはどうしますか？",
+        seed_chunks=[remedy],
+        exclude_chunk_ids={remedy.chunk_id},
+        max_chunks=6,
+    )
+    assert unrelated == []
+
+    # 台帳の「重要度: C」と同じ別名の、障害連絡規程の「重要度 C: …」は名寄せで足す。
+    incident_id, incident_cs = saved["incident-contact-rules.pdf"]
+    named = await plan_entity_expansion(
+        store,
+        {"knowledge_base_id": kb.id},
+        question="重要度 C のシステムで障害が起きたら、いつまでにどこへ報告しますか？",
+        seed_chunks=[],
+        exclude_chunk_ids=set(),
+        max_chunks=6,
+    )
+    assert [item.chunk.chunk_id for item in named] == [f"{incident_id}:{incident_cs}:1"]
