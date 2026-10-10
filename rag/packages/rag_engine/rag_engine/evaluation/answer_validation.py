@@ -36,7 +36,8 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, table_he
 # 4: 回答の段落が書いた根拠の ID でも根拠に結び付け、ID の照合はシステムが行うことを指示に足した（#1404）。
 # 5: ID を書かない段落は裏付ける根拠の ID を選ぶこと・ID が無いことを citation_error にしないことを指示に足し、
 #    それでも出典が決まらない ID の無い段落は、回答の他の段落が引いた根拠で確かめ直すようにした（#1412）。
-VALIDATION_RUBRIC_VERSION = 5
+# 6: 質問・回答が限定した範囲（会社・台帳・版・年度・部署）の外の根拠との違いを contradicted にしないことを足した（#1413）。
+VALIDATION_RUBRIC_VERSION = 6
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 段落に根拠の ID が無い（結論・まとめの段落など）ときは、その主張を裏付ける evidence_items を選び、その evidence_id を evidence_id に書く。
 - citation_error は、段落が書いた根拠の ID が evidence_items に無いときだけに使う。段落に ID が無いことを citation_error にしない。
 - contradicted: 根拠と矛盾する。evidence_id を指定する。
+- 質問・回答が対象（会社・台帳・版・年度・部署など）を限定しているときは、その範囲の外の根拠（別の会社の台帳の同じ略称の行など）との違いを contradicted にしない。範囲の中の根拠と食い違うときだけ contradicted にする。
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
 - not_a_claim: 見出しだけの行。本文の文には使わない。

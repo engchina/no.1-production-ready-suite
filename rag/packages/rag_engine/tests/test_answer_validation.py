@@ -661,3 +661,73 @@ def test_written_ids_missing_from_the_evidence_stay_citation_errors_and_are_not_
     answer = answer.replace(f"{CHANGE}:4】", f"{unknown}】")
     result, calls = _window_validation({**first, "A5": ("supported", unknown)}, None, answer=answer)
     assert result["counts"] == {"citation_error": 4} and len(calls) == 1
+
+
+# #1362 の確認の Run run_5352385802954df9a521e1a10ff7d881（dev tl-logistics-oms）の形（#1413。ID と本文は合成した値）。
+# 質問は「サンプル物流社のシステム台帳で」と範囲を限定し、根拠には本社の台帳の同じ略称（OMS）の行も入る。
+LOGISTICS = "449fb52adddd4843f6b4783146d22de1:c2a2b3d1" + "8" * 56
+HEADQUARTERS = "95e6cc20eeee4339a8e32763c996ce5c:28fb4739" + "9" * 56
+OMS_EVIDENCE = [
+    {"id": f"{LOGISTICS}:0", "source": "logistics-system-ledger.xlsx", "page_start": None, "page_end": None,
+     "text": "サンプル物流社のシステム台帳（サンプル社の子会社）\n担当部署はサンプル物流社の部署の略号です。"},
+    {"id": f"{LOGISTICS}:1", "source": "logistics-system-ledger.xlsx", "page_start": None, "page_end": None,
+     "text": "システムID: SL-201 / 正式名: 運行管理システム / 略称・別表記: OMS / 担当部署: 運"},
+    {"id": f"{HEADQUARTERS}:0", "source": "system-ledger.xlsx", "page_start": None, "page_end": None,
+     "text": "サンプル社のシステム台帳\n担当部署は部署の略号（漢字 1 文字）で書きます。"},
+    {"id": f"{HEADQUARTERS}:4", "source": "system-ledger.xlsx", "page_start": None, "page_end": None,
+     "text": "システムID: SYS-104 / 正式名: 受発注管理システム / 略称・別表記: OMS、受発注 / 担当部署: 営"},
+]
+OMS_QUESTION = "サンプル物流社のシステム台帳で、略称が OMS のシステムの正式名は何ですか？"
+
+
+def _oms_answer(name: str) -> str:
+    return (f"サンプル物流社のシステム台帳で、略称が **OMS** のシステムの正式名は **「{name}」** です。\n\n**根拠**\n"
+            "- 「システムID: SL-201 / 正式名: 運行管理システム / 略称・別表記: OMS」"
+            f"(logistics-system-ledger.xlsx、シート「システム台帳」行 4)【evidence_id: {LOGISTICS}:1】")
+
+
+def _oms_validation(answer: str, verdict) -> tuple[dict, str]:
+    """監査する段落（結論の段落だけ。見出しと出典の行は監査に渡らない）に verdict(system) の（status, chunk の id）を返すスタブ。"""
+    seen: list[tuple[str, list[str]]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append((system, [passage["text"] for passage in payload["answer_passages"]]))
+        ids = {item["id"]: item["evidence_id"] for item in payload["evidence_items"]}
+        status, chunk_id = verdict(system)
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": status, "evidence_id": ids[chunk_id],
+             "source_id": "", "evidence_quote": "", "reason": "台帳の OMS の行で判定。"}
+            for passage in payload["answer_passages"]]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims(OMS_QUESTION, answer, OMS_EVIDENCE, settings=None)
+    [(system, passages)] = seen
+    assert passages == [answer.split("\n\n")[0]]
+    return result, system
+
+
+SCOPE_RULE = "その範囲の外の根拠（別の会社の台帳の同じ略称の行など）との違いを contradicted にしない"
+
+
+def test_evidence_outside_the_scope_of_the_question_is_not_a_contradiction() -> None:
+    """質問が限定した範囲（会社・台帳・版・年度・部署）の外の根拠との違いを contradicted にしない指示がある (#1413)。
+
+    実サービスでは、物流社の台帳の「OMS = 運行管理システム」を、本社の台帳の「OMS = 受発注管理システム」と
+    食い違うとして contradicted にし、正しい結論を本文から外した。スタブは指示に範囲の規則があるときだけ、
+    範囲の中の根拠（物流社の台帳の行）で supported を返す（規則が無ければ範囲の外の行で contradicted）。
+    """
+    def verdict(system: str) -> tuple[str, str]:
+        return ("supported", f"{LOGISTICS}:1") if SCOPE_RULE in system else ("contradicted", f"{HEADQUARTERS}:4")
+
+    result, system = _oms_validation(_oms_answer("運行管理システム"), verdict)
+    assert "範囲の中の根拠と食い違うときだけ contradicted にする" in system
+    assert result["counts"] == {"supported": 1}
+    assert result["claim_checks"][0]["source_id"] == f"{LOGISTICS}:1"
+
+
+def test_contradictions_with_evidence_inside_the_scope_stay_contradicted() -> None:
+    """範囲の中の根拠と食い違う結論は、今までどおり contradicted (#1413)。"""
+    result, _ = _oms_validation(_oms_answer("受発注管理システム"), lambda system: ("contradicted", f"{LOGISTICS}:1"))
+    [claim] = result["claim_checks"]
+    assert claim["status"] == "contradicted" and claim["source_id"] == f"{LOGISTICS}:1"
