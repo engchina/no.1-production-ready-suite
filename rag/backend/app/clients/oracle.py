@@ -225,6 +225,18 @@ class StoredDocument:
     superseded_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class OlderDocumentVersion:
+    """検索で当たった文書を置き換えた旧版(#1405)。"""
+
+    document_id: str
+    file_name: str | None
+    # 文書のタイトル(先頭の見出し。版・年度を含むことが多い)。見出しが無ければ None。
+    title: str | None
+    # この旧版を置き換えた新しい版(検索で当たった文書)。
+    superseded_by_document_id: str
+
+
 @dataclass
 class StoredKnowledgeBase:
     """ナレッジベース行。"""
@@ -881,6 +893,86 @@ class OracleClient:
             (document_id, file_name, tuple(headings))
             for document_id, (file_name, headings) in documents.items()
         ]
+
+    async def retrieval_older_versions(
+        self, filters: dict[str, str], document_ids: Sequence[str], *, limit: int
+    ) -> list[OlderDocumentVersion]:
+        """検索と同じ条件の中の、``document_ids`` の文書を置き換えた旧版を返す(#1405)。
+
+        旧版は既定で検索しないため、検索で当たった今の版に旧版があっても結果からは分からない。
+        MCP の根拠の結果に旧版(文書名とタイトル。タイトルは版・年度を含むことが多い)を示し、旧版の
+        年度を名指しする質問で ``include_superseded`` を渡す手がかりにする。``filters`` は検索の
+        条件(ナレッジベース・分類など)で、旧版を含めた検索と同じ範囲(利用者の権限・データの範囲を
+        含む)の中の旧版だけを返す。タイトルは、見出しのある最初の chunk の見出しの列の先頭の
+        見出し(「定期保守計画 2025年度」)。
+        """
+        ids = _unique_sequence(list(document_ids))
+        if not ids:
+            return []
+        where_sql, binds = _oracle_retrieval_where(
+            {**filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
+        )
+        in_sql, in_binds = _oracle_in_predicate(
+            "d.superseded_by_document_id", "older_version_of", ids
+        )
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT * FROM (
+                SELECT t.document_id, t.file_name, t.superseded_by_document_id, t.root_heading
+                FROM (
+                    SELECT d.document_id,
+                           d.file_name,
+                           d.superseded_by_document_id,
+                           d.superseded_at,
+                           CASE
+                               WHEN INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), ' > ') > 0
+                               THEN SUBSTR(
+                                   JSON_VALUE(c.metadata_json, '$.section_path'),
+                                   1,
+                                   INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), ' > ') - 1
+                               )
+                               ELSE JSON_VALUE(c.metadata_json, '$.section_path')
+                           END AS root_heading,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY d.document_id
+                               ORDER BY
+                                   CASE
+                                       WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
+                                       THEN 1
+                                       ELSE 0
+                                   END,
+                                   c.chunk_index
+                           ) AS heading_rank
+                    FROM rag_chunks c
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    WHERE {where_sql}
+                      AND {in_sql}
+                ) t
+                WHERE t.heading_rank = 1
+                ORDER BY t.superseded_at DESC NULLS LAST, t.file_name, t.document_id
+            ) WHERE ROWNUM <= :older_version_limit
+            """,
+                where_sql=where_sql,
+                in_sql=in_sql,
+            ),
+            {**binds, **in_binds, "older_version_limit": max(1, int(limit))},
+        )
+        versions: list[OlderDocumentVersion] = []
+        for row in rows:
+            document_id = _optional_str(row.get("document_id"))
+            superseded_by = _optional_str(row.get("superseded_by_document_id"))
+            if document_id is None or superseded_by is None:
+                continue
+            versions.append(
+                OlderDocumentVersion(
+                    document_id=document_id,
+                    file_name=_optional_str(row.get("file_name")),
+                    title=_optional_str(row.get("root_heading")),
+                    superseded_by_document_id=superseded_by,
+                )
+            )
+        return versions
 
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
         """検索と同じ見え方の条件で 1 件の chunk を返す（MCP の ``rag_read_source``。#1219）。

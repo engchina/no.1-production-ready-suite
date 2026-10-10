@@ -538,3 +538,78 @@ async def test_including_superseded_stays_within_allowed_knowledge_bases_on_real
         assert await _retrieval_document_ids(client, {}) == {inside_current}
     finally:
         reset_audit_request_context(scoped)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_older_versions_of_hit_documents_on_real_oracle() -> None:
+    """当たった文書の旧版を、旧版を含めた検索と同じ範囲の中だけから返す(#1405)。
+
+    タイトルは見出しのある最初の chunk の先頭の見出し(版・年度を含む)。範囲の外の KB の旧版・
+    旧版でない文書は返さない。
+    """
+    from dataclasses import replace
+
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    inside = await client.create_knowledge_base(name=f"版の範囲の中 {token}")
+    outside = await client.create_knowledge_base(name=f"版の範囲の外 {token}")
+    current = await _indexed_document(
+        client,
+        file_name=f"maintenance-plan-{token}.pdf",
+        chunks=[_chunk(0, "ＨＲＭ: 毎月第 2 土曜日", "定期保守計画 2026年度 > 第 1 章")],
+        knowledge_base_ids=[inside.id, outside.id],
+    )
+    old = await _indexed_document(
+        client,
+        file_name=f"maintenance-plan-{token}-2025.pdf",
+        chunks=[
+            _chunk(0, "表紙"),
+            _chunk(1, "ＨＲＭ: 毎月第 1 土曜日", "定期保守計画 2025年度 > 第 1 章"),
+        ],
+        knowledge_base_ids=[inside.id],
+    )
+    await client.set_document_superseded_by(old, current)
+    # 範囲の外の KB にだけある旧版。
+    outside_old = await _indexed_document(
+        client,
+        file_name=f"maintenance-plan-{token}-2024.pdf",
+        chunks=[_chunk(0, "ＨＲＭ: 毎月第 3 土曜日", "定期保守計画 2024年度")],
+        knowledge_base_ids=[outside.id],
+    )
+    await client.set_document_superseded_by(outside_old, current)
+    # 旧版でない別の文書は返さない。
+    await _indexed_document(
+        client,
+        file_name=f"other-{token}.pdf",
+        chunks=[_chunk(0, "別の文書", "別の文書")],
+        knowledge_base_ids=[inside.id],
+    )
+
+    versions = await client.retrieval_older_versions(
+        {"knowledge_base_id": inside.id}, [current], limit=10
+    )
+    assert [(v.document_id, v.title, v.superseded_by_document_id) for v in versions] == [
+        (old, "定期保守計画 2025年度", current)
+    ]
+    assert versions[0].file_name == f"maintenance-plan-{token}-2025.pdf"
+    both = {"knowledge_base_id": f"{inside.id},{outside.id}"}
+    found = await client.retrieval_older_versions(both, [current], limit=10)
+    assert {version.document_id for version in found} == {old, outside_old}
+    assert len(await client.retrieval_older_versions(both, [current], limit=1)) == 1
+    assert await client.retrieval_older_versions(both, [old], limit=10) == []
+
+    # 利用者の範囲(許可した KB)の外の旧版は、KB を名指ししても返さない。
+    scoped = set_audit_request_context(
+        replace(current_audit_request_context(), allowed_knowledge_base_ids=frozenset({inside.id}))
+    )
+    try:
+        found = await client.retrieval_older_versions(both, [current], limit=10)
+        assert [version.document_id for version in found] == [old]
+    finally:
+        reset_audit_request_context(scoped)
