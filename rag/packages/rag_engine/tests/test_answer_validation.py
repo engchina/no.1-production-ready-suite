@@ -722,6 +722,9 @@ def test_evidence_outside_the_scope_of_the_question_is_not_a_contradiction() -> 
 
     result, system = _oms_validation(_oms_answer("運行管理システム"), verdict)
     assert "範囲の中の根拠と食い違うときだけ contradicted にする" in system
+    # 実サービスの再生では「同じ略称の別の行があるので唯一と断定できない」を理由に contradicted にした。
+    assert "ほかに同じ略称があることを矛盾や断定できない理由にしない" in system
+    assert "B 社の行を理由に contradicted にしない" in system
     assert result["counts"] == {"supported": 1}
     assert result["claim_checks"][0]["source_id"] == f"{LOGISTICS}:1"
 
