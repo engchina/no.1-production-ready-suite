@@ -13,6 +13,13 @@
 - 他の文書への参照は、文書名と節の表記だけを残す(未解決)。文書がどのナレッジベースに
   属するかは chunk に焼き込まない(KB は純スコープ。所属を変えても chunk に波及しない)ため、
   回答のときに検索範囲(KB)の中の文書から解決する(``answer_engine``)。
+- 文書名で別の文書を指す文(「時間帯は定期保守計画で確かめます」「組織規程に従う」。#1400)は、
+  文書名 + 参照の述語(で確かめる・を確認する・を見る・に従う・による・に記載 など)の形を、
+  節を決めない文書全体への参照(``kind="document"``)として抜き出す。どの文書かは回答のときに
+  検索範囲の文書のタイトル(見出しの列の先頭)・ファイル名と別名(年度・版・括弧書きを外した形)で
+  照合して決め(``document_name_match``)、参照の先はその文書の質問に関連の高い chunk に限る。
+  誤検出を避けるため、文書名は 4 文字以上・一般語(「システム」「台帳」など)でない・章や条の
+  表記を含まないものに限り、照合は別名との完全一致(とファイル名が文書名を含むもの)だけにする。
 - 回答: 検索で見つけた chunk の参照先の節の chunk を、上限付きで rerank の候補に足す。
 
 参照先は「見出しの列のどこまでか」(``section_path`` の前方一致)で表す。chunk の id は
@@ -33,6 +40,8 @@ REFERENCE_TARGETS_KEY = "reference_targets_json"
 # 回答で参照先として足した chunk に付ける印(起点の chunk_id と参照の表記)。
 REFERENCE_FROM_KEY = "reference_from_chunk_id"
 REFERENCE_LABEL_KEY = "reference_label"
+# 文書名だけの参照(#1400)の参照先 1 つの中で足した順(1 始まり。質問に関連の高い順)。
+REFERENCE_RANK_KEY = "reference_rank"
 # 1 つの chunk から残す参照の数の上限(目次や索引のような参照だらけの chunk を抑える)。
 MAX_REFERENCES_PER_CHUNK = 6
 # 見出しの列の区切り(chunking が「 > 」でつないで保存する)。
@@ -280,6 +289,7 @@ def extract_references(text: str) -> list[ReferenceSpec]:
     found: list[ReferenceSpec] = []
     found.extend(_extract_japanese(normalized))
     found.extend(_extract_english(normalized))
+    found.extend(_extract_document_names(normalized))
     unique: dict[tuple[str, str, str], ReferenceSpec] = {}
     for spec in found:
         unique.setdefault((spec.kind, spec.key, spec.document_title or ""), spec)
@@ -413,6 +423,237 @@ def _extract_english(text: str) -> list[ReferenceSpec]:
         document = (match.group("doc") or "").strip() or None
         specs.append(ReferenceSpec(label, kind, key, document))
     return specs
+
+
+# ---- 文書名の参照(#1400) ----
+
+# 文書名の直後に来る参照の述語(「定期保守計画で確かめます」「組織規程に従う」)。PDF の抽出で
+# 文字の間に空白が入ることがある(「確かめま す」)ので、文字の間の空白を許す。
+_DOCUMENT_NAME_PREDICATES = (
+    "で確かめ",
+    "で確認",
+    "で調べ",
+    "で定め",
+    "で規定",
+    "を確かめ",
+    "を確認",
+    "を調べ",
+    "を参照",
+    "参照",
+    "を参考",
+    "を見て",
+    "を見る",
+    "を見ます",
+    "を見れば",
+    "をご覧",
+    "に従",
+    "に基づ",
+    "に記載",
+    "に定め",
+    "に規定",
+    "による",
+    "により",
+    "に準じ",
+    "に準拠",
+    "のとおり",
+    "の通り",
+)
+_DOCUMENT_NAME_PREDICATE = re.compile(
+    "|".join(
+        r"\s*".join(re.escape(char) for char in predicate)
+        for predicate in sorted(_DOCUMENT_NAME_PREDICATES, key=len, reverse=True)
+    )
+)
+# 文書名に使う文字(漢字・カタカナ・英数字・「・」)。ひらがな・句読点・括弧で名前が切れる
+# (「サンプル社の定期保守計画」は「定期保守計画」)。文字の間の空白 1 つは許す(PDF の抽出)。
+_NAME_CHAR = r"[々〆ヶ一-鿿ァ-ヺー・A-Za-z0-9]"
+_DOCUMENT_NAME_BEFORE = re.compile(
+    rf"(?P<open>『)?(?P<name>(?:{_NAME_CHAR}(?:\s(?={_NAME_CHAR}))?){{2,40}})(?(open)』)\s*$"
+)
+# 述語が「で〜」のとき、同じ文の前の「〈文書名〉で、」も同じ述語の参照として拾う
+# (「担当部署はシステム台帳で、承認者は組織規程で確かめます」)。
+_DOCUMENT_NAME_COORDINATED = re.compile(
+    rf"(?<!{_NAME_CHAR})(?P<open>『)?(?P<name>(?:{_NAME_CHAR}(?:\s(?={_NAME_CHAR}))?){{2,40}})"
+    r"(?(open)』)\s*で\s*[、,]"
+)
+# 文書名の最短の文字数(``title_key`` の形で数える)。「台帳」「規程」のような短い語は一般語と区別
+# できないので拾わない。
+MIN_DOCUMENT_NAME_CHARS = 4
+# 文書名として扱わない一般語(``title_key`` の形)。照合は検索範囲の文書との完全一致だけだが、
+# 一般語と同じ名前の文書があっても、地の文の一般語を参照として扱わない。
+_GENERIC_DOCUMENT_NAMES = frozenset(
+    _TITLE_NOISE.sub("", unicodedata.normalize("NFKC", word).casefold())
+    for word in (
+        "システム",
+        "ドキュメント",
+        "ポータル",
+        "社内ポータル",
+        "ホームページ",
+        "ウェブサイト",
+        "Webサイト",
+        "管理画面",
+        "設定画面",
+        "画面",
+        "一覧",
+        "資料",
+        "文書",
+        "書類",
+        "手順",
+        "手順書",
+        "計画",
+        "計画書",
+        "台帳",
+        "申請書",
+        "様式",
+        "目的",
+        "概要",
+        "適用範囲",
+        "対象範囲",
+        "お知らせ",
+        "メール",
+        "チャット",
+        "ログ",
+        "エラーメッセージ",
+        "メッセージ",
+        "ヘルプ",
+        "FAQ",
+        "利用者",
+        "担当者",
+        "承認者",
+        "担当部署",
+        "管理者",
+        "責任者",
+        "上長",
+        "本文",
+        "原本",
+        "添付",
+        "添付ファイル",
+        "ファイル",
+        "データ",
+        "データベース",
+        "テーブル",
+        "マスタ",
+        "マスター",
+    )
+)
+# 同じ文書・前に出た文書を指す語(「本手順書」「同規程」「上記の計画」)。
+_DEMONSTRATIVE_NAME = re.compile(
+    rf"^(?:本|当|同|上記|下記|前記|後記|各|別)\s*(?:{_DOC_SUFFIX}|書|文書|資料|規程|計画書?|台帳|表)$"
+)
+
+
+def document_name_references(text: str) -> list[ReferenceSpec]:
+    """本文の中の、文書名で別の文書を指す参照(``kind="document"``。#1400)。
+
+    「時間帯は定期保守計画で確かめます」「担当部署はシステム台帳で、承認者は組織規程で確かめます」
+    「『経費精算マニュアル』に従う」の文書名を拾う。どの文書かは決めない(回答のときに検索範囲の
+    文書のタイトル・ファイル名で照合する)。``extract_references`` も同じ参照を返す。
+    """
+    return _extract_document_names(normalize_text(text))
+
+
+def _extract_document_names(text: str) -> list[ReferenceSpec]:
+    specs: list[ReferenceSpec] = []
+    for predicate in _DOCUMENT_NAME_PREDICATE.finditer(text):
+        start = max(0, predicate.start() - _LOOKBACK_CHARS)
+        boundary = max(
+            (match.end() for match in _SENTENCE_END.finditer(text, start, predicate.start())),
+            default=start,
+        )
+        segment = text[boundary : predicate.start()]
+        match = _DOCUMENT_NAME_BEFORE.search(segment)
+        if match is None:
+            continue
+        names = [match]
+        if predicate.group(0).startswith("で"):
+            names[:0] = list(_DOCUMENT_NAME_COORDINATED.finditer(segment[: match.start()]))
+        for found in names:
+            spec = _document_name_spec(found)
+            if spec is not None:
+                specs.append(spec)
+    return specs
+
+
+def _document_name_spec(match: re.Match[str]) -> ReferenceSpec | None:
+    raw = match.group("name").strip()
+    # 日本語の文字の間の空白(PDF の抽出で入る)は外す。英字の語の間の空白は残す。
+    name = re.sub(r"(?<=[^\x00-\x7f])\s+|\s+(?=[^\x00-\x7f])", "", raw)
+    key = title_key(name)
+    if len(key) < MIN_DOCUMENT_NAME_CHARS or key in _GENERIC_DOCUMENT_NAMES:
+        return None
+    if re.fullmatch(_DOC_SUFFIX, name) or _DEMONSTRATIVE_NAME.match(name):
+        return None
+    # 「第2章」「3.2節」「別紙1」などの表記を含むものは、章・節の参照(別の規則)に任せる。
+    if any(not label.group("quoted") for label in _LABEL.finditer(name)):
+        return None
+    label = f"『{name}』" if match.group("open") else name
+    return ReferenceSpec(label, "document", "", name)
+
+
+# 文書のタイトルの別名を作るときに外す、年度・版の表記(「2026年度」「第2版」「v1.2」「改訂版」)。
+_EDITION = (
+    r"(?:(?:19|20)\d{2}\s*(?:年度?)?|(?:令和|平成)\s*(?:\d+|元)\s*年度?|第?\s*\d+\s*版|[vV]\.?\s*\d+(?:\.\d+)*"
+    r"|ver\.?\s*\d+(?:\.\d+)*|(?:改訂|改定|最新|初|新|旧)版|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{6,8})"
+)
+_TRAILING_EDITION = re.compile(rf"(?:[\s_\-]*{_EDITION})+\s*$", re.IGNORECASE)
+_LEADING_EDITION = re.compile(rf"^\s*(?:{_EDITION}[\s_\-]*)+", re.IGNORECASE)
+# 括弧書き(「組織規程(システムの担当と承認者)」の「(…)」)。
+_PARENTHETICAL = re.compile(r"[(\[【][^()\[\]【】]*[)\]】]")
+# 先頭の会社名(「サンプル社 定期保守計画」の「サンプル社 」)。
+_COMPANY_PREFIX = re.compile(r"^\S{1,20}?社\s+")
+_FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+
+
+def title_heading(heading: str) -> bool:
+    """見出しの列の先頭の見出しが文書のタイトルとして使えるか(章・節・条などの番号が無い)。"""
+    text = normalize_text(heading).strip()
+    return bool(text) and _HEAD_NUMBERING.match(text) is None
+
+
+def document_name_aliases(value: str) -> set[str]:
+    """文書のタイトル・ファイル名の、照合に使う形(``title_key``)の集合。
+
+    そのままの形に加えて、括弧書き・年度や版の表記・先頭の会社名・拡張子を外した形を別名にする
+    (「定期保守計画 2026年度」→「定期保守計画」、
+    「組織規程(システムの担当と承認者)」→「組織規程」)。
+    """
+    text = normalize_text(value).strip()
+    bases = {text, _FILE_EXTENSION.sub("", text)}
+    variants: set[str] = set()
+    for base in bases:
+        for item in {base, _PARENTHETICAL.sub(" ", base)}:
+            for stripped in (
+                item,
+                _TRAILING_EDITION.sub("", _LEADING_EDITION.sub("", item)),
+                _COMPANY_PREFIX.sub("", item),
+                _TRAILING_EDITION.sub("", _LEADING_EDITION.sub("", _COMPANY_PREFIX.sub("", item))),
+            ):
+                variants.add(stripped.strip())
+    return {key for key in (title_key(item) for item in variants) if len(key) >= 2}
+
+
+def document_name_match(name: str, file_name: str, headings: Iterable[str] = ()) -> int | None:
+    """参照の文書名が文書に当たるか(当たり方の順位。小さいほど確か。当たらなければ None)。
+
+    - 0: 文書のタイトル(番号の無い先頭の見出し)・ファイル名、またはその別名と一致する。
+    - 1: ファイル名(拡張子を除く)が文書名を含む(#1280 の他の文書への参照と同じ規則)。
+
+    NFKC・大文字と小文字・空白と区切りの記号の違いは無視する。タイトルの部分一致は使わない
+    (「保守計画」で「定期保守計画」を指さない)。
+    """
+    key = title_key(name)
+    if len(key) < 2:
+        return None
+    aliases = document_name_aliases(file_name)
+    for heading in headings:
+        if title_heading(heading):
+            aliases |= document_name_aliases(heading)
+    if key in aliases:
+        return 0
+    stem = title_key(_FILE_EXTENSION.sub("", normalize_text(file_name)))
+    if len(stem) >= 2 and key in stem:
+        return 1
+    return None
 
 
 # ---- 解決 ----
@@ -651,13 +892,18 @@ def reference_targets(metadata: Mapping[str, object]) -> list[ReferenceTarget]:
 
 __all__ = [
     "MAX_REFERENCES_PER_CHUNK",
+    "MIN_DOCUMENT_NAME_CHARS",
     "REFERENCE_FROM_KEY",
     "REFERENCE_LABEL_KEY",
+    "REFERENCE_RANK_KEY",
     "REFERENCE_TARGETS_KEY",
     "ReferenceSpec",
     "ReferenceTarget",
     "SectionIndex",
     "annotate_cross_references",
+    "document_name_aliases",
+    "document_name_match",
+    "document_name_references",
     "extract_references",
     "heading_keys",
     "reference_targets",
@@ -665,5 +911,6 @@ __all__ = [
     "same_document_title",
     "section_path_within",
     "split_section_path",
+    "title_heading",
     "title_key",
 ]

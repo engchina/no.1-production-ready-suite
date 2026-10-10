@@ -788,47 +788,98 @@ class OracleClient:
 
     async def retrieval_reference_documents(
         self, filters: dict[str, str], *, title: str, limit: int
-    ) -> list[tuple[str, str]]:
-        """検索と同じ条件の文書のうち、文書名に ``title`` を含むものを(id, 文書名)で返す(#1280)。
+    ) -> list[tuple[str, str, tuple[str, ...]]]:
+        """検索と同じ条件の文書のうち、文書名かタイトルに ``title`` を含むものを返す(#1280・#1400)。
 
-        ``title`` は ``cross_references.title_key`` の形(小文字・空白と区切りの記号を除く)で渡す。
+        返す値は (id, 文書名, タイトルの候補)。タイトルの候補は、見出しの列(``section_path``)が
+        ``title`` を含む chunk の、見出しの列の先頭の見出し(文書のタイトル。「定期保守計画
+        2026年度」)を読み順に並べたもの。どれを文書のタイトルとみなすか(番号の無い見出しか)と、
+        別名での照合は呼び出し側(``cross_references.document_name_match``)が決める。
 
-        他の文書への交差参照(「経費精算マニュアルの「権限」を参照」)の参照先の文書を、検索範囲
-        (ナレッジベース)の中だけから探す。旧版の文書は検索と同じく既定では含めない。
+        ``title`` は ``cross_references.title_key`` の形(NFKC・小文字・空白と区切りの記号を除く)で
+        渡す。保存した文書名・見出しが全角の英数字でも当たるよう、全角の形でも比べる。
+
+        他の文書への交差参照(「経費精算マニュアルの「権限」を参照」「時間帯は定期保守計画で
+        確かめます」)の参照先の文書を、検索範囲(ナレッジベース)の中だけから探す。旧版の文書は
+        検索と同じく既定では含めない。
         """
         where_sql, binds = _oracle_retrieval_where(filters)
         rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT * FROM (
-                SELECT d.document_id, d.file_name
-                FROM rag_documents d
-                WHERE INSTR(
-                    TRANSLATE(LOWER(d.file_name), :reference_strip_from, 'x'), :reference_title
-                ) > 0
-                  AND EXISTS (
-                      SELECT 1
-                      FROM rag_chunks c
-                      WHERE c.document_id = d.document_id
-                        AND {where_sql}
-                  )
-                ORDER BY LENGTH(d.file_name), d.document_id
+                SELECT t.document_id, t.file_name, t.root_heading
+                FROM (
+                    SELECT d.document_id,
+                           d.file_name,
+                           c.chunk_index,
+                           CASE
+                               WHEN INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), ' > ') > 0
+                               THEN SUBSTR(
+                                   JSON_VALUE(c.metadata_json, '$.section_path'),
+                                   1,
+                                   INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), ' > ') - 1
+                               )
+                               ELSE JSON_VALUE(c.metadata_json, '$.section_path')
+                           END AS root_heading
+                    FROM rag_chunks c
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    WHERE {where_sql}
+                      AND (
+                          INSTR(
+                              TRANSLATE(LOWER(d.file_name), :reference_strip_from, 'x'),
+                              :reference_title
+                          ) > 0
+                          OR INSTR(
+                              TRANSLATE(LOWER(d.file_name), :reference_strip_from, 'x'),
+                              :reference_title_wide
+                          ) > 0
+                          OR INSTR(
+                              TRANSLATE(
+                                  LOWER(JSON_VALUE(c.metadata_json, '$.section_path')),
+                                  :reference_strip_from,
+                                  'x'
+                              ),
+                              :reference_title
+                          ) > 0
+                          OR INSTR(
+                              TRANSLATE(
+                                  LOWER(JSON_VALUE(c.metadata_json, '$.section_path')),
+                                  :reference_strip_from,
+                                  'x'
+                              ),
+                              :reference_title_wide
+                          ) > 0
+                      )
+                ) t
+                GROUP BY t.document_id, t.file_name, t.root_heading
+                ORDER BY LENGTH(t.file_name), t.document_id, MIN(t.chunk_index)
             ) WHERE ROWNUM <= :reference_limit
             """,
                 where_sql=where_sql,
             ),
             {
                 **binds,
-                # 文書名の空白・区切りの記号を除いて比べる(title は title_key で同じ形にしたもの)。
+                # 文書名・見出しの空白・区切りの記号を除いて比べる(title は title_key で同じ形)。
                 "reference_title": title,
+                "reference_title_wide": _full_width_ascii(title),
                 "reference_strip_from": "x" + _REFERENCE_TITLE_NOISE_CHARS,
                 "reference_limit": max(1, int(limit)),
             },
         )
+        documents: dict[str, tuple[str, list[str]]] = {}
+        for row in rows:
+            document_id = row.get("document_id")
+            file_name = row.get("file_name")
+            if not document_id or not file_name:
+                continue
+            _name, headings = documents.setdefault(str(document_id), (str(file_name), []))
+            heading = row.get("root_heading")
+            if heading and str(heading) not in headings:
+                headings.append(str(heading))
         return [
-            (str(row["document_id"]), str(row["file_name"]))
-            for row in rows
-            if row.get("document_id") and row.get("file_name")
+            (document_id, file_name, tuple(headings))
+            for document_id, (file_name, headings) in documents.items()
         ]
 
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
@@ -11312,6 +11363,14 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
 
 # 交差参照の文書名の照合で文書名から除く文字(title_key の NFKC 前の形も含む。#1280)。
 _REFERENCE_TITLE_NOISE_CHARS = " \u3000_-・:、。,.()[]「」『』【】（）＿－：，．"
+
+
+def _full_width_ascii(value: str) -> str:
+    """半角の英数字を全角にした形(保存した文書名・見出しの全角の英数字と比べるため。#1400)。"""
+    return "".join(
+        chr(ord(char) + 0xFEE0) if char.isascii() and char.isalnum() else char for char in value
+    )
+
 
 # 新しい版に置き換えた文書(旧版)を除く述語(#1248)。
 _NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"

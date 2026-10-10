@@ -53,9 +53,12 @@ from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_RANK_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
+    document_name_match,
+    document_name_references,
     extract_references,
     reference_targets,
     resolve_reference_specs,
@@ -109,8 +112,12 @@ _REFERENCE_SOURCE_ANCHORS = 5
 _REFERENCE_CHUNKS_PER_TARGET = 2
 # 交差参照: 参照先の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
 _REFERENCE_SCORE_DECAY = 0.5
-# 交差参照: 他の文書への参照で、文書名が合う文書を探す数の上限。
-_REFERENCE_DOCUMENT_CANDIDATES = 5
+# 交差参照: 他の文書への参照で、文書名・タイトルが合う文書を探す行の上限(文書とタイトルの組)。
+_REFERENCE_DOCUMENT_CANDIDATES = 20
+# 交差参照: 文書名だけの参照(「定期保守計画で確かめます」。#1400)の参照先の文書から、質問で
+# 検索して rerank にかける chunk の数(このうち関連の高い順に参照先 1 つにつき
+# ``_REFERENCE_CHUNKS_PER_TARGET`` 件を足す)。
+_DOCUMENT_REFERENCE_CANDIDATES = 8
 # 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベースと旧版の扱いだけ)。文書名・ページ・
 # 分類などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を止めない。§7.2)。
 _REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded")
@@ -200,6 +207,8 @@ class _SearchState:
     # 文書の見出しの列((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     query_reference_targets: dict[str, list[ReferenceTarget]] = field(default_factory=dict)
     reference_section_indexes: dict[tuple[str, str], SectionIndex] = field(default_factory=dict)
+    # 他の文書への参照の文書名に合う文書((範囲, 文書名の比較形) ごと。当たり方の順。#1400)。
+    reference_documents: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
 
 
 def answer_images_enabled(settings: Settings) -> bool:
@@ -636,17 +645,22 @@ class AnswerEngine:
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
         # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
+        # 参照先が起点より下位の候補・前後の文脈(siblings)にあるときも、起点の直後へ移す(#1400。
+        # 前後の文脈は rerank にかからず、下位の候補は文脈に入らないため)。上位の起点はそのまま。
+        source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
         references = (
             await self._reference_expansion(
                 request,
                 state,
                 anchors,
-                existing={chunk.chunk_id for chunk in [*anchors, *siblings]},
+                existing=source_ids,
+                question=(queries[0], embeddings[0]) if embeddings else None,
             )
             if expand_references
             else {}
         )
         referenced = [chunk for chunks in references.values() for chunk in chunks]
+        promoted = {chunk.chunk_id for chunk in referenced}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
         entity_chunks = (
             await self._entity_expansion(request, state, anchors) if expand_references else []
@@ -672,6 +686,9 @@ class AnswerEngine:
         for chunk in anchors:
             if chunk.chunk_id in entity_ids:
                 # 実体の拡張で足す chunk は、拡張の位置に置く(下)。
+                continue
+            if chunk.chunk_id in promoted:
+                # 参照先として起点の直後へ移した候補は、元の位置に置かない。
                 continue
             children.append(
                 _stored_child(
@@ -792,8 +809,12 @@ class AnswerEngine:
         anchors: Sequence[RetrievedChunk],
         *,
         existing: set[str],
+        question: tuple[str, list[float]] | None = None,
     ) -> dict[str, list[RetrievedChunk]]:
         """上位の候補が本文で参照する節の chunk を、上限まで集める(起点の chunk_id ごと。#1280)。
+
+        ``existing`` の chunk(上位の起点)は足さない。それより下位の候補・前後の文脈にある参照先は
+        足す(呼び出し側が起点の直後へ移す。#1400)。
 
         参照先は取込時に chunk の metadata(``reference_targets_json``)へ解決してある。参照の無い
         候補だけなら DB を読まない。足す chunk は 1 回の検索で合計
@@ -801,6 +822,10 @@ class AnswerEngine:
         ``_REFERENCE_CHUNKS_PER_TARGET`` 件まで。順位は rag_engine の rerank が決める(LLM は
         呼ばない)。参照先の範囲は検索範囲のナレッジベース(と利用者の権限)で、文書名・ページ・
         分類の絞り込みは使わない。読めない参照先は足さない(回答は続ける)。
+
+        文書名だけの参照(「時間帯は定期保守計画で確かめます」。#1400)は、参照先の文書の中を
+        ``question``(検索文とその埋め込み)で検索し、rerank で質問に関連の高い chunk を選ぶ
+        (``_document_reference_chunks``)。
         """
         if not self._settings.rag_reference_expansion_enabled:
             return {}
@@ -823,25 +848,35 @@ class AnswerEngine:
                 if count >= budget:
                     return added
                 try:
-                    chunks = await self._reference_target_chunks(scope, state, anchor, target)
+                    chunks = await self._reference_target_chunks(
+                        scope, state, anchor, target, request=request, question=question
+                    )
                 except Exception:  # noqa: BLE001 - 参照先は補助。この参照先を足さずに続ける。
                     logger.warning("reference target load failed", exc_info=True)
                     continue
                 fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen]
-                for chunk in fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]:
+                selected = fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]
+                for rank, chunk in enumerate(selected, start=1):
                     seen.add(chunk.chunk_id)
-                    marked = state.chunks.setdefault(
-                        chunk.chunk_id,
-                        chunk.model_copy(
+                    # 下位の候補・前後の文脈として読んだ chunk にも、参照の起点の印を付ける。
+                    marked = state.chunks.get(chunk.chunk_id, chunk)
+                    if REFERENCE_FROM_KEY not in marked.metadata:
+                        marked = marked.model_copy(
                             update={
                                 "metadata": {
-                                    **chunk.metadata,
+                                    **marked.metadata,
                                     REFERENCE_FROM_KEY: anchor.chunk_id,
                                     REFERENCE_LABEL_KEY: target.label,
+                                    # 文書名だけの参照は、参照先の文書の中の関連の順(#1400)。
+                                    **(
+                                        {REFERENCE_RANK_KEY: rank}
+                                        if target.kind == "document"
+                                        else {}
+                                    ),
                                 }
                             }
-                        ),
-                    )
+                        )
+                        state.chunks[chunk.chunk_id] = marked
                     added.setdefault(anchor.chunk_id, []).append(marked)
                     state.reference_expansions.setdefault(
                         chunk.chunk_id,
@@ -850,6 +885,7 @@ class AnswerEngine:
                             "document_id": chunk.document_id,
                             "from_chunk_id": anchor.chunk_id,
                             "label": target.label,
+                            "kind": target.kind,
                             "document_title": target.document_title,
                             "section_path": str(chunk.metadata.get("section_path") or ""),
                             "resolved_at": (
@@ -871,10 +907,16 @@ class AnswerEngine:
         空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
         あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
         有効な chunk_set)で 1 回読み、取込と同じ規則で決める。RAPTOR の要約 chunk は辿らない。
+        印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata
         if REFERENCE_TARGETS_KEY in metadata:
-            return reference_targets(metadata)
+            stored = reference_targets(metadata)
+            extra = _document_name_targets(anchor, stored)
+            if extra:
+                # 本文から足した参照がある起点(診断の resolved_at は query)。
+                state.query_reference_targets[anchor.chunk_id] = [*stored, *extra]
+            return [*stored, *extra]
         if anchor.chunk_id in state.query_reference_targets:
             return state.query_reference_targets[anchor.chunk_id]
         specs = [] if metadata.get("raptor_summary") else extract_references(anchor.text)
@@ -911,8 +953,14 @@ class AnswerEngine:
         state: _SearchState,
         anchor: RetrievedChunk,
         target: ReferenceTarget,
+        *,
+        request: SearchRequest | None = None,
+        question: tuple[str, list[float]] | None = None,
     ) -> list[RetrievedChunk]:
-        """参照先の節の chunk(読み順)。同じ文書は参照元と同じ版(chunk_set)から読む。"""
+        """参照先の節の chunk(読み順)。同じ文書は参照元と同じ版(chunk_set)から読む。
+
+        文書全体への参照(文書名だけ。#1400)は、参照先の文書の質問に関連の高い順。
+        """
         limit = _REFERENCE_CHUNKS_PER_TARGET + _REFERENCE_SOURCE_ANCHORS
         if target.document_title is None:
             if target.section_path is None:
@@ -934,18 +982,26 @@ class AnswerEngine:
                 ]
             return state.reference_chunks[key]
         if target.kind == "document":
-            # 文書全体への参照は、どの節を足すか決まらないので辿らない。
-            return []
+            # 文書全体への参照は、参照先の文書の中で質問に関連の高い chunk に限る(#1400)。
+            if request is None or question is None:
+                return []
+            key = ("document-name", title_key(target.document_title), request.query, question[0])
+            if key not in state.reference_chunks:
+                state.reference_chunks[key] = await self._document_reference_chunks(
+                    scope, state, anchor, target, request=request, question=question
+                )
+            return state.reference_chunks[key]
         key = ("document", title_key(target.document_title), target.kind, target.key)
         if key not in state.reference_chunks:
             state.reference_chunks[key] = await self._other_document_reference_chunks(
-                scope, anchor, target, limit=limit
+                scope, state, anchor, target, limit=limit
             )
         return state.reference_chunks[key]
 
     async def _other_document_reference_chunks(
         self,
         scope: dict[str, str],
+        state: _SearchState,
         anchor: RetrievedChunk,
         target: ReferenceTarget,
         *,
@@ -953,22 +1009,13 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """他の文書への参照を検索範囲の文書から解決し、参照先の節の chunk を返す(#1280)。
 
-        文書名が合う文書のうち、名前が文書名とそろうものを優先し、無ければ名前の短いものを選ぶ。
-        節は、その文書の見出しの列から取込時と同じ規則で決める。版は 1 つの chunk_set にそろえる。
+        文書名・タイトルが合う文書(``_reference_documents``)のうち、当たり方の確かなもの、名前の
+        短いものを選ぶ。節は、その文書の見出しの列から取込時と同じ規則で決める。版は 1 つの
+        chunk_set にそろえる。
         """
-        title = target.document_title or ""
-        documents = await self._oracle.retrieval_reference_documents(
-            scope, title=title_key(title), limit=_REFERENCE_DOCUMENT_CANDIDATES
-        )
-        candidates = [
-            (document_id, file_name)
-            for document_id, file_name in documents
-            if document_id != anchor.document_id and same_document_title(title, file_name)
-        ]
-        if not candidates:
+        document_id = await self._referenced_document_id(scope, state, anchor, target)
+        if document_id is None:
             return []
-        exact = [item for item in candidates if title_key(title) == _file_stem(item[1])]
-        document_id = (exact or candidates)[0][0]
         sections = await self._oracle.retrieval_screen_sections(
             {**scope, "document_id": document_id}
         )
@@ -987,6 +1034,99 @@ class AnswerEngine:
             return []
         first_set = rows[0].metadata.get("chunk_set_id")
         return [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
+
+    async def _referenced_document_id(
+        self,
+        scope: dict[str, str],
+        state: _SearchState,
+        anchor: RetrievedChunk,
+        target: ReferenceTarget,
+    ) -> str | None:
+        """参照の文書名に合う検索範囲の文書のうち、最も確かなもの(参照元の文書は除く)。"""
+        documents = await self._reference_documents(scope, state, target.document_title or "")
+        return next(
+            (document_id for document_id, _name in documents if document_id != anchor.document_id),
+            None,
+        )
+
+    async def _reference_documents(
+        self, scope: dict[str, str], state: _SearchState, title: str
+    ) -> list[tuple[str, str]]:
+        """参照の文書名に合う、検索範囲の文書の (id, 文書名)。確かな当たり方、名前の短い順(#1400)。
+
+        文書名(ファイル名)と文書のタイトル(番号の無い先頭の見出し)、それらの別名(年度・版・
+        括弧書きを外した形)と照合する(``document_name_match``。NFKC)。範囲は検索と同じ
+        (KB・利用者の権限・有効な chunk_set・旧版は既定で除く)。1 回の回答の中では cache する。
+        """
+        key = title_key(title)
+        cache_key = (json.dumps(scope, ensure_ascii=False, sort_keys=True), key)
+        if cache_key in state.reference_documents:
+            return state.reference_documents[cache_key]
+        documents: list[tuple[str, str]] = []
+        if len(key) >= 2:
+            rows = await self._oracle.retrieval_reference_documents(
+                scope, title=key, limit=_REFERENCE_DOCUMENT_CANDIDATES
+            )
+            ranked = sorted(
+                (match, len(file_name), document_id, file_name)
+                for document_id, file_name, headings in rows
+                if (match := document_name_match(title, file_name, headings)) is not None
+            )
+            documents = [(document_id, file_name) for _m, _l, document_id, file_name in ranked]
+        state.reference_documents[cache_key] = documents
+        return documents
+
+    async def _document_reference_chunks(
+        self,
+        scope: dict[str, str],
+        state: _SearchState,
+        anchor: RetrievedChunk,
+        target: ReferenceTarget,
+        *,
+        request: SearchRequest,
+        question: tuple[str, list[float]],
+    ) -> list[RetrievedChunk]:
+        """文書名だけの参照(#1400)の参照先の文書の、質問に関連の高い chunk(関連の高い順)。
+
+        参照先の文書は検索範囲の中から文書名・タイトルで決める(参照元の文書は除く)。その文書の中を
+        回答の検索と同じ検索文と埋め込みで ``_DOCUMENT_REFERENCE_CANDIDATES`` 件まで検索し(範囲は
+        検索と同じ。版は 1 つの chunk_set にそろえる)、rerank が有効なら原質問で並べ替える。
+        文書の前置き・目次から順に足さない(質問と関係の無い節で上限を使わない)。
+        """
+        document_id = await self._referenced_document_id(scope, state, anchor, target)
+        if document_id is None:
+            return []
+        query, embedding = question
+        hits = await self._oracle.hybrid_search(
+            query,
+            embedding,
+            _DOCUMENT_REFERENCE_CANDIDATES,
+            mode=SearchMode.HYBRID,
+            filters={**scope, "document_id": document_id},
+        )
+        rows = [
+            hit
+            for hit in hits
+            if hit.document_id == document_id and not hit.metadata.get("raptor_summary")
+        ]
+        if not rows:
+            return []
+        first_set = rows[0].metadata.get("chunk_set_id")
+        rows = [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
+        if len(rows) < 2 or not self._settings.rag_rerank_enabled:
+            return rows
+        try:
+            ranked = await self._genai.rerank(
+                request.query,
+                [_reference_rerank_document(row) for row in rows],
+                len(rows),
+            )
+        except Exception:  # noqa: BLE001 - 並べ替えは補助。検索の順のまま足す。
+            logger.warning("document reference rerank failed", exc_info=True)
+            return rows
+        order = [index for index, _score in ranked if 0 <= index < len(rows)]
+        order.extend(index for index in range(len(rows)) if index not in order)
+        return [rows[index] for index in order]
 
     async def _question_filters(
         self, filters: dict[str, str], inquiry_conditions: Any
@@ -1283,9 +1423,38 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:120]
 
 
-def _file_stem(file_name: str) -> str:
-    """文書名から拡張子を除いた比較形(交差参照の文書名の照合。#1280)。"""
-    return title_key(re.sub(r"\.[A-Za-z0-9]{1,5}$", "", file_name))
+def _reference_rerank_document(chunk: RetrievedChunk) -> str:
+    """文書名だけの参照の参照先を rerank にかける本文(見出しの列を先に置く。#1400)。
+
+    rag_engine の rerank(``_rerank_document``)と同じく見出しを先頭に置く。検索用の本文
+    (``engine_search_text``)は先頭に文書名・ページの見出しが付き、同じ文書の chunk の関連度の差が
+    小さくなる(dev の評価の KB で、定期保守計画の 4 つの章がどれも 0.85〜0.88 だった)。
+    """
+    path = str(chunk.metadata.get("section_path") or "").strip()
+    return f"見出し: {path}\n\n{chunk.text}" if path else chunk.text
+
+
+def _document_name_targets(
+    anchor: RetrievedChunk, stored: Sequence[ReferenceTarget]
+) -> list[ReferenceTarget]:
+    """取込で残した参照先に無い、本文の文書名だけの参照(#1400)。
+
+    #1400 より前に取り込んだ chunk の印(``reference_targets_json``)には文書名だけの参照が無いので、
+    回答のときに本文から足す(再処理しなくても辿れる)。RAPTOR の要約 chunk は辿らない。
+    """
+    if anchor.metadata.get("raptor_summary"):
+        return []
+    known = {
+        title_key(target.document_title or "") for target in stored if target.kind == "document"
+    }
+    targets: list[ReferenceTarget] = []
+    for spec in document_name_references(anchor.text):
+        key = title_key(spec.document_title or "")
+        if key in known or same_document_title(spec.document_title or "", anchor.file_name or ""):
+            continue
+        known.add(key)
+        targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title))
+    return targets
 
 
 def _section_headings(section_path: str) -> list[str]:

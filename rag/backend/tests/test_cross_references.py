@@ -16,15 +16,19 @@ from app.rag.cross_references import (
     MAX_REFERENCES_PER_CHUNK,
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_RANK_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceSpec,
     ReferenceTarget,
     SectionIndex,
     annotate_cross_references,
+    document_name_aliases,
+    document_name_match,
     extract_references,
     reference_targets,
     same_document_title,
     section_path_within,
+    title_key,
 )
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
@@ -386,7 +390,9 @@ class ReferenceOracle:
         self.reference_calls: list[dict[str, Any]] = []
         self.document_calls: list[dict[str, Any]] = []
         self.section_calls: list[dict[str, str]] = []
-        self.documents: list[tuple[str, str]] = []
+        self.search_calls: list[dict[str, Any]] = []
+        # 文書名・タイトルの照合の結果を固定するとき(None は sections から作る)。
+        self.documents: list[tuple[str, str, tuple[str, ...]]] | None = None
         self.fail = False
 
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
@@ -406,7 +412,16 @@ class ReferenceOracle:
         mode: SearchMode = SearchMode.HYBRID,
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
-        return list(self.hits)
+        document_id = (filters or {}).get("document_id")
+        if document_id is None:
+            return list(self.hits)
+        # 文書の中の検索(文書名だけの参照の参照先。#1400)。sections の順を関連の順とみなす。
+        self.search_calls.append({"query": query, "filters": dict(filters or {})})
+        return [
+            chunk
+            for chunk in self.sections
+            if chunk.document_id == document_id and self._in_scope(filters or {}, chunk)
+        ][:top_k]
 
     async def context_group_siblings(
         self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
@@ -449,9 +464,23 @@ class ReferenceOracle:
 
     async def retrieval_reference_documents(
         self, filters: dict[str, str], *, title: str, limit: int
-    ) -> list[tuple[str, str]]:
+    ) -> list[tuple[str, str, tuple[str, ...]]]:
         self.document_calls.append({"filters": dict(filters), "title": title})
-        return list(self.documents)
+        if self.documents is not None:
+            return list(self.documents)
+        # SQL と同じく、範囲の中で文書名か見出しの列が title を含む chunk の、見出しの列の先頭。
+        found: dict[str, tuple[str, list[str]]] = {}
+        for chunk in self.sections:
+            path = str(chunk.metadata.get("section_path") or "")
+            if not self._in_scope(filters, chunk) or (
+                title not in title_key(chunk.file_name or "") and title not in title_key(path)
+            ):
+                continue
+            _name, roots = found.setdefault(chunk.document_id, (chunk.file_name or "", []))
+            root = path.split(" > ")[0]
+            if root and root not in roots:
+                roots.append(root)
+        return [(key, name, tuple(roots)) for key, (name, roots) in found.items()][:limit]
 
     async def retrieval_screen_sections(
         self, filters: dict[str, str]
@@ -470,13 +499,33 @@ class ReferenceOracle:
 
 
 class FakeGenAi:
+    """埋め込みと rerank のスタブ。rerank は本文が含む語の点(``scores``)の高い順。"""
+
+    def __init__(self, scores: dict[str, float] | None = None, *, fail: bool = False) -> None:
+        self.scores = scores or {}
+        self.fail = fail
+        self.rerank_calls: list[tuple[str, list[str]]] = []
+
     async def embed(self, texts: list[str], *, input_type: str = "") -> list[list[float]]:
         return [[0.1] * 4 for _ in texts]
 
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        self.rerank_calls.append((query, list(documents)))
+        if self.fail:
+            raise RuntimeError("rerank down")
 
-def _engine(oracle: ReferenceOracle, **settings: Any) -> AnswerEngine:
+        def score(text: str) -> float:
+            return max((value for word, value in self.scores.items() if word in text), default=0.0)
+
+        ranked = sorted(range(len(documents)), key=lambda index: -score(documents[index]))
+        return [(index, score(documents[index])) for index in ranked[:top_n]]
+
+
+def _engine(
+    oracle: ReferenceOracle, genai: FakeGenAi | None = None, **settings: Any
+) -> AnswerEngine:
     return AnswerEngine(
-        Settings(**settings), oracle=cast(Any, oracle), genai=cast(Any, FakeGenAi())
+        Settings(**settings), oracle=cast(Any, oracle), genai=cast(Any, genai or FakeGenAi())
     )
 
 
@@ -613,8 +662,8 @@ async def test_search_resolves_other_document_reference_within_scope() -> None:
     ]
     oracle = ReferenceOracle([anchor], manual)
     oracle.documents = [
-        ("doc-2", "経費精算マニュアル.pdf"),
-        ("doc-3", "旧経費精算マニュアル集.pdf"),
+        ("doc-2", "経費精算マニュアル.pdf", ("第4章 権限",)),
+        ("doc-3", "旧経費精算マニュアル集.pdf", ()),
     ]
 
     result = await _engine(oracle)._search(
@@ -801,6 +850,8 @@ async def test_multi_hop_common_window_reference_reaches_chapter_two(resolved_at
     added = state.chunks["doc-plan:cs-plan:1"]
     assert added.metadata[REFERENCE_FROM_KEY] == chapter_one.chunk_id
     assert added.metadata[REFERENCE_LABEL_KEY] == "第 2 章"
+    # 章の参照の参照先には、関連の順(文書名だけの参照の印)を付けない。
+    assert REFERENCE_RANK_KEY not in added.metadata
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {resolved_at}
     # 参照先は KB の範囲と参照元の版(chunk_set)だけで読む(文書名などの絞り込みは外す)。
     assert all(
@@ -826,6 +877,348 @@ async def test_multi_hop_common_window_reference_stays_within_knowledge_base() -
     assert oracle.reference_calls == []
 
 
+# ---- 文書名の参照(#1400) ----
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("時間帯は定期保守計画で確かめます。", [("定期保守計画", "定期保守計画")]),
+        # PDF の抽出で文字の間に空白が入る(dev の評価の KB の本文)。
+        ("時間帯は定期保守計画で確かめま す。", [("定期保守計画", "定期保守計画")]),
+        ("時間帯は定期保守計 画で確かめます。", [("定期保守計画", "定期保守計画")]),
+        (
+            "担当部署はシステム台帳で、承認者は組織規程で確かめます。",
+            [("システム台帳", "システム台帳"), ("組織規程", "組織規程")],
+        ),
+        ("サンプル社の就業規則に従う。", [("就業規則", "就業規則")]),
+        (
+            "『経費精算マニュアル』に従って精算する。",
+            [("『経費精算マニュアル』", "経費精算マニュアル")],
+        ),
+        ("ＨＲＭ運用手順書を確認する。", [("HRM運用手順書", "HRM運用手順書")]),
+        ("保管の期間はデータ保管規程による。", [("データ保管規程", "データ保管規程")]),
+    ],
+    ids=[
+        "check-with",
+        "pdf-space-in-predicate",
+        "pdf-space-in-name",
+        "coordinated",
+        "company-prefix",
+        "quoted",
+        "full-width",
+        "according-to",
+    ],
+)
+def test_extract_document_name_references(text: str, expected: list[tuple[str, str]]) -> None:
+    specs = [spec for spec in extract_references(text) if spec.kind == "document"]
+
+    assert [(spec.label, spec.document_title) for spec in specs] == expected
+    assert all(spec.key == "" for spec in specs)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "承認者を確認します。",
+        "本手順書に従って作業する。",
+        "同規程に従う。",
+        "画面で確認してください。",
+        "利用者の担当部署を確認する。",
+        "上の表を見て決める。",
+        "保守計画を見直す。",
+        "システムで確認する。",
+        "マニュアルに従う。",
+        "台帳で確かめます。",
+        "第3章で確認する。",
+        "別紙1で確認する。",
+    ],
+    ids=[
+        "role",
+        "this-procedure",
+        "same-regulation",
+        "screen",
+        "generic-department",
+        "table",
+        "review-verb",
+        "generic-system",
+        "suffix-only",
+        "too-short",
+        "chapter-label",
+        "appendix-label",
+    ],
+)
+def test_extract_document_name_references_ignores_generic_words(text: str) -> None:
+    """一般語・短い語・同じ文書を指す語・章や別紙の表記は、文書名の参照として拾わない。"""
+    assert [spec for spec in extract_references(text) if spec.kind == "document"] == []
+
+
+@pytest.mark.parametrize(
+    ("name", "file_name", "headings", "expected"),
+    [
+        ("定期保守計画", "maintenance-plan.pdf", ["定期保守計画 2026年度"], 0),
+        ("組織規程", "organization-rules.pdf", ["組織規程（システムの担当と承認者）"], 0),
+        ("定期保守計画", "定期保守計画_2026.pdf", [], 0),
+        ("定期保守計画", "plan.pdf", ["サンプル社 定期保守計画 第2版"], 0),
+        ("HRM手順書", "hrm.pdf", ["ＨＲＭ手順書"], 0),
+        ("経費精算マニュアル", "旧経費精算マニュアル集.pdf", [], 1),
+        ("保守計画", "maintenance-plan.pdf", ["定期保守計画 2026年度"], None),
+        ("定期保守計画", "guide.pdf", ["第 1 章 定期保守計画"], None),
+        ("定期保守計画", "system-ledger.xlsx", ["システム台帳"], None),
+    ],
+    ids=[
+        "title-with-year",
+        "title-with-parenthetical",
+        "file-name",
+        "company-and-edition",
+        "nfkc",
+        "file-name-contains",
+        "partial-title",
+        "numbered-heading",
+        "other-document",
+    ],
+)
+def test_document_name_match(
+    name: str, file_name: str, headings: list[str], expected: int | None
+) -> None:
+    """文書名は検索範囲の文書のタイトル(番号の無い先頭の見出し)・ファイル名と別名で照合する。"""
+    assert document_name_match(name, file_name, headings) == expected
+
+
+def test_document_name_aliases_strip_edition_and_parenthetical() -> None:
+    assert "定期保守計画" in document_name_aliases("定期保守計画 2026年度")
+    assert "maintenanceplan" in document_name_aliases("maintenance-plan-2025.pdf")
+    assert "組織規程" in document_name_aliases("組織規程(システムの担当と承認者)")
+    assert "iso9001品質マニュアル" in document_name_aliases("ISO 9001 品質マニュアル 第2版")
+
+
+def test_annotate_cross_references_keeps_document_name_references_unresolved() -> None:
+    """取込は文書名だけの参照を未解決のまま残す(どの文書かは回答のときに検索範囲で決める)。"""
+    chunks = [
+        _chunk(0, "時間帯は定期保守計画で確かめます。", "第4章 作業の時間帯"),
+        _chunk(1, "精算は経費精算規程に従う。", "第1章 総則"),
+    ]
+
+    annotate_cross_references(chunks, document_title="経費精算規程.pdf")
+
+    (target,) = reference_targets(chunks[0].metadata)
+    assert (target.kind, target.document_title, target.section_path) == (
+        "document",
+        "定期保守計画",
+        None,
+    )
+    # 自分の文書名の参照は残さない(空の列は解決済みの印)。
+    assert chunks[1].metadata[REFERENCE_TARGETS_KEY] == "[]"
+
+
+_SALES_CASE = "br-sales-change-window"
+_OTHER_KB = "kb-other"
+
+
+def _sales_case() -> dict[str, Any]:
+    payload = json.loads((MULTI_HOP_DIR / "multi-hop.json").read_text(encoding="utf-8"))
+    return next(case for case in payload["cases"] if case["id"] == _SALES_CASE)
+
+
+def _change_window_corpus(resolved_at: str) -> tuple[RetrievedChunk, list[RetrievedChunk]]:
+    """変更手順書の第 4 章(当たった chunk)と、定期保守計画の今の版・旧版・別の KB の写し。"""
+    change = _plan_chunks("change-procedure.pdf", "doc-change", "cs-change")
+    current = _plan_chunks("maintenance-plan.pdf", "doc-plan", "cs-plan")
+    old = _plan_chunks("maintenance-plan-2025.pdf", "doc-plan-2025", "cs-old")
+    if resolved_at == "ingest":
+        change = _annotated(change, "change-procedure.pdf")
+    elif resolved_at == "legacy":
+        # #1400 より前の取込(印はあるが、文書名だけの参照を持たない)。
+        change = [
+            chunk.model_copy(update={"metadata": {**chunk.metadata, REFERENCE_TARGETS_KEY: "[]"}})
+            for chunk in change
+        ]
+    (window,) = [chunk for chunk in change if "第 4 章" in str(chunk.metadata["section_path"])]
+    assert "定期保守計画で確かめます" in window.text
+    # 別のナレッジベースにある同じ名前の文書(旧版の写し)。
+    copied = [
+        chunk.model_copy(update={"document_id": "doc-plan-copy", "file_name": "定期保守計画.pdf"})
+        for chunk in old
+    ]
+    return window, [*change, *current, *old, *copied]
+
+
+@pytest.mark.parametrize(
+    "resolved_at", ["ingest", "query", "legacy"], ids=["ingest", "query", "legacy"]
+)
+async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
+    resolved_at: str,
+) -> None:
+    """変更手順書の「時間帯は定期保守計画で確かめます」から、定期保守計画の保守枠が文脈に入る。
+
+    #1390 の検証で `br-sales-change-window` の必要な根拠(共通の保守枠)が MCP の並びの 96 位の
+    まま改善しなかった型(#1400)。参照先は同じナレッジベースの今の版の定期保守計画だけで、
+    その中の質問に関連の高い chunk(rerank の順)を足す。旧版・別の KB の同じ名前の文書は足さない。
+    """
+    from app.rag.evaluation_handling import contains_normalized
+
+    case = _sales_case()
+    window, sections = _change_window_corpus(resolved_at)
+    oracle = ReferenceOracle(
+        [window],
+        sections,
+        knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}, _OTHER_KB: {"doc-plan-copy"}},
+    )
+    genai = FakeGenAi({"共通の保守枠は": 0.9, "この章に無いシステム": 0.8, "保守枠を変えたい": 0.1})
+    state = _SearchState()
+
+    result = await _engine(oracle, genai)._search(
+        SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
+        state,
+        retrieval_queries=[case["query"]],
+    )
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    # 参照先の文書の質問に関連の高い 2 件を、参照元の直後に置く(第 3 章の保守枠の変更は足さない)。
+    assert order == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
+    context = "\n".join(child.text for child in result.child_chunks)
+    evidence = [
+        item
+        for item in case["required_evidence"]
+        if item["document_id"] == "file:maintenance-plan.pdf"
+    ]
+    assert {item["id"] for item in evidence} == {"mt-common-ref", "mt-common"}
+    assert [item["id"] for item in evidence if not contains_normalized(context, item["text"])] == []
+    assert "毎月最終土曜日" not in context
+    added = state.chunks["doc-plan:cs-plan:1"]
+    assert added.metadata[REFERENCE_FROM_KEY] == window.chunk_id
+    assert added.metadata[REFERENCE_LABEL_KEY] == "定期保守計画"
+    # 参照先の中の関連の順(MCP の根拠の並びは 1 件目だけを確保する)。
+    assert added.metadata[REFERENCE_RANK_KEY] == 1
+    assert state.chunks["doc-plan:cs-plan:0"].metadata[REFERENCE_RANK_KEY] == 2
+    assert {item["kind"] for item in state.reference_expansions.values()} == {"document"}
+    expected_resolved_at = "ingest" if resolved_at == "ingest" else "query"
+    assert {item["resolved_at"] for item in state.reference_expansions.values()} == {
+        expected_resolved_at
+    }
+    # 文書は検索の範囲(KB)の中だけで探し、その文書の中を原質問で検索して rerank で選ぶ。
+    assert oracle.document_calls == [
+        {"filters": {"knowledge_base_id": _PLAN_KB}, "title": "定期保守計画"}
+    ]
+    assert oracle.search_calls == [
+        {
+            "query": case["query"],
+            "filters": {"knowledge_base_id": _PLAN_KB, "document_id": "doc-plan"},
+        }
+    ]
+    ((rerank_query, documents),) = genai.rerank_calls
+    assert rerank_query == case["query"]
+    # 見出しの列を先に置いた本文で並べる(rag_engine の rerank と同じ)。
+    assert [document.split("\n", 1)[0] for document in documents] == [
+        "見出し: 定期保守計画 2026年度 > 第 1 章 個別の保守枠",
+        "見出し: 定期保守計画 2026年度 > 第 2 章 共通の保守枠",
+        "見出し: 定期保守計画 2026年度 > 第 3 章 保守枠の変更",
+    ]
+
+
+async def test_document_name_reference_outside_scope_adds_nothing() -> None:
+    """同じ名前の文書が検索の範囲(KB)の外・旧版だけなら、何も足さない。"""
+    window, sections = _change_window_corpus("query")
+    oracle = ReferenceOracle(
+        [window],
+        sections,
+        knowledge_bases={_PLAN_KB: {"doc-change"}, _OTHER_KB: {"doc-plan-copy", "doc-plan"}},
+    )
+    state = _SearchState()
+
+    result = await _engine(oracle)._search(
+        SearchRequest(query="作業の時間帯", filters={"knowledge_base_id": _PLAN_KB}),
+        state,
+        retrieval_queries=["作業の時間帯"],
+    )
+
+    assert [child.chunk_uid for child in result.child_chunks] == [window.chunk_id]
+    assert state.reference_expansions == {}
+    assert oracle.search_calls == []
+
+
+async def test_document_name_reference_needs_exact_title() -> None:
+    """文書名がタイトルの一部(「保守計画」→「定期保守計画」)・一般語なら辿らない。"""
+    plan = _plan_chunks("maintenance-plan.pdf", "doc-plan", "cs-plan")
+    partial = _retrieved("doc-1:a", "時間帯は保守計画で確かめます。", "第1章 総則")
+    generic = _retrieved("doc-1:b", "詳しくは画面で確認してください。", "第1章 総則")
+    oracle = ReferenceOracle([partial, generic], plan)
+    state = _SearchState()
+
+    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+
+    assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a", "doc-1:b"]
+    # 一般語は照合の SQL も読まない。
+    assert oracle.document_calls == [{"filters": {}, "title": "保守計画"}]
+    assert oracle.search_calls == []
+
+
+@pytest.mark.parametrize("mode", ["disabled", "failed"], ids=["rerank-disabled", "rerank-failed"])
+async def test_document_name_reference_keeps_search_order_without_rerank(mode: str) -> None:
+    """rerank が無効・失敗のときは、参照先の文書の中の検索の順で足す。"""
+    window, sections = _change_window_corpus("query")
+    oracle = ReferenceOracle(
+        [window], sections, knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}}
+    )
+    genai = FakeGenAi({"共通の保守枠は": 0.9}, fail=mode == "failed")
+    settings = {"rag_rerank_enabled": False} if mode == "disabled" else {}
+
+    result = await _engine(oracle, genai, **settings)._search(
+        SearchRequest(query="q", filters={"knowledge_base_id": _PLAN_KB}),
+        _SearchState(),
+        retrieval_queries=["q"],
+    )
+
+    assert [child.chunk_uid for child in result.child_chunks] == [
+        window.chunk_id,
+        "doc-plan:cs-plan:0",
+        "doc-plan:cs-plan:1",
+    ]
+    assert len(genai.rerank_calls) == (0 if mode == "disabled" else 1)
+
+
+async def test_reference_target_in_lower_candidates_moves_after_citing_anchor() -> None:
+    """参照先が起点より下位の候補にあるときは、起点の直後へ移す(元の位置には置かない。#1400)。
+
+    回答の検索は候補が多い(既定 150)ため、小さなナレッジベースでは参照先がすでに下位の候補や
+    前後の文脈にあり、足せる chunk が無かった(参照が辿られなかった)。上位の起点は動かさない。
+    """
+    anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    others = [_retrieved(f"doc-1:o{n}", "精算の概要。", "第1章 総則") for n in range(4)]
+    sections = _section_chunks(2)
+    oracle = ReferenceOracle([anchor, *others, sections[1]], sections)
+    state = _SearchState()
+
+    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    assert order == [
+        "doc-1:a",
+        "doc-1:cs-1:s0",
+        "doc-1:cs-1:s1",
+        "doc-1:o0",
+        "doc-1:o1",
+        "doc-1:o2",
+        "doc-1:o3",
+    ]
+    assert state.chunks["doc-1:cs-1:s1"].metadata[REFERENCE_FROM_KEY] == "doc-1:a"
+
+    # 上位 5 件の起点の中にある参照先は、その位置のまま(重ねて足さない)。
+    top = ReferenceOracle([anchor, sections[1], *others], sections)
+    result = await _engine(top)._search(
+        SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
+    )
+    assert [child.chunk_uid for child in result.child_chunks] == [
+        "doc-1:a",
+        "doc-1:cs-1:s0",
+        "doc-1:cs-1:s1",
+        "doc-1:o0",
+        "doc-1:o1",
+        "doc-1:o2",
+        "doc-1:o3",
+    ]
+
+
 # ---- Oracle の SQL ----
 
 
@@ -840,7 +1233,23 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
     ) -> list[dict[str, object]]:
         calls.append((statement, dict(binds or {})))
         if "TRANSLATE" in statement:
-            return [{"document_id": "doc-2", "file_name": "経費精算マニュアル.pdf"}]
+            return [
+                {
+                    "document_id": "doc-2",
+                    "file_name": "経費精算マニュアル.pdf",
+                    "root_heading": None,
+                },
+                {
+                    "document_id": "doc-3",
+                    "file_name": "manual.pdf",
+                    "root_heading": "経費精算マニュアル 第2版",
+                },
+                {
+                    "document_id": "doc-3",
+                    "file_name": "manual.pdf",
+                    "root_heading": "第1章 経費精算マニュアルの使い方",
+                },
+            ]
         return []
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
@@ -854,7 +1263,10 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
     )
     assert await client.retrieval_reference_documents(
         filters, title="経費精算マニュアル", limit=5
-    ) == [("doc-2", "経費精算マニュアル.pdf")]
+    ) == [
+        ("doc-2", "経費精算マニュアル.pdf", ()),
+        ("doc-3", "manual.pdf", ("経費精算マニュアル 第2版", "第1章 経費精算マニュアルの使い方")),
+    ]
 
     chunk_sql, chunk_binds = calls[0]
     assert "kb-1" in chunk_binds.values()
@@ -868,7 +1280,16 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
     document_sql, document_binds = calls[1]
     assert "kb-1" in document_binds.values()
     assert document_binds["reference_title"] == "経費精算マニュアル"
+    # 全角の英数字で保存した文書名・見出しとも比べる(#1400)。
+    assert document_binds["reference_title_wide"] == "経費精算マニュアル"
     assert "superseded_by_document_id IS NULL" in document_sql
+    # 文書名に加えて、見出しの列(文書のタイトル)でも探す。
+    assert "$.section_path" in document_sql
+    assert "root_heading" in document_sql
+    wide_binds = calls[1][1]
+    await client.retrieval_reference_documents(filters, title="hrm手順書", limit=5)
+    assert calls[2][1]["reference_title_wide"] == "ｈｒｍ手順書"
+    assert wide_binds["reference_limit"] == 5
 
 
 # ---- MCP の根拠 ----

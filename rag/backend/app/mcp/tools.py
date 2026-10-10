@@ -77,6 +77,9 @@ from app.rag.answer_validation import (
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
+    REFERENCE_RANK_KEY,
+    document_name_match,
+    document_name_references,
     reference_targets,
     section_path_within,
     split_section_path,
@@ -1358,15 +1361,55 @@ def _same_document_targets(chunk: RetrievedChunk) -> list[str]:
     ]
 
 
+def _referenced_document_names(chunk: RetrievedChunk) -> list[str]:
+    """chunk が本文で文書名だけで参照する別の文書の名前（「定期保守計画で確かめます」。#1400）。"""
+    names = [
+        target.document_title
+        for target in reference_targets(chunk.metadata)
+        if target.kind == "document" and target.document_title
+    ]
+    names.extend(
+        spec.document_title for spec in document_name_references(chunk.text) if spec.document_title
+    )
+    return list(dict.fromkeys(names))
+
+
+def _referenced_by_name(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
+    """当たった chunk が文書名で参照する文書の、回答の検索が参照先として足した chunk か（#1400）。
+
+    参照先として足した chunk（``reference_from_chunk_id``）は、回答の検索が参照先の文書の中から
+    質問に関連の高い順に選んだもの。起点が別の候補でも、文書名で参照する当たった chunk の参照の
+    先として確保する。確保するのは参照先 1 つにつき最も関連の高い 1 件（``reference_rank`` が 1）
+    だけ（2 件目は質問と関係の薄い節・台帳の別の行が多く、当たった chunk を上限の外へ押し出す）。
+    文書は文書名とタイトル（見出しの列の先頭）で照合する（``document_name_match``）。
+    """
+    if (
+        context.document_id == hit.document_id
+        or not _metadata_str(context.metadata, REFERENCE_FROM_KEY)
+        or _metadata_int(context.metadata, REFERENCE_RANK_KEY) != 1
+    ):
+        return False
+    root = split_section_path(context.metadata.get("section_path"))[:1]
+    return any(
+        document_name_match(name, context.file_name or "", root) is not None
+        for name in _referenced_document_names(hit)
+    )
+
+
 def _references_between(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
     """当たった chunk と前後の文脈が章の参照でつながるか（#1390）。
 
     当たった chunk が参照する節の chunk（「第 2 章の共通の保守枠で保守します」→ 第 2 章）、
     当たった chunk の節を参照する chunk（「連絡の手段は第 3 章を参照」→ 当たった第 3 章）、
     回答の検索が当たった chunk の参照先として足した chunk（``reference_from_chunk_id``。他の
-    文書の参照も含む）。
+    文書の参照も含む）、当たった chunk が文書名で参照する文書の、参照先として足した chunk
+    （「時間帯は定期保守計画で確かめます」→ 定期保守計画の共通の保守枠。#1400）。
     """
     if _metadata_str(context.metadata, REFERENCE_FROM_KEY) == hit.chunk_id:
+        # 文書名だけの参照の参照先は、最も関連の高い 1 件だけ（2 件目以降は確保しない。#1400）。
+        rank = _metadata_int(context.metadata, REFERENCE_RANK_KEY)
+        return rank is None or rank == 1
+    if _referenced_by_name(hit, context):
         return True
     if not _same_version(hit, context):
         return False
@@ -1392,14 +1435,25 @@ def _linked_contexts(ordered: Sequence[RetrievedChunk], tiers: Sequence[int]) ->
 
     起点は当たった chunk（回答に使った根拠と、関連度の順位を持つ根拠。拡張の根拠は除く）の上位
     ``LINKED_CONTEXT_ANCHORS`` 件。確保する順は、先に章の参照でつながる chunk（起点の順）、次に
-    すぐ前・すぐ後の chunk（起点の順）。対象は前後の文脈（3 の段）の根拠だけ。
+    すぐ前・すぐ後の chunk（起点の順）。対象は前後の文脈（3 の段）の根拠と、回答の検索が参照先と
+    して足した chunk（``reference_from_chunk_id``。関連度の順位が起点より下のもの。#1400）。
     """
     hits = [
         chunk
         for chunk, tier in zip(ordered, tiers, strict=True)
         if tier < 2 and not _is_entity_expansion(chunk)
     ][:LINKED_CONTEXT_ANCHORS]
-    contexts = [index for index, tier in enumerate(tiers) if tier == 2]
+    hit_ids = {chunk.chunk_id for chunk in hits}
+    contexts = [
+        index
+        for index, tier in enumerate(tiers)
+        if tier == 2
+        or (
+            tier == 1
+            and ordered[index].chunk_id not in hit_ids
+            and _metadata_str(ordered[index].metadata, REFERENCE_FROM_KEY) is not None
+        )
+    ]
     linked: list[int] = []
     for related in (_references_between, _adjacent):
         for hit in hits:
