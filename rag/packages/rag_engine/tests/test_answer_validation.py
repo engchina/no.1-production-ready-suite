@@ -282,3 +282,109 @@ def test_citation_line_marked_not_a_claim_is_not_unassessed() -> None:
     ]})
     bound = _bind_claims(output, {}, passages)
     assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "unassessed"]
+
+
+# #1362 の評価の Run の形（#1391）。業務支援の da-trial-account-setup: 運用手順書の章ごとの chunk と、手順の回答。
+PORTAL = "d71d90b414a74ad99ccfc7a9dc4b3cb5:2e474d0310926b739eeed94bfc31012518db916cc382524721434a8baa1d629d"
+PORTAL_EVIDENCE = [
+    {"id": f"{PORTAL}:2", "source": "portal-operations-manual.pdf", "page_start": 1, "page_end": 1,
+     "text": "2. 検証用アカウントの登録\n1.管理画面の「利用者」を開き、「追加」を押します。\n2.利用者種別で「検証用」を選びます。"},
+    {"id": f"{PORTAL}:3", "source": "portal-operations-manual.pdf", "page_start": 1, "page_end": 1,
+     "text": "3. アクセス権限の付与\n個別の利用者に付与する場合: 利用者の詳細画面の「権限」タブで、付与する権限を選んで「付与」を押します。"},
+    {"id": f"{PORTAL}:4", "source": "portal-operations-manual.pdf", "page_start": 1, "page_end": 1,
+     "text": "4. 通知の設定\n1.権限を付与した後、利用者の詳細画面の「通知」タブを開きます。"},
+]
+PORTAL_ANSWER = "\n".join([
+    "- 管理画面の「利用者」メニューを開き「追加」ボタンを押す。",
+    "- 登録した検証用利用者の詳細画面の **「権限」タブ** を開く。",
+    "- 権限付与が完了したら、同じ利用者の詳細画面の **「通知」タブ** を開く。",
+    "以上の順序で実施すれば、検証用アカウントの登録から権限付与、さらに通知設定まで完了します。",
+])
+
+
+def _portal_validation(written: list[str]) -> dict:
+    """段落ごとに、根拠の片段の ID（format の {0}〜{2}）から作った evidence_id を返すモデルのスタブ。"""
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        ids = [item["evidence_id"] for item in payload["evidence_items"]]
+        assert "省かず・短くせずにそのまま書く" in system
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": "supported",
+             "evidence_id": evidence_id.format(*ids), "source_id": "", "evidence_quote": "",
+             "reason": "根拠文書に手順が記載されているため"}
+            for passage, evidence_id in zip(payload["answer_passages"], written, strict=True)]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        return validate_answer_claims("検証用アカウントを登録し、権限を付けて、通知まで設定する手順は？", PORTAL_ANSWER,
+                                      PORTAL_EVIDENCE, settings=None)
+
+
+def test_span_ids_shortened_by_the_model_are_bound_to_their_evidence() -> None:
+    """モデルが片段の ID の後ろを切って書いても（「E0d7d982」）、根拠の 1 つに決まれば「未登録の原文ID」にしない (#1391)。
+
+    #1362 の評価の da-trial-account-setup を流し直すと、モデルは 21 文字の ID を 8〜10 文字に切って返し、
+    手順の段落が引用エラーで外され、回答の本文が空になった。
+    """
+    result = _portal_validation(["{0:.8}", "{1:.10}", "{2:.12}", "{0:.8}, {1}, {2:.9}"])
+    assert result["counts"] == {"supported": 4}
+    claims = result["claim_checks"]
+    assert [claim["source_id"] for claim in claims] == [f"{PORTAL}:2", f"{PORTAL}:3", f"{PORTAL}:4", f"{PORTAL}:2"]
+    # 結び付けた片段の完全な ID を残す（監査の記録から根拠を引ける）。
+    assert all(len(token) == 21 for claim in claims for token in claim["evidence_id"].split(","))
+    assert len(claims[3]["evidence_id"].split(",")) == 3
+    # 大文字で書いた ID・ラベルを付けた ID・「…」「...」で省いた ID も同じ。
+    result = _portal_validation(["{0:.10}".upper(), "evidence_id: {1:.9}", "evidence_id {2:.8}…", "{0:.8}..."])
+    assert result["counts"] == {"supported": 4}
+
+
+def test_shortened_ids_that_do_not_point_to_one_evidence_stay_citation_errors() -> None:
+    """根拠に無い ID・短すぎて根拠を決められない ID は、今までどおり引用エラー (#1391)。"""
+    result = _portal_validation(["E0000000", "{0:.4}", "{1:.6}…", "{0:.8}, E0000000"])
+    assert result["counts"] == {"citation_error": 4}
+    assert all(claim["reason"].startswith("未登録の原文ID。") for claim in result["claim_checks"])
+
+
+# 多段の br-document-portal-retention: 回答が根拠の ID を途中で省いて書き（「…fffa…:1」）、検証のモデルがそれを写した。
+PORTAL_LEDGER = {"id": "87ae9f2fc8f944a8a78edfba9d8ac8b9:a3ff18c115fc4f2bb10aece14f0cfc09a975f6a90598cd4ccaf483042efd1814:5",
+                 "source": "system-ledger.xlsx", "page_start": None, "page_end": None,
+                 "text": "システムID: SYS-105 / 正式名: ドキュメントポータル / 担当部署: 総 / 重要度: B / 機密区分: 社内限り"}
+RETENTION_SET = "af257c62c85d45cd9211a098fdca6fb4:16f11273eede4c4f508dcc4453985fffa816db12ed7c51b18f03305bee231ace"
+RETENTION_RULES = [
+    {"id": f"{RETENTION_SET}:1", "source": "data-retention-rules.pdf", "page_start": 1, "page_end": 1,
+     "text": "第 1 章 機密区分と保管期間\n極秘のデータは 10 年間保管します。\n社内限りのデータは 3 年間保管します。"},
+    {"id": f"{RETENTION_SET}:2", "source": "data-retention-rules.pdf", "page_start": 1, "page_end": 1,
+     "text": "第 2 章 閲覧の記録\n極秘のデータを扱うシステムは、閲覧の記録（アクセスログ）を 3 年間保管します。"},
+]
+ABBREVIATED_CHUNK_ID = "af257c62c85d45cd9211a098fdca6fb4:16f11273eede4c4f508dcc4453985fffa…:1"
+RETENTION_ANSWER = "\n".join([
+    "ドキュメントポータル（SYS‑105）の機密区分は「社内限り」（システム台帳）であり、社内限りのデータは **3 年間** 保管します。",
+    f"- データ保管規程: 「社内限りのデータは 3 年間保管します」【evidence_id {ABBREVIATED_CHUNK_ID}】",
+    "したがって、ドキュメントポータルのデータの保管期間は **3 年** です。",
+])
+
+
+def _retention_validation(written: list[str]) -> dict:
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": passage["id"], "status": "supported", "evidence_id": evidence_id,
+             "source_id": "", "evidence_quote": "", "reason": "台帳と規程で裏付けられます。"}
+            for passage, evidence_id in zip(payload["answer_passages"], written, strict=True)]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        return validate_answer_claims("ドキュメントポータルのデータの保管期間は何年ですか？", RETENTION_ANSWER,
+                                      [PORTAL_LEDGER, *RETENTION_RULES], settings=None)
+
+
+def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model() -> None:
+    """回答に書かれた途中を省いた chunk の id をモデルが写しても、1 つの chunk に決まれば結び付ける (#1391)。"""
+    both = f"{PORTAL_LEDGER['id']},{ABBREVIATED_CHUNK_ID}"
+    result = _retention_validation([both, f"evidence_id {ABBREVIATED_CHUNK_ID}", both])
+    assert result["counts"] == {"supported": 3}
+    assert [claim["source_id"] for claim in result["claim_checks"]] == [
+        PORTAL_LEDGER["id"], f"{RETENTION_SET}:1", PORTAL_LEDGER["id"]]
+    # 省いた所の後ろ（番号）が違えば根拠に無い chunk、番号まで省けば 2 つの chunk のどちらか決まらない。
+    # 回答に書かれた ID でない語（「record_codes.values[1]」）も、今までどおり引用エラー。
+    result = _retention_validation([ABBREVIATED_CHUNK_ID.replace(":1", ":9"), f"{RETENTION_SET[:40]}…",
+                                    "record_codes.values[1]"])
+    assert result["counts"] == {"citation_error": 3}

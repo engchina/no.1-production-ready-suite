@@ -359,25 +359,77 @@ def _span_for_misnamed_id(claim, catalog):
 
 # 1 つの evidence_id の欄に複数の根拠を書いたときの区切り（「E…, E…」「E… / E…」「[E…、E…]」）。
 # 根拠の ID（片段の「E + 16 進」・chunk の id「文書:chunk_set:番号」）は空白・句読点・括弧を含まない。
-_EVIDENCE_ID_SEPARATOR = re.compile(r"[\s,，、;；/／|｜・\[\]【】()（）「」]+")
+_EVIDENCE_ID_SEPARATOR = re.compile(r"[\s,，、;；/／|｜・\[\]【】()（）「」`'\"]+")
+# ID の前に付けたラベル（「evidence_id: E…」「evidence_id E…」「chunk_id=…」）。
+_EVIDENCE_ID_LABEL = re.compile(r"^(?:evidence[_-]?ids?|chunk[_-]?ids?|ids?|原文ID|根拠ID)(?:[:：=]|$)", re.IGNORECASE)
+# ID の途中・末尾を省いた印（「af25…:1」「E0d7d98...」）。
+_ID_ELLIPSIS = re.compile(r"…+|‥+|\.{2,}")
+# 片段の ID（「E + 16 進」）。モデルは後ろを切って短く書くことがある（「E0d7d982」。#1391）。
+_SPAN_ID_PREFIX = re.compile(r"E[0-9a-f]+", re.IGNORECASE)
+# 省いて書いた ID を結び付ける最短の長さ（片段の ID は「E + 16 進 6 桁」以上。これより短いと別の根拠と区別しにくい）。
+_MIN_ABBREVIATED_ID_CHARS = 7
+
+
+def _abbreviated_id_matches(written: str, actual: str) -> bool:
+    """省いて書いた ID（後ろを切った片段の ID・途中を「…」で省いた ID）が actual を指すか (#1391)。
+
+    モデルは 20 桁の片段の ID を「E0d7d982」のように後ろを切って書いたり、回答に書かれた
+    「文書:chunk_set の前半…:番号」を写したりする。大文字・小文字は区別しない。
+    """
+    written, actual = written.lower(), actual.lower()
+    pieces = _ID_ELLIPSIS.split(written)
+    if len(pieces) > 1:
+        # 省いた所には 1 文字以上が入る。残した部分（先頭と末尾）はそのまま一致すること。
+        if len(pieces[0]) < _MIN_ABBREVIATED_ID_CHARS:
+            return False
+        return re.fullmatch(".+".join(re.escape(piece) for piece in pieces), actual) is not None
+    return (_SPAN_ID_PREFIX.fullmatch(written) is not None and len(written) >= _MIN_ABBREVIATED_ID_CHARS
+            and len(written) < len(actual) and actual.startswith(written))
+
+
+def _span_for_token(token, catalog):
+    """evidence_id の欄の 1 つの ID を片段へ結び付ける（一致しない・1 つの chunk に決まらなければ None）。
+
+    片段の ID（evidence_id）か chunk の id にそのまま一致すればその片段。一致しなければ、省いて書いた ID
+    （後ろを切った片段の ID・途中を「…」で省いた ID。#1391）として、指す根拠が 1 つの chunk に決まるときだけ
+    結び付ける（chunk を名指しした場合はその最初の片段。片段の ID を名指しした場合と検証の厳しさは変わらない）。
+    根拠に無い ID・どの根拠か決まらない ID は None（引用エラーのまま）。
+    """
+    exact = catalog.get(token) or next(
+        (item for item in catalog.values() if token == str(item.get("id") or "")), None)
+    if exact is not None:
+        return exact
+    token = _EVIDENCE_ID_LABEL.sub("", token)
+    if not token:
+        return None
+    span = catalog.get(token) or next(
+        (item for item in catalog.values() if token == str(item.get("id") or "")), None)
+    if span is not None:
+        return span
+    matches = [item for item in catalog.values()
+               if _abbreviated_id_matches(token, str(item.get("evidence_id") or ""))
+               or _abbreviated_id_matches(token, str(item.get("id") or ""))]
+    return matches[0] if matches and len({str(item.get("id") or "") for item in matches}) == 1 else None
 
 
 def _spans_for_ids(claim, catalog):
-    """evidence_id の欄に区切って書いた複数の根拠を、それぞれ片段へ結び付ける (#1364)。
+    """evidence_id の欄に書いた根拠（区切って並べた複数の ID・省いて書いた ID）を、それぞれ片段へ結び付ける (#1364・#1391)。
 
     多段の結論（台帳の行で担当部署を引き、規程で承認者を引く）は 2 つ以上の根拠を合わせて裏付けるため、
     モデルは evidence_id に複数の ID を並べることがある。全体を 1 つの ID として引くと「未登録の原文ID」に
-    なり、正しい結論が引用エラーで外されていた。書いた ID がすべて片段（evidence_id）か chunk の id に
-    一致するときだけ結び付け、1 つでも一致しなければ None（従来どおり引用エラー）。括弧で囲んだ 1 つの ID も同じ。
+    なり、正しい結論が引用エラーで外されていた。モデルは ID を短く書くこともある（後ろを切った片段の ID・
+    回答から写した途中を省いた chunk の id。#1391）。書いた ID がすべて根拠の 1 つに決まるときだけ結び付け、
+    1 つでも決まらなければ None（従来どおり引用エラー）。括弧で囲んだ 1 つの ID・ラベルを付けた ID も同じ。
     引用（evidence_quote）を返したときは、結び付けた片段のどれかに引用が含まれることも求める。
     """
-    tokens = [token for token in _EVIDENCE_ID_SEPARATOR.split(claim.evidence_id or "") if token]
-    if not tokens or tokens == [claim.evidence_id]:
+    # ラベルだけの語（「evidence_id E…」の「evidence_id」）は ID ではないので除く。
+    tokens = [token for token in _EVIDENCE_ID_SEPARATOR.split(claim.evidence_id or "")
+              if token and _EVIDENCE_ID_LABEL.sub("", token)]
+    if not tokens:
         return None
     spans = []
     for token in tokens:
-        span = catalog.get(token) or next(
-            (item for item in catalog.values() if token == str(item.get("id") or "")), None)
+        span = _span_for_token(token, catalog)
         if span is None:
             return None
         if span not in spans:

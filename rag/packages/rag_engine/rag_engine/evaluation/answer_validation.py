@@ -28,7 +28,8 @@ from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERAT
 from rag_engine.generation.operation_audit import is_non_claim_passage, table_header_lines
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
-VALIDATION_RUBRIC_VERSION = 2
+# 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
+VALIDATION_RUBRIC_VERSION = 3
 
 VALIDATION_SYSTEM_PROMPT = (
     """1. 役割と目的
@@ -47,6 +48,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 段落に複数の主張があれば同じ ID で個別に確認してよい。1 つの段落の判定が分かれるときは最も厳しいものを記録する。
 - supported: evidence_items がその主張を明確に裏付ける。矛盾がないだけでは supported にしない。evidence_id に evidence_items の evidence_id を指定する。
 - 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
+- evidence_id は evidence_items の evidence_id の値を省かず・短くせずにそのまま書く（回答の本文に書かれた根拠の ID・文書名・章の名前は evidence_id にしない）。
 - contradicted: 根拠と矛盾する。evidence_id を指定する。
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
