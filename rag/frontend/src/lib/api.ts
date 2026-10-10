@@ -844,7 +844,7 @@ export interface KnowledgeBaseIngestionConfig {
   graph_profile: GraphProfileName | null;
   /**
    * 実体の索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
-   * 既定（無効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
+   * 既定（有効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
    */
   entity_index_enabled?: boolean | null;
   entity_name_columns?: string[] | null;

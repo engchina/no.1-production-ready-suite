@@ -730,13 +730,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="交差参照で 1 回の検索に足す参照先の chunk 数の上限(#1280)。",
     )
     rag_entity_index_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "取込の索引の保存の後に、chunk から実体（表の行の名前・属性の値、本文の定義の形・"
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
-            "rag_entity_aliases / rag_entity_chunks に保存する（#1362。既定 OFF。文書レシピで"
-            "選ぶ任意の処理。LLM は使わない）。回答の検索は、この表との SQL の join で関連する"
-            " chunk を 1 段だけ足す（検索・回答プロファイルの entity_expansion_enabled。#1388）。"
+            "rag_entity_aliases / rag_entity_chunks に保存する（#1362。既定 ON（#1388）。文書"
+            "レシピの「実体の索引」で文書ごとに無効にできる。LLM は使わない）。回答の検索は、"
+            "この表との SQL の join で関連する chunk を 1 段だけ足す（検索・回答プロファイルの"
+            " entity_expansion_enabled。#1388）。"
         ),
     )
     rag_entity_name_columns: list[str] = Field(

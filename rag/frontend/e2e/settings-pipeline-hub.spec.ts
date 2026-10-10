@@ -23,7 +23,8 @@ const RECIPE_DEFAULTS = {
   chunk_min_chars: 120,
   chunk_context_header_enabled: true,
   graph_profile: "off",
-  entity_index_enabled: false,
+  // 実体の索引は全体の既定で有効（#1388）。
+  entity_index_enabled: true,
   entity_name_columns: [],
   entity_attribute_columns: [],
   field_extraction_enabled: false,
@@ -204,9 +205,9 @@ for (const scheme of ["light", "dark"] as const) {
       items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/chunking");
     await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(9);
-    // 実体の索引は文書ごとに選ぶ（全体の既定は無効。変える画面は持たない。#1388）。
+    // 実体の索引は全体の既定で有効（文書ごとに無効にできる。変える画面は持たない。#1388）。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
-    await expect(entityIndex).toContainText("無効");
+    await expect(entityIndex).toContainText("有効");
     await expect(entityIndex.getByRole("link")).toHaveCount(0);
 
     // 工程の間の 3 つのスイッチ。

@@ -1,6 +1,6 @@
 """実体（システム・部署・属性の値など）と「実体と chunk の関連」の決定的な抽出（#1362）。
 
-文書レシピの任意の処理（``rag_entity_index_enabled``。既定は使わない）で、索引の保存の後に chunk
+文書レシピの処理（``rag_entity_index_enabled``。既定は使う。#1388）で、索引の保存の後に chunk
 から実体を抜き出し、Oracle の ``rag_entities`` / ``rag_entity_aliases`` / ``rag_entity_chunks`` に
 保存する。検索のときは ``app.rag.entity_expansion`` が、この表との SQL の join で関連する chunk を
 1 段だけ足す。

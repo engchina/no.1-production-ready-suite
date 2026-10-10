@@ -64,7 +64,8 @@ const effectiveBase: DocumentProcessingConfig = {
   parser_adapter_backend: "docling",
   chunking_strategy: "page_level",
   graph_profile: "off",
-  entity_index_enabled: false,
+  // 実体の索引は全体の既定で有効（#1388）。
+  entity_index_enabled: true,
   entity_name_columns: [],
   entity_attribute_columns: [],
   field_extraction_enabled: false,
@@ -381,27 +382,31 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   });
 });
 
-// #1388: 実体の索引（文書レシピ）と、その列を画面で選んで保存する。
-test("実体の索引を有効にして、名前・属性の列を選んで保存する", async ({ page }) => {
+// #1388: 実体の索引（文書レシピ。全体の既定は有効）と、その列を画面で選んで保存する。
+test("実体の索引は既定で有効で、名前・属性の列を選んで保存でき、無効にもできる", async ({ page }) => {
   const state = await mockWorkspace(page);
   await page.goto("/documents/doc-1");
   const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   const summary = panel.getByTestId("document-processing-config-summary");
-  await expect(summary.locator('[data-config-field="entity_index_enabled"]')).toContainText("無効");
+  await expect(summary.locator('[data-config-field="entity_index_enabled"]')).toContainText("有効");
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const editor = panel.getByTestId("document-processing-config-editor-items");
   const entityRow = editor.locator('[data-config-field="entity_index_enabled"]');
-  await expect(entityRow).toContainText("実体でつながる根拠を 1 段広げる");
-  // 無効のあいだは列の行を出さない。
-  await expect(panel.getByTestId("document-entity-columns")).toHaveCount(0);
-
-  await entityRow.getByText("上書き", { exact: true }).click();
-  await entityRow.getByText("有効", { exact: true }).click();
+  await expect(entityRow).toContainText("グローバル設定に従う: 有効");
+  await expect(entityRow).toContainText("全体の既定は有効で");
+  // 有効（継承）のあいだは列の行を出し、列は全体の既定（列名で決める）に従う。
   const columns = panel.getByTestId("document-entity-columns");
-  await expect(columns).toBeVisible();
   await expect(columns.getByTestId("document-entity-columns-inherited")).toContainText(
     "名前の列: 列名で決める · 属性の列: 列名で決める"
   );
+
+  // 無効にすると列の行を閉じる（使わない文書）。
+  await entityRow.getByText("上書き", { exact: true }).click();
+  await entityRow.getByText("無効", { exact: true }).click();
+  await expect(columns).toHaveCount(0);
+  await entityRow.getByText("有効", { exact: true }).click();
+  await expect(columns).toBeVisible();
+
   await columns.getByText("上書き", { exact: true }).click();
   await columns.getByRole("textbox", { name: "名前の列" }).fill("システムID、正式名称、略称");
   await columns.getByRole("textbox", { name: "属性の列" }).fill("担当部署、");
@@ -424,16 +429,17 @@ test("実体の索引を有効にして、名前・属性の列を選んで保�
     entity_name_columns: ["システムID", "正式名称", "略称"],
     entity_attribute_columns: ["担当部署", "重要度"],
   });
-  await expect(summary.locator('[data-config-field="entity_index_enabled"]')).toContainText("有効");
 
-  // 列を継承に戻すと、両方の列を全体の既定（列名で決める）に戻す。
+  // 列を継承に戻し、実体の索引を無効にして保存する。
   await columns.getByText("グローバルを継承", { exact: true }).click();
+  await entityRow.getByText("無効", { exact: true }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
   await expect.poll(() => state.saved()).toMatchObject({
-    entity_index_enabled: true,
+    entity_index_enabled: false,
     entity_name_columns: null,
     entity_attribute_columns: null,
   });
+  await expect(summary.locator('[data-config-field="entity_index_enabled"]')).toContainText("無効");
 });
 
 // 要約と上書きの一覧は、同じ項目を取込の処理順に並べる(#523)。
@@ -455,6 +461,10 @@ const PROCESSING_ORDER = [
 // 全体の既定を変える画面を持たない項目（実体の索引は文書ごとに選ぶ。#1388）。
 const NO_GLOBAL_SETTINGS_FIELDS = ["entity_index_enabled"];
 const GLOBAL_LINK_COUNT = PROCESSING_ORDER.length - NO_GLOBAL_SETTINGS_FIELDS.length;
+// 上書きの一覧は、実体の索引が有効（全体の既定）のとき、その右に「実体の索引の列」の行を出す。
+const EDITOR_ORDER = PROCESSING_ORDER.flatMap((field) =>
+  field === "entity_index_enabled" ? [field, "entity_columns"] : [field]
+);
 
 /** 画面上の読み順（上から下、同じ行は左から右）に並べた data-config-field。 */
 async function fieldsInReadingOrder(container: ReturnType<Page["locator"]>) {
@@ -492,9 +502,9 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
 
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const editor = panel.getByTestId("document-processing-config-editor-items");
-  await expect(editor.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
+  await expect(editor.locator("[data-config-field]")).toHaveCount(EDITOR_ORDER.length);
   // 2 列でも、左から右・上から下に読むと処理順になる。
-  expect(await fieldsInReadingOrder(editor)).toEqual(PROCESSING_ORDER);
+  expect(await fieldsInReadingOrder(editor)).toEqual(EDITOR_ORDER);
   await expect(panel).toContainText("すべてグローバル継承");
   // 文脈ヘッダを上書きすると、件数と要約のカードの両方に反映される。
   await editor
@@ -531,7 +541,7 @@ test("グローバル設定に従う行に、全体の既定を変える画面�
   // すべて継承のときは、全体の既定の画面がある 12 行すべてにリンクがある。
   await expect(links).toHaveCount(GLOBAL_LINK_COUNT);
   await expect(editor.locator('[data-config-field="entity_index_enabled"]')).toContainText(
-    "グローバル設定に従う: 無効"
+    "グローバル設定に従う: 有効"
   );
   await expect(
     editor.getByRole("link", { name: "図・画像を AI で読み取る のグローバル設定を開く" })
@@ -577,7 +587,7 @@ test("権限のない設定画面へのグローバル設定のリンクは出�
   const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const editor = panel.getByTestId("document-processing-config-editor-items");
-  await expect(editor.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
+  await expect(editor.locator("[data-config-field]")).toHaveCount(EDITOR_ORDER.length);
   // 文書分割と文脈ヘッダ（どちらも文書分割の画面）だけ。
   await expect(editor.getByRole("link", { name: / のグローバル設定を開く$/ })).toHaveCount(2);
 });

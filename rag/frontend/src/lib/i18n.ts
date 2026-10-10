@@ -1333,7 +1333,7 @@ export const ja = {
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
   "knowledgeBases.adapter.field.entityIndex": "実体の索引",
   "knowledgeBases.adapter.field.entityIndex.hint":
-    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、システム・部署などの実体とその根拠を記録します。検索・回答プロファイルの「実体でつながる根拠を 1 段広げる」が使います。AI は使いません。全体の既定は無効で、文書ごとに選びます。変えると索引から作り直します。",
+    "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、システム・部署などの実体とその根拠を記録します。AI は使いません。全体の既定は有効で（列の指定が無ければ列名で決めます）、使わない文書は無効にします。記録した実体を検索に使うのは、検索・回答プロファイルで「実体でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",

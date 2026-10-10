@@ -55,7 +55,7 @@ type RecipeConfigItemBase = {
   phase: IngestionJobPhase;
   /**
    * 全体の既定を変える画面。null は画面を持たない項目（実体の索引は文書ごとに選ぶ。全体の既定は
-   * backend/.env の `RAG_ENTITY_INDEX_ENABLED`（既定は無効）。#1388）。
+   * backend/.env の `RAG_ENTITY_INDEX_ENABLED`（既定は有効）。#1388）。
    */
   globalSettings: GlobalSettingsLocation | null;
 };

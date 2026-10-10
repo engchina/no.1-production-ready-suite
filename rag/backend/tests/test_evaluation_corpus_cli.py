@@ -334,6 +334,33 @@ def test_entity_index_selects_expansion_in_the_golden_set_and_the_profile() -> N
     }
 
 
+@pytest.mark.parametrize(
+    ("entity_index", "expected"),
+    [
+        (None, {".pdf": None, ".xlsx": {"preprocess_profile": "excel_to_json"}}),
+        (False, {".pdf": {"entity_index_enabled": False}, ".xlsx": None}),
+    ],
+    ids=["default", "no-entity-index"],
+)
+def test_recipe_follows_the_global_default_or_disables_entity_index(
+    entity_index: bool | None, expected: dict[str, Any]
+) -> None:
+    """実体の抽出は全体の既定で ON（#1388）。
+
+    省略時はレシピに書かず、``--no-entity-index`` は無効にする。
+    """
+    from app.rag.evaluation_corpus_cli import recipe_for
+
+    pdf = recipe_for(Path("manual.pdf"), entity_index=entity_index)
+    xlsx = recipe_for(Path("params.xlsx"), entity_index=entity_index)
+    assert pdf == (expected[".pdf"] or {})
+    assert xlsx == (
+        expected[".xlsx"]
+        if expected[".xlsx"] is not None
+        else {"preprocess_profile": "excel_to_json", "entity_index_enabled": False}
+    )
+
+
 # ---- 文書の版（旧版の登録。#1366） ------------------------------------------------------
 
 VERSIONED_SET: dict[str, Any] = {
