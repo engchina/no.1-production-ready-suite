@@ -243,6 +243,67 @@ def test_search_uses_search_answer_profile_and_user_scope(
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
 
 
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_include_superseded_is_a_boolean_argument(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, tool: str
+) -> None:
+    """旧版を含める指定は真偽値の引数 include_superseded で、入力の検証で落ちない（#1392）。"""
+    _install_search(monkeypatch)
+    user = auth.user_with_permissions(
+        "searcher", ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+    )
+    headers = _token(user.user_uuid)
+
+    def captured_filters() -> dict[str, str]:
+        captured = RecordingPipeline.captured_request
+        assert captured is not None
+        return dict(captured.filters)
+
+    included = _call(
+        tool,
+        {
+            "query": "旧版との違い",
+            "search_answer_profile_id": "bv-1",
+            "include_superseded": True,
+            "filters": {"category_name": "規程"},
+        },
+        headers,
+    )
+    assert included["isError"] is False, included
+    # 旧版を含めても検索の範囲は検索・回答プロファイルと利用者の KB のまま。
+    assert captured_filters() == {
+        "category_name": "規程",
+        "include_superseded": "true",
+        "knowledge_base_id": "kb-1",
+    }
+    assert _captured_knowledge_base_ids() == ["kb-1"]
+
+    # 既定（省略・false）は今の版だけ（filters に旧版の指定を足さない）。
+    for arguments in ({}, {"include_superseded": False}):
+        result = _call(
+            tool, {"query": "規程", "search_answer_profile_id": "bv-1", **arguments}, headers
+        )
+        assert result["isError"] is False, result
+        assert "include_superseded" not in captured_filters()
+
+    # filters に書いた旧版の指定（真偽値・文字列）は、専用の引数を案内して拒否する。
+    RecordingPipeline.captured_request = None
+    for value in (True, "true"):
+        invalid = _call(
+            tool,
+            {
+                "query": "規程",
+                "search_answer_profile_id": "bv-1",
+                "filters": {"include_superseded": value},
+            },
+            headers,
+        )
+        assert invalid["isError"] is True
+        assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    assert "include_superseded" in json.dumps(invalid["structuredContent"], ensure_ascii=False)
+    assert RecordingPipeline.captured_request is None
+
+
 def _chunk(chunk_id: str, *, text: str = "本文", used: bool | None = None, **metadata: Any) -> Any:
     if used is not None:
         metadata["evidence_model_used"] = used

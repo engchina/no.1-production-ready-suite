@@ -147,8 +147,11 @@ D 2 件あった）。
 
 - 旧版の文を根拠にする問（版の比較: `cmp-approval-deadline-versions`・`cmp-hrm-maintenance-versions`）は
   `include_superseded: true` を持ち、A はそのケースだけ利用者が旧版・変更点を尋ねるときと同じく `filters` の
-  `include_superseded=true` で旧版も検索します。D（業務 Agent）は、質問から旧版が要ると判断して `rag_search` の
-  `filters` に `include_superseded=true` を自分で渡す必要があります（渡さなければ旧版の根拠が欠けます）。
+  `include_superseded=true` で旧版も検索します。D（業務 Agent）は、質問から旧版が要ると判断して `rag_search` /
+  `rag_retrieve_evidence` の真偽値の引数 `include_superseded: true` を自分で渡す必要があります（渡さなければ旧版の
+  根拠が欠けます。#1392 より前は `filters` に真偽値を渡して入力の検証で拒否されていました）。D の結果の
+  `agent.superseded_cases` に、このケースのうち旧版も検索したケース（`searched_case_ids`）と、検索しなかった
+  ケース（`missed_case_ids`）を出します（Run ごとの回数は `runs[].superseded_searches`）。
 - **旧版を除かない評価（紛らわしさの測定）**: `evaluation_corpus_cli` に `--keep-superseded-active` を渡すと、版を
   登録せずに取り込み、旧版も今有効な文書のまま検索させます（書き出す評価セットから `document_versions` を外す）。
   版の登録が無い運用（旧版を置き換えずに残した資料）で、旧版に検索が引かれる度合いを見るためのもので、判断の基準

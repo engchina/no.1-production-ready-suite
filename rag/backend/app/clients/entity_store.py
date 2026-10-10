@@ -16,6 +16,11 @@
 検索の SQL は ``app.rag.entity_expansion.EntityExpansionStore`` の 3 つ（起点の別名・名寄せ・1 段）
 。どれも chunk と文書を検索と同じ見え方の条件で join し、範囲の外の chunk を返さない（途中の chunk
 も同じ）。
+
+本文の見出し・列挙のラベル（別名の種類 ``label``。「原因 A」「手順 1」）は、別の文書が同じ別名をラ
+ベル以外の種類（表の値・定義の形・ID や名前）で持ち、その文書の chunk が同じ見え方の条件の中にある
+ときだけ使う（``_usable_alias_sql``。#1393）。1 つの文書の中だけで使う記号は、起点にも名寄せ・1 段の
+経路にもしない。
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ from app.rag.entity_expansion import (
     EntityDefinitionRow,
     EntitySeedRow,
 )
-from app.rag.entity_index import EntityIndex
+from app.rag.entity_index import ALIAS_KIND_LABEL, EntityIndex
 
 ENTITIES_TABLE = "rag_entities"
 ENTITY_ALIASES_TABLE = "rag_entity_aliases"
@@ -59,6 +64,32 @@ _CHUNK_COLUMNS = """
                 d.category_name,
                 d.superseded_by_document_id,
                 0 AS score"""
+
+
+def _usable_alias_sql(alias: str, entity: str, where_sql: str) -> str:
+    """拡張に使える別名の条件（#1393）。
+
+    ラベル（``label``。「原因 A」）の別名は、別の文書の実体が同じ別名をラベル以外の種類で持ち、その
+    実体の chunk が検索と同じ見え方の条件（``where_sql``）の中にあるときだけ使う。``where_sql`` は
+    ``c`` / ``d`` の別名を使うため、内側の副問い合わせでも同じ別名で chunk と文書を join する
+    （外側の ``c`` / ``d`` は内側の別名で隠れる）。
+    """
+    return f"""(
+                    {alias}.alias_kind <> '{ALIAS_KIND_LABEL}'
+                    OR EXISTS (
+                        SELECT 1
+                        FROM {ENTITY_ALIASES_TABLE} label_a
+                        JOIN {ENTITIES_TABLE} label_e ON label_e.entity_id = label_a.entity_id
+                        JOIN {ENTITY_CHUNKS_TABLE} label_ec
+                          ON label_ec.entity_id = label_e.entity_id
+                        JOIN rag_chunks c ON c.chunk_id = label_ec.chunk_id
+                        JOIN rag_documents d ON d.document_id = c.document_id
+                        WHERE label_a.alias_key = {alias}.alias_key
+                          AND label_a.alias_kind <> '{ALIAS_KIND_LABEL}'
+                          AND label_e.document_id <> {entity}.document_id
+                          AND {where_sql}
+                    )
+                )"""
 
 
 def oracle_entity_schema_sql() -> str:
@@ -311,6 +342,7 @@ class EntityStore:
                 FROM ({" UNION ALL ".join(branches)}) seed
                 JOIN {ENTITIES_TABLE} e ON e.entity_id = seed.entity_id
                 JOIN {ENTITY_ALIASES_TABLE} alias ON alias.entity_id = seed.entity_id
+                WHERE {_usable_alias_sql("alias", "e", where_sql)}
                 GROUP BY seed.entity_id, alias.alias_key, e.scope_label
                 ORDER BY MIN(seed.seed_rank) NULLS FIRST, seed.entity_id, alias.alias_key
             ) WHERE ROWNUM <= :entity_seed_limit
@@ -358,6 +390,7 @@ class EntityStore:
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {{where_sql}}
                   AND {alias_in_sql}
+                  AND {_usable_alias_sql("a", "e", where_sql)}
                 ORDER BY c.document_id, c.chunk_index, c.chunk_id, a.alias_key
             ) WHERE ROWNUM <= :entity_limit
             """,
@@ -403,6 +436,7 @@ class EntityStore:
                 WHERE src.chunk_role = 'attribute'
                   AND {source_in_sql}
                   AND {{where_sql}}
+                  AND {_usable_alias_sql("a", "e", where_sql)}
                 ORDER BY src.chunk_id, c.document_id, c.chunk_index, c.chunk_id, a.alias_key
             ) WHERE ROWNUM <= :entity_limit
             """,
