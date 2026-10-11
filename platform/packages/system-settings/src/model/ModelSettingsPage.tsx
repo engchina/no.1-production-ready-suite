@@ -92,8 +92,11 @@ import {
 import { t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+  DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_SEED,
   ENTERPRISE_AI_CONNECTION_IDS,
+  ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX,
+  ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN,
   ENTERPRISE_AI_REASONING_EFFORTS,
   ENTERPRISE_AI_SEED_MAX,
   ENTERPRISE_AI_SEED_MIN,
@@ -207,6 +210,9 @@ export function ModelSettingsPage({
   // seed（#1434）の不正な値のエラーは、保存の操作の後から出す（キー入力ごと・欄を離れたときには出さない。
   // 欄を離れたときに出すと、保存のボタンを押した瞬間にエラーの行が入ってボタンが動き、押せなくなる）。
   const [showSeedError, setShowSeedError] = useState(false);
+  // 登録モデルの入力の上限（#1437）の不正な値のエラーも、seed と同じく保存の操作の後から出す。
+  const [showMaxInputTokensErrors, setShowMaxInputTokensErrors] =
+    useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
   // 保存が競合（409。画面を開いた後にほかの画面で保存された）した節（#1037）。その節の操作の行に
   // 「最新の設定を読み込む」を出す。読み込むまで残す（入力を変えても競合は解けない）。
@@ -453,6 +459,7 @@ export function ModelSettingsPage({
                   vision_enabled: false,
                   connection_id: PRIMARY_CONNECTION_ID,
                   reasoning_effort: DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+                  max_input_tokens: DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
                 },
               ],
             },
@@ -561,9 +568,11 @@ export function ModelSettingsPage({
         savedConnectionIds(baselineData.settings),
       );
       const idErrors = validateModelIds(draft.enterprise_ai.models);
-      // 行の順に、行の中は欄の並び（モデル ID → 接続）で最初のエラーの欄を探す。
+      const tokenErrors = validateMaxInputTokens(draft.enterprise_ai.models);
+      // 行の順に、行の中は欄の並び（モデル ID → 接続 → 入力の上限）で最初のエラーの欄を探す。
       const invalidRow = draft.enterprise_ai.models.findIndex(
-        (_, index) => idErrors[index] || connectionErrors[index],
+        (_, index) =>
+          idErrors[index] || connectionErrors[index] || tokenErrors[index],
       );
       const errors = validateDefaultModels(draft.enterprise_ai);
       const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
@@ -578,13 +587,16 @@ export function ModelSettingsPage({
       if (invalidRow >= 0 || firstInvalid) {
         setShowModelIdErrors(true);
         setShowModelConnectionErrors(true);
+        setShowMaxInputTokensErrors(true);
         setShowDefaultErrors(true);
         document
           .getElementById(
             invalidRow >= 0
               ? idErrors[invalidRow]
                 ? modelIdFieldId(invalidRow)
-                : modelConnectionFieldId(invalidRow)
+                : connectionErrors[invalidRow]
+                  ? modelConnectionFieldId(invalidRow)
+                  : modelMaxInputTokensFieldId(invalidRow)
               : DEFAULT_MODEL_FIELD_IDS[firstInvalid!],
           )
           ?.focus();
@@ -685,6 +697,10 @@ export function ModelSettingsPage({
       : {};
   const modelIdErrors: ModelIdErrors =
     draft && showModelIdErrors ? validateModelIds(draft.enterprise_ai.models) : {};
+  const maxInputTokensErrors: Record<number, string> =
+    draft && showMaxInputTokensErrors
+      ? validateMaxInputTokens(draft.enterprise_ai.models)
+      : {};
 
   // 取得の失敗を出すのは、下書きがまだない（初回の取得が失敗した）ときだけ（#1036）。
   // 画面は初回の取得の後は下書きを使うので、裏の再取得（画面への復帰・保存の後）が失敗しても
@@ -816,6 +832,9 @@ export function ModelSettingsPage({
         </form>
 
         <form
+          // 入力の上限・seed の範囲外（number の min / max）でブラウザの既定の検証を出さない（#1437）。
+          // 保存の操作で欄の直下にエラーを出し、最初のエラーの欄へフォーカスする（messaging.md §3.2.1）。
+          noValidate
           onSubmit={(event) => void handleSubmit(event, "enterprise_models")}
         >
           <Card>
@@ -834,6 +853,7 @@ export function ModelSettingsPage({
                 connections={draft.enterprise_ai.connections}
                 connectionErrors={modelConnectionErrors}
                 modelIdErrors={modelIdErrors}
+                maxInputTokensErrors={maxInputTokensErrors}
                 testingKey={testingKey}
                 testResults={testResults}
                 onModelChange={updateEnterpriseModel}
@@ -1223,6 +1243,7 @@ function ModelCatalogEditor({
   connections,
   connectionErrors,
   modelIdErrors,
+  maxInputTokensErrors,
   testingKey,
   testResults,
   onModelChange,
@@ -1235,6 +1256,7 @@ function ModelCatalogEditor({
   connections: EnterpriseAiConnectionSettings[];
   connectionErrors: ModelConnectionErrors;
   modelIdErrors: ModelIdErrors;
+  maxInputTokensErrors: Record<number, string>;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onModelChange: (
@@ -1286,7 +1308,7 @@ function ModelCatalogEditor({
       >
         <div
           className={cn(
-            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted xl:grid xl:gap-3",
+            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted 2xl:grid 2xl:gap-3",
             CATALOG_COLUMNS,
           )}
         >
@@ -1294,6 +1316,7 @@ function ModelCatalogEditor({
           <span>{t("settings.model.enterprise.displayName")}</span>
           <span>{t("settings.model.enterprise.connection")}</span>
           <span>{t("settings.model.enterprise.reasoningEffort")}</span>
+          <span>{t("settings.model.enterprise.maxInputTokens")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
           <span>{t("settings.model.test.action")}</span>
           <span aria-hidden />
@@ -1309,7 +1332,7 @@ function ModelCatalogEditor({
             <div
               key={index}
               className={cn(
-                "grid gap-3 border-b border-border p-3 last:border-b-0 xl:items-start",
+                "grid gap-3 border-b border-border p-3 last:border-b-0 md:grid-cols-2 md:items-start",
                 CATALOG_COLUMNS,
               )}
             >
@@ -1344,7 +1367,7 @@ function ModelCatalogEditor({
                 }
                 // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面の
                 // ラベルは同じ行の他の欄（CompactTextInput）と同じ小さい文字にそろえる。
-                className="min-w-0 max-xl:[&>label]:text-xs max-xl:[&>label]:text-fg-muted xl:[&>label]:sr-only"
+                className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
               />
               <SelectField
                 id={modelReasoningEffortFieldId(index)}
@@ -1360,11 +1383,35 @@ function ModelCatalogEditor({
                   onModelChange(index, { reasoning_effort: value })
                 }
                 // 接続の欄と同じく、広い画面のラベルは読み上げだけにする（表頭が見出し）。
-                className="min-w-0 max-xl:[&>label]:text-xs max-xl:[&>label]:text-fg-muted xl:[&>label]:sr-only"
+                className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
               />
-              {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。 */}
-              <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg xl:justify-start">
-                <span className="xl:sr-only">
+              <TextField
+                id={modelMaxInputTokensFieldId(index)}
+                label={t("settings.model.enterprise.maxInputTokensOfModel", {
+                  number: modelNumber,
+                })}
+                type="number"
+                inputMode="numeric"
+                min={ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN}
+                max={ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX}
+                step={1}
+                value={maxInputTokensInputValue(model)}
+                aria-describedby={MAX_INPUT_TOKENS_HELP_ID}
+                error={maxInputTokensErrors[index]}
+                onValueChange={(next) =>
+                  onModelChange(index, {
+                    max_input_tokens:
+                      next.trim() === "" ? Number.NaN : Number(next),
+                  })
+                }
+                inputClassName="tnum"
+                // 推論の量の欄と同じく、広い画面のラベルは読み上げだけにする（表頭が見出し）。
+                className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
+              />
+              {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。2 列の並び（md〜2xl）では、左の入力の上限の欄
+                  （ラベルつき）の入力と下端をそろえる（#1437）。 */}
+              <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg md:self-end 2xl:self-start 2xl:justify-start">
+                <span className="2xl:sr-only">
                   {t("settings.model.enterprise.vision")}
                 </span>
                 <Switch
@@ -1377,7 +1424,7 @@ function ModelCatalogEditor({
               </div>
               <div className="flex min-h-[var(--control-height-md)] items-center">
                 {/* 375px でラベルが「テス / ト」と折り返さないよう、ボタンに幅を譲らせる。 */}
-                <span className="mr-2 shrink-0 whitespace-nowrap text-xs font-medium text-fg-muted xl:sr-only">
+                <span className="mr-2 shrink-0 whitespace-nowrap text-xs font-medium text-fg-muted 2xl:sr-only">
                   {t("settings.model.test.action")}
                 </span>
                 <TestButton
@@ -1408,7 +1455,7 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="xl:col-span-7"
+                className="md:col-span-2 2xl:col-span-8"
               />
             </div>
           );
@@ -1421,8 +1468,51 @@ function ModelCatalogEditor({
       >
         {t("settings.model.enterprise.reasoningEffortHelp")}
       </p>
+      {/* 入力の上限の説明（#1437）。各行の欄の aria-describedby から読む。 */}
+      <p
+        id={MAX_INPUT_TOKENS_HELP_ID}
+        className="text-xs leading-relaxed text-fg-muted"
+      >
+        {t("settings.model.enterprise.maxInputTokensHelp")}
+      </p>
     </div>
   );
+}
+
+/** 入力の上限の説明の要素の id（#1437）。 */
+const MAX_INPUT_TOKENS_HELP_ID = "enterprise-model-max-input-tokens-help";
+
+function modelMaxInputTokensFieldId(index: number): string {
+  return `enterprise-model-max-input-tokens-${index}`;
+}
+
+/** 入力の上限の欄の表示値（値の無いモデルは既定、空欄（NaN）は空）。 */
+function maxInputTokensInputValue(model: EnterpriseAiConfiguredModel): number | "" {
+  const value = model.max_input_tokens ?? DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS;
+  return Number.isNaN(value) ? "" : value;
+}
+
+/** 入力の上限が保存できる値か（4096〜2000000 の整数。backend の検証と同じ範囲。#1437）。 */
+function isValidMaxInputTokens(value: number | undefined): boolean {
+  const tokens = value ?? DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS;
+  return (
+    Number.isInteger(tokens) &&
+    tokens >= ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN &&
+    tokens <= ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX
+  );
+}
+
+/** 行ごとの入力の上限のエラー（行の番号 → 文言。不正な行だけ）。 */
+function validateMaxInputTokens(
+  models: readonly EnterpriseAiConfiguredModel[],
+): Record<number, string> {
+  const errors: Record<number, string> = {};
+  models.forEach((model, index) => {
+    if (!isValidMaxInputTokens(model.max_input_tokens)) {
+      errors[index] = t("settings.model.enterprise.maxInputTokensInvalid");
+    }
+  });
+  return errors;
 }
 
 /** 推論の量の説明の要素の id（#1425）。 */
@@ -1447,12 +1537,14 @@ const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoning
   }));
 
 /**
- * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 画像入力（Vision）に対応 / テスト / 削除）。
- * 7 列はサイドバーを引いた lg（1024px）の本文幅では欄が読めないほど狭いため、xl（1280px）から表の形にする
- * （#533 / #1425）。推論の量は「none（送らない）」が読める固定の幅にし、残りをモデル ID・表示名・接続に回す。
+ * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 入力の上限 / 画像入力（Vision）に対応 / テスト /
+ * 削除）。8 列はサイドバーを引いた xl（1280px）の本文幅ではモデル ID・接続が読めないほど狭いため、2xl（1536px）から
+ * 表の形にし、md〜2xl は 1 行のモデルの欄を 2 列に並べる（#533 / #1425 / #1437。7 列の #1425 までは xl から表）。
+ * 推論の量は「none（送らない）」が読める固定の幅、入力の上限は 7 桁が読める固定の幅にし、残りをモデル ID・表示名・
+ * 接続に回す。
  */
 const CATALOG_COLUMNS =
-  "xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_6.5rem_7rem_3.25rem]";
+  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_6.5rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
@@ -1607,7 +1699,7 @@ function CompactTextInput({
       onValueChange={onChange}
       // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面のラベルは
       // 同じ行の選択欄（接続）と同じ小さい文字にする（#631 でネイティブの input から置き換えた）。
-      className="min-w-0 max-xl:[&>label]:text-xs max-xl:[&>label]:text-fg-muted xl:[&>label]:sr-only"
+      className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
     />
   );
 }

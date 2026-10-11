@@ -111,6 +111,12 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.reasoningEffortHelp":
     "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は medium で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。NL2SQL の Select AI・Select AI Agent には推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。",
   "settings.model.enterprise.reasoningEffort.none": "none（送らない）",
+  "settings.model.enterprise.maxInputTokens": "入力の上限（tokens）",
+  "settings.model.enterprise.maxInputTokensOfModel": "モデル {number} の入力の上限（tokens）",
+  "settings.model.enterprise.maxInputTokensHelp":
+    "入力の上限は、モデルが 1 回の呼び出しで受け付ける入力の token の数（コンテキストウィンドウ）です。既定は 128000 で、4096〜2000000 の整数を入力します。回答の根拠と、長い章節から原文を抜き出す 1 回分の量を、この値の割合で決めます（指示と出力の余地を残します）。モデルの仕様より大きくすると呼び出しが失敗することがあるため、仕様の値以下にしてください。",
+  "settings.model.enterprise.maxInputTokensInvalid":
+    "入力の上限は 4096〜2000000 の整数で入力してください。",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
   "settings.model.enterprise.removeConfirm.descriptionUnnamed":

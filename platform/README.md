@@ -236,6 +236,16 @@ API は 422 で「既定のテキストモデルを選択してください。�
   - RAG の共有 client（`rag_parser_core.OciEnterpriseAiConfig`）: テキストはテキストのモデルの接続、Vision の呼び出し（VLM 抽出・
     図の読み取り・Files API）は `vision_oci_enterprise_ai_*`（`for_vision()`）で既定の Vision モデルの接続を使う。
 
+## 登録モデルごとの入力の上限（`max_input_tokens`。#1437）
+
+「システム設定 › モデル」の登録モデルは、行ごとに「入力の上限（tokens）」（モデルが 1 回の呼び出しで受け付ける入力の token の数。コンテキストウィンドウ）を持つ。
+
+- 既定は **128000**（値の無いモデル・#1437 より前の設定・env だけで設定したモデル）。範囲は 4096〜2000000 の整数で、範囲外は保存（422）・読み込みとも検証エラー。
+- 値の解釈は `pr_system_settings.model` の 1 か所: `max_input_tokens_to_use`（値なし・範囲外は既定）、`enterprise_ai_max_input_tokens(settings, model_id)`（モデルの値）、`input_token_budget(上限, 割合%)`（入力の予算の token）、`estimate_input_tokens(text)`（本文の token の見積もり。ASCII は 4 字で 1 token、それ以外は 1 字で 1 token。モデルごとの tokenizer を持たないため多めに見積もる）。3 製品はこれを使う。
+- 使う製品: RAG（回答の章節の拡張の根拠の入力の上限と、長い章節を抽出してから統合する 1 回分の大きさ。backend が回答のモデルの値を `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で `rag_engine` に渡す）。NL2SQL・Agent はまだ使わない。
+- 保存の形式: `model-settings.json` は version 5 で、`enterprise_ai.models[].max_input_tokens` を書く。version 4 はそのまま読める（書き換えは要らない。画面で保存し直すと version 5 になる）。
+- 画面: 登録モデルの表に「入力の上限（tokens）」の列を足し、8 列になったため表の形は 2xl（1536px）から（md〜2xl は 1 つのモデルの欄を 2 列に並べる）。範囲外は保存の操作で欄の直下にエラーを出してフォーカスする（登録モデルの form はブラウザの既定の検証を出さない）。
+
 ## 登録モデルごとの推論の量（`reasoning_effort`。#1425）
 
 「システム設定 › モデル」の登録モデルは、行ごとに「推論の量」（モデルが回答の前に考える量。Responses API の `reasoning.effort`）を持つ。

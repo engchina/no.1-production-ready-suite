@@ -160,7 +160,7 @@ def _seed_context(*chunk_ids: str) -> AnswerContext:
 def _settings(**overrides: object) -> SimpleNamespace:
     values = {"section_expansion_enabled": True, "section_expansion_max_levels": 4,
               "section_expansion_input_token_percent": 50, "section_expansion_time_limit_seconds": 600.0,
-              "evidence_budget_chars": 48000}
+              "evidence_budget_chars": 48000, "answer_max_input_tokens": 128_000}
     values.update(overrides)
     return SimpleNamespace(**values)
 
@@ -250,9 +250,9 @@ def test_never_climbs_more_than_max_levels():
 
 def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
     stub, grader = SectionStub(), Grader(needs=None)
-    # 入力の上限 1,200 token（暫定: 予算 1,200 字 × 2 × 50%）。当たった chunk 300 + 3.1 の残り 300 の後は、
+    # 入力の上限 1,200 token（モデルの入力の上限 2,400 × 50%）。当たった chunk 300 + 3.1 の残り 300 の後は、
     # 第3章の全体（残り 1,200）は入らず、子の章節（600 ずつ）が 1 つだけ入る。
-    settings = _settings(evidence_budget_chars=1200)
+    settings = _settings(answer_max_input_tokens=2400)
 
     def prefer_last(question, documents, settings, top_n=None):
         # 見出しの関連度: 3.3（消火設備）を先に。
@@ -277,7 +277,7 @@ def test_token_budget_does_not_make_answer_conditional_when_read_part_is_enough(
     stub = SectionStub()
     grader = Grader(needs={"c33a", "c33b"})
 
-    result = _expand(_seed_context("c31a"), _settings(evidence_budget_chars=1200), grader, stub,
+    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=2400), grader, stub,
                      rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))])
 
     assert result.stop_reason == sections.STOP_SUFFICIENT and result.unread == []
@@ -285,16 +285,19 @@ def test_token_budget_does_not_make_answer_conditional_when_read_part_is_enough(
 
 def test_large_section_handler_receives_sections_that_do_not_fit():
     stub, grader = SectionStub(), Grader(needs=None)
-    handed: list[str] = []
+    handed: list[sections.LargeSectionRequest] = []
 
-    def handler(question, outline, section, remaining):
-        handed.append(section.section_id)
+    def handler(request):
+        handed.append(request)
         return None
 
-    _expand(_seed_context("c31a"), _settings(evidence_budget_chars=1200), grader, stub, large_sections=handler,
+    _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=2400), grader, stub, large_sections=handler,
             rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))])
 
-    assert handed == ["s3-2"]
+    assert [request.section.section_id for request in handed] == ["s3-2"]
+    # 渡すのは、まだ文脈に無い章節の親（章節の中の読み順）と残りの入力 token。
+    assert [item.record.chunk_uid for item in handed[0].tree] == [f"{DOC}:c32a", f"{DOC}:c32b"]
+    assert 0 < handed[0].remaining_tokens < 600
 
 
 def test_time_limit_stops_before_climbing():
@@ -390,7 +393,7 @@ def test_known_gaps_and_budget_follow_the_last_grade():
     assert _known_gaps(attempts, expansion) == ("requested_result",)
     context = _seed_context("c31a", "c32a")
     settings = _settings(evidence_budget_chars=100)
-    # 広げたときの原文の予算は、入力 token の上限（暫定: 1,000 × 2 × 50%）を超えない。
+    # 広げたときの原文の予算は、入力 token の上限（モデルの入力の上限 × 50%）を超えない。
     assert _section_evidence_budget(context, settings, expansion) == 660
     assert _section_evidence_budget(context, settings, None) is None
 
@@ -434,11 +437,22 @@ def test_unread_sections_make_the_answer_conditional():
     assert limited.response.needs_human_review is True
 
 
-@pytest.mark.parametrize("percent, expected", [(50, 48000), (25, 24000), (90, 86400)], ids=["50", "25", "90"])
-def test_input_token_limit_is_share_of_provisional_model_input(percent, expected):
-    limits = sections.SectionExpansionLimits.from_settings(
-        _settings(section_expansion_input_token_percent=percent))
+@pytest.mark.parametrize("percent, model, expected",
+                         [(50, 128_000, 64_000), (25, 128_000, 32_000), (90, 200_000, 180_000), (50, None, 64_000)],
+                         ids=["50", "25", "90-large-model", "default-model"])
+def test_input_token_limit_is_share_of_model_input(percent, model, expected):
+    """根拠の入力の上限は、回答のモデルの入力の上限（共通のモデル設定。#1437）に対する割合。"""
+    overrides = {"section_expansion_input_token_percent": percent}
+    if model is not None:
+        overrides["answer_max_input_tokens"] = model
+    settings = _settings(**overrides)
+    if model is None:
+        del settings.answer_max_input_tokens
+    limits = sections.SectionExpansionLimits.from_settings(settings)
     assert limits.input_tokens == expected
+    # 根拠の文字数の予算（evidence_budget_chars）には依らない（#1436 の暫定の推定を置き換えた）。
+    assert sections.SectionExpansionLimits.from_settings(
+        _settings(**overrides, evidence_budget_chars=1000)).input_tokens == (expected if model else 64_000)
 
 
 def test_engine_settings_read_section_expansion_environment():

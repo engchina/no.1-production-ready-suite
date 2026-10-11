@@ -87,6 +87,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "section_expansion_time_limit_seconds": (
             resolved_settings.rag_section_expansion_time_limit_seconds
         ),
+        # 抽出してから統合(#1437)の抽出の呼び出しの上限。
+        "section_extraction_max_calls": resolved_settings.rag_section_extraction_max_calls,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

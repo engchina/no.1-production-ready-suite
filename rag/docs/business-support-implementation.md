@@ -71,6 +71,12 @@
   利用者自身のロール・承認、付与先の種類）で、AnswerEnvelope の `conditions` に載せて `conditional` にする（本文では
   「回答を確定するために確認すること」の節に「条件: …」として出す）。「ポータル管理者ロールを持つか」はシステムの記録でも
   あるが、利用者本人が答えられるため `user_condition` に分ける（人の判断が要る点として PR に記録）。
+- **別の資料の確認は実データではない（#1491）。** 「回答を確定するために確認すること」の「資料: …」の行（草稿の
+  `reference_materials`）は `needs_environment_data` の判定に数えない（`handoff_reasons` は `reference_materials`）。
+  実行できる説明が無く、監査した要求がすべて `missing` なら、実データ・別の資料の確認があっても `insufficient_evidence`
+  にする（`rag_engine/generation/answer_envelope.py`）。業務ガイドの手順の検査（`answer_checks.check_guide_steps`）は、
+  実行の指示の行だけを照らし、満たした前提の言及（「→ この前提は満たしています」「承認済み」の行と、見出しが
+  「満たしている条件」などの節）を手順の実行に数えない。
 - **振り分けは Agent の側で決定的に行う。** Agent が `rag_search` を呼び、結果の `outcome` が
   `needs_environment_data` のとき、Control Plane がモデルへの結果に `next_step` を足す
   （`agent/backend/app/features/agent/support_task.py` の `rag_next_step`。記録する step の結果は RAG の結果のまま）。

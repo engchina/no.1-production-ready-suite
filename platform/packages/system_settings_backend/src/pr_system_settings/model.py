@@ -12,6 +12,9 @@
 - 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は medium）。
   3 製品の呼び出しは `enterprise_ai_reasoning`（送る値の解釈はここだけ。none は送らない）で
   モデルから引き、Responses API の `reasoning: {"effort": ...}` を送る
+- 登録モデルごとに入力の上限 `max_input_tokens`（tokens）を持つ（#1437。既定 128000）。
+  回答の根拠などの入力の予算は `input_token_budget` で token の数として決める（値の解釈と
+  token の見積もり `estimate_input_tokens` はここだけ。3 製品はこれを使う）
 - LLM / VLM の呼び出しの seed `seed` を全モデルで共通に 1 つ持つ（#1434。既定 42）。
   3 製品の呼び出しは `enterprise_ai_seed` / `seed_payload`（解釈はここだけ）で top-level の
   `seed` を送り、NL2SQL は Select AI の AI profile の `seed` 属性の既定にも使う
@@ -70,7 +73,9 @@ ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
 )
 # 4: 登録モデルの `reasoning_effort`（#1425）。3 の JSON はそのまま読める
 # （項目が無い = 既定の medium）。
-MODEL_SETTINGS_DOCUMENT_VERSION = 4
+# 5: 登録モデルの `max_input_tokens`（#1437）。4 の JSON はそのまま読める
+# （項目が無い = 既定の 128000）。
+MODEL_SETTINGS_DOCUMENT_VERSION = 5
 # この版より前の JSON だけが API key（`enterprise_ai.api_key`）を持てた
 # （v3 から secret は `.env`）。
 MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION = 3
@@ -112,6 +117,13 @@ ENTERPRISE_AI_REASONING_EFFORT_OMIT: Final = "none"
 #   受け付ける。型の違う `"abc"` も 200 なので、endpoint は seed を解釈せずに無視していると推測する
 #   （同じ入力の 2 回の出力は temperature 1 では 3 モデルとも一致しない）。拒むモデルが無いので、
 #   モデルごとの「送らない」は持たない
+# モデルの入力の上限（tokens。#1437）。登録モデルごとに持ち、値が無いとき（#1437 より前の設定・
+# env だけで設定したモデル）は既定の 128000（多くのモデルが受け付ける大きさで、上限の大きい
+# モデルでも安全な側）。範囲は 4096〜2000000。入力の予算（回答の根拠・抽出の 1 回分）は
+# `input_token_budget` で上限の割合として決め、本文の token は `estimate_input_tokens` で見積もる。
+DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS: Final = 128_000
+ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN: Final = 4_096
+ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX: Final = 2_000_000
 ENTERPRISE_AI_SEED_MIN: Final = 0
 ENTERPRISE_AI_SEED_MAX: Final = 2_147_483_647
 DEFAULT_ENTERPRISE_AI_SEED: Final = 42
@@ -137,6 +149,14 @@ class EnterpriseAiConfiguredModel(BaseModel):
     # 推論（思考）の量（#1425）。未指定（#1425 より前の設定も）は既定の medium。
     # none は `reasoning` を送らない（`reasoning_effort_to_send`）。
     reasoning_effort: EnterpriseAiReasoningEffort = DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
+    # 入力の上限（tokens。#1437）。未指定（#1437 より前の設定も）は既定の 128000。
+    # 範囲外は読み込み・保存とも検証エラー（`max_input_tokens_to_use` は env の直書きの値だけを
+    # 既定に寄せる）。
+    max_input_tokens: int = Field(
+        default=DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+        ge=ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN,
+        le=ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX,
+    )
 
     @field_validator("model_id", "display_name")
     @classmethod
@@ -155,6 +175,16 @@ class EnterpriseAiConfiguredModel(BaseModel):
             return DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
         if isinstance(value, str):
             return value.strip().casefold()
+        return value
+
+    @field_validator("max_input_tokens", mode="before")
+    @classmethod
+    def normalize_max_input_tokens(cls, value: object) -> object:
+        """None・空は既定（128000）にし、真偽値は検証エラーにする（bool は int の部分型のため）。"""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
+        if isinstance(value, bool):
+            raise ValueError("入力の上限は整数で入力してください。")
         return value
 
     @field_validator("connection_id", mode="before")
@@ -683,6 +713,68 @@ def reasoning_payload(effort: str) -> dict[str, str] | None:
 def enterprise_ai_reasoning(settings: Any, model_id: str) -> dict[str, str] | None:
     """モデルの Responses API の `reasoning`（`{"effort": ...}`）。送らないときは None（#1425）。"""
     return reasoning_payload(enterprise_ai_reasoning_effort(settings, model_id))
+
+
+def max_input_tokens_to_use(value: object) -> int:
+    """設定の値を、使う入力の上限（tokens）にする（#1437。解釈はここだけ）。
+
+    整数で範囲（4096〜2000000）の中ならその値、値なし・範囲外・整数でない値は既定の 128000。
+    保存・読み込みは `EnterpriseAiConfiguredModel` が検証するので、ここで既定に戻すのは
+    env の直書きなどの値だけ。
+    """
+    if isinstance(value, bool) or value is None:
+        return DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
+    if not ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN <= number <= ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX:
+        return DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
+    return number
+
+
+def enterprise_ai_max_input_tokens(settings: Any, model_id: str) -> int:
+    """モデルに設定した入力の上限（tokens。#1437）。
+
+    登録モデルにない ID（env だけで設定した場合など）は、登録モデルの既定と同じ 128000。
+    """
+    normalized = model_id.strip()
+    return next(
+        (
+            max_input_tokens_to_use(model.max_input_tokens)
+            for model in enterprise_ai_model_catalog(settings)
+            if model.model_id == normalized
+        ),
+        DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+    )
+
+
+def input_token_budget(max_input_tokens: object, percent: object) -> int:
+    """入力の上限に対する割合（%）を、入力の予算（tokens）にする（#1437）。
+
+    割合は 1〜100 に収め（値が無い・数でなければ 50）、上限は `max_input_tokens_to_use` で解釈する。
+    指示・出力の余地を残すため、呼び出し側は 100% 未満を渡す（回答の根拠は 50%、
+    抽出の 1 回分は 60%）。
+    """
+    limit = max_input_tokens_to_use(max_input_tokens)
+    try:
+        share = int(float(str(percent).strip())) if not isinstance(percent, bool) else 50
+    except (TypeError, ValueError):
+        share = 50
+    share = max(1, min(100, share))
+    return max(1, limit * share // 100)
+
+
+def estimate_input_tokens(text: str) -> int:
+    """本文の入力 token の見積もり（#1437。3 製品で共通の 1 つ）。
+
+    モデルごとの tokenizer を持たないため、多めに見積もる: ASCII は 4 字で 1 token、それ以外
+    （かな・漢字など）は 1 字で 1 token。見積もりは文字数を超えないので、文字の予算を token の
+    予算以下にすれば token も予算を超えない。
+    """
+    value = text or ""
+    ascii_count = sum(1 for char in value if ord(char) < 0x80)
+    return (len(value) - ascii_count) + (ascii_count + 3) // 4
 
 
 def _seed_input(value: object) -> object:
@@ -1563,6 +1655,7 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
                         "vision_enabled",
                         "connection_id",
                         "reasoning_effort",
+                        "max_input_tokens",
                     }
                 )
                 for model in enterprise.models

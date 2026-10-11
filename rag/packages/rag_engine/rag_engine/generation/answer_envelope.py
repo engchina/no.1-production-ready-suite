@@ -11,8 +11,9 @@
   提示だけ（適用は未確認）で答えた。利用者に聞けば分かる条件（質問で特定されていない対象・利用者自身の
   ロールや承認。草稿の external_data_items の kind=user_condition）だけを確かめる回答もここ（#1453）。
 - needs_environment_data: 回答の確定に、利用者に聞いても分からない現場の実データ（設定値・記録・ログ）の
-  確認が要る。
-- insufficient_evidence: 公開できる説明も原文も無く、資料から答えられない。
+  確認が要る。別の資料の確認（`confirmation_lines` の「資料:」の行）は実データに数えない（#1491）。
+- insufficient_evidence: 公開できる説明も原文も無く、資料から答えられない。実行できる説明が無く、要求が
+  すべて答えられていない（missing）ときも、実データ・別の資料の確認より先にここにする（#1491）。
 - needs_clarification / needs_human: 利用者への確認・人への引き継ぎ（業務ガイドと会話の段で決める。
   ここでは作らない）。
 """
@@ -33,6 +34,9 @@ AnswerOutcome = Literal[
 ]
 # 要求の状態。unknown は監査が無く充足を確かめていない要求。
 RequestStatus = Literal["addressed", "partial", "missing", "unknown"]
+# 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
+# ではないので、needs_environment_data の判定に数えない（#1491）。
+REFERENCE_CONFIRMATION_PREFIX = "資料: "
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -100,19 +104,25 @@ def build_envelope(
     """回答の構造を組み立てる。
 
     confirmations は現場の実データ・別の資料の確認、user_conditions は利用者に確かめる条件（#1453）。
-    利用者に確かめる条件は適用の条件（conditions）に載せ、現場の実データの確認には数えない。
+    利用者に確かめる条件は適用の条件（conditions）に載せ、現場の実データの確認には数えない。別の資料の
+    確認（「資料:」の行）も現場の実データではないので、needs_environment_data の判定に数えない（#1491）。
     """
     request_entries = envelope_requests(requests, reviews)
     actionable = [item for item in items if item.get("applies") != "quote_only"]
     unsettled = [item for item in actionable if item.get("applies") in {"conditional", "unverified"}]
     unanswered = [entry for entry in request_entries if entry["status"] in {"partial", "missing"}]
+    environment = [line for line in confirmations if not line.startswith(REFERENCE_CONFIRMATION_PREFIX)]
+    # 実行できる説明が無く、監査した要求がすべて答えられていない: 資料から答えられない（#1491）。
+    no_answer = (
+        not actionable and bool(request_entries) and all(entry["status"] == "missing" for entry in request_entries)
+    )
     conditions = _unique([*(str(item.get("condition") or "") for item in unsettled), *user_conditions])
     handoff: list[str] = []
     if unanswered:
         handoff.append("unanswered_requests")
     if gaps:
         handoff.append("gaps")
-    if external_data_required or confirmations:
+    if external_data_required or environment:
         handoff.append("environment_data")
     if any(item.get("applies") == "unverified" for item in unsettled):
         handoff.append("unverified_applicability")
@@ -124,7 +134,9 @@ def build_envelope(
         handoff.append("off_goal")
 
     outcome: AnswerOutcome
-    if external_data_required or (confirmations and not actionable):
+    if no_answer:
+        outcome = "insufficient_evidence"
+    elif external_data_required or (environment and not actionable):
         outcome = "needs_environment_data"
     elif not items:
         outcome = "insufficient_evidence"
@@ -172,6 +184,7 @@ def fallback_envelope(
 
 __all__ = [
     "ENVELOPE_SCHEMA_VERSION",
+    "REFERENCE_CONFIRMATION_PREFIX",
     "AnswerOutcome",
     "build_envelope",
     "envelope_item",

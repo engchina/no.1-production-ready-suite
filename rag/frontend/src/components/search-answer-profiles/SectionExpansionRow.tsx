@@ -14,12 +14,16 @@ export const SECTION_EXPANSION_INPUT_TOKEN_PERCENT_DEFAULT = 50;
 /** 広げるのを終える時間（回答の開始からの秒。backend は 60〜600）の選択肢と既定。 */
 export const SECTION_EXPANSION_TIME_LIMITS = [120, 180, 240, 300, 360, 420, 480, 540, 600] as const;
 export const SECTION_EXPANSION_TIME_LIMIT_DEFAULT = 600;
+/** 原文を抜き出す呼び出しの上限（1 回の回答。#1437。backend は 1〜16）の選択肢と既定。 */
+export const SECTION_EXTRACTION_MAX_CALLS = [1, 2, 4, 6, 8, 10, 12, 16] as const;
+export const SECTION_EXTRACTION_MAX_CALLS_DEFAULT = 8;
 
 export interface SectionExpansionValue {
   section_expansion_enabled?: boolean | null;
   section_expansion_max_levels?: number | null;
   section_expansion_input_token_percent?: number | null;
   section_expansion_time_limit_seconds?: number | null;
+  section_extraction_max_calls?: number | null;
 }
 
 function options(
@@ -67,6 +71,18 @@ const TIME_LIMIT_OPTIONS = options(
     ),
 );
 
+const EXTRACTION_CALL_OPTIONS = options(
+  SECTION_EXTRACTION_MAX_CALLS,
+  SECTION_EXTRACTION_MAX_CALLS_DEFAULT,
+  (count, isDefault) =>
+    t(
+      isDefault
+        ? "searchAnswerProfiles.sectionExpansion.extractionCallsDefault"
+        : "searchAnswerProfiles.sectionExpansion.extractionCallsValue",
+      { count },
+    ),
+);
+
 /**
  * 開閉を切り替えたときの query の差分。既定（使う）と同じ on は null で保存して既定に追従させ、off だけを
  * false で保存する。どちらも上限を一緒に外す（#1436）。
@@ -77,6 +93,7 @@ export function sectionExpansionPatch(enabled: boolean): Required<SectionExpansi
     section_expansion_max_levels: null,
     section_expansion_input_token_percent: null,
     section_expansion_time_limit_seconds: null,
+    section_extraction_max_calls: null,
   };
 }
 
@@ -94,7 +111,9 @@ export function sectionExpansionLimitValue(next: string, defaultValue: number): 
 /**
  * 検索・回答プロファイルの「当たった根拠の章節から親の章節へ広げる」（#1436）。
  *
- * 環境変数は持たず、このプロファイルの検索だけに効く（既定 on）。上限（段・根拠の入力・時間）は on のときだけ出す。
+ * 環境変数は持たず、このプロファイルの検索だけに効く（既定 on）。上限（段・根拠の入力・時間・原文を抜き出す呼び出し
+ * の回数。#1437）は on のときだけ出す。4 つの欄は、md で 2 列、xl で 4 列に並べる（ラベルが長く、3 列以上の md
+ * の幅では折り返すため）。
  */
 export function SectionExpansionRow({
   value,
@@ -136,7 +155,7 @@ export function SectionExpansionRow({
         </div>
         {enabled ? (
           <div className="space-y-2">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               <SelectField
                 id="search-answer-profile-section-expansion-max-levels"
                 label={t("searchAnswerProfiles.sectionExpansion.maxLevels")}
@@ -181,6 +200,18 @@ export function SectionExpansionRow({
                       next,
                       SECTION_EXPANSION_TIME_LIMIT_DEFAULT,
                     ),
+                  })
+                }
+              />
+              <SelectField
+                id="search-answer-profile-section-extraction-max-calls"
+                label={t("searchAnswerProfiles.sectionExpansion.extractionCalls")}
+                value={String(value.section_extraction_max_calls ?? SECTION_EXTRACTION_MAX_CALLS_DEFAULT)}
+                options={EXTRACTION_CALL_OPTIONS}
+                disabled={disabled}
+                onValueChange={(next) =>
+                  onChange({
+                    section_extraction_max_calls: sectionExpansionLimitValue(next, SECTION_EXTRACTION_MAX_CALLS_DEFAULT),
                   })
                 }
               />
