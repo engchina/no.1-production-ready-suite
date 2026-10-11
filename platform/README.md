@@ -223,29 +223,27 @@ API は 422 で「既定のテキストモデルを選択してください。�
 ## 登録モデルごとの推論の量（`reasoning_effort`。#1425）
 
 「システム設定 › モデル」の登録モデルは、行ごとに「推論の量」（モデルが回答の前に考える量。Responses API の `reasoning.effort`）を持つ。
-**既定は `high`**（結果の質を優先する）。新しく追加したモデルも、値を書いていない保存済みのモデル（`model-settings.json` の version 3 まで・
-`.env` の `PLATFORM_OCI_ENTERPRISE_AI_MODELS`）も `high` になり、登録モデルにない ID（`.env` だけで決めたモデルなど）も `high` を送る。
 
-- 選択肢は「送らない（モデルの既定）」（空。`reasoning` を送らない）と `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`。
-  受け付ける値はモデル（endpoint）で違うので、画面は全部を出し、**保存の前に行の「テスト」で確かめる**（テストは保存前に選んだ値で呼び、
-  受け付けない値は 400 の本文を結果パネルの「詳細」に出す）。2026-10-11 の実測（短い同じ入力）:
-
-  | モデル（接続） | 受け付ける値 | 受け付けない値（400） |
-  |---|---|---|
-  | `claude-opus-5`（ターシャリ接続） | none / minimal / low / medium / high / xhigh / max | ultra |
-  | `openai.gpt-oss-120b` | low / medium / high | none / minimal（「Harmony は未対応」）/ xhigh / max / ultra |
-  | `xai.grok-4.3` | minimal / low / medium / high | none / xhigh / max / ultra |
-
-  どのモデルも受け付けない値（`ultra` など）は選択肢に出さず、API（422）も受け付けない。`high` を受け付けないモデルを足すときは、
-  そのモデルの行を「送らない」か受け付ける値にする。
+- **選択肢は `none` / `low` / `medium` / `high` の 4 つ、既定は `medium`。** 新しく追加したモデルも、値を書いていない保存済みのモデル
+  （`model-settings.json` の version 3 まで・`.env` の `PLATFORM_OCI_ENTERPRISE_AI_MODELS`）も `medium` になり、登録モデルにない ID
+  （`.env` だけで決めたモデルなど）も `medium` を送る。選択肢以外の値（`minimal` / `xhigh` など）は保存（422）でも読み込みでも検証エラー。
+- **`none` は「送らない」**（`reasoning` を送らず、モデル（endpoint）の既定のまま。画面は「none（送らない）」）。それ以外はその値を送る。
+  値の解釈は `pr_system_settings.model.reasoning_effort_to_send` の 1 か所だけで、3 製品は `enterprise_ai_reasoning(settings, model_id)`
+  （送る `{"effort": …}`、送らないなら `None`）か `enterprise_ai_reasoning_effort_to_send`（送る値、送らないなら空）を使う。
+- 4 つは 3 つの登録モデルとも使える（2026-10-11 の実測。`minimal` は `openai.gpt-oss-120b` が 400「Harmony は未対応」、
+  `xhigh` / `max` は `claude-opus-5` だけが受け付けるので選択肢に入れない。`none` は送らないのでどのモデルでも使える）。
+  モデルを足したときは、行の「テスト」で選んだ値でモデルが応答するかを確かめる（テストは保存前に選んだ値で呼ぶ）。
 - 保存の形式: `model-settings.json` は version 4 で、`enterprise_ai.models[].reasoning_effort` を書く。version 3 はそのまま読める
-  （書き換えは要らない。画面で保存し直すと version 4 になる）。手で書いた知らない値は、読み込みを止めず既定（`high`）として読む。
-- 送る所（3 製品とも、そのモデルの値が空でなければ `reasoning: {"effort": …}` を送る。payload template の構成では template に任せる）:
-  - RAG: 共有 client（`rag_parser_core.OciEnterpriseAiConfig` の `text_reasoning_effort` / `vision_reasoning_effort`）、回答フローの
-    `responses.parse`（`build_engine_settings` の `OCI_ENTERPRISE_AI_REASONING_EFFORT` / `OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT`）、
-    OCI の parser（`service_runtime_env` の `PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT` / `_VISION_REASONING_EFFORT`。
-    値を変えたら「サービス管理」から parser を再起動する）。
-  - NL2SQL: `enterprise_ai_client`（テキスト・画像の呼び出し）。
+  （書き換えは要らない。画面で保存し直すと version 4 になる）。
+- 送る所（3 製品とも、Enterprise AI を呼ぶ所すべて。payload template の構成では template に任せる）:
+  - RAG: 共有 client（`rag_parser_core.OciEnterpriseAiConfig` の `text_reasoning_effort` / `vision_reasoning_effort`。回答・要約・
+    文書解析の VLM・図の読み取り・接続テスト）、回答フローの `responses.parse`（`build_engine_settings` の
+    `OCI_ENTERPRISE_AI_REASONING_EFFORT` / `OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT`。回答・評価・検証）、OCI の parser
+    （`service_runtime_env` の `PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT` / `_VISION_REASONING_EFFORT`。値を変えたら
+    「サービス管理」から parser を再起動する）。env・config で渡す値は「送る値」（`none` は空）。
+  - NL2SQL: `enterprise_ai_client`（SQL 生成・評価・オントロジーの VLM など、テキストと画像のすべての呼び出しと接続テスト）。
   - Agent: 組み込み Runtime の SDK の `ModelSettings(reasoning=…)`（Run と品質評価の判定）とモデルの接続テスト。
-- 実行時は `pr_system_settings.model.enterprise_ai_reasoning_effort(settings, model_id)`（`enterprise_ai_reasoning` は送る値の dict）で引く。
 - `max_output_tokens` は思考の token も含むので、推論の量を減らすと出力上限での未完了（#987）も減る。
+- 推論型のモデルの 1 回の呼び出しが数十秒になるため、RAG の回答の上限 `RAG_ANSWER_TIMEOUT_SECONDS` の既定を 600 秒（上限と同じ）にし、
+  Agent の接続 `rag` の待ち時間 `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` の既定を 630 秒（MCP のタイムアウト秒の上限は 900 秒）にした。
+  画面（630 秒）と Nginx（660 秒）は前から回答の上限より長い。

@@ -1267,7 +1267,7 @@ function ModelCatalogEditor({
       >
         <div
           className={cn(
-            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted lg:grid lg:gap-3",
+            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted xl:grid xl:gap-3",
             CATALOG_COLUMNS,
           )}
         >
@@ -1290,7 +1290,7 @@ function ModelCatalogEditor({
             <div
               key={index}
               className={cn(
-                "grid gap-3 border-b border-border p-3 last:border-b-0 lg:items-start",
+                "grid gap-3 border-b border-border p-3 last:border-b-0 xl:items-start",
                 CATALOG_COLUMNS,
               )}
             >
@@ -1325,7 +1325,7 @@ function ModelCatalogEditor({
                 }
                 // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面の
                 // ラベルは同じ行の他の欄（CompactTextInput）と同じ小さい文字にそろえる。
-                className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
+                className="min-w-0 max-xl:[&>label]:text-xs max-xl:[&>label]:text-fg-muted xl:[&>label]:sr-only"
               />
               <SelectField
                 id={modelReasoningEffortFieldId(index)}
@@ -1341,11 +1341,11 @@ function ModelCatalogEditor({
                   onModelChange(index, { reasoning_effort: value })
                 }
                 // 接続の欄と同じく、広い画面のラベルは読み上げだけにする（表頭が見出し）。
-                className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
+                className="min-w-0 max-xl:[&>label]:text-xs max-xl:[&>label]:text-fg-muted xl:[&>label]:sr-only"
               />
               {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。 */}
-              <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg lg:justify-start">
-                <span className="lg:sr-only">
+              <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg xl:justify-start">
+                <span className="xl:sr-only">
                   {t("settings.model.enterprise.vision")}
                 </span>
                 <Switch
@@ -1358,7 +1358,7 @@ function ModelCatalogEditor({
               </div>
               <div className="flex min-h-[var(--control-height-md)] items-center">
                 {/* 375px でラベルが「テス / ト」と折り返さないよう、ボタンに幅を譲らせる。 */}
-                <span className="mr-2 shrink-0 whitespace-nowrap text-xs font-medium text-fg-muted lg:sr-only">
+                <span className="mr-2 shrink-0 whitespace-nowrap text-xs font-medium text-fg-muted xl:sr-only">
                   {t("settings.model.test.action")}
                 </span>
                 <TestButton
@@ -1389,7 +1389,7 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="lg:col-span-7"
+                className="xl:col-span-7"
               />
             </div>
           );
@@ -1429,11 +1429,11 @@ const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoning
 
 /**
  * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 画像入力（Vision）に対応 / テスト / 削除）。
- * 7 列はサイドバーを引いた md の本文幅では窮屈なため、lg から表の形にする（#533 / #1425）。
- * 推論の量は短い値（「none（送らない）」・medium など）なので固定の幅にし、残りをモデル ID・表示名・接続に回す。
+ * 7 列はサイドバーを引いた lg（1024px）の本文幅では欄が読めないほど狭いため、xl（1280px）から表の形にする
+ * （#533 / #1425）。推論の量は「none（送らない）」が読める固定の幅にし、残りをモデル ID・表示名・接続に回す。
  */
 const CATALOG_COLUMNS =
-  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_9.5rem_7rem_7rem_3.25rem]";
+  "xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_6.5rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
@@ -1518,7 +1518,7 @@ function CompactTextInput({
       onValueChange={onChange}
       // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面のラベルは
       // 同じ行の選択欄（接続）と同じ小さい文字にする（#631 でネイティブの input から置き換えた）。
-      className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
+      className="min-w-0 max-xl:[&>label]:text-xs max-xl:[&>label]:text-fg-muted xl:[&>label]:sr-only"
     />
   );
 }
