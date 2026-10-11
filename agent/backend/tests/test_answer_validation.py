@@ -28,8 +28,8 @@ from test_clarification_preface import CLARIFICATIONS
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import (
     is_heading,
+    list_heading_lines,
     non_claim_passages,
-    numbered_heading_lines,
     passage_kind,
     passage_spans,
 )
@@ -1460,15 +1460,37 @@ def test_numbered_headings_are_decided_by_the_following_line(case: dict[str, str
     text = case["passage"]
     for below in ("   - 資料の記載", "- 資料の記載", "  資料の記載", "→ 資料の記載"):
         answer = f"{text}\n\n{below}"
-        assert numbered_heading_lines(answer) == {text}
+        assert list_heading_lines(answer) == {text}
         assert non_claim_passages(answer).get(text) == "heading"
     assert not is_heading(text)
     assert passage_kind(text) is None
     assert text not in non_claim_passages(text)
     listed = f"{text}\n9. 次の項目\n   - 資料の記載"
-    assert text not in numbered_heading_lines(listed)
+    assert text not in list_heading_lines(listed)
     assert text not in non_claim_passages(listed)
-    assert numbered_heading_lines(f"{text}\n**次の節**") == set()
+    assert list_heading_lines(f"{text}\n**次の節**") == set()
+
+
+@pytest.mark.parametrize(
+    "passage",
+    [
+        "- システム台帳（system-ledger.xlsx・シート「システム台帳」）",
+        "- **システム台帳**（system-ledger.xlsx、シート「システム台帳」）",
+    ],
+    ids=["sheet-note", "bold-document"],
+)
+def test_bullet_document_with_file_note_is_a_citation(passage: str) -> None:
+    """資料のファイル名の注記が付いた箇条書きの行は、次の行に関係なく出典の行（#1486）。
+
+    e1467 の run_93a965a4・run_eff5f621 の「根拠」の行。RAG は下に字下げした行が続くときだけ見出しに
+    する（`list_heading_lines`）ので、見出しの契約（headings.json）には入れず両方のテストで個別に
+    確かめる。
+    """
+    assert passage_kind(passage) == "citation"
+    for following in ("  - SYS-105 正式名: ドキュメントポータル / 重要度: B", "- 組織規程（1 頁）"):
+        answer = f"**根拠**\n{passage}\n{following}"
+        assert passage not in list_heading_lines(answer)
+        assert non_claim_passages(answer).get(passage) == "citation"
 
 
 def test_numbered_list_items_ending_with_heading_words_are_claims() -> None:
@@ -1486,16 +1508,39 @@ def test_numbered_list_items_ending_with_heading_words_are_claims() -> None:
     ]
     answer = "**申請書に書く 4 項目**\n" + "\n".join(items) + "\n\n**条件によって加わる項目**"
     kinds = non_claim_passages(answer)
-    assert numbered_heading_lines(answer) == set()
+    assert list_heading_lines(answer) == set()
     assert kinds.get("**申請書に書く 4 項目**") == "heading"
     for item in items:
         assert not is_heading(item)
         assert passage_kind(item) is None
         assert item not in kinds
     below = "3. 切り戻しの手順\n   1. 旧版に戻す\n   2. 動作を確かめる"
-    assert numbered_heading_lines(below) == {"3. 切り戻しの手順"}
+    assert list_heading_lines(below) == {"3. 切り戻しの手順"}
     assert non_claim_passages(below).get("3. 切り戻しの手順") == "heading"
     assert "1. 旧版に戻す" not in non_claim_passages(below)
+
+
+@pytest.mark.parametrize(
+    "case", HEADING_CASES["bullet_heading_passages"], ids=lambda case: str(case["id"])
+)
+def test_bullet_headings_are_decided_by_the_following_line(case: dict[str, str]) -> None:
+    """箇条書きの見出しの行は、次の行が下位の内容（深い字下げ・「→」）のときだけ見出し（#1486）。
+
+    単独の行と、同じ字下げの箇条書きの行が続く一覧の項目（「ご確認いただきたい点」の「- 組織規程
+    （ご担当部署の承認者）」）は、終わりの語が一覧にあっても主張のまま確かめる。
+    """
+    text = case["passage"]
+    for below in ("   - 資料の記載", "  資料の記載", "→ 資料の記載"):
+        answer = f"{text}\n\n{below}"
+        assert list_heading_lines(answer) == {text}
+        assert non_claim_passages(answer).get(text) == "heading"
+    assert not is_heading(text)
+    assert passage_kind(text) is None
+    assert text not in non_claim_passages(text)
+    for sibling in ("- 次の項目", "・次の項目", "1. 次の項目", "**次の節**"):
+        listed = f"{text}\n{sibling}\n   - 資料の記載"
+        assert text not in list_heading_lines(listed)
+        assert text not in non_claim_passages(listed)
 
 
 @pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: str(case["id"]))
@@ -1509,7 +1554,7 @@ def test_short_statements_are_not_headings(case: dict[str, str]) -> None:
     assert passage_kind(text) is None
     assert text not in non_claim_passages(text)
     below = f"{text}\n   - 資料の記載"
-    assert numbered_heading_lines(below) == set()
+    assert list_heading_lines(below) == set()
     assert text not in non_claim_passages(below)
 
 
