@@ -452,6 +452,36 @@ def is_absence(text: str) -> bool:
     return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
 
 
+# 結論の不足の文の前の、調べたことだけを述べる節（「資料を確認しましたが、」「確認できる根拠を
+# 検索しましたが、」。#1454）。
+_SEARCHED_LEAD = re.compile(
+    r".*?(?:検索|確認|調査|調べ|探)(?:し|い)?(?:ましたが|たが|ましたところ|たところ)、\s*"
+)
+# 結論の不足の文の述語（「該当する設定・手順は見つかりませんでした」「該当する記載を見つけられません
+# でした」）。主語は資料の記載・該当・設定・手順などに限る。
+_ABSENCE_CONCLUSION = re.compile(
+    r"(?:記載|記述|説明|情報|言及|該当|定め|規定|設定|手順|根拠|項目)[^。]{0,24}?"
+    r"(?:見つかりません|見つけられません|見当たりません|ありません|確認できません|確かめられません)"
+    r"(?:でした)?[。．]?$"
+)
+
+
+def is_absence_conclusion(text: str) -> bool:
+    """回答の結論の段落が、質問の対象が資料から確かめられないと述べるか（#1454）。
+
+    `is_absence` に加えて、前に調べたことだけを述べる節（「資料を確認しましたが、」）が付いた
+    不足の文も数える（段落の判定〔主張ではない段落〕には使わない。回答の対応を決めるときに、
+    最初の段落にだけ使う）。数量・逆接（前の節を除く）・操作を含む文は除く。
+    """
+    if is_absence(text):
+        return True
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    value = _TRAILING_NOTE.sub("", _SEARCHED_LEAD.sub("", value, count=1))
+    if not _ABSENCE_CONCLUSION.search(value):
+        return False
+    return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
+
+
 def case_label(text: str) -> str | None:
     """分岐の見出し・ラベル（「2. **個別に付与する場合**」「- グループの場合: …」）の語（#1317）。
 
@@ -616,6 +646,7 @@ __all__ = [
     "case_labels",
     "environment_check_passages",
     "is_absence",
+    "is_absence_conclusion",
     "is_citation",
     "is_clarification_only",
     "is_heading",
