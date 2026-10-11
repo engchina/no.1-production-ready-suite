@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { mockChatRequirement } from "./_helpers/chat-requirement";
 
 /**
  * チャットの前提（業務プロファイルの一覧・開いている会話の内容）の読み込み中・失敗の表示（#1153）。
@@ -26,6 +27,8 @@ const profilePage = {
 
 async function setup(page: Page) {
   await mockDatabaseGateReady(page);
+  // 送信の前の要件の検査（#1442）は「確認が要らない」で、聞かずに SQL を生成する。
+  await mockChatRequirement(page);
   await page.route("**/api/nl2sql/profiles/*/usage-context", (route) =>
     route.fulfill({ json: { data: profile } }),
   );
