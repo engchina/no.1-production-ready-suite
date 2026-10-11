@@ -33,6 +33,9 @@ from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
+from pr_system_settings.model import (
+    enterprise_ai_reasoning_effort_to_send as enterprise_ai_reasoning_effort_to_send,
+)
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
@@ -1004,14 +1007,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
     rag_answer_timeout_seconds: float = Field(
-        default=300.0,
+        default=600.0,
         gt=0.0,
         le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
         description=(
             "LLM を呼ぶ回答生成（チャット・RAG 検索の回答。ストリーム・非ストリーム・MCP。"
             "品質評価の 1 ケース）の通しの上限（秒。#375 / #383）。検索の計画・追加の検索の再分解・"
             "回答の生成で LLM を複数回呼ぶ。上限は LLM 1 回の timeout の設定の上限と同じ。"
-            "画面と Nginx の待ち時間はこれより長くする。"
+            "既定は上限と同じ 600 秒（推論の量の既定 medium で、推論型のモデルの 1 回の呼び出しが"
+            "数十秒になるため。#1425）。画面（630 秒）と Nginx（660 秒）の待ち時間は"
+            "これより長くする。"
         ),
     )
     db_read_timeout_seconds: float = Field(

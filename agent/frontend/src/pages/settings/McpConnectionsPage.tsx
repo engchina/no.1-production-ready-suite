@@ -69,7 +69,7 @@ import { formatDate } from "@/pages/shared/page-helpers";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 /** 外部 MCP のタイムアウト秒の上限（backend の `_MCP_TIMEOUT_MAX_SECONDS` と同じ）。 */
-const MCP_TIMEOUT_MAX_SECONDS = 600;
+const MCP_TIMEOUT_MAX_SECONDS = 900;
 
 /** 接続を使えない理由と直し方（使えるときは出さない。常設の success の面にしない）。 */
 function McpConnectionNotice({ connection }: { connection: McpConnectionSettings }) {

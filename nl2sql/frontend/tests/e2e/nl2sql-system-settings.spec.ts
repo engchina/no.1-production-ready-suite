@@ -3190,6 +3190,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
     display_name: "レビュー用",
     vision_enabled: true,
     connection_id: "primary",
+    // 追加したモデルの推論の量は既定の medium（#1425）。
+    reasoning_effort: "medium",
   });
   const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
   await expect(remove).toBeEnabled();

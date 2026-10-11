@@ -25,6 +25,7 @@ const baseline: ModelSettingsPayload = {
         display_name: "Saved",
         vision_enabled: false,
         connection_id: "primary",
+        reasoning_effort: "medium",
       },
     ],
     default_text_model_id: "saved-llm",

@@ -98,6 +98,11 @@ export const MODEL_MESSAGES = {
     "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
   "settings.model.enterprise.projectHelpTertiary":
     "OCI Enterprise AI を使うときだけ、Generative AI project OCID を入力します（入力したときだけ OpenAI-Project ヘッダーで送ります）。OpenAI や OpenAI 互換 API では空のままにします。",
+  "settings.model.enterprise.reasoningEffort": "推論の量",
+  "settings.model.enterprise.reasoningEffortOfModel": "モデル {number} の推論の量",
+  "settings.model.enterprise.reasoningEffortHelp":
+    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は medium で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。",
+  "settings.model.enterprise.reasoningEffort.none": "none（送らない）",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
   "settings.model.enterprise.removeConfirm.descriptionUnnamed":

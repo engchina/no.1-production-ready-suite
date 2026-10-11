@@ -684,6 +684,88 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
   await expect(page.getByText("401 Unauthorized: invalid model")).toHaveCount(0);
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`登録モデルごとに推論の量を選び、テストと保存に選んだ値を送る（既定は medium。#1425, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let savedPayload: { enterprise_ai: { models: Array<Record<string, unknown>> } } | undefined;
+    const testedEfforts: unknown[] = [];
+    await mockModelSettings(page, (payload) => {
+      savedPayload = payload as typeof savedPayload;
+    });
+    await page.route("**/api/settings/model/test", async (route) => {
+      const payload = route.request().postDataJSON();
+      testedEfforts.push(payload.settings.enterprise_ai.models[0].reasoning_effort);
+      await route.fulfill({
+        json: {
+          data: {
+            status: "success",
+            target_type: payload.target_type,
+            model_id: payload.model_id,
+            message: `Enterprise AI の回答生成モデル「${payload.model_id}」から応答を取得しました。`,
+            troubleshooting: [],
+            raw_error: null,
+            error_type: null,
+            elapsed_ms: 42,
+            checked_at: "2026-10-11T00:00:00Z",
+            details: { surface: "llm", response_chars: 8 },
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+    });
+    await page.goto("/settings/model");
+
+    const effort1 = page.getByRole("combobox", { name: "モデル 1 の推論の量" });
+    // 値の無い保存済みのモデルは既定の medium。
+    await expect(effort1).toHaveText("medium");
+    if (viewport.name === "desktop") {
+      // 広い画面は表頭に「推論の量」を出し、接続の右に並べる。
+      const header = page.locator("#enterprise-model-catalog").getByText("推論の量", { exact: true });
+      await expect(header).toBeVisible();
+      const connectionBox = await page.getByRole("combobox", { name: "モデル 1 の接続" }).boundingBox();
+      const effortBox = await effort1.boundingBox();
+      expect(effortBox!.x).toBeGreaterThan(connectionBox!.x);
+      expect(Math.abs(effortBox!.y - connectionBox!.y)).toBeLessThan(1);
+    }
+    // 説明（none は送らない・保存の前にテスト）を欄から読める。
+    await expect(effort1).toHaveAccessibleDescription(/none は推論の量を送らず.*保存の前に「テスト」/);
+    await effort1.click();
+    await expect(
+      page.getByRole("listbox", { name: "モデル 1 の推論の量" }).getByRole("option")
+    ).toHaveText(["none（送らない）", "low", "medium", "high"]);
+    await page.getByRole("option", { name: "none（送らない）" }).click();
+    await expect(effort1).toHaveText("none（送らない）");
+
+    // テストは保存前に選んだ値で呼ぶ。
+    await page.getByRole("button", { name: "enterprise-llm をテスト" }).click();
+    await expect(
+      page.getByText("Enterprise AI の回答生成モデル「enterprise-llm」から応答を取得しました。")
+    ).toBeVisible();
+    expect(testedEfforts).toEqual(["none"]);
+
+    // 追加したモデルの既定も medium。
+    await page.getByRole("button", { name: "追加" }).click();
+    await expect(page.getByRole("combobox", { name: "モデル 3 の推論の量" })).toHaveText("medium");
+    await page.getByRole("combobox", { name: "モデル 3 の推論の量" }).click();
+    await page.getByRole("option", { name: "high", exact: true }).click();
+    await page.getByRole("textbox", { name: "モデル ID 3" }).fill("claude-opus-5");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(savedPayload?.enterprise_ai.models.map((model) => model.reasoning_effort)).toEqual([
+      "none",
+      "medium",
+      "high",
+    ]);
+    await expectNoPageOverflow(page);
+  });
+}
+
 async function mockModelSettings(
   page: Page,
   onPatch?: (payload: unknown) => void,

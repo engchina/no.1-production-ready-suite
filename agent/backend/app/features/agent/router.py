@@ -56,6 +56,7 @@ from pr_system_settings.database_status import (
     build_database_status_router,
 )
 from pr_system_settings.model import (
+    DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
     EnterpriseAiConnection,
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
@@ -63,6 +64,7 @@ from pr_system_settings.model import (
     build_model_router,
     enterprise_ai_connection_for_model,
     model_payload,
+    reasoning_payload,
 )
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -305,7 +307,8 @@ _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
 
 
-_MCP_TIMEOUT_MAX_SECONDS = 600
+# 接続 `rag` の既定（630 秒。RAG の回答の上限 600 秒より長い。#1425）を画面でも保存し直せる上限。
+_MCP_TIMEOUT_MAX_SECONDS = 900
 
 
 def _validate_mcp_timeout(value: float | None) -> float | None:
@@ -802,13 +805,34 @@ def _enterprise_text_payload(
     }
     if settings.text_payload_template.strip():
         return _render_model_payload_template(settings.text_payload_template, values)
-    return {
-        "model": _enterprise_text_model_id(settings),
-        "instructions": system_prompt,
-        "input": [{"role": "user", "content": user_message}],
-        "temperature": 0,
-        "max_output_tokens": settings.llm_max_output_tokens,
-    }
+    return _with_model_reasoning(
+        settings,
+        _enterprise_text_model_id(settings),
+        {
+            "model": _enterprise_text_model_id(settings),
+            "instructions": system_prompt,
+            "input": [{"role": "user", "content": user_message}],
+            "temperature": 0,
+            "max_output_tokens": settings.llm_max_output_tokens,
+        },
+    )
+
+
+def _with_model_reasoning(
+    settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
+) -> dict[str, object]:
+    """テストするモデルの推論（思考）の量を `reasoning` に入れる（#1425。none は送らない）。
+
+    画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
+    """
+    effort = next(
+        (model.reasoning_effort for model in settings.models if model.model_id == model_id),
+        DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+    )
+    reasoning = reasoning_payload(effort)
+    if reasoning is not None:
+        payload["reasoning"] = reasoning
+    return payload
 
 
 def _enterprise_vision_payload(
@@ -832,11 +856,15 @@ def _enterprise_vision_payload(
     }
     if settings.vision_payload_template.strip():
         return _render_model_payload_template(settings.vision_payload_template, values)
-    return {
-        "model": settings.default_vision_model_id,
-        "input": [{"role": "user", "content": content}],
-        "max_output_tokens": settings.vlm_max_output_tokens,
-    }
+    return _with_model_reasoning(
+        settings,
+        settings.default_vision_model_id,
+        {
+            "model": settings.default_vision_model_id,
+            "input": [{"role": "user", "content": content}],
+            "max_output_tokens": settings.vlm_max_output_tokens,
+        },
+    )
 
 
 def _render_model_payload_template(
@@ -878,7 +906,9 @@ async def _post_enterprise_ai(
         headers["OpenAI-Project"] = connection.project_ocid
     async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
         response = await client.post(url, headers=headers, json=dict(payload))
-    response.raise_for_status()
+    if response.is_error:
+        # 受け付けない推論の量（#1425）などの 400 は、応答の本文に理由があるので結果の詳細に出す。
+        raise ValueError(f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}")
     data = response.json()
     if not isinstance(data, Mapping):
         raise ValueError("Enterprise AI response は JSON object である必要があります。")

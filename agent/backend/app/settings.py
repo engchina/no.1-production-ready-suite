@@ -119,7 +119,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。LLM を使う
     # 呼び出しがあるため、タイムアウトは NL2SQL の待ち時間（最大 45 秒）より長くする。
     agent_external_rag_mcp_url: str | None = None
-    agent_external_rag_timeout_seconds: float = 60.0
+    # RAG の `rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`。既定 600 秒）を通しで待つ
+    # ため、RAG の回答の上限より長くする（RAG の画面の timeout と同じ 630 秒。#1425）。
+    agent_external_rag_timeout_seconds: float = 630.0
     # 画面（ブラウザ）から RAG を開く起点（例: http://rag-host）。RAG の図の根拠を開く短命の URL
     # （#1311）の path をこの起点に付ける。空なら RAG が MCP の呼び出しを受けた起点（MCP の URL の
     # host。private IP のことがある）のまま使う。1 台の Compute（#1316）では同じ origin の `/rag`。

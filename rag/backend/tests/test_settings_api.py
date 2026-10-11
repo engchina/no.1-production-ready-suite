@@ -318,7 +318,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     assert settings.rag_parser_mineru_enabled is True
     assert settings.rag_parser_dots_ocr_enabled is False
     persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
-    assert persisted["version"] == 3
+    assert persisted["version"] == 4
     parser = persisted["parser_adapters"]
     assert parser["adapter_backend"] == "mineru"
     assert parser["docling_enabled"] is True
@@ -1328,12 +1328,14 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "display_name": "enterprise-llm",
             "vision_enabled": False,
             "connection_id": "primary",
+            "reasoning_effort": "medium",
         },
         {
             "model_id": "enterprise-vlm",
             "display_name": "enterprise-vlm",
             "vision_enabled": True,
             "connection_id": "primary",
+            "reasoning_effort": "medium",
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1396,7 +1398,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert stat.S_IMODE(settings_file.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["version"] == 3
+    assert persisted["version"] == 4
     # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
@@ -1406,12 +1408,14 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "display_name": "標準 LLM",
             "vision_enabled": False,
             "connection_id": "primary",
+            "reasoning_effort": "medium",
         },
         {
             "model_id": "enterprise-vlm",
             "display_name": "Vision LLM",
             "vision_enabled": True,
             "connection_id": "primary",
+            "reasoning_effort": "medium",
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"

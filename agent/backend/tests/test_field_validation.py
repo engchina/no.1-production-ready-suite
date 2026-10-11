@@ -46,7 +46,7 @@ async def test_run_with_empty_goal_is_rejected_with_field_message() -> None:
     [
         ("POST", "/api/settings/mcp-connections", {"server_id": "t0", "timeout_seconds": 0}),
         ("PATCH", "/api/settings/mcp-connections/rag", {"timeout_seconds": -1}),
-        ("PATCH", "/api/settings/mcp-connections/nl2sql", {"timeout_seconds": 601}),
+        ("PATCH", "/api/settings/mcp-connections/nl2sql", {"timeout_seconds": 901}),
     ],
     ids=["mcp-create-zero", "mcp-patch-negative", "mcp-patch-over"],
 )
@@ -56,7 +56,7 @@ async def test_mcp_timeout_is_never_saved_as_zero(
     response = await _request(method, path, payload)
     assert response.status_code == 422
     (message,) = response.json()["error_messages"]
-    assert message.endswith("タイムアウト秒は 0 より大きく 600 以下の数値を入力してください。")
+    assert message.endswith("タイムアウト秒は 0 より大きく 900 以下の数値を入力してください。")
 
 
 @pytest.mark.asyncio

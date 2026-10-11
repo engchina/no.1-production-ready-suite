@@ -21,6 +21,7 @@ from app.settings import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_reasoning,
     enterprise_ai_vision_model_id,
 )
 
@@ -304,7 +305,7 @@ def _build_payload(
         "temperature": values["temperature"],
         "max_output_tokens": values["max_output_tokens"],
     }
-    return _with_output_format(payload, response_format)
+    return _with_output_format(_with_reasoning(payload, settings, model_id), response_format)
 
 
 def _build_image_payload(
@@ -341,22 +342,37 @@ def _build_image_payload(
             response_format,
         )
     return _with_output_format(
-        {
-            "model": model_id,
-            "input": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": data_url},
-                    ],
-                }
-            ],
-            "temperature": values["temperature"],
-            "max_output_tokens": values["max_output_tokens"],
-        },
+        _with_reasoning(
+            {
+                "model": model_id,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": data_url},
+                        ],
+                    }
+                ],
+                "temperature": values["temperature"],
+                "max_output_tokens": values["max_output_tokens"],
+            },
+            settings,
+            model_id,
+        ),
         response_format,
     )
+
+
+def _with_reasoning(payload: dict[str, Any], settings: Settings, model_id: str) -> dict[str, Any]:
+    """モデルの推論（思考）の量を Responses API の `reasoning` に入れる（#1425。none は送らない）。
+
+    標準の payload だけに入れる（payload template の構成は template に任せる）。
+    """
+    reasoning = enterprise_ai_reasoning(settings, model_id)
+    if reasoning is not None:
+        payload["reasoning"] = reasoning
+    return payload
 
 
 def _with_output_format(

@@ -59,9 +59,9 @@ for (const viewport of [
 
       await expectFieldError(page, "mcp-server-timeout", "タイムアウト秒を入力してください。");
       await expect(page.locator("#mcp-server-timeout")).toBeFocused();
-      await page.locator("#mcp-server-timeout").fill("601");
+      await page.locator("#mcp-server-timeout").fill("901");
       await page.getByRole("button", { name: "作成" }).click();
-      await expectFieldError(page, "mcp-server-timeout", "タイムアウト秒は 0 より大きく 600 以下の数値を入力してください。");
+      await expectFieldError(page, "mcp-server-timeout", "タイムアウト秒は 0 より大きく 900 以下の数値を入力してください。");
       expect(patchCount(mockApi, "/settings/mcp-connections", "POST")).toBe(0);
       await expectNoHorizontalOverflow(page);
     });

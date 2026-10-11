@@ -155,6 +155,9 @@ class LlmProviderSettings:
     model: str
     supports_vision: bool = False
     endpoint: str = ""
+    # 推論(思考)の量の送る値(#1425。Responses API の `reasoning.effort`)。空は送らない。
+    # backend が platform の `reasoning_effort_to_send` で決めて渡す(none は空)。
+    reasoning_effort: str = ""
 
     @property
     def base_url(self) -> str:
@@ -303,6 +306,13 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     vision_endpoint = env.get("OCI_ENTERPRISE_AI_VLM_ENDPOINT", "").strip() or endpoint
     vision_project = env.get("OCI_ENTERPRISE_AI_VLM_PROJECT_OCID", "").strip() or project
     vision_api_key = env.get("OCI_ENTERPRISE_AI_VLM_API_KEY", "").strip() or api_key
+    # 推論(思考)の量はモデルごと(#1425)。Vision のモデルを指定しないときは回答のモデルの値。
+    answer_reasoning = env.get("OCI_ENTERPRISE_AI_REASONING_EFFORT", "").strip()
+    vision_reasoning = (
+        env.get("OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT", "").strip()
+        if env.get("OCI_ENTERPRISE_AI_VLM_MODEL", "").strip()
+        else answer_reasoning
+    )
     llm_providers = {
         ENTERPRISE_AI_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_LLM_PROVIDER,
@@ -312,6 +322,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             api_key=api_key,
             model=answer_model,
             endpoint=endpoint,
+            reasoning_effort=answer_reasoning,
         ),
         ENTERPRISE_AI_VISION_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -322,6 +333,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             model=vision_model,
             supports_vision=True,
             endpoint=vision_endpoint,
+            reasoning_effort=vision_reasoning,
         ),
     }
     default_vision_llm = normalize_llm_provider_id(

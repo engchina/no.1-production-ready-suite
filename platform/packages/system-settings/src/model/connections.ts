@@ -7,6 +7,7 @@ import type { SelectFieldOption } from "@production-ready/ui";
 
 import { t } from "./messages";
 import {
+  DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
   ENTERPRISE_AI_CONNECTION_IDS,
   type EnterpriseAiConfiguredModel,
   type EnterpriseAiConnectionId,
@@ -346,6 +347,9 @@ export function normalizeModelSettings(
       models: enterprise.models.map((model) => ({
         ...model,
         connection_id: modelConnectionId(model),
+        // 値の無いモデルは既定の推論の量（#1425）。空（送らない）はそのまま。
+        reasoning_effort:
+          model.reasoning_effort ?? DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
       })),
     },
     generative_ai: { ...settings.generative_ai },

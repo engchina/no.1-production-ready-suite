@@ -18,7 +18,7 @@ from rag_engine.resources.deadline import (
     remaining_seconds,
 )
 
-PROVIDER = SimpleNamespace(model="stub-model", label="stub")
+PROVIDER = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="")
 
 
 def _settings(**overrides):

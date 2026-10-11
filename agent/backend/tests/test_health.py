@@ -143,6 +143,7 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
 
 class _FakeResponse:
     status_code = 200
+    is_error = False
     headers: dict[str, str] = {}
     content = b"{}"
 
@@ -158,6 +159,7 @@ class _FakeResponse:
 
 class _FakeStreamResponse:
     status_code = 200
+    is_error = False
     headers: dict[str, str] = {}
     content = b"stream"
 

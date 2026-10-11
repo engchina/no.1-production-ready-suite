@@ -8,7 +8,10 @@
 - API key は共通 `.env`（`platform/.env`）の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY`
   （プライマリ接続）・`PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）・
   `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）だけに保存し、JSON には書かない
-- それ以外は `model-settings.json`（`version: 3`）へ保存し、起動時と mtime の変化時に読み込む
+- それ以外は `model-settings.json`（`version: 4`）へ保存し、起動時と mtime の変化時に読み込む
+- 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は medium）。
+  3 製品の呼び出しは `enterprise_ai_reasoning`（送る値の解釈はここだけ。none は送らない）で
+  モデルから引き、Responses API の `reasoning: {"effort": ...}` を送る
 - 製品固有の節（RAG の `parser_adapters`）は `ModelSettingsSection` で読み書きする
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
 - 既定のモデルは 2 つ（#499）。画像を読む呼び出しは「既定の Vision モデル」、
@@ -62,13 +65,41 @@ _OPTIONAL_CONNECTION_IDS = ENTERPRISE_AI_CONNECTION_IDS[1:]
 ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
     {ENTERPRISE_AI_TERTIARY_CONNECTION_ID}
 )
-MODEL_SETTINGS_DOCUMENT_VERSION = 3
+# 4: 登録モデルの `reasoning_effort`（#1425）。3 の JSON はそのまま読める
+# （項目が無い = 既定の medium）。
+MODEL_SETTINGS_DOCUMENT_VERSION = 4
+# この版より前の JSON だけが API key（`enterprise_ai.api_key`）を持てた
+# （v3 から secret は `.env`）。
+MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION = 3
 MODEL_SETTINGS_FILE_MODE = 0o600
 MODEL_SETTINGS_DIRECTORY_MODE = 0o700
 
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
 EnterpriseAiConnectionId = Literal["primary", "secondary", "tertiary"]
 ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
+# 推論（思考）の量（#1425。Responses API の `reasoning.effort`）。選択肢は 4 つで、既定は medium。
+# none は「送らない」（`reasoning` を送らない。endpoint の既定のまま）で、それ以外はその値を送る。
+# 解釈は `reasoning_effort_to_send` の 1 か所だけにし、3 製品はこれ
+# （か `enterprise_ai_reasoning`）を使う。
+# 受け付ける値はモデル（endpoint）で違うので、確かめるのはモデルの接続テストに任せる。
+# 2026-10-11 の実測（短い同じ入力）:
+# - claude-opus-5（ターシャリ接続）: none / minimal / low / medium / high
+#   （と xhigh / max）を受け付ける
+# - openai.gpt-oss-120b: low / medium / high（none・xhigh・max は 400、
+#   minimal は 400「Harmony は未対応」）
+# - xai.grok-4.3: minimal / low / medium / high（none・xhigh・max は 400）
+# 選択肢は 3 モデルとも使える none / low / medium / high だけにする（none は送らないので、
+# どのモデルでも使える。minimal は gpt-oss が受け付けないので持たない）。
+EnterpriseAiReasoningEffort = Literal["none", "low", "medium", "high"]
+ENTERPRISE_AI_REASONING_EFFORTS: Final[tuple[str, ...]] = (
+    "none",
+    "low",
+    "medium",
+    "high",
+)
+DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: Final = "medium"
+# 「送らない」の値。
+ENTERPRISE_AI_REASONING_EFFORT_OMIT: Final = "none"
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 ModelTestDetails = dict[str, str | int | float | bool | None]
@@ -86,12 +117,28 @@ class EnterpriseAiConfiguredModel(BaseModel):
     # 呼び出しに使う接続（#533）。未指定（#533 より前の設定）はプライマリ接続。
     # 存在しない接続を指す値は、保存時に欄のエラーにする（`validate_enterprise_ai_connections`）。
     connection_id: str = Field(default=ENTERPRISE_AI_PRIMARY_CONNECTION_ID, max_length=64)
+    # 推論（思考）の量（#1425）。未指定（#1425 より前の設定も）は既定の medium。
+    # none は `reasoning` を送らない（`reasoning_effort_to_send`）。
+    reasoning_effort: EnterpriseAiReasoningEffort = DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
 
     @field_validator("model_id", "display_name")
     @classmethod
     def strip_text(cls, value: str) -> str:
         """前後空白を設定値へ混入させない。"""
         return value.strip()
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
+    def normalize_reasoning_effort(cls, value: object) -> object:
+        """前後空白・大文字を正規化する。None は未指定と同じ既定（medium）にする。
+
+        選択肢（none / low / medium / high）以外は、読み込み・保存とも検証エラーにする。
+        """
+        if value is None:
+            return DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
+        if isinstance(value, str):
+            return value.strip().casefold()
+        return value
 
     @field_validator("connection_id", mode="before")
     @classmethod
@@ -530,6 +577,50 @@ def enterprise_ai_connection_for_model(settings: Any, model_id: str) -> Enterpri
         ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
     )
     return enterprise_ai_connection(settings, connection_id)
+
+
+def enterprise_ai_reasoning_effort(settings: Any, model_id: str) -> str:
+    """モデルに設定した推論（思考）の量（#1425。none / low / medium / high）。
+
+    登録モデルにない ID（env だけで設定した場合など）は、登録モデルの既定と同じ medium。
+    送る値にするときは `reasoning_effort_to_send` を通す（none は送らない）。
+    """
+    normalized = model_id.strip()
+    return next(
+        (
+            model.reasoning_effort
+            for model in enterprise_ai_model_catalog(settings)
+            if model.model_id == normalized
+        ),
+        DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+    )
+
+
+def reasoning_effort_to_send(effort: str) -> str:
+    """設定の値を、Responses API の `reasoning.effort` に送る値にする（#1425。解釈はここだけ）。
+
+    none（送らない）と空は ""（`reasoning` を送らない）、それ以外はその値。
+    """
+    normalized = (effort or "").strip().casefold()
+    if not normalized or normalized == ENTERPRISE_AI_REASONING_EFFORT_OMIT:
+        return ""
+    return normalized
+
+
+def enterprise_ai_reasoning_effort_to_send(settings: Any, model_id: str) -> str:
+    """モデルの推論の量を送る値で返す（""は送らない）。env・config で値を渡す部品に使う。"""
+    return reasoning_effort_to_send(enterprise_ai_reasoning_effort(settings, model_id))
+
+
+def reasoning_payload(effort: str) -> dict[str, str] | None:
+    """設定の値から Responses API の `reasoning` を作る（送らないなら None）。"""
+    to_send = reasoning_effort_to_send(effort)
+    return {"effort": to_send} if to_send else None
+
+
+def enterprise_ai_reasoning(settings: Any, model_id: str) -> dict[str, str] | None:
+    """モデルの Responses API の `reasoning`（`{"effort": ...}`）。送らないときは None（#1425）。"""
+    return reasoning_payload(enterprise_ai_reasoning_effort(settings, model_id))
 
 
 # --------------------------------------------------------------------------- catalog
@@ -1329,7 +1420,9 @@ class ModelSettingsStore:
         )
         legacy_secret = (enterprise.api_key or "").strip()
         settings.apply_legacy_enterprise_ai_api_key(
-            legacy_secret if persisted.version < MODEL_SETTINGS_DOCUMENT_VERSION else "",
+            legacy_secret
+            if persisted.version < MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION
+            else "",
             detected=bool(legacy_secret),
         )
 
@@ -1346,7 +1439,13 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
             ],
             "models": [
                 model.model_dump(
-                    include={"model_id", "display_name", "vision_enabled", "connection_id"}
+                    include={
+                        "model_id",
+                        "display_name",
+                        "vision_enabled",
+                        "connection_id",
+                        "reasoning_effort",
+                    }
                 )
                 for model in enterprise.models
                 if model.model_id
