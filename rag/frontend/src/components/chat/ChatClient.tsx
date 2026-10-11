@@ -68,6 +68,7 @@ import type {
   ClarificationAnswer,
   ClarificationSuggestionData,
   ChatMessage,
+  CompareModel,
   ConversationDetail,
   ConversationSummary,
   RetrievedChunk,
@@ -144,6 +145,7 @@ function stampNow(ref: { current: number | null }) {
   ref.current = Date.now();
 }
 const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_COMPARE_MODELS: readonly CompareModel[] = [];
 
 /** 会話一覧のページ（検索・回答プロファイルごと。#403）。別の検索・回答プロファイルに移ったら 1 ページ目から。 */
 interface ConversationsPage {
@@ -600,7 +602,7 @@ export function ChatClient() {
   const deleteConversation = useDeleteConversation();
   const confirm = useConfirm();
   const compareModelsQuery = useCompareModels();
-  const compareModels = compareModelsQuery.data ?? [];
+  const compareModels = compareModelsQuery.data ?? EMPTY_COMPARE_MODELS;
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
@@ -627,7 +629,13 @@ export function ChatClient() {
     inlineOpen: historyPanelOpen,
     onInlineOpenChange: setHistoryPanelOpen,
   });
-  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [storedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  // 選んだモデルは今の候補にあるものだけを使う（RAG 検索と同じ）。モデル設定で既定のモデルを変えたら、
+  // 候補から消えたモデルを選んだ状態を残さない（#1416）。
+  const selectedModelIds = useMemo(
+    () => storedModelIds.filter((id) => compareModels.some((model) => model.model_id === id)),
+    [storedModelIds, compareModels]
+  );
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   // この画面で送って保存された回答の処理の段階のイベント（message_id → イベント。#1146 / #1359）。保存済みの
   // 回答の段階（`progress`）が無いとき（保存に失敗した・取り直しが間に合わない）も、この画面の間は「処理の経過」を残す。
@@ -960,7 +968,8 @@ export function ChatClient() {
   }
 
   function toggleModel(modelId: string) {
-    setSelectedModelIds((current) => {
+    setSelectedModelIds(() => {
+      const current = selectedModelIds;
       if (current.includes(modelId)) return current.filter((id) => id !== modelId);
       if (current.length >= COMPARE_MAX) return current;
       return [...current, modelId];

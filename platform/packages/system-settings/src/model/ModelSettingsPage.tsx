@@ -25,7 +25,12 @@ import {
   toast,
   useConfirm,
 } from "@production-ready/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import {
   Cpu,
   Database,
@@ -114,6 +119,12 @@ export interface ModelSettingsPageProps {
   placeholders?: { displayName?: string };
   /** 離脱確認ダイアログの文言の上書き。 */
   draftGuardMessages?: Partial<DraftGuardMessages>;
+  /**
+   * 保存が成功したときに捨てる製品の cache（既定のモデル・登録モデルから作る候補など。#1416）。
+   * 例: RAG のチャット・RAG 検索の「回答するモデル」。`staleTime` を付けた query は、捨てないと
+   * 画面を戻ったときに保存前のモデルを出す（`staleTime` の無い query は開き直すと取り直すので要らない）。
+   */
+  invalidateQueryKeys?: readonly QueryKey[];
 }
 
 /**
@@ -133,6 +144,7 @@ export function ModelSettingsPage({
   errorMessage,
   placeholders,
   draftGuardMessages,
+  invalidateQueryKeys = [],
 }: ModelSettingsPageProps) {
   const queryClient = useQueryClient();
   const query = useQuery({
@@ -146,6 +158,9 @@ export function ModelSettingsPage({
       void queryClient.invalidateQueries({
         queryKey: MODEL_SETTINGS_QUERY_KEY,
       });
+      for (const queryKey of invalidateQueryKeys) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
     },
   });
   const testMutation = useMutation({

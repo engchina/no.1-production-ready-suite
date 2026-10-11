@@ -510,3 +510,128 @@ test("既定のテキストモデルが画像対応モデルも兼ねるとき�
   expect(bodies[0]).toMatchObject({ generate_answer: true, model_id: "xai.grok-4.3" });
   await expectNoPageOverflow(page);
 });
+
+/**
+ * モデル設定（GET / PATCH /api/settings/model）と、その既定のモデルから作る回答するモデルの候補
+ * （backend の answer_model_choices と同じ規則）。保存した既定のモデルを次の候補の取得で返す。
+ */
+async function mockModelSettingsWithAnswerModels(page: Page) {
+  const models = ["openai.gpt-oss-120b", "xai.grok-4.3", "claude-opus-5"].map((modelId) => ({
+    model_id: modelId,
+    display_name: "",
+    vision_enabled: modelId !== "openai.gpt-oss-120b",
+    connection_id: "primary",
+  }));
+  const server = { defaults: { text: "openai.gpt-oss-120b", vision: "xai.grok-4.3" } };
+  const settings = () => ({
+    settings: {
+      enterprise_ai: {
+        connections: [
+          {
+            connection_id: "primary",
+            endpoint: "https://inference.example",
+            project_ocid: "ocid1.generativeaiproject.oc1..example",
+            api_key: "",
+            has_api_key: true,
+            clear_api_key: false,
+          },
+        ],
+        models,
+        default_text_model_id: server.defaults.text,
+        default_vision_model_id: server.defaults.vision,
+        api_path: "/responses",
+        vlm_input_mode: "auto",
+        text_payload_template: "",
+        vision_payload_template: "",
+        text_response_path: "",
+        vision_response_path: "",
+        timeout_seconds: 600,
+        max_retries: 3,
+        llm_max_output_tokens: 1200,
+        vlm_max_output_tokens: 65536,
+      },
+      generative_ai: {
+        embedding_model: "cohere.embed-v4.0",
+        embedding_dim: 1536,
+        rerank_model: "cohere.rerank-v4.0-fast",
+      },
+    },
+    model_settings_file: "model-settings.json",
+    source: "runtime",
+    secret_source: "environment",
+    legacy_secret_detected: false,
+  });
+  const answerModels = () => {
+    const { text, vision } = server.defaults;
+    if (text === vision) return [{ model_id: text, display_name: text, kind: "text_vision" }];
+    return [
+      { model_id: text, display_name: text, kind: "text" },
+      { model_id: vision, display_name: vision, kind: "vision" },
+    ];
+  };
+  await page.route("**/api/settings/model", async (route) => {
+    const request = route.request();
+    if (request.method() === "PATCH") {
+      const payload = request.postDataJSON() as {
+        enterprise_ai: { default_text_model_id: string; default_vision_model_id: string };
+      };
+      server.defaults = {
+        text: payload.enterprise_ai.default_text_model_id,
+        vision: payload.enterprise_ai.default_vision_model_id,
+      };
+    }
+    await route.fulfill(envelope(settings()));
+  });
+  await page.route("**/api/chat/models", (route) => route.fulfill(envelope(answerModels())));
+  return server;
+}
+
+/** 画面を読み直さずに移る（SPA の中の移動。query の cache が残る）。 */
+async function navigateInApp(page: Page, path: string) {
+  await page.evaluate((target) => {
+    window.history.pushState({}, "", target);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, path);
+}
+
+async function chooseDefaultModel(page: Page, name: string, option: string) {
+  const field = page.getByRole("combobox", { name });
+  await field.click();
+  await page.getByRole("listbox", { name }).getByRole("option", { name: option }).click();
+  await expect(field).toContainText(option);
+}
+
+test("モデル設定で既定のモデルを変えたら、チャットの回答するモデルは今の既定のモデルになる（#1416）", async ({
+  page,
+}) => {
+  await mockChat(page, "bv-1");
+  // mockChat の空の候補より後に登録し、モデル設定から作る候補を返す（後に登録した route が先に当たる）。
+  const server = await mockModelSettingsWithAnswerModels(page);
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理ビュー");
+  const chips = page.getByTestId("chat-answer-model").locator("button[aria-pressed]");
+  await expect(chips).toHaveText(["openai.gpt-oss-120b（テキスト）", "xai.grok-4.3（画像対応）"]);
+  // 画像対応モデルを選んでおく（モデル設定で候補から消えたら、選んだ状態を残さない）。
+  const oldVision = page.getByRole("button", { name: "xai.grok-4.3（画像対応）" });
+  await oldVision.click();
+  await expect(oldVision).toHaveAttribute("aria-pressed", "true");
+
+  // 同じタブの中でモデル設定へ移り、既定のテキストモデル・既定の画像対応モデルを claude-opus-5 にして保存する。
+  await navigateInApp(page, "/settings/model");
+  await chooseDefaultModel(page, "既定のテキストモデル", "claude-opus-5");
+  await chooseDefaultModel(page, "既定の画像対応モデル", "claude-opus-5");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+  expect(server.defaults).toEqual({ text: "claude-opus-5", vision: "claude-opus-5" });
+
+  // チャットへ戻ると、保存前の候補ではなく今の既定のモデル（同じなので 1 件で「テキスト・画像対応」）を出す。
+  await navigateInApp(page, "/chat");
+  await expect(chips).toHaveText(["claude-opus-5（テキスト・画像対応）"]);
+  await expect(chips.first()).toHaveAttribute("aria-pressed", "false");
+
+  // ほかのタブ・ほかの製品でモデル設定が保存されたら、このタブに戻ったときに取り直す。
+  server.defaults = { text: "openai.gpt-oss-120b", vision: "claude-opus-5" };
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect(chips).toHaveText(["openai.gpt-oss-120b（テキスト）", "claude-opus-5（画像対応）"]);
+  await expectNoPageOverflow(page);
+});

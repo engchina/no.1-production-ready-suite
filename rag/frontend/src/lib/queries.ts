@@ -1697,23 +1697,27 @@ export function useDeleteConversation() {
   });
 }
 
-/** 比較で選べる設定済み OCI モデル一覧。 */
+/**
+ * チャットの「回答するモデル」の候補（既定のテキストモデルと Vision モデル。#675）。
+ *
+ * 候補は今の既定のモデルから作るので、cache を長く使わない（staleTime は既定の 0）。画面を開いたとき・
+ * タブに戻ったときに取り直し、別のタブ・別の製品で保存したモデル設定も反映する。この画面のモデル設定の
+ * 保存は `ModelSettingsClient` が捨てる（#1416）。
+ */
 export function useCompareModels(enabled = true) {
   return useQuery({
     queryKey: queryKeys.compareModels,
     queryFn: () => api.listCompareModels(),
     enabled,
-    staleTime: 5 * 60 * 1000,
   });
 }
 
-/** RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。 */
+/** RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。cache は `useCompareModels` と同じ（#1416）。 */
 export function useSearchAnswerModels(enabled = true) {
   return useQuery({
     queryKey: queryKeys.searchAnswerModels,
     queryFn: () => api.listSearchAnswerModels(),
     enabled,
-    staleTime: 5 * 60 * 1000,
   });
 }
 
