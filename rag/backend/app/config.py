@@ -479,6 +479,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=180.0,
         description="Oracle 接続テスト API 全体の待機秒数。",
     )
+    oracle_pool_max: int = Field(
+        default=16,
+        ge=1,
+        le=128,
+        description=(
+            "backend の Oracle の接続 pool の上限(接続の数)。回答の検索は 1 問の中で"
+            "検索文ごとの vector / keyword を並行に読むため(1 問で最大 8 本。#1490)、"
+            "同時に答える問の数に合わせる。"
+        ),
+    )
     oracle_vector_target_accuracy: int = Field(
         default=95,
         ge=1,
