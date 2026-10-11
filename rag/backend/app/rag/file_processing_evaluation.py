@@ -3496,6 +3496,10 @@ def _has_traceable_citation_metadata(
     頁のある引用（PDF・画像など）は頁と、要素の ID・bbox・節のどれかがあればたどれる。
     表計算（Excel の行の記録。#1221）の引用は頁を持たないので、シート名と行（``row_start``）・
     セル範囲・要素の ID のどれかがあればたどれる（#1456）。
+
+    D の評価の、MCP の読み取りのツール（``rag_read_document`` / ``rag_read_section``）で読んだ
+    chunk の引用は、要素の ID の代わりに要素の定位子（``element_locator``。``…/el:…`` を含むもの）
+    を持ち、節を見出しの列（``section_path`` の配列）で持つので、どちらも位置として数える（#1471）。
     """
     document_id = _citation_document_id(item)
     chunk_id = _citation_chunk_id(item)
@@ -3504,20 +3508,36 @@ def _has_traceable_citation_metadata(
     metadata = _citation_metadata(item)
     page_start = _optional_int(_citation_value(item, metadata, "page_start"))
     page_end = _optional_int(_citation_value(item, metadata, "page_end")) or page_start
+    element = bool(_citation_element_ids(item) or _citation_element_locator(item, metadata))
     if page_start is None or page_end is None:
         return bool(
             _string_value(_citation_value(item, metadata, "sheet_name"))
             and (
                 _optional_int(_citation_value(item, metadata, "row_start")) is not None
                 or _string_value(_citation_value(item, metadata, "cell_range"))
-                or _citation_element_ids(item)
+                or element
             )
         )
     return bool(
-        _citation_element_ids(item)
+        element
         or _citation_bbox(item) is not None
-        or _string_value(_citation_value(item, metadata, "section_path"))
+        or _section_path_value(_citation_value(item, metadata, "section_path"))
     )
+
+
+def _citation_element_locator(
+    item: RetrievedChunk | Mapping[str, object], metadata: Mapping[str, object]
+) -> bool:
+    """要素の定位子（``doc:…/ext:…/page:…/el:…``。#1330）を持つか（要素を指さない定位子は数えない）。"""
+    value = _string_value(_citation_value(item, metadata, "element_locator"))
+    return "/el:" in value
+
+
+def _section_path_value(value: object) -> bool:
+    """節の位置（文字列か、空でない見出しの列。#1471）を持つか。"""
+    if isinstance(value, list | tuple):
+        return any(_string_value(part) for part in value)
+    return bool(_string_value(value))
 
 
 def _citation_document_id(item: RetrievedChunk | Mapping[str, object]) -> str:
