@@ -294,6 +294,16 @@ _ENVIRONMENT_CHECK = re.compile(
     r"|(?:確認|照合|比較|チェック)(?:する必要が(?:あります|ある)|が必要(?:です)?)"
     r"|確かめる必要が(?:あります|ある)"
 )
+# 利用者に聞けば分かる条件（自分のロール・権限・承認、質問で特定されていない対象）を
+# 確かめる語（#1453）。これは現場のデータ・記録ではないので、記録そのもの（ログ・履歴・
+# 設定値・件数・明細）を確かめる語が無ければ、現場の確認を求める段落にしない。
+_USER_CONDITION = re.compile(
+    r"ロール(?:を|が)(?:持|お持|付与され)|権限(?:を|が)(?:持|お持)|承認(?:を|が)(?:得|取|受け|もら|あ|な)"
+    r"|(?:どの|対象の?)(?:システム|申請|アカウント|利用者|グループ)"
+)
+_RECORD_TARGET = re.compile(
+    r"ログ(?!イン|アウト|ラム)|\.log\b|記録|履歴|設定値|件数|明細|合計", re.IGNORECASE
+)
 # 出典の行に無い述語（括弧の外にあれば文。「…は **毎月 10 日** です（…）【….pdf】.」。#1317）。
 _PREDICATE_IN = re.compile(r"です|ます|ません|でした|ました|ください")
 _BRACKETS_ANY = re.compile(r"[（(【〔\[「『][^（()）【】〔〕\[\]「」『』\n]*[）)】〕\]」』]")
@@ -795,12 +805,16 @@ def asks_environment_data(text: str) -> bool:
     「認証ログ（auth.log）でエラーの時刻の行を確認し、…」のように、確かめる対象と確かめる依頼の
     語の両方がある段落。操作の指示・質問は除く。主張かどうかとは別の印で、検証では主張として
     確かめる（資料に同じ見分け方があれば supported になる）。
+
+    利用者に聞けば分かる条件（「ポータル管理者」ロールを持つか・承認を得たか・対象のシステム）を
+    確かめるだけの段落は、記録そのもの（ログ・履歴・設定値など）を確かめる語が無ければ含めない（#1453）。
     """
     value = _strip_bullet(text)
     return (
         bool(_ENVIRONMENT_TARGET.search(value) and _ENVIRONMENT_CHECK.search(value))
         and not _OPERATION.search(value)
         and not is_question(value)
+        and not (_USER_CONDITION.search(value) and not _RECORD_TARGET.search(value))
     )
 
 

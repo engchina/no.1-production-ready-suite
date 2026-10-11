@@ -549,10 +549,13 @@ class GroundedAnswerTest(unittest.TestCase):
     def test_generation_prompt_names_only_fields_the_model_can_write_or_read(self):
         import re
         from rag_engine.generation.answering import _answer_image_metadata
-        from rag_engine.models.llm import GroundedItem
+        from typing import get_args
+        from rag_engine.models.llm import ExternalDataItem, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
         # extra="forbid" のため、スキーマに無い欄を指示どおり出力すると検証エラーになる。
+        external_kinds = set(get_args(ExternalDataItem.model_fields["kind"].annotation))
         known = (set(GroundedDraft.model_fields) | set(GroundedItem.model_fields) | set(task_contract(QUESTION))
+                 | set(ExternalDataItem.model_fields) | external_kinds
                  | {"bbox", "context_bbox", "target_highlight", "asset_kind"} | set(_answer_image_metadata([])))
         named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.GENERATE_SYSTEM_PROMPT))
         values = {"document_text", "image_extraction", "context_crop", "desired_outcome", "explicit_facet",

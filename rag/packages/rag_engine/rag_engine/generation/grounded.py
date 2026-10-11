@@ -108,7 +108,7 @@ GENERATE_SYSTEM_PROMPT = (
     "どれも資料に書かれた値で、利用者の環境の今の設定値ではない（［記載時点の設定値］も資料を作った時点の記録）。"
     "表示が無くても、列名が既定値・初期値・記入例・設定例・推奨値の値は同じに扱う。"
     "今の値・この環境の値を尋ねる質問には、資料の値を種類とともに示し（例: 「資料の既定値は 30 分」）、"
-    "実際の値は external_data_items で確認対象にする。資料の値を今の値として断定しない。\n"
+    "実際の値は external_data_items（kind=environment）で確認対象にする。資料の値を今の値として断定しない。\n"
     "4.2 対象・項目・機能の一致\n"
     "- 手順を書く前に、質問の業務対象・変更された項目・発生条件・希望する操作と結果を分け、候補の画面名・節見出し・処理区分・本文・前提条件と照合する。"
     "業務・帳票名・項目番号・対象年月・設定条件の一致を確かめ、「番号」「変更」のような共通語だけで適用可能としない。\n"
@@ -130,8 +130,15 @@ GENERATE_SYSTEM_PROMPT = (
     "- 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。\n"
     "- 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。\n"
     "4.5 未確認事項・実データ・別の資料\n"
-    "- 3 つを分ける: 資料に記載が無い点（gap）、回答の確定に必要な実データ（external_data_items）、回答の確定に必要な別の資料（reference_materials）。\n"
-    "- 実データは個案でしか決まらない値（対象レコード・設定値・CSV の値・ログ・現在の状態・件数など）。何を、どの目的で照合するかを書く（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）。\n"
+    "- 4 つを分ける: 資料に記載が無い点（gap）、回答の確定に必要な現場の実データ（external_data_items の kind=environment）、"
+    "利用者に確かめる条件（external_data_items の kind=user_condition）、回答の確定に必要な別の資料（reference_materials）。\n"
+    "- 実データ（kind=environment）は、利用者に聞いても分からない現場の値（対象レコードの値・設定値・CSV の値・ログ・記録・処理の状態・件数など）。"
+    "何を、どの目的で照合するかを書く（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）。\n"
+    # 利用者のロール・承認・対象のシステムを「現場の実データ」に挙げ、手順を答えたのに needs_environment_data になっていた (#1453)。
+    "- 利用者に聞けば分かる条件は実データにせず kind=user_condition にする: 質問で対象が特定されていない（どのシステム・どの申請・どのアカウントか）、"
+    "利用者自身の状態（自分のロール・権限を持つか、承認を得たか）、付与先・申請の種類。何を、どの目的で確かめるかを書き"
+    "（例: 「操作する利用者が「ポータル管理者」ロールを持つか（自分で操作するか、依頼するかを決める）」）、資料の条件で答え分ける。"
+    "対象が特定されていないために決まらない値（「対象のシステムの台帳の担当部署」など）も、まず対象を確かめる条件として kind=user_condition にする。\n"
     "- 別の資料は、根拠の原文が参照を指示している資料（「別紙」「〜を参照」「コード表」「規程」など）や、質問が尋ねる定義・規則が載っているはずの資料。閲覧の目的とともに書く。\n"
     "- 資料名は根拠の原文か質問に出た名前だけを「」で囲んで書く。無ければ資料の種類で書き（例: 料金表、コード定義表）、名称・版・所在・URL・内容を創作しない。\n"
     "- 資料で分かる一般の規則・手順はそのまま items で答え、個案の値や別の資料が要る部分だけを未確定として案内する。操作自体の根拠がなければその範囲を gap に示し、手順・設定値・計算規則を推測しない。\n"
@@ -158,9 +165,10 @@ GENERATE_SYSTEM_PROMPT = (
     "5. 出力\n"
     "5.1 方針と items の対応\n"
     "- 資料からは確認できない点（資料に記載が無い、質問の語と原文の対応が未確認）→ kind=gap の item。操作や規則の text に混ぜず、summary にも書かない。\n"
-    "- 回答の確定に必要な実データとその照合の目的 → external_data_items。別の資料とその閲覧の目的 → reference_materials。同じ内容を gap に重ねない。\n"
+    "- 回答の確定に必要な現場の実データとその照合の目的 → external_data_items の kind=environment。利用者に確かめる条件 → external_data_items の kind=user_condition。"
+    "別の資料とその閲覧の目的 → reference_materials。同じ内容を gap に重ねない。\n"
     "- 原文に明記された適用条件・限定 → その item の applies=conditional と condition。\n"
-    "- 未確認の実値・履歴に依存する結論が残る → external_data_required=true。\n"
+    "- 利用者に聞いても分からない現場の実値・履歴に依存する結論が残る → external_data_required=true。利用者に確かめる条件だけなら false。\n"
     "- 機能・前提ごとに分ける手順 → 機能ごとに item を分ける。見出しは書かない。\n"
     "5.2 出力形式と上限\n"
     "- 各項目の意味は応答 schema の説明に従う。まず request_coverage に要求単位ごとに使う根拠の evidence_id を挙げ、その後に items を書く。\n"
@@ -172,7 +180,7 @@ GENERATE_SYSTEM_PROMPT = (
     "- 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。\n"
     "- request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景で、item も gap も作らない。\n"
     "5.4 根拠が無い場合\n"
-    "- 引用できる根拠が1つも無い場合は、items を kind=gap だけにして summary を空文字にする（根拠不足の案内文はシステムが表示する）。不足する範囲は gap に、確認すれば確定できる実データ・別の資料は external_data_items / reference_materials に書く。\n"
+    "- 引用できる根拠が1つも無い場合は、items を kind=gap だけにして summary を空文字にする（根拠不足の案内文はシステムが表示する）。不足する範囲は gap に、確認すれば確定できる実データ・利用者に確かめる条件・別の資料は external_data_items / reference_materials に書く。\n"
     "- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば kind=rule / operation の item にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。\n"
     "- user message の「検索評価で未確認の観点」は、根拠があれば答え、無ければその観点の gap を書く。\n"
     "5.5 summary と言語\n"
@@ -2025,10 +2033,18 @@ def confirmation_lines(draft: GroundedDraft, question: str, spans: Sequence[dict
     def named_in_corpus(text: str) -> bool:
         return all(_compact_text(name) in corpus for name in re.findall(r"「([^」]+)」", text))
 
-    lines = [f"実データ: {item.strip()}" for item in draft.external_data_items if item.strip()]
+    lines = [f"実データ: {item}" for item in draft.environment_data_items()]
     lines += [f"資料: {item.strip()}" for item in draft.reference_materials
               if item.strip() and named_in_corpus(item)]
     return list(dict.fromkeys(lines))
+
+
+def user_condition_lines(draft: GroundedDraft) -> list[str]:
+    """利用者に確かめる条件（kind=user_condition）を、本文の確認の節の行にする (#1453)。
+
+    現場の実データ（`confirmation_lines`）とは分け、回答の構造では適用の条件（conditions）に載せる。
+    """
+    return list(dict.fromkeys(f"条件: {item}" for item in draft.user_condition_items()))
 
 
 def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (),
