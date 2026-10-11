@@ -107,7 +107,13 @@ import type {
 
 type ActiveView = "list" | "editor";
 type ProfileNameError = "required" | "format" | "duplicate" | null;
-type ProfileRequiredField = "category" | "region" | "model" | "maxTokens" | "embeddingModel";
+type ProfileRequiredField =
+  | "category"
+  | "region"
+  | "model"
+  | "maxTokens"
+  | "seed"
+  | "embeddingModel";
 type ProfileRequiredErrors = Partial<Record<ProfileRequiredField, true>>;
 type DbProfileRefreshSignal = {
   profile_list_refresh_job_id?: string | null;
@@ -117,6 +123,10 @@ type DbProfileRefreshSignal = {
 
 const SELECT_AI_MAX_TOKENS_MIN = 4096;
 const SELECT_AI_MAX_TOKENS_MAX = 32000;
+/** AI profile の seed 属性（#1434）。backend の SELECT_AI_SEED_* と同じ既定・範囲。 */
+const SELECT_AI_SEED_DEFAULT = 42;
+const SELECT_AI_SEED_MIN = 0;
+const SELECT_AI_SEED_MAX = 2_147_483_647;
 const SELECT_AI_DEFAULT_REGION = "us-chicago-1";
 const SELECT_AI_REGION_OPTIONS = [
   { value: "us-chicago-1", label: "us-chicago-1" },
@@ -140,6 +150,7 @@ const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   model: "xai.grok-4.6",
   embedding_model: "cohere.embed-v4.0",
   max_tokens: SELECT_AI_MAX_TOKENS_MAX,
+  seed: SELECT_AI_SEED_DEFAULT,
   enforce_object_list: true,
   comments: true,
   // ANNOTATIONS / ドメイン継承 annotation を Select AI の prompt へ渡す(既定 false だと効かない)。
@@ -185,6 +196,26 @@ function normalizeSelectAiMaxTokens(value: unknown) {
   return Math.min(SELECT_AI_MAX_TOKENS_MAX, Math.max(SELECT_AI_MAX_TOKENS_MIN, Math.trunc(numeric)));
 }
 
+/** seed が保存できる値か（0〜2147483647 の整数。#1434）。 */
+function isValidSelectAiSeed(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= SELECT_AI_SEED_MIN &&
+    value <= SELECT_AI_SEED_MAX
+  );
+}
+
+/** 応答の seed（#1434 より前の業務プロファイルは無い）を、無効なら既定の 42 にする。 */
+function normalizeSelectAiSeed(value: unknown) {
+  return isValidSelectAiSeed(value) ? value : SELECT_AI_SEED_DEFAULT;
+}
+
+/** seed の入力。空欄は NaN（表示は空・保存の前に欄のエラーで止める）。 */
+function parseSeedInput(value: string) {
+  return value.trim() === "" ? Number.NaN : Number(value);
+}
+
 function normalizeSelectAiRegion(value: unknown) {
   const region = typeof value === "string" ? value.trim() : "";
   return SELECT_AI_REGION_OPTIONS.some((option) => option.value === region)
@@ -228,6 +259,7 @@ function profileRequiredErrors(form: ProfileFormState): ProfileRequiredErrors {
   if (!form.selectAiConfig.region.trim()) errors.region = true;
   if (!form.selectAiConfig.model.trim()) errors.model = true;
   if (!Number.isFinite(Number(form.selectAiConfig.max_tokens))) errors.maxTokens = true;
+  if (!isValidSelectAiSeed(form.selectAiConfig.seed)) errors.seed = true;
   if (!form.selectAiConfig.embedding_model.trim()) errors.embeddingModel = true;
   return errors;
 }
@@ -254,6 +286,7 @@ function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
       ...selectAiConfig,
       region: normalizeSelectAiRegion(selectAiConfig.region),
       max_tokens: normalizeSelectAiMaxTokens(selectAiConfig.max_tokens),
+      seed: normalizeSelectAiSeed(selectAiConfig.seed),
     },
   };
 }
@@ -496,6 +529,11 @@ function SelectAiConfigFields({
       aria-label={t("profiles.editor.selectAi")}
       tabIndex={-1}
     >
+      {/* 共通のモデル設定のうち Select AI に効くもの・効かないものの違い（#1434）。保存の影響なので常設する
+          （messaging.md §3.8）。推論の量は AI profile に属性がなく効かない。seed は下の欄で AI profile に入れる。 */}
+      <p className="text-xs leading-relaxed text-fg-muted" data-testid="profile-select-ai-reasoning-note">
+        {t("profiles.selectAi.reasoningNote")}
+      </p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(8rem,0.9fr)_minmax(12rem,1.2fr)_minmax(8rem,0.8fr)_minmax(12rem,1.2fr)]">
         <SelectField
           id="profile-select-ai-region"
@@ -554,6 +592,27 @@ function SelectAiConfigFields({
           onValueChange={(value) => {
             updateSelectAiConfig(setForm, { embedding_model: value });
             if (requiredErrors.embeddingModel) onRequiredErrorClear("embeddingModel");
+          }}
+          className="min-w-0"
+        />
+      </div>
+      {/* AI profile の seed 属性（#1434）。1 つの欄なので、上の行の 2 列の幅にそろえる（全幅に伸ばさない）。 */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField
+          id="profile-select-ai-seed"
+          label={t("profiles.field.seed")}
+          required
+          type="number"
+          inputMode="numeric"
+          min={SELECT_AI_SEED_MIN}
+          max={SELECT_AI_SEED_MAX}
+          step={1}
+          value={Number.isNaN(form.selectAiConfig.seed) ? "" : form.selectAiConfig.seed}
+          helper={t("profiles.field.seedHint")}
+          error={requiredErrors.seed ? t("profiles.error.seedInvalid") : undefined}
+          onValueChange={(value) => {
+            updateSelectAiConfig(setForm, { seed: parseSeedInput(value) });
+            if (requiredErrors.seed) onRequiredErrorClear("seed");
           }}
           className="min-w-0"
         />

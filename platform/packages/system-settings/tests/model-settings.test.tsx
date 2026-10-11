@@ -88,6 +88,22 @@ describe("buildSectionSavePayload", () => {
     expect(genai.generative_ai.rerank_model).toBe("draft-rerank");
     expect(genai.enterprise_ai.connections[0]?.api_key).toBe("");
   });
+
+  it("seed（#1434）は登録モデルの節と一緒に送り、ほかの節では保存済みの値を保つ", () => {
+    const seeded: ModelSettingsPayload = {
+      ...draft,
+      enterprise_ai: { ...draft.enterprise_ai, seed: 7 },
+    };
+    const saved: ModelSettingsPayload = {
+      ...baseline,
+      enterprise_ai: { ...baseline.enterprise_ai, seed: 42 },
+    };
+    expect(buildSectionSavePayload(saved, seeded, "enterprise_models").enterprise_ai.seed).toBe(7);
+    expect(
+      buildSectionSavePayload(saved, seeded, "enterprise_connection").enterprise_ai.seed,
+    ).toBe(42);
+    expect(buildSectionSavePayload(saved, seeded, "generative_ai").enterprise_ai.seed).toBe(42);
+  });
 });
 
 describe("buildSectionSavePayload（接続。#533 / #542）", () => {

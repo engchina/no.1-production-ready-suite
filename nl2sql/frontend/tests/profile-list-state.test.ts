@@ -27,6 +27,7 @@ function profile(patch: Partial<Nl2SqlProfile>): Nl2SqlProfile {
       model: "cohere.command-r-plus",
       embedding_model: "cohere.embed-v4.0",
       max_tokens: 32000,
+      seed: 42,
       enforce_object_list: true,
       comments: true,
       annotations: false,
