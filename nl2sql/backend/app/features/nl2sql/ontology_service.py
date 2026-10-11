@@ -26,7 +26,6 @@ from .object_identity import (
 )
 from .ontology_models import (
     ClarificationMode,
-    ClarificationTurn,
     GraphPatch,
     GraphPatchOperation,
     IntentAmbiguity,
@@ -53,9 +52,11 @@ from .ontology_models import (
     QuerySessionStatus,
     QuestionIntentGraph,
     RelationshipCardinality,
+    RequirementAnswerRecord,
     SqlArtifact,
     SqlConfirmationBinding,
     SqlConfirmationRequest,
+    SqlRequirementDraft,
     SqlSemanticGraph,
     ValidationSeverity,
     utc_now,
@@ -976,15 +977,60 @@ class OntologyQuerySessionService:
             session.updated_at = utc_now()
             return _copy_model(session)
 
-    def apply_clarification(
+    def create_requirement_session(
+        self,
+        request: QuerySessionCreate,
+        *,
+        draft: SqlRequirementDraft,
+    ) -> QuerySession:
+        """AI要件確認（guided）の session を作る（質問の解釈の intent は持たない。#1439）。"""
+
+        with self._lock:
+            view = self._require_profile_view(request.profile_view_id)
+            if view.archived:
+                raise OntologyGateBlockedError(
+                    "PROFILE_VIEW_ARCHIVED",
+                    "アーカイブ済みのプロファイル範囲は利用できません。",
+                )
+            if request.profile_id != view.profile_id:
+                raise OntologyIntegrityError(
+                    "PROFILE_VIEW_MISMATCH",
+                    "指定した profile とオントロジー範囲が一致しません。",
+                )
+            if request.ontology_revision_id != view.ontology_revision_id:
+                raise OntologyIntegrityError(
+                    "ONTOLOGY_REVISION_MISMATCH",
+                    "指定した Ontology revision とプロファイル範囲が一致しません。",
+                )
+            self._require_revision(request.ontology_revision_id)
+            session = QuerySession(
+                id=f"query_session_{uuid4().hex}",
+                profile_id=request.profile_id,
+                profile_view_id=request.profile_view_id,
+                ontology_revision_id=request.ontology_revision_id,
+                business_release_id=request.business_release_id,
+                status=QuerySessionStatus.AWAITING_INTENT_CONFIRMATION,
+                original_question=request.question,
+                current_intent_version=1,
+                intents=[],
+                clarification_mode=ClarificationMode.GUIDED,
+                requirement=_copy_model(draft),
+                actor_user_uuid=request.actor_user_uuid,
+                actor_is_system_admin=request.actor_is_system_admin,
+            )
+            self._sessions[session.id] = session
+            return _copy_model(session)
+
+    def update_requirement(
         self,
         session_id: str,
         *,
         base_version: int,
-        intent: QuestionIntentGraph,
-        turn: ClarificationTurn,
+        draft: SqlRequirementDraft,
+        answer: RequirementAnswerRecord,
+        review_round: int,
     ) -> QuerySession:
-        """検証済みの guided 回答を新しい intent version として保存する。"""
+        """回答（と LLM の再検査）で更新した下書きを、新しい版として保存する。"""
 
         with self._lock:
             session = self._require_session(session_id)
@@ -997,25 +1043,38 @@ class OntologyQuerySessionService:
             if base_version != session.current_intent_version:
                 raise OntologyVersionConflictError(
                     "INTENT_VERSION_CONFLICT",
-                    "質問の解釈が別の操作で更新されています。最新版を再読込してください。",
+                    "確認の内容が別の操作で更新されています。最新版を再読込してください。",
                 )
-            updated = _copy_model(intent)
-            updated.version = base_version + 1
-            updated.question_original = session.original_question
-            updated.profile_view_id = session.profile_view_id
-            updated.ontology_revision_id = session.ontology_revision_id
-            updated.created_at = utc_now()
-            turn_copy = _copy_model(turn)
-            turn_copy.intent_version = updated.version
-            session.intents.append(updated)
-            session.current_intent_version = updated.version
-            session.clarification_turns.append(turn_copy)
-            session.intent_confirmed_version = None
-            session.current_sql_artifact_id = None
-            session.sql_confirmation = None
-            session.execution = None
-            session.status = QuerySessionStatus.AWAITING_INTENT_CONFIRMATION
+            session.requirement = _copy_model(draft)
+            session.requirement_answers.append(_copy_model(answer))
+            session.requirement_review_round = review_round
+            session.current_intent_version = base_version + 1
             session.updated_at = utc_now()
+            return _copy_model(session)
+
+    def apply_requirement(self, session_id: str, *, base_version: int) -> QuerySession:
+        """確認した要件を SQL の生成に反映し、session を閉じる（以後は回答できない）。"""
+
+        with self._lock:
+            session = self._require_session(session_id)
+            self._assert_session_mutable(session)
+            if (
+                session.clarification_mode != ClarificationMode.GUIDED
+                or session.requirement is None
+            ):
+                raise OntologyStateConflictError(
+                    "GUIDED_CLARIFICATION_NOT_ENABLED",
+                    "この query session では AI 要件確認を開始していません。",
+                )
+            if base_version != session.current_intent_version:
+                raise OntologyVersionConflictError(
+                    "INTENT_VERSION_CONFLICT",
+                    "確認の内容が別の操作で更新されています。最新版を再読込してください。",
+                )
+            now = utc_now()
+            session.status = QuerySessionStatus.DONE
+            session.requirement_applied_at = now
+            session.updated_at = now
             return _copy_model(session)
 
     def cancel_session(self, session_id: str) -> QuerySession:
@@ -1388,7 +1447,6 @@ class OntologyQuerySessionService:
         request: QuerySessionCreate,
         view: ProfileOntologyView,
     ) -> Any:
-        from .ontology_models import QuestionIntentGraph
 
         question_key = request.question.casefold()
         visible_nodes = [

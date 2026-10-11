@@ -15,7 +15,7 @@ import secrets
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from threading import RLock
 from typing import Annotated, Any, Literal, NoReturn, cast
 from uuid import uuid4
@@ -38,6 +38,7 @@ from .models import (
     PreviewData,
     PreviewRequest,
     QueryResults,
+    SqlRequirementSpec,
 )
 from .object_identity import catalog_match_key, object_match_key, object_name_tokens
 from .ontology_build import (
@@ -56,20 +57,10 @@ from .ontology_catalog import (
     migrate_profile_ontology_view,
     retrieve_ontology_nodes,
 )
-from .ontology_clarification import (
-    CLARIFICATION_PROMPT_VERSION,
-    apply_clarification_answer,
-    build_clarification_state,
-    enrich_guided_intent,
-    merge_free_text_reinterpretation,
-)
 from .ontology_markdown_router import create_markdown_router
 from .ontology_mermaid import render_mermaid_er
 from .ontology_models import (
-    ClarificationAnswer,
     ClarificationMode,
-    ClarificationState,
-    ClarificationTurn,
     ColumnQueryPolicy,
     GraphPatch,
     MetricDefinition,
@@ -102,6 +93,8 @@ from .ontology_models import (
     QuerySessionCreate,
     QuerySessionStatus,
     QuestionIntentGraph,
+    RequirementAnswerRecord,
+    RequirementState,
     SqlConfirmationRequest,
     utc_now,
 )
@@ -142,6 +135,18 @@ from .ontology_store import (
 )
 from .profile_access import assert_profile_access
 from .service import nl2sql_service
+from .sql_requirement import (
+    RequirementAiUnavailableError,
+    RequirementAnswerInvalidError,
+    RequirementContext,
+    apply_answer,
+    build_draft,
+    build_requirement_context,
+    build_requirement_state,
+    call_requirement_llm,
+    generation_spec,
+    unresolved_items,
+)
 from .structured_outputs import format_schema, strict_schema
 
 logger = logging.getLogger(__name__)
@@ -386,11 +391,16 @@ class QuerySessionApiCreate(OntologyContract):
 
 
 class ClarificationAnswerRequest(OntologyContract):
+    """AI要件確認の 1 つの項目への回答（質問への回答と、確認済みの一覧からの直しの両方。#1439）。"""
+
     base_version: int = Field(ge=1)
-    question_id: str = Field(min_length=1)
-    selected_option_ids: list[str] = Field(default_factory=list)
+    item_id: str = Field(min_length=1)
+    selected_candidate_ids: list[str] = Field(default_factory=list)
     free_text: str = Field(default="", max_length=2000)
-    structured_value: Any = None
+
+
+class RequirementApplyRequest(OntologyContract):
+    base_version: int = Field(ge=1)
 
 
 class OntologyProfileRecommendationRequest(OntologyContract):
@@ -515,6 +525,8 @@ class QueryRuntimeContext(OntologyContract):
     retrieved_node_ids: list[str] = Field(default_factory=list)
     profile_recommendation_id: str = ""
     profile_selection_source: str = "legacy"
+    # AI要件確認で、公開版のオントロジーの業務の概念を使うか（公開版が古ければ使わない。#1439）。
+    requirement_ontology_current: bool = True
 
 
 class OntologyGraphData(OntologyContract):
@@ -549,7 +561,7 @@ class QuerySessionData(OntologyContract):
     result: QueryResults | None = None
     performance_check: ExplainPlanData | None = None
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
-    clarification: ClarificationState | None = None
+    requirement_state: RequirementState | None = None
 
 
 class QueryExecutionData(QuerySessionData):
@@ -2875,8 +2887,16 @@ class OntologyApiRuntime:
                     "ONTOLOGY_REVISION_CHANGED",
                     "Ontology revision が更新されました。もう一度実行してください。",
                 )
+            ontology_current = True
             if business_release_id:
-                published_context(self, request.profile_id, business_release_id)
+                try:
+                    published_context(self, request.profile_id, business_release_id)
+                except OntologyGateBlockedError:
+                    # AI要件確認はオントロジーが「あれば使う」（#1439）。公開版が Profile・Schema の
+                    # 変更より古いときは、業務の概念を使わずに Schema と業務プロファイルで確かめる。
+                    if request.clarification_mode != ClarificationMode.GUIDED:
+                        raise
+                    ontology_current = False
             recommendation_id = self._validate_profile_confirmation(request, ontology)
             base_view = self._base_profile_view(profile, ontology)
             allowed = self.legacy_service.resolve_allowed_objects(
@@ -2890,16 +2910,26 @@ class OntologyApiRuntime:
                 )
             view = self._narrow_profile_view(base_view, ontology, allowed)
             self.sessions.register_profile_view(view)
+        if request.clarification_mode == ClarificationMode.GUIDED:
+            return self._create_requirement_session(
+                request,
+                profile=profile,
+                ontology=ontology,
+                view=view,
+                allowed=allowed,
+                business_release_id=business_release_id,
+                recommendation_id=recommendation_id,
+                actor_user_uuid=actor_user_uuid,
+                actor_is_system_admin=actor_is_system_admin,
+                ontology_current=ontology_current,
+            )
         with observe_stage("interpret"):
             intent = self._interpret_question(
                 request.question,
                 profile,
                 ontology,
                 view,
-                include_guided_context=request.clarification_mode == ClarificationMode.GUIDED,
             )
-            if request.clarification_mode == ClarificationMode.GUIDED:
-                intent = enrich_guided_intent(intent, ontology)
         with self._lock:
             # LLM 呼び出し中に revision が公開・置換されていたら stale session を作らない
             current_ontology = self._query_ontology(request.profile_id)
@@ -2944,8 +2974,134 @@ class OntologyApiRuntime:
                 revision_id=session.ontology_revision_id,
                 state=session.status.value,
             )
-            if request.clarification_mode == ClarificationMode.GUIDED:
-                record_clarification(outcome="started")
+            return self._session_data(session)
+
+    # --- AI要件確認（#1439） -------------------------------------------------
+
+    def _requirement_today(self) -> date:
+        """相対的な期間の基準日（実行日）。テストで差し替える。"""
+
+        return datetime.now().astimezone().date()
+
+    def _requirement_max_review_rounds(self) -> int:
+        return int(get_settings().nl2sql_requirement_max_review_rounds)
+
+    def _requirement_context(
+        self,
+        *,
+        question: str,
+        profile: Nl2SqlProfile,
+        ontology: SchemaOntology,
+        view: ProfileOntologyView,
+        allowed: AllowedObjects,
+    ) -> RequirementContext:
+        try:
+            # SQL の生成と同じく、業務プロファイルの範囲の Schema を読む（増分の store では表ごとの
+            # 詳細。全体の catalog の cache は範囲の表を含まないことがある）。
+            profile_catalog = getattr(self.legacy_service, "_generation_schema_catalog", None)
+            tables = (
+                profile_catalog(profile, allowed).tables
+                if callable(profile_catalog)
+                else self.legacy_service.get_catalog().tables
+            )
+        except Exception as exc:
+            raise RequirementAiUnavailableError(
+                "REQUIREMENT_SCHEMA_UNAVAILABLE",
+                "データベースの Schema を読み込めないため、AI要件確認を開始できません。",
+            ) from exc
+        return build_requirement_context(
+            question=question,
+            profile=profile,
+            catalog_tables=tables,
+            allowed=allowed,
+            ontology=ontology,
+            view=view,
+            today=self._requirement_today(),
+        )
+
+    def _requirement_client(self) -> Any:
+        return getattr(self.legacy_service, "_enterprise_ai_client", None)
+
+    def _create_requirement_session(
+        self,
+        request: QuerySessionApiCreate,
+        *,
+        profile: Nl2SqlProfile,
+        ontology: SchemaOntology,
+        view: ProfileOntologyView,
+        allowed: AllowedObjects,
+        business_release_id: str,
+        recommendation_id: str,
+        actor_user_uuid: str,
+        actor_is_system_admin: bool,
+        ontology_current: bool = True,
+    ) -> QuerySessionData:
+        """Schema・業務プロファイル・オントロジーで、LLM 1 回の SQL の要件の下書きを作る。"""
+
+        context = self._requirement_context(
+            question=request.question,
+            profile=profile,
+            ontology=ontology,
+            view=view,
+            allowed=allowed,
+        )
+        if not ontology_current:
+            context.ontology_concepts = []
+        if not context.tables:
+            raise OntologyGateBlockedError(
+                "REQUEST_SCOPE_EMPTY",
+                "業務プロファイルの範囲に、使える表がありません。",
+            )
+        with observe_stage("requirement_draft"):
+            output, model = call_requirement_llm(
+                self._requirement_client(),
+                question=request.question,
+                context=context,
+                mode="draft",
+            )
+        draft = build_draft(output, context, question=request.question, model=model)
+        if not ontology_current:
+            draft.warnings_ja.append(
+                "公開版のオントロジーが業務プロファイル・Schema の変更より古いため、"
+                "オントロジーの業務の概念を使わずに確認しました。"
+            )
+        with self._lock:
+            current_ontology = self._query_ontology(request.profile_id)
+            if current_ontology.revision.id != ontology.revision.id:
+                raise OntologyVersionConflictError(
+                    "ONTOLOGY_REVISION_CHANGED",
+                    "Ontology revision が更新されました。もう一度実行してください。",
+                )
+            session = self.sessions.create_requirement_session(
+                QuerySessionCreate(
+                    question=request.question,
+                    profile_id=profile.id,
+                    profile_view_id=view.id,
+                    ontology_revision_id=ontology.revision.id,
+                    business_release_id=business_release_id,
+                    clarification_mode=ClarificationMode.GUIDED,
+                    actor_user_uuid=actor_user_uuid,
+                    actor_is_system_admin=actor_is_system_admin,
+                ),
+                draft=draft,
+            )
+            runtime_context = QueryRuntimeContext(
+                allowed_objects=allowed,
+                row_limit=request.row_limit,
+                engine=request.engine,
+                profile_recommendation_id=recommendation_id,
+                profile_selection_source="confirmed" if recommendation_id else "legacy",
+                requirement_ontology_current=ontology_current,
+            )
+            self._session_views[session.id] = view
+            self._contexts[session.id] = runtime_context
+            self._persist_session(session, context=runtime_context)
+            record_transition(
+                session_id=session.id,
+                revision_id=session.ontology_revision_id,
+                state=session.status.value,
+            )
+            record_clarification(outcome="started")
             return self._session_data(session)
 
     def create_session_idempotent(
@@ -2983,6 +3139,20 @@ class OntologyApiRuntime:
             idempotency_key,
             {"session_id": session_id, "request": request.model_dump(mode="json")},
             lambda: self.answer_clarification(session_id, request),
+        )
+
+    def apply_requirement_idempotent(
+        self,
+        session_id: str,
+        request: RequirementApplyRequest,
+        *,
+        idempotency_key: str,
+    ) -> QuerySessionData:
+        return self._run_session_idempotent(
+            "apply_query_requirement",
+            idempotency_key,
+            {"session_id": session_id, "request": request.model_dump(mode="json")},
+            lambda: self.apply_requirement(session_id, request),
         )
 
     def cancel_session_idempotent(
@@ -3452,10 +3622,12 @@ class OntologyApiRuntime:
         profile: Nl2SqlProfile,
         ontology: SchemaOntology,
         view: ProfileOntologyView,
-        *,
-        include_guided_context: bool = False,
     ) -> QuestionIntentGraph:
-        """Enterprise AI structured intent。障害時は決定論 draft をそのまま返す。"""
+        """Enterprise AI structured intent。障害時は決定論 draft をそのまま返す。
+
+        確認だけの session（review_only）の解釈。AI要件確認（guided）は sql_requirement が担う
+        （#1439。規則の下書き・閾値によるあいまいさの判定を使わない）。
+        """
 
         deterministic = interpret_question_deterministically(
             question,
@@ -3513,19 +3685,6 @@ class OntologyApiRuntime:
             ],
             "deterministic_draft": deterministic.model_dump(mode="json"),
         }
-        if include_guided_context:
-            context_payload["profile_context"] = {
-                "description": profile.description,
-                "glossary": profile.glossary,
-                "sql_rules": profile.sql_rules,
-                "few_shot_examples": profile.few_shot_examples[:5],
-            }
-            context_payload["schema_context"] = self._guided_schema_context(
-                profile,
-                ontology,
-                view,
-                question=question,
-            )
         context = json.dumps(
             context_payload,
             ensure_ascii=False,
@@ -3542,13 +3701,6 @@ class OntologyApiRuntime:
             "kind field は使わず、options は string 配列だけにしてください。"
             "filters の値は value_json に JSON 文字列として格納してください。"
         )
-        if include_guided_context:
-            system_prompt += (
-                " schema_context と profile_context は候補の根拠にだけ使い、複数候補や推測だけで"
-                "確定できない項目は ambiguity.options に業務利用者が選べる"
-                "短い候補を設定してください。"
-                "masked または非公開の値を推測・生成しないでください。"
-            )
         model_id = ""
         model_id_fn = getattr(client, "model_id", None)
         if callable(model_id_fn):
@@ -3627,129 +3779,6 @@ class OntologyApiRuntime:
                 exc=exc,
             )
             return deterministic
-
-    def _guided_schema_context(
-        self,
-        profile: Nl2SqlProfile,
-        ontology: SchemaOntology,
-        view: ProfileOntologyView,
-        *,
-        question: str = "",
-    ) -> list[dict[str, Any]]:
-        """Profile scope 内の必要最小限 schema context を構築する。
-
-        catalog に保持された代表値だけを使用し、Oracle への追加 scan は行わない。
-        column policy が masked または filterable=false の列は代表値を送らない。
-        """
-
-        # Profile の object は canonical 修飾名。引用符を外して大文字化すると、引用名の表の
-        # Profile で大文字の同名表の代表値まで LLM へ送るため、引用規則どおりに照合する（#561）。
-        allowed = {
-            object_match_key(value)
-            for value in [*profile.allowed_tables, *profile.allowed_views]
-            if value.strip()
-        }
-        node_by_id = {node.id: node for node in ontology.nodes}
-        # technical_name（`SALES."Mixed_Case".AMOUNT`）は引用規則の照合キーで引く。大文字化すると
-        # 大文字の同名表の列 policy と取り違える（#573）。
-        node_by_technical = {object_match_key(node.technical_name): node for node in ontology.nodes}
-        policy_by_column: dict[tuple[str, str, str], ColumnQueryPolicy] = {}
-        for key, column_policy in view.column_policies.items():
-            node = node_by_id.get(key) or node_by_technical.get(object_match_key(key))
-            if node is None:
-                continue
-            for mapping in node.physical_mappings:
-                for column in mapping.column_refs:
-                    # カタログ上の名前で照合する。大文字化すると `"Amount"` の policy
-                    # （masked 等）が `AMOUNT` に効かない、または逆になる（#563）。
-                    key_tuple = (column.owner, column.object_name, column.column_name)
-                    policy_by_column[key_tuple] = column_policy
-
-        relevant_objects: set[str] = set()
-        normalized_question = question.casefold()
-        if normalized_question:
-            for node in ontology.nodes:
-                if node.id not in view.node_ids:
-                    continue
-                terms = [node.business_name_ja, *node.aliases]
-                if not any(term and term.casefold() in normalized_question for term in terms):
-                    continue
-                for mapping in node.physical_mappings:
-                    object_ref = mapping.object_ref
-                    if object_ref.object_name:
-                        relevant_objects.add(catalog_match_key(object_ref.object_name))
-                        relevant_objects.add(
-                            catalog_match_key(object_ref.owner, object_ref.object_name)
-                        )
-                if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
-                    metadata_name = str(node.metadata.get("object_name") or "")
-                    if metadata_name:
-                        relevant_objects.add(
-                            catalog_match_key(str(node.metadata.get("owner") or ""), metadata_name)
-                        )
-
-        result: list[dict[str, Any]] = []
-        remaining_columns = 40
-        try:
-            tables = self.legacy_service.get_catalog().tables
-        except Exception:
-            logger.warning("guided_clarification_catalog_context_unavailable", exc_info=True)
-            return result
-        catalog_objects = {
-            name
-            for table in tables
-            for name in (
-                catalog_match_key(table.table_name),
-                catalog_match_key(table.owner, table.table_name),
-            )
-        }
-        if relevant_objects and not relevant_objects & catalog_objects:
-            relevant_objects.clear()
-        for table in tables:
-            short_name = catalog_match_key(table.table_name)
-            qualified_name = catalog_match_key(table.owner, table.table_name)
-            if (
-                allowed
-                and catalog_match_key(table.table_name) not in allowed
-                and catalog_match_key(table.owner, table.table_name) not in allowed
-            ):
-                continue
-            if relevant_objects and not {short_name, qualified_name} & relevant_objects:
-                continue
-            columns: list[dict[str, Any]] = []
-            for column in table.columns:
-                if remaining_columns <= 0:
-                    break
-                current_policy = policy_by_column.get(
-                    (table.owner, table.table_name, column.column_name)
-                )
-                samples = []
-                if current_policy is None or (
-                    current_policy.filterable and not current_policy.masked
-                ):
-                    samples = [str(value)[:64] for value in column.sample_values[:3]]
-                columns.append(
-                    {
-                        "name": column.column_name,
-                        "logical_name": column.logical_name,
-                        "data_type": column.data_type,
-                        "comment": column.comment,
-                        "sample_values": samples,
-                    }
-                )
-                remaining_columns -= 1
-            result.append(
-                {
-                    "owner": table.owner,
-                    "object_name": table.table_name,
-                    "logical_name": table.logical_name,
-                    "comment": table.comment,
-                    "columns": columns,
-                }
-            )
-            if len(result) >= 8 or remaining_columns <= 0:
-                break
-        return result
 
     def _embedding_hits(
         self,
@@ -3924,15 +3953,25 @@ class OntologyApiRuntime:
         session_id: str,
         request: ClarificationAnswerRequest,
     ) -> QuerySessionData:
+        """1 つの項目への回答を反映する。全部の質問に答えたら、LLM で要件のまとめを再検査する。"""
+
         with self._lock:
             self._ensure_store()
             current = self._ensure_session_loaded(session_id)
-            # 終了した（期限切れを含む）session には、AI の再解釈を呼ぶ前に答えを返す。
+            # 終了した（期限切れを含む）session には、LLM を呼ぶ前に答えを返す。
             OntologyQuerySessionService._assert_session_mutable(current)
+            if (
+                current.clarification_mode != ClarificationMode.GUIDED
+                or current.requirement is None
+            ):
+                raise OntologyStateConflictError(
+                    "GUIDED_CLARIFICATION_NOT_ENABLED",
+                    "この query session では AI 要件確認を開始していません。",
+                )
             if request.base_version != current.current_intent_version:
                 raise OntologyVersionConflictError(
                     "INTENT_VERSION_CONFLICT",
-                    "質問の解釈が別の操作で更新されています。最新版を再読込してください。",
+                    "確認の内容が別の操作で更新されています。最新版を再読込してください。",
                 )
             view = self._session_views.get(session_id)
             if view is None:
@@ -3940,85 +3979,160 @@ class OntologyApiRuntime:
             ontology = self._ontologies.get(current.ontology_revision_id)
             if ontology is None:
                 ontology = self.ontology_revision(current.ontology_revision_id)
-            state = build_clarification_state(current, ontology, view)
-            question = state.current_question
-            if question is None or question.id != request.question_id:
-                raise OntologyStateConflictError(
-                    "CLARIFICATION_QUESTION_CHANGED",
-                    "確認項目が更新されています。最新版を再読込してください。",
-                )
-            answer = ClarificationAnswer(
-                question_id=request.question_id,
-                selected_option_ids=request.selected_option_ids,
-                free_text=request.free_text,
-                structured_value=request.structured_value,
-            )
-            try:
-                updated_intent = apply_clarification_answer(
-                    current.intents[-1], question, answer, ontology
-                )
-            except ValueError as exc:
-                raise OntologyIntegrityError(
-                    "CLARIFICATION_ANSWER_INVALID",
-                    str(exc),
-                ) from exc
-            profile = (
-                self._strict_profile(current.profile_id) if request.free_text.strip() else None
-            )
+            profile = self._strict_profile(current.profile_id)
+            runtime_context = self._contexts.get(session_id)
+            allowed = runtime_context.allowed_objects if runtime_context else AllowedObjects()
+            max_rounds = self._requirement_max_review_rounds()
 
-        # AI 応答待ちで別 session の閲覧・取消を止めない。解釈対象は上記の snapshot。
-        if profile is not None:
-            correction_prompt = (
-                f"{current.intents[-1].question_effective}\n"
-                f"確認項目: {question.prompt_ja}\n"
-                f"利用者の訂正: {request.free_text.strip()}\n"
-                "確認項目の以前の解釈を訂正内容で置き換え、他の確認済み条件は保持してください。"
+        # Schema の読み込みと LLM の再検査は lock の外で行う（別の session の閲覧・中止を止めない）
+        # 。
+        context = self._requirement_context(
+            question=current.original_question,
+            profile=profile,
+            ontology=ontology,
+            view=view,
+            allowed=allowed,
+        )
+        if runtime_context is not None and not runtime_context.requirement_ontology_current:
+            context.ontology_concepts = []
+        try:
+            draft = apply_answer(
+                current.requirement,
+                item_id=request.item_id,
+                selected_candidate_ids=request.selected_candidate_ids,
+                free_text=request.free_text,
+                context=context,
             )
-            reinterpreted = self._interpret_question(
-                correction_prompt,
-                profile,
-                ontology,
-                view,
-                include_guided_context=True,
+        except RequirementAnswerInvalidError as exc:
+            raise OntologyIntegrityError("CLARIFICATION_ANSWER_INVALID", str(exc)) from exc
+        review_round = current.requirement_review_round
+        if not unresolved_items(draft) and review_round < max_rounds:
+            # 原則 2: 全部の質問に答えたら、要件のまとめを LLM でもう一度検査する。
+            with observe_stage("requirement_review"):
+                output, model = call_requirement_llm(
+                    self._requirement_client(),
+                    question=current.original_question,
+                    context=context,
+                    mode="review",
+                    draft=draft,
+                )
+            draft = build_draft(
+                output,
+                context,
+                question=current.original_question,
+                model=model,
+                previous=draft,
             )
-            updated_intent = merge_free_text_reinterpretation(
-                updated_intent,
-                enrich_guided_intent(reinterpreted, ontology),
-                question,
-                request.free_text.strip(),
-            )
+            review_round += 1
+        item = next(
+            (value for value in current.requirement.items if value.id == request.item_id), None
+        )
 
         with self._lock:
-            # 別 request / worker が更新・取消した状態を読み直す。
-            # apply_clarification が mutable 状態と base_version を再検証してから保存する。
+            # 別 request / worker が更新・取消した状態を読み直し、版を再検証してから保存する。
             self._ensure_session_loaded(session_id)
-            session = self.sessions.apply_clarification(
+            session = self.sessions.update_requirement(
                 session_id,
                 base_version=request.base_version,
-                intent=updated_intent,
-                turn=ClarificationTurn(
-                    question=question,
-                    answer=answer,
-                    intent_version=request.base_version + 1,
-                    prompt_version=CLARIFICATION_PROMPT_VERSION,
+                draft=draft,
+                answer=RequirementAnswerRecord(
+                    item_id=request.item_id,
+                    item_key=item.key if item else "",
+                    selected_candidate_ids=request.selected_candidate_ids,
+                    free_text=request.free_text.strip(),
+                    draft_version=draft.version,
                 ),
+                review_round=review_round,
             )
-            self._previews.pop(session_id, None)
-            self._results.pop(session_id, None)
-            self._plans.pop(session_id, None)
             self._persist_session(session)
             record_transition(
                 session_id=session.id,
                 revision_id=session.ontology_revision_id,
                 state=session.status.value,
             )
-            next_state = build_clarification_state(session, ontology, view)
+            state = build_requirement_state(session, max_review_rounds=max_rounds)
             record_clarification(
-                outcome=("ready" if next_state.can_generate_sql else "answered"),
-                category=question.category.value,
-                turns=next_state.turn_count if next_state.can_generate_sql else None,
+                outcome="ready" if state.can_apply and not state.unresolved_items else "answered",
+                category=item.section.value if item else "none",
+                turns=len(session.requirement_answers) if state.can_apply else None,
             )
             return self._session_data(session)
+
+    def apply_requirement(
+        self,
+        session_id: str,
+        request: RequirementApplyRequest,
+    ) -> QuerySessionData:
+        """確認した要件を SQL の生成に反映し、session を閉じる。"""
+
+        with self._lock:
+            self._ensure_store()
+            current = self._ensure_session_loaded(session_id)
+            OntologyQuerySessionService._assert_session_mutable(current)
+            state = build_requirement_state(
+                current, max_review_rounds=self._requirement_max_review_rounds()
+            )
+            if not state.can_apply:
+                raise OntologyGateBlockedError(
+                    "GUIDED_CLARIFICATION_INCOMPLETE",
+                    state.message_ja,
+                    finding_codes=[*state.minimum_missing_ja]
+                    or [item.label_ja for item in state.unresolved_items],
+                )
+            session = self.sessions.apply_requirement(session_id, base_version=request.base_version)
+            self._persist_session(session)
+            record_transition(
+                session_id=session.id,
+                revision_id=session.ontology_revision_id,
+                state=session.status.value,
+            )
+            return self._session_data(session)
+
+    def applied_requirement_spec(
+        self,
+        session_id: str,
+        *,
+        actor_user_uuid: str,
+        actor_is_system_admin: bool,
+        profile_id: str,
+        question: str,
+    ) -> SqlRequirementSpec:
+        """SQL の生成の job に渡す、反映済みの AI要件確認の構造化した要件（#1439）。
+
+        本人の session・同じ業務プロファイル・反映済み・反映した質問の文と同じ質問だけを受け付ける
+        （画面で質問の文を書き換えたら、要件は渡さない）。
+        """
+
+        with self._lock:
+            self._ensure_store()
+            session = self._ensure_session_loaded(session_id)
+        if session.clarification_mode != ClarificationMode.GUIDED or session.requirement is None:
+            raise OntologyStateConflictError(
+                "GUIDED_CLARIFICATION_NOT_ENABLED",
+                "指定した session は AI 要件確認ではありません。",
+            )
+        if not actor_is_system_admin and session.actor_user_uuid.strip() != actor_user_uuid:
+            raise OntologyStateConflictError(
+                "REQUIREMENT_SESSION_FORBIDDEN",
+                "他のユーザーの AI要件確認は使えません。",
+            )
+        if session.status != QuerySessionStatus.DONE or session.requirement_applied_at is None:
+            raise OntologyStateConflictError(
+                "REQUIREMENT_NOT_APPLIED",
+                "AI要件確認の結果がまだ反映されていません。",
+            )
+        if session.profile_id != (profile_id or ""):
+            raise OntologyStateConflictError(
+                "REQUIREMENT_PROFILE_MISMATCH",
+                "AI要件確認の業務プロファイルと、SQL を生成する業務プロファイルが違います。",
+            )
+        if question.strip() != session.requirement.clarified_question_ja.strip():
+            raise OntologyStateConflictError(
+                "REQUIREMENT_QUESTION_CHANGED",
+                "質問の文が AI要件確認で反映した文と違います。要件を外して生成するか、"
+                "確認をやり直してください。",
+            )
+        return generation_spec(session)
 
     def cancel_session(self, session_id: str) -> QuerySessionData:
         with self._lock:
@@ -4031,10 +4145,11 @@ class OntologyApiRuntime:
                 revision_id=session.ontology_revision_id,
                 state=session.status.value,
             )
-            record_clarification(
-                outcome="cancelled",
-                turns=len(session.clarification_turns),
-            )
+            if session.clarification_mode == ClarificationMode.GUIDED:
+                record_clarification(
+                    outcome="cancelled",
+                    turns=len(session.requirement_answers),
+                )
             return self._session_data(session)
 
     def _maybe_expire_idle_sessions(self) -> None:
@@ -4114,7 +4229,7 @@ class OntologyApiRuntime:
                     state=session.status.value,
                 )
                 if session.clarification_mode == ClarificationMode.GUIDED:
-                    record_clarification(outcome="expired", turns=len(session.clarification_turns))
+                    record_clarification(outcome="expired", turns=len(session.requirement_answers))
         if expired:
             logger.info("nl2sql_query_sessions_expired", extra={"count": expired})
         return expired
@@ -4138,19 +4253,11 @@ class OntologyApiRuntime:
                     "確認対象の Ontology revision が query session と一致しません。",
                 )
             if current.clarification_mode == ClarificationMode.GUIDED:
-                view = self._session_views.get(session_id)
-                if view is None:
-                    view = self.sessions.get_profile_view(current.profile_view_id)
-                ontology = self._ontologies.get(current.ontology_revision_id)
-                if ontology is None:
-                    ontology = self.ontology_revision(current.ontology_revision_id)
-                clarification = build_clarification_state(current, ontology, view)
-                if not clarification.can_generate_sql:
-                    raise OntologyGateBlockedError(
-                        "GUIDED_CLARIFICATION_INCOMPLETE",
-                        clarification.message_ja,
-                        finding_codes=clarification.missing_required,
-                    )
+                # AI要件確認の session は、反映して SQL 生成の画面の job で生成する（#1439）。
+                raise OntologyStateConflictError(
+                    "GUIDED_SESSION_GENERATES_IN_JOB",
+                    "AI要件確認の結果は、反映してから SQL 生成の画面で生成してください。",
+                )
             confirmed = self.sessions.confirm_intent(
                 session_id,
                 intent_version=request.intent_version,
@@ -5230,8 +5337,10 @@ class OntologyApiRuntime:
         artifact = session.sql_artifacts[-1] if session.sql_artifacts else None
         report = artifact.validation_report if artifact is not None else None
         context = self._contexts.get(session.id)
-        clarification = (
-            build_clarification_state(session, ontology, view)
+        requirement_state = (
+            build_requirement_state(
+                session, max_review_rounds=self._requirement_max_review_rounds()
+            )
             if session.clarification_mode == ClarificationMode.GUIDED
             else None
         )
@@ -5246,7 +5355,7 @@ class OntologyApiRuntime:
             preview=self._previews.get(session.id),
             result=self._results.get(session.id),
             performance_check=self._plans.get(session.id),
-            clarification=clarification,
+            requirement_state=requirement_state,
             ontology_trace_summary={
                 "session_id": session.id,
                 "ontology_revision_id": session.ontology_revision_id,
@@ -5889,6 +5998,8 @@ def _raise_domain_error(exc: Exception) -> NoReturn:
         status_code = 409
     elif isinstance(exc, OntologyGateBlockedError):
         status_code = 422
+    elif isinstance(exc, RequirementAiUnavailableError):
+        status_code = 503
     else:
         status_code = 500
     # アプリ共通の exception handler が detail を error_messages[0] へ文字列化するため、
@@ -6368,6 +6479,32 @@ def answer_query_clarification(
                 "session": current.model_dump(mode="json"),
             },
         ) from exc
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post(
+    "/query-sessions/{session_id}/apply",
+    response_model=ApiResponse[QuerySessionData],
+)
+def apply_query_requirement(
+    session_id: str,
+    request: RequirementApplyRequest,
+    http_request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+) -> ApiResponse[QuerySessionData]:
+    """AI要件確認の結果を反映し、session を閉じる（#1439）。"""
+
+    try:
+        _load_authorized_query_session(session_id, http_request)
+        return ApiResponse(
+            data=_run_runtime_sync(
+                ontology_runtime.apply_requirement_idempotent,
+                session_id,
+                request,
+                idempotency_key=idempotency_key,
+            )
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 

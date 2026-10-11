@@ -1,11 +1,16 @@
-"""AI 要件確認の質問計画、回答、scope 境界の回帰テスト。"""
+"""AI要件確認（SQL の要件の下書き）の回帰テスト（#1439）。
+
+LLM は決定論のスタブ。表のデータを LLM に渡さない・範囲の外と実在しない名前・未承認の結合・根拠の
+無い候補を拒む・相対的な期間を具体的な日付で確かめる・回答の後の再検査・上限・SELECT / FROM の
+最低の基準・物理名・危険な問い合わせの確認・SQL の骨組みを確かめる。
+"""
 
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Callable, Mapping
-from typing import Any, cast
+from datetime import date, timedelta
+from typing import Any
 
 import httpx
 import pytest
@@ -16,36 +21,18 @@ from app.features.nl2sql.models import (
     Nl2SqlProfile,
     SchemaCatalog,
     SchemaColumn,
+    SchemaConstraintDetail,
     SchemaTable,
 )
-from app.features.nl2sql.ontology_clarification import (
-    apply_clarification_answer,
-    build_clarification_state,
-    enrich_guided_intent,
-    merge_free_text_reinterpretation,
-)
 from app.features.nl2sql.ontology_models import (
-    ClarificationAnswer,
-    ClarificationAnswerKind,
-    ClarificationCategory,
     ClarificationMode,
-    ClarificationOption,
-    ClarificationQuestion,
-    ClarificationStatus,
-    ClarificationTurn,
-    ColumnQueryPolicy,
-    IntentAmbiguity,
-    IntentDimension,
-    IntentEntity,
-    IntentFilter,
-    IntentMetric,
-    IntentSort,
-    IntentTimeRange,
-    OntologyNodeKind,
-    PhysicalMapping,
-    PhysicalObjectRef,
-    QuerySession,
     QuerySessionStatus,
+    RequirementItem,
+    RequirementPhase,
+    RequirementSection,
+    RequirementState,
+    RequirementStatus,
+    SqlRequirementDraft,
 )
 from app.features.nl2sql.ontology_router import (
     ClarificationAnswerRequest,
@@ -53,6 +40,7 @@ from app.features.nl2sql.ontology_router import (
     OntologyApiRuntime,
     QuerySessionApiCreate,
     QuerySessionData,
+    RequirementApplyRequest,
 )
 from app.features.nl2sql.ontology_service import (
     OntologyGateBlockedError,
@@ -65,58 +53,153 @@ from app.features.nl2sql.ontology_store import (
     InMemoryOntologyStore,
     OntologyCollection,
 )
+from app.features.nl2sql.sql_requirement import (
+    LlmRequirementOutput,
+    RequirementAiUnavailableError,
+    build_draft,
+    build_requirement_context,
+    period_ranges,
+)
 from app.main import app
 from app.settings import get_settings
+
+TODAY = date(2026, 10, 11)
 
 
 @pytest.fixture(autouse=True)
 def _disable_profile_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_profile_confirmation_required", False)
+    monkeypatch.setattr(get_settings(), "nl2sql_requirement_max_review_rounds", 3)
 
 
-class _GuidedLegacyService:
+def _catalog() -> SchemaCatalog:
+    return SchemaCatalog(
+        refreshed_at="2026-10-11T00:00:00Z",
+        schema_fingerprint="requirement-schema",
+        tables=[
+            SchemaTable(
+                table_name="ORDERS",
+                owner="APP",
+                logical_name="受注",
+                comment="受注の明細",
+                columns=[
+                    SchemaColumn(
+                        column_name="ORDER_ID",
+                        logical_name="受注ID",
+                        data_type="NUMBER",
+                        nullable=False,
+                        comment="受注を識別する主キー",
+                        sample_values=["1001"],
+                    ),
+                    SchemaColumn(
+                        column_name="CUSTOMER_ID",
+                        logical_name="顧客ID",
+                        data_type="NUMBER",
+                        comment="顧客",
+                    ),
+                    SchemaColumn(
+                        column_name="ORDER_DATE",
+                        logical_name="受注日",
+                        data_type="DATE",
+                        comment="受注した日",
+                    ),
+                    SchemaColumn(
+                        column_name="SHIP_DATE",
+                        logical_name="出荷日",
+                        data_type="DATE",
+                        comment="出荷した日",
+                    ),
+                    SchemaColumn(
+                        column_name="STATUS",
+                        logical_name="受注状態",
+                        data_type="VARCHAR2",
+                        comment="受注の状態（SHIPPED: 出荷済み、CANCELLED: 取消）",
+                        sample_values=["SECRET_SAMPLE_VALUE"],
+                    ),
+                    SchemaColumn(
+                        column_name="AMOUNT",
+                        logical_name="受注金額",
+                        data_type="NUMBER",
+                        comment="税込の金額（円）",
+                    ),
+                ],
+                constraint_details=[
+                    SchemaConstraintDetail(
+                        constraint_name="PK_ORDERS",
+                        constraint_type="P",
+                        owner="APP",
+                        table_name="ORDERS",
+                        columns=["ORDER_ID"],
+                    ),
+                    SchemaConstraintDetail(
+                        constraint_name="FK_ORDERS_CUSTOMER",
+                        constraint_type="R",
+                        owner="APP",
+                        table_name="ORDERS",
+                        columns=["CUSTOMER_ID"],
+                        referenced_owner="APP",
+                        referenced_table="CUSTOMERS",
+                        referenced_columns=["CUSTOMER_ID"],
+                    ),
+                ],
+            ),
+            SchemaTable(
+                table_name="CUSTOMERS",
+                owner="APP",
+                logical_name="顧客",
+                comment="顧客の台帳",
+                columns=[
+                    SchemaColumn(
+                        column_name="CUSTOMER_ID",
+                        logical_name="顧客ID",
+                        data_type="NUMBER",
+                        nullable=False,
+                        comment="顧客の主キー",
+                    ),
+                    SchemaColumn(
+                        column_name="REGION",
+                        logical_name="地域",
+                        data_type="VARCHAR2",
+                        comment="顧客の地域",
+                    ),
+                ],
+                constraint_details=[
+                    SchemaConstraintDetail(
+                        constraint_name="PK_CUSTOMERS",
+                        constraint_type="P",
+                        owner="APP",
+                        table_name="CUSTOMERS",
+                        columns=["CUSTOMER_ID"],
+                    )
+                ],
+            ),
+            SchemaTable(
+                table_name="SECRET_TABLE",
+                owner="APP",
+                logical_name="秘密",
+                comment="業務プロファイルの範囲の外",
+                columns=[
+                    SchemaColumn(column_name="ID", logical_name="ID", data_type="NUMBER"),
+                ],
+            ),
+        ],
+    )
+
+
+class _LegacyService:
     uses_incremental_store = False
 
-    def __init__(self) -> None:
+    def __init__(self, *, glossary: dict[str, str] | None = None) -> None:
         self.profile = Nl2SqlProfile(
             id="sales",
             name="販売分析",
-            description="受注件数と金額を確認する Profile",
-            allowed_tables=["APP.ORDERS"],
-            glossary={"売上": "受注金額"},
-            sql_rules=["取消済みを除外する"],
-            few_shot_examples=[{"question": "先月の受注件数", "sql": "SELECT COUNT(*)"}],
+            description="受注と顧客を分析する",
+            allowed_tables=["APP.ORDERS", "APP.CUSTOMERS"],
+            glossary=glossary or {"売上": "受注金額（AMOUNT）の合計"},
+            sql_rules=["取消（STATUS = 'CANCELLED'）を除く"],
             default_row_limit=100,
         )
-        self.catalog = SchemaCatalog(
-            refreshed_at="2026-09-06T00:00:00Z",
-            schema_fingerprint="guided-schema",
-            tables=[
-                SchemaTable(
-                    table_name="ORDERS",
-                    owner="APP",
-                    table_type="table",
-                    logical_name="受注",
-                    comment="受注データ",
-                    columns=[
-                        SchemaColumn(
-                            column_name="STATUS",
-                            logical_name="受注状態",
-                            data_type="VARCHAR2",
-                            comment="受注の状態",
-                            sample_values=["CONFIRMED", "SECRET_VALUE"],
-                        ),
-                        SchemaColumn(
-                            column_name="ORDER_ID",
-                            logical_name="受注ID",
-                            data_type="NUMBER",
-                            comment="受注を識別する主キー",
-                            sample_values=["1001", "1002"],
-                        ),
-                    ],
-                )
-            ],
-        )
+        self.catalog = _catalog()
         self._enterprise_ai_client: Any = None
 
     def get_catalog(self) -> SchemaCatalog:
@@ -127,20 +210,999 @@ class _GuidedLegacyService:
             raise ValueError("profile not found")
         return self.profile.model_copy(deep=True)
 
-    def resolve_allowed_objects(
-        self,
-        profile_id: str,
-        requested: AllowedObjects,
-    ) -> AllowedObjects:
+    def resolve_allowed_objects(self, profile_id: str, requested: AllowedObjects) -> AllowedObjects:
         self.get_profile(profile_id)
-        return (
-            requested.model_copy(deep=True)
-            if requested.table_names
-            else AllowedObjects(
-                table_names=["APP.ORDERS"],
-                enforce_table_scope=True,
-            )
+        if requested.table_names:
+            return requested.model_copy(deep=True)
+        return AllowedObjects(
+            table_names=list(self.profile.allowed_tables), enforce_table_scope=True
         )
+
+
+class _ScriptedLlm:
+    """呼ばれた順に応答を返すスタブ。応答は context（dict）から作る関数でもよい。"""
+
+    def __init__(self, *responses: dict[str, Any] | Callable[[dict[str, Any]], dict[str, Any]]):
+        self.responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    def is_configured(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "stub-requirement-llm"
+
+    def generate(self, *, prompt: str, context: str, system_prompt: str, **kwargs: Any) -> str:
+        payload = json.loads(context)
+        self.calls.append(
+            {"prompt": prompt, "context": payload, "raw_context": context, "system": system_prompt}
+        )
+        if not self.responses:
+            raise AssertionError("LLM がスクリプトより多く呼ばれた")
+        response = self.responses.pop(0)
+        value = response(payload) if callable(response) else response
+        return json.dumps(value, ensure_ascii=False)
+
+
+def _item(
+    key: str,
+    section: str,
+    status: str,
+    *,
+    label: str = "",
+    value: str = "",
+    tables: list[str] | None = None,
+    columns: list[str] | None = None,
+    relationship_ids: list[str] | None = None,
+    sql_hint: str = "",
+    question: str = "",
+    candidates: list[dict[str, Any]] | None = None,
+    period: dict[str, Any] | None = None,
+    answer_kind: str = "single_select",
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "section": section,
+        "label_ja": label or key,
+        "value_ja": value,
+        "status": status,
+        "reason_ja": "",
+        "question_ja": question,
+        "answer_kind": answer_kind,
+        "source": "question",
+        "tables": tables or [],
+        "columns": columns or [],
+        "relationship_ids": relationship_ids or [],
+        "sql_hint": sql_hint,
+        "period": period,
+        "candidates": candidates or [],
+    }
+
+
+def _candidate(
+    label: str,
+    *,
+    evidence: str = "列のコメント",
+    tables: list[str] | None = None,
+    columns: list[str] | None = None,
+    sql_hint: str = "",
+    source: str = "schema",
+) -> dict[str, Any]:
+    return {
+        "label_ja": label,
+        "description_ja": "",
+        "evidence_ja": evidence,
+        "source": source,
+        "tables": tables or [],
+        "columns": columns or [],
+        "relationship_ids": [],
+        "sql_hint": sql_hint,
+    }
+
+
+def _output(*items: dict[str, Any], clarified: str = "", unanswerable: str = "") -> dict[str, Any]:
+    return {
+        "clarified_question_ja": clarified,
+        "items": list(items),
+        "unanswerable_reason_ja": unanswerable,
+    }
+
+
+def _from_orders(status: str = "confirmed") -> dict[str, Any]:
+    return _item(
+        "from_orders", "from", status, label="使う表", value="APP.ORDERS", tables=["APP.ORDERS"]
+    )
+
+
+def _select_total(status: str = "confirmed") -> dict[str, Any]:
+    return _item(
+        "select_total",
+        "select",
+        status,
+        label="受注金額の合計",
+        value="SUM(ORDERS.AMOUNT)",
+        columns=["APP.ORDERS.AMOUNT"],
+        sql_hint="SUM(ORDERS.AMOUNT)",
+    )
+
+
+def _where_shipped() -> dict[str, Any]:
+    return _item(
+        "where_status",
+        "where",
+        "confirmed",
+        label="受注状態",
+        value="出荷済み",
+        columns=["APP.ORDERS.STATUS"],
+        sql_hint="ORDERS.STATUS = 'SHIPPED'",
+    )
+
+
+def _runtime(llm: _ScriptedLlm, *, glossary: dict[str, str] | None = None) -> OntologyApiRuntime:
+    legacy = _LegacyService(glossary=glossary)
+    legacy._enterprise_ai_client = llm
+    runtime = OntologyApiRuntime(legacy_service=legacy, store=InMemoryOntologyStore())
+    runtime._requirement_today = lambda: TODAY  # type: ignore[method-assign]
+    return runtime
+
+
+def _create(
+    runtime: OntologyApiRuntime, question: str = "出荷済みの受注金額の合計"
+) -> QuerySessionData:
+    return runtime.create_session(
+        QuerySessionApiCreate(
+            question=question,
+            profile_id="sales",
+            clarification_mode=ClarificationMode.GUIDED,
+        ),
+        actor_user_uuid="user-1",
+    )
+
+
+def _draft(data: QuerySessionData) -> SqlRequirementDraft:
+    assert data.session.requirement is not None
+    return data.session.requirement
+
+
+def _items(data: QuerySessionData) -> list[RequirementItem]:
+    return _draft(data).items
+
+
+def _state(data: QuerySessionData) -> RequirementState:
+    assert data.requirement_state is not None
+    return data.requirement_state
+
+
+def _answer(
+    runtime: OntologyApiRuntime,
+    data: QuerySessionData,
+    *,
+    item_id: str | None = None,
+    candidate_index: int | None = 0,
+    free_text: str = "",
+) -> QuerySessionData:
+    state = data.requirement_state
+    assert state is not None
+    item = (
+        next(value for value in _items(data) if value.id == item_id)
+        if item_id
+        else state.current_item
+    )
+    assert item is not None
+    selected = (
+        [item.candidates[candidate_index].id]
+        if candidate_index is not None and not free_text and item.candidates
+        else []
+    )
+    return runtime.answer_clarification(
+        data.session.id,
+        ClarificationAnswerRequest(
+            base_version=data.session.current_intent_version,
+            item_id=item.id,
+            selected_candidate_ids=selected,
+            free_text=free_text,
+        ),
+    )
+
+
+# --- 1. 表のデータを LLM の入力に入れない ---------------------------------------------
+
+
+def test_llm_input_uses_schema_without_table_data() -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), _where_shipped()))
+    runtime = _runtime(llm)
+
+    created = _create(runtime)
+
+    assert len(llm.calls) == 1
+    raw = llm.calls[0]["raw_context"]
+    assert "SECRET_SAMPLE_VALUE" not in raw
+    assert "1001" not in raw
+    assert "sample_values" not in raw
+    assert "row_count" not in raw
+    context = llm.calls[0]["context"]
+    tables = {item["table"] for item in context["schema"]}
+    # 業務プロファイルの範囲の表だけ（範囲の外の表は名前も渡さない）。
+    assert tables == {"APP.ORDERS", "APP.CUSTOMERS"}
+    columns = {column["name"] for item in context["schema"] for column in item["columns"]}
+    assert "APP.ORDERS.ORDER_DATE" in columns
+    orders = next(item for item in context["schema"] if item["table"] == "APP.ORDERS")
+    assert orders["primary_key"] == ["ORDERS.ORDER_ID"]
+    assert any(
+        relation["condition"] == "ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID"
+        for relation in context["relationships"]
+    )
+    assert context["profile"]["glossary"] == {"売上": "受注金額（AMOUNT）の合計"}
+    assert context["reference_date"] == "2026-10-11"
+    assert created.requirement_state is not None
+
+
+def test_stale_published_ontology_is_skipped_but_schema_is_still_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import ontology_markdown_workspace, ontology_published_context
+
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped()),
+        _output(_from_orders(), _select_total(), _where_shipped()),
+    )
+    runtime = _runtime(llm)
+    revision_id = runtime._query_ontology("sales").revision.id
+    monkeypatch.setattr(
+        ontology_markdown_workspace.MarkdownOntologyWorkspace,
+        "head",
+        lambda self, profile_id: {"snapshot_id": revision_id},
+    )
+    monkeypatch.setattr(
+        ontology_markdown_workspace.MarkdownOntologyWorkspace,
+        "snapshot",
+        lambda self, profile_id, *args, **kwargs: None,
+    )
+
+    def stale(*_args: Any, **_kwargs: Any) -> Any:
+        raise OntologyGateBlockedError(
+            "MARKDOWN_STALE",
+            "Profile または Schema が変更されました。Markdown を再検証してください。",
+        )
+
+    monkeypatch.setattr(ontology_published_context, "published_context", stale)
+    created = _create(runtime)
+    draft = _draft(created)
+    # オントロジーは「あれば使う」。公開版が古ければ業務の概念を使わず、Schema で確かめる。
+    assert any("オントロジーの業務の概念を使わずに" in warning for warning in draft.warnings_ja)
+    assert llm.calls[0]["context"]["ontology"] == []
+    assert _state(created).can_apply is True
+
+    # 確認だけの session（review_only）は、これまでどおり止める。
+    with pytest.raises(OntologyGateBlockedError):
+        runtime.create_session(
+            QuerySessionApiCreate(question="受注", profile_id="sales"), actor_user_uuid="user-1"
+        )
+
+
+def test_llm_not_configured_does_not_fall_back_to_rule_draft() -> None:
+    legacy = _LegacyService()
+    runtime = OntologyApiRuntime(legacy_service=legacy, store=InMemoryOntologyStore())
+    with pytest.raises(RequirementAiUnavailableError) as raised:
+        _create(runtime)
+    assert raised.value.code == "REQUIREMENT_AI_NOT_CONFIGURED"
+
+
+def test_invalid_llm_output_is_rejected() -> None:
+    class _BrokenLlm(_ScriptedLlm):
+        def generate(self, **kwargs: Any) -> str:
+            return '{"items": "not-a-list"}'
+
+    runtime = _runtime(_BrokenLlm())
+    with pytest.raises(RequirementAiUnavailableError) as raised:
+        _create(runtime)
+    assert raised.value.code == "REQUIREMENT_AI_INVALID_OUTPUT"
+
+
+# --- 2. 範囲の外・実在しない名前・未承認の結合を拒む ---------------------------------
+
+
+def test_out_of_scope_and_unknown_names_are_rejected() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item(
+                "from_tables",
+                "from",
+                "confirmed",
+                tables=["APP.ORDERS", "APP.SECRET_TABLE", "APP.NO_SUCH_TABLE"],
+            ),
+            _item(
+                "select_amount",
+                "select",
+                "confirmed",
+                columns=["APP.ORDERS.AMOUNT", "APP.ORDERS.NO_SUCH_COLUMN"],
+                sql_hint="SUM(ORDERS.NO_SUCH_COLUMN)",
+            ),
+        )
+    )
+    created = _create(_runtime(llm))
+    draft = created.session.requirement
+    assert draft is not None
+    from_item = next(item for item in draft.items if item.key == "from_tables")
+    assert from_item.tables == ["APP.ORDERS"]
+    # 実在しない名前があった項目は、推測のままにせず確認に回す。
+    assert from_item.status == RequirementStatus.AMBIGUOUS
+    assert "APP.SECRET_TABLE" in from_item.reason_ja
+    select_item = next(item for item in draft.items if item.key == "select_amount")
+    assert select_item.columns == ["APP.ORDERS.AMOUNT"]
+    assert select_item.sql_hint == ""
+    assert any("APP.NO_SUCH_TABLE" in warning for warning in draft.warnings_ja)
+
+
+def test_unapproved_join_is_rejected_and_approved_relationship_is_used() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "confirmed", tables=["APP.ORDERS", "APP.CUSTOMERS"]),
+            _item("select_region", "select", "confirmed", columns=["APP.CUSTOMERS.REGION"]),
+            _item(
+                "join_orders_customers",
+                "join",
+                "confirmed",
+                relationship_ids=["made_up_relationship"],
+                sql_hint="ORDERS.ORDER_ID = CUSTOMERS.CUSTOMER_ID",
+            ),
+        )
+    )
+    created = _create(_runtime(llm), "地域ごとの受注")
+    draft = created.session.requirement
+    assert draft is not None
+    join = next(item for item in draft.items if item.key == "join_orders_customers")
+    assert join.relationship_ids == []
+    assert join.status == RequirementStatus.AMBIGUOUS
+    assert "承認済み" in join.reason_ja
+
+
+def test_unconnectable_tables_are_unanswerable() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "confirmed", tables=["APP.ORDERS", "APP.CUSTOMERS"]),
+            _select_total(),
+        )
+    )
+    legacy = _LegacyService()
+    # 外部キーを外す（承認済みの関係が無い）。
+    legacy.catalog.tables[0].constraint_details = legacy.catalog.tables[0].constraint_details[:1]
+    legacy._enterprise_ai_client = llm
+    runtime = OntologyApiRuntime(legacy_service=legacy, store=InMemoryOntologyStore())
+    runtime._requirement_today = lambda: TODAY  # type: ignore[method-assign]
+
+    created = _create(runtime)
+    state = created.requirement_state
+    assert state is not None
+    assert state.status == RequirementPhase.UNANSWERABLE
+    assert "この業務プロファイルでは答えられません" in state.message_ja
+    assert state.can_apply is False
+
+
+# --- 3. 根拠の無い候補・マスクの値を出さない ------------------------------------------
+
+
+def test_candidates_without_evidence_or_grounded_value_are_dropped() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _item(
+                "where_status",
+                "where",
+                "ambiguous",
+                question="どの受注状態に絞りますか？",
+                columns=["APP.ORDERS.STATUS"],
+                candidates=[
+                    _candidate(
+                        "出荷済み（SHIPPED）",
+                        columns=["APP.ORDERS.STATUS"],
+                        sql_hint="ORDERS.STATUS = 'SHIPPED'",
+                    ),
+                    _candidate("根拠の無い候補", evidence="", sql_hint="ORDERS.STATUS = 'X'"),
+                    _candidate(
+                        "データからの推測",
+                        columns=["APP.ORDERS.STATUS"],
+                        sql_hint="ORDERS.STATUS = 'SECRET_SAMPLE_VALUE'",
+                    ),
+                    _candidate("範囲の外", tables=["APP.SECRET_TABLE"]),
+                ],
+            ),
+        )
+    )
+    created = _create(_runtime(llm))
+    state = created.requirement_state
+    assert state is not None and state.current_item is not None
+    assert state.current_item.key == "where_status"
+    assert [candidate.label_ja for candidate in state.current_item.candidates] == [
+        "出荷済み（SHIPPED）"
+    ]
+
+
+def test_masked_column_values_are_not_offered() -> None:
+    profile = _LegacyService().profile
+    context = build_requirement_context(
+        question="状態で絞る",
+        profile=profile,
+        catalog_tables=_catalog().tables,
+        allowed=AllowedObjects(),
+        ontology=None,
+        view=None,
+        today=TODAY,
+    )
+    context.tables["APP.ORDERS"].columns["APP.ORDERS.STATUS"].masked = True
+    output = LlmRequirementOutput.model_validate(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _item(
+                "where_status",
+                "where",
+                "inferred",
+                columns=["APP.ORDERS.STATUS"],
+                sql_hint="ORDERS.STATUS = 'SHIPPED'",
+                candidates=[
+                    _candidate(
+                        "出荷済み",
+                        columns=["APP.ORDERS.STATUS"],
+                        sql_hint="ORDERS.STATUS = 'SHIPPED'",
+                    )
+                ],
+            ),
+        )
+    )
+    draft = build_draft(output, context, question="状態で絞る")
+    item = next(value for value in draft.items if value.key == "where_status")
+    assert item.candidates == []
+    assert item.sql_hint == ""
+    assert item.status == RequirementStatus.AMBIGUOUS
+    assert "マスク" in item.reason_ja
+
+
+# --- 4. 相対的な期間を具体的な日付の範囲で確かめる ------------------------------------
+
+
+def _fiscal_period_item(status: str = "confirmed") -> dict[str, Any]:
+    return _item(
+        "period_this_fiscal_year",
+        "period",
+        status,
+        label="期間",
+        value="今年度",
+        period={
+            "expression_ja": "今年度",
+            "relative_kind": "this_fiscal_year",
+            "count": 0,
+            "fiscal_year_start_month": 0,
+            "date_column": "APP.ORDERS.ORDER_DATE",
+        },
+    )
+
+
+def test_relative_period_is_always_confirmed_as_concrete_dates() -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), _fiscal_period_item()))
+    created = _create(_runtime(llm), "今年度の受注金額の合計")
+    draft = created.session.requirement
+    assert draft is not None
+    # 日付の列が 2 つ（ORDER_DATE・SHIP_DATE）あるので、まず列を確かめる。
+    column_item = next(item for item in draft.items if item.key == "period_date_column")
+    assert column_item.status == RequirementStatus.AMBIGUOUS
+    assert column_item.candidates[0].label_ja == "ORDERS.ORDER_DATE（受注日）"
+    assert "AI の推測" in column_item.candidates[0].description_ja
+    period = next(item for item in draft.items if item.key == "period_this_fiscal_year")
+    # LLM が confirmed と返しても、相対的な期間は必ず確かめる。
+    assert period.status == RequirementStatus.AMBIGUOUS
+    labels = [candidate.label_ja for candidate in period.candidates]
+    # 年度の開始月が定義されていないので、4 月始まりと 1 月始まりを具体的な日付で出す。
+    assert "2026-04-01〜2027-03-31" in labels
+    assert "2026-01-01〜2026-12-31" in labels
+    assert "データの最新日を基準にする" in labels
+    assert "実行日（2026-10-11）" in period.reason_ja
+    assert "開始日と終了日を含みます" in period.reason_ja
+
+
+def test_fiscal_year_start_from_glossary_is_the_candidate() -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), _fiscal_period_item()))
+    runtime = _runtime(llm, glossary={"年度": "4月1日から翌年3月31日までの期間"})
+    created = _create(runtime, "今年度の受注金額の合計")
+    draft = created.session.requirement
+    assert draft is not None
+    period = next(item for item in draft.items if item.key == "period_this_fiscal_year")
+    labels = [candidate.label_ja for candidate in period.candidates]
+    assert "2026-01-01〜2026-12-31" not in labels
+    assert labels[0] == "2026-04-01〜2027-03-31"
+    assert period.candidates[0].source.value == "glossary"
+    assert "用語集の定義（4月）" in period.reason_ja
+
+
+@pytest.mark.parametrize(
+    ("kind", "count", "expected"),
+    [
+        ("last_month", None, [("2026-09-01", "2026-09-30")]),
+        ("this_month", None, [("2026-10-01", "2026-10-11"), ("2026-10-01", "2026-10-31")]),
+        (
+            "last_n_months",
+            3,
+            [
+                ("2026-07-12", "2026-10-11"),
+                ("2026-07-01", "2026-09-30"),
+                ("2026-08-01", "2026-10-11"),
+            ],
+        ),
+        ("last_fiscal_year", None, [("2025-04-01", "2026-03-31"), ("2025-01-01", "2025-12-31")]),
+        (
+            "same_period_last_year",
+            None,
+            [
+                ("2025-10-01", "2025-10-31"),
+                ("2025-10-01", "2025-10-11"),
+                ("2025-01-01", "2025-10-11"),
+            ],
+        ),
+    ],
+    ids=["last_month", "this_month", "last_3_months", "last_fiscal_year", "same_period_last_year"],
+)
+def test_period_ranges_are_computed_from_reference_date(
+    kind: str, count: int | None, expected: list[tuple[str, str]]
+) -> None:
+    ranges = period_ranges(kind, count, TODAY, None)
+    assert [(start.isoformat(), end.isoformat()) for _label, start, end in ranges] == expected
+
+
+# --- 5. 回答・再検査・上限 -------------------------------------------------------------
+
+
+def test_answer_then_review_adds_question_and_stops_when_clear() -> None:
+    def first_review(context: dict[str, Any]) -> dict[str, Any]:
+        answered = {item["key"] for item in context["answered_items"]}
+        assert "where_status" in answered
+        return _output(
+            # 答えた項目を変えようとしても保たれる。
+            _item("where_status", "where", "ambiguous", question="変えてはいけない"),
+            _from_orders(),
+            _select_total(),
+            _item(
+                "other_currency",
+                "other",
+                "missing",
+                question="金額は税込と税抜のどちらですか？",
+                answer_kind="free_text",
+            ),
+            clarified="出荷済みの ORDERS の AMOUNT の合計",
+        )
+
+    def second_review(context: dict[str, Any]) -> dict[str, Any]:
+        answered = {item["key"] for item in context["answered_items"]}
+        assert answered == {"where_status", "other_currency"}
+        return _output(
+            _from_orders(),
+            _select_total(),
+            clarified="出荷済み（ORDERS.STATUS = 'SHIPPED'）の ORDERS.AMOUNT（税込）の合計",
+        )
+
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _item(
+                "where_status",
+                "where",
+                "ambiguous",
+                question="どの受注状態に絞りますか？",
+                columns=["APP.ORDERS.STATUS"],
+                candidates=[
+                    _candidate(
+                        "出荷済み（SHIPPED）",
+                        columns=["APP.ORDERS.STATUS"],
+                        sql_hint="ORDERS.STATUS = 'SHIPPED'",
+                    )
+                ],
+            ),
+        ),
+        first_review,
+        second_review,
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    assert created.requirement_state is not None
+    assert created.requirement_state.status == RequirementPhase.NEEDS_ANSWER
+    assert created.requirement_state.can_apply is False
+
+    after_first = _answer(runtime, created)
+    assert len(llm.calls) == 2
+    state = after_first.requirement_state
+    assert state is not None
+    assert state.review_round == 1
+    assert state.current_item is not None and state.current_item.key == "other_currency"
+    kept = next(item for item in _items(after_first) if item.key == "where_status")
+    assert kept.answered and kept.sql_hint == "ORDERS.STATUS = 'SHIPPED'"
+
+    after_second = _answer(runtime, after_first, free_text="税込")
+    assert len(llm.calls) == 3
+    final = after_second.requirement_state
+    assert final is not None
+    assert final.status == RequirementPhase.READY
+    assert final.review_round == 2
+    assert final.can_apply is True
+    assert final.unresolved_items == []
+
+
+def test_review_limit_lists_remaining_items_and_allows_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_requirement_max_review_rounds", 1)
+    still_missing = _output(
+        _from_orders(),
+        _select_total(),
+        _where_shipped(),
+        _item("other_unit", "other", "missing", question="単位は？", answer_kind="free_text"),
+    )
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _where_shipped(),
+            _item("other_currency", "other", "missing", question="税込？", answer_kind="free_text"),
+        ),
+        still_missing,
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    after = _answer(runtime, created, free_text="税込")
+    state = after.requirement_state
+    assert state is not None
+    assert state.review_limit_reached is True
+    assert [item.key for item in state.unresolved_items] == ["other_unit"]
+    assert "上限（1 回）" in state.message_ja
+    # SELECT と FROM が明確なら、残りを AI に任せて進めるかを利用者が決められる。
+    assert state.can_apply is True
+
+    # 上限の後は回答しても LLM を呼ばない。
+    final = _answer(runtime, after, free_text="円")
+    assert len(llm.calls) == 2
+    assert final.requirement_state is not None
+    assert final.requirement_state.status == RequirementPhase.READY
+
+
+def test_select_and_from_must_be_clear_before_apply() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "missing", question="どの表？"),
+        )
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime, "いい感じに出して")
+    state = created.requirement_state
+    assert state is not None
+    assert state.select_from_clear is False
+    assert len(state.minimum_missing_ja) == 2
+    assert state.can_apply is False
+    # FROM の候補は範囲の表（物理名）、SELECT の不足もプログラムが質問にする。
+    from_item = next(
+        item for item in state.unresolved_items if item.section == RequirementSection.FROM
+    )
+    assert {candidate.label_ja for candidate in from_item.candidates} == {
+        "APP.ORDERS（受注）",
+        "APP.CUSTOMERS（顧客）",
+    }
+    assert any(item.key == "select_output" for item in state.unresolved_items)
+    with pytest.raises(OntologyGateBlockedError) as raised:
+        runtime.apply_requirement(created.session.id, RequirementApplyRequest(base_version=1))
+    assert raised.value.code == "GUIDED_CLARIFICATION_INCOMPLETE"
+
+
+def test_review_limit_still_blocks_apply_without_select() -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _where_shipped()))
+    state = _create(_runtime(llm)).requirement_state
+    assert state is not None
+    assert "何を表示するか（SELECT）が明確ではありません。" in state.minimum_missing_ja
+    assert state.can_apply is False
+
+
+# --- 6. 物理名 -------------------------------------------------------------------------
+
+
+def test_screen_text_and_summary_use_physical_names() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _where_shipped(),
+            _fiscal_period_item(),
+            # 業務名だけで書いた質問の文。
+            clarified="今年度の出荷済みの受注金額の合計",
+        )
+    )
+    created = _create(_runtime(llm), "今年度の出荷済みの売上")
+    draft = created.session.requirement
+    assert draft is not None
+    select_item = next(item for item in draft.items if item.key == "select_total")
+    assert select_item.refs_ja == "ORDERS.AMOUNT（受注金額）"
+    from_item = next(item for item in draft.items if item.key == "from_orders")
+    assert from_item.refs_ja == "APP.ORDERS（受注）"
+    # 書き直した質問の文に物理名を添える。
+    assert "ORDERS" in draft.clarified_question_ja
+    assert "ORDERS.AMOUNT" in draft.clarified_question_ja
+    state = created.requirement_state
+    assert state is not None
+    assert "APP.ORDERS" in state.summary_ja
+    assert "ORDERS.STATUS" in state.summary_ja
+    column_item = next(item for item in draft.items if item.key == "period_date_column")
+    assert {candidate.label_ja for candidate in column_item.candidates} == {
+        "ORDERS.ORDER_DATE（受注日）",
+        "ORDERS.SHIP_DATE（出荷日）",
+    }
+
+
+# --- 7. 危険・重い問い合わせの確認 -------------------------------------------------------
+
+
+def test_detail_without_filter_or_limit_is_confirmed() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _item(
+                "select_columns",
+                "select",
+                "confirmed",
+                columns=["APP.ORDERS.ORDER_ID", "APP.ORDERS.AMOUNT"],
+                sql_hint="ORDERS.ORDER_ID, ORDERS.AMOUNT",
+            ),
+        )
+    )
+    created = _create(_runtime(llm), "受注の一覧")
+    state = created.requirement_state
+    assert state is not None
+    keys = [item.key for item in state.unresolved_items]
+    assert "risk_no_filter" in keys
+    assert "risk_no_limit" in keys
+    no_limit = next(item for item in state.unresolved_items if item.key == "risk_no_limit")
+    assert no_limit.candidates[0].label_ja == "100 件まで"
+    no_filter = next(item for item in state.unresolved_items if item.key == "risk_no_filter")
+    assert "APP.ORDERS" in no_filter.reason_ja
+    assert "件数は読まずに" in no_filter.reason_ja
+
+
+def test_join_without_condition_is_confirmed_as_cartesian_risk() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "confirmed", tables=["APP.ORDERS", "APP.CUSTOMERS"]),
+            _item(
+                "select_region_total",
+                "select",
+                "confirmed",
+                columns=["APP.CUSTOMERS.REGION", "APP.ORDERS.AMOUNT"],
+                sql_hint="CUSTOMERS.REGION, SUM(ORDERS.AMOUNT)",
+            ),
+            _item("group_region", "group_by", "confirmed", sql_hint="CUSTOMERS.REGION"),
+            _item("join_type", "join", "confirmed", label="結合の種類", value="INNER JOIN"),
+            _where_shipped(),
+        )
+    )
+    state = _create(_runtime(llm), "地域ごとの受注金額").requirement_state
+    assert state is not None
+    risk = next(item for item in state.unresolved_items if item.key == "risk_cartesian_join")
+    assert "デカルト積" in risk.reason_ja
+    assert risk.candidates[0].label_ja == "ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID"
+
+
+# --- 8. SQL の骨組み -------------------------------------------------------------------
+
+
+def test_sql_skeleton_is_built_deterministically_from_requirements() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "confirmed", tables=["APP.ORDERS", "APP.CUSTOMERS"]),
+            _item(
+                "select_region_total",
+                "select",
+                "confirmed",
+                sql_hint="SELECT CUSTOMERS.REGION, SUM(ORDERS.AMOUNT)",
+                columns=["APP.CUSTOMERS.REGION", "APP.ORDERS.AMOUNT"],
+            ),
+            _item("group_region", "group_by", "confirmed", sql_hint="GROUP BY CUSTOMERS.REGION"),
+            _item("order_total", "order_by", "inferred", sql_hint="SUM(ORDERS.AMOUNT) DESC"),
+            _where_shipped(),
+            _fiscal_period_item(),
+        ),
+        _output(_from_orders(), clarified="今年度の地域ごとの ORDERS.AMOUNT の合計"),
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime, "今年度の地域ごとの売上")
+    skeleton = _state(created).sql_skeleton
+    assert "FROM APP.ORDERS" in skeleton
+    assert "JOIN APP.CUSTOMERS ON ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID" in skeleton
+    # 未確定（期間）は目印にする。
+    assert "⟨未確定: 期間⟩" in skeleton
+
+    after_column = _answer(runtime, created)  # 日付の列: ORDERS.ORDER_DATE
+    after_period = _answer(runtime, after_column)  # 2026-04-01〜2027-03-31（4 月始まり・全体）
+    state = after_period.requirement_state
+    assert state is not None
+    assert state.status == RequirementPhase.READY, state.message_ja
+    skeleton = state.sql_skeleton
+    assert skeleton.startswith("SELECT CUSTOMERS.REGION, SUM(ORDERS.AMOUNT)")
+    assert (
+        "ORDERS.ORDER_DATE >= DATE '2026-04-01' AND ORDERS.ORDER_DATE < DATE '2027-04-01'"
+        in skeleton
+    )
+    assert "ORDERS.STATUS = 'SHIPPED'" in skeleton
+    assert "GROUP BY CUSTOMERS.REGION" in skeleton
+    assert "ORDER BY SUM(ORDERS.AMOUNT) DESC" in skeleton
+    assert "⟨未確定" not in skeleton
+    # LLM が句のキーワードを付けても、骨組みで二重にしない。
+    assert "SELECT SELECT" not in skeleton
+    assert "GROUP BY GROUP BY" not in skeleton
+    # 相対的な期間は、確かめた具体的な日付の範囲を書き直した質問の文にも書く。
+    assert "2026-04-01〜2027-03-31" in _draft(after_period).clarified_question_ja
+    # 同じ要件からは同じ骨組み（決定的）。
+    again = runtime.get_session(after_period.session.id).requirement_state
+    assert again is not None and again.sql_skeleton == skeleton
+
+
+# --- 9. 反映・SQL の生成に渡す要件 -----------------------------------------------------
+
+
+def test_apply_closes_session_and_builds_generation_spec() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _where_shipped(),
+            clarified="出荷済み（ORDERS.STATUS = 'SHIPPED'）の ORDERS.AMOUNT の合計",
+        )
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    state = created.requirement_state
+    assert state is not None
+    assert state.can_apply, state.message_ja
+    applied = runtime.apply_requirement(created.session.id, RequirementApplyRequest(base_version=1))
+    assert applied.session.status == QuerySessionStatus.DONE
+    assert applied.session.requirement_applied_at is not None
+    # 反映した session には答えられない。
+    with pytest.raises(OntologyStateConflictError):
+        runtime.answer_clarification(
+            created.session.id,
+            ClarificationAnswerRequest(
+                base_version=1,
+                item_id=_items(applied)[0].id,
+                free_text="x",
+            ),
+        )
+    question = _draft(applied).clarified_question_ja
+    spec = runtime.applied_requirement_spec(
+        created.session.id,
+        actor_user_uuid="user-1",
+        actor_is_system_admin=False,
+        profile_id="sales",
+        question=question,
+    )
+    assert spec.tables == ["APP.ORDERS"]
+    assert any(item.sql_hint == "ORDERS.STATUS = 'SHIPPED'" for item in spec.items)
+    block = spec.prompt_block()
+    assert "必ず守る条件" in block
+    assert "APP.ORDERS" in block
+    assert "SUM(ORDERS.AMOUNT)" in block
+    for kwargs, code in [
+        ({"question": "書き換えた質問"}, "REQUIREMENT_QUESTION_CHANGED"),
+        ({"actor_user_uuid": "other-user"}, "REQUIREMENT_SESSION_FORBIDDEN"),
+        ({"profile_id": "other"}, "REQUIREMENT_PROFILE_MISMATCH"),
+    ]:
+        arguments: dict[str, Any] = {
+            "actor_user_uuid": "user-1",
+            "actor_is_system_admin": False,
+            "profile_id": "sales",
+            "question": question,
+            **kwargs,
+        }
+        with pytest.raises(OntologyStateConflictError) as raised:
+            runtime.applied_requirement_spec(created.session.id, **arguments)
+        assert raised.value.code == code
+
+
+def test_guided_session_does_not_generate_sql_inside_session() -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), _where_shipped()))
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    with pytest.raises(OntologyStateConflictError) as raised:
+        runtime.generate_sql(
+            created.session.id,
+            GenerateSqlRequest(
+                base_version=1,
+                intent_version=1,
+                confirm_intent=True,
+                ontology_revision_id=created.session.ontology_revision_id,
+            ),
+        )
+    assert raised.value.code == "GUIDED_SESSION_GENERATES_IN_JOB"
+
+
+# --- 10. 回答の検査・版・二重の送信 -------------------------------------------------------
+
+
+def _ambiguous_status_output() -> dict[str, Any]:
+    return _output(
+        _from_orders(),
+        _select_total(),
+        _item(
+            "where_status",
+            "where",
+            "ambiguous",
+            question="どの受注状態に絞りますか？",
+            answer_kind="multi_select",
+            candidates=[
+                _candidate(
+                    "出荷済み", columns=["APP.ORDERS.STATUS"], sql_hint="ORDERS.STATUS = 'SHIPPED'"
+                ),
+                _candidate(
+                    "取消", columns=["APP.ORDERS.STATUS"], sql_hint="ORDERS.STATUS = 'CANCELLED'"
+                ),
+            ],
+        ),
+    )
+
+
+def test_answer_validation_rejects_unknown_and_mixed_inputs() -> None:
+    runtime = _runtime(_ScriptedLlm(_ambiguous_status_output()))
+    created = _create(runtime)
+    item = _state(created).current_item
+    assert item is not None
+    cases: list[tuple[dict[str, Any], str]] = [
+        ({"selected_candidate_ids": ["unknown"]}, "表示されていない選択肢"),
+        ({"selected_candidate_ids": [item.candidates[0].id], "free_text": "x"}, "どちらか 1 つ"),
+        ({}, "選択肢を選ぶか"),
+    ]
+    for request, message in cases:
+        with pytest.raises(OntologyIntegrityError) as raised:
+            runtime.answer_clarification(
+                created.session.id,
+                ClarificationAnswerRequest(base_version=1, item_id=item.id, **request),
+            )
+        assert message in raised.value.message_ja
+    with pytest.raises(OntologyVersionConflictError):
+        runtime.answer_clarification(
+            created.session.id,
+            ClarificationAnswerRequest(base_version=9, item_id=item.id, free_text="x"),
+        )
+
+
+def test_multi_select_answer_keeps_all_selected_conditions() -> None:
+    llm = _ScriptedLlm(_ambiguous_status_output(), _output(_from_orders(), _select_total()))
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    item = _state(created).current_item
+    assert item is not None
+    updated = runtime.answer_clarification(
+        created.session.id,
+        ClarificationAnswerRequest(
+            base_version=1,
+            item_id=item.id,
+            selected_candidate_ids=[candidate.id for candidate in item.candidates],
+        ),
+    )
+    answered = next(value for value in _items(updated) if value.key == "where_status")
+    assert answered.value_ja == "出荷済み、取消"
+    assert answered.status == RequirementStatus.CONFIRMED
+    assert updated.session.current_intent_version == 2
+
+
+def test_correcting_inferred_item_from_summary_replaces_only_that_item() -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total("inferred"), _where_shipped()),
+        _output(_from_orders(), _where_shipped()),
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    select_item = next(item for item in _items(created) if item.key == "select_total")
+    corrected = _answer(
+        runtime, created, item_id=select_item.id, free_text="ORDERS.AMOUNT の平均を表示する"
+    )
+    items = {item.key: item for item in _items(corrected)}
+    assert items["select_total"].answered is True
+    assert items["select_total"].value_ja == "ORDERS.AMOUNT の平均を表示する"
+    assert items["select_total"].columns == ["APP.ORDERS.AMOUNT"]
+    assert items["where_status"].sql_hint == "ORDERS.STATUS = 'SHIPPED'"
 
 
 class _OracleSizedIdempotencyStore(InMemoryOntologyStore):
@@ -160,1520 +1222,181 @@ class _OracleSizedIdempotencyStore(InMemoryOntologyStore):
         return super().save_document(collection, document, expected_etag=expected_etag)
 
 
-def _runtime() -> OntologyApiRuntime:
-    return OntologyApiRuntime(
-        legacy_service=_GuidedLegacyService(),
-        store=InMemoryOntologyStore(),
-    )
-
-
-class _IntentEnterpriseAiClient:
-    def __init__(self, response_factory: Callable[[dict[str, Any]], str | Exception]) -> None:
-        self.response_factory = response_factory
-        self.calls: list[dict[str, Any]] = []
-
-    def is_configured(self) -> bool:
-        return True
-
-    def model_id(self) -> str:
-        return "fake-enterprise-ai-intent"
-
-    def generate(
-        self,
-        *,
-        prompt: str,
-        context: str,
-        system_prompt: str,
-        response_format: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> str:
-        self.calls.append(
-            {
-                "prompt": prompt,
-                "context": context,
-                "system_prompt": system_prompt,
-                "response_format": response_format,
-                **kwargs,
-            }
-        )
-        response = self.response_factory(json.loads(context))
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-
-def _create_guided(runtime: OntologyApiRuntime) -> QuerySessionData:
-    return runtime.create_session(
-        QuerySessionApiCreate(
-            question="受注件数を表示",
-            profile_id="sales",
-            clarification_mode=ClarificationMode.GUIDED,
-        ),
-        actor_user_uuid="user-1",
-    )
-
-
-def _prepare_guided_output_question(
-    runtime: OntologyApiRuntime,
-) -> tuple[QuerySessionData, QuerySession, ClarificationQuestion]:
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    columns = [
-        node
-        for node in ontology.nodes
-        if node.kind == OntologyNodeKind.COLUMN
-        and node.technical_name in {"APP.ORDERS.STATUS", "APP.ORDERS.ORDER_ID"}
-    ]
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.metrics = []
-    intent.dimensions = []
-    intent.ambiguities = [
-        IntentAmbiguity(
-            id="embedding-columns-runtime",
-            code="ontology_embedding_ambiguous",
-            message_ja="Embedding 検索だけでは業務要素を一意に確定できません。",
-            options=[node.technical_name for node in columns],
-            blocking=True,
-        )
-    ]
-    session = created.session.model_copy(
-        deep=True,
-        update={"intents": [intent], "clarification_turns": []},
-    )
-    runtime.sessions.replace_session(session)
-    runtime._persist_session(session)
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-    question = state.current_question
-    assert question is not None
-    return created, session, question
-
-
-def _frontend_clarification_idempotency_key(session_id: str) -> str:
-    return (
-        f"nl2sql:/api/nl2sql/query-sessions/{session_id}/clarification-answers:"
-        "base_version.free_text.question_id.selected_option_ids:"
-        "00000000-0000-0000-0000-000000000000"
-    )
-
-
-def _legacy_ambiguity_intent_response(context: dict[str, Any]) -> str:
-    draft = dict(context["deterministic_draft"])
-    draft["confidence"] = 0.91
-    draft["ambiguities"] = [
-        {
-            "id": "ai-output-ambiguity",
-            "kind": "extract_items",
-            "message_ja": "表示する指標を確認してください。",
-            "options": [
-                {"label_ja": "受注件数", "value": "order_count"},
-                {"label_ja": "受注金額", "value": "order_amount"},
-            ],
-            "blocking": True,
-        }
-    ]
-    return json.dumps(draft, ensure_ascii=False)
-
-
-def _invalid_secret_intent_response(context: dict[str, Any]) -> str:
-    draft = dict(context["deterministic_draft"])
-    draft["confidence"] = 0.92
-    draft["ambiguities"] = [
-        {
-            "id": "secret-ambiguity",
-            "kind": "unknown_secret_shape",
-            "message_ja": "SECRET_FREE_TEXT を含む確認です。",
-            "options": [{"label_ja": "SECRET_SAMPLE_VALUE", "value": "secret"}],
-            "blocking": True,
-        }
-    ]
-    return json.dumps(draft, ensure_ascii=False)
-
-
-def _outside_scope_node_response(context: dict[str, Any]) -> str:
-    draft = dict(context["deterministic_draft"])
-    draft["confidence"] = 0.93
-    draft["entities"] = [
-        {
-            "id": "outside-entity",
-            "ontology_node_id": "node-outside-profile-view",
-            "name_ja": "SECRET_SCOPE_ENTITY",
-            "role": "subject",
-            "physical_object_ids": [],
-        }
-    ]
-    return json.dumps(draft, ensure_ascii=False)
-
-
-def test_guided_enterprise_ai_intent_uses_schema_and_accepts_legacy_ambiguity_shape() -> None:
-    runtime = _runtime()
-    fake_client = _IntentEnterpriseAiClient(_legacy_ambiguity_intent_response)
-    runtime.legacy_service._enterprise_ai_client = fake_client  # noqa: SLF001
-
-    created = _create_guided(runtime)
-
-    call = fake_client.calls[0]
-    assert call["response_format"]["type"] == "json_schema"
-    assert call["response_format"]["name"] == "question_intent_graph_v1"
-    assert call["response_format"]["strict"] is True
-    contract = json.loads(call["context"])["intent_contract"]
-    assert contract["schema_version"] == "question_intent_graph_v1"
-    assert contract["valid_minimum_example"]["profile_view_id"] == created.session.profile_view_id
-    assert "kind field は使わず" in call["system_prompt"]
-    intent = created.session.intents[-1]
-    assert intent.confidence == 0.91
-    ambiguity = next(item for item in intent.ambiguities if item.id == "ai-output-ambiguity")
-    assert ambiguity.code == "OUTPUT_UNCLEAR"
-    assert ambiguity.options == ["受注件数", "受注金額"]
-
-
-def test_guided_enterprise_ai_intent_schema_failure_log_is_sanitized(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    runtime = _runtime()
-    runtime.legacy_service._enterprise_ai_client = _IntentEnterpriseAiClient(  # noqa: SLF001
-        _invalid_secret_intent_response
-    )
-
-    with caplog.at_level(logging.WARNING, logger="app.features.nl2sql.ontology_router"):
-        created = _create_guided(runtime)
-
-    assert all(item.id != "secret-ambiguity" for item in created.session.intents[-1].ambiguities)
-    records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "ontology_intent_enterprise_ai_fallback"
-    ]
-    assert len(records) == 1
-    record = cast(Any, records[0])
-    assert record.exc_info is None
-    assert record.fallback_reason == "schema_validation"
-    assert record.schema_version == "question_intent_graph_v1"
-    assert record.prompt_version == "question_intent_interpreter_v2"
-    assert record.field_error_count >= 1
-    assert "SECRET" not in caplog.text
-    assert "input_value" not in caplog.text
-
-
-def test_guided_enterprise_ai_intent_outside_scope_falls_back_without_logging_candidates(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    runtime = _runtime()
-    runtime.legacy_service._enterprise_ai_client = _IntentEnterpriseAiClient(  # noqa: SLF001
-        _outside_scope_node_response
-    )
-
-    with caplog.at_level(logging.WARNING, logger="app.features.nl2sql.ontology_router"):
-        created = _create_guided(runtime)
-
-    assert all(
-        item.ontology_node_id != "node-outside-profile-view"
-        for item in created.session.intents[-1].entities
-    )
-    records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "ontology_intent_enterprise_ai_fallback"
-    ]
-    assert len(records) == 1
-    record = cast(Any, records[0])
-    assert record.fallback_reason == "scope_violation"
-    assert record.scope_violation_kind == "node"
-    assert record.scope_violation_count == 1
-    assert "SECRET_SCOPE_ENTITY" not in caplog.text
-
-
-def test_guided_session_asks_for_missing_time_and_accepts_scoped_option() -> None:
-    runtime = _runtime()
-
-    created = _create_guided(runtime)
-
-    assert created.clarification is not None
-    assert created.clarification.status == ClarificationStatus.NEEDS_ANSWER
-    assert created.clarification.current_question is not None
-    assert created.clarification.current_question.category.value == "time_range"
-    assert created.clarification.can_generate_sql is False
-    assert all(item.key != "limit" for item in created.clarification.intent_summary)
-    assert created.clarification.assumptions == []
-    option = created.clarification.current_question.options[0]
-
-    updated = runtime.answer_clarification(
-        created.session.id,
-        ClarificationAnswerRequest(
-            base_version=1,
-            question_id=created.clarification.current_question.id,
-            selected_option_ids=[option.id],
-        ),
-    )
-
-    assert updated.session.current_intent_version == 2
-    assert len(updated.session.clarification_turns) == 1
-    assert updated.session.clarification_turns[0].prompt_version == "deterministic_first_v2"
-    assert updated.session.intents[-1].time_range is not None
-    assert updated.session.intents[-1].time_range.relative_expression == "今月"
-    assert updated.clarification is not None
-    assert updated.clarification.status == ClarificationStatus.READY_TO_CONFIRM
-    assert updated.clarification.can_generate_sql is True
-    assert all(item.key != "limit" for item in updated.clarification.intent_summary)
-    assert updated.clarification.assumptions == []
-
-
-def test_inferred_summary_requires_an_explicit_answer_before_ready() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(
-        deep=True,
-        update={
-            "question_original": "一覧を表示",
-            "question_effective": "一覧を表示",
-            "metrics": [],
-            "ambiguities": [],
-        },
-    )
-    session = created.session.model_copy(
-        deep=True,
-        update={"intents": [intent], "clarification_turns": []},
-    )
-
-    pending = build_clarification_state(session, ontology, created.profile_ontology_view)
-
-    assert pending.status == ClarificationStatus.NEEDS_ANSWER
-    assert pending.can_generate_sql is False
-    assert pending.current_question is not None
-    assert pending.current_question.summary_key == "entities"
-    assert pending.current_question.prompt_ja == "対象は「受注」で合っていますか？"
-    assert pending.current_question.options[0].label_ja == "はい、この内容で進める"
-    assert pending.current_question.options[0].evidence_ja == ""
-    summary = next(item for item in pending.intent_summary if item.key == "entities")
-    assert summary.confirmed is False
-    assert summary.technical_evidence_ja == ""
-
-    answer = ClarificationAnswer(
-        question_id=pending.current_question.id,
-        selected_option_ids=[pending.current_question.options[0].id],
-    )
-    confirmed_session = session.model_copy(
-        deep=True,
-        update={
-            "clarification_turns": [
-                ClarificationTurn(
-                    question=pending.current_question,
-                    answer=answer,
-                    intent_version=2,
-                )
-            ]
-        },
-    )
-    confirmed = build_clarification_state(
-        confirmed_session,
-        ontology,
-        created.profile_ontology_view,
-    )
-
-    assert confirmed.status == ClarificationStatus.READY_TO_CONFIRM
-    assert confirmed.can_generate_sql is True
-    assert confirmed.current_question is None
-    assert confirmed.required_total == 1
-    assert confirmed.required_confirmed == 1
-    confirmed_summary = next(item for item in confirmed.intent_summary if item.key == "entities")
-    assert confirmed_summary.confirmed is True
-    assert confirmed_summary.source == "user"
-
-
-def test_guided_intent_prefers_business_entity_over_duplicate_physical_entity() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    table_node = next(node for node in ontology.nodes if node.kind == OntologyNodeKind.TABLE)
-    business_node = table_node.model_copy(
-        deep=True,
-        update={
-            "id": "business_entity_internal_hash",
-            "kind": OntologyNodeKind.BUSINESS_ENTITY,
-            "technical_name": "business_entity_internal_hash",
-            "business_name_ja": "受注",
-            "physical_mappings": [
-                PhysicalMapping(
-                    object_ref=PhysicalObjectRef(
-                        node_id=table_node.id,
-                        owner="APP",
-                        object_name="ORDERS",
-                    )
-                )
-            ],
-        },
-    )
-    related_business_node = business_node.model_copy(
-        deep=True,
-        update={
-            "id": "business_event_internal_hash",
-            "kind": OntologyNodeKind.BUSINESS_EVENT,
-            "technical_name": "business_event_internal_hash",
-            "business_name_ja": "受注処理",
-        },
-    )
-    ontology.nodes.extend([business_node, related_business_node])
-    intent = created.session.intents[-1].model_copy(
-        deep=True,
-        update={
-            "entities": [
-                IntentEntity(
-                    id="physical-intent",
-                    ontology_node_id=table_node.id,
-                    name_ja="受注情報",
-                    physical_object_ids=[table_node.id],
-                ),
-                IntentEntity(
-                    id="business-intent",
-                    ontology_node_id=business_node.id,
-                    name_ja="受注",
-                    physical_object_ids=[table_node.id],
-                ),
-                IntentEntity(
-                    id="related-business-intent",
-                    ontology_node_id=related_business_node.id,
-                    name_ja="受注処理",
-                    physical_object_ids=[table_node.id],
-                ),
-            ]
-        },
-    )
-
-    normalized = enrich_guided_intent(intent, ontology)
-
-    assert [(item.ontology_node_id, item.name_ja) for item in normalized.entities] == [
-        (business_node.id, "受注"),
-        (related_business_node.id, "受注処理"),
-    ]
-
-
-def test_guided_session_keeps_user_specified_limit_as_user_evidence() -> None:
-    runtime = _runtime()
-
-    created = runtime.create_session(
-        QuerySessionApiCreate(
-            question="受注を上位 10 件表示",
-            profile_id="sales",
-            clarification_mode=ClarificationMode.GUIDED,
-        ),
-        actor_user_uuid="user-1",
-    )
-
-    assert created.clarification is not None
-    limit_item = next(item for item in created.clarification.intent_summary if item.key == "limit")
-    assert created.session.intents[-1].limit == 10
-    assert limit_item.value_ja == "10 件"
-    assert limit_item.source == "user"
-    assert limit_item.confirmed is True
-    assert created.clarification.assumptions == []
-
-
-def test_embedding_column_ambiguity_is_presented_as_business_output_selection() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    columns = [
-        node
-        for node in ontology.nodes
-        if node.kind == OntologyNodeKind.COLUMN
-        and node.technical_name in {"APP.ORDERS.STATUS", "APP.ORDERS.ORDER_ID"}
-    ]
-    assert len(columns) == 2
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.metrics = []
-    intent.dimensions = []
-    intent.ambiguities = [
-        IntentAmbiguity(
-            id="embedding-columns",
-            code="ontology_embedding_ambiguous",
-            message_ja="Embedding 検索だけでは業務要素を一意に確定できません。",
-            options=[node.technical_name for node in columns],
-            blocking=True,
-        )
-    ]
-    session = created.session.model_copy(
-        deep=True,
-        update={"intents": [intent], "clarification_turns": []},
-    )
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-
-    question = state.current_question
-    assert question is not None
-    assert question.category == ClarificationCategory.OUTPUT
-    assert question.answer_kind == ClarificationAnswerKind.MULTI_SELECT
-    assert question.prompt_ja == "結果に表示する項目を選んでください。"
-    assert "必要な項目をすべて選んでください" in question.reason_ja
-    assert state.missing_required == [question.prompt_ja]
-    assert "Embedding" not in f"{question.prompt_ja}{question.reason_ja}{state.missing_required}"
-    assert {option.label_ja for option in question.options} == {"受注状態", "受注ID"}
-    assert all("結果に" in option.description_ja for option in question.options)
-    assert all("主キー" not in option.description_ja for option in question.options)
-    assert {option.evidence_ja for option in question.options} == {
-        "APP.ORDERS.STATUS",
-        "APP.ORDERS.ORDER_ID",
-    }
-
-    option_id_by_label = {option.label_ja: option.id for option in question.options}
-    answer = ClarificationAnswer(
-        question_id=question.id,
-        selected_option_ids=[
-            option_id_by_label["受注状態"],
-            option_id_by_label["受注ID"],
-        ],
-    )
-    updated_intent = apply_clarification_answer(intent, question, answer, ontology)
-
-    assert {item.name_ja for item in updated_intent.dimensions} == {"受注状態", "受注ID"}
-    assert updated_intent.question_effective == (
-        "受注を対象に、結果には受注状態、受注IDを表示してください。"
-    )
-    assert "確認事項" not in updated_intent.question_effective
-
-
-def test_business_target_ambiguity_accepts_multiple_ontology_concepts() -> None:
-    runtime = _runtime()
-    runtime.legacy_service.profile.allowed_tables.append("APP.CUSTOMERS")
-    runtime.legacy_service.catalog.tables.append(
-        SchemaTable(
-            table_name="CUSTOMERS",
-            owner="APP",
-            table_type="table",
-            logical_name="顧客",
-            comment="顧客データ",
-            columns=[
-                SchemaColumn(
-                    column_name="CUSTOMER_ID",
-                    logical_name="顧客 ID",
-                    data_type="NUMBER",
-                )
-            ],
-        )
-    )
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    candidates = [node for node in ontology.nodes if node.kind == OntologyNodeKind.TABLE]
-    assert len(candidates) == 2
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.entities = []
-    intent.metrics = []
-    intent.ambiguities = [
-        IntentAmbiguity(
-            id="business-targets",
-            code="business_meaning_required",
-            message_ja="対象を確認してください。",
-            options=[node.technical_name for node in candidates],
-            blocking=True,
-        )
-    ]
-    session = created.session.model_copy(
-        deep=True,
-        update={"intents": [intent], "clarification_turns": []},
-    )
-    view = created.profile_ontology_view.model_copy(deep=True)
-    view.node_ids = list(dict.fromkeys([*view.node_ids, *(node.id for node in candidates)]))
-
-    state = build_clarification_state(session, ontology, view)
-
-    question = state.current_question
-    assert question is not None
-    assert question.category == ClarificationCategory.BUSINESS_MEANING
-    assert question.answer_kind == ClarificationAnswerKind.MULTI_SELECT
-    assert question.prompt_ja == "どの業務対象について調べますか？"
-    assert "意図した対象をすべて選んでください" in question.reason_ja
-    assert len(question.options) == 2
-
-    updated_intent = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(
-            question_id=question.id,
-            selected_option_ids=[option.id for option in question.options],
-        ),
-        ontology,
-    )
-
-    selected_node_ids = {node.id for node in candidates}
-    applied_node_ids = {item.ontology_node_id for item in updated_intent.entities}
-    assert selected_node_ids <= applied_node_ids
-    assert "、" in updated_intent.question_effective
-    assert "確認事項" not in updated_intent.question_effective
-
-
-def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(
-        deep=True,
-        update={
-            "question_original": '"部署情報"',
-            "question_effective": (
-                '"部署情報"\n確認事項（結果に表示する項目を選んでください。）：部署名'
-            ),
-            "entities": [IntentEntity(id="department", name_ja="部署")],
-            "metrics": [],
-            "dimensions": [],
-        },
-    )
-    question = ClarificationQuestion(
-        id="question-all-columns",
-        category=ClarificationCategory.OUTPUT,
-        prompt_ja="結果に表示する項目を選んでください。",
-        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
-        options=[ClarificationOption(id="option-all-columns", label_ja="すべての列")],
-    )
-
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(
-            question_id=question.id,
-            selected_option_ids=["option-all-columns"],
-        ),
-        ontology,
-    )
-
-    assert updated.question_effective == ("部署を対象に、結果にはすべての列を表示してください。")
-    assert "確認事項" not in updated.question_effective
-    assert "結果に表示する項目を選んでください" not in updated.question_effective
-
-
-def test_guided_answer_rebuilds_complete_user_friendly_query_from_intent() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(
-        deep=True,
-        update={
-            "question_original": "確定した受注の売上を確認",
-            "question_effective": "確定した受注の売上を確認",
-            "entities": [
-                IntentEntity(
-                    id="entity-orders",
-                    ontology_node_id="business_entity_deadbeef",
-                    name_ja="受注",
-                    physical_object_ids=["physical_deadbeef"],
-                )
-            ],
-            "dimensions": [IntentDimension(id="dimension-customer", name_ja="顧客名")],
-            "metrics": [IntentMetric(id="metric-sales", name_ja="売上金額", aggregation="sum")],
-            "filters": [
-                IntentFilter(
-                    id="filter-status",
-                    property_node_id="property_deadbeef",
-                    label_ja="受注状態",
-                    operator="=",
-                    value="確定",
-                )
-            ],
-            "time_range": None,
-            "granularity": "month",
-            "sorts": [
-                IntentSort(target_id="metric-sales", direction="desc"),
-                IntentSort(target_id="physical_deadbeef", direction="asc"),
-            ],
-            "limit": 10,
-        },
-    )
-    question = ClarificationQuestion(
-        id="question-time-range",
-        category=ClarificationCategory.TIME_RANGE,
-        prompt_ja="どの期間を対象にしますか？",
-        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
-        options=[
-            ClarificationOption(
-                id="option-this-month",
-                label_ja="今月",
-                structured_value={"label_ja": "受注日", "relative_expression": "今月"},
-            )
-        ],
-    )
-
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(
-            question_id=question.id,
-            selected_option_ids=["option-this-month"],
-        ),
-        ontology,
-    )
-
-    assert updated.time_range == IntentTimeRange(label_ja="受注日", relative_expression="今月")
-    assert updated.question_effective == (
-        "受注のうち、受注日が今月、かつ受注状態が「確定」のデータを対象に、"
-        "結果には顧客名、売上金額の合計を表示してください。"
-        "集計単位は月別です。"
-        "表示結果は売上金額の降順で並べ、上位10件を取得してください。"
-    )
-    assert "business_entity_" not in updated.question_effective
-    assert "physical_" not in updated.question_effective
-    assert "property_" not in updated.question_effective
-
-
-def test_guided_metric_confirmation_keeps_metric_in_output_not_target() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    question = ClarificationQuestion(
-        id="question-confirm-metric",
-        summary_key="metrics",
-        category=ClarificationCategory.BUSINESS_MEANING,
-        prompt_ja="集計する指標は「受注件数」で合っていますか？",
-        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
-        options=[
-            ClarificationOption(
-                id="option-confirm-metric",
-                label_ja="はい、この内容で進める",
-                description_ja="受注件数",
-            )
-        ],
-    )
-
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(
-            question_id=question.id,
-            selected_option_ids=["option-confirm-metric"],
-        ),
-        ontology,
-    )
-
-    assert updated.question_effective == ("受注を対象に、結果には受注件数を表示してください。")
-    assert "受注と受注件数を対象" not in updated.question_effective
-
-
-def test_free_text_reinterpretation_rebuilds_query_without_duplicate_condition() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    reinterpreted = intent.model_copy(
-        deep=True,
-        update={
-            "filters": [
-                IntentFilter(
-                    id="filter-status",
-                    label_ja="受注状態",
-                    operator="=",
-                    value="確定",
-                )
-            ]
-        },
-    )
-    question = ClarificationQuestion(
-        id="question-filter",
-        summary_key="filters",
-        category=ClarificationCategory.FILTER_VALUE,
-        prompt_ja="絞り込み条件を入力してください。",
-        answer_kind=ClarificationAnswerKind.FREE_TEXT,
-        allow_free_text=True,
-    )
-
-    updated = merge_free_text_reinterpretation(
-        intent,
-        reinterpreted,
-        question,
-        "受注状態が確定",
-    )
-
-    assert updated.question_effective == (
-        "受注のうち、受注状態が「確定」のデータを対象に、結果には受注件数を表示してください。"
-    )
-    assert updated.question_effective.count("受注状態") == 1
-
-
-def test_guided_output_multi_select_answer_rebuilds_and_persists_session_state() -> None:
-    store = _OracleSizedIdempotencyStore()
-    runtime = OntologyApiRuntime(
-        legacy_service=_GuidedLegacyService(),
-        store=store,
-    )
-    _created, session, question = _prepare_guided_output_question(runtime)
-    idempotency_key = _frontend_clarification_idempotency_key(session.id)
-    assert len(idempotency_key.encode("utf-8")) > IDEMPOTENCY_KEY_STORAGE_MAX_BYTES
-    updated = runtime.answer_clarification_idempotent(
-        session.id,
-        ClarificationAnswerRequest(
-            base_version=1,
-            question_id=question.id,
-            selected_option_ids=[option.id for option in question.options],
-        ),
-        idempotency_key=idempotency_key,
-    )
-    replay = runtime.answer_clarification_idempotent(
-        session.id,
-        ClarificationAnswerRequest(
-            base_version=1,
-            question_id=question.id,
-            selected_option_ids=[option.id for option in question.options],
-        ),
-        idempotency_key=idempotency_key,
-    )
-    with pytest.raises(OntologyVersionConflictError, match="異なる payload"):
-        runtime.answer_clarification_idempotent(
-            session.id,
-            ClarificationAnswerRequest(
-                base_version=1,
-                question_id=question.id,
-                selected_option_ids=[question.options[0].id],
-            ),
-            idempotency_key=idempotency_key,
-        )
-
-    assert updated.session.current_intent_version == 2
-    assert replay.session.current_intent_version == 2
-    assert updated.clarification is not None
-    assert updated.clarification.status == ClarificationStatus.READY_TO_CONFIRM
-    assert {item.name_ja for item in updated.session.intents[-1].dimensions} == {
-        "受注状態",
-        "受注ID",
-    }
-    summary = next(
-        item for item in updated.clarification.intent_summary if item.key == "dimensions"
-    )
-    assert summary.confirmed is True
-    stored_idempotency = store.list_documents("idempotency")
-    assert len(stored_idempotency) == 1
-    assert stored_idempotency[0]["idempotency_key"].startswith("sha256:")
-    assert (
-        len(stored_idempotency[0]["idempotency_key"].encode("utf-8"))
-        <= IDEMPOTENCY_KEY_STORAGE_MAX_BYTES
-    )
-
-
-@pytest.mark.asyncio
-async def test_guided_output_multi_select_accepts_frontend_idempotency_key_over_http(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = _OracleSizedIdempotencyStore()
-    runtime = OntologyApiRuntime(
-        legacy_service=_GuidedLegacyService(),
-        store=store,
-    )
-    _created, session, question = _prepare_guided_output_question(runtime)
-    idempotency_key = _frontend_clarification_idempotency_key(session.id)
+async def test_answer_and_apply_are_idempotent_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    llm = _ScriptedLlm(_ambiguous_status_output(), _output(_from_orders(), _select_total()))
+    legacy = _LegacyService()
+    legacy._enterprise_ai_client = llm
+    runtime = OntologyApiRuntime(legacy_service=legacy, store=_OracleSizedIdempotencyStore())
+    runtime._requirement_today = lambda: TODAY  # type: ignore[method-assign]
+    created = _create(runtime)
+    item = _state(created).current_item
+    assert item is not None
     monkeypatch.setattr(ontology_router_module, "ontology_runtime", runtime)
     transport = httpx.ASGITransport(app=app)
+    key = (
+        f"nl2sql:/api/nl2sql/query-sessions/{created.session.id}/clarification-answers:"
+        "base_version.free_text.item_id.selected_candidate_ids:"
+        "00000000-0000-0000-0000-000000000000"
+    )
     payload = {
         "base_version": 1,
-        "question_id": question.id,
-        "selected_option_ids": [option.id for option in question.options],
+        "item_id": item.id,
+        "selected_candidate_ids": [item.candidates[0].id],
         "free_text": "",
     }
-
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        path = f"/api/nl2sql/query-sessions/{created.session.id}"
         response = await client.post(
-            f"/api/nl2sql/query-sessions/{session.id}/clarification-answers",
-            headers={"Idempotency-Key": idempotency_key},
-            json=payload,
+            f"{path}/clarification-answers", headers={"Idempotency-Key": key}, json=payload
         )
         replay = await client.post(
-            f"/api/nl2sql/query-sessions/{session.id}/clarification-answers",
-            headers={"Idempotency-Key": idempotency_key},
-            json=payload,
+            f"{path}/clarification-answers", headers={"Idempotency-Key": key}, json=payload
         )
-
-    assert response.status_code == 200
-    assert replay.status_code == 200
-    response_data = response.json()["data"]
-    assert response_data["clarification"]["status"] == "ready_to_confirm"
-    assert {item["name_ja"] for item in response_data["session"]["intents"][-1]["dimensions"]} == {
-        "受注状態",
-        "受注ID",
-    }
-
-
-@pytest.mark.parametrize(
-    ("code", "expected_prompt"),
-    [
-        ("business_meaning_required", "どの業務対象について調べますか？"),
-        ("relationship_path_required", "業務対象をどの関係で結びますか？"),
-        ("filter_value_required", "どの条件で絞り込みますか？"),
-        ("time_range_required", "どの期間を対象にしますか？"),
-        ("granularity_required", "どの単位で集計しますか？"),
-        ("output_format_required", "結果に何を表示しますか？"),
-    ],
-)
-def test_clarification_categories_use_answerable_business_copy(
-    code: str,
-    expected_prompt: str,
-) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.metrics = []
-    intent.ambiguities = [
-        IntentAmbiguity(
-            id=f"ambiguity-{code}",
-            code=code,
-            message_ja="Embedding / Ontology / Schema の内部診断です。",
-            blocking=True,
+        assert response.status_code == 200, response.text
+        assert replay.status_code == 200
+        data = response.json()["data"]
+        assert data["requirement_state"]["status"] == "ready"
+        assert data["requirement_state"]["can_apply"] is True
+        applied = await client.post(
+            f"{path}/apply",
+            headers={"Idempotency-Key": "apply-1"},
+            json={"base_version": data["session"]["current_intent_version"]},
         )
-    ]
-    session = created.session.model_copy(deep=True, update={"intents": [intent]})
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["data"]["session"]["status"] == "done"
+    # 回答の後の再検査を含めて LLM は 2 回だけ（再送では呼ばない）。
+    assert len(llm.calls) == 2
 
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
 
-    assert state.remaining_questions
-    question = state.remaining_questions[0]
-    assert question.prompt_ja == expected_prompt
-    assert not any(
-        term in f"{question.prompt_ja}{question.reason_ja}"
-        for term in ("Embedding", "Ontology", "Schema", "GROUP BY")
-    )
-
-
-def test_guided_answer_rejects_option_not_returned_by_current_question() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    assert created.clarification is not None
-    assert created.clarification.current_question is not None
-
-    with pytest.raises(OntologyIntegrityError, match="表示されていない選択肢"):
-        runtime.answer_clarification(
-            created.session.id,
-            ClarificationAnswerRequest(
-                base_version=1,
-                question_id=created.clarification.current_question.id,
-                selected_option_ids=["outside-option"],
-            ),
-        )
-
-
-def test_guided_answer_is_idempotent_and_rejects_stale_version() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    assert created.clarification is not None
-    current = created.clarification.current_question
-    assert current is not None
-    request = ClarificationAnswerRequest(
-        base_version=1,
-        question_id=current.id,
-        selected_option_ids=[current.options[0].id],
-    )
-
-    first = runtime.answer_clarification_idempotent(
-        created.session.id,
-        request,
-        idempotency_key="answer-1",
-    )
-    replay = runtime.answer_clarification_idempotent(
-        created.session.id,
-        request,
-        idempotency_key="answer-1",
-    )
-
-    assert first.session.current_intent_version == 2
-    assert replay.session.current_intent_version == 2
-    assert first.session.intents[-1].question_effective == (
-        "今月の受注を対象に、結果には受注件数を表示してください。"
-    )
-    assert "確認事項" not in first.session.intents[-1].question_effective
-    assert runtime.store.list_documents("idempotency")[0]["idempotency_key"] == "answer-1"
-    with pytest.raises(OntologyVersionConflictError):
-        runtime.answer_clarification_idempotent(
-            created.session.id,
-            request,
-            idempotency_key="answer-stale",
-        )
-
-
-def test_guided_generate_sql_is_blocked_before_required_answers() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-
-    with pytest.raises(OntologyGateBlockedError, match="必要な条件"):
-        runtime.generate_sql(
-            created.session.id,
-            GenerateSqlRequest(
-                base_version=1,
-                intent_version=1,
-                ontology_revision_id=created.session.ontology_revision_id,
-                confirm_intent=True,
-            ),
-        )
-
-
-def test_guided_schema_context_omits_masked_sample_values() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    view = created.profile_ontology_view.model_copy(deep=True)
-    status_node = next(
-        node
-        for node in ontology.nodes
-        if node.kind == OntologyNodeKind.COLUMN and node.technical_name.endswith(".STATUS")
-    )
-    view.column_policies[status_node.id] = ColumnQueryPolicy(masked=True)
-
-    context = runtime._guided_schema_context(runtime._strict_profile("sales"), ontology, view)
-
-    status_column = context[0]["columns"][0]
-    assert status_column["name"] == "STATUS"
-    assert status_column["sample_values"] == []
-    assert "SECRET_VALUE" not in str(context)
-
-
-def test_guided_schema_context_prefers_question_relevant_profile_objects() -> None:
-    runtime = _runtime()
-    runtime.legacy_service.profile.allowed_tables.append("APP.CUSTOMERS")
-    runtime.legacy_service.catalog.tables.append(
-        SchemaTable(
-            table_name="CUSTOMERS",
-            owner="APP",
-            table_type="table",
-            logical_name="顧客",
-            comment="顧客データ",
-            columns=[
-                SchemaColumn(
-                    column_name="CUSTOMER_ID",
-                    logical_name="顧客 ID",
-                    data_type="NUMBER",
-                )
-            ],
-        )
-    )
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-
-    context = runtime._guided_schema_context(
-        runtime._strict_profile("sales"),
-        ontology,
-        created.profile_ontology_view,
-        question="受注件数を表示",
-    )
-
-    assert [item["object_name"] for item in context] == ["ORDERS"]
-    assert "CUSTOMERS" not in str(context)
-
-
-def test_cancelled_guided_session_is_terminal() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-
-    cancelled = runtime.cancel_session(created.session.id)
-
-    assert cancelled.session.status == QuerySessionStatus.CANCELLED
-    assert cancelled.session.cancelled_at is not None
-    with pytest.raises(OntologyStateConflictError):
-        runtime.answer_clarification(
-            created.session.id,
-            ClarificationAnswerRequest(
-                base_version=1,
-                question_id="obsolete",
-                free_text="今月",
-            ),
-        )
-
-
-def test_guided_answer_rejects_multiple_input_kinds() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    assert created.clarification is not None
-    question = created.clarification.current_question
-    assert question is not None
-
-    with pytest.raises(OntologyIntegrityError, match="いずれか 1 つ"):
-        runtime.answer_clarification(
-            created.session.id,
-            ClarificationAnswerRequest(
-                base_version=1,
-                question_id=question.id,
-                selected_option_ids=[question.options[0].id],
-                free_text="今月",
-            ),
-        )
-
-
-def test_after_four_turns_returns_all_remaining_questions_for_manual_completion() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    assert created.clarification is not None
-    question = created.clarification.current_question
-    assert question is not None
-    answer = ClarificationAnswer(
-        question_id=question.id,
-        selected_option_ids=[question.options[0].id],
-    )
-    session = created.session.model_copy(
-        deep=True,
-        update={
-            "clarification_turns": [
-                ClarificationTurn(question=question, answer=answer, intent_version=index + 2)
-                for index in range(4)
-            ]
-        },
-    )
-
-    state = build_clarification_state(
-        session,
-        runtime.ontology_revision(session.ontology_revision_id),
-        created.profile_ontology_view,
-    )
-
-    assert state.manual_completion_required is True
-    assert state.current_question is not None
-    assert state.remaining_questions == [state.current_question]
-    assert state.can_generate_sql is False
-
-
-def test_legacy_query_session_payload_uses_review_only_defaults() -> None:
-    runtime = _runtime()
-    payload = _create_guided(runtime).session.model_dump(mode="json")
-    payload.pop("clarification_mode")
-    payload.pop("clarification_turns")
-    payload.pop("cancelled_at")
-
-    restored = QuerySession.model_validate(payload)
-
-    assert restored.clarification_mode == ClarificationMode.REVIEW_ONLY
-    assert restored.clarification_turns == []
-    assert restored.cancelled_at is None
-
-
-@pytest.mark.parametrize("concurrent_action", ["read", "cancel", "answer"])
-def test_guided_free_text_releases_lock_and_rechecks_session(
-    monkeypatch: pytest.MonkeyPatch, concurrent_action: str
-) -> None:
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Event
-
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    other = _create_guided(runtime)
-    assert created.clarification and created.clarification.current_question
-    question = created.clarification.current_question
-    entered, release = Event(), Event()
-    interpreted = created.session.intents[-1].model_copy(deep=True)
-    interpreted.time_range = IntentTimeRange(relative_expression="今月")
-
-    def interpret(*args: Any, **kwargs: Any) -> Any:
-        entered.set()
-        assert release.wait(5), "test did not release interpretation"
-        return interpreted
-
-    monkeypatch.setattr(runtime, "_interpret_question", interpret)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        pending = pool.submit(
-            runtime.answer_clarification,
-            created.session.id,
-            ClarificationAnswerRequest(base_version=1, question_id=question.id, free_text="今月"),
-        )
-        try:
-            assert entered.wait(3)
-            if concurrent_action == "read":
-                independent = pool.submit(runtime.get_session, other.session.id)
-            elif concurrent_action == "cancel":
-                independent = pool.submit(runtime.cancel_session, created.session.id)
-            else:
-                independent = pool.submit(
-                    runtime.answer_clarification,
-                    created.session.id,
-                    ClarificationAnswerRequest(
-                        base_version=1,
-                        question_id=question.id,
-                        selected_option_ids=[question.options[1].id],
-                    ),
-                )
-            independent.result(timeout=2)
-        finally:
-            release.set()
-        if concurrent_action == "read":
-            assert pending.result(timeout=3).session.current_intent_version == 2
-        else:
-            error = (
-                OntologyStateConflictError
-                if concurrent_action == "cancel"
-                else OntologyVersionConflictError
-            )
-            with pytest.raises(error):
-                pending.result(timeout=3)
-            saved = runtime.get_session(created.session.id).session
-            if concurrent_action == "cancel":
-                assert saved.status == QuerySessionStatus.CANCELLED
-                assert saved.current_intent_version == 1
-                assert not saved.clarification_turns
-            else:
-                assert saved.current_intent_version == 2
-                assert len(saved.clarification_turns) == 1
-                assert saved.intents[-1].time_range == IntentTimeRange(relative_expression="先月")
-
-
-@pytest.mark.parametrize("granularity", ["day", "month", "year", "none"])
-def test_accept_inferred_granularity_survives_following_answer(granularity: str) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.granularity = granularity
-    session = created.session.model_copy(deep=True, update={"intents": [intent]})
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-    question = next(q for q in state.remaining_questions if q.summary_key == "granularity")
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
-        ontology,
-    )
-    assert updated.granularity == granularity
-    assert created.clarification and created.clarification.current_question
-    next_question = created.clarification.current_question
-    updated = apply_clarification_answer(
-        updated,
-        next_question,
-        ClarificationAnswer(
-            question_id=next_question.id, selected_option_ids=[next_question.options[0].id]
-        ),
-        ontology,
-    )
-    assert updated.granularity == granularity
-    expected = {"day": "日別", "month": "月別", "year": "年別", "none": "期間全体を一つに集計"}
-    assert expected[granularity] in updated.question_effective
-
-
-@pytest.mark.parametrize(
-    ("aggregation", "label"),
-    [
-        ("avg", "平均"),
-        ("SUM", "合計"),
-        ("min", "最小値"),
-        ("max", "最大値"),
-        ("count", "件数"),
-        ("count_distinct", "重複を除いた件数"),
-    ],
-)
-def test_clarified_question_keeps_metric_aggregation(aggregation: str, label: str) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.metrics = [IntentMetric(id="amount", name_ja="受注金額", aggregation=aggregation)]
-    assert created.clarification and created.clarification.current_question
-    question = created.clarification.current_question
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
-        ontology,
-    )
-    assert f"受注金額の{label}" in updated.question_effective
-    state = build_clarification_state(
-        created.session.model_copy(update={"intents": [updated]}),
-        ontology,
-        created.profile_ontology_view,
-    )
-    metric_summary = next(item for item in state.intent_summary if item.key == "metrics")
-    assert metric_summary.value_ja == f"受注金額の{label}"
-    assert not metric_summary.confirmed
-
-
-@pytest.mark.parametrize("slot", ["entities", "metrics", "dimensions"])
-def test_free_text_replaces_only_the_confirmed_slot(slot: str) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.entities = [IntentEntity(id="old-entity", name_ja="旧対象")]
-    intent.metrics = [IntentMetric(id="old-metric", name_ja="旧指標", aggregation="avg")]
-    intent.dimensions = [IntentDimension(id="old-column", name_ja="旧項目")]
-    reinterpretation = intent.model_copy(deep=True)
-    reinterpretation.entities = [IntentEntity(id="new-entity", name_ja="新対象")]
-    reinterpretation.metrics = [IntentMetric(id="new-metric", name_ja="新指標", aggregation="sum")]
-    reinterpretation.dimensions = [IntentDimension(id="new-column", name_ja="新項目")]
-    reinterpretation.limit = 1
-    category = (
-        ClarificationCategory.OUTPUT
-        if slot == "dimensions"
-        else ClarificationCategory.BUSINESS_MEANING
-    )
-    question = ClarificationQuestion(
-        id="correction",
-        category=category,
-        summary_key=slot,
-        prompt_ja="正しい内容を入力",
-    )
-    updated = merge_free_text_reinterpretation(
-        intent,
-        reinterpretation,
-        question,
-        "以前の内容ではなく新しい内容だけ",
-    )
-    assert getattr(updated, slot) == getattr(reinterpretation, slot)
-    for other_slot in (
-        "entities",
-        "metrics",
-        "dimensions",
-        "filters",
-        "time_range",
-        "sorts",
-        "limit",
-    ):
-        if other_slot != slot:
-            assert getattr(updated, other_slot) == getattr(intent, other_slot)
-    assert "以前の内容ではなく" not in updated.question_effective
-    assert getattr(intent, slot)[0].name_ja not in updated.question_effective
-
-
-def test_runtime_free_text_output_correction_is_persisted_without_old_column(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = _runtime()
-    created, session, _question = _prepare_guided_output_question(runtime)
-    intent = session.intents[-1].model_copy(deep=True)
-    intent.ambiguities = []
-    intent.dimensions = [IntentDimension(id="status", name_ja="受注状態")]
-    session.intents = [intent]
-    runtime.sessions.replace_session(session)
-    runtime._persist_session(session)
-    current = runtime.get_session(session.id)
-    assert current.clarification and current.clarification.current_question
-    question = current.clarification.current_question
-    assert question.summary_key == "dimensions"
-    correction = "受注状態ではなく受注IDだけ"
-    parsed = intent.model_copy(deep=True)
-    parsed.dimensions = [IntentDimension(id="order-id", name_ja="受注ID")]
-
-    def interpret(prompt: str, *args: Any, **kwargs: Any) -> Any:
-        assert f"利用者の訂正: {correction}" in prompt
-        assert question.prompt_ja in prompt
-        return parsed
-
-    monkeypatch.setattr(runtime, "_interpret_question", interpret)
-    result = runtime.answer_clarification(
-        session.id,
-        ClarificationAnswerRequest(
-            base_version=1,
-            question_id=question.id,
-            free_text=correction,
-        ),
-    )
-    assert result.clarification and result.clarification.can_generate_sql
-    saved = runtime.get_session(session.id)
-    assert [d.name_ja for d in saved.session.intents[-1].dimensions] == ["受注ID"]
-    assert "受注状態" not in saved.session.intents[-1].question_effective
-
-
-@pytest.mark.parametrize(
-    ("granularity", "label"),
-    [("day", "日別"), ("month", "月別"), ("year", "年別"), ("none", "集計のみ")],
-)
-def test_granularity_confirmation_uses_business_label(granularity: str, label: str) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.granularity = granularity
-    session = created.session.model_copy(deep=True, update={"intents": [intent]})
-
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-
-    question = next(q for q in state.remaining_questions if q.summary_key == "granularity")
-    assert question.prompt_ja == f"集計単位は「{label}」で合っていますか？"
-    summary = next(item for item in state.intent_summary if item.key == "granularity")
-    assert summary.value_ja == label
-
-
-def test_filter_confirmation_uses_business_condition_text() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.filters = [
-        IntentFilter(id="status", label_ja="受注状態", operator="in", value=["受付", "出荷"]),
-        IntentFilter(id="amount", label_ja="受注金額", operator="gte", value=100),
-        IntentFilter(id="note", label_ja="備考", operator="is_null", value=None),
-    ]
-    session = created.session.model_copy(deep=True, update={"intents": [intent]})
-
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-
-    expected = "受注状態が「受付」、「出荷」のいずれか、受注金額が100以上、備考が未設定"
-    summary = next(item for item in state.intent_summary if item.key == "filters")
-    assert summary.value_ja == expected
-    question = next(q for q in state.remaining_questions if q.summary_key == "filters")
-    assert question.prompt_ja == f"絞り込み条件は「{expected}」で合っていますか？"
-
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
-        ontology,
-    )
-    # 「はい」の確認で、演算子や None の表記が質問文の条件に足されない。
-    assert " in " not in updated.question_effective
-    assert "gte" not in updated.question_effective
-    assert "None" not in updated.question_effective
-
-
-@pytest.mark.parametrize(
-    "code",
-    ["multiple_candidate_tables", "metric_candidates_ambiguous", "update_target_unclear"],
-)
-def test_ambiguity_code_category_does_not_match_inside_words(code: str) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.metrics = []
-    intent.ambiguities = [
-        IntentAmbiguity(id=f"ambiguity-{code}", code=code, message_ja="候補が複数あります。")
-    ]
-    session = created.session.model_copy(deep=True, update={"intents": [intent]})
-
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-
-    question = next(q for q in state.remaining_questions if q.ambiguity_id)
-    assert question.category != ClarificationCategory.TIME_RANGE
-    assert question.prompt_ja != "どの期間を対象にしますか？"
-
-
-def test_unanswerable_session_does_not_request_manual_completion() -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    assert created.clarification and created.clarification.current_question
-    question = created.clarification.current_question
-    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
-    intent = created.session.intents[-1].model_copy(deep=True)
-    intent.candidate_paths = []
-    intent.ambiguities = [
-        IntentAmbiguity(
-            id="relationship-without-path",
-            code="relationship_path_required",
-            message_ja="関係を確定できません。",
-        )
-    ]
-    answer = ClarificationAnswer(
-        question_id=question.id, selected_option_ids=[question.options[0].id]
-    )
-    session = created.session.model_copy(
-        deep=True,
-        update={
-            "intents": [intent],
-            "clarification_turns": [
-                ClarificationTurn(question=question, answer=answer, intent_version=index + 2)
-                for index in range(4)
-            ],
-        },
-    )
-
-    state = build_clarification_state(session, ontology, created.profile_ontology_view)
-
-    assert state.status == ClarificationStatus.UNANSWERABLE
-    assert state.manual_completion_required is False
-    assert state.can_generate_sql is False
+# --- 11. 期限切れ・中止 ---------------------------------------------------------------
 
 
 def _expire_after_ttl(created: QuerySessionData) -> Any:
-    from datetime import timedelta
-
     ttl = get_settings().nl2sql_query_session_idle_ttl_seconds
     return created.session.updated_at + timedelta(seconds=ttl + 1)
 
 
-def test_idle_guided_session_expires_after_ttl_and_rejects_answers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from datetime import timedelta
-
+def test_idle_guided_session_expires_and_rejects_answers_without_llm() -> None:
     from app.features.nl2sql.ontology_service import QUERY_SESSION_EXPIRED_CODE
 
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    assert created.clarification and created.clarification.current_question
-    question = created.clarification.current_question
-    ttl = get_settings().nl2sql_query_session_idle_ttl_seconds
-
-    # 期限内は変えない。
-    assert (
-        runtime.expire_idle_sessions(now=created.session.updated_at + timedelta(seconds=ttl - 1))
-        == 0
-    )
-    assert runtime.get_session(created.session.id).session.status != QuerySessionStatus.CANCELLED
-
+    llm = _ScriptedLlm(_ambiguous_status_output())
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    item = _state(created).current_item
+    assert item is not None
     assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 1
-    expired = runtime.get_session(created.session.id).session
-    assert expired.status == QuerySessionStatus.CANCELLED
-    assert expired.error_code == QUERY_SESSION_EXPIRED_CODE
-    assert expired.cancelled_at is not None
-    # 2 回目の掃除では数えない（終了済み）。
-    assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 0
-
-    # 自由入力の回答でも、AI の再解釈を呼ぶ前に期限切れを返す。
-    def unexpected_interpret(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("expired session must not be reinterpreted")
-
-    monkeypatch.setattr(runtime, "_interpret_question", unexpected_interpret)
     with pytest.raises(OntologyStateConflictError) as raised:
         runtime.answer_clarification(
             created.session.id,
-            ClarificationAnswerRequest(base_version=1, question_id=question.id, free_text="今月"),
+            ClarificationAnswerRequest(base_version=1, item_id=item.id, free_text="今月"),
         )
     assert raised.value.code == QUERY_SESSION_EXPIRED_CODE
-    assert "一定時間操作がなかった" in raised.value.message_ja
-    # 画面の「閉じる」（中止）は、終了済みの session でもそのまま成功する。
+    assert len(llm.calls) == 1
     assert runtime.cancel_session(created.session.id).session.status == QuerySessionStatus.CANCELLED
 
 
 @pytest.mark.parametrize(
     "status",
     [QuerySessionStatus.EXECUTING, QuerySessionStatus.DONE, QuerySessionStatus.ERROR],
+    ids=["executing", "done", "error"],
 )
 def test_session_expiry_skips_executing_and_finished_sessions(status: QuerySessionStatus) -> None:
-    runtime = _runtime()
-    created = _create_guided(runtime)
+    runtime = _runtime(_ScriptedLlm(_ambiguous_status_output()))
+    created = _create(runtime)
     session = created.session.model_copy(deep=True, update={"status": status})
     runtime.sessions.replace_session(session)
     runtime._persist_session(session)
-
     assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 0
     assert runtime.get_session(created.session.id).session.status == status
 
 
-def test_session_expiry_skips_sessions_updated_concurrently(
+def test_cancelled_guided_session_is_terminal() -> None:
+    runtime = _runtime(_ScriptedLlm(_ambiguous_status_output()))
+    created = _create(runtime)
+    cancelled = runtime.cancel_session(created.session.id)
+    assert cancelled.session.status == QuerySessionStatus.CANCELLED
+    with pytest.raises(OntologyStateConflictError):
+        runtime.apply_requirement(created.session.id, RequirementApplyRequest(base_version=1))
+
+
+# --- 12. SQL の生成の job に渡す -------------------------------------------------------
+
+
+def test_job_request_takes_requirement_only_from_applied_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.features.nl2sql.ontology_store import OntologyVersionConflict
+    from types import SimpleNamespace
 
-    runtime = _runtime()
-    created = _create_guided(runtime)
-    original_save = runtime._save
+    from fastapi import HTTPException
 
-    def conflicting_save(collection: Any, document: Any, **kwargs: Any) -> Any:
-        if collection == "query_sessions":
-            raise OntologyVersionConflict("changed", current_etag="other", current_version=9)
-        return original_save(collection, document, **kwargs)
+    from app.features.nl2sql import router as nl2sql_router
+    from app.features.nl2sql.models import JobCreateRequest, SqlRequirementSpec
 
-    monkeypatch.setattr(runtime, "_save", conflicting_save)
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _where_shipped(),
+            clarified="出荷済みの ORDERS.AMOUNT の合計",
+        )
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    applied = runtime.apply_requirement(created.session.id, RequirementApplyRequest(base_version=1))
+    assert applied.session.requirement is not None
+    question = _draft(applied).clarified_question_ja
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", runtime)
+    principal = SimpleNamespace(user_uuid="user-1", is_system_admin=False)
+    forged = SqlRequirementSpec(
+        session_id="forged", profile_id="sales", clarified_question="x", tables=["APP.SECRET"]
+    )
 
-    assert runtime.expire_idle_sessions(now=_expire_after_ttl(created)) == 0
-    monkeypatch.setattr(runtime, "_save", original_save)
-    assert runtime.get_session(created.session.id).session.status != QuerySessionStatus.CANCELLED
+    # session の無い要件の本文（画面が送ったもの）は使わない。
+    plain = nl2sql_router._with_requirement(
+        JobCreateRequest(question=question, profile_id="sales", sql_requirement=forged), principal
+    )
+    assert plain.sql_requirement is None
+
+    request = JobCreateRequest(
+        question=question,
+        profile_id="sales",
+        requirement_session_id=created.session.id,
+        sql_requirement=forged,
+    )
+    resolved = nl2sql_router._with_requirement(request, principal)
+    assert resolved.sql_requirement is not None
+    assert resolved.sql_requirement.session_id == created.session.id
+    assert resolved.sql_requirement.tables == ["APP.ORDERS"]
+    assert resolved.allowed_objects.table_names == ["APP.ORDERS"]
+
+    changed = request.model_copy(update={"question": "書き換えた質問"})
+    with pytest.raises(HTTPException) as raised:
+        nl2sql_router._with_requirement(changed, principal)
+    assert raised.value.status_code == 409
 
 
-def test_session_expiry_runs_on_create_at_most_once_per_interval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = _runtime()
-    calls: list[int] = []
+def test_tables_used_by_select_are_added_to_from_and_joined() -> None:
+    """実サービスで見つけた食い違い: FROM が 1 表なのに SELECT が別の表の列を使う（#1439）。"""
 
-    def counting_expire(**kwargs: Any) -> int:
-        calls.append(1)
-        return 0
-
-    monkeypatch.setattr(runtime, "expire_idle_sessions", counting_expire)
-    _create_guided(runtime)
-    _create_guided(runtime)
-    assert len(calls) == 1
-
-    # 間隔を過ぎたら、次の作成でもう一度掃除する。失敗しても作成は止めない。
-    runtime._last_session_sweep_at = (runtime._last_session_sweep_at or 0.0) - 901.0
-
-    def failing_expire(**kwargs: Any) -> int:
-        calls.append(1)
-        raise RuntimeError("store unavailable")
-
-    monkeypatch.setattr(runtime, "expire_idle_sessions", failing_expire)
-    assert _create_guided(runtime).session.id
-    assert len(calls) == 2
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders("inferred"),
+            _item(
+                "select_region",
+                "select",
+                "inferred",
+                columns=["APP.CUSTOMERS.REGION", "APP.ORDERS.AMOUNT"],
+                sql_hint="CUSTOMERS.REGION, ORDERS.AMOUNT",
+            ),
+            _where_shipped(),
+            _item("limit_rows", "limit", "inferred", value="100 件", sql_hint="FETCH FIRST 100"),
+        )
+    )
+    created = _create(_runtime(llm), "地域と受注金額")
+    draft = _draft(created)
+    from_item = next(item for item in draft.items if item.key == "from_orders")
+    assert from_item.tables == ["APP.ORDERS", "APP.CUSTOMERS"]
+    assert "APP.CUSTOMERS（顧客） を FROM に足しました" in from_item.reason_ja
+    join = next(item for item in draft.items if item.key == "join_relationships")
+    assert join.sql_hint == "ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID"
+    assert "JOIN APP.CUSTOMERS ON ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID" in draft.sql_skeleton

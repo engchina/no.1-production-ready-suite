@@ -291,6 +291,7 @@ from .models import (
     SqlChatExecutionSummary,
     SqlChatPage,
     SqlChatSummary,
+    SqlRequirementSpec,
     StageTiming,
     StructureToSqlData,
     StructureToSqlOutput,
@@ -7054,15 +7055,23 @@ class Nl2SqlService:
         profile: Nl2SqlProfile,
         overrides: SelectAiRequestOverrides | None,
         ontology_context: Any | None = None,
-    ) -> dict[str, str] | None:
+        sql_requirement: SqlRequirementSpec | None = None,
+    ) -> dict[str, Any] | None:
         ontology_instructions = (
             self._ontology_generation_context_prompt(ontology_context)
             if ontology_context is not None
             else ""
         )
+        if sql_requirement is not None:
+            requirement_block = sql_requirement.prompt_block()
+            ontology_instructions = (
+                f"{ontology_instructions}\n\n{requirement_block}"
+                if ontology_instructions
+                else requirement_block
+            )
         if (overrides is None or not overrides.has_values()) and not ontology_instructions:
             return None
-        attributes: dict[str, str] = {}
+        attributes: dict[str, Any] = {}
         request_instructions = overrides.additional_instructions if overrides is not None else ""
         role = (
             overrides.role.strip() if overrides is not None else ""
@@ -7076,7 +7085,28 @@ class Nl2SqlService:
             attributes["role"] = role
         if instructions:
             attributes["additional_instructions"] = instructions
+        if sql_requirement is not None and sql_requirement.tables:
+            # object_list を AI要件確認で選んだ表に絞る（#1439。業務プロファイルの範囲の中だけ）。
+            object_list = self._select_ai_requirement_object_list(profile, sql_requirement.tables)
+            if object_list:
+                attributes["object_list"] = object_list
         return attributes or None
+
+    def _select_ai_requirement_object_list(
+        self, profile: Nl2SqlProfile, tables: Sequence[str]
+    ) -> list[dict[str, str]]:
+        scope = set(self.profile_allowed_object_names(profile))
+        result: list[dict[str, str]] = []
+        for table in tables:
+            canonical = self._resolve_profile_object_name(table)
+            if canonical not in scope:
+                continue
+            try:
+                identity = parse_object_identity(canonical)
+            except ValueError:
+                continue
+            result.append(select_ai_object_list_entry(identity))
+        return result
 
     def _redact_select_ai_context_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """監査・engine meta から業務 prompt 本文を除外する。"""
@@ -20323,13 +20353,17 @@ class Nl2SqlService:
                 profile,
                 request.select_ai_overrides,
                 ontology_context=ontology_context,
+                sql_requirement=request.sql_requirement,
             )
+            show_question = _question_with_empty_filter_guard(rewritten_question)
+            if request.sql_requirement is not None:
+                show_question = request.sql_requirement.question_with_requirements(show_question)
             prompt = self._oracle_adapter.generate_select_ai_prompt(
                 profile_name=str(
                     generated.engine_meta.get("select_ai_profile")
                     or self._select_ai_profile_name(profile)
                 ),
-                question=_question_with_empty_filter_guard(rewritten_question),
+                question=show_question,
                 attributes=attributes,
             )
             if not prompt.strip():
@@ -20526,6 +20560,7 @@ class Nl2SqlService:
             select_ai_overrides=request.select_ai_overrides,
             ontology_context=ontology_context,
             use_glossary=request.use_glossary,
+            sql_requirement=request.sql_requirement,
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
@@ -20975,6 +21010,7 @@ class Nl2SqlService:
         ontology_context: Any | None = None,
         *,
         use_glossary: bool = False,
+        sql_requirement: SqlRequirementSpec | None = None,
     ) -> GeneratedSql:
         if (
             self._incremental_repository is None
@@ -20995,6 +21031,7 @@ class Nl2SqlService:
             use_glossary=use_glossary,
             allow_deterministic_fallback=engine != Nl2SqlEngine.SELECT_AI_AGENT,
             engine_timings=engine_timings,
+            sql_requirement=sql_requirement,
         )
 
     def _generate_sql(
@@ -21013,6 +21050,7 @@ class Nl2SqlService:
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
         engine_timings: list[dict[str, Any]] | None = None,
+        sql_requirement: SqlRequirementSpec | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
@@ -21079,6 +21117,15 @@ class Nl2SqlService:
                 }
                 for example in history_examples
             ]
+        if sql_requirement is not None:
+            # AI要件確認の構造化した要件（#1439）。3 つの生成方法のどれにも渡す。
+            meta.update(
+                {
+                    "sql_requirement_applied": True,
+                    "sql_requirement_session_id": sql_requirement.session_id,
+                    "sql_requirement_tables": list(sql_requirement.tables),
+                }
+            )
         if ontology_context is not None:
             ontology_instructions = self._ontology_generation_context_prompt(ontology_context)
             meta.update(
@@ -21107,6 +21154,7 @@ class Nl2SqlService:
                     ontology_context=ontology_context,
                     runtime_timeout_seconds=runtime_timeout_seconds,
                     engine_timings=engine_timings,
+                    sql_requirement=sql_requirement,
                 )
                 generated.engine_meta = _engine_meta_with_timings(
                     generated.engine_meta,
@@ -21159,6 +21207,7 @@ class Nl2SqlService:
                     runtime_timeout_seconds=runtime_timeout_seconds,
                     runtime_max_retries=runtime_max_retries,
                     engine_timings=engine_timings,
+                    sql_requirement=sql_requirement,
                 )
                 generated.engine_meta = _engine_meta_with_timings(
                     generated.engine_meta,
@@ -21394,6 +21443,7 @@ class Nl2SqlService:
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
         engine_timings: list[dict[str, Any]] | None = None,
+        sql_requirement: SqlRequirementSpec | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         context = self._enterprise_ai_schema_context(
@@ -21411,6 +21461,9 @@ class Nl2SqlService:
                     self._ontology_generation_context_prompt(ontology_context),
                 ]
             )
+        if sql_requirement is not None:
+            # 直接の LLM: AI要件確認の要件を、必ず守る条件として prompt に入れる（#1439）。
+            context = "\n".join([context, sql_requirement.prompt_block()])
         system_prompt = self._enterprise_ai_sql_system_prompt()
         generate_kwargs: dict[str, Any] = {
             "prompt": question,
@@ -21571,6 +21624,7 @@ class Nl2SqlService:
         ontology_context: Any | None = None,
         runtime_timeout_seconds: float | None = None,
         engine_timings: list[dict[str, Any]] | None = None,
+        sql_requirement: SqlRequirementSpec | None = None,
     ) -> GeneratedSql:
         engine_timings = engine_timings if engine_timings is not None else []
         self._assert_select_ai_scope_ready(profile)
@@ -21586,6 +21640,9 @@ class Nl2SqlService:
                 "Profile を再同期してから実行してください。"
             )
         runtime_question = question
+        if sql_requirement is not None:
+            # Select AI / Select AI Agent: 要件を明確な質問の文にする（#1439）。
+            runtime_question = sql_requirement.question_with_requirements(question)
         ontology_instructions = (
             self._ontology_generation_context_prompt(ontology_context)
             if ontology_context is not None
@@ -21597,6 +21654,7 @@ class Nl2SqlService:
                 profile,
                 select_ai_overrides,
                 ontology_context=ontology_context,
+                sql_requirement=sql_requirement,
             )
             if attributes:
                 select_ai_kwargs: dict[str, Any] = {
@@ -21649,6 +21707,8 @@ class Nl2SqlService:
                         ontology_instructions,
                     ]
                 )
+            if sql_requirement is not None:
+                runtime_question = "\n\n".join([runtime_question, sql_requirement.prompt_block()])
             agent_kwargs: dict[str, Any] = {
                 "team_name": team_name,
                 "question": runtime_question,

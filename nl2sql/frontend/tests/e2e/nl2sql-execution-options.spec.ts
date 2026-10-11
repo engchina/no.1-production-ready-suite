@@ -1,6 +1,12 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectSelectFieldValue } from "./_helpers/select-field";
+import {
+  REQUIREMENT_CLARIFIED_QUESTION,
+  REQUIREMENT_QUESTION,
+  REQUIREMENT_SESSION_ID,
+  requirementSessionData,
+} from "./_helpers/requirement-session";
 
 const safety = {
   is_safe: true,
@@ -319,35 +325,6 @@ const guidedRevision = {
   etag: "ontology-etag",
 };
 
-const guidedProfileView = {
-  id: "profile-view-guided",
-  profile_id: "default",
-  ontology_revision_id: guidedRevision.id,
-  node_ids: [],
-  edge_ids: [],
-  allowed_path_ids: [],
-};
-
-const guidedQuestion = {
-  id: "clarification-question-time",
-  ambiguity_id: "ambiguity-time",
-  category: "time_range",
-  prompt_ja: "どの期間を対象にしますか？",
-  reason_ja: "期間が未指定の集計は、期待と異なる範囲を集計する可能性があります。",
-  answer_kind: "single_select",
-  options: [
-    {
-      id: "option-this-month",
-      label_ja: "今月",
-      structured_value: { relative_expression: "今月" },
-      source: "default",
-      evidence_ja: "既定の期間候補",
-    },
-  ],
-  allow_free_text: true,
-  blocking: true,
-};
-
 const guidedRecommendation = {
   id: "recommendation-guided-1",
   question_hash: "question-hash-guided",
@@ -367,199 +344,6 @@ const guidedRecommendation = {
   selected_revision_id: guidedRevision.id,
   expires_at: "2026-09-06T00:10:00.000Z",
 };
-
-function guidedQuerySessionData(
-  state: "needs_answer" | "ready" | "generated" | "done",
-) {
-  const currentIntentVersion = state === "needs_answer" ? 1 : 2;
-  const currentIntent = {
-    version: currentIntentVersion,
-    question_original: "受注件数を表示",
-    question_effective:
-      state === "needs_answer"
-        ? "受注件数を表示"
-        : "今月を対象に、受注件数を表示してください。",
-    profile_view_id: guidedProfileView.id,
-    ontology_revision_id: guidedRevision.id,
-    entities: [],
-    metrics: [{ id: "intent-metric-orders", name_ja: "受注件数" }],
-    dimensions: [],
-    filters: [],
-    time_range:
-      state === "needs_answer"
-        ? null
-        : { label_ja: "期間", relative_expression: "今月", timezone: "Asia/Tokyo" },
-    granularity: "",
-    sorts: [],
-    limit: null,
-    candidate_paths: [],
-    selected_path_id: null,
-    ambiguities:
-      state === "needs_answer"
-        ? [
-            {
-              id: "ambiguity-time",
-              code: "time_range_required",
-              message_ja: "集計対象の期間を確認してください。",
-              options: ["今月", "先月"],
-              blocking: true,
-              resolved: false,
-            },
-          ]
-        : [
-            {
-              id: "ambiguity-time",
-              code: "time_range_required",
-              message_ja: "集計対象の期間を確認してください。",
-              options: ["今月", "先月"],
-              resolution: "今月",
-              blocking: true,
-              resolved: true,
-            },
-          ],
-    confidence: state === "needs_answer" ? 0.6 : 0.8,
-  };
-  const session = {
-    id: "guided-session-1",
-    profile_id: "default",
-    profile_view_id: guidedProfileView.id,
-    ontology_revision_id: guidedRevision.id,
-    status:
-      state === "generated"
-        ? "awaiting_sql_confirmation"
-        : state === "done"
-          ? "done"
-          : "awaiting_intent_confirmation",
-    original_question: "受注件数を表示",
-    current_intent_version: currentIntentVersion,
-    intents:
-      state === "needs_answer"
-        ? [currentIntent]
-        : [
-            {
-              ...currentIntent,
-              version: 1,
-              question_effective: "受注件数を表示",
-              time_range: null,
-            },
-            currentIntent,
-          ],
-    sql_artifacts:
-      state === "generated" || state === "done"
-        ? [
-            {
-              id: "artifact-guided-1",
-              intent_version: 2,
-              ontology_revision_id: guidedRevision.id,
-              sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
-              sql_hash: "sql-hash-guided",
-              generation_context_hash: "context-hash-guided",
-              semantic_graph: {
-                dialect: "oracle",
-                ctes: [],
-                tables: [],
-                columns: [],
-                joins: [],
-                filters: [],
-                aggregates: [],
-                having: [],
-                windows: [],
-              },
-              validation_report: {
-                id: "validation-guided-1",
-                is_valid: true,
-                findings: [],
-                intent_coverage: 1,
-                validation_hash: "validation-hash-guided",
-              },
-            },
-          ]
-        : [],
-    current_sql_artifact_id: state === "generated" || state === "done" ? "artifact-guided-1" : null,
-    clarification_mode: "guided",
-    clarification_turns:
-      state === "needs_answer"
-        ? []
-        : [
-            {
-              question: guidedQuestion,
-              answer: {
-                question_id: guidedQuestion.id,
-                selected_option_ids: ["option-this-month"],
-                free_text: "",
-              },
-              intent_version: 2,
-            },
-          ],
-  };
-  return {
-    session,
-    profile_ontology_view: guidedProfileView,
-    ontology_graph: {
-      revision_id: guidedRevision.id,
-      revision: guidedRevision,
-      nodes: [],
-      edges: [],
-    },
-    preview:
-      state === "done"
-        ? {
-            engine: "select_ai",
-            sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
-            executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
-            is_safe: true,
-            row_limit: 0,
-            note: "SQL を生成しました。",
-            engine_meta: { runtime: "oracle" },
-            fallback_reason: "",
-            recommendations: [],
-            repaired_sql: "",
-            optimization_hints: [],
-          }
-        : null,
-    result:
-      state === "done"
-        ? {
-            columns: ["ORDER_COUNT"],
-            rows: [{ ORDER_COUNT: 42 }],
-            total: 1,
-          }
-        : null,
-    clarification:
-      state === "needs_answer"
-        ? {
-            status: "needs_answer",
-            current_question: guidedQuestion,
-            intent_summary: [{ key: "metrics", label_ja: "指標", value_ja: "受注件数", source: "ontology", confirmed: false }],
-            required_total: 1,
-            required_confirmed: 0,
-            missing_required: ["集計対象の期間を確認してください。"],
-            assumptions: [],
-            turn_count: 0,
-            manual_completion_required: false,
-            can_generate_sql: false,
-            schema_version: "guided_clarification_v1",
-            message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
-          }
-        : {
-            status: "ready_to_confirm",
-            current_question: null,
-            intent_summary: [
-              { key: "metrics", label_ja: "指標", value_ja: "受注件数", source: "ontology", confirmed: false },
-              { key: "time_range", label_ja: "期間", value_ja: "今月", source: "user", confirmed: true },
-            ],
-            required_total: 1,
-            required_confirmed: 1,
-            missing_required: [],
-            assumptions: [],
-            turn_count: 1,
-            manual_completion_required: false,
-            can_generate_sql: true,
-            schema_version: "guided_clarification_v1",
-            message_ja: "SQL 生成に必要な情報を確認できました。",
-          },
-  };
-}
 
 test("unified execute button runs SQL and renders execution artifacts", async ({ page }) => {
   const api = await mockNl2SqlWorkbenchApi(page);
@@ -699,16 +483,14 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expectNoHorizontalOverflow(page);
 });
 
-test("AI要件確認は確認内容を質問へ反映し、通常の SQL の生成と実行へ戻す", async ({ page }) => {
+test("AI要件確認は確認した要件を質問へ反映し、構造化した要件を SQL の生成と実行の job に渡す", async ({ page }) => {
   const api = await mockNl2SqlWorkbenchApi(page);
   const calls: Record<string, Record<string, unknown> | null> = {
     recommendationPayload: null,
     confirmationPayload: null,
     createPayload: null,
     answerPayload: null,
-    generatePayload: null,
-    confirmPayload: null,
-    executePayload: null,
+    applyPayload: null,
   };
 
   await page.route("**/api/nl2sql/ontology/profile-recommendations", (route) => {
@@ -727,83 +509,73 @@ test("AI要件確認は確認内容を質問へ反映し、通常の SQL の生�
   );
   await page.route("**/api/nl2sql/query-sessions", (route) => {
     calls.createPayload = route.request().postDataJSON() as Record<string, unknown>;
-    return fulfillJson(route, guidedQuerySessionData("needs_answer"));
+    return fulfillJson(route, requirementSessionData("needs_answer"));
   });
-  await page.route("**/api/nl2sql/query-sessions/guided-session-1/clarification-answers", (route) => {
+  await page.route(`**/api/nl2sql/query-sessions/${REQUIREMENT_SESSION_ID}/clarification-answers`, (route) => {
     calls.answerPayload = route.request().postDataJSON() as Record<string, unknown>;
-    return fulfillJson(route, guidedQuerySessionData("ready"));
+    return fulfillJson(route, requirementSessionData("ready", 2));
   });
-  await page.route("**/api/nl2sql/query-sessions/guided-session-1/generate-sql", (route) => {
-    calls.generatePayload = route.request().postDataJSON() as Record<string, unknown>;
-    return fulfillJson(route, guidedQuerySessionData("generated"));
-  });
-  await page.route("**/api/nl2sql/query-sessions/guided-session-1/confirm-sql", (route) => {
-    calls.confirmPayload = route.request().postDataJSON() as Record<string, unknown>;
-    return fulfillJson(route, guidedQuerySessionData("generated"));
-  });
-  await page.route("**/api/nl2sql/query-sessions/guided-session-1/execute", (route) => {
-    calls.executePayload = route.request().postDataJSON() as Record<string, unknown>;
-    return fulfillJson(route, guidedQuerySessionData("done"));
+  await page.route(`**/api/nl2sql/query-sessions/${REQUIREMENT_SESSION_ID}/apply`, (route) => {
+    calls.applyPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, requirementSessionData("applied", 2));
   });
 
   await page.goto("/query");
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  await page.locator("#nl2sql-question-input").fill(REQUIREMENT_QUESTION);
   const startButton = page.getByRole("button", { name: "AI要件確認", exact: true });
   await expect(startButton).toBeEnabled();
   await startButton.click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel).toBeVisible();
-  await expect(page.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
-  await page.getByRole("radio", { name: "今月", exact: true }).check();
-  await page.getByRole("button", { name: "選んだ内容で次へ" }).click();
+  await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
+  await panel.getByRole("radio", { name: /2026-04-01〜2027-03-31/ }).check();
+  await panel.getByRole("button", { name: "この内容で回答" }).click();
 
   await expect(
     panel.locator('[data-status-variant="success"]').filter({ hasText: "確認完了" })
   ).toBeVisible();
-  await expect(panel.getByText("期間")).toBeVisible();
-  await expect(panel.getByText("今月")).toBeVisible();
-  await page.getByRole("button", { name: "確認内容を質問に反映" }).click();
+  await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM APP.ORDERS");
+  await panel.getByRole("button", { name: "要件を SQL の生成に反映" }).click();
 
   const questionInput = page.locator("#nl2sql-question-input");
-  const clarifiedQuestion = "今月を対象に、受注件数を表示してください。";
   await expect(panel).toHaveCount(0);
-  await expect(questionInput).toHaveValue(clarifiedQuestion);
+  await expect(questionInput).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
   await expect(questionInput).toBeFocused();
-  await expect(page.getByText("確認内容を質問に反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
+  await expect(
+    page.getByText("確認した要件を質問に反映しました。「SQL を生成して実行」で、構造化した要件も SQL の生成に渡します。")
+  ).toBeVisible();
   await expect(page.getByText("生成したSQL")).toHaveCount(0);
   expect(api.jobPayload).toBeNull();
   await expectNoHorizontalOverflow(page);
 
-  expect(calls.recommendationPayload).toMatchObject({
-    question: "受注件数を表示",
-    limit: 3,
-  });
+  expect(calls.recommendationPayload).toMatchObject({ question: REQUIREMENT_QUESTION, limit: 3 });
   expect(calls.confirmationPayload).toMatchObject({
     selected_profile_id: "default",
     selected_revision_id: guidedRevision.id,
   });
   expect(calls.createPayload).toMatchObject({
-    question: "受注件数を表示",
+    question: REQUIREMENT_QUESTION,
     profile_id: "default",
     engine: "select_ai",
     profile_confirmation_token: "profile-confirmation-token",
     clarification_mode: "guided",
   });
-  expect(calls.answerPayload).toMatchObject({
+  expect(calls.answerPayload).toEqual({
     base_version: 1,
-    question_id: guidedQuestion.id,
-    selected_option_ids: ["option-this-month"],
+    item_id: "item-period",
+    selected_candidate_ids: ["candidate-fy-april"],
     free_text: "",
   });
-  expect(calls.generatePayload).toBeNull();
-  expect(calls.confirmPayload).toBeNull();
-  expect(calls.executePayload).toBeNull();
+  expect(calls.applyPayload).toEqual({ base_version: 2 });
 
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect.poll(() => api.jobPayload).not.toBeNull();
-  expect(api.jobPayload).toMatchObject({ question: clarifiedQuestion });
+  expect(api.jobPayload).toMatchObject({
+    question: REQUIREMENT_CLARIFIED_QUESTION,
+    requirement_session_id: REQUIREMENT_SESSION_ID,
+  });
 });
 
 test("glossary option off skips rewrite and sends the original question", async ({ page }) => {

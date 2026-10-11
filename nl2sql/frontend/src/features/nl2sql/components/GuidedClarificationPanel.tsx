@@ -1,22 +1,23 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { Send, CheckCircle2, Sparkles, X } from "lucide-react";
+import { CheckCircle2, Pencil, Send, Sparkles, X } from "lucide-react";
 
 import {
   Banner,
   Button,
-  StatusBadge,
+  Disclosure,
   FieldError,
   ProcessingIndicator,
-  FieldLegend,
+  StatusBadge,
   TextareaField,
 } from "@production-ready/ui";
 
 import { isAbortError } from "@/lib/api";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 
 import {
   answerQuerySessionClarification,
+  applyQuerySessionRequirement,
   cancelQuerySession,
   confirmOntologyProfileRecommendation,
   createQuerySession,
@@ -25,9 +26,12 @@ import {
   recommendOntologyProfiles,
 } from "../ontology/api";
 import type {
-  ClarificationQuestion,
   OntologyProfileRecommendation,
   QuerySession,
+  RequirementItem,
+  RequirementSection,
+  RequirementState,
+  RequirementStatus,
 } from "../ontology/types";
 import type { Nl2SqlEngine } from "../types";
 
@@ -37,24 +41,66 @@ interface GuidedClarificationPanelProps {
   engine: Nl2SqlEngine;
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
-  onApplyQuestion: (question: string, profileId: string) => void;
-}
-
-interface ManualAnswerValue {
-  optionIds: string[];
-  freeText: string;
+  /**
+   * 確認した要件を反映した（session は閉じた）。質問の文と session の ID を渡す（#1439）。
+   * 画面に反映できなかった（草稿を保存できない）ときは false を返し、パネルを残す。
+   */
+  onApplyQuestion: (question: string, profileId: string, sessionId: string) => boolean;
 }
 
 type ClarificationStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
+
+/** 画面の欄（SELECT / FROM と結合 / WHERE と期間 / GROUP BY / ORDER BY と件数 / WITH / そのほか）。 */
+const REQUIREMENT_GROUPS: { id: string; labelKey: I18nKey; sections: RequirementSection[] }[] = [
+  { id: "select", labelKey: "nl2sql.clarification.section.select", sections: ["select"] },
+  { id: "from", labelKey: "nl2sql.clarification.section.from", sections: ["from", "join"] },
+  { id: "where", labelKey: "nl2sql.clarification.section.where", sections: ["where", "period"] },
+  { id: "group_by", labelKey: "nl2sql.clarification.section.groupBy", sections: ["group_by"] },
+  { id: "order_by", labelKey: "nl2sql.clarification.section.orderBy", sections: ["order_by", "limit"] },
+  { id: "subquery", labelKey: "nl2sql.clarification.section.subquery", sections: ["subquery"] },
+  { id: "other", labelKey: "nl2sql.clarification.section.other", sections: ["other"] },
+];
+
+const SECTION_LABEL_KEY: Record<RequirementSection, I18nKey> = {
+  select: "nl2sql.clarification.section.select",
+  from: "nl2sql.clarification.section.from",
+  join: "nl2sql.clarification.section.from",
+  where: "nl2sql.clarification.section.where",
+  period: "nl2sql.clarification.section.where",
+  group_by: "nl2sql.clarification.section.groupBy",
+  order_by: "nl2sql.clarification.section.orderBy",
+  limit: "nl2sql.clarification.section.orderBy",
+  subquery: "nl2sql.clarification.section.subquery",
+  other: "nl2sql.clarification.section.other",
+};
+
+const STATUS_VARIANT: Record<RequirementStatus, "success" | "info" | "warning"> = {
+  confirmed: "success",
+  inferred: "info",
+  missing: "warning",
+  ambiguous: "warning",
+};
 
 function isSessionOpen(session: QuerySession | null): session is QuerySession {
   return Boolean(session && session.status !== "done" && session.status !== "cancelled");
 }
 
-function latestIntent(session: QuerySession | null) {
-  if (!session?.intents?.length) return null;
-  const version = session.current_intent_version ?? 1;
-  return [...session.intents].reverse().find((item) => item.version === version) ?? null;
+function itemStatusLabel(item: RequirementItem): string {
+  if (item.answered) return t("nl2sql.clarification.itemStatus.answered");
+  return t(`nl2sql.clarification.itemStatus.${item.status}` as I18nKey);
+}
+
+function phaseBadge(state: RequirementState): { variant: "success" | "warning" | "danger"; label: string } {
+  if (state.status === "unanswerable") {
+    return { variant: "danger", label: t("nl2sql.clarification.status.unanswerable") };
+  }
+  if (state.status === "ready") {
+    return { variant: "success", label: t("nl2sql.clarification.status.ready") };
+  }
+  return {
+    variant: "warning",
+    label: t("nl2sql.clarification.status.needsAnswer", { count: state.unresolved_items.length }),
+  };
 }
 
 export function GuidedClarificationPanel({
@@ -68,18 +114,19 @@ export function GuidedClarificationPanel({
   const [session, setSession] = useState<QuerySession | null>(null);
   const [recommendation, setRecommendation] = useState<OntologyProfileRecommendation | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
-  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
   const [freeText, setFreeText] = useState("");
-  const [manualAnswers, setManualAnswers] = useState<Record<string, ManualAnswerValue>>({});
+  // 確認済みの一覧から「直す」で選んだ項目（質問の欄の代わりに、この項目の入力を出す）。
+  const [correctingItemId, setCorrectingItemId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [busyAction, setBusyAction] = useState<"start" | "answer" | "cancel" | "">("start");
+  const [busyAction, setBusyAction] = useState<"start" | "answer" | "apply" | "cancel" | "">("start");
   const [startPhase, setStartPhase] = useState<ClarificationStartPhase>("recommend_profile");
   const startedRef = useRef(false);
   const startControllerRef = useRef<AbortController | null>(null);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
   // 画面を離れた（unmount・再読込）ときに、サーバーの session を中止するための参照。
   const sessionRef = useRef<QuerySession | null>(null);
-  // 「確認を中止して閉じる」で中止済み、または確認内容を質問に反映した session は中止しない。
+  // 「確認を中止して閉じる」で中止済み、または要件を反映した（閉じた）session は中止しない。
   const releasedRef = useRef(false);
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -88,10 +135,13 @@ export function GuidedClarificationPanel({
 
   // 中止・期限切れなどで終わった確認は、質問と回答の欄を出さず、理由と「閉じる」だけを出す（#1274）。
   const sessionEnded = session?.status === "cancelled" || session?.status === "error";
-  const clarification = sessionEnded ? null : session?.clarification ?? null;
-  const currentQuestion = clarification?.current_question ?? null;
-  const intent = latestIntent(session);
-  const confirmedIntentSummary = clarification?.intent_summary.filter((item) => item.confirmed) ?? [];
+  const state = sessionEnded ? null : session?.requirement_state ?? null;
+  const draft = sessionEnded ? null : session?.requirement ?? null;
+  const items = draft?.items ?? [];
+  const correctingItem = correctingItemId
+    ? items.find((item) => item.id === correctingItemId) ?? null
+    : null;
+  const activeItem = correctingItem ?? state?.current_item ?? null;
 
   const startSession = async (
     currentRecommendation: OntologyProfileRecommendation,
@@ -210,142 +260,92 @@ export function GuidedClarificationPanel({
     }
   };
 
-  // 質問が変わったレンダーで回答欄を空にする（effect で setState しない）。focus の移動だけ effect で行う。
-  const questionChanged = useValuesChanged([currentQuestion?.id]);
-  if (questionChanged) {
-    setSelectedOptionIds([]);
+  // 質問（または直す項目）が変わったレンダーで回答欄を空にする（effect で setState しない）。
+  const activeChanged = useValuesChanged([activeItem?.id, session?.current_intent_version]);
+  if (activeChanged) {
+    setSelectedCandidateIds([]);
     setFreeText("");
   }
-  const currentQuestionId = currentQuestion?.id;
+  const activeItemId = activeItem?.id;
   useEffect(() => {
-    if (currentQuestionId) {
+    if (activeItemId) {
       requestAnimationFrame(() => questionHeadingRef.current?.focus({ preventScroll: true }));
     }
-  }, [currentQuestionId]);
+  }, [activeItemId]);
 
-  const selectedCount = selectedOptionIds.length;
-  const answerReady = selectedCount > 0 || Boolean(freeText.trim());
-  const completenessLabel = useMemo(() => {
-    if (!clarification) return "";
-    if (clarification.can_generate_sql) return t("nl2sql.clarification.complete");
-    return t("nl2sql.clarification.completeness", {
-      confirmed: clarification.required_confirmed,
-      total: clarification.required_total,
-    });
-  }, [clarification]);
+  const answerReady = selectedCandidateIds.length > 0 || Boolean(freeText.trim());
 
-  const selectOption = (optionId: string) => {
+  const selectCandidate = (candidateId: string) => {
     setFreeText("");
-    if (currentQuestion?.answer_kind === "multi_select") {
-      setSelectedOptionIds((current) =>
-        current.includes(optionId)
-          ? current.filter((item) => item !== optionId)
-          : [...current, optionId]
+    if (activeItem?.answer_kind === "multi_select") {
+      setSelectedCandidateIds((current) =>
+        current.includes(candidateId)
+          ? current.filter((item) => item !== candidateId)
+          : [...current, candidateId]
       );
       return;
     }
-    setSelectedOptionIds([optionId]);
+    setSelectedCandidateIds([candidateId]);
   };
 
-  const updateManualAnswer = (
-    question: ClarificationQuestion,
-    update: Partial<ManualAnswerValue>
-  ) => {
-    setManualAnswers((current) => {
-      const previous = current[question.id] ?? { optionIds: [], freeText: "" };
-      const next = { ...previous, ...update };
-      if (update.optionIds?.length) next.freeText = "";
-      if (update.freeText) next.optionIds = [];
-      return { ...current, [question.id]: next };
-    });
-  };
-
-  const manualQuestions = clarification?.remaining_questions ?? [];
-  const manualAnswersReady = manualQuestions.length > 0 && manualQuestions.every((question) => {
-    const answer = manualAnswers[question.id];
-    return Boolean(answer?.optionIds.length || answer?.freeText.trim());
-  });
-
-  const submitManualAnswers = async () => {
-    if (!session || !manualAnswersReady || busyAction) return;
-    setBusyAction("answer");
-    setError("");
-    let updated = session;
+  const reloadAfterConflict = async (cause: unknown, current: QuerySession) => {
+    if (!(cause instanceof QuerySessionVersionConflictError)) return;
     try {
-      // 画面上は一括フォームだが、公開 API の version / current-question 契約を維持して
-      // 1 件ずつ順序通りに確定する。
-      let allAnswered = true;
-      for (let index = 0; index < manualQuestions.length; index += 1) {
-        const questionToAnswer = updated.clarification?.current_question;
-        if (!questionToAnswer) break;
-        const value = manualAnswers[questionToAnswer.id];
-        // 自由入力の再解釈で確認項目が増えたときは、そこで止めて新しい項目をフォームに出す（#1270）。
-        if (!value) {
-          allAnswered = false;
-          break;
-        }
-        updated = await answerQuerySessionClarification(updated.id, {
-          base_version: updated.current_intent_version ?? 1,
-          question_id: questionToAnswer.id,
-          selected_option_ids: value.optionIds,
-          free_text: value.freeText.trim(),
-        });
-      }
-      setSession(updated);
-      if (allAnswered) setManualAnswers({});
-    } catch (cause) {
-      if (cause instanceof QuerySessionVersionConflictError) {
-        try {
-          setSession(await getQuerySession(session.id));
-        } catch {
-          if (cause.session) setSession(cause.session);
-        }
-      } else if (updated !== session) {
-        // 途中まで確定した分を画面へ反映する。古い version のままだと次の送信が競合になる（#1270）。
-        setSession(updated);
-      }
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.answer"));
-    } finally {
-      setBusyAction("");
+      setSession(await getQuerySession(current.id));
+    } catch {
+      if (cause.session) setSession(cause.session);
     }
   };
 
-  const answerCurrentQuestion = async () => {
-    if (!session || !currentQuestion || !answerReady || busyAction) return;
+  const submitAnswer = async () => {
+    if (!session || !activeItem || !answerReady || busyAction) return;
     setBusyAction("answer");
     setError("");
     try {
       const updated = await answerQuerySessionClarification(session.id, {
         base_version: session.current_intent_version ?? 1,
-        question_id: currentQuestion.id,
-        selected_option_ids: selectedOptionIds,
+        item_id: activeItem.id,
+        selected_candidate_ids: selectedCandidateIds,
         free_text: freeText.trim(),
       });
       setSession(updated);
+      setCorrectingItemId(null);
     } catch (cause) {
-      if (cause instanceof QuerySessionVersionConflictError) {
-        try {
-          setSession(await getQuerySession(session.id));
-        } catch {
-          if (cause.session) setSession(cause.session);
-        }
-      }
+      await reloadAfterConflict(cause, session);
       setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.answer"));
     } finally {
       setBusyAction("");
     }
   };
 
-  const applyQuestion = () => {
-    if (!session || !clarification?.can_generate_sql || busyAction) return;
-    const clarifiedQuestion = intent?.question_effective?.trim();
-    if (!clarifiedQuestion) {
-      setError(t("nl2sql.clarification.error.apply"));
-      return;
-    }
+  const applyRequirement = async () => {
+    if (!session || !state?.can_apply || busyAction) return;
+    setBusyAction("apply");
     setError("");
-    releasedRef.current = true;
-    onApplyQuestion(clarifiedQuestion, session.profile_id);
+    try {
+      // 反映済み（session は閉じた）で画面への反映だけが失敗したときは、API を呼び直さない。
+      const applied = session.requirement_applied_at
+        ? session
+        : await applyQuerySessionRequirement(session.id, {
+            base_version: session.current_intent_version ?? 1,
+          });
+      releasedRef.current = true;
+      if (applied !== session) {
+        // 状態の表示は反映前のまま保つ（閉じた session の state は使わない）。
+        setSession({ ...session, requirement_applied_at: applied.requirement_applied_at ?? "applied", requirement: applied.requirement ?? session.requirement });
+      }
+      const clarifiedQuestion = applied.requirement?.clarified_question_ja?.trim();
+      if (!clarifiedQuestion) {
+        setError(t("nl2sql.clarification.error.apply"));
+        return;
+      }
+      onApplyQuestion(clarifiedQuestion, applied.profile_id, applied.id);
+    } catch (cause) {
+      await reloadAfterConflict(cause, session);
+      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.apply"));
+    } finally {
+      if (mountedRef.current) setBusyAction("");
+    }
   };
 
   const closePanel = async () => {
@@ -372,25 +372,26 @@ export function GuidedClarificationPanel({
     }
   };
 
-  const renderCloseButton = (size: "md" | "lg" = "lg") => (
+  const closeButton = (
     <Button
       type="button"
       variant="ghost"
-      size={size}
-
+      size="lg"
       loading={busyAction === "cancel"}
-      disabled={busyAction === "answer"}
-      onClick={() => void closePanel()} icon={X}>
+      disabled={busyAction === "answer" || busyAction === "apply"}
+      onClick={() => void closePanel()}
+      icon={X}
+    >
       {t("nl2sql.clarification.close")}
     </Button>
   );
 
-  const hasStepAction = Boolean(
-    (recommendation && !session)
-      || (currentQuestion && !clarification?.manual_completion_required)
-      || clarification?.manual_completion_required
-      || clarification?.can_generate_sql
-  );
+  const badge = state ? phaseBadge(state) : null;
+  const unresolvedCount = state?.unresolved_items.length ?? 0;
+  const answeredCount = state?.answered_count ?? 0;
+  const showApply = Boolean(state?.can_apply) && !correctingItem;
+  const applyWithRemaining = showApply && unresolvedCount > 0;
+  const showFinalSummary = Boolean(state && (state.status === "ready" || state.can_apply));
 
   return (
     <section
@@ -398,28 +399,29 @@ export function GuidedClarificationPanel({
       className="grid gap-4 rounded-md border border-accent-emphasis bg-surface p-4"
       data-testid="nl2sql-guided-clarification"
     >
-      <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <Sparkles size={20} className="text-accent-fg" aria-hidden="true" />
-            <h3 id="nl2sql-guided-clarification-title" className="text-base font-semibold text-fg">
-              {t("nl2sql.clarification.title")}
-            </h3>
-            {clarification ? (
-              <StatusBadge
-                variant={clarification.can_generate_sql ? "success" : "warning"}
-                label={completenessLabel}
-              />
-            ) : null}
-          </div>
-          <p className="mt-1 text-sm leading-6 text-fg-muted">
-            {clarification?.message_ja || t("nl2sql.clarification.description")}
-          </p>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <Sparkles size={20} className="text-accent-fg" aria-hidden="true" />
+          <h3 id="nl2sql-guided-clarification-title" className="text-base font-semibold text-fg">
+            {t("nl2sql.clarification.title")}
+          </h3>
+          {badge ? <StatusBadge variant={badge.variant} label={badge.label} /> : null}
+          {state ? (
+            <span className="text-xs text-fg-muted" data-testid="nl2sql-clarification-review-round">
+              {t("nl2sql.clarification.reviewRound", {
+                round: state.review_round,
+                max: state.max_review_rounds,
+              })}
+            </span>
+          ) : null}
         </div>
+        <p className="mt-1 text-sm leading-6 text-fg-muted">
+          {state?.message_ja || t("nl2sql.clarification.description")}
+        </p>
       </div>
 
       <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {clarification?.message_ja}
+        {state?.message_ja}
       </div>
 
       {error && !sessionEnded ? <Banner severity="danger">{error}</Banner> : null}
@@ -450,7 +452,7 @@ export function GuidedClarificationPanel({
         </div>
       ) : null}
       {busyAction === "answer" ? (
-        // 回答ごとに質問を解釈し直すため数秒以上かかる。スピナーは回答のボタンが担う（messaging.md §3.7）。
+        // 回答の後に LLM の再検査が走ると数秒以上かかる。スピナーは回答のボタンが担う（messaging.md §3.7）。
         <ProcessingIndicator
           active
           operationKey="guided-clarification-answer"
@@ -502,91 +504,134 @@ export function GuidedClarificationPanel({
               type="button"
               variant="primary"
               size="lg"
-
               disabled={!selectedProfileId || Boolean(busyAction)}
               icon={CheckCircle2}
               onClick={() => void confirmRecommendedProfile()}
             >
               {t("nl2sql.clarification.confirmProfile")}
             </Button>
-            {renderCloseButton()}
+            {closeButton}
           </div>
         </fieldset>
       ) : null}
 
-      {clarification?.status === "unanswerable" ? (
-        <Banner severity="warning">{clarification.message_ja}</Banner>
+      {state?.status === "unanswerable" ? (
+        <Banner severity="warning">{state.message_ja}</Banner>
+      ) : null}
+      {state && state.minimum_missing_ja.length > 0 && state.status !== "unanswerable" ? (
+        <Banner severity="warning">{t("nl2sql.clarification.minimumMissing")}</Banner>
+      ) : null}
+      {state?.review_limit_reached && unresolvedCount > 0 ? (
+        <Banner severity="warning">
+          {t("nl2sql.clarification.limitReached", {
+            max: state.max_review_rounds,
+            items: state.unresolved_items.map((item) => item.label_ja).join("、"),
+          })}
+        </Banner>
       ) : null}
 
-      {currentQuestion && !clarification?.manual_completion_required ? (
-        <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
-          <legend className="sr-only">{currentQuestion.prompt_ja}</legend>
+      {activeItem && state ? (
+        <fieldset
+          className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4"
+          data-testid="nl2sql-clarification-question"
+          data-item-key={activeItem.key}
+        >
+          <legend className="sr-only">
+            {correctingItem
+              ? correctingItem.question_ja || t("nl2sql.clarification.correctLabel", { label: correctingItem.label_ja })
+              : activeItem.question_ja || activeItem.label_ja}
+          </legend>
           <div>
-            <p className="text-xs font-medium text-fg-muted">
-              {t("nl2sql.clarification.step", {
-                step: (clarification?.turn_count ?? 0) + 1,
-              })}
+            <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-fg-muted">
+              <span>
+                {correctingItem
+                  ? t("nl2sql.clarification.correctTitle", { label: correctingItem.label_ja })
+                  : t("nl2sql.clarification.step", {
+                      step: answeredCount + 1,
+                      remaining: unresolvedCount,
+                    })}
+              </span>
+              <StatusBadge
+                icon={false}
+                variant="neutral"
+                label={t(SECTION_LABEL_KEY[activeItem.section])}
+              />
             </p>
             <h4
               ref={questionHeadingRef}
               tabIndex={-1}
               className="mt-1 text-sm font-semibold leading-6 text-fg"
             >
-              {currentQuestion.prompt_ja}
+              {correctingItem
+                ? correctingItem.question_ja || t("nl2sql.clarification.correctLabel", { label: correctingItem.label_ja })
+                : activeItem.question_ja || activeItem.label_ja}
             </h4>
-            {currentQuestion.reason_ja ? (
-              <p className="mt-1 text-xs leading-5 text-fg-muted">{currentQuestion.reason_ja}</p>
+            {correctingItem ? (
+              <p className="mt-1 text-xs leading-5 text-fg-muted">
+                {t("nl2sql.clarification.correctHint", {
+                  value: correctingItem.value_ja || t("nl2sql.clarification.unset"),
+                })}
+              </p>
+            ) : null}
+            {activeItem.reason_ja ? (
+              <p className="mt-1 text-xs leading-5 text-fg-muted">{activeItem.reason_ja}</p>
             ) : null}
           </div>
 
-          {currentQuestion.options.length > 0 ? (
+          {activeItem.candidates.length > 0 ? (
             <div className="grid gap-2 sm:grid-cols-2">
-              {currentQuestion.options.map((option) => {
-                const checked = selectedOptionIds.includes(option.id);
+              {activeItem.candidates.map((candidate) => {
+                const checked = selectedCandidateIds.includes(candidate.id);
                 return (
-                  <div
-                    key={option.id}
-                    className="rounded-md border border-border-control bg-surface text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
+                  <label
+                    key={candidate.id}
+                    className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
                   >
-                    <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2">
-                      <input
-                        type={currentQuestion.answer_kind === "multi_select" ? "checkbox" : "radio"}
-                        name={`clarification-${currentQuestion.id}`}
-                        value={option.id}
-                        checked={checked}
-                        disabled={Boolean(busyAction)}
-                        onChange={() => selectOption(option.id)}
-                        className="mt-1 h-4 w-4 accent-accent-emphasis"
-                      />
-                      <span className="min-w-0">
-                        <span className="block font-medium">{option.label_ja}</span>
-                        {option.description_ja ? (
-                          <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
-                            {option.description_ja}
-                          </span>
-                        ) : null}
-                      </span>
-                    </label>
-                  </div>
+                    <input
+                      type={activeItem.answer_kind === "multi_select" ? "checkbox" : "radio"}
+                      name={`requirement-${activeItem.id}`}
+                      value={candidate.id}
+                      checked={checked}
+                      disabled={Boolean(busyAction)}
+                      onChange={() => selectCandidate(candidate.id)}
+                      className="mt-1 h-4 w-4 accent-accent-emphasis"
+                    />
+                    <span className="min-w-0">
+                      <span className="block break-words font-medium">{candidate.label_ja}</span>
+                      {candidate.description_ja ? (
+                        <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
+                          {candidate.description_ja}
+                        </span>
+                      ) : null}
+                      {candidate.refs_ja && candidate.refs_ja !== candidate.label_ja ? (
+                        <span className="mt-0.5 block break-all font-mono text-xs leading-5 text-fg-muted">
+                          {candidate.refs_ja}
+                        </span>
+                      ) : null}
+                      {candidate.evidence_ja ? (
+                        <span className="mt-0.5 block text-xs leading-5 text-fg-subtle">
+                          {t("nl2sql.clarification.evidence", { evidence: candidate.evidence_ja })}
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
                 );
               })}
             </div>
           ) : null}
 
-          {currentQuestion.allow_free_text ? (
-            <TextareaField
-              id="nl2sql-clarification-free-text"
-              label={t("nl2sql.clarification.other")}
-              value={freeText}
-              onChange={(event) => {
-                setFreeText(event.currentTarget.value);
-                if (event.currentTarget.value) setSelectedOptionIds([]);
-              }}
-              disabled={Boolean(busyAction)}
-              rows={2}
-              placeholder={t("nl2sql.clarification.otherPlaceholder")}
-            />
-          ) : null}
+          <TextareaField
+            id="nl2sql-clarification-free-text"
+            label={t("nl2sql.clarification.other")}
+            value={freeText}
+            onChange={(event) => {
+              setFreeText(event.currentTarget.value);
+              if (event.currentTarget.value) setSelectedCandidateIds([]);
+            }}
+            disabled={Boolean(busyAction)}
+            rows={2}
+            placeholder={t("nl2sql.clarification.otherPlaceholder")}
+          />
           {!answerReady && error ? (
             <FieldError
               id="nl2sql-clarification-answer-error"
@@ -594,140 +639,184 @@ export function GuidedClarificationPanel({
             />
           ) : null}
           <div className="flex flex-wrap justify-end gap-2">
-            <Button icon={Send}
+            {correctingItem ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="lg"
+                icon={X}
+                disabled={Boolean(busyAction)}
+                onClick={() => setCorrectingItemId(null)}
+              >
+                {t("nl2sql.clarification.correctCancel")}
+              </Button>
+            ) : null}
+            {applyWithRemaining ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="lg"
+                icon={CheckCircle2}
+                loading={busyAction === "apply"}
+                disabled={Boolean(busyAction && busyAction !== "apply")}
+                onClick={() => void applyRequirement()}
+              >
+                {t("nl2sql.clarification.applyWithRemaining")}
+              </Button>
+            ) : null}
+            <Button
+              icon={Send}
               type="button"
               variant="primary"
               size="lg"
-
               loading={busyAction === "answer"}
               disabled={!answerReady || Boolean(busyAction && busyAction !== "answer")}
-              onClick={() => void answerCurrentQuestion()}
+              onClick={() => void submitAnswer()}
             >
-              {t("nl2sql.clarification.answerNext")}
+              {correctingItem
+                ? t("nl2sql.clarification.correctSubmit")
+                : t("nl2sql.clarification.answer")}
             </Button>
-            {renderCloseButton()}
+            {correctingItem ? null : closeButton}
           </div>
         </fieldset>
       ) : null}
 
-      {clarification?.manual_completion_required ? (
+      {state && draft ? (
         <section
-          aria-labelledby="nl2sql-manual-completion-title"
-          className="grid gap-4 rounded-md border border-warning-border bg-warning-subtle p-4"
+          aria-labelledby="nl2sql-requirements-title"
+          className="grid gap-3"
+          data-testid="nl2sql-clarification-requirements"
         >
           <div>
-            <h4 id="nl2sql-manual-completion-title" className="text-sm font-semibold text-fg">
-              {t("nl2sql.clarification.remainingRequired")}
+            <h4 id="nl2sql-requirements-title" className="text-sm font-semibold text-fg">
+              {t("nl2sql.clarification.requirements")}
             </h4>
-            <p className="mt-1 text-sm leading-6 text-fg-muted">
-              {t("nl2sql.clarification.manualCompletion")}
+            <p className="mt-0.5 text-xs leading-5 text-fg-muted">
+              {t("nl2sql.clarification.requirementsHint")}
             </p>
           </div>
-          {manualQuestions.map((question) => {
-            const value = manualAnswers[question.id] ?? { optionIds: [], freeText: "" };
-            return (
-              <fieldset key={question.id} className="grid gap-2 rounded-md border border-border bg-surface p-3">
-                {/* 残りの質問はすべて回答が必要（manualAnswersReady）なので、群の見出しに「必須」を出す（#531）。 */}
-                <FieldLegend required className="px-1 text-sm font-medium leading-6">
-                  {question.prompt_ja}
-                </FieldLegend>
-                {question.reason_ja ? (
-                  <p className="text-xs leading-5 text-fg-muted">{question.reason_ja}</p>
-                ) : null}
-                {question.options.map((option) => (
-                  <div key={option.id} className="rounded-md border border-border-control bg-surface-sunken has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle">
-                    <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2 text-sm text-fg">
-                      <input
-                        type={question.answer_kind === "multi_select" ? "checkbox" : "radio"}
-                        name={`manual-${question.id}`}
-                        checked={value.optionIds.includes(option.id)}
-                        disabled={Boolean(busyAction)}
-                        onChange={() => {
-                          const optionIds = question.answer_kind === "multi_select"
-                            ? (value.optionIds.includes(option.id)
-                                ? value.optionIds.filter((item) => item !== option.id)
-                                : [...value.optionIds, option.id])
-                            : [option.id];
-                          updateManualAnswer(question, { optionIds });
-                        }}
-                        className="mt-1 h-4 w-4 accent-accent-emphasis"
-                      />
-                      <span className="min-w-0">
-                        <span className="block font-medium">{option.label_ja}</span>
-                        {option.description_ja ? (
-                          <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
-                            {option.description_ja}
-                          </span>
-                        ) : null}
-                      </span>
-                    </label>
-                  </div>
+          <div className="grid gap-2 lg:grid-cols-2">
+            {REQUIREMENT_GROUPS.map((group) => {
+              const groupItems = items.filter((item) => group.sections.includes(item.section));
+              return (
+                <section
+                  key={group.id}
+                  aria-labelledby={`nl2sql-requirement-group-${group.id}`}
+                  className="min-w-0 rounded-md border border-border bg-surface-sunken p-3"
+                  data-testid={`nl2sql-requirement-group-${group.id}`}
+                >
+                  <h5
+                    id={`nl2sql-requirement-group-${group.id}`}
+                    className="text-xs font-semibold text-fg-muted"
+                  >
+                    {t(group.labelKey)}
+                  </h5>
+                  {groupItems.length === 0 ? (
+                    <p className="mt-1 text-sm text-fg-subtle">{t("nl2sql.clarification.sectionEmpty")}</p>
+                  ) : (
+                    <ul className="mt-1 grid gap-2">
+                      {groupItems.map((item) => {
+                        const isCurrent = item.id === activeItem?.id;
+                        const unresolved = !item.answered && (item.status === "missing" || item.status === "ambiguous");
+                        return (
+                          <li
+                            key={item.id}
+                            className="grid gap-1 border-t border-border pt-2 first:border-t-0 first:pt-0"
+                            data-testid="nl2sql-requirement-item"
+                            data-item-key={item.key}
+                            data-item-status={item.answered ? "answered" : item.status}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs text-fg-muted">{item.label_ja}</span>
+                              <span className="flex items-center gap-1">
+                                <StatusBadge
+                                  variant={item.answered ? "success" : STATUS_VARIANT[item.status]}
+                                  label={itemStatusLabel(item)}
+                                />
+                                {!unresolved && !isCurrent && state.status !== "unanswerable" ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    icon={Pencil}
+                                    disabled={Boolean(busyAction)}
+                                    aria-label={t("nl2sql.clarification.correctLabel", { label: item.label_ja })}
+                                    onClick={() => setCorrectingItemId(item.id)}
+                                  >
+                                    {t("nl2sql.clarification.correct")}
+                                  </Button>
+                                ) : null}
+                              </span>
+                            </div>
+                            <p className="break-words text-sm font-medium leading-6 text-fg">
+                              {item.value_ja || t("nl2sql.clarification.unset")}
+                            </p>
+                            {item.refs_ja && !item.value_ja.includes(item.refs_ja) ? (
+                              <p className="break-all font-mono text-xs leading-5 text-fg-muted">{item.refs_ja}</p>
+                            ) : null}
+                            {item.period?.range_ja && !item.value_ja.includes(item.period.range_ja) ? (
+                              <p className="text-xs leading-5 text-fg-muted">{item.period.range_ja}</p>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+          {draft.warnings_ja.length > 0 ? (
+            <Disclosure summary={t("nl2sql.clarification.warnings")} surface="sunken">
+              <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-fg-muted">
+                {draft.warnings_ja.map((warning) => (
+                  <li key={warning}>{warning}</li>
                 ))}
-                {question.allow_free_text ? (
-                  <TextareaField
-                    id={`nl2sql-clarification-manual-free-text-${question.id}`}
-                    label={t("nl2sql.clarification.other")}
-                    rows={2}
-                    value={value.freeText}
-                    disabled={Boolean(busyAction)}
-                    onChange={(event) => updateManualAnswer(question, { freeText: event.currentTarget.value })}
-                  />
-                ) : null}
-              </fieldset>
-            );
-          })}
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button icon={Send}
-              type="button"
-              variant="primary"
-              size="lg"
+              </ul>
+            </Disclosure>
+          ) : null}
+        </section>
+      ) : null}
 
-              loading={busyAction === "answer"}
-              disabled={!manualAnswersReady || Boolean(busyAction && busyAction !== "answer")}
-              onClick={() => void submitManualAnswers()}
+      {showFinalSummary && state && draft ? (
+        <section
+          aria-labelledby="nl2sql-requirement-summary-title"
+          className="grid gap-3 border-t border-border pt-4"
+          data-testid="nl2sql-clarification-summary"
+        >
+          <h4 id="nl2sql-requirement-summary-title" className="text-sm font-semibold text-fg">
+            {t("nl2sql.clarification.summaryTitle")}
+          </h4>
+          <div className="grid gap-1">
+            <p className="text-xs font-medium text-fg-muted">
+              {t("nl2sql.clarification.clarifiedQuestion")}
+            </p>
+            <p
+              className="break-words rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 text-fg"
+              data-testid="nl2sql-clarified-question"
             >
-              {t("nl2sql.clarification.confirmRemaining")}
-            </Button>
-            {renderCloseButton()}
+              {draft.clarified_question_ja}
+            </p>
+          </div>
+          <div className="grid gap-1">
+            <p className="text-xs font-medium text-fg-muted">{t("nl2sql.clarification.skeleton")}</p>
+            <pre
+              data-surface="code"
+              tabIndex={0}
+              role="region"
+              aria-label={t("nl2sql.clarification.skeleton")}
+              className="max-h-80 overflow-auto rounded-md border border-border p-3 font-mono text-xs leading-5"
+              data-testid="nl2sql-clarification-skeleton"
+            >
+              {state.sql_skeleton}
+            </pre>
+            <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.skeletonNote")}</p>
           </div>
         </section>
       ) : null}
 
-      {clarification && confirmedIntentSummary.length > 0 ? (
-        <section aria-labelledby="nl2sql-intent-summary-title" className="grid gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 id="nl2sql-intent-summary-title" className="text-sm font-semibold text-fg">
-              {t("nl2sql.clarification.summary")}
-            </h4>
-            <span className="text-xs text-fg-muted">{completenessLabel}</span>
-          </div>
-          <dl className="grid gap-2 sm:grid-cols-2">
-            {confirmedIntentSummary.map((item) => (
-              <div key={item.key} className="rounded-md border border-border bg-surface-sunken p-3">
-                <dt className="flex flex-wrap items-center justify-between gap-2 text-xs text-fg-muted">
-                  <span>{item.label_ja}</span>
-                  <StatusBadge
-                    variant="success"
-                    label={t("nl2sql.clarification.confirmed")}
-                  />
-                </dt>
-                <dd className="mt-1 text-sm font-medium leading-6 text-fg">{item.value_ja}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      ) : null}
-
-      {clarification && clarification.assumptions.length > 0 ? (
-        <div className="rounded-md border border-border bg-surface-sunken p-3 text-sm">
-          <p className="font-medium text-fg">{t("nl2sql.clarification.assumptions")}</p>
-          <ul className="mt-1 list-disc space-y-1 pl-5 text-fg-muted">
-            {clarification.assumptions.map((item) => <li key={item}>{item}</li>)}
-          </ul>
-        </div>
-      ) : null}
-
-      {clarification?.can_generate_sql ? (
+      {showApply && !activeItem ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           <span className="flex items-center gap-2 text-sm text-success-fg">
             <CheckCircle2 size={16} aria-hidden="true" />
@@ -738,20 +827,20 @@ export function GuidedClarificationPanel({
               type="button"
               variant="primary"
               size="lg"
-
-              disabled={Boolean(busyAction)}
-              onClick={applyQuestion} icon={Sparkles}>
+              loading={busyAction === "apply"}
+              disabled={Boolean(busyAction && busyAction !== "apply")}
+              onClick={() => void applyRequirement()}
+              icon={Sparkles}
+            >
               {t("nl2sql.clarification.apply")}
             </Button>
-            {renderCloseButton("lg")}
+            {closeButton}
           </div>
         </div>
       ) : null}
 
-      {!hasStepAction ? (
-        <div className="flex flex-wrap justify-end border-t border-border pt-4">
-          {renderCloseButton()}
-        </div>
+      {!activeItem && !(showApply) && !(recommendation && !session) ? (
+        <div className="flex flex-wrap justify-end border-t border-border pt-4">{closeButton}</div>
       ) : null}
     </section>
   );
