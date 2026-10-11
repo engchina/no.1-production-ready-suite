@@ -324,86 +324,107 @@ export interface IntentAmbiguity {
 }
 
 export type ClarificationMode = "review_only" | "guided";
-export type ClarificationStatus = "needs_answer" | "ready_to_confirm" | "unanswerable";
-export type ClarificationCategory =
-  | "business_meaning"
-  | "relationship_path"
-  | "filter_value"
-  | "time_range"
-  | "granularity"
-  | "output";
-export type ClarificationAnswerKind =
-  | "single_select"
-  | "multi_select"
-  | "date_range"
-  | "number"
-  | "free_text";
-export type ClarificationEvidenceSource = "user" | "profile" | "ontology" | "schema" | "default";
+// --- AI要件確認（SQL の要件の下書き。#1439） ---
 
-export interface ClarificationOption {
+export type RequirementSection =
+  | "select"
+  | "from"
+  | "join"
+  | "where"
+  | "period"
+  | "group_by"
+  | "order_by"
+  | "limit"
+  | "subquery"
+  | "other";
+export type RequirementStatus = "confirmed" | "inferred" | "missing" | "ambiguous";
+export type RequirementSource =
+  | "user"
+  | "question"
+  | "schema"
+  | "profile"
+  | "glossary"
+  | "ontology"
+  | "calendar";
+export type RequirementAnswerKind = "single_select" | "multi_select" | "free_text";
+export type RequirementPhase = "needs_answer" | "ready" | "unanswerable";
+
+export interface RequirementPeriod {
+  expression_ja: string;
+  relative_kind: string;
+  count?: number | null;
+  fiscal_year_start_month?: number | null;
+  reference_basis: "execution_date" | "latest_data_date";
+  reference_date?: string;
+  date_column?: string;
+  start_date?: string;
+  end_date?: string;
+  range_ja?: string;
+  sql_condition?: string;
+}
+
+export interface RequirementCandidate {
   id: string;
   label_ja: string;
   description_ja?: string;
-  ontology_node_ids?: string[];
-  relationship_path_id?: string;
-  structured_value?: OntologyJsonValue;
-  source: ClarificationEvidenceSource;
   evidence_ja?: string;
+  source: RequirementSource;
+  tables: string[];
+  columns: string[];
+  relationship_ids: string[];
+  sql_hint?: string;
+  period?: RequirementPeriod | null;
+  refs_ja?: string;
 }
 
-export interface ClarificationQuestion {
+export interface RequirementItem {
   id: string;
-  ambiguity_id?: string;
-  summary_key?: string;
-  category: ClarificationCategory;
-  prompt_ja: string;
-  reason_ja?: string;
-  answer_kind: ClarificationAnswerKind;
-  options: ClarificationOption[];
-  allow_free_text: boolean;
-  blocking: boolean;
-}
-
-export interface ClarificationAnswer {
-  question_id: string;
-  selected_option_ids: string[];
-  free_text?: string;
-  structured_value?: OntologyJsonValue;
-  answered_at?: string;
-}
-
-export interface ClarificationTurn {
-  question: ClarificationQuestion;
-  answer: ClarificationAnswer;
-  intent_version: number;
-  schema_version?: string;
-  prompt_version?: string;
-  model?: string;
-}
-
-export interface IntentSummaryItem {
   key: string;
+  section: RequirementSection;
   label_ja: string;
   value_ja: string;
-  source: ClarificationEvidenceSource;
-  confirmed: boolean;
-  technical_evidence_ja?: string;
+  status: RequirementStatus;
+  reason_ja?: string;
+  question_ja?: string;
+  answer_kind: RequirementAnswerKind;
+  candidates: RequirementCandidate[];
+  source: RequirementSource;
+  tables: string[];
+  columns: string[];
+  relationship_ids: string[];
+  sql_hint?: string;
+  period?: RequirementPeriod | null;
+  refs_ja?: string;
+  answered: boolean;
+  answer_ja?: string;
 }
 
-export interface ClarificationState {
-  status: ClarificationStatus;
-  current_question?: ClarificationQuestion | null;
-  remaining_questions: ClarificationQuestion[];
-  intent_summary: IntentSummaryItem[];
-  required_total: number;
-  required_confirmed: number;
-  missing_required: string[];
-  assumptions: string[];
-  turn_count: number;
-  manual_completion_required: boolean;
-  can_generate_sql: boolean;
-  schema_version: string;
-  message_ja?: string;
+export interface SqlRequirementDraft {
+  version: number;
+  question_original: string;
+  clarified_question_ja: string;
+  items: RequirementItem[];
+  unanswerable_reason_ja?: string;
+  warnings_ja: string[];
+  reference_date?: string;
+  model?: string;
+  sql_skeleton?: string;
+}
+
+export interface RequirementState {
+  status: RequirementPhase;
+  current_item?: RequirementItem | null;
+  unresolved_items: RequirementItem[];
+  answered_count: number;
+  review_round: number;
+  max_review_rounds: number;
+  review_limit_reached: boolean;
+  select_from_clear: boolean;
+  minimum_missing_ja: string[];
+  can_apply: boolean;
+  summary_ja: string;
+  sql_skeleton: string;
+  message_ja: string;
 }
 
 export interface QuestionIntentGraph {
@@ -844,8 +865,10 @@ export interface QuerySession {
   sql_confirmation?: QuerySessionExecutionBinding | null;
   execution?: Record<string, OntologyJsonValue> | null;
   clarification_mode?: ClarificationMode;
-  clarification_turns?: ClarificationTurn[];
-  clarification?: ClarificationState | null;
+  requirement?: SqlRequirementDraft | null;
+  requirement_review_round?: number;
+  requirement_applied_at?: string | null;
+  requirement_state?: RequirementState | null;
   proposal_ids?: string[];
   suggested_question?: string | null;
   intent_version?: number;
@@ -885,10 +908,13 @@ export interface QuerySessionCreateRequest {
 
 export interface ClarificationAnswerRequest {
   base_version: number;
-  question_id: string;
-  selected_option_ids: string[];
+  item_id: string;
+  selected_candidate_ids: string[];
   free_text?: string;
-  structured_value?: OntologyJsonValue;
+}
+
+export interface RequirementApplyRequest {
+  base_version: number;
 }
 
 export interface QuerySessionIntentPatchRequest extends GraphPatch {}
