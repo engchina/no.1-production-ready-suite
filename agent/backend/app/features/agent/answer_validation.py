@@ -202,13 +202,13 @@ def _evidence_refs(
             if not isinstance(chunk, dict):
                 continue
             start, end = chunk.get("start"), chunk.get("end")
-            text = (
+            chunk_text = (
                 body[start:end]
                 if isinstance(start, int) and isinstance(end, int) and start < end
                 else ""
             )
             ref = {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
-            items.append((ref, text, [*_locator_labels(chunk), *section_labels]))
+            items.append((ref, chunk_text, [*_locator_labels(chunk), *section_labels]))
     else:
         return []
     refs: list[tuple[tuple[str, str], object, list[object]]] = []
