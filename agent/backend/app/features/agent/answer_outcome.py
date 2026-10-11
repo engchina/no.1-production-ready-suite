@@ -20,7 +20,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
 1. `empty_answer`: 回答が空 → insufficient_evidence
-2. `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
+2. `nl2sql_clarification`: 最後の `nl2sql_query` が AI要件確認の項目を返した（SQL を作らずに
+   利用者に確かめた。#1441）→ needs_clarification
+   `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
 3. `validation_withheld_all`: 最終の検証が本文をすべて載せなかった → insufficient_evidence
 4. `rag_search`: 回答が最後の `rag_search` に拠る（その後に根拠を集め直していない）とき、
    その対応。ただし、現場のデータが要る（needs_environment_data）を現場のデータの道具（RAG 以外の
@@ -67,10 +69,12 @@ from app.features.agent.answer_passages import (
     passage_spans,
 )
 from app.features.agent.answer_validation import BLOCKING_CLAIM_STATUSES, STATUS_COMPLETED
+from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
     is_environment_tool,
+    nl2sql_clarification_pending,
 )
 from app.features.agent.tools import mcp_base_tool_name
 
@@ -101,6 +105,7 @@ ANSWER_OUTCOMES = frozenset(
 
 BASIS_EMPTY_ANSWER = "empty_answer"
 BASIS_CLARIFICATION = "clarification_question"
+BASIS_NL2SQL_CLARIFICATION = "nl2sql_clarification"
 BASIS_WITHHELD_ALL = "validation_withheld_all"
 BASIS_RAG_SEARCH = "rag_search"
 BASIS_ENVIRONMENT_TOOLS = "environment_tools"
@@ -179,9 +184,16 @@ def _retrieved_after(steps: list[RunStep], index: int) -> bool:
 
 
 def _environment_resolved(steps: list[RunStep], start: int = 0) -> bool:
-    """`start` 以降に、現場のデータの道具（RAG 以外の MCP 接続のツール）が成功したか。"""
+    """`start` 以降に、現場のデータの道具（RAG 以外の MCP 接続のツール）が成功したか。
+
+    Control Plane が確認の取り消しで閉じた AI要件確認（`nl2sql_cancel_requirement`。#1441）は、
+    現場のデータを確かめた呼び出しではないので数えない。
+    """
     return any(
-        _succeeded(step) and step.tool_call is not None and is_environment_tool(step.tool_call.name)
+        _succeeded(step)
+        and step.tool_call is not None
+        and is_environment_tool(step.tool_call.name)
+        and not (step.tool_call.trace_id or "").startswith(CANCEL_TRACE_PREFIX)
         for step in steps[start:]
     )
 
@@ -279,6 +291,13 @@ def answer_outcome(
     if not answer.strip():
         return _content(
             INSUFFICIENT_EVIDENCE, BASIS_EMPTY_ANSWER, rag_outcome=rag_outcome, signals=set()
+        )
+    if nl2sql_clarification_pending(steps):
+        return _content(
+            NEEDS_CLARIFICATION,
+            BASIS_NL2SQL_CLARIFICATION,
+            rag_outcome=rag_outcome,
+            signals={SIGNAL_QUESTION},
         )
     if is_clarification_only(answer):
         return _content(

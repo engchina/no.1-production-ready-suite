@@ -11,6 +11,17 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
   `profile_id` は必須（画面の API と違い、既定の業務プロファイル `"default"` に黙って切り替えない。
   #1379）
 - `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ）
+- `nl2sql_cancel_requirement`: AI要件確認の session を閉じる
+  （`POST /nl2sql/query-sessions/{id}/cancel`。利用者が Agent のチャットで
+  「データベースの検索は不要」としたとき、Agent の Control Plane が呼ぶ）
+
+AI要件確認（#1439・#1441）: `nl2sql_query` は SQL を作る前に、画面の AI要件確認と同じ流れ
+（`POST /nl2sql/query-sessions` の guided・回答・`apply`・`POST /nl2sql/jobs` の
+`requirement_session_id`）で、Schema・業務プロファイル・オントロジーから SQL の要件を確かめる。
+足りない情報・明確でない情報があれば SQL を作らずに `status=needs_clarification` と確認の項目
+（`requirement.question`。質問・候補・理由。表・列は物理名）を 1 つだけ返す。呼び出し元が利用者に
+聞き、`requirement_session_id` と `answer` を付けて呼び直すと要件を更新し、確認の要るものが無くなり
+SELECT と FROM が明確になってから SQL を生成・実行する。確認が要らなければ聞かずに進む。
 
 サービストークンにプロファイルの範囲の claim（`profile_ids`。業務 Agent のデータの範囲。#1379）が
 あれば、業務プロファイルは「利用者の権限 ∩ claim」で判定する: 範囲外の `profile_id` は 403
@@ -22,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 from functools import wraps
 from typing import Any
 
@@ -34,21 +46,35 @@ from pr_system_settings.auth.service_token import (
     PROFILE_SCOPE_MAX_IDS,
     narrow_to_profile_scope,
 )
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.concurrency import run_sync_io
+from app.features.nl2sql import ontology_router
 from app.features.nl2sql.models import (
     JobCreateRequest,
     JobData,
     JobStatus,
     ProfileRecommendationRequest,
 )
+from app.features.nl2sql.ontology_models import (
+    ClarificationMode,
+    QuerySessionStatus,
+    RequirementPhase,
+)
+from app.features.nl2sql.ontology_router import (
+    ClarificationAnswerRequest,
+    QuerySessionApiCreate,
+    QuerySessionData,
+    RequirementApplyRequest,
+)
+from app.features.nl2sql.ontology_service import OntologyNotFoundError, OntologyServiceError
 from app.features.nl2sql.profile_access import (
     allowed_profile_ids_for_request,
     assert_profile_access,
     principal_from_request,
     profile_access_denied,
 )
+from app.features.nl2sql.router import _with_requirement
 from app.features.nl2sql.service import (
     JOB_FAILED_ERROR_CODE,
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
@@ -57,6 +83,7 @@ from app.features.nl2sql.service import (
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
+from app.features.nl2sql.sql_requirement import RequirementAiUnavailableError
 from app.security.permissions import (
     PROFILE_READ_PERMISSION,
     QUERY_GENERATE_PERMISSION,
@@ -73,6 +100,29 @@ MAX_WAIT_SECONDS = 45
 JOB_POLL_INTERVAL_SECONDS = 0.5
 _TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.ERROR})
 _JOB_NOT_FOUND_MESSAGE = "指定されたジョブが見つかりません。"
+_REQUIREMENT_NOT_FOUND_MESSAGE = (
+    "指定された AI要件確認が見つかりません。requirement_session_id を付けずに "
+    "nl2sql_query を呼び直してください。"
+)
+_REQUIREMENT_CLOSED_MESSAGE = (
+    "この AI要件確認は終了しています（取り消し・期限切れ）。requirement_session_id を付けずに "
+    "nl2sql_query を呼び直してください。"
+)
+_REQUIREMENT_SKIPPED_MESSAGE = (
+    "OCI Enterprise AI が設定されていないため、AI要件確認をせずに SQL を生成しました。"
+)
+REQUIREMENT_AI_NOT_CONFIGURED_CODE = "REQUIREMENT_AI_NOT_CONFIGURED"
+# この業務プロファイルの範囲では SQL を作れない（AI要件確認。#1441）。
+REQUIREMENT_UNANSWERABLE_CODE = "REQUIREMENT_UNANSWERABLE"
+# 変更できない（終了した・実行中の）AI要件確認の session。
+_CLOSED_SESSION_STATUSES = frozenset(
+    {
+        QuerySessionStatus.EXECUTING,
+        QuerySessionStatus.DONE,
+        QuerySessionStatus.ERROR,
+        QuerySessionStatus.CANCELLED,
+    }
+)
 
 _INSTRUCTIONS = (
     "Production Ready NL2SQL のツールです。利用者が使える業務プロファイルの範囲で、"
@@ -82,6 +132,9 @@ _INSTRUCTIONS = (
     "nl2sql_query が pending / running を返したら、"
     "job_id と wait_seconds（最大 45 秒）を nl2sql_get_job に渡し、"
     "done / error になるまで続きを取得します。"
+    "nl2sql_query が needs_clarification を返したら SQL はまだ作っていません。"
+    "requirement.question の問いを利用者に 1 つだけ確かめ、答えを answer に入れ、"
+    "requirement.session_id を requirement_session_id に渡して nl2sql_query を呼び直します。"
 )
 
 
@@ -131,6 +184,37 @@ class RecommendProfileInput(_Input):
         return list(dict.fromkeys(_require_profile_id(item) for item in value))
 
 
+class RequirementAnswerInput(_Input):
+    """AI要件確認の確認の項目への利用者の答え（#1441）。"""
+
+    item_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="答える確認の項目の ID（前の結果の requirement.question.item_id）",
+    )
+    selected_candidate_ids: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "利用者が選んだ候補の ID（requirement.question.candidates の id）。"
+            "候補に無い答えは free_text に入れる"
+            "（selected_candidate_ids と free_text はどちらか一方）"
+        ),
+    )
+    free_text: str = Field(
+        default="", max_length=2000, description="候補に無い利用者の答え（利用者の言葉のまま）"
+    )
+
+    @model_validator(mode="after")
+    def _require_answer(self) -> RequirementAnswerInput:
+        # 画面の AI要件確認と同じく、候補を選ぶか自由入力のどちらか一方で答える。
+        if bool(self.selected_candidate_ids) == bool(self.free_text.strip()):
+            raise ValueError(
+                "selected_candidate_ids か free_text のどちらか一方だけを指定してください。"
+            )
+        return self
+
+
 class QueryInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
 
@@ -152,6 +236,36 @@ class QueryInput(_Input):
         ge=0,
         le=MAX_WAIT_SECONDS,
         description="結果を待つ秒数。過ぎたら pending / running のまま job_id を返す",
+    )
+    requirement_session_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "前の nl2sql_query が needs_clarification で返した requirement.session_id。"
+            "確認の続き（answer を付ける）と SQL の生成に使う。省略すると新しく確かめ始める"
+        ),
+    )
+    answer: RequirementAnswerInput | None = Field(
+        default=None,
+        description=(
+            "requirement.question への利用者の答え（requirement_session_id と一緒に渡す）。"
+            "利用者が答えていない問いを推測で埋めない"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _answer_needs_session(self) -> QueryInput:
+        if self.answer is not None and self.requirement_session_id is None:
+            raise ValueError("answer は requirement_session_id と一緒に指定してください。")
+        return self
+
+
+class CancelRequirementInput(_Input):
+    requirement_session_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="閉じる AI要件確認の session（nl2sql_query の requirement.session_id）",
     )
 
 
@@ -192,11 +306,80 @@ class RecommendProfileOutput(BaseModel):
     candidates: list[RecommendationCandidate]
 
 
+class QueryStatus(StrEnum):
+    """`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態と、AI要件確認で止めた状態）。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+    # SQL を作る前に、利用者に確かめる項目がある（#1441）。
+    NEEDS_CLARIFICATION = "needs_clarification"
+    # この業務プロファイルの範囲では SQL を作れない（表をつなげない・SELECT / FROM が決まらない）。
+    UNANSWERABLE = "unanswerable"
+
+
+class RequirementCandidateOutput(BaseModel):
+    id: str
+    label: str
+    description: str = ""
+    # 表・列の物理名（論理名を括弧で添える）。
+    refs: str = ""
+
+
+class RequirementQuestionOutput(BaseModel):
+    """利用者に確かめる 1 つの項目（表・列は物理名）。"""
+
+    item_id: str
+    section: str = Field(
+        description=(
+            "SQL のどの部分か（select / from / join / where / period / group_by / order_by / "
+            "limit / subquery / other）"
+        )
+    )
+    label: str
+    question: str
+    reason: str = ""
+    answer_kind: str = Field(description="single_select / multi_select / free_text")
+    candidates: list[RequirementCandidateOutput] = Field(default_factory=list)
+    # AI の今の理解（あれば）。
+    value: str = ""
+    refs: str = ""
+
+
+class RequirementOutput(BaseModel):
+    """AI要件確認の状態（#1441。画面の AI要件確認と同じ session）。"""
+
+    session_id: str
+    status: str = Field(
+        description=(
+            "needs_answer / ready / unanswerable / applied / cancelled / skipped"
+            "（OCI Enterprise AI が無い構成で確かめなかった）"
+        )
+    )
+    question: RequirementQuestionOutput | None = None
+    remaining_count: int = 0
+    answered_count: int = 0
+    select_from_clear: bool = False
+    minimum_missing: list[str] = Field(default_factory=list)
+    # 確かめた要件のまとめと、それを書き直した質問の文（表・列は物理名）。
+    summary: str = ""
+    clarified_question: str = ""
+    sql_skeleton: str = ""
+    message: str = ""
+
+
+class CancelRequirementOutput(BaseModel):
+    requirement_session_id: str
+    status: str = Field(description="cancelled（閉じた）/ closed（もう閉じていた）")
+
+
 class Nl2SqlJobResult(BaseModel):
     """契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。"""
 
-    job_id: str
-    status: JobStatus
+    # AI要件確認で止めた（needs_clarification / unanswerable）ときはジョブを作らないので null。
+    job_id: str | None = None
+    status: QueryStatus
     profile_id: str | None = None
     generated_sql: str | None = None
     executable_sql: str | None = None
@@ -219,6 +402,8 @@ class Nl2SqlJobResult(BaseModel):
         ),
     )
     error_message: str | None = None
+    # AI要件確認の状態（nl2sql_query だけ。#1441）。
+    requirement: RequirementOutput | None = None
 
 
 def _translate_domain_errors[A, R](
@@ -235,6 +420,13 @@ def _translate_domain_errors[A, R](
             raise McpToolError(exc.reason_code, exc.public_message) from exc
         except SchemaCatalogEmptyError as exc:
             raise McpToolError(SCHEMA_CATALOG_EMPTY_ERROR_CODE, str(exc)) from exc
+        except OntologyServiceError as exc:
+            # AI要件確認の業務エラー（Schema が読めない・LLM が使えない・session の終了など）。
+            message = exc.message_ja
+            finding_codes = getattr(exc, "finding_codes", None)
+            if finding_codes:
+                message = f"{message} 対象: {', '.join(str(item) for item in finding_codes)}"
+            raise McpToolError(exc.code, message) from exc
 
     return wrapped
 
@@ -259,7 +451,7 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
     result = job.result
     output = Nl2SqlJobResult(
         job_id=job.job_id,
-        status=job.status,
+        status=QueryStatus(job.status.value),
         profile_id=job.profile_id or None,
         # 旧い snapshot など、error_code を持たない失敗も分類できるようにする（#847）。
         error_code=job.error_code
@@ -283,6 +475,75 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
     output.truncated = result.results.truncated
     output.history_id = result.history_id or None
     return output
+
+
+def _requirement_output(data: QuerySessionData) -> RequirementOutput:
+    """AI要件確認の session を、呼び出し元（Agent）に返す形にする（表・列は物理名）。"""
+
+    session = data.session
+    state = data.requirement_state
+    draft = session.requirement
+    if session.status == QuerySessionStatus.CANCELLED:
+        status = "cancelled"
+    elif session.requirement_applied_at is not None:
+        status = "applied"
+    elif state is not None:
+        status = state.status.value
+    else:
+        status = RequirementPhase.UNANSWERABLE.value
+    item = state.current_item if state is not None else None
+    question = None
+    if item is not None and status == RequirementPhase.NEEDS_ANSWER.value:
+        question = RequirementQuestionOutput(
+            item_id=item.id,
+            section=item.section.value,
+            label=item.label_ja,
+            question=item.question_ja or item.label_ja,
+            reason=item.reason_ja,
+            answer_kind=item.answer_kind.value,
+            candidates=[
+                RequirementCandidateOutput(
+                    id=candidate.id,
+                    label=candidate.label_ja,
+                    description=candidate.description_ja,
+                    refs=candidate.refs_ja,
+                )
+                for candidate in item.candidates
+            ],
+            value=item.value_ja,
+            refs=item.refs_ja,
+        )
+    return RequirementOutput(
+        session_id=session.id,
+        status=status,
+        question=question,
+        remaining_count=len(state.unresolved_items) if state is not None else 0,
+        answered_count=state.answered_count if state is not None else 0,
+        select_from_clear=state.select_from_clear if state is not None else False,
+        minimum_missing=list(state.minimum_missing_ja) if state is not None else [],
+        summary=state.summary_ja if state is not None else "",
+        clarified_question=draft.clarified_question_ja if draft is not None else "",
+        sql_skeleton=(state.sql_skeleton if state is not None else "")
+        or (draft.sql_skeleton if draft is not None else ""),
+        message=state.message_ja if state is not None else "",
+    )
+
+
+def _requirement_ready(data: QuerySessionData) -> bool:
+    """SQL の生成に進める（確認の要る項目が無く、SELECT と FROM が明確）か。
+
+    画面は再検査の回数の上限に達したら残った項目を AI に任せて進められるが、MCP（Agent）は
+    確認の要るものが無くなるまで 1 問ずつ聞く（#1441）。
+    """
+
+    state = data.requirement_state
+    return (
+        state is not None
+        and state.status == RequirementPhase.READY
+        and state.select_from_clear
+        and not state.unresolved_items
+        and state.can_apply
+    )
 
 
 def _profile_scope_forbidden(profile_id: str) -> SecurityApiError:
@@ -320,6 +581,28 @@ def build_mcp_server(request: Request) -> McpServer:
         if job is None:
             raise HTTPException(status_code=404, detail=_JOB_NOT_FOUND_MESSAGE)
         return job
+
+    def own_session(session_id: str) -> QuerySessionData:
+        """本人の AI要件確認の session（ジョブと同じく、管理権限があっても本人のものだけ）。"""
+        try:
+            data = ontology_router.ontology_runtime.get_session(session_id)
+        except OntologyNotFoundError:
+            data = None
+        principal = principal_from_request(request)
+        # 持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない。
+        if (
+            data is not None
+            and principal is not None
+            and data.session.actor_user_uuid.strip() != principal.user_uuid
+        ):
+            data = None  # 他人の session は存在も明かさない
+        if data is None or data.session.clarification_mode != ClarificationMode.GUIDED:
+            raise HTTPException(status_code=404, detail=_REQUIREMENT_NOT_FOUND_MESSAGE)
+        scoped = scope()
+        if scoped is not None and data.session.profile_id not in scoped:
+            raise _profile_scope_forbidden(data.session.profile_id)
+        assert_profile_access(request, data.session.profile_id)
+        return data
 
     async def wait_for_job(job_id: str, wait_seconds: int) -> Nl2SqlJobResult:
         deadline = time.monotonic() + wait_seconds
@@ -399,20 +682,8 @@ def build_mcp_server(request: Request) -> McpServer:
 
         return await run_sync_io(run)
 
-    @_translate_domain_errors
-    async def query(arguments: QueryInput) -> Nl2SqlJobResult:
-        scoped = scope()
-        if scoped is not None and arguments.profile_id not in scoped:
-            raise _profile_scope_forbidden(arguments.profile_id)
-        assert_profile_access(request, arguments.profile_id)
+    async def start_and_wait(job_request: JobCreateRequest, wait_seconds: int) -> Nl2SqlJobResult:
         actor_user_uuid, actor_is_system_admin = _actor(request)
-        # 画面の既定値（engine / use_ontology_context 等は JobCreateRequest の既定）で作る。
-        # row_limit は必ず渡す（None だと全件を取得する）。
-        job_request = JobCreateRequest(
-            question=arguments.question,
-            profile_id=arguments.profile_id,
-            row_limit=arguments.row_limit,
-        )
         try:
             created = await run_sync_io(
                 nl2sql_service.start_job,
@@ -422,11 +693,146 @@ def build_mcp_server(request: Request) -> McpServer:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return await wait_for_job(created.job_id, arguments.wait_seconds)
+        return await wait_for_job(created.job_id, wait_seconds)
+
+    @_translate_domain_errors
+    async def query(arguments: QueryInput) -> Nl2SqlJobResult:
+        scoped = scope()
+        if scoped is not None and arguments.profile_id not in scoped:
+            raise _profile_scope_forbidden(arguments.profile_id)
+        assert_profile_access(request, arguments.profile_id)
+        actor_user_uuid, actor_is_system_admin = _actor(request)
+        runtime = ontology_router.ontology_runtime
+
+        def requirement_step() -> QuerySessionData:
+            """AI要件確認を始める・続ける（#1441。SQL はまだ作らない）。"""
+            if arguments.requirement_session_id is None:
+                # 業務プロファイルは呼び出し元が profile_id で明示して選んだ（推薦の確認を省く）。
+                return runtime.create_session(
+                    QuerySessionApiCreate(
+                        question=arguments.question,
+                        profile_id=arguments.profile_id,
+                        row_limit=arguments.row_limit,
+                        clarification_mode=ClarificationMode.GUIDED,
+                    ),
+                    actor_user_uuid=actor_user_uuid,
+                    actor_is_system_admin=actor_is_system_admin,
+                    profile_confirmed=True,
+                )
+            data = own_session(arguments.requirement_session_id)
+            if data.session.profile_id != arguments.profile_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "requirement_session_id の業務プロファイルと profile_id が違います。"
+                        "同じ profile_id で呼び直してください。"
+                    ),
+                )
+            if data.session.requirement_applied_at is not None:
+                return data
+            if data.session.status in _CLOSED_SESSION_STATUSES:
+                raise HTTPException(status_code=409, detail=_REQUIREMENT_CLOSED_MESSAGE)
+            if arguments.answer is None:
+                return data
+            answer = arguments.answer
+            return runtime.answer_clarification(
+                data.session.id,
+                ClarificationAnswerRequest(
+                    # 会話は 1 問ずつ進むので、今の版に答える（古い版の上書きは session が防ぐ）。
+                    base_version=data.session.current_intent_version,
+                    item_id=answer.item_id,
+                    selected_candidate_ids=list(dict.fromkeys(answer.selected_candidate_ids)),
+                    free_text=answer.free_text.strip(),
+                ),
+            )
+
+        started = time.monotonic()
+        try:
+            data = await run_sync_io(requirement_step)
+        except RequirementAiUnavailableError as exc:
+            if exc.code != REQUIREMENT_AI_NOT_CONFIGURED_CODE or arguments.requirement_session_id:
+                raise
+            # OCI Enterprise AI を設定していない構成（Select AI だけ・ローカルの決定論）は、
+            # AI要件確認をせずに SQL を作る。確かめていないことを requirement で返す。
+            result = await start_and_wait(
+                JobCreateRequest(
+                    question=arguments.question,
+                    profile_id=arguments.profile_id,
+                    row_limit=arguments.row_limit,
+                ),
+                arguments.wait_seconds,
+            )
+            result.requirement = RequirementOutput(
+                session_id="", status="skipped", message=_REQUIREMENT_SKIPPED_MESSAGE
+            )
+            return result
+        if data.session.requirement_applied_at is None:
+            if not _requirement_ready(data):
+                requirement = _requirement_output(data)
+                if requirement.question is not None:
+                    # 確認の要る項目がある: SQL を作らずに 1 問だけ返す。
+                    return Nl2SqlJobResult(
+                        status=QueryStatus.NEEDS_CLARIFICATION,
+                        profile_id=arguments.profile_id,
+                        requirement=requirement,
+                    )
+                # 聞く項目が無いのに SELECT / FROM が決まらない・範囲で答えられない: 閉じて返す。
+                if data.session.status not in _CLOSED_SESSION_STATUSES:
+                    await run_sync_io(runtime.cancel_session, data.session.id)
+                return Nl2SqlJobResult(
+                    status=QueryStatus.UNANSWERABLE,
+                    profile_id=arguments.profile_id,
+                    error_code=REQUIREMENT_UNANSWERABLE_CODE,
+                    error_message=requirement.message or None,
+                    requirement=requirement.model_copy(update={"status": "unanswerable"}),
+                )
+            data = await run_sync_io(
+                runtime.apply_requirement,
+                data.session.id,
+                RequirementApplyRequest(base_version=data.session.current_intent_version),
+            )
+        draft = data.session.requirement
+        if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
+            raise HTTPException(status_code=409, detail="AI要件確認の要件がありません。")
+        # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。
+        # 画面の既定値（engine / use_ontology_context 等は JobCreateRequest の既定）で作る。
+        # row_limit は必ず渡す（None だと全件を取得する）。
+        job_request = _with_requirement(
+            JobCreateRequest(
+                question=draft.clarified_question_ja,
+                profile_id=arguments.profile_id,
+                row_limit=arguments.row_limit,
+                requirement_session_id=data.session.id,
+            ),
+            getattr(request.state, "principal", None),
+        )
+        # AI要件確認（LLM）にかかった分だけ、ジョブを待つ秒数を減らす（1 回の呼び出しの長さを
+        # 「AI要件確認 + wait_seconds」にしない。終わらなければ job_id を返し、続きは
+        # nl2sql_get_job）。
+        remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
+        result = await start_and_wait(job_request, remaining)
+        result.requirement = _requirement_output(data)
+        return result
 
     @_translate_domain_errors
     async def get_job(arguments: GetJobInput) -> Nl2SqlJobResult:
         return await wait_for_job(arguments.job_id, arguments.wait_seconds)
+
+    @_translate_domain_errors
+    async def cancel_requirement(arguments: CancelRequirementInput) -> CancelRequirementOutput:
+        def run() -> CancelRequirementOutput:
+            runtime = ontology_router.ontology_runtime
+            data = own_session(arguments.requirement_session_id)
+            if data.session.status in _CLOSED_SESSION_STATUSES:
+                return CancelRequirementOutput(
+                    requirement_session_id=data.session.id, status="closed"
+                )
+            runtime.cancel_session(data.session.id)
+            return CancelRequirementOutput(
+                requirement_session_id=data.session.id, status="cancelled"
+            )
+
+        return await run_sync_io(run)
 
     tools = [
         McpTool(
@@ -452,6 +858,10 @@ def build_mcp_server(request: Request) -> McpServer:
             name="nl2sql_query",
             description=(
                 "質問から SELECT SQL を生成して実行し、結果の行を返します。"
+                "SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。"
+                "確かめる項目があれば SQL を作らずに status=needs_clarification と "
+                "requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、"
+                "利用者に聞いてから requirement_session_id と answer を付けて呼び直します。"
                 "wait_seconds 内に終わらなければ job_id を返すので、"
                 "nl2sql_get_job で続きを取ります。"
             ),
@@ -474,6 +884,18 @@ def build_mcp_server(request: Request) -> McpServer:
             handler=get_job,
             output_model=Nl2SqlJobResult,
             permissions=(frozenset({QUERY_GENERATE_PERMISSION}),),
+        ),
+        McpTool(
+            name="nl2sql_cancel_requirement",
+            description=(
+                "nl2sql_query の AI要件確認（needs_clarification）を取り消して閉じます"
+                "（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。"
+            ),
+            input_model=CancelRequirementInput,
+            handler=cancel_requirement,
+            output_model=CancelRequirementOutput,
+            permissions=(frozenset({QUERY_GENERATE_PERMISSION}),),
+            read_only=False,
         ),
     ]
     return McpServer(

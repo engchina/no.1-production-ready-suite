@@ -2,6 +2,49 @@
   "server": "production-ready-nl2sql",
   "tools": [
     {
+      "name": "nl2sql_cancel_requirement",
+      "description": "nl2sql_query の AI要件確認（needs_clarification）を取り消して閉じます（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "requirement_session_id": {
+            "description": "閉じる AI要件確認の session（nl2sql_query の requirement.session_id）",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Requirement Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirement_session_id"
+        ],
+        "title": "CancelRequirementInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "outputSchema": {
+        "properties": {
+          "requirement_session_id": {
+            "title": "Requirement Session Id",
+            "type": "string"
+          },
+          "status": {
+            "description": "cancelled（閉じた）/ closed（もう閉じていた）",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirement_session_id",
+          "status"
+        ],
+        "title": "CancelRequirementOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "nl2sql_get_job",
       "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。wait_seconds の間、完了を待ってから返します。",
       "inputSchema": {
@@ -33,26 +76,195 @@
       },
       "outputSchema": {
         "$defs": {
-          "JobStatus": {
-            "description": "非同期ジョブ状態。",
+          "QueryStatus": {
+            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態と、AI要件確認で止めた状態）。",
             "enum": [
               "pending",
               "running",
               "done",
-              "error"
+              "error",
+              "needs_clarification",
+              "unanswerable"
             ],
-            "title": "JobStatus",
+            "title": "QueryStatus",
             "type": "string"
+          },
+          "RequirementCandidateOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              },
+              "refs": {
+                "default": "",
+                "title": "Refs",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "title": "RequirementCandidateOutput",
+            "type": "object"
+          },
+          "RequirementOutput": {
+            "description": "AI要件確認の状態（#1441。画面の AI要件確認と同じ session）。",
+            "properties": {
+              "session_id": {
+                "title": "Session Id",
+                "type": "string"
+              },
+              "status": {
+                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成で確かめなかった）",
+                "title": "Status",
+                "type": "string"
+              },
+              "question": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RequirementQuestionOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "remaining_count": {
+                "default": 0,
+                "title": "Remaining Count",
+                "type": "integer"
+              },
+              "answered_count": {
+                "default": 0,
+                "title": "Answered Count",
+                "type": "integer"
+              },
+              "select_from_clear": {
+                "default": false,
+                "title": "Select From Clear",
+                "type": "boolean"
+              },
+              "minimum_missing": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Minimum Missing",
+                "type": "array"
+              },
+              "summary": {
+                "default": "",
+                "title": "Summary",
+                "type": "string"
+              },
+              "clarified_question": {
+                "default": "",
+                "title": "Clarified Question",
+                "type": "string"
+              },
+              "sql_skeleton": {
+                "default": "",
+                "title": "Sql Skeleton",
+                "type": "string"
+              },
+              "message": {
+                "default": "",
+                "title": "Message",
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "status"
+            ],
+            "title": "RequirementOutput",
+            "type": "object"
+          },
+          "RequirementQuestionOutput": {
+            "description": "利用者に確かめる 1 つの項目（表・列は物理名）。",
+            "properties": {
+              "item_id": {
+                "title": "Item Id",
+                "type": "string"
+              },
+              "section": {
+                "description": "SQL のどの部分か（select / from / join / where / period / group_by / order_by / limit / subquery / other）",
+                "title": "Section",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "question": {
+                "title": "Question",
+                "type": "string"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "answer_kind": {
+                "description": "single_select / multi_select / free_text",
+                "title": "Answer Kind",
+                "type": "string"
+              },
+              "candidates": {
+                "items": {
+                  "$ref": "#/$defs/RequirementCandidateOutput"
+                },
+                "title": "Candidates",
+                "type": "array"
+              },
+              "value": {
+                "default": "",
+                "title": "Value",
+                "type": "string"
+              },
+              "refs": {
+                "default": "",
+                "title": "Refs",
+                "type": "string"
+              }
+            },
+            "required": [
+              "item_id",
+              "section",
+              "label",
+              "question",
+              "answer_kind"
+            ],
+            "title": "RequirementQuestionOutput",
+            "type": "object"
           }
         },
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "job_id": {
-            "title": "Job Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
           },
           "status": {
-            "$ref": "#/$defs/JobStatus"
+            "$ref": "#/$defs/QueryStatus"
           },
           "profile_id": {
             "anyOf": [
@@ -199,10 +411,20 @@
             ],
             "default": null,
             "title": "Error Message"
+          },
+          "requirement": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RequirementOutput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
-          "job_id",
           "status"
         ],
         "title": "Nl2SqlJobResult",
@@ -293,8 +515,44 @@
     },
     {
       "name": "nl2sql_query",
-      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
+      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
       "inputSchema": {
+        "$defs": {
+          "RequirementAnswerInput": {
+            "additionalProperties": false,
+            "description": "AI要件確認の確認の項目への利用者の答え（#1441）。",
+            "properties": {
+              "item_id": {
+                "description": "答える確認の項目の ID（前の結果の requirement.question.item_id）",
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Item Id",
+                "type": "string"
+              },
+              "selected_candidate_ids": {
+                "description": "利用者が選んだ候補の ID（requirement.question.candidates の id）。候補に無い答えは free_text に入れる（selected_candidate_ids と free_text はどちらか一方）",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "title": "Selected Candidate Ids",
+                "type": "array"
+              },
+              "free_text": {
+                "default": "",
+                "description": "候補に無い利用者の答え（利用者の言葉のまま）",
+                "maxLength": 2000,
+                "title": "Free Text",
+                "type": "string"
+              }
+            },
+            "required": [
+              "item_id"
+            ],
+            "title": "RequirementAnswerInput",
+            "type": "object"
+          }
+        },
         "additionalProperties": false,
         "properties": {
           "question": {
@@ -326,6 +584,33 @@
             "minimum": 0,
             "title": "Wait Seconds",
             "type": "integer"
+          },
+          "requirement_session_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "前の nl2sql_query が needs_clarification で返した requirement.session_id。確認の続き（answer を付ける）と SQL の生成に使う。省略すると新しく確かめ始める",
+            "title": "Requirement Session Id"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RequirementAnswerInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "requirement.question への利用者の答え（requirement_session_id と一緒に渡す）。利用者が答えていない問いを推測で埋めない"
           }
         },
         "required": [
@@ -340,26 +625,195 @@
       },
       "outputSchema": {
         "$defs": {
-          "JobStatus": {
-            "description": "非同期ジョブ状態。",
+          "QueryStatus": {
+            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態と、AI要件確認で止めた状態）。",
             "enum": [
               "pending",
               "running",
               "done",
-              "error"
+              "error",
+              "needs_clarification",
+              "unanswerable"
             ],
-            "title": "JobStatus",
+            "title": "QueryStatus",
             "type": "string"
+          },
+          "RequirementCandidateOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              },
+              "refs": {
+                "default": "",
+                "title": "Refs",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "title": "RequirementCandidateOutput",
+            "type": "object"
+          },
+          "RequirementOutput": {
+            "description": "AI要件確認の状態（#1441。画面の AI要件確認と同じ session）。",
+            "properties": {
+              "session_id": {
+                "title": "Session Id",
+                "type": "string"
+              },
+              "status": {
+                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成で確かめなかった）",
+                "title": "Status",
+                "type": "string"
+              },
+              "question": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RequirementQuestionOutput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "remaining_count": {
+                "default": 0,
+                "title": "Remaining Count",
+                "type": "integer"
+              },
+              "answered_count": {
+                "default": 0,
+                "title": "Answered Count",
+                "type": "integer"
+              },
+              "select_from_clear": {
+                "default": false,
+                "title": "Select From Clear",
+                "type": "boolean"
+              },
+              "minimum_missing": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Minimum Missing",
+                "type": "array"
+              },
+              "summary": {
+                "default": "",
+                "title": "Summary",
+                "type": "string"
+              },
+              "clarified_question": {
+                "default": "",
+                "title": "Clarified Question",
+                "type": "string"
+              },
+              "sql_skeleton": {
+                "default": "",
+                "title": "Sql Skeleton",
+                "type": "string"
+              },
+              "message": {
+                "default": "",
+                "title": "Message",
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "status"
+            ],
+            "title": "RequirementOutput",
+            "type": "object"
+          },
+          "RequirementQuestionOutput": {
+            "description": "利用者に確かめる 1 つの項目（表・列は物理名）。",
+            "properties": {
+              "item_id": {
+                "title": "Item Id",
+                "type": "string"
+              },
+              "section": {
+                "description": "SQL のどの部分か（select / from / join / where / period / group_by / order_by / limit / subquery / other）",
+                "title": "Section",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "question": {
+                "title": "Question",
+                "type": "string"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "answer_kind": {
+                "description": "single_select / multi_select / free_text",
+                "title": "Answer Kind",
+                "type": "string"
+              },
+              "candidates": {
+                "items": {
+                  "$ref": "#/$defs/RequirementCandidateOutput"
+                },
+                "title": "Candidates",
+                "type": "array"
+              },
+              "value": {
+                "default": "",
+                "title": "Value",
+                "type": "string"
+              },
+              "refs": {
+                "default": "",
+                "title": "Refs",
+                "type": "string"
+              }
+            },
+            "required": [
+              "item_id",
+              "section",
+              "label",
+              "question",
+              "answer_kind"
+            ],
+            "title": "RequirementQuestionOutput",
+            "type": "object"
           }
         },
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "job_id": {
-            "title": "Job Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
           },
           "status": {
-            "$ref": "#/$defs/JobStatus"
+            "$ref": "#/$defs/QueryStatus"
           },
           "profile_id": {
             "anyOf": [
@@ -506,10 +960,20 @@
             ],
             "default": null,
             "title": "Error Message"
+          },
+          "requirement": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RequirementOutput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
-          "job_id",
           "status"
         ],
         "title": "Nl2SqlJobResult",

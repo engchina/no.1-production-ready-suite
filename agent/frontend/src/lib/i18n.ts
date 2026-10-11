@@ -516,6 +516,12 @@ const agentJa = {
   "chat.failed": "回答できませんでした",
   "chat.failedUnknown": "実行に失敗しました。時間をおいて、もう一度送ってください。",
   "chat.cancelled": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
+  // 確認の取り消し（#1441・#1445）。確認の質問のそばの操作と、押した後（会話の文で取り消した後）の補足。
+  "chat.clarificationCancel.group": "確認の取り消し",
+  "chat.clarificationCancel.nl2sql": "データベースの検索は不要",
+  "chat.clarificationCancel.rag": "資料の検索は不要",
+  "chat.clarificationCancel.note.nl2sql": "データベースを使わずに回答を続けます",
+  "chat.clarificationCancel.note.rag": "資料を使わずに回答を続けます",
   "chat.sources": "出典（{count}）",
   "chat.sourceUntitled": "無題の文書",
   "evidence.page": "p.{page}",
@@ -583,6 +589,7 @@ const agentJa = {
   "chat.review.message.skipped": "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedEmpty": "回答が空のため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedClarification": "確認の質問だけの回答のため、資料との照らし合わせの対象外です。",
+  "chat.review.message.skippedRagDeclined": "資料の検索は不要とされたため、資料との照らし合わせの対象外です。",
   "chat.review.limitReached":
     "資料を調べられる回数の上限に達したため、ここまでに集めた資料で答えています。足りない点は、質問を分けて聞き直してください。",
   // 回答の処理の段階（3 製品共通の ChatProgress。#1145 / #1147）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。

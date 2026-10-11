@@ -19,7 +19,7 @@ from enum import StrEnum
 from importlib import import_module
 from pathlib import Path
 from threading import Condition, Lock
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from pr_backend_core import Page
@@ -44,6 +44,11 @@ from pydantic import (
 
 from app.features.agent import storage_backend
 from app.features.agent.chat_progress import record_run_progress
+from app.features.agent.clarification_cancel import (
+    CANCEL_METADATA_KEY,
+    button_record,
+    kind_label,
+)
 from app.features.agent.config import runtime_config_store
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
 from app.features.agent.support_task import (
@@ -311,6 +316,9 @@ class RunCreateRequest(BaseModel):
     draft: bool = False
     # 会話（スレッド）を続けるときの ID（#768）。省略すると新しい会話を始める。
     thread_id: str | None = Field(default=None, pattern=r"^thread_[0-9a-f]{32}$")
+    # チャットの確認の取り消しの操作（#1441・#1445）。`nl2sql` は「データベースの検索は不要」、
+    # `rag` は「資料の検索は不要」。この Run ではその種類のツールを使わずに続ける。
+    clarification_cancel: Literal["nl2sql", "rag"] | None = None
 
     @field_validator("goal")
     @classmethod
@@ -399,6 +407,8 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         "source",
         "mcp_session",
         "replayed_from_run_id",
+        # 確認の取り消し（#1441・#1445）。`RunCreateRequest.clarification_cancel` から作る。
+        CANCEL_METADATA_KEY,
     }
 )
 
@@ -691,6 +701,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
@@ -1030,7 +1041,15 @@ class AgentRuntimeRepository:
                 created_by_user_uuid=created_by_user_uuid,
                 thread_id=request.thread_id or f"thread_{uuid4().hex}",
                 status=RunStatus.QUEUED,
-                metadata={**request.metadata, "agent_version": used_version},
+                metadata={
+                    **request.metadata,
+                    "agent_version": used_version,
+                    **(
+                        {CANCEL_METADATA_KEY: [button_record(request.clarification_cancel)]}
+                        if request.clarification_cancel is not None
+                        else {}
+                    ),
+                },
             )
             self._runs[run.id] = run
             self._append_event(
@@ -1482,6 +1501,21 @@ class AgentRuntimeRepository:
         with self._lock:
             run = self._require_run(run_id)
             self._append_event(run, RunEventType.RUNTIME_EVENT, message, {"severity": "warning"})
+            self._persist_locked()
+
+    def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None:
+        """利用者が取り消した確認（#1441・#1445）を Run の metadata とイベントに残す。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            run.metadata[CANCEL_METADATA_KEY] = deepcopy(records)
+            names = "、".join(kind_label(str(record.get("kind"))) for record in records)
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                f"利用者が確認を取り消しました（{names}）。",
+                {"clarification_cancel": deepcopy(records)},
+            )
+            run.updated_at = _now()
             self._persist_locked()
 
     def _set_builtin_running_locked(self, run: RunState, message: str) -> None:

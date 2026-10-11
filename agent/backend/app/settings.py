@@ -131,13 +131,14 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_external_rag_public_url: str | None = None
     agent_external_nl2sql_mcp_url: str | None = None
     # NL2SQL の `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の
-    # 呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って、終わらなければ job_id を返す
-    # （呼び出しの中では LLM・Select AI を呼ばないため、推論の量に左右されない）。待ちの上限
-    # 45 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 120 秒にする（#1432。
-    # 余裕 15 秒の 60 秒では足りないことがあった）。続きの取得（`nl2sql_get_job`）は 1 回 20 秒
+    # 呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って、終わらなければ job_id を返す。
+    # `nl2sql_query` は SQL を作る前に AI要件確認（OCI Enterprise AI の LLM。下書きと回答の後の
+    # 再検査で最大 2 回。#1441）を呼び、その分だけジョブを待つ秒数を減らす。待ちの上限 45 秒と
+    # AI要件確認の 180 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 300 秒にする
+    # （#1432 の 120 秒に AI要件確認の分を足した）。続きの取得（`nl2sql_get_job`）は 1 回 20 秒
     # （`tools._JOB_POLL_WAIT_SECONDS`）で、ジョブの完了は `agent_nl2sql_job_wait_seconds` まで
     # 続きを取って待つ（#848 / #1430）。
-    agent_external_nl2sql_timeout_seconds: float = 120.0
+    agent_external_nl2sql_timeout_seconds: float = 300.0
     # NL2SQL のジョブが pending / running のまま返ったとき、ツールの中で完了を待つ合計の上限
     # （秒。#848）。既定の SQL の生成（Select AI の 1 回）と実行は、それぞれ NL2SQL の DB の
     # 呼び出しの上限（`NL2SQL_ORACLE_CALL_TIMEOUT_SECONDS`、既定 120 秒）で打ち切られるため、

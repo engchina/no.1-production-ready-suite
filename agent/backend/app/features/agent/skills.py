@@ -259,6 +259,16 @@ skill_registry.register(
             "wait_seconds=40 を渡して続きを取る。結果が出ないまま答えるときは、"
             "実行中であることと job_id を伝え、結果を推測で補わない。"
             "status が error なら error_message と error_code を伝える。"
+            "nl2sql_query は SQL を作る前に、足りない情報・明確でない情報を確かめる（AI要件確認）。"
+            "status が needs_clarification なら SQL はまだ作っていない。結果の next_step の "
+            "questions の問い（requirement.question）を 1 つだけ、候補があれば候補の名前を添えて"
+            "利用者にそのまま聞き（表・列は物理名のまま。推測で選ばない・SQL や結果を作らない）、"
+            "その回答では問いだけを返す。利用者が答えたら、nl2sql_query に同じ question と "
+            "profile_id、requirement_session_id と answer（item_id と、答えに当たる候補の id の "
+            "selected_candidate_ids。候補に無い答えは free_text に利用者の言葉のまま。"
+            "どちらか一方だけ）を渡して呼び直す。確認が要るものが無くなると SQL を作って実行する。"
+            "status が unanswerable なら、error_message（この業務プロファイルで答えられない理由）"
+            "を伝える。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
@@ -285,7 +295,10 @@ skill_registry.register(
             "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える"
             "（nl2sql_query には業務プロファイルの ID（profile_id）が必須。分からなければ "
             "nl2sql_recommend_profile か nl2sql_list_profiles で選ぶ。"
-            "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る）。"
+            "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る。"
+            "needs_clarification を返したら SQL はまだ作っていないので、next_step の questions の"
+            "問いを 1 つだけ利用者に聞き、答えを answer、requirement.session_id を "
+            "requirement_session_id に入れて呼び直す）。"
             "確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。"
         ),
         mcp_requirements=[
