@@ -24,6 +24,8 @@
 - 不足: 資料に記載が無い・資料からは確かめられないことだけを述べる文と、答えられないと言い切る
   拒答の文（「…示すことはできません」「回答はできません」。#1317）。数量・逆接・操作を含む文は除く。
 - 確かめられていない点: その見出しと、その節の行（操作の指示を除く）。
+- 作業の経過: 業務ガイドが見つからなかったことだけを述べる文（#1452。前置きに主張・数字を含む文と
+  操作の指示を含む文は除く）。不足の印にはしない（業務ガイドが無いことは回答の不足ではない）。
 
 別に、利用者に現場のデータ・記録の確認を求める段落（「認証ログでエラーの時刻の行を確認して
 ください」など）を `environment_check_passages` で判定する（#1317）。こちらは主張のまま（検証で
@@ -43,6 +45,8 @@ KIND_QUESTION = "question"
 KIND_ABSENCE = "absence"
 KIND_UNVERIFIED = "unverified_section"
 KIND_TABLE = "table"
+# 作業の経過だけを述べる文（「業務ガイドは見つかりませんでした。」。#1452）。不足の印にはしない。
+KIND_PROCESS = "process_note"
 
 # ---- 段落の分け方（RAG と同じ規則） ----------------------------------------------
 
@@ -205,6 +209,21 @@ _ABSENCE_CLAIM = re.compile(
     r"|ますが|ですが|ものの|けれど|けど|ただし"
     r"|(?:は|が)[^。、]{1,20}(?:で|であり|となり)、"
 )
+# 業務ガイドが見つからなかったことだけを述べる文（#1452。「補足：この内容に当たる公開の
+# 業務ガイドは見つかりませんでした（`rag_lookup_guides` の結果は0件）。」）。業務ガイドの検索の
+# 結果は検証の根拠に無いので、主張として確かめると必ず外れる。前置きは、業務ガイドを修飾する
+# だけの語（は・が・を・数字・引用を含まない）に限る（「部門長の承認が要る業務ガイドはありません」は
+# 主張）。RAG の `operation_audit.is_guide_not_found` と同じ規則で、両方のテストが
+# platform/contracts/answer-passages/process-notes.json の同じ事例で確かめる。
+_GUIDE_NOT_FOUND = re.compile(
+    r"(?:[^。:：\n]{1,8}[:：]\s*)?(?:なお|また|ただし)?[、,]?\s*(?P<lead>[^。\n]{0,30}?)業務ガイド"
+    r"(?:は|が|も)[、,]?(?:まだ)?"
+    r"(?:見つかりません|見当たりません|ありません|登録されていません|存在しません|公開されていません)"
+    r"(?:でした)?[。．]?"
+)
+_GUIDE_NOT_FOUND_LEAD = re.compile(r"[はがを0-9０-９「」『』]")
+# 文末の、ツールの名前を挙げた作業の経過の括弧（「（rag_lookup_guides の結果は0件）」）。
+_TOOL_NOTE = re.compile(r"\s*[（(][^（()）\n]*\brag_[a-z_]+[^（()）\n]*[）)](?=\s*[。．]?\s*$)")
 # 分岐の見出し・ラベル（#1317。「個別利用者に付与する場合」「原因 A の場合の対処：」）。
 _CASE_LABEL = re.compile(
     r"(?P<label>[^。\n]{1,40}?(?:場合|とき)(?:の(?:手順|対処|操作|対応|方法))?)\s*(?:は)?\s*[:：]?"
@@ -452,6 +471,20 @@ def is_absence(text: str) -> bool:
     return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
 
 
+def is_guide_not_found(text: str) -> bool:
+    """業務ガイドが見つからなかったことだけを述べる文か（#1452。作業の経過で、資料の主張ではない）。
+
+    文末のツールの名前を挙げた括弧は外して照らす。前置きに主張（は・が・を・数字・引用）を含む文と、
+    操作の指示を含む文は除く。
+    """
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    value = _TOOL_NOTE.sub("", value)
+    match = _GUIDE_NOT_FOUND.fullmatch(value)
+    if not match or _GUIDE_NOT_FOUND_LEAD.search(match.group("lead")):
+        return False
+    return not _OPERATION.search(value)
+
+
 def case_label(text: str) -> str | None:
     """分岐の見出し・ラベル（「2. **個別に付与する場合**」「- グループの場合: …」）の語（#1317）。
 
@@ -522,6 +555,8 @@ def passage_kind(text: str) -> str | None:
         return KIND_QUESTION
     if is_absence(text):
         return KIND_ABSENCE
+    if is_guide_not_found(text):
+        return KIND_PROCESS
     return None
 
 
@@ -608,6 +643,7 @@ __all__ = [
     "KIND_ABSENCE",
     "KIND_CITATION",
     "KIND_HEADING",
+    "KIND_PROCESS",
     "KIND_QUESTION",
     "KIND_TABLE",
     "KIND_UNVERIFIED",
@@ -618,6 +654,7 @@ __all__ = [
     "is_absence",
     "is_citation",
     "is_clarification_only",
+    "is_guide_not_found",
     "is_heading",
     "is_question",
     "is_structure",

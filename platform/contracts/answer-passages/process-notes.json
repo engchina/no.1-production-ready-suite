@@ -1,0 +1,47 @@
+{
+  "description": "回答の検証で主張として数えない作業の経過の文（業務ガイドが見つからなかったことだけを述べる文）と、似ていても主張として残す文の事例（#1452）。RAG（rag_engine.generation.operation_audit.is_guide_not_found / is_non_claim_passage）と Agent（app.features.agent.answer_passages.is_guide_not_found / passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。process_passages の最初の事例は #1362 の deepseek-flash の評価の da-regional-report-export（run_d24bd72a9a854a798d22624bcaa3c5f2）の回答の段落そのもの。",
+  "process_passages": [
+    {
+      "id": "guide-not-found-with-tool-note",
+      "passage": "補足：この内容に当たる公開の業務ガイドは見つかりませんでした（`rag_lookup_guides` の結果は0件）。"
+    },
+    {
+      "id": "guide-not-found",
+      "passage": "業務ガイドは見つかりませんでした。"
+    },
+    {
+      "id": "guide-not-registered-bullet",
+      "passage": "- この手順の業務ガイドは登録されていません。"
+    },
+    {
+      "id": "guide-not-found-emphasis",
+      "passage": "**公開の業務ガイドは見当たりませんでした**。"
+    }
+  ],
+  "claim_passages": [
+    {
+      "id": "guide-content",
+      "passage": "業務ガイド『アクセス権限の付与』では部門長の承認が要る。"
+    },
+    {
+      "id": "guide-with-condition",
+      "passage": "部門長の承認が要る業務ガイドはありません。"
+    },
+    {
+      "id": "guide-with-quantity",
+      "passage": "30 日以内に使える業務ガイドはありません。"
+    },
+    {
+      "id": "guide-with-quoted-title",
+      "passage": "「アカウントの削除」の業務ガイドはありません。"
+    },
+    {
+      "id": "guide-not-found-with-operation",
+      "passage": "業務ガイドが見つからないため、画面で「追加」を押してください。"
+    },
+    {
+      "id": "search-status",
+      "passage": "- 検索（`rag_search`）の結果は `insufficient_evidence` で、回答に使える根拠が取得できませんでした。"
+    }
+  ]
+}
