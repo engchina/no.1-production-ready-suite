@@ -30,7 +30,8 @@
 確かめ、外す）で、回答の対応（`answer_outcome`）が「現場の確認が要る」の印に使う。
 
 段落の分け方は RAG の `rag_engine.generation.operation_audit.answer_passages` と同じ（`answer_quote`
-はこの段落の原文。製品をまたいで import しないため写す）。
+はこの段落の原文。製品をまたいで import しないため写す）。括弧の中の「。」では分けない（#1455）。
+両方のテストが platform/contracts/answer-passages/sentence-splits.json の同じ事例で確かめる。
 """
 
 from __future__ import annotations
@@ -47,16 +48,54 @@ KIND_TABLE = "table"
 # ---- 段落の分け方（RAG と同じ規則） ----------------------------------------------
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
-_SENTENCE = re.compile(r"[^。]+(?:。[」』）)]*|$)")
 _PASSAGE_CHARS = 600
+# 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
+_BRACKET_PAIRS = {"「": "」", "『": "』", "（": "）", "(": ")", "【": "】"}
+_CLOSING_BRACKETS = frozenset(_BRACKET_PAIRS.values())
+# 前の文に付ける断片（太字・強調の印と閉じ括弧・句点だけ。#1455）。
+_MARKS_ONLY = re.compile(r"[\s*_`」』）)】。]*")
+
+
+def sentence_ranges(line: str) -> list[tuple[int, int]]:
+    """1 行を文に分けた範囲（開始・終了の位置。前後の空白を含む）。
+
+    「。」で文を分けるが、開いた括弧（「」『』（）()【】）の中の「。」では分けない（括弧の深さを数える。
+    #1455）。閉じない括弧は行の終わりまで続くとみなし、行の終わりで切る。開いていない閉じ括弧は数えない。
+    文の区切りの「。」の直後の閉じ括弧は前の文に含め、太字の印（`**`）・閉じ括弧だけの断片は前の文に付ける。
+    """
+    ranges: list[tuple[int, int]] = []
+    expected: list[str] = []
+    start = index = 0
+    while index < len(line):
+        char = line[index]
+        if char in _BRACKET_PAIRS:
+            expected.append(_BRACKET_PAIRS[char])
+        elif char in _CLOSING_BRACKETS and char in expected:
+            # 対応する開きの括弧まで閉じる（その間の閉じていない括弧も閉じたとみなす）。
+            while expected.pop() != char:
+                pass
+        elif char == "。" and not expected:
+            end = index + 1
+            while end < len(line) and line[end] in _CLOSING_BRACKETS:
+                end += 1
+            ranges.append((start, end))
+            start = index = end
+            continue
+        index += 1
+    if start < len(line):
+        ranges.append((start, len(line)))
+    merged: list[tuple[int, int]] = []
+    for begin, end in ranges:
+        if merged and _MARKS_ONLY.fullmatch(line[begin:end]):
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((begin, end))
+    return merged
 
 
 def passage_spans(line: str) -> list[tuple[int, int, str]]:
     """1 行の段落（行の中の開始・終了の位置と原文）。"""
-    if _QUOTE_ONLY_LINE.fullmatch(line):
-        pieces = [(0, len(line))]
-    else:
-        pieces = [(match.start(), match.end()) for match in _SENTENCE.finditer(line)]
+    pieces = [(0, len(line))] if _QUOTE_ONLY_LINE.fullmatch(line) else sentence_ranges(line)
     spans: list[tuple[int, int, str]] = []
     for start, end in pieces:
         raw = line[start:end]
@@ -91,6 +130,8 @@ _MD_HEADING = re.compile(r"#{1,6}\s+(?P<title>[^\n]{1,60})")
 _BOLD_LINE = re.compile(r"\*\*(?P<title>[^*\n]{1,40})\*\*\s*[:：]?")
 _BRACKET_HEADING = re.compile(r"【(?P<title>[^】。\n]{1,30})】\s*[:：]?")
 _LABEL_HEADING = re.compile(r"(?P<title>[^。！？!?\n:：]{1,30})[:：]")
+# ラベルの「：」の直前の注記の括弧（「補足（資料の注記。同シート A1:A2）：」。#1455）。
+_LABEL_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)](?=\s*[:：]\s*$)")
 
 _CITATION_LABEL = re.compile(
     r"[（(【〔\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース"
@@ -252,7 +293,12 @@ def _heading_title(text: str) -> str | None:
             if title and not _is_sentence(title) and not _OPERATION.search(title):
                 return title
             return None
-    match = _LABEL_HEADING.fullmatch(_strip_bullet(value))
+    label = _strip_bullet(value)
+    match = _LABEL_HEADING.fullmatch(label)
+    note = _LABEL_NOTE.search(label) if match is None else None
+    if note and not _is_sentence(note.group("note")) and not _OPERATION.search(note.group("note")):
+        # ラベルの後ろの注記の括弧（「補足（資料の注記。同シート A1:A2）：」）は除いて確かめる。
+        match = _LABEL_HEADING.fullmatch(label[: note.start()] + label[note.end() :])
     if match:
         title = match.group("title").strip().strip("*").strip()
         if title and not _is_sentence(title) and not _OPERATION.search(title):
@@ -618,9 +664,11 @@ def _is_clarification_question(text: str) -> bool:
 def _is_clarification_note(text: str) -> bool:
     """確認の質問に添える前置き・答え方の案内か（#1454。操作・数量・逆接を含む文は除く）。"""
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip().strip(_CLARIFY_NOTE_EDGES).strip()
+    # 括弧の中の「。」では段落を分けないので（#1455）、括弧の中の文ごとに確かめる。
+    sentences = [value[start:end].strip() for start, end in sentence_ranges(value)]
     return (
         bool(value)
-        and bool(_CLARIFY_NOTE.fullmatch(value))
+        and all(_CLARIFY_NOTE.fullmatch(sentence) for sentence in sentences if sentence)
         and not _OPERATION.search(value)
         and not _ABSENCE_CLAIM.search(value)
     )
