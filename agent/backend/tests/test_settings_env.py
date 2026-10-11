@@ -110,10 +110,27 @@ def test_product_mcp_timeouts_are_explicit_in_env_example() -> None:
     )
     # RAG の回答の上限（600 秒）+ 余裕 30 秒。画面の「MCP 接続」の上限（900 秒）以下。
     assert settings.agent_external_rag_timeout_seconds == 600 + 30 <= _MCP_TIMEOUT_MAX_SECONDS
-    # NL2SQL の MCP の 1 回の待ち（wait_seconds）の上限 45 秒に、続きの取得の余裕を足して収まる。
+    # NL2SQL の MCP の 1 回の待ち（wait_seconds）の上限 45 秒に、HTTP の往復・ジョブの登録・DB の
+    # 負荷の余裕 75 秒を足した 120 秒（#1432）。続きの取得の 1 回の待ち（20 秒）と余裕も収まる。
     nl2sql_max_wait_seconds = 45
-    assert (
-        settings.agent_external_nl2sql_timeout_seconds - tools._JOB_POLL_MARGIN_SECONDS
-        >= nl2sql_max_wait_seconds
+    assert settings.agent_external_nl2sql_timeout_seconds == nl2sql_max_wait_seconds + 75 == 120
+    assert settings.agent_external_nl2sql_timeout_seconds - tools._JOB_POLL_MARGIN_SECONDS >= max(
+        nl2sql_max_wait_seconds, tools._JOB_POLL_WAIT_SECONDS
     )
     assert settings.agent_external_nl2sql_timeout_seconds <= _MCP_TIMEOUT_MAX_SECONDS
+
+
+def test_evaluation_case_timeout_is_explicit_in_env_example() -> None:
+    """`.env.example` は品質評価の 1 ケースの上限を既定（0 = 自動）と同じ値で明示する（#1432）。"""
+    settings = Settings(_env_file=None)
+    lines = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    entries = dict(
+        line.split("=", 1)
+        for line in lines.splitlines()
+        if line.startswith("AGENT_EVALUATION_CASE_TIMEOUT_SECONDS=")
+    )
+    assert (
+        float(entries["AGENT_EVALUATION_CASE_TIMEOUT_SECONDS"])
+        == (settings.agent_evaluation_case_timeout_seconds)
+        == 0
+    )

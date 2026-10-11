@@ -63,8 +63,10 @@ EVALUATION_JOBS_MAX = 2000
 # 評価の履歴の一覧の 1 ページの既定と上限。
 EVALUATION_JOBS_PAGE_SIZE = 10
 EVALUATION_JOBS_PAGE_SIZE_MAX = 100
-# 1 ケースの上限時間（Run の実行。判定は別）。
-CASE_TIMEOUT_SECONDS = 300.0
+# 1 ケースの上限時間（Run の実行。判定は別）の範囲（秒。#1432）。上限は
+# `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（0 以下は自動。`case_timeout_seconds`）。
+CASE_TIMEOUT_MIN_SECONDS = 300.0
+CASE_TIMEOUT_MAX_SECONDS = 86_400.0
 # dispatcher のモードで Run の決着を待つ間隔。テストは短くする。
 settle_poll_seconds = 1.0
 # MCP 接続のツールの名前の区切り（`<接続>__<ツール>`。#757）。
@@ -73,6 +75,36 @@ _MCP_SEPARATOR = "__"
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _rag_timeout_seconds() -> float:
+    """接続 `rag` の 1 回の呼び出しの待ち時間（画面で変えた値を優先する）。"""
+    from app.features.agent.config import runtime_config_store
+
+    try:
+        return float(runtime_config_store.get_mcp("rag").timeout_seconds)
+    except KeyError:
+        return float(get_settings().agent_external_rag_timeout_seconds)
+
+
+def case_timeout_seconds() -> float:
+    """品質評価の 1 ケースの上限時間（秒。#1432）。
+
+    `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS` が正ならその値（86400 秒まで）。0 以下は自動で、
+    接続 `rag` の待ち時間 ×（Run の RAG の予算 + 1）にする。RAG を使う業務 Agent の Run は RAG を
+    予算の回数まで呼び、1 回は RAG の回答生成を通しで待つ（#1425）。+1 は回答の最終の検証
+    （`rag_validate_answer`）とモデルの推論の分。RAG の予算が無制限（0 以下）なら、Run のツールの
+    呼び出しの上限を回数に使う。自動の値は 300 秒〜86400 秒に収める。
+    """
+    settings = get_settings()
+    configured = float(settings.agent_evaluation_case_timeout_seconds)
+    if configured > 0:
+        return min(configured, CASE_TIMEOUT_MAX_SECONDS)
+    rag_calls = int(settings.agent_max_rag_calls_per_run)
+    if rag_calls <= 0:
+        rag_calls = max(int(settings.agent_max_tool_calls_per_run), 1)
+    automatic = _rag_timeout_seconds() * (rag_calls + 1)
+    return min(max(automatic, CASE_TIMEOUT_MIN_SECONDS), CASE_TIMEOUT_MAX_SECONDS)
 
 
 # ---- 評価セット -------------------------------------------------------------------------
@@ -908,14 +940,14 @@ _SETTLED = {
 }
 
 
-async def _settle_run(run_id: str) -> RunState:
+async def _settle_run(run_id: str, timeout_seconds: float) -> RunState:
     """Run を決着（完了・失敗・取消・承認待ち）させて返す。上限時間を過ぎたら TimeoutError。"""
     from app.features.agent.runtime import runtime_repository
 
     in_process = get_settings().agent_runtime_dispatch_mode.strip().lower() == "in_process"
-    deadline = time.monotonic() + CASE_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_seconds
     if in_process:
-        await asyncio.wait_for(builtin_runtime.execute_run(run_id), CASE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(builtin_runtime.execute_run(run_id), timeout_seconds)
     while True:
         run = runtime_repository.get_run(run_id)
         if run.status in _SETTLED:
@@ -1002,11 +1034,15 @@ async def _run_case(
         agent_version=pinned,
     )
     store.update_result(job.id, index, run_id=run.id)
+    timeout_seconds = case_timeout_seconds()
     try:
-        settled = await _settle_run(run.id)
+        settled = await _settle_run(run.id, timeout_seconds)
     except TimeoutError:
         repository.cancel_run(run.id)
-        finish(CaseStatus.TIMED_OUT, error="上限時間（300 秒）までに回答が出ませんでした。")
+        finish(
+            CaseStatus.TIMED_OUT,
+            error=f"上限時間（{timeout_seconds:g} 秒）までに回答が出ませんでした。",
+        )
         return
     tool_calls = _tool_calls(settled)
     tools = {
