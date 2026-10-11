@@ -27,6 +27,18 @@
 
 - request budget は `src/lib/requestPolicy.ts` を正本とする。`interactive-list = 60 秒`、`interactive-detail = 30 秒`、`job-control = 5 秒`。それ以上の処理は durable job とする。
 
+## 11. チャットの送信の前の AI要件確認（NL2SQL 固有。#1442）
+
+共通の送信の規則は [UX 契約 messaging.md §11](../../platform/docs/ux-contracts/messaging.md#11-チャットの送信楽観的な表示907)。NL2SQL のチャットは、送った質問で SQL を作る前に、SQL 生成の画面の AI要件確認（#1439）と同じ API・同じ部品（`components/RequirementClarification.tsx`）で要件を自動で検査する（チャットの画面に「AI要件確認」のボタンは置かない）。
+
+- **検査**: 送ると吹き出しの下（回答の場所）に `ChatProgress` の「SQL を作るのに足りない情報を確かめています」を出し、`POST /query-sessions`（`chat: true`・`previous_job_id`。会話の前の質問と SQL を検査に渡す）で session を作る。送信の操作は同じ位置で「停止」になり、押すと確認を中止する。
+- **確認が要らない**（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない）: 聞かずに反映（`/apply`）し、`requirement_session_id` を付けたジョブで SQL を作る。
+- **確認が要る**: 会話の中で 1 問ずつ（選択肢・複数選択・自由入力）聞く。全部に答えたら、まとめ（書き直した質問・SQL の骨組み）を出し、「この要件で SQL を生成して実行」（実行の権限が無ければ「この要件で SQL を生成」）で作る。「SQL の要件（AI の理解）」は既定で畳み、開くと「直す」で直せる。答えるまで次の質問は送らない。
+- **確認を中止**: サーバーの session を中止し、送った質問を入力欄に戻す（入力欄に書き始めた文字があれば上書きしない）。ジョブは作らない。
+- **検査の失敗**: 原因の `ApiErrorBanner` に「もう一度確認」「確認せずに SQL を生成」「確認を中止」を出す。OCI Enterprise AI が設定されていない（`REQUIREMENT_AI_NOT_CONFIGURED`）ときだけは、確認せずにそのまま SQL を作る。
+- 送った質問と session の ID は作業状態（`requirementCheck`）に残し、再読込・画面の移動の後も同じ確認を続ける（session を作り直さない・中止しない）。
+- 作ったターンの吹き出しは利用者の質問のまま、生成は確かめた質問の文で行い、回答に「AI要件確認で確かめた質問」（畳んだ詳細）を SQL の前に出す。
+
 ## 4.3 API problem 契約（NL2SQL 固有）
 
 - problem の factory は `backend/app/api/problems.py`。`type` は `urn:nl2sql:problem:<code>`。

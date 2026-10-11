@@ -1,7 +1,11 @@
 """標準回答による評価の指標と合否(評価の基準の指標と閾値。#680)。"""
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from app.config import Settings
 from app.rag.answer_metrics import score_answer_evaluation
@@ -106,3 +110,29 @@ def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> N
     assert result["passed"] is all(
         metric["passed"] for name, metric in metrics.items() if name != "faithfulness"
     )
+
+
+# Agent の「確かめられていない点」の節の事例（RAG と Agent の両方のテストが読む。#1456）。
+UNVERIFIED_SECTION: dict[str, Any] = json.loads(
+    (
+        Path(__file__).resolve().parents[3]
+        / "platform/contracts/answer-passages/unverified-section.json"
+    ).read_text("utf-8")
+)
+
+
+@pytest.mark.parametrize("case", UNVERIFIED_SECTION["answers"], ids=lambda case: str(case["id"]))
+def test_grounding_text_excludes_the_unverified_section_of_the_agent(
+    case: dict[str, str],
+) -> None:
+    """faithfulness は Agent の最終の検証が足した「確かめられていない点」の節を数えない（#1456）。
+
+    D の回答は外した段落の原文と検証の理由を末尾の節に並べ、外した段落が多い Run ほど語句の一致が
+    下がっていた。モデルが本文に書いた「資料からは確認できない点」などの節は本文として残す。
+    """
+    from app.rag.answer_metrics import AGENT_UNVERIFIED_HEADING, grounding_text
+
+    assert UNVERIFIED_SECTION["heading"] == AGENT_UNVERIFIED_HEADING
+    assert grounding_text(case["answer"]) == grounding_text(case["body"])
+    if case["answer"] != case["body"]:
+        assert AGENT_UNVERIFIED_HEADING not in grounding_text(case["answer"])

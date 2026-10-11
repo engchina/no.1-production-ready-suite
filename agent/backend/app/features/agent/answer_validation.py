@@ -46,6 +46,7 @@ from app.features.agent.answer_passages import (
     environment_check_passages,
     is_heading,
     is_structure,
+    list_heading_lines,
     non_claim_passages,
     passage_spans,
     table_header_lines,
@@ -174,29 +175,33 @@ def _locator_labels(item: JsonObject) -> list[object]:
         labels.append(section.get("title"))
     path = item.get("section_path")
     labels.extend(path if isinstance(path, list) else [])
+    # 読み取りのツールの chunk は表計算のシート名を chunk に持つ（#1471）。
+    labels.append(item.get("sheet_name"))
     return labels
 
 
-def _evidence_refs(
-    tool: str, output: JsonObject
-) -> list[tuple[tuple[str, str], object, list[object]]]:
-    """根拠を集める・読むツールの出力の（参照, 本文, 見出し）（出てきた順）。"""
-    items: list[tuple[object, object, list[object]]]
+_EvidenceRef = tuple[tuple[str, str], object, list[object], list[object]]
+
+
+def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
+    """根拠を集める・読むツールの出力の（参照, 本文, 見出し, 文書のファイル名）（出てきた順）。"""
+    items: list[tuple[object, object, list[object], list[object]]]
     if tool in EVIDENCE_TOOLS:
         evidence = output.get("evidence")
         items = [
-            (item, item.get("excerpt"), _locator_labels(item))
+            (item, item.get("excerpt"), _locator_labels(item), [item.get("file_name")])
             for item in (evidence if isinstance(evidence, list) else [])
             if isinstance(item, dict)
         ]
     elif tool == RAG_READ_SOURCE:
-        items = [(output, output.get("text"), _locator_labels(output))]
+        items = [(output, output.get("text"), _locator_labels(output), [output.get("file_name")])]
     elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         chunks = output.get("chunks")
         document_id = output.get("document_id")
         body = output.get("text")
         body = body if isinstance(body, str) else ""
         section_labels = _locator_labels(output)
+        names = [output.get("file_name")]
         items = []
         for chunk in chunks if isinstance(chunks, list) else []:
             if not isinstance(chunk, dict):
@@ -208,16 +213,16 @@ def _evidence_refs(
                 else ""
             )
             ref = {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
-            items.append((ref, chunk_text, [*_locator_labels(chunk), *section_labels]))
+            items.append((ref, chunk_text, [*_locator_labels(chunk), *section_labels], names))
     else:
         return []
-    refs: list[tuple[tuple[str, str], object, list[object]]] = []
-    for item, text, labels in items:
+    refs: list[_EvidenceRef] = []
+    for item, text, labels, file_names in items:
         if not isinstance(item, dict):
             continue
         document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
         if isinstance(document_id, str) and isinstance(chunk_id, str) and document_id and chunk_id:
-            refs.append(((document_id, chunk_id), text, labels))
+            refs.append(((document_id, chunk_id), text, labels, file_names))
     return refs
 
 
@@ -244,7 +249,8 @@ def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
     """回答が使った根拠を先にした並び（#1364・#1451）。
 
     1. 回答が `chunk_id` を書いた根拠（新しい呼び出しから順）
-    2. 回答に固有の特徴（ID・コード・引用・見出し・同じ並び）で当たった根拠（重みの大きい順）
+    2. 回答に固有の特徴（ID・コード・引用・見出し・同じ並び・「文書名＋第 N 章」の章節の参照）で
+       当たった根拠（重みの大きい順）
     3. 残りの検索・本文の読み取り（rag_read_source）の根拠（当たりの重み、新しい呼び出しの順）
     4. 残りの、文書・章節をまとめて読んだ chunk（全文を読んだ台帳の行が上限を埋めない）
     """
@@ -295,11 +301,11 @@ def run_evidence_groups(
         if prefix is None or not refs_found:
             continue
         _tool_name, refs = groups.setdefault(prefix, (call.name, {}))
-        for ref, text, labels in refs_found:
+        for ref, text, labels, file_names in refs_found:
             item = refs.get(ref)
             if item is None:
                 item = refs[ref] = _GroupRef(ref=ref, order=len(refs))
-            item.evidence.add(text, labels)
+            item.evidence.add(text, labels, file_names)
             if tool not in BULK_READ_TOOLS:
                 item.bulk_read = False
     grouped: list[tuple[str, list[JsonObject]]] = []
@@ -565,9 +571,11 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """
     found: set[str] = set()
     headers = table_header_lines(answer)
+    # 次の行で決まる番号つき・箇条書きの見出しの行（#1481 / #1486）。
+    listed = list_heading_lines(answer)
 
     def structure(text: str) -> bool:
-        return is_structure(text) or text in headers
+        return is_structure(text) or text in headers or text in listed
 
     # （行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
     kept: list[tuple[str, bool, bool] | None] = []
@@ -583,7 +591,7 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
         spans = passage_spans(line)
         withheld = [span for span in spans if span[2] in quotes]
         if not withheld:
-            if len(spans) == 1 and is_heading(spans[0][2]):
+            if len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed):
                 close_section()
                 heading, section_content, section_removed = len(kept), False, False
                 kept.append((line, True, False))

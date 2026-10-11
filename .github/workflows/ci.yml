@@ -82,7 +82,7 @@ jobs:
             nl2sql_frontend_contract:
               - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
-            # RAG / Engine と Agent / Backend のテストが読む、回答の出典の行の事例（#1370）。
+            # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「確かめられていない点」の節の事例（#1370・#1455・#1456）。
             answer_passages_contract:
               - "platform/contracts/answer-passages/**"
             rag:
@@ -322,7 +322,8 @@ jobs:
   rag-backend:
     name: RAG / Backend
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true'
+    # 品質評価のテストが「確かめられていない点」の節の事例（platform/contracts/answer-passages/）を読む（#1456）。
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -777,7 +778,7 @@ jobs:
   agent-backend:
     name: Agent / Backend
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true'
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

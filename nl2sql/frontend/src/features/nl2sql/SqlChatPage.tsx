@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -27,6 +27,7 @@ import {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
+  Disclosure,
   EmptyState,
   MessageText,
   PageBody,
@@ -69,6 +70,16 @@ import {
   ChatSqlExecutionResult,
   useChatSqlExecution,
 } from "./components/ChatSqlExecution";
+import {
+  ChatRequirementTurn,
+  useChatRequirementFlow,
+} from "./components/ChatRequirementTurn";
+import {
+  decodeChatRequirementCheck,
+  encodeChatRequirementCheck,
+  type ChatJobRequest,
+  type ChatRequirementCheck,
+} from "./chatRequirement";
 import { JobFailureBody } from "./components/JobFailureBody";
 import {
   useProfileUsageContext,
@@ -143,16 +154,6 @@ async function fetchJobProgress(
 }
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
-
-/** チャットの 1 回の送信の内容。再送信は同じ内容（同じ job ID）で送り直す。 */
-interface ChatJobRequest {
-  question: string;
-  profile_id: string;
-  engine: Nl2SqlEngine;
-  previous_job_id: string | null;
-  /** 送信の前に画面が決める job ID（#900）。 */
-  client_job_id: string;
-}
 
 /** 送った質問（#907）と、その送信の内容。 */
 interface PendingSend {
@@ -282,6 +283,26 @@ export function SqlChatPage() {
   // ジョブの作成の時刻から数え直さない）。画面を開き直したときはジョブの作成の時刻から数える。
   const [sentAtByJob, setSentAtByJob] = useState<Record<string, number>>({});
   const pending = pendingSend?.message ?? null;
+  // 送った質問の要件の検査・確認（#1442）。SQL を作る前に自動で行い、確認が要るときは会話の中で 1 問ずつ聞く。
+  // 送った質問と session の ID は作業状態に残し、再読込・画面の移動の後も同じ確認を続ける。
+  // 作業状態は既定値と同じ型の値だけを戻すので、JSON の文字列で持つ（空は確認なし）。
+  const [storedRequirementCheck, setStoredRequirementCheck] = useWorkspaceState(
+    "requirementCheck",
+    "",
+  );
+  const requirementCheck = useMemo(
+    () => decodeChatRequirementCheck(storedRequirementCheck),
+    [storedRequirementCheck],
+  );
+  const setRequirementCheck = useCallback(
+    (check: ChatRequirementCheck | null) =>
+      setStoredRequirementCheck(encodeChatRequirementCheck(check)),
+    [setStoredRequirementCheck],
+  );
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  // 確かめた質問の文（job ID ごと）。投入したジョブを会話のキャッシュに入れるときに付け、回答の「AI要件確認で
+  // 確かめた質問」を会話の取り直しを待たずに出す（後から増えて末尾の追従が外れない）。
+  const requirementQuestionByJob = useRef<Record<string, string>>({});
   const engineDescriptionId = useId();
   const engineOption =
     CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
@@ -368,7 +389,7 @@ export function SqlChatPage() {
     setPendingSend(null);
   const send = useMutation({
     mutationFn: (request: ChatJobRequest) => submitChatJob(request),
-    onSuccess: async (job, { question }) => {
+    onSuccess: async (job, { question, client_job_id: clientJobId }) => {
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
       // 草稿は送信の時点で空にしている（投入中に書き始めた次の質問は消さない。#907）。
@@ -392,6 +413,7 @@ export function SqlChatPage() {
               // 作成時の段階（開始待ち）を、会話を取り直す前から出す（取り直しで段階の行が増えて動かない。#1359）。
               progress_events: parseChatProgressEvents(job.progress_events),
               question,
+              requirement_question: requirementQuestionByJob.current[clientJobId] ?? "",
               profile_id: selectedProfileId,
               conversation_id: id,
               chat: true,
@@ -430,6 +452,39 @@ export function SqlChatPage() {
       await queryClient.invalidateQueries({ queryKey: conversationKey });
     },
   });
+  /** 要件の検査・確認を終えて、SQL の生成のジョブを投入する（`sessionId` が無ければ確認せずに作る）。 */
+  const submitJob = (
+    check: ChatRequirementCheck,
+    sessionId: string | null,
+    requirementQuestion?: string,
+  ) => {
+    const request: ChatJobRequest = sessionId
+      ? { ...check.request, requirement_session_id: sessionId }
+      : check.request;
+    if (sessionId && requirementQuestion)
+      requirementQuestionByJob.current[request.client_job_id] = requirementQuestion;
+    setRequirementCheck(null);
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    // 生成の経過は投入の時刻から数える（確認に答えていた時間を生成の時間に含めない）。
+    const message = createOptimisticChatMessage(request.question);
+    setSentAtByJob((current) => ({ ...current, [request.client_job_id]: message.sentAtMs }));
+    setPendingSend({ message, request });
+    autoScroll.scrollToLatest();
+    send.mutate(request);
+  };
+  const requirementFlow = useChatRequirementFlow({
+    check: requirementCheck,
+    setCheck: setRequirementCheck,
+    onSubmit: submitJob,
+    // 確認を中止したら、送った質問を入力欄に戻す（書き始めた次の質問は上書きしない）。
+    onCancelled: (check) => {
+      setRequirementCheck(null);
+      if (!draft.trim()) setDraft(check.request.question);
+      requestAnimationFrame(() => composerRef.current?.focus());
+    },
+    enabled: active,
+  });
   const busy = send.isPending || stop.isPending;
   // 使える業務プロファイルが無いときは、RAG・Agent のチャットと同じく会話の欄を出さない。
   const noProfiles =
@@ -456,6 +511,8 @@ export function SqlChatPage() {
     detail.isError ||
     (Boolean(conversationId) &&
       (conversation.isPending || conversation.isError)) ||
+    // 要件の確認の間は次の質問を送らない（確認に答えるか、中止してから送る。#1442）。
+    Boolean(requirementCheck) ||
     turns.length >= 50;
   function submit() {
     const question = draft.trim();
@@ -468,14 +525,14 @@ export function SqlChatPage() {
       previous_job_id: latest?.job_id ?? null,
       client_job_id: randomUuid(),
     };
-    // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。
-    const message = createOptimisticChatMessage(question);
-    setSentAtByJob((current) => ({ ...current, [request.client_job_id]: message.sentAtMs }));
-    setPendingSend({ message, request });
+    // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。SQL を作る前に、要件の検査を自動で行う
+    // （#1442。確認が要らなければそのまま SQL を作り、要れば会話の中で 1 問ずつ聞く）。
+    sendingRef.current = false;
+    const sent = createOptimisticChatMessage(question);
+    setRequirementCheck({ request, sentAtMs: sent.sentAtMs, sessionId: "" });
     setDraft("");
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
-    send.mutate(request);
   }
   /**
    * 送信できなかった質問を、そのままもう一度送る（#907）。同じ job ID・同じ内容で送るので、
@@ -492,6 +549,7 @@ export function SqlChatPage() {
   }
   function resetConversation() {
     if (busy) return;
+    requirementFlow.discard();
     setConversationId("");
     setPendingSend(null);
     send.reset();
@@ -499,6 +557,7 @@ export function SqlChatPage() {
   }
   function openConversation(item: Conversation) {
     if (busy) return;
+    requirementFlow.discard();
     setProfileId(item.profile_id);
     setConversationId(item.id);
     historyPanel.closeSheet();
@@ -509,7 +568,16 @@ export function SqlChatPage() {
   // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。keep-alive で隠れている間は動かさない。
   // 末尾を見ている間は新しいジョブ・状態の変化に合わせて末尾へ追い、上を読んでいる間は「最新へ」を出す。
   const autoScroll = useChatAutoScroll({
-    contentKey: `${turns.length}:${latest?.status ?? ""}:${pending?.localId ?? ""}:${pending?.status ?? ""}`,
+    contentKey: [
+      turns.length,
+      latest?.status ?? "",
+      pending?.localId ?? "",
+      pending?.status ?? "",
+      // 要件の確認の質問・まとめが変わったら末尾へ追う（#1442）。
+      requirementCheck?.request.client_job_id ?? "",
+      requirementFlow.phase,
+      requirementFlow.controller.session?.current_intent_version ?? "",
+    ].join(":"),
     resetKey: `${selectedProfileId}:${conversationId}`,
     enabled: active,
   });
@@ -709,9 +777,15 @@ export function SqlChatPage() {
                   onValueChange={setDraft}
                   onSubmit={submit}
                   onStop={() => {
+                    // 要件の検査の最中は、確認を中止する（質問は入力欄に戻す。#1442）。
+                    if (requirementFlow.running) {
+                      requirementFlow.cancel();
+                      return;
+                    }
                     if (!stop.isPending && !conversation.isError) stop.mutate();
                   }}
-                  running={generating}
+                  running={generating || requirementFlow.running}
+                  textareaRef={composerRef}
                   submitBlocked={blocked}
                   disabled={profilesLoading}
                   label={t("chat.query")}
@@ -804,7 +878,7 @@ export function SqlChatPage() {
                 }
               />
             ) : null}
-            {!conversationId && !pending && !profilesLoading ? (
+            {!conversationId && !pending && !requirementCheck && !profilesLoading ? (
               <EmptyState
                 title={t("chat.empty")}
                 hint={t("chat.emptyHint")}
@@ -822,6 +896,10 @@ export function SqlChatPage() {
                 refresh={refreshConversation}
               />
             ))}
+            {requirementCheck ? (
+              // 送った質問の要件の検査・会話の中の確認・まとめ（#1442）。SQL 生成の画面の AI要件確認と同じ部品と API。
+              <ChatRequirementTurn flow={requirementFlow} canExecuteSql={canExecuteSql} />
+            ) : null}
             {pending ? (
               // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
               // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
@@ -946,6 +1024,17 @@ function SqlChatTurn({
             labels={CHAT_PROGRESS_LABELS}
             testId="sql-chat-progress"
           />
+          {turn.requirement_question ? (
+            // AI要件確認で確かめた質問の文（#1442）。生成はこの文と構造化した要件で行った（回答の根拠なので SQL の前）。
+            <Disclosure
+              variant="plain"
+              size="sm"
+              summary={t("chat.requirement.applied")}
+              summaryProps={{ "data-testid": "sql-chat-turn-requirement" }}
+            >
+              <p className="break-words text-sm leading-6 text-fg">{turn.requirement_question}</p>
+            </Disclosure>
+          ) : null}
           {result ? (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">

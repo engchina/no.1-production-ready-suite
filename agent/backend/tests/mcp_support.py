@@ -308,7 +308,9 @@ _EVIDENCE = {
 }
 
 # RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
-RAG_OUTPUT_SCHEMA_VERSION = 4
+# 10: 読み取りのツールの chunks に表計算の場所（sheet_name・row_start・row_end・cell_range）を
+# 足した（#1471）。
+RAG_OUTPUT_SCHEMA_VERSION = 10
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -412,6 +414,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 12,
                 "end": 19,
             },
@@ -421,6 +427,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 4,
                 "page_end": 4,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 33,
                 "end": 38,
             },
@@ -442,6 +452,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 12,
                 "end": 19,
             },
@@ -451,6 +465,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 20,
                 "end": 25,
             },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -555,3 +556,217 @@ def test_mcp_validate_answer_passes_requests_and_guide(
         _token(user.user_uuid),
     )
     assert invalid["isError"] is True
+
+
+# #1450: deepseek-flash の評価の dev `cmp-pms-severity`（run_aeda6990aad14955bb88d957deb2b6e2）が
+# 最終の検証に渡した回答（原文のまま）。台帳の行の場所（行23・行24・行1〜3）を書いている。
+_PMS_SEVERITY_ANSWER = (
+    "略称が PMS のシステムは 2 つあり、重要度が高いのは **購買管理システム（SYS-119）** です。\n\n"
+    "**根拠**\n\n"
+    "- システム台帳（system-ledger.xlsx、シート「システム台帳」）\n"
+    "  - 行23: システムID: SYS-119 / 正式名: 購買管理システム / 略称・別表記: PMS / 担当部署: 購 / "
+    "**重要度: A** / 機密区分: 社外秘\n"
+    "  - 行24: システムID: SYS-120 / 正式名: 案件管理システム / 略称・別表記: PMS / 担当部署: 業 / "
+    "**重要度: B** / 機密区分: 社外秘\n"
+    "  - 行1〜3（表頭の説明）: 「重要度は A・B・C の 3 段階です。"
+    "A が最も高く、B、C の順に低くなります。」\n\n"
+    "したがって、同じ略称 PMS でも 購買管理システムが重要度 A、案件管理システムが重要度 B で、"
+    "**購買管理システムの方が重要度が高い**（A > B）と確かめられます。\n\n"
+    "（補足として、重要度の区分ごとの扱いは他の規程にも表れています。"
+    "例: 障害連絡規程 第 1 章では重要度 A は検知から 30 分以内、B は 2 時間以内に連絡、"
+    "と区分ごとに規則が異なります。）\n\n"
+    "なお、念のため確認した略称「購」「業」の正式名は組織規程 第 2 章にあり、"
+    "購＝購買部、業＝営業推進部です。"
+)
+_LEDGER_HEADER = (
+    "サンプル社のシステム台帳（架空の会社。評価用の合成資料）\n"
+    "担当部署は部署の略号（漢字 1 文字）で書きます。"
+    "略号と部署の正式名は組織規程の第 2 章を参照してください。\n"
+    "重要度は A・B・C の 3 段階です。A が最も高く、B、C の順に低くなります。"
+)
+# 台帳の行（行番号と列の値）。その Run の根拠の 30 件のうち、表頭の説明と合わせて台帳の 14 件。
+_LEDGER_ROWS = [
+    (23, "SYS-119", "購買管理システム", "PMS", "購", "A", "社外秘"),
+    (24, "SYS-120", "案件管理システム", "PMS", "業", "B", "社外秘"),
+    (6, "SYS-102", "勤怠管理システム", "勤怠", "人", "B", "社外秘"),
+    (57, "SYS-153", "販売管理システム", "SMS", "営", "A", "社外秘"),
+    (12, "SYS-108", "予算管理システム", "BMS", "経", "A", "極秘"),
+    (49, "SYS-145", "中期計画管理システム", "中計", "企", "C", "極秘"),
+    (22, "SYS-118", "予算実績システム", "予実", "企", "B", "極秘"),
+    (25, "SYS-121", "倉庫管理システム", "WMS", "物", "A", "社外秘"),
+    (5, "SYS-101", "経費精算ポータル", "経費 Portal", "経", "B", "社外秘"),
+    (55, "SYS-151", "名刺管理システム", "名刺", "業", "C", "社外秘"),
+    (7, "SYS-103", "人事評価システム", "HRM", "人", "A", "極秘"),
+    (28, "SYS-124", "製造実行システム", "MES", "製", "A", "社外秘"),
+    (32, "SYS-128", "カスタマーポータル", "Customer Portal", "顧", "A", "社外秘"),
+]
+_ROW_REFERENCE = re.compile(r"行(\d+)(?:〜(\d+))?")
+
+
+def _pms_severity_chunks() -> dict[tuple[str, str], RetrievedChunk]:
+    """その Run の根拠の 30 件（台帳の 14 件と、規程の PDF の 16 件）。"""
+    ledger = "ledger"
+    chunks = {
+        (ledger, f"{ledger}:0"): RetrievedChunk(
+            document_id=ledger,
+            chunk_id=f"{ledger}:0",
+            text=_LEDGER_HEADER,
+            score=0.5,
+            file_name="system-ledger.xlsx",
+            metadata={
+                "sheet_name": "システム台帳",
+                "row_start": 1,
+                "row_end": 3,
+                "cell_range": "A1:A3",
+                "section_path": ["システム台帳"],
+            },
+        )
+    }
+    for row, system_id, name, alias, department, severity, secrecy in _LEDGER_ROWS:
+        chunks[(ledger, f"{ledger}:{row}")] = RetrievedChunk(
+            document_id=ledger,
+            chunk_id=f"{ledger}:{row}",
+            text=(
+                f"システムID: {system_id} / 正式名: {name} / 略称・別表記: {alias} / "
+                f"担当部署: {department} / 重要度: {severity} / 機密区分: {secrecy}"
+            ),
+            score=0.5,
+            file_name="system-ledger.xlsx",
+            metadata={
+                "sheet_name": "システム台帳",
+                "row_start": row,
+                "row_end": row,
+                "cell_range": f"A{row}:F{row}",
+            },
+        )
+    for index in range(16):
+        document_id = f"rule{index // 4}"
+        chunks[(document_id, f"{document_id}:{index}")] = RetrievedChunk(
+            document_id=document_id,
+            chunk_id=f"{document_id}:{index}",
+            text=f"規程の本文 {index}。重要度 A は検知から 30 分以内、B は 2 時間以内に連絡する。",
+            score=0.4,
+            file_name=f"rule-{index // 4}.pdf",
+            metadata={"page_start": 1, "page_end": 1, "section_path": ["第 1 章"]},
+        )
+    return chunks
+
+
+def _location_aware_model(
+    system: str, inputs: str, settings: Any, schema: Any, provider_id: str | None = None
+) -> Any:
+    """場所を根拠の場所と照らすモデルのスタブ（#1450 の判定の指示どおり）。
+
+    段落が「行N」「行N〜M」を書いていれば、内容が一致する根拠の行の範囲（row_start〜row_end）に
+    入るときだけ supported。根拠に行の範囲が無ければ、実環境のモデルと同じく
+    「位置情報が根拠に無い」で unsupported にする。
+    """
+    from rag_engine.evaluation.answer_validation import ClaimAuditOutput
+
+    payload = json.loads(inputs)
+    evidence = payload["evidence_items"]
+    checks = []
+    for passage in payload["answer_passages"]:
+        text = passage["text"]
+        reference = _ROW_REFERENCE.search(text)
+        status, evidence_id, reason = "supported", evidence[-1]["evidence_id"], "規程に記載"
+        if reference:
+            first = int(reference.group(1))
+            last = int(reference.group(2) or first)
+            tokens = [token for token in ("SYS-119", "SYS-120", "3 段階") if token in text]
+            located = [
+                item
+                for item in evidence
+                if any(token in item["text"] for token in tokens)
+                and isinstance(item.get("row_start"), int)
+                and item["row_start"] <= first
+                and last <= int(item.get("row_end") or item["row_start"])
+            ]
+            if located:
+                evidence_id, reason = located[0]["evidence_id"], "内容と行の範囲が根拠と一致"
+            else:
+                status, evidence_id = "unsupported", ""
+                reason = f"内容は一致するが、行{first} という位置情報は渡された根拠に含まれない。"
+        checks.append(
+            {
+                "answer_quote": text,
+                "answer_passage_id": passage["id"],
+                "status": status,
+                "evidence_id": evidence_id,
+                "source_id": "",
+                "evidence_quote": "",
+                "reason": reason,
+            }
+        )
+    return ClaimAuditOutput.model_validate({"claim_checks": checks})
+
+
+@pytest.mark.parametrize("with_location", [True, False], ids=["location", "no-location"])
+async def test_ledger_rows_with_written_locations_are_supported(
+    monkeypatch: MonkeyPatch, with_location: bool
+) -> None:
+    """表計算の根拠の場所（シート・行・セル範囲）を検証に渡し、行番号を書いた段落を外さない（#1450）。
+
+    以前は根拠に頁と本文しか渡さず、「行23」などを書いた台帳の行の段落が「位置情報が根拠に無い」で
+    unsupported になり、回答の本文から外れていた（no-location はその再現）。
+    """
+    import rag_engine.evaluation.answer_eval as answer_eval
+
+    from app.rag import answer_validation
+
+    chunks = _pms_severity_chunks()
+    oracle = _Oracle()
+    oracle.chunks = chunks
+    if not with_location:
+        # 頁の無い根拠の場所を渡さない前の形（#1450 の前）。
+        monkeypatch.setattr(answer_validation, "evidence_location", lambda metadata: {})
+    monkeypatch.setattr(answer_eval, "parse_text_response", _location_aware_model)
+    refs = [EvidenceRef(document_id, chunk_id) for document_id, chunk_id in chunks]
+    assert len(refs) == 30
+    result = await validate_answer(
+        "略称が PMS のシステムは 2 つあります。重要度が高いのはどちらですか？",
+        _PMS_SEVERITY_ANSWER,
+        refs,
+        get_settings(),
+        oracle=cast(Any, oracle),
+    )
+    rows = {
+        label: [check for check in result.claim_checks if label in check["answer_quote"]]
+        for label in ("行23", "行24", "行1〜3")
+    }
+    assert all(rows.values())
+    statuses = {label: {check["status"] for check in checks} for label, checks in rows.items()}
+    expected = "supported" if with_location else "unsupported"
+    assert statuses == {label: {expected} for label in rows}
+    assert result.valid is with_location
+
+
+def test_evidence_location_matches_the_mcp_locator() -> None:
+    """検証に渡す場所は MCP の根拠の location と同じ値（分からない項目は入れない。#1450）。"""
+    from app.rag.answer_validation import evidence_location
+
+    metadata = {
+        "sheet_name": " システム台帳 ",
+        "row_start": 23,
+        "row_end": 23,
+        "cell_range": "A23:F23",
+        "section_path": "システム台帳 > 一覧",
+        "page_start": None,
+    }
+    location = evidence_location(metadata)
+    assert location == {
+        "section_path": ["システム台帳", "一覧"],
+        "sheet_name": "システム台帳",
+        "row_start": 23,
+        "row_end": 23,
+        "cell_range": "A23:F23",
+    }
+    locator = mcp_tools._locator(metadata)
+    assert (locator.sheet_name, locator.row_start, locator.row_end, locator.cell_range) == (
+        "システム台帳",
+        23,
+        23,
+        "A23:F23",
+    )
+    assert locator.section_path == location["section_path"]
+    assert evidence_location({"page_start": 3, "page_end": 3}) == {}
