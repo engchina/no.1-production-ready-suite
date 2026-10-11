@@ -344,14 +344,19 @@ _HEADING_END = re.compile(
     # （「承認者がどう決まるか」）。
     r"|とき|場合|か)$"
 )
-# 番号（「1.」「（2）」）。番号つきの行は段落だけでは決めず、次の行がその下の内容のときだけ見出し
-# （`numbered_heading_lines`。#1481 / #1482）。番号の行が続く一覧の項目は主張のまま。
+# 番号（「1.」「（2）」）と箇条書きの印（「- 」「・」。強調の「**」は印に数えない）。番号つき・
+# 箇条書きの行は段落だけでは決めず、次の行がその下の内容のときだけ見出し（`list_heading_lines`。
+# #1481 / #1482 / #1486）。番号・箇条書きの行が続く一覧の項目は主張のまま。
 _HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
+_HEADING_BULLET = re.compile(r"^(?:[-+・•]|\*(?!\*))")
 # 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞を
 # つなぐ「の」に数えない。
 _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
 # 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も、字下げした番号の行も下の内容）。
+# 箇条書きの見出しの下の内容は、字下げした行と「→」の行だけ（同じ字下げの箇条書きの行は同じ一覧の
+# 次の項目。#1486）。
 _SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
+_BULLET_SUB_CONTENT = re.compile(r"→")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の
 # 主張のまま。
 _HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
@@ -396,26 +401,33 @@ def heading_phrase(text: str) -> str | None:
     システムで障害が起きたとき**」のように、句点で終わらない短い名詞句で、項目・区分・資料の名前
     （`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。述語（です・ます・する…）・
     操作・数量・言い切りの「は」を含む行（「重要度は A です」「承認者は管理本部長」）は主張のまま。
-    番号つきの行（「1. 人事評価システムの重要度」）は段落だけでは見出しにせず、回答の中の次の行で
-    決める（番号の行が続く一覧の「1. 変更の内容と理由」は主張。`numbered_heading_lines`。
-    #1481 / #1482）。
+    番号つき・箇条書きの行（「1. 人事評価システムの重要度」「- 組織規程（ご担当部署の承認者）」）は
+    段落だけでは見出しにせず、回答の中の次の行で決める（番号・箇条書きの行が続く一覧の項目は主張。
+    `list_heading_lines`。#1481 / #1482 / #1486）。
     """
     found = _heading_value(text)
-    if not found or _HEADING_NUMBER.match(text.strip()):
+    if not found or _is_list_item(text):
         return None
     return found[0] if _HEADING_END.search(found[0]) else None
 
 
-def _numbered_heading_phrase(text: str) -> str | None:
-    """番号つきの見出しの語（「1. 人事評価システムの重要度」。#1481 / #1482）。
+def _is_list_item(text: str) -> bool:
+    """番号つきか箇条書きの行か（「1. …」「（2）…」「- …」「・…」。#1482 / #1486）。"""
+    value = text.strip()
+    return bool(_HEADING_NUMBER.match(value) or _HEADING_BULLET.match(value))
+
+
+def _list_heading_phrase(text: str) -> str | None:
+    """番号つき・箇条書きの見出しの語（「1. 人事評価システムの重要度」。#1481 / #1482 / #1486）。
 
     終わりの語が一覧（`_HEADING_END`）にあるか、一覧に無くても「…の…」の名詞句のもの
-    （「2. 重要度 B の復旧目標」）。人・組織・役職の名前で終わる「…の…」の行（「1. 情報システム部の
-    課長」）と、述語・操作・数量・言い切りの「は」を含む行（「1. **ID 管理システムの重要度は A**」）
-    は値の主張のまま。見出しかどうかは次の行で決める（`numbered_heading_lines`）。
+    （「2. 重要度 B の復旧目標」「- 重要度 B の復旧目標」）。人・組織・役職の名前で終わる
+    「…の…」の行（「1. 情報システム部の課長」）と、述語・操作・数量・言い切りの「は」を含む行
+    （「1. **ID 管理システムの重要度は A**」）は値の主張のまま。見出しかどうかは次の行で決める
+    （`list_heading_lines`）。
     """
     found = _heading_value(text)
-    if not found or not _HEADING_NUMBER.match(text.strip()):
+    if not found or not _is_list_item(text):
         return None
     value, outside = found
     if _HEADING_END.search(value):
@@ -425,23 +437,27 @@ def _numbered_heading_phrase(text: str) -> str | None:
     return None
 
 
-def numbered_heading_lines(text: str) -> set[str]:
-    """回答の中の、番号つきの見出しの行（前後の空白を除いた行。#1481 / #1482）。
+def list_heading_lines(text: str) -> set[str]:
+    """回答の中の、番号つき・箇条書きの見出しの行（前後の空白を除いた行。#1481 / #1482 / #1486）。
 
-    番号つきの見出しの語（`_numbered_heading_phrase`）の行で、次の（空でない）行がその下の内容
-    （字下げした行か、箇条書き・「→」の行）のもの。番号の行が続く一覧（「申請書に書く 4 項目」の
-    「1. 変更の内容と理由」〜「4. 作業の日時」）の項目と、下に内容の無い行は、終わりの語が一覧に
-    あっても主張のまま（段落だけで決めると、一覧の項目を見出しとして監査から外す。#1482）。RAG の
-    `operation_audit.numbered_heading_lines` と同じ規則。
+    番号つき・箇条書きの見出しの語（`_list_heading_phrase`）の行で、次の（空でない）行がその下の内容
+    のもの。番号つきの行の下の内容は、字下げした行か、箇条書き・「→」の行。箇条書きの行の下の内容は、
+    字下げした行（下位の箇条書き）か「→」の行で、同じ字下げの箇条書きの行は同じ一覧の次の項目。
+    番号・箇条書きの行が続く一覧（「申請書に書く 4 項目」の「1. 変更の内容と理由」〜
+    「4. 作業の日時」、「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」）の項目と、
+    下に内容の無い行は、終わりの語が一覧にあっても主張のまま（段落だけで決めると、一覧の項目を
+    見出しとして監査から外す。#1482 / #1486）。RAG の `operation_audit.list_heading_lines` と
+    同じ規則。
     """
     lines = [line for line in text.split("\n") if line.strip()]
     found = set()
     for line, following in zip(lines, lines[1:], strict=False):
         indent = len(line) - len(line.lstrip())
+        sub_content = _BULLET_SUB_CONTENT if _HEADING_BULLET.match(line.strip()) else _SUB_CONTENT
         below = len(following) - len(following.lstrip()) > indent or bool(
-            _SUB_CONTENT.match(following.strip())
+            sub_content.match(following.strip())
         )
-        if below and _numbered_heading_phrase(line):
+        if below and _list_heading_phrase(line):
             found.add(line.strip())
     return found
 
@@ -769,7 +785,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     kinds: dict[str, str] = {}
     claims: set[str] = set()
     headers = table_header_lines(answer)
-    numbered = numbered_heading_lines(answer)
+    listed = list_heading_lines(answer)
     section: str | None = None
     options = False
     blank = False
@@ -784,7 +800,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])
-            if title is None and spans[0][2] in numbered:
+            if title is None and spans[0][2] in listed:
                 title = spans[0][2]
             if title is not None:
                 if _UNVERIFIED_SECTION.search(title):
@@ -838,7 +854,7 @@ def supplement_passages(answer: str) -> set[str]:
     """
     inside: set[str] = set()
     outside: set[str] = set()
-    numbered = numbered_heading_lines(answer)
+    listed = list_heading_lines(answer)
     section = False
     blank = False
     for line in answer.split("\n"):
@@ -851,7 +867,7 @@ def supplement_passages(answer: str) -> set[str]:
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])
-            if title is None and spans[0][2] in numbered:
+            if title is None and spans[0][2] in listed:
                 title = spans[0][2]
             if title is not None:
                 section = bool(_SUPPLEMENT_SECTION.fullmatch(_EMPHASIS.sub("", title).strip()))
@@ -967,8 +983,8 @@ __all__ = [
     "is_question",
     "is_structure",
     "is_table_rule",
+    "list_heading_lines",
     "non_claim_passages",
-    "numbered_heading_lines",
     "passage_kind",
     "passage_spans",
     "supplement_passages",
