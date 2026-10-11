@@ -17,7 +17,8 @@ A（業務ガイドなし）・C（業務ガイドあり）と同じ評価セッ
 Agent の回答の組み立て:
 
 - 回答: Run の成果物 `answer` の本文（最終の検証 `answer_validation` の後の本文）。
-- 引用: その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠（出てきた順・重複なし）。
+- 引用: その Run の `rag_search` / `rag_retrieve_evidence` が返した根拠と、`rag_read_source` /
+  `rag_read_document` / `rag_read_section` で読んだ chunk（出てきた順・重複なし。#1345・#1438）。
   本文は MCP の `excerpt`（最大 1000 文字）なので、必要な根拠の照合は抜粋の範囲で行う。
 - 対応（outcome）: Run の成果物 `answer` の `outcome.value`（Agent の Control Plane が最終の
   回答に決定的に付けた対応。RAG の AnswerEnvelope と同じ語彙。#1305。
@@ -76,7 +77,9 @@ EVIDENCE_TOOLS = frozenset({RAG_SEARCH, "rag_retrieve_evidence"})
 # 根拠に数える（Agent の最終の検証と同じ。#1345）。
 RAG_READ_SOURCE = "rag_read_source"
 RAG_READ_DOCUMENT = "rag_read_document"
-READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT})
+# 章節を読み切るツール（#1438。出力の chunks の形は rag_read_document と同じ）。
+RAG_READ_SECTION = "rag_read_section"
+READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
 MCP_TOOL_SEPARATOR = "__"
 # Agent の組み込みの MCP 接続（RAG）の ID。モデルが呼ぶツールの名前は `<接続>__<ツール>`
 # （Agent #757）。指示にはこの名前を書く（素の名前だと存在しないツールを呼ぶ。#1303）。

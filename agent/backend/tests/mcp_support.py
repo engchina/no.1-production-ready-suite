@@ -84,7 +84,18 @@ class RagReadDocumentIn(_ContractInput):
     cursor: str | None = Field(default=None, min_length=1, max_length=2048)
     locator: str | None = Field(default=None, min_length=1, max_length=1024)
     page: int | None = Field(default=None, ge=1)
-    section: str | None = Field(default=None, min_length=1, max_length=512)
+    # 章節（rag_outline の section_id）の始まりから読む（#1438）。
+    section_id: str | None = Field(default=None, min_length=1, max_length=64)
+    max_chars: int = Field(default=8000, ge=1, le=20000)
+
+
+class RagReadSectionIn(_ContractInput):
+    # 章節の本文を章節の終わりまで読む（#1438）。section_id・chunk_id・cursor のどれか 1 つ。
+    document_id: str = Field(min_length=1, max_length=128)
+    section_id: str | None = Field(default=None, min_length=1, max_length=64)
+    chunk_id: str | None = Field(default=None, min_length=1, max_length=512)
+    up: int = Field(default=0, ge=0, le=6)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
     max_chars: int = Field(default=8000, ge=1, le=20000)
 
 
@@ -185,6 +196,19 @@ _EVIDENCE = {
     "role": "retrieved_anchor",
     "score": 0.9,
     "rerank_score": None,
+    # 根拠が属する章節（章節ナビゲーションの章節。#1438）。
+    "section": {
+        "section_id": "sec-5",
+        "title": "第5条（更新）",
+        "level": 2,
+        "page_start": 3,
+        "page_end": 4,
+        "chars": 1200,
+        "chunk_count": 2,
+        "parent_section_id": "sec-ch2",
+        "parent_title": "第2章 契約の期間",
+        "parent_chars": 3400,
+    },
 }
 
 # RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
@@ -235,20 +259,78 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "document_id": "doc-1",
         "file_name": "契約書.pdf",
         "chunk_set_id": "cs-1",
+        "root_section_id": "document",
         "chunk_count": 2,
+        "chars": 3400,
         "page_start": 1,
         "page_end": 4,
         "sections": [
             {
+                "section_id": "sec-ch2",
+                "title": "第2章 契約の期間",
+                "level": 1,
+                "parent_section_id": "document",
+                "path": ["第2章 契約の期間"],
+                "page_start": 1,
+                "page_end": 4,
+                "chunk_count": 2,
+                "chars": 3400,
+            },
+            {
+                "section_id": "sec-5",
+                "title": "第5条（更新）",
+                "level": 2,
+                "parent_section_id": "sec-ch2",
+                "path": ["第2章 契約の期間", "第5条（更新）"],
+                "page_start": 3,
+                "page_end": 4,
+                "chunk_count": 2,
+                "chars": 1200,
+            },
+        ],
+        "sections_omitted": 0,
+        "superseded": False,
+    },
+    "rag_read_section": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
+        "document_id": "doc-1",
+        "file_name": "契約書.pdf",
+        "chunk_set_id": "cs-1",
+        "section": {
+            "section_id": "sec-5",
+            "title": "第5条（更新）",
+            "level": 2,
+            "parent_section_id": "sec-ch2",
+            "path": ["第2章 契約の期間", "第5条（更新）"],
+            "page_start": 3,
+            "page_end": 4,
+            "chunk_count": 2,
+            "chars": 1200,
+        },
+        "child_sections": [],
+        "text": "--- p.3 ---\n契約条項の全文\n\n--- p.4 ---\n更新の条件",
+        "chunks": [
+            {
+                "chunk_id": "chunk-3",
+                "element_locator": None,
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
-                "chunk_count": 1,
-                "chars": 7,
-                "cursor": "cursor-section-5",
-            }
+                "start": 12,
+                "end": 19,
+            },
+            {
+                "chunk_id": "chunk-4",
+                "element_locator": None,
+                "section_path": ["契約書", "第5条（更新）"],
+                "page_start": 4,
+                "page_end": 4,
+                "start": 33,
+                "end": 38,
+            },
         ],
-        "sections_omitted": 0,
+        "section_complete": True,
+        "next_cursor": None,
         "superseded": False,
     },
     "rag_read_document": {
@@ -410,6 +492,7 @@ class FakeProductMcp:
                     self._tool("rag_retrieve_evidence", RagRetrieveEvidenceIn),
                     self._tool("rag_outline", RagOutlineIn),
                     self._tool("rag_read_document", RagReadDocumentIn),
+                    self._tool("rag_read_section", RagReadSectionIn),
                     self._tool("rag_validate_answer", RagValidateAnswerIn),
                 ],
             ),

@@ -1186,6 +1186,30 @@ async def test_recipe_job_records_success_outcome_once_after_succeeded(
     assert len(fake.activated) == 1
 
 
+async def test_recipe_job_rebuilds_the_section_map_after_it_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """分割と embedding が終わって job が成功したら、章節と chunk の対応を作る（#1438）。"""
+    fake = _EventRecipeOracle()
+    job_id = _prepare_recipe_run(monkeypatch, fake, IngestionJobPhase.INDEX)
+
+    async def record(document_id: str, *, oracle: object | None = None, reason: str) -> bool:
+        _RecordingRecipePipeline.events.append(f"section_map:{reason}")
+        return True
+
+    monkeypatch.setattr(documents_route, "refresh_document_section_map", record)
+
+    await documents_route._run_ingestion_job(job_id, propagate_errors=True)
+
+    assert _RecordingRecipePipeline.events == [
+        "activate",
+        "document_indexed",
+        "job_succeeded",
+        "section_map:ingestion",
+        "success",
+    ]
+
+
 async def test_materialize_returns_success_outcome_without_recording(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

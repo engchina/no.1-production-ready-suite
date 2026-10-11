@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -418,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -441,10 +441,10 @@
     },
     {
       "name": "rag_outline",
-      "description": "文書の節の構成（節の見出し・頁・chunk の数と、その節から読む cursor）を返します。長い文書のどこを読むかを決めるときに使います。",
+      "description": "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・親・頁の範囲・chunk の数・文字数）を返します。長い文書のどこを読むかを決めるときに使います。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "文書の節の構成を読む条件（#1332）。",
+        "description": "文書の章節の構成を読む条件（#1332 / #1438）。",
         "properties": {
           "document_id": {
             "description": "文書の id。",
@@ -466,14 +466,42 @@
       "outputSchema": {
         "$defs": {
           "OutlineSection": {
-            "description": "文書の 1 つの節（続く chunk のまとまり）。",
+            "description": "文書の 1 つの章節（章節ナビゲーションの章節。#1438）。",
             "properties": {
-              "section_path": {
-                "description": "節の見出しの列。",
+              "section_id": {
+                "description": "章節の id（rag_read_section の section_id に渡す）。",
+                "title": "Section Id",
+                "type": "string"
+              },
+              "title": {
+                "description": "章節の名前（文書全体の章節は文書名）。",
+                "title": "Title",
+                "type": "string"
+              },
+              "level": {
+                "description": "章節の階層（1〜6。0 は文書全体）。",
+                "title": "Level",
+                "type": "integer"
+              },
+              "parent_section_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の id（文書全体の章節は null）。",
+                "title": "Parent Section Id"
+              },
+              "path": {
+                "description": "文書の下からこの章節までの章節の名前の列。",
                 "items": {
                   "type": "string"
                 },
-                "title": "Section Path",
+                "title": "Path",
                 "type": "array"
               },
               "page_start": {
@@ -486,7 +514,7 @@
                   }
                 ],
                 "default": null,
-                "description": "節の開始の頁。",
+                "description": "章節の開始の頁。",
                 "title": "Page Start"
               },
               "page_end": {
@@ -499,29 +527,26 @@
                   }
                 ],
                 "default": null,
-                "description": "節の終了の頁。",
+                "description": "章節の終了の頁。",
                 "title": "Page End"
               },
               "chunk_count": {
-                "description": "節の chunk の数。",
+                "description": "章節の chunk の数（子の章節の chunk を含む）。",
                 "title": "Chunk Count",
                 "type": "integer"
               },
               "chars": {
-                "description": "節の本文の文字数。",
+                "description": "章節の本文の文字数（子の章節の本文を含む）。",
                 "title": "Chars",
                 "type": "integer"
-              },
-              "cursor": {
-                "description": "この節から読む rag_read_document の cursor。",
-                "title": "Cursor",
-                "type": "string"
               }
             },
             "required": [
+              "section_id",
+              "title",
+              "level",
               "chunk_count",
-              "chars",
-              "cursor"
+              "chars"
             ],
             "title": "OutlineSection",
             "type": "object"
@@ -529,7 +554,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -555,8 +580,20 @@
             "title": "Chunk Set Id",
             "type": "string"
           },
+          "root_section_id": {
+            "default": "document",
+            "description": "文書全体を表す章節の id（rag_read_section で文書全体を読むときに渡す）。",
+            "title": "Root Section Id",
+            "type": "string"
+          },
           "chunk_count": {
             "title": "Chunk Count",
+            "type": "integer"
+          },
+          "chars": {
+            "default": 0,
+            "description": "文書の本文の文字数。",
+            "title": "Chars",
             "type": "integer"
           },
           "page_start": {
@@ -584,6 +621,7 @@
             "title": "Page End"
           },
           "sections": {
+            "description": "章節（文書の詳細の章節ナビゲーションの並び順。階層は level、親は parent_section_id）。章節の無い文書は空（文書全体を root_section_id で読む）。",
             "items": {
               "$ref": "#/$defs/OutlineSection"
             },
@@ -592,7 +630,7 @@
           },
           "sections_omitted": {
             "default": 0,
-            "description": "上限を超えて省いた節の数。",
+            "description": "上限を超えて省いた章節の数。",
             "title": "Sections Omitted",
             "type": "integer"
           },
@@ -615,7 +653,7 @@
     },
     {
       "name": "rag_read_document",
-      "description": "文書の本文を、頁・節・根拠の定位子・続きの cursor の位置から順に読みます（頁の区切り付き。続きは next_cursor）。検索で当たらなかった前後の章や、「第 3 章を参照」の先を確かめるときに使います。",
+      "description": "文書の本文を、頁・章節・根拠の定位子・続きの cursor の位置から順に読みます（頁の区切り付き。章節の終わりで止まらない。続きは next_cursor）。検索で当たらなかった前後の章や、「第 3 章を参照」の先を確かめるときに使います。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "文書の本文を順に読む条件（#1332）。読み始めの位置はどれか 1 つ（無ければ文書の先頭）。",
@@ -639,7 +677,7 @@
               }
             ],
             "default": null,
-            "description": "続きの位置（前の rag_read_document の next_cursor、または rag_outline の節の cursor）。",
+            "description": "続きの位置（前の rag_read_document の next_cursor）。",
             "title": "Cursor"
           },
           "locator": {
@@ -671,10 +709,10 @@
             "description": "この頁（PDF の物理頁）から読む。",
             "title": "Page"
           },
-          "section": {
+          "section_id": {
             "anyOf": [
               {
-                "maxLength": 512,
+                "maxLength": 64,
                 "minLength": 1,
                 "type": "string"
               },
@@ -683,8 +721,8 @@
               }
             ],
             "default": null,
-            "description": "この節（見出しの列を「 > 」でつないだもの。前方一致）から読む。",
-            "title": "Section"
+            "description": "この章節（rag_outline の section_id）の始まりから読む（章節の終わりで止まらない。章節だけを読むときは rag_read_section）。",
+            "title": "Section Id"
           },
           "max_chars": {
             "default": 8000,
@@ -778,7 +816,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -842,6 +880,337 @@
           "chunks"
         ],
         "title": "ReadDocumentOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "rag_read_section",
+      "description": "章節（section_id、または根拠の chunk_id が属する章節。up で親の章節）の本文を、章節の始まりから終わりまで順に読みます（頁の区切り付き。続きは next_cursor、終わりまで読んだら section_complete=true）。根拠の抜粋より長い手順・一覧・条件のまとまりを読み切るときに使います。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "章節の本文を読む条件（#1438）。章節は section_id・根拠の chunk_id・cursor のどれか 1 つ。",
+        "properties": {
+          "document_id": {
+            "description": "文書の id。",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "section_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "章節の id（rag_outline の section_id、または根拠の section.section_id）。",
+            "title": "Section Id"
+          },
+          "chunk_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠の chunk の id（evidence_id）。その chunk が属する章節を読む。",
+            "title": "Chunk Id"
+          },
+          "up": {
+            "default": 0,
+            "description": "章節から何段上の親の章節を読むか（0 はその章節。文書全体より上には上がらない）。章節を読んでも手順・一覧・条件が足りないときに 1 ずつ上げる。cursor とは一緒に渡さない。",
+            "maximum": 6,
+            "minimum": 0,
+            "title": "Up",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続きの位置（前の rag_read_section の next_cursor）。",
+            "title": "Cursor"
+          },
+          "max_chars": {
+            "default": 8000,
+            "description": "返す本文の最大文字数（頁の区切りの行を含む）。",
+            "maximum": 20000,
+            "minimum": 1,
+            "title": "Max Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ReadSectionInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "OutlineSection": {
+            "description": "文書の 1 つの章節（章節ナビゲーションの章節。#1438）。",
+            "properties": {
+              "section_id": {
+                "description": "章節の id（rag_read_section の section_id に渡す）。",
+                "title": "Section Id",
+                "type": "string"
+              },
+              "title": {
+                "description": "章節の名前（文書全体の章節は文書名）。",
+                "title": "Title",
+                "type": "string"
+              },
+              "level": {
+                "description": "章節の階層（1〜6。0 は文書全体）。",
+                "title": "Level",
+                "type": "integer"
+              },
+              "parent_section_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の id（文書全体の章節は null）。",
+                "title": "Parent Section Id"
+              },
+              "path": {
+                "description": "文書の下からこの章節までの章節の名前の列。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の開始の頁。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の終了の頁。",
+                "title": "Page End"
+              },
+              "chunk_count": {
+                "description": "章節の chunk の数（子の章節の chunk を含む）。",
+                "title": "Chunk Count",
+                "type": "integer"
+              },
+              "chars": {
+                "description": "章節の本文の文字数（子の章節の本文を含む）。",
+                "title": "Chars",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "section_id",
+              "title",
+              "level",
+              "chunk_count",
+              "chars"
+            ],
+            "title": "OutlineSection",
+            "type": "object"
+          },
+          "ReadDocumentChunk": {
+            "description": "返した本文に含まれる chunk（根拠として引用するときの場所）。",
+            "properties": {
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Element Locator"
+              },
+              "section_path": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page End"
+              },
+              "start": {
+                "description": "返した本文の中の開始の位置（文字数）。",
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "description": "返した本文の中の終了の位置（文字数）。",
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "chunk_id",
+              "start",
+              "end"
+            ],
+            "title": "ReadDocumentChunk",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "default": 9,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Name"
+          },
+          "chunk_set_id": {
+            "title": "Chunk Set Id",
+            "type": "string"
+          },
+          "section": {
+            "$ref": "#/$defs/OutlineSection",
+            "description": "読んだ章節（ページの範囲・親の章節の id）。"
+          },
+          "child_sections": {
+            "description": "子の章節（最大 50 件。本文は section に含む）。",
+            "items": {
+              "$ref": "#/$defs/OutlineSection"
+            },
+            "title": "Child Sections",
+            "type": "array"
+          },
+          "text": {
+            "description": "章節の本文。頁が変わる所に「--- p.N ---」の行を入れる。",
+            "title": "Text",
+            "type": "string"
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/$defs/ReadDocumentChunk"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
+          "section_complete": {
+            "description": "章節の終わりまで読んだか（false なら next_cursor で続きを読む）。",
+            "title": "Section Complete",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "章節の続きを読む cursor（章節の終わりまで読んだら null）。",
+            "title": "Next Cursor"
+          },
+          "superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）か。",
+            "title": "Superseded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_set_id",
+          "section",
+          "text",
+          "chunks",
+          "section_complete"
+        ],
+        "title": "ReadSectionOutput",
         "type": "object"
       }
     },
@@ -1283,7 +1652,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1844,6 +2213,110 @@
             "title": "EvidenceReference",
             "type": "object"
           },
+          "EvidenceSection": {
+            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの。#1438）。",
+            "properties": {
+              "section_id": {
+                "description": "章節の id（rag_read_section の section_id に渡す）。",
+                "title": "Section Id",
+                "type": "string"
+              },
+              "title": {
+                "description": "章節の名前（どの章節にも入らない chunk は文書名）。",
+                "title": "Title",
+                "type": "string"
+              },
+              "level": {
+                "description": "章節の階層（1〜6。0 は文書全体）。",
+                "title": "Level",
+                "type": "integer"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の開始の頁。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の終了の頁。",
+                "title": "Page End"
+              },
+              "chars": {
+                "description": "章節の本文の文字数（excerpt より長ければ章節を読む）。",
+                "title": "Chars",
+                "type": "integer"
+              },
+              "chunk_count": {
+                "description": "章節の chunk の数。",
+                "title": "Chunk Count",
+                "type": "integer"
+              },
+              "parent_section_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の id。",
+                "title": "Parent Section Id"
+              },
+              "parent_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の名前。",
+                "title": "Parent Title"
+              },
+              "parent_chars": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の本文の文字数。",
+                "title": "Parent Chars"
+              }
+            },
+            "required": [
+              "section_id",
+              "title",
+              "level",
+              "chars",
+              "chunk_count"
+            ],
+            "title": "EvidenceSection",
+            "type": "object"
+          },
           "OlderVersion": {
             "description": "検索で当たった文書を置き換えた旧版（#1405）。",
             "properties": {
@@ -2081,6 +2554,18 @@
                 "default": null,
                 "description": "reference_from の根拠の本文の参照の表記。",
                 "title": "Reference Label"
+              },
+              "section": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceSection"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が属する章節（#1438。章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
               }
             },
             "required": [
@@ -2099,7 +2584,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2606,6 +3091,110 @@
             "title": "EvidenceReference",
             "type": "object"
           },
+          "EvidenceSection": {
+            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの。#1438）。",
+            "properties": {
+              "section_id": {
+                "description": "章節の id（rag_read_section の section_id に渡す）。",
+                "title": "Section Id",
+                "type": "string"
+              },
+              "title": {
+                "description": "章節の名前（どの章節にも入らない chunk は文書名）。",
+                "title": "Title",
+                "type": "string"
+              },
+              "level": {
+                "description": "章節の階層（1〜6。0 は文書全体）。",
+                "title": "Level",
+                "type": "integer"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の開始の頁。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の終了の頁。",
+                "title": "Page End"
+              },
+              "chars": {
+                "description": "章節の本文の文字数（excerpt より長ければ章節を読む）。",
+                "title": "Chars",
+                "type": "integer"
+              },
+              "chunk_count": {
+                "description": "章節の chunk の数。",
+                "title": "Chunk Count",
+                "type": "integer"
+              },
+              "parent_section_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の id。",
+                "title": "Parent Section Id"
+              },
+              "parent_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の名前。",
+                "title": "Parent Title"
+              },
+              "parent_chars": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の本文の文字数。",
+                "title": "Parent Chars"
+              }
+            },
+            "required": [
+              "section_id",
+              "title",
+              "level",
+              "chars",
+              "chunk_count"
+            ],
+            "title": "EvidenceSection",
+            "type": "object"
+          },
           "GuideClarification": {
             "properties": {
               "condition_id": {
@@ -3015,6 +3604,18 @@
                 "default": null,
                 "description": "reference_from の根拠の本文の参照の表記。",
                 "title": "Reference Label"
+              },
+              "section": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceSection"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が属する章節（#1438。章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
               }
             },
             "required": [
@@ -3033,7 +3634,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3513,7 +4114,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 8,
+            "default": 9,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
