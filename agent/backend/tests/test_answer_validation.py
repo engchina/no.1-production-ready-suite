@@ -1441,7 +1441,7 @@ HEADING_CASES: dict[str, Any] = json.loads(
     "case", HEADING_CASES["heading_passages"], ids=lambda case: str(case["id"])
 )
 def test_heading_phrases_and_lead_ins_are_headings(case: dict[str, str]) -> None:
-    """番号つきの見出し・「補足（…）」・「根拠」・「…は次のとおりです。」は見出し（#1469）。"""
+    """「補足（…）」・「根拠」・「…は次のとおりです。」は見出し（#1469）。"""
     text = case["passage"]
     assert is_heading(text)
     assert passage_kind(text) == "heading"
@@ -1452,8 +1452,9 @@ def test_heading_phrases_and_lead_ins_are_headings(case: dict[str, str]) -> None
     "case", HEADING_CASES["numbered_heading_passages"], ids=lambda case: str(case["id"])
 )
 def test_numbered_headings_are_decided_by_the_following_line(case: dict[str, str]) -> None:
-    """終わりの語が一覧に無い番号つきの「…の…」の行は、次の行が下の内容のときだけ見出し（#1481）。
+    """番号つきの見出しの行は、次の行が下の内容のときだけ見出し（#1481 / #1482）。
 
+    終わりの語が一覧にある行（「1. 人事評価システムの重要度」）も、一覧に無い「…の…」の行も、
     単独の行と、番号の行が続く一覧の中の行は主張のまま確かめる。
     """
     text = case["passage"]
@@ -1468,6 +1469,33 @@ def test_numbered_headings_are_decided_by_the_following_line(case: dict[str, str
     assert text not in numbered_heading_lines(listed)
     assert text not in non_claim_passages(listed)
     assert numbered_heading_lines(f"{text}\n**次の節**") == set()
+
+
+def test_numbered_list_items_ending_with_heading_words_are_claims() -> None:
+    """番号の行が続く一覧の項目は、終わりの語が見出しの語の一覧にあっても主張（#1482）。
+
+    e1467 の run_ee5468f8 の「申請書に書く 4 項目」。#1469 の段落だけの判定では「1. 変更の内容と
+    理由」「3. 切り戻しの手順」が見出しになり、主張として監査されなかった。同じ行でも、下に内容の
+    行があれば見出し。
+    """
+    items = [
+        "1. 変更の内容と理由",
+        "2. 影響を受けるシステムと利用者",
+        "3. 切り戻しの手順",
+        "4. 作業の日時",
+    ]
+    answer = "**申請書に書く 4 項目**\n" + "\n".join(items) + "\n\n**条件によって加わる項目**"
+    kinds = non_claim_passages(answer)
+    assert numbered_heading_lines(answer) == set()
+    assert kinds.get("**申請書に書く 4 項目**") == "heading"
+    for item in items:
+        assert not is_heading(item)
+        assert passage_kind(item) is None
+        assert item not in kinds
+    below = "3. 切り戻しの手順\n   1. 旧版に戻す\n   2. 動作を確かめる"
+    assert numbered_heading_lines(below) == {"3. 切り戻しの手順"}
+    assert non_claim_passages(below).get("3. 切り戻しの手順") == "heading"
+    assert "1. 旧版に戻す" not in non_claim_passages(below)
 
 
 @pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: str(case["id"]))

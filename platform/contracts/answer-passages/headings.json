@@ -1,61 +1,6 @@
 {
-  "description": "回答の検証で主張として数えない見出しの名詞句・導入の文と、見出しに見えても主張として残す行の事例（#1469）。RAG（rag_engine.generation.operation_audit.is_heading / is_non_claim_passage）と Agent（app.features.agent.answer_passages.is_heading / passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。見出しの名詞句は、句点で終わらない短い名詞句で、項目・区分・資料の名前か分岐・問いの形（「…とき」「…か」）で終わり、述語・操作・数量・言い切りの「は」を含まないもの（番号・強調・後ろの注記の括弧は除いて確かめる）。番号つきの行は、終わりの語が一覧に無くても「…の…」の名詞句で、次の（空でない）行がその下の内容（字下げした行か箇条書き・「→」の行）なら見出し（RAG と Agent の numbered_heading_lines。人・組織・役職の名前で終わるものと、番号の行が続く一覧の行は主張のまま。#1481）。numbered_heading_passages はその行（passage の次に下の内容の行を置くと見出し、単独・一覧の中では主張）。claim_passages は、次に下の内容の行を置いても主張のまま。導入の文は「…は次のとおりです。」「以下に示します。」のように以降の箇条書きを導くだけの文（先頭の接続の語「そのため、」「なお、」の後の「、」は許す。#1481）と、礼の定型の文。heading_passages の多くは #1362 の deepseek-flash の評価（e1467、main f83ebbda）の D の Run の回答の段落そのもの。#1481 の事例は e1481 の評価（main 05b35c37、deepseek-flash）の D の Run の回答の段落。",
+  "description": "回答の検証で主張として数えない見出しの名詞句・導入の文と、見出しに見えても主張として残す行の事例（#1469）。RAG（rag_engine.generation.operation_audit.is_heading / is_non_claim_passage / numbered_heading_lines）と Agent（app.features.agent.answer_passages.is_heading / passage_kind / non_claim_passages / numbered_heading_lines）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。見出しの名詞句は、句点で終わらない短い名詞句で、項目・区分・資料の名前か分岐・問いの形（「…とき」「…か」）で終わり、述語・操作・数量・言い切りの「は」を含まないもの（強調・後ろの注記の括弧は除いて確かめる）。heading_passages は段落だけで見出しになる番号の無い行。番号つきの行は段落だけでは決めず、終わりの語が一覧にあるか、一覧に無くても「…の…」の名詞句で、次の（空でない）行がその下の内容（字下げした行か箇条書き・「→」の行）のときだけ見出し（RAG と Agent の numbered_heading_lines。#1481 / #1482）。番号の行が続く一覧の項目（「申請書に書く 4 項目」の「1. 変更の内容と理由」）と、下に内容の無い行は、終わりの語が一覧にあっても主張のまま（#1482）。人・組織・役職の名前で終わる「…の…」の行も主張のまま。numbered_heading_passages はその行（passage の次に下の内容の行を置くと見出し、単独・一覧の中では主張）。claim_passages は、次に下の内容の行を置いても主張のまま。導入の文は「…は次のとおりです。」「以下に示します。」のように以降の箇条書きを導くだけの文（先頭の接続の語「そのため、」「なお、」の後の「、」は許す。#1481）と、礼の定型の文。heading_passages・numbered_heading_passages の多くは #1362 の deepseek-flash の評価（e1467、main f83ebbda）の D の Run の回答の段落そのもの。#1481 の事例は e1481 の評価（main 05b35c37、deepseek-flash）の D の Run の回答の段落。",
   "heading_passages": [
-    {
-      "id": "numbered-attribute",
-      "note": "多段 dev br-hr-evaluation-change-window（run_e42807013c3041d09185daae0bee0baf）。",
-      "passage": "1. 人事評価システムの重要度"
-    },
-    {
-      "id": "numbered-rule",
-      "passage": "2. 重要度 A の変更時間帯の規則"
-    },
-    {
-      "id": "numbered-slot",
-      "passage": "3. 定期保守計画の個別の保守枠"
-    },
-    {
-      "id": "numbered-with-document-note",
-      "note": "多段 dev cmp-expense-vs-attendance-deadline。",
-      "passage": "1. 担当部署（システム台帳）"
-    },
-    {
-      "id": "numbered-with-location-note",
-      "passage": "2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）"
-    },
-    {
-      "id": "numbered-document-with-row-note",
-      "note": "多段 dev br-mes-approver-deadline。",
-      "passage": "1. システム台帳（シート「システム台帳」28 行目）"
-    },
-    {
-      "id": "numbered-bold",
-      "note": "多段 dev br-idm-incident-contact。",
-      "passage": "2. **重要度 A の連絡先と期限**"
-    },
-    {
-      "id": "numbered-bold-short",
-      "passage": "5. **連絡の手段**"
-    },
-    {
-      "id": "numbered-question-form",
-      "note": "多段 dev br-contract-access-approver。",
-      "passage": "1. 承認者がどう決まるか"
-    },
-    {
-      "id": "numbered-case",
-      "note": "多段 dev br-audit-record-proxy。",
-      "passage": "3. 承認者が不在のときの代理"
-    },
-    {
-      "id": "numbered-quoted-terms",
-      "passage": "3. 「法」と「情セキ」の正式名と承認者"
-    },
-    {
-      "id": "numbered-quoted-abbreviation",
-      "note": "多段 holdout br-logistics-oms-approver。",
-      "passage": "2. 略号「運」の意味"
-    },
     {
       "id": "bold-case-with-location",
       "note": "多段 holdout sh-severity-c-report。",
@@ -130,6 +75,66 @@
     }
   ],
   "numbered_heading_passages": [
+    {
+      "id": "numbered-attribute",
+      "note": "多段 dev br-hr-evaluation-change-window（run_e42807013c3041d09185daae0bee0baf）。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "1. 人事評価システムの重要度"
+    },
+    {
+      "id": "numbered-rule",
+      "passage": "2. 重要度 A の変更時間帯の規則",
+      "note": "終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。"
+    },
+    {
+      "id": "numbered-slot",
+      "passage": "3. 定期保守計画の個別の保守枠",
+      "note": "終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。"
+    },
+    {
+      "id": "numbered-with-document-note",
+      "note": "多段 dev cmp-expense-vs-attendance-deadline。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "1. 担当部署（システム台帳）"
+    },
+    {
+      "id": "numbered-with-location-note",
+      "passage": "2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）",
+      "note": "終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。"
+    },
+    {
+      "id": "numbered-document-with-row-note",
+      "note": "多段 dev br-mes-approver-deadline。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "1. システム台帳（シート「システム台帳」28 行目）"
+    },
+    {
+      "id": "numbered-bold",
+      "note": "多段 dev br-idm-incident-contact。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "2. **重要度 A の連絡先と期限**"
+    },
+    {
+      "id": "numbered-bold-short",
+      "passage": "5. **連絡の手段**",
+      "note": "終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。"
+    },
+    {
+      "id": "numbered-question-form",
+      "note": "多段 dev br-contract-access-approver。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "1. 承認者がどう決まるか"
+    },
+    {
+      "id": "numbered-case",
+      "note": "多段 dev br-audit-record-proxy。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "3. 承認者が不在のときの代理"
+    },
+    {
+      "id": "numbered-quoted-terms",
+      "passage": "3. 「法」と「情セキ」の正式名と承認者",
+      "note": "終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。"
+    },
+    {
+      "id": "numbered-quoted-abbreviation",
+      "note": "多段 holdout br-logistics-oms-approver。 終わりの語が一覧にある番号つきの行（#1469）。段落だけでは決めない（#1482）。",
+      "passage": "2. 略号「運」の意味"
+    },
     {
       "id": "numbered-phrase-unlisted-end",
       "note": "多段 holdout（e1481、run_54f6039b7301498a8acc2ca9b6670347）。終わりの語「目標」は一覧に無い（#1481）。",
@@ -323,7 +328,7 @@
     },
     {
       "id": "change-request-items",
-      "note": "多段 dev（e1467、run_ee5468f82cf34acab3f9727cf79940d3）の最終の回答。「申請書に書く 4 項目」の番号の行が続く一覧の「4. 作業の日時」は、番号つきの「…の…」の名詞句でも一覧の内容なので主張のまま（#1481）。",
+      "note": "多段 dev（e1467、run_ee5468f82cf34acab3f9727cf79940d3）の最終の回答。「申請書に書く 4 項目」の番号の行が続く一覧の項目は、番号つきの「…の…」の名詞句（「4. 作業の日時」。#1481）でも、終わりの語が一覧にある行（「1. 変更の内容と理由」「3. 切り戻しの手順」。#1482）でも、一覧の内容なので主張のまま。",
       "answer": "本番環境のシステムの設定変更の申請書は、「システム変更手順書」の第 3 章「申請書の項目」に定められています（change-procedure.pdf p.1）。\n\n**申請書に書く 4 項目**\n1. 変更の内容と理由\n2. 影響を受けるシステムと利用者\n3. 切り戻しの手順\n4. 作業の日時\n\n**条件によって加わる項目**\n- 経費 Portal の変更では、上の 4 項目に加えて「月次の締め処理への影響」を書きます（同 第 3 章）。\n\n**申請先**\n- 変更の申請は、変更するシステムを担当する部署の承認者に出します。担当部署はシステム台帳で、承認者は組織規程で確かめます（同 第 2 章「申請」）。\n- なお、この手順書の対象は本番環境のシステムのうち、システム台帳に載っているものに限ります（同 第 1 章「対象」）。\n\n**回答を確定するためにご確認いただきたい点**\n- 変更対象のシステム名またはシステム ID（変更対象が経費 Portal に当たるか、「月次の締め処理への影響」を加える必要があるかを決めるため）\n- システム台帳（変更対象システムが台帳に載っているか、担当部署がどこか）\n- 組織規程（ご担当部署の承認者）\n\n変更対象のシステムが分かれば、担当部署と承認者まで具体的にお示しできます。",
       "heading_passages": [
         "**申請書に書く 4 項目**",
@@ -331,8 +336,38 @@
         "**申請先**"
       ],
       "claim_passages": [
-        "4. 作業の日時",
-        "2. 影響を受けるシステムと利用者"
+        "1. 変更の内容と理由",
+        "2. 影響を受けるシステムと利用者",
+        "3. 切り戻しの手順",
+        "4. 作業の日時"
+      ]
+    },
+    {
+      "id": "numbered-list-items-before-paragraph",
+      "note": "番号の行が続く一覧の最後の項目の次が、字下げしない本文の段落（#1482）。終わりの語が一覧にある項目（「期限」「連絡先」「手順」）も主張のまま。導入の文は見出し。",
+      "answer": "申請の前に確かめる点は次のとおりです。\n\n1. 申請の期限\n2. 承認者の連絡先\n3. 切り戻しの手順\n\n以上の 3 点は、システム変更手順書の第 3 章に定められています。",
+      "heading_passages": [
+        "申請の前に確かめる点は次のとおりです。"
+      ],
+      "claim_passages": [
+        "1. 申請の期限",
+        "2. 承認者の連絡先",
+        "3. 切り戻しの手順"
+      ]
+    },
+    {
+      "id": "numbered-heading-with-numbered-steps",
+      "note": "番号つきの見出しの下に、字下げした番号の行が続く回答（#1482）。見出しの行は見出しで、字下げした番号の一覧の項目は終わりの語が一覧にあっても主張のまま。",
+      "answer": "**変更の申請の流れ**\n\n1. 申請の手順\n   1. 変更の内容と理由\n   2. 切り戻しの手順\n2. 承認の流れ\n   - 担当部署の承認者が承認します。",
+      "heading_passages": [
+        "**変更の申請の流れ**",
+        "1. 申請の手順",
+        "2. 承認の流れ"
+      ],
+      "claim_passages": [
+        "1. 変更の内容と理由",
+        "2. 切り戻しの手順",
+        "- 担当部署の承認者が承認します。"
       ]
     }
   ]

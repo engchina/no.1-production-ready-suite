@@ -344,13 +344,13 @@ _HEADING_END = re.compile(
     # （「承認者がどう決まるか」）。
     r"|とき|場合|か)$"
 )
-# 番号（「1.」「（2）」）。番号つきの行は、終わりの語が一覧に無くても「…の…」の名詞句で、次の行が
-# その下の内容なら見出し（`numbered_heading_lines`。#1481）。
+# 番号（「1.」「（2）」）。番号つきの行は段落だけでは決めず、次の行がその下の内容のときだけ見出し
+# （`numbered_heading_lines`。#1481 / #1482）。番号の行が続く一覧の項目は主張のまま。
 _HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
 # 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞を
 # つなぐ「の」に数えない。
 _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
-# 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も下の内容）。
+# 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も、字下げした番号の行も下の内容）。
 _SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の
 # 主張のまま。
@@ -392,39 +392,46 @@ def _heading_note_ok(note: str) -> bool:
 def heading_phrase(text: str) -> str | None:
     """主張でない見出しの名詞句なら、注記の括弧・番号・強調を除いた見出しの語（#1469）。
 
-    見出しでなければ None。「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」
-    「回答に使った資料」「2. **重要度 A の連絡先と期限**」のように、句点で終わらない短い名詞句で、
-    項目・区分・資料の名前（`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。
-    述語（です・ます・する…）・操作・数量・言い切りの「は」を含む行（「重要度は A です」
-    「承認者は管理本部長」「1. **ID 管理システムの重要度は A**」）と、値の名前だけの行
-    （「1. 運行管理課長」）は主張のまま。終わりの語が一覧に無い番号つきの行は、回答の中の次の行で
-    決める（`numbered_heading_lines`。#1481）。
+    見出しでなければ None。「補足（資料の記載）」「根拠」「回答に使った資料」「**重要度 C の
+    システムで障害が起きたとき**」のように、句点で終わらない短い名詞句で、項目・区分・資料の名前
+    （`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。述語（です・ます・する…）・
+    操作・数量・言い切りの「は」を含む行（「重要度は A です」「承認者は管理本部長」）は主張のまま。
+    番号つきの行（「1. 人事評価システムの重要度」）は段落だけでは見出しにせず、回答の中の次の行で
+    決める（番号の行が続く一覧の「1. 変更の内容と理由」は主張。`numbered_heading_lines`。
+    #1481 / #1482）。
     """
     found = _heading_value(text)
-    return found[0] if found and _HEADING_END.search(found[0]) else None
+    if not found or _HEADING_NUMBER.match(text.strip()):
+        return None
+    return found[0] if _HEADING_END.search(found[0]) else None
 
 
 def _numbered_heading_phrase(text: str) -> str | None:
-    """終わりの語に関係なく、番号つきの「…の…」の名詞句なら見出しの語（#1481）。
+    """番号つきの見出しの語（「1. 人事評価システムの重要度」。#1481 / #1482）。
 
-    「2. 重要度 B の復旧目標」「1. 連携元のシステム」。人・組織・役職の名前で終わる行
-    （「1. 情報システム部の課長」）は値の主張のまま。
+    終わりの語が一覧（`_HEADING_END`）にあるか、一覧に無くても「…の…」の名詞句のもの
+    （「2. 重要度 B の復旧目標」）。人・組織・役職の名前で終わる「…の…」の行（「1. 情報システム部の
+    課長」）と、述語・操作・数量・言い切りの「は」を含む行（「1. **ID 管理システムの重要度は A**」）
+    は値の主張のまま。見出しかどうかは次の行で決める（`numbered_heading_lines`）。
     """
     found = _heading_value(text)
     if not found or not _HEADING_NUMBER.match(text.strip()):
         return None
     value, outside = found
+    if _HEADING_END.search(value):
+        return value
     if _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value):
         return value
     return None
 
 
 def numbered_heading_lines(text: str) -> set[str]:
-    """回答の中の、終わりの語が一覧に無い番号つきの見出しの行（前後の空白を除いた行。#1481）。
+    """回答の中の、番号つきの見出しの行（前後の空白を除いた行。#1481 / #1482）。
 
-    「1. 連携元のシステム」のような番号つきの「…の…」の名詞句で、次の（空でない）行がその下の
-    内容（字下げした行か箇条書き・「→」の行）のもの。番号の行が続く一覧（「申請書に書く 4 項目」の
-    「4. 作業の日時」）の行は、その一覧の内容なので主張のまま。RAG の
+    番号つきの見出しの語（`_numbered_heading_phrase`）の行で、次の（空でない）行がその下の内容
+    （字下げした行か、箇条書き・「→」の行）のもの。番号の行が続く一覧（「申請書に書く 4 項目」の
+    「1. 変更の内容と理由」〜「4. 作業の日時」）の項目と、下に内容の無い行は、終わりの語が一覧に
+    あっても主張のまま（段落だけで決めると、一覧の項目を見出しとして監査から外す。#1482）。RAG の
     `operation_audit.numbered_heading_lines` と同じ規則。
     """
     lines = [line for line in text.split("\n") if line.strip()]
@@ -434,11 +441,7 @@ def numbered_heading_lines(text: str) -> set[str]:
         below = len(following) - len(following.lstrip()) > indent or bool(
             _SUB_CONTENT.match(following.strip())
         )
-        if (
-            below
-            and not _HEADING_NUMBER.match(following.strip())
-            and _numbered_heading_phrase(line)
-        ):
+        if below and _numbered_heading_phrase(line):
             found.add(line.strip())
     return found
 
