@@ -30,6 +30,10 @@
   拒答の文（「…示すことはできません」「回答はできません」。#1317）。数量・逆接・操作を含む文は除く。
 - 確かめられていない点: その見出しと、その節の行（操作の指示を除く）。
 
+補足の段落（見出しが「補足」「注記」「備考」などの節の行と、「なお、」「補足：」で始まる段落）は
+`supplement_passages` で判定する（#1475）。主張かどうかは変えず、回答の対応（`answer_outcome`）が、
+結論の段落で答えた後の補足の不足の文を不足の印にしないために使う。
+
 別に、利用者に現場のデータ・記録の確認を求める段落（「認証ログでエラーの時刻の行を確認して
 ください」など）を `environment_check_passages` で判定する（#1317）。こちらは主張のまま（検証で
 確かめ、外す）で、回答の対応（`answer_outcome`）が「現場の確認が要る」の印に使う。
@@ -744,6 +748,50 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     return {text: kind for text, kind in kinds.items() if text not in claims}
 
 
+# 補足の節の見出しの語（「補足（資料の記載）」の注記の括弧は見出しの語から外れる。
+# 「参考」は出典の節）。
+_SUPPLEMENT_SECTION = re.compile(r"(?:補足|注記|備考|注意|留意|その他)(?:事項|点|情報)?")
+# 補足を導く段落の頭（「なお、…」「補足：…」「注記（同シート A1:A2）：…」）。
+_SUPPLEMENT_LEAD = re.compile(
+    r"(?:なお|ちなみに)[、,]"
+    r"|(?:補足|注記|備考|注意|留意)(?:事項|点|情報)?\s*(?:[（(][^（）()\n]{1,60}[）)])?\s*[:：]"
+)
+
+
+def supplement_passages(answer: str) -> set[str]:
+    """回答の中の、補足の段落（補足の節の行と、「なお、」「補足：」で始まる段落。#1475）。
+
+    回答の対応（`answer_outcome`）が、結論の段落で答えた後の補足の不足の文（「現在の各環境の
+    設定値は資料からは分かりません。」）を不足の印にしないために使う。節（見出しが「補足」「注記」
+    「備考」など）は、`non_claim_passages` の節と同じく、次の見出しか、空行の後の箇条書きではない行
+    まで続く。同じ原文の段落が補足の外にもあれば、補足として扱わない（保守的にする）。
+    """
+    inside: set[str] = set()
+    outside: set[str] = set()
+    section = False
+    blank = False
+    for line in answer.split("\n"):
+        if not line.strip():
+            blank = True
+            continue
+        if blank and not _BULLET.match(line.strip()):
+            section = False
+        blank = False
+        spans = passage_spans(line)
+        if len(spans) == 1:
+            title = _heading_title(spans[0][2])
+            if title is not None:
+                section = bool(_SUPPLEMENT_SECTION.fullmatch(_EMPHASIS.sub("", title).strip()))
+                continue
+        for _start, _end, text in spans:
+            value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+            if section or _SUPPLEMENT_LEAD.match(value):
+                inside.add(text)
+            else:
+                outside.add(text)
+    return inside - outside
+
+
 def environment_check_passages(answer: str) -> set[str]:
     """回答の中の、利用者に現場のデータ・記録の確認を求める段落（主張ではない段落を除く。#1317）。"""
     kinds = non_claim_passages(answer)
@@ -849,5 +897,6 @@ __all__ = [
     "non_claim_passages",
     "passage_kind",
     "passage_spans",
+    "supplement_passages",
     "table_header_lines",
 ]
