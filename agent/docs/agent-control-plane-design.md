@@ -250,9 +250,10 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   SDK の function tool の timeout は待つ分を足した値にする。外部の MCP 接続のツールは対象外。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 630 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）
-  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 60 秒。NL2SQL の
+  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 120 秒。NL2SQL の
   `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って
-  job_id を返す。呼び出しの中では LLM・Select AI を呼ばないため推論の量に左右されず、45 秒に余裕 15 秒を足した 60 秒で足りる。
+  job_id を返す。呼び出しの中では LLM・Select AI を呼ばないため推論の量に左右されない。45 秒に、HTTP の往復・ジョブの登録・DB の負荷の
+  余裕 75 秒を足した 120 秒にする〔#1432。余裕 15 秒の 60 秒では足りないことがあった〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
   ジョブの完了は `AGENT_NL2SQL_JOB_WAIT_SECONDS` まで待つ。既定の SQL の生成〔Select AI の 1 回〕と実行は NL2SQL の DB の呼び出しの
   上限〔120 秒〕で打ち切られる。#1430）は接続 `rag` / `nl2sql` の初期値（タイムアウト秒の上限は 900 秒。SDK の function tool の
   timeout は、接続の timeout〔`nl2sql` はジョブを待つ分を足した値〕の 2 倍）。`backend/.env.example` は両方の値を明示する（#1430）。画面で保存済みの接続はその値のまま（#1425 より前に保存した `rag` の 60 秒は、
@@ -372,6 +373,13 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   memory / file の構成は保存せず、メモリの Run を集計する（`source=memory`）。
 - 品質評価（#776）の job は件数（旧 50 件）ではなく期間（終わった job を 365 日。安全のため 2,000 件まで）で残し、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
+- 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。
+  既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 630 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`
+  + 1）にする（既定 630 ×（6 + 1）= 4410 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、
+  1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では
+  時間切れになった。+1 は回答の最終の検証（`rag_validate_answer`）とモデルの推論の分。RAG の予算が無制限（0 以下）なら
+  `AGENT_MAX_TOOL_CALLS_PER_RUN` を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに
+  実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースを 1 件ずつ実行し、ケースごとの上限で止まる）。
 
 ## 7. Snapshot migration
 
