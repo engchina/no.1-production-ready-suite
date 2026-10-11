@@ -29,7 +29,7 @@ from rag_engine.evaluation.answer_eval import (
     model_request,
 )
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
-from rag_engine.generation.operation_audit import is_non_claim_passage, table_header_lines
+from rag_engine.generation.operation_audit import is_non_claim_passage, numbered_heading_lines, table_header_lines
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
 # 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
@@ -37,7 +37,8 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, table_he
 # 5: ID を書かない段落は裏付ける根拠の ID を選ぶこと・ID が無いことを citation_error にしないことを指示に足し、
 #    それでも出典が決まらない ID の無い段落は、回答の他の段落が引いた根拠で確かめ直すようにした（#1412）。
 # 6: 質問・回答が限定した範囲（会社・台帳・版・年度・部署）の外の根拠との違いを contradicted にしないことを足した（#1413）。
-VALIDATION_RUBRIC_VERSION = 6
+# 7: 根拠に場所（節・シート・行・セル範囲）を渡し、段落が書いた場所の表記の違いだけを unsupported にしないことを足した（#1450）。
+VALIDATION_RUBRIC_VERSION = 7
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,9 @@ VALIDATION_SYSTEM_PROMPT = (
 - source_id / evidence_quote は空文字でよい（evidence_id から出典と原文を取る）。
 - ボタンの役割、操作の順序、項目が属する画面、パラメータの条件、影響範囲（個別 / グループ / 全体）は個別に確認する。
 - 段落の一部だけが裏付けられるときは段落全体を supported にしない。適用する版・施行日が違う根拠を、今の手順の裏付けに使わない。
+- 段落が書いた場所（頁・節・シート・行・セル範囲）は、evidence_items の場所（page_start・page_end・section_path・sheet_name・row_start・row_end・cell_range）と照らす。場所は裏付ける内容ではなく出典の示し方なので、上の「段落の一部」に数えない。
+- 根拠に場所の情報が無い、または表記が違うだけ（「行23」「23 行目」と row_start 23、「行1〜3」と row_start 1・row_end 3、「A11:F11」と cell_range、「p.3」と page_start 3 など）で、内容が根拠で裏付けられるなら supported にする。場所の表記を理由に unsupported にしない。
+- 段落が書いた場所が、内容を裏付ける根拠の場所と食い違う（別のシート・範囲の外の行・別の頁）ときだけ、場所を理由に unsupported にする。
 """
 )
 
@@ -206,15 +210,17 @@ def validate_answer_claims(
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
 
-    evidence_items は ``{id, source, page_start, page_end, text}``（id は chunk の id）。
+    evidence_items は ``{id, source, page_start, page_end, text}``（id は chunk の id）に、分かるときは場所の
+    ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。
     戻り値は status（completed / no_claims / input_too_large）・claim_checks・件数・切り詰め。
     見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
     """
     # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
     headers = table_header_lines(answer_text)
+    heading_lines = numbered_heading_lines(answer_text)
     passages = [passage for passage in _answer_passages(answer_text)
-                if not is_non_claim_passage(passage["text"], table_headers=headers)]
+                if not is_non_claim_passage(passage["text"], table_headers=headers, heading_lines=heading_lines)]
     base: dict[str, Any] = {"rubric_version": VALIDATION_RUBRIC_VERSION, "claim_checks": []}
     if not passages:
         return {**base, "status": "no_claims"}

@@ -224,6 +224,23 @@ skill_registry.register(
             "分けて答え、answer_with_guide は分かっている条件に当たる場合の手順だけを答える。"
             "handoff は引き継ぎ先を示す。"
             "needs_human は引き継ぎ先を示し、操作を代わりに進めない。"
+            "回答には、資料の内容と、資料で確かめられなかった点だけを書く。"
+            "質問が求めない限り、資料に無いこと（「…は見当たりませんでした」"
+            "「…の定めは示されていません」）・ほかに無いこと・全件で何件だけ"
+            "（「…は SYS-107 の 1 件だけでした」「この 2 件だけです」）を補足に書かない"
+            "（根拠は読んだ箇所しか示さないため、不在・網羅の断定は最終の検証で確かめられず、"
+            "回答から外れる）。質問に答えるのに要る点が資料で確かめられなかったときは、"
+            "無いと断定せず、確かめられなかった点として書く。"
+            "質問が全件を求めるとき（台帳で条件に当たる行はどれか・いくつか など）は、"
+            "読んだ範囲（例: 台帳の SYS-101〜SYS-180 の 80 行を読んだ）を結論に書き、"
+            "補足で繰り返さない。"
+            "自分の作業の経過は回答に書かない:ツールの名前（rag_search・rag_outline など）、"
+            "ツールの結果の状態（outcome・needs_human_review などの値）、業務ガイドが見つかった・"
+            "見つからなかったこと、検索の結果に旧版（older_versions）があったこと、"
+            "「確かめられなかった点はありません」のような作業の報告は書かない"
+            "（最終の検証は資料の根拠で回答を確かめるため、資料に無い作業の経過は"
+            "確かめられない点として回答から外れる）。"
+            "旧版・改定前との違いを尋ねる質問で、旧版の内容を書くのは除く。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
@@ -259,6 +276,16 @@ skill_registry.register(
             "wait_seconds=40 を渡して続きを取る。結果が出ないまま答えるときは、"
             "実行中であることと job_id を伝え、結果を推測で補わない。"
             "status が error なら error_message と error_code を伝える。"
+            "nl2sql_query は SQL を作る前に、足りない情報・明確でない情報を確かめる（AI要件確認）。"
+            "status が needs_clarification なら SQL はまだ作っていない。結果の next_step の "
+            "questions の問い（requirement.question）を 1 つだけ、候補があれば候補の名前を添えて"
+            "利用者にそのまま聞き（表・列は物理名のまま。推測で選ばない・SQL や結果を作らない）、"
+            "その回答では問いだけを返す。利用者が答えたら、nl2sql_query に同じ question と "
+            "profile_id、requirement_session_id と answer（item_id と、答えに当たる候補の id の "
+            "selected_candidate_ids。候補に無い答えは free_text に利用者の言葉のまま。"
+            "どちらか一方だけ）を渡して呼び直す。確認が要るものが無くなると SQL を作って実行する。"
+            "status が unanswerable なら、error_message（この業務プロファイルで答えられない理由）"
+            "を伝える。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
@@ -285,7 +312,10 @@ skill_registry.register(
             "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える"
             "（nl2sql_query には業務プロファイルの ID（profile_id）が必須。分からなければ "
             "nl2sql_recommend_profile か nl2sql_list_profiles で選ぶ。"
-            "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る）。"
+            "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る。"
+            "needs_clarification を返したら SQL はまだ作っていないので、next_step の questions の"
+            "問いを 1 つだけ利用者に聞き、答えを answer、requirement.session_id を "
+            "requirement_session_id に入れて呼び直す）。"
             "確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。"
         ),
         mcp_requirements=[

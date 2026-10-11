@@ -1,4 +1,4 @@
-import type { Artifact } from "@/lib/api";
+import type { Artifact, ClarificationKind, RunState } from "@/lib/api";
 
 /**
  * 回答の確かめ（#1286）。Run の成果物の「支援タスクの状態」（kind=`support_task`。#1243）と
@@ -48,6 +48,8 @@ export interface ReviewCondition {
 
 export interface ReviewClarification {
   key: string;
+  /** 確認の種類（NL2SQL の AI要件確認・RAG の確認。種類の無い古い問いは RAG。#1441）。 */
+  kind: ClarificationKind;
   question: string;
   options: string[];
 }
@@ -68,7 +70,7 @@ export interface ReviewGuide {
 export type ValidationState = "verified" | "withheld" | "unvalidated" | "skipped";
 
 /** 確かめられなかった理由（画面の文言を選ぶため。内部の reason の値そのものは出さない）。 */
-export type ValidationCause = "noEvidence" | "emptyAnswer" | "clarification" | "failure" | null;
+export type ValidationCause = "noEvidence" | "emptyAnswer" | "clarification" | "ragDeclined" | "failure" | null;
 
 /** 根拠で確かめられなかった段落の判定（RAG の `rag_validate_answer` の claim の status）。 */
 export type UnverifiedClaimKind = "contradicted" | "unsupported" | "citation_error" | "unassessed";
@@ -160,7 +162,8 @@ function clarifications(state: Record<string, unknown>): ReviewClarification[] {
     const question = text(item.question);
     if (!question) return [];
     const options = Array.isArray(item.options) ? item.options.map(text).filter(Boolean) : [];
-    return [{ key: `${text(item.condition_id)}:${index}`, question, options }];
+    const kind: ClarificationKind = item.kind === "nl2sql" ? "nl2sql" : "rag";
+    return [{ key: `${kind}:${text(item.condition_id)}:${index}`, kind, question, options }];
   });
 }
 
@@ -180,6 +183,7 @@ function cause(reason: unknown): ValidationCause {
   if (reason === "no_rag_evidence") return "noEvidence";
   if (reason === "empty_answer") return "emptyAnswer";
   if (reason === "clarification_only") return "clarification";
+  if (reason === "rag_declined") return "ragDeclined";
   return reason ? "failure" : null;
 }
 
@@ -258,6 +262,27 @@ export function validationReview(content: Record<string, unknown>): ReviewValida
 export function answerOutcome(content: Record<string, unknown> | null): ReviewOutcome | null {
   const value = record(content?.outcome)?.value;
   return typeof value === "string" && REVIEW_OUTCOMES.has(value) ? (value as ReviewOutcome) : null;
+}
+
+const CLARIFICATION_KINDS: readonly ClarificationKind[] = ["nl2sql", "rag"];
+
+/**
+ * Run が利用者の答えを待っている確認の種類（#1441・#1445。支援タスクの状態の確かめ中の問いから）。
+ * 取り消しの操作（「データベースの検索は不要」「資料の検索は不要」）を出す種類。
+ */
+export function pendingClarificationKinds(artifacts: Artifact[]): ClarificationKind[] {
+  const state = latest(artifacts, SUPPORT_TASK_KIND);
+  if (!state) return [];
+  const kinds = new Set(clarifications(state).map((item) => item.kind));
+  return CLARIFICATION_KINDS.filter((kind) => kinds.has(kind));
+}
+
+/** Run で利用者が取り消した確認の種類（Run の記録 `metadata.clarification_cancel`。#1441・#1445）。 */
+export function cancelledClarificationKinds(run: Pick<RunState, "metadata">): ClarificationKind[] {
+  const kinds = new Set(
+    records(run.metadata?.clarification_cancel).map((item) => item.kind).filter((kind) => typeof kind === "string")
+  );
+  return CLARIFICATION_KINDS.filter((kind) => kinds.has(kind));
 }
 
 /** Run の成果物から、回答の確かめを作る。出すものが何も無ければ null。 */

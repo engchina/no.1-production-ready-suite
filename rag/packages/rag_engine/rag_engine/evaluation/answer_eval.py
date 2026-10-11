@@ -25,7 +25,7 @@ from rag_engine.generation.grounded import (
     quote_in_text,
     verbatim_quote_lines,
 )
-from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading
+from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading, numbered_heading_lines
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -184,6 +184,10 @@ def _input_bytes(inputs: dict[str, Any]) -> int:
                                                  + _json(AnswerEvaluationOutput.model_json_schema())).encode("utf-8"))
 
 
+# 根拠の場所のうち、頁（page_start・page_end）のほかにモデルへ渡す項目（MCP の根拠の location と同じ値。#1450）。
+EVIDENCE_LOCATION_KEYS = ("section_path", "sheet_name", "row_start", "row_end", "cell_range")
+
+
 def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
     """親子の出典を残して全文を分割する。preview は全文として代用しない。"""
     for item in items:
@@ -192,6 +196,8 @@ def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
             yield from _evidence_fragments(item.get("children") or [], str(item.get("id") or ""), ancestor_text)
             continue
         metadata = {key: item.get(key) for key in ("id", "source", "source_run_id", "page_start", "page_end")}
+        # 頁の無い根拠（表計算の行など）の場所も写す（渡されたときだけ。#1450）。根拠の ID は変えない。
+        metadata.update({key: item[key] for key in EVIDENCE_LOCATION_KEYS if item.get(key) not in (None, "", [])})
         metadata["id"] = item.get("chunk_uid") or metadata["id"]
         metadata["parent_id"] = parent_id
         for start in range(0, max(1, len(text)), EVIDENCE_FRAGMENT_CHARS):
@@ -483,8 +489,10 @@ def _spans_for_passage_citations(claim, catalog):
     return _resolve_tokens(tokens, claim, catalog)
 
 
-def _bind_claims(output, catalog, passages, *, passage_citations: bool = False):
+def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, heading_lines=()):
     """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。
+
+    heading_lines は回答全体の ``numbered_heading_lines``（次の行で決まる番号つきの見出しの行。#1481）。
 
     passage_citations（最終の検証。#1404）では、モデルの evidence_id で決まらないとき、回答の段落が書いた
     根拠の ID でも結び付ける。モデルが citation_error を返した段落も、引用した ID（evidence_id か段落の ID）が
@@ -514,7 +522,8 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False):
             if len(matches) == 1:
                 claim = claim.model_copy(update={"answer_passage_id": matches[0]})
         # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。
-        if claim.status == "not_a_claim" and not (is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote)):
+        if claim.status == "not_a_claim" and not (is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote)
+                                                  or claim.answer_quote.strip() in heading_lines):
             claim = claim.model_copy(update={"status": "unassessed", "reason": "本文を見出しとして監査から除外できません。" + claim.reason})
         bound.append(claim)
     return output.model_copy(update={"claim_checks": bound})
@@ -562,6 +571,7 @@ def evaluate_answer_payload(payload: dict[str, Any], settings, *, provider_id: s
         "used_images",
     )}
     fixed["answer_passages"] = _answer_passages(str(payload.get("answer_text") or ""))
+    heading_lines = numbered_heading_lines(str(payload.get("answer_text") or ""))
     fixed["task_contract"] = task_contract(str(payload.get("question") or ""))
     try:
         # 大きな生成回答も範囲抽出前に止め、不要なネットワーク呼び出しを避ける。
@@ -587,7 +597,8 @@ def evaluate_answer_payload(payload: dict[str, Any], settings, *, provider_id: s
             inputs = _next_batch(fixed, pending, previous, base["batch_count"] + 1)
             catalog.update({item["evidence_id"]: item for item in inputs["evidence_items"]})
             base["evidence_catalog"] = list(catalog.values())
-            output = _bind_claims(_evaluate_batch(inputs, settings, provider_id), catalog, fixed["answer_passages"])
+            output = _bind_claims(_evaluate_batch(inputs, settings, provider_id), catalog, fixed["answer_passages"],
+                                  heading_lines=heading_lines)
             accumulated_claims = _merge_claims(accumulated_claims, output.claim_checks)
             batch_audits.append({"batch": base["batch_count"] + 1, "evidence_ids": [i["evidence_id"] for i in inputs["evidence_items"]],
                 "claim_checks": [c.model_dump() for c in output.claim_checks]})

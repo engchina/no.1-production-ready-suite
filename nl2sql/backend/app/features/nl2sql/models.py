@@ -1209,6 +1209,81 @@ JOB_QUESTION_MAX_LENGTH = 10000
 STORED_JOB_REQUEST_CONTEXT = "stored_job_request"
 
 
+class SqlRequirementSpecItem(BaseModel):
+    """AI要件確認で確かめた要件の 1 項目（表・列は物理名。#1439）。"""
+
+    section: str
+    section_label_ja: str = ""
+    label_ja: str = ""
+    value_ja: str = ""
+    status: str = ""
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    sql_hint: str = ""
+    period_range_ja: str = ""
+
+
+class SqlRequirementSpec(BaseModel):
+    """SQL の生成に渡す、AI要件確認の構造化した要件（#1439）。
+
+    画面からは受け取らない。job の作成の API が、反映済みの AI要件確認の session から作る。
+    """
+
+    session_id: str
+    profile_id: str
+    clarified_question: str
+    tables: list[str] = Field(default_factory=list)
+    joins: list[str] = Field(default_factory=list)
+    items: list[SqlRequirementSpecItem] = Field(default_factory=list)
+    unresolved_ja: list[str] = Field(default_factory=list)
+    summary_ja: str = ""
+
+    def prompt_block(self) -> str:
+        """直接の LLM の prompt に入れる「必ず守る条件」（物理名で書く）。"""
+
+        lines = [
+            "## AI要件確認で利用者と確かめた SQL の要件（必ず守る条件）",
+            f"- 使う表（FROM）: {'、'.join(self.tables)}（これ以外の表を使わない）",
+        ]
+        if self.joins:
+            lines.append(f"- 表の結合の条件: {' / '.join(self.joins)}")
+        for item in self.items:
+            if item.section in {"from"}:
+                continue
+            detail = []
+            if item.columns:
+                detail.append(f"列: {'、'.join(item.columns)}")
+            if item.period_range_ja:
+                detail.append(f"期間: {item.period_range_ja}")
+            if item.sql_hint:
+                detail.append(f"SQL: {item.sql_hint}")
+            suffix = f"（{' / '.join(detail)}）" if detail else ""
+            lines.append(f"- {item.section_label_ja} {item.label_ja}: {item.value_ja}{suffix}")
+        if self.unresolved_ja:
+            lines.append("- 確認しないまま進めた項目（質問と Schema から妥当に判断する）:")
+            lines.extend(f"  - {value}" for value in self.unresolved_ja)
+        return "\n".join(lines)
+
+    def question_with_requirements(self, question: str) -> str:
+        """Select AI / Select AI Agent に渡す、明確な質問の文（要件を短い条件で添える）。"""
+
+        conditions = [f"使う表は {'、'.join(self.tables)} だけ"]
+        if self.joins:
+            conditions.append(f"結合の条件は {' / '.join(self.joins)}")
+        for item in self.items:
+            if item.section in {"from", "join"}:
+                continue
+            if item.sql_hint:
+                conditions.append(f"{item.label_ja}: {item.sql_hint}")
+            elif item.period_range_ja:
+                conditions.append(f"{item.label_ja}: {item.period_range_ja}")
+        return (
+            question.strip()
+            + "\n\n必ず守る条件:\n"
+            + "\n".join(f"- {value}" for value in conditions)
+        )
+
+
 class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
@@ -1240,6 +1315,10 @@ class JobCreateRequest(BaseModel):
     # 画面が送信の前に決める job ID（UUID。#900）。送信の応答が届かなかった（timeout・通信断）
     # ときも、画面はこの ID でジョブを取り直して表示を続けられる。同じ ID の再送は同じジョブを返す。
     client_job_id: UUID | None = None
+    # AI要件確認で反映した session（#1439）。job の作成の API が session を検査し、構造化した要件を
+    # `sql_requirement` に入れる（画面が送った `sql_requirement` は使わない）。
+    requirement_session_id: str | None = Field(default=None, max_length=128)
+    sql_requirement: SqlRequirementSpec | None = None
 
     @field_validator("question")
     @classmethod
@@ -1265,6 +1344,18 @@ class JobCreateRequest(BaseModel):
     def is_chat_turn(self) -> bool:
         """チャット（会話）のターンか（旧版のチャットは `generation_only` だけ。#1176）。"""
         return self.chat or self.generation_only
+
+    @property
+    def generation_question(self) -> str:
+        """SQL の生成に使う質問の文。
+
+        AI要件確認を反映したジョブは、確かめた質問の文（`sql_requirement.clarified_question`）。
+        チャットのターンは画面に利用者の質問を残し、生成だけを確かめた文で行う（#1442）。
+        """
+        requirement = self.sql_requirement
+        if requirement is not None and requirement.clarified_question.strip():
+            return requirement.clarified_question
+        return self.question
 
     @property
     def ontology_grounding_requested(self) -> bool:
@@ -1341,6 +1432,9 @@ class JobData(BaseModel):
     # 実行に使った業務プロファイル（未指定のジョブは "default"）。MCP の結果に載せる（#231）。
     profile_id: str = ""
     question: str = ""
+    # AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に「確かめた要件」として
+    # 出す。#1442）。
+    requirement_question: str = ""
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False

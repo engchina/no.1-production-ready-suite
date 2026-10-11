@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { mockChatRequirement } from "./_helpers/chat-requirement";
 
 /**
  * チャットの会話の履歴のページング（3 製品共通。#1265）。API はカーソルと全件数を返し、画面は前へ戻るカーソルを
@@ -28,6 +29,8 @@ const conversations = Array.from({ length: 14 }, (_, index) => ({
 async function setup(page: Page) {
   const requests: string[] = [];
   await mockDatabaseGateReady(page);
+  // 送信の前の要件の検査（#1442）は「確認が要らない」で、聞かずに SQL を生成する。
+  await mockChatRequirement(page);
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({ json: { data: { items: [profile], total: 1, next_cursor: null } } }),
   );

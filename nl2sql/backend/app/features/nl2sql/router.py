@@ -49,6 +49,7 @@ from .models import (
     AgentTeamRunData,
     AgentTeamRunRequest,
     AgentToolRunRequest,
+    AllowedObjects,
     AnalyzeData,
     AnalyzeRequest,
     AnnotationApplyData,
@@ -480,6 +481,56 @@ def execute(req: ExecuteRequest, request: Request) -> ApiResponse[QueryResults]:
     return ApiResponse(data=results)
 
 
+def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequest:
+    """AI要件確認で反映した要件を job に入れる（#1439。画面が送った要件の本文は使わない）。
+
+    session を検査し（本人・同じ業務プロファイル・反映済み・同じ質問の文）、構造化した要件を
+    `sql_requirement` に、要件で選んだ表を `allowed_objects` の範囲にする。
+    チャットのターン（#1442）は、チャットで確かめた session・同じ会話の続き・利用者が送った
+    質問の文と同じものだけを受け付ける。
+    """
+
+    req = req.model_copy(update={"sql_requirement": None})
+    session_id = (req.requirement_session_id or "").strip()
+    if not session_id:
+        return req
+    from .ontology_router import ontology_runtime
+    from .ontology_service import OntologyNotFoundError, OntologyServiceError
+
+    try:
+        spec = ontology_runtime.applied_requirement_spec(
+            session_id,
+            actor_user_uuid=str(getattr(principal, "user_uuid", "")),
+            actor_is_system_admin=principal is None
+            or bool(getattr(principal, "is_system_admin", False)),
+            profile_id=req.profile_id or "",
+            question=req.question,
+            chat=req.is_chat_turn,
+            previous_job_id=req.previous_job_id,
+        )
+    except OntologyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message_ja) from exc
+    except OntologyServiceError as exc:
+        raise HTTPException(status_code=409, detail=exc.message_ja) from exc
+    requested = {name for name in req.allowed_objects.table_names if name.strip()}
+    tables = [table for table in spec.tables if not requested or table in requested]
+    if not tables:
+        raise HTTPException(
+            status_code=409,
+            detail="AI要件確認で選んだ表が、今回の対象の表に含まれていません。",
+        )
+    allowed = AllowedObjects(
+        table_names=tables,
+        columns={
+            table: columns
+            for table, columns in req.allowed_objects.columns.items()
+            if table in tables
+        },
+        enforce_table_scope=True,
+    )
+    return req.model_copy(update={"sql_requirement": spec, "allowed_objects": allowed})
+
+
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
 def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
     """NL2SQL の SQL 生成・実行の job を開始する。"""
@@ -497,6 +548,7 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         # チャットは実行の権限が無ければ生成だけにする（画面は実行しない理由を出す。#1176）。
         req = req.model_copy(update={"generation_only": True})
     _assert_profile_access(request, req.profile_id, default_profile=True)
+    req = _with_requirement(req, principal)
     try:
         actor_user_uuid = str(getattr(principal, "user_uuid", ""))
         return ApiResponse(

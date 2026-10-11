@@ -171,7 +171,7 @@ test("利用者の自然言語の入力とその実行を「検索」と呼ば�
   // AI 要件確認が利用者へ出す質問・選択肢・書き換えた質問（backend）も同じ。
   const clarificationPath = resolve(
     repositoryRoot,
-    "backend/app/features/nl2sql/ontology_clarification.py"
+    "backend/app/features/nl2sql/sql_requirement.py"
   );
   const clarification = readFileSync(clarificationPath, "utf8");
   const clarificationViolations = Array.from(

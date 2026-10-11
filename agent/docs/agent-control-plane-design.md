@@ -248,12 +248,28 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   `AGENT_NL2SQL_JOB_WAIT_SECONDS`（既定 300 秒、0 で待たない）で、1 回の待ちごとに Run がキャンセル・終了していないかを
   確かめる。上限を超えた・Run が終わった・続きの取得に失敗したときは最後の結果（`running` と `job_id`）を返す。
   SDK の function tool の timeout は待つ分を足した値にする。外部の MCP 接続のツールは対象外。
+- **NL2SQL の AI要件確認（#1441）**: `nl2sql_query` は SQL を作る前に AI要件確認（NL2SQL の SQL 生成の画面と同じ session）で
+  要件を確かめ、足りない・明確でない情報があれば SQL を作らずに `status=needs_clarification` と `requirement.question`
+  （質問・候補・理由。表・列は物理名）を 1 つだけ返す。Agent はモデルへの結果に `next_step`（`ask_clarification`。RAG の確認と
+  同じ形）を足し、確かめ中の問い（`kind=nl2sql`・`requirement_session_id`・候補）を支援タスクの状態に残す。利用者が答えた次の Run は、
+  指示の「データベース（NL2SQL）の確かめ中の問い」に従い `requirement_session_id` と `answer` を付けて呼び直す。確認の要るものが
+  無くなり SELECT・FROM が明確になると、NL2SQL が要件を反映してジョブで SQL を作る（確認が要らなければ聞かずに進む）。
+  Agent のチャットに「AI要件確認」のボタンは置かない。回答の対応は `needs_clarification`（`basis=nl2sql_clarification`）。
+- **確認の取り消し（#1441・#1445）**: 確かめ中の確認（NL2SQL の AI要件確認・RAG の `needs_clarification` / 業務ガイドの clarify）は、
+  チャットの「データベースの検索は不要」「資料の検索は不要」（`POST /api/runs` の `clarification_cancel`。同じ部品）か、確かめ中の問いへの
+  取り消しの文（「データベースは関係ない」「資料は関係ない」「確認はやめて」など。`clarification_cancel.message_cancel_kinds` の
+  決定的な判定）で取り消せる。取り消した Run は、その種類のツール（`nl2sql_*` / `rag_*`）をモデルに渡さず、ほかの手段で続けるか
+  意図を聞き直す指示を足す。NL2SQL は Control Plane が `nl2sql_cancel_requirement` で session を閉じる（step に残し、予算に数えない）。
+  RAG を取り消した回答は資料と照らし合わせない（`answer_validation` の `skipped` / `rag_declined`）。記録は Run の metadata
+  `clarification_cancel`・イベント・支援タスクの状態の `clarification_cancellations` に同じ形
+  （`{kind, trigger, run_id, at, questions, requirement_sessions}`）で残す。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 630 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）
-  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 120 秒。NL2SQL の
+  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 300 秒。NL2SQL の
   `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って
-  job_id を返す。呼び出しの中では LLM・Select AI を呼ばないため推論の量に左右されない。45 秒に、HTTP の往復・ジョブの登録・DB の負荷の
-  余裕 75 秒を足した 120 秒にする〔#1432。余裕 15 秒の 60 秒では足りないことがあった〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
+  job_id を返す。`nl2sql_query` は SQL を作る前に AI要件確認〔LLM。下書きと回答の後の再検査で最大 2 回。#1441〕を呼び、その分だけ
+  ジョブを待つ秒数を減らす。45 秒と AI要件確認の 180 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 300 秒にする
+  〔#1432 の 120 秒に AI要件確認の分を足した〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
   ジョブの完了は `AGENT_NL2SQL_JOB_WAIT_SECONDS` まで待つ。既定の SQL の生成〔Select AI の 1 回〕と実行は NL2SQL の DB の呼び出しの
   上限〔120 秒〕で打ち切られる。#1430）は接続 `rag` / `nl2sql` の初期値（タイムアウト秒の上限は 900 秒。SDK の function tool の
   timeout は、接続の timeout〔`nl2sql` はジョブを待つ分を足した値〕の 2 倍）。`backend/.env.example` は両方の値を明示する（#1430）。画面で保存済みの接続はその値のまま（#1425 より前に保存した `rag` の 60 秒は、
@@ -481,8 +497,10 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
 その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠と `rag_read_source` / `rag_read_document` /
 `rag_read_section` で読んだ chunk の参照（#1345。多段の質問は段の事実を読んで確かめるため。回答が引用した根拠（`chunk_id` を回答に
-書いたもの）を先に、残りは新しい呼び出しから順、重複なし、接続ごとに 30 件まで。#1364。前の段の根拠を上限で
-落とさない）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
+書いたもの。#1364）、回答の本文に固有の特徴（ID・コード・引用・見出し・同じ文字の並び・「組織規程 第 4 章」のような文書名＋章節の番号の参照を根拠の `section_path` と文書名に照らしたもの。多くの根拠が共有する
+特徴は数えない）で当たった根拠（#1451。`chunk_id` を書かないモデルでも回答が使った根拠を見分ける）を先に、残りは
+新しい呼び出しから順で、`rag_read_document` / `rag_read_section` でまとめて読んだ chunk のうち回答に当たらないものは
+検索の根拠の後ろ。重複なし、接続ごとに 30 件まで。前の段の根拠を上限で落とさない）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
 分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
 影響範囲・承認。#1276）も動かす。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
@@ -499,7 +517,7 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 接続が検証を提供しなければ、`unvalidated` にして回答は消さずに「この回答は検証できませんでした。」を足す。RAG の根拠を
 使っていない Run は、Agent が RAG の根拠のツールを持てば `unvalidated`（`no_rag_evidence`）にして「資料と照らし合わせて
 確かめていません」を足し、持たなければ `skipped` で回答はそのまま。ただし利用者への確認の質問だけの回答は、
-資料の主張を含まないので `skipped`（`clarification_only`）にして注記しない（#1306）。主張ではない段落（見出し・
+資料の主張を含まないので `skipped`（`clarification_only`）にして注記しない（#1306。質問の前置き〔「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」〕と、答え方の案内・確かめる理由の括弧〔「（「個別」または「グループ」でお答えください。…）」〕も質問の一部として扱う。操作・数量・逆接を含む文は除く。#1454）。主張ではない段落（見出し〔句点で終わらない短い名詞句〔「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」。項目・区分・資料の名前か「…とき」「…か」で終わり、述語・操作・数量・言い切りの「は」を含まないもの〕と、以降の箇条書きを導くだけの導入の文〔「根拠は次のとおりです。」〕・礼の定型の文を含む。「1. 運行管理課長」「重要度は A です」は主張のまま。#1469。番号つきの行は段落だけでは決めず、次の行がその下の内容〔字下げした行・箇条書き〕のときだけ見出しにし、番号の行が続く一覧の項目〔「1. 変更の内容と理由」〕は主張のまま。`numbered_heading_lines`。#1481 / #1482。両方のテストが `platform/contracts/answer-passages/headings.json` の同じ事例で確かめる〕・
 出典の行〔「セクション:」「ページ:」などの位置のラベル・根拠の ID の括弧を含む。#1317。要素の定位子（`*Locator*: …`）・〔証拠 ID: …〕・文書名と場所の括弧だけの行〔「**システム変更手順書**（第 2章 申請）」〕も。場所の後に本文が続く行は主張のまま。#1370。規則は RAG と同じで、両方のテストが `platform/contracts/answer-passages/citation-lines.json` の同じ事例で確かめる〕・Markdown の表の区切りと
 見出しの行〔#1317。表の本文の行は主張のまま〕・利用者への質問・資料に記載が無いことだけを述べる文と答えられないと
 言い切る拒答の文〔#1317〕・「確かめられていない点」の節）は、RAG の判定にかかわらず外さない（#1306。`answer_passages`
@@ -517,7 +535,7 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 `rag_search` に拠らず業務ガイドの判断が人への引き継ぎなら `needs_human`、それ以外は Agent が自分で組み立てた回答として
 段落で決める（主張の段落〔最終の検証で外した段落と、実データの確認を促す段落〔RAG の判定 `data_confirmation` か、
 外していない `environment_check` の段落。#1317〕を除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、
-それ以外は拒答。主張があり、不足の印〔資料に記載が無い文・拒答の文・主張に添えた質問・「確かめられていない点」の節・
+それ以外は拒答。主張があり、不足の印〔資料に記載が無い文・拒答の文〔結論の段落が質問に答え〔補足の外の主張に、最終の検証が根拠で確かめた段落がある〕、不足の文が補足の段落〔見出しが「補足」「注記」などの節と「なお、」で始まる段落〕にだけあるときは、質問が求めない周辺の事柄の不足として印にせず、記録の `supplement_absence` だけを付ける。#1475〕・主張に添えた質問・「確かめられていない点」の節・
 根拠で確かめられない・矛盾として外した段落〔`unsupported` / `contradicted`。確かめが終わらなかった `unassessed` だけなら
 付けない。#1317〕・決定的な検査の error・実データの確認・業務ガイドの条件が分からないまま答えた〔`guide_conditions`。
 最後の `rag_search` の後の最も新しい `rag_lookup_guides`〔モデルか Control Plane の照合〕の最上位の業務ガイドの判断が

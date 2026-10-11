@@ -1,6 +1,13 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
+import {
+  REQUIREMENT_CLARIFIED_QUESTION,
+  REQUIREMENT_QUESTION,
+  REQUIREMENT_SESSION_ID,
+  requirementSessionData,
+  type RequirementStage,
+} from "./_helpers/requirement-session";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -400,416 +407,6 @@ function sessionData(status: string, withSql = false, confirmed = false, done = 
   };
 }
 
-function guidedSessionData(
-  ready: boolean,
-  withSql = false,
-  confirmed = false,
-  done = false
-) {
-  const clarifiedQuestion =
-    "今月の受注を対象に、結果には受注件数を表示してください。";
-  const data: ReturnType<typeof sessionData> & { clarification?: unknown; preview?: unknown } = sessionData(
-    ready ? (withSql ? "awaiting_sql_confirmation" : "awaiting_intent_confirmation") : "awaiting_intent_confirmation",
-    withSql,
-    confirmed,
-    done
-  );
-  const guidedSession = {
-    ...data.session,
-    status: done ? "done" : data.session.status,
-    clarification_mode: "guided",
-    current_intent_version: ready ? 2 : 1,
-    intents: ready
-      ? [{
-          ...intent,
-          version: 2,
-          question_effective: clarifiedQuestion,
-          time_range: { relative_expression: "今月" },
-        }]
-      : [intent],
-    clarification_turns: ready
-      ? [{
-          question: {
-            id: "question-time-range",
-            ambiguity_id: "ambiguity-time-range",
-            category: "time_range",
-            prompt_ja: "どの期間を対象にしますか？",
-            answer_kind: "single_select",
-            options: [],
-            allow_free_text: true,
-            blocking: true,
-          },
-          answer: {
-            question_id: "question-time-range",
-            selected_option_ids: ["option-this-month"],
-            free_text: "",
-          },
-          intent_version: 2,
-        }]
-      : [],
-  };
-  data.session = guidedSession;
-  if (withSql) {
-    data.preview = {
-      engine: "select_ai",
-      engine_meta: { profile: "NL2SQL_DEFAULT_PROFILE" },
-      sql: artifact.sql,
-      executable_sql: artifact.sql,
-      is_safe: true,
-      row_limit: 0,
-      note: "受注件数を集計します。",
-      recommendations: [],
-      rewritten_question: "受注件数を表示。期間は今月。",
-    };
-  }
-  data.clarification = ready
-    ? {
-        status: "ready_to_confirm",
-        current_question: null,
-        remaining_questions: [],
-        intent_summary: [
-          { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "user", confirmed: true },
-          { key: "time_range", label_ja: "期間", value_ja: "今月", source: "user", confirmed: true },
-        ],
-        required_total: 1,
-        required_confirmed: 1,
-        missing_required: [],
-        assumptions: [],
-        turn_count: 1,
-        manual_completion_required: false,
-        can_generate_sql: true,
-        schema_version: "guided_clarification_v1",
-        message_ja: "SQL 生成に必要な情報を確認できました。",
-      }
-    : {
-        status: "needs_answer",
-        current_question: {
-          id: "question-time-range",
-          ambiguity_id: "ambiguity-time-range",
-          category: "time_range",
-          prompt_ja: "どの期間を対象にしますか？",
-          reason_ja: "期間が未指定の集計は、期待と異なる範囲を集計する可能性があります。",
-          answer_kind: "single_select",
-          options: [
-            {
-              id: "option-this-month",
-              label_ja: "今月",
-              structured_value: { relative_expression: "今月" },
-              source: "default",
-              evidence_ja: "日付条件へ変換します。",
-            },
-          ],
-          allow_free_text: true,
-          blocking: true,
-        },
-        remaining_questions: [],
-        intent_summary: [
-          { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "user", confirmed: true },
-        ],
-        required_total: 1,
-        required_confirmed: 0,
-        missing_required: ["集計対象の期間を確認してください。"],
-        assumptions: [],
-        turn_count: 0,
-        manual_completion_required: false,
-        can_generate_sql: false,
-        schema_version: "guided_clarification_v1",
-        message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
-      };
-  return data;
-}
-
-function guidedOutputSessionData(ready: boolean) {
-  const data = guidedSessionData(ready);
-  const originalQuestion = "受注情報";
-  const clarifiedQuestion =
-    "受注を対象に、結果には受注状態、受注IDを表示してください。";
-  data.session.original_question = originalQuestion;
-  data.session.intents = data.session.intents.map((item) => ({
-    ...item,
-    question_original: originalQuestion,
-    question_effective: ready ? clarifiedQuestion : originalQuestion,
-  }));
-  const outputQuestion = {
-    id: "question-output-columns",
-    ambiguity_id: "ambiguity-output-columns",
-    category: "output",
-    prompt_ja: "結果に表示する項目を選んでください。",
-    reason_ja:
-      "質問だけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
-    answer_kind: "multi_select",
-    options: [
-      {
-        id: "option-order-status",
-        label_ja: "受注状態",
-        description_ja: "結果に「受注状態」を表示します。",
-        source: "ontology",
-        evidence_ja: "APP.ORDERS.STATUS",
-      },
-      {
-        id: "option-order-id",
-        label_ja: "受注ID",
-        description_ja: "結果に「受注ID」を表示します。",
-        source: "ontology",
-        evidence_ja: "APP.ORDERS.ORDER_ID",
-      },
-    ],
-    allow_free_text: true,
-    blocking: true,
-  };
-  if (!ready) {
-    data.clarification = {
-      status: "needs_answer",
-      current_question: outputQuestion,
-      remaining_questions: [outputQuestion],
-      intent_summary: [
-        { key: "entities", label_ja: "対象", value_ja: "受注", source: "user", confirmed: true },
-      ],
-      required_total: 1,
-      required_confirmed: 0,
-      missing_required: [outputQuestion.prompt_ja],
-      assumptions: [],
-      turn_count: 0,
-      manual_completion_required: false,
-      can_generate_sql: false,
-      schema_version: "guided_clarification_v1",
-      message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
-    };
-    return data;
-  }
-  data.clarification = {
-    status: "ready_to_confirm",
-    current_question: null,
-    remaining_questions: [],
-    intent_summary: [
-      { key: "entities", label_ja: "対象", value_ja: "受注", source: "user", confirmed: true },
-      {
-        key: "dimensions",
-        label_ja: "表示する項目",
-        value_ja: "受注状態、受注ID",
-        source: "user",
-        confirmed: true,
-      },
-    ],
-    required_total: 1,
-    required_confirmed: 1,
-    missing_required: [],
-    assumptions: [],
-    turn_count: 1,
-    manual_completion_required: false,
-    can_generate_sql: true,
-    schema_version: "guided_clarification_v1",
-    message_ja: "SQL 生成に必要な情報を確認できました。",
-  };
-  return data;
-}
-
-function guidedBusinessTargetSessionData(ready: boolean) {
-  const data = guidedSessionData(ready);
-  const businessTargetQuestion = {
-    id: "question-business-targets",
-    ambiguity_id: "ambiguity-business-targets",
-    category: "business_meaning",
-    prompt_ja: "どの業務対象について調べますか？",
-    reason_ja: "対象の候補が複数あるため、意図した対象をすべて選んでください。",
-    answer_kind: "multi_select",
-    options: [
-      {
-        id: "option-orders",
-        label_ja: "受注",
-        description_ja: "「受注」を対象として扱います。",
-        source: "ontology",
-        evidence_ja: "APP.ORDERS",
-      },
-      {
-        id: "option-customers",
-        label_ja: "顧客",
-        description_ja: "「顧客」を対象として扱います。",
-        source: "ontology",
-        evidence_ja: "APP.CUSTOMERS",
-      },
-    ],
-    allow_free_text: true,
-    blocking: true,
-  };
-  if (!ready) {
-    data.clarification = {
-      status: "needs_answer",
-      current_question: businessTargetQuestion,
-      remaining_questions: [businessTargetQuestion],
-      intent_summary: [],
-      required_total: 1,
-      required_confirmed: 0,
-      missing_required: [businessTargetQuestion.prompt_ja],
-      assumptions: [],
-      turn_count: 0,
-      manual_completion_required: false,
-      can_generate_sql: false,
-      schema_version: "guided_clarification_v1",
-      message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
-    };
-  }
-  return data;
-}
-
-function guidedInferredTargetSessionData(ready: boolean) {
-  const data = guidedSessionData(ready);
-  const originalQuestion = "一覧を表示";
-  const targetQuestion = {
-    id: "question-confirm-inferred-target",
-    summary_key: "entities",
-    category: "business_meaning",
-    prompt_ja: "対象は「部署」で合っていますか？",
-    reason_ja:
-      "AI が質問から補った解釈です。内容を確認し、異なる場合は正しい条件を入力してください。",
-    answer_kind: "single_select",
-    options: [
-      {
-        id: "option-confirm-inferred-target",
-        label_ja: "はい、この内容で進める",
-        description_ja: "部署",
-        source: "ontology",
-        evidence_ja: "physical_67c53135ab4290e53f2e7fef",
-      },
-    ],
-    allow_free_text: true,
-    blocking: true,
-  };
-  data.session.original_question = originalQuestion;
-  data.session.intents = data.session.intents.map((item) => ({
-    ...item,
-    question_original: originalQuestion,
-    question_effective: originalQuestion,
-    entities: [
-      {
-        id: "intent-department",
-        ontology_node_id: "business_entity_9531b8867ab66ed5de76d7bd",
-        name_ja: "部署",
-        role: "subject",
-        physical_object_ids: ["physical_67c53135ab4290e53f2e7fef"],
-      },
-    ],
-    metrics: [],
-    time_range: null,
-  }));
-  const inferredSession = {
-    ...data.session,
-    current_intent_version: ready ? 2 : 1,
-    clarification_turns: ready
-      ? [{
-          question: targetQuestion,
-          answer: {
-            question_id: targetQuestion.id,
-            selected_option_ids: [targetQuestion.options[0].id],
-            free_text: "",
-          },
-          intent_version: 2,
-        }]
-      : [],
-  };
-  data.session = inferredSession;
-  data.clarification = ready
-    ? {
-        status: "ready_to_confirm",
-        current_question: null,
-        remaining_questions: [],
-        intent_summary: [
-          { key: "entities", label_ja: "対象", value_ja: "部署", source: "user", confirmed: true },
-        ],
-        required_total: 1,
-        required_confirmed: 1,
-        missing_required: [],
-        assumptions: [],
-        turn_count: 1,
-        manual_completion_required: false,
-        can_generate_sql: true,
-        schema_version: "guided_clarification_v1",
-        message_ja: "SQL 生成に必要な情報を確認できました。",
-      }
-    : {
-        status: "needs_answer",
-        current_question: targetQuestion,
-        remaining_questions: [targetQuestion],
-        intent_summary: [
-          {
-            key: "entities",
-            label_ja: "対象",
-            value_ja: "部署",
-            source: "ontology",
-            confirmed: false,
-            technical_evidence_ja:
-              "business_entity_9531b8867ab66ed5de76d7bd, physical_67c53135ab4290e53f2e7fef",
-          },
-        ],
-        required_total: 1,
-        required_confirmed: 0,
-        missing_required: [targetQuestion.prompt_ja],
-        assumptions: [],
-        turn_count: 0,
-        manual_completion_required: false,
-        can_generate_sql: false,
-        schema_version: "guided_clarification_v1",
-        message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
-      };
-  return data;
-}
-
-function guidedLimitSessionData(withSql = false, confirmed = false, executed = false) {
-  const data = guidedSessionData(true, withSql, confirmed, executed);
-  const question = "受注件数を上位 10 件表示";
-  const limitedIntent = {
-    ...intent,
-    question_original: question,
-    question_effective: question,
-    limit: 10,
-  };
-  const limitedArtifact = {
-    ...artifact,
-    sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 10 ROWS ONLY",
-    semantic_graph: {
-      ...artifact.semantic_graph,
-      raw_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 10 ROWS ONLY",
-      limit: 10,
-    },
-  };
-  data.session.original_question = question;
-  data.session.intents = [limitedIntent];
-  data.session.sql_artifacts = withSql ? [limitedArtifact] : [];
-  data.session.current_sql_artifact_id = withSql ? limitedArtifact.id : null;
-  data.preview = withSql
-    ? {
-        engine: "select_ai",
-        engine_meta: { profile: "NL2SQL_DEFAULT_PROFILE" },
-        sql: limitedArtifact.sql,
-        executable_sql: limitedArtifact.sql,
-        is_safe: true,
-        row_limit: 10,
-        note: "受注件数を集計します。",
-        recommendations: [],
-        rewritten_question: question,
-      }
-    : null;
-  data.clarification = {
-    status: "ready_to_confirm",
-    current_question: null,
-    remaining_questions: [],
-    intent_summary: [
-      { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "ontology", confirmed: false },
-      { key: "limit", label_ja: "最大件数", value_ja: "10 件", source: "user", confirmed: true },
-    ],
-    required_total: 0,
-    required_confirmed: 0,
-    missing_required: [],
-    assumptions: [],
-    turn_count: 0,
-    manual_completion_required: false,
-    can_generate_sql: true,
-    schema_version: "guided_clarification_v1",
-    message_ja: "SQL 生成に必要な情報を確認できました。",
-  };
-  return data;
-}
-
 async function fulfill(route: Route, data: unknown) {
   await route.fulfill({
     status: 200,
@@ -820,6 +417,10 @@ async function fulfill(route: Route, data: unknown) {
 
 interface MockApiOptions {
   guidedStartDelayMs?: number;
+  /** AI要件確認の作成の応答（#1439）。 */
+  createStage?: RequirementStage;
+  /** 回答の応答。 */
+  answerStage?: RequirementStage;
 }
 
 async function waitForMockDelay(delayMs: number) {
@@ -829,15 +430,10 @@ async function waitForMockDelay(delayMs: number) {
 
 async function mockApi(
   page: Page,
-  guidedQuestion: "time" | "output" | "business" | "inferred" = "time",
   options: MockApiOptions = {},
 ) {
   const payloads: Record<string, unknown> = {};
   const guidedStartDelayMs = options.guidedStartDelayMs ?? 0;
-  const isGuidedLimitRequest = () =>
-    String((payloads.create as { question?: unknown } | undefined)?.question ?? "").includes(
-      "上位 10"
-    );
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -1135,33 +731,23 @@ async function mockApi(
       payloads.create = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string }).clarification_mode === "guided") {
         await waitForMockDelay(guidedStartDelayMs);
-        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData());
-        const guidedData = guidedQuestion === "output"
-          ? guidedOutputSessionData(false)
-          : guidedQuestion === "business"
-            ? guidedBusinessTargetSessionData(false)
-            : guidedQuestion === "inferred"
-              ? guidedInferredTargetSessionData(false)
-              : guidedSessionData(false);
-        return fulfill(route, guidedData);
+        return fulfill(route, requirementSessionData(options.createStage ?? "needs_answer"));
       }
       return fulfill(route, sessionData("awaiting_intent_confirmation"));
     }
     if (path.endsWith("/clarification-answers") && request.method() === "POST") {
       payloads.clarificationAnswer = request.postDataJSON();
-      const guidedData = guidedQuestion === "output"
-        ? guidedOutputSessionData(true)
-        : guidedQuestion === "business"
-          ? guidedBusinessTargetSessionData(true)
-          : guidedQuestion === "inferred"
-            ? guidedInferredTargetSessionData(true)
-            : guidedSessionData(true);
-      return fulfill(route, guidedData);
+      return fulfill(route, requirementSessionData(options.answerStage ?? "ready", 2));
+    }
+    if (path.endsWith("/apply") && request.method() === "POST") {
+      const body = request.postDataJSON() as { base_version: number };
+      payloads.apply = body;
+      return fulfill(route, requirementSessionData("applied", body.base_version));
     }
     if (path.endsWith("/cancel") && request.method() === "POST") {
       payloads.cancel = true;
-      const data = guidedSessionData(false);
-      data.session.status = "cancelled";
+      const data = requirementSessionData("needs_answer");
+      Object.assign(data.session, { status: "cancelled" });
       return fulfill(route, data);
     }
     if (path.endsWith("/intent") && request.method() === "PATCH") {
@@ -1170,26 +756,14 @@ async function mockApi(
     }
     if (path.endsWith("/generate-sql")) {
       payloads.generate = request.postDataJSON();
-      if ((payloads.create as { clarification_mode?: string } | undefined)?.clarification_mode === "guided") {
-        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData(true));
-        return fulfill(route, guidedSessionData(true, true));
-      }
       return fulfill(route, sessionData("awaiting_sql_confirmation", true));
     }
     if (path.endsWith("/confirm-sql")) {
       payloads.confirm = request.postDataJSON();
-      if ((payloads.create as { clarification_mode?: string } | undefined)?.clarification_mode === "guided") {
-        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData(true, true));
-        return fulfill(route, guidedSessionData(true, true, true));
-      }
       return fulfill(route, sessionData("awaiting_sql_confirmation", true, true));
     }
     if (path.endsWith("/execute")) {
       payloads.execute = request.postDataJSON();
-      if ((payloads.create as { clarification_mode?: string } | undefined)?.clarification_mode === "guided") {
-        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData(true, true, true));
-        return fulfill(route, guidedSessionData(true, true, true, true));
-      }
       return fulfill(route, sessionData("done", true, true, true));
     }
     if (path.endsWith("/ontology-view") && request.method() === "GET") {
@@ -1284,81 +858,137 @@ test("SQL の生成と実行は明示操作後だけ現在の質問とオント�
   await page.screenshot({ path: testInfo.outputPath("ontology-intent-editor.png"), fullPage: true });
 });
 
-test("AI要件確認は一問ずつ確認した内容でクエリを置き換える", async ({ page }, testInfo) => {
-  const payloads = await mockApi(page);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/query");
-
-  // 補足の説明は常設せず、ボタンの横の info アイコンを押すと出す（#901）。
-  const clarificationDescription = page.getByTestId("nl2sql-clarification-description");
-  await expect(clarificationDescription).toBeHidden();
-  await page.getByRole("button", { name: "AI要件確認の説明", exact: true }).click();
-  await expect(clarificationDescription).toHaveText(
-    "AIによるSQL生成の精度を高めるため、対話を通じて質問の対象・表示項目・条件を補い、より明確で具体的な内容に整えます。"
-  );
-  await expect(clarificationDescription).toBeVisible();
-  await page.locator("#nl2sql-question-input").click();
-  await expect(clarificationDescription).toBeHidden();
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+async function startRequirementCheck(page: Page, question = REQUIREMENT_QUESTION) {
+  await page.locator("#nl2sql-question-input").fill(question);
   await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel).toBeVisible();
-  const questionHeading = panel.getByRole("heading", { name: "どの期間を対象にしますか？" });
-  await expect(questionHeading).toBeFocused();
-  const nextButton = panel.getByRole("button", { name: "選んだ内容で次へ" });
-  const answerActions = nextButton.locator("..");
-  await expect(answerActions.getByRole("button")).toHaveCount(2);
-  await expect(answerActions.getByRole("button").nth(0)).toHaveText("選んだ内容で次へ");
-  await expect(answerActions.getByRole("button").nth(1)).toHaveText("確認を中止して閉じる");
-  await panel.getByRole("radio", { name: /今月/ }).check();
-  await nextButton.click();
+  return panel;
+}
 
-  await expect(panel.getByText("確認完了").first()).toBeVisible();
-  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
-  await expect(panel.getByText("今月", { exact: true })).toBeVisible();
-  await expect(panel.getByText("最大件数")).toHaveCount(0);
-  await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
-  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
-
-  const clarifiedQuestion =
-    "今月の受注を対象に、結果には受注件数を表示してください。";
-  const questionInput = page.locator("#nl2sql-question-input");
-  await expect(panel).toHaveCount(0);
-  await expect(questionInput).toHaveValue(clarifiedQuestion);
-  await expect(questionInput).toBeFocused();
-  await expect(page.getByText("確認内容を質問に反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
-  expect(payloads.generate).toBeUndefined();
-  expect(payloads.confirm).toBeUndefined();
-  expect(payloads.execute).toBeUndefined();
-  expect(payloads.create).toMatchObject({
-    question: "受注件数を表示",
-    profile_id: "default",
-    clarification_mode: "guided",
-  });
-  expect(payloads.clarificationAnswer).toMatchObject({
-    base_version: 1,
-    question_id: "question-time-range",
-    selected_option_ids: ["option-this-month"],
-  });
-  await runCurrentOntologySearch(page);
-  expect(payloads.job).toMatchObject({ question: clarifiedQuestion });
-  // 確認内容を反映して閉じた session は中止しない（中止の件数に数えない）。
-  expect(payloads.cancel).toBeUndefined();
+async function expectNoPageOverflow(page: Page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
-  await page.screenshot({ path: testInfo.outputPath("guided-clarification.png"), fullPage: true });
-});
+}
+
+{
+  // desktop（1280px）と mobile-375 の 2 つの project で動く。
+  test("AI要件確認は SQL の要件を欄ごとに見せ、1 問ずつ確かめて反映する", async ({ page }, testInfo) => {
+    const viewport = { name: testInfo.project.name };
+    const payloads = await mockApi(page);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/query");
+
+    // 補足の説明は常設せず、ボタンの横の info アイコンを押すと出す（#901）。
+    const clarificationDescription = page.getByTestId("nl2sql-clarification-description");
+    await expect(clarificationDescription).toBeHidden();
+    await page.getByRole("button", { name: "AI要件確認の説明", exact: true }).click();
+    await expect(clarificationDescription).toHaveText(
+      "質問と、データベースの Schema・業務プロファイル・用語集・オントロジーを合わせて、SQL を作るのに足りない情報・明確でない情報を 1 つずつ確認します。表のデータは読みません。"
+    );
+    await page.locator("#nl2sql-question-input").click();
+
+    const panel = await startRequirementCheck(page);
+    // 欄: SELECT / FROM と結合 / WHERE と期間 / GROUP BY / ORDER BY と件数 / WITH / そのほか。
+    const requirements = panel.getByTestId("nl2sql-clarification-requirements");
+    for (const group of [
+      "表示する項目（SELECT）",
+      "対象の表と結合（FROM・JOIN）",
+      "条件と期間（WHERE）",
+      "集計の単位（GROUP BY）",
+      "並び順と件数の上限（ORDER BY・FETCH FIRST）",
+      "WITH・サブクエリ",
+      "そのほか",
+    ]) {
+      await expect(requirements.getByRole("heading", { name: group, exact: true })).toBeVisible();
+    }
+    // 表・列は物理名（論理名は括弧）で示す。AI の推測は一覧に出し、1 つずつは聞かない。
+    const selectGroup = panel.getByTestId("nl2sql-requirement-group-select");
+    await expect(selectGroup.getByText("CUSTOMERS.REGION（地域）、ORDERS.AMOUNT（受注金額）")).toBeVisible();
+    await expect(selectGroup.getByText("AI の推測")).toBeVisible();
+    await expect(panel.getByTestId("nl2sql-requirement-group-from")).toContainText("APP.ORDERS（受注）、APP.CUSTOMERS（顧客）");
+    await expect(panel.getByTestId("nl2sql-requirement-group-subquery")).toContainText("なし");
+    await expect(panel.getByText("AI の再検査 0/3 回")).toBeVisible();
+
+    // 質問は 1 問ずつ（不足・あいまいだけ）。相対的な期間は具体的な日付の範囲で選ぶ。
+    const question = panel.getByTestId("nl2sql-clarification-question");
+    await expect(question).toHaveAttribute("data-item-key", "period_this_fiscal_year");
+    await expect(question.getByText("確認 1・残り 1 件")).toBeVisible();
+    const heading = question.getByRole("heading", { name: "「今年度」は、どの期間ですか？" });
+    await expect(heading).toBeFocused();
+    await expect(question).toContainText("基準日は実行日（2026-10-11）");
+    await expect(question.getByRole("radio")).toHaveCount(3);
+    await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toHaveCount(0);
+    const answerButton = question.getByRole("button", { name: "この内容で回答" });
+    await expect(answerButton).toBeDisabled();
+    await expect(answerButton.locator("..").getByRole("button")).toHaveText([
+      "この内容で回答",
+      "確認を中止して閉じる",
+    ]);
+    await page.screenshot({ path: testInfo.outputPath(`requirement-question-${viewport.name}.png`), fullPage: true });
+    await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-question-${viewport.name}.png`) });
+    await expectNoPageOverflow(page);
+
+    await question.getByRole("radio", { name: /2026-04-01〜2027-03-31/ }).check();
+    await answerButton.click();
+
+    // すべて答えたら、まとめ（書き直した質問・SQL の骨組み）を見せてから反映する。
+    await expect(panel.locator('[data-status-variant="success"]').filter({ hasText: "確認完了" })).toBeVisible();
+    await expect(panel.getByText("AI の再検査 1/3 回")).toBeVisible();
+    const summary = panel.getByTestId("nl2sql-clarification-summary");
+    await expect(summary.getByTestId("nl2sql-clarified-question")).toHaveText(REQUIREMENT_CLARIFIED_QUESTION);
+    const skeleton = summary.getByTestId("nl2sql-clarification-skeleton");
+    await expect(skeleton).toContainText("FROM APP.ORDERS");
+    await expect(skeleton).toContainText("JOIN APP.CUSTOMERS ON ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID");
+    await expect(skeleton).toContainText("WHERE ORDERS.ORDER_DATE >= DATE '2026-04-01'");
+    await expect(summary).toContainText("実行はせず、生成する SQL そのものでもありません");
+    await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`requirement-summary-${viewport.name}.png`), fullPage: true });
+    await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-summary-${viewport.name}.png`) });
+    await expectNoPageOverflow(page);
+
+    await panel.getByRole("button", { name: "要件を SQL の生成に反映" }).click();
+    const questionInput = page.locator("#nl2sql-question-input");
+    await expect(panel).toHaveCount(0);
+    await expect(questionInput).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
+    await expect(questionInput).toBeFocused();
+    await expect(page.getByTestId("nl2sql-requirement-active")).toContainText("AI要件確認の要件を SQL の生成に渡します");
+    expect(payloads.create).toMatchObject({
+      question: REQUIREMENT_QUESTION,
+      profile_id: "default",
+      clarification_mode: "guided",
+    });
+    expect(payloads.clarificationAnswer).toEqual({
+      base_version: 1,
+      item_id: "item-period",
+      selected_candidate_ids: ["candidate-fy-april"],
+      free_text: "",
+    });
+    expect(payloads.apply).toEqual({ base_version: 2 });
+    // 反映した session は閉じる（中止は送らない）。
+    expect(payloads.cancel).toBeUndefined();
+
+    // 構造化した要件は session の ID で SQL の生成に渡す。
+    await runCurrentOntologySearch(page);
+    expect(payloads.job).toMatchObject({
+      question: REQUIREMENT_CLARIFIED_QUESTION,
+      requirement_session_id: REQUIREMENT_SESSION_ID,
+    });
+    // 質問の文を書き換えたら、要件は渡さない。
+    await questionInput.fill(`${REQUIREMENT_CLARIFIED_QUESTION} 追記`);
+    await expect(page.getByTestId("nl2sql-requirement-dropped")).toBeVisible();
+    await runCurrentOntologySearch(page);
+    expect((payloads.job as Record<string, unknown>).requirement_session_id).toBeUndefined();
+    await expectNoPageOverflow(page);
+  });
+}
 
 test("AI要件確認の開始中は実処理に合わせて案内を切り替え経過時間を表示する", async ({ page }, testInfo) => {
-  await mockApi(page, "time", { guidedStartDelayMs: 1_500 });
+  await mockApi(page, { guidedStartDelayMs: 1_500 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
 
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
-  const panel = page.getByTestId("nl2sql-guided-clarification");
+  const panel = await startRequirementCheck(page);
   const progress = panel.getByTestId("nl2sql-guided-start-progress");
   const timer = panel.getByTestId("nl2sql-guided-start-progress-timer");
   await expect(progress).toBeVisible();
@@ -1377,29 +1007,24 @@ test("AI要件確認の開始中は実処理に合わせて案内を切り替え
 
   await expect(timer).toContainText(/00:0[1-9]/);
   await expect(visibleProgressLabel).toHaveText("利用する業務プロファイルを確定しています");
-  await expect(visibleProgressLabel).toHaveText("質問の確認項目を整理しています");
+  await expect(visibleProgressLabel).toHaveText("SQL の要件の下書きを作っています");
   await expect(timer).toContainText(/00:0[2-9]/);
   await page.screenshot({
     path: testInfo.outputPath("guided-clarification-progress.png"),
     fullPage: true,
   });
 
-  await expect(panel.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
   await expect(progress).toHaveCount(0);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(overflow).toBe(false);
+  await expectNoPageOverflow(page);
 });
 
 test("AI要件確認は開始処理の途中でも中止して閉じられる", async ({ page }, testInfo) => {
-  const payloads = await mockApi(page, "time", { guidedStartDelayMs: 1_500 });
+  const payloads = await mockApi(page, { guidedStartDelayMs: 1_500 });
   await page.goto("/query");
 
-  const originalQuestion = "受注件数を表示";
   const questionInput = page.locator("#nl2sql-question-input");
-  await questionInput.fill(originalQuestion);
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
-  const panel = page.getByTestId("nl2sql-guided-clarification");
+  const panel = await startRequirementCheck(page);
   await expect(panel.getByTestId("nl2sql-guided-start-progress")).toBeVisible();
   const closeButton = panel.getByRole("button", { name: "確認を中止して閉じる" });
   await expect(closeButton).toBeEnabled();
@@ -1410,241 +1035,95 @@ test("AI要件確認は開始処理の途中でも中止して閉じられる", 
   await closeButton.click();
 
   await expect(panel).toHaveCount(0);
-  await expect(questionInput).toHaveValue(originalQuestion);
+  await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
   expect(payloads.create).toBeUndefined();
   expect(payloads.clarificationAnswer).toBeUndefined();
 });
 
-test("AI要件確認は利用者が明示した最大件数を保ったままクエリへ反映する", async ({ page }) => {
-  const payloads = await mockApi(page);
-  await page.emulateMedia({ reducedMotion: "reduce" });
+test("AI要件確認は AI の推測を確認済みの一覧から直せる", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page, { answerStage: "corrected" });
   await page.goto("/query");
+  const panel = await startRequirementCheck(page);
 
-  await page.locator("#nl2sql-question-input").fill("受注件数を上位 10 件表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  const selectGroup = panel.getByTestId("nl2sql-requirement-group-select");
+  await selectGroup.getByRole("button", { name: "地域と受注金額の合計を直す" }).click();
+  const question = panel.getByTestId("nl2sql-clarification-question");
+  await expect(question).toHaveAttribute("data-item-key", "select_region_total");
+  await expect(question.getByText("直す項目: 地域と受注金額の合計")).toBeVisible();
+  await expect(question.getByText("今の内容: CUSTOMERS.REGION と SUM(ORDERS.AMOUNT)")).toBeVisible();
+  await expect(question.getByRole("button", { name: "直すのをやめる" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("requirement-correct.png"), fullPage: true });
 
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  await expect(panel.getByText("確認完了").first()).toBeVisible();
-  await expect(panel.getByText("最大件数")).toBeVisible();
-  await expect(panel.getByText("10 件", { exact: true })).toBeVisible();
-  await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
-  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を上位 10 件表示");
-  expect(payloads.generate).toBeUndefined();
-  expect(payloads.confirm).toBeUndefined();
-  expect(payloads.execute).toBeUndefined();
-  expect(payloads.create).toMatchObject({
-    question: "受注件数を上位 10 件表示",
-    profile_id: "default",
-    clarification_mode: "guided",
+  // やめると、もとの質問（期間）に戻る。
+  await question.getByRole("button", { name: "直すのをやめる" }).click();
+  await expect(question).toHaveAttribute("data-item-key", "period_this_fiscal_year");
+
+  await selectGroup.getByRole("button", { name: "地域と受注金額の合計を直す" }).click();
+  await question.getByLabel("その他（自由入力）").fill("CUSTOMERS.REGION と AVG(ORDERS.AMOUNT)");
+  await question.getByRole("button", { name: "直した内容で更新" }).click();
+  expect(payloads.clarificationAnswer).toEqual({
+    base_version: 1,
+    item_id: "item-select",
+    selected_candidate_ids: [],
+    free_text: "CUSTOMERS.REGION と AVG(ORDERS.AMOUNT)",
   });
+  const corrected = selectGroup.getByTestId("nl2sql-requirement-item");
+  await expect(corrected).toHaveAttribute("data-item-status", "answered");
+  await expect(corrected).toContainText("CUSTOMERS.REGION と AVG(ORDERS.AMOUNT)");
+  await expect(corrected.getByText("回答済み")).toBeVisible();
 });
 
-test("AI要件確認は推測した対象を利用者へ質問し内部IDを表示しない", async ({ page }, testInfo) => {
-  const payloads = await mockApi(page, "inferred");
-  await page.emulateMedia({ reducedMotion: "reduce" });
+test("AI要件確認は複数選択の質問を Checkbox で答える", async ({ page }) => {
+  const payloads = await mockApi(page, { createStage: "multi_select" });
   await page.goto("/query");
+  const panel = await startRequirementCheck(page);
 
-  await page.locator("#nl2sql-question-input").fill("一覧を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  await expect(
-    panel.getByRole("heading", { name: "対象は「部署」で合っていますか？" })
-  ).toBeFocused();
-  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toHaveCount(0);
-  await expect(panel.getByText("対象", { exact: true })).toHaveCount(0);
-  await expect(panel.getByText(/要確認|AIの推定/)).toHaveCount(0);
-  await expect(panel.getByText("確認完了")).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "確認内容を質問に反映" })).toHaveCount(0);
-  await expect(panel.getByText(/business_entity_|physical_/)).toHaveCount(0);
-  await expect(panel.getByText("データ項目の詳細")).toHaveCount(0);
-  await expect(panel.getByText("管理者・開発者向け")).toHaveCount(0);
-  await page.screenshot({
-    path: testInfo.outputPath("guided-inferred-target-pending.png"),
-    fullPage: true,
-  });
-
-  await panel.getByRole("radio", { name: /はい、この内容で進める/ }).check();
-  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
-
-  await expect(panel.getByText("確認完了").first()).toBeVisible();
-  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
-  await expect(panel.getByText("対象", { exact: true })).toBeVisible();
-  await expect(panel.getByText("部署", { exact: true })).toBeVisible();
-  await expect(panel.getByText("確認済み", { exact: true }).first()).toBeVisible();
-  await expect(panel.getByText(/要確認|AIの推定|business_entity_|physical_/)).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "確認内容を質問に反映" })).toBeEnabled();
+  const question = panel.getByTestId("nl2sql-clarification-question");
+  await expect(question.getByRole("heading", { name: "どの受注状態（ORDERS.STATUS）に絞りますか？" })).toBeVisible();
+  await expect(question.getByRole("checkbox")).toHaveCount(2);
+  await question.getByRole("checkbox", { name: /出荷済み/ }).check();
+  await question.getByRole("checkbox", { name: /取消/ }).check();
+  await expect(question.getByText("根拠: 列のコメント").first()).toBeVisible();
+  await question.getByRole("button", { name: "この内容で回答" }).click();
   expect(payloads.clarificationAnswer).toMatchObject({
-    question_id: "question-confirm-inferred-target",
-    selected_option_ids: ["option-confirm-inferred-target"],
-  });
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(overflow).toBe(false);
-  await page.screenshot({
-    path: testInfo.outputPath("guided-inferred-target-confirmation.png"),
-    fullPage: true,
+    item_id: "item-status",
+    selected_candidate_ids: ["candidate-shipped", "candidate-cancelled"],
   });
 });
 
-test("AI要件確認は内部診断を見せず表示項目を自然なクエリへ完全反映できる", async ({ page }, testInfo) => {
-  const payloads = await mockApi(page, "output");
-  await page.emulateMedia({ reducedMotion: "reduce" });
+test("AI要件確認は再検査の上限で残った項目を示し、残りを AI に任せて反映できる", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page, { answerStage: "limit" });
   await page.goto("/query");
+  const panel = await startRequirementCheck(page);
+  const question = panel.getByTestId("nl2sql-clarification-question");
+  await question.getByRole("radio", { name: /2026-04-01〜2027-03-31/ }).check();
+  await question.getByRole("button", { name: "この内容で回答" }).click();
 
-  await page.locator("#nl2sql-question-input").fill("受注情報");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
+  await expect(panel.getByText("AI の再検査は上限（3 回）に達しました。残った確認の項目: 金額の税", { exact: false })).toBeVisible();
+  await expect(question).toHaveAttribute("data-item-key", "other_currency");
+  // 残りに答えるか、SELECT と FROM が明確なので残りを AI に任せて反映するかを選べる。
+  const applyRemaining = question.getByRole("button", { name: "残りを AI に任せて反映" });
+  await expect(applyRemaining).toBeEnabled();
+  await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("requirement-limit.png"), fullPage: true });
+  await applyRemaining.click();
+  await expect(panel).toHaveCount(0);
+  expect(payloads.apply).toEqual({ base_version: 2 });
+});
 
-  const panel = page.getByTestId("nl2sql-guided-clarification");
+test("AI要件確認は SELECT と FROM が明確になるまで反映させない", async ({ page }, testInfo) => {
+  await mockApi(page, { createStage: "minimum" });
+  await page.goto("/query");
+  const panel = await startRequirementCheck(page, "いい感じに出して");
+
   await expect(
-    panel.getByRole("heading", { name: "結果に表示する項目を選んでください。" })
-  ).toBeFocused();
-  await expect(panel.getByText(/Embedding|Ontology|Schema/)).toHaveCount(0);
-  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
-  await expect(panel.getByText("確認済み", { exact: true })).toBeVisible();
-
-  await panel.getByRole("checkbox", { name: /受注状態/ }).check();
-  await panel.getByRole("checkbox", { name: /受注ID/ }).check();
-  await expect(panel.getByText(/APP\.ORDERS/)).toHaveCount(0);
-  await expect(panel.getByText("管理者・開発者向け")).toHaveCount(0);
-  const outputNextButton = panel.getByRole("button", { name: "選んだ内容で次へ" });
-  await outputNextButton.scrollIntoViewIfNeeded();
-  await page.screenshot({
-    path: testInfo.outputPath("guided-output-selection-question.png"),
-    fullPage: true,
-  });
-  await outputNextButton.click();
-
-  await expect(panel.getByText("表示する項目")).toBeVisible();
-  await expect(panel.getByText("受注状態、受注ID")).toBeVisible();
-  await expect(panel.getByText("確認済み", { exact: true }).first()).toBeVisible();
-  expect(payloads.clarificationAnswer).toMatchObject({
-    question_id: "question-output-columns",
-    selected_option_ids: ["option-order-status", "option-order-id"],
-  });
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(overflow).toBe(false);
-  await page.screenshot({ path: testInfo.outputPath("guided-output-selection.png"), fullPage: true });
-  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
-  const clarifiedQuestion =
-    "受注を対象に、結果には受注状態、受注IDを表示してください。";
-  const questionInput = page.locator("#nl2sql-question-input");
-  await expect(questionInput).toHaveValue(clarifiedQuestion);
-  await questionInput.scrollIntoViewIfNeeded();
-  await page.screenshot({
-    path: testInfo.outputPath("guided-output-natural-query.png"),
-    fullPage: true,
-  });
-  await runCurrentOntologySearch(page);
-  expect(payloads.job).toMatchObject({ question: clarifiedQuestion });
-});
-
-test("AI要件確認は複数の業務対象をCheckboxで選択できる", async ({ page }, testInfo) => {
-  const payloads = await mockApi(page, "business");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/query");
-
-  await page.locator("#nl2sql-question-input").fill("情報を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  await expect(
-    panel.getByRole("heading", { name: "どの業務対象について調べますか？" })
-  ).toBeFocused();
-  await expect(panel.getByText("意図した対象をすべて選んでください。", { exact: false })).toBeVisible();
-  await expect(panel.getByRole("radio")).toHaveCount(0);
-
-  await panel.getByRole("checkbox", { name: /受注/ }).check();
-  await panel.getByRole("checkbox", { name: /顧客/ }).check();
-  await page.screenshot({
-    path: testInfo.outputPath("guided-business-target-multiselect.png"),
-    fullPage: true,
-  });
-  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
-
-  expect(payloads.clarificationAnswer).toMatchObject({
-    question_id: "question-business-targets",
-    selected_option_ids: ["option-orders", "option-customers"],
-  });
-});
-
-test("AI要件確認の残りの必須項目は途中で失敗しても確定した分を画面に残す", async ({ page }) => {
-  await mockApi(page);
-  const timeQuestion = (
-    guidedSessionData(false).clarification as { current_question: Record<string, unknown> }
-  ).current_question;
-  const granularityQuestion = {
-    id: "question-granularity",
-    ambiguity_id: "ambiguity-granularity",
-    category: "granularity",
-    prompt_ja: "どの単位で集計しますか？",
-    reason_ja: "日別・月別など、選んだ単位で結果のまとまり方が変わります。",
-    answer_kind: "single_select",
-    options: [
-      { id: "option-month", label_ja: "月別", structured_value: "month", source: "default" },
-    ],
-    allow_free_text: true,
-    blocking: true,
-  };
-  const manualSession = (version: number, questions: Array<Record<string, unknown>>) => {
-    const data = guidedSessionData(false);
-    data.session.current_intent_version = version;
-    data.clarification = {
-      ...(data.clarification as Record<string, unknown>),
-      current_question: questions[0],
-      remaining_questions: questions,
-      required_total: 2,
-      required_confirmed: 2 - questions.length,
-      turn_count: 4 + (2 - questions.length),
-      manual_completion_required: true,
-    };
-    return data;
-  };
-  const answers: Array<Record<string, unknown>> = [];
-  // mockApi より後に登録した route が優先される。
-  await page.route("**/api/nl2sql/query-sessions", async (route) => {
-    if (route.request().method() !== "POST") return route.fallback();
-    await fulfill(route, manualSession(1, [timeQuestion, granularityQuestion]));
-  });
-  await page.route("**/api/nl2sql/query-sessions/*/clarification-answers", async (route) => {
-    const body = route.request().postDataJSON() as Record<string, unknown>;
-    answers.push(body);
-    if (answers.length === 1) {
-      return fulfill(route, manualSession(2, [granularityQuestion]));
-    }
-    if (answers.length === 2) {
-      return route.fulfill({
-        status: 422,
-        contentType: "application/json",
-        body: JSON.stringify({ error_messages: ["回答を反映できませんでした。"] }),
-      });
-    }
-    const ready = guidedSessionData(true);
-    ready.session.current_intent_version = 3;
-    return fulfill(route, ready);
-  });
-  await page.goto("/query");
-
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  await expect(panel.getByRole("heading", { name: "残りの必須項目" })).toBeVisible();
-  await panel.getByRole("radio", { name: /今月/ }).check();
-  await panel.getByRole("radio", { name: /月別/ }).check();
-  await panel.getByRole("button", { name: "必須項目を確認" }).click();
-
-  // 1 件目は確定済み。画面は 2 件目だけを残し、入力した回答も保つ。
-  await expect(panel.getByText("回答を反映できませんでした。")).toBeVisible();
-  await expect(panel.getByRole("radio", { name: /今月/ })).toHaveCount(0);
-  await expect(panel.getByRole("radio", { name: /月別/ })).toBeChecked();
-  await panel.getByRole("button", { name: "必須項目を確認" }).click();
-
-  await expect(panel.getByText("確認完了").first()).toBeVisible();
-  expect(answers.map((item) => [item.base_version, item.question_id])).toEqual([
-    [1, "question-time-range"],
-    [2, "question-granularity"],
-    [2, "question-granularity"],
-  ]);
+    panel.getByText("SELECT（何を表示するか）と FROM（どの表から）が明確になるまで、SQL の生成に進めません。")
+  ).toBeVisible();
+  const question = panel.getByTestId("nl2sql-clarification-question");
+  await expect(question.getByRole("checkbox", { name: /APP\.ORDERS（受注）/ })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "残りを AI に任せて反映" })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("requirement-minimum.png"), fullPage: true });
 });
 
 // 375px ではサイドナビが畳まれるため、ナビのリンクと同じ client-side の遷移を history で起こす。
@@ -1661,10 +1140,8 @@ test("AI要件確認は別の画面へ移って戻ると同じ確認を続けら
   await page.goto("/query");
 
   const questionInput = page.locator("#nl2sql-question-input");
-  await questionInput.fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  const heading = panel.getByRole("heading", { name: "どの期間を対象にしますか？" });
+  const panel = await startRequirementCheck(page);
+  const heading = panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" });
   await expect(heading).toBeVisible();
   // 確認は開始時の質問で進むため、確認中は質問の入力と「新しい質問を開始」を使えない。
   await expect(questionInput).toBeDisabled();
@@ -1675,17 +1152,15 @@ test("AI要件確認は別の画面へ移って戻ると同じ確認を続けら
   await expect(panel).toBeHidden();
   await navigateInApp(page, "/query");
   await expect(heading).toBeVisible();
-  await expect(questionInput).toHaveValue("受注件数を表示");
+  await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
   expect(payloads.cancel).toBeUndefined();
 });
 
 test("AI要件確認は作成の途中で閉じても、作成された確認をサーバーで中止する", async ({ page }) => {
-  const payloads = await mockApi(page, "time", { guidedStartDelayMs: 1_000 });
+  const payloads = await mockApi(page, { guidedStartDelayMs: 1_000 });
   await page.goto("/query");
 
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-  const panel = page.getByTestId("nl2sql-guided-clarification");
+  const panel = await startRequirementCheck(page);
   // 作成の request がサーバーへ届いた後（応答の前）に閉じる。
   await expect.poll(() => payloads.create, { timeout: 10_000 }).toBeDefined();
   await panel.getByRole("button", { name: "確認を中止して閉じる" }).click();
@@ -1697,15 +1172,17 @@ test("AI要件確認の途中で再読込するとサーバーの確認を中止
   const payloads = await mockApi(page);
   await page.goto("/query");
 
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-  await expect(
-    page.getByTestId("nl2sql-guided-clarification").getByRole("heading", { name: "どの期間を対象にしますか？" })
-  ).toBeVisible();
+  const panel = await startRequirementCheck(page);
+  await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
   expect(payloads.cancel).toBeUndefined();
 
+  // 再読込の途中の keepalive の request は、route の mock に届く前に navigation で落ちることがある
+  // （main でも 6 回中 3 回）。画面が中止を送ったことを request で確かめる。
+  const cancelRequest = page.waitForRequest(
+    (request) => request.method() === "POST" && request.url().endsWith(`/query-sessions/${REQUIREMENT_SESSION_ID}/cancel`)
+  );
   await page.reload();
-  await expect.poll(() => payloads.cancel, { timeout: 10_000 }).toBe(true);
+  await cancelRequest;
 });
 
 test("AI要件確認は期限切れで終わった確認の質問を出さず、理由と閉じるだけを出す", async ({ page }, testInfo) => {
@@ -1722,23 +1199,24 @@ test("AI要件確認は期限切れで終わった確認の質問を出さず、
   );
   await page.route(/\/api\/nl2sql\/query-sessions\/[^/]+$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    const data = guidedSessionData(false);
-    data.session.status = "cancelled";
-    Object.assign(data.session, { error_code: "QUERY_SESSION_EXPIRED", error_message_ja: expiredMessage });
+    const data = requirementSessionData("needs_answer");
+    Object.assign(data.session, {
+      status: "cancelled",
+      error_code: "QUERY_SESSION_EXPIRED",
+      error_message_ja: expiredMessage,
+    });
     await fulfill(route, data);
   });
   await page.goto("/query");
 
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  await panel.getByRole("radio", { name: /今月/ }).check();
-  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
+  const panel = await startRequirementCheck(page);
+  await panel.getByRole("radio", { name: /2026-04-01〜2027-03-31/ }).check();
+  await panel.getByRole("button", { name: "この内容で回答" }).click();
 
   await expect(panel.getByText(expiredMessage)).toHaveCount(1);
-  await expect(panel.getByRole("heading", { name: "どの期間を対象にしますか？" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "選んだ内容で次へ" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "確認内容を質問に反映" })).toHaveCount(0);
+  await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "この内容で回答" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification-expired.png"), fullPage: true });
 
   // 終了済みの確認は、中止を送らずに閉じる。
@@ -1747,32 +1225,25 @@ test("AI要件確認は期限切れで終わった確認の質問を出さず、
   expect(payloads.cancel).toBeUndefined();
 });
 
-test("AI要件確認の中止は主操作の右側から元のクエリを保って閉じる", async ({ page }) => {
+test("AI要件確認の中止は主操作の右側から元の質問を保って閉じる", async ({ page }) => {
   const payloads = await mockApi(page);
   await page.goto("/query");
 
-  const originalQuestion = "受注件数を表示";
   const questionInput = page.locator("#nl2sql-question-input");
-  await questionInput.fill(originalQuestion);
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
-  const panel = page.getByTestId("nl2sql-guided-clarification");
-  const nextButton = panel.getByRole("button", { name: "選んだ内容で次へ" });
-  const closeButton = panel.getByRole("button", { name: "確認を中止して閉じる" });
-  await expect(nextButton.locator("..").getByRole("button")).toHaveText([
-    "選んだ内容で次へ",
-    "確認を中止して閉じる",
-  ]);
+  const panel = await startRequirementCheck(page);
+  const closeButton = panel
+    .getByTestId("nl2sql-clarification-question")
+    .getByRole("button", { name: "確認を中止して閉じる" });
   await closeButton.click();
 
   await expect(panel).toHaveCount(0);
-  await expect(questionInput).toHaveValue(originalQuestion);
+  await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
   expect(payloads.cancel).toBe(true);
   expect(payloads.clarificationAnswer).toBeUndefined();
 });
 
 for (const storageBlocked of [false, true]) {
-test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${storageBlocked}）`, async ({ page }, testInfo) => {
+test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${storageBlocked}）`, async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   const allProfile = {
     ...profile,
@@ -1830,7 +1301,7 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
             score: 0.52,
             matched_scenarios_ja: [],
             matched_terms: [],
-            reasons_ja: ["全体検索として利用できます。"],
+            reasons_ja: ["全体として利用できます。"],
           },
         ],
         expires_at: "2026-07-19T12:15:00Z",
@@ -1856,18 +1327,15 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
 
   await page.goto("/query");
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
-  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
-
-  const panel = page.getByTestId("nl2sql-guided-clarification");
+  const panel = await startRequirementCheck(page);
   await expect(panel.getByRole("group", { name: "どの業務プロファイルで確認しますか？" })).toBeVisible();
   await panel.getByRole("radio", { name: /標準プロファイル/ }).check();
   await panel.getByRole("button", { name: "このProfileで開始" }).click();
-  await expect(panel.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
   expect(payloads.profileConfirmation).toMatchObject({ selected_profile_id: "default" });
   expect(payloads.create).toMatchObject({ profile_id: "default", clarification_mode: "guided" });
-  await panel.getByRole("radio", { name: /今月/ }).check();
-  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
+  await panel.getByRole("radio", { name: /2026-04-01〜2027-03-31/ }).check();
+  await panel.getByRole("button", { name: "この内容で回答" }).click();
   if (storageBlocked) {
     await page.evaluate(() => {
       const original = Storage.prototype.setItem;
@@ -1877,32 +1345,33 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
       };
     });
   }
-  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
+  await panel.getByRole("button", { name: "要件を SQL の生成に反映" }).click();
   if (storageBlocked) {
     await expect(panel).toBeVisible();
     await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "all");
-    await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
     expect(payloads.job).toBeUndefined();
-    await expect(page.getByText("確認内容を質問に反映しました。内容を確認して検索を実行してください。")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("guided-profile-storage-error.png"), fullPage: true });
     return;
   }
   await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
-  const clarified = "今月の受注を対象に、結果には受注件数を表示してください。";
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
   await expect(page.locator("#nl2sql-question-input")).toBeFocused();
   expect(payloads.job).toBeUndefined();
   // Profile ごとの草稿を維持し、確認した Profile の質問を再読込でも復元する。
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
+  await runCurrentOntologySearch(page);
+  expect(payloads.job).toMatchObject({
+    profile_id: "default",
+    question: REQUIREMENT_CLARIFIED_QUESTION,
+    requirement_session_id: REQUIREMENT_SESSION_ID,
+  });
   await page.reload();
   await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
-  expect(payloads.job).toBeUndefined();
-  await runCurrentOntologySearch(page);
-  expect(payloads.job).toMatchObject({ profile_id: "default", question: clarified });
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
   await page.screenshot({ path: testInfo.outputPath("guided-profile-applied.png"), fullPage: true });
 });
 }

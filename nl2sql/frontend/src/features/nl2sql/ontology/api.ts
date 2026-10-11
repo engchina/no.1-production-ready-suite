@@ -18,6 +18,7 @@ import type {
   QuerySessionExecuteRequest,
   QuerySessionGenerateSqlRequest,
   QuerySessionSqlConfirmationRequest,
+  RequirementApplyRequest,
 } from "./types";
 import { apiFetch } from "../../../lib/api.ts";
 import { API_TIMEOUT_MS } from "../../../lib/requestPolicy.ts";
@@ -90,8 +91,8 @@ function normalizeQuerySession(value: unknown): QuerySession {
     performance_check: isRecord(value.performance_check)
       ? (value.performance_check as unknown as QuerySession["performance_check"])
       : null,
-    clarification: isRecord(value.clarification)
-      ? (value.clarification as unknown as QuerySession["clarification"])
+    requirement_state: isRecord(value.requirement_state)
+      ? (value.requirement_state as unknown as QuerySession["requirement_state"])
       : null,
   };
 }
@@ -210,6 +211,16 @@ export function answerQuerySessionClarification(
   options?: RequestOptions
 ): Promise<QuerySession> {
   return request<unknown>(querySessionPath(sessionId, "clarification-answers"), "POST", payload, options).then(
+    normalizeQuerySession
+  );
+}
+
+export function applyQuerySessionRequirement(
+  sessionId: string,
+  payload: RequirementApplyRequest,
+  options?: RequestOptions
+): Promise<QuerySession> {
+  return request<unknown>(querySessionPath(sessionId, "apply"), "POST", payload, options).then(
     normalizeQuerySession
   );
 }

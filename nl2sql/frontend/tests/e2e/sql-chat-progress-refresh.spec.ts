@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { mockChatRequirement } from "./_helpers/chat-requirement";
 import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 
 // #1160: チャットの回答の作成中に、処理の経過と回答が自動で更新されなくなる不具合の回帰テスト。
@@ -102,6 +103,8 @@ function secondTurn(phase: Phase, createdAt: string) {
 
 async function setup(page: Page): Promise<State> {
   await mockDatabaseGateReady(page);
+  // 送信の前の要件の検査（#1442）は「確認が要らない」で、聞かずに SQL を生成する。
+  await mockChatRequirement(page);
   const state: State = {
     phase: "prepare",
     failChats: 0,

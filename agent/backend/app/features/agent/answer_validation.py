@@ -39,6 +39,7 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_passages import (
@@ -46,8 +47,15 @@ from app.features.agent.answer_passages import (
     is_heading,
     is_structure,
     non_claim_passages,
+    numbered_heading_lines,
     passage_spans,
     table_header_lines,
+)
+from app.features.agent.evidence_match import (
+    EvidenceText,
+    answer_features,
+    matched_features,
+    order_weights,
 )
 from app.features.agent.support_task import (
     RAG_READ_DOCUMENT,
@@ -94,6 +102,8 @@ REASON_VALIDATOR_UNAVAILABLE = "validator_unavailable"
 REASON_EMPTY_ANSWER = "empty_answer"
 # 利用者への確認の質問だけの回答（資料の主張を含まないので、根拠が無くても注記しない。#1306）。
 REASON_CLARIFICATION_ONLY = "clarification_only"
+# 利用者が「資料の検索は不要」と確認を取り消した Run（#1445。資料を使わずに答えるので注記しない）。
+REASON_RAG_DECLINED = "rag_declined"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
@@ -116,6 +126,8 @@ EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 本文を読むツール（#1330・#1332）。多段の質問では段の事実を読んで確かめるため、読んだ chunk も
 # 最終の検証の根拠に入れる（#1345）。
 READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
+# 文書・章節をまとめて読むツール。回答に当たらない chunk は検索の根拠の後ろに置く（#1451）。
+BULK_READ_TOOLS = frozenset({RAG_READ_DOCUMENT, RAG_READ_SECTION})
 # 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。
 BLOCKING_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
 _CLAIM_LABELS = {
@@ -150,31 +162,67 @@ def _connection_prefix(function_name: str) -> str | None:
     return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
 
 
-def _evidence_refs(tool: str, output: JsonObject) -> list[tuple[str, str]]:
-    """根拠を集める・読むツールの出力の（document_id, chunk_id）（出てきた順）。"""
-    items: list[object]
+def _locator_labels(item: JsonObject) -> list[object]:
+    """根拠の見出し（章節の列・章節の名前・シート名）。回答と照らすのに使う（#1451）。"""
+    labels: list[object] = []
+    locator = item.get("locator")
+    if isinstance(locator, dict):
+        path = locator.get("section_path")
+        labels.extend(path if isinstance(path, list) else [])
+        labels.append(locator.get("sheet_name"))
+    section = item.get("section")
+    if isinstance(section, dict):
+        labels.append(section.get("title"))
+    path = item.get("section_path")
+    labels.extend(path if isinstance(path, list) else [])
+    # 読み取りのツールの chunk は表計算のシート名を chunk に持つ（#1471）。
+    labels.append(item.get("sheet_name"))
+    return labels
+
+
+_EvidenceRef = tuple[tuple[str, str], object, list[object], list[object]]
+
+
+def _evidence_refs(tool: str, output: JsonObject) -> list[_EvidenceRef]:
+    """根拠を集める・読むツールの出力の（参照, 本文, 見出し, 文書のファイル名）（出てきた順）。"""
+    items: list[tuple[object, object, list[object], list[object]]]
     if tool in EVIDENCE_TOOLS:
         evidence = output.get("evidence")
-        items = evidence if isinstance(evidence, list) else []
+        items = [
+            (item, item.get("excerpt"), _locator_labels(item), [item.get("file_name")])
+            for item in (evidence if isinstance(evidence, list) else [])
+            if isinstance(item, dict)
+        ]
     elif tool == RAG_READ_SOURCE:
-        items = [output]
+        items = [(output, output.get("text"), _locator_labels(output), [output.get("file_name")])]
     elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         chunks = output.get("chunks")
         document_id = output.get("document_id")
-        items = [
-            {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
-            for chunk in (chunks if isinstance(chunks, list) else [])
-            if isinstance(chunk, dict)
-        ]
+        body = output.get("text")
+        body = body if isinstance(body, str) else ""
+        section_labels = _locator_labels(output)
+        names = [output.get("file_name")]
+        items = []
+        for chunk in chunks if isinstance(chunks, list) else []:
+            if not isinstance(chunk, dict):
+                continue
+            start, end = chunk.get("start"), chunk.get("end")
+            chunk_text = (
+                body[start:end]
+                if isinstance(start, int) and isinstance(end, int) and start < end
+                else ""
+            )
+            ref = {"document_id": document_id, "chunk_id": chunk.get("chunk_id")}
+            items.append((ref, chunk_text, [*_locator_labels(chunk), *section_labels], names))
     else:
         return []
-    refs: list[tuple[str, str]] = []
-    for item in items:
+    refs: list[_EvidenceRef] = []
+    for item, text, labels, file_names in items:
         if not isinstance(item, dict):
             continue
         document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
         if isinstance(document_id, str) and isinstance(chunk_id, str) and document_id and chunk_id:
-            refs.append((document_id, chunk_id))
+            refs.append(((document_id, chunk_id), text, labels, file_names))
     return refs
 
 
@@ -186,6 +234,43 @@ def _cited_in(answer: str, chunk_id: str) -> bool:
     return bool(re.search(re.escape(chunk_id) + r"(?!\d)", answer))
 
 
+@dataclass
+class _GroupRef:
+    """接続の中の根拠 1 件（並べ替えの材料）。"""
+
+    ref: tuple[str, str]
+    order: int
+    evidence: EvidenceText = field(default_factory=EvidenceText)
+    # 文書・章節をまとめて読んだ（rag_read_document / rag_read_section）だけの根拠か。
+    bulk_read: bool = True
+
+
+def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
+    """回答が使った根拠を先にした並び（#1364・#1451）。
+
+    1. 回答が `chunk_id` を書いた根拠（新しい呼び出しから順）
+    2. 回答に固有の特徴（ID・コード・引用・見出し・同じ並び・「文書名＋第 N 章」の章節の参照）で
+       当たった根拠（重みの大きい順）
+    3. 残りの検索・本文の読み取り（rag_read_source）の根拠（当たりの重み、新しい呼び出しの順）
+    4. 残りの、文書・章節をまとめて読んだ chunk（全文を読んだ台帳の行が上限を埋めない）
+    """
+    if not answer:
+        return [item.ref for item in refs]
+    features = answer_features(answer)
+    weights = order_weights([matched_features(features, item.evidence) for item in refs])
+
+    def key(index: int) -> tuple[int, float, int]:
+        item = refs[index]
+        if _cited_in(answer, item.ref[1]):
+            return (0, 0.0, item.order)
+        distinct, weight = weights[index]
+        if distinct:
+            return (1, -weight, item.order)
+        return (3 if item.bulk_read else 2, -weight, item.order)
+
+    return [refs[index].ref for index in sorted(range(len(refs)), key=key)]
+
+
 def run_evidence_groups(
     steps: list[RunStep], answer: str = ""
 ) -> list[tuple[str, list[JsonObject]]]:
@@ -195,13 +280,13 @@ def run_evidence_groups(
     （その接続の最も新しい根拠のツールの function tool の名前〔接続を決める〕, 参照の一覧）で、
     最も新しく根拠を返した接続から順。参照は新しい呼び出しから順、接続の中で重複なし、最大 30 件。
     `rag_read_source`・`rag_read_document`・`rag_read_section`（#1438）で読んだ chunk も根拠に
-    入れる（#1345。多段の質問は段の
-    事実を読んで確かめる）。
-    `answer` を渡すと、回答が引用した根拠（`chunk_id` を回答に書いたもの）を接続の中で先にする
-    （#1364。多段の質問は前の段の根拠が古い呼び出しにあり、上限で切ると回答が使った根拠が検証に
-    入らず、正しい結論が「確かめられない」になる）。
+    入れる（#1345。多段の質問は段の事実を読んで確かめる）。
+    `answer` を渡すと、回答が使った根拠を接続の中で先にする（#1364・#1451。多段の質問は前の段の
+    根拠が古い呼び出しにあり、上限で切ると回答が使った根拠が検証に入らず、正しい結論が「確かめ
+    られない」になる）。回答が `chunk_id` を書いた根拠、回答の本文と当たった根拠（`evidence_match`）
+    の順に先にし、文書・章節をまとめて読んだ chunk で回答に当たらないものは検索の根拠の後ろに置く。
     """
-    groups: dict[str, tuple[str, list[JsonObject], set[tuple[str, str]]]] = {}
+    groups: dict[str, tuple[str, dict[tuple[str, str], _GroupRef]]] = {}
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not result.success or step.status != "completed":
@@ -215,20 +300,22 @@ def run_evidence_groups(
         prefix = _connection_prefix(call.name)
         if prefix is None or not refs_found:
             continue
-        _tool_name, refs, seen = groups.setdefault(prefix, (call.name, [], set()))
-        for ref in refs_found:
-            if ref in seen:
-                continue
-            seen.add(ref)
-            refs.append({"document_id": ref[0], "chunk_id": ref[1]})
+        _tool_name, refs = groups.setdefault(prefix, (call.name, {}))
+        for ref, text, labels, file_names in refs_found:
+            item = refs.get(ref)
+            if item is None:
+                item = refs[ref] = _GroupRef(ref=ref, order=len(refs))
+            item.evidence.add(text, labels, file_names)
+            if tool not in BULK_READ_TOOLS:
+                item.bulk_read = False
     grouped: list[tuple[str, list[JsonObject]]] = []
-    for tool_name, refs, _seen in groups.values():
+    for tool_name, refs in groups.values():
         if not refs:
             continue
-        if answer:
-            cited = [ref for ref in refs if _cited_in(answer, ref["chunk_id"])]
-            refs = cited + [ref for ref in refs if ref not in cited]
-        grouped.append((tool_name, refs[:MAX_VALIDATION_EVIDENCE]))
+        ordered = _ordered(list(refs.values()), answer)[:MAX_VALIDATION_EVIDENCE]
+        grouped.append(
+            (tool_name, [{"document_id": ref[0], "chunk_id": ref[1]} for ref in ordered])
+        )
     return grouped
 
 
@@ -484,9 +571,11 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """
     found: set[str] = set()
     headers = table_header_lines(answer)
+    # 次の行で決まる番号つきの見出しの行（#1481）。
+    numbered = numbered_heading_lines(answer)
 
     def structure(text: str) -> bool:
-        return is_structure(text) or text in headers
+        return is_structure(text) or text in headers or text in numbered
 
     # （行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
     kept: list[tuple[str, bool, bool] | None] = []
@@ -502,7 +591,7 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
         spans = passage_spans(line)
         withheld = [span for span in spans if span[2] in quotes]
         if not withheld:
-            if len(spans) == 1 and is_heading(spans[0][2]):
+            if len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in numbered):
                 close_section()
                 heading, section_content, section_removed = len(kept), False, False
                 kept.append((line, True, False))

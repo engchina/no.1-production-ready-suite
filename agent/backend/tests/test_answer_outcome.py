@@ -12,7 +12,12 @@ from typing import Any
 import pytest
 
 from app.features.agent.answer_outcome import ANSWER_OUTCOMES, answer_outcome
-from app.features.agent.answer_passages import asks_environment_data, case_labels, passage_spans
+from app.features.agent.answer_passages import (
+    asks_environment_data,
+    case_labels,
+    passage_spans,
+    supplement_passages,
+)
 from app.features.agent.answer_validation import (
     REASON_CLARIFICATION_ONLY,
     REASON_NO_RAG_EVIDENCE,
@@ -799,3 +804,135 @@ def test_guide_decision_before_a_later_rag_search_is_not_used() -> None:
     )
     assert (content["value"], content["basis"]) == ("answered", "rag_search")
     assert "guide_conditions" not in content["signals"]
+
+
+# ---- #1475: 結論の段落で答えた後の、補足の段落の不足の文 ------------------------------
+
+PARAMETER_DEFAULT_FACT = "session_timeout_minutes の既定値は **30**（分）です。"
+PARAMETER_DEFAULT_SUPPLEMENT_ABSENCE = "現在の各環境の設定値は資料からは分かりません。"
+# da-parameter-default（e1467、run_c91bafebe4794ecfb266ee6be336968b）の回答。
+PARAMETER_DEFAULT = "\n".join(
+    [
+        f"{PARAMETER_DEFAULT_FACT}説明は「操作が無いときにログインが切れるまでの分数」とされています。",
+        "",
+        "出典：portal-parameters.xlsx シート「パラメータ一覧」の当該行"
+        "（A4:D4、パラメータ名 session_timeout_minutes）",
+        "",
+        "補足（資料の記載）",
+        "- 同表には設定例として 60 も示されていますが、これは既定値ではなく設定の書き方の例です"
+        "（同シート A6:D6 など並びの行も同じ構成）。",
+        "- 同シートの注記（A1:A2）に「既定値は出荷時の値、設定例は設定の書き方の例で、どちらも"
+        "各環境の現在の設定値ではありません」とあり、この 30 は現在の環境の設定値ではありません。"
+        f"{PARAMETER_DEFAULT_SUPPLEMENT_ABSENCE}",
+    ]
+)
+
+
+def test_supplement_passages_are_the_supplement_section_and_lead_paragraphs() -> None:
+    supplement = supplement_passages(PARAMETER_DEFAULT)
+    assert PARAMETER_DEFAULT_SUPPLEMENT_ABSENCE in supplement
+    assert PARAMETER_DEFAULT_FACT not in supplement
+    assert "補足（資料の記載）" not in supplement
+    # 「なお、」「補足：」で始まる段落と、太字の見出し「**注記**」の節。
+    answer = "\n".join(
+        [
+            "既定値は 30 分です。",
+            "なお、現在の設定値は資料からは分かりません。",
+            "補足：設定例は 60 分です。",
+            "",
+            "**注記**",
+            "- 出荷時の値です。",
+            "",
+            "設定の変更は管理画面で行います。",
+        ]
+    )
+    assert supplement_passages(answer) == {
+        "なお、現在の設定値は資料からは分かりません。",
+        "補足：設定例は 60 分です。",
+        "- 出荷時の値です。",
+    }
+    # 補足の外にも同じ原文の段落があれば、補足として扱わない。
+    repeated = "現在の値は資料からは分かりません。\n\n補足\n- 現在の値は資料からは分かりません。"
+    assert supplement_passages(repeated) == {"- 現在の値は資料からは分かりません。"}
+    same = "現在の値は資料からは分かりません。\n\n補足\n現在の値は資料からは分かりません。"
+    assert supplement_passages(same) == set()
+
+
+@pytest.mark.parametrize(
+    "steps", [[_search("answered")], [_retrieve()]], ids=["rag_search", "answer_passages"]
+)
+def test_absence_only_in_the_supplement_after_an_answer_stays_answered(
+    steps: list[RunStep],
+) -> None:
+    # da-parameter-default: 既定値を答え（supported）、補足に「現在の各環境の設定値は資料からは
+    # 分かりません。」と書いた回答が、absence の印で conditional になっていた（期待は answered）。
+    validation = _validated(PARAMETER_DEFAULT, *_verdicts(PARAMETER_DEFAULT, {}))
+    content = answer_outcome(PARAMETER_DEFAULT, steps=steps, validation=validation)
+    assert (content["value"], content["signals"]) == ("answered", ["supplement_absence"])
+
+
+def test_absence_after_nao_following_a_supported_answer_stays_answered() -> None:
+    answer = "既定値は 30 分です。\nなお、現在の各環境の設定値は資料からは分かりません。"
+    validation = _validated(answer, *_verdicts(answer, {}))
+    content = answer_outcome(answer, steps=[_search("answered")], validation=validation)
+    assert (content["value"], content["signals"]) == ("answered", ["supplement_absence"])
+
+
+def test_supplement_absence_without_a_supported_conclusion_is_still_a_gap() -> None:
+    # 最終の検証が判定を出さなかった回答は変えない。
+    content = answer_outcome(PARAMETER_DEFAULT, steps=[_search("answered")])
+    assert (content["value"], content["signals"]) == ("conditional", ["absence"])
+    # 結論の段落を根拠で確かめられなかった（外した）回答も変えない。
+    fact_line = PARAMETER_DEFAULT.split("\n")[0]
+    statuses = {text: "unsupported" for _start, _end, text in passage_spans(fact_line)}
+    validation = _validated(PARAMETER_DEFAULT, *_verdicts(PARAMETER_DEFAULT, statuses))
+    content = answer_outcome(PARAMETER_DEFAULT, steps=[_retrieve()], validation=validation)
+    assert content["value"] == "conditional"
+    assert "absence" in content["signals"]
+    assert "supplement_absence" not in content["signals"]
+
+
+def test_absence_in_the_conclusion_is_still_a_gap_even_with_a_supplement() -> None:
+    # 資料に答えが無いことを結論にした回答（#1454）は、補足があっても今までどおり。
+    refusal = "\n".join(
+        [
+            "session_timeout_minutes の現在の設定値は資料からは分かりません。",
+            "",
+            "補足",
+            "- 既定値は 30 分です。",
+            "- 現在の各環境の設定値は資料からは分かりません。",
+        ]
+    )
+    validation = _validated(refusal, *_verdicts(refusal, {}))
+    content = answer_outcome(refusal, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["absence"])
+    searched = answer_outcome(
+        refusal, steps=[_search("insufficient_evidence")], validation=validation
+    )
+    assert searched["value"] == "insufficient_evidence"
+    # 拒答だけの回答の後の補足に不足の文があっても拒答のまま。
+    only = "\n".join(
+        [
+            "ライセンス費用は資料に記載がありません。",
+            "",
+            "補足",
+            "- 見積もりの窓口も資料からは分かりません。",
+        ]
+    )
+    validation = _validated(only, *_verdicts(only, {}))
+    content = answer_outcome(only, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("insufficient_evidence", ["absence"])
+    # 補足の節は、空行の後の箇条書きではない行で終わる（その行の不足の文は結論の側）。
+    ended = "\n".join(
+        [
+            "既定値は 30 分です。",
+            "",
+            "補足",
+            "- 設定例は 60 分です。",
+            "",
+            "現在の設定値は資料からは分かりません。",
+        ]
+    )
+    validation = _validated(ended, *_verdicts(ended, {}))
+    content = answer_outcome(ended, steps=[_retrieve()], validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["absence"])
