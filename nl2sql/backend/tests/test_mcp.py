@@ -16,6 +16,7 @@ import pytest
 from pr_system_settings.auth.service_token import issue_service_token
 
 from app.features.mcp import tools as mcp_tools
+from app.features.nl2sql import ontology_router
 from app.features.nl2sql.models import (
     JobCreateData,
     JobCreateRequest,
@@ -31,7 +32,21 @@ from app.features.nl2sql.models import (
     ProfileSummaryPage,
     QueryResults,
     SafetyReport,
+    SqlRequirementSpec,
     TimingEnvelope,
+)
+from app.features.nl2sql.ontology_models import (
+    ClarificationMode,
+    QuerySession,
+    QuerySessionStatus,
+    RequirementPhase,
+    RequirementState,
+    SqlRequirementDraft,
+)
+from app.features.nl2sql.ontology_router import (
+    QuerySessionApiCreate,
+    QuerySessionData,
+    RequirementApplyRequest,
 )
 from app.features.nl2sql.service import Nl2SqlService, StoredJob
 from app.main import app
@@ -186,6 +201,87 @@ def _result(request: JobCreateRequest) -> Nl2SqlResult:
     )
 
 
+class _ReadyRequirementRuntime:
+    """AI要件確認（#1441）で確かめる項目が無く、すぐ SQL の生成に進める fake の runtime。
+
+    確認の項目を返す流れは `test_nl2sql_guided_clarification.py` が実の runtime で確かめる。
+    """
+
+    def __init__(self) -> None:
+        self.sessions: dict[str, QuerySession] = {}
+        self.created: list[QuerySessionApiCreate] = []
+
+    def _data(self, session: QuerySession) -> QuerySessionData:
+        state = RequirementState(
+            status=RequirementPhase.READY,
+            select_from_clear=True,
+            can_apply=True,
+            summary_ja="- 使う表（FROM）: APP.EMPLOYEE",
+        )
+        # 画面のための profile view・graph は MCP が使わないので作らない。
+        return QuerySessionData.model_construct(  # type: ignore[call-arg]
+            session=session, requirement_state=state
+        )
+
+    def create_session(
+        self,
+        request: QuerySessionApiCreate,
+        *,
+        actor_user_uuid: str = "",
+        actor_is_system_admin: bool = False,
+        profile_confirmed: bool = False,
+    ) -> QuerySessionData:
+        assert profile_confirmed is True
+        assert request.clarification_mode == ClarificationMode.GUIDED
+        self.created.append(request)
+        session = QuerySession(
+            id=f"qs-{len(self.sessions) + 1}",
+            profile_id=request.profile_id,
+            profile_view_id="view-1",
+            ontology_revision_id="revision-1",
+            original_question=request.question,
+            clarification_mode=ClarificationMode.GUIDED,
+            requirement=SqlRequirementDraft(
+                question_original=request.question,
+                clarified_question_ja=f"{request.question}（APP.EMPLOYEE）",
+            ),
+            actor_user_uuid=actor_user_uuid,
+        )
+        self.sessions[session.id] = session
+        return self._data(session)
+
+    def get_session(self, session_id: str) -> QuerySessionData:
+        return self._data(self.sessions[session_id])
+
+    def apply_requirement(
+        self, session_id: str, request: RequirementApplyRequest
+    ) -> QuerySessionData:
+        session = self.sessions[session_id].model_copy(
+            update={"status": QuerySessionStatus.DONE, "requirement_applied_at": CREATED_AT}
+        )
+        self.sessions[session_id] = session
+        return self._data(session)
+
+    def applied_requirement_spec(
+        self,
+        session_id: str,
+        *,
+        actor_user_uuid: str,
+        actor_is_system_admin: bool,
+        profile_id: str,
+        question: str,
+    ) -> SqlRequirementSpec:
+        session = self.sessions[session_id]
+        assert session.requirement_applied_at is not None
+        assert question == session.requirement.clarified_question_ja  # type: ignore[union-attr]
+        return SqlRequirementSpec(
+            session_id=session_id,
+            profile_id=profile_id,
+            clarified_question=question,
+            tables=["APP.EMPLOYEE"],
+        )
+
+
 # ---------------------------------------------------------------- auth setup
 
 
@@ -233,6 +329,7 @@ def fake_service(monkeypatch: pytest.MonkeyPatch) -> _FakeNl2SqlService:
     service = _FakeNl2SqlService()
     monkeypatch.setattr(mcp_tools, "nl2sql_service", service)
     monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(ontology_router, "ontology_runtime", _ReadyRequirementRuntime())
     return service
 
 
@@ -359,12 +456,14 @@ def test_tools_list_follows_token_user_permissions(
         "nl2sql_recommend_profile",
         "nl2sql_query",
         "nl2sql_get_job",
+        "nl2sql_cancel_requirement",
     }
     # SQL 生成はできるが実行できない利用者には nl2sql_query を出さない。
     assert _tool_names(_run(_rpc("tools/list"), token=_token(evaluation_user.user_uuid))) == {
         "nl2sql_list_profiles",
         "nl2sql_recommend_profile",
         "nl2sql_get_job",
+        "nl2sql_cancel_requirement",
     }
     assert _tool_names(_run(_rpc("tools/list"), token=_token(direct_user.user_uuid))) == set()
 
@@ -608,6 +707,11 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
     assert request.row_limit == 100
     assert request.profile_id == "sales"
     assert request.use_ontology_context is True
+    # 確かめた要件（書き直した質問の文と構造化した要件・表の範囲）で SQL を作る（#1441）。
+    assert request.question == "売上一覧（APP.EMPLOYEE）"
+    assert request.requirement_session_id == "qs-1"
+    assert request.sql_requirement is not None
+    assert request.allowed_objects.table_names == ["APP.EMPLOYEE"]
     assert actor_user_uuid == user.user_uuid
     assert actor_is_system_admin is False
     assert content == {
@@ -628,6 +732,19 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
         "history_id": "history-1",
         "error_code": None,
         "error_message": None,
+        "requirement": {
+            "session_id": "qs-1",
+            "status": "applied",
+            "question": None,
+            "remaining_count": 0,
+            "answered_count": 0,
+            "select_from_clear": True,
+            "minimum_missing": [],
+            "summary": "- 使う表（FROM）: APP.EMPLOYEE",
+            "clarified_question": "売上一覧（APP.EMPLOYEE）",
+            "sql_skeleton": "",
+            "message": "",
+        },
     }
 
     _run(
@@ -771,6 +888,7 @@ def test_local_mode_uses_local_debug_user_without_token(
                     "nl2sql_recommend_profile",
                     "nl2sql_query",
                     "nl2sql_get_job",
+                    "nl2sql_cancel_requirement",
                 }
                 response = await client.post(
                     "/api/mcp",

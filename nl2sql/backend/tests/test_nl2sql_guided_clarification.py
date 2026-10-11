@@ -1400,3 +1400,260 @@ def test_tables_used_by_select_are_added_to_from_and_joined() -> None:
     join = next(item for item in draft.items if item.key == "join_relationships")
     assert join.sql_hint == "ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID"
     assert "JOIN APP.CUSTOMERS ON ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID" in draft.sql_skeleton
+
+
+# --- 13. MCP（Agent）からの AI要件確認（#1441） ------------------------------------------
+
+
+class _McpJobs:
+    """MCP の nl2sql_query が作るジョブを記録し、すぐ完了させる fake の service。"""
+
+    def __init__(self) -> None:
+        self.started: list[Any] = []
+
+    def ensure_persistence_available(self) -> None:
+        return None
+
+    def start_job(self, request: Any, **_kwargs: Any) -> Any:
+        from app.features.nl2sql.models import JobCreateData, JobStatus
+
+        self.started.append(request)
+        return JobCreateData(
+            job_id=f"job-{len(self.started)}",
+            status=JobStatus.PENDING,
+            created_at="2026-10-11T00:00:00+00:00",
+        )
+
+    def get_job(self, job_id: str, **_kwargs: Any) -> Any:
+        from app.features.nl2sql.models import (
+            JobData,
+            JobStatus,
+            Nl2SqlEngine,
+            Nl2SqlResult,
+            QueryResults,
+            SafetyReport,
+            TimingEnvelope,
+        )
+
+        request = self.started[int(job_id.removeprefix("job-")) - 1]
+        return JobData(
+            job_id=job_id,
+            status=JobStatus.DONE,
+            profile_id=request.profile_id,
+            created_at="2026-10-11T00:00:00+00:00",
+            result=Nl2SqlResult(
+                history_id="history-1",
+                engine=Nl2SqlEngine.SELECT_AI,
+                original_question=request.question,
+                rewritten_question=request.question,
+                generated_sql="SELECT SUM(AMOUNT) FROM APP.ORDERS WHERE STATUS = 'SHIPPED'",
+                executable_sql="SELECT SUM(AMOUNT) FROM APP.ORDERS WHERE STATUS = 'SHIPPED'",
+                explanation="出荷済みの受注金額の合計です。",
+                safety=SafetyReport(is_safe=True, is_select_only=True, row_limit_applied=100),
+                results=QueryResults(columns=["TOTAL"], rows=[{"TOTAL": 1200}], total=1),
+                timing=TimingEnvelope(created_at="2026-10-11T00:00:00+00:00"),
+            ),
+        )
+
+
+@pytest.fixture
+def mcp_requirement(monkeypatch: pytest.MonkeyPatch) -> Callable[[_ScriptedLlm], _McpJobs]:
+    """MCP を、スタブの LLM の AI要件確認と fake のジョブで動かす（認証は無効）。"""
+
+    from app.features.mcp import tools as mcp_tools
+
+    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
+
+    def install(llm: _ScriptedLlm) -> _McpJobs:
+        jobs = _McpJobs()
+        runtime = _runtime(llm)
+        monkeypatch.setattr(ontology_router_module, "ontology_runtime", runtime)
+        monkeypatch.setattr(mcp_tools, "nl2sql_service", jobs)
+        return jobs
+
+    return install
+
+
+def _mcp(name: str, arguments: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    import asyncio
+
+    async def post() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/api/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments},
+                },
+            )
+
+    response = asyncio.run(post())
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    return result["isError"], result["structuredContent"]
+
+
+def test_mcp_query_asks_one_question_then_generates_after_answer(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    llm = _ScriptedLlm(
+        _ambiguous_status_output(),
+        _output(
+            _from_orders(),
+            _select_total(),
+            clarified="出荷済み（ORDERS.STATUS = 'SHIPPED'）の ORDERS.AMOUNT の合計",
+        ),
+    )
+    jobs = mcp_requirement(llm)
+    question = {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
+
+    is_error, first = _mcp("nl2sql_query", question)
+    assert is_error is False, first
+    # 確かめる項目がある間は SQL を作らない（ジョブを作らない）。
+    assert first["status"] == "needs_clarification"
+    assert first["job_id"] is None
+    assert jobs.started == []
+    requirement = first["requirement"]
+    assert requirement["status"] == "needs_answer"
+    assert requirement["remaining_count"] == 1
+    asked = requirement["question"]
+    assert asked["question"] == "どの受注状態に絞りますか？"
+    assert asked["section"] == "where"
+    assert asked["answer_kind"] == "multi_select"
+    # 候補・項目の表・列は物理名で返す。
+    assert [candidate["label"] for candidate in asked["candidates"]] == ["出荷済み", "取消"]
+    assert asked["candidates"][0]["refs"] == "ORDERS.STATUS（受注状態）"
+
+    shipped = asked["candidates"][0]["id"]
+    is_error, done = _mcp(
+        "nl2sql_query",
+        {
+            **question,
+            "requirement_session_id": requirement["session_id"],
+            "answer": {"item_id": asked["item_id"], "selected_candidate_ids": [shipped]},
+        },
+    )
+    assert is_error is False, done
+    assert done["status"] == "done"
+    assert done["rows"] == [{"TOTAL": 1200}]
+    assert done["requirement"]["status"] == "applied"
+    # 回答で要件を更新し、確かめた要件（書き直した質問の文・構造化した要件・表）で SQL を作る。
+    assert len(jobs.started) == 1
+    job = jobs.started[0]
+    assert job.question == done["requirement"]["clarified_question"]
+    assert job.requirement_session_id == requirement["session_id"]
+    assert job.sql_requirement is not None
+    assert job.sql_requirement.tables == ["APP.ORDERS"]
+    assert any("SHIPPED" in item.sql_hint for item in job.sql_requirement.items)
+    assert job.allowed_objects.table_names == ["APP.ORDERS"]
+    # 下書きと、回答の後の再検査の 2 回。
+    assert len(llm.calls) == 2
+
+
+def test_mcp_query_without_questions_generates_without_asking(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped(), clarified="出荷済みの合計")
+    )
+    jobs = mcp_requirement(llm)
+    is_error, content = _mcp(
+        "nl2sql_query", {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
+    )
+    assert is_error is False, content
+    assert content["status"] == "done"
+    assert content["requirement"]["status"] == "applied"
+    assert content["requirement"]["question"] is None
+    assert len(jobs.started) == 1
+    assert len(llm.calls) == 1
+
+
+def test_mcp_query_does_not_generate_until_select_and_from_are_clear(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    llm = _ScriptedLlm(_output(_item("from_tables", "from", "missing", question="どの表？")))
+    jobs = mcp_requirement(llm)
+    question = {"question": "いい感じに出して", "profile_id": "sales"}
+    is_error, content = _mcp("nl2sql_query", question)
+    assert is_error is False, content
+    assert content["status"] == "needs_clarification"
+    requirement = content["requirement"]
+    assert requirement["select_from_clear"] is False
+    assert len(requirement["minimum_missing"]) == 2
+    assert requirement["question"]["section"] in {"from", "select"}
+    assert jobs.started == []
+
+
+def test_mcp_query_unanswerable_closes_session_without_sql(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(), _select_total(), unanswerable="この業務プロファイルでは答えられません"
+        )
+    )
+    jobs = mcp_requirement(llm)
+    is_error, content = _mcp("nl2sql_query", {"question": "秘密の表", "profile_id": "sales"})
+    assert is_error is False, content
+    assert content["status"] == "unanswerable"
+    assert content["error_code"] == "REQUIREMENT_UNANSWERABLE"
+    assert "答えられません" in content["error_message"]
+    assert jobs.started == []
+    runtime = ontology_router_module.ontology_runtime
+    session = runtime.get_session(content["requirement"]["session_id"]).session
+    assert session.status == QuerySessionStatus.CANCELLED
+
+
+def test_mcp_cancel_requirement_closes_session_and_rejects_answers(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    jobs = mcp_requirement(_ScriptedLlm(_ambiguous_status_output()))
+    question = {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
+    _, first = _mcp("nl2sql_query", question)
+    session_id = first["requirement"]["session_id"]
+
+    is_error, cancelled = _mcp("nl2sql_cancel_requirement", {"requirement_session_id": session_id})
+    assert (is_error, cancelled) == (
+        False,
+        {"requirement_session_id": session_id, "status": "cancelled"},
+    )
+    runtime = ontology_router_module.ontology_runtime
+    assert runtime.get_session(session_id).session.status == QuerySessionStatus.CANCELLED
+    # 2 回目は閉じた後（取り消しの操作を繰り返しても失敗にしない）。
+    _, again = _mcp("nl2sql_cancel_requirement", {"requirement_session_id": session_id})
+    assert again["status"] == "closed"
+
+    item = first["requirement"]["question"]
+    is_error, error = _mcp(
+        "nl2sql_query",
+        {
+            **question,
+            "requirement_session_id": session_id,
+            "answer": {"item_id": item["item_id"], "free_text": "出荷済み"},
+        },
+    )
+    assert is_error is True
+    assert "終了しています" in error["message"]
+    is_error, error = _mcp("nl2sql_cancel_requirement", {"requirement_session_id": "missing"})
+    assert is_error is True
+    assert error["status"] == 404
+    assert jobs.started == []
+
+
+def test_mcp_query_answer_requires_session_and_an_answer(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    mcp_requirement(_ScriptedLlm(_ambiguous_status_output()))
+    for arguments in (
+        {"answer": {"item_id": "x", "free_text": "y"}},
+        {"requirement_session_id": "s", "answer": {"item_id": "x"}},
+    ):
+        is_error, error = _mcp(
+            "nl2sql_query", {"question": "出荷済み", "profile_id": "sales", **arguments}
+        )
+        assert is_error is True
+        assert error["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
