@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
+from rag_engine.generation.answer_envelope import REFERENCE_CONFIRMATION_PREFIX
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
@@ -2034,7 +2035,7 @@ def confirmation_lines(draft: GroundedDraft, question: str, spans: Sequence[dict
         return all(_compact_text(name) in corpus for name in re.findall(r"「([^」]+)」", text))
 
     lines = [f"実データ: {item}" for item in draft.environment_data_items()]
-    lines += [f"資料: {item.strip()}" for item in draft.reference_materials
+    lines += [f"{REFERENCE_CONFIRMATION_PREFIX}{item.strip()}" for item in draft.reference_materials
               if item.strip() and named_in_corpus(item)]
     return list(dict.fromkeys(lines))
 

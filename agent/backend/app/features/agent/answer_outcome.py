@@ -23,7 +23,10 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 2. `nl2sql_clarification`: 最後の `nl2sql_query` が AI要件確認の項目を返した（SQL を作らずに
    利用者に確かめた。#1441）→ needs_clarification
    `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
-3. `validation_withheld_all`: 最終の検証が本文をすべて載せなかった → insufficient_evidence
+3. `validation_withheld_guide`: 最終の検証が、業務ガイドの手順・影響範囲・版の検査の error で
+   本文をすべて載せなかった（どの段落の手順が誤りかを決められない）→ needs_human（人が手順を
+   確かめる。#1491）
+   `validation_withheld_all`: それ以外で最終の検証が本文をすべて載せなかった → insufficient_evidence
 4. `rag_search`: 回答が最後の `rag_search` に拠る（その後に根拠を集め直していない）とき、
    その対応。ただし、現場のデータが要る（needs_environment_data）を現場のデータの道具（RAG 以外の
    MCP 接続のツール。#1283）で確かめたら answered / conditional（`environment_tools`）、確認の
@@ -46,7 +49,10 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 （`question`）・回答の中の「確かめられていない点」の節（`unverified_section`。最終の検証が
 本文を残して確かめきれなかった点を示したときも。#1391）・最終の検証が
 根拠で確かめられない・根拠と矛盾すると判定して外した段落（`withheld_claims`。`unsupported` /
-`contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317）・要求の不足などの
+`contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317。外した段落が補足の
+段落にだけあり、結論の段落〔補足の外の主張〕に最終の検証が根拠で確かめた段落があるときは、質問が
+求めない周辺の事柄を外しただけなので不足の印にせず、記録の `supplement_withheld` だけを付ける。
+#1491）・要求の不足などの
 決定的な検査の error（`check_errors`）・実データの確認を促す段落（`data_confirmation`。RAG の
 `rag_validate_answer` の判定か、利用者に現場のデータ・記録の確認を求める段落の決定的な判定
 `environment_check_passages`。#1317。外した段落は数えない）・分岐ごとに答えた印（`branches`。
@@ -76,7 +82,12 @@ from app.features.agent.answer_passages import (
     passage_spans,
     supplement_passages,
 )
-from app.features.agent.answer_validation import BLOCKING_CLAIM_STATUSES, STATUS_COMPLETED
+from app.features.agent.answer_validation import (
+    BLOCKING_CLAIM_STATUSES,
+    STATUS_COMPLETED,
+    WITHHOLDING_CHECKS,
+    error_findings,
+)
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
@@ -115,6 +126,8 @@ BASIS_EMPTY_ANSWER = "empty_answer"
 BASIS_CLARIFICATION = "clarification_question"
 BASIS_NL2SQL_CLARIFICATION = "nl2sql_clarification"
 BASIS_WITHHELD_ALL = "validation_withheld_all"
+# 業務ガイドの手順・影響範囲・版の検査の error で、最終の検証が本文をすべて外した（#1491）。
+BASIS_WITHHELD_GUIDE = "validation_withheld_guide"
 BASIS_RAG_SEARCH = "rag_search"
 BASIS_ENVIRONMENT_TOOLS = "environment_tools"
 BASIS_GUIDE_HANDOFF = "guide_handoff"
@@ -134,6 +147,8 @@ SIGNAL_BRANCHES = "branches"
 SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
 # 結論の段落で答えた後の、補足の段落だけの不足の文（不足の印にしない記録。#1475）。
 SIGNAL_SUPPLEMENT_ABSENCE = "supplement_absence"
+# 結論の段落で答えた後の、補足の段落だけを最終の検証が外した（不足の印にしない記録。#1491）。
+SIGNAL_SUPPLEMENT_WITHHELD = "supplement_withheld"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset(
     {
@@ -299,21 +314,33 @@ def _passages(answer: str) -> tuple[list[str], set[str], set[str]]:
     return claims, signals, absences
 
 
-def _absence_only_in_supplement(
-    answer: str, *, claims: list[str], absences: set[str], answered: set[str]
+def _only_in_supplement(
+    answer: str, *, claims: list[str], passages: set[str], answered: set[str]
 ) -> bool:
-    """結論の段落が質問に答え、不足の文が補足の段落にだけあるか（#1475）。
+    """結論の段落が質問に答え、`passages`（不足の文・外した段落）が補足の段落にだけあるか。
 
     結論の段落（補足の外の主張）に、最終の検証が根拠で確かめた（`supported`）段落があるときを
     「質問に答えた」とみなす（`answered` は外した段落と実データの確認を促す段落を除いた `supported`
-    の段落）。補足の「現在の各環境の設定値は資料からは分かりません。」のような、質問が求めない
-    周辺の事柄の不足は、答えの不足ではない。結論の段落の不足の文（資料に答えが無いことを結論に
-    した回答。#1454）は今までどおり不足の印にする。最終の検証が判定を出さなかった回答は変えない。
+    の段落）。補足の「現在の各環境の設定値は資料からは分かりません。」のような不足の文（#1475）や、
+    最終の検証が外した補足の「なお、…の資料は見当たりませんでした。」（#1491）は、質問が求めない
+    周辺の事柄で、答えの不足ではない。結論の段落の不足の文（資料に答えが無いことを結論にした回答。
+    #1454）・結論の段落を外したときは今までどおり不足の印にする。最終の検証が判定を出さなかった
+    回答は変えない。
     """
     supplement = supplement_passages(answer)
-    if not absences or not absences <= supplement:
+    if not passages or not passages <= supplement:
         return False
     return any(text in answered for text in claims if text not in supplement)
+
+
+def _guide_withheld(validation: JsonObject | None) -> bool:
+    """最終の検証が、業務ガイドの手順・影響範囲・版の検査の error を出したか（#1491）。"""
+    if not isinstance(validation, dict):
+        return False
+    result = validation.get("result")
+    return isinstance(result, dict) and any(
+        item.get("check") in WITHHOLDING_CHECKS for item in error_findings(result)
+    )
 
 
 def _rag_insufficient(steps: list[RunStep]) -> bool:
@@ -386,6 +413,13 @@ def answer_outcome(
     removed, disputed, confirmations, withheld = _validation_parts(validation)
     claims, signals, absences = _passages(answer)
     if withheld.get("all") is True:
+        if _guide_withheld(validation):
+            # 手順・影響範囲の検査で本文を載せなかった: 資料が無いのではなく、どの段落の手順が
+            # 誤りかを決められない。人が業務ガイドと照らして確かめる（#1491）。
+            signals.add(SIGNAL_CHECK_ERRORS)
+            return _content(
+                NEEDS_HUMAN, BASIS_WITHHELD_GUIDE, rag_outcome=rag_outcome, signals=signals
+            )
         return _content(
             INSUFFICIENT_EVIDENCE, BASIS_WITHHELD_ALL, rag_outcome=rag_outcome, signals=signals
         )
@@ -394,11 +428,15 @@ def answer_outcome(
     confirmations |= environment_check_passages(answer) - removed
     # 結論の段落で答えた後の、補足の段落だけの不足の文は不足の印にしない（#1475）。
     answered = _supported_quotes(validation) - removed - confirmations
-    if _absence_only_in_supplement(answer, claims=claims, absences=absences, answered=answered):
+    if _only_in_supplement(answer, claims=claims, passages=absences, answered=answered):
         signals.discard(SIGNAL_ABSENCE)
         signals.add(SIGNAL_SUPPLEMENT_ABSENCE)
     if disputed:
-        signals.add(SIGNAL_WITHHELD_CLAIMS)
+        # 補足の段落だけを外したときは、答えの不足ではない（#1491）。
+        supplement_only = _only_in_supplement(
+            answer, claims=claims, passages=disputed, answered=answered
+        )
+        signals.add(SIGNAL_SUPPLEMENT_WITHHELD if supplement_only else SIGNAL_WITHHELD_CLAIMS)
     # 利用者の条件を確かめずに、分岐ごとに答えた（rag_search の確認の求めに分岐で答えたのと同じ）。
     if len(case_labels(answer)) >= 2:
         signals.add(SIGNAL_BRANCHES)

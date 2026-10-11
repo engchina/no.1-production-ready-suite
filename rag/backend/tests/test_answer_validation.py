@@ -20,6 +20,7 @@ from app.rag.answer_checks import (
     check_requests,
     excluded_steps,
     impact_applies,
+    instruction_text,
 )
 from app.rag.answer_validation import (
     AnswerValidation,
@@ -274,6 +275,56 @@ def test_check_guide_steps_order_branch_and_omissions() -> None:
     unmatched = check_guide_steps("設定画面で操作してください。", guide, {})
     assert _codes(unmatched) == [("guide_steps_unmatched", "warning")]
     assert check_guide_steps("何か", _guide(steps=[], branches=[]), {}) == []
+
+
+def _delete_guide() -> SupportGuideContent:
+    """評価セットの業務ガイド「アカウントの削除」（承認を得ていなければ承認の手順へ分岐）。"""
+    data = json.loads(SUPPORT_GUIDES.read_text(encoding="utf-8"))
+    payload = next(item for item in data["guides"] if item["title"] == "アカウントの削除")
+    return SupportGuideContent.model_validate(payload)
+
+
+# 評価 e1467 の D の mt-delete-account-approved（2 回目の発言「承認はもらっています」）の
+# 回答の一部。
+_DELETE_APPROVED_ANSWER = """部門長の承認は得ている、という前提で、資料に沿ってお示しします。
+
+**削除の前提（満たしている条件）**
+- 削除の前に、所属部署の部門長の承認を得る必要があり、承認の無い削除は行いません。\
+→ 承認は得ているとのことなので、この前提は満たしています。
+- 削除したアカウントは 30 日後に完全に消去され、復元できません。
+
+**資料で確かめられなかった点**
+- 実際にアカウントを削除する操作そのものの手順は、資料には記載が見当たらず、\
+確認できません。"""
+
+
+def test_check_guide_steps_ignores_a_premise_that_is_already_met() -> None:
+    # 「承認を得る」を満たした前提として述べただけで、承認の手順を実行させていない。承認済みの
+    # 条件に当たらない分岐の手順（step_wrong_branch の error）にしない（#1491）。
+    guide = _delete_guide()
+    findings = check_guide_steps(_DELETE_APPROVED_ANSWER, guide, {"approved": "はい"})
+    assert _codes(findings) == [("guide_steps_unmatched", "warning")]
+    # 見出しの無い行でも、前提を満たしたと述べた行は数えない。
+    line = "所属部署の部門長の承認を得る（承認済み）。続いて削除を依頼してください。"
+    codes = [item.code for item in check_guide_steps(line, guide, {"approved": "はい"})]
+    assert "step_wrong_branch" not in codes
+
+
+def test_check_guide_steps_still_flags_an_instruction_of_the_wrong_branch() -> None:
+    # 承認済みなのに承認の手順を実行させる指示は、今までどおり error。
+    guide = _delete_guide()
+    answer = "1. まず所属部署の部門長の承認を得る\n2. 承認後に削除してください。"
+    findings = check_guide_steps(answer, guide, {"approved": "はい"})
+    assert ("step_wrong_branch", "error") in _codes(findings)
+    # 満たした前提の節は、空行の後の箇条書きではない行で終わる（その後の指示は数える）。
+    sectioned = (
+        "**前提（満たしている条件）**\n- 部門長の承認\n\n"
+        "所属部署の部門長の承認を得るよう依頼してください。"
+    )
+    assert ("step_wrong_branch", "error") in _codes(
+        check_guide_steps(sectioned, guide, {"approved": "はい"})
+    )
+    assert instruction_text(sectioned) == "所属部署の部門長の承認を得るよう依頼してください。"
 
 
 def test_check_impact_requires_scope_and_approval() -> None:

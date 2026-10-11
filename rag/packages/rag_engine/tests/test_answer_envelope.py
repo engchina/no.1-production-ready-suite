@@ -1,5 +1,7 @@
 """回答の構造（AnswerEnvelope。#1235）。LLM を差し替え、回答の確定の分岐ごとに対応を確かめる。"""
+import json
 import unittest
+from pathlib import Path
 
 from rag_engine.generation.answer_envelope import build_envelope, envelope_requests, fallback_envelope
 from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
@@ -74,11 +76,60 @@ class AnswerEnvelopeBuildTest(unittest.TestCase):
         self.assertEqual(build_envelope(items=[], confirmations=["ログを確認"], **common)["outcome"], "needs_environment_data")
         self.assertEqual(build_envelope(items=[], confirmations=(), **common)["outcome"], "insufficient_evidence")
 
+    def test_reference_material_lines_are_not_environment_data(self):
+        # 別の資料の確認（「資料:」の行）は現場の実データではない（#1491）。
+        quote = {"kind": "rule", "text": "原文", "applies": "quote_only", "condition": ""}
+        common = {"requests": [{"id": "Q1", "kind": "request", "text": "設定の場所"}],
+                  "reviews": [{"request_id": "Q1", "status": "partial"}], "gaps": (), "external_data_required": False,
+                  "reference_materials": ["設定資料"]}
+        envelope = build_envelope(items=[quote], confirmations=["資料: 設定資料"], **common)
+        self.assertEqual(envelope["outcome"], "conditional")
+        self.assertNotIn("environment_data", envelope["handoff_reasons"])
+        self.assertIn("reference_materials", envelope["handoff_reasons"])
+        self.assertEqual(build_envelope(items=[], confirmations=["資料: 設定資料"], **common)["outcome"],
+                         "insufficient_evidence")
+        # 実データの行があれば今までどおり needs_environment_data。
+        self.assertEqual(build_envelope(items=[quote], confirmations=["実データ: 設定値", "資料: 設定資料"],
+                                        **common)["outcome"], "needs_environment_data")
+
+    def test_all_missing_requests_without_actionable_items_are_insufficient_evidence(self):
+        # 実行できる説明が無く要求がすべて missing なら、実データの確認があっても資料から答えられない（#1491）。
+        quote = {"kind": "rule", "text": "原文", "applies": "quote_only", "condition": ""}
+        common = {"requests": [{"id": "Q1", "kind": "request", "text": "費用"}],
+                  "reviews": [{"request_id": "Q1", "status": "missing"}], "gaps": ["費用の記載が無い"],
+                  "confirmations": ["実データ: 契約の請求額"]}
+        for items in ([], [quote]):
+            self.assertEqual(build_envelope(items=items, external_data_required=True, **common)["outcome"],
+                             "insufficient_evidence")
+        # 実行できる説明があれば、要求が missing でも答えた部分があるので変えない。
+        action = {"kind": "rule", "text": "説明", "applies": "matched", "condition": ""}
+        self.assertEqual(build_envelope(items=[action], external_data_required=True, **common)["outcome"],
+                         "needs_environment_data")
+
     def test_fallback_envelope_for_answers_without_grounded_structure(self):
         self.assertEqual(fallback_envelope(answered=False, insufficient_reason="根拠なし")["outcome"], "insufficient_evidence")
         self.assertEqual(fallback_envelope(answered=True)["outcome"], "answered")
         self.assertEqual(fallback_envelope(answered=True, needs_human_review=True)["outcome"], "conditional")
         self.assertEqual(fallback_envelope(answered=True, external_data_required=True)["outcome"], "needs_environment_data")
+
+
+E1467 = json.loads((Path(__file__).with_name("fixtures") / "answer_envelope_e1467.json").read_text(encoding="utf-8"))
+
+
+class AnswerEnvelopeE1467ReplayTest(unittest.TestCase):
+    """評価 e1467 の記録の材料（fixture）を通し直し、取り違えた対応が直ることを確かめる（#1491）。"""
+
+    def test_recorded_materials_give_the_expected_outcome(self):
+        for name, case in E1467.items():
+            with self.subTest(name):
+                requests = [{"id": r["id"], "kind": "request", "text": r["text"]} for r in case["requests"]]
+                reviews = [{"request_id": r["id"], "status": r["status"]} for r in case["requests"]]
+                envelope = build_envelope(
+                    requests=requests, reviews=reviews, items=case["items"], gaps=case["gaps"],
+                    confirmations=case["confirmations"], external_data_required=case["external_data_required"],
+                    reference_materials=case["reference_materials"],
+                )
+                self.assertEqual(envelope["outcome"], case["expected"])
 
 
 if __name__ == "__main__":
