@@ -901,7 +901,9 @@ async def _post_enterprise_ai(
         headers["OpenAI-Project"] = connection.project_ocid
     async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
         response = await client.post(url, headers=headers, json=dict(payload))
-    response.raise_for_status()
+    if response.is_error:
+        # 受け付けない推論の量（#1425）などの 400 は、応答の本文に理由があるので結果の詳細に出す。
+        raise ValueError(f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}")
     data = response.json()
     if not isinstance(data, Mapping):
         raise ValueError("Enterprise AI response は JSON object である必要があります。")

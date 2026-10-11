@@ -48,13 +48,16 @@ def test_resolve_model_target_reads_effort_of_agent_model(monkeypatch: pytest.Mo
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="text-a", reasoning_effort="none"),
             EnterpriseAiConfiguredModel(model_id="text-b"),
+            EnterpriseAiConfiguredModel(model_id="text-c", reasoning_effort=""),
         ],
         oci_enterprise_ai_default_text_model="text-a",
     )
     monkeypatch.setattr(builtin_runtime, "get_settings", lambda: settings)
 
     assert builtin_runtime.resolve_model_target("").reasoning_effort == "none"
-    assert builtin_runtime.resolve_model_target("text-b").reasoning_effort == ""
+    # 値を書かないモデルは既定の high、空は「送らない」。
+    assert builtin_runtime.resolve_model_target("text-b").reasoning_effort == "high"
+    assert builtin_runtime.resolve_model_target("text-c").reasoning_effort == ""
 
 
 def test_sdk_agent_uses_model_effort(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -126,3 +129,26 @@ def test_model_test_sends_unsaved_effort(
 
     assert sent[0]["model"] == model_id
     assert sent[0].get("reasoning") == expected
+
+
+def test_model_test_shows_rejection_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """受け付けない値の 400 は、本文（理由）を結果の詳細に出す。"""
+    reason = "unknown variant `none`, expected one of `minimal`, `low`, `medium`, `high`"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": reason}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    request = ModelSettingsTestRequest.model_validate(
+        {"settings": _payload("none"), "target_type": "enterprise_text", "model_id": "text-a"}
+    )
+    candidate = model_test_candidate(Settings(_env_file=None), request)
+
+    with pytest.raises(ValueError, match="HTTP 400") as raised:
+        anyio.run(agent_router._run_model_settings_test, candidate, request)
+    assert reason in str(raised.value)

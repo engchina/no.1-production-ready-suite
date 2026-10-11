@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from test_model import PAYLOAD, FakeSettings, make_client, make_store
 
 from pr_system_settings.model import (
+    DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
     ENTERPRISE_AI_REASONING_EFFORTS,
     MODEL_SETTINGS_DOCUMENT_VERSION,
     EnterpriseAiConfiguredModel,
@@ -33,9 +34,9 @@ def test_effort_is_saved_per_model_and_reloaded(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.load(settings)
 
-    response = make_client(settings, store).patch(
-        "/api/settings/model", json=_payload_with_effort("low")
-    )
+    payload = _payload_with_effort("low")
+    payload["enterprise_ai"]["models"][1]["reasoning_effort"] = ""
+    response = make_client(settings, store).patch("/api/settings/model", json=payload)
 
     assert response.status_code == 200
     models = response.json()["data"]["settings"]["enterprise_ai"]["models"]
@@ -55,8 +56,8 @@ def test_effort_is_saved_per_model_and_reloaded(tmp_path: Path) -> None:
     assert enterprise_ai_reasoning(other, "vlm-b") is None
 
 
-def test_v3_document_without_effort_is_read_as_empty(tmp_path: Path) -> None:
-    """#1425 より前の JSON（version 3、項目なし）はそのまま読め、`reasoning` を送らない。"""
+def test_v3_document_without_effort_is_read_as_default_high(tmp_path: Path) -> None:
+    """#1425 より前の JSON（version 3、項目なし）はそのまま読め、既定の high を送る。"""
     (tmp_path / "model-settings.json").write_text(
         json.dumps(
             {
@@ -72,12 +73,13 @@ def test_v3_document_without_effort_is_read_as_empty(tmp_path: Path) -> None:
     settings = FakeSettings()
     make_store(tmp_path).load(settings)
 
-    assert [model.reasoning_effort for model in enterprise_ai_model_catalog(settings)] == [""]
-    assert enterprise_ai_reasoning(settings, "llm-a") is None
+    assert DEFAULT_ENTERPRISE_AI_REASONING_EFFORT == "high"
+    assert [model.reasoning_effort for model in enterprise_ai_model_catalog(settings)] == ["high"]
+    assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "high"}
 
 
 def test_unknown_effort_in_document_is_ignored_on_load(tmp_path: Path) -> None:
-    """手で書いた知らない値は読み込みを止めず、空（送らない）にする。"""
+    """手で書いた知らない値は読み込みを止めず、既定の high にする。"""
     (tmp_path / "model-settings.json").write_text(
         json.dumps(
             {
@@ -85,7 +87,8 @@ def test_unknown_effort_in_document_is_ignored_on_load(tmp_path: Path) -> None:
                 "enterprise_ai": {
                     "models": [
                         {"model_id": "llm-a", "reasoning_effort": "ultra"},
-                        {"model_id": "llm-b", "reasoning_effort": " High "},
+                        {"model_id": "llm-b", "reasoning_effort": " Low "},
+                        {"model_id": "llm-c", "reasoning_effort": ""},
                     ],
                     "default_text_model_id": "llm-a",
                 },
@@ -96,8 +99,10 @@ def test_unknown_effort_in_document_is_ignored_on_load(tmp_path: Path) -> None:
     settings = FakeSettings()
     make_store(tmp_path).load(settings)
 
-    assert enterprise_ai_reasoning_effort(settings, "llm-a") == ""
-    assert enterprise_ai_reasoning_effort(settings, "llm-b") == "high"
+    assert enterprise_ai_reasoning_effort(settings, "llm-a") == "high"
+    assert enterprise_ai_reasoning_effort(settings, "llm-b") == "low"
+    # 空は「送らない」として保つ（high を受け付けないモデル向け）。
+    assert enterprise_ai_reasoning(settings, "llm-c") is None
 
 
 def test_api_rejects_unknown_effort(tmp_path: Path) -> None:
@@ -127,14 +132,22 @@ def test_model_rejects_values_no_model_accepts() -> None:
         EnterpriseAiConfiguredModel(model_id="m", reasoning_effort="ultra")
 
 
-def test_unregistered_model_sends_no_reasoning() -> None:
+def test_new_model_defaults_to_high() -> None:
+    assert EnterpriseAiConfiguredModel(model_id="m").reasoning_effort == "high"
+    assert EnterpriseAiConfiguredModel(model_id="m", reasoning_effort=None).reasoning_effort == (
+        "high"
+    )
+
+
+def test_unregistered_model_uses_default_high() -> None:
     settings = FakeSettings(
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="llm-a", reasoning_effort="none")
         ]
     )
     assert enterprise_ai_reasoning(settings, " llm-a ") == {"effort": "none"}
-    assert enterprise_ai_reasoning(settings, "env-only-model") is None
+    # env だけで設定したモデルなど、登録モデルにない ID も既定の high。
+    assert enterprise_ai_reasoning(settings, "env-only-model") == {"effort": "high"}
 
 
 def test_model_test_uses_unsaved_effort(tmp_path: Path) -> None:
@@ -161,5 +174,5 @@ def test_model_test_uses_unsaved_effort(tmp_path: Path) -> None:
 
     assert data["status"] == "success"
     assert seen["reasoning"] == {"effort": "minimal"}
-    # 保存済みの設定は変えない。
-    assert enterprise_ai_reasoning(settings, "llm-a") is None
+    # 保存済みの設定（モデル未登録 = 既定）は変えない。
+    assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "high"}

@@ -16,6 +16,7 @@ import {
   RequiredBadge,
   SecretField,
   SelectField,
+  type SelectFieldOption,
   Switch,
   TabPanel,
   Tabs,
@@ -90,12 +91,15 @@ import {
 } from "./defaultModels";
 import { t } from "./messages";
 import {
+  DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
   ENTERPRISE_AI_CONNECTION_IDS,
+  ENTERPRISE_AI_REASONING_EFFORTS,
   MODEL_SETTINGS_QUERY_KEY,
   type EnterpriseAiConfiguredModel,
   type EnterpriseAiConnectionId,
   type EnterpriseAiConnectionSettings,
   type EnterpriseAiModelSettings,
+  type EnterpriseAiReasoningEffort,
   type GenerativeAiModelSettings,
   type ModelSettingsApi,
   type ModelSettingsData,
@@ -440,6 +444,7 @@ export function ModelSettingsPage({
                   display_name: "",
                   vision_enabled: false,
                   connection_id: PRIMARY_CONNECTION_ID,
+                  reasoning_effort: DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
                 },
               ],
             },
@@ -1269,6 +1274,7 @@ function ModelCatalogEditor({
           <span>{t("settings.model.enterprise.modelId")}</span>
           <span>{t("settings.model.enterprise.displayName")}</span>
           <span>{t("settings.model.enterprise.connection")}</span>
+          <span>{t("settings.model.enterprise.reasoningEffort")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
           <span>{t("settings.model.test.action")}</span>
           <span aria-hidden />
@@ -1321,6 +1327,22 @@ function ModelCatalogEditor({
                 // ラベルは同じ行の他の欄（CompactTextInput）と同じ小さい文字にそろえる。
                 className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
               />
+              <SelectField
+                id={modelReasoningEffortFieldId(index)}
+                label={t("settings.model.enterprise.reasoningEffortOfModel", {
+                  number: modelNumber,
+                })}
+                value={
+                  model.reasoning_effort ?? DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
+                }
+                options={REASONING_EFFORT_OPTIONS}
+                describedBy={REASONING_EFFORT_HELP_ID}
+                onValueChange={(value) =>
+                  onModelChange(index, { reasoning_effort: value })
+                }
+                // 接続の欄と同じく、広い画面のラベルは読み上げだけにする（表頭が見出し）。
+                className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
+              />
               {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。 */}
               <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg lg:justify-start">
                 <span className="lg:sr-only">
@@ -1367,22 +1389,50 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="lg:col-span-6"
+                className="lg:col-span-7"
               />
             </div>
           );
         })}
       </div>
+      {/* 推論の量の説明（#1425）。各行の選択欄の aria-describedby から読む。 */}
+      <p
+        id={REASONING_EFFORT_HELP_ID}
+        className="text-xs leading-relaxed text-fg-muted"
+      >
+        {t("settings.model.enterprise.reasoningEffortHelp")}
+      </p>
     </div>
   );
 }
 
+/** 推論の量の説明の要素の id（#1425）。 */
+const REASONING_EFFORT_HELP_ID = "enterprise-model-reasoning-effort-help";
+
+function modelReasoningEffortFieldId(index: number): string {
+  return `enterprise-model-reasoning-effort-${index}`;
+}
+
 /**
- * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 画像入力（Vision）に対応 / テスト / 削除）。
- * 6 列はサイドバーを引いた md の本文幅では窮屈なため、lg から表の形にする（#533）。
+ * 推論の量の選択肢（#1425）。先頭の「送らない（モデルの既定）」は空の値（`reasoning` を送らない）。
+ * 既定は high（結果の質を優先する）。high を受け付けないモデルのために「送らない」を残す。
+ * 値は API の語のまま出し、括弧で意味を添える。
+ */
+const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoningEffort>[] =
+  [
+    { value: "", label: t("settings.model.enterprise.reasoningEffort.default") },
+    ...ENTERPRISE_AI_REASONING_EFFORTS.map((effort) => ({
+      value: effort,
+      label: t(`settings.model.enterprise.reasoningEffort.${effort}`),
+    })),
+  ];
+
+/**
+ * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 画像入力（Vision）に対応 / テスト / 削除）。
+ * 7 列はサイドバーを引いた md の本文幅では窮屈なため、lg から表の形にする（#533 / #1425）。
  */
 const CATALOG_COLUMNS =
-  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_8rem_7rem_3.25rem]";
+  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)_8rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。

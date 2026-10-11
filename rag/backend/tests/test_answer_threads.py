@@ -33,7 +33,7 @@ from app.rag.answer_engine import _run_on_loop
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 
-_PROVIDER: Any = SimpleNamespace(model="stub-model", label="stub")
+_PROVIDER: Any = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="")
 # 遅い LLM の 1 回の応答時間（打ち切りの上限より十分長い）。
 _SLOW_LLM_SECONDS = 30.0
 

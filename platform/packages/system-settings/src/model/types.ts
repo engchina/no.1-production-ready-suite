@@ -24,12 +24,35 @@ export const ENTERPRISE_AI_CONNECTION_IDS: readonly EnterpriseAiConnectionId[] =
 /** 接続の上限（backend の MAX_ENTERPRISE_AI_CONNECTIONS と同じ）。 */
 export const MAX_ENTERPRISE_AI_CONNECTIONS = ENTERPRISE_AI_CONNECTION_IDS.length;
 
+/**
+ * 推論（思考）の量（#1425。Responses API の `reasoning.effort`）。既定は high（結果の質を優先する）で、
+ * 空は送らない（モデルの既定）。
+ * 選択肢は登録モデルのどれかが受け付けた値だけ（2026-10-11 の実測。backend の
+ * ENTERPRISE_AI_REASONING_EFFORTS と同じ）。受け付ける値はモデルで違うので、保存の前に「テスト」で確かめる。
+ */
+export const ENTERPRISE_AI_REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type EnterpriseAiReasoningEffort =
+  "" | (typeof ENTERPRISE_AI_REASONING_EFFORTS)[number];
+/** 推論の量の既定（新しく追加するモデル・値の無い保存済みのモデル。backend と同じ）。 */
+export const DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: EnterpriseAiReasoningEffort =
+  "high";
+
 export interface EnterpriseAiConfiguredModel {
   model_id: string;
   display_name: string;
   vision_enabled: boolean;
   /** 呼び出しに使う接続（#533）。未指定はプライマリ接続。存在しない接続を指すと保存時に欄のエラー。 */
   connection_id?: string;
+  /** 推論（思考）の量（#1425）。未指定は既定（high）、空は送らない。 */
+  reasoning_effort?: EnterpriseAiReasoningEffort;
 }
 
 /**
