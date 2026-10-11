@@ -664,9 +664,11 @@ def _is_clarification_question(text: str) -> bool:
 def _is_clarification_note(text: str) -> bool:
     """確認の質問に添える前置き・答え方の案内か（#1454。操作・数量・逆接を含む文は除く）。"""
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip().strip(_CLARIFY_NOTE_EDGES).strip()
+    # 括弧の中の「。」では段落を分けないので（#1455）、括弧の中の文ごとに確かめる。
+    sentences = [value[start:end].strip() for start, end in sentence_ranges(value)]
     return (
         bool(value)
-        and bool(_CLARIFY_NOTE.fullmatch(value))
+        and all(_CLARIFY_NOTE.fullmatch(sentence) for sentence in sentences if sentence)
         and not _OPERATION.search(value)
         and not _ABSENCE_CLAIM.search(value)
     )
