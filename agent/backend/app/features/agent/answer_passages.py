@@ -592,16 +592,60 @@ def environment_check_passages(answer: str) -> set[str]:
     }
 
 
+# 確認の質問に添える前置きと答え方の案内（#1454）。確認の質問だけの回答かの判定にだけ使い、
+# 段落の判定（`non_claim_passages`）は変えない。
+_CLARIFY_NOTE = re.compile(
+    # 前置き（「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」）。
+    r".*(?:確認|確かめ)させて(?:ください|下さい|いただきます|いただけますか)[。．]?"
+    r"|.*(?:が|は)(?:まだ)?(?:分かって|わかって|決まって|伺って|お聞きして)いません[。．]?"
+    # 答え方の案内（「「個別」または「グループ」でお答えください。」）。
+    r"|.*(?:お答え|ご回答|ご返答|お選び|お知らせ)(?:ください|下さい)[。．]?"
+    # 答えた後の案内（「お答えいただいた内容に応じて、手順と必要な承認をご案内します。」）。
+    r"|(?:お答え|ご回答|ご返答|回答)(?:いただいた|いただければ|いただき次第|の内容|に応じて)"
+    r".*(?:ご案内|案内|お伝え|お知らせ|お答え|回答)(?:します|いたします|できます)[。．]?"
+    # 確かめる理由（「この条件によって手順・答えが変わるため、まず確認しています。」）。
+    r"|.*(?:によって|に応じて|次第で)[^。]*(?:変わる|異なる|分かれる)ため、?[^。]*"
+    r"(?:確認|確かめ|お伺い|お聞き)(?:しています|します|いたします|させてください)[。．]?"
+)
+_CLARIFY_NOTE_EDGES = "（()）"
+
+
+def _is_clarification_question(text: str) -> bool:
+    """確認の質問の段落か（太字の質問「**…ですか？**（はい／いいえ）」も含める。#1454）。"""
+    return is_question(_EMPHASIS.sub("", text).strip())
+
+
+def _is_clarification_note(text: str) -> bool:
+    """確認の質問に添える前置き・答え方の案内か（#1454。操作・数量・逆接を含む文は除く）。"""
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip().strip(_CLARIFY_NOTE_EDGES).strip()
+    return (
+        bool(value)
+        and bool(_CLARIFY_NOTE.fullmatch(value))
+        and not _OPERATION.search(value)
+        and not _ABSENCE_CLAIM.search(value)
+    )
+
+
 def is_clarification_only(answer: str) -> bool:
-    """利用者への確認の質問だけの回答か（見出しと質問・選択肢だけで、質問が 1 つ以上ある）。"""
+    """利用者への確認の質問だけの回答か（見出しと質問・選択肢だけで、質問が 1 つ以上ある）。
+
+    質問の前置き（「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」）と、
+    答え方の案内・確かめる理由の括弧（「（「個別」または「グループ」でお答えください。…）」）も
+    質問の一部として扱う（#1454。これらが主張として残ると、確認の質問に「資料の根拠を使って
+    いない」の注記が付く）。
+    """
     passages = [text for line in answer.split("\n") for _s, _e, text in passage_spans(line)]
     if not passages:
         return False
     kinds = non_claim_passages(answer)
-    if any(text not in kinds for text in passages):
-        return False
-    found = {kinds[text] for text in passages}
-    return KIND_QUESTION in found and found <= {KIND_QUESTION, KIND_HEADING}
+    asked = False
+    for text in passages:
+        kind = kinds.get(text)
+        if kind == KIND_QUESTION or _is_clarification_question(text):
+            asked = True
+        elif kind != KIND_HEADING and not _is_clarification_note(text):
+            return False
+    return asked
 
 
 __all__ = [
