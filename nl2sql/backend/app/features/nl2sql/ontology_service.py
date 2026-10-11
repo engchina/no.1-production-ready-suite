@@ -1017,6 +1017,9 @@ class OntologyQuerySessionService:
                 requirement=_copy_model(draft),
                 actor_user_uuid=request.actor_user_uuid,
                 actor_is_system_admin=request.actor_is_system_admin,
+                chat=request.chat,
+                chat_previous_job_id=request.chat_previous_job_id,
+                conversation_history=[_copy_model(turn) for turn in request.conversation_history],
             )
             self._sessions[session.id] = session
             return _copy_model(session)

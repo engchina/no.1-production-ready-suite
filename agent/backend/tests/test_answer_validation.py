@@ -22,6 +22,7 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, McpToolError, fake_product_mcp
 from pr_backend_core.mcp import McpServer
 from pytest import MonkeyPatch
+from test_clarification_preface import CLARIFICATIONS
 
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import non_claim_passages, passage_kind, passage_spans
@@ -1203,6 +1204,27 @@ def test_clarification_only_answer_without_evidence_has_no_notice(
     assert run_answer_text(run) == question
     content = _validation(run)
     assert (content["status"], content["reason"]) == ("skipped", "clarification_only")
+
+
+@pytest.mark.parametrize("answer", CLARIFICATIONS.values(), ids=CLARIFICATIONS.keys())
+def test_clarification_with_preface_and_answer_guidance_has_no_notice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str
+) -> None:
+    """#1362 の評価の確認の質問（前置きの文・答え方の案内の括弧つき）に「確かめていません」を
+    足さず、回答の対応を needs_clarification にする（#1454）。"""
+    _script(monkeypatch, [assistant_message(answer)])
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="アクセス権限を付与したい", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert run_answer_text(run) == answer
+    content = _validation(run)
+    assert (content["status"], content["reason"]) == ("skipped", "clarification_only")
+    assert _answer_outcome(run)["value"] == "needs_clarification"
 
 
 @pytest.mark.parametrize(

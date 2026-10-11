@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { mockChatRequirement } from "./_helpers/chat-requirement";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 
@@ -110,6 +111,8 @@ async function setup(
   options: { safe?: boolean; me?: Record<string, unknown>; canExecute?: boolean } = {},
 ) {
   await mockDatabaseGateReady(page);
+  // 送信の前の要件の検査（#1442）は「確認が要らない」で、聞かずに SQL を生成する。
+  await mockChatRequirement(page);
   if (options.me)
     await page.route("**/api/auth/me", (route) =>
       route.fulfill({ json: { data: { ...systemAdminMe, ...options.me } } }),

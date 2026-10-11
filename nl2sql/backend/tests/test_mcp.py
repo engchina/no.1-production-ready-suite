@@ -270,7 +270,12 @@ class _ReadyRequirementRuntime:
         actor_is_system_admin: bool,
         profile_id: str,
         question: str,
+        chat: bool = False,
+        previous_job_id: str | None = None,
     ) -> SqlRequirementSpec:
+        # MCP の nl2sql_query は SQL 生成の画面と同じ（チャットのターンではない）要件で
+        # job を作る（#1442）。
+        assert chat is False and previous_job_id is None
         session = self.sessions[session_id]
         assert session.requirement_applied_at is not None
         assert question == session.requirement.clarified_question_ja  # type: ignore[union-attr]
