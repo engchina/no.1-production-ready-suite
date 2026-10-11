@@ -248,6 +248,13 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await panel.getByText("根拠の構成（1）").click();
   await expect(panel.getByText("検索の起点")).toBeVisible();
   await expect(panel.getByText("回答に使用")).toBeVisible();
+  // 根拠の構成・実行記録を先、実行の記録（処理時間とトレース ID）を後に並べる（#1417）。
+  const executionMeta = page.getByText(/^処理時間:/);
+  await expect(executionMeta).toBeVisible();
+  const [panelBox, metaBox] = await Promise.all([panel.boundingBox(), executionMeta.boundingBox()]);
+  expect(metaBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
+    (panelBox?.y ?? Number.POSITIVE_INFINITY) + (panelBox?.height ?? 0) - 1
+  );
   await expectNoPageOverflow(page);
 });
 
