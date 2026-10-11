@@ -80,7 +80,7 @@ def _chat_runtime(
     runtime = _runtime(llm)
     legacy = _ChatLegacyService(history)
     legacy._enterprise_ai_client = llm
-    runtime.legacy_service = legacy  # type: ignore[assignment]
+    runtime.legacy_service = legacy
     return runtime, legacy
 
 
