@@ -553,7 +553,7 @@ class GroundedAnswerTest(unittest.TestCase):
         from rag_engine.models.llm import ExternalDataItem, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
         # extra="forbid" のため、スキーマに無い欄を指示どおり出力すると検証エラーになる。
-        external_kinds = set(get_args(ExternalDataItem.model_fields["kind"].annotation))
+        external_kinds = set(get_args(ExternalDataItem.model_fields["who_can_answer"].annotation))
         known = (set(GroundedDraft.model_fields) | set(GroundedItem.model_fields) | set(task_contract(QUESTION))
                  | set(ExternalDataItem.model_fields) | external_kinds
                  | {"bbox", "context_bbox", "target_highlight", "asset_kind"} | set(_answer_image_metadata([])))
