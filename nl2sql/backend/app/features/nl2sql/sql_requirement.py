@@ -2178,6 +2178,20 @@ def _enforce_risks(items: list[RequirementItem], context: RequirementContext) ->
 UNDECIDED_MARK = "⟨未確定: {}⟩"
 
 
+_QUOTED = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"")
+_HIRAGANA = re.compile(r"[\u3041-\u309f]")
+
+
+def _is_sql_fragment(value: str) -> bool:
+    """骨組みに入れられる SQL の断片か。
+
+    LLM が断片の代わりに文（例: 「DISTINCT を付けない」）を返すことがある。引用符の外にひらがなの
+    ある値は文として扱う（漢字・カタカナの識別子は SQL の断片のまま）。
+    """
+
+    return bool(value.strip()) and not _HIRAGANA.search(_QUOTED.sub("", value))
+
+
 def _skeleton_note(item: RequirementItem) -> str:
     """確定していて SQL の断片の無い項目を、骨組みの注記（SQL のコメントの 1 行）にする。
 
@@ -2219,7 +2233,7 @@ def build_sql_skeleton(draft: SqlRequirementDraft, context: RequirementContext) 
         for item in items:
             if item.section not in sections or item.key == "period_date_column":
                 continue
-            if clear(item) and item.sql_hint:
+            if clear(item) and _is_sql_fragment(item.sql_hint):
                 result.append(item.sql_hint)
             elif clear(item):
                 if note := _skeleton_note(item):

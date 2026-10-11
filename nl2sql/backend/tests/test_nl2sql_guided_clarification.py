@@ -1054,6 +1054,24 @@ def test_skeleton_settled_items_without_fragment_are_not_undecided() -> None:
         _output(
             _from_orders(),
             _select_total(),
+            # LLM が断片の代わりに文を返したものは、断片にせず注記にする。
+            _item(
+                "select_distinct",
+                "select",
+                "inferred",
+                label="重複の除去",
+                value="重複を除かない",
+                sql_hint="DISTINCT を付けない",
+            ),
+            # 引用符の中の日本語は値なので、断片のまま。
+            _item(
+                "where_label",
+                "where",
+                "confirmed",
+                label="区分",
+                value="出荷済み",
+                sql_hint="ORDERS.STATUS = 'しゅっか済み'",
+            ),
             _item(
                 "where_none",
                 "where",
@@ -1075,7 +1093,9 @@ def test_skeleton_settled_items_without_fragment_are_not_undecided() -> None:
     assert state.status == RequirementPhase.READY, state.message_ja
     skeleton = state.sql_skeleton
     assert "⟨未確定" not in skeleton
-    assert _clause_lines(skeleton, "WHERE") == []
+    assert skeleton.startswith("-- 重複の除去: 重複を除かない\nSELECT SUM(ORDERS.AMOUNT)\n")
+    assert "DISTINCT を付けない" not in skeleton
+    assert _clause_lines(skeleton, "WHERE") == ["WHERE ORDERS.STATUS = 'しゅっか済み'"]
     assert _clause_lines(skeleton, "ORDER BY") == []
     # 確定した内容は注記（SQL のコメントの 1 行）に残す。
     assert "-- 絞り込み条件: WHERE による絞り込みは行わず、全件を対象にする" in skeleton
