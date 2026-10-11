@@ -300,6 +300,9 @@ export function SqlChatPage() {
     [setStoredRequirementCheck],
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // 確かめた質問の文（job ID ごと）。投入したジョブを会話のキャッシュに入れるときに付け、回答の「AI要件確認で
+  // 確かめた質問」を会話の取り直しを待たずに出す（後から増えて末尾の追従が外れない）。
+  const requirementQuestionByJob = useRef<Record<string, string>>({});
   const engineDescriptionId = useId();
   const engineOption =
     CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
@@ -386,7 +389,7 @@ export function SqlChatPage() {
     setPendingSend(null);
   const send = useMutation({
     mutationFn: (request: ChatJobRequest) => submitChatJob(request),
-    onSuccess: async (job, { question }) => {
+    onSuccess: async (job, { question, client_job_id: clientJobId }) => {
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
       // 草稿は送信の時点で空にしている（投入中に書き始めた次の質問は消さない。#907）。
@@ -410,6 +413,7 @@ export function SqlChatPage() {
               // 作成時の段階（開始待ち）を、会話を取り直す前から出す（取り直しで段階の行が増えて動かない。#1359）。
               progress_events: parseChatProgressEvents(job.progress_events),
               question,
+              requirement_question: requirementQuestionByJob.current[clientJobId] ?? "",
               profile_id: selectedProfileId,
               conversation_id: id,
               chat: true,
@@ -449,10 +453,16 @@ export function SqlChatPage() {
     },
   });
   /** 要件の検査・確認を終えて、SQL の生成のジョブを投入する（`sessionId` が無ければ確認せずに作る）。 */
-  const submitJob = (check: ChatRequirementCheck, sessionId: string | null) => {
+  const submitJob = (
+    check: ChatRequirementCheck,
+    sessionId: string | null,
+    requirementQuestion?: string,
+  ) => {
     const request: ChatJobRequest = sessionId
       ? { ...check.request, requirement_session_id: sessionId }
       : check.request;
+    if (sessionId && requirementQuestion)
+      requirementQuestionByJob.current[request.client_job_id] = requirementQuestion;
     setRequirementCheck(null);
     if (sendingRef.current) return;
     sendingRef.current = true;

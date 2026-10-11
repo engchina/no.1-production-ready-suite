@@ -73,8 +73,15 @@ export interface ChatRequirementFlow {
 interface ChatRequirementFlowOptions {
   check: ChatRequirementCheck | null;
   setCheck: (check: ChatRequirementCheck | null) => void;
-  /** SQL の生成のジョブを投入する（`sessionId` が無ければ確認せずに作る）。 */
-  onSubmit: (check: ChatRequirementCheck, sessionId: string | null) => void;
+  /**
+   * SQL の生成のジョブを投入する（`sessionId` が無ければ確認せずに作る）。`requirementQuestion` は確かめた
+   * 質問の文（回答の「AI要件確認で確かめた質問」を、会話の取り直しを待たずに出す）。
+   */
+  onSubmit: (
+    check: ChatRequirementCheck,
+    sessionId: string | null,
+    requirementQuestion?: string
+  ) => void;
   /** 確認を中止した（送った質問を入力欄に戻す）。 */
   onCancelled: (check: ChatRequirementCheck) => void;
   /** 画面が表示されている（keep-alive で隠れている間は検査を始めない）。 */
@@ -114,7 +121,7 @@ export function useChatRequirementFlow({
     async (current: ChatRequirementCheck, loaded: QuerySession) => {
       const step = chatRequirementStep(loaded);
       if (step === "applied") {
-        onSubmitRef.current(current, loaded.id);
+        onSubmitRef.current(current, loaded.id, loaded.requirement?.clarified_question_ja);
         return;
       }
       if (step !== "direct") {
@@ -127,7 +134,11 @@ export function useChatRequirementFlow({
           base_version: loaded.current_intent_version ?? 1,
         });
         if (checkRef.current?.request.client_job_id !== current.request.client_job_id) return;
-        onSubmitRef.current(current, applied.id);
+        onSubmitRef.current(
+          current,
+          applied.id,
+          applied.requirement?.clarified_question_ja ?? loaded.requirement?.clarified_question_ja
+        );
       } catch (cause) {
         // 反映できなければ、まとめを出して「SQL を生成」でやり直せるようにする。
         setSession(loaded);
@@ -226,7 +237,7 @@ export function useChatRequirementFlow({
     const current = check;
     void controller.applyRequirement().then((applied) => {
       if (applied && checkRef.current?.request.client_job_id === current.request.client_job_id) {
-        onSubmit(current, applied.id);
+        onSubmit(current, applied.id, applied.requirement?.clarified_question_ja);
       }
     });
   };
