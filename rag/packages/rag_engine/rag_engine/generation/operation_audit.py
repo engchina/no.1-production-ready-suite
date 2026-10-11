@@ -394,16 +394,39 @@ def is_question_to_user(text: str) -> bool:
     return not _BUNDLED_CLAIM.search(value)
 
 
+# 業務ガイドが見つからなかったことだけを述べる文 (#1452。「補足：この内容に当たる公開の業務ガイドは見つかりませんでした
+# （`rag_lookup_guides` の結果は0件）。」)。業務ガイドの検索の結果は検証の根拠に無いので、主張として監査すると必ず外れる。
+# 前置きは業務ガイドを修飾するだけの語（は・が・を・数字・引用を含まない）に限る（「部門長の承認が要る業務ガイドはありません」は主張）。
+# Agent の ``answer_passages.is_guide_not_found`` と同じ規則で、両方のテストが platform/contracts/answer-passages/process-notes.json
+# の同じ事例で確かめる。
+_GUIDE_NOT_FOUND = re.compile(
+    r"(?:[^。:：\n]{1,8}[:：]\s*)?(?:なお|また|ただし)?[、,]?\s*(?P<lead>[^。\n]{0,30}?)業務ガイド(?:は|が|も)[、,]?(?:まだ)?"
+    r"(?:見つかりません|見当たりません|ありません|登録されていません|存在しません|公開されていません)(?:でした)?[。．]?")
+_GUIDE_NOT_FOUND_LEAD = re.compile(r"[はがを0-9０-９「」『』]")
+# 文末の、ツールの名前を挙げた作業の経過の括弧（「（rag_lookup_guides の結果は0件）」）。
+_TOOL_NOTE = re.compile(r"\s*[（(][^（()）\n]*\brag_[a-z_]+[^（()）\n]*[）)](?=\s*[。．]?\s*$)")
+
+
+def is_guide_not_found(text: str) -> bool:
+    """業務ガイドが見つからなかったことだけを述べる文か (#1452。作業の経過で、資料の主張ではない)。"""
+    value = _TOOL_NOTE.sub("", _EMPHASIS.sub("", _LIST_MARK.sub("", text.strip(), count=1)).strip())
+    match = _GUIDE_NOT_FOUND.fullmatch(value)
+    if not match or _GUIDE_NOT_FOUND_LEAD.search(match.group("lead")):
+        return False
+    return not is_operation_instruction(value)
+
+
 def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (),
                          heading_lines: Collection[str] = ()) -> bool:
-    """回答の最終の検証で主張として監査しない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問）か (#1306 / #1317)。
+    """回答の最終の検証で主張として監査しない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・
+    業務ガイドが見つからなかったことだけを述べる文）か (#1306 / #1317 / #1452)。
 
     表の見出しの行と、番号つき・箇条書きの見出しの行は次の行で決まるので、呼び出し側が回答全体の
     ``table_header_lines`` と ``list_heading_lines``（#1481 / #1482 / #1486）を渡す。
     """
     value = text.strip()
     return (is_heading(text) or is_citation_line(text) or is_table_rule(text) or value in table_headers
-            or value in heading_lines or is_question_to_user(text))
+            or value in heading_lines or is_question_to_user(text) or is_guide_not_found(text))
 
 
 def is_operation_instruction(text: str) -> bool:
