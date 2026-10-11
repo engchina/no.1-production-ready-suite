@@ -207,8 +207,8 @@ def model_settings_for(target: ModelTarget) -> ModelSettings:
 
     - モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
       （none は送らない。解釈は platform の `reasoning_effort_to_send`）
-    - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため SDK の `extra_body`。
-      解釈は platform の `seed_to_send`）
+    - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため、SDK の
+      `extra_body`。解釈は platform の `seed_to_send`）
     """
     extra_body = {"seed": seed_to_send(target.seed)}
     effort = reasoning_effort_to_send(target.reasoning_effort)

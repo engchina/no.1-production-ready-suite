@@ -651,7 +651,10 @@ def enterprise_ai_reasoning(settings: Any, model_id: str) -> dict[str, str] | No
 
 
 def _seed_input(value: object) -> object:
-    """seed の入力の前処理（#1434）。None は既定、真偽値は検証エラーにする（int の部分型のため）。"""
+    """seed の入力の前処理（#1434）。
+
+    None は既定にし、真偽値は検証エラーにする（bool は int の部分型のため）。
+    """
     if value is None:
         return DEFAULT_ENTERPRISE_AI_SEED
     if isinstance(value, bool):
@@ -663,7 +666,8 @@ def seed_to_send(value: object) -> int:
     """設定の値を、LLM / VLM の呼び出しに送る seed にする（#1434。解釈はここだけ）。
 
     整数で範囲（0〜2147483647）の中ならその値、値なし・範囲外・整数でない値は既定の 42。
-    （保存・読み込みは `EnterpriseAiModelSettings` が検証するので、ここに来るのは env の直書きなど）。
+    保存・読み込みは `EnterpriseAiModelSettings` が検証するので、ここで既定に戻すのは
+    env の直書きなどの値だけ。
     """
     if isinstance(value, bool) or value is None:
         return DEFAULT_ENTERPRISE_AI_SEED
