@@ -65,6 +65,12 @@
   （`rag/backend/app/rag/answer_route.py`。モデルは呼ばない）。Prometheus の
   `rag_answer_routes_total{reason, requires_environment_data}` は理由と要否だけを数える。RAG の画面は、既存の
   回答の対応の表示（確かめる現場の値・記録）で「資料だけでは確定できない」ことを業務の言葉で伝え、どこへもリンクしない。
+- **現場の実データと利用者に確かめる条件を分ける（#1453）。** 根拠付き回答の草稿の `external_data_items` は項目ごとに
+  種類（`kind`）を持つ。`environment` は利用者に聞いても分からない現場の値（設定値・ログ・記録・件数・処理の状態）で、
+  `needs_environment_data` にする。`user_condition` は利用者に聞けば分かる条件（質問で特定されていない対象のシステム・申請、
+  利用者自身のロール・承認、付与先の種類）で、AnswerEnvelope の `conditions` に載せて `conditional` にする（本文では
+  「回答を確定するために確認すること」の節に「条件: …」として出す）。「ポータル管理者ロールを持つか」はシステムの記録でも
+  あるが、利用者本人が答えられるため `user_condition` に分ける（人の判断が要る点として PR に記録）。
 - **振り分けは Agent の側で決定的に行う。** Agent が `rag_search` を呼び、結果の `outcome` が
   `needs_environment_data` のとき、Control Plane がモデルへの結果に `next_step` を足す
   （`agent/backend/app/features/agent/support_task.py` の `rag_next_step`。記録する step の結果は RAG の結果のまま）。
