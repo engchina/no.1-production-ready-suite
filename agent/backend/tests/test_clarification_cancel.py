@@ -385,6 +385,9 @@ def test_cancelling_the_nl2sql_clarification_closes_the_session_and_continues_wi
     assert state["pending_clarifications"] == []
     assert state["clarification_cancellations"] == [record]
     assert state["budget"]["run"]["tool_calls"] == 0
+    # session を閉じた呼び出しは、現場のデータを確かめた呼び出しに数えない（回答の対応・経路）。
+    assert _outcome(run)["basis"] != "environment_tools"
+    assert state["route"]["path"] == "none"
 
 
 # ---- RAG の確認（#1445） ------------------------------------------------------------------

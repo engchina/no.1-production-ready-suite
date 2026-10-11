@@ -69,6 +69,7 @@ from app.features.agent.answer_passages import (
     passage_spans,
 )
 from app.features.agent.answer_validation import BLOCKING_CLAIM_STATUSES, STATUS_COMPLETED
+from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
@@ -183,9 +184,16 @@ def _retrieved_after(steps: list[RunStep], index: int) -> bool:
 
 
 def _environment_resolved(steps: list[RunStep], start: int = 0) -> bool:
-    """`start` 以降に、現場のデータの道具（RAG 以外の MCP 接続のツール）が成功したか。"""
+    """`start` 以降に、現場のデータの道具（RAG 以外の MCP 接続のツール）が成功したか。
+
+    Control Plane が確認の取り消しで閉じた AI要件確認（`nl2sql_cancel_requirement`。#1441）は、
+    現場のデータを確かめた呼び出しではないので数えない。
+    """
     return any(
-        _succeeded(step) and step.tool_call is not None and is_environment_tool(step.tool_call.name)
+        _succeeded(step)
+        and step.tool_call is not None
+        and is_environment_tool(step.tool_call.name)
+        and not (step.tool_call.trace_id or "").startswith(CANCEL_TRACE_PREFIX)
         for step in steps[start:]
     )
 
