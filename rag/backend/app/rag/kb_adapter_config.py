@@ -113,6 +113,15 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     # 実体の 1 段の拡張(#1388)。None は Settings の既定(拡張は on。#1402 / 上限は 6)。
     "entity_expansion_enabled": "rag_entity_expansion_enabled",
     "entity_expansion_max_chunks": "rag_entity_expansion_max_chunks",
+    # 章節の拡張(#1436)。None は Settings の既定(拡張は on / 4 段 / 50% / 600 秒)。
+    "section_expansion_enabled": "rag_section_expansion_enabled",
+    "section_expansion_max_levels": "rag_section_expansion_max_levels",
+    "section_expansion_input_token_percent": (  # nosec B105 - 設定の名前
+        "rag_section_expansion_input_token_percent"
+    ),
+    "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
+    # 抽出してから統合(#1437)の抽出の呼び出しの上限。None は Settings の既定(8)。
+    "section_extraction_max_calls": "rag_section_extraction_max_calls",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -296,6 +305,14 @@ class KnowledgeBaseQueryConfig(BaseModel):
     entity_expansion_enabled: bool | None = None
     # 1 回の検索で足す chunk 数の上限。None は既定(6)。
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    # 当たった chunk の章節から親の章節へ段階的に広げる(#1436)。None は既定(on)、false は使わない。
+    # 段ごとに CRAG の判定(LLM)が 1 回増える。上限(段・根拠の入力 token の割合・秒)も選べる。
+    section_expansion_enabled: bool | None = None
+    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
+    section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
+    section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
+    # 入らない章節から質問に関係する原文を抜き出す LLM の呼び出しの上限(#1437)。None は既定(8)。
+    section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

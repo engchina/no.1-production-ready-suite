@@ -466,9 +466,17 @@ class SectionMapStore:
         section_id: str,
         from_order: int,
         limit: int,
+        filters: Mapping[str, str] | None = None,
     ) -> list[SectionChunkRow]:
-        """章節の chunk を、章節の中の順に ``from_order`` から読む（検索と同じ見え方の条件）。"""
-        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        """章節の chunk を、章節の中の順に ``from_order`` から読む（検索と同じ見え方の条件）。
+
+        ``filters`` は回答の検索の条件（ナレッジベース・ページの範囲など。#1436）。渡すと、章節の
+        chunk のうちその条件に入るものだけを読む（文書は起点の chunk の文書なので、旧版の扱いは
+        問わない）。
+        """
+        where_sql, binds = _oracle_retrieval_where(
+            {**(filters or {}), INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
+        )
         rows = await self._oracle._fetch_all(
             _render_sql(
                 f"""

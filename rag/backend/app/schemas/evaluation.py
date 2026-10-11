@@ -656,6 +656,13 @@ class EvaluationRagOverrides(BaseModel):
     # 実体の 1 段の拡張(#1362)。実体の抽出を選んだ文書で、拡張の有り / 無しを比べる。
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    # 章節の拡張(#1436)。拡張の有り / 無し・上限を比べる。
+    section_expansion_enabled: bool | None = None
+    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
+    section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
+    section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
+    # 抽出してから統合(#1437)の抽出の呼び出しの上限。
+    section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
 
 

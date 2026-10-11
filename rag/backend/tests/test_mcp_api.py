@@ -1283,6 +1283,7 @@ class _SectionStore:
         section_id: str,
         from_order: int,
         limit: int,
+        filters: object = None,
     ) -> list[SectionChunkRow]:
         if (document_id, chunk_set_id) != ("d1", "cs-1"):
             return []

@@ -26,6 +26,7 @@ const baseline: ModelSettingsPayload = {
         vision_enabled: false,
         connection_id: "primary",
         reasoning_effort: "medium",
+        max_input_tokens: 128000,
       },
     ],
     default_text_model_id: "saved-llm",

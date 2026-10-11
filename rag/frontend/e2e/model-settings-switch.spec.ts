@@ -686,6 +686,7 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
+  { name: "wide", width: 1920, height: 1000 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
   test(`登録モデルごとに推論の量を選び、テストと保存に選んだ値を送る（既定は medium。#1425, ${viewport.name}）`, async ({
@@ -724,8 +725,8 @@ for (const viewport of [
     const effort1 = page.getByRole("combobox", { name: "モデル 1 の推論の量" });
     // 値の無い保存済みのモデルは既定の medium。
     await expect(effort1).toHaveText("medium");
-    if (viewport.name === "desktop") {
-      // 広い画面は表頭に「推論の量」を出し、接続の右に並べる。
+    if (viewport.width >= 1536) {
+      // 広い画面（2xl。#1437 で 8 列になり xl から変えた）は表頭に「推論の量」を出し、接続の右に並べる。
       const header = page.locator("#enterprise-model-catalog").getByText("推論の量", { exact: true });
       await expect(header).toBeVisible();
       const connectionBox = await page.getByRole("combobox", { name: "モデル 1 の接続" }).boundingBox();
@@ -761,6 +762,72 @@ for (const viewport of [
       "none",
       "medium",
       "high",
+    ]);
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "wide", width: 1920, height: 1000 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`登録モデルごとに入力の上限（tokens）を入力し、範囲外は保存の前に止める（既定は 128000。#1437, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let savedPayload: { enterprise_ai: { models: Array<Record<string, unknown>> } } | undefined;
+    await mockModelSettings(page, (payload) => {
+      savedPayload = payload as typeof savedPayload;
+    });
+    await page.goto("/settings/model");
+
+    const limit1 = page.getByRole("spinbutton", { name: "モデル 1 の入力の上限（tokens）" });
+    // 値の無い保存済みのモデルは既定の 128000。
+    await expect(limit1).toHaveValue("128000");
+    await expect(limit1).toHaveAccessibleDescription(/コンテキストウィンドウ.*既定は 128000/);
+    if (viewport.name === "desktop") {
+      // xl〜2xl は 1 つのモデルの欄を 2 列に並べる（表の形は 2xl から）。入力の上限は接続の下の左の列。
+      const connectionBox = await page.getByRole("combobox", { name: "モデル 1 の接続" }).boundingBox();
+      const limitBox = await limit1.boundingBox();
+      expect(Math.abs(limitBox!.x - connectionBox!.x)).toBeLessThan(1);
+      expect(limitBox!.y).toBeGreaterThan(connectionBox!.y);
+      await expect(
+        page.locator("#enterprise-model-catalog").getByText("入力の上限（tokens）", { exact: true })
+      ).toBeHidden();
+    }
+    if (viewport.name === "wide") {
+      // 広い画面（2xl）は表頭に「入力の上限（tokens）」を出し、推論の量の右に同じ行で並べる。
+      const header = page
+        .locator("#enterprise-model-catalog")
+        .getByText("入力の上限（tokens）", { exact: true });
+      await expect(header).toBeVisible();
+      const effortBox = await page.getByRole("combobox", { name: "モデル 1 の推論の量" }).boundingBox();
+      const limitBox = await limit1.boundingBox();
+      expect(limitBox!.x).toBeGreaterThan(effortBox!.x);
+      expect(Math.abs(limitBox!.y - effortBox!.y)).toBeLessThan(1);
+      // 同じ行の入力欄と選択欄は同じ高さ。
+      expect(Math.abs(limitBox!.height - effortBox!.height)).toBeLessThan(1);
+    }
+    if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+      await page.locator("#enterprise-model-catalog").screenshot({
+        path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/model-max-input-tokens-${viewport.name}.png`,
+      });
+    }
+
+    // 範囲外は保存の前に欄のエラーで止め、その欄にフォーカスする。
+    await limit1.fill("1000");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("入力の上限は 4096〜2000000 の整数で入力してください。")).toBeVisible();
+    await expect(limit1).toBeFocused();
+    expect(savedPayload).toBeUndefined();
+
+    await limit1.fill("200000");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(savedPayload?.enterprise_ai.models.map((model) => model.max_input_tokens)).toEqual([
+      200000,
+      128000,
     ]);
     await expectNoPageOverflow(page);
   });

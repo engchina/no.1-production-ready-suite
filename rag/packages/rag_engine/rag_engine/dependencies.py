@@ -23,6 +23,10 @@ class AnswerDependencies:
     screen_catalog は settings を受け取り {文書名: 番号付きの見出し} を返す。screen_chunks は links（選んだ
     （文書名、見出し）の列）・existing（候補にある chunk_uid）・settings を受け取り、その画面の child と親の
     StoredChunk を返す。
+    section_outline / section_chunks は章節の拡張（#1436）の入力。章節と chunk の対応を持つ呼び出し元が渡す。
+    section_outline は chunk_uid を受け取り、その chunk の文書の章節の一覧（`section_expansion.SectionOutline`。
+    対応が無い chunk は None）を返す。section_chunks は document_id・chunk_set_id・section_id を受け取り、
+    章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。省略時は章節で広げない。
     """
     search: Callable[..., Any]
     check_ready: Callable[..., Any]
@@ -32,6 +36,8 @@ class AnswerDependencies:
     business_domains: Callable[[str], Sequence[str]] | None = None
     screen_catalog: Callable[..., dict[str, list[str]]] | None = None
     screen_chunks: Callable[..., Sequence[Any]] | None = None
+    section_outline: Callable[..., Any] | None = None
+    section_chunks: Callable[..., Sequence[Any]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -85,6 +91,14 @@ def injected_screen_chunks(**kwargs) -> list[Any] | None:
     if current is None or current.screen_chunks is None:
         return None
     return list(current.screen_chunks(**kwargs))
+
+
+def section_dependencies() -> tuple[Callable[..., Any], Callable[..., Sequence[Any]]] | None:
+    """注入された章節の読み込み（章節の一覧, 章節の chunk）。注入が無ければ None（章節で広げない。#1436）。"""
+    current = _active.get()
+    if current is None or current.section_outline is None or current.section_chunks is None:
+        return None
+    return current.section_outline, current.section_chunks
 
 
 def search_adb_hybrid_chunks(**kwargs):
