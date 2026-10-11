@@ -12,7 +12,9 @@ from typing import Any
 
 import anyio
 import httpx
+import httpx2
 import pytest
+from openai import AsyncOpenAI
 from pr_system_settings.model import (
     EnterpriseAiConfiguredModel,
     ModelSettingsTestRequest,
@@ -54,9 +56,10 @@ def test_runtime_calls_endpoint_as_is(
 ) -> None:
     urls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    # openai の SDK は httpx2 の client を受け取る（httpx の client は型が合わない）。
+    def handler(request: httpx2.Request) -> httpx2.Response:
         urls.append(str(request.url))
-        return httpx.Response(200, json=_RESPONSE)
+        return httpx2.Response(200, json=_RESPONSE)
 
     settings = Settings(
         _env_file=None,
@@ -66,12 +69,11 @@ def test_runtime_calls_endpoint_as_is(
         oci_enterprise_ai_default_text_model="text-a",
     )
     monkeypatch.setattr(builtin_runtime, "get_settings", lambda: settings)
-    real_client = builtin_runtime.AsyncOpenAI
     monkeypatch.setattr(
         builtin_runtime,
         "AsyncOpenAI",
-        lambda **kwargs: real_client(
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), **kwargs
+        lambda **kwargs: AsyncOpenAI(
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)), **kwargs
         ),
     )
 

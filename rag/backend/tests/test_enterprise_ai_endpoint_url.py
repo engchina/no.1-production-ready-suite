@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_enterprise_ai import EnterpriseAiHttpTransport, OciEnterpriseAiClient
 from app.config import EnterpriseAiConfiguredModel, Settings
 from app.services.control import service_runtime_env
 
@@ -70,7 +70,11 @@ class RecordingTransport:
 async def test_model_test_client_calls_endpoint_as_is(endpoint: str, expected: str) -> None:
     """接続テスト・Vision が使う共有 core（rag_parser_core）の URL。"""
     transport = RecordingTransport()
-    client = OciEnterpriseAiClient(settings=_settings(endpoint), http_transport=transport)
+    # テキストの生成は post_json だけを使う（ほかの method は呼ばない）。
+    client = OciEnterpriseAiClient(
+        settings=_settings(endpoint),
+        http_transport=cast(EnterpriseAiHttpTransport, transport),
+    )
 
     await client.generate("質問", "根拠")
 
