@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -54,6 +55,8 @@ RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 # 本文を読むツール（#1330・#1332）。軽いので Run ごとの RAG の上限には数えない。
 RAG_READ_SOURCE = "rag_read_source"
 RAG_READ_DOCUMENT = "rag_read_document"
+# 章節（章節ナビゲーションの章節）の本文を章節の終わりまで読む（#1438）。
+RAG_READ_SECTION = "rag_read_section"
 # Control Plane が自分で呼ぶ業務ガイドの照合（#1322）の呼び出しの trace_id の接頭辞。
 # モデルの予算・消費には数えない（回答の最終の検証と同じく Control Plane の呼び出し）。
 GUIDE_CHECK_TRACE_PREFIX = "guide_check_"
@@ -74,9 +77,30 @@ _REFERENCE_PATTERN = re.compile(
 )
 MAX_REFERENCES = 5
 REFERENCE_READ_HINT = (
-    "rag_outline でこの文書の節の構成を確かめ、"
-    "当たる節の cursor を rag_read_document に渡して読む。"
+    "rag_outline でこの文書の章節の構成を確かめ、"
+    "当たる章節の section_id を rag_read_section に渡して読む。"
 )
+# 根拠の章節がその抜粋より長く、質問が手順・一覧・条件のまとまりを求めるとき（#1438）。章節を読み
+# 切るかはモデルが決める（planner は作らない。#756）。読む回数はツールの呼び出しの上限に数える。
+SECTION_READ_HINT = (
+    "質問は手順・一覧・条件のまとまりを求めていて、根拠の章節（section）は抜粋より長い。"
+    "抜粋だけで答えず、rag_read_section に document_id と根拠の chunk_id（または section_id）を"
+    "渡して章節を終わりまで読む（section_complete が false なら next_cursor で続きを読む）。"
+    "章節を読んでも足りなければ up を 1 増やして親の章節を読む。読む回数と max_chars は、"
+    "この実行の残りのツールの呼び出しに合わせる。"
+)
+SECTION_PARENT_HINT = (
+    "章節を終わりまで読んだ。質問の手順・一覧・条件がまだそろわなければ、同じ引数で up を 1 増やし"
+    "て親の章節（parent_section_id）を読む。そろったら読んだ章節の頁を示して答える。"
+)
+SECTION_CONTINUE_HINT = "章節の続きがある。next_cursor を rag_read_section に渡して続きを読む。"
+# 手順・一覧・条件のまとまりを求める質問の語（NFKC の後で照合する）。
+_GROUPED_QUESTION_PATTERN = re.compile(
+    r"手順|一覧|すべて|全て|全部|条件|項目|流れ|ステップ|順番|順序|リスト|列挙|挙げ|まとめ|"
+    r"チェック|確認事項|要件|段取り|作業内容|何を(?:する|すれば|確認|行)"
+)
+# 章節を読む案内に入れる章節の数の上限。
+MAX_SECTION_READS = 3
 
 # 固定の RAG では回答を確定できず、Agent が自分の道具で続ける対応（#1283）。確認の質問
 # （needs_clarification）は利用者に聞けば続けられ、人への引き継ぎ（needs_human）と資料の不足
@@ -224,11 +248,97 @@ def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | N
         found = [source(item, "excerpt") for item in items]
     elif tool == RAG_READ_SOURCE:
         found = [source(output, "text", "parent_text")]
-    elif tool == RAG_READ_DOCUMENT:
+    elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         found = [source(output, "text")]
     else:
         return []
     return [item for item in found if item is not None]
+
+
+def asks_for_grouped_content(texts: Sequence[object]) -> bool:
+    """質問が手順・一覧・条件のまとまりを求めるか（#1438。章節を読み切る案内を出すか）。"""
+    return any(
+        isinstance(text, str)
+        and _GROUPED_QUESTION_PATTERN.search(unicodedata.normalize("NFKC", text))
+        for text in texts
+    )
+
+
+def section_read_note(
+    tool: str, output: JsonObject, question_texts: Sequence[object]
+) -> JsonObject | None:
+    """根拠の章節を読み切る案内（#1438。案内しなければ None）。
+
+    根拠を集めるツールでは、質問が手順・一覧・条件のまとまりを求め、根拠の章節（``section``）が
+    抜粋より長いときに、読む章節（最大 3 つ。回答に使った根拠・上位の根拠の順）を示す。
+    ``rag_read_section`` では、章節の続きがあれば続きを、読み切ったら親の章節へ上がる案内を返す
+    （階層 1 の章節は親が文書全体なので案内しない）。
+    """
+    if tool == RAG_READ_SECTION:
+        section = output.get("section")
+        if not isinstance(section, dict):
+            return None
+        if output.get("section_complete") is not True:
+            return {"section_id": section.get("section_id"), "next_step": SECTION_CONTINUE_HINT}
+        parent = section.get("parent_section_id")
+        level = section.get("level")
+        # 階層 1 の章節の親は文書全体なので、上がる案内はしない（文書全体は rag_read_document）。
+        if (
+            not isinstance(parent, str)
+            or not parent
+            or not isinstance(level, int)
+            or level <= 1
+            or not asks_for_grouped_content(question_texts)
+        ):
+            return None
+        return {
+            "section_id": section.get("section_id"),
+            "parent_section_id": parent,
+            "next_step": SECTION_PARENT_HINT,
+        }
+    if tool not in RAG_BUDGET_TOOLS or not asks_for_grouped_content(question_texts):
+        return None
+    evidence = output.get("evidence")
+    items = (
+        [item for item in evidence if isinstance(item, dict)] if isinstance(evidence, list) else []
+    )
+    ordered = [item for item in items if item.get("used_in_answer") is True] + [
+        item for item in items if item.get("used_in_answer") is not True
+    ]
+    sections: list[JsonObject] = []
+    seen: set[tuple[str, str]] = set()
+    for item in ordered:
+        section = item.get("section")
+        document_id = item.get("document_id")
+        if not isinstance(section, dict) or not isinstance(document_id, str):
+            continue
+        section_id = section.get("section_id")
+        chars = section.get("chars")
+        excerpt = item.get("excerpt")
+        excerpt_chars = len(excerpt) if isinstance(excerpt, str) else 0
+        if not isinstance(section_id, str) or not isinstance(chars, int) or chars <= excerpt_chars:
+            continue
+        key = (document_id, section_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        sections.append(
+            {
+                "document_id": document_id,
+                "chunk_id": item.get("chunk_id"),
+                "section_id": section_id,
+                "title": section.get("title"),
+                "page_start": section.get("page_start"),
+                "page_end": section.get("page_end"),
+                "chars": chars,
+                "parent_section_id": section.get("parent_section_id"),
+            }
+        )
+        if len(sections) >= MAX_SECTION_READS:
+            break
+    if not sections:
+        return None
+    return {"sections": sections, "next_step": SECTION_READ_HINT}
 
 
 def text_references(tool: str, output: JsonObject) -> list[JsonObject]:

@@ -553,6 +553,27 @@ def test_evidence_groups_take_read_source_and_read_document_chunks() -> None:
     ]
 
 
+def test_evidence_groups_take_read_section_chunks() -> None:
+    """rag_read_section（#1438）で読んだ章節の chunk も、最終の検証の根拠に入れる。"""
+    steps = [
+        _step(
+            "rag__rag_read_section",
+            {"document_id": "doc-1", "chunk_id": "c-1"},
+            {"document_id": "doc-1", "chunks": [{"chunk_id": "c-1"}, {"chunk_id": "c-2"}]},
+        )
+    ]
+
+    assert run_evidence_groups(steps) == [
+        (
+            "rag__rag_read_section",
+            [
+                {"document_id": "doc-1", "chunk_id": "c-1"},
+                {"document_id": "doc-1", "chunk_id": "c-2"},
+            ],
+        )
+    ]
+
+
 def test_evidence_groups_keep_chunks_the_answer_cited_within_the_limit() -> None:
     """多段の質問の評価の Run の形（#1364）: 3 回の検索で 36 件の根拠を集め、回答が 1 回目の
     検索の根拠（台帳の行）を引用した。新しい順の 30 件で切ると台帳の行が検証に入らず、正しい結論が

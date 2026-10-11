@@ -174,7 +174,8 @@ skill_registry.register(
             "段ごとに確かめた文書と場所（節・頁）を示す。"
             "確かめられなかった段は推測で補わず、その点を示して分かった段までを答える。"
             "結果の rag_calls_remaining（この実行で残る検索の回数）が残りの段の数より少なければ、"
-            "段をまとめるか、読み取り（rag_read_document・rag_read_source。回数に数えない）で補う。"
+            "段をまとめるか、読み取り（rag_read_section・rag_read_document・rag_read_source。"
+            "回数に数えない）で補う。"
             "旧版・変更点・改定前との違いを尋ねる質問と、旧版の年度・版を名指しする質問"
             "（「2025 年度と 2026 年度では」「2023 年度版の規程では」）では、rag_search・"
             "rag_retrieve_evidence に include_superseded: true を渡して旧版も検索する"
@@ -186,12 +187,21 @@ skill_registry.register(
             "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
             "根拠の excerpt が切り詰められている（truncated）か、前後の条件・例外を確かめる必要が"
             "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
+            "根拠の section は、その根拠が属する章節（文書の章節ナビゲーションの章節。"
+            "section_id・頁の範囲・文字数・親の章節）。質問が手順・一覧・条件のまとまり"
+            "（「手順をすべて」「確認する項目」「条件の一覧」など）を求め、根拠の章節の文字数"
+            "（section.chars）が抜粋より長いときは、抜粋だけで答えず、rag_read_section に "
+            "document_id と根拠の chunk_id（または section_id）を渡して章節を終わりまで読む"
+            "（section_complete が false なら next_cursor で続きを読む）。章節を読んでも"
+            "手順・条件が足りなければ、up を 1 ずつ増やして親の章節を読む。上がる回数・読む量"
+            "（max_chars）は、この実行の残りのツールの呼び出しに合わせる（結果の section_reads が"
+            "付いたらその next_step に従う）。答えには読んだ章節の名前と頁を示す。"
             "検索で当たらなかった前後の章・本文が指す同じ文書の別の箇所（「第 4 章を参照」など。"
-            "結果の references）・長い文書の続きは、rag_outline で文書の節の構成を見て、"
-            "rag_read_document で読む（節の cursor・page・section・locator で読み始め、"
-            "続きは next_cursor を渡す）。根拠の locator.element_locator は"
-            " rag_read_source と rag_read_document の locator に渡せ、chunk が作り直されても"
-            "同じ箇所を読める。"
+            "結果の references）・長い文書の続きは、rag_outline で文書の章節の構成"
+            "（section_id・階層・頁）を見て、rag_read_section で章節を読むか、rag_read_document で"
+            "順に読む（section_id・page・locator で読み始め、続きは next_cursor を渡す）。"
+            "根拠の locator.element_locator は rag_read_source と rag_read_document の locator に"
+            "渡せ、chunk が作り直されても同じ箇所を読める。"
             "rag_search の outcome で答え方を決める。answered は根拠に沿って答える。"
             "conditional は conditions（説明が成り立つ条件）と gaps（資料で確かめられない点）を"
             "示し、条件ごとに分けて答える。"
@@ -226,6 +236,7 @@ skill_registry.register(
                     "rag_retrieve_evidence",
                     "rag_outline",
                     "rag_read_document",
+                    "rag_read_section",
                 ],
             )
         ],

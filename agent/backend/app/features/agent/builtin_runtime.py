@@ -95,6 +95,7 @@ from app.features.agent.support_task import (
     RAG_BUDGET_TOOLS,
     RAG_LOOKUP_GUIDES,
     RAG_READ_DOCUMENT,
+    RAG_READ_SECTION,
     RAG_READ_SOURCE,
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
@@ -109,6 +110,7 @@ from app.features.agent.support_task import (
     record_codes,
     repeated_query_note,
     search_limit_schema,
+    section_read_note,
     superseded_versions_note,
     support_task_instructions,
     text_references,
@@ -788,16 +790,24 @@ class _ToolRecorder:
         （`adjusted_limits`。#1403）を、質問が名指しする年度・版が当たった文書の旧版に当たり、
         旧版を検索していなければ旧版も含めた検索し直しの案内（`superseded_versions`。#1405）を、
         RAG の予算があればこの Run で残る検索の回数
-        （`rag_calls_remaining`）を足す。
+        （`rag_calls_remaining`）を、根拠の章節が抜粋より長く質問が手順・一覧・条件のまとまりを
+        求めるときは章節を読み切る案内（`section_reads`。#1438）を足す。
         """
         from app.features.agent.runtime import runtime_repository
 
         tool = mcp_base_tool_name(call.name)
-        if tool not in RAG_BUDGET_TOOLS and tool not in {RAG_READ_SOURCE, RAG_READ_DOCUMENT}:
+        if tool not in RAG_BUDGET_TOOLS and tool not in {
+            RAG_READ_SOURCE,
+            RAG_READ_DOCUMENT,
+            RAG_READ_SECTION,
+        }:
             return output
         references = text_references(tool, output)
         if references:
             output = {**output, "references": references}
+        section_note = section_read_note(tool, output, [self.goal, call.arguments.get("query")])
+        if section_note is not None:
+            output = {**output, "section_reads": section_note}
         if tool in RAG_BUDGET_TOOLS:
             steps = runtime_repository.get_run(self.run_id).steps
             repeated = repeated_query_note(
