@@ -78,6 +78,15 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # 実体の 1 段の拡張(#1362)。検索・回答プロファイルで選ぶ(#1388)。
         "entity_expansion_enabled": resolved_settings.rag_entity_expansion_enabled,
         "entity_expansion_max_chunks": resolved_settings.rag_entity_expansion_max_chunks,
+        # 章節の拡張(#1436)。検索・回答プロファイルで選ぶ。
+        "section_expansion_enabled": resolved_settings.rag_section_expansion_enabled,
+        "section_expansion_max_levels": resolved_settings.rag_section_expansion_max_levels,
+        "section_expansion_input_token_percent": (
+            resolved_settings.rag_section_expansion_input_token_percent
+        ),
+        "section_expansion_time_limit_seconds": (
+            resolved_settings.rag_section_expansion_time_limit_seconds
+        ),
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

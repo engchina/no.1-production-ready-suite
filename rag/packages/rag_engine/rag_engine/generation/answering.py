@@ -1065,12 +1065,16 @@ def _grade_crag_retrieval(
 
 
 def _grounded_spans(question: str, context: AnswerContext, image_evidence: Sequence[dict[str, Any]],
-                    runtime_knowledge: RuntimeKnowledgeContext | None, *, budget: int | None = None) -> list[dict[str, Any]]:
+                    runtime_knowledge: RuntimeKnowledgeContext | None, *, budget: int | None = None,
+                    whole_records: bool = False) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
+    whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
     """
-    budget_option = {"budget": int(budget)} if budget else {}
+    budget_option: dict[str, Any] = {"budget": int(budget)} if budget else {}
+    if whole_records:
+        budget_option["whole_records"] = True
     from rag_engine.generation.grounded import tag_spans
     from rag_engine.retrieval.metadata_context import with_child_contexts
     selection_question = question
@@ -1233,11 +1237,16 @@ def synthesize_grounded_answer(
     answer_llm_provider: str | None = None,
     query_expansion: QueryExpansionResult | None = None,
     known_gaps: Sequence[str] = (),
+    unread_sections: Sequence[str] = (),
+    evidence_budget_chars: int | None = None,
 ) -> GroundedAnswer:
     """主張と引用の対で回答を生成し、検査・局所監査・最大2回の是正を行う。
 
     known_gaps は CRAG 評価器が根拠を確認できなかった観点（`CragRetrievalAttempt.missing_aspects`）。
     生成の context block と監査入力に既知の欠落として渡す (#986)。
+    unread_sections は章節の拡張が上限で読めなかった章節の文 (#1436)。本文の「確かめられていない点」に出し、回答を
+    条件つき（conditional）にする。evidence_budget_chars は章節を広げたときの原文の予算（文字）で、渡すと広げた根拠を
+    予算の中で切らずに渡す（None は `settings.evidence_budget_chars`）。
 
     是正は1回につき1手段（既取得poolからの同機能根拠の追加、原画像の添付、指摘の反映）。
     支持済みの要求を失うか問題が増える候補は採用せず、最良の回を公開する。
@@ -1262,7 +1271,8 @@ def synthesize_grounded_answer(
     context, unit_fill = _fill_same_unit(question, context)
     for number in range(grounded.MAX_ROUNDS):
         spans = _grounded_spans(question, context, images, runtime_knowledge,
-                                budget=getattr(settings, "evidence_budget_chars", None))
+                                budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+                                whole_records=evidence_budget_chars is not None)
         prompt = _grounded_prompt(question, spans, context, images, feedback, question_plan, runtime_knowledge,
                                   inquiry_conditions, query_expansion, template=template, known_gaps=known_gaps)
         with _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
@@ -1348,6 +1358,8 @@ def synthesize_grounded_answer(
     gaps = [entry.item.text for entry in current.checked if entry.item.kind == "gap"]
     if off_goal:
         gaps.append(grounded.OFF_GOAL_GAP)
+    # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「確かめられていない点」に出し、回答を条件つきにする。
+    unread = [line for line in dict.fromkeys(unread_sections) if line]
     # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
     # 内部 ID を含む差分説明になりやすく、監査が返さなかった id は実際には答えている可能性があるため、
     # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
@@ -1374,18 +1386,18 @@ def synthesize_grounded_answer(
         shown = [*published, *extra]
         envelope_entries = shown
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmations)
+            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmations, unverified=unread)
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
         # 根拠全体を見た監査が必要と挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
         shown = needed
         envelope_entries = needed
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmations)
+            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmations, unverified=unread)
     elif published:
         envelope_entries = published
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, current.checked, reviewed_unanswered, confirmations)
+            current.summary, current.checked, reviewed_unanswered, confirmations, unverified=unread)
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
         # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
@@ -1397,14 +1409,14 @@ def synthesize_grounded_answer(
         answer_text, citation_lines = grounded.render_with_citations(
             grounded.CONFIRMATION_ONLY_SUMMARY if confirmations
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
-            [*related, *gap_items], confirmations=confirmations)
+            [*related, *gap_items], confirmations=confirmations, unverified=unread)
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
     # 適用（applicability）は別の判定で、適用未確認（unverified）は人手確認の対象にする (#1012)。
     unsettled = [e for e in published if not e.quote_only and e.item.applies != "matched"]
     confidence = current.draft.confidence
     if not current.verified or off_goal:
         confidence = "low"
-    elif confidence == "high" and (current.problems or unanswered or unsettled):
+    elif confidence == "high" and (current.problems or unanswered or unsettled or unread):
         confidence = "medium"
     unverified = any(e.item.applies == "unverified" for e in unsettled)
     trace = {
@@ -1422,7 +1434,7 @@ def synthesize_grounded_answer(
         requests=current.requests,
         reviews=[review.model_dump() for review in current.audit.request_reviews] if current.audit else None,
         items=[envelope_item(entry) for entry in envelope_entries],
-        gaps=gaps, confirmations=confirmations,
+        gaps=[*gaps, *unread], confirmations=confirmations,
         external_data_required=bool(current.draft.external_data_required or current.draft.external_data_items),
         reference_materials=_string_list(current.draft.reference_materials), off_goal=off_goal,
     )
@@ -1432,8 +1444,8 @@ def synthesize_grounded_answer(
         used_images=tuple(_used_image_entries([{"image_id": e.span["source_id"], "source": e.span.get("source", ""),
             "page": e.span.get("page", ""), "look_at": "引用", "visible_evidence": e.item.quote[:200]} for e in shown])),
         reasoning_summary=f"引用照合済みの説明 {current.verified} 件、原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、原文と一致せず除外 {len(current.dropped)} 件。",
-        insufficient_reason="\n".join(dict.fromkeys([*gaps, *unanswered])),
-        needs_human_review=bool(gaps or unanswered or current.problems or current.draft.external_data_required or unverified
+        insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
+        needs_human_review=bool(gaps or unread or unanswered or current.problems or current.draft.external_data_required or unverified
                                 or current.draft.reference_materials),
         external_data_required=current.draft.external_data_required,
         external_data_items=tuple(_string_list(current.draft.external_data_items)),
@@ -2122,6 +2134,8 @@ def answer_question_result(
     normalized_question = extract_original_question(question)
     if not normalized_question:
         raise ValueError("質問を入力してください。")
+    # 章節の拡張（#1436）の時間の上限は、回答の開始から数える。
+    answer_started_at = monotonic()
 
     effective_rerank_enabled = (
         bool(settings.default_rerank_enabled)
@@ -2374,6 +2388,13 @@ def answer_question_result(
                 crag_rewrites=crag_rewrites,
                 retrieval_top_k=chunk_top_k,
             )
+        section_expansion = None
+        if selected_answer_flow == CRAG_ANSWER_FLOW and context.records and context.text.strip():
+            context, section_expansion = _expand_context_by_sections(
+                normalized_question, context, settings, crag_attempts,
+                answer_llm_provider=answer_llm_provider, rerank_enabled=effective_rerank_enabled,
+                started_at=answer_started_at,
+            )
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。回答文の生成は未実行です。")
@@ -2449,12 +2470,16 @@ def answer_question_result(
             question_plan=question_plan, runtime_knowledge=runtime_knowledge, inquiry_conditions=inquiry_conditions,
             image_evidence=image_evidence, image_prompt_mode=image_prompt_mode,
             answer_llm_provider=answer_llm_provider, query_expansion=expansion,
-            known_gaps=crag_attempts[-1].missing_aspects if crag_attempts else (),
+            known_gaps=_known_gaps(crag_attempts, section_expansion),
+            unread_sections=section_expansion.gap_lines if section_expansion is not None else (),
+            evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
         )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
         response = replace(response, generation_trace={**(response.generation_trace or {}),
-                                                       "request_coverage": request_coverage})
+                                                       "request_coverage": request_coverage,
+                                                       **({"section_expansion": section_expansion.trace}
+                                                          if section_expansion is not None else {})})
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:
             response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
@@ -2485,6 +2510,91 @@ def answer_question_result(
             crag_rewrites=crag_rewrites,
             retrieval_top_k=chunk_top_k,
         )
+
+
+def _expand_context_by_sections(
+    question: str,
+    context: AnswerContext,
+    settings: Settings,
+    attempts: Sequence[CragRetrievalAttempt],
+    *,
+    answer_llm_provider: str | None,
+    rerank_enabled: bool,
+    started_at: float,
+) -> tuple[AnswerContext, Any]:
+    """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
+
+    章節の読み込みが注入されていない・設定で無効なら何もしない（None を返す）。足りるかの判定は CRAG の評価器
+    （`_grade_crag_retrieval`）で、段ごとに 1 回呼ぶ。
+    """
+    from rag_engine.dependencies import section_dependencies
+    from rag_engine.generation import section_expansion as sections
+    from rag_engine.resources.deadline import remaining_seconds
+
+    ports = section_dependencies()
+    if ports is None or not getattr(settings, "section_expansion_enabled", True):
+        return context, None
+    last = attempts[-1] if attempts else None
+    graded: list[CragRetrievalAttempt] = []
+
+    def grade(candidate: AnswerContext, level: int) -> CragRetrievalAttempt:
+        queries = last.retrieval_queries if last is not None else (question,)
+        attempt = _grade_crag_retrieval(len(attempts) + level, question, question, queries, candidate, settings,
+                                        answer_llm_provider=answer_llm_provider)
+        graded.append(attempt)
+        return attempt
+
+    rerank = rerank_text_with_scores if rerank_enabled and _rerank_configured(settings) else None
+    with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、足りるかを確かめながら根拠に加えます。") as step:
+        result = sections.expand_sections(
+            question, context, settings, last_attempt=last, grade=grade,
+            section_outline=ports[0], section_chunks=ports[1], rerank=rerank,
+            started_at=started_at, deadline_remaining=remaining_seconds, clock=monotonic,
+        )
+        result.trace["grades"] = [item.to_payload() for item in graded]
+        if result.stop_reason in {sections.STOP_SUFFICIENT, sections.STOP_DISABLED} and not result.applied:
+            step.hide()
+        added = len(result.context.records) - len(context.records)
+        step.result(f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
+                    *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])))
+        if result.unread:
+            step.impact("上限に達したため、読めなかった章節を「確かめられていない点」に示し、条件つきの回答にします。")
+    return result.context, result
+
+
+_SECTION_STOP_LABELS = {
+    "sufficient": "根拠が足りると判定",
+    "document_read": "文書全体まで読んだ",
+    "max_levels": "広げる段の上限",
+    "token_budget": "根拠の入力の上限",
+    "time_limit": "回答の時間の上限",
+    "no_sections": "章節の対応なし",
+    "grade_error": "判定に失敗",
+    "disabled": "無効",
+}
+
+
+def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tuple[str, ...]:
+    """生成に渡す既知の欠落。章節を広げて判定し直したときは、その最後の判定の欠落にする (#1436)。"""
+    grades = (expansion.trace.get("grades") if expansion is not None else None) or []
+    if grades:
+        return tuple(grades[-1].get("missing_aspects") or ())
+    return attempts[-1].missing_aspects if attempts else ()
+
+
+def _section_evidence_budget(context: AnswerContext, settings: Settings, expansion: Any) -> int | None:
+    """章節を広げたときの原文の予算（文字）。広げた根拠を切らずに渡せるよう、入力の上限の範囲で広げる (#1436)。
+
+    見積もりは 1 字 1 token 以上なので、文字の予算を入力 token の上限以下にすれば token も上限を超えない。
+    広げていなければ None（既定の `evidence_budget_chars`）。
+    """
+    if expansion is None or not expansion.applied:
+        return None
+    from rag_engine.generation.section_expansion import SectionExpansionLimits
+    base = int(getattr(settings, "evidence_budget_chars", 0) or 0)
+    total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
+    limit = SectionExpansionLimits.from_settings(settings).input_tokens
+    return max(base, min(limit, total + total // 10))
 
 
 def _retrieve_without_answer(

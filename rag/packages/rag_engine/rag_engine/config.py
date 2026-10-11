@@ -279,6 +279,13 @@ class Settings:
     request_coverage_max_queries: int = 2
     request_coverage_max_chunks: int = 4
     request_coverage_deadline_seconds: float = 10.0
+    # 当たった chunk の章節から親の章節へ段階的に広げて文脈に入れる (#1436)。章節と chunk の対応を注入した
+    # 呼び出し元（`AnswerDependencies.section_outline` / `section_chunks`）でだけ動く。上限は、根拠の入力 token
+    # （モデルの入力の上限に対する割合）・上がる段の数・回答の開始からの秒数。
+    section_expansion_enabled: bool = True
+    section_expansion_max_levels: int = 4
+    section_expansion_input_token_percent: int = 50
+    section_expansion_time_limit_seconds: float = 600.0
 
     @property
     def vision_model(self) -> str:
@@ -438,6 +445,12 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
         request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),
         request_coverage_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS", 10.0)),
+        section_expansion_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXPANSION", True),
+        section_expansion_max_levels=max(0, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 4)),
+        section_expansion_input_token_percent=max(1, min(100, _env_int(
+            env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),
+        section_expansion_time_limit_seconds=max(0.0, _env_float(
+            env, "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS", 600.0)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
