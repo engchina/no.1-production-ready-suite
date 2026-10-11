@@ -1040,6 +1040,269 @@ def test_sql_skeleton_is_built_deterministically_from_requirements() -> None:
     assert again is not None and again.sql_skeleton == skeleton
 
 
+def _clause_lines(skeleton: str, keyword: str) -> list[str]:
+    return [line for line in skeleton.splitlines() if line.startswith(keyword)]
+
+
+def test_skeleton_settled_items_without_fragment_are_not_undecided() -> None:
+    """確定して SQL の断片の無い項目（全件・並び順の指定なし）は ⟨未確定⟩ にせず、句も出さない。
+
+    #1466。
+    """
+
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _item(
+                "where_none",
+                "where",
+                "inferred",
+                label="絞り込み条件",
+                value="WHERE による絞り込みは行わず、全件を対象にする",
+            ),
+            _item(
+                "order_none",
+                "order_by",
+                "inferred",
+                label="並び順",
+                value="並び順の指定なし\n（ORDER BY を付けない）",
+            ),
+        )
+    )
+    created = _create(_runtime(llm), "受注金額の合計")
+    state = _state(created)
+    assert state.status == RequirementPhase.READY, state.message_ja
+    skeleton = state.sql_skeleton
+    assert "⟨未確定" not in skeleton
+    assert _clause_lines(skeleton, "WHERE") == []
+    assert _clause_lines(skeleton, "ORDER BY") == []
+    # 確定した内容は注記（SQL のコメントの 1 行）に残す。
+    assert "-- 絞り込み条件: WHERE による絞り込みは行わず、全件を対象にする" in skeleton
+    assert "-- 並び順: 並び順の指定なし （ORDER BY を付けない）" in skeleton
+
+
+def test_skeleton_after_answering_all_rows_and_delegated_order_has_no_undecided() -> None:
+    """「絞り込まずに全件」と、自由入力で AI に任せた並び順を答えた後の骨組みに
+    ⟨未確定⟩ を出さない。
+    """
+
+    def review(_context: dict[str, Any]) -> dict[str, Any]:
+        return _output(
+            _from_orders(),
+            _item(
+                "select_columns",
+                "select",
+                "confirmed",
+                columns=["APP.ORDERS.ORDER_ID", "APP.ORDERS.AMOUNT"],
+                sql_hint="ORDERS.ORDER_ID, ORDERS.AMOUNT",
+            ),
+        )
+
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _item(
+                "select_columns",
+                "select",
+                "confirmed",
+                columns=["APP.ORDERS.ORDER_ID", "APP.ORDERS.AMOUNT"],
+                sql_hint="ORDERS.ORDER_ID, ORDERS.AMOUNT",
+            ),
+            _item(
+                "order_by",
+                "order_by",
+                "missing",
+                label="並び順",
+                question="結果の並び順は指定しますか？",
+                answer_kind="free_text",
+            ),
+        ),
+        review,
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime, "受注の一覧")
+    first = _state(created)
+    # 未確定の項目だけが ⟨未確定⟩。
+    assert "⟨未確定: 並び順⟩" in first.sql_skeleton
+    assert "⟨未確定: 絞り込みの条件⟩" in first.sql_skeleton
+    data = created
+    for _ in range(4):
+        current = _state(data).current_item
+        if current is None:
+            break
+        if current.key == "risk_no_filter":
+            data = _answer(runtime, data)  # 絞り込まずに全件を対象にする
+        elif current.key == "risk_no_limit":
+            data = _answer(runtime, data)  # 100 件まで
+        else:
+            data = _answer(runtime, data, free_text="質問の内容から妥当に判断してください")
+    state = _state(data)
+    assert state.status == RequirementPhase.READY, state.message_ja
+    skeleton = state.sql_skeleton
+    assert "⟨未確定" not in skeleton
+    assert _clause_lines(skeleton, "WHERE") == []
+    assert _clause_lines(skeleton, "ORDER BY") == []
+    assert "-- 絞り込みの条件: 絞り込まずに全件を対象にする" in skeleton
+    assert "-- 並び順: 質問の内容から妥当に判断してください" in skeleton
+    assert "FETCH FIRST 100 ROWS ONLY" in skeleton
+
+
+def test_settled_items_without_fragment_stay_out_of_a_clause_with_fragments() -> None:
+    """断片のある句（期間の条件）に、確定して断片の無い項目（追加の条件なし）を
+    ⟨未確定⟩ で足さない。
+    """
+
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _where_shipped(),
+            _item(
+                "where_extra",
+                "where",
+                "inferred",
+                label="ほかの絞り込み",
+                value="追加の絞り込み条件なし",
+            ),
+        )
+    )
+    skeleton = _state(_create(_runtime(llm))).sql_skeleton
+    assert "⟨未確定" not in skeleton
+    assert _clause_lines(skeleton, "WHERE") == ["WHERE ORDERS.STATUS = 'SHIPPED'"]
+    assert "-- ほかの絞り込み: 追加の絞り込み条件なし" in skeleton
+
+
+# --- 8b. 期間を日付の範囲で確定した後に聞き直さない（#1466） -------------------------
+
+
+def _fiscal_reask_review(context: dict[str, Any]) -> dict[str, Any]:
+    """期間の確定の後の再検査で、年度の開始月・基準日・境界・同じ期間を聞き直す LLM のスタブ。"""
+
+    period = next(
+        item for item in context["answered_items"] if item["key"] == "period_this_fiscal_year"
+    )
+    assert "2026-04-01〜2027-03-31" in period["settled_ja"]
+    assert "年度の開始月" in period["settled_ja"]
+    return _output(
+        _from_orders(),
+        _select_total(),
+        _item(
+            "fiscal_year_start_month",
+            "other",
+            "missing",
+            label="年度の開始月",
+            question="「今年度」は何月に始まる年度ですか（例: 4月始まり、1月始まり）。",
+            answer_kind="free_text",
+        ),
+        _item(
+            "period_reference_date",
+            "period",
+            "missing",
+            label="期間の基準日",
+            question="期間の基準日は実行日ですか？",
+            answer_kind="free_text",
+        ),
+        _item(
+            "period_end_inclusive",
+            "where",
+            "ambiguous",
+            label="今年度の終了日",
+            question="今年度の終了日（2027-03-31）を含めますか？",
+            candidates=[_candidate("含める")],
+        ),
+        {
+            **_fiscal_period_item("ambiguous"),
+            "key": "period_fiscal_year_again",
+            "question_ja": "「今年度」はどの期間ですか？",
+        },
+        _item(
+            "other_currency",
+            "other",
+            "missing",
+            label="金額の税",
+            question="金額は税込と税抜のどちらですか？",
+            answer_kind="free_text",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "free_text", ["", "2026-04-01〜2027-03-31"], ids=["candidate", "free_text_range"]
+)
+def test_settled_period_does_not_ask_fiscal_start_again(free_text: str) -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _fiscal_period_item()), _fiscal_reask_review
+    )
+    runtime = _runtime(llm)
+    after_period = _create(runtime, "今年度の受注金額の合計")
+    # 日付の列（ORDERS.ORDER_DATE）と期間（2026-04-01〜2027-03-31）を答える。
+    for _ in range(2):
+        current = _state(after_period).current_item
+        assert current is not None
+        assert current.key in {"period_date_column", "period_this_fiscal_year"}
+        period_text = free_text if current.key == "period_this_fiscal_year" else ""
+        after_period = _answer(runtime, after_period, free_text=period_text)
+    assert len(llm.calls) == 2
+    # 再検査の入力に、期間が確定したことと、それに含まれる事項を明示する。
+    assert "settled_ja" in llm.calls[1]["system"]
+    keys = [item.key for item in _items(after_period)]
+    assert "fiscal_year_start_month" not in keys
+    assert "period_reference_date" not in keys
+    assert "period_end_inclusive" not in keys
+    assert "period_fiscal_year_again" not in keys
+    # 期間に関係しない確認は残す。
+    state = _state(after_period)
+    assert [item.key for item in state.unresolved_items] == ["other_currency"]
+    assert (
+        "ORDERS.ORDER_DATE >= DATE '2026-04-01' AND ORDERS.ORDER_DATE < DATE '2027-04-01'"
+        in state.sql_skeleton
+    )
+
+
+def test_fiscal_start_is_still_asked_when_the_settled_period_is_not_a_fiscal_year() -> None:
+    """「先月」を日付で確定しても、年度ごとの集計に要る年度の開始月は聞く。"""
+
+    last_month = _item(
+        "period_last_month",
+        "period",
+        "confirmed",
+        label="期間",
+        value="先月",
+        period={
+            "expression_ja": "先月",
+            "relative_kind": "last_month",
+            "count": 0,
+            "fiscal_year_start_month": 0,
+            "date_column": "APP.ORDERS.ORDER_DATE",
+        },
+    )
+
+    def review(_context: dict[str, Any]) -> dict[str, Any]:
+        return _output(
+            _from_orders(),
+            _select_total(),
+            _item(
+                "fiscal_year_start_month",
+                "group_by",
+                "missing",
+                label="年度の開始月",
+                question="年度ごとの集計の年度は何月に始まりますか？",
+                answer_kind="free_text",
+            ),
+        )
+
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), last_month), review)
+    runtime = _runtime(llm)
+    data = _create(runtime, "先月の受注金額の年度ごとの合計")
+    data = _answer(runtime, data)  # 日付の列か期間（2026-09-01〜2026-09-30）
+    data = _answer(runtime, data)
+    assert len(llm.calls) == 2
+    state = _state(data)
+    assert state.current_item is not None
+    assert state.current_item.key == "fiscal_year_start_month"
+
+
 # --- 9. 反映・SQL の生成に渡す要件 -----------------------------------------------------
 
 
