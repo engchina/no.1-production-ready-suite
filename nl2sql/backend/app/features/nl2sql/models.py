@@ -1346,6 +1346,18 @@ class JobCreateRequest(BaseModel):
         return self.chat or self.generation_only
 
     @property
+    def generation_question(self) -> str:
+        """SQL の生成に使う質問の文。
+
+        AI要件確認を反映したジョブは、確かめた質問の文（`sql_requirement.clarified_question`）。
+        チャットのターンは画面に利用者の質問を残し、生成だけを確かめた文で行う（#1442）。
+        """
+        requirement = self.sql_requirement
+        if requirement is not None and requirement.clarified_question.strip():
+            return requirement.clarified_question
+        return self.question
+
+    @property
     def ontology_grounding_requested(self) -> bool:
         """生成後の接地確認をするか（#1172）。"""
 
@@ -1420,6 +1432,9 @@ class JobData(BaseModel):
     # 実行に使った業務プロファイル（未指定のジョブは "default"）。MCP の結果に載せる（#231）。
     profile_id: str = ""
     question: str = ""
+    # AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に「確かめた要件」として
+    # 出す。#1442）。
+    requirement_question: str = ""
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False

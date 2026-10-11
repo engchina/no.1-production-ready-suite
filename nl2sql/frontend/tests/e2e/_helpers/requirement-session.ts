@@ -10,7 +10,9 @@ export type RequirementStage =
   | "limit"
   | "minimum"
   | "multi_select"
-  | "applied";
+  | "applied"
+  // 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない。#1442）。
+  | "clear";
 
 export const REQUIREMENT_SESSION_ID = "requirement-session-1";
 export const REQUIREMENT_QUESTION = "今年度の地域ごとの受注金額";
@@ -252,7 +254,11 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
     current_item: unresolved[0] ?? null,
     unresolved_items: unresolved,
     answered_count: items.filter((value) => value.answered).length,
-    review_round: limit ? 3 : stage === "needs_answer" || stage === "minimum" || stage === "multi_select" ? 0 : 1,
+    review_round: limit
+      ? 3
+      : stage === "needs_answer" || stage === "minimum" || stage === "multi_select" || stage === "clear"
+        ? 0
+        : 1,
     max_review_rounds: 3,
     review_limit_reached: limit,
     select_from_clear: minimum.length === 0,
@@ -277,6 +283,15 @@ function itemsFor(stage: RequirementStage): Record<string, unknown>[] {
     case "ready":
     case "applied":
       return [fromItem, selectItem, joinItem, periodAnswered, groupItem, orderItem];
+    case "clear":
+      return [
+        fromItem,
+        selectItem,
+        joinItem,
+        { ...periodAnswered, source: "question", answered: false, answer_ja: "" },
+        groupItem,
+        orderItem,
+      ];
     case "corrected":
       return [
         fromItem,

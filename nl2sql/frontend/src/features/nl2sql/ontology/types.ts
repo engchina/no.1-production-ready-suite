@@ -869,6 +869,10 @@ export interface QuerySession {
   requirement_review_round?: number;
   requirement_applied_at?: string | null;
   requirement_state?: RequirementState | null;
+  /** チャットの AI要件確認（#1442）。同じ会話の前のターンと、要件の検査に渡した会話の履歴。 */
+  chat?: boolean;
+  chat_previous_job_id?: string | null;
+  conversation_history?: { question: string; sql: string; status: string }[];
   proposal_ids?: string[];
   suggested_question?: string | null;
   intent_version?: number;
@@ -904,6 +908,12 @@ export interface QuerySessionCreateRequest {
   row_limit?: number;
   engine?: "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
   clarification_mode?: ClarificationMode;
+  /**
+   * チャットの AI要件確認（#1442。guided だけ）。業務プロファイルは画面で選んでいるので推薦の確認は無い。
+   * `previous_job_id` は同じ会話の前のターン（その会話の前の質問と SQL を要件の検査に渡す）。
+   */
+  chat?: boolean;
+  previous_job_id?: string | null;
 }
 
 export interface ClarificationAnswerRequest {

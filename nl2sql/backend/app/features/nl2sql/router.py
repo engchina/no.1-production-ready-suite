@@ -486,14 +486,14 @@ def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequ
 
     session を検査し（本人・同じ業務プロファイル・反映済み・同じ質問の文）、構造化した要件を
     `sql_requirement` に、要件で選んだ表を `allowed_objects` の範囲にする。
+    チャットのターン（#1442）は、チャットで確かめた session・同じ会話の続き・利用者が送った
+    質問の文と同じものだけを受け付ける。
     """
 
     req = req.model_copy(update={"sql_requirement": None})
     session_id = (req.requirement_session_id or "").strip()
     if not session_id:
         return req
-    if req.is_chat_turn:
-        raise HTTPException(status_code=400, detail="AI要件確認の結果はチャットでは使えません。")
     from .ontology_router import ontology_runtime
     from .ontology_service import OntologyNotFoundError, OntologyServiceError
 
@@ -505,6 +505,8 @@ def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequ
             or bool(getattr(principal, "is_system_admin", False)),
             profile_id=req.profile_id or "",
             question=req.question,
+            chat=req.is_chat_turn,
+            previous_job_id=req.previous_job_id,
         )
     except OntologyNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message_ja) from exc

@@ -202,3 +202,94 @@ def test_matched_features_ignore_number_only_headings_and_code_prefixes() -> Non
     shared = frozenset({"label:システム台帳"})
     weights = order_weights([shared] * 6 + [frozenset({"code:SYS-15"}) | shared])
     assert [distinct for distinct, _weight in weights] == [False] * 6 + [True]
+
+
+def _section_evidence(
+    document_id: str, title: str, chapter: int, heading: str, body: str
+) -> dict[str, Any]:
+    item = _evidence(
+        document_id, f"{document_id}:set:{chapter}", f"第 {chapter} 章 {heading}\n{body}"
+    )
+    item["locator"] = {"section_path": [title, f"第 {chapter} 章 {heading}", None]}
+    item["file_name"] = f"{document_id}.pdf"
+    return item
+
+
+def test_section_reference_by_document_and_chapter_number_enters_the_limit() -> None:
+    """`cmp-mes-vs-qms-deadline`（e1467、`run_cddfe2d1dc364df898ccf1d100a3d3e4`）の形: 回答は
+    「承認者が不在のときの代理（組織規程 第 4 章）」と文書名と章の番号だけで参照し、見出しの名前・
+    ID・引用を書かなかった。組織規程 第 4 章「承認者の代理」の chunk は根拠の候補 42 件の 35 番目
+    で、30 件に入らず「第 4 章の内容が根拠に無い」で unsupported になっていた。"""
+    org_title = "組織規程（システムの担当と承認者）"
+    first = [
+        _section_evidence(
+            "doc-org", org_title, 3, "部署の承認者", "製造部の承認者は生産本部長です。"
+        ),
+        _section_evidence(
+            "doc-org",
+            org_title,
+            4,
+            "承認者の代理",
+            "承認者が 3 営業日以上不在のときは、その部署が属する本部の本部長が代理で承認します。",
+        ),
+        # 別の会社の同じ名前の規程（題名の前に会社名が付く）の第 4 章は、回答の参照と別の文書。
+        _section_evidence(
+            "doc-org-logistics",
+            "サンプル物流社 組織規程（システムの担当と承認者）",
+            4,
+            "承認者の代理",
+            "課長が代理します。",
+        ),
+    ]
+    newer = [
+        [
+            _evidence(f"doc-{call}", f"doc-{call}:set:{index}", f"資料 {call} の {index} 番目")
+            for index in range(1, 14)
+        ]
+        for call in (1, 2, 3)
+    ]
+    steps = [_search(first, "承認者 代理"), *(_search(items, "段") for items in newer)]
+    answer = (
+        "製造実行システムの方が承認の期限は長いです（組織規程 第 3 章 部署の承認者）。\n\n"
+        "## 確かめられなかった点\n"
+        "承認者が不在のときの代理（組織規程 第 4 章）が適用される場合の期限は、"
+        "通常の期限とは別の扱いになります。"
+    )
+
+    [(_tool, newest)] = run_evidence_groups(steps)
+    # 新しい順では 41 件目で、上限の外（再現の前提）。
+    assert "doc-org:set:4" not in _chunk_ids(newest)
+
+    [(_tool, refs)] = run_evidence_groups(steps, answer)
+
+    ids = _chunk_ids(refs)
+    assert len(ids) == MAX_VALIDATION_EVIDENCE
+    assert set(ids[:2]) == {"doc-org:set:3", "doc-org:set:4"}
+    # 別の会社の規程の第 4 章は、回答の参照に当たらない（先にしない）。
+    assert "doc-org-logistics:set:4" not in ids[:2]
+
+
+def _section_matched(answer: str, labels: list[object], names: list[object] | None = None) -> bool:
+    evidence = EvidenceText()
+    evidence.add("本文", labels, names)
+    return any(
+        key.startswith("section:") for key in matched_features(answer_features(answer), evidence)
+    )
+
+
+def test_section_reference_needs_the_document_name_just_before_the_number() -> None:
+    labels: list[object] = ["組織規程（システムの担当と承認者）", "第 4 章 承認者の代理"]
+    # 括弧の補足を除いた名前・「の」をはさむ書き方・全角の数字・漢数字でも当たる。
+    assert _section_matched("代理は組織規程 第 4 章によります。", labels)
+    assert _section_matched("詳しくは「組織規程」の第４章を参照。", labels)
+    assert _section_matched("組織規程（システムの担当と承認者）第四章", labels)
+    # 「第 3 章・第 4 章」は前の参照の文書名を引き継ぐ。
+    assert _section_matched("組織規程 第 3 章・第 4 章", labels)
+    # ファイル名でも当たる。
+    assert _section_matched("org-rules.pdf の第 4 章", labels, ["org-rules.pdf"])
+    # 番号だけの参照・別の番号・別の文書の同じ番号・文書名から離れた番号は当てない。
+    assert not _section_matched("詳しくは第 4 章を参照してください。", labels)
+    assert not _section_matched("組織規程 第 14 章", labels)
+    assert not _section_matched("承認規程 第 4 章", labels)
+    assert not _section_matched("組織規程 第 2 章の部署と、承認規程の第 4 章", labels)
+    assert not _section_matched("組織規程に書かれた代理の扱いは第 4 章", labels)

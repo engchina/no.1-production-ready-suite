@@ -39,7 +39,10 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    無ければ、実データの確認を促していれば needs_environment_data、それ以外は insufficient_evidence。
    主張があり、実データの確認を促すか不足の印があれば conditional、無ければ answered。
 
-不足の印（`signals`）: 資料に記載が無い文・拒答の文（`absence`）・主張に添えた利用者への質問
+不足の印（`signals`）: 資料に記載が無い文・拒答の文（`absence`。ただし、結論の段落が質問に答え
+〔補足の外の主張に、最終の検証が根拠で確かめた段落がある〕、不足の文が補足の段落〔見出しが「補足」
+「注記」などの節と「なお、」で始まる段落〕にだけあるときは、質問が求めない周辺の事柄の不足として
+不足の印にせず、記録の `supplement_absence` だけを付ける。#1475）・主張に添えた利用者への質問
 （`question`）・回答の中の「確かめられていない点」の節（`unverified_section`。最終の検証が
 本文を残して確かめきれなかった点を示したときも。#1391）・最終の検証が
 根拠で確かめられない・根拠と矛盾すると判定して外した段落（`withheld_claims`。`unsupported` /
@@ -71,6 +74,7 @@ from app.features.agent.answer_passages import (
     is_clarification_only,
     non_claim_passages,
     passage_spans,
+    supplement_passages,
 )
 from app.features.agent.answer_validation import BLOCKING_CLAIM_STATUSES, STATUS_COMPLETED
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
@@ -128,6 +132,8 @@ SIGNAL_DATA_CONFIRMATION = "data_confirmation"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
 SIGNAL_BRANCHES = "branches"
 SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
+# 結論の段落で答えた後の、補足の段落だけの不足の文（不足の印にしない記録。#1475）。
+SIGNAL_SUPPLEMENT_ABSENCE = "supplement_absence"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset(
     {
@@ -260,11 +266,27 @@ def _count(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
 
 
-def _passages(answer: str) -> tuple[list[str], set[str]]:
-    """主張の段落と、主張ではない段落の印（不足・質問・確かめられていない点の節）。"""
+def _supported_quotes(validation: JsonObject | None) -> set[str]:
+    """最終の検証が根拠で確かめた（`supported`）段落（判定が出た `completed` のときだけ）。"""
+    if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
+        return set()
+    result = validation.get("result")
+    claims = result.get("claims") if isinstance(result, dict) else None
+    return {
+        str(claim.get("answer_quote") or "")
+        for claim in (claims if isinstance(claims, list) else [])
+        if isinstance(claim, dict)
+        and not claim.get("non_claim")
+        and claim.get("status") == "supported"
+    }
+
+
+def _passages(answer: str) -> tuple[list[str], set[str], set[str]]:
+    """主張の段落と、主張ではない段落の印（不足・質問・確かめられていない点の節）と、不足の文。"""
     kinds = non_claim_passages(answer)
     claims: list[str] = []
     signals: set[str] = set()
+    absences: set[str] = set()
     for line in answer.split("\n"):
         for _start, _end, text in passage_spans(line):
             kind = kinds.get(text)
@@ -272,7 +294,26 @@ def _passages(answer: str) -> tuple[list[str], set[str]]:
                 claims.append(text)
             elif kind in _KIND_SIGNALS:
                 signals.add(_KIND_SIGNALS[kind])
-    return claims, signals
+                if kind == KIND_ABSENCE:
+                    absences.add(text)
+    return claims, signals, absences
+
+
+def _absence_only_in_supplement(
+    answer: str, *, claims: list[str], absences: set[str], answered: set[str]
+) -> bool:
+    """結論の段落が質問に答え、不足の文が補足の段落にだけあるか（#1475）。
+
+    結論の段落（補足の外の主張）に、最終の検証が根拠で確かめた（`supported`）段落があるときを
+    「質問に答えた」とみなす（`answered` は外した段落と実データの確認を促す段落を除いた `supported`
+    の段落）。補足の「現在の各環境の設定値は資料からは分かりません。」のような、質問が求めない
+    周辺の事柄の不足は、答えの不足ではない。結論の段落の不足の文（資料に答えが無いことを結論に
+    した回答。#1454）は今までどおり不足の印にする。最終の検証が判定を出さなかった回答は変えない。
+    """
+    supplement = supplement_passages(answer)
+    if not absences or not absences <= supplement:
+        return False
+    return any(text in answered for text in claims if text not in supplement)
 
 
 def _rag_insufficient(steps: list[RunStep]) -> bool:
@@ -343,7 +384,7 @@ def answer_outcome(
             signals={SIGNAL_QUESTION},
         )
     removed, disputed, confirmations, withheld = _validation_parts(validation)
-    claims, signals = _passages(answer)
+    claims, signals, absences = _passages(answer)
     if withheld.get("all") is True:
         return _content(
             INSUFFICIENT_EVIDENCE, BASIS_WITHHELD_ALL, rag_outcome=rag_outcome, signals=signals
@@ -351,6 +392,11 @@ def answer_outcome(
     # 利用者に現場のデータ・記録の確認を求める段落（検証の判定が supported でも。#1317）。
     # 外した段落は利用者に見えないので数えない。
     confirmations |= environment_check_passages(answer) - removed
+    # 結論の段落で答えた後の、補足の段落だけの不足の文は不足の印にしない（#1475）。
+    answered = _supported_quotes(validation) - removed - confirmations
+    if _absence_only_in_supplement(answer, claims=claims, absences=absences, answered=answered):
+        signals.discard(SIGNAL_ABSENCE)
+        signals.add(SIGNAL_SUPPLEMENT_ABSENCE)
     if disputed:
         signals.add(SIGNAL_WITHHELD_CLAIMS)
     # 利用者の条件を確かめずに、分岐ごとに答えた（rag_search の確認の求めに分岐で答えたのと同じ）。

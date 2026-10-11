@@ -13,6 +13,7 @@
 - refusal_accuracy: 標準回答がある質問は答えるべき質問。拒答なら 0
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -29,9 +30,46 @@ UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 REFERENCE_ONLY_METRICS = frozenset({"faithfulness"})
 
 
+# Agent の最終の検証が回答の末尾に足す「確かめられていない点」の節の見出し（外した段落の原文と
+# 検証の理由を並べる。#1456）。Agent の `answer_validation.UNVERIFIED_HEADING` と同じ文言で、
+# 製品をまたいで import しないため写す（両方のテストが
+# platform/contracts/answer-passages/unverified-section.json で確かめる）。
+AGENT_UNVERIFIED_HEADING = "確かめられていない点"
+# 見出しの行（Markdown の見出し・太字だけの行。後ろの「：」は許す）。
+_HEADING_LINE = re.compile(r"(?:#{1,6}\s+(?P<md>.+?)|\*\*(?P<bold>[^*\n]+)\*\*)\s*[:：]?")
+
+
+def _heading_title(line: str) -> str | None:
+    match = _HEADING_LINE.fullmatch(line.strip())
+    if match is None:
+        return None
+    return (match.group("md") or match.group("bold") or "").strip().strip("*").strip()
+
+
+def without_unverified_section(answer: str) -> str:
+    """Agent の最終の検証が足した「確かめられていない点」の節（次の見出しの前まで）を除く。
+
+    節は回答の本文ではなく、検証が外した段落の原文と理由なので、忠実さ（語句の一致）に数えない
+    （#1456。外した段落が多い Run ほど faithfulness が下がり、A と D の比較を歪めていた）。
+    """
+    kept: list[str] = []
+    inside = False
+    for line in answer.splitlines():
+        title = _heading_title(line)
+        if title is not None:
+            inside = title == AGENT_UNVERIFIED_HEADING
+        if not inside:
+            kept.append(line)
+    return "\n".join(kept)
+
+
 def grounding_text(answer: str) -> str:
-    """忠実さの照合に使う回答の本文。回答生成が付けた見出し・出典行・定型文は主張ではないので外す。"""
-    lines = answer.replace(UNVERIFIED_NOTE, "").splitlines()
+    """忠実さの照合に使う回答の本文。
+
+    回答生成が付けた見出し・出典行・定型文と、Agent の最終の検証が足した「確かめられていない点」の節
+    （#1456）は主張ではないので外す。
+    """
+    lines = without_unverified_section(answer).replace(UNVERIFIED_NOTE, "").splitlines()
     return "\n".join(
         line
         for line in lines

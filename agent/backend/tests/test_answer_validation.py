@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
@@ -22,10 +23,18 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, McpToolError, fake_product_mcp
 from pr_backend_core.mcp import McpServer
 from pytest import MonkeyPatch
+from test_clarification_preface import CLARIFICATIONS
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_passages import non_claim_passages, passage_kind
+from app.features.agent.answer_passages import (
+    is_heading,
+    non_claim_passages,
+    numbered_heading_lines,
+    passage_kind,
+    passage_spans,
+)
 from app.features.agent.answer_validation import (
+    UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
     connection_check_inputs,
     merge_results,
@@ -1205,6 +1214,27 @@ def test_clarification_only_answer_without_evidence_has_no_notice(
     assert (content["status"], content["reason"]) == ("skipped", "clarification_only")
 
 
+@pytest.mark.parametrize("answer", CLARIFICATIONS.values(), ids=CLARIFICATIONS.keys())
+def test_clarification_with_preface_and_answer_guidance_has_no_notice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str
+) -> None:
+    """#1362 の評価の確認の質問（前置きの文・答え方の案内の括弧つき）に「確かめていません」を
+    足さず、回答の対応を needs_clarification にする（#1454）。"""
+    _script(monkeypatch, [assistant_message(answer)])
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="アクセス権限を付与したい", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert run_answer_text(run) == answer
+    content = _validation(run)
+    assert (content["status"], content["reason"]) == ("skipped", "clarification_only")
+    assert _answer_outcome(run)["value"] == "needs_clarification"
+
+
 @pytest.mark.parametrize(
     ("text", "kind"),
     [
@@ -1400,6 +1430,112 @@ def test_citation_lines_left_unassessed_do_not_withhold_the_answer(case: dict[st
     assert withheld == {"claims": 0, "findings": 0, "all": False}
 
 
+# 見出しの名詞句・導入の文の事例（RAG と Agent の両方のテストが読む。#1469）。
+HEADING_CASES_PATH = "platform/contracts/answer-passages/headings.json"
+HEADING_CASES: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / HEADING_CASES_PATH).read_text("utf-8")
+)
+
+
+@pytest.mark.parametrize(
+    "case", HEADING_CASES["heading_passages"], ids=lambda case: str(case["id"])
+)
+def test_heading_phrases_and_lead_ins_are_headings(case: dict[str, str]) -> None:
+    """「補足（…）」・「根拠」・「…は次のとおりです。」は見出し（#1469）。"""
+    text = case["passage"]
+    assert is_heading(text)
+    assert passage_kind(text) == "heading"
+    assert non_claim_passages(text).get(text) == "heading"
+
+
+@pytest.mark.parametrize(
+    "case", HEADING_CASES["numbered_heading_passages"], ids=lambda case: str(case["id"])
+)
+def test_numbered_headings_are_decided_by_the_following_line(case: dict[str, str]) -> None:
+    """番号つきの見出しの行は、次の行が下の内容のときだけ見出し（#1481 / #1482）。
+
+    終わりの語が一覧にある行（「1. 人事評価システムの重要度」）も、一覧に無い「…の…」の行も、
+    単独の行と、番号の行が続く一覧の中の行は主張のまま確かめる。
+    """
+    text = case["passage"]
+    for below in ("   - 資料の記載", "- 資料の記載", "  資料の記載", "→ 資料の記載"):
+        answer = f"{text}\n\n{below}"
+        assert numbered_heading_lines(answer) == {text}
+        assert non_claim_passages(answer).get(text) == "heading"
+    assert not is_heading(text)
+    assert passage_kind(text) is None
+    assert text not in non_claim_passages(text)
+    listed = f"{text}\n9. 次の項目\n   - 資料の記載"
+    assert text not in numbered_heading_lines(listed)
+    assert text not in non_claim_passages(listed)
+    assert numbered_heading_lines(f"{text}\n**次の節**") == set()
+
+
+def test_numbered_list_items_ending_with_heading_words_are_claims() -> None:
+    """番号の行が続く一覧の項目は、終わりの語が見出しの語の一覧にあっても主張（#1482）。
+
+    e1467 の run_ee5468f8 の「申請書に書く 4 項目」。#1469 の段落だけの判定では「1. 変更の内容と
+    理由」「3. 切り戻しの手順」が見出しになり、主張として監査されなかった。同じ行でも、下に内容の
+    行があれば見出し。
+    """
+    items = [
+        "1. 変更の内容と理由",
+        "2. 影響を受けるシステムと利用者",
+        "3. 切り戻しの手順",
+        "4. 作業の日時",
+    ]
+    answer = "**申請書に書く 4 項目**\n" + "\n".join(items) + "\n\n**条件によって加わる項目**"
+    kinds = non_claim_passages(answer)
+    assert numbered_heading_lines(answer) == set()
+    assert kinds.get("**申請書に書く 4 項目**") == "heading"
+    for item in items:
+        assert not is_heading(item)
+        assert passage_kind(item) is None
+        assert item not in kinds
+    below = "3. 切り戻しの手順\n   1. 旧版に戻す\n   2. 動作を確かめる"
+    assert numbered_heading_lines(below) == {"3. 切り戻しの手順"}
+    assert non_claim_passages(below).get("3. 切り戻しの手順") == "heading"
+    assert "1. 旧版に戻す" not in non_claim_passages(below)
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: str(case["id"]))
+def test_short_statements_are_not_headings(case: dict[str, str]) -> None:
+    """数・操作・言い切りを含む短い行と、値の名前だけの行は主張のまま確かめる（#1469）。
+
+    次の行が下の内容でも見出しにしない（#1481）。
+    """
+    text = case["passage"]
+    assert not is_heading(text)
+    assert passage_kind(text) is None
+    assert text not in non_claim_passages(text)
+    below = f"{text}\n   - 資料の記載"
+    assert numbered_heading_lines(below) == set()
+    assert text not in non_claim_passages(below)
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["answers"], ids=lambda case: str(case["id"]))
+def test_headings_left_unassessed_do_not_withhold_the_answer(case: dict[str, Any]) -> None:
+    """#1362 の評価（e1467）の回答で、RAG が見出しを unassessed にしても回答を外さない（#1469）。"""
+    answer = case["answer"]
+    kinds = non_claim_passages(answer)
+    assert {text: kinds.get(text) for text in case["heading_passages"]} == {
+        text: "heading" for text in case["heading_passages"]
+    }
+    assert not set(case["claim_passages"]) & set(kinds)
+    result = _verdict(
+        *[_claim(text, "supported", "根拠に記載。") for text in case["claim_passages"]],
+        *[
+            _claim(text, "unassessed", "本文を見出しとして監査から除外できません。")
+            for text in case["heading_passages"]
+        ],
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    assert published == answer
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+
 def _answer_outcome(run: RunState) -> dict[str, Any]:
     [artifact] = [item for item in run.artifacts if item.kind == "answer"]
     outcome = artifact.content["outcome"]
@@ -1478,3 +1614,94 @@ def test_outcome_is_recorded_when_the_validation_is_disabled(
         "needs_environment_data",
         "needs_environment_data",
     )
+
+
+# 段落の分け方の事例（RAG と Agent の両方のテストが読む。#1455）。
+SENTENCE_CASES_PATH = "platform/contracts/answer-passages/sentence-splits.json"
+SENTENCE_CASES: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / SENTENCE_CASES_PATH).read_text("utf-8")
+)
+
+
+@pytest.mark.parametrize("case", SENTENCE_CASES["cases"], ids=lambda case: str(case["id"]))
+def test_passages_are_not_split_inside_brackets(case: dict[str, Any]) -> None:
+    """括弧の中の「。」で段落を分けず、太字の印・閉じ括弧だけの断片を作らない（#1455）。"""
+    line = case["line"]
+    spans = passage_spans(line)
+    assert [text for _start, _end, text in spans] == case["passages"]
+    # 位置は行の中の原文を指す。
+    assert all(line[start:end] == text for start, end, text in spans)
+
+
+# dev cmp-pms-severity（run_aeda6990aad14955bb88d957deb2b6e2）の回答の台帳の節（#1455）。
+_LEDGER_SECTION = "\n".join(
+    [
+        "- システム台帳（system-ledger.xlsx、シート「システム台帳」）",
+        "  - 行1〜3（表頭の説明）: 「重要度は A・B・C の 3 段階です。"
+        "A が最も高く、B、C の順に低くなります。」",
+    ]
+)
+
+
+def test_withholding_a_quoted_passage_leaves_no_fragment() -> None:
+    """括弧の中で分けた前の半分だけを外し、閉じ括弧の残る断片を本文に残さない（#1455）。
+
+    以前は「…3 段階です。」と「A が最も高く、…」」に分かれ、前の半分を外すと
+    「A が最も高く、B、C の順に低くなります。」」が本文に残っていた。
+    """
+    quote = _LEDGER_SECTION.split("\n")[1].strip()
+    assert [text for _s, _e, text in passage_spans(_LEDGER_SECTION.split("\n")[1])] == [quote]
+    published = withhold_paragraphs(_LEDGER_SECTION, {quote})
+    assert published is not None
+    assert "A が最も高く" not in published
+    assert "」" not in published.replace("「システム台帳」", "")
+
+
+def test_a_label_with_a_note_in_brackets_is_a_heading() -> None:
+    """ラベルの後ろの注記の括弧（「補足（資料の注記。同シート A1:A2）：」）は見出し（#1455）。
+
+    業務支援 da-parameter-default（run_a96b17e4a37e4f1bbd195802a1247112）で、括弧の中の「。」で
+    2 つに分かれた断片がどちらも unassessed になり、外した主張は無いのに回答の対応が
+    conditional になっていた。
+    """
+    label = "補足（資料の注記。同シート A1:A2）："
+    assert [text for _s, _e, text in passage_spans(label)] == [label]
+    assert passage_kind(label) == "heading"
+    # 注記が操作・述語の文なら見出しにしない。ラベルの後ろに本文が続く段落も主張のまま。
+    assert passage_kind("注意（必ず削除してください。）：") is None
+    assert passage_kind("補足（資料の注記。同シート A1:A2）：初期値は 30 日です。") is None
+    result = _verdict(
+        _claim(label, "unassessed", "本文を見出しとして監査から除外できません。"),
+        _claim("- 初期値は 30 日です。", "supported", "根拠に記載。"),
+    )
+    answer = f"{label}\n- 初期値は 30 日です。"
+    published, withheld = publish_answer(answer, result)
+    assert published == answer
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+
+# 「確かめられていない点」の節の事例（RAG の品質評価のテストも読む。#1456）。
+UNVERIFIED_SECTION_PATH = "platform/contracts/answer-passages/unverified-section.json"
+UNVERIFIED_SECTION: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / UNVERIFIED_SECTION_PATH).read_text("utf-8")
+)
+
+
+def test_the_unverified_section_heading_is_shared_with_the_rag_evaluation() -> None:
+    """最終の検証が足す節の見出しは、RAG の品質評価が faithfulness から除く見出し（#1456）。"""
+    heading = UNVERIFIED_SECTION["heading"]
+    assert heading == UNVERIFIED_HEADING
+    answer = "検証用アカウントの有効期限は最長 30 日です。\n\n延長は 90 日までできます。"
+    result = _verdict(
+        _claim("検証用アカウントの有効期限は最長 30 日です。", "supported", "根拠に記載。"),
+        _claim("延長は 90 日までできます。", "unsupported", "延長の記載が無い。"),
+    )
+    published, _withheld = publish_answer(answer, result)
+    # RAG は太字の見出しの行から次の見出しの前までを除く（見出しの後ろに本文を足さない）。
+    body, section = published.split(f"\n\n**{heading}**\n\n")
+    assert body == "検証用アカウントの有効期限は最長 30 日です。"
+    heading_line = re.compile(r"(?:#{1,6}\s+.+|\*\*[^*\n]+\*\*)\s*[:：]?")
+    assert not any(heading_line.fullmatch(line.strip()) for line in section.split("\n"))
+    for case in UNVERIFIED_SECTION["answers"]:
+        if case["answer"] != case["body"]:
+            assert non_claim_passages(case["answer"]).get(f"**{heading}**") == "unverified_section"
