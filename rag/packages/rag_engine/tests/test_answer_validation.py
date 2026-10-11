@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rag_engine.evaluation.answer_validation import ClaimAuditOutput, validate_answer_claims
+from rag_engine.evaluation.answer_validation import VALIDATION_RUBRIC_VERSION, ClaimAuditOutput, validate_answer_claims
 
 EVIDENCE = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1,
              "text": "検証用アカウントの有効期限は最長 30 日です。"}]
@@ -734,3 +734,59 @@ def test_contradictions_with_evidence_inside_the_scope_stay_contradicted() -> No
     result, _ = _oms_validation(_oms_answer("受発注管理システム"), lambda system: ("contradicted", f"{LOGISTICS}:1"))
     [claim] = result["claim_checks"]
     assert claim["status"] == "contradicted" and claim["source_id"] == f"{LOGISTICS}:1"
+
+
+LEDGER_ROW = {"id": "ledger:23", "source": "system-ledger.xlsx", "page_start": None, "page_end": None,
+              "sheet_name": "システム台帳", "row_start": 23, "row_end": 23, "cell_range": "A23:F23",
+              "text": "システムID: SYS-119 / 正式名: 購買管理システム / 略称・別表記: PMS / 重要度: A"}
+
+
+def test_sheet_locations_are_passed_to_the_model_without_changing_evidence_ids() -> None:
+    """表計算の根拠の場所（シート・行・セル範囲）をモデルに渡す根拠の項目に写す（#1450）。
+
+    根拠の ID は本文と範囲から計算するので、場所を足しても変わらない。場所の無い根拠には項目を足さない。
+    """
+    from rag_engine.evaluation.answer_eval import _evidence_fragments
+
+    [fragment] = list(_evidence_fragments([LEDGER_ROW]))
+    assert (fragment["sheet_name"], fragment["row_start"], fragment["row_end"], fragment["cell_range"]) == (
+        "システム台帳", 23, 23, "A23:F23")
+    bare = {key: value for key, value in LEDGER_ROW.items()
+            if key not in {"sheet_name", "row_start", "row_end", "cell_range"}}
+    [without] = list(_evidence_fragments([bare]))
+    assert without["evidence_id"] == fragment["evidence_id"]
+    assert "sheet_name" not in without and "section_path" not in without
+    [pdf] = list(_evidence_fragments(EVIDENCE))
+    assert set(pdf) == {"id", "source", "source_run_id", "page_start", "page_end", "parent_id", "text",
+                        "fragment_start", "fragment_end", "evidence_id"}
+
+
+def test_paragraphs_that_only_write_the_location_differently_are_not_unsupported() -> None:
+    """段落が書いた場所（行23）を根拠の場所（row_start 23）と照らせる入力と指示を渡す（#1450）。
+
+    モデルはスタブで、根拠の項目に行の範囲があり段落の行と合うときだけ supported を返す（実環境のモデルは
+    場所が根拠に無いと「位置情報が根拠に含まれない」で unsupported にしていた）。
+    """
+    answer = "- 行23: システムID: SYS-119 / 正式名: 購買管理システム / 略称・別表記: PMS / 重要度: A"
+    seen: dict = {}
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        [item] = payload["evidence_items"]
+        seen["system"] = system
+        located = item.get("row_start") == 23 and item.get("sheet_name") == "システム台帳"
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": payload["answer_passages"][0]["id"],
+             "status": "supported" if located else "unsupported",
+             "evidence_id": item["evidence_id"] if located else "", "source_id": "", "evidence_quote": "",
+             "reason": "内容と行が根拠と一致" if located else "行23 という位置情報は根拠に含まれない"},
+        ]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("PMS の重要度は？", answer, [LEDGER_ROW], settings=None)
+    assert result["counts"] == {"supported": 1}
+    assert result["claim_checks"][0]["source_id"] == "ledger:23"
+    assert result["rubric_version"] == VALIDATION_RUBRIC_VERSION >= 7
+    # 判定の指示: 場所の表記の違いだけでは unsupported にせず、場所が食い違うときだけ unsupported にする。
+    assert "場所の表記を理由に unsupported にしない" in seen["system"]
+    assert "食い違う" in seen["system"] and "row_start" in seen["system"]
