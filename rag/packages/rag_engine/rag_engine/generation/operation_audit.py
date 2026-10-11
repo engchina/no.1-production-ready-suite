@@ -108,10 +108,13 @@ _HEADING_END = re.compile(
     r"|保守枠|日程|重要度|機密区分|区分|部署|担当|承認者|連絡先|窓口|代理|意味|正式名|名称|略号|関係|つながり"
     # 分岐の見出し（「重要度 C のシステムで障害が起きたとき」）と、問いの形の見出し（「承認者がどう決まるか」）。
     r"|とき|場合|か)$")
-# 番号（「1.」「（2）」）。番号つきの見出しは、終わりの語が一覧に無くても「…の…」の名詞句なら見出し（#1481）。
+# 番号（「1.」「（2）」）。番号つきの行は、終わりの語が一覧に無くても「…の…」の名詞句で、次の行がその下の内容なら
+# 見出し（``numbered_heading_lines``。#1481）。
 _HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
 # 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞をつなぐ「の」に数えない。
 _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
+# 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も下の内容）。
+_SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の主張のまま。
 _HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
 # 分岐・問いの形の見出しの終わり（この形だけ、中の「が」「を」を許す）。
@@ -143,15 +146,48 @@ def heading_phrase(text: str) -> str | None:
 
     「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」「回答に使った資料」「2. **重要度 A の連絡先と
     期限**」のように、句点で終わらない短い名詞句で、項目・区分・資料の名前（``_HEADING_END``）か分岐・問いの形
-    （「…とき」「…か」）で終わるもの。番号つきの行は、終わりの語が一覧に無くても「…の…」の名詞句（「2. 重要度 B の
-    復旧目標」「1. 連携元のシステム」）なら見出し（人・組織・役職の名前で終わるものを除く。#1481）。述語（です・
-    ます・する…）・操作・数量・言い切りの「は」を含む行（「重要度は A です」「承認者は管理本部長」「1. **ID 管理
-    システムの重要度は A**」）と、値の名前だけの行（「1. 運行管理課長」「1. 情報システム部の課長」）は主張のまま。
+    （「…とき」「…か」）で終わるもの。述語（です・ます・する…）・操作・数量・言い切りの「は」を含む行（「重要度は A
+    です」「承認者は管理本部長」「1. **ID 管理システムの重要度は A**」）と、値の名前だけの行（「1. 運行管理課長」）は
+    主張のまま。終わりの語が一覧に無い番号つきの行は、回答の中の次の行で決める（``numbered_heading_lines``。#1481）。
     """
+    found = _heading_value(text)
+    return found[0] if found and _HEADING_END.search(found[0]) else None
+
+
+def _numbered_heading_phrase(text: str) -> str | None:
+    """終わりの語に関係なく、番号つきの「…の…」の名詞句なら見出しの語（「2. 重要度 B の復旧目標」。#1481）。
+
+    人・組織・役職の名前で終わる行（「1. 情報システム部の課長」）は値の主張のまま。
+    """
+    found = _heading_value(text)
+    if not found or not _HEADING_NUMBER.match(text.strip()):
+        return None
+    value, outside = found
+    return value if _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value) else None
+
+
+def numbered_heading_lines(text: str) -> set[str]:
+    """回答の中の、終わりの語が一覧に無い番号つきの見出しの行（前後の空白を除いた行。#1481）。
+
+    「1. 連携元のシステム」のような番号つきの「…の…」の名詞句で、次の（空でない）行がその下の内容（字下げした行か
+    箇条書き・「→」の行）のもの。番号の行が続く一覧（「申請書に書く 4 項目」の「4. 作業の日時」）の行は、
+    その一覧の内容なので主張のまま。Agent の ``answer_passages.numbered_heading_lines`` と同じ規則。
+    """
+    lines = [line for line in text.split("\n") if line.strip()]
+    found = set()
+    for line, following in zip(lines, lines[1:], strict=False):
+        indent = len(line) - len(line.lstrip())
+        below = len(following) - len(following.lstrip()) > indent or bool(_SUB_CONTENT.match(following.strip()))
+        if below and not _HEADING_NUMBER.match(following.strip()) and _numbered_heading_phrase(line):
+            found.add(line.strip())
+    return found
+
+
+def _heading_value(text: str) -> tuple[str, str] | None:
+    """見出しの名詞句の共通の確かめ（注記の括弧・番号・強調を除いた語と、「…」の語を除いた残り。#1469）。"""
     if is_citation_line(text):
         # 文書名と場所だけの行（「1. **システム変更手順書**（第 2章 申請）」）は出典の行（#1370）。
         return None
-    numbered = bool(_HEADING_NUMBER.match(text.strip()))
     value = _HEADING_LIST_MARK.sub("", text.strip(), count=1)
     value = _EMPHASIS.sub("", value).strip().rstrip(":：").strip()
     while match := _HEADING_NOTE.search(value):
@@ -169,11 +205,7 @@ def heading_phrase(text: str) -> str | None:
     # 「が」「を」は、分岐・問いの形の見出しか、「…が不在のとき」の節の中だけに許す。
     if not _HEADING_CLAUSE_END.search(value) and re.search(r"[がを]", _HEADING_CASE_CLAUSE.sub(" ", outside)):
         return None
-    if _HEADING_END.search(value):
-        return value
-    if numbered and _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value):
-        return value
-    return None
+    return value, outside
 
 
 def is_lead_in(text: str) -> bool:
@@ -342,13 +374,16 @@ def is_question_to_user(text: str) -> bool:
     return not _BUNDLED_CLAIM.search(value)
 
 
-def is_non_claim_passage(text: str, *, table_headers: Collection[str] = ()) -> bool:
+def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (),
+                         heading_lines: Collection[str] = ()) -> bool:
     """回答の最終の検証で主張として監査しない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問）か (#1306 / #1317)。
 
-    表の見出しの行は次の行（区切りの行）で決まるので、呼び出し側が回答全体の ``table_header_lines`` を渡す。
+    表の見出しの行と、終わりの語が一覧に無い番号つきの見出しの行は次の行で決まるので、呼び出し側が回答全体の
+    ``table_header_lines`` と ``numbered_heading_lines``（#1481）を渡す。
     """
-    return (is_heading(text) or is_citation_line(text) or is_table_rule(text) or text.strip() in table_headers
-            or is_question_to_user(text))
+    value = text.strip()
+    return (is_heading(text) or is_citation_line(text) or is_table_rule(text) or value in table_headers
+            or value in heading_lines or is_question_to_user(text))
 
 
 def is_operation_instruction(text: str) -> bool:
