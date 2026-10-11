@@ -242,7 +242,8 @@ SYSTEM_PROMPT = (
     "に書かれているときだけ"
     " 1〜12（無ければ 0）。日付の計算はしないでください（プログラムが計算します）。\n"
     "7. sql_hint には、その項目を SQL にした断片（例: `SUM(ORDERS.AMOUNT)`、"
-    "`ORDERS.STATUS = 'SHIPPED'`）を物理名で書いてください（決められなければ空）。\n"
+    "`ORDERS.STATUS = 'SHIPPED'`）を物理名で書いてください（決められなければ空）。"
+    "句のキーワード（SELECT・FROM・WHERE・GROUP BY・ORDER BY）は付けないでください。\n"
     "8. clarified_question_ja は、すべての項目を反映した、自然な日本語の 1 "
     "つの質問の文にしてください"
     "（表・列は物理名）。\n"
@@ -943,7 +944,7 @@ def _validated_item(
         reasons.append("承認済みの関係・外部キーではない結合を除きました。")
         if status in _CLEAR:
             status = RequirementStatus.AMBIGUOUS
-    sql_hint = raw.sql_hint.strip()
+    sql_hint = strip_clause_keyword(raw.sql_hint)
     if rejected:
         sql_hint = ""
     masked = [column for column in columns if _column_masked(context, column)]
@@ -1064,6 +1065,16 @@ def _has_literal(value: str) -> bool:
     return bool(_LITERAL.search(value or ""))
 
 
+_CLAUSE_KEYWORD = re.compile(r"^\s*(?:SELECT|FROM|WHERE|AND|GROUP\s+BY|ORDER\s+BY|HAVING)\s+", re.I)
+
+
+def strip_clause_keyword(value: str) -> str:
+    """sql_hint の先頭の句のキーワード（`SELECT` など）を外す（骨組みで二重にしない）。"""
+
+    # `SELECT DISTINCT a` は `DISTINCT a` にする（骨組みは `SELECT DISTINCT a`）。
+    return _CLAUSE_KEYWORD.sub("", (value or "").strip(), count=1).strip()
+
+
 def _validated_candidate(
     raw: _LlmCandidate,
     index: int,
@@ -1099,7 +1110,7 @@ def _validated_candidate(
         tables=tables,
         columns=columns,
         relationship_ids=relationships,
-        sql_hint=raw.sql_hint.strip(),
+        sql_hint=strip_clause_keyword(raw.sql_hint),
     )
     candidate.refs_ja = refs_text(context, tables=tables, columns=columns)
     return candidate
@@ -2128,6 +2139,22 @@ def _ensure_physical_names(draft: SqlRequirementDraft, context: RequirementConte
         if column.rsplit(".", 1)[-1].casefold().strip('"') not in lowered
     ]
     notes: list[str] = []
+    # 相対的な期間は、確かめた具体的な日付の範囲を質問の文にも書く（「今年度」のままにしない）。
+    for item in draft.items:
+        period = item.period
+        if (
+            item.section == RequirementSection.PERIOD
+            and (item.answered or item.status in _CLEAR)
+            and period is not None
+            and period.start_date
+            and period.end_date
+            and period.start_date not in text
+        ):
+            column = period.date_column.split(".", 1)[-1] if period.date_column else ""
+            target = f"{column} が " if column else ""
+            notes.append(
+                f"期間: {target}{period.start_date}〜{period.end_date}（開始日と終了日を含む）"
+            )
     if missing_tables:
         notes.append(f"使う表: {'、'.join(missing_tables)}")
     if missing_columns:

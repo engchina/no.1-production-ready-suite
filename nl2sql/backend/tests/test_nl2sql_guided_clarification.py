@@ -997,10 +997,10 @@ def test_sql_skeleton_is_built_deterministically_from_requirements() -> None:
                 "select_region_total",
                 "select",
                 "confirmed",
-                sql_hint="CUSTOMERS.REGION, SUM(ORDERS.AMOUNT)",
+                sql_hint="SELECT CUSTOMERS.REGION, SUM(ORDERS.AMOUNT)",
                 columns=["APP.CUSTOMERS.REGION", "APP.ORDERS.AMOUNT"],
             ),
-            _item("group_region", "group_by", "confirmed", sql_hint="CUSTOMERS.REGION"),
+            _item("group_region", "group_by", "confirmed", sql_hint="GROUP BY CUSTOMERS.REGION"),
             _item("order_total", "order_by", "inferred", sql_hint="SUM(ORDERS.AMOUNT) DESC"),
             _where_shipped(),
             _fiscal_period_item(),
@@ -1030,6 +1030,11 @@ def test_sql_skeleton_is_built_deterministically_from_requirements() -> None:
     assert "GROUP BY CUSTOMERS.REGION" in skeleton
     assert "ORDER BY SUM(ORDERS.AMOUNT) DESC" in skeleton
     assert "⟨未確定" not in skeleton
+    # LLM が句のキーワードを付けても、骨組みで二重にしない。
+    assert "SELECT SELECT" not in skeleton
+    assert "GROUP BY GROUP BY" not in skeleton
+    # 相対的な期間は、確かめた具体的な日付の範囲を書き直した質問の文にも書く。
+    assert "2026-04-01〜2027-03-31" in _draft(after_period).clarified_question_ja
     # 同じ要件からは同じ骨組み（決定的）。
     again = runtime.get_session(after_period.session.id).requirement_state
     assert again is not None and again.sql_skeleton == skeleton

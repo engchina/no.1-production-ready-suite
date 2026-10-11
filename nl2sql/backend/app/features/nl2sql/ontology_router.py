@@ -2996,7 +2996,14 @@ class OntologyApiRuntime:
         allowed: AllowedObjects,
     ) -> RequirementContext:
         try:
-            tables = self.legacy_service.get_catalog().tables
+            # SQL の生成と同じく、業務プロファイルの範囲の Schema を読む（増分の store では表ごとの
+            # 詳細。全体の catalog の cache は範囲の表を含まないことがある）。
+            profile_catalog = getattr(self.legacy_service, "_generation_schema_catalog", None)
+            tables = (
+                profile_catalog(profile, allowed).tables
+                if callable(profile_catalog)
+                else self.legacy_service.get_catalog().tables
+            )
         except Exception as exc:
             raise RequirementAiUnavailableError(
                 "REQUIREMENT_SCHEMA_UNAVAILABLE",
