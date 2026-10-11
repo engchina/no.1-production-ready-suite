@@ -29,7 +29,7 @@ from rag_engine.evaluation.answer_eval import (
     model_request,
 )
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
-from rag_engine.generation.operation_audit import is_non_claim_passage, numbered_heading_lines, table_header_lines
+from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
 # 3: evidence_id を省かずに書く指示を足し、省いて書いた ID も根拠に結び付けるようにした（#1391）。
@@ -218,7 +218,7 @@ def validate_answer_claims(
     # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
     headers = table_header_lines(answer_text)
-    heading_lines = numbered_heading_lines(answer_text)
+    heading_lines = list_heading_lines(answer_text)
     passages = [passage for passage in _answer_passages(answer_text)
                 if not is_non_claim_passage(passage["text"], table_headers=headers, heading_lines=heading_lines)]
     base: dict[str, Any] = {"rubric_version": VALIDATION_RUBRIC_VERSION, "claim_checks": []}
