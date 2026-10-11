@@ -116,7 +116,9 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     # 章節の拡張(#1436)。None は Settings の既定(拡張は on / 4 段 / 50% / 600 秒)。
     "section_expansion_enabled": "rag_section_expansion_enabled",
     "section_expansion_max_levels": "rag_section_expansion_max_levels",
-    "section_expansion_input_token_percent": "rag_section_expansion_input_token_percent",
+    "section_expansion_input_token_percent": (  # nosec B105 - 設定の名前
+        "rag_section_expansion_input_token_percent"
+    ),
     "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
 }
 
