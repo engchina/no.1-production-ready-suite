@@ -196,7 +196,8 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         )
     return ModelTarget(
         model_id=resolved,
-        endpoint=connection.endpoint.rstrip("/"),
+        # OpenAI 互換 API の base URL（Endpoint URL を入力どおり。#1440。platform の関数）。
+        endpoint=connection.base_url,
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),

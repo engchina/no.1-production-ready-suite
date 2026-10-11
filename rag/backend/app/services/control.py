@@ -166,7 +166,8 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     vlm_model = enterprise_ai_vision_model_id(settings)
     default_model = enterprise_ai_default_model_id(settings)
     connection = enterprise_ai_connection_for_model(settings, vlm_model)
-    endpoint = connection.endpoint
+    # Endpoint URL は platform の関数で base URL にして渡す(#1440。parser はそのまま使う)。
+    endpoint = connection.base_url
     api_key = connection.api_key
     project = connection.project_ocid
     text_reasoning = enterprise_ai_reasoning_effort_to_send(settings, default_model)
