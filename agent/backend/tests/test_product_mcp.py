@@ -170,7 +170,8 @@ def test_fake_product_mcp_follows_the_input_contracts() -> None:
             assert set(schema.get("required", [])) == set(contract[name].get("required", [])), name
             assert set(schema["properties"]) <= set(contract[name]["properties"]), name
             checked += 1
-    assert checked == len(READ_ONLY) + 2  # + nl2sql_list_profiles / nl2sql_recommend_profile
+    # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）
+    assert checked == len(READ_ONLY) + 3
 
 
 # ---------------------------------------------------------------------------

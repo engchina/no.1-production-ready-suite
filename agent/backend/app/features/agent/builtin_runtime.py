@@ -26,6 +26,7 @@ import logging
 import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
@@ -71,6 +72,7 @@ from app.features.agent.answer_validation import (
     REASON_CONNECTION_NOT_FOUND,
     REASON_EMPTY_ANSWER,
     REASON_NO_RAG_EVIDENCE,
+    REASON_RAG_DECLINED,
     REASON_UNUSABLE_RESULT,
     REASON_VALIDATION_ERROR,
     REASON_VALIDATOR_UNAVAILABLE,
@@ -86,12 +88,30 @@ from app.features.agent.answer_validation import (
     with_no_evidence_notice,
     with_unverified_notice,
 )
+from app.features.agent.clarification_cancel import (
+    CANCEL_METADATA_KEY,
+    CANCEL_TRACE_PREFIX,
+    CLARIFICATION_KINDS,
+    KIND_NL2SQL,
+    KIND_RAG,
+    NL2SQL_CANCEL_TOOL,
+    TRIGGER_BUTTON,
+    TRIGGER_MESSAGE,
+    button_cancel_kinds,
+    cancel_instructions,
+    cancel_record,
+    declined_kinds,
+    is_declined_tool,
+    message_cancel_kinds,
+    pending_of,
+)
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.support_task import (
     ADJUSTED_LIMITS_HINT,
     BUDGET_EXCEEDED_CODE,
     GUIDE_CHECK_TRACE_PREFIX,
+    NL2SQL_QUERY,
     RAG_BUDGET_TOOLS,
     RAG_LOOKUP_GUIDES,
     RAG_READ_DOCUMENT,
@@ -106,6 +126,8 @@ from app.features.agent.support_task import (
     guide_check_note,
     has_support_task_activity,
     is_environment_tool,
+    nl2sql_clarification_pending,
+    nl2sql_next_step,
     rag_next_step,
     record_codes,
     repeated_query_note,
@@ -727,6 +749,11 @@ class _ToolRecorder:
                 next_step = rag_next_step(output, self.environment_tools)
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
+            if base == NL2SQL_QUERY and isinstance(output, dict):
+                # AI要件確認の項目（#1441）: SQL を作る前に、利用者に 1 問ずつ聞かせる。
+                next_step = nl2sql_next_step(output, call.arguments, tool_name=name)
+                if next_step is not None:
+                    output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
                 note = await self.check_guides(name, call.arguments)
                 if note is not None:
@@ -965,7 +992,9 @@ def build_function_tools(
     goal: str = "",
     known_conditions: Mapping[str, str] | None = None,
     data_scopes: data_scope.AgentDataScopes | None = None,
+    declined: Collection[str] = (),
 ) -> list[FunctionTool]:
+    """`declined` はこの Run で利用者が確認を取り消した種類（#1441・#1445。そのツールは渡さない）。"""
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
     recorder.data_scopes = dict(data_scopes or {})
@@ -985,6 +1014,8 @@ def build_function_tools(
         if definition.name in seen:
             continue
         seen.add(definition.name)
+        if is_declined_tool(definition.name, declined):
+            continue
         decision = policy.decide(definition)
         if decision == ToolPolicyDecision.DENY:
             continue
@@ -1057,10 +1088,13 @@ def build_sdk_agent(
     goal: str = "",
     known_conditions: Mapping[str, str] | None = None,
     data_scopes: data_scope.AgentDataScopes | None = None,
+    cancellations: list[dict[str, Any]] | None = None,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
 
     `support_task` は前の Run から引き継いだ支援タスクの状態（指示の末尾に足す。#1243）。
+    `cancellations` はこの Run で利用者が取り消した確認（#1441・#1445）。その種類のツールを渡さず、
+    ほかの手段で続けるか意図を聞き直す指示を足す。
     """
     from app.features.agent.runtime import runtime_repository
     from app.features.agent.skill_resources import skill_reference_ids
@@ -1081,6 +1115,7 @@ def build_sdk_agent(
         goal=goal,
         known_conditions=known_conditions,
         data_scopes=data_scopes,
+        declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -1093,6 +1128,9 @@ def build_sdk_agent(
     if support_task:
         support_names = instruction_tool_names(skill_ids, exposed)
         composed = f"{composed}\n\n{render_tool_names(support_task, support_names)}"
+    cancel_text = cancel_instructions(list(cancellations or []))
+    if cancel_text:
+        composed = f"{composed}\n\n{cancel_text}"
     return Agent(
         name=name or "agent",
         instructions=composed,
@@ -1230,7 +1268,8 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> None:
 
     try:
         run = runtime_repository.get_run(run_id)
-        if task.previous is None and not has_support_task_activity(run.steps):
+        cancellations = _run_cancellations(run)
+        if task.previous is None and not has_support_task_activity(run.steps) and not cancellations:
             return
         content = build_support_task(
             task.previous,
@@ -1241,6 +1280,7 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> None:
             goal=task.goal,
             max_rag_calls_per_run=task.max_rag_calls_per_run,
             max_tool_calls_per_task=task.max_tool_calls_per_task,
+            cancellations=cancellations,
         )
         runtime_repository.save_support_task(run_id, content)
     except Exception as exc:  # noqa: BLE001 - 状態は補助。残せなくても回答は返す
@@ -1261,6 +1301,7 @@ async def execute_run(run_id: str) -> None:
         run, agent = started
         try:
             task = _support_task_run(run)
+            cancellations = await _apply_clarification_cancel(run, task.previous, agent.data_scopes)
             sdk_agent = await asyncio.to_thread(
                 build_sdk_agent,
                 run_id,
@@ -1275,6 +1316,7 @@ async def execute_run(run_id: str) -> None:
                 goal=support_task_goal(run.goal, task.previous),
                 known_conditions=support_task_known_conditions(task.previous),
                 data_scopes=agent.data_scopes,
+                cancellations=cancellations,
             )
             result = await Runner.run(
                 sdk_agent,
@@ -1288,7 +1330,7 @@ async def execute_run(run_id: str) -> None:
                 run_id,
                 result,
                 task,
-                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids),
+                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                 data_scopes=agent.data_scopes,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
@@ -1307,6 +1349,8 @@ async def resume_run(run_id: str) -> None:
         run, agent, state_text, decisions = resumed
         try:
             task = _support_task_run(run)
+            # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
+            cancellations = _run_cancellations(run)
             sdk_agent = await asyncio.to_thread(
                 build_sdk_agent,
                 run_id,
@@ -1321,6 +1365,7 @@ async def resume_run(run_id: str) -> None:
                 goal=support_task_goal(run.goal, task.previous),
                 known_conditions=support_task_known_conditions(task.previous),
                 data_scopes=agent.data_scopes,
+                cancellations=cancellations,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
@@ -1338,12 +1383,134 @@ async def resume_run(run_id: str) -> None:
                 run_id,
                 result,
                 task,
-                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids),
+                rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                 data_scopes=agent.data_scopes,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
+
+
+def _run_cancellations(run: Any) -> list[dict[str, Any]]:
+    """Run の記録の、利用者が取り消した確認（#1441・#1445）。"""
+    records = run.metadata.get(CANCEL_METADATA_KEY) if isinstance(run.metadata, dict) else None
+    if not isinstance(records, list):
+        return []
+    return [
+        record
+        for record in records
+        if isinstance(record, dict) and record.get("kind") in CLARIFICATION_KINDS
+    ]
+
+
+async def _apply_clarification_cancel(
+    run: Any,
+    previous: Mapping[str, Any] | None,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> list[dict[str, Any]]:
+    """この Run で取り消す確認を決め、NL2SQL の確認の session を閉じ、Run に記録する（#1441）。
+
+    取り消しは、取り消しの操作で作った Run（`clarification_cancel`）と、確かめ中の問いがあるときの
+    取り消しの文（「データベースは関係ない」など）。取り消す確認が無ければ何もしない。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    triggers: dict[str, str] = {kind: TRIGGER_BUTTON for kind in button_cancel_kinds(run.metadata)}
+    for kind in message_cancel_kinds(run.goal, previous):
+        triggers.setdefault(kind, TRIGGER_MESSAGE)
+    if not triggers:
+        return []
+    at = datetime.now(UTC).isoformat()
+    records: list[dict[str, Any]] = []
+    for kind in CLARIFICATION_KINDS:
+        if kind not in triggers:
+            continue
+        pending = pending_of(previous, kind)
+        record = cancel_record(kind, trigger=triggers[kind], run_id=run.id, at=at, pending=pending)
+        if kind == KIND_NL2SQL:
+            for index, session in enumerate(record["requirement_sessions"]):
+                session_id = session["requirement_session_id"]
+                connection = next(
+                    (
+                        str(item.get("connection") or "")
+                        for item in pending
+                        if item.get("requirement_session_id") == session_id
+                    ),
+                    "",
+                )
+                session["status"] = await _cancel_requirement_session(
+                    run,
+                    connection or data_scope.NL2SQL_CONNECTION_ID,
+                    session_id,
+                    trace_id=f"{CANCEL_TRACE_PREFIX}{run.id}_{index}",
+                    data_scopes=data_scopes,
+                )
+        records.append(record)
+    runtime_repository.record_clarification_cancel(run.id, records)
+    logger.info(
+        "builtin_runtime_clarification_cancelled",
+        extra={
+            "run_id": run.id,
+            "kinds": [record["kind"] for record in records],
+            "triggers": [record["trigger"] for record in records],
+        },
+    )
+    return records
+
+
+async def _cancel_requirement_session(
+    run: Any,
+    connection: str,
+    session_id: str,
+    *,
+    trace_id: str,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> str:
+    """NL2SQL の AI要件確認の session を閉じる（`nl2sql_cancel_requirement`。#1441）。
+
+    Control Plane が Run の利用者のサービストークンで呼ぶ（ポリシー・監査・step はモデルのツールと
+    同じ境界。予算には数えない）。閉じられなくても Run は続ける（session は操作が途絶えると期限で
+    閉じる）。返すのは記録に残す状態（cancelled / closed / failed / unavailable）。
+    """
+    function_name = f"{connection}{MCP_TOOL_SEPARATOR}{NL2SQL_CANCEL_TOOL}"
+    config = next(
+        (
+            item
+            for item in runtime_config_store.list_mcp_servers()
+            if mcp_function_name(item.server_id, NL2SQL_CANCEL_TOOL) == function_name
+        ),
+        None,
+    )
+    if config is None:
+        return "unavailable"
+    context = ToolInvocationContext(
+        run_id=run.id, agent_id=run.agent_id, user_uuid=run.created_by_user_uuid
+    )
+    try:
+        listed = await asyncio.to_thread(
+            list_mcp_connection_tools, config.server_id, context=context
+        )
+    except (KeyError, ExternalToolError):
+        return "unavailable"
+    tool = next((item for item in listed.tools if item.name == NL2SQL_CANCEL_TOOL), None)
+    if tool is None:
+        return "unavailable"
+    definition = mcp_tool_definition(config, tool)
+    recorder = _ToolRecorder(run.id)
+    recorder.data_scopes = dict(data_scopes or {})
+    _step_id, result = await recorder.call(
+        ToolCall(
+            name=definition.name,
+            arguments={"requirement_session_id": session_id},
+            trace_id=trace_id,
+        ),
+        definition=definition,
+        handler=mcp_tool_handler(config, tool),
+    )
+    if not result.success or not isinstance(result.output, dict):
+        return "failed"
+    status = result.output.get("status")
+    return status if isinstance(status, str) and status else "cancelled"
 
 
 def _scoped_call(call: ToolCall, data_scopes: data_scope.AgentDataScopes | None) -> ToolCall:
@@ -1482,12 +1649,19 @@ def _validator_connection(evidence_tool: str) -> McpConnectionConfig | None:
     return None
 
 
-def has_rag_evidence_tools(sdk_agent: Agent[Any] | None, skill_ids: list[str]) -> bool:
+def has_rag_evidence_tools(
+    sdk_agent: Agent[Any] | None,
+    skill_ids: list[str],
+    cancellations: list[dict[str, Any]] | None = None,
+) -> bool:
     """Agent が RAG の根拠のツール（`rag_search` / `rag_retrieve_evidence`）を持つか（#1277）。
 
     Run に渡したツールにあるか、Skill の requirement が名前で求めていれば持つとみなす（RAG の
     接続のツールを取れなかった Run でも、根拠を使えなかった回答として注記するため）。
+    利用者が「資料の検索は不要」と取り消した Run（#1445）は持たないとみなす（資料を使わない）。
     """
+    if KIND_RAG in declined_kinds({CANCEL_METADATA_KEY: cancellations or []}):
+        return False
     tools = list(getattr(sdk_agent, "tools", []) or [])
     if any(mcp_base_tool_name(str(getattr(tool, "name", ""))) in EVIDENCE_TOOLS for tool in tools):
         return True
@@ -1525,7 +1699,10 @@ async def _validate_final_answer(
     # 回答が引用した根拠を先にして、上限で切っても検証に入れる（#1364）。
     groups = run_evidence_groups(run.steps, answer)
     if not groups:
-        if rag_tools and is_clarification_only(answer):
+        if KIND_RAG in declined_kinds(run.metadata):
+            # 利用者が「資料の検索は不要」とした（#1445）。資料と照らし合わせない（注記しない）。
+            return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_RAG_DECLINED))
+        if rag_tools and (is_clarification_only(answer) or nl2sql_clarification_pending(run.steps)):
             # 確認の質問だけの回答は資料の主張を含まない（「確かめていない」を足さない。#1306）。
             return answer, save(
                 validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY)

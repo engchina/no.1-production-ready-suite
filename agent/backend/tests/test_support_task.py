@@ -246,7 +246,8 @@ def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
     assert (state["thread_id"], state["owner_user_uuid"]) == (first.thread_id, USER_UUID)
     assert state["goal"] == "契約を更新したい"
     assert state["outcome"] == "needs_clarification"
-    assert state["pending_clarifications"] == [_CLARIFICATION]
+    # 確かめ中の問いは種類（RAG の確認）を持つ（NL2SQL の AI要件確認と分ける。#1441）。
+    assert state["pending_clarifications"] == [{**_CLARIFICATION, "kind": "rag"}]
     assert state["guide"] == {
         "guide_id": "guide-1",
         "revision": 2,

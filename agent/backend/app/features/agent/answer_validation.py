@@ -94,6 +94,8 @@ REASON_VALIDATOR_UNAVAILABLE = "validator_unavailable"
 REASON_EMPTY_ANSWER = "empty_answer"
 # 利用者への確認の質問だけの回答（資料の主張を含まないので、根拠が無くても注記しない。#1306）。
 REASON_CLARIFICATION_ONLY = "clarification_only"
+# 利用者が「資料の検索は不要」と確認を取り消した Run（#1445。資料を使わずに答えるので注記しない）。
+REASON_RAG_DECLINED = "rag_declined"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
