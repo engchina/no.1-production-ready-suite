@@ -45,6 +45,7 @@ from app.rag.answer_metrics import (
     grounding_text,
     is_abstained_answer,
 )
+from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     answer_stage_label,
@@ -187,18 +188,21 @@ async def judge_answer_with_standard(
 ) -> Mapping[str, object]:
     """回答を標準回答で評価し、結果を回答の記録にも保存する(保存は best-effort)。
 
-    worker thread の評価は止められないため、時間切れのときは結果を捨てる(#304 と同じ)。
+    時間切れのときは結果を捨てる(#304 と同じ)。評価の thread には同じ期限を渡し、時間切れの後は
+    LLM を呼ばない(#1422)。
     """
     resolved = settings or get_settings()
+    limit = max(0.001, timeout_seconds)
     evaluation = await asyncio.wait_for(
-        asyncio.to_thread(
+        run_answer_in_thread(
             evaluate_answer_record,
             evaluation_input,
             standard_answer,
             resolved,
             citations=citations,
+            timeout_seconds=limit,
         ),
-        timeout=max(0.001, timeout_seconds),
+        timeout=limit,
     )
     saved = {
         **evaluation,

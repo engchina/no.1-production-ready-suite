@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 
 from app.config import Settings
 from app.rag.answer_engine import ANSWER_STEP_STAGE_PREFIX
+from app.rag.answer_threads import answer_deadline
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 
 # 進捗の工程（SSE の `stage`）の利用者向けの名前。時間切れの文言（ERROR として保存する回答・
@@ -127,6 +128,9 @@ async def run_answer_with_timeout[T](
     `timeout_seconds` を渡すと、その秒数で打ち切る（品質評価で、評価全体の残り時間が回答生成の
     上限より短いとき。#383）。
 
+    打ち切り・取り消しは回答の thread にも伝える（期限を文脈に置き、抜けるときに取り消す。#1422）。
+    thread の中の LLM の呼び出しは期限を過ぎたら止まり、再試行しない。
+
     `operation` には工程を記録する callback（`StageTracker`）を渡す。時間切れのときは
     最後の工程を持つ `AnswerTimeoutError` を送出する（`TimeoutError` の派生）。工程の中で
     起きた `TimeoutError`（LLM 1 回の timeout など）も、工程が分かるように同じ例外にする。
@@ -135,8 +139,11 @@ async def run_answer_with_timeout[T](
     timeout = answer_timeout_seconds(settings) if timeout_seconds is None else timeout_seconds
     budget = asyncio.timeout(timeout)
     try:
+        # 回答の thread にも同じ期限を渡し、打ち切り・取り消しのときに thread の LLM の呼び出しを
+        # 止める（#1422。`app/rag/answer_threads.py`）。
         async with budget:
-            return await operation(tracker)
+            with answer_deadline(timeout):
+                return await operation(tracker)
     except AnswerTimeoutError:
         raise
     except TimeoutError as exc:
