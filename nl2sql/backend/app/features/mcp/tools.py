@@ -742,6 +742,7 @@ def build_mcp_server(request: Request) -> McpServer:
                 ),
             )
 
+        started = time.monotonic()
         try:
             data = await run_sync_io(requirement_step)
         except RequirementAiUnavailableError as exc:
@@ -801,7 +802,11 @@ def build_mcp_server(request: Request) -> McpServer:
             ),
             getattr(request.state, "principal", None),
         )
-        result = await start_and_wait(job_request, arguments.wait_seconds)
+        # AI要件確認（LLM）にかかった分だけ、ジョブを待つ秒数を減らす（1 回の呼び出しの長さを
+        # 「AI要件確認 + wait_seconds」にしない。終わらなければ job_id を返し、続きは
+        # nl2sql_get_job）。
+        remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
+        result = await start_and_wait(job_request, remaining)
         result.requirement = _requirement_output(data)
         return result
 

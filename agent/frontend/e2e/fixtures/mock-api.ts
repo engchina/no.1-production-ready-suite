@@ -1144,7 +1144,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       approvals: [],
       artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
       pending_tool_calls: [],
-      metadata: {},
+      // 確認の取り消しの操作（#1441・#1445）は、backend と同じく Run の記録に残す。
+      metadata:
+        body.clarification_cancel === "nl2sql" || body.clarification_cancel === "rag"
+          ? { clarification_cancel: [{ kind: body.clarification_cancel, trigger: "button" }] }
+          : {},
       created_by_user_uuid: "local",
       thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
       created_at: MOCK_NOW,

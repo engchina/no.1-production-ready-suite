@@ -994,7 +994,10 @@ def build_function_tools(
     data_scopes: data_scope.AgentDataScopes | None = None,
     declined: Collection[str] = (),
 ) -> list[FunctionTool]:
-    """`declined` はこの Run で利用者が確認を取り消した種類（#1441・#1445。そのツールは渡さない）。"""
+    """ツールを function tool にする。
+
+    `declined` はこの Run で利用者が確認を取り消した種類（#1441・#1445。そのツールは渡さない）。
+    """
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
     recorder.data_scopes = dict(data_scopes or {})

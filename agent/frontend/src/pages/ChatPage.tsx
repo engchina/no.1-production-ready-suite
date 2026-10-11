@@ -50,17 +50,19 @@ import {
   runProgressStreamUrl,
   type ApprovalRequest,
   type Artifact,
+  type ClarificationKind,
   type RunState,
   type RunStep,
   type ThreadData,
   type ThreadSummary,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
-import { answerReview } from "@/lib/answer-review";
+import { answerReview, cancelledClarificationKinds, pendingClarificationKinds } from "@/lib/answer-review";
 import { AGENT_CHAT_PROGRESS_STEPS, chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
+import { ClarificationCancelActions, ClarificationCancelNote } from "@/components/chat/ClarificationCancel";
 import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -233,11 +235,12 @@ export function ChatPage() {
   });
 
   const send = useMutation({
-    mutationFn: ({ goal }: { goal: string; generation: number }) =>
+    mutationFn: ({ goal, clarificationCancel }: { goal: string; generation: number; clarificationCancel?: ClarificationKind }) =>
       agentApi.createRun({
         goal,
         agent_id: selectedAgentId,
         thread_id: threadId ?? undefined,
+        ...(clarificationCancel ? { clarification_cancel: clarificationCancel } : {}),
       }),
     onSuccess: (run, { generation }) => {
       const stopRequested = stopAfterCreateRef.current === generation;
@@ -309,6 +312,19 @@ export function ChatPage() {
     autoScroll.scrollToLatest();
     cancel.reset();
     send.mutate({ goal, generation: viewGenerationRef.current });
+  }
+
+  /**
+   * 確認の取り消し（#1441・#1445）。「データベースの検索は不要」「資料の検索は不要」を押すと、その文を利用者の発言として
+   * 送り、その質問ではそのツールを使わずに続けさせる（入力欄の下書きは残す）。
+   */
+  function cancelClarification(kind: ClarificationKind) {
+    const goal = t(`chat.clarificationCancel.${kind}`);
+    if (!selectedAgentId || running || waitingApproval || send.isPending || prerequisitesLoading || threadFailed) return;
+    setPending(createOptimisticChatMessage(goal));
+    autoScroll.scrollToLatest();
+    cancel.reset();
+    send.mutate({ goal, generation: viewGenerationRef.current, clarificationCancel: kind });
   }
 
   /** 送れなかった質問を、そのままもう一度送る（#907）。 */
@@ -556,10 +572,14 @@ export function ChatPage() {
             ) : runs.length === 0 && !pending ? (
               <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
             ) : (
-              runs.map((run) => (
+              runs.map((run, index) => (
                 <RunChatTurn
                   key={run.id}
                   run={run}
+                  // 取り消しの操作は、利用者の答えを待っている最後の回答だけに出す（送信中・実行中は押せない）。
+                  latest={index === runs.length - 1 && !pending}
+                  cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
+                  onCancelClarification={cancelClarification}
                   canDecide={capabilities.decideApprovals}
                   // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
                   canRate={capabilities.operateRuns}
@@ -587,6 +607,9 @@ export function ChatPage() {
 
 function RunChatTurn({
   run,
+  latest,
+  cancelDisabled,
+  onCancelClarification,
   canDecide,
   canRate,
   deciding,
@@ -595,6 +618,10 @@ function RunChatTurn({
   onProgressTerminal,
 }: {
   run: RunState;
+  /** 会話の最後の往復か（確認の取り消しの操作を出すのは最後の回答だけ）。 */
+  latest: boolean;
+  cancelDisabled: boolean;
+  onCancelClarification: (kind: ClarificationKind) => void;
   canDecide: boolean;
   canRate: boolean;
   deciding: boolean;
@@ -611,6 +638,9 @@ function RunChatTurn({
   const failure = run.status === "failed" ? failureMessage(run) : null;
   // 回答の確かめ（確かめた条件・確認待ちの質問・業務ガイド・資料で確かめた結果。#1286）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
+  // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
+  const cancelledKinds = cancelledClarificationKinds(run);
+  const cancelKinds = latest && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : [];
   // 処理の段階（3 製品共通のイベント。#1359）。backend が Run の状態から記録したイベントを、実行中は SSE で受け取り
   // （承認待ちの間も heartbeat で途絶えない）、使えなければ polling に縮退する。会話の取り直しに入っている記録も積む。
   // 途絶えたら共通の hook が取り直し、「接続を確認しています」を出す（#1160）。
@@ -645,6 +675,9 @@ function RunChatTurn({
         */}
         {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
         <ChatProgress {...progress.progressProps} startedAt={run.created_at} testId="chat-progress" />
+        {cancelledKinds.length > 0 ? (
+          <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
+        ) : null}
         {answer ? (
           // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
           // 同じ共通の結果の表で出す（#1158）。表でない部分・表でない結果は今までどおり。
@@ -701,6 +734,15 @@ function RunChatTurn({
             </div>
           </Banner>
         ))}
+
+        {cancelKinds.length > 0 ? (
+          <ClarificationCancelActions
+            kinds={cancelKinds}
+            disabled={cancelDisabled}
+            onCancel={onCancelClarification}
+            testId={`chat-clarification-cancel-${run.id}`}
+          />
+        ) : null}
 
         {review ? <AnswerReviewPanel review={review} testId={`chat-review-${run.id}`} /> : null}
 
