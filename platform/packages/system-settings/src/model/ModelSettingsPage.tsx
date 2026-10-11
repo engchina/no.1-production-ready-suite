@@ -121,8 +121,8 @@ export interface ModelSettingsPageProps {
   draftGuardMessages?: Partial<DraftGuardMessages>;
   /**
    * 保存が成功したときに捨てる製品の cache（既定のモデル・登録モデルから作る候補など。#1416）。
-   * 例: RAG のチャット・RAG 検索の「回答するモデル」、Agent の業務 Agent の「既定（〈モデル〉）」。
-   * 捨てないと、画面を戻ったときに保存前のモデルを出す。
+   * 例: RAG のチャット・RAG 検索の「回答するモデル」。`staleTime` を付けた query は、捨てないと
+   * 画面を戻ったときに保存前のモデルを出す（`staleTime` の無い query は開き直すと取り直すので要らない）。
    */
   invalidateQueryKeys?: readonly QueryKey[];
 }
