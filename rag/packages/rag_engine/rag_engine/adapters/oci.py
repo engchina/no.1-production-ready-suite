@@ -615,10 +615,10 @@ def _validated_llm_provider(
         raise RuntimeError(f"{provider.label} は Vision 入力に対応していません。")
     prefix = provider.provider_id.upper()
     missing = []
-    # endpoint を明示した provider は base URL の組み立てに region を使わない。
+    # base URL は endpoint だけで決める(#1440)。
     # project は OCI の OpenAI 互換 API だけが要求するため必須にしない。
-    if not provider.region and not provider.endpoint:
-        missing.append(f"{prefix}_RAG_REGION")
+    if not provider.base_url:
+        missing.append(f"{prefix}_RAG_ENDPOINT")
     if not provider.api_key:
         missing.append(f"{prefix}_RAG_API_KEY")
     if not provider.model:
