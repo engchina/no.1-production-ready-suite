@@ -23,12 +23,20 @@ from pytest import MonkeyPatch
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oracle import OlderDocumentVersion
+from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
 from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
-from app.rag import document_crop, request_context
+from app.rag import document_crop, request_context, section_map_service
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+from app.rag.section_chunk_map import (
+    MapChunk,
+    SectionChunkMap,
+    SectionNode,
+    build_section_chunk_map,
+)
+from app.schemas.document import DocumentSection
 from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchRequest, SearchResponse
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
 from tests.security_support import ProductionAuth, enable_production_auth, login
@@ -48,6 +56,7 @@ ALL_TOOLS = [
     "rag_read_source",
     "rag_outline",
     "rag_read_document",
+    "rag_read_section",
 ]
 
 
@@ -148,6 +157,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_read_source",
         "rag_outline",
         "rag_read_document",
+        "rag_read_section",
     ]
     # チャットは MCP で提供しない（#787）。チャット
     # だけの利用者は検索・回答プロファイルの一覧だけを使える。
@@ -1190,6 +1200,14 @@ class _DocumentOracle:
     async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
         return {"cs-1": "er_1"} if "cs-1" in chunk_set_ids else {}
 
+    async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
+        if document_id != "d1":
+            return None
+        return next((chunk for chunk in self.chunks if chunk.chunk_id == chunk_id), None)
+
+    async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
+        return document_id == "d1" and chunk_id.startswith("d1:cs-old:")
+
     async def retrievable_element_chunk(
         self, document_id: str, extraction_recipe_id: str, element_id: str
     ) -> RetrievedChunk | None:
@@ -1203,6 +1221,96 @@ class _DocumentOracle:
         return None
 
 
+# 章節ナビゲーションの章節（人が直したもの。chunk の section_path とは違う「第2章 申請と承認」の下に
+# 「2.1 申請」「2.2 承認」を置く）。chunk・embedding は変えず、対応だけがこの章節に従う（#1438）。
+_DOCUMENT_SECTIONS = [
+    DocumentSection(id="s1", title="第1章 総則", level=1, page_start=1, page_end=1),
+    DocumentSection(id="s2", title="第2章 申請と承認", level=1, page_start=2, page_end=3),
+    DocumentSection(id="s21", title="2.1 申請", level=2, page_start=2, page_end=2),
+    DocumentSection(id="s22", title="2.2 承認", level=2, page_start=3, page_end=3),
+]
+
+
+class _SectionStore:
+    """章節と chunk の対応の fake（``_DocumentOracle`` の chunk から本物の決め方で作る）。"""
+
+    contexts: list[AuditRequestContext] = []
+
+    def __init__(self, oracle: object | None = None) -> None:
+        del oracle
+
+    @staticmethod
+    def _map() -> SectionChunkMap:
+        return build_section_chunk_map(
+            "cs-1",
+            _DOCUMENT_SECTIONS,
+            [
+                MapChunk(
+                    chunk_id=chunk.chunk_id,
+                    chunk_index=int(str(chunk.metadata["chunk_index"])),
+                    page_start=int(str(chunk.metadata["page_start"])),
+                    page_end=int(str(chunk.metadata["page_end"])),
+                    head=chunk.text,
+                    chars=len(chunk.text),
+                )
+                for chunk in _DocumentOracle.chunks
+            ],
+            root_title="規程.pdf",
+        )
+
+    async def readable_chunk_set(
+        self, document_id: str, chunk_set_id: str | None = None
+    ) -> ReadableChunkSet | None:
+        self.contexts.append(current_audit_request_context())
+        if document_id != "d1" or chunk_set_id not in {None, "cs-1"}:
+            return None
+        return ReadableChunkSet("d1", "cs-1", "規程.pdf", False)
+
+    async def chunk_set_sections(self, document_id: str, chunk_set_id: str) -> list[SectionNode]:
+        return self._map().sections if (document_id, chunk_set_id) == ("d1", "cs-1") else []
+
+    async def readable_owner_section(
+        self, document_id: str, chunk_id: str
+    ) -> tuple[str, str] | None:
+        owner = self._map().owner_of(chunk_id) if document_id == "d1" else None
+        return ("cs-1", owner) if owner is not None else None
+
+    async def section_chunks(
+        self,
+        document_id: str,
+        *,
+        chunk_set_id: str,
+        section_id: str,
+        from_order: int,
+        limit: int,
+    ) -> list[SectionChunkRow]:
+        if (document_id, chunk_set_id) != ("d1", "cs-1"):
+            return []
+        by_id = {chunk.chunk_id: chunk for chunk in _DocumentOracle.chunks}
+        ids = self._map().chunk_ids(section_id)
+        rows = [
+            SectionChunkRow(chunk_order=order, chunk=by_id[chunk_id])
+            for order, chunk_id in enumerate(ids)
+            if order >= from_order
+        ]
+        return rows[:limit]
+
+    async def owner_sections(
+        self, chunk_ids: list[str]
+    ) -> dict[str, tuple[SectionNode, SectionNode | None]]:
+        mapping = self._map()
+        nodes = {node.section_id: node for node in mapping.sections}
+        result: dict[str, tuple[SectionNode, SectionNode | None]] = {}
+        for chunk_id in chunk_ids:
+            owner = mapping.owner_of(chunk_id)
+            if owner is None:
+                continue
+            node = nodes[owner]
+            parent = nodes.get(node.parent_section_id or "")
+            result[chunk_id] = (node, parent)
+        return result
+
+
 @pytest.fixture
 def document_oracle(monkeypatch: MonkeyPatch) -> type[_DocumentOracle]:
     _DocumentOracle.chunks = [
@@ -1212,7 +1320,11 @@ def document_oracle(monkeypatch: MonkeyPatch) -> type[_DocumentOracle]:
         _doc_chunk(3, "承認の本文。", "規程 > 第3章 承認", 3),
     ]
     _DocumentOracle.contexts = []
+    _SectionStore.contexts = []
     monkeypatch.setattr(mcp_tools, "OracleClient", _DocumentOracle)
+    monkeypatch.setattr(section_map_service, "OracleClient", _DocumentOracle)
+    monkeypatch.setattr(mcp_tools, "SectionMapStore", _SectionStore)
+    monkeypatch.setattr(section_map_service, "SectionMapStore", _SectionStore)
     return _DocumentOracle
 
 
@@ -1228,9 +1340,14 @@ def _read_all(arguments: dict[str, Any], headers: dict[str, str]) -> list[dict[s
         arguments = {"document_id": "d1", "cursor": cursor, "max_chars": arguments["max_chars"]}
 
 
-def test_outline_groups_chunks_into_sections_with_cursors(
+def test_outline_returns_the_section_navigation_tree(
     auth: ProductionAuth, document_oracle: type[_DocumentOracle]
 ) -> None:
+    """rag_outline は chunk の見出しではなく、章節ナビゲーションの章節（階層・id）を返す。
+
+    #1438。
+    """
+    del document_oracle
     user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
     headers = _token(user.user_uuid)
 
@@ -1239,21 +1356,22 @@ def test_outline_groups_chunks_into_sections_with_cursors(
     assert result["isError"] is False, result
     body = result["structuredContent"]
     assert (body["file_name"], body["chunk_set_id"], body["chunk_count"]) == ("規程.pdf", "cs-1", 4)
-    assert (body["page_start"], body["page_end"]) == (1, 3)
-    assert [section["section_path"][-1] for section in body["sections"]] == [
-        "第1章 総則",
-        "第2章 申請",
-        "第3章 承認",
+    assert (body["page_start"], body["page_end"], body["root_section_id"]) == (1, 3, "document")
+    assert [
+        (item["section_id"], item["title"], item["level"], item["parent_section_id"])
+        for item in body["sections"]
+    ] == [
+        ("s1", "第1章 総則", 1, "document"),
+        ("s2", "第2章 申請と承認", 1, "document"),
+        ("s21", "2.1 申請", 2, "s2"),
+        ("s22", "2.2 承認", 2, "s2"),
     ]
-    assert [section["chunk_count"] for section in body["sections"]] == [2, 1, 1]
-    # 節の cursor から読むと、その節の先頭の chunk から始まる。
-    second = _call(
-        "rag_read_document",
-        {"document_id": "d1", "cursor": body["sections"][1]["cursor"], "max_chars": 1000},
-        headers,
-    )["structuredContent"]
-    assert second["chunks"][0]["chunk_id"] == "d1:cs-1:2"
-    assert document_oracle.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+    assert [item["chunk_count"] for item in body["sections"]] == [2, 2, 1, 1]
+    assert body["sections"][1]["chars"] == len("申請の本文。" * 3) + len("承認の本文。")
+    assert body["sections"][3]["path"] == ["第2章 申請と承認", "2.2 承認"]
+    assert (body["sections"][1]["page_start"], body["sections"][1]["page_end"]) == (2, 3)
+    # 見え方の条件（利用者のナレッジベース）は、章節を読むときも同じ context で判定する。
+    assert _SectionStore.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
 
 
 def test_read_document_reads_whole_document_in_order_without_gaps(
@@ -1295,7 +1413,8 @@ def test_read_document_starts_from_page_section_or_locator(
         return str(body["structuredContent"]["chunks"][0]["chunk_id"])
 
     assert first_chunk({"page": 3}) == "d1:cs-1:3"
-    assert first_chunk({"section": "規程 > 第2章 申請"}) == "d1:cs-1:2"
+    assert first_chunk({"section_id": "s2"}) == "d1:cs-1:2"
+    assert first_chunk({"section_id": "s22"}) == "d1:cs-1:3"
     assert first_chunk({"locator": "doc:d1/ext:er_1/el:el-1"}) == "d1:cs-1:1"
 
 
@@ -1314,13 +1433,152 @@ def test_read_document_errors(auth: ProductionAuth, document_oracle: type[_Docum
     assert error({"document_id": "d1", "cursor": "not-a-cursor"}) == mcp_tools.CURSOR_INVALID_CODE
     assert error({"document_id": "d9"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
     assert error({"document_id": "d1", "page": 9}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert error({"document_id": "d1", "section_id": "s9"}) == mcp_tools.SECTION_NOT_FOUND_CODE
     assert (
-        error({"document_id": "d1", "page": 1, "section": "規程"}) == "MCP_TOOL_ARGUMENTS_INVALID"
+        error({"document_id": "d1", "page": 1, "section_id": "s1"}) == "MCP_TOOL_ARGUMENTS_INVALID"
     )
     assert (
         _call("rag_outline", {"document_id": "d9"}, headers)["structuredContent"]["error_code"]
         == mcp_tools.SOURCE_NOT_FOUND_CODE
     )
+
+
+# ---------------------------------------------------------------------------
+# 章節を読む（rag_read_section。#1438）
+# ---------------------------------------------------------------------------
+
+
+def _read_section(arguments: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    result = _call("rag_read_section", {"document_id": "d1", **arguments}, headers)
+    assert result["isError"] is False, result
+    body: dict[str, Any] = result["structuredContent"]
+    return body
+
+
+def test_read_section_reads_the_whole_section_and_stops_at_its_end(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    body = _read_section({"section_id": "s2"}, headers)
+
+    assert body["section"]["section_id"] == "s2"
+    assert (body["section"]["page_start"], body["section"]["page_end"]) == (2, 3)
+    assert body["section"]["parent_section_id"] == "document"
+    assert [child["section_id"] for child in body["child_sections"]] == ["s21", "s22"]
+    # 章節の 2 ページ（p.2・p.3）を読み切り、次の章節の chunk は読まない。
+    assert body["text"] == ("--- p.2 ---\n" + "申請の本文。" * 3 + "\n\n--- p.3 ---\n承認の本文。")
+    assert [chunk["chunk_id"] for chunk in body["chunks"]] == ["d1:cs-1:2", "d1:cs-1:3"]
+    assert (body["section_complete"], body["next_cursor"]) == (True, None)
+    assert _SectionStore.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+
+def test_read_section_from_evidence_chunk_and_up_to_parent(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    # 根拠の chunk（d1:cs-1:3）は「2.2 承認」に属する（chunk の section_path は「第3章 承認」）。
+    leaf = _read_section({"chunk_id": "d1:cs-1:3"}, headers)
+    assert (leaf["section"]["section_id"], leaf["section"]["parent_section_id"]) == ("s22", "s2")
+    assert leaf["text"] == "--- p.3 ---\n承認の本文。"
+
+    parent = _read_section({"chunk_id": "d1:cs-1:3", "up": 1}, headers)
+    assert parent["section"]["section_id"] == "s2"
+    assert [chunk["chunk_id"] for chunk in parent["chunks"]] == ["d1:cs-1:2", "d1:cs-1:3"]
+
+    # 文書全体より上には上がらない。
+    whole = _read_section({"chunk_id": "d1:cs-1:3", "up": 6}, headers)
+    assert (whole["section"]["section_id"], whole["section"]["level"]) == ("document", 0)
+    assert len(whole["chunks"]) == 4
+
+
+def test_read_section_continues_with_cursor_without_gaps(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    pages = [_read_section({"section_id": "s2", "max_chars": 10}, headers)]
+    while pages[-1]["next_cursor"] is not None:
+        assert pages[-1]["section_complete"] is False
+        pages.append(_read_section({"cursor": pages[-1]["next_cursor"], "max_chars": 10}, headers))
+    assert pages[-1]["section_complete"] is True
+    assert len(pages) > 2
+    assert all(len(page["text"]) <= 10 for page in pages)
+    read = "".join(page["text"] for page in pages)
+    for marker in ("--- p.2 ---", "--- p.3 ---"):
+        read = read.replace(marker, "")
+    texts = [chunk.text for chunk in document_oracle.chunks[2:]]
+    assert read.replace("\n", "") == "".join(texts)
+
+
+def test_read_section_errors(auth: ProductionAuth, document_oracle: type[_DocumentOracle]) -> None:
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    def error(arguments: dict[str, Any]) -> str:
+        body = _call("rag_read_section", arguments, headers)
+        assert body["isError"] is True, body
+        return str(body["structuredContent"]["error_code"])
+
+    assert error({"document_id": "d1", "section_id": "s9"}) == mcp_tools.SECTION_NOT_FOUND_CODE
+    assert error({"document_id": "d9", "section_id": "s1"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert error({"document_id": "d1", "chunk_id": "d1:cs-9:0"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert error({"document_id": "d1", "chunk_id": "d1:cs-old:0"}) == mcp_tools.SOURCE_STALE_CODE
+    stale = encode_cursor({"cs": "cs-old", "s": "s2", "i": 0, "o": 0})
+    assert error({"document_id": "d1", "cursor": stale}) == mcp_tools.SOURCE_STALE_CODE
+    assert error({"document_id": "d1", "cursor": "bad"}) == mcp_tools.CURSOR_INVALID_CODE
+    for arguments in (
+        {"document_id": "d1"},
+        {"document_id": "d1", "section_id": "s1", "chunk_id": "d1:cs-1:0"},
+        {"document_id": "d1", "cursor": stale, "up": 1},
+        {"document_id": "d1", "section_id": "s1", "up": 7},
+    ):
+        assert error(arguments) == "MCP_TOOL_ARGUMENTS_INVALID", arguments
+
+
+def test_evidence_shows_the_section_of_the_chunk(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle], monkeypatch: MonkeyPatch
+) -> None:
+    """rag_retrieve_evidence の根拠に、所属の章節（id・名前・頁・文字数・親）が付く（#1438）。"""
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    hit = document_oracle.chunks[3].model_copy(
+        update={
+            "metadata": {**document_oracle.chunks[3].metadata, "evidence_role": "retrieved_anchor"}
+        }
+    )
+    other = RetrievedChunk(document_id="d2", chunk_id="d2:0", text="別の文書。", score=0.5)
+
+    async def fake_search(request: SearchRequest) -> SearchResponse:
+        del request
+        return SearchResponse(answer="", citations=[hit, other], trace_id="t-1", elapsed_ms=1.0)
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_search)
+    result = _call("rag_retrieve_evidence", {"query": "承認"}, headers)
+
+    assert result["isError"] is False, result
+    evidence = result["structuredContent"]["evidence"]
+    assert evidence[0]["section"] == {
+        "section_id": "s22",
+        "title": "2.2 承認",
+        "level": 2,
+        "page_start": 3,
+        "page_end": 3,
+        "chars": len("承認の本文。"),
+        "chunk_count": 1,
+        "parent_section_id": "s2",
+        "parent_title": "第2章 申請と承認",
+        "parent_chars": len("申請の本文。" * 3) + len("承認の本文。"),
+    }
+    # 対応の無い chunk（別の文書・対応を作る前の文書）は section を付けない。
+    assert evidence[1]["section"] is None
 
 
 # ---------------------------------------------------------------------------

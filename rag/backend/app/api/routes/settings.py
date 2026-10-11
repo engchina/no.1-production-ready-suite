@@ -98,6 +98,7 @@ from app.rag.preprocess_strategy import (
     normalize_preprocess_profile,
     preprocess_runtime_settings,
 )
+from app.rag.section_map_service import schedule_refresh_all_section_maps
 from app.rag.section_rules import (
     SectionRulesSettingsData,
     SectionRulesStore,
@@ -743,6 +744,8 @@ async def update_section_rules_settings(
         raise HTTPException(
             status_code=500, detail="章節の抽出規則を保存できませんでした。"
         ) from exc
+    # 章節が変わる文書の章節と chunk の対応を作り直す（#1438。chunk・embedding は変えない）。
+    schedule_refresh_all_section_maps(reason="section_rules_saved")
     return ApiResponse(data=section_rules_settings(store))
 
 
@@ -753,6 +756,7 @@ async def reset_section_rules_settings() -> ApiResponse[SectionRulesSettingsData
         reset_section_rules()
     except OSError as exc:
         raise HTTPException(status_code=500, detail="章節の抽出規則を戻せませんでした。") from exc
+    schedule_refresh_all_section_maps(reason="section_rules_reset")
     return ApiResponse(data=section_rules_settings())
 
 

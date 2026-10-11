@@ -92,6 +92,7 @@ from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.section_map_service import refresh_document_section_map
 from app.rag.section_rules import (
     SectionRulesPreviewRequest,
     SectionRulesStore,
@@ -1076,6 +1077,9 @@ async def update_document_recipe(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    # 章節の抽出規則の方式（section_rules_mode）は取込をやり直さずに章節を変えるため、
+    # 章節と chunk の対応だけを作り直す（#1438）。
+    await refresh_document_section_map(document_id, oracle=oracle, reason="recipe_config")
     return ApiResponse(data=await _document_recipe_view(oracle, row))
 
 
@@ -1094,6 +1098,7 @@ async def delete_document_recipe(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await refresh_document_section_map(document_id, oracle=oracle, reason="recipe_delete")
     return ApiResponse(
         data=DocumentRecipeDeleteResult(
             recipe_id=recipe_id,
@@ -1475,6 +1480,8 @@ async def save_document_sections(
             status_code=409,
             detail="読み込んだ後に、ほかの操作で章節が保存されました。読み込み直してから直してください。",
         ) from exc
+    # 章節を直しても chunk・embedding は作り直さず、章節と chunk の対応だけを作り直す（#1438）。
+    await refresh_document_section_map(document_id, oracle=oracle, reason="sections_saved")
     return ApiResponse(data=await _document_sections(oracle, document_id, request.recipe_id))
 
 
@@ -1517,6 +1524,7 @@ async def reset_document_sections(
     if not await oracle.document_exists(document_id):
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     await oracle.delete_document_sections(document_id)
+    await refresh_document_section_map(document_id, oracle=oracle, reason="sections_reset")
     return ApiResponse(data=await _document_sections(oracle, document_id, recipe_id))
 
 
@@ -4882,6 +4890,9 @@ async def _run_ingestion_job(
                 discarded_status=IngestionJobStatus.SUCCEEDED,
             )
             return
+        # 取込（分割と embedding）が終わったら、章節と chunk の対応を作る（#1438。失敗しても job は
+        # 成功のまま。MCP で章節を読むときに無ければ作り直す）。
+        await refresh_document_section_map(job.document_id, oracle=oracle, reason="ingestion")
         if recipe_success_outcome is not None:
             _record_recipe_success_outcome(job, recipe_success_outcome)
         if finished_detail is not None:

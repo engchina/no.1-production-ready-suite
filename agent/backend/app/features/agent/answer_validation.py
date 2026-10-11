@@ -51,6 +51,7 @@ from app.features.agent.answer_passages import (
 )
 from app.features.agent.support_task import (
     RAG_READ_DOCUMENT,
+    RAG_READ_SECTION,
     RAG_READ_SOURCE,
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
@@ -114,7 +115,7 @@ GUIDE_WITHHELD = (
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 本文を読むツール（#1330・#1332）。多段の質問では段の事実を読んで確かめるため、読んだ chunk も
 # 最終の検証の根拠に入れる（#1345）。
-READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT})
+READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
 # 回答に載せない段落の判定（RAG の `is_valid` が検証に通さない判定と同じ）。
 BLOCKING_CLAIM_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
 _CLAIM_LABELS = {
@@ -157,7 +158,7 @@ def _evidence_refs(tool: str, output: JsonObject) -> list[tuple[str, str]]:
         items = evidence if isinstance(evidence, list) else []
     elif tool == RAG_READ_SOURCE:
         items = [output]
-    elif tool == RAG_READ_DOCUMENT:
+    elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         chunks = output.get("chunks")
         document_id = output.get("document_id")
         items = [
@@ -193,7 +194,8 @@ def run_evidence_groups(
     根拠の id は返した RAG のものなので、接続ごとに分けて検証する。返すのは、接続ごとの
     （その接続の最も新しい根拠のツールの function tool の名前〔接続を決める〕, 参照の一覧）で、
     最も新しく根拠を返した接続から順。参照は新しい呼び出しから順、接続の中で重複なし、最大 30 件。
-    `rag_read_source`・`rag_read_document` で読んだ chunk も根拠に入れる（#1345。多段の質問は段の
+    `rag_read_source`・`rag_read_document`・`rag_read_section`（#1438）で読んだ chunk も根拠に
+    入れる（#1345。多段の質問は段の
     事実を読んで確かめる）。
     `answer` を渡すと、回答が引用した根拠（`chunk_id` を回答に書いたもの）を接続の中で先にする
     （#1364。多段の質問は前の段の根拠が古い呼び出しにあり、上限で切ると回答が使った根拠が検証に

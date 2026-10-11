@@ -27,7 +27,8 @@
 | `purchase-approval-rules.pdf` | **似た承認の規程**（購買の申請。システムの変更の申請とは別の承認者・期限） |
 | `logistics-organization-rules.pdf` | **別の会社**（サンプル物流社）の組織規程（略号「経」「総」「情」がサンプル社と衝突する） |
 | `logistics-system-ledger.xlsx` | **別の会社**のシステム台帳（20 行。略称 `OMS`・`BMS`・`DMS` がサンプル社と衝突する） |
-| `multi-hop.json` | 評価セット（69 問。dev 40 問・holdout 29 問。先頭の 33 問は #1335 のまま）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>`。文書の版（旧版 → 新しい版）は `document_versions`（#1366） |
+| `server-room-inspection.pdf` | サーバー室の定期点検要領（13 ページ。準備・設備ごとの点検・中止の条件・記録・点検の後の作業の章を改ページで 2〜3 ページに分ける。#1438。下の「章節の読み切り」） |
+| `multi-hop.json` | 評価セット（74 問。dev 43 問・holdout 31 問。先頭の 33 問は #1335 のまま、最後の 5 問は #1438 の章節の読み切り）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>`。文書の版（旧版 → 新しい版）は `document_versions`（#1366） |
 | `sources/*.html` | PDF の原稿（`multi_hop_corpus.py` が作る） |
 | `sources/*.workbook.json` | xlsx の原稿（シートの前書き・表頭・行。`multi_hop_corpus.py` が作る） |
 
@@ -94,8 +95,9 @@
 | `intra_document_reference` | 同じ文書の中の参照をたどる | 6 | 3 |
 | `table_lookup` | 本文の実体で表の行を引く（表の中の絞り込み・別の会社の台帳を含む） | 6 | 4 |
 | `single_hop` | 1 つの根拠で答えられる（対照） | 3 | 3 |
+| `section_read` | 複数ページの章節を読み切る（必要な根拠が同じ章節の別々のページにある。#1438） | 3 | 2 |
 
-- 段の数は 1 段 12 問・2 段 29 問・3 段 12 問・4 段 13 問・5 段 3 問です。
+- 段の数は 1 段 12 問・2 段 33 問・3 段 13 問・4 段 13 問・5 段 3 問です。
 - 先頭の 33 問は #1335 のまま（ID・質問・期待する語・根拠の文を変えていない）で、#1335 の結果と比べられます。
   #1352 で足した 36 問（dev 20・holdout 16）は、足した実体（名前の似たシステム・部署、略称の衝突、表記ゆれ、旧版・
   別の会社）を使います。
@@ -111,6 +113,32 @@
 - 対応（`expected_outcomes`）は、すべて答えられる質問なので `answered` / `conditional` を受け入れます（拒答は失敗）。
   期待する語（`expected_answer_keywords`）は NFKC・大小文字・空白を無視して照合します（「ＨＲＭ」と「HRM」、
   「5 年」と「5年」は同じ）。
+
+## 章節の読み切り（#1438）
+
+手順・一覧・条件のまとまりが複数ページの章節にあり、検索で当たった 1 つの根拠（chunk の抜粋）では全部の項目がそろわない
+問を 5 問（dev 3・holdout 2。種類 `section_read`）入れています。資料は `server-room-inspection.pdf`（サーバー室の定期点検
+要領。ほかの資料と実体を共有せず、#1335・#1352 の問の正解を変えない）で、章の中を改ページで 2〜3 ページに分け、各ページの
+終わりに点検表の欄の表を置きます（表が本文の子 chunk を区切るので、ページごとの本文が別々の chunk になる）。
+
+| ID | 区分 | 章節 | 必要な根拠のページ |
+|---|---|---|---|
+| `sr-inspection-preparation` | dev | 第 2 章 点検の前の準備（3 ページ） | p.2・p.3・p.4 |
+| `sr-inspection-equipment-values` | dev | 第 3 章 設備ごとの点検（3.1〜3.3 の節が 1 ページずつ。節を 1 つ読んでも足りず、親の章を読む） | p.5・p.6・p.7 |
+| `sr-inspection-record-items` | dev | 第 5 章 点検の記録（2 ページ） | p.10・p.11 |
+| `sr-inspection-stop-conditions` | holdout | 第 4 章 点検を中止する条件（2 ページ） | p.8・p.9 |
+| `sr-inspection-after-tasks` | holdout | 第 6 章 点検の後の作業（2 ページ） | p.12・p.13 |
+
+- 必要な根拠（`required_evidence`）は同じ章の別々のページの文で、テストが原稿の改ページ（`multi_hop_corpus.py` の
+  `Document.pages`）と同梱の PDF のページで照合します（`test_section_read_cases_need_every_page_of_one_section`）。
+- 見る値: `reasoning_type=section_read` の `evidence_chain_complete_rate`（章節の全部のページの根拠を引用で取れた割合）と
+  `answer_keyword_hit_rate`。A（RAG の回答）は検索の上位に章節の全部のページが入らないと欠け、D（業務 Agent）は根拠の
+  `section`（属する章節の頁の範囲・文字数）を見て `rag_read_section` で章節を読み切ると取れます（読んだ chunk は D の引用
+  に入る）。章節の読み切りが効いたかは、D の Run の `rag_read_section` の呼び出しと、`sr-inspection-equipment-values` で
+  `up` を使ったか（節から親の章へ上がったか）で確かめます。
+- 子 chunk の見積もり（`estimate_chunks`）は 27（章・節の見出し・改ページの後のページ・表を 1 つずつ）で、資料全体の
+  見積もりは 268（実測の 241 + この資料の見積もり。この資料の実測は未確認）です。
+- 回答のときに章節を自動で広げる（#1436）・長い章節を抽出してから統合する（#1437）の効果も、この 5 問で比べます。
 
 ## 指標
 

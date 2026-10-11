@@ -100,6 +100,7 @@ def test_multi_hop_set_has_every_reasoning_type_and_both_splits() -> None:
         "comparison",
         "intra_document_reference",
         "table_lookup",
+        "section_read",
     }
     for split in ("dev", "holdout"):
         members = [case for case in cases if case.split == split]
@@ -131,7 +132,7 @@ def test_multi_hop_evidence_is_written_in_its_sources_and_corpus() -> None:
     payload, request = _load_set()
     names = referenced_files(payload)
     # 紛らわしい資料（旧版・別の会社・似た承認の規程）も、評価の CLI が取り込むよう 1 問は参照する。
-    assert len(names) == 15
+    assert len(names) == 16
     assert all((CORPUS / name).is_file() for name in names)
     pdf_text = {
         name: "\n".join(page.extract_text() for page in PdfReader(CORPUS / name).pages)
@@ -164,6 +165,37 @@ def test_multi_hop_evidence_is_written_in_its_sources_and_corpus() -> None:
                 # 表は 1 行 1 記録で取り込む。根拠は行を指すセルの値（システム ID など）にする。
                 assert item.text in workbook_cells[name], (case.id, item.id)
                 assert item.text in xlsx_cells[name], (case.id, item.id)
+
+
+def test_section_read_cases_need_every_page_of_one_section() -> None:
+    """章節の読み切りの問（#1438）は、必要な根拠が同じ章節（章）の別々のページにある。
+
+    原稿の改ページ（``Document.pages``）と同梱の PDF のページが合い、根拠の文が置いたページにある。
+    """
+    from pypdf import PdfReader
+
+    builder = _source_builder()
+    _payload, request = _load_set()
+    [inspection] = [doc for doc in builder.build_documents() if doc.file_name == builder.INSPECTION]
+    reader = PdfReader(CORPUS / builder.INSPECTION)
+    page_text = [page.extract_text() for page in reader.pages]
+    cases = [case for case in request.cases if case.reasoning_type == "section_read"]
+    assert 4 <= len(cases) <= 6
+    assert {case.split for case in cases} == {"dev", "holdout"}
+    chapter_of_page: dict[int, str] = {}
+    current = ""
+    for number, text in enumerate(page_text, start=1):
+        # 章の見出しの行（本文の「第 5 章の記録」のような言及は数えない）。
+        found = re.findall(r"^第 (\d) 章 [^。、]+$", text, flags=re.MULTILINE)
+        current = found[-1] if found else current
+        chapter_of_page[number] = current
+    for case in cases:
+        assert case.relevant_document_ids == [f"file:{builder.INSPECTION}"], case.id
+        pages = [inspection.pages[item.id] for item in case.required_evidence]
+        assert len(set(pages)) == len(pages) >= 2, case.id
+        assert len({chapter_of_page[page] for page in pages}) == 1, case.id
+        for item, page in zip(case.required_evidence, pages, strict=True):
+            assert contains_normalized(page_text[page - 1], item.text), (case.id, item.id, page)
 
 
 def test_multi_hop_corpus_has_notation_variants_and_references() -> None:

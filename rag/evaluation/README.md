@@ -64,7 +64,8 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
   （`split_breakdown`）の中にも同じ内訳があり、dev だけの値を読めます。
 - `reasoning_type` は `single_hop`（1 つの根拠で答えられる対照）/ `bridge`（橋渡し: A の属性で B を引き、B の属性で
   答える）/ `comparison`（2 つ以上の実体の属性を比べる）/ `intra_document_reference`（同じ文書の中の参照をたどる）/
-  `table_lookup`（本文の実体で表の行を引く）。`hops` は根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）で、
+  `table_lookup`（本文の実体で表の行を引く）/ `section_read`（複数ページの章節を読み切る。必要な根拠が同じ章節の別々の
+  ページにある。#1438）。`hops` は根拠をたどる回数（比べる質問は 1 つの実体あたりの回数）で、
   `reasoning_type` と一緒に書きます。`single_hop` は 1、`bridge`・`intra_document_reference` は 2 以上で、
   `required_evidence` は段ごとに書くため `hops` より少なくできません（422）。採点の方法は変わりません。
 - ケースの `include_superseded: true`（#1366）は、新しい版に置き換えた文書（旧版）も検索して答えるケース（版の

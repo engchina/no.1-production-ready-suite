@@ -708,6 +708,23 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#1438 章節と chunk の対応・MCP の章節の読み取り）
+
+文書の詳細の「章節ナビゲーション」の章節を正本にし、章節と chunk の対応を表に持つようにした。章節を直しても chunk・
+embedding・ベクトル索引は作り直さない。MCP の `rag_outline` は章節の階層・`section_id` で返し（出力の版 9。未リリースの
+ため互換は持たない）、`rag_read_section` を足し、根拠に所属の章節（`section`）を付ける。
+
+1. システムテーブルを更新する（migration `20261011_001_section_chunk_map`。表 `rag_chunk_set_sections`・
+   `rag_section_chunks` と索引を無ければ作る。データを削除しないので承認は要らない）。更新するまで、MCP の
+   `rag_outline` / `rag_read_section` は表を読めずに失敗し、根拠の `section` は null になる（検索・回答は続ける）。取込と
+   章節の保存は対応の作り直しに失敗してもログ `section_map_refresh_failed` を残して続ける。
+2. backend を再起動する。既存の文書の対応は、取込をやり直さなくても、MCP で章節を読むとき（`rag_outline` /
+   `rag_read_section`）にその文書の分だけ作る。根拠の `section` は対応のある文書にだけ付くので、すぐに全部の文書に付けたい
+   ときは、章節の抽出規則の画面（検索・回答設定 > 文書解析の「解析後の処理」）で規則を保存し直す（すべての文書の対応を
+   バックグラウンドで作り直す。chunk・embedding は変えない）。
+3. Agent を再起動する（スキル `business_rag_research` が `rag_read_section` を使う。MCP 接続 `rag` のツールの一覧は
+   接続ごとに読み直す）。
+
 ## 既存環境の更新手順（#1430 品質評価の job の上限を回答の回数に比例させる）
 
 品質評価の job の全体の上限を、投入時の回答の回数（ケース × 往復。比較は experiment 倍）×

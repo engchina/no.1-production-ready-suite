@@ -125,6 +125,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "ingestion_audit",
         "knowledge_graph",
         "entities",
+        "section_map",
         "citation_feedback",
         "feedback_details",
         "evaluation_artifacts",
@@ -404,7 +405,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 関係情報グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
-    assert len(statements) == 89
+    assert len(statements) == 90
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -482,6 +483,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261005_001_message_answer_runs",
         "20261007_001_document_superseded",
         "20261009_001_entity_layer",
+        "20261011_001_section_chunk_map",
     ]
 
 

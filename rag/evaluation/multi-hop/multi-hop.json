@@ -2486,6 +2486,173 @@
           "text": "重要度 C のシステムは、毎週日曜日に 1 回バックアップを取り、4 世代を保管します"
         }
       ]
+    },
+    {
+      "id": "sr-inspection-preparation",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "section_read",
+      "hops": 2,
+      "query": "サーバー室の定期点検の前に行う準備をすべて挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "入室の予約",
+        "監視の一時停止",
+        "予備部品"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-prep-reserve",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の 5 営業日前までに、総務部にサーバー室の入室の予約をします"
+        },
+        {
+          "id": "sv-prep-monitor",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の前日までに、監視の担当者に監視の一時停止を依頼します"
+        },
+        {
+          "id": "sv-prep-parts",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "電源装置のバッテリーと空調のフィルターの予備部品が倉庫にあることを確かめます"
+        }
+      ]
+    },
+    {
+      "id": "sr-inspection-equipment-values",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "section_read",
+      "hops": 3,
+      "query": "サーバー室の定期点検で、設備ごとに確かめる値の範囲をすべて教えてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "210",
+        "27",
+        "緑の範囲"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-power-range",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "無停電電源装置の出力の電圧が 200 V から 210 V の間にあることを確かめます"
+        },
+        {
+          "id": "sv-air-range",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "サーバー室の室温が 18 度から 27 度の間にあることを確かめます"
+        },
+        {
+          "id": "sv-fire-range",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "消火ガスのボンベの圧力計の針が緑の範囲にあることを確かめます"
+        }
+      ]
+    },
+    {
+      "id": "sr-inspection-record-items",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "section_read",
+      "hops": 2,
+      "query": "サーバー室の定期点検の記録には、何を書きますか？すべて挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "氏名",
+        "交換した部品"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-record-name",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の記録には、点検の日時と点検者の氏名を書きます"
+        },
+        {
+          "id": "sv-record-parts",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の記録には、交換した部品とその数を書きます"
+        }
+      ]
+    },
+    {
+      "id": "sr-inspection-stop-conditions",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "section_read",
+      "hops": 2,
+      "query": "サーバー室の定期点検を途中で中止しなければならないのは、どのようなときですか？すべて挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "漏水",
+        "警報"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-stop-leak",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "床や天井に漏水を見つけたときは、点検を中止します"
+        },
+        {
+          "id": "sv-stop-alarm",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "火災の警報が鳴ったときは、点検を中止します"
+        }
+      ]
+    },
+    {
+      "id": "sr-inspection-after-tasks",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "section_read",
+      "hops": 2,
+      "query": "サーバー室の定期点検が終わった後に行う作業をすべて挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "監視の再開",
+        "補充"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-after-monitor",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検が終わったら、監視の担当者に監視の再開を依頼します"
+        },
+        {
+          "id": "sv-after-refill",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "使った予備部品は、点検の日から 10 営業日以内に補充します"
+        }
+      ]
     }
   ]
 }

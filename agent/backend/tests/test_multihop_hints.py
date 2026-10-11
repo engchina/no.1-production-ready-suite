@@ -50,16 +50,22 @@ from app.features.agent.support_task import (
     ADJUSTED_LIMITS_HINT,
     MAX_RECORD_CODES,
     MAX_REFERENCES,
+    MAX_SECTION_READS,
     RECORD_CODE_HINT,
     REFERENCE_READ_HINT,
     REPEATED_QUERY_HINT,
     SEARCH_LIMIT_SCHEMA_NOTE,
+    SECTION_CONTINUE_HINT,
+    SECTION_PARENT_HINT,
+    SECTION_READ_HINT,
     SUPERSEDED_VERSION_HINT,
     adjusted_search_limits,
+    asks_for_grouped_content,
     normalized_query,
     record_codes,
     repeated_query_note,
     search_limit_schema,
+    section_read_note,
     similar_queries,
     superseded_versions_note,
     text_references,
@@ -904,3 +910,153 @@ def test_fake_rag_evidence_outputs_match_the_contract() -> None:
         assert set(DEFAULT_OUTPUTS[name]) <= set(properties), name
         assert "older_versions" in DEFAULT_OUTPUTS[name], name
         assert properties["older_versions"]["type"] == "array", name
+
+
+# ---- 根拠の章節を読み切る（#1438） --------------------------------------------------------------
+
+_GROUPED_GOAL = "契約の更新の手順をすべて教えてください。"
+
+
+def _section_evidence(**overrides: Any) -> dict[str, Any]:
+    item: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]["evidence"][0])
+    item.update(overrides)
+    return item
+
+
+def test_section_read_note_points_to_sections_longer_than_the_excerpt() -> None:
+    used = _section_evidence(chunk_id="c-used", used_in_answer=True)
+    first = _section_evidence(chunk_id="c-1", used_in_answer=False)
+    same_section = _section_evidence(chunk_id="c-2", used_in_answer=False)
+    short = _section_evidence(
+        chunk_id="c-3",
+        used_in_answer=False,
+        section={**first["section"], "section_id": "sec-short", "chars": 2},
+    )
+    other = _section_evidence(
+        chunk_id="c-4",
+        document_id="doc-2",
+        used_in_answer=False,
+        section={**first["section"], "section_id": "sec-9"},
+    )
+    no_section = _section_evidence(chunk_id="c-5", section=None)
+    output = {"evidence": [first, same_section, short, used, other, no_section]}
+
+    note = section_read_note("rag_retrieve_evidence", output, [_GROUPED_GOAL])
+
+    assert note is not None and note["next_step"] == SECTION_READ_HINT
+    # 回答に使った根拠を先に、同じ章節は 1 つにし、抜粋より短い章節は案内しない。
+    found = [
+        (item["document_id"], item["section_id"], item["chunk_id"]) for item in note["sections"]
+    ]
+    assert found == [("doc-1", "sec-5", "c-used"), ("doc-2", "sec-9", "c-4")]
+    assert note["sections"][0] == {
+        "document_id": "doc-1",
+        "chunk_id": "c-used",
+        "section_id": "sec-5",
+        "title": "第5条（更新）",
+        "page_start": 3,
+        "page_end": 4,
+        "chars": 1200,
+        "parent_section_id": "sec-ch2",
+    }
+    many = {
+        "evidence": [
+            _section_evidence(
+                chunk_id=f"c{index}", section={**first["section"], "section_id": f"s{index}"}
+            )
+            for index in range(5)
+        ]
+    }
+    limited = section_read_note("rag_search", many, [_GROUPED_GOAL])
+    assert limited is not None and len(limited["sections"]) == MAX_SECTION_READS
+
+
+def test_section_read_note_needs_a_grouped_question() -> None:
+    output = {"evidence": [_section_evidence()]}
+
+    assert section_read_note("rag_retrieve_evidence", output, ["契約の更新の期限は？"]) is None
+    assert asks_for_grouped_content(["確認する項目を挙げてください"]) is True
+    assert asks_for_grouped_content(["ＨＲＭの申請の流れ"]) is True
+    assert asks_for_grouped_content(["承認者は誰？", None]) is False
+    # 読み取りのツール以外・根拠の無い結果は案内しない。
+    assert section_read_note("rag_read_source", output, [_GROUPED_GOAL]) is None
+    assert section_read_note("rag_retrieve_evidence", {"evidence": []}, [_GROUPED_GOAL]) is None
+
+
+def test_section_read_note_after_reading_a_section() -> None:
+    read: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_read_section"])
+
+    complete = section_read_note("rag_read_section", read, [_GROUPED_GOAL])
+    assert complete == {
+        "section_id": "sec-5",
+        "parent_section_id": "sec-ch2",
+        "next_step": SECTION_PARENT_HINT,
+    }
+    # 続きがあれば、質問に関係なく続きを読む案内。
+    partial = {**read, "section_complete": False, "next_cursor": "cur-2"}
+    assert section_read_note("rag_read_section", partial, ["期限は？"]) == {
+        "section_id": "sec-5",
+        "next_step": SECTION_CONTINUE_HINT,
+    }
+    # 階層 1 の章節の親は文書全体なので、上がる案内はしない。
+    top = {**read, "section": {**read["section"], "level": 1, "parent_section_id": "document"}}
+    assert section_read_note("rag_read_section", top, [_GROUPED_GOAL]) is None
+    assert section_read_note("rag_read_section", read, ["期限は？"]) is None
+
+
+def test_run_reads_the_section_of_the_evidence_when_the_question_asks_for_steps(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=SKILL_ID,
+            name=SKILL_ID,
+            instructions="根拠の章節を rag_read_section で読む。",
+            mcp_requirements=[
+                SkillMcpRequirement(
+                    server_id="rag",
+                    tool_names=["rag_retrieve_evidence", "rag_read_section"],
+                )
+            ],
+        )
+    )
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "契約 更新 手順"}, call_id="call-1"
+            )
+        ],
+        [
+            function_call(
+                "rag__rag_read_section",
+                {"document_id": "doc-1", "chunk_id": "chunk-1"},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("更新の手順は p.3〜4 のとおりです。")],
+    )
+    run = _run(_GROUPED_GOAL)
+
+    limit = int(get_settings().agent_max_rag_calls_per_run)
+    evidence = _tool_output(model, 1, "call-1")
+    assert evidence["section_reads"]["next_step"] == SECTION_READ_HINT
+    assert [item["section_id"] for item in evidence["section_reads"]["sections"]] == ["sec-5"]
+    read = _tool_output(model, 2, "call-2")
+    assert read["section_reads"]["next_step"] == SECTION_PARENT_HINT
+    # 章節の読み取りは RAG の検索の回数に数えない。
+    assert read["rag_calls_remaining"] == limit - 1
+    assert [call["arguments"] for call in mcp.calls_of("rag_read_section")] == [
+        {"document_id": "doc-1", "chunk_id": "chunk-1"}
+    ]
+    # 記録する step の結果は RAG の結果のまま。
+    recorded = [step.tool_result.output for step in run.steps if step.tool_result is not None]
+    assert all("section_reads" not in (output or {}) for output in recorded)
+
+
+def test_business_rag_research_skill_reads_sections() -> None:
+    skill = skill_registry.get("business_rag_research")
+    assert skill is not None
+    assert "rag_read_section" in skill.mcp_requirements[0].tool_names
+    assert "rag_read_section" in skill.instructions
+    assert "up を 1 ずつ増やして" in skill.instructions

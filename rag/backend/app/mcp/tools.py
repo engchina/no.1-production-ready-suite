@@ -13,8 +13,11 @@
 - `rag_read_source`（`menu.search`）: 根拠の本文の続きと親の本文を読む（検索と同じ見え方の
   条件。#1219）。`include_image=true` で図の根拠の元の画像の領域を、上限つきの PNG で MCP の
   content の image として返す（読むたびに同じ見え方の条件を確かめ直す。#1282）
-- `rag_outline` / `rag_read_document`（`menu.search`）: 文書の節の構成と、頁・節・定位子・
-  続きの位置から本文を順に読む（検索と同じ見え方の条件。#1332）
+- `rag_outline` / `rag_read_document`（`menu.search`）: 文書の章節の構成と、頁・章節・定位子・
+  続きの位置から本文を順に読む（検索と同じ見え方の条件。#1332）。章節は文書の詳細の
+  「章節ナビゲーション」が正本（#1438。`app.rag.section_map_service`）
+- `rag_read_section`（`menu.search`）: 章節（section_id か、根拠の chunk の所属の章節。`up` で
+  親の章節）の本文を章節の終わりまで順に読む（#1438）
 
 RAG のチャットは画面の機能で、MCP では提供しない（#787）。MCP で提供するのは検索と根拠の
 読み取りだけにする。
@@ -61,6 +64,7 @@ from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oracle import OracleClient
+from app.clients.section_map_store import SectionChunkRow, SectionMapStore
 from app.config import get_settings
 from app.mcp.profile_scope import (
     ProfileScope,
@@ -102,6 +106,13 @@ from app.rag.figure_url import (
     issue_figure_token,
 )
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
+from app.rag.section_map_service import (
+    SectionOutline,
+    chunk_section,
+    evidence_sections,
+    section_outline,
+)
 from app.rag.support_guide_runtime import (
     GuideMatch,
     clarification_questions,
@@ -124,7 +135,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 6: 根拠の場所に要素の定位子（locator.element_locator）を足した（#1330）。
 # 7: 文書を順に読むツール（rag_outline / rag_read_document）を足した（#1332）。
 # 8: 根拠の結果に、当たった文書の旧版（older_versions）を足した（#1405）。
-MCP_OUTPUT_SCHEMA_VERSION = 8
+# 9: 章節ナビゲーションを正本にした（#1438）。rag_outline を章節の階層・section_id で返し、
+#    rag_read_section を足し、根拠に所属の章節（section）を足した。
+MCP_OUTPUT_SCHEMA_VERSION = 9
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -138,10 +151,14 @@ OLDER_VERSIONS_MAX = 10
 # rag_read_source が 1 回で返す本文・親の本文の上限。
 READ_SOURCE_MAX_CHARS_DEFAULT = 8000
 READ_SOURCE_MAX_CHARS_LIMIT = 20000
-# rag_read_document が 1 回で読む chunk の数の単位と、rag_outline が返す節の上限（#1332）。
+# rag_read_document が 1 回で読む chunk の数の単位と、rag_outline が返す章節の上限（#1332）。
 READ_DOCUMENT_BATCH = 50
 OUTLINE_MAX_SECTIONS = 300
+# rag_read_section が返す子の章節の上限と、up で上がれる段の上限（章節の階層は 1〜6）。
+READ_SECTION_MAX_CHILDREN = 50
+READ_SECTION_MAX_UP = 6
 CURSOR_INVALID_CODE = "cursor_invalid"
+SECTION_NOT_FOUND_CODE = "section_not_found"
 SOURCE_NOT_FOUND_CODE = "source_not_found"
 SOURCE_STALE_CODE = "source_stale"
 # 図の元の画像（rag_read_source の include_image。#1282）。長い辺は VLM が縮めずに読める大きさ、
@@ -175,6 +192,10 @@ INSTRUCTIONS = (
     "渡してください。回答の根拠は evidence にあり、used_in_answer が回答に使った根拠です。"
     "根拠の excerpt が切り詰められている（truncated）ときや、前後の文脈が要るときは、"
     "rag_read_source に document_id と chunk_id を渡して本文と親の本文を読んでください。"
+    "根拠の section は所属の章節（章節ナビゲーションの章節。ページの範囲と文字数）です。手順・"
+    "一覧・条件のまとまりが章節の抜粋より長いときは、rag_read_section に document_id と chunk_id"
+    "（または section_id）を渡すと章節の終わりまで読めます（up で親の章節）。"
+    "文書の章節の構成は rag_outline で確かめます。"
     "evidence_type が figure_description の根拠は図を AI が読んだ説明です。元の図で確かめるときは"
     " rag_read_source に include_image=true を渡すと、図の領域の画像を返します。"
 )
@@ -448,7 +469,7 @@ class ReadSourceInput(BaseModel):
 
 
 class OutlineInput(BaseModel):
-    """文書の節の構成を読む条件（#1332）。"""
+    """文書の章節の構成を読む条件（#1332 / #1438）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -465,10 +486,7 @@ class ReadDocumentInput(BaseModel):
         default=None,
         min_length=1,
         max_length=2048,
-        description=(
-            "続きの位置（前の rag_read_document の next_cursor、"
-            "または rag_outline の節の cursor）。"
-        ),
+        description="続きの位置（前の rag_read_document の next_cursor）。",
     )
     locator: str | None = Field(
         default=None,
@@ -479,11 +497,14 @@ class ReadDocumentInput(BaseModel):
         ),
     )
     page: int | None = Field(default=None, ge=1, description="この頁（PDF の物理頁）から読む。")
-    section: str | None = Field(
+    section_id: str | None = Field(
         default=None,
         min_length=1,
-        max_length=512,
-        description="この節（見出しの列を「 > 」でつないだもの。前方一致）から読む。",
+        max_length=64,
+        description=(
+            "この章節（rag_outline の section_id）の始まりから読む（章節の終わりで止まらない。"
+            "章節だけを読むときは rag_read_section）。"
+        ),
     )
     max_chars: int = Field(
         default=READ_SOURCE_MAX_CHARS_DEFAULT,
@@ -494,13 +515,66 @@ class ReadDocumentInput(BaseModel):
 
     @model_validator(mode="after")
     def _one_start(self) -> ReadDocumentInput:
-        starts = [self.cursor, self.locator, self.page, self.section]
+        starts = [self.cursor, self.locator, self.page, self.section_id]
         if sum(value is not None for value in starts) > 1:
-            raise ValueError("cursor・locator・page・section はどれか 1 つだけを渡してください。")
+            raise ValueError(
+                "cursor・locator・page・section_id はどれか 1 つだけを渡してください。"
+            )
         if self.locator is not None:
             parsed = parse_element_locator(self.locator)
             if parsed is None or parsed.document_id != self.document_id:
                 raise ValueError("locator の形が違うか、文書が document_id と違います。")
+        return self
+
+
+class ReadSectionInput(BaseModel):
+    """章節の本文を読む条件（#1438）。章節は section_id・根拠の chunk_id・cursor のどれか 1 つ。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(..., min_length=1, max_length=128, description="文書の id。")
+    section_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="章節の id（rag_outline の section_id、または根拠の section.section_id）。",
+    )
+    chunk_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=512,
+        description="根拠の chunk の id（evidence_id）。その chunk が属する章節を読む。",
+    )
+    up: int = Field(
+        default=0,
+        ge=0,
+        le=READ_SECTION_MAX_UP,
+        description=(
+            "章節から何段上の親の章節を読むか（0 はその章節。文書全体より上には上がらない）。"
+            "章節を読んでも手順・一覧・条件が足りないときに 1 ずつ上げる。"
+            "cursor とは一緒に渡さない。"
+        ),
+    )
+    cursor: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        description="続きの位置（前の rag_read_section の next_cursor）。",
+    )
+    max_chars: int = Field(
+        default=READ_SOURCE_MAX_CHARS_DEFAULT,
+        ge=1,
+        le=READ_SOURCE_MAX_CHARS_LIMIT,
+        description="返す本文の最大文字数（頁の区切りの行を含む）。",
+    )
+
+    @model_validator(mode="after")
+    def _one_section(self) -> ReadSectionInput:
+        starts = [self.section_id, self.chunk_id, self.cursor]
+        if sum(value is not None for value in starts) != 1:
+            raise ValueError("section_id・chunk_id・cursor のどれか 1 つだけを渡してください。")
+        if self.cursor is not None and self.up:
+            raise ValueError("cursor と up は一緒に渡せません（続きは同じ章節を読みます）。")
         return self
 
 
@@ -524,14 +598,21 @@ class VersionedOutput(BaseModel):
 
 
 class OutlineSection(BaseModel):
-    """文書の 1 つの節（続く chunk のまとまり）。"""
+    """文書の 1 つの章節（章節ナビゲーションの章節。#1438）。"""
 
-    section_path: list[str] = Field(default_factory=list, description="節の見出しの列。")
-    page_start: int | None = Field(default=None, description="節の開始の頁。")
-    page_end: int | None = Field(default=None, description="節の終了の頁。")
-    chunk_count: int = Field(description="節の chunk の数。")
-    chars: int = Field(description="節の本文の文字数。")
-    cursor: str = Field(description="この節から読む rag_read_document の cursor。")
+    section_id: str = Field(description="章節の id（rag_read_section の section_id に渡す）。")
+    title: str = Field(description="章節の名前（文書全体の章節は文書名）。")
+    level: int = Field(description="章節の階層（1〜6。0 は文書全体）。")
+    parent_section_id: str | None = Field(
+        default=None, description="親の章節の id（文書全体の章節は null）。"
+    )
+    path: list[str] = Field(
+        default_factory=list, description="文書の下からこの章節までの章節の名前の列。"
+    )
+    page_start: int | None = Field(default=None, description="章節の開始の頁。")
+    page_end: int | None = Field(default=None, description="章節の終了の頁。")
+    chunk_count: int = Field(description="章節の chunk の数（子の章節の chunk を含む）。")
+    chars: int = Field(description="章節の本文の文字数（子の章節の本文を含む）。")
 
 
 class OutlineOutput(VersionedOutput):
@@ -540,11 +621,21 @@ class OutlineOutput(VersionedOutput):
     chunk_set_id: str = Field(
         description="読んだ chunk_set（続きの cursor はこの chunk_set に縛る）。"
     )
+    root_section_id: str = Field(
+        default=ROOT_SECTION_ID,
+        description="文書全体を表す章節の id（rag_read_section で文書全体を読むときに渡す）。",
+    )
     chunk_count: int
+    chars: int = Field(default=0, description="文書の本文の文字数。")
     page_start: int | None = None
     page_end: int | None = None
-    sections: list[OutlineSection]
-    sections_omitted: int = Field(default=0, description="上限を超えて省いた節の数。")
+    sections: list[OutlineSection] = Field(
+        description=(
+            "章節（文書の詳細の章節ナビゲーションの並び順。階層は level、親は parent_section_id）。"
+            "章節の無い文書は空（文書全体を root_section_id で読む）。"
+        )
+    )
+    sections_omitted: int = Field(default=0, description="上限を超えて省いた章節の数。")
     superseded: bool = Field(default=False, description="新しい版に置き換えた文書（旧版）か。")
 
 
@@ -568,6 +659,26 @@ class ReadDocumentOutput(VersionedOutput):
     chunks: list[ReadDocumentChunk]
     next_cursor: str | None = Field(
         default=None, description="続きを読む cursor（文書の最後まで読んだら null）。"
+    )
+    superseded: bool = Field(default=False, description="新しい版に置き換えた文書（旧版）か。")
+
+
+class ReadSectionOutput(VersionedOutput):
+    document_id: str
+    file_name: str | None = None
+    chunk_set_id: str
+    section: OutlineSection = Field(description="読んだ章節（ページの範囲・親の章節の id）。")
+    child_sections: list[OutlineSection] = Field(
+        default_factory=list,
+        description=f"子の章節（最大 {READ_SECTION_MAX_CHILDREN} 件。本文は section に含む）。",
+    )
+    text: str = Field(description="章節の本文。頁が変わる所に「--- p.N ---」の行を入れる。")
+    chunks: list[ReadDocumentChunk]
+    section_complete: bool = Field(
+        description="章節の終わりまで読んだか（false なら next_cursor で続きを読む）。"
+    )
+    next_cursor: str | None = Field(
+        default=None, description="章節の続きを読む cursor（章節の終わりまで読んだら null）。"
     )
     superseded: bool = Field(default=False, description="新しい版に置き換えた文書（旧版）か。")
 
@@ -673,6 +784,21 @@ class EvidenceImageUrl(BaseModel):
     expires_in_seconds: int = Field(description="発行からの有効な秒数。")
 
 
+class EvidenceSection(BaseModel):
+    """根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの。#1438）。"""
+
+    section_id: str = Field(description="章節の id（rag_read_section の section_id に渡す）。")
+    title: str = Field(description="章節の名前（どの章節にも入らない chunk は文書名）。")
+    level: int = Field(description="章節の階層（1〜6。0 は文書全体）。")
+    page_start: int | None = Field(default=None, description="章節の開始の頁。")
+    page_end: int | None = Field(default=None, description="章節の終了の頁。")
+    chars: int = Field(description="章節の本文の文字数（excerpt より長ければ章節を読む）。")
+    chunk_count: int = Field(description="章節の chunk の数。")
+    parent_section_id: str | None = Field(default=None, description="親の章節の id。")
+    parent_title: str | None = Field(default=None, description="親の章節の名前。")
+    parent_chars: int | None = Field(default=None, description="親の章節の本文の文字数。")
+
+
 class RagEvidence(BaseModel):
     """検索・回答の根拠 1 件。"""
 
@@ -730,6 +856,13 @@ class RagEvidence(BaseModel):
     )
     reference_label: str | None = Field(
         default=None, description="reference_from の根拠の本文の参照の表記。"
+    )
+    section: EvidenceSection | None = Field(
+        default=None,
+        description=(
+            "根拠が属する章節（#1438。章節と chunk の対応がまだ無い文書は null）。手順・一覧・"
+            "条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
+        ),
     )
 
 
@@ -1289,7 +1422,47 @@ def _image_ref(
     )
 
 
-def _evidence(chunk: RetrievedChunk) -> RagEvidence:
+def _evidence_section(
+    found: tuple[SectionNode, SectionNode | None] | None,
+) -> EvidenceSection | None:
+    if found is None:
+        return None
+    node, parent = found
+    return EvidenceSection(
+        section_id=node.section_id,
+        title=node.title,
+        level=node.level,
+        page_start=node.page_start,
+        page_end=node.page_end,
+        chars=node.chars,
+        chunk_count=node.chunk_count,
+        parent_section_id=node.parent_section_id,
+        parent_title=parent.title if parent is not None else None,
+        parent_chars=parent.chars if parent is not None else None,
+    )
+
+
+async def _chunk_sections(
+    chunks: Sequence[RetrievedChunk],
+) -> dict[str, tuple[SectionNode, SectionNode | None]]:
+    """根拠の chunk の所属の章節（#1438）。読めなかったときは付けずに続ける（検索の結果は返す）。"""
+    # 対応は chunk_set ごとにある（chunk_set の無い旧い保存の chunk は対象にしない）。
+    chunk_ids = [
+        chunk.chunk_id for chunk in chunks if _metadata_str(chunk.metadata, "chunk_set_id")
+    ]
+    if not chunk_ids:
+        return {}
+    try:
+        return await evidence_sections(chunk_ids)
+    except Exception:  # noqa: BLE001 - 章節は補助の情報。検索の結果を止めない
+        logger.warning("rag_mcp_evidence_sections_lookup_failed", exc_info=True)
+        return {}
+
+
+def _evidence(
+    chunk: RetrievedChunk,
+    sections: dict[str, tuple[SectionNode, SectionNode | None]] | None = None,
+) -> RagEvidence:
     metadata = dict(chunk.metadata)
     return RagEvidence(
         evidence_id=chunk.chunk_id,
@@ -1315,6 +1488,7 @@ def _evidence(chunk: RetrievedChunk) -> RagEvidence:
         references=_references(metadata),
         reference_from=_metadata_str(metadata, REFERENCE_FROM_KEY),
         reference_label=_metadata_str(metadata, REFERENCE_LABEL_KEY),
+        section=_evidence_section((sections or {}).get(chunk.chunk_id)),
     )
 
 
@@ -1600,7 +1774,11 @@ def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
     return min(max(arguments.evidence_limit, arguments.top_k), EVIDENCE_LIMIT_MAX)
 
 
-def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any]:
+def _answer_fields(
+    result: SearchResponse,
+    evidence_limit: int,
+    sections: dict[str, tuple[SectionNode, SectionNode | None]] | None = None,
+) -> dict[str, Any]:
     # 回答に使った根拠を先に、検索で当たった chunk、前後の文脈の順にする（#1348）。
     ordered = mcp_evidence_order(result.citations, evidence_limit)
     answer = _answer_diagnostics(result)
@@ -1634,7 +1812,7 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         "guide": _guide_ref(answer.get("guide")),
         "insufficient_reason": reason.strip() or None if isinstance(reason, str) else None,
         "needs_human_review": answer.get("needs_human_review") is True,
-        "evidence": [_evidence(chunk) for chunk in ordered[:evidence_limit]],
+        "evidence": [_evidence(chunk, sections) for chunk in ordered[:evidence_limit]],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
         "provenance": _provenance(answer.get("provenance")),
     }
@@ -1809,14 +1987,6 @@ async def readable_element_chunk(
     )
 
 
-def _section_parts(value: object) -> list[str]:
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(" > ") if part.strip()]
-    return []
-
-
 def _read_cursor(chunk_set_id: str, chunk_index: int, offset: int = 0) -> str:
     return encode_cursor({"cs": chunk_set_id, "i": chunk_index, "o": offset})
 
@@ -1836,56 +2006,189 @@ async def _first_chunk_or_missing(
     )
 
 
-async def outline_document(arguments: OutlineInput) -> OutlineOutput:
-    """文書の節の構成（節・頁・chunk の数と、その節から読む cursor）を返す（#1332）。"""
-    oracle = OracleClient()
-    chunk_set_id, rows = await oracle.document_reading_index(arguments.document_id)
-    if chunk_set_id is None or not rows:
-        raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=False)
-    head = await oracle.readable_document_chunks(
-        arguments.document_id,
-        chunk_set_id=chunk_set_id,
-        from_index=int(str(rows[0]["chunk_index"])),
-        limit=1,
+def _outline_section(outline: SectionOutline, node: SectionNode) -> OutlineSection:
+    return OutlineSection(
+        section_id=node.section_id,
+        title=node.title,
+        level=node.level,
+        parent_section_id=node.parent_section_id,
+        path=outline.path(node),
+        page_start=node.page_start,
+        page_end=node.page_end,
+        chunk_count=node.chunk_count,
+        chars=node.chars,
     )
-    sections: list[OutlineSection] = []
-    for row in rows:
-        path = _section_parts(row.get("section_path"))
-        raw_start, raw_end = row.get("page_start"), row.get("page_end")
-        page_start = raw_start if isinstance(raw_start, int) else None
-        page_end = raw_end if isinstance(raw_end, int) else page_start
-        chars = int(str(row.get("chars") or 0))
-        if sections and sections[-1].section_path == path:
-            current = sections[-1]
-            current.chunk_count += 1
-            current.chars += chars
-            if page_end is not None:
-                current.page_end = max(current.page_end or page_end, page_end)
-            if current.page_start is None:
-                current.page_start = page_start
-            continue
-        sections.append(
-            OutlineSection(
-                section_path=path,
-                page_start=page_start,
-                page_end=page_end,
-                chunk_count=1,
-                chars=chars,
-                cursor=_read_cursor(chunk_set_id, int(str(row["chunk_index"]))),
-            )
-        )
-    pages = [value for row in rows for value in (row.get("page_start"), row.get("page_end"))]
-    numbers = [value for value in pages if isinstance(value, int)]
+
+
+async def outline_document(arguments: OutlineInput) -> OutlineOutput:
+    """文書の章節の構成を、章節ナビゲーションの章節から返す（#1332 / #1438）。"""
+    oracle = OracleClient()
+    outline = await section_outline(arguments.document_id, oracle=oracle)
+    if outline is None:
+        raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=False)
+    root = outline.get(ROOT_SECTION_ID)
+    sections = [
+        _outline_section(outline, node)
+        for node in outline.sections
+        if node.section_id != ROOT_SECTION_ID
+    ]
     return OutlineOutput(
         document_id=arguments.document_id,
-        file_name=head[0].file_name if head else None,
-        chunk_set_id=chunk_set_id,
-        chunk_count=len(rows),
-        page_start=min(numbers) if numbers else None,
-        page_end=max(numbers) if numbers else None,
+        file_name=outline.chunk_set.file_name,
+        chunk_set_id=outline.chunk_set.chunk_set_id,
+        chunk_count=root.chunk_count if root is not None else 0,
+        chars=root.chars if root is not None else 0,
+        page_start=root.page_start if root is not None else None,
+        page_end=root.page_end if root is not None else None,
         sections=sections[:OUTLINE_MAX_SECTIONS],
         sections_omitted=max(0, len(sections) - OUTLINE_MAX_SECTIONS),
-        superseded=bool(head) and head[0].metadata.get("document_superseded") is True,
+        superseded=outline.chunk_set.superseded,
+    )
+
+
+def _section_cursor(chunk_set_id: str, section_id: str, order: int, offset: int = 0) -> str:
+    return encode_cursor({"cs": chunk_set_id, "s": section_id, "i": order, "o": offset})
+
+
+async def _section_start(
+    oracle: OracleClient, arguments: ReadSectionInput
+) -> tuple[SectionOutline, SectionNode, int, int]:
+    """読む章節と、読み始めの (章節の中の順, 文字の位置)。"""
+    if arguments.cursor is not None:
+        try:
+            payload = decode_cursor(arguments.cursor, required=("cs", "s", "i", "o"))
+        except InvalidCursorError as exc:
+            raise McpToolError(CURSOR_INVALID_CODE, "cursor の形が違います。") from exc
+        assert payload is not None
+        outline = await section_outline(
+            arguments.document_id, chunk_set_id=str(payload["cs"]), oracle=oracle
+        )
+        node = outline.get(str(payload["s"])) if outline is not None else None
+        if outline is None or node is None:
+            raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=True)
+        return outline, node, max(0, int(payload["i"])), max(0, int(payload["o"]))
+    if arguments.chunk_id is not None:
+        found = await chunk_section(arguments.document_id, arguments.chunk_id, oracle=oracle)
+        if found is None:
+            # 見えない・古い版の根拠は rag_read_source と同じエラーにする。
+            await readable_chunk(oracle, arguments.document_id, arguments.chunk_id)
+            raise McpToolError(
+                SECTION_NOT_FOUND_CODE,
+                "この根拠の章節が見つかりません。rag_read_source で根拠の本文を読んでください。",
+            )
+        chunk_set_id, section_id = found
+        outline = await section_outline(
+            arguments.document_id, chunk_set_id=chunk_set_id, oracle=oracle
+        )
+        node = outline.get(section_id) if outline is not None else None
+    else:
+        outline = await section_outline(arguments.document_id, oracle=oracle)
+        if outline is None:
+            raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=False)
+        node = outline.get(arguments.section_id or "")
+    if outline is None or node is None:
+        raise McpToolError(
+            SECTION_NOT_FOUND_CODE,
+            "その章節は文書にありません。rag_outline で章節の id を確かめてください。",
+        )
+    return outline, outline.ancestor(node, arguments.up), 0, 0
+
+
+async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
+    """章節の本文を、章節の中の順に max_chars まで返す（章節の終わりで止まる。#1438）。"""
+    oracle = OracleClient()
+    outline, node, order, offset = await _section_start(oracle, arguments)
+    chunk_set_id = outline.chunk_set.chunk_set_id
+    store = SectionMapStore(oracle)
+    budget = arguments.max_chars
+    parts: list[str] = []
+    length = 0
+    chunks: list[ReadDocumentChunk] = []
+    last_page: int | None = None
+    next_cursor: str | None = None
+    first = True
+    while next_cursor is None:
+        rows: list[SectionChunkRow] = await store.section_chunks(
+            arguments.document_id,
+            chunk_set_id=chunk_set_id,
+            section_id=node.section_id,
+            from_order=order,
+            limit=READ_DOCUMENT_BATCH,
+        )
+        if not rows:
+            if first and arguments.cursor is not None:
+                raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=True)
+            break
+        enriched = await _with_extraction_recipe_ids(oracle, [row.chunk for row in rows])
+        for row, chunk in zip(rows, enriched, strict=True):
+            metadata = dict(chunk.metadata)
+            page_start = _metadata_int(metadata, "page_start") or _metadata_int(
+                metadata, "page_number"
+            )
+            marker = f"--- p.{page_start} ---\n" if page_start and page_start != last_page else ""
+            body = chunk.text[offset:] if first else chunk.text
+            separator = "\n\n" if parts else ""
+            room = budget - length - len(separator) - len(marker)
+            if room <= 0 and not chunks:
+                # 頁の区切りの行だけで上限に届くときは、区切りを省いて本文を読み進める。
+                marker = ""
+                room = budget - length - len(separator)
+            if room <= 0 or (len(body) > room and chunks):
+                # 入りきらない chunk は次の回の先頭にする（最初の chunk だけは途中で切る）。
+                next_cursor = _section_cursor(chunk_set_id, node.section_id, row.chunk_order)
+                break
+            taken = body[:room]
+            start = length + len(separator) + len(marker)
+            parts.append(separator + marker + taken)
+            length = start + len(taken)
+            locator = _locator(metadata)
+            chunks.append(
+                ReadDocumentChunk(
+                    chunk_id=chunk.chunk_id,
+                    element_locator=locator.element_locator,
+                    section_path=locator.section_path,
+                    page_start=locator.page_start,
+                    page_end=locator.page_end,
+                    start=start,
+                    end=length,
+                )
+            )
+            if page_start:
+                last_page = _metadata_int(metadata, "page_end") or page_start
+            used = (offset if first else 0) + len(taken)
+            first = False
+            offset = 0
+            if used < len(chunk.text):
+                next_cursor = _section_cursor(chunk_set_id, node.section_id, row.chunk_order, used)
+                break
+            order = row.chunk_order + 1
+        if len(rows) < READ_DOCUMENT_BATCH:
+            break
+    if next_cursor is None and order < node.chunk_count:
+        # 最後の batch がちょうど上限の件数だったとき、続きがあるかを確かめる。
+        more = await store.section_chunks(
+            arguments.document_id,
+            chunk_set_id=chunk_set_id,
+            section_id=node.section_id,
+            from_order=order,
+            limit=1,
+        )
+        if more:
+            next_cursor = _section_cursor(chunk_set_id, node.section_id, more[0].chunk_order)
+    return ReadSectionOutput(
+        document_id=arguments.document_id,
+        file_name=outline.chunk_set.file_name,
+        chunk_set_id=chunk_set_id,
+        section=_outline_section(outline, node),
+        child_sections=[
+            _outline_section(outline, child)
+            for child in outline.children(node.section_id)[:READ_SECTION_MAX_CHILDREN]
+        ],
+        text="".join(parts),
+        chunks=chunks,
+        section_complete=next_cursor is None,
+        next_cursor=next_cursor,
+        superseded=outline.chunk_set.superseded,
     )
 
 
@@ -1920,14 +2223,19 @@ async def _read_start(
         if not matched:
             raise McpToolError(SOURCE_NOT_FOUND_CODE, f"文書に {page} 頁はありません。")
         target = matched[0]
-    elif arguments.section is not None:
-        wanted = _section_parts(arguments.section)
-        matched = [
-            row for row in rows if _section_parts(row.get("section_path"))[: len(wanted)] == wanted
-        ]
-        if not matched:
-            raise McpToolError(SOURCE_NOT_FOUND_CODE, "その節は文書にありません。")
-        target = matched[0]
+    elif arguments.section_id is not None:
+        outline = await section_outline(
+            arguments.document_id, chunk_set_id=index_chunk_set_id, oracle=oracle
+        )
+        node = outline.get(arguments.section_id) if outline is not None else None
+        if node is None:
+            raise McpToolError(
+                SECTION_NOT_FOUND_CODE,
+                "その章節は文書にありません。rag_outline で章節の id を確かめてください。",
+            )
+        if node.first_chunk_index is None:
+            raise McpToolError(SECTION_NOT_FOUND_CODE, "その章節には本文がありません。")
+        return index_chunk_set_id, node.first_chunk_index, 0, False
     return index_chunk_set_id, int(str(target["chunk_index"])), 0, False
 
 
@@ -1976,6 +2284,10 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
             body = chunk.text[offset:] if first else chunk.text
             separator = "\n\n" if parts else ""
             room = budget - length - len(separator) - len(marker)
+            if room <= 0 and not chunks:
+                # 頁の区切りの行だけで上限に届くときは、区切りを省いて本文を読み進める。
+                marker = ""
+                room = budget - length - len(separator)
             if room <= 0 or (len(body) > room and chunks):
                 # 入りきらない chunk は次の回の先頭にする（最初の chunk だけは途中で切る）。
                 next_cursor = _read_cursor(chunk_set_id, chunk_index, 0)
@@ -2301,8 +2613,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
+        returned = mcp_evidence_order(citations, arguments.evidence_limit)
+        sections = await _chunk_sections(returned[: arguments.evidence_limit])
         return SearchOutput(
-            **_answer_fields(result, arguments.evidence_limit),
+            **_answer_fields(result, arguments.evidence_limit, sections),
             older_versions=await _older_versions(arguments, request, citations),
         )
 
@@ -2344,10 +2658,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
         ordered = mcp_evidence_order(result.citations, limit)
         citations = await _with_extraction_recipe_ids(None, ordered[:limit])
+        sections = await _chunk_sections(citations)
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
-            evidence=[_evidence(chunk) for chunk in citations],
+            evidence=[_evidence(chunk, sections) for chunk in citations],
             evidence_omitted=max(0, len(result.citations) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
         )
@@ -2496,8 +2811,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             McpTool(
                 name="rag_outline",
                 description=(
-                    "文書の節の構成（節の見出し・頁・chunk の数と、その節から読む cursor）を"
-                    "返します。"
+                    "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・"
+                    "親・頁の範囲・chunk の数・文字数）を返します。"
                     "長い文書のどこを読むかを決めるときに使います。"
                 ),
                 input_model=OutlineInput,
@@ -2508,13 +2823,26 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             McpTool(
                 name="rag_read_document",
                 description=(
-                    "文書の本文を、頁・節・根拠の定位子・続きの cursor の位置から順に読みます"
-                    "（頁の区切り付き。続きは next_cursor）。検索で当たらなかった前後の章や、"
-                    "「第 3 章を参照」の先を確かめるときに使います。"
+                    "文書の本文を、頁・章節・根拠の定位子・続きの cursor の位置から順に読みます"
+                    "（頁の区切り付き。章節の終わりで止まらない。続きは next_cursor）。検索で"
+                    "当たらなかった前後の章や、「第 3 章を参照」の先を確かめるときに使います。"
                 ),
                 input_model=ReadDocumentInput,
                 handler=scoped(read_document),
                 output_model=ReadDocumentOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_read_section",
+                description=(
+                    "章節（section_id、または根拠の chunk_id が属する章節。up で親の章節）の"
+                    "本文を、章節の始まりから終わりまで順に読みます（頁の区切り付き。続きは"
+                    " next_cursor、終わりまで読んだら section_complete=true）。根拠の抜粋より"
+                    "長い手順・一覧・条件のまとまりを読み切るときに使います。"
+                ),
+                input_model=ReadSectionInput,
+                handler=scoped(read_section_tool),
+                output_model=ReadSectionOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
         ],
