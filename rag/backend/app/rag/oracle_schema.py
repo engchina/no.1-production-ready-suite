@@ -40,6 +40,7 @@ from app.clients.oracle import (
     oracle_search_audit_schema_sql,
     oracle_vector_schema_sql,
 )
+from app.clients.section_map_store import oracle_section_map_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
@@ -271,6 +272,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_entities",
             sql=oracle_entity_schema_sql(),
         ),
+        # 章節と chunk の対応（#1438）。rag_chunks を参照する。
+        OracleSchemaSection(
+            name="section_map",
+            table_name="rag_chunk_set_sections",
+            sql=oracle_section_map_schema_sql(),
+        ),
         OracleSchemaSection(
             name="citation_feedback",
             table_name="rag_citation_feedback",
@@ -352,6 +359,13 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=entity_layer_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261011_001_section_chunk_map",
+            table_name="rag_chunk_set_sections",
+            sql=section_chunk_map_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -361,11 +375,26 @@ def entity_layer_migration_sql() -> str:
 
     表と索引を足すだけでデータは変えない。DDL は正本(``oracle_entity_schema_sql``)から作る。
     """
+    return _create_missing_objects_sql(oracle_entity_schema_sql(), "実体の層")
+
+
+def section_chunk_map_migration_sql() -> str:
+    """章節と chunk の対応の表(rag_chunk_set_sections / rag_section_chunks)と索引を無ければ
+    作る(#1438)。
+
+    表と索引を足すだけでデータは変えない。DDL は正本(``oracle_section_map_schema_sql``)から作る。
+    対応は取込の後・章節の保存の後と、MCP で章節を読むときに無ければ作る。
+    """
+    return _create_missing_objects_sql(oracle_section_map_schema_sql(), "章節と chunk の対応")
+
+
+def _create_missing_objects_sql(ddl: str, label: str) -> str:
+    """表・索引の DDL を、無いものだけを作る PL/SQL にする。"""
     blocks: list[str] = []
-    for statement in split_sql_statements(oracle_entity_schema_sql()):
+    for statement in split_sql_statements(ddl):
         match = _CREATE_OBJECT_PATTERN.match(statement)
         if match is None:
-            raise ValueError(f"実体の層の DDL に表・索引以外の文があります: {statement[:60]}")
+            raise ValueError(f"{label}の DDL に表・索引以外の文があります: {statement[:60]}")
         kind, name = match.group(1).upper(), match.group(2).upper()
         dictionary = (
             "user_tables WHERE table_name" if kind == "TABLE" else "user_indexes WHERE index_name"

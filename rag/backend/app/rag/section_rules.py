@@ -176,13 +176,14 @@ def _heading_line(element: DocumentElement) -> str:
     return re.sub(r"^#{1,6}\s+", "", line)
 
 
-def sections_from_rules(
+def _rule_sections(
     elements: Sequence[DocumentElement], rules: Sequence[SectionRule]
-) -> list[DocumentSection]:
-    """要素に規則を当てて章節を作る。ページ範囲は次の同じか浅い階層の章節の直前まで。"""
+) -> list[tuple[DocumentSection, str | None]]:
+    """要素に規則を当てた章節と、その見出しの要素の ID(章節と chunk の対応に使う。#1438)。"""
     compiled = [(re.compile(rule.pattern), rule.level) for rule in rules]
     ordered = sorted(elements, key=lambda element: element.order)
-    headings: list[tuple[int, str, int, int | None]] = []  # (要素の位置, 名前, 階層, ページ)
+    # (要素の位置, 名前, 階層, ページ, 要素の ID)
+    headings: list[tuple[int, str, int, int | None, str | None]] = []
     for position, element in enumerate(ordered):
         line = _heading_line(element)
         if not line or len(line) > MAX_HEADING_CHARS or _SENTENCE_END.search(line):
@@ -190,13 +191,13 @@ def sections_from_rules(
         normalized = unicodedata.normalize("NFKC", line)
         level = next((lvl for pattern, lvl in compiled if pattern.match(normalized)), None)
         if level is not None:
-            headings.append((position, line, level, element.page_number))
+            headings.append((position, line, level, element.page_number, element.element_id))
 
-    sections: list[DocumentSection] = []
+    sections: list[tuple[DocumentSection, str | None]] = []
     # 規則の階層(1〜6)を、章節の木の深さに写す。浅い・同じ階層が来たら戻り、規則の階層が飛んで
     # いても 1 段ずつにする(例: 法令の「章(2)」「条(6)」は 1・2)。
     stack: list[int] = []
-    for index, (position, title, raw_level, page) in enumerate(headings):
+    for index, (position, title, raw_level, page, element_id) in enumerate(headings):
         end_position = next(
             (later[0] for later in headings[index + 1 :] if later[2] <= raw_level), len(ordered)
         )
@@ -214,17 +215,27 @@ def sections_from_rules(
             + hashlib.sha1(f"{index}:{title}".encode(), usedforsecurity=False).hexdigest()[:16]
         )
         sections.append(
-            DocumentSection(
-                id=section_id,
-                title=title[:200],
-                level=level,
-                page_start=page if page is not None else (min(pages) if pages else None),
-                page_end=max(pages) if pages else None,
-                origin="extraction",
-                source_section_id=section_id,
+            (
+                DocumentSection(
+                    id=section_id,
+                    title=title[:200],
+                    level=level,
+                    page_start=page if page is not None else (min(pages) if pages else None),
+                    page_end=max(pages) if pages else None,
+                    origin="extraction",
+                    source_section_id=section_id,
+                ),
+                element_id,
             )
         )
     return sections
+
+
+def sections_from_rules(
+    elements: Sequence[DocumentElement], rules: Sequence[SectionRule]
+) -> list[DocumentSection]:
+    """要素に規則を当てて章節を作る。ページ範囲は次の同じか浅い階層の章節の直前まで。"""
+    return [section for section, _element_id in _rule_sections(elements, rules)]
 
 
 def extraction_sections(
@@ -239,6 +250,33 @@ def extraction_sections(
     if rules is None:
         return sections_from_navigation(extraction.navigation)
     return sections_from_rules(extraction.elements, rules)
+
+
+def extraction_section_anchors(
+    extraction: StructuredExtraction | None,
+    mode: SectionRulesMode,
+    store: SectionRulesStore | None = None,
+) -> dict[str, frozenset[str]]:
+    """抽出結果の章節の id → その章節の始まりを示す解析の要素の ID(#1438)。
+
+    章節と chunk の対応(``app.rag.section_chunk_map``)で、同じ解析の結果の chunk の中から章節の
+    始まりを決めるのに使う。解析エンジンの見出しは章節の木の要素(その章節に直接属する要素)、規則の
+    章節は見出しの要素。要素の ID の無い章節は含めない(ページと名前で決める)。
+    """
+    if extraction is None:
+        return {}
+    rules = rules_for_mode(mode, store or load_section_rules())
+    if rules is None:
+        return {
+            node.section_id: frozenset(node.element_ids)
+            for node in extraction.navigation
+            if node.element_ids
+        }
+    return {
+        section.id: frozenset({element_id})
+        for section, element_id in _rule_sections(extraction.elements, rules)
+        if element_id
+    }
 
 
 def section_rules_settings(store: SectionRulesStore | None = None) -> SectionRulesSettingsData:
