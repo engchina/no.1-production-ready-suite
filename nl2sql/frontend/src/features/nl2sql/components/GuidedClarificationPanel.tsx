@@ -41,8 +41,11 @@ interface GuidedClarificationPanelProps {
   engine: Nl2SqlEngine;
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
-  /** 確認した要件を反映した（session は閉じた）。質問の文と session の ID を渡す（#1439）。 */
-  onApplyQuestion: (question: string, profileId: string, sessionId: string) => void;
+  /**
+   * 確認した要件を反映した（session は閉じた）。質問の文と session の ID を渡す（#1439）。
+   * 画面に反映できなかった（草稿を保存できない）ときは false を返し、パネルを残す。
+   */
+  onApplyQuestion: (question: string, profileId: string, sessionId: string) => boolean;
 }
 
 type ClarificationStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
@@ -320,15 +323,22 @@ export function GuidedClarificationPanel({
     setBusyAction("apply");
     setError("");
     try {
-      const applied = await applyQuerySessionRequirement(session.id, {
-        base_version: session.current_intent_version ?? 1,
-      });
+      // 反映済み（session は閉じた）で画面への反映だけが失敗したときは、API を呼び直さない。
+      const applied = session.requirement_applied_at
+        ? session
+        : await applyQuerySessionRequirement(session.id, {
+            base_version: session.current_intent_version ?? 1,
+          });
+      releasedRef.current = true;
+      if (applied !== session) {
+        // 状態の表示は反映前のまま保つ（閉じた session の state は使わない）。
+        setSession({ ...session, requirement_applied_at: applied.requirement_applied_at ?? "applied", requirement: applied.requirement ?? session.requirement });
+      }
       const clarifiedQuestion = applied.requirement?.clarified_question_ja?.trim();
       if (!clarifiedQuestion) {
         setError(t("nl2sql.clarification.error.apply"));
         return;
       }
-      releasedRef.current = true;
       onApplyQuestion(clarifiedQuestion, applied.profile_id, applied.id);
     } catch (cause) {
       await reloadAfterConflict(cause, session);
@@ -528,7 +538,7 @@ export function GuidedClarificationPanel({
         >
           <legend className="sr-only">
             {correctingItem
-              ? t("nl2sql.clarification.correctTitle", { label: correctingItem.label_ja })
+              ? correctingItem.question_ja || t("nl2sql.clarification.correctLabel", { label: correctingItem.label_ja })
               : activeItem.question_ja || activeItem.label_ja}
           </legend>
           <div>
