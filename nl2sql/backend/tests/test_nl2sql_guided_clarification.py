@@ -437,6 +437,49 @@ def test_llm_input_uses_schema_without_table_data() -> None:
     assert created.requirement_state is not None
 
 
+def test_stale_published_ontology_is_skipped_but_schema_is_still_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import ontology_markdown_workspace, ontology_published_context
+
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped()),
+        _output(_from_orders(), _select_total(), _where_shipped()),
+    )
+    runtime = _runtime(llm)
+    revision_id = runtime._query_ontology("sales").revision.id
+    monkeypatch.setattr(
+        ontology_markdown_workspace.MarkdownOntologyWorkspace,
+        "head",
+        lambda self, profile_id: {"snapshot_id": revision_id},
+    )
+    monkeypatch.setattr(
+        ontology_markdown_workspace.MarkdownOntologyWorkspace,
+        "snapshot",
+        lambda self, profile_id, *args, **kwargs: None,
+    )
+
+    def stale(*_args: Any, **_kwargs: Any) -> Any:
+        raise OntologyGateBlockedError(
+            "MARKDOWN_STALE",
+            "Profile または Schema が変更されました。Markdown を再検証してください。",
+        )
+
+    monkeypatch.setattr(ontology_published_context, "published_context", stale)
+    created = _create(runtime)
+    draft = _draft(created)
+    # オントロジーは「あれば使う」。公開版が古ければ業務の概念を使わず、Schema で確かめる。
+    assert any("オントロジーの業務の概念を使わずに" in warning for warning in draft.warnings_ja)
+    assert llm.calls[0]["context"]["ontology"] == []
+    assert _state(created).can_apply is True
+
+    # 確認だけの session（review_only）は、これまでどおり止める。
+    with pytest.raises(OntologyGateBlockedError):
+        runtime.create_session(
+            QuerySessionApiCreate(question="受注", profile_id="sales"), actor_user_uuid="user-1"
+        )
+
+
 def test_llm_not_configured_does_not_fall_back_to_rule_draft() -> None:
     legacy = _LegacyService()
     runtime = OntologyApiRuntime(legacy_service=legacy, store=InMemoryOntologyStore())

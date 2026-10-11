@@ -525,6 +525,8 @@ class QueryRuntimeContext(OntologyContract):
     retrieved_node_ids: list[str] = Field(default_factory=list)
     profile_recommendation_id: str = ""
     profile_selection_source: str = "legacy"
+    # AI要件確認で、公開版のオントロジーの業務の概念を使うか（公開版が古ければ使わない。#1439）。
+    requirement_ontology_current: bool = True
 
 
 class OntologyGraphData(OntologyContract):
@@ -2885,8 +2887,16 @@ class OntologyApiRuntime:
                     "ONTOLOGY_REVISION_CHANGED",
                     "Ontology revision が更新されました。もう一度実行してください。",
                 )
+            ontology_current = True
             if business_release_id:
-                published_context(self, request.profile_id, business_release_id)
+                try:
+                    published_context(self, request.profile_id, business_release_id)
+                except OntologyGateBlockedError:
+                    # AI要件確認はオントロジーが「あれば使う」（#1439）。公開版が Profile・Schema の
+                    # 変更より古いときは、業務の概念を使わずに Schema と業務プロファイルで確かめる。
+                    if request.clarification_mode != ClarificationMode.GUIDED:
+                        raise
+                    ontology_current = False
             recommendation_id = self._validate_profile_confirmation(request, ontology)
             base_view = self._base_profile_view(profile, ontology)
             allowed = self.legacy_service.resolve_allowed_objects(
@@ -2911,6 +2921,7 @@ class OntologyApiRuntime:
                 recommendation_id=recommendation_id,
                 actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=actor_is_system_admin,
+                ontology_current=ontology_current,
             )
         with observe_stage("interpret"):
             intent = self._interpret_question(
@@ -3016,6 +3027,7 @@ class OntologyApiRuntime:
         recommendation_id: str,
         actor_user_uuid: str,
         actor_is_system_admin: bool,
+        ontology_current: bool = True,
     ) -> QuerySessionData:
         """Schema・業務プロファイル・オントロジーで、LLM 1 回の SQL の要件の下書きを作る。"""
 
@@ -3026,6 +3038,8 @@ class OntologyApiRuntime:
             view=view,
             allowed=allowed,
         )
+        if not ontology_current:
+            context.ontology_concepts = []
         if not context.tables:
             raise OntologyGateBlockedError(
                 "REQUEST_SCOPE_EMPTY",
@@ -3039,6 +3053,11 @@ class OntologyApiRuntime:
                 mode="draft",
             )
         draft = build_draft(output, context, question=request.question, model=model)
+        if not ontology_current:
+            draft.warnings_ja.append(
+                "公開版のオントロジーが業務プロファイル・Schema の変更より古いため、"
+                "オントロジーの業務の概念を使わずに確認しました。"
+            )
         with self._lock:
             current_ontology = self._query_ontology(request.profile_id)
             if current_ontology.revision.id != ontology.revision.id:
@@ -3065,6 +3084,7 @@ class OntologyApiRuntime:
                 engine=request.engine,
                 profile_recommendation_id=recommendation_id,
                 profile_selection_source="confirmed" if recommendation_id else "legacy",
+                requirement_ontology_current=ontology_current,
             )
             self._session_views[session.id] = view
             self._contexts[session.id] = runtime_context
@@ -3966,6 +3986,8 @@ class OntologyApiRuntime:
             view=view,
             allowed=allowed,
         )
+        if runtime_context is not None and not runtime_context.requirement_ontology_current:
+            context.ontology_concepts = []
         try:
             draft = apply_answer(
                 current.requirement,
