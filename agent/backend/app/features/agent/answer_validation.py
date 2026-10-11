@@ -425,6 +425,32 @@ def connection_check_inputs(steps: list[RunStep], evidence_tool: str) -> JsonObj
     return inputs
 
 
+# 最後まで読んだ文書として渡す数の上限（`rag_validate_answer` の契約の maxItems。#1470）。
+MAX_COMPLETE_DOCUMENTS = 3
+COMPLETE_DOCUMENTS_FIELD = "complete_documents"
+
+
+def complete_documents(steps: list[RunStep], evidence_tool: str) -> list[JsonObject]:
+    """その接続の `rag_read_document` で最後まで読んだ文書（新しい呼び出しから順。#1470）。
+
+    最後まで読んだ（`next_cursor` が無い）呼び出しの `document_id`・`chunk_set_id`。回答が台帳の
+    全件・件数・不在を述べたとき、RAG がその文書の chunk をすべて読み直して確かめる。
+    """
+    prefix = _connection_prefix(evidence_tool)
+    if prefix is None:
+        return []
+    found: list[JsonObject] = []
+    for _arguments, output in _completed_outputs(steps, prefix, RAG_READ_DOCUMENT):
+        document_id = _text_value(output.get("document_id"), 128)
+        chunk_set_id = _text_value(output.get("chunk_set_id"), 128)
+        if not document_id or not chunk_set_id or output.get("next_cursor"):
+            continue
+        item = {"document_id": document_id, "chunk_set_id": chunk_set_id}
+        if item not in found:
+            found.append(item)
+    return found[:MAX_COMPLETE_DOCUMENTS]
+
+
 def validation_content(
     status: str,
     *,

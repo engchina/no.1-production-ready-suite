@@ -820,3 +820,55 @@ def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
         result = validate_answer_claims("重要度の段階は？", line, EVIDENCE, settings=None)
     assert seen == [[line.strip()]]
     assert result["counts"] == {"supported": 1}
+
+
+def _ledger_rows(count: int, size: int = 40) -> list[dict]:
+    return [{"id": f"row{number}", "source": "system-ledger.xlsx", "sheet_name": "システム台帳",
+             "text": f"SYS-{number} 担当部署: {'情' if number == 107 else '総'}" + "。" * size}
+            for number in range(101, 101 + count)]
+
+
+def _seen_complete_documents(evidence: list[dict], documents: list[dict]) -> tuple[dict, list]:
+    seen: list = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append(payload.get("complete_documents"))
+        ids = [item["id"] for item in payload["answer_passages"]]
+        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": passage_id, "status": "supported", "evidence_id": evidence_id,
+             "source_id": "", "evidence_quote": "", "reason": "台帳の全行で確かめた"} for passage_id in ids]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims(
+            "担当部署が「情」のシステムは？", "担当部署が「情」の行は SYS-107 の 1 件だけです。", evidence,
+            settings=None, complete_documents=documents)
+    return result, seen
+
+
+def test_complete_document_is_shown_only_when_all_of_its_evidence_fits_the_budget() -> None:
+    """全体を渡した文書（#1470）は、その文書の根拠がすべて予算に収まったときだけ complete_documents として
+    モデルに示し、範囲の全件・件数・不在の主張を判定させる（tl-it-department-system の「SYS-107 の 1 件だけ」）。"""
+    rows = _ledger_rows(80)
+    whole = [{"source": "system-ledger.xlsx", "chunk_ids": [row["id"] for row in rows]}]
+    result, seen = _seen_complete_documents(rows, whole)
+    assert seen[0] == [{"source": "system-ledger.xlsx", "evidence_count": 80}]
+    assert result["complete_documents"] == ["system-ledger.xlsx"]
+    assert result["evidence_truncated"] is False
+
+    # 予算に収まらず後ろの行が落ちたら、全体を渡せていないので示さない。
+    large = _ledger_rows(80, size=1200)
+    large_whole = [{"source": "system-ledger.xlsx", "chunk_ids": [row["id"] for row in large]}]
+    result, seen = _seen_complete_documents(large, large_whole)
+    assert result["evidence_truncated"] is True
+    assert seen[0] is None and result["complete_documents"] == []
+
+
+def test_rubric_limits_exhaustive_claims_to_complete_documents() -> None:
+    from rag_engine.evaluation.answer_validation import VALIDATION_SYSTEM_PROMPT
+
+    assert VALIDATION_RUBRIC_VERSION == 8
+    assert "complete_documents に載る文書（source）は、その文書の全ての根拠を evidence_items に渡している。" in (
+        VALIDATION_SYSTEM_PROMPT)
+    assert "complete_documents に無い文書の全件・件数・不在の主張" in VALIDATION_SYSTEM_PROMPT

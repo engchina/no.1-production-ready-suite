@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -418,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -554,7 +554,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -816,7 +816,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1128,7 +1128,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1652,7 +1652,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2584,7 +2584,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3634,7 +3634,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3789,6 +3789,30 @@
       "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います（モデルを 1 回呼びます）。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と分岐・影響範囲も決定的に確かめます。",
       "inputSchema": {
         "$defs": {
+          "CompleteDocumentInput": {
+            "additionalProperties": false,
+            "description": "最後まで読んだ文書（rag_read_document の document_id・chunk_set_id。#1470）。",
+            "properties": {
+              "document_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_set_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Chunk Set Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_set_id"
+            ],
+            "title": "CompleteDocumentInput",
+            "type": "object"
+          },
           "EvidenceRefInput": {
             "additionalProperties": false,
             "properties": {
@@ -3957,6 +3981,15 @@
             ],
             "default": null,
             "description": "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・承認の記載を確かめる。"
+          },
+          "complete_documents": {
+            "description": "rag_read_document で最後まで読んだ文書（台帳の全件を数える質問など）。渡すと、その文書の chunk（200 件まで）をすべて今の権限で読み直して根拠に足し、予算に収まれば、その文書の範囲の全件・件数・不在の主張も確かめる。",
+            "items": {
+              "$ref": "#/$defs/CompleteDocumentInput"
+            },
+            "maxItems": 3,
+            "title": "Complete Documents",
+            "type": "array"
           }
         },
         "required": [
@@ -4114,7 +4147,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4200,6 +4233,14 @@
             "default": null,
             "description": "検査に使った業務ガイドの今の公開の版。",
             "title": "Guide Revision"
+          },
+          "complete_documents": {
+            "description": "全体を根拠に渡して、その範囲の全件・件数・不在の主張を確かめた文書の名前（complete_documents を渡し、予算に収まった文書）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Complete Documents",
+            "type": "array"
           }
         },
         "required": [

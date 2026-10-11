@@ -30,6 +30,7 @@ from app.features.agent.answer_passages import non_claim_passages, passage_kind,
 from app.features.agent.answer_validation import (
     UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
+    complete_documents,
     connection_check_inputs,
     merge_results,
     publish_answer,
@@ -512,6 +513,39 @@ def test_chunks_read_in_a_multi_hop_run_are_validation_evidence(
         {"document_id": "doc-1", "chunk_id": "chunk-3"},
         {"document_id": "doc-1", "chunk_id": "chunk-4"},
     ]
+    # 文書を最後まで読んだ（next_cursor が無い）ので、RAG がその文書の chunk をすべて読み直して
+    # 全件・不在の主張も確かめられるよう、文書と chunk_set を渡す（#1470）。
+    assert call["arguments"]["complete_documents"] == [
+        {"document_id": "doc-1", "chunk_set_id": "cs-1"}
+    ]
+
+
+def test_complete_documents_are_documents_read_to_the_end() -> None:
+    """最後まで読んだ（next_cursor が無い）rag_read_document の文書だけを、接続ごとに新しい順・
+    重複なし・3 件まで渡す（#1470）。続きのある読み取り・別の接続・失敗した呼び出しは渡さない。"""
+
+    def read(document_id: str, *, cursor: str | None = None, name: str = "rag__rag_read_document"):
+        output = {"document_id": document_id, "chunk_set_id": f"cs-{document_id}", "chunks": []}
+        return _step(name, {"document_id": document_id}, {**output, "next_cursor": cursor})
+
+    steps = [
+        read("ledger-a"),
+        read("ledger-b", cursor="cursor-2"),
+        read("ledger-c"),
+        read("ledger-c"),
+        read("ledger-d"),
+        read("ledger-e"),
+        read("ledger-x", name="other__rag_read_document"),
+    ]
+    assert complete_documents(steps, "rag__rag_search") == [
+        {"document_id": "ledger-e", "chunk_set_id": "cs-ledger-e"},
+        {"document_id": "ledger-d", "chunk_set_id": "cs-ledger-d"},
+        {"document_id": "ledger-c", "chunk_set_id": "cs-ledger-c"},
+    ]
+    assert complete_documents(steps, "other__rag_search") == [
+        {"document_id": "ledger-x", "chunk_set_id": "cs-ledger-x"}
+    ]
+    assert complete_documents(steps, "rag_search") == []
 
 
 def test_evidence_groups_take_read_source_and_read_document_chunks() -> None:

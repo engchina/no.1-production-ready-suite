@@ -63,6 +63,7 @@ from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
     ANSWER_VALIDATION_NAME,
+    COMPLETE_DOCUMENTS_FIELD,
     EVIDENCE_TOOLS,
     MAX_ANSWER_CHARS,
     MAX_QUERY_CHARS,
@@ -81,6 +82,7 @@ from app.features.agent.answer_validation import (
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
     combine_validations,
+    complete_documents,
     connection_check_inputs,
     run_evidence_groups,
     usable_result,
@@ -1776,6 +1778,12 @@ async def _validate_with_connection(
             **connection,
         )
     definition = mcp_tool_definition(config, tool)
+    # 最後まで読んだ文書（#1470）は、検証のツールが受け取るときだけ渡す。
+    wholes = (
+        complete_documents(run.steps, evidence_tool)
+        if COMPLETE_DOCUMENTS_FIELD in (tool.input_schema.get("properties") or {})
+        else []
+    )
     recorder = _ToolRecorder(run.id)
     # 根拠の読み直しも Run と同じデータの範囲で行う（サービストークンの claim。#1379）。
     recorder.data_scopes = dict(data_scopes or {})
@@ -1788,6 +1796,7 @@ async def _validate_with_connection(
                 "evidence": refs,
                 # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
                 **connection_check_inputs(run.steps, evidence_tool),
+                **({COMPLETE_DOCUMENTS_FIELD: wholes} if wholes else {}),
             },
             trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),

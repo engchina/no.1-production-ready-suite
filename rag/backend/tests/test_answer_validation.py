@@ -770,3 +770,82 @@ def test_evidence_location_matches_the_mcp_locator() -> None:
     )
     assert locator.section_path == location["section_path"]
     assert evidence_location({"page_start": 3, "page_end": 3}) == {}
+
+
+class _LedgerOracle(_Oracle):
+    """台帳（80 行）を rag_read_document と同じ見え方で読める（#1470）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows = [
+            RetrievedChunk(
+                document_id="ledger",
+                chunk_id=f"ledger:set:{number}",
+                text=f"SYS-{number} 担当部署: {'情' if number == 107 else '総'}",
+                score=0.0,
+                file_name="system-ledger.xlsx",
+                metadata={"sheet_name": "システム台帳"},
+            )
+            for number in range(101, 181)
+        ]
+        self.chunks[("ledger", "ledger:set:107")] = self.rows[6]
+        self.reads: list[tuple[str, str, int]] = []
+
+    async def readable_document_chunks(
+        self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
+    ) -> list[RetrievedChunk]:
+        self.reads.append((document_id, chunk_set_id, limit))
+        if (document_id, chunk_set_id) != ("ledger", "set"):
+            return []  # chunk_set が有効でなくなった（作り直された）文書。
+        return self.rows[from_index : from_index + limit]
+
+
+async def test_complete_documents_add_every_chunk_of_the_document(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """最後まで読んだ文書（#1470）は、その文書の chunk をすべて読み直して参照の後ろに足し、
+    （source, chunk_ids）を rag_engine に渡す。作り直された chunk_set の文書は全体を渡さない。"""
+    captured: dict[str, Any] = {}
+
+    def fake_claims(
+        question: str,
+        answer: str,
+        items: list[dict[str, Any]],
+        settings: Any,
+        *,
+        complete_documents: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        captured["items"], captured["wholes"] = items, complete_documents
+        return {
+            "status": "completed",
+            "counts": {"supported": 1},
+            "claim_checks": [{"answer_quote": answer, "status": "supported", "source_id": "c1"}],
+            "complete_documents": [item["source"] for item in complete_documents],
+        }
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    from app.rag.answer_validation import MAX_COMPLETE_DOCUMENT_CHUNKS, CompleteDocumentRef
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    oracle = _LedgerOracle()
+    result = await validate_answer(
+        "担当部署が「情」のシステムは？",
+        "台帳の 80 行のうち、担当部署が「情」の行は SYS-107 の 1 件だけです。",
+        [EvidenceRef("d1", "c1"), EvidenceRef("ledger", "ledger:set:107")],
+        get_settings(),
+        oracle=cast(Any, oracle),
+        complete_documents=[
+            CompleteDocumentRef("ledger", "set"),
+            CompleteDocumentRef("ledger-old", "old-set"),
+        ],
+    )
+    ids = [item["id"] for item in captured["items"]]
+    # 呼び出し側の参照が先、台帳の残りの 79 行が後ろ（参照にある行は重ねない）。
+    assert ids[:2] == ["c1", "ledger:set:107"]
+    assert len(ids) == 81 and len(set(ids)) == 81
+    assert captured["wholes"] == [
+        {"source": "system-ledger.xlsx", "chunk_ids": [row.chunk_id for row in oracle.rows]}
+    ]
+    assert result.complete_documents == ["system-ledger.xlsx"]
+    assert oracle.reads[0] == ("ledger", "set", MAX_COMPLETE_DOCUMENT_CHUNKS + 1)

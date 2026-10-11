@@ -117,6 +117,11 @@ class RagValidateGuideIn(_ContractInput):
     conditions: dict[str, str] | None = None
 
 
+class RagCompleteDocumentIn(_ContractInput):
+    document_id: str = Field(min_length=1, max_length=128)
+    chunk_set_id: str = Field(min_length=1, max_length=128)
+
+
 class RagValidateAnswerIn(_ContractInput):
     query: str = Field(min_length=1, max_length=8000)
     answer: str = Field(min_length=1, max_length=20000)
@@ -125,6 +130,8 @@ class RagValidateAnswerIn(_ContractInput):
     requests: list[RagValidateRequestIn] | None = Field(default=None, max_length=30)
     gaps: list[str] | None = Field(default=None, max_length=30)
     guide: RagValidateGuideIn | None = None
+    # 最後まで読んだ文書（#1470）。
+    complete_documents: list[RagCompleteDocumentIn] = Field(default_factory=list, max_length=3)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):

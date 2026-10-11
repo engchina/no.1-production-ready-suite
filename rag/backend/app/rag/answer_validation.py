@@ -212,9 +212,9 @@ async def validate_answer(
 
         with tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work:
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
-            return validate_answer_claims(
-                question, answer, items, engine_settings, complete_documents=wholes
-            )
+            # 全体を渡す文書があるときだけ渡す（#1470）。
+            extra: dict[str, Any] = {"complete_documents": wholes} if wholes else {}
+            return validate_answer_claims(question, answer, items, engine_settings, **extra)
 
     # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
     result = await run_answer_in_thread(run)
@@ -252,8 +252,8 @@ async def _complete_document_items(
 ) -> list[dict[str, Any]]:
     """最後まで読んだ文書の chunk をすべて根拠に足し、（source, chunk_ids）を返す（#1470）。
 
-    読み直しは rag_read_document と同じ見え方（今の利用者の権限・その chunk_set）。chunk_set が有効で
-    なくなった文書・chunk が上限を超える文書は全体を渡さない。足すのは呼び出し側の参照の後ろ
+    読み直しは rag_read_document と同じ見え方（今の利用者の権限・その chunk_set）。chunk_set が
+    有効でなくなった文書・chunk が上限を超える文書は全体を渡さない。足すのは呼び出し側の参照の後ろ
     （予算に収まらなければ rag_engine が全体を渡せていないと判断する）。
     """
     wholes: list[dict[str, Any]] = []

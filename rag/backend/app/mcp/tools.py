@@ -73,6 +73,8 @@ from app.mcp.profile_scope import (
     within_profile_scope,
 )
 from app.rag.answer_validation import (
+    MAX_COMPLETE_DOCUMENT_CHUNKS,
+    CompleteDocumentRef,
     EvidenceRef,
     GuideCheckRef,
     GuideProfileNotFoundError,
@@ -137,7 +139,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 8: 根拠の結果に、当たった文書の旧版（older_versions）を足した（#1405）。
 # 9: 章節ナビゲーションを正本にした（#1438）。rag_outline を章節の階層・section_id で返し、
 #    rag_read_section を足し、根拠に所属の章節（section）を足した。
-MCP_OUTPUT_SCHEMA_VERSION = 9
+# 10: rag_validate_answer の結果に、全体を渡して判定した文書（complete_documents）を
+#     足した（#1470）。
+MCP_OUTPUT_SCHEMA_VERSION = 10
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -331,6 +335,15 @@ class EvidenceRefInput(BaseModel):
     chunk_id: str = Field(..., min_length=1, max_length=512)
 
 
+class CompleteDocumentInput(BaseModel):
+    """最後まで読んだ文書（rag_read_document の document_id・chunk_set_id。#1470）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(..., min_length=1, max_length=128)
+    chunk_set_id: str = Field(..., min_length=1, max_length=128)
+
+
 class ValidateRequestInput(BaseModel):
     """AnswerEnvelope の要求 1 件（rag_search の requests と同じ形）。"""
 
@@ -401,6 +414,16 @@ class ValidateAnswerInput(BaseModel):
         description=(
             "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・"
             "承認の記載を確かめる。"
+        ),
+    )
+    complete_documents: list[CompleteDocumentInput] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "rag_read_document で最後まで読んだ文書（台帳の全件を数える質問など）。"
+            f"渡すと、その文書の chunk（{MAX_COMPLETE_DOCUMENT_CHUNKS} 件まで）をすべて"
+            "今の権限で読み直して根拠に足し、予算に収まれば、その文書の範囲の全件・件数・"
+            "不在の主張も確かめる。"
         ),
     )
 
@@ -1152,6 +1175,13 @@ class ValidateAnswerOutput(VersionedOutput):
     )
     guide_revision: int | None = Field(
         default=None, description="検査に使った業務ガイドの今の公開の版。"
+    )
+    complete_documents: list[str] = Field(
+        default_factory=list,
+        description=(
+            "全体を根拠に渡して、その範囲の全件・件数・不在の主張を確かめた文書の名前"
+            "（complete_documents を渡し、予算に収まった文書）。"
+        ),
     )
 
 
@@ -2703,6 +2733,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     if guide is not None
                     else None
                 ),
+                complete_documents=[
+                    CompleteDocumentRef(item.document_id, item.chunk_set_id)
+                    for item in arguments.complete_documents
+                ],
             )
         except GuideProfileNotFoundError as exc:
             raise HTTPException(
@@ -2733,6 +2767,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             checks=result.checks,
             findings=[ValidationFinding.model_validate(item.as_dict()) for item in result.findings],
             guide_revision=result.guide_revision,
+            complete_documents=result.complete_documents,
         )
 
     return McpServer(
