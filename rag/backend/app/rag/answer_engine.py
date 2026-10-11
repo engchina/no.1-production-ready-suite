@@ -20,22 +20,27 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
 - rerank: backend の Cohere rerank。
 - LLM: openai SDK(OCI_ENTERPRISE_AI_*)。rag_engine 内部の Responses API 経路を使う。
-回答フローは同期関数のため worker thread で動かし、非同期 I/O はイベントループへ戻して実行する。
+回答フローは同期関数のため回答の専用の worker thread で動かし、非同期 I/O はイベントループへ戻して
+実行する。回答の打ち切り・取り消しは期限として thread に伝え、LLM の呼び出しと I/O を止める(#1422)。
 """
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
 import math
 import re
 import tempfile
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar
+
+from rag_engine.resources.deadline import check_deadline, current_deadline
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -49,6 +54,7 @@ from app.config import (
 from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
 from app.rag.answer_provenance import answer_prompt_version
+from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -104,6 +110,8 @@ _SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
 _SCREEN_CATALOG_CACHE_SIZE = 32
 # section_path の見出しの区切り(chunking_small_to_big が「 > 」でつないで保存する)。
 _SECTION_PATH_SEPARATOR = " > "
+# 回答の thread が event loop の I/O を待つ間に、回答の期限・取り消しを確かめる間隔(秒。#1422)。
+_IO_DEADLINE_POLL_SECONDS = 0.5
 # 回答フローの工程の通知(進捗)1 件を待つ上限(秒)。通知は補助なので、超えたら待たずに続ける。
 _STEP_NOTIFY_TIMEOUT_SECONDS = 5.0
 # 交差参照(#1280): 参照先を辿る起点にする検索候補の数(RRF の上位から)。
@@ -354,7 +362,8 @@ class AnswerEngine:
                 runtime_knowledge_path=runtime_path,
                 answer_model_id=self._answer_model_id,
             )
-            result = await asyncio.to_thread(
+            # 回答の専用の thread で動かし、打ち切り・取り消しを thread に伝える(#1422)。
+            result = await run_answer_in_thread(
                 self._answer_sync,
                 request,
                 engine_settings,
@@ -414,7 +423,7 @@ class AnswerEngine:
                 runtime_knowledge_path=None,
                 answer_model_id=self._answer_model_id,
             )
-            answer = await asyncio.to_thread(
+            answer = await run_answer_in_thread(
                 answer_from_approved_faq, request.query, faq_question, faq_answer, engine_settings
             )
         return AnswerOutcome(
@@ -508,9 +517,7 @@ class AnswerEngine:
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
         def run_async(factory: Callable[[], Awaitable[T]]) -> T:
-            return asyncio.run_coroutine_threadsafe(_call(factory), loop).result(
-                _IO_TIMEOUT_SECONDS
-            )
+            return _run_on_loop(factory, loop)
 
         dependencies = AnswerDependencies(
             search=lambda **kwargs: run_async(lambda: self._search(request, state, **kwargs)),
@@ -1353,6 +1360,33 @@ class AnswerEngine:
             return []
         ranked = await self._genai.rerank(query, documents, top_n or len(documents))
         return [RerankTextRank(index=index, relevance_score=score) for index, score in ranked]
+
+
+def _run_on_loop[R](factory: Callable[[], Awaitable[R]], loop: asyncio.AbstractEventLoop) -> R:
+    """回答の thread から、非同期 I/O を event loop で実行して待つ。
+
+    回答の期限(#1422)を過ぎた・取り消された後は I/O を始めず、待っている途中なら loop の task を
+    取り消して ``DeadlineExceeded`` にする(打ち切った回答の検索・rerank を続けない)。期限が無くても
+    待つ上限は ``_IO_TIMEOUT_SECONDS``。
+    """
+    check_deadline()
+    future = asyncio.run_coroutine_threadsafe(_call(factory), loop)
+    started = time.monotonic()
+    while True:
+        waited = time.monotonic() - started
+        if waited >= _IO_TIMEOUT_SECONDS:
+            future.cancel()
+            raise TimeoutError("回答フローの I/O が上限の時間内に終わりませんでした。")
+        try:
+            return future.result(min(_IO_DEADLINE_POLL_SECONDS, _IO_TIMEOUT_SECONDS - waited))
+        except concurrent.futures.TimeoutError:
+            if future.done():
+                # I/O 自体が TimeoutError で失敗した(待ちの上限ではない)。
+                raise
+            deadline = current_deadline()
+            if deadline is not None and deadline.expired:
+                future.cancel()
+                deadline.check()
 
 
 async def _call[R](factory: Callable[[], Awaitable[R]]) -> R:

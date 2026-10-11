@@ -26,6 +26,7 @@ from app.config import (
 )
 from app.rag.answer_engine import evaluate_answer_record
 from app.rag.answer_provenance import search_answer_profile_revision
+from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
@@ -811,14 +812,16 @@ async def evaluate_saved_answer(
         if isinstance(citation, dict)
     ]
     try:
-        # worker thread の評価は止められないため、時間切れのときは結果を捨てて保存しない。
+        # 時間切れのときは結果を捨てて保存しない。評価の thread には同じ期限を渡し、時間切れの後は
+        # LLM を呼ばない(#1422)。
         evaluation = await asyncio.wait_for(
-            asyncio.to_thread(
+            run_answer_in_thread(
                 evaluate_answer_record,
                 evaluation_input,
                 body.standard_answer,
                 get_settings(),
                 citations=citations,
+                timeout_seconds=ANSWER_EVALUATION_TIMEOUT_SECONDS,
             ),
             timeout=ANSWER_EVALUATION_TIMEOUT_SECONDS,
         )

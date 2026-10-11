@@ -11,7 +11,6 @@ error の finding があれば valid にしない。
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,6 +27,7 @@ from app.rag.answer_checks import (
     check_requests,
 )
 from app.rag.answer_engine import build_engine_settings
+from app.rag.answer_threads import run_answer_in_thread
 
 # 主張の監査で「検証に通った」とみなさない判定。
 _BLOCKING_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
@@ -187,7 +187,8 @@ async def validate_answer(
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
             return validate_answer_claims(question, answer, items, engine_settings)
 
-    result = await asyncio.to_thread(run)
+    # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
+    result = await run_answer_in_thread(run)
     counts = {str(key): int(value) for key, value in (result.get("counts") or {}).items()}
     status = str(result.get("status") or "error")
     return AnswerValidation(
