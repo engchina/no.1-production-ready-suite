@@ -575,12 +575,79 @@ def test_settle_waits_for_the_dispatcher(monkeypatch: MonkeyPatch, agent: None) 
     async def scenario() -> Any:
         async with anyio.create_task_group() as group:
             group.start_soon(dispatcher_completes)
-            settled = await evaluation._settle_run(run.id)  # noqa: SLF001 - 待ち方の確認
+            settled = await evaluation._settle_run(run.id, 5.0)  # noqa: SLF001 - 待ち方の確認
         return settled
 
     settled = anyio.run(scenario)
     assert settled.status == RunStatus.CANCELLED
     assert executed == []
+
+
+# ---- #1432: 1 ケースの上限時間 ----
+
+
+def test_case_timeout_defaults_to_rag_wait_times_rag_budget(monkeypatch: MonkeyPatch) -> None:
+    """既定（0）は接続 `rag` の待ち時間 ×（RAG の予算 + 1）。RAG を使う Run を 300 秒で切らない。"""
+    from app.settings import Settings, get_settings
+
+    defaults = Settings(_env_file=None)
+    assert defaults.agent_evaluation_case_timeout_seconds == 0
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_evaluation_case_timeout_seconds", 0.0)
+    monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 6)
+    monkeypatch.setattr(evaluation, "_rag_timeout_seconds", lambda: 630.0)
+    assert evaluation.case_timeout_seconds() == 630 * (6 + 1) == 4410
+    # RAG の予算が無制限なら、Run のツールの呼び出しの上限を回数に使う。
+    monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 0)
+    monkeypatch.setattr(settings, "agent_max_tool_calls_per_run", 20)
+    assert evaluation.case_timeout_seconds() == 630 * (20 + 1)
+    # 自動の値は 300 秒〜86400 秒に収める。
+    monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 1)
+    monkeypatch.setattr(evaluation, "_rag_timeout_seconds", lambda: 10.0)
+    assert evaluation.case_timeout_seconds() == evaluation.CASE_TIMEOUT_MIN_SECONDS
+    monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 1000)
+    monkeypatch.setattr(evaluation, "_rag_timeout_seconds", lambda: 900.0)
+    assert evaluation.case_timeout_seconds() == evaluation.CASE_TIMEOUT_MAX_SECONDS
+
+
+def test_case_timeout_uses_saved_rag_connection_and_explicit_setting(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """画面で保存した接続 `rag` の待ち時間を使い、明示の設定はそれより優先する。"""
+    from app.features.agent.config import runtime_config_store
+    from app.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_evaluation_case_timeout_seconds", 0.0)
+    monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 6)
+    connections = {config.server_id: config for config in runtime_config_store.list_mcp_servers()}
+    connections["rag"] = connections["rag"].model_copy(update={"timeout_seconds": 900.0})
+    monkeypatch.setattr(runtime_config_store, "_mcp_servers", connections)
+    assert evaluation.case_timeout_seconds() == 900 * 7
+    monkeypatch.setattr(settings, "agent_evaluation_case_timeout_seconds", 1800.0)
+    assert evaluation.case_timeout_seconds() == 1800
+    monkeypatch.setattr(settings, "agent_evaluation_case_timeout_seconds", 100_000.0)
+    assert evaluation.case_timeout_seconds() == evaluation.CASE_TIMEOUT_MAX_SECONDS
+
+
+def test_case_times_out_with_configured_limit(monkeypatch: MonkeyPatch, agent: None) -> None:
+    """上限時間までに Run が決着しなければ、Run を取り消して時間切れ（実際の上限の秒数）にする。"""
+    del agent
+    from app.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_runtime_dispatch_mode", "dispatcher")
+    monkeypatch.setattr(settings, "agent_evaluation_case_timeout_seconds", 0.05)
+    monkeypatch.setattr(evaluation, "settle_poll_seconds", 0.01)
+    job = _job(_case("c1", "今月の売上は？", "300 万円"))
+
+    anyio.run(run_evaluation_job, job.id)
+
+    result = evaluation_store.get(job.id).results[0]
+    assert result.status == CaseStatus.TIMED_OUT
+    assert result.error == "上限時間（0.05 秒）までに回答が出ませんでした。"
+    assert result.run_id is not None
+    assert runtime_repository.get_run(result.run_id).status == RunStatus.CANCELLED
 
 
 # ---- #810: フィードバックから評価ケース・テンプレートの評価ケース・評価する版 ----

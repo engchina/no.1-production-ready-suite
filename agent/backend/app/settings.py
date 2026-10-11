@@ -133,9 +133,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # NL2SQL の `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の
     # 呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って、終わらなければ job_id を返す
     # （呼び出しの中では LLM・Select AI を呼ばないため、推論の量に左右されない）。待ちの上限
-    # 45 秒に余裕 15 秒（`tools._JOB_POLL_MARGIN_SECONDS`）を足した 60 秒にする。ジョブの完了は
-    # `agent_nl2sql_job_wait_seconds` まで続きを取って待つ（#848 / #1430）。
-    agent_external_nl2sql_timeout_seconds: float = 60.0
+    # 45 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 120 秒にする（#1432。
+    # 余裕 15 秒の 60 秒では足りないことがあった）。続きの取得（`nl2sql_get_job`）は 1 回 20 秒
+    # （`tools._JOB_POLL_WAIT_SECONDS`）で、ジョブの完了は `agent_nl2sql_job_wait_seconds` まで
+    # 続きを取って待つ（#848 / #1430）。
+    agent_external_nl2sql_timeout_seconds: float = 120.0
     # NL2SQL のジョブが pending / running のまま返ったとき、ツールの中で完了を待つ合計の上限
     # （秒。#848）。既定の SQL の生成（Select AI の 1 回）と実行は、それぞれ NL2SQL の DB の
     # 呼び出しの上限（`NL2SQL_ORACLE_CALL_TIMEOUT_SECONDS`、既定 120 秒）で打ち切られるため、
@@ -183,6 +185,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_max_rag_calls_per_run: int = 6
     # 同じ会話（thread）の通しのツールの呼び出し。前の Run の支援タスクの状態に積む。
     agent_max_tool_calls_per_task: int = 60
+    # 品質評価の 1 ケースの上限時間（秒。Run の実行。判定は別。#1432）。0 以下（既定）は自動で、
+    # 接続 `rag` の待ち時間 ×（Run の RAG の予算〔agent_max_rag_calls_per_run。0 以下なら
+    # agent_max_tool_calls_per_run〕+ 1）にする。+1 は回答の最終の検証（rag_validate_answer）と
+    # モデルの推論の分。既定では 630 ×（6 + 1）= 4410 秒。300 秒〜86400 秒に収める。
+    agent_evaluation_case_timeout_seconds: float = 0.0
     # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、
     # 保存する前に Control Plane が根拠を返した RAG の接続ごとに MCP rag_validate_answer で検証する
     # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠で確かめられない段落は回答に
