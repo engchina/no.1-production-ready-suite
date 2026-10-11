@@ -113,7 +113,31 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_ENGINE_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。rag_engine の `rag_engine.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。rag_engine の設定（`build_engine_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
 | `RAG_ENGINE_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
-**チャットの確認の質問（#717）**: 検索・回答プロファイルのルールに確認の質問と選択肢（2〜8 件。表示名・説明・検索に足す語・回答に渡す前提・章節）を設定すると、チャットは質問がそのルールに一致したとき（選択肢の名前・語が質問に既に入っていれば除く）、回答の前に確認を出す。類似問の提示の後（「どれでもない」を選んだとき）に出し、1 つの質問で聞き返すのは 1 回だけ。選んだ答えは backend がルールから引き直し、章節は検索の絞り込み `page_ranges`（文書と chunk のページの重なり。複数の章節は OR）に、選択・前提・その他の入力は回答のプロンプトの前置きに、検索に足す語は補助の検索文にする。範囲の中に根拠が無ければ、そのように答える（範囲の外から補わない）。回答の末尾に対象の範囲を示し、回答の記録の diagnostics の `scope` に残す。章節のページは、ルールに保存したときのページを使う（抽出をやり直してページが変わったら、ルールの章節を選び直す）。
+**チャットの確認の質問（#717）**: 検索・回答プロファイルのルールに確認の質問と選択肢（2〜8 件。表示名・説明・検索に足す語・回答に渡す前提・章節）を設定すると、チャットは質問がそのルールに一致したとき（選択肢の名前・語が質問に既に入っていれば除く）、回答の前に確認を出す。類似問の提示の後（「どれでもない」を選んだとき）に出し、1 つの質問で聞き返すのは 1 回だけ。選んだ答えは backend がルールから引き直し、章節は検索の絞り込み `page_ranges`（文書と chunk のページの重なり。複数の章節は OR）に、選択・前提・その他の入力は回答のプロンプトの前置きに、検索に足す語は補助の検索文にする。範囲の中に根拠が無ければ、そのように答える（範囲の外から補わない）。回答の末尾に対象の範囲を示し、回答の記録の diagnostics の `scope` に残す。章節のページは、確認を出すときの文書の今の章節（章節ナビゲーションの章節。人の修正と今の抽出の結果から決める。`app/rag/document_sections_service.py`）のページを使う（#721。ルールには章節の id を保存しているので、抽出をやり直したり章節を直したりしてページが変わっても追う）。章節が今は無いときだけ、ルールに保存したときのページを使う。
+
+**章節と chunk の対応（#1438）**: 文書の詳細の「章節ナビゲーション」の章節（人の修正 `rag_document_sections` と、修正が
+無いときの抽出の章節）を章節の正本とし、正しいものとして扱う。章節は何度でも直されるが、分割（chunk）・embedding・
+ベクトル索引には影響させない（再分割・再 embedding をしない）。代わりに、どの chunk がどの章節に入るかの対応だけを表
+`rag_chunk_set_sections`（chunk_set ごとの章節。階層・親・ページの範囲・chunk の数・文字数）と `rag_section_chunks`
+（章節に入る chunk・章節の中の順・所有の章節か）に持ち、次の後に文書ごとに作り直す（`app/rag/section_map_service.py`）。
+
+- 取込の job の成功の後（分割と embedding が終わった後）。
+- 章節の保存（`PUT /api/documents/{document_id}/sections`）と取り消し（`DELETE`）の後、処理レシピの保存・削除の後（レシピの
+  章節の抽出規則の方式で章節が変わる）。
+- 章節の抽出規則の全体の既定の保存・取り消しの後（すべての文書をバックグラウンドで作り直す）。
+- 作り直しに失敗しても取込・保存は止めない（ログ `section_map_refresh_failed`）。対応がまだ無い chunk_set（この機能の前に
+  取り込んだ文書など）は、MCP で章節を読むときにその場で作る。
+
+対応の決め方は決定論的（`app/rag/section_chunk_map.py`）。章節を並び順に見て、それぞれの始まりの chunk（読み順 =
+`chunk_index`。前の章節の始まりより前にしない）を、解析の要素の ID（章節の元にした解析の結果の chunk_set のときだけ。解析
+エンジンの見出しは章節の木の要素、規則の章節は見出しの要素）→ 開始のページの中で本文の最初の行が見出しの名前で始まる
+（終わる）か chunk の見出しの列に名前を持つ chunk → 開始のページ以降で始まる最初の chunk の順で決める（ページの範囲の外の
+要素の ID は使わない。人がページを直した章節）。各 chunk は、始まりがその chunk 以前の最後の章節（所有の章節）と、その祖先の
+章節と、文書全体（仮想の根の章節 `document`）に入る。所有の章節の終了のページより後ろの chunk は、ページを含む祖先へ、
+無ければ文書全体へ移す。章節の無い文書は文書全体が 1 つの章節になる。要約の chunk（RAPTOR・章節の要約）は入れない。
+
+章節の本文は `section_map_service.read_section`（section_id → 章節の中の順の chunk の本文と範囲。検索と同じ見え方の条件）
+で読む。MCP の `rag_read_section` と、回答のときの章節の拡張（#1436 / #1437）が共通で使う。
 
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。
 

@@ -635,6 +635,20 @@ def test_chunks_read_by_the_agent_count_as_evidence() -> None:
                 },
             ),
             _step("rag_outline", {"document_id": "doc-3", "sections": []}),
+            # 章節を読み切った chunk（#1438）も根拠に数える。
+            _step(
+                "rag_read_section",
+                {
+                    "document_id": "doc-4",
+                    "file_name": "点検要領.pdf",
+                    "text": "--- p.8 ---\n漏水\n\n--- p.9 ---\n警報",
+                    "chunks": [
+                        {"chunk_id": "c-8", "page_start": 8, "start": 12, "end": 14},
+                        {"chunk_id": "c-9", "page_start": 9, "start": 28, "end": 30},
+                    ],
+                    "section_complete": True,
+                },
+            ),
         ],
     )
 
@@ -644,7 +658,10 @@ def test_chunks_read_by_the_agent_count_as_evidence() -> None:
         ("doc-1", "c-1"),
         ("doc-2", "c-2"),
         ("doc-3", "c-3"),
+        ("doc-4", "c-8"),
+        ("doc-4", "c-9"),
     ]
+    assert [item.text for item in citations[3:]] == ["漏水", "警報"]
     assert citations[1].text == "承認者は部長"
     assert citations[2].text == "第 4 章 承認者の代理\n代理は管理本部長。"
     assert citations[2].file_name == "組織規程.pdf"
