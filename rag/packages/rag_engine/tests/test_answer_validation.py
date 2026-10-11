@@ -330,6 +330,19 @@ def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
     assert set(result["counts"]) == {"supported"}
 
 
+def test_numbered_heading_with_document_location_note_is_not_audited() -> None:
+    """番号つきの「…の…」の見出しに資料と章の注記が付いた行も監査しない (#1481)。
+
+    e1481 の run_b568a0eb の段落。Agent はこの行を出典の行（citation）として本文から外すため、見出しの契約
+    （headings.json）には入れず RAG の側だけで確かめる。
+    """
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage
+
+    passage = "2. 復旧の目標（障害連絡規程 incident-contact-rules.pdf 第 2 章「復旧の目標」）"
+    assert is_heading(passage)
+    assert is_non_claim_passage(passage)
+
+
 def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
     """品質評価の主張の監査でも、モデルが not_a_claim にした番号つきの見出し・導入の文は unassessed にしない (#1469)。"""
     from rag_engine.evaluation.answer_eval import _bind_claims
