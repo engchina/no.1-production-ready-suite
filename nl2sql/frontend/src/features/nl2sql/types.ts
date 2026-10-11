@@ -600,6 +600,8 @@ export interface JobCreateData {
 export interface JobData {
   job_id: string;
   question?: string;
+  /** AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に出す。#1442）。 */
+  requirement_question?: string;
   profile_id?: string;
   conversation_id?: string;
   previous_job_id?: string | null;
