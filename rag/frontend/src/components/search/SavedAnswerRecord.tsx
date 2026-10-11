@@ -18,7 +18,7 @@ import { useDeleteAnswerRecord, useAnswerRecord } from "@/lib/queries";
 import { CitationCard } from "./CitationCard";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 
-/** 保存された回答 1 件(質問・回答・根拠パネル・引用)。 */
+/** 保存された回答 1 件(質問・回答・引用・根拠パネル)。 */
 export function SavedAnswerRecord({
   traceId,
   searchAnswerProfileId,
@@ -115,12 +115,6 @@ export function SavedAnswerRecord({
           {record.answer}
         </p>
       ) : null}
-      <AnswerDetailsPanel
-        diagnostics={record.answer_diagnostics}
-        traceId={record.evaluation_available ? record.trace_id : null}
-        evaluation={record.evaluation}
-        title={detailsTitle}
-      />
       {showCitations && record.citations.length > 0 ? (
         <ul className="space-y-2">
           {record.citations.map((chunk, index) => (
@@ -135,6 +129,13 @@ export function SavedAnswerRecord({
           ))}
         </ul>
       ) : null}
+      {/* 根拠（引用の一覧）を先、根拠の構成・実行記録のパネルを後に並べる（#1417。page-archetypes.md §6.1）。 */}
+      <AnswerDetailsPanel
+        diagnostics={record.answer_diagnostics}
+        traceId={record.evaluation_available ? record.trace_id : null}
+        evaluation={record.evaluation}
+        title={detailsTitle}
+      />
       {remove.isError ? (
         <FormStatus
           tone="danger"

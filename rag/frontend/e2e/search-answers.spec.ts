@@ -338,6 +338,12 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
   const feedbackTop = (await feedback.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
   expect(feedbackTop).toBeGreaterThan(citationTop);
+  // 根拠を先、実行記録を後に並べる（#1417）: 「この回答の実行記録」は「根拠 N 件」と評価の間に出す。
+  const recordTop =
+    (await page.locator("summary").filter({ hasText: "この回答の実行記録" }).boundingBox())?.y ??
+    Number.NEGATIVE_INFINITY;
+  expect(recordTop).toBeGreaterThan(citationTop);
+  expect(feedbackTop).toBeGreaterThan(recordTop);
 
   // 保存された回答は、チャットの「この回答の実行記録」から確認を通して削除できる（#147）。
   const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
