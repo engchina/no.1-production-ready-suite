@@ -25,12 +25,18 @@ from tests.test_oci_enterprise_ai import FakeEnterpriseAiTransport, _oci_setting
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 
-def _settings(text_effort: str = "", vision_effort: str = "") -> Settings:
+def _settings(text_effort: str = "medium", vision_effort: str = "medium") -> Settings:
     settings = _oci_settings()
     settings.oci_enterprise_ai_models = [
-        EnterpriseAiConfiguredModel(model_id="enterprise-llm", reasoning_effort=text_effort),
-        EnterpriseAiConfiguredModel(
-            model_id="enterprise-vlm", vision_enabled=True, reasoning_effort=vision_effort
+        EnterpriseAiConfiguredModel.model_validate(
+            {"model_id": "enterprise-llm", "reasoning_effort": text_effort}
+        ),
+        EnterpriseAiConfiguredModel.model_validate(
+            {
+                "model_id": "enterprise-vlm",
+                "vision_enabled": True,
+                "reasoning_effort": vision_effort,
+            }
         ),
     ]
     return settings
@@ -38,17 +44,27 @@ def _settings(text_effort: str = "", vision_effort: str = "") -> Settings:
 
 async def test_generate_sends_reasoning_of_text_model() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
-    client = OciEnterpriseAiClient(settings=_settings("none", "high"), http_transport=transport)
+    client = OciEnterpriseAiClient(settings=_settings("low", "high"), http_transport=transport)
 
     await client.generate("質問", "根拠")
 
-    assert transport.calls[0]["payload"]["reasoning"] == {"effort": "none"}
+    assert transport.calls[0]["payload"]["reasoning"] == {"effort": "low"}
 
 
-async def test_generate_without_effort_sends_no_reasoning() -> None:
-    """空（既定。#1425 より前の設定も）は今と同じく `reasoning` を送らない。"""
+async def test_generate_default_sends_medium() -> None:
+    """値の無いモデル（#1425 より前の設定も）は既定の medium を送る。"""
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
-    client = OciEnterpriseAiClient(settings=_settings("", "high"), http_transport=transport)
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    await client.generate("質問", "根拠")
+
+    assert transport.calls[0]["payload"]["reasoning"] == {"effort": "medium"}
+
+
+async def test_generate_with_none_sends_no_reasoning() -> None:
+    """none は「送らない」（`reasoning` を入れない）。"""
+    transport = FakeEnterpriseAiTransport({"output_text": "回答"})
+    client = OciEnterpriseAiClient(settings=_settings("none", "high"), http_transport=transport)
 
     await client.generate("質問", "根拠")
 
@@ -57,7 +73,7 @@ async def test_generate_without_effort_sends_no_reasoning() -> None:
 
 async def test_compared_model_uses_its_own_effort() -> None:
     """チャットのモデル比較（`model_id`）は、そのモデルの値を使う。"""
-    settings = _settings("none", "")
+    settings = _settings("none", "none")
     settings.oci_enterprise_ai_models.append(
         EnterpriseAiConfiguredModel(model_id="other-llm", reasoning_effort="low")
     )
@@ -73,14 +89,14 @@ async def test_compared_model_uses_its_own_effort() -> None:
 
 async def test_image_calls_send_reasoning_of_vision_model() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "画像の説明"})
-    client = OciEnterpriseAiClient(settings=_settings("none", "minimal"), http_transport=transport)
+    client = OciEnterpriseAiClient(settings=_settings("none", "high"), http_transport=transport)
 
     await client.generate_from_image(PNG, "説明して", mime_type="image/png")
     await client.generate_from_images([PNG], "説明して", mime_type="image/png")
 
     assert [call["payload"]["reasoning"] for call in transport.calls] == [
-        {"effort": "minimal"},
-        {"effort": "minimal"},
+        {"effort": "high"},
+        {"effort": "high"},
     ]
 
 
@@ -89,6 +105,8 @@ def test_config_carries_effort_of_each_model() -> None:
 
     assert (config.text_reasoning_effort, config.vision_reasoning_effort) == ("low", "medium")
     assert config.for_vision().vision_reasoning_effort == "medium"
+    # none は送る値が空（送らない）。
+    assert config_from_settings(_settings("none", "none")).text_reasoning_effort == ""
 
 
 def test_parser_service_env_carries_effort() -> None:
@@ -104,8 +122,8 @@ def test_parser_service_env_carries_effort() -> None:
 
 @pytest.mark.parametrize(
     ("text_effort", "vision_effort", "expected"),
-    [("none", "high", ("none", "high")), ("", "", ("", ""))],
-    ids=["set", "empty"],
+    [("low", "high", ("low", "high")), ("none", "none", ("", ""))],
+    ids=["set", "none"],
 )
 def test_answer_engine_provider_carries_effort(
     tmp_path: Path, text_effort: str, vision_effort: str, expected: tuple[str, str]

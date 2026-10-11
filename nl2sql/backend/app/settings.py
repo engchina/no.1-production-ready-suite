@@ -26,7 +26,7 @@ from pr_system_settings.model import (
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import (
-    enterprise_ai_reasoning_effort as enterprise_ai_reasoning_effort,
+    enterprise_ai_reasoning as enterprise_ai_reasoning,
 )
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import Field, field_validator, model_validator

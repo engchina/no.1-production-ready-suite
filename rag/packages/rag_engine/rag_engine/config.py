@@ -155,7 +155,8 @@ class LlmProviderSettings:
     model: str
     supports_vision: bool = False
     endpoint: str = ""
-    # 推論(思考)の量(#1425。Responses API の `reasoning.effort`)。空は送らない(endpoint の既定)。
+    # 推論(思考)の量の送る値(#1425。Responses API の `reasoning.effort`)。空は送らない。
+    # backend が platform の `reasoning_effort_to_send` で決めて渡す(none は空)。
     reasoning_effort: str = ""
 
     @property

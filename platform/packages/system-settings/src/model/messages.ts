@@ -101,15 +101,8 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.reasoningEffort": "推論の量",
   "settings.model.enterprise.reasoningEffortOfModel": "モデル {number} の推論の量",
   "settings.model.enterprise.reasoningEffortHelp":
-    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は high（結果の質を優先）です。少ないほど回答が速く、出力の上限にも届きにくくなります。「送らない」はモデルの既定のままにします。モデルによっては受け付けない値があります。保存の前に「テスト」で確かめてください。",
-  "settings.model.enterprise.reasoningEffort.default": "送らない（モデルの既定）",
-  "settings.model.enterprise.reasoningEffort.none": "none（考えない）",
-  "settings.model.enterprise.reasoningEffort.minimal": "minimal（最小）",
-  "settings.model.enterprise.reasoningEffort.low": "low（少ない）",
-  "settings.model.enterprise.reasoningEffort.medium": "medium（中）",
-  "settings.model.enterprise.reasoningEffort.high": "high（多い）",
-  "settings.model.enterprise.reasoningEffort.xhigh": "xhigh（とても多い）",
-  "settings.model.enterprise.reasoningEffort.max": "max（最大）",
+    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は medium で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。",
+  "settings.model.enterprise.reasoningEffort.none": "none（送らない）",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
   "settings.model.enterprise.removeConfirm.descriptionUnnamed":

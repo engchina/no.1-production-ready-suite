@@ -32,7 +32,11 @@ def _target(effort: str) -> ModelTarget:
     )
 
 
-@pytest.mark.parametrize(("effort", "expected"), [("low", "low"), ("", None)], ids=["set", "empty"])
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [("low", "low"), ("medium", "medium"), ("none", None)],
+    ids=["low", "medium", "none"],
+)
 def test_model_settings_send_effort_only_when_set(effort: str, expected: str | None) -> None:
     settings = builtin_runtime.model_settings_for(_target(effort))
 
@@ -48,16 +52,14 @@ def test_resolve_model_target_reads_effort_of_agent_model(monkeypatch: pytest.Mo
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="text-a", reasoning_effort="none"),
             EnterpriseAiConfiguredModel(model_id="text-b"),
-            EnterpriseAiConfiguredModel(model_id="text-c", reasoning_effort=""),
         ],
         oci_enterprise_ai_default_text_model="text-a",
     )
     monkeypatch.setattr(builtin_runtime, "get_settings", lambda: settings)
 
     assert builtin_runtime.resolve_model_target("").reasoning_effort == "none"
-    # 値を書かないモデルは既定の high、空は「送らない」。
-    assert builtin_runtime.resolve_model_target("text-b").reasoning_effort == "high"
-    assert builtin_runtime.resolve_model_target("text-c").reasoning_effort == ""
+    # 値を書かないモデルは既定の medium。
+    assert builtin_runtime.resolve_model_target("text-b").reasoning_effort == "medium"
 
 
 def test_sdk_agent_uses_model_effort(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,7 +82,7 @@ def _payload(effort: str) -> dict[str, Any]:
             "connections": [{"connection_id": "primary", "endpoint": ENDPOINT, "api_key": "sk"}],
             "models": [
                 {"model_id": "text-a", "reasoning_effort": effort},
-                {"model_id": "vision-b", "vision_enabled": True, "reasoning_effort": "minimal"},
+                {"model_id": "vision-b", "vision_enabled": True, "reasoning_effort": "low"},
             ],
             "default_text_model_id": "text-a",
             "default_vision_model_id": "vision-b",
@@ -94,11 +96,11 @@ def _payload(effort: str) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("target_type", "model_id", "effort", "expected"),
     [
-        ("enterprise_text", "text-a", "none", {"effort": "none"}),
-        ("enterprise_text", "text-a", "", None),
-        ("enterprise_vision", "vision-b", "", {"effort": "minimal"}),
+        ("enterprise_text", "text-a", "high", {"effort": "high"}),
+        ("enterprise_text", "text-a", "none", None),
+        ("enterprise_vision", "vision-b", "none", {"effort": "low"}),
     ],
-    ids=["text-set", "text-empty", "vision-set"],
+    ids=["text-high", "text-none", "vision-low"],
 )
 def test_model_test_sends_unsaved_effort(
     monkeypatch: pytest.MonkeyPatch,
@@ -145,7 +147,7 @@ def test_model_test_shows_rejection_body(monkeypatch: pytest.MonkeyPatch) -> Non
         lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
     )
     request = ModelSettingsTestRequest.model_validate(
-        {"settings": _payload("none"), "target_type": "enterprise_text", "model_id": "text-a"}
+        {"settings": _payload("low"), "target_type": "enterprise_text", "model_id": "text-a"}
     )
     candidate = model_test_candidate(Settings(_env_file=None), request)
 

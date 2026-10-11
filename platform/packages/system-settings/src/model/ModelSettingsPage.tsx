@@ -1414,25 +1414,26 @@ function modelReasoningEffortFieldId(index: number): string {
 }
 
 /**
- * 推論の量の選択肢（#1425）。先頭の「送らない（モデルの既定）」は空の値（`reasoning` を送らない）。
- * 既定は high（結果の質を優先する）。high を受け付けないモデルのために「送らない」を残す。
- * 値は API の語のまま出し、括弧で意味を添える。
+ * 推論の量の選択肢（#1425）。none / low / medium / high の 4 つで、既定は medium。
+ * none は「送らない」（`reasoning` を送らない）と分かるように書く。ほかは API の語のまま出し、
+ * 意味は表の下の説明に書く（表の列が狭いため）。
  */
 const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoningEffort>[] =
-  [
-    { value: "", label: t("settings.model.enterprise.reasoningEffort.default") },
-    ...ENTERPRISE_AI_REASONING_EFFORTS.map((effort) => ({
-      value: effort,
-      label: t(`settings.model.enterprise.reasoningEffort.${effort}`),
-    })),
-  ];
+  ENTERPRISE_AI_REASONING_EFFORTS.map((effort) => ({
+    value: effort,
+    label:
+      effort === "none"
+        ? t("settings.model.enterprise.reasoningEffort.none")
+        : effort,
+  }));
 
 /**
  * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 画像入力（Vision）に対応 / テスト / 削除）。
  * 7 列はサイドバーを引いた md の本文幅では窮屈なため、lg から表の形にする（#533 / #1425）。
+ * 推論の量は短い値（「none（送らない）」・medium など）なので固定の幅にし、残りをモデル ID・表示名・接続に回す。
  */
 const CATALOG_COLUMNS =
-  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)_8rem_7rem_3.25rem]";
+  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_9.5rem_7rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。

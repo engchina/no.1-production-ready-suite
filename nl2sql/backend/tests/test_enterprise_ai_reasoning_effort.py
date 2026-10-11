@@ -17,14 +17,18 @@ from app.settings import EnterpriseAiConfiguredModel, Settings
 ENDPOINT = "https://primary.example/openai/v1"
 
 
-def _settings(text_effort: str = "", vision_effort: str = "", **overrides: Any) -> Settings:
+def _settings(
+    text_effort: str = "medium", vision_effort: str = "medium", **overrides: Any
+) -> Settings:
     values: dict[str, Any] = {
         "oci_enterprise_ai_endpoint": ENDPOINT,
         "oci_enterprise_ai_api_key": "sk-primary",
         "oci_enterprise_ai_models": [
-            EnterpriseAiConfiguredModel(model_id="text-a", reasoning_effort=text_effort),
-            EnterpriseAiConfiguredModel(
-                model_id="vision-b", vision_enabled=True, reasoning_effort=vision_effort
+            EnterpriseAiConfiguredModel.model_validate(
+                {"model_id": "text-a", "reasoning_effort": text_effort}
+            ),
+            EnterpriseAiConfiguredModel.model_validate(
+                {"model_id": "vision-b", "vision_enabled": True, "reasoning_effort": vision_effort}
             ),
         ],
         "oci_enterprise_ai_default_text_model": "text-a",
@@ -54,20 +58,20 @@ def payloads(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def test_text_and_image_calls_send_each_model_effort(payloads: list[dict[str, Any]]) -> None:
-    client = OciEnterpriseAiDirectClient(_settings("none", "low"))
+    client = OciEnterpriseAiDirectClient(_settings("high", "low"))
 
     client.generate(prompt="質問", context="文脈", system_prompt="指示")
     client.generate_from_image(b"\x89PNG", "読んで")
 
     assert [payload.get("reasoning") for payload in payloads] == [
-        {"effort": "none"},
+        {"effort": "high"},
         {"effort": "low"},
     ]
 
 
-def test_empty_effort_sends_no_reasoning(payloads: list[dict[str, Any]]) -> None:
-    """空（既定。#1425 より前の設定も）は今と同じく `reasoning` を送らない。"""
-    client = OciEnterpriseAiDirectClient(_settings())
+def test_none_effort_sends_no_reasoning(payloads: list[dict[str, Any]]) -> None:
+    """none は「送らない」（`reasoning` を入れない）。"""
+    client = OciEnterpriseAiDirectClient(_settings("none", "none"))
 
     client.generate(prompt="質問", context="文脈", system_prompt="指示")
     client.generate_from_image(b"\x89PNG", "読んで")
@@ -85,3 +89,21 @@ def test_payload_template_is_left_to_template(payloads: list[dict[str, Any]]) ->
     client.generate(prompt="質問", context="文脈", system_prompt="指示")
 
     assert "reasoning" not in payloads[0]
+
+
+def test_default_effort_is_medium(payloads: list[dict[str, Any]]) -> None:
+    """値の無いモデル（#1425 より前の設定も）は既定の medium を送る。"""
+    settings = Settings(
+        _env_file=None,
+        oci_enterprise_ai_endpoint=ENDPOINT,
+        oci_enterprise_ai_api_key="sk-primary",
+        oci_enterprise_ai_models=[EnterpriseAiConfiguredModel(model_id="text-a")],
+        oci_enterprise_ai_default_text_model="text-a",
+        oci_enterprise_ai_max_retries=0,
+    )
+
+    OciEnterpriseAiDirectClient(settings).generate(
+        prompt="質問", context="文脈", system_prompt="指示"
+    )
+
+    assert payloads[0]["reasoning"] == {"effort": "medium"}

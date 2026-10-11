@@ -251,7 +251,7 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
             "display_name": "",
             "vision_enabled": False,
             "connection_id": "primary",
-            "reasoning_effort": "high",
+            "reasoning_effort": "medium",
         }
     ]
 

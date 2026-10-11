@@ -51,6 +51,7 @@ from pr_system_settings.model import (
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
     enterprise_ai_reasoning_effort,
+    reasoning_effort_to_send,
 )
 
 from app.features.agent import data_scope
@@ -156,7 +157,7 @@ class ModelTarget:
     endpoint: str
     project_ocid: str
     api_key: str
-    # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。空は送らない。
+    # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。none は送らない。
     reasoning_effort: str = ""
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
@@ -199,9 +200,10 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
 def model_settings_for(target: ModelTarget) -> ModelSettings:
     """Run・評価の判定に使う SDK の ModelSettings（#1425）。
 
-    推論（思考）の量が空でなければ Responses API の `reasoning: {"effort": ...}` を送る。
+    モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
+    （none は送らない。解釈は platform の `reasoning_effort_to_send`）。
     """
-    effort = target.reasoning_effort.strip()
+    effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
         return ModelSettings(store=False)
     # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。

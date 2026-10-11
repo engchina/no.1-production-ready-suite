@@ -44,9 +44,10 @@ class OciEnterpriseAiConfig:
     `default_model_id`(テキスト)の接続で、Vision の呼び出しは `vision_oci_enterprise_ai_*` が
     None でなければそれを使う(`for_vision()`)。None は「テキストと同じ接続」。
 
-    推論(思考)の量(#1425)は、テキストのモデルの値を `text_reasoning_effort`、Vision のモデルの値を
-    `vision_reasoning_effort` に入れる。空は `reasoning` を送らない(endpoint の既定)。標準の payload
-    だけに入れ、payload template を使う構成では template に任せる。
+    推論(思考)の量(#1425)は、テキストのモデルの送る値を `text_reasoning_effort`、Vision のモデルの
+    送る値を `vision_reasoning_effort` に入れる(backend が platform の `reasoning_effort_to_send` で
+    決める。none は空)。空は `reasoning` を送らない。標準の payload だけに入れ、payload template を
+    使う構成では template に任せる。
     """
 
     oci_enterprise_ai_endpoint: str = ""

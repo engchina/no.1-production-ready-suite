@@ -21,7 +21,7 @@ from app.settings import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
-    enterprise_ai_reasoning_effort,
+    enterprise_ai_reasoning,
     enterprise_ai_vision_model_id,
 )
 
@@ -365,13 +365,13 @@ def _build_image_payload(
 
 
 def _with_reasoning(payload: dict[str, Any], settings: Settings, model_id: str) -> dict[str, Any]:
-    """モデルの推論（思考）の量が空でなければ Responses API の `reasoning` を入れる（#1425）。
+    """モデルの推論（思考）の量を Responses API の `reasoning` に入れる（#1425。none は送らない）。
 
     標準の payload だけに入れる（payload template の構成は template に任せる）。
     """
-    effort = enterprise_ai_reasoning_effort(settings, model_id)
-    if effort:
-        payload["reasoning"] = {"effort": effort}
+    reasoning = enterprise_ai_reasoning(settings, model_id)
+    if reasoning is not None:
+        payload["reasoning"] = reasoning
     return payload
 
 

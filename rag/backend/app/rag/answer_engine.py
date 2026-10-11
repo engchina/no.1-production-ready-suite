@@ -49,7 +49,7 @@ from app.config import (
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
-    enterprise_ai_reasoning_effort,
+    enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_vision_model_id,
 )
 from app.rag.answer_metrics import score_answer_evaluation
@@ -258,11 +258,11 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.endpoint,
         "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
         "OCI_ENTERPRISE_AI_VLM_PROJECT_OCID": vision.project_ocid,
-        # 推論(思考)の量はモデルごと(#1425。空は送らない)。
-        "OCI_ENTERPRISE_AI_REASONING_EFFORT": enterprise_ai_reasoning_effort(
+        # 推論(思考)の量はモデルごとの送る値(#1425。none は空 = 送らない)。
+        "OCI_ENTERPRISE_AI_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
             settings, answer_model
         ),
-        "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": enterprise_ai_reasoning_effort(
+        "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
             settings, vision_model
         ),
         # rag_engine は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する

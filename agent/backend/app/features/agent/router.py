@@ -56,6 +56,7 @@ from pr_system_settings.database_status import (
     build_database_status_router,
 )
 from pr_system_settings.model import (
+    DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
     EnterpriseAiConnection,
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
@@ -63,6 +64,7 @@ from pr_system_settings.model import (
     build_model_router,
     enterprise_ai_connection_for_model,
     model_payload,
+    reasoning_payload,
 )
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -818,15 +820,17 @@ def _enterprise_text_payload(
 def _with_model_reasoning(
     settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """テストするモデルの推論（思考）の量が空でなければ `reasoning` を入れる（#1425）。
+    """テストするモデルの推論（思考）の量を `reasoning` に入れる（#1425。none は送らない）。
 
     画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
     """
     effort = next(
-        (model.reasoning_effort for model in settings.models if model.model_id == model_id), ""
+        (model.reasoning_effort for model in settings.models if model.model_id == model_id),
+        DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
     )
-    if effort:
-        payload["reasoning"] = {"effort": effort}
+    reasoning = reasoning_payload(effort)
+    if reasoning is not None:
+        payload["reasoning"] = reasoning
     return payload
 
 
