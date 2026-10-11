@@ -34,7 +34,17 @@ DELETE_ACCOUNT = (
     "（業務ガイド「アカウントの削除」では、この条件によって手順・答えが変わるため、"
     "まず確認しています。）"
 )
-CLARIFICATIONS = {"cr-grant-permission": GRANT_PERMISSION, "cr-delete-account": DELETE_ACCOUNT}
+# cr-grant-permission（e1467、run_2dc5eb2909e547ebb3c3d3fd29823ff2）: 答えが分かった後の案内の結び。
+GRANT_PERMISSION_CLOSING = (
+    "権限の付与先によって手順が変わるため、まず確認させてください。\n\n"
+    "**権限の付与先は、個別の利用者ですか、グループですか？**（選択肢: 個別 / グループ）\n\n"
+    "付与先が分かりましたら、その場合の手順をご案内します。"
+)
+CLARIFICATIONS = {
+    "cr-grant-permission": GRANT_PERMISSION,
+    "cr-delete-account": DELETE_ACCOUNT,
+    "cr-grant-permission-closing": GRANT_PERMISSION_CLOSING,
+}
 
 
 def _lookup_guides() -> RunStep:
@@ -74,8 +84,24 @@ def test_passage_kinds_are_not_changed_by_the_clarification_judgment() -> None:
         "承認は得ていますか？",
         # 質問が無い。
         "その点がまだ分かっていません。\n（「個別」または「グループ」でお答えください。）",
+        # 結びに操作の指示・数量・逆接がある（確かめる）。
+        "付与先は個別の利用者ですか？\n付与先が分かりましたら、「権限」タブで付与してください。",
+        "付与先は個別の利用者ですか？\n付与先が分かりましたら、3 営業日以内の手順をご案内します。",
+        "付与先は個別の利用者ですか？\n"
+        "付与先が分かりましたら手順をご案内しますが、承認は部門長が行います。",
+        # 資料の主張の「案内します」（敬語でない述語）は答えた後の案内として数えない。
+        "付与先は個別の利用者ですか？\n申請が決まり次第、情報システム部が手順を案内します。",
     ],
-    ids=["claim-preface", "operation-guidance", "quantity-preface", "no-question"],
+    ids=[
+        "claim-preface",
+        "operation-guidance",
+        "quantity-preface",
+        "no-question",
+        "operation-closing",
+        "quantity-closing",
+        "contrast-closing",
+        "plain-guidance-claim",
+    ],
 )
 def test_preface_with_a_claim_is_not_clarification_only(answer: str) -> None:
     assert not is_clarification_only(answer)

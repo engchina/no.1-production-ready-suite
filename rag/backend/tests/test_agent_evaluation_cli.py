@@ -670,3 +670,96 @@ def test_chunks_read_by_the_agent_count_as_evidence() -> None:
         "page_start": 2,
         "page_end": 2,
     }
+
+
+def test_read_chunk_citations_keep_the_sheet_location_and_are_traceable() -> None:
+    """rag_read_document・rag_read_section で読んだ chunk の引用に表計算の場所を残す（#1471）。
+
+    e1467 の D の tl-security-severity-a（run_be18f8c04622406e8bb08c11b85237b7）は、台帳を
+    rag_read_document で全件読んだ xlsx の chunk の引用が、場所に element_locator と
+    section_path だけでたどれなかった（citation_traceability_coverage 0.18）。PDF の読み取りの
+    chunk も、頁と配列の section_path・要素の定位子でたどれる。位置の無い引用はたどれないまま。
+    """
+    from app.rag.file_processing_evaluation import (
+        _has_traceable_citation_metadata,
+        citation_traceability_coverage,
+    )
+
+    ledger = "行6: システムID: SYS-103 / 重要度: A"
+    run = _run(
+        "run_" + "2" * 32,
+        answer="重要度 A は SYS-103 です。",
+        steps=[
+            _step(
+                "rag_read_document",
+                {
+                    "document_id": "doc-ledger",
+                    "file_name": "system-ledger.xlsx",
+                    "text": ledger,
+                    "chunks": [
+                        {
+                            "chunk_id": "c-ledger-6",
+                            "element_locator": "doc:doc-ledger/ext:er_1/el:sheet-000-r6",
+                            "section_path": ["システム台帳"],
+                            "page_start": None,
+                            "page_end": None,
+                            "sheet_name": "システム台帳",
+                            "row_start": 6,
+                            "row_end": 6,
+                            "cell_range": "A6:F6",
+                            "start": 0,
+                            "end": len(ledger),
+                        },
+                        # 位置の無い chunk（場所の項目が無い・要素を指さない定位子だけ）。
+                        {
+                            "chunk_id": "c-ledger-x",
+                            "element_locator": "doc:doc-ledger/ext:er_1",
+                            "section_path": [],
+                            "start": 0,
+                            "end": 0,
+                        },
+                    ],
+                },
+            ),
+            _step(
+                "rag_read_section",
+                {
+                    "document_id": "doc-pdf",
+                    "file_name": "組織規程.pdf",
+                    "text": "--- p.2 ---\n部署の承認者",
+                    "chunks": [
+                        {
+                            "chunk_id": "c-pdf-2",
+                            "element_locator": "doc:doc-pdf/ext:er_2/page:2/el:7",
+                            "section_path": ["第 3 章 部署の承認者"],
+                            "page_start": 2,
+                            "page_end": 2,
+                            "sheet_name": None,
+                            "row_start": None,
+                            "row_end": None,
+                            "cell_range": None,
+                            "start": 12,
+                            "end": 18,
+                        },
+                    ],
+                    "section_complete": True,
+                },
+            ),
+        ],
+    )
+
+    citations = evidence_citations(run)
+
+    by_id = {item.chunk_id: item for item in citations}
+    assert by_id["c-ledger-6"].metadata == {
+        "element_locator": "doc:doc-ledger/ext:er_1/el:sheet-000-r6",
+        "section_path": ["システム台帳"],
+        "sheet_name": "システム台帳",
+        "row_start": 6,
+        "row_end": 6,
+        "cell_range": "A6:F6",
+    }
+    assert _has_traceable_citation_metadata(by_id["c-ledger-6"])
+    assert _has_traceable_citation_metadata(by_id["c-pdf-2"])
+    assert not _has_traceable_citation_metadata(by_id["c-ledger-x"])
+    assert citation_traceability_coverage(citations) == pytest.approx(2 / 3)

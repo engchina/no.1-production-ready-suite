@@ -284,6 +284,143 @@ def test_citation_line_marked_not_a_claim_is_not_unassessed() -> None:
     assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "unassessed"]
 
 
+# 見出しの名詞句・導入の文の事例（RAG と Agent の両方のテストが読む。#1469）。
+HEADING_CASES = json.loads(
+    (Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/headings.json").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["heading_passages"], ids=lambda case: case["id"])
+def test_heading_phrases_and_lead_ins_are_not_claims(case: dict) -> None:
+    """「補足（…）」・「根拠」・「…は次のとおりです。」は見出しで、主張として監査しない (#1469)。"""
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage
+
+    assert is_heading(case["passage"])
+    assert is_non_claim_passage(case["passage"])
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["numbered_heading_passages"], ids=lambda case: case["id"])
+def test_numbered_headings_are_decided_by_the_following_line(case: dict) -> None:
+    """番号つきの見出しの行は、次の行が下の内容のときだけ見出し (#1481 / #1482)。
+
+    終わりの語が一覧にある行（「1. 人事評価システムの重要度」）も、一覧に無い「…の…」の行も、単独の行と、番号の
+    行が続く一覧の中の行は主張のまま監査する。
+    """
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage, numbered_heading_lines
+
+    passage = case["passage"]
+    for below in ("   - 資料の記載", "- 資料の記載", "  資料の記載", "→ 資料の記載"):
+        lines = numbered_heading_lines(f"{passage}\n\n{below}")
+        assert lines == {passage}
+        assert is_non_claim_passage(passage, heading_lines=lines)
+    assert not is_heading(passage)
+    assert numbered_heading_lines(passage) == set()
+    assert passage not in numbered_heading_lines(f"{passage}\n9. 次の項目\n   - 資料の記載")
+    assert numbered_heading_lines(f"{passage}\n**次の節**") == set()
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: case["id"])
+def test_short_statements_stay_claims(case: dict) -> None:
+    """数・操作・言い切りを含む短い行と、値の名前だけの行は見出しにせず主張のまま監査する (#1469)。
+
+    次の行が下の内容でも見出しにしない (#1481)。
+    """
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage, numbered_heading_lines
+
+    assert not is_heading(case["passage"])
+    assert not is_non_claim_passage(case["passage"])
+    assert numbered_heading_lines(f"{case['passage']}\n   - 資料の記載") == set()
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["answers"], ids=lambda case: case["id"])
+def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
+    """#1362 の評価（e1467）の回答の見出しを監査に渡さず、unassessed にしない (#1469)。"""
+    seen: list[list[str]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append([item["text"] for item in payload["answer_passages"]])
+        evidence_id = payload["evidence_items"][0]["evidence_id"]
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": item["id"], "status": "supported", "evidence_id": evidence_id,
+             "source_id": "", "evidence_quote": "", "reason": "根拠に記載"}
+            for item in payload["answer_passages"]
+        ]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("質問", case["answer"], EVIDENCE, settings=None)
+    [audited] = seen
+    assert not set(case["heading_passages"]) & set(audited)
+    assert set(case["claim_passages"]) <= set(audited)
+    assert set(result["counts"]) == {"supported"}
+
+
+def test_numbered_heading_with_document_location_note_is_not_audited() -> None:
+    """番号つきの「…の…」の見出しに資料と章の注記が付いた行も監査しない (#1481)。
+
+    e1481 の run_b568a0eb の段落。Agent はこの行を出典の行（citation）として本文から外すため、見出しの契約
+    （headings.json）には入れず RAG の側だけで確かめる。
+    """
+    from rag_engine.generation.operation_audit import is_non_claim_passage, numbered_heading_lines
+
+    passage = "2. 復旧の目標（障害連絡規程 incident-contact-rules.pdf 第 2 章「復旧の目標」）"
+    lines = numbered_heading_lines(f"{passage}\n   - 重要度 A のシステムは 4 時間以内に復旧")
+    assert lines == {passage}
+    assert is_non_claim_passage(passage, heading_lines=lines)
+
+
+def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
+    """品質評価の主張の監査でも、モデルが not_a_claim にした見出しの名詞句・導入の文は unassessed にしない (#1469)。
+
+    番号つきの見出しは回答の次の行で決まる（``test_numbered_heading_marked_not_a_claim_follows_the_answer_lines``。#1482）。
+    """
+    from rag_engine.evaluation.answer_eval import _bind_claims
+
+    passages = [{"id": "A1", "text": "根拠（段ごとに確認した内容）"},
+                {"id": "A2", "text": "根拠の積み上げは次のとおりです。"},
+                {"id": "A3", "text": "1. **ID 管理システムの重要度は A**"}]
+    output = ClaimAuditOutput.model_validate({"claim_checks": [
+        {"answer_quote": item["text"], "answer_passage_id": item["id"], "status": "not_a_claim", "evidence_id": "",
+         "source_id": "", "evidence_quote": "", "reason": "主張ではない"}
+        for item in passages
+    ]})
+    bound = _bind_claims(output, {}, passages)
+    assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "not_a_claim", "unassessed"]
+
+
+def test_numbered_heading_marked_not_a_claim_follows_the_answer_lines() -> None:
+    """品質評価の主張の監査で、次の行で決まる番号つきの見出しは、回答の中で見出しのときだけ not_a_claim のまま (#1481)。"""
+    from rag_engine.evaluation.answer_eval import _bind_claims
+    from rag_engine.generation.operation_audit import numbered_heading_lines
+
+    passages = [{"id": "A1", "text": "1. 連携元のシステム"}]
+    output = ClaimAuditOutput.model_validate({"claim_checks": [
+        {"answer_quote": "1. 連携元のシステム", "answer_passage_id": "A1", "status": "not_a_claim", "evidence_id": "",
+         "source_id": "", "evidence_quote": "", "reason": "主張ではない"}]})
+    lines = numbered_heading_lines("1. 連携元のシステム\n   - 生産計画システムから生産計画を受け取ります。")
+    assert [c.status for c in _bind_claims(output, {}, passages, heading_lines=lines).claim_checks] == ["not_a_claim"]
+    assert [c.status for c in _bind_claims(output, {}, passages).claim_checks] == ["unassessed"]
+
+
+def test_numbered_list_items_ending_with_heading_words_are_audited() -> None:
+    """番号の行が続く一覧の項目は、終わりの語が見出しの語の一覧にあっても主張として監査する (#1482)。
+
+    e1467 の run_ee5468f8 の「申請書に書く 4 項目」。#1469 の段落だけの判定では「1. 変更の内容と理由」「3. 切り戻しの
+    手順」が見出しになり、監査に渡らなかった。同じ行でも、下に内容の行があれば見出し。
+    """
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage, numbered_heading_lines
+
+    items = ["1. 変更の内容と理由", "2. 影響を受けるシステムと利用者", "3. 切り戻しの手順", "4. 作業の日時"]
+    answer = "**申請書に書く 4 項目**\n" + "\n".join(items) + "\n\n**条件によって加わる項目**\n- 経費 Portal の変更"
+    lines = numbered_heading_lines(answer)
+    assert lines == set()
+    for item in items:
+        assert not is_heading(item)
+        assert not is_non_claim_passage(item, heading_lines=lines)
+    below = numbered_heading_lines("3. 切り戻しの手順\n   1. 旧版に戻す\n   2. 動作を確かめる")
+    assert below == {"3. 切り戻しの手順"}
+    assert is_non_claim_passage("3. 切り戻しの手順", heading_lines=below)
+
+
 # #1362 の評価の Run の形（#1391）。業務支援の da-trial-account-setup: 運用手順書の章ごとの chunk と、手順の回答。
 PORTAL = "d71d90b414a74ad99ccfc7a9dc4b3cb5:2e474d0310926b739eeed94bfc31012518db916cc382524721434a8baa1d629d"
 PORTAL_EVIDENCE = [
@@ -790,3 +927,33 @@ def test_paragraphs_that_only_write_the_location_differently_are_not_unsupported
     # 判定の指示: 場所の表記の違いだけでは unsupported にせず、場所が食い違うときだけ unsupported にする。
     assert "場所の表記を理由に unsupported にしない" in seen["system"]
     assert "食い違う" in seen["system"] and "row_start" in seen["system"]
+# 段落の分け方の事例（RAG と Agent の両方のテストが読む。#1455）。
+SENTENCE_CASES = json.loads(
+    (Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/sentence-splits.json").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("case", SENTENCE_CASES["cases"], ids=lambda case: case["id"])
+def test_passages_are_not_split_inside_brackets(case: dict) -> None:
+    """括弧の中の「。」で段落を分けず、太字の印・閉じ括弧だけの断片を作らない（#1455）。"""
+    from rag_engine.generation.operation_audit import answer_passages
+
+    assert [item["text"] for item in answer_passages(case["line"])] == case["passages"]
+
+
+def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
+    """cmp-pms-severity の「行1〜3（表頭の説明）: 「…。…。」」を 1 つの段落として監査に渡す（#1455）。"""
+    line = "  - 行1〜3（表頭の説明）: 「重要度は A・B・C の 3 段階です。A が最も高く、B、C の順に低くなります。」"
+    seen: list[list[str]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append([item["text"] for item in payload["answer_passages"]])
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": item["id"], "status": "supported",
+             "evidence_id": payload["evidence_items"][0]["evidence_id"], "source_id": "", "evidence_quote": "",
+             "reason": "根拠に記載"} for item in payload["answer_passages"]]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("重要度の段階は？", line, EVIDENCE, settings=None)
+    assert seen == [[line.strip()]]
+    assert result["counts"] == {"supported": 1}

@@ -2487,3 +2487,53 @@ def manifest_metrics() -> Sequence[str]:
     manifest_path = REPO_ROOT / "docs/evaluation/file-processing-golden-set.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     return cast(Sequence[str], manifest["metrics"])
+
+
+def test_spreadsheet_citations_are_traceable_by_sheet_and_row() -> None:
+    """表計算の引用は頁の代わりにシート名と行・セル範囲・要素の ID でたどれる（#1456）。
+
+    以前は page_start を必須にしていたので、Excel の 1 行 = 1 chunk の引用は位置を持っていても
+    常にたどれないと数え、指標が「引用のうち PDF の割合」になっていた。
+    """
+    ledger_row = {
+        "document_id": "ledger",
+        "chunk_id": "ledger:23",
+        "file_name": "system-ledger.xlsx",
+        "metadata": {
+            "sheet_name": "システム台帳",
+            "row_start": 23,
+            "row_end": 23,
+            "section_path": "システム台帳",
+            "element_ids": ["sheet-000-r23"],
+        },
+    }
+    citations: list[RetrievedChunk | Mapping[str, object]] = [
+        ledger_row,
+        RetrievedChunk(
+            document_id="ledger",
+            chunk_id="ledger:24",
+            text="システムID: SYS-120",
+            score=1.0,
+            metadata={"sheet_name": "システム台帳", "cell_range": "A24:F24"},
+        ),
+        {
+            "document_id": "ledger",
+            "chunk_id": "ledger:5",
+            "metadata": {"sheet_name": "システム台帳", "element_ids": "sheet-000-r5"},
+        },
+        # シート名だけ（行・セル範囲・要素の ID が無い）はたどれない。
+        {"document_id": "ledger", "chunk_id": "ledger:6", "metadata": {"sheet_name": "台帳"}},
+        # 頁もシートの位置も無い引用はたどれない。
+        {
+            "document_id": "doc-5",
+            "chunk_id": "doc-5:0",
+            "metadata": {"section_path": "第1章", "element_ids": "el-1"},
+        },
+        # 頁のある引用（PDF）の条件は変えない（頁と要素・bbox・節が要る）。
+        {"document_id": "doc-6", "chunk_id": "doc-6:0", "metadata": {"page_start": 1}},
+    ]
+
+    assert citation_traceability_coverage(citations) == 0.5
+    assert citation_traceability_coverage([ledger_row]) == 1.0
+    # 文書・chunk の ID が無ければシートの位置があってもたどれない。
+    assert citation_traceability_coverage([{**ledger_row, "chunk_id": ""}]) == 0.0

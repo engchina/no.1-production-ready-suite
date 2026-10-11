@@ -9,7 +9,12 @@
 （確かめられない操作の手順・事実の主張は今までどおり外す）。
 
 - 見出し: Markdown の見出し・太字だけの行・【…】・「…：」で終わる短いラベル。述語で終わる文や
-  操作の指示を含むものは見出しにしない。
+  操作の指示を含むものは見出しにしない。句点で終わらない短い名詞句（「1. 人事評価システムの
+  重要度」「補足（資料の記載）」「根拠」。項目・区分・資料の名前か「…とき」「…か」で終わり、
+  述語・操作・数量・言い切りの「は」を含まないもの）と、以降の箇条書きを導くだけの導入の文
+  （「根拠は次のとおりです。」）・礼の定型の文も見出しとして扱う（#1469）。規則は RAG の
+  `operation_audit.is_heading` とそろえ、両方のテストが
+  platform/contracts/answer-passages/headings.json の同じ事例で確かめる。
 - 出典: 「出典：…」「根拠：…」「セクション：…」「ページ：…」「*Locator*: …」などの
   ラベルの行（ラベルの太字・斜体は許す）、文書名・頁・節を示す括弧だけの行、文書名だけの行、
   リンクだけの行、根拠の ID（【証拠 ID: …】・〔証拠 ID: …〕）と文の無い「…」の題・頁の括弧
@@ -25,12 +30,17 @@
   拒答の文（「…示すことはできません」「回答はできません」。#1317）。数量・逆接・操作を含む文は除く。
 - 確かめられていない点: その見出しと、その節の行（操作の指示を除く）。
 
+補足の段落（見出しが「補足」「注記」「備考」などの節の行と、「なお、」「補足：」で始まる段落）は
+`supplement_passages` で判定する（#1475）。主張かどうかは変えず、回答の対応（`answer_outcome`）が、
+結論の段落で答えた後の補足の不足の文を不足の印にしないために使う。
+
 別に、利用者に現場のデータ・記録の確認を求める段落（「認証ログでエラーの時刻の行を確認して
 ください」など）を `environment_check_passages` で判定する（#1317）。こちらは主張のまま（検証で
 確かめ、外す）で、回答の対応（`answer_outcome`）が「現場の確認が要る」の印に使う。
 
 段落の分け方は RAG の `rag_engine.generation.operation_audit.answer_passages` と同じ（`answer_quote`
-はこの段落の原文。製品をまたいで import しないため写す）。
+はこの段落の原文。製品をまたいで import しないため写す）。括弧の中の「。」では分けない（#1455）。
+両方のテストが platform/contracts/answer-passages/sentence-splits.json の同じ事例で確かめる。
 """
 
 from __future__ import annotations
@@ -47,16 +57,54 @@ KIND_TABLE = "table"
 # ---- 段落の分け方（RAG と同じ規則） ----------------------------------------------
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
-_SENTENCE = re.compile(r"[^。]+(?:。[」』）)]*|$)")
 _PASSAGE_CHARS = 600
+# 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
+_BRACKET_PAIRS = {"「": "」", "『": "』", "（": "）", "(": ")", "【": "】"}
+_CLOSING_BRACKETS = frozenset(_BRACKET_PAIRS.values())
+# 前の文に付ける断片（太字・強調の印と閉じ括弧・句点だけ。#1455）。
+_MARKS_ONLY = re.compile(r"[\s*_`」』）)】。]*")
+
+
+def sentence_ranges(line: str) -> list[tuple[int, int]]:
+    """1 行を文に分けた範囲（開始・終了の位置。前後の空白を含む）。
+
+    「。」で文を分けるが、開いた括弧（「」『』（）()【】）の中の「。」では分けない（括弧の深さを数える。
+    #1455）。閉じない括弧は行の終わりまで続くとみなし、行の終わりで切る。開いていない閉じ括弧は数えない。
+    文の区切りの「。」の直後の閉じ括弧は前の文に含め、太字の印（`**`）・閉じ括弧だけの断片は前の文に付ける。
+    """
+    ranges: list[tuple[int, int]] = []
+    expected: list[str] = []
+    start = index = 0
+    while index < len(line):
+        char = line[index]
+        if char in _BRACKET_PAIRS:
+            expected.append(_BRACKET_PAIRS[char])
+        elif char in _CLOSING_BRACKETS and char in expected:
+            # 対応する開きの括弧まで閉じる（その間の閉じていない括弧も閉じたとみなす）。
+            while expected.pop() != char:
+                pass
+        elif char == "。" and not expected:
+            end = index + 1
+            while end < len(line) and line[end] in _CLOSING_BRACKETS:
+                end += 1
+            ranges.append((start, end))
+            start = index = end
+            continue
+        index += 1
+    if start < len(line):
+        ranges.append((start, len(line)))
+    merged: list[tuple[int, int]] = []
+    for begin, end in ranges:
+        if merged and _MARKS_ONLY.fullmatch(line[begin:end]):
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((begin, end))
+    return merged
 
 
 def passage_spans(line: str) -> list[tuple[int, int, str]]:
     """1 行の段落（行の中の開始・終了の位置と原文）。"""
-    if _QUOTE_ONLY_LINE.fullmatch(line):
-        pieces = [(0, len(line))]
-    else:
-        pieces = [(match.start(), match.end()) for match in _SENTENCE.finditer(line)]
+    pieces = [(0, len(line))] if _QUOTE_ONLY_LINE.fullmatch(line) else sentence_ranges(line)
     spans: list[tuple[int, int, str]] = []
     for start, end in pieces:
         raw = line[start:end]
@@ -91,6 +139,8 @@ _MD_HEADING = re.compile(r"#{1,6}\s+(?P<title>[^\n]{1,60})")
 _BOLD_LINE = re.compile(r"\*\*(?P<title>[^*\n]{1,40})\*\*\s*[:：]?")
 _BRACKET_HEADING = re.compile(r"【(?P<title>[^】。\n]{1,30})】\s*[:：]?")
 _LABEL_HEADING = re.compile(r"(?P<title>[^。！？!?\n:：]{1,30})[:：]")
+# ラベルの「：」の直前の注記の括弧（「補足（資料の注記。同シート A1:A2）：」。#1455）。
+_LABEL_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)](?=\s*[:：]\s*$)")
 
 _CITATION_LABEL = re.compile(
     r"[（(【〔\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース"
@@ -262,12 +312,196 @@ def _heading_title(text: str) -> str | None:
             if title and not _is_sentence(title) and not _OPERATION.search(title):
                 return title
             return None
-    match = _LABEL_HEADING.fullmatch(_strip_bullet(value))
+    label = _strip_bullet(value)
+    match = _LABEL_HEADING.fullmatch(label)
+    note = _LABEL_NOTE.search(label) if match is None else None
+    if note and not _is_sentence(note.group("note")) and not _OPERATION.search(note.group("note")):
+        # ラベルの後ろの注記の括弧（「補足（資料の注記。同シート A1:A2）：」）は除いて確かめる。
+        match = _LABEL_HEADING.fullmatch(label[: note.start()] + label[note.end() :])
     if match:
         title = match.group("title").strip().strip("*").strip()
         if title and not _is_sentence(title) and not _OPERATION.search(title):
             return title
+    phrase = heading_phrase(value)
+    if phrase is not None:
+        return phrase
+    return value if is_lead_in(value) else None
+
+
+# ---- 見出しの名詞句と導入の文（#1469）。RAG の `operation_audit.heading_phrase` /
+# `is_lead_in` と同じ規則で、両方のテストが platform/contracts/answer-passages/headings.json の
+# 同じ事例で確かめる。
+# 見出しの後ろの注記の括弧（「補足（資料の記載）」
+# 「2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）」）。
+_HEADING_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)]\s*$")
+# 「…」の語（「略号「運」の意味」）。中の「は」「が」は言い切りの助詞に数えない。
+_HEADING_QUOTED = re.compile(r"[「『][^「」『』\n]{1,40}[」』]")
+# 数量（「30 分」「10 年」。主張の値）。年度（「2026年度」）・行・頁の番号は数えない。
+_HEADING_QUANTITY = re.compile(
+    r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年(?!度)|名|人|GB|MB)"
+)
+# 見出しの語に残してよい番号（章・節の番号と年度）。ほかの数字（値の「3 点」「SYS-103」）を
+# 含む行は主張のまま。
+_HEADING_NUMBERED_NAME = re.compile(r"第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+\s*年度")
+# 見出しの名詞句の終わりの語（項目・区分・資料の名前。値の名前「運行管理課長」「極秘」では
+# 終わらない）。
+_HEADING_END = re.compile(
+    r"(?:根拠|補足|注記|備考|参考|前提|結論|回答|まとめ|要点|概要|経緯|理由|背景|資料|台帳|規程|規定|手順書"
+    r"|マニュアル|ガイド|文書|内容|事項|点|条件|規則|ルール|手順|方法|手段|流れ|結果|定め|扱い|対応|範囲|対象"
+    r"|期限|期間|時間帯|保守枠|日程|重要度|機密区分|区分|部署|担当|承認者|連絡先|窓口|代理|意味|正式名|名称"
+    r"|略号|関係|つながり"
+    # 分岐の見出し（「重要度 C のシステムで障害が起きたとき」）と、問いの形の見出し
+    # （「承認者がどう決まるか」）。
+    r"|とき|場合|か)$"
+)
+# 番号（「1.」「（2）」）。番号つきの行は段落だけでは決めず、次の行がその下の内容のときだけ見出し
+# （`numbered_heading_lines`。#1481 / #1482）。番号の行が続く一覧の項目は主張のまま。
+_HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
+# 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞を
+# つなぐ「の」に数えない。
+_HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
+# 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も、字下げした番号の行も下の内容）。
+_SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
+# 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の
+# 主張のまま。
+_HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
+# 分岐・問いの形の見出しの終わり（この形だけ、中の「が」「を」を許す）。
+_HEADING_CLAUSE_END = re.compile(r"(?:とき|場合|か)$")
+# 見出しの中の、分岐の節（「承認者が不在のときの代理」の「が不在のとき」）。
+_HEADING_CASE_CLAUSE = re.compile(r"[がを][^はがを、。]{1,15}?(?:とき|場合)")
+# 導入の文の先頭の接続の語（「そのため、作業できる時間帯は次のとおりです。」。この後の「、」は
+# 主語の区切りに数えない。#1481）。
+_LEAD_IN_CONNECTIVE = re.compile(
+    r"^(?:そのため|このため|したがって|従って|なお|また|ただし|つまり|具体的には|結果として"
+    r"|以上から|以上より|以上のことから)[、，,]\s*"
+)
+# 以降の箇条書きを導くだけの導入の文（「根拠は次のとおりです。」「以下に示します。」）。
+_LEAD_IN = re.compile(
+    r"(?P<subject>[^。！？!?\n]{1,24}?)(?:は|が)、?\s*(?:次|以下)の(?:とおり|通り)"
+    r"(?:です|となります|になります|でした)?[。．:：]?"
+    r"|(?:(?P<object>[^。！？!?\n]{1,24}?)を)?(?:次|以下)に(?:示し|まとめ|挙げ|整理し)ます[。．:：]?"
+)
+# 利用者の答え・質問への礼の定型の文（「ご回答ありがとうございます。」）。
+_COURTESY = re.compile(
+    r"(?:ご(?:回答|返答|返信|連絡|質問)|お問い合わせ|お答え)(?:いただき)?、?ありがとうございます[。．!！]?"
+)
+
+
+def _heading_note_ok(note: str) -> bool:
+    """見出しの注記の括弧が、言い切り・操作・数量を含まない補足か（「（承認者は人事部長です）」は主張）。"""
+    outside = _HEADING_QUOTED.sub(" ", note)
+    return (
+        "。" not in note
+        and not _is_sentence(note)
+        and not _OPERATION.search(note)
+        and not _HEADING_QUANTITY.search(note)
+        and "は" not in outside
+    )
+
+
+def heading_phrase(text: str) -> str | None:
+    """主張でない見出しの名詞句なら、注記の括弧・番号・強調を除いた見出しの語（#1469）。
+
+    見出しでなければ None。「補足（資料の記載）」「根拠」「回答に使った資料」「**重要度 C の
+    システムで障害が起きたとき**」のように、句点で終わらない短い名詞句で、項目・区分・資料の名前
+    （`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。述語（です・ます・する…）・
+    操作・数量・言い切りの「は」を含む行（「重要度は A です」「承認者は管理本部長」）は主張のまま。
+    番号つきの行（「1. 人事評価システムの重要度」）は段落だけでは見出しにせず、回答の中の次の行で
+    決める（番号の行が続く一覧の「1. 変更の内容と理由」は主張。`numbered_heading_lines`。
+    #1481 / #1482）。
+    """
+    found = _heading_value(text)
+    if not found or _HEADING_NUMBER.match(text.strip()):
+        return None
+    return found[0] if _HEADING_END.search(found[0]) else None
+
+
+def _numbered_heading_phrase(text: str) -> str | None:
+    """番号つきの見出しの語（「1. 人事評価システムの重要度」。#1481 / #1482）。
+
+    終わりの語が一覧（`_HEADING_END`）にあるか、一覧に無くても「…の…」の名詞句のもの
+    （「2. 重要度 B の復旧目標」）。人・組織・役職の名前で終わる「…の…」の行（「1. 情報システム部の
+    課長」）と、述語・操作・数量・言い切りの「は」を含む行（「1. **ID 管理システムの重要度は A**」）
+    は値の主張のまま。見出しかどうかは次の行で決める（`numbered_heading_lines`）。
+    """
+    found = _heading_value(text)
+    if not found or not _HEADING_NUMBER.match(text.strip()):
+        return None
+    value, outside = found
+    if _HEADING_END.search(value):
+        return value
+    if _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value):
+        return value
     return None
+
+
+def numbered_heading_lines(text: str) -> set[str]:
+    """回答の中の、番号つきの見出しの行（前後の空白を除いた行。#1481 / #1482）。
+
+    番号つきの見出しの語（`_numbered_heading_phrase`）の行で、次の（空でない）行がその下の内容
+    （字下げした行か、箇条書き・「→」の行）のもの。番号の行が続く一覧（「申請書に書く 4 項目」の
+    「1. 変更の内容と理由」〜「4. 作業の日時」）の項目と、下に内容の無い行は、終わりの語が一覧に
+    あっても主張のまま（段落だけで決めると、一覧の項目を見出しとして監査から外す。#1482）。RAG の
+    `operation_audit.numbered_heading_lines` と同じ規則。
+    """
+    lines = [line for line in text.split("\n") if line.strip()]
+    found = set()
+    for line, following in zip(lines, lines[1:], strict=False):
+        indent = len(line) - len(line.lstrip())
+        below = len(following) - len(following.lstrip()) > indent or bool(
+            _SUB_CONTENT.match(following.strip())
+        )
+        if below and _numbered_heading_phrase(line):
+            found.add(line.strip())
+    return found
+
+
+def _heading_value(text: str) -> tuple[str, str] | None:
+    """見出しの名詞句の共通の確かめ（注記の括弧・番号・強調を除いた語と、「…」の語を除いた残り）。"""
+    if is_citation(text):
+        # 文書名と場所だけの行（「1. **システム変更手順書**（第 2章 申請）」）は出典の行（#1370）。
+        return None
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip().rstrip(":：").strip()
+    while match := _HEADING_NOTE.search(value):
+        if not _heading_note_ok(match.group("note")):
+            return None
+        value = value[: match.start()].strip()
+    if not value or len(value) > 30 or re.search(r"[。．！？!?、,，:：]", value):
+        return None
+    if (
+        _is_sentence(value)
+        or _OPERATION.search(value)
+        or re.search(r"[0-9０-９]", _HEADING_NUMBERED_NAME.sub(" ", value))
+    ):
+        return None
+    outside = _HEADING_QUOTED.sub(" ", value)
+    if "は" in outside:
+        return None
+    # 「が」「を」は、分岐・問いの形の見出しか、「…が不在のとき」の節の中だけに許す。
+    if not _HEADING_CLAUSE_END.search(value) and re.search(
+        r"[がを]", _HEADING_CASE_CLAUSE.sub(" ", outside)
+    ):
+        return None
+    return value, outside
+
+
+def is_lead_in(text: str) -> bool:
+    """以降の箇条書きを導くだけの導入の文（「根拠の積み上げは次のとおりです。」）と礼の定型の文か。
+
+    先頭の接続の語の後の「、」（「そのため、作業できる時間帯は次のとおりです。」）は許す（#1481）。
+    主語・目的語に数量・操作・言い切りの「は」・「、」を含む文（「保管期間は 10 年で、内訳は
+    次のとおりです。」）は主張のまま（#1469）。
+    """
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    if _COURTESY.fullmatch(value):
+        return True
+    match = _LEAD_IN.fullmatch(_LEAD_IN_CONNECTIVE.sub("", value, count=1))
+    if not match:
+        return False
+    head = match.group("subject") or match.group("object") or ""
+    return not (
+        _HEADING_QUANTITY.search(head) or _OPERATION.search(head) or "は" in head or "、" in head
+    )
 
 
 def is_heading(text: str) -> bool:
@@ -549,6 +783,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     kinds: dict[str, str] = {}
     claims: set[str] = set()
     headers = table_header_lines(answer)
+    numbered = numbered_heading_lines(answer)
     section: str | None = None
     options = False
     blank = False
@@ -563,6 +798,8 @@ def non_claim_passages(answer: str) -> dict[str, str]:
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])
+            if title is None and spans[0][2] in numbered:
+                title = spans[0][2]
             if title is not None:
                 if _UNVERIFIED_SECTION.search(title):
                     section = KIND_UNVERIFIED
@@ -595,6 +832,53 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     return {text: kind for text, kind in kinds.items() if text not in claims}
 
 
+# 補足の節の見出しの語（「補足（資料の記載）」の注記の括弧は見出しの語から外れる。
+# 「参考」は出典の節）。
+_SUPPLEMENT_SECTION = re.compile(r"(?:補足|注記|備考|注意|留意|その他)(?:事項|点|情報)?")
+# 補足を導く段落の頭（「なお、…」「補足：…」「注記（同シート A1:A2）：…」）。
+_SUPPLEMENT_LEAD = re.compile(
+    r"(?:なお|ちなみに)[、,]"
+    r"|(?:補足|注記|備考|注意|留意)(?:事項|点|情報)?\s*(?:[（(][^（）()\n]{1,60}[）)])?\s*[:：]"
+)
+
+
+def supplement_passages(answer: str) -> set[str]:
+    """回答の中の、補足の段落（補足の節の行と、「なお、」「補足：」で始まる段落。#1475）。
+
+    回答の対応（`answer_outcome`）が、結論の段落で答えた後の補足の不足の文（「現在の各環境の
+    設定値は資料からは分かりません。」）を不足の印にしないために使う。節（見出しが「補足」「注記」
+    「備考」など）は、`non_claim_passages` の節と同じく、次の見出しか、空行の後の箇条書きではない行
+    まで続く。同じ原文の段落が補足の外にもあれば、補足として扱わない（保守的にする）。
+    """
+    inside: set[str] = set()
+    outside: set[str] = set()
+    numbered = numbered_heading_lines(answer)
+    section = False
+    blank = False
+    for line in answer.split("\n"):
+        if not line.strip():
+            blank = True
+            continue
+        if blank and not _BULLET.match(line.strip()):
+            section = False
+        blank = False
+        spans = passage_spans(line)
+        if len(spans) == 1:
+            title = _heading_title(spans[0][2])
+            if title is None and spans[0][2] in numbered:
+                title = spans[0][2]
+            if title is not None:
+                section = bool(_SUPPLEMENT_SECTION.fullmatch(_EMPHASIS.sub("", title).strip()))
+                continue
+        for _start, _end, text in spans:
+            value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+            if section or _SUPPLEMENT_LEAD.match(value):
+                inside.add(text)
+            else:
+                outside.add(text)
+    return inside - outside
+
+
 def environment_check_passages(answer: str) -> set[str]:
     """回答の中の、利用者に現場のデータ・記録の確認を求める段落（主張ではない段落を除く。#1317）。"""
     kinds = non_claim_passages(answer)
@@ -617,11 +901,23 @@ _CLARIFY_NOTE = re.compile(
     # 答えた後の案内（「お答えいただいた内容に応じて、手順と必要な承認をご案内します。」）。
     r"|(?:お答え|ご回答|ご返答|回答)(?:いただいた|いただければ|いただき次第|の内容|に応じて)"
     r".*(?:ご案内|案内|お伝え|お知らせ|お答え|回答)(?:します|いたします|できます)[。．]?"
+    # 答えが分かった後の案内の結び（「付与先が分かりましたら、その場合の手順をご案内します。」。
+    # 回答が自ら案内する敬語の述語だけ。資料の主張の「案内します」は数えない）。
+    r"|[^。]{0,30}?(?:分かり|わかり|決まり|確認でき|お分かりになり)(?:ましたら|次第)"
+    r"[、,]?[^。]*(?:ご案内|ご説明|お伝え|お知らせ|お答え)(?:します|いたします|できます)[。．]?"
+    r"|[^。]{0,30}?(?:分かれば|わかれば|決まれば|伺えれば|お聞きできれば"
+    r"|(?:教えて|お知らせ|ご確認)(?:いただければ|いただけましたら|いただけると))"
+    r"[、,]?[^。]*(?:ご案内|ご説明|お伝え|お知らせ|お答え)(?:します|いたします|できます)[。．]?"
     # 確かめる理由（「この条件によって手順・答えが変わるため、まず確認しています。」）。
     r"|.*(?:によって|に応じて|次第で)[^。]*(?:変わる|異なる|分かれる)ため、?[^。]*"
     r"(?:確認|確かめ|お伺い|お聞き)(?:しています|します|いたします|させてください)[。．]?"
 )
 _CLARIFY_NOTE_EDGES = "（()）"
+# 前置き・案内に含まれると資料の主張とみなす数量（「3 営業日以内の手順」。`_ABSENCE_CLAIM` の
+# 数量に「営業日」などの複合の単位を足したもの。「条件を 1 つ」は数えない）。
+_CLARIFY_QUANTITY = re.compile(
+    r"[0-9０-９]+\s*(?:営業日|営業時間|円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年|名|人|GB|MB)"
+)
 
 
 def _is_clarification_question(text: str) -> bool:
@@ -632,11 +928,14 @@ def _is_clarification_question(text: str) -> bool:
 def _is_clarification_note(text: str) -> bool:
     """確認の質問に添える前置き・答え方の案内か（#1454。操作・数量・逆接を含む文は除く）。"""
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip().strip(_CLARIFY_NOTE_EDGES).strip()
+    # 括弧の中の「。」では段落を分けないので（#1455）、括弧の中の文ごとに確かめる。
+    sentences = [value[start:end].strip() for start, end in sentence_ranges(value)]
     return (
         bool(value)
-        and bool(_CLARIFY_NOTE.fullmatch(value))
+        and all(_CLARIFY_NOTE.fullmatch(sentence) for sentence in sentences if sentence)
         and not _OPERATION.search(value)
         and not _ABSENCE_CLAIM.search(value)
+        and not _CLARIFY_QUANTITY.search(value)
     )
 
 
@@ -673,15 +972,19 @@ __all__ = [
     "case_label",
     "case_labels",
     "environment_check_passages",
+    "heading_phrase",
     "is_absence",
     "is_citation",
     "is_clarification_only",
     "is_heading",
+    "is_lead_in",
     "is_question",
     "is_structure",
     "is_table_rule",
     "non_claim_passages",
+    "numbered_heading_lines",
     "passage_kind",
     "passage_spans",
+    "supplement_passages",
     "table_header_lines",
 ]
