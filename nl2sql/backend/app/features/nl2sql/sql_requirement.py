@@ -2111,7 +2111,8 @@ def build_sql_skeleton(draft: SqlRequirementDraft, context: RequirementContext) 
                 result.append(UNDECIDED_MARK.format(f"{item.label_ja}: {item.value_ja}"))
             elif not clear(item):
                 result.append(UNDECIDED_MARK.format(item.label_ja))
-        return result
+        # 同じ断片を 2 つの項目が持つとき（答えた並び順と AI の推測の並び順など）は 1 つにする。
+        return list(dict.fromkeys(result))
 
     lines: list[str] = []
     for item in items:

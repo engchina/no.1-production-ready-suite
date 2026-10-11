@@ -20,6 +20,7 @@ from test_nl2sql_guided_clarification import (
     _disable_profile_confirmation,
     _draft,
     _from_orders,
+    _item,
     _LegacyService,
     _output,
     _runtime,
@@ -396,3 +397,30 @@ def test_first_chat_turn_generation_uses_clarified_question(chat: ChatFixture) -
     assert job.question == "注文を見たい"
     assert "APP.ORDERS の一覧" in client.prompts[-1]
     assert "会話履歴" not in client.prompts[-1]
+
+
+def test_skeleton_does_not_repeat_the_same_fragment() -> None:
+    """会話の続きで、答えた並び順と AI の推測の並び順が同じ断片のとき、骨組みに 2 回出さない。"""
+
+    order = _item(
+        "order_count",
+        "order_by",
+        "inferred",
+        value="合計の降順",
+        sql_hint="SUM(ORDERS.AMOUNT) DESC",
+    )
+    again = _item(
+        "order_again",
+        "order_by",
+        "confirmed",
+        value="合計の降順",
+        sql_hint="SUM(ORDERS.AMOUNT) DESC",
+    )
+    runtime, _legacy = _chat_runtime(
+        _ScriptedLlm(_output(_from_orders(), _select_total(), _where_shipped(), order, again))
+    )
+
+    skeleton = _state(_create_chat(runtime, "多い順にして")).sql_skeleton
+
+    assert "ORDER BY SUM(ORDERS.AMOUNT) DESC\n" in skeleton + "\n"
+    assert skeleton.count("SUM(ORDERS.AMOUNT) DESC") == 1
