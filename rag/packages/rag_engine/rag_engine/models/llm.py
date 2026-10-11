@@ -1,8 +1,8 @@
 """外部 SDK に依存しない既存データ契約。"""
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 @dataclass(frozen=True)
 class RerankTextRank:
@@ -190,16 +190,56 @@ class RequestCoverage(_StrictModel):
     evidence_ids: list[str] = Field(default_factory=list, description="この要求に使う根拠の evidence_id（[E1] 形式の番号）。無ければ空にし、items では kind=gap にする。")
 
 
+class ExternalDataItem(_StrictModel):
+    """回答の確定に確かめる点 1 件と、その種類 (#1453)。
+
+    environment は利用者に聞いても分からない現場の値（設定値・ログ・記録・件数・処理の状態）で、回答の対応を
+    needs_environment_data にする。user_condition は利用者に聞けば分かる条件（質問で特定されていない対象・
+    利用者自身のロールや承認・付与先の種類）で、回答の適用の条件として conditional にする。
+    """
+    text: str = Field(description="確かめる点と照合の目的（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）。")
+    kind: Literal["environment", "user_condition"] = Field(
+        description="environment=利用者に聞いても分からない現場の値（設定値・ログ・記録・件数・処理の状態・対象レコードの値）。"
+                    "user_condition=利用者に聞けば分かる条件（質問で特定されていない対象（どのシステム・どの申請か）、"
+                    "利用者自身の状態（自分のロール・承認を得たか）、付与先・申請の種類）。迷うときは user_condition。")
+
+
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
     request_coverage: list[RequestCoverage] = Field(default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。")
     items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
-    external_data_required: bool = Field(default=False, description="未確認の実値・履歴に依存する結論が残るなら true。")
-    external_data_items: list[str] = Field(default_factory=list, max_length=10, description="回答の確定に確認が必要な実データ（対象レコード・設定値・CSV・ログ・個案の状態など）と照合の目的。資料は書かない。")
+    external_data_required: bool = Field(default=False, description="利用者に聞いても分からない現場の実値・履歴（kind=environment）に依存する結論が残るなら true。利用者に聞けば分かる条件（kind=user_condition）だけなら false。")
+    external_data_items: list[ExternalDataItem] = Field(default_factory=list, max_length=10, description="回答の確定に確かめる点（現場の実データと、利用者に確かめる条件）と照合の目的。種類を kind で分ける。資料は書かない。")
     reference_materials: list[str] = Field(default_factory=list, max_length=10, description="回答の確定に閲覧が必要な別の資料（規程・コード定義表・マスタ一覧・別マニュアルなど）と照合の目的。資料名は根拠の原文か質問に出た名前だけを「」で囲んで書き、無ければ資料の種類で書く。")
     question_type: list[str] = Field(default_factory=list, description="質問の種類の分類語（任意）。")
     summary: str = Field(description="items で裏付けた結論だけを1〜2文で。引用できる根拠が無ければ空文字。見出し・番号・出典・Markdown は書かない。")
     confidence: Literal["high", "medium", "low"] = Field(description="high=主要な説明と適用条件に直接の根拠がある。medium=一部に不確実性がある。low=案内自体に根拠が乏しい。")
+
+    @field_validator("external_data_items", mode="before")
+    @classmethod
+    def _plain_text_items_are_environment(cls, value: Any) -> Any:
+        # 種類の無い文字列だけの項目（構造化出力を強制できない接続の応答など）は、今までどおり現場の実データとして扱う。
+        if isinstance(value, list):
+            return [{"text": item, "kind": "environment"} if isinstance(item, str) else item for item in value]
+        return value
+
+    def environment_data_items(self) -> list[str]:
+        """現場の実データ（kind=environment）の確認。"""
+        return [item.text.strip() for item in self.external_data_items if item.kind == "environment" and item.text.strip()]
+
+    def user_condition_items(self) -> list[str]:
+        """利用者に確かめる条件（kind=user_condition）。"""
+        return [item.text.strip() for item in self.external_data_items if item.kind == "user_condition" and item.text.strip()]
+
+    def requires_environment_data(self) -> bool:
+        """回答の確定に現場の実データの確認が要るか (#1453)。
+
+        現場の実データの項目があれば要る。モデルが external_data_required を立てても、挙げた項目が利用者に確かめる
+        条件だけなら要らない（条件付きの回答にする）。項目が無く印だけのときは、今までどおり印に従う。
+        """
+        if self.environment_data_items():
+            return True
+        return self.external_data_required and not self.user_condition_items()
 
 
 class GroundedItemReview(_StrictModel):

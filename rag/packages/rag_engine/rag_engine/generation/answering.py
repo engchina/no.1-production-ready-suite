@@ -1376,6 +1376,11 @@ def synthesize_grounded_answer(
     gap_items = [grounded.CheckedItem(GroundedItem(kind="gap", text=gap)) for gap in gaps]
     # 回答の確定に必要な実データ・別の資料の確認。どの分岐でも本文の最後の節に出す (#688)。
     confirmations = grounded.confirmation_lines(current.draft, question, spans)
+    # 利用者に聞けば分かる条件（対象・ロール・承認など）。本文では同じ節の先頭に出し、回答の構造では
+    # 現場の実データではなく適用の条件にする (#1453)。
+    user_conditions = current.draft.user_condition_items()
+    confirmation_section = [*grounded.user_condition_lines(current.draft), *confirmations]
+    external_data_required = current.draft.requires_environment_data()
     # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
     envelope_entries: list[grounded.CheckedItem] = []
     if actionable:
@@ -1386,18 +1391,19 @@ def synthesize_grounded_answer(
         shown = [*published, *extra]
         envelope_entries = shown
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmations, unverified=unread)
+            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmation_section,
+            unverified=unread)
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
         # 根拠全体を見た監査が必要と挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
         shown = needed
         envelope_entries = needed
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmations, unverified=unread)
+            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmation_section, unverified=unread)
     elif published:
         envelope_entries = published
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, current.checked, reviewed_unanswered, confirmations, unverified=unread)
+            current.summary, current.checked, reviewed_unanswered, confirmation_section, unverified=unread)
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
         # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
@@ -1407,9 +1413,9 @@ def synthesize_grounded_answer(
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.CONFIRMATION_ONLY_SUMMARY if confirmations
+            grounded.CONFIRMATION_ONLY_SUMMARY if confirmation_section
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
-            [*related, *gap_items], confirmations=confirmations, unverified=unread)
+            [*related, *gap_items], confirmations=confirmation_section, unverified=unread)
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
     # 適用（applicability）は別の判定で、適用未確認（unverified）は人手確認の対象にする (#1012)。
     unsettled = [e for e in published if not e.quote_only and e.item.applies != "matched"]
@@ -1434,8 +1440,8 @@ def synthesize_grounded_answer(
         requests=current.requests,
         reviews=[review.model_dump() for review in current.audit.request_reviews] if current.audit else None,
         items=[envelope_item(entry) for entry in envelope_entries],
-        gaps=[*gaps, *unread], confirmations=confirmations,
-        external_data_required=bool(current.draft.external_data_required or current.draft.external_data_items),
+        gaps=[*gaps, *unread], confirmations=confirmations, user_conditions=user_conditions,
+        external_data_required=external_data_required,
         reference_materials=_string_list(current.draft.reference_materials), off_goal=off_goal,
     )
     response = _normalize_answer_response(AnswerResponse(
@@ -1445,10 +1451,10 @@ def synthesize_grounded_answer(
             "page": e.span.get("page", ""), "look_at": "引用", "visible_evidence": e.item.quote[:200]} for e in shown])),
         reasoning_summary=f"引用照合済みの説明 {current.verified} 件、原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、原文と一致せず除外 {len(current.dropped)} 件。",
         insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
-        needs_human_review=bool(gaps or unread or unanswered or current.problems or current.draft.external_data_required or unverified
+        needs_human_review=bool(gaps or unread or unanswered or current.problems or external_data_required or unverified
                                 or current.draft.reference_materials),
-        external_data_required=current.draft.external_data_required,
-        external_data_items=tuple(_string_list(current.draft.external_data_items)),
+        external_data_required=external_data_required,
+        external_data_items=tuple(current.draft.environment_data_items()),
         raw_text=current.draft.model_dump_json(),
         evidence_facts=tuple({"source_id": e.span["source_id"], "evidence_id": e.span["evidence_id"], "quote": e.item.quote}
                              for e in published),

@@ -275,6 +275,16 @@ _ENVIRONMENT_CHECK = re.compile(
     r"|(?:確認|照合|比較|チェック)(?:する必要が(?:あります|ある)|が必要(?:です)?)"
     r"|確かめる必要が(?:あります|ある)"
 )
+# 利用者に聞けば分かる条件（自分のロール・権限・承認、質問で特定されていない対象）を
+# 確かめる語（#1453）。これは現場のデータ・記録ではないので、記録そのもの（ログ・履歴・
+# 設定値・件数・明細）を確かめる語が無ければ、現場の確認を求める段落にしない。
+_USER_CONDITION = re.compile(
+    r"ロール(?:を|が)(?:持|お持|付与され)|権限(?:を|が)(?:持|お持)|承認(?:を|が)(?:得|取|受け|もら|あ|な)"
+    r"|(?:どの|対象の?)(?:システム|申請|アカウント|利用者|グループ)"
+)
+_RECORD_TARGET = re.compile(
+    r"ログ(?!イン|アウト|ラム)|\.log\b|記録|履歴|設定値|件数|明細|合計", re.IGNORECASE
+)
 # 出典の行に無い述語（括弧の外にあれば文。「…は **毎月 10 日** です（…）【….pdf】.」。#1317）。
 _PREDICATE_IN = re.compile(r"です|ます|ません|でした|ました|ください")
 _BRACKETS_ANY = re.compile(r"[（(【〔\[「『][^（()）【】〔〕\[\]「」『』\n]*[）)】〕\]」』]")
@@ -344,14 +354,19 @@ _HEADING_END = re.compile(
     # （「承認者がどう決まるか」）。
     r"|とき|場合|か)$"
 )
-# 番号（「1.」「（2）」）。番号つきの行は、終わりの語が一覧に無くても「…の…」の名詞句で、次の行が
-# その下の内容なら見出し（`numbered_heading_lines`。#1481）。
+# 番号（「1.」「（2）」）と箇条書きの印（「- 」「・」。強調の「**」は印に数えない）。番号つき・
+# 箇条書きの行は段落だけでは決めず、次の行がその下の内容のときだけ見出し（`list_heading_lines`。
+# #1481 / #1482 / #1486）。番号・箇条書きの行が続く一覧の項目は主張のまま。
 _HEADING_NUMBER = re.compile(r"^(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])")
+_HEADING_BULLET = re.compile(r"^(?:[-+・•]|\*(?!\*))")
 # 「…の…」の名詞句（「重要度 B の復旧目標」「連携元のシステム」）。「ので」「のに」「のみ」は名詞を
 # つなぐ「の」に数えない。
 _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
-# 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も下の内容）。
+# 番号つきの見出しの下の内容の行（箇条書き・「→」。字下げした行も、字下げした番号の行も下の内容）。
+# 箇条書きの見出しの下の内容は、字下げした行と「→」の行だけ（同じ字下げの箇条書きの行は同じ一覧の
+# 次の項目。#1486）。
 _SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
+_BULLET_SUB_CONTENT = re.compile(r"→")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の
 # 主張のまま。
 _HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
@@ -392,53 +407,67 @@ def _heading_note_ok(note: str) -> bool:
 def heading_phrase(text: str) -> str | None:
     """主張でない見出しの名詞句なら、注記の括弧・番号・強調を除いた見出しの語（#1469）。
 
-    見出しでなければ None。「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」
-    「回答に使った資料」「2. **重要度 A の連絡先と期限**」のように、句点で終わらない短い名詞句で、
-    項目・区分・資料の名前（`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。
-    述語（です・ます・する…）・操作・数量・言い切りの「は」を含む行（「重要度は A です」
-    「承認者は管理本部長」「1. **ID 管理システムの重要度は A**」）と、値の名前だけの行
-    （「1. 運行管理課長」）は主張のまま。終わりの語が一覧に無い番号つきの行は、回答の中の次の行で
-    決める（`numbered_heading_lines`。#1481）。
+    見出しでなければ None。「補足（資料の記載）」「根拠」「回答に使った資料」「**重要度 C の
+    システムで障害が起きたとき**」のように、句点で終わらない短い名詞句で、項目・区分・資料の名前
+    （`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。述語（です・ます・する…）・
+    操作・数量・言い切りの「は」を含む行（「重要度は A です」「承認者は管理本部長」）は主張のまま。
+    番号つき・箇条書きの行（「1. 人事評価システムの重要度」「- 組織規程（ご担当部署の承認者）」）は
+    段落だけでは見出しにせず、回答の中の次の行で決める（番号・箇条書きの行が続く一覧の項目は主張。
+    `list_heading_lines`。#1481 / #1482 / #1486）。
     """
     found = _heading_value(text)
-    return found[0] if found and _HEADING_END.search(found[0]) else None
+    if not found or _is_list_item(text):
+        return None
+    return found[0] if _HEADING_END.search(found[0]) else None
 
 
-def _numbered_heading_phrase(text: str) -> str | None:
-    """終わりの語に関係なく、番号つきの「…の…」の名詞句なら見出しの語（#1481）。
+def _is_list_item(text: str) -> bool:
+    """番号つきか箇条書きの行か（「1. …」「（2）…」「- …」「・…」。#1482 / #1486）。"""
+    value = text.strip()
+    return bool(_HEADING_NUMBER.match(value) or _HEADING_BULLET.match(value))
 
-    「2. 重要度 B の復旧目標」「1. 連携元のシステム」。人・組織・役職の名前で終わる行
-    （「1. 情報システム部の課長」）は値の主張のまま。
+
+def _list_heading_phrase(text: str) -> str | None:
+    """番号つき・箇条書きの見出しの語（「1. 人事評価システムの重要度」。#1481 / #1482 / #1486）。
+
+    終わりの語が一覧（`_HEADING_END`）にあるか、一覧に無くても「…の…」の名詞句のもの
+    （「2. 重要度 B の復旧目標」「- 重要度 B の復旧目標」）。人・組織・役職の名前で終わる
+    「…の…」の行（「1. 情報システム部の課長」）と、述語・操作・数量・言い切りの「は」を含む行
+    （「1. **ID 管理システムの重要度は A**」）は値の主張のまま。見出しかどうかは次の行で決める
+    （`list_heading_lines`）。
     """
     found = _heading_value(text)
-    if not found or not _HEADING_NUMBER.match(text.strip()):
+    if not found or not _is_list_item(text):
         return None
     value, outside = found
+    if _HEADING_END.search(value):
+        return value
     if _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value):
         return value
     return None
 
 
-def numbered_heading_lines(text: str) -> set[str]:
-    """回答の中の、終わりの語が一覧に無い番号つきの見出しの行（前後の空白を除いた行。#1481）。
+def list_heading_lines(text: str) -> set[str]:
+    """回答の中の、番号つき・箇条書きの見出しの行（前後の空白を除いた行。#1481 / #1482 / #1486）。
 
-    「1. 連携元のシステム」のような番号つきの「…の…」の名詞句で、次の（空でない）行がその下の
-    内容（字下げした行か箇条書き・「→」の行）のもの。番号の行が続く一覧（「申請書に書く 4 項目」の
-    「4. 作業の日時」）の行は、その一覧の内容なので主張のまま。RAG の
-    `operation_audit.numbered_heading_lines` と同じ規則。
+    番号つき・箇条書きの見出しの語（`_list_heading_phrase`）の行で、次の（空でない）行がその下の内容
+    のもの。番号つきの行の下の内容は、字下げした行か、箇条書き・「→」の行。箇条書きの行の下の内容は、
+    字下げした行（下位の箇条書き）か「→」の行で、同じ字下げの箇条書きの行は同じ一覧の次の項目。
+    番号・箇条書きの行が続く一覧（「申請書に書く 4 項目」の「1. 変更の内容と理由」〜
+    「4. 作業の日時」、「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」）の項目と、
+    下に内容の無い行は、終わりの語が一覧にあっても主張のまま（段落だけで決めると、一覧の項目を
+    見出しとして監査から外す。#1482 / #1486）。RAG の `operation_audit.list_heading_lines` と
+    同じ規則。
     """
     lines = [line for line in text.split("\n") if line.strip()]
     found = set()
     for line, following in zip(lines, lines[1:], strict=False):
         indent = len(line) - len(line.lstrip())
+        sub_content = _BULLET_SUB_CONTENT if _HEADING_BULLET.match(line.strip()) else _SUB_CONTENT
         below = len(following) - len(following.lstrip()) > indent or bool(
-            _SUB_CONTENT.match(following.strip())
+            sub_content.match(following.strip())
         )
-        if (
-            below
-            and not _HEADING_NUMBER.match(following.strip())
-            and _numbered_heading_phrase(line)
-        ):
+        if below and _list_heading_phrase(line):
             found.add(line.strip())
     return found
 
@@ -683,6 +712,36 @@ def is_absence(text: str) -> bool:
     return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
 
 
+# 結論の不足の文の前の、調べたことだけを述べる節（「資料を確認しましたが、」「確認できる根拠を
+# 検索しましたが、」。#1454）。
+_SEARCHED_LEAD = re.compile(
+    r".*?(?:検索|確認|調査|調べ|探)(?:し|い)?(?:ましたが|たが|ましたところ|たところ)、\s*"
+)
+# 結論の不足の文の述語（「該当する設定・手順は見つかりませんでした」「該当する記載を見つけられません
+# でした」）。主語は資料の記載・該当・設定・手順などに限る。
+_ABSENCE_CONCLUSION = re.compile(
+    r"(?:記載|記述|説明|情報|言及|該当|定め|規定|設定|手順|根拠|項目)[^。]{0,24}?"
+    r"(?:見つかりません|見つけられません|見当たりません|ありません|確認できません|確かめられません)"
+    r"(?:でした)?[。．]?$"
+)
+
+
+def is_absence_conclusion(text: str) -> bool:
+    """回答の結論の段落が、質問の対象が資料から確かめられないと述べるか（#1454）。
+
+    `is_absence` に加えて、前に調べたことだけを述べる節（「資料を確認しましたが、」）が付いた
+    不足の文も数える（段落の判定〔主張ではない段落〕には使わない。回答の対応を決めるときに、
+    最初の段落にだけ使う）。数量・逆接（前の節を除く）・操作を含む文は除く。
+    """
+    if is_absence(text):
+        return True
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    value = _TRAILING_NOTE.sub("", _SEARCHED_LEAD.sub("", value, count=1))
+    if not _ABSENCE_CONCLUSION.search(value):
+        return False
+    return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
+
+
 def case_label(text: str) -> str | None:
     """分岐の見出し・ラベル（「2. **個別に付与する場合**」「- グループの場合: …」）の語（#1317）。
 
@@ -713,12 +772,16 @@ def asks_environment_data(text: str) -> bool:
     「認証ログ（auth.log）でエラーの時刻の行を確認し、…」のように、確かめる対象と確かめる依頼の
     語の両方がある段落。操作の指示・質問は除く。主張かどうかとは別の印で、検証では主張として
     確かめる（資料に同じ見分け方があれば supported になる）。
+
+    利用者に聞けば分かる条件（「ポータル管理者」ロールを持つか・承認を得たか・対象のシステム）を
+    確かめるだけの段落は、記録そのもの（ログ・履歴・設定値など）を確かめる語が無ければ含めない（#1453）。
     """
     value = _strip_bullet(text)
     return (
         bool(_ENVIRONMENT_TARGET.search(value) and _ENVIRONMENT_CHECK.search(value))
         and not _OPERATION.search(value)
         and not is_question(value)
+        and not (_USER_CONDITION.search(value) and not _RECORD_TARGET.search(value))
     )
 
 
@@ -766,7 +829,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
     kinds: dict[str, str] = {}
     claims: set[str] = set()
     headers = table_header_lines(answer)
-    numbered = numbered_heading_lines(answer)
+    listed = list_heading_lines(answer)
     section: str | None = None
     options = False
     blank = False
@@ -781,7 +844,7 @@ def non_claim_passages(answer: str) -> dict[str, str]:
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])
-            if title is None and spans[0][2] in numbered:
+            if title is None and spans[0][2] in listed:
                 title = spans[0][2]
             if title is not None:
                 if _UNVERIFIED_SECTION.search(title):
@@ -835,7 +898,7 @@ def supplement_passages(answer: str) -> set[str]:
     """
     inside: set[str] = set()
     outside: set[str] = set()
-    numbered = numbered_heading_lines(answer)
+    listed = list_heading_lines(answer)
     section = False
     blank = False
     for line in answer.split("\n"):
@@ -848,7 +911,7 @@ def supplement_passages(answer: str) -> set[str]:
         spans = passage_spans(line)
         if len(spans) == 1:
             title = _heading_title(spans[0][2])
-            if title is None and spans[0][2] in numbered:
+            if title is None and spans[0][2] in listed:
                 title = spans[0][2]
             if title is not None:
                 section = bool(_SUPPLEMENT_SECTION.fullmatch(_EMPHASIS.sub("", title).strip()))
@@ -957,6 +1020,7 @@ __all__ = [
     "environment_check_passages",
     "heading_phrase",
     "is_absence",
+    "is_absence_conclusion",
     "is_citation",
     "is_clarification_only",
     "is_heading",
@@ -964,8 +1028,8 @@ __all__ = [
     "is_question",
     "is_structure",
     "is_table_rule",
+    "list_heading_lines",
     "non_claim_passages",
-    "numbered_heading_lines",
     "passage_kind",
     "passage_spans",
     "supplement_passages",

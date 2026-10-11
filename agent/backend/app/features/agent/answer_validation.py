@@ -46,8 +46,8 @@ from app.features.agent.answer_passages import (
     environment_check_passages,
     is_heading,
     is_structure,
+    list_heading_lines,
     non_claim_passages,
-    numbered_heading_lines,
     passage_spans,
     table_header_lines,
 )
@@ -571,11 +571,11 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """
     found: set[str] = set()
     headers = table_header_lines(answer)
-    # 次の行で決まる番号つきの見出しの行（#1481）。
-    numbered = numbered_heading_lines(answer)
+    # 次の行で決まる番号つき・箇条書きの見出しの行（#1481 / #1486）。
+    listed = list_heading_lines(answer)
 
     def structure(text: str) -> bool:
-        return is_structure(text) or text in headers or text in numbered
+        return is_structure(text) or text in headers or text in listed
 
     # （行, 見出しの行か, 中身のある行か）。消した見出しは None にする。
     kept: list[tuple[str, bool, bool] | None] = []
@@ -591,7 +591,7 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
         spans = passage_spans(line)
         withheld = [span for span in spans if span[2] in quotes]
         if not withheld:
-            if len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in numbered):
+            if len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed):
                 close_section()
                 heading, section_content, section_removed = len(kept), False, False
                 kept.append((line, True, False))
