@@ -10,19 +10,63 @@ from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
+# 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
+_BRACKET_PAIRS = {"「": "」", "『": "』", "（": "）", "(": ")", "【": "】"}
+_CLOSING_BRACKETS = frozenset(_BRACKET_PAIRS.values())
+# 前の文に付ける断片（太字・強調の印と閉じ括弧・句点だけ。#1455）。
+_MARKS_ONLY = re.compile(r"[\s*_`」』）)】。]*")
+
+
+def sentence_ranges(line: str) -> list[tuple[int, int]]:
+    """1 行を文に分けた範囲（開始・終了の位置。前後の空白を含む）。
+
+    「。」で文を分けるが、開いた括弧（「」『』（）()【】）の中の「。」では分けない（括弧の深さを数える。
+    #1455）。閉じない括弧は行の終わりまで続くとみなし、行の終わりで切る。開いていない閉じ括弧は数えない。
+    文の区切りの「。」の直後の閉じ括弧は前の文に含め、太字の印（`**`）・閉じ括弧だけの断片は前の文に付ける。
+    Agent の ``answer_passages.sentence_ranges`` と同じ規則（両方のテストが
+    platform/contracts/answer-passages/sentence-splits.json の同じ事例で確かめる）。
+    """
+    ranges: list[tuple[int, int]] = []
+    expected: list[str] = []
+    start = index = 0
+    while index < len(line):
+        char = line[index]
+        if char in _BRACKET_PAIRS:
+            expected.append(_BRACKET_PAIRS[char])
+        elif char in _CLOSING_BRACKETS and char in expected:
+            # 対応する開きの括弧まで閉じる（その間の閉じていない括弧も閉じたとみなす）。
+            while expected.pop() != char:
+                pass
+        elif char == "。" and not expected:
+            end = index + 1
+            while end < len(line) and line[end] in _CLOSING_BRACKETS:
+                end += 1
+            ranges.append((start, end))
+            start = index = end
+            continue
+        index += 1
+    if start < len(line):
+        ranges.append((start, len(line)))
+    merged: list[tuple[int, int]] = []
+    for begin, end in ranges:
+        if merged and _MARKS_ONLY.fullmatch(line[begin:end]):
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((begin, end))
+    return merged
 
 
 def answer_passages(text: str) -> list[dict[str, str]]:
     """改写せず文・改行で区切る。長文も600文字の連続範囲として保持する。
 
-    句点直後の閉じ括弧は同じ文に含める。「…。」の引用を句点で切ると、閉じ括弧だけの
-    段落ができて主張監査が完了しない。行全体が1つの「…」の引用（原文のみ提示の行。表の引用は
-    複数の文を含む）は、引用の途中で切らずに1段落として扱う。
+    句点直後の閉じ括弧は同じ文に含める。括弧の中の「。」では切らない（``sentence_ranges``。#1455）。
+    括弧の途中で切ると、検証で前の半分を外したときに閉じ括弧の残る断片が本文に残る。行全体が1つの
+    「…」の引用（原文のみ提示の行。表の引用は複数の文を含む）は、引用の途中で切らずに1段落として扱う。
     """
     result = []
     for line in text.split("\n"):
         pieces = [line] if _QUOTE_ONLY_LINE.fullmatch(line) else [
-            match.group() for match in re.finditer(r"[^。]+(?:。[」』）)]*|$)", line)]
+            line[begin:end] for begin, end in sentence_ranges(line)]
         for piece in pieces:
             value = piece.strip()
             for start in range(0, len(value), 600):
