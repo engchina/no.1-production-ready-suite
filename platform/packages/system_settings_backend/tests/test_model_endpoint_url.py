@@ -20,7 +20,11 @@ CASES = [
         "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
         "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1/responses",
     ),
-    ("https://api.deepseek.com/v1", "https://api.deepseek.com/v1", "https://api.deepseek.com/v1/responses"),
+    (
+        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com/v1/responses",
+    ),
     ("https://api.deepseek.com", "https://api.deepseek.com", "https://api.deepseek.com/responses"),
     # OCI の root URL にも path を補わない（利用者が /openai/v1 まで書く）。
     (
@@ -29,10 +33,21 @@ CASES = [
         "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/responses",
     ),
     # 前後の空白と末尾の / だけ除く。
-    ("  https://api.openai.com/v1/  ", "https://api.openai.com/v1", "https://api.openai.com/v1/responses"),
+    (
+        "  https://api.openai.com/v1/  ",
+        "https://api.openai.com/v1",
+        "https://api.openai.com/v1/responses",
+    ),
     ("", "", "/responses"),
 ]
-CASE_IDS = ["oci-openai-v1", "compatible-with-path", "compatible-without-path", "oci-root", "trim", "empty"]
+CASE_IDS = [
+    "oci-openai-v1",
+    "compatible-with-path",
+    "compatible-without-path",
+    "oci-root",
+    "trim",
+    "empty",
+]
 
 
 @pytest.mark.parametrize(("endpoint", "base_url", "request_url"), CASES, ids=CASE_IDS)

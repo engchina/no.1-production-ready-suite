@@ -210,6 +210,22 @@ API は 422 で「既定のテキストモデルを選択してください。�
   | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY` | ターシャリ接続の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
 
 - `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"`（ターシャリ接続は `"tertiary"`）を書く。
+- **Endpoint URL は入力どおり使い、path を補わない（#1440）。** 呼ぶ URL は `{Endpoint URL}{API path}`（既定 `/responses`）で、
+  3 製品の呼び出し・接続テストはすべて `pr_system_settings.model` の `enterprise_ai_base_url` / `enterprise_ai_request_url`
+  （接続の `base_url` / `request_url()`）で決める（前後の空白と末尾の `/` だけ除く）。OCI Enterprise AI も `/openai/v1` まで書き、
+  OpenAI 互換 API は API の base URL まで書く。
+
+  | 接続先 | Endpoint URL | 呼ぶ URL |
+  |---|---|---|
+  | OCI Enterprise AI | `https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1` | `…/openai/v1/responses` |
+  | OpenAI | `https://api.openai.com/v1` | `https://api.openai.com/v1/responses` |
+  | OpenAI 互換 API（例 DeepSeek） | `https://api.deepseek.com/v1` | `https://api.deepseek.com/v1/responses` |
+
+  以前の RAG（`rag_engine`）は path の無い Endpoint URL に `/openai/v1` を足していたため、`https://api.deepseek.com` では
+  `https://api.deepseek.com/openai/v1/responses`（404）を呼び、Agent（`https://api.deepseek.com/responses`）とずれていた。いまはどの製品も
+  同じ URL を呼ぶ。OCI の root URL（`https://inference.generativeai.<region>.oci.oraclecloud.com`）だけを書いた接続は `/responses` が
+  404 になるので、`/openai/v1` まで書き直す。`rag_engine` / `rag_parser_core` は platform に依存しないため、RAG の backend が
+  `base_url` で決めた値を渡し、両者は受け取った値をそのまま使う。
 - 実行時は、モデルを呼ぶたびに `enterprise_ai_connection_for_model(settings, model_id)` でそのモデルの接続を引く（3 製品の呼び出し・
   接続テスト・RAG の readiness / NL2SQL の診断）。接続を持たない ID（登録モデルにない ID、消えた接続を指すモデル）はプライマリ接続を使う。
 - env だけを受け取る部品は、使うモデルの接続を渡す。

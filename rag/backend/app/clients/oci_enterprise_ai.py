@@ -67,10 +67,11 @@ def config_from_settings(
     vision = enterprise_ai_connection_for_model(settings, vision_model_id)
     separate_vision = vision.connection_id != text.connection_id
     return OciEnterpriseAiConfig(
-        oci_enterprise_ai_endpoint=text.endpoint,
+        # Endpoint URL は platform の関数で base URL にして渡す(#1440。共有 core はそのまま使う)。
+        oci_enterprise_ai_endpoint=text.base_url,
         oci_enterprise_ai_api_key=text.api_key,
         oci_enterprise_ai_project_ocid=text.project_ocid,
-        vision_oci_enterprise_ai_endpoint=vision.endpoint if separate_vision else None,
+        vision_oci_enterprise_ai_endpoint=vision.base_url if separate_vision else None,
         vision_oci_enterprise_ai_api_key=vision.api_key if separate_vision else None,
         vision_oci_enterprise_ai_project_ocid=vision.project_ocid if separate_vision else None,
         oci_compartment_id=settings.oci_compartment_id,

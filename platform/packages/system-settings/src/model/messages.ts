@@ -91,9 +91,9 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.endpointDocs":
     "公式ドキュメント（新しいタブで開く）",
   "settings.model.enterprise.endpointHelp":
-    "公式 docs の OpenAI-compatible base URL を指定します。Responses API path は /responses です。",
+    "公式 docs の OpenAI-compatible base URL を /openai/v1 まで指定します。入力した URL に Responses API の /responses を付けて呼び出し、path は補いません。",
   "settings.model.enterprise.endpointHelpTertiary":
-    "OpenAI は https://api.openai.com/v1、OpenAI 互換 API や OCI Enterprise AI はその base URL を指定します。Responses API（/responses）で呼び出します。",
+    "API の base URL を path まで指定します（OpenAI は https://api.openai.com/v1、OpenAI 互換 API は https://api.deepseek.com/v1 など、OCI Enterprise AI は …/openai/v1）。入力した URL に /responses を付けて呼び出し、path は補いません。",
   "settings.model.enterprise.modelId": "モデル ID",
   "settings.model.enterprise.modelIdDuplicate":
     "モデル ID「{model}」はすでに登録されています。同じモデルは 1 行にまとめてください。",

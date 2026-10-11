@@ -576,9 +576,7 @@ def enterprise_ai_base_url(endpoint: str) -> str:
     return endpoint.strip().rstrip("/")
 
 
-def enterprise_ai_request_url(
-    endpoint: str, api_path: str = DEFAULT_ENTERPRISE_AI_API_PATH
-) -> str:
+def enterprise_ai_request_url(endpoint: str, api_path: str = DEFAULT_ENTERPRISE_AI_API_PATH) -> str:
     """接続の Endpoint URL と API path から、呼ぶ URL を決める（#1440）。
 
     `api_path` が空なら `/responses`。`http://` / `https://` で始まる `api_path` はそのまま使う。

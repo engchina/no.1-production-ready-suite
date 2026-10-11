@@ -251,12 +251,13 @@ def build_engine_settings(
     answer = enterprise_ai_connection_for_model(settings, answer_model)
     vision = enterprise_ai_connection_for_model(settings, vision_model)
     environ = {
-        "OCI_ENTERPRISE_AI_ENDPOINT": answer.endpoint,
+        # Endpoint URL は platform の関数で base URL にして渡す(#1440。rag_engine はそのまま使う)。
+        "OCI_ENTERPRISE_AI_ENDPOINT": answer.base_url,
         "OCI_ENTERPRISE_AI_API_KEY": answer.api_key,
         "OCI_ENTERPRISE_AI_PROJECT_OCID": answer.project_ocid,
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL": answer_model,
         "OCI_ENTERPRISE_AI_VLM_MODEL": vision_model,
-        "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.endpoint,
+        "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.base_url,
         "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
         "OCI_ENTERPRISE_AI_VLM_PROJECT_OCID": vision.project_ocid,
         # 推論(思考)の量はモデルごとの送る値(#1425。none は空 = 送らない)。

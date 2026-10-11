@@ -1617,7 +1617,9 @@ test("Endpoint URL の公式ドキュメントをキーボードで開き、未�
   await expect(docsLink).toHaveAttribute("href", docsUrl);
   await expect(docsLink).toHaveAttribute("target", "_blank");
   await expect(docsLink).toHaveAttribute("rel", "noopener noreferrer");
-  await expect(endpoint).toHaveAccessibleDescription(/OpenAI-compatible base URL.*\/responses.*公式ドキュメント/);
+  await expect(endpoint).toHaveAccessibleDescription(
+    /OpenAI-compatible base URL を \/openai\/v1 まで.*\/responses.*path は補いません.*公式ドキュメント/,
+  );
   await endpoint.fill("https://unsaved.example.com/openai/v1");
   await endpoint.press("Tab");
   await expect(docsLink).toBeFocused();
@@ -1969,6 +1971,10 @@ test("ターシャリ接続は Endpoint URL と API key だけで設定し、登
   await expect(apiKey).toHaveAttribute("aria-required", "true");
   await expect(project).not.toHaveAttribute("aria-required", "true");
   await expect(endpoint).toHaveAttribute("placeholder", "https://api.openai.com/v1");
+  // Endpoint URL は入力どおり使う（#1440）。書き方（path まで）と例を説明に出す。
+  await expect(endpoint).toHaveAccessibleDescription(
+    /base URL を path まで.*https:\/\/api\.openai\.com\/v1.*https:\/\/api\.deepseek\.com\/v1.*path は補いません/,
+  );
   await expect(apiKey).toHaveAttribute("placeholder", /^sk-/);
 
   await endpoint.fill("https://api.openai.com/v1");
