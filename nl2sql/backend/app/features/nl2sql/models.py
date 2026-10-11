@@ -14,6 +14,11 @@ from uuid import UUID
 
 from pr_backend_core import CursorPage
 from pr_backend_core.chat_progress import ChatProgressEvent
+from pr_system_settings.model import (
+    DEFAULT_ENTERPRISE_AI_SEED,
+    ENTERPRISE_AI_SEED_MAX,
+    ENTERPRISE_AI_SEED_MIN,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -275,6 +280,12 @@ class AllowedObjects(BaseModel):
 
 SELECT_AI_MAX_TOKENS_MIN = 4096
 SELECT_AI_MAX_TOKENS_MAX = 32000
+# Select AI の AI profile の `seed` 属性（#1434）。共通のモデル設定の seed と同じ既定（42）・範囲。
+# dev の ADB で `seed: 42` の profile を作れること（USER_CLOUD_AI_PROFILE_ATTRIBUTES に 42）、
+# 整数でない値（"abc"）は CREATE_PROFILE が ORA-06502 で拒むことを 2026-10-11 に確かめた。
+SELECT_AI_SEED_DEFAULT = DEFAULT_ENTERPRISE_AI_SEED
+SELECT_AI_SEED_MIN = ENTERPRISE_AI_SEED_MIN
+SELECT_AI_SEED_MAX = ENTERPRISE_AI_SEED_MAX
 PROFILE_IDENTIFIER_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -301,12 +312,25 @@ class ProfileSelectAiConfig(BaseModel):
         ge=SELECT_AI_MAX_TOKENS_MIN,
         le=SELECT_AI_MAX_TOKENS_MAX,
     )
+    # AI profile の `seed` 属性（#1434）。Select AI・Select AI Agent（同じ profile を使う）に効く。
+    seed: int = Field(
+        default=SELECT_AI_SEED_DEFAULT,
+        ge=SELECT_AI_SEED_MIN,
+        le=SELECT_AI_SEED_MAX,
+        strict=True,
+    )
     enforce_object_list: bool = True
     comments: bool = True
     annotations: bool = False
     constraints: bool = False
     role: str = ""
     additional_instructions: str = ""
+
+    @field_validator("seed", mode="before")
+    @classmethod
+    def default_seed(cls, value: object) -> object:
+        """値の無い保存済みの profile（#1434 より前）と None は既定の 42 にする。"""
+        return SELECT_AI_SEED_DEFAULT if value is None else value
 
 
 class ProfileSelectAiConfigPatch(BaseModel):
@@ -320,6 +344,12 @@ class ProfileSelectAiConfigPatch(BaseModel):
         default=None,
         ge=SELECT_AI_MAX_TOKENS_MIN,
         le=SELECT_AI_MAX_TOKENS_MAX,
+    )
+    seed: int | None = Field(
+        default=None,
+        ge=SELECT_AI_SEED_MIN,
+        le=SELECT_AI_SEED_MAX,
+        strict=True,
     )
     enforce_object_list: bool | None = None
     comments: bool | None = None

@@ -90,8 +90,11 @@ export { ModelSettingsPage, type ModelSettingsPageProps } from "./model/ModelSet
 export { MODEL_MESSAGES, type ModelMessageKey } from "./model/messages";
 export {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+  DEFAULT_ENTERPRISE_AI_SEED,
   ENTERPRISE_AI_CONNECTION_IDS,
   ENTERPRISE_AI_REASONING_EFFORTS,
+  ENTERPRISE_AI_SEED_MAX,
+  ENTERPRISE_AI_SEED_MIN,
   MAX_ENTERPRISE_AI_CONNECTIONS,
   MODEL_SETTINGS_QUERY_KEY,
   type EnterpriseAiConfiguredModel,

@@ -64,6 +64,14 @@ export const MODEL_MESSAGES = {
   "settings.model.defaults.vision": "既定の画像対応モデル",
   "settings.model.defaults.visionHelp":
     "画像を読み取る処理（文書解析の図・画像の読み取りなど）で使います。画像入力に対応したモデルだけを選べます。",
+  "settings.model.seed.title": "呼び出しの共通の設定",
+  "settings.model.seed.description":
+    "登録したすべてのモデルの呼び出し（LLM・VLM）に使う値です。登録モデルと一緒に保存します。",
+  "settings.model.seed.label": "seed",
+  "settings.model.seed.help":
+    "同じ入力から同じ出力を得やすくするための乱数の種で、0〜2147483647 の整数です（既定は 42）。3 製品の LLM・VLM の呼び出しに送ります。モデルが seed を受け付けても、同じ出力になるか（再現性）はモデル側の対応次第です。NL2SQL の Select AI・Select AI Agent は、業務プロファイルの Select AI 設定の seed（既定 42）を使います。",
+  "settings.model.seed.invalid":
+    "seed は 0〜2147483647 の整数で入力してください。",
   "settings.model.actions.label": "{section} の操作",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.apiKey": "API key",
@@ -101,7 +109,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.reasoningEffort": "推論の量",
   "settings.model.enterprise.reasoningEffortOfModel": "モデル {number} の推論の量",
   "settings.model.enterprise.reasoningEffortHelp":
-    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は medium で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。",
+    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は medium で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。NL2SQL の Select AI・Select AI Agent には推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。",
   "settings.model.enterprise.reasoningEffort.none": "none（送らない）",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",

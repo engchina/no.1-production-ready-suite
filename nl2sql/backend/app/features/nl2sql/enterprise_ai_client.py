@@ -23,6 +23,7 @@ from app.settings import (
     enterprise_ai_default_model_id,
     enterprise_ai_reasoning,
     enterprise_ai_vision_model_id,
+    seed_payload,
 )
 
 from .structured_outputs import validate_json_output
@@ -365,13 +366,18 @@ def _build_image_payload(
 
 
 def _with_reasoning(payload: dict[str, Any], settings: Settings, model_id: str) -> dict[str, Any]:
-    """モデルの推論（思考）の量を Responses API の `reasoning` に入れる（#1425。none は送らない）。
+    """モデルの推論（思考）の量と seed を入れる。
+
+    - 推論の量: Responses API の `reasoning`（#1425。none は送らない）
+    - seed: top-level の `seed`（#1434。全モデルで共通、既定 42。Responses API に seed の field が
+      無いため、OpenAI SDK の `extra_body` と同じ形）
 
     標準の payload だけに入れる（payload template の構成は template に任せる）。
     """
     reasoning = enterprise_ai_reasoning(settings, model_id)
     if reasoning is not None:
         payload["reasoning"] = reasoning
+    payload.update(seed_payload(settings))
     return payload
 
 

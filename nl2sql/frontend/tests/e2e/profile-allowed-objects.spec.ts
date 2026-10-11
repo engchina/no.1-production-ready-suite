@@ -1242,6 +1242,8 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   expect(payload?.select_ai_config).toMatchObject({
     profile_name: "SALES_PROFILE",
     embedding_model: "cohere.embed-v4.0",
+    // seed の無い保存済みの業務プロファイル（#1434 より前）は既定の 42 で保存する。
+    seed: 42,
     enforce_object_list: true,
     role: "財務分析向け Oracle SQL アシスタント",
     additional_instructions: "日付は DATE 型で返す。",
@@ -2134,6 +2136,7 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
     "profile-select-ai-model",
     "profile-select-ai-max-tokens",
     "profile-select-ai-embedding-model",
+    "profile-select-ai-seed",
   ]) {
     await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("必須");
     await expect(page.locator(`#${fieldId}`)).toHaveAttribute("aria-required", "true");
@@ -2206,6 +2209,19 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   await maxTokens.blur();
   await expect(maxTokens).toHaveValue("32000");
 
+  // AI profile の seed 属性（#1434）。既定 42・0〜2147483647 の整数で、Max Tokens の行の下に置く。
+  const seed = page.getByRole("spinbutton", { name: "seed" });
+  await expect(seed).toHaveValue("42");
+  await expect(seed).toHaveAttribute("min", "0");
+  await expect(seed).toHaveAttribute("max", "2147483647");
+  await expect(seed).toHaveAccessibleDescription(/AI profile の seed 属性.*既定は 42/);
+  const seedBox = await seed.boundingBox();
+  expect(seedBox!.y).toBeGreaterThan(maxTokensBox!.y + maxTokensBox!.height);
+  // 推論の量（共通のモデル設定）は Select AI・Select AI Agent に効かないことを常設で示す。
+  await expect(page.getByTestId("profile-select-ai-reasoning-note")).toHaveText(
+    /Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません/
+  );
+
   await page.setViewportSize({ width: 375, height: 900 });
   const mobileViewport = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -2229,9 +2245,14 @@ test("業務プロファイル必須項目は空欄保存を止める", async ({
   await page.getByLabel("カテゴリ").fill("販売");
   await page.getByLabel("LLM Model").fill("");
   await page.getByLabel("Embedding Model").fill("");
+  await page.getByRole("spinbutton", { name: "seed" }).fill("");
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
+  await expect(
+    page.getByRole("alert").filter({ hasText: "seed は 0〜2147483647 の整数で入力してください。" })
+  ).toBeVisible();
+  await expect(page.getByRole("spinbutton", { name: "seed" })).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("alert").filter({ hasText: "LLM Model を入力してください。" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "Embedding Model を入力してください。" })).toBeVisible();
   await expect(page.getByLabel("LLM Model")).toHaveAttribute("aria-invalid", "true");

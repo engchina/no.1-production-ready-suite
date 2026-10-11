@@ -766,6 +766,47 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`呼び出しの共通の seed は既定 42 で、不正な値は保存の前に止め、登録モデルと一緒に保存する（#1434, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const savedSeeds: unknown[] = [];
+    await mockModelSettings(page, (payload) => {
+      savedSeeds.push((payload as { enterprise_ai: { seed?: unknown } }).enterprise_ai.seed);
+    });
+    await page.goto("/settings/model");
+
+    const seed = page.getByRole("spinbutton", { name: "seed" });
+    // 値の無い応答（#1434 より前の設定）は既定の 42。
+    await expect(seed).toHaveValue("42");
+    await expect(page.getByRole("heading", { name: "呼び出しの共通の設定" })).toBeVisible();
+    // seed の説明（既定・Select AI は業務プロファイルの値）と、推論の量が Select AI に効かない注記を読める。
+    await expect(seed).toHaveAccessibleDescription(/既定は 42.*業務プロファイルの Select AI 設定の seed/);
+    await expect(
+      page.getByRole("combobox", { name: "モデル 1 の推論の量" })
+    ).toHaveAccessibleDescription(/Select AI・Select AI Agent には推論の量は効きません/);
+
+    // 空欄は保存の前に欄のエラーで止め、欄へフォーカスする（送らない）。
+    await seed.fill("");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("seed は 0〜2147483647 の整数で入力してください。")).toBeVisible();
+    await expect(seed).toBeFocused();
+    await expect(seed).toHaveAttribute("aria-invalid", "true");
+    expect(savedSeeds).toEqual([]);
+
+    await seed.fill("7");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(savedSeeds).toEqual([7]);
+    await expect(page.getByText("seed は 0〜2147483647 の整数で入力してください。")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+}
+
 async function mockModelSettings(
   page: Page,
   onPatch?: (payload: unknown) => void,

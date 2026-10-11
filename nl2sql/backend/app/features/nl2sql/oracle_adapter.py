@@ -28,6 +28,7 @@ from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.settings import Settings
 
 from .models import (
+    SELECT_AI_SEED_DEFAULT,
     CsvImportColumn,
     ExplainPlanData,
     ExplainPlanOperation,
@@ -4108,6 +4109,9 @@ class OracleNl2SqlAdapter:
             "annotations": True,
             "comments": True,
             "constraints": True,
+            # AI profile の seed 属性（#1434）。業務プロファイルから作る profile は
+            # `build_select_ai_profile_attributes` が業務プロファイルの値を入れる。
+            "seed": SELECT_AI_SEED_DEFAULT,
             "object_list": self._object_list(allowed_tables),
         }
         if self.settings.nl2sql_select_ai_credential_name:

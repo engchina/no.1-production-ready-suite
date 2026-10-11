@@ -7108,6 +7108,8 @@ class Nl2SqlService:
             "annotations": config.annotations,
             "constraints": config.constraints,
             "max_tokens": config.max_tokens,
+            # AI profile の seed 属性（#1434。業務プロファイルの Select AI 設定、既定 42）。
+            "seed": config.seed,
             "object_list": self._select_ai_object_list(self.profile_allowed_object_names(profile)),
         }
         credential_name = settings.nl2sql_select_ai_credential_name.strip()

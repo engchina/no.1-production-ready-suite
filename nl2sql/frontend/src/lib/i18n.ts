@@ -1588,6 +1588,8 @@ const nl2sqlJa = {
   "profiles.ontology.emptyHint":
     "上の「AI 構築 → Markdown 下書き確認 → オントロジーを公開」を完了すると、この Profile が許可した表・ビューと公開済みの関係が、関係グラフとしてここに表示されます。",
   "profiles.editor.selectAi": "Select AI 設定",
+  "profiles.selectAi.reasoningNote":
+    "Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。seed はこの設定の値を AI profile に入れます。",
   "profiles.ontologyBuild.title": "オントロジー構築",
   "profiles.ontologyBuild.hint":
     "スキーマ情報・業務説明・Q/A(質問と正解 SQL)から Markdown 下書きを生成します。公開済み Markdown だけが SQL 生成に使われます。",
@@ -1798,6 +1800,9 @@ const nl2sqlJa = {
   "profiles.field.model": "LLM Model",
   "profiles.field.embeddingModel": "Embedding Model",
   "profiles.field.maxTokens": "Max Tokens",
+  "profiles.field.seed": "seed",
+  "profiles.field.seedHint":
+    "AI profile の seed 属性として保存し、Select AI・Select AI Agent の SQL の生成に使います（0〜2147483647 の整数、既定は 42）。seed を受け付けても、同じ出力になるか（再現性）はモデル側の対応次第です。",
   "profiles.field.enforceObjectList": "Object List を強制",
   "profiles.field.comments": "コメントを利用",
   "profiles.field.annotations": "アノテーションを利用",
@@ -1950,6 +1955,7 @@ const nl2sqlJa = {
   "profiles.error.regionRequired": "Region を入力してください。",
   "profiles.error.modelRequired": "LLM Model を入力してください。",
   "profiles.error.maxTokensRequired": "Max Tokens を入力してください。",
+  "profiles.error.seedInvalid": "seed は 0〜2147483647 の整数で入力してください。",
   "profiles.error.embeddingModelRequired": "Embedding Model を入力してください。",
 
   "glossary.subtitle": "全プロファイル共通の用語・同義語を管理します。",

@@ -54,6 +54,7 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_max_retries: int = 3
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    oci_enterprise_ai_seed: int = 42
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"

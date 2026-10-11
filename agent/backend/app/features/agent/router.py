@@ -65,6 +65,7 @@ from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     model_payload,
     reasoning_payload,
+    seed_to_send,
 )
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -821,9 +822,11 @@ def _enterprise_text_payload(
 def _with_model_reasoning(
     settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """テストするモデルの推論（思考）の量を `reasoning` に入れる（#1425。none は送らない）。
+    """テストするモデルの推論（思考）の量を `reasoning` に、seed を top-level の `seed` に入れる。
 
-    画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
+    推論の量は #1425（none は送らない）、seed は #1434（全モデルで共通、既定 42）。
+    画面の保存前の値（`settings.models` / `settings.seed`）で呼ぶので、選んだ値をモデルが
+    受け付けるかを確かめられる。
     """
     effort = next(
         (model.reasoning_effort for model in settings.models if model.model_id == model_id),
@@ -832,6 +835,7 @@ def _with_model_reasoning(
     reasoning = reasoning_payload(effort)
     if reasoning is not None:
         payload["reasoning"] = reasoning
+    payload["seed"] = seed_to_send(settings.seed)
     return payload
 
 

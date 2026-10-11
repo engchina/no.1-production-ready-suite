@@ -112,6 +112,8 @@ export interface ProfileSelectAiConfig {
   model: string;
   embedding_model: string;
   max_tokens: number;
+  /** AI profile の seed 属性（#1434。0〜2147483647 の整数、既定 42）。入力中の空欄は NaN。 */
+  seed: number;
   enforce_object_list: boolean;
   comments: boolean;
   annotations: boolean;
