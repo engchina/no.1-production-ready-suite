@@ -508,100 +508,167 @@ class ClarificationMode(StrEnum):
     GUIDED = "guided"
 
 
-class ClarificationStatus(StrEnum):
-    NEEDS_ANSWER = "needs_answer"
-    READY_TO_CONFIRM = "ready_to_confirm"
-    UNANSWERABLE = "unanswerable"
+class RequirementSection(StrEnum):
+    """AI要件確認の「SQL の要件の下書き」の欄（#1439）。
+
+    GROUP BY・ORDER BY・件数の上限は SELECT と別の独立した欄にする。WITH / サブクエリと
+    相対的な期間も独立した欄。LLM が SQL の生成に要ると判断した、ほかの項目は OTHER。
+    """
+
+    SELECT = "select"
+    FROM = "from"
+    JOIN = "join"
+    WHERE = "where"
+    PERIOD = "period"
+    GROUP_BY = "group_by"
+    ORDER_BY = "order_by"
+    LIMIT = "limit"
+    SUBQUERY = "subquery"
+    OTHER = "other"
 
 
-class ClarificationCategory(StrEnum):
-    BUSINESS_MEANING = "business_meaning"
-    RELATIONSHIP_PATH = "relationship_path"
-    FILTER_VALUE = "filter_value"
-    TIME_RANGE = "time_range"
-    GRANULARITY = "granularity"
-    OUTPUT = "output"
+class RequirementStatus(StrEnum):
+    """項目の状態。確定 / AI の推測 / 不足 / あいまい。"""
+
+    CONFIRMED = "confirmed"
+    INFERRED = "inferred"
+    MISSING = "missing"
+    AMBIGUOUS = "ambiguous"
 
 
-class ClarificationAnswerKind(StrEnum):
+class RequirementSource(StrEnum):
+    """候補・推測の根拠。表のデータ（代表値・件数）は根拠にしない。"""
+
+    USER = "user"
+    QUESTION = "question"
+    SCHEMA = "schema"
+    PROFILE = "profile"
+    GLOSSARY = "glossary"
+    ONTOLOGY = "ontology"
+    CALENDAR = "calendar"
+
+
+class RequirementAnswerKind(StrEnum):
     SINGLE_SELECT = "single_select"
     MULTI_SELECT = "multi_select"
-    DATE_RANGE = "date_range"
-    NUMBER = "number"
     FREE_TEXT = "free_text"
 
 
-class ClarificationEvidenceSource(StrEnum):
-    USER = "user"
-    PROFILE = "profile"
-    ONTOLOGY = "ontology"
-    SCHEMA = "schema"
-    DEFAULT = "default"
+class RequirementReferenceBasis(StrEnum):
+    """相対的な期間の基準日。データを読まないため、実行日を既定の候補にする。"""
+
+    EXECUTION_DATE = "execution_date"
+    LATEST_DATA_DATE = "latest_data_date"
 
 
-class ClarificationOption(OntologyContract):
+class RequirementPeriod(OntologyContract):
+    """相対的な期間の表現（「今年度」「先月」など）を、具体的な日付の範囲にしたもの。"""
+
+    expression_ja: str = ""
+    relative_kind: str = ""
+    count: int | None = Field(default=None, ge=1, le=120)
+    fiscal_year_start_month: int | None = Field(default=None, ge=1, le=12)
+    fiscal_year_start_source: str = ""
+    reference_basis: RequirementReferenceBasis = RequirementReferenceBasis.EXECUTION_DATE
+    reference_date: str = ""
+    # 物理名（`TABLE.COLUMN`）。
+    date_column: str = ""
+    # 両端を含む日付（`YYYY-MM-DD`）。基準日がデータの最新日のときは空（SQL で求める）。
+    start_date: str = ""
+    end_date: str = ""
+    range_ja: str = ""
+    sql_condition: str = ""
+
+
+class RequirementCandidate(OntologyContract):
+    """質問に答えるときの候補。Schema・業務プロファイル・用語集・オントロジーの根拠があるものだけ。"""
+
     id: str = Field(min_length=1)
     label_ja: str = Field(min_length=1)
     description_ja: str = ""
-    ontology_node_ids: list[str] = Field(default_factory=list)
-    relationship_path_id: str = ""
-    structured_value: Any = None
-    source: ClarificationEvidenceSource = ClarificationEvidenceSource.ONTOLOGY
     evidence_ja: str = ""
+    source: RequirementSource = RequirementSource.SCHEMA
+    # 表は `OWNER.TABLE`、列は `OWNER.TABLE.COLUMN` の物理名（Schema に実在するもの）。
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    relationship_ids: list[str] = Field(default_factory=list)
+    sql_hint: str = ""
+    period: RequirementPeriod | None = None
+    # 画面に出す物理名（論理名を括弧で添える）。プログラムが Schema から作る。
+    refs_ja: str = ""
 
 
-class ClarificationQuestion(OntologyContract):
+class RequirementItem(OntologyContract):
+    """SQL の要件の 1 項目。"""
+
     id: str = Field(min_length=1)
-    ambiguity_id: str = ""
-    summary_key: str = ""
-    category: ClarificationCategory
-    prompt_ja: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    section: RequirementSection
+    label_ja: str = Field(min_length=1)
+    value_ja: str = ""
+    status: RequirementStatus
     reason_ja: str = ""
-    answer_kind: ClarificationAnswerKind = ClarificationAnswerKind.SINGLE_SELECT
-    options: list[ClarificationOption] = Field(default_factory=list)
-    allow_free_text: bool = True
-    blocking: bool = True
+    question_ja: str = ""
+    answer_kind: RequirementAnswerKind = RequirementAnswerKind.FREE_TEXT
+    candidates: list[RequirementCandidate] = Field(default_factory=list)
+    source: RequirementSource = RequirementSource.QUESTION
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    relationship_ids: list[str] = Field(default_factory=list)
+    sql_hint: str = ""
+    period: RequirementPeriod | None = None
+    refs_ja: str = ""
+    # 利用者が答えた・直した項目。以後の LLM の検査でも変えない。
+    answered: bool = False
+    answer_ja: str = ""
 
 
-class ClarificationAnswer(OntologyContract):
-    question_id: str = Field(min_length=1)
-    selected_option_ids: list[str] = Field(default_factory=list)
+class SqlRequirementDraft(OntologyContract):
+    """LLM が作り、プログラムが検査した「SQL の要件の下書き」。"""
+
+    version: int = Field(default=1, ge=1)
+    question_original: str = Field(min_length=1)
+    clarified_question_ja: str = ""
+    items: list[RequirementItem] = Field(default_factory=list)
+    unanswerable_reason_ja: str = ""
+    warnings_ja: list[str] = Field(default_factory=list)
+    reference_date: str = ""
+    model: str = ""
+    # 確定した要件から、プログラムが決定的に組み立てた SQL の骨組み（実行しない。生成の SQL ではない）。
+    sql_skeleton: str = ""
+
+
+class RequirementAnswerRecord(OntologyContract):
+    item_id: str = Field(min_length=1)
+    item_key: str = ""
+    selected_candidate_ids: list[str] = Field(default_factory=list)
     free_text: str = Field(default="", max_length=2000)
-    structured_value: Any = None
+    draft_version: int = Field(default=1, ge=1)
     answered_at: datetime = Field(default_factory=utc_now)
 
 
-class ClarificationTurn(OntologyContract):
-    question: ClarificationQuestion
-    answer: ClarificationAnswer
-    intent_version: int = Field(ge=1)
-    schema_version: str = "guided_clarification_v1"
-    prompt_version: str = "deterministic_first_v1"
-    model: str = ""
+class RequirementPhase(StrEnum):
+    NEEDS_ANSWER = "needs_answer"
+    READY = "ready"
+    UNANSWERABLE = "unanswerable"
 
 
-class IntentSummaryItem(OntologyContract):
-    key: str = Field(min_length=1)
-    label_ja: str = Field(min_length=1)
-    value_ja: str = Field(min_length=1)
-    source: ClarificationEvidenceSource
-    confirmed: bool = False
-    technical_evidence_ja: str = ""
+class RequirementState(OntologyContract):
+    """画面に返す確認の状態（保存しない。session と下書きからプログラムで作る）。"""
 
-
-class ClarificationState(OntologyContract):
-    status: ClarificationStatus
-    current_question: ClarificationQuestion | None = None
-    remaining_questions: list[ClarificationQuestion] = Field(default_factory=list)
-    intent_summary: list[IntentSummaryItem] = Field(default_factory=list)
-    required_total: int = Field(default=0, ge=0)
-    required_confirmed: int = Field(default=0, ge=0)
-    missing_required: list[str] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
-    turn_count: int = Field(default=0, ge=0)
-    manual_completion_required: bool = False
-    can_generate_sql: bool = False
-    schema_version: str = "guided_clarification_v1"
+    status: RequirementPhase
+    current_item: RequirementItem | None = None
+    unresolved_items: list[RequirementItem] = Field(default_factory=list)
+    answered_count: int = Field(default=0, ge=0)
+    review_round: int = Field(default=0, ge=0)
+    max_review_rounds: int = Field(default=1, ge=1)
+    review_limit_reached: bool = False
+    # 最低の基準: SELECT（何を出すか）と FROM（どの表から）が明確。
+    select_from_clear: bool = False
+    minimum_missing_ja: list[str] = Field(default_factory=list)
+    can_apply: bool = False
+    summary_ja: str = ""
+    sql_skeleton: str = ""
     message_ja: str = ""
 
 
@@ -1237,7 +1304,11 @@ class QuerySession(OntologyContract):
     sql_confirmation: SqlConfirmationBinding | None = None
     execution: QueryExecutionRecord | None = None
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
-    clarification_turns: list[ClarificationTurn] = Field(default_factory=list)
+    # AI要件確認（guided）の SQL の要件の下書き・回答・LLM の検査の回数（#1439）。
+    requirement: SqlRequirementDraft | None = None
+    requirement_answers: list[RequirementAnswerRecord] = Field(default_factory=list)
+    requirement_review_round: int = Field(default=0, ge=0)
+    requirement_applied_at: datetime | None = None
     proposal_ids: list[str] = Field(default_factory=list)
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False

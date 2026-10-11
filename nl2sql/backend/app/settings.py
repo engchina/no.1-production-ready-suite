@@ -236,6 +236,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 操作が途絶えた未完了の query session（AI要件確認など）を中止するまでの時間（秒）。
     # 画面の中止・再読込の後始末が届かなかった session（ブラウザの異常終了・通信断）を残さない。
     nl2sql_query_session_idle_ttl_seconds: int = Field(default=86_400, ge=600, le=2_592_000)
+    # AI要件確認で、全部の質問に答えた後に要件のまとめを LLM で検査し直す回数の上限（#1439）。
+    # 上限に達したら、残った確認の項目を画面に明示し、利用者が SQL の生成に進むかを決める。
+    nl2sql_requirement_max_review_rounds: int = Field(default=3, ge=1, le=10)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""
