@@ -623,6 +623,17 @@ class RequirementItem(OntologyContract):
     answer_ja: str = ""
 
 
+class RequirementConversationTurn(OntologyContract):
+    """チャットの AI要件確認に渡す、同じ会話の前のターン（質問と生成した SQL。#1442）。
+
+    結果の行・個人情報・権限設定は持たない。LLM には参照資料として渡す。
+    """
+
+    question: str = Field(default="", max_length=10000)
+    sql: str = Field(default="", max_length=16000)
+    status: str = ""
+
+
 class SqlRequirementDraft(OntologyContract):
     """LLM が作り、プログラムが検査した「SQL の要件の下書き」。"""
 
@@ -1310,6 +1321,12 @@ class QuerySession(OntologyContract):
     requirement_answers: list[RequirementAnswerRecord] = Field(default_factory=list)
     requirement_review_round: int = Field(default=0, ge=0)
     requirement_applied_at: datetime | None = None
+    # チャットの AI要件確認（#1442）。会話の続き（前のターンの job）と、要件の検査に渡した
+    # 会話の履歴。チャットの session はチャットのジョブにだけ、SQL 生成の画面の session は
+    # SQL 生成の画面にだけ使う。
+    chat: bool = False
+    chat_previous_job_id: str | None = None
+    conversation_history: list[RequirementConversationTurn] = Field(default_factory=list)
     proposal_ids: list[str] = Field(default_factory=list)
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
@@ -1330,6 +1347,9 @@ class QuerySessionCreate(OntologyContract):
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
+    chat: bool = False
+    chat_previous_job_id: str | None = None
+    conversation_history: list[RequirementConversationTurn] = Field(default_factory=list)
 
 
 class SqlConfirmationRequest(OntologyContract):

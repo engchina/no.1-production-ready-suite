@@ -22,7 +22,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
@@ -94,6 +94,7 @@ from .ontology_models import (
     QuerySessionStatus,
     QuestionIntentGraph,
     RequirementAnswerRecord,
+    RequirementConversationTurn,
     RequirementState,
     SqlConfirmationRequest,
     utc_now,
@@ -388,6 +389,19 @@ class QuerySessionApiCreate(OntologyContract):
     engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     profile_confirmation_token: str = ""
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
+    # チャットの AI要件確認（#1442）。業務プロファイルはチャットの画面で利用者が選んでいるので、
+    # 推薦の確認（profile_confirmation_token）は求めない。`previous_job_id` は同じ会話の前の
+    # ターンで、その会話の履歴（前の質問と SQL）を要件の検査に渡す。
+    chat: bool = False
+    previous_job_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_chat(self) -> QuerySessionApiCreate:
+        if self.chat and self.clarification_mode != ClarificationMode.GUIDED:
+            raise ValueError("チャットでは AI要件確認（guided）だけを使えます。")
+        if self.previous_job_id and not self.chat:
+            raise ValueError("会話の続きはチャットの AI要件確認で指定できます。")
+        return self
 
 
 class ClarificationAnswerRequest(OntologyContract):
@@ -2897,7 +2911,10 @@ class OntologyApiRuntime:
                     if request.clarification_mode != ClarificationMode.GUIDED:
                         raise
                     ontology_current = False
-            recommendation_id = self._validate_profile_confirmation(request, ontology)
+            # チャットは業務プロファイルを画面で選んでいる（推薦の確認は無い。#1442）。
+            recommendation_id = (
+                "" if request.chat else self._validate_profile_confirmation(request, ontology)
+            )
             base_view = self._base_profile_view(profile, ontology)
             allowed = self.legacy_service.resolve_allowed_objects(
                 profile.id,
@@ -2994,6 +3011,7 @@ class OntologyApiRuntime:
         ontology: SchemaOntology,
         view: ProfileOntologyView,
         allowed: AllowedObjects,
+        conversation: list[RequirementConversationTurn] | None = None,
     ) -> RequirementContext:
         try:
             # SQL の生成と同じく、業務プロファイルの範囲の Schema を読む（増分の store では表ごとの
@@ -3017,7 +3035,49 @@ class OntologyApiRuntime:
             ontology=ontology,
             view=view,
             today=self._requirement_today(),
+            conversation=[turn.model_dump(mode="json") for turn in conversation or []],
         )
+
+    def _requirement_conversation(
+        self,
+        request: QuerySessionApiCreate,
+        *,
+        actor_user_uuid: str,
+    ) -> list[RequirementConversationTurn]:
+        """チャットの同じ会話の前のターン（質問と SQL）を読む（#1442。結果の行は読まない）。"""
+
+        if not request.chat:
+            return []
+        reader = getattr(self.legacy_service, "chat_requirement_history", None)
+        if not callable(reader):
+            return []
+        if not request.previous_job_id:
+            if not actor_user_uuid:
+                raise OntologyStateConflictError(
+                    "CHAT_ACTOR_REQUIRED", "会話には認証済みの利用者が必要です。"
+                )
+            return []
+        try:
+            turns = reader(
+                question=request.question,
+                profile_id=request.profile_id,
+                previous_job_id=request.previous_job_id,
+                actor_user_uuid=actor_user_uuid,
+            )
+        except PermissionError as exc:
+            raise OntologyStateConflictError(
+                "CHAT_CONVERSATION_FORBIDDEN", str(exc) or "他の利用者の会話は継続できません。"
+            ) from exc
+        except ValueError as exc:
+            raise OntologyStateConflictError("CHAT_CONVERSATION_INVALID", str(exc)) from exc
+        return [
+            RequirementConversationTurn(
+                question=str(turn.get("query") or "")[:10000],
+                sql=str(turn.get("sql") or "")[:16000],
+                status=str(turn.get("status") or ""),
+            )
+            for turn in turns
+        ]
 
     def _requirement_client(self) -> Any:
         return getattr(self.legacy_service, "_enterprise_ai_client", None)
@@ -3038,12 +3098,14 @@ class OntologyApiRuntime:
     ) -> QuerySessionData:
         """Schema・業務プロファイル・オントロジーで、LLM 1 回の SQL の要件の下書きを作る。"""
 
+        conversation = self._requirement_conversation(request, actor_user_uuid=actor_user_uuid)
         context = self._requirement_context(
             question=request.question,
             profile=profile,
             ontology=ontology,
             view=view,
             allowed=allowed,
+            conversation=conversation,
         )
         if not ontology_current:
             context.ontology_concepts = []
@@ -3082,6 +3144,9 @@ class OntologyApiRuntime:
                     clarification_mode=ClarificationMode.GUIDED,
                     actor_user_uuid=actor_user_uuid,
                     actor_is_system_admin=actor_is_system_admin,
+                    chat=request.chat,
+                    chat_previous_job_id=request.previous_job_id,
+                    conversation_history=conversation,
                 ),
                 draft=draft,
             )
@@ -3992,6 +4057,7 @@ class OntologyApiRuntime:
             ontology=ontology,
             view=view,
             allowed=allowed,
+            conversation=current.conversation_history,
         )
         if runtime_context is not None and not runtime_context.requirement_ontology_current:
             context.ontology_concepts = []
@@ -4096,11 +4162,15 @@ class OntologyApiRuntime:
         actor_is_system_admin: bool,
         profile_id: str,
         question: str,
+        chat: bool = False,
+        previous_job_id: str | None = None,
     ) -> SqlRequirementSpec:
         """SQL の生成の job に渡す、反映済みの AI要件確認の構造化した要件（#1439）。
 
         本人の session・同じ業務プロファイル・反映済み・反映した質問の文と同じ質問だけを受け付ける
-        （画面で質問の文を書き換えたら、要件は渡さない）。
+        （画面で質問の文を書き換えたら、要件は渡さない）。チャットのジョブ（#1442）は、チャットで
+        確かめた session・同じ会話の続き（前のターン）・利用者が送った質問の文と同じものだけを
+        受け付ける（チャットの吹き出しには利用者の質問を残し、生成は確かめた質問の文で行う）。
         """
 
         with self._lock:
@@ -4126,6 +4196,24 @@ class OntologyApiRuntime:
                 "REQUIREMENT_PROFILE_MISMATCH",
                 "AI要件確認の業務プロファイルと、SQL を生成する業務プロファイルが違います。",
             )
+        if session.chat != chat:
+            raise OntologyStateConflictError(
+                "REQUIREMENT_SESSION_KIND_MISMATCH",
+                "チャットで確かめた要件はチャットに、SQL 生成の画面で確かめた要件は"
+                " SQL 生成の画面にだけ使えます。",
+            )
+        if chat:
+            if (session.chat_previous_job_id or None) != (previous_job_id or None):
+                raise OntologyStateConflictError(
+                    "REQUIREMENT_CONVERSATION_CHANGED",
+                    "会話が AI要件確認の後に変わりました。もう一度質問を送ってください。",
+                )
+            if question.strip() != session.original_question.strip():
+                raise OntologyStateConflictError(
+                    "REQUIREMENT_QUESTION_CHANGED",
+                    "質問の文が AI要件確認で確かめた質問と違います。もう一度質問を送ってください。",
+                )
+            return generation_spec(session)
         if question.strip() != session.requirement.clarified_question_ja.strip():
             raise OntologyStateConflictError(
                 "REQUIREMENT_QUESTION_CHANGED",
