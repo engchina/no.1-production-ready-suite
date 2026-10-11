@@ -23,13 +23,13 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
 
 
 def test_answer_timeout_default_and_limit() -> None:
-    """回答生成は既定 300 秒・上限は LLM 1 回の timeout の上限。
+    """回答生成は既定 600 秒（#1425）・上限は LLM 1 回の timeout の上限。
 
     検索だけの上限（旧 rag_search_timeout_seconds）は #383 で削除した（品質評価の 1 ケースも
     回答生成の上限で打ち切る）。
     """
     settings = Settings()
-    assert settings.rag_answer_timeout_seconds == 300.0
+    assert settings.rag_answer_timeout_seconds == 600.0 == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
     assert not hasattr(settings, "rag_search_timeout_seconds")
     assert Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS)
     with pytest.raises(ValidationError):
@@ -42,7 +42,7 @@ def test_answer_timeout_env_example_documents_setting() -> None:
     from pathlib import Path
 
     env_example = Path(__file__).resolve().parents[1] / ".env.example"
-    assert "RAG_ANSWER_TIMEOUT_SECONDS=300" in env_example.read_text(encoding="utf-8")
+    assert "RAG_ANSWER_TIMEOUT_SECONDS=600" in env_example.read_text(encoding="utf-8")
 
 
 def test_answer_timeout_message_names_stage_and_retry() -> None:

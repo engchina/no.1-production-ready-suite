@@ -154,3 +154,8 @@ def test_model_test_shows_rejection_body(monkeypatch: pytest.MonkeyPatch) -> Non
     with pytest.raises(ValueError, match="HTTP 400") as raised:
         anyio.run(agent_router._run_model_settings_test, candidate, request)
     assert reason in str(raised.value)
+
+
+def test_rag_mcp_timeout_default_outlasts_rag_answer_timeout() -> None:
+    """`rag_search` は RAG の回答生成（既定 600 秒）を通しで待つので、既定はそれより長い。"""
+    assert Settings(_env_file=None).agent_external_rag_timeout_seconds == 630.0

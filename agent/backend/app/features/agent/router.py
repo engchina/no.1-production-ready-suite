@@ -307,7 +307,8 @@ _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
 
 
-_MCP_TIMEOUT_MAX_SECONDS = 600
+# 接続 `rag` の既定（630 秒。RAG の回答の上限 600 秒より長い。#1425）を画面でも保存し直せる上限。
+_MCP_TIMEOUT_MAX_SECONDS = 900
 
 
 def _validate_mcp_timeout(value: float | None) -> float | None:
