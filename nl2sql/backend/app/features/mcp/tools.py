@@ -198,6 +198,7 @@ class RequirementAnswerInput(_Input):
         description=(
             "利用者が選んだ候補の ID（requirement.question.candidates の id）。"
             "候補に無い答えは free_text に入れる"
+            "（selected_candidate_ids と free_text はどちらか一方）"
         ),
     )
     free_text: str = Field(
@@ -206,8 +207,11 @@ class RequirementAnswerInput(_Input):
 
     @model_validator(mode="after")
     def _require_answer(self) -> RequirementAnswerInput:
-        if not self.selected_candidate_ids and not self.free_text.strip():
-            raise ValueError("selected_candidate_ids か free_text のどちらかを指定してください。")
+        # 画面の AI要件確認と同じく、候補を選ぶか自由入力のどちらか一方で答える。
+        if bool(self.selected_candidate_ids) == bool(self.free_text.strip()):
+            raise ValueError(
+                "selected_candidate_ids か free_text のどちらか一方だけを指定してください。"
+            )
         return self
 
 

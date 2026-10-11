@@ -1651,6 +1651,11 @@ def test_mcp_query_answer_requires_session_and_an_answer(
     for arguments in (
         {"answer": {"item_id": "x", "free_text": "y"}},
         {"requirement_session_id": "s", "answer": {"item_id": "x"}},
+        # 画面と同じく、候補と自由入力のどちらか一方だけで答える。
+        {
+            "requirement_session_id": "s",
+            "answer": {"item_id": "x", "selected_candidate_ids": ["a"], "free_text": "b"},
+        },
     ):
         is_error, error = _mcp(
             "nl2sql_query", {"question": "出荷済み", "profile_id": "sales", **arguments}

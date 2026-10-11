@@ -265,8 +265,8 @@ skill_registry.register(
             "利用者にそのまま聞き（表・列は物理名のまま。推測で選ばない・SQL や結果を作らない）、"
             "その回答では問いだけを返す。利用者が答えたら、nl2sql_query に同じ question と "
             "profile_id、requirement_session_id と answer（item_id と、答えに当たる候補の id の "
-            "selected_candidate_ids。候補に無い答えは free_text に利用者の言葉のまま）を渡して"
-            "呼び直す。確認が要るものが無くなると SQL を作って実行する。"
+            "selected_candidate_ids。候補に無い答えは free_text に利用者の言葉のまま。"
+            "どちらか一方だけ）を渡して呼び直す。確認が要るものが無くなると SQL を作って実行する。"
             "status が unanswerable なら、error_message（この業務プロファイルで答えられない理由）"
             "を伝える。"
         ),

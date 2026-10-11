@@ -289,7 +289,7 @@ NL2SQL_ASK_INSTRUCTION = (
     "（表・列は物理名のまま。推測で選ばない・ほかのツールで補わない・SQL や結果を作らない）。"
     "利用者が答えたら、nl2sql_query に同じ question と profile_id、requirement_session_id と "
     "answer（item_id と、答えに当たる候補の id の selected_candidate_ids。候補に無い答えは "
-    "free_text に利用者の言葉のまま）を渡して呼び直してください。"
+    "free_text に利用者の言葉のまま。どちらか一方だけ）を渡して呼び直してください。"
 )
 
 
@@ -1646,7 +1646,7 @@ def support_task_instructions(
             "- 利用者の新しい発言がデータベース（NL2SQL）の確かめ中の問いに答えていれば、"
             "nl2sql_query に上の question と profile_id、requirement_session_id と answer"
             "（item_id と、答えに当たる候補の id の selected_candidate_ids。候補に無い答えは "
-            "free_text に利用者の言葉のまま）を渡して呼び直してください。"
+            "free_text に利用者の言葉のまま。どちらか一方だけ）を渡して呼び直してください。"
             "答えを推測で埋めず、問いは 1 回に 1 つだけ聞いてください。"
         )
     lines.extend(

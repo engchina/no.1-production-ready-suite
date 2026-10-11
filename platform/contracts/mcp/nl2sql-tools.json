@@ -530,7 +530,7 @@
                 "type": "string"
               },
               "selected_candidate_ids": {
-                "description": "利用者が選んだ候補の ID（requirement.question.candidates の id）。候補に無い答えは free_text に入れる",
+                "description": "利用者が選んだ候補の ID（requirement.question.candidates の id）。候補に無い答えは free_text に入れる（selected_candidate_ids と free_text はどちらか一方）",
                 "items": {
                   "type": "string"
                 },
