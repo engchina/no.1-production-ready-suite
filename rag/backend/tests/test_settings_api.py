@@ -1328,12 +1328,14 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "display_name": "enterprise-llm",
             "vision_enabled": False,
             "connection_id": "primary",
+            "reasoning_effort": "",
         },
         {
             "model_id": "enterprise-vlm",
             "display_name": "enterprise-vlm",
             "vision_enabled": True,
             "connection_id": "primary",
+            "reasoning_effort": "",
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1406,12 +1408,14 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "display_name": "標準 LLM",
             "vision_enabled": False,
             "connection_id": "primary",
+            "reasoning_effort": "",
         },
         {
             "model_id": "enterprise-vlm",
             "display_name": "Vision LLM",
             "vision_enabled": True,
             "connection_id": "primary",
+            "reasoning_effort": "",
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"

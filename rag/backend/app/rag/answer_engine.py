@@ -259,7 +259,9 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
         "OCI_ENTERPRISE_AI_VLM_PROJECT_OCID": vision.project_ocid,
         # 推論(思考)の量はモデルごと(#1425。空は送らない)。
-        "OCI_ENTERPRISE_AI_REASONING_EFFORT": enterprise_ai_reasoning_effort(settings, answer_model),
+        "OCI_ENTERPRISE_AI_REASONING_EFFORT": enterprise_ai_reasoning_effort(
+            settings, answer_model
+        ),
         "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": enterprise_ai_reasoning_effort(
             settings, vision_model
         ),
