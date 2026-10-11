@@ -784,6 +784,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Ontology の query session（実行だけ SQL 実行の権限） ----
     ("POST", "/nl2sql/query-sessions"): _QUERY_GENERATE,
     ("GET", "/nl2sql/query-sessions/{session_id}"): _QUERY_GENERATE,
+    ("POST", "/nl2sql/query-sessions/{session_id}/apply"): _QUERY_GENERATE,
     ("POST", "/nl2sql/query-sessions/{session_id}/cancel"): _QUERY_GENERATE,
     ("POST", "/nl2sql/query-sessions/{session_id}/clarification-answers"): _QUERY_GENERATE,
     ("POST", "/nl2sql/query-sessions/{session_id}/confirm-sql"): _QUERY_GENERATE,

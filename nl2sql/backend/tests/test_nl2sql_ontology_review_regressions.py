@@ -15,11 +15,6 @@ from app.features.nl2sql.ontology_catalog import (
     migrate_profile_ontology_view,
     retrieve_ontology_nodes,
 )
-from app.features.nl2sql.ontology_clarification import (
-    _question_for_ambiguity,
-    apply_clarification_answer,
-    enrich_guided_intent,
-)
 from app.features.nl2sql.ontology_definitions import (
     DefinitionMapping,
     InterfaceDefinition,
@@ -32,9 +27,6 @@ from app.features.nl2sql.ontology_markdown_workspace import (
 from app.features.nl2sql.ontology_models import (
     BusinessRuleDefinition,
     BusinessRuleExpression,
-    ClarificationAnswer,
-    IntentAmbiguity,
-    IntentEntity,
     IntentMetric,
     OntologyNode,
     OntologyProvenance,
@@ -109,40 +101,6 @@ def test_builds_do_not_copy_another_profiles_concepts(
             service = OntologyBuildService(rt)
 
 
-def test_object_type_selection_is_applied_and_physical_duplicate_is_removed() -> None:
-    rt, legacy = runtime()
-    definitions, _ = merge_definitions("sales", model())
-    graph = project_graph(
-        rt.profile_view("sales")[1], definitions, "ontology_markdown_snapshot_test"
-    )
-    view = migrate_profile_ontology_view(legacy.profile, graph, strict=False)
-    ambiguity = IntentAmbiguity(
-        id="choose", code="ontology_term_ambiguous", message_ja="対象を選択", options=["Order"]
-    )
-    intent = QuestionIntentGraph(
-        profile_view_id=view.id,
-        ontology_revision_id=graph.revision.id,
-        question_original="対象一覧",
-        question_effective="対象一覧",
-        ambiguities=[ambiguity],
-    )
-    question = _question_for_ambiguity(ambiguity, intent, graph, view)
-    updated = apply_clarification_answer(
-        intent,
-        question,
-        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
-        graph,
-    )
-    assert updated.ambiguities[0].resolved
-    assert len(updated.entities) == 1
-    assert updated.entities[0].ontology_node_id == definitions[0].id
-    physical_id = updated.entities[0].physical_object_ids[0]
-    updated.entities.append(
-        IntentEntity(id="physical", ontology_node_id=physical_id, name_ja="受注表")
-    )
-    assert len(enrich_guided_intent(updated, graph).entities) == 1
-
-
 def test_published_snapshot_session_loads_without_global_revision_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,7 +116,7 @@ def test_published_snapshot_session_loads_without_global_revision_cache(
         "publish-session",
         None,
     )
-    monkeypatch.setattr(rt.legacy_service, "_enterprise_ai_client", None)
+    monkeypatch.setattr(rt.legacy_service, "_enterprise_ai_client", _RequirementLlmStub())
     monkeypatch.setattr(
         rt.legacy_service,
         "resolve_allowed_objects",
@@ -171,7 +129,7 @@ def test_published_snapshot_session_loads_without_global_revision_cache(
         )
     )
     assert created.session.ontology_revision_id == job.revision_id
-    assert created.clarification is not None
+    assert created.requirement_state is not None
     assert any(n.kind.value == "object_type" for n in created.ontology_graph.nodes)
     restored = OntologyApiRuntime(legacy_service=rt.legacy_service, store=rt.store)
     loaded = restored.get_session(created.session.id)
@@ -374,3 +332,53 @@ def test_child_interface_does_not_ground_parent_only_or_sibling_implementers() -
     assert child_hits == {"Premium", "PremiumChild", "Order"}
     parent_hits = {names[h.node_id] for h in retrieve_ontology_nodes("識別可能", graph, view)}
     assert {"Order", "Customer", "StandardCustomer"} <= parent_hits
+
+
+class _RequirementLlmStub:
+    """AI要件確認の LLM のスタブ（APP.ORDERS の一覧の要件を返す。#1439）。"""
+
+    def is_configured(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "stub"
+
+    def generate(self, **_kwargs: object) -> str:
+        item: dict[str, object] = {
+            "reason_ja": "",
+            "question_ja": "",
+            "answer_kind": "free_text",
+            "source": "question",
+            "columns": [],
+            "relationship_ids": [],
+            "sql_hint": "",
+            "period": None,
+            "candidates": [],
+        }
+        return json.dumps(
+            {
+                "clarified_question_ja": "APP.ORDERS の一覧",
+                "unanswerable_reason_ja": "",
+                "items": [
+                    {
+                        **item,
+                        "key": "from_orders",
+                        "section": "from",
+                        "label_ja": "使う表",
+                        "value_ja": "APP.ORDERS",
+                        "status": "confirmed",
+                        "tables": ["APP.ORDERS"],
+                    },
+                    {
+                        **item,
+                        "key": "select_all",
+                        "section": "select",
+                        "label_ja": "表示する列",
+                        "value_ja": "すべての列",
+                        "status": "confirmed",
+                        "tables": [],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        )

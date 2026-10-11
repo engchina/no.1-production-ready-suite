@@ -3957,7 +3957,8 @@ class OntologyApiRuntime:
             allowed = runtime_context.allowed_objects if runtime_context else AllowedObjects()
             max_rounds = self._requirement_max_review_rounds()
 
-        # Schema の読み込みと LLM の再検査は lock の外で行う（別の session の閲覧・中止を止めない）。
+        # Schema の読み込みと LLM の再検査は lock の外で行う（別の session の閲覧・中止を止めない）
+        # 。
         context = self._requirement_context(
             question=current.original_question,
             profile=profile,
@@ -4099,7 +4100,8 @@ class OntologyApiRuntime:
         if question.strip() != session.requirement.clarified_question_ja.strip():
             raise OntologyStateConflictError(
                 "REQUIREMENT_QUESTION_CHANGED",
-                "質問の文が AI要件確認で反映した文と違います。要件を外して生成するか、確認をやり直してください。",
+                "質問の文が AI要件確認で反映した文と違います。要件を外して生成するか、"
+                "確認をやり直してください。",
             )
         return generation_spec(session)
 

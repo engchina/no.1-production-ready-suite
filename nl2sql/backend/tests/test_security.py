@@ -2377,8 +2377,8 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # SQL チャットの一覧・会話取得も、生成権限で保護する（#871）。チャットのターンの SQL の実行
     # （#1154）と、ジョブの中で実行した結果の受け取り（#1176）は実行の権限で保護する。ジョブの
     # 処理の段階のイベント（polling・SSE。#1359）はジョブの取得と同じ権限。
-    assert len(mounted) == 278
-    assert len(ROUTE_PERMISSIONS) == 269
+    assert len(mounted) == 279
+    assert len(ROUTE_PERMISSIONS) == 270
     for path in ("/nl2sql/chats", "/nl2sql/chats/{conversation_id}"):
         assert ROUTE_PERMISSIONS[("GET", path)] == frozenset({QUERY_GENERATE_PERMISSION})
     for path in ("/nl2sql/jobs/{job_id}/progress", "/nl2sql/jobs/{job_id}/progress/stream"):

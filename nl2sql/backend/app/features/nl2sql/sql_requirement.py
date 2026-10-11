@@ -62,7 +62,8 @@ from .structured_outputs import response_format
 REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v1"
 REQUIREMENT_PROMPT_VERSION = "sql_requirement_v1"
 
-# LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。絞り込みはあいまいさを作らない）。
+# LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
+# 絞り込みはあいまいさを作らない）。
 _MAX_CONTEXT_TABLES = 16
 _MAX_CONTEXT_COLUMNS_PER_TABLE = 60
 _MAX_ONTOLOGY_CONCEPTS = 60
@@ -202,12 +203,16 @@ def requirement_response_format() -> dict[str, Any]:
 SYSTEM_PROMPT = (
     "あなたは Oracle AI Database の NL2SQL の要件確認器です。利用者の質問と、入力の schema・"
     "relationships・profile・ontology だけを使い、1 本の SQL を作るための「SQL の要件の下書き」を、"
-    "指定の JSON Schema の JSON オブジェクトだけで返してください（説明文や Markdown を付けない）。\n"
+    "指定の JSON Schema の JSON オブジェクトだけで返してください（説明文や Markdown を付けない）。"
+    "\n"
     "規則:\n"
-    "1. 表のデータは渡していません。値の候補は、列のコメント・用語集・オントロジー・業務プロファイルに"
-    "書かれた値だけにし、データの値を推測・生成しないでください。masked=true の列の値は候補にしないでください。\n"
+    "1. 表のデータは渡していません。値の候補は、列のコメント・用語集・オントロジー・"
+    "業務プロファイルに"
+    "書かれた値だけにし、データの値を推測・生成しないでください。masked=true "
+    "の列の値は候補にしないでください。\n"
     "2. 表・列は必ず schema にある物理名で書いてください（tables は `OWNER.TABLE`、columns は"
-    " `OWNER.TABLE.COLUMN`）。label_ja・value_ja・question_ja・候補の label_ja・clarified_question_ja でも、"
+    " `OWNER.TABLE.COLUMN`）。label_ja・value_ja・question_ja・候補の label_ja・"
+    "clarified_question_ja でも、"
     "表・列は物理名（`TABLE.COLUMN` など）で書き、論理名は括弧で添えるだけにしてください。"
     "schema に無い名前を作らないでください。\n"
     "3. 表の結合は relationships の id だけを使ってください（relationship_ids）。承認済みの関係で"
@@ -217,26 +222,35 @@ SYSTEM_PROMPT = (
     "where（絞り込みの列・演算子・値、状態・区分の値、NULL の扱い）、"
     "period（相対的な期間の表現）、group_by（集計の単位）、order_by（並び順）、limit（件数の上限）、"
     "subquery（WITH・サブクエリが要るか・どう組むか。例: 部門ごとの平均を超える社員、前月比）、"
-    "other（単位・通貨、「最新」「上位」の定義、指標の計算式の選択など、SQL の生成に要るそのほかの情報）。"
-    "SQL の生成に要る情報は、欄の例に限らずすべて項目にしてください。select と from の項目は必ず出してください。\n"
-    "5. status: confirmed=質問に明示されている、inferred=明示されていないが schema・profile・ontology から"
+    "other（単位・通貨、「最新」「上位」の定義、指標の計算式の選択など、SQL "
+    "の生成に要るそのほかの情報）。"
+    "SQL の生成に要る情報は、欄の例に限らずすべて項目にしてください。select と from "
+    "の項目は必ず出してください。\n"
+    "5. status: confirmed=質問に明示されている、inferred=明示されていないが schema・profile・"
+    "ontology から"
     "1 つに決められる、missing=情報が無い、ambiguous=複数の解釈がある。missing / ambiguous には"
-    " question_ja（利用者への 1 つの質問）と reason_ja を書き、ambiguous には根拠のある候補を candidates に"
+    " question_ja（利用者への 1 つの質問）と reason_ja を書き、ambiguous には根拠のある候補を "
+    "candidates に"
     "入れてください（evidence_ja に根拠を書く。根拠の無い候補は出さない）。\n"
-    "6. 「今年度」「今月」「先月」「直近 3 か月」「昨年同期」などの相対的な期間の表現は、必ず section=period の"
+    "6. 「今年度」「今月」「先月」「直近 3 か月」「昨年同期」などの相対的な期間の表現は、必ず "
+    "section=period の"
     "項目にし、period.relative_kind に次のどれかを入れてください: "
     + ", ".join(RELATIVE_PERIOD_KINDS)
     + "（当てはまらなければ other）。period.count は件数（直近 3 か月なら 3、無ければ 0）、"
     "period.date_column はその期間で絞る日付の列（物理名。決められなければ空）、"
-    "period.fiscal_year_start_month は年度の開始月が profile・用語集・ontology に書かれているときだけ"
+    "period.fiscal_year_start_month は年度の開始月が profile・用語集・ontology "
+    "に書かれているときだけ"
     " 1〜12（無ければ 0）。日付の計算はしないでください（プログラムが計算します）。\n"
     "7. sql_hint には、その項目を SQL にした断片（例: `SUM(ORDERS.AMOUNT)`、"
     "`ORDERS.STATUS = 'SHIPPED'`）を物理名で書いてください（決められなければ空）。\n"
-    "8. clarified_question_ja は、すべての項目を反映した、自然な日本語の 1 つの質問の文にしてください"
+    "8. clarified_question_ja は、すべての項目を反映した、自然な日本語の 1 "
+    "つの質問の文にしてください"
     "（表・列は物理名）。\n"
-    "9. 業務プロファイルの範囲の表だけでは答えられない質問なら、unanswerable_reason_ja に理由を書いてください。\n"
+    "9. 業務プロファイルの範囲の表だけでは答えられない質問なら、unanswerable_reason_ja "
+    "に理由を書いてください。\n"
     "10. mode=review のときは、answered_items（利用者が答えた項目）を変えずに、ほかの項目と"
-    " clarified_question_ja を見直し、まだ足りない・明確でない情報があれば missing / ambiguous の項目として"
+    " clarified_question_ja を見直し、まだ足りない・明確でない情報があれば missing / ambiguous "
+    "の項目として"
     "挙げてください。無ければすべての項目を confirmed / inferred にしてください。"
     "answered_items と同じ key の項目は出力しないでください。"
 )
@@ -276,7 +290,8 @@ class TableInfo:
     table_type: str
     columns: dict[str, ColumnInfo] = field(default_factory=dict)
     primary_key: list[str] = field(default_factory=list)
-    # 外部キーで別の表を参照する（明細・取引の表になりやすい。件数は読まないため Schema だけで判断する）。
+    # 外部キーで別の表を参照する（明細・取引の表になりやすい。件数は読まないため Schema
+    # だけで判断する）。
     references_other_tables: bool = False
 
 
@@ -817,7 +832,8 @@ def call_requirement_llm(
         prompt = (
             f"元の質問: {draft.question_original}\n"
             f"今の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
-            "このまとめと answered_items を検査し、SQL を作るのにまだ足りない・明確でない情報を挙げてください。"
+            "このまとめと answered_items を検査し、SQL を作るのにまだ足りない・"
+            "明確でない情報を挙げてください。"
         )
     try:
         raw = generate(
@@ -861,18 +877,27 @@ def build_draft(
     """LLM の出力を検査して下書きにする。答えた項目は前の下書きのまま保つ。"""
 
     warnings: list[str] = []
-    answered = [item for item in (previous.items if previous else []) if item.answered]
-    answered_keys = {item.key for item in answered}
-    items: list[RequirementItem] = [item.model_copy(deep=True) for item in answered]
-    used_keys = set(answered_keys)
+    # 前の下書きの項目は保つ。答えた項目は変えず、LLM が同じ key で出し直した未回答の項目だけを
+    # 置き換え、新しい key の項目を足す（LLM が出し忘れた項目を消さない）。
+    items: list[RequirementItem] = [
+        item.model_copy(deep=True) for item in (previous.items if previous else [])
+    ]
+    answered_keys = {item.key for item in items if item.answered}
+    position = {item.key: index for index, item in enumerate(items)}
+    seen_keys: set[str] = set()
     for raw in output.items[:_MAX_ITEMS]:
         key = _normalize_key(raw.key) or _normalize_key(f"{raw.section}_{len(items)}")
         if key in answered_keys:
             continue
-        while key in used_keys:
+        while key in seen_keys:
             key = f"{key}_2"
-        used_keys.add(key)
-        items.append(_validated_item(raw, key, context, warnings))
+        seen_keys.add(key)
+        validated = _validated_item(raw, key, context, warnings)
+        if key in position:
+            items[position[key]] = validated
+        else:
+            position[key] = len(items)
+            items.append(validated)
     draft = SqlRequirementDraft(
         version=(previous.version + 1) if previous else 1,
         question_original=question,
@@ -908,7 +933,8 @@ def _validated_item(
             f"Schema に無い・業務プロファイルの範囲の外の名前を除きました: {'、'.join(rejected)}"
         )
         reasons.append(
-            f"Schema に実在しない、または業務プロファイルの範囲の外の名前（{'、'.join(rejected)}）を除きました。"
+            f"Schema に実在しない、または業務プロファイルの範囲の外の名前（{'、'.join(rejected)}）"
+            "を除きました。"
         )
         if status in _CLEAR:
             status = RequirementStatus.AMBIGUOUS
@@ -1403,6 +1429,8 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
         ),
         "",
     )
+    first_period = period_items[0].period
+    first_expression = first_period.expression_ja if first_period else ""
     if not chosen_column and len(date_columns) > 1:
         if column_item is None:
             column_item = RequirementItem(
@@ -1418,10 +1446,7 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
             column_item.status = RequirementStatus.AMBIGUOUS
             column_item.answer_kind = RequirementAnswerKind.SINGLE_SELECT
             column_item.reason_ja = "期間の条件に使える日付の列が複数あります。"
-            column_item.question_ja = (
-                f"「{period_items[0].period.expression_ja if period_items[0].period else ''}」の期間は、"
-                "どの日付の列で絞りますか？"
-            )
+            column_item.question_ja = f"「{first_expression}」の期間は、どの日付の列で絞りますか？"
             column_item.candidates = [
                 RequirementCandidate(
                     id=stable_ontology_id(
@@ -1679,7 +1704,10 @@ def period_candidates(
             if fiscal[1] in {"profile", "glossary", "ontology"}
             else source
         )
-        evidence = f"{_source_label(fiscal[1])}の年度の定義（{fiscal[0]} 月始まり）と基準日 {context.today.isoformat()}"
+        evidence = (
+            f"{_source_label(fiscal[1])}の年度の定義（{fiscal[0]} 月始まり）"
+            f"と基準日 {context.today.isoformat()}"
+        )
     candidates: list[RequirementCandidate] = []
     for label, start, end in ranges:
         value = period.model_copy(
@@ -1863,7 +1891,8 @@ def _enforce_risks(items: list[RequirementItem], context: RequirementContext) ->
             section=RequirementSection.WHERE,
             label_ja="絞り込みの条件",
             reason_ja=(
-                f"{names} は明細・取引の表（外部キー・日付の列を持つ表）で、絞り込みの条件がありません。"
+                f"{names} は明細・取引の表（外部キー・日付の列を持つ表）で、"
+                "絞り込みの条件がありません。"
                 f"全件の{kind}は重い問い合わせになるおそれがあります"
                 "（表の件数は読まずに Schema だけで判断しています）。"
             ),
@@ -2296,7 +2325,10 @@ def build_requirement_state(session: QuerySession, *, max_review_rounds: int) ->
                 f"（{max_review_rounds} 回）に達したため、最後の回答の後は再検査していません。"
             )
     if missing_minimum and status != RequirementPhase.UNANSWERABLE:
-        message = f"{message} {' '.join(missing_minimum)}SELECT と FROM が明確になるまで SQL の生成に進めません。"
+        message = (
+            f"{message} {' '.join(missing_minimum)}"
+            "SELECT と FROM が明確になるまで SQL の生成に進めません。"
+        )
     can_apply = (
         status != RequirementPhase.UNANSWERABLE
         and not missing_minimum

@@ -20353,13 +20353,17 @@ class Nl2SqlService:
                 profile,
                 request.select_ai_overrides,
                 ontology_context=ontology_context,
+                sql_requirement=request.sql_requirement,
             )
+            show_question = _question_with_empty_filter_guard(rewritten_question)
+            if request.sql_requirement is not None:
+                show_question = request.sql_requirement.question_with_requirements(show_question)
             prompt = self._oracle_adapter.generate_select_ai_prompt(
                 profile_name=str(
                     generated.engine_meta.get("select_ai_profile")
                     or self._select_ai_profile_name(profile)
                 ),
-                question=_question_with_empty_filter_guard(rewritten_question),
+                question=show_question,
                 attributes=attributes,
             )
             if not prompt.strip():

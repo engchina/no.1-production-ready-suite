@@ -634,7 +634,8 @@ class SqlRequirementDraft(OntologyContract):
     warnings_ja: list[str] = Field(default_factory=list)
     reference_date: str = ""
     model: str = ""
-    # 確定した要件から、プログラムが決定的に組み立てた SQL の骨組み（実行しない。生成の SQL ではない）。
+    # 確定した要件から、プログラムが決定的に組み立てた SQL の骨組み（実行しない。生成の SQL
+    # ではない）。
     sql_skeleton: str = ""
 
 
