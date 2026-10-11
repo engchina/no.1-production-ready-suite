@@ -89,6 +89,7 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { EntityExpansionRow } from "./EntityExpansionRow";
 import { SearchAnswerProfileKnowledgePanel } from "./SearchAnswerProfileKnowledgePanel";
+import { SectionExpansionRow } from "./SectionExpansionRow";
 
 const LIMIT = DEFAULT_PAGE_SIZE;
 
@@ -994,6 +995,7 @@ function SearchAnswerProfileEditor({
                     disabled={locked}
                     onChange={updateQuery}
                   />
+                  <SectionExpansionRow value={config.query} disabled={locked} onChange={updateQuery} />
                   <QuerySelectRow
                     id="search-answer-profile-guardrail"
                     label={t("searchAnswerProfiles.field.guardrail")}
