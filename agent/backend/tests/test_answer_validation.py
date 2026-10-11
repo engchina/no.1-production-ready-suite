@@ -26,7 +26,12 @@ from pytest import MonkeyPatch
 from test_clarification_preface import CLARIFICATIONS
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_passages import non_claim_passages, passage_kind, passage_spans
+from app.features.agent.answer_passages import (
+    is_heading,
+    non_claim_passages,
+    passage_kind,
+    passage_spans,
+)
 from app.features.agent.answer_validation import (
     UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
@@ -1416,6 +1421,56 @@ def test_citation_lines_left_unassessed_do_not_withhold_the_answer(case: dict[st
     result = _verdict(
         *[_claim(text, "supported", "根拠に記載。") for text in case["claim_passages"]],
         *[_claim(text, "unassessed", "ロケータの提示のみ。") for text in case["citation_passages"]],
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    assert published == answer
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+
+# 見出しの名詞句・導入の文の事例（RAG と Agent の両方のテストが読む。#1469）。
+HEADING_CASES_PATH = "platform/contracts/answer-passages/headings.json"
+HEADING_CASES: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / HEADING_CASES_PATH).read_text("utf-8")
+)
+
+
+@pytest.mark.parametrize(
+    "case", HEADING_CASES["heading_passages"], ids=lambda case: str(case["id"])
+)
+def test_heading_phrases_and_lead_ins_are_headings(case: dict[str, str]) -> None:
+    """番号つきの見出し・「補足（…）」・「根拠」・「…は次のとおりです。」は見出し（#1469）。"""
+    text = case["passage"]
+    assert is_heading(text)
+    assert passage_kind(text) == "heading"
+    assert non_claim_passages(text).get(text) == "heading"
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: str(case["id"]))
+def test_short_statements_are_not_headings(case: dict[str, str]) -> None:
+    """数・操作・言い切りを含む短い行と、値の名前だけの行は主張のまま確かめる（#1469）。"""
+    text = case["passage"]
+    assert not is_heading(text)
+    assert passage_kind(text) is None
+    assert text not in non_claim_passages(text)
+
+
+@pytest.mark.parametrize("case", HEADING_CASES["answers"], ids=lambda case: str(case["id"]))
+def test_headings_left_unassessed_do_not_withhold_the_answer(case: dict[str, Any]) -> None:
+    """#1362 の評価（e1467）の回答で、RAG が見出しを unassessed にしても回答を外さない（#1469）。"""
+    answer = case["answer"]
+    kinds = non_claim_passages(answer)
+    assert {text: kinds.get(text) for text in case["heading_passages"]} == {
+        text: "heading" for text in case["heading_passages"]
+    }
+    assert not set(case["claim_passages"]) & set(kinds)
+    result = _verdict(
+        *[_claim(text, "supported", "根拠に記載。") for text in case["claim_passages"]],
+        *[
+            _claim(text, "unassessed", "本文を見出しとして監査から除外できません。")
+            for text in case["heading_passages"]
+        ],
     )
 
     published, withheld = publish_answer(answer, result)

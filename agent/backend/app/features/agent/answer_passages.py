@@ -9,7 +9,12 @@
 （確かめられない操作の手順・事実の主張は今までどおり外す）。
 
 - 見出し: Markdown の見出し・太字だけの行・【…】・「…：」で終わる短いラベル。述語で終わる文や
-  操作の指示を含むものは見出しにしない。
+  操作の指示を含むものは見出しにしない。句点で終わらない短い名詞句（「1. 人事評価システムの
+  重要度」「補足（資料の記載）」「根拠」。項目・区分・資料の名前か「…とき」「…か」で終わり、
+  述語・操作・数量・言い切りの「は」を含まないもの）と、以降の箇条書きを導くだけの導入の文
+  （「根拠は次のとおりです。」）・礼の定型の文も見出しとして扱う（#1469）。規則は RAG の
+  `operation_audit.is_heading` とそろえ、両方のテストが
+  platform/contracts/answer-passages/headings.json の同じ事例で確かめる。
 - 出典: 「出典：…」「根拠：…」「セクション：…」「ページ：…」「*Locator*: …」などの
   ラベルの行（ラベルの太字・斜体は許す）、文書名・頁・節を示す括弧だけの行、文書名だけの行、
   リンクだけの行、根拠の ID（【証拠 ID: …】・〔証拠 ID: …〕）と文の無い「…」の題・頁の括弧
@@ -303,7 +308,119 @@ def _heading_title(text: str) -> str | None:
         title = match.group("title").strip().strip("*").strip()
         if title and not _is_sentence(title) and not _OPERATION.search(title):
             return title
-    return None
+    phrase = heading_phrase(value)
+    if phrase is not None:
+        return phrase
+    return value if is_lead_in(value) else None
+
+
+# ---- 見出しの名詞句と導入の文（#1469）。RAG の `operation_audit.heading_phrase` /
+# `is_lead_in` と同じ規則で、両方のテストが platform/contracts/answer-passages/headings.json の
+# 同じ事例で確かめる。
+# 見出しの後ろの注記の括弧（「補足（資料の記載）」
+# 「2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）」）。
+_HEADING_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)]\s*$")
+# 「…」の語（「略号「運」の意味」）。中の「は」「が」は言い切りの助詞に数えない。
+_HEADING_QUOTED = re.compile(r"[「『][^「」『』\n]{1,40}[」』]")
+# 数量（「30 分」「10 年」。主張の値）。年度（「2026年度」）・行・頁の番号は数えない。
+_HEADING_QUANTITY = re.compile(
+    r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年(?!度)|名|人|GB|MB)"
+)
+# 見出しの語に残してよい番号（章・節の番号と年度）。ほかの数字（値の「3 点」「SYS-103」）を
+# 含む行は主張のまま。
+_HEADING_NUMBERED_NAME = re.compile(r"第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+\s*年度")
+# 見出しの名詞句の終わりの語（項目・区分・資料の名前。値の名前「運行管理課長」「極秘」では
+# 終わらない）。
+_HEADING_END = re.compile(
+    r"(?:根拠|補足|注記|備考|参考|前提|結論|回答|まとめ|要点|概要|経緯|理由|背景|資料|台帳|規程|規定|手順書"
+    r"|マニュアル|ガイド|文書|内容|事項|点|条件|規則|ルール|手順|方法|手段|流れ|結果|定め|扱い|対応|範囲|対象"
+    r"|期限|期間|時間帯|保守枠|日程|重要度|機密区分|区分|部署|担当|承認者|連絡先|窓口|代理|意味|正式名|名称"
+    r"|略号|関係|つながり"
+    # 分岐の見出し（「重要度 C のシステムで障害が起きたとき」）と、問いの形の見出し
+    # （「承認者がどう決まるか」）。
+    r"|とき|場合|か)$"
+)
+# 分岐・問いの形の見出しの終わり（この形だけ、中の「が」「を」を許す）。
+_HEADING_CLAUSE_END = re.compile(r"(?:とき|場合|か)$")
+# 見出しの中の、分岐の節（「承認者が不在のときの代理」の「が不在のとき」）。
+_HEADING_CASE_CLAUSE = re.compile(r"[がを][^はがを、。]{1,15}?(?:とき|場合)")
+# 以降の箇条書きを導くだけの導入の文（「根拠は次のとおりです。」「以下に示します。」）。
+_LEAD_IN = re.compile(
+    r"(?P<subject>[^。！？!?\n]{1,24}?)(?:は|が)、?\s*(?:次|以下)の(?:とおり|通り)"
+    r"(?:です|となります|になります|でした)?[。．:：]?"
+    r"|(?:(?P<object>[^。！？!?\n]{1,24}?)を)?(?:次|以下)に(?:示し|まとめ|挙げ|整理し)ます[。．:：]?"
+)
+# 利用者の答え・質問への礼の定型の文（「ご回答ありがとうございます。」）。
+_COURTESY = re.compile(
+    r"(?:ご(?:回答|返答|返信|連絡|質問)|お問い合わせ|お答え)(?:いただき)?、?ありがとうございます[。．!！]?"
+)
+
+
+def _heading_note_ok(note: str) -> bool:
+    """見出しの注記の括弧が、言い切り・操作・数量を含まない補足か（「（承認者は人事部長です）」は主張）。"""
+    outside = _HEADING_QUOTED.sub(" ", note)
+    return (
+        "。" not in note
+        and not _is_sentence(note)
+        and not _OPERATION.search(note)
+        and not _HEADING_QUANTITY.search(note)
+        and "は" not in outside
+    )
+
+
+def heading_phrase(text: str) -> str | None:
+    """主張でない見出しの名詞句なら、注記の括弧・番号・強調を除いた見出しの語（#1469）。
+
+    見出しでなければ None。「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」
+    「回答に使った資料」「2. **重要度 A の連絡先と期限**」のように、句点で終わらない短い名詞句で、
+    項目・区分・資料の名前（`_HEADING_END`）か分岐・問いの形（「…とき」「…か」）で終わるもの。
+    述語（です・ます・する…）・操作・数量・言い切りの「は」を含む行（「重要度は A です」
+    「承認者は管理本部長」「1. **ID 管理システムの重要度は A**」）と、値の名前だけの行
+    （「1. 運行管理課長」）は主張のまま。
+    """
+    if is_citation(text):
+        # 文書名と場所だけの行（「1. **システム変更手順書**（第 2章 申請）」）は出典の行（#1370）。
+        return None
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip().rstrip(":：").strip()
+    while match := _HEADING_NOTE.search(value):
+        if not _heading_note_ok(match.group("note")):
+            return None
+        value = value[: match.start()].strip()
+    if not value or len(value) > 30 or re.search(r"[。．！？!?、,，:：]", value):
+        return None
+    if (
+        _is_sentence(value)
+        or _OPERATION.search(value)
+        or re.search(r"[0-9０-９]", _HEADING_NUMBERED_NAME.sub(" ", value))
+    ):
+        return None
+    outside = _HEADING_QUOTED.sub(" ", value)
+    if "は" in outside:
+        return None
+    # 「が」「を」は、分岐・問いの形の見出しか、「…が不在のとき」の節の中だけに許す。
+    if not _HEADING_CLAUSE_END.search(value) and re.search(
+        r"[がを]", _HEADING_CASE_CLAUSE.sub(" ", outside)
+    ):
+        return None
+    return value if _HEADING_END.search(value) else None
+
+
+def is_lead_in(text: str) -> bool:
+    """以降の箇条書きを導くだけの導入の文（「根拠の積み上げは次のとおりです。」）と礼の定型の文か。
+
+    主語・目的語に数量・操作・言い切りの「は」を含む文（「保管期間は 10 年で、内訳は
+    次のとおりです。」）は主張のまま（#1469）。
+    """
+    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    if _COURTESY.fullmatch(value):
+        return True
+    match = _LEAD_IN.fullmatch(value)
+    if not match:
+        return False
+    head = match.group("subject") or match.group("object") or ""
+    return not (
+        _HEADING_QUANTITY.search(head) or _OPERATION.search(head) or "は" in head or "、" in head
+    )
 
 
 def is_heading(text: str) -> bool:
@@ -707,10 +824,12 @@ __all__ = [
     "case_label",
     "case_labels",
     "environment_check_passages",
+    "heading_phrase",
     "is_absence",
     "is_citation",
     "is_clarification_only",
     "is_heading",
+    "is_lead_in",
     "is_question",
     "is_structure",
     "is_table_rule",
