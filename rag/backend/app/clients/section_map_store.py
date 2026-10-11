@@ -24,6 +24,7 @@ from app.clients.oracle import (
     OracleConnectionProtocol,
     _execute,
     _executemany,
+    _fetch_one,
     _int_value,
     _metadata_from_json,
     _optional_int,
@@ -261,6 +262,17 @@ class SectionMapStore:
         """文書の対応を置き換える（前の対応は消してから入れる。chunk は変えない）。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
+            # 同じ文書の作り直し（章節の保存と規則の変更の後の作り直しなど）を直列にする。
+            if (
+                _fetch_one(
+                    connection,
+                    "SELECT document_id FROM rag_documents WHERE document_id = :document_id "
+                    "FOR UPDATE",
+                    {"document_id": document_id},
+                )
+                is None
+            ):
+                return
             _execute(
                 connection,
                 f"DELETE FROM {SECTION_CHUNKS_TABLE} WHERE document_id = :document_id",
