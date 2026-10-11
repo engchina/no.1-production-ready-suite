@@ -160,6 +160,19 @@ def heading_phrase(text: str) -> str | None:
     return value if _HEADING_END.search(value) else None
 
 
+def is_model_non_claim_kept(text: str) -> bool:
+    """モデルが主張でないとした段落を、最終の検証で外さずに本文に残してよいか（#1469。draft）。
+
+    前置き・範囲の注記（「ご質問の本部長の期限以外は問われていないため、上記の本部長分に限って回答しています。」）
+    のように、決定的な判定が見出し・出典と認めない段落でも、モデルが not_a_claim とし、数字・操作を含まない
+    150 字以内の段落は残す。数字（「30 分」「3 営業日」「SYS-103」）・操作の指示を含む段落は主張として外す
+    （unassessed）。数字も操作も無い言い切り（「承認者は人事部長です。」）をモデルが not_a_claim とした
+    ときも残ることになる（人の判断の点）。
+    """
+    value = text.strip()
+    return bool(value) and len(value) <= 150 and not re.search(r"[0-9０-９]", value) and not is_operation_instruction(value)
+
+
 def is_lead_in(text: str) -> bool:
     """以降の箇条書きを導くだけの導入の文（「根拠の積み上げは次のとおりです。」）と礼の定型の文か（#1469）。
 

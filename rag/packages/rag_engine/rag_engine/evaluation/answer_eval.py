@@ -25,11 +25,18 @@ from rag_engine.generation.grounded import (
     quote_in_text,
     verbatim_quote_lines,
 )
-from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading
+from rag_engine.generation.operation_audit import (
+    answer_passages,
+    is_citation_line,
+    is_heading,
+    is_model_non_claim_kept,
+)
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
 logger = logging.getLogger(__name__)
+# モデルが not_a_claim とし、決定的な判定が見出しと認めないが本文に残した段落の理由の前置き（#1469）。
+NON_CLAIM_KEPT_REASON = "モデルの判定（主張ではない）のまま残します。"
 
 
 class StandardRequirement(BaseModel):
@@ -520,8 +527,13 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False):
             if len(matches) == 1:
                 claim = claim.model_copy(update={"answer_passage_id": matches[0]})
         # 見出しと出典の行（定位子・根拠の ID・文書名と場所だけの行。#1370）は not_a_claim のまま残す。
+        # 最終の検証（passage_citations）では、決定的な判定が見出しと認めない段落も、数量・操作を含まなければ
+        # モデルの not_a_claim のまま残す（#1469。前置き・範囲の注記を外しても回答の安全は上がらない）。
         if claim.status == "not_a_claim" and not (is_heading(claim.answer_quote) or is_citation_line(claim.answer_quote)):
-            claim = claim.model_copy(update={"status": "unassessed", "reason": "本文を見出しとして監査から除外できません。" + claim.reason})
+            if passage_citations and is_model_non_claim_kept(claim.answer_quote):
+                claim = claim.model_copy(update={"reason": NON_CLAIM_KEPT_REASON + claim.reason})
+            else:
+                claim = claim.model_copy(update={"status": "unassessed", "reason": "本文を見出しとして監査から除外できません。" + claim.reason})
         bound.append(claim)
     return output.model_copy(update={"claim_checks": bound})
 

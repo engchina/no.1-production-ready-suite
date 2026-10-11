@@ -346,6 +346,34 @@ def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
     assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "not_a_claim", "unassessed"]
 
 
+def test_final_validation_keeps_model_non_claims_without_quantities_or_operations() -> None:
+    """最終の検証では、モデルが not_a_claim とした前置き・範囲の注記を外さずに残す（#1469。draft）。
+
+    e1467 の D の cmp-approval-deadline-versions・mt-delete-account-approved の段落。数量・操作を含む段落は
+    主張として外す（unassessed）。品質評価（passage_citations なし）は今までどおり unassessed。
+    """
+    from rag_engine.evaluation.answer_eval import NON_CLAIM_KEPT_REASON, _bind_claims
+
+    passages = [
+        {"id": "A1", "text": "ご質問の本部長の期限以外（部長・担当役員の期限など）は問われていないため、上記の本部長分に限って回答しています。"},
+        {"id": "A2", "text": "部門長の承認は得ている、という前提で、資料に沿ってお示しします。"},
+        {"id": "A3", "text": "承認の期限は 3 営業日以内です。"},
+        {"id": "A4", "text": "利用者の詳細画面で「権限」タブを開き、「付与」を押します。"},
+    ]
+    output = ClaimAuditOutput.model_validate({"claim_checks": [
+        {"answer_quote": item["text"], "answer_passage_id": item["id"], "status": "not_a_claim", "evidence_id": "",
+         "source_id": "", "evidence_quote": "", "reason": "主張ではない"}
+        for item in passages
+    ]})
+
+    final = _bind_claims(output, {}, passages, passage_citations=True)
+    evaluation = _bind_claims(output, {}, passages)
+
+    assert [claim.status for claim in final.claim_checks] == ["not_a_claim", "not_a_claim", "unassessed", "unassessed"]
+    assert final.claim_checks[0].reason.startswith(NON_CLAIM_KEPT_REASON)
+    assert {claim.status for claim in evaluation.claim_checks} == {"unassessed"}
+
+
 # #1362 の評価の Run の形（#1391）。業務支援の da-trial-account-setup: 運用手順書の章ごとの chunk と、手順の回答。
 PORTAL = "d71d90b414a74ad99ccfc7a9dc4b3cb5:2e474d0310926b739eeed94bfc31012518db916cc382524721434a8baa1d629d"
 PORTAL_EVIDENCE = [
