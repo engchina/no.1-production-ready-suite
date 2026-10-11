@@ -887,6 +887,11 @@ export interface KnowledgeBaseQueryConfig {
   section_expansion_max_levels?: number | null;
   section_expansion_input_token_percent?: number | null;
   section_expansion_time_limit_seconds?: number | null;
+  /**
+   * 根拠の入力の上限に入らない章節から、質問に関係する原文を抜き出す AI の呼び出しの上限(1 回の回答。1〜16。
+   * #1437)。null は既定(8)。
+   */
+  section_extraction_max_calls?: number | null;
 }
 
 /** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */

@@ -310,7 +310,7 @@ test("実体の索引のある参照先・数えられないときは案内を�
   await expectNoPageOverflow(page);
 });
 
-test("章節で広げる根拠は既定 on で、選んだ上限だけを保存する", async ({
+test("章節で広げる根拠は既定 on で、選んだ上限だけを保存する（抜き出す呼び出しの上限を含む）", async ({
   page,
 }) => {
   const bodies: Record<string, unknown>[] = [];
@@ -328,16 +328,21 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await expect(toggle).toHaveAccessibleDescription(
     /読めなかった章節を「確かめられていない点」に示し/,
   );
-  await expect(section).toContainText("モデルの入力の上限に対する割合");
+  await expect(section).toContainText("回答のモデルの入力の上限");
+  await expect(section).toContainText("一致しないものは使いません");
   const levels = section.getByRole("combobox", { name: "広げる段の上限" });
   const tokens = section.getByRole("combobox", { name: "根拠の入力の上限" });
   const time = section.getByRole("combobox", { name: "広げるのを終える時間" });
+  const calls = section.getByRole("combobox", {
+    name: "原文を抜き出す呼び出しの上限",
+  });
   await expect(levels).toHaveText(/4 段（既定）/);
   await expect(tokens).toHaveText(/50%（既定）/);
   await expect(time).toHaveText(/600 秒（既定）/);
+  await expect(calls).toHaveText(/8 回（既定）/);
   // 1 つの行の中の選択欄は同じ高さ（既定の size）。
   const heights = await Promise.all(
-    [levels, tokens, time].map(
+    [levels, tokens, time, calls].map(
       async (field) => (await field.boundingBox())?.height,
     ),
   );
@@ -345,10 +350,13 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await levels.click();
   await page.getByRole("option", { name: "2 段", exact: true }).click();
   await expect(levels).toHaveText(/2 段/);
+  await calls.click();
+  await page.getByRole("option", { name: "4 回", exact: true }).click();
+  await expect(calls).toHaveText(/4 回/);
   await expectNoPageOverflow(page);
   // 選択欄は行の枠の中に収まる（375px で横にはみ出さない）。
   const sectionBox = await section.boundingBox();
-  for (const field of [levels, tokens, time]) {
+  for (const field of [levels, tokens, time, calls]) {
     const box = await field.boundingBox();
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(
       (sectionBox?.x ?? 0) + (sectionBox?.width ?? 0),
@@ -387,11 +395,12 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await expect.poll(() => bodies.length).toBe(1);
   const query =
     (bodies[0]?.config as { query?: Record<string, unknown> })?.query ?? {};
-  // 既定と同じ on・上限は保存しない（既定に追従させる）。選んだ段の上限だけを保存する。
+  // 既定と同じ on・上限は保存しない（既定に追従させる）。選んだ段・抜き出す呼び出しの上限だけを保存する。
   expect(query.section_expansion_enabled ?? null).toBeNull();
   expect(query.section_expansion_max_levels).toBe(2);
   expect(query.section_expansion_input_token_percent ?? null).toBeNull();
   expect(query.section_expansion_time_limit_seconds ?? null).toBeNull();
+  expect(query.section_extraction_max_calls).toBe(4);
 });
 
 test("章節で広げる根拠を off にすると上限の欄を閉じ、false だけを保存する", async ({

@@ -965,8 +965,11 @@ export const ja = {
   "searchAnswerProfiles.sectionExpansion.timeLimit": "広げるのを終える時間",
   "searchAnswerProfiles.sectionExpansion.timeLimitValue": "{seconds} 秒",
   "searchAnswerProfiles.sectionExpansion.timeLimitDefault": "{seconds} 秒（既定）",
+  "searchAnswerProfiles.sectionExpansion.extractionCalls": "原文を抜き出す呼び出しの上限",
+  "searchAnswerProfiles.sectionExpansion.extractionCallsValue": "{count} 回",
+  "searchAnswerProfiles.sectionExpansion.extractionCallsDefault": "{count} 回（既定）",
   "searchAnswerProfiles.sectionExpansion.limitsHelper":
-    "根拠の入力の上限は、モデルの入力の上限に対する割合です。時間は回答の開始から数え、回答の生成の時間を残して止めます。回答の時間の上限より長くしても、その上限で止まります。",
+    "根拠の入力の上限は、回答のモデルの入力の上限（システム設定 › モデル の「入力の上限（tokens）」）に対する割合です。上限に入らない長い章節は、質問に関係する原文だけを AI に抜き出させてから（当たった根拠に近い範囲から順に）回答の材料にします。抜き出した原文は資料の原文と照合し、一致しないものは使いません。原文を抜き出す呼び出しの上限は 1 回の回答の回数です。時間は回答の開始から数え、回答の生成の時間を残して止めます。回答の時間の上限より長くしても、その上限で止まります。",
   "searchAnswerProfiles.queryStrategy.auto_routing": "自動ルーティング（自動選択）",
   "searchAnswerProfiles.queryStrategy.simple_retrieval": "単純検索（拡張なし）",
   "searchAnswerProfiles.queryStrategy.rag_fusion": "RAG フュージョン（複数の検索質問 + 順位融合）",
