@@ -496,12 +496,13 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await expect(toggle).toHaveAccessibleDescription(
     /読めなかった章節を「確かめられていない点」に示し/,
   );
+  await expect(section).toContainText("モデルの入力の上限に対する割合");
   const levels = section.getByRole("combobox", { name: "広げる段の上限" });
   const tokens = section.getByRole("combobox", { name: "根拠の入力の上限" });
   const time = section.getByRole("combobox", { name: "広げるのを終える時間" });
   await expect(levels).toHaveText(/4 段（既定）/);
-  await expect(tokens).toHaveText(/モデルの入力の上限の 50%（既定）/);
-  await expect(time).toHaveText(/回答の開始から 600 秒（既定）/);
+  await expect(tokens).toHaveText(/50%（既定）/);
+  await expect(time).toHaveText(/600 秒（既定）/);
   // 1 つの行の中の選択欄は同じ高さ（既定の size）。
   const heights = await Promise.all(
     [levels, tokens, time].map(
@@ -513,6 +514,14 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   await page.getByRole("option", { name: "2 段", exact: true }).click();
   await expect(levels).toHaveText(/2 段/);
   await expectNoPageOverflow(page);
+  // 選択欄は行の枠の中に収まる（375px で横にはみ出さない）。
+  const sectionBox = await section.boundingBox();
+  for (const field of [levels, tokens, time]) {
+    const box = await field.boundingBox();
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(
+      (sectionBox?.x ?? 0) + (sectionBox?.width ?? 0),
+    );
+  }
   if (process.env.RAG_E2E_SCREENSHOT_DIR) {
     await section.screenshot({
       path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-section-expansion-${test.info().project.name}.png`,

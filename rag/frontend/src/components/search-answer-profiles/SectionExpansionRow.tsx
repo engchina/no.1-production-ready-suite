@@ -136,7 +136,7 @@ export function SectionExpansionRow({
         </div>
         {enabled ? (
           <div className="space-y-2">
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <SelectField
                 id="search-answer-profile-section-expansion-max-levels"
                 label={t("searchAnswerProfiles.sectionExpansion.maxLevels")}
