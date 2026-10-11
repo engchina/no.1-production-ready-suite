@@ -799,3 +799,55 @@ def test_guide_decision_before_a_later_rag_search_is_not_used() -> None:
     )
     assert (content["value"], content["basis"]) == ("answered", "rag_search")
     assert "guide_conditions" not in content["signals"]
+
+
+# ---- 利用者に聞けば分かる条件は現場のデータではない（#1453） ------------------------------
+
+# #1362 の deepseek-flash の全量の D の業務支援 mt-grant-permission-individual の 2 回目
+# （run_b006caa651204fcfaeea40c1b5f1d2e0）の回答の形。手順を答え、利用者のロールを確かめる。
+GRANT_WITH_ROLE_CHECK = "\n".join(
+    [
+        "個別の利用者への付与手順は、次のとおりです。",
+        "",
+        "**手順（個別の利用者に付与する場合）**",
+        "1. 利用者の詳細画面の「権限」タブを開きます。",
+        "2. 付与する権限を選び、「付与」を押します。",
+        "",
+        "**ご確認いただきたい点**",
+        "- 操作を行う方が「ポータル管理者」ロールを持っているかどうかを、画面でご確認ください。"
+        "ロールをお持ちでない場合は、所属部署のポータル管理者にご依頼ください。",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "操作を行う方が「ポータル管理者」ロールを持っているかどうかを、画面でご確認ください。",
+        "**実データ**：対象システムの「重要度」列の実際の値をご確認ください。",
+        "削除の前に、所属部署の部門長の承認を得たかの現在の状態をご確認ください。",
+    ],
+    ids=["role", "target-system", "approval"],
+)
+def test_user_condition_checks_are_not_environment_data(text: str) -> None:
+    assert asks_environment_data(text) is False
+
+
+def test_record_checks_about_a_target_are_still_environment_data() -> None:
+    # 対象のシステムを名指ししても、ログ・履歴そのものを確かめるなら現場のデータ。
+    assert asks_environment_data(
+        "対象システムの認証ログ（auth.log）でエラーの時刻の行を確認してください。"
+    )
+    assert asks_environment_data("対象の利用者の権限の付与の履歴を確認してください。")
+
+
+def test_answer_that_asks_the_users_role_is_not_environment_data() -> None:
+    # RAG が利用者に確かめる条件だけで conditional を返したら、その対応を使う。
+    assert _outcome(GRANT_WITH_ROLE_CHECK, [_search("conditional")]) == (
+        "conditional",
+        "rag_search",
+    )
+    # Agent が自分で組み立てた回答でも、ロールの確認は現場の確認の印にしない。
+    content = answer_outcome(GRANT_WITH_ROLE_CHECK, steps=[_retrieve()])
+    assert content["value"] == "answered"
+    assert "data_confirmation" not in content["signals"]

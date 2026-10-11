@@ -523,6 +523,9 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 `rag_validate_answer` も、見出し・出典の行・表の区切りと見出し・質問は監査せず `claims` に含めない。段落を外した後に
 見出し・出典・表の形だけが残れば、それも消す。利用者に現場のデータ・記録（ログ・設定値・明細など）の確認を求める段落
 には、判定とは別に `environment_check` を付ける（#1317。主張のまま確かめて外す。回答の対応の「実データの確認」の印）。
+利用者に聞けば分かる条件（自分のロール・権限・承認を得たか、質問で特定されていない対象のシステム）を確かめるだけの段落は、
+記録そのもの（ログ・履歴・設定値・件数・明細）を確かめる語が無ければ `environment_check` にしない（#1453。RAG も
+この種の確認を現場の実データではなく適用の条件にし、`rag_search` の対応は `conditional` になる）。
 回答の対応（#1305）: Control Plane は最終の検証の後、回答の成果物（`kind="answer"`）の `outcome` に、RAG の回答の記録
 （AnswerEnvelope）と同じ語彙の対応（`answered` / `conditional` / `needs_clarification` / `needs_environment_data` /
 `needs_human` / `insufficient_evidence`）を、モデルを呼ばずに決めて残す（`answer_outcome`。内容は `value`・決めた手がかりの
