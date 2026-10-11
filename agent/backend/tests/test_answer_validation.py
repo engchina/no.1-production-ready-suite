@@ -29,6 +29,7 @@ from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import (
     is_heading,
     non_claim_passages,
+    numbered_heading_lines,
     passage_kind,
     passage_spans,
 )
@@ -1447,13 +1448,41 @@ def test_heading_phrases_and_lead_ins_are_headings(case: dict[str, str]) -> None
     assert non_claim_passages(text).get(text) == "heading"
 
 
+@pytest.mark.parametrize(
+    "case", HEADING_CASES["numbered_heading_passages"], ids=lambda case: str(case["id"])
+)
+def test_numbered_headings_are_decided_by_the_following_line(case: dict[str, str]) -> None:
+    """終わりの語が一覧に無い番号つきの「…の…」の行は、次の行が下の内容のときだけ見出し（#1481）。
+
+    単独の行と、番号の行が続く一覧の中の行は主張のまま確かめる。
+    """
+    text = case["passage"]
+    for below in ("   - 資料の記載", "- 資料の記載", "  資料の記載", "→ 資料の記載"):
+        answer = f"{text}\n\n{below}"
+        assert numbered_heading_lines(answer) == {text}
+        assert non_claim_passages(answer).get(text) == "heading"
+    assert not is_heading(text)
+    assert passage_kind(text) is None
+    assert text not in non_claim_passages(text)
+    listed = f"{text}\n9. 次の項目\n   - 資料の記載"
+    assert text not in numbered_heading_lines(listed)
+    assert text not in non_claim_passages(listed)
+    assert numbered_heading_lines(f"{text}\n**次の節**") == set()
+
+
 @pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: str(case["id"]))
 def test_short_statements_are_not_headings(case: dict[str, str]) -> None:
-    """数・操作・言い切りを含む短い行と、値の名前だけの行は主張のまま確かめる（#1469）。"""
+    """数・操作・言い切りを含む短い行と、値の名前だけの行は主張のまま確かめる（#1469）。
+
+    次の行が下の内容でも見出しにしない（#1481）。
+    """
     text = case["passage"]
     assert not is_heading(text)
     assert passage_kind(text) is None
     assert text not in non_claim_passages(text)
+    below = f"{text}\n   - 資料の記載"
+    assert numbered_heading_lines(below) == set()
+    assert text not in non_claim_passages(below)
 
 
 @pytest.mark.parametrize("case", HEADING_CASES["answers"], ids=lambda case: str(case["id"]))
