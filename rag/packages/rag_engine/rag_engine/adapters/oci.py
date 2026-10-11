@@ -19,6 +19,12 @@ import re
 import time
 from dataclasses import dataclass
 from rag_engine.resources.cache import application_cache
+from rag_engine.resources.deadline import (
+    DeadlineExceeded,
+    check_deadline,
+    current_deadline,
+    remaining_seconds,
+)
 from pathlib import Path
 from typing import Any, Sequence, TypeVar
 
@@ -347,7 +353,12 @@ def _llm_transport_retries(settings: Settings) -> int | None:
     任せるため 0 を返し、自前のバックオフを二重に掛けません。OCI Generative AI 経路は全呼び出しを
     `NoneRetryStrategy` で送っていて SDK 側が再試行しないため、既定（`LLM_RETRIES`）のまま
     自前で再試行します (#743)。
+
+    回答の期限（`rag_engine.resources.deadline`。#1422）がある文脈では、SDK の再試行を切って
+    （`_openai_parsed`）ここで再試行し、送り直す前に残り時間を確かめます（期限を過ぎたら再試行しない）。
     """
+    if current_deadline() is not None:
+        return max(0, int(settings.llm_retries))
     return 0
 
 
@@ -378,15 +389,24 @@ def _parse_with_retry(
     invalid_output_retries = 0
     attempt = 0
     while True:
+        # 回答の期限を過ぎた・取り消された後は、次の呼び出し・やり直しをしない (#1422)。
+        check_deadline()
         try:
             return operation()
+        except DeadlineExceeded:
+            raise
         except Exception as exc:
             if _is_invalid_structured_output(exc) and invalid_output_retries < INVALID_OUTPUT_RETRIES:
                 invalid_output_retries += 1  # 通信系の再試行回数は消費しない
                 continue
             if attempt >= retry_count or not _is_retryable_error(exc):
                 raise
-            time.sleep(min(initial_wait * (2**attempt), max_wait))
+            wait = min(initial_wait * (2**attempt), max_wait)
+            remaining = remaining_seconds()
+            if remaining is not None and remaining <= wait:
+                # 待つと期限を過ぎる。送り直さずに期限切れにする。
+                raise DeadlineExceeded("回答の期限までに LLM を再試行できません。") from exc
+            time.sleep(wait)
             attempt += 1
 
 
@@ -476,7 +496,10 @@ def _openai_parsed(
     """
     budget = max(1, int(settings.answer_max_tokens))
     for attempt in range(2):
-        response = _openai_client_for_provider(provider, settings).responses.parse(
+        check_deadline()
+        response = _openai_client_with_deadline(
+            _openai_client_for_provider(provider, settings), settings
+        ).responses.parse(
             model=provider.model,
             input=input_messages,
             text_format=text_format,
@@ -557,6 +580,23 @@ def _openai_client_for_provider(provider: LlmProviderSettings, settings: Setting
         settings.llm_request_timeout_seconds,
         settings.llm_retries,
     )
+
+
+def _openai_client_with_deadline(client: Any, settings: Settings) -> Any:
+    """回答の期限がある文脈では、1 回の timeout を残り時間に縮め、SDK の再試行を切った client を返す。
+
+    打ち切った回答の thread が LLM 1 回の timeout（600 秒）と再試行のまま LLM を呼び続けないように
+    する (#1422)。再試行は `_parse_with_retry` が残り時間と取り消しを確かめながら行う（時刻の期限が無く
+    取り消しだけを伝える期限でも、SDK の再試行は切る）。期限が無い文脈では client をそのまま返す。
+    """
+    deadline = current_deadline()
+    if deadline is None:
+        return client
+    timeout = float(settings.llm_request_timeout_seconds)
+    remaining = deadline.remaining()
+    if remaining is not None:
+        timeout = min(timeout, remaining)
+    return client.with_options(timeout=max(0.001, timeout), max_retries=0)
 
 
 def _validated_llm_provider(
@@ -669,6 +709,14 @@ def _is_retryable_error(exc: Exception) -> bool:
         httpx_errors: tuple[type[BaseException], ...] = ()
     else:
         httpx_errors = (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError)
+    # SDK の再試行を切った呼び出し（回答の期限がある文脈。#1422）では、OpenAI SDK が包んだ接続・
+    # timeout の失敗（`APIConnectionError` / `APITimeoutError`）もここで再試行する。
+    try:
+        from openai import APIConnectionError
+    except ImportError:
+        openai_errors: tuple[type[BaseException], ...] = ()
+    else:
+        openai_errors = (APIConnectionError,)
     # OCI SDK は同梱の `oci._vendor.requests` を使うため、接続タイムアウトの `oci.exceptions.ConnectTimeout` と
     # 読み取りタイムアウトを含むその他の通信失敗 `oci.exceptions.RequestException` は、top-level の requests 例外とも
     # builtin の ConnectionError とも別クラスになる（両者に共通の親は vendored の RequestException だけで、
@@ -681,7 +729,9 @@ def _is_retryable_error(exc: Exception) -> bool:
         oci_errors: tuple[type[BaseException], ...] = ()
     else:
         oci_errors = (OciConnectTimeout, OciRequestException)
-    return isinstance(exc, (TimeoutError, ConnectionError, *request_errors, *httpx_errors, *oci_errors))
+    return isinstance(
+        exc, (TimeoutError, ConnectionError, *request_errors, *httpx_errors, *openai_errors, *oci_errors)
+    )
 
 
 def _json_dumps(value: Any) -> str:
