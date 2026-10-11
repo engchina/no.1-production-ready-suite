@@ -963,6 +963,21 @@ def test_fake_rag_evidence_outputs_match_the_contract() -> None:
         assert properties["older_versions"]["type"] == "array", name
 
 
+def test_fake_rag_read_chunks_match_the_contract() -> None:
+    """fake の読み取りのツールの chunk の項目は RAG の契約と同じ（表計算の場所を含む。#1471）。"""
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    tools = {tool["name"]: tool["outputSchema"] for tool in contract["tools"]}
+    for name in ("rag_read_document", "rag_read_section"):
+        chunk = tools[name]["$defs"]["ReadDocumentChunk"]["properties"]
+        assert {"sheet_name", "row_start", "row_end", "cell_range"} <= set(chunk), name
+        for item in DEFAULT_OUTPUTS[name]["chunks"]:
+            assert set(item) == set(chunk), name
+        assert (
+            DEFAULT_OUTPUTS[name]["schema_version"]
+            == tools[name]["properties"]["schema_version"]["default"]
+        )
+
+
 # ---- 根拠の章節を読み切る（#1438） --------------------------------------------------------------
 
 _GROUPED_GOAL = "契約の更新の手順をすべて教えてください。"

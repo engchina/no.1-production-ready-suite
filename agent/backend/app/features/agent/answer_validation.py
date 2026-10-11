@@ -174,6 +174,8 @@ def _locator_labels(item: JsonObject) -> list[object]:
         labels.append(section.get("title"))
     path = item.get("section_path")
     labels.extend(path if isinstance(path, list) else [])
+    # 読み取りのツールの chunk は表計算のシート名を chunk に持つ（#1471）。
+    labels.append(item.get("sheet_name"))
     return labels
 
 
