@@ -940,7 +940,15 @@ export interface CreateRunPayload {
   draft?: boolean;
   /** 続ける会話（#768）。省略すると新しい会話を始める。 */
   thread_id?: string;
+  /**
+   * 確認の取り消しの操作（#1441・#1445）。`nl2sql` は「データベースの検索は不要」、`rag` は「資料の検索は不要」。
+   * この Run ではその種類のツールを使わずに続ける。
+   */
+  clarification_cancel?: ClarificationKind;
 }
+
+/** 確認の種類（NL2SQL の AI要件確認・RAG の確認。#1441・#1445）。 */
+export type ClarificationKind = "nl2sql" | "rag";
 
 /** チャットの会話の一覧の 1 件（#768）。 */
 /** 回答の評価（RAG と同じ値。#774）。 */

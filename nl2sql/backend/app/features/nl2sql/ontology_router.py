@@ -2880,7 +2880,11 @@ class OntologyApiRuntime:
         *,
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
+        profile_confirmed: bool = False,
     ) -> QuerySessionData:
+        """`profile_confirmed` は、呼び出し元が業務プロファイルを明示して選んだ（MCP の
+        `nl2sql_query` の `profile_id`。#1441）ときに、推薦の確認（確認の token）を省く。"""
+
         # スナップショット(ロック下)→ LLM 解釈(ロック外)→ 書き戻し(ロック下+再検証)。
         # Enterprise AI 呼び出し中にグローバルロックを保持すると、1 つのハング呼び出しが
         # 全 ontology API を最大 timeout×retry 分塞ぐため、HTTP はロック外で行う。
@@ -2911,9 +2915,12 @@ class OntologyApiRuntime:
                     if request.clarification_mode != ClarificationMode.GUIDED:
                         raise
                     ontology_current = False
-            # チャットは業務プロファイルを画面で選んでいる（推薦の確認は無い。#1442）。
+            # チャットは業務プロファイルを画面で選んでいる（推薦の確認は無い。#1442）。MCP の
+            # nl2sql_query も profile_id を明示する（profile_confirmed。#1441）。
             recommendation_id = (
-                "" if request.chat else self._validate_profile_confirmation(request, ontology)
+                ""
+                if profile_confirmed or request.chat
+                else self._validate_profile_confirmation(request, ontology)
             )
             base_view = self._base_profile_view(profile, ontology)
             allowed = self.legacy_service.resolve_allowed_objects(

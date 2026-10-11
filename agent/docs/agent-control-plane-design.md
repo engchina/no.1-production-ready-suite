@@ -248,12 +248,28 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   `AGENT_NL2SQL_JOB_WAIT_SECONDS`（既定 300 秒、0 で待たない）で、1 回の待ちごとに Run がキャンセル・終了していないかを
   確かめる。上限を超えた・Run が終わった・続きの取得に失敗したときは最後の結果（`running` と `job_id`）を返す。
   SDK の function tool の timeout は待つ分を足した値にする。外部の MCP 接続のツールは対象外。
+- **NL2SQL の AI要件確認（#1441）**: `nl2sql_query` は SQL を作る前に AI要件確認（NL2SQL の SQL 生成の画面と同じ session）で
+  要件を確かめ、足りない・明確でない情報があれば SQL を作らずに `status=needs_clarification` と `requirement.question`
+  （質問・候補・理由。表・列は物理名）を 1 つだけ返す。Agent はモデルへの結果に `next_step`（`ask_clarification`。RAG の確認と
+  同じ形）を足し、確かめ中の問い（`kind=nl2sql`・`requirement_session_id`・候補）を支援タスクの状態に残す。利用者が答えた次の Run は、
+  指示の「データベース（NL2SQL）の確かめ中の問い」に従い `requirement_session_id` と `answer` を付けて呼び直す。確認の要るものが
+  無くなり SELECT・FROM が明確になると、NL2SQL が要件を反映してジョブで SQL を作る（確認が要らなければ聞かずに進む）。
+  Agent のチャットに「AI要件確認」のボタンは置かない。回答の対応は `needs_clarification`（`basis=nl2sql_clarification`）。
+- **確認の取り消し（#1441・#1445）**: 確かめ中の確認（NL2SQL の AI要件確認・RAG の `needs_clarification` / 業務ガイドの clarify）は、
+  チャットの「データベースの検索は不要」「資料の検索は不要」（`POST /api/runs` の `clarification_cancel`。同じ部品）か、確かめ中の問いへの
+  取り消しの文（「データベースは関係ない」「資料は関係ない」「確認はやめて」など。`clarification_cancel.message_cancel_kinds` の
+  決定的な判定）で取り消せる。取り消した Run は、その種類のツール（`nl2sql_*` / `rag_*`）をモデルに渡さず、ほかの手段で続けるか
+  意図を聞き直す指示を足す。NL2SQL は Control Plane が `nl2sql_cancel_requirement` で session を閉じる（step に残し、予算に数えない）。
+  RAG を取り消した回答は資料と照らし合わせない（`answer_validation` の `skipped` / `rag_declined`）。記録は Run の metadata
+  `clarification_cancel`・イベント・支援タスクの状態の `clarification_cancellations` に同じ形
+  （`{kind, trigger, run_id, at, questions, requirement_sessions}`）で残す。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 630 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）
-  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 120 秒。NL2SQL の
+  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 300 秒。NL2SQL の
   `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って
-  job_id を返す。呼び出しの中では LLM・Select AI を呼ばないため推論の量に左右されない。45 秒に、HTTP の往復・ジョブの登録・DB の負荷の
-  余裕 75 秒を足した 120 秒にする〔#1432。余裕 15 秒の 60 秒では足りないことがあった〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
+  job_id を返す。`nl2sql_query` は SQL を作る前に AI要件確認〔LLM。下書きと回答の後の再検査で最大 2 回。#1441〕を呼び、その分だけ
+  ジョブを待つ秒数を減らす。45 秒と AI要件確認の 180 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 300 秒にする
+  〔#1432 の 120 秒に AI要件確認の分を足した〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
   ジョブの完了は `AGENT_NL2SQL_JOB_WAIT_SECONDS` まで待つ。既定の SQL の生成〔Select AI の 1 回〕と実行は NL2SQL の DB の呼び出しの
   上限〔120 秒〕で打ち切られる。#1430）は接続 `rag` / `nl2sql` の初期値（タイムアウト秒の上限は 900 秒。SDK の function tool の
   timeout は、接続の timeout〔`nl2sql` はジョブを待つ分を足した値〕の 2 倍）。`backend/.env.example` は両方の値を明示する（#1430）。画面で保存済みの接続はその値のまま（#1425 より前に保存した `rag` の 60 秒は、
@@ -481,8 +497,10 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 回答を保存する前に、Control Plane が（モデルではなく）根拠を返した MCP 接続ごとに `rag_validate_answer` を呼ぶ。渡すのは
 その Run の質問・回答と、その接続の `rag_search` / `rag_retrieve_evidence` が返した根拠と `rag_read_source` / `rag_read_document` /
 `rag_read_section` で読んだ chunk の参照（#1345。多段の質問は段の事実を読んで確かめるため。回答が引用した根拠（`chunk_id` を回答に
-書いたもの）を先に、残りは新しい呼び出しから順、重複なし、接続ごとに 30 件まで。#1364。前の段の根拠を上限で
-落とさない）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
+書いたもの。#1364）、回答の本文に固有の特徴（ID・コード・引用・見出し・同じ文字の並び。多くの根拠が共有する
+特徴は数えない）で当たった根拠（#1451。`chunk_id` を書かないモデルでも回答が使った根拠を見分ける）を先に、残りは
+新しい呼び出しから順で、`rag_read_document` / `rag_read_section` でまとめて読んだ chunk のうち回答に当たらないものは
+検索の根拠の後ろ。重複なし、接続ごとに 30 件まで。前の段の根拠を上限で落とさない）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
 分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
 影響範囲・承認。#1276）も動かす。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の

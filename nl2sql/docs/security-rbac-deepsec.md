@@ -181,6 +181,12 @@ platform の `docs/backend-standard.md`「製品間の連携（MCP とサービ�
 | `nl2sql_recommend_profile` | `nl2sql.query.generate` | `POST /api/nl2sql/recommend-profile`。任意の `profile_ids`（候補の一覧）を渡すとその中からだけ推薦する（候補は利用者の範囲・claim との積。積が空なら推薦なし）。範囲外・しきい値未満の推薦は `null` |
 | `nl2sql_query` | `nl2sql.query.generate` と `nl2sql.sql.execute` の両方 | `POST /api/nl2sql/jobs`。**`profile_id` は必須**（省略・空白は `MCP_TOOL_ARGUMENTS_INVALID`。画面の API と違い `"default"` に切り替えない。#1379）。claim の範囲外は 403（`PROFILE_SCOPE_FORBIDDEN`）、利用者の範囲外の業務プロファイルは 403。`row_limit`（既定 100、上限 1000）を必ずジョブに渡す。`wait_seconds`（既定 40、上限 45）まで待ち、終わらなければ `pending` / `running` と `job_id` を返す |
 | `nl2sql_get_job` | `nl2sql.query.generate` | `GET /api/nl2sql/jobs/{job_id}`。ただし管理権限があっても本人のジョブだけ（他人・不明は 404） |
+| `nl2sql_cancel_requirement` | `nl2sql.query.generate` | `POST /api/nl2sql/query-sessions/{session_id}/cancel`。本人の AI要件確認の session だけ（管理権限があっても他人・不明は 404）。claim の範囲外の業務プロファイルの session は 403 |
+
+`nl2sql_query` は SQL を作る前に AI要件確認（`POST /api/nl2sql/query-sessions` の guided と同じ。#1441）を行い、確認の要る項目があれば
+`status=needs_clarification` と `requirement.question` を返す（ジョブは作らない）。続きの `requirement_session_id` は本人の session だけで、
+業務プロファイルは同じ `profile_id` に限る。業務プロファイルは呼び出し元が `profile_id` で明示して選ぶため、画面の推薦の確認（確認の token）は
+求めない。OCI Enterprise AI を設定していない構成（`REQUIREMENT_AI_NOT_CONFIGURED`）だけは確かめずにジョブを作り、`requirement.status=skipped` を返す。
 
 `menu.query` はすべてのツールを使える。`menu.direct_sql` だけのロールはどのツールも使えない
 （生成できないため）。`menu.evaluation` のように生成だけできるロールには `nl2sql_query` を出さない。
