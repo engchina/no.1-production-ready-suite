@@ -29,6 +29,8 @@ from app.rag.answer_checks import (
 from app.rag.answer_engine import _sheet_location, build_engine_settings
 from app.rag.answer_threads import run_answer_in_thread
 
+# 全体を渡す文書（complete_documents）の chunk の数の上限。超える文書は全体を渡さない（#1470）。
+MAX_COMPLETE_DOCUMENT_CHUNKS = 200
 # 主張の監査で「検証に通った」とみなさない判定。
 _BLOCKING_STATUSES = frozenset({"unsupported", "contradicted", "citation_error", "unassessed"})
 
@@ -37,6 +39,14 @@ _BLOCKING_STATUSES = frozenset({"unsupported", "contradicted", "citation_error",
 class EvidenceRef:
     document_id: str
     chunk_id: str
+
+
+@dataclass(frozen=True)
+class CompleteDocumentRef:
+    """呼び出し側が最後まで読んだ文書（rag_read_document の document_id・chunk_set_id。#1470）。"""
+
+    document_id: str
+    chunk_set_id: str
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,8 @@ class AnswerValidation:
     checks: list[str] = field(default_factory=list)
     # 検査に使った業務ガイドの公開の版（業務ガイドを渡さなければ None）。
     guide_revision: int | None = None
+    # 全体を渡して、その範囲の全件・不在の主張を判定させた文書の名前（#1470）。
+    complete_documents: list[str] = field(default_factory=list)
 
 
 def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -155,6 +167,7 @@ async def validate_answer(
     requests: Sequence[Mapping[str, str]] | None = None,
     gaps: Sequence[str] = (),
     guide: GuideCheckRef | None = None,
+    complete_documents: Sequence[CompleteDocumentRef] = (),
 ) -> AnswerValidation:
     oracle = oracle or OracleClient()
     # 決定的な検査を先に行う（業務ガイドを読めなければ、モデルを呼ぶ前に止める）。
@@ -183,17 +196,8 @@ async def validate_answer(
             exists = await oracle.accessible_chunk_exists(ref.document_id, ref.chunk_id)
             (stale if exists else missing).append(ref)
             continue
-        metadata = dict(chunk.metadata)
-        items.append(
-            {
-                "id": chunk.chunk_id,
-                "source": chunk.file_name or chunk.document_id,
-                "page_start": metadata.get("page_start"),
-                "page_end": metadata.get("page_end"),
-                **evidence_location(metadata),
-                "text": chunk.text,
-            }
-        )
+        items.append(_evidence_item(chunk))
+    wholes = await _complete_document_items(oracle, complete_documents, items)
     if not items:
         return AnswerValidation(
             status="no_evidence",
@@ -208,7 +212,9 @@ async def validate_answer(
 
         with tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work:
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
-            return validate_answer_claims(question, answer, items, engine_settings)
+            return validate_answer_claims(
+                question, answer, items, engine_settings, complete_documents=wholes
+            )
 
     # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
     result = await run_answer_in_thread(run)
@@ -222,12 +228,61 @@ async def validate_answer(
         missing_evidence=missing,
         stale_evidence=stale,
         evidence_truncated=bool(result.get("evidence_truncated")),
+        complete_documents=[str(item) for item in result.get("complete_documents") or []],
         **deterministic,
     )
 
 
+def _evidence_item(chunk: Any) -> dict[str, Any]:
+    metadata = dict(chunk.metadata)
+    return {
+        "id": chunk.chunk_id,
+        "source": chunk.file_name or chunk.document_id,
+        "page_start": metadata.get("page_start"),
+        "page_end": metadata.get("page_end"),
+        **evidence_location(metadata),
+        "text": chunk.text,
+    }
+
+
+async def _complete_document_items(
+    oracle: OracleClient,
+    documents: Sequence[CompleteDocumentRef],
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """最後まで読んだ文書の chunk をすべて根拠に足し、（source, chunk_ids）を返す（#1470）。
+
+    読み直しは rag_read_document と同じ見え方（今の利用者の権限・その chunk_set）。chunk_set が有効で
+    なくなった文書・chunk が上限を超える文書は全体を渡さない。足すのは呼び出し側の参照の後ろ
+    （予算に収まらなければ rag_engine が全体を渡せていないと判断する）。
+    """
+    wholes: list[dict[str, Any]] = []
+    present = {str(item["id"]) for item in items}
+    for document in dict.fromkeys(documents):
+        chunks = await oracle.readable_document_chunks(
+            document.document_id,
+            chunk_set_id=document.chunk_set_id,
+            from_index=0,
+            limit=MAX_COMPLETE_DOCUMENT_CHUNKS + 1,
+        )
+        if not chunks or len(chunks) > MAX_COMPLETE_DOCUMENT_CHUNKS:
+            continue
+        for chunk in chunks:
+            if chunk.chunk_id not in present:
+                items.append(_evidence_item(chunk))
+                present.add(chunk.chunk_id)
+        wholes.append(
+            {
+                "source": chunks[0].file_name or chunks[0].document_id,
+                "chunk_ids": [chunk.chunk_id for chunk in chunks],
+            }
+        )
+    return wholes
+
+
 __all__ = [
     "AnswerValidation",
+    "CompleteDocumentRef",
     "EvidenceRef",
     "GuideCheckRef",
     "GuideProfileNotFoundError",

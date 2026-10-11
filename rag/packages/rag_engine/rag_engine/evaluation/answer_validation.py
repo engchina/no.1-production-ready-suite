@@ -38,7 +38,8 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, table_he
 #    それでも出典が決まらない ID の無い段落は、回答の他の段落が引いた根拠で確かめ直すようにした（#1412）。
 # 6: 質問・回答が限定した範囲（会社・台帳・版・年度・部署）の外の根拠との違いを contradicted にしないことを足した（#1413）。
 # 7: 根拠に場所（節・シート・行・セル範囲）を渡し、段落が書いた場所の表記の違いだけを unsupported にしないことを足した（#1450）。
-VALIDATION_RUBRIC_VERSION = 7
+# 8: 全体を渡した文書（complete_documents）の範囲の全件・件数・不在の主張を、その文書の根拠をすべて照らして判定することを足した（#1470）。
+VALIDATION_RUBRIC_VERSION = 8
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,8 @@ VALIDATION_SYSTEM_PROMPT = (
 - 段落が書いた場所（頁・節・シート・行・セル範囲）は、evidence_items の場所（page_start・page_end・section_path・sheet_name・row_start・row_end・cell_range）と照らす。場所は裏付ける内容ではなく出典の示し方なので、上の「段落の一部」に数えない。
 - 根拠に場所の情報が無い、または表記が違うだけ（「行23」「23 行目」と row_start 23、「行1〜3」と row_start 1・row_end 3、「A11:F11」と cell_range、「p.3」と page_start 3 など）で、内容が根拠で裏付けられるなら supported にする。場所の表記を理由に unsupported にしない。
 - 段落が書いた場所が、内容を裏付ける根拠の場所と食い違う（別のシート・範囲の外の行・別の頁）ときだけ、場所を理由に unsupported にする。
+- complete_documents に載る文書（source）は、その文書の全ての根拠を evidence_items に渡している。段落がその文書の範囲での全件・件数・不在（「この台帳で担当部署が X の行は SYS-107 の 1 件だけ」「この台帳に担当部署が Y の行は無い」）を述べるなら、その文書の evidence_items をすべて照らして判定する。すべてで確かめられれば supported にし、当てはまる根拠を evidence_id に書く（無いことを述べる段落は、その文書の根拠の 1 つを書く）。述べた件数・不在と食い違う根拠があれば contradicted にする。
+- complete_documents に無い文書の全件・件数・不在の主張と、文書の範囲を限らない全件・不在の主張（「資料に無い」「ほかに無い」）は、渡した根拠の外を確かめられないので unsupported にする。
 """
 )
 
@@ -200,6 +203,20 @@ def _recheck_unreferenced_passages(
     return result, [passage["id"] for passage in targets if passage["id"] in settled]
 
 
+def _complete_documents(
+    documents: Sequence[Mapping[str, Any]], fragments: Sequence[Mapping[str, Any]]
+) -> list[tuple[str, set[str]]]:
+    """全体を渡した文書ごとの（source, その文書の根拠の断片の evidence_id）。根拠が無い文書は除く。"""
+    wholes: list[tuple[str, set[str]]] = []
+    for document in documents:
+        source = str(document.get("source") or "").strip()
+        chunk_ids = {str(item) for item in document.get("chunk_ids") or []}
+        ids = {str(item["evidence_id"]) for item in fragments if str(item.get("id")) in chunk_ids}
+        if source and ids:
+            wholes.append((source, ids))
+    return wholes
+
+
 def validate_answer_claims(
     question: str,
     answer_text: str,
@@ -207,8 +224,13 @@ def validate_answer_claims(
     settings: Any,
     *,
     provider_id: str | None = None,
+    complete_documents: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
+
+    complete_documents は全体を渡した文書の ``{source, chunk_ids}``（#1470）。その文書の根拠がすべて
+    予算に収まったときだけ、モデルに ``complete_documents``（source と根拠の数）として示し、その文書の
+    範囲の全件・件数・不在の主張を判定させる。収まらなければ示さない（全体を渡せていない）。
 
     evidence_items は ``{id, source, page_start, page_end, text}``（id は chunk の id）に、分かるときは場所の
     ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。
@@ -229,9 +251,24 @@ def validate_answer_claims(
         "answer_passages": passages,
     }
     fragments = list(_evidence_fragments([dict(item) for item in evidence_items]))
+    wholes = _complete_documents(complete_documents, fragments)
+    if wholes:
+        fixed["complete_documents"] = [
+            {"source": source, "evidence_count": len(ids)} for source, ids in wholes
+        ]
     evidence, truncated = _fit_evidence(fixed, fragments)
     if not evidence and fragments:
         return {**base, "status": "input_too_large"}
+    if wholes:
+        chosen = {str(item.get("evidence_id")) for item in evidence}
+        # 文書の根拠が 1 つでも予算の外に落ちたら、その文書は全体を渡せていない（示さない）。
+        kept = [
+            {"source": source, "evidence_count": len(ids)} for source, ids in wholes if ids <= chosen
+        ]
+        if kept:
+            fixed["complete_documents"] = kept
+        else:
+            fixed.pop("complete_documents", None)
     inputs = {**fixed, "evidence_items": evidence}
 
     try:
@@ -273,6 +310,7 @@ def validate_answer_claims(
         "counts": counts,
         "evidence_truncated": truncated,
         "evidence_ids": sorted({str(item.get("id")) for item in evidence}),
+        "complete_documents": [item["source"] for item in fixed.get("complete_documents") or []],
         "rechecked_passage_ids": rechecked,
     }
 
