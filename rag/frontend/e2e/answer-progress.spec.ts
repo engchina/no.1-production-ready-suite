@@ -29,7 +29,7 @@ function sse(event: string, data: unknown): string {
 }
 
 const TIMEOUT_MESSAGE =
-  "回答の生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 文書検索）。" +
+  "回答の生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 文書検索）。" +
   "時間をおいて、もう一度送信してください。";
 
 const searchAnswerProfile = {

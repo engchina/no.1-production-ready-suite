@@ -17,7 +17,9 @@ curl -X POST http://localhost:8000/api/evaluation/jobs/run \
 curl http://localhost:8000/api/evaluation/jobs/<job_id>
 ```
 
-job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒）です。1 ケースは回答生成の上限
+job 全体の時間の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× 回答生成の上限で、
+`RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒）を最小値、86400 秒を最大値にします（#1430。例: 20 問なら
+20 × 600 = 12000 秒）。上限は job の `time_limit_seconds` で返ります。1 ケースは回答生成の上限
 （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）で打ち切り、時間切れになった工程を `error_stage` / `error_message` に
 残して次のケースへ進みます。全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに
 `error_type=EvaluationTimeBudgetExceeded` の失敗として結果を返します（job は `SUCCEEDED`、評価は `passed=false`）。
@@ -157,7 +159,7 @@ uv run python -m app.rag.search_load_cli \
 - `2`: golden set / search load scenario ファイルや CLI 引数が不正。
 - `3`: 評価 CLI で API 接続、HTTP 応答、レスポンス形式の問題が起きた。
 
-`RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_COMPARE_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`（job の終わりを待つ秒数。既定 3900 秒。job の既定の上限 3600 秒で打ち切った結果を受け取れるよう、それより長く待つ。超えたら job を取り消して終了コード 3 を返す。#390）、`RAG_EVALUATION_POLL_INTERVAL_SECONDS`、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は入力形式に応じて `/api/evaluation/jobs/run` または `/api/evaluation/jobs/compare` を付与します。`--api-url` や `RAG_EVALUATION_*_API_URL` に以前の同期 API の URL（`/api/evaluation/run`・`/compare`）を指定していても、job の API に読み替えます。nightly（`RAG Evaluation Nightly`）は、workflow の timeout に収まるよう `RAG_EVALUATION_TIMEOUT_SECONDS=900` で待ちます。tenant/user の raw 値は CLI 出力には表示しません。
+`RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_COMPARE_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`（job の終わりを待つ秒数。未指定なら job の上限（`time_limit_seconds`）+ 300 秒で、job の上限で打ち切った結果を受け取れるよう、それより長く待つ。超えたら job を取り消して終了コード 3 を返す。#390 / #1430）、`RAG_EVALUATION_POLL_INTERVAL_SECONDS`、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は入力形式に応じて `/api/evaluation/jobs/run` または `/api/evaluation/jobs/compare` を付与します。`--api-url` や `RAG_EVALUATION_*_API_URL` に以前の同期 API の URL（`/api/evaluation/run`・`/compare`）を指定していても、job の API に読み替えます。nightly（`RAG Evaluation Nightly`）は、workflow の timeout に収まるよう `RAG_EVALUATION_TIMEOUT_SECONDS=900` で待ちます。tenant/user の raw 値は CLI 出力には表示しません。
 
 `RAG_SEARCH_LOAD_API_BASE_URL`、`RAG_SEARCH_LOAD_API_URL`、`RAG_SEARCH_LOAD_TIMEOUT_SECONDS`、`RAG_SEARCH_LOAD_TENANT_ID`、`RAG_SEARCH_LOAD_USER_ID` でも検索 load CLI を指定できます。GitHub Actions の `RAG Evaluation Nightly` workflow は evaluation trend と search-load trend を同じ `rag-evaluation-nightly` artifact に保存します。`workflow_dispatch` の `search_load_path` を空文字にすると search load gate だけを skip できます。
 

@@ -17,6 +17,8 @@ from app.rag.evaluation_jobs import (
     EvaluationJobNotFoundError,
     EvaluationJobOutcome,
     EvaluationJobStateError,
+    evaluation_answer_runs,
+    evaluation_job_time_limit_seconds,
     get_evaluation_job_service,
 )
 from app.rag.rate_limit import enforce_rate_limit
@@ -42,7 +44,8 @@ logger = logging.getLogger(__name__)
 # 失敗として返す。Nginx の待ち時間（660 秒。`init_script.sh` が生成する設定）はこれより長くし、
 # 打ち切った結果を呼び出し元に届ける。
 # 画面と評価 CLI は job の API（`/jobs/run`・`/jobs/compare`。#390）に移した。job の全体の上限は
-# `rag_evaluation_job_timeout_seconds`。同期の API は、外部から直接呼ぶ利用のために残す。
+# 回答の回数に比例させる（`evaluation_job_time_limit_seconds`。#1430）。同期の API は、外部から
+# 直接呼ぶ利用のために残す。
 EVALUATION_RUN_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
 
 
@@ -103,7 +106,9 @@ async def submit_run_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """golden set の評価を job として投入する（#390）。進捗は `GET /jobs/{job_id}` で取得する。"""
     enforce_rate_limit("evaluation", http_request)
-    time_limit = get_settings().rag_evaluation_job_timeout_seconds
+    time_limit = evaluation_job_time_limit_seconds(
+        get_settings(), answer_runs=evaluation_answer_runs(request.cases)
+    )
 
     async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
         metrics, evaluation_run_id = await _execute_run(
@@ -130,7 +135,10 @@ async def submit_compare_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """複数 RAG 設定の比較を job として投入する（#390）。件数は experiment × ケース。"""
     enforce_rate_limit("evaluation", http_request)
-    time_limit = get_settings().rag_evaluation_job_timeout_seconds
+    time_limit = evaluation_job_time_limit_seconds(
+        get_settings(),
+        answer_runs=evaluation_answer_runs(request.cases, experiments=len(request.experiments)),
+    )
 
     async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
         comparison, evaluation_run_id = await _execute_compare(

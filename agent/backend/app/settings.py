@@ -116,8 +116,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_pool_max_connections: int = 8
     # MCP 接続（#757）。RAG / NL2SQL は各製品の MCP（`POST /api/mcp`）で、接続 `rag` / `nl2sql`
     # の URL の初期値になる（例: http://rag-host/api/mcp）。Run の利用者のサービストークン
-    # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。LLM を使う
-    # 呼び出しがあるため、タイムアウトは NL2SQL の待ち時間（最大 45 秒）より長くする。
+    # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。タイムアウト（秒）は
+    # 1 回の MCP の呼び出しの待ち時間で、画面の「MCP 接続」の上限（900 秒）以下にする。
     agent_external_rag_mcp_url: str | None = None
     # RAG の `rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`。既定 600 秒）を通しで待つ
     # ため、RAG の回答の上限より長くする（RAG の画面の timeout と同じ 630 秒。#1425）。
@@ -127,9 +127,16 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # host。private IP のことがある）のまま使う。1 台の Compute（#1316）では同じ origin の `/rag`。
     agent_external_rag_public_url: str | None = None
     agent_external_nl2sql_mcp_url: str | None = None
+    # NL2SQL の `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の
+    # 呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って、終わらなければ job_id を返す
+    # （呼び出しの中では LLM・Select AI を呼ばないため、推論の量に左右されない）。待ちの上限
+    # 45 秒に余裕 15 秒（`tools._JOB_POLL_MARGIN_SECONDS`）を足した 60 秒にする。ジョブの完了は
+    # `agent_nl2sql_job_wait_seconds` まで続きを取って待つ（#848 / #1430）。
     agent_external_nl2sql_timeout_seconds: float = 60.0
     # NL2SQL のジョブが pending / running のまま返ったとき、ツールの中で完了を待つ合計の上限
-    # （秒。#848）。
+    # （秒。#848）。既定の SQL の生成（Select AI の 1 回）と実行は、それぞれ NL2SQL の DB の
+    # 呼び出しの上限（`NL2SQL_ORACLE_CALL_TIMEOUT_SECONDS`、既定 120 秒）で打ち切られるため、
+    # 300 秒で足りる。
     # nl2sql_get_job を wait_seconds 付きで繰り返し呼ぶ。0 なら待たずにそのまま返す。
     agent_nl2sql_job_wait_seconds: float = 300.0
     # Run の利用者がいない呼び出し（画面からのツール一覧の取得など、利用者のいない経路）で使う

@@ -502,11 +502,26 @@ def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
 
 
 def test_evaluation_gate_cli_waits_longer_than_evaluation_job_time_limit() -> None:
-    """CLI の既定の待ち時間は、評価 job の既定の上限より長い（打ち切った結果を受け取る。#390）。"""
+    """--timeout 未指定なら job の全体の上限より長く待つ（結果を受け取る。#390 / #1430）。"""
     from app.config import Settings
 
+    assert evaluation_cli._job_wait_seconds({"time_limit_seconds": 12000}) == (
+        12000 + evaluation_cli.JOB_WAIT_MARGIN_SECONDS
+    )
+    # 古い backend で job の上限が分からないときは、以前の既定の上限より長く待つ。
     job_limit = Settings.model_fields["rag_evaluation_job_timeout_seconds"].default
+    assert evaluation_cli._job_wait_seconds({}) == evaluation_cli.DEFAULT_TIMEOUT_SECONDS
     assert job_limit < evaluation_cli.DEFAULT_TIMEOUT_SECONDS
+
+
+def test_evaluation_gate_cli_timeout_defaults_to_job_limit(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """--timeout と RAG_EVALUATION_TIMEOUT_SECONDS が無ければ、待ち時間は job の上限から決める。"""
+    monkeypatch.delenv("RAG_EVALUATION_TIMEOUT_SECONDS", raising=False)
+    assert evaluation_cli._build_parser().parse_args(["golden.json"]).timeout is None
+    monkeypatch.setenv("RAG_EVALUATION_TIMEOUT_SECONDS", "900")
+    assert evaluation_cli._build_parser().parse_args(["golden.json"]).timeout == 900.0
 
 
 class _FakeJobServer:
@@ -602,6 +617,36 @@ def test_post_evaluation_request_cancels_job_after_timeout() -> None:
 
     assert raised.value.exit_code == 3
     assert "取り消しました" in str(raised.value)
+    assert server.requests[-1] == ("POST", "/api/evaluation/jobs/job-1/cancel")
+
+
+def test_post_evaluation_request_waits_job_time_limit_without_timeout() -> None:
+    """timeout が None なら、job の上限 + 余裕まで待ってから取り消す（#1430）。"""
+    import httpx
+    import pytest
+
+    server = _FakeJobServer([_job("RUNNING", 0, time_limit_seconds=12000)])
+    now = [0.0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    with pytest.raises(evaluation_cli.EvaluationGateError) as raised:
+        evaluation_cli._post_evaluation_request(
+            api_url="http://rag.example.test/api/evaluation/jobs/run",
+            payload={"cases": []},
+            timeout=None,
+            headers={},
+            poll_interval=1000,
+            transport=httpx.MockTransport(server.handler),
+            sleep=sleep,
+            clock=lambda: now[0],
+        )
+
+    assert raised.value.exit_code == 3
+    # 以前の固定の 3900 秒では打ち切らず、12000 + 300 秒を超えてから取り消す。
+    assert now[0] >= 12000 + evaluation_cli.JOB_WAIT_MARGIN_SECONDS
+    assert now[0] < 12000 + evaluation_cli.JOB_WAIT_MARGIN_SECONDS + 1000
     assert server.requests[-1] == ("POST", "/api/evaluation/jobs/job-1/cancel")
 
 

@@ -110,7 +110,7 @@ for (const viewport of [
     await expect(error).toContainText("エラー");
     await expect(error).toContainText("工程: 根拠の検索と回答の生成");
     await expect(error).toContainText(
-      "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。"
+      "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。"
     );
     await expectNoPageOverflow(page);
   });
@@ -413,7 +413,7 @@ function evaluationMetricsWithTimedOutCase() {
         error_type: "TimeoutError",
         error_stage: "answer",
         error_message:
-          "評価ケースの回答生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。trace_id で監査ログを確認してください。",
+          "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。trace_id で監査ログを確認してください。",
       },
       success,
     ],

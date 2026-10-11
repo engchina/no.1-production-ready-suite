@@ -11,9 +11,10 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.clients.oracle import OracleClient, OraclePoolProtocol
-from app.config import get_settings
+from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.main import app
 from app.rag import evaluation_jobs
 from app.rag.evaluation import EvaluationProgressCallback, EvaluationRunner
@@ -29,6 +30,8 @@ from app.rag.evaluation_jobs import (
     EvaluationJobStateError,
     MemoryEvaluationJobStore,
     OracleEvaluationJobStore,
+    evaluation_answer_runs,
+    evaluation_job_time_limit_seconds,
     set_evaluation_job_service,
 )
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
@@ -430,6 +433,58 @@ async def api_client(service: EvaluationJobService) -> AsyncIterator[httpx.Async
         yield client
 
 
+def _case(case_id: str, *, replies: int = 0) -> EvaluationCase:
+    return EvaluationCase.model_validate(
+        {
+            "id": case_id,
+            "query": "承認条件は?",
+            "relevant_document_ids": [],
+            "turns": [{"reply": f"返答 {index}"} for index in range(replies)],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("answer_runs", "floor", "answer_timeout", "expected"),
+    [
+        # 推論型のモデルの 20 問の評価: 20 × 600 秒。以前の固定の 3600 秒では打ち切られた。
+        (20, 3600, 600.0, 12000),
+        # 少ない問の数では設定の値（最小値）より短くしない。
+        (2, 3600, 600.0, 3600),
+        # 1 日（86400 秒）を超えない。
+        (200, 3600, 600.0, RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS),
+        # 回答の上限の端数は切り上げる。
+        (3, 60, 100.5, 302),
+        (0, 60, 600.0, 60),
+    ],
+    ids=["twenty-cases", "floor", "max", "ceil", "no-cases"],
+)
+def test_evaluation_job_time_limit_is_proportional_to_answer_runs(
+    answer_runs: int, floor: int, answer_timeout: float, expected: int
+) -> None:
+    """job の上限は回答の回数 × 回答の上限で、設定の値を最小、86400 秒を最大にする（#1430）。"""
+    settings = Settings(
+        rag_evaluation_job_timeout_seconds=floor, rag_answer_timeout_seconds=answer_timeout
+    )
+    assert evaluation_job_time_limit_seconds(settings, answer_runs=answer_runs) == expected
+
+
+def test_evaluation_answer_runs_counts_replies_and_experiments() -> None:
+    """回答の回数は、ケースごとの最初の質問と返答（#1284）の数で、比較は experiment 倍。"""
+    cases = [_case("c1"), _case("c2", replies=2)]
+    assert evaluation_answer_runs(cases) == 1 + 3
+    assert evaluation_answer_runs(cases, experiments=3) == 3 * (1 + 3)
+
+
+def test_evaluation_job_timeout_setting_defaults() -> None:
+    """設定は最小値（既定 3600 秒）で、上限は job の上限の最大と同じ 86400 秒。"""
+    field = Settings.model_fields["rag_evaluation_job_timeout_seconds"]
+    assert field.default == 3600
+    assert Settings(rag_evaluation_job_timeout_seconds=RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS)
+    with pytest.raises(ValidationError):
+        Settings(rag_evaluation_job_timeout_seconds=RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS + 1)
+
+
 def _run_body() -> dict[str, Any]:
     return {
         "cases": [
@@ -466,6 +521,8 @@ async def test_run_job_api_submits_and_returns_result(
     monkeypatch.setattr(EvaluationRunner, "run", fake_run)
     monkeypatch.setattr(OracleClient, "save_evaluation_artifact", fake_save)
     monkeypatch.setattr(get_settings(), "rag_evaluation_job_timeout_seconds", 900)
+    # 2 ケース × 300 秒 = 600 秒は設定の最小値（900 秒）より短い。
+    monkeypatch.setattr(get_settings(), "rag_answer_timeout_seconds", 300.0)
 
     response = await api_client.post("/api/evaluation/jobs/run", json=_run_body())
     assert response.status_code == 202
@@ -487,7 +544,7 @@ async def test_run_job_api_submits_and_returns_result(
     assert done["completed_cases"] == 2
     assert done["run_result"]["case_count"] == 2
     assert done["run_result"]["evaluation_suite"] == "standard"
-    # job の上限は設定の値。同期の API の 600 秒ではない。
+    # job の上限は設定の最小値。同期の API の 600 秒ではない。
     assert observed == {"time_budget_seconds": 900, "artifact_kind": "run"}
 
 
@@ -506,6 +563,8 @@ async def test_compare_job_api_counts_experiment_cases(
 
     monkeypatch.setattr(EvaluationRunner, "compare", fake_compare)
     monkeypatch.setattr(OracleClient, "save_evaluation_artifact", fake_save)
+    monkeypatch.setattr(get_settings(), "rag_evaluation_job_timeout_seconds", 60)
+    monkeypatch.setattr(get_settings(), "rag_answer_timeout_seconds", 600.0)
 
     body = {
         "cases": _run_body()["cases"],
@@ -515,6 +574,8 @@ async def test_compare_job_api_counts_experiment_cases(
     assert response.status_code == 202
     job = response.json()["data"]
     assert (job["kind"], job["total_cases"]) == ("compare", 6)
+    # job の上限は回答の回数（experiment × ケース）× 回答の上限（#1430）。
+    assert job["time_limit_seconds"] == 6 * 600
     await service.wait_for(job["job_id"])
     done = (await api_client.get(f"/api/evaluation/jobs/{job['job_id']}")).json()["data"]
     assert done["status"] == "SUCCEEDED"

@@ -30,8 +30,12 @@ from app.schemas.evaluation import (
 DEFAULT_EVALUATION_API_URL = "http://localhost:8000/api/evaluation/jobs/run"
 DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/jobs/compare"
 DEFAULT_EVALUATION_API_BASE_URL = "http://localhost:8000"
-# job の終わりを待つ時間の上限（秒）。backend の job の上限（`RAG_EVALUATION_JOB_TIMEOUT_SECONDS`、
-# 既定 3600 秒）で打ち切った結果を受け取れるよう、それより長くする。超えたら job を取り消す。
+# job の終わりを待つ時間（秒）。`--timeout` を指定しなければ、投入した job の全体の上限
+# （`time_limit_seconds`。回答の回数に比例する。#1430）にこの余裕を足して待ち、backend が上限で
+# 打ち切った結果を受け取る。超えたら job を取り消す。
+JOB_WAIT_MARGIN_SECONDS = 300.0
+# job の状態に `time_limit_seconds` が無いとき（古い backend）の待つ時間（秒）。以前の job の
+# 既定の上限（3600 秒）に余裕を足した値。
 DEFAULT_TIMEOUT_SECONDS = 3900.0
 # 状態を取得する間隔（秒）と、1 回の HTTP の呼び出しの timeout（秒）。
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
@@ -127,10 +131,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=_env_float("RAG_EVALUATION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+        default=_env_optional_float("RAG_EVALUATION_TIMEOUT_SECONDS"),
         help=(
             "評価 job の終わりを待つ秒数。超えたら job を取り消して終了コード 3 を返します。"
-            f"既定値: {DEFAULT_TIMEOUT_SECONDS}"
+            "既定値: job の全体の上限（回答の回数に比例）"
+            f"+ {JOB_WAIT_MARGIN_SECONDS:g} 秒"
         ),
     )
     parser.add_argument(
@@ -247,7 +252,7 @@ def _post_evaluation_request(
     *,
     api_url: str,
     payload: Mapping[str, Any],
-    timeout: float,
+    timeout: float | None,
     headers: Mapping[str, str],
     poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
     transport: httpx.BaseTransport | None = None,
@@ -256,9 +261,10 @@ def _post_evaluation_request(
 ) -> dict[str, Any]:
     """評価 job を投入し、終わるまで状態を取得して、結果を `{"data": 結果, "job": 状態}` で返す。
 
-    `timeout` 秒を超えても終わらなければ、job を取り消して exit code 3 の失敗にする。
+    `timeout` 秒を超えても終わらなければ、job を取り消して exit code 3 の失敗にする。`timeout` が
+    None なら、job の全体の上限に余裕を足した秒数を待つ（`_job_wait_seconds`）。
     """
-    if timeout <= 0:
+    if timeout is not None and timeout <= 0:
         raise EvaluationGateError("timeout は 0 より大きい値にしてください。")
     if poll_interval <= 0:
         raise EvaluationGateError("poll-interval は 0 より大きい値にしてください。")
@@ -276,6 +282,8 @@ def _post_evaluation_request(
                 _request_json(client, "POST", submit_url, json=payload, headers=request_headers)
             )
             status_url = _job_status_url(submit_url, str(job["job_id"]))
+            if timeout is None:
+                timeout = _job_wait_seconds(job)
             deadline = clock() + timeout
             last_progress: tuple[object, object] | None = None
             try:
@@ -548,6 +556,24 @@ def _safe_validation_error_summary(error: ValidationError) -> str:
         error_type = item.get("type", "validation_error")
         summaries.append(f"{loc}:{error_type}")
     return ", ".join(summaries)
+
+
+def _job_wait_seconds(job: Mapping[str, Any]) -> float:
+    """`--timeout` 未指定のときに job を待つ秒数（job の全体の上限 + 余裕。#1430）。"""
+    limit = job.get("time_limit_seconds")
+    if isinstance(limit, int | float) and not isinstance(limit, bool) and limit > 0:
+        return float(limit) + JOB_WAIT_MARGIN_SECONDS
+    return DEFAULT_TIMEOUT_SECONDS
+
+
+def _env_optional_float(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 def _env_float(name: str, default: float) -> float:

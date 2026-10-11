@@ -16,7 +16,11 @@ golden set の評価（`/run`）と比較（`/compare`）は、ケースごと�
   取得・投入のときに失敗にする（別のプロセスは引き継がない。評価はやり直せばよいため）。
 - 取り消しは job の行を CANCELLED にする。実行中のプロセスは、次の heartbeat か進捗の更新で
   RUNNING でなくなったことを知り、評価の task を止める（同じプロセスならすぐに止める）。
-- job 全体の時間の上限は `rag_evaluation_job_timeout_seconds`（既定 3600 秒）。上限に達したら、
+- job 全体の時間の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）×
+  `rag_answer_timeout_seconds` と `rag_evaluation_job_timeout_seconds`（最小値。既定 3600 秒）の
+  大きいほうで、`RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS`（86400 秒）を超えない（#1430。
+  `evaluation_job_time_limit_seconds`）。評価はケースを 1 件ずつ回答するため、固定の上限では
+  推論型のモデル（1 回の回答が数分）の評価が問の数に応じて打ち切られる。上限に達したら、
   実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す（#383 と同じ）。
 """
 
@@ -25,18 +29,21 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import os
 import socket
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from app.clients.oracle import OracleClient
+from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings
 from app.rag.evaluation import EvaluationProgressCallback
 from app.rag.request_context import current_audit_request_context
 from app.schemas.evaluation import (
+    EvaluationCase,
     EvaluationCompareResponse,
     EvaluationJob,
     EvaluationJobKind,
@@ -75,6 +82,29 @@ EVALUATION_JOB_LIMIT_MESSAGE = (
 )
 EVALUATION_JOB_NOT_FOUND_MESSAGE = "品質評価の job が見つかりません。"
 EVALUATION_JOB_ALREADY_FINISHED_MESSAGE = "この品質評価は既に終わっているため、取り消せません。"
+
+
+def evaluation_answer_runs(cases: Iterable[EvaluationCase], *, experiments: int = 1) -> int:
+    """評価で回答を作る回数。ケースごとに最初の質問と確認の質問への返答（#1284）を 1 回ずつ。
+
+    比較（compare）は experiment ごとに同じケースを答えるため、experiment の数を掛ける。
+    """
+    return experiments * sum(1 + len(case.turns) for case in cases)
+
+
+def evaluation_job_time_limit_seconds(settings: Settings, *, answer_runs: int) -> int:
+    """評価 job の全体の時間の上限（秒。#1430）。
+
+    回答の回数 × 1 回の回答の上限（`rag_answer_timeout_seconds`）にし、設定の
+    `rag_evaluation_job_timeout_seconds` を最小値、`RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS` を
+    最大値にする。どの回答も上限まで掛かっても、各回答はそれぞれの上限で打ち切られて結果に残り、
+    job の上限が先に残りのケースを打ち切らない。
+    """
+    proportional = math.ceil(max(answer_runs, 0) * settings.rag_answer_timeout_seconds)
+    return min(
+        RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS,
+        max(settings.rag_evaluation_job_timeout_seconds, proportional),
+    )
 
 
 def evaluation_job_failed_message(error: BaseException) -> str:
