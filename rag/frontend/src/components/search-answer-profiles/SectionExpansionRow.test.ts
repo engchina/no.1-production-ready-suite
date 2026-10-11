@@ -8,6 +8,8 @@ import {
   SECTION_EXPANSION_MAX_LEVELS_MIN,
   SECTION_EXPANSION_TIME_LIMIT_DEFAULT,
   SECTION_EXPANSION_TIME_LIMITS,
+  SECTION_EXTRACTION_MAX_CALLS,
+  SECTION_EXTRACTION_MAX_CALLS_DEFAULT,
   isSectionExpansionEnabled,
   sectionExpansionLimitValue,
   sectionExpansionPatch,
@@ -20,6 +22,7 @@ describe("当たった根拠の章節から親の章節へ広げる", () => {
       section_expansion_max_levels: null,
       section_expansion_input_token_percent: null,
       section_expansion_time_limit_seconds: null,
+      section_extraction_max_calls: null,
     };
     expect(sectionExpansionPatch(true)).toEqual({ section_expansion_enabled: null, ...limits });
     expect(sectionExpansionPatch(false)).toEqual({ section_expansion_enabled: false, ...limits });
@@ -48,5 +51,10 @@ describe("当たった根拠の章節から親の章節へ広げる", () => {
     expect(SECTION_EXPANSION_TIME_LIMIT_DEFAULT).toBe(600);
     expect(Math.min(...SECTION_EXPANSION_TIME_LIMITS)).toBeGreaterThanOrEqual(60);
     expect(Math.max(...SECTION_EXPANSION_TIME_LIMITS)).toBeLessThanOrEqual(600);
+    // 原文を抜き出す呼び出しの上限（#1437）。backend は 1〜16、既定 8。
+    expect(SECTION_EXTRACTION_MAX_CALLS_DEFAULT).toBe(8);
+    expect(SECTION_EXTRACTION_MAX_CALLS).toContain(SECTION_EXTRACTION_MAX_CALLS_DEFAULT);
+    expect(Math.min(...SECTION_EXTRACTION_MAX_CALLS)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...SECTION_EXTRACTION_MAX_CALLS)).toBeLessThanOrEqual(16);
   });
 });

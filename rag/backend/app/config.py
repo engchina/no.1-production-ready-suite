@@ -32,6 +32,9 @@ from pr_system_settings.model import (
 from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
 )
+from pr_system_settings.model import (
+    enterprise_ai_max_input_tokens as enterprise_ai_max_input_tokens,
+)
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import (
     enterprise_ai_reasoning_effort_to_send as enterprise_ai_reasoning_effort_to_send,
@@ -236,6 +239,8 @@ PROFILE_ONLY_SETTING_FIELDS = frozenset(
         "rag_section_expansion_max_levels",
         "rag_section_expansion_input_token_percent",
         "rag_section_expansion_time_limit_seconds",
+        # 抽出してから統合（#1437）の抽出の呼び出しの上限。既定 8。
+        "rag_section_extraction_max_calls",
     }
 )
 
@@ -815,9 +820,20 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=10,
         le=90,
         description=(
-            "章節の拡張で、1 回の回答の根拠の入力 token の上限にする、モデルの入力の上限に対する"
-            "割合（%。#1436。既定 50）。モデルの入力の上限は #1437 まで暫定で、根拠の文字数の予算"
-            "（既定 48,000 字）を 50% とみなす（docs/rag-engine.md）。"
+            "章節の拡張で、1 回の回答の根拠の入力 token の上限にする、回答のモデルの入力の上限"
+            "（システム設定 › モデル の登録モデルの「入力の上限（tokens）」。#1437）に対する"
+            "割合（%。#1436。既定 50）。"
+        ),
+    )
+    rag_section_extraction_max_calls: int = Field(
+        default=8,
+        ge=1,
+        le=16,
+        description=(
+            "章節の拡張で根拠の入力の上限に入らない章節から、質問に関係する原文を抜き出す LLM の"
+            "呼び出しの、1 回の回答の上限（#1437。既定 8）。上限で読めなかった範囲は「確かめられて"
+            "いない点」に示し、条件つきの回答にする。検索・回答プロファイルの "
+            "section_extraction_max_calls で選ぶ。"
         ),
     )
     rag_section_expansion_time_limit_seconds: float = Field(
