@@ -894,12 +894,8 @@ async def _post_enterprise_ai(
     api_path: str,
     payload: Mapping[str, object],
 ) -> Mapping[str, object]:
-    endpoint = connection.endpoint.rstrip("/")
-    url = (
-        api_path
-        if api_path.startswith(("http://", "https://"))
-        else endpoint + "/" + api_path.lstrip("/")
-    )
+    # Endpoint URL は入力どおり使い、API path を付ける（#1440。3 製品で platform の関数）。
+    url = connection.request_url(api_path)
     api_key = _require_non_empty(connection.api_key, "OCI Enterprise AI API key")
     headers = {
         "accept": "application/json",

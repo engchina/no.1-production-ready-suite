@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, TYPE_CHECKING
-from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
@@ -33,7 +32,6 @@ DEFAULT_OSAKA_REGION = "ap-osaka-1"
 DEFAULT_OCI_CONFIG_FILE = "~/.oci/config"
 DEFAULT_OCI_PROFILE = "DEFAULT"
 OCI_INFERENCE_ENDPOINT_TEMPLATE = "https://inference.generativeai.{region}.oci.oraclecloud.com"
-OCI_OPENAI_BASE_URL_TEMPLATE = OCI_INFERENCE_ENDPOINT_TEMPLATE + "/openai/v1"
 DEFAULT_OCI_VISION_ENDPOINT = OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=DEFAULT_CHICAGO_REGION)
 OPENAI_RESPONSES_LLM_API_MODE = "openai_responses"
 DEFAULT_LLM_API_MODE = OPENAI_RESPONSES_LLM_API_MODE
@@ -147,7 +145,7 @@ class LlmProviderSettings:
     """1 つの LLM provider の接続先、認証、model 能力を保持します。"""
     provider_id: str
     label: str
-    # endpoint を指定しない場合だけ base URL の組み立てに使う。
+    # 記録用(base URL の組み立てには使わない。#1440)。
     region: str
     # OCI の OpenAI 互換 API が要求する project OCID。他の OpenAI 互換 API では空のままにする。
     project_id: str
@@ -161,17 +159,13 @@ class LlmProviderSettings:
 
     @property
     def base_url(self) -> str:
-        """root URL に API パスを補完し、空なら region から構築します。
+        """OpenAI 互換 API の base URL(endpoint を入力どおり使う。#1440)。
 
-        既存の OpenAI 互換 base URL に含まれるパスは維持します。
+        path は補わない(OCI Enterprise AI も利用者が `/openai/v1` まで書く)。backend は
+        platform の `enterprise_ai_base_url` で決めた値を `OCI_ENTERPRISE_AI_ENDPOINT` で渡すので、
+        ここでは前後の空白と末尾の `/` を除くだけにして、3 製品と同じ URL を呼ぶ。
         """
-        endpoint = self.endpoint.strip().rstrip("/")
-        if not endpoint:
-            return OCI_OPENAI_BASE_URL_TEMPLATE.format(region=self.region)
-        parsed = urlsplit(endpoint)
-        if not parsed.path:
-            return parsed._replace(path="/openai/v1").geturl()
-        return endpoint
+        return self.endpoint.strip().rstrip("/")
 
 
 # LLM / VLM の呼び出しの seed の既定(#1434。platform の DEFAULT_ENTERPRISE_AI_SEED と同じ)。

@@ -56,6 +56,10 @@ class OciEnterpriseAiConfig:
 
     seed(#1434)は全モデルで共通の 1 つで、テキストと Vision の標準の payload の top-level の
     `seed` に入れる(backend が platform の `enterprise_ai_seed` で決めて渡す。既定 42)。
+
+    endpoint(#1440)は OpenAI 互換 API の base URL で、入力どおり使い path を補わない(OCI
+    Enterprise AI も `…/openai/v1` まで書く)。backend は platform の `enterprise_ai_base_url` で
+    決めた値を渡し、呼ぶ URL は `{endpoint}{path}`(既定 `/responses`)で 3 製品と同じになる。
     """
 
     oci_enterprise_ai_endpoint: str = ""

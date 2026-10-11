@@ -177,7 +177,8 @@ class OciEnterpriseAiDirectClient:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
     ) -> Mapping[str, Any]:
-        url = _join_endpoint_path(connection.endpoint, path)
+        # Endpoint URL は入力どおり使い、API path を付ける(#1440。3 製品で platform の関数)。
+        url = connection.request_url(path)
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -629,7 +630,3 @@ def _extract_json_object_text(value: str) -> str | None:
     if start == -1 or end == -1 or end <= start:
         return None
     return value[start : end + 1]
-
-
-def _join_endpoint_path(endpoint: str, path: str) -> str:
-    return f"{endpoint.rstrip('/')}/{(path or '/responses').lstrip('/')}"
