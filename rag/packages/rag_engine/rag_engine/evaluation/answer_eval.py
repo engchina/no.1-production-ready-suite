@@ -25,7 +25,7 @@ from rag_engine.generation.grounded import (
     quote_in_text,
     verbatim_quote_lines,
 )
-from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading, numbered_heading_lines
+from rag_engine.generation.operation_audit import answer_passages, is_citation_line, is_heading, list_heading_lines
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -492,7 +492,7 @@ def _spans_for_passage_citations(claim, catalog):
 def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, heading_lines=()):
     """引用は原文IDへ結び付ける。引用障害と回答の根拠不足を区別する。
 
-    heading_lines は回答全体の ``numbered_heading_lines``（次の行で決まる番号つきの見出しの行。#1481）。
+    heading_lines は回答全体の ``list_heading_lines``（次の行で決まる番号つき・箇条書きの見出しの行。#1481 / #1486）。
 
     passage_citations（最終の検証。#1404）では、モデルの evidence_id で決まらないとき、回答の段落が書いた
     根拠の ID でも結び付ける。モデルが citation_error を返した段落も、引用した ID（evidence_id か段落の ID）が
@@ -571,7 +571,7 @@ def evaluate_answer_payload(payload: dict[str, Any], settings, *, provider_id: s
         "used_images",
     )}
     fixed["answer_passages"] = _answer_passages(str(payload.get("answer_text") or ""))
-    heading_lines = numbered_heading_lines(str(payload.get("answer_text") or ""))
+    heading_lines = list_heading_lines(str(payload.get("answer_text") or ""))
     fixed["task_contract"] = task_contract(str(payload.get("question") or ""))
     try:
         # 大きな生成回答も範囲抽出前に止め、不要なネットワーク呼び出しを避ける。
