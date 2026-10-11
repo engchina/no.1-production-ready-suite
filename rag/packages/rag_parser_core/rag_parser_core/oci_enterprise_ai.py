@@ -164,6 +164,16 @@ FILE_EXTENSION_BY_MIME_TYPE = {
 }
 TEMPLATE_TOKEN_RE = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.IGNORECASE | re.DOTALL)
+# 推論(思考)の部分の type(#1423)。Responses の `output` の item(`type=reasoning`)と、content の
+# block(`reasoning_text` / `summary_text`、Anthropic 形式の `thinking` / `redacted_thinking`)。
+# 本文・JSON の解析には使わず捨てる(思考は利用者に見せず、log にも出さない)。
+REASONING_PART_TYPES = frozenset(
+    {"reasoning", "reasoning_text", "summary_text", "thinking", "redacted_thinking"}
+)
+# 本文の先頭に思考をタグで入れるモデル(`<think>…</think>` / `<thinking>…</thinking>`)の思考の部分。
+LEADING_THINKING_TAG_RE = re.compile(
+    r"^\s*<(think|thinking)>.*?</\1>\s*", re.IGNORECASE | re.DOTALL
+)
 ENTERPRISE_AI_ENVELOPE_KEYS = (
     "structured_extraction",
     "extraction",
@@ -1602,6 +1612,9 @@ def _extract_stream_text_delta(payload: object) -> str:
         return ""
 
     payload_type = str(payload.get("type", "")).strip().lower()
+    # `response.reasoning_text.delta` / `response.reasoning_summary_text.delta` は思考の delta。
+    if "reasoning" in payload_type or "thinking" in payload_type:
+        return ""
     if "delta" in payload_type:
         for key in ("delta", "text", "content", "output_text"):
             value = payload.get(key)
@@ -1689,6 +1702,10 @@ def _unwrap_response_payload(payload: object) -> object:
                 continue
             continue
         if isinstance(current, list) and current:
+            # 思考の item / block を先に除く(先頭の reasoning の item を本文にしない。#1423)。
+            current = [item for item in current if not _is_reasoning_part(item)]
+            if not current:
+                return current
             if _looks_like_text_parts(current):
                 return current
             current = current[0]
@@ -1697,10 +1714,30 @@ def _unwrap_response_payload(payload: object) -> object:
     return current
 
 
+def _is_reasoning_part(candidate: object) -> bool:
+    """Responses の reasoning item や思考の content block か(本文に使わない。#1423)。"""
+    if not isinstance(candidate, Mapping):
+        return False
+    return str(candidate.get("type", "")).strip().lower() in REASONING_PART_TYPES
+
+
+def _strip_leading_thinking(text: str) -> str:
+    """本文の先頭の `<think>…</think>` / `<thinking>…</thinking>` を除く(#1423)。"""
+    return LEADING_THINKING_TAG_RE.sub("", text, count=1)
+
+
 def _extract_text_candidate(candidate: object) -> str:
-    """OpenAI 風/custom 風の候補から text を取り出す。"""
+    """OpenAI 風/custom 風の候補から text を取り出す。
+
+    思考の部分(Responses の `type=reasoning` の item、`reasoning_text` / `thinking` などの
+    content block、Chat Completions の `reasoning_content`、本文の先頭の `<think>` タグ)は
+    本文にも JSON の解析にも使わない(#1423)。
+    """
+    if _is_reasoning_part(candidate):
+        return ""
     if isinstance(candidate, str):
-        return _extract_text_from_json_string(candidate) or candidate
+        text = _strip_leading_thinking(candidate)
+        return _extract_text_from_json_string(text) or text
     if isinstance(candidate, Mapping):
         tool_payload = _extract_tool_call_payload(candidate)
         if tool_payload is not None:
@@ -1710,7 +1747,7 @@ def _extract_text_candidate(candidate: object) -> str:
         for key in ("content", "text", "answer", "output_text", "generated_text"):
             value = candidate.get(key)
             if isinstance(value, str):
-                return value
+                return _strip_leading_thinking(value)
             if isinstance(value, list):
                 parts = [_extract_text_candidate(item) for item in value]
                 return "\n".join(part for part in parts if part)

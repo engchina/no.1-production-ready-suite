@@ -1,6 +1,7 @@
 """OCI Enterprise AI adapter 境界のテスト。"""
 
 import base64
+import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
@@ -1167,3 +1168,179 @@ def _oci_settings() -> Settings:
         oci_enterprise_ai_timeout_seconds=12.0,
         oci_enterprise_ai_max_retries=0,
     )
+
+
+# --- 推論(思考)を返すモデルの応答(#1423) ---------------------------------------------------
+# 2026-10-11 に OCI Enterprise AI の `/responses` から実際に返った形(claude-opus-5 と
+# openai.gpt-oss-120b)を縮めて録画したもの。`output` の先頭に `type=reasoning` の item が付き、
+# その `content` に英語の思考(`reasoning_text`)が入る。
+
+_REASONING_TEXT = (
+    'The user is asking "What is the capital of Japan?" The evidence clearly states it. '
+    'I could answer {"answer": "wrong"} but I\'ll answer in one sentence in Japanese.'
+)
+
+
+def _recorded_reasoning_response(message_text: str) -> dict[str, Any]:
+    return {
+        "id": "resp_recorded",
+        "object": "response",
+        "status": "completed",
+        "model": "claude-opus-5",
+        "reasoning": None,
+        "text": None,
+        "output": [
+            {
+                "id": "rs_recorded",
+                "summary": [],
+                "type": "reasoning",
+                "content": [{"text": _REASONING_TEXT, "type": "reasoning_text"}],
+                "encrypted_content": None,
+                "status": None,
+            },
+            {
+                "id": "msg_recorded",
+                "content": [
+                    {
+                        "annotations": [],
+                        "text": message_text,
+                        "type": "output_text",
+                        "logprobs": None,
+                    }
+                ],
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+            },
+        ],
+        "usage": {
+            "input_tokens": 150,
+            "output_tokens": 137,
+            "output_tokens_details": {"reasoning_tokens": 128},
+        },
+    }
+
+
+async def test_oci_generate_drops_reasoning_item_from_answer() -> None:
+    """Responses の reasoning item の思考は本文に入れない(#1423)。"""
+    response = _recorded_reasoning_response("\n\n日本の首都は東京です。")
+    transport = FakeEnterpriseAiTransport(response)
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    answer = await client.generate("質問", "根拠")
+
+    assert answer == "日本の首都は東京です。"
+
+
+async def test_oci_generate_parses_structured_answer_after_reasoning() -> None:
+    """思考に `{...}` が含まれても、構造化出力の JSON は message の本文から読む(#1423)。"""
+    transport = FakeEnterpriseAiTransport(
+        _recorded_reasoning_response('{\n  "answer": "日本の首都は東京です。"\n}')
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    answer = await client.generate("質問", "根拠")
+
+    # 構造化出力の本文(JSON)だけを返し、呼び出し側の JSON の解析が通る。
+    assert json.loads(answer) == {"answer": "日本の首都は東京です。"}
+
+
+async def test_oci_vlm_parses_structured_extraction_after_reasoning() -> None:
+    """VLM の構造化抽出も、思考の item を除いた JSON から作る(#1423)。"""
+    transport = FakeEnterpriseAiTransport(
+        _recorded_reasoning_response(
+            '{"raw_text":"請求書 本文","document_type":"請求書","confidence":0.9,"warnings":[]}'
+        )
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(b"image", "OCR")
+
+    assert result["raw_text"] == "請求書 本文"
+    assert "capital" not in str(result)
+
+
+async def test_oci_generate_without_reasoning_is_unchanged() -> None:
+    """思考の無い応答はこれまでどおり本文を返す(#1423)。"""
+    response = _recorded_reasoning_response("日本の首都は東京です。")
+    response["output"] = response["output"][1:]
+    transport = FakeEnterpriseAiTransport(response)
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    assert await client.generate("質問", "根拠") == "日本の首都は東京です。"
+
+
+async def test_oci_generate_drops_thinking_blocks_in_content_array() -> None:
+    """content の配列の思考の block(thinking / reasoning_text)は本文に入れない(#1423)。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "thinking", "thinking": "Let me think.", "text": "Hmm."},
+                            {"type": "reasoning_text", "text": "Reasoning in English."},
+                            {"type": "output_text", "text": "1 文目です。"},
+                            {"type": "text", "text": "2 文目です。"},
+                        ],
+                    }
+                }
+            ]
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    answer = await client.generate("質問", "根拠")
+
+    assert answer == "1 文目です。\n2 文目です。"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "assistant", "content": "東京です。", "reasoning_content": "Thinking..."},
+        {"role": "assistant", "content": "<think>Thinking...</think>\n\n東京です。"},
+        {"role": "assistant", "content": "<thinking>\nThinking...\n</thinking>東京です。"},
+    ],
+    ids=["reasoning-content-field", "think-tag", "thinking-tag"],
+)
+async def test_oci_generate_drops_chat_completions_reasoning(message: dict[str, Any]) -> None:
+    """Chat Completions の `reasoning_content` と本文の先頭の思考のタグを除く(#1423)。"""
+    transport = FakeEnterpriseAiTransport({"choices": [{"message": message}]})
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    assert await client.generate("質問", "根拠") == "東京です。"
+
+
+async def test_oci_generate_does_not_return_reasoning_when_message_is_empty() -> None:
+    """本文が空で思考だけの応答は、思考を回答にせず失敗にする(#1423)。"""
+    transport = FakeEnterpriseAiTransport(_recorded_reasoning_response(""))
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    with pytest.raises(ValueError, match="回答 text"):
+        await client.generate("質問", "根拠")
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        ({"type": "response.reasoning_text.delta", "delta": "Thinking"}, ""),
+        ({"type": "response.reasoning_summary_text.delta", "delta": "Summary"}, ""),
+        ({"type": "response.output_text.delta", "delta": "東京"}, "東京"),
+        ({"choices": [{"delta": {"reasoning_content": "Thinking"}}]}, ""),
+        ({"choices": [{"delta": {"content": "です"}}]}, "です"),
+    ],
+    ids=[
+        "reasoning-delta",
+        "reasoning-summary-delta",
+        "output-delta",
+        "chat-reasoning",
+        "chat-content",
+    ],
+)
+def test_stream_delta_drops_reasoning_events(event: dict[str, Any], expected: str) -> None:
+    """stream の思考の delta は本文の delta にしない(#1423)。"""
+    from rag_parser_core.oci_enterprise_ai import _extract_stream_text_delta
+
+    assert _extract_stream_text_delta(event) == expected
