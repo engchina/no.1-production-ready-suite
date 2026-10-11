@@ -734,3 +734,35 @@ def test_contradictions_with_evidence_inside_the_scope_stay_contradicted() -> No
     result, _ = _oms_validation(_oms_answer("受発注管理システム"), lambda system: ("contradicted", f"{LOGISTICS}:1"))
     [claim] = result["claim_checks"]
     assert claim["status"] == "contradicted" and claim["source_id"] == f"{LOGISTICS}:1"
+
+
+# 段落の分け方の事例（RAG と Agent の両方のテストが読む。#1455）。
+SENTENCE_CASES = json.loads(
+    (Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/sentence-splits.json").read_text("utf-8"))
+
+
+@pytest.mark.parametrize("case", SENTENCE_CASES["cases"], ids=lambda case: case["id"])
+def test_passages_are_not_split_inside_brackets(case: dict) -> None:
+    """括弧の中の「。」で段落を分けず、太字の印・閉じ括弧だけの断片を作らない（#1455）。"""
+    from rag_engine.generation.operation_audit import answer_passages
+
+    assert [item["text"] for item in answer_passages(case["line"])] == case["passages"]
+
+
+def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
+    """cmp-pms-severity の「行1〜3（表頭の説明）: 「…。…。」」を 1 つの段落として監査に渡す（#1455）。"""
+    line = "  - 行1〜3（表頭の説明）: 「重要度は A・B・C の 3 段階です。A が最も高く、B、C の順に低くなります。」"
+    seen: list[list[str]] = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append([item["text"] for item in payload["answer_passages"]])
+        return ClaimAuditOutput.model_validate({"claim_checks": [
+            {"answer_quote": "段落", "answer_passage_id": item["id"], "status": "supported",
+             "evidence_id": payload["evidence_items"][0]["evidence_id"], "source_id": "", "evidence_quote": "",
+             "reason": "根拠に記載"} for item in payload["answer_passages"]]})
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("重要度の段階は？", line, EVIDENCE, settings=None)
+    assert seen == [[line.strip()]]
+    assert result["counts"] == {"supported": 1}

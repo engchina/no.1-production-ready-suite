@@ -24,7 +24,7 @@ from pr_backend_core.mcp import McpServer
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
-from app.features.agent.answer_passages import non_claim_passages, passage_kind
+from app.features.agent.answer_passages import non_claim_passages, passage_kind, passage_spans
 from app.features.agent.answer_validation import (
     UNVERIFIED_KEPT_INTRO,
     connection_check_inputs,
@@ -1477,3 +1477,66 @@ def test_outcome_is_recorded_when_the_validation_is_disabled(
         "needs_environment_data",
         "needs_environment_data",
     )
+
+
+# 段落の分け方の事例（RAG と Agent の両方のテストが読む。#1455）。
+SENTENCE_CASES_PATH = "platform/contracts/answer-passages/sentence-splits.json"
+SENTENCE_CASES: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / SENTENCE_CASES_PATH).read_text("utf-8")
+)
+
+
+@pytest.mark.parametrize("case", SENTENCE_CASES["cases"], ids=lambda case: str(case["id"]))
+def test_passages_are_not_split_inside_brackets(case: dict[str, Any]) -> None:
+    """括弧の中の「。」で段落を分けず、太字の印・閉じ括弧だけの断片を作らない（#1455）。"""
+    line = case["line"]
+    spans = passage_spans(line)
+    assert [text for _start, _end, text in spans] == case["passages"]
+    # 位置は行の中の原文を指す。
+    assert all(line[start:end] == text for start, end, text in spans)
+
+
+# dev cmp-pms-severity（run_aeda6990aad14955bb88d957deb2b6e2）の回答の台帳の節（#1455）。
+_LEDGER_SECTION = "\n".join(
+    [
+        "- システム台帳（system-ledger.xlsx、シート「システム台帳」）",
+        "  - 行1〜3（表頭の説明）: 「重要度は A・B・C の 3 段階です。"
+        "A が最も高く、B、C の順に低くなります。」",
+    ]
+)
+
+
+def test_withholding_a_quoted_passage_leaves_no_fragment() -> None:
+    """括弧の中で分けた前の半分だけを外し、閉じ括弧の残る断片を本文に残さない（#1455）。
+
+    以前は「…3 段階です。」と「A が最も高く、…」」に分かれ、前の半分を外すと
+    「A が最も高く、B、C の順に低くなります。」」が本文に残っていた。
+    """
+    quote = _LEDGER_SECTION.split("\n")[1].strip()
+    assert [text for _s, _e, text in passage_spans(_LEDGER_SECTION.split("\n")[1])] == [quote]
+    published = withhold_paragraphs(_LEDGER_SECTION, {quote})
+    assert "A が最も高く" not in published
+    assert "」" not in published.replace("「システム台帳」", "")
+
+
+def test_a_label_with_a_note_in_brackets_is_a_heading() -> None:
+    """ラベルの後ろの注記の括弧（「補足（資料の注記。同シート A1:A2）：」）は見出し（#1455）。
+
+    業務支援 da-parameter-default（run_a96b17e4a37e4f1bbd195802a1247112）で、括弧の中の「。」で
+    2 つに分かれた断片がどちらも unassessed になり、外した主張は無いのに回答の対応が
+    conditional になっていた。
+    """
+    label = "補足（資料の注記。同シート A1:A2）："
+    assert [text for _s, _e, text in passage_spans(label)] == [label]
+    assert passage_kind(label) == "heading"
+    # 注記が操作・述語の文なら見出しにしない。ラベルの後ろに本文が続く段落も主張のまま。
+    assert passage_kind("注意（必ず削除してください。）：") is None
+    assert passage_kind("補足（資料の注記。同シート A1:A2）：初期値は 30 日です。") is None
+    result = _verdict(
+        _claim(label, "unassessed", "本文を見出しとして監査から除外できません。"),
+        _claim("- 初期値は 30 日です。", "supported", "根拠に記載。"),
+    )
+    answer = f"{label}\n- 初期値は 30 日です。"
+    published, withheld = publish_answer(answer, result)
+    assert published == answer
+    assert withheld == {"claims": 0, "findings": 0, "all": False}
