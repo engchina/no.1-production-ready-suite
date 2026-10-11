@@ -344,32 +344,9 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {/* 根拠の構成・工程などの実行記録。引用の一覧は下の「根拠 N 件」の 1 か所だけに出す（#1202）。 */}
-      {finished && answerDiagnostics ? (
-        <AnswerDetailsPanel
-          diagnostics={answerDiagnostics}
-          traceId={traceId}
-          title={t("chat.answerDetails.title")}
-        />
-      ) : null}
-      {finished && !answerDiagnostics && savedAnswer && traceId ? (
-        <Disclosure
-          variant="plain"
-          summary={t("chat.answerDetails.open")}
-          className="border-t border-border px-2 pt-1"
-        >
-          <SavedAnswerRecord
-            traceId={traceId}
-            searchAnswerProfileId={searchAnswerProfileId}
-            showAnswer={false}
-            showCitations={false}
-            detailsTitle={t("chat.answerDetails.title")}
-          />
-        </Disclosure>
-      ) : null}
-      {citations.length > 0 || (finished && traceId) ? (
-        // 引用と評価は回答の枠の下端にそろえる（比較の列の高さをそろえる）。根拠を確かめてから評価できるよう、
-        // 評価は引用の後ろに置く（#1202）。
+      {citations.length > 0 || (finished && (traceId || answerDiagnostics)) ? (
+        // 引用・回答の実行記録・評価は回答の枠の下端にそろえる（比較の列の高さをそろえる）。根拠を確かめてから
+        // 評価できるよう、評価は引用の後ろに置く（#1202）。
         <div className="mt-auto flex flex-col gap-3">
           {citations.length > 0 ? (
             <Disclosure
@@ -390,6 +367,30 @@ function AssistantColumn({
                   />
                 ))}
               </ul>
+            </Disclosure>
+          ) : null}
+          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「根拠 N 件」の 1 か所だけに出す（#1202）。根拠を先、
+              実行記録を後に並べる（#1417。page-archetypes.md §6.1）。 */}
+          {finished && answerDiagnostics ? (
+            <AnswerDetailsPanel
+              diagnostics={answerDiagnostics}
+              traceId={traceId}
+              title={t("chat.answerDetails.title")}
+            />
+          ) : null}
+          {finished && !answerDiagnostics && savedAnswer && traceId ? (
+            <Disclosure
+              variant="plain"
+              summary={t("chat.answerDetails.open")}
+              className="border-t border-border px-2 pt-1"
+            >
+              <SavedAnswerRecord
+                traceId={traceId}
+                searchAnswerProfileId={searchAnswerProfileId}
+                showAnswer={false}
+                showCitations={false}
+                detailsTitle={t("chat.answerDetails.title")}
+              />
             </Disclosure>
           ) : null}
           {finished ? (

@@ -746,6 +746,18 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
 
   const panel = page.getByRole("region", { name: "回答の実行記録" });
   await expect(panel).toBeVisible();
+  // 回答の下は根拠を先、実行記録を後に並べる（#1417）: 「根拠 N 件」→ 回答の実行記録 → 評価。
+  const citationSummary = page.locator("summary").filter({ hasText: "根拠 1 件" });
+  const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+  await expect(citationSummary).toBeVisible();
+  await expect(feedback).toBeVisible();
+  const [citationBox, panelBox, feedbackBox] = await Promise.all([
+    citationSummary.boundingBox(),
+    panel.boundingBox(),
+    feedback.boundingBox(),
+  ]);
+  expect(panelBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(panelBox?.y ?? Number.POSITIVE_INFINITY);
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByTestId("answer-outcome-badge")).toHaveText("現場のデータが必要");
