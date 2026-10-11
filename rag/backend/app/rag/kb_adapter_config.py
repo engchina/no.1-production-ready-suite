@@ -120,6 +120,8 @@ _QUERY_FIELD_MAP: dict[str, str] = {
         "rag_section_expansion_input_token_percent"
     ),
     "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
+    # 抽出してから統合(#1437)の抽出の呼び出しの上限。None は Settings の既定(8)。
+    "section_extraction_max_calls": "rag_section_extraction_max_calls",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -309,6 +311,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
     section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
+    # 入らない章節から質問に関係する原文を抜き出す LLM の呼び出しの上限(#1437)。None は既定(8)。
+    section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

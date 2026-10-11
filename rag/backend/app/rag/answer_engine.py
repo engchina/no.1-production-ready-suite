@@ -48,6 +48,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_seed,
@@ -271,6 +272,11 @@ def build_engine_settings(
         ),
         # seed は全モデルで共通(#1434。既定 42)。rag_engine が Responses API の top-level で送る。
         "OCI_ENTERPRISE_AI_SEED": str(enterprise_ai_seed(settings)),
+        # 回答のモデルの入力の上限(tokens。#1437)。章節の拡張の根拠の入力の上限と、抽出してから
+        # 統合の 1 回分の大きさを、この値の割合で決める(値の解釈は platform の 1 か所)。
+        "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": str(
+            enterprise_ai_max_input_tokens(settings, answer_model)
+        ),
         # rag_engine は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
         # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して
         # 呼ぶが、この 2 値を渡さないと RAG_RERANK_ENABLED=true でも
@@ -306,6 +312,8 @@ def build_engine_settings(
                 settings.rag_answer_timeout_seconds,
             )
         ),
+        # 入らない章節から原文を抜き出す LLM の呼び出しの上限(#1437。検索・回答プロファイルで選ぶ)。
+        "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": str(settings.rag_section_extraction_max_calls),
     }
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)

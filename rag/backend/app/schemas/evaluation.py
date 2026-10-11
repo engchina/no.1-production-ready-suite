@@ -661,6 +661,8 @@ class EvaluationRagOverrides(BaseModel):
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
     section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
+    # 抽出してから統合(#1437)の抽出の呼び出しの上限。
+    section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
 
 

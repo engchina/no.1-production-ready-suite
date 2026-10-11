@@ -26,6 +26,7 @@ SECTION_FIELDS = {
     "rag_section_expansion_max_levels",
     "rag_section_expansion_input_token_percent",
     "rag_section_expansion_time_limit_seconds",
+    "rag_section_extraction_max_calls",
 }
 
 
@@ -221,6 +222,7 @@ def test_section_expansion_settings_are_profile_only(
     assert settings.rag_section_expansion_max_levels == 4
     assert settings.rag_section_expansion_input_token_percent == 50
     assert settings.rag_section_expansion_time_limit_seconds == 600.0
+    assert settings.rag_section_extraction_max_calls == 8
 
 
 def test_search_answer_profile_selects_section_expansion_limits() -> None:
@@ -240,6 +242,7 @@ def test_search_answer_profile_selects_section_expansion_limits() -> None:
                     "section_expansion_max_levels": 2,
                     "section_expansion_input_token_percent": 30,
                     "section_expansion_time_limit_seconds": 300,
+                    "section_extraction_max_calls": 4,
                 },
             }
         ),
@@ -251,13 +254,18 @@ def test_search_answer_profile_selects_section_expansion_limits() -> None:
         selected.rag_section_expansion_max_levels,
         selected.rag_section_expansion_input_token_percent,
         selected.rag_section_expansion_time_limit_seconds,
-    ) == (False, 2, 30, 300.0)
+        selected.rag_section_extraction_max_calls,
+    ) == (False, 2, 30, 300.0, 4)
     assert base.rag_section_expansion_enabled is True
     # 範囲の外の保存値は読まない。
     broken = parse_search_answer_profile_config(
         {"knowledge_base_ids": ["kb-1"], "query": {"section_expansion_max_levels": 9}}
     )
     assert broken.query.section_expansion_max_levels is None
+    too_many = parse_search_answer_profile_config(
+        {"knowledge_base_ids": ["kb-1"], "query": {"section_extraction_max_calls": 17}}
+    )
+    assert too_many.query.section_extraction_max_calls is None
 
 
 def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
@@ -280,6 +288,46 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
     assert custom.section_expansion_input_token_percent == 30
     # 回答の通しの上限より長くしない。
     assert custom.section_expansion_time_limit_seconds == 300.0
+    assert default.section_extraction_max_calls == 8
+
+
+def test_build_engine_settings_passes_model_input_limit_and_extraction_calls(tmp_path: Any) -> None:
+    """回答のモデルの入力の上限は、共通のモデル設定の登録モデルの値（#1437。既定 128000）。"""
+    from pr_system_settings.model import EnterpriseAiConfiguredModel
+
+    models = [
+        EnterpriseAiConfiguredModel(model_id="llm-a", max_input_tokens=200_000),
+        EnterpriseAiConfiguredModel(model_id="llm-b"),
+    ]
+    settings = Settings(
+        oci_enterprise_ai_models=models,
+        oci_enterprise_ai_default_text_model="llm-a",
+        rag_section_extraction_max_calls=4,
+    )
+
+    engine = build_engine_settings(settings, output_dir=tmp_path)
+    other = build_engine_settings(settings, output_dir=tmp_path, answer_model_id="llm-b")
+
+    assert engine.answer_max_input_tokens == 200_000
+    assert other.answer_max_input_tokens == 128_000
+    assert engine.section_extraction_max_calls == 4
+    assert build_engine_settings(Settings(), output_dir=tmp_path).answer_max_input_tokens == 128_000
+
+
+def test_token_estimate_and_default_limit_match_platform() -> None:
+    """rag_engine の見積もり・既定は platform の値の解釈と同じ（3 製品で共通の 1 か所。#1437）。"""
+    from pr_system_settings.model import (
+        DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+        estimate_input_tokens,
+    )
+    from rag_engine.generation.section_expansion import (
+        DEFAULT_MODEL_INPUT_TOKENS,
+        estimate_tokens,
+    )
+
+    assert DEFAULT_MODEL_INPUT_TOKENS == DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
+    for text in ["", "点検", "abcd", "abcde", "UPS の点検", "手順 1: 電源を切る。\n" * 30]:
+        assert estimate_tokens(text) == estimate_input_tokens(text)
 
 
 def test_evaluation_overrides_switch_section_expansion() -> None:
@@ -287,7 +335,127 @@ def test_evaluation_overrides_switch_section_expansion() -> None:
     from app.schemas.evaluation import EvaluationRagOverrides
 
     settings = evaluation_settings(
-        Settings(), EvaluationRagOverrides(section_expansion_enabled=False)
+        Settings(),
+        EvaluationRagOverrides(section_expansion_enabled=False, section_extraction_max_calls=2),
     )
 
     assert settings.rag_section_expansion_enabled is False
+    assert settings.rag_section_extraction_max_calls == 2
+
+
+# ---------------------------------------------------------------- 抽出してから統合（#1437）
+
+APPROVAL = "承認者は受注一覧で対象を選び、承認ボタンを押します。"
+FILLER = "この段落は画面の項目の並びについての説明で、承認の手順には関係しません。"
+
+
+def _long_text(page: int) -> str:
+    """入力の上限に入らない章節の 1 頁（承認の手順の 1 文と、関係の無い説明の段落）。"""
+    filler = FILLER * 25
+    return f"{filler}\n\n{APPROVAL}\n\n{filler}"
+
+
+@dataclass
+class LongSectionStub(SectionMapStub):
+    """受注入力画面の章節が長い（頁 2〜9 の 8 件。モデルの入力の上限 4096 の半分に入らない）。"""
+
+    def sections(self) -> list[SectionNode]:
+        return [
+            SectionNode("document", "manual.pdf", 0, 0, None, 1, 9, chunk_count=10, chars=20_000),
+            SectionNode("s1", "受注入力画面", 1, 1, "document", 1, 9, chunk_count=10, chars=20_000),
+        ]
+
+    async def read_section(self, document_id: str, section_id: str, **kwargs: Any) -> Any:
+        self.reads.append((section_id, dict(kwargs.get("filters") or {})))
+        chunks = [
+            _chunk("doc-1:c1", "受注番号を入力し、登録ボタンを押します。", 1),
+            _chunk("doc-1:c2", "登録後は受注一覧に表示されます。", 2),
+            *(
+                _section_chunk(f"doc-1:l{page}", _long_text(page), 10 + page, page)
+                for page in range(2, 10)
+            ),
+        ]
+        outline = await self.section_outline(document_id)
+        node = outline.get(section_id)
+        assert node is not None
+        return section_map_service.SectionText(
+            outline=outline,
+            section=node,
+            chunks=[SectionChunkRow(order, chunk) for order, chunk in enumerate(chunks)],
+            complete=True,
+        )
+
+
+@pytest.fixture
+def long_section(monkeypatch: pytest.MonkeyPatch) -> LongSectionStub:
+    stub = LongSectionStub()
+    monkeypatch.setattr(section_map_service, "chunk_section", stub.chunk_section)
+    monkeypatch.setattr(section_map_service, "section_outline", stub.section_outline)
+    monkeypatch.setattr(section_map_service, "read_section", stub.read_section)
+    return stub
+
+
+async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
+    monkeypatch: pytest.MonkeyPatch, long_section: LongSectionStub
+) -> None:
+    import re
+
+    import rag_engine.adapters.oci as engine_oci
+    from pr_system_settings.model import EnterpriseAiConfiguredModel
+    from rag_engine.models.llm import (
+        GroundedDraft,
+        SectionExtractionOutput,
+        SectionExtractionQuote,
+    )
+
+    prompts: dict[str, list[str]] = {"extract": [], "draft": []}
+    block = re.compile(r"^\[(C\d+)[^\]\n]*\]\n(.*?)(?=\n\n\[C\d+|\n\n</資料>)", re.M | re.S)
+
+    def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        if schema is SectionExtractionOutput:
+            prompts["extract"].append(prompt)
+            quotes = [
+                SectionExtractionQuote(chunk_ref=ref, location="", quote=sentence)
+                for ref, text in block.findall(prompt)
+                for sentence in re.findall(r"[^。\n]+。", text)
+                if "承認ボタン" in sentence
+            ]
+            # 作られた引用（原文に無い）も混ぜる。照合で捨てる。
+            quotes.append(
+                SectionExtractionQuote(chunk_ref="C1", location="", quote="承認は不要です。")
+            )
+            return SectionExtractionOutput(quotes=quotes)
+        if schema is GroundedDraft:
+            prompts["draft"].append(prompt)
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", llm)
+    engine = AnswerEngine(
+        Settings(
+            rag_domain_keywords=["受注番号"],
+            oci_enterprise_ai_models=[
+                EnterpriseAiConfiguredModel(model_id="llm-a", max_input_tokens=4096)
+            ],
+            oci_enterprise_ai_default_text_model="llm-a",
+        ),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注の承認の手順は？"))
+
+    expansion = outcome.diagnostics["section_expansion"]
+    entry = expansion["levels"][0]["sections"][0]
+    assert entry["read"] == "extracted"
+    assert expansion["large_section_handoff"] == "extract_then_integrate"
+    # 抽出の呼び出しは上限（既定 8 回）の中で、作られた引用は捨てる。
+    assert 1 <= len(prompts["extract"]) <= 8
+    assert entry["extraction"]["dropped_quotes"] == len(prompts["extract"])
+    assert entry["extraction"]["quotes"] == 8
+    # 根拠の入力は、モデルの入力の上限（4096）の 50% の中。
+    assert expansion["input_token_limit"] == 2048
+    assert expansion["used_tokens"] <= expansion["input_token_limit"]
+    # 回答の生成に渡す原文は、抜き出した原文だけ（関係の無い説明の段落は渡さない）。
+    assert prompts["draft"] and APPROVAL in prompts["draft"][0]
+    assert FILLER not in prompts["draft"][0]
+    assert "登録ボタン" in outcome.answer

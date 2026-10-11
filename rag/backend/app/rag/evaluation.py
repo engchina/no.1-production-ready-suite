@@ -646,6 +646,7 @@ def evaluation_settings(
                 "rag_section_expansion_input_token_percent"
             ),
             "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
+            "section_extraction_max_calls": "rag_section_extraction_max_calls",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
         }
         update.update(
