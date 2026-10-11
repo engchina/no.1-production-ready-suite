@@ -204,7 +204,8 @@ export function ModelSettingsPage({
   // 既定のモデルのエラーは、関係する操作（選択・Vision 対応の切替・削除・保存）の後から出す。
   // モデル ID の入力中（キー入力ごと）には出さない（messaging.md §3.2）。
   const [showDefaultErrors, setShowDefaultErrors] = useState(false);
-  // seed（#1434）の不正な値のエラーは、欄を離れた・保存の操作の後から出す（キー入力ごとには出さない）。
+  // seed（#1434）の不正な値のエラーは、保存の操作の後から出す（キー入力ごと・欄を離れたときには出さない。
+  // 欄を離れたときに出すと、保存のボタンを押した瞬間にエラーの行が入ってボタンが動き、押せなくなる）。
   const [showSeedError, setShowSeedError] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
   // 保存が競合（409。画面を開いた後にほかの画面で保存された）した節（#1037）。その節の操作の行に
@@ -850,7 +851,6 @@ export function ModelSettingsPage({
                 seed={draft.enterprise_ai.seed}
                 showError={showSeedError}
                 onChange={(value) => updateEnterprise("seed", value)}
-                onBlur={() => setShowSeedError(true)}
               />
               <ModelFormActions
                 sectionLabel={t("settings.model.enterprise.models")}
@@ -1535,12 +1535,10 @@ function SeedFields({
   seed,
   showError,
   onChange,
-  onBlur,
 }: {
   seed: number | undefined;
   showError: boolean;
   onChange: (value: number) => void;
-  onBlur: () => void;
 }) {
   const headingId = "enterprise-seed-title";
   const value = seed ?? DEFAULT_ENTERPRISE_AI_SEED;
@@ -1577,7 +1575,6 @@ function SeedFields({
           onValueChange={(next) =>
             onChange(next.trim() === "" ? Number.NaN : Number(next))
           }
-          onBlur={onBlur}
           inputClassName="tnum"
         />
       </div>

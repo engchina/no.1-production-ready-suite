@@ -69,7 +69,7 @@ export const MODEL_MESSAGES = {
     "登録したすべてのモデルの呼び出し（LLM・VLM）に使う値です。登録モデルと一緒に保存します。",
   "settings.model.seed.label": "seed",
   "settings.model.seed.help":
-    "同じ入力から同じ出力を得やすくするための乱数の種で、0〜2147483647 の整数です（既定は 42）。3 製品の LLM・VLM の呼び出しに送ります。seed を使わないモデル（endpoint）もあり、同じ seed でも出力が同じになるとは限りません。NL2SQL の Select AI・Select AI Agent は、業務プロファイルの Select AI 設定の seed（既定 42）を使います。",
+    "同じ入力から同じ出力を得やすくするための乱数の種で、0〜2147483647 の整数です（既定は 42）。3 製品の LLM・VLM の呼び出しに送ります。モデルが seed を受け付けても、同じ出力になるか（再現性）はモデル側の対応次第です。NL2SQL の Select AI・Select AI Agent は、業務プロファイルの Select AI 設定の seed（既定 42）を使います。",
   "settings.model.seed.invalid":
     "seed は 0〜2147483647 の整数で入力してください。",
   "settings.model.actions.label": "{section} の操作",

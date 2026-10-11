@@ -1802,7 +1802,7 @@ const nl2sqlJa = {
   "profiles.field.maxTokens": "Max Tokens",
   "profiles.field.seed": "seed",
   "profiles.field.seedHint":
-    "AI profile の seed 属性として保存し、Select AI・Select AI Agent の SQL の生成に使います（0〜2147483647 の整数、既定は 42）。同じ seed でも出力が同じになるとは限りません。",
+    "AI profile の seed 属性として保存し、Select AI・Select AI Agent の SQL の生成に使います（0〜2147483647 の整数、既定は 42）。seed を受け付けても、同じ出力になるか（再現性）はモデル側の対応次第です。",
   "profiles.field.enforceObjectList": "Object List を強制",
   "profiles.field.comments": "コメントを利用",
   "profiles.field.annotations": "アノテーションを利用",
