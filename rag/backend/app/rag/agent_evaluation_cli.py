@@ -80,6 +80,18 @@ RAG_READ_DOCUMENT = "rag_read_document"
 # 章節を読み切るツール（#1438。出力の chunks の形は rag_read_document と同じ）。
 RAG_READ_SECTION = "rag_read_section"
 READ_EVIDENCE_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
+# 読み取りのツールの chunk の場所の項目（MCP の ReadDocumentChunk。表計算のシート・行・
+# セル範囲は #1471）。
+READ_CHUNK_LOCATION_KEYS = (
+    "element_locator",
+    "section_path",
+    "page_start",
+    "page_end",
+    "sheet_name",
+    "row_start",
+    "row_end",
+    "cell_range",
+)
 MCP_TOOL_SEPARATOR = "__"
 # Agent の組み込みの MCP 接続（RAG）の ID。モデルが呼ぶツールの名前は `<接続>__<ツール>`
 # （Agent #757）。指示にはこの名前を書く（素の名前だと存在しないツールを呼ぶ。#1303）。
@@ -291,9 +303,10 @@ def _read_items(tool: str, output: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "chunk_id": chunk.get("chunk_id"),
                 "excerpt": excerpt,
                 "file_name": file_name,
+                # chunk の場所の項目をそのまま写す（表計算のシート・行・セル範囲を含む。#1471）。
                 "locator": {
                     key: chunk[key]
-                    for key in ("element_locator", "section_path", "page_start", "page_end")
+                    for key in READ_CHUNK_LOCATION_KEYS
                     if chunk.get(key) is not None
                 },
             }
