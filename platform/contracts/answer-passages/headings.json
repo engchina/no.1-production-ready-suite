@@ -1,0 +1,228 @@
+{
+  "description": "回答の検証で主張として数えない見出しの名詞句・導入の文と、見出しに見えても主張として残す行の事例（#1469）。RAG（rag_engine.generation.operation_audit.is_heading / is_non_claim_passage）と Agent（app.features.agent.answer_passages.is_heading / passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。見出しの名詞句は、句点で終わらない短い名詞句で、項目・区分・資料の名前か分岐・問いの形（「…とき」「…か」）で終わり、述語・操作・数量・言い切りの「は」を含まないもの（番号・強調・後ろの注記の括弧は除いて確かめる）。導入の文は「…は次のとおりです。」「以下に示します。」のように以降の箇条書きを導くだけの文と、礼の定型の文。heading_passages の多くは #1362 の deepseek-flash の評価（e1467、main f83ebbda）の D の Run の回答の段落そのもの。",
+  "heading_passages": [
+    {
+      "id": "numbered-attribute",
+      "note": "多段 dev br-hr-evaluation-change-window（run_e42807013c3041d09185daae0bee0baf）。",
+      "passage": "1. 人事評価システムの重要度"
+    },
+    {
+      "id": "numbered-rule",
+      "passage": "2. 重要度 A の変更時間帯の規則"
+    },
+    {
+      "id": "numbered-slot",
+      "passage": "3. 定期保守計画の個別の保守枠"
+    },
+    {
+      "id": "numbered-with-document-note",
+      "note": "多段 dev cmp-expense-vs-attendance-deadline。",
+      "passage": "1. 担当部署（システム台帳）"
+    },
+    {
+      "id": "numbered-with-location-note",
+      "passage": "2. 略号の意味（組織規程 第 2 章 部署と略号／1 頁）"
+    },
+    {
+      "id": "numbered-document-with-row-note",
+      "note": "多段 dev br-mes-approver-deadline。",
+      "passage": "1. システム台帳（シート「システム台帳」28 行目）"
+    },
+    {
+      "id": "numbered-bold",
+      "note": "多段 dev br-idm-incident-contact。",
+      "passage": "2. **重要度 A の連絡先と期限**"
+    },
+    {
+      "id": "numbered-bold-short",
+      "passage": "5. **連絡の手段**"
+    },
+    {
+      "id": "numbered-question-form",
+      "note": "多段 dev br-contract-access-approver。",
+      "passage": "1. 承認者がどう決まるか"
+    },
+    {
+      "id": "numbered-case",
+      "note": "多段 dev br-audit-record-proxy。",
+      "passage": "3. 承認者が不在のときの代理"
+    },
+    {
+      "id": "numbered-quoted-terms",
+      "passage": "3. 「法」と「情セキ」の正式名と承認者"
+    },
+    {
+      "id": "numbered-quoted-abbreviation",
+      "note": "多段 holdout br-logistics-oms-approver。",
+      "passage": "2. 略号「運」の意味"
+    },
+    {
+      "id": "bold-case-with-location",
+      "note": "多段 holdout sh-severity-c-report。",
+      "passage": "**重要度 C のシステムで障害が起きたとき（障害連絡規程 第 1 章「最初の連絡」／p.1）**"
+    },
+    {
+      "id": "note-label-material",
+      "note": "業務支援 da-parameter-default（run_c91bafebe4794ecfb266ee6be336968b）。",
+      "passage": "補足（資料の記載）"
+    },
+    {
+      "id": "note-label-condition",
+      "note": "多段 dev ir-room-booking-maintenance（run_a3b9045cdcc347d49a6c70a1656cfdf5）。",
+      "passage": "補足（参照できる場合）"
+    },
+    {
+      "id": "note-label-location",
+      "passage": "補足（同じ規程 p.1）"
+    },
+    {
+      "id": "evidence-label-with-note",
+      "passage": "根拠（段ごとに確認した内容）"
+    },
+    {
+      "id": "evidence-label",
+      "note": "多段 holdout cmp-hrm-maintenance-versions。",
+      "passage": "根拠"
+    },
+    {
+      "id": "materials-used",
+      "note": "多段 dev ir-room-booking-maintenance。",
+      "passage": "回答に使った資料"
+    },
+    {
+      "id": "lead-in-accumulation",
+      "passage": "根拠の積み上げは次のとおりです。"
+    },
+    {
+      "id": "lead-in-evidence",
+      "passage": "根拠は次のとおりです。"
+    },
+    {
+      "id": "lead-in-chain",
+      "passage": "根拠の連鎖は次のとおりです。"
+    },
+    {
+      "id": "lead-in-links",
+      "passage": "根拠のつながりは次のとおりです。"
+    },
+    {
+      "id": "lead-in-answer-with-comma",
+      "note": "多段 holdout tl-it-department-system。",
+      "passage": "ご質問の答えは、次のとおりです。"
+    },
+    {
+      "id": "lead-in-show",
+      "passage": "以下に示します。"
+    },
+    {
+      "id": "courtesy",
+      "note": "業務支援 mt-delete-account-approved。",
+      "passage": "ご回答ありがとうございます。"
+    }
+  ],
+  "claim_passages": [
+    {
+      "id": "short-statement-with-predicate",
+      "passage": "重要度は A です。"
+    },
+    {
+      "id": "short-statement-without-predicate",
+      "passage": "承認者は管理本部長"
+    },
+    {
+      "id": "numbered-bold-statement",
+      "note": "多段 dev br-idm-incident-contact の「1. **ID 管理システムの重要度は A**」。番号と太字でも「は」の言い切りは主張。",
+      "passage": "1. **ID 管理システムの重要度は A**"
+    },
+    {
+      "id": "numbered-value",
+      "passage": "1. 運行管理課長"
+    },
+    {
+      "id": "numbered-value-with-location",
+      "passage": "2. 運行管理課長（組織規程 第 3 章）"
+    },
+    {
+      "id": "numbered-quantity",
+      "passage": "2. 検知から 30 分以内"
+    },
+    {
+      "id": "numbered-count",
+      "passage": "3. 確認する 3 点"
+    },
+    {
+      "id": "note-with-statement",
+      "passage": "補足（担当部署は人事部）"
+    },
+    {
+      "id": "note-with-quantity",
+      "passage": "補足（保管は 10 年）"
+    },
+    {
+      "id": "numbered-operation",
+      "passage": "3. 申請画面を開く"
+    },
+    {
+      "id": "subject-statement-noun",
+      "passage": "承認者が人事部長"
+    },
+    {
+      "id": "lead-in-with-statement",
+      "passage": "保管期間は 10 年で、内訳は次のとおりです。"
+    },
+    {
+      "id": "lead-in-with-quantity-subject",
+      "passage": "30 日以内に必要な手順は次のとおりです。"
+    },
+    {
+      "id": "lead-in-with-following-claim",
+      "passage": "根拠は次のとおりで、承認者は人事部長です。"
+    }
+  ],
+  "answers": [
+    {
+      "id": "da-parameter-default",
+      "note": "業務支援 da-parameter-default（run_c91bafebe4794ecfb266ee6be336968b）の最終の回答（最終の検証に渡した原文）。「補足（資料の記載）」が unassessed で外され conditional になっていた。",
+      "answer": "session_timeout_minutes の既定値は **30**（分）です。説明は「操作が無いときにログインが切れるまでの分数」とされています。\n\n出典：portal-parameters.xlsx シート「パラメータ一覧」の当該行（A4:D4、パラメータ名 session_timeout_minutes）\n\n補足（資料の記載）\n- 同表には設定例として 60 も示されていますが、これは既定値ではなく設定の書き方の例です（同シート A6:D6 など並びの行も同じ構成）。\n- 同シートの注記（A1:A2）に「既定値は出荷時の値、設定例は設定の書き方の例で、どちらも各環境の現在の設定値ではありません」とあり、この 30 は現在の環境の設定値ではありません。現在の各環境の設定値は資料からは分かりません。",
+      "heading_passages": [
+        "補足（資料の記載）"
+      ],
+      "claim_passages": [
+        "session_timeout_minutes の既定値は **30**（分）です。",
+        "説明は「操作が無いときにログインが切れるまでの分数」とされています。",
+        "- 同表には設定例として 60 も示されていますが、これは既定値ではなく設定の書き方の例です（同シート A6:D6 など並びの行も同じ構成）。"
+      ]
+    },
+    {
+      "id": "br-hr-evaluation-change-window",
+      "note": "多段 dev br-hr-evaluation-change-window（run_e42807013c3041d09185daae0bee0baf）の回答の一部。番号つきの見出しが unassessed で外され conditional になっていた。",
+      "answer": "人事評価システムの本番変更は、**毎月第 2 土曜日の 22:00〜翌 2:00** に作業できます。\n\n根拠（段ごとに確認）：\n\n1. 人事評価システムの重要度\n- 「システム台帳」（システム台帳シート、システムID: SYS-103 の行）で、正式名「人事評価システム」、略称・別表記「HRM」、重要度は **A** です。\n\n2. 重要度 A の変更時間帯の規則\n- 「システム変更手順書」第 4 章 作業の時間帯：**重要度 A のシステムの変更は、定期保守の時間帯にだけ作業**します。\n\n3. 定期保守計画の個別の保守枠\n- 「定期保守計画 2026年度」第 1 章 個別の保守枠：**ＨＲＭ（＝人事評価システム）は毎月第 2 土曜日の 22:00〜翌 2:00** です（この章に無いシステムは第 2 章の共通の保守枠）。",
+      "heading_passages": [
+        "根拠（段ごとに確認）：",
+        "1. 人事評価システムの重要度",
+        "2. 重要度 A の変更時間帯の規則",
+        "3. 定期保守計画の個別の保守枠"
+      ],
+      "claim_passages": [
+        "人事評価システムの本番変更は、**毎月第 2 土曜日の 22:00〜翌 2:00** に作業できます。",
+        "- 「システム台帳」（システム台帳シート、システムID: SYS-103 の行）で、正式名「人事評価システム」、略称・別表記「HRM」、重要度は **A** です。",
+        "- 「システム変更手順書」第 4 章 作業の時間帯：**重要度 A のシステムの変更は、定期保守の時間帯にだけ作業**します。",
+        "- 「定期保守計画 2026年度」第 1 章 個別の保守枠：**ＨＲＭ（＝人事評価システム）は毎月第 2 土曜日の 22:00〜翌 2:00** です（この章に無いシステムは第 2 章の共通の保守枠）。"
+      ]
+    },
+    {
+      "id": "ir-room-booking-maintenance",
+      "note": "多段 dev ir-room-booking-maintenance（run_a3b9045cdcc347d49a6c70a1656cfdf5）の回答の一部。「補足（参照できる場合）」「回答に使った資料」が unassessed で外され conditional になっていた。",
+      "answer": "会議室予約システム（システムID: SYS-106）は、定期保守計画の「個別の保守枠」に挙げられていないため、「共通の保守枠」で保守されます。その時間帯は **毎月最終金曜日の 20:00〜24:00** です。\n\n補足（参照できる場合）\n\n- 保守枠を変えたいときは、変えたい月の 1 か月前までに情シスへ申し出る、とされています（定期保守計画 2026年度 第 3 章「保守枠の変更」、maintenance-plan.pdf p.1）。\n\n回答に使った資料\n\n- 定期保守計画 2026年度（maintenance-plan.pdf）p.1 第 1 章・第 2 章",
+      "heading_passages": [
+        "補足（参照できる場合）",
+        "回答に使った資料"
+      ],
+      "claim_passages": [
+        "会議室予約システム（システムID: SYS-106）は、定期保守計画の「個別の保守枠」に挙げられていないため、「共通の保守枠」で保守されます。",
+        "その時間帯は **毎月最終金曜日の 20:00〜24:00** です。",
+        "- 保守枠を変えたいときは、変えたい月の 1 か月前までに情シスへ申し出る、とされています（定期保守計画 2026年度 第 3 章「保守枠の変更」、maintenance-plan.pdf p.1）。"
+      ]
+    }
+  ]
+}
