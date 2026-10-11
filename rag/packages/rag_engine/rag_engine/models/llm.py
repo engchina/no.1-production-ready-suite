@@ -146,6 +146,18 @@ class UsedImageOutput(_StrictModel):
     visible_evidence: str
 
 
+class SectionExtractionQuote(_StrictModel):
+    """長い章節の 1 回分から抜き出した原文 1 つ（#1437。抽出してから統合）。"""
+    chunk_ref: str = Field(description="原文を取ったブロックの見出しの番号（[C1 …] の C1）をそのまま書く。")
+    location: str = Field(description="ブロックの見出しにある場所（p.5、シート「…」A3:D6 など）をそのまま書く。無ければ空文字。")
+    quote: str = Field(description="ブロックの本文の連続した一部を、文字・記号・数字・改行を変えずにそのまま写した原文。要約・言い換え・省略・補足をしない。")
+
+
+class SectionExtractionOutput(_StrictModel):
+    """長い章節の 1 回分から、質問に関係する原文を抜き出した結果（#1437）。"""
+    quotes: list[SectionExtractionQuote] = Field(default_factory=list, description="質問への回答に必要な原文を、資料の順に。関係する記載が無ければ空の配列。")
+
+
 class TextOutput(_StrictModel):
     """text-only LLM 呼び出しの構造化出力を表します。"""
     text: str

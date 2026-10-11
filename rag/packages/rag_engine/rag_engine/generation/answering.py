@@ -2545,18 +2545,28 @@ def _expand_context_by_sections(
         return attempt
 
     rerank = rerank_text_with_scores if rerank_enabled and _rerank_configured(settings) else None
+    from rag_engine.generation.section_extraction import SectionExtractor
+
+    # 予算に入らない章節は、質問に関係する原文を抜き出してから統合する (#1437)。呼び出しの上限は 1 回の回答で数える。
+    extractor = SectionExtractor(settings, parse_text_response, provider_id=answer_llm_provider)
     with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、足りるかを確かめながら根拠に加えます。") as step:
         result = sections.expand_sections(
             question, context, settings, last_attempt=last, grade=grade,
-            section_outline=ports[0], section_chunks=ports[1], rerank=rerank,
+            section_outline=ports[0], section_chunks=ports[1], rerank=rerank, large_sections=extractor,
             started_at=started_at, deadline_remaining=remaining_seconds, clock=monotonic,
         )
         result.trace["grades"] = [item.to_payload() for item in graded]
+        if extractor.calls:
+            result.trace["extraction"] = {"calls": extractor.calls, "max_calls": extractor.limits.max_calls,
+                                          "part_tokens": extractor.limits.part_tokens}
         if result.stop_reason in {sections.STOP_SUFFICIENT, sections.STOP_DISABLED} and not result.applied:
             step.hide()
         added = len(result.context.records) - len(context.records)
         step.result(f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
                     *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])))
+        if extractor.calls:
+            step.add(f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回 / "
+                     f"上限 {extractor.limits.max_calls} 回）。")
         if result.unread:
             step.impact("上限に達したため、読めなかった章節を「確かめられていない点」に示し、条件つきの回答にします。")
     return result.context, result
