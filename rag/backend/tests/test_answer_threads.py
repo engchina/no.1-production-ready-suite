@@ -2,6 +2,11 @@
 
 遅い LLM はスタブ（`rag_engine.adapters.oci` の client を差し替え、渡された timeout だけ待って
 timeout の例外を出す。実際の HTTP の timeout と同じ振る舞い）。時間は短い上限で確かめる。
+
+回答の thread が終わるまでの待ちは、壁時計の短い上限に頼らない（#1427）。thread の中の
+処理（LLM の失敗の再試行の判定が初回に import する OCI SDK など）は、CI の並列（`-n auto`）の
+負荷の下では数秒かかることがある。import は先に済ませ（`_warm_retry_imports`）、待ちの上限は
+「遅い LLM 1 回」より短い範囲で十分に長くとる（期限で縮まらなければ失敗する）。
 """
 
 from __future__ import annotations
@@ -36,6 +41,12 @@ from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 _PROVIDER: Any = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="")
 # 遅い LLM の 1 回の応答時間（打ち切りの上限より十分長い）。
 _SLOW_LLM_SECONDS = 30.0
+# 打ち切った後、回答の thread が終わるまで待つ上限（秒）。期限で縮めた LLM 1 回（1 秒未満）と
+# 後片付けが負荷の下で遅れても足りる長さにし、遅い LLM 1 回（`_SLOW_LLM_SECONDS`）より短くする。
+# 期限で 1 回の timeout が縮まなければ thread は `_SLOW_LLM_SECONDS` 待つので、この上限で失敗する
+# （#1427）。
+_THREAD_EXIT_WAIT_SECONDS = 10.0
+assert _THREAD_EXIT_WAIT_SECONDS < _SLOW_LLM_SECONDS
 
 
 class _SlowLlm:
@@ -96,6 +107,23 @@ def _answer_flow(llm: _SlowLlm, finished: threading.Event, steps: int = 4) -> st
         finished.set()
 
 
+@pytest.fixture(autouse=True)
+def _warm_retry_imports() -> None:
+    """LLM の失敗の再試行の判定が初回に import する SDK を先に読む。
+
+    `oci._is_retryable_error` は例外の型を見るため、OCI SDK・openai・httpx・requests を関数の中で
+    import する。回答の thread の中で初めて import すると、その process の最初の 1 回だけ thread の
+    終わりが遅れる（CI の並列の負荷の下では 3 秒を超えた。#1427）。テストが確かめるのは打ち切りの
+    振る舞いなので、import の時間を thread の時間に含めない。
+    """
+    assert oci._is_retryable_error(TimeoutError())
+
+
+async def _wait_thread_exit(finished: threading.Event) -> bool:
+    """回答の thread が終わる（`_answer_flow` の `finished`）まで、上限付きで待つ。"""
+    return await asyncio.to_thread(finished.wait, _THREAD_EXIT_WAIT_SECONDS)
+
+
 @pytest.fixture
 def short_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(answer_threads, "ANSWER_DEADLINE_GRACE_SECONDS", 0.05)
@@ -136,7 +164,7 @@ async def test_timeout_stops_llm_calls_in_answer_thread(
     assert db_elapsed and db_elapsed[0] < 0.5
 
     # 打ち切った後、回答の thread は LLM 1 回の timeout（600 秒）を待たずに終わる。
-    assert await asyncio.to_thread(finished.wait, 3.0)
+    assert await _wait_thread_exit(finished)
     # 呼んだ LLM は 1 回だけで、残りの工程・再試行で LLM を呼ばない。
     assert len(llm.calls) == 1
     [options] = llm.calls
@@ -151,7 +179,7 @@ async def test_wait_for_cancel_stops_answer_thread(short_grace: None) -> None:
         await asyncio.wait_for(
             run_answer_in_thread(_answer_flow, llm, finished, timeout_seconds=0.2), timeout=0.2
         )
-    assert await asyncio.to_thread(finished.wait, 3.0)
+    assert await _wait_thread_exit(finished)
     assert len(llm.calls) == 1
 
 
@@ -171,7 +199,7 @@ async def test_cancelled_task_stops_answer_thread() -> None:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert await asyncio.to_thread(finished.wait, 3.0)
+        assert await _wait_thread_exit(finished)
     assert len(llm.calls) == 1
     assert llm.calls[0]["max_retries"] == 0
 
