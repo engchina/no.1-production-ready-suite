@@ -298,13 +298,36 @@ def test_heading_phrases_and_lead_ins_are_not_claims(case: dict) -> None:
     assert is_non_claim_passage(case["passage"])
 
 
+@pytest.mark.parametrize("case", HEADING_CASES["numbered_heading_passages"], ids=lambda case: case["id"])
+def test_numbered_headings_are_decided_by_the_following_line(case: dict) -> None:
+    """終わりの語が一覧に無い番号つきの「…の…」の行は、次の行が下の内容のときだけ見出し (#1481)。
+
+    単独の行と、番号の行が続く一覧の中の行は主張のまま監査する。
+    """
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage, numbered_heading_lines
+
+    passage = case["passage"]
+    for below in ("   - 資料の記載", "- 資料の記載", "  資料の記載", "→ 資料の記載"):
+        lines = numbered_heading_lines(f"{passage}\n\n{below}")
+        assert lines == {passage}
+        assert is_non_claim_passage(passage, heading_lines=lines)
+    assert not is_heading(passage)
+    assert numbered_heading_lines(passage) == set()
+    assert passage not in numbered_heading_lines(f"{passage}\n9. 次の項目\n   - 資料の記載")
+    assert numbered_heading_lines(f"{passage}\n**次の節**") == set()
+
+
 @pytest.mark.parametrize("case", HEADING_CASES["claim_passages"], ids=lambda case: case["id"])
 def test_short_statements_stay_claims(case: dict) -> None:
-    """数・操作・言い切りを含む短い行と、値の名前だけの行は見出しにせず主張のまま監査する (#1469)。"""
-    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage
+    """数・操作・言い切りを含む短い行と、値の名前だけの行は見出しにせず主張のまま監査する (#1469)。
+
+    次の行が下の内容でも見出しにしない (#1481)。
+    """
+    from rag_engine.generation.operation_audit import is_heading, is_non_claim_passage, numbered_heading_lines
 
     assert not is_heading(case["passage"])
     assert not is_non_claim_passage(case["passage"])
+    assert numbered_heading_lines(f"{case['passage']}\n   - 資料の記載") == set()
 
 
 @pytest.mark.parametrize("case", HEADING_CASES["answers"], ids=lambda case: case["id"])
@@ -330,6 +353,20 @@ def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
     assert set(result["counts"]) == {"supported"}
 
 
+def test_numbered_heading_with_document_location_note_is_not_audited() -> None:
+    """番号つきの「…の…」の見出しに資料と章の注記が付いた行も監査しない (#1481)。
+
+    e1481 の run_b568a0eb の段落。Agent はこの行を出典の行（citation）として本文から外すため、見出しの契約
+    （headings.json）には入れず RAG の側だけで確かめる。
+    """
+    from rag_engine.generation.operation_audit import is_non_claim_passage, numbered_heading_lines
+
+    passage = "2. 復旧の目標（障害連絡規程 incident-contact-rules.pdf 第 2 章「復旧の目標」）"
+    lines = numbered_heading_lines(f"{passage}\n   - 重要度 A のシステムは 4 時間以内に復旧")
+    assert lines == {passage}
+    assert is_non_claim_passage(passage, heading_lines=lines)
+
+
 def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
     """品質評価の主張の監査でも、モデルが not_a_claim にした番号つきの見出し・導入の文は unassessed にしない (#1469)。"""
     from rag_engine.evaluation.answer_eval import _bind_claims
@@ -344,6 +381,20 @@ def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
     ]})
     bound = _bind_claims(output, {}, passages)
     assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "not_a_claim", "unassessed"]
+
+
+def test_numbered_heading_marked_not_a_claim_follows_the_answer_lines() -> None:
+    """品質評価の主張の監査で、次の行で決まる番号つきの見出しは、回答の中で見出しのときだけ not_a_claim のまま (#1481)。"""
+    from rag_engine.evaluation.answer_eval import _bind_claims
+    from rag_engine.generation.operation_audit import numbered_heading_lines
+
+    passages = [{"id": "A1", "text": "1. 連携元のシステム"}]
+    output = ClaimAuditOutput.model_validate({"claim_checks": [
+        {"answer_quote": "1. 連携元のシステム", "answer_passage_id": "A1", "status": "not_a_claim", "evidence_id": "",
+         "source_id": "", "evidence_quote": "", "reason": "主張ではない"}]})
+    lines = numbered_heading_lines("1. 連携元のシステム\n   - 生産計画システムから生産計画を受け取ります。")
+    assert [c.status for c in _bind_claims(output, {}, passages, heading_lines=lines).claim_checks] == ["not_a_claim"]
+    assert [c.status for c in _bind_claims(output, {}, passages).claim_checks] == ["unassessed"]
 
 
 # #1362 の評価の Run の形（#1391）。業務支援の da-trial-account-setup: 運用手順書の章ごとの chunk と、手順の回答。
