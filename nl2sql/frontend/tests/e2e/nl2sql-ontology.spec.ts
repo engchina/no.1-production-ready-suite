@@ -926,6 +926,7 @@ async function expectNoPageOverflow(page: Page) {
       "確認を中止して閉じる",
     ]);
     await page.screenshot({ path: testInfo.outputPath(`requirement-question-${viewport.name}.png`), fullPage: true });
+    await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-question-${viewport.name}.png`) });
     await expectNoPageOverflow(page);
 
     await question.getByRole("radio", { name: /2026-04-01〜2027-03-31/ }).check();
@@ -943,6 +944,7 @@ async function expectNoPageOverflow(page: Page) {
     await expect(summary).toContainText("実行はせず、生成する SQL そのものでもありません");
     await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`requirement-summary-${viewport.name}.png`), fullPage: true });
+    await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-summary-${viewport.name}.png`) });
     await expectNoPageOverflow(page);
 
     await panel.getByRole("button", { name: "要件を SQL の生成に反映" }).click();
