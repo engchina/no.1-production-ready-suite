@@ -65,6 +65,21 @@ export function parseChatRequirementCheck(value: unknown): ChatRequirementCheck 
   };
 }
 
+/** 作業状態に残す文字列（JSON。確認が無ければ空）。 */
+export function encodeChatRequirementCheck(check: ChatRequirementCheck | null): string {
+  return check ? JSON.stringify(check) : "";
+}
+
+/** 作業状態の文字列から戻す（空・壊れた値は確認なし）。 */
+export function decodeChatRequirementCheck(raw: string): ChatRequirementCheck | null {
+  if (!raw) return null;
+  try {
+    return parseChatRequirementCheck(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 /** 要件の検査の session を作る要求（チャットの業務プロファイル・会話の続き）。 */
 export function chatRequirementSessionRequest(request: ChatJobRequest): QuerySessionCreateRequest {
   return {

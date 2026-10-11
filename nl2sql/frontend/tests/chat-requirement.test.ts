@@ -7,6 +7,8 @@ import {
   chatRequirementIdempotencyKey,
   chatRequirementSessionRequest,
   chatRequirementStep,
+  decodeChatRequirementCheck,
+  encodeChatRequirementCheck,
   isRequirementCheckUnavailable,
   parseChatRequirementCheck,
   type ChatJobRequest,
@@ -184,4 +186,12 @@ test("要件の検査を使えない設定（OCI Enterprise AI が無い）だ�
   assert.equal(isRequirementCheckUnavailable(unavailable), true);
   assert.equal(isRequirementCheckUnavailable(failed), false);
   assert.equal(isRequirementCheckUnavailable(new Error("x")), false);
+});
+
+test("作業状態には JSON の文字列で残し、空・壊れた文字列は確認なしに戻す", () => {
+  const check = { request, sentAtMs: 1, sessionId: "" };
+  assert.deepEqual(decodeChatRequirementCheck(encodeChatRequirementCheck(check)), check);
+  assert.equal(encodeChatRequirementCheck(null), "");
+  assert.equal(decodeChatRequirementCheck(""), null);
+  assert.equal(decodeChatRequirementCheck("{"), null);
 });

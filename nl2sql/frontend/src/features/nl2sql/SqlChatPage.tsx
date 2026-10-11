@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -75,7 +75,8 @@ import {
   useChatRequirementFlow,
 } from "./components/ChatRequirementTurn";
 import {
-  parseChatRequirementCheck,
+  decodeChatRequirementCheck,
+  encodeChatRequirementCheck,
   type ChatJobRequest,
   type ChatRequirementCheck,
 } from "./chatRequirement";
@@ -284,11 +285,20 @@ export function SqlChatPage() {
   const pending = pendingSend?.message ?? null;
   // 送った質問の要件の検査・確認（#1442）。SQL を作る前に自動で行い、確認が要るときは会話の中で 1 問ずつ聞く。
   // 送った質問と session の ID は作業状態に残し、再読込・画面の移動の後も同じ確認を続ける。
-  const [storedRequirementCheck, setRequirementCheck] = useWorkspaceState<unknown>(
+  // 作業状態は既定値と同じ型の値だけを戻すので、JSON の文字列で持つ（空は確認なし）。
+  const [storedRequirementCheck, setStoredRequirementCheck] = useWorkspaceState(
     "requirementCheck",
-    null,
+    "",
   );
-  const requirementCheck = parseChatRequirementCheck(storedRequirementCheck);
+  const requirementCheck = useMemo(
+    () => decodeChatRequirementCheck(storedRequirementCheck),
+    [storedRequirementCheck],
+  );
+  const setRequirementCheck = useCallback(
+    (check: ChatRequirementCheck | null) =>
+      setStoredRequirementCheck(encodeChatRequirementCheck(check)),
+    [setStoredRequirementCheck],
+  );
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const engineDescriptionId = useId();
   const engineOption =
