@@ -33,7 +33,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from agents import Agent, ModelSettings, Runner
+from agents import Agent, Runner
 from pr_backend_core import Page
 from pr_backend_core.api import paginate
 from pydantic import BaseModel, Field, computed_field, field_validator
@@ -856,7 +856,7 @@ async def judge_answer(case: EvaluationCase, answer: str) -> EvaluationJudgement
         name="evaluator",
         instructions=JUDGE_INSTRUCTIONS,
         model=builtin_runtime.model_factory(target),
-        model_settings=ModelSettings(store=False),
+        model_settings=builtin_runtime.model_settings_for(target),
         output_type=EvaluationJudgement,
     )
     result = await Runner.run(judge, _judge_input(case, answer), max_turns=1)

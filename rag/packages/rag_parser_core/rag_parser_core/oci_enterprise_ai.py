@@ -43,6 +43,10 @@ class OciEnterpriseAiConfig:
     接続(endpoint / API key / project)はモデルごとに選ぶ(#533)。`oci_enterprise_ai_*` は
     `default_model_id`(テキスト)の接続で、Vision の呼び出しは `vision_oci_enterprise_ai_*` が
     None でなければそれを使う(`for_vision()`)。None は「テキストと同じ接続」。
+
+    推論(思考)の量(#1425)は、テキストのモデルの値を `text_reasoning_effort`、Vision のモデルの値を
+    `vision_reasoning_effort` に入れる。空は `reasoning` を送らない(endpoint の既定)。標準の payload
+    だけに入れ、payload template を使う構成では template に任せる。
     """
 
     oci_enterprise_ai_endpoint: str = ""
@@ -65,6 +69,8 @@ class OciEnterpriseAiConfig:
     oci_enterprise_ai_max_retries: int = 3
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    text_reasoning_effort: str = ""
+    vision_reasoning_effort: str = ""
 
     def for_vision(self) -> OciEnterpriseAiConfig:
         """Vision の呼び出しに使う config(既定の Vision モデルの接続。#533)。"""
@@ -91,6 +97,8 @@ class OciEnterpriseAiConfig:
         接続(`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_API_KEY` / `_PROJECT_OCID`)は、backend が
         サービス実行用の env に「既定の Vision モデルの接続」を書く(#533。
         `app.services.control.service_runtime_env`)。
+        推論の量(#1425)は `PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT` /
+        `PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT`(同じく backend が書く)。
         """
         src = os.environ if env is None else env
 
@@ -133,6 +141,10 @@ class OciEnterpriseAiConfig:
             oci_enterprise_ai_vlm_max_output_tokens=_int(
                 _get("PLATFORM_OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS"), 65536
             ),
+            text_reasoning_effort=_get("PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT").strip(),
+            vision_reasoning_effort=_get(
+                "PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT"
+            ).strip(),
         )
 
 
@@ -829,6 +841,14 @@ def _vlm_max_output_tokens(config: OciEnterpriseAiConfig) -> int:
     return int(getattr(config, "oci_enterprise_ai_vlm_max_output_tokens", 65536))
 
 
+def _with_reasoning(payload: dict[str, Any], effort: str) -> dict[str, Any]:
+    """推論(思考)の量が空でなければ Responses API の `reasoning` を入れる(#1425)。"""
+    normalized = (effort or "").strip()
+    if normalized:
+        payload["reasoning"] = {"effort": normalized}
+    return payload
+
+
 def _vlm_structured_extraction_schema() -> dict[str, Any]:
     """VLM に渡す token 節約版 StructuredExtraction schema。"""
     bbox_schema: dict[str, Any] = {
@@ -1060,7 +1080,7 @@ def _build_vlm_payload(
     }
     if use_text_format:
         payload["text"] = {"format": text_format}
-    return payload
+    return _with_reasoning(payload, config.vision_reasoning_effort)
 
 
 def _supports_responses_json_schema(model_id: str) -> bool:
@@ -1113,15 +1133,18 @@ def _build_vision_text_payload(
                 "image_url": f"data:{normalized_mime_type};base64,{data_base64}",
             },
         ]
-    return {
-        "model": model_id,
-        "input": [
-            {
-                "role": "user",
-                "content": content,
-            }
-        ],
-    }
+    return _with_reasoning(
+        {
+            "model": model_id,
+            "input": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+        },
+        config.vision_reasoning_effort,
+    )
 
 
 def _build_images_text_payload(
@@ -1165,7 +1188,7 @@ def _build_images_text_payload(
                 "schema": dict(response_schema),
             }
         }
-    return payload
+    return _with_reasoning(payload, config.vision_reasoning_effort)
 
 
 def _build_llm_payload(
@@ -1240,7 +1263,7 @@ def _build_llm_payload(
                 "schema": dict(response_schema),
             }
         }
-    return payload
+    return _with_reasoning(payload, config.text_reasoning_effort)
 
 
 def _render_payload_template(

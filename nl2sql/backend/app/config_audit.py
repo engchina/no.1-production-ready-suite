@@ -20,7 +20,7 @@ from pr_backend_core.config import (
     platform_env_name,
     settings_env_names,
 )
-from pr_system_settings.model import MODEL_SETTINGS_DOCUMENT_VERSION
+from pr_system_settings.model import MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION
 
 from app.settings import Settings
 
@@ -283,7 +283,8 @@ def _audit_model_settings(result: ConfigAuditResult, path: Path) -> None:
         result.findings.append(
             AuditFinding("error", "MODEL_SETTINGS_LEGACY_SECRET", ("enterprise_ai.api_key",))
         )
-    if version != MODEL_SETTINGS_DOCUMENT_VERSION:
+    # 3 以降は secret を持たない形で、そのまま読める（4 は登録モデルの推論の量を足しただけ。#1425）。
+    if not isinstance(version, int) or version < MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION:
         result.findings.append(AuditFinding("warning", "MODEL_SETTINGS_VERSION_LEGACY"))
     _audit_env_permissions(result, path, code="MODEL_SETTINGS_PERMISSIONS_NOT_0600")
 

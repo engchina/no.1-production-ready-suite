@@ -495,6 +495,10 @@ def _openai_parsed(
     2 回目の失敗はそのまま送出する (#987)。
     """
     budget = max(1, int(settings.answer_max_tokens))
+    # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。
+    reasoning: dict[str, Any] = (
+        {"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}
+    )
     for attempt in range(2):
         check_deadline()
         response = _openai_client_with_deadline(
@@ -506,6 +510,7 @@ def _openai_parsed(
             max_output_tokens=budget,
             temperature=LLM_TEMPERATURE,
             extra_body={"seed": LLM_SEED},
+            **reasoning,
         )
         try:
             return _parsed_response(response, text_format, provider)

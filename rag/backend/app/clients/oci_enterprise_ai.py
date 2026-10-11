@@ -27,6 +27,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_reasoning_effort,
     enterprise_ai_vision_model_id,
     get_settings,
 )
@@ -55,6 +56,7 @@ def config_from_settings(
     `model_id` を渡すと、テキストの呼び出しをそのモデルに差し替える(マルチモデル比較)。
     接続はモデルごとに引く(#533): テキストはテキストのモデルの接続、Vision は既定の
     Vision モデルの接続(テキストと違うときだけ `vision_oci_enterprise_ai_*` に入れる)。
+    推論(思考)の量(#1425)も、それぞれのモデルの登録の値を入れる(空は送らない)。
     """
     text_model_id = model_id or enterprise_ai_default_model_id(settings)
     vision_model_id = enterprise_ai_vision_model_id(settings)
@@ -88,6 +90,8 @@ def config_from_settings(
         oci_enterprise_ai_vlm_max_output_tokens=int(
             getattr(settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536)
         ),
+        text_reasoning_effort=enterprise_ai_reasoning_effort(settings, text_model_id),
+        vision_reasoning_effort=enterprise_ai_reasoning_effort(settings, vision_model_id),
     )
 
 

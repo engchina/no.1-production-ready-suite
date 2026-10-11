@@ -802,13 +802,32 @@ def _enterprise_text_payload(
     }
     if settings.text_payload_template.strip():
         return _render_model_payload_template(settings.text_payload_template, values)
-    return {
-        "model": _enterprise_text_model_id(settings),
-        "instructions": system_prompt,
-        "input": [{"role": "user", "content": user_message}],
-        "temperature": 0,
-        "max_output_tokens": settings.llm_max_output_tokens,
-    }
+    return _with_model_reasoning(
+        settings,
+        _enterprise_text_model_id(settings),
+        {
+            "model": _enterprise_text_model_id(settings),
+            "instructions": system_prompt,
+            "input": [{"role": "user", "content": user_message}],
+            "temperature": 0,
+            "max_output_tokens": settings.llm_max_output_tokens,
+        },
+    )
+
+
+def _with_model_reasoning(
+    settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
+) -> dict[str, object]:
+    """テストするモデルの推論（思考）の量が空でなければ `reasoning` を入れる（#1425）。
+
+    画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
+    """
+    effort = next(
+        (model.reasoning_effort for model in settings.models if model.model_id == model_id), ""
+    )
+    if effort:
+        payload["reasoning"] = {"effort": effort}
+    return payload
 
 
 def _enterprise_vision_payload(
@@ -832,11 +851,15 @@ def _enterprise_vision_payload(
     }
     if settings.vision_payload_template.strip():
         return _render_model_payload_template(settings.vision_payload_template, values)
-    return {
-        "model": settings.default_vision_model_id,
-        "input": [{"role": "user", "content": content}],
-        "max_output_tokens": settings.vlm_max_output_tokens,
-    }
+    return _with_model_reasoning(
+        settings,
+        settings.default_vision_model_id,
+        {
+            "model": settings.default_vision_model_id,
+            "input": [{"role": "user", "content": content}],
+            "max_output_tokens": settings.vlm_max_output_tokens,
+        },
+    )
 
 
 def _render_model_payload_template(

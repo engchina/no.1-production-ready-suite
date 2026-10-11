@@ -44,11 +44,13 @@ from agents import (
 from agents.run_config import ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
 from openai import APIStatusError, AsyncOpenAI, BadRequestError
+from openai.types.shared import Reasoning, ReasoningEffort
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
+    enterprise_ai_reasoning_effort,
 )
 
 from app.features.agent import data_scope
@@ -154,6 +156,8 @@ class ModelTarget:
     endpoint: str
     project_ocid: str
     api_key: str
+    # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。空は送らない。
+    reasoning_effort: str = ""
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
         return f"ModelTarget(model_id={self.model_id!r}, endpoint={self.endpoint!r})"
@@ -188,7 +192,20 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         endpoint=connection.endpoint.rstrip("/"),
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
+        reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
     )
+
+
+def model_settings_for(target: ModelTarget) -> ModelSettings:
+    """Run・評価の判定に使う SDK の ModelSettings（#1425）。
+
+    推論（思考）の量が空でなければ Responses API の `reasoning: {"effort": ...}` を送る。
+    """
+    effort = target.reasoning_effort.strip()
+    if not effort:
+        return ModelSettings(store=False)
+    # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。
+    return ModelSettings(store=False, reasoning=Reasoning(effort=cast(ReasoningEffort, effort)))
 
 
 def _omit_empty_tools(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1056,7 +1073,7 @@ def build_sdk_agent(
         instructions=composed,
         tools=list(tools),
         model=model_factory(target),
-        model_settings=ModelSettings(store=False),
+        model_settings=model_settings_for(target),
     )
 
 

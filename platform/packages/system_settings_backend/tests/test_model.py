@@ -143,7 +143,7 @@ def test_patch_saves_key_only_in_env_and_keeps_product_section(tmp_path: Path) -
     assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     assert data["secret_source"] == "environment"
     document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
-    assert document["version"] == 3
+    assert document["version"] == 4
     assert "api_key" not in document["enterprise_ai"]
     assert "sk-new" not in json.dumps(document)
     assert document["parser_adapters"] == {"backend": "docling"}
@@ -246,7 +246,13 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
         .json()["data"]["settings"]["enterprise_ai"]["models"]
     )
     assert models == [
-        {"model_id": "", "display_name": "", "vision_enabled": False, "connection_id": "primary"}
+        {
+            "model_id": "",
+            "display_name": "",
+            "vision_enabled": False,
+            "connection_id": "primary",
+            "reasoning_effort": "",
+        }
     ]
 
 
