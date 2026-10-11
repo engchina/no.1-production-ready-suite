@@ -26,6 +26,15 @@ from app.settings import (
 
 from .structured_outputs import validate_json_output
 
+# 推論(思考)の部分の type(#1423)。Responses の `output` の item(`type=reasoning`)と、content の
+# block(`reasoning_text` / `summary_text`、Anthropic 形式の `thinking` / `redacted_thinking`)。
+# 本文・JSON の解析には使わず捨てる(思考は利用者に見せず、log にも出さない)。
+REASONING_PART_TYPES = frozenset(
+    {"reasoning", "reasoning_text", "summary_text", "thinking", "redacted_thinking"}
+)
+# 本文の先頭に思考をタグで入れるモデル(`<think>…</think>` / `<thinking>…</thinking>`)の思考の部分。
+LEADING_THINKING_TAG_RE = re.compile(r"^\s*<(think|thinking)>.*?</\1>\s*", re.I | re.S)
+
 
 class EnterpriseAiDirectError(RuntimeError):
     """Enterprise AI direct 呼び出しの実行時エラー。"""
@@ -422,9 +431,9 @@ def _parse_response(
 
     def text(value: object) -> str:
         if isinstance(value, str):
-            return value
+            return _strip_leading_thinking(value)
         if isinstance(value, Mapping):
-            if value.get("type") in {"reasoning", "function_call", "tool_call"}:
+            if _is_reasoning_part(value) or value.get("type") in {"function_call", "tool_call"}:
                 return ""
             for key in ("output_text", "text", "content", "output", "choices", "message"):
                 if key in value:
@@ -497,9 +506,30 @@ def _raise_for_response_error(candidate: object) -> None:
     raise EnterpriseAiDirectError(f"OCI Enterprise AI response error: {message}")
 
 
+def _is_reasoning_part(candidate: object) -> bool:
+    """Responses の reasoning item や思考の content block か(本文に使わない。#1423)。"""
+    if not isinstance(candidate, Mapping):
+        return False
+    return str(candidate.get("type", "")).strip().lower() in REASONING_PART_TYPES
+
+
+def _strip_leading_thinking(text: str) -> str:
+    """本文の先頭の `<think>…</think>` / `<thinking>…</thinking>` を除く(#1423)。"""
+    return LEADING_THINKING_TAG_RE.sub("", text, count=1)
+
+
 def _extract_text_candidate(candidate: object) -> str:
+    """応答の候補から本文を取り出す。
+
+    思考の部分(Responses の `type=reasoning` の item、`reasoning_text` / `thinking` などの
+    content block、Chat Completions の `reasoning_content`、本文の先頭の `<think>` タグ)は
+    使わない(#1423)。
+    """
+    if _is_reasoning_part(candidate):
+        return ""
     if isinstance(candidate, str):
-        return _extract_text_from_json_string(candidate) or candidate
+        text = _strip_leading_thinking(candidate)
+        return _extract_text_from_json_string(text) or text
     if isinstance(candidate, Mapping):
         tool_payload = _extract_tool_call_payload(candidate)
         if tool_payload is not None:
@@ -509,7 +539,7 @@ def _extract_text_candidate(candidate: object) -> str:
         for key in ("content", "text", "answer", "output_text", "generated_text"):
             value = candidate.get(key)
             if isinstance(value, str):
-                return value
+                return _strip_leading_thinking(value)
             if isinstance(value, list):
                 return "\n".join(
                     part for part in (_extract_text_candidate(item) for item in value) if part

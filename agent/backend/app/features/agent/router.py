@@ -894,9 +894,11 @@ def _parse_enterprise_text_response(
         if isinstance(value, str) and value.strip():
             return value
         raise ValueError("Enterprise AI response path から回答 text を取得できませんでした。")
+    # 思考の部分(Responses の reasoning item、`reasoning_text` / `thinking` などの content block、
+    # Chat Completions の `reasoning_content`、本文の先頭の `<think>` タグ)は使わない(#1423)。
     output_text = response.get("output_text")
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text
+    if isinstance(output_text, str) and _strip_leading_thinking(output_text).strip():
+        return _strip_leading_thinking(output_text)
     choices = response.get("choices")
     if isinstance(choices, list) and choices:
         first = choices[0]
@@ -904,22 +906,49 @@ def _parse_enterprise_text_response(
             message = first.get("message")
             if isinstance(message, Mapping):
                 content = message.get("content")
-                if isinstance(content, str) and content.strip():
-                    return content
+                if isinstance(content, str) and _strip_leading_thinking(content).strip():
+                    return _strip_leading_thinking(content)
+                if isinstance(content, list) and (text := _first_answer_part_text(content)):
+                    return text
     output = response.get("output")
     if isinstance(output, list):
         for item in output:
-            if not isinstance(item, Mapping):
+            if not isinstance(item, Mapping) or _is_reasoning_part(item):
                 continue
             content = item.get("content")
-            if not isinstance(content, list):
-                continue
-            for part in content:
-                if isinstance(part, Mapping):
-                    text = part.get("text")
-                    if isinstance(text, str) and text.strip():
-                        return text
+            if isinstance(content, list) and (text := _first_answer_part_text(content)):
+                return text
     raise ValueError("Enterprise AI response から回答 text を取得できませんでした。")
+
+
+# 推論(思考)の部分の type(#1423)。Responses の `output` の item(`type=reasoning`)と、content の
+# block(`reasoning_text` / `summary_text`、Anthropic 形式の `thinking` / `redacted_thinking`)。
+_REASONING_PART_TYPES = frozenset(
+    {"reasoning", "reasoning_text", "summary_text", "thinking", "redacted_thinking"}
+)
+# 本文の先頭に思考をタグで入れるモデル(`<think>…</think>` / `<thinking>…</thinking>`)の思考の部分。
+_LEADING_THINKING_TAG_RE = re.compile(r"^\s*<(think|thinking)>.*?</\1>\s*", re.I | re.S)
+
+
+def _is_reasoning_part(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    return str(value.get("type", "")).strip().lower() in _REASONING_PART_TYPES
+
+
+def _strip_leading_thinking(text: str) -> str:
+    return _LEADING_THINKING_TAG_RE.sub("", text, count=1)
+
+
+def _first_answer_part_text(content: list[object]) -> str:
+    """content の配列から、思考ではない最初の本文を返す(無ければ空)。"""
+    for part in content:
+        if not isinstance(part, Mapping) or _is_reasoning_part(part):
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and _strip_leading_thinking(text).strip():
+            return _strip_leading_thinking(text)
+    return ""
 
 
 def _json_pointer_value(document: Mapping[str, object], pointer: str) -> object:
