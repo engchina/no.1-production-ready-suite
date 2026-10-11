@@ -3491,13 +3491,28 @@ def _retrieved_hits_expected_page(
 def _has_traceable_citation_metadata(
     item: RetrievedChunk | Mapping[str, object],
 ) -> bool:
+    """引用を原文の位置へたどれるか（文書・chunk と、頁か表計算のシートの位置）。
+
+    頁のある引用（PDF・画像など）は頁と、要素の ID・bbox・節のどれかがあればたどれる。
+    表計算（Excel の行の記録。#1221）の引用は頁を持たないので、シート名と行（``row_start``）・
+    セル範囲・要素の ID のどれかがあればたどれる（#1456）。
+    """
     document_id = _citation_document_id(item)
     chunk_id = _citation_chunk_id(item)
+    if not document_id or not chunk_id:
+        return False
     metadata = _citation_metadata(item)
     page_start = _optional_int(_citation_value(item, metadata, "page_start"))
     page_end = _optional_int(_citation_value(item, metadata, "page_end")) or page_start
-    if not document_id or not chunk_id or page_start is None or page_end is None:
-        return False
+    if page_start is None or page_end is None:
+        return bool(
+            _string_value(_citation_value(item, metadata, "sheet_name"))
+            and (
+                _optional_int(_citation_value(item, metadata, "row_start")) is not None
+                or _string_value(_citation_value(item, metadata, "cell_range"))
+                or _citation_element_ids(item)
+            )
+        )
     return bool(
         _citation_element_ids(item)
         or _citation_bbox(item) is not None

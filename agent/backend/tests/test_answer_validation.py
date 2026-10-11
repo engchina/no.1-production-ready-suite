@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
@@ -27,6 +28,7 @@ from test_clarification_preface import CLARIFICATIONS
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import non_claim_passages, passage_kind, passage_spans
 from app.features.agent.answer_validation import (
+    UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
     connection_check_inputs,
     merge_results,
@@ -1564,3 +1566,30 @@ def test_a_label_with_a_note_in_brackets_is_a_heading() -> None:
     published, withheld = publish_answer(answer, result)
     assert published == answer
     assert withheld == {"claims": 0, "findings": 0, "all": False}
+
+
+# 「確かめられていない点」の節の事例（RAG の品質評価のテストも読む。#1456）。
+UNVERIFIED_SECTION_PATH = "platform/contracts/answer-passages/unverified-section.json"
+UNVERIFIED_SECTION: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[3] / UNVERIFIED_SECTION_PATH).read_text("utf-8")
+)
+
+
+def test_the_unverified_section_heading_is_shared_with_the_rag_evaluation() -> None:
+    """最終の検証が足す節の見出しは、RAG の品質評価が faithfulness から除く見出し（#1456）。"""
+    heading = UNVERIFIED_SECTION["heading"]
+    assert heading == UNVERIFIED_HEADING
+    answer = "検証用アカウントの有効期限は最長 30 日です。\n\n延長は 90 日までできます。"
+    result = _verdict(
+        _claim("検証用アカウントの有効期限は最長 30 日です。", "supported", "根拠に記載。"),
+        _claim("延長は 90 日までできます。", "unsupported", "延長の記載が無い。"),
+    )
+    published, _withheld = publish_answer(answer, result)
+    # RAG は太字の見出しの行から次の見出しの前までを除く（見出しの後ろに本文を足さない）。
+    body, section = published.split(f"\n\n**{heading}**\n\n")
+    assert body == "検証用アカウントの有効期限は最長 30 日です。"
+    heading_line = re.compile(r"(?:#{1,6}\s+.+|\*\*[^*\n]+\*\*)\s*[:：]?")
+    assert not any(heading_line.fullmatch(line.strip()) for line in section.split("\n"))
+    for case in UNVERIFIED_SECTION["answers"]:
+        if case["answer"] != case["body"]:
+            assert non_claim_passages(case["answer"]).get(f"**{heading}**") == "unverified_section"
