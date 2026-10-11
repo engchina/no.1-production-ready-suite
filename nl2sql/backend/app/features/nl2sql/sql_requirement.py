@@ -1133,6 +1133,7 @@ def enforce_requirement_rules(
     items = updated.items
     _ensure_from(items, context)
     _ensure_select(items)
+    _include_referenced_tables(items, context)
     _enforce_joins(updated, context)
     _enforce_periods(items, context)
     _enforce_risks(items, context)
@@ -1199,6 +1200,48 @@ def _ensure_from(items: list[RequirementItem], context: RequirementContext) -> N
     if target.candidates:
         target.status = RequirementStatus.AMBIGUOUS
         target.answer_kind = RequirementAnswerKind.MULTI_SELECT
+
+
+def _include_referenced_tables(items: list[RequirementItem], context: RequirementContext) -> None:
+    """SELECT・結合・WHERE などで使う表を FROM に足す（FROM と食い違うと SQL が作れない）。
+
+    WITH・サブクエリの項目の表は、外側の FROM に入れない（サブクエリの中で使う）。
+    """
+
+    target = next(
+        (
+            item
+            for item in items
+            if item.section == RequirementSection.FROM
+            and (item.status in _CLEAR or item.answered)
+            and item.tables
+        ),
+        None,
+    )
+    if target is None:
+        return
+    current = set(from_tables(items))
+    referenced: list[str] = []
+    for item in items:
+        if item.section in {RequirementSection.FROM, RequirementSection.SUBQUERY}:
+            continue
+        if not (item.status in _CLEAR or item.answered):
+            continue
+        tables = [*item.tables]
+        tables.extend(
+            table for column in item.columns if (table := context.column_lookup.get(column, ""))
+        )
+        referenced.extend(table for table in tables if table and table not in current)
+    added = _unique(referenced)
+    if not added:
+        return
+    target.tables = _unique([*target.tables, *added])
+    names = "、".join(context.table_display(table) for table in added)
+    note = f"SELECT・条件などで使う {names} を FROM に足しました。"
+    if note not in target.reason_ja:
+        target.reason_ja = f"{target.reason_ja} {note}".strip()
+    if target.value_ja and not all(table in target.value_ja for table in added):
+        target.value_ja = f"{target.value_ja}、{'、'.join(added)}"
 
 
 def _ensure_select(items: list[RequirementItem]) -> None:

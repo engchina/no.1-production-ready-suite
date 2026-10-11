@@ -1373,3 +1373,30 @@ def test_job_request_takes_requirement_only_from_applied_session(
     with pytest.raises(HTTPException) as raised:
         nl2sql_router._with_requirement(changed, principal)
     assert raised.value.status_code == 409
+
+
+def test_tables_used_by_select_are_added_to_from_and_joined() -> None:
+    """実サービスで見つけた食い違い: FROM が 1 表なのに SELECT が別の表の列を使う（#1439）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders("inferred"),
+            _item(
+                "select_region",
+                "select",
+                "inferred",
+                columns=["APP.CUSTOMERS.REGION", "APP.ORDERS.AMOUNT"],
+                sql_hint="CUSTOMERS.REGION, ORDERS.AMOUNT",
+            ),
+            _where_shipped(),
+            _item("limit_rows", "limit", "inferred", value="100 件", sql_hint="FETCH FIRST 100"),
+        )
+    )
+    created = _create(_runtime(llm), "地域と受注金額")
+    draft = _draft(created)
+    from_item = next(item for item in draft.items if item.key == "from_orders")
+    assert from_item.tables == ["APP.ORDERS", "APP.CUSTOMERS"]
+    assert "APP.CUSTOMERS（顧客） を FROM に足しました" in from_item.reason_ja
+    join = next(item for item in draft.items if item.key == "join_relationships")
+    assert join.sql_hint == "ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID"
+    assert "JOIN APP.CUSTOMERS ON ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID" in draft.sql_skeleton
