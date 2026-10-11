@@ -255,6 +255,17 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   expect(metaBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
     (panelBox?.y ?? Number.POSITIVE_INFINITY) + (panelBox?.height ?? 0) - 1
   );
+  // 評価は回答の枠の最後（根拠の構成 → 実行の記録 → 評価。チャットと同じ。#1420）。
+  const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+  await expect(feedback).toBeVisible();
+  const [answerBox, feedbackBox] = await Promise.all([
+    page.getByText("受注一覧で取消を押します。").first().boundingBox(),
+    feedback.boundingBox(),
+  ]);
+  expect(panelBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
+    (metaBox?.y ?? Number.POSITIVE_INFINITY) + (metaBox?.height ?? 0) - 1
+  );
   await expectNoPageOverflow(page);
 });
 
