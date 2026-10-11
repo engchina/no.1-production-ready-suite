@@ -633,6 +633,33 @@ def test_business_rag_research_instructions_do_not_report_the_work() -> None:
         assert phrase in instructions, phrase
 
 
+def test_business_rag_research_instructions_do_not_add_absence_or_exhaustive_supplements() -> None:
+    """質問が求めない不在・網羅の補足を書かない（#1470）。
+
+    e1467-deepseek の D で、質問に答えた後の補足の「…は SYS-107 の 1 件だけでした」
+    （`tl-it-department-system`）・「A かつ極秘のものはこの 2 件だけです」
+    （`tl-severity-a-top-secret`）・「入出荷管理システム固有の別頻度は見当たりませんでした」
+    （`br-shipping-backup`）などの 8 段落が、渡された根拠の範囲で不在・網羅を確かめられず
+    unsupported になり、結論は正しいのに回答が conditional になっていた。"""
+    skill = skill_registry.get("business_rag_research")
+    assert skill is not None
+    instructions = skill.instructions
+    for phrase in (
+        "質問が求めない限り、資料に無いこと",
+        "ほかに無いこと・全件で何件だけ",
+        "を補足に書かない",
+        "無いと断定せず、確かめられなかった点として書く。",
+        # 全件を求める質問は、読んだ範囲を結論に書き、補足で繰り返さない。
+        "読んだ範囲（例: 台帳の SYS-101〜SYS-180 の 80 行を読んだ）を結論に書き、",
+        "補足で繰り返さない。",
+    ):
+        assert phrase in instructions, phrase
+    # 資料で確かめられなかった点を書く決まり（#1452）と矛盾させない（その文の後に置く）。
+    assert instructions.index("資料で確かめられなかった点だけを書く。") < instructions.index(
+        "質問が求めない限り、資料に無いこと"
+    )
+
+
 # ---- 台帳の行の略号・区分（#1365） --------------------------------------------------------------
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
