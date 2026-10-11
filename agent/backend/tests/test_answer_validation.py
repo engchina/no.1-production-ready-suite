@@ -502,11 +502,12 @@ def test_chunks_read_in_a_multi_hop_run_are_validation_evidence(
     anyio.run(builtin_runtime.execute_run, created.id)
 
     [call] = mcp.calls_of("rag_validate_answer")
-    # 新しい呼び出し（読んだ本文の chunk）から順に、根拠と合わせて渡す。
+    # 読んだ本文の chunk も根拠と合わせて渡す。回答に当たらない読んだ chunk は、検索の根拠の
+    # 後ろに置く（#1451。文書をまとめて読んだ chunk が上限を埋めない）。
     assert call["arguments"]["evidence"] == [
+        {"document_id": "doc-1", "chunk_id": "chunk-1"},
         {"document_id": "doc-1", "chunk_id": "chunk-3"},
         {"document_id": "doc-1", "chunk_id": "chunk-4"},
-        {"document_id": "doc-1", "chunk_id": "chunk-1"},
     ]
 
 
