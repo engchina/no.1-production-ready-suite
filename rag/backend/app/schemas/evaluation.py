@@ -52,12 +52,14 @@ EVALUATION_UNASSIGNED_SPLIT = "unassigned"
 # - comparison: 2 つ以上の実体の属性を比べる
 # - intra_document_reference: 同じ文書の中の参照（「第 3 章を参照」）をたどる
 # - table_lookup: 本文の実体で表の行を引く（表の中の絞り込みを含む）
+# - section_read: 複数ページの章節を読み切る（必要な根拠が同じ章節の別々のページにある。#1438）
 EvaluationReasoningType = Literal[
     "single_hop",
     "bridge",
     "comparison",
     "intra_document_reference",
     "table_lookup",
+    "section_read",
 ]
 EVALUATION_UNSPECIFIED_REASONING = "unspecified"
 # 段の数の上限と、2 段以上を求める種類（比べる・表を引くは 1 段でもよい）。
