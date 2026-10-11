@@ -1329,6 +1329,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "vision_enabled": False,
             "connection_id": "primary",
             "reasoning_effort": "medium",
+            "max_input_tokens": 128000,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1336,6 +1337,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "vision_enabled": True,
             "connection_id": "primary",
             "reasoning_effort": "medium",
+            "max_input_tokens": 128000,
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1409,6 +1411,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "vision_enabled": False,
             "connection_id": "primary",
             "reasoning_effort": "medium",
+            "max_input_tokens": 128000,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1416,6 +1419,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "vision_enabled": True,
             "connection_id": "primary",
             "reasoning_effort": "medium",
+            "max_input_tokens": 128000,
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
