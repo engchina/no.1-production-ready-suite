@@ -1515,6 +1515,7 @@ def test_withholding_a_quoted_passage_leaves_no_fragment() -> None:
     quote = _LEDGER_SECTION.split("\n")[1].strip()
     assert [text for _s, _e, text in passage_spans(_LEDGER_SECTION.split("\n")[1])] == [quote]
     published = withhold_paragraphs(_LEDGER_SECTION, {quote})
+    assert published is not None
     assert "A が最も高く" not in published
     assert "」" not in published.replace("「システム台帳」", "")
 
