@@ -69,7 +69,7 @@
 ## API
 
 - Snapshot 正式版は `agent-control-plane.snapshot.v2`。v1 `tool_names` は Skill を安全に推定する。変換不能 Agent は `migration_required=true`、無効。
-- `POST /api/runs` は `agent_id` と `goal` だけを受け取り、組み込み Runtime で実行する。旧エンジン（v1 の Run・`tool_calls`・planner・Memory・`X-Agent-API-Version: 1`）は持たない。
+- `POST /api/runs` は `agent_id` と `goal`（会話の続きは `thread_id`、確認の取り消しの操作は `clarification_cancel`。#1441・#1445）を受け取り、組み込み Runtime で実行する。旧エンジン（v1 の Run・`tool_calls`・planner・Memory・`X-Agent-API-Version: 1`）は持たない。
 - Skill は instructions と MCP ツールの許可リスト（`mcp_requirements`）だけを持つ。ToolCall のテンプレート（`tool_calls`）・`POST /api/skills/plan`・`agent_skill_run` は持たない。
 
 ## セキュリティ

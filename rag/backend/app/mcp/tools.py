@@ -137,7 +137,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 8: 根拠の結果に、当たった文書の旧版（older_versions）を足した（#1405）。
 # 9: 章節ナビゲーションを正本にした（#1438）。rag_outline を章節の階層・section_id で返し、
 #    rag_read_section を足し、根拠に所属の章節（section）を足した。
-MCP_OUTPUT_SCHEMA_VERSION = 9
+# 10: rag_read_document / rag_read_section の chunks に表計算の場所（sheet_name・row_start・
+#     row_end・cell_range）を足した（#1471）。
+MCP_OUTPUT_SCHEMA_VERSION = 10
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -647,6 +649,11 @@ class ReadDocumentChunk(BaseModel):
     section_path: list[str] = Field(default_factory=list)
     page_start: int | None = None
     page_end: int | None = None
+    # 表計算の場所（検索の根拠の locator と同じ。#1471）。表計算でない chunk は null。
+    sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
+    row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
+    row_end: int | None = Field(default=None, description="シートの終了の行。")
+    cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
     start: int = Field(description="返した本文の中の開始の位置（文字数）。")
     end: int = Field(description="返した本文の中の終了の位置（文字数）。")
 
@@ -2149,6 +2156,10 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
                     section_path=locator.section_path,
                     page_start=locator.page_start,
                     page_end=locator.page_end,
+                    sheet_name=locator.sheet_name,
+                    row_start=locator.row_start,
+                    row_end=locator.row_end,
+                    cell_range=locator.cell_range,
                     start=start,
                     end=length,
                 )
@@ -2305,6 +2316,10 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
                     section_path=locator.section_path,
                     page_start=locator.page_start,
                     page_end=locator.page_end,
+                    sheet_name=locator.sheet_name,
+                    row_start=locator.row_start,
+                    row_end=locator.row_end,
+                    cell_range=locator.cell_range,
                     start=start,
                     end=length,
                 )

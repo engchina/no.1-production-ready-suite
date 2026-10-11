@@ -35,6 +35,14 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from app.features.agent.clarification_cancel import (
+    CANCEL_TRACE_PREFIX,
+    KIND_NL2SQL,
+    KIND_RAG,
+    MAX_CANCELLATIONS,
+    clarification_kind,
+    kind_label,
+)
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -68,6 +76,9 @@ RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 _UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+# NL2SQL の SQL の生成・実行。SQL を作る前に AI要件確認の項目を返すことがある（#1441）。
+NL2SQL_QUERY = "nl2sql_query"
+NL2SQL_NEEDS_CLARIFICATION = "needs_clarification"
 
 # 本文の中の、同じ文書の別の箇所を指す参照（「第 4 章を参照」「別表 2 参照」など。#1345）。
 # 根拠の本文は NFKC にしてから探す（全角の数字・空白を同じに扱う）。
@@ -174,7 +185,7 @@ def _executed(step: RunStep) -> bool:
         return False
     if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
-    if (step.tool_call.trace_id or "").startswith(GUIDE_CHECK_TRACE_PREFIX):
+    if (step.tool_call.trace_id or "").startswith((GUIDE_CHECK_TRACE_PREFIX, CANCEL_TRACE_PREFIX)):
         return False
     return step.tool_result.error_code not in {_DRY_RUN_CODE, BUDGET_EXCEEDED_CODE}
 
@@ -225,6 +236,97 @@ def ask_clarification_step(clarifications: object, *, reason: str) -> JsonObject
             "利用者が答えたら、その値を conditions（条件の id → 値）に入れて続けてください。"
         ),
     }
+
+
+def _connection_of(tool_name: str) -> str:
+    """`<接続>__<ツール>` の接続の部分（MCP 接続のツールでなければ空）。"""
+    if MCP_TOOL_SEPARATOR not in tool_name:
+        return ""
+    return tool_name[: -len(mcp_base_tool_name(tool_name)) - len(MCP_TOOL_SEPARATOR)]
+
+
+def nl2sql_clarification(output: object, arguments: object, *, tool_name: str) -> JsonObject | None:
+    """`nl2sql_query` が返した AI要件確認の項目を、確かめ中の問いにする（#1441。無ければ None）。
+
+    1 回の結果は 1 問だけ（NL2SQL が 1 問ずつ返す）。表・列の物理名は候補の名前のまま持つ。
+    """
+    if not isinstance(output, dict) or output.get("status") != NL2SQL_NEEDS_CLARIFICATION:
+        return None
+    requirement = output.get("requirement")
+    question = requirement.get("question") if isinstance(requirement, dict) else None
+    if not isinstance(requirement, dict) or not isinstance(question, dict):
+        return None
+    session_id = _text(requirement.get("session_id"), 128)
+    item_id = _text(question.get("item_id"), 128)
+    text = _text(question.get("question"))
+    if not session_id or not item_id or not text:
+        return None
+    candidates = [
+        {"id": candidate_id, "label": label}
+        for item in _records(question.get("candidates"))[:10]
+        if (candidate_id := _text(item.get("id"), 128)) and (label := _text(item.get("label"), 200))
+    ]
+    call = arguments if isinstance(arguments, dict) else {}
+    return {
+        "kind": KIND_NL2SQL,
+        "connection": _connection_of(tool_name),
+        "condition_id": item_id,
+        "label": _text(question.get("label"), 100),
+        "question": text,
+        "reason": _text(question.get("reason")),
+        "options": [candidate["label"] for candidate in candidates],
+        "candidates": candidates,
+        "answer_kind": _text(question.get("answer_kind"), 20),
+        "requirement_session_id": session_id,
+        "profile_id": _text(call.get("profile_id"), 128),
+        "nl2sql_question": _text(call.get("question"), _MAX_GOAL_CHARS),
+    }
+
+
+NL2SQL_ASK_INSTRUCTION = (
+    "データベースから答える前に、SQL を正しく作るための確認が要ります（SQL はまだ作っていません）。"
+    "questions の問いを 1 つだけ、候補があれば候補の名前を添えて、利用者にそのまま確かめてください"
+    "（表・列は物理名のまま。推測で選ばない・ほかのツールで補わない・SQL や結果を作らない）。"
+    "利用者が答えたら、nl2sql_query に同じ question と profile_id、requirement_session_id と "
+    "answer（item_id と、答えに当たる候補の id の selected_candidate_ids。候補に無い答えは "
+    "free_text に利用者の言葉のまま。どちらか一方だけ）を渡して呼び直してください。"
+)
+
+
+def nl2sql_next_step(output: object, arguments: object, *, tool_name: str) -> JsonObject | None:
+    """`nl2sql_query` が確認の項目を返したとき、モデルに渡す次の手（RAG の確認と同じ形。#1441）。"""
+    pending = nl2sql_clarification(output, arguments, tool_name=tool_name)
+    if pending is None:
+        return None
+    return {
+        "action": NEXT_STEP_ASK_CLARIFICATION,
+        "reason": NL2SQL_NEEDS_CLARIFICATION,
+        "kind": KIND_NL2SQL,
+        "tools": [],
+        "questions": [
+            {
+                "kind": KIND_NL2SQL,
+                "condition_id": pending["condition_id"],
+                "label": pending["label"],
+                "question": pending["question"],
+                "options": pending["options"],
+            }
+        ],
+        "requirement_session_id": pending["requirement_session_id"],
+        "instruction": NL2SQL_ASK_INSTRUCTION,
+    }
+
+
+def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
+    """この Run の最後の `nl2sql_query` が確認の項目を返して止まったか（SQL を作っていない）。"""
+    for step in reversed(steps):
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or mcp_base_tool_name(call.name) != NL2SQL_QUERY:
+            continue
+        if not result.success or not isinstance(result.output, dict):
+            return False
+        return result.output.get("status") == NL2SQL_NEEDS_CLARIFICATION
+    return False
 
 
 def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | None, str]]:
@@ -1175,6 +1277,34 @@ class _StateBuilder:
         self.outcome: str | None = outcome if isinstance(outcome, str) else None
         self.evidence = _records(previous.get("evidence"))
         self.labels: dict[str, str] = {}
+        self.cancellations = _records(previous.get("clarification_cancellations"))
+
+    def _other_pending(self, kind: str) -> list[JsonObject]:
+        """ほかの種類の確かめ中の問い（RAG と NL2SQL の確認は別々に更新する）。"""
+        return [item for item in self.pending if clarification_kind(item) != kind]
+
+    def set_rag_pending(self, questions: list[JsonObject]) -> None:
+        rag = [{**question, "kind": KIND_RAG} for question in questions]
+        self.pending = [*self._other_pending(KIND_RAG), *rag]
+
+    def apply_nl2sql(self, call_name: str, arguments: JsonObject, result: object) -> None:
+        """`nl2sql_query` の AI要件確認（#1441）。確認の項目を返したら、その 1 問を確かめ中にする。
+
+        SQL を作った・失敗した（session の終了など）ときは、NL2SQL の確かめ中の問いを外す。
+        """
+        output = getattr(result, "output", None) if getattr(result, "success", False) else None
+        pending = nl2sql_clarification(output, arguments, tool_name=call_name)
+        self.pending = [*self._other_pending(KIND_NL2SQL), *([pending] if pending else [])]
+
+    def apply_cancellations(self, records: list[JsonObject]) -> None:
+        """取り消した確認（#1441・#1445）の問いを外し、取り消しの記録を残す。"""
+        for record in records:
+            kind = record.get("kind")
+            if kind not in {KIND_NL2SQL, KIND_RAG}:
+                continue
+            self.pending = self._other_pending(str(kind))
+            self.cancellations.append(deepcopy(record))
+        self.cancellations = self.cancellations[-MAX_CANCELLATIONS:]
 
     def set_condition(self, condition_id: str, raw: object, *, source: str, at: str) -> None:
         condition_id = _text(condition_id, 100)
@@ -1239,20 +1369,24 @@ class _StateBuilder:
             self.outcome = outcome
         clarifications = output.get("clarifications")
         if isinstance(clarifications, list):
-            self.pending = [
-                {
-                    "condition_id": _text(item.get("condition_id"), 100),
-                    "label": _text(item.get("label"), 100),
-                    "question": _text(item.get("question")),
-                    "options": [
-                        option for value in item.get("options") or [] if (option := _text(value))
-                    ][:10],
-                }
-                for item in _records(clarifications)
-                if _text(item.get("condition_id"), 100) and _text(item.get("question"))
-            ][:MAX_PENDING_CLARIFICATIONS]
+            self.set_rag_pending(
+                [
+                    {
+                        "condition_id": _text(item.get("condition_id"), 100),
+                        "label": _text(item.get("label"), 100),
+                        "question": _text(item.get("question")),
+                        "options": [
+                            option
+                            for value in item.get("options") or []
+                            if (option := _text(value))
+                        ][:10],
+                    }
+                    for item in _records(clarifications)
+                    if _text(item.get("condition_id"), 100) and _text(item.get("question"))
+                ][:MAX_PENDING_CLARIFICATIONS]
+            )
         elif isinstance(outcome, str) and outcome != "needs_clarification":
-            self.pending = []
+            self.set_rag_pending([])
         gaps = output.get("gaps")
         if isinstance(gaps, list):
             self.gaps = [text for item in gaps if (text := _text(item))][:MAX_GAPS]
@@ -1285,7 +1419,9 @@ class _StateBuilder:
             source = SOURCE_USER_ANSWER if item.get("source") == "user" else SOURCE_RAG_GUIDE
             self.set_condition(_text(item.get("id"), 100), item.get("value"), source=source, at=at)
         if guide.get("decision") == "clarify":
-            self.pending = _questions(guide.get("clarifications"))[:MAX_PENDING_CLARIFICATIONS]
+            self.set_rag_pending(
+                _questions(guide.get("clarifications"))[:MAX_PENDING_CLARIFICATIONS]
+            )
 
     def apply_evidence(self, output: JsonObject | None) -> None:
         if output is None:
@@ -1315,8 +1451,12 @@ class _StateBuilder:
         self.evidence = self.evidence[-MAX_EVIDENCE_HANDLES:]
 
     def pending_unknown(self) -> list[JsonObject]:
-        # 分かった条件の問いは確かめ終えた。
-        return [item for item in self.pending if item.get("condition_id") not in self.known]
+        # 分かった条件の問いは確かめ終えた（RAG の条件。NL2SQL の問いは NL2SQL の結果で外す）。
+        return [
+            item
+            for item in self.pending
+            if clarification_kind(item) == KIND_NL2SQL or item.get("condition_id") not in self.known
+        ]
 
 
 def build_support_task(
@@ -1330,9 +1470,15 @@ def build_support_task(
     max_rag_calls_per_run: int,
     max_tool_calls_per_task: int,
     now: datetime | None = None,
+    cancellations: list[JsonObject] | None = None,
 ) -> JsonObject:
-    """前の Run までの状態に、この Run の step（ツールの引数と結果）を重ねた状態。"""
+    """前の Run までの状態に、この Run の step（ツールの引数と結果）を重ねた状態。
+
+    `cancellations` はこの Run で取り消した確認（#1441・#1445。Run の metadata の記録）。
+    """
     builder = _StateBuilder(previous)
+    # 取り消しは Run の始めに決まる（この Run の step より前）。
+    builder.apply_cancellations(list(cancellations or []))
     for step in steps:
         call = step.tool_call
         if call is None or step.status not in {"completed", "failed"}:
@@ -1347,6 +1493,8 @@ def build_support_task(
             builder.apply_lookup(call.arguments, output, at=at)
         if base in _EVIDENCE_TOOLS:
             builder.apply_evidence(output)
+        if base == NL2SQL_QUERY:
+            builder.apply_nl2sql(call.name, call.arguments, result)
     run = run_consumption(steps)
     before = previous_task_consumption(previous)
     task = {
@@ -1368,6 +1516,8 @@ def build_support_task(
         "outcome": builder.outcome,
         "gaps": builder.gaps,
         "evidence": builder.evidence,
+        # 利用者が取り消した確認（#1441・#1445。会話の通し、新しいものが後ろ）。
+        "clarification_cancellations": builder.cancellations,
         # この Run の経路と理由（会話の通しではなく Run ごと。#1283）。
         "route": run_route(steps),
         "budget": {
@@ -1422,6 +1572,26 @@ def support_task_instructions(
             suffix = f"（{source}）" if source else ""
             lines.append(f"  - {name} = 「{_text(entry.get('value'), _MAX_VALUE_CHARS)}」{suffix}")
     pending = _records(state.get("pending_clarifications"))
+    nl2sql_pending = [item for item in pending if clarification_kind(item) == KIND_NL2SQL]
+    pending = [item for item in pending if clarification_kind(item) != KIND_NL2SQL]
+    if nl2sql_pending:
+        lines.append(
+            "- データベース（NL2SQL）の確かめ中の問い（SQL を作る前の確認。答えを待っている）:"
+        )
+        for item in nl2sql_pending[:MAX_PENDING_CLARIFICATIONS]:
+            candidates = [
+                f"「{_text(candidate.get('label'), 200)}」（id={_text(candidate.get('id'), 128)}）"
+                for candidate in _records(item.get("candidates"))
+            ]
+            choices = f" 候補: {' / '.join(candidates)}" if candidates else ""
+            session_id = _text(item.get("requirement_session_id"), 128)
+            lines.append(
+                f"  - item_id={_text(item.get('condition_id'), 128)}: "
+                f"「{_text(item.get('question'))}」{choices}"
+                f"（requirement_session_id={session_id}、"
+                f"profile_id={_text(item.get('profile_id'), 128)}、"
+                f"question=「{_text(item.get('nl2sql_question'), _MAX_GOAL_CHARS)}」）"
+            )
     if pending:
         lines.append("- 確かめ中の問い（利用者の答えを待っている）:")
         for item in pending[:MAX_PENDING_CLARIFICATIONS]:
@@ -1459,9 +1629,28 @@ def support_task_instructions(
         )
     if budget:
         lines.append("- 予算: " + "、".join(budget) + "。")
+    cancelled = [
+        record.get("kind")
+        for record in _records(state.get("clarification_cancellations"))
+        if record.get("kind") in {KIND_NL2SQL, KIND_RAG}
+    ]
+    if cancelled:
+        lines.append(
+            "- 利用者が取り消した確認: "
+            + "、".join(kind_label(str(kind)) for kind in dict.fromkeys(cancelled))
+            + "（同じ質問で、取り消した確認を聞き直さない）。"
+        )
+    lines.append("扱い:")
+    if nl2sql_pending:
+        lines.append(
+            "- 利用者の新しい発言がデータベース（NL2SQL）の確かめ中の問いに答えていれば、"
+            "nl2sql_query に上の question と profile_id、requirement_session_id と answer"
+            "（item_id と、答えに当たる候補の id の selected_candidate_ids。候補に無い答えは "
+            "free_text に利用者の言葉のまま。どちらか一方だけ）を渡して呼び直してください。"
+            "答えを推測で埋めず、問いは 1 回に 1 つだけ聞いてください。"
+        )
     lines.extend(
         [
-            "扱い:",
             "- 利用者の新しい発言が確かめ中の問いに答えていれば、その値を rag_search の conditions"
             "（条件の id → 値）に入れて呼んでください。",
             "- 分かっている条件は聞き直さず、rag_search の conditions に入れてください。",

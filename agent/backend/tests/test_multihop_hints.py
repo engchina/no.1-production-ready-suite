@@ -609,6 +609,57 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
         assert phrase in instructions, phrase
 
 
+def test_business_rag_research_instructions_do_not_report_the_work() -> None:
+    """回答に作業の経過（ツール名・検索の状態・業務ガイドの有無・旧版の有無）を書かない（#1452）。
+
+    #1362 の評価で、これらの段落が最終の検証で「根拠で確かめられない」になって外れ、資料の答えは
+    正しいのに回答が conditional になっていた（`da-regional-report-export` の「業務ガイドは
+    見つかりませんでした」、`km-license-fee` の「rag_search の結果は insufficient_evidence」、
+    `ir-emergency-change` の「旧版もあることが確認できました」、`br-crm-retention` の
+    「確かめられなかった点はありません」）。"""
+    skill = skill_registry.get("business_rag_research")
+    assert skill is not None
+    instructions = skill.instructions
+    for phrase in (
+        "回答には、資料の内容と、資料で確かめられなかった点だけを書く。",
+        "ツールの名前（rag_search・rag_outline など）",
+        "ツールの結果の状態（outcome・needs_human_review などの値）",
+        "業務ガイドが見つかった・見つからなかったこと",
+        "検索の結果に旧版（older_versions）があったこと",
+        "「確かめられなかった点はありません」のような作業の報告は書かない",
+        # 旧版を比べる質問で旧版の内容を書くのは除く。
+        "旧版・改定前との違いを尋ねる質問で、旧版の内容を書くのは除く。",
+    ):
+        assert phrase in instructions, phrase
+
+
+def test_business_rag_research_instructions_do_not_add_absence_or_exhaustive_supplements() -> None:
+    """質問が求めない不在・網羅の補足を書かない（#1470）。
+
+    e1467-deepseek の D で、質問に答えた後の補足の「…は SYS-107 の 1 件だけでした」
+    （`tl-it-department-system`）・「A かつ極秘のものはこの 2 件だけです」
+    （`tl-severity-a-top-secret`）・「入出荷管理システム固有の別頻度は見当たりませんでした」
+    （`br-shipping-backup`）などの 8 段落が、渡された根拠の範囲で不在・網羅を確かめられず
+    unsupported になり、結論は正しいのに回答が conditional になっていた。"""
+    skill = skill_registry.get("business_rag_research")
+    assert skill is not None
+    instructions = skill.instructions
+    for phrase in (
+        "質問が求めない限り、資料に無いこと",
+        "ほかに無いこと・全件で何件だけ",
+        "を補足に書かない",
+        "無いと断定せず、確かめられなかった点として書く。",
+        # 全件を求める質問は、読んだ範囲を結論に書き、補足で繰り返さない。
+        "読んだ範囲（例: 台帳の SYS-101〜SYS-180 の 80 行を読んだ）を結論に書き、",
+        "補足で繰り返さない。",
+    ):
+        assert phrase in instructions, phrase
+    # 資料で確かめられなかった点を書く決まり（#1452）と矛盾させない（その文の後に置く）。
+    assert instructions.index("資料で確かめられなかった点だけを書く。") < instructions.index(
+        "質問が求めない限り、資料に無いこと"
+    )
+
+
 # ---- 台帳の行の略号・区分（#1365） --------------------------------------------------------------
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
@@ -910,6 +961,21 @@ def test_fake_rag_evidence_outputs_match_the_contract() -> None:
         assert set(DEFAULT_OUTPUTS[name]) <= set(properties), name
         assert "older_versions" in DEFAULT_OUTPUTS[name], name
         assert properties["older_versions"]["type"] == "array", name
+
+
+def test_fake_rag_read_chunks_match_the_contract() -> None:
+    """fake の読み取りのツールの chunk の項目は RAG の契約と同じ（表計算の場所を含む。#1471）。"""
+    contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
+    tools = {tool["name"]: tool["outputSchema"] for tool in contract["tools"]}
+    for name in ("rag_read_document", "rag_read_section"):
+        chunk = tools[name]["$defs"]["ReadDocumentChunk"]["properties"]
+        assert {"sheet_name", "row_start", "row_end", "cell_range"} <= set(chunk), name
+        for item in DEFAULT_OUTPUTS[name]["chunks"]:
+            assert set(item) == set(chunk), name
+        assert (
+            DEFAULT_OUTPUTS[name]["schema_version"]
+            == tools[name]["properties"]["schema_version"]["default"]
+        )
 
 
 # ---- 根拠の章節を読み切る（#1438） --------------------------------------------------------------

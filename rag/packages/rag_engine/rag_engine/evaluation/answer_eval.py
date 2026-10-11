@@ -184,6 +184,10 @@ def _input_bytes(inputs: dict[str, Any]) -> int:
                                                  + _json(AnswerEvaluationOutput.model_json_schema())).encode("utf-8"))
 
 
+# 根拠の場所のうち、頁（page_start・page_end）のほかにモデルへ渡す項目（MCP の根拠の location と同じ値。#1450）。
+EVIDENCE_LOCATION_KEYS = ("section_path", "sheet_name", "row_start", "row_end", "cell_range")
+
+
 def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
     """親子の出典を残して全文を分割する。preview は全文として代用しない。"""
     for item in items:
@@ -192,6 +196,8 @@ def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
             yield from _evidence_fragments(item.get("children") or [], str(item.get("id") or ""), ancestor_text)
             continue
         metadata = {key: item.get(key) for key in ("id", "source", "source_run_id", "page_start", "page_end")}
+        # 頁の無い根拠（表計算の行など）の場所も写す（渡されたときだけ。#1450）。根拠の ID は変えない。
+        metadata.update({key: item[key] for key in EVIDENCE_LOCATION_KEYS if item.get(key) not in (None, "", [])})
         metadata["id"] = item.get("chunk_uid") or metadata["id"]
         metadata["parent_id"] = parent_id
         for start in range(0, max(1, len(text)), EVIDENCE_FRAGMENT_CHARS):

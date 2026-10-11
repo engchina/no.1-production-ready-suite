@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -418,7 +418,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -554,7 +554,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -794,6 +794,58 @@
                 "default": null,
                 "title": "Page End"
               },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のシート名（#1221）。",
+                "title": "Sheet Name"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの開始の行（1 始まり）。",
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの終了の行。",
+                "title": "Row End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セル範囲（例: A3:F7）。",
+                "title": "Cell Range"
+              },
               "start": {
                 "description": "返した本文の中の開始の位置（文字数）。",
                 "title": "Start",
@@ -816,7 +868,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1106,6 +1158,58 @@
                 "default": null,
                 "title": "Page End"
               },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のシート名（#1221）。",
+                "title": "Sheet Name"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの開始の行（1 始まり）。",
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの終了の行。",
+                "title": "Row End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セル範囲（例: A3:F7）。",
+                "title": "Cell Range"
+              },
               "start": {
                 "description": "返した本文の中の開始の位置（文字数）。",
                 "title": "Start",
@@ -1128,7 +1232,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1652,7 +1756,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2584,7 +2688,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3634,7 +3738,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4114,7 +4218,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 9,
+            "default": 10,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

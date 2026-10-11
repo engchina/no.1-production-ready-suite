@@ -1476,6 +1476,32 @@ def test_read_section_reads_the_whole_section_and_stops_at_its_end(
     assert _SectionStore.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
 
 
+def test_read_tools_return_the_sheet_location_of_spreadsheet_chunks(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle]
+) -> None:
+    """読み取りのツールの chunk に、検索の根拠と同じ表計算の場所（シート・行・セル範囲）を入れる。
+
+    #1471。
+
+    表計算の行の chunk は頁を持たず、場所がシートと行だけなので、無いと引用をたどれない。
+    """
+    sheet = {"sheet_name": "システム台帳", "row_start": 6, "row_end": 6, "cell_range": "A6:F6"}
+    document_oracle.chunks[3] = _doc_chunk(3, "承認の本文。", "規程 > 第3章 承認", 3, **sheet)
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+    location_keys = ("sheet_name", "row_start", "row_end", "cell_range")
+
+    whole = _read_all({"document_id": "d1", "max_chars": 1000}, headers)[0]
+    section = _read_section({"section_id": "s22"}, headers)
+
+    for chunks in (whole["chunks"], section["chunks"]):
+        by_id = {chunk["chunk_id"]: chunk for chunk in chunks}
+        assert {key: by_id["d1:cs-1:3"][key] for key in location_keys} == sheet
+    # 表計算でない chunk は null（項目を足すだけで、既存の項目は変えない）。
+    assert {key: whole["chunks"][0][key] for key in location_keys} == dict.fromkeys(location_keys)
+    assert whole["chunks"][0]["section_path"] == ["規程", "第1章 総則"]
+
+
 def test_read_section_from_evidence_chunk_and_up_to_parent(
     auth: ProductionAuth, document_oracle: type[_DocumentOracle]
 ) -> None:

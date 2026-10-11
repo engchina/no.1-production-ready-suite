@@ -26,7 +26,7 @@ from app.rag.answer_checks import (
     check_impact,
     check_requests,
 )
-from app.rag.answer_engine import build_engine_settings
+from app.rag.answer_engine import _sheet_location, build_engine_settings
 from app.rag.answer_threads import run_answer_in_thread
 
 # 主張の監査で「検証に通った」とみなさない判定。
@@ -67,6 +67,28 @@ class AnswerValidation:
     checks: list[str] = field(default_factory=list)
     # 検査に使った業務ガイドの公開の版（業務ガイドを渡さなければ None）。
     guide_revision: int | None = None
+
+
+def evidence_location(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """検証に渡す根拠の場所（節と、表計算のシート・行・セル範囲）。
+
+    値は MCP の根拠の location と同じ（#1450）。
+
+    段落が書いた「行23」「シート「台帳」」などの場所を、モデルが根拠の場所と照らせるようにする。
+    分からない項目は入れない（頁は呼び出し側が ``page_start``・``page_end`` で渡す）。
+    """
+    location: dict[str, Any] = {}
+    section = metadata.get("section_path")
+    if isinstance(section, str):
+        section = section.split(" > ")
+    if isinstance(section, list):
+        path = [str(item).strip() for item in section if str(item).strip()]
+        if path:
+            location["section_path"] = path
+    sheet = _sheet_location(metadata)
+    if sheet is not None:
+        location.update(sheet)
+    return location
 
 
 def is_valid(status: str, counts: dict[str, int], *, unreadable: int) -> bool:
@@ -168,6 +190,7 @@ async def validate_answer(
                 "source": chunk.file_name or chunk.document_id,
                 "page_start": metadata.get("page_start"),
                 "page_end": metadata.get("page_end"),
+                **evidence_location(metadata),
                 "text": chunk.text,
             }
         )
@@ -208,6 +231,7 @@ __all__ = [
     "EvidenceRef",
     "GuideCheckRef",
     "GuideProfileNotFoundError",
+    "evidence_location",
     "is_valid",
     "validate_answer",
 ]

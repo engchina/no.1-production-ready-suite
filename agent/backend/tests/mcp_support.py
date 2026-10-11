@@ -132,12 +132,26 @@ class RagListSearchAnswerProfilesIn(_ContractInput):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class Nl2SqlRequirementAnswerIn(_ContractInput):
+    # AI要件確認の項目への答え（#1441）。
+    item_id: str = Field(min_length=1, max_length=128)
+    selected_candidate_ids: list[str] = Field(default_factory=list, max_length=20)
+    free_text: str = Field(default="", max_length=2000)
+
+
 class Nl2SqlQueryIn(_ContractInput):
     question: str = Field(min_length=1, max_length=4000)
     # 契約どおり必須（"default" に切り替えない。#1379）。
     profile_id: str = Field(min_length=1, max_length=128)
     row_limit: int = Field(default=100, ge=1, le=1000)
     wait_seconds: int = Field(default=40, ge=0, le=45)
+    # AI要件確認の続き（#1441）。
+    requirement_session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    answer: Nl2SqlRequirementAnswerIn | None = None
+
+
+class Nl2SqlCancelRequirementIn(_ContractInput):
+    requirement_session_id: str = Field(min_length=1, max_length=128)
 
 
 class Nl2SqlGetJobIn(_ContractInput):
@@ -153,6 +167,85 @@ class Nl2SqlListProfilesIn(_ContractInput):
 class Nl2SqlRecommendProfileIn(_ContractInput):
     question: str = Field(min_length=1, max_length=4000)
     profile_ids: list[str] | None = Field(default=None, min_length=1, max_length=50)
+
+
+def nl2sql_requirement(status: str = "applied", **extra: Any) -> dict[str, Any]:
+    """契約の `requirement`（AI要件確認の状態。#1441）。"""
+    return {
+        "session_id": "qs-1",
+        "status": status,
+        "question": None,
+        "remaining_count": 0,
+        "answered_count": 0,
+        "select_from_clear": True,
+        "minimum_missing": [],
+        "summary": "- 使う表（FROM）: SALES",
+        "clarified_question": "部門別の売上（SALES.AMOUNT の合計）",
+        "sql_skeleton": "SELECT SALES.DEPARTMENT, SUM(SALES.AMOUNT) FROM SALES",
+        "message": "",
+        **extra,
+    }
+
+
+def nl2sql_needs_clarification(
+    *,
+    session_id: str = "qs-1",
+    item_id: str = "item-period",
+    question: str = "SALES のどの日付の列で期間を絞りますか？",
+    candidates: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """`nl2sql_query` が SQL を作らずに確認の項目を 1 つ返した結果（#1441）。"""
+    return {
+        "job_id": None,
+        "status": "needs_clarification",
+        "profile_id": "profile-sales",
+        "generated_sql": None,
+        "executable_sql": None,
+        "explanation": None,
+        "is_safe": None,
+        "safety_issues": [],
+        "columns": [],
+        "rows": [],
+        "returned_count": 0,
+        "total": None,
+        "has_more": False,
+        "truncated": False,
+        "history_id": None,
+        "error_code": None,
+        "error_message": None,
+        "requirement": nl2sql_requirement(
+            "needs_answer",
+            session_id=session_id,
+            remaining_count=1,
+            select_from_clear=True,
+            question={
+                "item_id": item_id,
+                "section": "period",
+                "label": "期間の日付の列",
+                "question": question,
+                "reason": "「今月」の基準の列が決まっていません。",
+                "answer_kind": "single_select",
+                "candidates": candidates
+                if candidates is not None
+                else [
+                    {
+                        "id": "c-order",
+                        "label": "SALES.ORDER_DATE（受注日）",
+                        "description": "",
+                        "refs": "SALES.ORDER_DATE（受注日）",
+                    },
+                    {
+                        "id": "c-ship",
+                        "label": "SALES.SHIP_DATE（出荷日）",
+                        "description": "",
+                        "refs": "SALES.SHIP_DATE（出荷日）",
+                    },
+                ],
+                "value": "",
+                "refs": "",
+            },
+        ),
+    }
 
 
 def _job(status: str = "done") -> dict[str, Any]:
@@ -172,6 +265,9 @@ def _job(status: str = "done") -> dict[str, Any]:
         "has_more": False,
         "truncated": False,
         "history_id": "history-1",
+        "error_code": None,
+        "error_message": None,
+        "requirement": nl2sql_requirement(),
     }
 
 
@@ -212,7 +308,9 @@ _EVIDENCE = {
 }
 
 # RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
-RAG_OUTPUT_SCHEMA_VERSION = 4
+# 10: 読み取りのツールの chunks に表計算の場所（sheet_name・row_start・row_end・cell_range）を
+# 足した（#1471）。
+RAG_OUTPUT_SCHEMA_VERSION = 10
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -316,6 +414,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 12,
                 "end": 19,
             },
@@ -325,6 +427,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 4,
                 "page_end": 4,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 33,
                 "end": 38,
             },
@@ -346,6 +452,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 12,
                 "end": 19,
             },
@@ -355,6 +465,10 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
                 "section_path": ["契約書", "第5条（更新）"],
                 "page_start": 3,
                 "page_end": 3,
+                "sheet_name": None,
+                "row_start": None,
+                "row_end": None,
+                "cell_range": None,
                 "start": 20,
                 "end": 25,
             },
@@ -449,6 +563,11 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "rewritten_question": None,
         "candidates": [{"id": "profile-sales", "name": "売上", "reason": None, "score": 0.9}],
     },
+    # AI要件確認の取り消し（#1441。Agent の Control Plane が呼ぶ）。
+    "nl2sql_cancel_requirement": lambda argument: {
+        "requirement_session_id": argument.requirement_session_id,
+        "status": "cancelled",
+    },
 }
 
 Product = Literal["rag", "nl2sql"]
@@ -504,6 +623,9 @@ class FakeProductMcp:
                     self._tool("nl2sql_get_job", Nl2SqlGetJobIn),
                     self._tool("nl2sql_list_profiles", Nl2SqlListProfilesIn),
                     self._tool("nl2sql_recommend_profile", Nl2SqlRecommendProfileIn),
+                    self._tool(
+                        "nl2sql_cancel_requirement", Nl2SqlCancelRequirementIn, read_only=False
+                    ),
                 ],
             ),
         }
@@ -643,4 +765,6 @@ __all__ = [
     "FakeProductMcp",
     "McpToolError",
     "fake_product_mcp",
+    "nl2sql_needs_clarification",
+    "nl2sql_requirement",
 ]

@@ -46,6 +46,8 @@ from app.features.nl2sql.models import (
     SelectAiFeedbackDeleteRequest,
     SelectAiFeedbackVectorIndexRequest,
     SimilarHistoryRequest,
+    SqlRequirementSpec,
+    SqlRequirementSpecItem,
 )
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
@@ -1508,6 +1510,124 @@ def test_enterprise_ai_direct_receives_published_markdown_in_context() -> None:
         "ontology_generation_context:\n" + published_markdown
     )
     assert "question_effective:" not in fake_client.calls[0]["context"]
+
+
+def _invoice_requirement(tables: list[str]) -> SqlRequirementSpec:
+    """AI要件確認の構造化した要件（#1439）。"""
+
+    return SqlRequirementSpec(
+        session_id="query_session_requirement",
+        profile_id="profile",
+        clarified_question="INVOICES.TOTAL_AMOUNT の合計を確認したい",
+        tables=tables,
+        items=[
+            SqlRequirementSpecItem(
+                section="select",
+                section_label_ja="表示する項目（SELECT）",
+                label_ja="請求金額の合計",
+                value_ja="SUM(INVOICES.TOTAL_AMOUNT)",
+                columns=["INVOICES.TOTAL_AMOUNT"],
+                sql_hint="SUM(INVOICES.TOTAL_AMOUNT)",
+            ),
+            SqlRequirementSpecItem(
+                section="period",
+                section_label_ja="期間（WHERE）",
+                label_ja="期間",
+                value_ja="2026-04-01〜2027-03-31",
+                sql_hint="INVOICES.INVOICE_DATE >= DATE '2026-04-01'",
+                period_range_ja="2026-04-01〜2027-03-31（開始日と終了日を含む）",
+            ),
+        ],
+    )
+
+
+def test_enterprise_ai_direct_receives_requirement_as_mandatory_conditions() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample_with_profile(service)
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT SUM(TOTAL_AMOUNT) FROM INVOICES","explanation":"請求金額"}'
+    )
+    service._enterprise_ai_client = fake_client  # noqa: SLF001
+    profile = service.get_profile("sql_assist_sample")
+    allowed = service.resolve_allowed_objects(profile.id, AllowedObjects())
+
+    service._generate_enterprise_ai_direct_sql(  # noqa: SLF001
+        question="INVOICES.TOTAL_AMOUNT の合計を確認したい",
+        profile=profile,
+        allowed=allowed,
+        row_limit=100,
+        fallback_messages=[],
+        meta={},
+        learning_examples=[],
+        catalog=service.get_catalog(),
+        sql_requirement=_invoice_requirement(["APP.INVOICES"]),
+    )
+
+    context = fake_client.calls[0]["context"]
+    assert "AI要件確認で利用者と確かめた SQL の要件（必ず守る条件）" in context
+    assert "使う表（FROM）: APP.INVOICES（これ以外の表を使わない）" in context
+    assert "SQL: SUM(INVOICES.TOTAL_AMOUNT)" in context
+    assert "2026-04-01〜2027-03-31" in context
+
+
+def test_select_ai_receives_clear_question_and_narrowed_object_list() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="requirement_select_ai_profile",
+            name="Requirement Select AI profile",
+            allowed_tables=["INVOICES", "CUSTOMERS"],
+        )
+    )
+    table = service.profile_allowed_object_names(profile)[0]
+
+    service._generate_oracle_sql(  # noqa: SLF001
+        engine=Nl2SqlEngine.SELECT_AI,
+        question="請求金額を確認したい",
+        profile=profile,
+        fallback_messages=[],
+        meta={},
+        learning_examples=[],
+        sql_requirement=_invoice_requirement([table]),
+    )
+
+    assert adapter.questions[0].startswith("請求金額を確認したい\n\n必ず守る条件:")
+    assert "使う表は " + table + " だけ" in adapter.questions[0]
+    attributes: dict[str, Any] | None = adapter.attributes[0]
+    assert attributes is not None
+    object_list = attributes["object_list"]
+    assert len(object_list) == 1
+    assert object_list[0]["name"] == table.split(".")[-1]
+    assert "必ず守る条件" in attributes["additional_instructions"]
+
+
+def test_select_ai_agent_receives_requirement_in_question() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="requirement_agent_profile",
+            name="Requirement Agent profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+    table = service.profile_allowed_object_names(profile)[0]
+
+    service._generate_oracle_sql(  # noqa: SLF001
+        engine=Nl2SqlEngine.SELECT_AI_AGENT,
+        question="請求金額を確認したい",
+        profile=profile,
+        fallback_messages=[],
+        meta={},
+        learning_examples=[],
+        sql_requirement=_invoice_requirement([table]),
+    )
+
+    question = adapter.questions[0]
+    assert "必ず守る条件:" in question
+    assert "AI要件確認で利用者と確かめた SQL の要件（必ず守る条件）" in question
+    assert "SUM(INVOICES.TOTAL_AMOUNT)" in question
 
 
 def test_ontology_generation_context_prompt_includes_qa_sql_examples() -> None:
