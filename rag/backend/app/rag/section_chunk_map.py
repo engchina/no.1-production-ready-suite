@@ -11,8 +11,8 @@
 1. 章節を並び順に見て、それぞれの**始まりの chunk**（読み順 = ``chunk_index``）を決める。
    始まりは前の章節の始まりより前にしない。
    - 解析の要素の ID（``anchors``。同じ解析の結果の chunk_set のときだけ）を含む最初の chunk。
-   - 無ければ、章節のページの範囲の中で、見出しの名前を本文の先頭か chunk の見出しの列に持つ
-     最初の chunk。
+   - 無ければ、章節の開始のページの中で、本文の最初の行が見出しの名前で始まる（終わる）か、
+     chunk の見出しの列に名前を持つ最初の chunk（同じページに始まる章節を分ける）。
    - 無ければ、章節の開始のページ以降で始まる最初の chunk。
    - ページも名前も無い章節は chunk を持たない（空の章節）。
    要素・名前・ページの順に信頼し、要素や名前で決めた chunk でもページの範囲の外なら使わない
@@ -38,9 +38,9 @@ from app.schemas.document import DocumentSection
 # 文書全体を表す仮想の根の章節の id（章節の id は文書の中でだけ一意）。
 ROOT_SECTION_ID = "document"
 ROOT_SECTION_LEVEL = 0
-# 見出しの名前を探す本文の先頭の長さ（名前の長さに足す）。
-_TITLE_HEAD_SLACK = 80
 _SPACE = re.compile(r"\s+")
+# Markdown の見出しの印（本文の最初の行の照合の前に外す）。
+_HEADING_MARK = re.compile(r"^\s*#{1,6}\s+")
 
 
 @dataclass(frozen=True)
@@ -137,12 +137,35 @@ def _within_pages(chunk: MapChunk, section: DocumentSection) -> bool:
     return section.page_end is None or first <= section.page_end
 
 
+def _on_start_page(chunk: MapChunk, section: DocumentSection) -> bool:
+    """chunk が章節の開始のページにあるか（ページの分からない側はあるとみなす）。"""
+    first = _page_of(chunk)
+    last = chunk.page_end if chunk.page_end is not None else first
+    if section.page_start is None or first is None or last is None:
+        return True
+    return first <= section.page_start <= last
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        cleaned = normalize_title(_HEADING_MARK.sub("", line))
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def _title_matches(chunk: MapChunk, title: str) -> bool:
+    """chunk が見出しの名前で始まるか（見出しの列か、本文の最初の行の始まり・終わりが名前）。
+
+    本文の途中の言及（「この手順書は」の「手順」）は見出しとみなさない。最初の行の終わりで照合
+    するのは、番号を見出しの名前に含めない章節（名前「総則」・行「第1章 総則」）のため。
+    """
     if not title:
         return False
     if any(normalize_title(part) == title for part in chunk.section_path):
         return True
-    return title in normalize_title(chunk.head)[: len(title) + _TITLE_HEAD_SLACK]
+    line = _first_line(chunk.head)
+    return line.startswith(title) or line.endswith(title)
 
 
 def _start_position(
@@ -165,7 +188,7 @@ def _start_position(
     if title:
         for position in candidates:
             chunk = chunks[position]
-            if _within_pages(chunk, section) and _title_matches(chunk, title):
+            if _on_start_page(chunk, section) and _title_matches(chunk, title):
                 return position
     if section.page_start is not None:
         for position in candidates:

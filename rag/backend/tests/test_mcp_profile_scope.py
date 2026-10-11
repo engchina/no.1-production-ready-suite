@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.main import app
 from app.mcp import profile_scope
 from app.mcp import tools as mcp_tools
+from app.rag import section_map_service
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.security.permissions import KNOWLEDGE_BASES_MANAGE
@@ -225,6 +226,17 @@ class _RecordingReadOracle:
         return False
 
 
+class _RecordingSectionStore:
+    """章節を読むツール（rag_outline / rag_read_section。#1438）の対象範囲を残す fake。"""
+
+    def __init__(self, oracle: object | None = None) -> None:
+        del oracle
+
+    async def readable_chunk_set(self, document_id: str, chunk_set_id: str | None = None) -> None:
+        _RecordingReadOracle.contexts.append(current_audit_request_context())
+        return None
+
+
 @pytest.mark.parametrize(
     ("user_knowledge_bases", "expected"),
     [(None, {"kb-1", "kb-2"}), (["kb-1", "kb-3"], {"kb-1"})],
@@ -243,6 +255,8 @@ def test_claim_limits_reading_tools_to_scoped_knowledge_bases(
     """
     _RecordingReadOracle.contexts = []
     monkeypatch.setattr(mcp_tools, "OracleClient", _RecordingReadOracle)
+    monkeypatch.setattr(section_map_service, "OracleClient", _RecordingReadOracle)
+    monkeypatch.setattr(section_map_service, "SectionMapStore", _RecordingSectionStore)
     user = auth.user_with_permissions(
         "searcher",
         # ナレッジベース管理はすべての KB を使える（利用者の KB の範囲の制限なし）。
@@ -260,9 +274,11 @@ def test_claim_limits_reading_tools_to_scoped_knowledge_bases(
     assert outline["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
     document = _call("rag_read_document", {"document_id": "d1"}, scoped)
     assert document["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+    section = _call("rag_read_section", {"document_id": "d1", "section_id": "s1"}, scoped)
+    assert section["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
     assert [context.allowed_knowledge_base_ids for context in _RecordingReadOracle.contexts] == [
         frozenset(expected)
-    ] * 3
+    ] * 4
     assert {
         context.allowed_search_answer_profile_ids for context in _RecordingReadOracle.contexts
     } == {frozenset({"bv-1"})}

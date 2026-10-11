@@ -406,9 +406,9 @@ class SectionMapStore:
         """
         rows = await self._oracle._fetch_all(
             _render_sql(
-                """
-            SELECT {columns}
-            FROM rag_chunk_set_sections s
+                f"""
+            SELECT {{columns}}
+            FROM {CHUNK_SET_SECTIONS_TABLE} s
             WHERE s.chunk_set_id = :chunk_set_id
               AND s.document_id = :document_id
             ORDER BY s.section_ordinal
