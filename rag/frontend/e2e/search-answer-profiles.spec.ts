@@ -37,6 +37,7 @@ for (const viewport of [
       "根拠の前後から加える数",
       "回答の検索のオプション",
       "実体でつながる根拠",
+      "章節で広げる根拠",
       "安全チェック",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
