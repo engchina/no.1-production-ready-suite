@@ -112,10 +112,10 @@ def _runtime(
     )
 
 
-# 生成・監査・質問ルーティング・Vision 説明の全呼出で同じ入力から同じ出力を得るための設定。
-# OCI ネイティブ経路と OpenAI Responses 経路で共有する。Responses API に seed の引数はないため extra_body で渡す。
+# 生成・監査・質問ルーティング・Vision 説明の全呼出で同じ入力から同じ出力を得やすくするための設定。
+# seed は共通のモデル設定の値(#1434。`settings.llm_seed`、既定 42)。Responses API に seed の引数は
+# ないため extra_body(top-level の `seed`)で渡す。
 LLM_TEMPERATURE = 0.0
-LLM_SEED = 42
 
 
 @application_cache(maxsize=16)
@@ -509,7 +509,7 @@ def _openai_parsed(
             text_format=text_format,
             max_output_tokens=budget,
             temperature=LLM_TEMPERATURE,
-            extra_body={"seed": LLM_SEED},
+            extra_body={"seed": int(settings.llm_seed)},
             **reasoning,
         )
         try:

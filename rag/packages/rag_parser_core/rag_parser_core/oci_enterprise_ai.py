@@ -33,6 +33,11 @@ DEFAULT_LLM_PATH = "/responses"
 DEFAULT_VLM_PATH = "/responses"
 
 
+# LLM / VLM の呼び出しの seed の既定(#1434。platform の DEFAULT_ENTERPRISE_AI_SEED と同じ)。
+# この package は platform に依存しないので、値の解釈は backend(`enterprise_ai_seed`)が行って渡す。
+DEFAULT_SEED = 42
+
+
 @dataclass(frozen=True)
 class OciEnterpriseAiConfig:
     """OCI Enterprise AI(LLM/VLM)呼び出しの非機密設定。Settings / env から構築できる。
@@ -48,6 +53,9 @@ class OciEnterpriseAiConfig:
     送る値を `vision_reasoning_effort` に入れる(backend が platform の `reasoning_effort_to_send` で
     決める。none は空)。空は `reasoning` を送らない。標準の payload だけに入れ、payload template を
     使う構成では template に任せる。
+
+    seed(#1434)は全モデルで共通の 1 つで、テキストと Vision の標準の payload の top-level の
+    `seed` に入れる(backend が platform の `enterprise_ai_seed` で決めて渡す。既定 42)。
     """
 
     oci_enterprise_ai_endpoint: str = ""
@@ -72,6 +80,7 @@ class OciEnterpriseAiConfig:
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
     text_reasoning_effort: str = ""
     vision_reasoning_effort: str = ""
+    seed: int = DEFAULT_SEED
 
     def for_vision(self) -> OciEnterpriseAiConfig:
         """Vision の呼び出しに使う config(既定の Vision モデルの接続。#533)。"""
@@ -100,6 +109,7 @@ class OciEnterpriseAiConfig:
         `app.services.control.service_runtime_env`)。
         推論の量(#1425)は `PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT` /
         `PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT`(同じく backend が書く)。
+        seed(#1434)は `PLATFORM_OCI_ENTERPRISE_AI_SEED`(同じく backend が書く。無ければ 42)。
         """
         src = os.environ if env is None else env
 
@@ -146,6 +156,7 @@ class OciEnterpriseAiConfig:
             vision_reasoning_effort=_get(
                 "PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT"
             ).strip(),
+            seed=_int(_get("PLATFORM_OCI_ENTERPRISE_AI_SEED"), DEFAULT_SEED),
         )
 
 
@@ -842,11 +853,17 @@ def _vlm_max_output_tokens(config: OciEnterpriseAiConfig) -> int:
     return int(getattr(config, "oci_enterprise_ai_vlm_max_output_tokens", 65536))
 
 
-def _with_reasoning(payload: dict[str, Any], effort: str) -> dict[str, Any]:
-    """推論(思考)の量が空でなければ Responses API の `reasoning` を入れる(#1425)。"""
+def _with_call_options(payload: dict[str, Any], *, effort: str, seed: int) -> dict[str, Any]:
+    """標準の payload に、呼び出しの共通の値を入れる。
+
+    - 推論(思考)の量が空でなければ Responses API の `reasoning`(#1425)
+    - seed(#1434)を top-level の `seed`(Responses API に seed の field が無いため。OpenAI SDK の
+      `extra_body={"seed": ...}` と同じ形)
+    """
     normalized = (effort or "").strip()
     if normalized:
         payload["reasoning"] = {"effort": normalized}
+    payload["seed"] = int(seed)
     return payload
 
 
@@ -1081,7 +1098,7 @@ def _build_vlm_payload(
     }
     if use_text_format:
         payload["text"] = {"format": text_format}
-    return _with_reasoning(payload, config.vision_reasoning_effort)
+    return _with_call_options(payload, effort=config.vision_reasoning_effort, seed=config.seed)
 
 
 def _supports_responses_json_schema(model_id: str) -> bool:
@@ -1134,7 +1151,7 @@ def _build_vision_text_payload(
                 "image_url": f"data:{normalized_mime_type};base64,{data_base64}",
             },
         ]
-    return _with_reasoning(
+    return _with_call_options(
         {
             "model": model_id,
             "input": [
@@ -1144,7 +1161,8 @@ def _build_vision_text_payload(
                 }
             ],
         },
-        config.vision_reasoning_effort,
+        effort=config.vision_reasoning_effort,
+        seed=config.seed,
     )
 
 
@@ -1189,7 +1207,7 @@ def _build_images_text_payload(
                 "schema": dict(response_schema),
             }
         }
-    return _with_reasoning(payload, config.vision_reasoning_effort)
+    return _with_call_options(payload, effort=config.vision_reasoning_effort, seed=config.seed)
 
 
 def _build_llm_payload(
@@ -1264,7 +1282,7 @@ def _build_llm_payload(
                 "schema": dict(response_schema),
             }
         }
-    return _with_reasoning(payload, config.text_reasoning_effort)
+    return _with_call_options(payload, effort=config.text_reasoning_effort, seed=config.seed)
 
 
 def _render_payload_template(

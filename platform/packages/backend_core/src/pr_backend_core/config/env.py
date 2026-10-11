@@ -71,6 +71,8 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_max_retries",
         "oci_enterprise_ai_llm_max_output_tokens",
         "oci_enterprise_ai_vlm_max_output_tokens",
+        # LLM / VLM の呼び出しの seed（#1434。既定 42）
+        "oci_enterprise_ai_seed",
         "oci_genai_endpoint",
         "oci_genai_embedding_model",
         "oci_genai_embedding_dim",

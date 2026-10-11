@@ -50,6 +50,7 @@ from app.config import (
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
     enterprise_ai_reasoning_effort_to_send,
+    enterprise_ai_seed,
     enterprise_ai_vision_model_id,
 )
 from app.rag.answer_metrics import score_answer_evaluation
@@ -265,6 +266,8 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
             settings, vision_model
         ),
+        # seed は全モデルで共通(#1434。既定 42)。rag_engine が Responses API の top-level で送る。
+        "OCI_ENTERPRISE_AI_SEED": str(enterprise_ai_seed(settings)),
         # rag_engine は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
         # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して
         # 呼ぶが、この 2 値を渡さないと RAG_RERANK_ENABLED=true でも

@@ -28,7 +28,9 @@ from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_a
 from pr_system_settings.model import (
     enterprise_ai_reasoning as enterprise_ai_reasoning,
 )
+from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
+from pr_system_settings.model import seed_payload as seed_payload
 from pydantic import Field, field_validator, model_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -110,6 +112,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_max_retries: int = 3
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
+    # 解釈は pr_system_settings の enterprise_ai_seed。
+    oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
     model_settings_file: str = DEFAULT_MODEL_SETTINGS_FILE
     upload_storage_backend: str = "local"
     local_storage_dir: str = "/u01/data/production-ready-nl2sql"

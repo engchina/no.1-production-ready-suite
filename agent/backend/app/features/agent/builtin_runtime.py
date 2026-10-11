@@ -51,7 +51,9 @@ from pr_system_settings.model import (
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
     enterprise_ai_reasoning_effort,
+    enterprise_ai_seed,
     reasoning_effort_to_send,
+    seed_to_send,
 )
 
 from app.features.agent import data_scope
@@ -159,6 +161,8 @@ class ModelTarget:
     api_key: str
     # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。none は送らない。
     reasoning_effort: str = ""
+    # LLM の呼び出しの seed（#1434。システム設定 > モデル の共通の値、既定 42）。
+    seed: int = 42
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
         return f"ModelTarget(model_id={self.model_id!r}, endpoint={self.endpoint!r})"
@@ -194,20 +198,28 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
+        seed=enterprise_ai_seed(settings),
     )
 
 
 def model_settings_for(target: ModelTarget) -> ModelSettings:
-    """Run・評価の判定に使う SDK の ModelSettings（#1425）。
+    """Run・評価の判定に使う SDK の ModelSettings（#1425 / #1434）。
 
-    モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
-    （none は送らない。解釈は platform の `reasoning_effort_to_send`）。
+    - モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
+      （none は送らない。解釈は platform の `reasoning_effort_to_send`）
+    - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため SDK の `extra_body`。
+      解釈は platform の `seed_to_send`）
     """
+    extra_body = {"seed": seed_to_send(target.seed)}
     effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
-        return ModelSettings(store=False)
+        return ModelSettings(store=False, extra_body=extra_body)
     # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。
-    return ModelSettings(store=False, reasoning=Reasoning(effort=cast(ReasoningEffort, effort)))
+    return ModelSettings(
+        store=False,
+        reasoning=Reasoning(effort=cast(ReasoningEffort, effort)),
+        extra_body=extra_body,
+    )
 
 
 def _omit_empty_tools(kwargs: dict[str, Any]) -> dict[str, Any]:
