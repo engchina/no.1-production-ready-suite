@@ -985,8 +985,10 @@ class SearchOutput(VersionedOutput):
     outcome: AnswerOutcome = Field(
         description=(
             "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
-            "needs_environment_data=現場の値・記録の確認が要る / insufficient_evidence=資料から答え"
-            "られない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。"
+            "needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / "
+            "insufficient_evidence=資料から答えられない。needs_clarification / needs_human は"
+            "利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを"
+            "確かめる回答は conditional（conditions に載る。#1453）。"
         )
     )
     requests: list[AnswerRequest] = Field(
@@ -994,7 +996,10 @@ class SearchOutput(VersionedOutput):
     )
     conditions: list[str] = Field(
         default_factory=list,
-        description="回答の説明が成り立つ条件（原文の語句。質問から確かめられないもの）。",
+        description=(
+            "回答の説明が成り立つ条件（原文の語句と、利用者に確かめる条件（質問で特定されていない対象・"
+            "利用者のロールや承認など）。質問から確かめられないもの）。"
+        ),
     )
     gaps: list[str] = Field(default_factory=list, description="資料から確かめられない点。")
     confirmations: list[str] = Field(
