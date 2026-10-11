@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from app.clients.oracle import OracleClient
@@ -199,11 +199,13 @@ async def read_section(
     chunk_set_id: str | None = None,
     from_order: int = 0,
     limit: int | None = None,
+    filters: Mapping[str, str] | None = None,
     oracle: OracleClient | None = None,
 ) -> SectionText:
     """章節の chunk を、章節の中の順に ``from_order`` から本文つきで返す（第 2・3 段階と共通）。
 
     ``limit`` が無ければ章節の最後まで読む。見えない文書・無い章節は ``SectionNotFoundError``。
+    ``filters`` は回答の検索の条件（回答の章節の拡張。#1436）で、その条件に入る chunk だけを読む。
     """
     client = oracle or OracleClient()
     outline = await section_outline(document_id, chunk_set_id=chunk_set_id, oracle=client)
@@ -224,6 +226,7 @@ async def read_section(
             section_id=section.section_id,
             from_order=order,
             limit=batch_size,
+            filters=filters,
         )
         rows.extend(batch)
         if remaining is not None:

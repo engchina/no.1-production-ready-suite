@@ -640,6 +640,12 @@ def evaluation_settings(
             "reference_expansion_max_chunks": "rag_reference_expansion_max_chunks",
             "entity_expansion_enabled": "rag_entity_expansion_enabled",
             "entity_expansion_max_chunks": "rag_entity_expansion_max_chunks",
+            "section_expansion_enabled": "rag_section_expansion_enabled",
+            "section_expansion_max_levels": "rag_section_expansion_max_levels",
+            "section_expansion_input_token_percent": (  # nosec B105 - 設定の名前
+                "rag_section_expansion_input_token_percent"
+            ),
+            "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
         }
         update.update(

@@ -489,7 +489,7 @@ def test_entity_expansion_is_not_read_from_the_environment(
     assert {
         "rag_entity_expansion_enabled",
         "rag_entity_expansion_max_chunks",
-    } == PROFILE_ONLY_SETTING_FIELDS
+    } <= PROFILE_ONLY_SETTING_FIELDS
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_ENABLED", "false")
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_MAX_CHUNKS", "3")
     # 同じ source のほかの項目は今までどおり読む。

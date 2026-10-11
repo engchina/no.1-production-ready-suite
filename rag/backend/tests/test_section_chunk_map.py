@@ -507,6 +507,7 @@ class _ReadStore:
         section_id: str,
         from_order: int,
         limit: int,
+        filters: object = None,
     ) -> list[SectionChunkRow]:
         self.calls.append((from_order, limit))
         rows = [row for row in self.rows.get(section_id, []) if row.chunk_order >= from_order]
