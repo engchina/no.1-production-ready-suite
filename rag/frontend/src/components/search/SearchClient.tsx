@@ -817,9 +817,6 @@ export function SearchClient() {
                       contentSnapshot={feedbackSnapshot}
                     />
                   ) : null}
-                  {meta && phase === "done" ? (
-                    <SearchExecutionMeta meta={meta} />
-                  ) : null}
                   {meta && phase === "done" && meta.diagnostics?.answer ? (
                     answerMode ? (
                       <AnswerDetailsPanel
@@ -834,6 +831,10 @@ export function SearchClient() {
                         showAutoFieldFilter={false}
                       />
                     )
+                  ) : null}
+                  {/* 経過時間と trace は実行の記録なので、根拠の構成の後に置く（#1417。page-archetypes.md §6.1）。 */}
+                  {meta && phase === "done" ? (
+                    <SearchExecutionMeta meta={meta} />
                   ) : null}
                 </CardContent>
               </Card>
