@@ -113,6 +113,7 @@ class _Part:
     quotes: list[tuple[int, int, int]] = field(default_factory=list)  # (record_index, start, end)
     dropped: int = 0
     error: str = ""
+    called: bool = False  # LLM を呼んだ（失敗・期限切れを含む）
 
     @property
     def tokens(self) -> int:
@@ -436,7 +437,7 @@ class SectionExtractor:
                 future.result()
         # 並列の呼び出しは thread の文脈で数えるので、呼び出し元の文脈の LLM の呼び出しの数に足す。
         from rag_engine.dependencies import llm_call_count
-        llm_call_count.set(llm_call_count.get() + sum(part.status in {"done", "error"} for part in selected))
+        llm_call_count.set(llm_call_count.get() + sum(part.called for part in selected))
 
     def _call(self, request: LargeSectionRequest, part: _Part, records: Sequence[Any],
               sources: Sequence[str]) -> None:
@@ -449,6 +450,7 @@ class SectionExtractor:
                 part.status = "calls"
                 return
             self.calls += 1
+        part.called = True
         refs = {record_index: f"C{number}" for number, record_index in
                 enumerate(dict.fromkeys(block.record_index for block in part.blocks), 1)}
         prompt = self._prompt(request.question, part, records, sources, refs)
