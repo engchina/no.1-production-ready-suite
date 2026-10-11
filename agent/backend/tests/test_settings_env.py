@@ -88,3 +88,32 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert all(origin.startswith("http://") for origin in settings.cors_origins)
     assert settings.oci_enterprise_ai_models == []
     assert settings.oracle_password in ("", None)
+
+
+def test_product_mcp_timeouts_are_explicit_in_env_example() -> None:
+    """`.env.example` は RAG / NL2SQL の MCP の待ち時間を既定と同じ値で明示する（#1430）。"""
+    from app.features.agent import tools
+    from app.features.agent.router import _MCP_TIMEOUT_MAX_SECONDS
+
+    settings = Settings(_env_file=None)
+    lines = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    entries = dict(
+        line.split("=", 1)
+        for line in lines.splitlines()
+        if line.startswith("AGENT_EXTERNAL_") and "_TIMEOUT_SECONDS=" in line
+    )
+    assert float(entries["AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS"]) == (
+        settings.agent_external_rag_timeout_seconds
+    )
+    assert float(entries["AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS"]) == (
+        settings.agent_external_nl2sql_timeout_seconds
+    )
+    # RAG の回答の上限（600 秒）+ 余裕 30 秒。画面の「MCP 接続」の上限（900 秒）以下。
+    assert settings.agent_external_rag_timeout_seconds == 600 + 30 <= _MCP_TIMEOUT_MAX_SECONDS
+    # NL2SQL の MCP の 1 回の待ち（wait_seconds）の上限 45 秒に、続きの取得の余裕を足して収まる。
+    nl2sql_max_wait_seconds = 45
+    assert (
+        settings.agent_external_nl2sql_timeout_seconds - tools._JOB_POLL_MARGIN_SECONDS
+        >= nl2sql_max_wait_seconds
+    )
+    assert settings.agent_external_nl2sql_timeout_seconds <= _MCP_TIMEOUT_MAX_SECONDS

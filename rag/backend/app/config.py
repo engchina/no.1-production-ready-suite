@@ -143,6 +143,9 @@ def normalize_legacy_chunking_strategy_value(value: object) -> object:
 # OCI Enterprise AI の LLM 1 回の timeout（`oci_enterprise_ai_timeout_seconds`）の上限（秒）。
 # 保存済みの回答の評価の時間の上限もこの値から決める（#304）。
 OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = 600.0
+# 品質評価の job の全体の時間の上限の最大（秒。1 日）。job の上限は、回答の回数 × 回答の上限を
+# この値で抑える（#1430。`app.rag.evaluation_jobs.evaluation_job_time_limit_seconds`）。
+RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS = 86400
 CHUNK_CHILD_TARGET_CHARS_DEFAULT = 1000
 CHUNK_CHILD_TARGET_CHARS_MIN = 300
 CHUNK_CHILD_TARGET_CHARS_MAX = 1600
@@ -1074,11 +1077,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_evaluation_job_timeout_seconds: int = Field(
         default=3600,
         ge=60,
-        le=86400,
+        le=RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS,
         description=(
-            "品質評価の job（golden set の評価・比較。#390）の全体の時間の上限（秒）。"
+            "品質評価の job（golden set の評価・比較。#390）の全体の時間の上限の最小値（秒）。"
+            "job の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× "
+            "rag_answer_timeout_seconds とこの値の大きいほうで、86400 秒を超えない（#1430）。"
             "上限に達したら実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す。"
-            "1 ケースの上限は rag_answer_timeout_seconds。"
+            "1 回の回答の上限は rag_answer_timeout_seconds。"
         ),
     )
     rag_evaluation_suite: EvaluationSuite = Field(

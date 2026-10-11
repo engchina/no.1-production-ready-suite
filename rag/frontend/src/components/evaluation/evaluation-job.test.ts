@@ -81,11 +81,11 @@ describe("評価 job の表示（Issue 390）", () => {
         status: "error",
         error_type: "TimeoutError",
         error_stage: "answer",
-        error_message: "評価ケースの回答生成が上限の 5 分以内に終わりませんでした",
+        error_message: "評価ケースの回答生成が上限の 10 分以内に終わりませんでした",
       })
     ).toEqual({
       stageLabel: "根拠の検索と回答の生成",
-      message: "評価ケースの回答生成が上限の 5 分以内に終わりませんでした",
+      message: "評価ケースの回答生成が上限の 10 分以内に終わりませんでした",
     });
     expect(
       evaluationCaseErrorSummary({
