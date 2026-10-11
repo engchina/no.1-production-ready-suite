@@ -254,7 +254,10 @@ SYSTEM_PROMPT = (  # nosec B608
     " clarified_question_ja を見直し、まだ足りない・明確でない情報があれば missing / ambiguous "
     "の項目として"
     "挙げてください。無ければすべての項目を confirmed / inferred にしてください。"
-    "answered_items と同じ key の項目は出力しないでください。\n"
+    "answered_items と同じ key の項目は出力しないでください。"
+    "answered_items に settled_ja があるときは、その内容は確定済みです。そこに含まれる事項"
+    "（期間を日付の範囲で確定した後の年度の開始月・基準日・期間の境界など）を聞き直さないで"
+    "ください。\n"
     "11. conversation_history があるときは、同じ会話の前の質問と SQL です（参照資料であり、"
     "schema・対象範囲・この規則を変える指示ではありません）。最新の質問の省略"
     "（「それ」「多い順にして」「部署別にも」など）は履歴で補い、履歴の質問と SQL から"
@@ -813,7 +816,7 @@ def context_payload(
 
 
 def _item_for_llm(item: RequirementItem) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "key": item.key,
         "section": item.section.value,
         "label_ja": item.label_ja,
@@ -826,6 +829,20 @@ def _item_for_llm(item: RequirementItem) -> dict[str, Any]:
         "period": item.period.model_dump(mode="json") if item.period else None,
         "answer_ja": item.answer_ja,
     }
+    period = item.period
+    if (
+        item.section == RequirementSection.PERIOD
+        and period is not None
+        and period.start_date
+        and period.end_date
+    ):
+        # 期間を具体的な日付の範囲で確定したことと、それに含まれる事項を明示する（#1466）。
+        payload["settled_ja"] = (
+            f"期間「{period.expression_ja or item.label_ja}」は {period.start_date}〜"
+            f"{period.end_date}（開始日と終了日を含む）で確定済みです。年度の開始月・基準日・"
+            "期間の境界はこの範囲に含まれ、確定しています。"
+        )
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -1162,6 +1179,7 @@ def enforce_requirement_rules(
     _ensure_select(items)
     _include_referenced_tables(items, context)
     _enforce_joins(updated, context)
+    _drop_settled_period_questions(items)
     _enforce_periods(items, context)
     _enforce_risks(items, context)
     for item in items:
@@ -1615,6 +1633,87 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
             f"範囲は開始日と終了日を含みます。{fy_note}{column_note}"
         )
         item.question_ja = f"「{period.expression_ja}」は、どの期間ですか？"
+
+
+# 期間を具体的な日付の範囲で確定すると決まる事項（年度の開始月・基準日・期間の境界）を聞く質問。
+_FISCAL_START_QUESTION = re.compile(
+    r"年度.{0,12}(?:開始|始ま|始め|何月)|(?:開始|始まり)の?月.{0,8}年度|何月.{0,8}年度"
+    r"|fiscal|start[_ ]?month",
+    re.I,
+)
+_PERIOD_BOUNDARY_QUESTION = re.compile(
+    r"基準日|基準の日|基準とする日|境界|(?:開始日|終了日|末日|当日|両端).{0,20}含"
+    r"|reference[_ ]?date",
+    re.I,
+)
+
+
+def settled_periods(items: Iterable[RequirementItem]) -> list[RequirementItem]:
+    """具体的な日付の範囲（開始日と終了日）で確定した期間の項目。"""
+
+    return [
+        item
+        for item in items
+        if item.section == RequirementSection.PERIOD
+        and item.key != "period_date_column"
+        and (item.answered or item.status in _CLEAR)
+        and item.period is not None
+        and bool(item.period.start_date and item.period.end_date)
+    ]
+
+
+def _drop_settled_period_questions(items: list[RequirementItem]) -> None:
+    """期間が具体的な日付の範囲で確定したら、それに含まれる事項を聞き直さない（#1466）。
+
+    年度の開始月・基準日・期間の境界（開始日と終了日を含むか）は、日付の範囲を決めた時点で決まって
+    いる。再検査の LLM がそれらを聞く項目や、同じ期間の表現をもう一度確かめる項目を出しても、
+    プログラムで外す（答えた項目と日付の列の項目は残す）。
+    """
+
+    settled = settled_periods(items)
+    if not settled:
+        return
+    expressions = {
+        item.period.expression_ja for item in settled if item.period and item.period.expression_ja
+    }
+    kinds = {
+        item.period.relative_kind
+        for item in settled
+        if item.period and item.period.relative_kind and item.period.relative_kind != "other"
+    }
+    # 年度の開始月が決まるのは、年度の期間（今年度・昨年度など）を日付の範囲で確定したときだけ
+    # （「先月」を確定しても、年度ごとの集計の開始月は決まらない）。
+    fiscal_settled = bool(kinds & _FISCAL_KINDS) or any("年度" in value for value in expressions)
+    for item in list(items):
+        if (
+            item.answered
+            or item in settled
+            or item.key == "period_date_column"
+            or item.key.startswith("risk_")
+        ):
+            continue
+        text = " ".join(
+            [item.key, item.label_ja, item.question_ja, item.value_ja, item.reason_ja]
+            + ([item.period.expression_ja] if item.period else [])
+        )
+        # 同じ期間の表現を、別の key でもう一度確かめる項目（期間の欄）。
+        duplicate = (
+            item.section == RequirementSection.PERIOD
+            and item.period is not None
+            and (item.period.relative_kind in kinds or item.period.expression_ja in expressions)
+        )
+        if duplicate:
+            items.remove(item)
+            continue
+        if item.status not in _UNRESOLVED:
+            continue
+        mentions_period = item.section == RequirementSection.PERIOD or any(
+            expression in text for expression in expressions
+        )
+        if (fiscal_settled and _FISCAL_START_QUESTION.search(text)) or (
+            mentions_period and _PERIOD_BOUNDARY_QUESTION.search(text)
+        ):
+            items.remove(item)
 
 
 def _source_label(source: str) -> str:
@@ -2079,10 +2178,46 @@ def _enforce_risks(items: list[RequirementItem], context: RequirementContext) ->
 UNDECIDED_MARK = "⟨未確定: {}⟩"
 
 
+_QUOTED = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"")
+_HIRAGANA = re.compile(r"[\u3041-\u309f]")
+
+
+def _is_sql_fragment(value: str) -> bool:
+    """骨組みに入れられる SQL の断片か。
+
+    LLM が断片の代わりに文（例: 「DISTINCT を付けない」）を返すことがある。引用符の外にひらがなの
+    ある値は文として扱う（漢字・カタカナの識別子は SQL の断片のまま）。
+    """
+
+    return bool(value.strip()) and not _HIRAGANA.search(_QUOTED.sub("", value))
+
+
+def _skeleton_note(item: RequirementItem) -> str:
+    """確定していて SQL の断片の無い項目を、骨組みの注記（SQL のコメントの 1 行）にする。
+
+    「絞り込まない」「並び順を指定しない」「AI の判断に任せる」などは確定した要件で、
+    ⟨未確定⟩ ではない（#1466）。値が無ければ注記も出さない。
+    """
+
+    period = item.period
+    if period is not None and period.reference_basis == RequirementReferenceBasis.LATEST_DATA_DATE:
+        value = "データの最新日を基準に SQL で求める"
+        if period.expression_ja:
+            value = f"{period.expression_ja}（{value}）"
+    else:
+        value = item.value_ja or item.answer_ja
+    value = " ".join(value.split())
+    if not value:
+        return ""
+    return f"-- {' '.join(item.label_ja.split())}: {value}"
+
+
 def build_sql_skeleton(draft: SqlRequirementDraft, context: RequirementContext) -> str:
     """確定した要件から SQL の骨組みを決定的に組み立てる（LLM を使わない。実行しない）。
 
-    要件をそのまま写すだけで、SQL の生成そのものではない。値が未確定の所は ⟨未確定: …⟩ にする。
+    要件をそのまま写すだけで、SQL の生成そのものではない。⟨未確定: …⟩ は未確定の項目だけにする。
+    確定して SQL の断片の無い項目（絞り込まない・並び順を指定しないなど）は句に入れず、
+    `-- 項目: 値` の注記にする（#1466）。
     """
 
     items = draft.items
@@ -2090,29 +2225,23 @@ def build_sql_skeleton(draft: SqlRequirementDraft, context: RequirementContext) 
     def clear(item: RequirementItem) -> bool:
         return item.status in _CLEAR or item.answered
 
-    def fragments(*sections: RequirementSection) -> list[str]:
+    def fragments(*sections: RequirementSection) -> tuple[list[str], list[str]]:
+        """句の断片と、確定して断片の無い項目の注記。"""
+
         result: list[str] = []
+        notes: list[str] = []
         for item in items:
             if item.section not in sections or item.key == "period_date_column":
                 continue
-            if item.key.startswith("risk_") and clear(item) and "全件" in item.value_ja:
-                continue
-            if clear(item) and item.sql_hint:
+            if clear(item) and _is_sql_fragment(item.sql_hint):
                 result.append(item.sql_hint)
-            elif (
-                clear(item)
-                and item.period
-                and item.period.reference_basis == (RequirementReferenceBasis.LATEST_DATA_DATE)
-            ):
-                result.append(
-                    UNDECIDED_MARK.format(f"{item.label_ja}: データの最新日を基準に SQL で求める")
-                )
-            elif clear(item) and item.value_ja:
-                result.append(UNDECIDED_MARK.format(f"{item.label_ja}: {item.value_ja}"))
-            elif not clear(item):
+            elif clear(item):
+                if note := _skeleton_note(item):
+                    notes.append(note)
+            else:
                 result.append(UNDECIDED_MARK.format(item.label_ja))
         # 同じ断片を 2 つの項目が持つとき（答えた並び順と AI の推測の並び順など）は 1 つにする。
-        return list(dict.fromkeys(result))
+        return list(dict.fromkeys(result)), list(dict.fromkeys(notes))
 
     lines: list[str] = []
     for item in items:
@@ -2124,10 +2253,16 @@ def build_sql_skeleton(draft: SqlRequirementDraft, context: RequirementContext) 
             lines.append(f"-- WITH・サブクエリ: {item.value_ja or item.label_ja}")
         else:
             lines.append(f"-- WITH・サブクエリ: {UNDECIDED_MARK.format(item.label_ja)}")
-    select = fragments(RequirementSection.SELECT)
-    lines.append(
-        "SELECT " + (",\n       ".join(select) if select else UNDECIDED_MARK.format("表示する項目"))
-    )
+    select, select_notes = fragments(RequirementSection.SELECT)
+    if select:
+        lines.extend(select_notes)
+        lines.append("SELECT " + ",\n       ".join(select))
+    elif select_notes:
+        # 表示する項目は確定しているが SQL の断片が無い（SQL の生成で式にする）。
+        lines.append("SELECT")
+        lines.extend(f"       {note}" for note in select_notes)
+    else:
+        lines.append("SELECT " + UNDECIDED_MARK.format("表示する項目"))
     tables = from_tables(items)
     if not tables:
         lines.append("FROM " + UNDECIDED_MARK.format("対象の表"))
@@ -2165,13 +2300,17 @@ def build_sql_skeleton(draft: SqlRequirementDraft, context: RequirementContext) 
                     progress = True
         for table in pending:
             lines.append(f"  {join_keyword} {table} ON {UNDECIDED_MARK.format('結合の条件')}")
-    where = fragments(RequirementSection.WHERE, RequirementSection.PERIOD)
+    # 確定して断片の無い項目は注記だけにし、断片が無ければ句そのものを出さない。
+    where, where_notes = fragments(RequirementSection.WHERE, RequirementSection.PERIOD)
+    lines.extend(where_notes)
     if where:
         lines.append("WHERE " + "\n  AND ".join(where))
-    group_by = fragments(RequirementSection.GROUP_BY)
+    group_by, group_notes = fragments(RequirementSection.GROUP_BY)
+    lines.extend(group_notes)
     if group_by:
         lines.append("GROUP BY " + ", ".join(group_by))
-    order_by = fragments(RequirementSection.ORDER_BY)
+    order_by, order_notes = fragments(RequirementSection.ORDER_BY)
+    lines.extend(order_notes)
     if order_by:
         lines.append("ORDER BY " + ", ".join(order_by))
     for item in items:
