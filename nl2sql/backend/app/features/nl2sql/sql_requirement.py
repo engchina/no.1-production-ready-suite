@@ -200,8 +200,9 @@ def requirement_response_format() -> dict[str, Any]:
     return response_format(LlmRequirementOutput, name=REQUIREMENT_SCHEMA_VERSION)
 
 
-SYSTEM_PROMPT = (
-    "あなたは Oracle AI Database の NL2SQL の要件確認器です。利用者の質問と、入力の schema・"
+# LLM への指示の文。SQL を組み立てる文字列ではない（bandit B608 の誤検知）。
+SYSTEM_PROMPT = (  # nosec B608
+    "あなたは Oracle AI Database の NL2SQL の要件確認器です。利用者の質問と、入力の schema・"  # nosec B608
     "relationships・profile・ontology だけを使い、1 本の SQL を作るための「SQL の要件の下書き」を、"
     "指定の JSON Schema の JSON オブジェクトだけで返してください（説明文や Markdown を付けない）。"
     "\n"
@@ -2395,8 +2396,9 @@ def build_requirement_state(session: QuerySession, *, max_review_rounds: int) ->
                 f"（{max_review_rounds} 回）に達したため、最後の回答の後は再検査していません。"
             )
     if missing_minimum and status != RequirementPhase.UNANSWERABLE:
-        message = (
-            f"{message} {' '.join(missing_minimum)}"
+        # 画面の文言。SQL ではない（bandit B608 の誤検知）。
+        message = (  # nosec B608
+            f"{message} {' '.join(missing_minimum)}"  # nosec B608
             "SELECT と FROM が明確になるまで SQL の生成に進めません。"
         )
     can_apply = (
