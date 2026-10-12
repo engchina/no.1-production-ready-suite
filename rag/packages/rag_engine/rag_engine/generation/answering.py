@@ -45,6 +45,7 @@ from rag_engine.retrieval.inquiry_conditions import (
 )
 from rag_engine.retrieval.character_forms import fold_width
 from rag_engine.retrieval.task_contract import task_contract, filter_queries, query_rejection_reason
+from rag_engine.retrieval.enumeration import enumeration_check
 from rag_engine.retrieval.request_coverage import (
     COVERAGE_SCHEMA_VERSION,
     CoverageBudget,
@@ -1028,6 +1029,8 @@ def _grade_crag_retrieval(
         if item.status == "supported" and not raw["source_ids"]:
             raw["status"] = "missing"
         checks.append(raw)
+    # 列挙・網羅の問は、件数・章の範囲の欠けを評価器の項目ごとの根拠から数える（自己申告に頼らない。#1503）。
+    checks = enumeration_check(question, checks, output.enumerated_items, context, all_records, canonical)
     required = task_contract(question)["required_aspects"]
     supported = {item["aspect"] for item in checks if item["status"] == "supported" and sum(c["aspect"] == item["aspect"] for c in checks) == 1}
     # 実値の照合待ちは操作案内の不足と分ける。対象と操作そのものの根拠は必須。
