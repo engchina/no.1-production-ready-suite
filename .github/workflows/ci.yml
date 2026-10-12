@@ -26,6 +26,11 @@ on:
   push:
     branches:
       - main
+  # Dependabot の自動 merge（GITHUB_TOKEN）は main の push の CI を起動しない（GitHub の仕様）。毎日 1 回、main で
+  # 最後に成功した CI からの変更を確かめる（変更が無ければ job は動かない。#1609）。
+  schedule:
+    - cron: "23 16 * * *"
+  workflow_dispatch:
 
 # PR は同じ branch の古い run を取り消す。main の push は commit ごとの group にし、続けて merge しても
 # 前の merge commit の run を取り消さない（#1585。changes は直前の commit との差分で job を選ぶため、取り消すと
@@ -56,6 +61,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
       rag: ${{ steps.filter.outputs.rag }}
       nl2sql: ${{ steps.filter.outputs.nl2sql }}
@@ -103,11 +109,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # main の CI は、最後に成功した commit との差分を取るため履歴を取る（PR は paths-filter が API で取る）。
+          fetch-depth: ${{ github.event_name == 'pull_request' && 1 || 0 }}
+
+      # main の CI（push・schedule・手動）は、直前の commit ではなく、main で ci.yml が最後に成功した commit と比べる
+      # （#1609）。取り消された run・起動されなかった run（Dependabot の自動 merge）の commit の変更も、ここで確かめる。
+      # 見つからない・祖先でないときは空にし、paths-filter の既定（push は直前の commit）に任せる。
+      - name: Find the last successful main commit
+        id: base
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=20" \
+            -q '[.workflow_runs[] | select(.event != "pull_request")][0].head_sha // ""' || true)"
+          if [ -n "${sha}" ] && git merge-base --is-ancestor "${sha}" HEAD 2>/dev/null; then
+            echo "base=${sha}" >> "${GITHUB_OUTPUT}"
+            echo "最後に成功した main の CI の commit: ${sha}（${sha:0:12}..${GITHUB_SHA:0:12} を確かめる）"
+          else
+            echo "最後に成功した main の CI の commit が見つからない（paths-filter の既定で比べる）。"
+          fi
 
       - name: Filter paths
         id: filter
         uses: dorny/paths-filter@v4
         with:
+          base: ${{ steps.base.outputs.base }}
           # `!` の除外は、その filter の中で含めたファイルから除く（除外の無い filter は従来の some と同じ。v4.0.3 以降）。
           predicate-quantifier: some-with-excludes
           # rag_services_deps_files（変わった lock のディレクトリ）に使う。ほかの filter の true / false は変わらない。
