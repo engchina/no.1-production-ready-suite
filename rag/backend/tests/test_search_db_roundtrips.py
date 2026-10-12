@@ -1,9 +1,11 @@
-"""回答の検索の DB の往復を減らしても、検索の結果が変わらないこと(#1490)。
+"""回答の検索の DB の往復を減らしても、検索の結果が変わらないこと(#1490・#1498)。
 
-- 読み取りの計測(SQL の回数・行数・LOB の読み取り)と、LOB を値で受け取る範囲。
-- 前後の文脈(同じ chunk group の sibling)を起点をまとめた SQL で読む(起点の順・起点ごとの並び)。
-- vector / keyword と検索文ごとの検索を並行に読む(融合の結果は直列と同じ)。
+- 読み取りの計測(SQL の回数・行数・LOB の読み取り)と、LOB を値で受け取る範囲・1 回の往復の行数。
+- 前後の文脈(同じ chunk group の sibling)を起点をまとめた SQL で読む(起点の順・起点ごとの並び。
+  本文は sibling の chunk ごとに 1 回)。
+- 検索文をまとめた検索(``search_many``)の結果が、検索文ごとの ``hybrid_search`` と同じ。
 - 1 回の回答の中で同じ検索文の結果を使い回す(CRAG の 2 回目)。
+- 接続 pool の min と、起動時に温める範囲。
 """
 
 import asyncio
@@ -12,13 +14,13 @@ from typing import Any
 
 import pytest
 
-import app.rag.answer_engine as answer_engine_module
 import app.rag.pipeline as pipeline_module
 from app.clients import oracle as oracle_module
 from app.clients.oracle import OracleClient
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     read_lobs_as_values,
+    read_rows_per_round_trip,
     track_db_calls,
 )
 from app.config import Settings
@@ -176,33 +178,33 @@ def _anchor(chunk_id: str, *, index: int, chunk_set_id: str | None) -> Retrieved
     )
 
 
-def _sibling_row(anchor_id: str, offset: int, *, anchor_ord: int | None = None) -> dict[str, Any]:
+def _sibling_row(sibling_id: str, *, anchor_positions: str | None = None) -> dict[str, Any]:
     row: dict[str, Any] = {
         "document_id": "doc-1",
-        "chunk_id": f"{anchor_id}+{offset}",
-        "chunk_text": f"{anchor_id} の前後 {offset}",
+        "chunk_id": sibling_id,
+        "chunk_text": f"{sibling_id} の本文",
         "metadata_json": "{}",
-        "chunk_index": 100 + offset,
+        "chunk_index": 100 + int(sibling_id.rsplit("+", 1)[1]),
         "chunk_set_id": "set-a",
         "file_name": "a.pdf",
         "category_name": None,
         "superseded_by_document_id": None,
         "score": 0,
     }
-    if anchor_ord is not None:
-        row["anchor_ord"] = anchor_ord
-        row["context_rank"] = offset
+    if anchor_positions is not None:
+        row["anchor_positions"] = anchor_positions
     return row
 
 
 async def test_context_group_siblings_batch_keeps_anchor_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """起点を 50 件ずつ 1 回の SQL で読み、返す順は起点の順・起点ごとの並びのまま。
+    """起点をまとめて 1 回の SQL で読み、返す順は起点の順・起点ごとの順位のまま(#1490)。
 
+    行は sibling の chunk ごとに 1 行で、複数の起点の sibling になる chunk も 1 行(#1498)。
     chunk_set の無い起点(レシピ導入前)は 1 件ずつ読む。
     """
-    anchors = [_anchor(f"a{index}", index=100, chunk_set_id="set-a") for index in range(60)]
+    anchors = [_anchor(f"a{index}", index=100, chunk_set_id="set-a") for index in range(160)]
     anchors.insert(30, _anchor("legacy", index=100, chunk_set_id=None))
     client = OracleClient(settings=Settings.model_construct())
     statements: list[tuple[str, dict[str, object]]] = []
@@ -212,47 +214,68 @@ async def test_context_group_siblings_batch_keeps_anchor_order(
     ) -> list[dict[str, object]]:
         binds = dict(binds or {})
         statements.append((statement, binds))
-        if "anchor_ord" in statement:
+        if "anchor_positions" in statement:
+            # 起点 n の sibling は「自分の +1」と、隣の起点と共有する「shared+(n // 2)」(順位 2)。
+            positions: dict[str, list[str]] = {}
+            for ordinal in range(oracle_module._CONTEXT_ANCHOR_BATCH_SIZE):
+                anchor_id = binds[f"ca_chunk_{ordinal}"]
+                if anchor_id is None:
+                    continue
+                positions.setdefault(f"{anchor_id}+1", []).append(f"{ordinal}:1")
+                positions.setdefault(f"shared+{ordinal // 2}", []).append(f"{ordinal}:2")
             rows = [
-                _sibling_row(str(binds[f"ca_chunk_{ordinal}"]), offset, anchor_ord=ordinal)
-                for ordinal in range(oracle_module._CONTEXT_ANCHOR_BATCH_SIZE)
-                if binds[f"ca_chunk_{ordinal}"] is not None
-                for offset in (1, 2)
+                _sibling_row(sibling, anchor_positions=",".join(items))
+                for sibling, items in positions.items()
             ]
-            # SQL の並びに頼らず、起点の位置で組み立て直すこと。
+            # SQL の並びに頼らず、起点の位置と順位で組み立て直すこと。
             return list(reversed(rows))
-        return [_sibling_row(str(binds["anchor_chunk_id"]), offset) for offset in (1, 2)]
+        return [_sibling_row(f"{binds['anchor_chunk_id']}+{offset}") for offset in (1, 2)]
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
 
     siblings = await client.context_group_siblings(anchors, max_chunks_per_group=2)
 
-    # 60 件の chunk_set の起点は 2 回、レシピ導入前の起点は 1 回。
+    # 160 件の chunk_set の起点は 150 件ずつ 2 回、レシピ導入前の起点は 1 回。
     assert len(statements) == 3
-    assert sum("anchor_ord" in statement for statement, _ in statements) == 2
-    expected_order = [f"{anchor.chunk_id}+{offset}" for anchor in anchors for offset in (1, 2)]
-    reversed_pairs = [
-        f"{anchor.chunk_id}+{offset}"
-        for anchor in anchors
-        for offset in ((2, 1) if anchor.metadata.get("chunk_set_id") else (1, 2))
-    ]
-    # 同じ起点の中の並びは SQL の並び(context_rank の順)。fake は逆順に返したので、起点の順は
-    # 保ちつつ起点の中は fake の順になる。実 DB は context_rank の順に返す。
-    assert [chunk.chunk_id for chunk in siblings] == reversed_pairs
-    assert sorted(chunk.chunk_id for chunk in siblings) == sorted(expected_order)
+    assert sum("anchor_positions" in statement for statement, _ in statements) == 2
+    expected: list[str] = []
+    batched = [anchor for anchor in anchors if anchor.metadata.get("chunk_set_id")]
+    for anchor in anchors:
+        if not anchor.metadata.get("chunk_set_id"):
+            expected.extend(f"{anchor.chunk_id}+{offset}" for offset in (1, 2))
+            continue
+        ordinal = batched.index(anchor) % oracle_module._CONTEXT_ANCHOR_BATCH_SIZE
+        expected.extend([f"{anchor.chunk_id}+1", f"shared+{ordinal // 2}"])
+    assert [chunk.chunk_id for chunk in siblings] == expected
     assert [chunk.metadata["context_anchor_chunk_id"] for chunk in siblings] == [
         anchor.chunk_id for anchor in anchors for _ in (1, 2)
     ]
+    # 共有の sibling は、起点ごとに起点の印と距離を付けた別の chunk になる(本文は同じ行)。
+    # 2 回目の SQL(a150〜)の起点の位置は 0 から数え直す。
+    shared = [chunk for chunk in siblings if chunk.chunk_id == "shared+0"]
+    assert [chunk.metadata["context_anchor_chunk_id"] for chunk in shared] == [
+        "a0",
+        "a1",
+        "a150",
+        "a151",
+    ]
+    assert {chunk.text for chunk in shared} == {"shared+0 の本文"}
     assert all(chunk.score == 0.5 for chunk in siblings)
+
+
+def test_anchor_positions_parses_integers_only() -> None:
+    assert oracle_module._anchor_positions("0:1,12:3") == [(0, 1), (12, 3)]
+    assert oracle_module._anchor_positions(None) == []
 
 
 async def test_context_group_siblings_batch_sql_is_stable_for_any_batch_size() -> None:
     """起点の数に関係なく SQL の文は同じ(解析済みの文を使い回す)。"""
+    size = oracle_module._CONTEXT_ANCHOR_BATCH_SIZE
     one = oracle_module._context_group_siblings_batch_sql(
         [(_anchor("a", index=1, chunk_set_id="set-a"), "grp-a", 1)], max_chunks_per_group=4
     )
     many = oracle_module._context_group_siblings_batch_sql(
-        [(_anchor(f"a{i}", index=i, chunk_set_id="set-a"), f"grp-{i}", i) for i in range(50)],
+        [(_anchor(f"a{i}", index=i, chunk_set_id="set-a"), f"grp-{i}", i) for i in range(size)],
         max_chunks_per_group=4,
     )
 
@@ -261,9 +284,14 @@ async def test_context_group_siblings_batch_sql_is_stable_for_any_batch_size() -
     assert ":filter_document_id" not in one[0]
     assert ":filter_chunk_set_id" not in one[0]
     assert "filter_document_id" not in one[1]
+    # sibling の chunk ごとに 1 行(本文を起点ごとに読み直さない)。
+    assert "GROUP BY chunk_id" in one[0]
     with pytest.raises(ValueError):
         oracle_module._context_group_siblings_batch_sql(
-            [(_anchor(f"a{i}", index=i, chunk_set_id="set-a"), f"grp-{i}", i) for i in range(51)],
+            [
+                (_anchor(f"a{i}", index=i, chunk_set_id="set-a"), f"grp-{i}", i)
+                for i in range(size + 1)
+            ],
             max_chunks_per_group=4,
         )
 
@@ -383,36 +411,51 @@ async def _search(
     return result, state
 
 
-async def test_search_result_is_same_with_parallel_and_sequential_queries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+class _ManySearchOracle(_SearchOracle):
+    """``search_many`` で検索文をまとめて読む Oracle の代役(結果は 1 本ずつの検索と同じ)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches: list[list[str]] = []
+
+    async def search_many(
+        self,
+        searches: list[tuple[str, list[float], SearchMode]],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[list[RetrievedChunk]]:
+        self.batches.append([query for query, _, _ in searches])
+        return [
+            await _SearchOracle.hybrid_search(self, query, embedding, top_k, mode, filters)
+            for query, embedding, mode in searches
+        ]
+
+
+async def test_search_reads_all_queries_in_one_batch() -> None:
+    """検索文は 1 回の ``search_many`` でまとめて読み、結果は 1 本ずつ読むときと同じ(#1498)。"""
     queries = [f"検索文 {number}" for number in range(6)]
 
-    monkeypatch.setattr(answer_engine_module, "_SEARCH_QUERY_CONCURRENCY", 1)
-    sequential_oracle = _SearchOracle()
-    sequential, _ = await _search(sequential_oracle, queries)
-    monkeypatch.setattr(answer_engine_module, "_SEARCH_QUERY_CONCURRENCY", 4)
-    parallel_oracle = _SearchOracle()
-    parallel, _ = await _search(parallel_oracle, queries)
+    one_by_one, _ = await _search(_SearchOracle(), queries)
+    batch_oracle = _ManySearchOracle()
+    batched, _ = await _search(batch_oracle, queries)
 
-    assert sequential_oracle.max_concurrent == 1
-    assert parallel_oracle.max_concurrent == 4
-    assert _dump(parallel) == _dump(sequential)
-    assert _dump(parallel)[0]
+    assert batch_oracle.batches == [queries]
+    assert _dump(batched) == _dump(one_by_one)
+    assert _dump(batched)[0]
 
 
 async def test_search_reuses_query_results_within_one_answer() -> None:
     """CRAG の 2 回目は、前の回と同じ検索文を読み直さず、結果は初めから検索したときと同じ。"""
     first_queries = [f"検索文 {number}" for number in range(4)]
     second_queries = [*first_queries, "検索文 5"]
-    oracle = _SearchOracle()
+    oracle = _ManySearchOracle()
 
     _, state = await _search(oracle, first_queries)
-    oracle.searched.clear()
+    oracle.batches.clear()
     reused, _ = await _search(oracle, second_queries, state)
     fresh, _ = await _search(_SearchOracle(), second_queries)
 
-    assert oracle.searched == ["検索文 5"]
+    assert oracle.batches == [["検索文 5"]]
     assert _dump(reused) == _dump(fresh)
 
 
@@ -444,3 +487,228 @@ def test_pool_max_uses_setting(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert created[0]["max"] == 16
     assert Settings.model_fields["oracle_pool_max"].default == 16
+
+
+# 検索文をまとめた検索(#1498)の代役の DB。branch ごとの候補(chunk の番号と score の順)を持つ。
+_VECTOR_HITS: dict[float, list[tuple[int, float]]] = {
+    1.0: [(1, 0.91), (2, 0.82), (3, 0.82), (5, 0.4)],
+    2.0: [(3, 0.88), (4, 0.7), (1, 0.69)],
+    3.0: [(6, 0.95), (1, 0.5)],
+}
+_KEYWORD_HITS: dict[str, list[tuple[int, float]]] = {
+    "規程": [(2, 0.37), (7, 0.2), (1, 0.12)],
+    "保管": [(4, 0.5), (3, 0.5)],
+}
+
+
+def _db_row(number: int) -> dict[str, object]:
+    return {
+        "document_id": f"doc-{number % 2}",
+        "chunk_id": f"c-{number}",
+        "chunk_text": f"本文 {number}",
+        "metadata_json": f'{{"chunk_index": {number}, "chunk_group_id": "g-{number}"}}',
+        "chunk_index": number,
+        "chunk_set_id": "set-a",
+        "recipe_id": "recipe-a",
+        "recipe_slot_no": 1,
+        "file_name": f"f{number % 2}.pdf",
+        "category_name": None,
+        "superseded_by_document_id": "doc-new" if number == 5 else None,
+    }
+
+
+def _search_settings() -> Settings:
+    return Settings.model_construct(
+        oci_genai_embedding_dim=1, rag_min_similarity=0.05, rag_rrf_k=60
+    )
+
+
+def _text_query(query: str) -> str:
+    text_query = oracle_module._oracle_text_query(query, settings=_search_settings())
+    assert text_query is not None
+    return text_query
+
+
+def _first_value(vector: object) -> float:
+    return float(list(vector)[0])  # type: ignore[call-overload]
+
+
+async def _fake_search_db(
+    statement: str, binds: Mapping[str, object] | None = None
+) -> list[dict[str, object]]:
+    """1 本ずつの検索の SQL と、``_multi_search_sql`` の両方に答える。"""
+    binds = dict(binds or {})
+    by_text = {_text_query(word): hits for word, hits in _KEYWORD_HITS.items()}
+    if "embedding" in binds:
+        return [
+            {**_db_row(number), "score": score}
+            for number, score in _VECTOR_HITS[_first_value(binds["embedding"])]
+        ]
+    if "query" in binds:
+        return [
+            {**_db_row(number), "score": score} for number, score in by_text[str(binds["query"])]
+        ]
+    assert "WITH b0 AS" in statement
+    branches: list[list[tuple[int, float]]] = []
+    for number in range(oracle_module._MULTI_SEARCH_MAX_BRANCHES):
+        if f"embedding_{number}" in binds:
+            branches.append(_VECTOR_HITS[_first_value(binds[f"embedding_{number}"])])
+        elif f"query_{number}" in binds:
+            branches.append(by_text[str(binds[f"query_{number}"])])
+    rows: dict[int, dict[str, object]] = {}
+    for branch, hits in enumerate(branches):
+        for rank, (number, score) in enumerate(hits, start=1):
+            row = rows.setdefault(number, _db_row(number))
+            row[f"rank_{branch}"] = rank
+            row[f"score_{branch}"] = score
+    for row in rows.values():
+        for branch in range(len(branches)):
+            row.setdefault(f"rank_{branch}", None)
+            row.setdefault(f"score_{branch}", None)
+    # 行の並びは決めない(呼び出し側が順位で並べる)。
+    return sorted(rows.values(), key=lambda row: str(row["chunk_id"]), reverse=True)
+
+
+async def test_search_many_matches_hybrid_search_per_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``search_many`` の結果(候補・順位・score・本文・metadata)は、検索文ごとの
+    ``hybrid_search`` と同じ。vector だけの検索文と、keyword の語が無い検索文も含む(#1498)。"""
+    monkeypatch.setattr(
+        oracle_module,
+        "resolve_vector_index_adapter",
+        lambda settings: type("Params", (), {"target_accuracy": 95})(),
+    )
+    client = OracleClient(settings=_search_settings())
+    statements: list[str] = []
+
+    async def fetch(statement: str, binds: Mapping[str, object] | None = None) -> Any:
+        statements.append(statement)
+        return await _fake_search_db(statement, binds)
+
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    searches = [
+        ("規程", [1.0], SearchMode.HYBRID),
+        ("保管", [2.0], SearchMode.HYBRID),
+        ("保管", [3.0], SearchMode.VECTOR),
+        ("？！--", [3.0], SearchMode.HYBRID),
+        ("規程", [1.0], SearchMode.KEYWORD),
+    ]
+    filters = {"knowledge_base_id": "kb-1"}
+
+    expected = [
+        await client.hybrid_search(query, embedding, 3, mode=mode, filters=filters)
+        for query, embedding, mode in searches
+    ]
+    statements.clear()
+    batched = await client.search_many(searches, 3, filters)
+
+    assert [[hit.model_dump() for hit in hits] for hits in batched] == [
+        [hit.model_dump() for hit in hits] for hits in expected
+    ]
+    # metadata の key の順も同じ(引用・記録の JSON が変わらない)。
+    assert [[list(hit.metadata) for hit in hits] for hits in batched] == [
+        [list(hit.metadata) for hit in hits] for hits in expected
+    ]
+    # vector の検索 4 本で 1 回、keyword の検索 3 本で 1 回。
+    assert len(statements) == 2
+    assert batched[0]
+    assert batched[3]
+
+
+def test_multi_search_sql_keeps_per_query_conditions() -> None:
+    """まとめた SQL の中の検索は、1 本ずつの検索と同じ条件・並び・件数。"""
+    where_sql, _ = oracle_module._oracle_retrieval_where({"knowledge_base_id": "kb-1"})
+    fetch_clause = oracle_module._oracle_vector_fetch_clause(top_k=150, target_accuracy=95)
+    statement = oracle_module._multi_search_sql(
+        ["vector", "vector", "keyword"], where_sql=where_sql, fetch_clause=fetch_clause
+    )
+
+    assert statement.count(fetch_clause) == 2
+    assert statement.count(where_sql) == 3
+    assert "CONTAINS(c.search_text, :query_2, 1) > 0" in statement
+    assert "VECTOR_DISTANCE(c.embedding, :embedding_1, COSINE) ASC" in statement
+    assert statement.count("WHERE ROWNUM <= :top_k") == 1
+    # 本文と metadata は chunk ごとに 1 回だけ読む(内側の検索は読まない)。
+    assert statement.count("c.chunk_text") == 1
+    with pytest.raises(ValueError):
+        oracle_module._multi_search_sql([], where_sql=where_sql, fetch_clause=fetch_clause)
+
+
+class _ArraySizeCursor(_PlainCursor):
+    prefetchrows = 2
+    arraysize = 100
+
+    def execute(  # type: ignore[override]
+        self, statement: str, parameters: Mapping[str, object] | None = None
+    ) -> None:
+        self._calls.append((self.prefetchrows, self.arraysize))
+
+
+def test_fetch_all_sets_rows_per_round_trip_only_in_scope() -> None:
+    connection = _Connection(_ArraySizeCursor)
+
+    oracle_module._fetch_all(connection, "SELECT chunk_id, chunk_text FROM t", {})  # type: ignore[arg-type]
+    with read_rows_per_round_trip(1000):
+        oracle_module._fetch_all(connection, "SELECT chunk_id, chunk_text FROM t", {})  # type: ignore[arg-type]
+
+    assert connection.calls == [(2, 100), (1000, 1000)]
+    with pytest.raises(ValueError), read_rows_per_round_trip(0):
+        pass
+
+
+def _pool_settings(**values: Any) -> Settings:
+    return Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir="",
+        oracle_wallet_password="",
+        **values,
+    )
+
+
+def _capture_pool_creation(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    created: list[dict[str, object]] = []
+
+    def fake_create_pool(**kwargs: object) -> object:
+        created.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL_MIN", 1)
+    fake_oracledb: Callable[[str], object] = lambda name: type(  # noqa: E731
+        "FakeOracledb",
+        (),
+        {"create_pool": staticmethod(fake_create_pool), "POOL_GETMODE_TIMEDWAIT": 3},
+    )
+    monkeypatch.setattr("app.clients.oracle.importlib.import_module", fake_oracledb)
+    return created
+
+
+def test_warm_oracle_pool_opens_min_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    """backend の起動時は ``RAG_ORACLE_POOL_MIN`` 本、それ以外のプロセスは 1 本から(#1498)。"""
+    created = _capture_pool_creation(monkeypatch)
+
+    OracleClient(settings=_pool_settings(oracle_pool_max=16, oracle_pool_min=4)).connection_pool()
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    assert oracle_module.warm_oracle_pool(_pool_settings(oracle_pool_max=16, oracle_pool_min=4))
+    # 作り直す pool も同じ min。上限を超える min は上限にする。
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    OracleClient(settings=_pool_settings(oracle_pool_max=2, oracle_pool_min=4)).connection_pool()
+
+    assert [kwargs["min"] for kwargs in created] == [1, 4, 2]
+    assert Settings.model_fields["oracle_pool_min"].default == 4
+
+
+def test_warm_oracle_pool_skips_without_connection_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = _capture_pool_creation(monkeypatch)
+
+    assert not oracle_module.warm_oracle_pool(
+        Settings.model_construct(oracle_user="", oracle_password="", oracle_dsn="")
+    )
+    assert created == []
+    assert oracle_module._SHARED_ORACLE_POOL_MIN == 1
