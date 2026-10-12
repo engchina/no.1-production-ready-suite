@@ -479,6 +479,148 @@ def test_extraction_limits_make_expansion_report_unread_ranges():
     assert "原文を抜き出す呼び出しの上限" in result.gap_lines[0]
 
 
+# ---------------------------------------------------------------- 最初の根拠と章節の重なり（#1504）
+
+
+def _context_in_section(anchors: tuple[int, ...], others: tuple[int, ...] = ()) -> AnswerContext:
+    """章節（第5章）の親を最初の根拠に持つ文脈。``anchors`` は当たった chunk、``others`` は近傍などの親。"""
+    def parent(index: int, role: str, rank: int | None) -> ContextParentEvidence:
+        return ContextParentEvidence(
+            record=_stored_chunk_answer_record(_parent(index)), role="synthesis_parent", reason="retrieved",
+            children=(ContextChildEvidence(record=_stored_chunk_answer_record(_child(index)), role=role,  # type: ignore[arg-type]
+                                           reason="retrieved", retrieval_rank=rank),))
+
+    tree = (*(parent(index, "retrieved_anchor", rank) for rank, index in enumerate(anchors, 1)),
+            *(parent(index, "neighbor_context", None) for index in others))
+    bundle = context_bundle_from_parent_evidence(tree, max_chars=24000)
+    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence,
+                         evidence_tree=bundle.evidence_tree)
+
+
+def _expand_section(context: AnswerContext, settings: SimpleNamespace, stub: ExtractionStub,
+                    grade=None) -> tuple[sections.SectionExpansionResult, extraction.SectionExtractor]:
+    extractor = extraction.SectionExtractor(settings, stub)
+    store = _Sections()
+    result = sections.expand_sections(
+        QUESTION, context, settings, last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
+        grade=grade or (lambda candidate, level: _attempt(sufficient=True, missing=("requested_result",))),
+        section_outline=store.outline, section_chunks=store.chunks, large_sections=extractor)
+    return result, extractor
+
+
+def _record_ids(context: AnswerContext) -> list[str]:
+    return [record.chunk_uid for record in context.records]
+
+
+def test_first_evidence_in_the_section_returns_its_budget_to_extraction():
+    """最初の根拠が予算の大半を使っても、同じ章節の親の分を戻して抽出する（入力の上限 8000 の再現。#1504）。"""
+    stub = ExtractionStub()
+    settings = _settings()  # 根拠の入力の上限 1,000（2,000 × 50%）
+    limit = sections.SectionExpansionLimits.from_settings(settings).input_tokens
+    context = _context_in_section((1,), others=(2,))
+    first = sections.context_tokens(context)
+    # 最初の根拠（p1・近傍の p2）の後の残りは 500 token 未満（修正前はここで抽出を呼ばずに読めなかった章節にしていた）。
+    assert limit - first < extraction.MIN_REMAINING_TOKENS
+
+    result, extractor = _expand_section(context, settings, stub)
+
+    assert extractor.calls >= 1 and result.unread == []
+    entry = result.trace["levels"][0]["sections"][0]
+    assert entry["read"] == "extracted"
+    assert entry["extraction"]["remaining_tokens"] == limit and entry["extraction"]["context_parents"] == 2
+    # 抽出の 1 回分の入力は、回答の予算の残りではなく、モデルの入力の上限から決める（60%）。
+    assert entry["extraction"]["part_tokens"] == 1200
+    # 根拠の入力の総量は上限の中。同じ chunk を二重に入れない。
+    assert sections.context_tokens(result.context) <= limit
+    assert len(_record_ids(result.context)) == len(set(_record_ids(result.context)))
+    # 予算に入る分は、最初の根拠を当たった chunk に近い親から元の本文のまま残し（p1）、入らない親（p2）と
+    # 新しく読んだ親は抜き出した原文だけにする。
+    by_id = {record.chunk_uid: record for record in result.context.records}
+    assert by_id[f"{DOC}:p1"].text == _text(1)
+    assert {f"{DOC}:p{index}" for index in range(2, PARENTS + 1)} <= set(by_id)
+    assert all(by_id[f"{DOC}:p{index}"].text == _sentence(index, 1) for index in range(2, PARENTS + 1))
+    assert (entry["extraction"]["context_kept"], entry["extraction"]["context_replaced"]) == (1, 1)
+    assert result.trace["levels"][0]["replaced_parents"] == 1
+
+
+def test_first_evidence_over_the_budget_is_replaced_by_extracted_text_within_limit():
+    """最初の根拠だけで上限を超えるとき（入力の上限 4096 の再現）も、抜き出した原文に置き換えて上限に収める。"""
+    stub = ExtractionStub()
+    settings = _settings()
+    limit = sections.SectionExpansionLimits.from_settings(settings).input_tokens
+    context = _context_in_section((1,), others=(2, 3))
+    assert sections.context_tokens(context) > limit
+
+    result, extractor = _expand_section(context, settings, stub)
+
+    assert extractor.calls >= 1 and result.unread == [] and result.applied
+    assert sections.context_tokens(result.context) <= limit
+    ids = _record_ids(result.context)
+    assert len(ids) == len(set(ids)) and set(ids) == {f"{DOC}:p{index}" for index in range(1, PARENTS + 1)}
+    # 置き換えた親は位置（最初の根拠の並び）と chunk の ID・child の役割をそのままにする。
+    assert ids[:3] == [f"{DOC}:p1", f"{DOC}:p2", f"{DOC}:p3"]
+    assert result.context.evidence_tree[0].children[0].role == "retrieved_anchor"
+    by_id = {record.chunk_uid: record for record in result.context.records}
+    # 当たった chunk に近い親から元の本文で残し、入らない親は抜き出した原文だけにする。
+    assert by_id[f"{DOC}:p1"].text == _text(1)
+    assert by_id[f"{DOC}:p2"].text == _sentence(2, 1) and by_id[f"{DOC}:p3"].text == _sentence(3, 1)
+    level = result.trace["levels"][0]
+    assert level["replaced_parents"] == 2 and level["sections"][0]["replaced_parents"] == 2
+    # 回答に渡す原文も、置き換えた原文（evidence と記録の両方が新しい本文）。
+    assert [item.record.text for item in result.context.evidence][1] == _sentence(2, 1)
+    spans = _grounded_spans(QUESTION, result.context, (), None)
+    assert all("項目2は" not in span["text"] for span in spans if span["source_id"] == f"{DOC}:p2")
+
+
+def test_first_evidence_not_reached_by_call_limit_stays_whole_and_is_not_reported():
+    """呼び出しの上限で抜き出せなかった最初の根拠は、文脈のまま残し、読めなかった範囲に出さない。"""
+    stub = ExtractionStub()
+    settings = _settings(answer_max_input_tokens=1100, section_extraction_max_calls=1)  # 1 回分 = 親 1 件
+    context = _context_in_section((1,), others=(12,))
+
+    result, extractor = _expand_section(context, settings, stub)
+
+    assert extractor.calls == 1
+    by_id = {record.chunk_uid: record for record in result.context.records}
+    assert by_id[f"{DOC}:p12"].text == _text(12)
+    # 残した p12 の分を引いた予算に収めるため、抜き出した p1 は原文だけにする（総量は上限の中）。
+    assert by_id[f"{DOC}:p1"].text == _sentence(1, 1)
+    assert sections.context_tokens(result.context) <= sections.SectionExpansionLimits.from_settings(
+        settings).input_tokens
+    lines = result.gap_lines
+    assert lines and all(item.reason == sections.STOP_EXTRACTION_CALLS for item in result.unread)
+    # p.21（文脈のまま残した p12）は読めなかった範囲に含めない。
+    assert all("21" not in line.split("（p.10〜21）")[1] for line in lines)
+
+
+def test_skipped_extraction_is_not_reported_as_extracted():
+    stub = ExtractionStub()
+    # 根拠の入力の上限 450（900 × 50%）。章節の外の当たった chunk だけが文脈にあり、戻す分が無い。
+    settings = _settings(answer_max_input_tokens=900)
+
+    result, extractor = _expand_section(_seed_context(1), settings, stub)
+
+    entry = result.trace["levels"][0]["sections"][0]
+    assert extractor.calls == 0 and entry["read"] == "skipped"
+    assert entry["extraction"]["skipped"] == "token_budget"
+    assert [item.reason for item in result.unread] == [sections.STOP_TOKEN_BUDGET]
+
+
+def test_section_already_in_context_is_reported_as_in_context():
+    """章節の chunk がすべて最初の根拠にあれば、抜き出さずに ``in_context`` にする（``extracted``・parts 0 にしない）。"""
+    stub = ExtractionStub()
+    graded: list[int] = []
+    context = _context_in_section(tuple(range(1, PARENTS + 1)))
+
+    result, extractor = _expand_section(context, _settings(answer_max_input_tokens=128_000), stub,
+                                        grade=lambda candidate, level: graded.append(level) or _attempt(sufficient=True))
+
+    entry = result.trace["levels"][0]["sections"][0]
+    assert entry["read"] == "in_context" and "extraction" not in entry
+    assert extractor.calls == 0 and graded == [] and not result.applied
+    assert result.context is context
+
+
 def test_engine_settings_read_extraction_environment():
     settings = get_settings(environ={"OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": "200000",
                                      "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": "4",

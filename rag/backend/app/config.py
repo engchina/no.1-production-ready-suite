@@ -501,8 +501,18 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=128,
         description=(
             "backend の Oracle の接続 pool の上限(接続の数)。回答の検索は 1 問の中で"
-            "検索文ごとの vector / keyword を並行に読むため(1 問で最大 8 本。#1490)、"
-            "同時に答える問の数に合わせる。"
+            "検索文をまとめた vector / keyword の SQL を並行に読み(#1498)、1 問で 2 本程度の"
+            "接続を使うため、同時に答える問の数に合わせる。"
+        ),
+    )
+    oracle_pool_min: int = Field(
+        default=4,
+        ge=1,
+        le=128,
+        description=(
+            "backend(API)の起動時に開いておく Oracle の接続の数(接続 pool の min。#1498)。"
+            "起動直後の問で接続の作成を待たない。取込の job のプロセスは 1 本から始める。"
+            "RAG_ORACLE_POOL_MAX より大きければ RAG_ORACLE_POOL_MAX にする。"
         ),
     )
     oracle_vector_target_accuracy: int = Field(

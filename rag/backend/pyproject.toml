@@ -39,7 +39,7 @@ dependencies = [
 # 下記 per-adapter extra は **ローカルでの単一 adapter デバッグ専用**(任意)。
 # runtime backend / 既定 `uv sync` は parser を一切入れない。
 [project.optional-dependencies]
-docling = ["docling==2.129.0"]
+docling = ["docling==2.132.0"]
 unstructured = ["unstructured[all-docs]==0.27.8"]
 
 [tool.uv.sources]

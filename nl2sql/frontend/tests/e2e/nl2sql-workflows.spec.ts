@@ -18496,6 +18496,8 @@ test.describe("query snapshot ownership", () => {
     await other.close({ runBeforeUnload: false });
   });
   test("双タブの別 job は再読込・往復後も独立して進捗と結果を復元する", async ({ page }, testInfo) => {
+    // 3 つのタブで再読込・往復を繰り返す長いテストで、2 worker の CI では既定の 30 秒を超えることがある（#1489）。
+    test.slow();
     const other = await openIdleTabs(page);
     const done = new Set<string>();
     const seen: string[][] = [[], []];

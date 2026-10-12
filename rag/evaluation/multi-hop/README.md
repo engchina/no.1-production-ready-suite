@@ -28,7 +28,7 @@
 | `logistics-organization-rules.pdf` | **別の会社**（サンプル物流社）の組織規程（略号「経」「総」「情」がサンプル社と衝突する） |
 | `logistics-system-ledger.xlsx` | **別の会社**のシステム台帳（20 行。略称 `OMS`・`BMS`・`DMS` がサンプル社と衝突する） |
 | `server-room-inspection.pdf` | サーバー室の定期点検要領（13 ページ。準備・設備ごとの点検・中止の条件・記録・点検の後の作業の章を改ページで 2〜3 ページに分ける。#1438。下の「章節の読み切り」） |
-| `multi-hop.json` | 評価セット（74 問。dev 43 問・holdout 31 問。先頭の 33 問は #1335 のまま、最後の 5 問は #1438 の章節の読み切り）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>`。文書の版（旧版 → 新しい版）は `document_versions`（#1366） |
+| `multi-hop.json` | 評価セット（77 問。dev 45 問・holdout 32 問。先頭の 33 問は #1335 のまま、後ろの 5 問は #1438 の章節の読み切り、最後の 3 問は #1503 の件数・章の範囲を示した網羅の問）。`relevant_document_ids` と `required_evidence[].document_id` は `file:<ファイル名>`。文書の版（旧版 → 新しい版）は `document_versions`（#1366） |
 | `sources/*.html` | PDF の原稿（`multi_hop_corpus.py` が作る） |
 | `sources/*.workbook.json` | xlsx の原稿（シートの前書き・表頭・行。`multi_hop_corpus.py` が作る） |
 
@@ -95,9 +95,10 @@
 | `intra_document_reference` | 同じ文書の中の参照をたどる | 6 | 3 |
 | `table_lookup` | 本文の実体で表の行を引く（表の中の絞り込み・別の会社の台帳を含む） | 6 | 4 |
 | `single_hop` | 1 つの根拠で答えられる（対照） | 3 | 3 |
-| `section_read` | 複数ページの章節を読み切る（必要な根拠が同じ章節の別々のページにある。#1438） | 3 | 2 |
+| `section_read` | 複数ページの章節を読み切る（必要な根拠が同じ章節の別々のページにある。#1438・#1503） | 4 | 2 |
+| `document_read` | 文書全体の複数の章に散らばる記載を、件数・章の範囲を示して網羅させる（#1503） | 1 | 1 |
 
-- 段の数は 1 段 12 問・2 段 33 問・3 段 13 問・4 段 13 問・5 段 3 問です。
+- 段の数は 1 段 12 問・2 段 35 問・3 段 13 問・4 段 13 問・5 段 4 問です。
 - 先頭の 33 問は #1335 のまま（ID・質問・期待する語・根拠の文を変えていない）で、#1335 の結果と比べられます。
   #1352 で足した 36 問（dev 20・holdout 16）は、足した実体（名前の似たシステム・部署、略称の衝突、表記ゆれ、旧版・
   別の会社）を使います。
@@ -139,6 +140,25 @@
 - 子 chunk の見積もり（`estimate_chunks`）は 27（章・節の見出し・改ページの後のページ・表を 1 つずつ）で、資料全体の
   見積もりは 268（実測の 241 + この資料の見積もり。この資料の実測は未確認）です。
 - 回答のときに章節を自動で広げる（#1436）・長い章節を抽出してから統合する（#1437）の効果も、この 5 問で比べます。
+
+### 件数・章の範囲を示した網羅の問（#1503）
+
+「すべて挙げて」の問で、CRAG の評価器が見えている数件の根拠で「足りる」と判定し、章節の拡張が起動しなかった
+（#1503）。件数・章の範囲を示した網羅の問を 3 問足しています（資料は同じ `server-room-inspection.pdf`）。
+
+| ID | 区分 | 種類 | 必要な根拠 |
+|---|---|---|---|
+| `sr-inspection-stop-six` | dev | `section_read` | 第 4 章の中止の条件 6 つ（p.8・p.9 に 3 つずつ） |
+| `dr-inspection-business-day-five` | dev | `document_read` | 「営業日」で期限が決められた作業 5 つ（第 2 章 p.2〜4 の 3 つ・第 6 章 p.13 の 2 つ） |
+| `dr-inspection-sheet-columns` | holdout | `document_read` | 第 2〜6 章の点検表の欄の表（9 ページ分） |
+
+- 点検表の欄の表の根拠（`sheet-<項目の ID>`）は、表の「書くこと」の値のうち、資料の中で表にしか現れない値です
+  （本文にも現れる値は本文の chunk の引用でも一致するので使わない。p.7・p.9・p.11 の表は該当の値が無く、根拠に入れて
+  いない）。`test_document_read_cases_need_evidence_from_several_chapters` が、根拠が 2 つ以上の章にあることと、
+  値が表にしか現れないことを確かめます。
+- 見る値: 拡張 on / off の `reasoning_type=document_read`・`section_read` の `evidence_chain_complete_rate` と、回答の診断の
+  `section_expansion`（段・止めた理由）。検索の上位に全部の根拠が入る top_k（既定の 20）では拡張が要らないことがあるため、
+  拡張の効き目は top_k 1 でも比べます。
 
 ## 指標
 

@@ -12,6 +12,9 @@
 - #1438 で足した問は、複数ページの章節を読み切らないと答えられない問（`section_read`。
   `_section_cases`）で、資料はサーバー室の定期点検要領（`_inspection`。章節を改ページで
   2〜3 ページに分ける）。根拠の文ごとに、置いたページ（`Document.pages`）を持つ。
+- #1503 で足した問は、件数・章の範囲を示して網羅させる問（`sr-inspection-stop-six` と、文書
+  全体の複数の章に散らばる記載を集める `document_read`。`_document_read_cases`）。点検表の欄の
+  表の値も根拠にする。
 - 資料を増やしても #1335 の問の正解が変わらないことは `_check_constraints` で確かめる（例: 重要度 A
   かつ極秘のシステムは今も 2 つだけ、情報システム部が担当するシステムは 1 つだけ）。
 
@@ -1445,6 +1448,22 @@ _INSPECTION_SHEET: dict[str, tuple[str, str]] = {
     "sv-after-refill": ("予備部品の補充", "補充を頼んだ日"),
 }
 
+# 点検表の欄の表の根拠（#1503。「章ごとに点検表の欄に書くことをすべて」の問）。表の「書くこと」
+# の値のうち、資料の中で表にしか現れない値を、そのページの表を引用で取れたかの根拠にする（本文
+# にも現れる値は、本文の chunk の引用でも一致するので使わない。p.7・p.9・p.11 の表は該当の値が
+# 無い）。ID は ``sheet-`` + 項目の ID。
+_INSPECTION_SHEET_EVIDENCE = (
+    "sv-prep-staff",
+    "sv-prep-monitor",
+    "sv-prep-parts",
+    "sv-power-range",
+    "sv-air-range",
+    "sv-stop-leak",
+    "sv-record-name",
+    "sv-after-monitor",
+    "sv-after-report",
+)
+
 
 def _inspection_block(
     items: Sequence[tuple[str, str, str]], evidence: dict[str, str], *, page_break: bool
@@ -1452,6 +1471,8 @@ def _inspection_block(
     paragraphs = []
     for index, (key, sentence, detail) in enumerate(items):
         evidence[key] = sentence
+        if key in _INSPECTION_SHEET_EVIDENCE:
+            evidence[f"sheet-{key}"] = _INSPECTION_SHEET[key][1]
         style = PAGE_BREAK if page_break and index == 0 else ""
         more = _INSPECTION_DETAILS.get(key, "")
         paragraphs.append(f"<p{style}>{html.escape(sentence)}。{html.escape(detail + more)}</p>")
@@ -1498,7 +1519,14 @@ def _inspection() -> Document:
             if index == 0:
                 parts.extend(["", f"<h2{PAGE_BREAK}>第 {number} 章 {html.escape(title)}</h2>"])
             parts.append(_inspection_block(items, evidence, page_break=index > 0))
-            pages.update({item[0]: page for item in items})
+            pages.update(
+                {
+                    key: page
+                    for item in items
+                    for key in (item[0], f"sheet-{item[0]}")
+                    if key in evidence
+                }
+            )
 
     add_chapter(2, "点検の前の準備", "prep")
     page += 1
@@ -1518,7 +1546,14 @@ def _inspection() -> Document:
         parts.append(f"<h3{style}>{number} {html.escape(title)}</h3>")
         [items] = _INSPECTION_PAGES[key]
         parts.append(_inspection_block(items, evidence, page_break=False))
-        pages.update({item[0]: page for item in items})
+        pages.update(
+            {
+                key: page
+                for item in items
+                for key in (item[0], f"sheet-{item[0]}")
+                if key in evidence
+            }
+        )
     add_chapter(4, "点検を中止する条件", "stop")
     add_chapter(5, "点検の記録", "record")
     add_chapter(6, "点検の後の作業", "after")
@@ -2231,6 +2266,67 @@ def _section_cases() -> list[CaseSpec]:
             ["監視の再開", "補充"],
             ["sv-after-monitor", "sv-after-refill"],
         ),
+        # #1503: 件数を示した網羅の問。第 4 章の 2 ページに 3 つずつある中止の条件を 6 つそろえる。
+        _case(
+            "sr-inspection-stop-six",
+            "dev",
+            "section_read",
+            2,
+            "サーバー室の定期点検要領の第 4 章には、点検を中止する条件が 6 つ書かれています。"
+            "6 つすべてと、それぞれ点検表に書くことを挙げてください。",
+            ["漏水", "におい", "32 度", "警報", "バッテリー", "1 人"],
+            [
+                "sv-stop-leak",
+                "sv-stop-smell",
+                "sv-stop-heat",
+                "sv-stop-alarm",
+                "sv-stop-battery",
+                "sv-stop-alone",
+            ],
+        ),
+    ]
+
+
+def _document_read_cases() -> list[CaseSpec]:
+    """#1503: 文書全体（複数の章）に散らばる記載を、件数・章の範囲を示して網羅させる問。
+
+    種類は ``document_read``。検索の上位の数件では項目がそろわず、CRAG の評価器も見えている数件で
+    「足りる」と判定しやすい。件数・章の範囲の欠けをプログラムで数え、章節の拡張で文書全体へ広げる
+    と取れる問。根拠は 2 つ以上の章にまたがる。
+    """
+    return [
+        _case(
+            "dr-inspection-business-day-five",
+            "dev",
+            "document_read",
+            2,
+            "サーバー室の定期点検要領の全体を通して、「営業日」で期限が決められている作業を "
+            "5 つすべて挙げてください。",
+            ["5 営業日", "3 営業日", "10 営業日"],
+            [
+                "sv-prep-reserve",
+                "sv-prep-notice",
+                "sv-prep-parts",
+                "sv-after-report",
+                "sv-after-refill",
+            ],
+        ),
+        _case(
+            "dr-inspection-sheet-columns",
+            "holdout",
+            "document_read",
+            5,
+            "サーバー室の定期点検要領の第 2 章から第 6 章までの各章で、点検表の欄に書くことを"
+            "章ごとにすべて挙げてください。",
+            [
+                "予約の番号",
+                "測った値",
+                "見つけた場所と時刻",
+                "入室・退室の時刻と氏名",
+                "提出した日",
+            ],
+            [f"sheet-{key}" for key in _INSPECTION_SHEET_EVIDENCE],
+        ),
     ]
 
 
@@ -2243,6 +2339,34 @@ def _check_section_cases(specs: Sequence[CaseSpec], documents: Sequence[Document
         placed = [pages.get(key) for key in spec.evidence]
         if None in placed or len(set(placed)) < 2:
             raise ValueError(f"{spec.id}: 根拠が章節の 2 ページ以上にまたがっていません: {placed}")
+
+
+def _check_document_read_cases(specs: Sequence[CaseSpec], documents: Sequence[Document]) -> None:
+    """文書全体の網羅の問は、根拠が同じ資料の 2 つ以上の章にまたがる（#1503）。"""
+    [inspection] = [document for document in documents if document.file_name == INSPECTION]
+    text = _document_text(inspection)
+    for spec in specs:
+        if spec.reasoning_type != "document_read":
+            continue
+        pages = [inspection.pages.get(key) for key in spec.evidence]
+        if None in pages:
+            raise ValueError(f"{spec.id}: 根拠のページがありません: {spec.evidence}")
+        chapters = {_chapter_of_page(inspection, page) for page in pages if page is not None}
+        if len(chapters) < 2:
+            raise ValueError(f"{spec.id}: 根拠が 2 つ以上の章にまたがっていません: {pages}")
+        for key in spec.evidence:
+            value = normalize(inspection.evidence[key])
+            if key.startswith("sheet-") and normalize(text).count(value) != 1:
+                raise ValueError(f"{spec.id}: 表の根拠の値が表の外にも現れます: {key}")
+
+
+def _chapter_of_page(document: Document, page: int) -> int:
+    """点検要領のページの章の番号（そのページに置いた項目の章）。"""
+    chapters = {"prep": 2, "power": 3, "air": 3, "fire": 3, "stop": 4, "record": 5, "after": 6}
+    for key, groups in _INSPECTION_PAGES.items():
+        if any(document.pages.get(item[0]) == page for group in groups for item in group):
+            return chapters[key]
+    raise ValueError(f"{document.file_name}: p.{page} に項目がありません。")
 
 
 def _check_constraints() -> None:
@@ -2344,10 +2468,11 @@ def evidence_registry(documents: Sequence[Document]) -> dict[str, tuple[str, str
 def build_golden_set(documents: Sequence[Document]) -> dict[str, Any]:
     _check_constraints()
     registry = evidence_registry(documents)
-    specs = [*ORIGINAL_CASES, *_new_cases(), *_section_cases()]
+    specs = [*ORIGINAL_CASES, *_new_cases(), *_section_cases(), *_document_read_cases()]
     if len({spec.id for spec in specs}) != len(specs):
         raise ValueError("ケースの ID が重複しています。")
     _check_section_cases(specs, documents)
+    _check_document_read_cases(specs, documents)
     cases = [_case_payload(spec, registry) for spec in specs]
     referenced = {name for case in cases for name in case["relevant_document_ids"]}
     unused = [doc.file_name for doc in documents if f"file:{doc.file_name}" not in referenced]

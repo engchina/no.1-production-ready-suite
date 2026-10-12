@@ -6,6 +6,9 @@
 - ``read_lobs_as_values()`` の中の読み取り(``_fetch_all``)は、CLOB を str・BLOB を bytes で
   受け取る(``fetch_lobs=False``)。LOB のロケータを行ごとに ``.read()`` する往復が無くなる。
   結果の値は従来(``.read()`` した値)と同じ。書き込み・LOB のロケータを使う経路には効かない。
+- ``read_rows_per_round_trip(n)`` の中の読み取り(``_fetch_all``)は、1 回の往復で ``n`` 行まで
+  受け取る(``prefetchrows`` / ``arraysize``。python-oracledb の既定は 100 行。#1498)。行の多い
+  検索の候補の SQL で、fetch の追加の往復を減らす。結果の値・行の順は変わらない。
 """
 
 from __future__ import annotations
@@ -65,6 +68,9 @@ _CURRENT_DB_CALL_STATS: ContextVar[DbCallStats | None] = ContextVar(
     "rag_oracle_db_call_stats", default=None
 )
 _READ_LOBS_AS_VALUES: ContextVar[bool] = ContextVar("rag_oracle_read_lobs_as_values", default=False)
+_ROWS_PER_ROUND_TRIP: ContextVar[int | None] = ContextVar(
+    "rag_oracle_rows_per_round_trip", default=None
+)
 
 
 def current_db_call_stats() -> DbCallStats | None:
@@ -96,3 +102,20 @@ def read_lobs_as_values() -> Iterator[None]:
         yield
     finally:
         _READ_LOBS_AS_VALUES.reset(token)
+
+
+def rows_per_round_trip() -> int | None:
+    """この中の読み取りで、1 回の往復で受け取る行の数(既定のままなら None)。"""
+    return _ROWS_PER_ROUND_TRIP.get()
+
+
+@contextmanager
+def read_rows_per_round_trip(rows: int) -> Iterator[None]:
+    """この中の読み取り(``_fetch_all``)で、1 回の往復で ``rows`` 行まで受け取る。"""
+    if rows < 1:
+        raise ValueError("1 回の往復で受け取る行の数は 1 以上にしてください。")
+    token = _ROWS_PER_ROUND_TRIP.set(rows)
+    try:
+        yield
+    finally:
+        _ROWS_PER_ROUND_TRIP.reset(token)
