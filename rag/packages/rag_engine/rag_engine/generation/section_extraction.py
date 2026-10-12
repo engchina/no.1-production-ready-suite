@@ -17,6 +17,12 @@
    近い順に残す（残せなかった範囲は読めなかった範囲にする）。
 5. 根拠: chunk ごとに、抜き出した原文だけを本文にした親の record（chunk の ID・頁はそのまま、頁は原文を含む
    child から決める）を返す。回答は既存の生成（引用つき）と最終の検証にかける。
+   すでに文脈にある章節の親（最初の根拠など。``LargeSectionRequest.context_keys``。#1504）も同じように抜き出し、
+   その分は予算に戻してある（同じ原文を二重に数えない）。抜き出した後、予算の残りに入る親は当たった chunk に近い順に
+   元の本文のまま残し、入らない親は抜き出した原文に置き換える（抜き出す原文が無ければ文脈から外す。
+   ``LargeSectionOutcome.replacements``）。上限で抜き出せなかった親は元のまま残し、読めなかった範囲にしない。
+   予算（``remaining_tokens``）は抜き出した原文の量の上限で、1 回の呼び出しの入力（1 回分）はモデルの入力の上限
+   から決める（回答の予算の残りには依らない）。
 6. 上限: 抽出の LLM の呼び出しは 1 回の回答で ``section_extraction_max_calls``（既定 8。検索・回答プロファイル
    で変えられる）まで、時間は回答の時間の上限（既定 600 秒）から生成の分を残した範囲（``seconds_left``）。
    上限で読めなかった分は ``UnreadSection`` で返し、呼び出し元は回答を条件つき（conditional）にする。
@@ -350,22 +356,29 @@ class SectionExtractor:
     def __call__(self, request: LargeSectionRequest) -> LargeSectionOutcome | None:
         records = [item.record for item in request.tree]
         sources = [_source_text(record) for record in records]
+        # すでに文脈にある親（#1504）。抜き出した原文で置き換える前提で、その分は ``remaining_tokens`` に戻してある。
+        in_context = {index for index, record in enumerate(records) if _record_key(record) in request.context_keys}
+        whole_cost = {index: estimate_tokens(str(getattr(records[index], "text", "") or "")) for index in in_context}
         trace: dict[str, Any] = {"part_tokens": self.limits.part_tokens, "max_calls": self.limits.max_calls,
                                  "remaining_tokens": request.remaining_tokens}
+        if in_context:
+            trace.update(context_parents=len(in_context), context_tokens=sum(whole_cost.values()))
         self.trace.append(trace)
         unread: list[UnreadSection] = []
         if request.truncated:
             unread.append(UnreadSection(request.outline.document_id, request.section.section_id,
                                         section_label(request.outline, request.section) + "の残り",
                                         STOP_SECTION_CHUNKS))
-        if not records:
+        if len(in_context) == len(records):
+            # 抜き出す新しい原文が無い（章節の chunk がすべて文脈にある）。
             trace["parts"] = 0
             return LargeSectionOutcome(unread=unread, trace=trace)
         if request.remaining_tokens < MIN_REMAINING_TOKENS:
             # 抜き出しても文脈に入らない（呼び出しを使わない）。
             trace["skipped"] = "token_budget"
-            unread.append(UnreadSection(request.outline.document_id, request.section.section_id,
-                                        section_label(request.outline, request.section), STOP_TOKEN_BUDGET))
+            unread.extend(UnreadSection(request.outline.document_id, section.section_id,
+                                        section_label(request.outline, section), STOP_TOKEN_BUDGET)
+                          for section in request.unread_sections)
             return LargeSectionOutcome(unread=unread, trace=trace)
         blocks = [block for index, text in enumerate(sources)
                   for block in split_blocks(text, index, self.limits.part_tokens)]
@@ -373,9 +386,17 @@ class SectionExtractor:
         order = self._priority(parts, records, request.seed_positions)
         trace.update(parts=len(parts), order=[part.index for part in order])
         self._run(request, order, records, sources)
-        quotes = _merge_ranges([quote for part in parts for quote in part.quotes])
+        # 文脈にある親で、抜き出しが終わらなかった（呼び出し・時間の上限・失敗）ものは、文脈のまま残す（その分を予算から引く）。
+        done_blocks = {(block.record_index, block.start, block.end)
+                       for part in parts if part.status == "done" for block in part.blocks}
+        processed = {index for index in in_context
+                     if all((block.record_index, block.start, block.end) in done_blocks
+                            for block in blocks if block.record_index == index)}
+        whole = in_context - processed
+        budget = max(0, request.remaining_tokens - sum(whole_cost[index] for index in whole))
+        quotes = _merge_ranges([quote for part in parts for quote in part.quotes if quote[0] not in whole])
         stage_two: list[_Part] = []
-        if quotes and self._tokens(quotes, sources) > request.remaining_tokens and self.calls_left:
+        if quotes and self._tokens(quotes, sources) > budget and self.calls_left:
             # なお収まらなければ、抜き出した原文を同じ方法でもう 1 段抜き出す（reduce）。
             reduced_blocks = [_Block(record_index, start, end, estimate_tokens(sources[record_index][start:end])
                                      + BLOCK_HEADER_TOKENS) for record_index, start, end in quotes]
@@ -389,11 +410,24 @@ class SectionExtractor:
                 kept += [(block.record_index, block.start, block.end) for part in stage_two
                          if part.status != "done" for block in part.blocks]
                 quotes = _merge_ranges(kept)
-        quotes, over = self._fit(quotes, sources, records, request)
-        unread.extend(self._unread(request, parts, records))
+        quotes, over = self._fit(quotes, sources, records, request, budget)
+        # 文脈にある親は、予算の残りに入れば元のまま残す（当たった chunk に近い順。最初の根拠を必要以上に縮めない）。
+        leftover = budget - self._tokens(quotes, sources)
+        for index in sorted(processed, key=lambda item: (_distance(records[item], request.seed_positions), item)):
+            delta = whole_cost[index] - self._tokens([quote for quote in quotes if quote[0] == index], sources)
+            if delta <= leftover:
+                whole.add(index)
+                leftover -= delta
+                quotes = [quote for quote in quotes if quote[0] != index]
+        over = [quote for quote in over if quote[0] not in whole]
+        unread.extend(self._unread(request, parts, records, skip=in_context))
         if over:
             unread.append(self._range_unread(request, records, over, STOP_TOKEN_BUDGET, "抜き出した原文のうち"))
-        tree = self._tree(request, records, sources, quotes)
+        extracted = dict(self._tree(request, records, sources, quotes))
+        replacements: dict[str, AnswerRecord | None] = {
+            _record_key(records[index]): (extracted[index].record if index in extracted else None)
+            for index in sorted(in_context - whole)}
+        tree = [item for index, item in sorted(extracted.items()) if index not in in_context]
         trace.update(
             calls=self.calls, stage_two_parts=len(stage_two),
             parts_done=sum(part.status == "done" for part in parts),
@@ -402,7 +436,11 @@ class SectionExtractor:
             quotes=len(quotes), dropped_quotes=sum(part.dropped for part in [*parts, *stage_two]),
             used_tokens=self._tokens(quotes, sources),
         )
-        return LargeSectionOutcome(tree=tuple(tree), unread=unread, trace=trace)
+        if in_context:
+            trace.update(context_kept=len(whole), context_replaced=sum(value is not None for value in replacements.values()),
+                         context_removed=sum(value is None for value in replacements.values()),
+                         context_kept_tokens=sum(whole_cost[index] for index in whole))
+        return LargeSectionOutcome(tree=tuple(tree), unread=unread, trace=trace, replacements=replacements)
 
     # ------------------------------------------------------------------ 順・実行
 
@@ -509,31 +547,32 @@ class SectionExtractor:
         return sum(_quote_tokens(sources, quote) for quote in quotes)
 
     def _fit(self, quotes: list[tuple[int, int, int]], sources: Sequence[str], records: Sequence[Any],
-             request: LargeSectionRequest) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
-        """根拠の入力の残りに入る原文を、当たった chunk に近い順に残す（返す順は原文の順）。"""
-        if self._tokens(quotes, sources) <= request.remaining_tokens:
+             request: LargeSectionRequest, budget: int) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+        """根拠の入力の残り（``budget``）に入る原文を、当たった chunk に近い順に残す（返す順は原文の順）。"""
+        if self._tokens(quotes, sources) <= budget:
             return quotes, []
-        seeds = request.seed_positions
 
         def distance(quote: tuple[int, int, int]) -> tuple[int, int, int]:
-            position = int(getattr(records[quote[0]], "seq_no", 0) or 0)
-            return (min((abs(position - seed) for seed in seeds), default=0), quote[0], quote[1])
+            return (_distance(records[quote[0]], request.seed_positions), quote[0], quote[1])
 
         kept: list[tuple[int, int, int]] = []
         over: list[tuple[int, int, int]] = []
         used = 0
         for quote in sorted(quotes, key=distance):
             cost = _quote_tokens(sources, quote)
-            if used + cost <= request.remaining_tokens:
+            if used + cost <= budget:
                 kept.append(quote)
                 used += cost
             else:
                 over.append(quote)
         return sorted(kept), sorted(over)
 
-    def _unread(self, request: LargeSectionRequest, parts: Sequence[_Part],
-                records: Sequence[Any]) -> list[UnreadSection]:
-        """読めなかった分を、理由ごとに続く分をまとめて「確かめられていない点」の範囲にする。"""
+    def _unread(self, request: LargeSectionRequest, parts: Sequence[_Part], records: Sequence[Any], *,
+                skip: set[int] | frozenset[int] = frozenset()) -> list[UnreadSection]:
+        """読めなかった分を、理由ごとに続く分をまとめて「確かめられていない点」の範囲にする。
+
+        ``skip`` の親（文脈のまま残す親。#1504）の範囲は読めなかった範囲にしない。
+        """
         reasons = {"calls": STOP_EXTRACTION_CALLS, "time": STOP_TIME_LIMIT, "error": STOP_EXTRACTION_ERROR}
         unread: list[UnreadSection] = []
         group: list[_Part] = []
@@ -542,8 +581,10 @@ class SectionExtractor:
                 group.append(part)
                 continue
             if group:
-                ranges = [(block.record_index, block.start, block.end) for item in group for block in item.blocks]
-                unread.append(self._range_unread(request, records, ranges, reasons[group[0].status], "のうち",
+                ranges = [(block.record_index, block.start, block.end) for item in group for block in item.blocks
+                          if block.record_index not in skip]
+                if ranges:
+                    unread.append(self._range_unread(request, records, ranges, reasons[group[0].status], "のうち",
                                                  parts=(group[0].index, group[-1].index, len(parts))))
                 group = []
             if part is not None and part.status in reasons:
@@ -574,12 +615,12 @@ class SectionExtractor:
         return UnreadSection(request.outline.document_id, request.section.section_id, label, reason)
 
     def _tree(self, request: LargeSectionRequest, records: Sequence[Any], sources: Sequence[str],
-              quotes: Sequence[tuple[int, int, int]]) -> list[ContextParentEvidence]:
-        """chunk ごとに、抜き出した原文だけを本文にした親の根拠（原文の順。chunk の ID はそのまま）。"""
+              quotes: Sequence[tuple[int, int, int]]) -> list[tuple[int, ContextParentEvidence]]:
+        """chunk ごとに、抜き出した原文だけを本文にした親の根拠（原文の順。chunk の ID はそのまま）と、その親の位置。"""
         by_record: dict[int, list[tuple[int, int]]] = {}
         for record_index, start, end in quotes:
             by_record.setdefault(record_index, []).append((start, end))
-        tree: list[ContextParentEvidence] = []
+        tree: list[tuple[int, ContextParentEvidence]] = []
         for record_index in sorted(by_record):
             ranges = by_record[record_index]
             parent = request.tree[record_index]
@@ -592,14 +633,21 @@ class SectionExtractor:
             metadata = {**(getattr(record, "metadata", {}) or {}),
                         "section_extraction": {"ranges": [[start, end] for start, end in ranges],
                                                "source_chars": len(source)}}
-            extracted = replace(record, text=text, body_text=text, metadata=metadata,
-                                **({"page": min(pages), "page_end": max(pages)} if pages else {}))
-            tree.append(ContextParentEvidence(
+            extracted = replace(record, text=text, body_text=text, metadata=metadata)
+            if pages:
+                extracted = replace(extracted, page=min(pages), page_end=max(pages))
+            tree.append((record_index, ContextParentEvidence(
                 record=extracted, role=parent.role, reason=SECTION_EXTRACTION_REASON,
                 children=tuple(ContextChildEvidence(record=child.record, role=SECTION_CONTEXT_ROLE,  # type: ignore[arg-type]
                                                     reason=SECTION_EXTRACTION_REASON) for child in children),
-            ))
+            )))
         return tree
+
+
+def _distance(record: Any, seeds: Sequence[int]) -> int:
+    """当たった chunk からの距離（文書の中の位置 ``seq_no`` の差。当たった chunk が無ければ 0）。"""
+    position = int(getattr(record, "seq_no", 0) or 0)
+    return min((abs(position - seed) for seed in seeds), default=0)
 
 
 def _quote_tokens(sources: Sequence[str], quote: tuple[int, int, int]) -> int:

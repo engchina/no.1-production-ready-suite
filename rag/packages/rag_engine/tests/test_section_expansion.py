@@ -268,8 +268,9 @@ def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
     limit = sections.SectionExpansionLimits.from_settings(settings).input_tokens
     assert limit == 1200
     assert sections.context_tokens(result.context) <= limit
-    # 関連の高い子の章節（3.3）を全体で読み、入らない 3.2 は読まない。
-    assert stub.read_calls == ["s3-1", "s3-3"]
+    # 入るかは、章節の chunk のうち文脈に無い分で確かめる（#1504。第3章の残りは 1,200 で入らない）。
+    # 関連の高い子の章節（3.3）を全体で読み、入らない 3.2 は文脈に入れない。
+    assert stub.read_calls == ["s3-1", "s3", "s3-3", "s3-2"]
     assert "c33a" in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
     assert result.stop_reason == sections.STOP_TOKEN_BUDGET
     assert [item.section_id for item in result.unread] == ["s3-2"]
@@ -299,10 +300,18 @@ def test_large_section_handler_receives_sections_that_do_not_fit():
     _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=2400), grader, stub, large_sections=handler,
             rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))])
 
-    assert [request.section.section_id for request in handed] == ["s3-2"]
-    # 渡すのは、まだ文脈に無い章節の親（章節の中の読み順）と残りの入力 token。
-    assert [item.record.chunk_uid for item in handed[0].tree] == [f"{DOC}:c32a", f"{DOC}:c32b"]
-    assert 0 < handed[0].remaining_tokens < 600
+    # 入らない子の章節（3.2）は、広げている章節（第3章）の要求としてまとめて渡す。
+    assert [request.section.section_id for request in handed] == ["s3"]
+    assert [section.section_id for section in handed[0].unread_sections] == ["s3-2"]
+    # 渡すのは、章節の親（章節の中の読み順）。まだ文脈に無い親（3.2）に加えて、すでに文脈にある章節の親
+    # （当たった chunk 3.1a・1 段目に読んだ 3.1b）も渡し、その分を残りの入力 token に戻す（#1504。二重に数えない）。
+    # 2 段目に全体で読んだ 3.3 は、この段で足した根拠なので渡さない。
+    assert [item.record.chunk_uid for item in handed[0].tree] == [
+        f"{DOC}:c31a", f"{DOC}:c31b", f"{DOC}:c32a", f"{DOC}:c32b"]
+    assert handed[0].context_keys == {f"{DOC}:c31a", f"{DOC}:c31b"}
+    # 上限 1,200 − 文脈（3.1）− 3.3 に、文脈の 3.1 の分を戻す（= 上限 − 3.3）。
+    section_3_3 = sum(sections.estimate_tokens(_text(chunk)) for chunk in LEAVES["s3-3"])
+    assert handed[0].remaining_tokens == 1200 - section_3_3
 
 
 def test_time_limit_stops_before_climbing():
