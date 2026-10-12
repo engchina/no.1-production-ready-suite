@@ -551,8 +551,8 @@ jobs:
         run: |
           version="$(sed -n '/^name = "ruff"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
           test -n "${version}"
-          uvx "ruff@${version}" check rag/services platform/scripts
-          uvx "ruff@${version}" format --check rag/services platform/scripts
+          uvx "ruff@${version}" check rag/services rag/packages platform/scripts
+          uvx "ruff@${version}" format --check rag/services rag/packages platform/scripts
 
       # e2e の影響分析の選択の規則（platform/scripts/e2e_impact.py。#885）。標準ライブラリだけで動く。
       - name: Unit tests (platform/scripts)
