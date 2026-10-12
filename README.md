@@ -18,21 +18,22 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 Compute に SSH で入って実行します（repository は `/u01/aipoc/no.1-production-ready-suite`）。
 
-最新のコード（main）を取得して再配備する（依存の同期・build・DB の migration・全サービスの再起動まで）:
+最新のコード（main）を取得して反映する（取得 → build → 全サービスの再起動）:
 
 ```bash
 sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh
 ```
 
-全サービスを再起動する（コードは変えない。`--status` で状態だけを表示）:
+全サービスを再起動する（今のコードから build してから再起動。`suite-pull.sh` で取得したコードもこれで反映されます）:
 
 ```bash
 sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 ```
 
-- 画面で保存した設定（各製品の `backend/.env`・`platform/.env`）、Wallet、HTTPS の CA は更新の後も保たれます。
+- build は、依存の同期・共有 UI と各製品の frontend・DB の migration・systemd・Nginx まで行います。build せずに再起動だけするときは `--no-build`、状態だけを見るときは `--status`。
 - 取得だけを行うときは `platform/deploy/suite-pull.sh`（追跡ファイルに変更があると中止します）。
-- 時間のかかる更新は `tmux` の中で実行すると、SSH が切れても止まりません。log は `/var/log/suite-update.log`。
+- 画面で保存した設定（各製品の `backend/.env`・`platform/.env`）、Wallet、HTTPS の CA は保たれます。
+- 時間がかかるので `tmux` の中で実行すると、SSH が切れても止まりません。log は `/var/log/suite-ops.log`。
 - OS を再起動すると、各製品のサービスと Nginx は自動で起動します。
 
 ## 構成

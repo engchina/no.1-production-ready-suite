@@ -48,7 +48,6 @@ function Shell({ path = "/documents", collapsed = true }: { path?: string; colla
           collapsed={collapsed}
           onToggleCollapsed={() => undefined}
           collapsedSections={{}}
-          onToggleSection={() => undefined}
           onSetSectionCollapsed={() => undefined}
           linkComponent={Link}
           labels={labels}

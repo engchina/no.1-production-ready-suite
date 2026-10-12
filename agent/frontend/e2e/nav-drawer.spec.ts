@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { expandSidebarSections } from "./fixtures/nav";
 
 // md 未満のナビのドロワー（#367。platform の AppShell）。desktop は従来のサイドバーのまま。
 
@@ -37,7 +38,10 @@ test.describe("md 未満のナビのドロワー (mobile-375)", { tag: "@respons
 
     // Tab の回数で止まる位置はナビの項目数で変わる。閉じるボタン（アイコンだけ）に止まると Tooltip が出て、
     // 1 回目の Escape は吹き出しだけを閉じる（#372）。項目数に左右されないよう、ナビのリンクから閉じる（#426）。
-    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "監査ログ", exact: true }).focus();
+    // 監査ログは既定で閉じている「改善・運用」にある（#1563）。
+    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+    await expandSidebarSections(sidebar, "改善・運用");
+    await sidebar.getByRole("link", { name: "監査ログ", exact: true }).focus();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(trigger).toBeFocused();
@@ -50,7 +54,9 @@ test.describe("md 未満のナビのドロワー (mobile-375)", { tag: "@respons
 
   test("ナビの選択で移動して閉じる", async ({ page }) => {
     await page.getByRole("button", { name: "メニュー", exact: true }).click();
-    await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "監査ログ", exact: true }).click();
+    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+    await expandSidebarSections(sidebar, "改善・運用");
+    await sidebar.getByRole("link", { name: "監査ログ", exact: true }).click();
     await expect(page).toHaveURL(/\/audit$/);
     await expect(page.getByRole("dialog", { name: "メニュー" })).toBeHidden();
     await expect(page.locator("#pr-main")).not.toHaveAttribute("inert", "");

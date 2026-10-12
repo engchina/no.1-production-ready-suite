@@ -285,14 +285,17 @@ def test_backend_env_example_lists_only_rag_settings() -> None:
 
 
 def test_auth_settings_use_platform_and_rag_env_names() -> None:
-    """共通認証: 構成管理者・認証ポリシーは PLATFORM_*、Cookie 名は RAG_APP_AUTH_*（#214）。"""
+    """共通認証: 構成管理者・認証ポリシー・Cookie 名は PLATFORM_*（#214）。
+
+    Cookie は 3 製品で共有する（#1565）。
+    """
     names = settings_env_names(Settings)
     assert names["app_admin_login_user_id"] == "PLATFORM_ADMIN_LOGIN_USER_ID"
     assert names["app_admin_login_user_password"] == "PLATFORM_ADMIN_LOGIN_USER_PASSWORD"
     assert names["app_auth_cookie_secure"] == "PLATFORM_AUTH_COOKIE_SECURE"
     assert names["app_auth_idle_timeout_minutes"] == "PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES"
-    assert names["app_auth_session_cookie_name"] == "RAG_APP_AUTH_SESSION_COOKIE_NAME"
-    assert names["app_auth_csrf_cookie_name"] == "RAG_APP_AUTH_CSRF_COOKIE_NAME"
+    assert names["app_auth_session_cookie_name"] == "PLATFORM_AUTH_SESSION_COOKIE_NAME"
+    assert names["app_auth_csrf_cookie_name"] == "PLATFORM_AUTH_CSRF_COOKIE_NAME"
     assert names["auth_mode"] == "RAG_AUTH_MODE"
     # 単一アカウント方式の設定は廃止した。
     for removed in (
@@ -306,8 +309,8 @@ def test_auth_settings_use_platform_and_rag_env_names() -> None:
         assert removed not in names
     settings = Settings(_env_file=None)
     assert settings.service_name == "production-ready-rag"
-    assert settings.app_auth_session_cookie_name == "rag_session"
-    assert settings.app_auth_csrf_cookie_name == "rag_csrf"
+    assert settings.app_auth_session_cookie_name == "pr_session"
+    assert settings.app_auth_csrf_cookie_name == "pr_csrf"
     assert settings.local_debug_enabled is (settings.auth_mode == "local")
     production = Settings(_env_file=None, auth_mode="production")
     assert production.app_auth_enabled is True

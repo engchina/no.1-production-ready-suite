@@ -175,6 +175,11 @@ test("Agent 管理の権限が無い利用者は一覧だけを見る", async ({
 
 test("システム管理者は、キーを連携用の専用の利用者として動かせる", async ({ page, mockApi }) => {
   await page.goto("/settings/api-keys");
+  // 「実行する利用者」は「名前」と同じ grid の列に置き、同じ幅にする（#1570）。
+  const nameBox = await page.locator("#api-key-name").boundingBox();
+  const runAsBox = await page.locator("#api-key-run-as").boundingBox();
+  expect(Math.abs((runAsBox?.width ?? 0) - (nameBox?.width ?? -10))).toBeLessThanOrEqual(1);
+  expect(Math.abs((runAsBox?.x ?? 0) - (nameBox?.x ?? -10))).toBeLessThanOrEqual(1);
   await page.getByLabel("名前").fill("基幹システム");
   await page.getByRole("radio", { name: "使えるすべての業務 Agent" }).check();
   await page.locator("#api-key-run-as").click();

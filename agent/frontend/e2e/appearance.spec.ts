@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
-import { openSidebarNav } from "./fixtures/nav";
+import { expandSidebarSections, openSidebarNav } from "./fixtures/nav";
 
 // 外観と証明書（テーマ切替）は platform の共有パッケージの画面を使う（#95）。
 
@@ -104,6 +104,8 @@ for (const viewport of [
     const sidebar = await openSidebarNav(page);
     // 認証の確認後にサイドナビを描く。最後のセクションが出るまで待ってから並びを読む。
     await expect(sidebar.locator("#nav-section-nav-section-settings")).toHaveCount(1);
+    // 既定では「AI 活用」と今のページのセクションだけが開いている（#1563）。すべて開いて項目を確かめる。
+    await expandSidebarSections(sidebar);
 
     // 並びは NL2SQL / RAG と同じく、上に一般の利用者が使う画面、下に管理者の画面
     // 「AI 活用 → Agent 構築 → 改善・運用 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」

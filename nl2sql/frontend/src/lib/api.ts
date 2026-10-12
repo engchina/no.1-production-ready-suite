@@ -152,9 +152,6 @@ export interface ApiRequestOptions {
   headers?: HeadersInit;
 }
 
-/** NL2SQL の CSRF Cookie 名（backend の `nl2sql_csrf`）。 */
-const CSRF_COOKIE_NAME = "nl2sql_csrf";
-
 // 応答が届かなかった API 呼び出し（timeout・通信断）の利用者向けの失敗は3製品共通（platform の共有パッケージ。#900 / #906）。
 export {
   ApiTransportError,
@@ -202,7 +199,7 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
   recovery = (async () => {
     const headers = new Headers({
       Accept: "application/json",
-      ...csrfHeader(CSRF_COOKIE_NAME, "POST"),
+      ...csrfHeader("POST"),
     });
     try {
       const response = await fetch(appPath(PERSISTENCE_RECOVERY_PATH), {
@@ -315,7 +312,7 @@ export async function apiFetch(
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   headers.set("Accept", headers.get("Accept") ?? "application/json");
-  for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method))) {
+  for (const [name, value] of Object.entries(csrfHeader(method))) {
     headers.set(name, value);
   }
   const requestInit = {

@@ -14,6 +14,7 @@ from pr_backend_core.config import (
     platform_env_file,
     product_settings_config,
 )
+from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
 from pr_system_settings.model import ModelSecretStateMixin, ModelSettingsStore
@@ -252,8 +253,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     app_admin_login_user_id: str = ""
     app_admin_login_user_password: str = ""
     app_auth_cookie_secure: bool = False
-    app_auth_session_cookie_name: str = "nl2sql_session"
-    app_auth_csrf_cookie_name: str = "nl2sql_csrf"
+    # ログインの Cookie は 3 製品で共有する（共通 `.env` の PLATFORM_AUTH_*_COOKIE_NAME。#1565）。
+    app_auth_session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
+    app_auth_csrf_cookie_name: str = DEFAULT_CSRF_COOKIE_NAME
     app_auth_idle_timeout_minutes: int = 60
     app_auth_absolute_timeout_hours: int = 12
     app_auth_failed_login_limit: int = 5

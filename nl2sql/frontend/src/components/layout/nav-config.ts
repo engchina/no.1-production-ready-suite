@@ -49,8 +49,11 @@ export interface NavSection {
   titleKey: I18nKey;
   items: NavItem[];
   collapsible?: boolean;
-  /** 保存値がない場合に、このセクションを初期状態で折りたたむか。 */
-  initiallyCollapsed?: boolean;
+  /**
+   * 利用者の開閉の保存値が無いとき、このセクションを閉じて出すか（共有 Sidebar の NavSection.defaultCollapsed）。
+   * 3 製品で業務の入口の「AI 活用」だけを展開し、ほかのセクションは true にする（#1563）。
+   */
+  defaultCollapsed?: boolean;
 }
 
 /** 共通5項目（共有パッケージ）に付ける NL2SQL の menu 権限。 */
@@ -75,7 +78,6 @@ const USER_ROLE_MENU_PERMISSIONS = {
 export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.use",
-    initiallyCollapsed: false,
     items: [
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.query, labelKey: "nav.query", icon: Sparkles, permission: MENU_PERMISSIONS.query },
@@ -91,7 +93,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.prepare",
-    initiallyCollapsed: true,
+    defaultCollapsed: true,
     items: [
       {
         href: APP_ROUTES.adminSql,
@@ -112,7 +114,7 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.improve",
-    initiallyCollapsed: true,
+    defaultCollapsed: true,
     items: [
       { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: BriefcaseBusiness, permission: MENU_PERMISSIONS.profiles },
       { href: APP_ROUTES.ontologyBuild, labelKey: "nav.ontologyBuild", icon: Network, permission: MENU_PERMISSIONS.ontologyBuild },
@@ -124,7 +126,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // NL2SQL 固有のセキュリティ（ロールへの権限付与と DeepSec。#206）。
     titleKey: "nav.section.security",
-    initiallyCollapsed: true,
+    defaultCollapsed: true,
     items: [
       { href: APP_ROUTES.securityPermissions, labelKey: "nav.securityPermissions", icon: LockKeyhole, permission: MENU_PERMISSIONS.securityPermissions },
       { href: APP_ROUTES.securityDeepSec, labelKey: "nav.securityDeepSec", icon: ShieldCheck, permission: MENU_PERMISSIONS.securityDeepSec },
@@ -133,7 +135,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
     titleKey: "nav.section.userRoles",
-    initiallyCollapsed: true,
+    defaultCollapsed: true,
     items: USER_ROLE_NAV_ITEMS.map((item) => ({
       ...item,
       permission: USER_ROLE_MENU_PERMISSIONS[item.key],
@@ -142,7 +144,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // NL2SQL 固有の運用設定（#81）。
     titleKey: "nav.section.operations",
-    initiallyCollapsed: true,
+    defaultCollapsed: true,
     items: [
       {
         href: APP_ROUTES.settingsSystemTables,
@@ -164,23 +166,10 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
-    initiallyCollapsed: true,
+    defaultCollapsed: true,
     items: SYSTEM_SETTINGS_NAV_ITEMS.map((item) => ({
       ...item,
       permission: SYSTEM_SETTINGS_MENU_PERMISSIONS[item.key],
     })),
   },
 ];
-
-/**
- * 保存済みの開閉状態をナビ構成の初期値へ重ねる。
- * 明示保存された false（展開）も維持し、新設セクションだけ構成値へ安全に追従させる。
- */
-export function resolveCollapsedSections(
-  savedSections: Record<string, boolean>
-): Record<string, boolean> {
-  const defaults = Object.fromEntries(
-    NAV_SECTIONS.map((section) => [section.titleKey, section.initiallyCollapsed ?? false])
-  );
-  return { ...defaults, ...savedSections };
-}

@@ -377,8 +377,8 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
     assert data["password_change_allowed"] is True
     headers = session_headers(login_response)
     set_cookie = login_response.headers.get_list("set-cookie")
-    assert any(item.startswith("agent_session=") and "HttpOnly" in item for item in set_cookie)
-    assert any(item.startswith("agent_csrf=") for item in set_cookie)
+    assert any(item.startswith("pr_session=") and "HttpOnly" in item for item in set_cookie)
+    assert any(item.startswith("pr_csrf=") for item in set_cookie)
 
     me = client.get("/api/auth/me", headers=headers)
     assert me.status_code == 200
@@ -433,8 +433,8 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     assert data["is_system_admin"] is True
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
     assert data["allowed_agent_ids"] is None
-    # 構成管理者の token は Agent 固有の接頭辞（他製品の token と混ざらない）。
-    assert str(response.cookies.get("agent_session")).startswith("agent-system-admin-v1.")
+    # 構成管理者の token は 3 製品で共通の接頭辞（ほかの製品でも同じ token で使える。#1565）。
+    assert str(response.cookies.get("pr_session")).startswith("platform-system-admin-v1.")
     headers = session_headers(response)
     assert client.get("/api/runs", headers=headers).status_code == 200
     assert client.get("/api/runtime/snapshot", headers=headers).status_code == 200
@@ -443,7 +443,7 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
 def test_invalid_session_cookie_is_401_and_headers_are_not_trusted(auth: ProductionAuth) -> None:
     """Cookie が不正なら 401。`X-Agent-Roles` などの自己申告の header は使わない（#750）。"""
     for headers in (
-        {"cookie": "agent_session=tampered", "X-Agent-Roles": "admin"},
+        {"cookie": "pr_session=tampered", "X-Agent-Roles": "admin"},
         {"X-Agent-Roles": "admin", "X-Agent-Business-Views": "*"},
         {"X-Agent-Actor": "ops"},
     ):

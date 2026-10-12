@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { authBroadcastType, openAuthBroadcastChannel, postAuthBroadcast } from "./broadcast";
 import { AUTH_UNAUTHORIZED_EVENT } from "./events";
 import { createPermissionCheck as defaultPermissionCheck } from "./permissions";
 import type { AuthApi, AuthStatus, BaseCurrentUser, HasPermission } from "./types";
@@ -72,6 +73,8 @@ export interface AuthProviderProps<U extends BaseCurrentUser> {
 /**
  * Cookie セッションの認証状態を持つ（NL2SQL から移設。#220）。
  * 起動時に `me` で確認し、401 のイベント（`notifyAuthStatus`）で未認証に戻す。
+ * ログインの Cookie は 3 製品で共有するため、ログイン・ログアウト・パスワード変更を
+ * `BroadcastChannel` でほかの製品・タブへ知らせ、受けた側は利用者を確かめ直すか未認証に戻す（#1565）。
  */
 export function AuthProvider<U extends BaseCurrentUser>({
   api,
@@ -150,16 +153,38 @@ export function AuthProvider<U extends BaseCurrentUser>({
     return () => controller.abort();
   }, [refresh]);
 
-  useEffect(() => {
-    const handleUnauthorized = () => {
-      applyIdentity(null);
-      setUser(null);
-      setError(null);
-      setStatus("unauthenticated");
-    };
-    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
-    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
+  const markUnauthenticated = useCallback(() => {
+    applyIdentity(null);
+    setUser(null);
+    setError(null);
+    setStatus("unauthenticated");
   }, [applyIdentity]);
+
+  useEffect(() => {
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, markUnauthenticated);
+    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, markUnauthenticated);
+  }, [markUnauthenticated]);
+
+  // ほかの製品・タブのログイン状態の変化を受ける（#1565）。送った自分の channel には届かない。
+  const channel = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    const opened = openAuthBroadcastChannel();
+    channel.current = opened;
+    if (!opened) return undefined;
+    const handleMessage = (event: MessageEvent) => {
+      const type = authBroadcastType(event.data);
+      // ログアウト（共有のセッションの失効）: この画面も未認証に戻し、ログイン画面へ移す。
+      if (type === "logout") markUnauthenticated();
+      // ログイン（別の利用者かもしれない）: 共有の Cookie で利用者を確かめ直す。
+      if (type === "login") void refresh();
+    };
+    opened.addEventListener("message", handleMessage);
+    return () => {
+      opened.removeEventListener("message", handleMessage);
+      opened.close();
+      if (channel.current === opened) channel.current = null;
+    };
+  }, [markUnauthenticated, refresh]);
 
   const login = useCallback(
     async (loginUserId: string, password: string) => {
@@ -168,6 +193,7 @@ export function AuthProvider<U extends BaseCurrentUser>({
       setUser(current);
       setError(null);
       setStatus("authenticated");
+      postAuthBroadcast(channel.current, "login");
       return current;
     },
     [applyIdentity],
@@ -176,19 +202,19 @@ export function AuthProvider<U extends BaseCurrentUser>({
   const logout = useCallback(async () => {
     try {
       await optionsRef.current.api.logout();
+      // 共有のセッションを失効させた。ほかの製品・タブもログイン画面へ移す。
+      postAuthBroadcast(channel.current, "logout");
     } finally {
-      applyIdentity(null);
-      setUser(null);
-      setError(null);
-      setStatus("unauthenticated");
+      markUnauthenticated();
     }
-  }, [applyIdentity]);
+  }, [markUnauthenticated]);
 
-  const changePassword = useCallback(
-    (currentPassword: string, newPassword: string) =>
-      optionsRef.current.api.changePassword(currentPassword, newPassword),
-    [],
-  );
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    const result = await optionsRef.current.api.changePassword(currentPassword, newPassword);
+    // パスワードを変えるとセッションは失効し、Cookie も消える。ほかの製品・タブもログインし直す。
+    postAuthBroadcast(channel.current, "logout");
+    return result;
+  }, []);
 
   const permissionCheckFor = useCallback(
     (target: U | null): HasPermission =>
