@@ -515,7 +515,7 @@
     },
     {
       "name": "nl2sql_query",
-      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
+      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL の生成の方式は、業務プロファイルの既定の生成方式です。SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
       "inputSchema": {
         "$defs": {
           "RequirementAnswerInput": {

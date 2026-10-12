@@ -209,6 +209,7 @@ from .models import (
     MetadataSqlSampleRequest,
     MetadataSqlTarget,
     Nl2SqlEngine,
+    Nl2SqlEngineAvailability,
     Nl2SqlInterpretationArtifact,
     Nl2SqlLogicalStep,
     Nl2SqlLogicalStructureItem,
@@ -4016,6 +4017,12 @@ def _reverse_deep_step_details(
         )
         for index, step in enumerate(steps)
     ]
+
+
+# OCI Enterprise AI で生成できない環境の理由（業務プロファイルの既定の生成方式の選択肢。#1524）。
+_DIRECT_ENGINE_UNAVAILABLE_REASON = (
+    "OCI Enterprise AI のモデルの接続が設定されていないか、無効になっています。"
+)
 
 
 class Nl2SqlService:
@@ -7911,7 +7918,10 @@ class Nl2SqlService:
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
         # error へ隠さない。
         accepted_started = time.monotonic()
-        self.get_profile(request.profile_id)
+        profile = self.get_profile(request.profile_id)
+        # 生成の方式を省略したジョブ（Agent の MCP の nl2sql_query など）は業務プロファイルの既定の
+        # 生成方式にする（#1524）。保存するジョブ・再送の照合は決めた方式で行う。
+        request = request.with_profile_default_engine(profile.default_engine)
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         if request.client_job_id is not None:
             # 応答が届かなかった送信の再送は、作成済みのジョブを返す（二重に生成しない。#900）。
@@ -21387,6 +21397,42 @@ class Nl2SqlService:
                 "Profile を再同期してから実行してください。"
             )
         return ""
+
+    def engine_availability(self) -> list[Nl2SqlEngineAvailability]:
+        """この環境で使える生成の方式（業務プロファイルの既定の生成方式の選択肢。#1524）。
+
+        Select AI は基準の方式で常に選べる。Select AI Agent と OCI Enterprise AI は、その方式の
+        設定の有無で決める（Select AI の資産の状態・接続の確認はしない。実行の時に確かめる）。
+        """
+
+        settings = get_settings()
+        agent_ready = bool(
+            settings.nl2sql_select_ai_enabled and settings.nl2sql_select_ai_agent_enabled
+        )
+        direct_ready = bool(
+            settings.nl2sql_enterprise_ai_direct_enabled
+            and self._enterprise_ai_client.is_configured()
+        )
+        return [
+            Nl2SqlEngineAvailability(engine=Nl2SqlEngine.SELECT_AI, available=True),
+            Nl2SqlEngineAvailability(
+                engine=Nl2SqlEngine.SELECT_AI_AGENT,
+                available=agent_ready,
+                reason="" if agent_ready else "Select AI Agent が無効になっています。",
+            ),
+            Nl2SqlEngineAvailability(
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+                available=direct_ready,
+                reason="" if direct_ready else _DIRECT_ENGINE_UNAVAILABLE_REASON,
+            ),
+        ]
+
+    def assert_engine_available(self, engine: Nl2SqlEngine) -> None:
+        """この環境で使えない生成の方式を、業務プロファイルの既定にさせない（#1524）。"""
+
+        for item in self.engine_availability():
+            if item.engine == engine and not item.available:
+                raise ValueError(f"この環境では選べない生成の方式です。{item.reason}")
 
     def quality_evaluation_engine_readiness(
         self, profile_id: str | None = None

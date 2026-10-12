@@ -795,7 +795,8 @@ def build_mcp_server(request: Request) -> McpServer:
         if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
             raise HTTPException(status_code=409, detail="AI要件確認の要件がありません。")
         # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。
-        # 画面の既定値（engine / use_ontology_context 等は JobCreateRequest の既定）で作る。
+        # 生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする（#1524）。
+        # use_ontology_context 等は画面と同じく JobCreateRequest の既定で作る。
         # row_limit は必ず渡す（None だと全件を取得する）。
         job_request = _with_requirement(
             JobCreateRequest(
@@ -858,6 +859,7 @@ def build_mcp_server(request: Request) -> McpServer:
             name="nl2sql_query",
             description=(
                 "質問から SELECT SQL を生成して実行し、結果の行を返します。"
+                "SQL の生成の方式は、業務プロファイルの既定の生成方式です。"
                 "SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。"
                 "確かめる項目があれば SQL を作らずに status=needs_clarification と "
                 "requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、"
