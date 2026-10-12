@@ -152,7 +152,29 @@ prepare_case() {
   [ ! -e "${SYSTEMD_UNIT_DIR}/production-ready-suite-tls-renew.timer" ] || fail "HTTPS が off なら timer を外す"
 )
 
-# 6. 製品の init_script.sh の契約（#1316。単独では配備しない）: Nginx の site を書かない・/<製品>/ を base に build・
+# 6. 完了の log の URL（#1561）: 入口（suite）を製品の URL の上に出し、転送先を添える。
+(
+  case_dir="${task_dir}/urls"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  printf '203.0.113.5\n' > "${PROPS_DIR}/public_ip.txt"
+  SUITE_PRODUCTS=(rag nl2sql agent)
+  expected="$(printf '%s\n' \
+    '[suite-init]   suite: https://203.0.113.5/ (entry point; redirects to /agent/)' \
+    '[suite-init]   rag: https://203.0.113.5/rag/' \
+    '[suite-init]   nl2sql: https://203.0.113.5/nl2sql/' \
+    '[suite-init]   agent: https://203.0.113.5/agent/' \
+    '[suite-init]   CA certificate: https://203.0.113.5/platform/ca.crt (import it as a trusted root CA on client PCs)')"
+  [ "$(report_urls)" = "${expected}" ] || fail "完了の log の URL: $(report_urls)"
+  SUITE_PRODUCTS=(rag nl2sql)
+  first="$(report_urls)"
+  first="${first%%$'\n'*}"
+  [ "${first}" = '[suite-init]   suite: https://203.0.113.5/ (entry point; redirects to /rag/)' ] \
+    || fail "Agent が無いときの入口の転送先: ${first}"
+)
+
+# 7. 製品の init_script.sh の契約（#1316。単独では配備しない）: Nginx の site を書かない・/<製品>/ を base に build・
 #    backend/.env の元。Nginx の location は platform/deploy/suite-nginx.sh の 1 か所だけ。
 for product in rag nl2sql agent; do
   source_text="$(cat "${repo}/${product}/init_script.sh")"

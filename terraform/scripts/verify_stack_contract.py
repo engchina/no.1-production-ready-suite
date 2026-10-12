@@ -450,14 +450,16 @@ def _verify_schema(schema: str, variables: str) -> None:
             context=f"{name} Terraform default",
         )
 
-    # 配備する製品の選択（複数選択可、既定はすべて配備）。
-    _, selection = groups.get("配備する製品", ("", []))
+    # 配備する製品の選択は画面に出さず、3 製品をすべて配備する（#1562。Suite はセットで配備する）。
+    selection_visible, selection = groups.get("配備する製品", ("", []))
+    if selection_visible != "false":
+        raise AssertionError("product selection group must be hidden")
     if selection != [f"deploy_{product}" for product in PRODUCTS]:
         raise AssertionError(f"product selection group must list deploy_* in order: {selection}")
     for product in PRODUCTS:
         _require_all(
             _schema_variable(schema, f"deploy_{product}"),
-            ["type: boolean", "required: true", "visible: true", "default: true"],
+            ["type: boolean", "required: true", "visible: false", "default: true"],
             context=f"deploy_{product} schema",
         )
         _require_all(

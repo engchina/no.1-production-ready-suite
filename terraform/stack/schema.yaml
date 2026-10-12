@@ -26,7 +26,7 @@ variableGroups:
       - vcn_ai_vcn_id
 
   - title: "配備する製品"
-    visible: true
+    visible: false
     variables:
       - deploy_rag
       - deploy_nl2sql
@@ -632,7 +632,7 @@ variables:
   deploy_rag:
     type: boolean
     required: true
-    visible: true
+    visible: false
     title: "RAG"
     description: "Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答）を配備します（/rag/）。選んだ製品は 1 台の Compute に入ります。少なくとも1つの製品を選択してください。"
     default: true
@@ -640,7 +640,7 @@ variables:
   deploy_nl2sql:
     type: boolean
     required: true
-    visible: true
+    visible: false
     title: "NL2SQL"
     description: "Production Ready NL2SQL（SQL 専用の自然言語問い合わせ）を配備します（/nl2sql/）。"
     default: true
@@ -648,7 +648,7 @@ variables:
   deploy_agent:
     type: boolean
     required: true
-    visible: true
+    visible: false
     title: "Agent Control Plane"
     description: "Production Control Plane for AI Agents を配備します（/agent/。/ はここへ転送します）。"
     default: true
