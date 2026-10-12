@@ -68,7 +68,7 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
   ].join("");
 }
 
-test("引用カードに variant(chunk_set)バッジが出る", async ({ page }, testInfo) => {
+test("引用カードに variant(chunk_set)バッジが出る", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) =>

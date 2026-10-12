@@ -276,7 +276,7 @@ test("チャットは参照 KB が 0 件の検索・回答プロファイルで�
   await expectNoPageOverflow(page);
 });
 
-test("チャットは会話の回答の trace_id で保存済みの回答を引き当て、削除できる", async ({ page }) => {
+test("チャットは会話の回答の trace_id で保存済みの回答を引き当て、削除できる", { tag: "@responsive" }, async ({ page }) => {
   await mockChat(page, "bv-1");
   const requested: string[][] = [];
   let deleted = false;
@@ -405,7 +405,7 @@ const ANSWER_MODELS = [
   { model_id: "vision-m", display_name: "grok-4.3", kind: "vision" },
 ];
 
-test("回答のモデルは既定のテキストモデルと画像対応モデルだけ。検索は 1 つを選び、チャットは比較できる（#675）", async ({
+test("回答のモデルは既定のテキストモデルと画像対応モデルだけ。検索は 1 つを選び、チャットは比較できる（#675）", { tag: "@responsive" }, async ({
   page,
   isMobile,
 }) => {

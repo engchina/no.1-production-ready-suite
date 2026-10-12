@@ -602,7 +602,7 @@ async function expectEntireGraphInCanvas(playground: Locator) {
 
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920]) {
-    test(`概念の種類を先頭にして操作枠を整列する ${theme} ${width}`, async ({ page }, testInfo) => {
+    test(`概念の種類を先頭にして操作枠を整列する ${theme} ${width}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== "desktop" && width !== 1280, "モバイルは375幅で確認");
       if (testInfo.project.name === "desktop") await page.setViewportSize({ width, height: 1000 });
       await page.addInitScript((theme) => {
@@ -680,7 +680,7 @@ for (const version of [1, 2]) {
   });
 }
 
-test("グラフ操作部は旧版の外観でモード・凡例・ズーム・検索を操作できる", async ({ page }, testInfo) => {
+test("グラフ操作部は旧版の外観でモード・凡例・ズーム・検索を操作できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
   await page.goto("/ontology-build?profile=default");
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
@@ -720,7 +720,7 @@ test("グラフ操作部は旧版の外観でモード・凡例・ズーム・�
   await playground.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
 });
 
-test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", async ({ page }, testInfo) => {
+test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1440, height: 900 });
   }
@@ -841,7 +841,7 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
   await expectNoHorizontalScroll(page);
 });
 
-test("大文字小文字だけが異なる物理表は別カード・別 cluster として SQL と同じ表記で表示する (#563)", async ({
+test("大文字小文字だけが異なる物理表は別カード・別 cluster として SQL と同じ表記で表示する (#563)", { tag: "@responsive" }, async ({
   page,
 }) => {
   const physicalTable = (id: string, objectName: string, technicalName: string, label: string) => ({
@@ -927,7 +927,7 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
   await expectNoHorizontalScroll(page);
 });
 
-test("質問を接地すると分類とグラフ強調が表示され、入力削除とクリアで reset できる", async ({
+test("質問を接地すると分類とグラフ強調が表示され、入力削除とクリアで reset できる", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   await mockApi(page);
@@ -999,7 +999,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expectNoHorizontalScroll(page);
 });
 
-test("選択候補一覧は標準の最大表示件数で縦スクロールする", async ({ page }, testInfo) => {
+test("選択候補一覧は標準の最大表示件数で縦スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockApi(page, { ontologyGraph: nodePickerOverflowGraph });
   await page.goto("/ontology-build?profile=default");
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
@@ -1051,7 +1051,7 @@ test("公開済み Ontology がない場合は準備手順を表示する", asyn
   await expectNoHorizontalScroll(page);
 });
 
-test("Ontology グラフはデスクトップとモバイルで主要ノード・凡例を表示し横スクロールしない", async ({
+test("Ontology グラフはデスクトップとモバイルで主要ノード・凡例を表示し横スクロールしない", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockApi(page);
@@ -1219,7 +1219,7 @@ const schemaContainsOntologyGraph = {
   ],
 };
 
-test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジは経路が分離される", async ({
+test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジは経路が分離される", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
@@ -1485,7 +1485,7 @@ const typedSemanticGraph = {
 
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920]) {
-    test(`型付き意味グラフの列挙展開とキーボード選択 ${theme} ${width}`, async ({ page }, testInfo) => {
+    test(`型付き意味グラフの列挙展開とキーボード選択 ${theme} ${width}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== "desktop" && width !== 1280, "モバイルは375幅で確認");
       if (testInfo.project.name === "desktop") await page.setViewportSize({ width, height: 1000 });
       await page.addInitScript((theme) => {
@@ -1525,7 +1525,7 @@ test.afterEach(async ({ page }, testInfo) => {
 
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920]) {
-    test(`公開版のない Profile に物理 graph を表示しない ${theme} ${width}`, async ({ page }, testInfo) => {
+    test(`公開版のない Profile に物理 graph を表示しない ${theme} ${width}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== "desktop" && width !== 1280, "モバイルは375幅で確認");
       if (testInfo.project.name === "desktop") await page.setViewportSize({ width, height: 1000 });
       await page.addInitScript(theme => localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({state:{theme},version:0})), theme);
@@ -1586,7 +1586,7 @@ test("公開済み Profile から未公開 Profile へ切り替えると graph �
   await expect(panel.getByTestId("ontology-playground-question")).toHaveValue("");
 });
 
-test("ノード種別は共有バッジで長い日本語名を欠けずに表示する", async ({ page }, testInfo) => {
+test("ノード種別は共有バッジで長い日本語名を欠けずに表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockApi(page, { ontologyGraph: typedSemanticGraph });
   await page.goto("/ontology-build?profile=default");
   await page.getByTestId("ontology-view-fetch").click();

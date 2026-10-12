@@ -8,6 +8,8 @@
  * - `executed`: source ファイル → 実行された関数の元の行の範囲（`"開始行:終了行"`）
  * - `loaded`: 読み込まれた source ファイル
  * - `durationMs`: テストの所要時間
+ * - `prScope`: PR の CI（mobile の project は `@responsive` などだけ。mobile-scope.ts）でも実行するテストか。
+ *   `e2e_impact.py` が PR の shard の時間の見積もりに使う（#1582）
  *
  * nightly が全件の実行で記録し、PR の CI は `platform/scripts/e2e_impact.py` がそれを使って、差分の行を
  * 実行した spec を選ぶ。すべてのテストで実行される関数（module の読み込み時の処理・画面の枠）は、
@@ -24,6 +26,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+
+import { inPullRequestScope } from "./mobile-scope";
 
 interface CoverageRange {
   startOffset: number;
@@ -55,6 +59,7 @@ interface ImpactTestInfo {
   file: string;
   testId: string;
   titlePath: string[];
+  tags: string[];
   retry: number;
   project: { name: string };
   config: { configFile?: string; rootDir: string };
@@ -349,6 +354,7 @@ export function withImpactCoverage<T>(base: T): T {
       project: testInfo.project.name,
       retry: testInfo.retry,
       durationMs,
+      prScope: inPullRequestScope(testInfo.project.name, testInfo.titlePath, testInfo.tags),
       executed: Object.fromEntries(
         [...files.executed.entries()]
           .sort(([a], [b]) => a.localeCompare(b))

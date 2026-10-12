@@ -5,7 +5,7 @@ test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
 for (const theme of ["light", "dark"] as const) {
   for (const width of [1280, 1920, 375]) {
-    test(`スキル一覧の件数とページのスクロールが変わっても幅と行高が安定する (${width}px, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`スキル一覧の件数とページのスクロールが変わっても幅と行高が安定する (${width}px, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       const base = mockApi.state.skills[0];
       const rows = Array.from({ length: 10 }, (_, index) => ({
         ...base, id: `stable-skill-${index}`, name: `業務の問い合わせに回答するスキル ${index}`,

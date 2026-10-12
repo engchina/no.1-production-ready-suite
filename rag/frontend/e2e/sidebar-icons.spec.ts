@@ -19,7 +19,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 720 },
   { name: "mobile", width: 375, height: 667 },
 ]) {
-  test(`settings sidebar icons are semantic on ${viewport.name}`, async ({ page }) => {
+  test(`settings sidebar icons are semantic on ${viewport.name}`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockApi(page);
     await page.goto("/settings/oci");
@@ -35,7 +35,7 @@ for (const viewport of [
     await expect(modelSettings.locator("svg").first()).toHaveClass(/lucide-brain-cog/);
   });
 
-  test(`sidebar brand and short labels are stable on ${viewport.name}`, async ({ page }) => {
+  test(`sidebar brand and short labels are stable on ${viewport.name}`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockApi(page);
     await page.goto("/settings/oci");

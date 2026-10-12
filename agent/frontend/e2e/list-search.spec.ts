@@ -207,7 +207,7 @@ for (const viewport of VIEWPORTS) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`業務 Agent のエディタの「変更を破棄」と段組み (${theme})`, async ({ page }, testInfo) => {
+  test(`業務 Agent のエディタの「変更を破棄」と段組み (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await useTheme(page, theme);
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.goto("/agents?id=default");

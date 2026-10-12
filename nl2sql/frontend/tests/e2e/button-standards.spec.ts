@@ -2,7 +2,7 @@ import { expect, test } from "./_helpers/test";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme}: 共通ボタンの実寸・状態・配置・キーボード操作`, async ({ page }, testInfo) => {
+  test(`${theme}: 共通ボタンの実寸・状態・配置・キーボード操作`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.route("**/__button-standards", route => route.fulfill({ contentType: "text/html", body:
       `<html class="${theme === "dark" ? "dark" : ""}" lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/tests/fixtures/button-standards.tsx"></script></body></html>` }));
     // fixture はトップレベルで createRoot() する。@vitejs/plugin-react は react-refresh 用に自分自身を
