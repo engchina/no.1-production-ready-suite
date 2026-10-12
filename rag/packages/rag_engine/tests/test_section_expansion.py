@@ -319,7 +319,7 @@ def test_time_limit_stops_before_climbing():
 
     result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 500.0)
 
-    # 回答の開始から 500 秒: 上限 600 秒までに、生成の分（150 秒）と 1 段の分が残らない。
+    # 回答の開始から 500 秒: 上限 600 秒までに、生成の分（270 秒）と 1 段の分が残らない。
     assert result.stop_reason == sections.STOP_TIME_LIMIT
     assert stub.read_calls == [] and grader.calls == []
     assert [item.section_id for item in result.unread] == ["s3-1"]
@@ -335,18 +335,33 @@ def test_answer_deadline_also_limits_time():
     assert result.stop_reason == sections.STOP_TIME_LIMIT and stub.read_calls == []
 
 
+def test_answer_deadline_leaves_one_generation_round():
+    """回答の期限の残りが、1 段の分と生成の分（1 組の見積もり + 確定の分。#1516）より少なければ上がらない。"""
+    reserve = sections.GENERATION_RESERVE_SECONDS
+    assert reserve == 240.0 + 30.0
+    for remaining, climbs in ((reserve + sections.DEFAULT_LEVEL_SECONDS - 1.0, False),
+                              (reserve + sections.DEFAULT_LEVEL_SECONDS, True)):
+        stub, grader = SectionStub(), Grader(needs=None)
+        result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 10.0,
+                         deadline_remaining=lambda remaining=remaining: remaining)
+        assert (stub.read_calls != []) is climbs, remaining
+        if not climbs:
+            assert result.stop_reason == sections.STOP_TIME_LIMIT
+
+
 def test_time_estimate_uses_measured_grade_seconds():
     stub = SectionStub()
     now = [0.0]
 
     def grade(context, level):
-        now[0] += 200.0  # 判定 1 回に 200 秒
+        now[0] += 150.0  # 判定 1 回に 150 秒
         return _attempt(sufficient=True, missing=("requested_result",))
 
     result = _expand(_seed_context("c31a"), _settings(), grade, stub, started_at=0.0, clock=lambda: now[0])
 
-    # 1 段目の後: 経過 200 秒、残り 400 秒 < 判定 200 + 生成 150 秒の 350 … は入るので 2 段目を読み、
-    # 2 段目の後は残り 200 秒で止める。上限 600 秒を超えない。
+    # 1 段目の後: 経過 150 秒、残り 450 秒 ≧ 判定 150 + 生成の分 270 秒（1 組の見積もり 240 + 確定 30。#1516）の
+    # 420 秒なので 2 段目を読み、2 段目の後は残り 300 秒で止める。上限 600 秒を超えない。
+    assert sections.GENERATION_RESERVE_SECONDS == 270.0
     assert stub.read_calls == ["s3-1", "s3"]
     assert result.stop_reason == sections.STOP_TIME_LIMIT
     assert now[0] <= 600.0

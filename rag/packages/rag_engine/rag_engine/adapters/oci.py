@@ -14,11 +14,13 @@ from rag_engine.models.llm import (
 
 import base64
 import json
+import logging
 import mimetypes
 import re
 import time
 from dataclasses import dataclass
 from rag_engine.resources.cache import application_cache
+from rag_engine.resources.llm_usage import record_llm_usage, response_usage
 from rag_engine.resources.deadline import (
     DeadlineExceeded,
     check_deadline,
@@ -501,6 +503,7 @@ def _openai_parsed(
     )
     for attempt in range(2):
         check_deadline()
+        started = time.monotonic()
         response = _openai_client_with_deadline(
             _openai_client_for_provider(provider, settings), settings
         ).responses.parse(
@@ -512,6 +515,7 @@ def _openai_parsed(
             extra_body={"seed": int(settings.llm_seed)},
             **reasoning,
         )
+        _record_usage(response, provider, text_format, time.monotonic() - started)
         try:
             return _parsed_response(response, text_format, provider)
         except IncompleteResponse as exc:
@@ -519,6 +523,21 @@ def _openai_parsed(
                 raise
             budget *= INCOMPLETE_OUTPUT_BUDGET_FACTOR
     raise AssertionError("unreachable")
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _record_usage(response: Any, provider: LlmProviderSettings, text_format: type, seconds: float) -> None:
+    """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。"""
+    usage = response_usage(response)
+    record_llm_usage({**usage, "seconds": seconds})
+    _logger.info(
+        "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
+        "reasoning_tokens=%d status=%s",
+        provider.model, getattr(text_format, "__name__", str(text_format)), seconds, usage["input_tokens"],
+        usage["cached_tokens"], usage["output_tokens"], usage["reasoning_tokens"], _value(response, "status"),
+    )
 
 
 def _parse_openai_text_once(

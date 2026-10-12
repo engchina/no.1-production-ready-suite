@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from difflib import SequenceMatcher
 import unicodedata
 from dataclasses import dataclass, field, replace
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
@@ -37,6 +40,15 @@ from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
 from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.resources.deadline import (
+    ANSWER_FINALIZE_RESERVE_SECONDS,
+    DEFAULT_GENERATION_ROUND_SECONDS,
+    Deadline,
+    bind_deadline,
+    current_deadline,
+    deadline_cut_short,
+)
+from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
 
 MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
 MAX_PINNED = 4
@@ -54,6 +66,8 @@ NEUTRAL_SUMMARY = "資料で確認できた内容を以下に示します。"
 # 適用が未確認の説明の末尾に付ける注記。評価の主張の監査では主張として扱わない(#680)。
 UNVERIFIED_NOTE = "（今回の対象への適用は未確認）"
 CITATION_PREFIX = "根拠："
+# 1 組目の生成が回答の時間の上限までに終わらなかったときの前置き（#1516）。関係する資料の記載だけを示す。
+DEADLINE_SUMMARY = "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。"
 # 監査が目的不一致とした round を拒答に回すときに本文へ出す不足 (#950)。
 OFF_GOAL_GAP = "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。"
 # render() が決定的に出力する見出し行と出典行。render の体裁を変えるときは一緒に直す。
@@ -2326,6 +2340,10 @@ class Round:
     withdrawn_requests: set[str] = field(default_factory=set)
     # summary を中立文に置き換えた理由（空なら草稿の summary を公開）。trace 用 (#1013)。
     summary_reason: str = ""
+    # 監査が回答の時間の上限（確定の分を残した期限）までに終わらず、監査なしの round にした (#1516)。
+    audit_cut: bool = False
+    # 生成と監査の秒・prompt の文字数・LLM の token の数（遅い round の理由を確かめる。#1516）。
+    timing: dict[str, Any] = field(default_factory=dict)
 
     @property
     def addressed(self) -> set[str]:
@@ -2405,6 +2423,7 @@ class Round:
                           for e in self.checked],
                 "audit": self.audit.model_dump() if self.audit else None, "audit_calls": self.audit_calls,
                 "audited_items": self.audited_items, "carried_over": self.carried, "summary_reason": self.summary_reason,
+                "audit_cut": self.audit_cut, "timing": self.timing,
                 "score": {"addressed": sorted(self.addressed), "verified": self.verified, "withdrawn": self.withdrawn,
                           "withdrawn_requests": sorted(self.withdrawn_requests), "problems": self.problems}}
 
@@ -2595,11 +2614,16 @@ def run_round(question: str, spans: Sequence[dict], settings: Any, *, prompt: st
     known_gaps は監査入力にも渡し、既知の欠落だけを理由に off_target と判定させない (#986)。
     画像を添付する生成は ``image_provider_id``（既定の Vision モデル）、それ以外は ``provider_id`` で呼ぶ (#649)。
     """
+    started, usage_before = monotonic(), usage_snapshot()
     if image_paths:
         draft = parse_images(GENERATE_SYSTEM_PROMPT, prompt, list(image_paths), settings, GroundedDraft,
                              provider_id=image_provider_id or provider_id)
     else:
         draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
+    timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt),
+                              "items": len(draft.items)}
+    if generation_usage := usage_delta(usage_before):
+        timing["generation_usage"] = generation_usage
     checked, dropped = verify(question, draft, spans)
     for entry in dropped:
         ref = _evidence_ref(entry["evidence_id"], spans)
@@ -2614,7 +2638,7 @@ def run_round(question: str, spans: Sequence[dict], settings: Any, *, prompt: st
     previous_verified = [p for p in previous if p.span and not p.quote_only]
     restated = {id(e) for e in checked if e.span and not e.quote_only and (e.carried or any(
         _covers(e, p) or _covers(p, e) or _same_quote(e, p) or _compact(e.item.text) == _compact(p.item.text) for p in previous_verified))}
-    audit, audit_calls = None, 0
+    audit, audit_calls, audit_cut = None, 0, False
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and not entry.quote_only]
     if spans:
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
@@ -2644,15 +2668,26 @@ def run_round(question: str, spans: Sequence[dict], settings: Any, *, prompt: st
         # 生成と同じく、根拠・引用・説明を文字の形をそろえて渡す。原文の引用（全角の ``ＨＲＭ``）と説明の
         # 半角の ``HRM`` を、監査が別の語として「根拠にない」と判定しないため (#1350)。
         audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
-        audit = parse_text(AUDIT_SYSTEM_PROMPT, audit_prompt, settings, GroundedAudit, provider_id=provider_id)
-        audit_calls = 1
-        if _audit_is_empty(audit):
-            # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
-            # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
+        started, usage_before = monotonic(), usage_snapshot()
+        try:
             audit = parse_text(AUDIT_SYSTEM_PROMPT, audit_prompt, settings, GroundedAudit, provider_id=provider_id)
-            audit_calls = 2
+            audit_calls = 1
             if _audit_is_empty(audit):
-                audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
+                # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
+                # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
+                audit = parse_text(AUDIT_SYSTEM_PROMPT, audit_prompt, settings, GroundedAudit, provider_id=provider_id)
+                audit_calls = 2
+                if _audit_is_empty(audit):
+                    audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
+        except Exception:
+            # 回答の確定の分を残した期限（`RoundBudget`）で監査が切れたら、草稿は捨てずに監査なしの round にする
+            # （#1516。原文との照合は済んでいる）。外側の期限が切れた・取り消された・他の失敗はそのまま送出する。
+            if not deadline_cut_short():
+                raise
+            audit, audit_calls, audit_cut = None, audit_calls + 1, True
+        timing.update(audit_seconds=round(monotonic() - started, 1), audit_prompt_chars=len(audit_prompt))
+        if audit_usage := usage_delta(usage_before):
+            timing["audit_usage"] = audit_usage
         if audit is not None:
             apply_audit(checked, audit)
             checked = without_redundant_quotes(checked)
@@ -2696,7 +2731,8 @@ def run_round(question: str, spans: Sequence[dict], settings: Any, *, prompt: st
     unused = [ref for label in (audit.unused_evidence_ids if audit else []) if (ref := _evidence_ref(label, spans))]
     return Round(summary, draft, checked, dropped, audit, unused, list(task_contract(question)["request_units"]),
                  audit_calls=audit_calls, audited_items=len(auditable), carried=carried, withdrawn=len(withdrawn),
-                 withdrawn_requests={e.item.request_id for e in withdrawn if e.item.request_id}, summary_reason=summary_reason)
+                 withdrawn_requests={e.item.request_id for e in withdrawn if e.item.request_id}, summary_reason=summary_reason,
+                 audit_cut=audit_cut, timing=timing)
 
 
 def _reconcile_request_reviews(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
@@ -2753,3 +2789,140 @@ def better(candidate: Round, current: Round) -> bool:
     if lost_requests or candidate.verified + candidate.withdrawn < current.verified:
         return False
     return candidate.score() > current.score()
+
+
+# 是正の round を時間で打ち切った・切れた理由（`RoundBudget.stop["reason"]`。#1516）。
+DEADLINE_BEFORE_ROUND = "deadline_before_round"  # 次の round の見積もりが残りの時間に入らない
+DEADLINE_IN_ROUND = "deadline_in_round"  # round の途中で、確定の分を残した期限が切れた
+DEADLINE_NO_DRAFT = "deadline_no_draft"  # 1 組目の生成が期限までに終わらなかった（草稿が無い）
+
+
+@dataclass
+class RoundBudget:
+    """生成と監査の是正の round の時間の配分（#1516）。
+
+    回答の期限（`rag_engine.resources.deadline`）までの残りから、次の round を始めるかを決める。1 組の見積もりは
+    直前の組の実測（無ければ `DEFAULT_GENERATION_ROUND_SECONDS`）。残りから回答の確定の分
+    （`ANSWER_FINALIZE_RESERVE_SECONDS`）を引いた時間が見積もりより短ければ、是正をせずにそれまでの最良の round で
+    確定する。round の LLM の呼び出しには確定の分を引いた子の期限を渡し、途中で切れても確かめ終わった round で
+    確定する（1 組目の生成が切れたときは草稿が無いので、関係する資料の記載だけを示す）。
+
+    ``remaining`` は回答の期限までの残りの秒数（期限が無ければ None。単体のテスト・CLI では何もしない）。
+    """
+
+    remaining: Callable[[], float | None]
+    clock: Callable[[], float] | None = None  # None は module の `monotonic`（テストが差し替えられる）
+    reserve_seconds: float = ANSWER_FINALIZE_RESERVE_SECONDS
+    default_round_seconds: float = DEFAULT_GENERATION_ROUND_SECONDS
+    seconds: list[float] = field(default_factory=list)
+    # 時間で打ち切った・切れた理由（空なら時間の上限に関係なく終わった）。
+    stop: dict[str, Any] = field(default_factory=dict)
+    _deadline: Deadline | None = None
+
+    def estimate(self) -> float:
+        """次の 1 組の見積もり（秒）。直前の組の実測、無ければ既定。"""
+        return self.seconds[-1] if self.seconds else self.default_round_seconds
+
+    def allows_round(self, number: int) -> bool:
+        """``number`` 回目（0 始まり）の round を始める時間が残るか。残らなければ ``stop`` に理由を残して False。
+
+        1 組目（``number`` 0）は草稿が無いので常に始める（子の期限で切れたら ``cut_round`` で扱う）。
+        """
+        left = self.remaining()
+        if number == 0 or left is None:
+            return True
+        estimate = self.estimate()
+        if left - self.reserve_seconds >= estimate:
+            return True
+        self.stop = {"reason": DEADLINE_BEFORE_ROUND, "round": number + 1, "remaining_seconds": round(left, 1),
+                     "estimate_seconds": round(estimate, 1), "reserve_seconds": self.reserve_seconds}
+        return False
+
+    @contextmanager
+    def round(self) -> Iterator[None]:
+        """round の LLM の呼び出しに、確定の分を残した子の期限を置き、round の秒を測る。"""
+        left = self.remaining()
+        self._deadline = (None if left is None
+                          else Deadline(max(0.0, left - self.reserve_seconds), parent=current_deadline()))
+        clock = self.clock or monotonic
+        started = clock()
+        try:
+            with bind_deadline(self._deadline) if self._deadline is not None else nullcontext():
+                yield
+        finally:
+            self.seconds.append(round(clock() - started, 1))
+
+    def cut_round(self, number: int, *, has_draft: bool) -> bool:
+        """今の round の失敗が、確定の分を残した期限で切れたものか。そうなら ``stop`` に理由を残して True。
+
+        外側の期限が切れた・取り消された（利用者が止めた・待つ側が抜けた）ときは False（呼び出し側は送出する）。
+        """
+        if self._deadline is None or not self._deadline.cut_short:
+            return False
+        self.stop = {"reason": DEADLINE_IN_ROUND if has_draft else DEADLINE_NO_DRAFT, "round": number + 1,
+                     "reserve_seconds": self.reserve_seconds}
+        return True
+
+    def gap_lines(self, adopted: Round | None, feedback: dict[str, Any] | None) -> list[str]:
+        """時間の上限で確かめられなかった点（本文の「確かめられていない点」に出し、回答を条件つきにする）。"""
+        lines: list[str] = []
+        reason = self.stop.get("reason")
+        if reason == DEADLINE_NO_DRAFT:
+            lines.append("回答の時間の上限までに回答文の生成が終わらなかったため、質問に関係する資料の記載だけを示しています。")
+        if adopted is not None and adopted.audit_cut:
+            lines.append("回答の時間の上限までに、説明が質問に当てはまるかの確認（監査）が終わらなかったため、"
+                         "原文との照合だけを済ませた説明を示しています。")
+        if reason in {DEADLINE_BEFORE_ROUND, DEADLINE_IN_ROUND} and feedback:
+            pending = pending_feedback_labels(feedback)
+            lines.append("回答の時間の上限が近いため、根拠の確認で見つかった不足"
+                         + (f"（{'・'.join(pending)}）" if pending else "") + "を直す作り直しをしていません。")
+        return lines
+
+    def trace(self, adopted: Round | None = None) -> dict[str, Any]:
+        """回答の記録に残す時間の配分（各組の秒・確定の分・既定の見積もり・打ち切った理由）。"""
+        result: dict[str, Any] = {"round_seconds": list(self.seconds), "reserve_seconds": self.reserve_seconds,
+                                  "default_round_seconds": self.default_round_seconds}
+        if self.stop:
+            result["stop"] = dict(self.stop)
+        if adopted is not None and adopted.audit_cut:
+            result["adopted_audit_cut"] = True
+        return result
+
+
+def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
+    """是正の指摘（`Round.feedback`）のうち、直していない不足の短い説明（#1516）。"""
+    labels: list[str] = []
+    if count := len(feedback.get("unanswered_requests") or ()):
+        labels.append(f"答えていない要求 {count} 件")
+    if count := len(feedback.get("dropped_items") or ()):
+        labels.append(f"原文と一致せず除いた説明 {count} 件")
+    if count := len(feedback.get("downgraded_items") or ()):
+        labels.append(f"裏付けを確かめられず原文のまま示した説明 {count} 件")
+    if count := len(feedback.get("unused_evidence_ids") or ()):
+        labels.append(f"使われていない根拠 {count} 件")
+    if feedback.get("goal_alignment"):
+        labels.append("質問の目的とのずれ")
+    if feedback.get("no_cited_evidence"):
+        labels.append("根拠を引用した説明が無いこと")
+    return labels
+
+
+def timed_out_round(question: str) -> Round:
+    """1 組目の生成が回答の時間の上限までに終わらなかったときの、草稿の無い round（#1516）。"""
+    draft = GroundedDraft(items=[], summary="", confidence="low")
+    return Round(NEUTRAL_SUMMARY, draft, [], [], None, requests=list(task_contract(question)["request_units"]),
+                 summary_reason="時間の上限までに生成が終わらなかった")
+
+
+def round_timing_line(current: Round) -> str:
+    """round の生成と監査の秒・LLM の token の数の 1 行（工程の記録に出す。#1516）。空なら空文字。"""
+    timing = current.timing
+    if not timing:
+        return ""
+    parts = [f"生成 {timing.get('generation_seconds', 0):.1f} 秒"
+             + (f"（{usage_line(timing['generation_usage'])}）" if timing.get("generation_usage") else "")]
+    if "audit_seconds" in timing:
+        parts.append(f"監査 {timing['audit_seconds']:.1f} 秒"
+                     + (f"（{usage_line(timing['audit_usage'])}）" if timing.get("audit_usage") else "")
+                     + ("、時間の上限で打ち切り" if current.audit_cut else ""))
+    return "所要: " + "、".join(parts)
