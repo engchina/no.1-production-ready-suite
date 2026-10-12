@@ -8,92 +8,43 @@ import json
 import logging
 import re
 import unicodedata
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
-from concurrent.futures import Future, ThreadPoolExecutor
 from time import monotonic
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
-from rag_engine.models.storage import AdbHybridSearchUnavailable
-from rag_engine.dependencies import check_adb_hybrid_search_ready, injected_prefetch_search, search_adb_hybrid_chunks
-from rag_engine.retrieval.scope import (
-    AdbSearchReadiness,
-    RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-    normalize_retrieval_scope,
-)
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     DEFAULT_NEIGHBOR_CHILD_COUNT,
     DEFAULT_RETRIEVAL_TOP_K,
-    load_latest_or_source_chunk_run,
     load_chunk_run_by_id,
+    load_latest_or_source_chunk_run,
 )
-from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
-from rag_engine.retrieval.context_builder import (
-    MAX_ANCHORS_PER_PARENT,
-    ContextBuildRequest,
-    ContextParentEvidence,
-    build_chunk_context_bundle,
-    context_bundle_from_parent_evidence,
-    context_bundle_from_records,
-    should_include_image_evidence,
+from rag_engine.config import (
+    LLM_PURPOSE_AUDIT,
+    LLM_PURPOSE_GENERATION,
+    LLM_PURPOSE_JUDGE,
+    LLM_PURPOSE_STRATEGY,
+    Settings,
+    llm_reasoning_effort_note,
+    settings_for_llm_purpose,
 )
-from rag_engine.knowledge.domain_keywords import load_domain_keywords
-from rag_engine.resources.runtime import current_profile
-from rag_engine.retrieval.inquiry_conditions import (
-    InquiryConditionParse,
-    inquiry_retrieval_queries,
-    parse_inquiry_conditions,
+from rag_engine.dependencies import (
+    check_adb_hybrid_search_ready,
+    injected_prefetch_search,
+    parse_multimodal_response,
+    parse_text_response,
+    rerank_text_with_scores,
+    search_adb_hybrid_chunks,
 )
-from rag_engine.retrieval.character_forms import fold_width
-from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
-from rag_engine.retrieval.task_contract import task_contract, filter_queries, query_rejection_reason
-from rag_engine.retrieval.enumeration import enumeration_check
-from rag_engine.retrieval.request_coverage import (
-    COVERAGE_SCHEMA_VERSION,
-    CoverageBudget,
-    assess_targets,
-    coverage_counts,
-    coverage_targets,
-    evidence_texts,
-    re_retrieval_skip_reason,
-    run_targeted_retrievals,
-    select_new_parents,
-)
-from rag_engine.retrieval.evidence_selection import evidence_spans, new_evidence_count as _new_evidence_count
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
-from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
-from rag_engine.dependencies import parse_multimodal_response, parse_text_response, rerank_text_with_scores
-from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
-from rag_engine.retrieval.operation_context import alternative_operation_queries
-from rag_engine.knowledge.prompt_files import (
-    VLM_ANSWER_PROMPT_KEY, neutralize_boundary_markers, read_prompt, render_prompt_template,
-)
-from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
-from rag_engine.generation.query_prompts import (
-    MAX_GENERATED_QUERY_COUNT,
-    _base_query_expansion,
-    _build_query_expansion_prompt,
-    _build_query_routing_prompt,
-    _dedupe_generated_queries,
-    _generated_queries_from_payload,
-    _limited_text_search_query_variants,
-    _query_expansion_details,
-    _retrieval_metadata_filter,
-    _retrieval_queries,
-    _text_search_query_source,
-)
-from rag_engine.generation.crag_support import (
-    MAX_GENERATED_QUERY_CHARS,
-    _build_crag_grade_prompt,
-    _crag_confidence,
-    _crag_grade_candidates,
-    _format_crag_confidence,
-    _merge_crag_evidence,
-    _record_matches_crag_relevant_ids,
-    _refine_crag_context,
-    _valid_crag_rewrite,
+from rag_engine.generation.answer_envelope import (
+    REFERENCE_CONFIRMATION_PREFIX,
+    build_envelope,
+    envelope_item,
+    fallback_envelope,
+    requires_environment_data,
 )
 from rag_engine.generation.answer_images import (
     _answer_image_metadata,
@@ -103,6 +54,74 @@ from rag_engine.generation.answer_images import (
     _visual_evidence_anchors,
     answer_image_evidence,
     prompt_injection_warnings_for_records,
+)
+from rag_engine.generation.answer_models import (
+    ANSWER_FLOW_DISPLAY_SEPARATOR,
+    ANSWER_FLOWS,
+    AUTO_ROUTING_LABEL,
+    AUTO_ROUTING_STRATEGY,
+    CRAG_ANSWER_FLOW,
+    CRAG_ANSWER_FLOW_LABEL,
+    CRAG_MAX_RETRIEVAL_ATTEMPTS,
+    DEFAULT_ANSWER_FLOW,
+    DEFAULT_QUERY_STRATEGY,
+    HYDE_LABEL,
+    HYDE_STRATEGY,
+    QUERY_DECOMPOSITION_LABEL,
+    QUERY_DECOMPOSITION_STRATEGY,
+    QUERY_EXPANSION_SEPARATOR,
+    QUERY_STRATEGIES,
+    QUERY_STRATEGY_DISPLAY_SEPARATOR,  # tests/test_answer_execution.py が answering 経由で参照する
+    QUESTION_DISPLAY_METADATA_SEPARATOR,
+    QUESTION_PLAN_SEPARATOR,
+    QUESTION_TEXT_SEARCH_SEPARATOR,
+    RAG_FUSION_LABEL,
+    RAG_FUSION_STRATEGY,
+    RUNTIME_KNOWLEDGE_SEPARATOR,
+    SIMPLE_RETRIEVAL_LABEL,
+    SIMPLE_RETRIEVAL_STRATEGY,
+    STANDARD_ANSWER_FLOW,
+    STANDARD_ANSWER_FLOW_LABEL,
+    STEP_BACK_PROMPTING_LABEL,
+    STEP_BACK_PROMPTING_STRATEGY,
+    AnswerContext,
+    AnswerQuestionResult,
+    AnswerRecord,
+    AnswerResponse,
+    CragRetrievalAttempt,
+    GroundedAnswer,
+    QueryExpansionResult,
+    QuestionTextSearchInfo,
+    RetrievalQueryPlan,
+    _dedupe_queries,
+    _dedupe_query_key,
+    _legacy_crag_query_strategy,
+    _normalize_text,
+    answer_flow_id,
+    answer_flow_label,
+    extract_original_question,
+    query_strategy_id,
+    query_strategy_label,
+    retrieval_scope_label,
+)
+from rag_engine.generation.answer_payload import (
+    _answer_record_identity_keys,
+    _evidence_id_key,
+    _format_answer_response,
+    _metadata_image_evidence,
+    _normalize_answer_response,
+    _primary_source_run_id,
+    _published_reference_records,
+    _records_for_prompt_injection_scan,
+    _rerank_scores_from_evidence,
+    _string_list,
+    _used_image_entries,
+    _used_image_ids,
+    answer_evidence_items,
+    answer_result_payload,
+    format_answer_response,
+    format_references,
+    parse_answer_response,
 )
 from rag_engine.generation.answer_records import (
     MAX_CONTEXT_RECORDS,
@@ -127,105 +146,95 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
-from rag_engine.generation.answer_payload import (
-    _answer_record_identity_keys,
-    _evidence_id_key,
-    _format_answer_response,
-    _metadata_image_evidence,
-    _normalize_answer_response,
-    _primary_source_run_id,
-    _published_reference_records,
-    _records_for_prompt_injection_scan,
-    _rerank_scores_from_evidence,
-    _string_list,
-    _used_image_entries,
-    _used_image_ids,
-    answer_evidence_items,
-    answer_result_payload,
-    format_answer_response,
-    format_references,
-    parse_answer_response,
+from rag_engine.generation.crag_support import (
+    MAX_GENERATED_QUERY_CHARS,
+    _build_crag_grade_prompt,
+    _crag_confidence,
+    _crag_grade_candidates,
+    _format_crag_confidence,
+    _merge_crag_evidence,
+    _record_matches_crag_relevant_ids,
+    _refine_crag_context,
+    _valid_crag_rewrite,
 )
 from rag_engine.generation.execution_record import (
     AnswerExecutionError,
-    _ExecutionStep,
     _execution_lines,
     _execution_step,
+    _ExecutionStep,
     _record_answer_execution,
     format_question_display,
 )
-from rag_engine.generation.answer_envelope import (
-    REFERENCE_CONFIRMATION_PREFIX,
-    build_envelope,
-    envelope_item,
-    fallback_envelope,
-    requires_environment_data,
+from rag_engine.generation.query_prompts import (
+    MAX_GENERATED_QUERY_COUNT,
+    _base_query_expansion,
+    _build_query_expansion_prompt,
+    _build_query_routing_prompt,
+    _dedupe_generated_queries,
+    _generated_queries_from_payload,
+    _limited_text_search_query_variants,
+    _query_expansion_details,
+    _retrieval_metadata_filter,
+    _retrieval_queries,
+    _text_search_query_source,
 )
-from rag_engine.generation.answer_models import (
-    ANSWER_FLOWS,
-    QUERY_STRATEGY_DISPLAY_SEPARATOR,  # tests/test_answer_execution.py が answering 経由で参照する
-    ANSWER_FLOW_DISPLAY_SEPARATOR,
-    CRAG_MAX_RETRIEVAL_ATTEMPTS,
-    AUTO_ROUTING_LABEL,
-    AUTO_ROUTING_STRATEGY,
-    AnswerContext,
-    AnswerQuestionResult,
-    AnswerRecord,
-    AnswerResponse,
-    CRAG_ANSWER_FLOW,
-    CRAG_ANSWER_FLOW_LABEL,
-    CragRetrievalAttempt,
-    DEFAULT_ANSWER_FLOW,
-    DEFAULT_ANSWER_FLOW_LABEL,
-    DEFAULT_QUERY_STRATEGY,
-    DEFAULT_QUERY_STRATEGY_LABEL,
-    GroundedAnswer,
-    HYDE_LABEL,
-    HYDE_STRATEGY,
-    QUERY_DECOMPOSITION_LABEL,
-    QUERY_DECOMPOSITION_STRATEGY,
-    QUERY_EXPANSION_SEPARATOR,
-    QUERY_STRATEGIES,
-    QUESTION_DISPLAY_METADATA_SEPARATOR,
-    QUESTION_PLAN_SEPARATOR,
-    QUESTION_TEXT_SEARCH_SEPARATOR,
-    QueryExpansionResult,
-    QuestionTextSearchInfo,
-    RAG_FUSION_LABEL,
-    RAG_FUSION_STRATEGY,
-    RUNTIME_KNOWLEDGE_SEPARATOR,
-    RetrievalQueryPlan,
-    SIMPLE_RETRIEVAL_LABEL,
-    SIMPLE_RETRIEVAL_STRATEGY,
-    STANDARD_ANSWER_FLOW,
-    STANDARD_ANSWER_FLOW_LABEL,
-    STEP_BACK_PROMPTING_LABEL,
-    STEP_BACK_PROMPTING_STRATEGY,
-    _dedupe_queries,
-    _dedupe_query_key,
-    _legacy_crag_query_strategy,
-    _normalize_text,
-    answer_flow_id,
-    answer_flow_label,
-    extract_original_question,
-    query_strategy_id,
-    query_strategy_label,
-    retrieval_scope_label,
+from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
+from rag_engine.knowledge.domain_keywords import load_domain_keywords
+from rag_engine.knowledge.prompt_files import (
+    VLM_ANSWER_PROMPT_KEY,
+    neutralize_boundary_markers,
+    read_prompt,
+    render_prompt_template,
 )
 from rag_engine.knowledge.runtime_knowledge import (
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
     runtime_knowledge_status,
 )
-from rag_engine.config import (
-    LLM_PURPOSE_AUDIT,
-    LLM_PURPOSE_GENERATION,
-    LLM_PURPOSE_JUDGE,
-    LLM_PURPOSE_STRATEGY,
-    Settings,
-    llm_reasoning_effort_note,
-    settings_for_llm_purpose,
+from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
+from rag_engine.models.storage import AdbHybridSearchUnavailable
+from rag_engine.resources.runtime import current_profile
+from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.context_builder import (
+    MAX_ANCHORS_PER_PARENT,
+    ContextBuildRequest,
+    ContextParentEvidence,
+    build_chunk_context_bundle,
+    context_bundle_from_parent_evidence,
+    context_bundle_from_records,
+    should_include_image_evidence,
 )
+from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
+from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+from rag_engine.retrieval.enumeration import enumeration_check
+from rag_engine.retrieval.evidence_selection import evidence_spans
+from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
+from rag_engine.retrieval.inquiry_conditions import (
+    InquiryConditionParse,
+    inquiry_retrieval_queries,
+    parse_inquiry_conditions,
+)
+from rag_engine.retrieval.operation_context import alternative_operation_queries
+from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
+from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
+from rag_engine.retrieval.request_coverage import (
+    COVERAGE_SCHEMA_VERSION,
+    CoverageBudget,
+    assess_targets,
+    coverage_counts,
+    coverage_targets,
+    evidence_texts,
+    re_retrieval_skip_reason,
+    run_targeted_retrievals,
+    select_new_parents,
+)
+from rag_engine.retrieval.scope import (
+    RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
+    RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+    AdbSearchReadiness,
+    normalize_retrieval_scope,
+)
+from rag_engine.retrieval.task_contract import filter_queries, query_rejection_reason, task_contract
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
@@ -238,7 +247,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
     tokenizer_fingerprint,
 )
 
-
 logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_CHARS = 24000
@@ -246,12 +254,10 @@ MAX_CONTEXT_NEIGHBORS_PER_RECORD = 5
 UNTRUSTED_CONTEXT_BEGIN = "BEGIN_UNTRUSTED_RETRIEVED_CONTEXT"
 UNTRUSTED_CONTEXT_END = "END_UNTRUSTED_RETRIEVED_CONTEXT"
 QUERY_ROUTING_SYSTEM_PROMPT = (
-    "あなたは問い合わせRAGの検索前処理ルーターです。"
-    "質問の性質に最も合う検索質問拡張戦略を1つだけ選び、JSONだけを返してください。"
+    "あなたは問い合わせRAGの検索前処理ルーターです。質問の性質に最も合う検索質問拡張戦略を1つだけ選び、JSONだけを返してください。"
 )
 QUERY_EXPANSION_SYSTEM_PROMPT = (
-    "あなたは問い合わせRAGの検索質問拡張担当です。"
-    "原質問の意図を保ち、検索に使う追加質問または検索文をJSONだけで返してください。"
+    "あなたは問い合わせRAGの検索質問拡張担当です。原質問の意図を保ち、検索に使う追加質問または検索文をJSONだけで返してください。"
 )
 CRAG_GRADER_SYSTEM_PROMPT = (
     "あなたはCorrective RAGの検索結果評価担当です。"
@@ -421,9 +427,7 @@ def _rerank_records(
         candidate_indices=rerankable_indices,
     )
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
-    protected_candidates, reranked_candidates = _keep_entity_expansion_positions(
-        protected_candidates, reranked_candidates
-    )
+    protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)
     return _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
 
 
@@ -496,9 +500,7 @@ def build_chunk_answer_context(
 
     queries = _retrieval_queries(question, retrieval_queries)
     ranked_children = (
-        rank_records_with_rrf(queries, children, len(children))
-        if len(queries) > 1
-        else rank_records(question, children, len(children))
+        rank_records_with_rrf(queries, children, len(children)) if len(queries) > 1 else rank_records(question, children, len(children))
     )
     ranked_children = rerank_records(question, ranked_children, settings, enabled=rerank_enabled)
     bundle = build_chunk_context_bundle(
@@ -524,8 +526,9 @@ def build_chunk_answer_context(
     )
 
 
-def select_documents(ranked_children: Sequence[AnswerRecord], settings: Settings | None,
-                     step: Any | None = None) -> tuple[list[AnswerRecord], list[AnswerRecord], dict[str, Any]]:
+def select_documents(
+    ranked_children: Sequence[AnswerRecord], settings: Settings | None, step: Any | None = None
+) -> tuple[list[AnswerRecord], list[AnswerRecord], dict[str, Any]]:
     """rerank 後の child を文書ごとに集約し、分数が明らかに低い文書の child を後回し（deferred）にする (#1028)。
 
     粗→細の検索の「粗」の側。文書級の要約や索引は作らず、chunk の rerank 分数（relevance_score。無い候補は
@@ -539,6 +542,7 @@ def select_documents(ranked_children: Sequence[AnswerRecord], settings: Settings
     小さく閾値に掛からないので、rerank 無効時は実質後回しは起きない（分数が無ければ落差を判断できない）。
     """
     from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
+
     enabled = bool(getattr(settings, "document_selection_enabled", False))
     trace: dict[str, Any] = {"enabled": enabled, "selected": [], "deferred": [], "restored": False}
     if not enabled or not ranked_children:
@@ -565,16 +569,27 @@ def select_documents(ranked_children: Sequence[AnswerRecord], settings: Settings
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
     # 参照元の直後へ置いた交差参照の参照先（#1549）も、参照元に従うので後回しにしない。
     reserved = [is_reserved_entity_expansion(r) or is_followed_reference(r) for r in ranked_children]
-    kept = [r for r, keep in zip(ranked_children, reserved) if document_context_key(r) not in excluded or keep]
-    deferred = [r for r, keep in zip(ranked_children, reserved) if document_context_key(r) in excluded and not keep]
+    kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
+    deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
-        step.add(f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
-                 + (f"（{'、'.join(e['source'] for e in trace['deferred'])}）" if excluded else ""))
+        step.add(
+            f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
+            + (f"（{'、'.join(e['source'] for e in trace['deferred'])}）" if excluded else "")
+        )
     return kept, deferred, trace
 
 
-def _bundle_context(question: str, ranked_children: Sequence[AnswerRecord], active_records: Sequence[AnswerRecord],
-                    settings: Settings, *, top_k: int, neighbor_child_count: int, max_records: int, max_chars: int):
+def _bundle_context(
+    question: str,
+    ranked_children: Sequence[AnswerRecord],
+    active_records: Sequence[AnswerRecord],
+    settings: Settings,
+    *,
+    top_k: int,
+    neighbor_child_count: int,
+    max_records: int,
+    max_chars: int,
+):
     """rerank 済みの child を起点に parent・隣接 child を展開して context bundle を作る（検索と復元で共用）。"""
     return build_chunk_context_bundle(
         ContextBuildRequest(
@@ -591,16 +606,31 @@ def _bundle_context(question: str, ranked_children: Sequence[AnswerRecord], acti
     )
 
 
-def _restore_deferred_context(question: str, context: AnswerContext, settings: Settings, *, top_k: int,
-                              neighbor_child_count: int, max_records: int, max_chars: int) -> AnswerContext:
+def _restore_deferred_context(
+    question: str, context: AnswerContext, settings: Settings, *, top_k: int, neighbor_child_count: int, max_records: int, max_chars: int
+) -> AnswerContext:
     """後回しにした文書を戻し、全候補から context を作り直す（護欄: 覆盖度による回退。#1028）。"""
-    bundle = _bundle_context(question, context.ranked_candidates, context.expansion_records, settings, top_k=top_k,
-                             neighbor_child_count=neighbor_child_count, max_records=max_records, max_chars=max_chars)
+    bundle = _bundle_context(
+        question,
+        context.ranked_candidates,
+        context.expansion_records,
+        settings,
+        top_k=top_k,
+        neighbor_child_count=neighbor_child_count,
+        max_records=max_records,
+        max_chars=max_chars,
+    )
     return AnswerContext(
-        records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree,
-        status=bundle.status, insufficient_reason=bundle.insufficient_reason,
-        expansion_records=context.expansion_records, ranked_candidates=context.ranked_candidates,
-        deferred_records=(), document_selection={**context.document_selection, "restored": True},
+        records=list(bundle.records),
+        text=bundle.text,
+        evidence=bundle.evidence,
+        evidence_tree=bundle.evidence_tree,
+        status=bundle.status,
+        insufficient_reason=bundle.insufficient_reason,
+        expansion_records=context.expansion_records,
+        ranked_candidates=context.ranked_candidates,
+        deferred_records=(),
+        document_selection={**context.document_selection, "restored": True},
     )
 
 
@@ -646,9 +676,7 @@ def build_adb_hybrid_answer_context(
     else:
         chunk_run = None
     if scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN and chunk_run is None:
-        raise AdbHybridSearchUnavailable(
-            "No chunk run was found. Run chunking, then create and save embeddings to ADB."
-        )
+        raise AdbHybridSearchUnavailable("No chunk run was found. Run chunking, then create and save embeddings to ADB.")
 
     # SDK・評価からの直接呼出では未指定。回答入口と CRAG の各回は読込済みの結果を渡す。
     runtime = runtime_knowledge or build_runtime_knowledge_context(question, settings.output_dir, settings.runtime_knowledge_path)
@@ -659,9 +687,13 @@ def build_adb_hybrid_answer_context(
         queries = queries[:1]
     target_queries = _target_text_queries(question, settings)
     search_options = {
-        "chunk_run_id": chunk_run_id, "retrieval_queries": queries, "settings": settings,
-        "preferred_engine_ids": preferred_engines, "candidate_limit": _retrieval_candidate_limit(top_k),
-        "retrieval_scope": scope, "classification_filter": classification_filter,
+        "chunk_run_id": chunk_run_id,
+        "retrieval_queries": queries,
+        "settings": settings,
+        "preferred_engine_ids": preferred_engines,
+        "candidate_limit": _retrieval_candidate_limit(top_k),
+        "retrieval_scope": scope,
+        "classification_filter": classification_filter,
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
         **({"query_embedder": query_embedder} if query_embedder is not None else {}),
         **({"extra_text_queries": tuple(target_queries)} if target_queries else {}),
@@ -686,22 +718,37 @@ def build_adb_hybrid_answer_context(
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
     ranked_children = rerank_records(
-        question, ranked_children, settings, enabled=rerank_enabled,
+        question,
+        ranked_children,
+        settings,
+        enabled=rerank_enabled,
         business_domains=inquiry_conditions.business_domains if inquiry_conditions is not None else None,
         screen_terms=inquiry_conditions.screen_terms if inquiry_conditions is not None else None,
     )
     reserve_rank = int(getattr(settings, "screen_linking_reserve_rank", 0) or 0)
     if linked_screens and reserve_rank > 0:
         from rag_engine.retrieval.screen_catalog import reserve_linked_screens
+
         ranked_children = reserve_linked_screens(ranked_children, linked_screens, reserve_rank)
     if getattr(settings, "document_selection_enabled", False):
         with _execution_step("文書の選択", "候補を文書ごとに集約し、分数が明らかに低い文書を後回しにします。") as step:
             kept_children, deferred_children, selection = select_documents(ranked_children, settings, step)
-            step.result(f"{len(selection['selected'])} 文書を起点にします" + (f"、{len(selection['deferred'])} 文書は後回し" if selection["deferred"] else ""))
+            step.result(
+                f"{len(selection['selected'])} 文書を起点にします"
+                + (f"、{len(selection['deferred'])} 文書は後回し" if selection["deferred"] else "")
+            )
     else:
         kept_children, deferred_children, selection = select_documents(ranked_children, settings)
-    bundle = _bundle_context(question, kept_children, active_records, settings, top_k=top_k,
-                             neighbor_child_count=neighbor_child_count, max_records=max_records, max_chars=max_chars)
+    bundle = _bundle_context(
+        question,
+        kept_children,
+        active_records,
+        settings,
+        top_k=top_k,
+        neighbor_child_count=neighbor_child_count,
+        max_records=max_records,
+        max_chars=max_chars,
+    )
     return AnswerContext(
         records=list(bundle.records),
         text=bundle.text,
@@ -760,8 +807,9 @@ def build_crag_answer_context(
             with _execution_step(f"文書検索（{attempt_number}回目）", _SEARCH_PURPOSE if attempt_number == 1 else "") as step:
                 known = {_dedupe_query_key(query) for query in base_queries}
                 added = [query for query in retrieval_queries if _dedupe_query_key(query) not in known]
-                step.add(f"検索文: 確定済みの {len(retrieval_queries) - len(added)} 本"
-                         + (f" + 今回追加した {len(added)} 本" if added else ""))
+                step.add(
+                    f"検索文: 確定済みの {len(retrieval_queries) - len(added)} 本" + (f" + 今回追加した {len(added)} 本" if added else "")
+                )
                 step.add(*(f"  {number}. {_display_query(query)}" for number, query in enumerate(added, 1)))
                 context = build_adb_hybrid_answer_context(
                     question,
@@ -785,28 +833,41 @@ def build_crag_answer_context(
         if attempt_number > 1 and best_context.records and not new_evidence_count:
             # rewrite が同じ本文を返した場合も、未閲覧の同一機能文脈を試してから停止する。
             # 追加候補の存在は回答支持とは扱わず、この回の評価器に再判定させる。
-            recovered, trace = _recover_crag_context(best_context, attempts[-1], max_records=max_records,
-                                                     max_chars=max_chars, fallback=True)
+            recovered, trace = _recover_crag_context(
+                best_context, attempts[-1], max_records=max_records, max_chars=max_chars, fallback=True
+            )
             attempts[-1] = replace(attempts[-1], recovery_trace=trace)
             if recovered is None:
-                attempts.append(CragRetrievalAttempt(attempt=attempt_number, query=active_query,
-                    retrieval_queries=tuple(retrieval_queries), sufficient=False, stop_reason="no_new_evidence",
-                    reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。"))
+                attempts.append(
+                    CragRetrievalAttempt(
+                        attempt=attempt_number,
+                        query=active_query,
+                        retrieval_queries=tuple(retrieval_queries),
+                        sufficient=False,
+                        stop_reason="no_new_evidence",
+                        reason="補正検索と局所拡張で新しい本文が得られないため、取得済みの根拠で回答する。",
+                    )
+                )
                 break
             context = recovered
             new_evidence_count = _new_evidence_count(context.records, seen_evidence)
         seen_evidence.extend(context.records)
         if context.records and context.text.strip():
             # 評価器は前の回の根拠を起点に文脈の追加を選ぶことがある。pool は置き換えず全回の和集合にする。
-            pool = tuple({record.chunk_uid or record.id: record
-                          for record in (*best_context.expansion_records, *context.expansion_records)}.values())
+            pool = tuple(
+                {record.chunk_uid or record.id: record for record in (*best_context.expansion_records, *context.expansion_records)}.values()
+            )
             preferred = best_context.preferred_child_ids
             best_context = _merge_crag_evidence(best_context, context, question, max_records=max_records, max_chars=max_chars)
             # 文書の選択の状態は今回の検索のものを引き継ぐ。後回しの文書を戻した context は deferred が空 (#1028)。
-            best_context = replace(best_context, expansion_records=pool, preferred_child_ids=preferred,
-                                   ranked_candidates=context.ranked_candidates or best_context.ranked_candidates,
-                                   deferred_records=context.deferred_records,
-                                   document_selection=context.document_selection or best_context.document_selection)
+            best_context = replace(
+                best_context,
+                expansion_records=pool,
+                preferred_child_ids=preferred,
+                ranked_candidates=context.ranked_candidates or best_context.ranked_candidates,
+                deferred_records=context.deferred_records,
+                document_selection=context.document_selection or best_context.document_selection,
+            )
             context = best_context
 
         skip_check = _crag_grade_skip_check(question, context, settings) if attempt_number == 1 else {}
@@ -817,17 +878,25 @@ def build_crag_answer_context(
                 step.status = "省略"
                 step.result("規則の信号が強いため、LLM の評価を省略しました", *skip["lines"])
                 step.impact("取得した根拠をそのまま回答の生成に渡します。生成後の監査は通常どおり行います。")
-            attempts.append(CragRetrievalAttempt(
-                attempt=attempt_number, query=active_query.strip(), retrieval_queries=_dedupe_queries(retrieval_queries),
-                sufficient=True, reason="規則の信号が強いため LLM の評価を省略: " + " / ".join(skip["lines"]),
-                new_evidence_count=new_evidence_count, document_selection=dict(context.document_selection),
-                stop_reason=CRAG_SKIP_STOP_REASON, recovery_trace={"grade_skipped": skip["trace"]}))
+            attempts.append(
+                CragRetrievalAttempt(
+                    attempt=attempt_number,
+                    query=active_query.strip(),
+                    retrieval_queries=_dedupe_queries(retrieval_queries),
+                    sufficient=True,
+                    reason="規則の信号が強いため LLM の評価を省略: " + " / ".join(skip["lines"]),
+                    new_evidence_count=new_evidence_count,
+                    document_selection=dict(context.document_selection),
+                    stop_reason=CRAG_SKIP_STOP_REASON,
+                    recovery_trace={"grade_skipped": skip["trace"]},
+                )
+            )
             return context, tuple(rewrites), tuple(attempts)
 
-        with _execution_step(f"根拠確認（{attempt_number}回目）",
-                             "集めた根拠で質問に答えられるかを LLM が判定します。" if attempt_number == 1 else "") as step:
-            if attempt_number == 1 and (note := llm_reasoning_effort_note(
-                    settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
+        with _execution_step(
+            f"根拠確認（{attempt_number}回目）", "集めた根拠で質問に答えられるかを LLM が判定します。" if attempt_number == 1 else ""
+        ) as step:
+            if attempt_number == 1 and (note := llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
                 step.add(note)
             if skip_check.get("reason") and skip_check["reason"] != "disabled":
                 # 省略の設定が有効でも評価器を呼んだ理由（曖昧な帯・必ず呼ぶ質問。#1528）。
@@ -862,28 +931,32 @@ def build_crag_answer_context(
                     return context, tuple(rewrites), tuple(attempts)
                 break
             labels = definition_labels(question)
-            covered = {d['label'] for r in context.records for d in definition_ranges(r.text, labels)}
+            covered = {d["label"] for r in context.records for d in definition_ranges(r.text, labels)}
             missing_definitions = [label for label in labels if label not in covered]
             if missing_definitions:
                 # 列名だけの画像では定義要求を満たさない。追加検索も既存3回枠内で行う。
-                attempt = replace(attempt, sufficient=False,
-                    rewritten_query=question + ' ' + ' '.join(f'「{v}」の意味・表示条件' for v in missing_definitions),
-                    reason=attempt.reason + ' 定義本文が未確認: ' + ', '.join(missing_definitions))
+                attempt = replace(
+                    attempt,
+                    sufficient=False,
+                    rewritten_query=question + " " + " ".join(f"「{v}」の意味・表示条件" for v in missing_definitions),
+                    reason=attempt.reason + " 定義本文が未確認: " + ", ".join(missing_definitions),
+                )
             if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and attempt.rewritten_query:
                 attempt = replace(attempt, rewritten_query="")
             attempt = replace(attempt, new_evidence_count=new_evidence_count, document_selection=dict(context.document_selection))
             attempts.append(attempt)
 
             status = "十分" if attempt.sufficient else "不足"
-            step.result(f"{status}（判定の確からしさ {_format_crag_confidence(attempt.confidence)}）",
-                        *([f"理由: {attempt.reason}"] if attempt.reason else []))
+            step.result(
+                f"{status}（判定の確からしさ {_format_crag_confidence(attempt.confidence)}）",
+                *([f"理由: {attempt.reason}"] if attempt.reason else []),
+            )
 
-        rejected = tuple(uid for uid in dict.fromkeys((*rejected, *attempt.rejected_chunk_ids))
-                         if uid not in attempt.relevant_chunk_ids)
-        refined_context = _refine_crag_context(context, attempt.relevant_chunk_ids, max_chars=max_chars,
-                                               rejected_chunk_ids=rejected)
-        best_context = replace(best_context, preferred_child_ids=tuple(dict.fromkeys(
-            (*best_context.preferred_child_ids, *attempt.relevant_chunk_ids))))
+        rejected = tuple(uid for uid in dict.fromkeys((*rejected, *attempt.rejected_chunk_ids)) if uid not in attempt.relevant_chunk_ids)
+        refined_context = _refine_crag_context(context, attempt.relevant_chunk_ids, max_chars=max_chars, rejected_chunk_ids=rejected)
+        best_context = replace(
+            best_context, preferred_child_ids=tuple(dict.fromkeys((*best_context.preferred_child_ids, *attempt.relevant_chunk_ids)))
+        )
         if attempt.sufficient and refined_context.records and refined_context.text.strip():
             # 十分でも観点が欠けるときは、再検索・再評価をせず既取得 pool から文脈を 1 回だけ広げて生成へ進む
             # （CRAG の「correct なら精錬して生成」に相当）。評価器の呼び出しは増やさない (#983)。
@@ -893,24 +966,40 @@ def build_crag_answer_context(
                 if expanded is not None:
                     merged = _merge_crag_evidence(refined_context, expanded, question, max_records=max_records, max_chars=max_chars)
                     attempts[-1] = replace(attempts[-1], stop_reason="expanded_for_missing_aspects")
-                    return replace(merged, expansion_records=best_context.expansion_records,
-                                   preferred_child_ids=best_context.preferred_child_ids,
-                                   ranked_candidates=best_context.ranked_candidates, deferred_records=best_context.deferred_records,
-                                   document_selection=best_context.document_selection), tuple(rewrites), tuple(attempts)
+                    return (
+                        replace(
+                            merged,
+                            expansion_records=best_context.expansion_records,
+                            preferred_child_ids=best_context.preferred_child_ids,
+                            ranked_candidates=best_context.ranked_candidates,
+                            deferred_records=best_context.deferred_records,
+                            document_selection=best_context.document_selection,
+                        ),
+                        tuple(rewrites),
+                        tuple(attempts),
+                    )
             return refined_context, tuple(rewrites), tuple(attempts)
 
-        confirmed = {item["aspect"] for item in attempt.aspect_checks
-                     if item.get("source_ids") and item.get("reason", "").strip()
-                     and (item["status"] == "supported" or
-                          item["status"] == "data_confirmation" and item["aspect"] in {"requested_result", "applicability"})}
-        if (any(item["status"] == "data_confirmation" for item in attempt.aspect_checks)
-                and set(task_contract(question)["required_aspects"]) <= confirmed):
+        confirmed = {
+            item["aspect"]
+            for item in attempt.aspect_checks
+            if item.get("source_ids")
+            and item.get("reason", "").strip()
+            and (
+                item["status"] == "supported"
+                or item["status"] == "data_confirmation"
+                and item["aspect"] in {"requested_result", "applicability"}
+            )
+        }
+        if (
+            any(item["status"] == "data_confirmation" for item in attempt.aspect_checks)
+            and set(task_contract(question)["required_aspects"]) <= confirmed
+        ):
             attempts[-1] = replace(attempts[-1], stop_reason="data_confirmation_only")
             return refined_context, tuple(rewrites), tuple(attempts)
 
         if attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS and attempt.recovery_action != "rewrite":
-            pending_context, trace = _recover_crag_context(best_context, attempt,
-                max_records=max_records, max_chars=max_chars)
+            pending_context, trace = _recover_crag_context(best_context, attempt, max_records=max_records, max_chars=max_chars)
             attempts[-1] = replace(attempts[-1], recovery_trace=trace)
             if pending_context is not None:
                 continue
@@ -918,9 +1007,15 @@ def build_crag_answer_context(
             # 護欄: 覆盖度による回退 (#1028)。話題違いで改写検索へ進む前に、文書の選択で後回しにした文書を戻して
             # 同じ検索文で再評価する。答えが後回しの文書にあった場合の漏答を、評価枠の中で防ぐ。
             with _execution_step("文書の選択の解除", "根拠が不足したため、後回しにした文書を戻して再評価します。") as step:
-                pending_context = _restore_deferred_context(question, best_context, settings, top_k=top_k,
-                                                            neighbor_child_count=neighbor_child_count,
-                                                            max_records=max_records, max_chars=max_chars)
+                pending_context = _restore_deferred_context(
+                    question,
+                    best_context,
+                    settings,
+                    top_k=top_k,
+                    neighbor_child_count=neighbor_child_count,
+                    max_records=max_records,
+                    max_chars=max_chars,
+                )
                 step.result(f"後回しにした {len(best_context.deferred_records)} 件の候補を戻しました")
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "deferred_documents_restored")
             continue
@@ -929,9 +1024,9 @@ def build_crag_answer_context(
 
         rewrite = _valid_crag_rewrite(attempt.rewritten_query, question, rewrites)
         if not rewrite and attempt_number < CRAG_MAX_RETRIEVAL_ATTEMPTS:
-            pending_context, trace = _recover_crag_context(best_context, attempt,
-                max_records=max_records, max_chars=max_chars, fallback=True,
-                fallback_trigger="rewrite_unavailable")
+            pending_context, trace = _recover_crag_context(
+                best_context, attempt, max_records=max_records, max_chars=max_chars, fallback=True, fallback_trigger="rewrite_unavailable"
+            )
             attempts[-1] = replace(attempts[-1], recovery_trace=trace)
             if pending_context is not None:
                 continue
@@ -944,9 +1039,10 @@ def build_crag_answer_context(
     if rejected:
         # 評価枠を使い切って取得済みの根拠で回答する場合も、明示的に不適合とした候補は末尾へ回し、全候補が不適合なら
         # 生成に渡さない (#1010, #1122)。
-        best_context = replace(_refine_crag_context(best_context, best_context.preferred_child_ids, max_chars=max_chars,
-                                                    rejected_chunk_ids=rejected),
-                               preferred_child_ids=best_context.preferred_child_ids)
+        best_context = replace(
+            _refine_crag_context(best_context, best_context.preferred_child_ids, max_chars=max_chars, rejected_chunk_ids=rejected),
+            preferred_child_ids=best_context.preferred_child_ids,
+        )
         if not best_context.records and attempts:
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "all_candidates_rejected")
     if attempts and not attempts[-1].sufficient and best_context.records:
@@ -966,7 +1062,8 @@ CRAG_SKIP_STOP_REASON = "grade_skipped_strong_signals"
 # （CRAG の評価でも足りると判定されやすい。#1503）ため、この質問では CRAG の評価を飛ばさない。
 _ENUMERATION_QUESTION = re.compile(
     r"すべて|全て|全部|全件|各|それぞれ|一覧|リスト|列挙|漏れなく|網羅|何件|何個|何人|何種類|いくつ|件数|人数|"
-    r"どれ|どの.{0,8}(?:が|も)|ほか|他に")
+    r"どれ|どの.{0,8}(?:が|も)|ほか|他に"
+)
 
 
 def _top_rerank_score(context: AnswerContext) -> float | None:
@@ -1007,8 +1104,7 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
     if contract["error_messages"] or _ERROR_QUESTION.search(unicodedata.normalize("NFKC", question)):
         return {"skip": False, "reason": "エラー文を問う質問"}
     # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
-    if (contract.get("goal") in {"count", "recipient_list"} or contract.get("enumeration")
-            or _ENUMERATION_QUESTION.search(question)):
+    if contract.get("goal") in {"count", "recipient_list"} or contract.get("enumeration") or _ENUMERATION_QUESTION.search(question):
         return {"skip": False, "reason": "列挙・網羅・件数を問う質問"}
     if exclusion := _crag_exclusion_needed(context):
         return {"skip": False, "reason": exclusion}
@@ -1031,19 +1127,26 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
     # 根拠ごとに分かれるが、別の要求（「…と、出張旅費の上限額」）の語が根拠のどこにも無ければ曖昧な帯にする。
     joined = "\n".join(text for _key, text in evidence_texts(context))
     weak_union = {row["id"]: _union_ratio(row, joined) for row in assessed if row["status"] == "weak"}
-    missing = [row for row in assessed if row["status"] == "missing"
-               or row["status"] == "weak" and weak_union[row["id"]] < _CRAG_SKIP_WEAK_UNION_RATIO]
+    missing = [
+        row
+        for row in assessed
+        if row["status"] == "missing" or row["status"] == "weak" and weak_union[row["id"]] < _CRAG_SKIP_WEAK_UNION_RATIO
+    ]
     if missing:
         return {"skip": False, "reason": f"語の一致で根拠の無い要求が {len(missing)} 件"}
     counts = {status: sum(row["status"] == status for row in assessed) for status in ("supported", "weak")}
     return {
         "skip": True,
-        "lines": [f"rerank の最上位の score {score:.3f}（閾値 {threshold:.3f} 以上）",
-                  f"質問の要求 {len(assessed)} 件に語の一致で根拠あり（一致 {counts['supported']} 件・"
-                  f"一部一致 {counts['weak']} 件、根拠なし 0 件）"],
-        "trace": {"top_rerank_score": score, "min_rerank_score": threshold,
-                  "requests": [{"id": row["id"], "status": row["status"], "best_ratio": row.get("best_ratio")}
-                               for row in rows]},
+        "lines": [
+            f"rerank の最上位の score {score:.3f}（閾値 {threshold:.3f} 以上）",
+            f"質問の要求 {len(assessed)} 件に語の一致で根拠あり（一致 {counts['supported']} 件・"
+            f"一部一致 {counts['weak']} 件、根拠なし 0 件）",
+        ],
+        "trace": {
+            "top_rerank_score": score,
+            "min_rerank_score": threshold,
+            "requests": [{"id": row["id"], "status": row["status"], "best_ratio": row.get("best_ratio")} for row in rows],
+        },
     }
 
 
@@ -1083,30 +1186,42 @@ def _crag_exclusion_needed(context: AnswerContext) -> str:
     return ""
 
 
-def _recover_crag_context(context: AnswerContext, attempt: CragRetrievalAttempt,
-                          *, max_records: int, max_chars: int, fallback: bool = False,
-                          fallback_trigger: str = "rewrite_no_new_evidence"
-                          ) -> tuple[AnswerContext | None, dict[str, Any]]:
+def _recover_crag_context(
+    context: AnswerContext,
+    attempt: CragRetrievalAttempt,
+    *,
+    max_records: int,
+    max_chars: int,
+    fallback: bool = False,
+    fallback_trigger: str = "rewrite_no_new_evidence",
+) -> tuple[AnswerContext | None, dict[str, Any]]:
     """不足評価の起点を検証して文脈を追加する。空振り時は最小の近傍から試す。"""
     visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
     anchors = attempt.recovery_anchor_ids
     actions = (attempt.recovery_action,)
     if fallback:
-        anchors = tuple(dict.fromkeys((*attempt.relevant_chunk_ids,
-            *(r.chunk_uid for r in visible[:8] if r.chunk_uid))))[:8]
+        anchors = tuple(dict.fromkeys((*attempt.relevant_chunk_ids, *(r.chunk_uid for r in visible[:8] if r.chunk_uid))))[:8]
         actions = ("neighbor_children", "parent", "neighbor_parents")
-    trace: dict[str, Any] = {"trigger": fallback_trigger if fallback else "grader_feedback",
-        "action": attempt.recovery_action, "anchor_ids": [], "added_chunk_ids": [],
-        "reason": "no_new_compatible_evidence"}
+    trace: dict[str, Any] = {
+        "trigger": fallback_trigger if fallback else "grader_feedback",
+        "action": attempt.recovery_action,
+        "anchor_ids": [],
+        "added_chunk_ids": [],
+        "reason": "no_new_compatible_evidence",
+    }
     for action in actions:
-        recovery = recover_context_records(visible, context.expansion_records, anchors, action,
-            max_records=min(6, max_records), max_chars=max_chars)
+        recovery = recover_context_records(
+            visible, context.expansion_records, anchors, action, max_records=min(6, max_records), max_chars=max_chars
+        )
         trace.update(action=action, anchor_ids=list(recovery.anchor_ids), reason=recovery.reason)
         if not recovery.records:
             continue
-        tree = tuple(ContextParentEvidence(record=r,
-            role="synthesis_parent" if r.chunk_level == "parent" else "child_fallback",
-            reason="crag_" + action) for r in recovery.records)
+        tree = tuple(
+            ContextParentEvidence(
+                record=r, role="synthesis_parent" if r.chunk_level == "parent" else "child_fallback", reason="crag_" + action
+            )
+            for r in recovery.records
+        )
         bundle = context_bundle_from_parent_evidence(tree, max_chars=max_chars)
         trace["added_chunk_ids"] = [r.chunk_uid for r in bundle.records]
         if not bundle.records or not bundle.text.strip():
@@ -1115,10 +1230,16 @@ def _recover_crag_context(context: AnswerContext, attempt: CragRetrievalAttempt,
         with _execution_step("文脈の追加", "根拠が不足したため、取得済みの資料から同じ機能の前後を追加します。") as step:
             labels = {"neighbor_children": "前後の段落", "parent": "上位のまとまり", "neighbor_parents": "隣接するまとまり"}
             step.result(f"{labels.get(action, action)}を {len(bundle.records)} 件追加")
-        return AnswerContext(records=list(bundle.records), text=bundle.text,
-            evidence=bundle.evidence, evidence_tree=bundle.evidence_tree,
-            expansion_records=context.expansion_records, ranked_candidates=context.ranked_candidates,
-            deferred_records=context.deferred_records, document_selection=context.document_selection), trace
+        return AnswerContext(
+            records=list(bundle.records),
+            text=bundle.text,
+            evidence=bundle.evidence,
+            evidence_tree=bundle.evidence_tree,
+            expansion_records=context.expansion_records,
+            ranked_candidates=context.ranked_candidates,
+            deferred_records=context.deferred_records,
+            document_selection=context.document_selection,
+        ), trace
     return None, trace
 
 
@@ -1154,8 +1275,9 @@ def _grade_crag_retrieval(
     output = parse_text_response(
         CRAG_GRADER_SYSTEM_PROMPT,
         # 詰めた入力 (#1528) は候補を JSON の空白なし・chunk_uid だけで書き、候補の数を max_candidates にする。
-        _build_crag_grade_prompt(question, active_query, retrieval_queries, context, compact=compact,
-                                 max_candidates=max_candidates if compact else None),
+        _build_crag_grade_prompt(
+            question, active_query, retrieval_queries, context, compact=compact, max_candidates=max_candidates if compact else None
+        ),
         # 十分 / 不足の判定(CRAG の評価と章節の拡張の十分性の判定)は根拠の評価の推論の量で呼ぶ (#1499)。
         settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
         CragRetrievalGradeOutput,
@@ -1163,19 +1285,26 @@ def _grade_crag_retrieval(
     )
     all_records = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
     known_uids = {r.chunk_uid or r.id for r in all_records}
+
     def canonical(value):
         matches = {r.chunk_uid or r.id for r in all_records if value in {r.chunk_uid, r.chunk_id, r.id} and value}
         return next(iter(matches)) if len(matches) == 1 else ""
+
     # 検索命中の子の本文は親の抄録に統合して評価器へ渡す (#978) ため、評価器は親 uid を挙げる。生成側の
     # 起点選択（_grounded_spans の preferred_child_ids）と回復 anchor は子 uid を見るので、挙げられた親の
     # 検索命中子（retrieved_anchor）を補う。子 uid をそのまま挙げた場合はそのまま通す。
-    anchors_of = {parent.record.chunk_uid or parent.record.id: [child.record.chunk_uid or child.record.id
-                  for child in parent.children if child.role == "retrieved_anchor"] for parent in context.evidence_tree}
+    anchors_of = {
+        parent.record.chunk_uid or parent.record.id: [
+            child.record.chunk_uid or child.record.id for child in parent.children if child.role == "retrieved_anchor"
+        ]
+        for parent in context.evidence_tree
+    }
     # 候補ごとの二値判定（relevant=true）を回答に使う候補にする。全体の sufficient より先に候補単位で判定させる
     # のは CRAG の評価器（文書ごとの判定を OR で束ねる）と同じ (#983)。
     # 質問がエラー文を示すとき、そのエラー文を含まない候補は別エラーの説明。prompt の規則だけでは守られない
     # （別コードの説明を「一致する」と判定した）ので、生成側の検査と同じ fuzzy 一致で決定的に外す (#999)。
     from rag_engine.generation.grounded import mentions_error
+
     asked_errors = task_contract(question)["error_messages"]
     verdicts: list[tuple[str, bool, str]] = []
     for verdict in output.candidate_verdicts:
@@ -1183,15 +1312,26 @@ def _grade_crag_retrieval(
         if relevant and asked_errors and uid and not mentions_error(_candidate_unit_text(uid, context, all_records), asked_errors):
             relevant, reason = False, "質問のエラー文『" + "』『".join(asked_errors) + "』が候補に無い: " + reason
         verdicts.append((uid or verdict.chunk_uid, relevant, reason))
-    relevant_chunk_ids = tuple(dict.fromkeys(
-        chunk_uid for uid, relevant, _reason in verdicts if relevant and uid in known_uids
-        for chunk_uid in (uid, *anchors_of.get(uid, ()))))
+    relevant_chunk_ids = tuple(
+        dict.fromkeys(
+            chunk_uid
+            for uid, relevant, _reason in verdicts
+            if relevant and uid in known_uids
+            for chunk_uid in (uid, *anchors_of.get(uid, ()))
+        )
+    )
     # 明示的に relevant=false とした候補（親とその検索命中子）。生成用 context の末尾へ回し、回復用 pool から除く
     # (#1010, #1122)。
     # 同じ候補が true と false の両方で返った場合は true を優先する。
-    rejected_chunk_ids = tuple(dict.fromkeys(
-        chunk_uid for uid, relevant, _reason in verdicts if not relevant and uid in known_uids
-        for chunk_uid in (uid, *anchors_of.get(uid, ())) if chunk_uid not in relevant_chunk_ids))
+    rejected_chunk_ids = tuple(
+        dict.fromkeys(
+            chunk_uid
+            for uid, relevant, _reason in verdicts
+            if not relevant and uid in known_uids
+            for chunk_uid in (uid, *anchors_of.get(uid, ()))
+            if chunk_uid not in relevant_chunk_ids
+        )
+    )
     checks = []
     for item in output.aspect_checks:
         raw = item.model_dump()
@@ -1202,14 +1342,18 @@ def _grade_crag_retrieval(
     # 列挙・網羅の問は、件数・章の範囲の欠けを評価器の項目ごとの根拠から数える（自己申告に頼らない。#1503）。
     checks = enumeration_check(question, checks, output.enumerated_items, context, all_records, canonical)
     required = task_contract(question)["required_aspects"]
-    supported = {item["aspect"] for item in checks if item["status"] == "supported" and sum(c["aspect"] == item["aspect"] for c in checks) == 1}
+    supported = {
+        item["aspect"] for item in checks if item["status"] == "supported" and sum(c["aspect"] == item["aspect"] for c in checks) == 1
+    }
     # 実値の照合待ちは操作案内の不足と分ける。対象と操作そのものの根拠は必須。
     # 閲覧方法の一意な出典と確認目的がない判定で十分性を緩和しない。
     confirmation_ready = {
-        item["aspect"] for item in checks
+        item["aspect"]
+        for item in checks
         if item["aspect"] in {"requested_result", "applicability"}
         and item["status"] == "data_confirmation"
-        and item["source_ids"] and item["reason"].strip()
+        and item["source_ids"]
+        and item["reason"].strip()
         and sum(c["aspect"] == item["aspect"] for c in checks) == 1
     }
     # 十分性はコードで決める（評価器の sufficient は参考値）。CRAG の評価器や LangGraph / LlamaIndex の grader と
@@ -1233,8 +1377,9 @@ def _grade_crag_retrieval(
         rewritten_query=rewrite,
         reason=_trim_generated_text(output.reason, 240),
         aspect_checks=tuple(checks),
-        candidate_verdicts=tuple({"chunk_uid": uid, "relevant": relevant, "reason": _trim_generated_text(reason, 160)}
-                                 for uid, relevant, reason in verdicts),
+        candidate_verdicts=tuple(
+            {"chunk_uid": uid, "relevant": relevant, "reason": _trim_generated_text(reason, 160)} for uid, relevant, reason in verdicts
+        ),
         rejected_chunk_ids=rejected_chunk_ids,
         missing_aspects=missing_aspects,
         recovery_action=output.recovery_action,
@@ -1243,9 +1388,15 @@ def _grade_crag_retrieval(
     )
 
 
-def _grounded_spans(question: str, context: AnswerContext, image_evidence: Sequence[dict[str, Any]],
-                    runtime_knowledge: RuntimeKnowledgeContext | None, *, budget: int | None = None,
-                    whole_records: bool = False) -> list[dict[str, Any]]:
+def _grounded_spans(
+    question: str,
+    context: AnswerContext,
+    image_evidence: Sequence[dict[str, Any]],
+    runtime_knowledge: RuntimeKnowledgeContext | None,
+    *,
+    budget: int | None = None,
+    whole_records: bool = False,
+) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
@@ -1256,19 +1407,27 @@ def _grounded_spans(question: str, context: AnswerContext, image_evidence: Seque
         budget_option["whole_records"] = True
     from rag_engine.generation.grounded import tag_spans
     from rag_engine.retrieval.metadata_context import with_child_contexts
+
     selection_question = question
     if runtime_knowledge is not None and runtime_knowledge.has_matches:
         selection_question += "\n" + runtime_knowledge.expanded_question
     # parent は context の順（rerank と context 組み立ての結果）のまま渡す。根拠の並びと文字予算の配分はこの順で
     # 決まる。以前は質問の語が見出しらしい行に現れるかの一致（operation_target_score）で並べ替えていたが、同じ
     # 言い回しで正解の画面が異なる質問を区別できず、rerank が上位に置いた正解の parent を後ろへ送っていた (#1094)。
-    records = [with_child_contexts(r, [c.record for p in context.evidence_tree if p.record is r for c in p.children])
-               for r in context.records]
+    records = [
+        with_child_contexts(r, [c.record for p in context.evidence_tree if p.record is r for c in p.children]) for r in context.records
+    ]
     labels = definition_labels(question) if task_contract(question)["goal"] == "rule" else []
     children = [child.record for parent in context.evidence_tree for child in parent.children]
-    anchors = [c for c in children if labels and (
-        definition_ranges(c.text.split("Child text:\n", 1)[-1], labels)
-        or _record_matches_crag_relevant_ids(c, set(context.preferred_child_ids)))]
+    anchors = [
+        c
+        for c in children
+        if labels
+        and (
+            definition_ranges(c.text.split("Child text:\n", 1)[-1], labels)
+            or _record_matches_crag_relevant_ids(c, set(context.preferred_child_ids))
+        )
+    ]
     if not labels:
         anchors = _visual_evidence_anchors(context, image_evidence)
     spans = evidence_spans(selection_question, records, anchors=anchors, scope_records=children, **budget_option)
@@ -1279,32 +1438,53 @@ def _grounded_spans(question: str, context: AnswerContext, image_evidence: Seque
     return tag_spans(question, spans)
 
 
-def _grounded_prompt(question: str, spans: Sequence[dict[str, Any]], context: AnswerContext,
-                     images: Sequence[dict[str, Any]], feedback: dict[str, Any] | None,
-                     question_plan: QuestionPlan | None, runtime_knowledge: RuntimeKnowledgeContext | None,
-                     inquiry_conditions: InquiryConditionParse | None,
-                     query_expansion: QueryExpansionResult | None, *, template: str | None = None,
-                     known_gaps: Sequence[str] = ()) -> str:
+def _grounded_prompt(
+    question: str,
+    spans: Sequence[dict[str, Any]],
+    context: AnswerContext,
+    images: Sequence[dict[str, Any]],
+    feedback: dict[str, Any] | None,
+    question_plan: QuestionPlan | None,
+    runtime_knowledge: RuntimeKnowledgeContext | None,
+    inquiry_conditions: InquiryConditionParse | None,
+    query_expansion: QueryExpansionResult | None,
+    *,
+    template: str | None = None,
+    known_gaps: Sequence[str] = (),
+) -> str:
     """編集可能テンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
 
     template 未指定では保存済みテンプレートを読む。是正ループは1回答で同じ内容を使うため明示する。
     known_gaps は CRAG 評価器の missing_aspects（#983）で、context block に既知の欠落として載せる。
     """
     from rag_engine.generation.grounded import build_context_block
-    preface = "\n\n".join(section for section in (
-        runtime_knowledge.prompt_context() if runtime_knowledge is not None and runtime_knowledge.has_matches else "",
-        inquiry_conditions.prompt_context() if inquiry_conditions is not None and inquiry_conditions.has_signals else "",
-        ("検索前の暫定データ確認観点（最終判定ではなく再確認する）:\n" + json.dumps(list(query_expansion.routing_data_items), ensure_ascii=False))
-        if query_expansion is not None and query_expansion.routing_data_items else "",
-    ) if section)
-    return render_prompt_template(read_prompt(VLM_ANSWER_PROMPT_KEY) if template is None else template, {
-        # 質問も根拠と同じ文字の形で渡す（全角の ＨＲＭ と根拠の HRM を同じ語と読ませる。#1350）。
-        "question": fold_width(question).strip(),
-        # source などの文字列値は文書由来なので、TRUSTED ブロックを閉じる表記を残さない。
-        "image_metadata": neutralize_boundary_markers(
-            json.dumps(_answer_image_metadata(context.records, image_evidence=images), ensure_ascii=False, indent=2)),
-        "images": build_context_block(question, spans, preface=preface, feedback=feedback, known_gaps=known_gaps),
-    })
+
+    preface = "\n\n".join(
+        section
+        for section in (
+            runtime_knowledge.prompt_context() if runtime_knowledge is not None and runtime_knowledge.has_matches else "",
+            inquiry_conditions.prompt_context() if inquiry_conditions is not None and inquiry_conditions.has_signals else "",
+            (
+                "検索前の暫定データ確認観点（最終判定ではなく再確認する）:\n"
+                + json.dumps(list(query_expansion.routing_data_items), ensure_ascii=False)
+            )
+            if query_expansion is not None and query_expansion.routing_data_items
+            else "",
+        )
+        if section
+    )
+    return render_prompt_template(
+        read_prompt(VLM_ANSWER_PROMPT_KEY) if template is None else template,
+        {
+            # 質問も根拠と同じ文字の形で渡す（全角の ＨＲＭ と根拠の HRM を同じ語と読ませる。#1350）。
+            "question": fold_width(question).strip(),
+            # source などの文字列値は文書由来なので、TRUSTED ブロックを閉じる表記を残さない。
+            "image_metadata": neutralize_boundary_markers(
+                json.dumps(_answer_image_metadata(context.records, image_evidence=images), ensure_ascii=False, indent=2)
+            ),
+            "images": build_context_block(question, spans, preface=preface, feedback=feedback, known_gaps=known_gaps),
+        },
+    )
 
 
 # 生成前に同じ機能ユニットの親を補う予算（文字）と件数。原文予算の 1/4 を上限にし、他の候補を追い出さない。
@@ -1313,9 +1493,16 @@ SAME_UNIT_FILL_RECORDS = 3
 _REMEDY_MODES = ("neighbor_children", "parent", "neighbor_parents", "same_function")
 
 
-def _expand_context_from_pool(question: str, context: AnswerContext, *, modes: Sequence[str] = _REMEDY_MODES,
-                              max_records: int = 6, max_chars: int = MAX_CONTEXT_CHARS,
-                              definitions: bool = True, deferred: bool = True) -> tuple[AnswerContext | None, dict[str, Any]]:
+def _expand_context_from_pool(
+    question: str,
+    context: AnswerContext,
+    *,
+    modes: Sequence[str] = _REMEDY_MODES,
+    max_records: int = 6,
+    max_chars: int = MAX_CONTEXT_CHARS,
+    definitions: bool = True,
+    deferred: bool = True,
+) -> tuple[AnswerContext | None, dict[str, Any]]:
     """既取得poolから同機能の根拠を最大 max_records 件足す。既存の根拠を追い出す拡張は採用しない。
 
     definitions=True では明示項目の定義原文の回復を先に試す。modes は `recover_context_records` の
@@ -1335,30 +1522,43 @@ def _expand_context_from_pool(question: str, context: AnswerContext, *, modes: S
         recovered, mode = _deferred_document_records(context, min(max_records, max(1, len(visible)))), "deferred_documents"
     if not recovered.records:
         for mode in modes:
-            recovered = recover_context_records(visible, context.expansion_records, anchors, mode,
-                                                max_records=max_records, max_chars=max_chars)
+            recovered = recover_context_records(
+                visible, context.expansion_records, anchors, mode, max_records=max_records, max_chars=max_chars
+            )
             if recovered.records:
                 break
     if not recovered.records:
         return None, {"remedy": "context", "reason": "no_new_compatible_evidence"}
     # 追加分も tree 付きにする。tree のない context を merge すると既存分まで tree なしの fallback に落ち、
     # 子チャンクの抜粋・prompt-injection 検査・保存 payload の children が失われる。
-    added = context_bundle_from_parent_evidence(tuple(ContextParentEvidence(
-        record=r, role="synthesis_parent" if r.chunk_level == "parent" else "child_fallback",
-        reason="grounded_" + mode) for r in recovered.records), max_chars=MAX_CONTEXT_CHARS)
+    added = context_bundle_from_parent_evidence(
+        tuple(
+            ContextParentEvidence(
+                record=r, role="synthesis_parent" if r.chunk_level == "parent" else "child_fallback", reason="grounded_" + mode
+            )
+            for r in recovered.records
+        ),
+        max_chars=MAX_CONTEXT_CHARS,
+    )
     if not added.records:
         return None, {"remedy": "context", "reason": "context_budget_exhausted"}
-    candidate = _merge_crag_evidence(context, AnswerContext(
-        records=list(added.records), text=added.text, evidence=added.evidence,
-        evidence_tree=added.evidence_tree), question,
-        max_records=max(1, len(visible)), max_chars=max(MAX_CONTEXT_CHARS, max_chars) * 2)
+    candidate = _merge_crag_evidence(
+        context,
+        AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence, evidence_tree=added.evidence_tree),
+        question,
+        max_records=max(1, len(visible)),
+        max_chars=max(MAX_CONTEXT_CHARS, max_chars) * 2,
+    )
     if not {r.chunk_uid or r.id for r in visible} <= {r.chunk_uid or r.id for r in candidate.records}:
         return None, {"remedy": "context", "reason": "would_drop_existing_evidence"}
-    candidate = replace(candidate, expansion_records=context.expansion_records,
-                        preferred_child_ids=context.preferred_child_ids, ranked_candidates=context.ranked_candidates,
-                        deferred_records=() if mode == "deferred_documents" else context.deferred_records,
-                        document_selection={**context.document_selection, "restored": True} if mode == "deferred_documents"
-                        else context.document_selection)
+    candidate = replace(
+        candidate,
+        expansion_records=context.expansion_records,
+        preferred_child_ids=context.preferred_child_ids,
+        ranked_candidates=context.ranked_candidates,
+        deferred_records=() if mode == "deferred_documents" else context.deferred_records,
+        document_selection={**context.document_selection, "restored": True} if mode == "deferred_documents" else context.document_selection,
+    )
     return candidate, {"remedy": "context", "mode": mode, "added_chunk_ids": [r.chunk_uid for r in recovered.records]}
 
 
@@ -1386,8 +1586,15 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
     `SAME_UNIT_FILL_CHARS` / `SAME_UNIT_FILL_RECORDS` の範囲で足す。何を足したかは trace に残す。
     """
     before = {r.chunk_uid or r.id for r in context.records}
-    filled, reason = _expand_context_from_pool(question, context, modes=("same_unit",), max_records=SAME_UNIT_FILL_RECORDS,
-                                               max_chars=SAME_UNIT_FILL_CHARS, definitions=False, deferred=False)
+    filled, reason = _expand_context_from_pool(
+        question,
+        context,
+        modes=("same_unit",),
+        max_records=SAME_UNIT_FILL_RECORDS,
+        max_chars=SAME_UNIT_FILL_CHARS,
+        definitions=False,
+        deferred=False,
+    )
     if filled is None:
         return context, {"applied": False, "reason": reason.get("reason", "")}
     added = [r.chunk_uid or r.id for r in filled.records if (r.chunk_uid or r.id) not in before]
@@ -1404,12 +1611,11 @@ _NO_IMPROVEMENT_RESULTS = {
     "no_improvement_not_accepted": "作り直した回答が前の回答より良くならなかったため、作り直しを止め、採用済みの回答で確定します",
     "no_improvement_same_feedback": "作り直した回答にも前と同じ指摘が残ったため、同じ指摘で作り直さずに確定します",
     "no_improvement_evidence_only": "残った指摘は、回答が「資料に記載が無い」とした要求（根拠の不足）だけで、"
-                                    "同じ根拠のまま作り直しても直らないため、作り直しをせずに確定します",
+    "同じ根拠のまま作り直しても直らないため、作り直しをせずに確定します",
 }
 
 
-def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason: str, number: int,
-                              feedback: dict[str, Any] | None) -> None:
+def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason: str, number: int, feedback: dict[str, Any] | None) -> None:
     """是正を改善が見込めないので止めた理由を、時間の配分・round の記録・工程に残す（#1527）。"""
     budget.stop_without_improvement(reason, number, feedback)
     rounds[-1]["improvement_stop"] = reason
@@ -1453,6 +1659,7 @@ def synthesize_grounded_answer(
     """
     from rag_engine.generation import grounded
     from rag_engine.models.llm import GroundedItem
+
     provider = answer_llm_provider
     source_provider = answer_llm_provider or settings.default_answer_llm
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
@@ -1466,33 +1673,65 @@ def synthesize_grounded_answer(
     # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか, 草稿の summary)。
     summary_flags: list[tuple[int, bool, str]] = []
     best_number = 0
-    image_decision = {"reason": "already_multimodal" if mode == "vision_attachments" else "not_needed",
-                      "regeneration_calls": 0, "source_provider": source_provider}
+    image_decision = {
+        "reason": "already_multimodal" if mode == "vision_attachments" else "not_needed",
+        "regeneration_calls": 0,
+        "source_provider": source_provider,
+    }
     # 生成中に Prompt 設定が保存されても、1回答の全ラウンドで同じテンプレートを使う。
     template = read_prompt(VLM_ANSWER_PROMPT_KEY)
     context, unit_fill = _fill_same_unit(question, context)
     # 是正の round の時間の配分（#1516）: 回答の期限の残りから次の round を始めるかを決め、round の LLM の呼び出しには
     # 回答の確定の分を残した期限を渡す（期限が無い文脈では何もしない）。
     from rag_engine.resources.deadline import remaining_seconds
+
     budget = grounded.RoundBudget(remaining_seconds)
     for number in range(grounded.MAX_ROUNDS):
-        spans = _grounded_spans(question, context, images, runtime_knowledge,
-                                budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
-                                whole_records=evidence_budget_chars is not None)
-        prompt = _grounded_prompt(question, spans, context, images, feedback, question_plan, runtime_knowledge,
-                                  inquiry_conditions, query_expansion, template=template, known_gaps=known_gaps)
-        with budget.round(), _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
-                             "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。" if number == 0 else "") as step:
+        spans = _grounded_spans(
+            question,
+            context,
+            images,
+            runtime_knowledge,
+            budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
+            whole_records=evidence_budget_chars is not None,
+        )
+        prompt = _grounded_prompt(
+            question,
+            spans,
+            context,
+            images,
+            feedback,
+            question_plan,
+            runtime_knowledge,
+            inquiry_conditions,
+            query_expansion,
+            template=template,
+            known_gaps=known_gaps,
+        )
+        with (
+            budget.round(),
+            _execution_step(
+                f"回答文の生成と根拠確認（{number + 1}回目）",
+                "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。" if number == 0 else "",
+            ) as step,
+        ):
             try:
                 # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
                 # 呼び出しにだけ使う)。
                 current = grounded.run_round(
-                    question, spans, generation_settings, prompt=prompt, provider_id=provider,
+                    question,
+                    spans,
+                    generation_settings,
+                    prompt=prompt,
+                    provider_id=provider,
                     audit_settings=audit_settings,
                     image_provider_id=settings.default_vision_llm,
-                    parse_text=parse_text_response, parse_images=parse_multimodal_response,
-                    previous=best[0].checked if best is not None else (), known_gaps=known_gaps,
-                    image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [])
+                    parse_text=parse_text_response,
+                    parse_images=parse_multimodal_response,
+                    previous=best[0].checked if best is not None else (),
+                    known_gaps=known_gaps,
+                    image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
+                )
                 if number == 0:
                     for purpose in (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT):
                         if note := llm_reasoning_effort_note(settings, purpose, provider):
@@ -1505,8 +1744,14 @@ def synthesize_grounded_answer(
                     raise
                 # 是正はより良くする試みなので、その LLM 呼出（生成・監査）の失敗で採用済みの回答を捨てない (#748)。
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
-                rounds.append({"error": f"{type(exc).__name__}: {exc}", "accepted": False, "audit_calls": 0,
-                               **({"deadline_cut": True} if cut else {})})
+                rounds.append(
+                    {
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "accepted": False,
+                        "audit_calls": 0,
+                        **({"deadline_cut": True} if cut else {}),
+                    }
+                )
                 if best is None:
                     best = (grounded.timed_out_round(question), context, spans, images, mode)
                     step.result("回答の時間の上限までに回答文の生成が終わらなかったため、質問に関係する資料の記載だけを示します")
@@ -1516,14 +1761,18 @@ def synthesize_grounded_answer(
                     step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
                 break
             quote_only = sum(e.quote_only for e in current.checked)
-            step.result(f"公開する説明 {current.verified} 件"
-                        + (f"、原文のまま示す記載 {quote_only} 件" if quote_only else "")
-                        + (f"、原文と一致せず除外 {len(current.dropped)} 件" if current.dropped else ""))
+            step.result(
+                f"公開する説明 {current.verified} 件"
+                + (f"、原文のまま示す記載 {quote_only} 件" if quote_only else "")
+                + (f"、原文と一致せず除外 {len(current.dropped)} 件" if current.dropped else "")
+            )
             # 生成と監査の秒と token の数（遅い round の理由を確かめる。#1516）。
             if timing_line := grounded.round_timing_line(current):
                 step.add(timing_line)
             if current.audit_cut:
-                step.impact("回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。")
+                step.impact(
+                    "回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。"
+                )
         accepted = best is None or grounded.better(current, best[0])
         if accepted:
             best = (current, context, spans, images, mode)
@@ -1548,8 +1797,9 @@ def synthesize_grounded_answer(
                 context = candidate
         image_candidates: tuple[dict[str, Any], ...] = ()
         if remedy is None and needs_content and mode != "vision_attachments":
-            candidates = tuple(i for i in answer_image_evidence(context.records, settings.output_dir, question=question)
-                               if i.get("prompt_path"))
+            candidates = tuple(
+                i for i in answer_image_evidence(context.records, settings.output_dir, question=question) if i.get("prompt_path")
+            )
             # 画像の添付が無効（または Vision モデルが無い）なら、文字の説明で答えられる範囲に留めて
             # 次の是正（指摘の反映）へ進む。添付する回は既定の Vision モデルで答える（#649）。
             if candidates and _image_prompt_mode(candidates, settings) == "vision_attachments":
@@ -1562,8 +1812,7 @@ def synthesize_grounded_answer(
         # 次の組を始める前に、改善が見込めるかを確かめる（#1527）。作り直した組が採用されない・指摘が前の組と
         # 同じなら、次の組も良くならない。同じ根拠のまま作り直す（指摘の反映）のは、残った指摘が根拠の不足
         # （草稿が「資料に記載が無い」と答えた要求）だけのときはしない。
-        stop_reason = grounded.no_improvement_reason(number, accepted=accepted, feedback=feedback,
-                                                     previous=previous_feedback)
+        stop_reason = grounded.no_improvement_reason(number, accepted=accepted, feedback=feedback, previous=previous_feedback)
         if not stop_reason and remedy["remedy"] == "correction" and grounded.evidence_shortage_only(feedback, best[0]):
             stop_reason = grounded.NO_IMPROVEMENT_EVIDENCE_ONLY
         if stop_reason:
@@ -1579,16 +1828,22 @@ def synthesize_grounded_answer(
             # 最良の round で確定し、直していない不足を「確かめられていない点」に出す。
             rounds[-1]["deadline_stop"] = dict(budget.stop)
             with _execution_step("是正の打ち切り") as stop_step:
-                stop_step.result(f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
-                                 f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
-                                 f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します")
+                stop_step.result(
+                    f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
+                    f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
+                    f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します"
+                )
                 stop_step.impact("直していない不足を「確かめられていない点」に示し、条件つきの回答にします。")
             break
         rounds[-1]["remedy"] = remedy
         with _execution_step("是正") as remedy_step:
-            remedy_step.result({"context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
-                                "images": "答えていない要求があるため、根拠の原画像を添付して作り直します",
-                                "correction": "検査の指摘を渡して作り直します"}[remedy["remedy"]])
+            remedy_step.result(
+                {
+                    "context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
+                    "images": "答えていない要求があるため、根拠の原画像を添付して作り直します",
+                    "correction": "検査の指摘を渡して作り直します",
+                }[remedy["remedy"]]
+            )
 
     current, context, spans, images, mode = best
     # 同じ質問・同じ根拠に対する summary が 1 度でも不支持と監査されたら、採用 round の summary も公開しない。
@@ -1598,13 +1853,16 @@ def synthesize_grounded_answer(
     # round が採用されて自身の監査が summary を支持したなら、不支持の理由は summary が頼る item を公開できなかった
     # ことで、是正で直っている。多段の結論の段を 1 つの item に混ぜた初回の不支持が残り、段を分けて直した結論まで
     # 外していた (#1383)。
-    summary_flagged = any(not (unpublished and number < best_number)
-                          and grounded.repeats_summary(str(current.draft.summary), flagged)
-                          for number, unpublished, flagged in summary_flags)
+    summary_flagged = any(
+        not (unpublished and number < best_number) and grounded.repeats_summary(str(current.draft.summary), flagged)
+        for number, unpublished, flagged in summary_flags
+    )
     if summary_flagged and current.summary != grounded.NEUTRAL_SUMMARY:
         current = replace(current, summary=grounded.NEUTRAL_SUMMARY)
     if image_decision["reason"] == "attempted":
-        image_decision["reason"] = "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
+        image_decision["reason"] = (
+            "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
+        )
     # 廃止・旧版の文書の説明は、今の手順・規則として公開せず原文のみ提示にする（#1492）。生成の是正では直せない
     # ので、採用した round の確定の段で決定的に行う。
     superseded = grounded.superseded_evidence_ids(question, spans)
@@ -1625,8 +1883,11 @@ def synthesize_grounded_answer(
     # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
     # 本文に出す文は要求原文の定型日本語。監査の reason（LLM の自由文）は言語が揺れるので trace と
     # insufficient_reason にだけ使う (#728)。
-    reviewed_unanswered = [grounded.missing_request_line(entry, current.requests)
-                           for entry in current.unanswered if entry["reviewed"] and entry["status"] == "missing"]
+    reviewed_unanswered = [
+        grounded.missing_request_line(entry, current.requests)
+        for entry in current.unanswered
+        if entry["reviewed"] and entry["status"] == "missing"
+    ]
     unanswered = [entry["reason"] for entry in current.unanswered]
     # 監査が「回答に必要なのに使われていない」と挙げた根拠。言い換えや適用の断定は加えず、原文のみ提示で示す (#1098)。
     needed = [] if off_goal else grounded.audit_needed_quotes(current, spans, question=question)
@@ -1638,8 +1899,10 @@ def synthesize_grounded_answer(
     # （#1492）。分かっている条件（業務ガイドの条件）を確かめる項目と、旧版・廃止の版を根拠が決めているときの版の
     # 確認は数えない。
     settled = grounded.settle_confirmations(
-        current.draft, known_conditions=settings.known_conditions,
-        version_settled=bool(superseded) and any(str(span.get("evidence_id")) not in superseded for span in spans))
+        current.draft,
+        known_conditions=settings.known_conditions,
+        version_settled=bool(superseded) and any(str(span.get("evidence_id")) not in superseded for span in spans),
+    )
     # 回答の確定に必要な実データ・別の資料の確認。どの分岐でも本文の最後の節に出す (#688)。
     confirmations = grounded.confirmation_lines(current.draft, question, spans, settled)
     # 利用者に聞けば分かる条件（対象・ロール・承認など）。本文では同じ節の先頭に出し、回答の構造では
@@ -1647,7 +1910,8 @@ def synthesize_grounded_answer(
     user_conditions = list(settled.user)
     confirmation_section = [*grounded.user_condition_lines(settled), *confirmations]
     external_data_required = requires_environment_data(
-        settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required)
+        settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required
+    )
     # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
     envelope_entries: list[grounded.CheckedItem] = []
     if actionable:
@@ -1658,25 +1922,26 @@ def synthesize_grounded_answer(
         shown = [*published, *extra]
         envelope_entries = shown
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmation_section,
-            unverified=unread)
+            current.summary, [*current.checked, *extra], reviewed_unanswered, confirmation_section, unverified=unread
+        )
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
         # 根拠全体を見た監査が必要と挙げた根拠を示す。冒頭は拒答文ではなく中立の文 (#1098, #1106)。
         shown = needed
         envelope_entries = needed
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmation_section, unverified=unread)
+            grounded.NEUTRAL_SUMMARY, [*needed, *gap_items], confirmations=confirmation_section, unverified=unread
+        )
     elif published:
         envelope_entries = published
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, current.checked, reviewed_unanswered, confirmation_section, unverified=unread)
+            current.summary, current.checked, reviewed_unanswered, confirmation_section, unverified=unread
+        )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
         # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
         no_draft = budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
-        related = (grounded.deadline_document_quotes(question, spans) if no_draft
-                   else grounded.related_document_quotes(question, spans))
+        related = grounded.deadline_document_quotes(question, spans) if no_draft else grounded.related_document_quotes(question, spans)
         shown = related
         if no_draft:
             # 1 組目の生成が時間の上限までに終わらなかった（#1516）。根拠は回答に渡すと決めた後なので、拒答
@@ -1687,10 +1952,15 @@ def synthesize_grounded_answer(
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.CONFIRMATION_ONLY_SUMMARY if confirmation_section
-            else grounded.DEADLINE_SUMMARY if no_draft
+            grounded.CONFIRMATION_ONLY_SUMMARY
+            if confirmation_section
+            else grounded.DEADLINE_SUMMARY
+            if no_draft
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
-            [*related, *gap_items], confirmations=confirmation_section, unverified=unread)
+            [*related, *gap_items],
+            confirmations=confirmation_section,
+            unverified=unread,
+        )
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
     # 適用（applicability）は別の判定で、適用未確認（unverified）は人手確認の対象にする (#1012)。
     unsettled = [e for e in published if not e.quote_only and e.item.applies != "matched"]
@@ -1701,9 +1971,14 @@ def synthesize_grounded_answer(
         confidence = "medium"
     unverified = any(e.item.applies == "unverified" for e in unsettled)
     trace = {
-        "pipeline": "grounded", "task_contract": task_contract(question), "selected_evidence": [_public_span(s) for s in spans],
+        "pipeline": "grounded",
+        "task_contract": task_contract(question),
+        "selected_evidence": [_public_span(s) for s in spans],
         "same_unit_fill": unit_fill,
-        "rounds": rounds, "round_budget": budget.trace(current), "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
+        "rounds": rounds,
+        "round_budget": budget.trace(current),
+        "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
+        "image_fallback": image_decision,
         "final_fact_count": len(published),
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
         # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
@@ -1711,37 +1986,73 @@ def synthesize_grounded_answer(
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
         # 参照欄は公開した引用だけに同期する。
-        "finalization": {"filtered": bool(problems), "citations_synchronized": True, "off_goal": off_goal,
-                         "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown}), "retained_passage_ids": []},
+        "finalization": {
+            "filtered": bool(problems),
+            "citations_synchronized": True,
+            "off_goal": off_goal,
+            "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown}),
+            "retained_passage_ids": [],
+        },
     }
     envelope = build_envelope(
         requests=current.requests,
         reviews=[review.model_dump() for review in current.audit.request_reviews] if current.audit else None,
         items=[envelope_item(entry) for entry in envelope_entries],
-        gaps=[*gaps, *unread], confirmations=confirmations, user_conditions=user_conditions,
+        gaps=[*gaps, *unread],
+        confirmations=confirmations,
+        user_conditions=user_conditions,
         external_data_required=external_data_required,
-        reference_materials=_string_list(current.draft.reference_materials), off_goal=off_goal,
+        reference_materials=_string_list(current.draft.reference_materials),
+        off_goal=off_goal,
         # 別の資料で確かめる確認の項目（who_can_answer=document。#1492）は資料の不足として条件付きにする。
         # 本文に出した行（資料名を創作していない行）だけを載せ、本文と食い違わないようにする。
-        document_items=[text for text in settled.document
-                        if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
+        document_items=[text for text in settled.document if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
     )
-    response = _normalize_answer_response(AnswerResponse(
-        envelope=envelope,
-        answer_text=answer_text, confidence=confidence, question_type=tuple(_string_list(current.draft.question_type)),
-        used_images=tuple(_used_image_entries([{"image_id": e.span["source_id"], "source": e.span.get("source", ""),
-            "page": e.span.get("page", ""), "look_at": "引用", "visible_evidence": e.item.quote[:200]} for e in shown])),
-        reasoning_summary=f"引用照合済みの説明 {current.verified} 件、原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、原文と一致せず除外 {len(current.dropped)} 件。",
-        insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
-        needs_human_review=bool(gaps or unread or unanswered or problems or external_data_required or unverified
-                                or current.draft.reference_materials or settled.document),
-        external_data_required=external_data_required,
-        external_data_items=settled.system,
-        raw_text=current.draft.model_dump_json(),
-        evidence_facts=tuple({"source_id": e.span["source_id"], "evidence_id": e.span["evidence_id"], "quote": e.item.quote}
-                             for e in published),
-        generation_trace=trace,
-    ))
+    response = _normalize_answer_response(
+        AnswerResponse(
+            envelope=envelope,
+            answer_text=answer_text,
+            confidence=confidence,
+            question_type=tuple(_string_list(current.draft.question_type)),
+            used_images=tuple(
+                _used_image_entries(
+                    [
+                        {
+                            "image_id": e.span["source_id"],
+                            "source": e.span.get("source", ""),
+                            "page": e.span.get("page", ""),
+                            "look_at": "引用",
+                            "visible_evidence": e.item.quote[:200],
+                        }
+                        for e in shown
+                    ]
+                )
+            ),
+            reasoning_summary=(
+                f"引用照合済みの説明 {current.verified} 件、"
+                f"原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、"
+                f"原文と一致せず除外 {len(current.dropped)} 件。"
+            ),
+            insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
+            needs_human_review=bool(
+                gaps
+                or unread
+                or unanswered
+                or problems
+                or external_data_required
+                or unverified
+                or current.draft.reference_materials
+                or settled.document
+            ),
+            external_data_required=external_data_required,
+            external_data_items=settled.system,
+            raw_text=current.draft.model_dump_json(),
+            evidence_facts=tuple(
+                {"source_id": e.span["source_id"], "evidence_id": e.span["evidence_id"], "quote": e.item.quote} for e in published
+            ),
+            generation_trace=trace,
+        )
+    )
     return GroundedAnswer(response, context, tuple(images), mode)
 
 
@@ -1756,8 +2067,16 @@ def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set
         "settled_confirmations": settled.diagnostics(),
         "external_data_required": bool(draft.external_data_required),
         "reference_materials": _string_list(draft.reference_materials),
-        "items": [{"kind": item.kind, "request_id": item.request_id, "evidence_id": item.evidence_id,
-                   "applies": item.applies, "condition": item.condition} for item in draft.items],
+        "items": [
+            {
+                "kind": item.kind,
+                "request_id": item.request_id,
+                "evidence_id": item.evidence_id,
+                "applies": item.applies,
+                "condition": item.condition,
+            }
+            for item in draft.items
+        ],
         "confidence": draft.confidence,
         "superseded_evidence_ids": sorted(superseded),
         "superseded_withheld": withheld,
@@ -1777,8 +2096,9 @@ def _request_coverage_budget(settings: Settings) -> CoverageBudget:
 def _coverage_tokenizer(settings: Settings) -> Callable[[str], Sequence[str]]:
     """覆域の判定に使う分かち書き。全文検索の質問と同じ tokenizer・業務語を使う。"""
     config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
-    domain_keywords = (settings.domain_keywords_override if settings.domain_keywords_override is not None
-                       else load_domain_keywords(settings.output_dir))
+    domain_keywords = (
+        settings.domain_keywords_override if settings.domain_keywords_override is not None else load_domain_keywords(settings.output_dir)
+    )
     return lambda text: tokenize_text_search_query(text, domain_keywords=domain_keywords, config=config)
 
 
@@ -1826,18 +2146,26 @@ def _cover_missing_requests(
 
     def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
         return build_adb_hybrid_answer_context(
-            text, run_id, preferred_engines, search_settings,
-            top_k=per_query, neighbor_child_count=neighbor_child_count, max_records=per_query,
-            retrieval_queries=queries, rerank_enabled=rerank_enabled, inquiry_conditions=inquiry_conditions,
-            retrieval_scope=retrieval_scope, classification_filter=classification_filter,
+            text,
+            run_id,
+            preferred_engines,
+            search_settings,
+            top_k=per_query,
+            neighbor_child_count=neighbor_child_count,
+            max_records=per_query,
+            retrieval_queries=queries,
+            rerank_enabled=rerank_enabled,
+            inquiry_conditions=inquiry_conditions,
+            retrieval_scope=retrieval_scope,
+            classification_filter=classification_filter,
             runtime_knowledge=runtime_knowledge,
         )
 
     started = clock()
-    results, stop = run_targeted_retrievals(rows, targets, budget=budget, retrieve=retrieve,
-                                            runtime_knowledge=runtime_knowledge, tokenize=tokenize, clock=clock)
-    existing = {r.chunk_uid or r.id for r in context.records} | {
-        p.record.chunk_uid or p.record.id for p in context.evidence_tree}
+    results, stop = run_targeted_retrievals(
+        rows, targets, budget=budget, retrieve=retrieve, runtime_knowledge=runtime_knowledge, tokenize=tokenize, clock=clock
+    )
+    existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
     selected = select_new_parents(results, existing, budget.max_chunks)
     added_ids: list[str] = []
     rejected = ""
@@ -1846,34 +2174,46 @@ def _cover_missing_requests(
         added = context_bundle_from_parent_evidence(parents, max_chars=MAX_CONTEXT_CHARS)
         visible = list(context.records)
         candidate = _merge_crag_evidence(
-            context, AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence,
-                                   evidence_tree=added.evidence_tree),
-            question, max_records=max(1, len(visible), len(added.records)), max_chars=MAX_CONTEXT_CHARS * 2)
+            context,
+            AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence, evidence_tree=added.evidence_tree),
+            question,
+            max_records=max(1, len(visible), len(added.records)),
+            max_chars=MAX_CONTEXT_CHARS * 2,
+        )
         merged_keys = {r.chunk_uid or r.id for r in candidate.records}
         if visible and not {r.chunk_uid or r.id for r in visible} <= merged_keys:
             rejected = "would_drop_existing_evidence"
         else:
             added_ids = [key for key in merged_keys - existing if key]
-            pool = {r.chunk_uid or r.id: r for r in (*context.expansion_records,
-                                                      *(r for res in results for r in res.expansion_records))}
-            context = replace(candidate, expansion_records=tuple(pool.values()),
-                              preferred_child_ids=context.preferred_child_ids,
-                              ranked_candidates=context.ranked_candidates, deferred_records=context.deferred_records,
-                              document_selection=context.document_selection)
+            pool = {r.chunk_uid or r.id: r for r in (*context.expansion_records, *(r for res in results for r in res.expansion_records))}
+            context = replace(
+                candidate,
+                expansion_records=tuple(pool.values()),
+                preferred_child_ids=context.preferred_child_ids,
+                ranked_candidates=context.ranked_candidates,
+                deferred_records=context.deferred_records,
+                document_selection=context.document_selection,
+            )
     added_set = set(added_ids)
     trace["re_retrieval"] = {
         "applied": bool(added_ids),
         "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
         "elapsed_ms": int((clock() - started) * 1000),
-        "queries": [{
-            "request_id": result.request_id,
-            "queries": list(result.queries),
-            "candidates": len(result.parents),
-            "added_chunk_ids": [(p.record.chunk_uid or p.record.id) for rid, p in selected
-                                if rid == result.request_id and (p.record.chunk_uid or p.record.id) in added_set],
-            "elapsed_ms": result.elapsed_ms,
-            **({"error": result.error} if result.error else {}),
-        } for result in results],
+        "queries": [
+            {
+                "request_id": result.request_id,
+                "queries": list(result.queries),
+                "candidates": len(result.parents),
+                "added_chunk_ids": [
+                    (p.record.chunk_uid or p.record.id)
+                    for rid, p in selected
+                    if rid == result.request_id and (p.record.chunk_uid or p.record.id) in added_set
+                ],
+                "elapsed_ms": result.elapsed_ms,
+                **({"error": result.error} if result.error else {}),
+            }
+            for result in results
+        ],
         "added_chunk_ids": sorted(added_set),
     }
     if added_ids:
@@ -1889,13 +2229,18 @@ def _cover_missing_requests(
 def _coverage_step_lines(trace: dict[str, Any]) -> list[str]:
     """覆域の工程の記録の行。"""
     labels = {"supported": "根拠あり", "weak": "根拠が一部", "missing": "根拠なし", "unassessed": "判定なし"}
-    lines = [f"{row['id']}: {labels.get(row['status'], row['status'])}"
-             + (f" → {labels.get(row['status_after'], row['status_after'])}" if row.get("status_after") else "")
-             + f"（{_display_query(row['text'])}）" for row in trace.get("requests", ())]
+    lines = [
+        f"{row['id']}: {labels.get(row['status'], row['status'])}"
+        + (f" → {labels.get(row['status_after'], row['status_after'])}" if row.get("status_after") else "")
+        + f"（{_display_query(row['text'])}）"
+        for row in trace.get("requests", ())
+    ]
     re_retrieval = trace.get("re_retrieval") or {}
     for query in re_retrieval.get("queries", ()):
-        lines.append(f"{query['request_id']} を再検索: 根拠 {len(query['added_chunk_ids'])} 件を追加"
-                     + (f"（失敗: {query['error']}）" if query.get("error") else ""))
+        lines.append(
+            f"{query['request_id']} を再検索: 根拠 {len(query['added_chunk_ids'])} 件を追加"
+            + (f"（失敗: {query['error']}）" if query.get("error") else "")
+        )
     return lines
 
 
@@ -1908,8 +2253,10 @@ def _legacy_schema_notice(document_count: int) -> str:
     """旧 schema のため検索対象外になった文書数の注記。0 件なら空 (#948)。"""
     if document_count <= 0:
         return ""
-    return (f"※ 検索範囲に旧 schema の文書が {document_count} 件あり、検索対象外です。"
-            "対象文書の再チャンキングと「Embedding作成・ADB保存」を再実行してください。")
+    return (
+        f"※ 検索範囲に旧 schema の文書が {document_count} 件あり、検索対象外です。"
+        "対象文書の再チャンキングと「Embedding作成・ADB保存」を再実行してください。"
+    )
 
 
 def _format_classification_filter(classification_filter: ClassificationFilter) -> str:
@@ -1953,7 +2300,7 @@ def _lexical_retrieval_queries(
     if keyword_trace is not None:
         keyword_trace.update(
             decisions=[{"query": term, "accepted": True, "reason": "applicable"} for term in selected]
-                      + [{**item, "accepted": False} for item in rejected],
+            + [{**item, "accepted": False} for item in rejected],
         )
     queries = [" ".join(selected[index : index + 8]) for index in range(0, min(len(selected), 16), 8)]
     return _dedupe_generated_queries(original_question, queries)
@@ -1986,11 +2333,7 @@ def _retrieval_query_plan_payload(
     crag_rewrites: Sequence[str] = (),
     target_text_queries: Sequence[str] = (),
 ) -> dict[str, Any]:
-    runtime_question = (
-        runtime_knowledge.expanded_question
-        if runtime_knowledge is not None
-        else expansion.original_question
-    )
+    runtime_question = runtime_knowledge.expanded_question if runtime_knowledge is not None else expansion.original_question
     queries = _dedupe_queries(vector_queries or text_search_info.query_variants or expansion.retrieval_queries)
     plan = RetrievalQueryPlan(
         original_question=expansion.original_question,
@@ -2016,9 +2359,9 @@ def _retrieval_query_plan_payload(
     payload = plan.to_payload()
     payload["domain_keyword_expansion"] = dict(text_search_info.domain_keyword_expansion)
     payload["runtime_expansion_decisions"] = list(runtime_knowledge.expansion_decisions) if runtime_knowledge else []
-    payload["llm_expansion_decisions"] = ([{"query": query, "accepted": True, "reason": "applicable"}
-                                           for query in expansion.generated_queries]
-                                          + [{**item, "accepted": False} for item in expansion.rejected_queries])
+    payload["llm_expansion_decisions"] = [
+        {"query": query, "accepted": True, "reason": "applicable"} for query in expansion.generated_queries
+    ] + [{**item, "accepted": False} for item in expansion.rejected_queries]
     return payload
 
 
@@ -2081,14 +2424,18 @@ def build_query_expansion(
             )
         except Exception as exc:
             return _degraded_query_expansion(
-                original_question, selected_strategy, "検索文の生成", exc,
-                routing_data_required=routing_data_required, routing_data_items=routing_data_items,
+                original_question,
+                selected_strategy,
+                "検索文の生成",
+                exc,
+                routing_data_required=routing_data_required,
+                routing_data_items=routing_data_items,
             )
         generated_queries, rejected = filter_queries(
             original_question, _generated_queries_from_payload(output.model_dump(mode="json"), original_question, limit=None)
         )
         rejected_queries = (*rejected_queries, *rejected)
-    generated_queries = generated_queries[:_query_expansion_max_queries(settings)]
+    generated_queries = generated_queries[: _query_expansion_max_queries(settings)]
     return QueryExpansionResult(
         original_question=original_question,
         selected_strategy=selected_strategy,
@@ -2123,8 +2470,10 @@ def _text_search_limit_note(text_variants: Sequence[str], settings: Settings) ->
     limit = max(1, int(getattr(settings, "text_search_query_variant_limit", 6) or 6))
     if len(text_variants) <= limit:
         return ""
-    return (f"      全文検索に使う検索文: 先頭 {limit} 本（TEXT_SEARCH_QUERY_VARIANT_LIMIT）。"
-            f"残り {len(text_variants) - limit} 本は意味検索だけに使います。")
+    return (
+        f"      全文検索に使う検索文: 先頭 {limit} 本（TEXT_SEARCH_QUERY_VARIANT_LIMIT）。"
+        f"残り {len(text_variants) - limit} 本は意味検索だけに使います。"
+    )
 
 
 def _degraded_query_expansion(
@@ -2264,8 +2613,7 @@ _GOAL_LABELS = {"procedure": "操作方法", "rule": "規則・定義・可否",
 _SEARCH_PURPOSE = "意味の近さ（ベクトル）と語の一致（全文）で探した順位を融合し、上位の根拠とその前後の文脈を集めます。"
 
 
-def _record_question_understanding(step: _ExecutionStep, question: str, plan: QuestionPlan,
-                                   conditions: InquiryConditionParse) -> None:
+def _record_question_understanding(step: _ExecutionStep, question: str, plan: QuestionPlan, conditions: InquiryConditionParse) -> None:
     """質問から読み取った内容のうち、検索や回答を実際に変えるものだけを示す。"""
     contract = task_contract(question)
     units = [unit for unit in contract["request_units"] if unit.get("text") and unit.get("kind") != "context"]
@@ -2305,7 +2653,10 @@ _SCREEN_LINK_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
 
 def _linked_screen_children(
-    question: str, pool: Sequence[Any], ranked_children: Sequence[AnswerRecord], settings: Settings,
+    question: str,
+    pool: Sequence[Any],
+    ranked_children: Sequence[AnswerRecord],
+    settings: Settings,
 ) -> tuple[list[AnswerRecord], list[tuple[str, str]], list[AnswerRecord]]:
     """画面目録で選んだ画面の child chunk のうちまだ候補に無いもの、選んだ（文書、見出し）、context の展開に足す record を返す (#1108)。
 
@@ -2315,6 +2666,7 @@ def _linked_screen_children(
     """
     from rag_engine.dependencies import injected_screen_catalog, injected_screen_chunks
     from rag_engine.retrieval.screen_catalog import build_screen_catalog, link_screens, screen_candidates
+
     with _execution_step("画面の選択", "画面目録から質問を解決する画面を選び、その画面の根拠を検索候補に加えます。") as step:
         catalog = injected_screen_catalog(settings=settings)
         if catalog is not None:
@@ -2354,9 +2706,11 @@ def _linked_screen_children(
 def _target_text_queries(question: str, settings: Settings) -> list[str]:
     """質問の対象語の部分語から作る Oracle Text のフレーズ検索式 (#730)。質問文と同じ tokenizer で分かち書きする。"""
     from rag_engine.retrieval.target_text_queries import target_text_queries
+
     config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
-    domain_keywords = (settings.domain_keywords_override if settings.domain_keywords_override is not None
-                       else load_domain_keywords(settings.output_dir))
+    domain_keywords = (
+        settings.domain_keywords_override if settings.domain_keywords_override is not None else load_domain_keywords(settings.output_dir)
+    )
     try:
         return target_text_queries(question, lambda text: tokenize_text_search_query(text, domain_keywords=domain_keywords, config=config))
     except Exception:
@@ -2374,11 +2728,7 @@ def _question_text_search_tokenizer_config(settings: Settings) -> TextSearchToke
 def _text_search_tokenizer_label(config: TextSearchTokenizerConfig, tokenizer_name: str) -> str:
     cfg = normalize_text_search_tokenizer_config(config)
     # 分割は 1 つ（#588）。Sudachi が使えない環境では文字種の区切りだけになる。
-    name = (
-        "Sudachi＋文字種の区切り"
-        if tokenizer_name == TEXT_SEARCH_TOKENIZER_HYBRID
-        else "文字種の区切り（Sudachi なし）"
-    )
+    name = "Sudachi＋文字種の区切り" if tokenizer_name == TEXT_SEARCH_TOKENIZER_HYBRID else "文字種の区切り（Sudachi なし）"
     detail = f"dict={cfg.sudachi_dict_type}, latin={cfg.latin_stemmer}"
     if cfg.sudachi_config_path:
         detail += f", config={cfg.sudachi_config_path}"
@@ -2452,11 +2802,7 @@ def answer_question_result(
     # 章節の拡張（#1436）の時間の上限は、回答の開始から数える。
     answer_started_at = monotonic()
 
-    effective_rerank_enabled = (
-        bool(settings.default_rerank_enabled)
-        if rerank_enabled is None
-        else bool(rerank_enabled)
-    )
+    effective_rerank_enabled = bool(settings.default_rerank_enabled) if rerank_enabled is None else bool(rerank_enabled)
     selected_answer_flow = answer_flow_id(answer_flow)
     selected_retrieval_scope = normalize_retrieval_scope(retrieval_scope)
     selected_classification_filter = classification_filter or classification_filter_from_values()
@@ -2473,7 +2819,9 @@ def answer_question_result(
 
     with _execution_step("用語・ルールの確認", "登録済みの用語・ルールを質問に当て、別名の検索と回答の補助に使います。") as step:
         runtime_knowledge = build_runtime_knowledge_context(
-            normalized_question, settings.output_dir, settings.runtime_knowledge_path,
+            normalized_question,
+            settings.output_dir,
+            settings.runtime_knowledge_path,
         )
         if runtime_knowledge.error:
             step.add(f"読込エラー: {runtime_knowledge.error}")
@@ -2549,14 +2897,17 @@ def answer_question_result(
 
         # 旧 schema の文書は検索 SQL の版条件で除外される。件数を工程記録と回答本文に出す (#948)。
         # 戻り値を返さない差し替え実装でも動くよう、型を確認してから使う。
-        legacy_notice = _legacy_schema_notice(
-            readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0)
+        legacy_notice = _legacy_schema_notice(readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0)
         if legacy_notice:
             step.add(legacy_notice)
 
     # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
     prefetch = _start_original_query_prefetch(
-        normalized_question, query_strategy_value, settings, top_k=chunk_top_k, inquiry_conditions=inquiry_conditions,
+        normalized_question,
+        query_strategy_value,
+        settings,
+        top_k=chunk_top_k,
+        inquiry_conditions=inquiry_conditions,
     )
     with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
         step.add(f"設定: {query_strategy_label(query_strategy_id(query_strategy_value))}")
@@ -2571,10 +2922,12 @@ def answer_question_result(
             prefetch_note = _wait_original_query_prefetch(prefetch)
         if prefetch_note:
             step.add(prefetch_note)
-        step.add(*_query_expansion_details(
-            expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))))
+        step.add(
+            *_query_expansion_details(expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True)))
+        )
         if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
-                note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)):
+            note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
+        ):
             step.add(note)
 
     with _execution_step("検索文と検索語の確定", "意味の近さで探す検索文と、全文検索に使うキーワードを確定します。") as step:
@@ -2612,26 +2965,43 @@ def answer_question_result(
             sources.setdefault(_dedupe_query_key(query), "質問拡張")
         for query in lexical_queries:
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
-        step.result(f"検索文 {len(retrieval_queries)} 本", *(
-            f"{number}. [{sources.get(_dedupe_query_key(query), '質問理解')}] {_display_query(query)}"
-            for number, query in enumerate(retrieval_queries, 1)))
+        step.result(
+            f"検索文 {len(retrieval_queries)} 本",
+            *(
+                f"{number}. [{sources.get(_dedupe_query_key(query), '質問理解')}] {_display_query(query)}"
+                for number, query in enumerate(retrieval_queries, 1)
+            ),
+        )
         if rejected:
             step.add(f"      質問の目的から外れるため使わない検索文: {len(rejected)} 本")
         if note := _text_search_limit_note(_text_search_variants(retrieval_queries, expansion), settings):
             step.add(note)
         if text_search_info.target_text_queries:
-            step.add(f"      対象語の部分語による全文検索: {len(text_search_info.target_text_queries)} 本 " + " ".join(text_search_info.target_text_queries))
+            step.add(
+                f"      対象語の部分語による全文検索: {len(text_search_info.target_text_queries)} 本 "
+                + " ".join(text_search_info.target_text_queries)
+            )
         _add_text_search_details(step, text_search_info)
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
 
     if not generate_answer:
         return _retrieve_without_answer(
-            normalized_question, run_id, preferred_engine_ids, settings,
-            top_k=chunk_top_k, neighbor_child_count=chunk_neighbor_count, rerank_enabled=effective_rerank_enabled,
-            expansion=expansion, retrieval_queries=retrieval_queries, lexical_queries=lexical_queries,
-            text_search_info=text_search_info, question_plan=question_plan, runtime_knowledge=runtime_knowledge,
-            inquiry_conditions=inquiry_conditions, retrieval_scope=selected_retrieval_scope,
+            normalized_question,
+            run_id,
+            preferred_engine_ids,
+            settings,
+            top_k=chunk_top_k,
+            neighbor_child_count=chunk_neighbor_count,
+            rerank_enabled=effective_rerank_enabled,
+            expansion=expansion,
+            retrieval_queries=retrieval_queries,
+            lexical_queries=lexical_queries,
+            text_search_info=text_search_info,
+            question_plan=question_plan,
+            runtime_knowledge=runtime_knowledge,
+            inquiry_conditions=inquiry_conditions,
+            retrieval_scope=selected_retrieval_scope,
             classification_filter=selected_classification_filter,
         )
 
@@ -2718,8 +3088,12 @@ def answer_question_result(
         section_expansion = None
         if selected_answer_flow == CRAG_ANSWER_FLOW and context.records and context.text.strip():
             context, section_expansion = _expand_context_by_sections(
-                normalized_question, context, settings, crag_attempts,
-                answer_llm_provider=answer_llm_provider, rerank_enabled=effective_rerank_enabled,
+                normalized_question,
+                context,
+                settings,
+                crag_attempts,
+                answer_llm_provider=answer_llm_provider,
+                rerank_enabled=effective_rerank_enabled,
                 started_at=answer_started_at,
             )
         if not context.records or not context.text.strip():
@@ -2755,14 +3129,22 @@ def answer_question_result(
                 retrieval_top_k=chunk_top_k,
             )
 
-        with _execution_step("要求ごとの根拠の確認",
-                             "質問の要求ごとに根拠があるかを確かめ、根拠の無い要求だけを探し直します。") as coverage_step:
+        with _execution_step(
+            "要求ごとの根拠の確認", "質問の要求ごとに根拠があるかを確かめ、根拠の無い要求だけを探し直します。"
+        ) as coverage_step:
             context, request_coverage = _cover_missing_requests(
-                normalized_question, context, settings,
-                run_id=run_id, preferred_engines=preferred_engine_ids, top_k=chunk_top_k,
-                neighbor_child_count=chunk_neighbor_count, rerank_enabled=effective_rerank_enabled,
-                inquiry_conditions=inquiry_conditions, retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter, runtime_knowledge=runtime_knowledge,
+                normalized_question,
+                context,
+                settings,
+                run_id=run_id,
+                preferred_engines=preferred_engine_ids,
+                top_k=chunk_top_k,
+                neighbor_child_count=chunk_neighbor_count,
+                rerank_enabled=effective_rerank_enabled,
+                inquiry_conditions=inquiry_conditions,
+                retrieval_scope=selected_retrieval_scope,
+                classification_filter=selected_classification_filter,
+                runtime_knowledge=runtime_knowledge,
             )
             counts = request_coverage["counts"]
             re_retrieval = request_coverage.get("re_retrieval") or {}
@@ -2770,11 +3152,14 @@ def answer_question_result(
                 coverage_step.hide()
             coverage_step.result(
                 f"根拠あり {counts['supported']} 件、一部 {counts['weak']} 件、なし {counts['missing']} 件",
-                *_coverage_step_lines(request_coverage))
+                *_coverage_step_lines(request_coverage),
+            )
             if re_retrieval.get("applied"):
                 coverage_step.impact(f"根拠の無い要求の根拠 {len(re_retrieval['added_chunk_ids'])} 件を回答の材料に加えます。")
 
-        with _execution_step("回答に使う画像の確認", "根拠に含まれる画面・図を、回答するモデルへ原画像のまま見せるかを決めます。") as image_step:
+        with _execution_step(
+            "回答に使う画像の確認", "根拠に含まれる画面・図を、回答するモデルへ原画像のまま見せるかを決めます。"
+        ) as image_step:
             image_evidence = (
                 answer_image_evidence(context.records, settings.output_dir, question=normalized_question)
                 if should_include_image_evidence(
@@ -2788,32 +3173,49 @@ def answer_question_result(
             image_prompt_mode = _image_prompt_mode(image_evidence, settings)
             if not image_evidence:
                 image_step.hide()
-            image_step.result(f"画像 {len(image_evidence)} 件を" + (
-                "原画像のまま添付し、既定の Vision モデルで回答します" if image_prompt_mode == "vision_attachments"
-                else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"))
+            image_step.result(
+                f"画像 {len(image_evidence)} 件を"
+                + (
+                    "原画像のまま添付し、既定の Vision モデルで回答します"
+                    if image_prompt_mode == "vision_attachments"
+                    else "文字の説明として使います（画像の添付が無効か、Vision モデルか画像ファイルがありません）"
+                )
+            )
 
         grounded_answer = synthesize_grounded_answer(
-            normalized_question, context, settings,
-            question_plan=question_plan, runtime_knowledge=runtime_knowledge, inquiry_conditions=inquiry_conditions,
-            image_evidence=image_evidence, image_prompt_mode=image_prompt_mode,
-            answer_llm_provider=answer_llm_provider, query_expansion=expansion,
+            normalized_question,
+            context,
+            settings,
+            question_plan=question_plan,
+            runtime_knowledge=runtime_knowledge,
+            inquiry_conditions=inquiry_conditions,
+            image_evidence=image_evidence,
+            image_prompt_mode=image_prompt_mode,
+            answer_llm_provider=answer_llm_provider,
+            query_expansion=expansion,
             known_gaps=_known_gaps(crag_attempts, section_expansion),
             unread_sections=section_expansion.gap_lines if section_expansion is not None else (),
             evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
         )
         # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
         response, context = grounded_answer.response, grounded_answer.context
-        response = replace(response, generation_trace={**(response.generation_trace or {}),
-                                                       "request_coverage": request_coverage,
-                                                       **({"section_expansion": section_expansion.trace}
-                                                          if section_expansion is not None else {})})
+        response = replace(
+            response,
+            generation_trace={
+                **(response.generation_trace or {}),
+                "request_coverage": request_coverage,
+                **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
+            },
+        )
         image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
         if legacy_notice:
             response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
         answer = _format_answer_response(response)
-        publication = (response.generation_trace or {}).get('finalization', {})
-        references = format_references(_published_reference_records(context.records, response.generation_trace),
-            include_source=bool(publication.get('filtered') or publication.get('citations_synchronized')))
+        publication = (response.generation_trace or {}).get("finalization", {})
+        references = format_references(
+            _published_reference_records(context.records, response.generation_trace),
+            include_source=bool(publication.get("filtered") or publication.get("citations_synchronized")),
+        )
         if references:
             answer = f"{answer}\n\n参照:\n{references}"
         return _answer_question_result(
@@ -2865,8 +3267,7 @@ def _start_original_query_prefetch(
 
     def run() -> float:
         started = monotonic()
-        prefetch(query=query, candidate_limit=candidate_limit, inquiry_conditions=inquiry_conditions,
-                 settings=settings)
+        prefetch(query=query, candidate_limit=candidate_limit, inquiry_conditions=inquiry_conditions, settings=settings)
         return monotonic() - started
 
     context = contextvars.copy_context()
@@ -2916,8 +3317,9 @@ def _expand_context_by_sections(
 
     def grade(candidate: AnswerContext, level: int) -> CragRetrievalAttempt:
         queries = last.retrieval_queries if last is not None else (question,)
-        attempt = _grade_crag_retrieval(len(attempts) + level, question, question, queries, candidate, settings,
-                                        answer_llm_provider=answer_llm_provider)
+        attempt = _grade_crag_retrieval(
+            len(attempts) + level, question, question, queries, candidate, settings, answer_llm_provider=answer_llm_provider
+        )
         graded.append(attempt)
         return attempt
 
@@ -2928,22 +3330,39 @@ def _expand_context_by_sections(
     extractor = SectionExtractor(settings, parse_text_response, provider_id=answer_llm_provider)
     with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、足りるかを確かめながら根拠に加えます。") as step:
         result = sections.expand_sections(
-            question, context, settings, last_attempt=last, grade=grade,
-            section_outline=ports[0], section_chunks=ports[1], rerank=rerank, large_sections=extractor,
-            started_at=started_at, deadline_remaining=remaining_seconds, clock=monotonic,
+            question,
+            context,
+            settings,
+            last_attempt=last,
+            grade=grade,
+            section_outline=ports[0],
+            section_chunks=ports[1],
+            rerank=rerank,
+            large_sections=extractor,
+            started_at=started_at,
+            deadline_remaining=remaining_seconds,
+            clock=monotonic,
         )
         result.trace["grades"] = [item.to_payload() for item in graded]
         if extractor.calls:
-            result.trace["extraction"] = {"calls": extractor.calls, "max_calls": extractor.limits.max_calls,
-                                          "part_tokens": extractor.limits.part_tokens}
+            result.trace["extraction"] = {
+                "calls": extractor.calls,
+                "max_calls": extractor.limits.max_calls,
+                "part_tokens": extractor.limits.part_tokens,
+            }
         if result.stop_reason in {sections.STOP_SUFFICIENT, sections.STOP_DISABLED} and not result.applied:
             step.hide()
         added = len(result.context.records) - len(context.records)
-        step.result(f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
-                    *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])))
+        step.result(
+            f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました"
+            f"（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
+            *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])),
+        )
         if extractor.calls:
-            step.add(f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回 / "
-                     f"上限 {extractor.limits.max_calls} 回）。")
+            step.add(
+                f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回 / "
+                f"上限 {extractor.limits.max_calls} 回）。"
+            )
         if result.unread:
             step.impact("上限に達したため、読めなかった章節を「確かめられていない点」に示し、条件つきの回答にします。")
     return result.context, result
@@ -2972,6 +3391,7 @@ def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tup
         # 読む範囲（文書全体）まで読み、評価し直しを省いた (#1528)。内容の観点の欠けは広げる前の根拠の判定なので
         # 渡さない（文書全体を読んだ後の根拠には当てはまらない）。適用の観点などはそのまま渡す。
         from rag_engine.generation.section_expansion import CONTENT_ASPECTS
+
         gaps = tuple(aspect for aspect in gaps if aspect not in CONTENT_ASPECTS)
     return gaps
 
@@ -2985,6 +3405,7 @@ def _section_evidence_budget(context: AnswerContext, settings: Settings, expansi
     if expansion is None or not expansion.applied:
         return None
     from rag_engine.generation.section_expansion import SectionExpansionLimits
+
     base = int(getattr(settings, "evidence_budget_chars", 0) or 0)
     total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
     limit = SectionExpansionLimits.from_settings(settings).input_tokens
@@ -3085,9 +3506,7 @@ def _route_query_strategy(
         QueryRoutingOutput,
         provider_id=answer_llm_provider,
     )
-    strategy = query_strategy_id(
-        output.strategy
-    )
+    strategy = query_strategy_id(output.strategy)
     if strategy not in _ROUTABLE_QUERY_STRATEGIES:
         strategy = SIMPLE_RETRIEVAL_STRATEGY
     reason = str(output.reason or "").strip()
@@ -3174,7 +3593,8 @@ def _answer_question_result(
         generation_trace=parsed.generation_trace,
         task_contract=task_contract(expansion.original_question),
         rejected_queries=expansion.rejected_queries,
-        envelope=parsed.envelope or fallback_envelope(
+        envelope=parsed.envelope
+        or fallback_envelope(
             answered=response is not None and bool(parsed.evidence_facts),
             insufficient_reason=parsed.insufficient_reason,
             needs_human_review=parsed.needs_human_review,
@@ -3219,11 +3639,7 @@ def _ranked_records_with_neighbors(
     queries = _retrieval_queries(question, retrieval_queries)
     normalized_question = _normalize_text(question)
     terms = _search_terms_for_queries(queries)
-    ranked = (
-        rank_records_with_rrf(queries, records, len(records))
-        if len(queries) > 1
-        else rank_records(question, records, len(records))
-    )
+    ranked = rank_records_with_rrf(queries, records, len(records)) if len(queries) > 1 else rank_records(question, records, len(records))
     ranked = rerank_records(question, ranked, settings, enabled=rerank_enabled)
     by_page: dict[int, list[AnswerRecord]] = {}
     for record in records:

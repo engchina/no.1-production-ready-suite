@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.chunking.constants import FORM_VISUAL_RAW_TYPES, _bool_value, _int_value, _preview
 from rag_engine.chunking.records import (
     _bbox_contains,
@@ -13,6 +13,8 @@ from rag_engine.chunking.records import (
     _image_evidence_embedding_modality,
     _record_text_for_chunk,
 )
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
+
 
 def _source_record_ref(record: dict[str, Any]) -> dict[str, Any]:
     text_preview = _preview(_record_text_for_chunk(record), 240)
@@ -114,12 +116,8 @@ def _image_evidence(
                 "vision_provider": str(ref.get("vision_provider") or ""),
                 "vision_model": str(ref.get("vision_model") or ""),
                 "vision_error": str(ref.get("vision_error") or ""),
-                "visual_kind": str(
-                    ref.get("visual_kind") or ref.get("picture_kind") or ref.get("visual_artifact_type") or ""
-                ),
-                "visual_structure": (
-                    dict(ref.get("visual_structure")) if isinstance(ref.get("visual_structure"), dict) else {}
-                ),
+                "visual_kind": str(ref.get("visual_kind") or ref.get("picture_kind") or ref.get("visual_artifact_type") or ""),
+                "visual_structure": (dict(ref.get("visual_structure")) if isinstance(ref.get("visual_structure"), dict) else {}),
                 "visual_role": visual_role_from_ref(ref),
                 "embedding_modality": _image_evidence_embedding_modality(ref),
             }
@@ -204,9 +202,7 @@ def _table_image_evidence(
                         or raw.get("visual_artifact_type")
                         or ("table" if table_id else "")
                     ),
-                    "visual_structure": (
-                        dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}
-                    ),
+                    "visual_structure": (dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}),
                     "visual_role": visual_role_from_ref(raw),
                     "relationship": str(raw.get("relationship") or "contained_in_table"),
                     "table_id": table_id,
@@ -237,17 +233,13 @@ def _form_image_evidence(
         page_fields = [dict(field) for field in form_context if int(field.get("page") or 0) == page]
         page_refs = [ref for ref in refs if int(ref.get("page") or 0) == page]
         regions = [
-            ref
-            for ref in page_refs
-            if _is_form_visual_ref(ref) and str(ref.get("crop_path") or ref.get("vision_crop") or "").strip()
+            ref for ref in page_refs if _is_form_visual_ref(ref) and str(ref.get("crop_path") or ref.get("vision_crop") or "").strip()
         ]
         region = regions[0] if len(regions) == 1 and _form_region_covers_fields(regions[0], page_fields) else None
         if region is not None:
             record_id = str(region.get("record_id") or "").strip()
             crop_path = str(region.get("crop_path") or region.get("vision_crop") or "").strip()
-            context_crop_path = str(
-                region.get("context_crop_path") or region.get("vision_context_crop") or ""
-            ).strip()
+            context_crop_path = str(region.get("context_crop_path") or region.get("vision_context_crop") or "").strip()
             image_id = record_id or f"{source_run_id or 'run'}-form-page-{page}"
             seq_no = int(region.get("seq_no") or 0)
             bbox = region.get("bbox") if isinstance(region.get("bbox"), list) else []
@@ -294,8 +286,10 @@ def _form_region_covers_fields(region: dict[str, Any], fields: Sequence[dict[str
     region_bbox = _bbox_tuple(region.get("bbox"))
     field_bboxes = [_bbox_tuple(field.get("bbox")) for field in fields]
     valid_field_bboxes = [bbox for bbox in field_bboxes if bbox is not None]
-    return region_bbox is not None and bool(valid_field_bboxes) and all(
-        _bbox_contains(region_bbox, field_bbox) for field_bbox in valid_field_bboxes
+    return (
+        region_bbox is not None
+        and bool(valid_field_bboxes)
+        and all(_bbox_contains(region_bbox, field_bbox) for field_bbox in valid_field_bboxes)
     )
 
 

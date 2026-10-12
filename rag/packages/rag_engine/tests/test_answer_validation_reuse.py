@@ -2,6 +2,7 @@
 
 RAG の回答の監査を通った説明と本文・根拠が同じ段落は、その判定（supported）を使い、モデルに渡さない。
 """
+
 import json
 from unittest.mock import patch
 
@@ -13,24 +14,26 @@ from rag_engine.evaluation.answer_validation import (
     validate_answer_claims,
 )
 
-RAG_ANSWER = "\n".join([
-    "承認の記録は、承認した日から5年間保管します。",
-    "",
-    "確認できる内容",
-    "",
-    "・承認の記録は、承認した日から5年間保管します。",
-    "根拠：approval-rules.pdf p.1",
-    "",
-    "操作手順（申請）",
-    "",
-    "1. 申請画面で「承認依頼」を押します。",
-    "2. 承認者を選びます。",
-    "根拠：manual.pdf p.3",
-    "",
-    "答えていない点",
-    "",
-    "・保管の場所は資料に記載がありません。",
-])
+RAG_ANSWER = "\n".join(
+    [
+        "承認の記録は、承認した日から5年間保管します。",
+        "",
+        "確認できる内容",
+        "",
+        "・承認の記録は、承認した日から5年間保管します。",
+        "根拠：approval-rules.pdf p.1",
+        "",
+        "操作手順（申請）",
+        "",
+        "1. 申請画面で「承認依頼」を押します。",
+        "2. 承認者を選びます。",
+        "根拠：manual.pdf p.3",
+        "",
+        "答えていない点",
+        "",
+        "・保管の場所は資料に記載がありません。",
+    ]
+)
 ITEMS = [
     {"kind": "rule", "text": "承認の記録は、承認した日から5年間保管します。", "applies": "matched"},
     {"kind": "operation", "text": "申請画面で「承認依頼」を押します。", "applies": "matched"},
@@ -39,18 +42,27 @@ ITEMS = [
 ]
 CITATION_LINES = {"c-rule": [1], "c-manual": [2]}
 EVIDENCE = [
-    {"id": "c-rule", "source": "approval-rules.pdf", "page_start": 1, "page_end": 1,
-     "text": "承認の記録は、承認した日から 5 年間保管します。"},
-    {"id": "c-manual", "source": "manual.pdf", "page_start": 3, "page_end": 3,
-     "text": "申請画面で「承認依頼」を押します。承認者を選びます。"},
+    {
+        "id": "c-rule",
+        "source": "approval-rules.pdf",
+        "page_start": 1,
+        "page_end": 1,
+        "text": "承認の記録は、承認した日から 5 年間保管します。",
+    },
+    {
+        "id": "c-manual",
+        "source": "manual.pdf",
+        "page_start": 3,
+        "page_end": 3,
+        "text": "申請画面で「承認依頼」を押します。承認者を選びます。",
+    },
 ]
 
 
 def test_audited_items_follow_the_citation_lines() -> None:
     audited = audited_answer_items(RAG_ANSWER, ITEMS, CITATION_LINES)
     # 条件つきの説明と gap は再利用しない。
-    assert audited == {"承認の記録は、承認した日から5年間保管します。": ["c-rule"],
-                       "申請画面で「承認依頼」を押します。": ["c-manual"]}
+    assert audited == {"承認の記録は、承認した日から5年間保管します。": ["c-rule"], "申請画面で「承認依頼」を押します。": ["c-manual"]}
     assert audited_line_key("- 1. x") == "1. x"  # 印は先頭の 1 つだけ除く
     assert audited_line_key("  2)  承認者を  選びます。 ") == "承認者を 選びます。"
     # Markdown の強調は書式だけなので除く（Agent が「**最長 30 日**」と書き直した回答。m1527 の実測）。
@@ -80,10 +92,22 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.append([item["text"] for item in payload["answer_passages"]])
-        return ClaimAuditOutput.model_validate({"claim_checks": [
-            {"answer_quote": "段落", "answer_passage_id": item["id"], "status": "supported",
-             "evidence_id": payload["evidence_items"][0]["evidence_id"], "source_id": "", "evidence_quote": "",
-             "reason": "根拠に記載"} for item in payload["answer_passages"]]})
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": item["id"],
+                        "status": "supported",
+                        "evidence_id": payload["evidence_items"][0]["evidence_id"],
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "根拠に記載",
+                    }
+                    for item in payload["answer_passages"]
+                ]
+            }
+        )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("保管期間は？", answer, EVIDENCE, settings=None, audited=audited)
@@ -100,9 +124,21 @@ def test_reuse_needs_the_evidence_to_be_reread() -> None:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        return ClaimAuditOutput.model_validate({"claim_checks": [
-            {"answer_quote": "段落", "answer_passage_id": payload["answer_passages"][0]["id"], "status": "unsupported",
-             "evidence_id": "", "source_id": "", "evidence_quote": "", "reason": "根拠に無い"}]})
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": payload["answer_passages"][0]["id"],
+                        "status": "unsupported",
+                        "evidence_id": "",
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "根拠に無い",
+                    }
+                ]
+            }
+        )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse) as model:
         result = validate_answer_claims("保管期間は？", answer, EVIDENCE[1:], settings=None, audited=audited)

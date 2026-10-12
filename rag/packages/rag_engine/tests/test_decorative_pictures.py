@@ -1,13 +1,24 @@
 """解析時の Picture 分類が、節見出しの再掲と著作権表示だけの帯画像を decorative にする (#899)。"""
+
 from rag_engine.parsing.decorative_pictures import classify_picture_record
 
 BANNER_BBOX = [50, 300, 550, 340]
 
 
 def _record(id, category, page, seq, text="", *, raw_type=None, bbox=None):
-    return {"id": id, "engine": "docling", "page": page, "seq_no": seq, "category": category, "text": text,
-            "raw_type": raw_type or category.lower(), "bbox": bbox or [50, 400, 550, 600],
-            "page_width": 1000, "page_height": 1000, "raw": {}}
+    return {
+        "id": id,
+        "engine": "docling",
+        "page": page,
+        "seq_no": seq,
+        "category": category,
+        "text": text,
+        "raw_type": raw_type or category.lower(),
+        "bbox": bbox or [50, 400, 550, 600],
+        "page_width": 1000,
+        "page_height": 1000,
+        "raw": {},
+    }
 
 
 def _records(ocr_text, heading="Ａ受注管理 －（３）受注入力"):

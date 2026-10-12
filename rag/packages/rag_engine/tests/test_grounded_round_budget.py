@@ -10,13 +10,14 @@ from contextvars import copy_context
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
+
 from rag_engine.adapters import oci
 from rag_engine.generation import execution_record, grounded
 from rag_engine.models.llm import GroundedAudit, GroundedDraft
 from rag_engine.resources import deadline as deadlines
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, check_deadline
 from rag_engine.resources.llm_usage import LlmUsage, llm_usage, record_llm_usage, usage_line
-from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
 GOOD = "一覧表を選択し、処理を選択します。"
 
@@ -60,8 +61,16 @@ class RoundBudgetUnitTest(unittest.TestCase):
         self.assertTrue(budget.allows_round(1))
         budget.seconds.append(201.0)
         self.assertFalse(budget.allows_round(2))
-        self.assertEqual(budget.stop, {"reason": grounded.DEADLINE_BEFORE_ROUND, "round": 3, "remaining_seconds": 230.0,
-                                       "estimate_seconds": 201.0, "reserve_seconds": 30.0})
+        self.assertEqual(
+            budget.stop,
+            {
+                "reason": grounded.DEADLINE_BEFORE_ROUND,
+                "round": 3,
+                "remaining_seconds": 230.0,
+                "estimate_seconds": 201.0,
+                "reserve_seconds": 30.0,
+            },
+        )
 
     def test_without_deadline_nothing_is_limited(self):
         budget = grounded.RoundBudget(lambda: None)
@@ -80,8 +89,7 @@ class RoundBudgetUnitTest(unittest.TestCase):
         self.assertGreater(remaining, 60.0)
 
     def test_pending_feedback_labels(self):
-        labels = grounded.pending_feedback_labels({"unanswered_requests": [{}, {}], "dropped_items": [{}],
-                                                   "goal_alignment": "partial"})
+        labels = grounded.pending_feedback_labels({"unanswered_requests": [{}, {}], "dropped_items": [{}], "goal_alignment": "partial"})
         self.assertEqual(labels, ["答えていない要求 2 件", "原文と一致せず除いた説明 1 件", "質問の目的とのずれ"])
 
 
@@ -123,8 +131,7 @@ class DeadlineCutShortTest(unittest.TestCase):
 
 class SynthesizeRoundBudgetTest(unittest.TestCase):
     def run_with_clock(self, model, ctx, clock):
-        with patch.object(deadlines, "remaining_seconds", clock.remaining), \
-                patch.object(grounded, "monotonic", lambda: clock.now):
+        with patch.object(deadlines, "remaining_seconds", clock.remaining), patch.object(grounded, "monotonic", lambda: clock.now):
             return run(model, ctx)
 
     def test_stops_before_a_correction_round_that_does_not_fit(self):
@@ -211,8 +218,15 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         def capped_draft(prompt):
             # adapter（`_openai_parsed`）と同じく、抑えた上限で未完了なら今の期限を切って DeadlineExceeded にする。
             clock.now += 520.0
-            record_llm_usage({"input_tokens": 13000, "output_tokens": 18000, "reasoning_tokens": 15000,
-                              "seconds": 520.0, "incomplete_reason": "max_output_tokens"})
+            record_llm_usage(
+                {
+                    "input_tokens": 13000,
+                    "output_tokens": 18000,
+                    "reasoning_tokens": 15000,
+                    "seconds": 520.0,
+                    "incomplete_reason": "max_output_tokens",
+                }
+            )
             deadlines.expire_deadline()
             raise DeadlineExceeded("回答の期限までに LLM の出力が終わりません")
 
@@ -225,8 +239,9 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
 
         stop = result.generation_trace["round_budget"]["stop"]
         self.assertEqual(stop["reason"], grounded.DEADLINE_NO_DRAFT)
-        self.assertEqual((stop["usage"]["output_tokens"], stop["usage"]["reasoning_tokens"], stop["usage"]["seconds"]),
-                         (18000, 15000, 520.0))
+        self.assertEqual(
+            (stop["usage"]["output_tokens"], stop["usage"]["reasoning_tokens"], stop["usage"]["seconds"]), (18000, 15000, 520.0)
+        )
         self.assertEqual(stop["usage"]["incomplete_reasons"], {"max_output_tokens": 1})
         self.assertEqual(result.envelope["outcome"], "conditional")
 
@@ -292,8 +307,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
             raise AssertionError("期限が切れているはず")
 
         model = FakeModel([_draft_with_dropped(eid), second_draft_cut], [audit((0, "supported", "matched", ""))])
-        with patch.object(deadlines, "remaining_seconds", remaining), \
-                patch.object(grounded.RoundBudget, "estimate", lambda self: 0.0):
+        with patch.object(deadlines, "remaining_seconds", remaining), patch.object(grounded.RoundBudget, "estimate", lambda self: 0.0):
             result = run(model, ctx).response
 
         rounds = result.generation_trace["rounds"]
@@ -324,8 +338,9 @@ class LlmUsageTest(unittest.TestCase):
         usage_token = llm_usage.set(LlmUsage())
         try:
             with execution_record._execution_step("生成"):
-                record_llm_usage({"input_tokens": 1200, "cached_tokens": 200, "output_tokens": 300,
-                                  "reasoning_tokens": 250, "seconds": 12.34})
+                record_llm_usage(
+                    {"input_tokens": 1200, "cached_tokens": 200, "output_tokens": 300, "reasoning_tokens": 250, "seconds": 12.34}
+                )
                 # 並列の呼び出し（抽出）は文脈を写した thread から同じ累積に足す。
                 copy_context().run(record_llm_usage, {"input_tokens": 100, "output_tokens": 10, "seconds": 1.0})
             with execution_record._execution_step("LLM なし"):
@@ -333,16 +348,23 @@ class LlmUsageTest(unittest.TestCase):
         finally:
             llm_usage.reset(usage_token)
             execution_record._structured_steps.reset(step_token)
-        self.assertEqual(steps[0]["llm_usage"], {"calls": 2, "input_tokens": 1300, "cached_tokens": 200,
-                                                 "output_tokens": 310, "reasoning_tokens": 250, "seconds": 13.3})
+        self.assertEqual(
+            steps[0]["llm_usage"],
+            {"calls": 2, "input_tokens": 1300, "cached_tokens": 200, "output_tokens": 310, "reasoning_tokens": 250, "seconds": 13.3},
+        )
         self.assertNotIn("llm_usage", steps[1])
-        self.assertEqual(usage_line(steps[0]["llm_usage"]),
-                         "入力 1,300 tokens（cache 200）・出力 310 tokens（推論 250）・13.3 秒")
+        self.assertEqual(usage_line(steps[0]["llm_usage"]), "入力 1,300 tokens（cache 200）・出力 310 tokens（推論 250）・13.3 秒")
 
     def test_adapter_reads_responses_usage(self):
-        response = SimpleNamespace(status="completed", usage=SimpleNamespace(
-            input_tokens=5000, input_tokens_details=SimpleNamespace(cached_tokens=1000), output_tokens=800,
-            output_tokens_details=SimpleNamespace(reasoning_tokens=600)))
+        response = SimpleNamespace(
+            status="completed",
+            usage=SimpleNamespace(
+                input_tokens=5000,
+                input_tokens_details=SimpleNamespace(cached_tokens=1000),
+                output_tokens=800,
+                output_tokens_details=SimpleNamespace(reasoning_tokens=600),
+            ),
+        )
         usage_token = llm_usage.set(LlmUsage())
         try:
             with self.assertLogs(oci.__name__, level="INFO") as logs:
@@ -350,24 +372,33 @@ class LlmUsageTest(unittest.TestCase):
             snapshot = llm_usage.get().snapshot()
         finally:
             llm_usage.reset(usage_token)
-        self.assertEqual(snapshot, {"calls": 1, "input_tokens": 5000, "cached_tokens": 1000, "output_tokens": 800,
-                                    "reasoning_tokens": 600, "seconds": 42.0})
+        self.assertEqual(
+            snapshot,
+            {"calls": 1, "input_tokens": 5000, "cached_tokens": 1000, "output_tokens": 800, "reasoning_tokens": 600, "seconds": 42.0},
+        )
         self.assertIn("schema=GroundedDraft seconds=42.0 input_tokens=5000", logs.output[0])
         # backend の構造化 log は外部の logger の本文を出さないので、値は extra の項目でも渡す。
         logged = logs.records[0]
-        self.assertEqual((logged.event, logged.llm_schema, logged.llm_seconds, logged.input_tokens, logged.reasoning_tokens),
-                         ("llm_call_usage", "GroundedDraft", 42.0, 5000, 600))
+        self.assertEqual(
+            (logged.event, logged.llm_schema, logged.llm_seconds, logged.input_tokens, logged.reasoning_tokens),
+            ("llm_call_usage", "GroundedDraft", 42.0, 5000, 600),
+        )
         # usage の無い応答（スタブ・古い endpoint）でも失敗しない。
         oci._record_usage(SimpleNamespace(status="completed"), SimpleNamespace(model="m"), GroundedAudit, 1.0)
 
     def test_round_timing_line(self):
-        current = SimpleNamespace(audit_cut=True, timing={
-            "generation_seconds": 200.0, "audit_seconds": 30.0,
-            "generation_usage": {"calls": 1, "input_tokens": 9000, "output_tokens": 4000, "reasoning_tokens": 3000,
-                                 "seconds": 200.0}})
-        self.assertEqual(grounded.round_timing_line(current),
-                         "所要: 生成 200.0 秒（入力 9,000 tokens・出力 4,000 tokens（推論 3,000）・200.0 秒）、"
-                         "監査 30.0 秒、時間の上限で打ち切り")
+        current = SimpleNamespace(
+            audit_cut=True,
+            timing={
+                "generation_seconds": 200.0,
+                "audit_seconds": 30.0,
+                "generation_usage": {"calls": 1, "input_tokens": 9000, "output_tokens": 4000, "reasoning_tokens": 3000, "seconds": 200.0},
+            },
+        )
+        self.assertEqual(
+            grounded.round_timing_line(current),
+            "所要: 生成 200.0 秒（入力 9,000 tokens・出力 4,000 tokens（推論 3,000）・200.0 秒）、監査 30.0 秒、時間の上限で打ち切り",
+        )
 
 
 if __name__ == "__main__":

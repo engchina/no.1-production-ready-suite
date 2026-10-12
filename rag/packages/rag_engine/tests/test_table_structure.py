@@ -10,8 +10,8 @@ class TableStructureTests(unittest.TestCase):
         structure = parse_html_table_structure(
             "<table>"
             "<caption>取引先情報</caption>"
-            "<tr><th colspan=\"2\">見出し</th><th>説明</th></tr>"
-            "<tr><th rowspan=\"2\">種別</th><td>基本</td><td>21件</td></tr>"
+            '<tr><th colspan="2">見出し</th><th>説明</th></tr>'
+            '<tr><th rowspan="2">種別</th><td>基本</td><td>21件</td></tr>'
             "<tr><td>出荷</td><td>25件</td></tr>"
             "</table>"
         )
@@ -45,8 +45,7 @@ class TableStructureTests(unittest.TestCase):
         structure = parse_html_table_structure("<table><tr><th>項目<th>値<tr><td>a<td>b<tr><td>c<td>d</table>")
 
         self.assertEqual(structure["row_count"], 3)
-        self.assertEqual([[cell["text"] for cell in row["cells"]] for row in structure["rows"]],
-                         [["項目", "値"], ["a", "b"], ["c", "d"]])
+        self.assertEqual([[cell["text"] for cell in row["cells"]] for row in structure["rows"]], [["項目", "値"], ["a", "b"], ["c", "d"]])
 
     def test_extreme_spans_are_capped(self):
         # Vision 由来の HTML の span をそのまま展開すると、処理量が入力値に比例する。
@@ -77,15 +76,18 @@ class TableStructureTests(unittest.TestCase):
         """期間全体の値を初日だけの値にしない。内訳行が何の内訳かを失わない。"""
         html = (
             "<table><tr><td></td><td></td><th>4月27日</th><th>4月28日</th><th>4月29日</th><th>4月30日</th></tr>"
-            "<tr><th colspan=\"2\">当行ATM</th><td colspan=\"4\">24時間</td></tr>"
-            "<tr><th rowspan=\"2\">提携銀行のATM</th><th>入金</th><td colspan=\"4\">9時～17時</td></tr>"
-            "<tr><th>出金</th><td>0時05分～23時55分</td><td>0時05分～20時</td><td colspan=\"2\">6時30分～20時</td></tr></table>"
+            '<tr><th colspan="2">当行ATM</th><td colspan="4">24時間</td></tr>'
+            '<tr><th rowspan="2">提携銀行のATM</th><th>入金</th><td colspan="4">9時～17時</td></tr>'
+            '<tr><th>出金</th><td>0時05分～23時55分</td><td>0時05分～20時</td><td colspan="2">6時30分～20時</td></tr></table>'
         )
         structure = parse_html_table_structure(html)
         text = table_row_group_text(structure, structure["rows"][1:])
         self.assertIn("行 2: 列1: 当行ATM / 4月27日～4月30日: 24時間", text)
         self.assertIn("行 3: 列1: 提携銀行のATM / 列2: 入金 / 4月27日～4月30日: 9時～17時", text)
-        self.assertIn("行 4: 列1: 提携銀行のATM / 列2: 出金 / 4月27日: 0時05分～23時55分 / 4月28日: 0時05分～20時 / 4月29日～4月30日: 6時30分～20時", text)
+        self.assertIn(
+            "行 4: 列1: 提携銀行のATM / 列2: 出金 / 4月27日: 0時05分～23時55分 / 4月28日: 0時05分～20時 / 4月29日～4月30日: 6時30分～20時",
+            text,
+        )
 
 
 if __name__ == "__main__":
@@ -96,9 +98,11 @@ def test_rowspan_value_cells_are_inherited_by_following_rows():
     # 「入金」の内訳行が何の内訳か分からなくならないよう、th でない結合セルも引き継ぐ (#594)。
     from rag_engine.parsing.table_structure import parse_html_table_structure, table_row_groups
 
-    html = ("<table><tr><th>区分</th><th>項目</th><th>金額</th></tr>"
-            "<tr><td rowspan='2'>入金</td><td>振込</td><td>100</td></tr><tr><td>現金</td><td>200</td></tr>"
-            "<tr><th rowspan='2'>出金</th><td>振込</td><td>300</td></tr><tr><td>現金</td><td>400</td></tr></table>")
+    html = (
+        "<table><tr><th>区分</th><th>項目</th><th>金額</th></tr>"
+        "<tr><td rowspan='2'>入金</td><td>振込</td><td>100</td></tr><tr><td>現金</td><td>200</td></tr>"
+        "<tr><th rowspan='2'>出金</th><td>振込</td><td>300</td></tr><tr><td>現金</td><td>400</td></tr></table>"
+    )
     structure = parse_html_table_structure(html)
     text = "\n".join(group["text"] for group in table_row_groups(structure, target_chars=10000))
     assert "行 3: 区分: 入金 / 項目: 現金 / 金額: 200" in text
@@ -113,14 +117,21 @@ def test_misplaced_cell_text_is_moved_back_from_the_neighbor_row():
     # グリフの bbox が下へずれ、26 行目の「Input」が 25 行目のセルへ入った表を text layer の行で戻す (#597)。
     from rag_engine.parsing.table_structure import misplaced_cell_repairs
 
-    rows = [_own("項番", "連携データ", "連携ID", "連携の向き", "連携手法"),
-            _own("24", "取引先情報", "LNK-002", "Input", "")]
+    rows = [_own("項番", "連携データ", "連携ID", "連携の向き", "連携手法"), _own("24", "取引先情報", "LNK-002", "Input", "")]
     rows[1][4] = ("ファイル連携（※2）", False)  # 上の行から続く rowspan セル
-    rows += [_own("25", "倉庫入出庫情報", "LNK-006", "Input Input") + [("ファイル連携（※2）", False)],
-             _own("26", "取引先与信情報", "LNK-007", "") + [("ファイル連携（※2）", False)],
-             _own("27", "取引先契約・割引情報", "LNK-008", "Input") + [("ファイル連携（※2）", False)]]
-    lines = ["項番 連携データ 連携ID 連携の向き 連携手法", "24 取引先情報 LNK-002 Input", "25 倉庫入出庫情報 LNK-006 Input",
-             "26 取引先与信情報 LNK-007 Input", "27 取引先契約・割引情報 LNK-008 Input", "ファイル連携（※2）"]
+    rows += [
+        _own("25", "倉庫入出庫情報", "LNK-006", "Input Input") + [("ファイル連携（※2）", False)],
+        _own("26", "取引先与信情報", "LNK-007", "") + [("ファイル連携（※2）", False)],
+        _own("27", "取引先契約・割引情報", "LNK-008", "Input") + [("ファイル連携（※2）", False)],
+    ]
+    lines = [
+        "項番 連携データ 連携ID 連携の向き 連携手法",
+        "24 取引先情報 LNK-002 Input",
+        "25 倉庫入出庫情報 LNK-006 Input",
+        "26 取引先与信情報 LNK-007 Input",
+        "27 取引先契約・割引情報 LNK-008 Input",
+        "ファイル連携（※2）",
+    ]
     assert misplaced_cell_repairs(rows, lines) == [(2, 3, "Input"), (3, 3, "Input")]
 
 
@@ -143,6 +154,7 @@ def test_misplaced_cell_repair_handles_different_values_and_refuses_invented_tex
 def test_row_groups_match_the_full_text_reference_on_a_large_table():
     """長さの累積で決める group 境界が、全文を作って測る従来の判定と一致する (#805)。"""
     from rag_engine.parsing.table_structure import table_row_group_text, table_row_groups
+
     rows = ["<tr><th>区分</th><th>種別</th><th>金額</th><th>備考</th></tr>"]
     for i in range(300):
         if i % 7 == 0:
@@ -154,7 +166,7 @@ def test_row_groups_match_the_full_text_reference_on_a_large_table():
     structure = parse_html_table_structure("<table><caption>料金表</caption>" + "".join(rows) + "</table>")
 
     def reference(target):
-        data_rows = structure["rows"][structure["header_row_count"]:]
+        data_rows = structure["rows"][structure["header_row_count"] :]
         groups, current = [], []
         for row in data_rows:
             candidate = [*current, row]

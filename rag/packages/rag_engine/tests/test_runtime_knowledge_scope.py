@@ -4,9 +4,7 @@ from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 
 
 def _context() -> RuntimeKnowledgeContext:
-    return RuntimeKnowledgeContext(
-        original_question="期限は？", expanded_question="期限は？", path=Path("rk.json")
-    )
+    return RuntimeKnowledgeContext(original_question="期限は？", expanded_question="期限は？", path=Path("rk.json"))
 
 
 def test_scope_goes_to_prompt_and_search_terms_to_the_expanded_question() -> None:

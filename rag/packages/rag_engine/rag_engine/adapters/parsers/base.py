@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.config import Settings
+from rag_engine.models.layout import LayoutRecord, PageImage
 
 
 @dataclass(frozen=True)
 class AdapterAvailability:
     """アダプターが現在利用できるかと、UI に出す理由を保持します。"""
+
     available: bool
     message: str
 
@@ -21,6 +22,7 @@ class AdapterAvailability:
 @dataclass(frozen=True)
 class AnalysisContext:
     """1 回の解析でアダプターへ渡す入力ファイル、ページ、設定をまとめます。"""
+
     pdf_path: Path
     run_dir: Path
     pages: list[PageImage]
@@ -30,6 +32,7 @@ class AnalysisContext:
 
 class LayoutAdapter(Protocol):
     """解析エンジンごとの実装が満たす共通インターフェースです。"""
+
     engine_id: str
     label: str
 
@@ -71,9 +74,5 @@ def object_to_plain(value):
             result[key] = object_to_plain(getattr(value, key, None))
         return result
     if hasattr(value, "__dict__"):
-        return {
-            str(key).lstrip("_"): object_to_plain(item)
-            for key, item in vars(value).items()
-            if not key.startswith("__")
-        }
+        return {str(key).lstrip("_"): object_to_plain(item) for key, item in vars(value).items() if not key.startswith("__")}
     return str(value)

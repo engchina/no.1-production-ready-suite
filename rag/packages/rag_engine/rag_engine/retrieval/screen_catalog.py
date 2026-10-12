@@ -8,12 +8,14 @@
 - 選択結果は目録に実在する（文書、見出し）だけを採る。
 - 候補は加えるだけで減らさない。順位は rerank が候補全件で決める。
 """
+
 from __future__ import annotations
 
 import json
 import re
 import unicodedata
-from typing import Any, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -54,8 +56,7 @@ def _section_path(chunk: Any) -> list[str]:
 
 def build_screen_catalog(chunks: Sequence[Any]) -> dict[str, list[str]]:
     """文書名 → 番号付きの画面見出し（出現の多い順）。知識ベースの chunk の `section_path` から作る。"""
-    return catalog_from_section_paths(
-        (str(getattr(chunk, "source_file_name", "") or ""), _section_path(chunk), 1) for chunk in chunks)
+    return catalog_from_section_paths((str(getattr(chunk, "source_file_name", "") or ""), _section_path(chunk), 1) for chunk in chunks)
 
 
 def catalog_from_section_paths(rows: Iterable[tuple[str, Sequence[str], int]]) -> dict[str, list[str]]:
@@ -91,8 +92,9 @@ def validated_links(links: ScreenLinks, catalog: dict[str, list[str]]) -> list[t
     return chosen[:MAX_LINKED_SCREENS]
 
 
-def link_screens(question: str, catalog: dict[str, list[str]], parse_text: Callable[..., ScreenLinks],
-                 settings: Any) -> list[tuple[str, str]]:
+def link_screens(
+    question: str, catalog: dict[str, list[str]], parse_text: Callable[..., ScreenLinks], settings: Any
+) -> list[tuple[str, str]]:
     """質問から操作すべき画面を目録で選ぶ。LLM の呼び出しに失敗したら空（検索は従来どおり続ける）。"""
     if not catalog:
         return []
@@ -104,8 +106,9 @@ def link_screens(question: str, catalog: dict[str, list[str]], parse_text: Calla
         return []
 
 
-def screen_candidates(chunks: Sequence[Any], links: Sequence[tuple[str, str]], existing: set[str],
-                      *, per_screen: int = MAX_CHILDREN_PER_SCREEN) -> list[Any]:
+def screen_candidates(
+    chunks: Sequence[Any], links: Sequence[tuple[str, str]], existing: set[str], *, per_screen: int = MAX_CHILDREN_PER_SCREEN
+) -> list[Any]:
     """選んだ画面ごとに、同じ文書で `section_path` にその見出しを含む child chunk を読み順に返す。
 
     既に候補にある chunk（`existing` の chunk_uid）は除く。候補を加えるだけで、既存の順位は変えない。
@@ -113,9 +116,14 @@ def screen_candidates(chunks: Sequence[Any], links: Sequence[tuple[str, str]], e
     added: list[Any] = []
     seen = set(existing)
     for source, heading in links:
-        matched = [c for c in chunks
-                   if getattr(c, "chunk_level", "") == "child" and getattr(c, "source_file_name", "") == source
-                   and heading in _section_path(c) and getattr(c, "chunk_uid", "") not in seen]
+        matched = [
+            c
+            for c in chunks
+            if getattr(c, "chunk_level", "") == "child"
+            and getattr(c, "source_file_name", "") == source
+            and heading in _section_path(c)
+            and getattr(c, "chunk_uid", "") not in seen
+        ]
         matched.sort(key=lambda c: (int(getattr(c, "page_start", 0) or 0), int(getattr(c, "chunk_seq", 0) or 0)))
         for chunk in matched[:per_screen]:
             seen.add(chunk.chunk_uid)
@@ -133,8 +141,9 @@ def reserve_linked_screens(records: Sequence[Any], links: Sequence[tuple[str, st
     ordered = list(records)
     for offset, (source, heading) in enumerate(links):
         target = max(0, rank - 1 + offset)
-        index = next((i for i, record in enumerate(ordered)
-                      if getattr(record, "source", "") == source and heading in _section_path(record)), None)
+        index = next(
+            (i for i, record in enumerate(ordered) if getattr(record, "source", "") == source and heading in _section_path(record)), None
+        )
         if index is not None and index > target:
             ordered.insert(target, ordered.pop(index))
     return ordered

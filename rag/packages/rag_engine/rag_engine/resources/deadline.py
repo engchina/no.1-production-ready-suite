@@ -27,7 +27,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-
 # 回答の確定（引用の照合・本文の組み立て・回答の安全チェック・記録の保存）に残す秒数（#1516）。
 ANSWER_FINALIZE_RESERVE_SECONDS = 30.0
 # 生成と監査の 1 組（grounded の round）の見積もりの既定（秒）。実測が無いとき（章節の拡張が生成に残す分・
@@ -48,9 +47,7 @@ class Deadline:
     """
 
     def __init__(self, timeout_seconds: float | None = None, *, parent: Deadline | None = None) -> None:
-        self._expires_at = (
-            None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
-        )
+        self._expires_at = None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
         self._parent = parent
         self._cancelled = threading.Event()
 

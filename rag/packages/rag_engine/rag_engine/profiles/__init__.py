@@ -4,9 +4,10 @@
 `legacy` profile の中身は repo 外の JSON（`RAG_ENGINE_DOMAIN_PROFILE_FILE`、未指定時は作業ディレクトリの
 `domain_profile.json`）から読み込む。書式は `domain_profile.example.json` を参照。
 """
-from dataclasses import dataclass
+
 import json
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -62,7 +63,8 @@ def load_profile(name: str = "generic") -> DomainProfile:
     path = domain_profile_path()
     data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     return DomainProfile(
-        name="legacy", japanese_inquiry_rules=True,
+        name="legacy",
+        japanese_inquiry_rules=True,
         categories=tuple((key, tuple(values)) for key, values in data.get("categories", {}).items()),
         business_patterns=tuple(tuple(pair) for pair in data.get("business_patterns", ())),
         aliases=tuple((key, tuple(values)) for key, values in data.get("aliases", ())),

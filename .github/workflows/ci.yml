@@ -251,8 +251,9 @@ jobs:
   # キャッシュの方針（#339）:
   #   - uv の cache は main の push だけが保存し、PR は main の cache を復元するだけにする
   #     （PR ごとに約 120 MB の cache を保存すると、repo の上限 10 GB を超えて main の cache が追い出される）。
-  #   - mypy の .mypy_cache は lock とブランチを key にし、無ければ main（同じ lock → 別の lock）から復元する。
-  #   - 共有 UI の dist と Playwright のブラウザは .github/actions/ の composite action がキャッシュする。
+  #   - mypy の .mypy_cache・npm の ~/.npm・Playwright のブラウザも main だけが保存し、PR は main の cache を
+  #     復元するだけにする（#1589。.github/actions/mypy-cache・npm-cache・playwright-browsers）。
+  #   - 共有 UI の dist は .github/actions/platform-ui がキャッシュする（数 MB。PR でも保存する）。
 
   platform-ui:
     name: Platform / UI (@production-ready/ui)
@@ -271,11 +272,23 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: platform/package-lock.json
+
+      - name: Restore npm cache
+        id: npm-cache
+        uses: ./.github/actions/npm-cache
+        with:
+          name: platform
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      # main だけが保存する（PR は復元だけ。#1589）。
+      - name: Save npm cache
+        if: github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.key }}
 
       # root の typecheck / test / build はそれぞれ ui を build し直す（ローカルの単発実行のため）。
       # CI では ui を 1 回だけ build し、system-settings の型検査・テストはその dist を使う。
@@ -340,16 +353,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: platform-backend-core
           path: platform/packages/backend_core/.mypy_cache
-          key: mypy-platform-backend-core-${{ hashFiles('platform/packages/backend_core/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-platform-backend-core-${{ hashFiles('platform/packages/backend_core/uv.lock') }}-
-            mypy-platform-backend-core-
+          lockfile: platform/packages/backend_core/uv.lock
 
       - name: Type check
         run: uv run mypy src
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: platform/packages/backend_core/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
@@ -397,16 +417,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: platform-system-settings
           path: platform/packages/system_settings_backend/.mypy_cache
-          key: mypy-platform-system-settings-${{ hashFiles('platform/packages/system_settings_backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-platform-system-settings-${{ hashFiles('platform/packages/system_settings_backend/uv.lock') }}-
-            mypy-platform-system-settings-
+          lockfile: platform/packages/system_settings_backend/uv.lock
 
       - name: Type check
         run: uv run mypy src
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: platform/packages/system_settings_backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
@@ -461,16 +488,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: rag-backend
           path: rag/backend/.mypy_cache
-          key: mypy-rag-backend-${{ hashFiles('rag/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-rag-backend-${{ hashFiles('rag/backend/uv.lock') }}-
-            mypy-rag-backend-
+          lockfile: rag/backend/uv.lock
 
       - name: Type check
         run: uv run mypy .
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: rag/backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
       # -n auto: pytest-xdist で並列に実行する。実 Oracle のテストは pyproject の
@@ -557,8 +591,8 @@ jobs:
         run: |
           version="$(sed -n '/^name = "ruff"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
           test -n "${version}"
-          uvx "ruff@${version}" check rag/services platform/scripts
-          uvx "ruff@${version}" format --check rag/services platform/scripts
+          uvx "ruff@${version}" check rag/services rag/packages platform/scripts
+          uvx "ruff@${version}" format --check rag/services rag/packages platform/scripts
 
       # e2e の影響分析の選択の規則（platform/scripts/e2e_impact.py。#885）。標準ライブラリだけで動く。
       - name: Unit tests (platform/scripts)
@@ -759,16 +793,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            rag/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: rag/frontend
 
       # 型検査は build の `tsc --noEmit` が兼ねる。Playwright E2E は rag-e2e job（#133）。
       # デザインシステム遵守ルール（../../platform/docs/design-system/adherence.oxlintrc.json を ESLint に渡す）。
@@ -805,16 +834,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            rag/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: rag/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -926,16 +950,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            nl2sql/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: nl2sql/frontend
 
       # デザインシステム遵守ルール（frontend/.oxlintrc.json が ../../platform の
       # docs/design-system/adherence.oxlintrc.json を extends）と oxlint 既定の correctness ルール。
@@ -973,16 +992,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            nl2sql/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: nl2sql/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1054,16 +1068,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: nl2sql-backend
           path: nl2sql/backend/.mypy_cache
-          key: mypy-nl2sql-backend-${{ hashFiles('nl2sql/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-nl2sql-backend-${{ hashFiles('nl2sql/backend/uv.lock') }}-
-            mypy-nl2sql-backend-
+          lockfile: nl2sql/backend/uv.lock
 
       - name: Type check
         run: uv run mypy .
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: nl2sql/backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
@@ -1114,13 +1135,12 @@ jobs:
           python-version: "3.12"
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: agent-backend
           path: agent/backend/.mypy_cache
-          key: mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-
-            mypy-agent-backend-
+          lockfile: agent/backend/uv.lock
 
       # ruff format / ruff check / mypy / pytest / 検証 evidence の dry-run / release chain の rehearsal / bandit / pip-audit。
       - name: Run backend checks
@@ -1131,6 +1151,14 @@ jobs:
           UV_SYNC_ARGS: "--locked --dev"
           # pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
           PYTEST_ARGS: "-n auto"
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: agent/backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
   agent-frontend:
     name: Agent / Frontend
@@ -1150,16 +1178,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            agent/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: agent/frontend
 
       - name: Lint
         run: npm run lint
@@ -1190,16 +1213,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            agent/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: agent/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1302,16 +1320,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            rag/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: rag/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1360,16 +1373,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            nl2sql/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: nl2sql/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1418,16 +1426,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            agent/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: agent/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers

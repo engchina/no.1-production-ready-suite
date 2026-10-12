@@ -1,4 +1,5 @@
 """指定された保存ルート内の成果物を読み書きする adapter。"""
+
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -6,6 +7,7 @@ from tempfile import NamedTemporaryFile
 
 class FileArtifactStore:
     """相対 key を保存先に解決する。ルート外参照を拒否する。"""
+
     def __init__(self, root: Path):
         self.root = root.resolve()
 

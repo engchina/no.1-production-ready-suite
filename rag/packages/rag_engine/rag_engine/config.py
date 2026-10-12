@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
@@ -20,7 +21,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
     DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
 )
-
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
 # 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。
@@ -51,6 +51,8 @@ DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
 DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.0
 # Reciprocal Rank Fusion の平滑化定数。ADB の hybrid 検索と回答側の順位融合で同じ値を使う。
 RRF_K = 60
+
+
 def oci_inference_endpoint(region: str) -> str:
     """region の OCI Generative AI inference endpoint（root URL）を返します。"""
     return OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region)
@@ -143,6 +145,7 @@ def normalize_llm_api_mode(value: str | None, default: str = DEFAULT_LLM_API_MOD
 @dataclass(frozen=True)
 class LlmProviderSettings:
     """1 つの LLM provider の接続先、認証、model 能力を保持します。"""
+
     provider_id: str
     label: str
     # 記録用(base URL の組み立てには使わない。#1440)。
@@ -175,6 +178,7 @@ DEFAULT_LLM_SEED = 42
 @dataclass(frozen=True)
 class Settings:
     """アプリ全体の環境変数由来設定を保持します。"""
+
     host: str
     port: int
     output_dir: Path
@@ -404,9 +408,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         query_history_min_count=max(1, _env_int(env, "QUERY_HISTORY_MIN_COUNT", QUERY_HISTORY_DEFAULT_MIN_COUNT)),
         query_history_min_unique_runs=max(1, _env_int(env, "QUERY_HISTORY_MIN_UNIQUE_RUNS", QUERY_HISTORY_DEFAULT_MIN_UNIQUE_RUNS)),
         query_history_suggestion_limit=max(1, _env_int(env, "QUERY_HISTORY_SUGGESTION_LIMIT", QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT)),
-        query_history_blocklist_path=Path(query_history_blocklist_raw).expanduser()
-        if query_history_blocklist_raw
-        else None,
+        query_history_blocklist_path=Path(query_history_blocklist_raw).expanduser() if query_history_blocklist_raw else None,
         render_dpi=_env_int(env, "RAG_ENGINE_RENDER_DPI", 300),
         max_default_pages=_env_int(env, "RAG_ENGINE_MAX_DEFAULT_PAGES", 1),
         enabled_engines=enabled_engines,
@@ -423,7 +425,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         # 戻らないよう、新しい名前が未設定のときだけ旧名を読む (#912)。
         llm_request_timeout_seconds=_env_int(env, "LLM_REQUEST_TIMEOUT_SECONDS", _env_int(env, "VISION_REQUEST_TIMEOUT_SECONDS", 90)),
         llm_retries=_env_int(env, "LLM_RETRIES", _env_int(env, "VISION_RETRIES", 3)),
-        llm_retry_initial_wait_seconds=_env_float(env, "LLM_RETRY_INITIAL_WAIT_SECONDS", _env_float(env, "VISION_RETRY_INITIAL_WAIT_SECONDS", 2.0)),
+        llm_retry_initial_wait_seconds=_env_float(
+            env, "LLM_RETRY_INITIAL_WAIT_SECONDS", _env_float(env, "VISION_RETRY_INITIAL_WAIT_SECONDS", 2.0)
+        ),
         llm_retry_max_wait_seconds=_env_float(env, "LLM_RETRY_MAX_WAIT_SECONDS", _env_float(env, "VISION_RETRY_MAX_WAIT_SECONDS", 30.0)),
         answer_max_tokens=_env_int(env, "ANSWER_MAX_TOKENS", 24576),
         llm_seed=_env_int(env, "OCI_ENTERPRISE_AI_SEED", DEFAULT_LLM_SEED),
@@ -445,12 +449,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         document_selection_min_hits=max(1, _env_int(env, "RAG_ENGINE_DOCUMENT_SELECTION_MIN_HITS", 2)),
         screen_linking_enabled=_env_bool(env, "RAG_ENGINE_SCREEN_LINKING", False),
         screen_linking_reserve_rank=max(0, _env_int(env, "RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK", 0)),
-        embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip()
-        or DEFAULT_EMBEDDING_REGION,
+        embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,
         embedding_endpoint=env.get("EMBEDDING_ENDPOINT", "").strip(),
-        embedding_model=env.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip()
-        or DEFAULT_EMBEDDING_MODEL,
-        embedding_output_dimensions=_env_int(env,
+        embedding_model=env.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip() or DEFAULT_EMBEDDING_MODEL,
+        embedding_output_dimensions=_env_int(
+            env,
             "EMBEDDING_OUTPUT_DIMENSIONS",
             DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS,
         ),
@@ -474,18 +477,14 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         request_coverage_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS", 10.0)),
         section_expansion_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXPANSION", True),
         section_expansion_max_levels=max(0, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 4)),
-        section_expansion_input_token_percent=max(1, min(100, _env_int(
-            env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),
-        section_expansion_time_limit_seconds=max(0.0, _env_float(
-            env, "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS", 600.0)),
+        section_expansion_input_token_percent=max(1, min(100, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),
+        section_expansion_time_limit_seconds=max(0.0, _env_float(env, "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS", 600.0)),
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         section_extraction_max_calls=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS", 8)),
         section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
-        strategy_reasoning_effort=normalize_reasoning_effort_override(
-            env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
+        strategy_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
-        generation_reasoning_effort=normalize_reasoning_effort_override(
-            env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
+        generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         audit_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_AUDIT_REASONING_EFFORT")),
         crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
         section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
@@ -514,9 +513,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_images_enabled=_env_bool(env, "RAG_ENGINE_ANSWER_IMAGES", False),
     )
 
-
     if "adb_settings" not in overrides and all(env.get(key) for key in ("ADB_OCID", "ADB_WALLET_PASSWORD", "ADB_DB_PASSWORD")):
         from rag_engine.adapters.oracle.connection import load_adb_settings
+
         settings = replace(settings, adb_settings=load_adb_settings(environ=env, env_path=dotenv_path or ".env"))
     return replace(settings, **overrides)
 
@@ -565,8 +564,7 @@ def settings_for_llm_purpose(settings: Settings, purpose: str) -> Settings:
         return settings
     to_send = "" if override == REASONING_EFFORT_OMIT else override
     providers = {
-        key: replace(provider, reasoning_effort=to_send) if provider.reasoning_effort else provider
-        for key, provider in current.items()
+        key: replace(provider, reasoning_effort=to_send) if provider.reasoning_effort else provider for key, provider in current.items()
     }
     if providers == current:
         return settings

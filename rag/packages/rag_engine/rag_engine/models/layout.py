@@ -7,13 +7,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-
 CoordSystem = Literal["image_top_left", "pdf_bottom_left", "normalized_top_left"]
 
 
 @dataclass
 class PageImage:
     """解析・ビューアで共有するページ画像と元 PDF 座標情報を保持します。"""
+
     page: int
     width: int
     height: int
@@ -26,6 +26,7 @@ class PageImage:
 @dataclass
 class LayoutRecord:
     """解析エンジンが検出した 1 つの bbox、カテゴリ、本文を保持します。"""
+
     id: str
     engine: str
     page: int
@@ -48,6 +49,7 @@ class LayoutRecord:
 @dataclass
 class EngineStatus:
     """解析エンジンごとの利用可否、所要時間、保存状態を保持します。"""
+
     engine: str
     label: str
     available: bool
@@ -65,6 +67,7 @@ class EngineStatus:
 @dataclass
 class AnalysisRun:
     """1 回の解析実行で作成されたページ、record、保存パスをまとめます。"""
+
     run_id: str
     pdf_name: str
     pdf_path: str
@@ -102,6 +105,7 @@ class AnalysisRun:
     def viewer_payload(self) -> dict[str, Any]:
         """互換 viewer データを遅延変換する。"""
         from rag_engine.parsing.presentation import viewer_payload
+
         return viewer_payload(self)
 
 

@@ -32,3 +32,34 @@ packages = ["rag_engine"]
 [tool.ruff]
 line-length = 140
 target-version = "py312"
+
+# lint の規則は rag/backend・rag/services と同じ（#1590）。指定しないと ruff の既定の規則の集合になり、版で変わる。
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# F401: 実装を submodule に分けたあとも、公開 API と兄弟モジュール・テストが使う名前を
+# ここから再 export している（chunking は #891）。未使用の import ではない（#1590）。
+"rag_engine/chunking/__init__.py" = ["F401"]
+"rag_engine/generation/answering.py" = ["F401"]
+# E501: LLM への指示（prompt）と、structured output の Field の description を書く場所。
+# 指示の文を行の幅で切ると読みにくく、prompt の差分も追いにくいため、行の長さを検査しない。
+"rag_engine/generation/grounded.py" = ["E501"]
+"rag_engine/generation/crag_support.py" = ["E501"]
+"rag_engine/generation/answer_policy.py" = ["E501"]
+"rag_engine/generation/query_prompts.py" = ["E501"]
+"rag_engine/generation/section_extraction.py" = ["E501"]
+"rag_engine/parsing/vision_prompt_rules.py" = ["E501"]
+"rag_engine/evaluation/answer_eval.py" = ["E501"]
+"rag_engine/evaluation/answer_validation.py" = ["E501"]
+"rag_engine/evaluation/crag_eval.py" = ["E501"]
+"rag_engine/knowledge/prompt_files.py" = ["E501"]
+"rag_engine/models/llm.py" = ["E501"]
+
+# 整形（#345）。black と同じ既定（二重引用符・空白の字下げ・magic trailing comma を尊重）にそろえる。
+# 行の長さは [tool.ruff] の line-length を共有する。
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

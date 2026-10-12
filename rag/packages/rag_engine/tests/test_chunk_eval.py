@@ -6,17 +6,28 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from rag_engine.evaluation.chunk_eval import audit_variants, evidence_metrics, evaluate_cohere_variants, load_token_counter, main
 from rag_engine.adapters.oci import RerankTextRank
 from rag_engine.config import get_settings
+from rag_engine.evaluation.chunk_eval import audit_variants, evaluate_cohere_variants, evidence_metrics, load_token_counter, main
 
 
 def payload():
-    return {"run_id": "abcdef", "pdf_name": "manual.pdf", "records": [
-        {"id": f"r{i}", "engine": "docling", "page": 1, "seq_no": i, "category": "Text",
-         "text": "手順の説明。" * 100 + f"例外条件{i}", "bbox": [0, 0, 100, 100]}
-        for i in range(1, 4)
-    ]}
+    return {
+        "run_id": "abcdef",
+        "pdf_name": "manual.pdf",
+        "records": [
+            {
+                "id": f"r{i}",
+                "engine": "docling",
+                "page": 1,
+                "seq_no": i,
+                "category": "Text",
+                "text": "手順の説明。" * 100 + f"例外条件{i}",
+                "bbox": [0, 0, 100, 100],
+            }
+            for i in range(1, 4)
+        ],
+    }
 
 
 class ChunkEvalTests(TestCase):
@@ -33,8 +44,7 @@ class ChunkEvalTests(TestCase):
     def test_evidence_metrics_require_source_and_page_and_count_unique_evidence(self):
         _, variants = audit_variants([payload()], engines=["docling"], sizes=[700])
         children = variants[700]
-        expected = [{"run_id": "abcdef", "page": 1, "text": "例外条件1"},
-                    {"run_id": "abcdef", "page": 1, "text": "例外条件3"}]
+        expected = [{"run_id": "abcdef", "page": 1, "text": "例外条件1"}, {"run_id": "abcdef", "page": 1, "text": "例外条件3"}]
         result = evidence_metrics([children[1], children[0], children[0]], expected)
         self.assertEqual(result, {"evidence_recall": 0.5, "reciprocal_rank": 0.5})
         self.assertEqual(evidence_metrics(children, [{**expected[0], "run_id": "other"}])["evidence_recall"], 0)
@@ -43,11 +53,12 @@ class ChunkEvalTests(TestCase):
 
     def test_live_metrics_measure_actual_rerank_order_and_do_not_claim_answer_accuracy(self):
         _, variants = audit_variants([payload()], engines=["docling"], sizes=[700])
-        cases = [{"case_id": "tail", "question": "条件3は？",
-                  "expected_evidence": [{"run_id": "abcdef", "page": 1, "text": "例外条件3"}]}]
-        with (patch("rag_engine.evaluation.chunk_eval.embed_query", return_value=[1.0, 0.0]),
-              patch("rag_engine.evaluation.chunk_eval.embed_texts", return_value=[[1, 0], [0.9, 0.1], [0, 1]]) as embed,
-              patch("rag_engine.evaluation.chunk_eval.rerank_text_with_scores", return_value=[RerankTextRank(2, 0.9)])):
+        cases = [{"case_id": "tail", "question": "条件3は？", "expected_evidence": [{"run_id": "abcdef", "page": 1, "text": "例外条件3"}]}]
+        with (
+            patch("rag_engine.evaluation.chunk_eval.embed_query", return_value=[1.0, 0.0]),
+            patch("rag_engine.evaluation.chunk_eval.embed_texts", return_value=[[1, 0], [0.9, 0.1], [0, 1]]) as embed,
+            patch("rag_engine.evaluation.chunk_eval.rerank_text_with_scores", return_value=[RerankTextRank(2, 0.9)]),
+        ):
             # 本番の保存と同じく、retrieval_text が空の chunk は本文を embedding 入力にする。
             variants[700][0].retrieval_text = ""
             report = evaluate_cohere_variants(variants, cases, get_settings(), candidate_k=3, top_k=1)
@@ -61,9 +72,11 @@ class ChunkEvalTests(TestCase):
 
     def test_unannotated_cases_fail_before_network_calls(self):
         _, variants = audit_variants([payload()], engines=["docling"], sizes=[700])
-        with patch("rag_engine.evaluation.chunk_eval.embed_query") as query:
-            with self.assertRaisesRegex(ValueError, "reviewed expected_evidence"):
-                evaluate_cohere_variants(variants, [{"case_id": "x", "question": "q"}], get_settings())
+        with (
+            patch("rag_engine.evaluation.chunk_eval.embed_query") as query,
+            self.assertRaisesRegex(ValueError, "reviewed expected_evidence"),
+        ):
+            evaluate_cohere_variants(variants, [{"case_id": "x", "question": "q"}], get_settings())
         query.assert_not_called()
 
     def test_local_token_counter_disables_tokenizer_truncation_and_padding(self):

@@ -127,9 +127,11 @@ def usage_delta(before: Mapping[str, Any]) -> dict[str, Any]:
         if diff := int(after.get(key, 0) - before.get(key, 0)):
             delta[key] = diff
     before_reasons = before.get(INCOMPLETE_REASONS_KEY) or {}
-    reasons = {reason: count - before_reasons.get(reason, 0)
-               for reason, count in (after.get(INCOMPLETE_REASONS_KEY) or {}).items()
-               if count - before_reasons.get(reason, 0) > 0}
+    reasons = {
+        reason: count - before_reasons.get(reason, 0)
+        for reason, count in (after.get(INCOMPLETE_REASONS_KEY) or {}).items()
+        if count - before_reasons.get(reason, 0) > 0
+    }
     if reasons:
         delta[INCOMPLETE_REASONS_KEY] = reasons
     return delta

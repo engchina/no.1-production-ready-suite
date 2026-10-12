@@ -5,23 +5,25 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from rag_engine.adapters.oracle.store import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     AdbHybridSearchUnavailable,
     normalize_retrieval_scope,
 )
+from rag_engine.config import get_settings
 from rag_engine.generation.answering import AnswerContext, build_adb_hybrid_answer_context
 from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
-from rag_engine.config import get_settings
 
 
 @dataclass(frozen=True)
 class RagEvalCase:
     """retrieval eval dataset の 1 問と期待条件を表します。"""
+
     case_id: str
     question: str
     expected_parent_ids: tuple[str, ...] = ()
@@ -36,6 +38,7 @@ class RagEvalCase:
 @dataclass(frozen=True)
 class RagEvalRetrieval:
     """1 問に対する retrieval 結果と context trace を保持します。"""
+
     parent_ids: tuple[str, ...] = ()
     child_ids: tuple[str, ...] = ()
     pages: tuple[int, ...] = ()
@@ -44,7 +47,7 @@ class RagEvalRetrieval:
     insufficient_reason: str = ""
 
     @classmethod
-    def from_answer_context(cls, context: AnswerContext) -> "RagEvalRetrieval":
+    def from_answer_context(cls, context: AnswerContext) -> RagEvalRetrieval:
         """AnswerContext から評価用 retrieval summary を作ります。"""
         parent_ids: list[str] = []
         child_ids: list[str] = []
@@ -86,6 +89,7 @@ class RagEvalRetrieval:
 @dataclass(frozen=True)
 class RagEvalCaseResult:
     """retrieval eval の 1 問ごとの hit 判定結果を保持します。"""
+
     case_id: str
     question: str
     retrieved_parent_ids: tuple[str, ...]
@@ -159,8 +163,10 @@ def evaluate_rag_cases(
         "ready_rate": _rate(sum(1 for result in results if result.status == "ready"), total),
         # 順位つきの指標。期待 ID / ページを持つ case だけを分母にする (#861)。
         "mrr": _rate(sum(1.0 / result.first_hit_rank for result in results if result.first_hit_rank), len(ranked_cases)),
-        "hit_at_k": {str(k): _rate(sum(1 for result in results if result.first_hit_rank and result.first_hit_rank <= k), len(ranked_cases))
-                     for k in HIT_AT_K},
+        "hit_at_k": {
+            str(k): _rate(sum(1 for result in results if result.first_hit_rank and result.first_hit_rank <= k), len(ranked_cases))
+            for k in HIT_AT_K
+        },
         "results": [result.to_payload() for result in results],
     }
 
