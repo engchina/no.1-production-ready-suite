@@ -27,7 +27,7 @@ concurrency:
 jobs:
   auto-merge:
     name: Auto merge
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # 人間の PR では実行しない。
     if: github.event.pull_request.user.login == 'dependabot[bot]'

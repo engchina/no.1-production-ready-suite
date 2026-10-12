@@ -27,9 +27,12 @@ on:
     branches:
       - main
 
+# PR は同じ branch の古い run を取り消す。main の push は commit ごとの group にし、続けて merge しても
+# 前の merge commit の run を取り消さない（#1585。changes は直前の commit との差分で job を選ぶため、取り消すと
+# その commit の変更が main の CI で確かめられない。同じ group は pending を 1 つしか保たないので sha で分ける）。
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # PR / main の push の E2E smoke の spec（frontend からの相対パス、空白区切り）。smoke の job と、e2e の影響分析
 # （e2e-impact の `--skip-specs`。selected のとき、smoke が全 project で実行する spec を impact から除く）の
@@ -48,7 +51,7 @@ env:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -221,7 +224,7 @@ jobs:
 
   secret-scan:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -252,7 +255,7 @@ jobs:
     name: Platform / UI (@production-ready/ui)
     needs: changes
     if: needs.changes.outputs.platform_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -301,7 +304,7 @@ jobs:
     name: Platform / backend_core (production-ready-backend-core)
     needs: changes
     if: needs.changes.outputs.platform_backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -360,7 +363,7 @@ jobs:
     name: Platform / system_settings_backend (pr_system_settings)
     needs: changes
     if: needs.changes.outputs.platform_backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -423,7 +426,7 @@ jobs:
     if: >-
       needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -493,7 +496,7 @@ jobs:
     name: RAG / Engine
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -527,7 +530,7 @@ jobs:
     name: Lint / services & scripts
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -623,7 +626,7 @@ jobs:
     name: RAG / Parser docling
     needs: changes
     if: needs.changes.outputs.rag_parser_docling == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -683,7 +686,7 @@ jobs:
     name: RAG / Parser asr
     needs: changes
     if: needs.changes.outputs.rag_parser_asr == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -739,7 +742,7 @@ jobs:
     name: RAG / Frontend
     needs: changes
     if: needs.changes.outputs.rag_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -785,7 +788,7 @@ jobs:
       !cancelled() && needs.changes.result == 'success'
       && (needs.changes.outputs.rag_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.rag_mode != 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 実測は 1.5〜2 分（2026-10、2 worker。Playwright は約 1 分で、1 worker と差は無い。#1489）。
     timeout-minutes: 10
     defaults:
@@ -837,7 +840,7 @@ jobs:
     name: RAG / Compute init script
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -863,7 +866,7 @@ jobs:
     name: NL2SQL / Deployment scripts
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.rag == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -905,7 +908,7 @@ jobs:
     if: >-
       needs.changes.outputs.nl2sql_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
       || needs.changes.outputs.nl2sql_frontend_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -952,7 +955,7 @@ jobs:
       !cancelled() && needs.changes.result == 'success'
       && (needs.changes.outputs.nl2sql_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.nl2sql_mode != 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 実測は約 2.5 分（2026-10、2 worker。Playwright は 1.7〜1.9 分。1 worker・sql-chat の両 project では 5 分。#1489）。
     timeout-minutes: 10
     defaults:
@@ -1012,7 +1015,7 @@ jobs:
     if: >-
       needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.mcp_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       NL2SQL_RUNTIME_MODE: memory
@@ -1084,7 +1087,7 @@ jobs:
     if: >-
       needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -1129,7 +1132,7 @@ jobs:
     name: Agent / Frontend
     needs: changes
     if: needs.changes.outputs.agent_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -1169,7 +1172,7 @@ jobs:
       !cancelled() && needs.changes.result == 'success'
       && (needs.changes.outputs.agent_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.agent_mode != 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 実測は約 2 分（2026-10、2 worker。Playwright は 1.2 分。1 worker では 1.8〜2.0 分。#1489）。
     timeout-minutes: 10
     defaults:
@@ -1230,7 +1233,7 @@ jobs:
   e2e-impact:
     name: E2E impact / 影響を受ける spec の選択
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1277,7 +1280,7 @@ jobs:
     name: RAG / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.rag_total }})
     needs: e2e-impact
     if: needs.e2e-impact.outputs.rag_mode == 'selected' || needs.e2e-impact.outputs.rag_mode == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
     timeout-minutes: 30
     strategy:
@@ -1335,7 +1338,7 @@ jobs:
     name: NL2SQL / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.nl2sql_total }})
     needs: e2e-impact
     if: needs.e2e-impact.outputs.nl2sql_mode == 'selected' || needs.e2e-impact.outputs.nl2sql_mode == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
     timeout-minutes: 30
     strategy:
@@ -1393,7 +1396,7 @@ jobs:
     name: Agent / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.agent_total }})
     needs: e2e-impact
     if: needs.e2e-impact.outputs.agent_mode == 'selected' || needs.e2e-impact.outputs.agent_mode == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
     timeout-minutes: 30
     strategy:
@@ -1452,7 +1455,7 @@ jobs:
     name: Agent / Compute init script
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -1483,7 +1486,7 @@ jobs:
     if: >-
       needs.changes.outputs.terraform == 'true' || needs.changes.outputs.platform == 'true'
       || needs.changes.outputs.rag == 'true' || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -1545,7 +1548,7 @@ jobs:
     name: Suite / Scripts
     needs: changes
     if: needs.changes.outputs.scripts == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -1608,7 +1611,7 @@ jobs:
       - agent-e2e-impact
       - suite-terraform
       - suite-scripts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # skip（変更のない製品）は成功扱い。failure / cancelled が1つでもあれば失敗させる。
