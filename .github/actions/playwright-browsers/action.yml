@@ -1,7 +1,7 @@
 name: Install Playwright browsers
 description: >-
   Playwright の chromium（headless shell）を ~/.cache/ms-playwright にキャッシュする。key は Playwright の版。
-  hit したら OS の依存（install-deps）だけを入れる（#339）。
+  hit したら OS の依存（install-deps）だけを入れる（#339）。保存は main だけで、PR は復元だけにする（#1589）。
 
 inputs:
   working-directory:
@@ -19,7 +19,7 @@ runs:
 
     - name: Restore Playwright browsers
       id: cache
-      uses: actions/cache@v6
+      uses: actions/cache/restore@v6
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-chromium-shell
@@ -30,6 +30,15 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: npx --no-install playwright install --with-deps --only-shell chromium
+
+    # PR（Playwright の版を上げる Dependabot 等）が保存すると、cache が PR の範囲に残って main の cache を追い出す
+    # （PR の範囲の Playwright の cache が約 540 MB あった。#1589）。PR は main の cache が無ければ取得し直す。
+    - name: Save Playwright browsers
+      if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-chromium-shell
 
     - name: Install OS dependencies
       if: steps.cache.outputs.cache-hit == 'true'

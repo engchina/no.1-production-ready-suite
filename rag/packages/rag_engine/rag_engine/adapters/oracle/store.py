@@ -1,28 +1,28 @@
 """ADB に保存したチャンク embedding を使う hybrid search と保存処理。"""
 
 from __future__ import annotations
-from rag_engine.models.storage import (
-    AdbHybridSearchUnavailable,
-    AdbEmbeddingsUnavailable,
-    EmbeddingSaveResult,
-    EmbeddingStatusResult,
-    StoredChunk,
-    HybridSearchResult,
-)
-
 
 import array
 import hashlib
-import time
 import json
-from copy import deepcopy
-from datetime import date
 import re
+import time
 import unicodedata
+from collections.abc import Callable, Iterable, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence, TypeVar
+from typing import Any
 
+from rag_engine.adapters.oci import (
+    EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
+    EMBEDDING_INPUT_TYPE_SEARCH_QUERY,
+    _is_retryable_error,
+    embed_images,
+    embed_query,
+    embed_texts,
+)
 from rag_engine.adapters.oracle.connection import connect_adb_thin, load_adb_settings
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
@@ -32,6 +32,7 @@ from rag_engine.chunking import (
     DocumentChunk,
     load_latest_or_source_chunk_run,
 )
+from rag_engine.config import RRF_K, Settings
 from rag_engine.knowledge.classification import (
     DEFAULT_CATEGORY_VALUE,
     LARGE_CATEGORIES,
@@ -39,30 +40,29 @@ from rag_engine.knowledge.classification import (
     ClassificationFilter,
     classification_filter_from_values,
 )
+from rag_engine.knowledge.domain_keywords import load_domain_keywords
+from rag_engine.models.storage import (
+    AdbEmbeddingsUnavailable,
+    AdbHybridSearchUnavailable,
+    EmbeddingSaveResult,
+    EmbeddingStatusResult,
+    HybridSearchResult,
+    StoredChunk,
+)
 from rag_engine.parsing.decorative_pictures import (
     DECORATIVE_VISUAL_ROLE,
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
-from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
     InquiryMetadataFilter,
     profile_channel_rankings,
 )
-from rag_engine.adapters.oci import (
-    EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
-    embed_images,
-    EMBEDDING_INPUT_TYPE_SEARCH_QUERY,
-    embed_query,
-    embed_texts,
-    _is_retryable_error,
-)
-from rag_engine.config import RRF_K, Settings
 from rag_engine.retrieval.scope import (
-    AdbSearchReadiness,
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+    AdbSearchReadiness,
     normalize_retrieval_scope,
 )
 from rag_engine.retrieval.text_search_tokenizer import (
@@ -71,7 +71,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TextSearchTokenizerConfig,
     oracle_text_query_for_question,
 )
-
 
 # 原質問以外の検索文（用語補助・LLM拡張・語彙・質問理解・CRAGの書き換え）全体の票の合計。
 # 各検索文を 1.0 で足すと、検索文が10本前後のとき原質問の票が1割になり、無関係な
@@ -91,19 +90,6 @@ EMBEDDING_MODALITY_IMAGE = "image"
 EmbeddingFunction = Callable[..., list[list[float]]]
 ImageEmbeddingFunction = Callable[..., list[list[float]]]
 QueryEmbeddingFunction = Callable[[str, Settings], list[float]]
-T = TypeVar("T")
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @dataclass(frozen=True)
@@ -257,8 +243,7 @@ def save_chunk_run_embeddings(
         # 今回の保存対象から外れた chunk（外した engine など）を検索に残さない。対象の chunk は
         # 直後の MERGE が active='Y' に戻す。同じ transaction なので途中の状態は検索から見えない。
         connection.cursor().execute(
-            "UPDATE rag_chunks SET active = 'N', updated_at_utc = SYSTIMESTAMP "
-            "WHERE chunk_run_id = :chunk_run_id AND active = 'Y'",
+            "UPDATE rag_chunks SET active = 'N', updated_at_utc = SYSTIMESTAMP WHERE chunk_run_id = :chunk_run_id AND active = 'Y'",
             {"chunk_run_id": chunk_run.chunk_run_id},
         )
         _upsert_chunks(connection, chunk_run, document_id, selected_chunks)
@@ -274,8 +259,7 @@ def save_chunk_run_embeddings(
         missing = [
             chunk
             for chunk in children
-            if _retrieval_text_hash(chunk)
-            not in existing_hashes.get(_chunk_uid(chunk_run.chunk_run_id, chunk.chunk_id), set())
+            if _retrieval_text_hash(chunk) not in existing_hashes.get(_chunk_uid(chunk_run.chunk_run_id, chunk.chunk_id), set())
         ]
         skipped_count = len(children) - len(missing)
 
@@ -291,9 +275,7 @@ def save_chunk_run_embeddings(
             )
             errors.extend(batch_errors)
             if saved:
-                _upsert_embeddings(
-                    connection, chunk_run, [chunk for chunk, _ in saved], [vector for _, vector in saved], settings
-                )
+                _upsert_embeddings(connection, chunk_run, [chunk for chunk, _ in saved], [vector for _, vector in saved], settings)
             # batch ごとに確定し、後続の失敗で取得済み（課金済み）の embedding を失わない。
             connection.commit()
             created_count += len(saved)
@@ -353,9 +335,7 @@ def save_chunk_run_embeddings(
         kept_latest_chunk_run_id = _newer_published_chunk_run_id(connection, document_id, chunk_run)
         if not kept_latest_chunk_run_id:
             _upsert_document(connection, chunk_run, document_id, publish=True)
-        _deactivate_superseded_chunk_runs(
-            connection, document_id, kept_latest_chunk_run_id or chunk_run.chunk_run_id
-        )
+        _deactivate_superseded_chunk_runs(connection, document_id, kept_latest_chunk_run_id or chunk_run.chunk_run_id)
         connection.commit()
         # 冒頭の clear から commit までに走った検索が、保存前の chunk 一覧を cache し直している場合がある。
         _pool_cache.clear()
@@ -419,8 +399,12 @@ def delete_source_documents(
     if connection is None:
         with connect_adb_thin(_connection_settings(settings)) as owned_connection:
             return delete_source_documents(
-                settings, source_file_sha256=source_file_sha256, source_file_name=source_file_name,
-                document_ids=document_ids, connection=owned_connection)
+                settings,
+                source_file_sha256=source_file_sha256,
+                source_file_name=source_file_name,
+                document_ids=document_ids,
+                connection=owned_connection,
+            )
     binds: dict[str, Any] = {"source_file_sha256": source_file_sha256, "source_file_name": source_file_name}
     conditions = ["(source_file_sha256 = :source_file_sha256 AND source_file_name = :source_file_name)"]
     ids = {f"document_id_{index}": value for index, value in enumerate(dict.fromkeys(document_ids))}
@@ -488,7 +472,7 @@ def _newer_published_chunk_run_id(connection: Any, document_id: str, chunk_run: 
     return published_run_id
 
 
-def _embed_isolating_failures(
+def _embed_isolating_failures[T](
     items: Sequence[T],
     embed: Callable[[Sequence[T]], list[list[float]]],
     *,
@@ -507,7 +491,7 @@ def _embed_isolating_failures(
         return vectors
 
     try:
-        return list(zip(items, checked(items))), []
+        return list(zip(items, checked(items), strict=False)), []
     except Exception as exc:
         if _is_retryable_error(exc):
             raise
@@ -712,8 +696,10 @@ def format_embedding_status_result(result: EmbeddingStatusResult) -> str:
     ラベルは日本語（英語）の併記。直上のチャンキング結果と重複する子 / 親チャンク数は出さない (#816)。
     """
     if result.legacy_row_count:
-        status = ("旧 schema（legacy）: この文書の ADB 行は現行の chunk metadata 版でないため検索対象外です。"
-                  "再チャンキングのうえ「Embedding作成・ADB保存」を再実行してください")
+        status = (
+            "旧 schema（legacy）: この文書の ADB 行は現行の chunk metadata 版でないため検索対象外です。"
+            "再チャンキングのうえ「Embedding作成・ADB保存」を再実行してください"
+        )
     elif result.ready:
         status = "検索可能（ready）"
     elif result.embedded_count > 0 or result.image_embedded_count > 0:
@@ -771,7 +757,7 @@ def format_embedding_save_result(result: EmbeddingSaveResult) -> str:
             ]
         )
     if result.kept_latest_chunk_run_id:
-        published = (f"より新しい run `{result.kept_latest_chunk_run_id}` を公開中のため、この run は検索対象に切り替えていません")
+        published = f"より新しい run `{result.kept_latest_chunk_run_id}` を公開中のため、この run は検索対象に切り替えていません"
     elif result.published:
         published = "この run を検索対象として公開しました"
     else:
@@ -809,13 +795,10 @@ def check_adb_hybrid_search_ready(
             legacy_documents = _legacy_schema_document_count(connection, chunk_run_id, retrieval_scope=retrieval_scope)
     except Exception as exc:
         raise AdbHybridSearchUnavailable(
-            "ADB hybrid search is unavailable. Create the schema and configure ADB first: "
-            + _short_error(exc)
+            "ADB hybrid search is unavailable. Create the schema and configure ADB first: " + _short_error(exc)
         ) from exc
     if count <= 0:
-        raise AdbEmbeddingsUnavailable(
-            "No ADB embeddings were found for the selected retrieval scope. Run Embedding/ADB save first."
-        )
+        raise AdbEmbeddingsUnavailable("No ADB embeddings were found for the selected retrieval scope. Run Embedding/ADB save first.")
     return AdbSearchReadiness(legacy_document_count=legacy_documents)
 
 
@@ -852,8 +835,15 @@ def search_adb_hybrid_chunks(
     try:
         adb_settings = _connection_settings(settings)
         with connect_adb_thin(adb_settings) as connection:
-            pool_key = (hashlib.sha256(repr(adb_settings).encode()).hexdigest(), chunk_run_id, scope, tuple(preferred_engine_ids), repr(category_filter),
-                        settings.embedding_model, _adb_embedding_dimensions(settings))
+            pool_key = (
+                hashlib.sha256(repr(adb_settings).encode()).hexdigest(),
+                chunk_run_id,
+                scope,
+                tuple(preferred_engine_ids),
+                repr(category_filter),
+                settings.embedding_model,
+                _adb_embedding_dimensions(settings),
+            )
             cached = _pool_cache.get(pool_key)
             all_chunks = cached[1] if cached and time.monotonic() - cached[0] < POOL_CACHE_TTL_SECONDS else None
             # Embedding の有無は検索範囲ごとに1回確認すれば足りる。
@@ -983,16 +973,22 @@ def search_adb_hybrid_chunks(
                     )
                 )
             # 比較実験用。質問理解の profile に合う chunk を第4のチャネルとして融合するかどうか。
-            profile_rankings = profile_channel_rankings(
-                profile_source_chunks,
-                inquiry_conditions,
-                limit=limit,
-            ) if getattr(settings, "profile_channel_enabled", True) else []
+            profile_rankings = (
+                profile_channel_rankings(
+                    profile_source_chunks,
+                    inquiry_conditions,
+                    limit=limit,
+                )
+                if getattr(settings, "profile_channel_enabled", True)
+                else []
+            )
             # 業務語の一致は SQL の除外条件ではなく、融合後の加点にする (#848)。
             business_rankings = _business_match_ranking(
                 profile_source_chunks,
                 metadata_filter,
-                rankings, text_rankings, limit=limit,
+                rankings,
+                text_rankings,
+                limit=limit,
             )
             scores = _combine_hybrid_scores(
                 rankings,
@@ -1236,9 +1232,7 @@ def _first_page_contexts(chunks: Iterable[Any]) -> dict[str, Any]:
     return contexts
 
 
-def _upsert_document(
-    connection: Any, chunk_run: ChunkingResult, document_id: str, *, publish: bool = True
-) -> None:
+def _upsert_document(connection: Any, chunk_run: ChunkingResult, document_id: str, *, publish: bool = True) -> None:
     """文書行を upsert します。publish=False では既存文書の latest run と metadata を変更しません。
 
     既存行は UPDATE、無ければ INSERT の 2 文に分ける。1 文の MERGE で
@@ -1590,7 +1584,7 @@ def _upsert_embeddings(
             "embedding_text_hash": _retrieval_text_hash(chunk),
             "embedding_vector": array.array("f", [float(value) for value in embedding]),
         }
-        for chunk, embedding in zip(chunks, embeddings)
+        for chunk, embedding in zip(chunks, embeddings, strict=False)
     ]
     if not rows:
         return
@@ -1660,7 +1654,7 @@ def _upsert_image_embeddings(
             "embedding_text_hash": candidate.image_hash,
             "embedding_vector": array.array("f", [float(value) for value in embedding]),
         }
-        for candidate, embedding in zip(candidates, embeddings)
+        for candidate, embedding in zip(candidates, embeddings, strict=False)
     ]
     if not rows:
         return
@@ -1760,10 +1754,7 @@ def _text_modality_filter(connection: Any) -> str | None:
     未適用の schema には image 行が存在しないため、限定しなくても text 行だけが対象になる。
     """
     cursor = connection.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) FROM user_tab_cols "
-        "WHERE table_name = 'RAG_CHUNK_EMBEDDINGS' AND column_name = 'EMBEDDING_MODALITY'"
-    )
+    cursor.execute("SELECT COUNT(*) FROM user_tab_cols WHERE table_name = 'RAG_CHUNK_EMBEDDINGS' AND column_name = 'EMBEDDING_MODALITY'")
     row = cursor.fetchone()
     return EMBEDDING_MODALITY_TEXT if row and int(row[0] or 0) > 0 else None
 
@@ -1779,10 +1770,7 @@ def _prune_image_embeddings(
 ) -> None:
     """現在候補と異なる画像vectorを削除し、asset未解決のchunkは既存vectorを保護します。"""
     preserved = {str(chunk_id) for chunk_id in preserve_chunk_ids if str(chunk_id)}
-    current_hashes = {
-        _chunk_uid(chunk_run.chunk_run_id, candidate.chunk.chunk_id): candidate.image_hash
-        for candidate in candidates
-    }
+    current_hashes = {_chunk_uid(chunk_run.chunk_run_id, candidate.chunk.chunk_id): candidate.image_hash for candidate in candidates}
     rows = [
         {
             "chunk_uid": _chunk_uid(chunk_run.chunk_run_id, chunk.chunk_id),
@@ -2112,11 +2100,7 @@ def _combine_hybrid_scores(
             score.channel_ranks[channel] = rank
         if channel_score is not None:
             current_score = score.channel_scores.get(channel)
-            score.channel_scores[channel] = (
-                channel_score
-                if current_score is None
-                else max(current_score, channel_score)
-            )
+            score.channel_scores[channel] = channel_score if current_score is None else max(current_score, channel_score)
 
     def weight(weights: Sequence[float] | None, index: int) -> float:
         return float(weights[index]) if weights is not None and index < len(weights) else 1.0
@@ -2128,11 +2112,7 @@ def _combine_hybrid_scores(
             score.rrf_score += weight(query_weights, query_index) / (RRF_K + rank)
             score.vector_rank = rank if score.vector_rank is None else min(score.vector_rank, rank)
             if distance is not None:
-                score.vector_distance = (
-                    distance
-                    if score.vector_distance is None
-                    else min(score.vector_distance, distance)
-                )
+                score.vector_distance = distance if score.vector_distance is None else min(score.vector_distance, distance)
             add_channel(
                 score,
                 channel=channel,
@@ -2147,11 +2127,7 @@ def _combine_hybrid_scores(
             score = ensure(chunk_uid, query_index)
             score.rrf_score += image_weight * weight(query_weights, query_index) / (RRF_K + rank)
             if distance is not None:
-                score.vector_distance = (
-                    distance
-                    if score.vector_distance is None
-                    else min(score.vector_distance, distance)
-                )
+                score.vector_distance = distance if score.vector_distance is None else min(score.vector_distance, distance)
             add_channel(
                 score,
                 channel=channel,
@@ -2166,11 +2142,7 @@ def _combine_hybrid_scores(
             score.rrf_score += weight(text_query_weights, query_index) / (RRF_K + rank)
             score.text_rank = rank if score.text_rank is None else min(score.text_rank, rank)
             if text_score is not None:
-                score.text_score = (
-                    text_score
-                    if score.text_score is None
-                    else max(score.text_score, text_score)
-                )
+                score.text_score = text_score if score.text_score is None else max(score.text_score, text_score)
             add_channel(score, channel=channel, rank=rank, channel_score=text_score)
 
     for channel_index, (channel, weight, ranking) in enumerate(profile_rankings):
@@ -2181,11 +2153,7 @@ def _combine_hybrid_scores(
             score.rrf_score += channel_weight / (RRF_K + rank)
             score.profile_rank = rank if score.profile_rank is None else min(score.profile_rank, rank)
             if profile_score is not None:
-                score.profile_score = (
-                    profile_score
-                    if score.profile_score is None
-                    else max(score.profile_score, profile_score)
-                )
+                score.profile_score = profile_score if score.profile_score is None else max(score.profile_score, profile_score)
             add_channel(score, channel=channel_name, rank=rank, channel_score=profile_score)
 
     return sorted(
@@ -2335,18 +2303,25 @@ def _restore_first_page_contexts(connection: Any, chunks: list[StoredChunk], doc
 
     同じ文書・エンジンの chunk は同じ辞書を共有する。後続の処理はこの値を変更しない。
     """
-    missing = sorted({doc for chunk, doc in zip(chunks, document_ids)
-                      if doc and "first_page_context" not in (chunk.metadata.get("document") or {})})
+    missing = sorted(
+        {
+            doc
+            for chunk, doc in zip(chunks, document_ids, strict=False)
+            if doc and "first_page_context" not in (chunk.metadata.get("document") or {})
+        }
+    )
     contexts: dict[str, dict[str, Any]] = {}
     for start in range(0, len(missing), 500):
-        batch = missing[start:start + 500]
+        batch = missing[start : start + 500]
         binds = {f"d{index}": value for index, value in enumerate(batch)}
         cursor = connection.cursor()
-        cursor.execute(f"SELECT document_id, metadata_json FROM rag_documents WHERE document_id IN ({', '.join(':' + key for key in binds)})", binds)
+        cursor.execute(
+            f"SELECT document_id, metadata_json FROM rag_documents WHERE document_id IN ({', '.join(':' + key for key in binds)})", binds
+        )
         for document_id, raw in cursor:
             stored = _json_dict(raw).get("first_page_contexts")
             contexts[str(document_id)] = stored if isinstance(stored, dict) else {}
-    for chunk, document_id in zip(chunks, document_ids):
+    for chunk, document_id in zip(chunks, document_ids, strict=False):
         context = contexts.get(document_id, {}).get(chunk.source_engine_id)
         document = chunk.metadata.get("document")
         if isinstance(context, dict) and isinstance(document, dict) and "first_page_context" not in document:
@@ -2405,10 +2380,7 @@ def _classification_filter_sql(
     for key, value in classification_filter.to_metadata().items():
         bind_name = f"classification_{key}"
         clauses.append(
-            "COALESCE("
-            f"JSON_VALUE({alias}.metadata_json, '$.document.classification.{key}'), "
-            f":classification_default_{key}"
-            f") = :{bind_name}"
+            f"COALESCE(JSON_VALUE({alias}.metadata_json, '$.document.classification.{key}'), :classification_default_{key}) = :{bind_name}"
         )
         binds[bind_name] = value
         binds[f"classification_default_{key}"] = DEFAULT_CATEGORY_VALUE
@@ -2565,12 +2537,9 @@ def _chunks_matching_metadata_filter(
     current_chunks = [
         chunk
         for chunk in chunks
-        if isinstance(chunk.metadata, dict)
-        and chunk.metadata.get("schema_version") == CHUNK_METADATA_SCHEMA_VERSION
+        if isinstance(chunk.metadata, dict) and chunk.metadata.get("schema_version") == CHUNK_METADATA_SCHEMA_VERSION
     ]
-    if (metadata_filter is None or not metadata_filter.active) and (
-        classification_filter is None or not classification_filter.active
-    ):
+    if (metadata_filter is None or not metadata_filter.active) and (classification_filter is None or not classification_filter.active):
         return current_chunks
 
     source_file_terms = _dedupe_filter_terms(metadata_filter.source_file_terms if metadata_filter else ())[:8]
@@ -2583,9 +2552,7 @@ def _chunks_matching_metadata_filter(
         page_ok = not page_numbers or _chunk_covers_page(chunk, page_numbers)
         business_values = _business_metadata_values(chunk.metadata)
         metadata_ok = not metadata_terms or any(
-            variant in business_values
-            for term in metadata_terms
-            for variant in _business_term_variants(term)
+            variant in business_values for term in metadata_terms for variant in _business_term_variants(term)
         )
         classification_ok = _chunk_matches_classification_filter(chunk, classification_filter)
         if source_ok and page_ok and metadata_ok and classification_ok:
@@ -2823,7 +2790,7 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
-def _batches(items: Sequence[T], size: int) -> Iterable[Sequence[T]]:
+def _batches[T](items: Sequence[T], size: int) -> Iterable[Sequence[T]]:
     step = max(1, int(size or 1))
     for start in range(0, len(items), step):
         yield items[start : start + step]
@@ -2843,6 +2810,7 @@ def _short_error(exc: Exception) -> str:
 def _connection_settings(settings: Settings):
     """SDK は明示した接続設定だけを使い、互換直接呼び出しは旧設定読込を維持する。"""
     from rag_engine.resources.runtime import current_runtime
+
     configured = getattr(settings, "adb_settings", None)
     if configured is not None:
         return configured

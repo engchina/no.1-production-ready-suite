@@ -1,4 +1,5 @@
 """回答の確定に必要な実データ・別の資料の確認を案内する (#688)。"""
+
 from test_grounded_answer import FakeModel, audit, context, draft, record, run
 
 from rag_engine.generation import grounded
@@ -11,10 +12,16 @@ def _draft(**extra):
 
 def test_confirmation_lines_keep_data_and_documents_named_in_the_evidence_or_question():
     spans = [{"text": "支払区分は「支払区分コード表」を参照してください。"}]
-    value = GroundedDraft.model_validate(_draft(
-        external_data_items=["対象の取引先の支払区分の設定値（どの手順に当たるかを決める）", " "],
-        reference_materials=["「支払区分コード表」（区分の意味を確かめる）", "料金表（手数料を確かめる）",
-                             "「架空の運用規程」（創作された資料名）"]))
+    value = GroundedDraft.model_validate(
+        _draft(
+            external_data_items=["対象の取引先の支払区分の設定値（どの手順に当たるかを決める）", " "],
+            reference_materials=[
+                "「支払区分コード表」（区分の意味を確かめる）",
+                "料金表（手数料を確かめる）",
+                "「架空の運用規程」（創作された資料名）",
+            ],
+        )
+    )
     assert grounded.confirmation_lines(value, "支払区分の意味は？", spans) == [
         "実データ: 対象の取引先の支払区分の設定値（どの手順に当たるかを決める）",
         "資料: 「支払区分コード表」（区分の意味を確かめる）",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import unicodedata
 
-
 _RANGE_SEPARATORS = re.compile(r"[〜~‐‑–—−ー]")
 _PAGE_PART = re.compile(r"(\d+)(?:-(\d+))?")
 

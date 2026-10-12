@@ -952,8 +952,8 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "app_auth_enabled", True)
-    monkeypatch.setattr(settings, "app_auth_session_cookie_name", "nl2sql_session")
-    monkeypatch.setattr(settings, "app_auth_csrf_cookie_name", "nl2sql_csrf")
+    monkeypatch.setattr(settings, "app_auth_session_cookie_name", "pr_session")
+    monkeypatch.setattr(settings, "app_auth_csrf_cookie_name", "pr_csrf")
 
     async def inline_threadpool(function: Any, *args: Any, **kwargs: Any) -> Any:
         return function(*args, **kwargs)
@@ -991,7 +991,7 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
         )
 
     def request(*, csrf: bool) -> Request:
-        headers = [(b"cookie", b"nl2sql_session=session-token; nl2sql_csrf=csrf-token")]
+        headers = [(b"cookie", b"pr_session=session-token; pr_csrf=csrf-token")]
         if csrf:
             headers.append((b"x-csrf-token", b"csrf-token"))
         scope = {

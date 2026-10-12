@@ -262,8 +262,6 @@ export interface Page<T> {
 }
 
 // --- 認証（platform の共通認証。#214） ---
-/** CSRF の double submit に使う Cookie 名（backend の `RAG_APP_AUTH_CSRF_COOKIE_NAME` の既定値）。 */
-export const CSRF_COOKIE_NAME = "rag_csrf";
 
 /**
  * `GET /api/auth/me` などが返すログイン中の利用者。`permissions` は implies を展開済み。
@@ -2376,7 +2374,7 @@ export function apiErrorFromEnvelope(
 /** 状態を変える method のとき Cookie の CSRF token を `X-CSRF-Token` として付けた headers を作る。 */
 export function withCsrfHeaders(method: string | undefined, headers?: HeadersInit): Headers {
   const merged = new Headers(headers);
-  for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method ?? "GET"))) {
+  for (const [name, value] of Object.entries(csrfHeader(method ?? "GET"))) {
     merged.set(name, value);
   }
   return merged;

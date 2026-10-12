@@ -3,10 +3,12 @@
 公開 SDK の Protocol と併用し、CRAG や multi-query の既存挙動も保護する。
 互換呼び出しの既定実装は composition root で遅延構築する。
 """
+
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class AnswerDependencies:
     cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。
     省略時は先に読まない。
     """
+
     search: Callable[..., Any]
     check_ready: Callable[..., Any]
     parse_text: Callable[..., Any]
@@ -71,6 +74,7 @@ def _get() -> AnswerDependencies:
     if current is not None:
         return current
     from rag_engine.composition import oracle_answer_dependencies
+
     return oracle_answer_dependencies()
 
 

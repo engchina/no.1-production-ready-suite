@@ -1,4 +1,5 @@
 """知識ベースに無い資料名の条件で検索が 0 件にならないことを確かめる (#1082)。"""
+
 from rag_engine.adapters.oracle.store import _resolved_metadata_filter
 from rag_engine.retrieval.inquiry_conditions import InquiryMetadataFilter
 
@@ -29,11 +30,9 @@ class _Connection:
 
 
 def test_unmatched_source_file_terms_are_dropped_with_their_page_numbers():
-    condition = InquiryMetadataFilter(source_file_terms=("手元の資料.pdf",), metadata_terms=("販売管理",),
-                                      page_numbers=(3,))
+    condition = InquiryMetadataFilter(source_file_terms=("手元の資料.pdf",), metadata_terms=("販売管理",), page_numbers=(3,))
 
-    resolved = _resolved_metadata_filter(_Connection(rows=False), "", condition,
-                                         retrieval_scope="knowledge_base")
+    resolved = _resolved_metadata_filter(_Connection(rows=False), "", condition, retrieval_scope="knowledge_base")
 
     assert resolved.source_file_terms == ()
     assert resolved.page_numbers == ()
@@ -44,8 +43,7 @@ def test_unmatched_source_file_terms_are_dropped_with_their_page_numbers():
 def test_matched_source_file_terms_are_kept():
     condition = InquiryMetadataFilter(source_file_terms=("地区別売上集計表.pdf",), page_numbers=(3,))
 
-    resolved = _resolved_metadata_filter(_Connection(rows=True), "", condition,
-                                         retrieval_scope="knowledge_base")
+    resolved = _resolved_metadata_filter(_Connection(rows=True), "", condition, retrieval_scope="knowledge_base")
 
     assert resolved is condition
 

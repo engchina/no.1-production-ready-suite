@@ -1,10 +1,13 @@
 """アプリが所有するモデルプール。共有 singleton を要求しない。"""
+
+from collections.abc import Callable
 from threading import RLock
-from typing import Callable, Any
+from typing import Any
 
 
 class ModelPool:
     """signature が同じモデルを再利用し、close 時に自分のモデルだけを解放する。"""
+
     def __init__(self):
         self._lock = RLock()
         self._entries: dict[str, tuple[object, Any, Callable[[], None] | None]] = {}

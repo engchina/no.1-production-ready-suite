@@ -1,20 +1,39 @@
 """検索戦略の選択と検索文生成のプロンプト、生成された検索文の正規化。LLM は呼ばない。"""
+
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
-from rag_engine.knowledge.classification import ClassificationFilter
-from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
-from rag_engine.retrieval.task_contract import task_contract
-from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
+from collections.abc import Sequence
+from typing import Any
+
+from rag_engine.config import Settings
 from rag_engine.generation.answer_images import _trim_generated_text
-from rag_engine.generation.answer_models import HYDE_LABEL, HYDE_STRATEGY, QUERY_DECOMPOSITION_LABEL, QUERY_DECOMPOSITION_STRATEGY, QueryExpansionResult, RAG_FUSION_LABEL, RAG_FUSION_STRATEGY, SIMPLE_RETRIEVAL_LABEL, SIMPLE_RETRIEVAL_STRATEGY, STEP_BACK_PROMPTING_LABEL, STEP_BACK_PROMPTING_STRATEGY, _dedupe_queries, _dedupe_query_key, query_strategy_id, query_strategy_label
+from rag_engine.generation.answer_models import (
+    HYDE_LABEL,
+    HYDE_STRATEGY,
+    QUERY_DECOMPOSITION_LABEL,
+    QUERY_DECOMPOSITION_STRATEGY,
+    RAG_FUSION_LABEL,
+    RAG_FUSION_STRATEGY,
+    SIMPLE_RETRIEVAL_LABEL,
+    SIMPLE_RETRIEVAL_STRATEGY,
+    STEP_BACK_PROMPTING_LABEL,
+    STEP_BACK_PROMPTING_STRATEGY,
+    QueryExpansionResult,
+    _dedupe_queries,
+    _dedupe_query_key,
+    query_strategy_id,
+    query_strategy_label,
+)
+from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
+from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.config import Settings
-
+from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
+from rag_engine.retrieval.task_contract import task_contract
 
 MAX_GENERATED_QUERY_COUNT = 5
+
 
 def _text_search_query_source(
     runtime_knowledge: RuntimeKnowledgeContext,
@@ -34,6 +53,7 @@ def _text_search_query_source(
         parts.append("CRAG 再検索文")
     return " + ".join(parts)
 
+
 def _retrieval_metadata_filter(
     inquiry_conditions: InquiryConditionParse | None,
     classification_filter: ClassificationFilter,
@@ -48,6 +68,7 @@ def _retrieval_metadata_filter(
             payload["inquiry"] = inquiry_filter
     return payload
 
+
 def _limited_text_search_query_variants(
     question: str,
     query_variants: Sequence[str] | None,
@@ -58,28 +79,47 @@ def _limited_text_search_query_variants(
     limit = max(1, int(getattr(settings, "text_search_query_variant_limit", 6) or 6))
     return tuple(variants[:limit])
 
+
 def _query_expansion_details(expansion: QueryExpansionResult, *, original_query_weighting: bool = True) -> list[str]:
     """使った戦略と理由を示す。検索文そのものは、最終の一覧を示す次の工程に任せる。"""
-    details = [f"結果: {query_strategy_label(expansion.effective_strategy)}"
-               + (f"（{len(expansion.generated_queries)} 本の検索文を追加）" if expansion.generated_queries else "（検索文の追加なし）")]
+    details = [
+        f"結果: {query_strategy_label(expansion.effective_strategy)}"
+        + (f"（{len(expansion.generated_queries)} 本の検索文を追加）" if expansion.generated_queries else "（検索文の追加なし）")
+    ]
     if expansion.routing_reason:
         details.append(f"      理由: {expansion.routing_reason}")
     if expansion.routing_data_required:
         details.append("      実データの確認が必要になりそうな点（暫定。回答時に根拠を見て判断し直します）:")
         details.extend(f"      ・{item}" for item in expansion.routing_data_items)
     if expansion.generated_queries:
-        details.append("影響: 追加した検索文は補助として使います。" + (
-            "順位の融合では原質問の検索結果を優先します。" if original_query_weighting
-            else "順位の融合では全検索文を同じ重みで扱います（RETRIEVAL_ORIGINAL_QUERY_WEIGHTING=false）。"))
+        details.append(
+            "影響: 追加した検索文は補助として使います。"
+            + (
+                "順位の融合では原質問の検索結果を優先します。"
+                if original_query_weighting
+                else "順位の融合では全検索文を同じ重みで扱います（RETRIEVAL_ORIGINAL_QUERY_WEIGHTING=false）。"
+            )
+        )
     if expansion.vector_only_queries:
         details.append("      仮説文は創作した語を含むため、意味検索（vector）だけに使い、全文検索（Oracle Text）には使いません。")
     return details
 
+
 # 検索文生成のプロンプトへ渡す契約の項目。原質問の写し（original_question / current_request / request_units /
 # user_assertions）はプロンプトの「原質問」と重複し、intent_parts / required_aspects は回答生成・監査用なので渡さない (#917)。
 _PROMPT_CONTRACT_KEYS = (
-    "goal", "asks_cause", "requested_actions", "action_targets", "business_objects", "error_messages",
-    "output_formats", "changed_fields", "explicit_conditions", "hypotheses", "requester_mentions", "missing_choice",
+    "goal",
+    "asks_cause",
+    "requested_actions",
+    "action_targets",
+    "business_objects",
+    "error_messages",
+    "output_formats",
+    "changed_fields",
+    "explicit_conditions",
+    "hypotheses",
+    "requester_mentions",
+    "missing_choice",
 )
 
 
@@ -106,8 +146,7 @@ _EXPANSION_INSTRUCTIONS = {
         "利用者語、正式な画面語、項目名、表記ゆれ、同義語、具体/抽象の粒度違いを混ぜます。"
     ),
     QUERY_DECOMPOSITION_STRATEGY: (
-        "質問分解として、問い合わせを独立して検索できる子質問に2〜5個へ分解してください。"
-        "各子質問は単独で意味が通る形にします。"
+        "質問分解として、問い合わせを独立して検索できる子質問に2〜5個へ分解してください。各子質問は単独で意味が通る形にします。"
     ),
     STEP_BACK_PROMPTING_STRATEGY: (
         "ステップバックプロンプトとして、原質問の前提・上位概念（生成条件・除外条件・設定の適用規則）を探す抽象化した質問を1〜3個作ってください。"
@@ -176,8 +215,8 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
     "- routing_data_required は、個案の原因・値・処理分岐の確定に実際の日付・設定・CSV・ログ・履歴などの照合が必要かの暫定判定。必要なら routing_data_items に確認するフィールドと目的を列挙し、値や原因は推測しない。"
     "操作方法・出力方法・エラーの意味・規則の説明、関連文書の不足、質問内に全必要値がある場合は false と空配列（検索後に回答生成で再判定する）。\n"
     "- 単純検索以外では、その選択肢の generate の指示に従って検索文を queries に返す（単純検索では空配列）。\n"
-    + _EXPANSION_CONSTRAINTS +
-    "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
+    + _EXPANSION_CONSTRAINTS
+    + "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
     "\n"
     "4. 入力\n"
     "問い合わせ:\n"
@@ -198,11 +237,9 @@ QUERY_EXPANSION_PROMPT_TEMPLATE = (
     "戦略「{{strategy_label}}」の指示に従い、検索に使う追加質問または検索文を作ってください。一覧にない戦略の場合は、検索に有効な追加質問を作ってください。\n"
     "\n"
     "2. 戦略ごとの指示\n"
-    + "".join(f"- {query_strategy_label(strategy)}: {instruction}\n" for strategy, instruction in _EXPANSION_INSTRUCTIONS.items()) +
-    "\n"
-    "3. 制約\n"
-    + _EXPANSION_CONSTRAINTS +
-    "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
+    + "".join(f"- {query_strategy_label(strategy)}: {instruction}\n" for strategy, instruction in _EXPANSION_INSTRUCTIONS.items())
+    + "\n"
+    "3. 制約\n" + _EXPANSION_CONSTRAINTS + "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
     "\n"
     "4. 入力\n"
     "原質問:\n"
@@ -216,20 +253,29 @@ QUERY_EXPANSION_PROMPT_TEMPLATE = (
     '{"queries": ["追加の検索質問または検索文"]}'
 )
 
+
 def _build_query_routing_prompt(question: str) -> str:
     """検索方法と実データ依存を混同しない二軸のルーティング指示を作成します。"""
-    return render_prompt_template(QUERY_ROUTING_PROMPT_TEMPLATE, {
-        "question": question.strip(),
-        "task_contract": _prompt_task_contract(question),
-    })
+    return render_prompt_template(
+        QUERY_ROUTING_PROMPT_TEMPLATE,
+        {
+            "question": question.strip(),
+            "task_contract": _prompt_task_contract(question),
+        },
+    )
+
 
 def _build_query_expansion_prompt(question: str, strategy: str) -> str:
     """選択済みの戦略で検索文を作る指示を作成します（自動ルーティングが検索文を返さないときの補助呼出にも使う）。"""
-    return render_prompt_template(QUERY_EXPANSION_PROMPT_TEMPLATE, {
-        "strategy_label": query_strategy_label(strategy),
-        "question": question.strip(),
-        "task_contract": _prompt_task_contract(question),
-    })
+    return render_prompt_template(
+        QUERY_EXPANSION_PROMPT_TEMPLATE,
+        {
+            "strategy_label": query_strategy_label(strategy),
+            "question": question.strip(),
+            "task_contract": _prompt_task_contract(question),
+        },
+    )
+
 
 def _generated_queries_from_payload(
     payload: dict[str, Any] | None, original_question: str, *, limit: int | None = MAX_GENERATED_QUERY_COUNT
@@ -254,6 +300,7 @@ def _generated_queries_from_payload(
         candidates.extend(_coerce_text_values(payload.get(key)))
     return _dedupe_generated_queries(original_question, candidates, limit=limit)
 
+
 def _coerce_text_values(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -277,6 +324,7 @@ def _coerce_text_values(value: Any) -> list[str]:
         return values
     return []
 
+
 def _dedupe_generated_queries(
     original_question: str, queries: Sequence[str], *, limit: int | None = MAX_GENERATED_QUERY_COUNT
 ) -> tuple[str, ...]:
@@ -295,6 +343,7 @@ def _dedupe_generated_queries(
             break
     return tuple(selected)
 
+
 def _retrieval_queries(question: str, retrieval_queries: Sequence[str] | None) -> tuple[str, ...]:
     if retrieval_queries is None:
         return (question,)
@@ -304,6 +353,7 @@ def _retrieval_queries(question: str, retrieval_queries: Sequence[str] | None) -
     if _dedupe_query_key(question) != _dedupe_query_key(queries[0]):
         return _dedupe_queries((question, *queries))
     return queries
+
 
 def _base_query_expansion(question: str, query_strategy: str) -> QueryExpansionResult:
     selected_strategy = query_strategy_id(query_strategy)

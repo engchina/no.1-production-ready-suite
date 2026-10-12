@@ -7,8 +7,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from rag_engine.knowledge.classification import classification_from_selection
-from rag_engine.parsing.parse_inputs import file_sha256, load_parse_inputs, save_parse_input
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.parse_inputs import file_sha256, load_parse_inputs, save_parse_input
 
 
 class ParseInputRestoreTests(unittest.TestCase):

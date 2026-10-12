@@ -9,6 +9,7 @@ from pr_backend_core.config import (
     platform_env_file,
     product_settings_config,
 )
+from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.model import (
     EnterpriseAiConfiguredModel,
     ModelSecretStateMixin,
@@ -38,13 +39,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # production: 共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。Cookie の
     #   ないリクエストは 401（Runtime からの呼出しは Binding token の /api/mcp/{binding_id}）。
     auth_mode: Literal["local", "production"] = "local"
-    # 構成管理者と認証ポリシーは共通 `.env` の PLATFORM_ADMIN_* / PLATFORM_AUTH_*（#211）、
-    # Cookie 名は製品ごとの AGENT_APP_AUTH_*。構成管理者 token の署名鍵に service_name を使う。
+    # 構成管理者・認証ポリシー・ログインの Cookie 名は共通 `.env` の PLATFORM_ADMIN_* /
+    # PLATFORM_AUTH_*（#211）。Cookie は 3 製品で共有し、1 回のログインで全製品を使える（#1565）。
     app_admin_login_user_id: str = ""
     app_admin_login_user_password: str = ""
     app_auth_cookie_secure: bool = False
-    app_auth_session_cookie_name: str = "agent_session"
-    app_auth_csrf_cookie_name: str = "agent_csrf"
+    app_auth_session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
+    app_auth_csrf_cookie_name: str = DEFAULT_CSRF_COOKIE_NAME
     app_auth_idle_timeout_minutes: int = 60
     app_auth_absolute_timeout_hours: int = 12
     app_auth_failed_login_limit: int = 5

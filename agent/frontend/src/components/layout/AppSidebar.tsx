@@ -26,7 +26,6 @@ export function AppSidebar() {
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
   const collapsedSections = useUiStore((state) => state.collapsedSections);
-  const toggleSection = useUiStore((state) => state.toggleSection);
   const setSectionCollapsed = useUiStore((state) => state.setSectionCollapsed);
 
   const sections = useMemo<UiNavSection[]>(
@@ -35,6 +34,7 @@ export function AppSidebar() {
         key: section.titleKey,
         title: t(section.titleKey),
         collapsible: section.collapsible,
+        defaultCollapsed: section.defaultCollapsed,
         items: section.items.map((item) => ({
           href: item.href,
           label: t(item.labelKey),
@@ -76,7 +76,6 @@ export function AppSidebar() {
       collapsed={collapsed}
       onToggleCollapsed={toggleSidebarCollapsed}
       collapsedSections={collapsedSections}
-      onToggleSection={toggleSection}
       onSetSectionCollapsed={setSectionCollapsed}
       linkComponent={Link}
       labels={labels}

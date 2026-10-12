@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from collections.abc import Iterable, Mapping
 from datetime import date
-from typing import Any, Iterable, Mapping
+from typing import Any
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 DOCUMENT_METADATA_SCHEMA_VERSION = 1
@@ -56,16 +57,27 @@ def normalize_document_metadata(value: Mapping[str, Any] | None, *, source_file_
                 date.fromisoformat(result[key])
             except ValueError as exc:
                 raise ValueError(f"{key} は有効な日付 YYYY-MM-DD で指定してください。") from exc
-    if result.get("effective_from") and result.get("effective_to"):
-        if result["effective_from"] >= result["effective_to"]:
-            raise ValueError("有効終了日は有効開始日より後の日付にしてください。")
+    if result.get("effective_from") and result.get("effective_to") and result["effective_from"] >= result["effective_to"]:
+        raise ValueError("有効終了日は有効開始日より後の日付にしてください。")
     if "source_uri" in result:
         try:
             parts = urlsplit(result["source_uri"])
             if parts.scheme.lower() not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
                 raise ValueError
-            secret_keys = {"token", "access_token", "sig", "signature", "x-amz-signature", "x-amz-credential",
-                           "x-goog-signature", "api_key", "apikey", "password", "secret", "code"}
+            secret_keys = {
+                "token",
+                "access_token",
+                "sig",
+                "signature",
+                "x-amz-signature",
+                "x-amz-credential",
+                "x-goog-signature",
+                "api_key",
+                "apikey",
+                "password",
+                "secret",
+                "code",
+            }
             if any(key.lower() in secret_keys for key, _ in parse_qsl(parts.query)) or any(char.isspace() for char in result["source_uri"]):
                 raise ValueError
             _ = parts.port
@@ -103,32 +115,47 @@ def normalize_first_page_context(value: Any) -> dict[str, Any]:
     keys = {"page", "status", "text", "engine", "record_ids", "truncated"}
     if not isinstance(value, dict) or set(value) != keys:
         raise ValueError("first_page_context の項目が不正です。")
-    if type(value['page']) is not int or value['page'] != 1 or value['status'] not in {'available', 'empty', 'not_analyzed', 'not_paginated'}:
+    if (
+        type(value["page"]) is not int
+        or value["page"] != 1
+        or value["status"] not in {"available", "empty", "not_analyzed", "not_paginated"}
+    ):
         raise ValueError("first_page_context の取得状態・物理ページが不正です。")
-    if (not isinstance(value['text'], str) or len(value['text']) > 8000
-            or not isinstance(value['engine'], str) or len(value['engine']) > 128
-            or not isinstance(value['truncated'], bool)
-            or not isinstance(value['record_ids'], list) or len(value['record_ids']) > 128
-            or not all(isinstance(v, str) and len(v) <= 256 for v in value['record_ids'])):
+    if (
+        not isinstance(value["text"], str)
+        or len(value["text"]) > 8000
+        or not isinstance(value["engine"], str)
+        or len(value["engine"]) > 128
+        or not isinstance(value["truncated"], bool)
+        or not isinstance(value["record_ids"], list)
+        or len(value["record_ids"]) > 128
+        or not all(isinstance(v, str) and len(v) <= 256 for v in value["record_ids"])
+    ):
         raise ValueError("first_page_context の本文・出典が不正です。")
-    if bool(value['text'].strip()) != (value['status'] == 'available'):
+    if bool(value["text"].strip()) != (value["status"] == "available"):
         raise ValueError("first_page_context の本文と取得状態が一致しません。")
-    return {**value, 'record_ids': list(value['record_ids'])}
+    return {**value, "record_ids": list(value["record_ids"])}
 
 
-def extract_first_page_context(records: Iterable[Mapping[str, Any]], *, engine: str,
-                               analyzed_pages: Iterable[int], paginated: bool) -> dict[str, Any]:
+def extract_first_page_context(
+    records: Iterable[Mapping[str, Any]], *, engine: str, analyzed_pages: Iterable[int], paginated: bool
+) -> dict[str, Any]:
     """既存解析の物理第1ページを読順で保存する。I/O・追加OCR・推測は行わない。
 
     Picture の生成説明と OCR（picture_ocr_text）は本文に含めず、文字レイヤーから抽出されたレコードだけを使う。
     1 ページ目が画面キャプチャ中心の説明書では、OCR の項目名の羅列が「文書背景」の先頭 800 字を占めていた (#812)。
     保存上限8000文字、参照128件。取得できない場合も理由を保存する。
     """
-    selected = sorted((r for r in records if r.get('page') == 1), key=lambda r: int(r.get('seq_no') or 0)) if paginated else []
-    native = [r for r in selected if r.get('category') != 'Picture']
-    texts = list(dict.fromkeys(str(r.get('text') or '').strip() for r in native if str(r.get('text') or '').strip()))
-    text = '\n'.join(texts)
-    status = 'available' if text else 'not_paginated' if not paginated else 'empty' if selected or 1 in analyzed_pages else 'not_analyzed'
-    return dict(page=1, status=status, text=text[:8000], engine=engine,
-                record_ids=[str(r.get('id') or r.get('seq_no') or '')[:256] for r in native][:128],
-                truncated=len(text) > 8000)
+    selected = sorted((r for r in records if r.get("page") == 1), key=lambda r: int(r.get("seq_no") or 0)) if paginated else []
+    native = [r for r in selected if r.get("category") != "Picture"]
+    texts = list(dict.fromkeys(str(r.get("text") or "").strip() for r in native if str(r.get("text") or "").strip()))
+    text = "\n".join(texts)
+    status = "available" if text else "not_paginated" if not paginated else "empty" if selected or 1 in analyzed_pages else "not_analyzed"
+    return dict(
+        page=1,
+        status=status,
+        text=text[:8000],
+        engine=engine,
+        record_ids=[str(r.get("id") or r.get("seq_no") or "")[:256] for r in native][:128],
+        truncated=len(text) > 8000,
+    )

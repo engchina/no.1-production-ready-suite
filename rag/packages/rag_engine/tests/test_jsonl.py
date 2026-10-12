@@ -3,8 +3,8 @@
 import json
 import unittest
 
-from rag_engine.resources.jsonl import dumps_jsonl
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.resources.jsonl import dumps_jsonl
 
 
 class JsonlTests(unittest.TestCase):

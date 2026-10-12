@@ -1,4 +1,5 @@
 """pytest 全体の前提。業務 profile は repo 外の設定なので、テストでは fixture の JSON を使う。"""
+
 import os
 from pathlib import Path
 

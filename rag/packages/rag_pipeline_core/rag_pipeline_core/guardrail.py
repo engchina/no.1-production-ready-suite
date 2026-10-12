@@ -34,9 +34,7 @@ GUARDRAIL_SPECS: dict[str, GuardrailSpec] = {
     "strict": GuardrailSpec(
         "strict", "nemo_guardrails_strict", ("low_hallucination", "sensitive"), 5, 0.30
     ),
-    "lenient": GuardrailSpec(
-        "lenient", "recall_first", ("exploratory", "internal"), 2, 0.05
-    ),
+    "lenient": GuardrailSpec("lenient", "recall_first", ("exploratory", "internal"), 2, 0.05),
     "regulated": GuardrailSpec(
         "regulated",
         "compliance_audit",

@@ -20,9 +20,7 @@ from rag_engine.knowledge.classification import (
 
 class ClassificationTests(unittest.TestCase):
     def test_infers_three_level_classification_from_share_path(self):
-        path = Path(
-            "share/20260101_20_在庫管理/20_在庫管理/20_操作説明書/Ver4.0/6_倉庫連携_41.pdf"
-        )
+        path = Path("share/20260101_20_在庫管理/20_在庫管理/20_操作説明書/Ver4.0/6_倉庫連携_41.pdf")
 
         classification = infer_classification_from_path(path)
 

@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rag_engine.parsing.rendering import _PDFIUM_LOCK, _import_pdfium
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.rendering import _PDFIUM_LOCK, _import_pdfium
 
 
 def missing_table_image_regions(
-    records: list[LayoutRecord], pages: list[PageImage], pdf_path: Path, *, engine: str = "docling",
+    records: list[LayoutRecord],
+    pages: list[PageImage],
+    pdf_path: Path,
+    *,
+    engine: str = "docling",
 ) -> dict[str, list[list[float]]]:
     """未処理画像を含む ``engine`` の Table の ID と画像領域を返します。
 
@@ -53,23 +57,40 @@ def missing_table_image_regions(
                             parent = parent.container
                         points = [converter.to_bitmap(*point) for point in points]
                         target = images if obj.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE else vectors
-                        target.append([min(x for x, _ in points), min(y for _, y in points),
-                                       max(x for x, _ in points), max(y for _, y in points)])
-                    pictures = [r.bbox for r in records if r.engine == engine and r.page == number
-                                and r.category == "Picture" and r.raw_type == "picture"
-                                and r.text.strip() and not r.raw.get("vision_error")
-                                and not r.raw.get("rag_excluded") and not r.raw.get("vision_skipped")]
+                        target.append(
+                            [min(x for x, _ in points), min(y for _, y in points), max(x for x, _ in points), max(y for _, y in points)]
+                        )
+                    pictures = [
+                        r.bbox
+                        for r in records
+                        if r.engine == engine
+                        and r.page == number
+                        and r.category == "Picture"
+                        and r.raw_type == "picture"
+                        and r.text.strip()
+                        and not r.raw.get("vision_error")
+                        and not r.raw.get("rag_excluded")
+                        and not r.raw.get("vision_skipped")
+                    ]
                     for table in (r for r in tables if r.page == number):
                         table.raw["table_image_detection_status"] = "no_uncovered_visual"
                         # raster がなくても、罫線以外の図形が集まる表内領域を Vision で確認します。
-                        small_paths = [box for box in vectors if box[2] - box[0] >= 4
-                                       and box[3] - box[1] >= 4
-                                       and 0 < _area(box) < _area(table.bbox) * 0.1
-                                       and _area(_intersection(table.bbox, box)) >= _area(box) * 0.95]
+                        small_paths = [
+                            box
+                            for box in vectors
+                            if box[2] - box[0] >= 4
+                            and box[3] - box[1] >= 4
+                            and 0 < _area(box) < _area(table.bbox) * 0.1
+                            and _area(_intersection(table.bbox, box)) >= _area(box) * 0.95
+                        ]
                         candidates = list(images)
                         if len(small_paths) >= 6:
-                            region = [min(b[0] for b in small_paths), min(b[1] for b in small_paths),
-                                      max(b[2] for b in small_paths), max(b[3] for b in small_paths)]
+                            region = [
+                                min(b[0] for b in small_paths),
+                                min(b[1] for b in small_paths),
+                                max(b[2] for b in small_paths),
+                                max(b[3] for b in small_paths),
+                            ]
                             if 0.02 <= _area(region) / max(1, _area(table.bbox)) <= 0.6:
                                 candidates.append(region)
                                 table.raw["table_vector_fallback"] = True
@@ -78,8 +99,7 @@ def missing_table_image_regions(
                             if _area(overlap) < min(_area(table.bbox), _area(bbox)) * 0.8:
                                 continue
                             if _area(overlap) <= 0 or any(
-                                _area(_intersection(overlap, picture)) >= _area(overlap) * 0.8
-                                for picture in pictures
+                                _area(_intersection(overlap, picture)) >= _area(overlap) * 0.8 for picture in pictures
                             ):
                                 continue
                             if overlap not in result.setdefault(table.id, []):

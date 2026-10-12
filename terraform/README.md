@@ -76,7 +76,7 @@ Compute には `platform/.env` を 1 つと、製品ごとの `backend/.env` を
 
 | ファイル | 内容 | 接頭辞 |
 |---|---|---|
-| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・構成管理者 `PLATFORM_ADMIN_*`・サービス間 token の署名鍵 `PLATFORM_SERVICE_TOKEN_SECRET`・`PLATFORM_AUTH_COOKIE_SECURE`（`https_enabled` と同じ値））。1 台の Compute では 3 製品が同じファイルを読み書きする（システム設定画面の保存先）。既にあれば上書きしない | `PLATFORM_` |
+| `platform/.env` | 3製品共通の設定（ADB 接続・OCI の region / compartment・アップロード保存先・構成管理者 `PLATFORM_ADMIN_*`・サービス間 token の署名鍵 `PLATFORM_SERVICE_TOKEN_SECRET`・`PLATFORM_AUTH_COOKIE_SECURE`（`https_enabled` と同じ値）・ログインの Cookie 名 `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME`）。1 台の Compute では 3 製品が同じファイルを読み書きする（システム設定画面の保存先）。既にあれば上書きしない | `PLATFORM_` |
 | `<製品>/backend/.env` | その製品だけの設定 | `RAG_` / `NL2SQL_` / `AGENT_` |
 
 `model-settings.json` は `platform/.env` と同じ場所の 1 つを 3 製品で共有し、アップロードの原本などのデータは製品ごとの
@@ -212,8 +212,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
   TCP `https_port`（HTTPS が off なら `http_port`）を許可してください。HTTPS が on のとき `http_port` も許可すると、`http://` で開いた利用者を
   https へ転送できます。Compute の OS の firewall（iptables）は suite-init.sh が選んだ port を開けます。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
   127.0.0.1 なので、security list は要りません。
-- ログインのセッションの Cookie は製品ごとに名前が違う（`rag_session` / `nl2sql_session` / `agent_session` と、CSRF の `*_csrf`）ため、
-  同じ host・port で衝突しません。ログインは製品ごとです（3 製品で同じユーザー・ロールを使いますが、セッションは別）。
+- ログインのセッションは 3 製品で共通です（#1565。下の「ログインのセッションの共有（#1565）」）。`/`（Agent、無ければ最初の製品）を含め、
+  どの製品の `/login` でログインしても全製品を使えます。
 - Wallet は `/u01/aipoc/wallet`、ログは `/var/log/cloud-init-custom.log`（bootstrap）・`/var/log/suite-init.log`（全体）・`/var/log/<製品>-init.log`。
 - apply 後の output に、`application_url`（`/`）、製品ごとの URL（`rag_application_url` など。配備しなかった製品は表示されない）、
   `ca_certificate_url`（HTTPS のとき）、`ssh_to_instance` が出ます。
@@ -229,20 +229,23 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 - 製品の `init_script.sh` を単独で実行する配備（製品ごとの Nginx の site）はやめました（3 製品はこの suite でセットで配備します）。
 - URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークや、外部から Agent の MCP（`/agent/api/mcp`）を呼ぶ設定を更新してください。
 
-### 配備した後の更新と再起動（#1566）
+### 配備した後の更新と再起動（#1566・#1577）
 
 | スクリプト（`platform/deploy/`） | 実行 | 内容 |
 |---|---|---|
-| `suite-update.sh` | `sudo` | `suite-pull.sh` で main を取得し、取得した新しい `suite-update.sh` で `suite-init.sh` を再実行して再配備する（依存の同期・build・DB の初期化と migration・systemd・Nginx・再起動）。最後に各製品の `/api/health` を待つ。`--no-pull` は取得しない |
-| `suite-pull.sh` | ubuntu か `sudo` | repository の所有者（ubuntu）で `origin/main` を取得して `main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ |
-| `suite-restart.sh` | `sudo` | 有効（enabled）な `production-ready-*` の service と Nginx を再起動し、各製品の `/api/health` を待つ。`--status` は再起動せずに状態だけを出す |
+| `suite-pull.sh` | ubuntu か `sudo` | repository の所有者（ubuntu）で `origin/main` を取得し、`main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ。取得だけで、build・再起動はしない |
+| `suite-restart.sh` | `sudo` | 既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に各製品の `/api/health` を待つ。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は状態だけを出す |
+| `suite-update.sh` | `sudo` | `suite-pull.sh` で取得し、取得した新しい `suite-restart.sh`（既定）を実行する |
 
-- `suite-init.sh` は props（Resource Manager の入力）から各製品の `backend/.env` を作り直す。そのため `suite-update.sh` は、再配備の前に今の `backend/.env` を
-  `/u01/aipoc/props/<製品>.backend.env` へ写す（画面で保存した値を保つ。元の props は `/u01/aipoc/recovery/<時刻>/` に退避）。
-  `platform/.env`・Wallet・HTTPS の CA は `suite-init.sh` がそのまま保つ。
-- lock で同時の実行を防ぐ。log は `/var/log/suite-update.log`（再配備の詳細は `/var/log/suite-init.log`）。cloud-init は `git` と `tmux` を入れる。
-- OS の再起動では、enabled の unit（`WantedBy=multi-user.target`。各製品の backend・worker、起動にした RAG の前処理 / parser）と Nginx が自動で起動する。
-  ADB は Compute の外にあるため、止まっていれば OCI のコンソールから起動する。
+- `suite-init.sh` は props（Resource Manager の入力）から、各製品の `backend/.env` を作り直す。
+  - そのため `suite-restart.sh` は、build の前に今の `backend/.env` を `/u01/aipoc/props/<製品>.backend.env` へ写す（画面で保存した値を保つ）。
+  - 元の props は `/u01/aipoc/recovery/<時刻>/` に退避する。
+  - `platform/.env`・Wallet・HTTPS の CA は、`suite-init.sh` がそのまま保つ。
+- 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
+- cloud-init は `git` と `tmux` を入れる。
+- OS の再起動では、enabled の unit（`WantedBy=multi-user.target`）と Nginx が自動で起動する。
+  - enabled の unit は、各製品の backend・worker と、起動にした RAG の前処理 / parser。
+  - ADB は Compute の外にあるため、止まっていれば OCI のコンソールから起動する。
 
 ### ログインの試行の回数の共有（#1173）
 
@@ -288,6 +291,35 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 3. Nginx のログインの API の上限は、`platform/deploy/suite-nginx.sh` の site（`/<製品>/api/auth/login`）に入っています。
 4. 確認: backend のログに `auth_login_throttle_shared_store_unavailable` が出ないこと。存在しないログイン ID で 1 回ログインに失敗すると、
    `SELECT COUNT(*) FROM PLATFORM_LOGIN_ATTEMPTS` が 2 増えること（窓を過ぎると、次の失敗のときに消える）。
+
+### ログインのセッションの共有（#1565）
+
+1 台の Compute の 3 製品（`/rag/`・`/nl2sql/`・`/agent/`）は同じ origin なので、ログインの Cookie を共有し、1 回のログインで全製品を使えます。
+
+- Cookie: セッション `pr_session`（HttpOnly）と CSRF `pr_csrf`（`Path=/`・`SameSite=Lax`、HTTPS なら `Secure`）。名前は共通 `.env` の
+  `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME`（変えるなら frontend の `CSRF_COOKIE_NAME`
+  （`@production-ready/system-settings`）も同じにする）。製品ごとの `RAG_` / `NL2SQL_` / `AGENT_APP_AUTH_*_COOKIE_NAME` は読みません。
+- セッションは共通のテーブル `PLATFORM_AUTH_SESSIONS` にあり、どの製品の backend でも検証できます。構成管理者 `system_admin` の token
+  （DB の行を持たない署名付きの token）も、接頭辞 `platform-system-admin-v1` と署名の鍵（共通の `PLATFORM_ADMIN_LOGIN_*` から導く）が 3 製品で同じです。
+- ログインし直すと、ブラウザが持っていた古いセッションは失効します。ログアウトは共有のセッションを失効させ、開いているほかの製品・タブは
+  `BroadcastChannel` で知らせを受けてログイン画面へ移ります（受けなくても次の API の 401 で移る）。
+- 権限はこれまでどおり製品ごとです（ロールに権限の無い製品は 403 の画面）。
+
+既存環境の更新:
+
+1. コードを更新します。`platform/.env` に次を足します（無くても既定値は同じ）。製品の `backend/.env` の
+   `RAG_APP_AUTH_SESSION_COOKIE_NAME` / `RAG_APP_AUTH_CSRF_COOKIE_NAME`・`NL2SQL_APP_AUTH_*_COOKIE_NAME`・`AGENT_APP_AUTH_*_COOKIE_NAME` は
+   もう読まないので消します。
+
+   ```bash
+   PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session
+   PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf
+   ```
+
+2. 3 製品の frontend を build し直し（`@production-ready/system-settings` の CSRF の Cookie 名が変わる）、backend を再起動します
+   （「配備した後の更新と再起動（#1566）」の `suite-update.sh` で行える。`backend/.env` に残った旧名の行は読まれないだけで害はない）。
+3. 利用者は一度ログインし直します。古い Cookie（`rag_session` など）は読まれず、期限（`PLATFORM_AUTH_ABSOLUTE_TIMEOUT_HOURS`）で
+   ブラウザから消えます。古い Cookie のセッションの行は、期限が過ぎると使えなくなります。構成管理者の古い token（`rag-system-admin-v1` など）も使えません。
 
 ## パッケージと検証
 

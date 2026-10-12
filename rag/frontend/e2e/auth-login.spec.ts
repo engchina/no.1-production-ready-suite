@@ -7,6 +7,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   type CurrentUserPayload,
+  expandSidebarSections,
   openSidebarNav,
 } from "./_helpers";
 
@@ -175,7 +176,7 @@ test("初回ログインは強制パスワード変更へ移り、変更後は C
   baseURL,
 }) => {
   const auth = await mockAuthApi(page, null);
-  await context.addCookies([{ name: "rag_csrf", value: "csrf-e2e-token", url: baseURL ?? "http://127.0.0.1:3100" }]);
+  await context.addCookies([{ name: "pr_csrf", value: "csrf-e2e-token", url: baseURL ?? "http://127.0.0.1:3100" }]);
 
   await page.goto("/login");
   await page.getByLabel("ログインユーザーID").fill("first.user");
@@ -219,6 +220,8 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
 
   await page.goto("/settings/appearance");
   const sidebar = await openSidebarNav(page);
+  // 文書インデックスは既定で閉じている「ナレッジ構築」にある（#1563）。
+  await expandSidebarSections(sidebar, "ナレッジ構築");
 
   expired = true;
   await sidebar.getByRole("link", { name: "文書インデックス" }).click();

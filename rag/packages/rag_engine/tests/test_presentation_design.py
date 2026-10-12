@@ -9,17 +9,19 @@ pytest.importorskip("lxml", reason="PPTX XML 検証の任意依存")
 
 from scripts.update_analysis_presentation import NS, make_body, read_design
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("filename,count", [
-    ("file-analysis-20260920.md", 18),
-    ("file-analysis-chunking-20260921.md", 24),
-    ("answer-management-20260921.md", 30),
-    ("full-guide-polish-20260921.md", 57),
-    ("full-guide-v17-20260921.md", 57),
-])
+@pytest.mark.parametrize(
+    "filename,count",
+    [
+        ("file-analysis-20260920.md", 18),
+        ("file-analysis-chunking-20260921.md", 24),
+        ("answer-management-20260921.md", 30),
+        ("full-guide-polish-20260921.md", 57),
+        ("full-guide-v17-20260921.md", 57),
+    ],
+)
 def test_presentation_source_remains_parseable(filename, count):
     """旧正本の互換性と新正本の全対象ページを保護する。"""
     design = read_design(ROOT / "docs/presentations" / filename)
@@ -32,6 +34,7 @@ def test_presentation_source_remains_parseable(filename, count):
 def test_full_review_polished_shapes_and_notes():
     """全本文頁を図形で生成し、日付制約と混植指定の回帰を防ぐ。"""
     from scripts.presentation_polish import make_polished_body
+
     design = read_design(ROOT / "docs/presentations/full-guide-polish-20260921.md")
     assert set(design) == set(range(3, 60))
     for number, page in design.items():
@@ -77,6 +80,7 @@ def test_design_amendment_requires_exact_source_match(tmp_path):
 def test_full_review_audit_has_every_page_and_real_source_paths(filename):
     """全60頁の独立核対表に欠落や存在しない根拠パスを残さない。"""
     import re
+
     content = (ROOT / "docs/presentations" / filename).read_text(encoding="utf-8")
     assert [int(n) for n in re.findall(r"^\| (\d+) \|", content, re.M)] == list(range(1, 61))
     for path in set(re.findall(r"(?:[a-z_]+/)+[a-z_]+\.(?:py|tsx)", content)):
@@ -87,7 +91,9 @@ def test_full_review_audit_has_every_page_and_real_source_paths(filename):
 def test_v17_refined_layout_and_prompt_boundaries():
     """新版の図形・字体を全頁検査し、Prompt自動置換や精度保証の誤記を防ぐ。"""
     import re
+
     from scripts.presentation_polish import make_polished_body
+
     design = read_design(ROOT / "docs/presentations/full-guide-v17-20260921.md")
     assert set(design) == set(range(3, 60))
     for number, page in design.items():
@@ -125,9 +131,17 @@ def test_six_row_settings_table_has_room_without_font_reduction():
 
 def test_hierarchy_arrows_point_inside_parent():
     """端の子の矢印が親の枠外を指す視覚回帰を防ぐ。"""
-    shapes = make_body({"layout": "hierarchy", "items": [
-        ["親", "文脈"], ["本文", "手順"], ["表", "行"], ["図", "説明"],
-    ]})
+    shapes = make_body(
+        {
+            "layout": "hierarchy",
+            "items": [
+                ["親", "文脈"],
+                ["本文", "手順"],
+                ["表", "行"],
+                ["図", "説明"],
+            ],
+        }
+    )
     parent = next(shape for shape in shapes if shape.find(".//p:cNvPr", NS).get("name") == "parent-context")
     parent_rect = parent.find("p:sp/p:spPr/a:xfrm", NS)
     start = int(parent_rect.find("a:off", NS).get("x"))

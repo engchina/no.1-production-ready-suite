@@ -18,9 +18,11 @@ export interface SidebarProps {
   /** サイドバー全体の折りたたみ状態とハンドラ（md 以上）。md 未満のドロワーの中では常に展開して描く。 */
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  /** セクション単位の折りたたみ状態とハンドラ。 */
+  /**
+   * セクション単位の折りたたみの保存値とハンドラ。キーの無いセクションは `NavSection.defaultCollapsed`
+   * （既定は展開）に従い、見出しを押すと今の開閉の逆を `onSetSectionCollapsed` で保存する（#1563）。
+   */
   collapsedSections: Record<string, boolean>;
-  onToggleSection: (key: string) => void;
   onSetSectionCollapsed: (key: string, collapsed: boolean) => void;
   /** ルーター非依存のリンク（react-router Link 等）。 */
   linkComponent: NavLinkComponent;
@@ -41,7 +43,6 @@ export function Sidebar({
   collapsed: collapsedPreference,
   onToggleCollapsed,
   collapsedSections,
-  onToggleSection,
   onSetSectionCollapsed,
   linkComponent: Link,
   labels,
@@ -152,7 +153,9 @@ export function Sidebar({
           const containsActive = section.items.some((item) => isActive(item.href));
           // セクション開閉は展開幅サイドバーでのみ作用（icon-only 幅は常に全表示）。
           const collapsible = section.collapsible !== false && !collapsed;
-          const sectionExpanded = !collapsible || !collapsedSections[section.key];
+          // 保存値が無ければ nav config の既定（defaultCollapsed）に従う（#1563）。
+          const sectionExpanded =
+            !collapsible || !(collapsedSections[section.key] ?? section.defaultCollapsed ?? false);
           const collapsedWithActive = collapsible && !sectionExpanded && containsActive;
           const regionId = `nav-section-${sectionId(section.key)}`;
           return (
@@ -170,7 +173,7 @@ export function Sidebar({
                         ? labels.sectionToggleCollapse(section.title)
                         : labels.sectionToggleExpand(section.title)
                   }
-                  onClick={() => onToggleSection(section.key)}
+                  onClick={() => onSetSectionCollapsed(section.key, sectionExpanded)}
                 >
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate">{section.title}</span>

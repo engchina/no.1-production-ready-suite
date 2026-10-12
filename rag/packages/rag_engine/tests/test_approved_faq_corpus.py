@@ -4,7 +4,6 @@ import json
 import unittest
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APPROVED_FAQ_PATH = PROJECT_ROOT / "knowledge_assets" / "approved_faq" / "approved_faq_golden_qa.json"
 EXAMPLES_QA_PATH = PROJECT_ROOT / "examples" / "qa.json"

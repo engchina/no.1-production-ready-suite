@@ -18,11 +18,11 @@ export interface UiState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebarCollapsed: () => void;
   /**
-   * サイドナビのセクション折りたたみ状態。キーは NavSection.key。
-   * 未指定（キー無し）は「展開」を既定とし、true のときだけ折りたたむ。
+   * サイドナビのセクション折りたたみの保存値。キーは NavSection.key、true で折りたたむ。
+   * 未指定（キー無し）のセクションは NavSection.defaultCollapsed（既定は展開）に従う（#1563）。
+   * 開閉の切り替えは既定を知る Sidebar が `setSectionCollapsed` で保存する。
    */
   collapsedSections: Record<string, boolean>;
-  toggleSection: (key: string) => void;
   setSectionCollapsed: (key: string, collapsed: boolean) => void;
   /** 配色テーマの選好（永続化）。適用（html.dark 付与）はアプリ側で行う。 */
   theme: ThemePreference;
@@ -82,13 +82,6 @@ export function createUiStore(options: CreateUiStoreOptions) {
         toggleSidebarCollapsed: () =>
           set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
         collapsedSections: {},
-        toggleSection: (key) =>
-          set((state) => ({
-            collapsedSections: {
-              ...state.collapsedSections,
-              [key]: !state.collapsedSections[key],
-            },
-          })),
         setSectionCollapsed: (key, collapsed) =>
           set((state) => ({
             collapsedSections: { ...state.collapsedSections, [key]: collapsed },
