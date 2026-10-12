@@ -704,6 +704,14 @@ DeepSec context は付けない。NL2SQL job の生成済み SELECT 実行は、
 context 付き data connection を使用する。`system_admin`、migration、DeepSec V001 適用、schema
 refresh、profile/credential/asset 管理は通常 Oracle user 接続で実行し、DeepSec context は付けない。
 
+Select AI / Select AI Agent が生成した SQL には、アプリの安全確認（SELECT-only guard・危険な関数・
+bind の placeholder・未承認の関数・他製品のシステムの表・業務プロファイルの表と列の範囲）を掛けない
+（#1523。ユーザーの決定。生成する SQL は既定で SELECT 文）。業務プロファイルの列の制限は、Select AI の
+profile の `object_list` が表の単位のため、この 2 方式では効かない。実行は上の読み取り専用の data
+connection のままなので、非 `system_admin` の行・列は DeepSec の Data Grant で守る。OCI Enterprise AI で
+生成した SQL と、利用者が入力・編集した SQL は従来どおりすべてを確かめる（[sql-chat.md](./sql-chat.md)
+「生成の方式ごとの安全確認」）。
+
 ## 主要な安全境界
 
 - session token は 256-bit random value、DB には SHA-256 digest だけを保存する。

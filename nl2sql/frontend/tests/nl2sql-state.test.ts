@@ -468,6 +468,44 @@ test("preview response maps to a synthetic timeline job", () => {
   assert.deepEqual(job.result?.results, { columns: [], rows: [], total: 0 });
 });
 
+test("Select AI の SQL で省略した安全性の確認は、プレビューのタイムラインでも未実行（#1523）", () => {
+  const preview: PreviewData = {
+    sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+    is_safe: true,
+    row_limit: 0,
+    note: "preview ready",
+    engine: "select_ai",
+    engine_meta: {},
+    fallback_reason: "",
+    rewritten_question: "",
+    executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+    safety: {
+      is_safe: true,
+      is_select_only: true,
+      row_limit_applied: 0,
+      blocked_reason: "",
+      warnings: [],
+      referenced_tables: ["APP.INVOICES"],
+      referenced_columns: [],
+      safety_checked: false,
+      safety_check_skip_reason: "Select AI が生成した SELECT 文のため省略しました。",
+    },
+    recommendations: [],
+    repaired_sql: "",
+    optimization_hints: [],
+    timing: null,
+  };
+
+  const job = previewToJob(preview, "請求金額を一覧で見たい");
+
+  assert.equal(job.steps.find((step) => step.stage === "safety_check")?.status, "skipped");
+  // 工程の正規化は省略を完了に変えない。
+  assert.equal(
+    normalizeNl2SqlJobSteps(job).find((step) => step.stage === "safety_check")?.status,
+    "skipped"
+  );
+});
+
 test("job progress normalization completes unfinished predecessors before formatted results", () => {
   const job: JobData = {
     job_id: "job-inconsistent-steps",
