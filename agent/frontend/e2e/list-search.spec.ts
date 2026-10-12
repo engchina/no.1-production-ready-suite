@@ -106,7 +106,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/agents");
       const table = page.getByRole("table", { name: "業務 Agent 一覧" });
       const toolbar = page.getByTestId("agent-list-toolbar");
-      await expect(toolbar).toContainText("15 件");
+      await expect(toolbar).toContainText("17 件");
       // 検索ボタンは置かない（入力に合わせて絞り込む）。
       await expect(toolbar.getByRole("button", { name: /^検索$|絞り込み$/ })).toHaveCount(0);
 
@@ -117,14 +117,14 @@ for (const viewport of VIEWPORTS) {
 
       const search = page.locator("#agent-search");
       await search.fill("経理 Agent 1");
-      await expect(toolbar).toContainText("6 / 15 件");
+      await expect(toolbar).toContainText("6 / 17 件");
       await expect(table.getByRole("link", { name: /経理 Agent 10/ })).toBeVisible();
       await expect(page.getByTestId("agent-list-pagination")).toHaveCount(0);
 
       // 再読込しても検索語が残る（作業状態）。
       await page.reload();
       await expect(page.locator("#agent-search")).toHaveValue("経理 Agent 1");
-      await expect(page.getByTestId("agent-list-toolbar")).toContainText("6 / 15 件");
+      await expect(page.getByTestId("agent-list-toolbar")).toContainText("6 / 17 件");
 
       // 0 件は「検索に一致する業務 Agent がありません」と「検索語をクリア」。
       await page.locator("#agent-search").fill("存在しない名前");
@@ -132,7 +132,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`agents-no-match-${viewport.name}.png`), fullPage: true });
       await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-      await expect(page.getByTestId("agent-list-toolbar")).toContainText("15 件");
+      await expect(page.getByTestId("agent-list-toolbar")).toContainText("17 件");
       await expect(page.locator("#agent-search")).toHaveValue("");
     });
 
@@ -140,12 +140,12 @@ for (const viewport of VIEWPORTS) {
       seedAgents(mockApi, 3);
       await page.goto("/agents");
       const toolbar = page.getByTestId("agent-list-toolbar");
-      await expect(toolbar).toContainText("4 件");
+      await expect(toolbar).toContainText("6 件");
       await composeJapanese(page, "#agent-search", ["け", "けい", "けいり"]);
       await page.waitForTimeout(500);
-      await expect(toolbar).toContainText("4 件");
+      await expect(toolbar).toContainText("6 件");
       await endComposition(page, "#agent-search", "経理");
-      await expect(toolbar).toContainText("3 / 4 件");
+      await expect(toolbar).toContainText("3 / 6 件");
     });
 
     test("実行履歴は状態のチップで絞り込み、承認は既定で保留中だけを出す", async ({ page, mockApi }, testInfo) => {

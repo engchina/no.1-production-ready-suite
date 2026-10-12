@@ -56,7 +56,7 @@ for (const viewport of VIEWPORTS) {
       expect(body.template_id).toBe("sales-analytics");
       await expect(page.getByText("評価セット「営業分析（テンプレート）」を作りました")).toBeVisible();
       expect(mockApi.lastRequest("POST", "/api/evaluation-sets/from-template")?.body).toEqual({
-        agent_id: String(body.id ?? "agent-2"),
+        agent_id: String(body.id ?? "agent-4"),
       });
       expect(mockApi.state.evaluationSets[0].cases).toEqual([
         {
