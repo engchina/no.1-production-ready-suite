@@ -1397,7 +1397,7 @@ describe("文書アップロードの送信（XHR）", () => {
 
   it("Cookie の CSRF token を X-CSRF-Token として付ける", async () => {
     stubXhr();
-    vi.stubGlobal("document", { cookie: "other=1; rag_csrf=token-123" });
+    vi.stubGlobal("document", { cookie: "other=1; pr_csrf=token-123" });
 
     const pending = api.uploadDocument(new File(["test"], "policy.txt"));
     const xhr = lastXhr();

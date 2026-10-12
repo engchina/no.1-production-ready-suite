@@ -716,6 +716,7 @@ connection のままなので、非 `system_admin` の行・列は DeepSec の D
 
 - session token は 256-bit random value、DB には SHA-256 digest だけを保存する。
 - session cookie は HttpOnly、CSRF は cookie/header/server digest の三者一致を要求する。
+- session / CSRF の cookie（`pr_session` / `pr_csrf`。共通 `.env` の `PLATFORM_AUTH_*_COOKIE_NAME`）は 3 製品で共有し、1 回のログインで全製品を使える。ログアウトは共有の session を失効させ、ログインのときはブラウザが持っていた古い session を失効させる。権限は製品ごと（#1565）。
 - password は Argon2id で保存し、平文 password、hash、session token、Oracle secret を応答・監査へ出さない。
 - Data pool connection は貸出時に application user UUID を context へ設定し、返却前に必ず clear する。
 - context 設定・clear に失敗した connection は再利用せず、data operation は control pool へ fallback しない。

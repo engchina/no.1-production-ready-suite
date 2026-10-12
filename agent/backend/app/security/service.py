@@ -48,8 +48,6 @@ class SecurityService(AuthService):
     role_class = RoleRecord
     # ロール管理・権限管理のどちらかを持つ操作者は、アーカイブ済みを含む全ロールを参照できる。
     role_catalog_permissions = frozenset({MENU_SECURITY_ROLES, MENU_SECURITY_PERMISSIONS})
-    # 構成管理者の token は製品ごとに接頭辞を変える（署名鍵に service_name も使う）。
-    configured_admin_token_prefix = "agent-system-admin-v1"  # nosec B105 - token の接頭辞
     migration_hint = (
         "運用設定 > システムテーブル で「作成・更新」を実行するか、"
         "`cd agent/backend && uv run python -m app.cli.agent_system_schema --initialize` を"

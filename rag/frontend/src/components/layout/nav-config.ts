@@ -53,6 +53,11 @@ export interface NavSection {
    * 展開幅サイドバーでのみ作用し、icon-only 幅では無効。
    */
   collapsible?: boolean;
+  /**
+   * 利用者の開閉の保存値が無いとき、このセクションを閉じて出すか（共有 Sidebar の NavSection.defaultCollapsed）。
+   * 3 製品で業務の入口の「AI 活用」だけを展開し、ほかのセクションは true にする（#1563）。
+   */
+  defaultCollapsed?: boolean;
 }
 
 /** 共通5項目（共有パッケージ）に付ける RAG の menu 権限（NL2SQL と同じコード）。 */
@@ -85,6 +90,8 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.section.ingestion",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.upload,
@@ -109,6 +116,8 @@ export const NAV_SECTIONS: NavSection[] = [
     // RAG の検索・回答設定を、利用者が理解しやすい処理順で並べる。「設定の概要」の工程の番号と同じ順番
     // （ナレッジ構築の工程 → 検索・回答の工程。PipelineHubClient の INGESTION_HREFS）にする（#267）。
     titleKey: "nav.section.pipeline",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.settingsPipeline,
@@ -184,6 +193,8 @@ export const NAV_SECTIONS: NavSection[] = [
     // 回答の品質を確かめて直す画面。NL2SQL の「改善・運用」（nav.section.improve）と同じ名前・同じ位置
     // （利用 → 準備 → 改善 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定）にする（#409 / #658）。
     titleKey: "nav.section.improve",
+    defaultCollapsed: true,
+
     items: [
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical, permission: MENU_PERMISSIONS.evaluation },
       { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedback },
@@ -192,6 +203,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // RAG 固有のセキュリティ（ロールへの機能権限と検索・回答プロファイル / KB の対象範囲の付与。#214）。
     titleKey: "nav.section.security",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.securityPermissions,
@@ -204,6 +217,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
     titleKey: "nav.section.userRoles",
+    defaultCollapsed: true,
+
     // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ RAG の型へそろえる
     // （実体は同じ lucide-react のコンポーネント）。
     items: USER_ROLE_NAV_ITEMS.map((item) => ({
@@ -216,6 +231,8 @@ export const NAV_SECTIONS: NavSection[] = [
     // RAG 固有の運用設定（システムテーブル、モデルの取得先、parser などのサービスの起動・停止）。
     // システムテーブルは NL2SQL と同じく先頭に置く（#658）。
     titleKey: "nav.section.operations",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.settingsSystemTables,
@@ -243,6 +260,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
+    defaultCollapsed: true,
+
     items: SYSTEM_SETTINGS_NAV_ITEMS.map((item) => ({
       ...item,
       icon: item.icon as LucideIcon,

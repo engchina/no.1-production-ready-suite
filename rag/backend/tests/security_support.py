@@ -21,8 +21,8 @@ from tests.support import AsgiTestClient
 
 CONFIGURED_ADMIN_PASSWORD = "RagSystemPass2026"  # nosec B105 - テスト用
 USER_PASSWORD = "UserPassword!2026"  # nosec B105 - テスト用
-SESSION_COOKIE = "rag_session"
-CSRF_COOKIE = "rag_csrf"
+SESSION_COOKIE = "pr_session"
+CSRF_COOKIE = "pr_csrf"
 
 
 @dataclass

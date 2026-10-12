@@ -91,8 +91,6 @@ NL2SQL_ENABLE_METRICS=true
 NL2SQL_DEBUG=false
 
 NL2SQL_APP_AUTH_ENABLED=true
-NL2SQL_APP_AUTH_SESSION_COOKIE_NAME=nl2sql_session
-NL2SQL_APP_AUTH_CSRF_COOKIE_NAME=nl2sql_csrf
 
 NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.nl2sql_oracle_deepsec_enabled}
 NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
@@ -188,6 +186,8 @@ PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}
 PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}
 
 PLATFORM_AUTH_COOKIE_SECURE=${var.https_enabled}
+PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session
+PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf
 EOT
 
   # ---------------------------------------------------------------- cloud-init

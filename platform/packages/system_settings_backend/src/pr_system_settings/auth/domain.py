@@ -14,6 +14,13 @@ SYSTEM_ADMIN_ROLE_ID = "00000000-0000-0000-0000-000000000001"
 CONFIGURED_SYSTEM_ADMIN_USER_UUID = "00000000-0000-0000-0000-000000000002"
 LOCAL_DEBUG_USER_UUID = "00000000-0000-0000-0000-000000000000"
 FIXED_ADMIN_LOGIN_USER_ID = "system_admin"
+# 3 製品で共有するログインの Cookie の既定の名前（#1565）。1 台に配備した 3 製品は同じ origin で
+# `Path=/` の同じ Cookie を読むので、1 回のログインで全製品を使える。名前は共通 `.env` の
+# `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME` で変えられる。
+# frontend の CSRF の Cookie 名（`@production-ready/system-settings` の `CSRF_COOKIE_NAME`）と
+# 同じにする。
+DEFAULT_SESSION_COOKIE_NAME = "pr_session"
+DEFAULT_CSRF_COOKIE_NAME = "pr_csrf"
 
 
 @dataclass(slots=True)

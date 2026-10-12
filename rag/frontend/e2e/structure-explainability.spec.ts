@@ -4,6 +4,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  expandSidebarSections,
   openSidebarNav,
   selectSearchAnswerProfile,
 } from "./_helpers";
@@ -453,7 +454,10 @@ test("修正の後に新しく抽出された章節に印を出し、編集の�
     .getByRole("textbox", { name: "章節の名前（階層 1）" })
     .first()
     .fill("第1章 総則と目的");
-  await (await openSidebarNav(page)).getByRole("link", { name: "文書インデックス" }).click();
+  const sidebar = await openSidebarNav(page);
+  // 文書インデックスは既定で閉じている「ナレッジ構築」にある（#1563）。
+  await expandSidebarSections(sidebar, "ナレッジ構築");
+  await sidebar.getByRole("link", { name: "文書インデックス" }).click();
   const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル" }).click();

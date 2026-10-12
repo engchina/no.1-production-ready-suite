@@ -171,10 +171,15 @@ def build_auth_router(
         if get_settings().local_debug_enabled:
             return ApiResponse(data=current_user_data(local_debug_principal(), True))
         request_id, client_ip = request_context(request)
-        principal, session_token, csrf_token = get_service().login(
+        service = get_service()
+        principal, session_token, csrf_token = service.login(
             payload.login_user_id, payload.password, request_id=request_id, client_ip=client_ip
         )
         settings = get_settings()
+        # Cookie は 3 製品で共有する。ブラウザが持っていた古いセッションは失効させる（#1565）。
+        previous_token = request.cookies.get(settings.app_auth_session_cookie_name, "")
+        if previous_token and previous_token != session_token:
+            service.revoke_session_token(previous_token)
         set_auth_cookie(
             response, name=settings.app_auth_session_cookie_name, value=session_token, httponly=True
         )

@@ -403,8 +403,8 @@ def test_database_user_login_me_and_logout(
     assert "chat_enabled" not in data
     headers = session_headers(login_response)
     set_cookie = login_response.headers.get_list("set-cookie")
-    assert any(item.startswith("rag_session=") and "HttpOnly" in item for item in set_cookie)
-    assert any(item.startswith("rag_csrf=") for item in set_cookie)
+    assert any(item.startswith("pr_session=") and "HttpOnly" in item for item in set_cookie)
+    assert any(item.startswith("pr_csrf=") for item in set_cookie)
 
     me = client.get("/api/auth/me", headers=headers)
     assert me.status_code == 200
@@ -413,6 +413,40 @@ def test_database_user_login_me_and_logout(
     logout = client.post("/api/auth/logout", headers=headers)
     assert logout.status_code == 200
     assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_login_revokes_session_cookie_the_browser_already_had(auth: ProductionAuth) -> None:
+    """Cookie は 3 製品で共有する（#1565）。
+
+    ログインし直したら、ブラウザが持っていた古いセッションは失効する。
+    """
+    auth.user_with_permissions("analyst", ["menu.search"])
+    auth.user_with_permissions("reviewer", ["menu.search"])
+    first = session_headers(
+        client.post("/api/auth/login", json={"login_user_id": "analyst", "password": USER_PASSWORD})
+    )
+    assert client.get("/api/auth/me", headers=first).status_code == 200
+
+    second_response = client.post(
+        "/api/auth/login",
+        json={"login_user_id": "reviewer", "password": USER_PASSWORD},
+        headers={"cookie": first["cookie"]},
+    )
+    assert second_response.status_code == 200
+    second = session_headers(second_response)
+    assert client.get("/api/auth/me", headers=first).status_code == 401
+    me = client.get("/api/auth/me", headers=second)
+    assert me.status_code == 200
+    assert me.json()["data"]["login_user_id"] == "reviewer"
+
+    # 構成管理者の token（DB の行を持たない）を持っていても、ログインは妨げない。
+    admin = login_configured_admin(client)
+    again = client.post(
+        "/api/auth/login",
+        json={"login_user_id": "analyst", "password": USER_PASSWORD},
+        headers={"cookie": admin["cookie"]},
+    )
+    assert again.status_code == 200
 
 
 def test_login_rejects_invalid_credentials(auth: ProductionAuth) -> None:
@@ -439,8 +473,8 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
     assert data["allowed_search_answer_profile_ids"] is None
     assert data["allowed_knowledge_base_ids"] is None
-    # 構成管理者の token は RAG 固有の接頭辞（他製品の token と混ざらない）。
-    assert str(response.cookies.get("rag_session")).startswith("rag-system-admin-v1.")
+    # 構成管理者の token は 3 製品で共通の接頭辞（ほかの製品でも同じ token で使える。#1565）。
+    assert str(response.cookies.get("pr_session")).startswith("platform-system-admin-v1.")
     headers = session_headers(response)
     assert client.get("/api/security/permissions", headers=headers).status_code == 200
 

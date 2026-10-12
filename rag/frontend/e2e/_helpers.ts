@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * 共通認証の利用者（`GET /api/auth/me` の CurrentUser。#214）。
@@ -364,4 +364,25 @@ export async function openChatHistory(page: Page) {
   const history = page.getByTestId("chat-history");
   await expect(history).toBeVisible();
   return history;
+}
+
+/**
+ * サイドナビのセクションを開く。保存値が無いときは「AI 活用」と今のページのセクションだけが開いている（#1563）。
+ * `titles` を渡すとその見出しのセクションだけ、省くと閉じているすべてのセクションを開く（開いていれば何もしない）。
+ * 開閉は ui-store（localStorage）に保存されるので、同じテストの中の再読み込みでも開いたまま。
+ */
+export async function expandSidebarSections(sidebar: Locator, ...titles: string[]) {
+  if (titles.length > 0) {
+    for (const title of titles) {
+      const toggle = sidebar.getByRole("button", { name: new RegExp(`^${title} を(展開|折りたたむ)`) });
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    }
+    return;
+  }
+  await expect(sidebar.locator('button[aria-controls^="nav-section-"]').first()).toBeVisible();
+  const collapsed = sidebar.locator('button[aria-controls^="nav-section-"][aria-expanded="false"]');
+  while ((await collapsed.count()) > 0) {
+    await collapsed.first().click();
+  }
 }

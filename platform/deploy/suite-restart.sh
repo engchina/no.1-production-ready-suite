@@ -1,19 +1,34 @@
 #!/usr/bin/env bash
-# 配備した Compute の上で、suite の全サービスを再起動する（#1566）。
+# 配備した Compute の上で、今のコードから build して全サービスを再起動する（#1566・#1577）。
 #
-# - 対象は systemd で有効（enabled）な production-ready-* の service（各製品の backend・worker、RAG の前処理 / parser）
-#   と Nginx。RAG の前処理 / parser で画面から「停止」にしたもの（disabled）は起動しない（再起動の後も停止のまま）。
-# - HTTPS の証明書の更新（production-ready-suite-tls-renew）は timer が起動する oneshot なので対象にしない。
-# - 再起動の後、配備した製品の backend の /api/health を待つ。
-# - OS の再起動では、同じ unit が自動で起動する（WantedBy=multi-user.target）。このスクリプトは手で再起動するとき用。
+# 既定（build して再起動）:
+#   1. 各製品の今の backend/.env を props（cloud-init が置いた元）へ写す。suite-init.sh は props から backend/.env を
+#      作り直すため、写さないと画面で保存した値（RAG の HuggingFace・解析後の処理、NL2SQL の Select AI Credential・
+#      Deep Data Security など）が消える。元の props は recovery/<時刻>/ に退避する。platform/.env・Wallet・HTTPS の CA は
+#      suite-init.sh がそのまま保つ。
+#   2. suite-init.sh を再実行する（依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・
+#      systemd の unit・Nginx・サービスの再起動）。suite-pull.sh で取得した最新のコードは、ここで使われる。
+#   3. 配備した製品の backend の /api/health を待つ。
+# --no-build: build せず、有効（enabled）な production-ready-* の service と Nginx だけを再起動する。
+#   RAG の前処理 / parser で画面から「停止」にしたもの（disabled）は起動しない。証明書の更新の oneshot も対象にしない。
+# --status: 再起動せず、service の状態と health だけを表示する。
+#
+# OS の再起動では、enabled の unit と Nginx が自動で起動する（WantedBy=multi-user.target）。
 set -euo pipefail
 
 SUITE_DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUITE_RESTART_SCRIPT="${SUITE_DEPLOY_DIR}/suite-restart.sh"
 # shellcheck source=suite-nginx.sh
 source "${SUITE_DEPLOY_DIR}/suite-nginx.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
+SUITE_REPO_DIR="${SUITE_REPO_DIR:-${APP_ROOT}/no.1-production-ready-suite}"
 PROPS_DIR="${PROPS_DIR:-${APP_ROOT}/props}"
+SUITE_RECOVERY_DIR="${SUITE_RECOVERY_DIR:-${APP_ROOT}/recovery}"
+SUITE_INIT_SCRIPT="${SUITE_INIT_SCRIPT:-${SUITE_DEPLOY_DIR}/suite-init.sh}"
+# suite-update.sh と共有する lock と log。
+SUITE_OPS_LOG="${SUITE_OPS_LOG:-/var/log/suite-ops.log}"
+SUITE_OPS_LOCK_FILE="${SUITE_OPS_LOCK_FILE:-/run/lock/production-ready-suite-ops.lock}"
 SUITE_UNIT_PATTERN="production-ready-*.service"
 SUITE_TLS_RENEW_SERVICE="production-ready-suite-tls-renew.service"
 SUITE_HEALTH_TIMEOUT_SECONDS="${SUITE_HEALTH_TIMEOUT_SECONDS:-180}"
@@ -27,14 +42,34 @@ restart_fail() {
 
 restart_usage() {
   cat <<'EOF'
-Usage: sudo platform/deploy/suite-restart.sh [--status]
+Usage: sudo platform/deploy/suite-restart.sh [--no-build | --status]
 
-引数なし   有効な production-ready-* の service と Nginx を再起動し、各製品の backend の health を待ちます。
---status  再起動せず、service の状態と health だけを表示します。
+引数なし     今のコードから build して再配備し（依存の同期・共有 UI と各製品の frontend の build・DB の migration・
+             systemd・Nginx）、全サービスを再起動して、各製品の backend の health を待ちます。
+             suite-pull.sh で取得した最新のコードは、これで反映されます。
+--no-build  build せず、有効な production-ready-* の service と Nginx だけを再起動します。
+--status    再起動せず、service の状態と health だけを表示します。
+
+画面で保存した値（各製品の backend/.env・platform/.env）、Wallet、HTTPS の CA は保ちます。
+log は /var/log/suite-ops.log（再配備の詳細は /var/log/suite-init.log）。
 
 Environment overrides:
   SUITE_HEALTH_TIMEOUT_SECONDS   health を待つ上限の秒数（既定 180）
 EOF
+}
+
+# suite-restart.sh / suite-update.sh の同時の実行を防ぐ。suite-update.sh から呼ばれたときは、lock と log を引き継ぐ。
+suite_ops_begin() {
+  local name="$1"
+  if [ "${SUITE_OPS_INHERITED:-false}" = "true" ]; then
+    return 0
+  fi
+  install -d -m 0755 "$(dirname "${SUITE_OPS_LOCK_FILE}")"
+  exec 9>"${SUITE_OPS_LOCK_FILE}"
+  flock -n 9 || { restart_fail "別の更新・再起動が実行中です（${SUITE_OPS_LOCK_FILE}）。"; return 1; }
+  exec > >(tee -a "${SUITE_OPS_LOG}") 2>&1
+  printf '[%s] 開始（%s）\n' "${name}" "$(date -Is)"
+  export SUITE_OPS_INHERITED=true
 }
 
 # 有効（enabled）な suite の service。証明書の更新の oneshot は除く。
@@ -80,7 +115,40 @@ suite_report_status() {
   done
 }
 
-suite_restart_all() {
+# 各製品の今の backend/.env を props へ写す（suite-init.sh が props から作り直しても値が変わらないように）。
+suite_preserve_backend_envs() {
+  local product env_file prop backup_dir=""
+  while read -r product; do
+    env_file="${SUITE_REPO_DIR}/${product}/backend/.env"
+    prop="${PROPS_DIR}/${product}.backend.env"
+    [ -f "${env_file}" ] || continue
+    if [ -z "${backup_dir}" ]; then
+      install -d -m 0700 "${SUITE_RECOVERY_DIR}"
+      backup_dir="$(mktemp -d "${SUITE_RECOVERY_DIR}/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+      chmod 0700 "${backup_dir}"
+    fi
+    if [ -f "${prop}" ]; then
+      install -m 0600 "${prop}" "${backup_dir}/${product}.backend.env"
+    fi
+    install -m 0600 "${env_file}" "${prop}"
+    restart_log "${product}: 今の backend/.env を保ちます（元の props は ${backup_dir}/ に退避）。"
+  done < <(suite_deployed_products)
+}
+
+# 今のコードで再配備する（build・migration・systemd・Nginx・再起動）。
+suite_rebuild_and_restart() {
+  local status=0
+  suite_preserve_backend_envs
+  restart_log "今のコードから build して再起動します（${SUITE_INIT_SCRIPT}。詳細は /var/log/suite-init.log）。"
+  APP_ROOT="${APP_ROOT}" bash "${SUITE_INIT_SCRIPT}" || status=$?
+  if [ "${status}" -ne 0 ]; then
+    restart_log "失敗した製品があります（status=${status}）。/var/log/suite-init.log と /var/log/<製品>-init.log を確認してください。"
+  fi
+  return "${status}"
+}
+
+# build せずにサービスだけを再起動する。
+suite_restart_services() {
   local units=()
   mapfile -t units < <(suite_enabled_units)
   if [ "${#units[@]}" -eq 0 ]; then
@@ -96,9 +164,10 @@ suite_restart_all() {
 }
 
 suite_restart_main() {
-  local action="restart"
+  local action="build" status=0
   case "${1:-}" in
     -h | --help) restart_usage; return 0 ;;
+    --no-build) action="restart" ;;
     --status)
       action="status"
       # 状態の確認では待たない（1 回だけ問い合わせる）。
@@ -108,22 +177,29 @@ suite_restart_main() {
     *) restart_usage >&2; return 2 ;;
   esac
   if [ "$(id -u)" -ne 0 ]; then
-    restart_fail "root で実行してください: sudo $0 ${1:-}"
+    restart_fail "root で実行してください: sudo ${SUITE_RESTART_SCRIPT} ${1:-}"
     return 1
   fi
-  if [ "${action}" = "restart" ]; then
-    suite_restart_all
-  fi
+  case "${action}" in
+    build)
+      suite_ops_begin suite-restart
+      suite_rebuild_and_restart || status=$?
+      ;;
+    restart)
+      suite_ops_begin suite-restart
+      suite_restart_services
+      ;;
+  esac
   restart_log "service の状態:"
   suite_report_status
-  if suite_wait_for_health; then
-    restart_log "すべての製品の backend が応答しています。"
-  else
-    restart_fail "応答しない製品があります（上の log を確認してください）。"
-    return 1
+  if suite_wait_for_health && [ "${status}" -eq 0 ]; then
+    restart_log "完了しました。すべての製品の backend が応答しています。"
+    return 0
   fi
+  restart_fail "失敗または応答しない製品があります（上の log を確認してください）。"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   suite_restart_main "$@"
+  exit $?
 fi
