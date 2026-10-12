@@ -12,6 +12,7 @@ from rag_engine.retrieval.operation_context import mentions_operation_section, o
 from rag_engine.retrieval.task_contract import task_contract
 from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
+from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
 from rag_engine.knowledge.document_metadata import document_context_text
 from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
 from rag_engine.parsing.decorative_pictures import (
@@ -456,6 +457,16 @@ def _group_has_entity_expansion(group: _ParentEvidenceBuilder) -> bool:
     )
 
 
+def _group_follows_reference(group: _ParentEvidenceBuilder, sources: set[str]) -> bool:
+    """参照元の直後へ置いた交差参照の参照先（#1549）を起点に持ち、その参照元が枠の内の起点の親か。"""
+    return any(
+        child.role == "retrieved_anchor"
+        and is_followed_reference(child.record)
+        and reference_source_uid(child.record) in sources
+        for child in group.children.values()
+    )
+
+
 def _reserve_entity_expansion_groups(
     ranked_groups: Sequence[_ParentEvidenceBuilder], max_records: int
 ) -> list[_ParentEvidenceBuilder]:
@@ -466,19 +477,33 @@ def _reserve_entity_expansion_groups(
     で当たった主根拠を半分より多くは落とさない）。確保するのは関連度が下限（``ENTITY_EXPANSION_MIN_RELEVANCE``）
     以上の拡張の根拠の親だけで、質問と関係の薄い属性の chunk の親で、検索で当たった親（前後の文脈・章の参照の先
     を持つ）を入れ替えない（#1390）。拡張の根拠が無ければ今までと同じ。
+
+    交差参照の参照先（参照元の直後へ置いたもの。#1549）の親も、参照元の親が枠の内にあれば同じ枠で確保する
+    （参照先は質問の語と重ならない橋渡しの根拠で、親を分数の順に並べると枠の外に落ちる。kb1517 の定期保守計画の
+    第 1 章「この章に無いシステムは、第 2 章の共通の保守枠で保守します」）。
     """
     primary = list(ranked_groups[:max_records])
-    reserved = [group for group in ranked_groups[max_records:] if _group_has_entity_expansion(group)]
+    sources = {
+        str(getattr(child.record, "chunk_uid", "") or "")
+        for group in primary
+        for child in group.children.values()
+        if child.role == "retrieved_anchor"
+    }
+
+    def bridge(group: _ParentEvidenceBuilder) -> bool:
+        return _group_has_entity_expansion(group) or _group_follows_reference(group, sources)
+
+    reserved = [group for group in ranked_groups[max_records:] if bridge(group)]
     if not reserved:
         return primary
-    room = max(0, max_records - max(1, max_records // 2) - sum(_group_has_entity_expansion(g) for g in primary))
+    room = max(0, max_records - max(1, max_records // 2) - sum(bridge(g) for g in primary))
     reserved = reserved[:room]
     if not reserved:
         return primary
     kept = list(primary)
     for _ in reserved:
         for index in range(len(kept) - 1, -1, -1):
-            if not _group_has_entity_expansion(kept[index]):
+            if not bridge(kept[index]):
                 del kept[index]
                 break
     return [*kept, *reserved]

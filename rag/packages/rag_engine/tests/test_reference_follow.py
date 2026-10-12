@@ -90,3 +90,36 @@ def test_document_selection_does_not_defer_followed_reference():
 
     assert _ids(kept) == ["window", "plan2", "a"]
     assert _ids(deferred) == ["c1"]
+
+
+def _parent(name):
+    return AnswerRecord(id=f"{name}-p", engine="docling", engine_label="Docling", page=1, seq_no=1,
+                        category="Chunk", text=f"{name} の親", source="規程.pdf", chunk_level="parent",
+                        chunk_id=f"{name}-p", chunk_uid=f"uid:{name}-p", source_run_id="run",
+                        metadata={"section_path": ["第 1 章"]})
+
+
+def test_context_reserves_parent_slots_for_followed_reference():
+    """参照先の親は分数が低く、親を分数の順に切ると枠の外に落ちる。参照元が枠の内なら確保する（#1549）。
+
+    kb1517 の br-budget-change-window: 定期保守計画が章ごとの親に分かれ、第 1 章（「この章に無いシステムは、
+    第 2 章の共通の保守枠で保守します」）の親が 12 枠の外に落ちた。
+    """
+    from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
+
+    hits = [_child(f"a{index}", score=0.6 - index / 100) for index in range(4)]
+    window = _child("window", score=0.7)
+    plan = [_child("plan2", ref_from="window", rank=1, score=0.29),
+            _child("plan1", ref_from="window", rank=2, score=0.1)]
+    orphan = _child("orphan", ref_from="gone", score=0.05)
+    records = follow_reference_sources([window, *hits, *plan, orphan])
+    parents = [_parent(record.id) for record in records]
+
+    bundle = build_chunk_context_bundle(ContextBuildRequest(
+        question="質問", ranked_children=records, active_records=[*records, *parents], top_k=10,
+        neighbor_child_count=0, max_records=4, max_chars=5000))
+
+    ids = [record.id for record in bundle.records]
+    # 4 枠のうち半分（2）までを参照先の親に入れ替える。参照元の無い印（orphan）は確保しない。
+    assert set(ids) == {"window-p", "a0-p", "plan2-p", "plan1-p"}
+    assert ids[0] == "window-p"
