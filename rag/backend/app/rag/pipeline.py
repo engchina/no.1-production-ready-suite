@@ -17,6 +17,7 @@ from pr_backend_core.logging import safe_exception_fields
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
+from app.clients.oracle_read_stats import track_db_calls
 from app.config import Settings, get_settings
 from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answer_step_stage
 from app.rag.answer_route import answer_route
@@ -610,7 +611,11 @@ async def _observe_stage[T](
     result_attributes: Callable[[T], Mapping[str, object]] | None = None,
     progress_callback: SearchStageProgressCallback | None = None,
 ) -> T:
-    """非同期 stage の処理時間を outcome 付きで記録する。"""
+    """非同期 stage の処理時間を outcome 付きで記録する。
+
+    stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
+    (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
+    """
     started_at = perf_counter()
     base_attributes = dict(attributes or {})
     await _emit_stage_progress(
@@ -622,7 +627,12 @@ async def _observe_stage[T](
         attributes=base_attributes,
     )
     try:
-        result = await operation
+        with track_db_calls() as db_stats:
+            try:
+                result = await operation
+            finally:
+                if db_stats.execute_count or db_stats.lob_read_count:
+                    base_attributes.update(db_stats.snapshot())
     except asyncio.CancelledError as exc:
         elapsed = perf_counter() - started_at
         record_rag_stage(SEARCH_METRIC_MODE, stage, "cancelled", elapsed)

@@ -19,7 +19,11 @@ from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
-from rag_engine.generation.answer_envelope import REFERENCE_CONFIRMATION_PREFIX
+from rag_engine.generation.answer_envelope import (
+    REFERENCE_CONFIRMATION_PREFIX,
+    SettledConfirmations,
+    settle_confirmation_items,
+)
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
@@ -112,7 +116,7 @@ GENERATE_SYSTEM_PROMPT = (
     "どれも資料に書かれた値で、利用者の環境の今の設定値ではない（［記載時点の設定値］も資料を作った時点の記録）。"
     "表示が無くても、列名が既定値・初期値・記入例・設定例・推奨値の値は同じに扱う。"
     "今の値・この環境の値を尋ねる質問には、資料の値を種類とともに示し（例: 「資料の既定値は 30 分」）、"
-    "実際の値は external_data_items（kind=environment）で確認対象にする。資料の値を今の値として断定しない。\n"
+    "実際の値は external_data_items（who_can_answer=system）で確認対象にする。資料の値を今の値として断定しない。\n"
     "4.2 対象・項目・機能の一致\n"
     "- 手順を書く前に、質問の業務対象・変更された項目・発生条件・希望する操作と結果を分け、候補の画面名・節見出し・処理区分・本文・前提条件と照合する。"
     "業務・帳票名・項目番号・対象年月・設定条件の一致を確かめ、「番号」「変更」のような共通語だけで適用可能としない。\n"
@@ -134,15 +138,22 @@ GENERATE_SYSTEM_PROMPT = (
     "- 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。\n"
     "- 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。\n"
     "4.5 未確認事項・実データ・別の資料\n"
-    "- 4 つを分ける: 資料に記載が無い点（gap）、回答の確定に必要な現場の実データ（external_data_items の kind=environment）、"
-    "利用者に確かめる条件（external_data_items の kind=user_condition）、回答の確定に必要な別の資料（reference_materials）。\n"
-    "- 実データ（kind=environment）は、利用者に聞いても分からない現場の値（対象レコードの値・設定値・CSV の値・ログ・記録・処理の状態・件数など）。"
-    "何を、どの目的で照合するかを書く（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）。\n"
-    # 利用者のロール・承認・対象のシステムを「現場の実データ」に挙げ、手順を答えたのに needs_environment_data になっていた (#1453)。
-    "- 利用者に聞けば分かる条件は実データにせず kind=user_condition にする: 質問で対象が特定されていない（どのシステム・どの申請・どのアカウントか）、"
-    "利用者自身の状態（自分のロール・権限を持つか、承認を得たか）、付与先・申請の種類。何を、どの目的で確かめるかを書き"
-    "（例: 「操作する利用者が「ポータル管理者」ロールを持つか（自分で操作するか、依頼するかを決める）」）、資料の条件で答え分ける。"
-    "対象が特定されていないために決まらない値（「対象のシステムの台帳の担当部署」など）も、まず対象を確かめる条件として kind=user_condition にする。\n"
+    "- 3 つを分ける: 資料に記載が無い点（gap）、回答の確定に確かめる点（external_data_items）、回答の確定に必要な別の資料の名前（reference_materials）。\n"
+    # 確かめる点の分類（実データか利用者の条件か）をモデルの 1 語の自己申告にしていたため、ロール・承認・付与先を
+    # 「実データ」に挙げて needs_environment_data になっていた (#1453、#1492)。モデルには観察できる事実だけを書かせ、
+    # 対応はシステムの規則（answer_envelope.settle_confirmation_items）で決める。
+    "- external_data_items の各項目には、何を、どの目的で確かめるかを text に書き（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）、"
+    "次の 3 つの事実を書く。どの対応にするかはシステムが決めるので、事実だけを答える。\n"
+    "  - who_can_answer: 値を答えられるもの。user=質問した利用者本人が知っている・決められる（自分のロール・権限を持つか、承認を得たか、"
+    "どのシステム・申請・アカウントのことか、付与先を個別とグループのどちらにするか）。system=業務システム・台帳・ログに記録され、"
+    "読まないと分からない値（対象レコードの設定値、今の設定値、エラーの時刻のログの行、処理の状態、件数、台帳の実際の値）。"
+    "document=資料に書かれる事実（どの版が有効か・廃止されたか、規則・コードの定義）。\n"
+    "  - 反例: 「操作する利用者が「ポータル管理者」ロールを持つか」は画面で確かめられても user。「付与先を個別とグループのどちらにするか」は利用者が選ぶので user。"
+    "「対象のシステムの台帳の担当部署」は、対象のシステムが分かれば台帳の値なので system（対象のシステムが質問で特定されていなければ、それを確かめる user の項目を別に挙げる）。"
+    "「適用されている版」は利用者の環境ではなく資料が決めるので document。\n"
+    "  - already_known: 質問・会話・「分かっている条件」・取得した根拠の原文から値がすでに分かれば true（例: 利用者が「承認はもらっています」と書いた承認の有無、"
+    "根拠が「第1版は廃止」と書いている適用の版）。分かっている点を聞き直さない。\n"
+    "  - decides: 値によって結論・選ぶ手順・可否が変われば true。値に関わらず同じ手順・結論で、念のための確認にとどまるなら false。\n"
     "- 別の資料は、根拠の原文が参照を指示している資料（「別紙」「〜を参照」「コード表」「規程」など）や、質問が尋ねる定義・規則が載っているはずの資料。閲覧の目的とともに書く。\n"
     "- 資料名は根拠の原文か質問に出た名前だけを「」で囲んで書く。無ければ資料の種類で書き（例: 料金表、コード定義表）、名称・版・所在・URL・内容を創作しない。\n"
     "- 資料で分かる一般の規則・手順はそのまま items で答え、個案の値や別の資料が要る部分だけを未確定として案内する。操作自体の根拠がなければその範囲を gap に示し、手順・設定値・計算規則を推測しない。\n"
@@ -169,10 +180,10 @@ GENERATE_SYSTEM_PROMPT = (
     "5. 出力\n"
     "5.1 方針と items の対応\n"
     "- 資料からは確認できない点（資料に記載が無い、質問の語と原文の対応が未確認）→ kind=gap の item。操作や規則の text に混ぜず、summary にも書かない。\n"
-    "- 回答の確定に必要な現場の実データとその照合の目的 → external_data_items の kind=environment。利用者に確かめる条件 → external_data_items の kind=user_condition。"
+    "- 回答の確定に確かめる点とその目的 → external_data_items（項目ごとに who_can_answer・already_known・decides）。"
     "別の資料とその閲覧の目的 → reference_materials。同じ内容を gap に重ねない。\n"
     "- 原文に明記された適用条件・限定 → その item の applies=conditional と condition。\n"
-    "- 利用者に聞いても分からない現場の実値・履歴に依存する結論が残る → external_data_required=true。利用者に確かめる条件だけなら false。\n"
+    "- システムだけが持つ値（who_can_answer=system）に依存する結論が残る → external_data_required=true。それ以外は false。\n"
     "- 機能・前提ごとに分ける手順 → 機能ごとに item を分ける。見出しは書かない。\n"
     "5.2 出力形式と上限\n"
     "- 各項目の意味は応答 schema の説明に従う。まず request_coverage に要求単位ごとに使う根拠の evidence_id を挙げ、その後に items を書く。\n"
@@ -2027,28 +2038,102 @@ def _compact_text(text: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
-def confirmation_lines(draft: GroundedDraft, question: str, spans: Sequence[dict]) -> list[str]:
+def settle_confirmations(draft: GroundedDraft, *, known_conditions: Sequence[tuple[str, str]] = (),
+                         version_settled: bool = False) -> SettledConfirmations:
+    """草稿の確認の項目を規則で分ける（#1492。`answer_envelope.settle_confirmation_items`）。"""
+    return settle_confirmation_items(draft.confirmation_items(), known_conditions=known_conditions,
+                                     version_settled=version_settled)
+
+
+def confirmation_lines(draft: GroundedDraft, question: str, spans: Sequence[dict],
+                       settled: SettledConfirmations | None = None) -> list[str]:
     """回答の確定に必要な実データ・別の資料の確認を、本文の行にする (#688)。
 
+    実データはシステムだけが持つ値の項目（who_can_answer=system）、資料は reference_materials と別の資料で分かる
+    項目（who_can_answer=document）。settled を省くと草稿の項目をそのまま規則で分ける（#1492）。
     資料名の創作を防ぐため、「」で囲んだ資料名が根拠の原文にも質問にも無い資料の行は出さない。
     """
+    settled = settled if settled is not None else settle_confirmations(draft)
     corpus = _compact_text(question + "\n" + "\n".join(str(span.get("text") or "") for span in spans))
 
     def named_in_corpus(text: str) -> bool:
         return all(_compact_text(name) in corpus for name in re.findall(r"「([^」]+)」", text))
 
-    lines = [f"実データ: {item}" for item in draft.environment_data_items()]
-    lines += [f"{REFERENCE_CONFIRMATION_PREFIX}{item.strip()}" for item in draft.reference_materials
+    lines = [f"実データ: {item}" for item in settled.system]
+    lines += [f"{REFERENCE_CONFIRMATION_PREFIX}{item.strip()}" for item in [*draft.reference_materials, *settled.document]
               if item.strip() and named_in_corpus(item)]
     return list(dict.fromkeys(lines))
 
 
-def user_condition_lines(draft: GroundedDraft) -> list[str]:
-    """利用者に確かめる条件（kind=user_condition）を、本文の確認の節の行にする (#1453)。
+def user_condition_lines(settled: SettledConfirmations) -> list[str]:
+    """利用者に確かめる条件（who_can_answer=user）を、本文の確認の節の行にする (#1453、#1492)。
 
     現場の実データ（`confirmation_lines`）とは分け、回答の構造では適用の条件（conditions）に載せる。
     """
-    return list(dict.fromkeys(f"条件: {item}" for item in draft.user_condition_items()))
+    return list(dict.fromkeys(f"条件: {item}" for item in settled.user))
+
+
+# ---- 廃止・旧版の文書（#1492） ----------------------------------------------------
+# 根拠の文書が新しい版に置き換えられた旧版（backend の `document_superseded` のメタデータ）か、ほかの根拠の原文が
+# 廃止を明記した版（「第1版は第2版の施行により廃止されています」）なら、その文書の説明は今の手順として公開せず
+# 原文のみ提示にする。版の比較・旧版を尋ねる質問は除く。
+SUPERSEDED_REASON = "廃止・旧版の文書の記載（今の版の手順・規則としては示さない）"
+_VERSION_LABEL = r"第\s*[0-9一二三四五六七八九十]+\s*版"
+_ABOLISHED_VERSION = (re.compile(rf"({_VERSION_LABEL})(?:は|を|が|も)[^。、\n]{{0,24}}?廃止"),
+                      re.compile(rf"廃止(?:され|し)た\s*({_VERSION_LABEL})"))
+# 版を比べる・旧版を尋ねる質問。旧版の記載はそのまま答えに使う。
+_ASKS_ABOUT_VERSIONS = re.compile(r"(?:どう|何が|どこが)変わ|変わ(?:りました|った)|違い|差分|比較|比べ|変更点|変更前|改訂前|旧版|前の版|以前の版|新旧")
+_QUESTION_VERSION_TOKEN = re.compile(rf"{_VERSION_LABEL}|[0-9]{{4}}")
+
+
+def _span_title(span: dict) -> str:
+    return unicodedata.normalize("NFKC", " ".join([str(span.get("source") or ""), *map(str, span.get("section_path") or ())]))
+
+
+def superseded_evidence_ids(question: str, spans: Sequence[dict]) -> set[str]:
+    """廃止・旧版の文書の根拠の evidence_id（#1492）。
+
+    メタデータで旧版（`superseded`）の根拠と、ほかの根拠の原文が廃止を明記した版（「第N版」）を見出し・文書名に
+    持つ根拠。質問が版を比べる・旧版を尋ねる、または旧版の版・年を名指しする場合は空（旧版の記載で答える）。
+    """
+    question_text = unicodedata.normalize("NFKC", question)
+    if _ASKS_ABOUT_VERSIONS.search(question_text):
+        return set()
+    abolished: set[str] = set()
+    for span in spans:
+        if span.get("superseded"):
+            continue
+        text = unicodedata.normalize("NFKC", str(span.get("text") or ""))
+        title = _compact(_span_title(span))
+        for pattern in _ABOLISHED_VERSION:
+            for match in pattern.finditer(text):
+                label = _compact(match.group(1))
+                if label not in title:
+                    abolished.add(label)
+    asked = {_compact(token) for token in _QUESTION_VERSION_TOKEN.findall(question_text)}
+    result: set[str] = set()
+    for span in spans:
+        title = _compact(_span_title(span))
+        if not (span.get("superseded") or any(label in title for label in abolished)):
+            continue
+        if any(token in title for token in asked):
+            continue
+        result.add(str(span.get("evidence_id") or ""))
+    result.discard("")
+    return result
+
+
+def withhold_superseded(checked: Sequence[CheckedItem], superseded: set[str]) -> int:
+    """廃止・旧版の文書の説明を原文のみ提示にする（#1492）。降格した数を返す。
+
+    生成の是正の指摘には使わない（モデルが直せるものではない）ので、採用した round の確定の段で呼ぶ。
+    """
+    count = 0
+    for entry in checked:
+        if entry.span and not entry.quote_only and entry.item.kind != "gap" and entry.span.get("evidence_id") in superseded:
+            entry.downgrade(SUPERSEDED_REASON)
+            count += 1
+    return count
 
 
 def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (),

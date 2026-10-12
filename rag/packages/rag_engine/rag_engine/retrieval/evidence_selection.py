@@ -382,6 +382,8 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
                 # 分類は v4 で document 配下 (#814)。
                 "business_scope": str((((getattr(record, 'metadata', {}) or {}).get('document') or {}).get('classification') or {}).get('large_category') or ''),
                 "source": getattr(record, "source", ""), "page": getattr(record, "page", 0),
+                # 新しい版に置き換えた文書（旧版）の根拠（backend の document_superseded。#1492）。
+                "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
                 # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
                 "location": record_location_label(record),
                 # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、

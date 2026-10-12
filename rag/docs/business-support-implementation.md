@@ -65,12 +65,23 @@
   （`rag/backend/app/rag/answer_route.py`。モデルは呼ばない）。Prometheus の
   `rag_answer_routes_total{reason, requires_environment_data}` は理由と要否だけを数える。RAG の画面は、既存の
   回答の対応の表示（確かめる現場の値・記録）で「資料だけでは確定できない」ことを業務の言葉で伝え、どこへもリンクしない。
-- **現場の実データと利用者に確かめる条件を分ける（#1453）。** 根拠付き回答の草稿の `external_data_items` は項目ごとに
-  種類（`kind`）を持つ。`environment` は利用者に聞いても分からない現場の値（設定値・ログ・記録・件数・処理の状態）で、
-  `needs_environment_data` にする。`user_condition` は利用者に聞けば分かる条件（質問で特定されていない対象のシステム・申請、
-  利用者自身のロール・承認、付与先の種類）で、AnswerEnvelope の `conditions` に載せて `conditional` にする（本文では
-  「回答を確定するために確認すること」の節に「条件: …」として出す）。「ポータル管理者ロールを持つか」はシステムの記録でも
-  あるが、利用者本人が答えられるため `user_condition` に分ける（人の判断が要る点として PR に記録）。
+- **確認の項目は観察できる事実と規則で分ける（#1453、#1492）。** 根拠付き回答の草稿の `external_data_items` は項目ごとに、
+  モデルが観察できる事実だけを持つ: 値を答えられるもの（`who_can_answer`: `user` = 利用者本人が知っている・決められる
+  （自分のロール・承認・対象のシステム・付与先の選択）/ `system` = 業務システム・台帳・ログの値 / `document` = 資料に
+  書かれる事実（どの版が有効か・規則の定義））、すでに分かっているか（`already_known`。質問・会話・分かっている条件・
+  根拠の原文で分かる）、結論がその値で分かれるか（`decides`）。どの対応にするかはモデルに答えさせず、
+  `answer_envelope.settle_confirmation_items` の規則で決める（selective prediction / clarifying question の判定と同じく、
+  自己申告の分類に頼らない）: `already_known` と `decides=false` の項目、業務ガイドの分かっている条件（MCP の
+  `conditions`・質問で決まった条件。backend が `known_conditions` として渡す）を確かめる項目、根拠が旧版・廃止の版を
+  決めているときの版の確認は数えない。残りは `user` → AnswerEnvelope の `conditions`（`conditional`。本文の
+  「回答を確定するために確認すること」に「条件: …」）、`system` → `needs_environment_data`（「実データ: …」）、
+  `document` → 資料の不足（`reference_materials`・`conditional`。「資料: …」）。値の欠けた項目（文字列だけ・#1453 の
+  `kind` だけ）は保守的に埋める（`kind` から写し、無ければ `system`・未確認・結論を分ける）。採用した草稿の構造
+  （確認の項目の事実・規則の分け方・説明の種類と適用）は回答の診断の `grounded_draft` に残し、LLM を呼ばずに replay できる。
+- **廃止・旧版の文書の説明は今の手順にしない（#1492）。** 根拠の文書が旧版（`document_superseded`）か、ほかの根拠の
+  原文が廃止を明記した版（「第1版は第2版の施行により廃止」。見出し・文書名の「第N版」で照らす）なら、その文書の
+  説明を原文のみ提示（`quote_only`）にし、版の確認を確認の項目に挙げない（`grounded.superseded_evidence_ids`）。
+  版を比べる・旧版を尋ねる質問、旧版の版・年を名指しする質問は除く。
 - **別の資料の確認は実データではない（#1491）。** 「回答を確定するために確認すること」の「資料: …」の行（草稿の
   `reference_materials`）は `needs_environment_data` の判定に数えない（`handoff_reasons` は `reference_materials`）。
   実行できる説明が無く、監査した要求がすべて `missing` なら、実データ・別の資料の確認があっても `insufficient_evidence`
