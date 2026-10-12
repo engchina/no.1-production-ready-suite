@@ -1,8 +1,9 @@
 """検索と任意の再順位付けを組み合わせるサービス。"""
 
 from dataclasses import replace
-from rag_engine.ports import Retriever, Reranker
+
 from rag_engine.models.contracts import SearchRequest, SearchResult
+from rag_engine.ports import Reranker, Retriever
 
 
 class RetrievalService:

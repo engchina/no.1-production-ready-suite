@@ -14,15 +14,16 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
-from contextlib import contextmanager, nullcontext
-from difflib import SequenceMatcher
 import unicodedata
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
+from difflib import SequenceMatcher
 from time import monotonic
 from types import SimpleNamespace
-from typing import Any, Callable, Sequence
+from typing import Any
 
+from rag_engine.chunking import _section_unit
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     SettledConfirmations,
@@ -33,14 +34,6 @@ from rag_engine.generation.operation_audit import deletion_target_supported, mis
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem
-from rag_engine.chunking import _section_unit
-from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
-from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupported_heading_navigation
-from rag_engine.retrieval.evidence_selection import evidence_relevance
-from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
-from rag_engine.retrieval.result_granularity import aggregate_only_evidence
-from rag_engine.retrieval.task_contract import task_contract
 from rag_engine.resources.deadline import (
     ANSWER_FINALIZE_RESERVE_SECONDS,
     DEFAULT_GENERATION_ROUND_SECONDS,
@@ -50,6 +43,13 @@ from rag_engine.resources.deadline import (
     deadline_cut_short,
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
+from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
+from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupported_heading_navigation
+from rag_engine.retrieval.evidence_selection import evidence_relevance
+from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
+from rag_engine.retrieval.result_granularity import aggregate_only_evidence
+from rag_engine.retrieval.task_contract import task_contract
 
 MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
 MAX_PINNED = 4
@@ -1014,7 +1014,7 @@ class CheckedItem:
 _PROCEDURE_KINDS = frozenset({"operation", "confirmation"})
 
 
-def primary_procedure_document(checked: Sequence["CheckedItem"]) -> tuple[str, ...]:
+def primary_procedure_document(checked: Sequence[CheckedItem]) -> tuple[str, ...]:
     """回答の手順の主文書。公開できる操作・確認 item が最も多い文書で、同数なら先に現れた文書 (#1022)。
 
     検索の最上位候補（spans[0]）の文書は手順に使われない別文書のことがある（実データで確認）ので、
@@ -1367,7 +1367,7 @@ def _context_request_ids(question: str) -> set[str]:
     return {unit["id"] for unit in task_contract(question)["request_units"] if unit.get("kind") == "context"}
 
 
-def _generated_values_absent_from_document_text(question: str, entry: "CheckedItem", spans: Sequence[dict]) -> list[str]:
+def _generated_values_absent_from_document_text(question: str, entry: CheckedItem, spans: Sequence[dict]) -> list[str]:
     """画像の生成説明（image_generated）を根拠にした操作 item が、同じ機能の本文と食い違う値を持つか (#652)。
 
     生成説明は OCR より筋の通った説明で、吹き出しの手順が図の中にしかない文書では唯一の操作根拠になる
@@ -1802,7 +1802,7 @@ def _normalized(item: GroundedItem, span: dict) -> GroundedItem:
     return item.model_copy(update=update) if update else item
 
 
-def _covers(entry: "CheckedItem", other: "CheckedItem") -> bool:
+def _covers(entry: CheckedItem, other: CheckedItem) -> bool:
     """同じ根拠の引用を entry が含むか。"""
     return (
         entry.span is not None
@@ -1836,17 +1836,17 @@ def _condition_phrase(condition: str) -> str:
     return f"{condition}の場合"
 
 
-def _same_quote(entry: "CheckedItem", other: "CheckedItem") -> bool:
+def _same_quote(entry: CheckedItem, other: CheckedItem) -> bool:
     """根拠 ID が違っても同じ原文を引用しているか。同じ文は本文と画像の生成説明の両方に現れる (#644)。"""
     return bool(entry.item.quote) and _compact(entry.item.quote) == _compact(other.item.quote)
 
 
-def _prefers_document_text(entry: "CheckedItem", other: "CheckedItem") -> bool:
+def _prefers_document_text(entry: CheckedItem, other: CheckedItem) -> bool:
     """entry が本文の根拠で other が画像の生成説明なら、出典は本文にする。"""
     return "image_generated" in (other.span or {}).get("tags", ()) and "image_generated" not in (entry.span or {}).get("tags", ())
 
 
-def without_redundant_quotes(checked: Sequence["CheckedItem"]) -> list["CheckedItem"]:
+def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem]:
     """言い換えで説明済みの原文を、原文のみの欄へ重ねて表示しない。"""
     verified = [e for e in checked if e.span and not e.quote_only]
     kept: list[CheckedItem] = []
@@ -1881,7 +1881,7 @@ def without_redundant_quotes(checked: Sequence["CheckedItem"]) -> list["CheckedI
     return kept
 
 
-def carry_over(candidate: Sequence["CheckedItem"], previous: Sequence["CheckedItem"]) -> list["CheckedItem"]:
+def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]) -> list[CheckedItem]:
     """是正後の草稿が落とした引用を引き継ぐ。再生成の揺らぎで、公開できた内容を失わない。
 
     引き継いだ item は複製して `carried=True` を付ける。当該 round の監査対象に含めて撤回できるようにするため
@@ -2048,7 +2048,7 @@ def _function_title(span: dict) -> str:
 _SCREEN_HEADING = re.compile(r"^[（(][0-9０-９Ａ-ＺA-Zａ-ｚ]{1,3}[）)]")
 
 
-def _displayed_quote(entry: "CheckedItem") -> str:
+def _displayed_quote(entry: CheckedItem) -> str:
     """原文のみ提示で表示する引用。生成説明の `値:` 欄（画面の表示例の値）は除く (#1114)。
 
     `値:` 欄はスクリーンショットに表示されている例の値で、利用者の実値ではない。画面名・ボタン・項目などの欄は
@@ -2107,7 +2107,7 @@ def _without_screen_examples(text: str) -> str:
     return re.sub(r"\n{2,}", "\n", text)
 
 
-def _block_screen_title(entries: Sequence["CheckedItem"]) -> str:
+def _block_screen_title(entries: Sequence[CheckedItem]) -> str:
     """手順ブロックの見出しに出す画面名。根拠の section_path にある最も深い番号付きの見出しのうち、最も多いもの。
 
     機能ラベルは柱を採ると資料全体の名前になり（#1088）、画面名が回答のどこにも出ないことがある。利用者を正しい
@@ -2166,8 +2166,8 @@ def _question_term_hits(terms: set[str], span: dict) -> int:
 
 
 def audit_needed_quotes(
-    current: "Round", spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT, question: str | None = None
-) -> list["CheckedItem"]:
+    current: Round, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT, question: str | None = None
+) -> list[CheckedItem]:
     """公開できる item が無い round で、監査が「回答に必要なのに使われていない」と挙げた根拠を原文のみ提示の item にする。
 
     監査は items が空の草稿も根拠全体を見て監査し（#1014）、必要な根拠を重要な順に `unused_evidence_ids` で返す。
@@ -2193,7 +2193,7 @@ def audit_needed_quotes(
     return items
 
 
-def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list["CheckedItem"]:
+def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list[CheckedItem]:
     """草稿が gap だけのとき、質問の語を 2 つ以上含む原文（生成説明を除く）を原文のみ提示の item として返す (#722)。
 
     質問の語（画面名・メッセージ文）そのものが原文になく、モデルが全面拒答しても、同じ対象の条件・操作を
@@ -2219,7 +2219,7 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
     return [_quote_item(span, span["text"][:600], "拒答時の関連原文") for _, _, span in scored[:limit]]
 
 
-def deadline_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list["CheckedItem"]:
+def deadline_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list[CheckedItem]:
     """1 組目の生成が回答の時間の上限までに終わらなかった（草稿が無い）ときに示す、根拠の原文の抜粋（#1548）。
 
     根拠は検索・根拠の評価（CRAG）・章節の拡張を通って回答に渡すと決めたもので、草稿が無いのは時間の上限の

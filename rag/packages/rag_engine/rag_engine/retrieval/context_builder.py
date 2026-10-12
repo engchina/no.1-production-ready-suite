@@ -4,23 +4,23 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL
-from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
-from rag_engine.retrieval.task_contract import task_contract
-from rag_engine.retrieval.evidence_selection import evidence_relevance
-from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
-from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
 from rag_engine.knowledge.document_metadata import document_context_text
-from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
 from rag_engine.parsing.decorative_pictures import (
     DECORATIVE_VISUAL_ROLE,
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
-
+from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
+from rag_engine.retrieval.evidence_selection import evidence_relevance
+from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
+from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
+from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
+from rag_engine.retrieval.task_contract import task_contract
 
 DEFAULT_MAX_RECORD_TEXT_CHARS = 1200
 DEFAULT_MIN_SNIPPET_CHARS = 80

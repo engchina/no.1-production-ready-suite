@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Sequence
-
+from typing import Any
 
 PROJECT_ROOT = Path.cwd()
 DEFAULT_RETRIEVAL_EVAL_DATASET = PROJECT_ROOT / "eval" / "retrieval_representative_questions.json"

@@ -3,11 +3,12 @@
 import json
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from rag_engine.config import get_settings
 from rag_engine.knowledge.query_history import (
     append_query_history,
     load_query_history_records,
@@ -18,7 +19,6 @@ from rag_engine.knowledge.query_history import (
     select_query_history_suggestion,
     suggest_query_history_questions,
 )
-from rag_engine.config import get_settings
 
 
 class QueryHistoryTests(unittest.TestCase):
@@ -109,7 +109,7 @@ class QueryHistoryTests(unittest.TestCase):
             records = load_query_history_records(
                 tmp,
                 retention_days=30,
-                now=datetime(2026, 9, 8, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 8, tzinfo=UTC),
             )
             suggestions = suggest_query_history_questions(
                 "",
@@ -145,7 +145,7 @@ class QueryHistoryTests(unittest.TestCase):
             records = load_query_history_records(
                 tmp,
                 retention_days=30,
-                now=datetime(2026, 9, 8, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 8, tzinfo=UTC),
             )
 
         self.assertEqual([record.query_id for record in records], ["naive"])
@@ -161,20 +161,22 @@ class QueryHistoryTests(unittest.TestCase):
                 extra_values={"private"},
             )
 
-            with patch.dict(
-                os.environ,
-                {
-                    "QUERY_HISTORY_ENABLED": "true",
-                    "QUERY_HISTORY_RETENTION_DAYS": "7",
-                    "QUERY_HISTORY_MIN_COUNT": "2",
-                    "QUERY_HISTORY_MIN_UNIQUE_RUNS": "2",
-                    "QUERY_HISTORY_SUGGESTION_LIMIT": "4",
-                    "QUERY_HISTORY_BLOCKLIST_PATH": str(blocklist_path),
-                },
-                clear=True,
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "QUERY_HISTORY_ENABLED": "true",
+                        "QUERY_HISTORY_RETENTION_DAYS": "7",
+                        "QUERY_HISTORY_MIN_COUNT": "2",
+                        "QUERY_HISTORY_MIN_UNIQUE_RUNS": "2",
+                        "QUERY_HISTORY_SUGGESTION_LIMIT": "4",
+                        "QUERY_HISTORY_BLOCKLIST_PATH": str(blocklist_path),
+                    },
+                    clear=True,
+                ),
+                patch("rag_engine.config.load_dotenv"),
             ):
-                with patch("rag_engine.config.load_dotenv"):
-                    settings = get_settings(dotenv_path=None)
+                settings = get_settings(dotenv_path=None)
 
         self.assertEqual(blocklist, {"秘密", "private"})
         self.assertTrue(settings.query_history_enabled)

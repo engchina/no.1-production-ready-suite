@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
-from rag_engine.parsing.vision_prompt_rules import without_vision_screen_values
 from rag_engine.chunking.constants import (
+    SOURCE_TABLE_CROP_RELATIONSHIP,
     ChunkingConfig,
     DocumentChunk,
-    SOURCE_TABLE_CROP_RELATIONSHIP,
     _clean_search_text,
     _context_preview,
     _int_value,
@@ -19,6 +18,8 @@ from rag_engine.chunking.constants import (
     _page_span,
     _trim_search_text,
 )
+from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
+from rag_engine.parsing.vision_prompt_rules import without_vision_screen_values
 
 # 画像の生成説明にある画面キャプチャの例示値の文。Vision prompt は例示値に「画面例では」「入力例として」
 # （英語では input example / display example）を付ける規則なので、その文を検索用テキストから除く。文書の説明では

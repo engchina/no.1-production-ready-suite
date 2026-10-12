@@ -2,7 +2,7 @@
 
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -18,15 +18,15 @@ from rag_engine.knowledge.approved_faq import (
     approved_faq_import_row_from_answer_feedback,
     approved_faq_records_signature,
     approved_faq_semantic_cache_path,
-    approved_faq_table_rows,
     approved_faq_suggestion_choices,
     approved_faq_suggestion_labels,
+    approved_faq_table_rows,
     build_approved_faq_semantic_index,
     delete_approved_faq_records,
     find_direct_approved_faq_answer,
-    load_approved_faq_semantic_index,
     load_approved_faq_excel_rows,
     load_approved_faq_records,
+    load_approved_faq_semantic_index,
     promote_answer_feedback_to_approved_faq,
     save_approved_faq_payload,
     select_approved_faq_suggestion,
@@ -261,7 +261,7 @@ class ApprovedFaqTests(unittest.TestCase):
             self.assertIsNone(wrong_model)
 
     def test_adds_approved_faq_record_and_skips_duplicate_question(self):
-        now = datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 9, 0, tzinfo=UTC)
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq_golden_qa.json"
             _write_corpus(path)
@@ -302,7 +302,7 @@ class ApprovedFaqTests(unittest.TestCase):
             result = delete_approved_faq_records(
                 path,
                 " faq-1\nfaq-2,faq-1 ",
-                now=datetime(2026, 9, 8, 9, 5, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 8, 9, 5, tzinfo=UTC),
             )
             records = load_approved_faq_records(path)
 
@@ -352,7 +352,7 @@ class ApprovedFaqTests(unittest.TestCase):
                     )
                 ],
                 mode=APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT,
-                now=datetime(2026, 9, 8, 9, 10, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 8, 9, 10, tzinfo=UTC),
             )
             records = load_approved_faq_records(path)
 
@@ -387,7 +387,7 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertEqual(rows[0].row, 2)
 
     def test_promotes_corrected_answer_feedback_to_approved_faq(self):
-        now = datetime(2026, 9, 8, 9, 20, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 9, 20, tzinfo=UTC)
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq_golden_qa.json"
             _write_corpus(path)
@@ -570,7 +570,7 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertNotIn("source_run_id", current.source)
 
     def test_promotes_correct_feedback_with_generated_answer_and_skips_empty_wrong_feedback(self):
-        now = datetime(2026, 9, 8, 9, 25, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 9, 25, tzinfo=UTC)
         correct_feedback = {
             "feedback_id": "feedback-2",
             "feedback_type": "correct",

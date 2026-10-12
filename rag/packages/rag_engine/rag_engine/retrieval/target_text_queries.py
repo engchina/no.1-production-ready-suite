@@ -10,7 +10,7 @@ LLM は使わない。
 from __future__ import annotations
 
 import re
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS, task_contract
 from rag_engine.retrieval.text_search_tokenizer import escape_oracle_text_term

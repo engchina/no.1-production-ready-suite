@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any, Sequence
-from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
+from typing import Any
+
 from rag_engine.generation.answer_models import (
     AnswerQuestionResult,
     AnswerRecord,
@@ -18,6 +19,7 @@ from rag_engine.generation.answer_models import (
     query_strategy_label,
     retrieval_scope_label,
 )
+from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
 
 
 def _records_for_prompt_injection_scan(

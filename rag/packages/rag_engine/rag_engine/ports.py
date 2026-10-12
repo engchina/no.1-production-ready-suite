@@ -1,18 +1,20 @@
 """外部実装が満たす最小契約。import 時に SDK や接続を初期化しない。"""
 
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
+
 from rag_engine.models.contracts import (
-    ParseRequest,
-    ParsedDocument,
-    ChunkRequest,
+    AnswerResult,
     ChunkBatch,
+    ChunkRequest,
+    Evidence,
+    GenerationRequest,
     IndexRequest,
     IndexResult,
+    ParsedDocument,
+    ParseRequest,
     SearchRequest,
     SearchResult,
-    GenerationRequest,
-    AnswerResult,
-    Evidence,
 )
 
 

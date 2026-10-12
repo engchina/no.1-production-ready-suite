@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 from typing import Any
+
 from rag_engine.parsing.categories import CATEGORY_STYLES
 
 

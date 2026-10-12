@@ -9,7 +9,6 @@ pytest.importorskip("lxml", reason="PPTX XML 検証の任意依存")
 
 from scripts.update_analysis_presentation import NS, make_body, read_design
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -92,6 +91,7 @@ def test_full_review_audit_has_every_page_and_real_source_paths(filename):
 def test_v17_refined_layout_and_prompt_boundaries():
     """新版の図形・字体を全頁検査し、Prompt自動置換や精度保証の誤記を防ぐ。"""
     import re
+
     from scripts.presentation_polish import make_polished_body
 
     design = read_design(ROOT / "docs/presentations/full-guide-v17-20260921.md")

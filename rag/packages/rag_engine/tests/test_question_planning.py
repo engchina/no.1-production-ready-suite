@@ -4,20 +4,21 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from grounded_stub import AnswerOutput
+
+from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
-    AnswerContext,
-    AnswerRecord,
     QUESTION_DISPLAY_METADATA_SEPARATOR,
     QUESTION_PLAN_SEPARATOR,
     SIMPLE_RETRIEVAL_LABEL,
     STANDARD_ANSWER_FLOW_LABEL,
+    AnswerContext,
+    AnswerRecord,
     answer_question_result,
     answer_result_payload,
     extract_original_question,
 )
-from grounded_stub import AnswerOutput
 from rag_engine.retrieval.question_planning import plan_question
-from rag_engine.config import get_settings
 
 
 class QuestionPlanningTests(unittest.TestCase):

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from time import monotonic
 import re
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import wraps
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from time import monotonic
+from typing import Any
+
 from rag_engine.dependencies import llm_call_count
-from rag_engine.resources.llm_usage import LlmUsage, llm_usage as _llm_usage, usage_delta, usage_snapshot
 from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
+from rag_engine.resources.llm_usage import LlmUsage, usage_delta, usage_snapshot
+from rag_engine.resources.llm_usage import llm_usage as _llm_usage
 
 
 @dataclass

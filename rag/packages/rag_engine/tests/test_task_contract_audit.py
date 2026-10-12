@@ -4,19 +4,19 @@ import json
 from unittest.mock import patch
 
 import pytest
+from test_evidence_first_answering import evaluation_case
 
-from rag_engine.retrieval.task_contract import task_contract, filter_queries
-from rag_engine.retrieval.evidence_selection import evidence_spans
+from rag_engine.evaluation.answer_eval import _evidence_fragments, evaluate_answer_payload
 from rag_engine.generation.answering import (
-    AnswerRecord,
     AnswerContext,
-    _refine_crag_context,
+    AnswerRecord,
     _grade_crag_retrieval,
+    _refine_crag_context,
     build_crag_answer_context,
 )
 from rag_engine.models.llm import CragRetrievalGradeOutput
-from rag_engine.evaluation.answer_eval import evaluate_answer_payload, _evidence_fragments
-from test_evidence_first_answering import evaluation_case
+from rag_engine.retrieval.evidence_selection import evidence_spans
+from rag_engine.retrieval.task_contract import filter_queries, task_contract
 
 
 def record(uid, text="入口を押すと編集画面が開く。保存ボタンで確定する。", source="guide.pdf"):
@@ -196,6 +196,7 @@ def test_requester_terms_come_from_generic_defaults_and_the_domain_profile():
     """問い合わせ元の語は一般語の既定と profile の requester_terms。業種固有の語はコードに置かない (#849)。"""
     from types import SimpleNamespace
     from unittest.mock import patch
+
     from rag_engine.retrieval import task_contract as module
 
     cached = getattr(module, "_task_contract", None)  # 結果は lru_cache されるため profile を変えたら消す

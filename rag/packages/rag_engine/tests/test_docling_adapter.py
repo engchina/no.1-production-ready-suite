@@ -15,8 +15,8 @@ from rag_engine.adapters.parsers.docling_adapter import (
     _table_data_to_html,
     _table_html_by_ref,
 )
-from rag_engine.models.layout import PageImage
 from rag_engine.config import get_settings
+from rag_engine.models.layout import PageImage
 
 
 class DoclingAdapterTests(unittest.TestCase):

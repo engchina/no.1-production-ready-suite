@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.chunking.constants import FORM_VISUAL_RAW_TYPES, _bool_value, _int_value, _preview
 from rag_engine.chunking.records import (
     _bbox_contains,
@@ -13,6 +13,7 @@ from rag_engine.chunking.records import (
     _image_evidence_embedding_modality,
     _record_text_for_chunk,
 )
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 
 
 def _source_record_ref(record: dict[str, Any]) -> dict[str, Any]:

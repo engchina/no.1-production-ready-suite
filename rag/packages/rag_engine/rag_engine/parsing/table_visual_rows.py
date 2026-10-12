@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from difflib import SequenceMatcher
 from html import escape
 from pathlib import Path
-import re
 from typing import Any
-import unicodedata
 
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.table_structure import parse_html_table_structure

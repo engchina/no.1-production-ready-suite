@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
@@ -20,7 +21,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
     DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
 )
-
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
 # 回答系(生成・監査・CRAG・質問拡張)と Vision(図説明)で model だけを分ける。

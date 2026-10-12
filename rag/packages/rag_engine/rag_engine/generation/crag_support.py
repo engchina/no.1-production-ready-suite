@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any, Sequence
-from rag_engine.retrieval.context_builder import ContextParentEvidence, context_bundle_from_parent_evidence, record_context_key
-from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_packet, evidence_relevance
-from rag_engine.retrieval.task_contract import task_contract, query_rejection_reason
-from rag_engine.retrieval.context_recovery import recover_context_records
-from rag_engine.retrieval.character_forms import fold_width
-from rag_engine.knowledge.prompt_files import neutralize_boundary_markers, render_prompt_template
-from rag_engine.generation.answer_images import _prompt_safe_warnings, _trim_generated_text, prompt_injection_warnings_for_records
-from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS, _answer_context_from_ranked
-from rag_engine.generation.answer_payload import _evidence_id_key, _records_for_prompt_injection_scan
-from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _dedupe_query_key
+from typing import Any
 
+from rag_engine.generation.answer_images import _prompt_safe_warnings, _trim_generated_text, prompt_injection_warnings_for_records
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _dedupe_query_key
+from rag_engine.generation.answer_payload import _evidence_id_key, _records_for_prompt_injection_scan
+from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS, _answer_context_from_ranked
+from rag_engine.knowledge.prompt_files import neutralize_boundary_markers, render_prompt_template
+from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.context_builder import ContextParentEvidence, context_bundle_from_parent_evidence, record_context_key
+from rag_engine.retrieval.context_recovery import recover_context_records
+from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_packet, evidence_relevance
+from rag_engine.retrieval.task_contract import query_rejection_reason, task_contract
 
 MAX_GENERATED_QUERY_CHARS = 900
 
@@ -41,7 +42,7 @@ def _merge_crag_evidence(
     records = list(by_key.values())
     limit = max_records * 2
     if len(records) > limit:
-        from rag_engine.retrieval.operation_context import mentions_operation_section, operation_target_score, operation_labels
+        from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
 
         target_labels = {label for r in records if operation_target_score(question, r) >= 80 for label in operation_labels(r)}
 

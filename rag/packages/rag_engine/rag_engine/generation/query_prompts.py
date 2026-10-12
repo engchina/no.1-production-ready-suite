@@ -3,33 +3,34 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
-from rag_engine.knowledge.classification import ClassificationFilter
-from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
-from rag_engine.retrieval.task_contract import task_contract
-from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
+from collections.abc import Sequence
+from typing import Any
+
+from rag_engine.config import Settings
 from rag_engine.generation.answer_images import _trim_generated_text
 from rag_engine.generation.answer_models import (
     HYDE_LABEL,
     HYDE_STRATEGY,
     QUERY_DECOMPOSITION_LABEL,
     QUERY_DECOMPOSITION_STRATEGY,
-    QueryExpansionResult,
     RAG_FUSION_LABEL,
     RAG_FUSION_STRATEGY,
     SIMPLE_RETRIEVAL_LABEL,
     SIMPLE_RETRIEVAL_STRATEGY,
     STEP_BACK_PROMPTING_LABEL,
     STEP_BACK_PROMPTING_STRATEGY,
+    QueryExpansionResult,
     _dedupe_queries,
     _dedupe_query_key,
     query_strategy_id,
     query_strategy_label,
 )
+from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
+from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.config import Settings
-
+from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
+from rag_engine.retrieval.task_contract import task_contract
 
 MAX_GENERATED_QUERY_COUNT = 5
 

@@ -6,10 +6,11 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from rag_engine.resources.runtime import current_profile
-from typing import Any, Iterable, Sequence
+from typing import Any
 
+from rag_engine.resources.runtime import current_profile
 
 INQUIRY_CONDITION_SCHEMA_VERSION = 1
 INQUIRY_PROFILE_SCHEMA_VERSION = 1

@@ -9,25 +9,26 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from grounded_stub import AnswerOutput
+
+from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
-    AnswerContext,
-    AnswerRecord,
     QUESTION_DISPLAY_METADATA_SEPARATOR,
     RUNTIME_KNOWLEDGE_SEPARATOR,
     SIMPLE_RETRIEVAL_LABEL,
     STANDARD_ANSWER_FLOW_LABEL,
+    AnswerContext,
+    AnswerRecord,
     answer_question_result,
     answer_result_payload,
     extract_original_question,
 )
-from grounded_stub import AnswerOutput
 from rag_engine.knowledge.runtime_knowledge import (
     RUNTIME_KNOWLEDGE_FILE_NAME,
     build_runtime_knowledge_context,
     load_runtime_knowledge,
     runtime_retrieval_queries,
 )
-from rag_engine.config import get_settings
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
 
 

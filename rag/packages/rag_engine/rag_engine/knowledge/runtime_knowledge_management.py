@@ -11,7 +11,7 @@ import re
 import tempfile
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -181,7 +181,7 @@ def edit_knowledge(
         # 既存の承認・再確認・下書き状態は、利用可否を変更した場合だけ置き換える。
         if index is None or bool(enabled) != (row.get("status", "") in RUNTIME_KNOWLEDGE_ACTIVE_STATUSES):
             row["status"] = "approved" if enabled else "deprecated"
-        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        row["updated_at"] = datetime.now(UTC).isoformat()
         if index is None:
             rows.append(row)
         else:
@@ -198,7 +198,7 @@ def edit_knowledge(
         if old is not None:
             directory = path.parent / "runtime_knowledge_backups"
             directory.mkdir(parents=True, exist_ok=True)
-            backup = directory / f"{path.stem}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}-{uuid4().hex}.json"
+            backup = directory / f"{path.stem}-{datetime.now(UTC):%Y%m%dT%H%M%S%f}-{uuid4().hex}.json"
             with backup.open("xb") as stream:
                 os.chmod(backup, 0o600)
                 stream.write(old)

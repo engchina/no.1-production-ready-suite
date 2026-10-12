@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import rag_engine.generation.answering as answering
 from rag_engine.config import get_settings
 from rag_engine.generation.answer_records import is_entity_expansion_record
+from rag_engine.generation.answering import AnswerRecord, rerank_records, select_documents
+from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.entity_expansion import (
     ENTITY_EXPANSION_CHUNK_SEED_MIN_RELEVANCE,
     ENTITY_EXPANSION_HOP_MIN_RELEVANCE,
@@ -19,8 +21,6 @@ from rag_engine.retrieval.entity_expansion import (
     entity_expansion_relevant,
     is_reserved_entity_expansion,
 )
-from rag_engine.generation.answering import AnswerRecord, rerank_records, select_documents
-from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 
 EXPANSION = {"entity": "経理部", "hop": 1}
 

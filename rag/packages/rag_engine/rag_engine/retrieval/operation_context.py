@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 
 def operation_labels(record: Any) -> set[str]:
@@ -27,7 +28,7 @@ def operation_labels(record: Any) -> set[str]:
     }
 
 
-def operation_section_pattern() -> "re.Pattern[str]":
+def operation_section_pattern() -> re.Pattern[str]:
     """操作手順の節（機能見出し直下の「操作説明」など）を表す見出し語の正規表現。
 
     特定マニュアルの節記法（「B 【操作説明】」）に固定せず、一般語の既定と業務 profile の

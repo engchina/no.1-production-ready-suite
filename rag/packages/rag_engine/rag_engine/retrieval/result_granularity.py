@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 
 

@@ -1,16 +1,18 @@
 """既存の multi-query / CRAG を UI なしで利用するアプリケーションサービス。"""
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rag_engine.generation.answering import AnswerQuestionResult
     from rag_engine.knowledge.answers import SavedAnswer
 from rag_engine.config import Settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.resources.runtime import Runtime
 from rag_engine.ports import ArtifactStore
+from rag_engine.resources.runtime import Runtime
 
 
 @dataclass(frozen=True)
@@ -87,8 +89,9 @@ class AnswerService:
 
 def answer_question_result(question, run_id, preferred_engines, settings, **options):
     """Gradio 互換引数を受け、共有サービスで高度な回答フローを実行する。"""
-    from rag_engine.composition import create_oracle_application
     from pathlib import Path
+
+    from rag_engine.composition import create_oracle_application
 
     application = create_oracle_application(settings.workspace_dir or Path.cwd(), settings=settings, profile=settings.profile)
     classification = options.pop("classification_filter", None)

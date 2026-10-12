@@ -9,7 +9,6 @@ from typing import Any
 
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 
-
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
 # 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
 _BRACKET_PAIRS = {"「": "」", "『": "』", "（": "）", "(": ")", "【": "】"}

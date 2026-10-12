@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
-from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
 from rag_engine.models.layout import LayoutRecord, PageImage
-
+from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
 
 VISUAL_CROP_PADDING = 8
 VISUAL_CATEGORIES = {"Picture", "Table"}

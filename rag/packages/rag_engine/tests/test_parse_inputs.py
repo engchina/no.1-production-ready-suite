@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from rag_engine.parsing.parse_inputs import file_sha256, filename_key, parse_input_path, save_parse_input
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.parse_inputs import file_sha256, filename_key, parse_input_path, save_parse_input
 
 
 class ParseInputTests(unittest.TestCase):

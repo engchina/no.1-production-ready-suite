@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from contextvars import ContextVar
-from datetime import datetime, timezone
 import json
 import logging
+from contextvars import ContextVar
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +59,7 @@ class PageProgress:
             "completed_page_numbers": sorted(self.completed),
             "failed_page_numbers": sorted(self.failed),
             "last_page": self.last_page,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

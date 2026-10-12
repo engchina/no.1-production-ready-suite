@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence
-
+from typing import Any, Literal
 
 CONTENT_VISUAL_ROLE = "content"
 DECORATIVE_VISUAL_ROLE = "decorative"
@@ -407,7 +407,7 @@ def _ensure_raw(record: Any) -> dict[str, Any]:
         if isinstance(record, dict):
             record["raw"] = raw
         else:
-            setattr(record, "raw", raw)
+            record.raw = raw
     return raw
 
 

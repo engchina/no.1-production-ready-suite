@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
-from rag_engine.retrieval.context_builder import ContextParentEvidence
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
-from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_relevance
-from rag_engine.retrieval.task_contract import task_contract, goal_retrieval_queries
-from rag_engine.generation.answer_payload import _evidence_id_key, _int_value, _metadata_image_evidence, _records_for_prompt_injection_scan
-from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.config import Settings, get_llm_provider
+from typing import Any
 
+from rag_engine.config import Settings, get_llm_provider
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.generation.answer_payload import _evidence_id_key, _int_value, _metadata_image_evidence, _records_for_prompt_injection_scan
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
+from rag_engine.retrieval.context_builder import ContextParentEvidence
+from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_relevance
+from rag_engine.retrieval.task_contract import goal_retrieval_queries, task_contract
 
 MAX_ANSWER_IMAGE_ATTACHMENTS = 4
 

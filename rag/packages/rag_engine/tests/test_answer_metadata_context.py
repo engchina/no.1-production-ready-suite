@@ -8,8 +8,8 @@ from rag_engine.chunking import ChunkingConfig, build_small_to_big_chunks
 from rag_engine.generation.answering import AnswerRecord, prompt_injection_warnings_for_records
 from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
 from rag_engine.retrieval.context_builder import (
-    ContextParentEvidence,
     ContextChildEvidence,
+    ContextParentEvidence,
     _parent_context_section,
     context_bundle_from_records,
 )

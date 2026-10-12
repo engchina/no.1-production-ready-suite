@@ -12,8 +12,6 @@ from rag_engine.evaluation.crag_eval import (
     format_crag_eval_summary,
     load_crag_goldset,
 )
-from rag_engine.generation.answering import AnswerContext, AnswerRecord
-from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.evaluation.rag_eval import (
     RagEvalCase,
     RagEvalRetrieval,
@@ -21,7 +19,8 @@ from rag_engine.evaluation.rag_eval import (
     format_rag_eval_summary,
     load_rag_eval_dataset,
 )
-
+from rag_engine.generation.answering import AnswerContext, AnswerRecord
+from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GOLDSET = PROJECT_ROOT / "eval" / "crag_goldset.json"

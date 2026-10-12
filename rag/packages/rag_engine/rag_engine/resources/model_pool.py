@@ -8,13 +8,14 @@ from __future__ import annotations
 同じエンジンを繰り返し試すときに毎回ロードし直すのを避けるためのもの。
 """
 
-from rag_engine.resources.runtime import current_runtime
-
 import gc
 import importlib.util
 import subprocess
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
+from rag_engine.resources.runtime import current_runtime
 
 _lock = threading.Lock()
 _entries: dict[str, tuple[Any, Any, Callable[[], None] | None]] = {}  # key -> (signature, obj, unloader)

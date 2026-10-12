@@ -1,22 +1,22 @@
 """旧提示詞の互換性と Vision の信頼境界・省略情報を保護する。"""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from unittest.mock import patch
 
 from rag_engine.adapters.oci import PictureDescriptionOutput, _compact_schema, _render_prompt
+from rag_engine.knowledge.prompt_files import DEFAULT_IMAGE_RETRIEVAL_PROMPT
 from rag_engine.models.llm import _StrictModel
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description
-from rag_engine.knowledge.prompt_files import DEFAULT_IMAGE_RETRIEVAL_PROMPT
 from rag_engine.parsing.vision_prompt_rules import (
-    vision_extraction_rules,
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
-    RULES_START,
     RULES_END,
+    RULES_START,
     TABLE_EXTRACTION_INSTRUCTION,
     managed_block_warning,
     refine_image_retrieval_prompt,
+    vision_extraction_rules,
 )
 
 
@@ -72,8 +72,9 @@ def test_ambiguous_english_negation_for_prefilled_values_is_replaced_in_saved_te
 def test_context_image_description_does_not_declare_every_red_frame_as_target():
     # 原文の画面写真にも赤枠があるため、metadata と共通規則が同じ判別基準（画像1と一致する枠）を示す。
     from types import SimpleNamespace
-    from rag_engine.parsing.picture_descriptions import _vision_metadata
+
     from rag_engine.models.layout import LayoutRecord
+    from rag_engine.parsing.picture_descriptions import _vision_metadata
 
     record = LayoutRecord(
         id="r1",
@@ -223,8 +224,8 @@ def test_managed_block_warning_only_when_saved_text_differs_from_sent_text():
 
 def test_rules_mark_screenshot_values_as_examples_unless_the_text_specifies_them():
     # 画面の値は例示が原則で、実際の指定値かは周辺本文でしか判断できない (#633)。
-    from rag_engine.parsing.vision_prompt_rules import vision_extraction_rules
     from rag_engine.generation.answer_policy import DOCUMENT_VALUE_POLICY
+    from rag_engine.parsing.vision_prompt_rules import vision_extraction_rules
 
     rules = vision_extraction_rules()
     assert "原則として文書の例示であり" in rules and "「画面例では」「入力例として」を付け" in rules

@@ -10,13 +10,14 @@ from contextvars import copy_context
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
+
 from rag_engine.adapters import oci
 from rag_engine.generation import execution_record, grounded
 from rag_engine.models.llm import GroundedAudit, GroundedDraft
 from rag_engine.resources import deadline as deadlines
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, check_deadline
 from rag_engine.resources.llm_usage import LlmUsage, llm_usage, record_llm_usage, usage_line
-from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
 GOOD = "一覧表を選択し、処理を選択します。"
 

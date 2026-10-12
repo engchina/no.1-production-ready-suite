@@ -1,7 +1,7 @@
 """#369: 過去の経路に現在の一覧出力を固定しない。"""
 
-from rag_engine.retrieval.task_contract import task_contract, current_request_text
 from rag_engine.retrieval.evidence_selection import evidence_relevance
+from rag_engine.retrieval.task_contract import current_request_text, task_contract
 
 QUESTION = (
     "以前は仕入先の一覧を作るときに帳票出力＞条件指定から抽出式を入れて出力する方法を教えてもらったが、配送業者の連絡先の一覧を出力したい。"

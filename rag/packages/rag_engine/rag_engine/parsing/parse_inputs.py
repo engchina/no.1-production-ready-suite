@@ -9,15 +9,14 @@ import os
 import tempfile
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from rag_engine.knowledge.classification import classification_from_metadata
-from rag_engine.parsing.coordinates import clamp_bbox
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.models.layout import LayoutRecord, PageImage
-
+from rag_engine.parsing.coordinates import clamp_bbox
 
 PARSE_INPUT_SCHEMA_VERSION = 1
 PARSE_INPUT_DIRECTORY = "parse_inputs"
@@ -161,7 +160,7 @@ def save_parse_input(
             "engine_id": engine_id,
             "engine_label": engine_label,
             "scope": "whole_file",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
             "options": {
                 "dpi": dpi,
                 "min_confidence": min_confidence,

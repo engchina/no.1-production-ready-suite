@@ -1,17 +1,17 @@
 """ページ進捗の順序逆転・失敗・実行分離を検証する。"""
 
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import unittest
 from unittest.mock import Mock, patch
 
-from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress, ProgressOutputQueue
 from rag_engine.adapters.parsers.base import AnalysisContext
 from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter
 from rag_engine.config import get_settings
 from rag_engine.models.layout import PageImage
+from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress, ProgressOutputQueue
 
 
 def item(page, failed=False):

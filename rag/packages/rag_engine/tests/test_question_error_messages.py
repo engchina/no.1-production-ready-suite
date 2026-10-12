@@ -1,7 +1,8 @@
 """質問が示すエラー文の抽出（task_contract.error_messages）を検証する (#686)。"""
 
-from rag_engine.retrieval.task_contract import error_messages, task_contract
 from fictional_examples import ERROR_MESSAGE_7, ERROR_QUESTION_15
+
+from rag_engine.retrieval.task_contract import error_messages, task_contract
 
 
 def test_quoted_errors_in_a_sentence_about_errors_are_extracted_in_order():

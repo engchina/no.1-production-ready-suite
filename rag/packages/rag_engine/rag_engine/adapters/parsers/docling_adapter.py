@@ -4,20 +4,12 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from html import escape
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import rag_engine.resources.model_pool as model_pool
-from rag_engine.parsing.categories import normalize_category
-from rag_engine.parsing.coordinates import clamp_bbox, pdf_bottom_left_to_image_top_left
-from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
-from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
-from rag_engine.parsing.table_structure import misplaced_cell_repairs, unassigned_table_lines
-from rag_engine.models.layout import LayoutRecord
-from rag_engine.config import Settings
-from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress
-
 from rag_engine.adapters.parsers.base import (
     AdapterAvailability,
     AnalysisContext,
@@ -26,7 +18,14 @@ from rag_engine.adapters.parsers.base import (
     missing_dependency_message,
     object_to_plain,
 )
-
+from rag_engine.config import Settings
+from rag_engine.models.layout import LayoutRecord
+from rag_engine.parsing.categories import normalize_category
+from rag_engine.parsing.coordinates import clamp_bbox, pdf_bottom_left_to_image_top_left
+from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress
+from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
+from rag_engine.parsing.table_structure import misplaced_cell_repairs, unassigned_table_lines
 
 DOCLING_ROW_TOLERANCE_RATIO = 0.005
 # 段組の判定に使う本文ブロックの最小幅（ページ幅比）。3 段組の 1 段（約 28%）は通し、
@@ -920,6 +919,7 @@ def _build_docling_converter(settings: Settings):
     )
     from docling.datamodel.settings import settings as docling_settings
     from docling.document_converter import DocumentConverter, PdfFormatOption
+
     from rag_engine.adapters.parsers.docling_progress import ProgressPdfPipeline
 
     device_value = settings.docling_device.lower()

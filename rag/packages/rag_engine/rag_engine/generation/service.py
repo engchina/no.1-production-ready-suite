@@ -1,7 +1,7 @@
 """根拠を明示して呼び出す回答生成サービス。"""
 
+from rag_engine.models.contracts import AnswerResult, GenerationRequest
 from rag_engine.ports import Generator
-from rag_engine.models.contracts import GenerationRequest, AnswerResult
 
 
 class GenerationService:

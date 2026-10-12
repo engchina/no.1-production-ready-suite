@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import Any
 
 from rag_engine.chunking.constants import (
-    DocumentChunk,
     PROMOTED_TEXT_HEADING_SOURCE,
     ROUTE_CAPTION_HEADING_SOURCE,
     RUNNING_HEAD_HEADING_SOURCE,
     SECTION_CATEGORIES,
     SECTION_HEADER_HEADING_SOURCE,
     TITLE_HEADING_SOURCE,
+    DocumentChunk,
     _boilerplate_text_key,
     _int_value,
 )

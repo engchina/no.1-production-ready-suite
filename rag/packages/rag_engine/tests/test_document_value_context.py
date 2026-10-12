@@ -1,7 +1,8 @@
 """文書の値を今回の実データと同一視しない方針を全回答段階へ渡す。"""
 
-from rag_engine.retrieval.evidence_selection import evidence_spans, format_evidence_packet
 from test_rag_evidence_recovery import rec
+
+from rag_engine.retrieval.evidence_selection import evidence_spans, format_evidence_packet
 
 
 def test_document_context_preserves_source_values_instead_of_deleting_them():

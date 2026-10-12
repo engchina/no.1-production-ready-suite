@@ -1,9 +1,10 @@
 """希望する結果の検索を試行経緯から分離し、原要求は捨てない。"""
 
 import pytest
-from rag_engine.retrieval.task_contract import task_contract, goal_retrieval_queries
-from rag_engine.retrieval.evidence_selection import evidence_relevance
+
 from rag_engine.generation.answering import QueryExpansionResult
+from rag_engine.retrieval.evidence_selection import evidence_relevance
+from rag_engine.retrieval.task_contract import goal_retrieval_queries, task_contract
 
 
 def test_trial_and_hypothesis_do_not_replace_the_goal_or_delete_question():

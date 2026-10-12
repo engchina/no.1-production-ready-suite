@@ -7,20 +7,20 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from rag_engine.resources.jsonl import record_to_legacy_jsonl
+from rag_engine.config import get_settings
+from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.picture_descriptions import (
-    VISION_TARGET_OUTLINE,
     MAX_CHART_SERIES_VALUES,
     MAX_DIAGRAM_NODES,
     MAX_FORM_FIELDS,
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
+    VISION_TARGET_OUTLINE,
     _bounded_vision_description,
     describe_docling_pictures,
     vision_description_text,
 )
-from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.config import get_settings
+from rag_engine.resources.jsonl import record_to_legacy_jsonl
 
 
 class PictureDescriptionTests(unittest.TestCase):

@@ -9,14 +9,15 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+from grounded_stub import AnswerOutput
+
 from rag_engine.chunking.service import ChunkingService
 from rag_engine.chunking.storage import chunk_payload, chunk_result_from_payload, load_chunk_run_by_id, persist_batch
 from rag_engine.composition import create_oracle_application
 from rag_engine.config import get_settings
-from rag_engine.generation.answering import AnswerRecord, MAX_CONTEXT_CHARS
+from rag_engine.generation.answering import MAX_CONTEXT_CHARS, AnswerRecord
 from rag_engine.models.contracts import ChunkRequest, Evidence, GenerationRequest, ParsedDocument
 from rag_engine.models.layout import LayoutRecord
-from grounded_stub import AnswerOutput
 
 
 def output(image_id=""):
@@ -67,8 +68,9 @@ class DocumentIdentityTests(TestCase):
 
 class GeneratorEvidenceTests(TestCase):
     def test_complete_text_of_every_parent_reaches_one_generation_prompt(self):
-        from rag_engine.models.llm import GroundedDraft
         from grounded_stub import echo_model
+
+        from rag_engine.models.llm import GroundedDraft
 
         evidence = tuple(Evidence(f"p{n}", f"START_{n}\n" + "A" * 2900 + f"TAIL_{n}") for n in range(6))
         with TemporaryDirectory() as directory, create_oracle_application(directory) as app:
@@ -244,6 +246,7 @@ class CitationScopeTests(TestCase):
     def test_query_pipeline_keeps_citation_for_duplicate_retrieval_hits(self):
         from copy import deepcopy
         from unittest.mock import Mock
+
         from rag_engine.models.contracts import SearchRequest, SearchResult
         from rag_engine.workflows import QueryPipeline
 

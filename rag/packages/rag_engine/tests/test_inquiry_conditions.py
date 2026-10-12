@@ -187,7 +187,7 @@ if __name__ == "__main__":
 class ActiveChunkProfileTests(unittest.TestCase):
     def test_operation_profile_depends_only_on_trigger_terms(self):
         # Picture / Section-header の有無では変わらない（旧分岐は恒等式だった #885）。
-        from rag_engine.retrieval.inquiry_conditions import _active_chunk_profiles, _trigger_terms, _PROFILE_BY_ID
+        from rag_engine.retrieval.inquiry_conditions import _PROFILE_BY_ID, _active_chunk_profiles, _trigger_terms
 
         term = _trigger_terms(_PROFILE_BY_ID[OPERATION_PROFILE])[0]
         self.assertEqual(_active_chunk_profiles("説明図です。", ["Picture", "Section-header"]), [])

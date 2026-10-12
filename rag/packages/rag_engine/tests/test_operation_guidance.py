@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import pytest
+from test_task_contract_audit import record
 
 from rag_engine.generation.answer_policy import OPERATION_GUIDANCE_POLICY
 from rag_engine.generation.answering import (
@@ -12,7 +13,6 @@ from rag_engine.generation.answering import (
 from rag_engine.knowledge.prompt_files import DEFAULT_VLM_ANSWER_PROMPT
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.task_contract import task_contract
-from test_task_contract_audit import record
 
 
 # 十分性は business_object と relevant な候補で決まる（OR 型、#983）。他の観点の不足や根拠の無い data_confirmation は
@@ -61,7 +61,6 @@ def test_crag_sufficiency_needs_business_object_and_reports_other_gaps(
 
 def test_default_and_optional_evaluation_use_guidance_goal():
     from rag_engine.evaluation.answer_eval import SYSTEM_PROMPT
-
     from rag_engine.generation.grounded import GENERATE_SYSTEM_PROMPT
 
     # 生成 prompt は共有方針の全文を結合せず、items 向けに書いた方針を持つ (#960)。編集可能テンプレートには重複させない。

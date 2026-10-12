@@ -5,18 +5,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from rag_engine.adapters.oracle.store import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     AdbHybridSearchUnavailable,
     normalize_retrieval_scope,
 )
+from rag_engine.config import get_settings
 from rag_engine.generation.answering import AnswerContext, build_adb_hybrid_answer_context
 from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
-from rag_engine.config import get_settings
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class RagEvalRetrieval:
     insufficient_reason: str = ""
 
     @classmethod
-    def from_answer_context(cls, context: AnswerContext) -> "RagEvalRetrieval":
+    def from_answer_context(cls, context: AnswerContext) -> RagEvalRetrieval:
         """AnswerContext から評価用 retrieval summary を作ります。"""
         parent_ids: list[str] = []
         child_ids: list[str] = []

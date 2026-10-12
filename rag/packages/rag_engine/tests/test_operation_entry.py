@@ -1,12 +1,12 @@
 """類似機能の入口、補助根拠の公平な選択、最終公開回答の除去を検証する。"""
 
 import pytest
-
-from rag_engine.retrieval.task_contract import task_contract
-from rag_engine.retrieval.operation_context import operation_labels, alternative_operation_queries
-from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from grounded_stub import AnswerOutput
 from test_rag_evidence_recovery import rec
+
+from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
+from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
+from rag_engine.retrieval.task_contract import task_contract
 
 
 @pytest.mark.parametrize(

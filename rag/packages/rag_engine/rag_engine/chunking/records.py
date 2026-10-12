@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
-from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
-from rag_engine.parsing.table_structure import parse_html_table_structure
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
     ATOMIC_CATEGORIES,
@@ -21,6 +19,9 @@ from rag_engine.chunking.constants import (
     _bool_value,
     _int_value,
 )
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
+from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+from rag_engine.parsing.table_structure import parse_html_table_structure
 
 
 def _record_can_supply_image_evidence(record: dict[str, Any], visual_role: Any | None = None) -> bool:

@@ -10,7 +10,6 @@ from unittest.mock import Mock
 
 from rag_engine.adapters.oracle.connection import connect_adb_thin, download_adb_wallet, load_adb_settings, validate_mtls_wallet
 
-
 ADB_OCID = "ocid1.autonomousdatabase.oc1.ap-osaka-1.example"
 
 

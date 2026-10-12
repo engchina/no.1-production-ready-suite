@@ -2,13 +2,11 @@
 
 import re
 import unittest
-from grounded_stub import echo_model
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from unittest.mock import patch
 
-import rag_engine.generation.answering as generation
-from rag_engine.config import get_settings
+from grounded_stub import echo_model
 from test_answer_generation import (
     _answer_context,
     _chunk_run_stub,
@@ -17,6 +15,9 @@ from test_answer_generation import (
     _rerank_ready_settings,
     heading,
 )
+
+import rag_engine.generation.answering as generation
+from rag_engine.config import get_settings
 
 
 class AnswerExecutionTests(unittest.TestCase):

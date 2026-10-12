@@ -5,9 +5,9 @@
 `domain_profile.json`）から読み込む。書式は `domain_profile.example.json` を参照。
 """
 
-from dataclasses import dataclass
 import json
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 

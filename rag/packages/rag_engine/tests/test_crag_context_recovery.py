@@ -4,11 +4,12 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
+from fictional_examples import ERROR_UNIT_7, ERROR_UNIT_15
+
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_recovery import recover_context_records
-from fictional_examples import ERROR_UNIT_7, ERROR_UNIT_15
 
 
 def record(name, seq, text, level="child", parent="p1", operation="管理-(1)登録", run="run"):

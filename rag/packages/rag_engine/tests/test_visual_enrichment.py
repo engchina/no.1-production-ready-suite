@@ -4,17 +4,17 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
 import pypdfium2 as pdfium
+from PIL import Image
 
 from rag_engine.chunking import ChunkingConfig, build_small_to_big_chunks
+from rag_engine.config import get_settings
+from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
 from rag_engine.parsing.picture_descriptions import describe_docling_pictures
 from rag_engine.parsing.rendering import render_pdf_pages
-from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.config import get_settings
-from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
 from rag_engine.parsing.table_vision import missing_table_image_regions
+from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
 
 
 def _page(root):
@@ -186,7 +186,7 @@ def test_vector_diagram_fallback_ignores_thin_table_rules(tmp_path):
 
 
 def test_restored_table_rebuilds_row_images_at_new_dpi(tmp_path):
-    from rag_engine.parsing.parse_inputs import save_parse_input, load_parse_inputs, file_sha256
+    from rag_engine.parsing.parse_inputs import file_sha256, load_parse_inputs, save_parse_input
     from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
 
     page = _page(tmp_path)

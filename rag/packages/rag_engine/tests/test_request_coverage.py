@@ -11,6 +11,7 @@ import pytest
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeRule, RuntimeTerm
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.request_coverage import (
     CoverageBudget,
@@ -25,8 +26,6 @@ from rag_engine.retrieval.request_coverage import (
     select_new_parents,
     targeted_queries,
 )
-from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeRule, RuntimeTerm
-
 
 _VOCABULARY = re.compile("請求書|請求|再発行|受注|登録|方法|業務|種別|追加|担当|インボイス|承認|取消|締め|語[0-9]")
 

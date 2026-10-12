@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.config import Settings
+from rag_engine.models.layout import LayoutRecord, PageImage
 
 
 @dataclass(frozen=True)

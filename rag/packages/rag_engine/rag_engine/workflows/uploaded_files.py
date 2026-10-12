@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from rag_engine.chunking.storage import CHUNKS_DIRECTORY, load_chunk_run_by_id
 from rag_engine.config import Settings

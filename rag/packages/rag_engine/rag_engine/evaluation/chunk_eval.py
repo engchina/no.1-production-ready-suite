@@ -7,11 +7,12 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
-from rag_engine.generation.answering import _chunk_answer_record, _rerank_document
+from rag_engine.adapters.oci import embed_query, embed_texts, rerank_text_with_scores
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     ChunkingConfig,
@@ -20,9 +21,8 @@ from rag_engine.chunking import (
     build_small_to_big_chunks,
     load_latest_chunk_run,
 )
-from rag_engine.adapters.oci import embed_query, embed_texts, rerank_text_with_scores
 from rag_engine.config import Settings, get_settings
-
+from rag_engine.generation.answering import _chunk_answer_record, _rerank_document
 
 TokenCounter = Callable[[str], int]
 

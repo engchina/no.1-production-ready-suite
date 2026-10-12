@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from rag_engine.adapters.oracle.store import _stored_chunk_from_row, _json_dict
+from rag_engine.adapters.oracle.store import _json_dict, _stored_chunk_from_row
 from rag_engine.generation.answering import AnswerRecord
 from rag_engine.retrieval.context_builder import (
     ContextBuildRequest,
@@ -153,6 +153,7 @@ def test_same_image_id_in_different_documents_is_not_deduplicated(tmp_path):
 
 def test_curated_operation_terms_keep_sources_and_unverified_gaps_inactive():
     from pathlib import Path
+
     from rag_engine.knowledge.runtime_knowledge import load_runtime_knowledge
 
     path = Path(__file__).resolve().parents[1] / "knowledge_assets/runtime_knowledge/operation_evidence_349.json"

@@ -6,37 +6,24 @@ import hashlib
 import json
 import re
 import time
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
-from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
-from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
-from rag_engine.parsing.decorative_pictures import (
-    DECORATIVE_VISUAL_ROLE,
-    INLINE_ICON_VISUAL_ROLE,
-    classify_picture_record,
-    mark_picture_record_role,
-)
-from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
-from rag_engine.retrieval.inquiry_conditions import (
-    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-    build_inquiry_chunk_metadata,
-    inquiry_profile_contract_hash,
-)
 from rag_engine.chunking.constants import (
+    _PAGE_NUMBER_FOOTER_PATTERN,
     ATOMIC_CATEGORIES,
     CHILD_CHUNK_LEVEL,
     CHUNK_METADATA_SCHEMA_VERSION,
     CHUNK_SCHEMA_VERSION,
     CHUNK_STRATEGY,
-    ChunkingConfig,
     DEFAULT_CHILD_SEARCH_TEXT_MAX_CHARS,
-    DocumentChunk,
     METADATA_ONLY_CATEGORIES,
     PARENT_CHUNK_LEVEL,
     RUN_ID_PATTERN,
     SEARCH_TEXT_SCHEMA_VERSION,
     SECTION_CATEGORIES,
-    _PAGE_NUMBER_FOOTER_PATTERN,
+    ChunkingConfig,
+    DocumentChunk,
     _boilerplate_text_key,
     _clean_search_text,
     _int_value,
@@ -47,19 +34,7 @@ from rag_engine.chunking.constants import (
     _token_estimate,
     _unique_refs,
 )
-from rag_engine.chunking.records import (
-    _buffer_has_body,
-    _form_record_text,
-    _image_fallback_text,
-    _is_attached_atomic_annotation,
-    _is_form_like_record,
-    _join_records_text,
-    _record_can_supply_image_evidence,
-    _record_text,
-    _record_text_for_chunk,
-    _record_visual_role,
-    _records_char_count,
-)
+from rag_engine.chunking.evidence import _source_record_ref
 from rag_engine.chunking.headings import (
     _SENTENCE_BOUNDARY_PATTERN,
     _merge_logical_page_labels,
@@ -76,21 +51,47 @@ from rag_engine.chunking.layout import (
     _attached_layout_annotations_for_targets,
     _inline_icons_by_merge_target,
     _is_excluded_page_boilerplate_record,
-    _is_section_banner_text,
     _is_page_boilerplate_item,
+    _is_section_banner_text,
     _table_contained_visual_ids,
     _visual_group_key,
     _visual_groups,
 )
+from rag_engine.chunking.metadata import _chunk_metadata, _project_chunk_metadata, _validate_chunk_metadata_v4
+from rag_engine.chunking.records import (
+    _buffer_has_body,
+    _form_record_text,
+    _image_fallback_text,
+    _is_attached_atomic_annotation,
+    _is_form_like_record,
+    _join_records_text,
+    _record_can_supply_image_evidence,
+    _record_text,
+    _record_text_for_chunk,
+    _record_visual_role,
+    _records_char_count,
+)
+from rag_engine.chunking.search_text import _child_search_text, _without_screen_examples
 from rag_engine.chunking.tables import (
     _paired_picture_ocr_text,
     _table_record_with_metadata,
     _table_row_group_records,
     _table_supplements_by_table,
 )
-from rag_engine.chunking.evidence import _source_record_ref
-from rag_engine.chunking.search_text import _child_search_text, _without_screen_examples
-from rag_engine.chunking.metadata import _chunk_metadata, _project_chunk_metadata, _validate_chunk_metadata_v4
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
+from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
+from rag_engine.parsing.decorative_pictures import (
+    DECORATIVE_VISUAL_ROLE,
+    INLINE_ICON_VISUAL_ROLE,
+    classify_picture_record,
+    mark_picture_record_role,
+)
+from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
+from rag_engine.retrieval.inquiry_conditions import (
+    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
+    build_inquiry_chunk_metadata,
+    inquiry_profile_contract_hash,
+)
 
 
 def build_small_to_big_chunks(

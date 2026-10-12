@@ -3,12 +3,12 @@
 from dataclasses import replace
 
 import pytest
+from fictional_examples import STEP_3, STEP_4, STEP_5
+from test_rag_evidence_recovery import rec
 
 from rag_engine.generation.answering import AnswerContext, _visual_evidence_anchors
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
-from rag_engine.retrieval.evidence_selection import evidence_spans, _child_ranges
-from fictional_examples import STEP_3, STEP_4, STEP_5
-from test_rag_evidence_recovery import rec
+from rag_engine.retrieval.evidence_selection import _child_ranges, evidence_spans
 
 
 def fixture_context():

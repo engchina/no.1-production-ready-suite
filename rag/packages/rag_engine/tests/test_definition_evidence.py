@@ -6,14 +6,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from grounded_stub import AnswerOutput
 
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, label_mentioned
-from rag_engine.retrieval.task_contract import task_contract
-from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query, TextSearchTokenizerConfig
-from rag_engine.retrieval.evidence_selection import evidence_spans, evidence_excerpt, format_evidence_packet
 from rag_engine.generation.answering import AnswerRecord
 from rag_engine.generation.operation_audit import answer_passages
-from grounded_stub import AnswerOutput
+from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, label_mentioned
+from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_spans, format_evidence_packet
+from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/definition_short_labels.json").read_text())
 QUESTION = FIXTURE["question"]

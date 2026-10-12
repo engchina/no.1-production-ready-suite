@@ -5,17 +5,18 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from rag_engine.parsing.analysis import analyze_pdf, preview_pdf
+from test_adb_vector_store import _CaptureConnection
+from test_analysis_full_file import _Adapter, _analysis_patches
+
 from rag_engine.adapters.oracle.store import _chunk_row, _upsert_document
 from rag_engine.chunking import create_chunk_run, load_chunk_run_by_id
-from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.config import get_settings
+from rag_engine.knowledge.document_metadata import normalize_document_metadata
+from rag_engine.parsing.analysis import analyze_pdf, preview_pdf
 from rag_engine.retrieval.context_builder import context_bundle_from_records
-from types import SimpleNamespace
-from test_analysis_full_file import _Adapter, _analysis_patches
-from test_adb_vector_store import _CaptureConnection
 
 
 class DocumentMetadataTests(unittest.TestCase):

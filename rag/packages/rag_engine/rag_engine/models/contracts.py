@@ -1,11 +1,12 @@
 """UI・プロバイダー・保存形式に依存しない同期 SDK の契約。"""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.chunking import ChunkingConfig, DocumentChunk
+from rag_engine.models.layout import LayoutRecord, PageImage
 
 
 @dataclass(frozen=True)

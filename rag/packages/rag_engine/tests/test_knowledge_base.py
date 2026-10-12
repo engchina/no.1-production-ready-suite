@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 from rag_engine.adapters.oracle.store import EmbeddingSaveResult
 from rag_engine.chunking import ChunkingConfig, ChunkingResult
+from rag_engine.config import get_settings
 from rag_engine.knowledge.classification import classification_from_selection
 from rag_engine.workflows.knowledge_base import format_knowledge_registration_result, register_source_file_for_rag
-from rag_engine.config import get_settings
 
 
 class KnowledgeBaseRegistrationTests(unittest.TestCase):
@@ -90,13 +90,13 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
             with (
                 patch("rag_engine.workflows.knowledge_base.analyze_pdf", return_value=failed),
                 patch("rag_engine.workflows.knowledge_base.create_chunk_run") as chunk,
+                self.assertRaisesRegex(RuntimeError, "Docling boom"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "Docling boom"):
-                    register_source_file_for_rag(
-                        source_path=source,
-                        engine_ids=["docling"],
-                        settings=replace(get_settings(), output_dir=Path(tmp) / "runs"),
-                    )
+                register_source_file_for_rag(
+                    source_path=source,
+                    engine_ids=["docling"],
+                    settings=replace(get_settings(), output_dir=Path(tmp) / "runs"),
+                )
         chunk.assert_not_called()
 
 

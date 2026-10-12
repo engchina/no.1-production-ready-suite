@@ -2,23 +2,24 @@
 
 from dataclasses import replace
 from time import monotonic
+
+from rag_engine.chunking import ChunkingConfig
+from rag_engine.generation.service import GenerationService
+from rag_engine.indexing import IndexingService
 from rag_engine.models.contracts import (
-    ParseRequest,
+    AnswerResult,
     ChunkRequest,
+    GenerationRequest,
     IndexRequest,
     IndexResult,
+    ParseRequest,
     SearchRequest,
-    GenerationRequest,
-    AnswerResult,
-    TraceStep,
     StageError,
+    TraceStep,
 )
-from rag_engine.chunking import ChunkingConfig
-from rag_engine.ports import Parser, Chunker, Indexer, Retriever, Generator, Reranker, QueryPlanner
 from rag_engine.parsing.service import ParsingService
-from rag_engine.indexing import IndexingService
+from rag_engine.ports import Chunker, Generator, Indexer, Parser, QueryPlanner, Reranker, Retriever
 from rag_engine.retrieval.service import RetrievalService
-from rag_engine.generation.service import GenerationService
 
 
 def _stage(name, trace, operation):

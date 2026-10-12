@@ -3,8 +3,10 @@
 import json
 import re
 import unittest
-from unittest.mock import patch
 from dataclasses import replace
+from unittest.mock import patch
+
+from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -18,7 +20,6 @@ from rag_engine.generation.answering import (
     synthesize_grounded_answer,
 )
 from rag_engine.models.llm import GroundedDraft, GroundedItem
-from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
 LIST_TEXT = "●集計表出力\n一覧表を選択し、処理を選択します。\n実行ボタンを押して完了します。"
 LIMIT_TEXT = "帳票印刷\nファイル出力は顧客名簿にのみ適用されます。"
@@ -821,8 +822,9 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_generation_prompt_names_only_fields_the_model_can_write_or_read(self):
         import re
-        from rag_engine.generation.answering import _answer_image_metadata
         from typing import get_args
+
+        from rag_engine.generation.answering import _answer_image_metadata
         from rag_engine.models.llm import ExternalDataItem, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
 
@@ -889,6 +891,7 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_prompts_account_for_every_applies_and_applicability_value(self):
         from typing import get_args
+
         from rag_engine.models.llm import GroundedItem, GroundedItemReview
 
         # スキーマが許す値のうち、prompt が説明しない値をモデルに選ばせない。

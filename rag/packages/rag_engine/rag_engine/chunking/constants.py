@@ -6,9 +6,9 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Literal, Sequence
-
+from typing import Any, Literal
 
 CHUNK_SCHEMA_VERSION = 3
 CHUNK_STRATEGY = "small_to_big_parent_child"
@@ -109,7 +109,7 @@ class ChunkingConfig:
     search_text_context_max_chars: int = DEFAULT_SEARCH_TEXT_CONTEXT_MAX_CHARS
     child_search_text_max_chars: int = DEFAULT_CHILD_SEARCH_TEXT_MAX_CHARS
 
-    def validate(self) -> "ChunkingConfig":
+    def validate(self) -> ChunkingConfig:
         """チャンキング設定が許容範囲内かを検証します。"""
         return ChunkingConfig(
             child_target_chars=_checked_int(

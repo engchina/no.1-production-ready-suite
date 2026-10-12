@@ -6,9 +6,9 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from rag_engine.evaluation.chunk_eval import audit_variants, evidence_metrics, evaluate_cohere_variants, load_token_counter, main
 from rag_engine.adapters.oci import RerankTextRank
 from rag_engine.config import get_settings
+from rag_engine.evaluation.chunk_eval import audit_variants, evaluate_cohere_variants, evidence_metrics, load_token_counter, main
 
 
 def payload():

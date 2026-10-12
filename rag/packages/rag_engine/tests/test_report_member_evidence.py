@@ -1,8 +1,8 @@
 """明細確認の要求と、同じ機能の選択から完了までの本文を保持する。"""
 
-from rag_engine.retrieval.task_contract import task_contract
 from rag_engine.retrieval.evidence_selection import evidence_excerpt
 from rag_engine.retrieval.result_granularity import aggregate_only_evidence
+from rag_engine.retrieval.task_contract import task_contract
 
 
 def test_member_request_requires_method_and_population_boundary():

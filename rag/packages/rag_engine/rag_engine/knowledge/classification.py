@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from rag_engine.resources.runtime import current_profile
+from typing import Any
+
 from rag_engine.profiles import load_profile
-from typing import Any, Iterable, Sequence
+from rag_engine.resources.runtime import current_profile
 
 
 def _category_label_without_code(value: str) -> str:

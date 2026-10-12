@@ -9,10 +9,10 @@ import pypdfium2 as pdfium
 from PIL import Image
 
 from rag_engine.chunking import ChunkingConfig, build_small_to_big_chunks
+from rag_engine.config import get_settings
+from rag_engine.models.layout import LayoutRecord
 from rag_engine.parsing.picture_descriptions import describe_docling_pictures
 from rag_engine.parsing.rendering import render_pdf_pages
-from rag_engine.models.layout import LayoutRecord
-from rag_engine.config import get_settings
 from rag_engine.parsing.table_vision import missing_table_image_regions
 
 

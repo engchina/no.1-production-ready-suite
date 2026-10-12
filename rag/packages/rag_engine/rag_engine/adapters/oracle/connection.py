@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import threading
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from rag_engine.config import DEFAULT_OCI_CONFIG_FILE, DEFAULT_OCI_PROFILE, load_dotenv
-
 
 DEFAULT_ADB_DB_NAME = "AIRAGADB"
 DEFAULT_ADB_DB_USER = "admin"
@@ -232,10 +232,9 @@ def validate_mtls_wallet(settings: AdbSettings) -> None:
 
 def smoke_test_adb_connection(settings: AdbSettings) -> int:
     """ADB に接続して select 1 による疎通確認を実行します。"""
-    with connect_adb_thin(settings) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("select 1 from dual")
-            row = cursor.fetchone()
+    with connect_adb_thin(settings) as connection, connection.cursor() as cursor:
+        cursor.execute("select 1 from dual")
+        row = cursor.fetchone()
     if not row:
         raise RuntimeError("ADB smoke test returned no rows.")
     return int(row[0])

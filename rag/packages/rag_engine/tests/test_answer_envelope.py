@@ -4,8 +4,9 @@ import json
 import unittest
 from pathlib import Path
 
-from rag_engine.generation.answer_envelope import build_envelope, envelope_requests, fallback_envelope
 from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
+
+from rag_engine.generation.answer_envelope import build_envelope, envelope_requests, fallback_envelope
 
 
 class AnswerEnvelopeFromGroundedAnswerTest(unittest.TestCase):

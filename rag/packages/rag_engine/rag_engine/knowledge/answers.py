@@ -1,19 +1,21 @@
 """通常回答と FAQ 直答の保存・履歴管理を共有する。"""
 
 from __future__ import annotations
+
 import hashlib
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from dataclasses import dataclass
+
 from rag_engine.knowledge.approved_faq import (
     APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-    ApprovedFaqSuggestion,
     DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
+    ApprovedFaqSuggestion,
 )
-from rag_engine.resources.filesystem import FileArtifactStore
 from rag_engine.ports import ArtifactStore
+from rag_engine.resources.filesystem import FileArtifactStore
 
 APPROVED_FAQ_DIRECT_ANSWER_FLOW = "approved_faq_direct"
 
@@ -23,7 +25,7 @@ APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL = "Approved FAQ"
 
 
 def _approved_faq_direct_answer_run_id(suggestion: ApprovedFaqSuggestion, question: str) -> str:
-    seed = f"{suggestion.record.id}\0{question}".encode("utf-8")
+    seed = f"{suggestion.record.id}\0{question}".encode()
     return f"approved-faq-{hashlib.sha256(seed).hexdigest()[:16]}"
 
 
@@ -124,7 +126,7 @@ def _approved_faq_direct_answer_payload(
 
 
 def _create_answer_id(run_id: str, question: str) -> str:
-    seed = f"{run_id}\0{time.time_ns()}\0{question}".encode("utf-8")
+    seed = f"{run_id}\0{time.time_ns()}\0{question}".encode()
     return hashlib.sha256(seed).hexdigest()[:16]
 
 

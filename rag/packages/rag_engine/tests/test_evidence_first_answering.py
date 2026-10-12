@@ -4,19 +4,19 @@ from unittest.mock import patch
 
 import pytest
 
-from rag_engine.generation.answering import AnswerContext, AnswerRecord, _crag_grade_candidates, _merge_crag_evidence, answer_image_evidence
-from rag_engine.retrieval.evidence_selection import evidence_packet
-from rag_engine.retrieval.task_contract import task_contract
-from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.evaluation.answer_eval import (
     AnswerEvaluationOutput,
     ClaimCheck,
     CoverageCheck,
     StandardAnswerScope,
     StandardRequirement,
-    evaluate_answer_payload,
     _evidence_fragments,
+    evaluate_answer_payload,
 )
+from rag_engine.generation.answering import AnswerContext, AnswerRecord, _crag_grade_candidates, _merge_crag_evidence, answer_image_evidence
+from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
+from rag_engine.retrieval.evidence_selection import evidence_packet
+from rag_engine.retrieval.task_contract import task_contract
 
 
 def record(key, text, **kwargs):
@@ -91,9 +91,10 @@ def test_crag_prompt_limits_insufficiency_and_carries_no_output_example():
 
 def test_crag_grade_forces_candidates_without_the_asked_error_to_irrelevant():
     """質問のエラー文を含まない候補は、評価器が true と言っても relevant=false。表記差のあるエラー文は残る (#999)。"""
+    from test_task_contract_audit import record
+
     from rag_engine.generation.answering import _grade_crag_retrieval
     from rag_engine.models.llm import CragRetrievalGradeOutput
-    from test_task_contract_audit import record
 
     question = "入荷検品チェックリストで『仕入先コードが未登録です』のエラーが出ている。どうすればよいか。"
     assert task_contract(question)["error_messages"] == ["仕入先コードが未登録です"]

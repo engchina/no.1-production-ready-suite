@@ -7,12 +7,11 @@ import re
 import shutil
 import threading
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
-from rag_engine.resources.runtime import current_runtime
 
 from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
-
+from rag_engine.resources.runtime import current_runtime
 
 PROJECT_ROOT = Path.cwd()
 # runtime なしの呼出（Gradio の Prompt 設定、UI からの解析）が使う保存先。UI の回答生成は
@@ -311,10 +310,10 @@ def _unique_backup_path(prompt_file: PromptFile, saved_at: datetime) -> Path:
 
 def _utc_now(now: datetime | None) -> datetime:
     if now is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:

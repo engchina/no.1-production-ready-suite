@@ -6,16 +6,17 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any
 
 from rag_engine.adapters.oracle.connection import connect_adb_thin, load_adb_settings
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     CHILD_SEARCH_TEXT_HEADER,
-    CHUNKS_DIRECTORY,
     CHUNK_METADATA_SCHEMA_VERSION,
+    CHUNKS_DIRECTORY,
     LATEST_CHUNKS_FILE,
     ChunkingResult,
     DocumentChunk,
@@ -23,7 +24,6 @@ from rag_engine.chunking import (
 )
 from rag_engine.knowledge.domain_keywords import normalize_domain_keyword, normalize_domain_keywords
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query
-
 
 DEFAULT_DOMAIN_KEYWORD_CANDIDATE_LIMIT = 300
 DEFAULT_DOMAIN_KEYWORD_SOURCE_CHUNK_LIMIT = 2000

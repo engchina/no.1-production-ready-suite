@@ -2,8 +2,8 @@
 
 import json
 from dataclasses import replace
-from tempfile import TemporaryDirectory
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pytest
@@ -11,19 +11,19 @@ from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.evaluation.answer_eval import (
-    AnswerEvaluationOutput,
-    evaluate_answer_payload,
     MAX_EVALUATION_INPUT_BYTES,
-    _input_bytes,
-    StandardAnswerScope,
-    StandardRequirement,
+    AnswerEvaluationOutput,
     ClaimCheck,
     CoverageCheck,
-    _prepare_standard_scope,
-    _evaluate_batch,
     EvaluationContractError,
+    StandardAnswerScope,
+    StandardRequirement,
+    _evaluate_batch,
+    _input_bytes,
+    _prepare_standard_scope,
+    evaluate_answer_payload,
 )
-from rag_engine.generation.answering import AnswerQuestionResult, parse_answer_response, AnswerRecord, answer_evidence_items
+from rag_engine.generation.answering import AnswerQuestionResult, AnswerRecord, answer_evidence_items, parse_answer_response
 from rag_engine.knowledge.answers import save_answer_result
 
 
@@ -280,6 +280,7 @@ def test_long_reasons_are_not_repeated_in_next_batch():
 
 def test_tight_remaining_budget_splits_fragments_without_losing_unicode():
     from collections import deque
+
     from rag_engine.evaluation.answer_eval import _next_batch
 
     text = '😀\\"\n' * 500

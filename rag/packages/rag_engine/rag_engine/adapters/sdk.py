@@ -1,20 +1,20 @@
 """既存 Docling / Oracle / OCI 実装を SDK の機能契約へ接続する。"""
 
-from dataclasses import asdict, replace
 import json
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, replace
 
 from rag_engine.config import Settings
 from rag_engine.models.contracts import (
-    ParseRequest,
-    ParsedDocument,
-    IndexRequest,
-    IndexResult,
-    SearchRequest,
-    SearchResult,
+    AnswerResult,
     Evidence,
     GenerationRequest,
-    AnswerResult,
+    IndexRequest,
+    IndexResult,
+    ParsedDocument,
+    ParseRequest,
+    SearchRequest,
+    SearchResult,
     TraceStep,
 )
 from rag_engine.ports import Embedder
@@ -92,8 +92,8 @@ class OracleIndexer:
         """親子チャンク manifest と ADB 索引を保存する。失敗結果は例外に変換する。"""
         if request.collection != "knowledge_base":
             raise ValueError("OracleIndexer supports collection='knowledge_base'; use index_id to search a chunk run")
-        from rag_engine.chunking.storage import persist_batch
         from rag_engine.adapters.oracle.store import save_chunk_run_embeddings
+        from rag_engine.chunking.storage import persist_batch
 
         with self.runtime.activate():
             result = persist_batch(request.batch, output_dir=self.settings.output_dir)
@@ -120,8 +120,8 @@ class OracleRetriever:
 
     def retrieve(self, request: SearchRequest) -> SearchResult:
         """knowledge_base または IndexResult.index_id を検索する。fallback は行わない。"""
-        from rag_engine.generation.answering import build_adb_hybrid_answer_context
         from rag_engine.adapters.oracle.store import check_adb_hybrid_search_ready
+        from rag_engine.generation.answering import build_adb_hybrid_answer_context
         from rag_engine.knowledge.classification import REQUEST_FILTER_KEYS, classification_filter_from_values
 
         request.validate()

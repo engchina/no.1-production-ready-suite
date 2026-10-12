@@ -2,7 +2,7 @@
 
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -36,8 +36,8 @@ class DomainKeywordsTests(unittest.TestCase):
     def test_save_and_load_keywords_with_backup(self):
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
-            first_time = datetime(2026, 9, 3, 1, 2, 3, tzinfo=timezone.utc)
-            second_time = datetime(2026, 9, 3, 1, 2, 4, tzinfo=timezone.utc)
+            first_time = datetime(2026, 9, 3, 1, 2, 3, tzinfo=UTC)
+            second_time = datetime(2026, 9, 3, 1, 2, 4, tzinfo=UTC)
 
             first = save_domain_keywords(output_dir, ["契約区分", "出庫伝票"], now=first_time)
             second = save_domain_keywords(output_dir, ["契約区分"], now=second_time)

@@ -4,23 +4,24 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterable, Sequence
-from rag_engine.models.storage import StoredChunk
+from typing import Any
+
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, DEFAULT_RETRIEVAL_TOP_K, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
+from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _normalize_text
+from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
+from rag_engine.models.llm import RerankTextRank
+from rag_engine.models.storage import StoredChunk
+from rag_engine.parsing.vision_prompt_rules import VISION_SENTENCE_GROUP_PREFIX
+from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.context_builder import context_bundle_from_records
 from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_expansion_record はここからも参照できる
     is_entity_expansion_record,
     is_reserved_entity_expansion,
 )
-from rag_engine.resources.runtime import current_profile
-from rag_engine.models.llm import RerankTextRank
-from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
-from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _normalize_text
-from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
-from rag_engine.parsing.vision_prompt_rules import VISION_SENTENCE_GROUP_PREFIX
-
 
 RUN_ID_PATTERN = re.compile(r"[0-9a-f]{6,64}\Z")
 

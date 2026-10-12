@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import re
-from importlib.metadata import version, PackageNotFoundError
 import time
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+import rag_engine.resources.model_pool as model_pool
 from rag_engine.adapters.parsers import ENGINE_LABELS, ENGINE_ORDER, build_adapters
 from rag_engine.adapters.parsers.base import AnalysisContext
-import rag_engine.resources.model_pool as model_pool
 from rag_engine.knowledge.classification import classification_from_metadata
-from rag_engine.resources.jsonl import write_jsonl
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.parsing.pages import parse_page_range
 from rag_engine.parsing.parse_inputs import RestoredParseInput, file_sha256, load_parse_inputs, save_parse_input
 from rag_engine.parsing.rendering import get_source_page_count, prepare_source_for_analysis, source_frame_warnings
+from rag_engine.resources.jsonl import write_jsonl
 
 
 def _installed_parser_version(engine_id: str) -> str | None:
@@ -30,9 +30,9 @@ def _installed_parser_version(engine_id: str) -> str | None:
         return None
 
 
+from rag_engine.config import Settings
 from rag_engine.models.layout import AnalysisRun, EngineStatus, LayoutRecord, PageImage, write_json
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, file_digest, load_base_checkpoint, save_base_checkpoint
-from rag_engine.config import Settings
 from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
 
 

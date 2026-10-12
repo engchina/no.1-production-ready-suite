@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from html.parser import HTMLParser
-from typing import Any, Sequence
-
+from typing import Any
 
 DEFAULT_TABLE_ROW_GROUP_TARGET_CHARS = 900
 # Vision 由来の HTML に極端な rowspan/colspan があっても、span の展開量を入力値に比例させない。

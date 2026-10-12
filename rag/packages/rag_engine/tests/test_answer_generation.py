@@ -2,8 +2,8 @@
 
 import json
 import re
-import unittest
 import unicodedata
+import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -28,13 +28,18 @@ def display_offset(display: str, section) -> int:
     return display.index(section)
 
 
+from grounded_stub import AnswerOutput
+
+from rag_engine.adapters.oci import (
+    CragRetrievalGradeOutput,
+    QueryExpansionOutput,
+    QueryRoutingOutput,
+    RerankTextRank,
+    UsedImageOutput,
+)
+from rag_engine.chunking import ChunkingConfig, create_chunk_run
+from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
-    AnswerRecord,
-    parse_answer_response,
-    _synthesize_answer_from_context,
-    synthesize_grounded_answer,
-    AnswerContext,
-    QueryExpansionResult,
     ANSWER_FLOW_DISPLAY_SEPARATOR,
     AUTO_ROUTING_LABEL,
     AUTO_ROUTING_STRATEGY,
@@ -56,38 +61,34 @@ from rag_engine.generation.answering import (
     STANDARD_ANSWER_FLOW_LABEL,
     STEP_BACK_PROMPTING_LABEL,
     STEP_BACK_PROMPTING_STRATEGY,
+    AnswerContext,
+    AnswerRecord,
+    QueryExpansionResult,
+    _synthesize_answer_from_context,
+    answer_evidence_items,
     answer_flow_id,
     answer_image_evidence,
     answer_question,
     answer_question_result,
-    answer_evidence_items,
     answer_result_payload,
-    build_chunk_answer_context,
     build_answer_context,
+    build_chunk_answer_context,
     build_query_expansion,
     extract_original_question,
     format_answer_response,
     load_answer_chunks,
     load_answer_records,
+    parse_answer_response,
     preferred_records,
     query_strategy_id,
     rank_records,
     rank_records_with_rrf,
     rerank_records,
+    synthesize_grounded_answer,
     validate_run_id,
 )
-from rag_engine.chunking import ChunkingConfig, create_chunk_run
 from rag_engine.knowledge.classification import classification_filter_from_values
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
-from rag_engine.adapters.oci import (
-    CragRetrievalGradeOutput,
-    QueryExpansionOutput,
-    QueryRoutingOutput,
-    RerankTextRank,
-    UsedImageOutput,
-)
-from grounded_stub import AnswerOutput
-from rag_engine.config import get_settings
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
 
 
@@ -164,8 +165,9 @@ class AnswerGenerationTests(unittest.TestCase):
 
     def test_text_and_vision_generation_apply_policy_with_custom_prompt(self):
         """独自テンプレートでも方針は system 側で渡り、画像添付時だけ生成が multimodal になる。"""
-        from rag_engine.generation import grounded
         from grounded_stub import echo_model
+
+        from rag_engine.generation import grounded
 
         context = _answer_context([_chunk_record("c1", "child", 1, "p1", "文書の操作手順")])
         for mode, parser in (("text_only", "parse_text_response"), ("vision_attachments", "parse_multimodal_response")):
@@ -1094,7 +1096,9 @@ class AnswerGenerationTests(unittest.TestCase):
     def test_routing_output_schema_constrains_strategy_to_routable_ids(self):
         """strategy は schema の enum で戦略 ID に制約し、プロンプトは ID と表示名を併記する (#919)。"""
         from typing import get_args
+
         from pydantic import ValidationError
+
         from rag_engine.generation.answering import _ROUTABLE_QUERY_STRATEGIES, query_strategy_label
         from rag_engine.generation.query_prompts import _build_query_routing_prompt
 

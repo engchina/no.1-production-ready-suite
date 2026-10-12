@@ -2,10 +2,10 @@
 
 import hashlib
 import json
-from datetime import date
 import re
 import unittest
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -15,9 +15,9 @@ from rag_engine.adapters.oracle.store import (
     EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
     StoredChunk,
-    _combine_hybrid_scores,
     _chunk_uid,
     _classification_filter_sql,
+    _combine_hybrid_scores,
     _hybrid_chunk_sort_key,
     _metadata_filter_sql,
     _retrieval_text_hash,
@@ -36,9 +36,9 @@ from rag_engine.chunking import (
     ChunkingResult,
     DocumentChunk,
 )
+from rag_engine.config import get_settings
 from rag_engine.knowledge.classification import classification_filter_from_values
 from rag_engine.retrieval.inquiry_conditions import FILE_DATA_PROFILE, InquiryMetadataFilter, parse_inquiry_conditions
-from rag_engine.config import get_settings
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 
@@ -1792,6 +1792,7 @@ def test_display_regions_are_stored_once_and_restored_on_load():
     """表示領域は専用列だけに保存し、読込時に metadata へ戻す。旧形式の行もそのまま読める。"""
     import json
     from types import SimpleNamespace
+
     from rag_engine.adapters.oracle.store import _chunk_row, _stored_chunk_from_row
 
     regions = [{"page": 1, "boxes": [{"bbox": [1.0, 2.0, 3.0, 4.0]}]}]
@@ -1849,6 +1850,7 @@ def test_first_page_context_is_stored_once_per_document_and_restored_on_load():
     """同じ第1ページ本文を全 chunk 行へ複製しない。旧形式の行が持つ値は上書きしない。"""
     import json
     from types import SimpleNamespace
+
     from rag_engine.adapters.oracle.store import StoredChunk, _first_page_contexts, _restore_first_page_contexts, _row_metadata
 
     context = {"page": 1, "status": "available", "text": "表紙の本文", "engine": "docling"}
@@ -1903,6 +1905,7 @@ def test_first_page_context_is_stored_once_per_document_and_restored_on_load():
 
 def test_profile_channel_can_be_switched_off_for_ablation():
     from dataclasses import replace as _replace
+
     from rag_engine.adapters.oracle import store
 
     store._pool_cache.clear()

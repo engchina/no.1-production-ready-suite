@@ -8,95 +8,43 @@ import json
 import logging
 import re
 import unicodedata
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
-from concurrent.futures import Future, ThreadPoolExecutor
 from time import monotonic
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
-from rag_engine.models.storage import AdbHybridSearchUnavailable
-from rag_engine.dependencies import check_adb_hybrid_search_ready, injected_prefetch_search, search_adb_hybrid_chunks
-from rag_engine.retrieval.scope import (
-    AdbSearchReadiness,
-    RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-    normalize_retrieval_scope,
-)
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     DEFAULT_NEIGHBOR_CHILD_COUNT,
     DEFAULT_RETRIEVAL_TOP_K,
-    load_latest_or_source_chunk_run,
     load_chunk_run_by_id,
+    load_latest_or_source_chunk_run,
 )
-from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
-from rag_engine.retrieval.context_builder import (
-    MAX_ANCHORS_PER_PARENT,
-    ContextBuildRequest,
-    ContextParentEvidence,
-    build_chunk_context_bundle,
-    context_bundle_from_parent_evidence,
-    context_bundle_from_records,
-    should_include_image_evidence,
+from rag_engine.config import (
+    LLM_PURPOSE_AUDIT,
+    LLM_PURPOSE_GENERATION,
+    LLM_PURPOSE_JUDGE,
+    LLM_PURPOSE_STRATEGY,
+    Settings,
+    llm_reasoning_effort_note,
+    settings_for_llm_purpose,
 )
-from rag_engine.knowledge.domain_keywords import load_domain_keywords
-from rag_engine.resources.runtime import current_profile
-from rag_engine.retrieval.inquiry_conditions import (
-    InquiryConditionParse,
-    inquiry_retrieval_queries,
-    parse_inquiry_conditions,
+from rag_engine.dependencies import (
+    check_adb_hybrid_search_ready,
+    injected_prefetch_search,
+    parse_multimodal_response,
+    parse_text_response,
+    rerank_text_with_scores,
+    search_adb_hybrid_chunks,
 )
-from rag_engine.retrieval.character_forms import fold_width
-from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
-from rag_engine.retrieval.task_contract import task_contract, filter_queries, query_rejection_reason
-from rag_engine.retrieval.enumeration import enumeration_check
-from rag_engine.retrieval.request_coverage import (
-    COVERAGE_SCHEMA_VERSION,
-    CoverageBudget,
-    assess_targets,
-    coverage_counts,
-    coverage_targets,
-    evidence_texts,
-    re_retrieval_skip_reason,
-    run_targeted_retrievals,
-    select_new_parents,
-)
-from rag_engine.retrieval.evidence_selection import evidence_spans, new_evidence_count as _new_evidence_count
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
-from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
-from rag_engine.dependencies import parse_multimodal_response, parse_text_response, rerank_text_with_scores
-from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
-from rag_engine.retrieval.operation_context import alternative_operation_queries
-from rag_engine.knowledge.prompt_files import (
-    VLM_ANSWER_PROMPT_KEY,
-    neutralize_boundary_markers,
-    read_prompt,
-    render_prompt_template,
-)
-from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
-from rag_engine.generation.query_prompts import (
-    MAX_GENERATED_QUERY_COUNT,
-    _base_query_expansion,
-    _build_query_expansion_prompt,
-    _build_query_routing_prompt,
-    _dedupe_generated_queries,
-    _generated_queries_from_payload,
-    _limited_text_search_query_variants,
-    _query_expansion_details,
-    _retrieval_metadata_filter,
-    _retrieval_queries,
-    _text_search_query_source,
-)
-from rag_engine.generation.crag_support import (
-    MAX_GENERATED_QUERY_CHARS,
-    _build_crag_grade_prompt,
-    _crag_confidence,
-    _crag_grade_candidates,
-    _format_crag_confidence,
-    _merge_crag_evidence,
-    _record_matches_crag_relevant_ids,
-    _refine_crag_context,
-    _valid_crag_rewrite,
+from rag_engine.generation.answer_envelope import (
+    REFERENCE_CONFIRMATION_PREFIX,
+    build_envelope,
+    envelope_item,
+    fallback_envelope,
+    requires_environment_data,
 )
 from rag_engine.generation.answer_images import (
     _answer_image_metadata,
@@ -106,6 +54,76 @@ from rag_engine.generation.answer_images import (
     _visual_evidence_anchors,
     answer_image_evidence,
     prompt_injection_warnings_for_records,
+)
+from rag_engine.generation.answer_models import (
+    ANSWER_FLOW_DISPLAY_SEPARATOR,
+    ANSWER_FLOWS,
+    AUTO_ROUTING_LABEL,
+    AUTO_ROUTING_STRATEGY,
+    CRAG_ANSWER_FLOW,
+    CRAG_ANSWER_FLOW_LABEL,
+    CRAG_MAX_RETRIEVAL_ATTEMPTS,
+    DEFAULT_ANSWER_FLOW,
+    DEFAULT_ANSWER_FLOW_LABEL,
+    DEFAULT_QUERY_STRATEGY,
+    DEFAULT_QUERY_STRATEGY_LABEL,
+    HYDE_LABEL,
+    HYDE_STRATEGY,
+    QUERY_DECOMPOSITION_LABEL,
+    QUERY_DECOMPOSITION_STRATEGY,
+    QUERY_EXPANSION_SEPARATOR,
+    QUERY_STRATEGIES,
+    QUERY_STRATEGY_DISPLAY_SEPARATOR,  # tests/test_answer_execution.py が answering 経由で参照する
+    QUESTION_DISPLAY_METADATA_SEPARATOR,
+    QUESTION_PLAN_SEPARATOR,
+    QUESTION_TEXT_SEARCH_SEPARATOR,
+    RAG_FUSION_LABEL,
+    RAG_FUSION_STRATEGY,
+    RUNTIME_KNOWLEDGE_SEPARATOR,
+    SIMPLE_RETRIEVAL_LABEL,
+    SIMPLE_RETRIEVAL_STRATEGY,
+    STANDARD_ANSWER_FLOW,
+    STANDARD_ANSWER_FLOW_LABEL,
+    STEP_BACK_PROMPTING_LABEL,
+    STEP_BACK_PROMPTING_STRATEGY,
+    AnswerContext,
+    AnswerQuestionResult,
+    AnswerRecord,
+    AnswerResponse,
+    CragRetrievalAttempt,
+    GroundedAnswer,
+    QueryExpansionResult,
+    QuestionTextSearchInfo,
+    RetrievalQueryPlan,
+    _dedupe_queries,
+    _dedupe_query_key,
+    _legacy_crag_query_strategy,
+    _normalize_text,
+    answer_flow_id,
+    answer_flow_label,
+    extract_original_question,
+    query_strategy_id,
+    query_strategy_label,
+    retrieval_scope_label,
+)
+from rag_engine.generation.answer_payload import (
+    _answer_record_identity_keys,
+    _evidence_id_key,
+    _format_answer_response,
+    _metadata_image_evidence,
+    _normalize_answer_response,
+    _primary_source_run_id,
+    _published_reference_records,
+    _records_for_prompt_injection_scan,
+    _rerank_scores_from_evidence,
+    _string_list,
+    _used_image_entries,
+    _used_image_ids,
+    answer_evidence_items,
+    answer_result_payload,
+    format_answer_response,
+    format_references,
+    parse_answer_response,
 )
 from rag_engine.generation.answer_records import (
     MAX_CONTEXT_RECORDS,
@@ -130,105 +148,95 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
-from rag_engine.generation.answer_payload import (
-    _answer_record_identity_keys,
-    _evidence_id_key,
-    _format_answer_response,
-    _metadata_image_evidence,
-    _normalize_answer_response,
-    _primary_source_run_id,
-    _published_reference_records,
-    _records_for_prompt_injection_scan,
-    _rerank_scores_from_evidence,
-    _string_list,
-    _used_image_entries,
-    _used_image_ids,
-    answer_evidence_items,
-    answer_result_payload,
-    format_answer_response,
-    format_references,
-    parse_answer_response,
+from rag_engine.generation.crag_support import (
+    MAX_GENERATED_QUERY_CHARS,
+    _build_crag_grade_prompt,
+    _crag_confidence,
+    _crag_grade_candidates,
+    _format_crag_confidence,
+    _merge_crag_evidence,
+    _record_matches_crag_relevant_ids,
+    _refine_crag_context,
+    _valid_crag_rewrite,
 )
 from rag_engine.generation.execution_record import (
     AnswerExecutionError,
-    _ExecutionStep,
     _execution_lines,
     _execution_step,
+    _ExecutionStep,
     _record_answer_execution,
     format_question_display,
 )
-from rag_engine.generation.answer_envelope import (
-    REFERENCE_CONFIRMATION_PREFIX,
-    build_envelope,
-    envelope_item,
-    fallback_envelope,
-    requires_environment_data,
+from rag_engine.generation.query_prompts import (
+    MAX_GENERATED_QUERY_COUNT,
+    _base_query_expansion,
+    _build_query_expansion_prompt,
+    _build_query_routing_prompt,
+    _dedupe_generated_queries,
+    _generated_queries_from_payload,
+    _limited_text_search_query_variants,
+    _query_expansion_details,
+    _retrieval_metadata_filter,
+    _retrieval_queries,
+    _text_search_query_source,
 )
-from rag_engine.generation.answer_models import (
-    ANSWER_FLOWS,
-    QUERY_STRATEGY_DISPLAY_SEPARATOR,  # tests/test_answer_execution.py が answering 経由で参照する
-    ANSWER_FLOW_DISPLAY_SEPARATOR,
-    CRAG_MAX_RETRIEVAL_ATTEMPTS,
-    AUTO_ROUTING_LABEL,
-    AUTO_ROUTING_STRATEGY,
-    AnswerContext,
-    AnswerQuestionResult,
-    AnswerRecord,
-    AnswerResponse,
-    CRAG_ANSWER_FLOW,
-    CRAG_ANSWER_FLOW_LABEL,
-    CragRetrievalAttempt,
-    DEFAULT_ANSWER_FLOW,
-    DEFAULT_ANSWER_FLOW_LABEL,
-    DEFAULT_QUERY_STRATEGY,
-    DEFAULT_QUERY_STRATEGY_LABEL,
-    GroundedAnswer,
-    HYDE_LABEL,
-    HYDE_STRATEGY,
-    QUERY_DECOMPOSITION_LABEL,
-    QUERY_DECOMPOSITION_STRATEGY,
-    QUERY_EXPANSION_SEPARATOR,
-    QUERY_STRATEGIES,
-    QUESTION_DISPLAY_METADATA_SEPARATOR,
-    QUESTION_PLAN_SEPARATOR,
-    QUESTION_TEXT_SEARCH_SEPARATOR,
-    QueryExpansionResult,
-    QuestionTextSearchInfo,
-    RAG_FUSION_LABEL,
-    RAG_FUSION_STRATEGY,
-    RUNTIME_KNOWLEDGE_SEPARATOR,
-    RetrievalQueryPlan,
-    SIMPLE_RETRIEVAL_LABEL,
-    SIMPLE_RETRIEVAL_STRATEGY,
-    STANDARD_ANSWER_FLOW,
-    STANDARD_ANSWER_FLOW_LABEL,
-    STEP_BACK_PROMPTING_LABEL,
-    STEP_BACK_PROMPTING_STRATEGY,
-    _dedupe_queries,
-    _dedupe_query_key,
-    _legacy_crag_query_strategy,
-    _normalize_text,
-    answer_flow_id,
-    answer_flow_label,
-    extract_original_question,
-    query_strategy_id,
-    query_strategy_label,
-    retrieval_scope_label,
+from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
+from rag_engine.knowledge.domain_keywords import load_domain_keywords
+from rag_engine.knowledge.prompt_files import (
+    VLM_ANSWER_PROMPT_KEY,
+    neutralize_boundary_markers,
+    read_prompt,
+    render_prompt_template,
 )
 from rag_engine.knowledge.runtime_knowledge import (
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
     runtime_knowledge_status,
 )
-from rag_engine.config import (
-    LLM_PURPOSE_AUDIT,
-    LLM_PURPOSE_GENERATION,
-    LLM_PURPOSE_JUDGE,
-    LLM_PURPOSE_STRATEGY,
-    Settings,
-    llm_reasoning_effort_note,
-    settings_for_llm_purpose,
+from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
+from rag_engine.models.storage import AdbHybridSearchUnavailable
+from rag_engine.resources.runtime import current_profile
+from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.context_builder import (
+    MAX_ANCHORS_PER_PARENT,
+    ContextBuildRequest,
+    ContextParentEvidence,
+    build_chunk_context_bundle,
+    context_bundle_from_parent_evidence,
+    context_bundle_from_records,
+    should_include_image_evidence,
 )
+from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records, recover_definition_records
+from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+from rag_engine.retrieval.enumeration import enumeration_check
+from rag_engine.retrieval.evidence_selection import evidence_spans
+from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
+from rag_engine.retrieval.inquiry_conditions import (
+    InquiryConditionParse,
+    inquiry_retrieval_queries,
+    parse_inquiry_conditions,
+)
+from rag_engine.retrieval.operation_context import alternative_operation_queries
+from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
+from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
+from rag_engine.retrieval.request_coverage import (
+    COVERAGE_SCHEMA_VERSION,
+    CoverageBudget,
+    assess_targets,
+    coverage_counts,
+    coverage_targets,
+    evidence_texts,
+    re_retrieval_skip_reason,
+    run_targeted_retrievals,
+    select_new_parents,
+)
+from rag_engine.retrieval.scope import (
+    RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
+    RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+    AdbSearchReadiness,
+    normalize_retrieval_scope,
+)
+from rag_engine.retrieval.task_contract import filter_queries, query_rejection_reason, task_contract
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
@@ -240,7 +248,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
     tokenize_text_search_query_with_trace,
     tokenizer_fingerprint,
 )
-
 
 logger = logging.getLogger(__name__)
 

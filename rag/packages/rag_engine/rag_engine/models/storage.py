@@ -1,6 +1,7 @@
 """外部 SDK に依存しない既存データ契約。"""
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 

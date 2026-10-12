@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE
-from rag_engine.parsing.picture_text import LEGACY_PICTURE_OCR_TEXT_LABELS, PICTURE_OCR_TEXT_LABEL
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
     ATOMIC_CATEGORIES,
@@ -34,6 +33,8 @@ from rag_engine.chunking.records import (
     _table_structure,
     _visual_group_key,
 )
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE
+from rag_engine.parsing.picture_text import LEGACY_PICTURE_OCR_TEXT_LABELS, PICTURE_OCR_TEXT_LABEL
 
 
 def _is_excluded_page_boilerplate_record(

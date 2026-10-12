@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 from rag_engine.retrieval.task_contract import task_contract
 

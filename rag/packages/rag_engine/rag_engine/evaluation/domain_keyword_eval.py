@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
+from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable
+from rag_engine.chunking import load_latest_or_source_chunk_run
+from rag_engine.config import get_settings
+from rag_engine.evaluation.rag_eval import RagEvalCase, load_rag_eval_dataset
 from rag_engine.generation.answering import (
     AnswerContext,
     _lexical_retrieval_queries,
@@ -16,11 +21,7 @@ from rag_engine.generation.answering import (
     build_adb_hybrid_answer_context,
     build_question_text_search_info,
 )
-from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable
-from rag_engine.chunking import load_latest_or_source_chunk_run
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
-from rag_engine.evaluation.rag_eval import RagEvalCase, load_rag_eval_dataset
-from rag_engine.config import get_settings
 
 
 def score_context(case: RagEvalCase, context: AnswerContext, top_k: int) -> dict[str, Any]:

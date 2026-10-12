@@ -8,9 +8,9 @@ payload の検証を生成の出力形式から独立させる。
 import re
 from unittest.mock import patch
 
-from rag_engine.generation import answering, grounded
 from pydantic import BaseModel, ConfigDict
 
+from rag_engine.generation import answering, grounded
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, UsedImageOutput
 
 

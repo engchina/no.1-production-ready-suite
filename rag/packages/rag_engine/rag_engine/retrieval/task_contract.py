@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import copy
 import re
-from functools import lru_cache
 import unicodedata
-from typing import Any, Sequence
+from collections.abc import Sequence
+from functools import lru_cache
+from typing import Any
+
 from rag_engine.retrieval.definition_evidence import definition_labels
 from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, enumeration_request
-
 
 # 質問や item が名指しする業務上の対象（画面・帳票・文書）。接尾辞は文書の一般的な種別語だけで、業務固有の名称は含めない。
 OBJECT_SUFFIX = r"(?:画面|台帳|名簿|帳票|情報|サービス|一覧表|集計表|一覧|リスト|[一-龯]{1,3}(?:書|表|票|証|券))"

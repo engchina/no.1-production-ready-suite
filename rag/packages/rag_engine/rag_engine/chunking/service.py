@@ -2,11 +2,12 @@
 
 from copy import deepcopy
 from dataclasses import asdict
-from rag_engine.chunking import build_small_to_big_chunks
-from rag_engine.models.contracts import ChunkRequest, ChunkBatch
-from rag_engine.profiles import DomainProfile
-from rag_engine.resources.runtime import Runtime, ResourcePaths
 from pathlib import Path
+
+from rag_engine.chunking import build_small_to_big_chunks
+from rag_engine.models.contracts import ChunkBatch, ChunkRequest
+from rag_engine.profiles import DomainProfile
+from rag_engine.resources.runtime import ResourcePaths, Runtime
 
 
 class ChunkingService:

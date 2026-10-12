@@ -1,16 +1,6 @@
 """OCI/OpenAI 互換 LLM、rerank、embedding の呼び出しを抽象化する。"""
 
 from __future__ import annotations
-from rag_engine.models.llm import (
-    RerankTextRank,
-    PictureDescriptionOutput,
-    QueryRoutingOutput,
-    QueryExpansionOutput,
-    CragRetrievalGradeOutput,
-    UsedImageOutput,
-    TextOutput,
-)
-
 
 import base64
 import json
@@ -20,23 +10,13 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
-from rag_engine.resources.cache import application_cache
-from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_usage, response_usage
-from rag_engine.resources.deadline import (
-    DeadlineExceeded,
-    check_deadline,
-    current_deadline,
-    expire_deadline,
-    remaining_seconds,
-)
 from pathlib import Path
-from typing import Any, Sequence, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
-from rag_engine.parsing.vision_prompt_rules import TABLE_EXTRACTION_INSTRUCTION, refine_image_retrieval_prompt
 from rag_engine.config import (
     DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS,
     OPENAI_RESPONSES_LLM_API_MODE,
@@ -45,7 +25,26 @@ from rag_engine.config import (
     get_llm_provider,
     oci_inference_endpoint,
 )
-
+from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
+from rag_engine.models.llm import (
+    CragRetrievalGradeOutput,
+    PictureDescriptionOutput,
+    QueryExpansionOutput,
+    QueryRoutingOutput,
+    RerankTextRank,
+    TextOutput,
+    UsedImageOutput,
+)
+from rag_engine.parsing.vision_prompt_rules import TABLE_EXTRACTION_INSTRUCTION, refine_image_retrieval_prompt
+from rag_engine.resources.cache import application_cache
+from rag_engine.resources.deadline import (
+    DeadlineExceeded,
+    check_deadline,
+    current_deadline,
+    expire_deadline,
+    remaining_seconds,
+)
+from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_usage, response_usage
 
 VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。JSONだけを返してください。"
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
@@ -1282,7 +1281,7 @@ def _rerank_text_once(
     ranks_with_scores: list[RerankTextRank] = []
     for rank in ranks:
         try:
-            index = int(getattr(rank, "index"))
+            index = int(rank.index)
         except (TypeError, ValueError):
             continue
         relevance_score = _optional_float(getattr(rank, "relevance_score", None))

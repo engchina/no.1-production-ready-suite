@@ -45,13 +45,13 @@ from typing import Any
 
 from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
-from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, minimum_scope
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
 from rag_engine.retrieval.context_builder import (
     ContextChildEvidence,
     ContextParentEvidence,
     context_bundle_from_parent_evidence,
 )
+from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, minimum_scope
 
 # 根の章節（文書全体）の id。backend の ``section_chunk_map.ROOT_SECTION_ID`` と同じ。
 ROOT_SECTION_ID = "document"

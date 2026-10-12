@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import re
 import hashlib
 import json
+import re
 import unicodedata
-from typing import Any, Collection, Sequence
+from collections.abc import Collection, Sequence
+from typing import Any
 
-from rag_engine.retrieval.task_contract import task_contract, current_request_text, goal_retrieval_queries
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
+from rag_engine.retrieval.task_contract import current_request_text, goal_retrieval_queries, task_contract
 
 
 def _record_page_end(record: Any) -> int:
@@ -516,8 +517,9 @@ def _local_child_path(child: Any, preceding: str) -> tuple[str, ...]:
     章切替直後のchildにも旧章metadataが残るため、本文中の独立した見出し行と
     metadataの完全一致を要求する。名称から操作入口の存在は推論しない。
     """
-    from rag_engine.retrieval.operation_context import operation_labels
     from types import SimpleNamespace
+
+    from rag_engine.retrieval.operation_context import operation_labels
 
     path = tuple((getattr(child, "metadata", {}) or {}).get("section_path", []))
 

@@ -11,14 +11,14 @@ import re
 import shutil
 import unicodedata
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from rag_engine.knowledge.answer_feedback import ANSWER_FEEDBACK_TYPE_VALUES
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
-
 
 PROJECT_ROOT = Path.cwd()
 APPROVED_FAQ_FILE = PROJECT_ROOT / "knowledge_assets" / "approved_faq" / "approved_faq_golden_qa.json"
@@ -1452,10 +1452,10 @@ def _unique_backup_path(path: Path, backup_dir: Path, saved_at: datetime) -> Pat
 
 def _utc_now(now: datetime | None) -> datetime:
     if now is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:

@@ -1,20 +1,22 @@
 """既存バックエンドの構築を集約する composition root。"""
 
 from __future__ import annotations
+
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
+
 from rag_engine.config import Settings
-from rag_engine.profiles import DomainProfile
-from rag_engine.ports import ArtifactStore, Embedder
-from rag_engine.resources.runtime import Runtime
 from rag_engine.dependencies import AnswerDependencies
+from rag_engine.ports import ArtifactStore, Embedder
+from rag_engine.profiles import DomainProfile
+from rag_engine.resources.runtime import Runtime
 
 
 def oracle_answer_dependencies() -> AnswerDependencies:
     """既存 Oracle/OCI 関数を束ねる。ここでは接続・モデル読込を行わない。"""
-    from rag_engine.adapters.oracle.store import search_adb_hybrid_chunks, check_adb_hybrid_search_ready
-    from rag_engine.adapters.oci import parse_text_response, parse_multimodal_response, rerank_text_with_scores
+    from rag_engine.adapters.oci import parse_multimodal_response, parse_text_response, rerank_text_with_scores
+    from rag_engine.adapters.oracle.store import check_adb_hybrid_search_ready, search_adb_hybrid_chunks
 
     return AnswerDependencies(
         search_adb_hybrid_chunks, check_adb_hybrid_search_ready, parse_text_response, parse_multimodal_response, rerank_text_with_scores
@@ -33,11 +35,11 @@ class OracleApplication:
         artifact_store: ArtifactStore | None = None,
         embedder: Embedder | None = None,
     ):
-        from rag_engine.adapters.sdk import DocumentParser, OracleIndexer, OracleRetriever, OciGenerator
+        from rag_engine.adapters.sdk import DocumentParser, OciGenerator, OracleIndexer, OracleRetriever
         from rag_engine.chunking.service import ChunkingService
-        from rag_engine.workflows import IngestionPipeline, QueryPipeline
         from rag_engine.generation.application import AnswerService
         from rag_engine.knowledge.service import KnowledgeService
+        from rag_engine.workflows import IngestionPipeline, QueryPipeline
 
         self.settings, self.runtime = settings, runtime
         self.parser = DocumentParser(settings, runtime, engines=tuple(settings.enabled_engines))
@@ -86,9 +88,9 @@ def create_oracle_application(
     embedder は索引と検索 query の両方に使う。dependencies を明示した場合、その search は変更しない。
     """
     from rag_engine.config import get_settings
-    from rag_engine.profiles import load_profile, DomainProfile
-    from rag_engine.resources.runtime import Runtime, ResourcePaths
+    from rag_engine.profiles import DomainProfile, load_profile
     from rag_engine.resources.pool import ModelPool
+    from rag_engine.resources.runtime import ResourcePaths, Runtime
 
     workspace = Path(workspace).resolve()
     chosen = load_profile(profile) if isinstance(profile, str) else profile

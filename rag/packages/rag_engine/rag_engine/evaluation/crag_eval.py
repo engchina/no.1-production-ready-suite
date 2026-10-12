@@ -7,12 +7,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
-
 
 CRAG_EVAL_VARIANTS = ("standard_rag", "crag", "crag_rerank")
 

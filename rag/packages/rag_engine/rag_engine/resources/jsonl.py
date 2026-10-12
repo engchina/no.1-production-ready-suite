@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
-from rag_engine.parsing.coordinates import image_top_left_to_pdf_bottom_left
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.coordinates import image_top_left_to_pdf_bottom_left
 
 
 def record_to_legacy_jsonl(record: LayoutRecord, page: PageImage | None = None) -> dict:

@@ -1,7 +1,8 @@
 """アプリが所有するモデルプール。共有 singleton を要求しない。"""
 
+from collections.abc import Callable
 from threading import RLock
-from typing import Callable, Any
+from typing import Any
 
 
 class ModelPool:

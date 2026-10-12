@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
-from rag_engine.knowledge.document_metadata import normalize_first_page_context
-from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
 from rag_engine.chunking.constants import (
     CHUNK_METADATA_SCHEMA_VERSION,
     HEADING_SOURCES,
@@ -17,7 +15,6 @@ from rag_engine.chunking.constants import (
     _string_list,
     _text_sha256,
 )
-from rag_engine.chunking.tables import _table_context
 from rag_engine.chunking.evidence import (
     _caption_context,
     _display_regions,
@@ -31,6 +28,10 @@ from rag_engine.chunking.evidence import (
     _source_categories,
     _table_image_evidence,
 )
+from rag_engine.chunking.tables import _table_context
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
+from rag_engine.knowledge.document_metadata import normalize_first_page_context
+from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
 
 
 def _chunk_metadata(

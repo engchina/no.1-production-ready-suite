@@ -1,8 +1,11 @@
 """チャンキングの互換画面向け表示変換。"""
 
 from __future__ import annotations
+
 import json
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from rag_engine.chunking import ChunkingResult, DocumentChunk, _format_seq_ranges, _page_span, _preview
 
 

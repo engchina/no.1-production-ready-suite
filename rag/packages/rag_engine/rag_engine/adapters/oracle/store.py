@@ -1,28 +1,28 @@
 """ADB に保存したチャンク embedding を使う hybrid search と保存処理。"""
 
 from __future__ import annotations
-from rag_engine.models.storage import (
-    AdbHybridSearchUnavailable,
-    AdbEmbeddingsUnavailable,
-    EmbeddingSaveResult,
-    EmbeddingStatusResult,
-    StoredChunk,
-    HybridSearchResult,
-)
-
 
 import array
 import hashlib
-import time
 import json
-from copy import deepcopy
-from datetime import date
 import re
+import time
 import unicodedata
+from collections.abc import Callable, Iterable, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence, TypeVar
+from typing import Any, TypeVar
 
+from rag_engine.adapters.oci import (
+    EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
+    EMBEDDING_INPUT_TYPE_SEARCH_QUERY,
+    _is_retryable_error,
+    embed_images,
+    embed_query,
+    embed_texts,
+)
 from rag_engine.adapters.oracle.connection import connect_adb_thin, load_adb_settings
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
@@ -32,6 +32,7 @@ from rag_engine.chunking import (
     DocumentChunk,
     load_latest_or_source_chunk_run,
 )
+from rag_engine.config import RRF_K, Settings
 from rag_engine.knowledge.classification import (
     DEFAULT_CATEGORY_VALUE,
     LARGE_CATEGORIES,
@@ -39,30 +40,29 @@ from rag_engine.knowledge.classification import (
     ClassificationFilter,
     classification_filter_from_values,
 )
+from rag_engine.knowledge.domain_keywords import load_domain_keywords
+from rag_engine.models.storage import (
+    AdbEmbeddingsUnavailable,
+    AdbHybridSearchUnavailable,
+    EmbeddingSaveResult,
+    EmbeddingStatusResult,
+    HybridSearchResult,
+    StoredChunk,
+)
 from rag_engine.parsing.decorative_pictures import (
     DECORATIVE_VISUAL_ROLE,
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
-from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
     InquiryMetadataFilter,
     profile_channel_rankings,
 )
-from rag_engine.adapters.oci import (
-    EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
-    embed_images,
-    EMBEDDING_INPUT_TYPE_SEARCH_QUERY,
-    embed_query,
-    embed_texts,
-    _is_retryable_error,
-)
-from rag_engine.config import RRF_K, Settings
 from rag_engine.retrieval.scope import (
-    AdbSearchReadiness,
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+    AdbSearchReadiness,
     normalize_retrieval_scope,
 )
 from rag_engine.retrieval.text_search_tokenizer import (
@@ -71,7 +71,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TextSearchTokenizerConfig,
     oracle_text_query_for_question,
 )
-
 
 # 原質問以外の検索文（用語補助・LLM拡張・語彙・質問理解・CRAGの書き換え）全体の票の合計。
 # 各検索文を 1.0 で足すと、検索文が10本前後のとき原質問の票が1割になり、無関係な

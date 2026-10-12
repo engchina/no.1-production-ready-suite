@@ -1,25 +1,25 @@
 """チャンキングの実行成果物の永続化。"""
 
 from __future__ import annotations
+
 import hashlib
 import json
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
-from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
-from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
-from rag_engine.knowledge.document_metadata import normalize_document_metadata
+from typing import Any
+
 from rag_engine.chunking import (
-    CHUNKS_DIRECTORY,
     CHUNK_METADATA_SCHEMA_VERSION,
     CHUNK_SCHEMA_VERSION,
     CHUNK_STRATEGY,
-    ChunkingConfig,
-    ChunkingResult,
+    CHUNKS_DIRECTORY,
     LATEST_CHUNKS_FILE,
     RUN_ID_PATTERN,
     SEARCH_TEXT_SCHEMA_VERSION,
+    ChunkingConfig,
+    ChunkingResult,
     _bool_value,
     _chunk_from_payload,
     _chunking_config_from_payload,
@@ -34,6 +34,9 @@ from rag_engine.chunking import (
     build_small_to_big_chunks,
     validate_run_id,
 )
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
+from rag_engine.knowledge.document_metadata import normalize_document_metadata
+from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
 
 
 def create_chunk_run(
@@ -59,7 +62,7 @@ def create_chunk_run(
     document_classification = classification_from_metadata(classification if classification is not None else payload.get("classification"))
     selected_engine_ids = _effective_engine_ids(payload, preferred_engine_ids)
     chunking_config = (config or ChunkingConfig()).validate()
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     source_file_sha256 = _optional_file_sha256(Path(output_dir) / source_run_id / "source.pdf")
     source_page_count = _source_page_count(payload)
     chunks = build_small_to_big_chunks(
@@ -457,7 +460,7 @@ def _write_jsonl(path: Path, payloads: Iterable[dict[str, Any]]) -> None:
 
 def persist_batch(batch, *, output_dir: str | Path) -> ChunkingResult:
     """SDK の分割済みデータを既存 manifest 形式で保存する。再分割はしない。"""
-    from rag_engine.chunking import _config_hash, _create_chunk_run_id, CHUNKS_DIRECTORY, LATEST_CHUNKS_FILE
+    from rag_engine.chunking import CHUNKS_DIRECTORY, LATEST_CHUNKS_FILE, _config_hash, _create_chunk_run_id
 
     document = batch.document
     source_id = validate_run_id(document.source_run_id or document.document_id)
@@ -466,7 +469,7 @@ def persist_batch(batch, *, output_dir: str | Path) -> ChunkingResult:
     run_id = _create_chunk_run_id(source_id, config_hash)
     directory = Path(output_dir) / source_id / CHUNKS_DIRECTORY / run_id
     latest = directory.parent / LATEST_CHUNKS_FILE
-    created = datetime.now(timezone.utc).isoformat()
+    created = datetime.now(UTC).isoformat()
     result = ChunkingResult(
         source_id,
         run_id,

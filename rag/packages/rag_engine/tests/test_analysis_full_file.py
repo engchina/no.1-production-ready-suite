@@ -9,12 +9,12 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter
-from rag_engine.knowledge.classification import classification_from_selection
-from rag_engine.parsing.parse_inputs import parse_input_path
-from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.config import get_settings
+from rag_engine.knowledge.classification import classification_from_selection
+from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.analysis import analyze_pdf
+from rag_engine.parsing.parse_inputs import parse_input_path
 
 
 class FullFileAnalysisTests(unittest.TestCase):

@@ -2,9 +2,10 @@
 
 from dataclasses import replace
 
+from fictional_examples import ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3
+
 from rag_engine.generation.answering import AnswerRecord
 from rag_engine.retrieval.evidence_selection import _same_unit_first, evidence_spans
-from fictional_examples import ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3
 
 
 def _parent(index, path, source="月次締めエラー一覧.pdf", text=None):

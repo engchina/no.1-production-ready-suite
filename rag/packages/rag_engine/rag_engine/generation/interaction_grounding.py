@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 _KEY = r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])"
 _LABEL = r"[一-龯々ァ-ヶー]{1,24}"

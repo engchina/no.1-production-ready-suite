@@ -16,13 +16,13 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
+from rag_engine.generation.answer_records import _stored_chunk_answer_record
 from rag_engine.generation.answering import (
     _grounded_spans,
     _known_gaps,
     _section_evidence_budget,
     synthesize_grounded_answer,
 )
-from rag_engine.generation.answer_records import _stored_chunk_answer_record
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.models.storage import StoredChunk
 from rag_engine.retrieval.context_builder import (

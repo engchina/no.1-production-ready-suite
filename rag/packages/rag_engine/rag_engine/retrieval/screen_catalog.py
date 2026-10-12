@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from typing import Any, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 from pydantic import BaseModel, Field
 

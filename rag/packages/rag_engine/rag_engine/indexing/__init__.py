@@ -1,7 +1,7 @@
 """指定された索引実装へチャンクを保存する。"""
 
-from rag_engine.ports import Indexer
 from rag_engine.models.contracts import IndexRequest, IndexResult
+from rag_engine.ports import Indexer
 
 
 class IndexingService:

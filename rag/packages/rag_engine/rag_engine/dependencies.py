@@ -4,10 +4,11 @@
 互換呼び出しの既定実装は composition root で遅延構築する。
 """
 
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)

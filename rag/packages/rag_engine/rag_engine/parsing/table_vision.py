@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rag_engine.parsing.rendering import _PDFIUM_LOCK, _import_pdfium
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.rendering import _PDFIUM_LOCK, _import_pdfium
 
 
 def missing_table_image_regions(

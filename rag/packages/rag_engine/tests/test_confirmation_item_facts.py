@@ -7,11 +7,12 @@
 LLM は差し替える。
 """
 
-from dataclasses import replace
 import itertools
 import unittest
+from dataclasses import replace
 
 from test_grounded_answer import FakeModel, audit, context, draft, ids
+
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
@@ -25,8 +26,8 @@ from rag_engine.generation.answer_envelope import (
     requires_environment_data,
     settle_confirmation_items,
 )
-from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.answer_models import AnswerRecord
+from rag_engine.generation.answering import synthesize_grounded_answer
 
 ROLE = "操作する利用者が「ポータル管理者」ロールを持つか（自分で操作するか、依頼するかを決める）"
 APPROVAL = "削除対象アカウントの所属部署の部門長の承認が得られているか（承認の無い削除を行わないため）"

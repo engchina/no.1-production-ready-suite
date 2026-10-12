@@ -26,9 +26,8 @@ class PageRangeTests(unittest.TestCase):
 
     def test_rejects_uninterpretable_parts_with_japanese_guidance(self):
         for value in ("abc", "1-", "-3", "1-2-3"):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "解釈できません"):
-                    parse_page_range(value, 10)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "解釈できません"):
+                parse_page_range(value, 10)
 
     def test_rejects_when_no_page_is_in_range(self):
         with self.assertRaisesRegex(ValueError, "有効なページ番号がありません"):

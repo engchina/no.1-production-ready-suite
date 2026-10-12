@@ -8,9 +8,10 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
+
 from rag_engine.generation import answering, grounded
 from rag_engine.models.llm import GroundedItem
-from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
 GOOD = "一覧表を選択し、処理を選択します。"
 

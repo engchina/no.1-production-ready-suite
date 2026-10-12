@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-
 CoordSystem = Literal["image_top_left", "pdf_bottom_left", "normalized_top_left"]
 
 

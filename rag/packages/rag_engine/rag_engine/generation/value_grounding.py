@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Sequence
-
+from collections.abc import Sequence
+from typing import Any
 
 _IMAGE_MARKER = re.compile(r"回答用本文:|視覚種別:|画面/メニュー:|OCR抽出テキスト:")
 _RULE = re.compile(r"許容範囲|入力範囲|入力可能範囲|上限|下限|最大|最小|必須値|初期値|既定値|デフォルト|[0-9]+\s*桁")

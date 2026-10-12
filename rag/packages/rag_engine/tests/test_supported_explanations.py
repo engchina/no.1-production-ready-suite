@@ -2,8 +2,9 @@
 
 import unittest
 
-from rag_engine.generation.operation_audit import answer_passages
 from grounded_stub import AnswerOutput
+
+from rag_engine.generation.operation_audit import answer_passages
 
 
 def make_output(text):

@@ -57,11 +57,12 @@ def setup_images(tmp_path, *, exists=True, provider="enterprise-ai-vision"):
 
 
 def test_vision_off_keeps_image_through_parsing_chunking_and_embedding(tmp_path):
-    from rag_engine.adapters.oracle.store import save_chunk_run_embeddings, EMBEDDING_MODALITY_IMAGE
-    from rag_engine.chunking import create_chunk_run, load_chunk_run_by_id
-    from rag_engine.parsing.analysis import analyze_pdf
-    from rag_engine.models.layout import LayoutRecord, PageImage
     from test_adb_vector_store import _FakeConnection
+
+    from rag_engine.adapters.oracle.store import EMBEDDING_MODALITY_IMAGE, save_chunk_run_embeddings
+    from rag_engine.chunking import create_chunk_run, load_chunk_run_by_id
+    from rag_engine.models.layout import LayoutRecord, PageImage
+    from rag_engine.parsing.analysis import analyze_pdf
 
     source = tmp_path / "guide.pdf"
     source.write_bytes(b"synthetic pdf")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+
 from rag_engine.config import get_settings
 from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.parsing.checkpoints import load_base_checkpoint

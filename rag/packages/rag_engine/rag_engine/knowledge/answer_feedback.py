@@ -6,10 +6,9 @@ import hashlib
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
-
 
 ANSWER_FEEDBACK_SCHEMA_VERSION = 1
 ANSWER_FEEDBACK_DIR_NAME = "answer_feedback"
@@ -159,12 +158,12 @@ def _safe_path_part(value: str, label: str) -> str:
 
 def _create_feedback_id(*, run_id: str, answer_id: str, feedback_type: str, created_at: str) -> str:
     # created_at は秒精度なので、同一秒の送信でも ID が重ならないよう time_ns を加える。
-    seed = f"{run_id}\0{answer_id}\0{feedback_type}\0{created_at}\0{time.time_ns()}".encode("utf-8")
+    seed = f"{run_id}\0{answer_id}\0{feedback_type}\0{created_at}\0{time.time_ns()}".encode()
     return hashlib.sha256(seed).hexdigest()[:16]
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _clean_text(value: Any) -> str:

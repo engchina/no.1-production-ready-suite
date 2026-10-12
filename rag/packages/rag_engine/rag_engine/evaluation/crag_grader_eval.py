@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 LABEL_SCHEMA_VERSION = 1
 

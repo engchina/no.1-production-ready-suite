@@ -9,6 +9,8 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
+from test_answer_generation import _answer_context, _chunk_run_stub, _crag_grade, _record
+
 import rag_engine.generation.answering as generation
 from rag_engine.config import (
     ENTERPRISE_AI_LLM_PROVIDER,
@@ -22,7 +24,6 @@ from rag_engine.config import (
 )
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.models.llm import QueryExpansionOutput, QueryRoutingOutput
-from test_answer_generation import _answer_context, _chunk_run_stub, _crag_grade, _record
 
 
 def _settings(*, answer_effort="medium", vision_effort="medium", **overrides):

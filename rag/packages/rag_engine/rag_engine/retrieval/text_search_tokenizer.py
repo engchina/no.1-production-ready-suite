@@ -23,8 +23,9 @@ import logging
 import re
 import threading
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from rag_engine.knowledge.domain_keywords import extract_domain_keywords
 from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_text

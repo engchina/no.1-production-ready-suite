@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from datetime import datetime, timezone
 import json
 import logging
+from dataclasses import asdict
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 from rag_engine.parsing.checkpoints import atomic_json, digest_json, file_digest
@@ -57,7 +57,7 @@ class VisionCheckpoints:
                 "pages": pages,
                 "current": self.current,
                 "items": self.entries,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             },
         )
         # 進捗は logging へ出す(backend の Vision の段の stdout へ print しない。#502)。
@@ -124,6 +124,6 @@ class VisionCheckpoints:
                 "reusable": reusable,
                 "state": state,
                 "record": asdict(record),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             },
         )

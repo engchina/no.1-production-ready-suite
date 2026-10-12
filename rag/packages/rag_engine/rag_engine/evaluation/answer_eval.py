@@ -7,10 +7,8 @@ claim_support_rate ほか)と閾値による合否は backend が計算する(#6
 
 from __future__ import annotations
 
-from rag_engine.generation.answer_policy import OPERATION_GUIDANCE_POLICY, OPERATION_BINDING_POLICY
-
-import json
 import hashlib
+import json
 import logging
 import re
 from collections import deque
@@ -19,6 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from rag_engine.dependencies import parse_text_response
+from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
 from rag_engine.generation.grounded import (
     NEUTRAL_SUMMARY,
     UNVERIFIED_NOTE,

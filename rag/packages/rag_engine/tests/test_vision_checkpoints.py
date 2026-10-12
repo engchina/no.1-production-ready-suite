@@ -1,21 +1,22 @@
 """中断・失敗・入力変更時のVision再利用とdurable保存を検証する。"""
 
 import copy
-from dataclasses import replace
 import json
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from PIL import Image
-from rag_engine.config import get_settings, get_llm_provider
+
+from rag_engine.config import get_llm_provider, get_settings
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.parsing.checkpoints import CheckpointError, atomic_json, checkpoint_lock, load_base_checkpoint, save_base_checkpoint
-from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_engine.parsing.picture_descriptions import describe_docling_pictures
+from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 
 
 class VisionCheckpointTests(unittest.TestCase):
@@ -41,11 +42,11 @@ class VisionCheckpointTests(unittest.TestCase):
 
     def test_resume_reuses_completed_item_after_interruption(self):
         second = replace(copy.deepcopy(self.record), id="docling-p1-2", seq_no=2)
-        with patch(
-            "rag_engine.parsing.picture_descriptions.describe_picture", side_effect=[{"retrieval_text": "first"}, KeyboardInterrupt]
+        with (
+            patch("rag_engine.parsing.picture_descriptions.describe_picture", side_effect=[{"retrieval_text": "first"}, KeyboardInterrupt]),
+            self.assertRaises(KeyboardInterrupt),
         ):
-            with self.assertRaises(KeyboardInterrupt):
-                self.describe([self.record, second])
+            self.describe([self.record, second])
         self.assertEqual(self.progress()["counts"]["succeeded"], 1)
         with patch("rag_engine.parsing.picture_descriptions.describe_picture", return_value={"retrieval_text": "second"}) as call:
             stats = self.describe([self.record, second])
@@ -168,15 +169,14 @@ class VisionCheckpointTests(unittest.TestCase):
         with (
             patch("rag_engine.parsing.picture_descriptions.describe_picture", return_value={"retrieval_text": "received"}),
             patch("rag_engine.parsing.vision_checkpoints.atomic_json", side_effect=fail_response),
+            self.assertRaises(CheckpointError),
         ):
-            with self.assertRaises(CheckpointError):
-                self.describe()
+            self.describe()
         self.assertEqual(self.progress()["counts"]["succeeded"], 0)
 
     def test_same_run_cannot_execute_vision_concurrently(self):
-        with checkpoint_lock(self.root, ".vision.lock"):
-            with self.assertRaises(CheckpointError):
-                self.describe()
+        with checkpoint_lock(self.root, ".vision.lock"), self.assertRaises(CheckpointError):
+            self.describe()
 
     def test_table_discovery_failure_does_not_report_completion(self):
         pdf = self.root / "source.pdf"
@@ -217,9 +217,9 @@ class VisionCheckpointTests(unittest.TestCase):
         with (
             patch("rag_engine.parsing.analysis.build_adapters", return_value={"docling": adapter}),
             patch("rag_engine.parsing.analysis.get_source_page_count", return_value=1),
+            self.assertRaises(CheckpointError),
         ):
-            with self.assertRaises(CheckpointError):
-                analyze_pdf(source, "1", ["docling"], settings, resume_run_id="1234567890abcdef")
+            analyze_pdf(source, "1", ["docling"], settings, resume_run_id="1234567890abcdef")
         adapter.analyze.assert_not_called()
 
     def test_base_resume_skips_parser_and_preserves_final_outputs(self):

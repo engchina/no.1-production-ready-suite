@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from collections.abc import Iterable, Mapping
 from datetime import date
-from typing import Any, Iterable, Mapping
+from typing import Any
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 DOCUMENT_METADATA_SCHEMA_VERSION = 1

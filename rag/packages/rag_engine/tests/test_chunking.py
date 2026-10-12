@@ -7,10 +7,10 @@ from tempfile import TemporaryDirectory
 
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
-    PARENT_CHUNK_LEVEL,
     CHUNK_METADATA_SCHEMA_VERSION,
     CHUNK_SCHEMA_VERSION,
     CHUNK_STRATEGY,
+    PARENT_CHUNK_LEVEL,
     SEARCH_TEXT_SCHEMA_VERSION,
     ChunkingConfig,
     ChunkingResult,
@@ -672,6 +672,7 @@ class ChunkingTests(unittest.TestCase):
     def test_table_html_is_parsed_once_per_table(self):
         # 同じ表を 4 回解析していたのを、文字列 key の共有で 1 回にする (#804)。
         from unittest.mock import patch
+
         from rag_engine import chunking
         from rag_engine.parsing.table_structure import parse_html_table_structure
 
@@ -1677,6 +1678,7 @@ class ChunkingTests(unittest.TestCase):
     def test_source_identity_lookup_reads_only_matching_runs_via_latest_pointer(self):
         # latest.json の照合項目で不一致 run を除外し、chunks.json は一致した run だけ読む。旧 pointer は従来どおり (#855)。
         from unittest.mock import patch
+
         from rag_engine.chunking import storage
 
         with TemporaryDirectory() as tmp:
@@ -1716,6 +1718,7 @@ class ChunkingTests(unittest.TestCase):
         # 打鍵ごとの候補更新で同じ PDF をハッシュし直さない。書き換われば再計算する (#859)。
         import os
         from unittest.mock import patch
+
         from rag_engine.chunking import storage
 
         with TemporaryDirectory() as tmp:
@@ -1791,6 +1794,7 @@ class ChunkingTests(unittest.TestCase):
     def test_retrieval_profile_is_computed_once_per_chunk(self):
         # child は検索文確定後の 1 回、親は生成時の 1 回だけ問い合わせ profile を推定する (#867)。
         from unittest.mock import patch
+
         from rag_engine import chunking
         from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
 
@@ -2177,6 +2181,7 @@ class ChunkingTests(unittest.TestCase):
 
     def test_search_text_ignores_parent_identity_and_rejects_legacy_metadata(self):
         from dataclasses import replace
+
         from rag_engine.chunking import _child_search_text, _chunk_from_payload
 
         chunks = build_small_to_big_chunks(
@@ -2529,7 +2534,7 @@ def test_single_letter_series_headings_are_not_roman_numeral_chapters():
 
 def test_search_text_drops_screen_example_values_but_keeps_them_in_text():
     """生成説明の画面例の値の文は検索用テキストから除き、回答用の text には残す (#753)。"""
-    from rag_engine.chunking import _without_screen_examples, audit_chunk_retrieval_text, DocumentChunk
+    from rag_engine.chunking import DocumentChunk, _without_screen_examples, audit_chunk_retrieval_text
 
     described = (
         "回答用本文: 更新確認ダイアログが表示される。画面例では締め対象年月=令和6年12月、出荷予定年月=令和6年9月。"

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Any, Sequence
+from typing import Any
 
 from rag_engine.retrieval.operation_context import operation_labels
 

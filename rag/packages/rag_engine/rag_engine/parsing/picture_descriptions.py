@@ -3,29 +3,29 @@
 from __future__ import annotations
 
 import math
-import time
 import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
+from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT, _image_retrieval_template, _render_prompt, describe_picture
+from rag_engine.config import Settings, get_llm_provider
+from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, digest_json, file_digest
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
-from rag_engine.adapters.oci import describe_picture, _image_retrieval_template, _render_prompt, VISION_SYSTEM_PROMPT
-from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, file_digest, digest_json
 from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
-from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.config import Settings, get_llm_provider
 from rag_engine.parsing.vision_prompt_rules import (
-    VISION_SENTENCE_GROUP_PREFIX,
-    MAX_DIAGRAM_NODES,
     MAX_CHART_SERIES_VALUES,
-    MAX_TABLE_ROWS,
-    MAX_TABLE_COLUMNS,
+    MAX_DIAGRAM_NODES,
     MAX_FORM_FIELDS,
+    MAX_TABLE_COLUMNS,
+    MAX_TABLE_ROWS,
     VISION_LIST_FIELD_LIMITS,
+    VISION_SENTENCE_GROUP_PREFIX,
 )
 
 VISION_CROP_PADDING = 8

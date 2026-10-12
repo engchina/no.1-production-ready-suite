@@ -15,11 +15,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_engine.evaluation.answer_eval import (
+    _CITED_CHUNK_ID,
     MAX_EVALUATION_INPUT_BYTES,
     ClaimCheck,
     EvaluationContractError,
     EvaluationInputTooLarge,
-    _CITED_CHUNK_ID,
     _answer_passages,
     _bind_claims,
     _evidence_fragments,

@@ -7,11 +7,11 @@ import json
 import re
 import shutil
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
-
+from typing import Any
 
 DOMAIN_KEYWORDS_SCHEMA_VERSION = 1
 DOMAIN_KEYWORDS_FILE_NAME = "domain_keywords.json"
@@ -213,10 +213,10 @@ def _unique_backup_path(path: Path, backup_dir: Path, saved_at: datetime) -> Pat
 
 def _utc_now(now: datetime | None) -> datetime:
     if now is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:

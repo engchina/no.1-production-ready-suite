@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from rag_engine.adapters.oracle.store import EmbeddingFunction, EmbeddingSaveResult, save_chunk_run_embeddings
-from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.chunking import ChunkingConfig, ChunkingResult, create_chunk_run
-from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.config import Settings
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
+from rag_engine.parsing.analysis import analyze_pdf
 
 
 @dataclass(frozen=True)

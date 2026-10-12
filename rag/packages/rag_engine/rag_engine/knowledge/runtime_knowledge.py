@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
-
+from typing import Any
 
 RUNTIME_KNOWLEDGE_SCHEMA_VERSION = 1
 RUNTIME_KNOWLEDGE_FILE_NAME = "runtime_knowledge.json"
@@ -128,7 +128,7 @@ class RuntimeKnowledgeContext:
     # 利用者が確認の質問で選んだ条件と対象範囲(チャットの確認。#717)。
     scope_context: str = ""
 
-    def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> "RuntimeKnowledgeContext":
+    def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""
         context = str(context or "").strip()
         terms = [term.strip() for term in search_terms if term and term.strip()]

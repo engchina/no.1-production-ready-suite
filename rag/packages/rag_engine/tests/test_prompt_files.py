@@ -1,7 +1,7 @@
 """prompt files の挙動を保護するテスト。"""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -162,7 +162,7 @@ class PromptFileTests(unittest.TestCase):
             root = Path(tmp)
             path = root / "prompts" / "sample.txt"
             prompt_file = PromptFile("sample", "sample.txt", path, root / "prompts" / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             result = save_prompt_file(prompt_file, "new prompt", now=now)
 
@@ -175,7 +175,7 @@ class PromptFileTests(unittest.TestCase):
             path = root / "sample.txt"
             path.write_text("old prompt", encoding="utf-8")
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             result = save_prompt_file(prompt_file, "new prompt", now=now)
 
@@ -198,7 +198,7 @@ class PromptFileTests(unittest.TestCase):
             path = root / "sample.txt"
             path.write_text("v0", encoding="utf-8")
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
             contents = [f"v{index}" for index in range(1, 7)]
 
             with patch.object(prompt_files.shutil, "copy2", side_effect=slow_copy), ThreadPoolExecutor(6) as pool:
@@ -220,7 +220,7 @@ class PromptFileTests(unittest.TestCase):
             path = root / "sample.txt"
             path.write_text("old prompt", encoding="utf-8")
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             with patch.object(Path, "write_text", side_effect=OSError("disk full")):
                 with self.assertRaisesRegex(OSError, "disk full"):
@@ -271,7 +271,7 @@ class PromptFileTests(unittest.TestCase):
                 ("question", "images"),
             )
             answer_prompt.path.write_text("旧形式のテンプレート", encoding="utf-8")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             with patch.dict(prompt_files.PROMPT_FILES, {VLM_ANSWER_PROMPT_KEY: answer_prompt}):
                 result = reset_prompt(VLM_ANSWER_PROMPT_KEY, now=now)

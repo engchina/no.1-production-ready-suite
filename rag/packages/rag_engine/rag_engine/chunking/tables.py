@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
-from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
-from rag_engine.parsing.table_structure import table_row_groups
 from rag_engine.chunking.constants import (
-    ChunkingConfig,
     SOURCE_TABLE_CROP_RELATIONSHIP,
+    ChunkingConfig,
     _compact_json_text,
     _int_value,
     _preview,
 )
+from rag_engine.chunking.layout import _engine_page_key, _visual_group_key
 from rag_engine.chunking.records import (
     _bbox_contains,
     _bbox_intersects,
@@ -24,7 +23,9 @@ from rag_engine.chunking.records import (
     _record_visual_role,
     _table_structure,
 )
-from rag_engine.chunking.layout import _engine_page_key, _visual_group_key
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
+from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+from rag_engine.parsing.table_structure import table_row_groups
 
 
 def _table_record_with_metadata(record: dict[str, Any], records: Sequence[dict[str, Any]]) -> dict[str, Any]:
