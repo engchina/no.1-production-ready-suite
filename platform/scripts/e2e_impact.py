@@ -16,8 +16,10 @@ PR の CI（`.github/workflows/ci.yml` の `e2e-impact`）は `select` で、bas
   - TypeScript の型の宣言（`interface`・`type`・`import type` / `export type`・`declare`）の
     中の行と、コメント・空行だけの変更は選ばない（実行時に影響しない。`enum`・`const` は
     選ぶ。#1488）
-- i18n の辞書（`src/lib/*i18n*.ts`）は、変更したキーを参照する source の行に置き換える。
-  古い文言をそのまま書いている spec も選ぶ
+- 文言の辞書（製品の `src/lib/*i18n*.ts` と、共有 UI の `src/**/messages*.ts`）は、変更した
+  キーを参照する source（製品と共有 UI）の行に置き換える。古い文言をそのまま書いている spec も
+  選ぶ。共有 UI の辞書で参照元が見つからないキー（組み立てたキーなど）は、辞書の変更した行で選ぶ
+  （辞書を読み込んだ spec すべて。#1580）。辞書の外（関数など）の変更は行で選ぶ
 - 変更・追加した spec と、変更した e2e の helper / fixture を使う spec
 - coverage の記録が無い spec（新しい spec・ページを使わない spec）は常に選ぶ
 - 判定できないもの（記録が無い、package.json / lock / vite / playwright の設定、CSS、
@@ -90,7 +92,6 @@ PRODUCTS = {
 PLATFORM_FRONTEND = ("platform/packages/ui/", "platform/packages/system-settings/")
 IMPACT_TOOLING = ("platform/scripts/e2e-impact/",)
 CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".json")
-I18N_DICT = re.compile(r"/src/lib/[^/]*i18n[^/]*\.ts$")
 UNIT_TEST = re.compile(r"(\.test\.[cm]?[jt]sx?$|/__tests__/)")
 FULL_RUN_FILES = re.compile(
     r"^(package\.json|package-lock\.json|index\.html|vite\.config\.[cm]?[jt]s|"
@@ -648,16 +649,53 @@ def test_dependents(product: Product, changed: str) -> set[str]:
 # ---- i18n の辞書
 
 ENTRY = re.compile(r'^\s*"([A-Za-z0-9_.\-]+)"\s*:')
+# 共有 UI の辞書は `title: "…"` のような識別子のキーも使う（`AUTH_MESSAGES` など。#1580）。
+IDENTIFIER_ENTRY = re.compile(r"^\s*([A-Za-z_$][\w$]*)\s*:(?!:)")
+# 識別子のキーは、行頭の `const X = {` から行頭の `}` までの object の中だけで読む
+# （`t(key: …)` の引数や `interface` の欄を辞書のキーとみなさないため）。
+OBJECT_START = re.compile(r"^(?:export\s+)?const\s+[A-Za-z_$][\w$]*(?:\s*:[^=]+)?\s*=\s*\{\s*$")
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# 共有 UI の文言の辞書（`platform/packages/<package>/src/**/messages*.ts`。#1580）。
+PLATFORM_DICTIONARY = re.compile(r"^platform/packages/[^/]+/src/(?:.+/)?messages[^/]*\.ts$")
 
 
-def parse_dictionary(text: str) -> tuple[dict[str, str], dict[int, str]]:
-    """`"key": value` の辞書を読む。キー → 値の文字列、行番号 → その行が属するキー。"""
+def is_platform_dictionary(path: str) -> bool:
+    return bool(PLATFORM_DICTIONARY.match(path)) and not (
+        UNIT_TEST.search(path) or path.endswith(".d.ts")
+    )
+
+
+def object_lines(text: str) -> set[int]:
+    """行頭の `const X = {` から行頭の `}` までの、object の中の行（1 始まり）。"""
+    lines: set[int] = set()
+    inside = False
+    for number, line in enumerate(text.splitlines(), start=1):
+        if inside:
+            if line.startswith("}"):
+                inside = False
+            else:
+                lines.add(number)
+        elif OBJECT_START.match(line):
+            inside = True
+    return lines
+
+
+def parse_dictionary(
+    text: str, identifier_keys: bool = False
+) -> tuple[dict[str, str], dict[int, str]]:
+    """`"key": value` の辞書を読む。キー → 値の文字列、行番号 → その行が属するキー。
+
+    `identifier_keys` なら、行頭の `const X = {` の object の中の `key: value` も読む（共有 UI の
+    辞書。#1580）。
+    """
     entries: dict[str, list[str]] = {}
     owner: dict[int, str] = {}
     current: str | None = None
+    in_object = object_lines(text) if identifier_keys else set()
     for number, line in enumerate(text.splitlines(), start=1):
         match = ENTRY.match(line)
+        if match is None and number in in_object:
+            match = IDENTIFIER_ENTRY.match(line)
         stripped = line.strip()
         if match:
             current = match.group(1)
@@ -681,10 +719,12 @@ def string_value(raw: str) -> str:
     return "".join(json.loads(f'"{part}"') for part in STRING.findall(raw))
 
 
-def dictionary_changes(old: str, new: str) -> tuple[set[str], dict[str, str], bool]:
+def dictionary_changes(
+    old: str, new: str, identifier_keys: bool = False
+) -> tuple[set[str], dict[str, str], bool]:
     """変わったキー、そのキーの古い文言、辞書の外（関数など）が変わったか。"""
-    old_entries, old_owner = parse_dictionary(old)
-    new_entries, new_owner = parse_dictionary(new)
+    old_entries, old_owner = parse_dictionary(old, identifier_keys)
+    new_entries, new_owner = parse_dictionary(new, identifier_keys)
     keys = {
         key
         for key in set(old_entries) | set(new_entries)
@@ -705,25 +745,45 @@ def dictionary_changes(old: str, new: str) -> tuple[set[str], dict[str, str], bo
     return keys, old_values, structural
 
 
-def key_references(product: Product, key: str, dictionaries: set[str]) -> dict[str, set[int]]:
-    """キーを参照する source の行（HEAD の行番号）。無ければ動的なキーとして接頭辞で探す。"""
-    src = ROOT / product.frontend / "src"
+def source_texts(product: Product, dictionaries: set[str]) -> dict[str, list[str]]:
+    """キーを探す source（製品と共有 UI の `src` の .ts / .tsx。辞書と単体テストを除く）の行。"""
+    roots = [ROOT / product.frontend / "src", *(ROOT / p / "src" for p in PLATFORM_FRONTEND)]
+    texts: dict[str, list[str]] = {}
+    for src in roots:
+        for path in sorted(src.rglob("*")) if src.is_dir() else []:
+            if path.suffix not in (".ts", ".tsx") or UNIT_TEST.search(path.name):
+                continue
+            rel = str(path.relative_to(ROOT)).replace(os.sep, "/")
+            if rel in dictionaries:
+                continue
+            texts[rel] = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    return texts
+
+
+def key_references(
+    product: Product,
+    key: str,
+    dictionaries: set[str],
+    texts: dict[str, list[str]] | None = None,
+) -> dict[str, set[int]]:
+    """キーを参照する source の行（HEAD の行番号）。製品と共有 UI の `src` を探す（#1580）。
+
+    `a.b.c` のキーは、文字列のキーが無ければ動的なキーとして接頭辞で探す。識別子のキー
+    （`title`。共有 UI の辞書）は、語として現れる行（`m.title`・`{ title }`・`"title"`）を探す。
+    """
+    if texts is None:
+        texts = source_texts(product, dictionaries)
     candidates = [re.compile(rf"[\"'`]{re.escape(key)}[\"'`]")]
+    if re.fullmatch(r"[A-Za-z_$][\w$]*", key):
+        candidates = [re.compile(rf"(?<![\w$]){re.escape(key)}(?![\w$])")]
     prefix = key.rsplit(".", 1)[0] if "." in key else None
     if prefix:
         candidates.append(re.compile(rf"[\"'`]{re.escape(prefix)}\.(\$\{{|[\"'`])"))
         candidates.append(re.compile(rf"[\"'`]{re.escape(prefix)}\."))
     for pattern in candidates:
         found: dict[str, set[int]] = {}
-        for path in src.rglob("*"):
-            if path.suffix not in (".ts", ".tsx") or UNIT_TEST.search(path.name):
-                continue
-            rel = str(path.relative_to(ROOT)).replace(os.sep, "/")
-            if rel in dictionaries:
-                continue
-            for number, line in enumerate(
-                path.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1
-            ):
+        for rel, lines in texts.items():
+            for number, line in enumerate(lines, start=1):
                 if pattern.search(line):
                     found.setdefault(rel, set()).add(number)
         if found:
@@ -762,6 +822,15 @@ def select(product: Product, impact: ImpactMap | None, base: str, head: str = "H
         for p in (ROOT / product.frontend / "src" / "lib").glob("*i18n*.ts")
         if not UNIT_TEST.search(p.name)
     }
+    # 共有 UI の文言の辞書（#1580）。module の先頭で評価されるため、行で選ぶと全画面の共通の処理に
+    # なる（全 spec を選ぶ）。製品の辞書と同じくキー単位で参照元に置き換える。
+    for package in PLATFORM_FRONTEND:
+        src = ROOT / package / "src"
+        for p in src.rglob("messages*.ts") if src.is_dir() else []:
+            rel = str(p.relative_to(ROOT)).replace(os.sep, "/")
+            if is_platform_dictionary(rel):
+                dictionaries.add(rel)
+    texts: dict[str, list[str]] | None = None
 
     def source_lines(path: str, lines: set[int], reason: str, ref: str) -> None:
         """`ref` の行番号の `lines` を、記録の commit の行番号に移して spec を選ぶ。"""
@@ -846,21 +915,36 @@ def select(product: Product, impact: ImpactMap | None, base: str, head: str = "H
         if old in dictionaries and change.new:
             before = git_show(base, old) or ""
             after = (ROOT / change.new).read_text(encoding="utf-8")
-            keys, old_values, structural = dictionary_changes(before, after)
+            shared_dictionary = is_platform_dictionary(old)
+            keys, old_values, structural = dictionary_changes(before, after, shared_dictionary)
             if structural:
                 source_lines(
                     old, changed_old_lines(base, head, old, change.new), "i18n の処理の変更", base
                 )
+            if texts is None:
+                texts = source_texts(product, dictionaries)
+            unresolved: list[str] = []
             for key in sorted(keys):
-                refs = key_references(product, key, dictionaries)
+                refs = key_references(product, key, dictionaries, texts)
                 if not refs:
                     selection.notes.append(f"{old}: キー {key} を参照する source が無い")
+                    unresolved.append(key)
                 for ref_path, lines in refs.items():
                     source_lines(ref_path, lines, f"文言 {key}", head)
                 if key in old_values:
                     selection.add(
                         specs_mentioning(product, old_values[key]), f"古い文言 {key} を書いた spec"
                     )
+            if shared_dictionary and unresolved and not structural:
+                # 共有 UI のキーは、製品が組み立てて使う（`Object.keys(…_MESSAGES)`）ことが
+                # ある。参照元が見つからなければ、辞書の変更した行で選ぶ（辞書を読み込んだ spec
+                # すべて）。
+                source_lines(
+                    old,
+                    changed_old_lines(base, head, old, change.new),
+                    f"文言 {unresolved[0]}（参照元が見つからない）",
+                    base,
+                )
             continue
 
         if change.status == "D":
