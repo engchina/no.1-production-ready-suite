@@ -10347,6 +10347,8 @@ test("app feedback keeps history left of the editor without crossing the divider
 
 test("shared split panes reserve their divider track across NL2SQL management pages", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop-only cross-page geometry audit");
+  // 8 つの管理画面を順に読み込む長いテストで、2 worker の nightly では 30 秒を超えた（retry を含めて失敗。#1519）。
+  test.slow();
   await page.setViewportSize({ width: 2048, height: 1000 });
   await mockNl2SqlApi(page);
 
