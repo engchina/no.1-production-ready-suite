@@ -9,7 +9,6 @@ import {
   PageBody,
   PageHeader,
   TimedLoadingState,
-  type FixedSplitWidePane,
 } from "@production-ready/ui";
 
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
@@ -135,17 +134,14 @@ export function RagSplitPane({
   splitId,
   left,
   right,
-  preferredWidePane = "right",
 }: {
   splitId: string;
   left: ReactNode;
   right: ReactNode;
-  preferredWidePane?: FixedSplitWidePane;
 }) {
   return (
     <FixedSplitPane
       splitId={splitId}
-      preferredWidePane={preferredWidePane}
       storagePrefix={RAG_SPLIT_STORAGE_PREFIX}
       labels={{
         separator: t("split.separator"),

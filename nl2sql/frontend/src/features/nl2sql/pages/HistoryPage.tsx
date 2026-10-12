@@ -887,7 +887,6 @@ export function HistoryPage() {
             idPrefix="history-management"
             ariaLabel={t("history.workspace.label")}
             splitId="history-management-list"
-            preferredWidePane="right"
           >
             <HistoryListSkeleton />
             <HistoryDetailSkeleton />
@@ -903,7 +902,6 @@ export function HistoryPage() {
             idPrefix="history-management"
             ariaLabel={t("history.workspace.label")}
             splitId="history-management-list"
-            preferredWidePane="right"
             processing={
               loading ? (
                 <ProcessingIndicator
