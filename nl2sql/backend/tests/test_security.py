@@ -206,7 +206,7 @@ async def _login_api(
         json={"login_user_id": login_user_id, "password": password},
     )
     assert response.status_code == 200
-    csrf = client.cookies.get("nl2sql_csrf")
+    csrf = client.cookies.get("pr_csrf")
     assert csrf
     return cast(dict[str, object], response.json()["data"]), csrf
 
@@ -560,7 +560,7 @@ def test_configured_system_admin_login_uses_app_admin_credentials_without_auth_t
     assert principal.force_password_change is False
     assert principal.password_change_allowed is True
     assert principal.login_user_id == "system_admin"
-    assert token.startswith("nl2sql-system-admin-v1.")
+    assert token.startswith("platform-system-admin-v1.")
     assert csrf
     authenticated = service.authenticate_session(token)
     assert authenticated.is_system_admin
@@ -3386,7 +3386,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
 
             no_csrf = await client.post("/api/auth/logout")
             assert no_csrf.status_code == 403
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             logout = await client.post(
                 "/api/auth/logout",
@@ -3799,7 +3799,7 @@ def test_api_enforces_menu_permissions(
                 "/api/auth/login",
                 json={"login_user_id": "ADMIN", "password": "BootstrapPass!123"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             forced = await client.get("/api/security/users")
             assert forced.status_code == 403
@@ -3816,7 +3816,7 @@ def test_api_enforces_menu_permissions(
                 "/api/auth/login",
                 json={"login_user_id": "ADMIN", "password": "IndependentPass!456"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             role_id = await _create_role_api(
                 client,
@@ -3860,7 +3860,7 @@ def test_api_enforces_menu_permissions(
                 "/api/auth/login",
                 json={"login_user_id": "viewer.user", "password": "ViewerStart!123"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             await client.post(
                 "/api/auth/password/change",
@@ -3874,7 +3874,7 @@ def test_api_enforces_menu_permissions(
                 "/api/auth/login",
                 json={"login_user_id": "viewer.user", "password": "ViewerActive!456"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             assert (await client.get("/api/nl2sql/history")).status_code == 200
             denied_execute = await client.post(
@@ -3891,7 +3891,7 @@ def test_api_enforces_menu_permissions(
                 "/api/auth/login",
                 json={"login_user_id": "deepsec.user", "password": "DeepSecStart!123"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             await client.post(
                 "/api/auth/password/change",
@@ -3905,7 +3905,7 @@ def test_api_enforces_menu_permissions(
                 "/api/auth/login",
                 json={"login_user_id": "deepsec.user", "password": "DeepSecActive!456"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             assert (await client.get("/api/security/roles")).status_code == 403
             entitlement_response = await client.get("/api/security/deepsec/data-entitlements")
@@ -5446,7 +5446,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
                 json={"login_user_id": "ADMIN", "password": "BootstrapPass!123"},
             )
             assert login.status_code == 200
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             changed = await client.post(
                 "/api/auth/password/change",
@@ -5463,7 +5463,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
             )
             assert admin_login.status_code == 200
             admin_user_id = admin_login.json()["data"]["user_uuid"]
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             role_id = await _create_role_api(
                 client,
@@ -5533,7 +5533,7 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
                 "/api/auth/login",
                 json={"login_user_id": "owner.viewer", "password": "ViewerStart!123"},
             )
-            csrf = client.cookies.get("nl2sql_csrf")
+            csrf = client.cookies.get("pr_csrf")
             assert csrf
             viewer_changed = await client.post(
                 "/api/auth/password/change",

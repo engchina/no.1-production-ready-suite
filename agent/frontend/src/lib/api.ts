@@ -1107,9 +1107,6 @@ export interface ApprovalDecisionPayload {
 
 // --- 認証（platform の共通認証。#215） ---
 
-/** CSRF の double submit に使う Cookie 名（backend の `app_auth_csrf_cookie_name` の既定値）。 */
-export const CSRF_COOKIE_NAME = "agent_csrf";
-
 /**
  * `GET /api/auth/me` などが返すログイン中の利用者。`permissions` は implies を展開済み。
  * `allowed_*_ids` が null なら制限なし（SYSTEM_ADMIN・`agent.admin`・ローカル DEBUG）。
@@ -1276,7 +1273,7 @@ async function apiErrorFrom(response: Response): Promise<ApiError> {
 
 /** 状態を変える method のとき Cookie の CSRF token を `X-CSRF-Token` として付けた headers を作る。 */
 function withCsrfHeaders(method: string | undefined, headers: Headers): Headers {
-  for (const [name, value] of Object.entries(csrfHeader(CSRF_COOKIE_NAME, method ?? "GET"))) {
+  for (const [name, value] of Object.entries(csrfHeader(method ?? "GET"))) {
     headers.set(name, value);
   }
   return headers;

@@ -23,8 +23,8 @@ from app.settings import get_settings
 
 CONFIGURED_ADMIN_PASSWORD = "AgentSystemPass2026"  # nosec B105 - テスト用
 USER_PASSWORD = "UserPassword!2026"  # nosec B105 - テスト用
-SESSION_COOKIE = "agent_session"
-CSRF_COOKIE = "agent_csrf"
+SESSION_COOKIE = "pr_session"
+CSRF_COOKIE = "pr_csrf"
 
 
 class AsgiTestClient:

@@ -173,10 +173,58 @@ def test_configured_system_admin_uses_signed_token_without_tables() -> None:
     # 大小文字だけ違う login ID は DB ユーザーへもフォールバックしない。
     with pytest.raises(SecurityApiError):
         service.login("SYSTEM_ADMIN", CONFIGURED_PASSWORD)
-    # 別製品の接頭辞の token は受け付けない。
+    # 別の接頭辞の token は受け付けない。
     other = token.replace(service.configured_admin_token_prefix, "other-prefix", 1)
     with pytest.raises(SecurityApiError):
         service.authenticate_session(other)
+
+
+class _OtherProductService(_ProductService):
+    product_key = "nl2sql"
+
+
+def test_configured_system_admin_token_is_shared_across_products() -> None:
+    """構成管理者の token は 3 製品で共通（接頭辞と署名鍵が製品に依存しない。#1565）。"""
+    service, _ = _service()
+    other = _OtherProductService(InMemoryAuthStore(), _Settings(service_name="other-product"))
+    assert service.configured_admin_token_prefix == "platform-system-admin-v1"
+    assert other.configured_admin_token_prefix == service.configured_admin_token_prefix
+    _, token, _ = service.login("system_admin", CONFIGURED_PASSWORD)
+    principal = other.authenticate_session(token)
+    assert principal.user_uuid == CONFIGURED_SYSTEM_ADMIN_USER_UUID
+    assert principal.is_system_admin
+    # パスワードが違えば（= 鍵が違えば）受け付けない。
+    changed = _OtherProductService(
+        InMemoryAuthStore(), _Settings(app_admin_login_user_password="Another1234AB")
+    )
+    with pytest.raises(SecurityApiError):
+        changed.authenticate_session(token)
+
+
+def test_revoke_session_token_revokes_only_database_sessions() -> None:
+    """ログインのときに、ブラウザが持っていた古いセッションを失効させる（#1565）。"""
+    service, _ = _service()
+    _, token, _ = service.login("ADMIN", ADMIN_PASSWORD)
+    service.revoke_session_token(token)
+    with pytest.raises(SecurityApiError) as exc:
+        service.authenticate_session(token)
+    assert exc.value.status_code == 401
+    # 構成管理者の token・空・不明な token では何もしない（例外を出さない）。
+    _, admin_token, _ = service.login("system_admin", CONFIGURED_PASSWORD)
+    service.revoke_session_token(admin_token)
+    assert service.authenticate_session(admin_token).is_system_admin
+    service.revoke_session_token("")
+    service.revoke_session_token("unknown-token")
+
+
+def test_revoke_session_token_does_not_block_login_when_store_fails() -> None:
+    service, store = _service()
+
+    def broken(_: str) -> None:
+        raise RuntimeError("DB が止まっている")
+
+    store.get_session_by_token_hash = broken  # type: ignore[method-assign,assignment]
+    service.revoke_session_token("some-token")
 
 
 def test_configured_system_admin_reads_and_writes_platform_env_file(tmp_path: Path) -> None:

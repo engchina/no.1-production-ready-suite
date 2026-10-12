@@ -18,6 +18,7 @@ from pr_backend_core.config import (
     product_settings_config,
     settings_env_name,
 )
+from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
 from pr_system_settings.model import (
@@ -330,14 +331,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     # --- 共通認証（platform の pr_system_settings.auth。#214）---
-    # 構成管理者と認証ポリシーは共通 `.env` の PLATFORM_ADMIN_* / PLATFORM_AUTH_*（#211）、
-    # Cookie 名は製品ごとの RAG_APP_AUTH_*。構成管理者 token の署名鍵に service_name を使う。
+    # 構成管理者・認証ポリシー・ログインの Cookie 名は共通 `.env` の PLATFORM_ADMIN_* /
+    # PLATFORM_AUTH_*（#211）。Cookie は 3 製品で共有し、1 回のログインで全製品を使える（#1565）。
     service_name: str = Field(default="production-ready-rag")
     app_admin_login_user_id: str = Field(default="")
     app_admin_login_user_password: str = Field(default="")
     app_auth_cookie_secure: bool = Field(default=False)
-    app_auth_session_cookie_name: str = Field(default="rag_session")
-    app_auth_csrf_cookie_name: str = Field(default="rag_csrf")
+    app_auth_session_cookie_name: str = Field(default=DEFAULT_SESSION_COOKIE_NAME)
+    app_auth_csrf_cookie_name: str = Field(default=DEFAULT_CSRF_COOKIE_NAME)
     app_auth_idle_timeout_minutes: int = Field(default=60)
     app_auth_absolute_timeout_hours: int = Field(default=12)
     app_auth_failed_login_limit: int = Field(default=5)
