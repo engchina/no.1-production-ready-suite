@@ -1317,6 +1317,26 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
 _CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
 
 
+# 是正を改善が見込めないので止めたときの工程の説明（#1527。`grounded.NO_IMPROVEMENT_*`）。
+_NO_IMPROVEMENT_RESULTS = {
+    "no_improvement_not_accepted": "作り直した回答が前の回答より良くならなかったため、作り直しを止め、採用済みの回答で確定します",
+    "no_improvement_same_feedback": "作り直した回答にも前と同じ指摘が残ったため、同じ指摘で作り直さずに確定します",
+    "no_improvement_evidence_only": "残った指摘は、回答が「資料に記載が無い」とした要求（根拠の不足）だけで、"
+                                    "同じ根拠のまま作り直しても直らないため、作り直しをせずに確定します",
+}
+
+
+def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason: str, number: int,
+                              feedback: dict[str, Any] | None) -> None:
+    """是正を改善が見込めないので止めた理由を、時間の配分・round の記録・工程に残す（#1527）。"""
+    budget.stop_without_improvement(reason, number, feedback)
+    rounds[-1]["improvement_stop"] = reason
+    with _execution_step("是正の打ち切り") as stop_step:
+        stop_step.result(_NO_IMPROVEMENT_RESULTS[reason])
+        if labels := budget.stop.get("feedback"):
+            stop_step.add(f"残った指摘: {'・'.join(labels)}")
+
+
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
 
@@ -1424,8 +1444,8 @@ def synthesize_grounded_answer(
             summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
-        feedback = best[0].feedback()
-        budget.note(current, feedback)
+        previous_feedback, feedback = feedback, best[0].feedback()
+        budget.note(current, feedback, accepted=accepted)
         if not feedback or number == grounded.MAX_ROUNDS - 1:
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
@@ -1438,20 +1458,34 @@ def synthesize_grounded_answer(
                 remedy = None
             else:
                 context = candidate
+        image_candidates: tuple[dict[str, Any], ...] = ()
         if remedy is None and needs_content and mode != "vision_attachments":
             candidates = tuple(i for i in answer_image_evidence(context.records, settings.output_dir, question=question)
                                if i.get("prompt_path"))
             # 画像の添付が無効（または Vision モデルが無い）なら、文字の説明で答えられる範囲に留めて
             # 次の是正（指摘の反映）へ進む。添付する回は既定の Vision モデルで答える（#649）。
             if candidates and _image_prompt_mode(candidates, settings) == "vision_attachments":
-                images, mode = candidates, "vision_attachments"
+                image_candidates = candidates
                 remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in candidates]}
-                image_decision.update(reason="attempted", regeneration_calls=1)
         if remedy is None:
             if corrected:
                 break
-            corrected = True
             remedy = {"remedy": "correction"}
+        # 次の組を始める前に、改善が見込めるかを確かめる（#1527）。作り直した組が採用されない・指摘が前の組と
+        # 同じなら、次の組も良くならない。同じ根拠のまま作り直す（指摘の反映）のは、残った指摘が根拠の不足
+        # （草稿が「資料に記載が無い」と答えた要求）だけのときはしない。
+        stop_reason = grounded.no_improvement_reason(number, accepted=accepted, feedback=feedback,
+                                                     previous=previous_feedback)
+        if not stop_reason and remedy["remedy"] == "correction" and grounded.evidence_shortage_only(feedback, best[0]):
+            stop_reason = grounded.NO_IMPROVEMENT_EVIDENCE_ONLY
+        if stop_reason:
+            _stop_without_improvement(budget, rounds, stop_reason, number, feedback)
+            break
+        if remedy["remedy"] == "correction":
+            corrected = True
+        elif image_candidates:
+            images, mode = image_candidates, "vision_attachments"
+            image_decision.update(reason="attempted", regeneration_calls=1)
         if not budget.allows_round(number + 1):
             # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
             # 最良の round で確定し、直していない不足を「確かめられていない点」に出す。
