@@ -129,6 +129,7 @@ function rowsDetail(params: ChatProgressParams): string | undefined {
  * - 開始待ち（ジョブの作成から worker が処理を始めるまで）: worker が起動していない・混んでいるときに、生成では
  *   なく開始を待っていることが分かる。
  * - 生成の段階の補足は生成方法、安全性の確認（完了）は参照した表、実行（完了）は取得した行数。
+ *   Select AI / Select AI Agent の SQL で省略した安全性の確認（未実行）は省略の理由。
  * - 止めた段階は「停止しました」（ほかの補足より先）。
  */
 export const CHAT_PROGRESS_STEP_DEFINITIONS: ChatProgressStepDefinitions = {
@@ -144,7 +145,13 @@ export const CHAT_PROGRESS_STEP_DEFINITIONS: ChatProgressStepDefinitions = {
   safety_check: {
     label: label("safety_check"),
     detail: (status, params) =>
-      stoppedDetail(params) ?? (status === "done" ? tablesDetail(params) : undefined),
+      stoppedDetail(params) ??
+      (status === "done"
+        ? tablesDetail(params)
+        : // Select AI / Select AI Agent の SQL で省略した（#1523）。
+          status === "skipped" && params.safety_check_skipped === true
+          ? t("chat.progress.safety_check.safetyCheckSkipped")
+          : undefined),
   },
   execute_sql: {
     label: label("execute_sql"),

@@ -18,6 +18,7 @@ from typing import Any
 
 from rag_engine.adapters.parsers.base import AnalysisContext
 from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter, _table_grid_rows
+from rag_engine.chunking.headings import layout_section_paths
 from rag_engine.config import Settings, get_settings
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.layout_metadata import (
@@ -108,14 +109,13 @@ def layout_to_extraction(
     elements: list[DocumentElement] = []
     tables: list[ExtractionTable] = []
     assets: list[ExtractionAsset] = []
-    section_path: list[str] = []
+    # 要素の section_path(章節ナビゲーションの見出しの木の元)は、chunk の section_path と同じ規則
+    # (番号の体系から深さを決める。rag_engine の layout_section_paths)で作る(#1517)。
+    section_paths = layout_section_paths([record.to_dict() for record in records])
     for order, record in enumerate(records):
         kind = CATEGORY_KINDS.get(record.category, "other")
         text = str(record.text or "")
-        if record.category == "Title" and text.strip():
-            section_path = [text.strip()]
-        elif record.category == "Section-header" and text.strip():
-            section_path = [*section_path[:1], text.strip()]
+        section_path = section_paths.get(record.id, [])
         elements.append(
             DocumentElement(
                 kind=kind,

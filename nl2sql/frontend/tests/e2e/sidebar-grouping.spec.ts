@@ -500,6 +500,9 @@ test("メニュー権限がない root は無権限画面へ移動し、再転�
 test("375px 幅ではナビがドロワーになり、開くと主要リンクへ到達できる（#367）", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/");
+  // `/` は `/query` へ移る。移る前にドロワーを開くと、移ったときに閉じて展開のボタンが見えなくなる
+  // （2 worker の nightly で 30 秒を超えた。#1519）。
+  await expect(page).toHaveURL(/\/query$/);
 
   // 閉じている間はサイドナビを出さず、上端のバーの「メニュー」から開く。
   await expect(page.getByRole("complementary", { name: "サイドナビゲーション" })).toHaveCount(0);

@@ -105,6 +105,14 @@ def _quality_evaluation_limits() -> QualityEvaluationLimits:
     )
 
 
+def _select_only_label(analysis: QualityEvaluationDeterministicAnalysis) -> str:
+    """Excel の「SELECTのみ」の欄。Select AI / Agent で確かめなかったときは「省略」（#1523）。"""
+
+    if not analysis.safety_checked:
+        return "省略"
+    return "OK" if analysis.is_select_only else "NG"
+
+
 def _normalized_sql(sql: str) -> str:
     text = str(sql or "")
     out: list[str] = []
@@ -1240,10 +1248,13 @@ class QualityEvaluationService:
                     allowed,
                     self._nl2sql.get_profile(job.profile_id).default_row_limit,
                     use_llm=False,
+                    # 生成の方式ごとの安全確認（Select AI / Agent は安全確認をしない。#1523）。
+                    engine=engine,
                 )
                 analysis = QualityEvaluationDeterministicAnalysis(
                     is_safe=local.safety.is_safe,
                     is_select_only=local.safety.is_select_only,
+                    safety_checked=local.safety.safety_checked,
                     referenced_objects=local.object_names,
                     structure_summary=local.structure_summary,
                     risk_findings=local.risk_findings,
@@ -1503,7 +1514,7 @@ class QualityEvaluationService:
                 result.generated_sql,
                 result.normalized_sql,
                 "OK" if result.deterministic_analysis.is_safe else "NG",
-                "OK" if result.deterministic_analysis.is_select_only else "NG",
+                _select_only_label(result.deterministic_analysis),
                 "\n".join(result.deterministic_analysis.referenced_objects),
                 result.deterministic_analysis.structure_summary,
                 "\n".join(result.deterministic_analysis.risk_findings),
