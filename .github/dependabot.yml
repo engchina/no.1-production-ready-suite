@@ -25,8 +25,9 @@
 # やめたため（#339）、main が進んだだけでは rebase も CI の再実行も起きず、auto-merge は CI OK の成功だけを待つ。
 #
 # 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
-# services/*（21 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は CI 検証対象外で PR 数も
-# 多くなるため、本設定には含めない。運用が安定してから ecosystem を追加する。
+# services/*（21 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は、CI がテストする
+# 外部 parser（rag/services/parsers/docling・asr。ci.yml の RAG / Parser <name>。#1512）だけを対象にする（#1513）。
+# 他のサービスは CI 検証対象外で PR 数も多くなるため含めない。テストと CI の job を足してから ecosystem を追加する。
 # monorepo（#71）では rag の backend / frontend と root の GitHub Actions を対象にする。
 # nl2sql / agent / platform の追加は、運用が安定してから ecosystem を足す。
 version: 2
@@ -67,6 +68,38 @@ updates:
       # 起動設定（26 系では control socket の無効化）の追従も要るため、26 系の PR は CI が失敗し続けた（#92、#339）。
       # major は Issue を立て、起動の契約を更新する PR で個別に上げる。
       - dependency-name: gunicorn
+        update-types: ["version-update:semver-major"]
+
+  # RAG の外部 parser のサービス（#1513）。lock は parser ごとに独立している。
+  # docling は解析の結果が変わり、rag/backend の docling の extra（tests/test_config.py が版を確認する）と同時に
+  # 上げるため、Dependabot では上げない（Issue を立て、評価の PDF の解析を確かめる PR で上げる）。
+  - package-ecosystem: uv
+    directories:
+      - /rag/services/parsers/docling
+      - /rag/services/parsers/asr
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    rebase-strategy: auto
+    groups:
+      parser-patch-minor:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+    ignore:
+      - dependency-name: docling
+      - dependency-name: docling-slim
+      # torch の CPU 版は rag-services.sh が lock と同じ版を CPU の index から入れる。major は個別に判断する。
+      - dependency-name: torch
+        update-types: ["version-update:semver-major"]
+      - dependency-name: torchvision
         update-types: ["version-update:semver-major"]
 
   # frontend
