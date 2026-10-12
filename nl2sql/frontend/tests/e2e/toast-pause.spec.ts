@@ -1,4 +1,9 @@
 import { expect, test, type Page } from "./_helpers/test";
+import { FIXTURE_BASE_URL } from "./_helpers/web-server";
+
+// `tests/fixtures/*.tsx` を `/@react-refresh` と一緒に読み込むので、dev server の変換が要る。preview（PR の CI）でも
+// fixture 用の dev server を開く（tests/e2e/_helpers/web-server.ts。#1583）。
+test.use({ baseURL: FIXTURE_BASE_URL });
 
 // #351: 通知はホバー・フォーカス中に消えず、離れたら残り時間から再開する。danger は閉じるまで残る。
 // タイマーは page.clock で止めて進め、実時間に依存しない。

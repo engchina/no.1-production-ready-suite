@@ -4,6 +4,15 @@ const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 // 開発用 dev サーバ（3000）と衝突しない既定ポート。
 const port = process.env.PLAYWRIGHT_PORT ?? "3100";
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
+// PLAYWRIGHT_WEB_SERVER=preview なら、vite build の成果物を vite preview で配信する（PR の CI。#1583）。
+// dev サーバより画面の読み込みが速い。e2e の影響分析の記録（E2E_IMPACT_DIR。nightly）は dev サーバの
+// `/src/...` の URL と inline の sourcemap を使うので、記録するときは dev サーバのままにする。
+const usePreviewServer = process.env.PLAYWRIGHT_WEB_SERVER === "preview" && !process.env.E2E_IMPACT_DIR;
+// 成果物は配備用の dist/ と分ける（node_modules の下なので commit されない）。
+const previewOutDir = "node_modules/.e2e-preview";
+const webServerCommand = usePreviewServer
+  ? `npx vite build --outDir ${previewOutDir} --emptyOutDir --logLevel warn && npx vite preview --outDir ${previewOutDir} --host 127.0.0.1 --port ${port} --strictPort`
+  : `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -27,14 +36,15 @@ export default defineConfig({
   webServer: skipWebServer
     ? undefined
     : {
-        command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+        command: webServerCommand,
         url: baseURL,
         // 既存の（hermetic でない）dev サーバを再利用すると実 backend へ proxy されるため、常に起動する。
         reuseExistingServer: false,
         timeout: 120_000,
         // e2e は全 API を page.route で mock する前提（hermetic）。未モック API は Vite 側の
-        // 404 middleware で終端し、実 backend / Oracle 環境へ接続しない。
-        env: { ...process.env, PLAYWRIGHT_HERMETIC_API: "1", BACKEND_URL: "http://127.0.0.1:9" },
+        // 404 middleware（dev サーバと preview）で終端し、実 backend / Oracle 環境へ接続しない。
+        // base は FRONTEND_BASE_PATH で変わるので、e2e では空にして `/` で配信する。
+        env: { ...process.env, PLAYWRIGHT_HERMETIC_API: "1", BACKEND_URL: "http://127.0.0.1:9", FRONTEND_BASE_PATH: "" },
       },
   projects: [
     {

@@ -44,6 +44,10 @@ env:
     e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
     e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
     e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts e2e/scrollbar-stability.spec.ts
+  # PR / main の push の e2e（smoke・impact）は、3 製品の playwright.config.ts の webServer が vite build の成果物を
+  # vite preview で配信する（dev server より約 25〜30% 速い。build は job ごとに 1〜2 秒。#1583）。
+  # nightly（e2e-nightly.yml）は e2e-impact の記録が dev server の URL と sourcemap を使うので dev server のまま。
+  PLAYWRIGHT_WEB_SERVER: preview
 
 jobs:
   changes:
@@ -987,7 +991,7 @@ jobs:
       # worker 数は playwright.config.ts の CI の値（2。fullyParallel でテスト単位で並ぶ）。#175 の遅い環境での flake の後に
       # `--workers=1` で 1 worker に固定していたが、smoke が 4〜6 分に伸びたため外した（#1489）。
       # 最も重い sql-chat（両 project で約 80 テスト中 58）と database-gate は desktop だけにし、375px の確認は
-      # impact（チャットの画面に触る PR）と nightly に任せる。dev server の起動を 1 回にするため 1 回の実行にまとめ、
+      # impact（チャットの画面に触る PR）と nightly に任せる。build と preview の起動を 1 回にするため 1 回の実行にまとめ、
       # `--grep-invert` で mobile-375 の 2 spec を外す（grep は「project 名 spec のファイル名 題名」に当たる）。
       # spec は workflow の env（NL2SQL_E2E_SMOKE は全 project、NL2SQL_E2E_SMOKE_DESKTOP は desktop だけ。
       # DESKTOP を変えたら --grep-invert の spec 名もそろえる）。
