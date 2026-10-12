@@ -855,7 +855,6 @@ export function UserManagementPage({
               ariaLabel={t("security.users.workspaceLabel")}
               splitId="security-users-list"
               splitStoragePrefix={splitStoragePrefix}
-              preferredWidePane="right"
             >
               <section className="grid min-w-0 content-start gap-3" aria-labelledby="security-users-list-heading">
                 <SecurityPanelHeader

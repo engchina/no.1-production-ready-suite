@@ -72,7 +72,7 @@
 
 ### 1.2 B 型（一覧 + 詳細）
 
-`frontend/src/components/EntityLayout.tsx` の `AgentSplitPane` が共有 `FixedSplitPane` に `storagePrefix="production-ready-agent.fixedSplitPane"` と Agent の i18n 文言を渡す。詳細側を既定で広くし、xl 未満は縦積み。
+`frontend/src/components/EntityLayout.tsx` の `AgentSplitPane` が共有 `FixedSplitPane` に `storagePrefix="production-ready-agent.fixedSplitPane"` と Agent の i18n 文言を渡す。分割線の初期位置は 50%（共有部品の既定。#1572）で、xl 未満は縦積み。
 
 | 画面 | `splitId` | 左（一覧） | 右（詳細） | 対象の操作 |
 |---|---|---|---|---|
