@@ -289,9 +289,11 @@ class Settings:
     section_extraction_max_calls: int = 8
     section_extraction_concurrency: int = 4
     # 用途ごとの推論(思考)の量の上書き(#1499)。空はモデルの登録値(`LlmProviderSettings.reasoning_effort`)の
-    # まま、none は送らない、low / medium / high はその値を送る。判定・分類(質問拡張戦略の判定と検索文の生成、
-    # CRAG の評価)と、回答文の生成・監査で分ける。モデルの登録値が none(送らない)のモデルには、上書きしても
-    # 送らない(推論を受け付けないモデルがある。platform の `pr_system_settings.model` の実測)。
+    # まま、none は送らない、low / medium / high はその値を送る。質問拡張戦略の判定と検索文の生成、根拠の評価
+    # (CRAG の評価と章節の拡張の十分性の判定)、回答文の生成・監査で分ける。モデルの登録値が none(送らない)の
+    # モデルには、上書きしても送らない(推論を受け付けないモデルがある。platform の `pr_system_settings.model`
+    # の実測)。
+    strategy_reasoning_effort: str = ""
     judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。全要求の根拠が語の一致で
@@ -472,6 +474,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         section_extraction_max_calls=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS", 8)),
         section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
+        strategy_reasoning_effort=normalize_reasoning_effort_override(
+            env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(
             env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
@@ -508,14 +512,19 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
 
 
 # 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
+# 質問拡張戦略の判定と検索文の生成(strategy)・根拠の評価(judge。CRAG の評価と章節の拡張の十分性の判定)・
+# 回答文の生成と監査(generation)。
+LLM_PURPOSE_STRATEGY = "strategy"
 LLM_PURPOSE_JUDGE = "judge"
 LLM_PURPOSE_GENERATION = "generation"
 _PURPOSE_EFFORT_FIELDS = {
+    LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
     LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
 }
 _PURPOSE_LABELS = {
-    LLM_PURPOSE_JUDGE: "判定・分類",
+    LLM_PURPOSE_STRATEGY: "質問拡張戦略の判定・検索文の生成",
+    LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答の生成・監査",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
@@ -552,7 +561,7 @@ def settings_for_llm_purpose(settings: Settings, purpose: str) -> Settings:
 
 
 def llm_reasoning_effort_note(settings: Settings, purpose: str, provider_id: str | None = None) -> str:
-    """実行記録に残す、その用途で送る推論の量と根拠(#1499)。例: 「推論の量: low（判定・分類の設定）」。"""
+    """実行記録に残す、その用途で送る推論の量と根拠(#1499)。例: 「推論の量: low（根拠の評価の設定）」。"""
     if not isinstance(settings, Settings):
         return ""
     try:

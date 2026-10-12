@@ -91,6 +91,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "section_extraction_max_calls": resolved_settings.rag_section_extraction_max_calls,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
         # 回答の LLM の時間の短縮(#1499)。
+        "strategy_reasoning_effort": resolved_settings.rag_strategy_reasoning_effort,
         "judge_reasoning_effort": resolved_settings.rag_judge_reasoning_effort,
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,

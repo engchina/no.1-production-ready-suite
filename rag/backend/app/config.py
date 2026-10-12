@@ -993,12 +993,18 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=60,
         description=("根拠の無い要求の再検索の期限(秒)。過ぎたら次の要求の検索を始めない(#1279)。"),
     )
+    rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
+        default="model",
+        description=(
+            "質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論の量(#1499。既定 model = "
+            "モデルの登録値。low では戦略の選択がぶれ、検索文 0 本の単純検索に倒れることがあった)。"
+        ),
+    )
     rag_judge_reasoning_effort: ReasoningEffortOverride = Field(
         default="low",
         description=(
-            "回答の判定・分類の LLM の呼び出し(質問拡張戦略の判定と検索文の生成、"
-            "CRAG の根拠の評価)の"
-            "推論の量(#1499。既定 low)。model はモデルの登録値のまま。モデルの登録値が none の"
+            "根拠の評価(CRAG の評価と章節の拡張の十分性の判定)の LLM の呼び出しの推論の量"
+            "(#1499。既定 low)。model はモデルの登録値のまま。モデルの登録値が none の"
             "モデルには送らない。"
         ),
     )

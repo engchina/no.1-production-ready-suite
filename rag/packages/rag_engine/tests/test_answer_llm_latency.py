@@ -1,6 +1,6 @@
 """回答の LLM の時間の短縮 (#1499) の検証。
 
-用途ごとの推論の量（判定・分類 / 生成・監査）、規則の信号が強いときの CRAG の評価の省略、質問拡張の検索文の上限、
+用途ごとの推論の量（質問拡張戦略 / 根拠の評価 / 生成・監査）、規則の信号が強いときの CRAG の評価の省略、質問拡張の検索文の上限、
 質問拡張の LLM と元の質問の検索の並行を、外部の I/O を置き換えて確かめる。
 """
 
@@ -15,6 +15,7 @@ from rag_engine.config import (
     ENTERPRISE_AI_VISION_LLM_PROVIDER,
     LLM_PURPOSE_GENERATION,
     LLM_PURPOSE_JUDGE,
+    LLM_PURPOSE_STRATEGY,
     get_settings,
     llm_reasoning_effort_note,
     settings_for_llm_purpose,
@@ -46,6 +47,7 @@ class PurposeReasoningEffortTests(unittest.TestCase):
 
     def test_env_values_are_normalized(self):
         settings = get_settings(environ={
+            "RAG_ENGINE_STRATEGY_REASONING_EFFORT": "Medium",
             "RAG_ENGINE_JUDGE_REASONING_EFFORT": " LOW ",
             "RAG_ENGINE_GENERATION_REASONING_EFFORT": "model",
             "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": "1",
@@ -53,13 +55,15 @@ class PurposeReasoningEffortTests(unittest.TestCase):
             "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": "3",
         }, dotenv_path=None)
         self.assertEqual(settings.judge_reasoning_effort, "low")
+        self.assertEqual(settings.strategy_reasoning_effort, "medium")
         # 選択肢に無い値（model など）はモデルの登録値のまま。
         self.assertEqual(settings.generation_reasoning_effort, "")
         self.assertTrue(settings.crag_skip_on_strong_signals)
         self.assertEqual(settings.crag_skip_min_rerank_score, 1.0)
         self.assertEqual(settings.query_expansion_max_queries, 3)
         defaults = get_settings(environ={}, dotenv_path=None)
-        self.assertEqual((defaults.judge_reasoning_effort, defaults.generation_reasoning_effort), ("", ""))
+        self.assertEqual((defaults.strategy_reasoning_effort, defaults.judge_reasoning_effort,
+                          defaults.generation_reasoning_effort), ("", "", ""))
         self.assertFalse(defaults.crag_skip_on_strong_signals)
         self.assertEqual(defaults.query_expansion_max_queries, generation.MAX_GENERATED_QUERY_COUNT)
 
@@ -71,6 +75,7 @@ class PurposeReasoningEffortTests(unittest.TestCase):
         # 元の設定は変えない。上書きの無い用途は同じ設定を返す。
         self.assertEqual(_efforts(settings)[ENTERPRISE_AI_LLM_PROVIDER], "medium")
         self.assertIs(settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION), settings)
+        self.assertIs(settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY), settings)
         omitted = settings_for_llm_purpose(replace(settings, generation_reasoning_effort="none"), LLM_PURPOSE_GENERATION)
         self.assertEqual(_efforts(omitted)[ENTERPRISE_AI_LLM_PROVIDER], "")
         # 設定でない stub はそのまま返す（差し替え実装のテストを壊さない）。
@@ -80,7 +85,11 @@ class PurposeReasoningEffortTests(unittest.TestCase):
     def test_note_shows_sent_effort_and_its_source(self):
         settings = _settings(judge_reasoning_effort="low")
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE),
-                         "推論の量: low（判定・分類の設定。モデルの登録値は medium）")
+                         "推論の量: low（根拠の評価の設定。モデルの登録値は medium）")
+        self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY), "推論の量: medium（モデルの登録値）")
+        self.assertEqual(llm_reasoning_effort_note(replace(settings, strategy_reasoning_effort="high"),
+                                                   LLM_PURPOSE_STRATEGY),
+                         "推論の量: high（質問拡張戦略の判定・検索文の生成の設定。モデルの登録値は medium）")
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION), "推論の量: medium（モデルの登録値）")
         self.assertEqual(llm_reasoning_effort_note(replace(settings, generation_reasoning_effort="none"),
                                                    LLM_PURPOSE_GENERATION), "推論の量: 送らない（回答の生成・監査の設定）")
@@ -92,7 +101,8 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
     """各呼び出しが用途の推論の量で LLM を呼ぶ。"""
 
     def setUp(self):
-        self.settings = _settings(judge_reasoning_effort="low", generation_reasoning_effort="high")
+        self.settings = _settings(strategy_reasoning_effort="none", judge_reasoning_effort="low",
+                                  generation_reasoning_effort="high")
         self.calls = []
 
     def record(self, reply):
@@ -101,7 +111,7 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
             return reply(schema) if callable(reply) else reply
         return parse
 
-    def test_routing_and_query_generation_use_judge_effort(self):
+    def test_routing_and_query_generation_use_strategy_effort(self):
         def reply(schema):
             if schema is QueryRoutingOutput:
                 return QueryRoutingOutput(strategy="rag_fusion", reason="複数の言い回し", queries=[])
@@ -109,7 +119,14 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
         with patch.object(generation, "parse_text_response", side_effect=self.record(reply)):
             expansion = generation.build_query_expansion("経費精算の申請方法は？", generation.AUTO_ROUTING_STRATEGY,
                                                          self.settings)
-        self.assertEqual(self.calls, [(QueryRoutingOutput, "low"), (QueryExpansionOutput, "low")])
+        # 戦略の判定と検索文の生成は根拠の評価（low）と別の設定（ここでは none = 送らない）で呼ぶ。
+        self.assertEqual(self.calls, [(QueryRoutingOutput, ""), (QueryExpansionOutput, "")])
+        defaults = replace(self.settings, strategy_reasoning_effort="")
+        self.calls.clear()
+        with patch.object(generation, "parse_text_response", side_effect=self.record(reply)):
+            generation.build_query_expansion("経費精算の申請方法は？", generation.AUTO_ROUTING_STRATEGY, defaults)
+        # 既定（空）はモデルの登録値のまま（#1499 の A/B で low は戦略の選択がぶれた）。
+        self.assertEqual(self.calls, [(QueryRoutingOutput, "medium"), (QueryExpansionOutput, "medium")])
         self.assertEqual(expansion.generated_queries, ("経費の申請", "経費精算の手順"))
 
     def test_crag_grade_uses_judge_effort(self):

@@ -219,6 +219,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 from rag_engine.config import (
     LLM_PURPOSE_GENERATION,
     LLM_PURPOSE_JUDGE,
+    LLM_PURPOSE_STRATEGY,
     Settings,
     llm_reasoning_effort_note,
     settings_for_llm_purpose,
@@ -1073,7 +1074,7 @@ def _grade_crag_retrieval(
     output = parse_text_response(
         CRAG_GRADER_SYSTEM_PROMPT,
         _build_crag_grade_prompt(question, active_query, retrieval_queries, context),
-        # 十分 / 不足の判定は分類なので、判定・分類の推論の量で呼ぶ (#1499)。
+        # 十分 / 不足の判定(CRAG の評価と章節の拡張の十分性の判定)は根拠の評価の推論の量で呼ぶ (#1499)。
         settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
         CragRetrievalGradeOutput,
         provider_id=answer_llm_provider,
@@ -1913,7 +1914,7 @@ def build_query_expansion(
             output = parse_text_response(
                 QUERY_EXPANSION_SYSTEM_PROMPT,
                 prompt,
-                settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
+                settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
                 QueryExpansionOutput,
                 provider_id=answer_llm_provider,
             )
@@ -2412,7 +2413,7 @@ def answer_question_result(
         step.add(*_query_expansion_details(
             expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))))
         if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
-                note := llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
+                note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)):
             step.add(note)
 
     with _execution_step("検索文と検索語の確定", "意味の近さで探す検索文と、全文検索に使うキーワードを確定します。") as step:
@@ -2911,8 +2912,8 @@ def _route_query_strategy(
     output = parse_text_response(
         QUERY_ROUTING_SYSTEM_PROMPT,
         _build_query_routing_prompt(question),
-        # 戦略の判定と検索文の生成は判定・分類の推論の量で呼ぶ (#1499)。
-        settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
+        # 戦略の判定と検索文の生成は、根拠の評価と別の推論の量で呼ぶ (#1499。low では戦略の選択がぶれた)。
+        settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
         QueryRoutingOutput,
         provider_id=answer_llm_provider,
     )

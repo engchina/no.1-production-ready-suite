@@ -341,6 +341,9 @@ def build_engine_settings(
         "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": str(settings.rag_section_extraction_max_calls),
         # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・
         # 検索文の上限。
+        "RAG_ENGINE_STRATEGY_REASONING_EFFORT": _reasoning_effort_override(
+            settings.rag_strategy_reasoning_effort
+        ),
         "RAG_ENGINE_JUDGE_REASONING_EFFORT": _reasoning_effort_override(
             settings.rag_judge_reasoning_effort
         ),

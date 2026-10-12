@@ -648,6 +648,7 @@ def evaluation_settings(
             "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
             "section_extraction_max_calls": "rag_section_extraction_max_calls",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
+            "strategy_reasoning_effort": "rag_strategy_reasoning_effort",
             "judge_reasoning_effort": "rag_judge_reasoning_effort",
             "generation_reasoning_effort": "rag_generation_reasoning_effort",
             "crag_skip_on_strong_signals": "rag_crag_skip_on_strong_signals",
