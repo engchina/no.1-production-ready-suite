@@ -84,6 +84,8 @@ STOP_TIME_LIMIT = "time_limit"
 STOP_NO_SECTIONS = "no_sections"
 STOP_GRADE_ERROR = "grade_error"
 STOP_DISABLED = "disabled"
+# 列挙の問の読む範囲（文書全体）まで読み、評価し直しを省いて止めた（#1528。``section_skip_regrade_at_scope``）。
+STOP_SCOPE_READ = "scope_read"
 # 抽出してから統合（#1437）で読めなかった範囲の理由（章節の拡張の止めた理由には使わない）。
 STOP_EXTRACTION_CALLS = "extraction_calls"
 STOP_EXTRACTION_ERROR = "extraction_error"
@@ -556,6 +558,10 @@ def expand_sections(
     reader = _Reader(read_chunks=section_chunks, known_ids=_context_chunk_ids(context))
     level_seconds = DEFAULT_LEVEL_SECONDS
     latest = last_attempt  # 最後の判定（読む範囲に届くまでの段は判定しない）
+    # 読む範囲が文書全体の列挙の問で、文書全体まで読んだら評価し直さない (#1528。既定 off)。文書全体を読んだ後は
+    # 上に読む章節が無く、評価し直しは足りるかの記録にしか使われない。当たった章節（leaf）が範囲の問は、評価器が
+    # 足りないと判定すれば親の章節へ広げるので、評価し直す。
+    skip_regrade_at_scope = bool(getattr(settings, "section_skip_regrade_at_scope", False)) and need == "document"
 
     def scope_reached() -> bool:
         """読む範囲まで読んだか（leaf: いずれかの起点の所有の章節、document: 起点の列の最上位の章節）。"""
@@ -764,7 +770,7 @@ def expand_sections(
         if not added and not replaced:
             if budget_hit:
                 return finish(STOP_TOKEN_BUDGET)
-            if need is not None and scope_reached() and is_enough(latest):
+            if need is not None and scope_reached() and (skip_regrade_at_scope or is_enough(latest)):
                 # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
                 return finish(STOP_SUFFICIENT)
             continue
@@ -772,6 +778,12 @@ def expand_sections(
             # 読む範囲に届くまでは判定しない（網羅の問で、見えている数件で「足りる」としない。#1503）。
             level_trace["grade_skipped"] = "minimum_scope"
             continue
+        if skip_regrade_at_scope and not budget_hit:
+            # 読む範囲（文書全体）まで決定的に読んだ。上に読む章節は無いので、評価し直さずに生成へ進む (#1528)。
+            level_trace["grade_skipped"] = "scope_reached"
+            result.context = current
+            result.applied = True
+            return finish(STOP_SCOPE_READ)
         result.context = current
         result.applied = True
         before = clock()
@@ -841,6 +853,7 @@ __all__ = [
     "MAX_SECTION_CHUNKS",
     "STOP_EXTRACTION_CALLS",
     "STOP_EXTRACTION_ERROR",
+    "STOP_SCOPE_READ",
     "STOP_SECTION_CHUNKS",
     "ROOT_SECTION_ID",
     "SECTION_CONTEXT_ROLE",

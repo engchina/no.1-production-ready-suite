@@ -1173,6 +1173,28 @@ def test_evaluation_settings_map_llm_latency_overrides() -> None:
     assert base.rag_query_expansion_max_queries == 5
 
 
+def test_evaluation_settings_map_judge_latency_overrides() -> None:
+    """監査の推論の量・CRAG の評価の入力の圧縮・評価し直しの省略(#1528)を比べられる。"""
+    base = Settings()
+    overridden = evaluation_settings(
+        base,
+        EvaluationRagOverrides(
+            audit_reasoning_effort="low",
+            crag_compact_input=not base.rag_crag_compact_input,
+            section_skip_regrade_at_scope=not base.rag_section_skip_regrade_at_scope,
+        ),
+    )
+
+    assert overridden.rag_audit_reasoning_effort == "low"
+    assert overridden.rag_crag_compact_input is (not base.rag_crag_compact_input)
+    skip_regrade = base.rag_section_skip_regrade_at_scope
+    assert overridden.rag_section_skip_regrade_at_scope is (not skip_regrade)
+    # 上書きの無い項目は既定のまま。
+    untouched = evaluation_settings(base, EvaluationRagOverrides(judge_reasoning_effort="low"))
+    assert untouched.rag_audit_reasoning_effort == base.rag_audit_reasoning_effort
+    assert untouched.rag_crag_compact_input is base.rag_crag_compact_input
+
+
 async def test_evaluation_compare_applies_experiment_rag_overrides(
     monkeypatch: MonkeyPatch,
 ) -> None:

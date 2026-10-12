@@ -134,8 +134,18 @@ def _build_crag_grade_prompt(
     active_query: str,
     retrieval_queries: Sequence[str],
     context: AnswerContext,
+    *,
+    compact: bool = False,
+    max_candidates: int | None = None,
 ) -> str:
-    candidates = _crag_grade_candidates(context, question)
+    """CRAG の評価器の入力。``compact`` は詰めた入力 (#1528。``crag_compact_input``)。
+
+    詰めた入力は、JSON を空白なしで書き、候補の欄を判定に使うもの（chunk_uid・文書名・頁・見出し・本文・抄録か）と
+    検索で当たった子の chunk_uid だけにする（ID は chunk_uid だけ。局所 ID・引用の文字列・子の entry の欄を
+    載せない）。``max_candidates`` は評価器に見せる候補（親）の上限（None は ``MAX_CRAG_GRADE_RECORDS``）。
+    評価器の判定は chunk_uid で候補へ結び付けるので、候補の除外・missing_aspects・列挙の項目の働きは変わらない。
+    """
+    candidates = _crag_grade_candidates(context, question, max_candidates=max_candidates)
     visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
     recovery_options = []
     # 未閲覧本文を十分性の根拠にせず、実行可能な回復経路だけを評価器へ知らせる。
@@ -151,29 +161,65 @@ def _build_crag_grade_prompt(
         evidence_tree=context.evidence_tree,
     )
     contract = task_contract(question)
+    # 詰めた入力は空白なしで書く。従来の入力は候補・検索文・警告を indent=2 で書く。
+    separators = (",", ":") if compact else None
+    indent = None if compact else 2
+
+    def dump(value: Any, *, block: bool = False) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=separators, indent=indent if block else None)
+
+    model_candidates = _model_candidates(candidates)
+    if compact:
+        model_candidates = [_compact_candidate(candidate) for candidate in model_candidates]
     return render_prompt_template(CRAG_GRADE_PROMPT_TEMPLATE, {
         "question": fold_width(question).strip(),
-        "recovery_options": json.dumps(recovery_options, ensure_ascii=False),
-        "task_contract": json.dumps(contract, ensure_ascii=False),
+        "recovery_options": dump(recovery_options),
+        "task_contract": dump(contract),
         "active_query": active_query.strip(),
-        "retrieval_queries": json.dumps(list(_dedupe_queries(retrieval_queries)), ensure_ascii=False, indent=2),
-        "prompt_injection_warnings": json.dumps(_prompt_safe_warnings(prompt_warnings), ensure_ascii=False, indent=2),
-        "candidates": neutralize_boundary_markers(json.dumps(_model_candidates(candidates), ensure_ascii=False, indent=2)),
+        "retrieval_queries": dump(list(_dedupe_queries(retrieval_queries)), block=True),
+        "prompt_injection_warnings": dump(_prompt_safe_warnings(prompt_warnings), block=True),
+        "candidates": neutralize_boundary_markers(dump(model_candidates, block=True)),
     })
 
-def _crag_grade_candidates(context: AnswerContext, question: str = "") -> list[dict[str, Any]]:
-    if context.evidence_tree:
-        return _crag_grade_tree_candidates(context.evidence_tree, question)
-    return _crag_grade_record_candidates(context.records, question)
 
-def _crag_grade_tree_candidates(evidence_tree: Sequence[ContextParentEvidence], question: str = "") -> list[dict[str, Any]]:
+def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """詰めた入力の候補 (#1528)。ID は chunk_uid だけで、空の欄は載せない。
+
+    検索で当たった子（retrieved_anchor）は chunk_uid の列（``anchor_uids``）にする。子の本文は親の抄録に入っており
+    （#978）、評価器が子の uid を挙げても親の uid を挙げても判定は候補へ結び付く。
+    """
+    # chunk の無い解析の記録（record の候補）は chunk_uid が空なので、評価器が判定を結び付けられる ID で代える。
+    uid = candidate.get("chunk_uid") or candidate.get("chunk_id") or candidate.get("image_id") or ""
+    compact: dict[str, Any] = {"chunk_uid": uid}
+    for key in ("source", "page", "section", "category"):
+        if candidate.get(key):
+            compact[key] = candidate[key]
+    compact["text"] = candidate.get("text", "")
+    if candidate.get("excerpt_only"):
+        compact["excerpt_only"] = True
+    anchors = [child.get("chunk_uid") for child in candidate.get("retrieved_anchor_children") or ()
+               if isinstance(child, dict) and child.get("chunk_uid")]
+    if anchors:
+        compact["anchor_uids"] = anchors
+    return compact
+
+
+def _crag_grade_candidates(context: AnswerContext, question: str = "", *,
+                           max_candidates: int | None = None) -> list[dict[str, Any]]:
+    limit = MAX_CRAG_GRADE_RECORDS if max_candidates is None else max(1, min(MAX_CRAG_GRADE_RECORDS, max_candidates))
+    if context.evidence_tree:
+        return _crag_grade_tree_candidates(context.evidence_tree, question, max_candidates=limit)
+    return _crag_grade_record_candidates(context.records, question, max_candidates=limit)
+
+def _crag_grade_tree_candidates(evidence_tree: Sequence[ContextParentEvidence], question: str = "", *,
+                                max_candidates: int = MAX_CRAG_GRADE_RECORDS) -> list[dict[str, Any]]:
     """全parentへ予算を配分し、子の独自本文のみ追加する。省略は明示する。
 
     検索で当たった子（retrieved_anchor）の本文は語彙一致が低くても親の抄録から落とさない。子の本文は
     親本文の部分列なので、子ごとの予算で選んだ窓を親本文上の必須範囲（required_ranges）として渡し、
     親の抄録 1 本にまとめる。子の entry は識別情報（chunk_uid・role・rank・section）だけで本文を持たない。
     """
-    parents = evidence_tree[:MAX_CRAG_GRADE_RECORDS]
+    parents = evidence_tree[:max_candidates]
     allowance = min(MAX_CRAG_GRADE_RECORD_CHARS, MAX_CRAG_GRADE_CHARS // max(1, len(parents)))
     candidates = []
     for parent in parents:
@@ -221,8 +267,9 @@ def _anchor_ranges(question: str, body: str, anchors: Sequence[str], budget: int
     return ranges
 
 
-def _crag_grade_record_candidates(records: Sequence[AnswerRecord], question: str = "") -> list[dict[str, Any]]:
-    selected = records[:MAX_CRAG_GRADE_RECORDS]
+def _crag_grade_record_candidates(records: Sequence[AnswerRecord], question: str = "", *,
+                                  max_candidates: int = MAX_CRAG_GRADE_RECORDS) -> list[dict[str, Any]]:
+    selected = records[:max_candidates]
     allowance = min(MAX_CRAG_GRADE_RECORD_CHARS, MAX_CRAG_GRADE_CHARS // max(1, len(selected)))
     return [{**_crag_grade_record_candidate(r, evidence_excerpt(question, r.text, allowance)),
              "excerpt_only": len(r.text) > allowance} for r in selected]
