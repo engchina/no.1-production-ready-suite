@@ -2653,6 +2653,177 @@
           "text": "使った予備部品は、点検の日から 10 営業日以内に補充します"
         }
       ]
+    },
+    {
+      "id": "sr-inspection-stop-six",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "section_read",
+      "hops": 2,
+      "query": "サーバー室の定期点検要領の第 4 章には、点検を中止する条件が 6 つ書かれています。6 つすべてと、それぞれ点検表に書くことを挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "漏水",
+        "におい",
+        "32 度",
+        "警報",
+        "バッテリー",
+        "1 人"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-stop-leak",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "床や天井に漏水を見つけたときは、点検を中止します"
+        },
+        {
+          "id": "sv-stop-smell",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "焦げたにおいがするときは、点検を中止します"
+        },
+        {
+          "id": "sv-stop-heat",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "室温が 32 度を超えたときは、点検を中止します"
+        },
+        {
+          "id": "sv-stop-alarm",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "火災の警報が鳴ったときは、点検を中止します"
+        },
+        {
+          "id": "sv-stop-battery",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "電源装置がバッテリーで動いているときは、点検を中止します"
+        },
+        {
+          "id": "sv-stop-alone",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "作業者が 1 人だけになったときは、点検を中止します"
+        }
+      ]
+    },
+    {
+      "id": "dr-inspection-business-day-five",
+      "category": "document_answerable",
+      "split": "dev",
+      "reasoning_type": "document_read",
+      "hops": 2,
+      "query": "サーバー室の定期点検要領の全体を通して、「営業日」で期限が決められている作業を 5 つすべて挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "5 営業日",
+        "3 営業日",
+        "10 営業日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sv-prep-reserve",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の 5 営業日前までに、総務部にサーバー室の入室の予約をします"
+        },
+        {
+          "id": "sv-prep-notice",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の 3 営業日前までに、点検の日時をサーバー室を使う部署に知らせます"
+        },
+        {
+          "id": "sv-prep-parts",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "電源装置のバッテリーと空調のフィルターの予備部品が倉庫にあることを確かめます"
+        },
+        {
+          "id": "sv-after-report",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "点検の記録は、点検の日から 3 営業日以内に情報システム部長へ提出します"
+        },
+        {
+          "id": "sv-after-refill",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "使った予備部品は、点検の日から 10 営業日以内に補充します"
+        }
+      ]
+    },
+    {
+      "id": "dr-inspection-sheet-columns",
+      "category": "document_answerable",
+      "split": "holdout",
+      "reasoning_type": "document_read",
+      "hops": 5,
+      "query": "サーバー室の定期点検要領の第 2 章から第 6 章までの各章で、点検表の欄に書くことを章ごとにすべて挙げてください。",
+      "relevant_document_ids": [
+        "file:server-room-inspection.pdf"
+      ],
+      "expected_answer_keywords": [
+        "予約の番号",
+        "測った値",
+        "見つけた場所と時刻",
+        "入室・退室の時刻と氏名",
+        "提出した日"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_evidence": [
+        {
+          "id": "sheet-sv-prep-staff",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "作業者の氏名と所属"
+        },
+        {
+          "id": "sheet-sv-prep-monitor",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "停止した項目と時刻"
+        },
+        {
+          "id": "sheet-sv-prep-parts",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "倉庫にある数"
+        },
+        {
+          "id": "sheet-sv-power-range",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "測った値（V）"
+        },
+        {
+          "id": "sheet-sv-air-range",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "測った値（度）"
+        },
+        {
+          "id": "sheet-sv-stop-leak",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "見つけた場所と時刻"
+        },
+        {
+          "id": "sheet-sv-record-name",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "入室・退室の時刻と氏名"
+        },
+        {
+          "id": "sheet-sv-after-monitor",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "再開した時刻"
+        },
+        {
+          "id": "sheet-sv-after-report",
+          "document_id": "file:server-room-inspection.pdf",
+          "text": "提出した日"
+        }
+      ]
     }
   ]
 }

@@ -2485,7 +2485,8 @@ def _relabeled_item(item: dict, spans: Sequence[dict]) -> dict:
 
 # CRAG 評価器の missing_aspects（task_contract.required_aspects の観点名）を利用者向けの語に写す (#986)。
 ASPECT_LABELS = {"business_object": "対象の業務・画面", "requested_result": "求める結果", "applicability": "適用条件",
-                 "procedure": "操作手順", "member_details": "構成明細", "population_membership": "集計対象の一致"}
+                 "procedure": "操作手順", "member_details": "構成明細", "population_membership": "集計対象の一致",
+                 "enumeration_coverage": "列挙の網羅（件数・範囲）"}
 
 
 def known_gap_labels(known_gaps: Sequence[str]) -> list[str]:
