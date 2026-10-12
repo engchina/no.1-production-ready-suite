@@ -663,7 +663,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
             ariaLabel={t("security.roles.workspaceLabel")}
             splitId="security-roles-list"
             splitStoragePrefix={splitStoragePrefix}
-            preferredWidePane="right"
           >
             <section
               className="grid min-w-0 content-start gap-3"

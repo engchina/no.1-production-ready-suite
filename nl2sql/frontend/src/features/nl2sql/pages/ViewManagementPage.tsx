@@ -796,7 +796,6 @@ export function ViewManagementPage() {
               idPrefix={VIEW_MANAGEMENT_ID}
               ariaLabel={t("viewMgmt.workspace.label")}
               splitId="view-management-list"
-              preferredWidePane="right"
               processing={
                 schemaRefreshing ? (
                   <SchemaRefreshProcessing testId="view-management-workspace-processing" />

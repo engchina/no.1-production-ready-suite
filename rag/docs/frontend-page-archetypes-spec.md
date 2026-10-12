@@ -90,11 +90,11 @@
 
 ## 4. 分割ペイン
 
-一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@production-ready/ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。
+一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@production-ready/ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。分割線の初期位置は、共有部品の既定のとおり 50%（#1572）。
 
-| 画面 | `splitId` | 既定で広い側 | 補足 |
-|---|---|---|---|
-| フィードバック | `feedback-list` | 左（一覧） | 一覧は評価・問題の概要・理由・対象 / 送信元の密な表なので一覧側を広くし、詳細は divider で広げる。モデル名と実行情報は詳細の「実行情報」タブに置く。`xl` 未満は縦積み（一覧 → 詳細）で、行を選ぶと詳細の見出しへフォーカスを移す。`md` 未満の一覧はカード。詳細の `詳細を閉じる` で選択を外し、その行の名前のボタンへフォーカスを戻す。 |
+| 画面 | `splitId` | 補足 |
+|---|---|---|
+| フィードバック | `feedback-list` | 一覧は評価・問題の概要・理由・対象 / 送信元の密な表。どちらかを広く見たいときは divider で広げる。モデル名と実行情報は詳細の「実行情報」タブに置く。`xl` 未満は縦積み（一覧 → 詳細）で、行を選ぶと詳細の見出しへフォーカスを移す。`md` 未満の一覧はカード。詳細の `詳細を閉じる` で選択を外し、その行の名前のボタンへフォーカスを戻す。 |
 
 チャットの会話一覧は作業の切替のサイドバーで、分割ペインとしては扱わない。既定で閉じ（多くの利用者は使わないので、チャットに面積を渡す。ChatGPT・Claude・Gemini・Microsoft Copilot と同じ型）、チャットの上端の行の開閉ボタン（「会話の履歴」）で開く。lg 以上は開くとチャットの左に 280px のパネルを置き（開閉は作業状態に残す）、lg 未満は左からの `SideSheet`（会話を選ぶ・Esc・外側・閉じるボタンで閉じ、開閉ボタンへフォーカスを戻す）。「新しい会話」と今の会話の名前は、履歴を閉じていてもチャットの上端の行に出す。会話を選ばずに送信すると、最初の送信で会話を作る（#664）。
 
