@@ -94,9 +94,15 @@ _LIST_MARKER = re.compile(r"^\s*(?:[・•\-*]\s*|\d{1,3}[.)．、]\s*|[（(]\d{
 REUSED_CLAIM_REASON = "RAG の回答の監査で確かめた説明と本文・根拠が同じため、その判定を使いました。"
 
 
+# Markdown の強調の印（「**最長 30 日**」）。書式だけで主張を変えないので、本文の比較では除く（#1527。Agent は
+# RAG の説明を強調して書き直すことが多い）。
+_EMPHASIS = re.compile(r"\*\*|__")
+
+
 def audited_line_key(line: str) -> str:
-    """回答の 1 行の本文の比較の形（先頭の箇条書き・番号の印と、空白の違いを除く）。"""
-    return " ".join(_LIST_MARKER.sub("", str(line or ""), count=1).split())
+    """回答の 1 行の本文の比較の形（強調の印・先頭の箇条書き・番号の印と、空白の違いを除く）。"""
+    text = _EMPHASIS.sub("", str(line or ""))
+    return " ".join(_LIST_MARKER.sub("", text, count=1).split())
 
 
 def audited_answer_items(

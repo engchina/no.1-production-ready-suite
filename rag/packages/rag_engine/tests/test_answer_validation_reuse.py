@@ -53,11 +53,14 @@ def test_audited_items_follow_the_citation_lines() -> None:
                        "申請画面で「承認依頼」を押します。": ["c-manual"]}
     assert audited_line_key("- 1. x") == "1. x"  # 印は先頭の 1 つだけ除く
     assert audited_line_key("  2)  承認者を  選びます。 ") == "承認者を 選びます。"
+    # Markdown の強調は書式だけなので除く（Agent が「**最長 30 日**」と書き直した回答。m1527 の実測）。
+    assert audited_line_key("- 有効期限は**最長 30 日**です。") == "有効期限は最長 30 日です。"
+    assert audited_line_key("**承認者**を__選びます__。") == "承認者を選びます。"
 
 
 def test_all_passages_reused_does_not_call_the_model() -> None:
     audited = audited_answer_items(RAG_ANSWER, ITEMS, CITATION_LINES)
-    answer = "承認の記録は、承認した日から5年間保管します。\n\n- 申請画面で「承認依頼」を押します。"
+    answer = "承認の記録は、承認した日から**5年間**保管します。\n\n- 申請画面で「承認依頼」を押します。"
     with patch("rag_engine.evaluation.answer_eval.parse_text_response") as never:
         result = validate_answer_claims("保管期間は？", answer, EVIDENCE, settings=None, audited=audited)
         never.assert_not_called()
