@@ -2048,6 +2048,27 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
     return [_quote_item(span, span["text"][:600], "拒答時の関連原文") for _, _, span in scored[:limit]]
 
 
+def deadline_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list["CheckedItem"]:
+    """1 組目の生成が回答の時間の上限までに終わらなかった（草稿が無い）ときに示す、根拠の原文の抜粋（#1548）。
+
+    根拠は検索・根拠の評価（CRAG）・章節の拡張を通って回答に渡すと決めたもので、草稿が無いのは時間の上限の
+    ためで根拠の不足ではない。質問の語を含む原文（`related_document_quotes`）を先に、足りなければ根拠の順（検索の
+    順位・読んだ章節の順）で、上限まで原文のみ提示（適用は未確認）の item にする。見出しだけ・項目名の羅列・画像
+    から作った説明は、拒答のときの関連原文と同じく除く。
+    """
+    quotes = related_document_quotes(question, spans, limit=limit)
+    shown = {entry.span["evidence_id"] for entry in quotes if entry.span}
+    for span in spans:
+        if len(quotes) >= limit:
+            break
+        if (span["evidence_id"] in shown or "image_generated" in span.get("tags", ())
+                or span.get("origin") == "image_extraction" or _bare_title(span["text"]) or _label_list_like(span["text"])):
+            continue
+        shown.add(span["evidence_id"])
+        quotes.append(_quote_item(span, span["text"][:600], "時間の上限で生成が終わらなかったときの根拠の抜粋"))
+    return quotes
+
+
 # 未回答要求の本文表示。要求原文は長い問い合わせでも 1 行に収まるよう切る。
 MISSING_REQUEST_MAX_CHARS = 80
 
@@ -2890,6 +2911,7 @@ class RoundBudget:
     # 各 round の生成と監査の秒・prompt の文字数・token（`Round.timing`）と、次の round へ渡す是正の指摘の量。
     notes: list[dict[str, Any]] = field(default_factory=list)
     _deadline: Deadline | None = None
+    _usage_before: dict[str, Any] = field(default_factory=dict)
 
     def note(self, current: Round, feedback: dict[str, Any] | None, *, accepted: bool | None = None) -> None:
         """round の所要と、その後の是正の指摘（`pending_feedback_labels`）を記録に残す（遅い round の理由を確かめる）。
@@ -2937,6 +2959,7 @@ class RoundBudget:
                           else Deadline(max(0.0, left - self.reserve_seconds), parent=current_deadline()))
         clock = self.clock or monotonic
         started = clock()
+        self._usage_before = usage_snapshot()
         try:
             with bind_deadline(self._deadline) if self._deadline is not None else nullcontext():
                 yield
@@ -2952,6 +2975,10 @@ class RoundBudget:
             return False
         self.stop = {"reason": DEADLINE_IN_ROUND if has_draft else DEADLINE_NO_DRAFT, "round": number + 1,
                      "reserve_seconds": self.reserve_seconds}
+        # 切れた round の LLM の呼び出しの秒・token（#1548）。期限で打ち切った呼び出しは token が 0 で、未完了の
+        # 理由（timeout の例外の型、または期限の残りで抑えた出力の上限）が入る。
+        if usage := usage_delta(self._usage_before):
+            self.stop["usage"] = usage
         return True
 
     def gap_lines(self, adopted: Round | None, feedback: dict[str, Any] | None) -> list[str]:
