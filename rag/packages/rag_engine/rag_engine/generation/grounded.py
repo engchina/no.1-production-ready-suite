@@ -1693,7 +1693,8 @@ def _condition_phrase(condition: str) -> str:
 
     名詞の後の助詞（「検証用アカウントには」）は落としてから「の場合」を付ける (#1501)。
     """
-    condition = condition.strip()
+    # 原文の句の末尾の読点（「ロールを持たない利用者は、」）も落とす。
+    condition = condition.strip().rstrip("、，,").rstrip()
     if not _CONDITION_ADVERB.search(condition):
         condition = _CONDITION_TRAILING_PARTICLE.sub("", condition) or condition
     if re.search(r"(?:た|だ|ない|る|う|く|す|つ|ぬ|ぶ|む|ぐ|い)$", condition) and not re.search(r"[一-龯々ァ-ヶー]$", condition):
