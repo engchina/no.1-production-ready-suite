@@ -135,7 +135,7 @@ for (const viewport of VIEWPORTS) {
 
       await expectScrollsInsideTable(page, "業務 Agent 一覧。スクロールできます。", viewport.visibleRows);
       const pager = page.getByTestId("agent-list-pagination");
-      await expect(pager).toContainText("1 - 10 / 23 件");
+      await expect(pager).toContainText("1 - 10 / 25 件");
       await expect(pager).toContainText("1 / 3 ページ");
       await expectNoHorizontalOverflow(page);
     });
@@ -145,17 +145,17 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/agents");
       const pager = page.getByTestId("agent-list-pagination");
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11 - 20 / 23 件");
+      await expect(pager).toContainText("11 - 20 / 25 件");
 
       await page.getByRole("link", { name: /^検証 Agent 12 agent-12/ }).click();
       await expect(page).toHaveURL(/\/agents\?id=agent-12$/);
       // 375px ではヘッダーの操作がメニューに入るため、ブラウザの戻るで一覧へ戻る。
       await page.goBack();
       await expect(page).toHaveURL(/\/agents$/);
-      await expect(pager).toContainText("11 - 20 / 23 件");
+      await expect(pager).toContainText("11 - 20 / 25 件");
 
       await page.reload();
-      await expect(pager).toContainText("11 - 20 / 23 件");
+      await expect(pager).toContainText("11 - 20 / 25 件");
       await expect(page.getByRole("link", { name: /^検証 Agent 12 agent-12/ })).toBeVisible();
     });
 

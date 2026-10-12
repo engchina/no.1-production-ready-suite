@@ -278,7 +278,7 @@ export const SECURITY_USERS: Json[] = [
  */
 export const ACCESS_TARGETS: Json = {
   agents: [
-    { id: "default", name: "汎用業務 Agent", description: "既定 Agent", status: "enabled" },
+    { id: "default", name: "資料・データ横断アシスタント", description: "既定 Agent", status: "enabled" },
     { id: "finance", name: "経理 Agent", description: null, status: "disabled" },
   ],
 };
