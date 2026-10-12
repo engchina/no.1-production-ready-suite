@@ -1,4 +1,5 @@
 /**
+ * 一時的な行（#1525 の測定。全件の e2e impact を動かすため。revert する）。
  * e2e の影響分析（test impact analysis）の記録（#885）。
  *
  * 3 製品の e2e の `test` をこの関数で包む（RAG・Agent は `e2e/fixtures/test.ts`、NL2SQL は
