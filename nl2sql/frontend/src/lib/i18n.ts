@@ -1843,6 +1843,10 @@ const nl2sqlJa = {
   "profiles.field.nameHint":
     "英字で開始し、英字・数字・アンダースコアのみ使用できます。小文字は自動で大文字になります。",
   "profiles.field.category": "カテゴリ",
+  "profiles.field.defaultEngine": "既定の生成方式",
+  "profiles.field.defaultEngineHint":
+    "SQL 生成・チャットで最初に選ばれる方式です。方式を指定しない問い合わせ（Agent からの問い合わせ）もこの方式で SQL を生成します。この環境で使える方式だけを選べます。",
+  "profiles.field.defaultEngineUnavailable": "{engine}（この環境では使えません）",
   "profiles.field.allowedTables": "許可表",
   "profiles.field.allowedViews": "許可ビュー",
   "profiles.field.allowedObjects": "許可オブジェクト",

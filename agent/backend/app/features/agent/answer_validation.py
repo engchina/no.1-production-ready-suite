@@ -12,7 +12,10 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
   `skipped`（確かめる対象が無い）。
 - 接続ごとに、その接続の最も新しい `rag_search` の `requests`・`gaps`・`guide`（無ければ
   `rag_lookup_guides` の最上位の業務ガイド）も渡し、RAG の決定的な検査（要求の充足・手順の順序と
-  分岐・影響範囲・承認。#1276）を動かす。
+  分岐・影響範囲・承認。#1276）を動かす。その接続の `rag_search` の `trace_id`
+  （`answer_trace_ids`）も渡し、RAG の回答の監査を通った説明と本文・根拠が同じ段落は、RAG が
+  その判定を使ってモデルに渡さない（#1527。根拠は RAG が今の権限と版で読み直す。すべての段落が
+  当たればモデルを呼ばない）。
 - 判定が valid でなければ、根拠で確かめられなかった段落（裏付けが無い・矛盾など）を回答から外し、
   外した内容と理由を「確かめられていない点」として足す（確かめていない操作の手順を公開しない。
   handoff §12）。根拠で確かめた段落と、主張ではない行（見出しなど）は残す。決定的な検査の error も
@@ -89,6 +92,10 @@ STATUS_UNVALIDATED = "unvalidated"
 
 # 決定的な検査の入力（`requests`・`gaps`・`guide.conditions`）の件数の上限（契約の maxItems）。
 MAX_CHECK_ITEMS = 30
+# 監査の判定を再利用する `rag_search` の回答の記録（`answer_trace_ids`）の上限と、
+# trace_id の長さ（契約）。
+MAX_ANSWER_TRACE_IDS = 10
+MAX_TRACE_ID_CHARS = 64
 RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 REQUEST_STATUSES = frozenset({"addressed", "partial", "missing", "unknown"})
 # 回答に手順を書く業務ガイドの判断（手順・影響範囲を確かめる）。
@@ -377,9 +384,11 @@ def _guide_input(guide: object, profile_id: object, conditions: object) -> JsonO
 
 
 def connection_check_inputs(steps: list[RunStep], evidence_tool: str) -> JsonObject:
-    """`rag_validate_answer` の決定的な検査の入力（`requests`・`gaps`・`guide`。#1276・#1277）。
+    """`rag_validate_answer` の決定的な検査の入力（`requests`・`gaps`・`guide`。#1276・#1277）と、
+    監査の判定を再利用する回答の記録（`answer_trace_ids`。#1527）。
 
     根拠を返した接続の最も新しい `rag_search` の要求ごとの充足・不足・業務ガイドを渡す。
+    `answer_trace_ids` はその接続の `rag_search` の `trace_id`（新しい順、最大 10 件）。
     `rag_search` が業務ガイドを返さなければ、同じ接続の最も新しい `rag_lookup_guides` の最上位の
     業務ガイドを使う。分からない項目は渡さない（その検査は RAG が行わない）。
     """
@@ -389,6 +398,16 @@ def connection_check_inputs(steps: list[RunStep], evidence_tool: str) -> JsonObj
     inputs: JsonObject = {}
     guide: JsonObject | None = None
     searches = _completed_outputs(steps, prefix, RAG_SEARCH)
+    # RAG の回答の監査を通った説明と本文・根拠が同じ段落は、RAG がその判定を使いモデルに
+    # 渡さない（#1527）。
+    # 記録は RAG が Run の利用者の範囲で読み直す（ここは trace_id を渡すだけ）。
+    trace_ids = [
+        trace_id
+        for _arguments, output in searches
+        if (trace_id := _text_value(output.get("trace_id"), MAX_TRACE_ID_CHARS))
+    ]
+    if trace_ids:
+        inputs["answer_trace_ids"] = list(dict.fromkeys(trace_ids))[:MAX_ANSWER_TRACE_IDS]
     if searches:
         arguments, output = searches[0]
         requests = [
@@ -552,6 +571,8 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
         "checks": checks,
         "findings": findings,
         "valid": valid,
+        # RAG の回答の監査の判定を使い、モデルに渡さなかった段落の数（#1527。接続ごとの和）。
+        "reused_claims": sum(int(result.get("reused_claims") or 0) for result in results),
         "status": status,
         "counts": counts,
         "claims": claims,

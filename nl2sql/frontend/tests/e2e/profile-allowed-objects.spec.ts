@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page, type Route } from "./_helpers/te
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -1622,6 +1623,91 @@ test("保存済み Region は Osaka を保持しキーボードで変更でき�
   await expect(region).toContainText("us-chicago-1");
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toBeVisible();
+});
+
+test("既定の生成方式はこの環境で使える方式だけから選んで保存する (#1524)", async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  // Select AI Agent は使える・OCI Enterprise AI は未設定の環境。
+  await page.route("**/api/nl2sql/engines", (route) =>
+    fulfillJson(route, {
+      engines: [
+        { engine: "select_ai", available: true, reason: "" },
+        { engine: "select_ai_agent", available: true, reason: "" },
+        { engine: "enterprise_ai_direct", available: false, reason: "未設定" },
+      ],
+    })
+  );
+  let savedPayload: { default_engine?: string } | null = null;
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fallback();
+      return;
+    }
+    savedPayload = route.request().postDataJSON() as { default_engine?: string };
+    await fulfillJson(route, { ...profiles[0], ...savedPayload, id: "default", etag: "etag-default-2" });
+  });
+  await page.goto("/profiles?profile=default");
+
+  const engine = page.getByRole("combobox", { name: "既定の生成方式" });
+  // 既定の生成方式を持たない業務プロファイルは Select AI。
+  await expectSelectFieldValue(engine, "select_ai");
+  await expect(page.getByText("方式を指定しない問い合わせ（Agent からの問い合わせ）もこの方式で SQL を生成します。", { exact: false })).toBeVisible();
+  // 入力欄の高さは名称・カテゴリと同じ段（md）。
+  const [engineBox, categoryBox] = await Promise.all([
+    engine.boundingBox(),
+    page.locator("#profile-category").boundingBox(),
+  ]);
+  expect(Math.abs((engineBox?.height ?? 0) - (categoryBox?.height ?? 0))).toBeLessThanOrEqual(1);
+  // ライト / ダークの見た目を確かめるための画像（失敗の判定には使わない）。
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
+    await testInfo.attach(`default-engine-${colorScheme}`, {
+      body: await engine.locator("xpath=ancestor::section[1]").screenshot(),
+      contentType: "image/png",
+    });
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.evaluate(() => document.documentElement.classList.remove("dark"));
+
+  await engine.click();
+  const listbox = page.locator(`[id="${await engine.getAttribute("aria-controls")}"]`);
+  await expect(listbox.getByRole("option")).toHaveText(["Select AI", "Select AI Agent"]);
+  await page.keyboard.press("Escape");
+  await chooseSelectFieldOption(engine, "select_ai_agent");
+
+  // 固定データの名称（日本語）は保存できない名称なので、保存できる名称にする。
+  await page.getByLabel("名称").fill("SALES_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("profile-save-progress")).toHaveAttribute("data-job-status", "succeeded");
+  expect((savedPayload as { default_engine?: string } | null)?.default_engine).toBe("select_ai_agent");
+  await expectNoDocumentHorizontalOverflow(page);
+});
+
+test("保存済みの既定の生成方式が使えない環境でも選択を残して示す (#1524)", async ({ page }) => {
+  await mockProfileApi(page, {
+    profileItems: [{ ...profiles[0], default_engine: "enterprise_ai_direct" } as (typeof profiles)[number]],
+  });
+  await page.route("**/api/nl2sql/engines", (route) =>
+    fulfillJson(route, {
+      engines: [
+        { engine: "select_ai", available: true, reason: "" },
+        { engine: "select_ai_agent", available: false, reason: "無効" },
+        { engine: "enterprise_ai_direct", available: false, reason: "未設定" },
+      ],
+    })
+  );
+  await page.goto("/profiles?profile=default");
+  const engine = page.getByRole("combobox", { name: "既定の生成方式" });
+  await expectSelectFieldValue(engine, "enterprise_ai_direct");
+  await expect(engine).toContainText("Enterprise AI Direct（この環境では使えません）");
+  await engine.click();
+  const listbox = page.locator(`[id="${await engine.getAttribute("aria-controls")}"]`);
+  await expect(listbox.getByRole("option")).toHaveText([
+    "Select AI",
+    "Enterprise AI Direct（この環境では使えません）",
+  ]);
 });
 
 test("Credential 不足からデータベース設定で作成し、履歴 job を自動再試行しない", async ({

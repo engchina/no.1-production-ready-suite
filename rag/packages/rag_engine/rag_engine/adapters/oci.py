@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass
 from rag_engine.resources.cache import application_cache
-from rag_engine.resources.llm_usage import record_llm_usage, response_usage
+from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_usage, response_usage
 from rag_engine.resources.deadline import (
     DeadlineExceeded,
     check_deadline,
@@ -515,32 +515,46 @@ def _openai_parsed(
             extra_body={"seed": int(settings.llm_seed)},
             **reasoning,
         )
-        _record_usage(response, provider, text_format, time.monotonic() - started)
+        _record_usage(response, provider, text_format, time.monotonic() - started,
+                      max_output_tokens=budget, attempt=attempt)
         try:
             return _parsed_response(response, text_format, provider)
         except IncompleteResponse as exc:
             if attempt or exc.reason != INCOMPLETE_OUTPUT_REASON:
                 raise
             budget *= INCOMPLETE_OUTPUT_BUDGET_FACTOR
+            # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
+            # ぶれが送り直しによるかを確かめる）。
+            record_llm_output_retry()
     raise AssertionError("unreachable")
 
 
 _logger = logging.getLogger(__name__)
 
 
-def _record_usage(response: Any, provider: LlmProviderSettings, text_format: type, seconds: float) -> None:
-    """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。"""
+def _record_usage(response: Any, provider: LlmProviderSettings, text_format: type, seconds: float, *,
+                  max_output_tokens: int | None = None, attempt: int = 0) -> None:
+    """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。
+
+    応答が未完了（`status=incomplete`）なら理由（`incomplete_details.reason`）も残す。``attempt`` は出力の上限を
+    広げた送り直しの何回目か（0 は最初の送信）、``max_output_tokens`` はその送信の出力の上限（#1527）。
+    """
     usage = response_usage(response)
-    record_llm_usage({**usage, "seconds": seconds})
+    status = str(_value(response, "status") or "")
+    reason = (str(_value(_value(response, "incomplete_details"), "reason") or "unknown")
+              if status == "incomplete" else "")
+    record_llm_usage({**usage, "seconds": seconds, **({"incomplete_reason": reason} if reason else {})})
     # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
         "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
-        "reasoning_tokens=%d status=%s",
+        "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s",
         provider.model, getattr(text_format, "__name__", str(text_format)), seconds, usage["input_tokens"],
-        usage["cached_tokens"], usage["output_tokens"], usage["reasoning_tokens"], _value(response, "status"),
+        usage["cached_tokens"], usage["output_tokens"], usage["reasoning_tokens"], status, reason or "-", attempt,
+        max_output_tokens if max_output_tokens is not None else "-",
         extra={"event": "llm_call_usage", "llm_model": str(provider.model),
                "llm_schema": getattr(text_format, "__name__", str(text_format)), "llm_seconds": round(seconds, 1),
-               "llm_status": str(_value(response, "status") or ""), **usage},
+               "llm_status": status, "llm_incomplete_reason": reason, "llm_attempt": attempt,
+               **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}), **usage},
     )
 
 
