@@ -155,6 +155,8 @@ def test_valid_answer_is_kept_and_the_result_is_saved(
         "evidence": [{"document_id": "doc-1", "chunk_id": "chunk-1"}],
         # rag_search の要求ごとの充足（決定的な検査。#1276）。
         "requests": [{"id": "Q1", "text": "契約条項", "status": "addressed"}],
+        # rag_search の回答の監査の判定を再利用する（#1527）。
+        "answer_trace_ids": ["rag-trace-1"],
     }
     assert call["claims"]["sub"] == USER_UUID
     assert call["claims"]["run_id"] == run.id
@@ -843,6 +845,7 @@ def test_lookup_guide_is_used_only_when_it_gives_steps() -> None:
     inputs = connection_check_inputs(steps, "rag__rag_search")
 
     assert inputs == {
+        "answer_trace_ids": ["rag-trace-1"],
         "requests": [{"id": "Q1", "text": "契約条項", "status": "addressed"}],
         "guide": {
             "search_answer_profile_id": "bv-sales",
@@ -1750,3 +1753,21 @@ def test_the_unverified_section_heading_is_shared_with_the_rag_evaluation() -> N
     for case in UNVERIFIED_SECTION["answers"]:
         if case["answer"] != case["body"]:
             assert non_claim_passages(case["answer"]).get(f"**{heading}**") == "unverified_section"
+
+
+def test_answer_trace_ids_are_the_searches_of_the_connection() -> None:
+    """監査の判定を再利用する回答の記録は、その接続の rag_search の trace_id（#1527）。
+
+    新しい呼び出しから順で、重複は除く。
+    """
+    first = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+    second = {**deepcopy(DEFAULT_OUTPUTS["rag_search"]), "trace_id": "rag-trace-2"}
+    other = {**deepcopy(DEFAULT_OUTPUTS["rag_search"]), "trace_id": "other-trace"}
+    steps = [
+        _step("rag__rag_search", {"query": "q1"}, first),
+        _step("rag2__rag_search", {"query": "q"}, other),
+        _step("rag__rag_search", {"query": "q2"}, second),
+        _step("rag__rag_search", {"query": "q1"}, deepcopy(first)),
+    ]
+    inputs = connection_check_inputs(steps, "rag__rag_search")
+    assert inputs["answer_trace_ids"] == ["rag-trace-1", "rag-trace-2"]
