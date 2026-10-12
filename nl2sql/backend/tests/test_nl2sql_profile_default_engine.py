@@ -13,16 +13,20 @@ import pytest
 from fastapi import HTTPException, Request, Response
 from test_nl2sql_job_runtime import _PROFILE_ID, _repository, _worker
 
+from app.features.mcp.tools import _job_result
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import (
     JobCreateRequest,
+    JobData,
+    JobStatus,
+    JobStepStatus,
     Nl2SqlEngine,
     Nl2SqlProfile,
     ProfilePatchRequest,
     ProfileUpsertRequest,
     SelectAiRequestOverrides,
 )
-from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.service import GeneratedSql, Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.permissions import (
     PROFILE_MANAGE_PERMISSION,
@@ -250,3 +254,92 @@ def test_profile_default_engine_resolution_keeps_explicit_engine() -> None:
     explicit = JobCreateRequest(question="売上", engine=Nl2SqlEngine.SELECT_AI)
     assert explicit.with_profile_default_engine(Nl2SqlEngine.SELECT_AI_AGENT) is explicit
     assert isinstance(Nl2SqlProfile(id="p", name="P").default_engine, Nl2SqlEngine)
+
+
+# --- 既定の生成方式で決めた方式と、安全確認の規則（#1523） -------------------------------------
+# 業務プロファイルの範囲の外の表。安全確認をする方式（enterprise_ai_direct）だけが止める。
+_OUT_OF_SCOPE_SQL = "SELECT ID FROM APP.SALARY"
+
+
+def _service_with_default_engine(
+    monkeypatch: pytest.MonkeyPatch, default_engine: Nl2SqlEngine
+) -> tuple[Nl2SqlService, list[Nl2SqlEngine]]:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repository = _repository()
+    stored = repository.get_profile(_PROFILE_ID)
+    assert stored is not None
+    repository.save_profile(
+        stored.model_copy(update={"default_engine": default_engine}),
+        expected_etag=stored.etag,
+    )
+    service = _worker(repository)
+    used: list[Nl2SqlEngine] = []
+
+    # 生成は、渡された方式（ジョブの作成が既定から決めた方式）で作ったことにする。
+    def generate(*_args: object, engine: Nl2SqlEngine, **_kwargs: object) -> GeneratedSql:
+        used.append(engine)
+        return GeneratedSql(
+            engine=engine, generated_sql=_OUT_OF_SCOPE_SQL, explanation="", engine_meta={}
+        )
+
+    monkeypatch.setattr(service, "_generate_selected_engine", generate)
+    return service, used
+
+
+def _run_without_engine(service: Nl2SqlService, *, chat: bool) -> JobData:
+    created = service.start_job(
+        JobCreateRequest(question="注文一覧を確認したい", profile_id=_PROFILE_ID, chat=chat),
+        actor_user_uuid="user-1",
+        actor_is_system_admin=True,
+    )
+    assert service.run_next_nl2sql_job(worker_id="default-engine-test", job_id=created.job_id)
+    job = service.get_job(created.job_id, actor_user_uuid="user-1")
+    assert job is not None
+    return job
+
+
+def _step_status(job: JobData, stage: str) -> JobStepStatus:
+    return next(step.status for step in job.steps if step.stage == stage)
+
+
+@pytest.mark.parametrize(
+    "default_engine",
+    [Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT],
+    ids=lambda engine: engine.value,
+)
+@pytest.mark.parametrize("chat", [False, True], ids=["sql-generation", "chat"])
+def test_select_ai_default_engine_skips_the_safety_check(
+    monkeypatch: pytest.MonkeyPatch, default_engine: Nl2SqlEngine, chat: bool
+) -> None:
+    service, used = _service_with_default_engine(monkeypatch, default_engine)
+
+    job = _run_without_engine(service, chat=chat)
+
+    assert used == [default_engine]
+    assert job.status == JobStatus.DONE, job.error_message
+    assert _step_status(job, "safety_check") == JobStepStatus.SKIPPED
+    result = job.result
+    assert result is not None
+    assert result.safety.is_safe is True
+    assert result.safety.safety_checked is False
+    # Agent の MCP（nl2sql_query）の応答も省略になる。
+    assert _job_result(job).safety_check == "skipped"
+
+
+@pytest.mark.parametrize("chat", [False, True], ids=["sql-generation", "chat"])
+def test_enterprise_ai_direct_default_engine_keeps_the_safety_check(
+    monkeypatch: pytest.MonkeyPatch, chat: bool
+) -> None:
+    service, used = _service_with_default_engine(monkeypatch, Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+
+    job = _run_without_engine(service, chat=chat)
+
+    assert used == [Nl2SqlEngine.ENTERPRISE_AI_DIRECT]
+    assert job.status == JobStatus.ERROR
+    assert _step_status(job, "safety_check") == JobStepStatus.ERROR
+    assert _step_status(job, "execute_sql") == JobStepStatus.SKIPPED
+    result = job.result
+    assert result is not None
+    assert result.safety.safety_checked is True
+    assert "許可されていない表" in result.safety.blocked_reason
+    assert _job_result(job).safety_check == "checked"
