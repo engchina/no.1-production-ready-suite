@@ -204,6 +204,18 @@ function nl2sqlQuestionInput(scope: Page | Locator) {
   return scope.locator("#nl2sql-question-input");
 }
 
+/**
+ * 業務プロファイルが決まってから質問を入れ、「SQL を生成して実行」が押せることを確かめる（#1519）。
+ * 質問の草稿はプロファイル・DB・利用者ごとに保存するため、決まる前に入れた質問は遅い runner で
+ * 草稿の切り替えと重なって消え、ボタンが押せないまま 30 秒を超えることがあった。
+ */
+async function fillQuestionWhenReady(page: Page, text: string, profileId = "default") {
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), profileId);
+  await nl2sqlQuestionInput(page).fill(text);
+  await expect(nl2sqlQuestionInput(page)).toHaveValue(text);
+  await expect(page.getByRole("button", { name: "SQL を生成して実行" })).toBeEnabled();
+}
+
 async function openNl2SqlExecutionOptions(page: Page) {
   const disclosure = page.getByRole("button", { name: /実行オプション/ });
   if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
@@ -5035,7 +5047,7 @@ test("SQL の生成と実行の開始時に前回の生成 SQL・実行結果を
 
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
-  await question.fill("請求金額を一覧で見たい");
+  await fillQuestionWhenReady(page, "請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
@@ -5683,7 +5695,7 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   );
 
   await page.goto("/query");
-  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await fillQuestionWhenReady(page, "請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByRole("heading", { name: "実行結果（12 行）" })).toBeVisible();
@@ -10335,6 +10347,8 @@ test("app feedback keeps history left of the editor without crossing the divider
 
 test("shared split panes reserve their divider track across NL2SQL management pages", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop-only cross-page geometry audit");
+  // 8 つの管理画面を順に読み込む長いテストで、2 worker の nightly では 30 秒を超えた（retry を含めて失敗。#1519）。
+  test.slow();
   await page.setViewportSize({ width: 2048, height: 1000 });
   await mockNl2SqlApi(page);
 
@@ -16739,13 +16753,18 @@ test("synthetic manual refresh discards feedback after switching history", async
   const first = syntheticRunFixture("completed");
   const second = { ...syntheticRunFixture("failed"), run_id: "run-002" };
   let gate: ReturnType<typeof createRequestGate> | null = null;
+  let listed = 0;
   await page.route("**/api/nl2sql/synthetic-data/runs", async (route) => {
     if (gate) await gate.promise;
+    listed += 1;
     return fulfillJson(route, [first, second]);
   });
   await page.goto("/data-management?synthetic_run=run-001");
   const panel = page.getByTestId("synthetic-run-panel");
   await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-001");
+  // 参照の run は URL から先に出るので、最初の一覧の応答を待ってから再確認の応答を止める。
+  // 遅い runner では最初の一覧の request が gate の後に出て止まり、run-002 が選択肢に出なかった（#1519）。
+  await expect.poll(() => listed).toBeGreaterThan(0);
   gate = createRequestGate();
   await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
   await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toHaveAttribute("aria-busy", "true");
