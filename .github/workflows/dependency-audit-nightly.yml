@@ -53,20 +53,15 @@ jobs:
       - name: Dependency audit
         run: uv run pip-audit --skip-editable ${{ matrix.args }}
 
-  # RAG の外部 parser のサービス（rag/services/parsers/<name>）。venv に pip-audit が無いので、ci.yml の
-  # RAG / Parser <name> の job と同じく、lock から書き出した requirements（hash 付き）を検査する（#1513）。
-  # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local）。
-  parser-pip-audit:
-    name: RAG / Parser ${{ matrix.parser }} (pip-audit)
+  # RAG の package とサービス（rag/packages/<name>・rag/services/<種類>/<name>。配備は rag-services.sh が各 lock から
+  # venv を作る）。venv に pip-audit が無いので、ci.yml の RAG / Parser <name>・Lint / services & scripts と同じく、
+  # lock から書き出した requirements（hash 付き）を検査する（#1513。docling・asr 以外は #1534 で足した）。
+  # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local）。package の extra（rag_engine の
+  # docling 等）も配備で入るので --all-extras を付ける。lock は glob で集めるので、サービスを足しても対象に入る。
+  rag-services-pip-audit:
+    name: RAG / packages & services (pip-audit)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        parser: [docling, asr]
-    defaults:
-      run:
-        working-directory: rag/services/parsers/${{ matrix.parser }}
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -76,7 +71,16 @@ jobs:
 
       - name: Dependency audit
         run: |
-          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
+          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
           test -n "${version}"
-          uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
-          uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
+          status=0
+          for lock in rag/packages/*/uv.lock rag/services/*/*/uv.lock; do
+            dir="$(dirname "${lock}")"
+            echo "::group::${dir}"
+            (cd "${dir}" && uv export --locked --no-dev --all-extras --no-emit-local --format requirements.txt \
+              -o "${RUNNER_TEMP}/requirements.txt" -q \
+              && uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt") \
+              || { status=1; echo "::error file=${lock}::pip-audit が既知の脆弱性を検出しました（uv lock --upgrade-package で修正版へ上げる）。"; }
+            echo "::endgroup::"
+          done
+          exit "${status}"

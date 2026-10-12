@@ -51,6 +51,7 @@ import { formatDateTime } from "@/lib/format";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
+import { useProfileEngine } from "./useProfileEngine";
 import { GuidedClarificationPanel } from "./components/GuidedClarificationPanel";
 import { Nl2SqlExecutionOptionsPanel } from "./components/Nl2SqlExecutionOptionsPanel";
 import { QueryResultCard } from "./components/QueryResultTable";
@@ -180,7 +181,6 @@ function ExecutableNl2SqlWorkbench() {
   const workspaceActive = useWorkspaceActive();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useWorkspaceRevalidation();
-  const [engine, setEngine] = useWorkspaceState<Nl2SqlEngine>("engine", "select_ai");
   const [profileId, setProfileId] = useWorkspaceState("profileId", "");
   const [question, setQuestion] = useWorkspaceState(`question:${profileId}`, "");
   // プロファイル未確定（""）の間に入力した質問は、確定した時点で新しいプロファイルの下書きへ
@@ -261,6 +261,8 @@ function ExecutableNl2SqlWorkbench() {
   const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
   const selectedProfileQuery = useProfileUsageContext(profileId);
   const selectedProfile = selectedProfileQuery.data?.profile ?? null;
+  // 生成の方式は業務プロファイルごとに残し、選んでいなければ業務プロファイルの既定の生成方式にする（#1524）。
+  const [engine, setEngine] = useProfileEngine(profileId, selectedProfile?.default_engine);
   const profileOptions = useMemo(() => {
     if (!selectedProfile || profiles.some((profile) => profile.id === selectedProfile.id)) {
       return profiles;
@@ -608,8 +610,9 @@ function ExecutableNl2SqlWorkbench() {
     let draftFailed = false;
     if (workspaceActive && QUERY_PREFILL_KEYS.some((key) => searchParams.has(key))) {
       const prefill = prefillFromSearchParams(searchParams);
+      const otherProfile = Boolean(prefill.profileId && prefill.profileId !== profileId);
       if (prefill.question) {
-        if (prefill.profileId && prefill.profileId !== profileId) {
+        if (otherProfile) {
           if (!writeDraft(`question:${prefill.profileId}`, prefill.question)) {
             setActionError(t("workspace.storageFailed"));
             draftFailed = true;
@@ -617,7 +620,13 @@ function ExecutableNl2SqlWorkbench() {
         } else setQuestion(prefill.question);
       }
       if (!draftFailed) {
-        if (prefill.engine) setEngine(prefill.engine);
+        // 生成の方式は業務プロファイルごとに残すので、別の業務プロファイルの方式はその草稿へ書く（#1524）。
+        if (prefill.engine) {
+          if (!otherProfile) setEngine(prefill.engine);
+          else if (!writeDraft(`engine:${prefill.profileId}`, prefill.engine)) {
+            setActionError(t("workspace.storageFailed"));
+          }
+        }
         if (prefill.profileId) setProfileId(prefill.profileId);
       }
     }

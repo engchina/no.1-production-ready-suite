@@ -661,6 +661,36 @@ test("select ai overrides show inactive notice for other engines and role can co
   await expectNoHorizontalOverflow(page);
 });
 
+test("実行エンジンの初期の選択は業務プロファイルの既定の生成方式 (#1524)", async ({ page }) => {
+  const api = await mockNl2SqlWorkbenchApi(page);
+  // 後から登録した route が先に当たる。
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) =>
+    fulfillJson(route, {
+      id: profile.id,
+      name: profile.name,
+      category: profile.category,
+      description: profile.description,
+      allowed_tables: profile.allowed_tables,
+      allowed_views: profile.allowed_views,
+      default_engine: "select_ai_agent",
+      archived: profile.archived,
+      object_scope_version: 1,
+      version: profile.version,
+      etag: profile.etag,
+      updated_at: profile.updated_at,
+    })
+  );
+  await page.goto("/query");
+  await expect(page.getByRole("button", { name: /^Select AI Agent/ })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.jobPayload).toMatchObject({ engine: "select_ai_agent" });
+});
+
 test("execution options keep ontology toggle usable at mobile width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 });
   await mockNl2SqlWorkbenchApi(page);

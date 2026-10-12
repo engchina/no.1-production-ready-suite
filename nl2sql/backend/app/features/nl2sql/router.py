@@ -118,6 +118,7 @@ from .models import (
     MetadataSqlSampleData,
     MetadataSqlSampleRequest,
     Nl2SqlEngine,
+    Nl2SqlEnginesData,
     Nl2SqlProfile,
     PersistenceStatusData,
     PreviewData,
@@ -873,6 +874,7 @@ def get_profile_usage_context(
                     "description",
                     "allowed_tables",
                     "allowed_views",
+                    "default_engine",
                     "archived",
                     "object_scope_version",
                     "version",
@@ -905,11 +907,18 @@ def get_profile_detail(
     return ApiResponse(data=profile)
 
 
+@router.get("/engines", response_model=ApiResponse[Nl2SqlEnginesData])
+def list_engines() -> ApiResponse[Nl2SqlEnginesData]:
+    """この環境で使える生成の方式（業務プロファイルの既定の生成方式の選択肢。#1524）。"""
+    return ApiResponse(data=Nl2SqlEnginesData(engines=nl2sql_service.engine_availability()))
+
+
 @router.post("/profiles", response_model=ApiResponse[Nl2SqlProfile])
 def create_profile(req: ProfileUpsertRequest, response: Response) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を作成する。"""
     profile = Nl2SqlProfile(id=str(uuid.uuid4()), **req.model_dump())
     try:
+        nl2sql_service.assert_engine_available(profile.default_engine)
         stored = nl2sql_service.create_profile(profile)
     except ProfileNameConflict as exc:
         raise _profile_name_conflict_exception(exc) from exc
@@ -937,6 +946,11 @@ def update_profile(
 
         def apply_profile_patch(current: Nl2SqlProfile) -> Nl2SqlProfile:
             update = dict(patch_data)
+            # 既定の生成方式を変えるときだけ、この環境で使えるかを確かめる（#1524）。
+            # 設定を外した後も、ほかの項目の保存は止めない。
+            requested_engine = update.get("default_engine")
+            if requested_engine is not None and requested_engine != current.default_engine:
+                nl2sql_service.assert_engine_available(Nl2SqlEngine(requested_engine))
             profile_name = normalize_profile_identifier(update.get("name", current.name))
             validate_profile_identifier(profile_name)
             update["name"] = profile_name

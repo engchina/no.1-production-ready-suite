@@ -92,6 +92,7 @@ import {
   chatSubmitProgressSteps,
 } from "./chatProgress";
 import type { JobCreateData, JobData, Nl2SqlEngine } from "./types";
+import { useProfileEngine } from "./useProfileEngine";
 
 interface Conversation {
   id: string;
@@ -257,10 +258,6 @@ export function SqlChatPage() {
     "conversationId",
     "",
   );
-  const [engine, setEngine] = useWorkspaceState<Nl2SqlEngine>(
-    "engine",
-    "select_ai",
-  );
   const [draft, setDraft] = useWorkspaceState(
     `draft:${profileId}:${conversationId}`,
     "",
@@ -303,9 +300,6 @@ export function SqlChatPage() {
   // 確かめた質問の文（job ID ごと）。投入したジョブを会話のキャッシュに入れるときに付け、回答の「AI要件確認で
   // 確かめた質問」を会話の取り直しを待たずに出す（後から増えて末尾の追従が外れない）。
   const requirementQuestionByJob = useRef<Record<string, string>>({});
-  const engineDescriptionId = useId();
-  const engineOption =
-    CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
   const sendingRef = useRef(false);
   const profiles = useProfileSummaries(profileSearch);
   const profileOptions =
@@ -319,6 +313,14 @@ export function SqlChatPage() {
   const selectedProfile =
     detail.data?.profile ??
     profileOptions.find((profile) => profile.id === selectedProfileId);
+  // 生成の方式は業務プロファイルごとに残し、選んでいなければ業務プロファイルの既定の生成方式にする（#1524）。
+  const [engine, setEngine] = useProfileEngine(
+    selectedProfileId,
+    detail.data?.profile.default_engine,
+  );
+  const engineDescriptionId = useId();
+  const engineOption =
+    CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
   const chatKey = [
     "nl2sql",
     "chats",

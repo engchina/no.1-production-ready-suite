@@ -83,6 +83,8 @@ class QualityEvaluationJudge(BaseModel):
 class QualityEvaluationDeterministicAnalysis(BaseModel):
     is_safe: bool = False
     is_select_only: bool = False
+    # 安全確認をしたか。Select AI / Select AI Agent の SQL は省略する（#1523）。
+    safety_checked: bool = True
     referenced_objects: list[str] = Field(default_factory=list)
     structure_summary: str = ""
     risk_findings: list[str] = Field(default_factory=list)

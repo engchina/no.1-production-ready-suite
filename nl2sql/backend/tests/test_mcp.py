@@ -140,6 +140,11 @@ class _FakeNl2SqlService:
         actor_is_system_admin: bool = False,
     ) -> JobCreateData:
         job_id = str(uuid.uuid4())
+        # 実装と同じく、生成の方式を省略したジョブは業務プロファイルの既定にする（#1524）。
+        profile = next(
+            item for item in self.profiles if item.id == (request.profile_id or "default")
+        )
+        request = request.with_profile_default_engine(profile.default_engine)
         self.started.append((request, actor_user_uuid, actor_is_system_admin))
         self.jobs[job_id] = StoredJob(
             job_id=job_id, request=request, actor_user_uuid=actor_user_uuid
@@ -728,6 +733,7 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
         "explanation": "社員 ID を取得します。",
         "is_safe": True,
         "safety_issues": ["行数を制限しました。"],
+        "safety_check": "checked",
         "columns": ["EMPLOYEE_ID"],
         "rows": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
         "returned_count": 2,
@@ -767,6 +773,25 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
         assert is_error is True
         assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
     assert len(fake_service.started) == 2
+
+
+def test_query_uses_profile_default_engine(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    """nl2sql_query は生成の方式を指定せず、業務プロファイルの既定の生成方式で作る（#1524）。"""
+
+    user = users.create("mcp.engine", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+    for engine in Nl2SqlEngine:
+        fake_service.profiles[1] = fake_service.profiles[1].model_copy(
+            update={"default_engine": engine}
+        )
+        is_error, _content = _structured(
+            _run(
+                _call("nl2sql_query", {"question": "売上一覧", "profile_id": "sales"}), token=token
+            )
+        )
+        assert is_error is False
+        assert fake_service.started[-1][0].engine == engine
+    assert len(fake_service.started) == len(Nl2SqlEngine)
 
 
 def test_query_returns_pending_job_after_wait_and_get_job_continues(

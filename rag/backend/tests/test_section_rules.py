@@ -48,6 +48,21 @@ def test_legal_preset_finds_chapters_and_articles_with_page_ranges() -> None:
     ]
 
 
+def test_legal_preset_accepts_spaces_around_numbers() -> None:
+    """「第 4 章」「第 1 条」(番号の前後に空白のある PDF の見出し)も章・条にする(#1517)。"""
+    elements = [
+        _element(0, "サーバー室の定期点検要領", 1),
+        _element(1, "第 3 章 設備ごとの点検", 1),
+        _element(2, "第 1 条 目的", 1),
+        _element(3, "第　四　章　中止の条件", 2),
+    ]
+    assert [(title, level) for title, level, *_ in _outline(elements, PRESET_RULES["legal"])] == [
+        ("第 3 章 設備ごとの点検", 1),
+        ("第 1 条 目的", 2),
+        ("第　四　章　中止の条件", 1),
+    ]
+
+
 def test_numbered_preset_and_custom_rules() -> None:
     elements = [
         _element(0, "# サンプル商事 経費精算マニュアル"),

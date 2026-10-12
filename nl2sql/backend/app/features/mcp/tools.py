@@ -35,7 +35,7 @@ import time
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from functools import wraps
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
@@ -386,6 +386,13 @@ class Nl2SqlJobResult(BaseModel):
     explanation: str | None = None
     is_safe: bool | None = None
     safety_issues: list[str] = Field(default_factory=list)
+    safety_check: Literal["checked", "skipped"] | None = Field(
+        default=None,
+        description=(
+            "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した "
+            "SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）"
+        ),
+    )
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     returned_count: int = 0
@@ -467,6 +474,7 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
     output.explanation = result.explanation or None
     output.is_safe = safety.is_safe
     output.safety_issues = [*issues, *safety.warnings]
+    output.safety_check = "checked" if safety.safety_checked else "skipped"
     output.columns = list(result.results.columns)
     output.rows = list(result.results.rows)
     output.returned_count = result.results.returned_count or len(result.results.rows)
@@ -795,7 +803,8 @@ def build_mcp_server(request: Request) -> McpServer:
         if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
             raise HTTPException(status_code=409, detail="AI要件確認の要件がありません。")
         # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。
-        # 画面の既定値（engine / use_ontology_context 等は JobCreateRequest の既定）で作る。
+        # 生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする（#1524）。
+        # use_ontology_context 等は画面と同じく JobCreateRequest の既定で作る。
         # row_limit は必ず渡す（None だと全件を取得する）。
         job_request = _with_requirement(
             JobCreateRequest(
@@ -858,6 +867,7 @@ def build_mcp_server(request: Request) -> McpServer:
             name="nl2sql_query",
             description=(
                 "質問から SELECT SQL を生成して実行し、結果の行を返します。"
+                "SQL の生成の方式は、業務プロファイルの既定の生成方式です。"
                 "SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。"
                 "確かめる項目があれば SQL を作らずに status=needs_clarification と "
                 "requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、"

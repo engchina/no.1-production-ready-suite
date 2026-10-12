@@ -374,11 +374,29 @@ class Nl2SqlProfile(BaseModel):
     safety_policy: str = "select_only"
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
+    # 既定の生成方式（#1524）。生成の方式を指定しないジョブ（Agent の MCP の `nl2sql_query`・API）が
+    # 使い、SQL 生成・チャットの画面の初期の選択にもなる。
+    default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     archived: bool = False
     version: int = Field(default=1, ge=1)
     etag: str = ""
     updated_at: str = ""
     object_scope_version: int = Field(default=1, ge=1)
+
+
+class Nl2SqlEngineAvailability(BaseModel):
+    """生成の方式がこの環境で使えるか（業務プロファイルの既定の生成方式の選択肢。#1524）。"""
+
+    engine: Nl2SqlEngine
+    available: bool
+    # 使えない理由（利用者向けの日本語。使えるときは空）。
+    reason: str = ""
+
+
+class Nl2SqlEnginesData(BaseModel):
+    """`GET /nl2sql/engines` の応答（#1524）。"""
+
+    engines: list[Nl2SqlEngineAvailability] = Field(default_factory=list)
 
 
 class ProfileSummary(BaseModel):
@@ -407,6 +425,8 @@ class ProfileUsageContext(BaseModel):
     description: str = ""
     allowed_tables: list[str] = Field(default_factory=list)
     allowed_views: list[str] = Field(default_factory=list)
+    # 既定の生成方式（#1524）。SQL 生成・チャットの画面の初期の選択。
+    default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     archived: bool = False
     object_scope_version: int = 1
     version: int = 1
@@ -520,6 +540,7 @@ class ProfileUpsertRequest(BaseModel):
     safety_policy: str = "select_only"
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
+    default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
 
     @field_validator("name", mode="before")
     @classmethod
@@ -560,6 +581,7 @@ class ProfilePatchRequest(BaseModel):
     safety_policy: str | None = None
     few_shot_examples: list[dict[str, str]] | None = None
     select_ai_config: ProfileSelectAiConfigPatch | None = None
+    default_engine: Nl2SqlEngine | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -648,6 +670,12 @@ class SafetyReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     referenced_tables: list[str] = Field(default_factory=list)
     referenced_columns: list[str] = Field(default_factory=list)
+    # 安全確認をしたか（#1523）。Select AI / Select AI Agent が生成した SQL は既定で SELECT 文
+    # なので確かめない（False。業務プロファイルの表・列の範囲の照合も行わない）。
+    # 利用者の SQL・LLM（enterprise_ai_direct）が生成した SQL は確かめる。
+    safety_checked: bool = True
+    # 安全確認を省略した理由（利用者向けの文。省略しなかったときは空）。
+    safety_check_skip_reason: str = ""
 
 
 class QueryResults(BaseModel):
@@ -1288,7 +1316,14 @@ class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
     question: str
-    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    # 生成の方式。省略したジョブ（Agent の MCP の `nl2sql_query` など）は、ジョブの作成
+    # （`Nl2SqlService.start_job`）が業務プロファイルの既定の生成方式（`default_engine`）にする
+    # （`with_profile_default_engine`。#1524）。省略は `model_fields_set` で判定し、
+    # 保存するジョブには決めた方式が入る。
+    engine: Nl2SqlEngine = Field(
+        default=Nl2SqlEngine.SELECT_AI,
+        description="生成の方式。省略すると業務プロファイルの既定の生成方式（default_engine）",
+    )
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
@@ -1339,6 +1374,18 @@ class JobCreateRequest(BaseModel):
         if self.previous_job_id and not self.is_chat_turn:
             raise ValueError("会話の継続はチャットのジョブで利用できます。")
         return self
+
+    def with_profile_default_engine(self, default_engine: Nl2SqlEngine) -> JobCreateRequest:
+        """生成の方式を省略したジョブを、業務プロファイルの既定の生成方式にする（#1524）。
+
+        方式を明示したジョブはそのまま返す。Select AI の指示の上書き（`select_ai_overrides`）は
+        Select AI だけで使えるため、既定が別の方式なら明示の方式と同じく拒否する。
+        """
+
+        if "engine" in self.model_fields_set:
+            return self
+        _validate_select_ai_request_overrides(default_engine, self.select_ai_overrides)
+        return self.model_copy(update={"engine": default_engine})
 
     @property
     def is_chat_turn(self) -> bool:

@@ -1077,7 +1077,14 @@ def test_select_ai_job_passes_request_overrides_to_oracle() -> None:
     assert job is not None
     assert job.status == JobStatus.DONE
     assert [step.stage for step in job.steps] == EXPECTED_NL2SQL_JOB_STAGES
-    assert [step.status.value for step in job.steps] == ["done"] * 5
+    # Select AI の SQL は安全性の確認を省略する（#1523）。
+    assert [step.status.value for step in job.steps] == [
+        "done",
+        "done",
+        "skipped",
+        "done",
+        "done",
+    ]
     assert all(step.elapsed_ms is not None and step.elapsed_ms >= 0 for step in job.steps)
     assert job.timing is not None
     assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
@@ -1935,8 +1942,9 @@ def test_job_marks_execution_skipped_when_safety_check_blocks_sql() -> None:
             allowed_tables=["EMPLOYEE"],
         )
     )
+    # 安全性の確認は LLM（enterprise_ai_direct）の SQL に掛ける（Select AI は省略する。#1523）。
     service._generate_selected_engine = lambda **_kwargs: GeneratedSql(  # type: ignore[method-assign]
-        engine=Nl2SqlEngine.SELECT_AI,
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
         generated_sql="SELECT PROJECT_ID FROM PROJECT",
         explanation="許可範囲外の表を参照するテスト SQL",
         engine_meta={},
@@ -1945,7 +1953,7 @@ def test_job_marks_execution_skipped_when_safety_check_blocks_sql() -> None:
     created = service.start_job(
         JobCreateRequest(
             question="許可範囲外のプロジェクトを確認",
-            engine=Nl2SqlEngine.SELECT_AI,
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
             profile_id=profile.id,
         )
     )
@@ -2611,7 +2619,14 @@ def test_explicit_select_ai_job_tracks_timing() -> None:
     assert data is not None
     assert data.status == JobStatus.DONE
     assert [step.stage for step in data.steps] == EXPECTED_NL2SQL_JOB_STAGES
-    assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
+    # Select AI の SQL は安全性の確認を省略する（#1523）。
+    assert [step.status for step in data.steps] == [
+        JobStepStatus.DONE,
+        JobStepStatus.DONE,
+        JobStepStatus.SKIPPED,
+        JobStepStatus.DONE,
+        JobStepStatus.DONE,
+    ]
     assert all(step.elapsed_ms is not None for step in data.steps)
     assert data.result is not None
     assert data.result.engine == Nl2SqlEngine.SELECT_AI
@@ -3362,7 +3377,14 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert job is not None
     assert job.status == JobStatus.DONE
     assert [step.stage for step in job.steps] == EXPECTED_NL2SQL_JOB_STAGES
-    assert [step.status.value for step in job.steps] == ["done"] * 5
+    # Select AI の SQL は安全性の確認を省略する（#1523）。
+    assert [step.status.value for step in job.steps] == [
+        "done",
+        "done",
+        "skipped",
+        "done",
+        "done",
+    ]
     assert job.timing is not None
     assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     history_item = service.list_history().items[0]

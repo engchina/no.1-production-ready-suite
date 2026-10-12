@@ -93,6 +93,10 @@ jobs:
       # parser の pip-audit も、その parser の uv.lock / pyproject.toml の変更時だけ（全件は dependency-audit-nightly.yml。#1513）。
       rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      # rag/packages・rag/services（docling・asr 以外）の pip-audit は、変わった uv.lock / pyproject.toml の
+      # ディレクトリだけを検査する（空白区切りのファイルの一覧。ci.yml の変更では all = 全 lock。#1534）。
+      rag_services_deps: >-
+        ${{ steps.filter.outputs.ci == 'true' && 'all' || steps.filter.outputs.rag_services_deps_files }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -103,6 +107,8 @@ jobs:
         with:
           # `!` の除外は、その filter の中で含めたファイルから除く（除外の無い filter は従来の some と同じ。v4.0.3 以降）。
           predicate-quantifier: some-with-excludes
+          # rag_services_deps_files（変わった lock のディレクトリ）に使う。ほかの filter の true / false は変わらない。
+          list-files: shell
           filters: |
             ci:
               - ".github/workflows/ci.yml"
@@ -190,6 +196,14 @@ jobs:
             rag_parser_asr_deps:
               - "rag/services/parsers/asr/uv.lock"
               - "rag/services/parsers/asr/pyproject.toml"
+            # docling・asr は RAG / Parser <name> の job が検査する。
+            rag_services_deps:
+              - "rag/packages/*/uv.lock"
+              - "rag/packages/*/pyproject.toml"
+              - "rag/services/*/*/uv.lock"
+              - "rag/services/*/*/pyproject.toml"
+              - "!rag/services/parsers/docling/**"
+              - "!rag/services/parsers/asr/**"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
             # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
             platform_other:
@@ -514,7 +528,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -572,6 +586,38 @@ jobs:
               exit 1
             fi
           done
+
+      # 配備（rag-services.sh）が venv を作る lock の脆弱性（#1534。以前はどこでも検査していなかった）。
+      # uv.lock / pyproject.toml が変わったディレクトリだけ（全件は dependency-audit-nightly.yml）。
+      # RAG / Parser <name> と同じく lock から書き出した requirements（hash 付き。path 依存は --no-emit-local で
+      # 除く）を検査する。package の extra（rag_engine の docling 等）も配備で入るので --all-extras を付ける。
+      - name: Dependency audit (rag/packages, rag/services)
+        if: needs.changes.outputs.rag_services_deps != ''
+        env:
+          DEPS_FILES: ${{ needs.changes.outputs.rag_services_deps }}
+        run: |
+          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
+          test -n "${version}"
+          if [ "${DEPS_FILES}" = "all" ]; then
+            mapfile -t dirs < <(for lock in rag/packages/*/uv.lock rag/services/*/*/uv.lock; do dirname "${lock}"; done)
+          else
+            # shellcheck disable=SC2086 # list-files: shell の空白区切り（パスに空白は無い）。
+            mapfile -t dirs < <(for file in ${DEPS_FILES}; do dirname "${file}"; done | sort -u)
+          fi
+          status=0
+          for dir in "${dirs[@]}"; do
+            case "${dir}" in
+              rag/services/parsers/docling | rag/services/parsers/asr) continue ;;
+            esac
+            [ -f "${dir}/uv.lock" ] || continue
+            echo "::group::${dir}"
+            (cd "${dir}" && uv export --locked --no-dev --all-extras --no-emit-local --format requirements.txt \
+              -o "${RUNNER_TEMP}/requirements.txt" -q \
+              && uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt") \
+              || { status=1; echo "::error file=${dir}/uv.lock::pip-audit が既知の脆弱性を検出しました（uv lock --upgrade-package で修正版へ上げる）。"; }
+            echo "::endgroup::"
+          done
+          exit "${status}"
 
   rag-parser-docling:
     name: RAG / Parser docling
