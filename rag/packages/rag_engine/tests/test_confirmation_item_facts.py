@@ -115,6 +115,74 @@ class EnvelopeFromFactsTest(unittest.TestCase):
         self.assertEqual(self.outcome_of([fact(VERSION, "system")], version_settled=True), "answered")
 
 
+# 実サービス m1492-deepseek の grounded_draft（#1500）。cr-grant-permission の「検証用か」と ir-backup-restore の
+# 台帳の列の値を、モデルが system にして needs_environment_data になっていた。
+GRANT_ITEMS = [
+    fact("権限の付与先を「個別の利用者」と「グループ」のどちらにするか（どちらの付与手順を使うかを決める）", "user"),
+    fact("操作する利用者が「ポータル管理者」ロールを持つか（自分で操作するか、所属部署のポータル管理者に依頼するかを決める）", "user"),
+    fact("グループへ付与する場合に、付与の前に部門長の承認を得ているか（グループへの付与を行えるかを決める）", "user"),
+]
+GRANT_TEST_ACCOUNT = "付与対象のアカウントが検証用かどうか（グループへの付与を行わず個別付与に限るかの判断）"
+RESTORE_SYSTEM = "復元したいデータのシステム(どのシステムのデータを戻すか。承認を求める担当部署と承認者が決まる)"
+RESTORE_LEDGER = "対象システムのシステム台帳「担当部署」列の値(承認を求める部署を決める)"
+RESTORE_APPROVER = "対象システムを担当する部署の承認者が誰か(組織規程に定める部署ごとの承認者。どの承認者に承認を求めるかが決まる)"
+E1023_ITEMS = [
+    fact("エラーが出た時刻の認証ログ（auth.log）の該当行が「token expired」か「permission denied」か"
+         "（原因 A と原因 B のどちらに当たるかを決める）", "system"),
+    fact("操作している利用者が「ポータル管理者」ロールを持つか（認証ログを自分で確認できるか、確認を依頼する必要があるかを決める）", "user"),
+]
+
+
+class WhoCanAnswerDefinitionTest(unittest.TestCase):
+    """who_can_answer の定義を値の出どころで排他に分ける (#1500)。
+
+    資料（台帳・一覧・表）に載る値は document、利用者が自分の状況として答えられる属性は user、system は稼働中の
+    システムにだけある値（ログ・設定の現在値・処理の状態・実績）。
+    """
+
+    def sections(self):
+        from rag_engine.models.llm import ExternalDataItem
+
+        prompt = grounded.GENERATE_SYSTEM_PROMPT.split("4.5 ", 1)[1].split("4.6 ", 1)[0]
+        return prompt, ExternalDataItem.model_fields["who_can_answer"].description
+
+    def test_ledger_values_are_document_not_system(self):
+        prompt, schema = self.sections()
+        for text in (prompt, schema):
+            with self.subTest(text=text[:20]):
+                self.assertIn("台帳・一覧・表の値", text.split("document=", 1)[1].split("system=", 1)[0])
+                system = text.split("system=", 1)[1].split("。", 1)[0]
+                self.assertNotIn("台帳", system)
+                self.assertNotIn("対象レコード", system)
+                self.assertIn("ログの行", system)
+                # 旧い反例（台帳の担当部署は system）を残さない。
+                self.assertNotIn("台帳の値なので system", text)
+                self.assertIn("台帳の担当部署は台帳が資料なので", text.replace("「", "").replace("」", ""))
+        self.assertIn("根拠に台帳の行があれば挙げず、無ければ document", prompt)
+
+    def test_attributes_of_the_target_the_user_knows_are_user(self):
+        prompt, schema = self.sections()
+        for text in (prompt, schema):
+            with self.subTest(text=text[:20]):
+                user = text.split("user=", 1)[1].split("document=", 1)[0]
+                self.assertIn("対象のアカウントの種類（検証用か・共用か）", user)
+                self.assertIn("付与対象のアカウントが検証用か", text.replace("「", "").replace("」", ""))
+        # ログの行は今までどおり system の反例。
+        self.assertIn("「エラーの時刻の認証ログ（auth.log）の行」は資料にも利用者の記憶にも無いので system", prompt)
+
+    def test_items_classified_by_the_definition_settle_the_outcome(self):
+        outcome = EnvelopeFromFactsTest().outcome_of
+        # 「検証用か」を user にすれば、条件で分けて答えた回答は conditional（system にすると needs_environment_data）。
+        self.assertEqual(outcome([*GRANT_ITEMS, fact(GRANT_TEST_ACCOUNT, "user")]), "conditional")
+        self.assertEqual(outcome([*GRANT_ITEMS, fact(GRANT_TEST_ACCOUNT, "system")]), "needs_environment_data")
+        # 台帳の列の値は、根拠に台帳の行が無ければ document（資料の不足）。対象のシステムは user。
+        restore = [fact(RESTORE_SYSTEM, "user"), fact(RESTORE_APPROVER, "document")]
+        self.assertEqual(outcome([*restore, fact(RESTORE_LEDGER, "document")]), "conditional")
+        self.assertEqual(outcome(restore), "conditional")
+        # ログの行（ed-error-e1023-cause）は今までどおり needs_environment_data。
+        self.assertEqual(outcome(E1023_ITEMS), "needs_environment_data")
+
+
 V1_TITLE = "地域別集計表 出力手順 第1版"
 V2_TITLE = "地域別集計表 出力手順 第2版"
 V1_STEP = "メニューの「レポート」を開き、「地域別集計」を選んで対象月を入力し、「出力」を押します。"
