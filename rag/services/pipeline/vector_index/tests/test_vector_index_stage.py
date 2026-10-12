@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from rag_pipeline_core.stage import VectorIndexStageRequest
+from rag_pipeline_core.vector_index import DEFAULT_VECTOR_INDEX_PROFILE
 
 from app.main import app
 
@@ -36,7 +37,8 @@ def test_run_accurate_requires_reprovision() -> None:
     assert body["requires_reprovision"] is True
 
 
-def test_run_unknown_profile_falls_back_to_balanced() -> None:
+def test_run_unknown_profile_falls_back_to_default() -> None:
+    # 未知の profile は既定（#272 から accurate）に倒す。
     req = VectorIndexStageRequest(profile="bogus", settings_target_accuracy=90)
     resp = client.post("/run", content=req.model_dump_json(), headers=_JSON)
-    assert resp.json()["profile"] == "balanced"
+    assert resp.json()["profile"] == DEFAULT_VECTOR_INDEX_PROFILE == "accurate"
