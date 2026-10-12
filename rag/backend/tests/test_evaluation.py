@@ -1141,6 +1141,34 @@ def test_evaluation_settings_map_overrides() -> None:
     assert base.rag_query_strategy == "auto_routing"
 
 
+def test_evaluation_settings_map_llm_latency_overrides() -> None:
+    """回答の LLM の時間の短縮(#1499)の設定を experiment ごとに比べられる。"""
+    base = Settings()
+    overridden = evaluation_settings(
+        base,
+        EvaluationRagOverrides(
+            judge_reasoning_effort="medium",
+            generation_reasoning_effort="low",
+            crag_skip_on_strong_signals=True,
+            crag_skip_min_rerank_score=0.7,
+            query_expansion_max_queries=2,
+        ),
+    )
+
+    assert overridden.rag_judge_reasoning_effort == "medium"
+    assert overridden.rag_generation_reasoning_effort == "low"
+    assert overridden.rag_crag_skip_on_strong_signals is True
+    assert overridden.rag_crag_skip_min_rerank_score == 0.7
+    assert overridden.rag_query_expansion_max_queries == 2
+    # 既定は「判定 low・生成はモデルの登録値」、CRAG の評価の省略は off、検索文の上限は従来の 5。
+    assert (base.rag_judge_reasoning_effort, base.rag_generation_reasoning_effort) == (
+        "low",
+        "model",
+    )
+    assert base.rag_crag_skip_on_strong_signals is False
+    assert base.rag_query_expansion_max_queries == 5
+
+
 async def test_evaluation_compare_applies_experiment_rag_overrides(
     monkeypatch: MonkeyPatch,
 ) -> None:

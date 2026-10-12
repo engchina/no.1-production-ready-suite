@@ -1980,6 +1980,72 @@ def test_build_engine_settings_passes_screen_linking(tmp_path: Any) -> None:
     assert enabled.screen_linking_enabled is True
 
 
+def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> None:
+    """用途ごとの推論の量・CRAG の評価の省略・検索文の上限を rag_engine へ渡す(#1499)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    changed = build_engine_settings(
+        Settings(
+            rag_judge_reasoning_effort="model",
+            rag_generation_reasoning_effort="none",
+            rag_crag_skip_on_strong_signals=True,
+            rag_crag_skip_min_rerank_score=0.65,
+            rag_query_expansion_max_queries=3,
+        ),
+        output_dir=tmp_path,
+    )
+
+    assert (default.judge_reasoning_effort, default.generation_reasoning_effort) == ("low", "")
+    assert default.crag_skip_on_strong_signals is False
+    assert default.query_expansion_max_queries == 5
+    # model はモデルの登録値のまま(空)、none は送らない。
+    assert (changed.judge_reasoning_effort, changed.generation_reasoning_effort) == ("", "none")
+    assert changed.crag_skip_on_strong_signals is True
+    assert changed.crag_skip_min_rerank_score == 0.65
+    assert changed.query_expansion_max_queries == 3
+
+
+async def test_prefetch_warms_search_cache_without_changing_results() -> None:
+    """元の質問の先読み(#1499)は検索の cache に入れるだけで、続く検索の結果を変えない。"""
+    from app.rag.answer_engine import _SearchState
+
+    question = "受注入力画面の使い方は？"
+    queries = [question, "受注の登録手順"]
+
+    async def search(prefetch: bool) -> tuple[Any, QueryRecordingOracle, list[str]]:
+        oracle = QueryRecordingOracle()
+        engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+        state = _SearchState()
+        request = SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"})
+        if prefetch:
+            await engine._prefetch_query_hits(
+                request,
+                state,
+                query=question,
+                candidate_limit=24,
+                inquiry_conditions=_inquiry(question),
+            )
+        prefetched = list(oracle.queries)
+        result = await engine._search(
+            request,
+            state,
+            retrieval_queries=queries,
+            candidate_limit=24,
+            inquiry_conditions=_inquiry(question),
+        )
+        return result, oracle, prefetched
+
+    plain, plain_oracle, _ = await search(False)
+    warmed, warmed_oracle, prefetched = await search(True)
+
+    assert prefetched == [question]
+    # 続く検索は元の質問を読み直さず、残りの検索文だけを読む。
+    assert warmed_oracle.queries == plain_oracle.queries == queries
+    assert warmed_oracle.filters == plain_oracle.filters
+    assert warmed == plain
+
+
 def test_search_answer_profile_overrides_screen_linking() -> None:
     """検索・回答プロファイルで画面目録の連携を上書きできる(#554)。"""
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig

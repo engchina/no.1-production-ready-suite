@@ -90,6 +90,12 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # 抽出してから統合(#1437)の抽出の呼び出しの上限。
         "section_extraction_max_calls": resolved_settings.rag_section_extraction_max_calls,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
+        # 回答の LLM の時間の短縮(#1499)。
+        "judge_reasoning_effort": resolved_settings.rag_judge_reasoning_effort,
+        "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
+        "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
+        "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,
+        "query_expansion_max_queries": resolved_settings.rag_query_expansion_max_queries,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

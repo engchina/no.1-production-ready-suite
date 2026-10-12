@@ -27,6 +27,10 @@ class AnswerDependencies:
     section_outline は chunk_uid を受け取り、その chunk の文書の章節の一覧（`section_expansion.SectionOutline`。
     対応が無い chunk は None）を返す。section_chunks は document_id・chunk_set_id・section_id を受け取り、
     章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。省略時は章節で広げない。
+    prefetch_search は、質問拡張の LLM と並行に元の質問の検索を先に読む入力（#1499）。query・candidate_limit・
+    inquiry_conditions・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
+    cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。
+    省略時は先に読まない。
     """
     search: Callable[..., Any]
     check_ready: Callable[..., Any]
@@ -38,6 +42,7 @@ class AnswerDependencies:
     screen_chunks: Callable[..., Sequence[Any]] | None = None
     section_outline: Callable[..., Any] | None = None
     section_chunks: Callable[..., Sequence[Any]] | None = None
+    prefetch_search: Callable[..., Any] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -99,6 +104,12 @@ def section_dependencies() -> tuple[Callable[..., Any], Callable[..., Sequence[A
     if current is None or current.section_outline is None or current.section_chunks is None:
         return None
     return current.section_outline, current.section_chunks
+
+
+def injected_prefetch_search() -> Callable[..., Any] | None:
+    """注入された元の質問の先読み（#1499）。注入が無ければ None（先に読まない）。"""
+    current = _active.get()
+    return None if current is None else current.prefetch_search
 
 
 def search_adb_hybrid_chunks(**kwargs):

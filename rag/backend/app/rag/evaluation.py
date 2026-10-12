@@ -648,6 +648,11 @@ def evaluation_settings(
             "section_expansion_time_limit_seconds": "rag_section_expansion_time_limit_seconds",
             "section_extraction_max_calls": "rag_section_extraction_max_calls",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
+            "judge_reasoning_effort": "rag_judge_reasoning_effort",
+            "generation_reasoning_effort": "rag_generation_reasoning_effort",
+            "crag_skip_on_strong_signals": "rag_crag_skip_on_strong_signals",
+            "crag_skip_min_rerank_score": "rag_crag_skip_min_rerank_score",
+            "query_expansion_max_queries": "rag_query_expansion_max_queries",
         }
         update.update(
             {mapping[key]: value for key, value in overrides.model_dump(exclude_none=True).items()}

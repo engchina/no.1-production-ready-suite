@@ -252,6 +252,11 @@ def answer_images_enabled(settings: Settings) -> bool:
     return settings.rag_answer_vision_enabled and bool(enterprise_ai_vision_model_id(settings))
 
 
+def _reasoning_effort_override(value: str) -> str:
+    """用途ごとの推論の量の設定を rag_engine へ渡す値にする(#1499。model は空 = 登録値のまま)。"""
+    return "" if value == "model" else value
+
+
 def build_engine_settings(
     settings: Settings,
     *,
@@ -337,6 +342,19 @@ def build_engine_settings(
         ),
         # 入らない章節から原文を抜き出す LLM の呼び出しの上限(#1437。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": str(settings.rag_section_extraction_max_calls),
+        # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・
+        # 検索文の上限。
+        "RAG_ENGINE_JUDGE_REASONING_EFFORT": _reasoning_effort_override(
+            settings.rag_judge_reasoning_effort
+        ),
+        "RAG_ENGINE_GENERATION_REASONING_EFFORT": _reasoning_effort_override(
+            settings.rag_generation_reasoning_effort
+        ),
+        "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": (
+            "1" if settings.rag_crag_skip_on_strong_signals else "0"
+        ),
+        "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": str(settings.rag_crag_skip_min_rerank_score),
+        "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": str(settings.rag_query_expansion_max_queries),
     }
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -619,6 +637,10 @@ class AnswerEngine:
                 if self._settings.rag_section_expansion_enabled
                 else None
             ),
+            # 質問拡張の LLM と並行に、元の質問の検索を先に読む(#1499。結果は変えない)。
+            prefetch_search=lambda **kwargs: run_async(
+                lambda: self._prefetch_query_hits(request, state, **kwargs)
+            ),
         )
 
         def notify_step(name: str, outcome: str, elapsed: float) -> None:
@@ -682,13 +704,8 @@ class AnswerEngine:
         queries = [query for query in dict.fromkeys(q.strip() for q in retrieval_queries) if query]
         if not queries:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
-        if state.filters is None:
-            filters = await self._question_filters(dict(request.filters), inquiry_conditions)
-            state.filters, state.auto_field_conditions = merge_field_conditions(
-                filters, self._auto_field_conditions
-            )
-            if state.auto_field_conditions:
-                state.filters_without_auto = filters
+        await self._ensure_search_filters(request, state, inquiry_conditions)
+        assert state.filters is not None
         vector_only = {query.strip() for query in vector_only_queries}
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
         k = float(self._settings.rag_rrf_k)
@@ -840,6 +857,53 @@ class AnswerEngine:
         parents = _stored_parents(list(all_children.values()), state)
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
+        )
+
+    async def _ensure_search_filters(
+        self, request: SearchRequest, state: _SearchState, inquiry_conditions: Any
+    ) -> None:
+        """1 回の回答の検索条件(質問の文書名・ページと自動の条件)を、最初の検索の前に決める。
+
+        決めた条件は ``state.filters`` に入れる(先読みと ``_search`` で同じ条件を使う。#1499)。
+        """
+        if state.filters is not None:
+            return
+        filters = await self._question_filters(dict(request.filters), inquiry_conditions)
+        state.filters, state.auto_field_conditions = merge_field_conditions(
+            filters, self._auto_field_conditions
+        )
+        if state.auto_field_conditions:
+            state.filters_without_auto = filters
+
+    async def _prefetch_query_hits(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        *,
+        query: str,
+        candidate_limit: int = 24,
+        inquiry_conditions: Any = None,
+        **_: object,
+    ) -> None:
+        """元の質問の検索を、質問拡張の LLM と並行に先に読む(#1499)。
+
+        検索文ごとの検索の結果(``state.search_hits``)に入れるだけで、融合・参照先・実体の拡張・条件の
+        緩和はしない。続く ``_search`` が同じ検索文・方式・条件・件数の結果を読むので、回答の検索の
+        結果は先読みしないときと同じ(条件の緩和は ``_search`` が全検索文の結果で決める)。
+        """
+        text = query.strip()
+        if not text:
+            return
+        await self._ensure_search_filters(request, state, inquiry_conditions)
+        assert state.filters is not None
+        embeddings = await self._genai.embed([text], input_type="SEARCH_QUERY")
+        if not embeddings:
+            return
+        await self._query_hits(
+            state,
+            [(text, embeddings[0], SearchMode.HYBRID)],
+            candidate_limit=candidate_limit,
+            filters=dict(state.filters),
         )
 
     async def _query_hits(
