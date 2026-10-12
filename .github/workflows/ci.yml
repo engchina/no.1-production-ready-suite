@@ -7,6 +7,10 @@ name: CI
 # 本 workflow・.github/actions/ と、どちらにも属さない platform のファイル（.env.example・contracts/ 等）の変更は両方に効く。
 # 例外: 回答の段落の判定の共通の事例（platform/contracts/answer-passages/）は backend のテストだけが読むので、
 # それを読む RAG / Engine・RAG / Backend・Agent / Backend だけを動かす（frontend・e2e は動かさない。#1488）。
+# 製品の frontend と E2E smoke の job は、その製品の frontend（と frontend のテストが読む backend の一部のファイル。
+# <製品>_frontend）か共有 UI の変更でだけ動く。e2e は API をすべてモックするので backend のコードを実行しない（#1531）。
+# frontend が読む frontend の外のファイルが filter に入っていることは platform/scripts/ci_frontend_paths.py が確かめる。
+# MCP ツールの契約（platform/contracts/mcp/）は 3 製品の backend のテストだけが読むので、backend の job だけを動かす（#1531）。
 # platform の Markdown（AGENTS.md・README・docs/ux-contracts 等）だけの変更では製品の job を動かさない
 # （docs/design-system/ は lint 設定を含むため frontend に数える）。
 # RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
@@ -69,6 +73,12 @@ jobs:
       # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の段落の判定の共通の事例（#1370・#1488）。
       # platform_other から外しているので、これだけの変更では frontend・e2e・配備の検証は動かない。
       answer_passages_contract: ${{ steps.filter.outputs.answer_passages_contract }}
+      # 3 製品の backend のテストが読む MCP ツールの契約（#248）。platform_other から外している（#1531）。
+      mcp_contract: ${{ steps.filter.outputs.mcp_contract }}
+      # 製品の frontend の job（Frontend・E2E smoke）を動かす変更（#1531）。
+      rag_frontend: ${{ steps.filter.outputs.rag_frontend }}
+      nl2sql_frontend: ${{ steps.filter.outputs.nl2sql_frontend }}
+      agent_frontend: ${{ steps.filter.outputs.agent_frontend }}
       # pip-audit は依存（uv.lock / pyproject.toml）が変わったときだけ実行する。全件は dependency-audit-nightly.yml。
       # `--skip-editable`: 自分たちの package（editable で入る backend と platform の package）は PyPI に無いので問い合わせない。
       # PyPI が存在しない名前に 404 ではなく 503 を返し続け、pip-audit が失敗したため（#344）。
@@ -113,12 +123,28 @@ jobs:
             # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「確かめられていない点」の節の事例（#1370・#1455・#1456）。
             answer_passages_contract:
               - "platform/contracts/answer-passages/**"
+            mcp_contract:
+              - "platform/contracts/mcp/**"
             rag:
               - "rag/**"
             nl2sql:
               - "nl2sql/**"
             agent:
               - "agent/**"
+            # 製品の frontend と、frontend の単体テスト・e2e が読む backend のファイル（#1531）。
+            # frontend のテストが frontend の外のファイルを新しく読んだら、ここに足す（ci_frontend_paths.py が検出する）。
+            rag_frontend:
+              - "rag/frontend/**"
+              - "rag/backend/app/rag/answer_engine.py"
+              - "rag/backend/app/rag/answer_timeout.py"
+              - "rag/backend/app/security/permissions.py"
+              - "rag/backend/app/services/catalog.py"
+            nl2sql_frontend:
+              - "nl2sql/frontend/**"
+            agent_frontend:
+              - "agent/frontend/**"
+              - "agent/backend/app/features/agent/router.py"
+              - "agent/backend/app/security/permissions.py"
             terraform:
               - "terraform/**"
             # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）と .github/
@@ -176,6 +202,7 @@ jobs:
               - "!platform/package.json"
               - "!platform/package-lock.json"
               - "!platform/contracts/answer-passages/**"
+              - "!platform/contracts/mcp/**"
               - "!platform/**/*.md"
 
   secret-scan:
@@ -378,7 +405,10 @@ jobs:
     name: RAG / Backend
     needs: changes
     # 品質評価のテストが「確かめられていない点」の節の事例（platform/contracts/answer-passages/）を読む（#1456）。
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
+    # MCP ツールの契約（platform/contracts/mcp/rag-tools.json）も読む（#1531）。
+    if: >-
+      needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true'
+      || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -662,7 +692,7 @@ jobs:
   rag-frontend:
     name: RAG / Frontend
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    if: needs.changes.outputs.rag_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -707,7 +737,7 @@ jobs:
     needs: [changes, e2e-impact]
     if: >-
       !cancelled() && needs.changes.result == 'success'
-      && (needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true')
+      && (needs.changes.outputs.rag_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.rag_mode != 'full'
     runs-on: ubuntu-latest
     # 実測は 1.5〜2 分（2026-10、2 worker。Playwright は約 1 分で、1 worker と差は無い。#1489）。
@@ -827,7 +857,7 @@ jobs:
     name: NL2SQL / Frontend
     needs: changes
     if: >-
-      needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true'
+      needs.changes.outputs.nl2sql_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
       || needs.changes.outputs.nl2sql_frontend_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -874,7 +904,7 @@ jobs:
     needs: [changes, e2e-impact]
     if: >-
       !cancelled() && needs.changes.result == 'success'
-      && (needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true')
+      && (needs.changes.outputs.nl2sql_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.nl2sql_mode != 'full'
     runs-on: ubuntu-latest
     # 実測は約 2.5 分（2026-10、2 worker。Playwright は 1.7〜1.9 分。1 worker・sql-chat の両 project では 5 分。#1489）。
@@ -932,7 +962,10 @@ jobs:
   nl2sql-backend:
     name: NL2SQL / Backend
     needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_backend == 'true'
+    # MCP ツールの契約（platform/contracts/mcp/nl2sql-tools.json）も読む（#1531）。
+    if: >-
+      needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_backend == 'true'
+      || needs.changes.outputs.mcp_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -1001,7 +1034,10 @@ jobs:
   agent-backend:
     name: Agent / Backend
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
+    # MCP ツールの契約（platform/contracts/mcp/）も読む（#1531）。
+    if: >-
+      needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true'
+      || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -1046,7 +1082,7 @@ jobs:
   agent-frontend:
     name: Agent / Frontend
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    if: needs.changes.outputs.agent_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -1085,7 +1121,7 @@ jobs:
     needs: [changes, e2e-impact]
     if: >-
       !cancelled() && needs.changes.result == 'success'
-      && (needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true')
+      && (needs.changes.outputs.agent_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.agent_mode != 'full'
     runs-on: ubuntu-latest
     # 実測は約 2 分（2026-10、2 worker。Playwright は 1.2 分。1 worker では 1.8〜2.0 分。#1489）。
@@ -1173,6 +1209,10 @@ jobs:
       # spec が記録の fixture を通る `test` を使っていること（@playwright/test から直接 import しない）。
       - name: Check e2e imports
         run: python3 platform/scripts/e2e_impact.py check-imports
+
+      # frontend が読む frontend の外のファイルが、frontend の job を動かす filter に入っていること（#1531）。
+      - name: Check frontend paths in the CI filter
+        run: python3 platform/scripts/ci_frontend_paths.py
 
       # --skip-specs: smoke が全 project で実行する spec（workflow の env の <製品>_E2E_SMOKE）は選ばない（#1525）。
       - name: Select affected specs
