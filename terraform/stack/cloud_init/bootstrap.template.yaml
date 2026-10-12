@@ -11,6 +11,7 @@ packages:
   - git
   - netfilter-persistent
   - openssl
+  - tmux
   - unzip
 write_files:
 %{ for product, env in backend_envs ~}
