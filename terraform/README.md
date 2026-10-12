@@ -296,12 +296,11 @@ CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` 
 ## release
 
 `.github/workflows/terraform-release.yml` が `suite-v*` の tag（例: `suite-v0.1.0`）から release を作り、
-`production-ready-suite-terraform-stack.zip` と `.sha256` を公開します。最初の release（`suite-v0.1.0`）を作った後は、次のボタンで配備できます
-（tag を固定して参照します）。
+`production-ready-suite-terraform-stack.zip` と `.sha256` を公開し、その release を GitHub の Latest にします。次のボタンは最新の release を配備します。
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/suite-v0.1.0/production-ready-suite-terraform-stack.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/latest/download/production-ready-suite-terraform-stack.zip)
 
-新しい release を作ったら、root の [README.md](../README.md)「OCI へのデプロイ」の節を更新します（ボタンの URL の tag・最新の release へのリンク・版ごとの変更の要約を 1 行足す）。上のボタンの tag も同じ版にそろえます。
+root の [README.md](../README.md)「OCI へのデプロイ」のボタンも `releases/latest` を指すので、release のたびに書き換えません。版ごとの変更は release のノートに書きます。
 
 製品ごとの release（`rag-v*` / `nl2sql-v*` / `agent-v*`）は作りません。既に公開済みの release（例: `nl2sql-v0.1.32`）はそのまま残ります。
 

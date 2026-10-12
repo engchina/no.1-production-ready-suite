@@ -160,7 +160,7 @@
 - Terraform stack は `terraform/stack/` に 1 つだけ。ADB を 1 つ作り（新規 / 既存）、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低 1 つ）を 1 台の Compute に入れる。製品固有の入力は `rag_` / `nl2sql_` / `agent_` を付ける。
 - Compute の上では `platform/deploy/suite-init.sh` が各製品の `init_script.sh`（製品は単独では配備しない）を順に呼び、Nginx の site（`/rag/` `/nl2sql/` `/agent/` の prefix・HTTPS・自作の CA・公開の port）を 1 つだけ書く。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。frontend の base は build の `FRONTEND_BASE_PATH`（未指定は `/`。配備は `/<製品>/`）。
 - CI は `Suite / Terraform` が `terraform/scripts/package_stack.py`・`verify_stack_contract.py` と `platform/deploy/tests/` を実行する。
-- release tag は `suite-v*`（`terraform-release.yml` が zip と sha256 を公開する）。製品ごとの release（`<製品>-v*`）は作らない（既存の `nl2sql-v*` は残す）。README 等は `releases/latest` ではなく tag を固定して参照する。
+- release tag は `suite-v*`（`terraform-release.yml` が zip と sha256 を公開する）。製品ごとの release（`<製品>-v*`）は作らない（既存の `nl2sql-v*` は残す）。README の配備ボタンは `releases/latest/download/<asset>` を指す（asset 名は変えない。新しい release を GitHub の Latest にする）。
 
 ### ローカルの検証の範囲
 
