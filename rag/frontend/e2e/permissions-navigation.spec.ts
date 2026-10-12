@@ -3,6 +3,7 @@ import { expect, test, type Page } from "./fixtures/test";
 import {
   apiEnvelope,
   dbUser,
+  expandSidebarSections,
   expectNoPageOverflow,
   mockAuthUser,
   mockDatabaseReady,
@@ -66,6 +67,8 @@ test("権限のある画面だけをナビに出し、空のセクションは�
   await page.goto("/");
   await expect(page).toHaveURL(/\/chat$/);
   const sidebar = await openSidebarNav(page);
+  // 既定では「AI 活用」だけが開いている（#1563）。権限のあるセクションをすべて開いて項目を数える。
+  await expandSidebarSections(sidebar);
   for (const name of ["RAG 検索", "チャット", "文書アップロード", "ユーザー管理"]) {
     await expect(sidebar.getByRole("link", { name })).toBeVisible();
   }

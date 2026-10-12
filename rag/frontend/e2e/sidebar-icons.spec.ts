@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures/test";
-import { LOCAL_AUTH_ME, openSidebarNav } from "./_helpers";
+import { LOCAL_AUTH_ME, expandSidebarSections, openSidebarNav } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
@@ -50,6 +50,8 @@ for (const viewport of [
       await expect(banner.getByText("Production Ready", { exact: true })).toBeVisible();
       await expect(banner.getByText("RAG", { exact: true })).toBeVisible();
       await openSidebarNav(page);
+      // 文書アップロードは既定で閉じている「ナレッジ構築」にある（#1563）。
+      await expandSidebarSections(sidebar, "ナレッジ構築");
       await expect(brand.getByText("Production Ready", { exact: true })).toBeVisible();
       await expect(uploadLink.getByText("アップロード", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "サイドバーを展開" })).toHaveCount(0);
@@ -60,6 +62,7 @@ for (const viewport of [
     await expect(brand).toBeVisible();
     await expect(brand.getByText("Production Ready", { exact: true })).toBeVisible();
     await expect(brand.getByText("RAG", { exact: true })).toBeVisible();
+    await expandSidebarSections(sidebar, "ナレッジ構築");
     await expect(uploadLink).toHaveAttribute("href", /\/upload$/);
     await expect(uploadLink.getByText("アップロード", { exact: true })).toBeVisible();
 

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures/test";
-import { LOCAL_AUTH_ME, openSidebarNav } from "./_helpers";
+import { LOCAL_AUTH_ME, expandSidebarSections, openSidebarNav } from "./_helpers";
 
 async function mockApi(page: Page) {
   await page.route("**/api/**", async (route) => {
@@ -24,6 +24,8 @@ for (const viewport of [
     await page.goto("/settings/appearance");
 
     const sidebar = await openSidebarNav(page);
+    // 既定では「AI 活用」と今のページのセクションだけが開いている（#1563）。すべて開いて項目を確かめる。
+    await expandSidebarSections(sidebar);
     await expect(sidebar).toContainText("ナレッジ構築");
     await expect(sidebar).toContainText("検索・回答設定");
     await expect(sidebar.getByRole("link", { name: "RAG 検索" })).toBeVisible();

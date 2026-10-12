@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { expandSidebarSections, mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 // 段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の REVIEW ゲート UI を検証する。
 // 文書状態が REVIEW のとき、DocumentWorkspace に「承認して Chunk 作成」と段階別再処理、
@@ -470,6 +470,8 @@ test("未保存変更がある状態でページを離れると破棄確認を�
   await page.locator("#review-edit-el-0000").fill("未保存の変更");
   // サイドナビのリンク（共有の離脱ガード）と、見出しの左上の「一覧へ戻る」（navigate の前に同じ確認。#581 / #618）。
   const sidebar = await openSidebarNav(page);
+  // 文書インデックスは既定で閉じている「ナレッジ構築」にある（#1563）。
+  await expandSidebarSections(sidebar, "ナレッジ構築");
   await sidebar.getByRole("link", { name: "文書インデックス" }).click();
 
   const dialog = page.getByRole("alertdialog");

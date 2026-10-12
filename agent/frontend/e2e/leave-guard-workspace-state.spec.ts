@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
-import { closeSidebarNav, openSidebarNav } from "./fixtures/nav";
+import { closeSidebarNav, expandSidebarSections, openSidebarNav } from "./fixtures/nav";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
 
 // 未保存変更の離脱ガードと、一覧の作業状態の保持（platform UX 契約 workspace-state.md。#87）。
@@ -13,7 +13,10 @@ const VIEWPORTS = [
 
 /** サイドナビのリンク。375px ではナビがドロワー（#367）のため、先に「メニュー」で開く。 */
 async function sidebarLink(page: Page, href: string): Promise<Locator> {
-  return (await openSidebarNav(page)).locator(`a[href="${href}"]`);
+  const sidebar = await openSidebarNav(page);
+  // 既定では「AI 活用」と今のページのセクションだけが開いているため、閉じたセクションを開いてから選ぶ（#1563）。
+  await expandSidebarSections(sidebar);
+  return sidebar.locator(`a[href="${href}"]`);
 }
 
 /** beforeunload の handler が登録されていれば、cancelable な event が preventDefault される。 */

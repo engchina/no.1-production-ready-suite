@@ -32,7 +32,7 @@ moduleResolver._resolveFilename = function resolveTestAlias(
 };
 
 const [
-  { NAV_SECTIONS, resolveCollapsedSections },
+  { NAV_SECTIONS },
   { ROUTE_PERMISSIONS, defaultEntryRoute, firstAllowedRoute },
 ] = await Promise.all([
   import("../src/components/layout/nav-config.ts"),
@@ -103,32 +103,14 @@ test("サイドバーのメニュー icon displayName は重複しない", () =>
   assert.equal(new Set(iconNames).size, iconNames.length);
 });
 
-test("サイドバーは AI 活用だけを初期展開し、保存済みの明示状態を優先する", () => {
-  assert.deepEqual(resolveCollapsedSections({}), {
-    "nav.section.use": false,
-    "nav.section.prepare": true,
-    "nav.section.improve": true,
-    "nav.section.security": true,
-    "nav.section.operations": true,
-    "nav.section.userRoles": true,
-    "nav.section.settings": true,
-  });
-
+// #1563
+test("サイドバーは AI 活用だけを既定で展開し、ほかのセクションは既定で閉じる", () => {
+  // 保存値の優先と今のページのセクションを開く振る舞いは共有 Sidebar が持つ（platform/packages/ui の単体テスト）。
   assert.deepEqual(
-    resolveCollapsedSections({
-      "nav.section.prepare": false,
-      "nav.section.use": true,
-    }),
-    {
-      "nav.section.use": true,
-      "nav.section.prepare": false,
-      "nav.section.improve": true,
-      "nav.section.security": true,
-      "nav.section.operations": true,
-      "nav.section.userRoles": true,
-      "nav.section.settings": true,
-    }
+    NAV_SECTIONS.filter((section) => !section.defaultCollapsed).map((section) => section.titleKey),
+    ["nav.section.use"]
   );
+  assert.equal(NAV_SECTIONS[0].titleKey, "nav.section.use");
 });
 
 test("既定入口は SQL 生成権限がなければ root に戻し、root が最初の許可画面へ振り分ける", () => {
