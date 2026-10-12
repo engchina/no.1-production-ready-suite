@@ -567,7 +567,7 @@ def _openai_parsed(
             )
         except Exception as exc:
             _record_failed_call(exc, provider, text_format, time.monotonic() - started,
-                                max_output_tokens=send_budget, attempt=attempt)
+                                max_output_tokens=send_budget, attempt=attempt, deadline_capped=time_capped)
             raise
         seconds = time.monotonic() - started
         _record_usage(response, provider, text_format, seconds, max_output_tokens=send_budget, attempt=attempt,
@@ -613,7 +613,7 @@ def _record_usage(response: Any, provider: LlmProviderSettings, text_format: typ
 
 
 def _record_failed_call(exc: Exception, provider: LlmProviderSettings, text_format: type, seconds: float, *,
-                        max_output_tokens: int | None = None, attempt: int = 0) -> None:
+                        max_output_tokens: int | None = None, attempt: int = 0, deadline_capped: bool = False) -> None:
     """応答が返らなかった呼び出し（timeout・接続の失敗）の秒と理由を残す（#1548）。
 
     打ち切った呼び出しは usage が返らないので token の数は 0 で、理由（例外の型。timeout は ``APITimeoutError``）を
@@ -621,7 +621,7 @@ def _record_failed_call(exc: Exception, provider: LlmProviderSettings, text_form
     """
     usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     _log_call(usage, seconds, provider, text_format, status="failed", reason=type(exc).__name__, attempt=attempt,
-              max_output_tokens=max_output_tokens)
+              max_output_tokens=max_output_tokens, deadline_capped=deadline_capped)
 
 
 def _log_call(usage: dict[str, int], seconds: float, provider: LlmProviderSettings, text_format: type, *,

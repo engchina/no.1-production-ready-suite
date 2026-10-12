@@ -177,6 +177,7 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
         logged = logs.records[0]
         self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens),
                          ("failed", "TimeoutError", 1000))
+        self.assertFalse(hasattr(logged, "llm_deadline_capped"))
 
 
 if __name__ == "__main__":
