@@ -516,8 +516,13 @@ def expand_sections(
     trace: dict[str, Any] = {"enabled": True, "max_levels": limits.max_levels, "input_token_limit": limits.input_tokens,
                              "time_limit_seconds": limits.time_limit_seconds, "levels": []}
     result = SectionExpansionResult(context=context, trace=trace)
+    current = context  # 読んだ章節を足した文脈（判定を飛ばした段の分を含む）
 
     def finish(reason: str) -> SectionExpansionResult:
+        if current is not result.context:
+            # 判定を飛ばした段（読む範囲に届く前。#1503）で足した根拠も、止めた理由によらず返す（#1526）。
+            result.context = current
+            result.applied = True
         result.stop_reason = reason
         result.used_tokens = context_tokens(result.context)
         trace.update(stop_reason=reason, applied=result.applied, levels_read=result.levels,
@@ -564,7 +569,6 @@ def expand_sections(
         if need == "leaf":
             return any(chain.position >= 0 for chain in chains)
         return any(chain.position >= len(chain.sections) - 1 for chain in chains)
-    current = context
     replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
     extracting = large_sections is not no_large_section_handler
 
@@ -764,10 +768,15 @@ def expand_sections(
         if not added and not replaced:
             if budget_hit:
                 return finish(STOP_TOKEN_BUDGET)
-            if need is not None and scope_reached() and is_enough(latest):
+            # 判定を飛ばした段で足した根拠がまだ判定・生成に渡っていない（#1526）。
+            unjudged = current is not result.context
+            if need is not None and scope_reached() and is_enough(latest) and not unjudged:
                 # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
                 return finish(STOP_SUFFICIENT)
-            continue
+            if not (unjudged and scope_reached()):
+                continue
+            # 読む範囲に届いた段で足す根拠が無くても（表題の章節が文書の全部を持ち、文書全体の段が in_context）、
+            # それまでの段で足した根拠で判定する（#1526）。
         if not scope_reached() and not budget_hit:
             # 読む範囲に届くまでは判定しない（網羅の問で、見えている数件で「足りる」としない。#1503）。
             level_trace["grade_skipped"] = "minimum_scope"
