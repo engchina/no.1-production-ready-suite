@@ -10,7 +10,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # docling サービスだけが使う(backend には入れない)。
-docling = ["docling>=2.0", "pypdfium2>=5.0,<6.0", "pillow>=10.0"]
+# docling-parse 7.21 以前は、1 バイトの埋め込みフォントで文字コード 0x20 に割り当てた字（LibreOffice の
+# PDF で起きる。例「記」「架」）を空白にして落とす。7.22.2 で直っているため下限にする（#1505）。
+docling = ["docling>=2.0", "docling-parse>=7.22.2,<8.0", "pypdfium2>=5.0,<6.0", "pillow>=10.0"]
 pdf = ["pypdfium2>=5.0,<6.0", "pillow>=10.0"]
 japanese = ["PyStemmer==3.1.0", "sudachidict_full==20260723", "sudachipy==0.6.11"]
 oracle = ["oci>=2.185.0", "oracledb>=2.5.0"]
