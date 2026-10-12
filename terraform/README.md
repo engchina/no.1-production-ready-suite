@@ -34,17 +34,18 @@
   `us-chicago-1` など他のリージョンで stack を作ると、`region` の validation で plan が失敗します。
 - 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢も同じ 2 つです。
 
-## 配備する製品の選択
+## 配備する製品
 
-Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql` / `deploy_agent` を選びます（複数選択可、既定はすべて）。
+Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Control Plane の 3 製品をすべて 1 台の Compute に配備します（#1562。Suite はセットで配備する）。
+「配備する製品」のグループと `deploy_rag` / `deploy_nl2sql` / `deploy_agent` は画面に出しません（`visible: false`。既定はすべて `true`）。
 
-- **最低1つは選んでください。** 1つも選ばないと plan が precondition で失敗します。
-- 選んだ製品の入力グループ（`RAG` / `NL2SQL Deep Data Security`）だけがフォームに表示されます。
-- どの製品を選んでも `app_admin_login_user_password`（構成管理者 `system_admin`、3製品で共通）は必須です。
+- 変数は残しています。Terraform の CLI で一部の製品を外すときは `-var deploy_<製品>=false` を渡します（最低 1 つ。1 つも選ばないと plan が precondition で失敗します）。
+  外した製品の入力グループ（`RAG` / `NL2SQL Deep Data Security`）は画面に出ません。
+- `app_admin_login_user_password`（構成管理者 `system_admin`、3 製品で共通）は必須です。
   NL2SQL で Deep Data Security を有効にする場合は `nl2sql_oracle_deepsec_data_user_password` も必要です。
-- 後から製品を追加・削除するときは、同じ stack で選択を変えて apply します。製品の選択は Compute の cloud-init に入るため、
-  **Compute は作り直されます**（OCI provider は `user_data` の変更で instance を置き換える）。データの正本は ADB で、
+- 製品の選択は Compute の cloud-init に入るため、選択を変えて apply すると **Compute は作り直されます**（OCI provider は `user_data` の変更で instance を置き換える）。データの正本は ADB で、
   Compute の中のローカルの保存（アップロードの原本・`platform/.env` を画面で変えた値・HTTPS の CA）は失われます。
+- 配備が終わると、`/var/log/suite-init.log` に入口の URL（`suite:`。`/` は Agent Control Plane へ転送。#1561）、製品ごとの URL、CA 証明書の URL を出します。
 
 ## Autonomous AI Database（全製品で共有）
 
