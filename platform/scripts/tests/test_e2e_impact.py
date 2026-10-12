@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -137,6 +138,61 @@ export function t(key: string) {
         keys, _, structural = impact.dictionary_changes(self.OLD, new)
         self.assertEqual(keys, set())
         self.assertTrue(structural)
+
+    SHARED = """/** 共有 UI の辞書（#1580）。 */
+export const AUTH_MESSAGES = {
+  // 見出し
+  title: "ログイン",
+  subtitle:
+    "説明の文言",
+  "a.b": "ドット区切り",
+} as const;
+
+export interface Extra {
+  title: string;
+}
+
+export function t(
+  key: string,
+  params?: Record<string, string>,
+): string {
+  return key;
+}
+"""
+
+    def test_identifier_keys_only_inside_object(self) -> None:
+        entries, _ = impact.parse_dictionary(self.SHARED, identifier_keys=True)
+        self.assertEqual(set(entries), {"title", "subtitle", "a.b"})
+        # 製品の辞書の読み方（識別子のキーを読まない）は変えない。
+        self.assertEqual(set(impact.parse_dictionary(self.SHARED)[0]), {"a.b"})
+
+    def test_identifier_key_change_is_not_structural(self) -> None:
+        new = self.SHARED.replace('"説明の文言"', '"新しい説明"')
+        keys, old_values, structural = impact.dictionary_changes(self.SHARED, new, True)
+        self.assertEqual(keys, {"subtitle"})
+        self.assertEqual(old_values["subtitle"], "説明の文言")
+        self.assertFalse(structural)
+
+    def test_interface_or_function_change_in_shared_dictionary_is_structural(self) -> None:
+        for old, new in (("  title: string;", "  title?: string;"), ("return key;", "return 1;")):
+            keys, _, structural = impact.dictionary_changes(
+                self.SHARED, self.SHARED.replace(old, new), True
+            )
+            self.assertEqual(keys, set(), old)
+            self.assertTrue(structural, old)
+
+    def test_platform_dictionary_paths(self) -> None:
+        self.assertTrue(
+            impact.is_platform_dictionary("platform/packages/system-settings/src/model/messages.ts")
+        )
+        self.assertTrue(impact.is_platform_dictionary("platform/packages/ui/src/messages.ts"))
+        for path in (
+            "platform/packages/system-settings/src/model/messages.test.ts",
+            "platform/packages/system-settings/tests/messages.ts",
+            "platform/packages/system-settings/src/model/ModelSettingsPage.tsx",
+            "rag/frontend/src/lib/messages.ts",
+        ):
+            self.assertFalse(impact.is_platform_dictionary(path), path)
 
 
 class TranslateLinesTest(unittest.TestCase):
@@ -358,6 +414,10 @@ class SkipSmokeSpecsTest(unittest.TestCase):
         self.assertIn("rag/frontend/e2e/a.spec.ts", selection.specs)
 
 
+MODEL_MESSAGES = "platform/packages/system-settings/src/model/messages.ts"
+AUTH_MESSAGES = "platform/packages/system-settings/src/auth/messages.ts"
+
+
 class SelectIntegrationTest(unittest.TestCase):
     """一時的な git repo で select を通しで確かめる。"""
 
@@ -381,8 +441,28 @@ class SelectIntegrationTest(unittest.TestCase):
             "rag/frontend/e2e/fixtures/helper.ts": "export const helper = 1;\n",
             "rag/frontend/e2e/page.spec.ts": "import { test } from './fixtures/test';\n",
             "rag/frontend/e2e/other.spec.ts": "import { helper } from './fixtures/helper';\n"
-            "// ほかの画面\n",
+            "// ほかの画面\n// 乱数の種の説明\n",
             "rag/frontend/e2e/node.spec.ts": "import { test } from './fixtures/test';\n",
+            "rag/frontend/e2e/model.spec.ts": "import { test } from './fixtures/test';\n",
+            # 共有 UI の文言の辞書（#1580）
+            MODEL_MESSAGES: "export const MODEL_MESSAGES = {\n"  # 1
+            '  "settings.model.seed.help":\n'  # 2
+            '    "乱数の種の説明",\n'  # 3
+            '  "orphan.label": "組み立てて使う",\n'  # 4
+            "} as const;\n"  # 5
+            "\n"  # 6
+            "export function t(key: string): string {\n"  # 7
+            "  return MODEL_MESSAGES[key] ?? key;\n"  # 8
+            "}\n",  # 9
+            "platform/packages/system-settings/src/model/ModelSettingsPage.tsx": (
+                'import { t } from "./messages";\n\nexport function ModelSettingsPage() {\n'
+                '  return t("settings.model.seed.help");\n}\n'
+            ),
+            AUTH_MESSAGES: 'export const AUTH_MESSAGES = {\n  loginTitle: "ログイン",\n'
+            '  loginHint: "説明",\n} as const;\n',
+            "platform/packages/system-settings/src/auth/AuthPages.tsx": (
+                "export function LoginPage(m) {\n  return m.loginTitle;\n}\n"
+            ),
         }
         for path, text in files.items():
             self._write(path, text)
@@ -393,6 +473,7 @@ class SelectIntegrationTest(unittest.TestCase):
         page = "rag/frontend/e2e/page.spec.ts"
         other = "rag/frontend/e2e/other.spec.ts"
         node = "rag/frontend/e2e/node.spec.ts"
+        model = "rag/frontend/e2e/model.spec.ts"
         self.map = impact.ImpactMap(
             {
                 **_map(
@@ -409,9 +490,33 @@ class SelectIntegrationTest(unittest.TestCase):
                             "loadedBy": [page, other],
                             "functions": {"14:16": {"specs": [page], "tests": 1}},
                         },
+                        # 辞書は module の先頭（全テストで実行される）で評価される。
+                        MODEL_MESSAGES: {
+                            "loadedBy": [page, other, model],
+                            "functions": {
+                                "1:9": {"specs": [page, other, model], "tests": 3},
+                                "7:9": {"specs": [model], "tests": 1},
+                            },
+                        },
+                        "platform/packages/system-settings/src/model/ModelSettingsPage.tsx": {
+                            "loadedBy": [page, other, model],
+                            "functions": {"3:5": {"specs": [model], "tests": 1}},
+                        },
+                        AUTH_MESSAGES: {
+                            "loadedBy": [page, other, model],
+                            "functions": {"1:4": {"specs": [page, other, model], "tests": 3}},
+                        },
+                        "platform/packages/system-settings/src/auth/AuthPages.tsx": {
+                            "loadedBy": [page, other, model],
+                            "functions": {"1:3": {"specs": [other], "tests": 1}},
+                        },
                     },
-                    tests=2,
-                    specs={page: {"durationMs": 1000, "tests": 1}, other: {"durationMs": 1000}},
+                    tests=3,
+                    specs={
+                        page: {"durationMs": 1000, "tests": 1},
+                        other: {"durationMs": 1000},
+                        model: {"durationMs": 1000},
+                    },
                     commit=self.base,
                 ),
             }
@@ -419,6 +524,7 @@ class SelectIntegrationTest(unittest.TestCase):
         self.node = node
         self.page = page
         self.other = other
+        self.model = model
         self._patch = mock.patch.object(impact, "ROOT", self.root)
         self._patch.start()
 
@@ -489,6 +595,41 @@ class SelectIntegrationTest(unittest.TestCase):
         selection = self._commit_and_select()
         self.assertIn(self.other, selection.specs)
         self.assertNotIn(self.page, selection.specs)
+
+    def _edit(self, path: str, old: str, new: str) -> impact.Selection:
+        text = (self.root / path).read_text()
+        self.assertIn(old, text)
+        self._write(path, text.replace(old, new))
+        return self._commit_and_select()
+
+    def test_platform_message_selects_referencing_screen_and_old_text_spec(self) -> None:
+        # #1569: 共有 UI の文言を 1 つ変えただけで、全 spec を選んでいた（#1580）。
+        selection = self._edit(MODEL_MESSAGES, "乱数の種の説明", "短い説明")
+        self.assertEqual(selection.full, [])
+        self.assertEqual(set(selection.specs), {self.model, self.other, self.node})
+        self.assertEqual(selection.specs[self.model], ["文言 settings.model.seed.help"])
+        self.assertEqual(
+            selection.specs[self.other], ["古い文言 settings.model.seed.help を書いた spec"]
+        )
+
+    def test_platform_identifier_key_selects_referencing_screen(self) -> None:
+        selection = self._edit(AUTH_MESSAGES, '"ログイン"', '"サインイン"')
+        self.assertEqual(set(selection.specs), {self.other, self.node})
+        self.assertEqual(selection.specs[self.other], ["文言 loginTitle"])
+
+    def test_platform_key_without_reference_selects_dictionary_users(self) -> None:
+        # 組み立てて使うキー（参照元が見つからない）は、辞書を読み込んだ spec すべてにする。
+        selection = self._edit(MODEL_MESSAGES, '"組み立てて使う"', '"別の文言"')
+        self.assertEqual(set(selection.specs), {self.page, self.other, self.model, self.node})
+        self.assertIn(
+            "文言 orphan.label（参照元が見つからない）（全画面の共通の処理）",
+            selection.specs[self.page],
+        )
+
+    def test_platform_dictionary_function_change_selects_by_lines(self) -> None:
+        selection = self._edit(MODEL_MESSAGES, "?? key;", "?? `[${key}]`;")
+        self.assertEqual(set(selection.specs), {self.model, self.node})
+        self.assertEqual(selection.specs[self.model], ["i18n の処理の変更"])
 
     def test_helper_change_selects_dependent_spec(self) -> None:
         self._write("rag/frontend/e2e/fixtures/helper.ts", "export const helper = 2;\n")
@@ -562,6 +703,55 @@ class SelectIntegrationTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("bad.spec.ts", errors[0])
         self.assertIn("./fixtures/test", errors[0])
+
+
+class NightlyShardsTest(unittest.TestCase):
+    """nightly の shard の数と、記録がそろった run だけを使うこと（#1599）。"""
+
+    def test_nightly_matrix_matches_products(self) -> None:
+        workflow = (impact.ROOT / ".github/workflows/e2e-nightly.yml").read_text(encoding="utf-8")
+        rows = re.findall(r"\{ product: (\w+),.*?shard: (\d+), total: (\d+) \}", workflow)
+        self.assertTrue(rows)
+        for name, product in impact.PRODUCTS.items():
+            shards = sorted(int(shard) for row, shard, _ in rows if row == name)
+            totals = {int(total) for row, _, total in rows if row == name}
+            self.assertEqual(shards, list(range(1, product.nightly_shards + 1)), name)
+            self.assertEqual(totals, {product.nightly_shards}, name)
+
+    def _download(self, runs: list[tuple[int, int]]) -> list[Path]:
+        """runs は (run の id, その run の記録の数)。新しい順。"""
+        product = impact.PRODUCTS["agent"]
+        counts = dict(runs)
+
+        def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess:
+            if args[:3] == ["gh", "run", "list"]:
+                body = json.dumps([{"databaseId": run} for run, _ in runs])
+                return subprocess.CompletedProcess(args, 0, body, "")
+            run = int(args[3])
+            target = Path(args[args.index("--dir") + 1])
+            for shard in range(1, counts[run] + 1):
+                path = target / f"e2e-impact-agent-{shard}" / f"agent-{shard}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(impact.subprocess, "run", side_effect=fake_run),
+                mock.patch("sys.stderr"),
+            ):
+                files = impact.download_maps(product, Path(tmp))
+            return [path.relative_to(tmp) for path in files]
+
+    def test_download_skips_run_with_missing_shard(self) -> None:
+        shards = impact.PRODUCTS["agent"].nightly_shards
+        files = self._download([(2, shards - 1), (1, shards)])
+        self.assertEqual(len(files), shards)
+        self.assertTrue(all(path.parts[0] == "1" for path in files))
+
+    def test_download_returns_nothing_without_complete_run(self) -> None:
+        shards = impact.PRODUCTS["agent"].nightly_shards
+        self.assertEqual(self._download([(2, shards - 1), (1, 0)]), [])
 
 
 if __name__ == "__main__":
