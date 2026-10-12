@@ -19,26 +19,27 @@ jobs:
   e2e:
     name: ${{ matrix.product }} / E2E nightly (${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
-    # 2 worker の実測（2026-10。実行範囲の記録を含む。#1489）: RAG 1 shard 15〜19 分、NL2SQL 1 shard 7.5〜17 分、
-    # Agent 約 22 分（1 shard）。1 worker では RAG 25〜33 分・NL2SQL 13〜27 分・Agent 約 35 分で、40 分の上限で止まった
-    # 夜があった。Agent は 1 shard が全体の律速だったので 2 shard にした（#1525。記録の artifact は shard ごと）。
-    timeout-minutes: 40
+    # 2 worker の実測（2026-10-12 の main。実行範囲の記録を含む）: RAG 1 shard 17〜18.5 分、NL2SQL 1 shard 11〜17.5 分、
+    # Agent 1 shard 12.5 分（2 shard。#1525）。1 worker・Agent 1 shard の頃は Agent が約 40 分かかり、40 分の上限で
+    # 止まった（#1599）。上限は製品ごとに実測の倍程度にする（matrix の timeout）。shard の数を変えたら、
+    # platform/scripts/e2e_impact.py の PRODUCTS の nightly_shards も合わせる（記録がそろった run だけを PR が使う）。
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { product: rag, node: "24", shard: 1, total: 2 }
-          - { product: rag, node: "24", shard: 2, total: 2 }
-          - { product: nl2sql, node: "24", shard: 1, total: 8 }
-          - { product: nl2sql, node: "24", shard: 2, total: 8 }
-          - { product: nl2sql, node: "24", shard: 3, total: 8 }
-          - { product: nl2sql, node: "24", shard: 4, total: 8 }
-          - { product: nl2sql, node: "24", shard: 5, total: 8 }
-          - { product: nl2sql, node: "24", shard: 6, total: 8 }
-          - { product: nl2sql, node: "24", shard: 7, total: 8 }
-          - { product: nl2sql, node: "24", shard: 8, total: 8 }
-          - { product: agent, node: "24", shard: 1, total: 2 }
-          - { product: agent, node: "24", shard: 2, total: 2 }
+          - { product: rag, node: "24", timeout: 40, shard: 1, total: 2 }
+          - { product: rag, node: "24", timeout: 40, shard: 2, total: 2 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 1, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 2, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 3, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 4, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 5, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 6, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 7, total: 8 }
+          - { product: nl2sql, node: "24", timeout: 35, shard: 8, total: 8 }
+          - { product: agent, node: "24", timeout: 25, shard: 1, total: 2 }
+          - { product: agent, node: "24", timeout: 25, shard: 2, total: 2 }
     defaults:
       run:
         working-directory: ${{ matrix.product }}/frontend
@@ -50,16 +51,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
-          cache-dependency-path: |
-            ${{ matrix.product }}/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: ${{ matrix.product }}/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
