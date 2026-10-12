@@ -184,6 +184,9 @@ QueryStrategy = Literal[
     "hyde",
 ]
 AnswerFlow = Literal["crag", "standard_rag"]
+# 回答の LLM の用途ごとの推論(思考)の量(#1499)。model はモデルの登録値(共通のモデル設定)のまま、
+# none は送らない、low / medium / high はその値を送る(platform の推論の量の選択肢と同じ)。
+ReasoningEffortOverride = Literal["model", "none", "low", "medium", "high"]
 MineruTier = Literal["flash", "basic", "standard", "advanced"]
 GuardrailPolicyName = Literal[
     "standard",
@@ -989,6 +992,52 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=0,
         le=60,
         description=("根拠の無い要求の再検索の期限(秒)。過ぎたら次の要求の検索を始めない(#1279)。"),
+    )
+    rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
+        default="model",
+        description=(
+            "質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論の量(#1499。既定 model = "
+            "モデルの登録値。low では戦略の選択がぶれ、検索文 0 本の単純検索に倒れることがあった)。"
+        ),
+    )
+    rag_judge_reasoning_effort: ReasoningEffortOverride = Field(
+        default="low",
+        description=(
+            "根拠の評価(CRAG の評価と章節の拡張の十分性の判定)の LLM の呼び出しの推論の量"
+            "(#1499。既定 low)。model はモデルの登録値のまま。モデルの登録値が none の"
+            "モデルには送らない。"
+        ),
+    )
+    rag_generation_reasoning_effort: ReasoningEffortOverride = Field(
+        default="model",
+        description=(
+            "回答文の生成と監査の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
+        ),
+    )
+    rag_crag_skip_on_strong_signals: bool = Field(
+        default=False,
+        description=(
+            "規則の信号が強いとき CRAG の根拠の評価(1 回目の LLM の呼び出し)を飛ばす"
+            "(#1499。既定 OFF)。rerank の最上位の score が閾値以上で、質問の要求がすべて"
+            "語の一致で根拠あり、定義を問う語の"
+            "定義本文があり、エラー文と列挙・網羅・件数を問う質問ではないときだけ(#1503)。生成後の監査は飛ばさない。"
+        ),
+    )
+    rag_crag_skip_min_rerank_score: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="CRAG の評価を飛ばす rerank の最上位の score の閾値(#1499。0〜1)。",
+    )
+    rag_query_expansion_max_queries: int = Field(
+        default=5,
+        ge=1,
+        le=5,
+        description=(
+            "質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来と同じ 5)。"
+            "原質問・用語の別名・"
+            "語彙の補助の検索文は数えない。"
+        ),
     )
     rag_auto_field_filter_enabled: bool = Field(
         default=False,
