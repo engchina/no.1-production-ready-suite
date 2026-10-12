@@ -648,6 +648,12 @@ class SafetyReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     referenced_tables: list[str] = Field(default_factory=list)
     referenced_columns: list[str] = Field(default_factory=list)
+    # 安全確認をしたか（#1523）。Select AI / Select AI Agent が生成した SQL は既定で SELECT 文
+    # なので確かめない（False。業務プロファイルの表・列の範囲の照合も行わない）。
+    # 利用者の SQL・LLM（enterprise_ai_direct）が生成した SQL は確かめる。
+    safety_checked: bool = True
+    # 安全確認を省略した理由（利用者向けの文。省略しなかったときは空）。
+    safety_check_skip_reason: str = ""
 
 
 class QueryResults(BaseModel):
