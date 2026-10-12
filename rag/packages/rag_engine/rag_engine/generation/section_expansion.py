@@ -10,6 +10,11 @@
   最後の判定を使う（評価器の呼び出しを増やさない）。足りるは「十分と判定され、内容の観点（``CONTENT_ASPECTS``）に
   確かめられていないものが無い」。適用の観点（applicability）は利用者の状況の確認で、章節を読んでも埋まらないため
   広げる理由にしない。
+- 列挙・網羅の問（#1503。``retrieval.enumeration``）は、件数・章の範囲の欠けを評価器の項目ごとの根拠から数え、
+  欠ければ内容の観点 ``enumeration_coverage`` が確かめられていないとして広げる。件数も範囲も無い網羅の問
+  （「〜要領で、…をすべて挙げて」）は根拠の数から足りるかを決められないため、評価器が足りると判定しても、
+  読む範囲（``minimum_scope``。当たった章節 = leaf、文書全体 = 根の章節）まで読んでから判定する。読む範囲に
+  届くまでの段は評価器を呼ばない（段ごとの LLM の呼び出しを増やさない）。上限（段・token・時間）は変えない。
 - 上の段の章節は、予算に入れば全体を読む。入らなければ、子の章節の見出し（目次）を質問との関連度（rerank。使えなければ
   語の重なり）で並べ、関連の高い子の章節から、予算に入る章節を全体で読む。入らない子の章節は読まない。
 - 章節が予算に入るかは、章節の chunk のうち、まだ文脈に無いものの token で決める（最初の根拠・前の段で読んだ
@@ -40,6 +45,7 @@ from typing import Any
 
 from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
+from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, minimum_scope
 from rag_engine.retrieval.context_builder import (
     ContextChildEvidence,
     ContextParentEvidence,
@@ -52,7 +58,8 @@ ROOT_SECTION_ID = "document"
 SECTION_EXPANSION_REASON = "section_expansion"
 SECTION_CONTEXT_ROLE = "section_context"
 # 「足りる」の判定で、確かめられていないと広げる内容の観点（``task_contract`` の required_aspects のうち）。
-CONTENT_ASPECTS = frozenset({"requested_result", "procedure", "member_details", "population_membership"})
+CONTENT_ASPECTS = frozenset({"requested_result", "procedure", "member_details", "population_membership",
+                             ENUMERATION_ASPECT})
 # 起点にする章節の数（関連の高い当たった chunk の所有の章節から、重ならないもの）。
 MAX_SEED_SECTIONS = 2
 # 1 つの章節で読む chunk の上限（文書全体でも、これより多い章節は予算に関係なく読まない）。
@@ -517,7 +524,11 @@ def expand_sections(
     if not getattr(settings, "section_expansion_enabled", True) or limits.max_levels <= 0:
         trace["enabled"] = False
         return finish(STOP_DISABLED)
-    if is_enough(last_attempt):
+    # 列挙・網羅の問で、足りると判定する前に読む範囲（#1503。None は範囲の規則なし）。
+    need = minimum_scope(question)
+    if need is not None:
+        trace["minimum_scope"] = need
+    if need is None and is_enough(last_attempt):
         return finish(STOP_SUFFICIENT)
     seeds = seed_chunk_ids(context, last_attempt.relevant_chunk_ids if last_attempt is not None else ())
     chains: list[_Chain] = []
@@ -541,6 +552,15 @@ def expand_sections(
 
     reader = _Reader(read_chunks=section_chunks, known_ids=_context_chunk_ids(context))
     level_seconds = DEFAULT_LEVEL_SECONDS
+    latest = last_attempt  # 最後の判定（読む範囲に届くまでの段は判定しない）
+
+    def scope_reached() -> bool:
+        """読む範囲まで読んだか（leaf: いずれかの起点の所有の章節、document: 起点の列の最上位の章節）。"""
+        if need is None:
+            return True
+        if need == "leaf":
+            return any(chain.position >= 0 for chain in chains)
+        return any(chain.position >= len(chain.sections) - 1 for chain in chains)
     current = context
     replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
     extracting = large_sections is not no_large_section_handler
@@ -741,6 +761,13 @@ def expand_sections(
         if not added and not replaced:
             if budget_hit:
                 return finish(STOP_TOKEN_BUDGET)
+            if need is not None and scope_reached() and is_enough(latest):
+                # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
+                return finish(STOP_SUFFICIENT)
+            continue
+        if not scope_reached() and not budget_hit:
+            # 読む範囲に届くまでは判定しない（網羅の問で、見えている数件で「足りる」としない。#1503）。
+            level_trace["grade_skipped"] = "minimum_scope"
             continue
         result.context = current
         result.applied = True
@@ -753,6 +780,7 @@ def expand_sections(
             level_trace["grade_error"] = f"{type(exc).__name__}: {exc}"[:240]
             return finish(STOP_GRADE_ERROR)
         level_seconds = max(1.0, clock() - before)
+        latest = attempt
         level_trace.update(sufficient=attempt.sufficient, missing_aspects=list(attempt.missing_aspects))
         if is_enough(attempt):
             # 読めなかった章節があっても、読んだ範囲で足りるなら条件つきにしない。

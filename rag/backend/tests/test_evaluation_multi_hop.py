@@ -101,6 +101,7 @@ def test_multi_hop_set_has_every_reasoning_type_and_both_splits() -> None:
         "intra_document_reference",
         "table_lookup",
         "section_read",
+        "document_read",
     }
     for split in ("dev", "holdout"):
         members = [case for case in cases if case.split == split]
@@ -192,10 +193,45 @@ def test_section_read_cases_need_every_page_of_one_section() -> None:
     for case in cases:
         assert case.relevant_document_ids == [f"file:{builder.INSPECTION}"], case.id
         pages = [inspection.pages[item.id] for item in case.required_evidence]
-        assert len(set(pages)) == len(pages) >= 2, case.id
+        # 根拠は 2 ページ以上にまたがる（件数を示した問は、1 ページに複数の項目がある。#1503）。
+        assert len(set(pages)) >= 2, case.id
         assert len({chapter_of_page[page] for page in pages}) == 1, case.id
         for item, page in zip(case.required_evidence, pages, strict=True):
             assert contains_normalized(page_text[page - 1], item.text), (case.id, item.id, page)
+
+
+def test_document_read_cases_need_evidence_from_several_chapters() -> None:
+    """文書全体の網羅の問（#1503）は、必要な根拠が同じ資料の 2 つ以上の章にある。
+
+    質問は件数・章の範囲を示す（``enumeration_request`` が数えられる要求として取り出す）。
+
+    点検表の欄の表の根拠は、資料の中で表にしか現れない値（本文の chunk の引用で一致しない）。
+    """
+    from pypdf import PdfReader
+    from rag_engine.retrieval.enumeration import enumeration_request
+
+    builder = _source_builder()
+    _payload, request = _load_set()
+    [inspection] = [doc for doc in builder.build_documents() if doc.file_name == builder.INSPECTION]
+    reader = PdfReader(CORPUS / builder.INSPECTION)
+    page_text = [page.extract_text() for page in reader.pages]
+    cases = [case for case in request.cases if case.reasoning_type == "document_read"]
+    assert {case.split for case in cases} == {"dev", "holdout"}
+    html_text = _html_text(builder.INSPECTION)
+    for case in cases:
+        assert case.relevant_document_ids == [f"file:{builder.INSPECTION}"], case.id
+        chapters = {
+            builder._chapter_of_page(inspection, inspection.pages[item.id])
+            for item in case.required_evidence
+        }
+        assert len(chapters) >= 2, case.id
+        for item in case.required_evidence:
+            page = inspection.pages[item.id]
+            assert contains_normalized(page_text[page - 1], item.text), (case.id, item.id)
+            if item.id.startswith("sheet-"):
+                assert html_text.count(item.text) == 1, (case.id, item.id)
+        enumeration = enumeration_request(case.query)
+        assert enumeration is not None and enumeration.countable, case.id
 
 
 def test_multi_hop_corpus_has_notation_variants_and_references() -> None:

@@ -165,10 +165,15 @@ def _settings(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
+# 列挙・網羅の問（「すべて」。#1503 の読む範囲の規則）ではない質問。列挙の問は test_enumeration_sufficiency.py。
+QUESTION = "第3章の設備ごとの点検の項目を教えて"
+
+
 def _expand(context: AnswerContext, settings: SimpleNamespace, grader, stub: SectionStub, *,
-            last: CragRetrievalAttempt | None = None, **options: object) -> sections.SectionExpansionResult:
+            last: CragRetrievalAttempt | None = None, question: str = QUESTION,
+            **options: object) -> sections.SectionExpansionResult:
     return sections.expand_sections(
-        "第3章の設備ごとの点検の項目をすべて教えて", context, settings,
+        question, context, settings,
         last_attempt=last if last is not None else _attempt(sufficient=True, missing=("requested_result",)),
         grade=grader, section_outline=stub.outline, section_chunks=stub.chunks, **options)
 
