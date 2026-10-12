@@ -9,6 +9,9 @@ name: CI
 # それを読む RAG / Engine・RAG / Backend・Agent / Backend だけを動かす（frontend・e2e は動かさない。#1488）。
 # platform の Markdown（AGENTS.md・README・docs/ux-contracts 等）だけの変更では製品の job を動かさない
 # （docs/design-system/ は lint 設定を含むため frontend に数える）。
+# RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
+# path 依存（rag_parser_core・rag_engine・backend_core）・テストのデータ・venv を作るスクリプトが変わったときだけ動かす
+# （rag/ の他の変更では動かさない。テストのある docling・asr だけ。#1512）。
 # branch protection の必須 check は最後の `CI OK` だけにする（skip された job を必須にすると pending のまま止まるため）。
 # main の push で失敗したら ci-failure-issue.yml が Issue を作る（ruleset の strict をやめたため。#339）。
 
@@ -58,6 +61,14 @@ jobs:
       rag_deps: ${{ steps.filter.outputs.rag_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       nl2sql_deps: ${{ steps.filter.outputs.nl2sql_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       agent_deps: ${{ steps.filter.outputs.agent_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      # RAG の外部 parser のサービスのテスト（#1512）。
+      rag_parser_docling: ${{ steps.filter.outputs.rag_parser_docling == 'true' || steps.filter.outputs.ci == 'true' }}
+      rag_parser_asr: ${{ steps.filter.outputs.rag_parser_asr == 'true' || steps.filter.outputs.ci == 'true' }}
+      # parser の pip-audit は、その parser の uv.lock / pyproject.toml の変更だけで動かす（ci.yml の変更では動かさない）。
+      # parser の lock には修正版のある advisory が残っており（docling 2.129.0・pillow・torch 等。#1513）、
+      # ci.yml を触る無関係な PR を赤にしないため。依存を更新する PR は、その parser の advisory を解消してから merge する。
+      rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps }}
+      rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -114,6 +125,28 @@ jobs:
             agent_deps:
               - "agent/backend/uv.lock"
               - "agent/backend/pyproject.toml"
+            # 外部 parser のサービスの venv が path で入れる共有の package、venv を作るスクリプト（rag-services.sh）。
+            # docling の text layer の回帰テストは評価のデータセットの PDF を読む（#1505）。
+            rag_parser_docling:
+              - "rag/services/parsers/docling/**"
+              - "rag/packages/rag_parser_core/**"
+              - "rag/packages/rag_engine/**"
+              - "platform/packages/backend_core/**"
+              - "rag/evaluation/multi-hop/*.pdf"
+              - "rag/scripts/rag-services.sh"
+              - "rag/scripts/rag-systemd.sh"
+            rag_parser_asr:
+              - "rag/services/parsers/asr/**"
+              - "rag/packages/rag_parser_core/**"
+              - "platform/packages/backend_core/**"
+              - "rag/scripts/rag-services.sh"
+              - "rag/scripts/rag-systemd.sh"
+            rag_parser_docling_deps:
+              - "rag/services/parsers/docling/uv.lock"
+              - "rag/services/parsers/docling/pyproject.toml"
+            rag_parser_asr_deps:
+              - "rag/services/parsers/asr/uv.lock"
+              - "rag/services/parsers/asr/pyproject.toml"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
             # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
             platform_other:
@@ -461,6 +494,122 @@ jobs:
       - name: Unit tests (rag/services/preprocess/excel_to_json)
         working-directory: rag/services/preprocess/excel_to_json
         run: uv run --locked --with pytest python -m pytest -q tests
+
+  rag-parser-docling:
+    name: RAG / Parser docling
+    needs: changes
+    if: needs.changes.outputs.rag_parser_docling == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: rag/services/parsers/docling
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: rag/services/parsers/docling/uv.lock
+          cache-suffix: rag-parser-docling
+          save-cache: ${{ github.event_name == 'push' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # 本番と同じ venv（uv sync --locked --no-dev）を rag-services.sh で作る。GPU の無い runner なので
+      # CUDA の wheel を入れず CPU 版の torch を入れ（rag-evaluation-nightly.yml と同じ）、モデルは取得しない。
+      # テスト（text layer の抽出・LayoutRecord の変換・cv2 の import）はモデルを使わない（#1512）。
+      - name: Install dependencies
+        working-directory: rag
+        env:
+          RAG_SERVICES_TORCH: cpu
+          RAG_SERVICES_MODELS: skip
+        run: scripts/rag-services.sh sync parser-docling
+
+      # parser の venv には pytest が無い（--no-dev の本番と同じ venv）ので、pytest だけを足して実行する。
+      # HF_HUB_OFFLINE: モデルを取得しない（テストはモデルの要らないものだけ。取得しようとしたら失敗させる）。
+      - name: Test
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: uv run --no-sync --with pytest python -m pytest -q tests
+
+      # 版は rag/backend の uv.lock の bandit にそろえる（Lint / services & scripts の ruff と同じ）。
+      - name: Security scan
+        run: |
+          version="$(sed -n '/^name = "bandit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
+          test -n "${version}"
+          uvx "bandit@${version}" -q -r app
+
+      # venv に pip-audit を入れないため、lock から書き出した requirements（hash 付き）を検査する。
+      # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local。backend の --skip-editable と同じ）。
+      - name: Dependency audit
+        if: needs.changes.outputs.rag_parser_docling_deps == 'true'
+        run: |
+          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
+          test -n "${version}"
+          uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
+          uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
+
+  rag-parser-asr:
+    name: RAG / Parser asr
+    needs: changes
+    if: needs.changes.outputs.rag_parser_asr == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: rag/services/parsers/asr
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: rag/services/parsers/asr/uv.lock
+          cache-suffix: rag-parser-asr
+          save-cache: ${{ github.event_name == 'push' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # 本番と同じ venv（uv sync --locked --no-dev）を rag-services.sh で作る。テストは文字起こしを
+      # 差し替えるので、faster-whisper のモデルも GPU も使わない。
+      - name: Install dependencies
+        working-directory: rag
+        run: scripts/rag-services.sh sync parser-asr
+
+      # parser の venv には pytest が無い（--no-dev の本番と同じ venv）ので、pytest だけを足して実行する。
+      # HF_HUB_OFFLINE: モデルを取得しない（テストはモデルの要らないものだけ。取得しようとしたら失敗させる）。
+      - name: Test
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: uv run --no-sync --with pytest python -m pytest -q tests
+
+      # 版は rag/backend の uv.lock の bandit にそろえる（Lint / services & scripts の ruff と同じ）。
+      - name: Security scan
+        run: |
+          version="$(sed -n '/^name = "bandit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
+          test -n "${version}"
+          uvx "bandit@${version}" -q -r app
+
+      # venv に pip-audit を入れないため、lock から書き出した requirements（hash 付き）を検査する。
+      # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local。backend の --skip-editable と同じ）。
+      - name: Dependency audit
+        if: needs.changes.outputs.rag_parser_asr_deps == 'true'
+        run: |
+          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
+          test -n "${version}"
+          uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
+          uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
 
   rag-frontend:
     name: RAG / Frontend
@@ -1276,6 +1425,8 @@ jobs:
       - rag-backend
       - rag-engine
       - services-scripts-lint
+      - rag-parser-docling
+      - rag-parser-asr
       - rag-frontend
       - rag-e2e
       - rag-init-script
