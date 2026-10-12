@@ -199,6 +199,29 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertIn("確認（監査）が終わらなかったため", result.answer_text)
         self.assertEqual(result.envelope["outcome"], "conditional")
 
+    def test_audit_cut_correction_round_does_not_replace_the_audited_round(self):
+        """是正の round の監査が切れたら、その round（監査なし）を、監査を通った round より採用しない。"""
+        ctx, eid = _context()
+        values = iter([600.0, 600.0])  # 1 組目の round・2 組目の判定 → 2 組目の round は 0.05 秒で切れる
+
+        def remaining():
+            return next(values, 30.05)
+
+        def cut_audit(prompt):
+            time.sleep(0.1)
+            check_deadline()
+            raise AssertionError("期限が切れているはず")
+
+        more = draft(item(eid, GOOD, GOOD), item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。"))
+        model = FakeModel([_draft_with_dropped(eid), more], [audit((0, "supported", "matched", "")), cut_audit])
+        with patch.object(deadlines, "remaining_seconds", remaining):
+            result = run(model, ctx).response
+
+        rounds = result.generation_trace["rounds"]
+        self.assertEqual([(r["accepted"], r["audit_cut"]) for r in rounds], [(True, False), (False, True)])
+        self.assertNotIn("実行ボタンを押して完了します。", result.answer_text.split(grounded.QUOTE_ONLY_LABEL)[0])
+        self.assertNotIn("確認（監査）が終わらなかったため", result.answer_text)
+
     def test_correction_round_cut_keeps_the_adopted_round(self):
         ctx, eid = _context()
         values = iter([600.0, 30.0])  # 1 組目の round・2 組目の判定 → 以後は確定の分だけ
