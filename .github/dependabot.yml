@@ -26,8 +26,9 @@
 #
 # 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
 # services/*（21 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は、CI がテストする
-# 外部 parser（rag/services/parsers/docling・asr。ci.yml の RAG / Parser <name>。#1512）だけを対象にする（#1513）。
-# 他のサービスは CI 検証対象外で PR 数も多くなるため含めない。テストと CI の job を足してから ecosystem を追加する。
+# 外部 parser（rag/services/parsers/docling・asr。ci.yml の RAG / Parser <name>。#1512。#1513）と、テストのある
+# 前処理・パイプラインのサービス（ci.yml の Lint / services & scripts がテストする。#1525・#1534）を対象にする。
+# テストの無いサービスと rag/packages/* は含めない（理由は該当の entry の注記）。テストを足してから対象に加える。
 # monorepo（#71）では rag の backend / frontend と root の GitHub Actions を対象にする。
 # nl2sql / agent / platform の追加は、運用が安定してから ecosystem を足す。
 version: 2
@@ -100,6 +101,53 @@ updates:
       - dependency-name: torch
         update-types: ["version-update:semver-major"]
       - dependency-name: torchvision
+        update-types: ["version-update:semver-major"]
+
+  # RAG の前処理・パイプラインのサービス（#1534）。CI の Lint / services & scripts がサービスごとの lock で
+  # テスト（tests/）と uv lock --check を実行する。lock はサービスごとに独立している。
+  # テストの無いサービス（parsers/unstructured・oci_document_understanding・oci_genai_vision）と、他の lock が
+  # path で読む package（rag/packages/*。pyproject.toml を変えると rag/backend・各サービスの lock がずれる）は含めない。
+  # これらの脆弱性は dependency-audit-nightly.yml が毎晩検査し、修正は Issue を立てて lock を上げる。
+  - package-ecosystem: uv
+    directories:
+      - /rag/services/pipeline/chunking
+      - /rag/services/pipeline/evaluation
+      - /rag/services/pipeline/graphrag
+      - /rag/services/pipeline/guardrail
+      - /rag/services/pipeline/vector_index
+      - /rag/services/preprocess/csv_to_json
+      - /rag/services/preprocess/excel_to_json
+      - /rag/services/preprocess/image_enhance
+      - /rag/services/preprocess/office_to_pdf
+      - /rag/services/preprocess/pdf_to_page_images
+      - /rag/services/preprocess/pii_redact
+      - /rag/services/preprocess/url_to_markdown
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    rebase-strategy: auto
+    groups:
+      services-patch-minor:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+    ignore:
+      # 確定スタックの中核（rag/backend と同じ）。major は個別に判断する。
+      - dependency-name: oci
+        update-types: ["version-update:semver-major"]
+      - dependency-name: oracledb
+        update-types: ["version-update:semver-major"]
+      - dependency-name: fastapi
+        update-types: ["version-update:semver-major"]
+      # 版の範囲は rag_parser_core / rag_pipeline_core の service の extra が決める（<24）。
+      - dependency-name: gunicorn
         update-types: ["version-update:semver-major"]
 
   # frontend

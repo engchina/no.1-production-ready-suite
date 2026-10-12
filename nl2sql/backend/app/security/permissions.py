@@ -765,6 +765,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- SQL 生成・実行 ----
     ("POST", "/nl2sql/preview"): _QUERY_GENERATE,
     ("POST", "/nl2sql/jobs"): _QUERY_GENERATE,
+    # この環境で使える生成の方式（業務プロファイルの既定の生成方式の選択肢。#1524）。
+    ("GET", "/nl2sql/engines"): _allowed(PROFILE_MANAGE_PERMISSION, QUERY_GENERATE_PERMISSION),
     ("GET", "/nl2sql/chats"): _QUERY_GENERATE,
     ("GET", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
     ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
