@@ -140,6 +140,8 @@ export interface Nl2SqlProfile {
   safety_policy: string;
   few_shot_examples: Array<Record<string, string>>;
   select_ai_config: ProfileSelectAiConfig;
+  /** 既定の生成方式（#1524）。SQL 生成・チャットの初期の選択と、方式を指定しないジョブ（Agent の MCP）が使う。 */
+  default_engine?: Nl2SqlEngine;
   archived: boolean;
   object_scope_version?: number;
   version?: number;
@@ -176,11 +178,24 @@ export interface ProfileUsageContext {
   description: string;
   allowed_tables: string[];
   allowed_views: string[];
+  /** 既定の生成方式（#1524）。SQL 生成・チャットの初期の選択。 */
+  default_engine?: Nl2SqlEngine;
   archived: boolean;
   object_scope_version: number;
   version: number;
   etag: string;
   updated_at: string;
+}
+
+/** この環境で使える生成の方式（`GET /api/nl2sql/engines`。#1524）。 */
+export interface Nl2SqlEngineAvailability {
+  engine: Nl2SqlEngine;
+  available: boolean;
+  reason: string;
+}
+
+export interface Nl2SqlEnginesData {
+  engines: Nl2SqlEngineAvailability[];
 }
 
 export interface SchemaCatalogHead {
@@ -271,6 +286,7 @@ export interface ProfileUpsertPayload {
   safety_policy: string;
   few_shot_examples?: Array<Record<string, string>>;
   select_ai_config: ProfileSelectAiConfig;
+  default_engine: Nl2SqlEngine;
 }
 
 export interface ProfileLearningMaterialImportData {
