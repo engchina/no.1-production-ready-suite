@@ -508,7 +508,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
-    # 実測は 1〜2 分（2026-09）。
+    # 実測は 1.5〜2 分（2026-10、2 worker。Playwright は約 1 分で、1 worker と差は無い。#1489）。
     timeout-minutes: 10
     defaults:
       run:
@@ -668,7 +668,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
-    # 実測は 1.5〜2 分（2026-09）。
+    # 実測は約 2.5 分（2026-10、2 worker。Playwright は 1.7〜1.9 分。1 worker・sql-chat の両 project では 5 分。#1489）。
     timeout-minutes: 10
     defaults:
       run:
@@ -873,6 +873,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
+    # 実測は約 2 分（2026-10、2 worker。Playwright は 1.2 分。1 worker では 1.8〜2.0 分。#1489）。
     timeout-minutes: 10
     defaults:
       run:
