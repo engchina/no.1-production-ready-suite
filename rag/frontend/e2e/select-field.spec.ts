@@ -213,7 +213,7 @@ test("overflow: hidden の親の中でも一覧が切れず、選択肢を押せ
   await region.evaluate((button) => {
     const clip = button.parentElement as HTMLElement;
     clip.style.overflow = "hidden";
-    clip.style.height = `${button.offsetHeight}px`;
+    clip.style.height = `${(button as HTMLElement).offsetHeight}px`;
   });
 
   await region.click();

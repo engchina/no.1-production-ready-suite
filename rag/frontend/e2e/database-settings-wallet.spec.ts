@@ -267,6 +267,7 @@ for (const viewport of [
           readiness: "ok",
           message: "Oracle AI Database に接続できました。",
           elapsed_ms: 1200,
+          error_type: null,
           troubleshooting: [],
           details: {},
           checked_at: "2026-06-14T00:00:00Z",

@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "vite preview --host 0.0.0.0 --port 3002",
     "typecheck": "tsc --noEmit",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json",
     "check": "npm run lint && npm run build && npm run test:e2e",
     "test:e2e": "playwright test"
   },

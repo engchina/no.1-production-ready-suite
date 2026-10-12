@@ -16,6 +16,11 @@ export default defineConfig({
   // RAG / NL2SQL と同じく CI だけ retries 2（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
   // retries が無いと trace: "on-first-retry" も記録されない。
   retries: process.env.CI ? 2 : 0,
+  // CI は失敗・flaky を PR の注釈（github）に、log を dot にし、json は nightly の flaky の一覧に使う
+  // （platform/scripts/playwright_report_summary.py。#1591）。
+  reporter: process.env.CI
+    ? [["github"], ["dot"], ["json", { outputFile: "playwright-report/results.json" }]]
+    : "list",
   timeout: 30_000,
   expect: {
     timeout: 7_500,
