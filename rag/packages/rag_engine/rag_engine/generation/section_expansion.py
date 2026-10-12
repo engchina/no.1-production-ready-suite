@@ -46,6 +46,7 @@ from typing import Any
 from rag_engine.generation.answer_models import AnswerContext, CragRetrievalAttempt
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
 from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, minimum_scope
+from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
 from rag_engine.retrieval.context_builder import (
     ContextChildEvidence,
     ContextParentEvidence,
@@ -66,8 +67,10 @@ MAX_SEED_SECTIONS = 2
 MAX_SECTION_CHUNKS = 400
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
 DEFAULT_MODEL_INPUT_TOKENS = 128_000
-# 回答の生成（生成・監査・是正）に残す秒数。これより残りが少なければ上がらない。
-GENERATION_RESERVE_SECONDS = 150.0
+# 回答の生成に残す秒数。これより残りが少なければ上がらない。生成と監査の 1 組の見積もりの既定と回答の確定の分の和
+# （#1516。150 秒は、長い根拠で 1 組 125〜344 秒かかるモデルの 1 組目に足りなかった）。是正の round は、残りの時間と
+# 直前の組の実測から grounded の `RoundBudget` が決める。
+GENERATION_RESERVE_SECONDS = DEFAULT_GENERATION_ROUND_SECONDS + ANSWER_FINALIZE_RESERVE_SECONDS
 # 次の段の見積もりの秒数（評価器の 1 回の実測が無いとき）。
 DEFAULT_LEVEL_SECONDS = 20.0
 _ASCII = re.compile(r"[\x00-\x7f]")
@@ -513,8 +516,13 @@ def expand_sections(
     trace: dict[str, Any] = {"enabled": True, "max_levels": limits.max_levels, "input_token_limit": limits.input_tokens,
                              "time_limit_seconds": limits.time_limit_seconds, "levels": []}
     result = SectionExpansionResult(context=context, trace=trace)
+    current = context  # 読んだ章節を足した文脈（判定を飛ばした段の分を含む）
 
     def finish(reason: str) -> SectionExpansionResult:
+        if current is not result.context:
+            # 判定を飛ばした段（読む範囲に届く前。#1503）で足した根拠も、止めた理由によらず返す（#1526）。
+            result.context = current
+            result.applied = True
         result.stop_reason = reason
         result.used_tokens = context_tokens(result.context)
         trace.update(stop_reason=reason, applied=result.applied, levels_read=result.levels,
@@ -561,7 +569,6 @@ def expand_sections(
         if need == "leaf":
             return any(chain.position >= 0 for chain in chains)
         return any(chain.position >= len(chain.sections) - 1 for chain in chains)
-    current = context
     replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
     extracting = large_sections is not no_large_section_handler
 
@@ -761,10 +768,15 @@ def expand_sections(
         if not added and not replaced:
             if budget_hit:
                 return finish(STOP_TOKEN_BUDGET)
-            if need is not None and scope_reached() and is_enough(latest):
+            # 判定を飛ばした段で足した根拠がまだ判定・生成に渡っていない（#1526）。
+            unjudged = current is not result.context
+            if need is not None and scope_reached() and is_enough(latest) and not unjudged:
                 # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
                 return finish(STOP_SUFFICIENT)
-            continue
+            if not (unjudged and scope_reached()):
+                continue
+            # 読む範囲に届いた段で足す根拠が無くても（表題の章節が文書の全部を持ち、文書全体の段が in_context）、
+            # それまでの段で足した根拠で判定する（#1526）。
         if not scope_reached() and not budget_hit:
             # 読む範囲に届くまでは判定しない（網羅の問で、見えている数件で「足りる」としない。#1503）。
             level_trace["grade_skipped"] = "minimum_scope"

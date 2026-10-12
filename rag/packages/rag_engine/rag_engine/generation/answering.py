@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import asdict, replace
 from pathlib import Path
+from concurrent.futures import Future, ThreadPoolExecutor
 from time import monotonic
 from typing import Any, Callable, Iterable, Sequence
 
 from rag_engine.models.storage import AdbHybridSearchUnavailable
-from rag_engine.dependencies import check_adb_hybrid_search_ready, search_adb_hybrid_chunks
+from rag_engine.dependencies import check_adb_hybrid_search_ready, injected_prefetch_search, search_adb_hybrid_chunks
 from rag_engine.retrieval.scope import (
     AdbSearchReadiness,
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
@@ -213,7 +216,14 @@ from rag_engine.knowledge.runtime_knowledge import (
     build_runtime_knowledge_context,
     runtime_knowledge_status,
 )
-from rag_engine.config import Settings
+from rag_engine.config import (
+    LLM_PURPOSE_GENERATION,
+    LLM_PURPOSE_JUDGE,
+    LLM_PURPOSE_STRATEGY,
+    Settings,
+    llm_reasoning_effort_note,
+    settings_for_llm_purpose,
+)
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
@@ -226,6 +236,8 @@ from rag_engine.retrieval.text_search_tokenizer import (
     tokenizer_fingerprint,
 )
 
+
+logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_CHARS = 24000
 MAX_CONTEXT_NEIGHBORS_PER_RECORD = 5
@@ -791,8 +803,25 @@ def build_crag_answer_context(
                                    document_selection=context.document_selection or best_context.document_selection)
             context = best_context
 
+        skip = _crag_grade_skip(question, context, settings) if attempt_number == 1 else None
+        if skip is not None:
+            # 規則の信号が強いときは LLM の評価を飛ばして生成へ進む (#1499。既定 off)。生成後の監査は飛ばさない。
+            with _execution_step("根拠確認（1回目）", "集めた根拠で質問に答えられるかを LLM が判定します。") as step:
+                step.status = "省略"
+                step.result("規則の信号が強いため、LLM の評価を省略しました", *skip["lines"])
+                step.impact("取得した根拠をそのまま回答の生成に渡します。生成後の監査は通常どおり行います。")
+            attempts.append(CragRetrievalAttempt(
+                attempt=attempt_number, query=active_query.strip(), retrieval_queries=_dedupe_queries(retrieval_queries),
+                sufficient=True, reason="規則の信号が強いため LLM の評価を省略: " + " / ".join(skip["lines"]),
+                new_evidence_count=new_evidence_count, document_selection=dict(context.document_selection),
+                stop_reason=CRAG_SKIP_STOP_REASON, recovery_trace={"grade_skipped": skip["trace"]}))
+            return context, tuple(rewrites), tuple(attempts)
+
         with _execution_step(f"根拠確認（{attempt_number}回目）",
                              "集めた根拠で質問に答えられるかを LLM が判定します。" if attempt_number == 1 else "") as step:
+            if attempt_number == 1 and (note := llm_reasoning_effort_note(
+                    settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
+                step.add(note)
             try:
                 attempt = _grade_crag_retrieval(
                     attempt_number,
@@ -918,6 +947,64 @@ def build_crag_answer_context(
     return best_context, tuple(rewrites), tuple(attempts)
 
 
+# CRAG の評価を規則の信号で飛ばしたときの stop_reason (#1499)。
+CRAG_SKIP_STOP_REASON = "grade_skipped_strong_signals"
+# 列挙・網羅を求める質問の語 (#1499 / #1503)。根拠の一部しか集まっていなくても語の一致では「根拠あり」に見える
+# （CRAG の評価でも足りると判定されやすい。#1503）ため、この質問では CRAG の評価を飛ばさない。
+_ENUMERATION_QUESTION = re.compile(
+    r"すべて|全て|全部|全件|各|それぞれ|一覧|リスト|列挙|漏れなく|網羅|何件|何個|何人|何種類|いくつ|件数|人数|"
+    r"どれ|どの.{0,8}(?:が|も)|ほか|他に")
+
+
+def _top_rerank_score(context: AnswerContext) -> float | None:
+    """rerank の最上位の候補の score。rerank していない（score が無い）ときは None。"""
+    for record in context.ranked_candidates[:1]:
+        rerank = (record.metadata or {}).get("rerank") if isinstance(record.metadata, dict) else None
+        score = rerank.get("relevance_score") if isinstance(rerank, dict) else None
+        if isinstance(score, (int, float)):
+            return float(score)
+    return None
+
+
+def _crag_grade_skip(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any] | None:
+    """CRAG の評価（1 回目）を飛ばす条件と理由 (#1499)。飛ばさないときは None。
+
+    条件はすべて決定的（LLM を呼ばない）: 設定で有効、根拠がある、rerank の最上位の score が閾値以上、質問の
+    要求をすべて判定でき、すべてが語の一致で「根拠あり」（要求ごとの根拠の確認と同じ判定）、定義を問う語の
+    定義本文がある、エラー文を問う質問ではない（評価器はエラー文の一致を候補ごとに確かめるため）、列挙・網羅・
+    件数を求める質問ではない（取得した根拠で網羅できたかを語の一致では確かめられない。#1503）。
+    """
+    if not getattr(settings, "crag_skip_on_strong_signals", False):
+        return None
+    if not context.records or not context.text.strip():
+        return None
+    threshold = float(getattr(settings, "crag_skip_min_rerank_score", 1.0))
+    score = _top_rerank_score(context)
+    if score is None or score < threshold:
+        return None
+    contract = task_contract(question)
+    if contract["error_messages"]:
+        return None
+    # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
+    if contract.get("goal") in {"count", "recipient_list"} or _ENUMERATION_QUESTION.search(question):
+        return None
+    labels = definition_labels(question)
+    if labels:
+        covered = {d["label"] for r in context.records for d in definition_ranges(r.text, labels)}
+        if any(label not in covered for label in labels):
+            return None
+    rows = assess_targets(coverage_targets(question, _coverage_tokenizer(settings)), evidence_texts(context))
+    if not rows or any(row["status"] != "supported" for row in rows):
+        return None
+    return {
+        "lines": [f"rerank の最上位の score {score:.3f}（閾値 {threshold:.3f} 以上）",
+                  f"質問の要求 {len(rows)} 件がすべて語の一致で根拠あり"],
+        "trace": {"top_rerank_score": score, "min_rerank_score": threshold,
+                  "requests": [{"id": row["id"], "status": row["status"], "best_ratio": row.get("best_ratio")}
+                               for row in rows]},
+    }
+
+
 def _recover_crag_context(context: AnswerContext, attempt: CragRetrievalAttempt,
                           *, max_records: int, max_chars: int, fallback: bool = False,
                           fallback_trigger: str = "rewrite_no_new_evidence"
@@ -987,7 +1074,8 @@ def _grade_crag_retrieval(
     output = parse_text_response(
         CRAG_GRADER_SYSTEM_PROMPT,
         _build_crag_grade_prompt(question, active_query, retrieval_queries, context),
-        settings,
+        # 十分 / 不足の判定(CRAG の評価と章節の拡張の十分性の判定)は根拠の評価の推論の量で呼ぶ (#1499)。
+        settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
         CragRetrievalGradeOutput,
         provider_id=answer_llm_provider,
     )
@@ -1265,6 +1353,7 @@ def synthesize_grounded_answer(
     from rag_engine.models.llm import GroundedItem
     provider = answer_llm_provider
     source_provider = answer_llm_provider or settings.default_answer_llm
+    generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
     images, mode = tuple(image_evidence), image_prompt_mode
     rounds: list[dict[str, Any]] = []
     best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
@@ -1278,33 +1367,55 @@ def synthesize_grounded_answer(
     # 生成中に Prompt 設定が保存されても、1回答の全ラウンドで同じテンプレートを使う。
     template = read_prompt(VLM_ANSWER_PROMPT_KEY)
     context, unit_fill = _fill_same_unit(question, context)
+    # 是正の round の時間の配分（#1516）: 回答の期限の残りから次の round を始めるかを決め、round の LLM の呼び出しには
+    # 回答の確定の分を残した期限を渡す（期限が無い文脈では何もしない）。
+    from rag_engine.resources.deadline import remaining_seconds
+    budget = grounded.RoundBudget(remaining_seconds)
     for number in range(grounded.MAX_ROUNDS):
         spans = _grounded_spans(question, context, images, runtime_knowledge,
                                 budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
                                 whole_records=evidence_budget_chars is not None)
         prompt = _grounded_prompt(question, spans, context, images, feedback, question_plan, runtime_knowledge,
                                   inquiry_conditions, query_expansion, template=template, known_gaps=known_gaps)
-        with _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
+        with budget.round(), _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
                              "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。" if number == 0 else "") as step:
             try:
+                # 生成と監査は回答の生成・監査の推論の量で呼ぶ (#1499。run_round は settings を LLM の呼び出しにだけ使う)。
                 current = grounded.run_round(
-                    question, spans, settings, prompt=prompt, provider_id=provider,
+                    question, spans, generation_settings, prompt=prompt, provider_id=provider,
                     image_provider_id=settings.default_vision_llm,
                     parse_text=parse_text_response, parse_images=parse_multimodal_response,
                     previous=best[0].checked if best is not None else (), known_gaps=known_gaps,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [])
+                if number == 0 and (note := llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION, provider)):
+                    step.add(note)
             except Exception as exc:
-                if best is None:
+                # 回答の確定の分を残した期限で切れた（#1516）なら、確かめ終わった round で確定する。1 組目の生成が
+                # 切れたときは草稿が無いので、関係する資料の記載だけを示す。外側の期限・取り消し・他の失敗は送出する。
+                cut = budget.cut_round(number, has_draft=best is not None)
+                if best is None and not cut:
                     raise
                 # 是正はより良くする試みなので、その LLM 呼出（生成・監査）の失敗で採用済みの回答を捨てない (#748)。
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
-                rounds.append({"error": f"{type(exc).__name__}: {exc}", "accepted": False, "audit_calls": 0})
-                step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
+                rounds.append({"error": f"{type(exc).__name__}: {exc}", "accepted": False, "audit_calls": 0,
+                               **({"deadline_cut": True} if cut else {})})
+                if best is None:
+                    best = (grounded.timed_out_round(question), context, spans, images, mode)
+                    step.result("回答の時間の上限までに回答文の生成が終わらなかったため、質問に関係する資料の記載だけを示します")
+                elif cut:
+                    step.result("回答の時間の上限が近いため、この作り直しを打ち切り、直前に採用した回答を公開します")
+                else:
+                    step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
                 break
             quote_only = sum(e.quote_only for e in current.checked)
             step.result(f"公開する説明 {current.verified} 件"
                         + (f"、原文のまま示す記載 {quote_only} 件" if quote_only else "")
                         + (f"、原文と一致せず除外 {len(current.dropped)} 件" if current.dropped else ""))
+            # 生成と監査の秒と token の数（遅い round の理由を確かめる。#1516）。
+            if timing_line := grounded.round_timing_line(current):
+                step.add(timing_line)
+            if current.audit_cut:
+                step.impact("回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。")
         accepted = best is None or grounded.better(current, best[0])
         if accepted:
             best = (current, context, spans, images, mode)
@@ -1314,6 +1425,7 @@ def synthesize_grounded_answer(
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         feedback = best[0].feedback()
+        budget.note(current, feedback)
         if not feedback or number == grounded.MAX_ROUNDS - 1:
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
@@ -1340,6 +1452,16 @@ def synthesize_grounded_answer(
                 break
             corrected = True
             remedy = {"remedy": "correction"}
+        if not budget.allows_round(number + 1):
+            # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
+            # 最良の round で確定し、直していない不足を「確かめられていない点」に出す。
+            rounds[-1]["deadline_stop"] = dict(budget.stop)
+            with _execution_step("是正の打ち切り") as stop_step:
+                stop_step.result(f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
+                                 f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
+                                 f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します")
+                stop_step.impact("直していない不足を「確かめられていない点」に示し、条件つきの回答にします。")
+            break
         rounds[-1]["remedy"] = remedy
         with _execution_step("是正") as remedy_step:
             remedy_step.result({"context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
@@ -1374,7 +1496,8 @@ def synthesize_grounded_answer(
     if off_goal:
         gaps.append(grounded.OFF_GOAL_GAP)
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「確かめられていない点」に出し、回答を条件つきにする。
-    unread = [line for line in dict.fromkeys(unread_sections) if line]
+    # 回答の時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）も同じ節に出す。
+    unread = [line for line in dict.fromkeys([*unread_sections, *budget.gap_lines(current, feedback)]) if line]
     # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
     # 内部 ID を含む差分説明になりやすく、監査が返さなかった id は実際には答えている可能性があるため、
     # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
@@ -1436,6 +1559,7 @@ def synthesize_grounded_answer(
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
         answer_text, citation_lines = grounded.render_with_citations(
             grounded.CONFIRMATION_ONLY_SUMMARY if confirmation_section
+            else grounded.DEADLINE_SUMMARY if budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items], confirmations=confirmation_section, unverified=unread)
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
@@ -1450,7 +1574,7 @@ def synthesize_grounded_answer(
     trace = {
         "pipeline": "grounded", "task_contract": task_contract(question), "selected_evidence": [_public_span(s) for s in spans],
         "same_unit_fill": unit_fill,
-        "rounds": rounds, "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
+        "rounds": rounds, "round_budget": budget.trace(current), "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
         "final_fact_count": len(published),
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
         # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
@@ -1822,7 +1946,7 @@ def build_query_expansion(
             output = parse_text_response(
                 QUERY_EXPANSION_SYSTEM_PROMPT,
                 prompt,
-                settings,
+                settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
                 QueryExpansionOutput,
                 provider_id=answer_llm_provider,
             )
@@ -1835,7 +1959,7 @@ def build_query_expansion(
             original_question, _generated_queries_from_payload(output.model_dump(mode="json"), original_question, limit=None)
         )
         rejected_queries = (*rejected_queries, *rejected)
-    generated_queries = generated_queries[:MAX_GENERATED_QUERY_COUNT]
+    generated_queries = generated_queries[:_query_expansion_max_queries(settings)]
     return QueryExpansionResult(
         original_question=original_question,
         selected_strategy=selected_strategy,
@@ -1846,6 +1970,14 @@ def build_query_expansion(
         routing_data_required=routing_data_required,
         routing_data_items=routing_data_items,
     )
+
+
+def _query_expansion_max_queries(settings: Settings) -> int:
+    """質問拡張で LLM が作る検索文の本数の上限 (#1499。設定が無ければ従来の MAX_GENERATED_QUERY_COUNT)。"""
+    try:
+        return max(1, int(getattr(settings, "query_expansion_max_queries", MAX_GENERATED_QUERY_COUNT)))
+    except (TypeError, ValueError):
+        return MAX_GENERATED_QUERY_COUNT
 
 
 def _text_search_variants(queries: Sequence[str], expansion: QueryExpansionResult) -> tuple[str, ...]:
@@ -2293,16 +2425,28 @@ def answer_question_result(
         if legacy_notice:
             step.add(legacy_notice)
 
+    # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
+    prefetch = _start_original_query_prefetch(
+        normalized_question, query_strategy_value, settings, top_k=chunk_top_k, inquiry_conditions=inquiry_conditions,
+    )
     with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
         step.add(f"設定: {query_strategy_label(query_strategy_id(query_strategy_value))}")
-        expansion = build_query_expansion(
-            normalized_question,
-            query_strategy_value,
-            settings,
-            answer_llm_provider=answer_llm_provider,
-        )
+        try:
+            expansion = build_query_expansion(
+                normalized_question,
+                query_strategy_value,
+                settings,
+                answer_llm_provider=answer_llm_provider,
+            )
+        finally:
+            prefetch_note = _wait_original_query_prefetch(prefetch)
+        if prefetch_note:
+            step.add(prefetch_note)
         step.add(*_query_expansion_details(
             expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))))
+        if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
+                note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)):
+            step.add(note)
 
     with _execution_step("検索文と検索語の確定", "意味の近さで探す検索文と、全文検索に使うキーワードを確定します。") as step:
         keyword_trace: dict[str, Any] = {}
@@ -2566,6 +2710,56 @@ def answer_question_result(
         )
 
 
+def _start_original_query_prefetch(
+    question: str,
+    query_strategy: str,
+    settings: Settings,
+    *,
+    top_k: int,
+    inquiry_conditions: InquiryConditionParse | None,
+) -> Future[float] | None:
+    """元の質問の検索を別の thread で始める (#1499)。先読みが注入されていない・LLM を呼ばない戦略なら None。
+
+    先読みは呼び出し元の検索の cache に入れるだけで、続く検索（`search_adb_hybrid_chunks`）が同じ検索文・件数の
+    結果を読む。thread には呼び出しの contextvars（注入した I/O・回答の期限）を写す。
+    """
+    prefetch = injected_prefetch_search()
+    if prefetch is None or query_strategy_id(query_strategy) == SIMPLE_RETRIEVAL_STRATEGY:
+        return None
+    # 文書検索の先頭の検索文と同じ形（NFKC・空白の正規化。`inquiry_retrieval_queries`）にする。違う形だと cache に
+    # 当たらない（結果は変わらないが先読みが無駄になる）。
+    first = inquiry_retrieval_queries(question, question, (), None)
+    if not first:
+        return None
+    query = first[0]
+    candidate_limit = _retrieval_candidate_limit(top_k)
+
+    def run() -> float:
+        started = monotonic()
+        prefetch(query=query, candidate_limit=candidate_limit, inquiry_conditions=inquiry_conditions,
+                 settings=settings)
+        return monotonic() - started
+
+    context = contextvars.copy_context()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-answer-prefetch")
+    try:
+        return executor.submit(context.run, run)
+    finally:
+        executor.shutdown(wait=False)
+
+
+def _wait_original_query_prefetch(prefetch: Future[float] | None) -> str:
+    """先読みの終わりを待ち、実行記録の文を返す。失敗しても回答は続ける（続く検索がそのまま読む）。"""
+    if prefetch is None:
+        return ""
+    try:
+        elapsed = prefetch.result()
+    except Exception as exc:  # noqa: BLE001 - 先読みは時間の短縮だけ。失敗しても続く検索が読む。
+        logger.warning("original query prefetch failed", exc_info=True)
+        return f"元の質問の検索の先読みに失敗しました（{type(exc).__name__}）。検索の工程でそのまま検索します。"
+    return f"元の質問の検索を、検索文の生成と並行に実行しました（検索 {elapsed:.1f} 秒）。"
+
+
 def _expand_context_by_sections(
     question: str,
     context: AnswerContext,
@@ -2750,7 +2944,8 @@ def _route_query_strategy(
     output = parse_text_response(
         QUERY_ROUTING_SYSTEM_PROMPT,
         _build_query_routing_prompt(question),
-        settings,
+        # 戦略の判定と検索文の生成は、根拠の評価と別の推論の量で呼ぶ (#1499。low では戦略の選択がぶれた)。
+        settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
         QueryRoutingOutput,
         provider_id=answer_llm_provider,
     )

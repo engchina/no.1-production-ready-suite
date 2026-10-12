@@ -5,7 +5,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.config import AnswerFlow, EvaluationSuite, QueryStrategy
+from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
 from app.schemas.search import (
     SearchDiagnostics,
     format_search_id_filter,
@@ -666,6 +666,14 @@ class EvaluationRagOverrides(BaseModel):
     # 抽出してから統合(#1437)の抽出の呼び出しの上限。
     section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
+    # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成・監査の推論の量、
+    # CRAG の評価の省略、質問拡張の検索文の上限を比べる。
+    strategy_reasoning_effort: ReasoningEffortOverride | None = None
+    judge_reasoning_effort: ReasoningEffortOverride | None = None
+    generation_reasoning_effort: ReasoningEffortOverride | None = None
+    crag_skip_on_strong_signals: bool | None = None
+    crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 
 class EvaluationExperiment(BaseModel):

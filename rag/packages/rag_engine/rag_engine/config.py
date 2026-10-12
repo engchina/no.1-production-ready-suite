@@ -288,6 +288,21 @@ class Settings:
     # 同時に呼ぶ数（既定 4）。
     section_extraction_max_calls: int = 8
     section_extraction_concurrency: int = 4
+    # 用途ごとの推論(思考)の量の上書き(#1499)。空はモデルの登録値(`LlmProviderSettings.reasoning_effort`)の
+    # まま、none は送らない、low / medium / high はその値を送る。質問拡張戦略の判定と検索文の生成、根拠の評価
+    # (CRAG の評価と章節の拡張の十分性の判定)、回答文の生成・監査で分ける。モデルの登録値が none(送らない)の
+    # モデルには、上書きしても送らない(推論を受け付けないモデルがある。platform の `pr_system_settings.model`
+    # の実測)。
+    strategy_reasoning_effort: str = ""
+    judge_reasoning_effort: str = ""
+    generation_reasoning_effort: str = ""
+    # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。全要求の根拠が語の一致で
+    # 「根拠あり」(要求ごとの根拠の確認と同じ判定)で、rerank の最上位の score が閾値以上のときだけ。
+    # 生成後の監査は飛ばさない。
+    crag_skip_on_strong_signals: bool = False
+    crag_skip_min_rerank_score: float = 0.8
+    # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
+    query_expansion_max_queries: int = 5
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
@@ -459,6 +474,14 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         section_extraction_max_calls=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS", 8)),
         section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
+        strategy_reasoning_effort=normalize_reasoning_effort_override(
+            env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
+        judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
+        generation_reasoning_effort=normalize_reasoning_effort_override(
+            env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
+        crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
+        crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),
+        query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
@@ -486,6 +509,74 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         from rag_engine.adapters.oracle.connection import load_adb_settings
         settings = replace(settings, adb_settings=load_adb_settings(environ=env, env_path=dotenv_path or ".env"))
     return replace(settings, **overrides)
+
+
+# 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
+# 質問拡張戦略の判定と検索文の生成(strategy)・根拠の評価(judge。CRAG の評価と章節の拡張の十分性の判定)・
+# 回答文の生成と監査(generation)。
+LLM_PURPOSE_STRATEGY = "strategy"
+LLM_PURPOSE_JUDGE = "judge"
+LLM_PURPOSE_GENERATION = "generation"
+_PURPOSE_EFFORT_FIELDS = {
+    LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
+    LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
+    LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
+}
+_PURPOSE_LABELS = {
+    LLM_PURPOSE_STRATEGY: "質問拡張戦略の判定・検索文の生成",
+    LLM_PURPOSE_JUDGE: "根拠の評価",
+    LLM_PURPOSE_GENERATION: "回答の生成・監査",
+}
+# 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
+REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")
+REASONING_EFFORT_OMIT = "none"
+
+
+def normalize_reasoning_effort_override(value: str | None) -> str:
+    """用途ごとの推論の量の上書きの値。選択肢に無い値(空・model など)は "" (モデルの登録値のまま)。"""
+    normalized = str(value or "").strip().casefold()
+    return normalized if normalized in REASONING_EFFORT_OVERRIDES else ""
+
+
+def settings_for_llm_purpose(settings: Settings, purpose: str) -> Settings:
+    """用途の推論の量を反映した設定(#1499)。上書きが無ければ同じ設定を返す。
+
+    LLM の呼び出しに渡す設定だけを差し替える(provider の `reasoning_effort` は送る値)。モデルの登録値が
+    送らない(空)の provider は、上書きしても送らない。
+    """
+    override = normalize_reasoning_effort_override(getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+    if not override:
+        return settings
+    current = getattr(settings, "llm_providers", None)
+    if not isinstance(settings, Settings) or not isinstance(current, dict):
+        return settings
+    to_send = "" if override == REASONING_EFFORT_OMIT else override
+    providers = {
+        key: replace(provider, reasoning_effort=to_send) if provider.reasoning_effort else provider
+        for key, provider in current.items()
+    }
+    if providers == current:
+        return settings
+    return replace(settings, llm_providers=providers)
+
+
+def llm_reasoning_effort_note(settings: Settings, purpose: str, provider_id: str | None = None) -> str:
+    """実行記録に残す、その用途で送る推論の量と根拠(#1499)。例: 「推論の量: low（根拠の評価の設定）」。"""
+    if not isinstance(settings, Settings):
+        return ""
+    try:
+        registered = get_llm_provider(settings, provider_id or settings.default_answer_llm).reasoning_effort
+    except RuntimeError:
+        return ""
+    override = normalize_reasoning_effort_override(getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+    label = _PURPOSE_LABELS.get(purpose, purpose)
+    if not registered:
+        return "推論の量: 送らない（モデルの登録値が none）"
+    if not override:
+        return f"推論の量: {registered}（モデルの登録値）"
+    if override == REASONING_EFFORT_OMIT:
+        return f"推論の量: 送らない（{label}の設定）"
+    return f"推論の量: {override}（{label}の設定。モデルの登録値は {registered}）"
 
 
 def get_llm_provider(settings: Settings, provider_id: str | None, default: str = DEFAULT_LLM_PROVIDER) -> LlmProviderSettings:

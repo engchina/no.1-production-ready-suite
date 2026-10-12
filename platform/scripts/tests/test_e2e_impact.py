@@ -292,6 +292,71 @@ class PlanShardsTest(unittest.TestCase):
         )
         self.assertEqual(shards, [])
 
+    def test_split_long_spec_into_test_level_parts(self) -> None:
+        # 合計 1200・4 shard（目安 300）。a（600）は a だけの 2 shard に分け、
+        # 残りを 2 shard に詰める。
+        durations = {"a": 600, "b": 250, "c": 200, "d": 100, "e": 50}
+        shards = impact.plan_split_shards(durations, 4)
+        self.assertEqual(
+            [(s.specs, s.part) for s in shards[:2]], [(("a",), (1, 2)), (("a",), (2, 2))]
+        )
+        self.assertEqual(len(shards), 4)
+        self.assertEqual([s.playwright_shard for s in shards], ["1/2", "2/2", "1/1", "1/1"])
+        whole = sorted(spec for s in shards if s.part is None for spec in s.specs)
+        self.assertEqual(whole, ["b", "c", "d", "e"])
+        self.assertLessEqual(max(s.estimated_ms for s in shards), 300)
+
+    def test_split_leaves_a_shard_for_the_rest(self) -> None:
+        # a だけで 3 shard 分あっても、残りの spec に 1 shard を残す。
+        shards = impact.plan_split_shards({"a": 900, "b": 10}, 3)
+        self.assertEqual([s.part for s in shards], [(1, 2), (2, 2), None])
+        self.assertEqual(shards[-1].specs, ("b",))
+
+    def test_split_does_not_exceed_test_count(self) -> None:
+        shards = impact.plan_split_shards({"a": 900, "b": 10, "c": 10}, 4, {"a": 2})
+        self.assertEqual([s.part for s in shards if s.part], [(1, 2), (2, 2)])
+        self.assertEqual(sorted(spec for s in shards if not s.part for spec in s.specs), ["b", "c"])
+
+    def test_split_with_one_shard_runs_everything_together(self) -> None:
+        shards = impact.plan_split_shards({"a": 900, "b": 10}, 1)
+        self.assertEqual(len(shards), 1)
+        self.assertEqual((shards[0].specs, shards[0].part), (("a", "b"), None))
+
+    def test_fully_parallel_product_with_map_splits_long_spec(self) -> None:
+        product = impact.PRODUCTS["nl2sql"]
+        selection = impact.Selection(product)
+        root = "nl2sql/frontend/tests/e2e"
+        specs = {f"{root}/long.spec.ts": {"durationMs": 6000, "tests": 30}}
+        specs |= {f"{root}/s{i}.spec.ts": {"durationMs": 1000, "tests": 5} for i in range(6)}
+        selection.add(specs, "変更")
+        recorded = impact.ImpactMap(_map({}, specs=specs))
+        with mock.patch.object(impact, "SHARD_TARGET_MS", 3000):
+            matrix, shards = impact.shard_matrix(product, selection, recorded)
+        self.assertEqual(len(matrix), 4)
+        self.assertEqual(
+            [(m["specs"], m["playwright_shard"]) for m in matrix[:2]],
+            [("tests/e2e/long.spec.ts", "1/2"), ("tests/e2e/long.spec.ts", "2/2")],
+        )
+        rest = " ".join(m["specs"] for m in matrix[2:]).split()
+        self.assertEqual(sorted(rest), [f"tests/e2e/s{i}.spec.ts" for i in range(6)])
+        self.assertEqual({m["playwright_shard"] for m in matrix[2:]}, {"1/1"})
+
+
+class SkipSmokeSpecsTest(unittest.TestCase):
+    def test_removes_smoke_specs_from_selection(self) -> None:
+        selection = impact.Selection(impact.PRODUCTS["rag"])
+        selection.add(["rag/frontend/e2e/a.spec.ts", "rag/frontend/e2e/b.spec.ts"], "変更")
+        impact.skip_smoke_specs(selection, ["e2e/a.spec.ts", "e2e/c.spec.ts"])
+        self.assertEqual(list(selection.specs), ["rag/frontend/e2e/b.spec.ts"])
+        self.assertTrue(any("smoke" in note for note in selection.notes))
+
+    def test_keeps_full_run(self) -> None:
+        selection = impact.Selection(impact.PRODUCTS["rag"])
+        selection.need_full("package.json")
+        selection.add(["rag/frontend/e2e/a.spec.ts"], "変更")
+        impact.skip_smoke_specs(selection, ["e2e/a.spec.ts"])
+        self.assertIn("rag/frontend/e2e/a.spec.ts", selection.specs)
+
 
 class SelectIntegrationTest(unittest.TestCase):
     """一時的な git repo で select を通しで確かめる。"""
@@ -448,6 +513,40 @@ class SelectIntegrationTest(unittest.TestCase):
         selection = self._commit_and_select()
         self.assertEqual(selection.specs, {})
         self.assertEqual(selection.full, [])
+
+    def _run_select(self, *extra: str) -> tuple[mock.MagicMock, str]:
+        out = self.root / "github-output.txt"
+        with (
+            mock.patch.object(impact, "download_maps", return_value=[]) as download,
+            mock.patch("sys.stdout"),
+        ):
+            impact.main(
+                [
+                    "select", "--product", "rag", "--base", self.base, "--download",
+                    "--github-output", str(out), "--step-summary", "", *extra,
+                ]
+            )  # fmt: skip
+        return download, out.read_text(encoding="utf-8")
+
+    def test_select_does_not_download_without_frontend_change(self) -> None:
+        self._write("rag/backend/app.py", "x = 1\n")
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "change")
+        download, output = self._run_select()
+        download.assert_not_called()
+        self.assertIn("rag_mode=none", output)
+
+    def test_select_downloads_and_skips_smoke_specs(self) -> None:
+        spec = "import { test } from './fixtures/test';\n// x\n"
+        self._write("rag/frontend/e2e/page.spec.ts", spec)
+        self._write("rag/frontend/e2e/node.spec.ts", spec)
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "change")
+        download, output = self._run_select("--skip-specs", "e2e/page.spec.ts")
+        download.assert_called_once()
+        self.assertIn("rag_mode=selected", output)
+        self.assertIn("e2e/node.spec.ts", output)
+        self.assertNotIn("e2e/page.spec.ts", output)
 
     def test_check_imports_rejects_direct_test_import(self) -> None:
         self._write(

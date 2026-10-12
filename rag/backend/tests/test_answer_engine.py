@@ -212,6 +212,43 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     assert diagnostics["evidence_tree"][0]["children"]
 
 
+async def test_answer_diagnostics_keep_llm_usage_and_round_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工程ごとの LLM の token の数と、是正の round の時間の配分を診断に残す(#1516)。"""
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.resources.llm_usage import record_llm_usage
+
+    def fake_with_usage(system: str, prompt: str, settings: Any, schema: Any, **_: Any) -> Any:
+        # 本番の adapter（`_record_usage`）と同じく、1 回の呼び出しの usage を累積に足す。
+        record_llm_usage(
+            {"input_tokens": 1000, "output_tokens": 200, "reasoning_tokens": 150, "seconds": 2.5}
+        )
+        return _fake_llm(system, prompt, settings, schema)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", fake_with_usage)
+    engine = AnswerEngine(
+        Settings(rag_domain_keywords=["受注番号"]),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
+    )
+
+    steps = outcome.diagnostics["execution_steps"]
+    generation = next(step for step in steps if step["name"].startswith("回答文の生成と根拠確認"))
+    assert generation["llm_usage"]["input_tokens"] == 1000 * generation["llm_calls"]
+    assert generation["llm_usage"]["reasoning_tokens"] == 150 * generation["llm_calls"]
+    # LLM を呼ばない工程には載せない。
+    assert all("llm_usage" not in step for step in steps if not step.get("llm_calls"))
+    budget = outcome.diagnostics["round_budget"]
+    assert len(budget["round_seconds"]) >= 1
+    assert budget["reserve_seconds"] == 30.0
+    assert "stop" not in budget
+
+
 async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     import rag_engine.adapters.oci as engine_oci
 
@@ -1988,6 +2025,82 @@ def test_build_engine_settings_passes_screen_linking(tmp_path: Any) -> None:
 
     assert disabled.screen_linking_enabled is False
     assert enabled.screen_linking_enabled is True
+
+
+def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> None:
+    """用途ごとの推論の量・CRAG の評価の省略・検索文の上限を rag_engine へ渡す(#1499)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    changed = build_engine_settings(
+        Settings(
+            rag_strategy_reasoning_effort="low",
+            rag_judge_reasoning_effort="model",
+            rag_generation_reasoning_effort="none",
+            rag_crag_skip_on_strong_signals=True,
+            rag_crag_skip_min_rerank_score=0.65,
+            rag_query_expansion_max_queries=3,
+        ),
+        output_dir=tmp_path,
+    )
+
+    # 既定: 戦略はモデルの登録値(空)、根拠の評価は low、生成はモデルの登録値。
+    assert (
+        default.strategy_reasoning_effort,
+        default.judge_reasoning_effort,
+        default.generation_reasoning_effort,
+    ) == ("", "low", "")
+    assert default.crag_skip_on_strong_signals is False
+    assert default.query_expansion_max_queries == 5
+    # model はモデルの登録値のまま(空)、none は送らない。
+    assert (
+        changed.strategy_reasoning_effort,
+        changed.judge_reasoning_effort,
+        changed.generation_reasoning_effort,
+    ) == ("low", "", "none")
+    assert changed.crag_skip_on_strong_signals is True
+    assert changed.crag_skip_min_rerank_score == 0.65
+    assert changed.query_expansion_max_queries == 3
+
+
+async def test_prefetch_warms_search_cache_without_changing_results() -> None:
+    """元の質問の先読み(#1499)は検索の cache に入れるだけで、続く検索の結果を変えない。"""
+    from app.rag.answer_engine import _SearchState
+
+    question = "受注入力画面の使い方は？"
+    queries = [question, "受注の登録手順"]
+
+    async def search(prefetch: bool) -> tuple[Any, QueryRecordingOracle, list[str]]:
+        oracle = QueryRecordingOracle()
+        engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+        state = _SearchState()
+        request = SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"})
+        if prefetch:
+            await engine._prefetch_query_hits(
+                request,
+                state,
+                query=question,
+                candidate_limit=24,
+                inquiry_conditions=_inquiry(question),
+            )
+        prefetched = list(oracle.queries)
+        result = await engine._search(
+            request,
+            state,
+            retrieval_queries=queries,
+            candidate_limit=24,
+            inquiry_conditions=_inquiry(question),
+        )
+        return result, oracle, prefetched
+
+    plain, plain_oracle, _ = await search(False)
+    warmed, warmed_oracle, prefetched = await search(True)
+
+    assert prefetched == [question]
+    # 続く検索は元の質問を読み直さず、残りの検索文だけを読む。
+    assert warmed_oracle.queries == plain_oracle.queries == queries
+    assert warmed_oracle.filters == plain_oracle.filters
+    assert warmed == plain
 
 
 def test_search_answer_profile_overrides_screen_linking() -> None:

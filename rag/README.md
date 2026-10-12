@@ -126,7 +126,7 @@ CI(`secret-scan` ジョブ)でも同じ `.gitleaks.toml` で full history を走
 
 monorepo root の `.github/workflows/ci.yml`(統合 CI)で secret-scan(gitleaks)と RAG の job(`RAG / Backend`・`RAG / Engine`・`RAG / Frontend`・`RAG / E2E smoke`・`RAG / Compute init script`)を実行する。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security audit(依存が変わったときは dependency audit)、frontend の unit test・build、Playwright の smoke、配備スクリプト(`init_script.sh`・`scripts/rag-systemd.sh`・`scripts/rag-services.sh`)のテストを実行する。Docker Compose の検証は自前の compose を削除したため無い(#356)。
 
-frontend の lint(`npm run lint`)と dependency audit(`npm audit`)は CI では実行せず、ローカル検証と PR review で確認する。Playwright は PR では smoke だけを実行し、全件は `e2e-nightly.yml` が毎晩実行する(#184)。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
+frontend の lint(`npm run lint`)は CI の `RAG / Frontend` で実行する(#1099)。dependency audit(`npm audit`)は CI では実行せず、ローカル検証と PR review で確認する。Playwright は PR では smoke と差分に影響を受ける spec(`e2e-impact`)を実行し、全件は `e2e-nightly.yml` が毎晩実行する(#184・#885)。RAG のサービス(`rag/services`)と `rag_parser_core` の単体テスト・lock の検査は `Lint / services & scripts` が実行する(#1525)。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
 
 `main` の ruleset の必須 check は `CI OK` の 1 つだけ(変更のあった製品の job の結果を集約する。root の [AGENTS.md](../AGENTS.md) の「CI」)。
 

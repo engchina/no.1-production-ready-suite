@@ -14,6 +14,8 @@ name: CI
 # （rag/ の他の変更では動かさない。テストのある docling・asr だけ。#1512）。
 # branch protection の必須 check は最後の `CI OK` だけにする（skip された job を必須にすると pending のまま止まるため）。
 # main の push で失敗したら ci-failure-issue.yml が Issue を作る（ruleset の strict をやめたため。#339）。
+# PR の e2e は製品ごとの smoke と、差分に影響を受ける spec（e2e-impact。#885）。impact が全件の製品は smoke を
+# 飛ばし（全件が smoke の spec を含む）、selected のときは smoke の spec を impact から除く（#1525）。
 
 on:
   pull_request:
@@ -24,6 +26,20 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# PR / main の push の E2E smoke の spec（frontend からの相対パス、空白区切り）。smoke の job と、e2e の影響分析
+# （e2e-impact の `--skip-specs`。selected のとき、smoke が全 project で実行する spec を impact から除く）の
+# 両方が読む（#1525）。NL2SQL の desktop だけで実行する spec（*_DESKTOP）は 375px を impact に残すので除外しない。
+env:
+  RAG_E2E_SMOKE: >-
+    e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
+    e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts e2e/scrollbar-stability.spec.ts
+  NL2SQL_E2E_SMOKE: tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts
+  NL2SQL_E2E_SMOKE_DESKTOP: tests/e2e/sql-chat.spec.ts tests/e2e/database-gate.spec.ts
+  AGENT_E2E_SMOKE: >-
+    e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
+    e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
+    e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts e2e/scrollbar-stability.spec.ts
 
 jobs:
   changes:
@@ -105,9 +121,12 @@ jobs:
               - "agent/**"
             terraform:
               - "terraform/**"
-            # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）。
+            # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）と .github/
+            # （workflow の actionlint、.github/scripts の shellcheck。#1525。以前は ci.yml 以外の workflow の変更で
+            # 何も検査しなかった）。
             scripts:
               - "scripts/**"
+              - ".github/**"
             platform_backend_core_deps:
               - "platform/packages/backend_core/uv.lock"
               - "platform/packages/backend_core/pyproject.toml"
@@ -470,8 +489,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # サービスごとの venv の依存（下の Unit tests）を、ほかの job と同じく main の push だけが保存する。
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            rag/services/**/uv.lock
+            rag/packages/*/uv.lock
+          cache-suffix: rag-services
+          save-cache: ${{ github.event_name == 'push' }}
 
       # 各 backend の job は自分のディレクトリだけを検査するため、RAG のマイクロサービス（rag/services）と
       # platform のスクリプト（platform/scripts）は、venv を作らずに ruff だけで検査する（#517）。
@@ -487,11 +514,34 @@ jobs:
       - name: Unit tests (platform/scripts)
         run: python3 -m unittest discover -s platform/scripts/tests -p 'test_*.py'
 
-      # Excel の前処理（表頭・元の行とセル・表示の値・手順書の読み方。#1221）。サービスの uv.lock の
-      # 依存（openpyxl / xlrd）で、pytest だけを足して実行する。
-      - name: Unit tests (rag/services/preprocess/excel_to_json)
-        working-directory: rag/services/preprocess/excel_to_json
-        run: uv run --locked --with pytest python -m pytest -q tests
+      # RAG のサービス（rag/services/<種類>/<name>/tests）と共有の parser の契約（rag_parser_core）の単体テスト。
+      # 以前は excel_to_json（#1221）だけを実行し、ほかの 11 サービスと rag_parser_core のテストは CI のどこでも
+      # 実行していなかった（#1525）。各 uv.lock の依存（本番と同じ。--locked で pyproject とのずれも検出する）に
+      # pytest だけを足す。parser の docling・asr は RAG / Parser <name> の job が実行する（torch 等が重いので分ける）。
+      - name: Unit tests (rag/services, rag_parser_core)
+        run: |
+          status=0
+          for tests in rag/packages/rag_parser_core/tests rag/services/*/*/tests; do
+            dir="$(dirname "${tests}")"
+            case "${dir}" in
+              rag/services/parsers/docling | rag/services/parsers/asr) continue ;;
+            esac
+            echo "::group::${dir}"
+            (cd "${dir}" && uv run --locked --all-extras --with pytest python -m pytest -q tests) || status=1
+            echo "::endgroup::"
+          done
+          exit "${status}"
+
+      # テストの無い package・サービスも、uv.lock が pyproject.toml と合っていることを確かめる（配備の
+      # `uv sync --locked` が失敗しないように。#1525 で rag_parser_core・rag_pipeline_core の lock のずれが見つかった）。
+      - name: Lock check (rag/packages, rag/services)
+        run: |
+          for lock in rag/packages/*/uv.lock rag/services/*/*/uv.lock; do
+            if ! (cd "$(dirname "${lock}")" && uv lock --check -q); then
+              echo "::error file=${lock}::uv.lock が pyproject.toml と合っていません（そのディレクトリで uv lock を実行する）。"
+              exit 1
+            fi
+          done
 
   rag-parser-docling:
     name: RAG / Parser docling
@@ -652,8 +702,13 @@ jobs:
 
   rag-e2e:
     name: RAG / E2E smoke
-    needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    # impact が全件（rag_mode == full）なら smoke の spec も全件に含まれるので飛ばす（#1525）。push では e2e-impact が
+    # skip されるため、`!cancelled()` で needs の skip を許し、changes の成功を明示して確かめる。
+    needs: [changes, e2e-impact]
+    if: >-
+      !cancelled() && needs.changes.result == 'success'
+      && (needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true')
+      && needs.e2e-impact.outputs.rag_mode != 'full'
     runs-on: ubuntu-latest
     # 実測は 1.5〜2 分（2026-10、2 worker。Playwright は約 1 分で、1 worker と差は無い。#1489）。
     timeout-minutes: 10
@@ -687,11 +742,11 @@ jobs:
       # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
       # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project、CI=true で retries 2。
       # worker 数は playwright.config.ts の CI の値（2。4 vCPU の runner。spec のファイル単位で並べる。#1489）。
+      # spec は workflow の env の RAG_E2E_SMOKE（空白区切り。単語分割を意図している）。
       - name: Playwright E2E (smoke)
-        run: >-
-          npx playwright test
-          e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
-          e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts e2e/scrollbar-stability.spec.ts
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright test $RAG_E2E_SMOKE
 
       - name: Upload Playwright report
         if: failure()
@@ -751,6 +806,9 @@ jobs:
           bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh scripts/start-frontend.sh ../rag/scripts/start-frontend.sh ../agent/scripts/start-frontend.sh
           bash scripts/tests/git-pull.test.sh
           bash scripts/tests/init-script-deployment.test.sh
+          # Node.js 24 の入れ方（NodeSource → 公式 tarball・checksum）とデータの場所の移行。以前は frontend の
+          # `npm run test:startup` だけが呼び、CI では実行していなかった（#1525）。
+          bash scripts/tests/init-script-nodejs.test.sh
           bash scripts/tests/update-after-pull.test.sh
           bash scripts/tests/tail-logs.test.sh
           bash ../platform/scripts/tests/log-viewer.test.sh
@@ -812,8 +870,12 @@ jobs:
 
   nl2sql-e2e:
     name: NL2SQL / E2E smoke
-    needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    # impact が全件なら飛ばす（RAG / E2E smoke と同じ。#1525）。
+    needs: [changes, e2e-impact]
+    if: >-
+      !cancelled() && needs.changes.result == 'success'
+      && (needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true')
+      && needs.e2e-impact.outputs.nl2sql_mode != 'full'
     runs-on: ubuntu-latest
     # 実測は約 2.5 分（2026-10、2 worker。Playwright は 1.7〜1.9 分。1 worker・sql-chat の両 project では 5 分。#1489）。
     timeout-minutes: 10
@@ -851,11 +913,13 @@ jobs:
       # 最も重い sql-chat（両 project で約 80 テスト中 58）と database-gate は desktop だけにし、375px の確認は
       # impact（チャットの画面に触る PR）と nightly に任せる。dev server の起動を 1 回にするため 1 回の実行にまとめ、
       # `--grep-invert` で mobile-375 の 2 spec を外す（grep は「project 名 spec のファイル名 題名」に当たる）。
+      # spec は workflow の env（NL2SQL_E2E_SMOKE は全 project、NL2SQL_E2E_SMOKE_DESKTOP は desktop だけ。
+      # DESKTOP を変えたら --grep-invert の spec 名もそろえる）。
       - name: Playwright E2E (smoke)
-        run: >-
-          npx playwright test --grep-invert "mobile-375 .*(sql-chat|database-gate)\.spec"
-          tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts
-          tests/e2e/sql-chat.spec.ts tests/e2e/database-gate.spec.ts
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright test --grep-invert "mobile-375 .*(sql-chat|database-gate)\.spec" \
+            $NL2SQL_E2E_SMOKE $NL2SQL_E2E_SMOKE_DESKTOP
 
       - name: Upload Playwright report
         if: failure()
@@ -1017,8 +1081,12 @@ jobs:
 
   agent-e2e:
     name: Agent / E2E smoke
-    needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true'
+    # impact が全件なら飛ばす（RAG / E2E smoke と同じ。#1525）。
+    needs: [changes, e2e-impact]
+    if: >-
+      !cancelled() && needs.changes.result == 'success'
+      && (needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true')
+      && needs.e2e-impact.outputs.agent_mode != 'full'
     runs-on: ubuntu-latest
     # 実測は約 2 分（2026-10、2 worker。Playwright は 1.2 分。1 worker では 1.8〜2.0 分。#1489）。
     timeout-minutes: 10
@@ -1053,12 +1121,11 @@ jobs:
       # ログイン・認証・Run の stream・Runtime の主導線・セキュリティ管理・外観・フォント・設定の契約。
       # 全件（約 100 件）は e2e-nightly.yml が毎晩実行する。CI=true で retries 2、worker 数は
       # playwright.config.ts の CI の値（2。spec のファイル単位で並べる。#1489）。
+      # spec は workflow の env の AGENT_E2E_SMOKE。
       - name: Playwright E2E (smoke)
-        run: >-
-          npx playwright test
-          e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
-          e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
-          e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts e2e/scrollbar-stability.spec.ts
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright test $AGENT_E2E_SMOKE
 
       - name: Upload Playwright report
         if: failure()
@@ -1075,13 +1142,12 @@ jobs:
   # 差分の行を突き合わせる（platform/scripts/e2e_impact.py）。記録が無い・判定できない変更は全件にする。
   # 画面のコードを変えた PR で、その画面を検証する既存の spec が nightly で初めて壊れることを防ぐ。
 
+  # changes を待たずに始める（shard の開始が 15〜30 秒早まる。#1525）。選択の規則は製品の frontend・共有 UI・
+  # 記録の仕組みのパスだけを見る（changes の rag / nl2sql / agent / platform_frontend が false の製品は必ず none）ので、
+  # PR では常に 3 製品とも select する。何も選ばない製品は nightly の記録を取得しない。
   e2e-impact:
     name: E2E impact / 影響を受ける spec の選択
-    needs: changes
-    if: >-
-      github.event_name == 'pull_request' && (needs.changes.outputs.rag == 'true'
-      || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
-      || needs.changes.outputs.platform_frontend == 'true')
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1108,23 +1174,17 @@ jobs:
       - name: Check e2e imports
         run: python3 platform/scripts/e2e_impact.py check-imports
 
+      # --skip-specs: smoke が全 project で実行する spec（workflow の env の <製品>_E2E_SMOKE）は選ばない（#1525）。
       - name: Select affected specs
         id: select
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: origin/${{ github.base_ref }}
-          RAG: ${{ needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true' }}
-          NL2SQL: ${{ needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true' }}
-          AGENT: ${{ needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true' }}
         run: |
           for product in rag nl2sql agent; do
-            flag="$(echo "${product}" | tr '[:lower:]' '[:upper:]')"
-            if [ "${!flag}" = "true" ]; then
-              python3 platform/scripts/e2e_impact.py select --product "${product}" --base "${BASE}" --download
-            else
-              echo "${product}_mode=none" >> "${GITHUB_OUTPUT}"
-              echo "${product}_matrix=[]" >> "${GITHUB_OUTPUT}"
-            fi
+            smoke="$(echo "${product}" | tr '[:lower:]' '[:upper:]')_E2E_SMOKE"
+            python3 platform/scripts/e2e_impact.py select --product "${product}" --base "${BASE}" --download \
+              --skip-specs "${!smoke}"
           done
 
   rag-e2e-impact:
@@ -1166,7 +1226,8 @@ jobs:
           working-directory: rag/frontend
 
       # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
-      # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
+      # （記録の無い NL2SQL の全件）。playwright_shard は NL2SQL（fullyParallel）が長い spec をテスト単位で
+      # 分けた部分の値（#1525）で、ほかは 1/1。
       # spec のパスは空白区切りで渡す（単語分割を意図している）。worker は config の CI の値（2。#1489）。
       - name: Playwright E2E (affected)
         env:
@@ -1223,7 +1284,8 @@ jobs:
           working-directory: nl2sql/frontend
 
       # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
-      # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
+      # （記録の無い NL2SQL の全件）。playwright_shard は NL2SQL（fullyParallel）が長い spec をテスト単位で
+      # 分けた部分の値（#1525）で、ほかは 1/1。
       # spec のパスは空白区切りで渡す（単語分割を意図している）。worker は config の CI の値（2。#1489）。
       - name: Playwright E2E (affected)
         env:
@@ -1280,7 +1342,8 @@ jobs:
           working-directory: agent/frontend
 
       # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
-      # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
+      # （記録の無い NL2SQL の全件）。playwright_shard は NL2SQL（fullyParallel）が長い spec をテスト単位で
+      # 分けた部分の値（#1525）で、ほかは 1/1。
       # spec のパスは空白区切りで渡す（単語分割を意図している）。worker は config の CI の値（2。#1489）。
       - name: Playwright E2E (affected)
         env:
@@ -1388,7 +1451,8 @@ jobs:
   # ---------------------------------------------------------------- root の scripts/
 
   # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh。#1328）を shellcheck と、
-  # 偽の gh・一時的な git リポジトリのテスト（scripts/tests/）で検査する。GitHub には接続しない。
+  # 偽の gh・一時的な git リポジトリのテスト（scripts/tests/）で検査する。テストは GitHub に接続しない。
+  # .github/ の workflow（actionlint。run の script は shellcheck も通す）と .github/scripts も検査する（#1525）。
   suite-scripts:
     name: Suite / Scripts
     needs: changes
@@ -1401,10 +1465,24 @@ jobs:
 
       # shellcheck は GitHub の ubuntu の runner に入っている。
       - name: Shellcheck
-        run: shellcheck scripts/*.sh scripts/tests/*.sh
+        run: shellcheck scripts/*.sh scripts/tests/*.sh .github/scripts/*.sh
 
       - name: Test pr-merge-check
         run: bash scripts/tests/pr-merge-check.test.sh
+
+      # 版を固定し、release の checksum で確かめてから使う。shellcheck は runner のものを使う。
+      - name: Actionlint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTIONLINT_VERSION: "1.7.12"
+        run: |
+          dir="${RUNNER_TEMP}/actionlint"
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          gh release download "v${ACTIONLINT_VERSION}" --repo rhysd/actionlint --dir "${dir}" \
+            --pattern "${archive}" --pattern "actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          (cd "${dir}" && sha256sum --check --ignore-missing "actionlint_${ACTIONLINT_VERSION}_checksums.txt" \
+            && tar -xzf "${archive}" actionlint)
+          "${dir}/actionlint" -color
 
   # ---------------------------------------------------------------- 集約
 
