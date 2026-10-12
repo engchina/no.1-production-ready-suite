@@ -8,7 +8,7 @@ dependencies = [
     "rag-parser-core[service]",
     # rag_poc の解析実装(読み順・表補修)。Vision は backend の解析後の段が行う(#497)。
     "rag-engine[docling]",
-    "docling==2.129.0",
+    "docling==2.132.0",
     # docling の PDF の backend。7.21 以前は 1 バイトの埋め込みフォントで文字コード 0x20 に割り当てた字
     # （LibreOffice の PDF で起きる。例「点検の記録」の「記」）を空白にして落とす（#1505）。
     "docling-parse>=7.22.2,<8.0",

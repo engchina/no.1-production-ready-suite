@@ -11,7 +11,8 @@ export default defineConfig({
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",
   timeout: 30_000,
-  workers: 1,
+  // CI（4 vCPU の runner）は 2 worker で spec のファイル単位で並べる（#1489）。手元は従来どおり 1 worker。
+  workers: process.env.CI ? 2 : 1,
   // CI はヘッドレス環境のタイミング差で e2e が稀に flake するため retry する。
   // retries 未設定だと trace: "on-first-retry" も機能せず、1 件の flake で CI 全体が赤になる。
   retries: process.env.CI ? 2 : 0,

@@ -64,11 +64,9 @@ jobs:
       # RAG の外部 parser のサービスのテスト（#1512）。
       rag_parser_docling: ${{ steps.filter.outputs.rag_parser_docling == 'true' || steps.filter.outputs.ci == 'true' }}
       rag_parser_asr: ${{ steps.filter.outputs.rag_parser_asr == 'true' || steps.filter.outputs.ci == 'true' }}
-      # parser の pip-audit は、その parser の uv.lock / pyproject.toml の変更だけで動かす（ci.yml の変更では動かさない）。
-      # parser の lock には修正版のある advisory が残っており（docling 2.129.0・pillow・torch 等。#1513）、
-      # ci.yml を触る無関係な PR を赤にしないため。依存を更新する PR は、その parser の advisory を解消してから merge する。
-      rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps }}
-      rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps }}
+      # parser の pip-audit も、その parser の uv.lock / pyproject.toml の変更時だけ（全件は dependency-audit-nightly.yml。#1513）。
+      rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps == 'true' || steps.filter.outputs.ci == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -657,7 +655,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
-    # 実測は 1〜2 分（2026-09）。
+    # 実測は 1.5〜2 分（2026-10、2 worker。Playwright は約 1 分で、1 worker と差は無い。#1489）。
     timeout-minutes: 10
     defaults:
       run:
@@ -688,9 +686,10 @@ jobs:
 
       # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
       # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project、CI=true で retries 2。
+      # worker 数は playwright.config.ts の CI の値（2。4 vCPU の runner。spec のファイル単位で並べる。#1489）。
       - name: Playwright E2E (smoke)
         run: >-
-          npx playwright test --workers=1
+          npx playwright test
           e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
           e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts e2e/scrollbar-stability.spec.ts
 
@@ -816,7 +815,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
-    # 実測は 1.5〜2 分（2026-09）。
+    # 実測は約 2.5 分（2026-10、2 worker。Playwright は 1.7〜1.9 分。1 worker・sql-chat の両 project では 5 分。#1489）。
     timeout-minutes: 10
     defaults:
       run:
@@ -846,11 +845,17 @@ jobs:
           working-directory: nl2sql/frontend
 
       # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
-      # 全件は e2e-nightly.yml が毎晩 8 shard で実行する。CI=true で retries 2、負荷対策で 1 worker（#175）。
+      # 全件は e2e-nightly.yml が毎晩 8 shard で実行する。CI=true で retries 2。
+      # worker 数は playwright.config.ts の CI の値（2。fullyParallel でテスト単位で並ぶ）。#175 の遅い環境での flake の後に
+      # `--workers=1` で 1 worker に固定していたが、smoke が 4〜6 分に伸びたため外した（#1489）。
+      # 最も重い sql-chat（両 project で約 80 テスト中 58）と database-gate は desktop だけにし、375px の確認は
+      # impact（チャットの画面に触る PR）と nightly に任せる。dev server の起動を 1 回にするため 1 回の実行にまとめ、
+      # `--grep-invert` で mobile-375 の 2 spec を外す（grep は「project 名 spec のファイル名 題名」に当たる）。
       - name: Playwright E2E (smoke)
-        run: |
-          npx playwright test --workers=1 tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts tests/e2e/sql-chat.spec.ts
-          npx playwright test --workers=1 --project=desktop tests/e2e/database-gate.spec.ts
+        run: >-
+          npx playwright test --grep-invert "mobile-375 .*(sql-chat|database-gate)\.spec"
+          tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts
+          tests/e2e/sql-chat.spec.ts tests/e2e/database-gate.spec.ts
 
       - name: Upload Playwright report
         if: failure()
@@ -1015,6 +1020,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true'
     runs-on: ubuntu-latest
+    # 実測は約 2 分（2026-10、2 worker。Playwright は 1.2 分。1 worker では 1.8〜2.0 分。#1489）。
     timeout-minutes: 10
     defaults:
       run:
@@ -1045,7 +1051,8 @@ jobs:
 
       # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（RAG / NL2SQL の #184 と同じ。#339）。
       # ログイン・認証・Run の stream・Runtime の主導線・セキュリティ管理・外観・フォント・設定の契約。
-      # 全件（約 100 件）は e2e-nightly.yml が毎晩実行する。CI=true で retries 2、1 worker。
+      # 全件（約 100 件）は e2e-nightly.yml が毎晩実行する。CI=true で retries 2、worker 数は
+      # playwright.config.ts の CI の値（2。spec のファイル単位で並べる。#1489）。
       - name: Playwright E2E (smoke)
         run: >-
           npx playwright test
@@ -1160,14 +1167,14 @@ jobs:
 
       # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
       # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
-      # spec のパスは空白区切りで渡す（単語分割を意図している）。
+      # spec のパスは空白区切りで渡す（単語分割を意図している）。worker は config の CI の値（2。#1489）。
       - name: Playwright E2E (affected)
         env:
           SPECS: ${{ matrix.specs }}
           PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
         run: |
           # shellcheck disable=SC2086
-          npx playwright test --workers=1 --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
+          npx playwright test --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
 
       - name: Upload Playwright report
         if: failure()
@@ -1217,14 +1224,14 @@ jobs:
 
       # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
       # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
-      # spec のパスは空白区切りで渡す（単語分割を意図している）。
+      # spec のパスは空白区切りで渡す（単語分割を意図している）。worker は config の CI の値（2。#1489）。
       - name: Playwright E2E (affected)
         env:
           SPECS: ${{ matrix.specs }}
           PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
         run: |
           # shellcheck disable=SC2086
-          npx playwright test --workers=1 --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
+          npx playwright test --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
 
       - name: Upload Playwright report
         if: failure()
@@ -1274,14 +1281,14 @@ jobs:
 
       # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
       # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
-      # spec のパスは空白区切りで渡す（単語分割を意図している）。
+      # spec のパスは空白区切りで渡す（単語分割を意図している）。worker は config の CI の値（2。#1489）。
       - name: Playwright E2E (affected)
         env:
           SPECS: ${{ matrix.specs }}
           PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
         run: |
           # shellcheck disable=SC2086
-          npx playwright test --workers=1 --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
+          npx playwright test --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
 
       - name: Upload Playwright report
         if: failure()

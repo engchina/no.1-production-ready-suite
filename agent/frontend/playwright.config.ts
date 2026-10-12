@@ -11,7 +11,8 @@ export default defineConfig({
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",
   fullyParallel: false,
-  workers: 1,
+  // CI（4 vCPU の runner）は 2 worker で spec のファイル単位で並べる（#1489）。手元は従来どおり 1 worker。
+  workers: process.env.CI ? 2 : 1,
   // RAG / NL2SQL と同じく CI だけ retries 2（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
   // retries が無いと trace: "on-first-retry" も記録されない。
   retries: process.env.CI ? 2 : 0,
