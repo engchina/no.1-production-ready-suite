@@ -64,11 +64,9 @@ jobs:
       # RAG の外部 parser のサービスのテスト（#1512）。
       rag_parser_docling: ${{ steps.filter.outputs.rag_parser_docling == 'true' || steps.filter.outputs.ci == 'true' }}
       rag_parser_asr: ${{ steps.filter.outputs.rag_parser_asr == 'true' || steps.filter.outputs.ci == 'true' }}
-      # parser の pip-audit は、その parser の uv.lock / pyproject.toml の変更だけで動かす（ci.yml の変更では動かさない）。
-      # parser の lock には修正版のある advisory が残っており（docling 2.129.0・pillow・torch 等。#1513）、
-      # ci.yml を触る無関係な PR を赤にしないため。依存を更新する PR は、その parser の advisory を解消してから merge する。
-      rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps }}
-      rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps }}
+      # parser の pip-audit も、その parser の uv.lock / pyproject.toml の変更時だけ（全件は dependency-audit-nightly.yml。#1513）。
+      rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps == 'true' || steps.filter.outputs.ci == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
