@@ -889,6 +889,9 @@ def _verify_bootstrap(bootstrap: str) -> None:
             'path: "/u01/aipoc/props/http_port.txt"',
             'path: "/u01/aipoc/props/https_port.txt"',
             "- openssl",
+            # 運用の道具（#1566）: 最新のコードの取得（platform/deploy/suite-pull.sh）と、長い作業を切れない端末で。
+            "- git",
+            "- tmux",
         ],
         context="Compute bootstrap",
     )
