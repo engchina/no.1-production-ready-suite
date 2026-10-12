@@ -51,9 +51,17 @@ PAGES = {"s2": 2, "s3-1": 5, "s3-2": 6, "s3-3": 7, "s4": 8}
 
 def _sections() -> tuple[sections.SectionInfo, ...]:
     def info(section_id, title, level, parent, members, page_start, page_end):
-        return sections.SectionInfo(section_id=section_id, title=title, level=level, parent_section_id=parent,
-                                    page_start=page_start, page_end=page_end, chunk_count=len(members),
-                                    chars=len(members) * CHUNK_CHARS)
+        return sections.SectionInfo(
+            section_id=section_id,
+            title=title,
+            level=level,
+            parent_section_id=parent,
+            page_start=page_start,
+            page_end=page_end,
+            chunk_count=len(members),
+            chars=len(members) * CHUNK_CHARS,
+        )
+
     return (
         info("document", FILE, 0, None, _members("document"), 1, 8),
         info("s2", "第2章 点検の前の準備", 1, "document", _members("s2"), 2, 2),
@@ -87,18 +95,39 @@ def _text(chunk_id: str) -> str:
 
 
 def _child(chunk_id: str) -> StoredChunk:
-    return StoredChunk(chunk_uid=chunk_id, chunk_id=chunk_id, chunk_level="child", chunk_seq=0,
-                       parent_chunk_uid=f"{DOC}:{chunk_id}", parent_chunk_id=f"{DOC}:{chunk_id}", child_chunk_ids=(),
-                       text=_text(chunk_id), retrieval_text=_text(chunk_id), source_run_id="run",
-                       source_file_name=FILE, source_engine_id="docling", source_engine_label="Docling",
-                       page_start=_page(chunk_id), page_end=_page(chunk_id), source_seq_ranges=(),
-                       source_record_refs=(), metadata={"section_path": [_owner(chunk_id)], "document_id": DOC})
+    return StoredChunk(
+        chunk_uid=chunk_id,
+        chunk_id=chunk_id,
+        chunk_level="child",
+        chunk_seq=0,
+        parent_chunk_uid=f"{DOC}:{chunk_id}",
+        parent_chunk_id=f"{DOC}:{chunk_id}",
+        child_chunk_ids=(),
+        text=_text(chunk_id),
+        retrieval_text=_text(chunk_id),
+        source_run_id="run",
+        source_file_name=FILE,
+        source_engine_id="docling",
+        source_engine_label="Docling",
+        page_start=_page(chunk_id),
+        page_end=_page(chunk_id),
+        source_seq_ranges=(),
+        source_record_refs=(),
+        metadata={"section_path": [_owner(chunk_id)], "document_id": DOC},
+    )
 
 
 def _parent(chunk_id: str) -> StoredChunk:
     child = _child(chunk_id)
-    return replace(child, chunk_uid=f"{DOC}:{chunk_id}", chunk_id=f"{DOC}:{chunk_id}", chunk_level="parent",
-                   parent_chunk_uid="", parent_chunk_id="", child_chunk_ids=(chunk_id,))
+    return replace(
+        child,
+        chunk_uid=f"{DOC}:{chunk_id}",
+        chunk_id=f"{DOC}:{chunk_id}",
+        chunk_level="parent",
+        parent_chunk_uid="",
+        parent_chunk_id="",
+        child_chunk_ids=(chunk_id,),
+    )
 
 
 class SectionStub:
@@ -113,8 +142,9 @@ class SectionStub:
         self.outline_calls.append(chunk_uid)
         if not self.mapped:
             return None
-        return sections.SectionOutline(document_id=DOC, chunk_set_id=CHUNK_SET, owner_section_id=_owner(chunk_uid),
-                                       sections=_sections(), file_name=FILE)
+        return sections.SectionOutline(
+            document_id=DOC, chunk_set_id=CHUNK_SET, owner_section_id=_owner(chunk_uid), sections=_sections(), file_name=FILE
+        )
 
     def chunks(self, *, document_id: str, chunk_set_id: str, section_id: str, **_: object) -> list[StoredChunk]:
         assert (document_id, chunk_set_id) == (DOC, CHUNK_SET)
@@ -139,28 +169,39 @@ class Grader:
 
 
 def _attempt(*, sufficient: bool, missing: tuple[str, ...] = (), relevant: tuple[str, ...] = ()) -> CragRetrievalAttempt:
-    return CragRetrievalAttempt(attempt=1, query="q", retrieval_queries=("q",), sufficient=sufficient,
-                                missing_aspects=missing, relevant_chunk_ids=relevant)
+    return CragRetrievalAttempt(
+        attempt=1, query="q", retrieval_queries=("q",), sufficient=sufficient, missing_aspects=missing, relevant_chunk_ids=relevant
+    )
 
 
 def _seed_context(*chunk_ids: str) -> AnswerContext:
     """検索で当たった chunk（retrieved_anchor）を親ごとに 1 つずつ持つ文脈。"""
     tree = tuple(
         ContextParentEvidence(
-            record=_stored_chunk_answer_record(_parent(chunk_id)), role="synthesis_parent", reason="retrieved",
-            children=(ContextChildEvidence(record=_stored_chunk_answer_record(_child(chunk_id)),
-                                           role="retrieved_anchor", reason="retrieved", retrieval_rank=rank),))
+            record=_stored_chunk_answer_record(_parent(chunk_id)),
+            role="synthesis_parent",
+            reason="retrieved",
+            children=(
+                ContextChildEvidence(
+                    record=_stored_chunk_answer_record(_child(chunk_id)), role="retrieved_anchor", reason="retrieved", retrieval_rank=rank
+                ),
+            ),
+        )
         for rank, chunk_id in enumerate(chunk_ids, 1)
     )
     bundle = context_bundle_from_parent_evidence(tree, max_chars=24000)
-    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence,
-                         evidence_tree=bundle.evidence_tree)
+    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
 
 
 def _settings(**overrides: object) -> SimpleNamespace:
-    values = {"section_expansion_enabled": True, "section_expansion_max_levels": 4,
-              "section_expansion_input_token_percent": 50, "section_expansion_time_limit_seconds": 600.0,
-              "evidence_budget_chars": 48000, "answer_max_input_tokens": 128_000}
+    values = {
+        "section_expansion_enabled": True,
+        "section_expansion_max_levels": 4,
+        "section_expansion_input_token_percent": 50,
+        "section_expansion_time_limit_seconds": 600.0,
+        "evidence_budget_chars": 48000,
+        "answer_max_input_tokens": 128_000,
+    }
     values.update(overrides)
     return SimpleNamespace(**values)
 
@@ -169,13 +210,26 @@ def _settings(**overrides: object) -> SimpleNamespace:
 QUESTION = "第3章の設備ごとの点検の項目を教えて"
 
 
-def _expand(context: AnswerContext, settings: SimpleNamespace, grader, stub: SectionStub, *,
-            last: CragRetrievalAttempt | None = None, question: str = QUESTION,
-            **options: object) -> sections.SectionExpansionResult:
+def _expand(
+    context: AnswerContext,
+    settings: SimpleNamespace,
+    grader,
+    stub: SectionStub,
+    *,
+    last: CragRetrievalAttempt | None = None,
+    question: str = QUESTION,
+    **options: object,
+) -> sections.SectionExpansionResult:
     return sections.expand_sections(
-        question, context, settings,
+        question,
+        context,
+        settings,
         last_attempt=last if last is not None else _attempt(sufficient=True, missing=("requested_result",)),
-        grade=grader, section_outline=stub.outline, section_chunks=stub.chunks, **options)
+        grade=grader,
+        section_outline=stub.outline,
+        section_chunks=stub.chunks,
+        **options,
+    )
 
 
 def _child_ids(context: AnswerContext) -> list[str]:
@@ -197,8 +251,7 @@ def test_does_not_expand_when_crag_judged_enough():
 def test_applicability_alone_does_not_trigger_expansion():
     stub, grader = SectionStub(), Grader()
 
-    result = _expand(_seed_context("c31a"), _settings(), grader, stub,
-                     last=_attempt(sufficient=True, missing=("applicability",)))
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, last=_attempt(sufficient=True, missing=("applicability",)))
 
     assert result.stop_reason == sections.STOP_SUFFICIENT and stub.read_calls == []
 
@@ -283,8 +336,13 @@ def test_token_budget_does_not_make_answer_conditional_when_read_part_is_enough(
     stub = SectionStub()
     grader = Grader(needs={"c33a", "c33b"})
 
-    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=2400), grader, stub,
-                     rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))])
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        grader,
+        stub,
+        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
+    )
 
     assert result.stop_reason == sections.STOP_SUFFICIENT and result.unread == []
 
@@ -297,8 +355,14 @@ def test_large_section_handler_receives_sections_that_do_not_fit():
         handed.append(request)
         return None
 
-    _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=2400), grader, stub, large_sections=handler,
-            rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))])
+    _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        grader,
+        stub,
+        large_sections=handler,
+        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
+    )
 
     # 入らない子の章節（3.2）は、広げている章節（第3章）の要求としてまとめて渡す。
     assert [request.section.section_id for request in handed] == ["s3"]
@@ -306,8 +370,7 @@ def test_large_section_handler_receives_sections_that_do_not_fit():
     # 渡すのは、章節の親（章節の中の読み順）。まだ文脈に無い親（3.2）に加えて、すでに文脈にある章節の親
     # （当たった chunk 3.1a・1 段目に読んだ 3.1b）も渡し、その分を残りの入力 token に戻す（#1504。二重に数えない）。
     # 2 段目に全体で読んだ 3.3 は、この段で足した根拠なので渡さない。
-    assert [item.record.chunk_uid for item in handed[0].tree] == [
-        f"{DOC}:c31a", f"{DOC}:c31b", f"{DOC}:c32a", f"{DOC}:c32b"]
+    assert [item.record.chunk_uid for item in handed[0].tree] == [f"{DOC}:c31a", f"{DOC}:c31b", f"{DOC}:c32a", f"{DOC}:c32b"]
     assert handed[0].context_keys == {f"{DOC}:c31a", f"{DOC}:c31b"}
     # 上限 1,200 − 文脈（3.1）− 3.3 に、文脈の 3.1 の分を戻す（= 上限 − 3.3）。
     section_3_3 = sum(sections.estimate_tokens(_text(chunk)) for chunk in LEAVES["s3-3"])
@@ -329,8 +392,7 @@ def test_time_limit_stops_before_climbing():
 def test_answer_deadline_also_limits_time():
     stub, grader = SectionStub(), Grader(needs=None)
 
-    result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 10.0,
-                     deadline_remaining=lambda: 60.0)
+    result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 10.0, deadline_remaining=lambda: 60.0)
 
     assert result.stop_reason == sections.STOP_TIME_LIMIT and stub.read_calls == []
 
@@ -339,11 +401,17 @@ def test_answer_deadline_leaves_one_generation_round():
     """回答の期限の残りが、1 段の分と生成の分（1 組の見積もり + 確定の分。#1516）より少なければ上がらない。"""
     reserve = sections.GENERATION_RESERVE_SECONDS
     assert reserve == 240.0 + 30.0
-    for remaining, climbs in ((reserve + sections.DEFAULT_LEVEL_SECONDS - 1.0, False),
-                              (reserve + sections.DEFAULT_LEVEL_SECONDS, True)):
+    for remaining, climbs in ((reserve + sections.DEFAULT_LEVEL_SECONDS - 1.0, False), (reserve + sections.DEFAULT_LEVEL_SECONDS, True)):
         stub, grader = SectionStub(), Grader(needs=None)
-        result = _expand(_seed_context("c31a"), _settings(), grader, stub, started_at=0.0, clock=lambda: 10.0,
-                         deadline_remaining=lambda remaining=remaining: remaining)
+        result = _expand(
+            _seed_context("c31a"),
+            _settings(),
+            grader,
+            stub,
+            started_at=0.0,
+            clock=lambda: 10.0,
+            deadline_remaining=lambda remaining=remaining: remaining,
+        )
         assert (stub.read_calls != []) is climbs, remaining
         if not climbs:
             assert result.stop_reason == sections.STOP_TIME_LIMIT
@@ -444,11 +512,18 @@ def test_unread_sections_make_the_answer_conditional():
     spans = _grounded_spans("質問", context, (), None)
     evidence_id = spans[0]["evidence_id"]
     quote = spans[0]["text"][:20]
-    draft = {"summary": "空調の点検の項目です。", "confidence": "high",
-             "items": [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}]}
-    audit = {"goal_alignment": "aligned", "summary_supported": True,
-             "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "",
-                          "reason": "r"}], "request_reviews": [], "unused_evidence_ids": []}
+    draft = {
+        "summary": "空調の点検の項目です。",
+        "confidence": "high",
+        "items": [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}],
+    }
+    audit = {
+        "goal_alignment": "aligned",
+        "summary_supported": True,
+        "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"}],
+        "request_reviews": [],
+        "unused_evidence_ids": [],
+    }
 
     def model(system, prompt, settings, schema, **options):
         return schema.model_validate(draft if schema is GroundedDraft else audit)
@@ -457,8 +532,7 @@ def test_unread_sections_make_the_answer_conditional():
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         plain = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only")
-        limited = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only",
-                                             unread_sections=unread)
+        limited = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=unread)
     assert plain.response.envelope["outcome"] == "answered"
     assert limited.response.envelope["outcome"] == "conditional"
     assert unread[0] in limited.response.envelope["gaps"]
@@ -466,9 +540,11 @@ def test_unread_sections_make_the_answer_conditional():
     assert limited.response.needs_human_review is True
 
 
-@pytest.mark.parametrize("percent, model, expected",
-                         [(50, 128_000, 64_000), (25, 128_000, 32_000), (90, 200_000, 180_000), (50, None, 64_000)],
-                         ids=["50", "25", "90-large-model", "default-model"])
+@pytest.mark.parametrize(
+    "percent, model, expected",
+    [(50, 128_000, 64_000), (25, 128_000, 32_000), (90, 200_000, 180_000), (50, None, 64_000)],
+    ids=["50", "25", "90-large-model", "default-model"],
+)
 def test_input_token_limit_is_share_of_model_input(percent, model, expected):
     """根拠の入力の上限は、回答のモデルの入力の上限（共通のモデル設定。#1437）に対する割合。"""
     overrides = {"section_expansion_input_token_percent": percent}
@@ -480,17 +556,26 @@ def test_input_token_limit_is_share_of_model_input(percent, model, expected):
     limits = sections.SectionExpansionLimits.from_settings(settings)
     assert limits.input_tokens == expected
     # 根拠の文字数の予算（evidence_budget_chars）には依らない（#1436 の暫定の推定を置き換えた）。
-    assert sections.SectionExpansionLimits.from_settings(
-        _settings(**overrides, evidence_budget_chars=1000)).input_tokens == (expected if model else 64_000)
+    assert sections.SectionExpansionLimits.from_settings(_settings(**overrides, evidence_budget_chars=1000)).input_tokens == (
+        expected if model else 64_000
+    )
 
 
 def test_engine_settings_read_section_expansion_environment():
-    settings = get_settings(environ={"RAG_ENGINE_SECTION_EXPANSION": "0",
-                                     "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": "2",
-                                     "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": "30",
-                                     "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS": "300"}, dotenv_path=None)
-    assert (settings.section_expansion_enabled, settings.section_expansion_max_levels,
-            settings.section_expansion_input_token_percent, settings.section_expansion_time_limit_seconds) == (
-        False, 2, 30, 300.0)
+    settings = get_settings(
+        environ={
+            "RAG_ENGINE_SECTION_EXPANSION": "0",
+            "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": "2",
+            "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": "30",
+            "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS": "300",
+        },
+        dotenv_path=None,
+    )
+    assert (
+        settings.section_expansion_enabled,
+        settings.section_expansion_max_levels,
+        settings.section_expansion_input_token_percent,
+        settings.section_expansion_time_limit_seconds,
+    ) == (False, 2, 30, 300.0)
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 4

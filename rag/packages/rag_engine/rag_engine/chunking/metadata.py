@@ -32,6 +32,7 @@ from rag_engine.chunking.evidence import (
     _table_image_evidence,
 )
 
+
 def _chunk_metadata(
     refs: Sequence[dict[str, Any]],
     metadata_by_page: dict[int, dict[str, Any]],
@@ -89,14 +90,18 @@ def _chunk_metadata(
     clean_section_path = [item for item in section_path if item]
     clean_sources = [source for item, source in zip(section_path, padded_sources) if item]
     retrieval_source = retrieval_text or text
-    inquiry_metadata = build_inquiry_chunk_metadata(
-        text=text,
-        retrieval_text=retrieval_source,
-        source_file_name=source_file_name,
-        source_categories=source_categories,
-        page_start=page_start,
-        page_end=page_end,
-    ) if compute_retrieval_profile else {}
+    inquiry_metadata = (
+        build_inquiry_chunk_metadata(
+            text=text,
+            retrieval_text=retrieval_source,
+            source_file_name=source_file_name,
+            source_categories=source_categories,
+            page_start=page_start,
+            page_end=page_end,
+        )
+        if compute_retrieval_profile
+        else {}
+    )
     metadata = {
         "schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "active": True,
@@ -148,9 +153,14 @@ def _rounded_coordinates(value: Any) -> Any:
     ハイライトに必要な精度は1画素未満で足り、桁を残しても検索にも回答にも使われない。
     """
     if isinstance(value, dict):
-        return {key: ([round(float(v), 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else v for v in item]
-                      if key.endswith("bbox") and isinstance(item, list) else _rounded_coordinates(item))
-                for key, item in value.items()}
+        return {
+            key: (
+                [round(float(v), 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else v for v in item]
+                if key.endswith("bbox") and isinstance(item, list)
+                else _rounded_coordinates(item)
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [_rounded_coordinates(item) for item in value]
     return value
@@ -242,18 +252,21 @@ def _validate_chunk_metadata_v4(metadata: Any) -> dict[str, Any]:
         raise ValueError("chunk metadata v4 の document が不正です。")
     classification = document.get("classification")
     category_keys = ("large_category", "middle_category", "small_category")
-    if (not isinstance(classification, dict) or set(classification) != set(category_keys)
-            or not all(isinstance(classification.get(key), str) for key in category_keys)):
+    if (
+        not isinstance(classification, dict)
+        or set(classification) != set(category_keys)
+        or not all(isinstance(classification.get(key), str) for key in category_keys)
+    ):
         raise ValueError("chunk metadata v4 の document.classification が不正です。")
-    if 'first_page_context' in document:
-        normalize_first_page_context(document['first_page_context'])
+    if "first_page_context" in document:
+        normalize_first_page_context(document["first_page_context"])
     for key in ("section_path", "section_path_sources", "source_categories"):
-        if not isinstance(metadata.get(key), list) or not all(
-            isinstance(item, str) and item for item in metadata[key]
-        ):
+        if not isinstance(metadata.get(key), list) or not all(isinstance(item, str) and item for item in metadata[key]):
             raise ValueError(f"chunk metadata v4 の {key} が配列ではありません。")
-    if (len(metadata["section_path_sources"]) != len(metadata["section_path"])
-            or not set(metadata["section_path_sources"]) <= HEADING_SOURCES):
+    if (
+        len(metadata["section_path_sources"]) != len(metadata["section_path"])
+        or not set(metadata["section_path_sources"]) <= HEADING_SOURCES
+    ):
         raise ValueError("chunk metadata v4 の section_path_sources が section_path と対応していません。")
     for key in _CHUNK_METADATA_OPTIONAL_KEYS:
         if key in metadata and not metadata[key]:
@@ -279,9 +292,7 @@ def _validate_chunk_metadata_v4(metadata: Any) -> dict[str, Any]:
             raise ValueError("chunk metadata v4 の retrieval_profile に未対応項目があります。")
         for key in ("business_domains", "document_kinds", "active_profiles"):
             if key in profile and (
-                not isinstance(profile[key], list)
-                or not profile[key]
-                or not all(isinstance(item, str) and item for item in profile[key])
+                not isinstance(profile[key], list) or not profile[key] or not all(isinstance(item, str) and item for item in profile[key])
             ):
                 raise ValueError(f"chunk metadata v4 の retrieval_profile.{key} が不正です。")
     return dict(metadata)

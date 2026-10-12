@@ -3,7 +3,9 @@ from rag_engine.retrieval.task_contract import action_targets, task_contract
 
 def test_action_targets_take_the_object_of_the_requested_operation():
     """要求文の「X を<操作語>する／したい」の X を原文の語で返す (#700)。"""
-    assert action_targets("月末にまとめて印刷する請求書の備考欄について、3行のうち1行を変更したい。ロゴ画像を変更するにはどうしたらよいか。") == ["ロゴ画像"]
+    assert action_targets(
+        "月末にまとめて印刷する請求書の備考欄について、3行のうち1行を変更したい。ロゴ画像を変更するにはどうしたらよいか。"
+    ) == ["ロゴ画像"]
     assert action_targets("倉庫を移転したので、拠点名を変更する方法を教えてほしい。") == ["拠点名"]
     assert action_targets("得意先ごとに登録している掛率を一括で変更することは可能か。") == ["掛率"]
     assert action_targets("権限を設定するにはどのように操作するのか。店長と経理担当者に権限を付与したい。") == ["権限"]

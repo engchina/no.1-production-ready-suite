@@ -51,9 +51,12 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
             )
 
             with (
-                patch("rag_engine.workflows.knowledge_base.analyze_pdf", return_value=_run(
-                    [SimpleNamespace(raw={"vision_status": "failed"}), SimpleNamespace(raw={"vision_status": "succeeded"})],
-                )) as analyze,
+                patch(
+                    "rag_engine.workflows.knowledge_base.analyze_pdf",
+                    return_value=_run(
+                        [SimpleNamespace(raw={"vision_status": "failed"}), SimpleNamespace(raw={"vision_status": "succeeded"})],
+                    ),
+                ) as analyze,
                 patch("rag_engine.workflows.knowledge_base.create_chunk_run", return_value=chunk_result) as chunk,
                 patch("rag_engine.workflows.knowledge_base.save_chunk_run_embeddings", return_value=embedding_result) as embed,
             ):
@@ -90,7 +93,8 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "Docling boom"):
                     register_source_file_for_rag(
-                        source_path=source, engine_ids=["docling"],
+                        source_path=source,
+                        engine_ids=["docling"],
                         settings=replace(get_settings(), output_dir=Path(tmp) / "runs"),
                     )
         chunk.assert_not_called()

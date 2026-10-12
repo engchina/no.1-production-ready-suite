@@ -128,6 +128,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
 
     def test_answer_flow_uses_runtime_knowledge_for_search_prompt_display_and_payload(self):
         from grounded_stub import stub_generation
+
         stub_generation(self)
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
@@ -151,7 +152,10 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             context = AnswerContext(records=records, text="[chunk] 納品書 再発行条件")
 
             with (
-                patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=SimpleNamespace(chunk_run_id="abcdef-1234567890ab")),
+                patch(
+                    "rag_engine.generation.answering.load_latest_or_source_chunk_run",
+                    return_value=SimpleNamespace(chunk_run_id="abcdef-1234567890ab"),
+                ),
                 patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
                 patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", return_value=context) as build_context,
                 patch("rag_engine.generation.answering.load_domain_keywords", return_value=[]),

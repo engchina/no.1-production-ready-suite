@@ -44,57 +44,83 @@ TABLE_CELL_TEXT_HINT_LIMIT = 6
 # 生成説明の本文。グループ見出し（`■ …`）と field ごとのラベル行の 2 階層にする (#773)。
 # 1 行に複数 field を連結すると、どの語がボタンでどの語が項目かを人も回答生成も区別できない。
 VISION_SENTENCE_GROUPS = (
-    ("要点", (
-        ("回答用本文", "retrieval_text"),
-        ("主題", "main_topic"),
-        ("視覚種別", "visual_kind"),
-    )),
-    ("可視情報", (
-        ("画面/メニュー", "menu_route"),
-        ("画面名", "visible_screen_names"),
-        ("ボタン", "visible_buttons"),
-        ("項目", "visible_fields"),
-        ("値", "visible_values"),
-        ("コード・エラー", "codes_and_errors"),
-    )),
-    ("構造", (
-        ("図のタイトル", "diagram_title"),
-        ("図のノード", "diagram_nodes"),
-        ("図の接続", "diagram_edges"),
-        ("図の要約", "diagram_summary"),
-        ("グラフのタイトル", "chart_title"),
-        ("グラフの種別", "chart_type"),
-        ("グラフの軸", "chart_axes"),
-        ("グラフの凡例", "chart_legends"),
-        ("グラフの系列", "chart_series"),
-        ("グラフの要約", "chart_summary"),
-        ("表の見出し", "table_headers"),
-        ("表の行", "table_rows"),
-        ("表の要約", "table_summary"),
-        ("フォームの項目", "form_fields"),
-        ("フォームの配置", "form_layout"),
-    )),
-    ("関係", (
-        ("操作", "operation_steps"),
-        ("条件と結果", "condition_result_pairs"),
-        ("注意", "exception_or_cautions"),
-    )),
-    ("補足", (
-        ("周辺コンテキスト", "surrounding_context"),
-        ("修正・補足", "correction_notes"),
-    )),
-    ("検索", (
-        ("検索語", "search_keywords"),
-        ("言い換え", "query_rewrites"),
-        ("想定質問", "answerable_questions"),
-    )),
+    (
+        "要点",
+        (
+            ("回答用本文", "retrieval_text"),
+            ("主題", "main_topic"),
+            ("視覚種別", "visual_kind"),
+        ),
+    ),
+    (
+        "可視情報",
+        (
+            ("画面/メニュー", "menu_route"),
+            ("画面名", "visible_screen_names"),
+            ("ボタン", "visible_buttons"),
+            ("項目", "visible_fields"),
+            ("値", "visible_values"),
+            ("コード・エラー", "codes_and_errors"),
+        ),
+    ),
+    (
+        "構造",
+        (
+            ("図のタイトル", "diagram_title"),
+            ("図のノード", "diagram_nodes"),
+            ("図の接続", "diagram_edges"),
+            ("図の要約", "diagram_summary"),
+            ("グラフのタイトル", "chart_title"),
+            ("グラフの種別", "chart_type"),
+            ("グラフの軸", "chart_axes"),
+            ("グラフの凡例", "chart_legends"),
+            ("グラフの系列", "chart_series"),
+            ("グラフの要約", "chart_summary"),
+            ("表の見出し", "table_headers"),
+            ("表の行", "table_rows"),
+            ("表の要約", "table_summary"),
+            ("フォームの項目", "form_fields"),
+            ("フォームの配置", "form_layout"),
+        ),
+    ),
+    (
+        "関係",
+        (
+            ("操作", "operation_steps"),
+            ("条件と結果", "condition_result_pairs"),
+            ("注意", "exception_or_cautions"),
+        ),
+    ),
+    (
+        "補足",
+        (
+            ("周辺コンテキスト", "surrounding_context"),
+            ("修正・補足", "correction_notes"),
+        ),
+    ),
+    (
+        "検索",
+        (
+            ("検索語", "search_keywords"),
+            ("言い換え", "query_rewrites"),
+            ("想定質問", "answerable_questions"),
+        ),
+    ),
 )
 # 要素ごとに改行する field。行・接続・項目・条件の対応が ` / ` 連結で失われるため (#768)。
 # これ以外は語の列挙か文章なので 1 行にまとめる（未知の field と壊れた値も 1 行側に倒す）。
-VISION_MULTILINE_FIELDS = frozenset({
-    "table_headers", "table_rows", "diagram_edges", "chart_series", "form_fields",
-    "condition_result_pairs", "operation_steps", "exception_or_cautions",
-})
+VISION_MULTILINE_FIELDS = frozenset(
+    {
+        "table_headers",
+        "table_rows",
+        "diagram_edges",
+        "chart_series",
+        "form_fields",
+        "condition_result_pairs",
+        "operation_steps",
+        "exception_or_cautions",
+    }
+)
 VISUAL_STRUCTURE_FIELDS = (
     "diagram_title",
     "diagram_nodes",
@@ -125,10 +151,10 @@ VISUAL_KIND_ALIASES = {
 }
 
 
-
 @dataclass(frozen=True)
 class VisionDescriptionStats:
     """Picture/Table Vision 説明の対象数、成功数、失敗数を保持します。"""
+
     targets: int
     succeeded: int
     failed: int
@@ -138,6 +164,7 @@ class VisionDescriptionStats:
 @dataclass(frozen=True)
 class VisionContextCrop:
     """Vision 説明に添付する周辺 context 画像のパスと metadata を保持します。"""
+
     path: Path
     bbox: list[float]
     source_record_refs: tuple[dict[str, Any], ...]
@@ -230,8 +257,7 @@ def _vision_field_lines(field: str, value: Any) -> list[str]:
     if field not in VISION_MULTILINE_FIELDS or not isinstance(value, list):
         return [text] if (text := _join_vision_values(value)) else []
     if field == "table_rows":
-        return [_cells_line(row, f"{index}行目: ") for index, row in enumerate(value, start=1)
-                if not _is_empty_vision_value(row)]
+        return [_cells_line(row, f"{index}行目: ") for index, row in enumerate(value, start=1) if not _is_empty_vision_value(row)]
     renderer = {
         "diagram_edges": _edge_line,
         "chart_series": _series_line,
@@ -378,14 +404,23 @@ class _SettingsPictureDescriber:
         rendered_prompt: str,
     ) -> dict[str, Any]:
         return describe_picture(
-            crop_path, metadata, self._settings, context_image_paths=list(context_image_paths),
-            rendered_prompt=rendered_prompt, **({"target_kind": "table"} if target_kind == "table" else {}),
+            crop_path,
+            metadata,
+            self._settings,
+            context_image_paths=list(context_image_paths),
+            rendered_prompt=rendered_prompt,
+            **({"target_kind": "table"} if target_kind == "table" else {}),
         )
 
 
 def describe_docling_pictures(
-    records: list[LayoutRecord], pages: list[PageImage], *, run_dir: Path,
-    pdf_name: str, settings: Settings, pdf_path: Path | None = None,
+    records: list[LayoutRecord],
+    pages: list[PageImage],
+    *,
+    run_dir: Path,
+    pdf_name: str,
+    settings: Settings,
+    pdf_path: Path | None = None,
 ) -> VisionDescriptionStats:
     """Picture/Table説明を逐項保存し、同一入力の応答を再利用する。
 
@@ -393,8 +428,12 @@ def describe_docling_pictures(
     保存不能・同じrunの同時処理はCheckpointError。個別API失敗はrecordへ記録する。
     """
     return describe_layout_pictures(
-        records, pages, run_dir=run_dir, pdf_name=pdf_name,
-        describer=_SettingsPictureDescriber(settings), pdf_path=pdf_path,
+        records,
+        pages,
+        run_dir=run_dir,
+        pdf_name=pdf_name,
+        describer=_SettingsPictureDescriber(settings),
+        pdf_path=pdf_path,
     )
 
 
@@ -417,10 +456,16 @@ def describe_layout_pictures(
     表内画像の検出、prompt の metadata)で読み取れる。``prompt_template`` は画像検索の prompt
     (未指定は保存済みの prompt)。``cancel_check`` は対象ごとの前に呼び、例外で中断する。
     """
-    with checkpoint_lock(run_dir, '.vision.lock'):
+    with checkpoint_lock(run_dir, ".vision.lock"):
         return _describe_layout_pictures(
-            records, pages, run_dir=run_dir, pdf_name=pdf_name, describer=describer,
-            pdf_path=pdf_path, engine=engine, prompt_template=prompt_template,
+            records,
+            pages,
+            run_dir=run_dir,
+            pdf_name=pdf_name,
+            describer=describer,
+            pdf_path=pdf_path,
+            engine=engine,
+            prompt_template=prompt_template,
             cancel_check=cancel_check,
         )
 
@@ -443,19 +488,20 @@ def _describe_layout_pictures(
     対象にします。Table の HTML は保持し、補足を raw.table_vision_text へ保存します。
     個別の Vision 失敗は raw.vision_error に記録し、既存の解析 text を維持します。
     """
-    source_hash = (file_digest(pdf_path) if pdf_path is not None and pdf_path.is_file()
-                   else digest_json({'name': pdf_name, 'pages': [
-                       [page.page, file_digest(Path(page.image_path)) if Path(page.image_path).is_file() else None]
-                       for page in pages]}))
+    source_hash = (
+        file_digest(pdf_path)
+        if pdf_path is not None and pdf_path.is_file()
+        else digest_json(
+            {
+                "name": pdf_name,
+                "pages": [[page.page, file_digest(Path(page.image_path)) if Path(page.image_path).is_file() else None] for page in pages],
+            }
+        )
+    )
     ledger = VisionCheckpoints(run_dir / engine / "vision", source_hash)
     vlm_targets: list[LayoutRecord] = []
     for record in records:
-        if not (
-            record.engine == engine
-            and record.category == "Picture"
-            and record.raw_type == "picture"
-            and not record.text.strip()
-        ):
+        if not (record.engine == engine and record.category == "Picture" and record.raw_type == "picture" and not record.text.strip()):
             continue
         record.raw["visual_processing_version"] = 2
         visual_role = classify_picture_record(record, records)
@@ -571,16 +617,25 @@ def _describe_layout_pictures(
                 ]
                 kind = "table" if record.category == "Table" else "picture"
                 prompt = _render_prompt(metadata, target_kind=kind, template=prompt_template)
-                key = ledger.key(crop=crop_path, context=context_crop.path, prompt=prompt,
-                                 system_prompt=VISION_SYSTEM_PROMPT, provider=provider,
-                                 max_tokens=describer.max_tokens, kind=kind,
-                                 api_mode=describer.api_mode)
+                key = ledger.key(
+                    crop=crop_path,
+                    context=context_crop.path,
+                    prompt=prompt,
+                    system_prompt=VISION_SYSTEM_PROMPT,
+                    provider=provider,
+                    max_tokens=describer.max_tokens,
+                    kind=kind,
+                    api_mode=describer.api_mode,
+                )
                 response = ledger.load(key)
                 reused = response is not None
                 if response is None:
                     response = describer.describe(
-                        crop_path, metadata, context_image_paths=[context_crop.path],
-                        target_kind=kind, rendered_prompt=prompt,
+                        crop_path,
+                        metadata,
+                        context_image_paths=[context_crop.path],
+                        target_kind=kind,
+                        rendered_prompt=prompt,
                     )
                     # 応答受信直後に保存し、後続の分類・整表処理が落ちても再送を避ける。
                     ledger.save(key, response, record, state="received")
@@ -617,6 +672,7 @@ def _describe_layout_pictures(
                 reusable = True
                 if record.category == "Table":
                     from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
+
                     record.raw["table_vision_text"] = sentence
                     enrich_table_visual_rows(record, page, description, run_dir)
                     record.raw["visual_artifact_type"] = "table"
@@ -735,8 +791,7 @@ def _vision_metadata(
     next_record = _neighbor_record(record, records, direction=1)
     if next_record and str(next_record.get("category") or "") in SECTION_CATEGORIES:
         boundary_ids = {other.id for other in _boundary_sections(record, records, pdf_path=pdf_path)}
-        next_record["section_role"] = ("section_boundary" if next_record.get("record_id") in boundary_ids
-                                       else "subheading_in_owning_section")
+        next_record["section_role"] = "section_boundary" if next_record.get("record_id") in boundary_ids else "subheading_in_owning_section"
     containing_table = _containing_table_metadata(record, records)
     metadata: dict[str, Any] = {
         "file_name": pdf_name,
@@ -750,8 +805,10 @@ def _vision_metadata(
         "context_source_record_refs": list(context_crop.source_record_refs),
         "nearby_headings": nearby_headings,
         "owning_section": nearby_headings[-1] if nearby_headings else {},
-        "context_constraint": ("所属章は owning_section。next_record の見出しは section_role が section_boundary なら次節の境界であり所属章ではありません。"
-                               "subheading_in_owning_section なら同じ節の小見出しで、その本文は主対象の説明として使えます。"),
+        "context_constraint": (
+            "所属章は owning_section。next_record の見出しは section_role が section_boundary なら次節の境界であり所属章ではありません。"
+            "subheading_in_owning_section なら同じ節の小見出しで、その本文は主対象の説明として使えます。"
+        ),
         "previous_record": previous_record,
         "next_record": next_record,
         "containing_table": containing_table,
@@ -787,8 +844,7 @@ def _context_records(
     pdf_path: Path | None = None,
 ) -> list[LayoutRecord]:
     search_bbox = _context_window(target_bbox)
-    boundary = min((_record_order_key(other) for other in _boundary_sections(record, records, pdf_path=pdf_path)),
-                   default=None)
+    boundary = min((_record_order_key(other) for other in _boundary_sections(record, records, pdf_path=pdf_path)), default=None)
     candidates: list[LayoutRecord] = []
     for other in records:
         if other is record or other.engine != record.engine or other.page != record.page:
@@ -798,14 +854,9 @@ def _context_records(
             continue
         if boundary is not None and _record_order_key(other) >= boundary:
             continue
-        directly_related = (
-            _boxes_intersect(target_bbox, bbox)
-            or _box_contains(bbox, target_bbox)
-            or _box_contains(target_bbox, bbox)
-        )
-        nearby_related = (
-            abs(int(other.seq_no or 0) - int(record.seq_no or 0)) <= VISION_CONTEXT_SEQ_WINDOW
-            and _boxes_intersect(search_bbox, bbox)
+        directly_related = _boxes_intersect(target_bbox, bbox) or _box_contains(bbox, target_bbox) or _box_contains(target_bbox, bbox)
+        nearby_related = abs(int(other.seq_no or 0) - int(record.seq_no or 0)) <= VISION_CONTEXT_SEQ_WINDOW and _boxes_intersect(
+            search_bbox, bbox
         )
         if not directly_related and not nearby_related:
             continue
@@ -817,7 +868,9 @@ def _context_records(
 
 
 def _boundary_sections(
-    record: LayoutRecord, records: list[LayoutRecord], pdf_path: Path | None = None,
+    record: LayoutRecord,
+    records: list[LayoutRecord],
+    pdf_path: Path | None = None,
 ) -> list[LayoutRecord]:
     """対象より後にある見出しのうち、次節の境界とみなすものを返します。
 
@@ -830,12 +883,17 @@ def _boundary_sections(
     # ponytail: 階層は文字サイズ比だけで判定する。所属見出しと同じ大きさの小見出しは
     # 区別できず境界扱いのまま（採番パターンや太字の比較は実例が出てから）。
     target_key = _record_order_key(record)
-    sections = [other for other in records if other is not record and other.engine == record.engine
-                and other.page == record.page and str(other.category or "") in SECTION_CATEGORIES
-                and _coerce_bbox(other.bbox) is not None]
+    sections = [
+        other
+        for other in records
+        if other is not record
+        and other.engine == record.engine
+        and other.page == record.page
+        and str(other.category or "") in SECTION_CATEGORIES
+        and _coerce_bbox(other.bbox) is not None
+    ]
     following = [other for other in sections if _record_order_key(other) > target_key]
-    owning = max((other for other in sections if _record_order_key(other) <= target_key),
-                 key=_record_order_key, default=None)
+    owning = max((other for other in sections if _record_order_key(other) <= target_key), key=_record_order_key, default=None)
     if owning is None:
         return following
     limit = _heading_line_height(owning, pdf_path) * VISION_SUBHEADING_HEIGHT_RATIO
@@ -854,9 +912,15 @@ def _heading_line_height(record: LayoutRecord, pdf_path: Path | None) -> float:
     bbox = provenance[0].get("bbox") if isinstance(provenance, list) and provenance and isinstance(provenance[0], dict) else None
     if pdf_path is None or not isinstance(bbox, dict) or not all(key in bbox for key in ("l", "t", "r", "b")):
         return height
-    lines = _heading_line_count(str(pdf_path), int(record.page or 0),
-                                float(bbox["l"]), float(bbox["t"]), float(bbox["r"]), float(bbox["b"]),
-                                str(bbox.get("coord_origin") or ""))
+    lines = _heading_line_count(
+        str(pdf_path),
+        int(record.page or 0),
+        float(bbox["l"]),
+        float(bbox["t"]),
+        float(bbox["r"]),
+        float(bbox["b"]),
+        str(bbox.get("coord_origin") or ""),
+    )
     return height / max(1, lines)
 
 
@@ -874,16 +938,16 @@ def _context_window(bbox: tuple[float, float, float, float]) -> tuple[float, flo
 
     周辺文脈画像はページ全体を使うため (#638)、この範囲は crop の大きさには影響しません。
     """
-    return _expand_bbox(bbox, max(VISION_CONTEXT_MIN_PADDING, _bbox_width(bbox) * 0.5),
-                        max(VISION_CONTEXT_MIN_PADDING, _bbox_height(bbox) * 0.75))
+    return _expand_bbox(
+        bbox, max(VISION_CONTEXT_MIN_PADDING, _bbox_width(bbox) * 0.5), max(VISION_CONTEXT_MIN_PADDING, _bbox_height(bbox) * 0.75)
+    )
 
 
 def _visible_context_ref(record: LayoutRecord, crop_bbox: tuple[float, float, float, float]) -> dict[str, Any]:
     """文脈画像に実際に写る範囲を明示し、部分表示の全文を画像の根拠と誤認させません。"""
     ref = _context_record_ref(record)
     box = record.bbox
-    visible = [max(box[0], crop_bbox[0]), max(box[1], crop_bbox[1]),
-               min(box[2], crop_bbox[2]), min(box[3], crop_bbox[3])]
+    visible = [max(box[0], crop_bbox[0]), max(box[1], crop_bbox[1]), min(box[2], crop_bbox[2]), min(box[3], crop_bbox[3])]
     ref["visible_bbox"] = visible
     ref["partially_visible"] = visible != list(box)
     if ref["partially_visible"]:
@@ -934,10 +998,7 @@ def _nearby_headings(record: LayoutRecord, records: list[LayoutRecord]) -> list[
         key=lambda other: (
             0 if _record_order_key(other) <= target_key else 1,
             abs(int(other.seq_no or 0) - int(record.seq_no or 0)),
-            abs(
-                (_bbox_center_y(_coerce_bbox(other.bbox)) or 0.0)
-                - (_bbox_center_y(_coerce_bbox(record.bbox)) or 0.0)
-            ),
+            abs((_bbox_center_y(_coerce_bbox(other.bbox)) or 0.0) - (_bbox_center_y(_coerce_bbox(record.bbox)) or 0.0)),
         )
     )
     selected = candidates[:PROMPT_NEARBY_HEADING_LIMIT]
@@ -952,13 +1013,7 @@ def _neighbor_record(
     direction: int,
 ) -> dict[str, Any]:
     ordered = sorted(
-        (
-            other
-            for other in records
-            if other.engine == record.engine
-            and other.page == record.page
-            and _is_prompt_context_record(other)
-        ),
+        (other for other in records if other.engine == record.engine and other.page == record.page and _is_prompt_context_record(other)),
         key=_record_order_key,
     )
     target_key = _record_order_key(record)
@@ -993,11 +1048,7 @@ def _containing_table_metadata(record: LayoutRecord, records: list[LayoutRecord]
         key=lambda item: (item[0], item[1], _record_order_key(item[2])),
     )[0]
     payload = _prompt_record_ref(table, text_limit=600)
-    payload["relationship"] = (
-        "contains_target_picture"
-        if _box_contains(table_bbox, target_bbox)
-        else "intersects_target_picture"
-    )
+    payload["relationship"] = "contains_target_picture" if _box_contains(table_bbox, target_bbox) else "intersects_target_picture"
     payload["cell_hint"] = _table_cell_hint(table, table_bbox, record, target_bbox, records)
     return payload
 
@@ -1047,9 +1098,7 @@ def _table_cell_hint(
             "horizontal_region": _region_label(x_ratio, "left", "middle", "right"),
             "vertical_region": _region_label(y_ratio, "upper", "middle", "lower"),
         },
-        "nearby_cell_text_records": [
-            _prompt_record_ref(item, text_limit=240) for item in nearby_text_records[:TABLE_CELL_TEXT_HINT_LIMIT]
-        ],
+        "nearby_cell_text_records": [_prompt_record_ref(item, text_limit=240) for item in nearby_text_records[:TABLE_CELL_TEXT_HINT_LIMIT]],
     }
 
 

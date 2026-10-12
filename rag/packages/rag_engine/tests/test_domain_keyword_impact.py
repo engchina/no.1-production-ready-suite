@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from rag_engine.generation.answering import (
-    AnswerContext, _lexical_retrieval_queries, build_question_text_search_info,
+    AnswerContext,
+    _lexical_retrieval_queries,
+    build_question_text_search_info,
     build_adb_hybrid_answer_context,
 )
 from rag_engine.evaluation.domain_keyword_eval import run_keyword_comparison, score_context, summarize_pairs
@@ -35,8 +37,10 @@ class DomainKeywordImpactTests(unittest.TestCase):
 
     def test_matched_keywords_report_retained_and_truncated(self):
         result = tokenize_text_search_query_with_trace(
-            "契約区分 出庫伝票", domain_keywords=["契約区分", "出庫伝票", "未出現"],
-            config=TextSearchTokenizerConfig(), max_tokens=1,
+            "契約区分 出庫伝票",
+            domain_keywords=["契約区分", "出庫伝票", "未出現"],
+            config=TextSearchTokenizerConfig(),
+            max_tokens=1,
         )
         self.assertEqual(result.matched_domain_keywords, ("出庫伝票", "契約区分"))
         self.assertEqual(result.selected_domain_keywords, ("出庫伝票",))
@@ -63,8 +67,13 @@ class DomainKeywordImpactTests(unittest.TestCase):
         self.assertIsNone(score_context(RagEvalCase("x", "q"), context, 3)["recall_at_k"])
 
     def test_unjudged_is_not_zero_and_regressions_are_reported(self):
-        results = [{"case_id": "x", "without_keywords": {"recall_at_k": 1, "answer_correct": True},
-                    "with_keywords": {"recall_at_k": 0, "answer_correct": None}}]
+        results = [
+            {
+                "case_id": "x",
+                "without_keywords": {"recall_at_k": 1, "answer_correct": True},
+                "with_keywords": {"recall_at_k": 0, "answer_correct": None},
+            }
+        ]
         summary = summarize_pairs(results)
         self.assertEqual(summary["recall_at_k"]["regressions"], ["x"])
         self.assertIsNone(summary["answer_correct"]["delta"])
@@ -82,12 +91,17 @@ class DomainKeywordImpactTests(unittest.TestCase):
             dataset = root / "cases.json"
             dataset.write_text(json.dumps({"cases": [{"case_id": "x", "question": "出庫伝票", "reference_answer": "参照"}]}))
             observed = []
+
             def retrieve(question, run, engines, settings, **kwargs):
                 observed.append((settings.domain_keywords_override, kwargs["pinned_chunk_run_id"]))
                 return AnswerContext(records=[], text="", status="insufficient")
+
             with (
                 patch("rag_engine.evaluation.domain_keyword_eval.get_settings", return_value=self.settings(output_dir=root)),
-                patch("rag_engine.evaluation.domain_keyword_eval.load_latest_or_source_chunk_run", return_value=SimpleNamespace(chunk_run_id="abcdef")),
+                patch(
+                    "rag_engine.evaluation.domain_keyword_eval.load_latest_or_source_chunk_run",
+                    return_value=SimpleNamespace(chunk_run_id="abcdef"),
+                ),
                 patch("rag_engine.evaluation.domain_keyword_eval.build_adb_hybrid_answer_context", side_effect=retrieve),
             ):
                 report = run_keyword_comparison(dataset, "source")
@@ -99,6 +113,7 @@ class DomainKeywordImpactTests(unittest.TestCase):
 
     def test_pinned_context_never_resolves_latest(self):
         from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable
+
         with (
             patch("rag_engine.generation.answering.load_chunk_run_by_id", return_value=None) as direct,
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", side_effect=AssertionError("latest read")),

@@ -24,8 +24,6 @@ from rag_engine.knowledge.prompt_files import (
 
 
 class PromptFileTests(unittest.TestCase):
-
-
     def test_read_prompt_file_uses_utf8(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.txt"
@@ -237,8 +235,12 @@ class PromptFileTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             answer_prompt = PromptFile(
-                VLM_ANSWER_PROMPT_KEY, "vlm_answer.txt", root / "vlm_answer.txt", root / "backups",
-                DEFAULT_VLM_ANSWER_PROMPT, ("question", "images"),
+                VLM_ANSWER_PROMPT_KEY,
+                "vlm_answer.txt",
+                root / "vlm_answer.txt",
+                root / "backups",
+                DEFAULT_VLM_ANSWER_PROMPT,
+                ("question", "images"),
             )
             answer_prompt.path.write_text("old {{question}} {{images}}", encoding="utf-8")
 
@@ -261,8 +263,12 @@ class PromptFileTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             answer_prompt = PromptFile(
-                VLM_ANSWER_PROMPT_KEY, "vlm_answer.txt", root / "vlm_answer.txt", root / "backups",
-                DEFAULT_VLM_ANSWER_PROMPT, ("question", "images"),
+                VLM_ANSWER_PROMPT_KEY,
+                "vlm_answer.txt",
+                root / "vlm_answer.txt",
+                root / "backups",
+                DEFAULT_VLM_ANSWER_PROMPT,
+                ("question", "images"),
             )
             answer_prompt.path.write_text("旧形式のテンプレート", encoding="utf-8")
             now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)

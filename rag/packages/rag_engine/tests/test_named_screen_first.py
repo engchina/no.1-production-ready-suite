@@ -1,4 +1,5 @@
 """質問が画面名を名指ししたとき、その画面名を節見出しに持つ候補を rerank 後に先頭へ寄せる (#1044)。"""
+
 from types import SimpleNamespace
 
 import rag_engine.generation.answering as answering
@@ -6,15 +7,30 @@ from rag_engine.generation.answering import AnswerRecord, rerank_records
 
 
 def _child(index, heading, source="架空仕入業務.pdf"):
-    return AnswerRecord(id=f"c{index}", engine="docling", engine_label="Docling", page=index, seq_no=index, category="Chunk",
-                        text=f"抽出対象を選ぶと処理内容の選択肢が変わります。{index}", source=source, chunk_level="child",
-                        chunk_id=f"c{index}", chunk_uid=f"uid:c{index}", source_run_id="run",
-                        metadata={"section_path": ["９架空仕入業務", heading, "B 【操作説明】"]})
+    return AnswerRecord(
+        id=f"c{index}",
+        engine="docling",
+        engine_label="Docling",
+        page=index,
+        seq_no=index,
+        category="Chunk",
+        text=f"抽出対象を選ぶと処理内容の選択肢が変わります。{index}",
+        source=source,
+        chunk_level="child",
+        chunk_id=f"c{index}",
+        chunk_uid=f"uid:c{index}",
+        source_run_id="run",
+        metadata={"section_path": ["９架空仕入業務", heading, "B 【操作説明】"]},
+    )
 
 
 QUESTION = "月次締め処理を実行した後で、仕入単価を訂正したい。"
-RECORDS = lambda: [_child(1, "（Ｓ）仕入明細訂正"), _child(2, "（２）－（Ｄ）月次締め処理"),
-                   _child(3, "（Ｘ）仕入内容確定処理"), _child(4, "（１）－（Ｄ） 月次締め処理", source="架空経理業務.pdf")]
+RECORDS = lambda: [
+    _child(1, "（Ｓ）仕入明細訂正"),
+    _child(2, "（２）－（Ｄ）月次締め処理"),
+    _child(3, "（Ｘ）仕入内容確定処理"),
+    _child(4, "（１）－（Ｄ） 月次締め処理", source="架空経理業務.pdf"),
+]
 
 
 def test_candidates_under_the_named_screen_heading_come_first_in_rank_order():

@@ -25,6 +25,7 @@ MAX_TEXT_CHARS = 800
 @dataclass(frozen=True)
 class RuntimeTerm:
     """実行時 glossary の 1 用語と別名・説明・review 状態を保持します。"""
+
     term: str
     aliases: tuple[str, ...] = ()
     description: str = ""
@@ -62,6 +63,7 @@ class RuntimeTerm:
 @dataclass(frozen=True)
 class RuntimeRule:
     """質問に一致したとき prompt へ追加する実行時ルールを保持します。"""
+
     rule_id: str
     title: str
     triggers: tuple[str, ...] = ()
@@ -101,6 +103,7 @@ class RuntimeRule:
 @dataclass(frozen=True)
 class RuntimeKnowledge:
     """runtime knowledge JSON から読み込んだ用語・ルールと読込状態を保持します。"""
+
     path: Path
     terms: tuple[RuntimeTerm, ...] = ()
     rules: tuple[RuntimeRule, ...] = ()
@@ -111,6 +114,7 @@ class RuntimeKnowledge:
 @dataclass(frozen=True)
 class RuntimeKnowledgeContext:
     """一致項目・拡張後 query と読込件数を保持する。件数は一致上限を適用する前の登録数。"""
+
     original_question: str
     expanded_question: str
     path: Path
@@ -172,12 +176,14 @@ class RuntimeKnowledgeContext:
                 source = f" [{rule.source}]" if rule.source else ""
                 lines.append(f"- {label}{triggers}: {rule.content}{source}")
         if self.scope_context:
-            lines.extend([
-                "[利用者が確認の質問で選んだ条件]",
-                self.scope_context,
-                "回答はこの条件に沿って作る。対象範囲が示されていれば、その範囲の資料だけを根拠にし、"
-                "範囲の資料に記載が無ければ、その範囲には記載が見つからないと答える（範囲の外から補わない）。",
-            ])
+            lines.extend(
+                [
+                    "[利用者が確認の質問で選んだ条件]",
+                    self.scope_context,
+                    "回答はこの条件に沿って作る。対象範囲が示されていれば、その範囲の資料だけを根拠にし、"
+                    "範囲の資料に記載が無ければ、その範囲には記載が見つからないと答える（範囲の外から補わない）。",
+                ]
+            )
         return "\n".join(lines)
 
     def to_payload(self) -> dict[str, Any]:
@@ -256,9 +262,15 @@ def build_runtime_knowledge_context(
             matches = [label for label in item.labels() if _matches(original_question, label)]
             weak = _shared_token_count(original_question, item.description if kind == "term" else item.content)
             if matches or weak:
-                decisions.append({"source": kind, "key": item.term if kind == "term" else item.rule_id,
-                                  "matched_labels": matches, "accepted": item in selected,
-                                  "reason": "explicit_label" if item in selected else "limit" if matches else "shared_words_only"})
+                decisions.append(
+                    {
+                        "source": kind,
+                        "key": item.term if kind == "term" else item.rule_id,
+                        "matched_labels": matches,
+                        "accepted": item in selected,
+                        "reason": "explicit_label" if item in selected else "limit" if matches else "shared_words_only",
+                    }
+                )
     return RuntimeKnowledgeContext(
         original_question=original_question,
         expanded_question=expanded_question,
@@ -332,11 +344,7 @@ def _parse_terms(payload: Any) -> list[RuntimeTerm]:
             continue
         term = _first_text(item, "term", "name", "canonical", "formal", "label")
         aliases = _text_list(
-            item.get("aliases")
-            or item.get("synonyms")
-            or item.get("abbreviations")
-            or item.get("abbrev")
-            or item.get("alias")
+            item.get("aliases") or item.get("synonyms") or item.get("abbreviations") or item.get("abbrev") or item.get("alias")
         )[:MAX_ALIASES_PER_TERM]
         description = _first_text(item, "description", "definition", "body", "note")
         source = _first_text(item, "source", "document", "path")
@@ -375,13 +383,9 @@ def _parse_rules(payload: Any) -> list[RuntimeRule]:
             continue
         rule_id = _first_text(item, "id", "rule_id", "key") or f"rule-{index}"
         title = _first_text(item, "title", "name", "label") or rule_id
-        triggers = _text_list(
-            item.get("triggers")
-            or item.get("terms")
-            or item.get("keywords")
-            or item.get("aliases")
-            or item.get("when")
-        )[:MAX_TRIGGERS_PER_RULE]
+        triggers = _text_list(item.get("triggers") or item.get("terms") or item.get("keywords") or item.get("aliases") or item.get("when"))[
+            :MAX_TRIGGERS_PER_RULE
+        ]
         content = _first_text(item, "content", "body", "text", "rule", max_chars=MAX_TEXT_CHARS)
         source = _first_text(item, "source", "document", "path")
         tags = _text_list(item.get("tags"))
@@ -473,7 +477,9 @@ def _expanded_question(
             continue
         # trigger は別名ではない。ある条件の一致だけで他条件や業務IDを検索へ流さない。
         additions.extend(label for label in rule.labels() if _matches(question, label))
-        if any(_matches(rule.title, label) for label in rule.labels() if _matches(question, label)) and not re.search(r'[A-Za-z]{2,}[\w-]*\d', rule.title):
+        if any(_matches(rule.title, label) for label in rule.labels() if _matches(question, label)) and not re.search(
+            r"[A-Za-z]{2,}[\w-]*\d", rule.title
+        ):
             additions.append(rule.title)
     additions = _ordered_unique(additions)
     if not additions:

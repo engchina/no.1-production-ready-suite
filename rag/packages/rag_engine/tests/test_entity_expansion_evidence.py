@@ -31,17 +31,40 @@ def _child(name, *, source="規程.pdf", parent=None, expansion=False, score=Non
         metadata["entity_expansion"] = dict(EXPANSION)
     if score is not None:
         metadata["rerank"] = {"relevance_score": score}
-    return AnswerRecord(id=name, engine="docling", engine_label="Docling", page=1, seq_no=1, category="Chunk",
-                        text=f"{name} の本文", source=source, chunk_level="child", chunk_id=name,
-                        chunk_uid=f"uid:{name}", parent_chunk_uid=f"uid:{parent or name}-p", source_run_id="run",
-                        metadata=metadata)
+    return AnswerRecord(
+        id=name,
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=f"{name} の本文",
+        source=source,
+        chunk_level="child",
+        chunk_id=name,
+        chunk_uid=f"uid:{name}",
+        parent_chunk_uid=f"uid:{parent or name}-p",
+        source_run_id="run",
+        metadata=metadata,
+    )
 
 
 def _parent(name, *, source="規程.pdf"):
-    return AnswerRecord(id=f"{name}-p", engine="docling", engine_label="Docling", page=1, seq_no=1,
-                        category="Chunk", text=f"{name} の親", source=source, chunk_level="parent",
-                        chunk_id=f"{name}-p", chunk_uid=f"uid:{name}-p", source_run_id="run",
-                        metadata={"section_path": ["第 1 章"]})
+    return AnswerRecord(
+        id=f"{name}-p",
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=f"{name} の親",
+        source=source,
+        chunk_level="parent",
+        chunk_id=f"{name}-p",
+        chunk_uid=f"uid:{name}-p",
+        source_run_id="run",
+        metadata={"section_path": ["第 1 章"]},
+    )
 
 
 def _stub_reverse_rerank(monkeypatch):
@@ -50,8 +73,7 @@ def _stub_reverse_rerank(monkeypatch):
 
     def fake(question, documents, settings, top_n=None):
         order = list(reversed(range(len(documents))))
-        return [SimpleNamespace(index=index, relevance_score=1.0 - position / 100)
-                for position, index in enumerate(order)]
+        return [SimpleNamespace(index=index, relevance_score=1.0 - position / 100) for position, index in enumerate(order)]
 
     monkeypatch.setattr(answering, "rerank_text_with_scores", fake)
 
@@ -94,8 +116,7 @@ def _stub_scores(monkeypatch, scores):
 def test_low_relevance_entity_expansion_is_ordered_by_rerank(monkeypatch):
     """関連度が下限未満の拡張の根拠（質問と関係の薄い属性の chunk）は位置を保たず、分数の順に並ぶ（#1390）。"""
     _stub_scores(monkeypatch, {"a1": 0.9, "a2": 0.6, "ledger": 0.45, "org": 0.05, "a3": 0.3})
-    records = [_child("a1"), _child("a2"), _child("ledger", expansion=True), _child("org", expansion=True),
-               _child("a3")]
+    records = [_child("a1"), _child("a2"), _child("ledger", expansion=True), _child("org", expansion=True), _child("a3")]
 
     ranked = rerank_records("質問", records, _settings(), enabled=True, business_domains=(), screen_terms=())
 
@@ -135,11 +156,18 @@ def test_rerank_without_marker_is_unchanged(monkeypatch):
 
 
 def test_document_selection_does_not_defer_entity_expansion():
-    settings = replace(get_settings(environ={}, dotenv_path=None), document_selection_enabled=True,
-                       document_selection_score_ratio=0.5, document_selection_min_hits=2)
-    children = [_child("a1", source="a.pdf", score=0.9), _child("a2", source="a.pdf", score=0.8),
-                _child("ledger", source="ledger.xlsx", expansion=True),
-                _child("c1", source="c.pdf", score=0.1)]
+    settings = replace(
+        get_settings(environ={}, dotenv_path=None),
+        document_selection_enabled=True,
+        document_selection_score_ratio=0.5,
+        document_selection_min_hits=2,
+    )
+    children = [
+        _child("a1", source="a.pdf", score=0.9),
+        _child("a2", source="a.pdf", score=0.8),
+        _child("ledger", source="ledger.xlsx", expansion=True),
+        _child("c1", source="c.pdf", score=0.1),
+    ]
 
     kept, deferred, _ = select_documents(children, settings)
 
@@ -160,9 +188,17 @@ def test_context_reserves_parent_slots_for_entity_expansion():
     parents = [_parent(name) for name in [*names, "e1", "e2"]]
 
     def build(records):
-        return build_chunk_context_bundle(ContextBuildRequest(
-            question="質問", ranked_children=records, active_records=[*records, *parents], top_k=10,
-            neighbor_child_count=0, max_records=4, max_chars=5000))
+        return build_chunk_context_bundle(
+            ContextBuildRequest(
+                question="質問",
+                ranked_children=records,
+                active_records=[*records, *parents],
+                top_k=10,
+                neighbor_child_count=0,
+                max_records=4,
+                max_chars=5000,
+            )
+        )
 
     bundle = build(children)
     ids = [record.id for record in bundle.records]
@@ -183,20 +219,34 @@ def test_context_does_not_swap_hit_parents_for_low_relevance_expansion():
     「いつ作業できるか」と関係しない）。修正前は 3 つの拡張の親が枠の後ろの親と入れ替わり、定期保守計画の親
     （共通の保守枠）が文脈から落ちた。関連度の低い拡張の親は入れ替えない。
     """
-    hits = [_child("change-ch4", score=0.8), _child("ops-ch9", score=0.7),
-            _child("maintenance-common", score=0.6), _child("ops-ch43", score=0.5), _child("ops-ch59", score=0.45)]
-    expansions = [_child("ledger-sys108", expansion=True, score=0.3),
-                  _child("org-codes", expansion=True, score=0.08),
-                  _child("org-approvers", expansion=True, score=0.06),
-                  _child("incident-severity-a", expansion=True, score=0.267)]
+    hits = [
+        _child("change-ch4", score=0.8),
+        _child("ops-ch9", score=0.7),
+        _child("maintenance-common", score=0.6),
+        _child("ops-ch43", score=0.5),
+        _child("ops-ch59", score=0.45),
+    ]
+    expansions = [
+        _child("ledger-sys108", expansion=True, score=0.3),
+        _child("org-codes", expansion=True, score=0.08),
+        _child("org-approvers", expansion=True, score=0.06),
+        _child("incident-severity-a", expansion=True, score=0.267),
+    ]
     names = [record.id for record in [*hits, *expansions]]
     parents = [_parent(name) for name in names]
 
     def build(records):
-        bundle = build_chunk_context_bundle(ContextBuildRequest(
-            question="予算管理システムの本番の変更は、いつ作業できますか？", ranked_children=records,
-            active_records=[*records, *parents], top_k=10, neighbor_child_count=0, max_records=5,
-            max_chars=5000))
+        bundle = build_chunk_context_bundle(
+            ContextBuildRequest(
+                question="予算管理システムの本番の変更は、いつ作業できますか？",
+                ranked_children=records,
+                active_records=[*records, *parents],
+                top_k=10,
+                neighbor_child_count=0,
+                max_records=5,
+                max_chars=5000,
+            )
+        )
         return [record.id for record in bundle.records]
 
     ids = build([*hits, *expansions])
@@ -216,12 +266,19 @@ def test_anchor_first_seen_as_neighbor_keeps_its_rerank_relevance():
     codes = _child("org-codes", parent="org", expansion=True, score=0.05)
     approvers = _child("org-approvers", parent="org", expansion=True, score=0.05)
     # backend が渡す同じ chunk の record（前後の文脈の元。rerank の結果は持たない）。
-    stored = [_child("org-codes", parent="org", expansion=True),
-              _child("org-approvers", parent="org", expansion=True)]
+    stored = [_child("org-codes", parent="org", expansion=True), _child("org-approvers", parent="org", expansion=True)]
     parents = [_parent("h0"), _parent("h1"), _parent("h2"), _parent("org")]
 
-    bundle = build_chunk_context_bundle(ContextBuildRequest(
-        question="質問", ranked_children=[*hits, codes, approvers], active_records=[*hits, *stored, *parents],
-        top_k=10, neighbor_child_count=1, max_records=3, max_chars=5000))
+    bundle = build_chunk_context_bundle(
+        ContextBuildRequest(
+            question="質問",
+            ranked_children=[*hits, codes, approvers],
+            active_records=[*hits, *stored, *parents],
+            top_k=10,
+            neighbor_child_count=1,
+            max_records=3,
+            max_chars=5000,
+        )
+    )
 
     assert [record.id for record in bundle.records] == ["h0-p", "h1-p", "h2-p"]

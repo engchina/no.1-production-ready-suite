@@ -56,40 +56,88 @@ def _page(index: int) -> int:
 
 def _child(index: int) -> StoredChunk:
     uid = f"c{index}"
-    return StoredChunk(chunk_uid=uid, chunk_id=uid, chunk_level="child", chunk_seq=index,
-                       parent_chunk_uid=f"{DOC}:p{index}", parent_chunk_id=f"{DOC}:p{index}", child_chunk_ids=(),
-                       text=_text(index), retrieval_text=_text(index), source_run_id="run",
-                       source_file_name=FILE, source_engine_id="docling", source_engine_label="Docling",
-                       page_start=_page(index), page_end=_page(index), source_seq_ranges=(),
-                       source_record_refs=(), metadata={"section_path": ["第5章 設備ごとの点検基準"],
-                                                        "document_id": DOC})
+    return StoredChunk(
+        chunk_uid=uid,
+        chunk_id=uid,
+        chunk_level="child",
+        chunk_seq=index,
+        parent_chunk_uid=f"{DOC}:p{index}",
+        parent_chunk_id=f"{DOC}:p{index}",
+        child_chunk_ids=(),
+        text=_text(index),
+        retrieval_text=_text(index),
+        source_run_id="run",
+        source_file_name=FILE,
+        source_engine_id="docling",
+        source_engine_label="Docling",
+        page_start=_page(index),
+        page_end=_page(index),
+        source_seq_ranges=(),
+        source_record_refs=(),
+        metadata={"section_path": ["第5章 設備ごとの点検基準"], "document_id": DOC},
+    )
 
 
 def _parent(index: int) -> StoredChunk:
     child = _child(index)
-    return replace(child, chunk_uid=f"{DOC}:p{index}", chunk_id=f"{DOC}:p{index}", chunk_level="parent",
-                   parent_chunk_uid="", parent_chunk_id="", child_chunk_ids=(f"c{index}",))
+    return replace(
+        child,
+        chunk_uid=f"{DOC}:p{index}",
+        chunk_id=f"{DOC}:p{index}",
+        chunk_level="parent",
+        parent_chunk_uid="",
+        parent_chunk_id="",
+        child_chunk_ids=(f"c{index}",),
+    )
 
 
 def _tree(indexes: range | list[int] = range(1, PARENTS + 1)) -> tuple[ContextParentEvidence, ...]:
     return tuple(
         ContextParentEvidence(
-            record=_stored_chunk_answer_record(_parent(index)), role="synthesis_parent",
+            record=_stored_chunk_answer_record(_parent(index)),
+            role="synthesis_parent",
             reason=sections.SECTION_EXPANSION_REASON,
-            children=(ContextChildEvidence(record=_stored_chunk_answer_record(_child(index)),
-                                           role=sections.SECTION_CONTEXT_ROLE,  # type: ignore[arg-type]
-                                           reason=sections.SECTION_EXPANSION_REASON),))
+            children=(
+                ContextChildEvidence(
+                    record=_stored_chunk_answer_record(_child(index)),
+                    role=sections.SECTION_CONTEXT_ROLE,  # type: ignore[arg-type]
+                    reason=sections.SECTION_EXPANSION_REASON,
+                ),
+            ),
+        )
         for index in indexes
     )
 
 
-SECTION = sections.SectionInfo(section_id="s5", title="第5章 設備ごとの点検基準", level=1,
-                               parent_section_id="document", page_start=10, page_end=21,
-                               chunk_count=PARENTS, chars=PARENTS * 1000)
+SECTION = sections.SectionInfo(
+    section_id="s5",
+    title="第5章 設備ごとの点検基準",
+    level=1,
+    parent_section_id="document",
+    page_start=10,
+    page_end=21,
+    chunk_count=PARENTS,
+    chars=PARENTS * 1000,
+)
 OUTLINE = sections.SectionOutline(
-    document_id=DOC, chunk_set_id=CHUNK_SET, owner_section_id="s5", file_name=FILE,
-    sections=(sections.SectionInfo(section_id="document", title=FILE, level=0, parent_section_id=None,
-                                   page_start=1, page_end=30, chunk_count=PARENTS, chars=PARENTS * 1000), SECTION))
+    document_id=DOC,
+    chunk_set_id=CHUNK_SET,
+    owner_section_id="s5",
+    file_name=FILE,
+    sections=(
+        sections.SectionInfo(
+            section_id="document",
+            title=FILE,
+            level=0,
+            parent_section_id=None,
+            page_start=1,
+            page_end=30,
+            chunk_count=PARENTS,
+            chars=PARENTS * 1000,
+        ),
+        SECTION,
+    ),
+)
 
 _BLOCK = re.compile(r"^\[(C\d+)(?: ([^\]\n]*))?\]\n(.*?)(?=\n\n\[C\d+|\n\n</資料>)", re.M | re.S)
 
@@ -97,8 +145,7 @@ _BLOCK = re.compile(r"^\[(C\d+)(?: ([^\]\n]*))?\]\n(.*?)(?=\n\n\[C\d+|\n\n</資�
 class ExtractionStub:
     """抽出の LLM のスタブ。prompt のブロックごとに ``choose(本文)`` の原文を返す（呼び出しを記録する）。"""
 
-    def __init__(self, choose=None, *, delay: float = 0.0, fail_on: set[str] | None = None,
-                 stage_two=None) -> None:
+    def __init__(self, choose=None, *, delay: float = 0.0, fail_on: set[str] | None = None, stage_two=None) -> None:
         self.choose = choose or (lambda text: [s for s in re.findall(r"[^。\n]+。", text) if "項目1は" in s])
         # 2 段目（抜き出した原文をもう一度抜き出す）の選び方。無ければ 1 段目と同じ。
         self.stage_two = stage_two
@@ -122,8 +169,11 @@ class ExtractionStub:
             if any(marker in prompt for marker in self.fail_on):
                 raise RuntimeError("抽出の失敗")
             choose = self.stage_two if self.stage_two and "1 段目で抜き出した原文" in prompt else self.choose
-            quotes = [SectionExtractionQuote(chunk_ref=ref, location=location or "", quote=quote)
-                      for ref, location, text in blocks for quote in choose(text)]
+            quotes = [
+                SectionExtractionQuote(chunk_ref=ref, location=location or "", quote=quote)
+                for ref, location, text in blocks
+                for quote in choose(text)
+            ]
             return SectionExtractionOutput(quotes=quotes)
         finally:
             with self._lock:
@@ -136,24 +186,37 @@ class ExtractionStub:
 
 def _settings(**overrides: object) -> SimpleNamespace:
     # 入力の上限 2,000 token: 1 回分は 60% の 1,200 token（親 2 件）、重なりは 5% の 60 token。
-    values = {"answer_max_input_tokens": 2000, "section_extraction_max_calls": 8,
-              "section_extraction_concurrency": 4, "section_expansion_enabled": True,
-              "section_expansion_max_levels": 4, "section_expansion_input_token_percent": 50,
-              "section_expansion_time_limit_seconds": 600.0, "evidence_budget_chars": 48000}
+    values = {
+        "answer_max_input_tokens": 2000,
+        "section_extraction_max_calls": 8,
+        "section_extraction_concurrency": 4,
+        "section_expansion_enabled": True,
+        "section_expansion_max_levels": 4,
+        "section_expansion_input_token_percent": 50,
+        "section_expansion_time_limit_seconds": 600.0,
+        "evidence_budget_chars": 48000,
+    }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def _request(*, tree=None, remaining: int = 100_000, seeds: tuple[int, ...] = (), seconds_left=lambda: 500.0,
-             truncated: bool = False) -> sections.LargeSectionRequest:
-    return sections.LargeSectionRequest(question=QUESTION, outline=OUTLINE, section=SECTION,
-                                        tree=tree if tree is not None else _tree(), remaining_tokens=remaining,
-                                        seed_positions=seeds, seconds_left=seconds_left, truncated=truncated)
+def _request(
+    *, tree=None, remaining: int = 100_000, seeds: tuple[int, ...] = (), seconds_left=lambda: 500.0, truncated: bool = False
+) -> sections.LargeSectionRequest:
+    return sections.LargeSectionRequest(
+        question=QUESTION,
+        outline=OUTLINE,
+        section=SECTION,
+        tree=tree if tree is not None else _tree(),
+        remaining_tokens=remaining,
+        seed_positions=seeds,
+        seconds_left=seconds_left,
+        truncated=truncated,
+    )
 
 
 def _quotes(outcome: sections.LargeSectionOutcome) -> list[tuple[str, str]]:
-    return [(item.record.chunk_uid, part) for item in outcome.tree
-            for part in item.record.text.split(extraction.QUOTE_SEPARATOR)]
+    return [(item.record.chunk_uid, part) for item in outcome.tree for part in item.record.text.split(extraction.QUOTE_SEPARATOR)]
 
 
 def test_split_keeps_heading_and_sentence_boundaries_with_small_overlap():
@@ -162,20 +225,22 @@ def test_split_keeps_heading_and_sentence_boundaries_with_small_overlap():
     text = _text(1)
     blocks = extraction.split_blocks(text, 0, limits.part_tokens)
     # 見出しは段落になり、段落の中は文の途中で切らない（ブロックの終わりは句点か段落の終わり）。
-    assert text[blocks[0].start:blocks[0].end] == "5.1 設備1の点検" and blocks[0].heading
-    assert all(text[block.start:block.end].endswith(("。", "点検")) for block in blocks)
+    assert text[blocks[0].start : blocks[0].end] == "5.1 設備1の点検" and blocks[0].heading
+    assert all(text[block.start : block.end].endswith(("。", "点検")) for block in blocks)
     # 1 回分に入らない段落は文の境界で分ける。
     small = extraction.split_blocks(text, 0, 150)
     assert len(small) > len(blocks)
-    assert all(text[block.start:block.end].endswith(("。", "点検")) for block in small)
+    assert all(text[block.start : block.end].endswith(("。", "点検")) for block in small)
     assert all(block.tokens <= 150 for block in small)
-    parts = extraction.pack_parts([block for index in range(PARENTS)
-                                   for block in extraction.split_blocks(_text(index + 1), index, 1200)], limits)
+    parts = extraction.pack_parts(
+        [block for index in range(PARENTS) for block in extraction.split_blocks(_text(index + 1), index, 1200)], limits
+    )
     assert all(part.tokens <= limits.part_tokens for part in parts)
     # 隣の分とは前の分の末尾の段落を少し重ねる（重なりの token まで）。
     overlaps = [set(map(id, a.blocks)) & set(map(id, b.blocks)) for a, b in zip(parts, parts[1:])]
-    assert all(sum(block.tokens for block in parts[i].blocks if id(block) in shared) <= limits.overlap_tokens
-               for i, shared in enumerate(overlaps))
+    assert all(
+        sum(block.tokens for block in parts[i].blocks if id(block) in shared) <= limits.overlap_tokens for i, shared in enumerate(overlaps)
+    )
 
 
 def test_extracts_verbatim_quotes_in_original_order_with_chunk_ids_and_pages():
@@ -275,9 +340,10 @@ def test_call_limit_is_shared_across_sections_in_one_answer():
 
 def test_reduces_once_more_when_quotes_do_not_fit_and_stays_within_token_budget():
     # 1 段目は全部の文を関係ありとして返す（残りの入力 token に入らない）。2 段目は項目1・2 だけを残す。
-    stub = ExtractionStub(lambda text: re.findall(r"[^。\n]+。", text),
-                          stage_two=lambda text: [s for s in re.findall(r"[^。\n]+。", text)
-                                                  if re.search(r"項目[12]は", s)])
+    stub = ExtractionStub(
+        lambda text: re.findall(r"[^。\n]+。", text),
+        stage_two=lambda text: [s for s in re.findall(r"[^。\n]+。", text) if re.search(r"項目[12]は", s)],
+    )
     extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100), stub)
 
     outcome = extractor(_request(tree=_tree(range(1, 5)), remaining=1500))
@@ -289,14 +355,12 @@ def test_reduces_once_more_when_quotes_do_not_fit_and_stays_within_token_budget(
     used = sum(sections.estimate_tokens(item.record.text) for item in outcome.tree)
     assert used <= 1500 and outcome.trace["used_tokens"] <= 1500
     # 2 段目も原本と照合した原文だけで、原文の順（続く 2 文は 1 つの原文にまとめる）。
-    assert _quotes(outcome) == [(f"{DOC}:p{index}", _sentence(index, 1) + _sentence(index, 2))
-                                for index in range(1, 5)]
+    assert _quotes(outcome) == [(f"{DOC}:p{index}", _sentence(index, 1) + _sentence(index, 2)) for index in range(1, 5)]
 
 
 def test_truncates_by_distance_when_still_over_budget_and_reports_dropped_quotes():
     stub = ExtractionStub(lambda text: re.findall(r"[^。\n]+。", text))
-    extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100,
-                                                      section_extraction_max_calls=12), stub)
+    extractor = extraction.SectionExtractor(_settings(answer_max_input_tokens=1100, section_extraction_max_calls=12), stub)
 
     outcome = extractor(_request(remaining=800, seeds=(1,)))
 
@@ -329,8 +393,7 @@ def test_time_runs_out_during_extraction():
             return next(budget)
 
     settings = _settings(answer_max_input_tokens=1100, section_extraction_concurrency=1)
-    outcome = extraction.SectionExtractor(settings, stub)(_request(tree=_tree(range(1, 7)),
-                                                                   seconds_left=seconds_left))
+    outcome = extraction.SectionExtractor(settings, stub)(_request(tree=_tree(range(1, 7)), seconds_left=seconds_left))
 
     assert outcome is not None and stub.calls == 2
     assert len(outcome.tree) == 2
@@ -339,8 +402,7 @@ def test_time_runs_out_during_extraction():
 
 def test_parallel_calls_respect_concurrency_limit():
     stub = ExtractionStub(delay=0.02)
-    settings = _settings(answer_max_input_tokens=1100, section_extraction_concurrency=2,
-                         section_extraction_max_calls=6)
+    settings = _settings(answer_max_input_tokens=1100, section_extraction_concurrency=2, section_extraction_max_calls=6)
 
     outcome = extraction.SectionExtractor(settings, stub)(_request())
 
@@ -404,17 +466,38 @@ def test_locate_quote_allows_only_whitespace_and_width_differences():
 
 def _seed_context(index: int) -> AnswerContext:
     """当たった chunk（章節の外の親 1 件）を持つ文脈。"""
-    child = replace(_child(index), chunk_uid="hit", chunk_id="hit", parent_chunk_uid="hit-parent",
-                    parent_chunk_id="hit-parent", text="設備の点検の概要。", retrieval_text="設備の点検の概要。")
-    parent = replace(child, chunk_uid="hit-parent", chunk_id="hit-parent", chunk_level="parent",
-                     parent_chunk_uid="", parent_chunk_id="", child_chunk_ids=("hit",))
-    tree = (ContextParentEvidence(
-        record=_stored_chunk_answer_record(parent), role="synthesis_parent", reason="retrieved",
-        children=(ContextChildEvidence(record=_stored_chunk_answer_record(child), role="retrieved_anchor",
-                                       reason="retrieved", retrieval_rank=1),)),)
+    child = replace(
+        _child(index),
+        chunk_uid="hit",
+        chunk_id="hit",
+        parent_chunk_uid="hit-parent",
+        parent_chunk_id="hit-parent",
+        text="設備の点検の概要。",
+        retrieval_text="設備の点検の概要。",
+    )
+    parent = replace(
+        child,
+        chunk_uid="hit-parent",
+        chunk_id="hit-parent",
+        chunk_level="parent",
+        parent_chunk_uid="",
+        parent_chunk_id="",
+        child_chunk_ids=("hit",),
+    )
+    tree = (
+        ContextParentEvidence(
+            record=_stored_chunk_answer_record(parent),
+            role="synthesis_parent",
+            reason="retrieved",
+            children=(
+                ContextChildEvidence(
+                    record=_stored_chunk_answer_record(child), role="retrieved_anchor", reason="retrieved", retrieval_rank=1
+                ),
+            ),
+        ),
+    )
     bundle = context_bundle_from_parent_evidence(tree, max_chars=24000)
-    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence,
-                         evidence_tree=bundle.evidence_tree)
+    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
 
 
 class _Sections:
@@ -429,8 +512,7 @@ class _Sections:
 
 
 def _attempt(*, sufficient: bool, missing: tuple[str, ...] = ()) -> CragRetrievalAttempt:
-    return CragRetrievalAttempt(attempt=1, query="q", retrieval_queries=("q",), sufficient=sufficient,
-                                missing_aspects=missing)
+    return CragRetrievalAttempt(attempt=1, query="q", retrieval_queries=("q",), sufficient=sufficient, missing_aspects=missing)
 
 
 def test_expansion_hands_large_section_to_extraction_and_answer_uses_only_extracted_text():
@@ -445,8 +527,15 @@ def test_expansion_hands_large_section_to_extraction_and_answer_uses_only_extrac
         return _attempt(sufficient=True)
 
     result = sections.expand_sections(
-        QUESTION, _seed_context(1), settings, last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
-        grade=grade, section_outline=store.outline, section_chunks=store.chunks, large_sections=extractor)
+        QUESTION,
+        _seed_context(1),
+        settings,
+        last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
+        grade=grade,
+        section_outline=store.outline,
+        section_chunks=store.chunks,
+        large_sections=extractor,
+    )
 
     assert result.applied and result.unread == [] and graded == [1]
     assert result.trace["large_section_handoff"] == "extract_then_integrate"
@@ -468,10 +557,15 @@ def test_extraction_limits_make_expansion_report_unread_ranges():
     store = _Sections()
 
     result = sections.expand_sections(
-        QUESTION, _seed_context(1), settings, last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
+        QUESTION,
+        _seed_context(1),
+        settings,
+        last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
         grade=lambda context, level: _attempt(sufficient=True, missing=("requested_result",)),
-        section_outline=store.outline, section_chunks=store.chunks,
-        large_sections=extraction.SectionExtractor(settings, stub))
+        section_outline=store.outline,
+        section_chunks=store.chunks,
+        large_sections=extraction.SectionExtractor(settings, stub),
+    )
 
     assert stub.calls == 2
     assert result.stop_reason == sections.STOP_TOKEN_BUDGET
@@ -484,27 +578,45 @@ def test_extraction_limits_make_expansion_report_unread_ranges():
 
 def _context_in_section(anchors: tuple[int, ...], others: tuple[int, ...] = ()) -> AnswerContext:
     """章節（第5章）の親を最初の根拠に持つ文脈。``anchors`` は当たった chunk、``others`` は近傍などの親。"""
+
     def parent(index: int, role: str, rank: int | None) -> ContextParentEvidence:
         return ContextParentEvidence(
-            record=_stored_chunk_answer_record(_parent(index)), role="synthesis_parent", reason="retrieved",
-            children=(ContextChildEvidence(record=_stored_chunk_answer_record(_child(index)), role=role,  # type: ignore[arg-type]
-                                           reason="retrieved", retrieval_rank=rank),))
+            record=_stored_chunk_answer_record(_parent(index)),
+            role="synthesis_parent",
+            reason="retrieved",
+            children=(
+                ContextChildEvidence(
+                    record=_stored_chunk_answer_record(_child(index)),
+                    role=role,  # type: ignore[arg-type]
+                    reason="retrieved",
+                    retrieval_rank=rank,
+                ),
+            ),
+        )
 
-    tree = (*(parent(index, "retrieved_anchor", rank) for rank, index in enumerate(anchors, 1)),
-            *(parent(index, "neighbor_context", None) for index in others))
+    tree = (
+        *(parent(index, "retrieved_anchor", rank) for rank, index in enumerate(anchors, 1)),
+        *(parent(index, "neighbor_context", None) for index in others),
+    )
     bundle = context_bundle_from_parent_evidence(tree, max_chars=24000)
-    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence,
-                         evidence_tree=bundle.evidence_tree)
+    return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
 
 
-def _expand_section(context: AnswerContext, settings: SimpleNamespace, stub: ExtractionStub,
-                    grade=None) -> tuple[sections.SectionExpansionResult, extraction.SectionExtractor]:
+def _expand_section(
+    context: AnswerContext, settings: SimpleNamespace, stub: ExtractionStub, grade=None
+) -> tuple[sections.SectionExpansionResult, extraction.SectionExtractor]:
     extractor = extraction.SectionExtractor(settings, stub)
     store = _Sections()
     result = sections.expand_sections(
-        QUESTION, context, settings, last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
+        QUESTION,
+        context,
+        settings,
+        last_attempt=_attempt(sufficient=True, missing=("requested_result",)),
         grade=grade or (lambda candidate, level: _attempt(sufficient=True, missing=("requested_result",))),
-        section_outline=store.outline, section_chunks=store.chunks, large_sections=extractor)
+        section_outline=store.outline,
+        section_chunks=store.chunks,
+        large_sections=extractor,
+    )
     return result, extractor
 
 
@@ -585,8 +697,7 @@ def test_first_evidence_not_reached_by_call_limit_stays_whole_and_is_not_reporte
     assert by_id[f"{DOC}:p12"].text == _text(12)
     # 残した p12 の分を引いた予算に収めるため、抜き出した p1 は原文だけにする（総量は上限の中）。
     assert by_id[f"{DOC}:p1"].text == _sentence(1, 1)
-    assert sections.context_tokens(result.context) <= sections.SectionExpansionLimits.from_settings(
-        settings).input_tokens
+    assert sections.context_tokens(result.context) <= sections.SectionExpansionLimits.from_settings(settings).input_tokens
     lines = result.gap_lines
     assert lines and all(item.reason == sections.STOP_EXTRACTION_CALLS for item in result.unread)
     # p.21（文脈のまま残した p12）は読めなかった範囲に含めない。
@@ -612,8 +723,12 @@ def test_section_already_in_context_is_reported_as_in_context():
     graded: list[int] = []
     context = _context_in_section(tuple(range(1, PARENTS + 1)))
 
-    result, extractor = _expand_section(context, _settings(answer_max_input_tokens=128_000), stub,
-                                        grade=lambda candidate, level: graded.append(level) or _attempt(sufficient=True))
+    result, extractor = _expand_section(
+        context,
+        _settings(answer_max_input_tokens=128_000),
+        stub,
+        grade=lambda candidate, level: graded.append(level) or _attempt(sufficient=True),
+    )
 
     entry = result.trace["levels"][0]["sections"][0]
     assert entry["read"] == "in_context" and "extraction" not in entry
@@ -622,14 +737,25 @@ def test_section_already_in_context_is_reported_as_in_context():
 
 
 def test_engine_settings_read_extraction_environment():
-    settings = get_settings(environ={"OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": "200000",
-                                     "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": "4",
-                                     "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY": "2"}, dotenv_path=None)
-    assert (settings.answer_max_input_tokens, settings.section_extraction_max_calls,
-            settings.section_extraction_concurrency) == (200_000, 4, 2)
+    settings = get_settings(
+        environ={
+            "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": "200000",
+            "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": "4",
+            "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY": "2",
+        },
+        dotenv_path=None,
+    )
+    assert (settings.answer_max_input_tokens, settings.section_extraction_max_calls, settings.section_extraction_concurrency) == (
+        200_000,
+        4,
+        2,
+    )
     defaults = get_settings(environ={}, dotenv_path=None)
-    assert (defaults.answer_max_input_tokens, defaults.section_extraction_max_calls,
-            defaults.section_extraction_concurrency) == (128_000, 8, 4)
+    assert (defaults.answer_max_input_tokens, defaults.section_extraction_max_calls, defaults.section_extraction_concurrency) == (
+        128_000,
+        8,
+        4,
+    )
     limits = extraction.ExtractionLimits.from_settings(defaults)
     # 1 回分は入力の上限の 60%（規格の 50〜70% の中）。
     assert limits.part_tokens == 76_800 and limits.overlap_tokens == 2_000

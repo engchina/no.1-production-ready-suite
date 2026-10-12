@@ -16,6 +16,7 @@ from rag_engine.config import Settings
 @dataclass(frozen=True)
 class KnowledgeRegistrationResult:
     """Knowledge Base 登録処理の各成果物と保存件数を保持します。"""
+
     source_path: str
     source_file_name: str
     run_id: str

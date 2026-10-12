@@ -30,7 +30,7 @@ class MetadataFilterIntegrationTests(unittest.TestCase):
             ("操作説明書", {"document": {"classification": {"middle_category": "20_操作説明書"}}}, True),
             ("販売管理", {"document": {"classification": {"large_category": None}}}, False),
             ("販売管理", {}, False),
-            ('a"b\\c\' OR 1=1 --', {"document": {"classification": {"small_category": 'a"b\\c\' OR 1=1 --'}}}, True),
+            ("a\"b\\c' OR 1=1 --", {"document": {"classification": {"small_category": "a\"b\\c' OR 1=1 --"}}}, True),
         ]
         with connect_adb_thin(load_adb_settings(os.environ["RAG_TEST_ADB_ENV"])) as connection:
             with connection.cursor() as cursor:

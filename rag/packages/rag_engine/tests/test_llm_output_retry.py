@@ -53,9 +53,11 @@ class OutputRetryRecordTest(unittest.TestCase):
         step_token = execution_record._structured_steps.set(steps)
         usage_token = llm_usage.set(LlmUsage())
         try:
-            with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), \
-                    self.assertLogs(oci.__name__, level="INFO") as logs, \
-                    execution_record._execution_step("生成"):
+            with (
+                mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+                self.assertLogs(oci.__name__, level="INFO") as logs,
+                execution_record._execution_step("生成"),
+            ):
                 try:
                     oci._openai_parsed([], settings, TextOutput, PROVIDER)
                 except oci.IncompleteResponse:
@@ -74,9 +76,10 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertEqual(usage["output_retries"], 1)
         self.assertEqual(usage["incomplete_reasons"], {"max_output_tokens": 1})
         self.assertIn("未完了の応答 1 回（max_output_tokens 1 回）・出力の上限を広げた送り直し 1 回", usage_line(usage))
-        self.assertEqual([(r.llm_status, r.llm_incomplete_reason, r.llm_attempt, r.llm_max_output_tokens)
-                          for r in records],
-                         [("incomplete", "max_output_tokens", 0, 1000), ("completed", "", 1, 2000)])
+        self.assertEqual(
+            [(r.llm_status, r.llm_incomplete_reason, r.llm_attempt, r.llm_max_output_tokens) for r in records],
+            [("incomplete", "max_output_tokens", 0, 1000), ("completed", "", 1, 2000)],
+        )
 
     def test_other_incomplete_reasons_are_recorded_without_retry(self):
         client = _Client([_incomplete("content_filter")])
@@ -89,15 +92,13 @@ class OutputRetryRecordTest(unittest.TestCase):
         """text の呼び出し（`_parse_text_with_retry` → `_parse_openai_text_once`）が Responses API まで届く。"""
         client = _Client([_completed()])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
-        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), \
-                self.assertLogs(oci.__name__, level="INFO"):
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertLogs(oci.__name__, level="INFO"):
             result = oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
         self.assertEqual((result.text, client.budgets), ("ok", [1000]))
 
     def test_completed_call_keeps_the_usage_shape(self):
         usage, _records = self.call(_Client([_completed()]))
-        self.assertEqual(set(usage), {"calls", "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens",
-                                      "seconds"})
+        self.assertEqual(set(usage), {"calls", "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "seconds"})
 
 
 class DeadlineOutputBudgetTest(unittest.TestCase):
@@ -137,9 +138,12 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
         child = Deadline(10.0, parent=outer)
         usage_token = llm_usage.set(LlmUsage())
         try:
-            with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), \
-                    self.assertLogs(oci.__name__, level="INFO") as logs, bind_deadline(child), \
-                    self.assertRaises(DeadlineExceeded):
+            with (
+                mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+                self.assertLogs(oci.__name__, level="INFO") as logs,
+                bind_deadline(child),
+                self.assertRaises(DeadlineExceeded),
+            ):
                 oci._openai_parsed([], settings, TextOutput, PROVIDER)
             usage = llm_usage.get().snapshot()
         finally:
@@ -156,8 +160,11 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
     def test_uncapped_incomplete_response_is_still_retried_once(self):
         client = _Client([_incomplete("max_output_tokens"), _completed()])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
-        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), \
-                self.assertLogs(oci.__name__, level="INFO"), bind_deadline(Deadline(600.0)):
+        with (
+            mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+            self.assertLogs(oci.__name__, level="INFO"),
+            bind_deadline(Deadline(600.0)),
+        ):
             oci._openai_parsed([], settings, TextOutput, PROVIDER)
         self.assertEqual(client.budgets, [1000, 2000])
 
@@ -166,17 +173,18 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         usage_token = llm_usage.set(LlmUsage())
         try:
-            with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), \
-                    self.assertLogs(oci.__name__, level="INFO") as logs, self.assertRaises(TimeoutError):
+            with (
+                mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+                self.assertLogs(oci.__name__, level="INFO") as logs,
+                self.assertRaises(TimeoutError),
+            ):
                 oci._openai_parsed([], settings, TextOutput, PROVIDER)
             usage = llm_usage.get().snapshot()
         finally:
             llm_usage.reset(usage_token)
-        self.assertEqual((usage["calls"], usage["output_tokens"], usage["incomplete_reasons"]),
-                         (1, 0, {"TimeoutError": 1}))
+        self.assertEqual((usage["calls"], usage["output_tokens"], usage["incomplete_reasons"]), (1, 0, {"TimeoutError": 1}))
         logged = logs.records[0]
-        self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens),
-                         ("failed", "TimeoutError", 1000))
+        self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens), ("failed", "TimeoutError", 1000))
         self.assertFalse(hasattr(logged, "llm_deadline_capped"))
 
 

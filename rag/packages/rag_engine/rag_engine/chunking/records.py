@@ -22,6 +22,7 @@ from rag_engine.chunking.constants import (
     _int_value,
 )
 
+
 def _record_can_supply_image_evidence(record: dict[str, Any], visual_role: Any | None = None) -> bool:
     if str(record.get("category") or "") != "Picture":
         return False
@@ -294,13 +295,10 @@ def _join_records_text(records: Sequence[dict[str, Any]], *, for_retrieval: bool
     誤読のノイズになります (#900)。Vision 失敗・未実施の図は OCR が唯一の文字情報なので残します。
     回答・表示用の text は変えません。
     """
-    described_groups = {
-        _visual_group_key(record) for record in records if for_retrieval and _picture_vision_described(record)
-    }
+    described_groups = {_visual_group_key(record) for record in records if for_retrieval and _picture_vision_described(record)}
     pieces = []
     for record in records:
-        if (str(record.get("raw_type") or "") == "picture_ocr_text"
-                and _visual_group_key(record) in described_groups):
+        if str(record.get("raw_type") or "") == "picture_ocr_text" and _visual_group_key(record) in described_groups:
             continue
         text = _record_text_for_chunk(record, for_retrieval=for_retrieval)
         if text:
@@ -316,10 +314,15 @@ def _record_text_for_chunk(record: dict[str, Any], *, for_retrieval: bool = Fals
     if str(record.get("category") or "") == "Table":
         raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
         supplement = str(raw.get("table_vision_text") or "").strip()
-        table_visual_text = "\n".join(filter(None, [
-            f"表内画像の補足:\n{supplement}" if supplement else "",
-            _table_visual_evidence_text(record, for_retrieval=for_retrieval),
-        ]))
+        table_visual_text = "\n".join(
+            filter(
+                None,
+                [
+                    f"表内画像の補足:\n{supplement}" if supplement else "",
+                    _table_visual_evidence_text(record, for_retrieval=for_retrieval),
+                ],
+            )
+        )
         if text and table_visual_text:
             return f"{text}\n{table_visual_text}"
         if table_visual_text:

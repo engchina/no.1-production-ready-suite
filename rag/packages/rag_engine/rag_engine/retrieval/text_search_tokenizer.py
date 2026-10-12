@@ -262,6 +262,7 @@ _EN_IRREGULAR = {
 @dataclass(frozen=True)
 class TextSearchTokenizerConfig:
     """Sudachi の辞書と英語の語幹の設定を保持します（分割の方式は 1 つで選べない。#588）。"""
+
     sudachi_dict_type: str = DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT
     sudachi_config_path: str = ""
     latin_stemmer: str = DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER
@@ -270,6 +271,7 @@ class TextSearchTokenizerConfig:
 @dataclass(frozen=True)
 class TextSearchTokenizationResult:
     """Oracle Text 検索用 token（と重み）と切り詰め有無を保持します。"""
+
     tokens: tuple[str, ...]
     weights: tuple[float, ...] = ()
     candidate_tokens: tuple[str, ...] = ()
@@ -381,7 +383,9 @@ def tokenize_text_search_query_with_trace(
             )
 
     matched_keywords = extract_domain_keywords(
-        query, normalized_domain_keywords, limit=max(1, len(normalized_domain_keywords)),
+        query,
+        normalized_domain_keywords,
+        limit=max(1, len(normalized_domain_keywords)),
     )
     for keyword in matched_keywords:
         add(keyword, _TIER_KEYWORD)
@@ -400,11 +404,7 @@ def tokenize_text_search_query_with_trace(
         selected = sorted(ordered_candidates, key=_ranked_token_sort_key)[:limit]
     selected_keys = {candidate.term for candidate in selected}
     ranked_candidates = sorted(ordered_candidates, key=_ranked_token_sort_key)
-    truncated_tokens = tuple(
-        candidate.term
-        for candidate in ranked_candidates
-        if candidate.term not in selected_keys
-    )
+    truncated_tokens = tuple(candidate.term for candidate in ranked_candidates if candidate.term not in selected_keys)
     return TextSearchTokenizationResult(
         tokens=tuple(candidate.term for candidate in selected),
         weights=tuple(candidate.weight for candidate in selected),

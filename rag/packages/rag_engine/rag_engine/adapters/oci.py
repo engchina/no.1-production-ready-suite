@@ -77,9 +77,7 @@ def _load_api_signing_key_config(oci: Any, config_file: str, profile: str) -> di
     sdk_config = dict(oci.config.from_file(str(Path(config_file).expanduser()), profile))
     missing = [field for field in API_SIGNING_KEY_FIELDS if not sdk_config.get(field)]
     if missing:
-        raise RuntimeError(
-            "OCI API signing key profile に必要な設定がありません: " + ", ".join(missing)
-        )
+        raise RuntimeError("OCI API signing key profile に必要な設定がありません: " + ", ".join(missing))
     # 混在 profile に任意 key が含まれていても、この client は session-token auth ではなく
     # 標準の user/fingerprint/private-key signer を必ず使う。
     sdk_config.pop("security_token_file", None)
@@ -379,15 +377,11 @@ def _parse_with_retry(
     retry_count = max(0, settings.llm_retries if retries is None else int(retries))
     initial_wait = max(
         0.0,
-        settings.llm_retry_initial_wait_seconds
-        if initial_wait_seconds is None
-        else float(initial_wait_seconds),
+        settings.llm_retry_initial_wait_seconds if initial_wait_seconds is None else float(initial_wait_seconds),
     )
     max_wait = max(
         0.0,
-        settings.llm_retry_max_wait_seconds
-        if max_wait_seconds is None
-        else float(max_wait_seconds),
+        settings.llm_retry_max_wait_seconds if max_wait_seconds is None else float(max_wait_seconds),
     )
     # 構造化出力の検証エラー（JSON を最後まで返さない・必須項目欠落）は通信系とは別に、同じ入力で 1 回だけ
     # やり直す (#663)。モデルが空白行を延々と出力して JSON が閉じないことがあり、再実行では再現しない。
@@ -546,17 +540,13 @@ def _openai_parsed(
     """
     budget = max(1, int(settings.answer_max_tokens))
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。
-    reasoning: dict[str, Any] = (
-        {"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}
-    )
+    reasoning: dict[str, Any] = {"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}
     for attempt in range(2):
         check_deadline()
         send_budget, time_capped = deadline_output_budget(budget, provider)
         started = time.monotonic()
         try:
-            response = _openai_client_with_deadline(
-                _openai_client_for_provider(provider, settings), settings
-            ).responses.parse(
+            response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
                 model=provider.model,
                 input=input_messages,
                 text_format=text_format,
@@ -566,12 +556,18 @@ def _openai_parsed(
                 **reasoning,
             )
         except Exception as exc:
-            _record_failed_call(exc, provider, text_format, time.monotonic() - started,
-                                max_output_tokens=send_budget, attempt=attempt, deadline_capped=time_capped)
+            _record_failed_call(
+                exc,
+                provider,
+                text_format,
+                time.monotonic() - started,
+                max_output_tokens=send_budget,
+                attempt=attempt,
+                deadline_capped=time_capped,
+            )
             raise
         seconds = time.monotonic() - started
-        _record_usage(response, provider, text_format, seconds, max_output_tokens=send_budget, attempt=attempt,
-                      deadline_capped=time_capped)
+        _record_usage(response, provider, text_format, seconds, max_output_tokens=send_budget, attempt=attempt, deadline_capped=time_capped)
         try:
             parsed = _parsed_response(response, text_format, provider)
         except IncompleteResponse as exc:
@@ -596,8 +592,16 @@ def _openai_parsed(
 _logger = logging.getLogger(__name__)
 
 
-def _record_usage(response: Any, provider: LlmProviderSettings, text_format: type, seconds: float, *,
-                  max_output_tokens: int | None = None, attempt: int = 0, deadline_capped: bool = False) -> None:
+def _record_usage(
+    response: Any,
+    provider: LlmProviderSettings,
+    text_format: type,
+    seconds: float,
+    *,
+    max_output_tokens: int | None = None,
+    attempt: int = 0,
+    deadline_capped: bool = False,
+) -> None:
     """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。
 
     応答が未完了（`status=incomplete`）なら理由（`incomplete_details.reason`）も残す。``attempt`` は出力の上限を
@@ -606,40 +610,90 @@ def _record_usage(response: Any, provider: LlmProviderSettings, text_format: typ
     """
     usage = response_usage(response)
     status = str(_value(response, "status") or "")
-    reason = (str(_value(_value(response, "incomplete_details"), "reason") or "unknown")
-              if status == "incomplete" else "")
-    _log_call(usage, seconds, provider, text_format, status=status, reason=reason, attempt=attempt,
-              max_output_tokens=max_output_tokens, deadline_capped=deadline_capped)
+    reason = str(_value(_value(response, "incomplete_details"), "reason") or "unknown") if status == "incomplete" else ""
+    _log_call(
+        usage,
+        seconds,
+        provider,
+        text_format,
+        status=status,
+        reason=reason,
+        attempt=attempt,
+        max_output_tokens=max_output_tokens,
+        deadline_capped=deadline_capped,
+    )
 
 
-def _record_failed_call(exc: Exception, provider: LlmProviderSettings, text_format: type, seconds: float, *,
-                        max_output_tokens: int | None = None, attempt: int = 0, deadline_capped: bool = False) -> None:
+def _record_failed_call(
+    exc: Exception,
+    provider: LlmProviderSettings,
+    text_format: type,
+    seconds: float,
+    *,
+    max_output_tokens: int | None = None,
+    attempt: int = 0,
+    deadline_capped: bool = False,
+) -> None:
     """応答が返らなかった呼び出し（timeout・接続の失敗）の秒と理由を残す（#1548）。
 
     打ち切った呼び出しは usage が返らないので token の数は 0 で、理由（例外の型。timeout は ``APITimeoutError``）を
     未完了の理由として数える。期限で打ち切った呼び出しが何秒かかっていたかを、工程の記録と log で確かめる。
     """
     usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    _log_call(usage, seconds, provider, text_format, status="failed", reason=type(exc).__name__, attempt=attempt,
-              max_output_tokens=max_output_tokens, deadline_capped=deadline_capped)
+    _log_call(
+        usage,
+        seconds,
+        provider,
+        text_format,
+        status="failed",
+        reason=type(exc).__name__,
+        attempt=attempt,
+        max_output_tokens=max_output_tokens,
+        deadline_capped=deadline_capped,
+    )
 
 
-def _log_call(usage: dict[str, int], seconds: float, provider: LlmProviderSettings, text_format: type, *,
-              status: str, reason: str, attempt: int, max_output_tokens: int | None,
-              deadline_capped: bool = False) -> None:
+def _log_call(
+    usage: dict[str, int],
+    seconds: float,
+    provider: LlmProviderSettings,
+    text_format: type,
+    *,
+    status: str,
+    reason: str,
+    attempt: int,
+    max_output_tokens: int | None,
+    deadline_capped: bool = False,
+) -> None:
     record_llm_usage({**usage, "seconds": seconds, **({"incomplete_reason": reason} if reason else {})})
     # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
         "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
         "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s deadline_capped=%s",
-        provider.model, getattr(text_format, "__name__", str(text_format)), seconds, usage["input_tokens"],
-        usage["cached_tokens"], usage["output_tokens"], usage["reasoning_tokens"], status, reason or "-", attempt,
-        max_output_tokens if max_output_tokens is not None else "-", deadline_capped,
-        extra={"event": "llm_call_usage", "llm_model": str(provider.model),
-               "llm_schema": getattr(text_format, "__name__", str(text_format)), "llm_seconds": round(seconds, 1),
-               "llm_status": status, "llm_incomplete_reason": reason, "llm_attempt": attempt,
-               **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),
-               **({"llm_deadline_capped": True} if deadline_capped else {}), **usage},
+        provider.model,
+        getattr(text_format, "__name__", str(text_format)),
+        seconds,
+        usage["input_tokens"],
+        usage["cached_tokens"],
+        usage["output_tokens"],
+        usage["reasoning_tokens"],
+        status,
+        reason or "-",
+        attempt,
+        max_output_tokens if max_output_tokens is not None else "-",
+        deadline_capped,
+        extra={
+            "event": "llm_call_usage",
+            "llm_model": str(provider.model),
+            "llm_schema": getattr(text_format, "__name__", str(text_format)),
+            "llm_seconds": round(seconds, 1),
+            "llm_status": status,
+            "llm_incomplete_reason": reason,
+            "llm_attempt": attempt,
+            **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),
+            **({"llm_deadline_capped": True} if deadline_capped else {}),
+            **usage,
+        },
     )
 
 
@@ -655,7 +709,10 @@ def _parse_openai_text_once(
             {"role": "system", "content": str(system_prompt or "")},
             {"role": "user", "content": str(prompt or "")},
         ],
-        settings, text_format, provider)
+        settings,
+        text_format,
+        provider,
+    )
 
 
 def _parse_openai_image_once(
@@ -677,7 +734,10 @@ def _parse_openai_image_once(
                 ],
             },
         ],
-        settings, text_format, provider)
+        settings,
+        text_format,
+        provider,
+    )
 
 
 def _parse_openai_multimodal_once(
@@ -695,7 +755,10 @@ def _parse_openai_multimodal_once(
             {"role": "system", "content": str(system_prompt or "")},
             {"role": "user", "content": content},
         ],
-        settings, text_format, provider)
+        settings,
+        text_format,
+        provider,
+    )
 
 
 def _openai_client_for_provider(provider: LlmProviderSettings, settings: Settings) -> Any:
@@ -856,9 +919,7 @@ def _is_retryable_error(exc: Exception) -> bool:
         oci_errors: tuple[type[BaseException], ...] = ()
     else:
         oci_errors = (OciConnectTimeout, OciRequestException)
-    return isinstance(
-        exc, (TimeoutError, ConnectionError, *request_errors, *httpx_errors, *openai_errors, *oci_errors)
-    )
+    return isinstance(exc, (TimeoutError, ConnectionError, *request_errors, *httpx_errors, *openai_errors, *oci_errors))
 
 
 def _json_dumps(value: Any) -> str:
@@ -996,13 +1057,8 @@ def embed_images(
         return []
     normalized_texts = [str(text or "") for text in texts] if texts is not None else [""] * len(paths)
     if len(normalized_texts) != len(paths):
-        raise RuntimeError(
-            f"Image embedding input mismatch: expected {len(paths)} text payloads, got {len(normalized_texts)}"
-        )
-    return [
-        _embed_image_with_retry(path, text, settings, input_type=input_type)
-        for path, text in zip(paths, normalized_texts)
-    ]
+        raise RuntimeError(f"Image embedding input mismatch: expected {len(paths)} text payloads, got {len(normalized_texts)}")
+    return [_embed_image_with_retry(path, text, settings, input_type=input_type) for path, text in zip(paths, normalized_texts)]
 
 
 def _embed_text_batch_with_retry(
@@ -1101,11 +1157,7 @@ def _embed_image_once(
     normalized_text = str(text or "").strip()
     if normalized_text:
         contents.append(models.EmbedTextContent(text=normalized_text))
-    contents.append(
-        models.EmbedImageContent(
-            image_url=models.ImageUrl(url=_image_data_url(image_path), detail="AUTO")
-        )
-    )
+    contents.append(models.EmbedImageContent(image_url=models.ImageUrl(url=_image_data_url(image_path), detail="AUTO")))
     request = models.EmbedTextDetails(
         embed_contents=contents,
         serving_mode=_serving_mode(models, settings.embedding_model),
@@ -1155,9 +1207,7 @@ def _embedding_input_type(models: Any, input_type: str) -> str:
 def _embedding_output_dimensions(settings: Settings) -> int:
     dimensions = int(settings.embedding_output_dimensions or DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS)
     if dimensions not in SUPPORTED_EMBEDDING_OUTPUT_DIMENSIONS:
-        raise RuntimeError(
-            "EMBEDDING_OUTPUT_DIMENSIONS は 256 / 512 / 1024 / 1536 のいずれかで指定してください。"
-        )
+        raise RuntimeError("EMBEDDING_OUTPUT_DIMENSIONS は 256 / 512 / 1024 / 1536 のいずれかで指定してください。")
     return dimensions
 
 
@@ -1172,9 +1222,7 @@ def _embedding_vectors(data: Any, *, expected_count: int, expected_dimensions: i
     if not isinstance(raw_embeddings, list):
         raise RuntimeError("OCI embedding response に embeddings がありません。")
     if len(raw_embeddings) != expected_count:
-        raise RuntimeError(
-            f"OCI embedding response count mismatch: expected {expected_count}, got {len(raw_embeddings)}"
-        )
+        raise RuntimeError(f"OCI embedding response count mismatch: expected {expected_count}, got {len(raw_embeddings)}")
 
     embeddings: list[list[float]] = []
     for index, raw_vector in enumerate(raw_embeddings):
@@ -1183,8 +1231,7 @@ def _embedding_vectors(data: Any, *, expected_count: int, expected_dimensions: i
         vector = [float(value) for value in raw_vector]
         if len(vector) != expected_dimensions:
             raise RuntimeError(
-                "OCI embedding dimension mismatch: "
-                f"expected {expected_dimensions}, got {len(vector)} for vector #{index + 1}"
+                f"OCI embedding dimension mismatch: expected {expected_dimensions}, got {len(vector)} for vector #{index + 1}"
             )
         embeddings.append(vector)
     return embeddings

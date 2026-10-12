@@ -1,4 +1,5 @@
 """回答評価の照合・主張の監査・除外範囲・保存失敗分離を検証する。"""
+
 import json
 from dataclasses import replace
 from tempfile import TemporaryDirectory
@@ -9,9 +10,19 @@ import pytest
 from pydantic import ValidationError
 
 from rag_engine.config import get_settings
-from rag_engine.evaluation.answer_eval import (AnswerEvaluationOutput, evaluate_answer_payload,
-                                           MAX_EVALUATION_INPUT_BYTES, _input_bytes, StandardAnswerScope, StandardRequirement,
-                                           ClaimCheck, CoverageCheck, _prepare_standard_scope, _evaluate_batch, EvaluationContractError)
+from rag_engine.evaluation.answer_eval import (
+    AnswerEvaluationOutput,
+    evaluate_answer_payload,
+    MAX_EVALUATION_INPUT_BYTES,
+    _input_bytes,
+    StandardAnswerScope,
+    StandardRequirement,
+    ClaimCheck,
+    CoverageCheck,
+    _prepare_standard_scope,
+    _evaluate_batch,
+    EvaluationContractError,
+)
 from rag_engine.generation.answering import AnswerQuestionResult, parse_answer_response, AnswerRecord, answer_evidence_items
 from rag_engine.knowledge.answers import save_answer_result
 
@@ -24,27 +35,37 @@ def fixed_scope():
 
 
 def scope_output():
-    return StandardAnswerScope(requirements=[StandardRequirement(standard_answer_quote="ログを確認", requirement="文書にあるログ確認手順")], excluded_case_data=["実際の原因"])
+    return StandardAnswerScope(
+        requirements=[StandardRequirement(standard_answer_quote="ログを確認", requirement="文書にあるログ確認手順")],
+        excluded_case_data=["実際の原因"],
+    )
 
 
 def output():
     """ログ確認手順を説明済みと照合し、確認案内を監査した固定の評価結果を返す。"""
     return AnswerEvaluationOutput(
-        claim_checks=[ClaimCheck(answer_quote="回答", status="data_confirmation", source_id="", evidence_quote="", reason="未確認データの確認案内")],
-        coverage_checks=[CoverageCheck(requirement_index=1, status="addressed", answer_quote="回答")], evidence_summary="文書で確認したログ確認手順と出典",
+        claim_checks=[
+            ClaimCheck(answer_quote="回答", status="data_confirmation", source_id="", evidence_quote="", reason="未確認データの確認案内")
+        ],
+        coverage_checks=[CoverageCheck(requirement_index=1, status="addressed", answer_quote="回答")],
+        evidence_summary="文書で確認したログ確認手順と出典",
     )
 
 
 def payload():
-    return {"question": "今回の取込失敗の原因は？", "standard_answer": "ログを確認して原因を特定する。",
-            "answer_text": "回答",
-            "evidence_items": [{"id": "c1", "text": "手順本文" * 150, "text_preview": "短縮表示", "source": "manual.pdf"}]}
+    return {
+        "question": "今回の取込失敗の原因は？",
+        "standard_answer": "ログを確認して原因を特定する。",
+        "answer_text": "回答",
+        "evidence_items": [{"id": "c1", "text": "手順本文" * 150, "text_preview": "短縮表示", "source": "manual.pdf"}],
+    }
 
 
 def test_completed_returns_checks_without_scores_and_sends_full_evidence():
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output()) as parse:
-        result = evaluate_answer_payload(payload() | {"external_data_required": True, "external_data_items": ["当該実行のログ"]},
-                                         object(), provider_id="chosen")
+        result = evaluate_answer_payload(
+            payload() | {"external_data_required": True, "external_data_items": ["当該実行のログ"]}, object(), provider_id="chosen"
+        )
     assert result["status"] == "completed" and result["rubric_version"] == 11
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
@@ -96,7 +117,9 @@ def test_removed_axis_fields_are_rejected():
 
 def test_no_standard_answer_skips_network_and_keeps_external_status():
     with patch("rag_engine.evaluation.answer_eval.parse_text_response") as parse:
-        result = evaluate_answer_payload({"standard_answer": "  ", "external_data_required": True, "external_data_items": ["ログ"]}, object())
+        result = evaluate_answer_payload(
+            {"standard_answer": "  ", "external_data_required": True, "external_data_items": ["ログ"]}, object()
+        )
     parse.assert_not_called()
     assert result["status"] == "no_standard_answer"
     assert result["external_data_items"] == ["ログ"]
@@ -105,8 +128,15 @@ def test_no_standard_answer_skips_network_and_keeps_external_status():
 def test_error_does_not_prevent_answer_persistence_or_leak_details():
     with TemporaryDirectory() as tmp:
         settings = replace(get_settings(), output_dir=Path(tmp), query_history_enabled=False)
-        result = AnswerQuestionResult(answer="回答", answer_text="回答", original_question="質問", question_display="質問",
-                                      selected_strategy="simple", effective_strategy="simple", primary_source_run_id="run1")
+        result = AnswerQuestionResult(
+            answer="回答",
+            answer_text="回答",
+            original_question="質問",
+            question_display="質問",
+            selected_strategy="simple",
+            effective_strategy="simple",
+            primary_source_run_id="run1",
+        )
         with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=RuntimeError("private connection details")):
             saved = save_answer_result(result, settings, standard_answer="標準")
         stored = json.loads((Path(tmp) / "run1" / "answers" / f"{saved.answer_id}.json").read_text())
@@ -123,17 +153,33 @@ def test_external_output_and_legacy_compatibility():
 
 
 def test_evidence_body_is_not_truncated_for_evaluation():
-    record = AnswerRecord(id="c1", engine="docling", engine_label="Docling", page=1, seq_no=1,
-                          category="text", text="metadata付き本文", body_text="根拠全文" * 150)
+    record = AnswerRecord(
+        id="c1",
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="text",
+        text="metadata付き本文",
+        body_text="根拠全文" * 150,
+    )
     assert answer_evidence_items([record])[0]["text"] == "根拠全文" * 150
 
 
 def test_successful_evaluation_is_saved_and_keeps_generation_external_state():
     with TemporaryDirectory() as tmp:
         settings = replace(get_settings(), output_dir=Path(tmp), query_history_enabled=False)
-        result = AnswerQuestionResult(answer="回答", answer_text="回答", original_question="質問", question_display="質問",
-                                      selected_strategy="simple", effective_strategy="simple", primary_source_run_id="run1",
-                                      external_data_required=True, external_data_items=("実行ログ",))
+        result = AnswerQuestionResult(
+            answer="回答",
+            answer_text="回答",
+            original_question="質問",
+            question_display="質問",
+            selected_strategy="simple",
+            effective_strategy="simple",
+            primary_source_run_id="run1",
+            external_data_required=True,
+            external_data_items=("実行ログ",),
+        )
         with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output()) as parse:
             saved = save_answer_result(result, settings, standard_answer="標準", evaluation_provider="chosen")
         stored = json.loads((Path(tmp) / "run1" / "answers" / f"{saved.answer_id}.json").read_text())
@@ -147,14 +193,22 @@ def test_successful_evaluation_is_saved_and_keeps_generation_external_state():
 def long_payload():
     """12個の親と子の全文を送り、末尾の根拠を保持することを検証する。"""
     data = payload()
-    data["evidence_items"] = [{"id": f"p{i}", "source": "manual.pdf", "text": "手順条件。" * 1700,
-        "children": [{"id": f"c{i}", "source": "manual.pdf", "text": "😀\n\"\\条件" * 1200 + f"末尾{i}"}]} for i in range(12)]
+    data["evidence_items"] = [
+        {
+            "id": f"p{i}",
+            "source": "manual.pdf",
+            "text": "手順条件。" * 1700,
+            "children": [{"id": f"c{i}", "source": "manual.pdf", "text": '😀\n"\\条件' * 1200 + f"末尾{i}"}],
+        }
+        for i in range(12)
+    ]
     return data
 
 
 def test_long_evidence_is_losslessly_batched_with_bounded_previous_state():
     data = long_payload()
     calls = []
+
     def parse(system, prompt, settings, schema, *, provider_id):
         inputs = json.loads(prompt)
         assert _input_bytes(inputs) <= MAX_EVALUATION_INPUT_BYTES
@@ -163,6 +217,7 @@ def test_long_evidence_is_losslessly_batched_with_bounded_previous_state():
             assert inputs["previous_evaluation"]["evidence_summary"] == f"batch {len(calls)} 確認済み事実と出典"
         calls.append(inputs)
         return output().model_copy(update={"evidence_summary": f"batch {len(calls)} 確認済み事実と出典"})
+
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = evaluate_answer_payload(data, object(), provider_id="chosen")
     assert result["status"] == "completed"
@@ -207,8 +262,14 @@ def test_missing_intermediate_summary_is_not_treated_as_complete():
 
 def test_long_reasons_are_not_repeated_in_next_batch():
     long_reason = "理由" * 5000
-    oversized = output().model_copy(update={"evidence_summary": "摘要", "claim_checks": [ClaimCheck(
-        answer_quote="回答", status="data_confirmation", source_id="", evidence_quote="", reason=long_reason)]})
+    oversized = output().model_copy(
+        update={
+            "evidence_summary": "摘要",
+            "claim_checks": [
+                ClaimCheck(answer_quote="回答", status="data_confirmation", source_id="", evidence_quote="", reason=long_reason)
+            ],
+        }
+    )
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=oversized) as parse:
         result = evaluate_answer_payload(long_payload(), object())
     assert parse.call_count > 1
@@ -220,7 +281,8 @@ def test_long_reasons_are_not_repeated_in_next_batch():
 def test_tight_remaining_budget_splits_fragments_without_losing_unicode():
     from collections import deque
     from rag_engine.evaluation.answer_eval import _next_batch
-    text = "😀\\\"\n" * 500
+
+    text = '😀\\"\n' * 500
     item = {"id": "c1", "text": text, "fragment_start": 0, "fragment_end": len(text)}
     empty = {"previous_evaluation": None, "batch_index": 1, "is_final_batch": False, "evidence_items": []}
     limit = _input_bytes(empty) + 500
@@ -240,9 +302,17 @@ def test_tight_remaining_budget_splits_fragments_without_losing_unicode():
 def test_unfinished_evaluation_preserves_original_review_state(status):
     with TemporaryDirectory() as tmp:
         settings = replace(get_settings(), output_dir=Path(tmp), query_history_enabled=False)
-        generated = AnswerQuestionResult(answer="回答", original_question="質問", question_display="質問",
-            selected_strategy="simple", effective_strategy="simple", primary_source_run_id="run1",
-            external_data_required=True, external_data_items=("実行ログ",), needs_human_review=True)
+        generated = AnswerQuestionResult(
+            answer="回答",
+            original_question="質問",
+            question_display="質問",
+            selected_strategy="simple",
+            effective_strategy="simple",
+            primary_source_run_id="run1",
+            external_data_required=True,
+            external_data_items=("実行ログ",),
+            needs_human_review=True,
+        )
         with patch("rag_engine.evaluation.answer_eval.evaluate_answer_payload", return_value={"status": status}):
             saved = save_answer_result(generated, settings, standard_answer="標準")
         assert saved.payload["needs_human_review"] is True
@@ -251,9 +321,10 @@ def test_unfinished_evaluation_preserves_original_review_state(status):
 
 def test_scope_preparation_never_receives_answer_or_retrieved_evidence():
     standard = "設定画面で業務別担当者(J)を選択してください。今回は主担当が設定されていました。"
-    scope = StandardAnswerScope(requirements=[StandardRequirement(
-        standard_answer_quote="業務別担当者(J)を選択", requirement="業務別担当者(J)の選択手順")],
-        excluded_case_data=["今回の設定値"])
+    scope = StandardAnswerScope(
+        requirements=[StandardRequirement(standard_answer_quote="業務別担当者(J)を選択", requirement="業務別担当者(J)の選択手順")],
+        excluded_case_data=["今回の設定値"],
+    )
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope) as parse:
         result = _prepare_standard_scope(payload() | {"standard_answer": standard}, object(), "enterprise-ai-vision")
     assert result == scope
@@ -268,14 +339,17 @@ def test_scope_quote_not_in_standard_answer_retries_then_fails():
     assert parse.call_count == 2
 
 
-@pytest.mark.parametrize("checks", [
-    [],
-    [CoverageCheck(requirement_index=2, status="missing", answer_quote="")],
-    [CoverageCheck(requirement_index=1, status="missing", answer_quote="")]*2,
-    [CoverageCheck(requirement_index=1, status="addressed", answer_quote="標準回答だけにある操作")],
-    [CoverageCheck(requirement_index=1, status="partial", answer_quote="")],
-    [CoverageCheck(requirement_index=1, status="missing", answer_quote="回答外の引用")],
-])
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [],
+        [CoverageCheck(requirement_index=2, status="missing", answer_quote="")],
+        [CoverageCheck(requirement_index=1, status="missing", answer_quote="")] * 2,
+        [CoverageCheck(requirement_index=1, status="addressed", answer_quote="標準回答だけにある操作")],
+        [CoverageCheck(requirement_index=1, status="partial", answer_quote="")],
+        [CoverageCheck(requirement_index=1, status="missing", answer_quote="回答外の引用")],
+    ],
+)
 def test_invalid_fixed_check_or_answer_quote_is_retried_without_publishing_scores(checks):
     invalid = output().model_copy(update={"coverage_checks": checks})
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=invalid) as parse:
@@ -288,9 +362,11 @@ def test_invalid_fixed_check_or_answer_quote_is_retried_without_publishing_score
 def test_absent_document_evidence_cannot_remove_expected_procedure(state, expected, fixed_scope):
     required = StandardRequirement(standard_answer_quote="業務別担当者(J)を選択", requirement="業務別担当者(J)の選択手順")
     fixed_scope.return_value = StandardAnswerScope(requirements=[required], excluded_case_data=["今回の主担当設定値"])
-    evaluated = output().model_copy(update={
-        "coverage_checks": [CoverageCheck(requirement_index=1, status=state, answer_quote="" if state=="missing" else "回答")],
-    })
+    evaluated = output().model_copy(
+        update={
+            "coverage_checks": [CoverageCheck(requirement_index=1, status=state, answer_quote="" if state == "missing" else "回答")],
+        }
+    )
     data = payload() | {"standard_answer": "業務別担当者(J)を選択。今回は主担当が設定されていた。", "evidence_items": []}
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=evaluated):
         result = evaluate_answer_payload(data, object())
@@ -301,15 +377,25 @@ def test_absent_document_evidence_cannot_remove_expected_procedure(state, expect
 
 def test_frozen_scope_is_not_changed_by_later_evidence_batches():
     seen = []
+
     def parse(system, prompt, settings, schema, **kwargs):
         inputs = json.loads(prompt)
         seen.append(inputs["standard_answer_scope"])
-        return output().model_copy(update={"coverage_checks": [CoverageCheck(
-            requirement_index=1, status="missing" if inputs["is_final_batch"] else "addressed",
-            answer_quote="" if inputs["is_final_batch"] else "回答")]})
+        return output().model_copy(
+            update={
+                "coverage_checks": [
+                    CoverageCheck(
+                        requirement_index=1,
+                        status="missing" if inputs["is_final_batch"] else "addressed",
+                        answer_quote="" if inputs["is_final_batch"] else "回答",
+                    )
+                ]
+            }
+        )
+
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = evaluate_answer_payload(long_payload(), object())
-    assert len(seen)>1 and all(item==seen[0] for item in seen)
+    assert len(seen) > 1 and all(item == seen[0] for item in seen)
     assert result["requirement_coverage"] == 0
 
 
@@ -325,10 +411,19 @@ def test_real_scope_stage_then_evaluation_keeps_procedure_without_document_suppo
 
 def test_partial_coverage_is_not_lost_and_followup_is_still_reported(fixed_scope):
     required = StandardRequirement(standard_answer_quote="ログを確認", requirement="ログ確認")
-    extra = StandardRequirement(standard_answer_quote="別の相談", requirement="履歴の出力", relevance="follow_up", relevance_reason="原質問にない追加相談")
-    fixed_scope.return_value = StandardAnswerScope(requirements=[required, extra, extra.model_copy(update={"requirement": "別日付の出力"})], excluded_case_data=[])
-    checks = [CoverageCheck(requirement_index=i, status="partial" if i == 1 else "missing", answer_quote="回答" if i == 1 else "") for i in (1, 2, 3)]
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output().model_copy(update={"coverage_checks": checks})):
+    extra = StandardRequirement(
+        standard_answer_quote="別の相談", requirement="履歴の出力", relevance="follow_up", relevance_reason="原質問にない追加相談"
+    )
+    fixed_scope.return_value = StandardAnswerScope(
+        requirements=[required, extra, extra.model_copy(update={"requirement": "別日付の出力"})], excluded_case_data=[]
+    )
+    checks = [
+        CoverageCheck(requirement_index=i, status="partial" if i == 1 else "missing", answer_quote="回答" if i == 1 else "")
+        for i in (1, 2, 3)
+    ]
+    with patch(
+        "rag_engine.evaluation.answer_eval.parse_text_response", return_value=output().model_copy(update={"coverage_checks": checks})
+    ):
         result = evaluate_answer_payload(payload(), object())
     # 指標は required だけの対応率。追加相談(follow_up)と全項目は参考に残す。
     assert result["requirement_coverage"] == 0.5
@@ -370,13 +465,16 @@ def _rendered_items_answer():
     def item(kind, text, **extra):
         return GroundedItem(kind=kind, text=text, evidence_id="E1", quote=text, **extra)
 
-    return render("結論です。", [
-        CheckedItem(item("rule", "対象は登録済みの利用者です。"), span("3.1 対象", 3)),
-        CheckedItem(item("operation", "利用者情報画面を開きます。"), span("3.2 利用者情報の変更", 4)),
-        CheckedItem(item("confirmation", "帳票の出力結果を確認します。"), span("4.1 帳票出力", 9)),
-        CheckedItem(item("operation", "保存ボタンを押す。"), span("3.2 利用者情報の変更", 5), quote_only=True),
-        CheckedItem(GroundedItem(kind="gap", text="取消の手順は資料にありません。")),
-    ])
+    return render(
+        "結論です。",
+        [
+            CheckedItem(item("rule", "対象は登録済みの利用者です。"), span("3.1 対象", 3)),
+            CheckedItem(item("operation", "利用者情報画面を開きます。"), span("3.2 利用者情報の変更", 4)),
+            CheckedItem(item("confirmation", "帳票の出力結果を確認します。"), span("4.1 帳票出力", 9)),
+            CheckedItem(item("operation", "保存ボタンを押す。"), span("3.2 利用者情報の変更", 5), quote_only=True),
+            CheckedItem(GroundedItem(kind="gap", text="取消の手順は資料にありません。")),
+        ],
+    )
 
 
 def test_rendered_headings_and_citations_do_not_block_passing(fixed_scope):
@@ -387,8 +485,14 @@ def test_rendered_headings_and_citations_do_not_block_passing(fixed_scope):
     lines = [line for line in answer.splitlines() if line.strip()]
     structural = [line for line in lines if is_structural_line(line)]
     assert structural == [
-        "確認できる内容", "根拠：manual.pdf p.3", "操作手順（3.2 利用者情報の変更）", "根拠：manual.pdf p.4",
-        "確認手順（4.1 帳票出力）", "根拠：manual.pdf p.9", "資料の記載（今回への適用は未確認）", "根拠：manual.pdf p.5",
+        "確認できる内容",
+        "根拠：manual.pdf p.3",
+        "操作手順（3.2 利用者情報の変更）",
+        "根拠：manual.pdf p.4",
+        "確認手順（4.1 帳票出力）",
+        "根拠：manual.pdf p.9",
+        "資料の記載（今回への適用は未確認）",
+        "根拠：manual.pdf p.5",
         "資料からは確認できない点",
     ]
     # 原文のみ提示の行は、決定的な原文照合を通った引用そのもの。モデルの主張ではないので監査対象にしない (#580)。
@@ -396,11 +500,15 @@ def test_rendered_headings_and_citations_do_not_block_passing(fixed_scope):
     assert claims[0] == "結論です。" and len(claims) == 5
 
     # 評価モデルは主張の段落だけを監査して返す。見出し・出典行には何も返さない。
-    evaluated = output().model_copy(update={
-        "claim_checks": [ClaimCheck(answer_quote=text, status="data_confirmation", source_id="", evidence_quote="", reason="確認案内")
-                         for text in claims],
-        "coverage_checks": [CoverageCheck(requirement_index=1, status="addressed", answer_quote=claims[0])],
-    })
+    evaluated = output().model_copy(
+        update={
+            "claim_checks": [
+                ClaimCheck(answer_quote=text, status="data_confirmation", source_id="", evidence_quote="", reason="確認案内")
+                for text in claims
+            ],
+            "coverage_checks": [CoverageCheck(requirement_index=1, status="addressed", answer_quote=claims[0])],
+        }
+    )
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=evaluated) as parse:
         result = evaluate_answer_payload({**payload(), "answer_text": answer}, object())
 
@@ -415,27 +523,48 @@ def test_generated_boilerplate_is_not_audited_as_a_claim():
     from rag_engine.evaluation.answer_eval import _answer_passages
     from rag_engine.generation.grounded import NEUTRAL_SUMMARY, UNVERIFIED_NOTE
 
-    answer = (NEUTRAL_SUMMARY + "\n\n確認できる内容\n\n・特典はQUOカード（5千円）です。条件は15百万円以上の契約実行です。"
-              + UNVERIFIED_NOTE + "\n根拠：info.pdf p.1")
-    assert [p["text"] for p in _answer_passages(answer)] == [
-        "・特典はQUOカード（5千円）です。", "条件は15百万円以上の契約実行です。"]
+    answer = (
+        NEUTRAL_SUMMARY
+        + "\n\n確認できる内容\n\n・特典はQUOカード（5千円）です。条件は15百万円以上の契約実行です。"
+        + UNVERIFIED_NOTE
+        + "\n根拠：info.pdf p.1"
+    )
+    assert [p["text"] for p in _answer_passages(answer)] == ["・特典はQUOカード（5千円）です。", "条件は15百万円以上の契約実行です。"]
 
 
 def test_claim_citing_the_chunk_id_instead_of_the_span_id_is_bound_by_its_verbatim_quote(fixed_scope):
     # 評価入力の根拠は片段 ID とチャンク ID の両方を持ち、モデルは取り違える。引用が原文どおりなら引用エラーにしない (#563)。
     from rag_engine.evaluation.answer_eval import _evidence_fragments
 
-    evidence = [{"id": "run:chunk-p1", "chunk_uid": "run:chunk-p1", "source": "fx.pdf",
-                 "text": "外貨サービス店 ✓ 対応言語は 18 種類です。 ✓ AMEX T/Cは日本国内購入分のみ"},
-                {"id": "run:chunk-p2", "chunk_uid": "run:chunk-p2", "source": "other.pdf", "text": "10 連休の窓口のご利用案内"}]
+    evidence = [
+        {
+            "id": "run:chunk-p1",
+            "chunk_uid": "run:chunk-p1",
+            "source": "fx.pdf",
+            "text": "外貨サービス店 ✓ 対応言語は 18 種類です。 ✓ AMEX T/Cは日本国内購入分のみ",
+        },
+        {"id": "run:chunk-p2", "chunk_uid": "run:chunk-p2", "source": "other.pdf", "text": "10 連休の窓口のご利用案内"},
+    ]
     span_id = next(_evidence_fragments(evidence))["evidence_id"]
     answer = "対応言語は18種類です。"
 
     def evaluated(evidence_id, quote, status="supported"):
-        return output().model_copy(update={
-            "claim_checks": [ClaimCheck(answer_quote=answer, answer_passage_id="A1", status=status, evidence_id=evidence_id,
-                                        source_id="fx.pdf", evidence_quote=quote, reason="本文と一致")],
-            "coverage_checks": [CoverageCheck(requirement_index=1, status="addressed", answer_quote=answer)]})
+        return output().model_copy(
+            update={
+                "claim_checks": [
+                    ClaimCheck(
+                        answer_quote=answer,
+                        answer_passage_id="A1",
+                        status=status,
+                        evidence_id=evidence_id,
+                        source_id="fx.pdf",
+                        evidence_quote=quote,
+                        reason="本文と一致",
+                    )
+                ],
+                "coverage_checks": [CoverageCheck(requirement_index=1, status="addressed", answer_quote=answer)],
+            }
+        )
 
     def run(evidence_id, quote):
         with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=evaluated(evidence_id, quote)):
@@ -467,16 +596,40 @@ def test_table_and_ocr_quotes_and_file_name_sources_are_verified_like_the_answer
     # 評価モデルは表の tag を外した引用、OCR の改行を詰めた引用、出典のファイル名を返す。回答生成と同じ基準で照合する (#567)。
     table = "<table><tbody><tr><td>対象投資額</td><td>毎年 80 万円</td></tr><tr><td>優遇期間</td><td>最長 5 年間</td></tr></tbody></table>"
     figure = "18\n歳以降\n（注\n1\n）\nは、\n払い出しが可能となります。"
-    evidence = [{"id": "nisa:p1", "chunk_uid": "nisa:p1", "source": "nisa.pdf", "text": "概要\n" + table + "\n" + figure,
-                 "children": [{"id": "nisa:c1", "chunk_uid": "nisa:c1", "source": "nisa.pdf", "text": table}]},
-                {"id": "other:p1", "chunk_uid": "other:p1", "source": "other.pdf", "text": "<table><tr><td>対象投資額</td><td>毎年 80 万円</td></tr></table>"}]
+    evidence = [
+        {
+            "id": "nisa:p1",
+            "chunk_uid": "nisa:p1",
+            "source": "nisa.pdf",
+            "text": "概要\n" + table + "\n" + figure,
+            "children": [{"id": "nisa:c1", "chunk_uid": "nisa:c1", "source": "nisa.pdf", "text": table}],
+        },
+        {
+            "id": "other:p1",
+            "chunk_uid": "other:p1",
+            "source": "other.pdf",
+            "text": "<table><tr><td>対象投資額</td><td>毎年 80 万円</td></tr></table>",
+        },
+    ]
     answer = "対象投資額は毎年80万円です。"
 
     def run(evidence_id, source_id, quote):
-        evaluated = output().model_copy(update={
-            "claim_checks": [ClaimCheck(answer_quote=answer, answer_passage_id="A1", status="supported", evidence_id=evidence_id,
-                                        source_id=source_id, evidence_quote=quote, reason="表と一致")],
-            "coverage_checks": [CoverageCheck(requirement_index=1, status="addressed", answer_quote=answer)]})
+        evaluated = output().model_copy(
+            update={
+                "claim_checks": [
+                    ClaimCheck(
+                        answer_quote=answer,
+                        answer_passage_id="A1",
+                        status="supported",
+                        evidence_id=evidence_id,
+                        source_id=source_id,
+                        evidence_quote=quote,
+                        reason="表と一致",
+                    )
+                ],
+                "coverage_checks": [CoverageCheck(requirement_index=1, status="addressed", answer_quote=answer)],
+            }
+        )
         with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=evaluated):
             result = evaluate_answer_payload({**payload(), "answer_text": answer, "evidence_items": evidence}, object())
         return result["claim_checks"][0]
@@ -497,20 +650,32 @@ def test_quote_only_line_with_several_sentences_is_one_passage():
     # 表の引用は複数の文を含む。引用の途中の「。」で切ると、半端な段落が監査未完了になる (#567)。
     from rag_engine.generation.operation_audit import answer_passages
 
-    text = ("結論です。続きです。\n\n資料の記載（今回への適用は未確認）\n\n"
-            "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」\n根拠：nisa.pdf p.1\n1. 「保存を押す。」")
+    text = (
+        "結論です。続きです。\n\n資料の記載（今回への適用は未確認）\n\n"
+        "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」\n根拠：nisa.pdf p.1\n1. 「保存を押す。」"
+    )
     assert [p["text"] for p in answer_passages(text)] == [
-        "結論です。", "続きです。", "資料の記載（今回への適用は未確認）",
+        "結論です。",
+        "続きです。",
+        "資料の記載（今回への適用は未確認）",
         "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」",
-        "根拠：nisa.pdf p.1", "1. 「保存を押す。」"]
+        "根拠：nisa.pdf p.1",
+        "1. 「保存を押す。」",
+    ]
 
 
 def test_verbatim_quote_lines_are_limited_to_the_quote_only_section():
     # 他の節の「…」で始まる行はモデルの言い換えであり得るので、監査対象に残す (#580)。
     from rag_engine.evaluation.answer_eval import _answer_passages
 
-    answer = ("結論です。\n\n確認できる内容\n\n・「保存」を押すと登録されます。\n・「これはモデルが書いた説明です。」\n根拠：m.pdf p.1\n\n"
-              "資料の記載（今回への適用は未確認）\n\n・「※到着後、約 1 週間で登録完了となります。」\n根拠：m.pdf p.1\n・「自動支払依頼書記入例」\n\n"
-              "資料からは確認できない点\n\n・「取消」の手順は資料にありません。")
+    answer = (
+        "結論です。\n\n確認できる内容\n\n・「保存」を押すと登録されます。\n・「これはモデルが書いた説明です。」\n根拠：m.pdf p.1\n\n"
+        "資料の記載（今回への適用は未確認）\n\n・「※到着後、約 1 週間で登録完了となります。」\n根拠：m.pdf p.1\n・「自動支払依頼書記入例」\n\n"
+        "資料からは確認できない点\n\n・「取消」の手順は資料にありません。"
+    )
     assert [p["text"] for p in _answer_passages(answer)] == [
-        "結論です。", "・「保存」を押すと登録されます。", "・「これはモデルが書いた説明です。」", "・「取消」の手順は資料にありません。"]
+        "結論です。",
+        "・「保存」を押すと登録されます。",
+        "・「これはモデルが書いた説明です。」",
+        "・「取消」の手順は資料にありません。",
+    ]

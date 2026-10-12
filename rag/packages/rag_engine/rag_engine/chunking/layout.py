@@ -35,6 +35,7 @@ from rag_engine.chunking.records import (
     _visual_group_key,
 )
 
+
 def _is_excluded_page_boilerplate_record(
     record: dict[str, Any],
     metadata_by_page: dict[int, dict[str, Any]],

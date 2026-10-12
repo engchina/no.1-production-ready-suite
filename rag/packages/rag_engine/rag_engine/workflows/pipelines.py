@@ -1,9 +1,17 @@
 """個別サービスを同期で組み合わせる ingestion / query pipeline。"""
+
 from dataclasses import replace
 from time import monotonic
 from rag_engine.models.contracts import (
-    ParseRequest, ChunkRequest, IndexRequest, IndexResult, SearchRequest,
-    GenerationRequest, AnswerResult, TraceStep, StageError,
+    ParseRequest,
+    ChunkRequest,
+    IndexRequest,
+    IndexResult,
+    SearchRequest,
+    GenerationRequest,
+    AnswerResult,
+    TraceStep,
+    StageError,
 )
 from rag_engine.chunking import ChunkingConfig
 from rag_engine.ports import Parser, Chunker, Indexer, Retriever, Generator, Reranker, QueryPlanner
@@ -26,6 +34,7 @@ def _stage(name, trace, operation):
 
 class IngestionPipeline:
     """解析・分割・索引の順に実行する。失敗した後の工程は呼び出さない。"""
+
     def __init__(self, parser: Parser, chunker: Chunker, indexer: Indexer):
         self.parser, self.chunker, self.indexer = ParsingService(parser), chunker, IndexingService(indexer)
 
@@ -42,7 +51,10 @@ class IngestionPipeline:
 
 class QueryPipeline:
     """質問準備・検索・回答を組み合わせる。外部実装を構築時に注入する。"""
-    def __init__(self, retriever: Retriever, generator: Generator, *, planner: QueryPlanner | None = None, reranker: Reranker | None = None):
+
+    def __init__(
+        self, retriever: Retriever, generator: Generator, *, planner: QueryPlanner | None = None, reranker: Reranker | None = None
+    ):
         self.retriever = RetrievalService(retriever, reranker)
         self.generator = GenerationService(generator)
         self.planner = planner

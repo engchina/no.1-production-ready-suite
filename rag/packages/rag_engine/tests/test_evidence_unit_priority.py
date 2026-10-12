@@ -1,4 +1,5 @@
 """原文予算の配分で、最上位候補と同じ機能ユニットの候補を先に扱う (#665)。"""
+
 from dataclasses import replace
 
 from rag_engine.generation.answering import AnswerRecord
@@ -7,9 +8,21 @@ from fictional_examples import ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, S
 
 
 def _parent(index, path, source="月次締めエラー一覧.pdf", text=None):
-    return AnswerRecord(id=f"p{index}", engine="docling", engine_label="Docling", page=index, seq_no=index, category="Chunk",
-                        text=text or f"{path[-1]} の本文 {index}。" * 40, source=source, chunk_level="parent", chunk_id=f"p{index}",
-                        chunk_uid=f"uid:p{index}", source_run_id="run", metadata={"section_path": list(path)})
+    return AnswerRecord(
+        id=f"p{index}",
+        engine="docling",
+        engine_label="Docling",
+        page=index,
+        seq_no=index,
+        category="Chunk",
+        text=text or f"{path[-1]} の本文 {index}。" * 40,
+        source=source,
+        chunk_level="parent",
+        chunk_id=f"p{index}",
+        chunk_uid=f"uid:p{index}",
+        source_run_id="run",
+        metadata={"section_path": list(path)},
+    )
 
 
 def test_same_unit_candidates_follow_the_top_candidate_and_keep_relative_order():
@@ -43,16 +56,24 @@ def test_budget_is_spent_on_the_same_unit_before_other_documents():
 def _native(index, path, text, source="経理手順.pdf"):
     """解析本文の範囲（native_text_ranges）を持つ親。text 全体が原文。"""
     record = _parent(index, path, source=source, text=text)
-    record.metadata.setdefault("layout", {})["native_text_ranges"] = [{"record_id": f"r{index}", "page": index, "start": 0, "end": len(text)}]
+    record.metadata.setdefault("layout", {})["native_text_ranges"] = [
+        {"record_id": f"r{index}", "page": index, "start": 0, "end": len(text)}
+    ]
     return record
 
 
 def test_top_unit_is_the_first_candidate_whose_native_text_mentions_the_target():
     """生成説明の画面例の値だけが質問の語に一致する候補は起点にしない (#730)。"""
     heading = "Ａシステム管理-(6)パラメータ設定\n"
-    described = _parent(1, ["Ａシステム管理-(6)パラメータ設定"], source="システム管理.pdf",
-                        text=heading + "回答用本文: 更新確認ダイアログ。画面例では締め対象年月=令和6年12月、出荷予定年月=令和6年9月。")
-    described.metadata.setdefault("layout", {})["native_text_ranges"] = [{"record_id": "r1", "page": 1, "start": 0, "end": len(heading)}]  # 生成説明は原文ではない
+    described = _parent(
+        1,
+        ["Ａシステム管理-(6)パラメータ設定"],
+        source="システム管理.pdf",
+        text=heading + "回答用本文: 更新確認ダイアログ。画面例では締め対象年月=令和6年12月、出荷予定年月=令和6年9月。",
+    )
+    described.metadata.setdefault("layout", {})["native_text_ranges"] = [
+        {"record_id": "r1", "page": 1, "start": 0, "end": len(heading)}
+    ]  # 生成説明は原文ではない
     native = _native(2, ["Ⅴ．締め処理"], "出荷予定年月は予定月変更ボタンで変更します。")
     sibling = _native(3, ["Ⅴ．締め処理"], "①処理年月を確認します。")
     ordered = [(r.id, r) for r in (described, native, sibling)]
@@ -74,6 +95,7 @@ def test_native_ranges_of_later_candidates_are_reserved_in_the_budget():
 def test_reserve_follows_the_order_after_definition_sort():
     """定義質問で候補が並べ替わっても、取り置きは並べ替え後の後続候補の原文範囲で数える (#744)。"""
     step = "①伝票を選びます。②内容を確認します。③保存ボタンを押します。④一覧に戻ります。⑤終了します。"
+
     def native_pair(index, marker):
         text = (step * 10)[:500] + "\n" + ((step * 10)[:480] + marker)
         record = _parent(index, ["概要"], source=f"手順{index}.pdf", text=text)
@@ -82,9 +104,11 @@ def test_reserve_follows_the_order_after_definition_sort():
             {"record_id": f"r{index}b", "page": index, "start": 501, "end": len(text)},
         ]
         return record
+
     first = native_pair(1, "⑥締め処理を行います。")
-    defined = _parent(2, ["用語"], source="用語集.pdf",
-                      text="「予定月」とは、出荷を予定している年月です。" + "回答用本文: 画面の説明。" * 200)
+    defined = _parent(
+        2, ["用語"], source="用語集.pdf", text="「予定月」とは、出荷を予定している年月です。" + "回答用本文: 画面の説明。" * 200
+    )
     last = native_pair(3, "⑥予定月変更ボタンを押します。")
     spans = evidence_spans("「予定月」とは何ですか", [first, defined, last], budget=2700)
 
@@ -115,9 +139,22 @@ def test_span_page_end_covers_the_parent_range_until_the_page_is_pinned():
     assert all(s["page"] == 3 and s["page_end"] == 7 for s in spans)
 
     # anchor の child で頁を確定できた span は、親が 3〜7 頁でもその 1 頁に閉じる。
-    child = AnswerRecord(id="c3", engine="docling", engine_label="Docling", page=5, seq_no=1, category="Chunk",
-                         text=body, source=parent.source, chunk_level="child", chunk_id="c3", chunk_uid="uid:c3",
-                         parent_chunk_uid="uid:p3", source_run_id="run", metadata={})
+    child = AnswerRecord(
+        id="c3",
+        engine="docling",
+        engine_label="Docling",
+        page=5,
+        seq_no=1,
+        category="Chunk",
+        text=body,
+        source=parent.source,
+        chunk_level="child",
+        chunk_id="c3",
+        chunk_uid="uid:c3",
+        parent_chunk_uid="uid:p3",
+        source_run_id="run",
+        metadata={},
+    )
     pinned = evidence_spans("ユーザ登録の操作手順", [parent], budget=2400, anchors=[child])
 
     assert any(s["page"] == 5 and s["page_end"] == 5 for s in pinned)

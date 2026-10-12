@@ -6,6 +6,7 @@
 分かっているか（already_known）・結論がその値で分かれるか（decides）だけを書かせ、対応は規則で決める。
 LLM は差し替える。
 """
+
 from dataclasses import replace
 import itertools
 import unittest
@@ -56,8 +57,9 @@ class SettleConfirmationItemsTest(unittest.TestCase):
 
     def test_missing_facts_are_filled_conservatively(self):
         # 文字列だけ・#1453 の種類（kind）だけの項目: 種類から写し、無ければシステムの値。未確認・結論を分ける。
-        self.assertEqual(confirmation_item_facts("ログ"),
-                         {"text": "ログ", "who_can_answer": "system", "already_known": False, "decides": True})
+        self.assertEqual(
+            confirmation_item_facts("ログ"), {"text": "ログ", "who_can_answer": "system", "already_known": False, "decides": True}
+        )
         self.assertEqual(confirmation_item_facts({"text": "ロール", "kind": "user_condition"})["who_can_answer"], "user")
         self.assertEqual(confirmation_item_facts({"text": "ログ", "kind": "environment"})["who_can_answer"], "system")
         self.assertEqual(confirmation_item_facts({"text": "x"})["who_can_answer"], "system")
@@ -95,10 +97,15 @@ class EnvelopeFromFactsTest(unittest.TestCase):
     def outcome_of(self, items, **options):
         settled = settle_confirmation_items(items, **options)
         envelope = build_envelope(
-            requests=(), reviews=[], items=[self.MATCHED], gaps=(),
+            requests=(),
+            reviews=[],
+            items=[self.MATCHED],
+            gaps=(),
             confirmations=[*(f"実データ: {text}" for text in settled.system), *(f"資料: {text}" for text in settled.document)],
-            user_conditions=settled.user, document_items=settled.document,
-            external_data_required=requires_environment_data(settled, items=items, external_data_required=False))
+            user_conditions=settled.user,
+            document_items=settled.document,
+            external_data_required=requires_environment_data(settled, items=items, external_data_required=False),
+        )
         return envelope["outcome"]
 
     def test_outcome_by_who_can_answer(self):
@@ -127,9 +134,14 @@ RESTORE_SYSTEM = "復元したいデータのシステム(どのシステムの�
 RESTORE_LEDGER = "対象システムのシステム台帳「担当部署」列の値(承認を求める部署を決める)"
 RESTORE_APPROVER = "対象システムを担当する部署の承認者が誰か(組織規程に定める部署ごとの承認者。どの承認者に承認を求めるかが決まる)"
 E1023_ITEMS = [
-    fact("エラーが出た時刻の認証ログ（auth.log）の該当行が「token expired」か「permission denied」か"
-         "（原因 A と原因 B のどちらに当たるかを決める）", "system"),
-    fact("操作している利用者が「ポータル管理者」ロールを持つか（認証ログを自分で確認できるか、確認を依頼する必要があるかを決める）", "user"),
+    fact(
+        "エラーが出た時刻の認証ログ（auth.log）の該当行が「token expired」か「permission denied」か"
+        "（原因 A と原因 B のどちらに当たるかを決める）",
+        "system",
+    ),
+    fact(
+        "操作している利用者が「ポータル管理者」ロールを持つか（認証ログを自分で確認できるか、確認を依頼する必要があるかを決める）", "user"
+    ),
 ]
 
 
@@ -192,9 +204,20 @@ V2_ABOLISHED = "第2版の施行日は 2026年4月1日で、第1版は第2版の
 
 def versioned(index, text, title, source, *, superseded=False):
     metadata = {"section_path": [title, "出力の手順"], **({"document_superseded": True} if superseded else {})}
-    return AnswerRecord(id=f"r{index}", engine="docling", engine_label="Docling", page=1, seq_no=index + 1,
-                        category="Chunk", text=text, source=source, chunk_level="parent", chunk_id=f"r{index}",
-                        source_run_id="run", metadata=metadata)
+    return AnswerRecord(
+        id=f"r{index}",
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=index + 1,
+        category="Chunk",
+        text=text,
+        source=source,
+        chunk_level="parent",
+        chunk_id=f"r{index}",
+        source_run_id="run",
+        metadata=metadata,
+    )
 
 
 class SupersededEvidenceTest(unittest.TestCase):
@@ -202,8 +225,7 @@ class SupersededEvidenceTest(unittest.TestCase):
         v2 = [{"evidence_id": "E2", "text": V2_STEP, "section_path": [V2_TITLE], "source": "guide-v2.pdf"}]
         if abolished:
             v2.append({"evidence_id": "E3", "text": V2_ABOLISHED, "section_path": [V2_TITLE], "source": "guide-v2.pdf"})
-        v1 = {"evidence_id": "E1", "text": V1_STEP, "section_path": [V1_TITLE], "source": "guide-v1.pdf",
-              "superseded": superseded}
+        v1 = {"evidence_id": "E1", "text": V1_STEP, "section_path": [V1_TITLE], "source": "guide-v1.pdf", "superseded": superseded}
         return [*v2, v1]
 
     def test_version_abolished_by_the_current_evidence(self):
@@ -217,9 +239,11 @@ class SupersededEvidenceTest(unittest.TestCase):
         self.assertEqual(grounded.superseded_evidence_ids("地域別集計表を出力する手順は？", self._spans(abolished=False)), set())
 
     def test_questions_about_versions_keep_the_old_version(self):
-        for question in ("地域別集計表の出力手順は、第1版と第2版で何が変わりましたか？",
-                         "第1版の地域別集計表の締め日は何日でしたか？",
-                         "今の承認規程と 2023 年度版の承認規程では、期限はどう変わりましたか？"):
+        for question in (
+            "地域別集計表の出力手順は、第1版と第2版で何が変わりましたか？",
+            "第1版の地域別集計表の締め日は何日でしたか？",
+            "今の承認規程と 2023 年度版の承認規程では、期限はどう変わりましたか？",
+        ):
             with self.subTest(question):
                 self.assertEqual(grounded.superseded_evidence_ids(question, self._spans(superseded=True)), set())
 
@@ -227,8 +251,7 @@ class SupersededEvidenceTest(unittest.TestCase):
 def _run(model, ctx, question, **settings):
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
-        return synthesize_grounded_answer(question, ctx, replace(get_settings(), **settings),
-                                          image_prompt_mode="text_only").response
+        return synthesize_grounded_answer(question, ctx, replace(get_settings(), **settings), image_prompt_mode="text_only").response
 
 
 def rule(eid, text, kind="rule"):
@@ -238,12 +261,22 @@ def rule(eid, text, kind="rule"):
 class GroundedConfirmationFactsTest(unittest.TestCase):
     def test_abolished_version_is_quote_only_and_not_asked(self):
         question = "地域別集計表を出力する手順を教えてください。"
-        ctx = context(versioned(0, V2_STEP, V2_TITLE, "guide-v2.pdf"), versioned(1, V2_ABOLISHED, V2_TITLE, "guide-v2.pdf"),
-                      versioned(2, V1_STEP, V1_TITLE, "guide-v1.pdf"))
+        ctx = context(
+            versioned(0, V2_STEP, V2_TITLE, "guide-v2.pdf"),
+            versioned(1, V2_ABOLISHED, V2_TITLE, "guide-v2.pdf"),
+            versioned(2, V1_STEP, V1_TITLE, "guide-v1.pdf"),
+        )
         eids = ids(ctx, question)
-        value = {**draft(rule(eids[V2_STEP], V2_STEP, "operation"), rule(eids[V2_ABOLISHED], V2_ABOLISHED),
-                         rule(eids[V1_STEP], V1_STEP, "operation"), summary=""),
-                 "external_data_required": True, "external_data_items": [fact(VERSION, "system")]}
+        value = {
+            **draft(
+                rule(eids[V2_STEP], V2_STEP, "operation"),
+                rule(eids[V2_ABOLISHED], V2_ABOLISHED),
+                rule(eids[V1_STEP], V1_STEP, "operation"),
+                summary="",
+            ),
+            "external_data_required": True,
+            "external_data_items": [fact(VERSION, "system")],
+        }
         reviews = [(index, "supported", "matched", "") for index in range(3)]
         response = _run(FakeModel([value], [audit(*reviews, requests=[("Q1", "addressed")])]), ctx, question)
         envelope = response.envelope
@@ -267,8 +300,11 @@ class GroundedConfirmationFactsTest(unittest.TestCase):
         text = "無効にする前に、所属部署の部門長の承認を得てください。"
         ctx = context(versioned(0, text, "アカウントの無効化", "portal-operations-manual.pdf"))
         eids = ids(ctx, question)
-        value = {**draft(rule(eids[text], text), summary=""), "external_data_required": True,
-                 "external_data_items": [fact(APPROVAL, "system")]}
+        value = {
+            **draft(rule(eids[text], text), summary=""),
+            "external_data_required": True,
+            "external_data_items": [fact(APPROVAL, "system")],
+        }
         model = lambda: FakeModel([value], [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])])  # noqa: E731
         self.assertEqual(_run(model(), ctx, question).envelope["outcome"], "needs_environment_data")
         response = _run(model(), ctx, question, known_conditions=(("部門長の承認", "はい"),))

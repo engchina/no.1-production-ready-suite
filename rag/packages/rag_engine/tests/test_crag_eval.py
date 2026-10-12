@@ -28,8 +28,9 @@ GOLDSET = PROJECT_ROOT / "eval" / "crag_goldset.json"
 RETRIEVAL_DATASET = PROJECT_ROOT / "eval" / "retrieval_representative_questions.json"
 # 評価データは顧客の問い合わせ由来なので repo 外にある。ローカルにある環境だけで照合する。
 needs_goldset = pytest.mark.skipif(not GOLDSET.is_file(), reason="ローカルの eval/crag_goldset.json がない")
-needs_retrieval_dataset = pytest.mark.skipif(not RETRIEVAL_DATASET.is_file(),
-                                             reason="ローカルの eval/retrieval_representative_questions.json がない")
+needs_retrieval_dataset = pytest.mark.skipif(
+    not RETRIEVAL_DATASET.is_file(), reason="ローカルの eval/retrieval_representative_questions.json がない"
+)
 
 
 @needs_goldset
@@ -126,11 +127,7 @@ def test_parent_child_rag_eval_scores_parent_child_and_page_hits():
 def test_retrieval_representative_dataset_has_30_to_50_cases_and_diverse_tags():
     cases = load_rag_eval_dataset(RETRIEVAL_DATASET)
     payload = json.loads(RETRIEVAL_DATASET.read_text(encoding="utf-8"))
-    tags = {
-        tag
-        for case in payload["cases"]
-        for tag in case.get("tags", [])
-    }
+    tags = {tag for case in payload["cases"] for tag in case.get("tags", [])}
 
     assert 30 <= len(cases) <= 50
     assert len(cases) == 40

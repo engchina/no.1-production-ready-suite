@@ -1,4 +1,5 @@
 """回答文と引用本文に対する決定的な判定。LLM を呼ばず、入力を変更しない。"""
+
 from __future__ import annotations
 
 import re
@@ -65,12 +66,11 @@ def answer_passages(text: str) -> list[dict[str, str]]:
     """
     result = []
     for line in text.split("\n"):
-        pieces = [line] if _QUOTE_ONLY_LINE.fullmatch(line) else [
-            line[begin:end] for begin, end in sentence_ranges(line)]
+        pieces = [line] if _QUOTE_ONLY_LINE.fullmatch(line) else [line[begin:end] for begin, end in sentence_ranges(line)]
         for piece in pieces:
             value = piece.strip()
             for start in range(0, len(value), 600):
-                result.append({"id": f"A{len(result) + 1}", "text": value[start:start + 600]})
+                result.append({"id": f"A{len(result) + 1}", "text": value[start : start + 600]})
     return result
 
 
@@ -83,7 +83,10 @@ def is_heading(text: str) -> bool:
         return True
     if re.fullmatch(r"(?:確認|変更|操作|設定)(?:手順|方法)|結果の見方|未確定の点|確認が必要な点|注意事項", text.strip()):
         return True
-    if re.fullmatch(r"\s*(?:#{1,6}\s+[^。]{1,35}|【[^】]{1,25}】|\*\*[^*。]{1,30}\*\*[:：]?|[^。\n:：]{0,28}(?:内容|点|事項|操作|手順|条件|規則|結果|確認)(?:[（(][^）)\n]{1,20}[）)])?[:：]|(?:操作)?手順|確認事項|注意事項|関連操作|未確定事項)\s*", text):
+    if re.fullmatch(
+        r"\s*(?:#{1,6}\s+[^。]{1,35}|【[^】]{1,25}】|\*\*[^*。]{1,30}\*\*[:：]?|[^。\n:：]{0,28}(?:内容|点|事項|操作|手順|条件|規則|結果|確認)(?:[（(][^）)\n]{1,20}[）)])?[:：]|(?:操作)?手順|確認事項|注意事項|関連操作|未確定事項)\s*",
+        text,
+    ):
         return True
     return heading_phrase(text) is not None or is_lead_in(text)
 
@@ -97,8 +100,7 @@ _HEADING_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)]\s*$")
 # 「…」の語（「略号「運」の意味」）。中の「は」「が」は言い切りの助詞に数えない。
 _HEADING_QUOTED = re.compile(r"[「『][^「」『』\n]{1,40}[」』]")
 # 数量（「30 分」「10 年」。主張の値）。年度（「2026年度」）・行・頁の番号は数えない。
-_HEADING_QUANTITY = re.compile(
-    r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年(?!度)|名|人|GB|MB)")
+_HEADING_QUANTITY = re.compile(r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年(?!度)|名|人|GB|MB)")
 # 見出しの語に残してよい番号（章・節の番号と年度）。ほかの数字（値の「3 点」「SYS-103」）を含む行は主張のまま。
 _HEADING_NUMBERED_NAME = re.compile(r"第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+\s*年度")
 # 見出しの名詞句の終わりの語（項目・区分・資料の名前。値の名前「運行管理課長」「極秘」では終わらない）。
@@ -107,7 +109,8 @@ _HEADING_END = re.compile(
     r"|ガイド|文書|内容|事項|点|条件|規則|ルール|手順|方法|手段|流れ|結果|定め|扱い|対応|範囲|対象|期限|期間|時間帯"
     r"|保守枠|日程|重要度|機密区分|区分|部署|担当|承認者|連絡先|窓口|代理|意味|正式名|名称|略号|関係|つながり"
     # 分岐の見出し（「重要度 C のシステムで障害が起きたとき」）と、問いの形の見出し（「承認者がどう決まるか」）。
-    r"|とき|場合|か)$")
+    r"|とき|場合|か)$"
+)
 # 番号（「1.」「（2）」）と箇条書きの印（「- 」「・」。強調の「**」は印に数えない）。番号つき・箇条書きの行は段落
 # だけでは決めず、次の行がその下の内容のときだけ見出し（``list_heading_lines``。#1481 / #1482 / #1486）。番号・
 # 箇条書きの行が続く一覧の項目は主張のまま。
@@ -128,21 +131,27 @@ _HEADING_CASE_CLAUSE = re.compile(r"[がを][^はがを、。]{1,15}?(?:とき|�
 # 導入の文の先頭の接続の語（「そのため、作業できる時間帯は次のとおりです。」。この後の「、」は主語の区切りに数えない。#1481）。
 _LEAD_IN_CONNECTIVE = re.compile(
     r"^(?:そのため|このため|したがって|従って|なお|また|ただし|つまり|具体的には|結果として|以上から|以上より|以上のことから)"
-    r"[、，,]\s*")
+    r"[、，,]\s*"
+)
 # 以降の箇条書きを導くだけの導入の文（「根拠は次のとおりです。」「以下に示します。」）。
 _LEAD_IN = re.compile(
     r"(?P<subject>[^。！？!?\n]{1,24}?)(?:は|が)、?\s*(?:次|以下)の(?:とおり|通り)(?:です|となります|になります|でした)?[。．:：]?"
-    r"|(?:(?P<object>[^。！？!?\n]{1,24}?)を)?(?:次|以下)に(?:示し|まとめ|挙げ|整理し)ます[。．:：]?")
+    r"|(?:(?P<object>[^。！？!?\n]{1,24}?)を)?(?:次|以下)に(?:示し|まとめ|挙げ|整理し)ます[。．:：]?"
+)
 # 利用者の答え・質問への礼の定型の文（「ご回答ありがとうございます。」）。
-_COURTESY = re.compile(
-    r"(?:ご(?:回答|返答|返信|連絡|質問)|お問い合わせ|お答え)(?:いただき)?、?ありがとうございます[。．!！]?")
+_COURTESY = re.compile(r"(?:ご(?:回答|返答|返信|連絡|質問)|お問い合わせ|お答え)(?:いただき)?、?ありがとうございます[。．!！]?")
 
 
 def _heading_note_ok(note: str) -> bool:
     """見出しの注記の括弧が、言い切り・操作・数量を含まない補足か（「（承認者は人事部長です）」は主張）。"""
     outside = _HEADING_QUOTED.sub(" ", note)
-    return ("。" not in note and not _SENTENCE_END.search(note) and not is_operation_instruction(note)
-            and not _HEADING_QUANTITY.search(note) and "は" not in outside)
+    return (
+        "。" not in note
+        and not _SENTENCE_END.search(note)
+        and not is_operation_instruction(note)
+        and not _HEADING_QUANTITY.search(note)
+        and "は" not in outside
+    )
 
 
 def heading_phrase(text: str) -> str | None:
@@ -213,11 +222,10 @@ def _heading_value(text: str) -> tuple[str, str] | None:
     while match := _HEADING_NOTE.search(value):
         if not _heading_note_ok(match.group("note")):
             return None
-        value = value[:match.start()].strip()
+        value = value[: match.start()].strip()
     if not value or len(value) > 30 or re.search(r"[。．！？!?、,，:：]", value):
         return None
-    if _SENTENCE_END.search(value) or is_operation_instruction(value) or re.search(
-            r"[0-9０-９]", _HEADING_NUMBERED_NAME.sub(" ", value)):
+    if _SENTENCE_END.search(value) or is_operation_instruction(value) or re.search(r"[0-9０-９]", _HEADING_NUMBERED_NAME.sub(" ", value)):
         return None
     outside = _HEADING_QUOTED.sub(" ", value)
     if "は" in outside:
@@ -252,14 +260,15 @@ _CITATION_LABEL = re.compile(
     # 要素の定位子のラベル（#1370。「*Locator*: `doc:…/page:3/el:12`」。#1330 の要素の定位子）。
     r"|locator|ロケータ|ロケーター|定位子)"
     r"\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?",
-    re.I)
+    re.I,
+)
 # Markdown の強調（「**根拠**：…」「*Locator*:」のラベル。出典の判定だけで外す。#1370 で斜体の `*` も外す）。
 _EMPHASIS = re.compile(r"\*{1,2}|__|`")
 # 根拠の ID の括弧（【証拠 ID: 03ac…:1】・〔証拠 ID: 07e8…:5〕・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】。
 # 〔〕［］[] は #1370）。
 _EVIDENCE_REF = re.compile(
-    r"[【〔［\[]\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}[】〕］\]]",
-    re.I)
+    r"[【〔［\[]\s*(?:証拠|根拠|出典|evidence|source)(?:\s*_?(?:ID|id))?\s*[:：]?[\s0-9A-Za-z:_\-,，、…①-⑳]{0,200}[】〕］\]]", re.I
+)
 _TITLE_QUOTE = re.compile(r"[「『]([^「」『』\n]{1,80})[」』]")
 _DOCUMENT_TITLE = re.compile(r"手順書|マニュアル|ガイド|規程|規定|資料|文書|メモ|第\s*[0-9０-９]+\s*版")
 _SECTION_REF = re.compile(r"(?:第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+(?:\.[0-9０-９]+)*[.．]\s*)[^。\n]{0,30}")
@@ -272,14 +281,17 @@ _TABLE_ROW = re.compile(r"\|.*\|")
 _MARKUP_ONLY = re.compile(r"[*_`>#|~\-\s]+")
 _DOCUMENT_MARK = re.compile(
     r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b|\bpage\b|\bp\.\s*\d|\bpp\.|ページ|頁|\bsection\b|\bsheet\b|シート|第\s*[0-9０-９]+\s*(?:章|節|条|項)",
-    re.I)
+    re.I,
+)
 _BRACKETED = re.compile(r"(?:[【\[（(][^】\]）)\n]{1,200}[】\]）)][\s、,，]*)+")
 _BRACKET_PART = re.compile(r"[【\[（(]([^】\]）)\n]{1,200})[】\]）)]")
 _LINK_LINE = re.compile(r"(?:\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)[\s、,，]*)+|https?://\S+")
 _SENTENCE_END = re.compile(r"(?:ます|ません|です|でした|ました|ください|ない|無い|ある|する|できる|れる|った|いた|した|だ)[。．.!！]?$")
 # 後ろの注記の括弧（「（はい／いいえ）」「【clarification: target】」）は許す (#1317)。
 _QUESTION = re.compile(r".*[？?]\s*(?:[（(【][^）)】\n]{1,40}[）)】]\s*)*。?")
-_INFO_REQUEST = re.compile(r".*(?:教えてください|お知らせください|お教えください|お聞かせください|ご回答ください|お答えください|確認させてください)[。．!！]?")
+_INFO_REQUEST = re.compile(
+    r".*(?:教えてください|お知らせください|お教えください|お聞かせください|ご回答ください|お答えください|確認させてください)[。．!！]?"
+)
 _BUNDLED_CLAIM = re.compile(r"ますが|ですが|ましたが|ませんが|ものの|けれど|けど|ただし")
 
 
@@ -290,14 +302,20 @@ def is_table_rule(text: str) -> bool:
 
 def table_header_lines(text: str) -> set[str]:
     """Markdown の表の見出しの行（区切りの行の直前の、短い語だけのセルの行）。表の本文の行は主張のまま (#1317)。"""
+
     def header_cell(cell: str) -> bool:
         value = _EMPHASIS.sub("", cell).strip()
         return 0 < len(value) <= 20 and "。" not in value and not _SENTENCE_END.search(value) and not is_operation_instruction(value)
 
     lines = [line.strip() for line in text.split("\n")]
-    return {line for line, following in zip(lines, lines[1:], strict=False)
-            if _TABLE_ROW.fullmatch(line) and "|" in following and is_table_rule(following)
-            and all(header_cell(cell) for cell in line.strip("|").split("|"))}
+    return {
+        line
+        for line, following in zip(lines, lines[1:], strict=False)
+        if _TABLE_ROW.fullmatch(line)
+        and "|" in following
+        and is_table_rule(following)
+        and all(header_cell(cell) for cell in line.strip("|").split("|"))
+    }
 
 
 def _is_reference_only(value: str) -> bool:
@@ -354,7 +372,7 @@ def _is_document_location(value: str) -> bool:
         location = match.group(1)
         if not _DOCUMENT_MARK.search(location) or _SENTENCE_END.search(location) or is_operation_instruction(location):
             break
-        rest, found = rest[:match.start()].strip(), True
+        rest, found = rest[: match.start()].strip(), True
     if not found or not rest or len(rest) > 80 or "。" in rest:
         return False
     if _SENTENCE_END.search(rest) or is_operation_instruction(rest):
@@ -401,7 +419,8 @@ def is_question_to_user(text: str) -> bool:
 # の同じ事例で確かめる。
 _GUIDE_NOT_FOUND = re.compile(
     r"(?:[^。:：\n]{1,8}[:：]\s*)?(?:なお|また|ただし)?[、,]?\s*(?P<lead>[^。\n]{0,30}?)業務ガイド(?:は|が|も)[、,]?(?:まだ)?"
-    r"(?:見つかりません|見当たりません|ありません|登録されていません|存在しません|公開されていません)(?:でした)?[。．]?")
+    r"(?:見つかりません|見当たりません|ありません|登録されていません|存在しません|公開されていません)(?:でした)?[。．]?"
+)
 _GUIDE_NOT_FOUND_LEAD = re.compile(r"[はがを0-9０-９「」『』]")
 # 文末の、ツールの名前を挙げた作業の経過の括弧（「（rag_lookup_guides の結果は0件）」）。
 _TOOL_NOTE = re.compile(r"\s*[（(][^（()）\n]*\brag_[a-z_]+[^（()）\n]*[）)](?=\s*[。．]?\s*$)")
@@ -416,8 +435,7 @@ def is_guide_not_found(text: str) -> bool:
     return not is_operation_instruction(value)
 
 
-def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (),
-                         heading_lines: Collection[str] = ()) -> bool:
+def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (), heading_lines: Collection[str] = ()) -> bool:
     """回答の最終の検証で主張として監査しない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・
     業務ガイドが見つからなかったことだけを述べる文）か (#1306 / #1317 / #1452)。
 
@@ -425,20 +443,32 @@ def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (),
     ``table_header_lines`` と ``list_heading_lines``（#1481 / #1482 / #1486）を渡す。
     """
     value = text.strip()
-    return (is_heading(text) or is_citation_line(text) or is_table_rule(text) or value in table_headers
-            or value in heading_lines or is_question_to_user(text) or is_guide_not_found(text))
+    return (
+        is_heading(text)
+        or is_citation_line(text)
+        or is_table_rule(text)
+        or value in table_headers
+        or value in heading_lines
+        or is_question_to_user(text)
+        or is_guide_not_found(text)
+    )
 
 
 def is_operation_instruction(text: str) -> bool:
     """具体的な操作指示を確認留保として無引用で通さないための補助判定。"""
-    return bool(re.search(
-        r"(?:開き|押し|選び|選択し|入力し|変更し|修正し|登録し|保存し|実行し|実施し|クリックし)(?:ます|てください|て頂|ていただ|、|て)|"
-        r"(?:を開く|を押す|を選択する|を入力する|を保存する|に遷移する|に遷移します)|"
-        r"(?:登録|選択|入力|変更|修正|保存|実行)(?:すれば|すると|することで|できます|可能)|"
-        r"(?:押下|クリック|印刷|再発行)(?:する|すれば|すると|し|できます|可能)|"
-        r"(?:ボタン|画面|タブ).{0,30}(?:を開く|を押す|を選択する)|"
-        r"(?:削除|消去)(?:し|する|すれば|すると|できます|可能)|"
-        r"\b(?:click|press|navigate to|save changes|delete|erase)\b", text, re.I))
+    return bool(
+        re.search(
+            r"(?:開き|押し|選び|選択し|入力し|変更し|修正し|登録し|保存し|実行し|実施し|クリックし)(?:ます|てください|て頂|ていただ|、|て)|"
+            r"(?:を開く|を押す|を選択する|を入力する|を保存する|に遷移する|に遷移します)|"
+            r"(?:登録|選択|入力|変更|修正|保存|実行)(?:すれば|すると|することで|できます|可能)|"
+            r"(?:押下|クリック|印刷|再発行)(?:する|すれば|すると|し|できます|可能)|"
+            r"(?:ボタン|画面|タブ).{0,30}(?:を開く|を押す|を選択する)|"
+            r"(?:削除|消去)(?:し|する|すれば|すると|できます|可能)|"
+            r"\b(?:click|press|navigate to|save changes|delete|erase)\b",
+            text,
+            re.I,
+        )
+    )
 
 
 def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]:
@@ -450,13 +480,19 @@ def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]
     """
     if not is_operation_instruction(text):
         return []
-    body = "\n".join(line for span in cited for line in str(span.get("text", "")).splitlines()
-                     if not is_vision_enumeration_line(line))
-    families = (("再発行", "再交付"), ("印刷", "プリント", "印字"),
-                ("修正", "編集", "訂正", "書き換え", "書換", "変更"),
-                ("削除", "消去"), ("保存", "登録", "更新"))
-    return [next(term for term in family if term in text) for family in families
-            if any(term in text for term in family) and not any(term in body for term in family)]
+    body = "\n".join(line for span in cited for line in str(span.get("text", "")).splitlines() if not is_vision_enumeration_line(line))
+    families = (
+        ("再発行", "再交付"),
+        ("印刷", "プリント", "印字"),
+        ("修正", "編集", "訂正", "書き換え", "書換", "変更"),
+        ("削除", "消去"),
+        ("保存", "登録", "更新"),
+    )
+    return [
+        next(term for term in family if term in text)
+        for family in families
+        if any(term in text for term in family) and not any(term in body for term in family)
+    ]
 
 
 # 総称語だけの削除対象。「データを削除」は資料の具体名（「履歴情報」「行」）と一致しないので対象にしない (#696)。
@@ -471,18 +507,19 @@ def deletion_targets(question: str) -> list[str]:
     削除手順を当てないことにあり、総称語には具体名との照合が成り立たない。「〇〇データ」は対象にする。
     """
     text = unicodedata.normalize("NFKC", question)
-    targets = re.findall(r'[「『]([^」』]+)[」』](?:を|の)?(?:個別|一括)?(?:削除|消去)', text)
-    targets += re.findall(r'([一-龯々ァ-ヶーA-Za-z0-9]+)(?:を|の)(?:個別|一括)?(?:削除|消去)', text)
+    targets = re.findall(r"[「『]([^」』]+)[」』](?:を|の)?(?:個別|一括)?(?:削除|消去)", text)
+    targets += re.findall(r"([一-龯々ァ-ヶーA-Za-z0-9]+)(?:を|の)(?:個別|一括)?(?:削除|消去)", text)
     return [t for t in dict.fromkeys(targets) if t not in _GENERIC_DELETION_TARGETS]
 
 
 def deletion_target_supported(question: str, cited: list[dict[str, Any]]) -> bool:
     """対象名は削除操作を支える同じ本文で照合する。資料名だけの一致は使わない。"""
     targets = deletion_targets(question)
+
     def compact(value):
-        return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value))
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
+
     return not targets or any(
-        all(compact(target) in compact(str(s.get('text', ''))) for target in targets)
-        and re.search(r'削除|消去', str(s.get('text', '')))
+        all(compact(target) in compact(str(s.get("text", ""))) for target in targets) and re.search(r"削除|消去", str(s.get("text", "")))
         for s in cited
     )

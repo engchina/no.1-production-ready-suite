@@ -153,7 +153,9 @@ class DoclingAdapterTests(unittest.TestCase):
         self.assertEqual(caption.text, "[ 画面：マスタ管理⇒掛率登録 ]")
         aggregate = next(record for record in records if record.raw_type == "picture_ocr_text")
         self.assertNotIn("画面：", aggregate.text)  # OCR 集約には入れない
-        self.assertNotIn("inner ocr text", [record.text for record in records if record.category != "Picture" and record.raw_type != "picture_ocr_text"])
+        self.assertNotIn(
+            "inner ocr text", [record.text for record in records if record.category != "Picture" and record.raw_type != "picture_ocr_text"]
+        )
 
     def test_numbered_instruction_callouts_inside_a_picture_are_kept_as_text(self):
         # 画面キャプチャの上の吹き出し手順は図内の文字ではない。行が分かれていても 1 件の Text にまとめ、
@@ -332,16 +334,24 @@ class DoclingAdapterTests(unittest.TestCase):
         table = {
             **_item("", "table", 1, [10, 10, 90, 90]),
             "self_ref": "#/tables/0",
-            "data": {"grid": [
-                [{"text": "制度開始時期"}, {"text": "4 月：取引開始 5"}],   # 下の行の「5」が混入
-                [{"text": "優遇期間"}, {"text": "投資した年から最長 年間"}],
-                [{"text": "運用管理"}, {"text": "1 3 31 18 1 1"}],          # 日本語が欠落
-                [{"text": "手数料"}, {"text": "1回目は無料\n2回目以降は有料"}],
-            ]},
+            "data": {
+                "grid": [
+                    [{"text": "制度開始時期"}, {"text": "4 月：取引開始 5"}],  # 下の行の「5」が混入
+                    [{"text": "優遇期間"}, {"text": "投資した年から最長 年間"}],
+                    [{"text": "運用管理"}, {"text": "1 3 31 18 1 1"}],  # 日本語が欠落
+                    [{"text": "手数料"}, {"text": "1回目は無料\n2回目以降は有料"}],
+                ]
+            },
         }
         payload = {"tables": [table], "texts": [_body_text(0, "（注）表の下の脚注です。", [10, 92, 90, 98])]}
-        native_lines = ["制度開始時期 4 月：取引開始", "優遇期間 投資した年から最長 5 年間", "運用管理 ・原則として、親権者等が代理して運用を行う",
-                        "手数料 1回目は無料", "2回目以降は有料", "（注）表の下の脚注です。"]
+        native_lines = [
+            "制度開始時期 4 月：取引開始",
+            "優遇期間 投資した年から最長 5 年間",
+            "運用管理 ・原則として、親権者等が代理して運用を行う",
+            "手数料 1回目は無料",
+            "2回目以降は有料",
+            "（注）表の下の脚注です。",
+        ]
         html = {"#/tables/0": "<table><tbody><tr><td>x</td></tr></tbody></table>"}
         with patch("rag_engine.adapters.parsers.docling_adapter.pdf_text_lines_in_bbox", return_value=native_lines) as lines:
             records = DoclingAdapter(get_settings())._records_from_payload(payload, _context(), table_html_by_ref=html)
@@ -350,11 +360,18 @@ class DoclingAdapterTests(unittest.TestCase):
         self.assertEqual([r.raw_type for r in records], ["table", "table_unassigned_text", "text"])
         self.assertEqual(records[0].text, html["#/tables/0"])  # 表の HTML は変えない
         supplement = records[1]
-        self.assertEqual((supplement.category, supplement.bbox, supplement.raw["source_table_ref"]), ("Text", records[0].bbox, "#/tables/0"))
+        self.assertEqual(
+            (supplement.category, supplement.bbox, supplement.raw["source_table_ref"]), ("Text", records[0].bbox, "#/tables/0")
+        )
         # 正しくセルに入っている行、複数行のセルの各行、別 record になっている脚注は補足に含めない。
-        self.assertEqual(supplement.text.splitlines(), [
-            "表の補足（セルに割り当てられなかった原文）:", "優遇期間 投資した年から最長 5 年間",
-            "運用管理 ・原則として、親権者等が代理して運用を行う"])
+        self.assertEqual(
+            supplement.text.splitlines(),
+            [
+                "表の補足（セルに割り当てられなかった原文）:",
+                "優遇期間 投資した年から最長 5 年間",
+                "運用管理 ・原則として、親権者等が代理して運用を行う",
+            ],
+        )
 
     def test_table_cell_text_moved_to_the_neighbor_row_is_repaired_before_building_html(self):
         """隣の行へ入ったセルの文字は text layer で戻し、HTML を作り直して修正を raw に記録する (#597)。"""
@@ -363,14 +380,24 @@ class DoclingAdapterTests(unittest.TestCase):
         def cell(row, col, text, **extra):
             return {**_cell(row, col, text, **extra), "bbox": {}}
 
-        cells = [cell(0, 0, "連携データ", column_header=True), cell(0, 1, "連携の向き", column_header=True),
-                 cell(1, 0, "取引先情報"), cell(1, 1, "Input"),
-                 cell(2, 0, "倉庫入出庫情報"), cell(2, 1, "Input Input"),
-                 cell(3, 0, "取引先与信情報"), cell(3, 1, ""),
-                 cell(4, 0, "取引先契約資格"), cell(4, 1, "Input")]
+        cells = [
+            cell(0, 0, "連携データ", column_header=True),
+            cell(0, 1, "連携の向き", column_header=True),
+            cell(1, 0, "取引先情報"),
+            cell(1, 1, "Input"),
+            cell(2, 0, "倉庫入出庫情報"),
+            cell(2, 1, "Input Input"),
+            cell(3, 0, "取引先与信情報"),
+            cell(3, 1, ""),
+            cell(4, 0, "取引先契約資格"),
+            cell(4, 1, "Input"),
+        ]
         grid = [[dict(c) for c in cells if c["start_row_offset_idx"] == row] for row in range(5)]
-        table = {**_item("", "table", 1, [10, 10, 90, 90]), "self_ref": "#/tables/0",
-                 "data": {"num_rows": 5, "num_cols": 2, "table_cells": cells, "grid": grid}}
+        table = {
+            **_item("", "table", 1, [10, 10, 90, 90]),
+            "self_ref": "#/tables/0",
+            "data": {"num_rows": 5, "num_cols": 2, "table_cells": cells, "grid": grid},
+        }
         lines = ["連携データ 連携の向き", "取引先情報 Input", "倉庫入出庫情報 Input", "取引先与信情報 Input", "取引先契約資格 Input"]
         native = {"#/tables/0": "<table><tbody><tr><td>native</td></tr></tbody></table>"}
         with patch("rag_engine.adapters.parsers.docling_adapter.pdf_text_lines_in_bbox", return_value=lines):
@@ -379,21 +406,27 @@ class DoclingAdapterTests(unittest.TestCase):
         # 修正した表は Docling の HTML ではなく dict から作り直し、未割当の補足は出ない。
         self.assertEqual([r.raw_type for r in records], ["table"])
         self.assertIn("<tr><td>倉庫入出庫情報</td><td>Input</td></tr><tr><td>取引先与信情報</td><td>Input</td></tr>", records[0].text)
-        self.assertEqual(records[0].raw["table_cell_repairs"], [
-            {"row": 2, "column": 1, "before": "Input Input", "after": "Input"},
-            {"row": 3, "column": 1, "before": "", "after": "Input"}])
+        self.assertEqual(
+            records[0].raw["table_cell_repairs"],
+            [{"row": 2, "column": 1, "before": "Input Input", "after": "Input"}, {"row": 3, "column": 1, "before": "", "after": "Input"}],
+        )
         self.assertEqual([c["text"] for c in cells if c["start_col_offset_idx"] == 1], ["連携の向き", "Input", "Input", "Input", "Input"])
 
     def test_table_supplement_is_skipped_when_cells_are_complete_or_the_text_layer_is_unavailable(self):
         from unittest.mock import patch
 
-        table = {**_item("", "table", 1, [10, 10, 90, 90]), "self_ref": "#/tables/0",
-                 "data": {"grid": [[{"text": "項目"}, {"text": "内容"}], [{"text": "対象投資額"}, {"text": "毎年 80 万円"}]]}}
+        table = {
+            **_item("", "table", 1, [10, 10, 90, 90]),
+            "self_ref": "#/tables/0",
+            "data": {"grid": [[{"text": "項目"}, {"text": "内容"}], [{"text": "対象投資額"}, {"text": "毎年 80 万円"}]]},
+        }
         html = {"#/tables/0": "<table><tbody><tr><td>x</td></tr></tbody></table>"}
         adapter = DoclingAdapter(get_settings())
         for lines in (["項目 内容", "対象投資額 毎年 80 万円"], []):
             with patch("rag_engine.adapters.parsers.docling_adapter.pdf_text_lines_in_bbox", return_value=lines):
-                self.assertEqual([r.raw_type for r in adapter._records_from_payload({"tables": [table]}, _context(), table_html_by_ref=html)], ["table"])
+                self.assertEqual(
+                    [r.raw_type for r in adapter._records_from_payload({"tables": [table]}, _context(), table_html_by_ref=html)], ["table"]
+                )
         # text layer の取得に失敗しても解析は止めない。
         with patch("rag_engine.adapters.parsers.docling_adapter.pdf_text_lines_in_bbox", side_effect=RuntimeError("no text layer")):
             self.assertEqual(len(adapter._records_from_payload({"tables": [table]}, _context(), table_html_by_ref=html)), 1)
@@ -433,7 +466,7 @@ class DoclingAdapterTests(unittest.TestCase):
             html,
             '<table><tbody><tr><th colspan="2">見出し &lt;A&gt;<br>次</th><th>B &amp; C</th></tr>'
             '<tr><th rowspan="2">縦 &quot;結合&quot;</th><td>値1</td><td>値2</td></tr>'
-            '<tr><td>値3</td><td></td></tr></tbody></table>',
+            "<tr><td>値3</td><td></td></tr></tbody></table>",
         )
 
     def test_falls_back_to_table_cells_and_tolerates_missing_data(self):
@@ -476,7 +509,6 @@ class DoclingAdapterTests(unittest.TestCase):
         self.assertEqual(records[0].raw_type, "document_index")
         self.assertEqual(records[0].text, "<table><tbody><tr><td>第1章 概要</td><td>3</td></tr></tbody></table>")
 
-
     def test_multi_prov_text_is_split_by_charspan(self):
         item = _item("前半の段落後半の段落", "text", 1, [10, 10, 90, 20])
         item["prov"][0]["charspan"] = [0, 5]
@@ -496,9 +528,7 @@ class DoclingAdapterTests(unittest.TestCase):
         }
         table["prov"].append(_item("", "table", 1, [10, 70, 90, 80])["prov"][0])
 
-        records = DoclingAdapter(get_settings())._records_from_payload(
-            {"texts": [text_item], "tables": [table]}, _context()
-        )
+        records = DoclingAdapter(get_settings())._records_from_payload({"texts": [text_item], "tables": [table]}, _context())
 
         self.assertEqual(
             [record.text for record in records],
@@ -528,8 +558,7 @@ class DoclingAdapterTests(unittest.TestCase):
         ]
         table = {**_item("", "table", 1, [55, 30, 95, 50]), "self_ref": "#/tables/0", "data": {}}
         payload = {
-            "body": {"children": [{"$ref": ref} for ref in (
-                "#/texts/0", "#/texts/1", "#/texts/2", "#/tables/0", "#/texts/3")]},
+            "body": {"children": [{"$ref": ref} for ref in ("#/texts/0", "#/texts/1", "#/texts/2", "#/tables/0", "#/texts/3")]},
             "texts": texts,
             "tables": [table],
         }
@@ -581,12 +610,11 @@ class DoclingAdapterTests(unittest.TestCase):
             "pictures": [_picture("#/pictures/0", [10, 10, 90, 90], [])],
         }
 
-        records = DoclingAdapter(replace(get_settings(), docling_keep_picture_child_text=False))._records_from_payload(
-            payload, _context()
-        )
+        records = DoclingAdapter(replace(get_settings(), docling_keep_picture_child_text=False))._records_from_payload(payload, _context())
 
         self.assertEqual([record.raw_type for record in records], ["picture", "picture_ocr_text"])
         self.assertIn("図内の箇条書き", records[1].text)
+
 
 def _item(text: str, label: str, page: int, bbox: list[int]) -> dict:
     left, top, right, bottom = bbox

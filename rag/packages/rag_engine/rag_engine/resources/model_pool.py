@@ -98,13 +98,17 @@ def gpu_summary() -> str:
         else:
             parts.append("CUDA は利用できません（CPU 実行）")
     try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.strip().splitlines()[0]
+        out = (
+            subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()[0]
+        )
         name, used, total = [part.strip() for part in out.split(",")]
         parts.append(f"GPU 全体 ({name}): {int(used) / 1024:.2f} / {int(total) / 1024:.2f} GiB 使用中")
     except Exception:

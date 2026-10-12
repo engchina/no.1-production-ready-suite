@@ -18,7 +18,10 @@ def _normalized(text: str) -> str:
 
 
 def enrich_table_visual_rows(
-    record: LayoutRecord, page: PageImage, description: dict[str, Any], run_dir: Path | None = None,
+    record: LayoutRecord,
+    page: PageImage,
+    description: dict[str, Any],
+    run_dir: Path | None = None,
 ) -> None:
     """一意に照合できる行だけ補足し、元 HTML を変更せず raw に拡張 HTML を保存します。
 
@@ -60,11 +63,17 @@ def enrich_table_visual_rows(
         extras = [i for i in range(len(cells)) if i not in positions]
         supplement = " / ".join(cells[i] for i in extras if cells[i].strip())
         if supplement:
-            matches[index] = {"row_index": index, "original_text": original, "text": supplement,
-                              "cells": cells, "match_score": round(score, 3), "image_regions": [],
-                              "original_cell_positions": positions,
-                              "supplement_positions": [sum(pos < i for pos in positions) for i in extras],
-                              "supplement_cells": [cells[i] for i in extras]}
+            matches[index] = {
+                "row_index": index,
+                "original_text": original,
+                "text": supplement,
+                "cells": cells,
+                "match_score": round(score, 3),
+                "image_regions": [],
+                "original_cell_positions": positions,
+                "supplement_positions": [sum(pos < i for pos in positions) for i in extras],
+                "supplement_cells": [cells[i] for i in extras],
+            }
     matches = {index: match for index, match in matches.items() if not match.get("ambiguous")}
     regions = record.raw.get("table_missing_picture_regions", [])
     for region in regions:
@@ -97,8 +106,7 @@ def _align_cells(original: list[dict[str, Any]], vision: list[str]) -> tuple[flo
         text = _normalized(cell["text"])
         if not text:
             return None
-        candidates = sorted(((SequenceMatcher(None, text, _normalized(value)).ratio(), i)
-                             for i, value in enumerate(vision)), reverse=True)
+        candidates = sorted(((SequenceMatcher(None, text, _normalized(value)).ratio(), i) for i, value in enumerate(vision)), reverse=True)
         if not candidates:
             return None
         if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.1:
@@ -126,7 +134,7 @@ def _enhanced_html(structure: dict[str, Any], matches: dict[int, dict[str, Any]]
         return ""
     lines = ["<table>"]
     if structure.get("caption"):
-        lines.append(f'<caption>{escape(structure["caption"])}</caption>')
+        lines.append(f"<caption>{escape(structure['caption'])}</caption>")
     lines.append("<tbody>")
     for row in rows:
         lines.append("<tr>")
@@ -142,20 +150,26 @@ def _enhanced_html(structure: dict[str, Any], matches: dict[int, dict[str, Any]]
             if index < len(row["cells"]):
                 cell = row["cells"][index]
                 tag = "th" if cell["is_header"] else "td"
-                lines.append(f'<{tag}>{escape(cell["text"])}</{tag}>')
+                lines.append(f"<{tag}>{escape(cell['text'])}</{tag}>")
         lines.append("</tr>")
     lines.append("</tbody></table>")
     return "".join(lines)
 
 
 def _geometric_column_position(
-    record: LayoutRecord, page: PageImage, row: dict[str, Any], regions: list[list[float]],
+    record: LayoutRecord,
+    page: PageImage,
+    row: dict[str, Any],
+    regions: list[list[float]],
 ) -> int | None:
     """単一補足セルの挿入位置を PDF の横座標で確認し、重なりや結合セルでは推測しません。"""
     if not page.pdf_width or any(cell["colspan"] != 1 or cell["rowspan"] != 1 for cell in row["cells"]):
         return None
-    cells = [cell for cell in record.raw.get("data", {}).get("table_cells", [])
-             if int(cell.get("start_row_offset_idx", -1)) + 1 == row["row_index"]]
+    cells = [
+        cell
+        for cell in record.raw.get("data", {}).get("table_cells", [])
+        if int(cell.get("start_row_offset_idx", -1)) + 1 == row["row_index"]
+    ]
     cells.sort(key=lambda cell: int(cell.get("start_col_offset_idx", 0)))
     if len(cells) != len(row["cells"]):
         return None
@@ -210,14 +224,30 @@ def _save_row_crops(record: LayoutRecord, page: PageImage, run_dir: Path, matche
                 # parser ID をファイルパスとして信用しません。
                 filename = re.sub(r"[^a-zA-Z0-9_-]", "_", image_id) + ".png"
                 path = crop_dir / filename
-                box = (max(0, int(region[0])), max(0, int(region[1])),
-                       min(source.width, int(region[2])), min(source.height, int(region[3])))
+                box = (
+                    max(0, int(region[0])),
+                    max(0, int(region[1])),
+                    min(source.width, int(region[2])),
+                    min(source.height, int(region[3])),
+                )
                 if box[2] <= box[0] or box[3] <= box[1]:
                     continue
                 source.crop(box).save(path)
                 relative = path.relative_to(run_dir).as_posix()
-                evidence.append({"image_id": image_id, "record_id": record.id, "page": record.page,
-                                 "seq_no": record.seq_no, "bbox": list(box), "row_index": index,
-                                 "relationship": "table_row_image", "raw_type": "picture", "visual_role": "content",
-                                 "crop_path": relative, "vision_crop": relative, "text_preview": row["text"]})
+                evidence.append(
+                    {
+                        "image_id": image_id,
+                        "record_id": record.id,
+                        "page": record.page,
+                        "seq_no": record.seq_no,
+                        "bbox": list(box),
+                        "row_index": index,
+                        "relationship": "table_row_image",
+                        "raw_type": "picture",
+                        "visual_role": "content",
+                        "crop_path": relative,
+                        "vision_crop": relative,
+                        "text_preview": row["text"],
+                    }
+                )
     record.raw["table_row_image_evidence"] = evidence

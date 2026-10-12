@@ -1,4 +1,5 @@
 """ファイルシステム不要の Small-to-Big 分割サービス。"""
+
 from copy import deepcopy
 from dataclasses import asdict
 from rag_engine.chunking import build_small_to_big_chunks
@@ -10,6 +11,7 @@ from pathlib import Path
 
 class ChunkingService:
     """既存の表・画像・親子構造を維持し、業務設定を明示して分割する。"""
+
     def __init__(self, profile: DomainProfile | None = None):
         self.profile = profile or DomainProfile()
 
@@ -30,7 +32,10 @@ class ChunkingService:
         runtime = Runtime(ResourcePaths(Path("."), Path(".")), self.profile)
         with runtime.activate():
             chunks = build_small_to_big_chunks(
-                payload, source_run_id=document.source_run_id or document.document_id,
-                selected_engine_ids=engines, config=config, source_page_count=document.page_count,
+                payload,
+                source_run_id=document.source_run_id or document.document_id,
+                selected_engine_ids=engines,
+                config=config,
+                source_page_count=document.page_count,
             )
         return ChunkBatch(document, tuple(chunks), config)

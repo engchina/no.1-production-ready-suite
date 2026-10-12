@@ -114,6 +114,7 @@ END_TRUSTED_RETRIEVAL_METADATA
 @dataclass(frozen=True)
 class PromptFile:
     """UI から編集できる prompt ファイルの key、path、既定値を保持します。"""
+
     key: str
     label: str
     path: Path
@@ -126,6 +127,7 @@ class PromptFile:
 @dataclass(frozen=True)
 class PromptSaveResult:
     """prompt 保存時の更新時刻と保存先を保持します。"""
+
     prompt_file: PromptFile
     backup_path: Path | None
     saved_at: datetime
@@ -165,8 +167,12 @@ def get_prompt_file(key: str) -> PromptFile:
             return definition
         content = dict(runtime.profile.prompt_overrides).get(key, definition.default_content)
         directory = runtime.paths.prompts
-        return replace(definition, path=(directory or runtime.paths.workspace / "prompts") / definition.path.name,
-                       backup_dir=(directory or runtime.paths.workspace / "prompts") / "backups", default_content=content)
+        return replace(
+            definition,
+            path=(directory or runtime.paths.workspace / "prompts") / definition.path.name,
+            backup_dir=(directory or runtime.paths.workspace / "prompts") / "backups",
+            default_content=content,
+        )
     except KeyError as exc:
         raise ValueError(f"Unknown prompt file: {key}") from exc
 

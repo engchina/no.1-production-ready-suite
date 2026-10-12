@@ -1,4 +1,5 @@
 """UI・プロバイダー・保存形式に依存しない同期 SDK の契約。"""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -10,6 +11,7 @@ from rag_engine.chunking import ChunkingConfig, DocumentChunk
 @dataclass(frozen=True)
 class ParseRequest:
     """解析元とページ指定。全文解析が既定で、ファイルは変更しない。"""
+
     source: Path
     page_range: str = ""
     entire_file: bool = True
@@ -24,6 +26,7 @@ class ParsedDocument:
     document_id は独立索引で同一文書を更新するための安定した識別子とし、
     別文書には別 ID を渡す。PDF がない場合も保存後の索引キーに使用する。
     """
+
     document_id: str
     source_name: str
     records: tuple[LayoutRecord, ...]
@@ -37,6 +40,7 @@ class ParsedDocument:
 @dataclass(frozen=True)
 class ChunkRequest:
     """構造化解析結果と分割設定。保存処理を要求しない。"""
+
     document: ParsedDocument
     config: ChunkingConfig = field(default_factory=ChunkingConfig)
 
@@ -44,6 +48,7 @@ class ChunkRequest:
 @dataclass(frozen=True)
 class ChunkBatch:
     """文書単位の親子チャンク集合。"""
+
     document: ParsedDocument
     chunks: tuple[DocumentChunk, ...]
     config: ChunkingConfig
@@ -52,6 +57,7 @@ class ChunkBatch:
 @dataclass(frozen=True)
 class IndexRequest:
     """指定した論理 collection にチャンクを書き込む要求。"""
+
     batch: ChunkBatch
     collection: str
 
@@ -59,6 +65,7 @@ class IndexRequest:
 @dataclass(frozen=True)
 class IndexResult:
     """索引書き込み件数とバックエンドの識別子。"""
+
     collection: str
     indexed_count: int
     index_id: str = ""
@@ -67,6 +74,7 @@ class IndexResult:
 @dataclass(frozen=True)
 class TraceStep:
     """処理工程の結果。elapsed_seconds の単位は秒。"""
+
     name: str
     status: str = "complete"
     elapsed_seconds: float = 0.0
@@ -76,6 +84,7 @@ class TraceStep:
 @dataclass(frozen=True)
 class Evidence:
     """テキストと元の出典情報。metadata に score・bbox・画像参照を保持できる。"""
+
     id: str
     text: str
     source: str = ""
@@ -86,6 +95,7 @@ class Evidence:
 @dataclass(frozen=True)
 class SearchRequest:
     """検索条件。collection の解釈は adapter の公開契約に従う。"""
+
     question: str
     collection: str
     top_k: int = 20
@@ -104,6 +114,7 @@ class SearchRequest:
 @dataclass(frozen=True)
 class SearchResult:
     """検索で得た根拠と実行工程。"""
+
     evidence: tuple[Evidence, ...]
     trace: tuple[TraceStep, ...] = ()
 
@@ -111,6 +122,7 @@ class SearchResult:
 @dataclass(frozen=True)
 class GenerationRequest:
     """根拠を明示した回答要求。検索を暗黙には行わない。"""
+
     question: str
     evidence: tuple[Evidence, ...]
 
@@ -118,6 +130,7 @@ class GenerationRequest:
 @dataclass(frozen=True)
 class AnswerResult:
     """回答・引用・不足理由。表示用 HTML や HTTP URL は含めない。"""
+
     text: str
     citations: tuple[Evidence, ...] = ()
     confidence: str = ""
@@ -128,6 +141,7 @@ class AnswerResult:
 
 class StageError(RuntimeError):
     """外部処理が失敗した工程と中断までの trace を保持する。"""
+
     def __init__(self, stage: str, trace: tuple[TraceStep, ...]):
         super().__init__(f"RAG engine stage failed: {stage}")
         self.stage = stage

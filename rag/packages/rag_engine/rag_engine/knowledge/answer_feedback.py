@@ -60,9 +60,7 @@ def create_answer_feedback_record(
         created_at=created_at,
     )
     feedback_question = str(answer_trace.get("question") or "").strip() or _clean_text(question)
-    feedback_classification_filter = _dict_or_empty(answer_trace.get("classification_filter")) or dict(
-        classification_filter or {}
-    )
+    feedback_classification_filter = _dict_or_empty(answer_trace.get("classification_filter")) or dict(classification_filter or {})
     return {
         "schema_version": ANSWER_FEEDBACK_SCHEMA_VERSION,
         "feedback_id": feedback_id,
@@ -110,11 +108,7 @@ def load_answer_trace_summary(output_dir: str | Path, run_id: str, answer_id: st
         raise ValueError("回答 payload の形式が不正です。")
 
     evidence_items = payload.get("evidence_items") if isinstance(payload.get("evidence_items"), list) else []
-    evidence_ids = [
-        str(item.get("id"))
-        for item in evidence_items
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    ]
+    evidence_ids = [str(item.get("id")) for item in evidence_items if isinstance(item, dict) and str(item.get("id") or "").strip()]
     return {
         "answer_payload_path": path.as_posix(),
         "question": str(payload.get("question") or ""),

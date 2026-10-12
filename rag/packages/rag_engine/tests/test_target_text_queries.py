@@ -1,4 +1,5 @@
 """質問の対象語の部分語から作る全文検索クエリ (#730)。"""
+
 from rag_engine.retrieval.target_text_queries import target_phrases, target_text_queries
 
 

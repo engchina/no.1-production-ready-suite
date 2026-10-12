@@ -48,9 +48,7 @@ class Deadline:
     """
 
     def __init__(self, timeout_seconds: float | None = None, *, parent: Deadline | None = None) -> None:
-        self._expires_at = (
-            None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
-        )
+        self._expires_at = None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
         self._parent = parent
         self._cancelled = threading.Event()
 

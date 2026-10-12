@@ -27,14 +27,17 @@ from test_answer_generation import _answer_context, _chunk_run_stub, _crag_grade
 
 def _settings(*, answer_effort="medium", vision_effort="medium", **overrides):
     """外部の .env を読まない設定。モデルの登録値（送る値）は provider の reasoning_effort。"""
-    base = get_settings(environ={
-        "OCI_ENTERPRISE_AI_ENDPOINT": "https://example.invalid/openai/v1",
-        "OCI_ENTERPRISE_AI_API_KEY": "test-key",
-        "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "test.model",
-        "OCI_ENTERPRISE_AI_VLM_MODEL": "test.vision",
-        "OCI_ENTERPRISE_AI_REASONING_EFFORT": answer_effort,
-        "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": vision_effort,
-    }, dotenv_path=None)
+    base = get_settings(
+        environ={
+            "OCI_ENTERPRISE_AI_ENDPOINT": "https://example.invalid/openai/v1",
+            "OCI_ENTERPRISE_AI_API_KEY": "test-key",
+            "OCI_ENTERPRISE_AI_DEFAULT_MODEL": "test.model",
+            "OCI_ENTERPRISE_AI_VLM_MODEL": "test.vision",
+            "OCI_ENTERPRISE_AI_REASONING_EFFORT": answer_effort,
+            "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": vision_effort,
+        },
+        dotenv_path=None,
+    )
     return replace(base, **overrides)
 
 
@@ -46,14 +49,17 @@ class PurposeReasoningEffortTests(unittest.TestCase):
     """用途ごとの推論の量の解釈（none は送らない・登録値が none のモデルには送らない）。"""
 
     def test_env_values_are_normalized(self):
-        settings = get_settings(environ={
-            "RAG_ENGINE_STRATEGY_REASONING_EFFORT": "Medium",
-            "RAG_ENGINE_JUDGE_REASONING_EFFORT": " LOW ",
-            "RAG_ENGINE_GENERATION_REASONING_EFFORT": "model",
-            "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": "1",
-            "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": "1.7",
-            "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": "3",
-        }, dotenv_path=None)
+        settings = get_settings(
+            environ={
+                "RAG_ENGINE_STRATEGY_REASONING_EFFORT": "Medium",
+                "RAG_ENGINE_JUDGE_REASONING_EFFORT": " LOW ",
+                "RAG_ENGINE_GENERATION_REASONING_EFFORT": "model",
+                "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS": "1",
+                "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE": "1.7",
+                "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES": "3",
+            },
+            dotenv_path=None,
+        )
         self.assertEqual(settings.judge_reasoning_effort, "low")
         self.assertEqual(settings.strategy_reasoning_effort, "medium")
         # 選択肢に無い値（model など）はモデルの登録値のまま。
@@ -62,8 +68,9 @@ class PurposeReasoningEffortTests(unittest.TestCase):
         self.assertEqual(settings.crag_skip_min_rerank_score, 1.0)
         self.assertEqual(settings.query_expansion_max_queries, 3)
         defaults = get_settings(environ={}, dotenv_path=None)
-        self.assertEqual((defaults.strategy_reasoning_effort, defaults.judge_reasoning_effort,
-                          defaults.generation_reasoning_effort), ("", "", ""))
+        self.assertEqual(
+            (defaults.strategy_reasoning_effort, defaults.judge_reasoning_effort, defaults.generation_reasoning_effort), ("", "", "")
+        )
         self.assertFalse(defaults.crag_skip_on_strong_signals)
         self.assertEqual(defaults.query_expansion_max_queries, generation.MAX_GENERATED_QUERY_COUNT)
 
@@ -84,31 +91,37 @@ class PurposeReasoningEffortTests(unittest.TestCase):
 
     def test_note_shows_sent_effort_and_its_source(self):
         settings = _settings(judge_reasoning_effort="low")
-        self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE),
-                         "推論の量: low（根拠の評価の設定。モデルの登録値は medium）")
+        self.assertEqual(
+            llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE), "推論の量: low（根拠の評価の設定。モデルの登録値は medium）"
+        )
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY), "推論の量: medium（モデルの登録値）")
-        self.assertEqual(llm_reasoning_effort_note(replace(settings, strategy_reasoning_effort="high"),
-                                                   LLM_PURPOSE_STRATEGY),
-                         "推論の量: high（質問拡張戦略の判定・検索文の生成の設定。モデルの登録値は medium）")
+        self.assertEqual(
+            llm_reasoning_effort_note(replace(settings, strategy_reasoning_effort="high"), LLM_PURPOSE_STRATEGY),
+            "推論の量: high（質問拡張戦略の判定・検索文の生成の設定。モデルの登録値は medium）",
+        )
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION), "推論の量: medium（モデルの登録値）")
-        self.assertEqual(llm_reasoning_effort_note(replace(settings, generation_reasoning_effort="none"),
-                                                   LLM_PURPOSE_GENERATION), "推論の量: 送らない（回答文の生成の設定）")
-        self.assertEqual(llm_reasoning_effort_note(_settings(answer_effort="", judge_reasoning_effort="high"),
-                                                   LLM_PURPOSE_JUDGE), "推論の量: 送らない（モデルの登録値が none）")
+        self.assertEqual(
+            llm_reasoning_effort_note(replace(settings, generation_reasoning_effort="none"), LLM_PURPOSE_GENERATION),
+            "推論の量: 送らない（回答文の生成の設定）",
+        )
+        self.assertEqual(
+            llm_reasoning_effort_note(_settings(answer_effort="", judge_reasoning_effort="high"), LLM_PURPOSE_JUDGE),
+            "推論の量: 送らない（モデルの登録値が none）",
+        )
 
 
 class PurposeEffortCallSiteTests(unittest.TestCase):
     """各呼び出しが用途の推論の量で LLM を呼ぶ。"""
 
     def setUp(self):
-        self.settings = _settings(strategy_reasoning_effort="none", judge_reasoning_effort="low",
-                                  generation_reasoning_effort="high")
+        self.settings = _settings(strategy_reasoning_effort="none", judge_reasoning_effort="low", generation_reasoning_effort="high")
         self.calls = []
 
     def record(self, reply):
         def parse(system, prompt, settings, schema, **options):
             self.calls.append((schema, settings.llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort))
             return reply(schema) if callable(reply) else reply
+
         return parse
 
     def test_routing_and_query_generation_use_strategy_effort(self):
@@ -116,9 +129,9 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
             if schema is QueryRoutingOutput:
                 return QueryRoutingOutput(strategy="rag_fusion", reason="複数の言い回し", queries=[])
             return QueryExpansionOutput(queries=["経費の申請", "経費精算の手順"])
+
         with patch.object(generation, "parse_text_response", side_effect=self.record(reply)):
-            expansion = generation.build_query_expansion("経費精算の申請方法は？", generation.AUTO_ROUTING_STRATEGY,
-                                                         self.settings)
+            expansion = generation.build_query_expansion("経費精算の申請方法は？", generation.AUTO_ROUTING_STRATEGY, self.settings)
         # 戦略の判定と検索文の生成は根拠の評価（low）と別の設定（ここでは none = 送らない）で呼ぶ。
         self.assertEqual(self.calls, [(QueryRoutingOutput, ""), (QueryExpansionOutput, "")])
         defaults = replace(self.settings, strategy_reasoning_effort="")
@@ -131,14 +144,15 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
 
     def test_crag_grade_uses_judge_effort(self):
         context = _answer_context([_record("r1", "docling", 1, 1, "経費精算の申請方法")])
-        with patch.object(generation, "parse_text_response",
-                          side_effect=self.record(_crag_grade(sufficient=True, relevant_chunk_ids=["r1"]))):
-            generation._grade_crag_retrieval(1, "経費精算の申請方法は？", "経費精算の申請方法は？", ("経費精算",),
-                                             context, self.settings)
+        with patch.object(
+            generation, "parse_text_response", side_effect=self.record(_crag_grade(sufficient=True, relevant_chunk_ids=["r1"]))
+        ):
+            generation._grade_crag_retrieval(1, "経費精算の申請方法は？", "経費精算の申請方法は？", ("経費精算",), context, self.settings)
         self.assertEqual([effort for _, effort in self.calls], ["low"])
 
     def test_generation_and_audit_use_generation_effort(self):
         from rag_engine.generation import grounded
+
         seen = []
 
         def fake_round(question, spans, settings, **options):
@@ -147,8 +161,7 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
 
         context = _answer_context([_record("r1", "docling", 1, 1, "経費精算の申請方法")])
         with patch.object(grounded, "run_round", side_effect=fake_round), self.assertRaises(RuntimeError):
-            generation.synthesize_grounded_answer("経費精算の申請方法は？", context, self.settings,
-                                                  image_prompt_mode="text_only")
+            generation.synthesize_grounded_answer("経費精算の申請方法は？", context, self.settings, image_prompt_mode="text_only")
         self.assertEqual(seen, ["high"])
 
     def test_query_expansion_max_queries_caps_generated_queries(self):
@@ -156,8 +169,7 @@ class PurposeEffortCallSiteTests(unittest.TestCase):
         settings = replace(self.settings, query_expansion_max_queries=2)
         with patch.object(generation, "parse_text_response", side_effect=self.record(output)):
             capped = generation.build_query_expansion("経費精算の申請方法は？", generation.RAG_FUSION_STRATEGY, settings)
-            default = generation.build_query_expansion("経費精算の申請方法は？", generation.RAG_FUSION_STRATEGY,
-                                                       self.settings)
+            default = generation.build_query_expansion("経費精算の申請方法は？", generation.RAG_FUSION_STRATEGY, self.settings)
         self.assertEqual(capped.generated_queries, ("経費精算の検索文1", "経費精算の検索文2"))
         self.assertEqual(len(default.generated_queries), generation.MAX_GENERATED_QUERY_COUNT)
 
@@ -182,10 +194,11 @@ class CragGradeSkipTests(unittest.TestCase):
 
     def build(self, context, settings=None, question=QUESTION):
         grade = _crag_grade(sufficient=True, relevant_chunk_ids=["r1"])
-        with patch.object(generation, "build_adb_hybrid_answer_context", return_value=context), \
-                patch.object(generation, "parse_text_response", return_value=grade) as parse:
-            built, _rewrites, attempts = generation.build_crag_answer_context(
-                question, "abcdef", ["docling"], settings or self.settings)
+        with (
+            patch.object(generation, "build_adb_hybrid_answer_context", return_value=context),
+            patch.object(generation, "parse_text_response", return_value=grade) as parse,
+        ):
+            built, _rewrites, attempts = generation.build_crag_answer_context(question, "abcdef", ["docling"], settings or self.settings)
         return built, attempts, parse.call_count
 
     def test_strong_signals_skip_the_grade_and_keep_the_context(self):
@@ -239,12 +252,12 @@ class OriginalQueryPrefetchTests(unittest.TestCase):
 
     def setUp(self):
         from grounded_stub import echo_model
+
         self.settings = _settings()
         self.enterContext(patch.object(generation, "load_latest_or_source_chunk_run", return_value=_chunk_run_stub()))
         self.enterContext(patch.object(generation, "check_adb_hybrid_search_ready"))
         self.context = _answer_context([_record("r1", "docling", 1, 1, "source evidence")])
-        self.search = self.enterContext(patch.object(generation, "build_adb_hybrid_answer_context",
-                                                     return_value=self.context))
+        self.search = self.enterContext(patch.object(generation, "build_adb_hybrid_answer_context", return_value=self.context))
         self.enterContext(patch.object(generation, "parse_text_response", side_effect=echo_model))
         self.prefetched = threading.Event()
         self.calls = []
@@ -252,20 +265,25 @@ class OriginalQueryPrefetchTests(unittest.TestCase):
     def dependencies(self, prefetch):
         def unused(*args, **kwargs):
             raise AssertionError("not used")
-        return AnswerDependencies(search=unused, check_ready=unused, parse_text=unused, parse_images=unused,
-                                  rerank=unused, prefetch_search=prefetch)
+
+        return AnswerDependencies(
+            search=unused, check_ready=unused, parse_text=unused, parse_images=unused, rerank=unused, prefetch_search=prefetch
+        )
 
     def expansion_waiting_for_prefetch(self, question, strategy, settings, **options):
         # 先読みが終わるまで質問拡張（LLM の応答待ち）を終えない。直列なら待ちきれずに失敗する。
         self.assertTrue(self.prefetched.wait(5), "質問拡張と元の質問の検索が並行に動いていない")
-        return generation.QueryExpansionResult(original_question=question, selected_strategy=generation.RAG_FUSION_STRATEGY,
-                                               effective_strategy=generation.RAG_FUSION_STRATEGY,
-                                               generated_queries=("追加の検索文",))
+        return generation.QueryExpansionResult(
+            original_question=question,
+            selected_strategy=generation.RAG_FUSION_STRATEGY,
+            effective_strategy=generation.RAG_FUSION_STRATEGY,
+            generated_queries=("追加の検索文",),
+        )
 
     def run_answer(self, question, strategy=generation.RAG_FUSION_LABEL):
-        return generation.answer_question_result(question, "abcdef", ["docling"], self.settings,
-                                                 query_strategy=strategy,
-                                                 answer_flow=generation.STANDARD_ANSWER_FLOW_LABEL)
+        return generation.answer_question_result(
+            question, "abcdef", ["docling"], self.settings, query_strategy=strategy, answer_flow=generation.STANDARD_ANSWER_FLOW_LABEL
+        )
 
     def test_prefetch_runs_during_query_expansion_with_the_first_search_query(self):
         caller = threading.current_thread()
@@ -273,11 +291,14 @@ class OriginalQueryPrefetchTests(unittest.TestCase):
         def prefetch(**kwargs):
             # 注入した I/O（contextvars）が先読みの thread でも見える。
             from rag_engine.dependencies import injected_prefetch_search
+
             self.calls.append((kwargs, threading.current_thread() is caller, injected_prefetch_search() is prefetch))
             self.prefetched.set()
 
-        with bind_dependencies(self.dependencies(prefetch)), \
-                patch.object(generation, "build_query_expansion", side_effect=self.expansion_waiting_for_prefetch):
+        with (
+            bind_dependencies(self.dependencies(prefetch)),
+            patch.object(generation, "build_query_expansion", side_effect=self.expansion_waiting_for_prefetch),
+        ):
             result = self.run_answer("受注の登録方法は？")
         self.assertEqual(len(self.calls), 1)
         kwargs, same_thread, visible = self.calls[0]
@@ -310,8 +331,10 @@ class OriginalQueryPrefetchTests(unittest.TestCase):
             self.prefetched.set()
             raise ConnectionError("db down")
 
-        with bind_dependencies(self.dependencies(prefetch)), \
-                patch.object(generation, "build_query_expansion", side_effect=self.expansion_waiting_for_prefetch):
+        with (
+            bind_dependencies(self.dependencies(prefetch)),
+            patch.object(generation, "build_query_expansion", side_effect=self.expansion_waiting_for_prefetch),
+        ):
             result = self.run_answer("受注の登録方法は？")
         self.assertIn("元の質問の検索の先読みに失敗しました（ConnectionError）", result.question_display)
         self.assertEqual(self.search.call_count, 1)

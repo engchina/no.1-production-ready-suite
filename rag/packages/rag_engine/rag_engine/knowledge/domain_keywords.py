@@ -24,6 +24,7 @@ MAX_EXTRACTED_DOMAIN_KEYWORDS = 16
 @dataclass(frozen=True)
 class DomainKeywordSaveResult:
     """ドメインキーワード保存時のパス、backup、件数を保持します。"""
+
     path: Path
     backup_path: Path | None
     keyword_count: int
@@ -121,11 +122,7 @@ def add_domain_keywords(existing_keywords: Sequence[str], additions: Sequence[st
 def remove_domain_keywords(existing_keywords: Sequence[str], removals: Sequence[str]) -> list[str]:
     """指定 keyword を正規化 key で既存 list から取り除きます。"""
     removal_keys = {_keyword_key(keyword) for keyword in removals if _keyword_key(keyword)}
-    return [
-        keyword
-        for keyword in normalize_domain_keywords(existing_keywords)
-        if _keyword_key(keyword) not in removal_keys
-    ]
+    return [keyword for keyword in normalize_domain_keywords(existing_keywords) if _keyword_key(keyword) not in removal_keys]
 
 
 def extract_domain_keywords(

@@ -1,4 +1,5 @@
 """要求ごとの根拠の覆域と、根拠の無い要求だけの再検索（#1279）。外部 I/O と LLM は使わない。"""
+
 from __future__ import annotations
 
 import re
@@ -36,9 +37,20 @@ def split(text: str) -> list[str]:
 
 
 def record(uid: str, text: str, level: str = "parent") -> AnswerRecord:
-    return AnswerRecord(id=uid, engine="docling", engine_label="Docling", page=1, seq_no=1, category="Chunk",
-                        text=text, source="manual.pdf", source_run_id="source", chunk_id=uid,
-                        chunk_uid=f"run:{uid}", chunk_level=level)
+    return AnswerRecord(
+        id=uid,
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=text,
+        source="manual.pdf",
+        source_run_id="source",
+        chunk_id=uid,
+        chunk_uid=f"run:{uid}",
+        chunk_level=level,
+    )
 
 
 def parent(uid: str, text: str, child_text: str = "") -> ContextParentEvidence:
@@ -130,8 +142,7 @@ def test_targeted_retrieval_respects_max_queries() -> None:
         calls.append(text)
         return context(parent(f"new-{text}", text))
 
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=2), retrieve=retrieve,
-                                            tokenize=split)
+    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=2), retrieve=retrieve, tokenize=split)
 
     assert calls == ["要求1", "要求2"]
     assert [r.request_id for r in results] == ["Q1", "Q2"]
@@ -148,8 +159,9 @@ def test_targeted_retrieval_stops_at_deadline() -> None:
         now[0] += 6.0  # 1 回の検索に 6 秒かかる
         return context()
 
-    results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(max_queries=5, deadline_seconds=10),
-                                            retrieve=retrieve, tokenize=split, clock=lambda: now[0])
+    results, stop = run_targeted_retrievals(
+        rows, targets, budget=CoverageBudget(max_queries=5, deadline_seconds=10), retrieve=retrieve, tokenize=split, clock=lambda: now[0]
+    )
 
     # 2 回目は 6 秒の時点で始まり（期限内）、3 回目は 12 秒の時点なので始めない。
     assert calls == ["要求1", "要求2"]
@@ -185,7 +197,9 @@ def test_select_new_parents_round_robin_skips_existing_and_caps() -> None:
 def test_hints_come_from_aliases_and_guide_triggers_sharing_request_terms() -> None:
     target = RequestTarget("Q2", "request", "請求書の再発行方法は？", ("請求書", "再発行"))
     knowledge = RuntimeKnowledgeContext(
-        original_question=QUESTION, expanded_question=QUESTION, path=None,  # type: ignore[arg-type]
+        original_question=QUESTION,
+        expanded_question=QUESTION,
+        path=None,  # type: ignore[arg-type]
         matched_terms=(RuntimeTerm(term="請求書", aliases=("インボイス",)), RuntimeTerm(term="受注", aliases=("オーダー",))),
         matched_rules=(RuntimeRule(rule_id="g", title="t", triggers=("再発行 承認", "受注 取消")),),
     )
@@ -217,14 +231,25 @@ def _patch_search(monkeypatch: pytest.MonkeyPatch, results: dict[str, AnswerCont
 
 def _cover(ctx: AnswerContext, settings: Any, question: str = QUESTION) -> tuple[AnswerContext, dict[str, Any]]:
     return a._cover_missing_requests(
-        question, ctx, settings, run_id="run", preferred_engines=["docling"], top_k=8, neighbor_child_count=0,
-        rerank_enabled=False, inquiry_conditions=None, retrieval_scope="knowledge_base", classification_filter=None,
-        runtime_knowledge=None)
+        question,
+        ctx,
+        settings,
+        run_id="run",
+        preferred_engines=["docling"],
+        top_k=8,
+        neighbor_child_count=0,
+        rerank_enabled=False,
+        inquiry_conditions=None,
+        retrieval_scope="knowledge_base",
+        classification_filter=None,
+        runtime_knowledge=None,
+    )
 
 
 def test_cover_missing_requests_adds_evidence_and_records_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = _patch_search(monkeypatch, {"請求書の再発行方法は？": context(
-        parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))})
+    calls = _patch_search(
+        monkeypatch, {"請求書の再発行方法は？": context(parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))}
+    )
     ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
 
     merged, trace = _cover(ctx, _settings())
@@ -247,8 +272,9 @@ def test_cover_missing_requests_adds_evidence_and_records_diagnostics(monkeypatc
 
 def test_cover_missing_requests_does_not_search_when_all_covered(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_search(monkeypatch, {})
-    ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"),
-                  parent("p2", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))
+    ctx = context(
+        parent("p1", "受注番号を入力し、登録ボタンを押します。"), parent("p2", "請求書の再発行は、請求一覧で再発行ボタンを押します。")
+    )
 
     merged, trace = _cover(ctx, _settings())
 
@@ -270,8 +296,7 @@ def test_cover_missing_requests_respects_disabled_setting(monkeypatch: pytest.Mo
 
 
 def test_cover_missing_requests_caps_added_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_search(monkeypatch, {"請求書の再発行方法は？": context(
-        *(parent(f"inv{i}", "請求書の再発行") for i in range(5)))})
+    _patch_search(monkeypatch, {"請求書の再発行方法は？": context(*(parent(f"inv{i}", "請求書の再発行") for i in range(5)))})
     ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
 
     merged, trace = _cover(ctx, _settings(request_coverage_max_chunks=2))
@@ -294,10 +319,15 @@ def test_cover_missing_requests_no_new_evidence_keeps_context(monkeypatch: pytes
 
 def test_engine_settings_default_and_env() -> None:
     default = get_settings(environ={}, dotenv_path=None)
-    custom = get_settings(environ={"RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": "0",
-                                   "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": "1",
-                                   "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": "3",
-                                   "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": "2.5"}, dotenv_path=None)
+    custom = get_settings(
+        environ={
+            "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL": "0",
+            "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES": "1",
+            "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS": "3",
+            "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": "2.5",
+        },
+        dotenv_path=None,
+    )
 
     assert default.request_coverage_retrieval_enabled is True
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)

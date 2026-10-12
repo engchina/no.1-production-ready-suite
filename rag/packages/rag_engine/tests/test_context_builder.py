@@ -15,27 +15,58 @@ from rag_engine.retrieval.context_builder import (
 class ContextBuilderTests(unittest.TestCase):
     def test_visual_context_recovers_explicit_text_across_parent_boundary(self):
         source = dict(source_run_id="parse-a", source="manual.pdf")
-        picture = replace(_chunk_record("image", "parent", 1, "", "画像の説明", chunk_uid="v1:image", **source),
-                          source_record_refs=({"record_id": "picture-1", "page": 1, "category": "Picture",
-                              "vision_context_record_refs": [{"record_id": "instruction", "page": 1,
-                                  "category": "List-item", "partially_visible": False}]},))
+        picture = replace(
+            _chunk_record("image", "parent", 1, "", "画像の説明", chunk_uid="v1:image", **source),
+            source_record_refs=(
+                {
+                    "record_id": "picture-1",
+                    "page": 1,
+                    "category": "Picture",
+                    "vision_context_record_refs": [
+                        {"record_id": "instruction", "page": 1, "category": "List-item", "partially_visible": False}
+                    ],
+                },
+            ),
+        )
         child = _chunk_record("hit", "child", 1, "image", "画像", chunk_uid="v1:hit", parent_chunk_uid="v1:image", **source)
-        body = replace(_chunk_record("body", "parent", 2, "", "希望日を入力して右側のアイコンを押し、保存する。", chunk_uid="v1:body", **source),
-                       source_record_refs=({"record_id": "instruction", "page": 1, "category": "List-item"},))
-        unrelated = replace(body, id="other", chunk_id="other", chunk_uid="v1:other",
-                            source_record_refs=({"record_id": "other-text", "page": 1, "category": "Text"},))
+        body = replace(
+            _chunk_record("body", "parent", 2, "", "希望日を入力して右側のアイコンを押し、保存する。", chunk_uid="v1:body", **source),
+            source_record_refs=({"record_id": "instruction", "page": 1, "category": "List-item"},),
+        )
+        unrelated = replace(
+            body,
+            id="other",
+            chunk_id="other",
+            chunk_uid="v1:other",
+            source_record_refs=({"record_id": "other-text", "page": 1, "category": "Text"},),
+        )
+
         def build(anchor=picture, candidate=body, limit=1):
-            return build_chunk_context_bundle(ContextBuildRequest(
-                question="希望日を追加したい", ranked_children=[child], active_records=[child, anchor, candidate, unrelated],
-                top_k=1, neighbor_child_count=1, max_records=1, support_record_limit=limit, max_chars=5000))
+            return build_chunk_context_bundle(
+                ContextBuildRequest(
+                    question="希望日を追加したい",
+                    ranked_children=[child],
+                    active_records=[child, anchor, candidate, unrelated],
+                    top_k=1,
+                    neighbor_child_count=1,
+                    max_records=1,
+                    support_record_limit=limit,
+                    max_chars=5000,
+                )
+            )
+
         bundle = build()
         self.assertEqual([r.id for r in bundle.records], ["image", "body"])
         self.assertIn("希望日を入力", bundle.text)
         self.assertEqual(bundle.supporting_evidence[0].reason, "visual_context_source")
         self.assertEqual(len(build(limit=0).records), 1)
         # ID が同じでも文書・解析版・チャンク版・ページが異なる本文は補完しない。
-        for changes in ({"source": "other.pdf"}, {"source_run_id": "parse-b"}, {"chunk_uid": "v2:body"},
-                        {"source_record_refs": ({"record_id": "instruction", "page": 2, "category": "List-item"},)}):
+        for changes in (
+            {"source": "other.pdf"},
+            {"source_run_id": "parse-b"},
+            {"chunk_uid": "v2:body"},
+            {"source_record_refs": ({"record_id": "instruction", "page": 2, "category": "List-item"},)},
+        ):
             with self.subTest(changes=changes):
                 self.assertEqual(len(build(candidate=replace(body, **changes)).records), 1)
         for visibility in (True, None):

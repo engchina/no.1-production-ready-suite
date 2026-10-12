@@ -1,4 +1,5 @@
 """回答に添付する原画像の選択と、モデルへ渡す画像メタデータ。"""
+
 from __future__ import annotations
 
 import re
@@ -29,6 +30,7 @@ PROMPT_INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("japanese_role_override", re.compile(r"あなたは(?:今から|これから)|新しい指示")),
 )
 
+
 def _prompt_safe_warnings(warnings: Sequence[str]) -> list[str]:
     """警告から検出箇所の抜粋を外し、根拠の識別子と pattern 名だけを prompt へ渡す。
 
@@ -36,6 +38,7 @@ def _prompt_safe_warnings(warnings: Sequence[str]) -> list[str]:
     抜粋付きの全文は実行記録と UI 用に呼出元が保持する。
     """
     return [": ".join(str(warning).split(": ", 2)[:2]) for warning in warnings]
+
 
 def prompt_injection_warnings_for_records(
     records: Sequence[AnswerRecord],
@@ -48,7 +51,8 @@ def prompt_injection_warnings_for_records(
     for record in _records_for_prompt_injection_scan(records, evidence_tree):
         text = str(getattr(record, "text", "") or "")
         from rag_engine.retrieval.metadata_context import answer_metadata_context
-        text += '\n' + answer_metadata_context(record)
+
+        text += "\n" + answer_metadata_context(record)
         if not text:
             continue
         source = str(getattr(record, "chunk_id", "") or getattr(record, "id", "") or record.citation)
@@ -66,27 +70,35 @@ def prompt_injection_warnings_for_records(
                 return tuple(warnings)
     return tuple(warnings)
 
+
 def _visual_evidence_anchors(
-    context: AnswerContext, image_evidence: Sequence[dict[str, Any]],
+    context: AnswerContext,
+    image_evidence: Sequence[dict[str, Any]],
 ) -> list[AnswerRecord]:
     """添付画像に対応するchild本文を最大4件・各4000文字まで原文保持する。
 
     画像説明の画面名と操作を別抜粋へ切断しない。同一解析・文書・parentと
     画像IDを照合し、本文の親子一致と全体予算はevidence_spansで再検証する。
     """
-    selected = {(item.get('source_run_id'), item.get('source'), item.get('chunk_id'), item.get('image_id'))
-                for item in image_evidence if item.get('source_run_id') and item.get('image_id')}
+    selected = {
+        (item.get("source_run_id"), item.get("source"), item.get("chunk_id"), item.get("image_id"))
+        for item in image_evidence
+        if item.get("source_run_id") and item.get("image_id")
+    }
     anchors = []
     for parent in context.evidence_tree:
         for child in parent.children:
             record = child.record
-            body = record.text.split('Child text:\n', 1)[-1].strip()
+            body = record.text.split("Child text:\n", 1)[-1].strip()
             if not body or len(body) > 4000:
                 continue
-            if any((record.source_run_id, record.source, parent.record.chunk_id, ref.get('record_id')) in selected
-                   for ref in record.source_record_refs):
+            if any(
+                (record.source_run_id, record.source, parent.record.chunk_id, ref.get("record_id")) in selected
+                for ref in record.source_record_refs
+            ):
                 anchors.append(record)
     return anchors[:4]
+
 
 def answer_image_evidence(
     records: Sequence[AnswerRecord],
@@ -101,8 +113,8 @@ def answer_image_evidence(
     selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     root = Path(output_dir)
-    procedure = bool(question and task_contract(question)['goal'] == 'procedure')
-    focus = ' '.join(goal_retrieval_queries(question)) or question
+    procedure = bool(question and task_contract(question)["goal"] == "procedure")
+    focus = " ".join(goal_retrieval_queries(question)) or question
     for record in records:
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
         raw_images = _metadata_image_evidence(metadata)
@@ -123,22 +135,28 @@ def answer_image_evidence(
                 continue
             path, asset_kind, exists = _resolve_image_prompt_path(raw, record, root)
             context_bbox = []
-            ref = next((r for r in record.source_record_refs if r.get('record_id') == image_id), {})
-            native_context = [str(r.get('text_preview') or '') for r in ref.get('vision_context_record_refs', ())
-                              if r.get('partially_visible') is False and r.get('category') in {'Text', 'List-item'}]
+            ref = next((r for r in record.source_record_refs if r.get("record_id") == image_id), {})
+            native_context = [
+                str(r.get("text_preview") or "")
+                for r in ref.get("vision_context_record_refs", ())
+                if r.get("partially_visible") is False and r.get("category") in {"Text", "List-item"}
+            ]
             if procedure:
                 # 手順の説明が画像外にある場合は、解析時と同じ赤枠付き文脈を添付する。
                 # 他ページや任意ファイルへ展開せず、同じ解析runの既存cropだけを使う。
-                context_path = str(raw.get('context_crop_path') or ref.get('vision_context_crop') or '')
-                refs = ref.get('vision_context_record_refs') or []
-                if context_path and record.source_run_id and any(
-                        r.get('partially_visible') is False and r.get('category') in {'Text', 'List-item'} for r in refs):
+                context_path = str(raw.get("context_crop_path") or ref.get("vision_context_crop") or "")
+                refs = ref.get("vision_context_record_refs") or []
+                if (
+                    context_path
+                    and record.source_run_id
+                    and any(r.get("partially_visible") is False and r.get("category") in {"Text", "List-item"} for r in refs)
+                ):
                     run_root = (root / record.source_run_id).resolve()
                     candidate = Path(context_path)
                     candidate = candidate.resolve() if candidate.is_absolute() else (run_root / candidate).resolve()
                     if run_root.is_relative_to(root.resolve()) and candidate.is_relative_to(run_root) and candidate.is_file():
-                        path, asset_kind, exists = candidate, 'context_crop', True
-                        context_bbox = ref.get('vision_context_bbox') or []
+                        path, asset_kind, exists = candidate, "context_crop", True
+                        context_bbox = ref.get("vision_context_bbox") or []
             entry = {
                 "image_id": image_id,
                 "source": record.source,
@@ -150,9 +168,7 @@ def answer_image_evidence(
                 "bbox": raw.get("bbox") if isinstance(raw.get("bbox"), list) else [],
                 "raw_type": str(raw.get("raw_type") or ""),
                 "visual_kind": str(raw.get("visual_kind") or ""),
-                "visual_structure": (
-                    dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}
-                ),
+                "visual_structure": (dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}),
                 "relationship": str(raw.get("relationship") or ""),
                 "table_id": str(raw.get("table_id") or ""),
                 "asset_kind": asset_kind,
@@ -164,19 +180,36 @@ def answer_image_evidence(
                 "embedding_modality": str(raw.get("embedding_modality") or "image_caption_fallback"),
                 "fallback_reason": "" if exists else "image asset was not found; using text/caption context only",
             }
-            visual_text = " ".join(str(raw.get(k) or "") for k in ("text_preview", "ocr_text", "retrieval_text", "visual_structure", "caption"))
-            entry["selection_score"] = (evidence_relevance(question, visual_text)
-                + evidence_relevance(question, evidence_excerpt(question, record.text, 1600))) if question else 0.0
+            visual_text = " ".join(
+                str(raw.get(k) or "") for k in ("text_preview", "ocr_text", "retrieval_text", "visual_structure", "caption")
+            )
+            entry["selection_score"] = (
+                (evidence_relevance(question, visual_text) + evidence_relevance(question, evidence_excerpt(question, record.text, 1600)))
+                if question
+                else 0.0
+            )
             # 生成説明の語数で操作の原文を押し出さない。目的の原文と、完全可視の
             # 周辺操作文の関連度を先に比較し、表示例・部分表示は加点しない。
-            entry['native_operation_score'] = max((evidence_relevance(focus, text) for text in native_context
-                if re.search(r'入力|押|選択|クリック|追加|削除|登録', text)), default=0.0) if procedure else 0.0
-            entry["selection_reason"] = ('native_operation_relevance' if entry['native_operation_score']
-                                         else "question_relevance" if question else "record_order")
+            entry["native_operation_score"] = (
+                max(
+                    (
+                        evidence_relevance(focus, text)
+                        for text in native_context
+                        if re.search(r"入力|押|選択|クリック|追加|削除|登録", text)
+                    ),
+                    default=0.0,
+                )
+                if procedure
+                else 0.0
+            )
+            entry["selection_reason"] = (
+                "native_operation_relevance" if entry["native_operation_score"] else "question_relevance" if question else "record_order"
+            )
             selected.append(entry)
             seen.add(key)
-    selected.sort(key=lambda item: (-item['native_operation_score'], -item["selection_score"]))
+    selected.sort(key=lambda item: (-item["native_operation_score"], -item["selection_score"]))
     return tuple(selected[:max_images])
+
 
 def _answer_image_metadata(
     records: Sequence[AnswerRecord],
@@ -193,10 +226,27 @@ def _answer_image_metadata(
         },
         # 全metadataには表HTML・vision説明・周辺本文が重複して入る。本文はcontextから渡す。
         "prompt_images": [
-            {key: item.get(key) for key in ("image_id", "source", "source_run_id", "page", "chunk_id", "bbox", "context_bbox", "target_highlight", "asset_kind", "visual_kind", "table_id", "embedding_modality")}
+            {
+                key: item.get(key)
+                for key in (
+                    "image_id",
+                    "source",
+                    "source_run_id",
+                    "page",
+                    "chunk_id",
+                    "bbox",
+                    "context_bbox",
+                    "target_highlight",
+                    "asset_kind",
+                    "visual_kind",
+                    "table_id",
+                    "embedding_modality",
+                )
+            }
             for item in image_evidence
         ],
     }
+
 
 def _resolve_image_prompt_path(
     raw: dict[str, Any],
@@ -220,6 +270,7 @@ def _resolve_image_prompt_path(
         return candidates[0][0], candidates[0][1], False
     return output_dir, "missing", False
 
+
 def _image_prompt_mode(image_evidence: Sequence[dict[str, Any]], settings: Settings) -> str:
     """根拠の画像を原画像のまま添付するか。添付する回は既定の Vision モデルで答える（#649）。"""
     if not image_evidence:
@@ -234,6 +285,7 @@ def _image_prompt_mode(image_evidence: Sequence[dict[str, Any]], settings: Setti
     except Exception:
         return "text_fallback_unknown_provider"
     return "vision_attachments" if provider.supports_vision and provider.model else "text_fallback_llm_without_vision"
+
 
 def _trim_generated_text(value: Any, max_length: int) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()

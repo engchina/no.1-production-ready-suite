@@ -89,6 +89,7 @@ def persist_semantic_visual_crops(
                 record.raw["visual_asset_bbox"] = [float(value) for value in record.bbox]
                 if record.category == "Table" and isinstance(record.raw.get("vision_description"), dict):
                     from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
+
                     enrich_table_visual_rows(record, page, record.raw["vision_description"], run_dir)
                 saved += 1
             except Exception as exc:
@@ -114,6 +115,7 @@ def _visual_targets(records: Sequence[LayoutRecord]) -> list[LayoutRecord]:
                 continue
             if visual_role.reason == "meaningful_text_in_visual" and not record.text.strip():
                 from rag_engine.parsing.picture_descriptions import vision_description_text
+
                 record.text = vision_description_text(record.raw.get("vision_description") or {})
         targets.append(record)
     return sorted(targets, key=lambda item: (item.page, item.seq_no, item.bbox[1], item.bbox[0]))

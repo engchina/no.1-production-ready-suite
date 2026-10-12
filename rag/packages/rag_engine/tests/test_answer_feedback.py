@@ -77,8 +77,7 @@ class AnswerFeedbackTests(unittest.TestCase):
     def test_feedback_ids_are_unique_within_the_same_second(self):
         from rag_engine.knowledge.answer_feedback import _create_feedback_id
 
-        ids = {_create_feedback_id(run_id="r", answer_id="a", feedback_type="correct",
-                                   created_at="2026-01-01T00:00:00Z") for _ in range(5)}
+        ids = {_create_feedback_id(run_id="r", answer_id="a", feedback_type="correct", created_at="2026-01-01T00:00:00Z") for _ in range(5)}
         self.assertEqual(len(ids), 5)
 
     def test_rejects_invalid_path_parts_and_feedback_types(self):

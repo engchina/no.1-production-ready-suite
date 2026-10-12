@@ -48,7 +48,9 @@ class ChunkingTests(unittest.TestCase):
             payload,
             source_run_id="abcdef",
             selected_engine_ids=["docling"],
-            config=ChunkingConfig(child_target_chars=80, table_child_target_chars=80, parent_target_chars=200, parent_max_pages=2, parent_max_children=8),
+            config=ChunkingConfig(
+                child_target_chars=80, table_child_target_chars=80, parent_target_chars=200, parent_max_pages=2, parent_max_children=8
+            ),
         )
 
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
@@ -58,16 +60,18 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(len(parents), 1)
         self.assertEqual(children[0].parent_chunk_id, parents[0].chunk_id)
         self.assertEqual(parents[0].child_chunk_ids, [children[0].chunk_id])
-        self.assertEqual(children[0].source_seq_ranges, [{"page": 1, "seq_start": 1, "seq_end": 3}, {"page": 2, "seq_start": 1, "seq_end": 1}])
+        self.assertEqual(
+            children[0].source_seq_ranges, [{"page": 1, "seq_start": 1, "seq_end": 3}, {"page": 2, "seq_start": 1, "seq_end": 1}]
+        )
         self.assertEqual(children[0].metadata["section_path"], ["Ⅰ. 仕入先の登録"])
         self.assertEqual(children[0].metadata["layout"]["logical_page_labels"], {"1": 31})
         self.assertNotIn("31", children[0].text)
         for chunk in [*children, *parents]:
-            ranges = chunk.metadata['layout']['native_text_ranges']
-            native_text = [chunk.text[r['start']:r['end']] for r in ranges]
-            self.assertIn('仕入先登録の説明です。', native_text)
-            self.assertIn('支払区分に5を設定します。', native_text)
-            self.assertNotIn('Ⅰ. 仕入先の登録', native_text)
+            ranges = chunk.metadata["layout"]["native_text_ranges"]
+            native_text = [chunk.text[r["start"] : r["end"]] for r in ranges]
+            self.assertIn("仕入先登録の説明です。", native_text)
+            self.assertIn("支払区分に5を設定します。", native_text)
+            self.assertNotIn("Ⅰ. 仕入先の登録", native_text)
 
     def test_picture_and_ocr_records_with_same_bbox_are_one_atomic_child(self):
         bbox = [10, 20, 300, 400]
@@ -204,23 +208,51 @@ class ChunkingTests(unittest.TestCase):
         """埋め込み用の補足は、HTML や JSON の途中で切れた文字列を含まず、表の内容を半端に二重化しない (#592)。"""
         from rag_engine.chunking import _context_preview, _flatten_table_html, _table_search_text, _table_visual_evidence_text
 
-        table = ("<table><tbody><tr><th>項目</th><th>改正前</th><th>改正後</th></tr><tr><td>① 月間上限額 の引き上げ</td>"
-                 "<td>月間上限額は 100 万円です。</td><td>月間上限額は、 120 万円まで 引き上げられます。</td></tr></tbody></table>")
-        self.assertEqual(_flatten_table_html("概要\n" + table + "\n次の段落。"),
-                         "概要 項目 | 改正前 | 改正後 / ① 月間上限額 の引き上げ | 月間上限額は 100 万円です。 | 月間上限額は、 120 万円まで 引き上げられます。 / 次の段落。")
+        table = (
+            "<table><tbody><tr><th>項目</th><th>改正前</th><th>改正後</th></tr><tr><td>① 月間上限額 の引き上げ</td>"
+            "<td>月間上限額は 100 万円です。</td><td>月間上限額は、 120 万円まで 引き上げられます。</td></tr></tbody></table>"
+        )
+        self.assertEqual(
+            _flatten_table_html("概要\n" + table + "\n次の段落。"),
+            "概要 項目 | 改正前 | 改正後 / ① 月間上限額 の引き上げ | 月間上限額は 100 万円です。 | 月間上限額は、 120 万円まで 引き上げられます。 / 次の段落。",
+        )
         # 上限に収まらないときは文・セルの区切りで切り、tag や語の途中では切らない。
         preview = _context_preview("平成 27 年 6 月のお知らせです。" + table, 90)
-        self.assertEqual(preview, "平成 27 年 6 月のお知らせです。 項目 | 改正前 | 改正後 / ① 月間上限額 の引き上げ | 月間上限額は 100 万円です。…")
+        self.assertEqual(
+            preview, "平成 27 年 6 月のお知らせです。 項目 | 改正前 | 改正後 / ① 月間上限額 の引き上げ | 月間上限額は 100 万円です。…"
+        )
         self.assertLessEqual(len(preview), 90)
         self.assertEqual(_context_preview("短い本文。", 120), "短い本文。")
 
         structure = {"column_headers": [{"column_index": 1, "text": "項目"}, {"column_index": 2, "text": "内容"}], "caption": ""}
-        own_crop = {"image_id": "docling-p1-6", "record_id": "docling-p1-6", "page": 1, "seq_no": 6,
-                    "relationship": "source_table_crop", "text_preview": table[:240] + "…", "ocr_text": ""}
-        picture = {"image_id": "docling-p1-9", "record_id": "docling-p1-9", "page": 1, "seq_no": 9, "relationship": "contained",
-                   "text_preview": "駅前店のアイコン", "ocr_text": "BANK"}
-        context = _table_search_text([{"table_id": "docling-p1-6", "structure": structure,
-                                       "row_group": {"row_start": 2, "row_end": 3, "row_count": 2}, "visual_evidence": [own_crop, picture]}])
+        own_crop = {
+            "image_id": "docling-p1-6",
+            "record_id": "docling-p1-6",
+            "page": 1,
+            "seq_no": 6,
+            "relationship": "source_table_crop",
+            "text_preview": table[:240] + "…",
+            "ocr_text": "",
+        }
+        picture = {
+            "image_id": "docling-p1-9",
+            "record_id": "docling-p1-9",
+            "page": 1,
+            "seq_no": 9,
+            "relationship": "contained",
+            "text_preview": "駅前店のアイコン",
+            "ocr_text": "BANK",
+        }
+        context = _table_search_text(
+            [
+                {
+                    "table_id": "docling-p1-6",
+                    "structure": structure,
+                    "row_group": {"row_start": 2, "row_end": 3, "row_count": 2},
+                    "visual_evidence": [own_crop, picture],
+                }
+            ]
+        )
         self.assertEqual(context, "表 docling-p1-6。列見出し 項目 / 内容。2〜3 行目（2 行）。表内画像 docling-p1-9")
         # 表自身の切り出し画像は表 HTML の複製なので本文に載せない。表内の Picture は載せる。
         record = {"raw": {"table_visual_evidence": [own_crop, picture], "table_visual_texts": {}}}
@@ -232,41 +264,69 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(_table_visual_evidence_text({"raw": {"table_visual_evidence": [own_crop]}}), "")
 
     def _children(self, payload, config=None):
-        chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"],
-                                           config=config or ChunkingConfig())
+        chunks = build_small_to_big_chunks(
+            payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=config or ChunkingConfig()
+        )
         return [c for c in chunks if c.chunk_level == CHILD_CHUNK_LEVEL], [c for c in chunks if c.chunk_level == PARENT_CHUNK_LEVEL]
 
     def test_ocr_text_of_an_excluded_decorative_picture_does_not_become_a_child(self):
         # ロゴの Picture 本体は除外されるのに、同じ bbox の OCR 集約が 15 字の単独 child として残っていた (#594)。
         bbox = [1674, 3071, 2159, 3193]
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Text", "本文です。", bbox=[10, 10, 500, 60]),
-            _record(1, 2, "Picture", "", raw_type="picture", bbox=bbox,
-                    raw={"visual_role": "decorative", "visual_role_reason": "vision_logo", "rag_excluded": True}),
-            _record(1, 3, "Picture", "OCR抽出テキスト:\nMUFG", raw_type="picture_ocr_text", bbox=bbox),
-        ]))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Text", "本文です。", bbox=[10, 10, 500, 60]),
+                    _record(
+                        1,
+                        2,
+                        "Picture",
+                        "",
+                        raw_type="picture",
+                        bbox=bbox,
+                        raw={"visual_role": "decorative", "visual_role_reason": "vision_logo", "rag_excluded": True},
+                    ),
+                    _record(1, 3, "Picture", "OCR抽出テキスト:\nMUFG", raw_type="picture_ocr_text", bbox=bbox),
+                ]
+            )
+        )
         self.assertEqual([c.text for c in children], ["本文です。"])
         # 除外されない Picture の OCR 集約は従来どおり残る。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Text", "本文です。", bbox=[10, 10, 500, 60]),
-            _record(1, 2, "Picture", "画像概要: 画面の説明。", raw_type="picture", bbox=[10, 100, 900, 700],
-                    raw={"visual_role": "content"}),
-            _record(1, 3, "Picture", "OCR抽出テキスト:\n保存", raw_type="picture_ocr_text", bbox=[10, 100, 900, 700]),
-        ]))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Text", "本文です。", bbox=[10, 10, 500, 60]),
+                    _record(
+                        1,
+                        2,
+                        "Picture",
+                        "画像概要: 画面の説明。",
+                        raw_type="picture",
+                        bbox=[10, 100, 900, 700],
+                        raw={"visual_role": "content"},
+                    ),
+                    _record(1, 3, "Picture", "OCR抽出テキスト:\n保存", raw_type="picture_ocr_text", bbox=[10, 100, 900, 700]),
+                ]
+            )
+        )
         self.assertTrue(any("保存" in c.text for c in children))
 
     def test_retrieval_text_drops_picture_ocr_only_when_vision_described_the_picture(self):
         """Vision 説明が本文になった図の OCR は検索文から外し、回答用 text には残す。失敗・未実施なら残す (#900)。"""
         from rag_engine.chunking import audit_chunk_retrieval_text
+
         bbox = [10, 100, 900, 700]
         described = {"visual_role": "content", "vision_description": {"visible_buttons": ["保存"]}}
 
         def picture_child(picture_raw, picture_text="■ 画面\n操作: 保存ボタンを押す。"):
-            children, _ = self._children(_viewer_payload([
-                _record(1, 1, "Text", "本文です。", bbox=[10, 10, 500, 60]),
-                _record(1, 2, "Picture", picture_text, raw_type="picture", bbox=bbox, raw=picture_raw),
-                _record(1, 3, "Picture", "OCR抽出テキスト:\n保存 キャンセル", raw_type="picture_ocr_text", bbox=bbox),
-            ]))
+            children, _ = self._children(
+                _viewer_payload(
+                    [
+                        _record(1, 1, "Text", "本文です。", bbox=[10, 10, 500, 60]),
+                        _record(1, 2, "Picture", picture_text, raw_type="picture", bbox=bbox, raw=picture_raw),
+                        _record(1, 3, "Picture", "OCR抽出テキスト:\n保存 キャンセル", raw_type="picture_ocr_text", bbox=bbox),
+                    ]
+                )
+            )
             return next(c for c in children if "Picture" in c.metadata["source_categories"])
 
         child = picture_child(described)
@@ -286,11 +346,15 @@ class ChunkingTests(unittest.TestCase):
         bbox = [20, 30, 45, 55]
 
         def table_child(picture_text, picture_raw):
-            children, _ = self._children(_viewer_payload([
-                _record(1, 1, "Table", table_text, raw_type="table", bbox=[10, 10, 90, 90]),
-                _record(1, 2, "Picture", picture_text, raw_type="picture", bbox=bbox, raw=picture_raw),
-                _record(1, 3, "Picture", "OK キャンセル", raw_type="picture_ocr_text", bbox=bbox),
-            ]))
+            children, _ = self._children(
+                _viewer_payload(
+                    [
+                        _record(1, 1, "Table", table_text, raw_type="table", bbox=[10, 10, 90, 90]),
+                        _record(1, 2, "Picture", picture_text, raw_type="picture", bbox=bbox, raw=picture_raw),
+                        _record(1, 3, "Picture", "OK キャンセル", raw_type="picture_ocr_text", bbox=bbox),
+                    ]
+                )
+            )
             self.assertEqual(len(children), 1)
             return children[0]
 
@@ -305,26 +369,45 @@ class ChunkingTests(unittest.TestCase):
 
     def test_table_supplement_stays_in_the_table_child(self):
         # text layer から補った表の原文（#564）は表と同じ child に入れ、別 child / parent へ切り離さない (#594)。
-        supplement = _record(1, 3, "Text", "表の補足（セルに割り当てられなかった原文）:\n優遇期間 投資した年から最長 5 年間",
-                             raw_type="table_unassigned_text", bbox=[10, 10, 90, 90])
-        big_table = "<table><tr><th>項目</th><th>説明</th></tr>" + "".join(
-            f"<tr><td>項目{i}</td><td>{'説明' * 30}</td></tr>" for i in range(1, 12)) + "</table>"
-        children, parents = self._children(_viewer_payload([
-            _record(1, 1, "Text", "前置きの本文です。" * 40),
-            _record(1, 2, "Table", big_table, raw_type="table", bbox=[10, 10, 90, 90]),
-            supplement,
-            _record(1, 4, "Text", "後続の本文です。"),
-        ]), ChunkingConfig(child_target_chars=1600, table_child_target_chars=1600, parent_target_chars=1800, parent_max_children=8))
+        supplement = _record(
+            1,
+            3,
+            "Text",
+            "表の補足（セルに割り当てられなかった原文）:\n優遇期間 投資した年から最長 5 年間",
+            raw_type="table_unassigned_text",
+            bbox=[10, 10, 90, 90],
+        )
+        big_table = (
+            "<table><tr><th>項目</th><th>説明</th></tr>"
+            + "".join(f"<tr><td>項目{i}</td><td>{'説明' * 30}</td></tr>" for i in range(1, 12))
+            + "</table>"
+        )
+        children, parents = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Text", "前置きの本文です。" * 40),
+                    _record(1, 2, "Table", big_table, raw_type="table", bbox=[10, 10, 90, 90]),
+                    supplement,
+                    _record(1, 4, "Text", "後続の本文です。"),
+                ]
+            ),
+            ChunkingConfig(child_target_chars=1600, table_child_target_chars=1600, parent_target_chars=1800, parent_max_children=8),
+        )
         table_child = next(c for c in children if "<table" in c.text)
         self.assertIn("最長 5 年間", table_child.text)
         self.assertEqual([r["raw_type"] for r in table_child.source_record_refs], ["table", "table_unassigned_text"])
         self.assertNotIn("最長 5 年間", next(c for c in children if "後続の本文" in c.text).text)
         # 行分割した表では末尾の行グループに付く（表が子の目標文字数を超えるよう目標を小さくする）。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "手数料一覧"),
-            _record(1, 2, "Table", big_table, raw_type="table", bbox=[10, 10, 90, 90]),
-            supplement,
-        ]), ChunkingConfig(child_target_chars=900, table_child_target_chars=900))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "手数料一覧"),
+                    _record(1, 2, "Table", big_table, raw_type="table", bbox=[10, 10, 90, 90]),
+                    supplement,
+                ]
+            ),
+            ChunkingConfig(child_target_chars=900, table_child_target_chars=900),
+        )
         groups = [c for c in children if any(r["raw_type"] == "table_row_group" for r in c.source_record_refs)]
         self.assertGreater(len(groups), 1)
         self.assertIn("最長 5 年間", groups[-1].text)
@@ -332,62 +415,87 @@ class ChunkingTests(unittest.TestCase):
 
     def test_picture_over_an_unstructured_table_is_not_duplicated(self):
         # HTML 構造化できない表では、表内 Picture の判定を表 child と単独 child で一致させる (#594)。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Table", "項目 値\nA 1\nB 2", raw_type="table", bbox=[10, 10, 90, 90]),
-            _record(1, 2, "Picture", "回答用本文: 表内のアイコン説明。", raw_type="picture", bbox=[20, 30, 45, 55],
-                    raw={"vision_crop": "docling/vision/docling-p1-2.png"}),
-        ]))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Table", "項目 値\nA 1\nB 2", raw_type="table", bbox=[10, 10, 90, 90]),
+                    _record(
+                        1,
+                        2,
+                        "Picture",
+                        "回答用本文: 表内のアイコン説明。",
+                        raw_type="picture",
+                        bbox=[20, 30, 45, 55],
+                        raw={"vision_crop": "docling/vision/docling-p1-2.png"},
+                    ),
+                ]
+            )
+        )
         mentions = sum("表内のアイコン説明" in c.text for c in children)
         evidence = sum(1 for c in children for i in c.metadata.get("image_evidence", []) if i["image_id"] == "docling-p1-2")
         self.assertEqual((mentions, evidence), (1, 1))
 
     def test_repeated_heading_does_not_duplicate_the_section_path(self):
         # 帳票の 2 ページ目に同じ表題が再出現しても、1 ページ目の下位見出しを引き継がない (#594)。
-        children, parents = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "自動出荷依頼書"),
-            _record(1, 2, "Section-header", "[ ご記入の注意事項 ]"),
-            _record(1, 3, "Text", "1ページ目の注意事項です。"),
-            _record(2, 1, "Section-header", "自動出荷依頼書"),
-            _record(2, 2, "Section-header", "【印鑑の押印例】"),
-            _record(2, 3, "Text", "2ページ目の押印例です。"),
-        ]))
+        children, parents = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "自動出荷依頼書"),
+                    _record(1, 2, "Section-header", "[ ご記入の注意事項 ]"),
+                    _record(1, 3, "Text", "1ページ目の注意事項です。"),
+                    _record(2, 1, "Section-header", "自動出荷依頼書"),
+                    _record(2, 2, "Section-header", "【印鑑の押印例】"),
+                    _record(2, 3, "Text", "2ページ目の押印例です。"),
+                ]
+            )
+        )
         second = next(c for c in children if "2ページ目" in c.text)
         self.assertEqual(second.metadata["section_path"], ["自動出荷依頼書", "【印鑑の押印例】"])
-        self.assertEqual(next(c for c in children if "1ページ目" in c.text).metadata["section_path"], ["自動出荷依頼書", "[ ご記入の注意事項 ]"])
+        self.assertEqual(
+            next(c for c in children if "1ページ目" in c.text).metadata["section_path"], ["自動出荷依頼書", "[ ご記入の注意事項 ]"]
+        )
 
     def test_recurring_heading_text_is_a_heading_even_when_labeled_list_item(self):
         # 目次で Section-header だった「２．…」が本文で List-item と分類されても見出しとして扱う (#626)。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "１．掛率の登録"),
-            _record(1, 2, "Section-header", "２．顧客への掛率の登録"),
-            _record(2, 1, "Section-header", "１．掛率の登録"),
-            _record(2, 2, "Text", "掛率の登録を行います。"),
-            _record(3, 1, "List-item", "２．顧客への掛率の登録"),
-            _record(3, 2, "Text", "顧客ごとに掛率の登録を行います。"),
-        ]))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "１．掛率の登録"),
+                    _record(1, 2, "Section-header", "２．顧客への掛率の登録"),
+                    _record(2, 1, "Section-header", "１．掛率の登録"),
+                    _record(2, 2, "Text", "掛率の登録を行います。"),
+                    _record(3, 1, "List-item", "２．顧客への掛率の登録"),
+                    _record(3, 2, "Text", "顧客ごとに掛率の登録を行います。"),
+                ]
+            )
+        )
         self.assertEqual(next(c for c in children if "顧客ごとに" in c.text).metadata["section_path"], ["２．顧客への掛率の登録"])
         self.assertEqual(next(c for c in children if "掛率の登録を行います" in c.text).metadata["section_path"], ["１．掛率の登録"])
 
     def test_flow_list_on_the_cover_page_is_not_a_heading(self):
         # 表紙のフロー一覧（番号行が 3 つ以上並び、後のページで見出しとして再出現する）は見出しにしない。
         # 本文側の「1 ．登録倉庫の確認」（空白入り・List-item）は再出現として見出しに寄せる (#714)。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "手順書"),
-            _record(1, 2, "List-item", "１．登録倉庫の確認"),
-            _record(1, 3, "Text", "※この資料の２ページを参照してください。"),
-            _record(1, 4, "List-item", "２．倉庫の廃止登録"),
-            _record(1, 5, "List-item", "３．倉庫の登録"),
-            _record(1, 6, "List-item", "１．保管委託先の変更"),
-            _record(2, 1, "Section-header", "＜倉庫統廃合＞"),
-            _record(2, 2, "List-item", "1 ．登録倉庫の確認"),
-            _record(2, 3, "Text", "登録有無を確認します。"),
-            _record(3, 1, "Section-header", "2 ．倉庫の廃止登録"),
-            _record(3, 2, "Text", "廃止を行います。"),
-            _record(4, 1, "Section-header", "３．倉庫の登録"),
-            _record(4, 2, "Text", "新規に登録します。"),
-            _record(5, 1, "Section-header", "１．保管委託先の変更"),
-            _record(5, 2, "Text", "委託先を変更します。"),
-        ]))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "手順書"),
+                    _record(1, 2, "List-item", "１．登録倉庫の確認"),
+                    _record(1, 3, "Text", "※この資料の２ページを参照してください。"),
+                    _record(1, 4, "List-item", "２．倉庫の廃止登録"),
+                    _record(1, 5, "List-item", "３．倉庫の登録"),
+                    _record(1, 6, "List-item", "１．保管委託先の変更"),
+                    _record(2, 1, "Section-header", "＜倉庫統廃合＞"),
+                    _record(2, 2, "List-item", "1 ．登録倉庫の確認"),
+                    _record(2, 3, "Text", "登録有無を確認します。"),
+                    _record(3, 1, "Section-header", "2 ．倉庫の廃止登録"),
+                    _record(3, 2, "Text", "廃止を行います。"),
+                    _record(4, 1, "Section-header", "３．倉庫の登録"),
+                    _record(4, 2, "Text", "新規に登録します。"),
+                    _record(5, 1, "Section-header", "１．保管委託先の変更"),
+                    _record(5, 2, "Text", "委託先を変更します。"),
+                ]
+            )
+        )
         path = lambda needle: next(c for c in children if needle in c.text).metadata["section_path"]
         self.assertEqual(path("登録有無")[-1], "1 ．登録倉庫の確認")
         self.assertNotIn("１．保管委託先の変更", path("登録有無"))
@@ -397,15 +505,19 @@ class ChunkingTests(unittest.TestCase):
 
     def test_restated_current_heading_in_the_body_does_not_change_the_section(self):
         # 節の途中に現在の節名が本文（List-item）として再掲されても節を変えない。Section-header の再出現は戻る (#764)。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "Ａシステム管理－ ( ４ ) 利用権限設定"),
-            _record(1, 2, "Section-header", "B 【操作説明】"),
-            _record(1, 3, "Text", "①グループ一覧からグループを選択します。"),
-            _record(1, 4, "List-item", "Ａシステム管理-（ 4 ）利用権限設定"),  # 柱に近い再掲
-            _record(1, 5, "Text", "④実行ボタンを押します。"),
-            _record(2, 1, "Section-header", "Ａシステム管理－ ( ４ ) 利用権限設定"),  # 2 ページ目の見出し
-            _record(2, 2, "Text", "⑤戻るボタンを押します。"),
-        ]))
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "Ａシステム管理－ ( ４ ) 利用権限設定"),
+                    _record(1, 2, "Section-header", "B 【操作説明】"),
+                    _record(1, 3, "Text", "①グループ一覧からグループを選択します。"),
+                    _record(1, 4, "List-item", "Ａシステム管理-（ 4 ）利用権限設定"),  # 柱に近い再掲
+                    _record(1, 5, "Text", "④実行ボタンを押します。"),
+                    _record(2, 1, "Section-header", "Ａシステム管理－ ( ４ ) 利用権限設定"),  # 2 ページ目の見出し
+                    _record(2, 2, "Text", "⑤戻るボタンを押します。"),
+                ]
+            )
+        )
         path = lambda needle: next(c for c in children if needle in c.text).metadata["section_path"]
         self.assertEqual(path("④実行"), ["Ａシステム管理－ ( ４ ) 利用権限設定", "B 【操作説明】"])
         self.assertEqual(path("①グループ"), path("④実行"))
@@ -413,15 +525,21 @@ class ChunkingTests(unittest.TestCase):
 
     def test_route_shaped_caption_becomes_a_heading(self):
         # 図の caption として返った画面経路行は見出しとして section_path に載せる (#626)。
-        children, _ = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "１．掛率の登録"),
-            _record(1, 2, "Caption", "[ 画面：マスタ管理⇒マスタ管理 2 タブ⇒掛率登録 ]"),
-            _record(1, 3, "List-item", "①新しい掛率コードを入力します。"),
-            _record(1, 4, "Caption", "図1 掛率登録画面"),
-            _record(1, 5, "Text", "以上"),
-        ]))
-        self.assertEqual(next(c for c in children if "新しい掛率コード" in c.text).metadata["section_path"],
-                         ["１．掛率の登録", "[ 画面：マスタ管理⇒マスタ管理 2 タブ⇒掛率登録 ]"])
+        children, _ = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "１．掛率の登録"),
+                    _record(1, 2, "Caption", "[ 画面：マスタ管理⇒マスタ管理 2 タブ⇒掛率登録 ]"),
+                    _record(1, 3, "List-item", "①新しい掛率コードを入力します。"),
+                    _record(1, 4, "Caption", "図1 掛率登録画面"),
+                    _record(1, 5, "Text", "以上"),
+                ]
+            )
+        )
+        self.assertEqual(
+            next(c for c in children if "新しい掛率コード" in c.text).metadata["section_path"],
+            ["１．掛率の登録", "[ 画面：マスタ管理⇒マスタ管理 2 タブ⇒掛率登録 ]"],
+        )
         self.assertNotIn("図1 掛率登録画面", " ".join(p for c in children for p in c.metadata["section_path"]))
 
     def test_legacy_picture_ocr_heading_is_normalized_in_chunks(self):
@@ -515,7 +633,10 @@ class ChunkingTests(unittest.TestCase):
         )
 
         chunks = build_small_to_big_chunks(
-            payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig(),
+            payload,
+            source_run_id="abcdef",
+            selected_engine_ids=["docling"],
+            config=ChunkingConfig(),
         )
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
 
@@ -523,12 +644,15 @@ class ChunkingTests(unittest.TestCase):
         table_child = next(child for child in children if "「保存」" in child.text)
         text_child = next(child for child in children if "「履歴」" in child.text)
         self.assertEqual([ref["category"] for ref in table_child.source_record_refs], ["Table"])
-        self.assertEqual([(ref["category"], ref.get("visual_role")) for ref in text_child.source_record_refs],
-                         [("Picture", "inline_icon"), ("Text", None)])
+        self.assertEqual(
+            [(ref["category"], ref.get("visual_role")) for ref in text_child.source_record_refs],
+            [("Picture", "inline_icon"), ("Text", None)],
+        )
 
     def test_chunking_does_not_mutate_the_input_payload(self):
         # Picture の役割付けで呼び出し側の payload を書き換えない。同じ payload で 2 回呼んでも同じ結果 (#798)。
         import copy
+
         payload = _viewer_payload(
             [
                 _record(1, 1, "Text", "「履歴」ボタンを押すと連携の送信記録を照会します。", bbox=[10, 40, 70, 55]),
@@ -550,11 +674,14 @@ class ChunkingTests(unittest.TestCase):
         from unittest.mock import patch
         from rag_engine import chunking
         from rag_engine.parsing.table_structure import parse_html_table_structure
+
         html = "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>"
-        payload = _viewer_payload([
-            _record(1, 1, "Table", html, raw_type="table", bbox=[10, 20, 70, 60]),
-            _record(1, 2, "Picture", "", raw_type="picture", bbox=[20, 30, 40, 50]),
-        ])
+        payload = _viewer_payload(
+            [
+                _record(1, 1, "Table", html, raw_type="table", bbox=[10, 20, 70, 60]),
+                _record(1, 2, "Picture", "", raw_type="picture", bbox=[20, 30, 40, 50]),
+            ]
+        )
         chunking._table_structure.cache_clear()
         try:
             with patch("rag_engine.chunking.records.parse_html_table_structure", wraps=parse_html_table_structure) as parse:
@@ -636,10 +763,7 @@ class ChunkingTests(unittest.TestCase):
     def test_oversized_table_is_split_into_row_group_children(self):
         table_text = (
             "<table><tr><th>項目</th><th>説明</th></tr>"
-            + "".join(
-                f"<tr><td>項目{i}</td><td>{'長い説明' * 20}</td></tr>"
-                for i in range(1, 8)
-            )
+            + "".join(f"<tr><td>項目{i}</td><td>{'長い説明' * 20}</td></tr>" for i in range(1, 8))
             + "</table>"
         )
         payload = _viewer_payload([_record(1, 1, "Table", table_text, raw_type="table")])
@@ -666,10 +790,7 @@ class ChunkingTests(unittest.TestCase):
     def test_oversized_table_crop_is_attached_only_to_first_row_group(self):
         table_text = (
             "<table><tr><th>項目</th><th>説明</th></tr>"
-            + "".join(
-                f"<tr><td>項目{i}</td><td>{'長い説明' * 20}</td></tr>"
-                for i in range(1, 8)
-            )
+            + "".join(f"<tr><td>項目{i}</td><td>{'長い説明' * 20}</td></tr>" for i in range(1, 8))
             + "</table>"
         )
         payload = _viewer_payload(
@@ -695,10 +816,7 @@ class ChunkingTests(unittest.TestCase):
         table_crop_children = [
             child
             for child in children
-            if any(
-                image.get("relationship") == "source_table_crop"
-                for image in child.metadata.get("image_evidence", [])
-            )
+            if any(image.get("relationship") == "source_table_crop" for image in child.metadata.get("image_evidence", []))
         ]
 
         self.assertGreater(len(children), 1)
@@ -707,10 +825,7 @@ class ChunkingTests(unittest.TestCase):
     def test_table_row_group_visual_evidence_is_limited_to_matching_rows(self):
         table_text = (
             "<table><tr><th>画像</th><th>説明</th></tr>"
-            + "".join(
-                f"<tr><td></td><td>項目{i} {'長い説明' * 80}</td></tr>"
-                for i in range(1, 6)
-            )
+            + "".join(f"<tr><td></td><td>項目{i} {'長い説明' * 80}</td></tr>" for i in range(1, 6))
             + "</table>"
         )
         payload = _viewer_payload(
@@ -746,13 +861,9 @@ class ChunkingTests(unittest.TestCase):
         row_children = [
             chunk
             for chunk in chunks
-            if chunk.chunk_level == CHILD_CHUNK_LEVEL
-            and chunk.source_record_refs[0]["raw_type"] == "table_row_group"
+            if chunk.chunk_level == CHILD_CHUNK_LEVEL and chunk.source_record_refs[0]["raw_type"] == "table_row_group"
         ]
-        children_by_start = {
-            child.metadata["table_context"][0]["row_group"]["row_start"]: child
-            for child in row_children
-        }
+        children_by_start = {child.metadata["table_context"][0]["row_group"]["row_start"]: child for child in row_children}
 
         self.assertGreaterEqual(len(row_children), 5)
         self.assertEqual(
@@ -775,10 +886,7 @@ class ChunkingTests(unittest.TestCase):
         # 表に重なる Picture は単独 chunk にならないため、行帯の判定に漏れても失われてはならない。
         table_text = (
             "<table><tr><th>画像</th><th>説明</th></tr>"
-            + "".join(
-                f"<tr><td></td><td>項目{i} {'長い説明' * 80}</td></tr>"
-                for i in range(1, 6)
-            )
+            + "".join(f"<tr><td></td><td>項目{i} {'長い説明' * 80}</td></tr>" for i in range(1, 6))
             + "</table>"
         )
         payload = _viewer_payload(
@@ -814,16 +922,20 @@ class ChunkingTests(unittest.TestCase):
         description = "図の説明" + "あ" * 600 + "末尾の条件"
         payload = _viewer_payload(
             [
-                _record(1, 1, "Table", "<table><tr><th>a</th></tr><tr><td>b</td></tr></table>",
-                        raw_type="table", bbox=[0, 0, 100, 100]),
-                _record(1, 2, "Picture", description, raw_type="picture", bbox=[10, 10, 90, 90],
-                        raw={"vision_crop": "docling/vision/in-table.png"}),
+                _record(1, 1, "Table", "<table><tr><th>a</th></tr><tr><td>b</td></tr></table>", raw_type="table", bbox=[0, 0, 100, 100]),
+                _record(
+                    1,
+                    2,
+                    "Picture",
+                    description,
+                    raw_type="picture",
+                    bbox=[10, 10, 90, 90],
+                    raw={"vision_crop": "docling/vision/in-table.png"},
+                ),
             ]
         )
 
-        chunks = build_small_to_big_chunks(
-            payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig()
-        )
+        chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
 
         self.assertIn(description, child.text)
@@ -832,11 +944,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertNotIn("末尾の条件", json.dumps(child.source_record_refs, ensure_ascii=False))
 
     def test_table_chunk_keeps_contained_picture_as_visual_evidence_without_orphan_chunk(self):
-        table_text = (
-            "<table><tr><th>画像</th><th>説明</th></tr>"
-            "<tr><td></td><td>OK で選んだ処理を取り消す場合。</td></tr>"
-            "</table>"
-        )
+        table_text = "<table><tr><th>画像</th><th>説明</th></tr><tr><td></td><td>OK で選んだ処理を取り消す場合。</td></tr></table>"
         payload = _viewer_payload(
             [
                 _record(1, 1, "Table", table_text, raw_type="table", bbox=[10, 10, 90, 90]),
@@ -873,11 +981,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(children[0].metadata["image_evidence"][0]["crop_path"], "docling/vision/docling-p1-2.png")
 
     def test_table_chunk_merges_contained_picture_ocr_without_orphan_picture_chunk(self):
-        table_text = (
-            "<table><tr><th>画像</th><th>説明</th></tr>"
-            "<tr><td></td><td>ダイアログの内容を確認します。</td></tr>"
-            "</table>"
-        )
+        table_text = "<table><tr><th>画像</th><th>説明</th></tr><tr><td></td><td>ダイアログの内容を確認します。</td></tr></table>"
         bbox = [20, 30, 45, 55]
         payload = _viewer_payload(
             [
@@ -1235,9 +1339,7 @@ class ChunkingTests(unittest.TestCase):
             ]
         )
 
-        chunks = build_small_to_big_chunks(
-            payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig()
-        )
+        chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
 
         self.assertEqual(len(children), 2)
@@ -1278,10 +1380,20 @@ class ChunkingTests(unittest.TestCase):
 
     def test_section_path_restarts_lettered_series_under_unknown_heading(self):
         # 操作説明書の「（２） > D 【遷移画面】 > 〔納品書〕 > A/B」の入れ子と、〔…〕 の兄弟を保つ (#660)。
-        paths = self._section_paths([
-            "（２）納品書発行依頼入力", "A 【画面説明】", "B 【操作説明】", "D 【遷移画面】", "〔納品書〕",
-            "A 【画面説明】", "B 【操作説明】", "〔受領書〕", "A 【画面説明】", "（３）納品書発行依頼一括入力",
-        ])
+        paths = self._section_paths(
+            [
+                "（２）納品書発行依頼入力",
+                "A 【画面説明】",
+                "B 【操作説明】",
+                "D 【遷移画面】",
+                "〔納品書〕",
+                "A 【画面説明】",
+                "B 【操作説明】",
+                "〔受領書〕",
+                "A 【画面説明】",
+                "（３）納品書発行依頼一括入力",
+            ]
+        )
 
         self.assertEqual(paths[2], ["（２）納品書発行依頼入力", "B 【操作説明】"])
         self.assertEqual(paths[6], ["（２）納品書発行依頼入力", "D 【遷移画面】", "〔納品書〕", "B 【操作説明】"])
@@ -1290,34 +1402,51 @@ class ChunkingTests(unittest.TestCase):
 
     def test_section_path_keeps_parent_error_heading_across_unknown_subheadings(self):
         # 「２． > （７）担当者なし > 【修正方法】」。前のエラーの【修正方法】が（７）の文脈に残らない (#660)。
-        paths = self._section_paths([
-            "月次締めエラー一覧の見方", "２． 「エラー」の対処方法", "（１）入荷実績がない",
-            "【修正方法１ 入荷を確定する場合】", "【修正方法２ 仮入荷を取り消す場合】", "（ 12 ）同じ伝票番号が２件以上",
-            "【修正方法】", "（ A ）システムログ", "A 【画面説明】",
-        ])
+        paths = self._section_paths(
+            [
+                "月次締めエラー一覧の見方",
+                "２． 「エラー」の対処方法",
+                "（１）入荷実績がない",
+                "【修正方法１ 入荷を確定する場合】",
+                "【修正方法２ 仮入荷を取り消す場合】",
+                "（ 12 ）同じ伝票番号が２件以上",
+                "【修正方法】",
+                "（ A ）システムログ",
+                "A 【画面説明】",
+            ]
+        )
 
-        self.assertEqual(paths[4], ["月次締めエラー一覧の見方", "２． 「エラー」の対処方法", "（１）入荷実績がない", "【修正方法２ 仮入荷を取り消す場合】"])
-        self.assertEqual(paths[6], ["月次締めエラー一覧の見方", "２． 「エラー」の対処方法", "（ 12 ）同じ伝票番号が２件以上", "【修正方法】"])
+        self.assertEqual(
+            paths[4],
+            ["月次締めエラー一覧の見方", "２． 「エラー」の対処方法", "（１）入荷実績がない", "【修正方法２ 仮入荷を取り消す場合】"],
+        )
+        self.assertEqual(
+            paths[6], ["月次締めエラー一覧の見方", "２． 「エラー」の対処方法", "（ 12 ）同じ伝票番号が２件以上", "【修正方法】"]
+        )
         self.assertEqual(paths[8], ["月次締めエラー一覧の見方", "２． 「エラー」の対処方法", "（ A ）システムログ", "A 【画面説明】"])
 
     def test_running_header_and_step_sentence_are_not_headings(self):
         # 毎ページ上端に繰り返す柱と、文として終わる「見出し」（手順行）は section_path に載せない (#660)。
-        children, parents = self._children(_viewer_payload([
-            _record(1, 1, "Section-header", "１データ連携", bbox=[0, 2, 10, 5]),
-            _record(1, 2, "Section-header", "（１）基幹データ取込"),
-            _record(1, 3, "Text", "基幹データを取り込みます。"),
-            _record(1, 4, "Section-header", "２ . 承認情報を入力します。"),
-            _record(1, 5, "Section-header", "５ ."),
-            _record(1, 6, "Text", "取込の理由を入力します。"),
-            _record(2, 1, "Section-header", "１データ連携", bbox=[0, 2, 10, 5]),
-            _record(2, 2, "Section-header", "（２）売上データ取込"),
-            _record(2, 3, "Text", "売上データを取り込みます。"),
-            _record(2, 4, "Section-header", "１データ連携", bbox=[0, 95, 10, 98]),
-            # 1 ページしかない章の柱。同じ帯・同じ高さなので柱の同族として章の根になる。
-            _record(3, 1, "Section-header", "２売上連動", bbox=[0, 2, 10, 5]),
-            _record(3, 2, "Section-header", "（１）売上情報照会"),
-            _record(3, 3, "Text", "売上情報を照会します。"),
-        ]))
+        children, parents = self._children(
+            _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "１データ連携", bbox=[0, 2, 10, 5]),
+                    _record(1, 2, "Section-header", "（１）基幹データ取込"),
+                    _record(1, 3, "Text", "基幹データを取り込みます。"),
+                    _record(1, 4, "Section-header", "２ . 承認情報を入力します。"),
+                    _record(1, 5, "Section-header", "５ ."),
+                    _record(1, 6, "Text", "取込の理由を入力します。"),
+                    _record(2, 1, "Section-header", "１データ連携", bbox=[0, 2, 10, 5]),
+                    _record(2, 2, "Section-header", "（２）売上データ取込"),
+                    _record(2, 3, "Text", "売上データを取り込みます。"),
+                    _record(2, 4, "Section-header", "１データ連携", bbox=[0, 95, 10, 98]),
+                    # 1 ページしかない章の柱。同じ帯・同じ高さなので柱の同族として章の根になる。
+                    _record(3, 1, "Section-header", "２売上連動", bbox=[0, 2, 10, 5]),
+                    _record(3, 2, "Section-header", "（１）売上情報照会"),
+                    _record(3, 3, "Text", "売上情報を照会します。"),
+                ]
+            )
+        )
         self.assertEqual(next(c for c in children if "売上情報を" in c.text).metadata["section_path"], ["２売上連動", "（１）売上情報照会"])
         joined = " ".join(p for c in children for p in c.metadata["section_path"])
         self.assertNotIn("承認情報", joined)
@@ -1325,7 +1454,9 @@ class ChunkingTests(unittest.TestCase):
         step = next(c for c in children if "承認情報" in c.text)
         # 柱の初出は章として path の根に残り、2 回目以降（2 ページ目の上端・下端）は path にも本文にも出ない。
         self.assertEqual(step.metadata["section_path"], ["１データ連携", "（１）基幹データ取込"])
-        self.assertEqual(next(c for c in children if "売上データを" in c.text).metadata["section_path"], ["１データ連携", "（２）売上データ取込"])
+        self.assertEqual(
+            next(c for c in children if "売上データを" in c.text).metadata["section_path"], ["１データ連携", "（２）売上データ取込"]
+        )
         self.assertIn("List-item", step.metadata["source_categories"])
         self.assertEqual(sum("１データ連携" in c.text for c in children), 1)
         # 親は番号付き機能見出しの単位をまたがない。
@@ -1363,7 +1494,9 @@ class ChunkingTests(unittest.TestCase):
         payload = _viewer_payload([_record(1, 1, "Text", "あ" * 2000)])
 
         chunks = build_small_to_big_chunks(
-            payload, source_run_id="abcdef", selected_engine_ids=["docling"],
+            payload,
+            source_run_id="abcdef",
+            selected_engine_ids=["docling"],
             config=ChunkingConfig(child_target_chars=300, table_child_target_chars=300, parent_target_chars=1200),
         )
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
@@ -1380,9 +1513,7 @@ class ChunkingTests(unittest.TestCase):
             ]
         )
 
-        chunks = build_small_to_big_chunks(
-            payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig()
-        )
+        chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
 
         self.assertIn("Pages: p.9-10; p.9=logical 9 / p.10=logical 10", child.retrieval_text)
@@ -1391,18 +1522,30 @@ class ChunkingTests(unittest.TestCase):
         payload = _viewer_payload(
             [
                 _record(
-                    1, 1, "Table", "画面 説明 登録画面 登録ボタンを押します", raw_type="table", bbox=[0, 0, 100, 100],
-                    raw={"table_enhanced_html": "<table><tr><th>画面</th><th>説明</th></tr>"
-                                                "<tr><td>登録画面</td><td>登録ボタンを押します</td></tr></table>"},
+                    1,
+                    1,
+                    "Table",
+                    "画面 説明 登録画面 登録ボタンを押します",
+                    raw_type="table",
+                    bbox=[0, 0, 100, 100],
+                    raw={
+                        "table_enhanced_html": "<table><tr><th>画面</th><th>説明</th></tr>"
+                        "<tr><td>登録画面</td><td>登録ボタンを押します</td></tr></table>"
+                    },
                 ),
-                _record(1, 2, "Picture", "登録画面の図", raw_type="picture", bbox=[10, 10, 40, 40],
-                        raw={"vision_crop": "docling/vision/in-table.png"}),
+                _record(
+                    1,
+                    2,
+                    "Picture",
+                    "登録画面の図",
+                    raw_type="picture",
+                    bbox=[10, 10, 40, 40],
+                    raw={"vision_crop": "docling/vision/in-table.png"},
+                ),
             ]
         )
 
-        chunks = build_small_to_big_chunks(
-            payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig()
-        )
+        chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
 
         self.assertEqual(len(children), 1)
@@ -1535,6 +1678,7 @@ class ChunkingTests(unittest.TestCase):
         # latest.json の照合項目で不一致 run を除外し、chunks.json は一致した run だけ読む。旧 pointer は従来どおり (#855)。
         from unittest.mock import patch
         from rag_engine.chunking import storage
+
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             _write_viewer_data(output_dir, "aaaaaa01", [_record(1, 1, "Text", "契約区分の登録手順です。")])
@@ -1543,12 +1687,17 @@ class ChunkingTests(unittest.TestCase):
             first = create_chunk_run(output_dir=output_dir, run_id="aaaaaa01", preferred_engine_ids=["docling"], config=ChunkingConfig())
             create_chunk_run(output_dir=output_dir, run_id="bbbbbb01", preferred_engine_ids=["docling"], config=ChunkingConfig())
             latest = json.loads(Path(first.latest_path).read_text(encoding="utf-8"))
-            self.assertEqual((latest["source_file_sha256"], latest["source_page_count"], latest["source_file_name"]),
-                             (first.source_file_sha256, first.source_page_count, first.source_file_name))
+            self.assertEqual(
+                (latest["source_file_sha256"], latest["source_page_count"], latest["source_file_name"]),
+                (first.source_file_sha256, first.source_page_count, first.source_file_name),
+            )
             with patch("rag_engine.chunking.storage.load_latest_chunk_run", wraps=storage.load_latest_chunk_run) as loader:
                 found = storage._load_latest_chunk_run_for_source_identity(
-                    output_dir, source_sha256=first.source_file_sha256, source_page_count=first.source_page_count,
-                    source_file_name=first.source_file_name)
+                    output_dir,
+                    source_sha256=first.source_file_sha256,
+                    source_page_count=first.source_page_count,
+                    source_file_name=first.source_file_name,
+                )
             self.assertEqual(found.chunk_run_id, first.chunk_run_id)
             self.assertEqual([call.args[1] for call in loader.call_args_list], ["aaaaaa01"])  # 不一致の run は読まない
             # 旧 pointer（照合項目なし）でも照合できる
@@ -1556,8 +1705,11 @@ class ChunkingTests(unittest.TestCase):
             legacy = {k: v for k, v in latest.items() if not k.startswith("source_")}
             latest_path.write_text(json.dumps(legacy), encoding="utf-8")
             found = storage._load_latest_chunk_run_for_source_identity(
-                output_dir, source_sha256=first.source_file_sha256, source_page_count=first.source_page_count,
-                source_file_name=first.source_file_name)
+                output_dir,
+                source_sha256=first.source_file_sha256,
+                source_page_count=first.source_page_count,
+                source_file_name=first.source_file_name,
+            )
             self.assertEqual(found.chunk_run_id, first.chunk_run_id)
 
     def test_file_sha256_is_cached_until_the_file_changes(self):
@@ -1565,6 +1717,7 @@ class ChunkingTests(unittest.TestCase):
         import os
         from unittest.mock import patch
         from rag_engine.chunking import storage
+
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "source.pdf"
             path.write_bytes(b"%PDF-1")
@@ -1581,9 +1734,15 @@ class ChunkingTests(unittest.TestCase):
         rows = "".join(f"<tr><td>項目{i:03d}</td><td>説明 {i} の内容をここに書きます</td></tr>" for i in range(60))
         html = "<table><tr><th>項目</th><th>説明</th></tr>" + rows + "</table>"
         payload = _viewer_payload([_record(1, 1, "Table", html, raw_type="table", bbox=[10, 10, 90, 90])])
+
         def groups(config):
             children = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=config)
-            return [c for c in children if c.chunk_level == CHILD_CHUNK_LEVEL and any(r["raw_type"] == "table_row_group" for r in c.source_record_refs)]
+            return [
+                c
+                for c in children
+                if c.chunk_level == CHILD_CHUNK_LEVEL and any(r["raw_type"] == "table_row_group" for r in c.source_record_refs)
+            ]
+
         table_text = groups(ChunkingConfig(table_child_target_chars=8000)) or []
         self.assertEqual(table_text, [])  # 十分大きい閾値では 1 child
         self.assertEqual(groups(ChunkingConfig()), [])  # 既定 3000 でも 1 child（この表は約 2,000 字）
@@ -1593,14 +1752,17 @@ class ChunkingTests(unittest.TestCase):
         # OCR が「節見出しの再掲 + 著作権表示」だけの帯画像は child にしない。見出し以外の行があれば child になる (#897)。
         def children_for(ocr):
             bbox = [50, 300, 550, 340]
-            payload = _viewer_payload([
-                _record(1, 1, "Section-header", "Ａ受注管理 －（３）受注入力"),
-                _record(1, 2, "Text", "①伝票を選びます。②保存ボタンを押します。"),
-                _record(1, 3, "Picture", "", raw_type="picture", bbox=bbox),
-                _record(1, 4, "Picture", ocr, raw_type="picture_ocr_text", bbox=bbox),
-            ])
+            payload = _viewer_payload(
+                [
+                    _record(1, 1, "Section-header", "Ａ受注管理 －（３）受注入力"),
+                    _record(1, 2, "Text", "①伝票を選びます。②保存ボタンを押します。"),
+                    _record(1, 3, "Picture", "", raw_type="picture", bbox=bbox),
+                    _record(1, 4, "Picture", ocr, raw_type="picture_ocr_text", bbox=bbox),
+                ]
+            )
             chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
             return [c for c in chunks if c.chunk_level == CHILD_CHUNK_LEVEL]
+
         banner = children_for("OCR抽出テキスト:\nＡ受注管理 －（３）受注入力\nCopyright© サンプル株式会社 All rights reserved.")
         self.assertFalse(any("Copyright" in c.text for c in banner))
         self.assertEqual(len(banner), 1)
@@ -1610,14 +1772,16 @@ class ChunkingTests(unittest.TestCase):
     def test_tiny_text_buffer_is_attached_to_next_visual_or_dropped(self):
         # 手順番号「２」だけの Text は単独 child にせず次の画像 child に付ける。末尾の「以上」は捨てる (#897)。
         bbox = [50, 300, 550, 500]
-        payload = _viewer_payload([
-            _record(1, 1, "Section-header", "（１）登録"),
-            _record(1, 2, "Text", "２"),
-            _record(1, 3, "Picture", "", raw_type="picture", bbox=bbox),
-            _record(1, 4, "Picture", "OCR抽出テキスト:\n保存ボタン", raw_type="picture_ocr_text", bbox=bbox),
-            _record(1, 5, "Text", "保存ボタンを押します。"),
-            _record(1, 6, "Page-footer", "以上"),
-        ])
+        payload = _viewer_payload(
+            [
+                _record(1, 1, "Section-header", "（１）登録"),
+                _record(1, 2, "Text", "２"),
+                _record(1, 3, "Picture", "", raw_type="picture", bbox=bbox),
+                _record(1, 4, "Picture", "OCR抽出テキスト:\n保存ボタン", raw_type="picture_ocr_text", bbox=bbox),
+                _record(1, 5, "Text", "保存ボタンを押します。"),
+                _record(1, 6, "Page-footer", "以上"),
+            ]
+        )
         chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         texts = [c.text for c in chunks if c.chunk_level == CHILD_CHUNK_LEVEL]
         self.assertFalse(any(t.strip() in {"２", "以上"} for t in texts))
@@ -1629,11 +1793,14 @@ class ChunkingTests(unittest.TestCase):
         from unittest.mock import patch
         from rag_engine import chunking
         from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
-        payload = _viewer_payload([
-            _record(1, 1, "Section-header", "（１）登録"),
-            _record(1, 2, "Text", "①伝票を選びます。②保存ボタンを押します。"),
-            _record(1, 3, "Text", "③確認ボタンを押します。"),
-        ])
+
+        payload = _viewer_payload(
+            [
+                _record(1, 1, "Section-header", "（１）登録"),
+                _record(1, 2, "Text", "①伝票を選びます。②保存ボタンを押します。"),
+                _record(1, 3, "Text", "③確認ボタンを押します。"),
+            ]
+        )
         # child は builder（検索文確定後）、親は metadata（生成時）が呼ぶ (#891)。
         with (
             patch("rag_engine.chunking.builder.build_inquiry_chunk_metadata", wraps=build_inquiry_chunk_metadata) as build_children,
@@ -1680,9 +1847,7 @@ class ChunkingTests(unittest.TestCase):
                 payload["contracts"]["inquiry_chunk_metadata_schema_version"],
                 INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
             )
-            self.assertEqual(
-                payload["contracts"]["inquiry_profile_contract_hash"], inquiry_profile_contract_hash()
-            )
+            self.assertEqual(payload["contracts"]["inquiry_profile_contract_hash"], inquiry_profile_contract_hash())
             self.assertRegex(payload["contracts"]["fingerprint"], r"^[0-9a-f]{64}$")
             self.assertEqual(
                 payload["summary"]["retrieval_text_audit"],
@@ -1692,9 +1857,9 @@ class ChunkingTests(unittest.TestCase):
                 ),
             )
             from rag_engine.chunking import _chunk_from_payload
+
             jsonl_chunks = [
-                _chunk_from_payload(json.loads(line))
-                for line in Path(result.jsonl_path).read_text(encoding="utf-8").splitlines()
+                _chunk_from_payload(json.loads(line)) for line in Path(result.jsonl_path).read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual([chunk.chunk_id for chunk in jsonl_chunks], [chunk.chunk_id for chunk in result.chunks])
             latest = json.loads(Path(result.latest_path).read_text(encoding="utf-8"))
@@ -1794,21 +1959,33 @@ class ChunkingTests(unittest.TestCase):
         # v4: 文書属性は document、位置系は layout、問い合わせ profile は retrieval_profile (#814)。
         self.assertEqual(
             set(child.metadata),
-            {"schema_version", "active", "atomic", "content_hash", "document", "section_path", "section_path_sources",
-             "source_categories", "layout", "retrieval_profile"},
+            {
+                "schema_version",
+                "active",
+                "atomic",
+                "content_hash",
+                "document",
+                "section_path",
+                "section_path_sources",
+                "source_categories",
+                "layout",
+                "retrieval_profile",
+            },
         )
         self.assertEqual(set(child.metadata["layout"]), {"display_regions", "native_text_ranges"})
         self.assertEqual(child.metadata["section_path_sources"], ["section_header"] * len(child.metadata["section_path"]))
 
     def test_section_path_sources_record_where_each_heading_came_from(self):
         # 見出しの出所を section_path と同じ長さで残す。Docling の分類、柱の初出、経路 caption、本文の再出現を区別する (#814)。
-        payload = _viewer_payload([
-            _record(1, 1, "Section-header", "２．顧客の登録"),
-            _record(1, 2, "Caption", "〔マスタ管理⇒顧客管理⇒基本設定〕", raw_type="caption"),
-            _record(1, 3, "Text", "①顧客コードを入力します。"),
-            _record(2, 1, "Text", "２．顧客の登録"),  # 本文側の再出現（節は変わらない）
-            _record(2, 2, "Text", "②保存ボタンを押します。"),
-        ])
+        payload = _viewer_payload(
+            [
+                _record(1, 1, "Section-header", "２．顧客の登録"),
+                _record(1, 2, "Caption", "〔マスタ管理⇒顧客管理⇒基本設定〕", raw_type="caption"),
+                _record(1, 3, "Text", "①顧客コードを入力します。"),
+                _record(2, 1, "Text", "２．顧客の登録"),  # 本文側の再出現（節は変わらない）
+                _record(2, 2, "Text", "②保存ボタンを押します。"),
+            ]
+        )
         chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         for chunk in chunks:
             self.assertEqual(len(chunk.metadata["section_path_sources"]), len(chunk.metadata["section_path"]))
@@ -1820,15 +1997,21 @@ class ChunkingTests(unittest.TestCase):
 
     def test_metadata_omits_fields_nobody_reads(self):
         # boxes.raw_type は category と重複、list_context の text / bbox は本文・display_regions と重複 (#812)。
-        payload = _viewer_payload([
-            _record(1, 1, "List-item", "1. 伝票を選びます。", raw={"list_item": {"ordinal": 1, "level": 1, "marker": "1."}}),
-            _record(1, 2, "List-item", "2. 保存します。", raw={"list_item": {"ordinal": 2, "level": 1, "marker": "2."}}),
-        ])
+        payload = _viewer_payload(
+            [
+                _record(1, 1, "List-item", "1. 伝票を選びます。", raw={"list_item": {"ordinal": 1, "level": 1, "marker": "1."}}),
+                _record(1, 2, "List-item", "2. 保存します。", raw={"list_item": {"ordinal": 2, "level": 1, "marker": "2."}}),
+            ]
+        )
         chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
-        self.assertEqual(set(child.metadata["layout"]["display_regions"][0]["boxes"][0]), {"record_id", "seq_no", "category", "bbox", "text_preview"})
-        self.assertEqual(set(child.metadata["layout"]["list_context"][0]),
-                         {"record_id", "page", "seq_no", "ordinal", "level", "marker", "previous_record_id", "next_record_id"})
+        self.assertEqual(
+            set(child.metadata["layout"]["display_regions"][0]["boxes"][0]), {"record_id", "seq_no", "category", "bbox", "text_preview"}
+        )
+        self.assertEqual(
+            set(child.metadata["layout"]["list_context"][0]),
+            {"record_id", "page", "seq_no", "ordinal", "level", "marker", "previous_record_id", "next_record_id"},
+        )
 
     def test_child_retrieval_text_gets_context_without_changing_display_regions(self):
         payload = _viewer_payload(
@@ -1921,34 +2104,60 @@ class ChunkingTests(unittest.TestCase):
             "source_page_count": 4,
             "parser": {"engine_id": "docling", "engine_label": "Docling", "source_run_id": "abcdef"},
             "hierarchy": {
-                "chunk_level": "child", "parent_chunk_id": "chunk-docling-p000001",
-                "child_chunk_ids": [], "previous_child_chunk_id": "chunk-docling-c000001",
-                "next_child_chunk_id": "chunk-docling-c000003", "sibling_index": 2, "sibling_count": 5,
+                "chunk_level": "child",
+                "parent_chunk_id": "chunk-docling-p000001",
+                "child_chunk_ids": [],
+                "previous_child_chunk_id": "chunk-docling-c000001",
+                "next_child_chunk_id": "chunk-docling-c000003",
+                "sibling_index": 2,
+                "sibling_count": 5,
             },
             "provenance": {
-                "display_regions": regions, "logical_page_labels": {"2": 2},
-                "page_start": 2, "page_end": 2, "source_categories": ["Section-header", "Text"],
+                "display_regions": regions,
+                "logical_page_labels": {"2": 2},
+                "page_start": 2,
+                "page_end": 2,
+                "source_categories": ["Section-header", "Text"],
                 "source_seq_ranges": [{"page": 2, "seq_start": 1, "seq_end": 2}],
             },
             "content_flags": {
-                "atomic": False, "contains_caption": False, "contains_footnote": False,
-                "contains_form_field": False, "contains_formula": False, "contains_image_evidence": False,
-                "contains_list": False, "contains_page_boilerplate": True, "contains_picture": False,
-                "contains_structured_table": False, "contains_table": False,
-                "content_type": "heading_text", "language": "und", "oversized_atomic": False,
+                "atomic": False,
+                "contains_caption": False,
+                "contains_footnote": False,
+                "contains_form_field": False,
+                "contains_formula": False,
+                "contains_image_evidence": False,
+                "contains_list": False,
+                "contains_page_boilerplate": True,
+                "contains_picture": False,
+                "contains_structured_table": False,
+                "contains_table": False,
+                "content_type": "heading_text",
+                "language": "und",
+                "oversized_atomic": False,
             },
             "retrieval": {
-                "base_text_hash": compact["content_hash"], "body_char_count": len(child.text),
-                "body_preserved": True, "body_truncated": False, "char_count": len(child.text),
-                "child_search_text_max_chars": 2200, "contextual_search_text_enabled": True,
-                "embedding_modes": ["text"], "excluded_layout_roles": ["page_number"],
-                "image_embedding_status": "not_applicable", "layout_context_types": ["page_boilerplate"],
+                "base_text_hash": compact["content_hash"],
+                "body_char_count": len(child.text),
+                "body_preserved": True,
+                "body_truncated": False,
+                "char_count": len(child.text),
+                "child_search_text_max_chars": 2200,
+                "contextual_search_text_enabled": True,
+                "embedding_modes": ["text"],
+                "excluded_layout_roles": ["page_number"],
+                "image_embedding_status": "not_applicable",
+                "layout_context_types": ["page_boilerplate"],
                 "search_text_char_count": len(child.retrieval_text),
                 "search_text_components": ["source_file", "classification", "page_span", "section_path", "parent_blurb", "child_text"],
-                "search_text_context_max_chars": 700, "search_text_hash": "b" * 64,
-                "search_text_over_target": False, "search_text_schema_version": 5,
-                "search_text_token_estimate": 100, "section_path": compact["section_path"],
-                "table_chunking_strategy": "not_applicable", "token_estimate": 50,
+                "search_text_context_max_chars": 700,
+                "search_text_hash": "b" * 64,
+                "search_text_over_target": False,
+                "search_text_schema_version": 5,
+                "search_text_token_estimate": 100,
+                "section_path": compact["section_path"],
+                "table_chunking_strategy": "not_applicable",
+                "token_estimate": 50,
             },
             "contains_image_evidence": False,
             "contains_picture": False,
@@ -1972,12 +2181,16 @@ class ChunkingTests(unittest.TestCase):
 
         chunks = build_small_to_big_chunks(
             _viewer_payload([_record(1, 1, "Text", "English source text.")]),
-            source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig(),
+            source_run_id="abcdef",
+            selected_engine_ids=["docling"],
+            config=ChunkingConfig(),
         )
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
         parent = next(chunk for chunk in chunks if chunk.chunk_level == PARENT_CHUNK_LEVEL)
         changed, components = _child_search_text(
-            child, parent=replace(parent, chunk_id="unrelated-parent-id"), config=ChunkingConfig(),
+            child,
+            parent=replace(parent, chunk_id="unrelated-parent-id"),
+            config=ChunkingConfig(),
         )
         self.assertEqual(changed, child.retrieval_text)
         self.assertNotIn("parent_chunk", components)
@@ -1993,7 +2206,9 @@ class ChunkingTests(unittest.TestCase):
         body = "説明" * 2000 + "末尾の例外条件"
         chunks = build_small_to_big_chunks(
             _viewer_payload([_record(1, 1, "Table", body, raw_type="table")]),
-            source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig(),
+            source_run_id="abcdef",
+            selected_engine_ids=["docling"],
+            config=ChunkingConfig(),
         )
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
         self.assertIn(child.text, child.retrieval_text)
@@ -2008,14 +2223,18 @@ class ChunkingTests(unittest.TestCase):
 
     def test_table_below_parent_limit_splits_with_headers_and_keeps_long_row_tail(self):
         tail = "最終行の例外"
-        table = "<table><tr><th>項目</th><th>説明</th></tr>" + "".join(
-            f"<tr><td>行{i}</td><td>{'説明' * 200}</td></tr>" for i in range(4)
-        ) + f"<tr><td>最終行</td><td>{tail}</td></tr></table>"
+        table = (
+            "<table><tr><th>項目</th><th>説明</th></tr>"
+            + "".join(f"<tr><td>行{i}</td><td>{'説明' * 200}</td></tr>" for i in range(4))
+            + f"<tr><td>最終行</td><td>{tail}</td></tr></table>"
+        )
         self.assertLess(len(table), 3000)
         # 既定の表閾値（3000）では 1 child になるため、行グループの性質は閾値 1000 で確認する (#894)。
         chunks = build_small_to_big_chunks(
             _viewer_payload([_record(1, 1, "Table", table, raw_type="table")]),
-            source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig(table_child_target_chars=1000),
+            source_run_id="abcdef",
+            selected_engine_ids=["docling"],
+            config=ChunkingConfig(table_child_target_chars=1000),
         )
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
         self.assertGreater(len(children), 1)
@@ -2098,7 +2317,9 @@ class ChunkingTests(unittest.TestCase):
             payload,
             source_run_id="abcdef",
             selected_engine_ids=["docling"],
-            config=ChunkingConfig(child_target_chars=30, table_child_target_chars=30, parent_target_chars=1000, parent_max_pages=2, parent_max_children=8),
+            config=ChunkingConfig(
+                child_target_chars=30, table_child_target_chars=30, parent_target_chars=1000, parent_max_pages=2, parent_max_children=8
+            ),
         )
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
         parent = next(chunk for chunk in chunks if chunk.chunk_level == PARENT_CHUNK_LEVEL)
@@ -2210,6 +2431,7 @@ class ChunkingTests(unittest.TestCase):
 
 def _unit(chunk):
     from rag_engine.chunking import _section_unit
+
     return _section_unit(chunk.metadata["section_path"])
 
 
@@ -2276,9 +2498,20 @@ if __name__ == "__main__":
 def test_metadata_coordinates_are_rounded_without_touching_other_numbers():
     """座標だけを小数1桁にする。ページ番号や順序、入力の辞書は変えない。"""
     from rag_engine.chunking import _rounded_coordinates
-    source = [{"page": 3, "boxes": [{"bbox": [155.7710034780906, 393.66399963815786, 3353.929648024301, 890.4669781885613],
-                                     "seq_no": 19, "text_preview": "1.25倍"}],
-               "context_bbox": [1.04, 2.06, 3, 4.0]}]
+
+    source = [
+        {
+            "page": 3,
+            "boxes": [
+                {
+                    "bbox": [155.7710034780906, 393.66399963815786, 3353.929648024301, 890.4669781885613],
+                    "seq_no": 19,
+                    "text_preview": "1.25倍",
+                }
+            ],
+            "context_bbox": [1.04, 2.06, 3, 4.0],
+        }
+    ]
     rounded = _rounded_coordinates(source)
     assert rounded[0]["boxes"][0]["bbox"] == [155.8, 393.7, 3353.9, 890.5]
     assert rounded[0]["context_bbox"] == [1.0, 2.1, 3.0, 4.0]
@@ -2297,15 +2530,34 @@ def test_single_letter_series_headings_are_not_roman_numeral_chapters():
 def test_search_text_drops_screen_example_values_but_keeps_them_in_text():
     """生成説明の画面例の値の文は検索用テキストから除き、回答用の text には残す (#753)。"""
     from rag_engine.chunking import _without_screen_examples, audit_chunk_retrieval_text, DocumentChunk
-    described = ("回答用本文: 更新確認ダイアログが表示される。画面例では締め対象年月=令和6年12月、出荷予定年月=令和6年9月。"
-                 "更新確認のメッセージで「はい」を選択する。\n画面例: コード=E2。\n入力例として 001 を入れる。")
+
+    described = (
+        "回答用本文: 更新確認ダイアログが表示される。画面例では締め対象年月=令和6年12月、出荷予定年月=令和6年9月。"
+        "更新確認のメッセージで「はい」を選択する。\n画面例: コード=E2。\n入力例として 001 を入れる。"
+    )
     stripped = _without_screen_examples(described)
     assert "出荷予定年月" not in stripped and "画面例" not in stripped and "001" not in stripped
     assert "更新確認のメッセージで「はい」を選択する。" in stripped
-    child = DocumentChunk(chunk_id="c1", chunk_level="child", chunk_seq=1, parent_chunk_id="p1", child_chunk_ids=[],
-                          text=described, retrieval_text="Child text:\n" + stripped, char_count=len(described), token_estimate=1,
-                          source_run_id="r", source_file_name="a.pdf", source_engine_id="docling", source_engine_label="Docling",
-                          page_start=1, page_end=1, source_seq_ranges=[], source_record_refs=[], metadata={})
+    child = DocumentChunk(
+        chunk_id="c1",
+        chunk_level="child",
+        chunk_seq=1,
+        parent_chunk_id="p1",
+        child_chunk_ids=[],
+        text=described,
+        retrieval_text="Child text:\n" + stripped,
+        char_count=len(described),
+        token_estimate=1,
+        source_run_id="r",
+        source_file_name="a.pdf",
+        source_engine_id="docling",
+        source_engine_label="Docling",
+        page_start=1,
+        page_end=1,
+        source_seq_ranges=[],
+        source_record_refs=[],
+        metadata={},
+    )
     assert audit_chunk_retrieval_text([child])["body_truncated_count"] == 0  # 意図的な除去は欠落に数えない
 
 
@@ -2313,17 +2565,19 @@ def test_screen_value_lines_are_removed_without_relying_on_a_prefix():
     """接頭辞が付かなくても、行ラベルで画面の値を検索用テキストから外す (#778)。"""
     from rag_engine.chunking import _without_screen_examples
 
-    text = "\n".join([
-        "■ 可視情報",
-        "項目: 区分 / 名称",
-        "値: 区分=01 / 電話番号=0123-45-6789",
-        "コード・エラー: E2",
-        "■ 構造",
-        "フォームの項目:",
-        "- 区分 = 01 [enabled]",
-        "- 名称 = サンプル [enabled]",
-        "フォームの配置: 左側に入力欄。",
-    ])
+    text = "\n".join(
+        [
+            "■ 可視情報",
+            "項目: 区分 / 名称",
+            "値: 区分=01 / 電話番号=0123-45-6789",
+            "コード・エラー: E2",
+            "■ 構造",
+            "フォームの項目:",
+            "- 区分 = 01 [enabled]",
+            "- 名称 = サンプル [enabled]",
+            "フォームの配置: 左側に入力欄。",
+        ]
+    )
     stripped = _without_screen_examples(text)
 
     assert "0123-45-6789" not in stripped and "サンプル" not in stripped
@@ -2335,11 +2589,13 @@ def test_screen_value_lines_are_removed_without_relying_on_a_prefix():
 
 
 def test_screen_example_removal_keeps_following_items_on_the_same_line():
-    """" / " 連結の行では例示値の項目だけを除き、後続のコードや項目名を残す (#766)。"""
+    """ " / " 連結の行では例示値の項目だけを除き、後続のコードや項目名を残す (#766)。"""
     from rag_engine.chunking import _without_screen_examples
 
-    line = ("画面/メニュー: 〔マスタ管理⇒基本設定〕 / 基本設定画面 / display example: 対象年月=2026年1月"
-            " / エラーコード E2 / input example: 区分=01 / 印刷区分")
+    line = (
+        "画面/メニュー: 〔マスタ管理⇒基本設定〕 / 基本設定画面 / display example: 対象年月=2026年1月"
+        " / エラーコード E2 / input example: 区分=01 / 印刷区分"
+    )
     stripped = _without_screen_examples(line)
     assert "対象年月=2026年1月" not in stripped and "区分=01" not in stripped
     assert "エラーコード E2" in stripped and "印刷区分" in stripped and "基本設定画面" in stripped

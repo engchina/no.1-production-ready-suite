@@ -40,10 +40,7 @@ def record_to_legacy_jsonl(record: LayoutRecord, page: PageImage | None = None) 
 def dumps_jsonl(records: Iterable[LayoutRecord], pages: Iterable[PageImage]) -> str:
     """LayoutRecord と PageImage を JSONL 文字列へ変換します。"""
     by_page = {page.page: page for page in pages}
-    lines = [
-        json.dumps(record_to_legacy_jsonl(record, by_page.get(record.page)), ensure_ascii=False)
-        for record in records
-    ]
+    lines = [json.dumps(record_to_legacy_jsonl(record, by_page.get(record.page)), ensure_ascii=False) for record in records]
     return "\n".join(lines) + ("\n" if lines else "")
 
 

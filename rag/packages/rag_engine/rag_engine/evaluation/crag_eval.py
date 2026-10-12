@@ -46,6 +46,7 @@ JSON形式でkeyとして"judged"を含みそのvalueに結果を記載して出
 
 class CragJudgeOutput(BaseModel):
     """LLM 判定の構造化出力。"""
+
     model_config = ConfigDict(extra="forbid")
     judged: CragJudgement
 
@@ -53,6 +54,7 @@ class CragJudgeOutput(BaseModel):
 @dataclass(frozen=True)
 class CragEvalVariantResult:
     """CRAG 評価における variant 別の正誤と回答を保持します。"""
+
     retrieved_ids: tuple[str, ...] = ()
     used_evidence_ids: tuple[str, ...] = ()
     answer: str = ""
@@ -61,6 +63,7 @@ class CragEvalVariantResult:
 @dataclass(frozen=True)
 class CragEvalCase:
     """CRAG goldset の 1 問と期待回答を表します。"""
+
     case_id: str
     question: str
     expected_evidence_ids: tuple[str, ...]
@@ -179,11 +182,7 @@ def _crag_eval_case(raw: dict[str, Any]) -> CragEvalCase:
         expected_evidence_ids=tuple(_string_list(raw.get("expected_evidence_ids"))),
         expected_answer_terms=tuple(_string_list(raw.get("expected_answer_terms"))),
         expected_answer=str(raw.get("expected_answer") or "").strip(),
-        variants={
-            str(name): _variant_result(value)
-            for name, value in variants.items()
-            if isinstance(value, dict)
-        },
+        variants={str(name): _variant_result(value) for name, value in variants.items() if isinstance(value, dict)},
     )
 
 

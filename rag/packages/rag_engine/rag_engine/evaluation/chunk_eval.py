@@ -59,7 +59,10 @@ def audit_variants(
             chunk
             for payload in payloads
             for chunk in build_small_to_big_chunks(
-                payload, source_run_id=payload["run_id"], selected_engine_ids=engines, config=config,
+                payload,
+                source_run_id=payload["run_id"],
+                selected_engine_ids=engines,
+                config=config,
             )
         ]
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
@@ -79,14 +82,16 @@ def audit_variants(
         )
         row["embed_text_tokens"] = _token_stats([child.retrieval_text for child in children], embed_counter)
         row["rerank_document_tokens"] = _token_stats(
-            [_rerank_document(_chunk_answer_record(child)) for child in children], rerank_counter,
+            [_rerank_document(_chunk_answer_record(child)) for child in children],
+            rerank_counter,
         )
         report["variants"][str(size)] = row
     return report, variants
 
 
 def evidence_metrics(
-    ranked: Sequence[DocumentChunk], expected: Sequence[dict[str, Any]],
+    ranked: Sequence[DocumentChunk],
+    expected: Sequence[dict[str, Any]],
 ) -> dict[str, float | None]:
     """run/page/本文抜粋で安定した根拠を照合し、根拠 recall と最初の命中の逆順位を返します。
 
@@ -98,7 +103,8 @@ def evidence_metrics(
     first_rank = 0
     for rank, chunk in enumerate(ranked, 1):
         matches = {
-            index for index, evidence in enumerate(expected)
+            index
+            for index, evidence in enumerate(expected)
             if chunk.source_run_id == evidence["run_id"]
             and chunk.page_start <= evidence["page"] <= chunk.page_end
             and _normalized(evidence["text"]) in _normalized(chunk.text)
@@ -113,8 +119,12 @@ def evidence_metrics(
 
 
 def evaluate_cohere_variants(
-    variants: dict[int, list[DocumentChunk]], cases: Sequence[dict[str, Any]], settings: Settings,
-    *, candidate_k: int = 80, top_k: int = 20,
+    variants: dict[int, list[DocumentChunk]],
+    cases: Sequence[dict[str, Any]],
+    settings: Settings,
+    *,
+    candidate_k: int = 80,
+    top_k: int = 20,
 ) -> dict[str, Any]:
     """OCI embedding + cosine 候補 + Rerank を比較し、ADB には保存しません。
 
@@ -143,33 +153,46 @@ def evaluate_cohere_variants(
             retrieval_seconds = time.perf_counter() - started
             started = time.perf_counter()
             ranks = rerank_text_with_scores(
-                case["question"], [_rerank_document(_chunk_answer_record(child)) for child in candidates],
-                settings, top_n=top_k,
+                case["question"],
+                [_rerank_document(_chunk_answer_record(child)) for child in candidates],
+                settings,
+                top_n=top_k,
             )
             rerank_seconds = time.perf_counter() - started
             indices = [rank.index for rank in ranks]
-            if len(indices) != min(top_k, len(candidates)) or len(set(indices)) != len(indices) or any(
-                index < 0 or index >= len(candidates) for index in indices
+            if (
+                len(indices) != min(top_k, len(candidates))
+                or len(set(indices)) != len(indices)
+                or any(index < 0 or index >= len(candidates) for index in indices)
             ):
                 raise ValueError("Rerank returned incomplete or invalid ranks.")
             reranked = [candidates[index] for index in indices]
             expected = case["expected_evidence"]
-            rows.append({
-                "case_id": case["case_id"],
-                "candidate": evidence_metrics(candidates, expected),
-                "vector_top_k": evidence_metrics(candidates[:top_k], expected),
-                "rerank_top_k": evidence_metrics(reranked, expected),
-                "retrieval_seconds": retrieval_seconds, "rerank_seconds": rerank_seconds,
-            })
+            rows.append(
+                {
+                    "case_id": case["case_id"],
+                    "candidate": evidence_metrics(candidates, expected),
+                    "vector_top_k": evidence_metrics(candidates[:top_k], expected),
+                    "rerank_top_k": evidence_metrics(reranked, expected),
+                    "retrieval_seconds": retrieval_seconds,
+                    "rerank_seconds": rerank_seconds,
+                }
+            )
         results[str(size)] = {
             "embedding_seconds": embedding_seconds,
             "candidate_recall": _mean([row["candidate"]["evidence_recall"] for row in rows]),
             "rerank_recall_at_k": _mean([row["rerank_top_k"]["evidence_recall"] for row in rows]),
             "rerank_mrr_at_k": _mean([row["rerank_top_k"]["reciprocal_rank"] for row in rows]),
-            "answer_accuracy": None, "cases": rows,
+            "answer_accuracy": None,
+            "cases": rows,
         }
-    return {"mode": "oci_text_vector_cosine_rerank", "candidate_k": candidate_k, "top_k": top_k,
-            "query_embedding_seconds": query_seconds, "variants": results}
+    return {
+        "mode": "oci_text_vector_cosine_rerank",
+        "candidate_k": candidate_k,
+        "top_k": top_k,
+        "query_embedding_seconds": query_seconds,
+        "variants": results,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -191,8 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_ids = list(dict.fromkeys(validate_run_id(run_id) for run_id in args.run_id))
     sources = [Path(args.output_dir) / run_id / "viewer-data.json" for run_id in run_ids]
-    payloads = [dict(json.loads(path.read_text(encoding="utf-8")), run_id=run_id)
-                for path, run_id in zip(sources, run_ids)]
+    payloads = [dict(json.loads(path.read_text(encoding="utf-8")), run_id=run_id) for path, run_id in zip(sources, run_ids)]
     counters = {}
     tokenizer_info = {}
     for name, path in (("embed", args.embed_tokenizer), ("rerank", args.rerank_tokenizer)):
@@ -202,11 +224,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             tokenizer_info[name] = {"method": "unavailable", "reason": "No matching tokenizer supplied."}
     report, variants = audit_variants(
-        payloads, engines=args.engines.split(","), sizes=[int(size) for size in args.sizes.split(",")],
-        embed_counter=counters.get("embed"), rerank_counter=counters.get("rerank"),
+        payloads,
+        engines=args.engines.split(","),
+        sizes=[int(size) for size in args.sizes.split(",")],
+        embed_counter=counters.get("embed"),
+        rerank_counter=counters.get("rerank"),
     )
-    report["sources"] = [{"run_id": run_id, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-                         for path, run_id in zip(sources, run_ids)]
+    report["sources"] = [
+        {"run_id": run_id, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path, run_id in zip(sources, run_ids)
+    ]
     report["tokenizers"] = tokenizer_info
     report["token_count_note"] = "Document-only counts; rerank query/protocol overhead is not included."
     existing = []
@@ -229,15 +255,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--live-cohere requires --dataset with reviewed evidence.")
         settings = get_settings()
         cases = json.loads(Path(args.dataset).read_text(encoding="utf-8"))["cases"]
-        report["models"] = {"embedding": settings.embedding_model, "rerank": settings.rerank_model,
-                            "dimensions": settings.embedding_output_dimensions}
+        report["models"] = {
+            "embedding": settings.embedding_model,
+            "rerank": settings.rerank_model,
+            "dimensions": settings.embedding_output_dimensions,
+        }
         report["dataset_sha256"] = hashlib.sha256(Path(args.dataset).read_bytes()).hexdigest()
         report["evaluation"] = evaluate_cohere_variants(
-            variants, cases, settings, candidate_k=args.candidate_k, top_k=args.top_k,
+            variants,
+            cases,
+            settings,
+            candidate_k=args.candidate_k,
+            top_k=args.top_k,
         )
     Path(args.json_out).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"report": args.json_out, "source_count": len(sources),
-                      "variants": list(report["variants"]), "evaluation": report["evaluation"]["mode"]}))
+    print(
+        json.dumps(
+            {
+                "report": args.json_out,
+                "source_count": len(sources),
+                "variants": list(report["variants"]),
+                "evaluation": report["evaluation"]["mode"],
+            }
+        )
+    )
     return 0
 
 
@@ -255,9 +296,14 @@ def _validate_cases(cases: Sequence[dict[str, Any]], variants: dict[int, list[Do
         if not isinstance(expected, list) or not expected:
             raise ValueError("Each case needs reviewed expected_evidence, not just expected_terms.")
         for evidence in expected:
-            if (not isinstance(evidence, dict) or evidence.get("run_id") not in run_ids
-                    or not isinstance(evidence.get("page"), int) or evidence["page"] < 1
-                    or not isinstance(evidence.get("text"), str) or not evidence["text"].strip()):
+            if (
+                not isinstance(evidence, dict)
+                or evidence.get("run_id") not in run_ids
+                or not isinstance(evidence.get("page"), int)
+                or evidence["page"] < 1
+                or not isinstance(evidence.get("text"), str)
+                or not evidence["text"].strip()
+            ):
                 raise ValueError("Evidence requires a corpus run_id, positive page, and nonempty exact text.")
 
 

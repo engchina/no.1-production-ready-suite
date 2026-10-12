@@ -36,6 +36,7 @@ DOCLING_COLUMN_BLOCK_MIN_WIDTH_RATIO = 0.2
 
 class DoclingAdapter:
     """ローカル Docling DocumentConverter を使う標準解析アダプター。"""
+
     engine_id = "docling"
     label = "Docling"
 
@@ -82,9 +83,7 @@ class DoclingAdapter:
         status = getattr(result.status, "value", result.status)
         # 飛び飛びのページ指定では最小〜最大の連続範囲を変換するため、指定外ページだけが
         # 失敗した partial_success は成功とする。全ページ解析では指定＝全ページなので対象外。
-        succeeded = status == "success" or (
-            status == "partial_success" and progress.completed == progress.expected
-        )
+        succeeded = status == "success" or (status == "partial_success" and progress.completed == progress.expected)
         progress.finish(succeeded)
         if not succeeded:
             details = "; ".join(str(error.error_message) for error in result.errors)
@@ -114,24 +113,14 @@ class DoclingAdapter:
                 candidates.extend((key, item) for item in value if isinstance(item, dict))
 
         text_entries = [(index, item) for index, (key, item) in enumerate(candidates) if key == "texts"]
-        texts_by_ref = {
-            self_ref: item
-            for _, item in text_entries
-            if (self_ref := _item_self_ref(item))
-        }
-        pictures_by_ref = {
-            self_ref: item
-            for key, item in candidates
-            if key == "pictures" and (self_ref := _item_self_ref(item))
-        }
+        texts_by_ref = {self_ref: item for _, item in text_entries if (self_ref := _item_self_ref(item))}
+        pictures_by_ref = {self_ref: item for key, item in candidates if key == "pictures" and (self_ref := _item_self_ref(item))}
         picture_refs = set(pictures_by_ref)
         # 図内の箇条書きなどは group を挟んだ孫になる。直接の子だけを見ると、除外も OCR 集約も
         # されずに通常の Text として残るため、祖先の Picture までたどって対応付ける。
         nodes = _document_nodes(payload)
         picture_ref_by_text = {
-            id(item): picture_ref
-            for _, item in text_entries
-            if (picture_ref := _picture_ancestor_ref(item, nodes)) in picture_refs
+            id(item): picture_ref for _, item in text_entries if (picture_ref := _picture_ancestor_ref(item, nodes)) in picture_refs
         }
         # caption は図の外にある文書テキスト（画面経路の行など）で、図内の文字ではない。
         # 図の子として捨てず、OCR 集約にも入れず、通常の record として残す。
@@ -145,14 +134,26 @@ class DoclingAdapter:
         instruction_heads: set[int] = set()
         merged_lines: set[int] = set()
         for picture_ref, picture in pictures_by_ref.items():
-            for page_number in sorted({int(prov.get("page_no")) for prov in picture.get("prov", []) or []
-                                       if isinstance(prov, dict) and isinstance(prov.get("page_no"), int)}):
+            for page_number in sorted(
+                {
+                    int(prov.get("page_no"))
+                    for prov in picture.get("prov", []) or []
+                    if isinstance(prov, dict) and isinstance(prov.get("page_no"), int)
+                }
+            ):
                 page = page_lookup.get(page_number)
                 if page is None:
                     continue
-                ordered = _ordered_picture_children(picture, page_number=page_number, page=page, texts_by_ref=texts_by_ref,
-                                                    parented_texts=texts_by_picture_ref.get(picture_ref, []))
-                for run in _instruction_runs([item for _, item in ordered if id(item) not in merged_lines and id(item) not in instruction_heads]):
+                ordered = _ordered_picture_children(
+                    picture,
+                    page_number=page_number,
+                    page=page,
+                    texts_by_ref=texts_by_ref,
+                    parented_texts=texts_by_picture_ref.get(picture_ref, []),
+                )
+                for run in _instruction_runs(
+                    [item for _, item in ordered if id(item) not in merged_lines and id(item) not in instruction_heads]
+                ):
                     head, *rest = run
                     head["text"] = "".join(str(item.get("text") or "").strip() for item in run)
                     head[INSTRUCTION_CALLOUT_FLAG] = True
@@ -238,9 +239,10 @@ class DoclingAdapter:
                 )
                 if collection == "tables" and record_text and table_lines:
                     unassigned = _table_unassigned_text(
-                        item, table_lines,
-                        other_texts=[str(entry.get("text") or "") for _, entry in text_entries
-                                     if _item_has_page(entry, page_number)])
+                        item,
+                        table_lines,
+                        other_texts=[str(entry.get("text") or "") for _, entry in text_entries if _item_has_page(entry, page_number)],
+                    )
                     if unassigned:
                         counters[page_number] += 1
                         records.append(
@@ -299,9 +301,7 @@ class DoclingAdapter:
                         },
                     )
                 )
-        return _sort_and_renumber_records(
-            records, _reading_order_keys(payload), _multi_column_pages(payload, page_lookup)
-        )
+        return _sort_and_renumber_records(records, _reading_order_keys(payload), _multi_column_pages(payload, page_lookup))
 
 
 def _charspan_texts(text: str, provenances: list[dict[str, Any]]) -> list[str] | None:
@@ -350,9 +350,7 @@ def _ordered_picture_children(
 ) -> list[tuple[str, dict[str, Any]]]:
     """Picture の Text 子要素を Docling の明示順（直接の子）→ 座標順（孫）で並べる。caption は含めない。"""
     child_refs = [
-        str(child.get("$ref") or "")
-        for child in picture.get("children", []) or []
-        if isinstance(child, dict) and child.get("$ref")
+        str(child.get("$ref") or "") for child in picture.get("children", []) or [] if isinstance(child, dict) and child.get("$ref")
     ]
     direct_ref_set = set(child_refs)
     ordered: list[tuple[str, dict[str, Any]]] = []
@@ -434,9 +432,13 @@ def _picture_text_aggregate(
     parented_texts: list[tuple[int, dict[str, Any]]],
 ) -> tuple[str, list[str]] | None:
     """Picture の直接 Text 子要素を Docling の読み順で 1 件にまとめる。"""
-    ordered = [(ref, item) for ref, item in _ordered_picture_children(
-        picture, page_number=page_number, page=page, texts_by_ref=texts_by_ref, parented_texts=parented_texts)
-        if not item.get(INSTRUCTION_CALLOUT_FLAG)]  # 吹き出しの手順は通常の record に残す
+    ordered = [
+        (ref, item)
+        for ref, item in _ordered_picture_children(
+            picture, page_number=page_number, page=page, texts_by_ref=texts_by_ref, parented_texts=parented_texts
+        )
+        if not item.get(INSTRUCTION_CALLOUT_FLAG)
+    ]  # 吹き出しの手順は通常の record に残す
 
     pieces: list[str] = []
     used_refs: list[str] = []
@@ -507,9 +509,12 @@ def _repair_table_cells(item: dict[str, Any], lines: Sequence[str]) -> list[dict
         applied.append({"row": row, "column": col, "before": str(cell.get("text") or ""), "after": text})
         cell["text"] = text
         for entry in data.get("table_cells") or []:
-            if (isinstance(entry, dict) and entry is not cell
-                    and _nonnegative_int(entry.get("start_row_offset_idx")) == row
-                    and _nonnegative_int(entry.get("start_col_offset_idx")) == col):
+            if (
+                isinstance(entry, dict)
+                and entry is not cell
+                and _nonnegative_int(entry.get("start_row_offset_idx")) == row
+                and _nonnegative_int(entry.get("start_col_offset_idx")) == col
+            ):
                 entry["text"] = text
     return applied
 
@@ -555,10 +560,7 @@ def _sort_picture_fallback_texts(
     page_number: int,
     page: Any,
 ) -> list[tuple[int, dict[str, Any]]]:
-    decorated = [
-        (source_index, item, _item_page_sort_key(item, page_number, page))
-        for source_index, item in entries
-    ]
+    decorated = [(source_index, item, _item_page_sort_key(item, page_number, page)) for source_index, item in entries]
     decorated.sort(key=lambda entry: (*entry[2], entry[0]))
     row_tolerance = max(1.0, float(page.height) * DOCLING_ROW_TOLERANCE_RATIO)
     rows: list[list[tuple[int, dict[str, Any], tuple[float, float, float, float]]]] = []
@@ -729,11 +731,7 @@ def _reading_order_keys(payload: dict[str, Any]) -> dict[str, tuple[int, int, in
             keys[ref] = (text_index[ref], 0, 0)
         else:
             keys[ref] = (latest_text, 1, len(visited))
-        children = [
-            str(child.get("$ref") or "")
-            for child in nodes[ref].get("children", []) or []
-            if isinstance(child, dict)
-        ]
+        children = [str(child.get("$ref") or "") for child in nodes[ref].get("children", []) or [] if isinstance(child, dict)]
         stack.extend(child for child in reversed(children) if child in nodes and child not in visited)
     return keys
 
@@ -812,9 +810,13 @@ def _sort_and_renumber_records(
         if page_number in (reading_order_pages or set()):
             # OCR 集約・表の補足 record は元の Picture / Table と同じ key にし、生成順で本体の直後へ置く。
             keyed = [
-                ((reading_keys or {}).get(str(record.raw.get("source_picture_ref") or record.raw.get("source_table_ref")
-                                              or record.raw.get("self_ref") or "")),
-                 source_index, record)
+                (
+                    (reading_keys or {}).get(
+                        str(record.raw.get("source_picture_ref") or record.raw.get("source_table_ref") or record.raw.get("self_ref") or "")
+                    ),
+                    source_index,
+                    record,
+                )
                 for source_index, record in indexed_by_page[page_number]
             ]
             if all(key is not None for key, _, _ in keyed):
@@ -868,6 +870,7 @@ def _sort_and_renumber_records(
 def _prepare_docling_env(settings: Settings) -> None:
     """互換起動だけキャッシュ環境を設定する。SDK はホストのプロセス環境を変更しない。"""
     from rag_engine.resources.runtime import current_runtime
+
     if current_runtime() is not None:
         return
     cache_root = (settings.output_dir / "_cache" / "docling").resolve()
@@ -932,7 +935,9 @@ def _build_docling_converter(settings: Settings):
         pipeline_options.table_structure_options = TableStructureOptions(do_cell_matching=True)
     if settings.docling_do_ocr:
         pipeline_options.ocr_options = RapidOcrOptions()
-    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_cls=ProgressPdfPipeline, pipeline_options=pipeline_options)})
+    return DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_cls=ProgressPdfPipeline, pipeline_options=pipeline_options)}
+    )
 
 
 def _docling_bbox_to_image(bbox: dict[str, Any], page) -> list[float] | None:

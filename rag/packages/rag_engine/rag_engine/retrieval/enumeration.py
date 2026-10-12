@@ -33,9 +33,7 @@ _EXHAUSTIVE = re.compile(
     r"|(?:章|節)ごとに|各(?:章|節)"
 )
 # 一覧を求める述語（網羅の語と組で列挙の要求とみなす）。
-_LISTING = re.compile(
-    r"挙げ|あげて|教え|示し|示して|列挙|書き出|洗い出|答え|まとめ|知りたい|一覧|ありますか|どれ|どのような|何を"
-)
+_LISTING = re.compile(r"挙げ|あげて|教え|示し|示して|列挙|書き出|洗い出|答え|まとめ|知りたい|一覧|ありますか|どれ|どのような|何を")
 # 示された件数（「5 つすべて」「6 件」）。「点」は「点検」と紛れるので数えない。
 _COUNT = re.compile(r"(\d+|[一二三四五六七八九十]+)\s*(?:つ|件|個|項目|種類|か所|箇所|ヶ所|カ所)")
 _KANJI_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
@@ -44,9 +42,7 @@ _CHAPTER_RANGE = re.compile(r"第\s*(\d+)\s*章\s*(?:から|より|〜|～|~|－
 # 文書全体を範囲にする語。
 _DOCUMENT_WIDE = re.compile(r"全体を通して|全体で|全体から|全体の中で|文書全体|資料全体|全章|すべての章|全ての章|各章|章ごと")
 # 文書の名前で範囲を示す（「〜要領で、…をすべて」）。章・節を名指ししないときだけ文書全体にする。
-_DOCUMENT_NAMED = re.compile(
-    r"(?:要領|規程|規則|規定|手順書|マニュアル|ガイド|要綱|計画|台帳|資料|文書)(?:の中)?(?:で|では|には)[、,]"
-)
+_DOCUMENT_NAMED = re.compile(r"(?:要領|規程|規則|規定|手順書|マニュアル|ガイド|要綱|計画|台帳|資料|文書)(?:の中)?(?:で|では|には)[、,]")
 # 件数の上限（質問の数字の読み違いで無理な件数を求めない）。
 MAX_EXPECTED_COUNT = 50
 # 章の範囲の上限。
@@ -95,8 +91,13 @@ class EnumerationRequest:
         return OPEN_LISTED_ITEMS
 
     def to_payload(self) -> dict[str, Any]:
-        return {"scope": self.scope, "expected_count": self.expected_count, "chapters": list(self.chapters),
-                "minimum_scope": self.minimum_scope, "max_items": self.max_items}
+        return {
+            "scope": self.scope,
+            "expected_count": self.expected_count,
+            "chapters": list(self.chapters),
+            "minimum_scope": self.minimum_scope,
+            "max_items": self.max_items,
+        }
 
 
 def _number(value: str) -> int | None:
@@ -120,8 +121,7 @@ def enumeration_request(question: str) -> EnumerationRequest | None:
 def _enumeration_request(text: str) -> EnumerationRequest | None:
     if not (_EXHAUSTIVE.search(text) and _LISTING.search(text)):
         return None
-    counts = [number for raw in _COUNT.findall(text)
-              if (number := _number(raw)) is not None and 2 <= number <= MAX_EXPECTED_COUNT]
+    counts = [number for raw in _COUNT.findall(text) if (number := _number(raw)) is not None and 2 <= number <= MAX_EXPECTED_COUNT]
     chapters: tuple[int, ...] = ()
     span = _CHAPTER_RANGE.search(text)
     if span:
@@ -178,8 +178,7 @@ def _units(context: Any, records: Sequence[Any]) -> dict[str, _Unit]:
 
     for parent in getattr(context, "evidence_tree", ()) or ():
         members = [parent.record, *(child.record for child in parent.children)]
-        unit = _Unit(text="\n".join(str(getattr(item, "text", "") or "") for item in members),
-                     chapters=chapters(members))
+        unit = _Unit(text="\n".join(str(getattr(item, "text", "") or "") for item in members), chapters=chapters(members))
         for item in members:
             uid = str(getattr(item, "chunk_uid", "") or getattr(item, "id", "") or "")
             if uid:
@@ -244,17 +243,21 @@ def enumeration_check(
                 ok = False
                 reasons.append("根拠の無い章: " + "、".join(f"第 {number} 章" for number in lacking))
             else:
-                reasons.append("範囲の章（" + "、".join(f"第 {number} 章" for number in request.chapters)
-                               + "）すべてに根拠がある")
+                reasons.append("範囲の章（" + "、".join(f"第 {number} 章" for number in request.chapters) + "）すべてに根拠がある")
         status = "supported" if ok else "missing"
     else:
         claimed = llm[0].get("status") if len(llm) == 1 else "missing"
         status = "supported" if claimed == "supported" and counted else "missing"
-        reasons.append(f"原文を確かめた項目 {len(counted)} 件"
-                       + ("" if claimed == "supported" else "（評価器は網羅を確かめていない）"))
-    entry = {"aspect": ENUMERATION_ASPECT, "status": status, "source_ids": source_ids if status == "supported" else [],
-             "reason": "。".join(reasons), "counted_items": len(counted),
-             "expected_count": request.expected_count, "chapters": list(request.chapters)}
+        reasons.append(f"原文を確かめた項目 {len(counted)} 件" + ("" if claimed == "supported" else "（評価器は網羅を確かめていない）"))
+    entry = {
+        "aspect": ENUMERATION_ASPECT,
+        "status": status,
+        "source_ids": source_ids if status == "supported" else [],
+        "reason": "。".join(reasons),
+        "counted_items": len(counted),
+        "expected_count": request.expected_count,
+        "chapters": list(request.chapters),
+    }
     return [*(item for item in result if item.get("aspect") != ENUMERATION_ASPECT), entry]
 
 

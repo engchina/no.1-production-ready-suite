@@ -1,4 +1,5 @@
 """モデルの引用を文書・ページの範囲内で元の SDK 証拠へ解決する。"""
+
 from __future__ import annotations
 
 import re
@@ -30,8 +31,7 @@ def resolve_citations(
     keys = [_answer_record_identity_keys(record, item.id) for item, record in zip(evidence, records)]
     origins = [_citation_origin(item, record) for item, record in zip(evidence, records)]
     # 入力位置や引用別名が異なっても、同じ出典は常に先頭の証拠へ解決する。
-    representatives = [next((j for j in range(i) if origins[j] == origin), i)
-                       for i, origin in enumerate(origins)]
+    representatives = [next((j for j in range(i) if origins[j] == origin), i) for i, origin in enumerate(origins)]
     selected: set[int] = set()
     for usage in used_images:
         identity = str(usage.get("image_id") or "").strip()
@@ -76,13 +76,18 @@ def _citation_origin(item: Evidence, record: AnswerRecord) -> tuple[Evidence, An
         return item, record
     ranking_fields = {"score", "rank", "adb_hybrid", "rerank"}
     record_metadata = {key: value for key, value in record.metadata.items() if key not in ranking_fields}
-    evidence_metadata = {key: value for key, value in item.metadata.items()
-                         if key not in ranking_fields and key != "record"}
+    evidence_metadata = {key: value for key, value in item.metadata.items() if key not in ranking_fields and key != "record"}
     # JSON 往復で配列になった既存 tuple フィールドも同じ出典として比較する。
-    return (replace(item, id=record.chunk_uid, metadata=evidence_metadata),
-            replace(record, metadata=record_metadata, child_chunk_ids=tuple(record.child_chunk_ids),
-                    source_seq_ranges=tuple(record.source_seq_ranges),
-                    source_record_refs=tuple(record.source_record_refs)))
+    return (
+        replace(item, id=record.chunk_uid, metadata=evidence_metadata),
+        replace(
+            record,
+            metadata=record_metadata,
+            child_chunk_ids=tuple(record.child_chunk_ids),
+            source_seq_ranges=tuple(record.source_seq_ranges),
+            source_record_refs=tuple(record.source_record_refs),
+        ),
+    )
 
 
 def _source_matches(source: str, actual: str) -> bool:

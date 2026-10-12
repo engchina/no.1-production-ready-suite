@@ -1,10 +1,12 @@
 """指定された索引実装へチャンクを保存する。"""
+
 from rag_engine.ports import Indexer
 from rag_engine.models.contracts import IndexRequest, IndexResult
 
 
 class IndexingService:
     """保存先を明示した索引サービス。"""
+
     def __init__(self, indexer: Indexer):
         self.indexer = indexer
 

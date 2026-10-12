@@ -1,4 +1,5 @@
 """通常回答と FAQ 直答の保存・履歴管理を共有する。"""
+
 from __future__ import annotations
 import hashlib
 import json
@@ -20,9 +21,11 @@ APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL = "Approved FAQ直接回答"
 
 APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL = "Approved FAQ"
 
+
 def _approved_faq_direct_answer_run_id(suggestion: ApprovedFaqSuggestion, question: str) -> str:
     seed = f"{suggestion.record.id}\0{question}".encode("utf-8")
     return f"approved-faq-{hashlib.sha256(seed).hexdigest()[:16]}"
+
 
 def _approved_faq_direct_answer_payload(
     suggestion: ApprovedFaqSuggestion,
@@ -37,9 +40,7 @@ def _approved_faq_direct_answer_payload(
     question_text = str(question or record.question).strip()
     answer_text = record.approved_answer.strip()
     classification_metadata = (
-        classification_filter.to_metadata()
-        if hasattr(classification_filter, "to_metadata")
-        else dict(classification_filter or {})
+        classification_filter.to_metadata() if hasattr(classification_filter, "to_metadata") else dict(classification_filter or {})
     )
     match_summary = (
         f"Approved FAQ ID: {record.id} / matched QUESTION: {suggestion.matched_question} "
@@ -121,6 +122,7 @@ def _approved_faq_direct_answer_payload(
         "evidence_items": [],
     }
 
+
 def _create_answer_id(run_id: str, question: str) -> str:
     seed = f"{run_id}\0{time.time_ns()}\0{question}".encode("utf-8")
     return hashlib.sha256(seed).hexdigest()[:16]
@@ -133,7 +135,8 @@ def write_answer_payload(output_dir: Path, run_id: str, payload: dict[str, Any],
         raise ValueError("run_id and answer_id must be nonempty path components")
     target = store if store is not None else FileArtifactStore(Path(output_dir))
     target.write(
-        f"{run_id}/answers/{answer_id}.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        f"{run_id}/answers/{answer_id}.json",
+        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
     )
     return answer_id
 
@@ -141,13 +144,24 @@ def write_answer_payload(output_dir: Path, run_id: str, payload: dict[str, Any],
 @dataclass(frozen=True)
 class SavedAnswer:
     """保存された回答の識別子と既存 viewer 互換データ。"""
+
     run_id: str
     answer_id: str
     payload: dict[str, Any]
 
 
-def save_answer_result(result, settings, *, run_id: str = "", question: str = "", standard_answer: str = "", store: ArtifactStore | None = None, evaluation_provider: str | None = None,
-                       evaluation_standard_scope=None, evaluation_enabled: bool = True) -> SavedAnswer | None:
+def save_answer_result(
+    result,
+    settings,
+    *,
+    run_id: str = "",
+    question: str = "",
+    standard_answer: str = "",
+    store: ArtifactStore | None = None,
+    evaluation_provider: str | None = None,
+    evaluation_standard_scope=None,
+    evaluation_enabled: bool = True,
+) -> SavedAnswer | None:
     """標準回答があれば指定 provider（未指定時は既定 LLM）で評価し、回答と履歴を保存する。
 
     evaluation_standard_scope は同じ質問・標準回答のモデル比較で再利用する事前評価範囲。
@@ -157,17 +171,21 @@ def save_answer_result(result, settings, *, run_id: str = "", question: str = ""
     """
     from rag_engine.generation.answering import answer_result_payload, format_answer_response
     from rag_engine.knowledge.query_history import append_query_history, load_query_suggestion_blocklist
+
     source_id = str(run_id or result.primary_source_run_id or "").strip()
     if not source_id:
         return None
     answer_id = _create_answer_id(source_id, result.original_question)
-    payload = answer_result_payload(result, answer_id=answer_id, run_id=source_id,
-                                    question=question or result.original_question, standard_answer=standard_answer)
+    payload = answer_result_payload(
+        result, answer_id=answer_id, run_id=source_id, question=question or result.original_question, standard_answer=standard_answer
+    )
     if evaluation_enabled:
         from rag_engine.evaluation.answer_eval import evaluate_answer_payload
+
         # 同じ質問・標準回答のモデル比較では、事前に固定した評価範囲を共有できる。
         payload["evaluation"] = evaluate_answer_payload(
-            payload, settings, provider_id=evaluation_provider, standard_scope=evaluation_standard_scope)
+            payload, settings, provider_id=evaluation_provider, standard_scope=evaluation_standard_scope
+        )
     else:
         payload["evaluation"] = {
             "status": "not_evaluated",
@@ -187,32 +205,66 @@ def save_answer_result(result, settings, *, run_id: str = "", question: str = ""
             payload["needs_human_review"] = True
         # 外部確認が不要でも、根拠不足・専門判断などによる既存の人手確認は解除しない。
         # 旧クライアントが読む整形済み answer にも古い人工確認ラベルを残さない。
-        payload["answer"] = format_answer_response(json.dumps({
-            "answer": payload["answer_text"],
-            **{key: payload[key] for key in ("confidence", "question_type", "used_images", "reasoning_summary",
-                "insufficient_reason", "needs_human_review", "external_data_required", "external_data_items")},
-        }, ensure_ascii=False))
+        payload["answer"] = format_answer_response(
+            json.dumps(
+                {
+                    "answer": payload["answer_text"],
+                    **{
+                        key: payload[key]
+                        for key in (
+                            "confidence",
+                            "question_type",
+                            "used_images",
+                            "reasoning_summary",
+                            "insufficient_reason",
+                            "needs_human_review",
+                            "external_data_required",
+                            "external_data_items",
+                        )
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
     write_answer_payload(settings.output_dir, source_id, payload, store=store)
     append_query_history(
-        output_dir=settings.output_dir, question=result.original_question,
-        enabled=settings.query_history_enabled, run_id=source_id, answer_id=answer_id,
-        retrieval_scope=result.retrieval_scope, classification_filter=result.classification_filter,
+        output_dir=settings.output_dir,
+        question=result.original_question,
+        enabled=settings.query_history_enabled,
+        run_id=source_id,
+        answer_id=answer_id,
+        retrieval_scope=result.retrieval_scope,
+        classification_filter=result.classification_filter,
         blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path),
     )
     return SavedAnswer(source_id, answer_id, payload)
 
 
-def save_faq_answer(suggestion: ApprovedFaqSuggestion, settings, *, question: str, standard_answer: str = "", classification_filter=None) -> SavedAnswer:
+def save_faq_answer(
+    suggestion: ApprovedFaqSuggestion, settings, *, question: str, standard_answer: str = "", classification_filter=None
+) -> SavedAnswer:
     """FAQ の直答を既存形式で保存する。RAG や回答モデルは呼び出さない。"""
     run_id = _approved_faq_direct_answer_run_id(suggestion, question)
     answer_id = _create_answer_id(run_id, question)
-    payload = _approved_faq_direct_answer_payload(suggestion, answer_id=answer_id, run_id=run_id,
-        question=question, standard_answer=standard_answer, classification_filter=classification_filter)
+    payload = _approved_faq_direct_answer_payload(
+        suggestion,
+        answer_id=answer_id,
+        run_id=run_id,
+        question=question,
+        standard_answer=standard_answer,
+        classification_filter=classification_filter,
+    )
     write_answer_payload(settings.output_dir, run_id, payload)
     from rag_engine.knowledge.query_history import append_query_history, load_query_suggestion_blocklist
-    append_query_history(output_dir=settings.output_dir, question=str(payload.get("question") or ""),
-                         enabled=settings.query_history_enabled, run_id=run_id, answer_id=answer_id,
-                         retrieval_scope=APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-                         classification_filter=payload["classification_filter"],
-                         blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path))
+
+    append_query_history(
+        output_dir=settings.output_dir,
+        question=str(payload.get("question") or ""),
+        enabled=settings.query_history_enabled,
+        run_id=run_id,
+        answer_id=answer_id,
+        retrieval_scope=APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
+        classification_filter=payload["classification_filter"],
+        blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path),
+    )
     return SavedAnswer(run_id, answer_id, payload)

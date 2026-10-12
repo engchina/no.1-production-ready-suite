@@ -26,6 +26,7 @@ QUERY_HISTORY_MAX_QUESTION_CHARS = 500
 @dataclass(frozen=True)
 class QueryHistoryRecord:
     """質問履歴 JSONL の 1 レコードを表します。"""
+
     query_id: str
     created_at: str
     question: str
@@ -39,6 +40,7 @@ class QueryHistoryRecord:
 @dataclass(frozen=True)
 class QueryHistorySuggestion:
     """履歴頻度から提示する質問候補を保持します。"""
+
     question: str
     count: int
     unique_run_count: int

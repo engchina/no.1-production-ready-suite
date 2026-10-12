@@ -1,21 +1,26 @@
 """外部 SDK に依存しない既存データ契約。"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+
 class AdbHybridSearchUnavailable(RuntimeError):
     """ADB hybrid search を実行できない前提条件不足を表します。"""
+
     pass
 
 
 class AdbEmbeddingsUnavailable(AdbHybridSearchUnavailable):
     """対象チャンクの embedding が未作成で検索できない状態を表します。"""
+
     pass
 
 
 @dataclass(frozen=True)
 class EmbeddingSaveResult:
     """チャンク embedding 保存処理の件数と警告を保持します。"""
+
     source_run_id: str
     chunk_run_id: str
     document_id: str
@@ -46,6 +51,7 @@ class EmbeddingSaveResult:
 @dataclass(frozen=True)
 class EmbeddingStatusResult:
     """チャンク run ごとの text/image embedding 準備状況を保持します。"""
+
     source_run_id: str
     chunk_run_id: str
     document_id: str
@@ -92,6 +98,7 @@ class EmbeddingStatusResult:
 @dataclass(frozen=True)
 class StoredChunk:
     """ADB から読み出したチャンク本文と検索用 metadata を保持します。"""
+
     chunk_uid: str
     chunk_id: str
     chunk_level: str
@@ -115,5 +122,6 @@ class StoredChunk:
 @dataclass(frozen=True)
 class HybridSearchResult:
     """hybrid search の順位、score、由来 channel を保持します。"""
+
     child_chunks: list[StoredChunk]
     all_chunks: list[StoredChunk]

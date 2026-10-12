@@ -1,4 +1,5 @@
 """回答結果を保存・表示用の payload と根拠 item へ変換する。I/O は行わない。"""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,16 @@ import re
 from dataclasses import replace
 from typing import Any, Sequence
 from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
-from rag_engine.generation.answer_models import AnswerQuestionResult, AnswerRecord, AnswerResponse, _normalize_text, answer_flow_label, extract_original_question, query_strategy_label, retrieval_scope_label
+from rag_engine.generation.answer_models import (
+    AnswerQuestionResult,
+    AnswerRecord,
+    AnswerResponse,
+    _normalize_text,
+    answer_flow_label,
+    extract_original_question,
+    query_strategy_label,
+    retrieval_scope_label,
+)
 
 
 def _records_for_prompt_injection_scan(
@@ -33,9 +43,11 @@ def _records_for_prompt_injection_scan(
             add(child.record)
     return selected
 
+
 def format_answer_response(content: str) -> str:
     """回答本文を JSON 文字列形式の AnswerResponse に整形します。"""
     return _format_answer_response(parse_answer_response(content))
+
 
 def parse_answer_response(content: str) -> AnswerResponse:
     """LLM の JSON または生 text 応答を AnswerResponse に変換します。"""
@@ -46,18 +58,23 @@ def parse_answer_response(content: str) -> AnswerResponse:
 
     used_images = tuple(_used_image_entries(payload.get("used_images")))
     needs_review = payload.get("needs_human_review")
-    return _normalize_answer_response(AnswerResponse(
-        answer_text=str(payload.get("answer") or "").strip(),
-        confidence=str(payload.get("confidence") or "").strip(),
-        question_type=tuple(_string_list(payload.get("question_type"))),
-        used_images=used_images,
-        reasoning_summary=str(payload.get("reasoning_summary") or "").strip(),
-        insufficient_reason=str(payload.get("insufficient_reason") or "").strip(),
-        needs_human_review=needs_review if isinstance(needs_review, bool) else None,
-        external_data_required=payload.get("external_data_required") if isinstance(payload.get("external_data_required"), bool) else None,
-        external_data_items=tuple(_string_list(payload.get("external_data_items"))),
-        raw_text=raw,
-    ))
+    return _normalize_answer_response(
+        AnswerResponse(
+            answer_text=str(payload.get("answer") or "").strip(),
+            confidence=str(payload.get("confidence") or "").strip(),
+            question_type=tuple(_string_list(payload.get("question_type"))),
+            used_images=used_images,
+            reasoning_summary=str(payload.get("reasoning_summary") or "").strip(),
+            insufficient_reason=str(payload.get("insufficient_reason") or "").strip(),
+            needs_human_review=needs_review if isinstance(needs_review, bool) else None,
+            external_data_required=payload.get("external_data_required")
+            if isinstance(payload.get("external_data_required"), bool)
+            else None,
+            external_data_items=tuple(_string_list(payload.get("external_data_items"))),
+            raw_text=raw,
+        )
+    )
+
 
 def _normalize_answer_response(response: AnswerResponse) -> AnswerResponse:
     """旧式の短い棄権を根拠不足の説明へ補正し、不足時の人手確認を保証する。
@@ -81,7 +98,9 @@ def _normalize_answer_response(response: AnswerResponse) -> AnswerResponse:
         )
         reason = "The retrieved documents contain insufficient evidence for this question."
     elif bare_answer in {"不知道", "我不知道", "不清楚", "无法确定"}:
-        fallback = "检索到的资料缺乏足够的依据，无法回答此问题。请查看相关操作手册以确认操作方法和适用条件，并明确问题的对象、条件及检索范围。"
+        fallback = (
+            "检索到的资料缺乏足够的依据，无法回答此问题。请查看相关操作手册以确认操作方法和适用条件，并明确问题的对象、条件及检索范围。"
+        )
         reason = "检索到的资料不足以支持对该问题的回答。"
     if response.external_data_items:
         response = replace(response, external_data_required=True, needs_human_review=True)
@@ -96,6 +115,7 @@ def _normalize_answer_response(response: AnswerResponse) -> AnswerResponse:
     if (response.insufficient_reason or response.external_data_required) and response.needs_human_review is not True:
         return replace(response, needs_human_review=True)
     return response
+
 
 def _format_answer_response(response: AnswerResponse) -> str:
     lines: list[str] = []
@@ -125,45 +145,56 @@ def _format_answer_response(response: AnswerResponse) -> str:
 
     return "\n\n".join(lines).strip() or response.raw_text
 
+
 def _published_reference_records(records: Sequence[AnswerRecord], trace: dict[str, Any] | None) -> list[AnswerRecord]:
     """公開引用だけを最終本文の根拠へ絞る。検索一覧・入力recordsは変更しない。"""
     trace = trace or {}
-    finalization = trace.get('finalization', {})
-    if not (finalization.get('filtered') or finalization.get('citations_synchronized')):
+    finalization = trace.get("finalization", {})
+    if not (finalization.get("filtered") or finalization.get("citations_synchronized")):
         return list(records)
-    retained = set(finalization.get('retained_evidence_ids', []))
+    retained = set(finalization.get("retained_evidence_ids", []))
     selected: dict[str, list[str]] = {}
     pages: dict[str, set[int]] = {}
-    for span in trace.get('selected_evidence', []):
-        if span['evidence_id'] in retained:
-            selected.setdefault(span['source_id'], []).append(span.get('text', ''))
-            if span.get('page'):
-                pages.setdefault(span['source_id'], set()).add(span['page'])
+    for span in trace.get("selected_evidence", []):
+        if span["evidence_id"] in retained:
+            selected.setdefault(span["source_id"], []).append(span.get("text", ""))
+            if span.get("page"):
+                pages.setdefault(span["source_id"], set()).add(span["page"])
     # parent先頭は別項目の場合があるため、引用欄の抜粋も採用した原文から作る。
-    return [replace(r, text='\n'.join(selected[getattr(r, 'chunk_uid', '') or r.id]),
-                    **({'page': next(iter(pages[r.chunk_uid or r.id])), 'page_end': next(iter(pages[r.chunk_uid or r.id])),
-                        'source_seq_ranges': tuple(v for v in r.source_seq_ranges if v.get('page') in pages[r.chunk_uid or r.id])}
-                       if finalization.get('citations_synchronized') and len(pages.get(r.chunk_uid or r.id, set())) == 1 else {}))
-            for r in records if (getattr(r, 'chunk_uid', '') or r.id) in selected]
+    return [
+        replace(
+            r,
+            text="\n".join(selected[getattr(r, "chunk_uid", "") or r.id]),
+            **(
+                {
+                    "page": next(iter(pages[r.chunk_uid or r.id])),
+                    "page_end": next(iter(pages[r.chunk_uid or r.id])),
+                    "source_seq_ranges": tuple(v for v in r.source_seq_ranges if v.get("page") in pages[r.chunk_uid or r.id]),
+                }
+                if finalization.get("citations_synchronized") and len(pages.get(r.chunk_uid or r.id, set())) == 1
+                else {}
+            ),
+        )
+        for r in records
+        if (getattr(r, "chunk_uid", "") or r.id) in selected
+    ]
+
 
 def format_references(records: Sequence[AnswerRecord], limit: int = 5, *, include_source: bool = False) -> str:
     """最大limit件の参照を整形する。include_source時は資料名も明示する。"""
     lines = []
     for record in records[:limit]:
         active_status = " / active=true" if record.chunk_id else ""
-        source = f'{record.source} / ' if include_source and record.source else ''
+        source = f"{record.source} / " if include_source and record.source else ""
         lines.append(f"- {source}{record.citation}{active_status}: {_trim_for_context(record.text, 90)}")
     return "\n".join(lines)
+
 
 def _metadata_image_evidence(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     images: list[dict[str, Any]] = []
     raw_images = metadata.get("image_evidence")
     if isinstance(raw_images, list):
-        images.extend(
-            dict(raw)
-            for raw in raw_images
-            if isinstance(raw, dict) and str(raw.get("raw_type") or "") != "picture_ocr_text"
-        )
+        images.extend(dict(raw) for raw in raw_images if isinstance(raw, dict) and str(raw.get("raw_type") or "") != "picture_ocr_text")
 
     table_context = metadata.get("table_context")
     if not isinstance(table_context, list):
@@ -194,6 +225,7 @@ def _metadata_image_evidence(metadata: dict[str, Any]) -> list[dict[str, Any]]:
             images.append(image)
     return images
 
+
 def _json_response_object(content: str) -> dict[str, Any] | None:
     cleaned = re.sub(r"<think>.*?</think>", "", content or "", flags=re.S).strip()
     fence_match = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, flags=re.I)
@@ -209,6 +241,7 @@ def _json_response_object(content: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
 
 def answer_result_payload(
     result: AnswerQuestionResult,
@@ -281,9 +314,11 @@ def answer_result_payload(
         "evidence_items": list(result.evidence_items),
     }
 
+
 def _query_expansion_summary(generated_queries: Sequence[str]) -> str:
     count = len(generated_queries)
     return f"{count} 件の検索文を追加" if count else "検索文追加なし"
+
 
 def answer_evidence_items(
     records: Sequence[AnswerRecord],
@@ -324,9 +359,7 @@ def answer_evidence_items(
                     "context_reason": parent.reason,
                     "retrieval_rank": None,
                     "anchor_child_chunk_ids": list(parent.anchor_child_ids),
-                    "anchor_source_record_refs": [
-                        ref for ref in (_evidence_source_ref(item) for item in anchor_refs) if ref
-                    ],
+                    "anchor_source_record_refs": [ref for ref in (_evidence_source_ref(item) for item in anchor_refs) if ref],
                     "anchor_regions": _display_regions_from_refs(anchor_refs),
                     "parent_regions": parent_item.get("display_regions") or [],
                     "children": child_items,
@@ -344,6 +377,7 @@ def answer_evidence_items(
         item["children"] = []
         items.append(item)
     return [item for _, item in sorted(enumerate(items), key=_evidence_item_sort_key)]
+
 
 def _answer_record_evidence_item(
     record: AnswerRecord,
@@ -402,9 +436,11 @@ def _answer_record_evidence_item(
         "channel_scores": dict(hybrid_metadata.get("channel_scores") or {}),
     }
 
+
 def _record_rerank_metadata(record: AnswerRecord) -> dict[str, Any]:
     metadata = record.metadata.get("rerank") if isinstance(record.metadata, dict) else {}
     return metadata if isinstance(metadata, dict) else {}
+
 
 def _answer_record_identity_keys(record: AnswerRecord, item_id: str) -> set[str]:
     values: list[str] = [
@@ -416,15 +452,11 @@ def _answer_record_identity_keys(record: AnswerRecord, item_id: str) -> set[str]
         record.citation,
         *record.child_chunk_ids,
     ]
-    values.extend(
-        str(ref.get("record_id") or "")
-        for ref in record.source_record_refs
-        if isinstance(ref, dict)
-    )
+    values.extend(str(ref.get("record_id") or "") for ref in record.source_record_refs if isinstance(ref, dict))
     # 行画像は親 Table と異なる ID でモデルに渡るため、所有 chunk の利用判定に含めます。
-    values.extend(str(image.get("image_id") or image.get("record_id") or "")
-                  for image in _metadata_image_evidence(record.metadata or {}))
+    values.extend(str(image.get("image_id") or image.get("record_id") or "") for image in _metadata_image_evidence(record.metadata or {}))
     return {_evidence_id_key(value) for value in values if _evidence_id_key(value)}
+
 
 def _display_regions_for_record(
     record: AnswerRecord,
@@ -436,10 +468,12 @@ def _display_regions_for_record(
         return display_regions
     return _display_regions_from_refs(source_refs)
 
+
 def _display_regions_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     layout = metadata.get("layout") if isinstance(metadata.get("layout"), dict) else {}
     raw = layout.get("display_regions")
     return _normalize_display_regions(raw)
+
 
 def _display_regions_from_refs(refs: Sequence[Any]) -> list[dict[str, Any]]:
     by_page: dict[int, list[dict[str, Any]]] = {}
@@ -468,6 +502,7 @@ def _display_regions_from_refs(refs: Sequence[Any]) -> list[dict[str, Any]]:
         for page, boxes in sorted(by_page.items())
     ]
 
+
 def _normalize_display_regions(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
@@ -476,14 +511,11 @@ def _normalize_display_regions(raw: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         page = _int_value(item.get("page")) or 0
-        boxes = [
-            box
-            for box in (_normalize_display_box(raw_box) for raw_box in item.get("boxes") or [])
-            if box
-        ]
+        boxes = [box for box in (_normalize_display_box(raw_box) for raw_box in item.get("boxes") or []) if box]
         if page > 0 and boxes:
             regions.append({"page": page, "boxes": boxes})
     return regions
+
 
 def _normalize_display_box(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
@@ -501,6 +533,7 @@ def _normalize_display_box(raw: Any) -> dict[str, Any]:
         "visual_role": str(raw.get("visual_role") or ""),
     }
 
+
 def _model_usage_order(used_image_ids: Sequence[str]) -> dict[str, int]:
     usage_order: dict[str, int] = {}
     for image_id in used_image_ids:
@@ -509,9 +542,11 @@ def _model_usage_order(used_image_ids: Sequence[str]) -> dict[str, int]:
             usage_order[key] = len(usage_order) + 1
     return usage_order
 
+
 def _model_usage_rank(identity_keys: set[str], usage_order: dict[str, int]) -> int | None:
     ranks = [usage_order[key] for key in identity_keys if key in usage_order]
     return min(ranks) if ranks else None
+
 
 def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]]) -> tuple[Any, ...]:
     source_index, item = index_and_item
@@ -529,13 +564,16 @@ def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]]) -> tuple
         source_index,
     )
 
+
 def _descending_number_sort_key(value: Any) -> tuple[int, float]:
     number = _finite_float(value)
     return (0, -number) if number is not None else (1, 0.0)
 
+
 def _ascending_number_sort_key(value: Any) -> tuple[int, float]:
     number = _finite_float(value)
     return (0, number) if number is not None else (1, 0.0)
+
 
 def _best_mapping_number(value: Any) -> float | None:
     if not isinstance(value, dict):
@@ -544,6 +582,7 @@ def _best_mapping_number(value: Any) -> float | None:
     numbers = [number for number in numbers if number is not None]
     return max(numbers) if numbers else None
 
+
 def _best_evidence_rank(item: dict[str, Any]) -> float | None:
     ranks = [_finite_float(item.get(key)) for key in ("vector_rank", "text_rank", "profile_rank")]
     channel_ranks = item.get("channel_ranks")
@@ -551,6 +590,7 @@ def _best_evidence_rank(item: dict[str, Any]) -> float | None:
         ranks.extend(_finite_float(value) for value in channel_ranks.values())
     ranks = [rank for rank in ranks if rank is not None and rank > 0]
     return min(ranks) if ranks else None
+
 
 def _finite_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
@@ -562,6 +602,7 @@ def _finite_float(value: Any) -> float | None:
     if not math.isfinite(number):
         return None
     return number
+
 
 def _rerank_scores_from_evidence(
     records: Sequence[AnswerRecord],
@@ -594,6 +635,7 @@ def _rerank_scores_from_evidence(
         )
     return tuple(scores)
 
+
 def _used_image_entries(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
@@ -615,11 +657,13 @@ def _used_image_entries(value: Any) -> list[dict[str, str]]:
             entries.append(entry)
     return entries
 
+
 def _primary_source_run_id(records: Sequence[AnswerRecord]) -> str:
     for record in records:
         if record.source_run_id:
             return record.source_run_id
     return ""
+
 
 def _used_image_ids(entries: Sequence[dict[str, Any]]) -> list[str]:
     ids: list[str] = []
@@ -634,6 +678,7 @@ def _used_image_ids(entries: Sequence[dict[str, Any]]) -> list[str]:
         ids.append(image_id)
         seen.add(key)
     return ids
+
 
 def _format_used_images(value: Any) -> str:
     entries = _used_image_entries(value) if not isinstance(value, tuple) else list(value)
@@ -662,8 +707,10 @@ def _format_used_images(value: Any) -> str:
             lines.append(f"- {header}")
     return "\n".join(lines)
 
+
 def _evidence_id_key(value: Any) -> str:
     return _normalize_text(str(value or "").strip())
+
 
 def _evidence_source_ref(ref: Any) -> dict[str, Any]:
     if not isinstance(ref, dict):
@@ -679,6 +726,7 @@ def _evidence_source_ref(ref: Any) -> dict[str, Any]:
         "vision_context_crop": str(ref.get("vision_context_crop") or ""),
     }
 
+
 def _source_ref_from_answer_record(record: AnswerRecord) -> dict[str, Any]:
     return {
         "record_id": record.id,
@@ -689,6 +737,7 @@ def _source_ref_from_answer_record(record: AnswerRecord) -> dict[str, Any]:
         "bbox": [],
     }
 
+
 def _evidence_seq_range(item: Any) -> dict[str, int]:
     if not isinstance(item, dict):
         return {"page": 0, "seq_start": 0, "seq_end": 0}
@@ -696,6 +745,7 @@ def _evidence_seq_range(item: Any) -> dict[str, int]:
     start = _int_value(item.get("seq_start")) or 0
     end = _int_value(item.get("seq_end")) or start
     return {"page": page, "seq_start": start, "seq_end": end}
+
 
 def _bbox_values(value: Any) -> list[float]:
     if not isinstance(value, list) or len(value) != 4:
@@ -705,6 +755,7 @@ def _bbox_values(value: Any) -> list[float]:
     except (TypeError, ValueError):
         return []
 
+
 def _preview_lines(value: str, max_length: int = 280) -> str:
     lines = [line.strip() for line in str(value or "").replace("\r\n", "\n").split("\n") if line.strip()]
     preview = "\n".join(lines[:2]) if lines else _trim_for_context(value, max_length)
@@ -712,17 +763,20 @@ def _preview_lines(value: str, max_length: int = 280) -> str:
         return preview
     return f"{preview[: max(0, max_length - 1)]}…"
 
+
 def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value or "").strip()
     return [text] if text else []
 
+
 def _int_value(value: Any) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
+
 
 def _trim_for_context(value: str, max_length: int) -> str:
     normalized = re.sub(r"\s+", " ", str(value or "")).strip()

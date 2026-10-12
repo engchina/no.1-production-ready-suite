@@ -1,12 +1,21 @@
 """既存 Docling / Oracle / OCI 実装を SDK の機能契約へ接続する。"""
+
 from dataclasses import asdict, replace
 import json
 from typing import Sequence
 
 from rag_engine.config import Settings
 from rag_engine.models.contracts import (
-    ParseRequest, ParsedDocument, IndexRequest, IndexResult, SearchRequest, SearchResult,
-    Evidence, GenerationRequest, AnswerResult, TraceStep,
+    ParseRequest,
+    ParsedDocument,
+    IndexRequest,
+    IndexResult,
+    SearchRequest,
+    SearchResult,
+    Evidence,
+    GenerationRequest,
+    AnswerResult,
+    TraceStep,
 )
 from rag_engine.ports import Embedder
 from rag_engine.resources.runtime import Runtime
@@ -14,6 +23,7 @@ from rag_engine.resources.runtime import Runtime
 
 class DocumentParser:
     """既存解析器を明示的な保存先・profile・モデルプールで実行する。"""
+
     def __init__(self, settings: Settings, runtime: Runtime, *, engines: tuple[str, ...] = ("docling",)):
         self.settings, self.runtime, self.engines = settings, runtime, engines
 
@@ -24,26 +34,39 @@ class DocumentParser:
         except ImportError as exc:
             raise RuntimeError("Install rag-engine[pdf,docling]") from exc
         with self.runtime.activate():
-            result = analyze_pdf(request.source, request.page_range, list(self.engines), self.settings,
-                                 use_docling_vision=request.vision, parse_entire_file=request.entire_file,
-                                 document_metadata=dict(request.metadata))
+            result = analyze_pdf(
+                request.source,
+                request.page_range,
+                list(self.engines),
+                self.settings,
+                use_docling_vision=request.vision,
+                parse_entire_file=request.entire_file,
+                document_metadata=dict(request.metadata),
+            )
         if not result.records:
             raise RuntimeError("Parser produced no layout records; inspect the analysis status")
         return ParsedDocument(
-            result.run_id, result.pdf_name, tuple(result.records),
-            tuple(replace(page, image_url="") for page in result.pages), result.run_id,
-            result.source_page_count, result.document_metadata, result.classification,
+            result.run_id,
+            result.pdf_name,
+            tuple(result.records),
+            tuple(replace(page, image_url="") for page in result.pages),
+            result.run_id,
+            result.source_page_count,
+            result.document_metadata,
+            result.classification,
         )
 
 
 class OciEmbedder:
     """既存 OCI embedding のモデル・次元・retry 設定を利用する。"""
+
     def __init__(self, settings: Settings):
         self.settings = settings
 
     def embed(self, texts: Sequence[str], *, query: bool = False) -> list[list[float]]:
         """入力順の embedding を返す。認証・通信エラーを伝播する。"""
         from rag_engine.adapters.oci import embed_texts
+
         return embed_texts(texts, self.settings, input_type="SEARCH_QUERY" if query else "SEARCH_DOCUMENT")
 
 
@@ -59,6 +82,7 @@ class OracleIndexer:
     custom embedder は OracleRetriever にも同じものを渡すこと。保存行は
     settings.embedding_model で識別するため、モデルを替えるときはこの値も変える。
     """
+
     def __init__(self, settings: Settings, runtime: Runtime, *, embedder: Embedder | None = None):
         _require_text_only(settings, embedder)
         self.settings, self.runtime = settings, runtime
@@ -70,10 +94,12 @@ class OracleIndexer:
             raise ValueError("OracleIndexer supports collection='knowledge_base'; use index_id to search a chunk run")
         from rag_engine.chunking.storage import persist_batch
         from rag_engine.adapters.oracle.store import save_chunk_run_embeddings
+
         with self.runtime.activate():
             result = persist_batch(request.batch, output_dir=self.settings.output_dir)
             saved = save_chunk_run_embeddings(
-                result, self.settings,
+                result,
+                self.settings,
                 embedder=lambda texts, settings, **kwargs: self.embedder.embed(texts),
             )
         if saved.error_count:
@@ -87,6 +113,7 @@ class OracleRetriever:
     embedder 指定時は query も同じ embedder（query=True）で vector 化する。索引と別の
     embedder を使うと vector 空間が一致せず、エラーなしに無意味な順位になる。
     """
+
     def __init__(self, settings: Settings, runtime: Runtime, *, embedder: Embedder | None = None):
         _require_text_only(settings, embedder)
         self.settings, self.runtime, self.embedder = settings, runtime, embedder
@@ -96,6 +123,7 @@ class OracleRetriever:
         from rag_engine.generation.answering import build_adb_hybrid_answer_context
         from rag_engine.adapters.oracle.store import check_adb_hybrid_search_ready
         from rag_engine.knowledge.classification import REQUEST_FILTER_KEYS, classification_filter_from_values
+
         request.validate()
         unknown = set(request.filters) - REQUEST_FILTER_KEYS
         if unknown:
@@ -105,25 +133,41 @@ class OracleRetriever:
         with self.runtime.activate():
             filters = classification_filter_from_values(**dict(request.filters))
             embedder = self.embedder
-            query_embedder = None if embedder is None else (
-                lambda query, settings: embedder.embed([query], query=True)[0])
-            check_adb_hybrid_search_ready(chunk_run_id=chunk_run_id, settings=self.settings,
-                                          retrieval_scope=scope, classification_filter=filters)
+            query_embedder = None if embedder is None else (lambda query, settings: embedder.embed([query], query=True)[0])
+            check_adb_hybrid_search_ready(
+                chunk_run_id=chunk_run_id, settings=self.settings, retrieval_scope=scope, classification_filter=filters
+            )
             context = build_adb_hybrid_answer_context(
-                request.question, "", (), self.settings, top_k=request.top_k,
-                neighbor_child_count=request.neighbor_count, retrieval_queries=request.queries or None,
-                retrieval_scope=scope, pinned_chunk_run_id=chunk_run_id,
-                classification_filter=filters, rerank_enabled=self.settings.default_rerank_enabled,
+                request.question,
+                "",
+                (),
+                self.settings,
+                top_k=request.top_k,
+                neighbor_child_count=request.neighbor_count,
+                retrieval_queries=request.queries or None,
+                retrieval_scope=scope,
+                pinned_chunk_run_id=chunk_run_id,
+                classification_filter=filters,
+                rerank_enabled=self.settings.default_rerank_enabled,
                 query_embedder=query_embedder,
             )
-        return SearchResult(tuple(Evidence(
-            record.id, record.text, record.source, record.page,
-            {"record": asdict(record)},
-        ) for record in context.records))
+        return SearchResult(
+            tuple(
+                Evidence(
+                    record.id,
+                    record.text,
+                    record.source,
+                    record.page,
+                    {"record": asdict(record)},
+                )
+                for record in context.records
+            )
+        )
 
 
 class OciGenerator:
     """既存の文書 grounding・画像根拠・回答出力契約を使用する。"""
+
     def __init__(self, settings: Settings, runtime: Runtime):
         self.settings, self.runtime = settings, runtime
 
@@ -137,6 +181,7 @@ class OciGenerator:
         from rag_engine.generation import answering as answer
         from rag_engine.generation.service import GenerationService
         from rag_engine.retrieval.context_builder import ContextParentEvidence, context_bundle_from_parent_evidence
+
         if not request.evidence:
             return GenerationService(self).generate(request)
         records = []
@@ -145,8 +190,19 @@ class OciGenerator:
             if raw:
                 records.append(answer.AnswerRecord(**raw))
             else:
-                records.append(answer.AnswerRecord(id=item.id, engine="external", engine_label="external", page=item.page,
-                    seq_no=len(records) + 1, category="Text", text=item.text, source=item.source, metadata=dict(item.metadata)))
+                records.append(
+                    answer.AnswerRecord(
+                        id=item.id,
+                        engine="external",
+                        engine_label="external",
+                        page=item.page,
+                        seq_no=len(records) + 1,
+                        category="Text",
+                        text=item.text,
+                        source=item.source,
+                        metadata=dict(item.metadata),
+                    )
+                )
         with self.runtime.activate():
             # 親本文が回答予算を超える根拠は受け付けない。prompt の抜粋は synthesize_grounded_answer 側で行う。
             bundle = context_bundle_from_parent_evidence(
@@ -157,20 +213,38 @@ class OciGenerator:
                 reason = bundle.insufficient_reason or "Evidence exceeds synthesis budget; re-run chunking with a smaller parent size."
                 return AnswerResult("", confidence="low", insufficient_reason=reason, needs_human_review=True)
             context = answer.AnswerContext(
-                records=bundle.records, text=bundle.text, evidence=bundle.evidence,
+                records=bundle.records,
+                text=bundle.text,
+                evidence=bundle.evidence,
                 evidence_tree=bundle.evidence_tree,
             )
             images = answer.answer_image_evidence(records, self.settings.output_dir)
             mode = answer._image_prompt_mode(images, self.settings)
             response = answer.synthesize_grounded_answer(
-                request.question, context, self.settings, image_evidence=images,
-                image_prompt_mode=mode, answer_llm_provider=self.settings.default_answer_llm,
+                request.question,
+                context,
+                self.settings,
+                image_evidence=images,
+                image_prompt_mode=mode,
+                answer_llm_provider=self.settings.default_answer_llm,
             ).response
         from rag_engine.generation.citations import resolve_citations
+
         citations = resolve_citations(request.evidence, records, response.used_images)
         decision = response.generation_trace.get("image_fallback", {})
         # SDKでも画像添付による是正の有無を確認可能にし、元回答本文は公開traceへ重複保存しない。
-        trace = (TraceStep("image_fallback", detail=json.dumps({key: decision.get(key) for key in (
-            "reason", "source_provider", "regeneration_calls")}, ensure_ascii=False)),) if decision else ()
-        return AnswerResult(response.answer_text, citations, response.confidence,
-                            response.insufficient_reason, bool(response.needs_human_review), trace)
+        trace = (
+            (
+                TraceStep(
+                    "image_fallback",
+                    detail=json.dumps(
+                        {key: decision.get(key) for key in ("reason", "source_provider", "regeneration_calls")}, ensure_ascii=False
+                    ),
+                ),
+            )
+            if decision
+            else ()
+        )
+        return AnswerResult(
+            response.answer_text, citations, response.confidence, response.insufficient_reason, bool(response.needs_human_review), trace
+        )

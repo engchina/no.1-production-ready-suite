@@ -1,4 +1,5 @@
 """CRAG の評価入力の組み立て、評価結果の正規化、取得済み根拠の統合・絞り込み。LLM と検索は呼ばない。"""
+
 from __future__ import annotations
 
 import json
@@ -28,8 +29,10 @@ UNTRUSTED_CRAG_CANDIDATES_BEGIN = "BEGIN_UNTRUSTED_CRAG_CANDIDATES"
 
 UNTRUSTED_CRAG_CANDIDATES_END = "END_UNTRUSTED_CRAG_CANDIDATES"
 
-def _merge_crag_evidence(previous: AnswerContext, current: AnswerContext, question: str,
-                         *, max_records: int, max_chars: int) -> AnswerContext:
+
+def _merge_crag_evidence(
+    previous: AnswerContext, current: AnswerContext, question: str, *, max_records: int, max_chars: int
+) -> AnswerContext:
     """既取得の出典を最大2回分保持する。満杯時は質問関連度で選ぶ。"""
     if not previous.records:
         return current
@@ -39,11 +42,14 @@ def _merge_crag_evidence(previous: AnswerContext, current: AnswerContext, questi
     limit = max_records * 2
     if len(records) > limit:
         from rag_engine.retrieval.operation_context import mentions_operation_section, operation_target_score, operation_labels
+
         target_labels = {label for r in records if operation_target_score(question, r) >= 80 for label in operation_labels(r)}
+
         def priority(record):
             labels = operation_labels(record)
             entry = len(labels) == 1 and bool(labels & target_labels) and mentions_operation_section(record.text)
             return operation_target_score(question, record) + (100 if entry else 0) + evidence_relevance(question, record.text)
+
         records.sort(key=lambda r: -priority(r))
         records = records[:limit]
     keys = {record_context_key(r) or r.id for r in records}
@@ -51,9 +57,9 @@ def _merge_crag_evidence(previous: AnswerContext, current: AnswerContext, questi
     tree.update({record_context_key(p.record) or p.record.id: p for p in current.evidence_tree})
     if tree and all(key in tree for key in keys):
         bundle = context_bundle_from_parent_evidence(tuple(tree[record_context_key(r) or r.id] for r in records), max_chars=max_chars)
-        return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence,
-                             evidence_tree=bundle.evidence_tree)
+        return AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
     return AnswerContext(records=records, text=evidence_packet(question, records))
+
 
 # 静的な指示は番号付きの節のテンプレートに置き、実行時の値は {{...}} で差し込む。UI はこの定数を読み取り専用で示す (#934)。
 # 節 2 は回答生成の共有方針（OPERATION_GUIDANCE_POLICY）のうち十分性の判定に関わる部分だけの要約。回答文の
@@ -129,6 +135,7 @@ CRAG_GRADE_PROMPT_TEMPLATE = (
     "- 応答 schema（CragRetrievalGradeOutput）の各項目の説明に従い、JSON だけを返す。\n"
 )
 
+
 def _build_crag_grade_prompt(
     question: str,
     active_query: str,
@@ -151,11 +158,9 @@ def _build_crag_grade_prompt(
     # 未閲覧本文を十分性の根拠にせず、実行可能な回復経路だけを評価器へ知らせる。
     for anchor in visible[:8] if context.expansion_records else ():
         for action in ("neighbor_children", "parent", "neighbor_parents"):
-            recovery = recover_context_records(visible, context.expansion_records,
-                [anchor.chunk_uid], action)
+            recovery = recover_context_records(visible, context.expansion_records, [anchor.chunk_uid], action)
             if recovery.records:
-                recovery_options.append({"anchor_id": anchor.chunk_uid, "action": action,
-                    "additional_chunk_count": len(recovery.records)})
+                recovery_options.append({"anchor_id": anchor.chunk_uid, "action": action, "additional_chunk_count": len(recovery.records)})
     prompt_warnings = prompt_injection_warnings_for_records(
         context.records,
         evidence_tree=context.evidence_tree,
@@ -171,15 +176,18 @@ def _build_crag_grade_prompt(
     model_candidates = _model_candidates(candidates)
     if compact:
         model_candidates = [_compact_candidate(candidate) for candidate in model_candidates]
-    return render_prompt_template(CRAG_GRADE_PROMPT_TEMPLATE, {
-        "question": fold_width(question).strip(),
-        "recovery_options": dump(recovery_options),
-        "task_contract": dump(contract),
-        "active_query": active_query.strip(),
-        "retrieval_queries": dump(list(_dedupe_queries(retrieval_queries)), block=True),
-        "prompt_injection_warnings": dump(_prompt_safe_warnings(prompt_warnings), block=True),
-        "candidates": neutralize_boundary_markers(dump(model_candidates, block=True)),
-    })
+    return render_prompt_template(
+        CRAG_GRADE_PROMPT_TEMPLATE,
+        {
+            "question": fold_width(question).strip(),
+            "recovery_options": dump(recovery_options),
+            "task_contract": dump(contract),
+            "active_query": active_query.strip(),
+            "retrieval_queries": dump(list(_dedupe_queries(retrieval_queries)), block=True),
+            "prompt_injection_warnings": dump(_prompt_safe_warnings(prompt_warnings), block=True),
+            "candidates": neutralize_boundary_markers(dump(model_candidates, block=True)),
+        },
+    )
 
 
 def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -197,22 +205,26 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     compact["text"] = candidate.get("text", "")
     if candidate.get("excerpt_only"):
         compact["excerpt_only"] = True
-    anchors = [child.get("chunk_uid") for child in candidate.get("retrieved_anchor_children") or ()
-               if isinstance(child, dict) and child.get("chunk_uid")]
+    anchors = [
+        child.get("chunk_uid")
+        for child in candidate.get("retrieved_anchor_children") or ()
+        if isinstance(child, dict) and child.get("chunk_uid")
+    ]
     if anchors:
         compact["anchor_uids"] = anchors
     return compact
 
 
-def _crag_grade_candidates(context: AnswerContext, question: str = "", *,
-                           max_candidates: int | None = None) -> list[dict[str, Any]]:
+def _crag_grade_candidates(context: AnswerContext, question: str = "", *, max_candidates: int | None = None) -> list[dict[str, Any]]:
     limit = MAX_CRAG_GRADE_RECORDS if max_candidates is None else max(1, min(MAX_CRAG_GRADE_RECORDS, max_candidates))
     if context.evidence_tree:
         return _crag_grade_tree_candidates(context.evidence_tree, question, max_candidates=limit)
     return _crag_grade_record_candidates(context.records, question, max_candidates=limit)
 
-def _crag_grade_tree_candidates(evidence_tree: Sequence[ContextParentEvidence], question: str = "", *,
-                                max_candidates: int = MAX_CRAG_GRADE_RECORDS) -> list[dict[str, Any]]:
+
+def _crag_grade_tree_candidates(
+    evidence_tree: Sequence[ContextParentEvidence], question: str = "", *, max_candidates: int = MAX_CRAG_GRADE_RECORDS
+) -> list[dict[str, Any]]:
     """全parentへ予算を配分し、子の独自本文のみ追加する。省略は明示する。
 
     検索で当たった子（retrieved_anchor）の本文は語彙一致が低くても親の抄録から落とさない。子の本文は
@@ -240,12 +252,16 @@ def _crag_grade_tree_candidates(evidence_tree: Sequence[ContextParentEvidence], 
             children.append({**entry, "retrieval_role": child.role, "retrieval_rank": child.retrieval_rank})
         excerpt = evidence_excerpt(question, body, allowance, required_ranges=required)
         candidate = _crag_grade_record_candidate(parent.record, excerpt)
-        candidate.update(retrieval_role=parent.role, context_reason=parent.reason,
-                         excerpt_only=len(excerpt) < len(body),
-                         retrieved_anchor_children=[c for c in children if c["retrieval_role"] == "retrieved_anchor"],
-                         context_children=[c for c in children if c["retrieval_role"] != "retrieved_anchor"])
+        candidate.update(
+            retrieval_role=parent.role,
+            context_reason=parent.reason,
+            excerpt_only=len(excerpt) < len(body),
+            retrieved_anchor_children=[c for c in children if c["retrieval_role"] == "retrieved_anchor"],
+            context_children=[c for c in children if c["retrieval_role"] != "retrieved_anchor"],
+        )
         candidates.append(candidate)
     return candidates
+
 
 def _anchor_ranges(question: str, body: str, anchors: Sequence[str], budget: int) -> list[tuple[int, int]]:
     """検索で当たった子の本文のうち質問に関連する窓（子ごと budget 字まで）を、親本文上の範囲で返す。
@@ -267,12 +283,16 @@ def _anchor_ranges(question: str, body: str, anchors: Sequence[str], budget: int
     return ranges
 
 
-def _crag_grade_record_candidates(records: Sequence[AnswerRecord], question: str = "", *,
-                                  max_candidates: int = MAX_CRAG_GRADE_RECORDS) -> list[dict[str, Any]]:
+def _crag_grade_record_candidates(
+    records: Sequence[AnswerRecord], question: str = "", *, max_candidates: int = MAX_CRAG_GRADE_RECORDS
+) -> list[dict[str, Any]]:
     selected = records[:max_candidates]
     allowance = min(MAX_CRAG_GRADE_RECORD_CHARS, MAX_CRAG_GRADE_CHARS // max(1, len(selected)))
-    return [{**_crag_grade_record_candidate(r, evidence_excerpt(question, r.text, allowance)),
-             "excerpt_only": len(r.text) > allowance} for r in selected]
+    return [
+        {**_crag_grade_record_candidate(r, evidence_excerpt(question, r.text, allowance)), "excerpt_only": len(r.text) > allowance}
+        for r in selected
+    ]
+
 
 def _crag_grade_record_candidate(record: Any, text: str) -> dict[str, Any]:
     return {
@@ -303,14 +323,18 @@ def _model_candidates(candidates: Sequence[dict[str, Any]]) -> list[dict[str, An
     資料の全角の ``ＨＲＭ`` を質問の ``HRM`` と同じ語と読ませるため。識別子（chunk_uid・source など）は評価器の
     判定を候補へ結び付けるのでそろえず、候補そのもの（評価の記録・草稿ラベルに使う）も変えない。
     """
+
     def view(candidate: dict[str, Any]) -> dict[str, Any]:
-        copied = {key: fold_width(value) if key in _CANDIDATE_TEXT_KEYS and isinstance(value, str) else value
-                  for key, value in candidate.items()}
+        copied = {
+            key: fold_width(value) if key in _CANDIDATE_TEXT_KEYS and isinstance(value, str) else value for key, value in candidate.items()
+        }
         for key in ("retrieved_anchor_children", "context_children"):
             if isinstance(copied.get(key), list):
                 copied[key] = [view(child) if isinstance(child, dict) else child for child in copied[key]]
         return copied
+
     return [view(candidate) for candidate in candidates]
+
 
 def _refine_crag_context(
     context: AnswerContext,
@@ -333,16 +357,23 @@ def _refine_crag_context(
     if not keys and not rejected:
         return context
     # 文書の選択の状態（後回しの文書・全候補・trace）は精錬をまたいで引き継ぐ (#1028)。
-    carried = dict(ranked_candidates=context.ranked_candidates, deferred_records=context.deferred_records,
-                   document_selection=context.document_selection)
+    carried = dict(
+        ranked_candidates=context.ranked_candidates,
+        deferred_records=context.deferred_records,
+        document_selection=context.document_selection,
+    )
+
     def allowed_record(record: AnswerRecord) -> bool:
         return _record_matches_crag_relevant_ids(record, keys) or not _record_matches_crag_relevant_ids(record, rejected)
+
     pool = tuple(r for r in context.expansion_records if allowed_record(r))
     if context.evidence_tree:
+
         def tree_rank(item: ContextParentEvidence) -> int:
             if _parent_evidence_matches_crag_relevant_ids(item, keys):
                 return 0
             return 2 if _parent_evidence_matches_crag_relevant_ids(item, rejected) else 1
+
         selected_tree = tuple(sorted(context.evidence_tree, key=tree_rank))
         if all(tree_rank(item) == 2 for item in selected_tree):
             selected_tree = ()
@@ -355,20 +386,35 @@ def _refine_crag_context(
             status=bundle.status if bundle else "insufficient",
             insufficient_reason=bundle.insufficient_reason if bundle else "all_candidates_rejected",
             preferred_child_ids=tuple(relevant_chunk_ids),
-            expansion_records=pool, **carried,
+            expansion_records=pool,
+            **carried,
         )
+
     def record_rank(record: AnswerRecord) -> int:
         if _record_matches_crag_relevant_ids(record, keys):
             return 0
         return 2 if _record_matches_crag_relevant_ids(record, rejected) else 1
+
     refined = sorted(context.records, key=record_rank)
     if all(record_rank(record) == 2 for record in refined):
         refined = []
     if not refined:
-        return AnswerContext(records=[], text="", status="insufficient", insufficient_reason="all_candidates_rejected",
-                             preferred_child_ids=tuple(relevant_chunk_ids), expansion_records=pool, **carried)
-    return replace(_answer_context_from_ranked(refined, max_chars=max_chars), preferred_child_ids=tuple(relevant_chunk_ids),
-                   expansion_records=pool, **carried)
+        return AnswerContext(
+            records=[],
+            text="",
+            status="insufficient",
+            insufficient_reason="all_candidates_rejected",
+            preferred_child_ids=tuple(relevant_chunk_ids),
+            expansion_records=pool,
+            **carried,
+        )
+    return replace(
+        _answer_context_from_ranked(refined, max_chars=max_chars),
+        preferred_child_ids=tuple(relevant_chunk_ids),
+        expansion_records=pool,
+        **carried,
+    )
+
 
 def _parent_evidence_matches_crag_relevant_ids(
     parent: ContextParentEvidence,
@@ -377,6 +423,7 @@ def _parent_evidence_matches_crag_relevant_ids(
     if _record_matches_crag_relevant_ids(parent.record, keys):
         return True
     return any(_record_matches_crag_relevant_ids(child.record, keys) for child in parent.children)
+
 
 def _record_matches_crag_relevant_ids(record: AnswerRecord, keys: set[str]) -> bool:
     record_keys = {
@@ -392,12 +439,9 @@ def _record_matches_crag_relevant_ids(record: AnswerRecord, keys: set[str]) -> b
         )
         if _evidence_id_key(value)
     }
-    record_keys.update(
-        _evidence_id_key(value)
-        for value in record.child_chunk_ids
-        if _evidence_id_key(value)
-    )
+    record_keys.update(_evidence_id_key(value) for value in record.child_chunk_ids if _evidence_id_key(value))
     return bool(record_keys & keys)
+
 
 def _sanitize_crag_chunk_ids(values: Sequence[str]) -> tuple[str, ...]:
     selected: list[str] = []
@@ -413,6 +457,7 @@ def _sanitize_crag_chunk_ids(values: Sequence[str]) -> tuple[str, ...]:
             break
     return tuple(selected)
 
+
 def _valid_crag_rewrite(value: str, original_question: str, existing: Sequence[str]) -> str:
     text = _trim_generated_text(value, MAX_GENERATED_QUERY_CHARS)
     if query_rejection_reason(original_question, text):
@@ -424,6 +469,7 @@ def _valid_crag_rewrite(value: str, original_question: str, existing: Sequence[s
         return ""
     return text
 
+
 def _crag_confidence(value: Any) -> float | None:
     try:
         confidence = float(value)
@@ -432,6 +478,7 @@ def _crag_confidence(value: Any) -> float | None:
     if confidence != confidence:
         return None
     return max(0.0, min(1.0, confidence))
+
 
 def _format_crag_confidence(value: float | None) -> str:
     if value is None:

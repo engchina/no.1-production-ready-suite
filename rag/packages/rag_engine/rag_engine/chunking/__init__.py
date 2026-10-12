@@ -257,12 +257,29 @@ from rag_engine.chunking.builder import (
     _chunk_from_payload,
 )
 
+
 def __getattr__(name: str):
     """旧 chunking API の保存・表示関数を遅延転送する。"""
-    if name in ['_optional_file_sha256', '_load_latest_chunk_run_for_source_identity', '_load_viewer_payload', '_write_json', '_write_jsonl', 'chunk_payload', 'chunk_result_from_payload', 'create_chunk_run', 'load_chunk_run_by_id', 'load_latest_chunk_run', 'load_latest_chunk_run_for_run_source', 'load_latest_chunk_run_for_source', 'load_latest_or_source_chunk_run']:
+    if name in [
+        "_optional_file_sha256",
+        "_load_latest_chunk_run_for_source_identity",
+        "_load_viewer_payload",
+        "_write_json",
+        "_write_jsonl",
+        "chunk_payload",
+        "chunk_result_from_payload",
+        "create_chunk_run",
+        "load_chunk_run_by_id",
+        "load_latest_chunk_run",
+        "load_latest_chunk_run_for_run_source",
+        "load_latest_chunk_run_for_source",
+        "load_latest_or_source_chunk_run",
+    ]:
         from importlib import import_module
+
         return getattr(import_module("rag_engine.chunking.storage"), name)
-    if name in ['chunk_table_rows', 'summarize_chunk_run']:
+    if name in ["chunk_table_rows", "summarize_chunk_run"]:
         from importlib import import_module
+
         return getattr(import_module("rag_engine.chunking.presentation"), name)
     raise AttributeError(name)

@@ -1,10 +1,12 @@
 """根拠を明示して呼び出す回答生成サービス。"""
+
 from rag_engine.ports import Generator
 from rag_engine.models.contracts import GenerationRequest, AnswerResult
 
 
 class GenerationService:
     """空検索のときは回答モデルを呼ばず不足を返す。"""
+
     def __init__(self, generator: Generator):
         self.generator = generator
 
@@ -15,6 +17,8 @@ class GenerationService:
         if not request.evidence:
             return AnswerResult(
                 text="検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
-                confidence="low", insufficient_reason="retrieval returned no evidence", needs_human_review=True,
+                confidence="low",
+                insufficient_reason="retrieval returned no evidence",
+                needs_human_review=True,
             )
         return self.generator.generate(request)

@@ -23,6 +23,7 @@ REQUIRED_MTLS_WALLET_FILES = ("tnsnames.ora", "ewallet.pem")
 @dataclass(frozen=True)
 class AdbSettings:
     """Oracle 接続設定。TCP Easy Connect では OCID と Wallet は不要です。"""
+
     ocid: str
     db_name: str
     tns_alias: str
@@ -48,11 +49,7 @@ class AdbSettings:
 def _is_tcp_easy_connect(dsn: str) -> bool:
     """host:port/service または tcp:// 形式を判別します。TCPS は除外します。"""
     value = dsn.strip().lower()
-    return (
-        "/" in value
-        and not value.startswith("(")
-        and ("://" not in value or value.startswith("tcp://"))
-    )
+    return "/" in value and not value.startswith("(") and ("://" not in value or value.startswith("tcp://"))
 
 
 def load_adb_settings(

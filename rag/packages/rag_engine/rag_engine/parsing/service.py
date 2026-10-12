@@ -1,10 +1,12 @@
 """解析器を差し替え可能にするサービス。"""
+
 from rag_engine.ports import Parser
 from rag_engine.models.contracts import ParseRequest, ParsedDocument
 
 
 class ParsingService:
     """選択された解析器に検証済み要求を渡す。"""
+
     def __init__(self, parser: Parser):
         self.parser = parser
 

@@ -61,6 +61,7 @@ _CATEGORY_ALIASES = {
 @dataclass(frozen=True)
 class CategoryStyle:
     """比較ビューアで使うカテゴリ名、色、表示優先度を保持します。"""
+
     label: str
     color: str
 

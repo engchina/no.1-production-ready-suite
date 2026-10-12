@@ -54,6 +54,7 @@ MAX_APPROVED_FAQ_ANSWER_LENGTH = 20000
 @dataclass(frozen=True)
 class ApprovedFaqRecord:
     """Approved FAQ の canonical question、回答、分類、出典を保持します。"""
+
     id: str
     question: str
     approved_answer: str
@@ -75,6 +76,7 @@ class ApprovedFaqRecord:
 @dataclass(frozen=True)
 class ApprovedFaqSuggestion:
     """質問入力に対する FAQ 候補と一致 score を保持します。"""
+
     record: ApprovedFaqRecord
     matched_question: str
     score: float
@@ -88,6 +90,7 @@ class ApprovedFaqSuggestion:
 @dataclass(frozen=True)
 class ApprovedFaqSemanticItem:
     """FAQ semantic index 内の 1 質問 embedding を保持します。"""
+
     record_id: str
     question: str
     question_hash: str
@@ -97,6 +100,7 @@ class ApprovedFaqSemanticItem:
 @dataclass(frozen=True)
 class ApprovedFaqSemanticIndex:
     """FAQ semantic matching 用 cache の内容と署名を保持します。"""
+
     model: str
     dimensions: int
     records_signature: str
@@ -106,6 +110,7 @@ class ApprovedFaqSemanticIndex:
 @dataclass(frozen=True)
 class ApprovedFaqImportRow:
     """Excel 取り込みで読み取った FAQ 行を表します。"""
+
     question: str
     approved_answer: str
     source_file: str = ""
@@ -120,6 +125,7 @@ class ApprovedFaqImportRow:
 @dataclass(frozen=True)
 class ApprovedFaqSaveResult:
     """FAQ JSON 保存時のパス、backup、件数を保持します。"""
+
     path: Path
     backup_path: Path | None
     record_count: int
@@ -129,6 +135,7 @@ class ApprovedFaqSaveResult:
 @dataclass(frozen=True)
 class ApprovedFaqMutationResult:
     """FAQ の追加・削除・取込操作の結果を UI 向けに保持します。"""
+
     path: Path
     backup_path: Path | None
     record_count: int
@@ -280,9 +287,7 @@ def _apply_approved_faq_import_rows_locked(
         replaced: dict[str, Any] | None = None
         if normalized_mode == APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT:
             if inherit_replaced:
-                replaced = next(
-                    (item for item in records if _question_key(item.get("question")) == question_key), None
-                )
+                replaced = next((item for item in records if _question_key(item.get("question")) == question_key), None)
             records, removed = _remove_records_by_question_key(records, question_key)
             deleted_count += removed
             if removed:
@@ -770,9 +775,7 @@ def approved_faq_feedback_skip_reason(record: dict[str, Any]) -> str:
         return "Approved FAQ の回答のため、再登録は不要です。"
     # ponytail: 「回答できない」の判定は insufficient_reason と confidence=low の組で近似する。
     # 一部だけ不足する回答も insufficient_reason を持つため、これだけでは除外しない。
-    if str(answer_trace.get("insufficient_reason") or "").strip() and str(
-        answer_trace.get("confidence") or ""
-    ).strip() == "low":
+    if str(answer_trace.get("insufficient_reason") or "").strip() and str(answer_trace.get("confidence") or "").strip() == "low":
         return "根拠不足の回答は FAQ 化しません。登録する内容がある場合は修正回答を入力してください。"
     if not question or not _clean_multiline_text(answer_trace.get("answer_text"), MAX_APPROVED_FAQ_ANSWER_LENGTH):
         return "FAQへ反映する回答がありません。"
@@ -804,8 +807,7 @@ def approved_faq_import_row_from_answer_feedback(record: dict[str, Any]) -> Appr
     # FAQ 直接回答の run_id は approved-faq-* の保存先で文書ではないため、同様に出典へ入れない。
     answer_scope = str(answer_trace.get("retrieval_scope") or "").strip()
     from_knowledge_base = (
-        answer_scope == APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE
-        or normalize_retrieval_scope(answer_scope) == RETRIEVAL_SCOPE_KNOWLEDGE_BASE
+        answer_scope == APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE or normalize_retrieval_scope(answer_scope) == RETRIEVAL_SCOPE_KNOWLEDGE_BASE
     )
     source = _compact_dict(
         {
@@ -944,11 +946,7 @@ def _approved_faq_record_from_raw(
         id=record_id,
         question=question,
         approved_answer=approved_answer,
-        alternate_questions=tuple(
-            str(item).strip()
-            for item in raw_record.get("alternate_questions") or []
-            if str(item).strip()
-        ),
+        alternate_questions=tuple(str(item).strip() for item in raw_record.get("alternate_questions") or [] if str(item).strip()),
         status=str(raw_record.get("status") or "").strip(),
         business=str(raw_record.get("business") or "").strip(),
         classification=_dict_or_none(raw_record.get("classification")),
@@ -1130,18 +1128,12 @@ def _scope_match_score(record: ApprovedFaqRecord, scope: dict[str, Any]) -> tupl
     matches: list[str] = []
 
     scope_run_id = _normalized_scope_text(scope.get("source_run_id") or scope.get("run_id"))
-    if scope_run_id and any(
-        _same_scope_text(source.get(key), scope_run_id)
-        for key in ("source_run_id", "run_id", "analysis_run_id")
-    ):
+    if scope_run_id and any(_same_scope_text(source.get(key), scope_run_id) for key in ("source_run_id", "run_id", "analysis_run_id")):
         score += 1.0
         matches.append("source_run_id")
 
     scope_sha = _normalized_scope_text(scope.get("source_file_sha256") or scope.get("file_sha256"))
-    if scope_sha and any(
-        _same_scope_text(source.get(key), scope_sha)
-        for key in ("source_file_sha256", "file_sha256", "sha256")
-    ):
+    if scope_sha and any(_same_scope_text(source.get(key), scope_sha) for key in ("source_file_sha256", "file_sha256", "sha256")):
         score += 0.9
         matches.append("source_file_sha256")
 

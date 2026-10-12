@@ -120,11 +120,7 @@ def parse_html_table_structure(html: str) -> dict[str, Any]:
 
     row_count = len(positioned_rows)
     column_count = max(
-        (
-            cell["column_index"] + cell["colspan"] - 1
-            for row in positioned_rows
-            for cell in row["cells"]
-        ),
+        (cell["column_index"] + cell["colspan"] - 1 for row in positioned_rows for cell in row["cells"]),
         default=0,
     )
     header_row_count = _header_row_count(positioned_rows)
@@ -290,9 +286,7 @@ def _header_row_count(rows: Sequence[dict[str, Any]]) -> int:
     for row in rows:
         cells = row.get("cells") if isinstance(row.get("cells"), list) else []
         # 本文行の行見出し（th）だけで、行全体を列見出しとして扱わないようにします。
-        if not any(cell.get("is_header") for cell in cells) or not all(
-            cell.get("is_header") or not cell.get("text") for cell in cells
-        ):
+        if not any(cell.get("is_header") for cell in cells) or not all(cell.get("is_header") or not cell.get("text") for cell in cells):
             break
         count += 1
     return count
@@ -311,10 +305,7 @@ def _column_headers(header_rows: Sequence[dict[str, Any]]) -> list[dict[str, Any
             colspan = max(1, int(cell.get("colspan") or 1))
             for column_index in range(start, start + colspan):
                 headers_by_column[column_index] = text
-    return [
-        {"column_index": column_index, "text": text}
-        for column_index, text in sorted(headers_by_column.items())
-    ]
+    return [{"column_index": column_index, "text": text} for column_index, text in sorted(headers_by_column.items())]
 
 
 def _row_group_payload(
@@ -334,9 +325,7 @@ def _row_group_payload(
     }
 
 
-def _row_text(
-    row: dict[str, Any], structure: dict[str, Any], inherited_by_row: dict[int, list[dict[str, Any]]] | None = None
-) -> str:
+def _row_text(row: dict[str, Any], structure: dict[str, Any], inherited_by_row: dict[int, list[dict[str, Any]]] | None = None) -> str:
     """1行を「列見出し: 値」で表す。結合セルの適用範囲を落とさない。
 
     colspan の値は先頭列だけでなく覆う列全体（「A～B」）に対応付ける。上の行から
@@ -388,9 +377,7 @@ def _positive_int(value: Any) -> int:
     return min(max(1, parsed), MAX_TABLE_SPAN)
 
 
-def unassigned_table_lines(
-    native_lines: Sequence[str], rows: Sequence[Sequence[str]], other_texts: Sequence[str] = ()
-) -> list[str]:
+def unassigned_table_lines(native_lines: Sequence[str], rows: Sequence[Sequence[str]], other_texts: Sequence[str] = ()) -> list[str]:
     """表の範囲にある原文の行のうち、どの行のセルにも収まっていない行を返します。
 
     native_lines は PDF の text layer から取った表の範囲の行、rows は解析した表の各行のセル本文。
@@ -415,9 +402,7 @@ def unassigned_table_lines(
     return missing
 
 
-def misplaced_cell_repairs(
-    rows: Sequence[Sequence[tuple[str, bool]]], native_lines: Sequence[str]
-) -> list[tuple[int, int, str]]:
+def misplaced_cell_repairs(rows: Sequence[Sequence[tuple[str, bool]]], native_lines: Sequence[str]) -> list[tuple[int, int, str]]:
     """隣の行のセルへ入った文字を text layer の行を根拠に元のセルへ戻す修正を返します。
 
     rows は表の各行のセルを (本文, 自セルか) の並びで表したもの。span で覆われた位置は
@@ -470,10 +455,7 @@ def misplaced_cell_repairs(
         if len(matched) != 1:
             continue
         covering = [_compact(t) for i, (t, _) in enumerate(rows[row]) if i != col and _compact(t)]
-        residual = " ".join(
-            token for token in native_lines[matched[0]].split()
-            if not any(_compact(token) in text for text in covering)
-        )
+        residual = " ".join(token for token in native_lines[matched[0]].split() if not any(_compact(token) in text for text in covering))
         compact_residual = _compact(residual)
         if not compact_residual:
             continue

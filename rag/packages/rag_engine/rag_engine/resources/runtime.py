@@ -1,4 +1,5 @@
 """明示的なアプリ資源と、既存関数へ渡すリクエスト単位のスコープ。"""
+
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass

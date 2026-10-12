@@ -20,23 +20,29 @@ def _drafts(model):
 
 
 def _gap(request_id):
-    return {"kind": "gap", "text": "資料に抽出条件の記載がありません。", "evidence_id": "", "quote": "",
-            "request_id": request_id}
+    return {"kind": "gap", "text": "資料に抽出条件の記載がありません。", "evidence_id": "", "quote": "", "request_id": request_id}
 
 
 def _adopted(*kinds_and_requests):
     """``evidence_shortage_only`` に渡す採用済みの組（説明の kind と request_id だけを持つ）。"""
-    return SimpleNamespace(checked=[SimpleNamespace(item=GroundedItem(kind=kind, text="t", request_id=request_id))
-                                    for kind, request_id in kinds_and_requests])
+    return SimpleNamespace(
+        checked=[SimpleNamespace(item=GroundedItem(kind=kind, text="t", request_id=request_id)) for kind, request_id in kinds_and_requests]
+    )
 
 
 class NoImprovementUnitTest(unittest.TestCase):
     def test_signature_ignores_the_free_text_of_the_audit(self):
-        first = {"unanswered_requests": [{"request_id": "Q1", "status": "partial", "reason": "一部だけ"}],
-                 "downgraded_items": [{"text": "a", "reasons": ["x"]}], "goal_alignment": "partial"}
-        second = {"unanswered_requests": [{"request_id": "Q1", "status": "partial", "reason": "言い換えた理由"}],
-                  "downgraded_items": [{"text": "b", "reasons": ["y"]}], "goal_alignment": "partial",
-                  "supported_items": [{"text": "c"}]}
+        first = {
+            "unanswered_requests": [{"request_id": "Q1", "status": "partial", "reason": "一部だけ"}],
+            "downgraded_items": [{"text": "a", "reasons": ["x"]}],
+            "goal_alignment": "partial",
+        }
+        second = {
+            "unanswered_requests": [{"request_id": "Q1", "status": "partial", "reason": "言い換えた理由"}],
+            "downgraded_items": [{"text": "b", "reasons": ["y"]}],
+            "goal_alignment": "partial",
+            "supported_items": [{"text": "c"}],
+        }
         self.assertEqual(grounded.feedback_signature(first), grounded.feedback_signature(second))
         third = {**second, "unanswered_requests": [{"request_id": "Q2", "status": "partial"}]}
         self.assertNotEqual(grounded.feedback_signature(first), grounded.feedback_signature(third))
@@ -45,12 +51,13 @@ class NoImprovementUnitTest(unittest.TestCase):
         same = {"dropped_items": [{"reason": "r"}]}
         # 1 組目の後は是正をまだ試していないので止めない。
         self.assertEqual(grounded.no_improvement_reason(0, accepted=True, feedback=same, previous=None), "")
-        self.assertEqual(grounded.no_improvement_reason(1, accepted=False, feedback=same, previous=same),
-                         grounded.NO_IMPROVEMENT_NOT_ACCEPTED)
-        self.assertEqual(grounded.no_improvement_reason(1, accepted=True, feedback=same, previous=same),
-                         grounded.NO_IMPROVEMENT_SAME_FEEDBACK)
-        self.assertEqual(grounded.no_improvement_reason(
-            1, accepted=True, feedback={"downgraded_items": [{}]}, previous=same), "")
+        self.assertEqual(
+            grounded.no_improvement_reason(1, accepted=False, feedback=same, previous=same), grounded.NO_IMPROVEMENT_NOT_ACCEPTED
+        )
+        self.assertEqual(
+            grounded.no_improvement_reason(1, accepted=True, feedback=same, previous=same), grounded.NO_IMPROVEMENT_SAME_FEEDBACK
+        )
+        self.assertEqual(grounded.no_improvement_reason(1, accepted=True, feedback={"downgraded_items": [{}]}, previous=same), "")
 
     def test_evidence_shortage_only(self):
         unanswered = {"unanswered_requests": [{"request_id": "Q2", "status": "missing"}], "goal_alignment": "partial"}
@@ -59,11 +66,14 @@ class NoImprovementUnitTest(unittest.TestCase):
         # 草稿が答えようとして監査が不足とした要求は、指摘を渡せば同じ根拠で答えられることがある（#621）。
         self.assertFalse(grounded.evidence_shortage_only(unanswered, _adopted(("operation", "Q2"))))
         # 写し誤り・降格・引用なし・使われていない根拠があれば作り直す。
-        for key, value in (("dropped_items", [{}]), ("downgraded_items", [{}]), ("no_cited_evidence", "x"),
-                           ("unused_evidence_ids", [{"evidence_id": "e"}])):
+        for key, value in (
+            ("dropped_items", [{}]),
+            ("downgraded_items", [{}]),
+            ("no_cited_evidence", "x"),
+            ("unused_evidence_ids", [{"evidence_id": "e"}]),
+        ):
             with self.subTest(key=key):
-                self.assertFalse(grounded.evidence_shortage_only({**unanswered, key: value},
-                                                                 _adopted(("gap", "Q2"))))
+                self.assertFalse(grounded.evidence_shortage_only({**unanswered, key: value}, _adopted(("gap", "Q2"))))
         # 答えていない要求が無い（目的のずれだけ）なら作り直す。
         self.assertFalse(grounded.evidence_shortage_only({"goal_alignment": "partial"}, _adopted(("gap", "Q2"))))
 
@@ -75,8 +85,7 @@ class SynthesizeRoundStopTest(unittest.TestCase):
     def test_context_round_that_is_not_adopted_stops_the_correction(self):
         """取得済みの資料を足した組が採用されなければ、同じ指摘での作り直し（3 組目）を始めない。"""
         shown = replace(record(0, "●集計表出力\n一覧表を選択します。", "売上-(3)年次集計明細作成"), chunk_uid="run:r0")
-        hidden = replace(record(1, "抽出条件で店舗を指定します。", "売上-(3)年次集計明細作成", page=21),
-                         chunk_uid="run:r1", seq_no=2)
+        hidden = replace(record(1, "抽出条件で店舗を指定します。", "売上-(3)年次集計明細作成", page=21), chunk_uid="run:r1", seq_no=2)
         ctx = replace(context(shown), expansion_records=(shown, hidden))
         eid = ids(ctx)[shown.text]
         first = draft(item(eid, "一覧表を選択します。", "一覧表を選択します。", request_id="Q1"))
@@ -88,8 +97,9 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         self.assertEqual(rounds[0]["remedy"]["remedy"], "context")
         self.assertEqual(rounds[1]["improvement_stop"], grounded.NO_IMPROVEMENT_NOT_ACCEPTED)
         budget = result.generation_trace["round_budget"]
-        self.assertEqual(budget["stop"], {"reason": grounded.NO_IMPROVEMENT_NOT_ACCEPTED, "round": 3,
-                                          "feedback": ["答えていない要求 1 件"]})
+        self.assertEqual(
+            budget["stop"], {"reason": grounded.NO_IMPROVEMENT_NOT_ACCEPTED, "round": 3, "feedback": ["答えていない要求 1 件"]}
+        )
         self.assertEqual([note["accepted"] for note in budget["rounds"]], [True, False])
         # 時間の上限ではないので「確かめられていない点」に作り直しの打ち切りを出さない。
         self.assertNotIn("作り直しをしていません", result.answer_text)
@@ -100,8 +110,10 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         first = draft(item(eid, GOOD, GOOD, request_id="Q1"), _gap("Q2"))
-        model = FakeModel([first], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""),
-                                          requests=[("Q1", "addressed"), ("Q2", "missing")])])
+        model = FakeModel(
+            [first],
+            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])],
+        )
         result = run(model, ctx, question="明細一覧表を出力する手順と、店舗の抽出条件を教えてください").response
         self.assertEqual(len(_drafts(model)), 1)
         rounds = result.generation_trace["rounds"]
@@ -116,10 +128,13 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         eid = ids(ctx)[LIST_TEXT]
         select = item(eid, GOOD, GOOD, request_id="Q1")
         execute = item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。", request_id="Q1")
-        model = FakeModel([draft(select), draft(select, execute)],
-                          [audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
-                           audit((0, "supported", "matched", ""), (1, "supported", "matched", ""),
-                                 requests=[("Q1", "addressed")])])
+        model = FakeModel(
+            [draft(select), draft(select, execute)],
+            [
+                audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+                audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")]),
+            ],
+        )
         result = run(model, ctx).response
         self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True, True])
         self.assertNotIn("stop", result.generation_trace["round_budget"])

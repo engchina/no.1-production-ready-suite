@@ -32,6 +32,7 @@ class QuestionPlanningTests(unittest.TestCase):
 
     def test_answer_result_includes_question_plan_in_display_prompt_and_payload(self):
         from grounded_stub import stub_generation
+
         stub_generation(self)
         settings = get_settings()
         records = [
@@ -52,7 +53,10 @@ class QuestionPlanningTests(unittest.TestCase):
         context = AnswerContext(records=records, text="[chunk] 再発行できない条件")
 
         with (
-            patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=SimpleNamespace(chunk_run_id="abcdef-1234567890ab")),
+            patch(
+                "rag_engine.generation.answering.load_latest_or_source_chunk_run",
+                return_value=SimpleNamespace(chunk_run_id="abcdef-1234567890ab"),
+            ),
             patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
             patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", return_value=context),
             patch(
@@ -89,8 +93,9 @@ class QuestionPlanningTests(unittest.TestCase):
             self.assertNotIn(removed, display)
         self.assertNotIn(QUESTION_PLAN_SEPARATOR, display)
         self.assertNotIn("[Question Plan]", prompt)
-        self.assertEqual(payload["question_plan"], {"original_question": result.question_plan.original_question,
-                                                    "requires_visual_context": False})
+        self.assertEqual(
+            payload["question_plan"], {"original_question": result.question_plan.original_question, "requires_visual_context": False}
+        )
 
     def test_extract_original_question_strips_question_plan_metadata(self):
         displayed = "\n".join(["元の質問", "", QUESTION_PLAN_SEPARATOR, "実行処理: 画面・画像確認"])

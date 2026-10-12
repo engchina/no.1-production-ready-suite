@@ -61,9 +61,7 @@ _SECTION_PATH_LIMIT = 8
 # 「1.」「1.2」「1.2.3 概要」「3.3消火設備」。区切りのない「3つの方法」や「2024年度」は番号として扱いません。
 # 2 段以上の番号（「3.3」）は、空白の無い日本語の見出し（「3.3消火設備」）も番号として読む。1 段の番号は「.」「、」か
 # 空白が要る。2 段の番号を 1 段と読み違えない（「3.3消火設備」の「3.」で止まると level 1 になる）。
-_DOTTED_HEADING_PATTERN = re.compile(
-    r"([0-9]{1,2}(?:\.[0-9]{1,2})+)(?:[.、]|\s|$|(?=[^\x00-\x7f]))|([0-9]{1,2})(?:[.、]|\s|$)"
-)
+_DOTTED_HEADING_PATTERN = re.compile(r"([0-9]{1,2}(?:\.[0-9]{1,2})+)(?:[.、]|\s|$|(?=[^\x00-\x7f]))|([0-9]{1,2})(?:[.、]|\s|$)")
 
 
 # 画面経路の形をした 1 行（[ 画面：A⇒B ]、〔A⇒B⇒C〕）。Docling は図に近いこの行を図の caption として返すことがある。
@@ -241,7 +239,8 @@ def _toc_entry_ids(ordered: Sequence[dict[str, Any]]) -> set[int]:
     ids: set[int] = set()
     for page, page_records in by_page.items():
         entries = [
-            r for r in page_records
+            r
+            for r in page_records
             if str(r.get("category") or "") in {"List-item", "Text", *SECTION_CATEGORIES}
             and len(_record_text(r).strip()) <= 40
             and _TOC_ENTRY_PATTERN.match(_record_text(r).strip())
@@ -301,8 +300,14 @@ def _heading_source(record: dict[str, Any]) -> str:
 
 
 def _updated_section_path(
-    path: Sequence[str], levels: Sequence[int | None], depths: Sequence[int], text: str, level: int | None = None,
-    *, sources: Sequence[str] = (), source: str = "",
+    path: Sequence[str],
+    levels: Sequence[int | None],
+    depths: Sequence[int],
+    text: str,
+    level: int | None = None,
+    *,
+    sources: Sequence[str] = (),
+    source: str = "",
 ) -> tuple[list[str], list[int | None], list[int], list[str]]:
     """見出し text を受けて section_path と、その推定レベル列・実効深さ列・出所列を更新する。
 
@@ -384,8 +389,13 @@ def _section_path_state_after(state: SectionPathState, record: dict[str, Any]) -
         # 見出しにすると子見出しになり、以降の手順が別の機能ユニットに割れる (#764)。
         return state
     return _updated_section_path(
-        path, levels, depths, text, level=_int_value(raw.get("heading_level")),
-        sources=sources, source=_heading_source(record),
+        path,
+        levels,
+        depths,
+        text,
+        level=_int_value(raw.get("heading_level")),
+        sources=sources,
+        source=_heading_source(record),
     )
 
 

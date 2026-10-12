@@ -1,4 +1,5 @@
 """FAQ・用語・フィードバックをアプリ固有の保存先で扱う。"""
+
 from pathlib import Path
 from typing import Any, Sequence
 from rag_engine.resources.runtime import Runtime
@@ -8,6 +9,7 @@ from rag_engine.knowledge.domain_keywords import load_domain_keywords, save_doma
 
 class KnowledgeService:
     """既存アプリの知識管理を UI なしで再利用する。"""
+
     def __init__(self, runtime: Runtime):
         self.runtime = runtime
 

@@ -17,6 +17,7 @@ missing の要求があるときだけ、missing の要求ごとに 1 回だけ�
 lexical の判定は言い換え（資料が別の語で書く）を missing と見誤ることがある。その場合も再検索が 1 回
 増えるだけで、回答の材料から既存の根拠は減らない。判定の閾値は評価セットで見直す。
 """
+
 from __future__ import annotations
 
 import re
@@ -42,10 +43,29 @@ CoverageStatus = Literal["supported", "weak", "missing", "unassessed"]
 _FACET_TARGET = re.compile(r"対象「(.+?)」の(.+?)を個別に回答する")
 _DEFINITION_TARGET = re.compile(r"項目「(.+?)」")
 # 問い方の語。資料の本文に現れないことが普通で、覆域の判定に使うと根拠があっても割合が下がる。
-_QUESTION_FORM_TERMS = frozenset({
-    "方法", "手順", "やり方", "仕方", "可否", "必要", "可能", "場合", "とき", "教え", "知り", "意味",
-    "どう", "どこ", "なぜ", "いつ", "何", "について", "ください",
-})
+_QUESTION_FORM_TERMS = frozenset(
+    {
+        "方法",
+        "手順",
+        "やり方",
+        "仕方",
+        "可否",
+        "必要",
+        "可能",
+        "場合",
+        "とき",
+        "教え",
+        "知り",
+        "意味",
+        "どう",
+        "どこ",
+        "なぜ",
+        "いつ",
+        "何",
+        "について",
+        "ください",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -101,11 +121,9 @@ def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
     分かち書きは複合語とその部分の両方を返す。複合語のまま数えると、資料が「登録」「方法」を別々に書く
     ときに一致しないので、部分の語がある複合語は数えない。
     """
-    terms = [t for t in dict.fromkeys(_normalize(term).strip() for term in raw_terms)
-             if len(t) >= 2 and t not in _QUESTION_FORM_TERMS]
+    terms = [t for t in dict.fromkeys(_normalize(term).strip() for term in raw_terms) if len(t) >= 2 and t not in _QUESTION_FORM_TERMS]
     candidates = set(terms) | {_normalize(t).strip() for t in raw_terms}
-    return tuple(t for t in terms
-                 if not any(other != t and len(other) >= 2 and other in t for other in candidates))
+    return tuple(t for t in terms if not any(other != t and len(other) >= 2 and other in t for other in candidates))
 
 
 def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) -> list[RequestTarget]:
@@ -125,8 +143,7 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
         if terms and key in seen:
             continue
         seen.add(key)
-        targets.append(RequestTarget(id=str(unit.get("id") or ""), kind=str(unit.get("kind") or "definition"),
-                                     text=focus, terms=terms))
+        targets.append(RequestTarget(id=str(unit.get("id") or ""), kind=str(unit.get("kind") or "definition"), text=focus, terms=terms))
     return targets
 
 
@@ -138,10 +155,20 @@ def evidence_texts(context: Any) -> list[tuple[str, str]]:
     """回答に渡す根拠ごとの (key, 正規化した本文)。親の本文に子の本文を足す。"""
     tree = list(getattr(context, "evidence_tree", ()) or ())
     if tree:
-        return [(_record_key(parent.record),
-                 _normalize("\n".join([str(getattr(parent.record, "text", "") or ""),
-                                       *(str(getattr(child.record, "text", "") or "") for child in parent.children)])))
-                for parent in tree]
+        return [
+            (
+                _record_key(parent.record),
+                _normalize(
+                    "\n".join(
+                        [
+                            str(getattr(parent.record, "text", "") or ""),
+                            *(str(getattr(child.record, "text", "") or "") for child in parent.children),
+                        ]
+                    )
+                ),
+            )
+            for parent in tree
+        ]
     return [(_record_key(record), _normalize(getattr(record, "text", ""))) for record in getattr(context, "records", ()) or ()]
 
 
@@ -150,8 +177,18 @@ def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[st
     rows: list[dict[str, Any]] = []
     for target in targets:
         if not target.terms:
-            rows.append({"id": target.id, "kind": target.kind, "text": target.text, "terms": [],
-                         "status": "unassessed", "best_ratio": 0.0, "matched_terms": [], "evidence_ids": []})
+            rows.append(
+                {
+                    "id": target.id,
+                    "kind": target.kind,
+                    "text": target.text,
+                    "terms": [],
+                    "status": "unassessed",
+                    "best_ratio": 0.0,
+                    "matched_terms": [],
+                    "evidence_ids": [],
+                }
+            )
             continue
         scored: list[tuple[float, int, str, list[str]]] = []
         for position, (key, text) in enumerate(evidence):
@@ -160,13 +197,19 @@ def assess_targets(targets: Sequence[RequestTarget], evidence: Sequence[tuple[st
                 scored.append((len(matched) / len(target.terms), position, key, matched))
         scored.sort(key=lambda item: (-item[0], item[1]))
         best = scored[0][0] if scored else 0.0
-        status: CoverageStatus = ("supported" if best >= SUPPORTED_RATIO else "weak" if best >= WEAK_RATIO else "missing")
-        rows.append({
-            "id": target.id, "kind": target.kind, "text": target.text, "terms": list(target.terms),
-            "status": status, "best_ratio": round(best, 3),
-            "matched_terms": scored[0][3] if scored else [],
-            "evidence_ids": [key for ratio, _, key, _ in scored if ratio >= WEAK_RATIO and key][:MAX_EVIDENCE_PER_REQUEST],
-        })
+        status: CoverageStatus = "supported" if best >= SUPPORTED_RATIO else "weak" if best >= WEAK_RATIO else "missing"
+        rows.append(
+            {
+                "id": target.id,
+                "kind": target.kind,
+                "text": target.text,
+                "terms": list(target.terms),
+                "status": status,
+                "best_ratio": round(best, 3),
+                "matched_terms": scored[0][3] if scored else [],
+                "evidence_ids": [key for ratio, _, key, _ in scored if ratio >= WEAK_RATIO and key][:MAX_EVIDENCE_PER_REQUEST],
+            }
+        )
     return rows
 
 
@@ -266,17 +309,23 @@ def run_targeted_retrievals(
         try:
             context = retrieve(target.text, queries)
         except Exception as exc:  # noqa: BLE001 - 再検索は補助。失敗しても既存の根拠で回答する。
-            results.append(TargetedRetrieval(target.id, queries, (), (), int((clock() - began) * 1000),
-                                             f"{type(exc).__name__}: {str(exc)[:200]}"))
+            results.append(
+                TargetedRetrieval(target.id, queries, (), (), int((clock() - began) * 1000), f"{type(exc).__name__}: {str(exc)[:200]}")
+            )
             continue
-        results.append(TargetedRetrieval(
-            target.id, queries, tuple(getattr(context, "evidence_tree", ()) or ()),
-            tuple(getattr(context, "expansion_records", ()) or ()), int((clock() - began) * 1000)))
+        results.append(
+            TargetedRetrieval(
+                target.id,
+                queries,
+                tuple(getattr(context, "evidence_tree", ()) or ()),
+                tuple(getattr(context, "expansion_records", ()) or ()),
+                int((clock() - began) * 1000),
+            )
+        )
     return results, stop
 
 
-def select_new_parents(results: Sequence[TargetedRetrieval], existing_keys: Iterable[str],
-                       max_chunks: int) -> list[tuple[str, Any]]:
+def select_new_parents(results: Sequence[TargetedRetrieval], existing_keys: Iterable[str], max_chunks: int) -> list[tuple[str, Any]]:
     """再検索の結果から、回答の材料に無い根拠（親）を要求ごとに順番に 1 件ずつ選ぶ（合計 max_chunks まで）。
 
     1 つの要求の結果が予算を使い切らないよう、各要求の最上位から交互に取る。戻り値は (request_id, parent)。

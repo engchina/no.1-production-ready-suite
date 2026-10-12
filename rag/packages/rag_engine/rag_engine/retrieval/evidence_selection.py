@@ -1,4 +1,5 @@
 """質問に関連する原文を、出典ごとの予算と操作文脈を保って選ぶ。"""
+
 from __future__ import annotations
 
 import re
@@ -26,7 +27,7 @@ def _terms(value: str) -> set[str]:
     terms = set(re.findall(r"[a-z][a-z0-9_-]{1,}", text))
     for word in re.findall(r"[一-龯々ァ-ヶー]{2,}", text):
         terms.add(word)
-        terms.update(word[i:i + 2] for i in range(len(word) - 1))
+        terms.update(word[i : i + 2] for i in range(len(word) - 1))
     return terms - {"確認", "情報", "場合", "対象", "方法", "表示"}
 
 
@@ -36,10 +37,10 @@ def evidence_relevance(question: str, text: str) -> float:
     matches = [term for term in _terms(current_request_text(question)) if term in normalized]
     score = sum(min(len(term), 8) for term in matches)
     # 試行した経路の語数が多くても、希望する結果を扱う原文を残す。
-    goal_terms = _terms(' '.join(goal_retrieval_queries(question)))
+    goal_terms = _terms(" ".join(goal_retrieval_queries(question)))
     score += 2 * sum(min(len(term), 8) for term in goal_terms if term in normalized)
     # 列名の出現数ではなく、質問の各項目に対する定義本文を優先する。
-    score += 100 * len({item['label'] for item in definition_ranges(text, definition_labels(question))})
+    score += 100 * len({item["label"] for item in definition_ranges(text, definition_labels(question))})
     # 一致する操作説明を画面のサンプル値より優先する。無関係な操作には加点しない。
     if matches:
         score *= 1 + 0.18 * min(3, len(re.findall(r"操作:|条件と結果:|直接入力|パラメータ|手順", text)))
@@ -62,8 +63,9 @@ def evidence_relevance(question: str, text: str) -> float:
     return score
 
 
-def evidence_excerpt(question: str, text: str, budget: int, *, required_ranges: Sequence[tuple[int, int]] = (),
-                     required_only: bool = False) -> str:
+def evidence_excerpt(
+    question: str, text: str, budget: int, *, required_ranges: Sequence[tuple[int, int]] = (), required_only: bool = False
+) -> str:
     """関連窓と隣接文を原文順に返す。切断箇所は明示し、値や原文は改変しない。
 
     budgetは文字数。長いHTMLや改行なしのOCRも窓で探索するため、末尾の規則を
@@ -79,11 +81,11 @@ def evidence_excerpt(question: str, text: str, budget: int, *, required_ranges: 
     # 項目見出しと続く操作・注意書きは一つの引用窓に保ち、操作だけが落ちるのを防ぐ。
     for match in re.finditer(r"[●■◆][^\n]*(?:\n(?!\n|[●■◆])[^\n]+)*\n?|[^\n]+(?:\n|$)", text):
         left, right = match.span()
-        if match.group().startswith(('●', '■', '◆')):
+        if match.group().startswith(("●", "■", "◆")):
             # 項目直前の短い上位見出しも原文順で保持し、タブと項目の階層を失わない。
-            headings = list(re.finditer(r"(?m)^[^。:：\n●■◆・※]{2,24}\n(?=[※●■◆])", text[max(0,left-400):left]))
+            headings = list(re.finditer(r"(?m)^[^。:：\n●■◆・※]{2,24}\n(?=[※●■◆])", text[max(0, left - 400) : left]))
             if headings:
-                left = max(0, left-400) + headings[-1].start()
+                left = max(0, left - 400) + headings[-1].start()
         if right - left <= budget:
             spans.append((left, right))
         else:
@@ -93,26 +95,28 @@ def evidence_excerpt(question: str, text: str, budget: int, *, required_ranges: 
     # 表の項目名だけに点数が集中しても、後続の番号付き完了操作を落とさない。
     # 長い表全体は必須にせず、実際の操作を含む原文行を保護する。
     steps = []
-    if task_contract(question)['goal'] in {'procedure', 'recipient_list'}:
-        for match in re.finditer(r'(?m)^[^\n]+', text):
-            numbered = re.match(r'\s*(?:[0-9０-９]+\s*[.．、]|[①-⑳㉑-㉟])', match.group())
-            conditional = re.search(r'新規追加|の場合', match.group())
-            if (numbered or conditional) and re.search(r'入力|選択|押|実行|登録|完了|クリック|ボタン', match.group()):
+    if task_contract(question)["goal"] in {"procedure", "recipient_list"}:
+        for match in re.finditer(r"(?m)^[^\n]+", text):
+            numbered = re.match(r"\s*(?:[0-9０-９]+\s*[.．、]|[①-⑳㉑-㉟])", match.group())
+            conditional = re.search(r"新規追加|の場合", match.group())
+            if (numbered or conditional) and re.search(r"入力|選択|押|実行|登録|完了|クリック|ボタン", match.group()):
                 steps.append(match.span())
     # 短い節名の直後に箇条書きの条件が続く場合、節名と条件を同じ窓にする。
     # 片方の処理区分名だけが落ちると、同ページの別モードへ条件を誤配属する。
-    if task_contract(question)['goal'] == 'procedure':
-        lines = list(re.finditer(r'(?m)^[^\n]*(?:\n|$)', text))
+    if task_contract(question)["goal"] == "procedure":
+        lines = list(re.finditer(r"(?m)^[^\n]*(?:\n|$)", text))
         for index, line in enumerate(lines[:-1]):
             heading = line.group().strip()
-            if (not re.fullmatch(r'[^。:：●■◆・※]{2,32}', heading)
-                    or not lines[index + 1].group().lstrip().startswith('・')):
+            if not re.fullmatch(r"[^。:：●■◆・※]{2,32}", heading) or not lines[index + 1].group().lstrip().startswith("・"):
                 continue
             end = lines[index + 1].end()
-            for following in lines[index + 2:]:
+            for following in lines[index + 2 :]:
                 body = following.group().strip()
-                if (not body or re.fullmatch(r'[^。:：●■◆・※]{2,32}', body)
-                        or re.match(r'(?:[0-9０-９]+[.．、]|[●■◆]|[^:：]{1,20}[:：])', body)):
+                if (
+                    not body
+                    or re.fullmatch(r"[^。:：●■◆・※]{2,32}", body)
+                    or re.match(r"(?:[0-9０-９]+[.．、]|[●■◆]|[^:：]{1,20}[:：])", body)
+                ):
                     break
                 end = following.end()
             steps.append((line.start(), end))
@@ -121,7 +125,7 @@ def evidence_excerpt(question: str, text: str, budget: int, *, required_ranges: 
     spans = [(a, b) for a, b in spans if not any(a < y and b > x for x, y in protected)]
     if required_only:
         spans = []
-    ranked = [*protected, *sorted(spans, key=lambda span: (-evidence_relevance(question, text[span[0]:span[1]]), span[0]))]
+    ranked = [*protected, *sorted(spans, key=lambda span: (-evidence_relevance(question, text[span[0] : span[1]]), span[0]))]
     selected: list[tuple[int, int]] = []
     for start, end in ranked:
         merged = sorted([*selected, (start, end)])
@@ -142,8 +146,14 @@ def record_fingerprint(record: Any) -> str:
     # 出典不明の本文は、同文でも別資料の可能性があるためIDを隔離キーにする。
     source = getattr(record, "source", "") or getattr(record, "chunk_uid", "") or record.id
     from rag_engine.retrieval.metadata_context import document_context_key
-    value = [source, document_context_key(record), getattr(record, "page", 0),
-             metadata.get("section_path"), str(getattr(record, "text", ""))]
+
+    value = [
+        source,
+        document_context_key(record),
+        getattr(record, "page", 0),
+        metadata.get("section_path"),
+        str(getattr(record, "text", "")),
+    ]
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -167,8 +177,11 @@ def record_element_ids(record: Any) -> frozenset[str]:
     items: list[Any] = value.split(",") if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else []
     ids = {text for item in items if (text := str(item).strip())}
     if not ids:
-        ids = {text for ref in getattr(record, "source_record_refs", ()) or ()
-               if isinstance(ref, dict) and (text := str(ref.get("record_id") or "").strip())}
+        ids = {
+            text
+            for ref in getattr(record, "source_record_refs", ()) or ()
+            if isinstance(ref, dict) and (text := str(ref.get("record_id") or "").strip())
+        }
     return frozenset(ids)
 
 
@@ -179,13 +192,14 @@ def _span_shingles(record: Any, cache: dict[int, frozenset[str]]) -> frozenset[s
         text = str(getattr(record, "body_text", "") or getattr(record, "text", "") or "")
         compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).lower()
         size = _SOURCE_SPAN_SHINGLE_CHARS
-        found = frozenset(compact[i:i + size] for i in range(len(compact) - size + 1)) or frozenset({compact} - {""})
+        found = frozenset(compact[i : i + size] for i in range(len(compact) - size + 1)) or frozenset({compact} - {""})
         cache[id(record)] = found
     return found
 
 
 def _same_source_document(left: Any, right: Any) -> bool:
     from rag_engine.retrieval.metadata_context import document_context_key
+
     if document_context_key(left) != document_context_key(right):
         return False
     ids = [str((getattr(record, "metadata", {}) or {}).get("document_id") or "") for record in (left, right)]
@@ -268,9 +282,16 @@ EVIDENCE_BUDGET_CHARS = 48000
 NATIVE_RESERVE_CAP = 1200
 
 
-def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDENCE_BUDGET_CHARS,
-                   anchors: Sequence[Any] = (), definitions_only: bool = False,
-                   scope_records: Sequence[Any] = (), whole_records: bool = False) -> list[dict[str, Any]]:
+def evidence_spans(
+    question: str,
+    records: Sequence[Any],
+    *,
+    budget: int = EVIDENCE_BUDGET_CHARS,
+    anchors: Sequence[Any] = (),
+    definitions_only: bool = False,
+    scope_records: Sequence[Any] = (),
+    whole_records: bool = False,
+) -> list[dict[str, Any]]:
     """原文の文字予算内で安定IDを付け、照合済みanchorsの本文と頁を優先する。
 
     anchorsは同じ検索で取得したchildだけを渡す。文書・版・親子関係・位置を
@@ -294,10 +315,12 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
         grouped = [item for member in members for item in same_text[first_keys[id(member)]]]
         unique[key] = kept
         aliases[key] = [getattr(item, "chunk_uid", "") or item.id for item in grouped]
-        member_keys[key] = {value for item in grouped
-                            for value in (getattr(item, "chunk_uid", ""), getattr(item, "chunk_id", ""), item.id) if value}
+        member_keys[key] = {
+            value for item in grouped for value in (getattr(item, "chunk_uid", ""), getattr(item, "chunk_id", ""), item.id) if value
+        }
     labels = definition_labels(question)
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
+
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
     seen_documents = set()
@@ -305,32 +328,40 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
     ordered = _same_unit_first(list(unique.items()), question)
     if labels:
         ordered.sort(key=lambda item: -len(definition_ranges(item[1].text, labels)))
+
     # 後続の候補の短い原文範囲（各親 NATIVE_RESERVE_CAP まで）の分は先に取り置き、先頭の候補の生成説明に
     # 予算を使い切らせない (#730)。21 親のうち 17 番目の親の ※ 注記（標準回答の操作）が予算外に落ちていた。
     # 取り置きは最終的な処理順（定義質問の並べ替え後）で数える。並べ替え前に数えると index と後続候補が
     # 対応せず、定義質問で取り置きが過不足になる (#744)。
     def native_need(record: Any) -> int:
         return min(NATIVE_RESERVE_CAP, sum(b - a for a, b in _native_ranges(record) if b - a <= 600))
-    whole = whole_records and not definitions_only and (
-        sum(len(str(getattr(record, "text", "") or "")) for _key, record in ordered) <= max(0, budget - budget // 10))
+
+    whole = (
+        whole_records
+        and not definitions_only
+        and (sum(len(str(getattr(record, "text", "") or "")) for _key, record in ordered) <= max(0, budget - budget // 10))
+    )
     reserve_after = [0] * (len(ordered) + 1)
     for position in range(len(ordered) - 1, -1, -1):
         reserve_after[position] = reserve_after[position + 1] + native_need(ordered[position][1])
     for index, (key, record) in enumerate(ordered):
         text = str(getattr(record, "text", "") or "")
         document_key = document_context_key(record)
-        prefix = answer_metadata_context(record, max_chars=min(1200, context_remaining, max(0, remaining // 10)),
-                                         include_first_page=document_key not in seen_documents)
+        prefix = answer_metadata_context(
+            record, max_chars=min(1200, context_remaining, max(0, remaining // 10)), include_first_page=document_key not in seen_documents
+        )
         context_remaining -= len(prefix)
         remaining -= len(prefix)
         required = definition_windows(text, labels)
         # まとめた根拠（#1331）の child も、本文が残す根拠の中に一意に見つかれば位置と頁に使う。
         parent_keys = member_keys[key]
         located = _child_ranges(record, anchors, parent_keys=parent_keys)
-        scoped = [(a, b, page, child) for child in scope_records
-                  for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys)]
-        image_ranges = _child_ranges(record, [a for a in anchors if any(
-            ref.get('category') == 'Picture' for ref in getattr(a, 'source_record_refs', ()))], parent_keys=parent_keys)
+        scoped = [(a, b, page, child) for child in scope_records for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys)]
+        image_ranges = _child_ranges(
+            record,
+            [a for a in anchors if any(ref.get("category") == "Picture" for ref in getattr(a, "source_record_refs", ()))],
+            parent_keys=parent_keys,
+        )
         native_ranges = _native_ranges(record)
         # CRAGのchild本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
         pinned = [] if definitions_only else [(a, b) for a, b, _ in located]
@@ -341,8 +372,8 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
         if not definitions_only:
             pinned.extend((a, b) for a, b in native_ranges if b - a <= 600)
         required = sorted(set([*required, *pinned]))
-        needed = sum(b-a for a, b in required) + 8 * max(0, len(required)-1)
-        allowance = min(remaining, max(remaining // max(1, len(ordered)-index), needed))
+        needed = sum(b - a for a, b in required) + 8 * max(0, len(required) - 1)
+        allowance = min(remaining, max(remaining // max(1, len(ordered) - index), needed))
         if not labels and not anchors:
             allowance = min(remaining, max(1, budget // max(1, len(unique))))
         # 取り置き分を超えない。ただし自分の必須範囲（原文・定義・照合済み child）は確保する。
@@ -357,11 +388,9 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
             offset = text.find(part, cursor)
             if offset < 0:
                 continue
-            boundaries = [*((a, b) for a, b, _ in located), *native_ranges,
-                          *((a, b) for a, b, _, _ in scoped)]
-            cuts = sorted({0, len(part), *[edge-offset for a, b in boundaries for edge in (a,b)
-                                         if offset < edge < offset+len(part)]})
-            parts.extend(part[a:b] for a,b in zip(cuts,cuts[1:]))
+            boundaries = [*((a, b) for a, b, _ in located), *native_ranges, *((a, b) for a, b, _, _ in scoped)]
+            cuts = sorted({0, len(part), *[edge - offset for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)]})
+            parts.extend(part[a:b] for a, b in zip(cuts, cuts[1:]))
             cursor = offset + len(part)
         cursor = 0
         for part in parts:
@@ -376,34 +405,48 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
             pages = {page for a, b, page in located if a <= start and end <= b}
             # 親の前置きと連結した窓も、含まれるchildが単一頁の場合だけ頁を確定する。
             if not pages:
-                pages = {page for a, b, page in located if start <= a and b <= end and text[start:a].strip() == '' and text[b:end].strip() == ''}
-            result.append({"evidence_id": span_id, "source_id": source_id,
-                "document_scope": list(document_context_key(record)),
-                # 分類は v4 で document 配下 (#814)。
-                "business_scope": str((((getattr(record, 'metadata', {}) or {}).get('document') or {}).get('classification') or {}).get('large_category') or ''),
-                "source": getattr(record, "source", ""), "page": getattr(record, "page", 0),
-                # 新しい版に置き換えた文書（旧版）の根拠（backend の document_superseded。#1492）。
-                "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
-                # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
-                "location": record_location_label(record),
-                # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
-                # page だけを見ると span の出どころを実際より狭く見積もる。確定できた span は page_end == page。
-                "page_end": _record_page_end(record),
-                "section_path": (getattr(record, "metadata", {}) or {}).get("section_path", []),
-                # 見出しの出所（v4）。無い旧データでは空で、function_key は全要素を Docling 由来として扱う。
-                "section_path_sources": (getattr(record, "metadata", {}) or {}).get("section_path_sources", []),
-                "start": start, "end": end, "text": part, "excerpt_only": len(excerpt) < len(text),
-                "source_aliases": list(dict.fromkeys(aliases[key])),
-                # 抽出方法とデータの用途は別軸。正確なOCRでも文書の表示例を
-                # 今回の業務レコードの実値へ昇格させない。
-                "value_context": "reference_document",
-                "origin": _span_origin(record, start, end, image_ranges)})
+                pages = {
+                    page for a, b, page in located if start <= a and b <= end and text[start:a].strip() == "" and text[b:end].strip() == ""
+                }
+            result.append(
+                {
+                    "evidence_id": span_id,
+                    "source_id": source_id,
+                    "document_scope": list(document_context_key(record)),
+                    # 分類は v4 で document 配下 (#814)。
+                    "business_scope": str(
+                        (((getattr(record, "metadata", {}) or {}).get("document") or {}).get("classification") or {}).get("large_category")
+                        or ""
+                    ),
+                    "source": getattr(record, "source", ""),
+                    "page": getattr(record, "page", 0),
+                    # 新しい版に置き換えた文書（旧版）の根拠（backend の document_superseded。#1492）。
+                    "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
+                    # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
+                    "location": record_location_label(record),
+                    # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
+                    # page だけを見ると span の出どころを実際より狭く見積もる。確定できた span は page_end == page。
+                    "page_end": _record_page_end(record),
+                    "section_path": (getattr(record, "metadata", {}) or {}).get("section_path", []),
+                    # 見出しの出所（v4）。無い旧データでは空で、function_key は全要素を Docling 由来として扱う。
+                    "section_path_sources": (getattr(record, "metadata", {}) or {}).get("section_path_sources", []),
+                    "start": start,
+                    "end": end,
+                    "text": part,
+                    "excerpt_only": len(excerpt) < len(text),
+                    "source_aliases": list(dict.fromkeys(aliases[key])),
+                    # 抽出方法とデータの用途は別軸。正確なOCRでも文書の表示例を
+                    # 今回の業務レコードの実値へ昇格させない。
+                    "value_context": "reference_document",
+                    "origin": _span_origin(record, start, end, image_ranges),
+                }
+            )
             if prefix:
-                result[-1]['answer_context'] = prefix
-                prefix = ''
+                result[-1]["answer_context"] = prefix
+                prefix = ""
                 seen_documents.add(document_key)
             if len(pages) == 1:
-                result[-1]['page'] = result[-1]['page_end'] = next(iter(pages))
+                result[-1]["page"] = result[-1]["page_end"] = next(iter(pages))
             # parentの章一覧には隣接する別機能が混在し得る。本文位置と文書・版・
             # 親子関係を照合した単一childだけで、引用そのものの所属を確定する。
             matching = [(a, child) for a, b, _, child in scoped if a <= start and end <= b]
@@ -411,8 +454,12 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
             if len(scopes) == 1:
                 path, page = next(iter(scopes))
                 if path:
-                    result[-1].update(section_path=list(path), page=page, page_end=page,
-                                      scope_source_ids=sorted({c.chunk_uid or c.id for _, c in matching}))
+                    result[-1].update(
+                        section_path=list(path),
+                        page=page,
+                        page_end=page,
+                        scope_source_ids=sorted({c.chunk_uid or c.id for _, c in matching}),
+                    )
             cursor = end
     return _merge_adjacent_spans(result)
 
@@ -430,8 +477,7 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     same = ("source_id", "origin", "page", "page_end", "section_path", "excerpt_only", "value_context", "scope_source_ids")
 
     def joinable(left: dict[str, Any], right: dict[str, Any]) -> bool:
-        return (left["end"] == right["start"] and "answer_context" not in right
-                and all(left.get(key) == right.get(key) for key in same))
+        return left["end"] == right["start"] and "answer_context" not in right and all(left.get(key) == right.get(key) for key in same)
 
     def glue(index: int, previous: dict[str, Any]) -> bool:
         span = spans[index]
@@ -440,16 +486,25 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not span["text"].strip():
             return True
         following = spans[index + 1] if index + 1 < len(spans) else None
-        return (span.get("origin") == "unclassified" and len(span["text"].strip()) <= 8 and following is not None
-                and following["start"] == span["end"] and all(previous.get(k) == following.get(k) for k in same))
+        return (
+            span.get("origin") == "unclassified"
+            and len(span["text"].strip()) <= 8
+            and following is not None
+            and following["start"] == span["end"]
+            and all(previous.get(k) == following.get(k) for k in same)
+        )
 
     merged: list[dict[str, Any]] = []
     for index, span in enumerate(spans):
         previous = merged[-1] if merged else None
         if previous is not None and (joinable(previous, span) or glue(index, previous)):
             text = previous["text"] + span["text"]
-            previous.update(text=text, end=span["end"], evidence_id="E" + hashlib.sha256(
-                f"{previous['source_id']}:{previous['start']}:{span['end']}:{text}".encode()).hexdigest()[:20])
+            previous.update(
+                text=text,
+                end=span["end"],
+                evidence_id="E"
+                + hashlib.sha256(f"{previous['source_id']}:{previous['start']}:{span['end']}:{text}".encode()).hexdigest()[:20],
+            )
         else:
             merged.append(dict(span))
     return [span for span in merged if span["text"].strip()]
@@ -463,65 +518,79 @@ def _local_child_path(child: Any, preceding: str) -> tuple[str, ...]:
     """
     from rag_engine.retrieval.operation_context import operation_labels
     from types import SimpleNamespace
-    path = tuple((getattr(child, 'metadata', {}) or {}).get('section_path', []))
+
+    path = tuple((getattr(child, "metadata", {}) or {}).get("section_path", []))
+
     def compact(value):
-        return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value))
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
+
     selected = None
     for line in preceding.splitlines():
         for index, label in enumerate(path):
-            if (compact(line) == compact(label) and re.search(r'[-－—―ー]\([0-9A-Z]+\)', compact(label))
-                    and len(operation_labels(
-                    SimpleNamespace(metadata={'section_path': [label]}))) == 1):
+            if (
+                compact(line) == compact(label)
+                and re.search(r"[-－—―ー]\([0-9A-Z]+\)", compact(label))
+                and len(operation_labels(SimpleNamespace(metadata={"section_path": [label]}))) == 1
+            ):
                 selected = index
     return path[selected:] if selected is not None else path
 
 
 def _native_ranges(record: Any) -> list[tuple[int, int]]:
     """本文内の有効な原文位置だけを返し、旧metadataでは空にする。"""
-    ranges = ((getattr(record, 'metadata', {}) or {}).get('layout') or {}).get('native_text_ranges') or []
-    return sorted((r['start'], r['end']) for r in ranges if isinstance(r, dict)
-                  and type(r.get('start')) is int and type(r.get('end')) is int
-                  and 0 <= r['start'] < r['end'] <= len(record.text))
+    ranges = ((getattr(record, "metadata", {}) or {}).get("layout") or {}).get("native_text_ranges") or []
+    return sorted(
+        (r["start"], r["end"])
+        for r in ranges
+        if isinstance(r, dict)
+        and type(r.get("start")) is int
+        and type(r.get("end")) is int
+        and 0 <= r["start"] < r["end"] <= len(record.text)
+    )
 
 
-def _span_origin(record: Any, start: int, end: int,
-                 image_ranges: Sequence[tuple[int, int, Any]]) -> str:
+def _span_origin(record: Any, start: int, end: int, image_ranges: Sequence[tuple[int, int, Any]]) -> str:
     """解析原文の範囲に完全に収まる抜粋だけを文書本文と分類する。"""
     cursor = start
     for a, b in _native_ranges(record):
         if b <= cursor or a >= end:
             continue
-        if record.text[cursor:max(cursor, a)].strip():
+        if record.text[cursor : max(cursor, a)].strip():
             break
         cursor = max(cursor, min(end, b))
     if cursor > start and not record.text[cursor:end].strip():
-        return 'document_text'
+        return "document_text"
     if any(a <= start and end <= b for a, b, _ in image_ranges):
-        return 'image_extraction'
-    return 'unclassified'
+        return "image_extraction"
+    return "unclassified"
 
 
-def _child_ranges(parent: Any, anchors: Sequence[Any], *,
-                  parent_keys: Collection[str] = ()) -> list[tuple[int, int, Any]]:
+def _child_ranges(parent: Any, anchors: Sequence[Any], *, parent_keys: Collection[str] = ()) -> list[tuple[int, int, Any]]:
     """同文書・同版・親子関係と本文一致を検証してからchildの位置と頁を返す。
 
     parent_keysは parent にまとめた根拠（#1331）の ID。その child も本文一致を検証してから使う。
     """
     found = []
-    parent_key = getattr(parent, 'chunk_uid', '') or parent.id
+    parent_key = getattr(parent, "chunk_uid", "") or parent.id
     for child in anchors:
-        key = getattr(child, 'parent_chunk_uid', '') or getattr(child, 'parent_chunk_id', '')
-        if key not in {parent_key, getattr(parent, 'chunk_id', ''), *parent_keys}:
+        key = getattr(child, "parent_chunk_uid", "") or getattr(child, "parent_chunk_id", "")
+        if key not in {parent_key, getattr(parent, "chunk_id", ""), *parent_keys}:
             continue
-        if (not getattr(parent, 'source', '') or getattr(child, 'source', '') != getattr(parent, 'source', '')
-                or getattr(child, 'source_run_id', '') != getattr(parent, 'source_run_id', '')
-                or (getattr(child, 'chunk_uid', '') and getattr(parent, 'chunk_uid', '')
-                    and child.chunk_uid.partition(':')[0] != parent.chunk_uid.partition(':')[0])):
+        if (
+            not getattr(parent, "source", "")
+            or getattr(child, "source", "") != getattr(parent, "source", "")
+            or getattr(child, "source_run_id", "") != getattr(parent, "source_run_id", "")
+            or (
+                getattr(child, "chunk_uid", "")
+                and getattr(parent, "chunk_uid", "")
+                and child.chunk_uid.partition(":")[0] != parent.chunk_uid.partition(":")[0]
+            )
+        ):
             continue
-        body = child.text.split('Child text:\n', 1)[-1].strip()
+        body = child.text.split("Child text:\n", 1)[-1].strip()
         start = parent.text.find(body) if body else -1
-        if start >= 0 and parent.text.find(body, start+1) < 0:
-            found.append((start, start+len(body), getattr(child, 'page', 0)))
+        if start >= 0 and parent.text.find(body, start + 1) < 0:
+            found.append((start, start + len(body), getattr(child, "page", 0)))
     return found
 
 
@@ -561,11 +630,14 @@ def _same_unit_first(ordered: list[tuple[str, Any]], question: str = "") -> list
     最上位になった候補を、機能ユニットの起点にしない。該当する候補がなければ従来どおり先頭。
     """
     from rag_engine.chunking import _section_unit
+
     if not ordered:
         return ordered
+
     def unit(record: Any) -> tuple[str, ...]:
         path = (getattr(record, "metadata", {}) or {}).get("section_path") or []
         return (str(getattr(record, "source", "")), *_section_unit(path))
+
     targets = _question_targets(question) if question else []
     anchor = ordered[0][1]
     if targets:
@@ -594,9 +666,10 @@ def format_evidence_packet(spans: Sequence[dict[str, Any]]) -> str:
         f"Origin: {span.get('origin', 'unclassified')}\n"
         f"Value context: {span.get('value_context', 'reference_document')} (not verified as current case data)\n"
         f"Excerpt only: {str(span['excerpt_only']).lower()}\n"
-        + (span.get('answer_context', '') + '\n' if span.get('answer_context') else '')
-        + span['text']
-        for span in spans)
+        + (span.get("answer_context", "") + "\n" if span.get("answer_context") else "")
+        + span["text"]
+        for span in spans
+    )
 
 
 def record_location_label(record: Any) -> str | None:

@@ -69,10 +69,18 @@ def _validate_payload(payload: Any) -> None:
             if key in seen:
                 raise ValueError(f"{kind} の {identity} が重複しています。既存ファイルを確認してください。")
             seen.add(key)
-            legacy_fields = ("synonyms", "abbreviations", "abbrev", "alias", "definition", "body", "note", "document", "path", "lifecycle_status") if kind == "terms" else ("terms", "keywords", "aliases", "when", "body", "text", "rule", "document", "path", "lifecycle_status")
+            legacy_fields = (
+                ("synonyms", "abbreviations", "abbrev", "alias", "definition", "body", "note", "document", "path", "lifecycle_status")
+                if kind == "terms"
+                else ("terms", "keywords", "aliases", "when", "body", "text", "rule", "document", "path", "lifecycle_status")
+            )
             if any(field in row for field in legacy_fields):
-                raise ValueError(f"{kind} に旧形式の項目があります。標準フィールドへ移行してから再読込してください。既存ファイルは変更していません。")
-            text_fields = (identity, "source", "status", "description") if kind == "terms" else (identity, "source", "status", "title", "content")
+                raise ValueError(
+                    f"{kind} に旧形式の項目があります。標準フィールドへ移行してから再読込してください。既存ファイルは変更していません。"
+                )
+            text_fields = (
+                (identity, "source", "status", "description") if kind == "terms" else (identity, "source", "status", "title", "content")
+            )
             if any(field in row and not isinstance(row[field], str) for field in text_fields):
                 raise ValueError(f"{kind} のテキスト項目は文字列で指定してください。")
             list_field = "aliases" if kind == "terms" else "triggers"
@@ -124,9 +132,18 @@ def _labels(value: str, label: str, limit: int) -> list[str]:
 
 
 def edit_knowledge(
-    snapshot: KnowledgeSnapshot, kind: str, selected: str | None, *,
-    name: str = "", title: str = "", labels: str = "", content: str = "",
-    source: str = "", enabled: bool = True, delete: bool = False, confirmed: bool = False,
+    snapshot: KnowledgeSnapshot,
+    kind: str,
+    selected: str | None,
+    *,
+    name: str = "",
+    title: str = "",
+    labels: str = "",
+    content: str = "",
+    source: str = "",
+    enabled: bool = True,
+    delete: bool = False,
+    confirmed: bool = False,
 ) -> tuple[KnowledgeSnapshot, Path | None]:
     """選択行を更新・削除し、未選択なら追加する。未知のメタデータと他行を保持する。
 

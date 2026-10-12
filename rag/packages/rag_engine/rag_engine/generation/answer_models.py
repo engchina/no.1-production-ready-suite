@@ -1,4 +1,5 @@
 """回答フローで受け渡すデータ型と、設定値・表示名の正規化。I/O は行わない。"""
+
 from __future__ import annotations
 
 import re
@@ -130,13 +131,13 @@ _QUERY_STRATEGY_LABEL_BY_ID = dict(QUERY_STRATEGIES)
 
 _QUERY_STRATEGY_ID_BY_LABEL = {label: strategy_id for strategy_id, label in QUERY_STRATEGIES}
 
-_QUERY_STRATEGY_ID_BY_LEGACY_LABEL = {
-    label: strategy_id for strategy_id, label in LEGACY_QUERY_STRATEGY_LABELS
-}
+_QUERY_STRATEGY_ID_BY_LEGACY_LABEL = {label: strategy_id for strategy_id, label in LEGACY_QUERY_STRATEGY_LABELS}
+
 
 @dataclass(frozen=True)
 class AnswerRecord:
     """回答生成 context に投入する解析レコードまたはチャンクを表します。"""
+
     id: str
     engine: str
     engine_label: str
@@ -171,6 +172,7 @@ class AnswerRecord:
             return f"{self.chunk_id}{parent} / {pages} / {seq_ranges}"
         return f"p.{self.page} #{self.seq_no}"
 
+
 @dataclass(frozen=True)
 class AnswerContext:
     """回答に使う根拠レコードと検索 trace を保持します。
@@ -178,6 +180,7 @@ class AnswerContext:
     `text` は `ContextBundle.text` と同じ可読 trace で、回答 prompt には渡さない（prompt は
     `evidence_spans` が `records` から切り出す）。空判定・評価ツール・SDK が読む。
     """
+
     records: list[AnswerRecord]
     text: str
     evidence: tuple[ContextEvidence, ...] = ()
@@ -193,9 +196,11 @@ class AnswerContext:
     deferred_records: tuple[AnswerRecord, ...] = ()
     document_selection: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(frozen=True)
 class AnswerResponse:
     """LLM から得た回答本文と参照レコードを保持します。"""
+
     answer_text: str
     confidence: str = ""
     question_type: tuple[str, ...] = ()
@@ -211,9 +216,11 @@ class AnswerResponse:
     # 回答の構造（AnswerEnvelope。#1235）。grounded の確定の段で組み立てる。無い経路は結果で補う。
     envelope: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(frozen=True)
 class QueryExpansionResult:
     """検索 query、生成元 strategy、検索前の暫定データ確認観点を保持します。"""
+
     original_question: str
     selected_strategy: str
     effective_strategy: str
@@ -237,9 +244,11 @@ class QueryExpansionResult:
         """
         return self.generated_queries if self.effective_strategy == HYDE_STRATEGY else ()
 
+
 @dataclass(frozen=True)
 class QuestionTextSearchInfo:
     """Oracle Text 検索に使う質問文字列、token、query を保持します。"""
+
     tokenizer: str = ""
     tokenizer_label: str = ""
     tokenizer_fingerprint: str = ""
@@ -253,9 +262,11 @@ class QuestionTextSearchInfo:
     target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
     error: str = ""
 
+
 @dataclass(frozen=True)
 class RetrievalQueryPlan:
     """複数 query の生成元と検索投入時の役割を保持します。"""
+
     original_question: str
     runtime_expanded_question: str
     vector_queries: tuple[str, ...] = ()
@@ -294,9 +305,11 @@ class RetrievalQueryPlan:
             "metadata_filter": dict(self.metadata_filter),
         }
 
+
 @dataclass(frozen=True)
 class CragRetrievalAttempt:
     """CRAG の各 retrieval/rewrite attempt の判定結果を保持します。"""
+
     attempt: int
     query: str
     retrieval_queries: tuple[str, ...]
@@ -348,9 +361,11 @@ class CragRetrievalAttempt:
             payload["grade_error"] = self.grade_error
         return payload
 
+
 @dataclass(frozen=True)
 class AnswerQuestionResult:
     """回答生成全体の trace、根拠、出力 payload をまとめます。"""
+
     answer: str
     question_display: str
     original_question: str
@@ -401,13 +416,16 @@ class AnswerQuestionResult:
     # 回答の構造（AnswerEnvelope。#1235）。
     envelope: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(frozen=True)
 class GroundedAnswer:
     """是正で文脈や画像が変わり得るため、回答と、それを生成した入力を一緒に返す。"""
+
     response: AnswerResponse
     context: AnswerContext
     image_evidence: tuple[dict[str, Any], ...]
     image_prompt_mode: str
+
 
 def extract_original_question(question: Any) -> str:
     """再実行時に表示文字列から元の質問だけを取り出します。"""
@@ -427,6 +445,7 @@ def extract_original_question(question: Any) -> str:
         if separator in text:
             text = text.split(separator, 1)[0].rstrip()
     return text.strip()
+
 
 def answer_flow_id(value: Any) -> str:
     """UI 入力値を既知の回答 flow ID へ正規化します。"""
@@ -462,9 +481,11 @@ def answer_flow_id(value: Any) -> str:
             return flow_id
     return DEFAULT_ANSWER_FLOW
 
+
 def answer_flow_label(flow_id: str) -> str:
     """回答 flow ID を UI 表示ラベルへ変換します。"""
     return _ANSWER_FLOW_LABEL_BY_ID.get(flow_id, DEFAULT_ANSWER_FLOW_LABEL)
+
 
 def retrieval_scope_label(scope_id: str) -> str:
     """検索範囲 ID を UI 表示ラベルへ変換します。"""
@@ -472,6 +493,7 @@ def retrieval_scope_label(scope_id: str) -> str:
     if scope == RETRIEVAL_SCOPE_KNOWLEDGE_BASE:
         return "Knowledge Base（全登録ファイル）"
     return "現在のファイル"
+
 
 def _legacy_crag_query_strategy(value: Any) -> bool:
     text = str(value or "").strip()
@@ -488,6 +510,7 @@ def _legacy_crag_query_strategy(value: Any) -> bool:
         "crag",
         "corrective rag",
     }
+
 
 def query_strategy_id(value: Any) -> str:
     """UI 入力値を既知の質問拡張 strategy ID へ正規化します。"""
@@ -539,9 +562,11 @@ def _label_head(normalized: str) -> str:
     """NFKC 済みの label から、括弧書きの前の部分を返します。"""
     return normalized.split("(", 1)[0].strip()
 
+
 def query_strategy_label(strategy_id: str) -> str:
     """質問拡張 strategy ID を UI 表示ラベルへ変換します。"""
     return _QUERY_STRATEGY_LABEL_BY_ID.get(strategy_id, DEFAULT_QUERY_STRATEGY_LABEL)
+
 
 def _dedupe_queries(queries: Sequence[str]) -> tuple[str, ...]:
     seen: set[str] = set()
@@ -555,16 +580,20 @@ def _dedupe_queries(queries: Sequence[str]) -> tuple[str, ...]:
         seen.add(key)
     return tuple(selected)
 
+
 def _dedupe_query_key(value: str) -> str:
     return re.sub(r"\s+", "", _normalize_text(str(value or "")))
 
+
 def _normalize_text(value: str) -> str:
     return unicodedata.normalize("NFKC", value or "").casefold()
+
 
 def _page_span(page_start: int, page_end: int) -> str:
     if page_start == page_end:
         return f"p.{page_start}"
     return f"p.{page_start}-{page_end}"
+
 
 def _format_seq_ranges(ranges: Sequence[dict[str, int]]) -> str:
     pieces = []

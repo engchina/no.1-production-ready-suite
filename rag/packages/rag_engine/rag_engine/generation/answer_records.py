@@ -1,4 +1,5 @@
 """解析結果・チャンクから回答用レコードを作り、語の一致による順位付けと rerank 結果の反映を行う。外部 I/O は行わない。"""
+
 from __future__ import annotations
 
 import json
@@ -42,6 +43,7 @@ BROAD_RETRIEVAL_MAX_CANDIDATES = 150
 
 MAX_RERANK_METADATA_CHARS = 700
 
+
 def validate_run_id(run_id: Any) -> str:
     """run_id を安全な保存パス要素として使える文字列に検証します。"""
     normalized = str(run_id or "").strip()
@@ -50,6 +52,7 @@ def validate_run_id(run_id: Any) -> str:
     if not RUN_ID_PATTERN.fullmatch(normalized):
         raise ValueError("解析結果の run_id が不正です。")
     return normalized
+
 
 def load_answer_records(output_dir: str | Path, run_id: Any) -> list[AnswerRecord]:
     """解析結果 JSON から回答生成に使う AnswerRecord を読み込みます。"""
@@ -72,6 +75,7 @@ def load_answer_records(output_dir: str | Path, run_id: Any) -> list[AnswerRecor
             records.append(record)
     return sorted(records, key=lambda record: (record.page, record.seq_no, record.engine, record.id))
 
+
 def preferred_records(records: Sequence[AnswerRecord], preferred_engines: Iterable[str]) -> list[AnswerRecord]:
     """選択された engine を優先して record を絞り込みます。"""
     preferred = {engine for engine in preferred_engines if engine}
@@ -80,12 +84,14 @@ def preferred_records(records: Sequence[AnswerRecord], preferred_engines: Iterab
     selected = [record for record in records if record.engine in preferred]
     return selected or list(records)
 
+
 def rank_records(question: str, records: Sequence[AnswerRecord], limit: int = MAX_CONTEXT_RECORDS) -> list[AnswerRecord]:
     """質問との lexical 類似度で record を順位付けします。"""
     if limit <= 0:
         return []
 
     return [record for _, _, record in _rank_records_with_scores(question, records, limit)]
+
 
 def rank_records_with_rrf(
     queries: Sequence[str],
@@ -110,11 +116,7 @@ def rank_records_with_rrf(
     best_rank: dict[str, int] = {}
 
     for query_index, query in enumerate(retrieval_queries):
-        ranked = [
-            (score, record)
-            for score, _, record in _rank_records_with_scores(query, records, len(records))
-            if score > 0
-        ]
+        ranked = [(score, record) for score, _, record in _rank_records_with_scores(query, records, len(records)) if score > 0]
         for rank, (score, record) in enumerate(ranked, start=1):
             rrf_scores[record.id] = rrf_scores.get(record.id, 0.0) + 1.0 / (RRF_K + rank)
             lexical_scores[record.id] = lexical_scores.get(record.id, 0.0) + score
@@ -138,6 +140,7 @@ def rank_records_with_rrf(
     )
     return ranked_records[:limit]
 
+
 def _rank_records_with_scores(
     question: str,
     records: Sequence[AnswerRecord],
@@ -156,11 +159,10 @@ def _rank_records_with_scores(
     ranked = sorted(scored, key=lambda item: (-item[0], item[1], item[2], item[3]))
     return [(score, index, record) for score, _, _, index, record in ranked[:limit]]
 
+
 def _rerank_configured(settings: Settings) -> bool:
-    return bool(
-        str(getattr(settings, "rerank_model", "") or "").strip()
-        and str(getattr(settings, "oci_compartment_id", "") or "").strip()
-    )
+    return bool(str(getattr(settings, "rerank_model", "") or "").strip() and str(getattr(settings, "oci_compartment_id", "") or "").strip())
+
 
 def _retrieval_candidate_limit(top_k: int) -> int:
     anchor_count = max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K))
@@ -171,6 +173,7 @@ def _retrieval_candidate_limit(top_k: int) -> int:
             anchor_count * BROAD_RETRIEVAL_TOP_K_MULTIPLIER,
         ),
     )
+
 
 def _engine_labels(raw_engines: Any) -> dict[str, str]:
     labels = {}
@@ -184,6 +187,7 @@ def _engine_labels(raw_engines: Any) -> dict[str, str]:
         if engine:
             labels[engine] = label
     return labels
+
 
 def _answer_record(raw_record: Any, engine_labels: dict[str, str], source_name: str = "") -> AnswerRecord | None:
     if not isinstance(raw_record, dict):
@@ -219,6 +223,7 @@ def _answer_record(raw_record: Any, engine_labels: dict[str, str], source_name: 
         ),
     )
 
+
 def _preferred_chunk_records(chunk_run: ChunkingResult, preferred_engines: Iterable[str]) -> list[AnswerRecord]:
     if not _chunk_run_active(chunk_run):
         return []
@@ -234,12 +239,15 @@ def _preferred_chunk_records(chunk_run: ChunkingResult, preferred_engines: Itera
         return []
     return records
 
+
 def _chunk_run_active(chunk_run: ChunkingResult) -> bool:
     return _bool_metadata_value(getattr(chunk_run, "active", True), default=True)
+
 
 def _document_chunk_active(chunk: DocumentChunk) -> bool:
     metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
     return _bool_metadata_value(metadata.get("active"), default=True)
+
 
 def _bool_metadata_value(value: Any, *, default: bool) -> bool:
     if isinstance(value, bool):
@@ -253,6 +261,7 @@ def _bool_metadata_value(value: Any, *, default: bool) -> bool:
     if value is None:
         return default
     return bool(value)
+
 
 def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> AnswerRecord:
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
@@ -298,6 +307,7 @@ def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> Ans
         metadata=chunk.metadata,
     )
 
+
 def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
     return AnswerRecord(
@@ -324,6 +334,7 @@ def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
         metadata=chunk.metadata,
     )
 
+
 def _local_chunk_uid(
     *,
     chunk_run_id: str,
@@ -341,22 +352,14 @@ def _local_chunk_uid(
     source_run_id = str(source_run_id or "").strip()
     if source_run_id:
         return f"{source_run_id}:{chunk_id}"
-    source_scope = ":".join(
-        part
-        for part in (str(source_file_name or "").strip(), str(source_engine_id or "").strip())
-        if part
-    )
+    source_scope = ":".join(part for part in (str(source_file_name or "").strip(), str(source_engine_id or "").strip()) if part)
     return f"{source_scope}:{chunk_id}" if source_scope else chunk_id
+
 
 def _search_terms(question: str) -> list[str]:
     normalized = _normalize_text(question)
     expanded = JAPANESE_STOP_PATTERN.sub(" ", normalized)
-    terms = {
-        term
-        for source in (normalized, expanded)
-        for term in TERM_PATTERN.findall(source)
-        if len(term) >= 2
-    }
+    terms = {term for source in (normalized, expanded) for term in TERM_PATTERN.findall(source) if len(term) >= 2}
     compact = re.sub(r"\s+", "", normalized)
     if 2 <= len(compact) <= 80:
         terms.add(compact)
@@ -367,9 +370,11 @@ def _search_terms(question: str) -> list[str]:
         terms.update(_normalize_text(expansion) for expansion in expansions)
     return sorted(terms, key=lambda term: (-len(term), term))
 
+
 def _search_terms_for_queries(queries: Sequence[str]) -> list[str]:
     terms = {term for query in queries for term in _search_terms(query)}
     return sorted(terms, key=lambda term: (-len(term), term))
+
 
 def _answer_context_from_ranked(records: Sequence[AnswerRecord], *, max_chars: int) -> AnswerContext:
     bundle = context_bundle_from_records(
@@ -385,6 +390,7 @@ def _answer_context_from_ranked(records: Sequence[AnswerRecord], *, max_chars: i
         status=bundle.status,
         insufficient_reason=bundle.insufficient_reason,
     )
+
 
 def _split_text_rerank_candidates(
     candidates: Sequence[AnswerRecord],
@@ -406,6 +412,7 @@ def _split_text_rerank_candidates(
         rerankable_indices.append(index)
     return protected, rerankable, rerankable_indices
 
+
 def _keep_entity_expansion_positions(
     protected: dict[int, AnswerRecord],
     reranked: Sequence[AnswerRecord],
@@ -421,17 +428,14 @@ def _keep_entity_expansion_positions(
     for record in reranked:
         rerank = record.metadata.get("rerank") if isinstance(record.metadata, dict) else None
         index = rerank.get("candidate_index") if isinstance(rerank, dict) else None
-        if (
-            is_reserved_entity_expansion(record)
-            and isinstance(index, int)
-            and index not in kept
-        ):
+        if is_reserved_entity_expansion(record) and isinstance(index, int) and index not in kept:
             metadata = dict(record.metadata)
             metadata["rerank"] = {**rerank, "kept_position": "entity_expansion"}
             kept[index] = replace(record, metadata=metadata)
             continue
         rest.append(record)
     return kept, rest
+
 
 def _merge_text_rerank_candidates(
     original_candidates: Sequence[AnswerRecord],
@@ -452,14 +456,13 @@ def _merge_text_rerank_candidates(
     merged.extend(reranked_iter)
     return merged
 
+
 def _image_vector_only_candidate(record: AnswerRecord) -> bool:
     channels = _retrieval_channels(record)
     if not any(channel.startswith("image_vector:") for channel in channels):
         return False
-    return not any(
-        channel.startswith(("vector:", "keyword:", "profile:"))
-        for channel in channels
-    )
+    return not any(channel.startswith(("vector:", "keyword:", "profile:")) for channel in channels)
+
 
 def _retrieval_channels(record: AnswerRecord) -> tuple[str, ...]:
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
@@ -472,6 +475,7 @@ def _retrieval_channels(record: AnswerRecord) -> tuple[str, ...]:
     else:
         values = ()
     return tuple(str(channel or "").strip() for channel in values if str(channel or "").strip())
+
 
 def _rerank_document(record: AnswerRecord) -> str:
     """本文を全量保持し、補足 metadata だけを文字数制限して再順位付けへ渡します。
@@ -494,6 +498,7 @@ def _rerank_document(record: AnswerRecord) -> str:
     parts.append(_trim_for_context("\n".join(metadata), MAX_RERANK_METADATA_CHARS))
     return "\n\n".join(part for part in parts if part)
 
+
 def _rerank_visual_context(record: AnswerRecord) -> str:
     channels = tuple(channel for channel in _retrieval_channels(record) if channel.startswith("image_vector:"))
     evidence = _rerank_image_evidence(record)
@@ -504,6 +509,7 @@ def _rerank_visual_context(record: AnswerRecord) -> str:
         lines.append("Visual retrieval channels: " + ", ".join(channels))
     lines.extend(evidence[:3])
     return "\n".join(lines)
+
 
 def _rerank_image_evidence(record: AnswerRecord) -> list[str]:
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
@@ -545,6 +551,7 @@ def _rerank_image_evidence(record: AnswerRecord) -> list[str]:
             lines.append(line)
     return lines
 
+
 def _join_rerank_image_text(*values: Any) -> str:
     parts: list[str] = []
     for value in values:
@@ -560,6 +567,7 @@ def _join_rerank_image_text(*values: Any) -> str:
                 parts.append(text)
     return " | ".join(parts)
 
+
 def _records_by_rerank_ranks(
     records: Sequence[AnswerRecord],
     ranks: Sequence[RerankTextRank],
@@ -574,11 +582,7 @@ def _records_by_rerank_ranks(
         index = rank.index
         if index in seen or index < 0 or index >= len(records):
             continue
-        if (
-            min_score > 0
-            and rank.relevance_score is not None
-            and rank.relevance_score < min_score
-        ):
+        if min_score > 0 and rank.relevance_score is not None and rank.relevance_score < min_score:
             seen.add(index)
             continue
         selected.append(
@@ -594,6 +598,7 @@ def _records_by_rerank_ranks(
     selected.extend(record for index, record in enumerate(records) if index not in seen)
     return selected
 
+
 def _records_by_rerank_indices(records: Sequence[AnswerRecord], indices: Sequence[int]) -> list[AnswerRecord]:
     selected: list[AnswerRecord] = []
     seen: set[int] = set()
@@ -605,10 +610,12 @@ def _records_by_rerank_indices(records: Sequence[AnswerRecord], indices: Sequenc
     selected.extend(record for index, record in enumerate(records) if index not in seen)
     return selected
 
+
 def _original_candidate_index(index: int, candidate_indices: Sequence[int] | None) -> int:
     if candidate_indices is None or index < 0 or index >= len(candidate_indices):
         return index
     return int(candidate_indices[index])
+
 
 def _record_with_rerank_metadata(
     record: AnswerRecord,
@@ -628,6 +635,7 @@ def _record_with_rerank_metadata(
     }
     return replace(record, metadata=metadata)
 
+
 def _record_with_rerank_skip_metadata(
     record: AnswerRecord,
     *,
@@ -646,6 +654,7 @@ def _record_with_rerank_skip_metadata(
     }
     return replace(record, metadata=metadata)
 
+
 def _chunk_neighbors(child: AnswerRecord, siblings: Sequence[AnswerRecord], neighbor_child_count: int) -> list[AnswerRecord]:
     count = max(0, int(neighbor_child_count or 0))
     if count <= 0:
@@ -663,6 +672,7 @@ def _chunk_neighbors(child: AnswerRecord, siblings: Sequence[AnswerRecord], neig
         if after < len(siblings):
             neighbors.append(siblings[after])
     return neighbors
+
 
 def _same_page_chunk_neighbors(
     child: AnswerRecord,
@@ -683,6 +693,7 @@ def _same_page_chunk_neighbors(
     candidates.sort(key=lambda record: (abs(record.chunk_seq - child.chunk_seq), record.chunk_seq))
     return candidates[:count]
 
+
 def _first_source_seq(ranges: Sequence[dict[str, int]]) -> int | None:
     for item in ranges:
         try:
@@ -691,22 +702,20 @@ def _first_source_seq(ranges: Sequence[dict[str, int]]) -> int | None:
             continue
     return None
 
+
 def _context_neighbors(
     record: AnswerRecord,
     page_records: Sequence[AnswerRecord],
     normalized_question: str,
     terms: Sequence[str],
 ) -> list[AnswerRecord]:
-    neighbors = [
-        neighbor
-        for neighbor in page_records
-        if neighbor.id != record.id and abs(neighbor.seq_no - record.seq_no) <= 10
-    ]
+    neighbors = [neighbor for neighbor in page_records if neighbor.id != record.id and abs(neighbor.seq_no - record.seq_no) <= 10]
     scored = [
         (_record_score(normalized_question, terms, neighbor), abs(neighbor.seq_no - record.seq_no), neighbor.seq_no, neighbor)
         for neighbor in neighbors
     ]
     return [neighbor for score, _, _, neighbor in sorted(scored, key=lambda item: (-item[0], item[1], item[2])) if score > 0]
+
 
 def _record_score(normalized_question: str, terms: Sequence[str], record: AnswerRecord) -> float:
     text = _normalize_text(record.text)

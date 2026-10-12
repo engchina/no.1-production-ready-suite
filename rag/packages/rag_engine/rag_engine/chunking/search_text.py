@@ -88,8 +88,7 @@ def _child_search_text(
     # 文字数は目標値とし、分割できない表の行や図の本文を metadata のために切り捨てない。
     context_budget = max(
         0,
-        min(config.search_text_context_max_chars,
-            config.child_search_text_max_chars - len(child_text) - len(child_header) - 2),
+        min(config.search_text_context_max_chars, config.child_search_text_max_chars - len(child_text) - len(child_header) - 2),
     )
     context_text, included = _pack_search_context(
         components,
@@ -149,10 +148,7 @@ def _chunk_page_context_text(chunk: DocumentChunk) -> str:
     if not isinstance(labels, dict) or not labels:
         return pages
     # key は JSON 保存のため文字列です。文字列順では p.10 が p.9 より前に並びます。
-    logical = " / ".join(
-        f"p.{page}=logical {label}"
-        for page, label in sorted(labels.items(), key=lambda item: _int_value(item[0]) or 0)
-    )
+    logical = " / ".join(f"p.{page}=logical {label}" for page, label in sorted(labels.items(), key=lambda item: _int_value(item[0]) or 0))
     return f"{pages}; {logical}"
 
 
@@ -185,9 +181,13 @@ def _table_search_text(value: Any) -> str:
         row_group = table.get("row_group") if isinstance(table.get("row_group"), dict) else {}
         visual_evidence = table.get("visual_evidence") if isinstance(table.get("visual_evidence"), list) else []
         # JSON を文字数で切ると key と値の途中で切れて検索の役に立たない。平文で列見出しと行の範囲を示す。
-        headers = " / ".join(dict.fromkeys(
-            str(item.get("text") or "").strip() for item in structure.get("column_headers") or []
-            if isinstance(item, dict) and str(item.get("text") or "").strip()))
+        headers = " / ".join(
+            dict.fromkeys(
+                str(item.get("text") or "").strip()
+                for item in structure.get("column_headers") or []
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            )
+        )
         parts = [f"表 {table_id}" if table_id else "表"]
         if structure.get("caption"):
             parts.append(f"見出し {structure['caption']}")
@@ -196,8 +196,11 @@ def _table_search_text(value: Any) -> str:
         if row_group.get("row_count"):
             parts.append(f"{row_group.get('row_start')}〜{row_group.get('row_end')} 行目（{row_group['row_count']} 行）")
         # 表自身の切り出し画像は表の複製なので数えない。表内の Picture だけを示す。
-        pictures = [str(item.get("image_id") or item.get("record_id") or "") for item in visual_evidence
-                    if isinstance(item, dict) and str(item.get("relationship") or "") != SOURCE_TABLE_CROP_RELATIONSHIP]
+        pictures = [
+            str(item.get("image_id") or item.get("record_id") or "")
+            for item in visual_evidence
+            if isinstance(item, dict) and str(item.get("relationship") or "") != SOURCE_TABLE_CROP_RELATIONSHIP
+        ]
         if pictures:
             parts.append("表内画像 " + ", ".join(p for p in pictures if p))
         pieces.append("。".join(parts))
@@ -269,13 +272,7 @@ def _form_search_text(value: Any) -> str:
 def _formula_search_text(value: Any) -> str:
     if not isinstance(value, list):
         return ""
-    return " / ".join(
-        _ordered_nonempty(
-            item.get("expression")
-            for item in value[:5]
-            if isinstance(item, dict)
-        )
-    )
+    return " / ".join(_ordered_nonempty(item.get("expression") for item in value[:5] if isinstance(item, dict)))
 
 
 def _child_search_keywords(child: DocumentChunk, parent: DocumentChunk, *, body: str | None = None) -> str:

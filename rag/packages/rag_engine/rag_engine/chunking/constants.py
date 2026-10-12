@@ -98,6 +98,7 @@ CHUNK_TABLE_HEADERS = [
 @dataclass(frozen=True)
 class ChunkingConfig:
     """Small-to-Big チャンキングのサイズ上限と近傍条件を保持します。"""
+
     child_target_chars: int = DEFAULT_CHILD_TARGET_CHARS
     # 表の行グループ分割の閾値と各グループの目標。本文の child_target_chars とは独立 (#894)。
     table_child_target_chars: int = DEFAULT_TABLE_CHILD_TARGET_CHARS
@@ -167,6 +168,7 @@ class ChunkingConfig:
 @dataclass
 class DocumentChunk:
     """親または子チャンクの本文、ページ範囲、根拠 record を保持します。"""
+
     chunk_id: str
     chunk_level: Literal["parent", "child"]
     chunk_seq: int
@@ -194,6 +196,7 @@ class DocumentChunk:
 @dataclass(frozen=True)
 class ChunkingResult:
     """1 回のチャンキング実行で生成されたチャンクと入力 metadata を保持します。"""
+
     source_run_id: str
     chunk_run_id: str
     source_file_name: str
@@ -255,14 +258,23 @@ def _ordered_nonempty(values: Iterable[Any]) -> list[str]:
         selected.append(text)
         seen.add(text)
     return selected
+
+
 # section_path の各見出しの出所。section_header と title は Docling の分類、それ以外は chunking の昇格・推定。
 SECTION_HEADER_HEADING_SOURCE = "section_header"
 TITLE_HEADING_SOURCE = "title"
 RUNNING_HEAD_HEADING_SOURCE = "running_head"
 ROUTE_CAPTION_HEADING_SOURCE = "route_caption"
 PROMOTED_TEXT_HEADING_SOURCE = "promoted_text"
-HEADING_SOURCES = frozenset({SECTION_HEADER_HEADING_SOURCE, TITLE_HEADING_SOURCE, RUNNING_HEAD_HEADING_SOURCE,
-                             ROUTE_CAPTION_HEADING_SOURCE, PROMOTED_TEXT_HEADING_SOURCE})
+HEADING_SOURCES = frozenset(
+    {
+        SECTION_HEADER_HEADING_SOURCE,
+        TITLE_HEADING_SOURCE,
+        RUNNING_HEAD_HEADING_SOURCE,
+        ROUTE_CAPTION_HEADING_SOURCE,
+        PROMOTED_TEXT_HEADING_SOURCE,
+    }
+)
 
 
 def _metadata_classification(metadata: dict[str, Any]) -> Any:
