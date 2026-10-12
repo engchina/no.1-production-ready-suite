@@ -284,6 +284,8 @@ report_urls() {
   host="$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/public_ip.txt" || true)"
   host="${host:-$(suite_tls_detect_private_ip || printf '<compute-ip>')}"
   base="$(public_base_url "${host}")"
+  # 入口（/）。転送先は Nginx の site と同じ規則で決める（#1561）。
+  log "  suite: ${base}/ (entry point; redirects to $(suite_root_redirect_target "${SUITE_PRODUCTS[@]}"))"
   for product in "${SUITE_PRODUCTS[@]}"; do
     log "  ${product}: ${base}/${product}/"
   done
