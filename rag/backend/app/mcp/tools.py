@@ -73,6 +73,7 @@ from app.mcp.profile_scope import (
     within_profile_scope,
 )
 from app.rag.answer_validation import (
+    MAX_ANSWER_TRACE_IDS,
     EvidenceRef,
     GuideCheckRef,
     GuideProfileNotFoundError,
@@ -139,7 +140,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #    rag_read_section を足し、根拠に所属の章節（section）を足した。
 # 10: rag_read_document / rag_read_section の chunks に表計算の場所（sheet_name・row_start・
 #     row_end・cell_range）を足した（#1471）。
-MCP_OUTPUT_SCHEMA_VERSION = 10
+# 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
+MCP_OUTPUT_SCHEMA_VERSION = 11
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -403,6 +405,16 @@ class ValidateAnswerInput(BaseModel):
         description=(
             "回答が沿った業務ガイド。渡すと公開の版を読み直し、手順の順序・依存・分岐と影響範囲・"
             "承認の記載を確かめる。"
+        ),
+    )
+    answer_trace_ids: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
+        default_factory=list,
+        max_length=MAX_ANSWER_TRACE_IDS,
+        description=(
+            "回答に使った rag_search の trace_id（#1527）。その回答の監査を通った説明と本文が"
+            "同じ段落は、根拠を今の権限と版で読み直して本文が変わっていなければ、その判定を使って"
+            "モデルに渡さない（すべての段落が当たればモデルを呼ばない）。記録は呼び出した利用者が"
+            "読めるものだけを使う。"
         ),
     )
 
@@ -1164,6 +1176,12 @@ class ValidateAnswerOutput(VersionedOutput):
     )
     guide_revision: int | None = Field(
         default=None, description="検査に使った業務ガイドの今の公開の版。"
+    )
+    reused_claims: int = Field(
+        default=0,
+        description=(
+            "answer_trace_ids の回答の監査の判定を使い、モデルに渡さなかった段落の数（#1527）。"
+        ),
     )
 
 
@@ -2713,6 +2731,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     else None
                 ),
                 gaps=arguments.gaps,
+                answer_trace_ids=arguments.answer_trace_ids,
                 guide=(
                     GuideCheckRef(
                         guide.search_answer_profile_id,
@@ -2753,6 +2772,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             checks=result.checks,
             findings=[ValidationFinding.model_validate(item.as_dict()) for item in result.findings],
             guide_revision=result.guide_revision,
+            reused_claims=result.reused_claims,
         )
 
     return McpServer(
@@ -2805,7 +2825,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_validate_answer",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
-                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。見出し・出典の行・"
+                    "公開する前の最終の検証に使います（モデルを 1 回呼びます。answer_trace_ids の"
+                    "回答の監査を通った説明と同じ段落はモデルに渡しません）。見出し・出典の行・"
                     "利用者への質問の段落は主張ではないので監査せず、claims に含めません。"
                     "requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順の順序と"
                     "分岐・影響範囲も"

@@ -2799,6 +2799,70 @@ def better(candidate: Round, current: Round) -> bool:
 DEADLINE_BEFORE_ROUND = "deadline_before_round"  # 次の round の見積もりが残りの時間に入らない
 DEADLINE_IN_ROUND = "deadline_in_round"  # round の途中で、確定の分を残した期限が切れた
 DEADLINE_NO_DRAFT = "deadline_no_draft"  # 1 組目の生成が期限までに終わらなかった（草稿が無い）
+# 是正の round を、改善が見込めないので止めた理由（`RoundBudget.stop["reason"]`。#1527）。時間の上限ではないので、
+# 本文の「確かめられていない点」には出さない（残った不足は、それまでに採用した round の回答がそのまま示す）。
+NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した組が採用されなかった
+NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
+NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
+NO_IMPROVEMENT_REASONS = frozenset({NO_IMPROVEMENT_NOT_ACCEPTED, NO_IMPROVEMENT_SAME_FEEDBACK,
+                                    NO_IMPROVEMENT_EVIDENCE_ONLY})
+# 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致せず除いた
+# 説明（写し誤り）・裏付けを確かめられず原文のまま示した説明（降格）・根拠を引用した説明が無いこと。
+# 答えていない要求・使われていない根拠・質問の目的とのずれは、根拠を足す是正（取得済みの資料・原画像）で直す。
+REGENERATION_FEEDBACK_KEYS = ("dropped_items", "downgraded_items", "no_cited_evidence")
+
+
+def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
+    """是正の指摘（`Round.feedback`）の同一性の比較に使う形（#1527）。
+
+    LLM の自由文（監査の reason・説明の言い回し）は組ごとに揺れるので比べない。答えていない要求は要求の ID と
+    状態、使われていない根拠は根拠の参照、除いた・降格した説明は件数、目的のずれは監査の値で比べる。
+    """
+    feedback = feedback or {}
+    return {
+        "unanswered": sorted({(str(entry.get("request_id")), str(entry.get("status")))
+                              for entry in feedback.get("unanswered_requests") or ()}),
+        "unused": sorted({json.dumps(ref, ensure_ascii=False, sort_keys=True, default=str)
+                          for ref in feedback.get("unused_evidence_ids") or ()}),
+        "dropped": len(feedback.get("dropped_items") or ()),
+        "downgraded": len(feedback.get("downgraded_items") or ()),
+        "goal_alignment": str(feedback.get("goal_alignment") or ""),
+        "no_cited_evidence": bool(feedback.get("no_cited_evidence")),
+    }
+
+
+def evidence_shortage_only(feedback: dict[str, Any] | None, adopted: Round) -> bool:
+    """残った指摘が根拠の不足だけで、同じ根拠のまま作り直しても直らないか（#1527）。
+
+    写し誤り・降格・引用なし（`REGENERATION_FEEDBACK_KEYS`）があれば作り直す。監査が「使われていない根拠」を
+    挙げたときも、根拠はあるので作り直す。答えていない要求は、採用した組の草稿がその要求を「資料に記載が無い」
+    （kind=gap）と答えたときだけ根拠の不足とみなす。草稿が答えようとして監査が partial・missing とした要求は、
+    指摘を渡せば同じ根拠で答えられることがある（#621）。答えていない要求が無い（目的のずれだけ）なら作り直す。
+    """
+    feedback = feedback or {}
+    if any(feedback.get(key) for key in REGENERATION_FEEDBACK_KEYS) or feedback.get("unused_evidence_ids"):
+        return False
+    unanswered = {str(entry.get("request_id")) for entry in feedback.get("unanswered_requests") or ()}
+    gap_requests = {str(entry.item.request_id) for entry in adopted.checked
+                    if entry.item.kind == "gap" and entry.item.request_id}
+    return bool(unanswered) and unanswered <= gap_requests
+
+
+def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, Any] | None,
+                          previous: dict[str, Any] | None) -> str:
+    """作り直した ``number`` 回目（0 始まり）の組の後に是正を止める理由（#1527）。止めなければ空文字。
+
+    1 組目の後は止めない（是正をまだ試していない）。作り直した組が採用されなければ、残った指摘は採用済みの組の
+    もので、その指摘を渡して作り直した結果が良くならなかった。採用されても指摘が前の組と同じなら、同じ指摘を
+    渡して作り直しても同じ結果になる。
+    """
+    if number <= 0:
+        return ""
+    if not accepted:
+        return NO_IMPROVEMENT_NOT_ACCEPTED
+    if feedback_signature(feedback) == feedback_signature(previous):
+        return NO_IMPROVEMENT_SAME_FEEDBACK
+    return ""
 
 
 @dataclass
@@ -2825,10 +2889,24 @@ class RoundBudget:
     notes: list[dict[str, Any]] = field(default_factory=list)
     _deadline: Deadline | None = None
 
-    def note(self, current: Round, feedback: dict[str, Any] | None) -> None:
-        """round の所要と、その後の是正の指摘（`pending_feedback_labels`）を記録に残す（遅い round の理由を確かめる）。"""
-        self.notes.append({**current.timing, "feedback": pending_feedback_labels(feedback or {}),
-                           "feedback_chars": len(json.dumps(feedback or {}, ensure_ascii=False))})
+    def note(self, current: Round, feedback: dict[str, Any] | None, *, accepted: bool | None = None) -> None:
+        """round の所要と、その後の是正の指摘（`pending_feedback_labels`）を記録に残す（遅い round の理由を確かめる）。
+
+        採否・指摘の同一性の形（`feedback_signature`）・監査が summary を支持したかも残し、是正の打ち切り（#1527）を
+        LLM を呼ばずに replay できるようにする。
+        """
+        note: dict[str, Any] = {**current.timing, "feedback": pending_feedback_labels(feedback or {}),
+                                "feedback_chars": len(json.dumps(feedback or {}, ensure_ascii=False)),
+                                "feedback_signature": feedback_signature(feedback)}
+        if accepted is not None:
+            note["accepted"] = accepted
+        if current.audit is not None:
+            note["summary_supported"] = bool(current.audit.summary_supported)
+        self.notes.append(note)
+
+    def stop_without_improvement(self, reason: str, number: int, feedback: dict[str, Any] | None) -> None:
+        """``number`` 回目（0 始まり）の組の後の是正を、改善が見込めないので止めた理由を残す（#1527）。"""
+        self.stop = {"reason": reason, "round": number + 2, "feedback": pending_feedback_labels(feedback or {})}
 
     def estimate(self) -> float:
         """次の 1 組の見積もり（秒）。直前の組の実測、無ければ既定。"""

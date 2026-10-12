@@ -76,7 +76,7 @@ async def test_validate_answer_rereads_evidence_and_reports_unreadable(
     captured: dict[str, Any] = {}
 
     def fake_claims(
-        question: str, answer: str, items: list[dict[str, Any]], settings: Any
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **_options: Any
     ) -> dict[str, Any]:
         captured["items"] = items
         return {
@@ -414,7 +414,7 @@ def _supported(monkeypatch: MonkeyPatch) -> list[str]:
     calls: list[str] = []
 
     def fake_claims(
-        question: str, answer: str, items: list[dict[str, Any]], settings: Any
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **_options: Any
     ) -> dict[str, Any]:
         calls.append(answer)
         return {
@@ -821,3 +821,127 @@ def test_evidence_location_matches_the_mcp_locator() -> None:
     )
     assert locator.section_path == location["section_path"]
     assert evidence_location({"page_start": 3, "page_end": 3}) == {}
+
+
+# #1527: rag_search の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使い
+# モデルに渡さない。
+_RAG_ANSWER = (
+    "有効期限は最長 30 日です。\n\n確認できる内容\n\n・有効期限は最長 30 日です。\n"
+    "根拠：manual.pdf p.1"
+)
+
+
+class _RecordOracle(_Oracle):
+    def __init__(self, stored_text: str = "有効期限は最長 30 日です。") -> None:
+        super().__init__()
+        self.read_trace_ids: list[str] = []
+        self.record = {
+            "answer": _RAG_ANSWER,
+            "citations_json": [
+                {
+                    "chunk_id": "c1",
+                    "document_id": "d1",
+                    "text": stored_text,
+                    "metadata": {"answer_citation_lines": [1]},
+                }
+            ],
+            "diagnostics_json": {
+                "envelope": {
+                    "items": [
+                        {"kind": "rule", "text": "有効期限は最長 30 日です。", "applies": "matched"}
+                    ]
+                }
+            },
+        }
+
+    async def get_answer_record(self, trace_id: str) -> Any:
+        # 記録は今の利用者の範囲で読む（範囲の外は None）。
+        self.read_trace_ids.append(trace_id)
+        return self.record if trace_id == "trace-1" else None
+
+
+def _never_called(*_args: Any, **_kwargs: Any) -> Any:
+    raise AssertionError("監査済みの段落だけならモデルを呼ばない")
+
+
+async def test_validate_answer_reuses_the_audited_items_of_the_answer_record(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    import rag_engine.evaluation.answer_eval as answer_eval
+
+    monkeypatch.setattr(answer_eval, "parse_text_response", _never_called)
+    oracle = _RecordOracle()
+    answer = "有効期限は最長 30 日です。\n\n- 有効期限は最長 30 日です。"
+    result = await validate_answer(
+        "有効期限は？",
+        answer,
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, oracle),
+        answer_trace_ids=["trace-1", "trace-other", "trace-1"],
+    )
+    assert oracle.read_trace_ids == ["trace-1", "trace-other"]
+    assert (result.status, result.valid, result.reused_claims) == ("completed", True, 2)
+    assert result.counts == {"supported": 2}
+
+
+async def test_validate_answer_does_not_reuse_when_the_evidence_changed(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """記録したときから根拠の本文が変わった（版が変わった）なら、モデルで確かめ直す。"""
+    calls: list[str] = []
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        calls.append(answer)
+        assert options["audited"] == {}
+        return {"status": "completed", "counts": {"supported": 1}, "claim_checks": []}
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    oracle = _RecordOracle(stored_text="有効期限は最長 14 日です。")
+    result = await validate_answer(
+        "有効期限は？",
+        "有効期限は最長 30 日です。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, oracle),
+        answer_trace_ids=["trace-1"],
+    )
+    assert calls == ["有効期限は最長 30 日です。"]
+    assert result.reused_claims == 0
+
+
+def test_mcp_validate_answer_passes_answer_trace_ids(
+    auth: Any,  # noqa: F811
+    monkeypatch: MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_validate(
+        question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
+    ) -> AnswerValidation:
+        captured.update(kwargs)
+        return AnswerValidation(
+            status="completed", valid=True, counts={"supported": 1}, reused_claims=1
+        )
+
+    monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    arguments: dict[str, Any] = {
+        "query": "q",
+        "answer": "a",
+        "evidence": [{"document_id": "d1", "chunk_id": "c1"}],
+        "answer_trace_ids": ["trace-1"],
+    }
+    body = _call("rag_validate_answer", arguments, _token(user.user_uuid))["structuredContent"]
+    assert captured["answer_trace_ids"] == ["trace-1"]
+    assert body["reused_claims"] == 1
+    too_many = _call(
+        "rag_validate_answer",
+        {**arguments, "answer_trace_ids": [f"t{i}" for i in range(11)]},
+        _token(user.user_uuid),
+    )
+    assert too_many["isError"] is True

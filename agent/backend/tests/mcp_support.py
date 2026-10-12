@@ -125,6 +125,8 @@ class RagValidateAnswerIn(_ContractInput):
     requests: list[RagValidateRequestIn] | None = Field(default=None, max_length=30)
     gaps: list[str] | None = Field(default=None, max_length=30)
     guide: RagValidateGuideIn | None = None
+    # 監査の判定を再利用する rag_search の回答の記録（#1527）。
+    answer_trace_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):
@@ -310,7 +312,8 @@ _EVIDENCE = {
 # RAG の MCP の出力の形の版（platform/contracts/mcp/rag-tools.json の schema_version。#1276）。
 # 10: 読み取りのツールの chunks に表計算の場所（sheet_name・row_start・row_end・cell_range）を
 # 足した（#1471）。
-RAG_OUTPUT_SCHEMA_VERSION = 10
+# 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
+RAG_OUTPUT_SCHEMA_VERSION = 11
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -545,6 +548,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "checks": [],
         "findings": [],
         "guide_revision": None,
+        "reused_claims": 0,
     },
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
