@@ -2,16 +2,18 @@
 
 業務支援の評価（#1362 の deepseek-flash の全量）で、手順を答えたうえで「操作する利用者が「ポータル管理者」
 ロールを持つか」「部門長の承認の有無」「対象のシステム」を「実データ」に挙げ、回答の対応が
-needs_environment_data になっていた。草稿の external_data_items の種類（kind）で分け、利用者に確かめる
-条件（user_condition）だけなら conditional、現場の実データ（environment）があれば needs_environment_data にする。
+needs_environment_data になっていた。草稿の external_data_items の項目ごとの事実（誰が答えられるか。#1492）で
+分け、利用者が答えられる条件（who_can_answer=user）だけなら conditional、システムだけが持つ値（system）があれば
+needs_environment_data にする。
 LLM は差し替え、評価の質問の形（評価用の合成資料の原文）で入出力だけを確かめる。
 """
+import json
 import unittest
 
 from test_grounded_answer import FakeModel, audit, context, draft, ids, record, run
 
 from rag_engine.generation import grounded
-from rag_engine.generation.answer_envelope import build_envelope
+from rag_engine.generation.answer_envelope import build_envelope, requires_environment_data
 from rag_engine.models.llm import GroundedDraft
 
 MANUAL = "portal-operations-manual.pdf"
@@ -28,11 +30,11 @@ AUTH_LOG = "エラー発生時刻に対応する認証ログ（auth.log）の該
 
 
 def user_condition(text):
-    return {"text": text, "kind": "user_condition"}
+    return {"text": text, "who_can_answer": "user", "already_known": False, "decides": True}
 
 
 def environment(text):
-    return {"text": text, "kind": "environment"}
+    return {"text": text, "who_can_answer": "system", "already_known": False, "decides": True}
 
 
 def rule(eid, text, request_id="Q1"):
@@ -105,26 +107,42 @@ class ExternalDataItemTest(unittest.TestCase):
         return GroundedDraft.model_validate({"summary": "", "items": [], "confidence": "low",
                                              "external_data_required": required, "external_data_items": items})
 
-    def test_plain_text_items_are_treated_as_environment_data(self):
+    def _requires(self, value):
+        settled = grounded.settle_confirmations(value)
+        return requires_environment_data(settled, items=value.confirmation_items(),
+                                         external_data_required=value.external_data_required)
+
+    def test_plain_text_items_are_treated_as_system_values(self):
+        # 構造化出力を強制できない接続の応答（文字列だけ）は、今までどおり現場の実データにする。
         value = self._draft(["当該実行のログ"])
-        self.assertEqual(value.environment_data_items(), ["当該実行のログ"])
-        self.assertEqual(value.user_condition_items(), [])
-        self.assertTrue(value.requires_environment_data())
+        self.assertEqual(grounded.settle_confirmations(value).system, ("当該実行のログ",))
+        self.assertTrue(self._requires(value))
+
+    def test_legacy_kind_is_mapped_to_who_can_answer(self):
+        # #1492 より前の記録の種類（kind）は、誰が答えられるかに写す（ほかの事実は保守的に埋める）。
+        value = self._draft([{"text": ROLE, "kind": "user_condition"}, {"text": AUTH_LOG, "kind": "environment"}])
+        self.assertEqual([(item.who_can_answer, item.already_known, item.decides) for item in value.external_data_items],
+                         [("user", False, True), ("system", False, True)])
 
     def test_only_user_conditions_do_not_require_environment_data(self):
         value = self._draft([user_condition(ROLE), user_condition(" ")])
-        self.assertEqual(value.user_condition_items(), [ROLE])
-        self.assertFalse(value.requires_environment_data())
-        self.assertEqual(grounded.user_condition_lines(value), [f"条件: {ROLE}"])
+        settled = grounded.settle_confirmations(value)
+        self.assertEqual(settled.user, (ROLE,))
+        self.assertFalse(self._requires(value))
+        self.assertEqual(grounded.user_condition_lines(settled), [f"条件: {ROLE}"])
         self.assertEqual(grounded.confirmation_lines(value, "", []), [])
-        self.assertFalse(self._draft([], required=False).requires_environment_data())
-        self.assertTrue(self._draft([]).requires_environment_data())
+        self.assertFalse(self._requires(self._draft([], required=False)))
+        self.assertTrue(self._requires(self._draft([])))
 
-    def test_schema_asks_the_model_for_the_kind(self):
+    def test_schema_asks_the_model_for_observable_facts(self):
         schema = GroundedDraft.model_json_schema()
         item = schema["$defs"]["ExternalDataItem"]
-        self.assertEqual(set(item["required"]), {"text", "kind"})
-        self.assertEqual(set(item["properties"]["kind"]["enum"]), {"environment", "user_condition"})
+        self.assertEqual(set(item["required"]), {"text", "who_can_answer", "already_known", "decides"})
+        self.assertEqual(set(item["properties"]["who_can_answer"]["enum"]), {"user", "system", "document"})
+        self.assertEqual(item["properties"]["already_known"]["type"], "boolean")
+        self.assertEqual(item["properties"]["decides"]["type"], "boolean")
+        # 偏った既定値（「迷うときは〜」）を置かない。
+        self.assertNotIn("迷うとき", json.dumps(item, ensure_ascii=False))
 
 
 class BuildEnvelopeUserConditionsTest(unittest.TestCase):

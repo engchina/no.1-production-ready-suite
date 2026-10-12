@@ -8,10 +8,15 @@
 
 - answered: 公開した説明があり、未回答の要求・不足・条件付きの説明が無い。
 - conditional: 公開した説明はあるが、未回答の要求・不足・適用の条件（未確認を含む）がある。または原文の
-  提示だけ（適用は未確認）で答えた。利用者に聞けば分かる条件（質問で特定されていない対象・利用者自身の
-  ロールや承認。草稿の external_data_items の kind=user_condition）だけを確かめる回答もここ（#1453）。
-- needs_environment_data: 回答の確定に、利用者に聞いても分からない現場の実データ（設定値・記録・ログ）の
-  確認が要る。別の資料の確認（`confirmation_lines` の「資料:」の行）は実データに数えない（#1491）。
+  提示だけ（適用は未確認）で答えた。利用者が答えられる確認の項目（`who_can_answer=user`）・別の資料で
+  分かる項目（`who_can_answer=document`）だけを確かめる回答もここ（#1453、#1492）。
+- needs_environment_data: 回答の確定に、システムだけが持つ値（設定値・記録・ログ。確認の項目の
+  `who_can_answer=system`）の確認が要る。別の資料の確認（`confirmation_lines` の「資料:」の行）は実データに
+  数えない（#1491）。
+
+確認の項目（草稿の external_data_items）の分け方は `settle_confirmation_items`（#1492）。モデルには観察できる
+事実（誰が答えられるか・すでに分かっているか・結論がその値で分かれるか）だけを答えさせ、どの対応にするかは
+ここの規則で決める（selective prediction / clarifying question の判定と同じく、自己申告の分類に頼らない）。
 - insufficient_evidence: 公開できる説明も原文も無く、資料から答えられない。実行できる説明が無く、要求が
   すべて答えられていない（missing）ときも、実データ・別の資料の確認より先にここにする（#1491）。
 - needs_clarification / needs_human: 利用者への確認・人への引き継ぎ（業務ガイドと会話の段で決める。
@@ -20,7 +25,10 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 ENVELOPE_SCHEMA_VERSION = 1
@@ -37,6 +45,24 @@ RequestStatus = Literal["addressed", "partial", "missing", "unknown"]
 # 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
 # ではないので、needs_environment_data の判定に数えない（#1491）。
 REFERENCE_CONFIRMATION_PREFIX = "資料: "
+# 確認の項目に答えられる人・もの（#1492、#1500）。user=質問した利用者本人（自分の状況・対象の属性・選ぶもの）、
+# system=稼働中のシステムにだけある値（設定の現在値・ログ・処理の状態・実績）、document=KB の資料（規程・マニュアル・
+# コード表・台帳・一覧の値）。
+WhoCanAnswer = Literal["user", "system", "document"]
+WHO_CAN_ANSWER: tuple[WhoCanAnswer, ...] = ("user", "system", "document")
+# #1492 より前の草稿・記録の種類（kind）からの写し。
+LEGACY_KIND_WHO: dict[str, WhoCanAnswer] = {"environment": "system", "user_condition": "user"}
+# 対応の決定に数えなかった項目の理由（診断に残す）。
+EXCLUDED_ALREADY_KNOWN = "already_known"
+EXCLUDED_NOT_DECISIVE = "not_decisive"
+EXCLUDED_KNOWN_CONDITION = "known_condition"
+EXCLUDED_VERSION_SETTLED = "version_settled"
+# 版を確かめる項目（「適用されている版」「どの版か」「第1版と第2版のどちらか」）。根拠が旧版・廃止の版を
+# 決めているときは確認の項目にしない（#1492）。
+_VERSION_ITEM = re.compile(
+    r"第\s*[0-9０-９一二三四五六七八九十]+\s*版|(?:どの|適用(?:され(?:てい)?る|する)|有効な|使う|最新の?|新しい|今の)版"
+    r"|版(?:の(?:確認|違い|別)|が(?:異な|違))|旧版|新版|改訂版|バージョン"
+)
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -47,6 +73,118 @@ def _request_text(unit: Mapping[str, Any]) -> str:
     text = str(unit.get("text") or "")
     text = text.split("原文: ", 1)[1] if "原文: " in text else text
     return " ".join(text.split())
+
+
+def _compact(value: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value or ""))
+
+
+def confirmation_item_facts(item: Mapping[str, Any] | str) -> dict[str, Any]:
+    """確認の項目 1 件を、規則が読む事実（text / who_can_answer / already_known / decides）にそろえる。
+
+    欠けた値は保守的に埋める（#1492）: 誰が答えられるかが無ければ #1453 の種類（kind）から写し、種類も無い
+    文字列だけの項目は今までどおりシステムの値（現場の実データ）とする。already_known が無ければ未確認、
+    decides が無ければ結論を分ける（対応の決定に数える）とする。
+    """
+    if isinstance(item, str):
+        return {"text": item.strip(), "who_can_answer": "system", "already_known": False, "decides": True}
+    who = item.get("who_can_answer")
+    if who not in WHO_CAN_ANSWER:
+        who = LEGACY_KIND_WHO.get(str(item.get("kind") or ""), "system")
+    already_known = item.get("already_known")
+    decides = item.get("decides")
+    return {
+        "text": str(item.get("text") or "").strip(),
+        "who_can_answer": who,
+        "already_known": already_known if isinstance(already_known, bool) else False,
+        "decides": decides if isinstance(decides, bool) else True,
+    }
+
+
+@dataclass(frozen=True)
+class SettledConfirmations:
+    """確認の項目を規則で分けた結果（#1492）。
+
+    user は利用者に確かめる条件（適用の条件・conditional）、system はシステムだけが持つ値
+    （needs_environment_data）、document は別の資料で分かる点（資料の確認・conditional）。excluded は対応の
+    決定に数えなかった項目と理由（`EXCLUDED_*`）。
+    """
+
+    user: tuple[str, ...] = ()
+    system: tuple[str, ...] = ()
+    document: tuple[str, ...] = ()
+    excluded: tuple[dict[str, str], ...] = ()
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"user": list(self.user), "system": list(self.system), "document": list(self.document),
+                "excluded": [dict(entry) for entry in self.excluded]}
+
+
+def _known_condition(text: str, known_conditions: Sequence[tuple[str, str]]) -> str:
+    """項目が、分かっている条件（業務ガイドの条件の名前）を確かめるものなら、その名前。"""
+    compact = _compact(text)
+    for label, value in known_conditions:
+        name = _compact(label)
+        if len(name) >= 2 and str(value or "").strip() and name in compact:
+            return label
+    return ""
+
+
+def settle_confirmation_items(
+    items: Sequence[Mapping[str, Any] | str],
+    *,
+    known_conditions: Sequence[tuple[str, str]] = (),
+    version_settled: bool = False,
+) -> SettledConfirmations:
+    """確認の項目を、観察できる事実から規則で分ける（#1492）。
+
+    - 対応の決定に数えない: すでに分かっている（already_known）、結論がその値で分かれない（decides=false）、
+      分かっている条件（known_conditions。業務ガイドの条件の名前と値。MCP の conditions など）を確かめる項目、
+      根拠が旧版・廃止の版を決めているとき（version_settled）の版を確かめる項目。
+    - 残りを誰が答えられるかで分ける: user → 利用者に確かめる条件、system → システムだけが持つ値、
+      document → 別の資料で分かる点。
+
+    「迷うときは〜」のような既定の寄せ方はしない。値が欠けた項目は `confirmation_item_facts` が保守的に埋める。
+    """
+    groups: dict[str, list[str]] = {name: [] for name in WHO_CAN_ANSWER}
+    excluded: list[dict[str, str]] = []
+    for raw in items:
+        facts = confirmation_item_facts(raw)
+        text = facts["text"]
+        if not text:
+            continue
+        reason = ""
+        if facts["already_known"]:
+            reason = EXCLUDED_ALREADY_KNOWN
+        elif not facts["decides"]:
+            reason = EXCLUDED_NOT_DECISIVE
+        elif _known_condition(text, known_conditions):
+            reason = EXCLUDED_KNOWN_CONDITION
+        elif version_settled and _VERSION_ITEM.search(unicodedata.normalize("NFKC", text)):
+            reason = EXCLUDED_VERSION_SETTLED
+        if reason:
+            excluded.append({"text": text, "who_can_answer": facts["who_can_answer"], "reason": reason})
+            continue
+        groups[facts["who_can_answer"]].append(text)
+    return SettledConfirmations(
+        user=tuple(_unique(groups["user"])),
+        system=tuple(_unique(groups["system"])),
+        document=tuple(_unique(groups["document"])),
+        excluded=tuple(excluded),
+    )
+
+
+def requires_environment_data(
+    settled: SettledConfirmations, *, items: Sequence[Mapping[str, Any] | str], external_data_required: bool
+) -> bool:
+    """回答の確定にシステムだけが持つ値の確認が要るか（#1453、#1492）。
+
+    システムだけが持つ値の項目が残れば要る。項目を 1 つも挙げずに印（external_data_required）だけを立てた
+    草稿は、今までどおり印に従う。項目を挙げてすべて規則で外れたなら要らない。
+    """
+    if settled.system:
+        return True
+    return external_data_required and not any(confirmation_item_facts(item)["text"] for item in items)
 
 
 def envelope_requests(
@@ -100,12 +238,15 @@ def build_envelope(
     reference_materials: Sequence[str] = (),
     off_goal: bool = False,
     user_conditions: Sequence[str] = (),
+    document_items: Sequence[str] = (),
 ) -> dict[str, Any]:
     """回答の構造を組み立てる。
 
     confirmations は現場の実データ・別の資料の確認、user_conditions は利用者に確かめる条件（#1453）。
     利用者に確かめる条件は適用の条件（conditions）に載せ、現場の実データの確認には数えない。別の資料の
     確認（「資料:」の行）も現場の実データではないので、needs_environment_data の判定に数えない（#1491）。
+    document_items は結論を分けるのに別の資料で確かめる点（確認の項目の who_can_answer=document。#1492）で、
+    資料の不足として回答を条件付きにし、reference_materials に載せる。
     """
     request_entries = envelope_requests(requests, reviews)
     actionable = [item for item in items if item.get("applies") != "quote_only"]
@@ -128,7 +269,7 @@ def build_envelope(
         handoff.append("unverified_applicability")
     if user_conditions:
         handoff.append("user_conditions")
-    if reference_materials:
+    if reference_materials or document_items:
         handoff.append("reference_materials")
     if off_goal:
         handoff.append("off_goal")
@@ -140,7 +281,7 @@ def build_envelope(
         outcome = "needs_environment_data"
     elif not items:
         outcome = "insufficient_evidence"
-    elif not actionable or unanswered or gaps or unsettled or off_goal or user_conditions:
+    elif not actionable or unanswered or gaps or unsettled or off_goal or user_conditions or document_items:
         outcome = "conditional"
     else:
         outcome = "answered"
@@ -152,7 +293,7 @@ def build_envelope(
         "conditions": conditions,
         "gaps": _unique(gaps),
         "confirmations": _unique(confirmations),
-        "reference_materials": _unique(reference_materials),
+        "reference_materials": _unique([*reference_materials, *document_items]),
         "handoff_reasons": handoff,
     }
 
@@ -184,10 +325,21 @@ def fallback_envelope(
 
 __all__ = [
     "ENVELOPE_SCHEMA_VERSION",
+    "EXCLUDED_ALREADY_KNOWN",
+    "EXCLUDED_KNOWN_CONDITION",
+    "EXCLUDED_NOT_DECISIVE",
+    "EXCLUDED_VERSION_SETTLED",
+    "LEGACY_KIND_WHO",
     "REFERENCE_CONFIRMATION_PREFIX",
+    "WHO_CAN_ANSWER",
     "AnswerOutcome",
+    "SettledConfirmations",
+    "WhoCanAnswer",
     "build_envelope",
+    "confirmation_item_facts",
     "envelope_item",
     "envelope_requests",
     "fallback_envelope",
+    "requires_environment_data",
+    "settle_confirmation_items",
 ]

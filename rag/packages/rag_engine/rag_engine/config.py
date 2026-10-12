@@ -301,6 +301,9 @@ class Settings:
     crag_skip_min_rerank_score: float = 0.8
     # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
     query_expansion_max_queries: int = 5
+    # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
+    # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
+    known_conditions: tuple[tuple[str, str], ...] = ()
 
     @property
     def vision_model(self) -> str:

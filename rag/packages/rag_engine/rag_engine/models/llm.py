@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 @dataclass(frozen=True)
 class RerankTextRank:
@@ -191,55 +191,66 @@ class RequestCoverage(_StrictModel):
 
 
 class ExternalDataItem(_StrictModel):
-    """回答の確定に確かめる点 1 件と、その種類 (#1453)。
+    """回答の確定に確かめる点 1 件と、観察できる事実 (#1453、#1492)。
 
-    environment は利用者に聞いても分からない現場の値（設定値・ログ・記録・件数・処理の状態）で、回答の対応を
-    needs_environment_data にする。user_condition は利用者に聞けば分かる条件（質問で特定されていない対象・
-    利用者自身のロールや承認・付与先の種類）で、回答の適用の条件として conditional にする。
+    モデルには分類（どの対応にするか）を答えさせず、項目ごとに観察できる事実だけを答えさせる: 誰が答えられるか
+    （who_can_answer）、すでに分かっているか（already_known）、結論がその値で分かれるか（decides）。対応は
+    `answer_envelope.settle_confirmation_items` の規則で決める（system だけが持つ値 → needs_environment_data、
+    利用者が答えられる条件 → conditional、別の資料 → 資料の確認）。
     """
     text: str = Field(description="確かめる点と照合の目的（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）。")
-    kind: Literal["environment", "user_condition"] = Field(
-        description="environment=利用者に聞いても分からない現場の値（設定値・ログ・記録・件数・処理の状態・対象レコードの値）。"
-                    "user_condition=利用者に聞けば分かる条件（質問で特定されていない対象（どのシステム・どの申請か）、"
-                    "利用者自身の状態（自分のロール・承認を得たか）、付与先・申請の種類）。迷うときは user_condition。")
+    who_can_answer: Literal["user", "system", "document"] = Field(
+        description="この点の値を答えられるもの。3 つは排他で、値の出どころで決める。"
+                    "user=質問した利用者本人が自分の状況として答えられる・決められる（自分のロール・権限を持つか、承認を得たか、"
+                    "どのシステム・申請・アカウントのことか、対象のアカウントの種類（検証用か・共用か）、付与先を個別とグループの"
+                    "どちらにするか、何をしたいか）。"
+                    "document=KB の資料に載っている事実（規程・マニュアル・コード表の規則・定義、台帳・一覧・表の値、どの版が"
+                    "有効か・廃止されたか）。取得した根拠に該当の行・記載があれば値は分かるので挙げない。"
+                    "system=稼働中のシステムにだけあり、資料にも利用者の答えにも無い値（今の設定値、エラーの時刻のログの行、"
+                    "処理の状態・実行の結果、件数・実績のデータ）。"
+                    "反例: 自分がロールを持つかは画面で確かめられても user。付与対象のアカウントが検証用かは利用者が知っているので user。"
+                    "対象のシステムの台帳の担当部署は台帳が資料なので document（根拠に台帳の行があれば挙げない）。"
+                    "どの版が有効かは利用者の環境ではなく資料が決めるので document。"
+                    "資料の例示値・記載時点の値が今の環境でも同じかは system。")
+    already_known: bool = Field(
+        description="true=質問・会話・「分かっている条件」・取得した根拠の原文から、値がすでに分かる"
+                    "（例: 利用者が「承認はもらっています」と書いた承認の有無、根拠が「第1版は廃止」と書いている適用の版）。"
+                    "false=まだ分からない。")
+    decides: bool = Field(
+        description="true=値によって回答の結論・選ぶ手順・可否が変わる（例: ロールの有無で自分で操作するか依頼するかが変わる）。"
+                    "false=値に関わらず同じ手順・結論で、念のための確認・補足にとどまる。")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _facts_from_legacy_kind(cls, value: Any) -> Any:
+        # 構造化出力を強制できない接続の応答・#1492 より前の記録は、文字列だけか種類（kind）だけを持つ。欠けた事実は
+        # 保守的に埋める（answer_envelope.confirmation_item_facts と同じ写し）: kind から誰が答えられるかを写し
+        # （種類も無ければシステムの値）、未確認・結論を分ける項目とする。モデルが返した値はそのまま検証する。
+        from rag_engine.generation.answer_envelope import confirmation_item_facts
+
+        if isinstance(value, str):
+            return confirmation_item_facts(value)
+        if isinstance(value, dict):
+            facts = confirmation_item_facts(value)
+            return {**{key: facts[key] for key in ("who_can_answer", "already_known", "decides")},
+                    **{key: item for key, item in value.items() if key != "kind"}}
+        return value
 
 
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
     request_coverage: list[RequestCoverage] = Field(default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。")
     items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
-    external_data_required: bool = Field(default=False, description="利用者に聞いても分からない現場の実値・履歴（kind=environment）に依存する結論が残るなら true。利用者に聞けば分かる条件（kind=user_condition）だけなら false。")
-    external_data_items: list[ExternalDataItem] = Field(default_factory=list, max_length=10, description="回答の確定に確かめる点（現場の実データと、利用者に確かめる条件）と照合の目的。種類を kind で分ける。資料は書かない。")
+    external_data_required: bool = Field(default=False, description="システムだけが持つ値（who_can_answer=system）に依存する結論が残るなら true。項目を external_data_items に挙げたときは、システムは項目の事実から決める。")
+    external_data_items: list[ExternalDataItem] = Field(default_factory=list, max_length=10, description="回答の確定に確かめる点と照合の目的。項目ごとに誰が答えられるか・すでに分かっているか・結論がその値で分かれるかを書く。資料名は reference_materials に書く。")
     reference_materials: list[str] = Field(default_factory=list, max_length=10, description="回答の確定に閲覧が必要な別の資料（規程・コード定義表・マスタ一覧・別マニュアルなど）と照合の目的。資料名は根拠の原文か質問に出た名前だけを「」で囲んで書き、無ければ資料の種類で書く。")
     question_type: list[str] = Field(default_factory=list, description="質問の種類の分類語（任意）。")
     summary: str = Field(description="items で裏付けた結論だけを1〜2文で。引用できる根拠が無ければ空文字。見出し・番号・出典・Markdown は書かない。")
     confidence: Literal["high", "medium", "low"] = Field(description="high=主要な説明と適用条件に直接の根拠がある。medium=一部に不確実性がある。low=案内自体に根拠が乏しい。")
 
-    @field_validator("external_data_items", mode="before")
-    @classmethod
-    def _plain_text_items_are_environment(cls, value: Any) -> Any:
-        # 種類の無い文字列だけの項目（構造化出力を強制できない接続の応答など）は、今までどおり現場の実データとして扱う。
-        if isinstance(value, list):
-            return [{"text": item, "kind": "environment"} if isinstance(item, str) else item for item in value]
-        return value
-
-    def environment_data_items(self) -> list[str]:
-        """現場の実データ（kind=environment）の確認。"""
-        return [item.text.strip() for item in self.external_data_items if item.kind == "environment" and item.text.strip()]
-
-    def user_condition_items(self) -> list[str]:
-        """利用者に確かめる条件（kind=user_condition）。"""
-        return [item.text.strip() for item in self.external_data_items if item.kind == "user_condition" and item.text.strip()]
-
-    def requires_environment_data(self) -> bool:
-        """回答の確定に現場の実データの確認が要るか (#1453)。
-
-        現場の実データの項目があれば要る。モデルが external_data_required を立てても、挙げた項目が利用者に確かめる
-        条件だけなら要らない（条件付きの回答にする）。項目が無く印だけのときは、今までどおり印に従う。
-        """
-        if self.environment_data_items():
-            return True
-        return self.external_data_required and not self.user_condition_items()
+    def confirmation_items(self) -> list[dict[str, Any]]:
+        """確認の項目の事実（`answer_envelope.settle_confirmation_items` の入力。#1492）。"""
+        return [item.model_dump() for item in self.external_data_items]
 
 
 class GroundedItemReview(_StrictModel):

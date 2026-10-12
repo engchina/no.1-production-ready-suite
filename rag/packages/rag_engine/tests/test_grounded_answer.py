@@ -553,7 +553,7 @@ class GroundedAnswerTest(unittest.TestCase):
         from rag_engine.models.llm import ExternalDataItem, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
         # extra="forbid" のため、スキーマに無い欄を指示どおり出力すると検証エラーになる。
-        external_kinds = set(get_args(ExternalDataItem.model_fields["kind"].annotation))
+        external_kinds = set(get_args(ExternalDataItem.model_fields["who_can_answer"].annotation))
         known = (set(GroundedDraft.model_fields) | set(GroundedItem.model_fields) | set(task_contract(QUESTION))
                  | set(ExternalDataItem.model_fields) | external_kinds
                  | {"bbox", "context_bbox", "target_highlight", "asset_kind"} | set(_answer_image_metadata([])))
@@ -1801,6 +1801,31 @@ class ConditionPhraseTest(unittest.TestCase):
         self.assertEqual(grounded._condition_phrase("適用日を過ぎた"), "適用日を過ぎた場合")
         self.assertEqual(grounded._condition_phrase("「拠点倉庫名」欄が空白"), "「拠点倉庫名」欄が空白の場合")
         self.assertEqual(grounded._condition_phrase("登録済みでない"), "登録済みでない場合")
+
+    def test_trailing_particles_after_a_noun_are_dropped(self):
+        # 原文の句「検証用アカウントには」をそのまま条件にすると「（検証用アカウントにはの場合）」になっていた (#1501)。
+        cases = {
+            "検証用アカウントには": "検証用アカウントの場合",
+            "検証用アカウントでは": "検証用アカウントの場合",
+            "本社の部署へは": "本社の部署の場合",
+            "グループに": "グループの場合",
+            "「拠点倉庫名」欄には": "「拠点倉庫名」欄の場合",
+            "SYS-105には": "SYS-105の場合",
+            # 実サービス m1500 の「（ロールを持たない利用者は、の場合）」。読点と助詞を落とす。
+            "ロールを持たない利用者は、": "ロールを持たない利用者の場合",
+            # 用言で終わる条件・意味を持つ語尾（「までは」「からは」）はそのまま。
+            "月末までは": "月末までの場合",
+            "4月からは": "4月からの場合",
+            "グループに付与する": "グループに付与する場合",
+            "有効期限を過ぎた": "有効期限を過ぎた場合",
+            "顧客名簿にのみ適用": "顧客名簿にのみ適用の場合",
+        }
+        for condition, phrase in cases.items():
+            with self.subTest(condition=condition):
+                self.assertEqual(grounded._condition_phrase(condition), phrase)
+        # 漢字 1 字＋「に」の副詞・助詞だけの条件は落とさない（空の条件にしない）。
+        self.assertTrue(grounded._condition_phrase("アカウントが既に").startswith("アカウントが既に"))
+        self.assertEqual(grounded._condition_phrase("は"), "はの場合")
 
 
 class OperationHintFeedbackTest(unittest.TestCase):

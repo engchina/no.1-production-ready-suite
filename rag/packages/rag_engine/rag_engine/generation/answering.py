@@ -152,7 +152,13 @@ from rag_engine.generation.execution_record import (
     _record_answer_execution,
     format_question_display,
 )
-from rag_engine.generation.answer_envelope import build_envelope, envelope_item, fallback_envelope
+from rag_engine.generation.answer_envelope import (
+    REFERENCE_CONFIRMATION_PREFIX,
+    build_envelope,
+    envelope_item,
+    fallback_envelope,
+    requires_environment_data,
+)
 from rag_engine.generation.answer_models import (
     ANSWER_FLOWS,
     QUERY_STRATEGY_DISPLAY_SEPARATOR,  # tests/test_answer_execution.py が answering 経由で参照する
@@ -1443,6 +1449,12 @@ def synthesize_grounded_answer(
         current = replace(current, summary=grounded.NEUTRAL_SUMMARY)
     if image_decision["reason"] == "attempted":
         image_decision["reason"] = "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
+    # 廃止・旧版の文書の説明は、今の手順・規則として公開せず原文のみ提示にする（#1492）。生成の是正では直せない
+    # ので、採用した round の確定の段で決定的に行う。
+    superseded = grounded.superseded_evidence_ids(question, spans)
+    superseded_withheld = grounded.withhold_superseded(current.checked, superseded)
+    # 旧版を原文のみ提示にしたことは検査の不合格ではないので、信頼度・人の確認の判定に数えない。
+    problems = current.problems - superseded_withheld
     # 監査が目的不一致とした round は、支持済み item があっても公開しない (#950)。
     off_goal = grounded.off_goal(current, question)
     published = [] if off_goal else [entry for entry in current.checked if entry.span]
@@ -1465,13 +1477,20 @@ def synthesize_grounded_answer(
     # 回答に実際に出す根拠。参照欄と画像の参照はこれに同期する。
     shown = published
     gap_items = [grounded.CheckedItem(GroundedItem(kind="gap", text=gap)) for gap in gaps]
+    # 確認の項目をモデルが書いた事実（誰が答えられるか・すでに分かっているか・結論を分けるか）から規則で分ける
+    # （#1492）。分かっている条件（業務ガイドの条件）を確かめる項目と、旧版・廃止の版を根拠が決めているときの版の
+    # 確認は数えない。
+    settled = grounded.settle_confirmations(
+        current.draft, known_conditions=settings.known_conditions,
+        version_settled=bool(superseded) and any(str(span.get("evidence_id")) not in superseded for span in spans))
     # 回答の確定に必要な実データ・別の資料の確認。どの分岐でも本文の最後の節に出す (#688)。
-    confirmations = grounded.confirmation_lines(current.draft, question, spans)
+    confirmations = grounded.confirmation_lines(current.draft, question, spans, settled)
     # 利用者に聞けば分かる条件（対象・ロール・承認など）。本文では同じ節の先頭に出し、回答の構造では
     # 現場の実データではなく適用の条件にする (#1453)。
-    user_conditions = current.draft.user_condition_items()
-    confirmation_section = [*grounded.user_condition_lines(current.draft), *confirmations]
-    external_data_required = current.draft.requires_environment_data()
+    user_conditions = list(settled.user)
+    confirmation_section = [*grounded.user_condition_lines(settled), *confirmations]
+    external_data_required = requires_environment_data(
+        settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required)
     # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
     envelope_entries: list[grounded.CheckedItem] = []
     if actionable:
@@ -1513,7 +1532,7 @@ def synthesize_grounded_answer(
     confidence = current.draft.confidence
     if not current.verified or off_goal:
         confidence = "low"
-    elif confidence == "high" and (current.problems or unanswered or unsettled or unread):
+    elif confidence == "high" and (problems or unanswered or unsettled or unread):
         confidence = "medium"
     unverified = any(e.item.applies == "unverified" for e in unsettled)
     trace = {
@@ -1521,10 +1540,13 @@ def synthesize_grounded_answer(
         "same_unit_fill": unit_fill,
         "rounds": rounds, "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
         "final_fact_count": len(published),
+        # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
+        # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
+        "grounded_draft": draft_structure(current.draft, settled, superseded=superseded, withheld=superseded_withheld),
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
         # 参照欄は公開した引用だけに同期する。
-        "finalization": {"filtered": bool(current.problems), "citations_synchronized": True, "off_goal": off_goal,
+        "finalization": {"filtered": bool(problems), "citations_synchronized": True, "off_goal": off_goal,
                          "retained_evidence_ids": sorted({e.span["evidence_id"] for e in shown}), "retained_passage_ids": []},
     }
     envelope = build_envelope(
@@ -1534,6 +1556,10 @@ def synthesize_grounded_answer(
         gaps=[*gaps, *unread], confirmations=confirmations, user_conditions=user_conditions,
         external_data_required=external_data_required,
         reference_materials=_string_list(current.draft.reference_materials), off_goal=off_goal,
+        # 別の資料で確かめる確認の項目（who_can_answer=document。#1492）は資料の不足として条件付きにする。
+        # 本文に出した行（資料名を創作していない行）だけを載せ、本文と食い違わないようにする。
+        document_items=[text for text in settled.document
+                        if f"{REFERENCE_CONFIRMATION_PREFIX}{text}" in confirmations],
     )
     response = _normalize_answer_response(AnswerResponse(
         envelope=envelope,
@@ -1542,16 +1568,35 @@ def synthesize_grounded_answer(
             "page": e.span.get("page", ""), "look_at": "引用", "visible_evidence": e.item.quote[:200]} for e in shown])),
         reasoning_summary=f"引用照合済みの説明 {current.verified} 件、原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、原文と一致せず除外 {len(current.dropped)} 件。",
         insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
-        needs_human_review=bool(gaps or unread or unanswered or current.problems or external_data_required or unverified
-                                or current.draft.reference_materials),
+        needs_human_review=bool(gaps or unread or unanswered or problems or external_data_required or unverified
+                                or current.draft.reference_materials or settled.document),
         external_data_required=external_data_required,
-        external_data_items=tuple(current.draft.environment_data_items()),
+        external_data_items=settled.system,
         raw_text=current.draft.model_dump_json(),
         evidence_facts=tuple({"source_id": e.span["source_id"], "evidence_id": e.span["evidence_id"], "quote": e.item.quote}
                              for e in published),
         generation_trace=trace,
     ))
     return GroundedAnswer(response, context, tuple(images), mode)
+
+
+def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set[str] = (), withheld: int = 0) -> dict[str, Any]:
+    """回答の診断に残す草稿の構造（#1492）。
+
+    確認の項目（text と事実）・規則で分けた結果・説明の種類と適用（本文・引用は除く）・別の資料・旧版として
+    原文のみ提示にした根拠。大きさは草稿の上限（items 40 件・確認の項目 10 件）で抑えられる。
+    """
+    return {
+        "confirmation_items": draft.confirmation_items(),
+        "settled_confirmations": settled.diagnostics(),
+        "external_data_required": bool(draft.external_data_required),
+        "reference_materials": _string_list(draft.reference_materials),
+        "items": [{"kind": item.kind, "request_id": item.request_id, "evidence_id": item.evidence_id,
+                   "applies": item.applies, "condition": item.condition} for item in draft.items],
+        "confidence": draft.confidence,
+        "superseded_evidence_ids": sorted(superseded),
+        "superseded_withheld": withheld,
+    }
 
 
 def _request_coverage_budget(settings: Settings) -> CoverageBudget:
