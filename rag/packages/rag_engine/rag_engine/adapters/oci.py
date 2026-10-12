@@ -532,11 +532,15 @@ def _record_usage(response: Any, provider: LlmProviderSettings, text_format: typ
     """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。"""
     usage = response_usage(response)
     record_llm_usage({**usage, "seconds": seconds})
+    # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
         "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
         "reasoning_tokens=%d status=%s",
         provider.model, getattr(text_format, "__name__", str(text_format)), seconds, usage["input_tokens"],
         usage["cached_tokens"], usage["output_tokens"], usage["reasoning_tokens"], _value(response, "status"),
+        extra={"event": "llm_call_usage", "llm_model": str(provider.model),
+               "llm_schema": getattr(text_format, "__name__", str(text_format)), "llm_seconds": round(seconds, 1),
+               "llm_status": str(_value(response, "status") or ""), **usage},
     )
 
 

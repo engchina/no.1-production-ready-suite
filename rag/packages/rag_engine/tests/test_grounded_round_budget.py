@@ -268,6 +268,10 @@ class LlmUsageTest(unittest.TestCase):
         self.assertEqual(snapshot, {"calls": 1, "input_tokens": 5000, "cached_tokens": 1000, "output_tokens": 800,
                                     "reasoning_tokens": 600, "seconds": 42.0})
         self.assertIn("schema=GroundedDraft seconds=42.0 input_tokens=5000", logs.output[0])
+        # backend の構造化 log は外部の logger の本文を出さないので、値は extra の項目でも渡す。
+        logged = logs.records[0]
+        self.assertEqual((logged.event, logged.llm_schema, logged.llm_seconds, logged.input_tokens, logged.reasoning_tokens),
+                         ("llm_call_usage", "GroundedDraft", 42.0, 5000, 600))
         # usage の無い応答（スタブ・古い endpoint）でも失敗しない。
         oci._record_usage(SimpleNamespace(status="completed"), SimpleNamespace(model="m"), GroundedAudit, 1.0)
 
