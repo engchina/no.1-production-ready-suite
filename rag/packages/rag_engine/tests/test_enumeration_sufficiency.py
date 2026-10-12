@@ -6,10 +6,20 @@ CRAG の評価器が「足りる」と判定しても、列挙の問は件数・
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
-from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context, _settings
+from test_section_expansion import (
+    Grader,
+    SectionStub,
+    _attempt,
+    _child_ids,
+    _expand,
+    _members,
+    _seed_context,
+    _settings,
+)
 
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grade_crag_retrieval
@@ -247,3 +257,62 @@ def test_counted_enumeration_relies_on_the_counted_aspect():
     enough = _expand(_seed_context("c31a"), _settings(), grader2, stub2, last=_attempt(sufficient=True),
                      question=BUSINESS_DAY_FIVE)
     assert enough.stop_reason == sections.STOP_SUFFICIENT and stub2.read_calls == [] and grader2.calls == []
+
+
+class TitledSectionStub(SectionStub):
+    """表題の章節（level 1）が文書の全部の chunk を持ち、章をその下に置く章節ナビゲーション（#1526）。
+
+    PDF の表題が level 1 の見出しになる文書。文書全体（根）の段では、表題の章節を読んだ後に足す根拠が無い。
+    """
+
+    def outline(self, *, chunk_uid: str, **_: object) -> sections.SectionOutline | None:
+        outline = super().outline(chunk_uid=chunk_uid)
+        assert outline is not None
+        root, *rest = outline.sections
+        moved = [replace(item, parent_section_id="title") if item.parent_section_id == root.section_id else item
+                 for item in rest]
+        title = replace(root, section_id="title", title="点検要領", level=1, parent_section_id=root.section_id)
+        return replace(outline, sections=(root, title, *moved))
+
+    def chunks(self, *, document_id: str, chunk_set_id: str, section_id: str, **options: object):
+        chunks = super().chunks(document_id=document_id, chunk_set_id=chunk_set_id,
+                                section_id="document" if section_id == "title" else section_id, **options)
+        self.read_calls[-1] = section_id
+        return chunks
+
+
+def test_document_scope_keeps_sections_read_before_the_document_level():
+    stub, grader = TitledSectionStub(), Grader(needs=set())
+
+    result = _expand(_seed_context("c4a"), _settings(), grader, stub, last=_attempt(sufficient=True),
+                     question=DO_NOT_TOUCH)
+
+    # 第4章 → 表題の章節（文書の全部）を判定を飛ばして読み、文書全体の段は足す根拠が無い（in_context）。それでも
+    # 読んだ根拠を生成に渡し（applied）、判定を 1 回だけ呼ぶ。
+    assert stub.read_calls[:2] == ["s4", "title"]
+    assert [level.get("grade_skipped") for level in result.trace["levels"]] == ["minimum_scope", "minimum_scope", None]
+    assert grader.calls == [3]
+    assert result.applied and result.stop_reason == sections.STOP_SUFFICIENT
+    assert set(_child_ids(result.context)) == set(_members("document"))
+
+
+def test_document_scope_returns_read_sections_even_when_still_not_enough():
+    stub, grader = TitledSectionStub(), Grader(needs=None)
+
+    result = _expand(_seed_context("c4a"), _settings(), grader, stub, last=_attempt(sufficient=True),
+                     question=DO_NOT_TOUCH)
+
+    # 読んだ後の判定でも足りない: 文書全体まで読んで止め、読んだ根拠は捨てない。
+    assert grader.calls == [3] and result.stop_reason == sections.STOP_DOCUMENT
+    assert result.applied and set(_child_ids(result.context)) == set(_members("document"))
+
+
+def test_max_levels_before_the_reading_scope_still_returns_read_sections():
+    stub, grader = TitledSectionStub(), Grader(needs=None)
+
+    result = _expand(_seed_context("c4a"), _settings(section_expansion_max_levels=2), grader, stub,
+                     last=_attempt(sufficient=True), question=DO_NOT_TOUCH)
+
+    # 読む範囲（文書全体）に届く前に段の上限で止めても、判定を飛ばした段で読んだ根拠は返す。
+    assert grader.calls == [] and result.stop_reason == sections.STOP_MAX_LEVELS
+    assert result.applied and "c2a" in _child_ids(result.context)
