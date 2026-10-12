@@ -92,7 +92,7 @@ class PurposeReasoningEffortTests(unittest.TestCase):
                          "推論の量: high（質問拡張戦略の判定・検索文の生成の設定。モデルの登録値は medium）")
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION), "推論の量: medium（モデルの登録値）")
         self.assertEqual(llm_reasoning_effort_note(replace(settings, generation_reasoning_effort="none"),
-                                                   LLM_PURPOSE_GENERATION), "推論の量: 送らない（回答の生成・監査の設定）")
+                                                   LLM_PURPOSE_GENERATION), "推論の量: 送らない（回答文の生成の設定）")
         self.assertEqual(llm_reasoning_effort_note(_settings(answer_effort="", judge_reasoning_effort="high"),
                                                    LLM_PURPOSE_JUDGE), "推論の量: 送らない（モデルの登録値が none）")
 

@@ -290,17 +290,24 @@ class Settings:
     section_extraction_concurrency: int = 4
     # 用途ごとの推論(思考)の量の上書き(#1499)。空はモデルの登録値(`LlmProviderSettings.reasoning_effort`)の
     # まま、none は送らない、low / medium / high はその値を送る。質問拡張戦略の判定と検索文の生成、根拠の評価
-    # (CRAG の評価と章節の拡張の十分性の判定)、回答文の生成・監査で分ける。モデルの登録値が none(送らない)の
-    # モデルには、上書きしても送らない(推論を受け付けないモデルがある。platform の `pr_system_settings.model`
-    # の実測)。
+    # (CRAG の評価と章節の拡張の十分性の判定)、回答文の生成、生成後の監査(#1528)で分ける。モデルの登録値が
+    # none(送らない)のモデルには、上書きしても送らない(推論を受け付けないモデルがある。platform の
+    # `pr_system_settings.model` の実測)。
     strategy_reasoning_effort: str = ""
     judge_reasoning_effort: str = ""
     generation_reasoning_effort: str = ""
-    # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。全要求の根拠が語の一致で
-    # 「根拠あり」(要求ごとの根拠の確認と同じ判定)で、rerank の最上位の score が閾値以上のときだけ。
+    audit_reasoning_effort: str = ""
+    # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
+    # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
+    # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。
     # 生成後の監査は飛ばさない。
     crag_skip_on_strong_signals: bool = False
     crag_skip_min_rerank_score: float = 0.8
+    # CRAG の評価の入力を詰める(#1528): 候補を生成と同じ親の数(max_context_records)にし、JSON を詰めて書き、
+    # 候補の ID は chunk_uid だけにする。候補の除外・missing_aspects・列挙の項目の働きは変えない。
+    crag_compact_input: bool = False
+    # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
+    section_skip_regrade_at_scope: bool = False
     # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
     query_expansion_max_queries: int = 5
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
@@ -479,6 +486,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
         generation_reasoning_effort=normalize_reasoning_effort_override(
             env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
+        audit_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_AUDIT_REASONING_EFFORT")),
+        crag_compact_input=_env_bool(env, "RAG_ENGINE_CRAG_COMPACT_INPUT", False),
+        section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
         crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
         crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),
         query_expansion_max_queries=max(1, _env_int(env, "RAG_ENGINE_QUERY_EXPANSION_MAX_QUERIES", 5)),
@@ -513,19 +523,22 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
 
 # 回答の LLM の呼び出しの用途(#1499)。用途ごとに推論の量を上書きできる。
 # 質問拡張戦略の判定と検索文の生成(strategy)・根拠の評価(judge。CRAG の評価と章節の拡張の十分性の判定)・
-# 回答文の生成と監査(generation)。
+# 回答文の生成(generation)・生成後の監査(audit。#1528)。
 LLM_PURPOSE_STRATEGY = "strategy"
 LLM_PURPOSE_JUDGE = "judge"
 LLM_PURPOSE_GENERATION = "generation"
+LLM_PURPOSE_AUDIT = "audit"
 _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_STRATEGY: "strategy_reasoning_effort",
     LLM_PURPOSE_JUDGE: "judge_reasoning_effort",
     LLM_PURPOSE_GENERATION: "generation_reasoning_effort",
+    LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
 }
 _PURPOSE_LABELS = {
     LLM_PURPOSE_STRATEGY: "質問拡張戦略の判定・検索文の生成",
     LLM_PURPOSE_JUDGE: "根拠の評価",
-    LLM_PURPOSE_GENERATION: "回答の生成・監査",
+    LLM_PURPOSE_GENERATION: "回答文の生成",
+    LLM_PURPOSE_AUDIT: "回答の監査",
 }
 # 上書きに使える値(platform の推論の量の選択肢と同じ。none は送らない)。
 REASONING_EFFORT_OVERRIDES = ("none", "low", "medium", "high")

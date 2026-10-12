@@ -2063,6 +2063,45 @@ def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> Non
     assert changed.query_expansion_max_queries == 3
 
 
+def test_build_engine_settings_passes_judge_latency_settings(tmp_path: Any) -> None:
+    """監査の推論の量・CRAG の評価の入力の圧縮・評価し直しの省略を渡す(#1528)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    changed = build_engine_settings(
+        Settings(
+            rag_audit_reasoning_effort="high",
+            rag_crag_compact_input=False,
+            rag_section_skip_regrade_at_scope=False,
+        ),
+        output_dir=tmp_path,
+    )
+    omitted = build_engine_settings(
+        Settings(rag_audit_reasoning_effort="none"), output_dir=tmp_path
+    )
+
+    assert default.audit_reasoning_effort == _engine_effort(Settings().rag_audit_reasoning_effort)
+    assert default.crag_compact_input is Settings().rag_crag_compact_input
+    assert default.section_skip_regrade_at_scope is Settings().rag_section_skip_regrade_at_scope
+    assert changed.audit_reasoning_effort == "high"
+    assert changed.crag_compact_input is False and changed.section_skip_regrade_at_scope is False
+    assert omitted.audit_reasoning_effort == "none"
+    model = build_engine_settings(
+        Settings(
+            rag_audit_reasoning_effort="model",
+            rag_crag_compact_input=True,
+            rag_section_skip_regrade_at_scope=True,
+        ),
+        output_dir=tmp_path,
+    )
+    assert model.audit_reasoning_effort == ""
+    assert model.crag_compact_input is True and model.section_skip_regrade_at_scope is True
+
+
+def _engine_effort(value: str) -> str:
+    return "" if value == "model" else value
+
+
 async def test_prefetch_warms_search_cache_without_changing_results() -> None:
     """元の質問の先読み(#1499)は検索の cache に入れるだけで、続く検索の結果を変えない。"""
     from app.rag.answer_engine import _SearchState

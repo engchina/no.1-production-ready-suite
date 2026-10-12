@@ -217,6 +217,7 @@ from rag_engine.knowledge.runtime_knowledge import (
     runtime_knowledge_status,
 )
 from rag_engine.config import (
+    LLM_PURPOSE_AUDIT,
     LLM_PURPOSE_GENERATION,
     LLM_PURPOSE_JUDGE,
     LLM_PURPOSE_STRATEGY,
@@ -803,7 +804,8 @@ def build_crag_answer_context(
                                    document_selection=context.document_selection or best_context.document_selection)
             context = best_context
 
-        skip = _crag_grade_skip(question, context, settings) if attempt_number == 1 else None
+        skip_check = _crag_grade_skip_check(question, context, settings) if attempt_number == 1 else {}
+        skip = skip_check if skip_check.get("skip") else None
         if skip is not None:
             # 規則の信号が強いときは LLM の評価を飛ばして生成へ進む (#1499。既定 off)。生成後の監査は飛ばさない。
             with _execution_step("根拠確認（1回目）", "集めた根拠で質問に答えられるかを LLM が判定します。") as step:
@@ -822,6 +824,9 @@ def build_crag_answer_context(
             if attempt_number == 1 and (note := llm_reasoning_effort_note(
                     settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
                 step.add(note)
+            if skip_check.get("reason") and skip_check["reason"] != "disabled":
+                # 省略の設定が有効でも評価器を呼んだ理由（曖昧な帯・必ず呼ぶ質問。#1528）。
+                step.add(f"LLM の評価を省略しない理由: {skip_check['reason']}")
             try:
                 attempt = _grade_crag_retrieval(
                     attempt_number,
@@ -831,6 +836,9 @@ def build_crag_answer_context(
                     context,
                     settings,
                     answer_llm_provider=answer_llm_provider,
+                    # 詰めた入力 (#1528) では、評価器に見せる候補を生成に渡す親の数にそろえる。章節の拡張の判定は
+                    # 広げた章節を見せるため、この上限を掛けない。
+                    max_candidates=max_records,
                 )
             except Exception as exc:
                 attempt = CragRetrievalAttempt(
@@ -967,42 +975,107 @@ def _top_rerank_score(context: AnswerContext) -> float | None:
 
 
 def _crag_grade_skip(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any] | None:
-    """CRAG の評価（1 回目）を飛ばす条件と理由 (#1499)。飛ばさないときは None。
+    """CRAG の評価（1 回目）を飛ばす条件と理由 (#1499 / #1528)。飛ばさないときは None。"""
+    check = _crag_grade_skip_check(question, context, settings)
+    return check if check.get("skip") else None
 
-    条件はすべて決定的（LLM を呼ばない）: 設定で有効、根拠がある、rerank の最上位の score が閾値以上、質問の
-    要求をすべて判定でき、すべてが語の一致で「根拠あり」（要求ごとの根拠の確認と同じ判定）、定義を問う語の
-    定義本文がある、エラー文を問う質問ではない（評価器はエラー文の一致を候補ごとに確かめるため）、列挙・網羅・
-    件数を求める質問ではない（取得した根拠で網羅できたかを語の一致では確かめられない。#1503）。
+
+def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Settings) -> dict[str, Any]:
+    """CRAG の評価を飛ばすかの決定的な判定 (#1499。#1528 で曖昧な帯だけ評価器を呼ぶ形に見直した)。
+
+    CRAG 論文の評価器の閾値の方式に合わせ、規則の信号が「強い」ときだけ評価器を呼ばず、それ以外（曖昧な帯・
+    弱い信号）は呼ぶ。返り値の ``skip`` が True なら飛ばす。``reason`` は飛ばさない理由（実行記録に出す）。
+
+    強い: 設定で有効、根拠がある、rerank の最上位の score が閾値以上、質問の要求を 1 件以上判定でき、語の一致で
+    根拠の無い要求（missing）が無い（weak は可。多段の問は要求の語が 1 つの根拠にそろわないことが普通で、
+    #1499 の条件（すべて supported）では 5 問中 1 問しか効かなかった）、定義を問う語の定義本文がある。
+    必ず呼ぶ: エラー文を問う質問（評価器の判定をエラー文の一致で候補ごとに外す。#999）、列挙・網羅・件数の質問
+    （取得した根拠で網羅できたかを語の一致では確かめられない。列挙の項目は評価器が挙げる。#1503）、候補の除外が
+    要る根拠（新しい版に置き換えた旧版の文書、別の文書に同じ本文がある重複）がある（評価器の relevant=false の
+    除外を保つ）。
     """
     if not getattr(settings, "crag_skip_on_strong_signals", False):
-        return None
+        return {"skip": False, "reason": "disabled"}
     if not context.records or not context.text.strip():
-        return None
+        return {"skip": False, "reason": "根拠が無い"}
+    contract = task_contract(question)
+    if contract["error_messages"] or _ERROR_QUESTION.search(unicodedata.normalize("NFKC", question)):
+        return {"skip": False, "reason": "エラー文を問う質問"}
+    # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
+    if (contract.get("goal") in {"count", "recipient_list"} or contract.get("enumeration")
+            or _ENUMERATION_QUESTION.search(question)):
+        return {"skip": False, "reason": "列挙・網羅・件数を問う質問"}
+    if exclusion := _crag_exclusion_needed(context):
+        return {"skip": False, "reason": exclusion}
     threshold = float(getattr(settings, "crag_skip_min_rerank_score", 1.0))
     score = _top_rerank_score(context)
-    if score is None or score < threshold:
-        return None
-    contract = task_contract(question)
-    if contract["error_messages"]:
-        return None
-    # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
-    if contract.get("goal") in {"count", "recipient_list"} or _ENUMERATION_QUESTION.search(question):
-        return None
+    if score is None:
+        return {"skip": False, "reason": "rerank の score が無い"}
+    if score < threshold:
+        return {"skip": False, "reason": f"rerank の最上位の score {score:.3f} が閾値 {threshold:.3f} 未満"}
     labels = definition_labels(question)
     if labels:
         covered = {d["label"] for r in context.records for d in definition_ranges(r.text, labels)}
         if any(label not in covered for label in labels):
-            return None
+            return {"skip": False, "reason": "定義を問う語の定義本文が無い"}
     rows = assess_targets(coverage_targets(question, _coverage_tokenizer(settings)), evidence_texts(context))
-    if not rows or any(row["status"] != "supported" for row in rows):
-        return None
+    assessed = [row for row in rows if row["status"] != "unassessed"]
+    if not assessed:
+        return {"skip": False, "reason": "質問の要求を語の一致で判定できない"}
+    # 一部一致（weak）の要求は、要求の語が根拠の全体（複数の根拠の和）にそろうときだけ強いとみなす。多段の問は語が
+    # 根拠ごとに分かれるが、別の要求（「…と、出張旅費の上限額」）の語が根拠のどこにも無ければ曖昧な帯にする。
+    joined = "\n".join(text for _key, text in evidence_texts(context))
+    weak_union = {row["id"]: _union_ratio(row, joined) for row in assessed if row["status"] == "weak"}
+    missing = [row for row in assessed if row["status"] == "missing"
+               or row["status"] == "weak" and weak_union[row["id"]] < _CRAG_SKIP_WEAK_UNION_RATIO]
+    if missing:
+        return {"skip": False, "reason": f"語の一致で根拠の無い要求が {len(missing)} 件"}
+    counts = {status: sum(row["status"] == status for row in assessed) for status in ("supported", "weak")}
     return {
+        "skip": True,
         "lines": [f"rerank の最上位の score {score:.3f}（閾値 {threshold:.3f} 以上）",
-                  f"質問の要求 {len(rows)} 件がすべて語の一致で根拠あり"],
+                  f"質問の要求 {len(assessed)} 件に語の一致で根拠あり（一致 {counts['supported']} 件・"
+                  f"一部一致 {counts['weak']} 件、根拠なし 0 件）"],
         "trace": {"top_rerank_score": score, "min_rerank_score": threshold,
                   "requests": [{"id": row["id"], "status": row["status"], "best_ratio": row.get("best_ratio")}
                                for row in rows]},
     }
+
+
+# 一部一致の要求を強いとみなす、根拠の全体に現れる要求の語の割合（#1528）。
+_CRAG_SKIP_WEAK_UNION_RATIO = 0.8
+# エラー文・エラーコードを問う質問（質問契約の error_messages が拾わない「E0123」「ERR-12」などのコードも含む）。
+_ERROR_QUESTION = re.compile(r"エラー|[A-Za-z]{1,5}-?\d{3,}")
+
+
+def _union_ratio(row: dict[str, Any], joined: str) -> float:
+    """要求の語のうち、根拠の全体（親子の本文をつないだもの）のどこかに現れる語の割合。"""
+    terms = row.get("terms") or []
+    return sum(term in joined for term in terms) / len(terms) if terms else 0.0
+
+
+# 重複とみなす本文の長さの下限（字）。短い定型文（「以上」「目的」など）は文書をまたいで一致しても重複にしない。
+_DUPLICATE_MIN_CHARS = 40
+
+
+def _crag_exclusion_needed(context: AnswerContext) -> str:
+    """評価器による候補の除外（relevant=false）が要る根拠があれば理由を返す (#1528)。
+
+    新しい版に置き換えた旧版の文書の根拠（backend の ``document_superseded``。#1492）と、別の文書に同じ本文がある
+    根拠（版の違う文書・写しの文書）は、評価器が候補ごとに判定して末尾へ回す。決定的な規則では選べない。
+    """
+    records = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
+    if any((getattr(record, "metadata", None) or {}).get("document_superseded") is True for record in records):
+        return "新しい版に置き換えた旧版の文書の根拠がある"
+    owners: dict[str, str] = {}
+    for record in records:
+        body = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(getattr(record, "body_text", "") or record.text or "")))
+        if len(body) < _DUPLICATE_MIN_CHARS:
+            continue
+        source = str(getattr(record, "source", "") or getattr(record, "source_run_id", "") or "")
+        if owners.setdefault(body, source) != source:
+            return "別の文書に同じ本文の根拠がある"
+    return ""
 
 
 def _recover_crag_context(context: AnswerContext, attempt: CragRetrievalAttempt,
@@ -1070,10 +1143,14 @@ def _grade_crag_retrieval(
     settings: Settings,
     *,
     answer_llm_provider: str | None = None,
+    max_candidates: int | None = None,
 ) -> CragRetrievalAttempt:
+    compact = bool(getattr(settings, "crag_compact_input", False))
     output = parse_text_response(
         CRAG_GRADER_SYSTEM_PROMPT,
-        _build_crag_grade_prompt(question, active_query, retrieval_queries, context),
+        # 詰めた入力 (#1528) は候補を JSON の空白なし・chunk_uid だけで書き、候補の数を max_candidates にする。
+        _build_crag_grade_prompt(question, active_query, retrieval_queries, context, compact=compact,
+                                 max_candidates=max_candidates if compact else None),
         # 十分 / 不足の判定(CRAG の評価と章節の拡張の十分性の判定)は根拠の評価の推論の量で呼ぶ (#1499)。
         settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
         CragRetrievalGradeOutput,
@@ -1374,6 +1451,8 @@ def synthesize_grounded_answer(
     provider = answer_llm_provider
     source_provider = answer_llm_provider or settings.default_answer_llm
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
+    # 監査は生成と別の推論の量で呼ぶ (#1528。判定の仕事なので生成ほど推論を要らない)。
+    audit_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_AUDIT)
     images, mode = tuple(image_evidence), image_prompt_mode
     rounds: list[dict[str, Any]] = []
     best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
@@ -1400,15 +1479,19 @@ def synthesize_grounded_answer(
         with budget.round(), _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
                              "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。" if number == 0 else "") as step:
             try:
-                # 生成と監査は回答の生成・監査の推論の量で呼ぶ (#1499。run_round は settings を LLM の呼び出しにだけ使う)。
+                # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
+                # 呼び出しにだけ使う)。
                 current = grounded.run_round(
                     question, spans, generation_settings, prompt=prompt, provider_id=provider,
+                    audit_settings=audit_settings,
                     image_provider_id=settings.default_vision_llm,
                     parse_text=parse_text_response, parse_images=parse_multimodal_response,
                     previous=best[0].checked if best is not None else (), known_gaps=known_gaps,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [])
-                if number == 0 and (note := llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION, provider)):
-                    step.add(note)
+                if number == 0:
+                    for purpose in (LLM_PURPOSE_GENERATION, LLM_PURPOSE_AUDIT):
+                        if note := llm_reasoning_effort_note(settings, purpose, provider):
+                            step.add(("監査の" if purpose == LLM_PURPOSE_AUDIT else "生成の") + note)
             except Exception as exc:
                 # 回答の確定の分を残した期限で切れた（#1516）なら、確かめ終わった round で確定する。1 組目の生成が
                 # 切れたときは草稿が無いので、関係する資料の記載だけを示す。外側の期限・取り消し・他の失敗は送出する。
@@ -2863,6 +2946,7 @@ _SECTION_STOP_LABELS = {
     "no_sections": "章節の対応なし",
     "grade_error": "判定に失敗",
     "disabled": "無効",
+    "scope_read": "読む範囲（文書全体）まで読んだ",
 }
 
 
@@ -2871,7 +2955,13 @@ def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tup
     grades = (expansion.trace.get("grades") if expansion is not None else None) or []
     if grades:
         return tuple(grades[-1].get("missing_aspects") or ())
-    return attempts[-1].missing_aspects if attempts else ()
+    gaps = attempts[-1].missing_aspects if attempts else ()
+    if expansion is not None and expansion.stop_reason == "scope_read":
+        # 読む範囲（文書全体）まで読み、評価し直しを省いた (#1528)。内容の観点の欠けは広げる前の根拠の判定なので
+        # 渡さない（文書全体を読んだ後の根拠には当てはまらない）。適用の観点などはそのまま渡す。
+        from rag_engine.generation.section_expansion import CONTENT_ASPECTS
+        gaps = tuple(aspect for aspect in gaps if aspect not in CONTENT_ASPECTS)
+    return gaps
 
 
 def _section_evidence_budget(context: AnswerContext, settings: Settings, expansion: Any) -> int | None:

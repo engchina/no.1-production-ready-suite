@@ -671,6 +671,10 @@ class EvaluationRagOverrides(BaseModel):
     strategy_reasoning_effort: ReasoningEffortOverride | None = None
     judge_reasoning_effort: ReasoningEffortOverride | None = None
     generation_reasoning_effort: ReasoningEffortOverride | None = None
+    # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
+    audit_reasoning_effort: ReasoningEffortOverride | None = None
+    crag_compact_input: bool | None = None
+    section_skip_regrade_at_scope: bool | None = None
     crag_skip_on_strong_signals: bool | None = None
     crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
     query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)

@@ -1012,16 +1012,43 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_generation_reasoning_effort: ReasoningEffortOverride = Field(
         default="model",
         description=(
-            "回答文の生成と監査の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
+            "回答文の生成の LLM の呼び出しの推論の量(#1499。既定 model = モデルの登録値)。"
+            "監査は RAG_AUDIT_REASONING_EFFORT(#1528)。"
+        ),
+    )
+    rag_audit_reasoning_effort: ReasoningEffortOverride = Field(
+        default="model",
+        description=(
+            "生成後の監査(主張と引用の適用性の確認)の LLM の呼び出しの推論の量(#1528。"
+            "既定 model = モデルの登録値)。"
         ),
     )
     rag_crag_skip_on_strong_signals: bool = Field(
         default=False,
         description=(
-            "規則の信号が強いとき CRAG の根拠の評価(1 回目の LLM の呼び出し)を飛ばす"
-            "(#1499。既定 OFF)。rerank の最上位の score が閾値以上で、質問の要求がすべて"
-            "語の一致で根拠あり、定義を問う語の"
-            "定義本文があり、エラー文と列挙・網羅・件数を問う質問ではないときだけ(#1503)。生成後の監査は飛ばさない。"
+            "規則の信号が強いとき CRAG の根拠の評価(1 回目の LLM の呼び出し)を飛ばし、"
+            "曖昧な帯だけで呼ぶ(#1499・#1528。既定 OFF)。rerank の最上位の score が閾値以上で、"
+            "質問の要求に語の一致で根拠の無いもの(missing)が無く、定義を問う語の定義本文が"
+            "あるときだけ飛ばす。"
+            "エラー文・列挙・網羅・件数を問う質問(#1503)と、候補の除外が要る根拠(旧版の文書・"
+            "別の文書と同じ本文)があるときは必ず呼ぶ。生成後の監査は飛ばさない。"
+        ),
+    )
+    rag_crag_compact_input: bool = Field(
+        default=True,
+        description=(
+            "CRAG の根拠の評価の入力を詰める(#1528。既定 ON。A/B で入力 tokens が"
+            " 1/4〜1/9)。候補を生成に渡す親の数にそろえ、JSON を"
+            "空白なしで書き、候補の ID を chunk_uid だけにする。章節の拡張の判定は候補の数を"
+            "そろえない(広げた章節を見せる)。"
+        ),
+    )
+    rag_section_skip_regrade_at_scope: bool = Field(
+        default=True,
+        description=(
+            "(既定 ON。#1528 の A/B で列挙の問が 484 → 293 秒、品質は同じ)"
+            "読む範囲が文書全体の列挙の問(#1503)で、章節の拡張が文書全体まで読んだら、"
+            "CRAG の評価し直しを省いて生成へ進む(#1528)。"
         ),
     )
     rag_crag_skip_min_rerank_score: float = Field(
