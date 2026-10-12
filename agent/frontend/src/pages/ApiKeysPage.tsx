@@ -199,19 +199,19 @@ export function ApiKeysPage() {
                   }))}
                   onValueChange={setExpiry}
                 />
+                {/* 2 行目の左のセル（「名前」と同じ幅。#1570）。 */}
+                {canChooseRunAs ? (
+                  <SearchableSelectField
+                    id="api-key-run-as"
+                    label={t("apiKeys.create.runAs")}
+                    helper={t("apiKeys.create.runAsHelper")}
+                    value={runAs}
+                    options={runAsOptions}
+                    onValueChange={setRunAs}
+                    disabled={users.isLoading}
+                  />
+                ) : null}
               </div>
-              {canChooseRunAs ? (
-                <SearchableSelectField
-                  id="api-key-run-as"
-                  label={t("apiKeys.create.runAs")}
-                  helper={t("apiKeys.create.runAsHelper")}
-                  width="md"
-                  value={runAs}
-                  options={runAsOptions}
-                  onValueChange={setRunAs}
-                  disabled={users.isLoading}
-                />
-              ) : null}
               <Fieldset
                 legend={t("apiKeys.create.scope")}
                 role="radiogroup"
