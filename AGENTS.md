@@ -52,14 +52,14 @@
 
 - PR と `main` の push で `.github/workflows/ci.yml` が動き、`changes` job が**変更のあった製品の job だけ**を動かす（platform の frontend / backend の分け方と、全製品を動かす変更の規則は `ci.yml` の冒頭）。製品のテストが platform の別の側のファイルを読むなら、`changes` の filter にそのファイルを足す。
 - 必須 check は **`CI OK`** だけ（skip は成功扱い）。**job を追加したら `ci-ok` の `needs` に足し、すべての job に `timeout-minutes`（通常 10〜15 分、e2e は実測の倍程度）を付ける。**
-- PR の e2e は約 1 分の smoke と、差分に影響を受ける spec（`e2e-impact`）。全件は `e2e-nightly.yml` が毎晩実行する。キャッシュの方針は `ci.yml` の platform の節のコメント。
+- PR の e2e は約 1 分の smoke と、差分に影響を受ける spec（`e2e-impact`。smoke の spec は重ねず、全件なら smoke を飛ばす）。全件は `e2e-nightly.yml` が毎晩実行する。キャッシュの方針は `ci.yml` の platform の節のコメント。
 - backend の pytest は CI で並列（`-n auto`）に実行する。**テストは並列でも直列でも通るように書く**（`tmp_path`・`parametrize` の `ids=`・差し替えられる待ち・`xdist_group`。[backend-standard.md](./platform/docs/backend-standard.md)「テストの並列実行」）。
 - `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ（全件は `dependency-audit-nightly.yml`）、`bandit` は毎回。
 - **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。
 - secret 検出は `.gitleaks.toml` / `.gitleaksignore`（書き方は `.gitleaks.toml` の冒頭）。誤検知は fingerprint 単位で `.gitleaksignore` に理由付きで除外する。
 - Dependabot の patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
 - Python の整形は `ruff format`（black は使わない。CI は `uv run ruff format --check .`）。整形だけの commit は `.git-blame-ignore-revs` に載せる。pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend のファイルへの `ruff format --check` / `ruff check`。
-- root の `scripts/` は `Suite / Scripts` が shellcheck と `scripts/tests/` で検査する。
+- root の `scripts/` と `.github/` は `Suite / Scripts` が検査する（shellcheck・`scripts/tests/`・workflow の actionlint）。
 
 ## デザインシステム / UI（platform が正本）
 
