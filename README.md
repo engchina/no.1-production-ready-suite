@@ -6,12 +6,11 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 ボタンを押すと、大阪リージョン（`ap-osaka-1`）を選んだ状態で OCI Resource Manager の stack の作成画面が開きます。1 つの Autonomous AI Database と、選んだ製品（RAG / NL2SQL / Agent）をまとめて入れる 1 台の Compute を作ります。
 
-- **suite-v0.1.0**（最新）: 東京（`ap-tokyo-1`）/ 大阪（`ap-osaka-1`）リージョンだけをサポートします（既定は大阪）。
-  - RAG / NL2SQL / Agent Control Plane を 1 つの stack にまとめた、最初の統合 release です。
+- **latest**: 東京（`ap-tokyo-1`）/ 大阪（`ap-osaka-1`）リージョンだけをサポートします（既定は大阪）。
 
-  [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/suite-v0.1.0/production-ready-suite-terraform-stack.zip)
+  [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/latest/download/production-ready-suite-terraform-stack.zip)
 
-ボタンは release [suite-v0.1.0](https://github.com/engchina/no.1-production-ready-suite/releases/tag/suite-v0.1.0) の asset `production-ready-suite-terraform-stack.zip`（checksum は `.sha256`）を読み込みます。版を固定せず常に最新の release を使う場合は、配備の URL の `releases/download/suite-v0.1.0` を `releases/latest/download` に替えてください。
+ボタンは[最新の release](https://github.com/engchina/no.1-production-ready-suite/releases/latest) の `production-ready-suite-terraform-stack.zip` を読み込みます。
 
 入力の変数・手動でのアップロード・配備後の確認・トラブルシューティングは [terraform/README.md](./terraform/README.md) を参照してください。
 
