@@ -609,7 +609,7 @@ def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> N
     )
     optional = pyproject["project"]["optional-dependencies"]
 
-    assert optional["docling"] == ["docling==2.129.0"]
+    assert optional["docling"] == ["docling==2.132.0"]
     assert optional["unstructured"] == ["unstructured[all-docs]==0.27.8"]
     # Marker は削除した(#270)。combined extra も提供しない(サービス分離の理由)。
     assert set(optional) == {"docling", "unstructured"}

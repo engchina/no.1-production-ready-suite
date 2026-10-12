@@ -52,3 +52,31 @@ jobs:
 
       - name: Dependency audit
         run: uv run pip-audit --skip-editable ${{ matrix.args }}
+
+  # RAG の外部 parser のサービス（rag/services/parsers/<name>）。venv に pip-audit が無いので、ci.yml の
+  # RAG / Parser <name> の job と同じく、lock から書き出した requirements（hash 付き）を検査する（#1513）。
+  # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local）。
+  parser-pip-audit:
+    name: RAG / Parser ${{ matrix.parser }} (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        parser: [docling, asr]
+    defaults:
+      run:
+        working-directory: rag/services/parsers/${{ matrix.parser }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Dependency audit
+        run: |
+          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
+          test -n "${version}"
+          uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
+          uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
