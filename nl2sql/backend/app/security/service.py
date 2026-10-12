@@ -67,8 +67,6 @@ class SecurityService(AuthService):
     # ロール管理・権限管理のどちらかを持つ actor は、アーカイブ済みを含む全ロールを参照できる
     # （#206）。
     role_catalog_permissions = frozenset({"menu.security_roles", "menu.security_permissions"})
-    # 既存の構成管理者 token を無効にしないよう、NL2SQL の接頭辞を保つ。
-    configured_admin_token_prefix = "nl2sql-system-admin-v1"  # nosec B105 - token の接頭辞
     migration_hint = (
         "`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` "
         "を実行してから再試行してください。"

@@ -6,7 +6,7 @@ import { openSidebarNav } from "./fixtures/nav";
 
 // 共通認証のログイン・パスワード変更・セッション切れ（#215）。
 // production（`AGENT_AUTH_MODE=production`）の DB ユーザーでログインし、失敗・強制パスワード変更・
-// 401 でログインへ戻る流れと、状態を変える API に CSRF header（Cookie `agent_csrf`）を付けることを確かめる。
+// 401 でログインへ戻る流れと、状態を変える API に CSRF header（共有の Cookie `pr_csrf`。#1565）を付けることを確かめる。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
@@ -139,7 +139,7 @@ for (const viewport of VIEWPORTS) {
       mockApi,
     }) => {
       mockApi.setCurrentUser(null);
-      await context.addCookies([{ name: "agent_csrf", value: CSRF_TOKEN, url: baseURL ?? "http://127.0.0.1:3042" }]);
+      await context.addCookies([{ name: "pr_csrf", value: CSRF_TOKEN, url: baseURL ?? "http://127.0.0.1:3042" }]);
 
       await page.goto("/login");
       await page.getByLabel("ログインユーザーID").fill("first.user");
@@ -197,7 +197,7 @@ for (const viewport of VIEWPORTS) {
       mockApi,
     }) => {
       mockApi.setCurrentUser(ADMIN_USER);
-      await context.addCookies([{ name: "agent_csrf", value: CSRF_TOKEN, url: baseURL ?? "http://127.0.0.1:3042" }]);
+      await context.addCookies([{ name: "pr_csrf", value: CSRF_TOKEN, url: baseURL ?? "http://127.0.0.1:3042" }]);
 
       await page.goto("/runs");
       await expandSidebarOnMobile(page);

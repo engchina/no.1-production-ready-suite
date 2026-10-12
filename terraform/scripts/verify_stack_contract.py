@@ -78,6 +78,9 @@ REMOVED_SINGLE_COMPUTE_INPUTS = (
     "agent_app_auth_cookie_secure",
     "oci_core_instance.product",
     "oci_core_instance.agent",
+    # 製品ごとのログインの Cookie 名（共通 .env の PLATFORM_AUTH_*_COOKIE_NAME に統一。#1565）。
+    "_APP_AUTH_SESSION_COOKIE_NAME",
+    "_APP_AUTH_CSRF_COOKIE_NAME",
 )
 # 各製品の backend の port（127.0.0.1。1 台の Compute で衝突しない。ローカルの開発と同じ。#1316）。
 BACKEND_PORTS = {"rag": "8000", "nl2sql": "8010", "agent": "8020"}
@@ -181,6 +184,9 @@ REQUIRED_PLATFORM_ENV_LINES = [
     "PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}\n",
     # 1 台の Compute では platform/.env は 1 つ。ログインの Cookie は HTTPS が on なら Secure（#1316）。
     "PLATFORM_AUTH_COOKIE_SECURE=${var.https_enabled}\n",
+    # ログインの Cookie は 3 製品で共有する（1 回のログインで全製品を使える。#1565）。
+    "PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session\n",
+    "PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf\n",
 ]
 PRODUCT_ENV_PREFIXES = {"rag": "RAG_", "nl2sql": "NL2SQL_", "agent": "AGENT_"}
 # 共通の属性名の正本（pr_backend_core.config.env.PLATFORM_SETTING_FIELDS）。stdlib だけで読むため AST で取り出す。

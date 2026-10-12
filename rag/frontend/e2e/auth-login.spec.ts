@@ -175,7 +175,7 @@ test("初回ログインは強制パスワード変更へ移り、変更後は C
   baseURL,
 }) => {
   const auth = await mockAuthApi(page, null);
-  await context.addCookies([{ name: "rag_csrf", value: "csrf-e2e-token", url: baseURL ?? "http://127.0.0.1:3100" }]);
+  await context.addCookies([{ name: "pr_csrf", value: "csrf-e2e-token", url: baseURL ?? "http://127.0.0.1:3100" }]);
 
   await page.goto("/login");
   await page.getByLabel("ログインユーザーID").fill("first.user");

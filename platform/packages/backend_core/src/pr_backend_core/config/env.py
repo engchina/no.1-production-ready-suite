@@ -92,10 +92,13 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oracle_adb_region",
         "oracle_tcp_connect_timeout_seconds",
         "oracle_db_test_timeout_seconds",
-        # 共通認証（構成管理者と認証ポリシー。Cookie 名と認証の有効 / 無効は製品ごと）
+        # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。認証の有効 / 無効は製品ごと）。
+        # Cookie 名を 3 製品で共通にし、1 回のログインで全製品を使えるようにする（#1565）。
         "app_admin_login_user_id",
         "app_admin_login_user_password",
         "app_auth_cookie_secure",
+        "app_auth_session_cookie_name",
+        "app_auth_csrf_cookie_name",
         "app_auth_idle_timeout_minutes",
         "app_auth_absolute_timeout_hours",
         "app_auth_failed_login_limit",

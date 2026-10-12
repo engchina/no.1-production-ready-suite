@@ -104,7 +104,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 `RAG_AUTH_MODE=production` では、3製品共通の認証（`pr_system_settings.auth`。#212 / #214）でログインします。
 
 - 利用者: 構成管理者 `system_admin`（共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_ID` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`）と、「ユーザーとロール」で作る DB ユーザー（`PLATFORM_USERS` などを NL2SQL / Agent と共有）。
-- セッション: Cookie `rag_session`（HttpOnly）と `rag_csrf`（名前は `RAG_APP_AUTH_SESSION_COOKIE_NAME` / `RAG_APP_AUTH_CSRF_COOKIE_NAME`）。更新系の API は `X-CSRF-Token` header に `rag_csrf` の値が必要です。期限・ロック・パスワード方針・`Secure` 属性は共通 `.env` の `PLATFORM_AUTH_*`。
+- セッション: Cookie `pr_session`（HttpOnly）と `pr_csrf`（名前は共通 `.env` の `PLATFORM_AUTH_SESSION_COOKIE_NAME` / `PLATFORM_AUTH_CSRF_COOKIE_NAME`）。3 製品で共有し、1 回のログインで NL2SQL / Agent も使えます。ログアウトは全製品で共通です（#1565）。更新系の API は `X-CSRF-Token` header に `pr_csrf` の値が必要です。期限・ロック・パスワード方針・`Secure` 属性は共通 `.env` の `PLATFORM_AUTH_*`。
 - 認可: 全 API は router の dependency で確認し、`app/security/permissions.py` の manifest に登録されていない API は拒否します（公開は `/health`・`/ready`・`/ready/database`・`/auth/login` だけ）。
 - 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.search_answer_profiles.manage`（全検索・回答プロファイル・検索・回答プロファイルの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映と、他の利用者の保存済みの回答の表示・評価・削除。#304）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_SEARCH_ANSWER_PROFILES` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
 - 対象範囲: 検索・回答プロファイル・ナレッジベースを割り当てたロールの利用者は、その検索・回答プロファイル・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の検索・回答プロファイルは 404、検索・回答プロファイルの KB を 1 つも許可されていない検索・チャットは 403（`error_code: RAG_SCOPE_FORBIDDEN`。画面はその場で理由を表示する。#224）です。検索・回答プロファイルで検索させるには、その検索・回答プロファイルのナレッジベースも許可してください。

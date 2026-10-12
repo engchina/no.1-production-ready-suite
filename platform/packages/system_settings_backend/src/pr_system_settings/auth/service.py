@@ -81,7 +81,6 @@ _CROSS_PRODUCT_DENIED_MESSAGE = (
 
 
 class AuthSettings(Protocol):
-    service_name: str
     app_admin_login_user_id: str
     app_admin_login_user_password: str
     app_auth_absolute_timeout_hours: int
@@ -131,8 +130,9 @@ class AuthService:
     role_class: type[RoleRecord] = RoleRecord
     # アーカイブ済みを含む全ロールを参照できる権限（ロール管理・権限管理など）。
     role_catalog_permissions: frozenset[str] = frozenset()
-    # 構成管理者の token の接頭辞。製品ごとに変える（既存 token を無効にしないため）。
-    configured_admin_token_prefix: str = "platform-system-admin-v1"
+    # 構成管理者の token の接頭辞。3 製品で共通にし、1 回のログインで全製品を使えるようにする
+    # （署名の鍵も製品に依存しない。#1565）。製品で上書きしない。
+    configured_admin_token_prefix: str = "platform-system-admin-v1"  # nosec B105 - token の接頭辞
     admin_login_env_key: str = "PLATFORM_ADMIN_LOGIN_USER_ID"
     admin_password_env_key: str = "PLATFORM_ADMIN_LOGIN_USER_PASSWORD"  # nosec B105
     migration_hint: str = "security migration を適用してから再試行してください。"
@@ -324,6 +324,22 @@ class AuthService:
                 "リクエストの安全性を確認できません。画面を再読込してください。",
                 code=CSRF_INVALID_CODE,
             )
+
+    def revoke_session_token(self, token: str) -> None:
+        """ブラウザが持っていたセッションを失効させる（ログインのときに呼ぶ。#1565）。
+
+        Cookie は 3 製品で共有するため、別の製品でログインし直したときに古いセッションを
+        残さない（session fixation の対策）。構成管理者の token は DB の行を持たないので何もしない。
+        失効できなくても（DB の停止中など）ログインは妨げない。
+        """
+        if not token or token.startswith(self.configured_admin_token_prefix + "."):
+            return
+        try:
+            session = self.store.get_session_by_token_hash(hash_token(token))
+            if session is not None and session.revoked_at is None:
+                self.store.revoke_session(session.session_id)
+        except Exception:
+            logger.warning("auth_previous_session_revoke_failed", exc_info=True)
 
     def logout(self, principal: Principal, *, request_id: str = "", client_ip: str = "") -> None:
         if self._is_configured_system_admin_principal(principal):
@@ -917,9 +933,14 @@ class AuthService:
         )
 
     def _configured_system_admin_token_key(self) -> bytes:
+        """構成管理者の token の署名鍵。3 製品で同じ鍵にする（製品の名前を含めない。#1565）。
+
+        資格情報は共通 `.env` の `PLATFORM_ADMIN_LOGIN_*` なので、どの製品で発行した token も
+        ほかの製品で検証できる。パスワードを変えると、発行済みの token はすべて無効になる。
+        """
         configured_login_user_id, configured_password = self._ensure_configured_system_admin_ready()
         configured_secret = (
-            f"{self.settings.service_name}:{configured_login_user_id}:{configured_password}"
+            f"{self.configured_admin_token_prefix}:{configured_login_user_id}:{configured_password}"
         )
         return hashlib.sha256(configured_secret.encode("utf-8")).digest()
 

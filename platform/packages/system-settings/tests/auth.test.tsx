@@ -9,6 +9,7 @@ import {
   AUTH_FORBIDDEN_EVENT,
   AUTH_UNAUTHORIZED_EVENT,
   AuthProvider,
+  CSRF_COOKIE_NAME,
   CSRF_HEADER_NAME,
   ForbiddenPage,
   LoginPage,
@@ -109,11 +110,15 @@ describe("権限の判定とルート", () => {
 
 describe("CSRF と認証イベント", () => {
   it("状態を変える method だけ Cookie の値を X-CSRF-Token で返す", () => {
-    vi.stubGlobal("document", { cookie: "other=1; rag_csrf=token%2Fvalue" });
-    expect(csrfHeader("rag_csrf", "post")).toEqual({ [CSRF_HEADER_NAME]: "token/value" });
-    expect(csrfHeader("rag_csrf", "DELETE")).toEqual({ "X-CSRF-Token": "token/value" });
-    expect(csrfHeader("rag_csrf", "GET")).toEqual({});
-    expect(csrfHeader("missing", "PUT")).toEqual({});
+    // Cookie 名は 3 製品で共有の 1 つ（#1565）。製品ごとの旧名は読まない。
+    expect(CSRF_COOKIE_NAME).toBe("pr_csrf");
+    vi.stubGlobal("document", { cookie: "other=1; pr_csrf=token%2Fvalue" });
+    expect(csrfHeader("post")).toEqual({ [CSRF_HEADER_NAME]: "token/value" });
+    expect(csrfHeader("DELETE")).toEqual({ "X-CSRF-Token": "token/value" });
+    expect(csrfHeader("GET")).toEqual({});
+    expect(csrfHeader()).toEqual({});
+    vi.stubGlobal("document", { cookie: "rag_csrf=old-token" });
+    expect(csrfHeader("PUT")).toEqual({});
   });
 
   it("401 / 403 で対応する window イベントを発火し、403 には request ID を載せる", () => {

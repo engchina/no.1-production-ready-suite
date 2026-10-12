@@ -1,6 +1,7 @@
+import { CSRF_COOKIE_NAME } from "@production-ready/system-settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, CSRF_COOKIE_NAME, api } from "./api";
+import { ApiError, api } from "./api";
 import { describeSecurityApiError, securityApi } from "./security-api";
 import { streamSearch } from "./search-stream";
 
@@ -38,7 +39,7 @@ afterEach(() => {
 });
 
 describe("CSRF header", () => {
-  it("状態を変える method では rag_csrf の値を X-CSRF-Token で送る", async () => {
+  it("状態を変える method では共有の CSRF の Cookie（pr_csrf）の値を X-CSRF-Token で送る", async () => {
     stubBrowser(`other=1; ${CSRF_COOKIE_NAME}=token-123`);
     const fetchMock = vi.fn().mockImplementation(async () =>jsonResponse(OK));
     vi.stubGlobal("fetch", fetchMock);
