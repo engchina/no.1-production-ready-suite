@@ -31,18 +31,9 @@ describe("useUiStore", () => {
     expect(useUiStore.persist.hasHydrated()).toBe(true);
   });
 
-  it("セクションの折りたたみは既定で空（=全展開）", () => {
+  // 既定の開閉は nav config の defaultCollapsed が持つ（#1563）。
+  it("セクションの開閉の保存値は既定で空", () => {
     expect(useUiStore.getState().collapsedSections).toEqual({});
-  });
-
-  it("toggleSection でセクション開閉を切り替える", () => {
-    const key = "nav.section.pipeline";
-
-    useUiStore.getState().toggleSection(key);
-    expect(useUiStore.getState().collapsedSections[key]).toBe(true);
-
-    useUiStore.getState().toggleSection(key);
-    expect(useUiStore.getState().collapsedSections[key]).toBe(false);
   });
 
   it("setSectionCollapsed で他セクションを保ったまま明示設定する", () => {

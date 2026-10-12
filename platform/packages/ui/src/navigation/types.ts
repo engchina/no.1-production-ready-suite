@@ -26,6 +26,12 @@ export interface NavSection {
    * 展開幅サイドバーでのみ作用し、icon-only 幅では無効。
    */
   collapsible?: boolean;
+  /**
+   * 利用者の開閉の保存値が無いとき、このセクションを閉じて出すか（既定 false = 展開）。
+   * 3 製品は業務の入口（「AI 活用」）だけを展開し、ほかのセクションに true を付ける（#1563）。
+   * 保存値（ui-store の `collapsedSections`）があればそちらを優先し、今のページを含むセクションは開く。
+   */
+  defaultCollapsed?: boolean;
 }
 
 /**
