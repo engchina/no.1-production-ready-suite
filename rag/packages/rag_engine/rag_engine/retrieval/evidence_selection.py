@@ -270,13 +270,15 @@ NATIVE_RESERVE_CAP = 1200
 
 def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDENCE_BUDGET_CHARS,
                    anchors: Sequence[Any] = (), definitions_only: bool = False,
-                   scope_records: Sequence[Any] = ()) -> list[dict[str, Any]]:
+                   scope_records: Sequence[Any] = (), whole_records: bool = False) -> list[dict[str, Any]]:
     """原文の文字予算内で安定IDを付け、照合済みanchorsの本文と頁を優先する。
 
     anchorsは同じ検索で取得したchildだけを渡す。文書・版・親子関係・位置を
     再検証し、照合できないchildは頁確定や原文保護に使わない。
     definitions_onlyは予算競合時の再切出し用で、定義以外の窓を追加しない。
     scope_recordsは取得済みchildの所属照合専用で、全文の予算優先には使わない。
+    whole_recordsは、全部の根拠の本文が予算（前置きの分の 1 割を除く）に入るとき、根拠ごとの配分で切らずに
+    全文を渡す（章節の拡張で読んだ章節を切らない。#1436）。入らなければ通常の配分にする。
     """
     # 本文が同じ根拠（record_fingerprint）を先にまとめる。
     same_text: dict[str, list[Any]] = {}
@@ -309,6 +311,8 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
     # 対応せず、定義質問で取り置きが過不足になる (#744)。
     def native_need(record: Any) -> int:
         return min(NATIVE_RESERVE_CAP, sum(b - a for a, b in _native_ranges(record) if b - a <= 600))
+    whole = whole_records and not definitions_only and (
+        sum(len(str(getattr(record, "text", "") or "")) for _key, record in ordered) <= max(0, budget - budget // 10))
     reserve_after = [0] * (len(ordered) + 1)
     for position in range(len(ordered) - 1, -1, -1):
         reserve_after[position] = reserve_after[position + 1] + native_need(ordered[position][1])
@@ -343,6 +347,8 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
             allowance = min(remaining, max(1, budget // max(1, len(unique))))
         # 取り置き分を超えない。ただし自分の必須範囲（原文・定義・照合済み child）は確保する。
         allowance = min(allowance, max(needed, remaining - reserve_after[index + 1]))
+        if whole:
+            allowance = min(remaining, max(allowance, len(text)))
         excerpt = evidence_excerpt(question, text, allowance, required_ranges=required, required_only=definitions_only)
         remaining -= len(excerpt)
         cursor = 0

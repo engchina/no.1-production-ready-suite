@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
+from rag_engine.generation.answer_envelope import REFERENCE_CONFIRMATION_PREFIX
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
@@ -39,6 +40,8 @@ CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</�
 QUOTE_ONLY_LABEL = "資料の記載（今回への適用は未確認）"
 RULES_SECTION_TITLE = "確認できる内容"
 GAPS_SECTION_TITLE = "資料からは確認できない点"
+# 章節の拡張が上限で読めなかった章節（#1436）。回答は条件つきになる。
+UNVERIFIED_SECTION_TITLE = "確かめられていない点"
 # 回答の確定に必要な実データ・別の資料の確認（#688）。
 CONFIRMATIONS_SECTION_TITLE = "回答を確定するために確認すること"
 CONFIRMATION_ONLY_SUMMARY = "資料だけでは回答を確定できません。次を確認してください。"
@@ -51,7 +54,8 @@ CITATION_PREFIX = "根拠："
 OFF_GOAL_GAP = "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。"
 # render() が決定的に出力する見出し行と出典行。render の体裁を変えるときは一緒に直す。
 _STRUCTURAL_LINE = re.compile(
-    "|".join(re.escape(title) for title in (RULES_SECTION_TITLE, QUOTE_ONLY_LABEL, GAPS_SECTION_TITLE))
+    "|".join(re.escape(title) for title in (RULES_SECTION_TITLE, QUOTE_ONLY_LABEL, GAPS_SECTION_TITLE,
+                                            UNVERIFIED_SECTION_TITLE))
     + r"|(?:操作|確認)手順(?:（.+）)?|" + re.escape(CITATION_PREFIX) + r".*(?: p\..*| シート「.+」.*)"
 )
 _COMPLETION = re.compile(
@@ -2034,7 +2038,7 @@ def confirmation_lines(draft: GroundedDraft, question: str, spans: Sequence[dict
         return all(_compact_text(name) in corpus for name in re.findall(r"「([^」]+)」", text))
 
     lines = [f"実データ: {item}" for item in draft.environment_data_items()]
-    lines += [f"資料: {item.strip()}" for item in draft.reference_materials
+    lines += [f"{REFERENCE_CONFIRMATION_PREFIX}{item.strip()}" for item in draft.reference_materials
               if item.strip() and named_in_corpus(item)]
     return list(dict.fromkeys(lines))
 
@@ -2070,8 +2074,11 @@ def citation_line_ref(span: dict) -> dict[str, Any]:
 
 
 def render_with_citations(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (),
-                          confirmations: Sequence[str] = ()) -> tuple[str, list[dict[str, Any]]]:
+                          confirmations: Sequence[str] = (), *,
+                          unverified: Sequence[str] = ()) -> tuple[str, list[dict[str, Any]]]:
     """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
+
+    unverified は章節の拡張が上限で読めなかった章節（#1436）。不足の節の後に「確かめられていない点」として出す。
 
     出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
     結び、ファイル名と頁で推測しない。
@@ -2138,6 +2145,8 @@ def render_with_citations(summary: str, checked: Sequence[CheckedItem], unanswer
                                        if not any(text in entry.item.text for entry in gaps)]
     if gap_lines:
         sections.append((GAPS_SECTION_TITLE, gap_lines))
+    if unverified:
+        sections.append((UNVERIFIED_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(unverified)]))
     if confirmations:
         sections.append((CONFIRMATIONS_SECTION_TITLE, [f"・{line}" for line in confirmations]))
     body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)

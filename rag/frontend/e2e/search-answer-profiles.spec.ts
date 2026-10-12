@@ -37,6 +37,7 @@ for (const viewport of [
       "根拠の前後から加える数",
       "回答の検索のオプション",
       "実体でつながる根拠",
+      "章節で広げる根拠",
       "安全チェック",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -307,6 +308,136 @@ test("実体の索引のある参照先・数えられないときは案内を�
   expect(query.entity_expansion_enabled).toBe(false);
   expect(query.entity_expansion_max_chunks ?? null).toBeNull();
   await expectNoPageOverflow(page);
+});
+
+test("章節で広げる根拠は既定 on で、選んだ上限だけを保存する（抜き出す呼び出しの上限を含む）", async ({
+  page,
+}) => {
+  const bodies: Record<string, unknown>[] = [];
+  await mockSearchAnswerProfiles(page, [], (body) => {
+    bodies.push(body);
+  });
+  await page.goto("/search-answer-profiles?id=new");
+
+  const section = page.getByTestId("search-answer-profile-section-expansion");
+  const toggle = section.getByRole("switch", {
+    name: "当たった根拠の章節から親の章節へ広げる",
+  });
+  // 既定は on（#1436）。上限は on のときだけ出す。
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(toggle).toHaveAccessibleDescription(
+    /読めなかった章節を「確かめられていない点」に示し/,
+  );
+  await expect(section).toContainText("回答のモデルの入力の上限");
+  await expect(section).toContainText("一致しないものは使いません");
+  const levels = section.getByRole("combobox", { name: "広げる段の上限" });
+  const tokens = section.getByRole("combobox", { name: "根拠の入力の上限" });
+  const time = section.getByRole("combobox", { name: "広げるのを終える時間" });
+  const calls = section.getByRole("combobox", {
+    name: "原文を抜き出す呼び出しの上限",
+  });
+  await expect(levels).toHaveText(/4 段（既定）/);
+  await expect(tokens).toHaveText(/50%（既定）/);
+  await expect(time).toHaveText(/600 秒（既定）/);
+  await expect(calls).toHaveText(/8 回（既定）/);
+  // 1 つの行の中の選択欄は同じ高さ（既定の size）。
+  const heights = await Promise.all(
+    [levels, tokens, time, calls].map(
+      async (field) => (await field.boundingBox())?.height,
+    ),
+  );
+  expect(new Set(heights).size).toBe(1);
+  await levels.click();
+  await page.getByRole("option", { name: "2 段", exact: true }).click();
+  await expect(levels).toHaveText(/2 段/);
+  await calls.click();
+  await page.getByRole("option", { name: "4 回", exact: true }).click();
+  await expect(calls).toHaveText(/4 回/);
+  await expectNoPageOverflow(page);
+  // 選択欄は行の枠の中に収まる（375px で横にはみ出さない）。
+  const sectionBox = await section.boundingBox();
+  for (const field of [levels, tokens, time, calls]) {
+    const box = await field.boundingBox();
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(
+      (sectionBox?.x ?? 0) + (sectionBox?.width ?? 0),
+    );
+  }
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+    await section.screenshot({
+      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-section-expansion-${test.info().project.name}.png`,
+    });
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "dark";
+    });
+    await section.screenshot({
+      path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/profile-section-expansion-${test.info().project.name}-dark.png`,
+    });
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.theme;
+    });
+  }
+
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await page
+    .getByRole("combobox", { name: "参照するナレッジベース" })
+    .press("Escape");
+  await page
+    .getByRole("textbox", { name: "名前", exact: true })
+    .fill("章節ビュー");
+  await page
+    .getByRole("textbox", { name: "説明", exact: true })
+    .fill("章節を読んで回答します");
+  await page
+    .locator("[data-page-header-actions]")
+    .getByRole("button", { name: "作成", exact: true })
+    .click();
+  await expect.poll(() => bodies.length).toBe(1);
+  const query =
+    (bodies[0]?.config as { query?: Record<string, unknown> })?.query ?? {};
+  // 既定と同じ on・上限は保存しない（既定に追従させる）。選んだ段・抜き出す呼び出しの上限だけを保存する。
+  expect(query.section_expansion_enabled ?? null).toBeNull();
+  expect(query.section_expansion_max_levels).toBe(2);
+  expect(query.section_expansion_input_token_percent ?? null).toBeNull();
+  expect(query.section_expansion_time_limit_seconds ?? null).toBeNull();
+  expect(query.section_extraction_max_calls).toBe(4);
+});
+
+test("章節で広げる根拠を off にすると上限の欄を閉じ、false だけを保存する", async ({
+  page,
+}) => {
+  let createBody: Record<string, unknown> | null = null;
+  await mockSearchAnswerProfiles(page, [], (body) => {
+    createBody = body;
+  });
+  await page.goto("/search-answer-profiles?id=new");
+  const section = page.getByTestId("search-answer-profile-section-expansion");
+  const toggle = section.getByRole("switch", {
+    name: "当たった根拠の章節から親の章節へ広げる",
+  });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(section.getByRole("combobox")).toHaveCount(0);
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await page
+    .getByRole("combobox", { name: "参照するナレッジベース" })
+    .press("Escape");
+  await page
+    .getByRole("textbox", { name: "名前", exact: true })
+    .fill("短答ビュー");
+  await page
+    .getByRole("textbox", { name: "説明", exact: true })
+    .fill("当たった根拠だけで回答します");
+  await page
+    .locator("[data-page-header-actions]")
+    .getByRole("button", { name: "作成", exact: true })
+    .click();
+  await expect.poll(() => createBody?.name).toBe("短答ビュー");
+  const query =
+    (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
+  expect(query.section_expansion_enabled).toBe(false);
+  expect(query.section_expansion_max_levels ?? null).toBeNull();
 });
 
 for (const viewport of [

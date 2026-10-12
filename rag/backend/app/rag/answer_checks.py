@@ -12,11 +12,14 @@
   承認が係る手順（`impact.steps`）が、分かっている条件で外れた分岐の手順だけなら確かめない（#1320）。
 
 手順・語の照合は、NFKC・大文字小文字・空白を揃えた文字列の部分一致で行う（言い換えは見つけられない）。
-手順の名前が回答に 1 つも見つからなければ、順序は確かめられないことを warning で示す。
+手順の名前が回答に 1 つも見つからなければ、順序は確かめられないことを warning で示す。手順の照合は
+実行の指示の段落（行）だけで行い、満たした前提の言及（「→ この前提は満たしています」「承認済み」の
+行と、見出しが「満たしている条件」などの節）は数えない（#1491）。
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -40,6 +43,22 @@ APPROVAL_TERMS = ("承認",)
 _BOOLEAN_ALIASES = {"true": "はい", "yes": "はい", "false": "いいえ", "no": "いいえ"}
 # 照合に使う手順の名前の最短の長さ（1 文字の名前は本文のどこにでも当たる）。
 _MIN_TITLE_CHARS = 2
+# 満たした前提の言及の印（手順の実行の指示ではない。#1491）。NFKC・空白を揃えた後の文字列で照らす。
+PREMISE_MET_MARKERS = (
+    "満たしています",
+    "満たしている",
+    "満たされています",
+    "満たされている",
+    "済み",
+    "済んでいます",
+    "済んでいる",
+    "完了しています",
+    "完了している",
+)
+# 見出しの行（Markdown の見出し・全体が強調・末尾がコロン）。
+_HEADING = re.compile(r"^\s*(#{1,6}\s+.+|\*\*[^*]+\*\*[:：]?|[^。]{1,40}[:：])\s*$")
+# 箇条書き・番号付きの行（節の続き）。
+_LIST_ITEM = re.compile(r"^\s*([-*・•]|\d+[.)．、）])")
 
 
 @dataclass(frozen=True)
@@ -146,13 +165,45 @@ def excluded_steps(content: SupportGuideContent, conditions: Mapping[str, str]) 
     return excluded
 
 
+def _premise_met(text: str) -> bool:
+    normalized = _normalized(text)
+    return any(marker in normalized for marker in PREMISE_MET_MARKERS)
+
+
+def instruction_text(answer: str) -> str:
+    """手順の照合に使う本文（実行の指示の段落だけ。#1491）。
+
+    満たした前提の言及は、手順の名前を含んでも手順の実行ではない（例: 「部門長の承認を得る必要があり
+    → この前提は満たしています。」）。その行と、見出しが満たした前提の節（「削除の前提（満たしている
+    条件）」）の行は除く。節は次の見出しか、空行の後の箇条書きではない行まで続く。
+    """
+    kept: list[str] = []
+    section = False
+    blank = False
+    for line in answer.split("\n"):
+        if not line.strip():
+            blank = True
+            continue
+        if blank and not _LIST_ITEM.match(line):
+            section = False
+        blank = False
+        if _HEADING.match(line):
+            section = _premise_met(line)
+            if section:
+                continue
+        elif section or _premise_met(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def check_guide_steps(
     answer: str, content: SupportGuideContent, conditions: Mapping[str, str]
 ) -> list[AnswerFinding]:
-    """回答に出た手順の順序・分岐・依存を業務ガイドの手順と照らす。"""
+    """回答に出た手順の順序・分岐・依存を業務ガイドの手順と照らす（実行の指示の段落だけ。#1491）。"""
     if not content.steps:
         return []
-    normalized = _normalized(answer)
+    normalized = _normalized(instruction_text(answer))
     titles = {step.id: step.title for step in content.steps}
     positions: dict[str, int] = {}
     for step in content.steps:
@@ -284,4 +335,5 @@ __all__ = [
     "check_requests",
     "excluded_steps",
     "impact_applies",
+    "instruction_text",
 ]

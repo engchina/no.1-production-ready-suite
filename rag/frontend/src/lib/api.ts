@@ -879,6 +879,19 @@ export interface KnowledgeBaseQueryConfig {
   entity_expansion_enabled?: boolean | null;
   /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
   entity_expansion_max_chunks?: number | null;
+  /**
+   * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
+   * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50% / 600 秒)。
+   */
+  section_expansion_enabled?: boolean | null;
+  section_expansion_max_levels?: number | null;
+  section_expansion_input_token_percent?: number | null;
+  section_expansion_time_limit_seconds?: number | null;
+  /**
+   * 根拠の入力の上限に入らない章節から、質問に関係する原文を抜き出す AI の呼び出しの上限(1 回の回答。1〜16。
+   * #1437)。null は既定(8)。
+   */
+  section_extraction_max_calls?: number | null;
 }
 
 /** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */

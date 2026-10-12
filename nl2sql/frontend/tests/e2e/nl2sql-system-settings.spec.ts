@@ -3198,6 +3198,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
     connection_id: "primary",
     // 追加したモデルの推論の量は既定の medium（#1425）。
     reasoning_effort: "medium",
+    // 追加したモデルの入力の上限は既定の 128000（#1437）。
+    max_input_tokens: 128000,
   });
   const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
   await expect(remove).toBeEnabled();

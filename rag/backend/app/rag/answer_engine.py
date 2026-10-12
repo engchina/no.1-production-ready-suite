@@ -52,6 +52,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_seed,
@@ -242,6 +243,8 @@ class _SearchState:
     search_hits: dict[tuple[str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]] = (
         field(default_factory=dict)
     )
+    # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
+    section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
 
 
 def answer_images_enabled(settings: Settings) -> bool:
@@ -292,6 +295,11 @@ def build_engine_settings(
         ),
         # seed は全モデルで共通(#1434。既定 42)。rag_engine が Responses API の top-level で送る。
         "OCI_ENTERPRISE_AI_SEED": str(enterprise_ai_seed(settings)),
+        # 回答のモデルの入力の上限(tokens。#1437)。章節の拡張の根拠の入力の上限と、抽出してから
+        # 統合の 1 回分の大きさを、この値の割合で決める(値の解釈は platform の 1 か所)。
+        "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": str(
+            enterprise_ai_max_input_tokens(settings, answer_model)
+        ),
         # rag_engine は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
         # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して
         # 呼ぶが、この 2 値を渡さないと RAG_RERANK_ENABLED=true でも
@@ -315,6 +323,20 @@ def build_engine_settings(
         "RAG_ENGINE_REQUEST_COVERAGE_DEADLINE_SECONDS": str(
             settings.rag_request_coverage_deadline_seconds
         ),
+        # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索・回答プロファイルで選ぶ)。
+        "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
+        "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": str(settings.rag_section_expansion_max_levels),
+        "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
+            settings.rag_section_expansion_input_token_percent
+        ),
+        "RAG_ENGINE_SECTION_EXPANSION_TIME_LIMIT_SECONDS": str(
+            min(
+                settings.rag_section_expansion_time_limit_seconds,
+                settings.rag_answer_timeout_seconds,
+            )
+        ),
+        # 入らない章節から原文を抜き出す LLM の呼び出しの上限(#1437。検索・回答プロファイルで選ぶ)。
+        "RAG_ENGINE_SECTION_EXTRACTION_MAX_CALLS": str(settings.rag_section_extraction_max_calls),
     }
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -575,6 +597,27 @@ class AnswerEngine:
             screen_catalog=lambda **kwargs: run_async(lambda: self._screen_catalog(request, state)),
             screen_chunks=lambda *, links, existing, **kwargs: run_async(
                 lambda: self._screen_chunks(request, state, links, existing)
+            ),
+            # 章節の拡張(#1436)。章節と chunk の対応(#1438)を読む。無効なら章節で広げない。
+            section_outline=(
+                (
+                    lambda *, chunk_uid, **kwargs: run_async(
+                        lambda: self._section_outline(state, chunk_uid)
+                    )
+                )
+                if self._settings.rag_section_expansion_enabled
+                else None
+            ),
+            section_chunks=(
+                (
+                    lambda *, document_id, chunk_set_id, section_id, **kwargs: run_async(
+                        lambda: self._section_chunks(
+                            request, state, document_id, chunk_set_id, section_id
+                        )
+                    )
+                )
+                if self._settings.rag_section_expansion_enabled
+                else None
             ),
         )
 
@@ -1363,6 +1406,104 @@ class AnswerEngine:
         ]
         return [*children, *_stored_parents(children, state)]
 
+    async def _section_outline(self, state: _SearchState, chunk_id: str) -> Any:
+        """当たった chunk の文書の章節の一覧と所有の章節(#1436)。対応が無い・読めなければ None。
+
+        対応がまだ無い文書(この機能の前に取り込んだ文書)は、第 1 段階(#1438)と同じく
+        その場で作り直す。
+        """
+        from rag_engine.generation.section_expansion import SectionInfo, SectionOutline
+
+        from app.rag.section_map_service import chunk_section, section_outline
+
+        chunk = state.chunks.get(chunk_id)
+        if chunk is None:
+            return None
+        try:
+            found = await chunk_section(chunk.document_id, chunk_id, oracle=self._oracle)
+            if found is None:
+                return None
+            chunk_set_id, owner_section_id = found
+            key = (chunk.document_id, chunk_set_id)
+            if key not in state.section_outlines:
+                state.section_outlines[key] = await section_outline(
+                    chunk.document_id, chunk_set_id=chunk_set_id, oracle=self._oracle
+                )
+            outline = state.section_outlines[key]
+        except Exception:  # noqa: BLE001 - 章節の拡張は補助。広げずに回答を続ける。
+            logger.warning("section outline load failed", exc_info=True)
+            return None
+        if outline is None:
+            return None
+        return SectionOutline(
+            document_id=chunk.document_id,
+            chunk_set_id=chunk_set_id,
+            owner_section_id=owner_section_id,
+            sections=tuple(
+                SectionInfo(
+                    section_id=node.section_id,
+                    title=node.title,
+                    level=node.level,
+                    parent_section_id=node.parent_section_id,
+                    page_start=node.page_start,
+                    page_end=node.page_end,
+                    chunk_count=node.chunk_count,
+                    chars=node.chars,
+                )
+                for node in outline.sections
+            ),
+            file_name=_source_file_name(chunk),
+        )
+
+    async def _section_chunks(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        document_id: str,
+        chunk_set_id: str,
+        section_id: str,
+    ) -> list[Any]:
+        """章節の chunk(章節の中の順の child と、その親)を回答の検索と同じ条件で読む(#1436)。
+
+        読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、分類・1 ページ目の本文・根拠画像は
+        検索の候補と同じく付ける。読めなければ空(広げずに回答を続ける)。
+        """
+        from rag_engine.generation.section_expansion import MAX_SECTION_CHUNKS
+
+        from app.rag.section_map_service import read_section
+
+        try:
+            text = await read_section(
+                document_id,
+                section_id,
+                chunk_set_id=chunk_set_id,
+                limit=MAX_SECTION_CHUNKS,
+                filters=dict(state.filters if state.filters is not None else request.filters),
+                oracle=self._oracle,
+            )
+        except Exception:  # noqa: BLE001 - 章節の拡張は補助。この章節を足さずに続ける。
+            logger.warning("section chunks load failed", exc_info=True)
+            return []
+        chunks = [state.chunks.setdefault(row.chunk.chunk_id, row.chunk) for row in text.chunks]
+        if not chunks:
+            return []
+        await self._load_classifications(chunks, state)
+        await self._load_first_page_contexts(chunks, state)
+        if answer_images_enabled(self._settings):
+            for chunk in chunks:
+                await self._materialize_image_evidence(chunk, state)
+            chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
+        children = [
+            _stored_child(
+                chunk,
+                rrf_score=0.0,
+                classification=state.classifications.get(chunk.document_id),
+                first_page_context=_first_page_context(chunk, state),
+            )
+            for chunk in chunks
+        ]
+        return [*children, *_stored_parents(children, state)]
+
     async def _load_classifications(
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
     ) -> None:
@@ -1976,6 +2117,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "crag_attempt_count": len(result.crag_attempts or ()),
         # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
         "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
+        # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
+        # 読めなかった章節)。
+        "section_expansion": _section_expansion_diagnostics(result.generation_trace),
         "execution_steps": steps,
         "evidence_tree": tree,
     }
@@ -1988,6 +2132,14 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         context_text=context_text,
         evaluation_input=_evaluation_input(result),
     )
+
+
+def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:
+    """章節の拡張の記録(#1436)。評価器の判定の全文(grades)は除き、段ごとの判定だけを残す。"""
+    raw = (trace or {}).get("section_expansion") if isinstance(trace, Mapping) else None
+    if not isinstance(raw, Mapping):
+        return {}
+    return {key: value for key, value in raw.items() if key != "grades"}
 
 
 # 本文の出典行（「根拠：」）の順番（1 始まり）を、出典行が指す根拠の chunk の metadata に

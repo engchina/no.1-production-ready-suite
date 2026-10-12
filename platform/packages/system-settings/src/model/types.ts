@@ -41,6 +41,14 @@ export const DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: EnterpriseAiReasoningEffort
   "medium";
 
 /**
+ * モデルの入力の上限（tokens。#1437）。登録モデルごとに持ち、値の無いモデルは既定の 128000。範囲は backend の
+ * ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN / ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX と同じ（範囲外は保存で 422）。
+ */
+export const DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS = 128_000;
+export const ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN = 4_096;
+export const ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX = 2_000_000;
+
+/**
  * LLM / VLM の呼び出しの seed（#1434）。全モデルで共通の 1 つで、既定は 42。範囲は backend の
  * ENTERPRISE_AI_SEED_MIN / ENTERPRISE_AI_SEED_MAX と同じ（範囲外は保存で 422）。
  */
@@ -56,6 +64,8 @@ export interface EnterpriseAiConfiguredModel {
   connection_id?: string;
   /** 推論（思考）の量（#1425）。未指定は既定（medium）、none は送らない。 */
   reasoning_effort?: EnterpriseAiReasoningEffort;
+  /** 入力の上限（tokens。#1437）。未指定は既定（128000）。空欄は NaN で持ち、保存の前に欄のエラーで止める。 */
+  max_input_tokens?: number;
 }
 
 /**
