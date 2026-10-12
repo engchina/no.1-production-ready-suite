@@ -36,7 +36,7 @@ function seedRun(mockApi: MockApi, id = "run-layout", status = "completed") {
 }
 
 // #875: 分割ペインではなく、一覧 → 全幅の結果を URL で開く。
-test("一覧から結果を開き、戻る・再読込・進むで対象と検索を保持する", async ({ page, mockApi }) => {
+test("一覧から結果を開き、戻る・再読込・進むで対象と検索を保持する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   seedRun(mockApi, "run-other");
   await page.goto("/runs");
@@ -66,7 +66,7 @@ test("一覧から結果を開き、戻る・再読込・進むで対象と検�
   await expect(link).toBeFocused();
 });
 
-test("結果・経過・監査のタブをキーボードで選び、監査は開いた時だけ取得する", async ({ page, mockApi }) => {
+test("結果・経過・監査のタブをキーボードで選び、監査は開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   await page.goto("/runs?id=run-layout");
   const result = page.getByRole("tab", { name: "結果", exact: true });
@@ -86,7 +86,7 @@ test("結果・経過・監査のタブをキーボードで選び、監査は�
   await expect(page.getByText("売上合計は100万円です。", { exact: true })).toBeVisible();
 });
 
-test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", async ({ page, mockApi }) => {
+test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", { tag: "@responsive" }, async ({ page, mockApi }) => {
   await page.goto("/runs");
   await page.getByRole("button", { name: "実行を作成", exact: true }).click();
   await expect(page).toHaveURL(/\/runs\?id=new$/);
@@ -108,7 +108,7 @@ test("作成は独立画面で入力を確認し、成功した実行の詳細�
   });
 });
 
-test("存在しない実行の URL は他の結果へ置換せず、一覧に戻れる", async ({ page, mockApi }) => {
+test("存在しない実行の URL は他の結果へ置換せず、一覧に戻れる", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   await page.goto("/runs?id=missing-run");
   await expect(page.getByText("対象が見つかりません")).toBeVisible();
@@ -117,7 +117,7 @@ test("存在しない実行の URL は他の結果へ置換せず、一覧に戻
   await expect(page.locator('a[data-run-id="run-layout"]')).toBeVisible();
 });
 
-test("閲覧だけの利用者には作成・監査・実行の操作を出さない", async ({ page, mockApi }) => {
+test("閲覧だけの利用者には作成・監査・実行の操作を出さない", { tag: "@responsive" }, async ({ page, mockApi }) => {
   mockApi.setCurrentUser(dbUser({ permissions: ["menu.runs", "agent.runs.view"], allowed_agent_ids: ["default"] }));
   seedRun(mockApi);
   await page.goto("/runs");
@@ -132,7 +132,7 @@ test("閲覧だけの利用者には作成・監査・実行の操作を出さ�
   await expect(page.locator("#run-goal")).toHaveCount(0);
 });
 
-test("取得中・取得失敗・再試行・空の履歴を区別する", async ({ page }) => {
+test("取得中・取得失敗・再試行・空の履歴を区別する", { tag: "@responsive" }, async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -162,7 +162,7 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", async
   await expect(page.locator("a[data-run-id]")).toHaveCount(0);
 });
 
-test("回答を中間成果物より先に出し、失敗時には経過への導線を出す", async ({ page, mockApi }) => {
+test("回答を中間成果物より先に出し、失敗時には経過への導線を出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   const run = mockApi.state.runs[0];
   (run.artifacts as Record<string, unknown>[]).unshift({
@@ -186,7 +186,7 @@ test("回答を中間成果物より先に出し、失敗時には経過への�
   await expect(page.getByText("nl2sql__nl2sql_query", { exact: true })).toBeVisible();
 });
 
-test("承認待ちの判断は結果と経過のどちらでも見つかる", async ({ page, mockApi }) => {
+test("承認待ちの判断は結果と経過のどちらでも見つかる", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi, "run-layout", "waiting_approval");
   mockApi.state.runs[0].approvals = [
     {
@@ -234,7 +234,7 @@ async function detailAction(page: Page, name: string) {
 }
 
 // #919: 承認の画面（#877）と同じく、判断の結果は返却値で確かめる。
-test("判断の返却値が判断済みでなければ、承認の成功と案内しない", async ({ page, mockApi }) => {
+test("判断の返却値が判断済みでなければ、承認の成功と案内しない", { tag: "@responsive" }, async ({ page, mockApi }) => {
   const approval = seedPendingApproval(mockApi);
   await page.route("**/api/approvals/approval-layout/decision", async (route) => {
     // 送る前に実行が取り消された（backend は 200 で、承認を cancelled にした Run を返す）。
@@ -251,7 +251,7 @@ test("判断の返却値が判断済みでなければ、承認の成功と案�
   await expect(page.getByText("承認待ち", { exact: true })).toHaveCount(0);
 });
 
-test("確認中に他の操作者が判断した承認には、古い状態で判断を送らない", async ({ page, mockApi }) => {
+test("確認中に他の操作者が判断した承認には、古い状態で判断を送らない", { tag: "@responsive" }, async ({ page, mockApi }) => {
   const approval = seedPendingApproval(mockApi);
   await page.goto("/runs?id=run-layout");
   await detailAction(page, "却下");
@@ -267,7 +267,7 @@ test("確認中に他の操作者が判断した承認には、古い状態で�
   expect(mockApi.lastRequest("POST", "/api/approvals/approval-layout/decision")).toBeUndefined();
 });
 
-test("一覧の2ページ目から詳細を開いて戻ると、同じページと行に戻る", async ({ page, mockApi }) => {
+test("一覧の2ページ目から詳細を開いて戻ると、同じページと行に戻る", { tag: "@responsive" }, async ({ page, mockApi }) => {
   for (let index = 0; index < 23; index++) seedRun(mockApi, `run-layout-${index}`);
   await page.goto("/runs");
   await page.getByTestId("run-history-pagination").getByRole("button", { name: "次へ", exact: true }).click();
@@ -285,7 +285,7 @@ for (const viewport of [
   { width: 375, height: 812 },
   { width: 812, height: 375 },
 ]) {
-  test(`全幅の履歴と詳細は明暗・文字拡大でもページ外へスクロールしない (${viewport.width}px)`, async ({
+  test(`全幅の履歴と詳細は明暗・文字拡大でもページ外へスクロールしない (${viewport.width}px)`, { tag: "@responsive" }, async ({
     page,
     mockApi,
   }, testInfo) => {
@@ -333,7 +333,7 @@ for (const viewport of [
 
 // #1122: 開いた直後はフォーカスを動かさない。最初の Tab は「本文へスキップ」（一覧 ↔ 詳細の切り替えだけ見出し・行へ移す）。
 for (const path of ["/runs", "/runs?id=run-layout", "/runs?id=new"]) {
-  test(`${path} を開いた直後の最初の Tab で「本文へスキップ」にフォーカスが当たる`, async ({ page, mockApi }) => {
+  test(`${path} を開いた直後の最初の Tab で「本文へスキップ」にフォーカスが当たる`, { tag: "@responsive" }, async ({ page, mockApi }) => {
     seedRun(mockApi);
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

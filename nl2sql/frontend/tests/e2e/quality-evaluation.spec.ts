@@ -980,7 +980,7 @@ test("desktop confirms delete, removes the current job URL and clears the page s
   await expect(page.getByText("結果明細はまだありません")).toBeVisible();
 });
 
-test("mobile recent job delete actions do not create horizontal overflow", async ({
+test("mobile recent job delete actions do not create horizontal overflow", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-375", "mobile delete actions");
@@ -1020,7 +1020,7 @@ test("mobile recent job delete actions do not create horizontal overflow", async
   expect(noHorizontalOverflow).toBe(true);
 });
 
-test("start validation errors stay in the action footer", async ({ page }) => {
+test("start validation errors stay in the action footer", { tag: "@responsive" }, async ({ page }) => {
   const validationError = "行 3: ケースID「CASE-001」が重複しています。";
   await mockQualityApi(page, { startValidationErrors: [validationError] });
   await page.goto("/evaluation");
@@ -1073,7 +1073,7 @@ test("unavailable engines remain disabled when capabilities mark them unavailabl
   await expect(page.getByText("利用不可")).toBeVisible();
 });
 
-test("mobile restores completed results as cards without page overflow", async ({
+test("mobile restores completed results as cards without page overflow", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-375", "mobile flow");
@@ -1129,7 +1129,7 @@ test("mobile restores completed results as cards without page overflow", async (
   expect(noHorizontalOverflow).toBe(true);
 });
 
-test("mobile constrains result cards to an internal vertical scroll region", async ({
+test("mobile constrains result cards to an internal vertical scroll region", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-375", "mobile scroll region");

@@ -7,7 +7,7 @@ import { expect, test } from "./fixtures/mock-api";
 const focusedInsideDrawer = (page: Page) =>
   page.evaluate(() => Boolean(document.activeElement?.closest('[data-testid="nav-drawer"]')));
 
-test.describe("md 未満のナビのドロワー (mobile-375)", () => {
+test.describe("md 未満のナビのドロワー (mobile-375)", { tag: "@responsive" }, () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto("/settings/appearance");
@@ -57,7 +57,7 @@ test.describe("md 未満のナビのドロワー (mobile-375)", () => {
   });
 });
 
-test("desktop（1280px）は従来どおりサイドバーを出し、メニューボタンを出さない", async ({ page }) => {
+test("desktop（1280px）は従来どおりサイドバーを出し、メニューボタンを出さない", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/settings/appearance");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });

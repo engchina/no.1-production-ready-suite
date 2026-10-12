@@ -140,7 +140,7 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
 });
 
 // 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
-test("関係情報グラフ・パイプライン図の開閉の見出しは Disclosure の高さで、開閉の状態を持つ", async ({ page }) => {
+test("関係情報グラフ・パイプライン図の開閉の見出しは Disclosure の高さで、開閉の状態を持つ", { tag: "@responsive" }, async ({ page }) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
   await page.goto("/knowledge-bases/kb-1");
 

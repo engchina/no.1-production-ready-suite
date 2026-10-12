@@ -115,7 +115,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`チャットの出典の図の根拠から元の図を開き、Escape で閉じる (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`チャットの出典の図の根拠から元の図を開き、Escape で閉じる (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       seedFigureRun(mockApi);
       const figures = await serveFigures(page);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });

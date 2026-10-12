@@ -25,7 +25,7 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`API キーを作ると秘密を 1 回だけ出し、一覧から削除できる (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`API キーを作ると秘密を 1 回だけ出し、一覧から削除できる (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       await page.goto("/settings/api-keys");

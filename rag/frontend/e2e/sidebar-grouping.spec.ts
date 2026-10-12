@@ -17,7 +17,7 @@ async function mockApi(page: Page) {
   });
 }
 
-test("サイドバーのセクション再編とラベルを確認", async ({ page }) => {
+test("サイドバーのセクション再編とラベルを確認", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto("/settings/retrieval");
@@ -91,7 +91,7 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
   await expect(sidebar.getByText("設定", { exact: true })).toHaveCount(0);
 });
 
-test("セクション見出しクリックで配下項目を開閉できる", async ({ page }) => {
+test("セクション見出しクリックで配下項目を開閉できる", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   // システム設定が現在地。検索・回答設定は非アクティブなので折りたためる。
@@ -114,7 +114,7 @@ test("セクション見出しクリックで配下項目を開閉できる", as
   await expect(parserLink).toBeVisible();
 });
 
-test("アクティブ経路のセクションは折りたたみ状態でも自動展開する", async ({ page }) => {
+test("アクティブ経路のセクションは折りたたみ状態でも自動展開する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto("/settings/oci");

@@ -78,7 +78,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 720, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`モデル設定は Enterprise AI の複数 LLM と既定のモデル 2 つを表示する (${viewport.name})`, async ({ page }) => {
+  test(`モデル設定は Enterprise AI の複数 LLM と既定のモデル 2 つを表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -218,7 +218,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 720 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`画面を開いた後にほかの製品が保存していたら、保存は競合を案内し、最新の設定を読み直せる (#1037, ${viewport.name})`, async ({
+  test(`画面を開いた後にほかの製品が保存していたら、保存は競合を案内し、最新の設定を読み直せる (#1037, ${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -347,7 +347,7 @@ for (const scheme of ["light", "dark"] as const) {
 
 for (const scheme of ["light", "dark"] as const) {
   // desktop（1440px）と mobile（375px）は playwright.config の project で回す。
-  test(`既定のテキストモデルが未設定なら欄の直下にエラーを出し、選ぶまで保存しない (#566, ${scheme})`, async ({
+  test(`既定のテキストモデルが未設定なら欄の直下にエラーを出し、選ぶまで保存しない (#566, ${scheme})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.addInitScript((theme) => {
@@ -414,7 +414,7 @@ test("既定の画像対応モデルに選んだモデルを一覧から削除�
 
 for (const scheme of ["light", "dark"] as const) {
   // desktop（1440px）と mobile（375px）は playwright.config の project で回す。
-  test(`接続はプライマリ接続とセカンダリ接続のタブで切り替え、登録モデルごとに接続を選んで保存する (${scheme})`, async ({
+  test(`接続はプライマリ接続とセカンダリ接続のタブで切り替え、登録モデルごとに接続を選んで保存する (${scheme})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     const viewportWidth = page.viewportSize()?.width ?? 1440;
@@ -689,7 +689,7 @@ for (const viewport of [
   { name: "wide", width: 1920, height: 1000 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`登録モデルごとに推論の量を選び、テストと保存に選んだ値を送る（既定は medium。#1425, ${viewport.name}）`, async ({
+  test(`登録モデルごとに推論の量を選び、テストと保存に選んだ値を送る（既定は medium。#1425, ${viewport.name}）`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -772,7 +772,7 @@ for (const viewport of [
   { name: "wide", width: 1920, height: 1000 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`登録モデルごとに入力の上限（tokens）を入力し、範囲外は保存の前に止める（既定は 128000。#1437, ${viewport.name}）`, async ({
+  test(`登録モデルごとに入力の上限（tokens）を入力し、範囲外は保存の前に止める（既定は 128000。#1437, ${viewport.name}）`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });

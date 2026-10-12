@@ -137,7 +137,7 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
   return state;
 }
 for (const width of [1280, 375]) {
-  test(`多輪で SQL を生成し、履歴とリロードで復元する (${width}px)`, async ({
+  test(`多輪で SQL を生成し、履歴とリロードで復元する (${width}px)`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     const state = await setup(page);
@@ -308,7 +308,7 @@ async function holdJobSubmit(page: Page, state: { requests: Record<string, unkno
   };
 }
 
-test("送信の応答が上限までに届かないと、英語の signal timed out ではなく日本語の案内と詳細を出す (#900)", async ({
+test("送信の応答が上限までに届かないと、英語の signal timed out ではなく日本語の案内と詳細を出す (#900)", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   const state = await setup(page);
@@ -483,7 +483,7 @@ test("AI 活用の先頭のチャットは、生成だけの権限でも利用�
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
 });
 
-test("安全検査でブロックした SQL は未実行のまま表示する", async ({ page }) => {
+test("安全検査でブロックした SQL は未実行のまま表示する", { tag: "@responsive" }, async ({ page }) => {
   const state = await setup(page);
   state.turns.push({
     job_id: "chat-1",
@@ -539,7 +539,7 @@ test("利用できるプロファイルがないと会話の欄を出さず送�
   expect(state.requests).toHaveLength(0);
 });
 
-test("業務プロファイルの欄は RAG の検索・回答プロファイルと同じ形で、読み込み中は欄の形を出す", async ({
+test("業務プロファイルの欄は RAG の検索・回答プロファイルと同じ形で、読み込み中は欄の形を出す", { tag: "@responsive" }, async ({
   page,
 }) => {
   await setup(page);
@@ -580,7 +580,7 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
   await expect(field).toBeFocused();
 });
 
-test("生成方法は入力欄の直上で選び、Select AI Agent も送れる", async ({
+test("生成方法は入力欄の直上で選び、Select AI Agent も送れる", { tag: "@responsive" }, async ({
   page,
   isMobile,
 }) => {
@@ -1299,7 +1299,7 @@ const noHorizontalOverflow = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 // desktop（1280px）と 375px は playwright の project で分ける。
-test("チャットで確認の質問・回答・まとめ・骨組みを経て SQL を作る (#1442)", async ({
+test("チャットで確認の質問・回答・まとめ・骨組みを経て SQL を作る (#1442)", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   const width = page.viewportSize()?.width ?? 0;

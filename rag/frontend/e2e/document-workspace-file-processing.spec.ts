@@ -275,7 +275,7 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   ).toHaveCount(0);
 });
 
-test("処理の詳細(診断) は Chevron で開閉の状態を示し、クリック・Enter・Space で開閉できる（#397）", async ({
+test("処理の詳細(診断) は Chevron で開閉の状態を示し、クリック・Enter・Space で開閉できる（#397）", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockDocumentWorkspace(page, { pdfPreview: true });
@@ -710,7 +710,7 @@ test("chunk 取得失敗時は workspace 内にエラー状態を表示する", 
   await expectNoHorizontalOverflow(page);
 });
 
-test("画像 preview は同一 surface 上で bbox overlay を位置決めする", async ({ page }) => {
+test("画像 preview は同一 surface 上で bbox overlay を位置決めする", { tag: "@responsive" }, async ({ page }) => {
   await mockDocumentWorkspace(page, { imagePreview: true });
 
   await page.goto("/documents/doc-1");
@@ -800,7 +800,7 @@ test("章節ナビゲーションの章節を押すと、プレビューをそ�
   await expect(page.getByTestId("preview-page-status")).toHaveText("2 / 2");
 });
 
-test("PDF はページ画像で表示し、要素の表示領域を要素ごとに強調する", async ({ page }) => {
+test("PDF はページ画像で表示し、要素の表示領域を要素ごとに強調する", { tag: "@responsive" }, async ({ page }) => {
   await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
 
   await page.goto("/documents/doc-1");
@@ -847,7 +847,7 @@ test("PDF はページ画像で表示し、要素の表示領域を要素ごと�
   await expectNoHorizontalOverflow(page);
 });
 
-test("プレビューの回転・拡大の後も強調が同じ位置に重なり、キーボードでも操作できる", async ({
+test("プレビューの回転・拡大の後も強調が同じ位置に重なり、キーボードでも操作できる", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
@@ -1516,7 +1516,7 @@ test("抽出セグメントが多い場合は高さ固定で内部スクロー�
   await expectNoHorizontalOverflow(page);
 });
 
-test("chunk が多い場合は 5 / 8 行の高さで中をスクロールし、選んだ chunk を一覧の中で見せる", async ({ page }) => {
+test("chunk が多い場合は 5 / 8 行の高さで中をスクロールし、選んだ chunk を一覧の中で見せる", { tag: "@responsive" }, async ({ page }) => {
   await mockDocumentWorkspace(page, { extraChunkCount: 23 });
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: "Chunk / Citation", exact: false }).click();

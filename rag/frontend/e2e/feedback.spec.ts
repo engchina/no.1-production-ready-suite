@@ -136,7 +136,7 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと分�
   await expectNoPageOverflow(page);
 });
 
-test("375pxでは一覧と詳細を縦に積み、カードを選ぶと詳細へ移り、URLから選択を復元できる", async ({ page }, testInfo) => {
+test("375pxでは一覧と詳細を縦に積み、カードを選ぶと詳細へ移り、URLから選択を復元できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "mobile card contract");
   await page.setViewportSize({ width: 375, height: 812 });
   await mockFeedback(page, []);
@@ -175,7 +175,7 @@ test("375pxでは一覧と詳細を縦に積み、カードを選ぶと詳細へ
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-mobile.png"), fullPage: true });
 });
 
-test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Enter / Space で選び、選んだ対象を aria-current で伝える", async ({ page }, testInfo) => {
+test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Enter / Space で選び、選んだ対象を aria-current で伝える", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // #421: RAG の EntityLayout の RowTitleButton を packages/ui の共有部品へ移した。
   await mockFeedback(page, []);
   await page.goto("/feedback?period=30&sort=newest&size=25&page=1");
@@ -324,7 +324,7 @@ test("承認 FAQ への反映の権限が無い利用者には Approved FAQ へ�
   await expect(evidence.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
 });
 
-test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけ", async ({ page }) => {
+test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけ", { tag: "@responsive" }, async ({ page }) => {
   // 範囲は backend が SQL で絞る（#408）。画面は範囲の案内を、集計・一覧より前に出す。
   await mockFeedback(page, []);
   await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
@@ -369,7 +369,7 @@ for (const width of [1280, 1920]) {
   });
 }
 
-test("375pxのカード一覧は評価バッジや値がカードの外にはみ出さない", async ({ page }, testInfo) => {
+test("375pxのカード一覧は評価バッジや値がカードの外にはみ出さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "mobile card contract");
   await page.setViewportSize({ width: 375, height: 812 });
   await mockFeedback(page, []);
@@ -603,7 +603,7 @@ function feedbackDetailEnvelope() {
 }
 
 // #384: 検索欄は共有の TextField（先頭アイコン・クリア）。高さはコントロールの高さのトークン（--field-height）。
-test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・クリアボタン・Escape で入力を扱える", async ({ page }, testInfo) => {
+test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・クリアボタン・Escape で入力を扱える", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockFeedback(page, []);
   await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
 

@@ -12,7 +12,7 @@ async function mockApi(page: Page) {
   });
 }
 
-test.describe("サイドナビのセクション折りたたみ", () => {
+test.describe("サイドナビのセクション折りたたみ", { tag: "@responsive" }, () => {
   test("キーボード（Enter / Space）で開閉でき aria-expanded が反映される", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await mockApi(page);

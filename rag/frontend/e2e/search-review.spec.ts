@@ -363,7 +363,7 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
   await expectNoPageOverflow(page);
 });
 
-test("検索のボタンは詳細条件の下にあり、実行中は同じ位置・同じ要素のまま「停止」になる（#413）", async ({ page }) => {
+test("検索のボタンは詳細条件の下にあり、実行中は同じ位置・同じ要素のまま「停止」になる（#413）", { tag: "@responsive" }, async ({ page }) => {
   let calls = 0;
   let aborted = 0;
   page.on("requestfailed", (request) => {

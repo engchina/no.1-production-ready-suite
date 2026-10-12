@@ -417,7 +417,7 @@ async function openSections(page: Page) {
   return page.getByTestId("extraction-navigation");
 }
 
-test("章節ナビゲーションは各章節のページ範囲を出す", async ({ page }) => {
+test("章節ナビゲーションは各章節のページ範囲を出す", { tag: "@responsive" }, async ({ page }) => {
   await mockDocumentDetail(page);
   await mockDocumentSections(page);
   const panel = await openSections(page);
