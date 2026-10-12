@@ -27,21 +27,22 @@ DO_NOT_TOUCH = "サーバー室の定期点検要領で、作業者が触れな�
 PREPARATION = "サーバー室の定期点検の前に行う準備をすべて挙げてください。"
 
 
-@pytest.mark.parametrize("question, scope, count, chapters, minimum", [
-    (BUSINESS_DAY_FIVE, "document", 5, [], None),
-    (SHEET_COLUMNS, "document", None, [2, 3, 4, 5, 6], None),
-    (STOP_SIX, "section", 6, [], None),
-    (DO_NOT_TOUCH, "document", None, [], "document"),
-    (PREPARATION, "section", None, [], "leaf"),
-    ("重要度が A で、機密区分が極秘のシステムをすべて挙げてください。", "section", None, [], "leaf"),
-    ("承認の条件を三つ、漏れなく教えてください。", "section", 3, [], None),
+@pytest.mark.parametrize("question, scope, count, chapters, minimum, max_items", [
+    (BUSINESS_DAY_FIVE, "document", 5, [], None, 7),
+    # 2 つ以上の章の範囲は 1 つの章節に入らないので、文書全体まで読んでから判定する。
+    (SHEET_COLUMNS, "document", None, [2, 3, 4, 5, 6], "document", 10),
+    (STOP_SIX, "section", 6, [], None, 8),
+    (DO_NOT_TOUCH, "document", None, [], "document", 5),
+    (PREPARATION, "section", None, [], "leaf", 5),
+    ("重要度が A で、機密区分が極秘のシステムをすべて挙げてください。", "section", None, [], "leaf", 5),
+    ("承認の条件を三つ、漏れなく教えてください。", "section", 3, [], None, 5),
 ], ids=["count-document", "chapter-range", "count-section", "open-document", "open-section", "open-table",
         "kanji-count"])
-def test_detects_enumeration_requests(question, scope, count, chapters, minimum):
+def test_detects_enumeration_requests(question, scope, count, chapters, minimum, max_items):
     request = enumeration_request(question)
     assert request is not None
     assert request.to_payload() == {"scope": scope, "expected_count": count, "chapters": chapters,
-                                    "minimum_scope": minimum}
+                                    "minimum_scope": minimum, "max_items": max_items}
     contract = task_contract(question)
     assert ENUMERATION_ASPECT in contract["required_aspects"]
     assert contract["enumeration"] == request.to_payload()
@@ -137,6 +138,18 @@ def test_chapter_range_requires_evidence_from_every_chapter():
     whole = _context(*(_record(f"c{n}", f"第 {n} 章の点検表の欄に書くこと{n}。", f"第 {n} 章 見出し") for n in range(2, 7)))
     covered = _check(SHEET_COLUMNS, _items(*((f"c{n}", f"点検表の欄に書くこと{n}") for n in range(2, 7))), whole)
     assert covered["status"] == "supported"
+
+
+def test_chapter_comes_from_the_deepest_heading_and_string_paths():
+    """見出しは「A > B」の文字列でもよく、深さが崩れて前の章の節の下に入った章は最も深い章で数える。"""
+    nested = AnswerRecord(id="n5", chunk_id="n5", chunk_uid="n5", engine="docling", engine_label="Docling", page=10,
+                          seq_no=1, category="Chunk", text="点検の記録には、点検の日時と点検者の氏名を書きます。",
+                          chunk_level="parent",
+                          metadata={"section_path": "要領 > 第 3 章 設備ごとの点検 > 3.3 消火設備 > 第 5 章 点検の記録"})
+    context = _context(nested)
+    entry = _check("要領の第 3 章から第 5 章までの各章で、書くことを章ごとにすべて挙げてください。",
+                   _items(("n5", "点検者の氏名を書きます")), context)
+    assert "根拠の無い章: 第 3 章、第 4 章" in entry["reason"]
 
 
 def test_open_enumeration_uses_grader_status_only_with_verified_items():

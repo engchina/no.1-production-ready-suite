@@ -130,14 +130,14 @@ class CragEnumeratedItem(_StrictModel):
     """
     item: str = Field(description="該当の項目を短く（例: 入室の予約）。")
     source_ids: list[str] = Field(default_factory=list, description="項目が書かれた候補の chunk_uid。")
-    quote: str = Field(description="候補の本文から、項目が書かれた箇所を文字を変えずに写した原文（40 字程度まで）。")
+    quote: str = Field(description="候補の本文から、項目が書かれた箇所を文字を変えずに写した原文（20 字程度）。")
 
 
 # 項目の順序は生成順でもある（strict schema）。候補ごとの判定 → 列挙の項目 → 観点 → 理由 → 結論の順に置き、結論を先に書かせない。
 class CragRetrievalGradeOutput(_StrictModel):
     """CRAG retrieval の十分性判定と理由を保持します。"""
     candidate_verdicts: list[CragCandidateVerdict] = Field(default_factory=list, description="全候補の関連判定。候補ごとに独立に判定する。relevant=true の候補を回答に使う。")
-    enumerated_items: list[CragEnumeratedItem] = Field(default_factory=list, description="task_contract.enumeration があるときだけ、候補に見える該当の項目をすべて、重ねずに資料の順で挙げる。候補に無い項目を推測で足さない。enumeration が null なら空の配列。")
+    enumerated_items: list[CragEnumeratedItem] = Field(default_factory=list, description="task_contract.enumeration があるときだけ、候補に見える該当の項目を、重ねずに資料の順で enumeration.max_items 件まで挙げる。候補に無い項目を推測で足さない。enumeration が null なら空の配列。")
     aspect_checks: list[CragAspectCheck] = Field(default_factory=list, description="required_aspects ごとの判定。relevant な候補を合わせて確認し、全観点を必ず列挙する。")
     reason: str = Field(description="十分・不足の理由を短く。不足なら欠けている観点と、どの候補が最も近いかを書く。")
     sufficient: bool = Field(description="同じ業務・機能の relevant な候補があり business_object を supported にできるなら true。他の観点の missing は不足ではなく aspect_checks と recovery_action で示す。")

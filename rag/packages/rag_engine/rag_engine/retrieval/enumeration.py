@@ -51,6 +51,10 @@ _DOCUMENT_NAMED = re.compile(
 MAX_EXPECTED_COUNT = 50
 # 章の範囲の上限。
 MAX_CHAPTERS = 30
+# 評価器に挙げさせる項目の上限（章の範囲の問）と、件数も範囲も無い問で挙げさせる数（足りるかは評価器の判定と
+# 読む範囲で決めるので、根拠のある項目が確かめられれば足りる）。
+MAX_LISTED_ITEMS = 20
+OPEN_LISTED_ITEMS = 5
 
 Scope = Literal["section", "document"]
 
@@ -70,14 +74,29 @@ class EnumerationRequest:
 
     @property
     def minimum_scope(self) -> str | None:
-        """足りると判定する前に読む範囲（件数・範囲の無い網羅の問だけ）。``leaf`` / ``document`` / None。"""
+        """足りると判定する前に読む範囲。``leaf`` / ``document`` / None（範囲の規則なし）。
+
+        件数だけの問は数えた結果で決める（None）。2 つ以上の章の範囲の問は、範囲の章が 1 つの章節に入らないため
+        文書全体まで読んでから判定する（下の段で評価器を呼ばない）。件数も範囲も無い問は、範囲の語で決める。
+        """
+        if len(self.chapters) >= 2:
+            return "document"
         if self.countable:
             return None
         return "document" if self.scope == "document" else "leaf"
 
+    @property
+    def max_items(self) -> int:
+        """評価器に挙げさせる項目の上限（判定に要る数だけ。出力の token と時間を増やしすぎない）。"""
+        if self.expected_count is not None:
+            return min(MAX_EXPECTED_COUNT, self.expected_count + 2)
+        if self.chapters:
+            return min(MAX_LISTED_ITEMS, 2 * len(self.chapters))
+        return OPEN_LISTED_ITEMS
+
     def to_payload(self) -> dict[str, Any]:
         return {"scope": self.scope, "expected_count": self.expected_count, "chapters": list(self.chapters),
-                "minimum_scope": self.minimum_scope}
+                "minimum_scope": self.minimum_scope, "max_items": self.max_items}
 
 
 def _number(value: str) -> int | None:
@@ -131,27 +150,36 @@ def _folded(text: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or ""))).lower()
 
 
-def _chapters_of(texts: Sequence[str]) -> set[int]:
-    return {int(value) for text in texts for value in _CHAPTER.findall(unicodedata.normalize("NFKC", text))}
+def _chapter_of(record: Any) -> int | None:
+    """根拠の見出し（``section_path``）の最も深い「第 N 章」。見出しは配列か「A > B」の文字列。
+
+    解析の見出しの深さが崩れて、後ろの章が前の章の節の下に入ることがある（「第 3 章 > 3.3 > 第 5 章」）ため、
+    浅い章ではなく最も深い章をその根拠の章にする。
+    """
+    path = (getattr(record, "metadata", None) or {}).get("section_path")
+    if isinstance(path, str):
+        path = path.split(" > ")
+    found = _CHAPTER.findall(unicodedata.normalize("NFKC", " > ".join(str(item) for item in path or () if item)))
+    return int(found[-1]) if found else None
 
 
 @dataclass(frozen=True)
 class _Unit:
     text: str
-    sections: tuple[str, ...]
+    chapters: frozenset[int]
 
 
 def _units(context: Any, records: Sequence[Any]) -> dict[str, _Unit]:
-    """候補の chunk_uid → 根拠の本文（親・同じ親の子）と見出し。子の uid も親の単位に写す。"""
+    """候補の chunk_uid → 根拠の本文（親・同じ親の子）と章。子の uid も親の単位に写す。"""
     units: dict[str, _Unit] = {}
 
-    def heading(record: Any) -> list[str]:
-        return [str(item) for item in (getattr(record, "metadata", None) or {}).get("section_path") or [] if item]
+    def chapters(items: Sequence[Any]) -> frozenset[int]:
+        return frozenset(number for item in items if (number := _chapter_of(item)) is not None)
 
     for parent in getattr(context, "evidence_tree", ()) or ():
         members = [parent.record, *(child.record for child in parent.children)]
         unit = _Unit(text="\n".join(str(getattr(item, "text", "") or "") for item in members),
-                     sections=tuple(dict.fromkeys(title for item in members for title in heading(item))))
+                     chapters=chapters(members))
         for item in members:
             uid = str(getattr(item, "chunk_uid", "") or getattr(item, "id", "") or "")
             if uid:
@@ -159,7 +187,7 @@ def _units(context: Any, records: Sequence[Any]) -> dict[str, _Unit]:
     for record in records:
         uid = str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
         if uid and uid not in units:
-            units[uid] = _Unit(text=str(getattr(record, "text", "") or ""), sections=tuple(heading(record)))
+            units[uid] = _Unit(text=str(getattr(record, "text", "") or ""), chapters=chapters([record]))
     return units
 
 
@@ -210,7 +238,7 @@ def enumeration_check(
                 ok = False
             reasons.append(f"要求 {request.expected_count} 件に対し、原文を確かめた項目 {len(counted)} 件")
         if request.chapters:
-            covered = _chapters_of([title for uid in source_ids for title in units[uid].sections])
+            covered = {number for uid in source_ids for number in units[uid].chapters}
             lacking = [number for number in request.chapters if number not in covered]
             if lacking:
                 ok = False

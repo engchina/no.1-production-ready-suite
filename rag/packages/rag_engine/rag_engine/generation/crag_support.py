@@ -99,7 +99,7 @@ CRAG_GRADE_PROMPT_TEMPLATE = (
     "- recovery_anchor_ids は閲覧した適合候補の chunk_uid のみ。実値確認のみなら拡張しない。\n"
     "- sufficient=false の場合は、原質問の対象・目的を保った短い日本語の検索文を rewritten_query に入れる。候補画面名だけに限定しない。\n"
     "3.4 列挙・網羅の問（task_contract.enumeration があるときだけ）\n"
-    "- 「すべて挙げて」「5 つすべて」「章ごとに」のような問は、見えている候補で答えられるかではなく、該当の項目が候補にそろっているかを確かめる。候補に見える該当の項目をすべて enumerated_items に挙げ、項目ごとに書かれた候補の chunk_uid と、その箇所の原文の写し（quote。文字を変えない）を付ける。同じ記載を 2 回挙げない。候補に無い項目を推測・一般知識で足さない。\n"
+    "- 「すべて挙げて」「5 つすべて」「章ごとに」のような問は、見えている候補で答えられるかではなく、該当の項目が候補にそろっているかを確かめる。候補に見える該当の項目を enumerated_items に資料の順で挙げ（task_contract.enumeration.max_items 件まで。章の範囲（chapters）のある問は章ごとに 1〜2 件）、項目ごとに書かれた候補の chunk_uid と、その箇所の原文の写し（quote。20 字程度。文字を変えない）を付ける。同じ記載を 2 回挙げない。候補に無い項目を推測・一般知識で足さない。\n"
     "- aspect_checks の enumeration_coverage は、該当の項目が候補にそろっていれば supported、件数（expected_count）に足りない・範囲の章（chapters）の記載が候補に無い・候補が抄録（excerpt_only=true）や章節の途中で、続きに該当が残っていそうなら missing。件数・章の範囲は enumerated_items からシステムが数え直す。\n"
     "- enumeration_coverage が missing でも、sufficient は 3.1 のとおり business_object で決める（足りない項目は章節の拡張で補う）。\n"
     "3.5 信頼境界\n"
