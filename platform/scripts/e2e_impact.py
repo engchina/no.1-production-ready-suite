@@ -25,7 +25,11 @@ PR の CI（`.github/workflows/ci.yml` の `e2e-impact`）は `select` で、bas
 
 選んだ spec は、nightly の実測の時間（記録が無い spec は中央値）で LPT（長い spec から、合計が
 最も短い shard へ）で shard に詰め、shard ごとの spec を matrix に出す（#1488）。`fullyParallel`
-の製品（NL2SQL）は Playwright の `--shard` でテスト単位に分ける。
+の製品（NL2SQL）は、1 shard の目安より長い spec をその spec だけの Playwright の `--shard` で
+テスト単位に分け、残りの spec を LPT で詰める（#1525）。記録が無ければ全体を `--shard` で分ける。
+
+PR の smoke（ci.yml の `*_E2E_SMOKE`）が全 project で実行する spec は `--skip-specs` で渡し、
+選んだ spec から除く（同じ spec を 2 回実行しない。全件のときは smoke の job を飛ばす。#1525）。
 
 ローカルで同じ選択を見るには（nightly の記録を `gh` で取得する）:
 
@@ -81,7 +85,7 @@ PRODUCTS = {
     "nl2sql": Product(
         "nl2sql", "nl2sql/frontend", "tests/e2e", "tests/e2e/_helpers/test.ts", 8, 8, True
     ),
-    "agent": Product("agent", "agent/frontend", "e2e", "e2e/fixtures/test.ts", 3, 1),
+    "agent": Product("agent", "agent/frontend", "e2e", "e2e/fixtures/test.ts", 3, 2),
 }
 PLATFORM_FRONTEND = ("platform/packages/ui/", "platform/packages/system-settings/")
 IMPACT_TOOLING = ("platform/scripts/e2e-impact/",)
@@ -902,6 +906,13 @@ def shard_count(product: Product, selection: Selection, impact: ImpactMap | None
 class Shard:
     specs: tuple[str, ...]
     estimated_ms: int
+    # 1 つの spec を Playwright の `--shard` でテスト単位に分けた部分（(i, k) は `--shard i/k`）。
+    # None なら specs のテストをすべて実行する。
+    part: tuple[int, int] | None = None
+
+    @property
+    def playwright_shard(self) -> str:
+        return f"{self.part[0]}/{self.part[1]}" if self.part else "1/1"
 
 
 def plan_shards(durations: dict[str, int], count: int) -> list[Shard]:
@@ -923,6 +934,46 @@ def plan_shards(durations: dict[str, int], count: int) -> list[Shard]:
     return [Shard(tuple(sorted(specs)), total) for specs, total in zip(bins, totals, strict=True)]
 
 
+def plan_split_shards(
+    durations: dict[str, int], count: int, tests: dict[str, int] | None = None
+) -> list[Shard]:
+    """`fullyParallel` の製品の shard（#1525）。
+
+    1 shard の目安（合計 / shard 数）より長い spec は、その spec だけを Playwright の `--shard i/k`
+    でテスト単位に k 個（目安で割って丸めた数。テストの数を超えない）に分け、それぞれを 1 つの
+    shard にする。残りの spec は LPT で残りの shard に詰める。どのテストも 1 回だけ実行する。
+
+    全 spec を 1 回の `--shard` で分けると、件数で前から区切るため重いテストが固まった shard だけが
+    倍近く遅くなっていた（NL2SQL の全件の 8 shard で、1 つだけ 13 分・他は 6〜9 分）。
+    """
+    # 分けられる数の上限はテストの数（記録の無い spec は上限を設けない）。
+    capacity = {spec: max(1, (tests or {}).get(spec, count)) for spec in durations}
+    count = min(count, sum(capacity.values()))
+    if count <= 1 or not durations:
+        return plan_shards(durations, count)
+    target = sum(durations.values()) / count
+    parts: dict[str, int] = {}
+    for spec, ms in durations.items():
+        k = min(round(ms / target), capacity[spec], count)
+        if k >= 2:
+            parts[spec] = k
+    rest = [spec for spec in durations if spec not in parts]
+    # 分けた部分で shard を使い切らない（残りの spec に少なくとも 1 shard を残す）。
+    while parts and sum(parts.values()) > count - (1 if rest else 0):
+        largest = max(parts, key=lambda s: (parts[s], durations[s], s))
+        parts[largest] -= 1
+        if parts[largest] < 2:
+            del parts[largest]
+            rest.append(largest)
+    shards = [
+        Shard((spec,), durations[spec] // k, (i, k))
+        for spec, k in sorted(parts.items())
+        for i in range(1, k + 1)
+    ]
+    shards += plan_shards({spec: durations[spec] for spec in rest}, count - len(shards))
+    return shards
+
+
 def shard_matrix(
     product: Product, selection: Selection, impact: ImpactMap | None
 ) -> tuple[list[dict], list[Shard]]:
@@ -934,7 +985,8 @@ def shard_matrix(
     count = shard_count(product, selection, impact)
     if count == 0:
         return [], []
-    if product.fully_parallel:
+    if product.fully_parallel and impact is None:
+        # 時間の記録が無いので、全体を Playwright の `--shard` でテスト単位に分ける。
         specs = (
             ""
             if selection.full
@@ -946,16 +998,36 @@ def shard_matrix(
         ]
         return matrix, []
     targets = list_specs(product) if selection.full else sorted(selection.specs)
-    shards = plan_shards(spec_durations(targets, impact), count)
+    durations = spec_durations(targets, impact)
+    if product.fully_parallel:
+        assert impact is not None
+        tests = {spec: int(impact.specs.get(spec, {}).get("tests", 0)) for spec in targets}
+        shards = plan_split_shards(durations, count, {s: n for s, n in tests.items() if n})
+    else:
+        shards = plan_shards(durations, count)
     matrix = [
         {
             "shard": index,
             "specs": " ".join(relative_to_frontend(product, spec) for spec in shard.specs),
-            "playwright_shard": "1/1",
+            "playwright_shard": shard.playwright_shard,
         }
         for index, shard in enumerate(shards, start=1)
     ]
     return matrix, shards
+
+
+def skip_smoke_specs(selection: Selection, specs: Iterable[str]) -> None:
+    """PR の smoke が全 project で実行する spec（frontend からの相対パス）を選択から除く（#1525）。
+
+    全件のときは除かない（全件を実行する PR では smoke の job を飛ばす）。
+    """
+    if selection.full:
+        return
+    product = selection.product
+    for spec in specs:
+        path = f"{product.frontend}/{spec}"
+        if selection.specs.pop(path, None) is not None:
+            selection.notes.append(f"{spec}: PR の smoke が実行する（impact では実行しない）")
 
 
 # ---------------------------------------------------------------- nightly の記録の取得
@@ -1061,8 +1133,15 @@ def summary(
         for spec, reasons in sorted(selection.specs.items()):
             lines.append(f"  - `{relative_to_frontend(product, spec)}`: {' / '.join(reasons)}")
     if shards:
+
+        def label(shard: Shard) -> str:
+            if shard.part:
+                name = relative_to_frontend(product, shard.specs[0]).rsplit("/", 1)[-1]
+                return f"{name} のテスト単位の {shard.playwright_shard}"
+            return f"{len(shard.specs)} spec"
+
         estimates = "、".join(
-            f"{index} は {len(shard.specs)} spec・約 {math.ceil(shard.estimated_ms / 1000)} 秒"
+            f"{index} は {label(shard)}・約 {math.ceil(shard.estimated_ms / 1000)} 秒"
             for index, shard in enumerate(shards, start=1)
         )
         lines.append(f"- shard の見積もり（nightly の実測。LPT で詰める）: {estimates}")
@@ -1079,9 +1158,14 @@ def command_select(args: argparse.Namespace) -> int:
     if args.maps:
         paths = sorted(Path(args.maps).rglob("*.json"))
     elif args.download:
-        paths = download_maps(product, Path(tempfile.mkdtemp(prefix="e2e-impact-")), args.repo)
+        # 記録が無くても何も選ばない差分（製品の frontend・共有 UI に触れない PR）なら、取得しない
+        # （ci.yml は製品の変更を待たずに 3 製品とも select する。#1525）。
+        dry = select(product, None, args.base, args.head)
+        if dry.full or dry.specs:
+            paths = download_maps(product, Path(tempfile.mkdtemp(prefix="e2e-impact-")), args.repo)
     impact = load_impact(paths, product)
     selection = select(product, impact, args.base, args.head)
+    skip_smoke_specs(selection, (args.skip_specs or "").split())
     mode = "full" if selection.full else ("selected" if selection.specs else "none")
     matrix, shards = shard_matrix(product, selection, impact)
     text = summary(selection, mode, len(matrix), shards, impact)
@@ -1127,6 +1211,11 @@ def main(argv: list[str] | None = None) -> int:
     p_select.add_argument("--maps", help="記録（aggregate の JSON）のディレクトリ")
     p_select.add_argument("--download", action="store_true", help="nightly の記録を gh で取得する")
     p_select.add_argument("--repo", help="gh の --repo（省略時は現在の repo）")
+    p_select.add_argument(
+        "--skip-specs",
+        help="PR の smoke が全 project で実行する spec（frontend からの相対パス、空白区切り）。"
+        "全件でなければ選択から除く",
+    )
     p_select.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     p_select.add_argument("--step-summary", default=os.environ.get("GITHUB_STEP_SUMMARY"))
     p_select.set_defaults(func=command_select)
