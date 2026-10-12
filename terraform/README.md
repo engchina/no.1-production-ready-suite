@@ -336,10 +336,11 @@ backend の port（RAG 8000・NL2SQL 8010・Agent 8020）が init_script.sh・Ng
 RAG の前処理 / parser（`rag/scripts/rag-systemd.sh` の unit の定義と uv.lock があること）、各製品の `init_script.sh` の配備契約
 （Docker を入れないこと、RAG の sudoers・状態の保持を含む）と、Dockerfile・compose が無いこと（#356 / #754）を検証します。
 
-CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` / `terraform validate`（Terraform 1.5.7）と上の2つに加え、
+CI（`.github/workflows/ci.yml` の `Suite / Deploy`。中身は `.github/workflows/suite-deploy.yml` で、release の workflow も再利用する。#1592）は、
+`terraform fmt` / `terraform validate`（Terraform 1.5.7）と上の2つに加え、
 `platform/deploy/tests/`（suite-init の振る舞い、openssl で証明書の subject・SAN・拡張・有効期間、隔離した Nginx で prefix・SSE・MCP・ログインの上限・
-`/` → `/agent/`・HTTPS on / off）を実行します。
-各製品の `init_script.sh` のテスト（`<製品>/scripts/tests/init-script-deployment.test.sh`）は製品ごとの job が実行します。実テナンシーへの配備確認は手動で行います。
+`/` → `/agent/`・HTTPS on / off）と、各製品の `init_script.sh` と配備・更新のスクリプトのテスト（`<製品>/scripts/tests/`）を 1 つの job で実行します。
+製品の frontend・共有 UI・Markdown だけの変更では動きません。実テナンシーへの配備確認は手動で行います。
 
 ## release
 

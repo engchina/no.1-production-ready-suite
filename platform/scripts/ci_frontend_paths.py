@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """製品の frontend のコードが読む frontend の外のファイルが、
 CI の frontend の job を動かす filter に入っていることを確かめる（#1531）。
+逆向きに、backend のテストが読む frontend のファイルが、backend の job を動かす filter に
+入っていることも確かめる（#1592）。
 
 `.github/workflows/ci.yml` の `<製品> / Frontend`・`<製品> / E2E smoke` は、`changes` の
 `<製品>_frontend`（`<製品>/frontend/**` と、frontend のテストが読む backend のファイル）と
@@ -11,6 +13,13 @@ filter に足し忘れると、そのファイルの変更で frontend の job �
 `../` で始まる文字列（そのファイルのディレクトリからの相対パス）と、
 `const NAME = new URL("../dir/", import.meta.url)` を基点にした `new URL("x", NAME)`。
 frontend の中・repo の外・存在しないパス（`.env` 等）・ディレクトリは数えない。
+
+逆向き（#1592）: `<製品>_backend` は `<製品>/**` から `<製品>/frontend/**` を除くので、backend の
+テストが読む frontend のファイルは `<製品>_backend_frontend` に足す。検出するのは、`<製品>/` の
+frontend 以外の `.py` のうち `"frontend"`（パスの部分）を含むファイルの、`/` と拡張子のある
+文字列で、`<製品>/frontend/src/<文字列>`・`<製品>/frontend/<文字列>`・`<製品>/<文字列>` のどれかに
+存在するファイルがあるもの（`FRONTEND_SRC / "lib/i18n.ts"` や
+`"frontend/src/lib/x.fixture.json"` の形）。`rglob` などでディレクトリごと読むものは検出しない。
 
 実行: python3 platform/scripts/ci_frontend_paths.py（違反があれば終了コード 1）
 """
@@ -31,6 +40,18 @@ SHARED_FILTERS = ("platform_frontend", "platform_other", "ci")
 EXTRA_FILTERS = {"nl2sql": ("nl2sql_frontend_contract",)}
 SUFFIXES = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".json")
 SKIP_DIRS = {"node_modules", "dist", "test-results", "playwright-report", "coverage"}
+# backend の job を動かす filter（ci.yml の rag-backend 等の `if` と同じ組み合わせ。#1592）。
+BACKEND_SHARED_FILTERS = ("platform_backend", "platform_other", "ci")
+BACKEND_SKIP_DIRS = {
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+}
+FRONTEND_PART = re.compile(r"""["'`]frontend(?:/[^"'`\s]*)?["'`]""")
+PATH_STRING = re.compile(r"""["']([\w.@-]+(?:/[\w.@-]+)+\.\w+)["']""")
 RELATIVE = re.compile(r"""["'`]((?:\.\./)+[^"'`\s$]*)["'`]""")
 URL_BASE = re.compile(
     r"""(\w+)\s*=\s*new URL\(\s*["'`]((?:\.\./)+[^"'`\s$]*/)["'`]\s*,\s*import\.meta\.url\s*\)"""
@@ -118,6 +139,56 @@ def frontend_reads(product: str, root: Path = ROOT) -> dict[str, set[str]]:
     return reads
 
 
+def backend_reads(product: str, root: Path = ROOT) -> dict[str, set[str]]:
+    """backend（製品の frontend 以外）の `.py` が読む frontend のファイル → 読むファイル。
+
+    パスは repo 相対。
+    """
+    base = root / product
+    frontend = base / "frontend"
+    reads: dict[str, set[str]] = {}
+    for dirpath, dirnames, filenames in os.walk(base):
+        current = Path(dirpath)
+        dirnames[:] = [
+            d for d in dirnames if d not in BACKEND_SKIP_DIRS and current / d != frontend
+        ]
+        for name in filenames:
+            if not name.endswith(".py"):
+                continue
+            source = current / name
+            text = source.read_text(encoding="utf-8", errors="ignore")
+            if not FRONTEND_PART.search(text):
+                continue
+            for literal in PATH_STRING.findall(text):
+                for candidate in (frontend / "src" / literal, frontend / literal, base / literal):
+                    resolved = Path(os.path.normpath(candidate))
+                    if resolved.is_relative_to(frontend) and resolved.is_file():
+                        rel = resolved.relative_to(root).as_posix()
+                        reads.setdefault(rel, set()).add(source.relative_to(root).as_posix())
+                        break
+    return reads
+
+
+def check_backend(root: Path = ROOT) -> list[str]:
+    filters = parse_filters((root / CI_WORKFLOW).read_text(encoding="utf-8"))
+    errors = []
+    for product in PRODUCTS:
+        names = (f"{product}_backend", f"{product}_backend_frontend", *BACKEND_SHARED_FILTERS)
+        missing = [n for n in names if n not in filters]
+        if missing:
+            errors.append(f"{CI_WORKFLOW} に filter {', '.join(missing)} がありません")
+            continue
+        for path, sources in sorted(backend_reads(product, root).items()):
+            if any(matches(path, filters[name]) for name in names):
+                continue
+            errors.append(
+                f"{path}（{', '.join(sorted(sources))} が読む）が {CI_WORKFLOW} の "
+                f"`{product}_backend_frontend` の filter にありません。足さないと、"
+                f"このファイルの変更で {product} の backend の job が動きません（#1592）"
+            )
+    return errors
+
+
 def check(root: Path = ROOT) -> list[str]:
     filters = parse_filters((root / CI_WORKFLOW).read_text(encoding="utf-8"))
     errors = []
@@ -139,11 +210,14 @@ def check(root: Path = ROOT) -> list[str]:
 
 
 def main() -> int:
-    errors = check()
+    errors = check() + check_backend()
     for error in errors:
         print(f"::error::{error}" if os.environ.get("GITHUB_ACTIONS") else error)
     if not errors:
-        print("frontend が読む frontend の外のファイルは、すべて CI の filter に入っています。")
+        print(
+            "frontend が読む frontend の外のファイルと、backend が読む frontend のファイルは、"
+            "すべて CI の filter に入っています。"
+        )
     return 1 if errors else 0
 
 
