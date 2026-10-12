@@ -1168,7 +1168,6 @@ export function DataManagementPage() {
             idPrefix={DATA_MANAGEMENT_ID}
             ariaLabel={t("dataMgmt.workspace.preview")}
             splitId="data-management-preview"
-            preferredWidePane="right"
             minLeftPaneWidthPx={520}
             minRightPaneWidthPx={560}
             topContent={

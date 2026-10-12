@@ -5,7 +5,6 @@ import {
   Button,
   EmptyState,
   FixedSplitPane,
-  type FixedSplitWidePane,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
@@ -36,17 +35,14 @@ export function AgentSplitPane({
   splitId,
   left,
   right,
-  preferredWidePane = "right",
 }: {
   splitId: string;
   left: ReactNode;
   right: ReactNode;
-  preferredWidePane?: FixedSplitWidePane;
 }) {
   return (
     <FixedSplitPane
       splitId={splitId}
-      preferredWidePane={preferredWidePane}
       storagePrefix={AGENT_SPLIT_STORAGE_PREFIX}
       labels={{
         separator: t("split.separator"),

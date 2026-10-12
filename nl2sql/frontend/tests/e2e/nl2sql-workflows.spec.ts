@@ -10269,7 +10269,8 @@ test("app feedback keeps history left of the editor without crossing the divider
   const generatedSql = page.getByLabel("生成 SQL");
 
   await expect(pane).toHaveAttribute("data-split-layout", "split");
-  await expect(pane).toHaveAttribute("data-split-ratio", "left-wide");
+  // 保存が無いときは 50% から始める（#1572）。
+  await expect(pane).toHaveAttribute("data-split-ratio", "equal");
   await expect(left.getByRole("heading", { name: "フィードバック履歴" })).toBeVisible();
   await expect(right.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
   await expectSplitPaneReservedTrack(pane);
@@ -10280,7 +10281,7 @@ test("app feedback keeps history left of the editor without crossing the divider
   const [initialLeft, initialRight] = await Promise.all([left.boundingBox(), right.boundingBox()]);
   expect(initialLeft).not.toBeNull();
   expect(initialRight).not.toBeNull();
-  expect(initialLeft!.width).toBeGreaterThan(initialRight!.width);
+  expect(Math.abs(initialLeft!.width - initialRight!.width)).toBeLessThan(2);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 1440, height: 1000 });

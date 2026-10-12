@@ -102,6 +102,29 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 ツールを使う。組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
 権限を表現せず、渡すツールの一覧を実体として絞る）。
 
+組み込みの Skill と初期の業務 Agent（#1573）:
+
+| Skill の ID | 名前 | 使うツール |
+|---|---|---|
+| `business_rag_research` | 業務 RAG 調査 | `rag` の検索・読み取り |
+| `structured_data_query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
+| `rag_and_structured_data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
+
+`rag_and_structured_data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
+`nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。根拠がそろったら
+止める。旧 ID `rag_then_structured_data`（RAG の後に NL2SQL の固定の順序）は、保存済みの業務 Agent とその版の
+読み込みで新しい ID に置き換える（`skills.RENAMED_SKILL_IDS`）。
+
+| 業務 Agent の ID | 名前 | Skill |
+|---|---|---|
+| `default`（既定） | 資料・データ横断アシスタント | `rag_and_structured_data`・`business_rag_research`・`structured_data_query` |
+| `rag-research` | 資料調査アシスタント | `business_rag_research` |
+| `data-query` | データ照会アシスタント | `structured_data_query` |
+
+3 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
+状態）。#1573 より前の `default`（名前が「汎用業務 Agent」のまま）は、新しい内容を次の版として公開する（前の版は残す。
+名前を変えた `default` は利用者の内容として残し、Skill の ID だけを置き換える）。
+
 ### Marketplace package
 
 正式 manifest は `skills[] / mcp_servers[] / resources[]`。resource kind は `prompt / workflow /

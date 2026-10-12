@@ -90,7 +90,7 @@ function seedFinishedJobs(mockApi: MockApi) {
   const job = (id: string, items: typeof results) => ({
     id,
     agent_id: "default",
-    agent_name: "汎用業務 Agent",
+    agent_name: "資料・データ横断アシスタント",
     set_id: SET.id,
     set_name: SET.name,
     status: "completed",
@@ -198,7 +198,7 @@ for (const viewport of VIEWPORTS) {
       await expect(summary).toContainText("1 / 2 件");
       // どの版どうしの比較かを出す（#810）。
       await expect(page.getByTestId("evaluation-previous")).toContainText("同じ評価ケースで完了した前回の評価（v1・");
-      await expect(page.getByText("経理の評価（汎用業務 Agent・下書き）")).toBeVisible();
+      await expect(page.getByText("経理の評価（資料・データ横断アシスタント・下書き）")).toBeVisible();
       await expect(
         page.getByRole("table", { name: "最近の評価" }).getByRole("row").nth(1)
       ).toContainText("下書き");
@@ -338,7 +338,7 @@ for (const viewport of VIEWPORTS) {
       agent_version: "published",
     });
     await expect(page.getByTestId("evaluation-summary")).toBeVisible();
-    await expect(page.getByText("経理の評価（汎用業務 Agent・v1）")).toBeVisible();
+    await expect(page.getByText("経理の評価（資料・データ横断アシスタント・v1）")).toBeVisible();
     await expect(page.getByRole("table", { name: "最近の評価" }).getByRole("row").nth(1)).toContainText("v1");
   });
 }

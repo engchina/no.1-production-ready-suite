@@ -36,6 +36,11 @@ const defaults = JSON.parse(
   readFileSync(new URL("./api-defaults.json", import.meta.url), "utf-8")
 ) as Record<string, unknown>;
 
+/** 組み込みの業務 Agent（backend の BUILTIN_AGENT_IDS。#1573）。 */
+const BUILTIN_AGENTS = defaults.agents as Json[];
+/** 既定の業務 Agent（default）の名前。 */
+export const DEFAULT_AGENT_NAME = String(BUILTIN_AGENTS.find((agent) => agent.id === "default")?.name);
+
 export interface RecordedRequest {
   method: string;
   path: string;
@@ -402,7 +407,7 @@ function feedbackReportFromRuns(
       run_id: run.id,
       thread_id: run.thread_id ?? null,
       agent_id: run.agent_id,
-      agent_name: run.agent_id === "default" ? "汎用業務 Agent" : "",
+      agent_name: run.agent_id === "default" ? DEFAULT_AGENT_NAME : "",
       user_uuid: run.created_by_user_uuid ?? null,
       display_name: "ローカル利用者",
       question: run.goal,
@@ -937,8 +942,11 @@ function validateSnapshot(snapshot: Json) {
   };
   duplicates("実行", runs.map((run) => run.id));
   duplicates("業務 Agent", agents.map((agent) => agent.id));
-  if (!agents.some((agent) => agent.id === "default")) {
-    warnings.push("既定の業務 Agent（default）がありません。置換すると作り直します。");
+  const missing = BUILTIN_AGENTS.map((agent) => String(agent.id)).filter(
+    (id) => !agents.some((agent) => agent.id === id)
+  );
+  if (missing.length) {
+    warnings.push(`組み込みの業務 Agent（${missing.join("・")}）がありません。置換すると作り直します。`);
   }
   return {
     valid: errors.length === 0,
@@ -1488,7 +1496,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const job: Json = {
       id: `eval-${state.evaluations.length + 1}`,
       agent_id: evaluationSet.agent_id,
-      agent_name: evaluationSet.agent_id === "default" ? "汎用業務 Agent" : String(evaluationSet.agent_id),
+      agent_name: evaluationSet.agent_id === "default" ? DEFAULT_AGENT_NAME : String(evaluationSet.agent_id),
       set_id: evaluationSet.id,
       set_name: evaluationSet.name,
       agent_version: evaluationVersion(state, evaluationSet.agent_id, body.agent_version),

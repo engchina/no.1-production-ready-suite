@@ -234,7 +234,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("table", { name: "業務 Agent 一覧" })).toBeVisible();
 
       await page.goto("/agents?id=default");
-      await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "資料・データ横断アシスタント", level: 1 })).toBeVisible();
       await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
       await expect(page.locator("#default-agent-name")).toBeDisabled();
       await expect(page.locator("#default-agent-model")).toBeDisabled();

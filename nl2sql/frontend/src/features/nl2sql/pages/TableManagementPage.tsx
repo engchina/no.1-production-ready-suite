@@ -979,7 +979,6 @@ export function TableManagementPage() {
               idPrefix="table-management"
               ariaLabel={t("tableMgmt.workspace.label")}
               splitId="table-management-list"
-              preferredWidePane="right"
               processing={
                 schemaRefreshing ? (
                   <SchemaRefreshProcessing testId="table-management-workspace-processing" />

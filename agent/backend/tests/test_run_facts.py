@@ -98,9 +98,13 @@ def test_fact_is_taken_from_the_run_snapshot() -> None:
     )
     completed = repository.complete_builtin_run(run.id, "300 万円です。")
 
-    fact = fact_from_run(completed, agent_name="汎用業務 Agent")
+    fact = fact_from_run(completed, agent_name="資料・データ横断アシスタント")
 
-    assert (fact.run_id, fact.agent_name, fact.agent_version) == (run.id, "汎用業務 Agent", "1")
+    assert (fact.run_id, fact.agent_name, fact.agent_version) == (
+        run.id,
+        "資料・データ横断アシスタント",
+        "1",
+    )
     assert (fact.status, fact.source, fact.user_uuid) == ("completed", RUN_SOURCE_AUTOMATION, ALICE)
     assert (fact.model, fact.requests, fact.total_tokens) == ("m", 2, 15)
     assert (fact.question, fact.answer) == ("今月の売上は？", "300 万円です。")
@@ -138,7 +142,7 @@ def test_repository_queues_facts_when_they_change() -> None:
     fact = store.facts[run.id]
     assert (fact.status, fact.total_tokens, fact.answer) == ("completed", 7, "回答")
     assert fact.feedback is not None and fact.feedback.reason == FeedbackReason.INCOMPLETE
-    assert fact.agent_name == "汎用業務 Agent"
+    assert fact.agent_name == "資料・データ横断アシスタント"
 
     cancelled = repository.create_builtin_run(RunCreateRequest(agent_id="default", goal="q"))
     repository.cancel_run(cancelled.id)
@@ -228,7 +232,7 @@ def test_usage_and_feedback_beyond_the_runs_in_memory_come_from_saved_facts() ->
         600,
     )
     # 業務 Agent の名前は今の名前（無ければ保存した名前）。
-    assert usage["by_agent"][0]["agent_name"] == "汎用業務 Agent"
+    assert usage["by_agent"][0]["agent_name"] == "資料・データ横断アシスタント"
     assert client.get("/api/usage", params={"days": 90}).json()["data"]["totals"]["runs"] == 1
 
     feedback = client.get("/api/feedback", params={"days": 365}).json()["data"]
