@@ -139,9 +139,13 @@ npm run lint && npm run build
 npx vitest related <変更したファイル>   # または npm run test（全件）
 npx playwright test e2e/<対象>.spec.ts  # 関係する spec だけ（smoke・全件は CI と nightly）
 npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（未指定なら 404 の hermetic モード）
+
+# 外部 parser のサービス（services/parsers/<name>。venv は parser ごと）
+RAG_SERVICES_TORCH=cpu RAG_SERVICES_MODELS=skip scripts/rag-services.sh sync parser-docling
+cd services/parsers/docling && uv run --no-sync --with pytest python -m pytest -q tests
 ```
 
-CI の job は `RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等。
+CI の job は `RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等。外部 parser のテストは `RAG / Parser docling`・`RAG / Parser asr` で、その parser と path 依存が変わったときだけ動く（#1512）。
 
 ## テスト/検証方針
 

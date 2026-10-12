@@ -45,8 +45,9 @@ RequestStatus = Literal["addressed", "partial", "missing", "unknown"]
 # 確認の行のうち、回答の確定に必要な別の資料の行の接頭辞（grounded.confirmation_lines）。現場の実データ
 # ではないので、needs_environment_data の判定に数えない（#1491）。
 REFERENCE_CONFIRMATION_PREFIX = "資料: "
-# 確認の項目に答えられる人・もの（#1492）。user=質問した利用者本人、system=業務システム・台帳・ログ、
-# document=資料（規程・マニュアル・コード表）。
+# 確認の項目に答えられる人・もの（#1492、#1500）。user=質問した利用者本人（自分の状況・対象の属性・選ぶもの）、
+# system=稼働中のシステムにだけある値（設定の現在値・ログ・処理の状態・実績）、document=KB の資料（規程・マニュアル・
+# コード表・台帳・一覧の値）。
 WhoCanAnswer = Literal["user", "system", "document"]
 WHO_CAN_ANSWER: tuple[WhoCanAnswer, ...] = ("user", "system", "document")
 # #1492 より前の草稿・記録の種類（kind）からの写し。
