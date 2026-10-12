@@ -3100,6 +3100,22 @@ def _similar_history_question_tokens(value: str) -> set[str]:
     return _similarity_tokens(_similar_history_question_text_for_similarity(value))
 
 
+# Select AI / Select AI Agent が生成した SQL の、安全確認を省略する理由（#1523）。
+SELECT_AI_SAFETY_CHECK_SKIP_REASON = "Select AI が生成した SELECT 文のため省略しました。"
+
+_SAFETY_CHECK_SKIPPED_ENGINES = frozenset({Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT})
+
+
+def engine_skips_safety_check(engine: Nl2SqlEngine | None) -> bool:
+    """生成の方式が SQL の安全確認を省略するか（#1523）。
+
+    Select AI / Select AI Agent は既定で SELECT 文を生成するため確かめない（業務プロファイルの
+    表・列の範囲の照合も含めて行わない）。LLM で生成する enterprise_ai_direct と、生成の方式の
+    無い経路（利用者の SQL・SQL の解析の画面）は確かめる。
+    """
+    return engine in _SAFETY_CHECK_SKIPPED_ENGINES
+
+
 def is_select_only(sql: str) -> bool:
     """SELECT/WITH のみを許可し、DDL/DML/PLSQL と複数 statement を拒否する。
 
@@ -3646,6 +3662,8 @@ _JOB_PROGRESS_QUEUE_STEP = "queue"
 _JOB_PROGRESS_STEPS = (_JOB_PROGRESS_QUEUE_STEP, *_NL2SQL_JOB_STAGES)
 # 段階を止めた印（`params`）。停止は失敗ではないので、画面は「未実行」と「停止しました」を出す。
 _JOB_PROGRESS_STOPPED_PARAM = "stopped"
+# 安全性の確認を省略した印（Select AI / Select AI Agent の SQL。#1523）。
+_JOB_PROGRESS_SAFETY_CHECK_SKIPPED_PARAM = "safety_check_skipped"
 # 安全性の確認の補足に出す参照した表の数（残りは件数だけ。画面の「ほか N 件」）。
 _JOB_PROGRESS_TABLES_SHOWN = 3
 
@@ -3796,6 +3814,26 @@ def _job_progress_tables_params(tables: Sequence[str]) -> JobProgressParams | No
         "tables": ", ".join(names[:_JOB_PROGRESS_TABLES_SHOWN]),
         "table_count": len(names),
     }
+
+
+def _job_safety_check_status(safety: SafetyReport) -> JobStepStatus:
+    """安全性の確認の段階の状態（#1523）。
+
+    遮断は失敗。Select AI / Select AI Agent の SQL で安全確認を省略したときは「省略」。
+    """
+
+    if not safety.is_safe:
+        return JobStepStatus.ERROR
+    return JobStepStatus.DONE if safety.safety_checked else JobStepStatus.SKIPPED
+
+
+def _job_progress_safety_params(safety: SafetyReport) -> JobProgressParams | None:
+    """安全性の確認の補足: 参照した表と、安全確認を省略した印（`safety_check_skipped`）。"""
+
+    params = _job_progress_tables_params(safety.referenced_tables)
+    if safety.safety_checked:
+        return params
+    return {**(params or {}), _JOB_PROGRESS_SAFETY_CHECK_SKIPPED_PARAM: True}
 
 
 def _log_job_stage_started(job_id: str, stage: str, *, attempt: int) -> None:
@@ -8700,6 +8738,8 @@ class Nl2SqlService:
                 question=result.rewritten_question or job.request.question,
                 allowed=allowed,
                 log_event="nl2sql_chat_execute_sql_failed",
+                # ジョブに保存した生成の方式（画面から受け取らない。#1523）。
+                engine=result.engine,
             )
         history_item = HistoryItem(
             generation_only=False,
@@ -8763,10 +8803,12 @@ class Nl2SqlService:
         question: str,
         allowed: AllowedObjects,
         log_event: str,
+        engine: Nl2SqlEngine | None,
     ) -> SqlChatExecuteData:
         """チャットのターンの SQL をチャットの上限で実行する（明示の実行とジョブの中。#1176）。
 
         経路は SQL 生成のジョブの実行の段階と同じ（安全検査 → `_execute_generated_sql`）。
+        `engine` は SQL を生成した方式（Select AI / Select AI Agent は安全確認を省略する。#1523）。
         行数・セルの文字数・バイト数はチャットの上限（#1154）。actor（接続の分離。#904）は呼び出し側が
         `actor_scope` で明示する（ジョブの worker は `_run_job_safely`）。
         """
@@ -8777,7 +8819,7 @@ class Nl2SqlService:
         )
         max_cell_chars = int(settings.nl2sql_chat_result_max_cell_chars)
         started = time.monotonic()
-        analysis = self.analyze_sql(generated_sql, allowed, row_limit)
+        analysis = self.analyze_sql(generated_sql, allowed, row_limit, engine=engine)
         analysis = self._apply_empty_filter_generation_guard(question, analysis)
         if analysis.safety.is_safe:
             execution = self._execute_generated_sql(
@@ -8945,6 +8987,7 @@ class Nl2SqlService:
             allowed,
             row_limit,
             catalog=generated.schema_catalog,
+            engine=generated.engine,
         )
         analysis = self._apply_empty_filter_generation_guard(rewritten, analysis)
         timing = TimingEnvelope(
@@ -9067,7 +9110,19 @@ class Nl2SqlService:
         *,
         use_llm: bool = False,
         catalog: SchemaCatalog | None = None,
+        engine: Nl2SqlEngine | None = None,
     ) -> AnalyzeData:
+        """SQL の安全性・参照した表と列・構造を解析する。
+
+        `engine` は SQL を生成した方式（#1523）。Select AI / Select AI Agent が生成した SQL は
+        既定で SELECT 文なので、安全確認を一切しない（SELECT だけか・危険な関数・bind の
+        placeholder・未承認の関数・他製品のシステムの表・業務プロファイルの表と列の範囲・LLM の
+        解析の補強）。業務プロファイルの列の制限は、Select AI の profile の object_list が表の単位の
+        ため、この 2 方式では効かない。参照した表・列と構造は表示のために解析する。
+        `engine` が無い経路（利用者の SQL の実行・SQL の解析の画面）と enterprise_ai_direct は、
+        すべてを確かめる。
+        """
+        skip_safety_check = engine_skips_safety_check(engine)
         semantic = parse_oracle_sql(sql)
         graph = semantic.graph
         current_owner = self._current_schema_owner()
@@ -9117,21 +9172,22 @@ class Nl2SqlService:
         has_wildcard = bool(
             graph and any(projection.contains_wildcard for projection in graph.projections)
         )
-        select_only = graph is not None and is_select_only(sql)
-        dangerous_function_names = (
-            _dangerous_oracle_function_names(sql) if graph is not None and select_only else []
-        )
-        bind_placeholder_names = (
-            _bind_placeholder_names(sql) if graph is not None and select_only else []
-        )
+        # Select AI の SQL は SELECT 文として扱う（確かめない。#1523）。
+        select_only = skip_safety_check or (graph is not None and is_select_only(sql))
+        form_check = not skip_safety_check and graph is not None and select_only
+        dangerous_function_names = _dangerous_oracle_function_names(sql) if form_check else []
+        bind_placeholder_names = _bind_placeholder_names(sql) if form_check else []
         unapproved_function_names = (
             _unapproved_function_names(sql, get_settings().nl2sql_allowed_user_functions.split(","))
-            if graph is not None and select_only
+            if form_check
             else []
         )
         warnings: list[str] = []
         blocked_reason = ""
-        if graph is None:
+        if skip_safety_check:
+            # Select AI / Select AI Agent の SQL は止めない（#1523）。
+            pass
+        elif graph is None:
             blocked_reason = semantic.validation.findings[0].message_ja
         elif not select_only:
             blocked_reason = (
@@ -9145,16 +9201,22 @@ class Nl2SqlService:
             blocked_reason = (
                 f"{', '.join(unapproved_function_names)}: {_UNAPPROVED_FUNCTION_MESSAGE}"
             )
-        hidden_referenced = _hidden_schema_object_names(referenced, current_owner=current_owner)
-        if not blocked_reason and hidden_referenced:
+        hidden_referenced = (
+            []
+            if skip_safety_check
+            else _hidden_schema_object_names(referenced, current_owner=current_owner)
+        )
+        if skip_safety_check or blocked_reason:
+            pass
+        elif hidden_referenced:
             blocked_reason = _system_object_blocked_message(hidden_referenced)
-        elif not blocked_reason and not _table_allowed(
+        elif not _table_allowed(
             referenced,
             allowed,
             current_owner=current_owner,
         ):
             blocked_reason = "許可されていない表を参照しています。"
-        elif not blocked_reason and not _column_allowed(
+        elif not _column_allowed(
             referenced_columns,
             has_wildcard,
             referenced,
@@ -9168,7 +9230,7 @@ class Nl2SqlService:
             warnings.append(f"SQL に行数制限がないため、取得は先頭 {row_limit} 件までになります。")
         if sql.strip().endswith(";") and ";" not in sql.strip().rstrip(";"):
             warnings.append("API 実行時は末尾のセミコロンを除去します。")
-        if has_wildcard and allowed.columns:
+        if not skip_safety_check and has_wildcard and allowed.columns:
             warnings.append("列選択が制限されているため、SELECT * は実行できません。")
         safety = SafetyReport(
             is_safe=not blocked_reason,
@@ -9178,16 +9240,25 @@ class Nl2SqlService:
             warnings=warnings,
             referenced_tables=referenced,
             referenced_columns=referenced_columns,
+            safety_checked=not skip_safety_check,
+            safety_check_skip_reason=SELECT_AI_SAFETY_CHECK_SKIP_REASON
+            if skip_safety_check
+            else "",
         )
         executable_sql = normalize_executable_sql(sql) if select_only else ""
-        repaired_sql = self._repair_sql(
-            sql=sql,
-            safety=safety,
-            allowed=allowed,
-            referenced_tables=referenced,
-            referenced_columns=referenced_columns,
-            has_wildcard=has_wildcard,
-            catalog=catalog,
+        # 確かめなかった SQL には修正案を出さない（#1523）。
+        repaired_sql = (
+            ""
+            if skip_safety_check
+            else self._repair_sql(
+                sql=sql,
+                safety=safety,
+                allowed=allowed,
+                referenced_tables=referenced,
+                referenced_columns=referenced_columns,
+                has_wildcard=has_wildcard,
+                catalog=catalog,
+            )
         )
         structure = self._sql_structure(sql, referenced)
         optimization_hints = self._optimization_hints(safety=safety, sql=sql, row_limit=row_limit)
@@ -9223,7 +9294,7 @@ class Nl2SqlService:
             joins=structure["joins"],
             aggregations=structure["aggregations"],
         )
-        if use_llm:
+        if use_llm and not skip_safety_check:
             return self._enhance_sql_analysis_with_llm(data, sql, allowed, catalog=catalog)
         return data
 
@@ -20639,6 +20710,7 @@ class Nl2SqlService:
             allowed,
             row_limit,
             catalog=generated.schema_catalog,
+            engine=generated.engine,
         )
         analysis = self._apply_empty_filter_generation_guard(rewritten, analysis)
         stage_elapsed = _elapsed_ms(stage_started)
@@ -20646,15 +20718,13 @@ class Nl2SqlService:
         self._transition_job_steps(
             job_id,
             completed_stage="safety_check",
-            completed_status=(
-                JobStepStatus.DONE if analysis.safety.is_safe else JobStepStatus.ERROR
-            ),
+            completed_status=_job_safety_check_status(analysis.safety),
             elapsed_ms=stage_elapsed,
             running_stage="execute_sql"
             if analysis.safety.is_safe and not request.generation_only
             else None,
-            # 安全性の確認の補足は参照した表。
-            completed_params=_job_progress_tables_params(analysis.safety.referenced_tables)
+            # 安全性の確認の補足は参照した表（省略したときは省略の印も。#1523）。
+            completed_params=_job_progress_safety_params(analysis.safety)
             if analysis.safety.is_safe
             else None,
         )
@@ -20682,6 +20752,7 @@ class Nl2SqlService:
                 question=rewritten,
                 allowed=allowed,
                 log_event="nl2sql_job_execute_sql_failed",
+                engine=generated.engine,
             )
             safety = analysis.safety
             executable = chat_execution.executable_sql or analysis.executable_sql

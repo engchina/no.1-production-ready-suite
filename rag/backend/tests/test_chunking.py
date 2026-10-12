@@ -92,6 +92,22 @@ def test_structured_extraction_infers_elements_from_raw_text() -> None:
     assert raw_start >= 0
 
 
+def test_structured_extraction_infers_spaced_chapter_numbers_from_raw_text() -> None:
+    """「第 3 章」(番号の前後に空白)も章の見出しにし、「3.1」はその子になる(#1517)。"""
+    extraction = StructuredExtraction(
+        raw_text="""第 3 章 設備ごとの点検
+3.1 電源設備
+分電盤の表示灯を確かめる。
+第 4 章 点検を中止する条件
+漏水を見つけたら中止する。
+"""
+    )
+
+    body = [element for element in extraction.elements if element.kind != "title"]
+    assert body[0].section_path == ["設備ごとの点検", "電源設備"]
+    assert body[1].section_path == ["点検を中止する条件"]
+
+
 def test_structured_extraction_infers_code_and_equation_blocks() -> None:
     """Markdown/LaTeX block を code/equation element として保持する。"""
     extraction = StructuredExtraction(

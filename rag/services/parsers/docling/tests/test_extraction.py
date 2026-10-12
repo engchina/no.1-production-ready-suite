@@ -65,6 +65,35 @@ def test_layout_records_map_to_elements_tables_assets_and_layout_artifact() -> N
     assert "image_path" not in layout["pages"][0]
 
 
+def test_element_section_paths_follow_heading_numbers_like_chunks() -> None:
+    """要素の section_path は chunk と同じ規則で番号から深さを決める(#1517)。
+
+    Docling の見出しの level は PDF ではすべて 1。「3.3」は「第 3 章」の子、その後の「第 4 章」は
+    3.3 の下ではなく第 3 章の兄弟になる(章節ナビゲーションの見出しの木の元)。
+    """
+    page = PageImage(
+        page=1, width=1000, height=1400, pdf_width=600, pdf_height=840, image_path="/x.png"
+    )
+    records = [
+        _record("docling-p1-1", "Section-header", "サーバー室の定期点検要領", level=1),
+        _record("docling-p1-2", "Section-header", "第 3 章 設備ごとの点検", level=1),
+        _record("docling-p1-3", "Section-header", "3.3 消火設備", level=1),
+        _record("docling-p1-4", "Text", "消火器の圧力を確かめる。"),
+        _record("docling-p1-5", "Section-header", "第 4 章 点検を中止する条件", level=1),
+        _record("docling-p1-6", "Text", "漏水を見つけたら中止する。"),
+    ]
+
+    extraction = layout_to_extraction(records, [page], source_page_count=1)
+
+    paths = {element.element_id: element.section_path for element in extraction.elements}
+    assert paths["docling-p1-4"] == [
+        "サーバー室の定期点検要領",
+        "第 3 章 設備ごとの点検",
+        "3.3 消火設備",
+    ]
+    assert paths["docling-p1-6"] == ["サーバー室の定期点検要領", "第 4 章 点検を中止する条件"]
+
+
 def test_parse_endpoint_ignores_legacy_vision_options() -> None:
     """Vision は backend の共通の段が行う(#497)。旧 backend の parser_options は使わない。"""
     captured: dict[str, object] = {}
