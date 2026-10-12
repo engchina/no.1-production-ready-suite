@@ -7,6 +7,7 @@ from functools import lru_cache
 import unicodedata
 from typing import Any, Sequence
 from rag_engine.retrieval.definition_evidence import definition_labels
+from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT, enumeration_request
 
 
 
@@ -122,6 +123,7 @@ def _task_contract(question: str) -> dict[str, Any]:
     # 明示目的の操作を先に記録する。経緯中の「登録」だけを要求操作とすると、
     # 追加・削除等の本来の目的が契約から脱落する。原質問の他の要求も保持する。
     action_text = '\n'.join([*intent_parts['desired_outcomes'], current])
+    enumeration = enumeration_request(question)
     goal = "rule" if definitions and not change_request and not re.search(r'方法|手順|どうしたら', text) else "recipient_list" if recipient_list and not wants_count else "count" if wants_count else "procedure" if change_request or re.search(r"方法|手順|どうしたら|できない|登録|入力|印字", text) else "rule"
     return {
         "original_question": question,
@@ -149,8 +151,12 @@ def _task_contract(question: str) -> dict[str, Any]:
         "explicit_conditions": [c for c in clauses if re.search(r"関係なく|含む|除外|場合|のみ|以外|期限|され(?:て(?:いる|いた)|ており)", c)],
         "hypotheses": [c for c in clauses if re.search(r"と思|ではないか|かもしれ|可能性", c)],
         "missing_choice": missing_choice,
+        # 列挙・網羅の要求（件数・章の範囲・読む範囲。#1503）。CRAG の評価器は項目ごとの根拠を出し、件数・範囲の欠けは
+        # プログラムで数える（`enumeration.enumeration_check`）。
+        "enumeration": enumeration.to_payload() if enumeration is not None else None,
         "required_aspects": ["business_object", "requested_result", "applicability"] + (["procedure"] if goal in {"procedure", "recipient_list"} or missing_choice else [])
-            + (["member_details", "population_membership"] if wants_members and re.search(r'集計|計上|算入', text) else []),
+            + (["member_details", "population_membership"] if wants_members and re.search(r'集計|計上|算入', text) else [])
+            + ([ENUMERATION_ASPECT] if enumeration is not None else []),
     }
 
 
