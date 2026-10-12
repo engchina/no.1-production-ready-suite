@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine, _SearchState
+from app.rag.answer_engine import AnswerEngine, _outcome_from_result, _SearchState
 from app.rag.chunking import Chunk
 from app.rag.cross_references import (
     MAX_REFERENCES_PER_CHUNK,
@@ -1216,6 +1216,227 @@ async def test_reference_target_in_lower_candidates_moves_after_citing_anchor() 
         "doc-1:o1",
         "doc-1:o2",
         "doc-1:o3",
+    ]
+
+
+def _sources(search: dict[str, object]) -> list[dict[str, Any]]:
+    """診断の交差参照の起点の記録(検索 1 回分)の起点の列。"""
+    return cast(list[dict[str, Any]], search["sources"])
+
+
+def _filler(count: int) -> list[RetrievedChunk]:
+    """参照を持たない上位の候補(統合の順位で参照の起点を下げる)。"""
+    return [
+        _retrieved(
+            f"doc-guide:o{n}",
+            "システムの運用の概要。",
+            "第1章 総則",
+            document_id="doc-guide",
+            file_name="system-operation-guide.pdf",
+        )
+        for n in range(count)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("top_k", "followed"), [(20, True), (5, False)], ids=["top-k-20", "top-k-5"]
+)
+async def test_document_name_reference_outside_top_five_is_followed(
+    top_k: int, followed: bool
+) -> None:
+    """参照を持つ chunk が統合の上位 5 件の外(8 位)でも、回答の文脈に入りうる上位なら辿る(#1549)。
+
+    kb1517 の `br-budget-change-window`: LLM が作る検索文が前の記録と変わり、変更手順書の
+    「時間帯は定期保守計画で確かめます」の chunk が統合の 8 位(前の記録は 2 位)になって、定期保守
+    計画の共通の保守枠を辿らず、根拠の連鎖が欠けた。起点の範囲は回答の検索の top_k(20 件まで)。
+    辿った・辿らなかった起点は、統合の順位と理由を診断に残す。
+    """
+    case = _sales_case()
+    window, sections = _change_window_corpus("ingest")
+    others = _filler(7)
+    oracle = ReferenceOracle(
+        [*others, window],
+        sections,
+        knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan", "doc-guide"}},
+    )
+    genai = FakeGenAi({"共通の保守枠は": 0.9, "この章に無いシステム": 0.8})
+    state = _SearchState()
+
+    result = await _engine(oracle, genai)._search(
+        SearchRequest(query=case["query"], top_k=top_k, filters={"knowledge_base_id": _PLAN_KB}),
+        state,
+        retrieval_queries=[case["query"]],
+    )
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    assert order[:7] == [chunk.chunk_id for chunk in others]
+    (search,) = state.reference_sources
+    assert search["top_sources"] == 5
+    assert search["source_limit"] == top_k
+    (source,) = _sources(search)
+    assert source["chunk_id"] == window.chunk_id
+    assert source["fused_rank"] == 8
+    assert source["rrf_score"] > 0
+    assert {"label": "定期保守計画", "kind": "document"} in source["targets"]
+    if followed:
+        # 参照先の文書の質問に関連の高い 2 件を、起点の直後に置く(上位 5 件の起点と同じ)。
+        assert order[7:] == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
+        assert source["outcome"] == "added"
+        assert "added" in source["target_outcomes"]
+        assert search["added_count"] == 2
+        assert {item["from_fused_rank"] for item in state.reference_expansions.values()} == {8}
+        assert state.chunks["doc-plan:cs-plan:1"].metadata[REFERENCE_FROM_KEY] == window.chunk_id
+        # rag_engine へは参照元の印を渡す(rerank の後に参照元の直後へ置く。#1549)。
+        assert result.child_chunks[8].metadata["reference_expansion"] == {
+            "from_chunk_uid": window.chunk_id,
+            "label": "定期保守計画",
+            "rank": 1,
+        }
+        assert "reference_expansion" not in result.child_chunks[7].metadata
+    else:
+        # top_k が 5 なら起点は上位 5 件だけ(辿らなかった理由を残す。DB も読まない)。
+        assert order[7:] == [window.chunk_id]
+        assert source["outcome"] == "outside_sources"
+        assert state.reference_expansions == {}
+        assert oracle.document_calls == []
+        assert oracle.search_calls == []
+    # 統合の順位と点は根拠の木にも出す(検索の候補ごと。複数回の検索では最も上の順位)。
+    assert state.fused_ranks[window.chunk_id][0] == 8
+    tree = _outcome_from_result(_TreeResult([window.chunk_id, "doc-plan:cs-plan:1"]), state)
+    children = tree.diagnostics["evidence_tree"][0]["children"]
+    assert children[0]["fused_rank"] == 8
+    assert children[0]["rrf_score"] == pytest.approx(
+        state.fused_ranks[window.chunk_id][1], abs=1e-6
+    )
+    # 参照先として読んだ chunk(検索の候補に無いもの)には統合の順位が無い。
+    assert "fused_rank" not in children[1]
+
+
+class _TreeResult:
+    """rag_engine の回答の結果(``_outcome_from_result`` が読む属性だけ。根拠の木の確認用)。"""
+
+    def __init__(self, chunk_ids: list[str]) -> None:
+        self.evidence_items = [
+            {
+                "chunk_id": "p",
+                "children": [
+                    {"chunk_id": chunk_id, "retrieval_role": "retrieved_anchor"}
+                    for chunk_id in chunk_ids
+                ],
+            }
+        ]
+        self.generation_trace: dict[str, Any] = {}
+        self.execution_steps: list[Any] = []
+        self.generated_queries: list[str] = []
+        self.text_search_tokens: list[str] = []
+        self.crag_attempts: list[Any] = []
+        self.envelope: dict[str, Any] = {}
+        self.external_data_items: list[Any] = []
+        self.question_type: list[str] = []
+        self.answer_text = "回答"
+
+    def __getattr__(self, name: str) -> Any:
+        return None
+
+
+async def test_document_name_reference_adds_sentence_citing_selected_section() -> None:
+    """文書名の参照で選んだ節を同じ文書の中で参照する文(適用の条件)も足す(#1549)。
+
+    kb1517 では定期保守計画が章ごとの親に分かれ、第 2 章(共通の保守枠)と第 3 章を足しても、第 1 章の
+    「この章に無いシステムは、第 2 章の共通の保守枠で保守します」(`mt-common-ref`)が文脈に
+    入らなかった。
+    参照先の文書の中の検索の候補のうち、取込で選んだ節(第 2 章)への参照を持つ chunk を足す。
+    """
+    case = _sales_case()
+    window, _sections = _change_window_corpus("ingest")
+    plan = _annotated(
+        _plan_chunks("maintenance-plan.pdf", "doc-plan", "cs-plan"), "maintenance-plan.pdf"
+    )
+    oracle = ReferenceOracle([window], plan, knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}})
+    genai = FakeGenAi({"共通の保守枠は": 0.9, "保守枠を変えたい": 0.8, "この章に無い": 0.1})
+    state = _SearchState()
+
+    result = await _engine(oracle, genai)._search(
+        SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
+        state,
+        retrieval_queries=[case["query"]],
+    )
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    # 関連の高い 2 件(第 2 章・第 3 章)の後に、第 2 章を参照する第 1 章を置く。
+    assert order == [
+        window.chunk_id,
+        "doc-plan:cs-plan:1",
+        "doc-plan:cs-plan:2",
+        "doc-plan:cs-plan:0",
+    ]
+    assert state.chunks["doc-plan:cs-plan:0"].metadata[REFERENCE_RANK_KEY] == 3
+    assert "この章に無いシステムは" in state.chunks["doc-plan:cs-plan:0"].text
+
+    # 上限(rag_reference_expansion_max_chunks)は超えない。
+    limited = _SearchState()
+    result = await _engine(oracle, genai, rag_reference_expansion_max_chunks=2)._search(
+        SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
+        limited,
+        retrieval_queries=[case["query"]],
+    )
+    assert [child.chunk_uid for child in result.child_chunks][1:] == [
+        "doc-plan:cs-plan:1",
+        "doc-plan:cs-plan:2",
+    ]
+
+
+async def test_extended_reference_sources_follow_one_hop_without_moving_sources() -> None:
+    """上位 5 件の外の起点どうしで、参照先を足した起点は他の起点の参照先として移さない(#1549)。
+
+    6 位の候補(第 3 章の chunk。別紙 1 を参照)と、7 位の候補(第 3 章を参照)。6 位の参照先(別紙)を
+    足した後、7 位の参照先(第 3 章)からは 6 位の候補を除いて足す。参照先として足した候補は起点に
+    しない(参照は 1 段)。
+    """
+    appendix_target = ReferenceTarget("別紙1", "appendix", "別紙:1", None, "別紙1 申請書様式")
+    source = _retrieved(
+        "doc-1:cs-1:s0",
+        "承認の条件。様式は別紙1を参照。",
+        "第3章 承認 > 3.1 申請",
+        targets=[appendix_target],
+    )
+    citing = _retrieved("doc-1:f", "承認は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    chapter = [source, *_section_chunks(3)[1:]]
+    appendix = [_retrieved(f"doc-1:cs-1:x{n}", "様式", "別紙1 申請書様式") for n in range(2)]
+    oracle = ReferenceOracle([*_filler(5), source, citing], [*chapter, *appendix])
+    state = _SearchState()
+
+    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    assert order[5:] == [
+        "doc-1:cs-1:s0",
+        "doc-1:cs-1:x0",
+        "doc-1:cs-1:x1",
+        "doc-1:f",
+        "doc-1:cs-1:s1",
+        "doc-1:cs-1:s2",
+    ]
+    (search,) = state.reference_sources
+    assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
+        (6, "added"),
+        (7, "added"),
+    ]
+
+    # 7 位の候補が 6 位の候補の参照先なら(参照先を先に足した候補)、7 位は起点にしない。
+    first = _retrieved("doc-1:f", "承認は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    later = source.model_copy(update={"chunk_id": "doc-1:cs-1:s0"})
+    oracle = ReferenceOracle([*_filler(5), first, later], [*chapter, *appendix])
+    state = _SearchState()
+
+    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    assert order[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
+    (search,) = state.reference_sources
+    assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
+        (6, "added"),
+        (7, "referenced"),
     ]
 
 

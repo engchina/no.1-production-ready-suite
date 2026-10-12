@@ -47,6 +47,7 @@ from rag_engine.retrieval.inquiry_conditions import (
     parse_inquiry_conditions,
 )
 from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
 from rag_engine.retrieval.task_contract import task_contract, filter_queries, query_rejection_reason
 from rag_engine.retrieval.enumeration import enumeration_check
 from rag_engine.retrieval.request_coverage import (
@@ -293,7 +294,9 @@ def rerank_records(
         conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
         domains = conditions.business_domains if business_domains is None else business_domains
         screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
-        return _named_screen_first(_same_business_records(ranked, domains, step), screens, step)
+        ranked = _named_screen_first(_same_business_records(ranked, domains, step), screens, step)
+        # 交差参照で足した参照先は、参照元の直後へ置く（質問で並べると橋渡しの参照先が下がる。#1549）。
+        return follow_reference_sources(ranked, step)
 
 
 def _category_label(value: Any) -> str:
@@ -560,8 +563,10 @@ def select_documents(ranked_children: Sequence[AnswerRecord], settings: Settings
         trace["deferred" if key in excluded else "selected"].append(entry)
     # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。関連度が
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
-    kept = [r for r in ranked_children if document_context_key(r) not in excluded or is_reserved_entity_expansion(r)]
-    deferred = [r for r in ranked_children if document_context_key(r) in excluded and not is_reserved_entity_expansion(r)]
+    # 参照元の直後へ置いた交差参照の参照先（#1549）も、参照元に従うので後回しにしない。
+    reserved = [is_reserved_entity_expansion(r) or is_followed_reference(r) for r in ranked_children]
+    kept = [r for r, keep in zip(ranked_children, reserved) if document_context_key(r) not in excluded or keep]
+    deferred = [r for r, keep in zip(ranked_children, reserved) if document_context_key(r) in excluded and not keep]
     if step is not None:
         step.add(f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
                  + (f"（{'、'.join(e['source'] for e in trace['deferred'])}）" if excluded else ""))
