@@ -2330,14 +2330,13 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     """OCI mode の同一 group context は、起点をまとめた 1 回の SQL で chunk_group_id から取得する。
 
     起点ごとの条件(文書・chunk_set・group・自分を除く)・並び・件数は起点の表(``a``)の値で
-    1 件ずつ読むときと同じにする(#1490)。
+    1 件ずつ読むときと同じにする(#1490)。行は sibling の chunk ごと(#1498)。
     """
     pool = FakeOraclePool(
         execute_results=[
             [
                 {
-                    "anchor_ord": 0,
-                    "context_rank": 1,
+                    "anchor_positions": "0:1",
                     "document_id": "doc-1",
                     "chunk_id": "doc-1:1",
                     "chunk_text": "表ヘッダー: 項目 / 条件。",
@@ -2348,8 +2347,7 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
                     "score": 0,
                 },
                 {
-                    "anchor_ord": 0,
-                    "context_rank": 2,
+                    "anchor_positions": "0:2",
                     "document_id": "doc-1",
                     "chunk_id": "doc-1:3",
                     "chunk_text": "表注記: 証憑添付が必要。",
@@ -2393,7 +2391,11 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
         call.statement
     )
     assert "context_rank <= :max_chunks_per_group" in call.statement
-    assert "ORDER BY anchor_ord ASC, context_rank ASC" in call.statement
+    # 行は sibling の chunk ごとに 1 行(本文は 1 回だけ読む。#1498)。
+    assert "GROUP BY chunk_id" in call.statement
+    assert "WITHIN GROUP (ORDER BY anchor_ord, context_rank) AS anchor_positions" in (
+        call.statement
+    )
     assert "d.status = 'INDEXED'" in call.statement
     assert "d.document_id = a.document_id" in call.statement
     assert "c.chunk_set_id = a.chunk_set_id" in call.statement

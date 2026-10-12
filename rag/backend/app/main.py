@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.api.errors import DocumentFileMissingError
 from app.api.router import api_router
-from app.clients.oracle import close_oracle_pool
+from app.clients.oracle import close_oracle_pool, warm_oracle_pool
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
 from app.rag.chat_answer_runs import get_chat_answer_run_service
@@ -37,6 +37,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
+from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.readiness import pending_legacy_local_storage_dir
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,21 @@ def _warn_pending_legacy_local_storage_dir(settings: Settings) -> None:
     )
 
 
+async def _warm_search(settings: Settings) -> None:
+    """回答の検索が最初の問で待つものを、起動時に用意する(#1498)。
+
+    - 接続 pool を作り、``RAG_ORACLE_POOL_MIN`` 本の接続を開く。
+    - vector index の検索の設定(target accuracy)を解決する(pipeline-vector-index サービスに
+      届かなければ同じ計算を in-process で行う。どちらもメモ化する)。
+    用意できなければ最初の問で作る(起動は続ける)。DB の接続の設定が無ければ何もしない。
+    """
+    try:
+        if await asyncio.to_thread(warm_oracle_pool, settings):
+            await asyncio.to_thread(resolve_vector_index_adapter, settings)
+    except Exception as exc:  # noqa: BLE001 - 温められなくても起動は続ける(要るときに作り直す)。
+        logger.warning("search_warm_failed", extra={"error_type": type(exc).__name__})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """起動・終了時の初期化/後始末。"""
@@ -69,6 +85,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     configure_trace_exporter(settings)
     _warn_pending_legacy_local_storage_dir(settings)
+    # 起動直後の問で接続の作成などを待たないよう、検索の準備をする(#1498)。起動は待たせない。
+    pool_warm_task = asyncio.create_task(_warm_search(settings))
     worker_task: asyncio.Task[None] | None = None
     worker_stop: asyncio.Event | None = None
     if (
@@ -113,6 +131,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if not pool_warm_task.done():
+            pool_warm_task.cancel()
         # このプロセスで実行中の品質評価の job を打ち切り、失敗にする（#390。別のプロセスは
         # 引き継がない）。
         await get_evaluation_job_service().shutdown()

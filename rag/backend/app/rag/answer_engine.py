@@ -146,9 +146,6 @@ _ENTITY_SCORE_DECAY = 0.5
 # 実体の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベースと旧版の扱いだけ)。
 _ENTITY_SCOPE_FILTER_KEYS = _REFERENCE_SCOPE_FILTER_KEYS
 
-# 回答の検索で、同時に読む検索文の数(#1490)。1 本の中で vector と keyword を並行に読むので、
-# 1 問で使う接続はその倍(``RAG_ORACLE_POOL_MAX`` の既定はこの 2 問分)。
-_SEARCH_QUERY_CONCURRENCY = 4
 # 回答の記録の工程(execution_steps)に残す、工程の中の SQL の計測値(#1490。DbCallStats.snapshot)。
 _STEP_DB_METRIC_KEYS = frozenset(
     {
@@ -720,7 +717,7 @@ class AnswerEngine:
         while True:
             fused: dict[str, float] = {}
             rankings: list[list[str]] = []
-            # 検索文ごとの検索は並行に読み、融合は検索文の順に行う(結果は直列と同じ。#1490)。
+            # 検索文ごとの検索は 1 回の SQL で読み(#1498)、融合は検索文の順に行う。
             all_hits = await self._query_hits(
                 state,
                 [
@@ -876,32 +873,35 @@ class AnswerEngine:
     ) -> list[list[RetrievedChunk]]:
         """検索文ごとの検索の結果を、``searches`` の順に返す(#1490)。
 
-        同時に読む検索文は ``_SEARCH_QUERY_CONCURRENCY`` 本まで(1 本の中で vector と keyword を
-        並行に読むので、接続はその倍)。同じ回答の中で同じ検索文・方式・条件・件数を読んだことが
-        あれば、その結果を使う(CRAG の 2 回目と要求ごとの再検索)。
+        まだ読んでいない検索文は 1 回の SQL でまとめて読む(``OracleClient.search_many``。結果は
+        検索文ごとの ``hybrid_search`` と同じ。#1498)。同じ回答の中で同じ検索文・方式・条件・件数を
+        読んだことがあれば、その結果を使う(CRAG の 2 回目と要求ごとの再検索)。
         """
         filter_key = tuple(sorted(filters.items()))
-        semaphore = asyncio.Semaphore(_SEARCH_QUERY_CONCURRENCY)
-
-        async def hits_for(
-            query: str, embedding: list[float], mode: SearchMode
-        ) -> list[RetrievedChunk]:
-            key = (query, mode.value, filter_key, candidate_limit)
-            cached = state.search_hits.get(key)
-            if cached is not None:
-                return cached
-            async with semaphore:
-                hits = await self._oracle.hybrid_search(
-                    query, embedding, candidate_limit, mode=mode, filters=dict(filters)
+        keys = [(query, mode.value, filter_key, candidate_limit) for query, _, mode in searches]
+        missing: dict[
+            tuple[str, str, tuple[tuple[str, str], ...], int],
+            tuple[str, list[float], SearchMode],
+        ] = {}
+        for key, search in zip(keys, searches, strict=True):
+            if key not in state.search_hits:
+                missing.setdefault(key, search)
+        if missing:
+            search_many = getattr(self._oracle, "search_many", None)
+            if search_many is not None:
+                found = await search_many(
+                    list(missing.values()), candidate_limit, filters=dict(filters)
                 )
-            state.search_hits[key] = hits
-            return hits
-
-        return list(
-            await asyncio.gather(
-                *(hits_for(query, embedding, mode) for query, embedding, mode in searches)
-            )
-        )
+            else:
+                # ``hybrid_search`` だけを持つ Oracle(テストの代役など)は 1 本ずつ読む。
+                found = [
+                    await self._oracle.hybrid_search(
+                        query, embedding, candidate_limit, mode=mode, filters=dict(filters)
+                    )
+                    for query, embedding, mode in missing.values()
+                ]
+            state.search_hits.update(zip(missing, found, strict=True))
+        return [state.search_hits[key] for key in keys]
 
     async def _entity_expansion(
         self,
