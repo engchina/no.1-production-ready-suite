@@ -341,7 +341,31 @@ def build_engine_settings(
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
-    return replace(engine_settings, domain_keywords_override=tuple(settings.rag_domain_keywords))
+    return replace(
+        engine_settings,
+        domain_keywords_override=tuple(settings.rag_domain_keywords),
+        known_conditions=guide_known_conditions(settings.rag_support_guide),
+    )
+
+
+def guide_known_conditions(guide: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
+    """業務ガイドの照合で分かっている条件(名前と値。#1492)。
+
+    MCP の ``conditions``・質問の文で決まった条件で、回答の確認の項目のうちこれを確かめる項目を
+    rag_engine が決定的に除く(分かっている条件を聞き直さない)。
+    """
+    known = (guide or {}).get("known_conditions")
+    if not isinstance(known, list):
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for item in known:
+        if not isinstance(item, Mapping):
+            continue
+        label = str(item.get("label") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if label and value:
+            pairs.append((label, value))
+    return tuple(pairs)
 
 
 @dataclass(frozen=True)
@@ -1840,6 +1864,10 @@ def _stored_child(
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
         metadata["sheet_location"] = location
+    if chunk.metadata.get("document_superseded") is True:
+        # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
+        # 公開しない(#1492)。
+        metadata["document_superseded"] = True
     if element_ids := chunk_element_ids(chunk.metadata):
         # 解析の要素の ID。複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめる(#1331)。
         metadata["element_ids"] = element_ids
@@ -2120,6 +2148,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 当たった chunk の章節から親の章節へ広げた記録(#1436。段・読んだ章節・止めた理由・
         # 読めなかった章節)。
         "section_expansion": _section_expansion_diagnostics(result.generation_trace),
+        # 採用した草稿の構造(#1492。確認の項目の事実と規則の分け方・説明の種類と適用)。
+        # LLM を呼ばずに対応の決定を replay する材料。
+        "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }

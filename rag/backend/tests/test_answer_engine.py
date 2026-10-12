@@ -197,6 +197,16 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     assert diagnostics["external_data_items"] == []
     assert diagnostics["question_type"] == []
     assert "external_data_required" in diagnostics
+    # 採用した草稿の構造（確認の項目の事実と規則の分け方。#1492）を replay の材料に残す。
+    draft = diagnostics["grounded_draft"]
+    assert draft["confirmation_items"] == []
+    assert draft["settled_confirmations"] == {
+        "user": [],
+        "system": [],
+        "document": [],
+        "excluded": [],
+    }
+    assert [item["kind"] for item in draft["items"]]
     assert diagnostics["execution_steps"]
     assert diagnostics["evidence_tree"]
     assert diagnostics["evidence_tree"][0]["children"]
