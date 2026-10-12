@@ -83,7 +83,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("利用できる検索・回答プロファイル")).toHaveCount(0);
       // 無効なエージェントは状態を示す。保存済みの対象は選択済み。
       await expect(agents.getByText("無効")).toBeVisible();
-      await expect(agents.getByRole("option", { name: /汎用業務 Agent/ })).toBeChecked();
+      await expect(agents.getByRole("option", { name: /資料・データ横断アシスタント/ })).toBeChecked();
 
       await agents.getByRole("option", { name: /経理 Agent/ }).check();
       expect(mockApi.lastRequest("PUT", "/api/security/roles/role-operator/access")).toBeUndefined();

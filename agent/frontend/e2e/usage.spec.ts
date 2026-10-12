@@ -39,7 +39,7 @@ function seedReport(mockApi: MockApi) {
   report.previous = totals(8, 60_000, 5_000);
   report.by_agent = [
     { agent_id: "sales", agent_name: "営業の Agent", ...totals(7, 70_000, 5_000) },
-    { agent_id: "default", agent_name: "汎用業務 Agent", ...totals(4, 20_000, 5_000) },
+    { agent_id: "default", agent_name: "資料・データ横断アシスタント", ...totals(4, 20_000, 5_000) },
     { agent_id: "removed-agent", agent_name: "", ...totals(1, 0, 0, 0) },
   ];
   report.by_user = [
@@ -126,11 +126,11 @@ test("全件利用量未記録でも実行数を残し、モデル内訳に専�
   seedReport(mockApi);
   const report = mockApi.state.usageReports["30"] as Record<string, unknown>;
   report.totals = totals(1, 0, 0, 0);
-  report.by_agent = [{ agent_id: "default", agent_name: "汎用業務 Agent", ...totals(1, 0, 0, 0) }];
+  report.by_agent = [{ agent_id: "default", agent_name: "資料・データ横断アシスタント", ...totals(1, 0, 0, 0) }];
   // 更新前の backend の応答も想定し、欠測を0利用量のモデルとして表示しない。
   report.by_model = [{ model: "", ...totals(1, 0, 0, 0) }];
   await page.goto("/usage");
-  await expect(page.getByRole("table", { name: "業務 Agent ごとの利用量" })).toContainText("汎用業務 Agent");
+  await expect(page.getByRole("table", { name: "業務 Agent ごとの利用量" })).toContainText("資料・データ横断アシスタント");
   await expect(page.getByTestId("usage-unrecorded")).toContainText("実行数には含めます");
   await page.getByRole("tab", { name: /モデルごと/ }).click();
   await expect(page.getByText("この期間にモデルの利用量の記録はありません")).toBeVisible();

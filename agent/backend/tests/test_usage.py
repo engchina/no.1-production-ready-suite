@@ -64,7 +64,7 @@ def _report(runs: list[RunState], days: int = 7) -> Any:
         days=days,
         now=NOW,
         tz=TOKYO,
-        agent_names={"default": "汎用業務 Agent", "sales": "営業の Agent"},
+        agent_names={"default": "資料・データ横断アシスタント", "sales": "営業の Agent"},
         user_names=lambda uuids: {
             uuid: {ALICE: "Alice"}.get(uuid, "") for uuid in uuids if uuid == ALICE
         },
@@ -98,7 +98,7 @@ def test_report_sums_the_period_and_compares_with_the_previous_period() -> None:
     # 業務 Agent・利用者・モデルは token の多い順。
     assert [(item.agent_id, item.agent_name, item.total_tokens) for item in report.by_agent] == [
         ("sales", "営業の Agent", 400),
-        ("default", "汎用業務 Agent", 120),
+        ("default", "資料・データ横断アシスタント", 120),
     ]
     assert [(item.user_uuid, item.display_name, item.runs) for item in report.by_user] == [
         (BOB, "", 1),
