@@ -29,6 +29,79 @@ def _map(files: dict, tests: int = 4, specs: dict | None = None, commit: str = "
     }
 
 
+API_TS = """export interface Config {
+  /** 説明 */
+  a?: string;
+}
+
+export const LIMIT = 10;
+
+export enum Mode {
+  A = "a",
+}
+
+// 読み込み
+export function load() {
+  return LIMIT;
+}
+"""
+
+
+class NonRuntimeLinesTest(unittest.TestCase):
+    def _marked(self, text: str) -> list[str]:
+        lines = text.splitlines()
+        return [lines[n - 1] for n in sorted(impact.non_runtime_lines(text))]
+
+    def test_interface_type_and_comments_are_static(self) -> None:
+        text = (
+            'import type { A } from "./a";\n'  # 1
+            'export type { B, C } from "./b";\n'  # 2
+            "/**\n"  # 3
+            " * 説明\n"  # 4
+            " */\n"  # 5
+            'export interface Props extends Omit<A, "x"> {\n'  # 6
+            "  // 欄\n"  # 7
+            "  onChange: (value: { a: string }) => void;\n"  # 8
+            "}\n"  # 9
+            "\n"  # 10
+            "export type Union =\n"  # 11
+            '  | "a"\n'  # 12
+            "  | { b: `x-${string}` };\n"  # 13
+            "declare global {\n"  # 14
+            "  interface Window { x: number }\n"  # 15
+            "}\n"  # 16
+        )
+        self.assertEqual(impact.non_runtime_lines(text), set(range(1, 17)))
+
+    def test_runtime_code_is_not_static(self) -> None:
+        text = (
+            "export const LIMIT = 10;\n"  # 1
+            "export enum Mode {\n"  # 2
+            '  A = "a",\n'  # 3
+            "}\n"  # 4
+            "const enum Flag { On }\n"  # 5
+            "export function f(): number {\n"  # 6
+            "  type Local = string;\n"  # 7（関数の中は見ない）
+            "  return 1; // コメント\n"  # 8
+            "}\n"  # 9
+            'import { type A, b } from "./a";\n'  # 10
+            "export class K implements A {}\n"  # 11
+        )
+        self.assertEqual(impact.non_runtime_lines(text), set())
+
+    def test_type_without_semicolon_ends_before_next_statement(self) -> None:
+        text = 'export type A = "a" | "b"\nexport const b = 1;\n'
+        self.assertEqual(self._marked(text), ['export type A = "a" | "b"'])
+
+    def test_template_literal_lines_are_runtime(self) -> None:
+        text = "const sql = `\n\n// 例\ninterface X {}\n`;\n"
+        self.assertEqual(impact.non_runtime_lines(text), set())
+
+    def test_code_after_declaration_on_same_line_is_runtime(self) -> None:
+        text = "interface A {\n  a: string;\n} export const x = 1;\n/* a */ const y = 2;\n"
+        self.assertEqual(self._marked(text), ["interface A {", "  a: string;"])
+
+
 class DictionaryTest(unittest.TestCase):
     OLD = """export const ja = {
   "a.title": "タイトル",
@@ -166,6 +239,60 @@ class AggregateTest(unittest.TestCase):
         self.assertEqual(merged["tests"], 1)
 
 
+class PlanShardsTest(unittest.TestCase):
+    def test_lpt_balances_by_duration(self) -> None:
+        durations = {"a": 700, "b": 500, "c": 400, "d": 300, "e": 200, "f": 100}
+        shards = impact.plan_shards(durations, 3)
+        totals = sorted(shard.estimated_ms for shard in shards)
+        self.assertEqual(totals, [700, 700, 800])
+        self.assertEqual(sorted(s for shard in shards for s in shard.specs), sorted(durations))
+
+    def test_no_empty_shards(self) -> None:
+        shards = impact.plan_shards({"a": 1, "b": 2}, 4)
+        self.assertEqual(len(shards), 2)
+        self.assertEqual(impact.plan_shards({}, 3), [])
+
+    def test_unknown_spec_uses_median(self) -> None:
+        recorded = impact.ImpactMap(
+            _map(
+                {},
+                specs={
+                    "a": {"durationMs": 100},
+                    "b": {"durationMs": 300},
+                    "c": {"durationMs": 900},
+                },
+            )
+        )
+        self.assertEqual(impact.spec_durations(["a", "new"], recorded), {"a": 100, "new": 300})
+        self.assertEqual(impact.spec_durations(["x"], None), {"x": impact.UNKNOWN_SPEC_MS})
+
+    def test_matrix_lists_specs_per_shard(self) -> None:
+        product = impact.PRODUCTS["rag"]
+        selection = impact.Selection(product)
+        long = {f"rag/frontend/e2e/s{i}.spec.ts": {"durationMs": 4 * 60 * 1000} for i in range(3)}
+        selection.add(long, "変更")
+        matrix, shards = impact.shard_matrix(
+            product, selection, impact.ImpactMap(_map({}, specs=long))
+        )
+        self.assertEqual(len(matrix), 2)
+        self.assertEqual([entry["shard"] for entry in matrix], [1, 2])
+        self.assertEqual({entry["playwright_shard"] for entry in matrix}, {"1/1"})
+        listed = " ".join(entry["specs"] for entry in matrix).split()
+        self.assertEqual(sorted(listed), [f"e2e/s{i}.spec.ts" for i in range(3)])
+        self.assertEqual(len(shards), 2)
+
+    def test_fully_parallel_product_shards_by_test(self) -> None:
+        product = impact.PRODUCTS["nl2sql"]
+        selection = impact.Selection(product)
+        selection.need_full("package.json")
+        matrix, shards = impact.shard_matrix(product, selection, None)
+        self.assertEqual(len(matrix), product.max_shards)
+        self.assertEqual(
+            matrix[0], {"shard": 1, "specs": "", "playwright_shard": f"1/{product.max_shards}"}
+        )
+        self.assertEqual(shards, [])
+
+
 class SelectIntegrationTest(unittest.TestCase):
     """一時的な git repo で select を通しで確かめる。"""
 
@@ -184,6 +311,7 @@ class SelectIntegrationTest(unittest.TestCase):
             ),
             "rag/frontend/src/lib/i18n.ts": 'export const ja = {\n  "page.title": "ページ",\n'
             '  "other.title": "ほかの画面",\n};\n',
+            "rag/frontend/src/lib/api.ts": API_TS,
             "rag/frontend/e2e/fixtures/test.ts": "export const test = 1;\n",
             "rag/frontend/e2e/fixtures/helper.ts": "export const helper = 1;\n",
             "rag/frontend/e2e/page.spec.ts": "import { test } from './fixtures/test';\n",
@@ -211,6 +339,10 @@ class SelectIntegrationTest(unittest.TestCase):
                         "rag/frontend/src/Other.tsx": {
                             "loadedBy": [page, other],
                             "functions": {"1:3": {"specs": [other], "tests": 1}},
+                        },
+                        "rag/frontend/src/lib/api.ts": {
+                            "loadedBy": [page, other],
+                            "functions": {"14:16": {"specs": [page], "tests": 1}},
                         },
                     },
                     tests=2,
@@ -254,6 +386,36 @@ class SelectIntegrationTest(unittest.TestCase):
         selection = self._commit_and_select()
         self.assertEqual(selection.full, [])
         # 記録の無い spec（node.spec.ts）は常に選ぶ。
+        self.assertEqual(set(selection.specs), {self.page, self.node})
+
+    def _edit_api(self, old: str, new: str) -> impact.Selection:
+        text = (self.root / "rag/frontend/src/lib/api.ts").read_text()
+        self.assertIn(old, text)
+        self._write("rag/frontend/src/lib/api.ts", text.replace(old, new))
+        return self._commit_and_select()
+
+    def test_interface_only_change_selects_nothing(self) -> None:
+        selection = self._edit_api(
+            "  a?: string;\n", "  a?: string;\n  /** 追加 */\n  b?: number;\n"
+        )
+        self.assertEqual(selection.specs, {})
+        self.assertEqual(selection.full, [])
+        self.assertTrue(any("型の宣言・コメントだけ" in note for note in selection.notes))
+
+    def test_comment_only_change_selects_nothing(self) -> None:
+        selection = self._edit_api("// 読み込み\n", "// 一覧を読み込む\n")
+        self.assertEqual(selection.specs, {})
+
+    def test_const_change_selects_specs(self) -> None:
+        selection = self._edit_api("LIMIT = 10", "LIMIT = 20")
+        self.assertIn(self.page, selection.specs)
+
+    def test_enum_change_selects_specs(self) -> None:
+        selection = self._edit_api('  A = "a",\n', '  A = "a",\n  B = "b",\n')
+        self.assertIn(self.page, selection.specs)
+
+    def test_function_body_change_selects_specs(self) -> None:
+        selection = self._edit_api("return LIMIT;", "return LIMIT + 1;")
         self.assertEqual(set(selection.specs), {self.page, self.node})
 
     def test_i18n_key_selects_referencing_screen_and_old_text_spec(self) -> None:
