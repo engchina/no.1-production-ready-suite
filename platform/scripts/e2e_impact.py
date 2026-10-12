@@ -75,6 +75,7 @@ class Product:
     # 記録の fixture を足した `test` を export するファイル（frontend からの相対パス）。
     test_module: str
     max_shards: int
+    # `.github/workflows/e2e-nightly.yml` の matrix の shard の数（テストが一致を検査する）。
     nightly_shards: int
     # playwright.config の `fullyParallel`。true なら Playwright の `--shard` がテスト単位で
     # 分けるので、spec 単位の LPT より細かく均せる（NL2SQL の nl2sql-workflows.spec.ts は
@@ -1146,7 +1147,12 @@ def skip_smoke_specs(selection: Selection, specs: Iterable[str]) -> None:
 
 
 def download_maps(product: Product, dest: Path, repo: str | None = None) -> list[Path]:
-    """最近の nightly（main）の run から、製品の記録の artifact を取得する。"""
+    """最近の nightly（main）の run から、製品の記録の artifact を取得する。
+
+    shard の記録が `nightly_shards` 個そろった run だけを使う（#1599）。時間切れで cancel された
+    shard は記録を残さないので、そろわない run の記録は spec の一部が欠け、欠けた spec の変更を
+    「影響なし」と見誤る。そろわない run は飛ばして、1 つ前の run を見る。
+    """
     repo_args = ["--repo", repo] if repo else []
     out = subprocess.run(
         [
@@ -1168,8 +1174,14 @@ def download_maps(product: Product, dest: Path, repo: str | None = None) -> list
             cwd=ROOT, capture_output=True, text=True, check=False,
         )  # fmt: skip
         files = sorted(target.rglob("*.json")) if target.exists() else []
-        if result.returncode == 0 and files:
+        if result.returncode == 0 and len(files) == product.nightly_shards:
             return files
+        if files:
+            print(
+                f"[e2e-impact] nightly の run {run['databaseId']} の記録は {len(files)} / "
+                f"{product.nightly_shards} shard しか無いので使わない",
+                file=sys.stderr,
+            )
     return []
 
 
