@@ -1,6 +1,13 @@
 import { expect, type Page, test } from "./fixtures/test";
 
-import { mockDatabaseReady, mockLocalAuth, openChatHistory, openSidebarNav, selectSearchAnswerProfile } from "./_helpers";
+import {
+  expandSidebarSections,
+  mockDatabaseReady,
+  mockLocalAuth,
+  openChatHistory,
+  openSidebarNav,
+  selectSearchAnswerProfile,
+} from "./_helpers";
 
 /**
  * #132: 編集画面の離脱ガードと、検索・チャット・一覧の作業状態の保持
@@ -33,7 +40,10 @@ test.beforeEach(async ({ page }) => {
 
 /** サイドナビの項目を開く（375px ではナビがドロワーのため、先に「メニュー」で開く。#367）。 */
 async function openFromSidebar(page: Page, name: string) {
-  await (await openSidebarNav(page)).getByRole("link", { name, exact: true }).click();
+  const sidebar = await openSidebarNav(page);
+  // 既定では「AI 活用」と今のページのセクションだけが開いているため、閉じたセクションを開いてから選ぶ（#1563）。
+  await expandSidebarSections(sidebar);
+  await sidebar.getByRole("link", { name, exact: true }).click();
 }
 
 /** beforeunload を合成して、離脱を妨げるか（preventDefault されたか）を返す。 */

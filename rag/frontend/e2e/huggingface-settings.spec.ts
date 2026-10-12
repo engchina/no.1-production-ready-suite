@@ -1,6 +1,12 @@
 import { expect, type Page, type Route, test } from "./fixtures/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
+import {
+  expandSidebarSections,
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+  openSidebarNav,
+} from "./_helpers";
 
 /**
  * HuggingFace 設定（#287）。共通のシステム設定の画面と同じ構成（TimedLoadingState + Skeleton、
@@ -175,7 +181,10 @@ test("未保存の変更があると離脱を確認し、キャンセルで入�
 
   await page.goto("/settings/huggingface");
   await page.locator("#hf-token").fill("hf_unsaved");
-  await (await openSidebarNav(page)).getByRole("link", { name: "OCI 認証設定", exact: true }).click();
+  const sidebar = await openSidebarNav(page);
+  // OCI 認証設定は既定で閉じている「システム設定」にある（#1563）。
+  await expandSidebarSections(sidebar, "システム設定");
+  await sidebar.getByRole("link", { name: "OCI 認証設定", exact: true }).click();
 
   const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
   await expect(dialog).toBeVisible();

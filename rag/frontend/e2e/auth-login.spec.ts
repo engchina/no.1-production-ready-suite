@@ -7,6 +7,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   type CurrentUserPayload,
+  expandSidebarSections,
   openSidebarNav,
 } from "./_helpers";
 
@@ -219,6 +220,8 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
 
   await page.goto("/settings/appearance");
   const sidebar = await openSidebarNav(page);
+  // 文書インデックスは既定で閉じている「ナレッジ構築」にある（#1563）。
+  await expandSidebarSections(sidebar, "ナレッジ構築");
 
   expired = true;
   await sidebar.getByRole("link", { name: "文書インデックス" }).click();

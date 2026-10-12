@@ -734,6 +734,7 @@ import { SearchField } from "@production-ready/ui";
 - チャットは会話の内部スクロールと入力欄を分ける。自動移動・引用への移動は会話コンテナの `scrollTo` で行い、祖先まで動かす `scrollIntoView` を使わない。狭い画面では会話の高さを制限し、長い回答でページを無限に伸ばさない。
 
 - **`.pr-skip-link`（本文へスキップ）と `<main id="pr-main" tabIndex={-1}>` を出力。** サイドバーが20項目を超えるため、キーボード利用者が毎ページ全 nav を Tab 通過していました
+- **セクションの既定の開閉（#1563）**: 保存済みの開閉（ui-store の `collapsedSections`）が無いセクションは `NavSection.defaultCollapsed` に従う（既定は展開）。3 製品は業務の入口の「AI 活用」（`nav.section.use`）だけを展開し、ほかのセクションに `defaultCollapsed: true` を付ける（製品は nav config で指定するだけ）。今のページを含むセクションは閉じていても開き、利用者が開閉した状態は保存して既定より優先する
 - **md 未満（767px 以下）はナビをドロワーにする（#367。2026-09-28 に案 A に決定。案 B「アイコン列を維持」・案 C「下部タブバー」は採らない）。** 3 製品の nav config と `Sidebar` の props は変えず、`AppShell` がモードを切り替えます
   - サイドバーを隠し、画面の上端に反転面（サイドバーと同じ `data-surface="inverted"`）のバーを置く。左端に「メニュー」ボタン（lucide `Menu`、`aria-expanded` / `aria-controls`、44px）、その右に製品名（`Sidebar` の `title`）。バーは本文のスクロールの外にあり、どこまでスクロールしてもメニューに届く
   - 開くと左からドロワー（`role="dialog"` + `aria-modal`、幅 `--sidebar-width`、画面幅 − 3.5rem まで）と scrim（`--scrim`）。ドロワーの中の `Sidebar` は折りたたみの選好（`collapsed`）に関係なく展開して描き、折りたたみボタンの代わりに「メニューを閉じる」（`X`）を出す
@@ -1092,6 +1093,7 @@ QA に事前共有してください。**80点あります。**
 | 81 | **チャットで上の回答を読んでいる間は引き戻されず、「最新のメッセージへ」が出る**（#1161。`useChatAutoScroll`） | 3 製品とも、回答の受信・処理の段階の更新・状態の変化のたびに会話の欄を末尾へ動かしていた（上を読んでいても引き戻される）→ 末尾を見ている間だけ追い、上を読んでいる間に新しい内容が届いたら会話の欄の下端の中央に「最新のメッセージへ」（`ArrowDown`）を出す。押すと末尾へ戻り、ボタンは消える。会話を開いたとき・送信の瞬間は従来どおり末尾へ | 長い回答の受信中に前の回答を読めなかった。ChatGPT・Claude・Slack と同じ振る舞い |
 | 83 | **ページ送りの件数の文言が 3 製品で「a - b / n 件」（桁区切りあり）にそろう**（#1266） | NL2SQL は「a-b / n 件」（空白なし・桁区切りなし）、RAG・Agent は「a - b / n 件」。1 ページの件数の選択は RAG フィードバック・Agent 監査・`ResultTable` で別々の欄と文言 → 共通の `Pagination` の既定の文言（`DEFAULT_PAGINATION_LABELS`。`ResultTable` の「すべての行を見る」の件数も同じ形）と `PageSizeSelect`。`LoadMoreFooter` に `disabled`（取り直し中は続きを読ませない）。NL2SQL のカーソル型の一覧（SQL生成評価・質問の学習の候補・アプリのフィードバック）は共通の `CursorPagination` | 製品ごとに書き写していたページ送りのつなぎ（文言の配線・最後のページへ戻す・カーソルの履歴・件数の選択）を共通にした |
 | 82 | **3 製品のチャットの 1 往復と回答の枠が共通の `ChatTurn` / `ChatAnswer` になる**（#1161） | NL2SQL の回答は `Card`（影・角丸 lg・`CardContent` の余白）、RAG・Agent は枠線の箱（RAG は中の間隔 0.5rem、Agent は地の色なし）。1 往復は RAG・Agent が `div`、NL2SQL が `article` → 3 製品とも 1 往復は `article`、回答は枠線の箱（`rounded-md`・`border`・`bg-surface`・`p-3`、中の間隔 0.75rem、影なし） | 同じ入れ物を 3 製品で書き写していて、回答の枠の見た目が製品ごとに違っていた |
+| 84 | **サイドナビは初めて開いたとき「AI 活用」だけを展開し、ほかのセクションを閉じる**（#1563。`NavSection.defaultCollapsed`） | 保存済みの開閉が無いとき、RAG・Agent はすべてのセクションを展開、NL2SQL は製品の独自の処理（`initiallyCollapsed`）で「AI 活用」だけを展開していた → 3 製品とも共有 `Sidebar` が nav config の `defaultCollapsed` で「AI 活用」だけを展開し、ほかは閉じる。今のページを含むセクションは閉じていても開く（従来どおり）。利用者が開閉した状態は ui-store（localStorage）に保存し、既定より優先する | 管理の画面まで並ぶ長いナビを、業務の入口から始めやすくする。既定の開閉を製品ごとに書かず、3 製品で同じ仕組みにする |
 
 ### API の非互換
 
@@ -1126,6 +1128,7 @@ QA に事前共有してください。**80点あります。**
 | `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
 | `Tabs`（#542） | `TabItem` に `invalid` / `invalidLabel` を追加し、`DEFAULT_TAB_INVALID_LABEL` を export。`invalid` のタブは `data-invalid` と、`aria-describedby` に `<idPrefix>-tab-<id>-invalid` を持つ（バッジがあればバッジの id と並べる）。既存の props・id・キー操作は変えない |
 | `Disclosure`（#397） | **新規 export。** `Disclosure` / `DisclosureProps` / `DisclosureVariant` / `DisclosureSurface` / `DisclosureTone` / `DisclosureSize`。`<details>` を包む開閉の標準形。adherence の lint が製品の JSX の `<details>` を検出する |
+| `Sidebar` / `NavSection` / `createUiStore`（#1563） | `NavSection` に `defaultCollapsed?: boolean`（保存値が無いときに閉じる。既定 false）。`Sidebar` の `onToggleSection` を廃止し、見出しの開閉は今の開閉の逆を `onSetSectionCollapsed` で保存する。ui-store の `toggleSection` を廃止（既定を知らないトグルは、既定で閉じたセクションを 1 回目に開けない） |
 | `DisclosureChevron`（#397） | 折りたたみの向きが `rotate-90`（左向き）→ `-rotate-90`（右向き）。`getComputedStyle(icon).rotate` を検証している E2E は `"90deg"` → `"-90deg"`。`expanded="group"` は残すが、入れ子の `<details>` では外側の open に引きずられるため新規コードは `Disclosure` か boolean を使う |
 | `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
