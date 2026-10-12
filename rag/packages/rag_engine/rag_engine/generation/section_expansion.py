@@ -12,9 +12,13 @@
   広げる理由にしない。
 - 上の段の章節は、予算に入れば全体を読む。入らなければ、子の章節の見出し（目次）を質問との関連度（rerank。使えなければ
   語の重なり）で並べ、関連の高い子の章節から、予算に入る章節を全体で読む。入らない子の章節は読まない。
+- 章節が予算に入るかは、章節の chunk のうち、まだ文脈に無いものの token で決める（最初の根拠・前の段で読んだ
+  chunk は数えない。#1504）。章節の chunk がすべて文脈にあれば、読むものは無い（診断の ``read: "in_context"``）。
 - 全体を読む必要があるのに予算に入らない章節は、第 3 段階（#1437。抽出してから統合）の差し込み口
   （``large_sections``。``section_extraction.SectionExtractor``）に渡し、質問に関係する原文だけを抜き出して文脈に
-  入れる。差し込み口が無ければ予算で打ち切る。
+  入れる。入らない子の章節が出たら、それより関連の低い子の章節もまとめて 1 つの要求で渡す。要求には、すでに文脈に
+  ある章節の親（最初の根拠を含む）も入れ、その分を抜き出した原文の予算に戻す（抜き出した原文で置き換える。予算に
+  入れば元のまま残す。#1504）。差し込み口が無ければ予算で打ち切る。
 - 上限（入力 token・段の数・時間）で止めたときは、読めなかった章節を返し、呼び出し元は回答を条件つき
   （``conditional``）にして「確かめられていない点」に出す。
 
@@ -194,7 +198,11 @@ class SectionExpansionResult:
 class LargeSectionRequest:
     """全体を読む必要があるのに予算に入らない章節（第 3 段階 #1437 の抽出してから統合に渡す）。
 
-    ``tree`` はまだ文脈に無い章節の親（章節の中の読み順）、``remaining_tokens`` は文脈に足せる残りの入力 token、
+    ``tree`` は章節の親（章節の中の読み順）。まだ文脈に無い親に加えて、すでに文脈にある章節の親（最初の根拠・前の段で
+    読んだ親。``context_keys`` の chunk）も含む（#1504。抜き出した原文で置き換えられるので、同じ原文を二重に数えない）。
+    ``remaining_tokens`` は抜き出した原文に使える入力 token（根拠の入力の上限の残りに、``context_keys`` の親の分を
+    戻した値）。抽出の 1 回の呼び出しの入力は、これとは別にモデルの入力の上限から決める（``section_extraction``）。
+    ``sections`` は読めなかったときに出す章節（既定は ``section``。子の章節をまとめて渡すときは、その子の章節）、
     ``seed_positions`` は同じ文書の当たった chunk の位置（``seq_no``。近い分から先に読む）、``seconds_left`` は抽出に使える残りの秒数
     （回答の時間の上限から、生成と次の判定の分を引いた値）、``truncated`` は章節の chunk が読む上限を超えて
     先頭だけを読んだこと。
@@ -208,15 +216,27 @@ class LargeSectionRequest:
     seed_positions: tuple[int, ...] = ()
     seconds_left: Callable[[], float] = lambda: math.inf
     truncated: bool = False
+    context_keys: frozenset[str] = frozenset()
+    sections: tuple[SectionInfo, ...] = ()
+
+    @property
+    def unread_sections(self) -> tuple[SectionInfo, ...]:
+        return self.sections or (self.section,)
 
 
 @dataclass
 class LargeSectionOutcome:
-    """抽出してから統合の結果。``tree`` は文脈に足す根拠、``unread`` は上限で読めなかった範囲。"""
+    """抽出してから統合の結果。``tree`` は文脈に足す根拠、``unread`` は上限で読めなかった範囲。
+
+    ``replacements`` は、すでに文脈にある親（``LargeSectionRequest.context_keys``）のうち、抜き出した原文の親に
+    置き換えるもの（chunk の ID → 置き換える record。None は文脈から外す）。含まれない親は文脈のまま残す。
+    """
 
     tree: tuple[ContextParentEvidence, ...] = ()
     unread: list[UnreadSection] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
+    replacements: dict[str, AnswerRecord | None] = field(default_factory=dict)
+
 
 
 # (章節の要求) を受け取り、抜き出した根拠（読めなかった範囲つき）を返す。None は読まない（予算で打ち切る）。
@@ -324,6 +344,8 @@ class _Reader:
     read_chunks: Callable[..., Sequence[Any]]
     known_ids: set[str]
     read_sections: set[tuple[str, str, str]] = field(default_factory=set)
+    # 章節ごとの親（読み順。文脈にあるかに関係なく全部）。同じ章節を 2 回読まない。
+    _groups: dict[tuple[str, str, str], list[ContextParentEvidence]] = field(default_factory=dict)
 
     def section_key(self, outline: SectionOutline, section: SectionInfo) -> tuple[str, str, str]:
         return outline.document_id, outline.chunk_set_id, section.section_id
@@ -336,33 +358,39 @@ class _Reader:
                                                 for other in done)]
         return max(0, section.chars - sum(item.chars for item in top))
 
-    def read(self, outline: SectionOutline, section: SectionInfo) -> list[ContextParentEvidence]:
-        """章節の chunk を読み、まだ文脈に無い親を章節の中の読み順で返す（child は章節の中の順）。"""
+    def groups(self, outline: SectionOutline, section: SectionInfo) -> list[ContextParentEvidence]:
+        """章節の chunk を読み、親ごとにまとめて章節の中の読み順で返す（文脈にある親も含む。child は章節の中の順）。"""
+        key = self.section_key(outline, section)
+        if key in self._groups:
+            return self._groups[key]
         chunks = list(self.read_chunks(document_id=outline.document_id, chunk_set_id=outline.chunk_set_id,
                                        section_id=section.section_id))
         records = [_stored_chunk_answer_record(chunk) for chunk in chunks]
         parents = {_record_key(r): r for r in records if getattr(r, "chunk_level", "") == "parent"}
-        groups: dict[str, list[AnswerRecord]] = {}
+        grouped: dict[str, list[AnswerRecord]] = {}
         for record in records:
             if getattr(record, "chunk_level", "") == "parent":
                 continue
-            key = str(getattr(record, "parent_chunk_uid", "") or "") or _record_key(record)
-            groups.setdefault(key, []).append(record)
-        tree: list[ContextParentEvidence] = []
-        for key, children in groups.items():
-            parent = parents.get(key)
-            if _record_key(parent or children[0]) in self.known_ids:
-                continue
-            tree.append(ContextParentEvidence(
-                record=parent or children[0],
-                role="synthesis_parent" if parent is not None else "child_fallback",
+            group_key = str(getattr(record, "parent_chunk_uid", "") or "") or _record_key(record)
+            grouped.setdefault(group_key, []).append(record)
+        tree = [
+            ContextParentEvidence(
+                record=parents.get(group_key) or children[0],
+                role="synthesis_parent" if group_key in parents else "child_fallback",
                 reason=SECTION_EXPANSION_REASON,
                 children=tuple(
                     ContextChildEvidence(record=child, role=SECTION_CONTEXT_ROLE,  # type: ignore[arg-type]
                                          reason=SECTION_EXPANSION_REASON)
                     for child in children),
-            ))
+            )
+            for group_key, children in grouped.items()
+        ]
+        self._groups[key] = tree
         return tree
+
+    def read(self, outline: SectionOutline, section: SectionInfo) -> list[ContextParentEvidence]:
+        """章節の親のうち、まだ文脈に無いものを章節の中の読み順で返す。"""
+        return [item for item in self.groups(outline, section) if _record_key(item.record) not in self.known_ids]
 
     def mark(self, outline: SectionOutline, section: SectionInfo, tree: Sequence[ContextParentEvidence]) -> None:
         self.read_sections.add(self.section_key(outline, section))
@@ -435,6 +463,24 @@ def _merge(context: AnswerContext, tree: Sequence[ContextParentEvidence]) -> Ans
     )
 
 
+def _replace_records(context: AnswerContext, replacements: dict[str, AnswerRecord | None]) -> AnswerContext:
+    """文脈の親を、抜き出した原文の親に置き換える（None は外す。#1504）。位置・役割・child はそのまま。"""
+    if not replacements:
+        return context
+
+    def swap(record: Any) -> Any:
+        key = _record_key(record)
+        return replacements[key] if key in replacements else record
+
+    tree = tuple(replace(item, record=new) for item in context.evidence_tree if (new := swap(item.record)) is not None)
+    records = [new for record in context.records if (new := swap(record)) is not None]
+    evidence = tuple(replace(item, record=new) for item in context.evidence if (new := swap(item.record)) is not None)
+    text = context_bundle_from_parent_evidence(tree, max_chars=max(
+        [len(str(getattr(item.record, "text", "") or "")) for item in tree] + [1])).text if tree else ""
+    return replace(context, records=records, evidence=evidence, evidence_tree=tree,
+                   text=text or "\n\n".join(str(getattr(record, "text", "") or "") for record in records))
+
+
 def expand_sections(
     question: str,
     context: AnswerContext,
@@ -496,6 +542,7 @@ def expand_sections(
     reader = _Reader(read_chunks=section_chunks, known_ids=_context_chunk_ids(context))
     level_seconds = DEFAULT_LEVEL_SECONDS
     current = context
+    replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
     extracting = large_sections is not no_large_section_handler
 
     def seconds_left() -> float:
@@ -506,30 +553,104 @@ def expand_sections(
             left = min(left, remaining_deadline)
         return left - GENERATION_RESERVE_SECONDS - level_seconds
 
-    def hand_off(chain: _Chain, section: SectionInfo, remaining: int, entry: dict[str, Any],
-                 added: list[ContextParentEvidence]) -> bool:
+    def remaining_now(added: Sequence[ContextParentEvidence]) -> int:
+        return limits.input_tokens - context_tokens(current) - _tree_tokens(added)
+
+    def try_whole(chain: _Chain, section: SectionInfo, entry: dict[str, Any],
+                  added: list[ContextParentEvidence]) -> bool:
+        """章節の、まだ文脈に無い親が予算に入れば全体を読む（読んだ・読む必要が無ければ True）。
+
+        文脈にすでにある chunk（最初の根拠・前の段で読んだ章節）は数えない（#1504。二重に数えない）。章節の chunk が
+        すべて文脈にあれば、読むものが無い（``in_context``）。
+        """
+        if section.chunk_count > MAX_SECTION_CHUNKS:
+            return False
+        tree = reader.read(chain.outline, section)
+        if not tree:
+            reader.mark(chain.outline, section, ())
+            entry.update(read="in_context", added_parents=0)
+            return True
+        if _tree_tokens(tree) > remaining_now(added):
+            return False
+        reader.mark(chain.outline, section, tree)
+        added.extend(tree)
+        entry.update(read="whole", added_parents=len(tree))
+        return True
+
+    def without_extraction(chain: _Chain, section: SectionInfo, entry: dict[str, Any],
+                           added: list[ContextParentEvidence]) -> None:
+        """抽出してから統合が無いとき: 見積もりで入る章節は先頭から入る分だけ読み、入らなければ読まない。"""
+        remaining = remaining_now(added)
+        label = section_label(chain.outline, section)
+        if section.chunk_count <= MAX_SECTION_CHUNKS and reader.unread_chars(chain.outline, section) <= remaining:
+            kept, _whole = _fit_tree(reader.read(chain.outline, section), remaining)
+            reader.mark(chain.outline, section, kept)
+            added.extend(kept)
+            entry.update(read="partial", added_parents=len(kept))
+            label += "の残り"
+        else:
+            entry["read"] = "skipped"
+        result.unread.append(UnreadSection(chain.outline.document_id, section.section_id, label, STOP_TOKEN_BUDGET))
+
+    def hand_off(chain: _Chain, scope: SectionInfo, pending: Sequence[tuple[SectionInfo, dict[str, Any]]],
+                 holder: dict[str, Any], added: list[ContextParentEvidence]) -> bool:
         """予算に入らない章節を、抽出してから統合（#1437）に渡す。読めなかった範囲があれば True。
 
-        差し込み口が無い（None を返す）ときは、章節を読まずに「根拠の入力の上限」で読めなかった章節にする。
-        抜き出した根拠は ``added`` に足し、章節は読んだことにする（抜き出す原文が無くても読んだ）。
+        ``scope`` は広げている章節、``pending`` は入らない章節（``scope`` 自身か、入らない子の章節）。``scope`` の
+        親（読めれば ``scope`` の全体、読めなければ ``pending`` の章節）のうち、まだ文脈に無い親と、すでに文脈にある親
+        （最初の根拠・前の段で読んだ親）を読み順で渡す。文脈にある親の分は予算に戻し、抜き出した原文で置き換える
+        （#1504。同じ原文を二重に数えない）。差し込み口が None を返したら、読めなかった章節にする。
         """
-        outcome = None
-        if extracting:
-            tree = reader.read(chain.outline, section)
-            outcome = large_sections(LargeSectionRequest(
-                question=question, outline=chain.outline, section=section, tree=tuple(tree),
-                remaining_tokens=max(0, remaining), seconds_left=seconds_left,
-                seed_positions=_seed_positions(context, chains, chain),
-                truncated=section.chunk_count > MAX_SECTION_CHUNKS))
+        nonlocal current, replaced
+        outline = chain.outline
+        sections_ = [section for section, _entry in pending]
+        scoped = [scope] if scope.chunk_count <= MAX_SECTION_CHUNKS or sections_ == [scope] else sections_
+        in_context = {_record_key(item.record): item for item in current.evidence_tree}
+        tree: list[ContextParentEvidence] = []
+        seen: set[str] = set()
+        absorbed: set[str] = set()
+        for section in scoped:
+            for item in reader.groups(outline, section):
+                key = _record_key(item.record)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if key in in_context:
+                    tree.append(in_context[key])
+                    absorbed.add(key)
+                elif key not in reader.known_ids:
+                    tree.append(item)
+        remaining = remaining_now(added) + sum(
+            estimate_tokens(str(getattr(in_context[key].record, "text", "") or "")) for key in absorbed)
+        outcome = large_sections(LargeSectionRequest(
+            question=question, outline=outline, section=scope, tree=tuple(tree),
+            remaining_tokens=max(0, remaining), seconds_left=seconds_left,
+            seed_positions=_seed_positions(context, chains, chain),
+            truncated=any(section.chunk_count > MAX_SECTION_CHUNKS for section in scoped),
+            context_keys=frozenset(absorbed), sections=() if sections_ == [scope] else tuple(sections_)))
         if outcome is None:
-            entry["read"] = "skipped"
-            result.unread.append(UnreadSection(chain.outline.document_id, section.section_id,
-                                               section_label(chain.outline, section), STOP_TOKEN_BUDGET))
+            for section, entry in pending:
+                entry["read"] = "skipped"
+                result.unread.append(UnreadSection(outline.document_id, section.section_id,
+                                                   section_label(outline, section), STOP_TOKEN_BUDGET))
             return True
-        reader.mark(chain.outline, section, outcome.tree)
+        for section, _entry in pending:
+            reader.mark(outline, section, outcome.tree)
+        if outcome.replacements:
+            current = _replace_records(current, outcome.replacements)
+            replaced += len(outcome.replacements)
         added.extend(outcome.tree)
         result.unread.extend(outcome.unread)
-        entry.update(read="extracted", added_parents=len(outcome.tree), extraction=outcome.trace)
+        # 抜き出していない章節を「抽出した」にしない（#1504）。
+        read = "skipped" if outcome.trace.get("skipped") else "extracted"
+        holder.update(added_parents=len(outcome.tree),
+                      replaced_parents=sum(value is not None for value in outcome.replacements.values()),
+                      removed_parents=sum(value is None for value in outcome.replacements.values()),
+                      extraction=outcome.trace)
+        for _section, entry in pending:
+            entry["read"] = read
+            if entry is not holder:
+                entry["extraction_group"] = scope.section_id
         return bool(outcome.unread)
 
     for level in range(1, limits.max_levels + 1):
@@ -548,6 +669,7 @@ def expand_sections(
         level_trace: dict[str, Any] = {"level": level, "sections": []}
         trace["levels"].append(level_trace)
         added: list[ContextParentEvidence] = []
+        replaced = 0
         budget_hit = False
         labels: list[str] = []
         seen_targets: set[tuple[str, str, str]] = set()
@@ -560,21 +682,10 @@ def expand_sections(
                 continue
             seen_targets.add(key)
             labels.append(section_label(chain.outline, section))
-            remaining = limits.input_tokens - context_tokens(current) - _tree_tokens(added)
             entry: dict[str, Any] = {"section_id": section.section_id, "title": section.title,
                                      "is_document": section.section_id == ROOT_SECTION_ID}
             level_trace["sections"].append(entry)
-            if reader.unread_chars(chain.outline, section) <= remaining and section.chunk_count <= MAX_SECTION_CHUNKS:
-                tree = reader.read(chain.outline, section)
-                kept, whole = _fit_tree(tree, remaining)
-                reader.mark(chain.outline, section, kept)
-                added.extend(kept)
-                entry.update(read="whole" if whole else "partial", added_parents=len(kept))
-                if not whole:
-                    budget_hit = True
-                    result.unread.append(UnreadSection(chain.outline.document_id, section.section_id,
-                                                       section_label(chain.outline, section) + "の残り",
-                                                       STOP_TOKEN_BUDGET))
+            if try_whole(chain, section, entry, added):
                 continue
             # 予算に入らない: 子の章節を関連度の順に、入るものから全体で読む。
             done = chain.sections[chain.position - 1] if chain.position > 0 else None
@@ -582,33 +693,40 @@ def expand_sections(
                         if done is None or child.section_id != done.section_id]
             if not children:
                 # 子の章節が無い章節（大きな leaf・子をすべて読んだ章節）は、抽出してから統合（#1437）に渡す。
-                if hand_off(chain, section, remaining, entry, added):
+                if extracting:
+                    budget_hit = hand_off(chain, section, [(section, entry)], entry, added) or budget_hit
+                else:
+                    without_extraction(chain, section, entry, added)
                     budget_hit = True
                 continue
             ranked, method = _rank_children(question, chain.outline, children, rerank, settings)
             entry.update(read="children", ranking=method, children=[])
+            pending: list[tuple[SectionInfo, dict[str, Any]]] = []
             for child in ranked:
                 child_key = reader.section_key(chain.outline, child)
                 if child_key in reader.read_sections:
                     continue
-                remaining = limits.input_tokens - context_tokens(current) - _tree_tokens(added)
-                child_entry = {"section_id": child.section_id, "title": child.title}
+                child_entry: dict[str, Any] = {"section_id": child.section_id, "title": child.title}
                 entry["children"].append(child_entry)
-                if reader.unread_chars(chain.outline, child) > remaining or child.chunk_count > MAX_SECTION_CHUNKS:
-                    # 入らない子の章節も、抽出してから統合（#1437）に渡す。
-                    if hand_off(chain, child, remaining, child_entry, added):
-                        budget_hit = True
+                if pending:
+                    # 入らない子の章節が出たら、それより関連の低い子の章節もまとめて抽出してから統合に渡す
+                    # （関連の低い章節が先に予算を使わない）。読むものが無い章節は渡さない。
+                    if child.chunk_count <= MAX_SECTION_CHUNKS and not reader.read(chain.outline, child):
+                        reader.mark(chain.outline, child, ())
+                        child_entry.update(read="in_context", added_parents=0)
+                    else:
+                        pending.append((child, child_entry))
                     continue
-                tree = reader.read(chain.outline, child)
-                kept, whole = _fit_tree(tree, remaining)
-                reader.mark(chain.outline, child, kept)
-                added.extend(kept)
-                child_entry.update(read="whole" if whole else "partial", added_parents=len(kept))
-                if not whole:
+                if try_whole(chain, child, child_entry, added):
+                    continue
+                if extracting:
+                    pending.append((child, child_entry))
+                else:
+                    without_extraction(chain, child, child_entry, added)
                     budget_hit = True
-                    result.unread.append(UnreadSection(chain.outline.document_id, child.section_id,
-                                                       section_label(chain.outline, child) + "の残り",
-                                                       STOP_TOKEN_BUDGET))
+            if pending:
+                # 入らない子の章節は、まとめて抽出してから統合（#1437）に渡す（1 回分に複数の章節を入れられる）。
+                budget_hit = hand_off(chain, section, pending, entry, added) or budget_hit
         if budget_hit or any(item.get("read") == "extracted" for item in _entries(level_trace)):
             # 全体を読む必要のある章節は、抽出してから統合（#1437）に渡す（差し込み口が無ければ予算で打ち切る）。
             trace["large_section_handoff"] = (
@@ -617,13 +735,15 @@ def expand_sections(
         level_trace["labels"] = labels
         if added:
             current = _merge(current, added)
-            result.context = current
-            result.applied = True
             level_trace["added_parents"] = len(added)
-        if not added:
+        if replaced:
+            level_trace["replaced_parents"] = replaced
+        if not added and not replaced:
             if budget_hit:
                 return finish(STOP_TOKEN_BUDGET)
             continue
+        result.context = current
+        result.applied = True
         before = clock()
         try:
             attempt = grade(current, level)
