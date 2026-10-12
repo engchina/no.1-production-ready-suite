@@ -1219,6 +1219,11 @@ async def test_reference_target_in_lower_candidates_moves_after_citing_anchor() 
     ]
 
 
+def _sources(search: dict[str, object]) -> list[dict[str, Any]]:
+    """診断の交差参照の起点の記録(検索 1 回分)の起点の列。"""
+    return cast(list[dict[str, Any]], search["sources"])
+
+
 def _filler(count: int) -> list[RetrievedChunk]:
     """参照を持たない上位の候補(統合の順位で参照の起点を下げる)。"""
     return [
@@ -1268,7 +1273,7 @@ async def test_document_name_reference_outside_top_five_is_followed(
     (search,) = state.reference_sources
     assert search["top_sources"] == 5
     assert search["source_limit"] == top_k
-    (source,) = search["sources"]
+    (source,) = _sources(search)
     assert source["chunk_id"] == window.chunk_id
     assert source["fused_rank"] == 8
     assert source["rrf_score"] > 0
@@ -1359,7 +1364,7 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
         "doc-1:cs-1:s2",
     ]
     (search,) = state.reference_sources
-    assert [(item["fused_rank"], item["outcome"]) for item in search["sources"]] == [
+    assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
         (6, "added"),
         (7, "added"),
     ]
@@ -1375,7 +1380,7 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
     order = [child.chunk_uid for child in result.child_chunks]
     assert order[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
     (search,) = state.reference_sources
-    assert [(item["fused_rank"], item["outcome"]) for item in search["sources"]] == [
+    assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
         (6, "added"),
         (7, "referenced"),
     ]
