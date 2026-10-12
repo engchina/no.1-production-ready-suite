@@ -57,6 +57,17 @@ test("選択肢を読むまでは Select AI と今の値だけを出す（#1524�
   );
 });
 
+test("応答に方式の一覧が無くても落とさず、読む前と同じく Select AI と今の値だけを出す（#1524）", () => {
+  const malformed = {} as Nl2SqlEnginesData;
+  assert.deepEqual(
+    defaultEngineOptions("enterprise_ai_direct", malformed).map((option) => [option.value, option.label]),
+    [
+      ["select_ai", "Select AI"],
+      ["enterprise_ai_direct", "Enterprise AI Direct"],
+    ]
+  );
+});
+
 test("画面の生成の方式は、選んだ方式 → 業務プロファイルの既定 → Select AI の順（#1524）", () => {
   assert.equal(resolveProfileEngine("select_ai", "enterprise_ai_direct"), "select_ai");
   assert.equal(resolveProfileEngine("", "enterprise_ai_direct"), "enterprise_ai_direct");
