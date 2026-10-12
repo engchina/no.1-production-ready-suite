@@ -16,6 +16,7 @@ boilerplate を除去した Markdown へ再マップし、`ConvertResponse` を�
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from collections.abc import Callable
 from urllib.parse import urlparse
@@ -206,10 +207,109 @@ def _default_extractor(html: str) -> str | None:
     """trafilatura で本文を Markdown 抽出する(失敗時 None)。"""
     import trafilatura
 
-    return trafilatura.extract(
+    markdown = trafilatura.extract(
         html,
         output_format="markdown",
         include_tables=True,
         include_links=True,
         with_metadata=False,
     )
+    return None if markdown is None else unescape_trafilatura_markdown(markdown)
+
+
+# trafilatura 2 が Markdown の出力で本文に足すエスケープ(#1544)。RAG はこの Markdown を
+# 描画せず生の文字列として分割・索引するため、`element_id` が `element\_id` になると
+# chunk の本文・全文検索の索引・引用にバックスラッシュが入る。trafilatura にエスケープを
+# 止める設定は無いので、ここで戻す。
+# - 本文の `* _ ` ~ [ ] <`: もとからあったバックスラッシュを倍にしたうえで 1 つ足す(2k+1 個)。
+# - 段落・一覧の項目・引用の先頭の `# > - +` と `1.` / `1)`: 1 つ足す。`\#` だけは残す(戻すと
+#   `rag_parser_core` の `MARKDOWN_HEADING` が見出しと読み、元のページに無い章節ができる)。
+# - 表のセルの `|` は `\|` になるが、列の区切りと区別するために残す。
+# - コード(fence の block と inline のコード)の中はエスケープされないので触らない。
+_INLINE_ESCAPED_CHARS = frozenset("*_`~[]<")
+# 行頭のインデントと、一覧・引用の印(入れ子を含む)。その後ろが段落・項目の本文の先頭。
+_BLOCK_PREFIX = r"^((?:[ \t]*(?:[-+*]|\d{1,9}[.)]|>)[ \t]+)*[ \t]*)"
+_BLOCK_MARKER_ESCAPED_RE = re.compile(_BLOCK_PREFIX + r"\\(>|[-+](?=[ \t]|$))")
+_BLOCK_ORDERED_ESCAPED_RE = re.compile(_BLOCK_PREFIX + r"(\d{1,9})\\([.)])(?=[ \t]|$)")
+_FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+
+
+def unescape_trafilatura_markdown(markdown: str) -> str:
+    """trafilatura 2 が足した Markdown のエスケープを戻す。
+
+    コードの中・表のセルの `\\|`・行頭の `\\#` は残す。
+    """
+    lines: list[str] = []
+    fence: str | None = None
+    for line in markdown.split("\n"):
+        match = _FENCE_RE.match(line)
+        if fence is not None:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
+                fence = None
+            lines.append(line)
+            continue
+        if match:
+            fence = match.group(1)
+            lines.append(line)
+            continue
+        line = _BLOCK_MARKER_ESCAPED_RE.sub(r"\1\2", line)
+        line = _BLOCK_ORDERED_ESCAPED_RE.sub(r"\1\2\3", line)
+        lines.append(_unescape_inline(line))
+    return "\n".join(lines)
+
+
+def _unescape_inline(line: str) -> str:
+    """1 行の本文の `\\_` などを戻す。inline のコード(対になる `` ` `` の間)はそのまま残す。"""
+    if "\\" not in line:
+        return line
+    out: list[str] = []
+    index = 0
+    length = len(line)
+    while index < length:
+        char = line[index]
+        if char == "\\":
+            end = index
+            while end < length and line[end] == "\\":
+                end += 1
+            run = end - index
+            if end < length and line[end] in _INLINE_ESCAPED_CHARS and run % 2 == 1:
+                # 2k+1 個のバックスラッシュ + 記号 → 元の k 個 + 記号
+                # (trafilatura の `_escape_run` の逆)。
+                out.append("\\" * (run // 2) + line[end])
+                index = end + 1
+            else:
+                out.append(line[index:end])
+                index = end
+            continue
+        if char == "`":
+            end = index
+            while end < length and line[end] == "`":
+                end += 1
+            closing = _find_code_span_end(line, end, end - index)
+            if closing is None:
+                out.append(line[index:end])
+                index = end
+            else:
+                out.append(line[index:closing])
+                index = closing
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _find_code_span_end(line: str, start: int, ticks: int) -> int | None:
+    """`start` 以降で、同じ長さの `` ` `` の並びが閉じる位置の直後を返す(無ければ None)。"""
+    index = start
+    length = len(line)
+    while index < length:
+        if line[index] != "`":
+            index += 1
+            continue
+        end = index
+        while end < length and line[end] == "`":
+            end += 1
+        if end - index == ticks:
+            return end
+        index = end
+    return None

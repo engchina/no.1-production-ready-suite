@@ -139,3 +139,83 @@ def test_is_safe_url_blocks_dns_rebinding(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(converters.socket, "getaddrinfo", fake_getaddrinfo)
     assert converters._is_safe_url("http://totally-public.example/") is False
+
+
+# --- trafilatura 2 の Markdown のエスケープを戻す(#1544) ---
+
+
+@pytest.mark.parametrize(
+    ("escaped", "expected"),
+    [
+        ("根拠は element\\_id で追う", "根拠は element_id で追う"),
+        (
+            "[Lib/json/\\_\\_init\\_\\_.py](https://example.com/__init__.py)",
+            "[Lib/json/__init__.py](https://example.com/__init__.py)",
+        ),
+        (
+            "注記 \\[1\\] と a \\* b と \\~x\\~ と \\<tag> と \\`x\\`",
+            "注記 [1] と a * b と ~x~ と <tag> と `x`",
+        ),
+        # もとからあったバックスラッシュ(`\_`)は 2k+1 個になるので k 個に戻す。
+        ("正規表現 a\\\\\\_b", "正規表現 a\\_b"),
+        # 特殊文字の前でないバックスラッシュ(Windows のパス)は変えない。
+        ("C:\\Users\\name", "C:\\Users\\name"),
+        # 段落・項目の先頭の印。
+        ("\\- 先頭がハイフンの段落", "- 先頭がハイフンの段落"),
+        ("- \\+ 項目", "- + 項目"),
+        ("  1. \\> 引用ではない", "  1. > 引用ではない"),
+        ("2026\\. 年の計画", "2026. 年の計画"),
+        # 行頭の `\#` は見出しと読まれないよう残す。
+        ("\\# 見出しではない", "\\# 見出しではない"),
+        # 表のセルの `\|` は列の区切りと区別するため残す。
+        ("| a\\|b | c\\_d |", "| a\\|b | c_d |"),
+        # inline のコードの中は変えない。
+        ("`a\\_b` と c\\_d", "`a\\_b` と c_d"),
+        ("``x ` \\_y`` と \\_z", "``x ` \\_y`` と _z"),
+    ],
+    ids=[
+        "underscore",
+        "link-text",
+        "inline-specials",
+        "doubled-backslash",
+        "windows-path",
+        "block-hyphen",
+        "item-plus",
+        "nested-quote",
+        "ordered",
+        "keep-heading-escape",
+        "keep-table-pipe",
+        "code-span",
+        "double-backtick-span",
+    ],
+)
+def test_unescape_trafilatura_markdown(escaped: str, expected: str) -> None:
+    assert converters.unescape_trafilatura_markdown(escaped) == expected
+
+
+def test_unescape_keeps_fenced_code() -> None:
+    markdown = "前 a\\_b\n\n```\nprint('\\u1234', a\\_b)\n```\n後 c\\_d\n~~~\nx\\*y\n~~~"
+    assert converters.unescape_trafilatura_markdown(markdown) == (
+        "前 a_b\n\n```\nprint('\\u1234', a\\_b)\n```\n後 c_d\n~~~\nx\\*y\n~~~"
+    )
+
+
+def test_default_extractor_removes_trafilatura_escapes() -> None:
+    pytest.importorskip("trafilatura")
+    html = (
+        "<html><body><article><h1>手順</h1>"
+        "<p>回答の根拠はページ番号と element_id で追跡します。"
+        "注記 [1] を参照し、a*b を計算します。</p>"
+        "<p>関数 <code>parse_doc_id</code> は __init__.py にあります。</p>"
+        "<p>この段落は本文として十分な長さを持つように、いくつかの文を続けて書きます。"
+        "検索の索引と引用の照合で、元のページの文字がそのまま残ることを確かめます。</p>"
+        "</article></body></html>"
+    )
+    markdown = converters._default_extractor(html)
+    assert markdown is not None
+    assert "element_id" in markdown
+    assert "[1]" in markdown
+    assert "a*b" in markdown
+    assert "__init__.py" in markdown
+    assert "parse_doc_id" in markdown
+    assert "\\" not in markdown
