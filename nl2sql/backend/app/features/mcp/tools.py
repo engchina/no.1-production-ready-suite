@@ -35,7 +35,7 @@ import time
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from functools import wraps
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
@@ -386,6 +386,13 @@ class Nl2SqlJobResult(BaseModel):
     explanation: str | None = None
     is_safe: bool | None = None
     safety_issues: list[str] = Field(default_factory=list)
+    safety_check: Literal["checked", "skipped"] | None = Field(
+        default=None,
+        description=(
+            "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した "
+            "SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）"
+        ),
+    )
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     returned_count: int = 0
@@ -467,6 +474,7 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
     output.explanation = result.explanation or None
     output.is_safe = safety.is_safe
     output.safety_issues = [*issues, *safety.warnings]
+    output.safety_check = "checked" if safety.safety_checked else "skipped"
     output.columns = list(result.results.columns)
     output.rows = list(result.results.rows)
     output.returned_count = result.results.returned_count or len(result.results.rows)
