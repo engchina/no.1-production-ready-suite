@@ -258,7 +258,7 @@ jobs:
     name: Dependency review
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.deps_manifest == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
