@@ -276,7 +276,7 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 `@production-ready/ui` の `FixedSplitPane` を B / C 型のページで同じ規約で使う。構造 CSS は共有の `tokens.css` が配布する。
 
 - `splitId` は `<feature>-<view>`（例：`table-management-list`）。localStorage の key は部品に任せる。
-- `preferredWidePane`：一覧 + 詳細では詳細側（通常 `right`）を既定で広くする。
+- 分割線の初期位置は、すべての画面で 50%（左右 1:1）。画面ごとに片側を広くする指定は持たない（#1572）。利用者が動かした位置は `splitId` ごとに localStorage に残り、次からはそれを使う。ダブルクリック / Enter / Space は 1:1 → 左を広く → 右を広く（黄金比）の順に切り替え、Home で 1:1 に戻す。
 - 左右の枠の class は共通の panel shell にまとめ、ページごとに重ねて書かない。
 - 狭い幅（`xl` 未満）は縦積みに切り替える。divider は `role="separator"`、矢印 / Home キー、grip を備える。
 

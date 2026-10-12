@@ -53,7 +53,6 @@ import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import type { FixedSplitWidePane } from "@production-ready/ui";
 import {
   formatDbObjectName,
   parseDbAdminObjectTarget,
@@ -275,7 +274,6 @@ export function DbObjectManagementPanelShell({
   idPrefix,
   className = "",
   splitId,
-  preferredWidePane = "right",
   minLeftPaneWidthPx,
   minRightPaneWidthPx,
   role = "tabpanel",
@@ -290,7 +288,6 @@ export function DbObjectManagementPanelShell({
   idPrefix: string;
   className?: string;
   splitId?: string;
-  preferredWidePane?: FixedSplitWidePane;
   minLeftPaneWidthPx?: number;
   minRightPaneWidthPx?: number;
   /** タブ配下は "tabpanel"(既定)、タブ非連携の独立領域は "region"。 */
@@ -321,7 +318,6 @@ export function DbObjectManagementPanelShell({
         <FixedSplitPane
           storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
           splitId={splitPaneId}
-          preferredWidePane={preferredWidePane}
           minLeftPaneWidthPx={minLeftPaneWidthPx}
           minRightPaneWidthPx={minRightPaneWidthPx}
           left={panelChildren[0]}

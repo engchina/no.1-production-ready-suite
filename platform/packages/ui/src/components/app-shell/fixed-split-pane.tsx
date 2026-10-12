@@ -24,7 +24,6 @@ import {
   fixedSplitFractionBounds,
   fixedSplitGridTemplateColumns,
   fixedSplitStateForFraction,
-  fixedSplitStateForPreferredWidePane,
   fixedSplitStateForRatio,
   fixedSplitStorageKey,
   fixedSplitValueText,
@@ -33,7 +32,6 @@ import {
   serializeFixedSplitState,
   type FixedSplitPaneState,
   type FixedSplitRatio,
-  type FixedSplitWidePane,
 } from "../../lib/fixed-split-pane";
 import { cn } from "../../lib/utils";
 
@@ -58,7 +56,6 @@ export const DEFAULT_FIXED_SPLIT_PANE_LABELS: FixedSplitPaneLabels = {
 
 export interface FixedSplitPaneProps {
   splitId: string;
-  preferredWidePane: FixedSplitWidePane;
   left: ReactNode;
   right: ReactNode;
   className?: string;
@@ -71,12 +68,10 @@ export interface FixedSplitPaneProps {
   labels?: Partial<FixedSplitPaneLabels>;
 }
 
-function readStoredState(
-  splitId: string,
-  preferredWidePane: FixedSplitWidePane,
-  storagePrefix: string,
-): FixedSplitPaneState {
-  const fallbackState = fixedSplitStateForPreferredWidePane(preferredWidePane);
+// 保存が無い・壊れているときは、すべての画面で左右 1:1（50%）から始める（#1572）。
+// 利用者が分割線を動かした位置は localStorage に残り、次からはそれを優先する。
+function readStoredState(splitId: string, storagePrefix: string): FixedSplitPaneState {
+  const fallbackState = fixedSplitStateForRatio("equal");
   if (typeof window === "undefined") return fallbackState;
   try {
     const value = window.localStorage.getItem(fixedSplitStorageKey(splitId, storagePrefix));
@@ -94,7 +89,6 @@ function valueText(ratio: FixedSplitRatio, labels: FixedSplitPaneLabels) {
 
 export function FixedSplitPane({
   splitId,
-  preferredWidePane,
   left,
   right,
   className,
@@ -115,7 +109,7 @@ export function FixedSplitPane({
   const previousBodyCursorRef = useRef("");
   const previousBodyUserSelectRef = useRef("");
   const [splitState, setSplitState] = useState<FixedSplitPaneState>(() =>
-    readStoredState(splitId, preferredWidePane, storagePrefix)
+    readStoredState(splitId, storagePrefix)
   );
   const [isDragging, setIsDragging] = useState(false);
   const [rootWidth, setRootWidth] = useState(0);
@@ -128,8 +122,8 @@ export function FixedSplitPane({
   );
 
   useEffect(() => {
-    setSplitState(readStoredState(splitId, preferredWidePane, storagePrefix));
-  }, [preferredWidePane, splitId, storagePrefix]);
+    setSplitState(readStoredState(splitId, storagePrefix));
+  }, [splitId, storagePrefix]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
