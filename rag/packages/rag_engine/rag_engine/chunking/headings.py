@@ -24,22 +24,28 @@ from rag_engine.chunking.records import _record_text
 _SENTENCE_BOUNDARY_PATTERN = re.compile(r"(?<=[。！？!?\n])(?![」』）)\]】])|(?<=\.)(?=\s)")
 
 
-_KANJI_NUMBER = "0-9一二三四五六七八九十百"
+# 章・節の番号（「第 4 章」「第四章」「第４章」）。全角の数字と空白は NFKC で半角になる。番号の前後の空白は
+# あってもなくてもよい（LibreOffice などの PDF は「第 4 章」と空白を入れる。#1517）。
+_KANJI_NUMBER = "0-9一二三四五六七八九十百千〇零"
+_NUMBERED_PREFIX = rf"第\s*[{_KANJI_NUMBER}]+\s*"
+# 「第 N 編」「第 N 部」。章より上の区分で、配下の番号の見出しは 1 段深くなる（`_updated_section_path`）。
+# 「第一部門」のような語と紛れないよう、編・部の後は空白・区切り・行末に限る。
+_PART_PATTERN = re.compile(rf"{_NUMBERED_PREFIX}[編部](?=\s|$|[:.、])")
 _HEADING_LEVEL_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
-    (re.compile(rf"第[{_KANJI_NUMBER}]+[章編部]"), 1),
+    (re.compile(rf"{_NUMBERED_PREFIX}[章編部]"), 1),
     # 「Ⅰ 月次定例処理」「Ⅴ．定例処理」のローマ数字の章。NFKC で Ⅴ は V になる。英字 1 文字の章記号（「A 【画面説明】」）
     # と紛れないよう、ローマ数字として成立する並びに限る (#730)。I・V・X は単独でもローマ数字として成立するため、
     # 1 文字だけで空白の直後に囲み記号が続く「I 【画面説明】」「V 【操作説明】」は英字系列（下の level 6）へ倒す。
     # 2 文字以上（「Ⅲ 【補足】」）や句点区切り（「Ⅴ．定例処理」）はローマ数字のまま (#747)。
     (re.compile(r"(?:X{0,3}(?:IX|IV|V?I{0,3}))(?<=[IVX])(?:\s*[.．、]|(?<=[IVX]{2})\s|\s(?![【\[〔]))"), 1),
-    (re.compile(rf"第[{_KANJI_NUMBER}]+節"), 2),
-    (re.compile(rf"第[{_KANJI_NUMBER}]+[項条]"), 3),
+    (re.compile(rf"{_NUMBERED_PREFIX}節"), 2),
+    (re.compile(rf"{_NUMBERED_PREFIX}[項条]"), 3),
     # 「B-(1) 新規登録」形式の機能見出し。章を表す英字だけの見出しは推定しません。
     (re.compile(r"[A-Z]?[-—―ー]\([0-9]+\)"), 2),
     # 「（Ａ）システム設定」「（ B ）利用状況」のような英字 1 文字の括弧番号は番号付き機能見出しの上の章。
     (re.compile(r"\(\s*[A-Z]\s*\)"), 4),
-    # 「（１）」「（ 12 ）」（Docling は括弧内に空白を入れることがある）。
-    (re.compile(r"\(?\s*[0-9]{1,2}\s*\)"), 5),
+    # 「（１）」「（ 12 ）」（Docling は括弧内に空白を入れることがある）と「（一）」。
+    (re.compile(r"\(?\s*[0-9]{1,2}\s*\)|\(\s*[一二三四五六七八九十]{1,3}\s*\)"), 5),
     # 操作説明書の「A 【画面説明】」「B 【操作説明】」「B-1.」。番号付き機能見出しの直下に並ぶ系列。
     (re.compile(r"[A-Z]\s*(?:[【\[〔]|[-—―ー.．]\s*[0-9])"), 6),
 )
@@ -52,8 +58,12 @@ _UNIT_MAX_LEVEL = 5
 # 系列の先頭（「A 【画面説明】」）。直近の非英字見出しの直下に新しい系列を始める。
 _SERIES_START_PATTERN = re.compile(r"A\s*[【\[〔]")
 _SECTION_PATH_LIMIT = 8
-# 「1.」「1.2」「1.2.3 概要」。区切りのない「3つの方法」や「2024年度」は番号として扱いません。
-_DOTTED_HEADING_PATTERN = re.compile(r"([0-9]{1,2}(?:\.[0-9]{1,2})*)(?:[.、]|\s|$)")
+# 「1.」「1.2」「1.2.3 概要」「3.3消火設備」。区切りのない「3つの方法」や「2024年度」は番号として扱いません。
+# 2 段以上の番号（「3.3」）は、空白の無い日本語の見出し（「3.3消火設備」）も番号として読む。1 段の番号は「.」「、」か
+# 空白が要る。2 段の番号を 1 段と読み違えない（「3.3消火設備」の「3.」で止まると level 1 になる）。
+_DOTTED_HEADING_PATTERN = re.compile(
+    r"([0-9]{1,2}(?:\.[0-9]{1,2})+)(?:[.、]|\s|$|(?=[^\x00-\x7f]))|([0-9]{1,2})(?:[.、]|\s|$)"
+)
 
 
 # 画面経路の形をした 1 行（[ 画面：A⇒B ]、〔A⇒B⇒C〕）。Docling は図に近いこの行を図の caption として返すことがある。
@@ -248,7 +258,10 @@ def _toc_entry_ids(ordered: Sequence[dict[str, Any]]) -> set[int]:
 def _heading_level(text: str) -> int | None:
     """見出しの番号表記から階層の深さを推定します。推定できない場合は None を返します。
 
-    解析結果の見出しには階層情報がないため、番号の形式だけを根拠にします。①-⑳ は NFKC で
+    番号の体系（「第 N 章」「N.」「N.N」「N.N.N」「（N）」など。漢数字・全角数字・空白の有無を問わない）が
+    見出しの深さの第一の根拠です。Docling の見出しの level（`SectionHeaderItem.level`）は PDF の解析では
+    すべて 1 になり深さを表さない（評価の PDF の 18 件で全件 1。#1517）ため使いません。番号の無い見出しは
+    `_updated_section_path` が形（囲み記号・無印）と並びから置き場所を決めます。①-⑳ は NFKC で
     数字へ変わるため、正規化前の文字で判定します。
     """
     stripped = str(text or "").strip()
@@ -259,7 +272,12 @@ def _heading_level(text: str) -> int | None:
         if pattern.match(normalized):
             return level
     dotted = _DOTTED_HEADING_PATTERN.match(normalized)
-    return dotted.group(1).count(".") + 1 if dotted else None
+    return (dotted.group(1) or dotted.group(2)).count(".") + 1 if dotted else None
+
+
+def _is_part_heading(text: str) -> bool:
+    """「第 N 編」「第 N 部」の見出し（章より上の区分）か。"""
+    return bool(_PART_PATTERN.match(unicodedata.normalize("NFKC", str(text or "").strip())))
 
 
 def _heading_form(text: str) -> str:
@@ -299,6 +317,7 @@ def _updated_section_path(
     - 階層不明の見出しは、同じ形（【…】、〔…〕、無印）の直近の階層不明見出しを兄弟として置き換える
       （「【修正方法１】」の次の「【修正方法２】」）。無印は番号見出しをまたいで遡らず、先頭の見出し
       （文書の表題）は兄弟の候補にしない。同じ形がなければ直上の見出しの配下に入る。
+    - 「第 N 編・部」の配下の番号の見出し（章・「N.N」など）は、番号から決まる深さより 1 段深くする。
     """
     level = _heading_level(text) if level is None else level
     normalized = unicodedata.normalize("NFKC", text.strip())
@@ -311,6 +330,10 @@ def _updated_section_path(
         depth = next((depths[index] for index in range(len(path) - 1, -1, -1) if levels[index] == _LETTERED_LEVEL), None)
     elif level is not None:
         depth = level
+        # 「第 N 編・部」の配下では、章以下の番号の見出しを 1 段深くする（編・部と章が同じ深さに並ばない）。
+        # 柱の章（level 0）は path の根のため対象にしない。
+        if level != _CHAPTER_LEVEL and not _is_part_heading(normalized):
+            depth += int(any(_is_part_heading(item) for item in path))
     elif text in path:
         cut = list(path).index(text)
         depth = depths[cut]
@@ -336,6 +359,52 @@ def _updated_section_path(
         (list(depths[:cut]) + [depth])[-_SECTION_PATH_LIMIT:],
         (padded_sources[:cut] + [source or SECTION_HEADER_HEADING_SOURCE])[-_SECTION_PATH_LIMIT:],
     )
+
+
+# section_path の状態（path・推定レベル列・実効深さ列・出所列）。`_updated_section_path` の入出力と同じ形。
+SectionPathState = tuple[list[str], list[int | None], list[int], list[str]]
+
+
+def _section_path_state_after(state: SectionPathState, record: dict[str, Any]) -> SectionPathState:
+    """layout record を 1 件読んだ後の section_path の状態。見出しでなければ state をそのまま返す。
+
+    chunk の section_path（`builder`）と、章節ナビゲーションの元になる要素の section_path
+    （`layout_section_paths`）が同じ規則で見出しの木を作るための 1 か所（#1517）。record は
+    `_promote_headings` を通したものを読み順に渡す。
+    """
+    if str(record.get("category") or "") not in SECTION_CATEGORIES:
+        return state
+    text = _record_text(record)
+    if not text:
+        return state
+    path, levels, depths, sources = state
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    if raw.get("recurring_heading") and _heading_key(text) in {_heading_key(h) for h in path}:
+        # 本文中に現在の節名がそのまま再掲されている（「Ａマスタ管理-（ 4 ）区分管理」）。節は変わらない。
+        # 見出しにすると子見出しになり、以降の手順が別の機能ユニットに割れる (#764)。
+        return state
+    return _updated_section_path(
+        path, levels, depths, text, level=_int_value(raw.get("heading_level")),
+        sources=sources, source=_heading_source(record),
+    )
+
+
+def layout_section_paths(records: Sequence[dict[str, Any]]) -> dict[str, list[str]]:
+    """layout record の id → その record が属する section_path（chunk の section_path と同じ規則。#1517）。
+
+    解析エンジン（Docling）の要素の section_path に使い、章節ナビゲーションの見出しの木を chunk の
+    section_path とそろえる。見出しの record はその見出し自身を末尾に含む path、本文の record は直前の
+    見出しの path になる。最初の見出しより前の record は空の path。入力は変更しない。
+    """
+    state: SectionPathState = ([], [], [], [])
+    paths: dict[str, list[str]] = {}
+    ordered = sorted(_promote_headings(records), key=lambda item: (int(item.get("page") or 0), int(item.get("seq_no") or 0)))
+    for record in ordered:
+        state = _section_path_state_after(state, record)
+        record_id = str(record.get("id") or "")
+        if record_id:
+            paths[record_id] = list(state[0])
+    return paths
 
 
 def _section_unit(path: Sequence[str]) -> tuple[str, ...]:
