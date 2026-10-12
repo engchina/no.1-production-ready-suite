@@ -22,7 +22,6 @@ export const FIXED_SPLIT_KEYBOARD_STEP_PX = 24;
 export const FIXED_SPLIT_KEYBOARD_FAST_STEP_PX = 72;
 
 export type FixedSplitRatio = "equal" | "leftWide" | "rightWide";
-export type FixedSplitWidePane = "left" | "right";
 
 const FIXED_SPLIT_RATIOS = new Set<FixedSplitRatio>(["equal", "leftWide", "rightWide"]);
 
@@ -129,10 +128,6 @@ export function fixedSplitStateForRatio(ratio: FixedSplitRatio): FixedSplitPaneS
     ratio,
     leftFraction: fixedSplitFractionForRatio(ratio),
   };
-}
-
-export function fixedSplitStateForPreferredWidePane(preferredWidePane: FixedSplitWidePane): FixedSplitPaneState {
-  return fixedSplitStateForRatio(preferredWidePane === "left" ? "leftWide" : "rightWide");
 }
 
 export function fixedSplitStateForFraction(leftFraction: number): FixedSplitPaneState {
