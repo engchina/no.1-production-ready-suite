@@ -1367,13 +1367,17 @@ def synthesize_grounded_answer(
     # 生成中に Prompt 設定が保存されても、1回答の全ラウンドで同じテンプレートを使う。
     template = read_prompt(VLM_ANSWER_PROMPT_KEY)
     context, unit_fill = _fill_same_unit(question, context)
+    # 是正の round の時間の配分（#1516）: 回答の期限の残りから次の round を始めるかを決め、round の LLM の呼び出しには
+    # 回答の確定の分を残した期限を渡す（期限が無い文脈では何もしない）。
+    from rag_engine.resources.deadline import remaining_seconds
+    budget = grounded.RoundBudget(remaining_seconds)
     for number in range(grounded.MAX_ROUNDS):
         spans = _grounded_spans(question, context, images, runtime_knowledge,
                                 budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
                                 whole_records=evidence_budget_chars is not None)
         prompt = _grounded_prompt(question, spans, context, images, feedback, question_plan, runtime_knowledge,
                                   inquiry_conditions, query_expansion, template=template, known_gaps=known_gaps)
-        with _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
+        with budget.round(), _execution_step(f"回答文の生成と根拠確認（{number + 1}回目）",
                              "主張と原文引用の対で回答を作り、引用を原文と照合してから、別のLLM呼出で適用性を監査します。" if number == 0 else "") as step:
             try:
                 # 生成と監査は回答の生成・監査の推論の量で呼ぶ (#1499。run_round は settings を LLM の呼び出しにだけ使う)。
@@ -1386,17 +1390,32 @@ def synthesize_grounded_answer(
                 if number == 0 and (note := llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION, provider)):
                     step.add(note)
             except Exception as exc:
-                if best is None:
+                # 回答の確定の分を残した期限で切れた（#1516）なら、確かめ終わった round で確定する。1 組目の生成が
+                # 切れたときは草稿が無いので、関係する資料の記載だけを示す。外側の期限・取り消し・他の失敗は送出する。
+                cut = budget.cut_round(number, has_draft=best is not None)
+                if best is None and not cut:
                     raise
                 # 是正はより良くする試みなので、その LLM 呼出（生成・監査）の失敗で採用済みの回答を捨てない (#748)。
                 # 失敗した round は trace に理由だけ残し、直前に採用した round を公開する。
-                rounds.append({"error": f"{type(exc).__name__}: {exc}", "accepted": False, "audit_calls": 0})
-                step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
+                rounds.append({"error": f"{type(exc).__name__}: {exc}", "accepted": False, "audit_calls": 0,
+                               **({"deadline_cut": True} if cut else {})})
+                if best is None:
+                    best = (grounded.timed_out_round(question), context, spans, images, mode)
+                    step.result("回答の時間の上限までに回答文の生成が終わらなかったため、質問に関係する資料の記載だけを示します")
+                elif cut:
+                    step.result("回答の時間の上限が近いため、この作り直しを打ち切り、直前に採用した回答を公開します")
+                else:
+                    step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{type(exc).__name__}）")
                 break
             quote_only = sum(e.quote_only for e in current.checked)
             step.result(f"公開する説明 {current.verified} 件"
                         + (f"、原文のまま示す記載 {quote_only} 件" if quote_only else "")
                         + (f"、原文と一致せず除外 {len(current.dropped)} 件" if current.dropped else ""))
+            # 生成と監査の秒と token の数（遅い round の理由を確かめる。#1516）。
+            if timing_line := grounded.round_timing_line(current):
+                step.add(timing_line)
+            if current.audit_cut:
+                step.impact("回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。")
         accepted = best is None or grounded.better(current, best[0])
         if accepted:
             best = (current, context, spans, images, mode)
@@ -1406,6 +1425,7 @@ def synthesize_grounded_answer(
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         feedback = best[0].feedback()
+        budget.note(current, feedback)
         if not feedback or number == grounded.MAX_ROUNDS - 1:
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
@@ -1432,6 +1452,16 @@ def synthesize_grounded_answer(
                 break
             corrected = True
             remedy = {"remedy": "correction"}
+        if not budget.allows_round(number + 1):
+            # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
+            # 最良の round で確定し、直していない不足を「確かめられていない点」に出す。
+            rounds[-1]["deadline_stop"] = dict(budget.stop)
+            with _execution_step("是正の打ち切り") as stop_step:
+                stop_step.result(f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
+                                 f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
+                                 f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します")
+                stop_step.impact("直していない不足を「確かめられていない点」に示し、条件つきの回答にします。")
+            break
         rounds[-1]["remedy"] = remedy
         with _execution_step("是正") as remedy_step:
             remedy_step.result({"context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
@@ -1466,7 +1496,8 @@ def synthesize_grounded_answer(
     if off_goal:
         gaps.append(grounded.OFF_GOAL_GAP)
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「確かめられていない点」に出し、回答を条件つきにする。
-    unread = [line for line in dict.fromkeys(unread_sections) if line]
+    # 回答の時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）も同じ節に出す。
+    unread = [line for line in dict.fromkeys([*unread_sections, *budget.gap_lines(current, feedback)]) if line]
     # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
     # 内部 ID を含む差分説明になりやすく、監査が返さなかった id は実際には答えている可能性があるため、
     # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
@@ -1528,6 +1559,7 @@ def synthesize_grounded_answer(
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
         answer_text, citation_lines = grounded.render_with_citations(
             grounded.CONFIRMATION_ONLY_SUMMARY if confirmation_section
+            else grounded.DEADLINE_SUMMARY if budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items], confirmations=confirmation_section, unverified=unread)
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
@@ -1542,7 +1574,7 @@ def synthesize_grounded_answer(
     trace = {
         "pipeline": "grounded", "task_contract": task_contract(question), "selected_evidence": [_public_span(s) for s in spans],
         "same_unit_fill": unit_fill,
-        "rounds": rounds, "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
+        "rounds": rounds, "round_budget": budget.trace(current), "llm_calls": sum(1 + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds), "image_fallback": image_decision,
         "final_fact_count": len(published),
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
         # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
