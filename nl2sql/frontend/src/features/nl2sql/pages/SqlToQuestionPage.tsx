@@ -405,7 +405,6 @@ export function SqlToQuestionPage() {
           <FixedSplitPane
             storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
             splitId="sql-to-question-input"
-            preferredWidePane="left"
             left={
               <section className="grid min-w-0 content-start gap-4" aria-labelledby="sql-to-question-input-heading">
               <DbObjectPanelHeader

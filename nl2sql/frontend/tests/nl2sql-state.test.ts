@@ -29,7 +29,6 @@ import {
   fixedSplitFractionForRatio,
   fixedSplitGridTemplateColumns,
   fixedSplitStateForFraction,
-  fixedSplitStateForPreferredWidePane,
   fixedSplitStateForRatio,
   fixedSplitStorageKey,
   isFixedSplitRatio,
@@ -150,11 +149,11 @@ test("fixed split pane reads legacy and draggable storage values", () => {
   assert.deepEqual(parseFixedSplitStorageValue("not-json"), fixedSplitStateForRatio("equal"));
 });
 
-test("fixed split pane uses the preferred wide pane when storage is absent", () => {
-  const rightWide = fixedSplitStateForPreferredWidePane("right");
-  assert.deepEqual(parseFixedSplitStorageValue(null, rightWide), fixedSplitStateForRatio("rightWide"));
-  assert.deepEqual(parseFixedSplitStorageValue("leftWide", rightWide), fixedSplitStateForRatio("leftWide"));
-  assert.deepEqual(parseFixedSplitStorageValue("not-json", rightWide), fixedSplitStateForRatio("rightWide"));
+test("fixed split pane starts at 50% when storage is absent and keeps stored ratios", () => {
+  const equal = fixedSplitStateForRatio("equal");
+  assert.deepEqual(parseFixedSplitStorageValue(null), equal);
+  assert.deepEqual(parseFixedSplitStorageValue("leftWide"), fixedSplitStateForRatio("leftWide"));
+  assert.deepEqual(parseFixedSplitStorageValue("not-json"), equal);
 });
 
 test("fixed split pane clamps dragged fraction and detects nearest fixed ratio", () => {

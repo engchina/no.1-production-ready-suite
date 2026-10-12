@@ -890,7 +890,6 @@ export function FeedbackManagementPage() {
               <FixedSplitPane
                 storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
                 splitId="feedback-management-entries-split"
-                preferredWidePane="left"
                 minLeftPaneWidthPx={560}
                 minRightPaneWidthPx={400}
                 left={
@@ -1006,7 +1005,6 @@ export function FeedbackManagementPage() {
             ariaLabel={t("feedbackManagement.workspace.appFeedback")}
             idPrefix="feedback-management-app-feedback"
             splitId="feedback-management-app-feedback-history-left-v2"
-            preferredWidePane="left"
             minLeftPaneWidthPx={640}
             minRightPaneWidthPx={420}
           >

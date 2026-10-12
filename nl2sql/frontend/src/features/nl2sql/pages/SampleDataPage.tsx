@@ -500,7 +500,6 @@ export function SampleDataPage() {
           idPrefix={SAMPLE_DATA_ID}
           ariaLabel={t("dataTools.sample.workspace.label")}
           splitId={`sample-data-${activeAction}`}
-          preferredWidePane="right"
           processing={
             schemaRefreshing ? (
               <SchemaRefreshProcessing testId="sample-data-workspace-processing" />
