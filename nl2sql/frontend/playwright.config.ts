@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+
 const playwrightPort = process.env.PLAYWRIGHT_PORT ?? "3101";
 const playwrightBaseUrl = `http://127.0.0.1:${playwrightPort}`;
 
@@ -47,6 +49,9 @@ export default defineConfig({
         viewport: { width: 375, height: 812 },
         isMobile: true,
       },
+      // PR の CI は E2E_MOBILE_SCOPE=responsive で、画面幅に依存するテスト（@responsive など）だけを実行する。
+      // nightly とローカルは全件（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
+      ...mobileProjectScope(),
     },
   ],
 });

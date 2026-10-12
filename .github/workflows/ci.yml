@@ -20,6 +20,8 @@ name: CI
 # main の push で失敗したら ci-failure-issue.yml が Issue を作る（ruleset の strict をやめたため。#339）。
 # PR の e2e は製品ごとの smoke と、差分に影響を受ける spec（e2e-impact。#885）。impact が全件の製品は smoke を
 # 飛ばし（全件が smoke の spec を含む）、selected のときは smoke の spec を impact から除く（#1525）。
+# PR の e2e の 375px の project は、画面幅に依存するテスト（@responsive）だけを実行する（workflow の env の
+# E2E_MOBILE_SCOPE。全件は e2e-nightly.yml。#1582）。
 
 on:
   pull_request:
@@ -34,7 +36,11 @@ concurrency:
 # PR / main の push の E2E smoke の spec（frontend からの相対パス、空白区切り）。smoke の job と、e2e の影響分析
 # （e2e-impact の `--skip-specs`。selected のとき、smoke が全 project で実行する spec を impact から除く）の
 # 両方が読む（#1525）。NL2SQL の desktop だけで実行する spec（*_DESKTOP）は 375px を impact に残すので除外しない。
+# E2E_MOBILE_SCOPE: PR の e2e（smoke・impact）の 375px（mobile）の project は、画面幅に依存するテスト（@responsive の
+# tag と、名前の括弧で mobile / 375px を前提にするもの）だけを実行する。desktop は全件。main の push と nightly は
+# 全件（all）で、mobile の退行は e2e-nightly.yml が拾う（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
 env:
+  E2E_MOBILE_SCOPE: ${{ github.event_name == 'pull_request' && 'responsive' || 'all' }}
   RAG_E2E_SMOKE: >-
     e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
     e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts e2e/scrollbar-stability.spec.ts
@@ -816,7 +822,8 @@ jobs:
           working-directory: rag/frontend
 
       # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
-      # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project、CI=true で retries 2。
+      # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project（PR の mobile は @responsive だけ。
+      # workflow の env の E2E_MOBILE_SCOPE。#1582）、CI=true で retries 2。
       # worker 数は playwright.config.ts の CI の値（2。4 vCPU の runner。spec のファイル単位で並べる。#1489）。
       # spec は workflow の env の RAG_E2E_SMOKE（空白区切り。単語分割を意図している）。
       - name: Playwright E2E (smoke)
