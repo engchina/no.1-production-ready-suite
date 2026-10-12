@@ -85,6 +85,30 @@ class RoundBudgetUnitTest(unittest.TestCase):
         self.assertEqual(labels, ["答えていない要求 2 件", "原文と一致せず除いた説明 1 件", "質問の目的とのずれ"])
 
 
+class DeadlineDocumentQuotesTest(unittest.TestCase):
+    """1 組目の生成が切れたときに示す根拠の抜粋（#1548）。"""
+
+    @staticmethod
+    def _span(eid, text, *section, **extra):
+        return {"evidence_id": eid, "text": text, "section_path": list(section), "tags": [], **extra}
+
+    def test_question_terms_first_then_evidence_order_up_to_the_limit(self):
+        question = "サーバー室の定期点検の記録には、何を書きますか？"
+        spans = [
+            self._span("E1", "点検の前に、入室の申請をします。", "サーバー室の定期点検", "第 2 章 入室"),
+            self._span("E2", "第 5 章 点検の記録"),  # 見出しだけ
+            self._span("E3", "画面の説明です。", tags=["image_generated"]),
+            self._span("E4", "点検の記録には、点検の日時と点検者の氏名を書きます。", "サーバー室の定期点検", "第 5 章 点検の記録"),
+            self._span("E5", "空調の温度を確かめます。", "第 3 章 空調"),
+            self._span("E6", "UPS の表示を確かめます。", "第 3 章 電源"),
+        ]
+        quotes = grounded.deadline_document_quotes(question, spans, limit=3)
+        # 質問の語（サーバー室・定期点検・記録）を多く含む E4・E1 が先、続けて根拠の順（E2・E3 は除く）。
+        self.assertEqual([entry.span["evidence_id"] for entry in quotes], ["E4", "E1", "E5"])
+        self.assertTrue(all(entry.quote_only and entry.item.applies == "unverified" for entry in quotes))
+        self.assertEqual(grounded.deadline_document_quotes(question, []), [])
+
+
 class DeadlineCutShortTest(unittest.TestCase):
     def test_child_deadline_cut_short_only_while_the_outer_deadline_is_alive(self):
         outer = Deadline(100.0)
@@ -168,9 +192,43 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertEqual(result.generation_trace["round_budget"]["stop"]["reason"], grounded.DEADLINE_NO_DRAFT)
         self.assertTrue(result.generation_trace["rounds"][0]["deadline_cut"])
         self.assertEqual(result.confidence, "low")
-        self.assertNotEqual(result.envelope["outcome"], "answered")
+        # 根拠は回答に渡すと決めた後で、草稿が無いのは時間の上限のため。拒答（insufficient_evidence）にせず、
+        # 根拠の抜粋を原文のみ提示（適用は未確認）で示す条件つきの回答にする（#1548）。質問の語を 2 つ含む原文が
+        # 無くても、根拠の順で抜粋を示す。
+        self.assertEqual(result.envelope["outcome"], "conditional")
+        self.assertEqual([entry["applies"] for entry in result.envelope["items"]], ["quote_only"])
+        self.assertIn("一覧表を選択し、処理を選択します。", result.envelope["items"][0]["text"])
+        self.assertIn("一覧表を選択し、処理を選択します。", result.answer_text)
+        self.assertTrue(result.needs_human_review)
         # 監査は呼ばない（草稿が無い）。
         self.assertEqual([name for name, _ in model.prompts], ["GroundedDraft"])
+
+    def test_first_generation_capped_by_the_deadline_keeps_the_cut_call_usage(self):
+        """1 組目の生成が、期限の残りで抑えた出力の上限に届いて切れた（#1548）。秒・token を round_budget に残す。"""
+        ctx, _eid = _context()
+        clock = _Clock(600.0)
+
+        def capped_draft(prompt):
+            # adapter（`_openai_parsed`）と同じく、抑えた上限で未完了なら今の期限を切って DeadlineExceeded にする。
+            clock.now += 520.0
+            record_llm_usage({"input_tokens": 13000, "output_tokens": 18000, "reasoning_tokens": 15000,
+                              "seconds": 520.0, "incomplete_reason": "max_output_tokens"})
+            deadlines.expire_deadline()
+            raise DeadlineExceeded("回答の期限までに LLM の出力が終わりません")
+
+        model = FakeModel([capped_draft], [audit()])
+        usage_token = llm_usage.set(LlmUsage())
+        try:
+            result = self.run_with_clock(model, ctx, clock).response
+        finally:
+            llm_usage.reset(usage_token)
+
+        stop = result.generation_trace["round_budget"]["stop"]
+        self.assertEqual(stop["reason"], grounded.DEADLINE_NO_DRAFT)
+        self.assertEqual((stop["usage"]["output_tokens"], stop["usage"]["reasoning_tokens"], stop["usage"]["seconds"]),
+                         (18000, 15000, 520.0))
+        self.assertEqual(stop["usage"]["incomplete_reasons"], {"max_output_tokens": 1})
+        self.assertEqual(result.envelope["outcome"], "conditional")
 
     def test_audit_cut_keeps_the_verified_draft(self):
         ctx, eid = _context()

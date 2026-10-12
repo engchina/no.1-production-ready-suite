@@ -1674,14 +1674,21 @@ def synthesize_grounded_answer(
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
         # 関連する記載があるかは、適用を判定できなくても利用者に必要な情報 (#722)。
-        related = grounded.related_document_quotes(question, spans)
+        no_draft = budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
+        related = (grounded.deadline_document_quotes(question, spans) if no_draft
+                   else grounded.related_document_quotes(question, spans))
         shown = related
+        if no_draft:
+            # 1 組目の生成が時間の上限までに終わらなかった（#1516）。根拠は回答に渡すと決めた後なので、拒答
+            # （insufficient_evidence）ではなく、示した根拠の抜粋を回答の構造にも載せ、原文のみ提示（適用は未確認）の
+            # 条件つきの回答にする（#1548）。
+            envelope_entries = related
         # 拒答文では要求ごとの missing 行を重ねない。拒答文と gap がすでに「答えていない」ことを述べており、gap だけの
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
         answer_text, citation_lines = grounded.render_with_citations(
             grounded.CONFIRMATION_ONLY_SUMMARY if confirmation_section
-            else grounded.DEADLINE_SUMMARY if budget.stop.get("reason") == grounded.DEADLINE_NO_DRAFT
+            else grounded.DEADLINE_SUMMARY if no_draft
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items], confirmations=confirmation_section, unverified=unread)
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への

@@ -2044,12 +2044,12 @@ def test_build_engine_settings_passes_llm_latency_settings(tmp_path: Any) -> Non
         output_dir=tmp_path,
     )
 
-    # 既定: 戦略はモデルの登録値(空)、根拠の評価は low、生成はモデルの登録値。
+    # 既定: 戦略はモデルの登録値(空)、根拠の評価は medium(#1550)、生成はモデルの登録値。
     assert (
         default.strategy_reasoning_effort,
         default.judge_reasoning_effort,
         default.generation_reasoning_effort,
-    ) == ("", "low", "")
+    ) == ("", "medium", "")
     assert default.crag_skip_on_strong_signals is False
     assert default.query_expansion_max_queries == 5
     # model はモデルの登録値のまま(空)、none は送らない。

@@ -1002,10 +1002,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_judge_reasoning_effort: ReasoningEffortOverride = Field(
-        default="low",
+        default="medium",
         description=(
             "根拠の評価(CRAG の評価と章節の拡張の十分性の判定)の LLM の呼び出しの推論の量"
-            "(#1499。既定 low)。model はモデルの登録値のまま。モデルの登録値が none の"
+            "(#1499。既定 medium。#1550)。model はモデルの登録値のまま。モデルの登録値が none の"
             "モデルには送らない。"
         ),
     )

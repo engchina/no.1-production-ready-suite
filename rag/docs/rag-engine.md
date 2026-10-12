@@ -108,7 +108,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_REQUEST_COVERAGE_MAX_CHUNKS` | `4` | 再検索で回答の材料に足す根拠（親 chunk）の数の上限（0〜12）。要求ごとに順番に 1 件ずつ選ぶ |
 | `RAG_REQUEST_COVERAGE_DEADLINE_SECONDS` | `10` | 再検索の期限（秒、0〜60）。過ぎたら次の要求の検索を始めない（実行中の 1 回は止めない） |
 | `RAG_STRATEGY_REASONING_EFFORT` | `model` | 質問拡張戦略の判定と検索文の生成の LLM の呼び出しの推論（思考）の量（#1499）。`model` はモデルの登録値（システム設定 › モデルの「推論の量」）のまま、`none` は送らない、`low` / `medium` / `high` はその値を送る。モデルの登録値が `none` のモデルには、上書きしても送らない（推論を受け付けないモデルがある）。rag_engine の `settings_for_llm_purpose` が LLM の呼び出しに渡す設定だけを差し替え、工程の記録（「質問拡張戦略」）に送った量を残す。既定 `model` は A/B の結果（DeepSeek・5 問 × 3 回。`low` では 15 回中 4 回で戦略が検索文 0 本の単純検索に倒れ、1 問で根拠を取り逃した）。品質評価の `rag_overrides` の `strategy_reasoning_effort` で比べられる |
-| `RAG_JUDGE_REASONING_EFFORT` | `low` | 根拠の評価（CRAG の十分 / 不足の評価と章節の拡張の十分性の判定）の LLM の呼び出しの推論の量（#1499。値は上と同じ）。工程の記録（「根拠確認（1回目）」）に「推論の量: low（根拠の評価の設定。モデルの登録値は medium）」の形で残す。既定 `low` は A/B の結果（CRAG の評価の中央値 60.5 → 22.3 秒、5 問の品質は同じ）。`rag_overrides` の `judge_reasoning_effort` |
+| `RAG_JUDGE_REASONING_EFFORT` | `medium` | 根拠の評価（CRAG の十分 / 不足の評価と章節の拡張の十分性の判定）の LLM の呼び出しの推論の量（#1499。値は上と同じ）。工程の記録（「根拠確認（1回目）」）に「推論の量: medium（根拠の評価の設定。…）」の形で残す。既定は #1550 で `low` から `medium` に戻した（#1499 の A/B は DeepSeek で、CRAG の評価の中央値 60.5 → 22.3 秒・5 問の品質は同じだった。vLLM の chat template では low が「短く考えて」の指示を足すだけで推論の token は安定して減らず、判定が甘くなる危険（#1503）だけが残るため）。`rag_overrides` の `judge_reasoning_effort` |
 | `RAG_GENERATION_REASONING_EFFORT` | `model` | 回答文の生成の LLM の呼び出しの推論の量（#1499。値は上と同じ）。生成後の監査は `RAG_AUDIT_REASONING_EFFORT`（#1528）。工程の記録（「回答文の生成と根拠確認（1回目）」）に「生成の推論の量」「監査の推論の量」を分けて残す。`rag_overrides` の `generation_reasoning_effort` |
 | `RAG_AUDIT_REASONING_EFFORT` | `model` | 生成後の監査（主張と引用の適用性の確認。`grounded.run_round` の `audit_settings`）の LLM の呼び出しの推論の量（#1528。値は上と同じ）。判定の仕事なので生成より少ない量にできるよう、生成と分けた。既定 `model` は、#1528 の A/B のモデル（vLLM の JEV-27B-VL）が推論の量を反映しなかったため（同じ入力・temperature 0 で推論の token が low 187・medium 192・high 128）。推論の量を反映するモデルで `low` を比べる。`rag_overrides` の `audit_reasoning_effort` |
 | `RAG_CRAG_SKIP_ON_STRONG_SIGNALS` | `false` | 規則の信号が強いとき、CRAG の根拠の評価（1 回目の LLM の呼び出し）を飛ばして生成へ進み、曖昧な帯だけで評価器を呼ぶ（#1499 / #1528。`rag_engine/generation/answering.py` の `_crag_grade_skip_check`）。条件はすべて決定的で、rerank の最上位の score が `RAG_CRAG_SKIP_MIN_RERANK_SCORE` 以上、質問の要求を 1 件以上判定でき、語の一致で根拠の無い要求（missing）が無い（一部一致の要求は、要求の語の 8 割以上が根拠の全体に現れること。多段の問は語が根拠ごとに分かれるため、#1499 の「すべて一致」から緩めた）、定義を問う語の定義本文がある、のすべて。次の質問・根拠では必ず呼ぶ: エラー文・エラーコード（`E0123` など）を問う質問、列挙・網羅・件数を求める質問（「すべて」「各」「一覧」「何件」など。`_ENUMERATION_QUESTION` と質問契約の goal が count / recipient_list・`enumeration`。#1503）、候補の除外が要る根拠（`document_superseded` の旧版の文書、別の文書に同じ本文がある重複。評価器の relevant=false の除外を保つ）。飛ばすと取得した根拠をそのまま生成に渡し（候補の関連の判定と欠けた観点の申し送りは無い）、生成後の監査は通常どおり行う。工程「根拠確認（1回目）」の状態は「省略」で、理由（score と要求の数）を残し、`crag_attempts` の `stop_reason` は `grade_skipped_strong_signals`。省略の設定が有効で呼んだときは「LLM の評価を省略しない理由」を残す。既定 `false` は #1528 の A/B の結果（4 問中 2 問で省略し、1 問は 444 → 173 秒で品質は同じ、1 問は生成が回答の時間の上限までに終わらず根拠不足になった）。`rag_overrides` の `crag_skip_on_strong_signals` |
@@ -133,11 +133,21 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 `ANSWER_FINALIZE_RESERVE_SECONDS`）。是正の組は、残りから確定の分を引いた時間が 1 組の見積もり（直前の組の実測。
 推論するモデルの長い根拠の列挙の問で 1 組 125〜344 秒）より短ければ始めず、それまでの最良の組で確定する（工程
 「是正の打ち切り」）。各組の LLM の呼び出しには確定の分を残した期限を渡し、途中で切れても error にしない: 是正の組が
-切れたら採用済みの組を（監査が切れた是正の組は、監査を通った組より採用しない）、1 組目の監査が切れたら原文と照合済みの説明（監査なし）を、1 組目の生成が切れたら質問に関係
-する資料の記載だけを返す。どの場合も、時間で確かめられなかった点（直していない是正の指摘・終わらなかった監査・生成）
+切れたら採用済みの組を（監査が切れた是正の組は、監査を通った組より採用しない）、1 組目の監査が切れたら原文と照合済みの説明（監査なし）を、1 組目の生成が切れたら根拠の
+原文の抜粋（質問の語を含む原文を先に、足りなければ根拠の順で最大 4 件。`grounded.deadline_document_quotes`）を原文のみ提示
+（適用は未確認）で返す。根拠は回答に渡すと決めた後なので、生成が切れても拒答（`insufficient_evidence`）にはしない（#1548）。
+どの場合も、時間で確かめられなかった点（直していない是正の指摘・終わらなかった監査・生成）
 を本文の「確かめられていない点」に出し、回答を条件つきにする。外側の期限が切れた・利用者が取り消したときは従来どおり
 時間切れの error にする。各組の秒（生成・監査の秒・token・prompt の文字数と、次の組へ渡す是正の指摘の量）と打ち切った理由は回答の診断の `round_budget`、工程ごとの LLM の token の数（入力・
 cache・出力・推論）と呼び出しの秒の和は `execution_steps[].llm_usage`、1 回ごとは backend の log（`LLM の呼び出し:`）で分かる。
+
+**期限の中の LLM の 1 回の上限（#1548）**: 回答の期限がある文脈では、LLM の 1 回の呼び出しに、timeout（残りの秒。#1422）に
+加えて、出力の上限（`max_output_tokens`）を残りの秒で出せる token の数に抑えて渡す（`rag_engine.adapters.oci.deadline_output_budget`。
+同じ接続・モデルの直近 8 回の完了した呼び出しの出力の速さの最大 × 1.25 × 残りの秒。実測が無ければ抑えない）。抑えた上限に
+届いて未完了になったら、残りの時間では終わらないので上限を広げた送り直し（#987）をせず、今の期限を切って期限切れと同じに
+扱う（生成と監査の組では、確かめ終わった分で確定する）。こうすると打ち切った呼び出しにも usage が返り、出力・推論の token が
+記録に残る。応答が返らなかった呼び出し（timeout・接続の失敗）も、秒と理由（例外の型）を log（`llm_status=failed`）と
+工程の記録（未完了の応答の理由）に残す。切れた組の LLM の秒・token は `round_budget.stop.usage` に入る。
 出力の上限で未完了の応答を、上限を 2 倍にして送り直した回数（`output_retries`）と、未完了の応答の数・理由
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・
 `llm_attempt`・`llm_max_output_tokens`）に残す（#1527）。

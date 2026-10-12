@@ -58,6 +58,16 @@ class Deadline:
         """取り消す（以後の LLM の呼び出しは `DeadlineExceeded` になる）。"""
         self._cancelled.set()
 
+    def expire(self) -> None:
+        """自分の時刻の期限を今にする（#1548）。
+
+        LLM の呼び出しが、残りの時間で出せる出力の上限に届いて終わらなかった（期限までに終わらないと分かった）
+        ときに使う。取り消し（`cancel`）と違い、親（外側の期限）は切らないので、子の期限なら `cut_short` が真に
+        なり、呼び出し側は時刻の期限で切れたときと同じく確かめ終わった分で確定する。
+        """
+        now = time.monotonic()
+        self._expires_at = now if self._expires_at is None else min(self._expires_at, now)
+
     @property
     def cancelled(self) -> bool:
         if self._cancelled.is_set():
@@ -130,6 +140,13 @@ def check_deadline() -> None:
     deadline = _current.get()
     if deadline is not None:
         deadline.check()
+
+
+def expire_deadline() -> None:
+    """この文脈の回答の期限の時刻を今にする（期限が無ければ何もしない。`Deadline.expire`。#1548）。"""
+    deadline = _current.get()
+    if deadline is not None:
+        deadline.expire()
 
 
 def deadline_cut_short() -> bool:

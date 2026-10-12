@@ -17,7 +17,9 @@ import json
 import logging
 import mimetypes
 import re
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from rag_engine.resources.cache import application_cache
 from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_usage, response_usage
@@ -25,6 +27,7 @@ from rag_engine.resources.deadline import (
     DeadlineExceeded,
     check_deadline,
     current_deadline,
+    expire_deadline,
     remaining_seconds,
 )
 from pathlib import Path
@@ -483,6 +486,46 @@ def _parse_multimodal_once(
 INCOMPLETE_OUTPUT_BUDGET_FACTOR = 2
 INCOMPLETE_OUTPUT_REASON = "max_output_tokens"
 
+# 回答の期限の残りに合わせた出力の上限（#1548）。同じ接続・モデルの直近の完了した呼び出しの出力の速さ
+# （出力の token ÷ 往復の秒）の最大に余裕の倍率を掛け、残りの秒で出せる token の数を上限にする。速さは
+# 往復の秒（入力の処理・待ちを含む）から測るので、実際の生成の速さより遅めに出る。最大と余裕の倍率で、
+# 期限までに終わる呼び出しを上限で切らないようにする。出力の短い呼び出し（入力の処理が主）は速さに数えない。
+OUTPUT_RATE_MARGIN = 1.25
+OUTPUT_RATE_WINDOW = 8
+OUTPUT_RATE_MIN_TOKENS = 256
+_output_rates: dict[tuple[str, str], deque[float]] = {}
+_output_rates_lock = threading.Lock()
+
+
+def _rate_key(provider: LlmProviderSettings) -> tuple[str, str]:
+    return (str(getattr(provider, "base_url", "") or ""), str(provider.model))
+
+
+def _note_output_rate(provider: LlmProviderSettings, output_tokens: int, seconds: float) -> None:
+    """完了した呼び出しの出力の速さ（token/秒）を、接続・モデルごとに直近の分だけ残す（#1548）。"""
+    if output_tokens < OUTPUT_RATE_MIN_TOKENS or seconds <= 0:
+        return
+    with _output_rates_lock:
+        _output_rates.setdefault(_rate_key(provider), deque(maxlen=OUTPUT_RATE_WINDOW)).append(output_tokens / seconds)
+
+
+def deadline_output_budget(budget: int, provider: LlmProviderSettings) -> tuple[int, bool]:
+    """回答の期限がある文脈で、残りの秒で出せる出力の token の数に上限を抑える（#1548）。
+
+    戻り値は (送る上限, 期限で抑えたか)。期限が無い・速さの実測が無い・抑える必要が無いときは ``budget`` の
+    まま。残りの時間で出し終えられない出力は、期限で timeout になるまで待っても使えない。上限で抑えると、
+    同じ時刻までに応答が「出力の上限で未完了」として返り、その呼び出しの出力・推論の token が記録に残る。
+    """
+    remaining = remaining_seconds()
+    if remaining is None:
+        return budget, False
+    with _output_rates_lock:
+        rates = list(_output_rates.get(_rate_key(provider), ()))
+    if not rates:
+        return budget, False
+    cap = max(1, int(max(rates) * OUTPUT_RATE_MARGIN * remaining))
+    return (cap, True) if cap < budget else (budget, False)
+
 
 def _openai_parsed(
     input_messages: list[dict[str, Any]],
@@ -495,6 +538,11 @@ def _openai_parsed(
     推論型モデルは推論 token が出力予算を消費するため、同じ入力でも実行ごとに `max_output_tokens` へ
     届くかどうかが変わる。上限が理由の未完了だけ予算を 2 倍にして 1 回だけ送り直す。別の理由の未完了と
     2 回目の失敗はそのまま送出する (#987)。
+
+    回答の期限がある文脈では、出力の上限を残りの秒で出せる token の数に抑える（`deadline_output_budget`。
+    #1548）。抑えた上限で未完了になったら、残りの時間では終わらないので送り直さず、今の期限を切って
+    `DeadlineExceeded` にする（回答の時間の配分は、期限で切れた呼び出しと同じく確かめ終わった分で確定する）。
+    応答が返らなかった呼び出し（timeout・接続の失敗）も、秒と理由を log と工程の記録に残す。
     """
     budget = max(1, int(settings.answer_max_tokens))
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。
@@ -503,29 +551,45 @@ def _openai_parsed(
     )
     for attempt in range(2):
         check_deadline()
+        send_budget, time_capped = deadline_output_budget(budget, provider)
         started = time.monotonic()
-        response = _openai_client_with_deadline(
-            _openai_client_for_provider(provider, settings), settings
-        ).responses.parse(
-            model=provider.model,
-            input=input_messages,
-            text_format=text_format,
-            max_output_tokens=budget,
-            temperature=LLM_TEMPERATURE,
-            extra_body={"seed": int(settings.llm_seed)},
-            **reasoning,
-        )
-        _record_usage(response, provider, text_format, time.monotonic() - started,
-                      max_output_tokens=budget, attempt=attempt)
         try:
-            return _parsed_response(response, text_format, provider)
+            response = _openai_client_with_deadline(
+                _openai_client_for_provider(provider, settings), settings
+            ).responses.parse(
+                model=provider.model,
+                input=input_messages,
+                text_format=text_format,
+                max_output_tokens=send_budget,
+                temperature=LLM_TEMPERATURE,
+                extra_body={"seed": int(settings.llm_seed)},
+                **reasoning,
+            )
+        except Exception as exc:
+            _record_failed_call(exc, provider, text_format, time.monotonic() - started,
+                                max_output_tokens=send_budget, attempt=attempt, deadline_capped=time_capped)
+            raise
+        seconds = time.monotonic() - started
+        _record_usage(response, provider, text_format, seconds, max_output_tokens=send_budget, attempt=attempt,
+                      deadline_capped=time_capped)
+        try:
+            parsed = _parsed_response(response, text_format, provider)
         except IncompleteResponse as exc:
+            if time_capped and exc.reason == INCOMPLETE_OUTPUT_REASON:
+                # 残りの時間で出せる分を出し切っても終わらなかった。送り直しても期限に間に合わない。
+                expire_deadline()
+                raise DeadlineExceeded(
+                    f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
+                ) from exc
             if attempt or exc.reason != INCOMPLETE_OUTPUT_REASON:
                 raise
             budget *= INCOMPLETE_OUTPUT_BUDGET_FACTOR
             # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
             # ぶれが送り直しによるかを確かめる）。
             record_llm_output_retry()
+            continue
+        _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
+        return parsed
     raise AssertionError("unreachable")
 
 
@@ -533,28 +597,49 @@ _logger = logging.getLogger(__name__)
 
 
 def _record_usage(response: Any, provider: LlmProviderSettings, text_format: type, seconds: float, *,
-                  max_output_tokens: int | None = None, attempt: int = 0) -> None:
+                  max_output_tokens: int | None = None, attempt: int = 0, deadline_capped: bool = False) -> None:
     """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。
 
     応答が未完了（`status=incomplete`）なら理由（`incomplete_details.reason`）も残す。``attempt`` は出力の上限を
-    広げた送り直しの何回目か（0 は最初の送信）、``max_output_tokens`` はその送信の出力の上限（#1527）。
+    広げた送り直しの何回目か（0 は最初の送信）、``max_output_tokens`` はその送信の出力の上限（#1527）、
+    ``deadline_capped`` はその上限を回答の期限の残りで抑えたか（#1548）。
     """
     usage = response_usage(response)
     status = str(_value(response, "status") or "")
     reason = (str(_value(_value(response, "incomplete_details"), "reason") or "unknown")
               if status == "incomplete" else "")
+    _log_call(usage, seconds, provider, text_format, status=status, reason=reason, attempt=attempt,
+              max_output_tokens=max_output_tokens, deadline_capped=deadline_capped)
+
+
+def _record_failed_call(exc: Exception, provider: LlmProviderSettings, text_format: type, seconds: float, *,
+                        max_output_tokens: int | None = None, attempt: int = 0, deadline_capped: bool = False) -> None:
+    """応答が返らなかった呼び出し（timeout・接続の失敗）の秒と理由を残す（#1548）。
+
+    打ち切った呼び出しは usage が返らないので token の数は 0 で、理由（例外の型。timeout は ``APITimeoutError``）を
+    未完了の理由として数える。期限で打ち切った呼び出しが何秒かかっていたかを、工程の記録と log で確かめる。
+    """
+    usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    _log_call(usage, seconds, provider, text_format, status="failed", reason=type(exc).__name__, attempt=attempt,
+              max_output_tokens=max_output_tokens, deadline_capped=deadline_capped)
+
+
+def _log_call(usage: dict[str, int], seconds: float, provider: LlmProviderSettings, text_format: type, *,
+              status: str, reason: str, attempt: int, max_output_tokens: int | None,
+              deadline_capped: bool = False) -> None:
     record_llm_usage({**usage, "seconds": seconds, **({"incomplete_reason": reason} if reason else {})})
     # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
         "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
-        "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s",
+        "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s deadline_capped=%s",
         provider.model, getattr(text_format, "__name__", str(text_format)), seconds, usage["input_tokens"],
         usage["cached_tokens"], usage["output_tokens"], usage["reasoning_tokens"], status, reason or "-", attempt,
-        max_output_tokens if max_output_tokens is not None else "-",
+        max_output_tokens if max_output_tokens is not None else "-", deadline_capped,
         extra={"event": "llm_call_usage", "llm_model": str(provider.model),
                "llm_schema": getattr(text_format, "__name__", str(text_format)), "llm_seconds": round(seconds, 1),
                "llm_status": status, "llm_incomplete_reason": reason, "llm_attempt": attempt,
-               **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}), **usage},
+               **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),
+               **({"llm_deadline_capped": True} if deadline_capped else {}), **usage},
     )
 
 
