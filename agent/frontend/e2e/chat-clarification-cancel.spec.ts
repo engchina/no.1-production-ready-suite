@@ -114,8 +114,8 @@ test("NL2SQL の確認の下に「データベースの検索は不要」を出�
   await page.screenshot({ path: testInfo.outputPath("nl2sql-cancel-before.png"), fullPage: true });
 
   await button.click();
-  const request = mockApi.lastRequest("POST", "/api/runs");
-  expect(request?.body).toMatchObject({
+  // 送信の request は click の後に非同期に出るので、記録されるまで待つ（#1519）。
+  await expect.poll(() => mockApi.lastRequest("POST", "/api/runs")?.body).toMatchObject({
     goal: "データベースの検索は不要",
     thread_id: THREAD_ID,
     clarification_cancel: "nl2sql",
@@ -153,7 +153,8 @@ test("RAG の確認には同じ部品で「資料の検索は不要」を出し�
   await button.focus();
   await expect(button).toBeFocused();
   await page.keyboard.press("Enter");
-  expect(mockApi.lastRequest("POST", "/api/runs")?.body).toMatchObject({
+  // Enter の後、送信の request は非同期に出る。押した直後に読むと、遅い runner ではまだ記録が無い（#1519）。
+  await expect.poll(() => mockApi.lastRequest("POST", "/api/runs")?.body).toMatchObject({
     goal: "資料の検索は不要",
     clarification_cancel: "rag",
   });

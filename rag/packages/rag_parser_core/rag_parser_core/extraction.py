@@ -21,8 +21,9 @@ type ExtractionArtifactValue = (
 )
 
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
+# 「第 4 章」のように番号の前後に空白のある章も見出しにする(rag_engine の規則と同じ。#1517)。
 NUMBERED_HEADING = re.compile(
-    r"^(?P<prefix>(?:\d+(?:\.\d+)*|第[一二三四五六七八九十百千\d]+[章節部]|"
+    r"^(?P<prefix>(?:\d+(?:\.\d+)*|第\s*[一二三四五六七八九十百千〇\d]+\s*[章節部]|"
     r"[（(]?\d+[）)]))[\s:：.．、-]+(?P<title>.+)$"
 )
 BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")

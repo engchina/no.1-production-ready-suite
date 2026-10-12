@@ -333,6 +333,23 @@
             "title": "Safety Issues",
             "type": "array"
           },
+          "safety_check": {
+            "anyOf": [
+              {
+                "enum": [
+                  "checked",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）",
+            "title": "Safety Check"
+          },
           "columns": {
             "items": {
               "type": "string"
@@ -881,6 +898,23 @@
             },
             "title": "Safety Issues",
             "type": "array"
+          },
+          "safety_check": {
+            "anyOf": [
+              {
+                "enum": [
+                  "checked",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）",
+            "title": "Safety Check"
           },
           "columns": {
             "items": {

@@ -106,12 +106,12 @@ _NUM = "[0-9一二三四五六七八九十百千〇零]+"
 # プリセット(rag_engine/chunking/headings.py・rag_parser_core の見出しの規則を下敷きにした)。
 PRESET_RULES: dict[SectionRulesMode, list[SectionRule]] = {
     "legal": [
-        SectionRule(name="編", pattern=rf"^第{_NUM}編", level=1),
-        SectionRule(name="章", pattern=rf"^第{_NUM}章", level=2),
-        SectionRule(name="節", pattern=rf"^第{_NUM}節", level=3),
-        SectionRule(name="款", pattern=rf"^第{_NUM}款", level=4),
-        SectionRule(name="目", pattern=rf"^第{_NUM}目", level=5),
-        SectionRule(name="条", pattern=rf"^第{_NUM}条(の{_NUM})*", level=6),
+        SectionRule(name="編", pattern=rf"^第\s*{_NUM}\s*編", level=1),
+        SectionRule(name="章", pattern=rf"^第\s*{_NUM}\s*章", level=2),
+        SectionRule(name="節", pattern=rf"^第\s*{_NUM}\s*節", level=3),
+        SectionRule(name="款", pattern=rf"^第\s*{_NUM}\s*款", level=4),
+        SectionRule(name="目", pattern=rf"^第\s*{_NUM}\s*目", level=5),
+        SectionRule(name="条", pattern=rf"^第\s*{_NUM}\s*条(の{_NUM})*", level=6),
     ],
     "official": [
         SectionRule(name="第1", pattern=r"^第[0-9]+(\s|$)", level=1),

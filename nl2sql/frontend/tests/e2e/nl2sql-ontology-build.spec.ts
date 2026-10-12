@@ -3087,6 +3087,8 @@ test("Markdown 公開前の実データ検証と受入テストは入力エラ�
 });
 
 test("Markdown 草稿は往復ナビで保持し DB とユーザーを越えて流用しない",async({page})=>{
+  // 往復・再読込で画面を 7 回読み込む長いテストで、2 worker の CI では既定の 30 秒を超えることがある（#1519）。
+  test.slow();
   const state=await mockApi(page);state.jobPolls=2;
   let database="database-a", user={...systemAdminMe};
   await page.route("**/api/auth/me",route=>fulfillJson(route,user));

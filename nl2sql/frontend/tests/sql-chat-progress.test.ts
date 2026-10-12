@@ -144,6 +144,29 @@ test("失敗した段階は「〜できませんでした」、未実行の段�
   assert.equal(beforeStart[0].label, "処理を開始できませんでした");
 });
 
+test("Select AI / Agent の SQL で省略した安全性の確認は、未実行と省略の理由（#1523）", () => {
+  const steps = view(
+    events(
+      {
+        queue: { status: "done" },
+        prepare_context: { status: "done" },
+        generate_sql: { status: "done", params: { engine: "select_ai" } },
+        safety_check: {
+          status: "skipped",
+          params: { tables: "APP.A", table_count: 1, safety_check_skipped: true },
+        },
+        execute_sql: { status: "done", params: { rows: 3 } },
+        format_results: { status: "done" },
+      },
+      "done",
+    ),
+  );
+  assert.equal(steps[3].status, "skipped");
+  assert.equal(steps[3].label, "SQL の安全性の確認");
+  assert.equal(steps[3].detail, "Select AI が生成した SELECT 文のため省略しました");
+  assert.equal(steps[4].status, "done");
+});
+
 test("止めた段階（backend の停止の印）は未実行と「停止しました」", () => {
   const list = events(
     {
