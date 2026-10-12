@@ -2189,6 +2189,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                 for key, value in step.items()
                 if key in _STEP_DB_METRIC_KEYS and isinstance(value, int | float)
             },
+            # LLM の token の数（入力・出力・推論）と呼び出しの秒の和(#1516)。
+            **(
+                {"llm_usage": dict(step["llm_usage"])}
+                if isinstance(step.get("llm_usage"), Mapping)
+                else {}
+            ),
         }
         for step in result.execution_steps or ()
         if isinstance(step, Mapping)
@@ -2218,6 +2224,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 採用した草稿の構造(#1492。確認の項目の事実と規則の分け方・説明の種類と適用)。
         # LLM を呼ばずに対応の決定を replay する材料。
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
+        # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
+        "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
     }

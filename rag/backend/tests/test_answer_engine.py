@@ -212,6 +212,43 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     assert diagnostics["evidence_tree"][0]["children"]
 
 
+async def test_answer_diagnostics_keep_llm_usage_and_round_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工程ごとの LLM の token の数と、是正の round の時間の配分を診断に残す(#1516)。"""
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.resources.llm_usage import record_llm_usage
+
+    def fake_with_usage(system: str, prompt: str, settings: Any, schema: Any, **_: Any) -> Any:
+        # 本番の adapter（`_record_usage`）と同じく、1 回の呼び出しの usage を累積に足す。
+        record_llm_usage(
+            {"input_tokens": 1000, "output_tokens": 200, "reasoning_tokens": 150, "seconds": 2.5}
+        )
+        return _fake_llm(system, prompt, settings, schema)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", fake_with_usage)
+    engine = AnswerEngine(
+        Settings(rag_domain_keywords=["受注番号"]),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(
+        SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
+    )
+
+    steps = outcome.diagnostics["execution_steps"]
+    generation = next(step for step in steps if step["name"].startswith("回答文の生成と根拠確認"))
+    assert generation["llm_usage"]["input_tokens"] == 1000 * generation["llm_calls"]
+    assert generation["llm_usage"]["reasoning_tokens"] == 150 * generation["llm_calls"]
+    # LLM を呼ばない工程には載せない。
+    assert all("llm_usage" not in step for step in steps if not step.get("llm_calls"))
+    budget = outcome.diagnostics["round_budget"]
+    assert len(budget["round_seconds"]) >= 1
+    assert budget["reserve_seconds"] == 30.0
+    assert "stop" not in budget
+
+
 async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     import rag_engine.adapters.oci as engine_oci
 

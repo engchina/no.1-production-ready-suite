@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from functools import wraps
 from typing import Any, Callable, Iterator, Mapping, Sequence
 from rag_engine.dependencies import llm_call_count
+from rag_engine.resources.llm_usage import LlmUsage, llm_usage as _llm_usage, usage_delta, usage_snapshot
 from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
 
 
@@ -126,6 +127,7 @@ def _execution_step(name: str, purpose: str = ""):
     index = len(steps) if steps is not None else 0
     start = monotonic()
     llm_before = llm_call_count.get()
+    usage_before = usage_snapshot()
     metrics_before = _step_metrics_snapshot()
     if steps is not None:
         steps.append({"name": name, "status": "running"})
@@ -151,6 +153,9 @@ def _execution_step(name: str, purpose: str = ""):
         if steps is not None:
             steps[index] = {"name": name, "status": step.status or "complete", "elapsed_seconds": elapsed,
                             "llm_calls": llm_calls, **_step_metrics_delta(metrics_before)}
+            # LLM の token の数（入力・出力・推論）と呼び出しの秒の和。遅い工程の理由を確かめる（#1516）。
+            if usage := usage_delta(usage_before):
+                steps[index]["llm_usage"] = usage
         if lines is not None:
             if step.hidden and not step.status:
                 del lines[first_line:]
@@ -250,6 +255,7 @@ def _record_answer_execution(function):
         step_token = _structured_steps.set(steps)
         token = _execution_lines.set(lines)
         llm_token = llm_call_count.set(0)
+        usage_token = _llm_usage.set(LlmUsage())
         try:
             result = function(question, *args, **kwargs)
             return replace(result, question_display=format_question_display(result.original_question, lines), execution_steps=tuple(steps))
@@ -261,6 +267,7 @@ def _record_answer_execution(function):
             error.execution_steps = tuple(steps)
             raise error from exc
         finally:
+            _llm_usage.reset(usage_token)
             llm_call_count.reset(llm_token)
             _execution_lines.reset(token)
             _structured_steps.reset(step_token)
