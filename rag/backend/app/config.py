@@ -1035,16 +1035,18 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_crag_compact_input: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "CRAG の根拠の評価の入力を詰める(#1528)。候補を生成に渡す親の数にそろえ、JSON を"
+            "CRAG の根拠の評価の入力を詰める(#1528。既定 ON。A/B で入力 tokens が"
+            " 1/4〜1/9)。候補を生成に渡す親の数にそろえ、JSON を"
             "空白なしで書き、候補の ID を chunk_uid だけにする。章節の拡張の判定は候補の数を"
             "そろえない(広げた章節を見せる)。"
         ),
     )
     rag_section_skip_regrade_at_scope: bool = Field(
-        default=False,
+        default=True,
         description=(
+            "(既定 ON。#1528 の A/B で列挙の問が 484 → 293 秒、品質は同じ)"
             "読む範囲が文書全体の列挙の問(#1503)で、章節の拡張が文書全体まで読んだら、"
             "CRAG の評価し直しを省いて生成へ進む(#1528)。"
         ),
