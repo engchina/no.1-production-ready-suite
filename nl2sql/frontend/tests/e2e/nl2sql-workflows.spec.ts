@@ -16751,13 +16751,18 @@ test("synthetic manual refresh discards feedback after switching history", async
   const first = syntheticRunFixture("completed");
   const second = { ...syntheticRunFixture("failed"), run_id: "run-002" };
   let gate: ReturnType<typeof createRequestGate> | null = null;
+  let listed = 0;
   await page.route("**/api/nl2sql/synthetic-data/runs", async (route) => {
     if (gate) await gate.promise;
+    listed += 1;
     return fulfillJson(route, [first, second]);
   });
   await page.goto("/data-management?synthetic_run=run-001");
   const panel = page.getByTestId("synthetic-run-panel");
   await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-001");
+  // 参照の run は URL から先に出るので、最初の一覧の応答を待ってから再確認の応答を止める。
+  // 遅い runner では最初の一覧の request が gate の後に出て止まり、run-002 が選択肢に出なかった（#1519）。
+  await expect.poll(() => listed).toBeGreaterThan(0);
   gate = createRequestGate();
   await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
   await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toHaveAttribute("aria-busy", "true");
