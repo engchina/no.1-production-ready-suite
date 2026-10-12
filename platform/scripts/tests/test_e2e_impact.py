@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -562,6 +563,55 @@ class SelectIntegrationTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("bad.spec.ts", errors[0])
         self.assertIn("./fixtures/test", errors[0])
+
+
+class NightlyShardsTest(unittest.TestCase):
+    """nightly の shard の数と、記録がそろった run だけを使うこと（#1599）。"""
+
+    def test_nightly_matrix_matches_products(self) -> None:
+        workflow = (impact.ROOT / ".github/workflows/e2e-nightly.yml").read_text(encoding="utf-8")
+        rows = re.findall(r"\{ product: (\w+),.*?shard: (\d+), total: (\d+) \}", workflow)
+        self.assertTrue(rows)
+        for name, product in impact.PRODUCTS.items():
+            shards = sorted(int(shard) for row, shard, _ in rows if row == name)
+            totals = {int(total) for row, _, total in rows if row == name}
+            self.assertEqual(shards, list(range(1, product.nightly_shards + 1)), name)
+            self.assertEqual(totals, {product.nightly_shards}, name)
+
+    def _download(self, runs: list[tuple[int, int]]) -> list[Path]:
+        """runs は (run の id, その run の記録の数)。新しい順。"""
+        product = impact.PRODUCTS["agent"]
+        counts = dict(runs)
+
+        def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess:
+            if args[:3] == ["gh", "run", "list"]:
+                body = json.dumps([{"databaseId": run} for run, _ in runs])
+                return subprocess.CompletedProcess(args, 0, body, "")
+            run = int(args[3])
+            target = Path(args[args.index("--dir") + 1])
+            for shard in range(1, counts[run] + 1):
+                path = target / f"e2e-impact-agent-{shard}" / f"agent-{shard}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(impact.subprocess, "run", side_effect=fake_run),
+                mock.patch("sys.stderr"),
+            ):
+                files = impact.download_maps(product, Path(tmp))
+            return [path.relative_to(tmp) for path in files]
+
+    def test_download_skips_run_with_missing_shard(self) -> None:
+        shards = impact.PRODUCTS["agent"].nightly_shards
+        files = self._download([(2, shards - 1), (1, shards)])
+        self.assertEqual(len(files), shards)
+        self.assertTrue(all(path.parts[0] == "1" for path in files))
+
+    def test_download_returns_nothing_without_complete_run(self) -> None:
+        shards = impact.PRODUCTS["agent"].nightly_shards
+        self.assertEqual(self._download([(2, shards - 1), (1, 0)]), [])
 
 
 if __name__ == "__main__":
