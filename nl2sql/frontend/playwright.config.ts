@@ -12,6 +12,7 @@ export default defineConfig({
   // RAG と同じく CI だけ retries 2。遅い runner で 1 件の一時的な遅延が shard 全体を赤にしないため（#175）。
   // retry で通ったテストは flaky として report に残る。nightly（e2e-nightly.yml）でも拾う。
   retries: process.env.CI ? 2 : 0,
+  // CI（4 vCPU の runner）は 2 worker。ci.yml・e2e-nightly.yml は `--workers` で上書きしない（#1489）。
   workers: process.env.CI ? 2 : 4,
   expect: {
     timeout: 8_000,
