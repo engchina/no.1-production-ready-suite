@@ -1,8 +1,10 @@
 name: Dependency Audit Nightly
 
-# backend の依存の脆弱性（pip-audit）を毎晩 main で全件検査する（#339）。
+# backend の依存の脆弱性（pip-audit）と frontend の依存の脆弱性（npm audit。#1588）を毎晩 main で全件検査する（#339）。
 # PR / main push の CI（ci.yml）は、その backend の uv.lock / pyproject.toml が変わったときだけ pip-audit を実行する
 # （advisory の公開で無関係な PR が赤になるのを避けるため。bandit は PR でも毎回実行する）。
+# npm audit は PR の CI では実行しない（#74。advisory の公開で無関係な PR が赤になるため）。lock / manifest が変わった PR は
+# ci.yml の Dependency review が、追加・更新した依存の脆弱性を確かめる（#1588）。
 # 失敗は ci-failure-issue.yml が Issue にする。ignore する advisory は ci.yml と同じにし、理由をここと ci.yml に書く。
 
 on:
@@ -84,3 +86,34 @@ jobs:
             echo "::endgroup::"
           done
           exit "${status}"
+
+  # frontend の 4 つの package-lock.json（#1588。以前は rag/frontend だけを Dependabot が見て、nl2sql / agent / platform の
+  # npm の依存はどこでも検査していなかった）。npm audit は lock だけを読むので npm ci は要らない。
+  # --omit=dev: dependencies（画面の bundle に入る依存）だけ。build・テストの道具（devDependencies）は対象外。
+  # --audit-level=high: high / critical で失敗する（moderate 以下はログに出すだけ）。
+  npm-audit:
+    name: ${{ matrix.name }} (npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Platform / frontend", dir: platform }
+          - { name: "RAG / Frontend", dir: rag/frontend }
+          - { name: "NL2SQL / Frontend", dir: nl2sql/frontend }
+          - { name: "Agent / Frontend", dir: agent/frontend }
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high

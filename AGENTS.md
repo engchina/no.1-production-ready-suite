@@ -54,10 +54,11 @@
 - 必須 check は **`CI OK`** だけ（skip は成功扱い）。**job を追加したら `ci-ok` の `needs` に足し、すべての job に `timeout-minutes`（通常 10〜15 分、e2e は実測の倍程度）を付ける。**
 - PR の e2e は約 1 分の smoke と、差分に影響を受ける spec（`e2e-impact`。smoke の spec は重ねず、全件なら smoke を飛ばす）。全件は `e2e-nightly.yml` が毎晩実行する。キャッシュの方針は `ci.yml` の platform の節のコメント。
 - backend の pytest は CI で並列（`-n auto`）に実行する。**テストは並列でも直列でも通るように書く**（`tmp_path`・`parametrize` の `ids=`・差し替えられる待ち・`xdist_group`。[backend-standard.md](./platform/docs/backend-standard.md)「テストの並列実行」）。
-- `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ（全件は `dependency-audit-nightly.yml`）、`bandit` は毎回。
+- `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ、`bandit` は毎回。`npm audit` は PR では実行しない。全件は `dependency-audit-nightly.yml` が毎晩（pip-audit と、4 つの `package-lock.json` の `npm audit --omit=dev --audit-level=high`）。
+- **依存の manifest / lock（`package.json`・`package-lock.json`・`uv.lock`・`pyproject.toml`）か workflow・composite action を変えた PR は、`Dependency review` が追加・更新した依存の脆弱性（high 以上で失敗）と license を確かめる**（#1588）。
 - **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。
 - secret 検出は `.gitleaks.toml` / `.gitleaksignore`（書き方は `.gitleaks.toml` の冒頭）。誤検知は fingerprint 単位で `.gitleaksignore` に理由付きで除外する。
-- Dependabot の patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
+- Dependabot は 3 製品の backend（uv）・frontend（npm）、platform の package（uv・npm。lock だけを上げる）、RAG のサービス、actions を対象にする。公開から 5 日の `cooldown` を置き、npm は monthly（lock の変更は e2e の全件になる）、security updates は entry ごとの group にまとめる。patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
 - Python の整形は `ruff format`（black は使わない。CI は `uv run ruff format --check .`）。整形だけの commit は `.git-blame-ignore-revs` に載せる。pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend のファイルへの `ruff format --check` / `ruff check`。
 - root の `scripts/` と `.github/` は `Suite / Scripts` が検査する（shellcheck・`scripts/tests/`・workflow の actionlint）。
 
