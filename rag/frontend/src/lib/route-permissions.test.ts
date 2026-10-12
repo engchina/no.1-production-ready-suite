@@ -86,6 +86,17 @@ describe("権限コードの対応表", () => {
   });
 });
 
+describe("ナビのセクションの既定の開閉", () => {
+  // 保存値が無いときは業務の入口の「AI 活用」だけを展開し、ほかは閉じる（3 製品で同じ。#1563）。
+  it("AI 活用だけを既定で展開し、ほかのセクションは既定で閉じる", () => {
+    const expandedByDefault = NAV_SECTIONS.filter((section) => !section.defaultCollapsed).map(
+      (section) => section.titleKey
+    );
+    expect(expandedByDefault).toEqual(["nav.section.use"]);
+    expect(NAV_SECTIONS[0].titleKey).toBe("nav.section.use");
+  });
+});
+
 describe("ナビのアイコン", () => {
   // Issue 658: 3 製品で同じ機能は同じアイコン、違う機能は違うアイコン。
   it("機能ごとに違うアイコンを使う（同じアイコンを 2 つの項目に使わない）", () => {
