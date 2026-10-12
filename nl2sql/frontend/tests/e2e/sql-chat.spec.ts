@@ -657,6 +657,36 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   ).toBeLessThanOrEqual(0);
 });
 
+test("生成方法の初期の選択は業務プロファイルの既定の生成方式 (#1524)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  // 後から登録した route が先に当たる。
+  await page.route("**/api/nl2sql/profiles/*/usage-context", (route) =>
+    route.fulfill({
+      json: { data: { ...profile, default_engine: "enterprise_ai_direct" } },
+    }),
+  );
+  await page.goto("/chat");
+  const engine = page.getByRole("combobox", { name: "生成方法", exact: true });
+  await expectSelectFieldValue(engine, "enterprise_ai_direct");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+  expect(state.requests[0]).toMatchObject({
+    engine: "enterprise_ai_direct",
+    chat: true,
+  });
+  // 利用者が選んだ方式は、業務プロファイルの既定より優先して作業状態に残る。
+  await chooseSelectFieldOption(engine, "select_ai");
+  await page.reload();
+  await expectSelectFieldValue(
+    page.getByRole("combobox", { name: "生成方法", exact: true }),
+    "select_ai",
+  );
+});
+
 // #907: 送った質問は、ジョブの投入の応答を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
 /** ジョブの投入を止めておき、好きなときに setup の応答へ流す。 */
 async function gateJobSubmit(page: Page) {
