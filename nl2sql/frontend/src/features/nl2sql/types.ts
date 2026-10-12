@@ -445,6 +445,10 @@ export interface SafetyReport {
   warnings: string[];
   referenced_tables: string[];
   referenced_columns: string[];
+  /** 安全性の確認をしたか。Select AI / Select AI Agent の SQL は省略する（#1523）。旧い結果には無い。 */
+  safety_checked?: boolean;
+  /** 安全性の確認を省略した理由（省略しなかったときは空）。 */
+  safety_check_skip_reason?: string;
 }
 
 export interface QueryResults {
@@ -925,6 +929,7 @@ export interface QualityEvaluationResult {
   deterministic_analysis: {
     is_safe: boolean;
     is_select_only: boolean;
+    safety_checked?: boolean;
     referenced_objects: string[];
     structure_summary: string;
     risk_findings: string[];

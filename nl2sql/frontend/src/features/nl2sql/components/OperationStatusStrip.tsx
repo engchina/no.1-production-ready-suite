@@ -9,7 +9,7 @@ import {
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import { normalizeNl2SqlJobSteps } from "../jobProgressState";
-import type { JobData, JobStatus, JobStepStatus } from "../types";
+import type { JobData, JobStatus, JobStepData, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { JobFailureBody } from "./JobFailureBody";
 import { QuestionText } from "./QuestionText";
@@ -28,6 +28,27 @@ function stepStatusLabel(status: JobStepStatus) {
   if (status === "skipped") return t("nl2sql.progress.step.skipped");
   if (status === "running") return t("nl2sql.progress.step.running");
   return t("nl2sql.progress.step.pending");
+}
+
+/** Select AI / Select AI Agent の SQL で省略した安全性の確認（#1523）。 */
+function isSafetyCheckSkipped(job: JobData, step: JobStepData) {
+  return (
+    step.stage === "safety_check" &&
+    step.status === "skipped" &&
+    job.result?.safety.safety_checked === false
+  );
+}
+
+function jobStepStatusLabel(job: JobData, step: JobStepData) {
+  return isSafetyCheckSkipped(job, step)
+    ? t("nl2sql.progress.step.safetyCheckSkipped")
+    : stepStatusLabel(step.status);
+}
+
+function jobStepDescription(job: JobData, step: JobStepData) {
+  return isSafetyCheckSkipped(job, step)
+    ? t("nl2sql.progress.safety_check.safetyCheckSkippedDescription")
+    : stepDescription(step.stage);
 }
 
 function stepLabel(stage: string) {
@@ -133,9 +154,9 @@ export function OperationStatusStrip({
       steps={steps.map((step) => ({
         id: step.stage,
         label: stepLabel(step.stage),
-        description: stepDescription(step.stage),
+        description: jobStepDescription(job, step),
         status: normalizeStepStatus(step.status),
-        statusLabel: stepStatusLabel(step.status),
+        statusLabel: jobStepStatusLabel(job, step),
         elapsedLabel: step.elapsed_ms != null ? formatElapsed(step.elapsed_ms) : "",
         open: step.status === "running" || (step.stage === "generate_sql" && Boolean(job.result)),
         testId: `nl2sql-job-step-${step.stage}`,
