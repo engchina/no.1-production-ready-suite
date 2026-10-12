@@ -16,7 +16,7 @@ dependencies = [
     "onnxruntime>=1.20",
     # rapidocr と docling の TableFormer が import する cv2 は、GUI 版ではなく headless 版で入れる
     # (#310)。GUI 版は libxcb / libGL / glib を要し、slim の base image では import が失敗する。
-    "opencv-python-headless>=4.10,<5.0",
+    "opencv-python-headless>=4.10,<6.0",
 ]
 
 [tool.uv]
