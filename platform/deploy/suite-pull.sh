@@ -5,7 +5,7 @@
 #   root のまま git を実行すると「dubious ownership」で失敗するため、git は repository の所有者で実行する。
 # - 追跡ファイルに変更があれば中止する（手で直したファイルを黙って消さない）。未追跡のファイルは保ち、
 #   取得したファイルと衝突するときは git が更新を拒否する。
-# - 取得だけを行う。依存の同期・build・migration・再起動は suite-update.sh（sudo）が行う。
+# - 取得だけを行う。依存の同期・build・migration・再起動は suite-restart.sh（sudo）が行う（suite-update.sh は両方）。
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
@@ -24,8 +24,8 @@ Usage: platform/deploy/suite-pull.sh
 
 suite の repository（既定 /u01/aipoc/no.1-production-ready-suite）を origin の main の最新にします。
 ubuntu でも sudo でも実行できます（git は repository の所有者で実行します）。
-追跡ファイルに変更があるときは中止します。取得の後は、sudo で suite-update.sh を実行して再配備してください
-（suite-update.sh は取得から再配備・再起動までをまとめて行います）。
+追跡ファイルに変更があるときは中止します。取得したコードは、sudo で suite-restart.sh を実行すると
+build・再起動されて反映されます（suite-update.sh は取得から build・再起動までをまとめて行います）。
 
 Environment overrides:
   SUITE_REPO_DIR  repository（既定 /u01/aipoc/no.1-production-ready-suite）

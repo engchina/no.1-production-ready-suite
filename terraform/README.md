@@ -229,20 +229,23 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 - 製品の `init_script.sh` を単独で実行する配備（製品ごとの Nginx の site）はやめました（3 製品はこの suite でセットで配備します）。
 - URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークや、外部から Agent の MCP（`/agent/api/mcp`）を呼ぶ設定を更新してください。
 
-### 配備した後の更新と再起動（#1566）
+### 配備した後の更新と再起動（#1566・#1577）
 
 | スクリプト（`platform/deploy/`） | 実行 | 内容 |
 |---|---|---|
-| `suite-update.sh` | `sudo` | `suite-pull.sh` で main を取得し、取得した新しい `suite-update.sh` で `suite-init.sh` を再実行して再配備する（依存の同期・build・DB の初期化と migration・systemd・Nginx・再起動）。最後に各製品の `/api/health` を待つ。`--no-pull` は取得しない |
-| `suite-pull.sh` | ubuntu か `sudo` | repository の所有者（ubuntu）で `origin/main` を取得して `main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ |
-| `suite-restart.sh` | `sudo` | 有効（enabled）な `production-ready-*` の service と Nginx を再起動し、各製品の `/api/health` を待つ。`--status` は再起動せずに状態だけを出す |
+| `suite-pull.sh` | ubuntu か `sudo` | repository の所有者（ubuntu）で `origin/main` を取得し、`main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ。取得だけで、build・再起動はしない |
+| `suite-restart.sh` | `sudo` | 既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に各製品の `/api/health` を待つ。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は状態だけを出す |
+| `suite-update.sh` | `sudo` | `suite-pull.sh` で取得し、取得した新しい `suite-restart.sh`（既定）を実行する |
 
-- `suite-init.sh` は props（Resource Manager の入力）から各製品の `backend/.env` を作り直す。そのため `suite-update.sh` は、再配備の前に今の `backend/.env` を
-  `/u01/aipoc/props/<製品>.backend.env` へ写す（画面で保存した値を保つ。元の props は `/u01/aipoc/recovery/<時刻>/` に退避）。
-  `platform/.env`・Wallet・HTTPS の CA は `suite-init.sh` がそのまま保つ。
-- lock で同時の実行を防ぐ。log は `/var/log/suite-update.log`（再配備の詳細は `/var/log/suite-init.log`）。cloud-init は `git` と `tmux` を入れる。
-- OS の再起動では、enabled の unit（`WantedBy=multi-user.target`。各製品の backend・worker、起動にした RAG の前処理 / parser）と Nginx が自動で起動する。
-  ADB は Compute の外にあるため、止まっていれば OCI のコンソールから起動する。
+- `suite-init.sh` は props（Resource Manager の入力）から、各製品の `backend/.env` を作り直す。
+  - そのため `suite-restart.sh` は、build の前に今の `backend/.env` を `/u01/aipoc/props/<製品>.backend.env` へ写す（画面で保存した値を保つ）。
+  - 元の props は `/u01/aipoc/recovery/<時刻>/` に退避する。
+  - `platform/.env`・Wallet・HTTPS の CA は、`suite-init.sh` がそのまま保つ。
+- 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
+- cloud-init は `git` と `tmux` を入れる。
+- OS の再起動では、enabled の unit（`WantedBy=multi-user.target`）と Nginx が自動で起動する。
+  - enabled の unit は、各製品の backend・worker と、起動にした RAG の前処理 / parser。
+  - ADB は Compute の外にあるため、止まっていれば OCI のコンソールから起動する。
 
 ### ログインの試行の回数の共有（#1173）
 

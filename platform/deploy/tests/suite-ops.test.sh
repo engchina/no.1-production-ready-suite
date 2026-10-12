@@ -48,8 +48,8 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   suite_pull | grep -q "すでに最新です" || fail "最新のときの表示"
 )
 
-# 2. suite-restart.sh: 有効な production-ready-* の service（証明書の更新の oneshot を除く）と Nginx を再起動し、
-#    配備した製品の backend の health を待つ。
+# 2. suite-restart.sh --no-build: 有効な production-ready-* の service（証明書の更新の oneshot を除く）と Nginx を
+#    再起動し、配備した製品の backend の health を待つ。
 (
   export PROPS_DIR="${task_dir}/restart-props"
   mkdir -p "${PROPS_DIR}"
@@ -69,7 +69,7 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     printf 'systemctl %s\n' "$*" >> "${calls}"
   }
   nginx() { printf 'nginx %s\n' "$*" >> "${calls}"; }
-  suite_restart_all >/dev/null
+  suite_restart_services >/dev/null
   grep -qxF "systemctl restart production-ready-rag-backend.service production-ready-rag-parser-docling.service production-ready-agent-backend.service" "${calls}" \
     || fail "再起動の対象: $(cat "${calls}")"
   if grep -q "tls-renew" "${calls}"; then fail "証明書の更新の oneshot を再起動した"; fi
@@ -84,9 +84,10 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   suite_wait_for_health >/dev/null || fail "すべて応答するのに失敗した"
 )
 
-# 3. suite-update.sh: 再配備の前に今の backend/.env を props へ写し（元の props は退避）、suite-init.sh を実行する。
+# 3. suite-restart.sh（既定）: 今のコードから build する。再配備の前に今の backend/.env を props へ写し
+#    （元の props は退避）、suite-init.sh を実行する（#1577。suite-pull.sh の後の再起動で最新のコードを使う）。
 (
-  export APP_ROOT="${task_dir}/update"
+  export APP_ROOT="${task_dir}/rebuild"
   export SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
   export PROPS_DIR="${APP_ROOT}/props"
   mkdir -p "${SUITE_REPO_DIR}/rag/backend" "${SUITE_REPO_DIR}/agent/backend" "${PROPS_DIR}"
@@ -98,19 +99,22 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   init_marker="${task_dir}/init-called"
   export SUITE_INIT_SCRIPT="${task_dir}/fake-suite-init.sh"
   printf '#!/usr/bin/env bash\ncp "%s" "%s"\n' "${PROPS_DIR}/rag.backend.env" "${init_marker}" > "${SUITE_INIT_SCRIPT}"
-  # shellcheck source=../suite-update.sh
-  source "${repo}/platform/deploy/suite-update.sh"
-  suite_wait_for_health() { return 0; }
-  suite_git() { printf 'abc1234 2026-10-12 test\n'; }
-  update_redeploy >/dev/null || fail "再配備に失敗した"
+  # shellcheck source=../suite-restart.sh
+  source "${repo}/platform/deploy/suite-restart.sh"
+  suite_rebuild_and_restart >/dev/null || fail "再配備に失敗した"
   grep -qxF "RAG_SAVED_ON_SCREEN=1" "${init_marker}" || fail "suite-init.sh の前に backend/.env を props へ写していない"
   [ "$(cat "${PROPS_DIR}/agent.backend.env")" = "AGENT_FROM_TERRAFORM=1" ] || fail "backend/.env が無い製品の props を変えた"
   backup="$(find "${APP_ROOT}/recovery" -name rag.backend.env)"
   [ -n "${backup}" ] && [ "$(cat "${backup}")" = "RAG_FROM_TERRAFORM=1" ] || fail "元の props を退避していない"
   [ "$(stat -c '%a' "${PROPS_DIR}/rag.backend.env")" = "600" ] || fail "props の権限"
   printf '#!/usr/bin/env bash\nexit 1\n' > "${SUITE_INIT_SCRIPT}"
-  if update_redeploy >/dev/null 2>&1; then fail "再配備の失敗を成功と報告した"; fi
+  if suite_rebuild_and_restart >/dev/null 2>&1; then fail "再配備の失敗を成功と報告した"; fi
 )
+
+# 4. suite-update.sh: 取得の後に、取得した新しい suite-restart.sh（既定 = build して再起動）を実行する。
+grep -qxF '  suite_pull' "${repo}/platform/deploy/suite-update.sh" || fail "suite-update.sh が取得しない"
+grep -qxF '  exec bash "${SUITE_RESTART_SCRIPT}"' "${repo}/platform/deploy/suite-update.sh" \
+  || fail "suite-update.sh が取得の後に suite-restart.sh（build して再起動）を実行しない"
 
 for script in suite-pull.sh suite-restart.sh suite-update.sh; do
   [ -x "${repo}/platform/deploy/${script}" ] || fail "${script} に実行権限が無い"
