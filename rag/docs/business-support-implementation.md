@@ -96,7 +96,7 @@
   - この Run に現場のデータを確かめる道具（RAG 以外の MCP 接続のツール。NL2SQL・登録した接続）があれば
     `continue_with_tools`（`confirmations` の点を `tools` のツールで確かめてから答える）。
   - 無ければ `answer_with_confirmations`（`confirmations` を利用者が確かめる点として挙げ、推測で断定しない）。
-  - スキル「業務 RAG 調査」「RAG 後に構造化データ照会」の指示は `next_step` に従うことを明記する。道具の呼び出しは
+  - スキル「業務 RAG 調査」「資料とデータの横断調査」の指示は `next_step` に従うことを明記する。道具の呼び出しは
     今までどおりツール権限（承認）を通る。
   - 確認の質問（`needs_clarification`）は利用者に聞けば続けられ、人への引き継ぎ（`needs_human`）と資料の不足
     （`insufficient_evidence`）は道具でも埋められないので対象にしない。条件付きの回答（`conditional`）も対象にしない

@@ -102,7 +102,7 @@ for (const viewport of VIEWPORTS) {
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(true);
       await page.getByRole("button", { name: "作成", exact: true }).first().click();
       await expect(page.getByText("Agent を作成しました")).toBeVisible();
-      await expect(page).toHaveURL(/\/agents\?id=agent-2$/);
+      await expect(page).toHaveURL(/\/agents\?id=agent-4$/);
       await expect(page.getByRole("heading", { name: "作成する Agent", level: 1 })).toBeVisible();
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(false);
       // 新規フォームは履歴に残さない（戻るで空の作成フォームへ戻らない）。

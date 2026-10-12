@@ -42,7 +42,7 @@ for (const viewport of VIEWPORTS) {
 
       await page.getByLabel("名前").fill("基幹システムの問い合わせ連携");
       await page.locator("#api-key-agents").click();
-      await page.getByRole("option", { name: /汎用業務 Agent/ }).click();
+      await page.getByRole("option", { name: /資料・データ横断アシスタント/ }).click();
       await page.keyboard.press("Escape");
       await page.getByTestId("api-key-create").click();
 
@@ -61,7 +61,7 @@ for (const viewport of VIEWPORTS) {
       });
       const table = page.getByRole("table", { name: "API キーの一覧" });
       const row = table.getByRole("row", { name: /基幹システムの問い合わせ連携/ });
-      await expect(row).toContainText("汎用業務 Agent");
+      await expect(row).toContainText("資料・データ横断アシスタント");
       await expect(row).toContainText("未使用");
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`api-keys-${viewport.name}-${theme}.png`), fullPage: true });
@@ -166,7 +166,7 @@ test("Agent 管理の権限が無い利用者は一覧だけを見る", async ({
   const row = page.getByRole("table", { name: "API キーの一覧" }).getByRole("row", { name: /既存のキー/ });
   await expect(row).toContainText("期限切れ");
   // 利用できる業務 Agent は名前で、範囲外の業務 Agent は名前を出さず、ID だけでは無いことが分かる表示にする。
-  await expect(row).toContainText("汎用業務 Agent、名前を表示できない業務 Agent（ID: finance）");
+  await expect(row).toContainText("資料・データ横断アシスタント、名前を表示できない業務 Agent（ID: finance）");
   await expect(row).not.toContainText("経理 Agent");
   await expect(row).toContainText("山田 太郎");
   await expect(page.getByRole("heading", { name: "API キーの作成" })).toHaveCount(0);
@@ -175,6 +175,11 @@ test("Agent 管理の権限が無い利用者は一覧だけを見る", async ({
 
 test("システム管理者は、キーを連携用の専用の利用者として動かせる", async ({ page, mockApi }) => {
   await page.goto("/settings/api-keys");
+  // 「実行する利用者」は「名前」と同じ grid の列に置き、同じ幅にする（#1570）。
+  const nameBox = await page.locator("#api-key-name").boundingBox();
+  const runAsBox = await page.locator("#api-key-run-as").boundingBox();
+  expect(Math.abs((runAsBox?.width ?? 0) - (nameBox?.width ?? -10))).toBeLessThanOrEqual(1);
+  expect(Math.abs((runAsBox?.x ?? 0) - (nameBox?.x ?? -10))).toBeLessThanOrEqual(1);
   await page.getByLabel("名前").fill("基幹システム");
   await page.getByRole("radio", { name: "使えるすべての業務 Agent" }).check();
   await page.locator("#api-key-run-as").click();
