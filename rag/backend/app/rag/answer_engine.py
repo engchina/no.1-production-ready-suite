@@ -1177,6 +1177,13 @@ class AnswerEngine:
                     continue
                 fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen | added.keys()]
                 selected = fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]
+                if target.kind == "document":
+                    # 文書名の参照で選んだ節を、同じ文書の中で参照する文(適用の条件。#1549)。
+                    selected.extend(
+                        _section_citing_chunks(
+                            fresh, selected, limit=budget - count - len(selected)
+                        )
+                    )
                 # 足した / 参照先がすでに上位の起点にある / 参照先が見つからない。
                 outcomes.append("added" if selected else ("present" if chunks else "not_found"))
                 for rank, chunk in enumerate(selected, start=1):
@@ -1989,6 +1996,40 @@ def _inquiry_channel_rankings(
 
 def _first_page_context(chunk: RetrievedChunk, state: _SearchState) -> Mapping[str, object] | None:
     return state.first_page_contexts.get(str(chunk.metadata.get("chunk_set_id") or ""))
+
+
+def _section_citing_chunks(
+    candidates: Sequence[RetrievedChunk],
+    selected: Sequence[RetrievedChunk],
+    *,
+    limit: int,
+) -> list[RetrievedChunk]:
+    """文書名の参照で選んだ chunk の節を、同じ文書の中で参照する候補(#1549)。
+
+    「時間帯は定期保守計画で確かめます」で定期保守計画の「第 2 章 共通の保守枠」を選んだとき、
+    その節がどのシステムに当てはまるかは同じ文書の別の節の文(「この章に無いシステムは、第 2 章の
+    共通の保守枠で保守します」)が書く。参照先の文書の中の検索の候補(``candidates``)のうち、取込で
+    解決した参照(``reference_targets_json``)が選んだ chunk の節を指すものを、上限(``limit``)まで
+    返す。SQL は増えない。
+    """
+    if limit <= 0:
+        return []
+    chosen = {chunk.chunk_id for chunk in selected}
+    paths = [str(chunk.metadata.get("section_path") or "") for chunk in selected]
+    citing: list[RetrievedChunk] = []
+    for chunk in candidates:
+        if len(citing) >= limit:
+            break
+        if chunk.chunk_id in chosen:
+            continue
+        if any(
+            target.document_title is None
+            and target.section_path
+            and any(path and section_path_within(path, target.section_path) for path in paths)
+            for target in reference_targets(chunk.metadata)
+        ):
+            citing.append(chunk)
+    return citing
 
 
 def _reference_source_entry(

@@ -1339,6 +1339,53 @@ class _TreeResult:
         return None
 
 
+async def test_document_name_reference_adds_sentence_citing_selected_section() -> None:
+    """文書名の参照で選んだ節を同じ文書の中で参照する文(適用の条件)も足す(#1549)。
+
+    kb1517 では定期保守計画が章ごとの親に分かれ、第 2 章(共通の保守枠)と第 3 章を足しても、第 1 章の
+    「この章に無いシステムは、第 2 章の共通の保守枠で保守します」(`mt-common-ref`)が文脈に
+    入らなかった。
+    参照先の文書の中の検索の候補のうち、取込で選んだ節(第 2 章)への参照を持つ chunk を足す。
+    """
+    case = _sales_case()
+    window, _sections = _change_window_corpus("ingest")
+    plan = _annotated(
+        _plan_chunks("maintenance-plan.pdf", "doc-plan", "cs-plan"), "maintenance-plan.pdf"
+    )
+    oracle = ReferenceOracle([window], plan, knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}})
+    genai = FakeGenAi({"共通の保守枠は": 0.9, "保守枠を変えたい": 0.8, "この章に無い": 0.1})
+    state = _SearchState()
+
+    result = await _engine(oracle, genai)._search(
+        SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
+        state,
+        retrieval_queries=[case["query"]],
+    )
+
+    order = [child.chunk_uid for child in result.child_chunks]
+    # 関連の高い 2 件(第 2 章・第 3 章)の後に、第 2 章を参照する第 1 章を置く。
+    assert order == [
+        window.chunk_id,
+        "doc-plan:cs-plan:1",
+        "doc-plan:cs-plan:2",
+        "doc-plan:cs-plan:0",
+    ]
+    assert state.chunks["doc-plan:cs-plan:0"].metadata[REFERENCE_RANK_KEY] == 3
+    assert "この章に無いシステムは" in state.chunks["doc-plan:cs-plan:0"].text
+
+    # 上限(rag_reference_expansion_max_chunks)は超えない。
+    limited = _SearchState()
+    result = await _engine(oracle, genai, rag_reference_expansion_max_chunks=2)._search(
+        SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
+        limited,
+        retrieval_queries=[case["query"]],
+    )
+    assert [child.chunk_uid for child in result.child_chunks][1:] == [
+        "doc-plan:cs-plan:1",
+        "doc-plan:cs-plan:2",
+    ]
+
+
 async def test_extended_reference_sources_follow_one_hop_without_moving_sources() -> None:
     """上位 5 件の外の起点どうしで、参照先を足した起点は他の起点の参照先として移さない(#1549)。
 
