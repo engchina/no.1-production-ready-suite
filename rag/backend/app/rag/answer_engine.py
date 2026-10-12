@@ -121,8 +121,15 @@ _SECTION_PATH_SEPARATOR = " > "
 _IO_DEADLINE_POLL_SECONDS = 0.5
 # 回答フローの工程の通知(進捗)1 件を待つ上限(秒)。通知は補助なので、超えたら待たずに続ける。
 _STEP_NOTIFY_TIMEOUT_SECONDS = 5.0
-# 交差参照(#1280): 参照先を辿る起点にする検索候補の数(RRF の上位から)。
+# 交差参照(#1280): 参照先を辿る起点にする検索候補の数(RRF の上位から)。この起点の参照先は
+# 上限まで必ず辿る。
 _REFERENCE_SOURCE_ANCHORS = 5
+# 交差参照(#1549): 上の起点の外でも、回答の文脈に入りうる統合の上位(回答の検索の ``top_k``。
+# この数が上限)の候補が参照を持つなら、残りの上限まで辿る。検索文は LLM が毎回作るため、参照を
+# 持つ chunk の統合の順位は回ごとに 2 位にも 8 位にもなり、上位 5 件だけでは辿るかどうかが揺れる。
+_REFERENCE_EXTENDED_ANCHORS = 20
+# 交差参照(#1549): 上位 5 件の外の起点で試す参照先の数の上限(解決できない参照の SQL を抑える)。
+_REFERENCE_EXTENDED_TARGETS = 6
 # 交差参照: 1 つの参照先の節から足す chunk の数の上限(節の先頭から。親子階層では親本文も入る)。
 _REFERENCE_CHUNKS_PER_TARGET = 2
 # 交差参照: 参照先の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
@@ -138,6 +145,8 @@ _DOCUMENT_REFERENCE_CANDIDATES = 8
 _REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded")
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
+# 診断に出す交差参照の起点の記録の、検索の回数の上限(CRAG の各回・要求ごとの再検索)。
+_REFERENCE_DIAGNOSTICS_SEARCHES = 4
 # 実体の 1 段の拡張(#1362)で足した chunk を置く候補の位置(先頭からこの件数の後ろ)。rag_engine は
 # この chunk を rerank で並べ替えず(位置を保つ)、文書の選択で後回しにしない。
 _ENTITY_INSERT_AFTER = 3
@@ -225,6 +234,12 @@ class _SearchState:
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
     reference_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
+    # 交差参照の起点の記録(検索ごと。#1549)。参照を持つ候補の統合の順位と、辿った・辿らなかった
+    # 理由(起点の外・参照先が無い・上限)を診断に出し、回答の記録から replay で確かめる。
+    reference_sources: list[dict[str, object]] = field(default_factory=list)
+    # 回答の検索の統合(RRF)の順位と点(chunk_id → (順位, 点)。複数回の検索では最も上の順位。
+    # #1549)。根拠の木に出す。
+    fused_ranks: dict[str, tuple[int, float]] = field(default_factory=dict)
     # 実体の 1 段の拡張(#1362)で足した chunk の記録(診断に出す。chunk_id → 実体・段・起点)と、
     # 同じ起点での計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -511,11 +526,15 @@ class AnswerEngine:
                 "max_chunks": self._settings.rag_entity_expansion_max_chunks,
                 "chunks": list(state.entity_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
             }
-        if state.reference_expansions:
+        if state.reference_expansions or any(
+            search.get("sources") for search in state.reference_sources
+        ):
             outcome.diagnostics["reference_expansion"] = {
                 "added_count": len(state.reference_expansions),
                 "max_chunks": self._settings.rag_reference_expansion_max_chunks,
                 "chunks": list(state.reference_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
+                # 検索ごとの、参照を持つ候補の統合の順位と辿った結果・辿らなかった理由(#1549)。
+                "searches": list(state.reference_sources),
             }
         if state.auto_field_conditions:
             outcome.diagnostics["auto_field_filter"] = {
@@ -794,6 +813,10 @@ class AnswerEngine:
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
         ranked = sorted(fused, key=lambda chunk_id: -fused[chunk_id])[:candidate_limit]
         anchors = [state.chunks[chunk_id] for chunk_id in ranked]
+        for rank, chunk_id in enumerate(ranked, start=1):
+            known = state.fused_ranks.get(chunk_id)
+            if known is None or rank < known[0]:
+                state.fused_ranks[chunk_id] = (rank, fused[chunk_id])
         siblings = await self._oracle.context_group_siblings(
             anchors, max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks)
         )
@@ -802,6 +825,7 @@ class AnswerEngine:
         # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
         # 参照先が起点より下位の候補・前後の文脈(siblings)にあるときも、起点の直後へ移す(#1400。
         # 前後の文脈は rerank にかからず、下位の候補は文脈に入らないため)。上位の起点はそのまま。
+        # 起点は統合の上位 5 件と、その外で回答の文脈に入りうる上位(top_k)の参照を持つ候補(#1549)。
         source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
         references = (
             await self._reference_expansion(
@@ -810,6 +834,7 @@ class AnswerEngine:
                 anchors,
                 existing=source_ids,
                 question=(queries[0], embeddings[0]) if embeddings else None,
+                scores=fused,
             )
             if expand_references
             else {}
@@ -1053,8 +1078,16 @@ class AnswerEngine:
         *,
         existing: set[str],
         question: tuple[str, list[float]] | None = None,
+        scores: Mapping[str, float] | None = None,
     ) -> dict[str, list[RetrievedChunk]]:
         """上位の候補が本文で参照する節の chunk を、上限まで集める(起点の chunk_id ごと。#1280)。
+
+        起点は統合(RRF)の上位 ``_REFERENCE_SOURCE_ANCHORS`` 件と、その外で回答の文脈に入りうる上位
+        (``request.top_k``。``_REFERENCE_EXTENDED_ANCHORS`` 件まで)の参照を持つ候補(#1549)。上位の
+        起点から順に辿り、上位 5 件の外の起点では試す参照先を ``_REFERENCE_EXTENDED_TARGETS``
+        件までに抑える。他の起点の参照先として足した候補は起点にしない(参照は 1 段)。起点として
+        参照先を足した候補は、他の起点の参照先として移さない(移すと、その候補の参照先が根拠に
+        並ばない)。
 
         ``existing`` の chunk(上位の起点)は足さない。それより下位の候補・前後の文脈にある参照先は
         足す(呼び出し側が起点の直後へ移す。#1400)。
@@ -1069,6 +1102,9 @@ class AnswerEngine:
         文書名だけの参照(「時間帯は定期保守計画で確かめます」。#1400)は、参照先の文書の中を
         ``question``(検索文とその埋め込み)で検索し、rerank で質問に関連の高い chunk を選ぶ
         (``_document_reference_chunks``)。
+
+        参照を持つ候補の統合の順位と、辿った結果・辿らなかった理由は ``state.reference_sources`` に
+        残す(診断。#1549)。``scores`` は統合の点(chunk_id → 点)。
         """
         if not self._settings.rag_reference_expansion_enabled:
             return {}
@@ -1078,29 +1114,74 @@ class AnswerEngine:
             for key, value in request.filters.items()
             if key in _REFERENCE_SCOPE_FILTER_KEYS and value.strip()
         }
+        limit = max(_REFERENCE_SOURCE_ANCHORS, min(int(request.top_k), _REFERENCE_EXTENDED_ANCHORS))
         seen = set(existing)
         added: dict[str, list[RetrievedChunk]] = {}
+        promoted: set[str] = set()
         count = 0
-        for anchor in anchors[:_REFERENCE_SOURCE_ANCHORS]:
+        extended_targets = 0
+        sources: list[dict[str, object]] = []
+        record: dict[str, object] = {
+            "candidates": len(anchors),
+            "top_sources": _REFERENCE_SOURCE_ANCHORS,
+            "source_limit": limit,
+            "added_count": 0,
+            "sources": sources,
+        }
+        if len(state.reference_sources) < _REFERENCE_DIAGNOSTICS_SEARCHES:
+            state.reference_sources.append(record)
+        for position, anchor in enumerate(anchors, start=1):
+            if position > limit or count >= budget:
+                # 起点の外・上限の後の参照を持つ候補(取込で解決した印のあるものだけ。DB は
+                # 読まない)。
+                stored = reference_targets(anchor.metadata)
+                if stored and len(sources) < _REFERENCE_DIAGNOSTICS_LIMIT:
+                    outcome = "outside_sources" if position > limit else "budget"
+                    sources.append(
+                        _reference_source_entry(anchor, position, scores, stored, outcome)
+                    )
+                continue
             try:
                 targets = await self._anchor_reference_targets(scope, state, anchor)
             except Exception:  # noqa: BLE001 - 参照先は補助。この候補の参照を辿らずに続ける。
                 logger.warning("reference target resolution failed", exc_info=True)
                 continue
+            if not targets:
+                continue
+            entry = _reference_source_entry(anchor, position, scores, targets, "none")
+            if len(sources) < _REFERENCE_DIAGNOSTICS_LIMIT:
+                sources.append(entry)
+            if anchor.chunk_id in promoted:
+                # 他の起点の参照先として足した候補(参照は 1 段)。
+                entry["outcome"] = "referenced"
+                continue
+            extended = position > _REFERENCE_SOURCE_ANCHORS
+            outcomes: list[str] = []
+            entry["target_outcomes"] = outcomes
             for target in targets:
                 if count >= budget:
-                    return added
+                    outcomes.append("budget")
+                    break
+                if extended and extended_targets >= _REFERENCE_EXTENDED_TARGETS:
+                    outcomes.append("target_limit")
+                    break
+                if extended:
+                    extended_targets += 1
                 try:
                     chunks = await self._reference_target_chunks(
                         scope, state, anchor, target, request=request, question=question
                     )
                 except Exception:  # noqa: BLE001 - 参照先は補助。この参照先を足さずに続ける。
                     logger.warning("reference target load failed", exc_info=True)
+                    outcomes.append("error")
                     continue
-                fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen]
+                fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen | added.keys()]
                 selected = fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]
+                # 足した / 参照先がすでに上位の起点にある / 参照先が見つからない。
+                outcomes.append("added" if selected else ("present" if chunks else "not_found"))
                 for rank, chunk in enumerate(selected, start=1):
                     seen.add(chunk.chunk_id)
+                    promoted.add(chunk.chunk_id)
                     # 下位の候補・前後の文脈として読んだ chunk にも、参照の起点の印を付ける。
                     marked = state.chunks.get(chunk.chunk_id, chunk)
                     if REFERENCE_FROM_KEY not in marked.metadata:
@@ -1127,6 +1208,8 @@ class AnswerEngine:
                             "chunk_id": chunk.chunk_id,
                             "document_id": chunk.document_id,
                             "from_chunk_id": anchor.chunk_id,
+                            # 起点の統合の順位(#1549)。
+                            "from_fused_rank": position,
                             "label": target.label,
                             "kind": target.kind,
                             "document_title": target.document_title,
@@ -1139,6 +1222,11 @@ class AnswerEngine:
                         },
                     )
                     count += 1
+            if anchor.chunk_id in added:
+                entry["outcome"] = "added"
+            elif outcomes and outcomes[-1] in {"budget", "target_limit"}:
+                entry["outcome"] = outcomes[-1]
+        record["added_count"] = count
         return added
 
     async def _anchor_reference_targets(
@@ -1903,6 +1991,30 @@ def _first_page_context(chunk: RetrievedChunk, state: _SearchState) -> Mapping[s
     return state.first_page_contexts.get(str(chunk.metadata.get("chunk_set_id") or ""))
 
 
+def _reference_source_entry(
+    anchor: RetrievedChunk,
+    position: int,
+    scores: Mapping[str, float] | None,
+    targets: Sequence[ReferenceTarget],
+    outcome: str,
+) -> dict[str, object]:
+    """交差参照の起点の記録(診断。#1549)。統合の順位・点と、参照の表記・種類・結果。
+
+    ``outcome`` は added(足した)/ none(参照先が見つからない・すでに上位にある)/ referenced
+    (他の起点の参照先として足した)/ budget(上限)/ target_limit(上位 5 件の外で試す参照先の
+    上限)/ outside_sources(起点の外)。
+    """
+    score = (scores or {}).get(anchor.chunk_id)
+    return {
+        "chunk_id": anchor.chunk_id,
+        "file_name": anchor.file_name or "",
+        "fused_rank": position,
+        **({"rrf_score": round(score, 6)} if score is not None else {}),
+        "targets": [{"label": target.label, "kind": target.kind} for target in targets],
+        "outcome": outcome,
+    }
+
+
 def _stored_child(
     chunk: RetrievedChunk,
     *,
@@ -2134,6 +2246,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             if rerank_score is not None and chunk_id not in reranked:
                 position_rank = _int(child.get("rerank_rank"))
                 reranked[chunk_id] = (position_rank if position_rank > 0 else None, rerank_score)
+            fused = state.fused_ranks.get(chunk_id)
             children.append(
                 {
                     "chunk_id": chunk_id,
@@ -2141,6 +2254,13 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                     "reason": str(child.get("context_reason") or ""),
                     "is_model_used": used,
                     "page": child.get("page_start"),
+                    # 回答の検索の統合(RRF。rerank の前)の順位と点(#1549)。検索の候補に無い
+                    # chunk(前後の文脈・参照先として読んだもの)には無い。
+                    **(
+                        {"fused_rank": fused[0], "rrf_score": round(fused[1], 6)}
+                        if fused is not None
+                        else {}
+                    ),
                 }
             )
             rank = _int(child.get("model_usage_rank"), 10_000) if used else 10_000 + position
