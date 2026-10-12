@@ -151,7 +151,9 @@ class DeferredRestoreTests(unittest.TestCase):
         )
 
     def test_crag_restores_deferred_documents_before_rewriting_and_records_it(self):
-        attempt = lambda number, sufficient, **kw: a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
+        def attempt(number, sufficient, **kw):
+            return a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
+
         grades = [attempt(1, False, rewritten_query="登録 別の検索文"), attempt(2, True)]
         with (
             patch.object(a, "build_adb_hybrid_answer_context", return_value=self.selected),

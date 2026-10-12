@@ -117,7 +117,7 @@ class DomainKeywordImpactTests(unittest.TestCase):
         with (
             patch("rag_engine.generation.answering.load_chunk_run_by_id", return_value=None) as direct,
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", side_effect=AssertionError("latest read")),
+            self.assertRaises(AdbHybridSearchUnavailable),
         ):
-            with self.assertRaises(AdbHybridSearchUnavailable):
-                build_adb_hybrid_answer_context("q", "source", ("docling",), self.settings(), pinned_chunk_run_id="abcdef")
+            build_adb_hybrid_answer_context("q", "source", ("docling",), self.settings(), pinned_chunk_run_id="abcdef")
         direct.assert_called_once()

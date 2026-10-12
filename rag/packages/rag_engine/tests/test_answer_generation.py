@@ -10,33 +10,9 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable, HybridSearchResult, StoredChunk
-
-
-def heading(name: str) -> re.Pattern:
-    """実行記録の見出し（「1. 名前」「1.2 名前」、任意で「［LLM n 回 / x 秒］」）に一致し、詳細文の同じ語には一致しない。"""
-    return re.compile(rf"(?m)^ *\d+(?:\.\d+)*\.? {re.escape(name)}(?: ［[^］]*］)?$")
-
-
-def display_offset(display: str, section) -> int:
-    """文字列はそのまま、見出し pattern は先頭一致の位置を返す。無ければ例外で失敗させる。"""
-    if isinstance(section, re.Pattern):
-        match = section.search(display)
-        if match is None:
-            raise AssertionError(f"見出しが見つかりません: {section.pattern}")
-        return match.start()
-    return display.index(section)
-
-
 from grounded_stub import AnswerOutput
 
-from rag_engine.adapters.oci import (
-    CragRetrievalGradeOutput,
-    QueryExpansionOutput,
-    QueryRoutingOutput,
-    RerankTextRank,
-    UsedImageOutput,
-)
+from rag_engine.adapters.oracle.store import AdbHybridSearchUnavailable, HybridSearchResult, StoredChunk
 from rag_engine.chunking import ChunkingConfig, create_chunk_run
 from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
@@ -88,8 +64,30 @@ from rag_engine.generation.answering import (
     validate_run_id,
 )
 from rag_engine.knowledge.classification import classification_filter_from_values
+from rag_engine.models.llm import (
+    CragRetrievalGradeOutput,
+    QueryExpansionOutput,
+    QueryRoutingOutput,
+    RerankTextRank,
+    UsedImageOutput,
+)
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
+
+
+def heading(name: str) -> re.Pattern:
+    """実行記録の見出し（「1. 名前」「1.2 名前」、任意で「［LLM n 回 / x 秒］」）に一致し、詳細文の同じ語には一致しない。"""
+    return re.compile(rf"(?m)^ *\d+(?:\.\d+)*\.? {re.escape(name)}(?: ［[^］]*］)?$")
+
+
+def display_offset(display: str, section) -> int:
+    """文字列はそのまま、見出し pattern は先頭一致の位置を返す。無ければ例外で失敗させる。"""
+    if isinstance(section, re.Pattern):
+        match = section.search(display)
+        if match is None:
+            raise AssertionError(f"見出しが見つかりません: {section.pattern}")
+        return match.start()
+    return display.index(section)
 
 
 class AnswerGenerationTests(unittest.TestCase):
@@ -170,8 +168,11 @@ class AnswerGenerationTests(unittest.TestCase):
         from rag_engine.generation import grounded
 
         context = _answer_context([_chunk_record("c1", "child", 1, "p1", "文書の操作手順")])
-        for mode, parser in (("text_only", "parse_text_response"), ("vision_attachments", "parse_multimodal_response")):
-            multimodal = lambda system, prompt, paths, settings, schema, **kw: echo_model(system, prompt, settings, schema, **kw)
+        for mode, _parser in (("text_only", "parse_text_response"), ("vision_attachments", "parse_multimodal_response")):
+
+            def multimodal(system, prompt, paths, settings, schema, **kw):
+                return echo_model(system, prompt, settings, schema, **kw)
+
             with (
                 self.subTest(mode=mode),
                 patch(
@@ -1183,7 +1184,10 @@ class AnswerGenerationTests(unittest.TestCase):
         # 契約の原質問の写しと監査用項目はプロンプトに入れない (#917)。
         from rag_engine.generation.query_prompts import _build_query_expansion_prompt, _build_query_routing_prompt
 
-        question = "地区別売上集計表を出力したところ、前月の取消済み伝票が集計に含まれてしまいます。除外する設定はありますか。また、CSV で出力する方法も教えてください。"
+        question = (
+            "地区別売上集計表を出力したところ、前月の取消済み伝票が集計に含まれてしまいます。"
+            "除外する設定はありますか。また、CSV で出力する方法も教えてください。"
+        )
         for prompt in (_build_query_routing_prompt(question), _build_query_expansion_prompt(question, RAG_FUSION_STRATEGY)):
             self.assertEqual(prompt.count(question), 1)
             for key in ("user_assertions", "request_units", "required_aspects", "intent_parts", "original_question", "hypotheses"):
@@ -1270,12 +1274,6 @@ class AnswerGenerationTests(unittest.TestCase):
             effective_strategy=STEP_BACK_PROMPTING_STRATEGY,
             routing_data_required=True,
             routing_data_items=("登録履歴",),
-        )
-        first = _answer_output(answer="規則では条件 A で生成します。").model_copy(
-            update={
-                "external_data_required": True,
-                "external_data_items": ["登録履歴", "送信年月"],
-            }
         )
         final = _answer_output(answer="提示された実データでは条件 A に該当します。").model_copy(
             update={

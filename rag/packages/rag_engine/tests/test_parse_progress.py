@@ -57,9 +57,9 @@ class ParseProgressTests(unittest.TestCase):
             with (
                 patch.object(adapter, "_converter", return_value=converter),
                 patch("rag_engine.adapters.parsers.docling_adapter._prepare_docling_env"),
+                self.assertRaisesRegex(RuntimeError, "conversion failed"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "conversion failed"):
-                    adapter.analyze(context)
+                adapter.analyze(context)
             self.assertIsNone(ACTIVE_PAGE_PROGRESS.get())
             state = json.loads((Path(directory) / "progress.json").read_text())
             self.assertEqual(state["stage"], "docling_failed")
@@ -78,11 +78,12 @@ class ParseProgressTests(unittest.TestCase):
                 )
                 adapter = DoclingAdapter(context.settings)
 
+                # converter の side_effect として同じ反復の中でだけ呼ぶため、failed_page の遅延束縛は問題にならない。
                 def convert(*_args, **_kwargs):
-                    ACTIVE_PAGE_PROGRESS.get().observe([item(page, failed=page == failed_page) for page in (1, 2, 3)])
+                    ACTIVE_PAGE_PROGRESS.get().observe([item(page, failed=page == failed_page) for page in (1, 2, 3)])  # noqa: B023
                     return SimpleNamespace(
                         status=SimpleNamespace(value="partial_success"),
-                        errors=[SimpleNamespace(error_message=f"page {failed_page} failed")],
+                        errors=[SimpleNamespace(error_message=f"page {failed_page} failed")],  # noqa: B023
                         document=SimpleNamespace(export_to_dict=lambda: {}, tables=[]),
                     )
 

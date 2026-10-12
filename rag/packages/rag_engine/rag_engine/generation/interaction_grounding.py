@@ -65,13 +65,17 @@ def interaction_binding_error(
     aliases = re.findall(r"「([^」]{1,30})」\s*\(\s*「?([^」)]{1,30})」?\s*\)", value)
     aliases += re.findall(r"(" + _LABEL + r")\((" + _LABEL + r")\)(?:ボタン|欄|項目)", value)
     for a, b in aliases:
-        if a != b and a in native and b in native:
-            if not any(
+        if (
+            a != b
+            and a in native
+            and b in native
+            and not any(
                 a in line
                 and b in line
                 and re.search(r"同じ|同一|別名|とも呼|を指す", line)
                 and not re.search(r"異なる|別の|ではない", line)
                 for line in re.split(r"[。\n]", native)
-            ):
-                return "別項目を同義のラベルとする原文対応が未確認"
+            )
+        ):
+            return "別項目を同義のラベルとする原文対応が未確認"
     return ""

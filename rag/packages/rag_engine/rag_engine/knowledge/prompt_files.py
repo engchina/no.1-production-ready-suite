@@ -7,7 +7,7 @@ import re
 import shutil
 import threading
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt

@@ -8,9 +8,12 @@ from rag_engine.generation.execution_record import _execution_step, bind_step_li
 class StepListenerTests(unittest.TestCase):
     def test_listener_receives_nested_steps_in_order(self):
         events = []
-        with bind_step_listener(lambda name, outcome, elapsed: events.append((name, outcome))), _execution_step("回答生成フロー"):
-            with _execution_step("文書検索"):
-                pass
+        with (
+            bind_step_listener(lambda name, outcome, elapsed: events.append((name, outcome))),
+            _execution_step("回答生成フロー"),
+            _execution_step("文書検索"),
+        ):
+            pass
         self.assertEqual(
             events,
             [
@@ -23,9 +26,12 @@ class StepListenerTests(unittest.TestCase):
 
     def test_failed_step_is_reported_as_error_and_still_raises(self):
         events = []
-        with bind_step_listener(lambda name, outcome, elapsed: events.append((name, outcome))), self.assertRaises(ValueError):
-            with _execution_step("文書検索"):
-                raise ValueError("boom")
+        with (
+            bind_step_listener(lambda name, outcome, elapsed: events.append((name, outcome))),
+            self.assertRaises(ValueError),
+            _execution_step("文書検索"),
+        ):
+            raise ValueError("boom")
         self.assertEqual(events, [("文書検索", "started"), ("文書検索", "error")])
 
     def test_listener_failure_does_not_stop_the_step(self):

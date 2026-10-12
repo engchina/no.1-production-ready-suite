@@ -168,7 +168,8 @@ def format_grader_summary(summary: dict[str, Any]) -> str:
         f"| {_fmt(summary['recall'])} ({summary['tp']}/{summary['tp'] + summary['fn']}) | {_fmt(summary['f1'])} "
         f"| {summary['false_refusals']}/{summary['answerable_attempts']} | {summary['false_accepts']}/{summary['unanswerable_attempts']} |",
         "",
-        f"ラベルにあるが提示されなかった候補（absent）: {summary['absent']} / 提示されたがラベルに無い候補（unlabeled）: {summary['unlabeled']}",
+        f"ラベルにあるが提示されなかった候補（absent）: {summary['absent']} / "
+        f"提示されたがラベルに無い候補（unlabeled）: {summary['unlabeled']}",
         "",
         "| id | answerable | ラベル数（relevant） | 評価回数 | 十分 | hit | miss | extra | absent | unlabeled |",
         "|---|---|---|---|---|---|---|---|---|---|",
@@ -232,7 +233,8 @@ def format_review_sheet(labels: dict[str, Any]) -> str:
         for number, candidate in enumerate(question["candidates"], 1):
             excerpt = " ".join(str(candidate.get("excerpt", "")).split())[:120]
             lines.append(
-                f"| {number} | `{candidate['chunk_uid']}` | {candidate.get('source', '')} p.{candidate.get('page', '')} {candidate.get('section', '')} "
+                f"| {number} | `{candidate['chunk_uid']}` "
+                f"| {candidate.get('source', '')} p.{candidate.get('page', '')} {candidate.get('section', '')} "
                 f"| {excerpt} | {candidate.get('relevant')} |  | {candidate.get('note', '')} |"
             )
         lines.append("")

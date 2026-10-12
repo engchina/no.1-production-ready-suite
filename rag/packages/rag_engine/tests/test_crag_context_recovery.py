@@ -370,7 +370,10 @@ class PoolHandoffTests(unittest.TestCase):
                 a.AnswerContext([other], other.text, expansion_records=(other,)),
             ]
         )
-        attempt = lambda number, sufficient, **kw: a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
+
+        def attempt(number, sufficient, **kw):
+            return a.CragRetrievalAttempt(number, "q", ("q",), sufficient, **kw)
+
         grades = [
             attempt(1, False, rewritten_query="登録 適用条件 未確定"),
             # 2回目の検索は別の pool を返すが、評価器は1回目の根拠を起点に文脈の追加を選ぶ。
@@ -439,7 +442,10 @@ class RejectedCandidateTests(unittest.TestCase):
     def test_rejected_ids_go_last_in_the_final_fallback_context(self):
         # 評価枠を使い切って取得済みの根拠で回答する場合も、1 回目に不適合とした候補は末尾に置く。
         contexts = iter([self.flat_context, self.flat_context, self.flat_context])
-        attempt = lambda number, **kw: a.CragRetrievalAttempt(number, "q", ("q",), False, **kw)
+
+        def attempt(number, **kw):
+            return a.CragRetrievalAttempt(number, "q", ("q",), False, **kw)
+
         grades = [
             attempt(1, rejected_chunk_ids=("run:x1",), rewritten_query="登録 適用条件"),
             attempt(2, rejected_chunk_ids=("run:x1",)),

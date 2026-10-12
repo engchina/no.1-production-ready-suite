@@ -89,7 +89,7 @@ def _chunk_metadata(
     formula_context = _formula_context(refs)
     padded_sources = list(section_path_sources) + [SECTION_HEADER_HEADING_SOURCE] * (len(section_path) - len(section_path_sources))
     clean_section_path = [item for item in section_path if item]
-    clean_sources = [source for item, source in zip(section_path, padded_sources) if item]
+    clean_sources = [source for item, source in zip(section_path, padded_sources, strict=False) if item]
     retrieval_source = retrieval_text or text
     inquiry_metadata = (
         build_inquiry_chunk_metadata(

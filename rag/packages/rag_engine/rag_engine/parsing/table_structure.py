@@ -442,7 +442,7 @@ def misplaced_cell_repairs(rows: Sequence[Sequence[tuple[str, bool]]], native_li
     for row, cells in enumerate(rows):
         for col, (text, is_own) in enumerate(cells):
             tokens = text.split()
-            if is_own and any(a == b for a, b in zip(tokens, tokens[1:])):
+            if is_own and any(a == b for a, b in zip(tokens, tokens[1:], strict=False)):
                 flagged.add((row, col))
 
     repairs: list[tuple[int, int, str]] = []

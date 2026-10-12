@@ -96,7 +96,8 @@ def _normalize_answer_response(response: AnswerResponse) -> AnswerResponse:
     elif bare_answer in {"i don't know", "i don’t know", "i do not know"}:
         fallback = (
             "The retrieved documents do not provide sufficient evidence to answer this question. "
-            "Consult the relevant operation manual to check the procedure and applicable conditions, or clarify the question or search scope."
+            "Consult the relevant operation manual to check the procedure and applicable conditions, or "
+            "clarify the question or search scope."
         )
         reason = "The retrieved documents contain insufficient evidence for this question."
     elif bare_answer in {"不知道", "我不知道", "不清楚", "无法确定"}:

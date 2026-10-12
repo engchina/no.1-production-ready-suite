@@ -82,7 +82,10 @@ def test_embedded_goal_has_independent_coverage_without_rewriting_parent():
 
 def test_state_suffix_is_not_a_tried_or_requested_action():
     # 「取消済み伝票」はデータの状態。試行操作にも要求操作にもしない。
-    question = "地区別売上集計表を出力したところ、前月の取消済み伝票が集計に含まれてしまいます。除外する設定はありますか。また、CSV で出力する方法も教えてください。"
+    question = (
+        "地区別売上集計表を出力したところ、前月の取消済み伝票が集計に含まれてしまいます。"
+        "除外する設定はありますか。また、CSV で出力する方法も教えてください。"
+    )
     contract = task_contract(question)
     assert contract["intent_parts"]["tried_actions"] == []
     assert contract["requested_actions"] == ["出力"]

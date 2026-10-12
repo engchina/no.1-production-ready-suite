@@ -1,18 +1,17 @@
-"""解析モデルをプロセス内に常駐させる簡易プール。"""
-
-from __future__ import annotations
-
-"""エンジンごとのモデル常駐管理。
+"""解析モデルをプロセス内に常駐させる簡易プール（エンジンごとのモデル常駐管理）。
 
 一度ロードしたモデルは、UI から解放するまでプロセス内（GPU 利用時は VRAM 上）に置いたままにする。
 同じエンジンを繰り返し試すときに毎回ロードし直すのを避けるためのもの。
 """
+
+from __future__ import annotations
 
 import gc
 import importlib.util
 import subprocess
 import threading
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from rag_engine.resources.runtime import current_runtime
@@ -123,9 +122,7 @@ def _drop(key: str) -> bool:
         return False
     _, obj, unloader = entry
     if unloader is not None:
-        try:
+        with suppress(Exception):
             unloader()
-        except Exception:
-            pass
     del obj
     return True

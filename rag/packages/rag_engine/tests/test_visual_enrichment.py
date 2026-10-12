@@ -1,7 +1,6 @@
 """画像の業務情報、所属節、表行との対応を実際の処理経路で保護する。"""
 
 from dataclasses import replace
-from pathlib import Path
 from unittest.mock import patch
 
 import pypdfium2 as pdfium

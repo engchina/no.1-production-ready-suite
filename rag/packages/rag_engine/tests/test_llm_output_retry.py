@@ -5,6 +5,7 @@
 """
 
 import unittest
+from contextlib import suppress
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
@@ -57,11 +58,9 @@ class OutputRetryRecordTest(unittest.TestCase):
                 mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
                 self.assertLogs(oci.__name__, level="INFO") as logs,
                 execution_record._execution_step("生成"),
+                suppress(oci.IncompleteResponse),
             ):
-                try:
-                    oci._openai_parsed([], settings, TextOutput, PROVIDER)
-                except oci.IncompleteResponse:
-                    pass
+                oci._openai_parsed([], settings, TextOutput, PROVIDER)
         finally:
             llm_usage.reset(usage_token)
             execution_record._structured_steps.reset(step_token)

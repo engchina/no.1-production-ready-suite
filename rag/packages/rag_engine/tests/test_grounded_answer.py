@@ -61,7 +61,9 @@ class FakeModel:
 
 
 def run(model, ctx, question=QUESTION):
-    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+    def unused(*a, **k):
+        return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         return synthesize_grounded_answer(question, ctx, get_settings(), image_prompt_mode="text_only")
 
@@ -184,7 +186,11 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_quote_joining_numbered_steps_that_skips_a_note_is_matched_step_by_step(self):
         """手順番号で区切った引用が間の ※ 注記を飛ばしていても、各手順が原文に読み順どおりあれば受理する (#678)。"""
-        text = "①営業所を選択します。\n※営業所を選択しても、納品先一覧が空の場合は、変更は不要です。\n②納品先一覧に登録済みの納品先が表示されるので、選択します。\n③納品先名を変更します。\n④実行ボタンを押します。"
+        text = (
+            "①営業所を選択します。\n※営業所を選択しても、納品先一覧が空の場合は、変更は不要です。"
+            "\n②納品先一覧に登録済みの納品先が表示されるので、選択します。\n③納品先名を変更します。"
+            "\n④実行ボタンを押します。"
+        )
         span = {"evidence_id": "E1", "source_id": "uid-a", "start": 0, "end": len(text), "text": text}
         quote = (
             "①営業所を選択します。②納品先一覧に登録済みの納品先が表示されるので、選択します。③納品先名を変更します。④実行ボタンを押します。"
@@ -193,7 +199,8 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(resolved["evidence_id"], "E1")
         self.assertEqual(
             matched,
-            "①営業所を選択します。 … ②納品先一覧に登録済みの納品先が表示されるので、選択します。 … ③納品先名を変更します。 … ④実行ボタンを押します。",
+            "①営業所を選択します。 … ②納品先一覧に登録済みの納品先が表示されるので、選択します。 … "
+            "③納品先名を変更します。 … ④実行ボタンを押します。",
         )
         # 順序が違う引用と、原文にない手順を含む引用は落とす。
         self.assertIsNone(
@@ -958,7 +965,10 @@ class GroundedAnswerTest(unittest.TestCase):
             [draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。"))],
             [audit((0, "supported", "matched", ""))],
         )
-        unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
         with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
             synthesize_grounded_answer(
                 QUESTION, ctx, get_settings(), image_prompt_mode="text_only", known_gaps=("procedure", "applicability", "procedure")
@@ -1108,7 +1118,10 @@ class GroundedAnswerTest(unittest.TestCase):
             tempfile.NamedTemporaryFile(suffix=".png") as image,
             patch("rag_engine.generation.answering.answer_image_evidence", return_value=[{"image_id": "img1", "prompt_path": image.name}]),
         ):
-            unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+            def unused(*a, **k):
+                return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
             with bind_dependencies(AnswerDependencies(unused, unused, text_model, vision, unused)):
                 settings = get_settings(
                     environ={
@@ -1324,7 +1337,10 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(audited["items"][0]["function_limits"], [limit])  # 別機能の文は含めない
 
     def test_audit_sees_the_body_of_the_same_function(self):
-        """監査には同じ機能の本文（隣の span の手順）を渡し、別機能の本文は渡さない (#706)。生成説明の除外は function_texts の既存テストで固定。"""
+        """監査には同じ機能の本文（隣の span の手順）を渡し、別機能の本文は渡さない (#706)。
+
+        生成説明の除外は function_texts の既存テストで固定。
+        """
         intro = "営業所の取引先名を変更します。"
         steps = "①取引先名、略称、カナ名など変わる箇所を変更します。\n②実行ボタンを押します。"
         other = "納品先名を変更します。"
@@ -1450,7 +1466,7 @@ class GroundedAnswerTest(unittest.TestCase):
     def test_requests_the_audit_marks_missing_are_shown_in_the_answer_text(self):
         """監査が missing とした要求は本文に出す。insufficient_reason だけでは利用者に見えない (#622)。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
-        eid = ids(ctx)[LIST_TEXT]
+        self.assertIn(LIST_TEXT, ids(ctx))
         reason = "No item addresses the impact on past records"  # 監査の reason は言語が揺れる
         question = "明細一覧表を出力する手順を教えてください。過去の記録の表示に影響はあるか。"
         by_text = ids(ctx, question)
@@ -1515,11 +1531,17 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertIn(plain, run(model, ctx, question).response.answer_text)
 
     def test_route_heading_terms_and_field_label_do_not_downgrade(self):
-        steps = "①「拠点倉庫名」欄に、新しい拠点倉庫の名称を入力します。\n②実行ボタンを押します。\n※実行ボタンを押すと、以後に出力する伝票の拠点倉庫名がすべて新しい名称になります。"
+        steps = (
+            "①「拠点倉庫名」欄に、新しい拠点倉庫の名称を入力します。\n②実行ボタンを押します。"
+            "\n※実行ボタンを押すと、以後に出力する伝票の拠点倉庫名がすべて新しい名称になります。"
+        )
         ctx = context(record(0, steps, "〔マスタ管理⇒マスタ管理2タブ⇒倉庫マスタ登録〕"))
         question = "倉庫を移転したので、拠点名を変更する方法を教えてほしい。"
         eid = ids(ctx, question)[steps]
-        text = "倉庫マスタ登録画面（マスタ管理 ⇒ マスタ管理2タブ ⇒ 倉庫マスタ登録）を開き、【拠点倉庫名】欄に新しい名称を入力し、実行ボタンを押して変更を確定します。"
+        text = (
+            "倉庫マスタ登録画面（マスタ管理 ⇒ マスタ管理2タブ ⇒ 倉庫マスタ登録）を開き、【拠点倉庫名】"
+            "欄に新しい名称を入力し、実行ボタンを押して変更を確定します。"
+        )
         model = FakeModel([draft(item(eid, text, steps))], [audit((0, "supported", "matched", ""))])
         result = run(model, ctx, question).response
         self.assertIn("・" + text, result.answer_text)  # 「2」「登録」は見出し由来、【…】欄は欄名
@@ -1727,7 +1749,10 @@ class ScreenKeyBindingTest(unittest.TestCase):
 class ObjectSubstitutionGuardTest(unittest.TestCase):
     """質問が名指しした帳票が根拠になく、同種の別帳票の手順で答える強行回答を止める (#642)。"""
 
-    STEPS = "①顧客名簿を選び、出力条件を指定します。\n②出力形式でファイルを選び、参照ボタンで保存先を指定します。\n③実行ボタンを押してＣＳＶファイルを作成します。"
+    STEPS = (
+        "①顧客名簿を選び、出力条件を指定します。\n②出力形式でファイルを選び、"
+        "参照ボタンで保存先を指定します。\n③実行ボタンを押してＣＳＶファイルを作成します。"
+    )
     FUNCTION = "[ 画面：販売管理⇒帳票出力⇒帳票出力１タブ⇒顧客名簿 ]"
 
     def test_procedure_for_another_report_is_downgraded_and_the_gap_is_stated(self):
@@ -1791,7 +1816,10 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
 
     def test_procedure_for_a_different_error_is_downgraded_when_the_asked_error_is_absent(self):
         # 質問のエラー文が根拠になく、item の機能ユニットが別のエラー（013）の手順なら適用扱いにしない (#686)。
-        steps = "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」\n①仕入先登録画面で仕入先コードを入力します。\n②確認ボタンを押します。"
+        steps = (
+            "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」"
+            "\n①仕入先登録画面で仕入先コードを入力します。\n②確認ボタンを押します。"
+        )
         ctx = context(record(0, steps, "（１）仕入業務 ４．仕入内容の確認"))
         question = "入荷検品チェックリストで仕入先コードが登録済みの仕入先ではないのエラーが出ている。どうすればよいか。"
         eid = ids(ctx, question)[steps]
@@ -1806,7 +1834,10 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
     def test_rule_for_a_different_error_is_downgraded_and_the_gap_names_the_report(self):
         # 質問のエラー文が根拠に無いとき、別エラー（013）の原因説明（rule）は「確認できる内容」に出さず、gap には
         # 質問が挙げた帳票名とエラー文の両方を書く (#993)。
-        steps = "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」\n仕入先マスタに仕入先コードが登録されていない場合に出力されます。"
+        steps = (
+            "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」"
+            "\n仕入先マスタに仕入先コードが登録されていない場合に出力されます。"
+        )
         ctx = context(record(0, steps, "（１）仕入業務 ４．仕入内容の確認"))
         question = "入荷検品チェックリストで仕入先コードが登録済みの仕入先ではないのエラーが出ている。どうすればよいか。"
         eid = ids(ctx, question)[steps]
@@ -1897,7 +1928,10 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
 class SameQuoteDedupeTest(unittest.TestCase):
     """本文と画像の生成説明の両方にある同じ原文を引用した同文の item は 1 件にし、本文の根拠を残す (#644)。"""
 
-    NOTE = "※新様式への切替について、切替日を過ぎると'旧様式残あり'ボタンが表示されます。ボタンを押すとポップアップ画面で旧様式のままの伝票の一覧を確認できます。"
+    NOTE = (
+        "※新様式への切替について、切替日を過ぎると'旧様式残あり'ボタンが表示されます。"
+        "ボタンを押すとポップアップ画面で旧様式のままの伝票の一覧を確認できます。"
+    )
     QUESTION = "メイン画面に旧様式残ありの表示があるがこれは何か。"
 
     def setUp(self):
@@ -2001,7 +2035,6 @@ class CarryOverWithdrawalTest(unittest.TestCase):
             (0, "supported", "matched", ""), (1, "supported", "not_applicable", ""), requests=[("Q1", "addressed"), ("Q2", "missing")]
         )
         third = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])
-        model = FakeModel([self.both, self.only_a, self.only_a], [self.first, second, third])
         spans = _grounded_spans(QUESTION, self.ctx, (), None)
         rounds = []
         for draft_value, audit_value in ((self.both, self.first), (self.only_a, second), (self.only_a, third)):
@@ -2662,10 +2695,14 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
     def test_nearly_verbatim_quote_is_bound_to_the_original_text_of_a_single_span(self):
         """助詞 1 文字違い・2 文の連結の引用は、同じ span の原文範囲に結び付け、原文の文言で表示する (#711)。"""
         text = (
-            "回答用本文: 出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、地区を選択して倉庫番号を入力して検索する。"
+            "回答用本文: 出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、"
+            "地区を選択して倉庫番号を入力して検索する。"
             "本社倉庫の場合は略称を空ける。メニュー経路はマスタ管理⇒マスタ管理 1 ⇒出荷倉庫登録。"
         )
-        quote = "出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、地区を選択し倉庫番号を入力して検索する。メニュー：マスタ管理⇒マスタ管理 1 ⇒出荷倉庫登録"
+        quote = (
+            "出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、"
+            "地区を選択し倉庫番号を入力して検索する。メニュー：マスタ管理⇒マスタ管理 1 ⇒出荷倉庫登録"
+        )
         span = {"evidence_id": "E1", "label": "E1", "text": text, "source_id": "s1", "start": 0, "end": len(text)}
         other = {
             "evidence_id": "E2",
@@ -2682,7 +2719,9 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         self.assertIs(resolved, span)
         self.assertEqual(
             matched,
-            "出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、地区を選択して倉庫番号を入力して検索する。 … メニュー経路はマスタ管理⇒マスタ管理 1 ⇒出荷倉庫登録。",
+            "出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、"
+            "地区を選択して倉庫番号を入力して検索する。 … メニュー経路はマスタ管理⇒マスタ管理 1 "
+            "⇒出荷倉庫登録。",
         )
         self.assertEqual(match["kind"], "fuzzy")
         # 8 割程度しか似ていない言い換えは受け入れない
@@ -2751,7 +2790,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         """引用の結び付けは段階的にする (#716)。id が指す span は 0.8、それ以外は 0.9、生成説明は 0.85。
         内容語（漢字・カタカナ・英数字）を引用側だけが持つ差は許さず、句読点・記号だけの差は完全一致扱い。"""
         text = (
-            "回答用本文: 出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、地区を選択して倉庫番号を入力して検索する。"
+            "回答用本文: 出荷倉庫登録画面では、倉庫欄の横にある虫眼鏡アイコンを押して倉庫検索画面を開き、"
+            "地区を選択して倉庫番号を入力して検索する。"
             "本社倉庫の場合は略称を空ける。"
         )
         span = {"evidence_id": "E1", "label": "E1", "text": text, "source_id": "s1", "start": 0, "end": len(text)}

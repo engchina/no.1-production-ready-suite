@@ -72,9 +72,11 @@ class ChunkEvalTests(TestCase):
 
     def test_unannotated_cases_fail_before_network_calls(self):
         _, variants = audit_variants([payload()], engines=["docling"], sizes=[700])
-        with patch("rag_engine.evaluation.chunk_eval.embed_query") as query:
-            with self.assertRaisesRegex(ValueError, "reviewed expected_evidence"):
-                evaluate_cohere_variants(variants, [{"case_id": "x", "question": "q"}], get_settings())
+        with (
+            patch("rag_engine.evaluation.chunk_eval.embed_query") as query,
+            self.assertRaisesRegex(ValueError, "reviewed expected_evidence"),
+        ):
+            evaluate_cohere_variants(variants, [{"case_id": "x", "question": "q"}], get_settings())
         query.assert_not_called()
 
     def test_local_token_counter_disables_tokenizer_truncation_and_padding(self):

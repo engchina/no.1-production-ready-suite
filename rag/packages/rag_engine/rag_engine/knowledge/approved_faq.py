@@ -13,7 +13,7 @@ import unicodedata
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -363,10 +363,7 @@ def delete_approved_faq_records(
     削除時のみ path の JSON をバックアップして保存し、件数と保存結果を返します。
     読込・保存エラーは呼び出し元へ伝播します。now は保存日時の指定に使います。
     """
-    if isinstance(selectors, str):
-        selector_values = parse_approved_faq_delete_text(selectors)
-    else:
-        selector_values = _clean_selectors(selectors)
+    selector_values = parse_approved_faq_delete_text(selectors) if isinstance(selectors, str) else _clean_selectors(selectors)
     with _approved_faq_write_lock(path):
         return _delete_approved_faq_records_locked(path, selector_values, now)
 
@@ -683,7 +680,7 @@ def build_approved_faq_semantic_index(
     questions = [question for _, question in question_items]
     embeddings = embedder(questions, settings) if questions else []
     items: list[ApprovedFaqSemanticItem] = []
-    for (record_id, question), embedding in zip(question_items, embeddings):
+    for (record_id, question), embedding in zip(question_items, embeddings, strict=False):
         embedding_tuple = _embedding_tuple(embedding, normalized_dimensions)
         if embedding_tuple is None:
             continue
@@ -1099,7 +1096,7 @@ def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     right_norm = math.sqrt(sum(item * item for item in right))
     if left_norm <= 0.0 or right_norm <= 0.0:
         return 0.0
-    score = sum(left_item * right_item for left_item, right_item in zip(left, right)) / (left_norm * right_norm)
+    score = sum(left_item * right_item for left_item, right_item in zip(left, right, strict=False)) / (left_norm * right_norm)
     return max(-1.0, min(1.0, score))
 
 

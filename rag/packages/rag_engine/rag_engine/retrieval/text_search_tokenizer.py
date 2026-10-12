@@ -764,9 +764,7 @@ def _keep_token(token: str, stopwords: frozenset[str]) -> bool:
         return True
     if token in stopwords:
         return False
-    if len(token) == 1 and _KANA_ONLY.fullmatch(token):
-        return False
-    return True
+    return not (len(token) == 1 and _KANA_ONLY.fullmatch(token))
 
 
 def _latin_variants(token: str, config: TextSearchTokenizerConfig) -> list[str]:

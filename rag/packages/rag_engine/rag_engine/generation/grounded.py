@@ -465,7 +465,7 @@ def _trusted_section_path(span: dict) -> list[str]:
     sources = [str(s) for s in span.get("section_path_sources") or ()]
     if len(sources) != len(path):
         return path
-    return [heading for heading, source in zip(path, sources) if source in _TRUSTED_HEADING_SOURCES]
+    return [heading for heading, source in zip(path, sources, strict=False) if source in _TRUSTED_HEADING_SOURCES]
 
 
 # 番号付きの見出し（「(2)帳票印字設定」「(D)請求処理」）で始まるラベル。正規化・空白除去した形で見る。
@@ -783,8 +783,8 @@ def _screen_example_values(span: dict) -> set[str]:
         texts.append(span.get("text", ""))
     values: set[str] = set()
     for text in texts:
-        for field in _SCREEN_VALUE_FIELD.findall(str(text or "")):
-            for pair in re.split(r"\s*/\s*", field):
+        for value_field in _SCREEN_VALUE_FIELD.findall(str(text or "")):
+            for pair in re.split(r"\s*/\s*", value_field):
                 value = _function_label_key(pair.split("=", 1)[-1])
                 if (
                     len(value) >= 2
@@ -872,7 +872,7 @@ def _canonical(value: str) -> tuple[str, list[int]]:
     folded, folded_positions = fold_text_with_positions(value)
     chars: list[str] = []
     positions: list[int] = []
-    for char, index in zip(folded, folded_positions):
+    for char, index in zip(folded, folded_positions, strict=False):
         if index in masked or char.isspace() or char in _IGNORED_QUOTE_CHARS:
             continue
         chars.append(char)
@@ -1262,7 +1262,7 @@ def _mentions_term(term: str, corpus: str) -> bool:
     if needle in corpus:
         return True
     gap = len(needle) + 2
-    pattern = ("." + "{0,%d}?" % gap).join(re.escape(c) for c in needle)
+    pattern = (".{0," + str(gap) + "}?").join(re.escape(c) for c in needle)
     return any(len(m.group()) <= len(needle) * 2 + 2 for m in re.finditer(pattern, corpus))
 
 
@@ -2075,8 +2075,8 @@ _NAME_VALUE_PAIR = re.compile(r"[^\s/=「」『』]+\s*=\s*[^\s/」』]+")
 def _screen_description_values(text: str) -> set[str]:
     """画面説明の値欄とフォームの項目に並ぶ値（表示の揺れを除くため 2 文字以上）。"""
     values: set[str] = set()
-    for field in _SCREEN_VALUE_FIELD.findall(str(text or "")):
-        for pair in re.split(r"\s*/\s*", field):
+    for value_field in _SCREEN_VALUE_FIELD.findall(str(text or "")):
+        for pair in re.split(r"\s*/\s*", value_field):
             value = pair.split("=", 1)[-1].strip()
             if len(value) >= 2:
                 values.add(value)
@@ -2506,7 +2506,7 @@ def format_functions(spans: Sequence[dict]) -> str:
     for span in spans:
         groups.setdefault(span["function"], []).append(span)
     blocks = []
-    for number, (key, members) in enumerate(groups.items(), 1):
+    for number, members in enumerate(groups.values(), 1):
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。

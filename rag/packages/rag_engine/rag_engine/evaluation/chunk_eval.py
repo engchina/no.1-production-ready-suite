@@ -146,7 +146,7 @@ def evaluate_cohere_variants(
         if len(vectors) != len(children):
             raise ValueError("Embedding count does not match candidate count.")
         rows = []
-        for case, query in zip(cases, queries):
+        for case, query in zip(cases, queries, strict=False):
             started = time.perf_counter()
             order = sorted(range(len(children)), key=lambda i: _cosine(query, vectors[i]), reverse=True)
             candidates = [children[i] for i in order[:candidate_k]]
@@ -214,7 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_ids = list(dict.fromkeys(validate_run_id(run_id) for run_id in args.run_id))
     sources = [Path(args.output_dir) / run_id / "viewer-data.json" for run_id in run_ids]
-    payloads = [dict(json.loads(path.read_text(encoding="utf-8")), run_id=run_id) for path, run_id in zip(sources, run_ids)]
+    payloads = [dict(json.loads(path.read_text(encoding="utf-8")), run_id=run_id) for path, run_id in zip(sources, run_ids, strict=False)]
     counters = {}
     tokenizer_info = {}
     for name, path in (("embed", args.embed_tokenizer), ("rerank", args.rerank_tokenizer)):
@@ -231,7 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         rerank_counter=counters.get("rerank"),
     )
     report["sources"] = [
-        {"run_id": run_id, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path, run_id in zip(sources, run_ids)
+        {"run_id": run_id, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path, run_id in zip(sources, run_ids, strict=False)
     ]
     report["tokenizers"] = tokenizer_info
     report["token_count_note"] = "Document-only counts; rerank query/protocol overhead is not included."
@@ -326,7 +326,7 @@ def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
     if len(left) != len(right):
         raise ValueError("Query and document embedding dimensions differ.")
     denominator = math.sqrt(sum(x * x for x in left) * sum(x * x for x in right))
-    return sum(x * y for x, y in zip(left, right)) / denominator if denominator else 0.0
+    return sum(x * y for x, y in zip(left, right, strict=False)) / denominator if denominator else 0.0
 
 
 if __name__ == "__main__":

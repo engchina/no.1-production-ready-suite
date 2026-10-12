@@ -6,20 +6,18 @@ import base64
 import json
 import logging
 import mimetypes
-import re
 import threading
 import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel
 
 from rag_engine.config import (
     DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS,
-    OPENAI_RESPONSES_LLM_API_MODE,
     LlmProviderSettings,
     Settings,
     get_llm_provider,
@@ -27,13 +25,9 @@ from rag_engine.config import (
 )
 from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
 from rag_engine.models.llm import (
-    CragRetrievalGradeOutput,
     PictureDescriptionOutput,
-    QueryExpansionOutput,
-    QueryRoutingOutput,
     RerankTextRank,
     TextOutput,
-    UsedImageOutput,
 )
 from rag_engine.parsing.vision_prompt_rules import TABLE_EXTRACTION_INSTRUCTION, refine_image_retrieval_prompt
 from rag_engine.resources.cache import application_cache
@@ -48,7 +42,6 @@ from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_u
 
 VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。JSONだけを返してください。"
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
-StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
 
 EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT = "SEARCH_DOCUMENT"
@@ -236,7 +229,7 @@ def _image_prompt_note(metadata: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def parse_text_response(
+def parse_text_response[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     settings: Settings,
@@ -253,7 +246,7 @@ def parse_text_response(
     return _parse_text_with_retry(system_prompt, prompt, settings, text_format, provider)
 
 
-def parse_image_response(
+def parse_image_response[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_path: Path,
@@ -271,7 +264,7 @@ def parse_image_response(
     return _parse_image_with_retry(system_prompt, prompt, image_path, settings, text_format, provider)
 
 
-def parse_multimodal_response(
+def parse_multimodal_response[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_paths: Sequence[str | Path],
@@ -298,7 +291,7 @@ def parse_multimodal_response(
     return _parse_multimodal_with_retry(system_prompt, prompt, paths, settings, text_format, provider)
 
 
-def _parse_text_with_retry(
+def _parse_text_with_retry[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     settings: Settings,
@@ -314,7 +307,7 @@ def _parse_text_with_retry(
     )
 
 
-def _parse_image_with_retry(
+def _parse_image_with_retry[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_path: Path,
@@ -331,7 +324,7 @@ def _parse_image_with_retry(
     )
 
 
-def _parse_multimodal_with_retry(
+def _parse_multimodal_with_retry[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_paths: Sequence[Path],
@@ -364,7 +357,7 @@ def _llm_transport_retries(settings: Settings) -> int | None:
     return 0
 
 
-def _parse_with_retry(
+def _parse_with_retry[StructuredOutputT: BaseModel](
     operation,
     label: str,
     settings: Settings,
@@ -443,7 +436,7 @@ def _is_invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, ValidationError)
 
 
-def _parse_text_once(
+def _parse_text_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     settings: Settings,
@@ -453,7 +446,7 @@ def _parse_text_once(
     return _parse_openai_text_once(system_prompt, prompt, settings, text_format, provider)
 
 
-def _parse_image_once(
+def _parse_image_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_path: Path,
@@ -464,7 +457,7 @@ def _parse_image_once(
     return _parse_openai_image_once(system_prompt, prompt, image_path, settings, text_format, provider)
 
 
-def _parse_multimodal_once(
+def _parse_multimodal_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_paths: Sequence[Path],
@@ -520,7 +513,7 @@ def deadline_output_budget(budget: int, provider: LlmProviderSettings) -> tuple[
     return (cap, True) if cap < budget else (budget, False)
 
 
-def _openai_parsed(
+def _openai_parsed[StructuredOutputT: BaseModel](
     input_messages: list[dict[str, Any]],
     settings: Settings,
     text_format: type[StructuredOutputT],
@@ -696,7 +689,7 @@ def _log_call(
     )
 
 
-def _parse_openai_text_once(
+def _parse_openai_text_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     settings: Settings,
@@ -714,7 +707,7 @@ def _parse_openai_text_once(
     )
 
 
-def _parse_openai_image_once(
+def _parse_openai_image_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_path: Path,
@@ -739,7 +732,7 @@ def _parse_openai_image_once(
     )
 
 
-def _parse_openai_multimodal_once(
+def _parse_openai_multimodal_once[StructuredOutputT: BaseModel](
     system_prompt: str,
     prompt: str,
     image_paths: Sequence[Path],
@@ -812,7 +805,7 @@ def _validated_llm_provider(
     return provider
 
 
-def _parsed_response(
+def _parsed_response[StructuredOutputT: BaseModel](
     response: Any,
     text_format: type[StructuredOutputT],
     provider: LlmProviderSettings,
@@ -838,7 +831,7 @@ def _parsed_response(
     raise RuntimeError(f"{provider.label} の Responses API 応答に parsed output がありません。")
 
 
-def _coerce_parsed_output(
+def _coerce_parsed_output[StructuredOutputT: BaseModel](
     parsed: Any,
     text_format: type[StructuredOutputT],
     provider: LlmProviderSettings,
@@ -865,8 +858,7 @@ def _response_refusal(response: Any) -> str:
 
 def _iter_response_content(response: Any):
     for output in _value(response, "output", []) or []:
-        for content in _value(output, "content", []) or []:
-            yield content
+        yield from _value(output, "content", []) or []
 
 
 def _value(item: Any, name: str, default: Any = None) -> Any:
@@ -1057,7 +1049,9 @@ def embed_images(
     normalized_texts = [str(text or "") for text in texts] if texts is not None else [""] * len(paths)
     if len(normalized_texts) != len(paths):
         raise RuntimeError(f"Image embedding input mismatch: expected {len(paths)} text payloads, got {len(normalized_texts)}")
-    return [_embed_image_with_retry(path, text, settings, input_type=input_type) for path, text in zip(paths, normalized_texts)]
+    return [
+        _embed_image_with_retry(path, text, settings, input_type=input_type) for path, text in zip(paths, normalized_texts, strict=False)
+    ]
 
 
 def _embed_text_batch_with_retry(

@@ -42,7 +42,8 @@ def test_custom_policy_survives_refinement_and_runtime_rules_are_not_duplicated(
 def test_known_legacy_ocr_and_highlight_rules_are_replaced_without_touching_custom_text():
     original = (
         "独自の赤枠の説明はデータとして保持する。\n"
-        "- 周辺文脈画像に赤枠、ハイライト、選択枠などがある場合、その強調領域が対象Pictureです。強調領域外だけに見える無関係な内容を対象の説明に混ぜない。\n"
+        "- 周辺文脈画像に赤枠、ハイライト、選択枠などがある場合、その強調領域が対象Pictureです。"
+        "強調領域外だけに見える無関係な内容を対象の説明に混ぜない。\n"
         "- `paired_ocr_text` がある場合は読み取り補助として使う。ただしOCR文字列を羅列せず、意味、条件、操作、検索語へ正規化する。"
     )
     result = refine_image_retrieval_prompt(original)

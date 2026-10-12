@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import wraps
@@ -109,10 +109,9 @@ def _notify_step(name: str, outcome: str, elapsed: float) -> None:
     listener = _step_listener.get()
     if listener is None:
         return
-    try:
+    # 進捗の通知は補助。回答の処理を止めない。
+    with suppress(Exception):
         listener(name, outcome, elapsed)
-    except Exception:  # noqa: BLE001 - 進捗の通知は補助。回答の処理を止めない。
-        pass
 
 
 class AnswerExecutionError(RuntimeError):

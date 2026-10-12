@@ -7,7 +7,6 @@ from rag_engine.chunking import CHILD_CHUNK_LEVEL
 from rag_engine.retrieval.inquiry_conditions import (
     CONDITION_PROFILE,
     FILE_DATA_PROFILE,
-    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
     OPERATION_PROFILE,
     build_inquiry_chunk_metadata,
     inquiry_profile_contract_hash,

@@ -449,7 +449,7 @@ def _merge_section_path_sources(children: Sequence[DocumentChunk]) -> list[str]:
     for child in children:
         path = child.metadata.get("section_path") or []
         child_sources = child.metadata.get("section_path_sources") or []
-        for item, source in zip(path, child_sources):
+        for item, source in zip(path, child_sources, strict=False):
             sources.setdefault(item, source)
     return [sources.get(item, SECTION_HEADER_HEADING_SOURCE) for item in merged]
 

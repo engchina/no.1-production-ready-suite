@@ -25,12 +25,15 @@ def _child(index, heading, source="架空仕入業務.pdf"):
 
 
 QUESTION = "月次締め処理を実行した後で、仕入単価を訂正したい。"
-RECORDS = lambda: [
-    _child(1, "（Ｓ）仕入明細訂正"),
-    _child(2, "（２）－（Ｄ）月次締め処理"),
-    _child(3, "（Ｘ）仕入内容確定処理"),
-    _child(4, "（１）－（Ｄ） 月次締め処理", source="架空経理業務.pdf"),
-]
+
+
+def RECORDS():
+    return [
+        _child(1, "（Ｓ）仕入明細訂正"),
+        _child(2, "（２）－（Ｄ）月次締め処理"),
+        _child(3, "（Ｘ）仕入内容確定処理"),
+        _child(4, "（１）－（Ｄ） 月次締め処理", source="架空経理業務.pdf"),
+    ]
 
 
 def test_candidates_under_the_named_screen_heading_come_first_in_rank_order():

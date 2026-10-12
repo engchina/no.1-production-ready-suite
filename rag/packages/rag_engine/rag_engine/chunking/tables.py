@@ -219,7 +219,12 @@ def _attach_unmatched_table_visuals(
         row_index = _int_value(visual.get("row_index"))
         visual_bbox = _bbox_tuple(visual.get("bbox"))
 
-        def distance(group: dict[str, Any]) -> float:
+        # 反復ごとの値は既定値で束縛する（min の key として同じ反復の中でだけ呼ぶ。B023）。
+        def distance(
+            group: dict[str, Any],
+            row_index: int | None = row_index,
+            visual_bbox: tuple[float, float, float, float] | None = visual_bbox,
+        ) -> float:
             row_start = _int_value(group.get("row_start")) or 0
             row_end = _int_value(group.get("row_end")) or 0
             if row_index is not None:

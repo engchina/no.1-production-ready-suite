@@ -180,7 +180,7 @@ def _geometric_column_position(
             return None
         left, right = sorted((float(box["l"]), float(box["r"])))
         bounds.append((left * page.width / page.pdf_width, right * page.width / page.pdf_width))
-    if any(left[1] > right[0] for left, right in zip(bounds, bounds[1:])):
+    if any(left[1] > right[0] for left, right in zip(bounds, bounds[1:], strict=False)):
         return None
     positions = set()
     for region in regions:

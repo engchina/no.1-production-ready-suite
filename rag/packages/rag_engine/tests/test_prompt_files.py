@@ -1,7 +1,7 @@
 """prompt files の挙動を保護するテスト。"""
 
 import unittest
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -222,9 +222,8 @@ class PromptFileTests(unittest.TestCase):
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
             now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
-            with patch.object(Path, "write_text", side_effect=OSError("disk full")):
-                with self.assertRaisesRegex(OSError, "disk full"):
-                    save_prompt_file(prompt_file, "new prompt", now=now)
+            with patch.object(Path, "write_text", side_effect=OSError("disk full")), self.assertRaisesRegex(OSError, "disk full"):
+                save_prompt_file(prompt_file, "new prompt", now=now)
 
             backup_path = root / "backups" / "sample.20260901T123456Z.txt.bak"
             self.assertEqual(path.read_text(encoding="utf-8"), "old prompt")

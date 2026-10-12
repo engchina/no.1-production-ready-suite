@@ -153,9 +153,8 @@ class VisionCheckpointTests(unittest.TestCase):
     def test_atomic_failure_preserves_previous_file(self):
         target = self.root / "checkpoint.json"
         atomic_json(target, {"before": True})
-        with patch("rag_engine.parsing.checkpoints.os.replace", side_effect=OSError("disk failure")):
-            with self.assertRaises(CheckpointError):
-                atomic_json(target, {"after": True})
+        with patch("rag_engine.parsing.checkpoints.os.replace", side_effect=OSError("disk failure")), self.assertRaises(CheckpointError):
+            atomic_json(target, {"after": True})
         self.assertEqual(json.loads(target.read_text()), {"before": True})
 
     def test_checkpoint_failure_stops_without_marking_success(self):
@@ -238,9 +237,11 @@ class VisionCheckpointTests(unittest.TestCase):
             patch("rag_engine.parsing.analysis.model_pool.trim_cuda_cache"),
             patch("rag_engine.parsing.table_vision.missing_table_image_regions", return_value={}),
         ):
-            with patch("rag_engine.parsing.picture_descriptions.describe_picture", side_effect=KeyboardInterrupt):
-                with self.assertRaises(KeyboardInterrupt):
-                    analyze_pdf(source, "1", ["docling"], settings, use_docling_vision=True)
+            with (
+                patch("rag_engine.parsing.picture_descriptions.describe_picture", side_effect=KeyboardInterrupt),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                analyze_pdf(source, "1", ["docling"], settings, use_docling_vision=True)
             self.assertTrue((settings.output_dir / run_id / "base_checkpoint.json").is_file())
             with patch("rag_engine.parsing.picture_descriptions.describe_picture", return_value={"retrieval_text": "ok"}):
                 run = analyze_pdf(source, "1", ["docling"], settings, use_docling_vision=True, resume_run_id=run_id)

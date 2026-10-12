@@ -64,9 +64,7 @@ from rag_engine.generation.answer_models import (
     CRAG_ANSWER_FLOW_LABEL,
     CRAG_MAX_RETRIEVAL_ATTEMPTS,
     DEFAULT_ANSWER_FLOW,
-    DEFAULT_ANSWER_FLOW_LABEL,
     DEFAULT_QUERY_STRATEGY,
-    DEFAULT_QUERY_STRATEGY_LABEL,
     HYDE_LABEL,
     HYDE_STRATEGY,
     QUERY_DECOMPOSITION_LABEL,
@@ -571,8 +569,8 @@ def select_documents(
     # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
     # 参照元の直後へ置いた交差参照の参照先（#1549）も、参照元に従うので後回しにしない。
     reserved = [is_reserved_entity_expansion(r) or is_followed_reference(r) for r in ranked_children]
-    kept = [r for r, keep in zip(ranked_children, reserved) if document_context_key(r) not in excluded or keep]
-    deferred = [r for r, keep in zip(ranked_children, reserved) if document_context_key(r) in excluded and not keep]
+    kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
+    deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
         step.add(
             f"文書の選択: {len(scores)} 文書のうち {len(excluded)} 文書を後回し"
@@ -2030,7 +2028,11 @@ def synthesize_grounded_answer(
                     ]
                 )
             ),
-            reasoning_summary=f"引用照合済みの説明 {current.verified} 件、原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、原文と一致せず除外 {len(current.dropped)} 件。",
+            reasoning_summary=(
+                f"引用照合済みの説明 {current.verified} 件、"
+                f"原文のみ提示 {sum(e.quote_only for e in current.checked)} 件、"
+                f"原文と一致せず除外 {len(current.dropped)} 件。"
+            ),
             insufficient_reason="\n".join(dict.fromkeys([*gaps, *unread, *unanswered])),
             needs_human_review=bool(
                 gaps
@@ -3352,7 +3354,8 @@ def _expand_context_by_sections(
             step.hide()
         added = len(result.context.records) - len(context.records)
         step.result(
-            f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
+            f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました"
+            f"（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
             *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])),
         )
         if extractor.calls:

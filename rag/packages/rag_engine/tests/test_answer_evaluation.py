@@ -18,7 +18,6 @@ from rag_engine.evaluation.answer_eval import (
     EvaluationContractError,
     StandardAnswerScope,
     StandardRequirement,
-    _evaluate_batch,
     _input_bytes,
     _prepare_standard_scope,
     evaluate_answer_payload,
@@ -334,9 +333,11 @@ def test_scope_preparation_never_receives_answer_or_retrieved_evidence():
 
 
 def test_scope_quote_not_in_standard_answer_retries_then_fails():
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope_output()) as parse:
-        with pytest.raises(EvaluationContractError):
-            _prepare_standard_scope({"question": "質問", "standard_answer": "業務別担当者(J)を選択"}, object(), None)
+    with (
+        patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope_output()) as parse,
+        pytest.raises(EvaluationContractError),
+    ):
+        _prepare_standard_scope({"question": "質問", "standard_answer": "業務別担当者(J)を選択"}, object(), None)
     assert parse.call_count == 2
 
 
@@ -436,9 +437,11 @@ def test_partial_coverage_is_not_lost_and_followup_is_still_reported(fixed_scope
 def test_scope_cannot_relabel_every_requirement_as_followup():
     scope = scope_output()
     scope.requirements[0].relevance = "follow_up"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope):
-        with pytest.raises(EvaluationContractError, match="原質問"):
-            _prepare_standard_scope(payload(), object(), None)
+    with (
+        patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=scope),
+        pytest.raises(EvaluationContractError, match="原質問"),
+    ):
+        _prepare_standard_scope(payload(), object(), None)
 
 
 def test_prepared_scope_is_reused_without_another_scope_call(fixed_scope):
@@ -653,7 +656,8 @@ def test_quote_only_line_with_several_sentences_is_one_passage():
 
     text = (
         "結論です。続きです。\n\n資料の記載（今回への適用は未確認）\n\n"
-        "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」\n根拠：nisa.pdf p.1\n1. 「保存を押す。」"
+        "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」"
+        "\n根拠：nisa.pdf p.1\n1. 「保存を押す。」"
     )
     assert [p["text"] for p in answer_passages(text)] == [
         "結論です。",
@@ -671,7 +675,8 @@ def test_verbatim_quote_lines_are_limited_to_the_quote_only_section():
 
     answer = (
         "結論です。\n\n確認できる内容\n\n・「保存」を押すと登録されます。\n・「これはモデルが書いた説明です。」\n根拠：m.pdf p.1\n\n"
-        "資料の記載（今回への適用は未確認）\n\n・「※到着後、約 1 週間で登録完了となります。」\n根拠：m.pdf p.1\n・「自動支払依頼書記入例」\n\n"
+        "資料の記載（今回への適用は未確認）\n\n・「※到着後、約 1 週間で登録完了となります。」"
+        "\n根拠：m.pdf p.1\n・「自動支払依頼書記入例」\n\n"
         "資料からは確認できない点\n\n・「取消」の手順は資料にありません。"
     )
     assert [p["text"] for p in _answer_passages(answer)] == [

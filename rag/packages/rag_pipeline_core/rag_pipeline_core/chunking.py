@@ -125,7 +125,8 @@ BBOX_COORDINATE_MODE_KEYS = (
 )
 BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 # 表の中の画像を Vision で読み取った説明文(#502 / #513)。要素の metadata の key と、表の本文の
-# 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と同じ書式にする。
+# 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と
+# 同じ書式にする。
 TABLE_VISION_TEXT_KEY = "table_vision_text"
 TABLE_VISION_SUPPLEMENT_LABEL = "表内画像の補足:"
 
@@ -1890,7 +1891,8 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         metadata["page_start"] = pages[0]
         metadata["page_end"] = pages[-1]
     if first.content_kind == "figure":
-        # 図の本文の出どころ（根拠の種類。vision=VLM の説明 / ocr=解析の OCR・キャプション。#1282）。
+        # 図の本文の出どころ（根拠の種類。vision=VLM の説明 /
+        # ocr=解析の OCR・キャプション。#1282）。
         metadata[FIGURE_TEXT_SOURCE_KEY] = (
             FIGURE_TEXT_SOURCE_VISION
             if any(span.vision_described for span in group)

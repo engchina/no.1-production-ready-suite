@@ -28,8 +28,8 @@ def resolve_citations(
     """
     if len(evidence) != len(records):
         raise ValueError("evidence and records must correspond one-to-one")
-    keys = [_answer_record_identity_keys(record, item.id) for item, record in zip(evidence, records)]
-    origins = [_citation_origin(item, record) for item, record in zip(evidence, records)]
+    keys = [_answer_record_identity_keys(record, item.id) for item, record in zip(evidence, records, strict=False)]
+    origins = [_citation_origin(item, record) for item, record in zip(evidence, records, strict=False)]
     # 入力位置や引用別名が異なっても、同じ出典は常に先頭の証拠へ解決する。
     representatives = [next((j for j in range(i) if origins[j] == origin), i) for i, origin in enumerate(origins)]
     selected: set[int] = set()

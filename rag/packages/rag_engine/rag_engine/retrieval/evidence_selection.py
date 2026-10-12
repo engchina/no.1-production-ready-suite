@@ -391,7 +391,7 @@ def evidence_spans(
                 continue
             boundaries = [*((a, b) for a, b, _ in located), *native_ranges, *((a, b) for a, b, _, _ in scoped)]
             cuts = sorted({0, len(part), *[edge - offset for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)]})
-            parts.extend(part[a:b] for a, b in zip(cuts, cuts[1:]))
+            parts.extend(part[a:b] for a, b in zip(cuts, cuts[1:], strict=False))
             cursor = offset + len(part)
         cursor = 0
         for part in parts:
@@ -610,7 +610,7 @@ def _mentions(term: str, corpus: str) -> bool:
         return False
     if needle in corpus:
         return True
-    pattern = ("." + "{0,%d}?" % (len(needle) + 2)).join(re.escape(c) for c in needle)
+    pattern = (".{0," + str(len(needle) + 2) + "}?").join(re.escape(c) for c in needle)
     return any(len(m.group()) <= len(needle) * 2 + 2 for m in re.finditer(pattern, corpus))
 
 

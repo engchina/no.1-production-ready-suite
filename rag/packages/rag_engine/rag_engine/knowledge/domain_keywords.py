@@ -9,7 +9,7 @@ import shutil
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,10 +46,7 @@ def load_domain_keywords(output_dir: str | Path) -> list[str]:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return []
 
-    if isinstance(payload, dict):
-        raw_keywords = payload.get("keywords")
-    else:
-        raw_keywords = payload
+    raw_keywords = payload.get("keywords") if isinstance(payload, dict) else payload
     return normalize_domain_keywords(raw_keywords)
 
 

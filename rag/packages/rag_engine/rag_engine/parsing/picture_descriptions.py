@@ -20,10 +20,7 @@ from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_engine.parsing.vision_prompt_rules import (
     MAX_CHART_SERIES_VALUES,
-    MAX_DIAGRAM_NODES,
-    MAX_FORM_FIELDS,
     MAX_TABLE_COLUMNS,
-    MAX_TABLE_ROWS,
     VISION_LIST_FIELD_LIMITS,
     VISION_SENTENCE_GROUP_PREFIX,
 )
@@ -824,7 +821,9 @@ def _vision_metadata(
             {
                 "index": 2,
                 "role": "page_context_crop",
-                "description": "同じページの周辺文脈を含む画像。マゼンタ（明るい紫）の矩形がシステムの付けた対象枠で、画像1と同じ内容を囲む。原文に元からある赤枠や強調色は文書の内容であり対象の指定ではない。表・見出し・近接説明との関係確認に使う。",
+                "description": "同じページの周辺文脈を含む画像。マゼンタ（明るい紫）の矩形がシステムの付けた対象枠で、"
+                "画像1と同じ内容を囲む。原文に元からある赤枠や強調色は文書の内容であり対象の指定ではない。"
+                "表・見出し・近接説明との関係確認に使う。",
                 "path": context_crop_path,
                 "bbox": context_crop.bbox,
             },
@@ -1169,7 +1168,7 @@ def _same_bbox(
 ) -> bool:
     if left is None or right is None:
         return False
-    return all(abs(a - b) <= tolerance for a, b in zip(left, right))
+    return all(abs(a - b) <= tolerance for a, b in zip(left, right, strict=False))
 
 
 def _union_bboxes(bboxes: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:

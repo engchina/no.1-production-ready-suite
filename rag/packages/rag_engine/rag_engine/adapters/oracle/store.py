@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from rag_engine.adapters.oci import (
     EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
@@ -90,7 +90,6 @@ EMBEDDING_MODALITY_IMAGE = "image"
 EmbeddingFunction = Callable[..., list[list[float]]]
 ImageEmbeddingFunction = Callable[..., list[list[float]]]
 QueryEmbeddingFunction = Callable[[str, Settings], list[float]]
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -473,7 +472,7 @@ def _newer_published_chunk_run_id(connection: Any, document_id: str, chunk_run: 
     return published_run_id
 
 
-def _embed_isolating_failures(
+def _embed_isolating_failures[T](
     items: Sequence[T],
     embed: Callable[[Sequence[T]], list[list[float]]],
     *,
@@ -492,7 +491,7 @@ def _embed_isolating_failures(
         return vectors
 
     try:
-        return list(zip(items, checked(items))), []
+        return list(zip(items, checked(items), strict=False)), []
     except Exception as exc:
         if _is_retryable_error(exc):
             raise
@@ -1585,7 +1584,7 @@ def _upsert_embeddings(
             "embedding_text_hash": _retrieval_text_hash(chunk),
             "embedding_vector": array.array("f", [float(value) for value in embedding]),
         }
-        for chunk, embedding in zip(chunks, embeddings)
+        for chunk, embedding in zip(chunks, embeddings, strict=False)
     ]
     if not rows:
         return
@@ -1655,7 +1654,7 @@ def _upsert_image_embeddings(
             "embedding_text_hash": candidate.image_hash,
             "embedding_vector": array.array("f", [float(value) for value in embedding]),
         }
-        for candidate, embedding in zip(candidates, embeddings)
+        for candidate, embedding in zip(candidates, embeddings, strict=False)
     ]
     if not rows:
         return
@@ -2305,7 +2304,11 @@ def _restore_first_page_contexts(connection: Any, chunks: list[StoredChunk], doc
     同じ文書・エンジンの chunk は同じ辞書を共有する。後続の処理はこの値を変更しない。
     """
     missing = sorted(
-        {doc for chunk, doc in zip(chunks, document_ids) if doc and "first_page_context" not in (chunk.metadata.get("document") or {})}
+        {
+            doc
+            for chunk, doc in zip(chunks, document_ids, strict=False)
+            if doc and "first_page_context" not in (chunk.metadata.get("document") or {})
+        }
     )
     contexts: dict[str, dict[str, Any]] = {}
     for start in range(0, len(missing), 500):
@@ -2318,7 +2321,7 @@ def _restore_first_page_contexts(connection: Any, chunks: list[StoredChunk], doc
         for document_id, raw in cursor:
             stored = _json_dict(raw).get("first_page_contexts")
             contexts[str(document_id)] = stored if isinstance(stored, dict) else {}
-    for chunk, document_id in zip(chunks, document_ids):
+    for chunk, document_id in zip(chunks, document_ids, strict=False):
         context = contexts.get(document_id, {}).get(chunk.source_engine_id)
         document = chunk.metadata.get("document")
         if isinstance(context, dict) and isinstance(document, dict) and "first_page_context" not in document:
@@ -2787,7 +2790,7 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
-def _batches(items: Sequence[T], size: int) -> Iterable[Sequence[T]]:
+def _batches[T](items: Sequence[T], size: int) -> Iterable[Sequence[T]]:
     step = max(1, int(size or 1))
     for start in range(0, len(items), step):
         yield items[start : start + step]

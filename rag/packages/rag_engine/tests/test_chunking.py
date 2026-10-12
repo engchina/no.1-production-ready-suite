@@ -214,7 +214,8 @@ class ChunkingTests(unittest.TestCase):
         )
         self.assertEqual(
             _flatten_table_html("概要\n" + table + "\n次の段落。"),
-            "概要 項目 | 改正前 | 改正後 / ① 月間上限額 の引き上げ | 月間上限額は 100 万円です。 | 月間上限額は、 120 万円まで 引き上げられます。 / 次の段落。",
+            "概要 項目 | 改正前 | 改正後 / ① 月間上限額 の引き上げ | 月間上限額は 100 万円です。 | "
+            "月間上限額は、 120 万円まで 引き上げられます。 / 次の段落。",
         )
         # 上限に収まらないときは文・セルの区切りで切り、tag や語の途中では切らない。
         preview = _context_preview("平成 27 年 6 月のお知らせです。" + table, 90)
@@ -496,7 +497,10 @@ class ChunkingTests(unittest.TestCase):
                 ]
             )
         )
-        path = lambda needle: next(c for c in children if needle in c.text).metadata["section_path"]
+
+        def path(needle):
+            return next(c for c in children if needle in c.text).metadata["section_path"]
+
         self.assertEqual(path("登録有無")[-1], "1 ．登録倉庫の確認")
         self.assertNotIn("１．保管委託先の変更", path("登録有無"))
         self.assertEqual(path("廃止を行います")[-1], "2 ．倉庫の廃止登録")
@@ -518,7 +522,10 @@ class ChunkingTests(unittest.TestCase):
                 ]
             )
         )
-        path = lambda needle: next(c for c in children if needle in c.text).metadata["section_path"]
+
+        def path(needle):
+            return next(c for c in children if needle in c.text).metadata["section_path"]
+
         self.assertEqual(path("④実行"), ["Ａシステム管理－ ( ４ ) 利用権限設定", "B 【操作説明】"])
         self.assertEqual(path("①グループ"), path("④実行"))
         self.assertEqual(path("⑤戻る"), ["Ａシステム管理－ ( ４ ) 利用権限設定"])
@@ -1795,7 +1802,6 @@ class ChunkingTests(unittest.TestCase):
         # child は検索文確定後の 1 回、親は生成時の 1 回だけ問い合わせ profile を推定する (#867)。
         from unittest.mock import patch
 
-        from rag_engine import chunking
         from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
 
         payload = _viewer_payload(

@@ -237,7 +237,7 @@ def test_split_keeps_heading_and_sentence_boundaries_with_small_overlap():
     )
     assert all(part.tokens <= limits.part_tokens for part in parts)
     # 隣の分とは前の分の末尾の段落を少し重ねる（重なりの token まで）。
-    overlaps = [set(map(id, a.blocks)) & set(map(id, b.blocks)) for a, b in zip(parts, parts[1:])]
+    overlaps = [set(map(id, a.blocks)) & set(map(id, b.blocks)) for a, b in zip(parts, parts[1:], strict=False)]
     assert all(
         sum(block.tokens for block in parts[i].blocks if id(block) in shared) <= limits.overlap_tokens for i, shared in enumerate(overlaps)
     )
@@ -320,8 +320,10 @@ def test_call_limit_processes_nearest_parts_and_reports_unread_ranges():
     assert [item.reason for item in outcome.unread] == [sections.STOP_EXTRACTION_CALLS] * 2
     lines = [item.gap_line() for item in outcome.unread]
     assert lines == [
-        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.10〜13の範囲は、原文を抜き出す呼び出しの上限に達したため読んでいません。",
-        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.17〜21の範囲は、原文を抜き出す呼び出しの上限に達したため読んでいません。",
+        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.10〜13の範囲は、"
+        "原文を抜き出す呼び出しの上限に達したため読んでいません。",
+        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.17〜21の範囲は、"
+        "原文を抜き出す呼び出しの上限に達したため読んでいません。",
     ]
 
 

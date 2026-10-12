@@ -4,7 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
-from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.generation.answer_envelope import build_envelope, envelope_requests, fallback_envelope
 

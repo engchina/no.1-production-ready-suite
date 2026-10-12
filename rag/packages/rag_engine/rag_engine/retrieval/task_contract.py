@@ -267,7 +267,7 @@ def _with_request_kind(units: list[dict[str, str]]) -> list[dict[str, str]]:
     kinds = ["request" if _REQUEST_MARKER.search(unit["text"]) else "context" for unit in units]
     if "request" not in kinds:
         kinds = ["request"] * len(units)
-    return [{**unit, "kind": kind} for unit, kind in zip(units, kinds)]
+    return [{**unit, "kind": kind} for unit, kind in zip(units, kinds, strict=False)]
 
 
 def _sentence_units(question: str) -> list[dict[str, str]]:
@@ -334,7 +334,10 @@ def request_units(question: str) -> list[dict[str, str]]:
                         id=f"{unit['id']}.M2",
                         request_id=unit["id"],
                         kind="explicit_facet",
-                        text=f"原要求 {unit['id']} の明細候補と最終集計対象との対応。採用・除外条件が未確認なら一致を保証せず、その不足を明示する。原文: {unit['text']}",
+                        text=(
+                            f"原要求 {unit['id']} の明細候補と最終集計対象との対応。"
+                            f"採用・除外条件が未確認なら一致を保証せず、その不足を明示する。原文: {unit['text']}"
+                        ),
                     ),
                 ]
             )

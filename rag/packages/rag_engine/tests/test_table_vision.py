@@ -160,9 +160,10 @@ def test_picture_finishes_before_table_fallback_detection():
             picture = replace(table, id="picture", seq_no=2, category="Picture", raw_type="picture", bbox=region, text="", raw={})
             calls = []
 
+            # describe_picture の side_effect として同じ反復の中でだけ呼ぶため、遅延束縛は問題にならない。
             def describe(_path, metadata, _settings, **kwargs):
-                calls.append(metadata["record_id"])
-                if fail_picture and metadata["record_id"] == "picture":
+                calls.append(metadata["record_id"])  # noqa: B023
+                if fail_picture and metadata["record_id"] == "picture":  # noqa: B023
                     raise RuntimeError("picture unavailable")
                 return {"retrieval_text": "確認ダイアログで登録を実行します。", "visual_kind": "screenshot"}
 

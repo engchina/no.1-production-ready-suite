@@ -121,9 +121,8 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertEqual(trace["matched_rules"][0]["next_review_at"], "2026-10-01T00:00:00Z")
 
     def test_settings_reads_runtime_knowledge_path(self):
-        with patch.dict(os.environ, {"RUNTIME_KNOWLEDGE_PATH": "~/runtime-rules.json"}, clear=True):
-            with patch("rag_engine.config.load_dotenv"):
-                settings = get_settings(dotenv_path=None)
+        with patch.dict(os.environ, {"RUNTIME_KNOWLEDGE_PATH": "~/runtime-rules.json"}, clear=True), patch("rag_engine.config.load_dotenv"):
+            settings = get_settings(dotenv_path=None)
 
         self.assertEqual(settings.runtime_knowledge_path, Path("~/runtime-rules.json").expanduser())
 

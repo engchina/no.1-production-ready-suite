@@ -57,9 +57,8 @@ def normalize_document_metadata(value: Mapping[str, Any] | None, *, source_file_
                 date.fromisoformat(result[key])
             except ValueError as exc:
                 raise ValueError(f"{key} は有効な日付 YYYY-MM-DD で指定してください。") from exc
-    if result.get("effective_from") and result.get("effective_to"):
-        if result["effective_from"] >= result["effective_to"]:
-            raise ValueError("有効終了日は有効開始日より後の日付にしてください。")
+    if result.get("effective_from") and result.get("effective_to") and result["effective_from"] >= result["effective_to"]:
+        raise ValueError("有効終了日は有効開始日より後の日付にしてください。")
     if "source_uri" in result:
         try:
             parts = urlsplit(result["source_uri"])

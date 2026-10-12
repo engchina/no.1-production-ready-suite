@@ -8,6 +8,7 @@ from collections.abc import Collection
 from typing import Any
 
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
+from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS as _GENERIC_DELETION_TARGETS
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
 # 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
@@ -495,8 +496,7 @@ def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]
 
 
 # 総称語だけの削除対象。「データを削除」は資料の具体名（「履歴情報」「行」）と一致しないので対象にしない (#696)。
-# 操作対象の検査（#700）と同じ語彙を使う。
-from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS as _GENERIC_DELETION_TARGETS
+# 操作対象の検査（#700）と同じ語彙（_GENERIC_DELETION_TARGETS。task_contract.GENERIC_TARGET_WORDS）を使う。
 
 
 def deletion_targets(question: str) -> list[str]:

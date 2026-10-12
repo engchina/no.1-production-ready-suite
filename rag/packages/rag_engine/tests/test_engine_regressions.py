@@ -110,9 +110,12 @@ class GeneratorEvidenceTests(TestCase):
             chunk_uid="unique-parent",
         )
         owner = Evidence("sdk-id", record.text, record.source, 1, {"record": asdict(record)})
-        with TemporaryDirectory() as directory, create_oracle_application(directory) as app:
-            with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model):
-                result = app.generator.generate(GenerationRequest("question", (owner, Evidence("other", "unrelated"))))
+        with (
+            TemporaryDirectory() as directory,
+            create_oracle_application(directory) as app,
+            patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model),
+        ):
+            result = app.generator.generate(GenerationRequest("question", (owner, Evidence("other", "unrelated"))))
         self.assertEqual(result.citations, (owner,))
         self.assertIn("table text", result.text)
 

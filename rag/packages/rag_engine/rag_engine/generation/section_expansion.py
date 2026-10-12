@@ -487,7 +487,7 @@ def _replace_records(context: AnswerContext, replacements: dict[str, AnswerRecor
 
     def swap(record: Any) -> Any:
         key = _record_key(record)
-        return replacements[key] if key in replacements else record
+        return replacements.get(key, record)
 
     tree = tuple(replace(item, record=new) for item in context.evidence_tree if (new := swap(item.record)) is not None)
     records = [new for record in context.records if (new := swap(record)) is not None]

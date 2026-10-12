@@ -197,7 +197,8 @@ def run_keyword_comparison(
             "answer_model": settings.llm_providers[settings.default_answer_llm].model,
             "protocol": "current chunk run; fixed original query plus lexical rules; no LLM query expansion; text-only answers",
         },
-        "review_rubric": "正解参照と根拠を照合し、質問への正確・十分な回答で根拠のない主張がなければ answer_correct=true。不正解は false、未評価は null。",
+        "review_rubric": "正解参照と根拠を照合し、質問への正確・十分な回答で根拠のない主張がなければ answer_correct=true。"
+        "不正解は false、未評価は null。",
         "results": results,
         "summary": summarize_pairs(results),
     }
