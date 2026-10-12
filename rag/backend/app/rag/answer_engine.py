@@ -2062,6 +2062,16 @@ def _stored_child(
         # 実体の 1 段の拡張で足した chunk(#1362)。rag_engine は rerank で位置を変えず、文書の選択で
         # 後回しにせず、文脈の親の枠を確保する。
         metadata["entity_expansion"] = dict(expansion)
+    if source := str(chunk.metadata.get(REFERENCE_FROM_KEY) or ""):
+        # 交差参照で足した参照先(#1280・#1400)。rag_engine は rerank の後に参照元の直後へ置き、
+        # 文書の選択で後回しにしない(質問で並べると橋渡しの参照先が下がり、文脈に入らなかった。
+        # #1549)。
+        rank = chunk.metadata.get(REFERENCE_RANK_KEY)
+        metadata["reference_expansion"] = {
+            "from_chunk_uid": source,
+            "label": str(chunk.metadata.get(REFERENCE_LABEL_KEY) or ""),
+            **({"rank": rank} if isinstance(rank, int) else {}),
+        }
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,

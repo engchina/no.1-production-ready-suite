@@ -1286,6 +1286,13 @@ async def test_document_name_reference_outside_top_five_is_followed(
         assert search["added_count"] == 2
         assert {item["from_fused_rank"] for item in state.reference_expansions.values()} == {8}
         assert state.chunks["doc-plan:cs-plan:1"].metadata[REFERENCE_FROM_KEY] == window.chunk_id
+        # rag_engine へは参照元の印を渡す(rerank の後に参照元の直後へ置く。#1549)。
+        assert result.child_chunks[8].metadata["reference_expansion"] == {
+            "from_chunk_uid": window.chunk_id,
+            "label": "定期保守計画",
+            "rank": 1,
+        }
+        assert "reference_expansion" not in result.child_chunks[7].metadata
     else:
         # top_k が 5 なら起点は上位 5 件だけ(辿らなかった理由を残す。DB も読まない)。
         assert order[7:] == [window.chunk_id]
