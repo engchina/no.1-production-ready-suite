@@ -150,9 +150,9 @@ variable "adb_password" {
 }
 
 variable "adb_workload" {
-  description = "Autonomous AI Database workload type. RAG ingestion and Agent Runtime checkpoints write continuously, so OLTP is the default."
+  description = "Autonomous AI Database workload type. LH (Lakehouse) is the default."
   type        = string
-  default     = "OLTP"
+  default     = "LH"
 
   validation {
     condition     = contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)
@@ -517,9 +517,9 @@ variable "deploy_agent" {
 # RAG_PARSER_ADAPTER_BACKEND=docling。PDF と画像）は常に配備し、ここでは任意の parser だけを選ぶ。
 # 以前の Docling を配備するかを選ぶ入力は廃止した（Docling は常に配備する。#286）。
 variable "rag_enable_parser_unstructured" {
-  description = "Install the Unstructured parser (parser-unstructured) as a systemd service. Use it to ingest formats that the default Docling parser (PDF and images only) cannot parse, such as text, HTML, Office, and e-mail; select Unstructured in the document's processing recipe."
+  description = "Install the Unstructured parser (parser-unstructured) as a systemd service (default on). The Docling parser (CPU, PDF and images) is always installed as the default document parser. Use Unstructured to ingest formats that Docling cannot parse, such as text, HTML, Office, and e-mail; select Unstructured in the document's processing recipe."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "rag_enable_oci_cloud_parsers" {

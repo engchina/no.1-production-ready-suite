@@ -56,7 +56,7 @@
 文書は中身に加えて **1〜3 件の独立した処理レシピ（preprocess / parser / chunking）** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
 - ファイル準備（preprocess）。
-- 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは既定では配備しない）。
+- 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは統合 stack の既定で配備する。#1559）。
 - 文書分割（chunking strategy、chunk size、overlap、parent-child）。
 - 索引構築（vector index build、GraphRAG、navigation summary、field extraction）。
 - 品質 gate（解析品質、chunk 品質、公開前チェック）。
