@@ -1425,6 +1425,7 @@ def synthesize_grounded_answer(
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         feedback = best[0].feedback()
+        budget.note(current, feedback)
         if not feedback or number == grounded.MAX_ROUNDS - 1:
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))

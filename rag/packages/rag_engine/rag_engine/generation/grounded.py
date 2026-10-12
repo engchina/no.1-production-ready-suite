@@ -2817,7 +2817,14 @@ class RoundBudget:
     seconds: list[float] = field(default_factory=list)
     # 時間で打ち切った・切れた理由（空なら時間の上限に関係なく終わった）。
     stop: dict[str, Any] = field(default_factory=dict)
+    # 各 round の生成と監査の秒・prompt の文字数・token（`Round.timing`）と、次の round へ渡す是正の指摘の量。
+    notes: list[dict[str, Any]] = field(default_factory=list)
     _deadline: Deadline | None = None
+
+    def note(self, current: Round, feedback: dict[str, Any] | None) -> None:
+        """round の所要と、その後の是正の指摘（`pending_feedback_labels`）を記録に残す（遅い round の理由を確かめる）。"""
+        self.notes.append({**current.timing, "feedback": pending_feedback_labels(feedback or {}),
+                           "feedback_chars": len(json.dumps(feedback or {}, ensure_ascii=False))})
 
     def estimate(self) -> float:
         """次の 1 組の見積もり（秒）。直前の組の実測、無ければ既定。"""
@@ -2882,6 +2889,8 @@ class RoundBudget:
         """回答の記録に残す時間の配分（各組の秒・確定の分・既定の見積もり・打ち切った理由）。"""
         result: dict[str, Any] = {"round_seconds": list(self.seconds), "reserve_seconds": self.reserve_seconds,
                                   "default_round_seconds": self.default_round_seconds}
+        if self.notes:
+            result["rounds"] = [dict(note) for note in self.notes]
         if self.stop:
             result["stop"] = dict(self.stop)
         if adopted is not None and adopted.audit_cut:

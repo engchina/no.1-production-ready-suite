@@ -122,6 +122,10 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertEqual(len(_drafts(model)), 1)
         budget = result.generation_trace["round_budget"]
         self.assertEqual(budget["round_seconds"], [350.0])
+        # round の所要と、次へ渡す是正の指摘の量を残す（遅い round の理由を確かめる）。
+        self.assertEqual(budget["rounds"][0]["feedback"], ["原文と一致せず除いた説明 1 件"])
+        self.assertGreater(budget["rounds"][0]["feedback_chars"], 0)
+        self.assertGreater(budget["rounds"][0]["prompt_chars"], 0)
         self.assertEqual(budget["stop"]["reason"], grounded.DEADLINE_BEFORE_ROUND)
         self.assertEqual(result.generation_trace["rounds"][0]["deadline_stop"]["estimate_seconds"], 350.0)
         # 確かめ終わった説明は公開し、直していない不足を「確かめられていない点」に出して条件つきにする。
