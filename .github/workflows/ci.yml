@@ -5,6 +5,8 @@ name: CI
 # platform/ は frontend（共有 UI・システム設定画面・デザインシステム）と backend（backend_core・system_settings_backend）に
 # 分けて判定し、製品の frontend / backend の job はそれぞれの側の変更だけで動く（#339）。
 # 本 workflow・.github/actions/ と、どちらにも属さない platform のファイル（.env.example・contracts/ 等）の変更は両方に効く。
+# 例外: 回答の段落の判定の共通の事例（platform/contracts/answer-passages/）は backend のテストだけが読むので、
+# それを読む RAG / Engine・RAG / Backend・Agent / Backend だけを動かす（frontend・e2e は動かさない。#1488）。
 # platform の Markdown（AGENTS.md・README・docs/ux-contracts 等）だけの変更では製品の job を動かさない
 # （docs/design-system/ は lint 設定を含むため frontend に数える）。
 # branch protection の必須 check は最後の `CI OK` だけにする（skip された job を必須にすると pending のまま止まるため）。
@@ -45,7 +47,8 @@ jobs:
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.platform_backend == 'true'
         || steps.filter.outputs.ci == 'true' || steps.filter.outputs.platform_other == 'true' }}
       nl2sql_frontend_contract: ${{ steps.filter.outputs.nl2sql_frontend_contract }}
-      # RAG / Engine のテストが読む、回答の段落の判定の共通の事例（#1370。Agent / Backend は platform_other で動く）。
+      # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の段落の判定の共通の事例（#1370・#1488）。
+      # platform_other から外しているので、これだけの変更では frontend・e2e・配備の検証は動かない。
       answer_passages_contract: ${{ steps.filter.outputs.answer_passages_contract }}
       # pip-audit は依存（uv.lock / pyproject.toml）が変わったときだけ実行する。全件は dependency-audit-nightly.yml。
       # `--skip-editable`: 自分たちの package（editable で入る backend と platform の package）は PyPI に無いので問い合わせない。
@@ -112,6 +115,7 @@ jobs:
               - "agent/backend/uv.lock"
               - "agent/backend/pyproject.toml"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
+            # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
             platform_other:
               - "platform/**"
               - "!platform/packages/ui/**"
@@ -121,6 +125,7 @@ jobs:
               - "!platform/docs/design-system/**"
               - "!platform/package.json"
               - "!platform/package-lock.json"
+              - "!platform/contracts/answer-passages/**"
               - "!platform/**/*.md"
 
   secret-scan:
@@ -928,16 +933,13 @@ jobs:
       actions: read
     outputs:
       rag_mode: ${{ steps.select.outputs.rag_mode }}
-      rag_specs: ${{ steps.select.outputs.rag_specs }}
-      rag_shards: ${{ steps.select.outputs.rag_shards }}
+      rag_matrix: ${{ steps.select.outputs.rag_matrix }}
       rag_total: ${{ steps.select.outputs.rag_total }}
       nl2sql_mode: ${{ steps.select.outputs.nl2sql_mode }}
-      nl2sql_specs: ${{ steps.select.outputs.nl2sql_specs }}
-      nl2sql_shards: ${{ steps.select.outputs.nl2sql_shards }}
+      nl2sql_matrix: ${{ steps.select.outputs.nl2sql_matrix }}
       nl2sql_total: ${{ steps.select.outputs.nl2sql_total }}
       agent_mode: ${{ steps.select.outputs.agent_mode }}
-      agent_specs: ${{ steps.select.outputs.agent_specs }}
-      agent_shards: ${{ steps.select.outputs.agent_shards }}
+      agent_matrix: ${{ steps.select.outputs.agent_matrix }}
       agent_total: ${{ steps.select.outputs.agent_total }}
     steps:
       # base との差分と、nightly の記録の commit（main の履歴）の両方を使うため全履歴を取る。
@@ -965,7 +967,7 @@ jobs:
               python3 platform/scripts/e2e_impact.py select --product "${product}" --base "${BASE}" --download
             else
               echo "${product}_mode=none" >> "${GITHUB_OUTPUT}"
-              echo "${product}_shards=[]" >> "${GITHUB_OUTPUT}"
+              echo "${product}_matrix=[]" >> "${GITHUB_OUTPUT}"
             fi
           done
 
@@ -979,7 +981,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.e2e-impact.outputs.rag_shards) }}
+        include: ${{ fromJSON(needs.e2e-impact.outputs.rag_matrix) }}
     defaults:
       run:
         working-directory: rag/frontend
@@ -1007,14 +1009,16 @@ jobs:
         with:
           working-directory: rag/frontend
 
-      # SPECS が空（全件）なら全 spec。spec のパスは空白区切りで渡す（単語分割を意図している）。
+      # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
+      # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
+      # spec のパスは空白区切りで渡す（単語分割を意図している）。
       - name: Playwright E2E (affected)
         env:
-          SPECS: ${{ needs.e2e-impact.outputs.rag_specs }}
-          SHARD: ${{ matrix.shard }}/${{ needs.e2e-impact.outputs.rag_total }}
+          SPECS: ${{ matrix.specs }}
+          PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
         run: |
           # shellcheck disable=SC2086
-          npx playwright test --workers=1 --pass-with-no-tests --shard="$SHARD" $SPECS
+          npx playwright test --workers=1 --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
 
       - name: Upload Playwright report
         if: failure()
@@ -1034,7 +1038,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.e2e-impact.outputs.nl2sql_shards) }}
+        include: ${{ fromJSON(needs.e2e-impact.outputs.nl2sql_matrix) }}
     defaults:
       run:
         working-directory: nl2sql/frontend
@@ -1062,14 +1066,16 @@ jobs:
         with:
           working-directory: nl2sql/frontend
 
-      # SPECS が空（全件）なら全 spec。spec のパスは空白区切りで渡す（単語分割を意図している）。
+      # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
+      # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
+      # spec のパスは空白区切りで渡す（単語分割を意図している）。
       - name: Playwright E2E (affected)
         env:
-          SPECS: ${{ needs.e2e-impact.outputs.nl2sql_specs }}
-          SHARD: ${{ matrix.shard }}/${{ needs.e2e-impact.outputs.nl2sql_total }}
+          SPECS: ${{ matrix.specs }}
+          PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
         run: |
           # shellcheck disable=SC2086
-          npx playwright test --workers=1 --pass-with-no-tests --shard="$SHARD" $SPECS
+          npx playwright test --workers=1 --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
 
       - name: Upload Playwright report
         if: failure()
@@ -1089,7 +1095,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.e2e-impact.outputs.agent_shards) }}
+        include: ${{ fromJSON(needs.e2e-impact.outputs.agent_matrix) }}
     defaults:
       run:
         working-directory: agent/frontend
@@ -1117,14 +1123,16 @@ jobs:
         with:
           working-directory: agent/frontend
 
-      # SPECS が空（全件）なら全 spec。spec のパスは空白区切りで渡す（単語分割を意図している）。
+      # matrix の specs は e2e_impact.py が nightly の実測の時間で shard に詰めた spec（#1488）。空なら全 spec
+      # （fullyParallel の NL2SQL の全件）。playwright_shard は NL2SQL がテスト単位で分ける値で、ほかは 1/1。
+      # spec のパスは空白区切りで渡す（単語分割を意図している）。
       - name: Playwright E2E (affected)
         env:
-          SPECS: ${{ needs.e2e-impact.outputs.agent_specs }}
-          SHARD: ${{ matrix.shard }}/${{ needs.e2e-impact.outputs.agent_total }}
+          SPECS: ${{ matrix.specs }}
+          PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
         run: |
           # shellcheck disable=SC2086
-          npx playwright test --workers=1 --pass-with-no-tests --shard="$SHARD" $SPECS
+          npx playwright test --workers=1 --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
 
       - name: Upload Playwright report
         if: failure()
