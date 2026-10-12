@@ -865,7 +865,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
         description=(
             "章節の拡張を終える、回答の開始からの秒数（#1436。既定 600）。回答の通しの上限"
-            "（rag_answer_timeout_seconds）の早いほうから、生成の分（150 秒）を残して止める。"
+            "（rag_answer_timeout_seconds）の早いほうから、生成の分（270 秒。"
+            "生成と監査の 1 組の見積もりと回答の確定の分。#1516）を残して止める。"
         ),
     )
     rag_navigation_summary_enabled: bool = Field(
