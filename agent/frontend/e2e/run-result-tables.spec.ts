@@ -147,12 +147,15 @@ async function expectLargeResultTable(page: Page, table: Locator, testId: string
   // すべての行を見る（ページ送り）。閉じるとボタンへフォーカスを戻す。
   const viewAll = table.getByTestId(`${testId}-view-all`);
   await viewAll.click();
-  const sheet = page.getByRole("dialog");
+  // 結果の表の sheet を testid で指す。`getByRole("dialog")` は、375px で閉じた直後の会話の履歴（inert・data-state="closed"）
+  // が DOM に残っている間は 2 つに当たる（#1519）。
+  const sheet = page.getByTestId(`${testId}-sheet`);
   await expect(sheet).toBeVisible();
   await expect(sheet.getByTestId(`${testId}-all-pagination`)).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(sheet).toHaveCount(0);
+  // SideSheet は閉じた後も DOM に残る（data-state="closed"・非表示）ので、数ではなく非表示を確かめる。
+  await expect(sheet).toBeHidden();
   await expect(viewAll).toBeFocused();
 }
 

@@ -204,6 +204,18 @@ function nl2sqlQuestionInput(scope: Page | Locator) {
   return scope.locator("#nl2sql-question-input");
 }
 
+/**
+ * 業務プロファイルが決まってから質問を入れ、「SQL を生成して実行」が押せることを確かめる（#1519）。
+ * 質問の草稿はプロファイル・DB・利用者ごとに保存するため、決まる前に入れた質問は遅い runner で
+ * 草稿の切り替えと重なって消え、ボタンが押せないまま 30 秒を超えることがあった。
+ */
+async function fillQuestionWhenReady(page: Page, text: string, profileId = "default") {
+  await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), profileId);
+  await nl2sqlQuestionInput(page).fill(text);
+  await expect(nl2sqlQuestionInput(page)).toHaveValue(text);
+  await expect(page.getByRole("button", { name: "SQL を生成して実行" })).toBeEnabled();
+}
+
 async function openNl2SqlExecutionOptions(page: Page) {
   const disclosure = page.getByRole("button", { name: /実行オプション/ });
   if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
@@ -5035,7 +5047,7 @@ test("SQL の生成と実行の開始時に前回の生成 SQL・実行結果を
 
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
-  await question.fill("請求金額を一覧で見たい");
+  await fillQuestionWhenReady(page, "請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
@@ -5683,7 +5695,7 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   );
 
   await page.goto("/query");
-  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await fillQuestionWhenReady(page, "請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByRole("heading", { name: "実行結果（12 行）" })).toBeVisible();
