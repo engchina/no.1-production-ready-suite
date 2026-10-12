@@ -2327,11 +2327,17 @@ async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_m
 
 
 async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
-    """OCI mode の同一 group context は chunk_group_id を bind 付き SQL で取得する。"""
+    """OCI mode の同一 group context は、起点をまとめた 1 回の SQL で chunk_group_id から取得する。
+
+    起点ごとの条件(文書・chunk_set・group・自分を除く)・並び・件数は起点の表(``a``)の値で
+    1 件ずつ読むときと同じにする(#1490)。
+    """
     pool = FakeOraclePool(
         execute_results=[
             [
                 {
+                    "anchor_ord": 0,
+                    "context_rank": 1,
                     "document_id": "doc-1",
                     "chunk_id": "doc-1:1",
                     "chunk_text": "表ヘッダー: 項目 / 条件。",
@@ -2342,6 +2348,8 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
                     "score": 0,
                 },
                 {
+                    "anchor_ord": 0,
+                    "context_rank": 2,
                     "document_id": "doc-1",
                     "chunk_id": "doc-1:3",
                     "chunk_text": "表注記: 証憑添付が必要。",
@@ -2376,19 +2384,31 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert [chunk.metadata["context_group_distance"] for chunk in siblings] == [-1, 1]
     assert all(chunk.score == 0.91 for chunk in siblings)
     assert all(chunk.metadata["context_group_expanded"] is True for chunk in siblings)
+    assert len(pool.connection.calls) == 1
     call = pool.connection.calls[0]
-    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id" in (call.statement)
-    assert "c.chunk_id <> :anchor_chunk_id" in call.statement
-    assert "ABS(c.chunk_index - :anchor_index)" in call.statement
-    assert "ROWNUM <= :max_chunks_per_group" in call.statement
+    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = a.chunk_group_id" in call.statement
+    assert "c.chunk_id <> a.anchor_chunk_id" in call.statement
+    assert "PARTITION BY a.anchor_ord" in call.statement
+    assert "ABS(c.chunk_index - a.anchor_index) ASC, c.chunk_index ASC, c.chunk_id ASC" in (
+        call.statement
+    )
+    assert "context_rank <= :max_chunks_per_group" in call.statement
+    assert "ORDER BY anchor_ord ASC, context_rank ASC" in call.statement
     assert "d.status = 'INDEXED'" in call.statement
-    assert "d.document_id = :filter_document_id" in call.statement
-    assert call.parameters["filter_document_id"] == "doc-1"
-    assert call.parameters["filter_chunk_set_id"] == "set-a"
-    assert call.parameters["chunk_group_id"] == "grp-table"
-    assert call.parameters["anchor_index"] == 2
-    assert call.parameters["anchor_chunk_id"] == "doc-1:2"
+    assert "d.document_id = a.document_id" in call.statement
+    assert "c.chunk_set_id = a.chunk_set_id" in call.statement
+    assert ":filter_document_id" not in call.statement
+    assert ":filter_chunk_set_id" not in call.statement
+    assert call.parameters["ca_ord_0"] == 0
+    assert call.parameters["ca_doc_0"] == "doc-1"
+    assert call.parameters["ca_set_0"] == "set-a"
+    assert call.parameters["ca_group_0"] == "grp-table"
+    assert call.parameters["ca_index_0"] == 2
+    assert call.parameters["ca_chunk_0"] == "doc-1:2"
     assert call.parameters["max_chunks_per_group"] == 2
+    # 足りない起点は空(どの chunk にも一致しない)で埋め、SQL の文を同じにする。
+    assert call.parameters["ca_doc_1"] is None
+    assert call.parameters["ca_ord_49"] is None
 
 
 async def test_oci_update_error_status_preserves_chunks_and_extraction() -> None:

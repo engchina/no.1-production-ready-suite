@@ -44,6 +44,10 @@ from rag_engine.resources.deadline import check_deadline, current_deadline
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
+from app.clients.oracle_read_stats import (
+    current_db_call_stats,
+    read_lobs_as_values,
+)
 from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
@@ -142,6 +146,20 @@ _ENTITY_SCORE_DECAY = 0.5
 # 実体の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベースと旧版の扱いだけ)。
 _ENTITY_SCOPE_FILTER_KEYS = _REFERENCE_SCOPE_FILTER_KEYS
 
+# 回答の検索で、同時に読む検索文の数(#1490)。1 本の中で vector と keyword を並行に読むので、
+# 1 問で使う接続はその倍(``RAG_ORACLE_POOL_MAX`` の既定はこの 2 問分)。
+_SEARCH_QUERY_CONCURRENCY = 4
+# 回答の記録の工程(execution_steps)に残す、工程の中の SQL の計測値(#1490。DbCallStats.snapshot)。
+_STEP_DB_METRIC_KEYS = frozenset(
+    {
+        "db_execute_count",
+        "db_row_count",
+        "db_lob_read_count",
+        "db_round_trip_count",
+        "db_seconds",
+    }
+)
+
 # 回答フローの工程の通知: (工程名, "started" / "success" / "error", 経過秒)。
 type StepCallback = Callable[[str, str, float], Awaitable[None]]
 # 回答フローの各工程を進捗(SSE の stage)へ出すときの名前の接頭辞。後ろに工程名
@@ -220,6 +238,11 @@ class _SearchState:
     reference_section_indexes: dict[tuple[str, str], SectionIndex] = field(default_factory=dict)
     # 他の文書への参照の文書名に合う文書((範囲, 文書名の比較形) ごと。当たり方の順。#1400)。
     reference_documents: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
+    # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。CRAG の 2 回目・要求ごとの
+    # 再検索で同じ検索文を読み直さない(1 回の回答の中だけ)。
+    search_hits: dict[tuple[str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]] = (
+        field(default_factory=dict)
+    )
     # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
 
@@ -372,6 +395,13 @@ class AnswerEngine:
         """回答する。``step_callback`` は回答フローの各工程の開始・終了を受け取る(進捗。#593)。"""
         if self._approved_faq is not None:
             return await self._answer_from_approved_faq(request)
+        # 回答の中の読み取りは、chunk の本文(CLOB)を行ごとに読み直さず値で受け取る(#1490)。
+        with read_lobs_as_values():
+            return await self._run(request, step_callback=step_callback)
+
+    async def _run(
+        self, request: SearchRequest, *, step_callback: StepCallback | None
+    ) -> AnswerOutcome:
         loop = asyncio.get_running_loop()
         state = _SearchState()
         try:
@@ -508,14 +538,15 @@ class AnswerEngine:
         検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
         """
         state = _SearchState()
-        result = await self._search(
-            request,
-            state,
-            retrieval_queries=[request.query],
-            candidate_limit=max(1, int(request.top_k)),
-            # 検索だけの結果は上位 top_k 件の候補なので、交差参照の chunk は足さない(#1280)。
-            expand_references=False,
-        )
+        with read_lobs_as_values():
+            result = await self._search(
+                request,
+                state,
+                retrieval_queries=[request.query],
+                candidate_limit=max(1, int(request.top_k)),
+                # 検索だけの結果は上位 top_k 件の候補なので、交差参照の chunk は足さない(#1280)。
+                expand_references=False,
+            )
         return [
             state.chunks[child.chunk_uid]
             for child in result.child_chunks
@@ -546,7 +577,7 @@ class AnswerEngine:
         from rag_engine.adapters.oci import parse_multimodal_response, parse_text_response
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
-        from rag_engine.generation.execution_record import bind_step_listener
+        from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -597,10 +628,13 @@ class AnswerEngine:
                     _call(lambda: step_callback(name, outcome, elapsed)), loop
                 ).result(_STEP_NOTIFY_TIMEOUT_SECONDS)
 
+        # 工程ごとの SQL の回数・行数・時間(#1490)。計測の範囲は工程の span(pipeline)が作る。
+        db_stats = current_db_call_stats()
         with (
             bind_dependencies(dependencies),
             prompt_overrides(overrides or {}),
             bind_step_listener(notify_step if step_callback is not None else None),
+            bind_step_metrics(db_stats.snapshot if db_stats is not None else None),
         ):
             return answer_question_result(
                 request.query,
@@ -662,11 +696,21 @@ class AnswerEngine:
         while True:
             fused: dict[str, float] = {}
             rankings: list[list[str]] = []
-            for index, (query, embedding) in enumerate(zip(queries, embeddings, strict=False)):
-                mode = SearchMode.VECTOR if query in vector_only else SearchMode.HYBRID
-                hits = await self._oracle.hybrid_search(
-                    query, embedding, candidate_limit, mode=mode, filters=dict(state.filters)
-                )
+            # 検索文ごとの検索は並行に読み、融合は検索文の順に行う(結果は直列と同じ。#1490)。
+            all_hits = await self._query_hits(
+                state,
+                [
+                    (
+                        query,
+                        embedding,
+                        SearchMode.VECTOR if query in vector_only else SearchMode.HYBRID,
+                    )
+                    for query, embedding in zip(queries, embeddings, strict=False)
+                ],
+                candidate_limit=candidate_limit,
+                filters=dict(state.filters),
+            )
+            for index, hits in enumerate(all_hits):
                 rankings.append([hit.chunk_id for hit in hits])
                 # 原質問を主軸にし、派生検索文は合計で原質問 1 本分の票に抑える(rag_poc #975)。
                 weight = 1.0 if index == 0 else derived_weight
@@ -796,6 +840,43 @@ class AnswerEngine:
         parents = _stored_parents(list(all_children.values()), state)
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
+        )
+
+    async def _query_hits(
+        self,
+        state: _SearchState,
+        searches: Sequence[tuple[str, list[float], SearchMode]],
+        *,
+        candidate_limit: int,
+        filters: dict[str, str],
+    ) -> list[list[RetrievedChunk]]:
+        """検索文ごとの検索の結果を、``searches`` の順に返す(#1490)。
+
+        同時に読む検索文は ``_SEARCH_QUERY_CONCURRENCY`` 本まで(1 本の中で vector と keyword を
+        並行に読むので、接続はその倍)。同じ回答の中で同じ検索文・方式・条件・件数を読んだことが
+        あれば、その結果を使う(CRAG の 2 回目と要求ごとの再検索)。
+        """
+        filter_key = tuple(sorted(filters.items()))
+        semaphore = asyncio.Semaphore(_SEARCH_QUERY_CONCURRENCY)
+
+        async def hits_for(
+            query: str, embedding: list[float], mode: SearchMode
+        ) -> list[RetrievedChunk]:
+            key = (query, mode.value, filter_key, candidate_limit)
+            cached = state.search_hits.get(key)
+            if cached is not None:
+                return cached
+            async with semaphore:
+                hits = await self._oracle.hybrid_search(
+                    query, embedding, candidate_limit, mode=mode, filters=dict(filters)
+                )
+            state.search_hits[key] = hits
+            return hits
+
+        return list(
+            await asyncio.gather(
+                *(hits_for(query, embedding, mode) for query, embedding, mode in searches)
+            )
         )
 
     async def _entity_expansion(
@@ -2007,6 +2088,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "status": str(step.get("status") or ""),
             "elapsed_seconds": step.get("elapsed_seconds"),
             "llm_calls": step.get("llm_calls"),
+            # 工程の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間(#1490)。
+            **{
+                key: value
+                for key, value in step.items()
+                if key in _STEP_DB_METRIC_KEYS and isinstance(value, int | float)
+            },
         }
         for step in result.execution_steps or ()
         if isinstance(step, Mapping)

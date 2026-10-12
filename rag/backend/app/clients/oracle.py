@@ -7,6 +7,7 @@ Oracle Text による keyword retrieval を担う。外部ベクトル DB は使
 import asyncio
 import hashlib
 import importlib
+import inspect
 import json
 import logging
 import re
@@ -19,6 +20,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
@@ -32,6 +34,7 @@ from pr_backend_core.oracle_pool import (
 )
 from pr_backend_core.oracle_session import init_oracle_session
 
+from app.clients.oracle_read_stats import current_db_call_stats, lobs_as_values_enabled
 from app.config import Settings, get_settings
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
@@ -418,8 +421,11 @@ class OracleClient:
         if mode == SearchMode.KEYWORD:
             return await self.keyword_search(query, top_k, filters)
 
-        vector_hits = await self.vector_search(embedding, top_k, filters)
-        keyword_hits = await self.keyword_search(query, top_k, filters)
+        # vector と keyword は独立しているので並行に読む(#1490)。融合は順位だけで決まる。
+        vector_hits, keyword_hits = await asyncio.gather(
+            self.vector_search(embedding, top_k, filters),
+            self.keyword_search(query, top_k, filters),
+        )
         vector_ids = {hit.chunk_id for hit in vector_hits}
         keyword_ids = {hit.chunk_id for hit in keyword_hits}
         fused: dict[str, RetrievedChunk] = {}
@@ -5790,55 +5796,48 @@ class OracleClient:
         *,
         max_chunks_per_group: int,
     ) -> list[RetrievedChunk]:
-        """Oracle から同一 parent chunk group の sibling を取得する。"""
-        siblings: list[RetrievedChunk] = []
+        """Oracle から同一 parent chunk group の sibling を取得する。
+
+        chunk_set を持つ起点は ``_CONTEXT_ANCHOR_BATCH_SIZE`` 件ずつ 1 回の SQL にまとめる(#1490)。
+        起点ごとの条件・並び・件数は 1 件ずつ読むとき(``_context_group_siblings_for_anchor``)と
+        同じで、返す順も起点の順・起点ごとの並びのまま。chunk_set の無い起点(レシピ導入前の文書)
+        だけは 1 件ずつ読む。
+        """
+        targets: list[tuple[RetrievedChunk, str, int]] = []
         for anchor in anchors:
             group_id = _chunk_group_id_from_retrieved(anchor)
             anchor_index = _chunk_index_from_retrieved(anchor)
             if group_id is None or anchor_index is None:
                 continue
-            where_sql, binds = _context_anchor_retrieval_where(anchor)
-            binds.update(
-                {
-                    "chunk_group_id": group_id,
-                    "anchor_index": anchor_index,
-                    "anchor_chunk_id": anchor.chunk_id,
-                    "max_chunks_per_group": max_chunks_per_group,
-                }
-            )
+            targets.append((anchor, group_id, anchor_index))
+        rows_by_target: dict[int, list[dict[str, object]]] = {}
+        batched = [
+            (position, target)
+            for position, target in enumerate(targets)
+            if _metadata_str(target[0].metadata.get("chunk_set_id")) is not None
+        ]
+        for start in range(0, len(batched), _CONTEXT_ANCHOR_BATCH_SIZE):
+            batch = batched[start : start + _CONTEXT_ANCHOR_BATCH_SIZE]
             rows = await self._fetch_all(
-                _render_sql(
-                    """
-                SELECT *
-                FROM (
-                    SELECT
-                        c.document_id,
-                        c.chunk_id,
-                        c.chunk_text,
-                        c.metadata_json,
-                        c.chunk_index,
-                        c.chunk_set_id,
-                        d.file_name,
-                        d.category_name,
-                        d.superseded_by_document_id,
-                        0 AS score
-                    FROM rag_chunks c
-                    JOIN rag_documents d ON d.document_id = c.document_id
-                    WHERE {where_sql}
-                      AND JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id
-                      AND c.chunk_id <> :anchor_chunk_id
-                    ORDER BY
-                        ABS(c.chunk_index - :anchor_index) ASC,
-                        c.chunk_index ASC,
-                        c.chunk_id ASC
+                *_context_group_siblings_batch_sql(
+                    [target for _position, target in batch],
+                    max_chunks_per_group=max_chunks_per_group,
                 )
-                WHERE ROWNUM <= :max_chunks_per_group
-                """,
-                    where_sql=where_sql,
-                ),
-                binds,
             )
             for row in rows:
+                position = batch[_int_value(row["anchor_ord"])][0]
+                rows_by_target.setdefault(position, []).append(row)
+        for position, (anchor, group_id, anchor_index) in enumerate(targets):
+            if _metadata_str(anchor.metadata.get("chunk_set_id")) is None:
+                rows_by_target[position] = await self._context_group_siblings_for_anchor(
+                    anchor,
+                    group_id=group_id,
+                    anchor_index=anchor_index,
+                    max_chunks_per_group=max_chunks_per_group,
+                )
+        siblings: list[RetrievedChunk] = []
+        for position, (anchor, group_id, anchor_index) in enumerate(targets):
+            for row in rows_by_target.get(position, ()):
                 sibling = _retrieved_chunk_from_row(row).model_copy(update={"score": anchor.score})
                 sibling_index = _chunk_index_from_retrieved(sibling)
                 if sibling_index is None:
@@ -5852,6 +5851,57 @@ class OracleClient:
                     )
                 )
         return siblings
+
+    async def _context_group_siblings_for_anchor(
+        self,
+        anchor: RetrievedChunk,
+        *,
+        group_id: str,
+        anchor_index: int,
+        max_chunks_per_group: int,
+    ) -> list[dict[str, object]]:
+        """1 つの起点と同じ chunk group の sibling の行を、起点に近い順に読む。"""
+        where_sql, binds = _context_anchor_retrieval_where(anchor)
+        binds.update(
+            {
+                "chunk_group_id": group_id,
+                "anchor_index": anchor_index,
+                "anchor_chunk_id": anchor.chunk_id,
+                "max_chunks_per_group": max_chunks_per_group,
+            }
+        )
+        return await self._fetch_all(
+            _render_sql(
+                """
+            SELECT *
+            FROM (
+                SELECT
+                    c.document_id,
+                    c.chunk_id,
+                    c.chunk_text,
+                    c.metadata_json,
+                    c.chunk_index,
+                    c.chunk_set_id,
+                    d.file_name,
+                    d.category_name,
+                    d.superseded_by_document_id,
+                    0 AS score
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id
+                  AND c.chunk_id <> :anchor_chunk_id
+                ORDER BY
+                    ABS(c.chunk_index - :anchor_index) ASC,
+                    c.chunk_index ASC,
+                    c.chunk_id ASC
+            )
+            WHERE ROWNUM <= :max_chunks_per_group
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
 
     async def _create_document_with_oracle(
         self,
@@ -9423,7 +9473,7 @@ class OracleClient:
                 self._settings,
                 extra={
                     "min": 1,
-                    "max": 4,
+                    "max": self._settings.oracle_pool_max,
                     "increment": 1,
                     # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
                     "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
@@ -9517,9 +9567,14 @@ def _fetch_all(
     binds: Mapping[str, object],
 ) -> list[dict[str, object]]:
     cursor = connection.cursor()
+    started = perf_counter()
     try:
         normalized = _normalize_sql(statement)
-        cursor.execute(normalized, _binds_for_sql(normalized, binds))
+        cursor.execute(
+            normalized,
+            _binds_for_sql(normalized, binds),
+            **_lob_value_execute_options(cursor),
+        )
         rows = cursor.fetchall()
         result = [_row_to_dict(row, cursor.description) for row in rows]
     except Exception:
@@ -9528,7 +9583,37 @@ def _fetch_all(
         raise
     else:
         cursor.close()
+        _record_db_execute(started, rows=len(result))
         return result
+
+
+def _lob_value_execute_options(cursor: object) -> dict[str, object]:
+    """``read_lobs_as_values()`` の中なら、LOB を値で受け取る ``execute`` の引数(#1490)。
+
+    CLOB は str、BLOB は bytes で届き、``_read_db_value`` が ``.read()`` した値と同じになる。
+    ``fetch_lobs`` を受けない cursor(テストの代役など)には渡さない。
+    """
+    if not lobs_as_values_enabled() or not _execute_accepts_fetch_lobs(type(cursor)):
+        return {}
+    return {"fetch_lobs": False}
+
+
+# cursor の型ごとに、``execute`` が ``fetch_lobs`` を受けるか(python-oracledb の Cursor は受ける)。
+_FETCH_LOBS_SUPPORT: dict[type, bool] = {}
+
+
+def _execute_accepts_fetch_lobs(cursor_type: type) -> bool:
+    supported = _FETCH_LOBS_SUPPORT.get(cursor_type)
+    if supported is None:
+        execute = getattr(cursor_type, "execute", None)
+        try:
+            supported = execute is not None and (
+                "fetch_lobs" in inspect.signature(execute).parameters
+            )
+        except (TypeError, ValueError):
+            supported = False
+        _FETCH_LOBS_SUPPORT[cursor_type] = supported
+    return supported
 
 
 def _fetch_one(
@@ -9548,6 +9633,7 @@ def _execute(
     input_sizes: Mapping[str, object] | None = None,
 ) -> None:
     cursor = connection.cursor()
+    started = perf_counter()
     try:
         normalized = _normalize_sql(statement)
         if input_sizes:
@@ -9557,6 +9643,7 @@ def _execute(
         cursor.execute(normalized, _binds_for_sql(normalized, binds))
     finally:
         cursor.close()
+        _record_db_execute(started)
 
 
 def _execute_count(
@@ -9566,6 +9653,7 @@ def _execute_count(
 ) -> int:
     """DML を実行して影響行数を返す。"""
     cursor = connection.cursor()
+    started = perf_counter()
     try:
         normalized = _normalize_sql(statement)
         # `_with_tenant_bind` の予防的な bind を含めて渡せるよう、SQL に現れる名前へ絞る。
@@ -9573,6 +9661,14 @@ def _execute_count(
         return int(getattr(cursor, "rowcount", 0) or 0)
     finally:
         cursor.close()
+        _record_db_execute(started)
+
+
+def _record_db_execute(started: float, *, rows: int = 0) -> None:
+    """計測の範囲(``track_db_calls``)の中なら、SQL の 1 回の実行を数える(#1490)。"""
+    stats = current_db_call_stats()
+    if stats is not None:
+        stats.record_execute(rows=rows, seconds=perf_counter() - started)
 
 
 # 品質評価の job を、投入した利用者（tenant と user の hash）だけが見られるようにする条件（#390）。
@@ -11066,6 +11162,9 @@ def _description_columns(description: Sequence[Sequence[Any]] | None) -> list[st
 def _read_db_value(value: object) -> object:
     read = getattr(value, "read", None)
     if callable(read):
+        stats = current_db_call_stats()
+        if stats is not None:
+            stats.record_lob_read()
         return read()
     if isinstance(value, dict | list):
         # Oracle の JSON 列は数値を Decimal で返す。json.dumps に渡せるよう int / float に
@@ -11573,6 +11672,111 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
     )
     binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
     return clauses, binds
+
+
+# 前後の文脈(同じ chunk group の sibling)を 1 回の SQL で読む起点の数(#1490)。足りない分は
+# 空の起点で埋め、SQL の文を同じにする(解析済みの文を使い回す)。
+_CONTEXT_ANCHOR_BATCH_SIZE = 50
+_CONTEXT_ANCHOR_DOCUMENT_PLACEHOLDER = "context_anchor_document"
+_CONTEXT_ANCHOR_CHUNK_SET_PLACEHOLDER = "context_anchor_chunk_set"
+
+
+def _context_group_siblings_batch_sql(
+    targets: Sequence[tuple[RetrievedChunk, str, int]],
+    *,
+    max_chunks_per_group: int,
+) -> tuple[str, dict[str, object]]:
+    """chunk_set を持つ起点の sibling を 1 回で読む SQL と bind(#1490)。
+
+    起点ごとの条件は ``_context_anchor_retrieval_where``(文書と chunk_set で絞る)と同じで、
+    文書と chunk_set の値だけを起点の表(``a``)から読む。起点ごとの並び
+    (起点からの距離 → chunk_index → chunk_id)と件数の上限も同じで、``anchor_ord`` が
+    ``targets`` の位置、``context_rank`` が起点の中の順位。
+    """
+    if len(targets) > _CONTEXT_ANCHOR_BATCH_SIZE:
+        raise ValueError("前後の文脈の起点が 1 回の SQL の上限を超えています。")
+    where_sql, binds = _oracle_retrieval_where(
+        {
+            "document_id": _CONTEXT_ANCHOR_DOCUMENT_PLACEHOLDER,
+            "chunk_set_id": _CONTEXT_ANCHOR_CHUNK_SET_PLACEHOLDER,
+        }
+    )
+    if (
+        binds.pop("filter_document_id", None) != _CONTEXT_ANCHOR_DOCUMENT_PLACEHOLDER
+        or binds.pop("filter_chunk_set_id", None) != _CONTEXT_ANCHOR_CHUNK_SET_PLACEHOLDER
+    ):
+        raise RuntimeError("前後の文脈の検索条件を組み立てられません。")
+    where_sql = re.sub(r":filter_document_id\b", "a.document_id", where_sql)
+    where_sql = re.sub(r":filter_chunk_set_id\b", "a.chunk_set_id", where_sql)
+    anchor_rows: list[str] = []
+    for ordinal in range(_CONTEXT_ANCHOR_BATCH_SIZE):
+        anchor_rows.append(
+            "SELECT "
+            f"CAST(:ca_ord_{ordinal} AS NUMBER) AS anchor_ord, "
+            f"CAST(:ca_doc_{ordinal} AS VARCHAR2(64)) AS document_id, "
+            f"CAST(:ca_set_{ordinal} AS VARCHAR2(64)) AS chunk_set_id, "
+            f"CAST(:ca_group_{ordinal} AS VARCHAR2(4000)) AS chunk_group_id, "
+            f"CAST(:ca_index_{ordinal} AS NUMBER) AS anchor_index, "
+            f"CAST(:ca_chunk_{ordinal} AS VARCHAR2(128)) AS anchor_chunk_id "
+            "FROM dual"
+        )
+        if ordinal < len(targets):
+            anchor, group_id, anchor_index = targets[ordinal]
+            values: tuple[object, ...] = (
+                ordinal,
+                anchor.document_id,
+                _metadata_str(anchor.metadata.get("chunk_set_id")),
+                group_id,
+                anchor_index,
+                anchor.chunk_id,
+            )
+        else:
+            # 空の起点(どの chunk にも一致しない)。
+            values = (None, None, None, None, None, None)
+        for name, value in zip(
+            ("ord", "doc", "set", "group", "index", "chunk"), values, strict=True
+        ):
+            binds[f"ca_{name}_{ordinal}"] = value
+    binds["max_chunks_per_group"] = max_chunks_per_group
+    statement = _render_sql(
+        """
+        SELECT *
+        FROM (
+            SELECT
+                a.anchor_ord,
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                d.superseded_by_document_id,
+                0 AS score,
+                ROW_NUMBER() OVER (
+                    PARTITION BY a.anchor_ord
+                    ORDER BY
+                        ABS(c.chunk_index - a.anchor_index) ASC,
+                        c.chunk_index ASC,
+                        c.chunk_id ASC
+                ) AS context_rank
+            FROM ({anchor_rows}) a
+            JOIN rag_chunks c
+              ON c.document_id = a.document_id
+             AND c.chunk_set_id = a.chunk_set_id
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND JSON_VALUE(c.metadata_json, '$.chunk_group_id') = a.chunk_group_id
+              AND c.chunk_id <> a.anchor_chunk_id
+        )
+        WHERE context_rank <= :max_chunks_per_group
+        ORDER BY anchor_ord ASC, context_rank ASC
+        """,
+        anchor_rows=" UNION ALL ".join(anchor_rows),
+        where_sql=where_sql,
+    )
+    return statement, binds
 
 
 def _context_anchor_retrieval_where(
