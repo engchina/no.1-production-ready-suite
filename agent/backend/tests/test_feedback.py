@@ -67,7 +67,7 @@ def _report(runs: list[RunState], **filters: Any) -> Any:
         agent_id=filters.get("agent_id"),
         rating=filters.get("rating"),
         reason=filters.get("reason"),
-        agent_names={"default": "汎用業務 Agent", "sales": "営業の Agent"},
+        agent_names={"default": "資料・データ横断アシスタント", "sales": "営業の Agent"},
         user_names=lambda uuids: {uuid: "Alice" for uuid in uuids if uuid == ALICE},
         offset=filters.get("offset", 0),
         limit=filters.get("limit", 10),

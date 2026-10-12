@@ -7,7 +7,7 @@ const now = "2026-06-28T00:00:00Z";
 
 const agent = {
   id: "default",
-  name: "汎用業務 Agent",
+  name: "資料・データ横断アシスタント",
   description: "業務調査を行う",
   instructions: "根拠を示して回答する。",
   skill_ids: ["business_rag_research"],
@@ -19,7 +19,7 @@ const agent = {
   versions: [
     {
       version: 1,
-      name: "汎用業務 Agent",
+      name: "資料・データ横断アシスタント",
       description: "業務調査を行う",
       instructions: "根拠を示して回答する。",
       skill_ids: ["business_rag_research"],
@@ -174,9 +174,9 @@ test.describe("AI Agent Control Plane", () => {
     await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
     // 一覧はモデル（空は既定のテキストモデル）を示す（#754）。
     await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).getByText("既定のテキストモデル")).toBeVisible();
-    await page.getByRole("link", { name: "汎用業務 Agent default", exact: true }).click();
+    await page.getByRole("link", { name: "資料・データ横断アシスタント default", exact: true }).click();
     await expect(page).toHaveURL(/\/agents\?id=default$/);
-    await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "資料・データ横断アシスタント", level: 1 })).toBeVisible();
     await expect(page.getByText("業務 RAG 調査").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "実行先", exact: true })).toHaveCount(0);
     await expect(page.getByText("利用可能ツール")).toHaveCount(0);

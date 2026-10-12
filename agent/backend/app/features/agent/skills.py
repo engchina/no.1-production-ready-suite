@@ -140,9 +140,30 @@ class SkillRegistry:
 
 skill_registry = SkillRegistry()
 
+# 組み込みの Skill の ID（初期の業務 Agent・業種テンプレートが使う）。
+BUSINESS_RAG_RESEARCH_SKILL_ID = "business_rag_research"
+STRUCTURED_DATA_QUERY_SKILL_ID = "structured_data_query"
+RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag_and_structured_data"
+# 改名した組み込みの Skill（旧 ID → 新 ID）。保存済みの業務 Agent とその版の読み込みで置き換える。
+# #1573: 順序を固定した「RAG 後に構造化データ照会」を、順序を決めない横断調査にした。
+RENAMED_SKILL_IDS: dict[str, str] = {
+    "rag_then_structured_data": RAG_AND_STRUCTURED_DATA_SKILL_ID,
+}
+
+
+def migrate_skill_ids(skill_ids: list[str]) -> list[str]:
+    """旧 ID を新 ID に置き換える（順序を保ち、置き換えで重なった ID は 1 つにする）。"""
+    migrated: list[str] = []
+    for skill_id in skill_ids:
+        current = RENAMED_SKILL_IDS.get(skill_id, skill_id)
+        if current not in migrated:
+            migrated.append(current)
+    return migrated
+
+
 skill_registry.register(
     AgentSkillDefinition(
-        id="business_rag_research",
+        id=BUSINESS_RAG_RESEARCH_SKILL_ID,
         name="業務 RAG 調査",
         description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
         instructions=(
@@ -267,7 +288,7 @@ skill_registry.register(
 )
 skill_registry.register(
     AgentSkillDefinition(
-        id="structured_data_query",
+        id=STRUCTURED_DATA_QUERY_SKILL_ID,
         name="構造化データ照会",
         description="NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
         instructions=(
@@ -308,19 +329,33 @@ skill_registry.register(
 )
 skill_registry.register(
     AgentSkillDefinition(
-        id="rag_then_structured_data",
-        name="RAG 後に構造化データ照会",
-        description="業務 RAG で文脈を確認した後、NL2SQL へ同じ目的を渡す。",
+        id=RAG_AND_STRUCTURED_DATA_SKILL_ID,
+        name="資料とデータの横断調査",
+        description=(
+            "業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、"
+            "順序を決めずに繰り返し使って調べる。"
+        ),
         instructions=(
-            "非構造文脈と構造化表の両方が必要な調査に使う。先に rag_search で資料の文脈を確かめる。"
+            "資料（手順・規則・定義・条件）と業務データ（件数・金額・状態・記録の値）の両方が"
+            "要るかもしれない調査に使う。"
+            "ツールを呼ぶ順序は決めない。問いと、それまでのツールの結果から、答えに足りないものを"
+            "そのたびに判断し、資料の根拠が要るなら rag_search を、業務データの値が要るなら "
+            "nl2sql_query を呼ぶ（nl2sql_query が先でもよい）。"
+            "一方の結果で分かった事実・条件・識別子（コード・名前・期間・区分・状態）を使って、"
+            "もう一方や同じツールを何度でも呼んでよい（例: 規程で分かった基準・期限で業務データを"
+            "絞る。業務データで見つかった区分・ID の意味や扱いを資料で確かめる）。"
+            "答えに要る根拠がそろったら、それ以上ツールを呼ばずに答える。"
+            "同じ目的で言い換えて呼び直しても新しい根拠が出ないときは繰り返さず、"
+            "確かめられなかった点として示して、分かったことまでを答える。"
             "rag_search の outcome が needs_environment_data（資料だけでは確定できない）なら、"
-            "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える"
-            "（nl2sql_query には業務プロファイルの ID（profile_id）が必須。分からなければ "
-            "nl2sql_recommend_profile か nl2sql_list_profiles で選ぶ。"
+            "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える。"
+            "nl2sql_query には業務プロファイルの ID（profile_id）が必須。分からなければ "
+            "nl2sql_recommend_profile か nl2sql_list_profiles で選ぶ"
+            "（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。"
             "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る。"
             "needs_clarification を返したら SQL はまだ作っていないので、next_step の questions の"
             "問いを 1 つだけ利用者に聞き、答えを answer、requirement.session_id を "
-            "requirement_session_id に入れて呼び直す）。"
+            "requirement_session_id に入れて呼び直す。"
             "確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。"
         ),
         mcp_requirements=[

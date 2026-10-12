@@ -51,6 +51,12 @@ from app.features.agent.clarification_cancel import (
 )
 from app.features.agent.config import runtime_config_store
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
+from app.features.agent.skills import (
+    BUSINESS_RAG_RESEARCH_SKILL_ID,
+    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+    STRUCTURED_DATA_QUERY_SKILL_ID,
+    migrate_skill_ids,
+)
 from app.features.agent.support_task import (
     SUPPORT_TASK_KIND,
     SUPPORT_TASK_NAME,
@@ -757,8 +763,9 @@ class AgentRuntimeRepository:
         self._condition = Condition(self._lock)
         self._runs: dict[str, RunState] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
-        default_agent = _ensure_versioned(_default_agent())
-        self._agents: dict[str, AgentProfile] = {default_agent.id: default_agent}
+        self._agents: dict[str, AgentProfile] = {
+            agent.id: _ensure_versioned(agent) for agent in _builtin_agents()
+        }
         # 読み込みで直せず退避した Run・業務 Agent（保存のたびに snapshot に残す。#853）。
         self._quarantined: list[QuarantinedSnapshotRecord] = []
         self._load_report = SnapshotLoadReport()
@@ -1626,25 +1633,25 @@ class AgentRuntimeRepository:
 
     def delete_agent(self, agent_id: str) -> None:
         with self._lock:
-            if agent_id == "default":
-                raise ValueError("既定の業務 Agent は削除できません。")
+            if agent_id in BUILTIN_AGENT_IDS:
+                raise ValueError("組み込みの業務 Agent は削除できません。")
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
             self._persist_locked()
 
     def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None:
-        """指定 source(例: plugin:<id>)の agent を一括置換する。default は保護。"""
+        """指定 source(例: plugin:<id>)の agent を一括置換する。組み込みの Agent は保護。"""
         with self._lock:
             for agent_id in [
                 aid
                 for aid, agent in self._agents.items()
-                if agent.source == source and aid != "default"
+                if agent.source == source and aid not in BUILTIN_AGENT_IDS
             ]:
                 del self._agents[agent_id]
             now = _now()
             for agent in agents:
-                if agent.id == "default":
+                if agent.id in BUILTIN_AGENT_IDS:
                     continue
                 self._validate_agent_skills(agent.skill_ids)
                 self._validate_agent_tools(agent.tool_names)
@@ -1658,7 +1665,7 @@ class AgentRuntimeRepository:
             for agent_id in [
                 aid
                 for aid, agent in self._agents.items()
-                if agent.source == source and aid != "default"
+                if agent.source == source and aid not in BUILTIN_AGENT_IDS
             ]:
                 del self._agents[agent_id]
             self._persist_locked()
@@ -1701,10 +1708,13 @@ class AgentRuntimeRepository:
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
         self._agents = {
-            agent.id: _ensure_versioned(_migrate_legacy_agent(agent)) for agent in snapshot.agents
+            agent.id: _migrate_builtin_agent(_ensure_versioned(_migrate_legacy_agent(agent)))
+            for agent in snapshot.agents
         }
-        if "default" not in self._agents:
-            self._agents["default"] = _ensure_versioned(_default_agent())
+        # 保存済みの snapshot に無い組み込みの業務 Agent は足す（#1573 で 3 つにした）。
+        for builtin in _builtin_agents():
+            if builtin.id not in self._agents:
+                self._agents[builtin.id] = _ensure_versioned(builtin)
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
@@ -3058,8 +3068,11 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
     _append_duplicate_errors("イベント", event_ids, errors)
     _append_duplicate_errors("成果物", artifact_ids, errors)
 
-    if not any(agent.id == "default" for agent in snapshot.agents):
-        warnings.append("既定の業務 Agent（default）がありません。置換すると作り直します。")
+    present = {agent.id for agent in snapshot.agents}
+    if missing := [agent_id for agent_id in BUILTIN_AGENT_IDS if agent_id not in present]:
+        warnings.append(
+            f"組み込みの業務 Agent（{'・'.join(missing)}）がありません。置換すると作り直します。"
+        )
 
     for agent in snapshot.agents:
         _validate_agent_snapshot(agent, errors)
@@ -3386,19 +3399,98 @@ def _validate_approval_snapshot(
         errors.append(f"承認 {approval.id} が、無いステップ {approval.step_id} を参照しています。")
 
 
-def _default_agent() -> AgentProfile:
-    return AgentProfile(
-        id="default",
-        name="汎用業務 Agent",
-        description="RAG / NL2SQL の MCP 接続と承認フローを使う既定 Agent。",
-        instructions="業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
-        skill_ids=[
-            "business_rag_research",
-            "structured_data_query",
-            "rag_then_structured_data",
-        ],
-        tool_names=tool_registry.names(),
-        source="builtin",
+DEFAULT_AGENT_ID = "default"
+RAG_RESEARCH_AGENT_ID = "rag-research"
+DATA_QUERY_AGENT_ID = "data-query"
+# 組み込みの業務 Agent（#1573）。削除できず、保存済みの snapshot に無ければ読み込みで足す。
+# 既定の Agent（default）が先頭（一覧は作成日時の順）。
+BUILTIN_AGENT_IDS: tuple[str, ...] = (DEFAULT_AGENT_ID, RAG_RESEARCH_AGENT_ID, DATA_QUERY_AGENT_ID)
+# #1573 より前の既定の Agent の名前。保存済みの default がこの名前のままなら、新しい内容にする。
+_LEGACY_DEFAULT_AGENT_NAME = "汎用業務 Agent"
+
+
+def _builtin_agents() -> list[AgentProfile]:
+    """組み込みの業務 Agent（資料・データ・その両方）。並びは BUILTIN_AGENT_IDS と同じ。"""
+    tool_names = tool_registry.names()
+    return [
+        AgentProfile(
+            id=DEFAULT_AGENT_ID,
+            name="資料・データ横断アシスタント",
+            description=(
+                "社内の資料（業務 RAG）と業務データ（NL2SQL）を、問いに合わせて使い分けて"
+                "調べる既定の業務 Agent。"
+            ),
+            instructions=(
+                "問いと途中の結果から、資料の根拠と業務データの値のどちらが要るかを判断して"
+                "ツールを呼ぶ。根拠と監査情報を残す。"
+            ),
+            skill_ids=[
+                RAG_AND_STRUCTURED_DATA_SKILL_ID,
+                BUSINESS_RAG_RESEARCH_SKILL_ID,
+                STRUCTURED_DATA_QUERY_SKILL_ID,
+            ],
+            tool_names=tool_names,
+            source="builtin",
+        ),
+        AgentProfile(
+            id=RAG_RESEARCH_AGENT_ID,
+            name="資料調査アシスタント",
+            description="社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
+            instructions="資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
+            skill_ids=[BUSINESS_RAG_RESEARCH_SKILL_ID],
+            tool_names=tool_names,
+            source="builtin",
+        ),
+        AgentProfile(
+            id=DATA_QUERY_AGENT_ID,
+            name="データ照会アシスタント",
+            description="業務データ（NL2SQL）を照会し、集計の条件と結果を示して答える業務 Agent。",
+            instructions="業務データの照会の結果に基づいて答え、集計の条件（期間・対象）を示す。",
+            skill_ids=[STRUCTURED_DATA_QUERY_SKILL_ID],
+            tool_names=tool_names,
+            source="builtin",
+        ),
+    ]
+
+
+def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile:
+    """#1573 より前の既定の Agent（名前が「汎用業務 Agent」のまま）を、新しい内容の版にする。
+
+    名前を変えた default は利用者の内容として残す（Skill の ID の置き換えだけ）。
+    新しい内容は次の版として公開し、前の版は残す。
+    """
+    if agent.id != DEFAULT_AGENT_ID or agent.name != _LEGACY_DEFAULT_AGENT_NAME:
+        return agent
+    builtin = next(item for item in _builtin_agents() if item.id == DEFAULT_AGENT_ID)
+    content = {
+        "name": builtin.name,
+        "description": builtin.description,
+        "instructions": builtin.instructions,
+        "skill_ids": list(builtin.skill_ids),
+    }
+    published = agent.published()
+    versions = [item.model_copy(deep=True) for item in agent.versions]
+    published_version = agent.published_version
+    if published is None or published.name == _LEGACY_DEFAULT_AGENT_NAME:
+        published_version = max((item.version for item in versions), default=0) + 1
+        base = published if published is not None else agent
+        versions.append(
+            AgentVersion(
+                version=published_version,
+                note="初期の業務 Agent の見直し（#1573）",
+                model_id=base.model_id,
+                data_scopes=deepcopy(base.data_scopes),
+                **content,
+            )
+        )
+    return agent.model_copy(
+        deep=True,
+        update={
+            **content,
+            "versioned": True,
+            "versions": versions,
+            "published_version": published_version,
+        },
     )
 
 
@@ -3456,7 +3548,7 @@ def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
 
 def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
     if agent.skill_ids or not agent.tool_names:
-        return agent.model_copy(deep=True)
+        return _migrate_renamed_skills(agent)
     inferred = {
         skill_id
         for tool_name in agent.tool_names
@@ -3471,6 +3563,20 @@ def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
             "skill_ids": sorted(inferred),
             "migration_required": bool(unmapped),
             "enabled": agent.enabled and not unmapped,
+        },
+    )
+
+
+def _migrate_renamed_skills(agent: AgentProfile) -> AgentProfile:
+    """下書きと各版の Skill の旧 ID（`RENAMED_SKILL_IDS`）を新 ID に置き換える（#1573）。"""
+    return agent.model_copy(
+        deep=True,
+        update={
+            "skill_ids": migrate_skill_ids(agent.skill_ids),
+            "versions": [
+                item.model_copy(deep=True, update={"skill_ids": migrate_skill_ids(item.skill_ids)})
+                for item in agent.versions
+            ],
         },
     )
 
