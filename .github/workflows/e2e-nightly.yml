@@ -64,10 +64,10 @@ jobs:
         with:
           working-directory: ${{ matrix.product }}/frontend
 
-      # runner は 4 vCPU なので 2 worker で実行する（#1489）。retry で通ったテスト（flaky）は log の
+      # worker 数は各製品の playwright.config.ts の CI の値（2。4 vCPU の runner。#1489）。retry で通ったテスト（flaky）は log の
       # 「N flaky」に出る。増えたら、そのテストの待ちを直す（#175）。
       - name: Playwright E2E
-        run: npx playwright test --shard=${{ matrix.shard }}/${{ matrix.total }} --workers=2
+        run: npx playwright test --shard=${{ matrix.shard }}/${{ matrix.total }}
         env:
           # テストごとの実行範囲の記録（platform/scripts/e2e-impact/fixture.ts。#885）。
           E2E_IMPACT_DIR: ${{ runner.temp }}/e2e-impact-records
