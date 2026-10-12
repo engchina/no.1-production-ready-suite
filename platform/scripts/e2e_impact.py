@@ -12,13 +12,20 @@ PR の CI（`.github/workflows/ci.yml` の `e2e-impact`）は `select` で、bas
 - 製品の frontend の source・共有 UI（`platform/packages/{ui,system-settings}/src`）の変更した行
   - その行を含む関数を実行した spec。すべてのテストで実行される関数（画面の枠・読み込み時の
     処理）なら、そのファイルを読み込んだ spec すべて
-  - 関数の外の行（import・定数・型）は、そのファイルの関数を実行した spec
+  - 関数の外の行（import・定数）は、そのファイルの関数を実行した spec
+  - TypeScript の型の宣言（`interface`・`type`・`import type` / `export type`・`declare`）の
+    中の行と、コメント・空行だけの変更は選ばない（実行時に影響しない。`enum`・`const` は
+    選ぶ。#1488）
 - i18n の辞書（`src/lib/*i18n*.ts`）は、変更したキーを参照する source の行に置き換える。
   古い文言をそのまま書いている spec も選ぶ
 - 変更・追加した spec と、変更した e2e の helper / fixture を使う spec
 - coverage の記録が無い spec（新しい spec・ページを使わない spec）は常に選ぶ
 - 判定できないもの（記録が無い、package.json / lock / vite / playwright の設定、CSS、
   記録の仕組み自体）は全件
+
+選んだ spec は、nightly の実測の時間（記録が無い spec は中央値）で LPT（長い spec から、合計が
+最も短い shard へ）で shard に詰め、shard ごとの spec を matrix に出す（#1488）。`fullyParallel`
+の製品（NL2SQL）は Playwright の `--shard` でテスト単位に分ける。
 
 ローカルで同じ選択を見るには（nightly の記録を `gh` で取得する）:
 
@@ -59,6 +66,10 @@ class Product:
     test_module: str
     max_shards: int
     nightly_shards: int
+    # playwright.config の `fullyParallel`。true なら Playwright の `--shard` がテスト単位で
+    # 分けるので、spec 単位の LPT より細かく均せる（NL2SQL の nl2sql-workflows.spec.ts は
+    # 1 本で全体の 4 割を占める）。
+    fully_parallel: bool = False
 
     @property
     def test_root(self) -> str:
@@ -67,7 +78,9 @@ class Product:
 
 PRODUCTS = {
     "rag": Product("rag", "rag/frontend", "e2e", "e2e/fixtures/test.ts", 4, 2),
-    "nl2sql": Product("nl2sql", "nl2sql/frontend", "tests/e2e", "tests/e2e/_helpers/test.ts", 8, 8),
+    "nl2sql": Product(
+        "nl2sql", "nl2sql/frontend", "tests/e2e", "tests/e2e/_helpers/test.ts", 8, 8, True
+    ),
     "agent": Product("agent", "agent/frontend", "e2e", "e2e/fixtures/test.ts", 3, 1),
 }
 PLATFORM_FRONTEND = ("platform/packages/ui/", "platform/packages/system-settings/")
@@ -151,6 +164,258 @@ def changed_old_lines(base: str, head: str, old: str, new: str) -> set[int]:
         else:
             lines.update(range(start, start + count))
     return lines
+
+
+@dataclass(frozen=True)
+class Hunk:
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+
+    @property
+    def old_lines(self) -> range:
+        return range(self.old_start, self.old_start + self.old_count)
+
+    @property
+    def new_lines(self) -> range:
+        return range(self.new_start, self.new_start + self.new_count)
+
+
+def diff_hunks(base: str, head: str, old: str, new: str) -> list[Hunk]:
+    out = git("diff", "-U0", f"{base}...{head}", "--", old, new)
+    hunks = []
+    for line in out.splitlines():
+        match = HUNK.match(line)
+        if match:
+            hunks.append(
+                Hunk(
+                    int(match.group(1)),
+                    int(match.group(2) or "1"),
+                    int(match.group(3)),
+                    int(match.group(4) or "1"),
+                )
+            )
+    return hunks
+
+
+# ---- 実行時の影響が無い行（TypeScript の型の宣言・コメント・空行。#1488）
+
+TYPESCRIPT_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
+# 型の宣言は行頭（字下げ無し）で始まるものだけを見る。関数の中の `type` や JSX の文の「type …」を
+# 型の宣言とみなさないため（見落としは選びすぎる側に倒れる）。`enum`・`const enum`・`namespace` は
+# 実行時のコードを出すので含めない（`declare` が付けば出さない）。
+TYPE_DECLARATION = re.compile(
+    r"^(?:"
+    r"(?P<block>(?:export\s+(?:default\s+)?)?(?:declare\s+)?interface\s+[A-Za-z_$]"
+    r"|(?:export\s+)?declare\s+(?:global\b|module\b|namespace\b|class\b|enum\b|const\s+enum\b))"
+    r"|(?P<statement>(?:export\s+)?(?:declare\s+)?type\s+[A-Za-z_$][\w$]*\s*[<=]"
+    r"|(?:import|export)\s+type\s+(?:\{|\*|[A-Za-z_$][\w$]*\s+from\b)"
+    r"|(?:export\s+)?declare\s+)"
+    r")"
+)
+BRACKETS = {"(": ")", "[": "]", "{": "}"}
+
+
+@dataclass(frozen=True)
+class LineState:
+    in_template: bool  # 行の始まりがテンプレート文字列の中
+    in_comment: bool  # 行の始まりが block コメントの中
+    has_code: bool  # コメントの外の文字（文字列の中を含む）がある
+
+
+def scan_lines(lines: list[str]) -> list[LineState]:
+    """行ごとに、始まりの状態（テンプレート文字列・block コメントの中か）とコードの有無を求める。
+
+    `'` / `"` の文字列は行をまたがないので行末で閉じる（JSX の文の `Don't` などで
+    読み違えないため）。
+    """
+    states: list[LineState] = []
+    stack: list[str] = []  # "`"（テンプレート）と、その中の `${` の "{"
+    in_comment = False
+    for text in lines:
+        start_template = bool(stack) and stack[-1] == "`"
+        start_comment = in_comment
+        has_code = start_template and bool(text)
+        quote: str | None = None
+        position = 0
+        while position < len(text):
+            char = text[position]
+            pair = text[position : position + 2]
+            if in_comment:
+                if pair == "*/":
+                    in_comment = False
+                    position += 2
+                else:
+                    position += 1
+                continue
+            if quote is not None or (stack and stack[-1] == "`"):
+                has_code = True
+                closing = quote or "`"
+                if char == "\\":
+                    position += 2
+                    continue
+                if quote is None and pair == "${":
+                    stack.append("{")
+                    position += 2
+                    continue
+                if char == closing:
+                    if quote is None:
+                        stack.pop()
+                    quote = None
+                position += 1
+                continue
+            if pair == "//":
+                break
+            if pair == "/*":
+                in_comment = True
+                position += 2
+                continue
+            if not char.isspace():
+                has_code = True
+            if char in "'\"":
+                quote = char
+            elif char == "`":
+                stack.append("`")
+            elif char == "{":
+                stack.append("{")
+            elif char == "}" and stack and stack[-1] == "{":
+                stack.pop()
+            position += 1
+        states.append(LineState(start_template, start_comment, has_code))
+    return states
+
+
+def _declaration_end(lines: list[str], start: int, block: bool) -> int | None:
+    """`start`（0 始まり）の行で始まる型の宣言の最後の行。読めなければ None（印を付けない）。
+
+    文字列・コメントを飛ばし、括弧の深さで終わりを探す。文は深さ 0 の `;`、`interface` などの
+    block は最初の block の `}` で終わる。`;` の無い文は、深さ 0 で次の行が行頭から始まるところで
+    終わりとする。
+    """
+    stack: list[str] = []
+    quote: str | None = None
+    in_comment = False
+    opened = False
+    for index in range(start, len(lines)):
+        text = lines[index]
+        position = 0
+        while position < len(text):
+            char = text[position]
+            pair = text[position : position + 2]
+            if in_comment:
+                if pair == "*/":
+                    in_comment = False
+                    position += 1
+            elif quote is not None:
+                if char == "\\":
+                    position += 1
+                elif quote == "`" and pair == "${":
+                    stack.append("${")
+                    quote = None
+                    position += 1
+                elif char == quote:
+                    quote = None
+            elif pair == "//":
+                break
+            elif pair == "/*":
+                in_comment = True
+                position += 1
+            elif char in "'\"`":
+                quote = char
+            elif char in BRACKETS:
+                stack.append(BRACKETS[char])
+                opened = opened or (block and char == "{" and len(stack) == 1)
+            elif char in ")]}":
+                if char == "}" and stack and stack[-1] == "${":
+                    stack.pop()
+                    quote = "`"
+                elif not stack or stack[-1] != char:
+                    return None
+                else:
+                    stack.pop()
+                    if block and opened and not stack:
+                        return _end_line(lines, start, index, position + 1)
+            elif char == ";" and not stack:
+                return _end_line(lines, start, index, position + 1)
+            position += 1
+        if quote in ("'", '"'):
+            return None
+        if not block and not stack and quote is None and not in_comment:
+            following = next((line for line in lines[index + 1 :] if line.strip()), None)
+            if following is not None and not following[0].isspace():
+                return index
+    return None
+
+
+def _end_line(lines: list[str], start: int, index: int, after: int) -> int | None:
+    """宣言の終わりの後に同じ行でコードが続くなら、その行は数えない。"""
+    rest = lines[index][after:].strip().lstrip(";").strip()
+    if rest and not rest.startswith("//"):
+        return index - 1 if index > start else None
+    return index
+
+
+def non_runtime_lines(text: str) -> set[int]:
+    """実行時のコードを含まない行（1 始まり）: 型の宣言（`interface`・`type`・`import type` /
+    `export type`・`declare`）の中の行、コメントだけの行、空行。
+
+    標準ライブラリだけの簡易な読み方で、読めないところは実行時のコードとして扱う（選びすぎる側）。
+    """
+    lines = text.splitlines()
+    states = scan_lines(lines)
+    result: set[int] = set()
+    index = 0
+    while index < len(lines):
+        state = states[index]
+        if state.in_template:
+            index += 1
+            continue
+        if not state.has_code:
+            result.add(index + 1)
+            index += 1
+            continue
+        match = None if state.in_comment else TYPE_DECLARATION.match(lines[index])
+        if match:
+            end = _declaration_end(lines, index, block=match.group("block") is not None)
+            if end is not None:
+                result.update(range(index + 1, end + 2))
+                index = end + 1
+                continue
+        index += 1
+    return result
+
+
+def changed_runtime_lines(base: str, head: str, old: str, new: str) -> tuple[set[int], int]:
+    """`changed_old_lines` と同じ base 側の行（実行時に影響する hunk だけ）と、除いた hunk の数。
+
+    TypeScript のファイルで、hunk の base 側と head 側の行がどちらも型の宣言・コメント・空行
+    だけなら、その hunk を除く（`interface` に欄を足しただけで、その型を使う画面の spec を
+    すべて選ばないため）。`enum`・`const` などの実行時のコードを含む hunk は従来どおり数える。
+    """
+    hunks = diff_hunks(base, head, old, new)
+    skipped = 0
+    if old.endswith(TYPESCRIPT_SUFFIXES) and new.endswith(TYPESCRIPT_SUFFIXES) and hunks:
+        point = git("merge-base", base, head).strip() or base
+        before = git_show(point, old)
+        after = git_show(head, new)
+        if before is not None and after is not None:
+            before_static = non_runtime_lines(before)
+            after_static = non_runtime_lines(after)
+            kept = []
+            for hunk in hunks:
+                if set(hunk.old_lines) <= before_static and set(hunk.new_lines) <= after_static:
+                    skipped += 1
+                else:
+                    kept.append(hunk)
+            hunks = kept
+    lines: set[int] = set()
+    for hunk in hunks:
+        if hunk.old_count == 0:
+            lines.update({max(hunk.old_start, 1), hunk.old_start + 1})
+        else:
+            lines.update(hunk.old_lines)
+    return lines, skipped
 
 
 def translate_lines(lines: Iterable[int], source: str, target: str) -> set[int]:
@@ -597,7 +862,14 @@ def select(product: Product, impact: ImpactMap | None, base: str, head: str = "H
         if change.status == "D":
             lines = {fn.start for fn in impact.functions(old)} or {1}
         else:
-            lines = changed_old_lines(base, head, old, change.new or old)
+            # 型の宣言・コメントだけの hunk は実行時に影響しないので、選択の理由にしない（#1488）。
+            lines, skipped = changed_runtime_lines(base, head, old, change.new or old)
+            if not lines:
+                if skipped:
+                    selection.notes.append(
+                        f"{old}: 型の宣言・コメントだけの変更（spec を選ばない）"
+                    )
+                continue
         source_lines(old, lines, f"変更: {old}", base)
 
     if impact is not None:
@@ -608,18 +880,82 @@ def select(product: Product, impact: ImpactMap | None, base: str, head: str = "H
     return selection
 
 
+def spec_durations(specs: Iterable[str], impact: ImpactMap | None) -> dict[str, int]:
+    """spec ごとの見積もりの時間（nightly の実測の合計。記録が無い spec は、記録のある spec の
+    中央値）。"""
+    known = sorted(entry["durationMs"] for entry in (impact.specs.values() if impact else []))
+    default = known[len(known) // 2] if known else UNKNOWN_SPEC_MS
+    recorded = impact.specs if impact else {}
+    return {spec: int(recorded.get(spec, {}).get("durationMs", default)) for spec in specs}
+
+
 def shard_count(product: Product, selection: Selection, impact: ImpactMap | None) -> int:
     if selection.full:
         return product.max_shards
     if not selection.specs:
         return 0
-    durations = [entry["durationMs"] for entry in (impact.specs.values() if impact else [])]
-    default = sorted(durations)[len(durations) // 2] if durations else UNKNOWN_SPEC_MS
-    total = sum(
-        impact.specs.get(spec, {}).get("durationMs", default) if impact else default
-        for spec in selection.specs
-    )
+    total = sum(spec_durations(selection.specs, impact).values())
     return max(1, min(product.max_shards, math.ceil(total / SHARD_TARGET_MS)))
+
+
+@dataclass(frozen=True)
+class Shard:
+    specs: tuple[str, ...]
+    estimated_ms: int
+
+
+def plan_shards(durations: dict[str, int], count: int) -> list[Shard]:
+    """spec を時間で shard に詰める（LPT: 長い spec から、見積もりの合計が最も短い shard へ。
+    #1488）。
+
+    `--shard` は件数で分けて時間を見ないため、最大と最小の shard に 2 倍の差が出ていた。
+    空の shard は作らない。
+    """
+    count = min(count, len(durations))
+    if count <= 0:
+        return []
+    bins: list[list[str]] = [[] for _ in range(count)]
+    totals = [0] * count
+    for spec in sorted(durations, key=lambda s: (-durations[s], s)):
+        target = min(range(count), key=lambda i: (totals[i], i))
+        bins[target].append(spec)
+        totals[target] += durations[spec]
+    return [Shard(tuple(sorted(specs)), total) for specs, total in zip(bins, totals, strict=True)]
+
+
+def shard_matrix(
+    product: Product, selection: Selection, impact: ImpactMap | None
+) -> tuple[list[dict], list[Shard]]:
+    """CI の matrix の include と、spec を時間で詰めた shard（`fully_parallel` の製品は空）。
+
+    include の各要素は `shard`（番号）・`specs`（その shard で実行する spec。frontend からの
+    相対パスを空白区切り。空なら全 spec）・`playwright_shard`（`playwright test --shard` の値）。
+    """
+    count = shard_count(product, selection, impact)
+    if count == 0:
+        return [], []
+    if product.fully_parallel:
+        specs = (
+            ""
+            if selection.full
+            else " ".join(relative_to_frontend(product, spec) for spec in sorted(selection.specs))
+        )
+        matrix = [
+            {"shard": index, "specs": specs, "playwright_shard": f"{index}/{count}"}
+            for index in range(1, count + 1)
+        ]
+        return matrix, []
+    targets = list_specs(product) if selection.full else sorted(selection.specs)
+    shards = plan_shards(spec_durations(targets, impact), count)
+    matrix = [
+        {
+            "shard": index,
+            "specs": " ".join(relative_to_frontend(product, spec) for spec in shard.specs),
+            "playwright_shard": "1/1",
+        }
+        for index, shard in enumerate(shards, start=1)
+    ]
+    return matrix, shards
 
 
 # ---------------------------------------------------------------- nightly の記録の取得
@@ -703,7 +1039,13 @@ def write_output(path: str | None, values: dict[str, str]) -> None:
             handle.write(f"{key}={value}\n")
 
 
-def summary(selection: Selection, mode: str, shards: int, impact: ImpactMap | None) -> str:
+def summary(
+    selection: Selection,
+    mode: str,
+    count: int,
+    shards: list[Shard],
+    impact: ImpactMap | None,
+) -> str:
     product = selection.product
     lines = [f"### e2e の影響分析: {product.name}", ""]
     if impact:
@@ -711,13 +1053,21 @@ def summary(selection: Selection, mode: str, shards: int, impact: ImpactMap | No
     else:
         lines.append("- 記録: なし")
     if mode == "full":
-        lines.append(f"- **全件**（{shards} shard）: " + "、".join(selection.full))
+        lines.append(f"- **全件**（{count} shard）: " + "、".join(selection.full))
     elif mode == "none":
         lines.append("- 影響を受ける spec はありません")
     else:
-        lines.append(f"- {len(selection.specs)} spec（{shards} shard）")
+        lines.append(f"- {len(selection.specs)} spec（{count} shard）")
         for spec, reasons in sorted(selection.specs.items()):
             lines.append(f"  - `{relative_to_frontend(product, spec)}`: {' / '.join(reasons)}")
+    if shards:
+        estimates = "、".join(
+            f"{index} は {len(shard.specs)} spec・約 {math.ceil(shard.estimated_ms / 1000)} 秒"
+            for index, shard in enumerate(shards, start=1)
+        )
+        lines.append(f"- shard の見積もり（nightly の実測。LPT で詰める）: {estimates}")
+    elif count:
+        lines.append("- shard はテスト単位（Playwright の `--shard`。`fullyParallel`）")
     for note in list(dict.fromkeys(selection.notes))[:30]:
         lines.append(f"- 注: {note}")
     return "\n".join(lines) + "\n"
@@ -732,10 +1082,9 @@ def command_select(args: argparse.Namespace) -> int:
         paths = download_maps(product, Path(tempfile.mkdtemp(prefix="e2e-impact-")), args.repo)
     impact = load_impact(paths, product)
     selection = select(product, impact, args.base, args.head)
-    shards = shard_count(product, selection, impact)
     mode = "full" if selection.full else ("selected" if selection.specs else "none")
-    specs = [relative_to_frontend(product, spec) for spec in sorted(selection.specs)]
-    text = summary(selection, mode, shards, impact)
+    matrix, shards = shard_matrix(product, selection, impact)
+    text = summary(selection, mode, len(matrix), shards, impact)
     print(text)
     if args.step_summary:
         with open(args.step_summary, "a", encoding="utf-8") as handle:
@@ -744,9 +1093,8 @@ def command_select(args: argparse.Namespace) -> int:
         args.github_output,
         {
             f"{product.name}_mode": mode,
-            f"{product.name}_specs": " ".join(specs) if mode == "selected" else "",
-            f"{product.name}_shards": json.dumps(list(range(1, shards + 1))),
-            f"{product.name}_total": str(shards),
+            f"{product.name}_matrix": json.dumps(matrix, ensure_ascii=False),
+            f"{product.name}_total": str(len(matrix)),
         },
     )
     return 0

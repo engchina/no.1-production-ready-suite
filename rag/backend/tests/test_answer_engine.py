@@ -1593,7 +1593,9 @@ async def test_question_file_name_and_pages_become_search_filters() -> None:
         "page_number_min": "12",
         "page_number_max": "13",
     }
-    assert oracle.filters[1] == oracle.filters[0]
+    # 2 回目(CRAG の各回)は同じ検索文・同じ条件の結果を使い回す(#1490)。結果の cache の key は
+    # 条件を含むため、条件が 1 回目と違えば検索し直す(ここでは 1 回だけ)。
+    assert len(oracle.filters) == 1
     # 存在の確認は CRAG の各回で繰り返さない。
     assert oracle.probes == [{"knowledge_base_id": "kb-1", "file_name": "manual.pdf"}]
 

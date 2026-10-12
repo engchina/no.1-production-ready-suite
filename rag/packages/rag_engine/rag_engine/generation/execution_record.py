@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import wraps
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from rag_engine.dependencies import llm_call_count
 from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
 
@@ -63,6 +63,42 @@ def bind_step_listener(listener: StepListener | None) -> Iterator[None]:
         _step_listener.reset(token)
 
 
+# 工程ごとに差分を記録する累積の計測値（DB の SQL の回数・行数など。#1490）。呼び出し側が渡す関数は
+# その時点の累積値（数値）を返し、工程の記録には終了時と開始時の差を足す。失敗しても回答を止めない。
+StepMetrics = Callable[[], Mapping[str, int | float]]
+_step_metrics: ContextVar[StepMetrics | None] = ContextVar("answer_step_metrics", default=None)
+
+
+@contextmanager
+def bind_step_metrics(provider: StepMetrics | None) -> Iterator[None]:
+    """この呼び出しの中の工程の記録に、``provider`` の累積値の差分を足す。"""
+    token = _step_metrics.set(provider)
+    try:
+        yield
+    finally:
+        _step_metrics.reset(token)
+
+
+def _step_metrics_snapshot() -> dict[str, int | float]:
+    provider = _step_metrics.get()
+    if provider is None:
+        return {}
+    try:
+        values = provider()
+    except Exception:  # noqa: BLE001 - 計測は補助。回答の処理を止めない。
+        return {}
+    return {key: value for key, value in values.items() if isinstance(value, int | float) and not isinstance(value, bool)}
+
+
+def _step_metrics_delta(before: Mapping[str, int | float]) -> dict[str, int | float]:
+    after = _step_metrics_snapshot()
+    delta: dict[str, int | float] = {}
+    for key, value in after.items():
+        diff = value - before.get(key, 0)
+        delta[key] = round(diff, 3) if isinstance(diff, float) else diff
+    return delta
+
+
 def _notify_step(name: str, outcome: str, elapsed: float) -> None:
     listener = _step_listener.get()
     if listener is None:
@@ -90,6 +126,7 @@ def _execution_step(name: str, purpose: str = ""):
     index = len(steps) if steps is not None else 0
     start = monotonic()
     llm_before = llm_call_count.get()
+    metrics_before = _step_metrics_snapshot()
     if steps is not None:
         steps.append({"name": name, "status": "running"})
     lines = _execution_lines.get()
@@ -113,7 +150,7 @@ def _execution_step(name: str, purpose: str = ""):
         llm_calls = llm_call_count.get() - llm_before
         if steps is not None:
             steps[index] = {"name": name, "status": step.status or "complete", "elapsed_seconds": elapsed,
-                            "llm_calls": llm_calls}
+                            "llm_calls": llm_calls, **_step_metrics_delta(metrics_before)}
         if lines is not None:
             if step.hidden and not step.status:
                 del lines[first_line:]
