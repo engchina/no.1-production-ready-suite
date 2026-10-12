@@ -25,6 +25,8 @@
 #                           CUDA の wheel（torch・torchvision・triton・nvidia-* / cuda-*。docling で約 2.7GB）を入れず、
 #                           PyTorch の CPU 版の index から lock と同じ版の torch / torchvision を入れる
 #                           （GPU の無い CI・検証用。#366）。未設定なら lock どおり（本番の init_script.sh も lock どおり）。
+#   RAG_SERVICES_MODELS=skip  sync で、サービスが実行時に使うモデル（docling-tools models download）を取得しない
+#                           （モデルの要らない pytest だけを動かす CI 用。#1512）。未設定なら取得する。
 #
 # unit は現在のユーザー（sudo で実行したときは SUDO_USER）で動き、backend と同じユーザーの
 # ~/.cache にモデルを置く。起動 / 停止の状態は systemd の enable / disable で保ち、install を
@@ -49,6 +51,7 @@ PLATFORM_ENV_FILE="${SUITE_DIR}/platform/.env"
 BACKEND_ENV_FILE="${RAG_DIR}/backend/.env"
 TORCH_VARIANT="${RAG_SERVICES_TORCH:-}"
 TORCH_CPU_INDEX_URL="https://download.pytorch.org/whl/cpu"
+MODELS_VARIANT="${RAG_SERVICES_MODELS:-}"
 
 CPU_SERVICES=(
   preprocess-office-to-pdf
@@ -171,6 +174,13 @@ sync_services() {
       exit 2
       ;;
   esac
+  case "${MODELS_VARIANT}" in
+    "" | skip) ;;
+    *)
+      log "RAG_SERVICES_MODELS は skip だけを指定できます（未設定ならモデルを取得する）: ${MODELS_VARIANT}"
+      exit 2
+      ;;
+  esac
   warn_missing_os_tools
   for service in "${SELECTED[@]}"; do
     dir="${RAG_DIR}/$(rag_service_dir "${service}")"
@@ -190,7 +200,9 @@ sync_services() {
       (cd "${dir}" && bash -c "${extra}")
     fi
     model_command="$(rag_service_model_command "${service}")"
-    if [ -n "${model_command}" ]; then
+    if [ -n "${model_command}" ] && [ "${MODELS_VARIANT}" = "skip" ]; then
+      log "${service}: RAG_SERVICES_MODELS=skip のため、モデルを取得しません。"
+    elif [ -n "${model_command}" ]; then
       (cd "${dir}" && bash -c "${model_command}") \
         || log "注意: ${service} のモデルを取得できませんでした（初回の解析で取得します）。"
     fi
