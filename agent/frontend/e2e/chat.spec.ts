@@ -102,7 +102,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/chat");
 
       await expect(page.getByRole("heading", { name: "チャット", level: 1 })).toBeVisible();
-      await expect(page.locator("#chat-agent")).toContainText("汎用業務 Agent");
+      await expect(page.locator("#chat-agent")).toContainText("資料・データ横断アシスタント");
       await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
 
       const composer = page.getByRole("textbox", { name: "質問" });

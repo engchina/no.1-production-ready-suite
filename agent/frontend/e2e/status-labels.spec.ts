@@ -72,7 +72,7 @@ for (const viewport of VIEWPORTS) {
       await expect(table.getByTestId("run-row-run-status-running").getByText("実行中", { exact: true })).toBeVisible();
       await expect(table.getByTestId("run-row-run-status-waiting").getByText("承認待ち", { exact: true })).toBeVisible();
       // 目標の下の補足は業務 Agent の ID ではなく名前。
-      await expect(table.getByTestId("run-row-run-status-running")).toContainText("汎用業務 Agent");
+      await expect(table.getByTestId("run-row-run-status-running")).toContainText("資料・データ横断アシスタント");
       await expectNoRawEnumBadges(page);
 
       const refresh = page.getByRole("button", { name: "表示を更新" });

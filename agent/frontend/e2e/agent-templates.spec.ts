@@ -94,7 +94,7 @@ test("使えない Skill は外して知らせ、既存の業務 Agent の編集
   await expect(page.getByRole("option", { name: /^業務 RAG 調査/ })).toBeChecked();
 
   await page.goto("/agents?id=default");
-  await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "資料・データ横断アシスタント", level: 1 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "テンプレートから始める" })).toHaveCount(0);
 });
 

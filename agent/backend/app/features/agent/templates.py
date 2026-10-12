@@ -3,16 +3,22 @@
 よくある業務の業務 Agent の出発点（指示・Skill・質問の例・評価ケース）。業務 Agent の
 新規作成の画面で選ぶと、フォームに入る（テンプレートから業務 Agent を直接は作らない）。
 Skill は組み込みの `business_rag_research`（RAG）・`structured_data_query`（NL2SQL）・
-`rag_then_structured_data`（両方）。
+`rag_and_structured_data`（両方を順序を決めずに使い分ける）。
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-RAG = "business_rag_research"
-NL2SQL = "structured_data_query"
-RAG_THEN_NL2SQL = "rag_then_structured_data"
+from app.features.agent.skills import (
+    BUSINESS_RAG_RESEARCH_SKILL_ID,
+    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+    STRUCTURED_DATA_QUERY_SKILL_ID,
+)
+
+RAG = BUSINESS_RAG_RESEARCH_SKILL_ID
+NL2SQL = STRUCTURED_DATA_QUERY_SKILL_ID
+RAG_AND_NL2SQL = RAG_AND_STRUCTURED_DATA_SKILL_ID
 
 _COMMON_RULES = (
     "\n\n## 共通のルール\n"
@@ -83,7 +89,7 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "- 規程に照らして精算できるかを聞かれたら、判断に必要な情報が足りなければ質問し返す。"
             + _COMMON_RULES
         ),
-        skill_ids=[RAG_THEN_NL2SQL],
+        skill_ids=[RAG_AND_NL2SQL],
         sample_questions=[
             "出張の日当の上限はいくらですか？",
             "今月の営業部の交通費の合計は？",
@@ -157,7 +163,7 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "- 不良率・検査結果は構造化データ照会で取得し、ライン・期間・ロットの条件を示す。\n"
             "- 是正処置を提案するときは、過去の類似の不具合の対策を根拠にする。" + _COMMON_RULES
         ),
-        skill_ids=[RAG_THEN_NL2SQL],
+        skill_ids=[RAG_AND_NL2SQL],
         sample_questions=[
             "先月のライン別の不良率を教えてください。",
             "溶接の外観検査の判定基準は？",
@@ -231,7 +237,7 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "- 発注の実績・納期・取引先ごとの金額は構造化データ照会で取得し、期間と条件を示す。\n"
             "- 新規の取引先・高額の発注は、必要な審査と決裁を案内する。" + _COMMON_RULES
         ),
-        skill_ids=[RAG_THEN_NL2SQL],
+        skill_ids=[RAG_AND_NL2SQL],
         sample_questions=[
             "100 万円を超える発注の決裁者は誰ですか？",
             "今四半期の取引先別の発注金額を教えてください。",

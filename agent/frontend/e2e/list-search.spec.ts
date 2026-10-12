@@ -211,7 +211,7 @@ for (const theme of ["light", "dark"] as const) {
     await useTheme(page, theme);
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.goto("/agents?id=default");
-    await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "資料・データ横断アシスタント", level: 1 })).toBeVisible();
     const discard = page.getByRole("button", { name: "変更を破棄" });
     await expect(discard).toBeDisabled();
     const name = page.locator("#default-agent-name");
