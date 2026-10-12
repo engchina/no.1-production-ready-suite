@@ -18,6 +18,10 @@ from typing import Any
 
 # 累積する値（usage の項目）。秒は呼び出しの往復の時間の和（並列の呼び出しは重なる）。
 USAGE_KEYS = ("calls", "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "seconds")
+# 応答が最後まで返らなかった（`status=incomplete`）数と、出力の上限で未完了のため上限を広げて送り直した数（#1527）。
+# 0 なら記録に出さない（多くの工程では起きない）。理由（`incomplete_details.reason`）ごとの数は ``incomplete_reasons``。
+RETRY_KEYS = ("incomplete_responses", "output_retries")
+INCOMPLETE_REASONS_KEY = "incomplete_reasons"
 
 
 class LlmUsage:
@@ -26,15 +30,22 @@ class LlmUsage:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._values: dict[str, float] = dict.fromkeys(USAGE_KEYS, 0)
+        self._reasons: dict[str, int] = {}
 
-    def add(self, values: Mapping[str, float]) -> None:
+    def add(self, values: Mapping[str, Any]) -> None:
         with self._lock:
-            for key in USAGE_KEYS:
-                self._values[key] += float(values.get(key, 0) or 0)
+            for key in (*USAGE_KEYS, *RETRY_KEYS):
+                if key in USAGE_KEYS or values.get(key):
+                    self._values[key] = self._values.get(key, 0) + float(values.get(key, 0) or 0)
+            if reason := values.get("incomplete_reason"):
+                self._reasons[str(reason)] = self._reasons.get(str(reason), 0) + 1
 
-    def snapshot(self) -> dict[str, float]:
+    def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            return dict(self._values)
+            result: dict[str, Any] = dict(self._values)
+            if self._reasons:
+                result[INCOMPLETE_REASONS_KEY] = dict(self._reasons)
+            return result
 
 
 llm_usage: ContextVar[LlmUsage | None] = ContextVar("rag_engine_llm_usage", default=None)
@@ -77,32 +88,54 @@ def response_usage(response: Any) -> dict[str, int]:
     }
 
 
-def record_llm_usage(values: Mapping[str, float]) -> None:
-    """この文脈の累積に、1 回の呼び出しの usage（``response_usage`` と ``seconds``）を足す。"""
+def record_llm_usage(values: Mapping[str, Any]) -> None:
+    """この文脈の累積に、1 回の呼び出しの usage（``response_usage`` と ``seconds``）を足す。
+
+    応答が未完了なら ``incomplete_reason``（`incomplete_details.reason`）を渡す（未完了の数と理由を数える）。
+    """
     usage = llm_usage.get()
     if usage is not None:
-        usage.add({**values, "calls": 1})
+        usage.add({**values, "calls": 1, **({"incomplete_responses": 1} if values.get("incomplete_reason") else {})})
 
 
-def usage_snapshot() -> dict[str, float]:
+def record_llm_output_retry() -> None:
+    """出力の上限で未完了になった呼び出しを、上限を広げて送り直したことを数える（#1527）。"""
+    usage = llm_usage.get()
+    if usage is not None:
+        usage.add({"output_retries": 1})
+
+
+def usage_snapshot() -> dict[str, Any]:
     """この文脈の累積（無ければ空）。"""
     usage = llm_usage.get()
     return usage.snapshot() if usage is not None else {}
 
 
-def usage_delta(before: Mapping[str, float]) -> dict[str, float]:
-    """``before``（`usage_snapshot`）からの増分。呼び出しが無ければ空。秒は小数 1 桁、他は整数。"""
+def usage_delta(before: Mapping[str, Any]) -> dict[str, Any]:
+    """``before``（`usage_snapshot`）からの増分。呼び出しが無ければ空。秒は小数 1 桁、他は整数。
+
+    未完了の応答・送り直し（`RETRY_KEYS`）とその理由は、増えたときだけ入れる。
+    """
     after = usage_snapshot()
     if not after or after.get("calls", 0) - before.get("calls", 0) <= 0:
         return {}
-    delta: dict[str, float] = {}
+    delta: dict[str, Any] = {}
     for key in USAGE_KEYS:
         diff = after.get(key, 0) - before.get(key, 0)
         delta[key] = round(diff, 1) if key == "seconds" else int(diff)
+    for key in RETRY_KEYS:
+        if diff := int(after.get(key, 0) - before.get(key, 0)):
+            delta[key] = diff
+    before_reasons = before.get(INCOMPLETE_REASONS_KEY) or {}
+    reasons = {reason: count - before_reasons.get(reason, 0)
+               for reason, count in (after.get(INCOMPLETE_REASONS_KEY) or {}).items()
+               if count - before_reasons.get(reason, 0) > 0}
+    if reasons:
+        delta[INCOMPLETE_REASONS_KEY] = reasons
     return delta
 
 
-def usage_line(delta: Mapping[str, float]) -> str:
+def usage_line(delta: Mapping[str, Any]) -> str:
     """利用者向けの 1 行（例: 「入力 12,345 tokens・出力 2,345 tokens（推論 1,800）・120.5 秒」）。空なら空文字。"""
     if not delta:
         return ""
@@ -112,4 +145,10 @@ def usage_line(delta: Mapping[str, float]) -> str:
     text += f"・出力 {int(delta.get('output_tokens', 0)):,} tokens"
     if delta.get("reasoning_tokens"):
         text += f"（推論 {int(delta['reasoning_tokens']):,}）"
-    return text + f"・{float(delta.get('seconds', 0)):.1f} 秒"
+    text += f"・{float(delta.get('seconds', 0)):.1f} 秒"
+    if delta.get("incomplete_responses"):
+        reasons = "・".join(f"{reason} {count} 回" for reason, count in (delta.get(INCOMPLETE_REASONS_KEY) or {}).items())
+        text += f"・未完了の応答 {int(delta['incomplete_responses'])} 回" + (f"（{reasons}）" if reasons else "")
+    if delta.get("output_retries"):
+        text += f"・出力の上限を広げた送り直し {int(delta['output_retries'])} 回"
+    return text

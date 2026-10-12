@@ -29,6 +29,7 @@ from rag_engine.evaluation.answer_eval import (
     model_request,
 )
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
+from rag_engine.generation.grounded import CITATION_PREFIX
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
@@ -78,6 +79,91 @@ VALIDATION_SYSTEM_PROMPT = (
 - 段落が書いた場所が、内容を裏付ける根拠の場所と食い違う（別のシート・範囲の外の行・別の頁）ときだけ、場所を理由に unsupported にする。
 """
 )
+
+
+# ---- 回答の監査の判定の再利用（#1527） -----------------------------------------------------------------
+#
+# Agent の最終の検証は、Agent がまとめた回答を `rag_search` の根拠で確かめ直す。回答の段落が RAG の回答の
+# 監査を通った説明（AnswerEnvelope の item）と本文が同じで、その説明の根拠を今の権限と版で読み直して本文が
+# 変わっていなければ、同じ主張を同じ根拠で確かめ直すことになるので、その判定（supported）を使い、モデルに
+# 渡さない。本文が少しでも違う段落・条件つき（conditional）・適用未確認（unverified）・原文のみ提示の説明は
+# 再利用しない。
+
+# 行の先頭の箇条書き・番号の印（「・」「- 」「1. 」「(1)」など）。本文の比較では除く。
+_LIST_MARKER = re.compile(r"^\s*(?:[・•\-*]\s*|\d{1,3}[.)．、]\s*|[（(]\d{1,3}[）)]\s*)")
+REUSED_CLAIM_REASON = "RAG の回答の監査で確かめた説明と本文・根拠が同じため、その判定を使いました。"
+
+
+# Markdown の強調の印（「**最長 30 日**」）。書式だけで主張を変えないので、本文の比較では除く（#1527。Agent は
+# RAG の説明を強調して書き直すことが多い）。
+_EMPHASIS = re.compile(r"\*\*|__")
+
+
+def audited_line_key(line: str) -> str:
+    """回答の 1 行の本文の比較の形（強調の印・先頭の箇条書き・番号の印と、空白の違いを除く）。"""
+    text = _EMPHASIS.sub("", str(line or ""))
+    return " ".join(_LIST_MARKER.sub("", text, count=1).split())
+
+
+def audited_answer_items(
+    answer_text: str,
+    envelope_items: Sequence[Mapping[str, Any]],
+    citation_lines: Mapping[str, Sequence[int]],
+) -> dict[str, list[str]]:
+    """RAG の回答の、監査を通った説明の本文（`audited_line_key`）→ その説明の出典行の根拠の chunk の id。
+
+    ``envelope_items`` は回答の構造（AnswerEnvelope）の items、``citation_lines`` は引用の chunk の id → その chunk を
+    指す出典行の番号（1 始まり。回答の記録の citations の ``answer_citation_lines``。#1330）。説明の行は箇条書き・
+    番号の行で、続く最初の出典行（「根拠：」）の根拠を持つ。対象は適用が確定した（applies=matched）説明・規則で、
+    gap・条件つき・適用未確認・原文のみ提示は除く。根拠の chunk が決まらない説明も除く。
+    """
+    by_line: dict[int, list[str]] = {}
+    for chunk_id, lines in citation_lines.items():
+        for number in lines or ():
+            by_line.setdefault(int(number), []).append(str(chunk_id))
+    chunks_by_key: dict[str, list[str]] = {}
+    pending: list[str] = []
+    ordinal = 0
+    for line in str(answer_text or "").split("\n"):
+        text = line.strip()
+        if text.startswith(CITATION_PREFIX):
+            ordinal += 1
+            for key in pending:
+                chunks_by_key.setdefault(key, []).extend(by_line.get(ordinal, []))
+            pending = []
+        elif text and _LIST_MARKER.match(text):
+            pending.append(audited_line_key(text))
+        elif text:
+            # 見出し・要約の行で説明の並びが切れる（出典行は、直前に続く説明の行にだけ付く）。
+            pending = []
+    result: dict[str, list[str]] = {}
+    for item in envelope_items:
+        if not isinstance(item, Mapping) or item.get("kind") == "gap" or item.get("applies") != "matched":
+            continue
+        key = audited_line_key(str(item.get("text") or ""))
+        chunk_ids = list(dict.fromkeys(chunks_by_key.get(key) or ()))
+        if key and chunk_ids:
+            result[key] = chunk_ids
+    return result
+
+
+def _settled_passages(
+    answer_text: str, passages: Sequence[Mapping[str, str]], audited: Mapping[str, Sequence[str]]
+) -> dict[str, list[str]]:
+    """回答の段落のうち、行の本文が監査済みの説明と同じもの（段落の ID → 根拠の chunk の id）。
+
+    同じ段落の文が、監査済みでない別の行にも現れるときは再利用しない。
+    """
+    if not audited:
+        return {}
+    lines = str(answer_text or "").split("\n")
+    settled: dict[str, list[str]] = {}
+    for passage in passages:
+        containing = [line for line in lines if passage["text"] and passage["text"] in line]
+        matched = [audited.get(audited_line_key(line)) for line in containing]
+        if containing and all(matched):
+            settled[passage["id"]] = list(matched[0] or ())
+    return settled
 
 
 class ClaimAuditOutput(BaseModel):
@@ -207,6 +293,7 @@ def validate_answer_claims(
     settings: Any,
     *,
     provider_id: str | None = None,
+    audited: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
 
@@ -214,6 +301,11 @@ def validate_answer_claims(
     ``section_path``・``sheet_name``・``row_start``・``row_end``・``cell_range`` を足したもの（#1450）。
     戻り値は status（completed / no_claims / input_too_large）・claim_checks・件数・切り詰め。
     見出し・出典の行・表の区切りと見出しの行・利用者への質問の段落は監査せず、claim_checks にも含めない（#1306 / #1317）。
+
+    ``audited`` は RAG の回答の監査を通った説明の本文（`audited_line_key`）→ 根拠の chunk の id（`audited_answer_items`。
+    呼び出し側が今の権限と版で読み直して本文が変わっていないものだけ。#1527）。行の本文が同じ段落は、根拠が
+    ``evidence_items`` にあればその判定（supported）を使い、モデルに渡さない。すべての段落が再利用できればモデルを
+    呼ばない（``reused_passage_ids`` に再利用した段落の ID）。
     """
     # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
@@ -224,32 +316,47 @@ def validate_answer_claims(
     base: dict[str, Any] = {"rubric_version": VALIDATION_RUBRIC_VERSION, "claim_checks": []}
     if not passages:
         return {**base, "status": "no_claims"}
+    readable = {str(item.get("id") or "") for item in evidence_items}
+    settled = {passage_id: chunk_ids for passage_id, chunk_ids in _settled_passages(answer_text, passages, audited or {}).items()
+               if chunk_ids and set(chunk_ids) <= readable}
+    reused = [
+        ClaimCheck(answer_quote=passage["text"], answer_passage_id=passage["id"], status="supported",
+                   source_id=settled[passage["id"]][0], evidence_quote="", reason=REUSED_CLAIM_REASON)
+        for passage in passages if passage["id"] in settled
+    ]
+    remaining = [passage for passage in passages if passage["id"] not in settled]
     fixed: dict[str, Any] = {
         "question": question,
         "answer_text": answer_text,
-        "answer_passages": passages,
+        "answer_passages": remaining,
     }
     fragments = list(_evidence_fragments([dict(item) for item in evidence_items]))
     evidence, truncated = _fit_evidence(fixed, fragments)
     if not evidence and fragments:
         return {**base, "status": "input_too_large"}
-    inputs = {**fixed, "evidence_items": evidence}
-
-    try:
-        output = _parse_checked(
-            VALIDATION_SYSTEM_PROMPT, inputs, settings, ClaimAuditOutput, provider_id,
-            _passage_check(passages, answer_text),
-        )
-    except EvaluationInputTooLarge:
-        return {**base, "status": "input_too_large"}
-    catalog = {item["evidence_id"]: item for item in evidence}
-    # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
-    bound = _bind_claims(output, catalog, passages, passage_citations=True)
-    # ID を書かない段落の出典が決まらなければ、回答の他の段落が引いた根拠で確かめ直す（#1412）。
-    bound_claims, rechecked = _recheck_unreferenced_passages(
-        bound.claim_checks, fixed, passages, evidence, catalog, settings, provider_id)
-    checked = {claim.answer_passage_id for claim in bound_claims}
+    bound_claims: list[ClaimCheck] = []
+    rechecked: list[str] = []
+    if remaining:
+        inputs = {**fixed, "evidence_items": evidence}
+        try:
+            output = _parse_checked(
+                VALIDATION_SYSTEM_PROMPT, inputs, settings, ClaimAuditOutput, provider_id,
+                _passage_check(remaining, answer_text),
+            )
+        except EvaluationInputTooLarge:
+            return {**base, "status": "input_too_large"}
+        catalog = {item["evidence_id"]: item for item in evidence}
+        # 回答の段落が書いた根拠の ID でも結び付ける（モデルが ID を写し損ねても出典の誤りにしない。#1404）。
+        bound = _bind_claims(output, catalog, remaining, passage_citations=True)
+        # ID を書かない段落の出典が決まらなければ、回答の他の段落が引いた根拠で確かめ直す（#1412）。再利用した段落の
+        # 根拠も「他の段落が引いた根拠」に入れる。
+        rebound, rechecked = _recheck_unreferenced_passages(
+            [*bound.claim_checks, *reused], fixed, remaining, evidence, catalog, settings, provider_id)
+        bound_claims = [claim for claim in rebound if claim.answer_passage_id not in settled]
+    checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
     claims = [
+        *[claim for passage in passages if passage["id"] in settled
+          for claim in reused if claim.answer_passage_id == passage["id"]],
         *bound_claims,
         *[
             ClaimCheck(
@@ -275,7 +382,9 @@ def validate_answer_claims(
         "evidence_truncated": truncated,
         "evidence_ids": sorted({str(item.get("id")) for item in evidence}),
         "rechecked_passage_ids": rechecked,
+        "reused_passage_ids": [passage["id"] for passage in passages if passage["id"] in settled],
     }
 
 
-__all__ = ["VALIDATION_RUBRIC_VERSION", "validate_answer_claims"]
+__all__ = ["REUSED_CLAIM_REASON", "VALIDATION_RUBRIC_VERSION", "audited_answer_items", "audited_line_key",
+           "validate_answer_claims"]

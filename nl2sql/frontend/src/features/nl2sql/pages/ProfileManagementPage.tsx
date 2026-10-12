@@ -92,7 +92,10 @@ import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
 import { DbObjectName } from "../components/DbObjectName";
 import { formatDbObjectName, formatDbObjectPart } from "../dbObjectIdentity";
+import { NL2SQL_ENGINES_URL, defaultEngineOptions } from "../profileEngineOptions";
 import type {
+  Nl2SqlEngine,
+  Nl2SqlEnginesData,
   Nl2SqlProfile,
   ProfileDeleteData,
   ProfileSummary,
@@ -142,7 +145,10 @@ interface ProfileFormState {
   allowedTables: string[];
   allowedViews: string[];
   selectAiConfig: ProfileSelectAiConfig;
+  /** 既定の生成方式（#1524）。 */
+  defaultEngine: Nl2SqlEngine;
 }
+
 
 const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   profile_name: "",
@@ -166,6 +172,7 @@ const EMPTY_FORM: ProfileFormState = {
   allowedTables: [],
   allowedViews: [],
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
+  defaultEngine: "select_ai",
 };
 
 function emptyProfileForm(): ProfileFormState {
@@ -310,6 +317,7 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
     allowedTables: normalized.allowed_tables,
     allowedViews: normalized.allowed_views,
     selectAiConfig,
+    defaultEngine: normalized.default_engine ?? "select_ai",
   };
 }
 
@@ -322,6 +330,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     allowed_views: form.allowedViews,
     sql_rules: [],
     safety_policy: "select_only",
+    default_engine: form.defaultEngine,
     select_ai_config: {
       ...form.selectAiConfig,
       profile_name: profileName,
@@ -819,6 +828,7 @@ function ProfileEditor({
   busy,
   nameError,
   requiredErrors,
+  engineOptions,
   oracleConfirmation,
   rebuildAgentAssets,
   canClearOracleExecution,
@@ -871,6 +881,8 @@ function ProfileEditor({
   busy: boolean;
   nameError: ProfileNameError;
   requiredErrors: ProfileRequiredErrors;
+  /** 既定の生成方式の選択肢（この環境で使える方式。#1524）。 */
+  engineOptions: readonly SelectFieldOption<Nl2SqlEngine>[];
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
   canClearOracleExecution: boolean;
@@ -977,6 +989,16 @@ function ProfileEditor({
           >
             {t("profiles.field.nameHint")}
           </p>
+          {/* 既定の生成方式（#1524）。SQL 生成・チャットの初期の選択と、方式を指定しない問い合わせ（Agent の MCP）が使う。 */}
+          <SelectField
+            id="profile-default-engine"
+            label={t("profiles.field.defaultEngine")}
+            value={form.defaultEngine}
+            options={engineOptions}
+            helper={t("profiles.field.defaultEngineHint")}
+            onValueChange={(value) => onFormChange((current) => ({ ...current, defaultEngine: value }))}
+            className="order-4 mt-2 min-w-0 md:order-none"
+          />
         </div>
       </section>
 
@@ -1280,6 +1302,16 @@ export function ProfileManagementPage() {
   const dbProfileRefreshing = dbProfileRefreshIsActive(dbProfileRefreshStatus);
   // どの「業務プロファイルを再取得」で始めた送信か（ヘッダー / 失敗の案内）。送信の間だけ押した側を回す（#821）。
   const [dbProfileRefreshOrigin, setDbProfileRefreshOrigin] = useState<"header" | "notice">("header");
+  // 既定の生成方式の選択肢（この環境で使える方式。#1524）。
+  const enginesQuery = useQuery({
+    queryKey: ["nl2sql", "engines"],
+    queryFn: ({ signal }) => apiGet<Nl2SqlEnginesData>(NL2SQL_ENGINES_URL, { signal }),
+    staleTime: 60_000,
+  });
+  const engineOptions = useMemo(
+    () => defaultEngineOptions(form.defaultEngine, enginesQuery.data),
+    [form.defaultEngine, enginesQuery.data]
+  );
   const dbProfilesQuery = useQuery({
     queryKey: ["nl2sql", "select-ai", "business-profiles"],
     queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
@@ -1970,6 +2002,7 @@ export function ProfileManagementPage() {
   const editor = (
     <ProfileEditor
       selectedProfile={selectedProfile}
+      engineOptions={engineOptions}
       profileAccessProfile={selectedProfileAccessProfile}
       form={form}
       tableObjects={tableObjects}
