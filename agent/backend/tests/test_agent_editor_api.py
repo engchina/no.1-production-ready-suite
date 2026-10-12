@@ -65,7 +65,7 @@ def test_agent_api_errors_are_japanese() -> None:
 
     default = client.request("DELETE", "/api/agents/default")
     assert default.status_code == 400
-    assert _messages(default) == ["既定の業務 Agent は削除できません。"]
+    assert _messages(default) == ["組み込みの業務 Agent は削除できません。"]
 
 
 def test_unknown_skill_message_tells_how_to_fix() -> None:

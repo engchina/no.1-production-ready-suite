@@ -269,7 +269,7 @@ for (const viewport of VIEWPORTS) {
       await expect(detail.getByText("run-e2e-1", { exact: true }).first()).toBeVisible();
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
-      await page.getByRole("link", { name: /^二つ目の目標 汎用業務 Agent/ }).click();
+      await page.getByRole("link", { name: /^二つ目の目標 資料・データ横断アシスタント/ }).click();
       await expect(detail.getByText("run-e2e-2", { exact: true }).first()).toBeVisible();
       await expect(page.getByTestId("run-object-actions").getByRole("button", { name: "再実行" })).toBeVisible();
 
@@ -288,8 +288,8 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
-      const first = page.getByRole("link", { name: /^一つ目の目標 汎用業務 Agent/ });
-      const second = page.getByRole("link", { name: /^二つ目の目標 汎用業務 Agent/ });
+      const first = page.getByRole("link", { name: /^一つ目の目標 資料・データ横断アシスタント/ });
+      const second = page.getByRole("link", { name: /^二つ目の目標 資料・データ横断アシスタント/ });
       await expect(first).toHaveAttribute("data-row-title-button", "");
       // 一覧では自動で詳細を開かず、選んだ履歴だけを現在の項目にする。
       await expect(first).not.toHaveAttribute("aria-current", /.*/);

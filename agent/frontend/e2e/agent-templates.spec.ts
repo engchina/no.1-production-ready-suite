@@ -56,7 +56,7 @@ for (const viewport of VIEWPORTS) {
       expect(body.template_id).toBe("sales-analytics");
       await expect(page.getByText("評価セット「営業分析（テンプレート）」を作りました")).toBeVisible();
       expect(mockApi.lastRequest("POST", "/api/evaluation-sets/from-template")?.body).toEqual({
-        agent_id: String(body.id ?? "agent-2"),
+        agent_id: String(body.id ?? "agent-4"),
       });
       expect(mockApi.state.evaluationSets[0].cases).toEqual([
         {
@@ -94,7 +94,7 @@ test("使えない Skill は外して知らせ、既存の業務 Agent の編集
   await expect(page.getByRole("option", { name: /^業務 RAG 調査/ })).toBeChecked();
 
   await page.goto("/agents?id=default");
-  await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "資料・データ横断アシスタント", level: 1 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "テンプレートから始める" })).toHaveCount(0);
 });
 

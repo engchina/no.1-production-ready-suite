@@ -88,7 +88,7 @@ test("一覧に公開の状態を出す", async ({ page, mockApi }) => {
   await page.goto("/agents");
   const table = page.getByRole("table");
   await expect(table.getByRole("row", { name: /経理の Agent/ }).getByText("未公開")).toBeVisible();
-  await expect(table.getByRole("row", { name: /汎用業務 Agent/ }).getByText("公開中 v1")).toBeVisible();
+  await expect(table.getByRole("row", { name: /資料・データ横断アシスタント/ }).getByText("公開中 v1")).toBeVisible();
 });
 
 test("公開していない Agent は、管理者が「下書きで実行」にしたときだけ Run で選べる", async ({ page, mockApi }) => {

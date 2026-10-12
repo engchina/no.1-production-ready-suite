@@ -90,7 +90,7 @@ test("消えた業務 Agent の自動実行は ID と「見つかりません」
 
 test("新規を直接開いても、業務 Agent の一覧が届いたら先頭の業務 Agent を選んで作成できる", async ({ page, mockApi }) => {
   await page.goto("/automations?id=new");
-  await expect(page.locator("#automation-agent")).toHaveText(/汎用業務 Agent/);
+  await expect(page.locator("#automation-agent")).toHaveText(/資料・データ横断アシスタント/);
   await page.getByLabel("名前").fill("受注の通知");
   await page.locator("#automation-goal").fill("受け取った受注を確認してください。");
   // 業務 Agent を選んだだけでは未保存の変更にしない（一覧へ戻るで確認を出さない）。

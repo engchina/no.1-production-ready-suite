@@ -2247,7 +2247,7 @@ def test_runtime_snapshot_invalid_replace_and_warnings_are_japanese() -> None:
         "/api/runtime/snapshot/import",
         json={"snapshot": without_default, "dry_run": True},
     ).json()["data"]["validation"]
-    missing_default = "既定の業務 Agent（default）がありません。置換すると作り直します。"
+    missing_default = "組み込みの業務 Agent（default）がありません。置換すると作り直します。"
     assert missing_default in checked["warnings"]
 
     invalid = deepcopy(snapshot)
