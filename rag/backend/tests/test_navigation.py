@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
+import json
+import re
+import unicodedata
+from pathlib import Path
+from typing import Any
 
+import pytest
+from rag_engine.chunking.headings import layout_section_paths
+
+from app.rag.document_sections import sections_from_navigation
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_section_id,
@@ -162,3 +170,61 @@ def test_navigation_round_trips_through_document_payload() -> None:
     assert payload["navigation"]
     restored = StructuredExtraction.model_validate(payload)
     assert restored.navigation == extraction.navigation
+
+
+# 評価の PDF を Docling で解析した layout record（rag_engine の回帰テストと同じ fixture。#1517）。
+_RAG_ROOT = Path(__file__).resolve().parents[2]
+_LAYOUT_FIXTURE = (
+    _RAG_ROOT / "packages" / "rag_engine" / "tests" / "fixtures" / "evaluation_layout_headings.json"
+)
+_LAYOUT_DOCUMENTS: dict[str, list[dict[str, Any]]] = {
+    name: document["records"]
+    for name, document in json.loads(_LAYOUT_FIXTURE.read_text(encoding="utf-8"))[
+        "documents"
+    ].items()
+}
+_HEADING_TAG = re.compile(r"<h([1-6])[^>]*>(.*?)</h\1>", re.S)
+
+
+def _heading_key(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+
+
+def _source_toc(name: str) -> list[tuple[int, str]]:
+    """原稿の HTML の見出し(h1〜h6)の階層と名前。"""
+    folder, file_name = name.split("/", 1)
+    source = _RAG_ROOT / "evaluation" / folder / "sources" / file_name.replace(".pdf", ".html")
+    return [
+        (int(level), _heading_key(re.sub(r"<[^>]+>", "", title)))
+        for level, title in _HEADING_TAG.findall(source.read_text(encoding="utf-8"))
+    ]
+
+
+@pytest.mark.parametrize("name", sorted(_LAYOUT_DOCUMENTS), ids=sorted(_LAYOUT_DOCUMENTS))
+def test_docling_navigation_sections_follow_document_toc(name: str) -> None:
+    """Docling の要素から作る章節ナビゲーションの階層が、文書の目次どおりになる(#1517)。
+
+    要素の section_path は parser(``layout_to_extraction``)と同じく、chunk と同じ規則
+    (``layout_section_paths``)で作る。「第 3 章 > 3.1」の 3.1 は第 3 章の子(兄弟にしない)。
+    """
+    records = _LAYOUT_DOCUMENTS[name]
+    paths = layout_section_paths(records)
+    extraction = _extraction(
+        [
+            DocumentElement(
+                kind="title" if record["category"] in {"Title", "Section-header"} else "text",
+                text=record["text"],
+                order=order,
+                element_id=record["id"],
+                page_number=record["page"],
+                section_path=paths.get(record["id"], []),
+            )
+            for order, record in enumerate(records)
+        ]
+    )
+
+    sections = sections_from_navigation(build_navigation_tree(extraction))
+
+    assert [(section.level, _heading_key(section.title)) for section in sections] == _source_toc(
+        name
+    )

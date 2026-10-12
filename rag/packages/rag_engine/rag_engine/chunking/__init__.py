@@ -142,6 +142,8 @@ from rag_engine.chunking.headings import (
     _heading_form,
     _heading_source,
     _updated_section_path,
+    _section_path_state_after,
+    layout_section_paths,
     _section_unit,
     _section_unit_cached,
     _merge_section_paths,

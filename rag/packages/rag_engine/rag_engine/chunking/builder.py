@@ -53,14 +53,12 @@ from rag_engine.chunking.records import (
 )
 from rag_engine.chunking.headings import (
     _SENTENCE_BOUNDARY_PATTERN,
-    _heading_key,
-    _heading_source,
     _merge_logical_page_labels,
     _merge_section_path_sources,
     _merge_section_paths,
     _promote_headings,
+    _section_path_state_after,
     _section_unit,
-    _updated_section_path,
 )
 from rag_engine.chunking.layout import (
     _annotate_layout_records,
@@ -282,17 +280,10 @@ def _build_child_chunks_for_engine(
             continue
         if category in SECTION_CATEGORIES and text_buffer and _buffer_has_body(text_buffer):
             flush_text_buffer()
-        if category in SECTION_CATEGORIES:
-            raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
-            if raw.get("recurring_heading") and _heading_key(text) in {_heading_key(h) for h in section_path}:
-                # 本文中に現在の節名がそのまま再掲されている（「Ａマスタ管理-（ 4 ）区分管理」）。節は変わらない。
-                # 見出しにすると子見出しになり、以降の手順が別の機能ユニットに割れる (#764)。
-                pass
-            else:
-                section_path, section_levels, section_depths, section_sources = _updated_section_path(
-                    section_path, section_levels, section_depths, text, level=_int_value(raw.get("heading_level")),
-                    sources=section_sources, source=_heading_source(record),
-                )
+        # 見出しの木の規則は章節ナビゲーション（`layout_section_paths`）と共通 (#1517)。
+        section_path, section_levels, section_depths, section_sources = _section_path_state_after(
+            (section_path, section_levels, section_depths, section_sources), record,
+        )
         if category == "Table":
             heading_records = []
             if text_buffer and _buffer_has_body(text_buffer):
