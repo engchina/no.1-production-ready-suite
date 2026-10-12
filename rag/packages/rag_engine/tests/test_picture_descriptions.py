@@ -7,20 +7,18 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from rag_engine.resources.jsonl import record_to_legacy_jsonl
+from rag_engine.config import get_settings
+from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.picture_descriptions import (
-    VISION_TARGET_OUTLINE,
     MAX_CHART_SERIES_VALUES,
-    MAX_DIAGRAM_NODES,
-    MAX_FORM_FIELDS,
     MAX_TABLE_COLUMNS,
-    MAX_TABLE_ROWS,
+    VISION_TARGET_OUTLINE,
     _bounded_vision_description,
     describe_docling_pictures,
     vision_description_text,
 )
-from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.config import get_settings
+from rag_engine.parsing.vision_prompt_rules import MAX_DIAGRAM_NODES, MAX_FORM_FIELDS, MAX_TABLE_ROWS
+from rag_engine.resources.jsonl import record_to_legacy_jsonl
 
 
 class PictureDescriptionTests(unittest.TestCase):
@@ -160,9 +158,7 @@ class PictureDescriptionTests(unittest.TestCase):
         description = _bounded_vision_description(
             {
                 "diagram_nodes": [f"node-{index}" for index in range(MAX_DIAGRAM_NODES + 5)],
-                "chart_series": [
-                    {"name": "requests", "values": list(range(MAX_CHART_SERIES_VALUES + 5)), "trend": "up"}
-                ],
+                "chart_series": [{"name": "requests", "values": list(range(MAX_CHART_SERIES_VALUES + 5)), "trend": "up"}],
                 "table_rows": [list(range(MAX_TABLE_COLUMNS + 5)) for _ in range(MAX_TABLE_ROWS + 5)],
                 "form_fields": [{"name": str(index)} for index in range(MAX_FORM_FIELDS + 5)],
             }
@@ -191,9 +187,7 @@ class PictureDescriptionTests(unittest.TestCase):
             }
 
             with patch("rag_engine.parsing.picture_descriptions.describe_picture", return_value=description):
-                stats = describe_docling_pictures(
-                    [record], [page], run_dir=run_dir, pdf_name="manual.pdf", settings=get_settings()
-                )
+                stats = describe_docling_pictures([record], [page], run_dir=run_dir, pdf_name="manual.pdf", settings=get_settings())
 
             self.assertEqual((stats.targets, stats.succeeded, stats.failed), (1, 1, 0))
             self.assertEqual(record.raw["picture_kind"], "flowchart")
@@ -438,6 +432,7 @@ class PictureDescriptionTests(unittest.TestCase):
             self.assertTrue((run_dir / logo.raw["crop_path"]).is_file())
             self.assertTrue((run_dir / logo.raw["vision_context_crop"]).is_file())
             from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
+
             mark_picture_record_role(logo, classify_picture_record(logo, [logo]))
             self.assertEqual(logo.raw["vision_status"], "succeeded")
             self.assertFalse(logo.raw["vision_skipped"])
@@ -505,9 +500,7 @@ class PictureDescriptionTests(unittest.TestCase):
             record = _record("docling-p1-1", "docling", "Picture", 1, [30, 30, 30, 30])
 
             with patch("rag_engine.parsing.picture_descriptions.describe_picture") as describe:
-                stats = describe_docling_pictures(
-                    [record], [page], run_dir=run_dir, pdf_name="manual.pdf", settings=get_settings()
-                )
+                stats = describe_docling_pictures([record], [page], run_dir=run_dir, pdf_name="manual.pdf", settings=get_settings())
 
             self.assertEqual((stats.targets, stats.succeeded, stats.failed), (1, 0, 1))
             self.assertFalse(describe.called)

@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import threading
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from rag_engine.config import DEFAULT_OCI_CONFIG_FILE, DEFAULT_OCI_PROFILE, load_dotenv
-
 
 DEFAULT_ADB_DB_NAME = "AIRAGADB"
 DEFAULT_ADB_DB_USER = "admin"
@@ -23,6 +23,7 @@ REQUIRED_MTLS_WALLET_FILES = ("tnsnames.ora", "ewallet.pem")
 @dataclass(frozen=True)
 class AdbSettings:
     """Oracle 接続設定。TCP Easy Connect では OCID と Wallet は不要です。"""
+
     ocid: str
     db_name: str
     tns_alias: str
@@ -48,11 +49,7 @@ class AdbSettings:
 def _is_tcp_easy_connect(dsn: str) -> bool:
     """host:port/service または tcp:// 形式を判別します。TCPS は除外します。"""
     value = dsn.strip().lower()
-    return (
-        "/" in value
-        and not value.startswith("(")
-        and ("://" not in value or value.startswith("tcp://"))
-    )
+    return "/" in value and not value.startswith("(") and ("://" not in value or value.startswith("tcp://"))
 
 
 def load_adb_settings(
@@ -235,10 +232,9 @@ def validate_mtls_wallet(settings: AdbSettings) -> None:
 
 def smoke_test_adb_connection(settings: AdbSettings) -> int:
     """ADB に接続して select 1 による疎通確認を実行します。"""
-    with connect_adb_thin(settings) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("select 1 from dual")
-            row = cursor.fetchone()
+    with connect_adb_thin(settings) as connection, connection.cursor() as cursor:
+        cursor.execute("select 1 from dual")
+        row = cursor.fetchone()
     if not row:
         raise RuntimeError("ADB smoke test returned no rows.")
     return int(row[0])

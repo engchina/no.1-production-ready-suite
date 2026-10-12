@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
-from rag_engine.parsing.coordinates import image_top_left_to_pdf_bottom_left
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.coordinates import image_top_left_to_pdf_bottom_left
 
 
 def record_to_legacy_jsonl(record: LayoutRecord, page: PageImage | None = None) -> dict:
@@ -40,10 +40,7 @@ def record_to_legacy_jsonl(record: LayoutRecord, page: PageImage | None = None) 
 def dumps_jsonl(records: Iterable[LayoutRecord], pages: Iterable[PageImage]) -> str:
     """LayoutRecord と PageImage を JSONL 文字列へ変換します。"""
     by_page = {page.page: page for page in pages}
-    lines = [
-        json.dumps(record_to_legacy_jsonl(record, by_page.get(record.page)), ensure_ascii=False)
-        for record in records
-    ]
+    lines = [json.dumps(record_to_legacy_jsonl(record, by_page.get(record.page)), ensure_ascii=False) for record in records]
     return "\n".join(lines) + ("\n" if lines else "")
 
 

@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
-    CHUNKS_DIRECTORY,
     CHUNK_SCHEMA_VERSION,
+    CHUNKS_DIRECTORY,
     LATEST_CHUNKS_FILE,
     ChunkingConfig,
     ChunkingResult,
@@ -154,12 +154,14 @@ class DomainKeywordCandidateTests(unittest.TestCase):
     def test_candidate_generation_surfaces_tokenizer_errors(self):
         sources = [_source("chunk-1", "契約区分")]
 
-        with patch(
-            "rag_engine.knowledge.domain_keyword_candidates.tokenize_text_search_query",
-            side_effect=RuntimeError("broken tokenizer"),
+        with (
+            patch(
+                "rag_engine.knowledge.domain_keyword_candidates.tokenize_text_search_query",
+                side_effect=RuntimeError("broken tokenizer"),
+            ),
+            self.assertRaisesRegex(DomainKeywordCandidateTokenizationError, "broken tokenizer"),
         ):
-            with self.assertRaisesRegex(DomainKeywordCandidateTokenizationError, "broken tokenizer"):
-                suggest_domain_keyword_candidates(sources)
+            suggest_domain_keyword_candidates(sources)
 
     def test_latest_chunk_runs_deduplicate_repeated_analysis_of_same_document(self):
         with TemporaryDirectory() as tmp:

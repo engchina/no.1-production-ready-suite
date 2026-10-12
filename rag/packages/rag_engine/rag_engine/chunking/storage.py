@@ -1,24 +1,25 @@
 """チャンキングの実行成果物の永続化。"""
+
 from __future__ import annotations
+
 import hashlib
 import json
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
-from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
-from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
-from rag_engine.knowledge.document_metadata import normalize_document_metadata
+from typing import Any
+
 from rag_engine.chunking import (
-    CHUNKS_DIRECTORY,
     CHUNK_METADATA_SCHEMA_VERSION,
     CHUNK_SCHEMA_VERSION,
     CHUNK_STRATEGY,
-    ChunkingConfig,
-    ChunkingResult,
+    CHUNKS_DIRECTORY,
     LATEST_CHUNKS_FILE,
     RUN_ID_PATTERN,
     SEARCH_TEXT_SCHEMA_VERSION,
+    ChunkingConfig,
+    ChunkingResult,
     _bool_value,
     _chunk_from_payload,
     _chunking_config_from_payload,
@@ -33,6 +34,10 @@ from rag_engine.chunking import (
     build_small_to_big_chunks,
     validate_run_id,
 )
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
+from rag_engine.knowledge.document_metadata import normalize_document_metadata
+from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
+
 
 def create_chunk_run(
     *,
@@ -54,12 +59,10 @@ def create_chunk_run(
         document_metadata if document_metadata is not None else payload.get("document_metadata"),
         source_file_name=str(payload.get("pdf_name") or ""),
     )
-    document_classification = classification_from_metadata(
-        classification if classification is not None else payload.get("classification")
-    )
+    document_classification = classification_from_metadata(classification if classification is not None else payload.get("classification"))
     selected_engine_ids = _effective_engine_ids(payload, preferred_engine_ids)
     chunking_config = (config or ChunkingConfig()).validate()
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     source_file_sha256 = _optional_file_sha256(Path(output_dir) / source_run_id / "source.pdf")
     source_page_count = _source_page_count(payload)
     chunks = build_small_to_big_chunks(
@@ -124,6 +127,7 @@ def create_chunk_run(
     )
     return result
 
+
 def load_latest_chunk_run(output_dir: str | Path, run_id: Any) -> ChunkingResult | None:
     """指定 source run に紐づく最新チャンク実行を読み込みます。
 
@@ -151,6 +155,7 @@ def load_latest_chunk_run(output_dir: str | Path, run_id: Any) -> ChunkingResult
         return None
     return chunk_result_from_payload(payload, json_path=chunk_json_path, latest_path=latest_path)
 
+
 def load_chunk_run_by_id(output_dir: str | Path, chunk_run_id: Any) -> ChunkingResult | None:
     """chunk_run_id から保存済みチャンク実行を読み込みます。
 
@@ -166,9 +171,7 @@ def load_chunk_run_by_id(output_dir: str | Path, chunk_run_id: Any) -> ChunkingR
         return None
 
     try:
-        candidates = Path(output_dir).glob(
-            f"*/{CHUNKS_DIRECTORY}/{normalized_chunk_run_id}/chunks.json"
-        )
+        candidates = Path(output_dir).glob(f"*/{CHUNKS_DIRECTORY}/{normalized_chunk_run_id}/chunks.json")
         for chunk_json_path in candidates:
             try:
                 payload = json.loads(chunk_json_path.read_text(encoding="utf-8"))
@@ -185,6 +188,7 @@ def load_chunk_run_by_id(output_dir: str | Path, chunk_run_id: Any) -> ChunkingR
         return None
     return None
 
+
 def load_latest_or_source_chunk_run(output_dir: str | Path, run_id: Any) -> ChunkingResult | None:
     """最新チャンクがなければ source run 自身を fallback として読み込みます。
 
@@ -195,6 +199,7 @@ def load_latest_or_source_chunk_run(output_dir: str | Path, run_id: Any) -> Chun
     if direct is not None:
         return direct
     return load_latest_chunk_run_for_run_source(output_dir, run_id)
+
 
 def load_latest_chunk_run_for_source(
     output_dir: str | Path,
@@ -220,6 +225,7 @@ def load_latest_chunk_run_for_source(
         source_file_name=source_file.name,
     )
 
+
 def load_latest_chunk_run_for_run_source(
     output_dir: str | Path,
     run_id: Any,
@@ -243,6 +249,7 @@ def load_latest_chunk_run_for_run_source(
         source_page_count=source_page_count,
         source_file_name=source_file_name,
     )
+
 
 def _load_latest_chunk_run_for_source_identity(
     output_dir: str | Path,
@@ -290,10 +297,15 @@ def _latest_pointer_identity(latest_path: Path) -> tuple[str, int, str, bool] | 
     if not isinstance(latest, dict) or "source_file_sha256" not in latest:
         return None
     try:
-        return (str(latest.get("source_file_sha256") or ""), int(latest.get("source_page_count") or 0),
-                str(latest.get("source_file_name") or ""), bool(latest.get("active", True)))
+        return (
+            str(latest.get("source_file_sha256") or ""),
+            int(latest.get("source_page_count") or 0),
+            str(latest.get("source_file_name") or ""),
+            bool(latest.get("active", True)),
+        )
     except (TypeError, ValueError):
         return None
+
 
 def chunk_result_from_payload(
     payload: dict[str, Any],
@@ -336,6 +348,7 @@ def chunk_result_from_payload(
         document_metadata=payload.get("document_metadata") or {},
         source_document_id=str(payload.get("source_document_id") or ""),
     )
+
 
 def chunk_payload(result: ChunkingResult) -> dict[str, Any]:
     """ChunkingResult を保存用 JSON payload に変換します。"""
@@ -388,6 +401,7 @@ def _validate_chunk_contracts(value: Any) -> None:
     if value != _chunk_contracts():
         raise ValueError("対応していない chunk contracts です。再チャンキングしてください。")
 
+
 def _load_viewer_payload(output_dir: str | Path, run_id: str) -> dict[str, Any]:
     viewer_data_path = Path(output_dir) / run_id / "viewer-data.json"
     if not viewer_data_path.exists():
@@ -399,6 +413,7 @@ def _load_viewer_payload(output_dir: str | Path, run_id: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("解析結果 JSON の形式が不正です。")
     return payload
+
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -419,6 +434,7 @@ def _write_json(path: Path, payload: Any) -> None:
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink(missing_ok=True)
+
 
 def _write_jsonl(path: Path, payloads: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -444,7 +460,8 @@ def _write_jsonl(path: Path, payloads: Iterable[dict[str, Any]]) -> None:
 
 def persist_batch(batch, *, output_dir: str | Path) -> ChunkingResult:
     """SDK の分割済みデータを既存 manifest 形式で保存する。再分割はしない。"""
-    from rag_engine.chunking import _config_hash, _create_chunk_run_id, CHUNKS_DIRECTORY, LATEST_CHUNKS_FILE
+    from rag_engine.chunking import CHUNKS_DIRECTORY, LATEST_CHUNKS_FILE, _config_hash, _create_chunk_run_id
+
     document = batch.document
     source_id = validate_run_id(document.source_run_id or document.document_id)
     engines = list(dict.fromkeys(chunk.source_engine_id for chunk in batch.chunks))
@@ -452,21 +469,43 @@ def persist_batch(batch, *, output_dir: str | Path) -> ChunkingResult:
     run_id = _create_chunk_run_id(source_id, config_hash)
     directory = Path(output_dir) / source_id / CHUNKS_DIRECTORY / run_id
     latest = directory.parent / LATEST_CHUNKS_FILE
-    created = datetime.now(timezone.utc).isoformat()
+    created = datetime.now(UTC).isoformat()
     result = ChunkingResult(
-        source_id, run_id, document.source_name, engines, batch.config, config_hash, created, True,
-        _optional_file_sha256(Path(output_dir) / source_id / "source.pdf"), document.page_count,
-        list(batch.chunks), str(directory / "chunks.json"), str(directory / "chunks.jsonl"), str(latest),
-        dict(document.classification), dict(document.metadata),
+        source_id,
+        run_id,
+        document.source_name,
+        engines,
+        batch.config,
+        config_hash,
+        created,
+        True,
+        _optional_file_sha256(Path(output_dir) / source_id / "source.pdf"),
+        document.page_count,
+        list(batch.chunks),
+        str(directory / "chunks.json"),
+        str(directory / "chunks.jsonl"),
+        str(latest),
+        dict(document.classification),
+        dict(document.metadata),
         source_document_id=document.document_id,
     )
     directory.mkdir(parents=True, exist_ok=True)
     _write_json(Path(result.json_path), chunk_payload(result))
     _write_jsonl(Path(result.jsonl_path), (chunk.to_dict() for chunk in result.chunks))
-    _write_json(latest, {"schema_version": CHUNK_SCHEMA_VERSION, "strategy": CHUNK_STRATEGY,
-                        "source_run_id": source_id, "chunk_run_id": run_id, "created_at_utc": created,
-                        "config_hash": config_hash, "active": True,
-                        "chunks_json_path": result.json_path, "chunks_jsonl_path": result.jsonl_path})
+    _write_json(
+        latest,
+        {
+            "schema_version": CHUNK_SCHEMA_VERSION,
+            "strategy": CHUNK_STRATEGY,
+            "source_run_id": source_id,
+            "chunk_run_id": run_id,
+            "created_at_utc": created,
+            "config_hash": config_hash,
+            "active": True,
+            "chunks_json_path": result.json_path,
+            "chunks_jsonl_path": result.jsonl_path,
+        },
+    )
     return result
 
 
