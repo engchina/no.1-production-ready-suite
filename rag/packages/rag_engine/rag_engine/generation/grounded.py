@@ -2785,7 +2785,7 @@ def better(candidate: Round, current: Round) -> bool:
     失ったとは扱わない: 撤回した要求は addressed から外れてよく、verified は撤回分を足して比べる。撤回だけの
     round も採用する（内容の正確さを件数より優先する）。撤回のない減少は従来どおり採用しない (#1011)。
     """
-    if candidate.audit_cut and current.audit is not None:
+    if getattr(candidate, "audit_cut", False) and getattr(current, "audit", None) is not None:
         # 監査が時間の上限で切れた round（#1516）は、監査を通った round より採用しない。監査で降格されていない分だけ
         # 公開できる説明が多く見え、確かめていない説明が確かめた説明を置き換えてしまう。
         return False
