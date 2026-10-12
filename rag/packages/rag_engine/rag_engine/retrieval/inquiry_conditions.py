@@ -6,10 +6,11 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from rag_engine.resources.runtime import current_profile
-from typing import Any, Iterable, Sequence
+from typing import Any
 
+from rag_engine.resources.runtime import current_profile
 
 INQUIRY_CONDITION_SCHEMA_VERSION = 1
 INQUIRY_PROFILE_SCHEMA_VERSION = 1
@@ -29,9 +30,7 @@ _TERM_PATTERN = re.compile(r"[0-9A-Za-z_]+|[ぁ-んァ-ン一-龯々ー・]{2,}"
 _ERROR_CODE_PATTERN = re.compile(
     r"(?<![0-9A-Za-z])(?:[A-Z]{1,5}[-_]?\d{3,6}|\d{2}[A-Z]\d{3}|[WE]\d{3,5})(?![0-9A-Za-z])",
 )
-_PARAMETER_PATTERN = re.compile(
-    r"(?P<name>[A-Za-z][A-Za-z0-9_]{2,})\s*(?:[（(][^）)]*[）)]\s*)?[:：,、]\s*(?P<value>[0-9A-Za-z_-]{1,12})"
-)
+_PARAMETER_PATTERN = re.compile(r"(?P<name>[A-Za-z][A-Za-z0-9_]{2,})\s*(?:[（(][^）)]*[）)]\s*)?[:：,、]\s*(?P<value>[0-9A-Za-z_-]{1,12})")
 _DATE_PATTERN = re.compile(
     r"(?<![0-9A-Za-z])(?:R\d{1,2}[./年]\d{1,2}(?:[./月]\d{1,2}日?)?|"
     r"[平成令和]\s*\d{1,2}年\s*\d{1,2}月(?:\s*\d{1,2}日)?|"
@@ -47,9 +46,7 @@ _FILE_PATTERN = re.compile(
 # 「2ページ目」「2頁」「p.2」。「P2」のように点のない形は製品名・型番と区別できないため対象にしない。
 _PAGE_PATTERN = re.compile(r"(?<![0-9A-Za-z])(?:(\d{1,4})\s*(?:ページ目?|頁)|[pP]\.\s*(\d{1,4})(?![0-9A-Za-z]))")
 _COLUMN_PATTERN = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})\s*列")
-_SCREEN_PATTERN = re.compile(
-    r"[0-9A-Za-zぁ-んァ-ン一-龯々ー・（）()]+(?:画面|タブ|メニュー|処理|登録|設定)"
-)
+_SCREEN_PATTERN = re.compile(r"[0-9A-Za-zぁ-んァ-ン一-龯々ー・（）()]+(?:画面|タブ|メニュー|処理|登録|設定)")
 # 画面名は名詞句であり疑問詞を含まない。接尾語だけで判定すると「どこから登録」「どのように設定」も
 # 画面名になり、検索語と名指し画面の並び替え（#1044）が質問の疑問部分に引きずられる (#1066)。
 _INTERROGATIVE_PATTERN = re.compile(r"どこ|どの|どう|なぜ|いつ|いくつ|何")
@@ -110,6 +107,7 @@ _CONDITION_TERMS = ("場合", "条件", "注意", "対象外", "不要", "でき
 @dataclass(frozen=True)
 class InquiryProfileDefinition:
     """問い合わせ種別ごとの trigger、channel 重み、prompt 指示を定義します。"""
+
     profile_id: str
     label: str
     weight: float
@@ -175,8 +173,7 @@ def _document_kind_patterns() -> tuple[tuple[str, str], ...]:
     if not extra:
         return _DOCUMENT_KIND_PATTERNS
     alternatives = "|".join(re.escape(term) for term in extra)
-    return tuple((label, f"{pattern}|{alternatives}" if label == "外部データ" else pattern)
-                 for label, pattern in _DOCUMENT_KIND_PATTERNS)
+    return tuple((label, f"{pattern}|{alternatives}" if label == "外部データ" else pattern) for label, pattern in _DOCUMENT_KIND_PATTERNS)
 
 
 def inquiry_profile_contract_hash() -> str:
@@ -200,6 +197,7 @@ def inquiry_profile_contract_hash() -> str:
 @dataclass(frozen=True)
 class InquiryMetadataFilter:
     """問い合わせ条件から派生した chunk metadata filter を保持します。"""
+
     source_file_terms: tuple[str, ...] = ()
     metadata_terms: tuple[str, ...] = ()
     # 質問が指定したページ番号（1 始まり）。source_file_terms と組でだけ使う（#601）。
@@ -223,6 +221,7 @@ class InquiryMetadataFilter:
 @dataclass(frozen=True)
 class InquiryConditionParse:
     """質問文から推定した問い合わせ種別、channel、制約を保持します。"""
+
     original_question: str
     business_domains: tuple[str, ...] = ()
     document_kinds: tuple[str, ...] = ()
@@ -337,10 +336,7 @@ class InquiryConditionParse:
         _append_line(lines, "列", self.column_terms)
         _append_line(lines, "コード/エラー", self.codes_and_errors)
         if self.parameter_refs:
-            lines.append(
-                "パラメータ: "
-                + " / ".join(f"{item['name']}={item['value']}" for item in self.parameter_refs)
-            )
+            lines.append("パラメータ: " + " / ".join(f"{item['name']}={item['value']}" for item in self.parameter_refs))
         _append_line(lines, "日付", self.date_terms)
         _append_line(lines, "検索語", self.search_terms[:12])
         _append_line(lines, "プロファイル", _display_profiles(self.active_profiles))
@@ -367,9 +363,7 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     comparable = _comparable(original)
     business_domains = _question_business_domains(original)
     document_kinds = _match_patterns(original, _document_kind_patterns())
-    screen_terms = _ordered_unique(
-        term for term in _SCREEN_PATTERN.findall(original) if not _INTERROGATIVE_PATTERN.search(term)
-    )
+    screen_terms = _ordered_unique(term for term in _SCREEN_PATTERN.findall(original) if not _INTERROGATIVE_PATTERN.search(term))
     menu_routes = _ordered_unique(_ROUTE_PATTERN.findall(original))
     file_terms = _ordered_unique(_FILE_PATTERN.findall(original))
     column_terms = _ordered_unique(f"{match.group(1).upper()}列" for match in _COLUMN_PATTERN.finditer(original))
@@ -534,9 +528,7 @@ def profile_chunk_score(chunk: Any, conditions: InquiryConditionParse, profile_i
     term_hits = _term_hits(text, conditions.search_terms)
     code_hits = _term_hits(text, conditions.codes_and_errors)
     param_hits = sum(
-        1
-        for ref in conditions.parameter_refs
-        if _comparable(ref.get("name", "")) in text and _comparable(ref.get("value", "")) in text
+        1 for ref in conditions.parameter_refs if _comparable(ref.get("name", "")) in text and _comparable(ref.get("value", "")) in text
     )
     field_hits = 0
     for field in (
@@ -676,11 +668,7 @@ def _looks_like_source_document(value: str) -> bool:
 
 
 def _match_patterns(text: str, patterns: tuple[tuple[str, str], ...]) -> list[str]:
-    return [
-        label
-        for label, pattern in patterns
-        if re.search(pattern, text, flags=re.IGNORECASE)
-    ]
+    return [label for label, pattern in patterns if re.search(pattern, text, flags=re.IGNORECASE)]
 
 
 def _extract_labeled_lines(text: str, label: str) -> list[str]:
@@ -746,10 +734,7 @@ def _ordered_unique(values: Iterable[Any]) -> list[str]:
 
 def _clean_text(value: Any) -> str:
     normalized = unicodedata.normalize("NFKC", str(value or ""))
-    normalized = "".join(
-        character for character in normalized
-        if unicodedata.category(character) not in {"Cc", "Cf"}
-    )
+    normalized = "".join(character for character in normalized if unicodedata.category(character) not in {"Cc", "Cf"})
     return re.sub(r"\s+", " ", normalized).strip()
 
 

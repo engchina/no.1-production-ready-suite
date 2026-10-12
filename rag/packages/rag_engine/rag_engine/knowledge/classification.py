@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from rag_engine.resources.runtime import current_profile
+from typing import Any
+
 from rag_engine.profiles import load_profile
-from typing import Any, Iterable, Sequence
+from rag_engine.resources.runtime import current_profile
 
 
 def _category_label_without_code(value: str) -> str:
@@ -40,6 +42,7 @@ def _middle_aliases():
 @dataclass(frozen=True)
 class DocumentClassification:
     """文書の大分類・中分類・小分類と推定元を保持します。"""
+
     large_category: str = DEFAULT_CATEGORY_VALUE
     middle_category: str = DEFAULT_CATEGORY_VALUE
     small_category: str = DEFAULT_CATEGORY_VALUE
@@ -66,6 +69,7 @@ class ClassificationFilter:
     ponytail: 検索経路の全呼び出しが既にこの型を運ぶため、新しい引数を通す代わりにここへ載せる。
     分類以外の条件が増えたら RetrievalFilter へ分離する。
     """
+
     large_category: str = ""
     middle_category: str = ""
     small_category: str = ""
@@ -107,6 +111,7 @@ REQUEST_FILTER_KEYS = frozenset({"large_category", "middle_category", "small_cat
 @dataclass(frozen=True)
 class ClassificationOptions:
     """UI の分類 selector に提示する候補群を保持します。"""
+
     large_categories: tuple[str, ...]
     middle_categories: tuple[str, ...]
     small_categories: tuple[str, ...]
@@ -144,11 +149,7 @@ def classification_from_selection(
     small_category: Any = "",
 ) -> DocumentClassification:
     """UI 手入力値と path 推定値を統合し、任意の中・小分類を保持します。"""
-    inferred = (
-        infer_classification_from_path(source_path, source_root=source_root)
-        if source_path
-        else DocumentClassification()
-    )
+    inferred = infer_classification_from_path(source_path, source_root=source_root) if source_path else DocumentClassification()
     manual_large = _large_category_value(large_category)
     manual_middle = _middle_category_value(middle_category)
     manual_small = _small_category_value(small_category)
@@ -251,8 +252,7 @@ def classification_options_from_share(
     large = set(current_profile().large_categories)
     middle = set(current_profile().middle_categories)
     middle_by_large = {
-        large_category: set(middle_categories)
-        for large_category, middle_categories in dict(current_profile().categories).items()
+        large_category: set(middle_categories) for large_category, middle_categories in dict(current_profile().categories).items()
     }
     small: set[str] = set()
     if root.exists():

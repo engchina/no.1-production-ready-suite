@@ -2,10 +2,10 @@
 
 import hashlib
 import json
-from datetime import date
 import re
 import unittest
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -15,9 +15,9 @@ from rag_engine.adapters.oracle.store import (
     EMBEDDING_INPUT_TYPE_SEARCH_DOCUMENT,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
     StoredChunk,
-    _combine_hybrid_scores,
     _chunk_uid,
     _classification_filter_sql,
+    _combine_hybrid_scores,
     _hybrid_chunk_sort_key,
     _metadata_filter_sql,
     _retrieval_text_hash,
@@ -28,22 +28,31 @@ from rag_engine.adapters.oracle.store import (
     save_chunk_run_embeddings,
     search_adb_hybrid_chunks,
 )
-from rag_engine.chunking import CHILD_CHUNK_LEVEL, CHUNK_METADATA_SCHEMA_VERSION, PARENT_CHUNK_LEVEL, ChunkingConfig, ChunkingResult, DocumentChunk
+from rag_engine.chunking import (
+    CHILD_CHUNK_LEVEL,
+    CHUNK_METADATA_SCHEMA_VERSION,
+    PARENT_CHUNK_LEVEL,
+    ChunkingConfig,
+    ChunkingResult,
+    DocumentChunk,
+)
+from rag_engine.config import get_settings
 from rag_engine.knowledge.classification import classification_filter_from_values
 from rag_engine.retrieval.inquiry_conditions import FILE_DATA_PROFILE, InquiryMetadataFilter, parse_inquiry_conditions
-from rag_engine.config import get_settings
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 
 class AdbVectorStoreTests(unittest.TestCase):
     def setUp(self):
         from rag_engine.adapters.oracle import store
+
         store._pool_cache.clear()
         self.addCleanup(store._pool_cache.clear)
 
     def test_original_question_keeps_its_vote_against_many_derived_queries(self):
         """派生検索文が何本あっても合計の票は原質問と同じ。無関係な拡張の多数決で別機能へ寄らない。"""
         from rag_engine.adapters.oracle.store import derived_query_weights
+
         original = [("uid-target", 0.1), ("uid-other", 0.3)]
         derived = [("uid-other", 0.1), ("uid-target", 0.4)]
         rankings = [original, derived, derived, derived, [("uid-third", 0.2)]]
@@ -58,6 +67,7 @@ class AdbVectorStoreTests(unittest.TestCase):
     def test_each_query_keeps_its_top_candidates_after_fusion(self):
         """1 つの派生質問にしか一致しない節が RRF 融合で候補上限から落ちても、その質問の上位として残す (#669)。"""
         from rag_engine.adapters.oracle.store import _reserve_query_top_candidates
+
         common = [(f"uid-common-{i}", 0.1 + i * 0.01) for i in range(6)]
         only_q3 = [("uid-q3-a", 0.05), ("uid-parent", 0.06), ("uid-q3-b", 0.07), ("uid-q3-c", 0.08), ("uid-q3-d", 0.09)]
         rankings = [common, common, only_q3 + common]
@@ -84,8 +94,13 @@ class AdbVectorStoreTests(unittest.TestCase):
             patch("rag_engine.adapters.oracle.store._text_search", return_value=[]),
             patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=pool),
         ):
-            result = search_adb_hybrid_chunks(chunk_run_id="run-1", retrieval_queries=["原質問", "派生1", "派生2"], settings=settings,
-                                              query_embedder=lambda *_: [0.1] * 1536, candidate_limit=5)
+            result = search_adb_hybrid_chunks(
+                chunk_run_id="run-1",
+                retrieval_queries=["原質問", "派生1", "派生2"],
+                settings=settings,
+                query_embedder=lambda *_: [0.1] * 1536,
+                candidate_limit=5,
+            )
         ids = {c.chunk_id: c for c in result.child_chunks}
         self.assertIn("chunk-7", ids)
         self.assertEqual(ids["chunk-7"].metadata["adb_hybrid"]["reserved_by"], ["vector:q3"])
@@ -104,17 +119,23 @@ class AdbVectorStoreTests(unittest.TestCase):
             patch("rag_engine.adapters.oracle.store._text_search", return_value=[("uid-1", 0.2)]) as text,
             patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=pool),
         ):
-            search_adb_hybrid_chunks(chunk_run_id="run-1", retrieval_queries=["原質問 出力", "仮説文 出力 条件", "派生 出力"],
-                                     vector_only_queries=["仮説文 出力 条件"], settings=settings,
-                                     query_embedder=lambda *_: [0.1] * 1536, candidate_limit=5)
+            search_adb_hybrid_chunks(
+                chunk_run_id="run-1",
+                retrieval_queries=["原質問 出力", "仮説文 出力 条件", "派生 出力"],
+                vector_only_queries=["仮説文 出力 条件"],
+                settings=settings,
+                query_embedder=lambda *_: [0.1] * 1536,
+                candidate_limit=5,
+            )
         self.assertEqual(vector.call_count, 3)
         self.assertEqual(text.call_count, 2)
         self.assertFalse(any("仮説" in call.args[2] for call in text.call_args_list))
 
     def test_text_search_limit_counts_only_text_candidates(self):
         # 上限は vector 専用の検索文を除いてから数える (#921)。
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False,
-                           text_search_query_variant_limit=2)
+        settings = replace(
+            get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False, text_search_query_variant_limit=2
+        )
         pool = [_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)]
         with (
             patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb"),
@@ -125,9 +146,14 @@ class AdbVectorStoreTests(unittest.TestCase):
             patch("rag_engine.adapters.oracle.store._text_search", return_value=[("uid-1", 0.2)]) as text,
             patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=pool),
         ):
-            search_adb_hybrid_chunks(chunk_run_id="run-1", retrieval_queries=["原質問 出力", "仮説文 出力 条件", "派生 出力 手順"],
-                                     vector_only_queries=["仮説文 出力 条件"], settings=settings,
-                                     query_embedder=lambda *_: [0.1] * 1536, candidate_limit=5)
+            search_adb_hybrid_chunks(
+                chunk_run_id="run-1",
+                retrieval_queries=["原質問 出力", "仮説文 出力 条件", "派生 出力 手順"],
+                vector_only_queries=["仮説文 出力 条件"],
+                settings=settings,
+                query_embedder=lambda *_: [0.1] * 1536,
+                candidate_limit=5,
+            )
         self.assertEqual(text.call_count, 2)
         self.assertTrue(any("派生" in call.args[2] for call in text.call_args_list))
 
@@ -144,11 +170,13 @@ class AdbVectorStoreTests(unittest.TestCase):
             patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=pool) as load,
         ):
             for query in ("質問", "書き換えた質問"):
-                result = search_adb_hybrid_chunks(chunk_run_id="run-1", retrieval_queries=[query], settings=settings,
-                                                  query_embedder=lambda *_: [0.1] * 1536)
+                result = search_adb_hybrid_chunks(
+                    chunk_run_id="run-1", retrieval_queries=[query], settings=settings, query_embedder=lambda *_: [0.1] * 1536
+                )
                 self.assertEqual([c.chunk_id for c in result.child_chunks], ["chunk-1"])
-            search_adb_hybrid_chunks(chunk_run_id="run-2", retrieval_queries=["質問"], settings=settings,
-                                     query_embedder=lambda *_: [0.1] * 1536)
+            search_adb_hybrid_chunks(
+                chunk_run_id="run-2", retrieval_queries=["質問"], settings=settings, query_embedder=lambda *_: [0.1] * 1536
+            )
         self.assertEqual((load.call_count, count.call_count), (2, 2))  # run-1 で1回、run-2 で1回
 
     def test_oracle_text_query_sanitizes_reserved_words_and_symbols(self):
@@ -174,9 +202,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             tokenizer_config=TextSearchTokenizerConfig(),
         )
 
-        self.assertEqual(
-            query, "{契約区分}*2 ACCUM {契約} ACCUM {区分} ACCUM {登録} ACCUM {出庫伝票} ACCUM {出庫} ACCUM {伝票}"
-        )
+        self.assertEqual(query, "{契約区分}*2 ACCUM {契約} ACCUM {区分} ACCUM {登録} ACCUM {出庫伝票} ACCUM {出庫} ACCUM {伝票}")
 
     def test_combine_hybrid_scores_uses_rrf_and_text_vector_tiebreakers(self):
         scores = _combine_hybrid_scores(
@@ -271,12 +297,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
         self.assertEqual(text_search.call_count, 2)
-        self.assertEqual(
-            text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}"
-        )
-        self.assertEqual(
-            text_search.call_args_list[1].args[2], "{エキスパンデッド} ACCUM {expanded} ACCUM {シノニム} ACCUM {synonym}"
-        )
+        self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
+        self.assertEqual(text_search.call_args_list[1].args[2], "{エキスパンデッド} ACCUM {expanded} ACCUM {シノニム} ACCUM {synonym}")
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
         self.assertIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
 
@@ -295,12 +317,16 @@ class AdbVectorStoreTests(unittest.TestCase):
             patch("rag_engine.adapters.oracle.store.load_domain_keywords", return_value=[]),
             patch("rag_engine.adapters.oracle.store._available_embedding_count", return_value=2),
             patch("rag_engine.adapters.oracle.store._vector_search", return_value=[("uid-original", 0.1)]),
-            patch("rag_engine.adapters.oracle.store._text_search",
-                  side_effect=[[("uid-original", 12.0)], [("uid-note", 45.0)]]) as text_search,
-            patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=[
-                _stored_chunk("uid-original", "chunk-original", page_start=1, chunk_seq=1),
-                _stored_chunk("uid-note", "chunk-note", page_start=13, chunk_seq=2),
-            ]),
+            patch(
+                "rag_engine.adapters.oracle.store._text_search", side_effect=[[("uid-original", 12.0)], [("uid-note", 45.0)]]
+            ) as text_search,
+            patch(
+                "rag_engine.adapters.oracle.store._load_chunk_run_chunks",
+                return_value=[
+                    _stored_chunk("uid-original", "chunk-original", page_start=1, chunk_seq=1),
+                    _stored_chunk("uid-note", "chunk-note", page_start=13, chunk_seq=2),
+                ],
+            ),
         ):
             result = search_adb_hybrid_chunks(
                 chunk_run_id="abcdef-1234567890ab",
@@ -411,15 +437,14 @@ class AdbVectorStoreTests(unittest.TestCase):
             with self.subTest(metadata=metadata):
                 chunk = _stored_chunk("uid", "chunk", page_start=1, chunk_seq=1, metadata=metadata)
                 result = adb_vector_store._chunks_matching_metadata_filter(
-                    [chunk], InquiryMetadataFilter(metadata_terms=("販売管理",)),
+                    [chunk],
+                    InquiryMetadataFilter(metadata_terms=("販売管理",)),
                 )
                 self.assertEqual(bool(result), expected)
 
     def test_local_metadata_filter_excludes_legacy_schema_even_without_business_filter(self):
         current = _stored_chunk("uid-v3", "chunk-v3", page_start=1, chunk_seq=1)
-        legacy = _stored_chunk(
-            "uid-v2", "chunk-v2", page_start=1, chunk_seq=2, metadata={"schema_version": 2, "active": True}
-        )
+        legacy = _stored_chunk("uid-v2", "chunk-v2", page_start=1, chunk_seq=2, metadata={"schema_version": 2, "active": True})
 
         self.assertEqual(adb_vector_store._chunks_matching_metadata_filter([legacy, current], None), [current])
 
@@ -427,10 +452,10 @@ class AdbVectorStoreTests(unittest.TestCase):
         term = "a\"b\\c' OR 1=1 --"
         sql, binds = _metadata_filter_sql("c", InquiryMetadataFilter(metadata_terms=(term,)))
         self.assertEqual((sql, binds), ("", {}))  # 業務語だけでは WHERE を作らない (#848)
-        chunk = _stored_chunk("uid", "chunk", page_start=1, chunk_seq=1,
-                              metadata={"document": {"classification": {"small_category": term}}})
-        self.assertEqual(adb_vector_store._chunks_matching_metadata_filter(
-            [chunk], InquiryMetadataFilter(metadata_terms=(term,))), [chunk])
+        chunk = _stored_chunk(
+            "uid", "chunk", page_start=1, chunk_seq=1, metadata={"document": {"classification": {"small_category": term}}}
+        )
+        self.assertEqual(adb_vector_store._chunks_matching_metadata_filter([chunk], InquiryMetadataFilter(metadata_terms=(term,))), [chunk])
 
     def test_page_filter_sql_and_local_filter_use_page_range(self):
         conditions = InquiryMetadataFilter(source_file_terms=("manual.pdf",), page_numbers=(2, 2, 0))
@@ -444,20 +469,24 @@ class AdbVectorStoreTests(unittest.TestCase):
 
     def test_business_filter_local_limit_is_twelve_terms(self):
         terms = tuple(f"term{i}" for i in range(13))
-        chunk = _stored_chunk("uid", "chunk", page_start=1, chunk_seq=1,
-                              metadata={"retrieval_profile": {"business_domains": [terms[-1]]}})
+        chunk = _stored_chunk("uid", "chunk", page_start=1, chunk_seq=1, metadata={"retrieval_profile": {"business_domains": [terms[-1]]}})
         conditions = InquiryMetadataFilter(metadata_terms=terms)
         self.assertEqual(adb_vector_store._chunks_matching_metadata_filter([chunk], conditions), [])
 
     def test_business_term_match_boosts_ranking_without_excluding_other_chunks(self):
         """業務語に一致する chunk は channel の加点で上位に寄り、一致しない chunk も候補に残る (#848)。"""
         from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
+
         settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
         plain = _stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)
-        matched = _stored_chunk("uid-2", "chunk-2", page_start=2, chunk_seq=2,
-                                metadata={"retrieval_profile": {"business_domains": ["販売管理"]}})
-        conditions = InquiryConditionParse(original_question="販売管理の伝票登録手順は？", business_domains=("販売管理",),
-                                           metadata_filter=InquiryMetadataFilter(metadata_terms=("販売管理",)))
+        matched = _stored_chunk(
+            "uid-2", "chunk-2", page_start=2, chunk_seq=2, metadata={"retrieval_profile": {"business_domains": ["販売管理"]}}
+        )
+        conditions = InquiryConditionParse(
+            original_question="販売管理の伝票登録手順は？",
+            business_domains=("販売管理",),
+            metadata_filter=InquiryMetadataFilter(metadata_terms=("販売管理",)),
+        )
         with (
             patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb"),
             patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=lambda *_: _ConnectionContext(object())),
@@ -467,8 +496,13 @@ class AdbVectorStoreTests(unittest.TestCase):
             patch("rag_engine.adapters.oracle.store._text_search", return_value=[]),
             patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=[plain, matched]),
         ):
-            result = search_adb_hybrid_chunks(chunk_run_id="run-1", retrieval_queries=["質問"], settings=settings,
-                                              query_embedder=lambda *_: [0.1] * 1536, inquiry_conditions=conditions)
+            result = search_adb_hybrid_chunks(
+                chunk_run_id="run-1",
+                retrieval_queries=["質問"],
+                settings=settings,
+                query_embedder=lambda *_: [0.1] * 1536,
+                inquiry_conditions=conditions,
+            )
         self.assertEqual([c.chunk_id for c in result.child_chunks], ["chunk-2", "chunk-1"])
         self.assertIn("business_match", result.child_chunks[0].metadata["adb_hybrid"]["channel_ranks"])
         self.assertNotIn("business_match", result.child_chunks[1].metadata["adb_hybrid"]["channel_ranks"])
@@ -854,9 +888,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(result.image_missing_asset_count, 0)
         self.assertEqual(len(connection.embedding_rows), 3)
         image_rows = [
-            row
-            for row in connection.embedding_rows
-            if row.get("embedding_modality") == adb_vector_store.EMBEDDING_MODALITY_IMAGE
+            row for row in connection.embedding_rows if row.get("embedding_modality") == adb_vector_store.EMBEDDING_MODALITY_IMAGE
         ]
         self.assertEqual(len(image_rows), 1)
         self.assertEqual(image_rows[0]["chunk_uid"], _chunk_uid(chunk_run.chunk_run_id, chunk_run.chunks[1].chunk_id))
@@ -961,9 +993,11 @@ class AdbVectorStoreTests(unittest.TestCase):
         # 途中で失敗した run は既存文書の latest として公開しない。
         self.assertEqual([binds["publish"] for binds in connection.document_binds], [0])
 
-        resumed = _FakeConnection(existing_hashes={
-            _chunk_uid(chunk_run.chunk_run_id, chunk_run.chunks[0].chunk_id): _retrieval_text_hash(chunk_run.chunks[0]),
-        })
+        resumed = _FakeConnection(
+            existing_hashes={
+                _chunk_uid(chunk_run.chunk_run_id, chunk_run.chunks[0].chunk_id): _retrieval_text_hash(chunk_run.chunks[0]),
+            }
+        )
         calls = []
 
         def embedder(texts, settings_value, *, input_type):
@@ -1001,8 +1035,9 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertTrue(any("chunk-docling-c000009" in error for error in result.errors))
         self.assertTrue(any("chunk-docling-c000002: input is too long" in error for error in result.errors))
         self.assertNotIn("chunk-docling-c000009", [row["chunk_id"] for row in connection.chunk_rows])
-        self.assertEqual([row["chunk_uid"] for row in connection.embedding_rows],
-                         [_chunk_uid(chunk_run.chunk_run_id, "chunk-docling-c000001")])
+        self.assertEqual(
+            [row["chunk_uid"] for row in connection.embedding_rows], [_chunk_uid(chunk_run.chunk_run_id, "chunk-docling-c000001")]
+        )
         # 入力起因で除外した chunk があっても、保存できた範囲を latest として公開する。
         self.assertEqual(connection.document_binds[-1]["publish"], 1)
         self.assertEqual(connection.rollback_count, 0)
@@ -1016,9 +1051,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         def embedder(texts, settings_value, *, input_type):
             return [[0.1] * 1536 for _ in texts]
 
-        result = save_chunk_run_embeddings(
-            chunk_run, settings, preferred_engine_ids=["docling"], embedder=embedder, connection=connection
-        )
+        result = save_chunk_run_embeddings(chunk_run, settings, preferred_engine_ids=["docling"], embedder=embedder, connection=connection)
 
         self.assertTrue(result.ok)
         order = [name for name, _ in connection.statements]
@@ -1060,12 +1093,17 @@ class AdbVectorStoreTests(unittest.TestCase):
         connection = _FakeConnection()
         adb_vector_store._pool_cache["stale"] = (0.0, [])
         adb_vector_store.delete_source_documents(
-            get_settings(), source_file_sha256="a" * 64, source_file_name="manual.pdf",
-            document_ids=["doc-1", "doc-1", "doc-2"], connection=connection)
+            get_settings(),
+            source_file_sha256="a" * 64,
+            source_file_name="manual.pdf",
+            document_ids=["doc-1", "doc-1", "doc-2"],
+            connection=connection,
+        )
         name, binds = connection.statements[-1]
         self.assertEqual(name, "DELETE FROM rag_documents")
-        self.assertEqual(binds, {"source_file_sha256": "a" * 64, "source_file_name": "manual.pdf",
-                                 "document_id_0": "doc-1", "document_id_1": "doc-2"})
+        self.assertEqual(
+            binds, {"source_file_sha256": "a" * 64, "source_file_name": "manual.pdf", "document_id_0": "doc-1", "document_id_1": "doc-2"}
+        )
         self.assertEqual(connection.commit_count, 1)
         self.assertEqual(adb_vector_store._pool_cache, {})
 
@@ -1093,9 +1131,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                 lookups = [binds for name, binds in connection.statements if name == "SELECT chunk_uid, embedding_text_hash"]
                 self.assertEqual([binds.get("embedding_modality") for binds in lookups], [expected, expected])
                 # modality 列のない旧 schema でも text vector の prune が ORA-00904 にならない。
-                self.assertEqual(
-                    {row.get("embedding_modality") for row in connection.deleted_embedding_rows}, {expected}
-                )
+                self.assertEqual({row.get("embedding_modality") for row in connection.deleted_embedding_rows}, {expected})
 
     def test_image_embedding_hash_does_not_depend_on_the_output_directory(self):
         chunk = _chunk_run().chunks[0]
@@ -1148,8 +1184,7 @@ class AdbVectorStoreTests(unittest.TestCase):
 
         cases = {
             "保存した run を公開": (None, chunk_run.chunk_run_id),
-            "より新しい run が公開中なら、そちらを残す": (
-                ("newer-run", "9999-01-01T00:00:00+00:00"), "newer-run"),
+            "より新しい run が公開中なら、そちらを残す": (("newer-run", "9999-01-01T00:00:00+00:00"), "newer-run"),
         }
         for name, (published_run, expected_kept) in cases.items():
             with self.subTest(name):
@@ -1158,10 +1193,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                 result = save_chunk_run_embeddings(chunk_run, settings, embedder=embedder, connection=connection)
                 self.assertTrue(result.ok)
                 for table in ("rag_chunks", "rag_chunk_runs"):
-                    binds = [
-                        b for head, b in connection.statements
-                        if head == f"UPDATE {table} SET" and "document_id" in b
-                    ]
+                    binds = [b for head, b in connection.statements if head == f"UPDATE {table} SET" and "document_id" in b]
                     self.assertEqual(
                         binds,
                         [{"document_id": result.document_id, "chunk_run_id": expected_kept}],
@@ -1186,9 +1218,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         target_uid = _chunk_uid(chunk_run.chunk_run_id, target.chunk_id)
         connection = _FakeConnection(
             existing_hashes={
-                _chunk_uid(chunk_run.chunk_run_id, chunk_run.chunks[0].chunk_id): _retrieval_text_hash(
-                    chunk_run.chunks[0]
-                ),
+                _chunk_uid(chunk_run.chunk_run_id, chunk_run.chunks[0].chunk_id): _retrieval_text_hash(chunk_run.chunks[0]),
                 target_uid: _retrieval_text_hash(target),
                 (adb_vector_store.EMBEDDING_MODALITY_IMAGE, target_uid): "existing-image-hash",
             }
@@ -1209,9 +1239,9 @@ class AdbVectorStoreTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.image_missing_asset_count, 1)
-        self.assertNotIn(target_uid, {
-            row["chunk_uid"] for row in connection.deleted_embedding_rows if row["embedding_modality"] == "image"
-        })
+        self.assertNotIn(
+            target_uid, {row["chunk_uid"] for row in connection.deleted_embedding_rows if row["embedding_modality"] == "image"}
+        )
         self.assertEqual(connection.commit_count, 1)
 
     def test_save_chunk_run_embeddings_rejects_non_schema_dimension(self):
@@ -1265,16 +1295,31 @@ class AdbVectorStoreTests(unittest.TestCase):
     def test_format_embedding_save_result_reports_model_and_publication(self):
         # 既存データと混在できるかの判断にモデル・次元を、次の操作の判断に公開状態を出す (#816)。
         published = adb_vector_store.EmbeddingSaveResult(
-            source_run_id="abcdef", chunk_run_id="chunk-run", document_id="doc", child_count=3, parent_count=1,
-            created_count=3, skipped_count=0, error_count=0, published=True,
-            embedding_model="cohere.embed-v4.0", embedding_dimensions=1536,
+            source_run_id="abcdef",
+            chunk_run_id="chunk-run",
+            document_id="doc",
+            child_count=3,
+            parent_count=1,
+            created_count=3,
+            skipped_count=0,
+            error_count=0,
+            published=True,
+            embedding_model="cohere.embed-v4.0",
+            embedding_dimensions=1536,
         )
         text = format_embedding_save_result(published)
         self.assertIn("embedding モデル（model）: cohere.embed-v4.0 / 1536 次元（dimensions）", text)
         self.assertIn("knowledge base 公開（published）: この run を検索対象として公開しました", text)
         kept = adb_vector_store.EmbeddingSaveResult(
-            source_run_id="abcdef", chunk_run_id="chunk-run", document_id="doc", child_count=3, parent_count=1,
-            created_count=3, skipped_count=0, error_count=0, kept_latest_chunk_run_id="newer-run",
+            source_run_id="abcdef",
+            chunk_run_id="chunk-run",
+            document_id="doc",
+            child_count=3,
+            parent_count=1,
+            created_count=3,
+            skipped_count=0,
+            error_count=0,
+            kept_latest_chunk_run_id="newer-run",
         )
         self.assertIn("より新しい run `newer-run` を公開中のため", format_embedding_save_result(kept))
 
@@ -1327,8 +1372,12 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertIn("旧 schema の chunk 行（legacy rows）: 2 件", text)
         self.assertIn("状態（status）: 旧 schema（legacy）", text)
         connection.legacy_rows = 0
-        self.assertNotIn("legacy", format_embedding_status_result(
-            load_chunk_embedding_status(chunk_run, settings, preferred_engine_ids=["docling"], connection=connection)))
+        self.assertNotIn(
+            "legacy",
+            format_embedding_status_result(
+                load_chunk_embedding_status(chunk_run, settings, preferred_engine_ids=["docling"], connection=connection)
+            ),
+        )
 
     def test_load_chunk_embedding_status_counts_missing_image_embeddings(self):
         chunk_run = _chunk_run()
@@ -1542,11 +1591,7 @@ class _FakeCursor:
         elif "FROM rag_documents" in sql and "SELECT latest_chunk_run_id" in sql:
             self.rows = [self.connection.published_run] if self.connection.published_run else []
         elif "SELECT chunk_uid, embedding_text_hash" in sql:
-            chunk_uids = [
-                value
-                for key, value in binds.items()
-                if key.startswith("chunk_uid_")
-            ]
+            chunk_uids = [value for key, value in binds.items() if key.startswith("chunk_uid_")]
             modality = binds.get("embedding_modality")
             self.rows = []
             for chunk_uid in chunk_uids:
@@ -1747,19 +1792,57 @@ def test_display_regions_are_stored_once_and_restored_on_load():
     """表示領域は専用列だけに保存し、読込時に metadata へ戻す。旧形式の行もそのまま読める。"""
     import json
     from types import SimpleNamespace
+
     from rag_engine.adapters.oracle.store import _chunk_row, _stored_chunk_from_row
+
     regions = [{"page": 1, "boxes": [{"bbox": [1.0, 2.0, 3.0, 4.0]}]}]
-    chunk = SimpleNamespace(chunk_id="c1", chunk_level="child", chunk_seq=1, parent_chunk_id="", child_chunk_ids=[],
-                            source_run_id="run", source_file_name="a.pdf", source_engine_id="docling",
-                            source_engine_label="Docling", page_start=1, page_end=1, source_seq_ranges=[],
-                            source_record_refs=[], text="本文", retrieval_text="本文", char_count=2, token_estimate=1,
-                            metadata={"active": True, "atomic": False, "section_path": ["章"], "layout": {"display_regions": regions}})
+    chunk = SimpleNamespace(
+        chunk_id="c1",
+        chunk_level="child",
+        chunk_seq=1,
+        parent_chunk_id="",
+        child_chunk_ids=[],
+        source_run_id="run",
+        source_file_name="a.pdf",
+        source_engine_id="docling",
+        source_engine_label="Docling",
+        page_start=1,
+        page_end=1,
+        source_seq_ranges=[],
+        source_record_refs=[],
+        text="本文",
+        retrieval_text="本文",
+        char_count=2,
+        token_estimate=1,
+        metadata={"active": True, "atomic": False, "section_path": ["章"], "layout": {"display_regions": regions}},
+    )
     row = _chunk_row(SimpleNamespace(chunk_run_id="cr"), "doc", chunk)
     assert "layout" not in json.loads(row["metadata_json"])  # display_regions だけの layout は行へ残さない
     assert json.loads(row["display_regions_json"]) == regions
     assert chunk.metadata["layout"]["display_regions"] == regions  # 入力は変更しない
-    loaded = _stored_chunk_from_row(["cr:c1", "c1", "child", 1, "", "", "[]", "本文", "本文", "run", "a.pdf", "docling",
-                                     "Docling", 1, 1, "[]", "[]", row["display_regions_json"], row["metadata_json"]])
+    loaded = _stored_chunk_from_row(
+        [
+            "cr:c1",
+            "c1",
+            "child",
+            1,
+            "",
+            "",
+            "[]",
+            "本文",
+            "本文",
+            "run",
+            "a.pdf",
+            "docling",
+            "Docling",
+            1,
+            1,
+            "[]",
+            "[]",
+            row["display_regions_json"],
+            row["metadata_json"],
+        ]
+    )
     assert loaded.metadata["layout"]["display_regions"] == regions and loaded.metadata["section_path"] == ["章"]
 
 
@@ -1767,25 +1850,52 @@ def test_first_page_context_is_stored_once_per_document_and_restored_on_load():
     """同じ第1ページ本文を全 chunk 行へ複製しない。旧形式の行が持つ値は上書きしない。"""
     import json
     from types import SimpleNamespace
-    from rag_engine.adapters.oracle.store import (StoredChunk, _first_page_contexts, _restore_first_page_contexts, _row_metadata)
+
+    from rag_engine.adapters.oracle.store import StoredChunk, _first_page_contexts, _restore_first_page_contexts, _row_metadata
+
     context = {"page": 1, "status": "available", "text": "表紙の本文", "engine": "docling"}
     metadata = {"active": True, "document": {"title": "資料", "first_page_context": context}, "layout": {"display_regions": [{"page": 1}]}}
     row = _row_metadata(metadata)
     assert row == {"active": True, "document": {"title": "資料"}}
     assert metadata["document"]["first_page_context"] is context  # 入力は変更しない
-    chunks = [SimpleNamespace(metadata=metadata, source_engine_id="docling"), SimpleNamespace(metadata=metadata, source_engine_id="docling")]
+    chunks = [
+        SimpleNamespace(metadata=metadata, source_engine_id="docling"),
+        SimpleNamespace(metadata=metadata, source_engine_id="docling"),
+    ]
     assert _first_page_contexts(chunks) == {"docling": context}
 
     def stored(uid, document):
-        return StoredChunk(chunk_uid=uid, chunk_id=uid, chunk_level="child", chunk_seq=1, parent_chunk_uid="", parent_chunk_id="",
-                           child_chunk_ids=(), text="t", retrieval_text="t", source_run_id="r", source_file_name="a.pdf",
-                           source_engine_id="docling", source_engine_label="Docling", page_start=2, page_end=2,
-                           source_seq_ranges=(), source_record_refs=(), metadata={"document": document})
+        return StoredChunk(
+            chunk_uid=uid,
+            chunk_id=uid,
+            chunk_level="child",
+            chunk_seq=1,
+            parent_chunk_uid="",
+            parent_chunk_id="",
+            child_chunk_ids=(),
+            text="t",
+            retrieval_text="t",
+            source_run_id="r",
+            source_file_name="a.pdf",
+            source_engine_id="docling",
+            source_engine_label="Docling",
+            page_start=2,
+            page_end=2,
+            source_seq_ranges=(),
+            source_record_refs=(),
+            metadata={"document": document},
+        )
+
     new, legacy, unknown = stored("n", {"title": "資料"}), stored("l", {"first_page_context": {"text": "旧"}}), stored("u", {})
     queries = []
+
     class Cursor:
-        def execute(self, sql, binds): queries.append(sorted(binds.values()))
-        def __iter__(self): return iter([("doc-1", json.dumps({"first_page_contexts": {"docling": context}}))])
+        def execute(self, sql, binds):
+            queries.append(sorted(binds.values()))
+
+        def __iter__(self):
+            return iter([("doc-1", json.dumps({"first_page_contexts": {"docling": context}}))])
+
     _restore_first_page_contexts(SimpleNamespace(cursor=Cursor), [new, legacy, unknown], ["doc-1", "doc-1", "doc-2"])
     assert queries == [["doc-1", "doc-2"]]  # 文書ごとに1回だけ問い合わせる
     assert new.metadata["document"] == {"title": "資料", "first_page_context": context}
@@ -1795,7 +1905,9 @@ def test_first_page_context_is_stored_once_per_document_and_restored_on_load():
 
 def test_profile_channel_can_be_switched_off_for_ablation():
     from dataclasses import replace as _replace
+
     from rag_engine.adapters.oracle import store
+
     store._pool_cache.clear()
     settings = _replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False, profile_channel_enabled=False)
     with (
@@ -1805,11 +1917,15 @@ def test_profile_channel_can_be_switched_off_for_ablation():
         patch("rag_engine.adapters.oracle.store._available_embedding_count", return_value=1),
         patch("rag_engine.adapters.oracle.store._vector_search", return_value=[("uid-1", 0.1)]),
         patch("rag_engine.adapters.oracle.store._text_search", return_value=[]),
-        patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=[_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)]),
+        patch(
+            "rag_engine.adapters.oracle.store._load_chunk_run_chunks",
+            return_value=[_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)],
+        ),
         patch("rag_engine.adapters.oracle.store.profile_channel_rankings") as profile,
     ):
-        result = search_adb_hybrid_chunks(chunk_run_id="run-p", retrieval_queries=["質問"], settings=settings,
-                                          query_embedder=lambda *_: [0.1] * 1536)
+        result = search_adb_hybrid_chunks(
+            chunk_run_id="run-p", retrieval_queries=["質問"], settings=settings, query_embedder=lambda *_: [0.1] * 1536
+        )
     profile.assert_not_called()
     assert [c.chunk_id for c in result.child_chunks] == ["chunk-1"]
     store._pool_cache.clear()

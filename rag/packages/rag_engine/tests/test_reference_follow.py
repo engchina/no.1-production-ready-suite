@@ -21,14 +21,29 @@ from rag_engine.retrieval.reference_follow import (
 def _child(name, *, source="規程.pdf", ref_from=None, rank=None, score=None):
     metadata = {"section_path": ["第 1 章"]}
     if ref_from is not None:
-        metadata["reference_expansion"] = {"from_chunk_uid": f"uid:{ref_from}", "label": "定期保守計画",
-                                           **({"rank": rank} if rank is not None else {})}
+        metadata["reference_expansion"] = {
+            "from_chunk_uid": f"uid:{ref_from}",
+            "label": "定期保守計画",
+            **({"rank": rank} if rank is not None else {}),
+        }
     if score is not None:
         metadata["rerank"] = {"relevance_score": score}
-    return AnswerRecord(id=name, engine="docling", engine_label="Docling", page=1, seq_no=1, category="Chunk",
-                        text=f"{name} の本文", source=source, chunk_level="child", chunk_id=name,
-                        chunk_uid=f"uid:{name}", parent_chunk_uid=f"uid:{name}-p", source_run_id="run",
-                        metadata=metadata)
+    return AnswerRecord(
+        id=name,
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=f"{name} の本文",
+        source=source,
+        chunk_level="child",
+        chunk_id=name,
+        chunk_uid=f"uid:{name}",
+        parent_chunk_uid=f"uid:{name}-p",
+        source_run_id="run",
+        metadata=metadata,
+    )
 
 
 def _ids(records):
@@ -36,8 +51,14 @@ def _ids(records):
 
 
 def test_follow_moves_references_after_source_in_reference_rank_order():
-    records = [_child("c"), _child("window"), _child("plan2", ref_from="window", rank=2), _child("a"),
-               _child("b"), _child("plan3", ref_from="window", rank=1)]
+    records = [
+        _child("c"),
+        _child("window"),
+        _child("plan2", ref_from="window", rank=2),
+        _child("a"),
+        _child("b"),
+        _child("plan3", ref_from="window", rank=1),
+    ]
 
     followed = follow_reference_sources(records)
 
@@ -62,11 +83,11 @@ def test_rerank_places_reference_after_its_source(monkeypatch):
     scores = {"window": 0.67, "a": 0.63, "b": 0.6, "c": 0.5, "plan2": 0.29}
 
     def fake(question, documents, settings, top_n=None):
-        order = sorted(range(len(documents)), key=lambda index: -scores[documents[index].split(" の本文")[0]
-                                                                         .rsplit("\n", 1)[-1]])
-        return [SimpleNamespace(index=index, relevance_score=scores[documents[index].split(" の本文")[0]
-                                                                     .rsplit("\n", 1)[-1]])
-                for index in order]
+        order = sorted(range(len(documents)), key=lambda index: -scores[documents[index].split(" の本文")[0].rsplit("\n", 1)[-1]])
+        return [
+            SimpleNamespace(index=index, relevance_score=scores[documents[index].split(" の本文")[0].rsplit("\n", 1)[-1]])
+            for index in order
+        ]
 
     monkeypatch.setattr(answering, "rerank_text_with_scores", fake)
     settings = SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True, document_selection_enabled=False)
@@ -79,12 +100,20 @@ def test_rerank_places_reference_after_its_source(monkeypatch):
 
 
 def test_document_selection_does_not_defer_followed_reference():
-    settings = replace(get_settings(environ={}, dotenv_path=None), document_selection_enabled=True,
-                       document_selection_score_ratio=0.5, document_selection_min_hits=2)
-    children = follow_reference_sources([
-        _child("window", source="change.pdf", score=0.9), _child("a", source="change.pdf", score=0.8),
-        _child("c1", source="c.pdf", score=0.1), _child("plan2", source="plan.pdf", ref_from="window", score=0.1),
-    ])
+    settings = replace(
+        get_settings(environ={}, dotenv_path=None),
+        document_selection_enabled=True,
+        document_selection_score_ratio=0.5,
+        document_selection_min_hits=2,
+    )
+    children = follow_reference_sources(
+        [
+            _child("window", source="change.pdf", score=0.9),
+            _child("a", source="change.pdf", score=0.8),
+            _child("c1", source="c.pdf", score=0.1),
+            _child("plan2", source="plan.pdf", ref_from="window", score=0.1),
+        ]
+    )
 
     kept, deferred, _ = select_documents(children, settings)
 
@@ -93,10 +122,21 @@ def test_document_selection_does_not_defer_followed_reference():
 
 
 def _parent(name):
-    return AnswerRecord(id=f"{name}-p", engine="docling", engine_label="Docling", page=1, seq_no=1,
-                        category="Chunk", text=f"{name} の親", source="規程.pdf", chunk_level="parent",
-                        chunk_id=f"{name}-p", chunk_uid=f"uid:{name}-p", source_run_id="run",
-                        metadata={"section_path": ["第 1 章"]})
+    return AnswerRecord(
+        id=f"{name}-p",
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=f"{name} の親",
+        source="規程.pdf",
+        chunk_level="parent",
+        chunk_id=f"{name}-p",
+        chunk_uid=f"uid:{name}-p",
+        source_run_id="run",
+        metadata={"section_path": ["第 1 章"]},
+    )
 
 
 def test_context_reserves_parent_slots_for_followed_reference():
@@ -109,15 +149,22 @@ def test_context_reserves_parent_slots_for_followed_reference():
 
     hits = [_child(f"a{index}", score=0.6 - index / 100) for index in range(4)]
     window = _child("window", score=0.7)
-    plan = [_child("plan2", ref_from="window", rank=1, score=0.29),
-            _child("plan1", ref_from="window", rank=2, score=0.1)]
+    plan = [_child("plan2", ref_from="window", rank=1, score=0.29), _child("plan1", ref_from="window", rank=2, score=0.1)]
     orphan = _child("orphan", ref_from="gone", score=0.05)
     records = follow_reference_sources([window, *hits, *plan, orphan])
     parents = [_parent(record.id) for record in records]
 
-    bundle = build_chunk_context_bundle(ContextBuildRequest(
-        question="質問", ranked_children=records, active_records=[*records, *parents], top_k=10,
-        neighbor_child_count=0, max_records=4, max_chars=5000))
+    bundle = build_chunk_context_bundle(
+        ContextBuildRequest(
+            question="質問",
+            ranked_children=records,
+            active_records=[*records, *parents],
+            top_k=10,
+            neighbor_child_count=0,
+            max_records=4,
+            max_chars=5000,
+        )
+    )
 
     ids = [record.id for record in bundle.records]
     # 4 枠のうち半分（2）までを参照先の親に入れ替える。参照元の無い印（orphan）は確保しない。

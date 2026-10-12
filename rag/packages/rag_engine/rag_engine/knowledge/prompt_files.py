@@ -7,12 +7,11 @@ import re
 import shutil
 import threading
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from rag_engine.resources.runtime import current_runtime
 
 from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
-
+from rag_engine.resources.runtime import current_runtime
 
 PROJECT_ROOT = Path.cwd()
 # runtime なしの呼出（Gradio の Prompt 設定、UI からの解析）が使う保存先。UI の回答生成は
@@ -114,6 +113,7 @@ END_TRUSTED_RETRIEVAL_METADATA
 @dataclass(frozen=True)
 class PromptFile:
     """UI から編集できる prompt ファイルの key、path、既定値を保持します。"""
+
     key: str
     label: str
     path: Path
@@ -126,6 +126,7 @@ class PromptFile:
 @dataclass(frozen=True)
 class PromptSaveResult:
     """prompt 保存時の更新時刻と保存先を保持します。"""
+
     prompt_file: PromptFile
     backup_path: Path | None
     saved_at: datetime
@@ -165,8 +166,12 @@ def get_prompt_file(key: str) -> PromptFile:
             return definition
         content = dict(runtime.profile.prompt_overrides).get(key, definition.default_content)
         directory = runtime.paths.prompts
-        return replace(definition, path=(directory or runtime.paths.workspace / "prompts") / definition.path.name,
-                       backup_dir=(directory or runtime.paths.workspace / "prompts") / "backups", default_content=content)
+        return replace(
+            definition,
+            path=(directory or runtime.paths.workspace / "prompts") / definition.path.name,
+            backup_dir=(directory or runtime.paths.workspace / "prompts") / "backups",
+            default_content=content,
+        )
     except KeyError as exc:
         raise ValueError(f"Unknown prompt file: {key}") from exc
 
@@ -305,10 +310,10 @@ def _unique_backup_path(prompt_file: PromptFile, saved_at: datetime) -> Path:
 
 def _utc_now(now: datetime | None) -> datetime:
     if now is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:

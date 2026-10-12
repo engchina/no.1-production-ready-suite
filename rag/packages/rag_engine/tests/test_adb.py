@@ -10,7 +10,6 @@ from unittest.mock import Mock
 
 from rag_engine.adapters.oracle.connection import connect_adb_thin, download_adb_wallet, load_adb_settings, validate_mtls_wallet
 
-
 ADB_OCID = "ocid1.autonomousdatabase.oc1.ap-osaka-1.example"
 
 
@@ -18,39 +17,49 @@ class AdbTests(unittest.TestCase):
     def test_local_easy_connect_does_not_require_or_pass_wallet_settings(self):
         for dsn in ("localhost:1521/FREEPDB1", "tcp://localhost:1521/FREEPDB1"):
             with self.subTest(dsn=dsn):
-                settings = load_adb_settings(environ={
-                    "ADB_TNS_ALIAS": dsn,
-                    "ADB_DB_USER": "admin",
-                    "ADB_DB_PASSWORD": "test-only-password",
-                    "ADB_CONNECT_TIMEOUT_SECONDS": "4",
-                    "ADB_CONNECT_RETRY_COUNT": "2",
-                    "ADB_CONNECT_RETRY_DELAY_SECONDS": "1",
-                    "ADB_POOL_MAX": "0",  # 直接 connect の経路を検証する (#887)
-                    "ADB_WALLET_DIR": "/nonexistent/local-db-wallet",
-                    "ADB_WALLET_PASSWORD": "unused-wallet-password",
-                })
+                settings = load_adb_settings(
+                    environ={
+                        "ADB_TNS_ALIAS": dsn,
+                        "ADB_DB_USER": "admin",
+                        "ADB_DB_PASSWORD": "test-only-password",
+                        "ADB_CONNECT_TIMEOUT_SECONDS": "4",
+                        "ADB_CONNECT_RETRY_COUNT": "2",
+                        "ADB_CONNECT_RETRY_DELAY_SECONDS": "1",
+                        "ADB_POOL_MAX": "0",  # 直接 connect の経路を検証する (#887)
+                        "ADB_WALLET_DIR": "/nonexistent/local-db-wallet",
+                        "ADB_WALLET_PASSWORD": "unused-wallet-password",
+                    }
+                )
                 self.assertFalse(settings.uses_wallet)
                 self.assertEqual(settings.ocid, "")
                 driver = Mock()
                 result = connect_adb_thin(settings, oracledb_module=driver)
                 driver.ConnectParams.assert_called_once_with(
-                    tcp_connect_timeout=4.0, retry_count=2, retry_delay=1,
+                    tcp_connect_timeout=4.0,
+                    retry_count=2,
+                    retry_delay=1,
                 )
                 params = driver.ConnectParams.return_value
                 params.parse_connect_string.assert_called_once_with(dsn)
                 params.set.assert_called_once_with(
-                    tcp_connect_timeout=4.0, retry_count=2, retry_delay=1,
+                    tcp_connect_timeout=4.0,
+                    retry_count=2,
+                    retry_delay=1,
                 )
                 driver.connect.assert_called_once_with(
-                    user="admin", password="test-only-password", params=params,
+                    user="admin",
+                    password="test-only-password",
+                    params=params,
                 )
                 self.assertIs(result, driver.connect.return_value)
 
     def test_local_settings_without_cloud_credentials_and_wallet_download_guard(self):
-        settings = load_adb_settings(environ={
-            "ADB_TNS_ALIAS": "localhost:1521/FREEPDB1",
-            "ADB_DB_PASSWORD": "test-only-password",
-        })
+        settings = load_adb_settings(
+            environ={
+                "ADB_TNS_ALIAS": "localhost:1521/FREEPDB1",
+                "ADB_DB_PASSWORD": "test-only-password",
+            }
+        )
         self.assertEqual(settings.wallet_password, "")
         with self.assertRaisesRegex(RuntimeError, "ADB_OCID and ADB_WALLET_PASSWORD"):
             download_adb_wallet(settings, oci_module=Mock())
@@ -242,7 +251,9 @@ class AdbTests(unittest.TestCase):
             return FakePool()
 
         fake_oracledb = SimpleNamespace(
-            PoolParams=FakePoolParams, ConnectParams=None, create_pool=create_pool,
+            PoolParams=FakePoolParams,
+            ConnectParams=None,
+            create_pool=create_pool,
             connect=lambda **kwargs: self.fail("pool があるときは connect しない"),
             defaults=SimpleNamespace(fetch_lobs=True),
         )

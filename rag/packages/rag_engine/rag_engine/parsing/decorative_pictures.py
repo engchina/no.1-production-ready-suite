@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence
-
+from typing import Any, Literal
 
 CONTENT_VISUAL_ROLE = "content"
 DECORATIVE_VISUAL_ROLE = "decorative"
@@ -45,6 +45,7 @@ _OPERATION_TEXT = re.compile(
 @dataclass(frozen=True)
 class PictureRecordRole:
     """Picture レコードを VLM/RAG/テキスト統合でどう扱うかを表します。"""
+
     role: PictureVisualRole
     reason: str = ""
     merge_target_id: str = ""
@@ -112,16 +113,26 @@ def _has_meaningful_content(record: Any, records: Sequence[Any]) -> bool:
     """同一 bbox の OCR と具体的な Vision field から業務情報の存在を確認します。"""
     description = _raw_value(record, "vision_description")
     if isinstance(description, dict):
-        fields = ("visible_screen_names", "visible_buttons", "visible_fields", "operation_steps",
-                  "condition_result_pairs", "codes_and_errors", "table_rows", "diagram_nodes")
+        fields = (
+            "visible_screen_names",
+            "visible_buttons",
+            "visible_fields",
+            "operation_steps",
+            "condition_result_pairs",
+            "codes_and_errors",
+            "table_rows",
+            "diagram_nodes",
+        )
         if any(description.get(field) for field in fields):
             return True
     texts = [_record_text(record)] if str(_record_value(record, "raw_type")) == "picture_ocr_text" else []
     for other in records:
-        if (_record_value(other, "page") == _record_value(record, "page")
-                and _record_value(other, "engine") == _record_value(record, "engine")
-                and _record_value(other, "raw_type") == "picture_ocr_text"
-                and _bbox(other) == _bbox(record)):
+        if (
+            _record_value(other, "page") == _record_value(record, "page")
+            and _record_value(other, "engine") == _record_value(record, "engine")
+            and _record_value(other, "raw_type") == "picture_ocr_text"
+            and _bbox(other) == _bbox(record)
+        ):
             texts.append(_record_text(other))
     heading_keys = _heading_keys(record, records)
     for text in texts:
@@ -182,10 +193,12 @@ def _ocr_lines(record: Any, records: Sequence[Any]) -> list[str]:
     """同一 bbox の OCR record の本文をラベル行を除いて行に分ける。"""
     texts = [_record_text(record)] if str(_record_value(record, "raw_type")) == "picture_ocr_text" else []
     for other in records:
-        if (_record_value(other, "page") == _record_value(record, "page")
-                and _record_value(other, "engine") == _record_value(record, "engine")
-                and _record_value(other, "raw_type") == "picture_ocr_text"
-                and _bbox(other) == _bbox(record)):
+        if (
+            _record_value(other, "page") == _record_value(record, "page")
+            and _record_value(other, "engine") == _record_value(record, "engine")
+            and _record_value(other, "raw_type") == "picture_ocr_text"
+            and _bbox(other) == _bbox(record)
+        ):
             texts.append(_record_text(other))
     lines: list[str] = []
     for text in texts:
@@ -242,8 +255,7 @@ def mark_picture_record_role(record: Any, role: PictureRecordRole) -> None:
             raw.pop("vision_excluded_after_classification", None)
             raw.pop("merge_target_id", None)
             raw["vision_skipped"] = False
-            raw["vision_status"] = ("failed" if raw.get("vision_error") else
-                                    "succeeded" if raw.get("vision_description") else "pending")
+            raw["vision_status"] = "failed" if raw.get("vision_error") else "succeeded" if raw.get("vision_description") else "pending"
         return
 
     raw = _ensure_raw(record)
@@ -312,9 +324,7 @@ def _related_operation_record_id(record: Any, records: Sequence[Any]) -> str:
 
 
 def _nearby_by_geometry(record: Any, other: Any, vertical_distance: float) -> bool:
-    page_height = _finite_float(_record_value(record, "page_height")) or _finite_float(
-        _record_value(other, "page_height")
-    )
+    page_height = _finite_float(_record_value(record, "page_height")) or _finite_float(_record_value(other, "page_height"))
     if not page_height:
         return False
     limit = max(NEARBY_TEXT_MAX_VERTICAL_PX, page_height * NEARBY_TEXT_MAX_VERTICAL_RATIO)
@@ -397,7 +407,7 @@ def _ensure_raw(record: Any) -> dict[str, Any]:
         if isinstance(record, dict):
             record["raw"] = raw
         else:
-            setattr(record, "raw", raw)
+            record.raw = raw
     return raw
 
 

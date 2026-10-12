@@ -1,4 +1,5 @@
 """複数レシピ融合で、元の文書の範囲が重なる根拠を 1 つにまとめる (#1331)。"""
+
 from rag_engine.generation.answering import AnswerRecord
 from rag_engine.retrieval.evidence_selection import (
     collapse_source_spans,
@@ -21,9 +22,22 @@ def _record(uid, element_ids, text, *, document_id="doc-1", source="経費精算
     metadata = {"section_path": ["経費精算"], "document_id": document_id}
     if element_ids is not None:
         metadata["element_ids"] = element_ids if isinstance(element_ids, str) else list(element_ids)
-    return AnswerRecord(id=uid, engine="docling", engine_label="Docling", page=3, seq_no=1, category="ParentChunk",
-                        text=text, source=source, source_run_id="run", chunk_id=uid, chunk_uid=uid,
-                        chunk_level="parent", source_record_refs=tuple(refs or ()), metadata=metadata)
+    return AnswerRecord(
+        id=uid,
+        engine="docling",
+        engine_label="Docling",
+        page=3,
+        seq_no=1,
+        category="ParentChunk",
+        text=text,
+        source=source,
+        source_run_id="run",
+        chunk_id=uid,
+        chunk_uid=uid,
+        chunk_level="parent",
+        source_record_refs=tuple(refs or ()),
+        metadata=metadata,
+    )
 
 
 def _ids(*numbers):
@@ -86,8 +100,11 @@ def test_overlap_below_the_threshold_keeps_both():
 def test_look_alike_ids_from_different_parse_results_with_different_text_are_not_merged():
     """解析の設定が違うレシピでは同じ要素の ID が別の箇所を指すことがある。本文が違えばまとめない。"""
     docling_ocr = _record("doc-1:recipe-a", _ids(1, 2, 3), _text(1, 2, 3))
-    docling_plain = _record("doc-1:recipe-b", _ids(1, 2, 3),
-                            "第2章 旅費規程\n国内出張の日当は役職ごとに定めます。\n宿泊費は実費とし上限を超えた分は自己負担です。")
+    docling_plain = _record(
+        "doc-1:recipe-b",
+        _ids(1, 2, 3),
+        "第2章 旅費規程\n国内出張の日当は役職ごとに定めます。\n宿泊費は実費とし上限を超えた分は自己負担です。",
+    )
 
     assert source_span_relation(docling_ocr, docling_plain) is None
     spans = evidence_spans("経費精算の申請方法", [docling_ocr, docling_plain])
@@ -111,8 +128,7 @@ def test_evidence_without_ranges_uses_the_identical_text_rule():
     assert record_element_ids(fixed_a) == frozenset()
     spans = evidence_spans("経費精算の申請方法", [fixed_a, fixed_b, same_text])
     assert {span["source_id"] for span in spans} == {"doc-1:fixed-1", "doc-1:fixed-2"}
-    assert next(s for s in spans if s["source_id"] == "doc-1:fixed-1")["source_aliases"] == [
-        "doc-1:fixed-1", "doc-1:fixed-3"]
+    assert next(s for s in spans if s["source_id"] == "doc-1:fixed-1")["source_aliases"] == ["doc-1:fixed-1", "doc-1:fixed-3"]
 
 
 def test_element_ids_fall_back_to_source_record_refs():
@@ -120,8 +136,7 @@ def test_element_ids_fall_back_to_source_record_refs():
     record = _record("doc-1:p", None, "本文", refs=[{"record_id": "docling-p3-1"}, {"record_id": "docling-p3-2"}])
 
     assert record_element_ids(record) == frozenset({"docling-p3-1", "docling-p3-2"})
-    assert record_element_ids(_record("doc-1:q", "docling-p3-1, docling-p3-2", "本文")) == frozenset(
-        {"docling-p3-1", "docling-p3-2"})
+    assert record_element_ids(_record("doc-1:q", "docling-p3-1, docling-p3-2", "本文")) == frozenset({"docling-p3-1", "docling-p3-2"})
 
 
 def test_another_recipe_of_the_same_passage_is_not_new_evidence():

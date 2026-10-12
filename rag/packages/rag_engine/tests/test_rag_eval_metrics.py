@@ -1,4 +1,5 @@
 """retrieval eval の順位つき指標（MRR / hit@k）を守るテスト (#861)。"""
+
 from rag_engine.evaluation.rag_eval import RagEvalCase, RagEvalRetrieval, evaluate_rag_cases, format_rag_eval_summary
 
 
@@ -8,10 +9,10 @@ def _retriever(mapping):
 
 def test_mrr_and_hit_at_k_use_the_first_rank_of_an_expected_hit():
     cases = [
-        RagEvalCase(case_id="a", question="q", expected_child_ids=("c2",)),          # 2 位で命中 → 1/2
-        RagEvalCase(case_id="b", question="q", expected_parent_ids=("p9",)),         # 命中なし → 0
-        RagEvalCase(case_id="c", question="q", expected_pages=(4,)),                 # ページ 1 位 → 1
-        RagEvalCase(case_id="d", question="q", expected_terms=("語",)),               # 順位つき指標の分母に入れない
+        RagEvalCase(case_id="a", question="q", expected_child_ids=("c2",)),  # 2 位で命中 → 1/2
+        RagEvalCase(case_id="b", question="q", expected_parent_ids=("p9",)),  # 命中なし → 0
+        RagEvalCase(case_id="c", question="q", expected_pages=(4,)),  # ページ 1 位 → 1
+        RagEvalCase(case_id="d", question="q", expected_terms=("語",)),  # 順位つき指標の分母に入れない
     ]
     retrievals = {
         "a": RagEvalRetrieval(child_ids=("c1", "c2", "c3"), parent_ids=("p1",)),

@@ -125,7 +125,8 @@ BBOX_COORDINATE_MODE_KEYS = (
 )
 BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 # 表の中の画像を Vision で読み取った説明文(#502 / #513)。要素の metadata の key と、表の本文の
-# 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と同じ書式にする。
+# 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と
+# 同じ書式にする。
 TABLE_VISION_TEXT_KEY = "table_vision_text"
 TABLE_VISION_SUPPLEMENT_LABEL = "表内画像の補足:"
 
@@ -773,12 +774,8 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                 formula_count=_metadata_positive_int(element.metadata.get("formula_count")),
                 formula_cell_refs=_formula_cell_refs(element.metadata),
                 formula_cells=_metadata_text_tuple(element.metadata.get("formula_cells")),
-                formula_cell_row=_metadata_optional_int(
-                    element.metadata.get("formula_cell_row")
-                ),
-                formula_cell_col=_metadata_optional_int(
-                    element.metadata.get("formula_cell_col")
-                ),
+                formula_cell_row=_metadata_optional_int(element.metadata.get("formula_cell_row")),
+                formula_cell_col=_metadata_optional_int(element.metadata.get("formula_cell_col")),
                 formula_value=_metadata_label(
                     element.metadata.get("formula_value"),
                     max_length=500,
@@ -789,9 +786,7 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                     max_length=500,
                 ),
                 table_row_count=_metadata_positive_int(element.metadata.get("row_count")),
-                table_column_count=_metadata_positive_int(
-                    element.metadata.get("column_count")
-                ),
+                table_column_count=_metadata_positive_int(element.metadata.get("column_count")),
                 asset_id=_metadata_label(element.metadata.get("asset_id"), max_length=80),
                 asset_kind=_metadata_label(element.metadata.get("asset_kind"), max_length=40),
                 sheet_name=_metadata_label(element.metadata.get("sheet_name"), max_length=120),
@@ -1274,13 +1269,7 @@ def _with_table_continuity_metadata(chunks: list[Chunk]) -> list[Chunk]:
 
     replacements: dict[int, Chunk] = {}
     for table_id, table_chunks in table_chunks_by_id.items():
-        pages = sorted(
-            {
-                page
-                for chunk in table_chunks
-                for page in _chunk_page_range(chunk)
-            }
-        )
+        pages = sorted({page for chunk in table_chunks for page in _chunk_page_range(chunk)})
         if len(pages) <= 1:
             continue
         ordered = sorted(
@@ -1399,16 +1388,12 @@ def _table_row_tree_metadata(chunk: Chunk) -> ChunkMetadata:
         "table_row_tree_row_start": row_start,
         "table_row_tree_row_end": row_end,
         "table_row_tree_column_keys": header_json,
-        "table_row_tree_header_sha256": hashlib.sha256(
-            header_json.encode("utf-8")
-        ).hexdigest(),
+        "table_row_tree_header_sha256": hashlib.sha256(header_json.encode("utf-8")).hexdigest(),
         "table_row_tree_row_hashes": json.dumps(
             row_hashes,
             separators=(",", ":"),
         ),
-        "table_row_tree_kv_sha256": _stable_sha256(
-            {"columns": column_keys, "rows": row_blocks}
-        ),
+        "table_row_tree_kv_sha256": _stable_sha256({"columns": column_keys, "rows": row_blocks}),
         "table_row_tree_dense": all(len(row) == len(column_keys) for row in data_rows),
         "table_cell_ref_format": "a1",
         "table_cell_ref_count": len(cell_refs),
@@ -1457,10 +1442,7 @@ def _table_rows_without_separator(text: str) -> list[list[str]]:
 
 def _table_cells(line: str) -> list[str]:
     body = line.strip().strip("|")
-    return [
-        _clean_table_cell(cell.replace("\\|", "|"))
-        for cell in re.split(r"(?<!\\)\|", body)
-    ]
+    return [_clean_table_cell(cell.replace("\\|", "|")) for cell in re.split(r"(?<!\\)\|", body)]
 
 
 def _clean_table_cell(value: str) -> str:
@@ -1789,17 +1771,11 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     bbox_units = {span.bbox_unit for span in group if span.bbox_unit}
     page_widths = {span.page_width for span in group if span.page_width is not None}
     page_heights = {span.page_height for span in group if span.page_height is not None}
-    page_rotations = {
-        span.page_rotation for span in group if span.page_rotation is not None
-    }
+    page_rotations = {span.page_rotation for span in group if span.page_rotation is not None}
     code_languages = {span.code_language for span in group if span.code_language}
-    equation_delimiters = {
-        span.equation_delimiter for span in group if span.equation_delimiter
-    }
+    equation_delimiters = {span.equation_delimiter for span in group if span.equation_delimiter}
     equation_formats = {span.equation_format for span in group if span.equation_format}
-    formula_counts = {
-        span.formula_count for span in group if span.formula_count is not None
-    }
+    formula_counts = {span.formula_count for span in group if span.formula_count is not None}
     formula_cell_refs = _ordered_unique(
         [cell_ref for span in group for cell_ref in span.formula_cell_refs]
     )
@@ -1810,20 +1786,14 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     formula_cell_cols = {
         span.formula_cell_col for span in group if span.formula_cell_col is not None
     }
-    formula_values = _ordered_unique(
-        [span.formula_value for span in group if span.formula_value]
-    )
+    formula_values = _ordered_unique([span.formula_value for span in group if span.formula_value])
     table_ids = sorted({span.table_id for span in group if span.table_id})
     table_captions = _ordered_unique([span.table_caption for span in group if span.table_caption])
     asset_ids = sorted({span.asset_id for span in group if span.asset_id})
     asset_kinds = sorted({span.asset_kind for span in group if span.asset_kind})
-    table_row_counts = {
-        span.table_row_count for span in group if span.table_row_count is not None
-    }
+    table_row_counts = {span.table_row_count for span in group if span.table_row_count is not None}
     table_column_counts = {
-        span.table_column_count
-        for span in group
-        if span.table_column_count is not None
+        span.table_column_count for span in group if span.table_column_count is not None
     }
     parent_ids = sorted({span.parent_id for span in group if span.parent_id})
     dependency_edges = _span_dependency_edges(group)
@@ -1921,7 +1891,8 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         metadata["page_start"] = pages[0]
         metadata["page_end"] = pages[-1]
     if first.content_kind == "figure":
-        # 図の本文の出どころ（根拠の種類。vision=VLM の説明 / ocr=解析の OCR・キャプション。#1282）。
+        # 図の本文の出どころ（根拠の種類。vision=VLM の説明 /
+        # ocr=解析の OCR・キャプション。#1282）。
         metadata[FIGURE_TEXT_SOURCE_KEY] = (
             FIGURE_TEXT_SOURCE_VISION
             if any(span.vision_described for span in group)
