@@ -14,6 +14,27 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 入力の変数・手動でのアップロード・配備後の確認・トラブルシューティングは [terraform/README.md](./terraform/README.md) を参照してください。
 
+## 配備した後の運用
+
+Compute に SSH で入って実行します（repository は `/u01/aipoc/no.1-production-ready-suite`）。
+
+最新のコード（main）を取得して再配備する（依存の同期・build・DB の migration・全サービスの再起動まで）:
+
+```bash
+sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh
+```
+
+全サービスを再起動する（コードは変えない。`--status` で状態だけを表示）:
+
+```bash
+sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
+```
+
+- 画面で保存した設定（各製品の `backend/.env`・`platform/.env`）、Wallet、HTTPS の CA は更新の後も保たれます。
+- 取得だけを行うときは `platform/deploy/suite-pull.sh`（追跡ファイルに変更があると中止します）。
+- 時間のかかる更新は `tmux` の中で実行すると、SSH が切れても止まりません。log は `/var/log/suite-update.log`。
+- OS を再起動すると、各製品のサービスと Nginx は自動で起動します。
+
 ## 構成
 
 | ディレクトリ | 内容 |
