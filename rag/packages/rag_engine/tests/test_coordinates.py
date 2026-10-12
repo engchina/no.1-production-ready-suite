@@ -29,10 +29,8 @@ class CoordinateTests(unittest.TestCase):
 
     def test_polygon_to_bbox_keeps_pixel_vertices_when_any_vertex_exceeds_one(self):
         # 正規化座標かは polygon 全体で判断する。頂点ごとに判断すると (0,0)-(1,1) px がページ全体に化ける (#790)。
-        self.assertEqual(polygon_to_bbox([{"x": 0, "y": 0}, {"x": 1, "y": 1}, {"x": 5, "y": 3}], 1000, 800),
-                         [0.0, 0.0, 5.0, 3.0])
-        self.assertEqual(polygon_to_bbox([{"x": 0.5, "y": 0.5}, {"x": 300, "y": 200}], 1000, 800),
-                         [0.5, 0.5, 300.0, 200.0])
+        self.assertEqual(polygon_to_bbox([{"x": 0, "y": 0}, {"x": 1, "y": 1}, {"x": 5, "y": 3}], 1000, 800), [0.0, 0.0, 5.0, 3.0])
+        self.assertEqual(polygon_to_bbox([{"x": 0.5, "y": 0.5}, {"x": 300, "y": 200}], 1000, 800), [0.5, 0.5, 300.0, 200.0])
         self.assertEqual(polygon_to_bbox([{"x": 0, "y": 0}, {"x": 1, "y": 1}], 1000, 800), [0.0, 0.0, 1000.0, 800.0])
 
     def test_pdf_bottom_left_roundtrip(self):

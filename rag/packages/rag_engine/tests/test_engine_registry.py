@@ -26,11 +26,14 @@ class EngineRegistryTests(unittest.TestCase):
         self.assertEqual(list(build_adapters(settings)), ENGINE_ORDER)
 
     def test_retired_engines_cannot_be_reenabled_by_old_settings(self):
-        settings = get_settings(dotenv_path=None, environ={
-            "RAG_ENGINE_ENABLED_ENGINES": "docling,dots_mocr_api,mineru_api",
-            "DOTS_MOCR_BASE_URL": "http://retired.invalid/v1",
-            "MINERU_API_URL": "http://retired.invalid",
-        })
+        settings = get_settings(
+            dotenv_path=None,
+            environ={
+                "RAG_ENGINE_ENABLED_ENGINES": "docling,dots_mocr_api,mineru_api",
+                "DOTS_MOCR_BASE_URL": "http://retired.invalid/v1",
+                "MINERU_API_URL": "http://retired.invalid",
+            },
+        )
         self.assertEqual(list(build_adapters(settings)), ["docling"])
         self.assertFalse(hasattr(settings, "dots_mocr_base_url"))
         self.assertFalse(hasattr(settings, "mineru_api_url"))

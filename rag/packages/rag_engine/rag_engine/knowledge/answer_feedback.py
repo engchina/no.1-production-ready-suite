@@ -6,10 +6,9 @@ import hashlib
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 ANSWER_FEEDBACK_SCHEMA_VERSION = 1
 ANSWER_FEEDBACK_DIR_NAME = "answer_feedback"
@@ -60,9 +59,7 @@ def create_answer_feedback_record(
         created_at=created_at,
     )
     feedback_question = str(answer_trace.get("question") or "").strip() or _clean_text(question)
-    feedback_classification_filter = _dict_or_empty(answer_trace.get("classification_filter")) or dict(
-        classification_filter or {}
-    )
+    feedback_classification_filter = _dict_or_empty(answer_trace.get("classification_filter")) or dict(classification_filter or {})
     return {
         "schema_version": ANSWER_FEEDBACK_SCHEMA_VERSION,
         "feedback_id": feedback_id,
@@ -110,11 +107,7 @@ def load_answer_trace_summary(output_dir: str | Path, run_id: str, answer_id: st
         raise ValueError("回答 payload の形式が不正です。")
 
     evidence_items = payload.get("evidence_items") if isinstance(payload.get("evidence_items"), list) else []
-    evidence_ids = [
-        str(item.get("id"))
-        for item in evidence_items
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    ]
+    evidence_ids = [str(item.get("id")) for item in evidence_items if isinstance(item, dict) and str(item.get("id") or "").strip()]
     return {
         "answer_payload_path": path.as_posix(),
         "question": str(payload.get("question") or ""),
@@ -165,12 +158,12 @@ def _safe_path_part(value: str, label: str) -> str:
 
 def _create_feedback_id(*, run_id: str, answer_id: str, feedback_type: str, created_at: str) -> str:
     # created_at は秒精度なので、同一秒の送信でも ID が重ならないよう time_ns を加える。
-    seed = f"{run_id}\0{answer_id}\0{feedback_type}\0{created_at}\0{time.time_ns()}".encode("utf-8")
+    seed = f"{run_id}\0{answer_id}\0{feedback_type}\0{created_at}\0{time.time_ns()}".encode()
     return hashlib.sha256(seed).hexdigest()[:16]
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _clean_text(value: Any) -> str:

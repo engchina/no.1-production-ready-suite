@@ -1,20 +1,20 @@
-"""解析モデルをプロセス内に常駐させる簡易プール。"""
-
-from __future__ import annotations
-
-"""エンジンごとのモデル常駐管理。
+"""解析モデルをプロセス内に常駐させる簡易プール（エンジンごとのモデル常駐管理）。
 
 一度ロードしたモデルは、UI から解放するまでプロセス内（GPU 利用時は VRAM 上）に置いたままにする。
 同じエンジンを繰り返し試すときに毎回ロードし直すのを避けるためのもの。
 """
 
-from rag_engine.resources.runtime import current_runtime
+from __future__ import annotations
 
 import gc
 import importlib.util
 import subprocess
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from contextlib import suppress
+from typing import Any
+
+from rag_engine.resources.runtime import current_runtime
 
 _lock = threading.Lock()
 _entries: dict[str, tuple[Any, Any, Callable[[], None] | None]] = {}  # key -> (signature, obj, unloader)
@@ -98,13 +98,17 @@ def gpu_summary() -> str:
         else:
             parts.append("CUDA は利用できません（CPU 実行）")
     try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.strip().splitlines()[0]
+        out = (
+            subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()[0]
+        )
         name, used, total = [part.strip() for part in out.split(",")]
         parts.append(f"GPU 全体 ({name}): {int(used) / 1024:.2f} / {int(total) / 1024:.2f} GiB 使用中")
     except Exception:
@@ -118,9 +122,7 @@ def _drop(key: str) -> bool:
         return False
     _, obj, unloader = entry
     if unloader is not None:
-        try:
+        with suppress(Exception):
             unloader()
-        except Exception:
-            pass
     del obj
     return True

@@ -28,8 +28,7 @@ RAG_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = Path(__file__).parent / "fixtures" / "evaluation_layout_headings.json"
 EVALUATION_SETS = ("multi-hop", "business-support")
 DOCUMENTS: dict[str, list[dict]] = {
-    name: document["records"]
-    for name, document in json.loads(FIXTURE.read_text(encoding="utf-8"))["documents"].items()
+    name: document["records"] for name, document in json.loads(FIXTURE.read_text(encoding="utf-8"))["documents"].items()
 }
 
 
@@ -88,21 +87,14 @@ def _navigation_paths(records: list[dict]) -> list[tuple[str, ...]]:
 
 
 def test_fixture_covers_every_evaluation_pdf() -> None:
-    pdfs = {
-        f"{folder}/{path.name}"
-        for folder in EVALUATION_SETS
-        for path in (RAG_ROOT / "evaluation" / folder).glob("*.pdf")
-    }
+    pdfs = {f"{folder}/{path.name}" for folder in EVALUATION_SETS for path in (RAG_ROOT / "evaluation" / folder).glob("*.pdf")}
     assert set(DOCUMENTS) == pdfs
 
 
 def test_docling_heading_levels_carry_no_depth() -> None:
     """Docling の見出しの level は PDF ではすべて 1（深さの根拠にならない）。番号を優先する理由。"""
     levels = {
-        record["raw"].get("level")
-        for records in DOCUMENTS.values()
-        for record in records
-        if record["category"] in SECTION_CATEGORIES
+        record["raw"].get("level") for records in DOCUMENTS.values() for record in records if record["category"] in SECTION_CATEGORIES
     }
     assert levels == {1}
 
@@ -120,9 +112,7 @@ def test_chunk_section_paths_follow_document_toc(name: str) -> None:
         "records": DOCUMENTS[name],
         "engines": [{"engine": "docling", "label": "Docling"}],
     }
-    chunks = build_small_to_big_chunks(
-        payload, source_run_id="eval1517", selected_engine_ids=["docling"], config=ChunkingConfig()
-    )
+    chunks = build_small_to_big_chunks(payload, source_run_id="eval1517", selected_engine_ids=["docling"], config=ChunkingConfig())
     expected = set(_expected_paths(name))
     children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
     assert children

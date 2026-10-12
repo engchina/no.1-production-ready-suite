@@ -28,11 +28,14 @@ from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT
 
 
 def test_env_values_for_the_judge_settings():
-    settings = get_settings(environ={
-        "RAG_ENGINE_AUDIT_REASONING_EFFORT": " Low ",
-        "RAG_ENGINE_CRAG_COMPACT_INPUT": "1",
-        "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": "true",
-    }, dotenv_path=None)
+    settings = get_settings(
+        environ={
+            "RAG_ENGINE_AUDIT_REASONING_EFFORT": " Low ",
+            "RAG_ENGINE_CRAG_COMPACT_INPUT": "1",
+            "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": "true",
+        },
+        dotenv_path=None,
+    )
     assert settings.audit_reasoning_effort == "low"
     assert settings.crag_compact_input is True and settings.section_skip_regrade_at_scope is True
     defaults = get_settings(environ={}, dotenv_path=None)
@@ -43,14 +46,20 @@ def test_env_values_for_the_judge_settings():
 
 # ---- 監査の推論の量 ---------------------------------------------------------------------------------------
 
+
 def test_audit_uses_its_own_effort_separately_from_generation():
     from rag_engine.generation import grounded
+
     settings = _engine_settings(generation_reasoning_effort="high", audit_reasoning_effort="low")
     seen = []
 
     def fake_round(question, spans, round_settings, **options):
-        seen.append((round_settings.llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort,
-                     options["audit_settings"].llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort))
+        seen.append(
+            (
+                round_settings.llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort,
+                options["audit_settings"].llm_providers[ENTERPRISE_AI_LLM_PROVIDER].reasoning_effort,
+            )
+        )
         raise RuntimeError("stop after the first round")
 
     context = generation.AnswerContext(records=[_parent("r1", "経費精算の申請方法")], text="経費精算の申請方法")
@@ -64,46 +73,87 @@ def test_audit_uses_its_own_effort_separately_from_generation():
 def test_run_round_calls_the_audit_with_the_audit_settings():
     from rag_engine.generation import grounded
     from rag_engine.models.llm import GroundedAudit, GroundedDraft
+
     calls = []
 
     def parse_text(system, prompt, settings, schema, **options):
         calls.append((schema, settings))
         if schema is GroundedDraft:
             return GroundedDraft(summary="", confidence="low", items=[])
-        return GroundedAudit(reviews=[], request_reviews=[{"request_id": "R1", "status": "missing", "reason": "なし"}],
-                             summary_supported=False, goal_alignment="partial")
+        return GroundedAudit(
+            reviews=[],
+            request_reviews=[{"request_id": "R1", "status": "missing", "reason": "なし"}],
+            summary_supported=False,
+            goal_alignment="partial",
+        )
 
     question = "経費精算の申請方法は？"
-    context = AnswerContext(records=[_parent("r1", "経費精算の申請方法: 経費精算画面で申請します。")],
-                            text="経費精算の申請方法: 経費精算画面で申請します。")
+    context = AnswerContext(
+        records=[_parent("r1", "経費精算の申請方法: 経費精算画面で申請します。")], text="経費精算の申請方法: 経費精算画面で申請します。"
+    )
     spans = generation._grounded_spans(question, context, (), None)
-    grounded.run_round(question, spans, "generation", prompt="p", image_paths=(), provider_id=None,
-                       parse_text=parse_text, parse_images=None, audit_settings="audit")
-    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraft", "generation"),
-                                                                            ("GroundedAudit", "audit")]
+    grounded.run_round(
+        question,
+        spans,
+        "generation",
+        prompt="p",
+        image_paths=(),
+        provider_id=None,
+        parse_text=parse_text,
+        parse_images=None,
+        audit_settings="audit",
+    )
+    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraft", "generation"), ("GroundedAudit", "audit")]
     calls.clear()
     # 渡さなければ監査も生成と同じ設定（従来の動き）。
-    grounded.run_round(question, spans, "generation", prompt="p", image_paths=(), provider_id=None,
-                       parse_text=parse_text, parse_images=None)
+    grounded.run_round(
+        question, spans, "generation", prompt="p", image_paths=(), provider_id=None, parse_text=parse_text, parse_images=None
+    )
     assert [settings for _schema, settings in calls] == ["generation", "generation"]
 
 
 # ---- CRAG の評価の入力の圧縮 ---------------------------------------------------------------------------------
 
+
 def _parent(uid: str, text: str, *, source: str = "規程.pdf", metadata: dict | None = None) -> AnswerRecord:
-    return AnswerRecord(id=uid, chunk_id=f"local-{uid}", chunk_uid=uid, engine="docling", engine_label="Docling",
-                        page=1, seq_no=1, category="Chunk", text=text, source=source, chunk_level="parent",
-                        parent_chunk_id="", metadata={"section_path": ["規程", "第 2 章"], **(metadata or {})})
+    return AnswerRecord(
+        id=uid,
+        chunk_id=f"local-{uid}",
+        chunk_uid=uid,
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=text,
+        source=source,
+        chunk_level="parent",
+        parent_chunk_id="",
+        metadata={"section_path": ["規程", "第 2 章"], **(metadata or {})},
+    )
 
 
 def _tree_context(count: int) -> AnswerContext:
     tree = []
     for n in range(count):
         parent = _parent(f"p{n}", f"経費精算の申請の規則 {n}。申請は月末までに行います。")
-        child = replace(parent, id=f"c{n}", chunk_id=f"local-c{n}", chunk_uid=f"c{n}", chunk_level="child",
-                        parent_chunk_uid=f"p{n}", parent_chunk_id=f"local-p{n}")
-        tree.append(ContextParentEvidence(record=parent, role="synthesis_parent", reason="retrieved", children=(
-            ContextChildEvidence(record=child, role="retrieved_anchor", reason="retrieved", retrieval_rank=n + 1),)))
+        child = replace(
+            parent,
+            id=f"c{n}",
+            chunk_id=f"local-c{n}",
+            chunk_uid=f"c{n}",
+            chunk_level="child",
+            parent_chunk_uid=f"p{n}",
+            parent_chunk_id=f"local-p{n}",
+        )
+        tree.append(
+            ContextParentEvidence(
+                record=parent,
+                role="synthesis_parent",
+                reason="retrieved",
+                children=(ContextChildEvidence(record=child, role="retrieved_anchor", reason="retrieved", retrieval_rank=n + 1),),
+            )
+        )
     records = [item.record for item in tree]
     return AnswerContext(records=records, text="\n".join(r.text for r in records), evidence_tree=tuple(tree))
 
@@ -117,8 +167,7 @@ def test_compact_prompt_keeps_only_chunk_uid_and_needed_fields_without_spaces():
     context = _tree_context(15)
     question = "経費精算の申請の期限は？"
     full = crag_support._build_crag_grade_prompt(question, question, [question], context)
-    compact = crag_support._build_crag_grade_prompt(question, question, [question], context, compact=True,
-                                                    max_candidates=12)
+    compact = crag_support._build_crag_grade_prompt(question, question, [question], context, compact=True, max_candidates=12)
 
     shown = json.loads(_candidates_json(compact))
     # 生成に渡す親の数（12）にそろえ、ID は chunk_uid だけ（局所 ID・引用の文字列・子の entry を載せない）。
@@ -140,16 +189,21 @@ def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
     tree = tuple(ContextParentEvidence(record=item, role="synthesis_parent", reason="retrieved") for item in records)
     context = AnswerContext(records=list(records), text="\n".join(r.text for r in records), evidence_tree=tree)
     output = CragRetrievalGradeOutput(
-        candidate_verdicts=[{"chunk_uid": "p2", "relevant": True, "reason": "関連"},
-                            {"chunk_uid": "p12", "relevant": True, "reason": "関連"},
-                            {"chunk_uid": "x1", "relevant": False, "reason": "話題が別"}],
+        candidate_verdicts=[
+            {"chunk_uid": "p2", "relevant": True, "reason": "関連"},
+            {"chunk_uid": "p12", "relevant": True, "reason": "関連"},
+            {"chunk_uid": "x1", "relevant": False, "reason": "話題が別"},
+        ],
         enumerated_items=_items(("p2", "5 営業日前までに"), ("p2", "3 営業日前までに"), ("p12", "3 営業日以内に")),
         aspect_checks=[{"aspect": "business_object", "status": "supported", "source_ids": ["p2"], "reason": "関連"}],
-        reason="足りる", sufficient=True, confidence=0.9, rewritten_query="")
+        reason="足りる",
+        sufficient=True,
+        confidence=0.9,
+        rewritten_query="",
+    )
     settings = SimpleNamespace(crag_compact_input=True)
     with patch.object(generation, "parse_text_response", return_value=output) as parse:
-        attempt = generation._grade_crag_retrieval(1, question, question, [question], context, settings,
-                                                   max_candidates=12)
+        attempt = generation._grade_crag_retrieval(1, question, question, [question], context, settings, max_candidates=12)
     assert "\n  " not in parse.call_args.args[1]
     # 候補の除外（relevant=false）・関連の候補・列挙の項目の数え直し（3 件 < 5 件で欠け）は詰めた入力でも同じ。
     assert attempt.rejected_chunk_ids == ("x1",)
@@ -177,28 +231,48 @@ def _check(context: AnswerContext, question: str = QUESTION, **overrides):
 
 def test_strong_signals_with_partly_matched_requests_skip_the_grade():
     # 多段の問は要求の語が 1 つの根拠にそろわない（一部一致 = weak）。根拠の無い要求が無ければ飛ばす。
-    context = _scored(_parent("p1", "経費精算の申請は月末までに行います。"),
-                      _parent("p2", "承認は部長が行います。", source="承認規程.pdf"))
+    context = _scored(_parent("p1", "経費精算の申請は月末までに行います。"), _parent("p2", "承認は部長が行います。", source="承認規程.pdf"))
     check = _check(context)
     assert check["skip"] is True, check
     assert any("根拠なし 0 件" in line for line in check["lines"])
 
 
-@pytest.mark.parametrize("name, context, question", [
-    ("low-score", _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。"), score=0.5), QUESTION),
-    ("missing-request", _scored(_parent("p1", "経費精算の申請は月末までに行います。")),
-     "経費精算の申請の期限と、出張旅費の上限額を教えてください"),
-    ("enumeration", _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。")),
-     "経費精算の申請で決められた期限をすべて挙げてください"),
-    ("open-document-enumeration", _scored(_parent("p1", "作業者は配線に触れません。")), DO_NOT_TOUCH),
-    ("error-message", _scored(_parent("p1", "経費精算で「E0123 申請できません」と表示されたら再申請します。")),
-     "「E0123 申請できません」と表示されたときの対処は？"),
-    ("superseded", _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。",
-                                   metadata={"document_superseded": True})), QUESTION),
-    ("duplicate", _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。" * 3, source="規程.pdf"),
-                          _parent("p9", "経費精算の申請の期限は月末で、承認者は部長です。" * 3, source="規程-2023.pdf")),
-     QUESTION),
-], ids=lambda value: value if isinstance(value, str) and len(value) < 30 else "")
+@pytest.mark.parametrize(
+    "name, context, question",
+    [
+        ("low-score", _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。"), score=0.5), QUESTION),
+        (
+            "missing-request",
+            _scored(_parent("p1", "経費精算の申請は月末までに行います。")),
+            "経費精算の申請の期限と、出張旅費の上限額を教えてください",
+        ),
+        (
+            "enumeration",
+            _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。")),
+            "経費精算の申請で決められた期限をすべて挙げてください",
+        ),
+        ("open-document-enumeration", _scored(_parent("p1", "作業者は配線に触れません。")), DO_NOT_TOUCH),
+        (
+            "error-message",
+            _scored(_parent("p1", "経費精算で「E0123 申請できません」と表示されたら再申請します。")),
+            "「E0123 申請できません」と表示されたときの対処は？",
+        ),
+        (
+            "superseded",
+            _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。", metadata={"document_superseded": True})),
+            QUESTION,
+        ),
+        (
+            "duplicate",
+            _scored(
+                _parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。" * 3, source="規程.pdf"),
+                _parent("p9", "経費精算の申請の期限は月末で、承認者は部長です。" * 3, source="規程-2023.pdf"),
+            ),
+            QUESTION,
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) and len(value) < 30 else "",
+)
 def test_ambiguous_or_must_call_questions_call_the_grade(name, context, question):
     check = _check(context, question)
     assert check["skip"] is False and check["reason"], name
@@ -207,15 +281,22 @@ def test_ambiguous_or_must_call_questions_call_the_grade(name, context, question
 def test_not_skipped_grade_records_the_reason_in_the_step():
     context = _scored(_parent("p1", "経費精算の申請の期限は月末で、承認者は部長です。"), score=0.5)
     settings = _engine_settings(crag_skip_on_strong_signals=True, crag_skip_min_rerank_score=0.8)
-    grade = CragRetrievalGradeOutput(candidate_verdicts=[{"chunk_uid": "p1", "relevant": True, "reason": "関連"}],
-                                     aspect_checks=[], reason="足りる", sufficient=True, confidence=0.9,
-                                     rewritten_query="")
+    grade = CragRetrievalGradeOutput(
+        candidate_verdicts=[{"chunk_uid": "p1", "relevant": True, "reason": "関連"}],
+        aspect_checks=[],
+        reason="足りる",
+        sufficient=True,
+        confidence=0.9,
+        rewritten_query="",
+    )
     lines: list = []
     token = generation._execution_lines.set(lines)
     try:
-        with patch.object(generation, "load_latest_or_source_chunk_run", return_value=SimpleNamespace(run_id="r")), \
-                patch.object(generation, "build_adb_hybrid_answer_context", return_value=context), \
-                patch.object(generation, "parse_text_response", return_value=grade) as parse:
+        with (
+            patch.object(generation, "load_latest_or_source_chunk_run", return_value=SimpleNamespace(run_id="r")),
+            patch.object(generation, "build_adb_hybrid_answer_context", return_value=context),
+            patch.object(generation, "parse_text_response", return_value=grade) as parse,
+        ):
             generation.build_crag_answer_context(QUESTION, "abcdef", ["docling"], settings)
     finally:
         generation._execution_lines.reset(token)
@@ -226,21 +307,25 @@ def test_not_skipped_grade_records_the_reason_in_the_step():
 
 # ---- 読む範囲（文書全体）まで読んだ後の評価し直しの省略 ----------------------------------------------------------------
 
+
 def test_open_document_enumeration_skips_the_regrade_after_reading_the_document():
     stub, grader = SectionStub(), Grader(needs=set())
 
-    result = _expand(_seed_context("c31a"), _section_settings(section_skip_regrade_at_scope=True), grader, stub,
-                     last=_attempt(sufficient=True, missing=(ENUMERATION_ASPECT, "applicability")),
-                     question=DO_NOT_TOUCH)
+    result = _expand(
+        _seed_context("c31a"),
+        _section_settings(section_skip_regrade_at_scope=True),
+        grader,
+        stub,
+        last=_attempt(sufficient=True, missing=(ENUMERATION_ASPECT, "applicability")),
+        question=DO_NOT_TOUCH,
+    )
 
     # leaf → 第3章 → 文書全体まで読み、文書全体を読んだ後も評価器を呼ばない（上に読む章節が無い）。
     assert stub.read_calls == ["s3-1", "s3", "document"]
     assert grader.calls == []
     assert result.stop_reason == sections.STOP_SCOPE_READ and result.applied and result.unread == []
-    assert set(_members("document")) <= {child.record.chunk_uid for parent in result.context.evidence_tree
-                                          for child in parent.children}
-    assert [level.get("grade_skipped") for level in result.trace["levels"]] == [
-        "minimum_scope", "minimum_scope", "scope_reached"]
+    assert set(_members("document")) <= {child.record.chunk_uid for parent in result.context.evidence_tree for child in parent.children}
+    assert [level.get("grade_skipped") for level in result.trace["levels"]] == ["minimum_scope", "minimum_scope", "scope_reached"]
     # 生成に渡す既知の欠落から、広げる前の判定の内容の観点（列挙の欠け）を除く。適用の観点は残す。
     attempts = (_attempt(sufficient=True, missing=(ENUMERATION_ASPECT, "applicability")),)
     assert generation._known_gaps(attempts, result) == ("applicability",)
@@ -248,20 +333,31 @@ def test_open_document_enumeration_skips_the_regrade_after_reading_the_document(
 
 def test_leaf_scope_and_counted_enumerations_still_regrade():
     stub, grader = SectionStub(), Grader(needs=set(_members("s3-1")))
-    leaf = _expand(_seed_context("c31a"), _section_settings(section_skip_regrade_at_scope=True), grader, stub,
-                   last=_attempt(sufficient=True), question="第3章の設備ごとの点検の項目をすべて教えて")
+    leaf = _expand(
+        _seed_context("c31a"),
+        _section_settings(section_skip_regrade_at_scope=True),
+        grader,
+        stub,
+        last=_attempt(sufficient=True),
+        question="第3章の設備ごとの点検の項目をすべて教えて",
+    )
     # 当たった章節が範囲の問は、評価器が足りないと判定すれば親へ広げるので評価し直す。
     assert grader.calls == [1] and leaf.stop_reason == sections.STOP_SUFFICIENT
 
     stub2, grader2 = SectionStub(), Grader(needs=set(_members("s3")), missing=(ENUMERATION_ASPECT,))
-    counted = _expand(_seed_context("c31a"), _section_settings(section_skip_regrade_at_scope=True), grader2, stub2,
-                      last=_attempt(sufficient=True, missing=(ENUMERATION_ASPECT,)), question=BUSINESS_DAY_FIVE)
+    counted = _expand(
+        _seed_context("c31a"),
+        _section_settings(section_skip_regrade_at_scope=True),
+        grader2,
+        stub2,
+        last=_attempt(sufficient=True, missing=(ENUMERATION_ASPECT,)),
+        question=BUSINESS_DAY_FIVE,
+    )
     # 件数のある問は数えた結果で決めるので、読む範囲の規則を使わず評価し直す。
     assert grader2.calls == [1, 2] and counted.stop_reason == sections.STOP_SUFFICIENT
 
 
 def test_regrade_is_kept_when_the_setting_is_off():
     stub, grader = SectionStub(), Grader(needs=set())
-    result = _expand(_seed_context("c31a"), _section_settings(), grader, stub, last=_attempt(sufficient=True),
-                     question=DO_NOT_TOUCH)
+    result = _expand(_seed_context("c31a"), _section_settings(), grader, stub, last=_attempt(sufficient=True), question=DO_NOT_TOUCH)
     assert grader.calls == [3] and result.stop_reason == sections.STOP_SUFFICIENT

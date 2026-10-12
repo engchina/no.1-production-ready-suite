@@ -33,7 +33,7 @@ def _weighted(query, *, domain_keywords=None, latin_stemmer="none"):
         domain_keywords=domain_keywords,
         config=TextSearchTokenizerConfig(latin_stemmer=latin_stemmer),
     )
-    return dict(zip(result.tokens, result.weights)), result
+    return dict(zip(result.tokens, result.weights, strict=False)), result
 
 
 class TextSearchTokenizerTests(unittest.TestCase):

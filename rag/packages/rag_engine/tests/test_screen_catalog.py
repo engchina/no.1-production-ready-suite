@@ -1,13 +1,21 @@
 """画面目録で質問から画面を選び、その画面の根拠を検索候補に加える (#1108)。"""
+
 from types import SimpleNamespace
 
-from rag_engine.retrieval.screen_catalog import (LinkedScreen, ScreenLinks, build_screen_catalog, link_screens,
-                                             screen_candidates, validated_links)
+from rag_engine.retrieval.screen_catalog import (
+    LinkedScreen,
+    ScreenLinks,
+    build_screen_catalog,
+    link_screens,
+    screen_candidates,
+    validated_links,
+)
 
 
 def _chunk(uid, source, path, *, level="child", page=1, seq=1):
-    return SimpleNamespace(chunk_uid=uid, source_file_name=source, chunk_level=level, page_start=page, chunk_seq=seq,
-                           metadata={"section_path": list(path)})
+    return SimpleNamespace(
+        chunk_uid=uid, source_file_name=source, chunk_level=level, page_start=page, chunk_seq=seq, metadata={"section_path": list(path)}
+    )
 
 
 POOL = [
@@ -30,9 +38,13 @@ def test_catalog_lists_numbered_screen_headings_per_document():
 
 def test_only_links_that_exist_in_the_catalog_are_kept():
     catalog = build_screen_catalog(POOL)
-    links = ScreenLinks(candidates=[LinkedScreen(document="架空管理.pdf", screen="(2)伝票印刷設定"),  # 全角半角の違いは許す
-                                    LinkedScreen(document="架空管理.pdf", screen="（９）存在しない画面"),
-                                    LinkedScreen(document="無い文書.pdf", screen="（２）伝票印刷設定")])
+    links = ScreenLinks(
+        candidates=[
+            LinkedScreen(document="架空管理.pdf", screen="(2)伝票印刷設定"),  # 全角半角の違いは許す
+            LinkedScreen(document="架空管理.pdf", screen="（９）存在しない画面"),
+            LinkedScreen(document="無い文書.pdf", screen="（２）伝票印刷設定"),
+        ]
+    )
 
     assert validated_links(links, catalog) == [("架空管理.pdf", "（２）伝票印刷設定")]
 
@@ -57,9 +69,12 @@ def test_link_failures_leave_retrieval_unchanged():
 
 def test_reserve_moves_only_the_best_child_of_each_linked_screen_up_to_the_rank():
     from rag_engine.retrieval.screen_catalog import reserve_linked_screens
+
     records = [SimpleNamespace(id=f"r{i}", source="架空管理.pdf", metadata={"section_path": ["（９）別画面"]}) for i in range(6)]
-    records += [SimpleNamespace(id="s1", source="架空管理.pdf", metadata={"section_path": ["（２）伝票印刷設定"]}),
-                SimpleNamespace(id="s2", source="架空管理.pdf", metadata={"section_path": ["（２）伝票印刷設定"]})]
+    records += [
+        SimpleNamespace(id="s1", source="架空管理.pdf", metadata={"section_path": ["（２）伝票印刷設定"]}),
+        SimpleNamespace(id="s2", source="架空管理.pdf", metadata={"section_path": ["（２）伝票印刷設定"]}),
+    ]
 
     ordered = reserve_linked_screens(records, [("架空管理.pdf", "（２）伝票印刷設定")], rank=3)
 
@@ -70,22 +85,43 @@ def test_reserve_moves_only_the_best_child_of_each_linked_screen_up_to_the_rank(
 def test_catalog_from_section_paths_matches_chunk_catalog():
     """DB で集計した（文書名、見出しの列、chunk 数）からも、chunk から作るのと同じ目録になる。"""
     from rag_engine.retrieval.screen_catalog import catalog_from_section_paths
-    rows = [("架空管理.pdf", ["架空管理", "（３）出力様式設定"], 1),
-            ("架空管理.pdf", ["架空管理", "（２）伝票印刷設定", "A 【画面説明】"], 2),
-            ("架空仕入.pdf", ["架空仕入", "（２）伝票印刷設定"], 1),
-            ("", ["（１）文書名なし"], 1)]
 
-    assert catalog_from_section_paths(rows) == {"架空管理.pdf": ["（２）伝票印刷設定", "（３）出力様式設定"],
-                                                "架空仕入.pdf": ["（２）伝票印刷設定"]}
+    rows = [
+        ("架空管理.pdf", ["架空管理", "（３）出力様式設定"], 1),
+        ("架空管理.pdf", ["架空管理", "（２）伝票印刷設定", "A 【画面説明】"], 2),
+        ("架空仕入.pdf", ["架空仕入", "（２）伝票印刷設定"], 1),
+        ("", ["（１）文書名なし"], 1),
+    ]
+
+    assert catalog_from_section_paths(rows) == {
+        "架空管理.pdf": ["（２）伝票印刷設定", "（３）出力様式設定"],
+        "架空仕入.pdf": ["（２）伝票印刷設定"],
+    }
 
 
 def _stored(uid, source, path, *, level="child", seq=1):
     from rag_engine.models.storage import StoredChunk
-    return StoredChunk(chunk_uid=uid, chunk_id=uid, chunk_level=level, chunk_seq=seq,
-                       parent_chunk_uid="" if level == "parent" else f"{source}:p", parent_chunk_id="",
-                       child_chunk_ids=(), text=uid, retrieval_text=uid, source_run_id="run", source_file_name=source,
-                       source_engine_id="docling", source_engine_label="Docling", page_start=1, page_end=1,
-                       source_seq_ranges=(), source_record_refs=(), metadata={"section_path": list(path)})
+
+    return StoredChunk(
+        chunk_uid=uid,
+        chunk_id=uid,
+        chunk_level=level,
+        chunk_seq=seq,
+        parent_chunk_uid="" if level == "parent" else f"{source}:p",
+        parent_chunk_id="",
+        child_chunk_ids=(),
+        text=uid,
+        retrieval_text=uid,
+        source_run_id="run",
+        source_file_name=source,
+        source_engine_id="docling",
+        source_engine_label="Docling",
+        page_start=1,
+        page_end=1,
+        source_seq_ranges=(),
+        source_record_refs=(),
+        metadata={"section_path": list(path)},
+    )
 
 
 def test_linked_screen_children_reads_catalog_and_chunks_from_injected_dependencies():
@@ -101,13 +137,19 @@ def test_linked_screen_children_reads_catalog_and_chunks_from_injected_dependenc
 
     def screen_chunks(*, links, existing, settings):
         calls.append(("chunks", list(links), set(existing)))
-        return [_stored("s1", screen[0], ["架空管理", screen[1]]),
-                _stored(f"{screen[0]}:p", screen[0], ["架空管理", screen[1]], level="parent")]
+        return [
+            _stored("s1", screen[0], ["架空管理", screen[1]]),
+            _stored(f"{screen[0]}:p", screen[0], ["架空管理", screen[1]], level="parent"),
+        ]
 
     dependencies = AnswerDependencies(
-        search=unused, check_ready=unused, rerank=unused, parse_images=unused,
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
         parse_text=lambda system, prompt, settings, schema, **kwargs: ScreenLinks(
-            candidates=[LinkedScreen(document=screen[0], screen=screen[1])]),
+            candidates=[LinkedScreen(document=screen[0], screen=screen[1])]
+        ),
         screen_catalog=lambda *, settings: calls.append(("catalog",)) or {screen[0]: [screen[1]]},
         screen_chunks=screen_chunks,
     )

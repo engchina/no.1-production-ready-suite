@@ -137,9 +137,8 @@ if __name__ == "__main__":
         self.assertTrue(document.closed)
 
     def test_pdf_text_lines_in_bbox_closes_resources_on_error(self):
-        with patch("rag_engine.parsing.rendering._import_pdfium", return_value=self.pdfium):
-            with self.assertRaises(KeyError):
-                pdf_text_lines_in_bbox("source.pdf", 1, {"l": 1, "t": 40})  # r / b が無い
+        with patch("rag_engine.parsing.rendering._import_pdfium", return_value=self.pdfium), self.assertRaises(KeyError):
+            pdf_text_lines_in_bbox("source.pdf", 1, {"l": 1, "t": 40})  # r / b が無い
 
         page = _FakeDocument.instances[-1].pages[0]
         self.assertTrue(page.closed)

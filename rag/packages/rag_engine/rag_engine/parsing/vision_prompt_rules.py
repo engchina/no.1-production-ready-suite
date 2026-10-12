@@ -29,8 +29,16 @@ VISION_LIST_FIELD_LIMITS = {
 # 根拠の判定・監査（result_granularity / operation_audit）はこれらの行を本文として使わない。
 VISION_SENTENCE_GROUP_PREFIX = "■ "
 VISION_ENUMERATION_LABELS = (
-    "主題", "画面/メニュー", "画面名", "ボタン", "項目", "値", "コード・エラー",
-    "検索語", "言い換え", "想定質問",
+    "主題",
+    "画面/メニュー",
+    "画面名",
+    "ボタン",
+    "項目",
+    "値",
+    "コード・エラー",
+    "検索語",
+    "言い換え",
+    "想定質問",
 )
 _ENUMERATION_LINE = re.compile(r"\s*(?:" + "|".join(re.escape(label) for label in VISION_ENUMERATION_LABELS) + r"):")
 
@@ -77,9 +85,7 @@ RULES_END = "[/Vision extraction rules]"
 # 終了マーカーは版を持たないため、そのまま対になる。
 _ANY_RULES_START = r"\[Vision extraction rules v\d+\]"
 # 開始マーカーの手前に孤立した開始マーカーがあっても、その間の独自文面を巻き込まない。
-_MANAGED_BLOCK = re.compile(
-    _ANY_RULES_START + rf"(?:(?!{_ANY_RULES_START}).)*?" + re.escape(RULES_END), re.S
-)
+_MANAGED_BLOCK = re.compile(_ANY_RULES_START + rf"(?:(?!{_ANY_RULES_START}).)*?" + re.escape(RULES_END), re.S)
 # ブロックを取り除いた後に残る、対になっていないマーカー。
 _ORPHAN_MARKER = re.compile(_ANY_RULES_START + "|" + re.escape(RULES_END))
 
@@ -99,7 +105,7 @@ TABLE_EXTRACTION_INSTRUCTION = (
 def vision_extraction_rules() -> str:
     """型に依存しない抽出規則と、保存処理と一致する構造配列の件数上限を返します。"""
     limits = "、".join(f"{field}={limit}" for field, limit in VISION_LIST_FIELD_LIMITS.items())
-    return f'''{RULES_START}
+    return f"""{RULES_START}
 以下は field ごとの抽出契約です。上記の方針は維持し、原文と検索用の言い換えを分離します。
 
 1. 原文保持
@@ -140,7 +146,7 @@ def vision_extraction_rules() -> str:
 - 構造配列の上限: {limits}。table_rows の各行は最大 {MAX_TABLE_COLUMNS} セル、chart_series の values は各系列最大 {MAX_CHART_SERIES_VALUES} 件。
 - 長表は原本の先頭から最大 {MAX_TABLE_ROWS} 行を保持する。ただし実行対象が表全体で missing_picture_regions がある場合は、その画像セルを含む行を先に確保し、残りの枠を先頭の行で埋めて、上から下の順で返す。超過分は読める根拠に限って table_summary 等へ要約し、correction_notes に省略の有無と範囲を明示する。要約を全行の構造化抽出として扱わない。
 - 同義語・質問例は重複を避け、見えている語から自然に導ける根拠のある表現だけ（特定コーパス専用の同義語を作らない）。必須キーを埋めるために情報を創作しない。出力は実行時の JSON schema に従う。
-{RULES_END}'''
+{RULES_END}"""
 
 
 def refine_image_retrieval_prompt(template: str) -> str:
@@ -151,29 +157,20 @@ def refine_image_retrieval_prompt(template: str) -> str:
     ブロック外の独自文面は既知の旧規則と完全一致する文面以外は変更しません。
     """
     # システムの枠はマゼンタ (#784)。原文の赤枠と色で区別し、「画像1と同じ内容を囲む」ことを補助の判別基準にする。
-    highlight_rule = (
-        "- 周辺文脈画像では、マゼンタ（明るい紫）の矩形がシステムの付けた対象枠（target_highlight）で、metadata.bbox の位置にあり画像1と同じ内容を囲む。原文に元からある赤枠、ハイライト、選択枠は文書の内容であり、対象の指定ではない。対象外だけの無関係な内容を対象の説明に混ぜない。"
-    )
+    highlight_rule = "- 周辺文脈画像では、マゼンタ（明るい紫）の矩形がシステムの付けた対象枠（target_highlight）で、metadata.bbox の位置にあり画像1と同じ内容を囲む。原文に元からある赤枠、ハイライト、選択枠は文書の内容であり、対象の指定ではない。対象外だけの無関係な内容を対象の説明に混ぜない。"
     replacements = {
-        "- 周辺文脈画像に赤枠、ハイライト、選択枠などがある場合、その強調領域が対象Pictureです。強調領域外だけに見える無関係な内容を対象の説明に混ぜない。":
-            highlight_rule,
+        "- 周辺文脈画像に赤枠、ハイライト、選択枠などがある場合、その強調領域が対象Pictureです。強調領域外だけに見える無関係な内容を対象の説明に混ぜない。": highlight_rule,
         # 判別基準を持たない一世代前の文面。保存済みテンプレートに残っている場合も揃える。
-        "- 周辺文脈画像では metadata.bbox とシステムの target_highlight を対象確認に使う。原文内の赤枠、ハイライト、選択枠は対象の指定ではない。対象外だけの無関係な内容を対象の説明に混ぜない。":
-            highlight_rule,
-        "- `paired_ocr_text` がある場合は読み取り補助として使う。ただしOCR文字列を羅列せず、意味、条件、操作、検索語へ正規化する。":
-            "- `paired_ocr_text` は読み取り補助。可視 field と表セルは原文を保ち、意味・条件・操作・検索語への正規化は要約・検索 field で行う。",
+        "- 周辺文脈画像では metadata.bbox とシステムの target_highlight を対象確認に使う。原文内の赤枠、ハイライト、選択枠は対象の指定ではない。対象外だけの無関係な内容を対象の説明に混ぜない。": highlight_rule,
+        "- `paired_ocr_text` がある場合は読み取り補助として使う。ただしOCR文字列を羅列せず、意味、条件、操作、検索語へ正規化する。": "- `paired_ocr_text` は読み取り補助。可視 field と表セルは原文を保ち、意味・条件・操作・検索語への正規化は要約・検索 field で行う。",
         # JSON 例の一文。表モードでは画像セルを含む行を優先するため「先頭から」を外す。
-        "表全体では先頭から最大20行とし、残りはtable_summaryへ要約する。":
-            "表全体では最大20行とし（行の選び方は共通規則 4 に従う）、残りはtable_summaryへ要約する。",
+        "表全体では先頭から最大20行とし、残りはtable_summaryへ要約する。": "表全体では最大20行とし（行の選び方は共通規則 4 に従う）、残りはtable_summaryへ要約する。",
         # 和文に埋めた英語の否定列挙は not の範囲が決まらず、「既定値として扱う」と逆に読める。
-        "not real production system values, current customer data, customer-specific settings, defaults, or recommended fixed values として扱う。":
-            "実運用システムの値、現在の顧客データ、顧客固有の設定、既定値、推奨の固定値のいずれとしても扱わない。",
+        "not real production system values, current customer data, customer-specific settings, defaults, or recommended fixed values として扱う。": "実運用システムの値、現在の顧客データ、顧客固有の設定、既定値、推奨の固定値のいずれとしても扱わない。",
         # 例示値のラベルは日本語 1 系統に統一した (#769)。英語表記が残ると、検索用テキストから
         # 例示値を除く処理と表記が揃わず、生成説明ごとにラベルが混ざる。
-        "- 入力欄、検索条件欄、ダイアログ入力欄、ファイル選択欄に既に入っている値は、原則として文書上の入力例・表示例です。実運用システムの値、現在の顧客データ、顧客固有の設定、既定値、推奨の固定値のいずれとしても扱わない。検索に必要なら `input example: field=value` または `display example: field=value` の形で項目名とセットにする。":
-            "- 入力欄、検索条件欄、ダイアログ入力欄、ファイル選択欄に既に入っている値の扱いは共通規則 3 に従う。",
-        '"visible_values": ["読める選択値、状態、日付、件数、設定値、コード、単位付き数値。項目名と値をセットで書く。事前入力済みUI値は input example: field=value または display example: field=value と明示する"],':
-            '"visible_values": ["読める選択値、状態、日付、件数、設定値、コード、単位付き数値。項目名と値をセットで書く"],',
+        "- 入力欄、検索条件欄、ダイアログ入力欄、ファイル選択欄に既に入っている値は、原則として文書上の入力例・表示例です。実運用システムの値、現在の顧客データ、顧客固有の設定、既定値、推奨の固定値のいずれとしても扱わない。検索に必要なら `input example: field=value` または `display example: field=value` の形で項目名とセットにする。": "- 入力欄、検索条件欄、ダイアログ入力欄、ファイル選択欄に既に入っている値の扱いは共通規則 3 に従う。",
+        '"visible_values": ["読める選択値、状態、日付、件数、設定値、コード、単位付き数値。項目名と値をセットで書く。事前入力済みUI値は input example: field=value または display example: field=value と明示する"],': '"visible_values": ["読める選択値、状態、日付、件数、設定値、コード、単位付き数値。項目名と値をセットで書く"],',
     }
     result = template
     for old, new in replacements.items():
@@ -181,7 +178,7 @@ def refine_image_retrieval_prompt(template: str) -> str:
     rules = vision_extraction_rules()
     match = _MANAGED_BLOCK.search(result)
     if match:
-        before, after = result[:match.start()], result[match.end():]
+        before, after = result[: match.start()], result[match.end() :]
     else:
         before, after = result.rstrip() + "\n\n", "\n"
     # 片方だけ残ったマーカーや二つ目のブロックを残すと、管理ブロックが重複して規則が二重に送られる。
