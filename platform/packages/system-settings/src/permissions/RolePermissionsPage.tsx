@@ -704,7 +704,6 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
             ariaLabel={m.workspaceLabel}
             splitId="security-permissions-list"
             splitStoragePrefix={splitStoragePrefix}
-            preferredWidePane="right"
           >
             <section className="grid min-w-0 content-start gap-3" aria-labelledby="security-permissions-list-heading">
               <SecurityPanelHeader

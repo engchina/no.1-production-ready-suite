@@ -316,8 +316,6 @@ export function FeedbackClient() {
               {page?.items.length ? (
                 <RagSplitPane
                   splitId="feedback-list"
-                  // 一覧は情報の密な表なので、一覧側を既定で広くする（詳細は divider で広げられる）。
-                  preferredWidePane="left"
                   left={
                     <>
                       <FeedbackTable

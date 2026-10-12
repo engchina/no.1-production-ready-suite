@@ -168,10 +168,13 @@ test("固定分割 slide は三档切替・ページ別保存・モバイル単�
   await expect(divider).toBeVisible();
   await expect(divider).toHaveAttribute("role", "separator");
   await expect(divider).toHaveAttribute("aria-label", "左右ペインの表示比率");
-  await expect(pane).toHaveAttribute("data-split-ratio", "right-wide");
+  // 保存が無いときは、どの画面も分割線を 50% に置く（#1572）。
+  await expect(pane).toHaveAttribute("data-split-ratio", "equal");
+  await expect(pane).toHaveAttribute("data-split-left-fraction", "0.5000");
+  await expect(divider).toHaveAttribute("aria-valuenow", "50");
 
   let widths = await paneWidths(page);
-  expectNearRatio(widths.right / widths.left, 1.618);
+  expectNearRatio(widths.right / widths.left, 1);
 
   await dragDivider(page, divider, 260);
   const draggedFraction = await leftFraction(pane);

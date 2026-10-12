@@ -8,7 +8,6 @@ import {
   RowTitleButton,
   SearchField,
   cn,
-  type FixedSplitWidePane,
   type RowTitleButtonProps,
 } from "@production-ready/ui";
 
@@ -170,7 +169,6 @@ export function SecurityManagementPanelShell({
   className = "",
   splitId,
   splitStoragePrefix,
-  preferredWidePane = "right",
   children,
 }: {
   id: string;
@@ -181,7 +179,6 @@ export function SecurityManagementPanelShell({
   splitId?: string;
   /** 分割比率を保存する localStorage key の前置き（製品ごと）。 */
   splitStoragePrefix?: string;
-  preferredWidePane?: FixedSplitWidePane;
   children: ReactNode;
 }) {
   const panelChildren = Children.toArray(children);
@@ -201,7 +198,6 @@ export function SecurityManagementPanelShell({
         <FixedSplitPane
           storagePrefix={splitStoragePrefix}
           splitId={splitPaneId}
-          preferredWidePane={preferredWidePane}
           left={panelChildren[0]}
           right={panelChildren[1]}
         />
