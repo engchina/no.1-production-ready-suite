@@ -852,7 +852,7 @@ for (const viewport of [
     await expect(seed).toHaveValue("42");
     await expect(page.getByRole("heading", { name: "呼び出しの共通の設定" })).toBeVisible();
     // seed の説明（既定・Select AI は業務プロファイルの値）と、推論の量が Select AI に効かない注記を読める。
-    await expect(seed).toHaveAccessibleDescription(/既定は 42.*業務プロファイルの Select AI 設定の seed/);
+    await expect(seed).toHaveAccessibleDescription(/既定 42.*業務プロファイルの seed/);
     await expect(
       page.getByRole("combobox", { name: "モデル 1 の推論の量" })
     ).toHaveAccessibleDescription(/Select AI・Select AI Agent には推論の量は効きません/);
