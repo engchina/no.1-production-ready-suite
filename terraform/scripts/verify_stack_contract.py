@@ -556,7 +556,7 @@ def _verify_schema(schema: str, variables: str) -> None:
     workload = _schema_variable(schema, "adb_workload")
     _require_all(
         workload,
-        ['- "OLTP"', '- "AJD"', '- "APEX"', '- "LH"', 'default: "OLTP"'],
+        ['- "OLTP"', '- "AJD"', '- "APEX"', '- "LH"', 'default: "LH"'],
         context="adb_workload schema",
     )
     if '- "DW"' in workload:
@@ -638,7 +638,7 @@ def _verify_schema(schema: str, variables: str) -> None:
 def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str, outputs: str) -> None:
     _require_all(
         _terraform_variable(variables, "adb_workload"),
-        ['default     = "OLTP"', 'contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)'],
+        ['default     = "LH"', 'contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)'],
         context="adb_workload",
     )
     _require_all(_terraform_variable(variables, "adb_db_version"), ['default     = "26ai"'], context="adb_db_version")

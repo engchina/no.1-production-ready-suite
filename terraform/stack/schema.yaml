@@ -290,7 +290,7 @@ variables:
       - "AJD"
       - "APEX"
       - "LH"
-    default: "OLTP"
+    default: "LH"
 
   adb_db_version:
     type: enum
@@ -659,8 +659,8 @@ variables:
     required: true
     visible: deploy_rag
     title: "Unstructured parser (CPU)"
-    description: "Install and start parser-unstructured as a systemd service. The default Docling parser handles PDF and images only; enable this to ingest text, Markdown, CSV, JSON, XML, HTML, Office, and e-mail files, and select Unstructured in the document's processing recipe."
-    default: false
+    description: "The Docling parser (CPU, PDF and images) is always installed as the default document parser. This option also installs and starts parser-unstructured as a systemd service to ingest text, Markdown, CSV, JSON, XML, HTML, Office, and e-mail files; select Unstructured in the document's processing recipe."
+    default: true
 
   rag_enable_oci_cloud_parsers:
     type: boolean
