@@ -140,6 +140,8 @@ REQUIRED_BACKEND_ENV_LINES = {
         "RAG_AUDIT_CONTEXT_HASH_SALT=\n",
         "RAG_PARSER_ADAPTER_BACKEND=docling\n",
         "RAG_PARSER_DOCLING_ENABLED=true\n",
+        # parser-unstructured を配備したら、文書解析の設定でも有効にする(#1559)。
+        "RAG_PARSER_UNSTRUCTURED_ENABLED='${var.rag_enable_parser_unstructured}'\n",
         "RAG_SERVICE_CONTROL_ENABLED=true\n",
     ],
     "nl2sql": [

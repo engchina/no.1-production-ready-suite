@@ -659,7 +659,7 @@ variables:
     required: true
     visible: deploy_rag
     title: "Unstructured parser (CPU)"
-    description: "The Docling parser (CPU, PDF and images) is always installed as the default document parser. This option also installs and starts parser-unstructured as a systemd service to ingest text, Markdown, CSV, JSON, XML, HTML, Office, and e-mail files; select Unstructured in the document's processing recipe."
+    description: "The Docling parser (CPU, PDF and images) is always installed as the default document parser. This option also installs and starts parser-unstructured as a systemd service and enables it in the document parsing settings, to ingest text, Markdown, CSV, JSON, XML, HTML, Office, and e-mail files; select Unstructured in the document's processing recipe."
     default: true
 
   rag_enable_oci_cloud_parsers:

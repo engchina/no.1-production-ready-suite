@@ -99,7 +99,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   | service | 既定 | 入力 |
   |---|---|---|
   | `parser-docling` | 常に配備 | 既定の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=docling`。PDF と画像。#286） |
-  | `parser-unstructured` | 配備する（#1559） | `rag_enable_parser_unstructured`（テキスト・HTML・Office・メールなど Docling が扱えない形式を、処理レシピで Unstructured を選んで取り込む場合） |
+  | `parser-unstructured` | 配備する（#1559。文書解析の設定でも有効にする: `RAG_PARSER_UNSTRUCTURED_ENABLED`） | `rag_enable_parser_unstructured`（テキスト・HTML・Office・メールなど Docling が扱えない形式を、処理レシピで Unstructured を選んで取り込む場合） |
   | `parser-oci-genai-vision` / `parser-oci-document-understanding` | 配備しない | `rag_enable_oci_cloud_parsers` |
 
   Docling を配備するかを選ぶ入力（以前の `rag_enable_parser_docling`）は廃止しました（Docling は既定の解析エンジンのため常に配備します）。
