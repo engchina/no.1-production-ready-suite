@@ -44,6 +44,11 @@ export interface NavSection {
   titleKey: I18nKey;
   items: NavItem[];
   collapsible?: boolean;
+  /**
+   * 利用者の開閉の保存値が無いとき、このセクションを閉じて出すか（共有 Sidebar の NavSection.defaultCollapsed）。
+   * 3 製品で業務の入口の「AI 活用」だけを展開し、ほかのセクションは true にする（#1563）。
+   */
+  defaultCollapsed?: boolean;
 }
 
 /** 共通5項目（共有パッケージ）に付ける Agent の menu 権限（NL2SQL / RAG と同じコード）。 */
@@ -82,6 +87,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 管理者が業務 Agent を作る画面（#791）。RAG の「ナレッジ構築」・NL2SQL の「データ準備」に当たる。
     titleKey: "nav.section.build",
+    defaultCollapsed: true,
+
     items: [
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
       { href: APP_ROUTES.skills, labelKey: "nav.skills", icon: Blocks, permission: MENU_PERMISSIONS.skills },
@@ -105,6 +112,8 @@ export const NAV_SECTIONS: NavSection[] = [
     // 同じ名前・同じ位置・同じ並び・同じアイコン（品質評価は FlaskConical、フィードバックは ThumbsUp）にする
     // （#658 / #772 / #774 / #776）。
     titleKey: "nav.section.improve",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.evaluation,
@@ -122,6 +131,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // Agent 固有のセキュリティ（ロールへの機能権限とエージェント / 検索・回答プロファイルの対象範囲の付与。#215）。
     titleKey: "nav.section.security",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.securityPermissions,
@@ -134,6 +145,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
     titleKey: "nav.section.userRoles",
+    defaultCollapsed: true,
+
     // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ Agent の型へそろえる
     // （実体は同じ lucide-react のコンポーネント）。
     items: USER_ROLE_NAV_ITEMS.map((item) => ({
@@ -146,6 +159,8 @@ export const NAV_SECTIONS: NavSection[] = [
     // Agent 固有の運用設定（実行環境・接続先・バックアップ。#87 / #791）。先頭はシステムテーブル
     // （RAG / NL2SQL と同じ並びとアイコン。#658 / #751）。
     titleKey: "nav.section.operations",
+    defaultCollapsed: true,
+
     items: [
       {
         href: APP_ROUTES.settingsSystemTables,
@@ -181,6 +196,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
+    defaultCollapsed: true,
+
     items: SYSTEM_SETTINGS_NAV_ITEMS.map((item) => ({
       ...item,
       icon: item.icon as LucideIcon,

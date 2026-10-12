@@ -27,7 +27,6 @@ export function Sidebar() {
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
   const collapsedSections = useUiStore((state) => state.collapsedSections);
-  const toggleSection = useUiStore((state) => state.toggleSection);
   const setSectionCollapsed = useUiStore((state) => state.setSectionCollapsed);
 
   // NAV_SECTIONS（i18n キー保持）→ 解決済みラベルの NavSection へ変換。
@@ -38,6 +37,7 @@ export function Sidebar() {
         key: section.titleKey,
         title: t(section.titleKey),
         collapsible: section.collapsible,
+        defaultCollapsed: section.defaultCollapsed,
         items: section.items.map((item) => ({
           href: item.href,
           label: t(item.labelKey),
@@ -79,7 +79,6 @@ export function Sidebar() {
       collapsed={collapsed}
       onToggleCollapsed={toggleSidebarCollapsed}
       collapsedSections={collapsedSections}
-      onToggleSection={toggleSection}
       onSetSectionCollapsed={setSectionCollapsed}
       linkComponent={Link}
       labels={labels}

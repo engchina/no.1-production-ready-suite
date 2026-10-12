@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { ALL_PERMISSION_CODES, dbUser } from "./fixtures/auth";
 import { expect, test, type MockApi } from "./fixtures/mock-api";
-import { openSidebarNav } from "./fixtures/nav";
+import { expandSidebarSections, openSidebarNav } from "./fixtures/nav";
 
 // 共通認証のログイン・パスワード変更・セッション切れ（#215）。
 // production（`AGENT_AUTH_MODE=production`）の DB ユーザーでログインし、失敗・強制パスワード変更・
@@ -184,6 +184,8 @@ for (const viewport of VIEWPORTS) {
         })
       );
       await expandSidebarOnMobile(page);
+      // スキルは既定で閉じている「Agent 構築」にある（#1563）。
+      await expandSidebarSections(sidebar(page), "Agent 構築");
       await sidebar(page).locator('a[href="/skills"]').click();
 
       await expect(page).toHaveURL(/\/login$/);
