@@ -1759,7 +1759,7 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     ]
     assert models[1]["vision_enabled"] is True
     document = json.loads(model_settings_file.read_text(encoding="utf-8"))
-    assert document["version"] == 5
+    assert document["version"] == 6
     assert "api_key" not in document["enterprise_ai"]
     assert document["enterprise_ai"]["models"][1]["model_id"] == "mistral.vision-model"
     assert document["enterprise_ai"]["default_text_model_id"] == "cohere.command-r-plus"

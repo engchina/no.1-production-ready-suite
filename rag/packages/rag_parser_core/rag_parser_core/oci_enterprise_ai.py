@@ -36,6 +36,10 @@ DEFAULT_VLM_PATH = "/responses"
 # LLM / VLM の呼び出しの seed の既定(#1434。platform の DEFAULT_ENTERPRISE_AI_SEED と同じ)。
 # この package は platform に依存しないので、値の解釈は backend(`enterprise_ai_seed`)が行って渡す。
 DEFAULT_SEED = 42
+# 1 回の呼び出しの出力の上限の既定(#1719。platform の
+# DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS と同じ)。出力の上限はモデルごとの値で、backend が
+# platform の `enterprise_ai_output_token_budget` で決めて渡す。
+DEFAULT_MAX_OUTPUT_TOKENS = 32768
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,11 @@ class OciEnterpriseAiConfig:
 
     seed(#1434)は全モデルで共通の 1 つで、テキストと Vision の標準の payload の top-level の
     `seed` に入れる(backend が platform の `enterprise_ai_seed` で決めて渡す。既定 42)。
+
+    出力の上限(#1719)はモデルごとで、テキストのモデルの値を `text_max_output_tokens`、Vision の
+    モデルの値を `vision_max_output_tokens` に入れる(backend が platform の
+    `enterprise_ai_output_token_budget` で決める。モデルの出力の上限と入力の上限の小さい方。
+    既定 32768)。共通の LLM / VLM の出力の上限は持たない。
 
     endpoint(#1440)は OpenAI 互換 API の base URL で、入力どおり使い path を補わない(OCI
     Enterprise AI も `…/openai/v1` まで書く)。backend は platform の `enterprise_ai_base_url` で
@@ -80,8 +89,8 @@ class OciEnterpriseAiConfig:
     oci_enterprise_ai_vlm_input_mode: str = "files_api"
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_llm_max_output_tokens: int = 1200
-    oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    text_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    vision_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     text_reasoning_effort: str = ""
     vision_reasoning_effort: str = ""
     seed: int = DEFAULT_SEED
@@ -114,6 +123,9 @@ class OciEnterpriseAiConfig:
         推論の量(#1425)は `PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT` /
         `PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT`(同じく backend が書く)。
         seed(#1434)は `PLATFORM_OCI_ENTERPRISE_AI_SEED`(同じく backend が書く。無ければ 42)。
+        出力の上限(#1719)は `PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS` /
+        `PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS`(同じく backend がモデルごとの
+        値を書く。無ければ 32768)。
         """
         src = os.environ if env is None else env
 
@@ -150,11 +162,13 @@ class OciEnterpriseAiConfig:
                 _get("PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS"), 600.0
             ),
             oci_enterprise_ai_max_retries=_int(_get("PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES"), 3),
-            oci_enterprise_ai_llm_max_output_tokens=_int(
-                _get("PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS"), 1200
+            text_max_output_tokens=_int(
+                _get("PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS"),
+                DEFAULT_MAX_OUTPUT_TOKENS,
             ),
-            oci_enterprise_ai_vlm_max_output_tokens=_int(
-                _get("PLATFORM_OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS"), 65536
+            vision_max_output_tokens=_int(
+                _get("PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS"),
+                DEFAULT_MAX_OUTPUT_TOKENS,
             ),
             text_reasoning_effort=_get("PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT").strip(),
             vision_reasoning_effort=_get(
@@ -847,14 +861,14 @@ def _rag_user_message(prompt: str, context: str) -> str:
     )
 
 
-def _llm_max_output_tokens(config: OciEnterpriseAiConfig) -> int:
-    """RAG 回答生成の出力 token 上限を返す。"""
-    return int(getattr(config, "oci_enterprise_ai_llm_max_output_tokens", 1200))
+def _text_output_token_limit(config: OciEnterpriseAiConfig) -> int:
+    """テキストのモデルの呼び出しの出力 token 上限(モデルごとの値。#1719)。"""
+    return max(1, int(config.text_max_output_tokens))
 
 
-def _vlm_max_output_tokens(config: OciEnterpriseAiConfig) -> int:
-    """OCR/構造化抽出の出力 token 上限を返す。"""
-    return int(getattr(config, "oci_enterprise_ai_vlm_max_output_tokens", 65536))
+def _vision_output_token_limit(config: OciEnterpriseAiConfig) -> int:
+    """Vision のモデルの呼び出し(OCR/構造化抽出・図の読み取り)の出力 token 上限(#1719)。"""
+    return max(1, int(config.vision_max_output_tokens))
 
 
 def _with_call_options(payload: dict[str, Any], *, effort: str, seed: int) -> dict[str, Any]:
@@ -1040,7 +1054,7 @@ def _build_vlm_payload(
         "mime_type": _normalized_mime_type(mime_type),
         "data_base64": data_base64,
         "file_id": file_id,
-        "max_output_tokens": _vlm_max_output_tokens(config),
+        "max_output_tokens": _vision_output_token_limit(config),
         "response_format": response_format,
         "structured_extraction_schema": extraction_schema,
         "structured_extraction_schema_json": json.dumps(
@@ -1098,7 +1112,7 @@ def _build_vlm_payload(
                 "content": content,
             }
         ],
-        "max_output_tokens": _vlm_max_output_tokens(config),
+        "max_output_tokens": _vision_output_token_limit(config),
     }
     if use_text_format:
         payload["text"] = {"format": text_format}
@@ -1199,7 +1213,7 @@ def _build_images_text_payload(
     payload: dict[str, Any] = {
         "model": model_id,
         "input": [{"role": "user", "content": content}],
-        "max_output_tokens": _vlm_max_output_tokens(config),
+        "max_output_tokens": _vision_output_token_limit(config),
     }
     if system_prompt:
         payload["instructions"] = system_prompt
@@ -1236,7 +1250,7 @@ def _build_llm_payload(
     ]
     parameters = {
         "temperature": 0.0,
-        "max_output_tokens": _llm_max_output_tokens(config),
+        "max_output_tokens": _text_output_token_limit(config),
     }
     values = {
         "model": model_id,
@@ -1878,11 +1892,52 @@ def _raise_for_response_error(payload: object) -> None:
     if not error_message:
         return
     if _is_max_output_incomplete_response(payload):
-        raise EnterpriseAiIncompleteResponseError(
-            "OCI Enterprise AI の出力が max_output_tokens 上限で途中終了しました。"
-            "モデル設定の VLM max output tokens を増やすか、PDF を分割して再実行してください。"
-        )
+        raise EnterpriseAiIncompleteResponseError(_max_output_incomplete_message(payload))
     raise ValueError(error_message)
+
+
+def _usage_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _max_output_incomplete_message(payload: object) -> str:
+    """出力の上限で未完了の応答の、利用者向けの文(理由・上限・使った token。#1719)。
+
+    この package は platform に依存しないため、platform の `enterprise_ai_incomplete_message` と同じ
+    項目(status・理由・出力の上限・使った出力とうち推論)をここで組み立てる。上限は応答が返す
+    `max_output_tokens`(Responses API は送った値を返す)。応答の本文は含めない。
+    """
+    response = payload if isinstance(payload, Mapping) else {}
+    details = response.get("incomplete_details")
+    reason = str(details.get("reason") or "") if isinstance(details, Mapping) else ""
+    parts = [f"status={response.get('status') or '-'}", f"理由={reason or '不明'}"]
+    limit = _usage_int(response.get("max_output_tokens"))
+    if limit is not None:
+        parts.append(f"出力の上限={limit} tokens")
+    usage = response.get("usage")
+    if isinstance(usage, Mapping):
+        output_tokens = _usage_int(usage.get("output_tokens"))
+        output_details = usage.get("output_tokens_details")
+        reasoning_tokens = (
+            _usage_int(output_details.get("reasoning_tokens"))
+            if isinstance(output_details, Mapping)
+            else None
+        )
+        if output_tokens is not None:
+            used = f"使った出力={output_tokens} tokens"
+            if reasoning_tokens is not None:
+                used += f"(うち推論 {reasoning_tokens})"
+            parts.append(used)
+    model = str(response.get("model") or "").strip()
+    subject = f"モデル「{model}」の" if model else "OCI Enterprise AI の"
+    return (
+        f"{subject}応答が出力の上限に達して未完了でした({'・'.join(parts)})。"
+        "推論のあるモデルは推論の token も出力の上限に数えます。"
+        "システム設定 › モデル で、このモデルの「出力の上限(tokens)」を大きくするか、"
+        "PDF を分割して再実行してください。"
+    )
 
 
 def _is_max_output_incomplete_response(payload: object) -> bool:

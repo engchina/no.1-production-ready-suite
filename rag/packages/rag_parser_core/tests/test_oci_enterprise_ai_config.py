@@ -79,3 +79,16 @@ def test_for_vision_uses_vision_connection_only_when_set() -> None:
     assert vision.oci_enterprise_ai_project_ocid == ""
     assert vision.vision_model_id == "vendor.vision"
     assert vision.for_vision() is vision
+
+
+def test_config_from_env_reads_model_output_limits() -> None:
+    """出力の上限はモデルごとの値(#1719。backend が書く。無ければ 32768)。"""
+    config = OciEnterpriseAiConfig.from_env(
+        {
+            "PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS": "16000",
+            "PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS": "64000",
+        }
+    )
+    assert (config.text_max_output_tokens, config.vision_max_output_tokens) == (16000, 64000)
+
+    assert OciEnterpriseAiConfig.from_env({}).text_max_output_tokens == 32768

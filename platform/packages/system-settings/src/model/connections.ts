@@ -8,6 +8,7 @@ import type { SelectFieldOption } from "@production-ready/ui";
 import { t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+  DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
   DEFAULT_ENTERPRISE_AI_SEED,
   ENTERPRISE_AI_CONNECTION_IDS,
@@ -348,16 +349,23 @@ export function normalizeModelSettings(
       // 値の無い応答（#1434 より前の backend）は既定の seed。
       seed: enterprise.seed ?? DEFAULT_ENTERPRISE_AI_SEED,
       connections,
-      models: enterprise.models.map((model) => ({
-        ...model,
-        connection_id: modelConnectionId(model),
-        // 値の無いモデルは既定の推論の量（#1425）。空（送らない）はそのまま。
-        reasoning_effort:
-          model.reasoning_effort ?? DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+      models: enterprise.models.map((model) => {
         // 値の無いモデルは既定の入力の上限（#1437）。
-        max_input_tokens:
-          model.max_input_tokens ?? DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
-      })),
+        const maxInputTokens =
+          model.max_input_tokens ?? DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS;
+        return {
+          ...model,
+          connection_id: modelConnectionId(model),
+          // 値の無いモデルは既定の推論の量（#1425）。空（送らない）はそのまま。
+          reasoning_effort:
+            model.reasoning_effort ?? DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+          max_input_tokens: maxInputTokens,
+          // 値の無いモデルは既定の出力の上限（#1719。入力の上限がそれより小さければ入力の上限）。
+          max_output_tokens:
+            model.max_output_tokens ??
+            Math.min(DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS, maxInputTokens),
+        };
+      }),
     },
     generative_ai: { ...settings.generative_ai },
   };

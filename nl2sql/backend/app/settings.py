@@ -111,8 +111,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_vlm_input_mode: str = "auto"
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_llm_max_output_tokens: int = 1200
-    oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    # 出力の上限は登録モデルごとの `max_output_tokens`（#1719。既定 32768）。共通の LLM / VLM の
+    # 上限は持たない（呼び出しは pr_system_settings の enterprise_ai_output_token_budget）。
     # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
     # 解釈は pr_system_settings の enterprise_ai_seed。
     oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
@@ -173,10 +173,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # Ontology worker / reasoning。typo(例: "in-process")だと job が誰にも処理されず
     # queued のまま沈黙するため、起動時に Literal で検証する。
     nl2sql_ontology_worker_mode: Literal["inprocess", "external"] = "inprocess"
-    # AI 構築の抽出/命名呼び出し専用の出力トークン上限。汎用の
-    # oci_enterprise_ai_llm_max_output_tokens(既定 1200)では SCHEMA_NAMING の
-    # JSON が途中で切れて全体失敗するため、抽出系は大きめの予算を使う。
-    nl2sql_ontology_extraction_max_output_tokens: int = 8000
+    # AI 構築の抽出/命名呼び出しが要る出力トークンの量（#1719 で 8000 から 32768）。送る上限は
+    # モデルの出力の上限と入力の上限の残りで抑える（enterprise_ai_output_token_budget）。推論のある
+    # モデルは推論の token も数えるため、小さい値では SCHEMA_NAMING の JSON が途中で切れる。
+    nl2sql_ontology_extraction_max_output_tokens: int = 32768
     # GraphRAG 流 gleaning(取りこぼし回収の追加パス)。0 で無効。
     nl2sql_ontology_extraction_gleaning_passes: int = 1
     # 1 回の抽出呼び出しに載せる資料本文の上限(チャンクが大きいほど抽出漏れが増えるため)。
@@ -241,13 +241,14 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 上限に達したら、残った確認の項目を画面に明示し、利用者が SQL の生成に進むかを決める。
     nl2sql_requirement_max_review_rounds: int = Field(default=3, ge=1, le=10)
     # AI要件確認の LLM の呼び出し（#1715）。利用者が画面で待つので、共通の LLM の設定
-    # （待ち時間 600 秒・再試行 3 回）より短くする。出力の上限は共通の LLM の上限（既定 1200）を
-    # 使わない: 推論（reasoning）の token も上限に数えるモデル（openai.gpt-oss-120b など）は
-    # 1200 では JSON を書く前に上限に達して失敗する（2026-10-13 の実測。推論は 800〜2000 token、
-    # 要件の JSON は 1000〜2500 token）。
+    # （待ち時間 600 秒・再試行 3 回）より短くする。出力の上限は要る量で、推論（reasoning）の
+    # token も上限に数えるモデル（openai.gpt-oss-120b など）は小さい上限では JSON を書く前に
+    # 上限に達する（2026-10-13 の実測。推論は 800〜2000 token、要件の JSON は 1000〜2500
+    # token）。#1719 で 8000 から 32768 にした。送る上限はモデルの出力の上限と入力の上限の
+    # 残りで抑える（enterprise_ai_output_token_budget）。
     nl2sql_requirement_timeout_seconds: float = Field(default=90.0, gt=0.0, le=600.0)
     nl2sql_requirement_max_retries: int = Field(default=1, ge=0, le=5)
-    nl2sql_requirement_max_output_tokens: int = Field(default=8000, ge=1000, le=65536)
+    nl2sql_requirement_max_output_tokens: int = Field(default=32768, ge=1000, le=2_000_000)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""

@@ -33,6 +33,9 @@ from pr_system_settings.model import (
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import (
+    enterprise_ai_output_token_budget as enterprise_ai_output_token_budget,
+)
+from pr_system_settings.model import (
     enterprise_ai_reasoning_effort_to_send as enterprise_ai_reasoning_effort_to_send,
 )
 from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
@@ -444,8 +447,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
     )
     oci_enterprise_ai_max_retries: int = Field(default=3, ge=0, le=5)
-    oci_enterprise_ai_llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
-    oci_enterprise_ai_vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
+    # 出力の上限は登録モデルごとの `max_output_tokens`(#1719。platform の
+    # `enterprise_ai_output_token_budget`)。共通の LLM / VLM の出力の上限は持たない。
     # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
     # 解釈は pr_system_settings の enterprise_ai_seed。
     oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)

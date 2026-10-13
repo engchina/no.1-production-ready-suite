@@ -224,10 +224,13 @@ def test_incomplete_output_names_the_output_limit(monkeypatch: pytest.MonkeyPatc
     )
     error = _failure(_settings(), max_retries=0, max_output_tokens=8000)
 
-    assert "出力の上限（8000 token）に達して" in error.message_ja
+    # 機能の要る量（8000）は既定（32768）を下回らない形で送る（#1719）。モデルの上限も 32768 なので
+    # 広げて送り直せない。
+    assert "出力の上限（32768 token）に達して" in error.message_ja
     assert "NL2SQL_REQUIREMENT_MAX_OUTPUT_TOKENS" in error.message_ja
+    assert "「出力の上限（tokens）」" in error.message_ja
     assert error.details["kind"] == "incomplete"
-    assert error.details["max_output_tokens"] == 8000
+    assert error.details["max_output_tokens"] == 32768
     assert error.details["upstream_request_id"] == "resp_incomplete_1"
 
 
@@ -263,7 +266,8 @@ def test_requirement_uses_its_own_output_limit(monkeypatch: pytest.MonkeyPatch) 
 
     assert model == MODEL
     assert output.clarified_question_ja == QUESTION
-    assert transport.payloads[0]["max_output_tokens"] == 8000
+    # 32k 未満の要る量は、既定（32768）を下回らない形で送る（#1719）。
+    assert transport.payloads[0]["max_output_tokens"] == 32768
     assert transport.timeouts == [90.0]
 
 
@@ -278,7 +282,8 @@ def test_router_passes_requirement_settings() -> None:
         "max_retries": int(settings.nl2sql_requirement_max_retries),
         "max_output_tokens": int(settings.nl2sql_requirement_max_output_tokens),
     }
-    assert settings.nl2sql_requirement_max_output_tokens >= 8000
+    # 32k 未満の個別の上限は持たない（#1719。送る上限はモデルの出力の上限で抑える）。
+    assert settings.nl2sql_requirement_max_output_tokens >= 32768
     assert settings.nl2sql_requirement_timeout_seconds <= 120
 
 

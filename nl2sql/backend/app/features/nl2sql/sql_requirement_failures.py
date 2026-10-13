@@ -131,8 +131,9 @@ def requirement_failure_message(
             message = (
                 f"{_SUBJECT}の{llm}の応答が、出力の上限{limit}に達して"
                 "途中で終わりました。推論の量が多いとき・応答の形式が崩れたときに起こります。"
-                "続くときは、管理者が AI要件確認の出力の上限"
-                "（NL2SQL_REQUIREMENT_MAX_OUTPUT_TOKENS）とモデルの推論の量を見直してください。"
+                "続くときは、管理者がシステム設定 › モデル の既定のテキストモデルの"
+                "「出力の上限（tokens）」と、AI要件確認の出力の上限"
+                "（NL2SQL_REQUIREMENT_MAX_OUTPUT_TOKENS）・モデルの推論の量を見直してください。"
             )
         else:
             message = f"{_SUBJECT}の{llm}の応答が途中で終わりました。"

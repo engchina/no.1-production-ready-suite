@@ -25,6 +25,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_seed,
     enterprise_ai_vision_model_id,
@@ -70,6 +71,8 @@ SERVICE_RUNTIME_ENV_KEYS = (
     "PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT",
     "PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT",
     "PLATFORM_OCI_ENTERPRISE_AI_SEED",
+    "PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS",
+    "PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS",
 )
 _RUNTIME_ENV_FILE_MODE = 0o600
 _ACTION_LABELS: dict[ServiceAction, str] = {
@@ -162,6 +165,8 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     モデルの接続を渡す(#533。セカンダリ接続を選んだ Vision モデルでも parser が同じ接続で呼ぶ)。
     推論(思考)の量(#1425)は、それぞれのモデルの送る値を渡す(none は空 = 送らない)。
     seed(#1434)は全モデルで共通の値を渡す(既定 42)。
+    出力の上限(#1719)は、それぞれのモデルの値を渡す(platform の
+    `enterprise_ai_output_token_budget`。共通の LLM / VLM の出力の上限は無い)。
     """
     vlm_model = enterprise_ai_vision_model_id(settings)
     default_model = enterprise_ai_default_model_id(settings)
@@ -188,6 +193,12 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
         "PLATFORM_OCI_ENTERPRISE_AI_TEXT_REASONING_EFFORT": text_reasoning,
         "PLATFORM_OCI_ENTERPRISE_AI_VISION_REASONING_EFFORT": vision_reasoning,
         "PLATFORM_OCI_ENTERPRISE_AI_SEED": str(enterprise_ai_seed(settings)),
+        "PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS": str(
+            enterprise_ai_output_token_budget(settings, default_model)
+        ),
+        "PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS": str(
+            enterprise_ai_output_token_budget(settings, vlm_model)
+        ),
     }
 
 

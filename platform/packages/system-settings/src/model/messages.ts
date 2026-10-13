@@ -114,9 +114,17 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.maxInputTokens": "入力の上限（tokens）",
   "settings.model.enterprise.maxInputTokensOfModel": "モデル {number} の入力の上限（tokens）",
   "settings.model.enterprise.maxInputTokensHelp":
-    "入力の上限は、モデルが 1 回の呼び出しで受け付ける入力の token の数（コンテキストウィンドウ）です。既定は 128000 で、4096〜2000000 の整数を入力します。回答の根拠と、長い章節から原文を抜き出す 1 回分の量を、この値の割合で決めます（指示と出力の余地を残します）。モデルの仕様より大きくすると呼び出しが失敗することがあるため、仕様の値以下にしてください。",
+    "入力の上限は、モデルが 1 回の呼び出しで扱える token の数（コンテキストウィンドウ。prompt と応答の合計）です。既定は 128000 で、4096〜2000000 の整数を入力します。回答の根拠と、長い章節から原文を抜き出す 1 回分の量を、この値の割合で決めます（指示と出力の余地を残します）。モデルの仕様より大きくすると呼び出しが失敗することがあるため、仕様の値以下にしてください（OCI の公式の値の例: xai.grok-4.3 は 1000000、openai.gpt-oss-120b は 128000）。出力の上限は別の設定です。",
   "settings.model.enterprise.maxInputTokensInvalid":
     "入力の上限は 4096〜2000000 の整数で入力してください。",
+  "settings.model.enterprise.maxOutputTokens": "出力の上限（tokens）",
+  "settings.model.enterprise.maxOutputTokensOfModel": "モデル {number} の出力の上限（tokens）",
+  "settings.model.enterprise.maxOutputTokensHelp":
+    "出力の上限は、1 回の応答で出せる token の数です。入力の上限（prompt と応答の合計）の中の応答の分で、推論のあるモデルは推論の token も含みます。既定は 32768 で、1〜2000000 の整数を入力の上限以下で入力します。小さすぎると、表・列の多いコメントの生成などで応答が途中で終わり（未完了）、AI を使わない規則ベースの結果になります。呼び出しでは、入力の上限から prompt の分を引いた残りを超えない値を送ります。",
+  "settings.model.enterprise.maxOutputTokensInvalid":
+    "出力の上限は 1〜2000000 の整数で入力してください。",
+  "settings.model.enterprise.maxOutputTokensOverInput":
+    "出力の上限は入力の上限（{max}）以下にしてください。",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
   "settings.model.enterprise.removeConfirm.descriptionUnnamed":

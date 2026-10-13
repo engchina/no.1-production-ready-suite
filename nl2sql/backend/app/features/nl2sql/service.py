@@ -23,6 +23,7 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -101,6 +102,14 @@ from .logical_steps import (
     build_business_explanation,
     build_logical_steps,
     build_logical_structure_items,
+)
+from .metadata_sql_batches import (
+    METADATA_SQL_PARALLEL_CALLS,
+    filter_object_blocks,
+    metadata_fallback_detail,
+    metadata_fallback_reason,
+    metadata_sql_output_tokens,
+    plan_metadata_sql_batches,
 )
 from .models import (
     DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD,
@@ -13368,9 +13377,11 @@ class Nl2SqlService:
                 }
             )
 
-        try:
-            raw = self._enterprise_ai_client.generate(
+        def call_llm(batch: MetadataSqlGenerateRequest, previous_sql: str) -> str:
+            del previous_sql
+            return self._enterprise_ai_client.generate(
                 response_format=response_format(SqlOutput),
+                max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
                     "以下の情報に基づき、Oracle COMMENT ON 文のみを生成してください。"
                     "説明文、前置き、markdown code fence は出力しないでください。\n\n"
@@ -13385,7 +13396,7 @@ class Nl2SqlService:
                     "推測しない\n"
                     "- 利用者が質問で使う日本語の業務名(同義語)も併記する"
                 ),
-                context=self._metadata_generation_context(request),
+                context=self._metadata_generation_context(batch),
                 system_prompt=(
                     "あなたはOracleデータベース専門家です。純粋なCOMMENT ON "
                     "TABLE/COLUMN/MATERIALIZED VIEW ステートメントのみを出力してください。"
@@ -13394,32 +13405,27 @@ class Nl2SqlService:
                     "表・ビューはA-Z順、列は定義順、各説明文は200字以内です。"
                 ),
             )
-            raw = SqlOutput.model_validate_json(raw).sql
-            sql = self._clean_generated_metadata_sql(raw, "comment_sql")
-            if not self._metadata_sql_preserves_targets(sql, request):
-                warning = (
-                    "生成 SQL が owner 修飾を保持しなかったため deterministic SQL を使用しました。"
-                )
-                return deterministic.model_copy(
-                    update={
-                        "warnings": deterministic.warnings + [warning],
-                        "timing": self._timing(created_at, started, "comment_sql_generate"),
-                    }
-                )
-            return MetadataSqlGenerateData(
-                sql=sql,
-                source="oci_enterprise_ai",
-                warnings=[],
-                timing=self._timing(created_at, started, "comment_sql_generate"),
+
+        def finish(raw: str, batch: MetadataSqlGenerateRequest) -> str:
+            sql = self._clean_generated_metadata_sql(
+                SqlOutput.model_validate_json(raw).sql, "comment_sql"
             )
-        except (EnterpriseAiDirectError, ValueError, TypeError) as exc:
-            return deterministic.model_copy(
-                update={
-                    "warnings": deterministic.warnings
-                    + [f"Enterprise AI comment SQL 生成に失敗したため fallback しました: {exc}"],
-                    "timing": self._timing(created_at, started, "comment_sql_generate"),
-                }
-            )
+            if not self._metadata_sql_preserves_targets(sql, batch):
+                raise ValueError("生成 SQL が owner 修飾を保持しませんでした。")
+            return sql
+
+        return self._generate_metadata_sql_with_ai(
+            request,
+            deterministic=deterministic,
+            stage="comment_sql_generate",
+            created_at=created_at,
+            started=started,
+            call_llm=call_llm,
+            finish=finish,
+            deterministic_for=self._deterministic_comment_sql,
+            sequential=False,
+            success_warnings=[],
+        )
 
     def get_metadata_samples(self, request: MetadataSqlSampleRequest) -> MetadataSqlSampleData:
         """コメント/アノテーション SQL 生成に使う列代表値を取得する。"""
@@ -13537,10 +13543,13 @@ class Nl2SqlService:
                     + ["OCI Enterprise AI が未設定のため deterministic SQL を使用しました。"]
                 }
             )
-        try:
-            has_samples = bool(request.sample_text.strip())
-            raw = self._enterprise_ai_client.generate(
+
+        def call_llm(batch: MetadataSqlGenerateRequest, previous_sql: str) -> str:
+            del previous_sql
+            has_samples = bool(batch.sample_text.strip())
+            return self._enterprise_ai_client.generate(
                 response_format=response_format(SqlOutput),
+                max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
                     "以下の情報に基づき、Select AI(NL2SQL)が業務用語を正しく SQL に変換できる"
                     "ように、Oracle ALTER TABLE/ALTER VIEW/ALTER MATERIALIZED VIEW の "
@@ -13588,7 +13597,7 @@ class Nl2SqlService:
                     "ALTER MATERIALIZED VIEW APP.SALES_MV ANNOTATIONS ("
                     "ADD OR REPLACE \"DESCRIPTION\" 'Monthly sales summary.');"
                 ),
-                context=self._metadata_generation_context(request),
+                context=self._metadata_generation_context(batch),
                 system_prompt=(
                     "あなたは Oracle Database の専門家です。純粋な annotation SQL のみを"
                     "出力してください。\n"
@@ -13607,37 +13616,30 @@ class Nl2SqlService:
                     "複数 annotation は同じ括弧内へカンマ区切りで指定できます。"
                 ),
             )
-            raw = SqlOutput.model_validate_json(raw).sql
+
+        def finish(raw: str, batch: MetadataSqlGenerateRequest) -> str:
             # sample_header / sample_data は Select AI に不要なため常に除外する。
             sql = self._clean_generated_metadata_sql(
-                raw,
+                SqlOutput.model_validate_json(raw).sql,
                 "annotation_sql",
                 has_annotation_samples=False,
             )
-            if not self._metadata_sql_preserves_targets(sql, request):
-                warning = (
-                    "生成 SQL が owner 修飾を保持しなかったため deterministic SQL を使用しました。"
-                )
-                return deterministic.model_copy(
-                    update={
-                        "warnings": deterministic.warnings + [warning],
-                        "timing": self._timing(created_at, started, "annotation_sql_generate"),
-                    }
-                )
-            return MetadataSqlGenerateData(
-                sql=sql,
-                source="oci_enterprise_ai",
-                warnings=[],
-                timing=self._timing(created_at, started, "annotation_sql_generate"),
-            )
-        except (EnterpriseAiDirectError, ValueError, TypeError) as exc:
-            return deterministic.model_copy(
-                update={
-                    "warnings": deterministic.warnings
-                    + [f"Enterprise AI annotation SQL 生成に失敗したため fallback しました: {exc}"],
-                    "timing": self._timing(created_at, started, "annotation_sql_generate"),
-                }
-            )
+            if not self._metadata_sql_preserves_targets(sql, batch):
+                raise ValueError("生成 SQL が owner 修飾を保持しませんでした。")
+            return sql
+
+        return self._generate_metadata_sql_with_ai(
+            request,
+            deterministic=deterministic,
+            stage="annotation_sql_generate",
+            created_at=created_at,
+            started=started,
+            call_llm=call_llm,
+            finish=finish,
+            deterministic_for=lambda batch: self._deterministic_annotation_sql(batch)[0],
+            sequential=False,
+            success_warnings=[],
+        )
 
     def get_domain_inventory(self, request: DomainInventoryRequest) -> DomainInventoryData:
         """対象表の列に付いた既存ドメインを dictionary から集め、LLM 向けテキストも返す。"""
@@ -13702,10 +13704,12 @@ class Nl2SqlService:
                     + ["OCI Enterprise AI が未設定のため deterministic SQL を使用しました。"]
                 }
             )
-        try:
-            has_samples = bool(request.sample_text.strip())
-            raw = self._enterprise_ai_client.generate(
+
+        def call_llm(batch: MetadataSqlGenerateRequest, previous_sql: str) -> str:
+            has_samples = bool(batch.sample_text.strip())
+            return self._enterprise_ai_client.generate(
                 response_format=response_format(SqlOutput),
+                max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
                     "以下の情報に基づき、Oracle AI Database の SQL ドメイン"
                     "(CREATE DOMAIN)と、その列への関連付け"
@@ -13751,9 +13755,15 @@ class Nl2SqlService:
                     "ALTER TABLE APP.ORD_TXN MODIFY (CUST_ID) ADD DOMAIN APP.CUSTOMER_ID_D;"
                 ),
                 context=(
-                    self._metadata_generation_context(request)
+                    self._metadata_generation_context(batch)
                     + "\n\n<既存ドメイン>\n"
-                    + (request.domain_text.strip() or "-")
+                    + (batch.domain_text.strip() or "-")
+                    + (
+                        "\n\n<この生成の前の組で作るドメイン（同じ意味の列には再利用し、"
+                        "作り直さない）>\n" + previous_sql
+                        if previous_sql
+                        else ""
+                    )
                 ),
                 system_prompt=(
                     "あなたは Oracle Database の専門家です。純粋な SQL ドメイン定義と"
@@ -13773,40 +13783,36 @@ class Nl2SqlService:
                     "値内の単一引用符は '' にエスケープし、annotation 値は最大 4000 文字です。"
                 ),
             )
-            raw = SqlOutput.model_validate_json(raw).sql
-            sql = self._clean_generated_metadata_sql(raw, "domain_sql")
-            if not self._domain_sql_targets_allowed(sql, request):
-                warning = (
-                    "生成 SQL が選択した表以外を変更するか owner 修飾を保持しなかったため "
-                    "deterministic SQL を使用しました。"
-                )
-                return deterministic.model_copy(
-                    update={
-                        "warnings": deterministic.warnings + [warning],
-                        "timing": self._timing(created_at, started, "domain_sql_generate"),
-                    }
-                )
-            return MetadataSqlGenerateData(
-                sql=sql,
-                source="oci_enterprise_ai",
-                warnings=[
-                    warning
-                    for warning in (
-                        _DOMAIN_UPDATE_WARNING if request.operation == "update" else "",
-                        _DOMAIN_REBUILD_WARNING if request.operation == "rebuild" else "",
-                    )
-                    if warning
-                ],
-                timing=self._timing(created_at, started, "domain_sql_generate"),
+
+        def finish(raw: str, batch: MetadataSqlGenerateRequest) -> str:
+            sql = self._clean_generated_metadata_sql(
+                SqlOutput.model_validate_json(raw).sql, "domain_sql"
             )
-        except (EnterpriseAiDirectError, ValueError, TypeError) as exc:
-            return deterministic.model_copy(
-                update={
-                    "warnings": deterministic.warnings
-                    + [f"Enterprise AI domain SQL 生成に失敗したため fallback しました: {exc}"],
-                    "timing": self._timing(created_at, started, "domain_sql_generate"),
-                }
-            )
+            if not self._domain_sql_targets_allowed(sql, batch):
+                raise ValueError(
+                    "生成 SQL が選択した表以外を変更するか owner 修飾を保持しませんでした。"
+                )
+            return sql
+
+        return self._generate_metadata_sql_with_ai(
+            request,
+            deterministic=deterministic,
+            stage="domain_sql_generate",
+            created_at=created_at,
+            started=started,
+            call_llm=call_llm,
+            finish=finish,
+            deterministic_for=None,
+            sequential=True,
+            success_warnings=[
+                warning
+                for warning in (
+                    _DOMAIN_UPDATE_WARNING if request.operation == "update" else "",
+                    _DOMAIN_REBUILD_WARNING if request.operation == "rebuild" else "",
+                )
+                if warning
+            ],
+        )
 
     def _domain_sql_targets_allowed(
         self,
@@ -14129,6 +14135,163 @@ class Nl2SqlService:
                 "<サンプル>\n" + request.sample_text,
                 "<追加入力>\n" + request.extra_text,
             ]
+        )
+
+    def _metadata_sql_batches(
+        self, request: MetadataSqlGenerateRequest
+    ) -> list[MetadataSqlGenerateRequest]:
+        """選んだ表を、表の数と列の数で区切った組に分ける（#1719。1 組なら元の要求のまま）。
+
+        組ごとに、構造・主キー・外部キー・サンプルの文から、ほかの組の表の塊を除く。
+        """
+        if len(request.targets) <= 1:
+            return [request]
+        names = [
+            self._db_admin_object_identity(target.object_name, target.owner).qualified_name
+            for target in request.targets
+        ]
+        columns: dict[str, int] = {}
+        for item in self._metadata_input_objects(request):
+            name = self._metadata_block_identity(str(item["name"]))
+            if name:
+                columns[name] = len(item["columns"])
+        groups = plan_metadata_sql_batches([columns.get(name, 0) for name in names])
+        if len(groups) <= 1:
+            return [request]
+        batches: list[MetadataSqlGenerateRequest] = []
+        for group in groups:
+            others = {name for index, name in enumerate(names) if index not in group}
+
+            def keep(block_name: str, others: set[str] = others) -> bool:
+                return self._metadata_block_identity(block_name) not in others
+
+            batches.append(
+                request.model_copy(
+                    update={
+                        "targets": [request.targets[index] for index in group],
+                        "structure_text": filter_object_blocks(request.structure_text, keep),
+                        "primary_key_text": filter_object_blocks(request.primary_key_text, keep),
+                        "foreign_key_text": filter_object_blocks(request.foreign_key_text, keep),
+                        "sample_text": filter_object_blocks(request.sample_text, keep),
+                    }
+                )
+            )
+        return batches
+
+    def _metadata_block_identity(self, name: str) -> str:
+        """入力の文の `OBJECT:` の名前を、表の識別（owner 解決済み）にする（解けなければ空）。"""
+        try:
+            return self._db_admin_object_identity(name).qualified_name
+        except ValueError:
+            return ""
+
+    def _metadata_sql_output_tokens(self, request: MetadataSqlGenerateRequest) -> int:
+        """組の出力の量の見積もり（#1719。送る上限は共通の既定を下回らず、モデルの上限で抑える）。"""
+        objects = self._metadata_input_objects(request)
+        return metadata_sql_output_tokens(
+            max(len(request.targets), len(objects)),
+            sum(len(item["columns"]) for item in objects),
+        )
+
+    def _generate_metadata_sql_with_ai(
+        self,
+        request: MetadataSqlGenerateRequest,
+        *,
+        deterministic: MetadataSqlGenerateData,
+        stage: str,
+        created_at: str,
+        started: float,
+        call_llm: Callable[[MetadataSqlGenerateRequest, str], str],
+        finish: Callable[[str, MetadataSqlGenerateRequest], str],
+        deterministic_for: Callable[[MetadataSqlGenerateRequest], str] | None,
+        sequential: bool,
+        success_warnings: list[str],
+    ) -> MetadataSqlGenerateData:
+        """コメント・アノテーション・ドメインの SQL を、組ごとに OCI Enterprise AI で作る（#1719）。
+
+        - 表が多ければ組に分けて呼ぶ（1 回の出力を小さくし、出力の上限での未完了を避ける）。
+          コメント・アノテーションは組を同時に呼び、ドメイン（`sequential`）は前の組で作るドメインを
+          次の組に渡して順に呼ぶ
+        - 失敗した組は規則ベース（名前をそのまま入れた SQL）にし、AI で作ったように見せないよう
+          `fallback`・理由・「詳細」を返す。`deterministic_for` が無い（ドメイン）ときは、1 組でも
+          失敗したら全体を規則ベースにする（組をまたぐドメインの共有を崩さない）
+        """
+        # ドメインは作成だけを組に分ける（更新・再作成・削除は既存ドメインの一覧から作るので
+        # 1 回で呼ぶ）。
+        split = not sequential or request.operation == "create"
+        batches = self._metadata_sql_batches(request) if split else [request]
+        results: list[tuple[MetadataSqlGenerateRequest, str, BaseException | None]] = []
+        errors = (EnterpriseAiDirectError, ValueError, TypeError)
+        if sequential or len(batches) == 1:
+            previous: list[str] = []
+            for batch in batches:
+                try:
+                    sql = finish(call_llm(batch, "\n".join(previous)), batch)
+                except errors as exc:
+                    results.append((batch, "", exc))
+                    continue
+                previous.append(sql)
+                results.append((batch, sql, None))
+        else:
+            # LLM の呼び出し（HTTP）だけを同時に行い、SQL の検査は順に行う。
+            with ThreadPoolExecutor(
+                max_workers=min(METADATA_SQL_PARALLEL_CALLS, len(batches))
+            ) as pool:
+                futures = [pool.submit(call_llm, batch, "") for batch in batches]
+                for batch, future in zip(batches, futures, strict=True):
+                    try:
+                        results.append((batch, finish(future.result(), batch), None))
+                    except errors as exc:
+                        results.append((batch, "", exc))
+        timing = self._timing(created_at, started, stage)
+        failures = [(batch, exc) for batch, _sql, exc in results if exc is not None]
+        if not failures:
+            return MetadataSqlGenerateData(
+                sql="\n".join(sql for _batch, sql, _exc in results if sql),
+                source="oci_enterprise_ai",
+                warnings=success_warnings,
+                timing=timing,
+            )
+
+        def object_names(batch: MetadataSqlGenerateRequest) -> list[str]:
+            return [
+                self._db_admin_object_identity(target.object_name, target.owner).qualified_name
+                for target in batch.targets
+            ]
+
+        details = [
+            (f"{', '.join(object_names(batch))}: " if len(batches) > 1 else "")
+            + metadata_fallback_detail(error)
+            for batch, error in failures
+        ]
+        fallback = {
+            "fallback": True,
+            "fallback_reason": metadata_fallback_reason(failures[0][1]),
+            "fallback_detail": "\n".join(details),
+        }
+        for batch, error in failures:
+            logger.warning(
+                "metadata_sql_ai_fallback",
+                extra={
+                    "warning_code": "METADATA_SQL_AI_FALLBACK",
+                    "stage": stage,
+                    "objects": len(batch.targets),
+                    "batches": len(batches),
+                    "error_code": getattr(error, "code", type(error).__name__),
+                },
+            )
+        if deterministic_for is None or len(failures) == len(results):
+            return deterministic.model_copy(update={**fallback, "timing": timing})
+        parts = [
+            sql if failure is None else deterministic_for(batch) for batch, sql, failure in results
+        ]
+        return MetadataSqlGenerateData(
+            sql="\n".join(part for part in parts if part),
+            source="oci_enterprise_ai",
+            warnings=success_warnings,
+            fallback_objects=[name for batch, _error in failures for name in object_names(batch)],
+            timing=timing,
+            **fallback,
         )
 
     def _metadata_sql_preserves_targets(

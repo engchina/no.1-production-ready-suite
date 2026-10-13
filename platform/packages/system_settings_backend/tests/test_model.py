@@ -49,8 +49,6 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_llm_max_output_tokens: int = 1200
-    oci_enterprise_ai_vlm_max_output_tokens: int = 65536
     oci_enterprise_ai_seed: int = 42
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
@@ -120,7 +118,7 @@ def test_patch_saves_key_only_in_env(tmp_path: Path) -> None:
     assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     assert data["secret_source"] == "environment"
     document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
-    assert document["version"] == 5
+    assert document["version"] == 6
     assert "api_key" not in document["enterprise_ai"]
     assert "sk-new" not in json.dumps(document)
     # 製品固有の設定は model-settings.json に書かない（#1701）。
@@ -231,6 +229,7 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
             "connection_id": "primary",
             "reasoning_effort": "medium",
             "max_input_tokens": 128000,
+            "max_output_tokens": 32768,
         }
     ]
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 from urllib.parse import urlsplit
@@ -255,3 +256,100 @@ def enterprise_ai_provider_message(body: str, *, limit: int = _PROVIDER_MESSAGE_
     if len(text) > limit:
         text = text[: limit - 1] + "…"
     return text
+
+
+# --------------------------------------------------------------------------- 未完了の応答（#1719）
+
+# Responses API の `incomplete_details.reason` のうち、出力の上限に達したもの。
+ENTERPRISE_AI_INCOMPLETE_OUTPUT_LIMIT_REASON: Final = "max_output_tokens"
+# 未完了の応答の error code（ジョブ・API の `error_code`。3 製品で同じ値）。
+ENTERPRISE_AI_INCOMPLETE_ERROR_CODE: Final = "ENTERPRISE_AI_OUTPUT_INCOMPLETE"
+
+
+def _usage_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+@dataclass(frozen=True)
+class EnterpriseAiIncomplete:
+    """Responses API の未完了の応答（`status` が completed 以外）の理由と使った token（#1719）。
+
+    2026-10-13 の実測（NL2SQL のコメント管理の SQL 生成と同じ要求。5 表・32 列）:
+    - openai.gpt-oss-120b（推論 medium・上限 1200）: `status=incomplete`・
+      `incomplete_details.reason=max_output_tokens`・output 1200 のうち reasoning 1198
+      （本文 0 文字）
+    - xai.grok-4.3（推論 medium）: 上限 1200 でも completed のことがあり、上限 300 では incomplete
+    推論のあるモデルは推論の token も出力の上限に数える。
+    """
+
+    status: str
+    reason: str = ""
+    max_output_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+    @property
+    def output_limit_reached(self) -> bool:
+        """出力の上限に達して未完了か（上限を広げた送り直しで直る見込みがある）。"""
+        return self.reason == ENTERPRISE_AI_INCOMPLETE_OUTPUT_LIMIT_REASON
+
+    def detail(self) -> str:
+        """「詳細」に出す文（理由・上限・使った token。応答の本文・secret は含めない）。"""
+        parts = [f"status={self.status or '-'}", f"理由={self.reason or '不明'}"]
+        if self.max_output_tokens is not None:
+            parts.append(f"出力の上限={self.max_output_tokens} tokens")
+        if self.output_tokens is not None:
+            used = f"使った出力={self.output_tokens} tokens"
+            if self.reasoning_tokens is not None:
+                used += f"（うち推論 {self.reasoning_tokens}）"
+            parts.append(used)
+        return "・".join(parts)
+
+
+def enterprise_ai_incomplete_from_response(
+    response: Mapping[str, object], *, max_output_tokens: int | None = None
+) -> EnterpriseAiIncomplete | None:
+    """Responses API の応答が未完了なら、その理由と使った token を返す（完了なら None）。"""
+    status = str(response.get("status") or "").strip()
+    if status not in {"incomplete", "failed", "cancelled", "queued", "in_progress"}:
+        return None
+    details = response.get("incomplete_details")
+    reason = ""
+    if isinstance(details, Mapping):
+        reason = str(details.get("reason") or "").strip()
+    usage = response.get("usage")
+    output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    if isinstance(usage, Mapping):
+        output_tokens = _usage_int(usage.get("output_tokens"))
+        output_details = usage.get("output_tokens_details")
+        if isinstance(output_details, Mapping):
+            reasoning_tokens = _usage_int(output_details.get("reasoning_tokens"))
+    return EnterpriseAiIncomplete(
+        status=status,
+        reason=reason,
+        max_output_tokens=max_output_tokens,
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning_tokens,
+    )
+
+
+def enterprise_ai_incomplete_message(
+    incomplete: EnterpriseAiIncomplete, *, model_id: str = "", retried: bool = False
+) -> str:
+    """未完了の応答の、利用者向けの文（理由・上限・使った token と、確かめる所）。"""
+    model = f"モデル「{model_id}」の" if model_id else ""
+    if incomplete.output_limit_reached:
+        retry = "上限を広げて送り直しても" if retried else ""
+        return (
+            f"{model}応答が{retry}出力の上限に達して未完了でした（{incomplete.detail()}）。"
+            "推論のあるモデルは推論の token も出力の上限に数えます。"
+            "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくするか、"
+            "対象を減らしてやり直してください。"
+        )
+    return (
+        f"{model}応答が未完了でした（{incomplete.detail()}）。"
+        "時間をおいてやり直し、続くときはモデルの設定を確かめてください。"
+    )

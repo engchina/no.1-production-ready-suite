@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT, _image_retrieval_template, _render_prompt, describe_picture
-from rag_engine.config import Settings, get_llm_provider
+from rag_engine.config import Settings, get_llm_provider, llm_output_token_limit
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, digest_json, file_digest
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
@@ -386,7 +386,8 @@ class _SettingsPictureDescriber:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self.api_mode = settings.llm_api_mode
-        self.max_tokens = max(1, int(settings.answer_max_tokens))
+        # 呼び出し（`_openai_parsed`）と同じ上限: 回答の上限と Vision のモデルの出力の上限の小さい方（#1719）。
+        self.max_tokens = llm_output_token_limit(settings, get_llm_provider(settings, settings.default_vision_llm))
 
     def provider(self) -> Any:
         return get_llm_provider(self._settings, self._settings.default_vision_llm)
