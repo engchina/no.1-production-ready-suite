@@ -127,9 +127,11 @@ test("business profile clear action resets only the Oracle execution gate and jo
   assert.match(profileManagementPage, /const canClearOracleExecution = Boolean\([\s\S]*oracleConfirmation[\s\S]*syncJobParam/u);
   assert.match(
     profileManagementPage,
-    /const clearOracleExecution = \(\) => \{[\s\S]*setOracleConfirmation\(""\);[\s\S]*setRebuildAgentAssets\(false\);[\s\S]*setOracleSyncJobId\(""\);[\s\S]*nextParams\.delete\("syncJobId"\);/u,
+    /const clearOracleExecution = \(\) => \{[\s\S]*setOracleConfirmation\(""\);[\s\S]*setOracleSyncJobId\(""\);[\s\S]*nextParams\.delete\("syncJobId"\);/u,
   );
   assert.doesNotMatch(clearOracleExecution, /setProfileName\(""\)/u);
+  // 「保存時に Select AI Agent アセットも再構築する」は業務プロファイルの設定で、リセットしない（#1690）。
+  assert.doesNotMatch(clearOracleExecution, /setRebuildAgentAssets/u);
 });
 
 test("file dropzone reset signal clears local validation errors for external clear actions", () => {
