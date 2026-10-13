@@ -49,6 +49,15 @@ export const ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN = 4_096;
 export const ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX = 2_000_000;
 
 /**
+ * モデルの出力の上限（tokens。#1719）。登録モデルごとに持ち、値の無いモデルは既定の 32768（入力の上限がそれより
+ * 小さければ入力の上限）。範囲は backend の ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN / _MAX と同じで、入力の上限以下
+ * （範囲外・入力の上限を超える値は保存で 422）。推論のあるモデルは推論の token も出力の上限に数える。
+ */
+export const DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS = 32_768;
+export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN = 1;
+export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX = 2_000_000;
+
+/**
  * LLM / VLM の呼び出しの seed（#1434）。全モデルで共通の 1 つで、既定は 42。範囲は backend の
  * ENTERPRISE_AI_SEED_MIN / ENTERPRISE_AI_SEED_MAX と同じ（範囲外は保存で 422）。
  */
@@ -66,6 +75,11 @@ export interface EnterpriseAiConfiguredModel {
   reasoning_effort?: EnterpriseAiReasoningEffort;
   /** 入力の上限（tokens。#1437）。未指定は既定（128000）。空欄は NaN で持ち、保存の前に欄のエラーで止める。 */
   max_input_tokens?: number;
+  /**
+   * 出力の上限（tokens。#1719）。入力の上限（prompt と応答の合計）の中の応答の分。未指定は既定（32768）。
+   * 空欄は NaN で持ち、保存の前に欄のエラーで止める。
+   */
+  max_output_tokens?: number;
 }
 
 /**
@@ -100,8 +114,6 @@ export interface EnterpriseAiModelSettings {
   vision_response_path: string;
   timeout_seconds: number;
   max_retries: number;
-  llm_max_output_tokens: number;
-  vlm_max_output_tokens: number;
   /**
    * LLM / VLM の呼び出しの seed（#1434。既定 42）。古い応答に無ければ読み込みで既定にする
    * （`normalizeModelSettings`）。入力中の空欄は NaN で持ち、保存の前に止める。

@@ -1380,6 +1380,14 @@ export interface MetadataSqlGenerateData {
   sql: string;
   source: string;
   warnings: string[];
+  /** OCI Enterprise AI で作れず、規則ベース（名前をそのまま入れた SQL）にしたか（#1719）。 */
+  fallback?: boolean;
+  /** 規則ベースにした表（一部の組だけ失敗した場合。空 = 全部）。 */
+  fallback_objects?: string[];
+  /** 利用者向けの理由（1 文）。 */
+  fallback_reason?: string;
+  /** 「詳細」に出す失敗の元の文（理由・出力の上限・使った token）。 */
+  fallback_detail?: string;
   timing: TimingEnvelope;
 }
 

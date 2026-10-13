@@ -55,8 +55,6 @@ EXPLICIT_RENAMES: dict[str, dict[str, str | None]] = {
             "ENTERPRISE_AI_VISION_RESPONSE_PATH",
             "ENTERPRISE_AI_TIMEOUT_SECONDS",
             "ENTERPRISE_AI_MAX_RETRIES",
-            "ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS",
-            "ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS",
             "EMBEDDING_MODEL",
             "EMBEDDING_DIM",
             "RERANK_MODEL",

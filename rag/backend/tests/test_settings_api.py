@@ -1256,6 +1256,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "connection_id": "primary",
             "reasoning_effort": "medium",
             "max_input_tokens": 128000,
+            "max_output_tokens": 32768,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1264,6 +1265,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "connection_id": "primary",
             "reasoning_effort": "medium",
             "max_input_tokens": 128000,
+            "max_output_tokens": 32768,
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1274,8 +1276,6 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
     assert body["settings"]["enterprise_ai"]["vision_payload_template"] == VLM_TEMPLATE
     assert body["settings"]["enterprise_ai"]["text_response_path"] == "/data/text"
     assert body["settings"]["enterprise_ai"]["vision_response_path"] == "/data/document"
-    assert body["settings"]["enterprise_ai"]["llm_max_output_tokens"] == 1200
-    assert body["settings"]["enterprise_ai"]["vlm_max_output_tokens"] == 65536
     assert body["settings"]["generative_ai"]["embedding_dim"] == 1536
     assert "sk-runtime-secret" not in resp.text
 
@@ -1305,8 +1305,11 @@ def test_update_model_settings_mutates_runtime_settings() -> None:
     assert settings.oci_enterprise_ai_vlm_payload_template == VLM_TEMPLATE
     assert settings.oci_enterprise_ai_llm_response_path == "/data/text"
     assert settings.oci_enterprise_ai_vlm_response_path == "/data/document"
-    assert settings.oci_enterprise_ai_llm_max_output_tokens == 1600
-    assert settings.oci_enterprise_ai_vlm_max_output_tokens == 64000
+    # 出力の上限は登録モデルごとの値（#1719）。
+    assert [model.max_output_tokens for model in settings.oci_enterprise_ai_models] == [
+        16000,
+        64000,
+    ]
     assert settings.oci_genai_embedding_model == "cohere.embed-v4.0"
     assert settings.oci_genai_embedding_dim == 1536
     assert settings.oci_genai_rerank_model == "cohere.rerank-v4.0-fast"
@@ -1326,7 +1329,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert stat.S_IMODE(settings_file.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["version"] == 5
+    assert persisted["version"] == 6
     # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
@@ -1338,6 +1341,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "connection_id": "primary",
             "reasoning_effort": "medium",
             "max_input_tokens": 128000,
+            "max_output_tokens": 16000,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1346,14 +1350,15 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "connection_id": "primary",
             "reasoning_effort": "medium",
             "max_input_tokens": 128000,
+            "max_output_tokens": 64000,
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
     assert persisted["enterprise_ai"]["default_vision_model_id"] == "enterprise-vlm"
     assert "default_model_id" not in persisted["enterprise_ai"]
     assert persisted["enterprise_ai"]["vlm_input_mode"] == "files_api"
-    assert persisted["enterprise_ai"]["llm_max_output_tokens"] == 1600
-    assert persisted["enterprise_ai"]["vlm_max_output_tokens"] == 64000
+    # 共通の LLM / VLM の出力の上限は書かない（#1719。モデルごとの max_output_tokens）。
+    assert not [key for key in persisted["enterprise_ai"] if key.endswith("_max_output_tokens")]
     assert persisted["generative_ai"]["embedding_dim"] == 1536
     # 文書解析の設定は共有の model-settings.json に書かない（#1701）。
     assert "parser_adapters" not in persisted
@@ -1393,8 +1398,6 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(
                     "vision_response_path": "/payload/document",
                     "timeout_seconds": 42,
                     "max_retries": 1,
-                    "llm_max_output_tokens": 1700,
-                    "vlm_max_output_tokens": 63000,
                 },
                 "generative_ai": {
                     "embedding_model": "cohere.embed-v4.0",
@@ -1427,8 +1430,11 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(
     assert settings.oci_enterprise_ai_vlm_response_path == "/payload/document"
     assert settings.oci_enterprise_ai_timeout_seconds == 42
     assert settings.oci_enterprise_ai_max_retries == 1
-    assert settings.oci_enterprise_ai_llm_max_output_tokens == 1700
-    assert settings.oci_enterprise_ai_vlm_max_output_tokens == 63000
+    # 出力の上限の無い古い JSON のモデルは既定の 32768（#1719）。
+    assert [model.max_output_tokens for model in settings.oci_enterprise_ai_models] == [
+        32768,
+        32768,
+    ]
     assert settings.rag_parser_adapter_backend == "docling"
     assert settings.rag_parser_docling_enabled is True
 
@@ -1631,8 +1637,9 @@ def test_enterprise_ai_model_settings_defaults_max_retries_to_three() -> None:
     assert EnterpriseAiModelSettings().max_retries == 3
     # 共有 schema（#103）の既定は auto。RAG の runtime は auto を files_api として扱う。
     assert EnterpriseAiModelSettings().vlm_input_mode == "auto"
-    assert EnterpriseAiModelSettings().llm_max_output_tokens == 1200
-    assert EnterpriseAiModelSettings().vlm_max_output_tokens == 65536
+    # 出力の上限は登録モデルごと（#1719。既定 32768）。共通の値は持たない。
+    fields = EnterpriseAiModelSettings.model_fields
+    assert not [name for name in fields if name.endswith("_max_output_tokens")]
 
 
 def test_model_settings_rejects_invalid_payload_template() -> None:
@@ -3274,11 +3281,13 @@ def _payload() -> dict[str, Any]:
                     "model_id": "enterprise-llm",
                     "display_name": "標準 LLM",
                     "vision_enabled": False,
+                    "max_output_tokens": 16000,
                 },
                 {
                     "model_id": "enterprise-vlm",
                     "display_name": "Vision LLM",
                     "vision_enabled": True,
+                    "max_output_tokens": 64000,
                 },
             ],
             "default_text_model_id": "enterprise-llm",
@@ -3291,8 +3300,6 @@ def _payload() -> dict[str, Any]:
             "vision_response_path": "/data/document",
             "timeout_seconds": 60.0,
             "max_retries": 2,
-            "llm_max_output_tokens": 1600,
-            "vlm_max_output_tokens": 64000,
         },
         "generative_ai": {
             "embedding_model": "cohere.embed-v4.0",

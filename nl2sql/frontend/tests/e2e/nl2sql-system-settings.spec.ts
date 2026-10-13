@@ -100,8 +100,6 @@ function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
         vision_response_path: "",
         timeout_seconds: 120,
         max_retries: 3,
-        llm_max_output_tokens: 1200,
-        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",
@@ -1679,8 +1677,10 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
         vlm_input_mode: "inline_image",
         timeout_seconds: 177,
         max_retries: 4,
-        llm_max_output_tokens: 2048,
-        vlm_max_output_tokens: 8192,
+        // 出力の上限は登録モデルごと（#1719）。画面の 1 つ目のモデルの値を保存で保つ。
+        models: (base.settings.enterprise_ai.models as Array<Record<string, unknown>>).map(
+          (model, index) => (index === 0 ? { ...model, max_output_tokens: 65536 } : model)
+        ),
       },
     },
   });
@@ -1742,8 +1742,10 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   expect(connectionEnterprise.vlm_input_mode).toBe("inline_image");
   expect(connectionEnterprise.timeout_seconds).toBe(177);
   expect(connectionEnterprise.max_retries).toBe(4);
-  expect(connectionEnterprise.llm_max_output_tokens).toBe(2048);
-  expect(connectionEnterprise.vlm_max_output_tokens).toBe(8192);
+  expect(
+    ((connectionEnterprise.models as Array<Record<string, unknown>>)[0]).max_output_tokens
+  ).toBe(65536);
+  expect(connectionEnterprise).not.toHaveProperty("llm_max_output_tokens");
   expect(
     ((connectionEnterprise.models as Array<Record<string, unknown>>)[0]).model_id
   ).toBe("enterprise-nl2sql-llm");
@@ -1764,8 +1766,9 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   expect(modelsEnterprise.vlm_input_mode).toBe("inline_image");
   expect(modelsEnterprise.timeout_seconds).toBe(177);
   expect(modelsEnterprise.max_retries).toBe(4);
-  expect(modelsEnterprise.llm_max_output_tokens).toBe(2048);
-  expect(modelsEnterprise.vlm_max_output_tokens).toBe(8192);
+  expect(
+    ((modelsEnterprise.models as Array<Record<string, unknown>>)[0]).max_output_tokens
+  ).toBe(65536);
   expect(((modelsEnterprise.models as Array<Record<string, unknown>>)[0]).model_id).toBe(
     "enterprise-unsaved-model"
   );
@@ -1789,11 +1792,10 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
     >)[0].model_id
   ).toBe("enterprise-unsaved-model");
   expect(
-    (generativeRequest.enterprise_ai as Record<string, unknown>).llm_max_output_tokens
-  ).toBe(2048);
-  expect(
-    (generativeRequest.enterprise_ai as Record<string, unknown>).vlm_max_output_tokens
-  ).toBe(8192);
+    ((generativeRequest.enterprise_ai as Record<string, unknown>).models as Array<
+      Record<string, unknown>
+    >)[0].max_output_tokens
+  ).toBe(65536);
 
   rejectNextSave = true;
   await page.getByRole("textbox", { name: "モデル ID 1" }).fill("enterprise-failed-model");
@@ -1933,6 +1935,79 @@ test("モデル設定はプライマリ接続とセカンダリ接続をタブ�
     expect(connection).not.toHaveProperty("display_name");
   }
   await expectNoHorizontalOverflow(page);
+});
+
+test("登録モデルは入力の上限の隣に出力の上限を持ち、入力の上限を超える値は欄の直下で止める (#1719)", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  await page.unroute("**/api/settings/model");
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/settings/model", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      requests.push(body);
+      await fulfillJson(route, modelSettingsFixture({ settings: body }));
+      return;
+    }
+    await fulfillJson(route, modelSettingsFixture());
+  });
+
+  await page.goto("/settings/model");
+  const input = page.getByRole("spinbutton", { name: "モデル 1 の入力の上限（tokens）" });
+  const output = page.getByRole("spinbutton", { name: "モデル 1 の出力の上限（tokens）" });
+  // 値の無いモデル（#1719 より前の保存）は既定の 32768。
+  await expect(input).toHaveValue("128000");
+  await expect(output).toHaveValue("32768");
+  // 入力の上限と取り違えないよう、両方の説明に違いを書く。
+  await expect(page.locator("#enterprise-model-max-output-tokens-help")).toContainText(
+    "推論のあるモデルは推論の token も含みます"
+  );
+  await expect(page.locator("#enterprise-model-max-input-tokens-help")).toContainText(
+    "出力の上限は別の設定です"
+  );
+  const isWide = (page.viewportSize()?.width ?? 0) >= 1536;
+  if (isWide) {
+    // 広い画面では表の列として、入力の上限の右に並ぶ。
+    const inputBox = await input.boundingBox();
+    const outputBox = await output.boundingBox();
+    expect(outputBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width - 1);
+    expect(Math.abs(outputBox!.y - inputBox!.y)).toBeLessThan(2);
+  }
+
+  await output.fill("131072");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(output).toBeFocused();
+  await expect(output).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText("出力の上限は入力の上限（128000）以下にしてください。")).toBeVisible();
+  expect(requests).toHaveLength(0);
+  if (process.env.MODEL_OUTPUT_SCREENSHOT_DIR) {
+    await page.screenshot({
+      path: `${process.env.MODEL_OUTPUT_SCREENSHOT_DIR}/model-output-limit-error-${test.info().project.name}.png`,
+      fullPage: false,
+    });
+  }
+
+  // 128k 以上も、入力の上限の中なら保存できる（xai.grok-4.3 の context は 1M）。
+  await input.fill("1000000");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。")).toBeVisible();
+  const models = (requests[0].enterprise_ai as Record<string, unknown>).models as Array<
+    Record<string, unknown>
+  >;
+  expect(models.map((model) => [model.max_input_tokens, model.max_output_tokens])).toEqual([
+    [1000000, 131072],
+    [128000, 32768],
+  ]);
+  expect(requests[0].enterprise_ai).not.toHaveProperty("llm_max_output_tokens");
+  await expectNoHorizontalOverflow(page);
+  if (process.env.MODEL_OUTPUT_SCREENSHOT_DIR && !test.info().project.name.includes("mobile")) {
+    // PR 用の画面（表の形になる 1920px の登録モデル）。
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.locator("#enterprise-model-catalog").scrollIntoViewIfNeeded();
+    await page.locator("#enterprise-model-catalog").screenshot({
+      path: `${process.env.MODEL_OUTPUT_SCREENSHOT_DIR}/model-catalog-1920.png`,
+    });
+  }
 });
 
 test("ターシャリ接続は Endpoint URL と API key だけで設定し、登録モデルで選べる (#786)", async ({
@@ -3200,6 +3275,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
     reasoning_effort: "medium",
     // 追加したモデルの入力の上限は既定の 128000（#1437）。
     max_input_tokens: 128000,
+    // 追加したモデルの出力の上限は既定の 32768（#1719）。
+    max_output_tokens: 32768,
   });
   const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
   await expect(remove).toBeEnabled();

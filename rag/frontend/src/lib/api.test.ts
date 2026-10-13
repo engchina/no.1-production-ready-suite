@@ -515,6 +515,7 @@ describe("api.request envelope", () => {
             model_id: "enterprise-llm",
             display_name: "標準 LLM",
             vision_enabled: true,
+            max_output_tokens: 32768,
           },
         ],
         default_text_model_id: "",
@@ -527,8 +528,6 @@ describe("api.request envelope", () => {
         vision_response_path: "/data/document",
         timeout_seconds: 60,
         max_retries: 2,
-        llm_max_output_tokens: 1200,
-        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",
@@ -575,6 +574,7 @@ describe("api.request envelope", () => {
               model_id: "enterprise-llm",
               display_name: "標準 LLM",
               vision_enabled: false,
+              max_output_tokens: 32768,
             },
           ],
           default_text_model_id: "enterprise-llm",
@@ -587,8 +587,6 @@ describe("api.request envelope", () => {
           vision_response_path: "",
           timeout_seconds: 60,
           max_retries: 2,
-          llm_max_output_tokens: 1200,
-          vlm_max_output_tokens: 65536,
         },
         generative_ai: {
           embedding_model: "cohere.embed-v4.0",

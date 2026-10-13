@@ -93,10 +93,13 @@ import { t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+  DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_SEED,
   ENTERPRISE_AI_CONNECTION_IDS,
   ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX,
   ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN,
+  ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX,
+  ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN,
   ENTERPRISE_AI_REASONING_EFFORTS,
   ENTERPRISE_AI_SEED_MAX,
   ENTERPRISE_AI_SEED_MIN,
@@ -460,6 +463,7 @@ export function ModelSettingsPage({
                   connection_id: PRIMARY_CONNECTION_ID,
                   reasoning_effort: DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
                   max_input_tokens: DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+                  max_output_tokens: DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
                 },
               ],
             },
@@ -569,10 +573,16 @@ export function ModelSettingsPage({
       );
       const idErrors = validateModelIds(draft.enterprise_ai.models);
       const tokenErrors = validateMaxInputTokens(draft.enterprise_ai.models);
-      // 行の順に、行の中は欄の並び（モデル ID → 接続 → 入力の上限）で最初のエラーの欄を探す。
+      const outputTokenErrors = validateMaxOutputTokens(
+        draft.enterprise_ai.models,
+      );
+      // 行の順に、行の中は欄の並び（モデル ID → 接続 → 入力の上限 → 出力の上限）で最初のエラーの欄を探す。
       const invalidRow = draft.enterprise_ai.models.findIndex(
         (_, index) =>
-          idErrors[index] || connectionErrors[index] || tokenErrors[index],
+          idErrors[index] ||
+          connectionErrors[index] ||
+          tokenErrors[index] ||
+          outputTokenErrors[index],
       );
       const errors = validateDefaultModels(draft.enterprise_ai);
       const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
@@ -596,7 +606,9 @@ export function ModelSettingsPage({
                 ? modelIdFieldId(invalidRow)
                 : connectionErrors[invalidRow]
                   ? modelConnectionFieldId(invalidRow)
-                  : modelMaxInputTokensFieldId(invalidRow)
+                  : tokenErrors[invalidRow]
+                    ? modelMaxInputTokensFieldId(invalidRow)
+                    : modelMaxOutputTokensFieldId(invalidRow)
               : DEFAULT_MODEL_FIELD_IDS[firstInvalid!],
           )
           ?.focus();
@@ -700,6 +712,11 @@ export function ModelSettingsPage({
   const maxInputTokensErrors: Record<number, string> =
     draft && showMaxInputTokensErrors
       ? validateMaxInputTokens(draft.enterprise_ai.models)
+      : {};
+  // 出力の上限（#1719）のエラーも、入力の上限と同じく保存の操作の後から出す。
+  const maxOutputTokensErrors: Record<number, string> =
+    draft && showMaxInputTokensErrors
+      ? validateMaxOutputTokens(draft.enterprise_ai.models)
       : {};
 
   // 取得の失敗を出すのは、下書きがまだない（初回の取得が失敗した）ときだけ（#1036）。
@@ -854,6 +871,7 @@ export function ModelSettingsPage({
                 connectionErrors={modelConnectionErrors}
                 modelIdErrors={modelIdErrors}
                 maxInputTokensErrors={maxInputTokensErrors}
+                maxOutputTokensErrors={maxOutputTokensErrors}
                 testingKey={testingKey}
                 testResults={testResults}
                 onModelChange={updateEnterpriseModel}
@@ -1244,6 +1262,7 @@ function ModelCatalogEditor({
   connectionErrors,
   modelIdErrors,
   maxInputTokensErrors,
+  maxOutputTokensErrors,
   testingKey,
   testResults,
   onModelChange,
@@ -1257,6 +1276,7 @@ function ModelCatalogEditor({
   connectionErrors: ModelConnectionErrors;
   modelIdErrors: ModelIdErrors;
   maxInputTokensErrors: Record<number, string>;
+  maxOutputTokensErrors: Record<number, string>;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onModelChange: (
@@ -1317,6 +1337,7 @@ function ModelCatalogEditor({
           <span>{t("settings.model.enterprise.connection")}</span>
           <span>{t("settings.model.enterprise.reasoningEffort")}</span>
           <span>{t("settings.model.enterprise.maxInputTokens")}</span>
+          <span>{t("settings.model.enterprise.maxOutputTokens")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
           <span>{t("settings.model.test.action")}</span>
           <span aria-hidden />
@@ -1408,8 +1429,30 @@ function ModelCatalogEditor({
                 // 推論の量の欄と同じく、広い画面のラベルは読み上げだけにする（表頭が見出し）。
                 className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
               />
-              {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。2 列の並び（md〜2xl）では、左の入力の上限の欄
-                  （ラベルつき）の入力と下端をそろえる（#1437）。 */}
+              {/* 出力の上限（#1719）。入力の上限の隣に置き、説明で入力の上限との違いを示す。 */}
+              <TextField
+                id={modelMaxOutputTokensFieldId(index)}
+                label={t("settings.model.enterprise.maxOutputTokensOfModel", {
+                  number: modelNumber,
+                })}
+                type="number"
+                inputMode="numeric"
+                min={ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN}
+                max={ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX}
+                step={1}
+                value={maxOutputTokensInputValue(model)}
+                aria-describedby={MAX_OUTPUT_TOKENS_HELP_ID}
+                error={maxOutputTokensErrors[index]}
+                onValueChange={(next) =>
+                  onModelChange(index, {
+                    max_output_tokens:
+                      next.trim() === "" ? Number.NaN : Number(next),
+                  })
+                }
+                inputClassName="tnum"
+                className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
+              />
+              {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。 */}
               <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg md:self-end 2xl:self-start 2xl:justify-start">
                 <span className="2xl:sr-only">
                   {t("settings.model.enterprise.vision")}
@@ -1455,7 +1498,7 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="md:col-span-2 2xl:col-span-8"
+                className="md:col-span-2 2xl:col-span-9"
               />
             </div>
           );
@@ -1474,6 +1517,13 @@ function ModelCatalogEditor({
         className="text-xs leading-relaxed text-fg-muted"
       >
         {t("settings.model.enterprise.maxInputTokensHelp")}
+      </p>
+      {/* 出力の上限の説明（#1719）。各行の欄の aria-describedby から読む。 */}
+      <p
+        id={MAX_OUTPUT_TOKENS_HELP_ID}
+        className="text-xs leading-relaxed text-fg-muted"
+      >
+        {t("settings.model.enterprise.maxOutputTokensHelp")}
       </p>
     </div>
   );
@@ -1515,6 +1565,47 @@ function validateMaxInputTokens(
   return errors;
 }
 
+/** 出力の上限の説明の要素の id（#1719）。 */
+const MAX_OUTPUT_TOKENS_HELP_ID = "enterprise-model-max-output-tokens-help";
+
+function modelMaxOutputTokensFieldId(index: number): string {
+  return `enterprise-model-max-output-tokens-${index}`;
+}
+
+/** 出力の上限の欄の表示値（値の無いモデルは既定、空欄（NaN）は空）。 */
+function maxOutputTokensInputValue(model: EnterpriseAiConfiguredModel): number | "" {
+  const value = model.max_output_tokens ?? DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS;
+  return Number.isNaN(value) ? "" : value;
+}
+
+/**
+ * 行ごとの出力の上限のエラー（#1719。行の番号 → 文言。不正な行だけ）。1〜2000000 の整数で、入力の上限
+ * （prompt と応答の合計）以下（backend の検証と同じ）。入力の上限が不正な行は、入力の上限のエラーだけを出す。
+ */
+function validateMaxOutputTokens(
+  models: readonly EnterpriseAiConfiguredModel[],
+): Record<number, string> {
+  const errors: Record<number, string> = {};
+  models.forEach((model, index) => {
+    const tokens = model.max_output_tokens ?? DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS;
+    if (
+      !Number.isInteger(tokens) ||
+      tokens < ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN ||
+      tokens > ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX
+    ) {
+      errors[index] = t("settings.model.enterprise.maxOutputTokensInvalid");
+      return;
+    }
+    const input = model.max_input_tokens ?? DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS;
+    if (isValidMaxInputTokens(model.max_input_tokens) && tokens > input) {
+      errors[index] = t("settings.model.enterprise.maxOutputTokensOverInput", {
+        max: input,
+      });
+    }
+  });
+  return errors;
+}
+
 /** 推論の量の説明の要素の id（#1425）。 */
 const REASONING_EFFORT_HELP_ID = "enterprise-model-reasoning-effort-help";
 
@@ -1544,7 +1635,7 @@ const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoning
  * 接続に回す。
  */
 const CATALOG_COLUMNS =
-  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_6.5rem_7rem_3.25rem]";
+  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_8.5rem_6.5rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。

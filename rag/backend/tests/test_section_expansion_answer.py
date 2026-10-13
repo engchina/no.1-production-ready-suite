@@ -314,6 +314,37 @@ def test_build_engine_settings_passes_model_input_limit_and_extraction_calls(tmp
     assert build_engine_settings(Settings(), output_dir=tmp_path).answer_max_input_tokens == 128_000
 
 
+def test_build_engine_settings_passes_model_output_limits(tmp_path: Any) -> None:
+    """回答と Vision のモデルの出力の上限は登録モデルの値（#1719。既定 32768。入力の上限以下）。"""
+    from pr_system_settings.model import EnterpriseAiConfiguredModel
+    from rag_engine.config import get_llm_provider, llm_output_token_limit
+
+    models = [
+        EnterpriseAiConfiguredModel(model_id="llm-a", max_output_tokens=16_000),
+        EnterpriseAiConfiguredModel(model_id="vlm-a", max_output_tokens=64_000),
+        EnterpriseAiConfiguredModel(model_id="llm-small", max_input_tokens=8_192),
+    ]
+    settings = Settings(
+        oci_enterprise_ai_models=models,
+        oci_enterprise_ai_default_text_model="llm-a",
+        oci_enterprise_ai_default_vision_model="vlm-a",
+    )
+
+    engine = build_engine_settings(settings, output_dir=tmp_path)
+    answer = get_llm_provider(engine, engine.default_answer_llm)
+    vision = get_llm_provider(engine, engine.default_vision_llm)
+    assert (answer.max_output_tokens, vision.max_output_tokens) == (16_000, 64_000)
+    # 送る上限は回答の上限（既定 32768）とモデルの出力の上限の小さい方。
+    assert engine.answer_max_tokens == 32_768
+    assert (llm_output_token_limit(engine, answer), llm_output_token_limit(engine, vision)) == (
+        16_000,
+        32_768,
+    )
+    # 入力の上限の小さいモデルは、出力の上限も入力の上限を超えない。
+    small = build_engine_settings(settings, output_dir=tmp_path, answer_model_id="llm-small")
+    assert get_llm_provider(small, small.default_answer_llm).max_output_tokens == 8_192
+
+
 def test_token_estimate_and_default_limit_match_platform() -> None:
     """rag_engine の見積もり・既定は platform の値の解釈と同じ（3 製品で共通の 1 か所。#1437）。"""
     from pr_system_settings.model import (

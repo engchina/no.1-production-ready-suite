@@ -35,9 +35,7 @@
         "text_response_path": "",
         "vision_response_path": "",
         "timeout_seconds": 120,
-        "max_retries": 3,
-        "llm_max_output_tokens": 1200,
-        "vlm_max_output_tokens": 4096
+        "max_retries": 3
       },
       "generative_ai": {
         "embedding_model": "cohere.embed-v4.0",

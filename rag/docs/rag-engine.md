@@ -148,6 +148,13 @@ cache・出力・推論）と呼び出しの秒の和は `execution_steps[].llm_
 扱う（生成と監査の組では、確かめ終わった分で確定する）。こうすると打ち切った呼び出しにも usage が返り、出力・推論の token が
 記録に残る。応答が返らなかった呼び出し（timeout・接続の失敗）も、秒と理由（例外の型）を log（`llm_status=failed`）と
 工程の記録（未完了の応答の理由）に残す。切れた組の LLM の秒・token は `round_budget.stop.usage` に入る。
+構造化出力の呼び出しの出力の上限は、回答の上限（`answer_max_tokens`。環境変数 `ANSWER_MAX_TOKENS`。既定 32768）と、呼ぶモデル
+（回答のモデル / Vision のモデル）の出力の上限の小さい方（`rag_engine.config.llm_output_token_limit`。#1719）。モデルの出力の上限は
+「システム設定 › モデル」の登録モデルの「出力の上限（tokens）」（既定 32768）で、backend が platform の
+`enterprise_ai_output_token_budget` で決めて `OCI_ENTERPRISE_AI_MAX_OUTPUT_TOKENS` / `OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS`
+で渡す（`LlmProviderSettings.max_output_tokens`）。出力の上限で未完了なら上限を 2 倍にして 1 回だけ送り直すが（#987）、2 倍はモデルの
+出力の上限で抑え、広げられなければ送り直さない。未完了で終わるときは、失敗の文に理由・出力の上限・使った出力（うち推論）の
+token を出す。
 出力の上限で未完了の応答を、上限を 2 倍にして送り直した回数（`output_retries`）と、未完了の応答の数・理由
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・
 `llm_attempt`・`llm_max_output_tokens`）に残す（#1527）。

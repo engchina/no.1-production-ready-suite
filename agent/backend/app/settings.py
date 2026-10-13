@@ -97,8 +97,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_llm_max_output_tokens: int = 1200
-    oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    # 出力の上限は登録モデルごとの `max_output_tokens`（#1719。platform の
+    # `enterprise_ai_output_token_budget`）。共通の LLM / VLM の出力の上限は持たない。
     # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
     # 解釈は pr_system_settings の enterprise_ai_seed。
     oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)

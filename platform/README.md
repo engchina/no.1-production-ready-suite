@@ -242,9 +242,21 @@ API は 422 で「既定のテキストモデルを選択してください。�
 
 - 既定は **128000**（値の無いモデル・#1437 より前の設定・env だけで設定したモデル）。範囲は 4096〜2000000 の整数で、範囲外は保存（422）・読み込みとも検証エラー。
 - 値の解釈は `pr_system_settings.model` の 1 か所: `max_input_tokens_to_use`（値なし・範囲外は既定）、`enterprise_ai_max_input_tokens(settings, model_id)`（モデルの値）、`input_token_budget(上限, 割合%)`（入力の予算の token）、`estimate_input_tokens(text)`（本文の token の見積もり。ASCII は 4 字で 1 token、それ以外は 1 字で 1 token。モデルごとの tokenizer を持たないため多めに見積もる）。3 製品はこれを使う。
-- 使う製品: RAG（回答の章節の拡張の根拠の入力の上限と、長い章節を抽出してから統合する 1 回分の大きさ。backend が回答のモデルの値を `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で `rag_engine` に渡す）。NL2SQL・Agent はまだ使わない。
+- 使う製品: RAG（回答の章節の拡張の根拠の入力の上限と、長い章節を抽出してから統合する 1 回分の大きさ。backend が回答のモデルの値を `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で `rag_engine` に渡す）。3 製品とも、出力の上限を入力の上限の残りで抑えるのに使う（#1719）。
 - 保存の形式: `model-settings.json` は version 5 で、`enterprise_ai.models[].max_input_tokens` を書く。version 4 はそのまま読める（書き換えは要らない。画面で保存し直すと version 5 になる）。
-- 画面: 登録モデルの表に「入力の上限（tokens）」の列を足し、8 列になったため表の形は 2xl（1536px）から（md〜2xl は 1 つのモデルの欄を 2 列に並べる）。範囲外は保存の操作で欄の直下にエラーを出してフォーカスする（登録モデルの form はブラウザの既定の検証を出さない）。
+- 画面: 登録モデルの表に「入力の上限（tokens）」の列を足し、8 列になったため表の形は 2xl（1536px）から（md〜2xl は 1 つのモデルの欄を 2 列に並べる）。#1719 で「出力の上限（tokens）」の列をその右に足した。範囲外は保存の操作で欄の直下にエラーを出してフォーカスする（登録モデルの form はブラウザの既定の検証を出さない）。
+
+## 登録モデルごとの出力の上限（`max_output_tokens`。#1719）
+
+「システム設定 › モデル」の登録モデルは、行ごとに「出力の上限（tokens）」（1 回の応答で出せる token の数。推論のあるモデルは推論の token も含む）を持つ。入力の上限は prompt と応答の合計（context）で、出力の上限はその中の応答の分。
+
+- 既定は **32768**（値の無いモデル・#1719 より前の設定・env だけで設定したモデル。入力の上限がそれより小さいモデルは入力の上限）。範囲は 1〜2000000 の整数で、**入力の上限以下**。範囲外・入力の上限を超える値は保存（422）・読み込みとも検証エラー。
+- OCI の公式文書（2026-10-13 に確認）: `xai.grok-4.3` は context 1M tokens（https://docs.oracle.com/en-us/iaas/Content/generative-ai/xai-grok-4-3.htm ）、`openai.gpt-oss-120b` は context 128k tokens（https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-gpt-oss-120b.htm ）。モデルで上限が大きく違うため、業界の一般的な作り（モデルごとに入力の上限と出力の上限を持つ）に合わせ、128k 以上も入れられる範囲にした。
+- 呼び出しの `max_output_tokens` は `enterprise_ai_output_token_budget(settings, model_id, prompt_tokens=…, requested=…)`: min(機能の要る量（既定 32768 を下回らない。無ければモデルの出力の上限）, モデルの出力の上限, 入力の上限 − prompt の見積もり)。出力の上限の大きいモデルで prompt が入らずに失敗するのを防ぐ。
+- 未完了（`status=incomplete`・`incomplete_details.reason=max_output_tokens`）は、`enterprise_ai_retry_output_token_budget` でモデルの出力の上限まで広げて 1 回だけ送り直す（広げられなければ送り直さない）。それでも未完了なら、`pr_system_settings.enterprise_ai_errors.enterprise_ai_incomplete_message` で理由・上限・使った token（出力・推論）を失敗の文に出す（応答の本文・secret は出さない）。
+- 共通の LLM / VLM の出力の上限（#1719 より前の `llm_max_output_tokens`（既定 1200）/ `vlm_max_output_tokens`、`PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` / `_VLM_MAX_OUTPUT_TOKENS`）は持たない。画像の処理も Vision のモデルの出力の上限を使う。
+- 保存の形式: `model-settings.json` は version 6 で、`enterprise_ai.models[].max_output_tokens` を書く。version 5 はそのまま読め、共通の `llm_max_output_tokens` / `vlm_max_output_tokens` は読み捨てる（各モデルは既定の 32768）。画面で保存し直すと version 6 になる。
+- 2026-10-13 の実測（NL2SQL のコメント管理の SQL 生成と同じ要求。5 表・32 列）: `openai.gpt-oss-120b`（推論 medium・上限 1200）は `incomplete`（output 1200 のうち reasoning 1198、本文 0 文字）、上限 32768 では completed（output 2756、うち reasoning 1506）。`xai.grok-4.3`（推論 medium）は上限 1200 でも completed のことがあり（output 3300〜3700）、上限 300 では incomplete。
 
 ## 登録モデルごとの推論の量（`reasoning_effort`。#1425）
 

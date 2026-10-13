@@ -1490,8 +1490,6 @@ def test_model_settings_save_persists_json_and_env_secret(
             "vision_response_path": "/output_text",
             "timeout_seconds": 30.0,
             "max_retries": 1,
-            "llm_max_output_tokens": 1200,
-            "vlm_max_output_tokens": 2048,
         },
         "generative_ai": {
             "embedding_model": "cohere.embed-v4.0",
@@ -1559,8 +1557,6 @@ def test_model_settings_test_uses_saved_secret_for_blank_key(
             "vision_response_path": "/output_text",
             "timeout_seconds": 30.0,
             "max_retries": 1,
-            "llm_max_output_tokens": 1200,
-            "vlm_max_output_tokens": 2048,
         },
         "generative_ai": {
             "embedding_model": "cohere.embed-v4.0",
@@ -1602,6 +1598,33 @@ def test_model_test_payloads_use_text_and_vision_defaults() -> None:
     assert (
         agent_router._enterprise_text_payload(fallback, prompt="p", context="")["model"]
         == "vision-model"
+    )
+
+
+def test_model_test_payloads_send_each_model_output_limit() -> None:
+    """テストの `max_output_tokens` は、テストするモデルの出力の上限（#1719。保存前の値）。"""
+    from pr_system_settings.model import EnterpriseAiConfiguredModel, EnterpriseAiModelSettings
+
+    settings = EnterpriseAiModelSettings(
+        models=[
+            EnterpriseAiConfiguredModel(model_id="text-model", max_output_tokens=16000),
+            EnterpriseAiConfiguredModel(
+                model_id="vision-model", vision_enabled=True, max_input_tokens=8192
+            ),
+        ],
+        default_text_model_id="text-model",
+        default_vision_model_id="vision-model",
+    )
+    text = agent_router._enterprise_text_payload(settings, prompt="p", context="")
+    vision = agent_router._enterprise_vision_payload(settings, prompt="p")
+    assert text["max_output_tokens"] == 16000
+    # 入力の上限の小さいモデルは入力の上限まで。
+    assert vision["max_output_tokens"] == 8192
+    # 登録の無いモデルは既定の 32768。
+    unknown = settings.model_copy(update={"default_text_model_id": "unknown"})
+    assert (
+        agent_router._enterprise_text_payload(unknown, prompt="p", context="")["max_output_tokens"]
+        == 32768
     )
 
 

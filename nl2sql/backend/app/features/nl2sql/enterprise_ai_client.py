@@ -8,19 +8,28 @@ deterministic fallback を使う。
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from base64 import b64encode
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol, cast
 
 import httpx
 from pr_system_settings.enterprise_ai_errors import (
     ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
     EnterpriseAiHttpFailure,
+    EnterpriseAiIncomplete,
     classify_enterprise_ai_http_failure,
     enterprise_ai_endpoint_host,
     enterprise_ai_failure_actions,
+    enterprise_ai_incomplete_from_response,
+    enterprise_ai_incomplete_message,
+)
+from pr_system_settings.model import (
+    enterprise_ai_output_token_budget,
+    enterprise_ai_retry_output_token_budget,
+    estimate_input_tokens,
 )
 
 from app.settings import (
@@ -34,6 +43,8 @@ from app.settings import (
 )
 
 from .structured_outputs import validate_json_output
+
+logger = logging.getLogger(__name__)
 
 # 推論(思考)の部分の type(#1423)。Responses の `output` の item(`type=reasoning`)と、content の
 # block(`reasoning_text` / `summary_text`、Anthropic 形式の `thinking` / `redacted_thinking`)。
@@ -61,6 +72,7 @@ class EnterpriseAiDirectError(RuntimeError):
         http_failure: EnterpriseAiHttpFailure | None = None,
         model_id: str = "",
         endpoint_host: str = "",
+        incomplete: EnterpriseAiIncomplete | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -68,6 +80,8 @@ class EnterpriseAiDirectError(RuntimeError):
         self.http_failure = http_failure
         self.model_id = model_id
         self.endpoint_host = endpoint_host
+        # 未完了の応答の理由・上限・使った token（#1719。`code == "incomplete"` のとき）。
+        self.incomplete = incomplete
 
     @property
     def configuration_error(self) -> bool:
@@ -178,31 +192,96 @@ class OciEnterpriseAiDirectClient:
     ) -> str:
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
-        payload = _build_payload(
-            settings=self.settings,
-            model_id=self.model_id(),
-            prompt=prompt,
-            context=context,
-            system_prompt=system_prompt,
-            max_output_tokens=max_output_tokens,
-            response_format=response_format,
-        )
         # 既定のテキストモデル（システム設定の「モデル」）とその接続で呼ぶ。業務プロファイルの
         # LLM Model・Region は Select AI の AI profile 用で、ここでは使わない（#1684）。
         model_id = self.model_id()
-        response = self._post_json(
-            payload,
-            connection=self.connection(model_id),
-            path=self.settings.oci_enterprise_ai_llm_path,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
+        # 出力の上限はモデルの出力の上限と、入力の上限から prompt の見積もりを引いた残りの小さい方
+        # （#1719）。機能が渡す `max_output_tokens` は要る量で、既定（32768）を下回らない。
+        prompt_tokens = estimate_input_tokens("\n".join([system_prompt, context, prompt]))
+
+        def call(budget: int) -> str:
+            payload = _build_payload(
+                settings=self.settings,
+                model_id=model_id,
+                prompt=prompt,
+                context=context,
+                system_prompt=system_prompt,
+                max_output_tokens=budget,
+                response_format=response_format,
+            )
+            response = self._post_json(
+                payload,
+                connection=self.connection(model_id),
+                path=self.settings.oci_enterprise_ai_llm_path,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                model_id=model_id,
+            )
+            return _parse_response(
+                response,
+                response_path=self.settings.oci_enterprise_ai_llm_response_path,
+                response_format=response_format,
+                max_output_tokens=budget,
+                model_id=model_id,
+            )
+
+        return self._with_output_limit_retry(
+            call,
             model_id=model_id,
+            budget=enterprise_ai_output_token_budget(
+                self.settings, model_id, prompt_tokens=prompt_tokens, requested=max_output_tokens
+            ),
+            prompt_tokens=prompt_tokens,
         )
-        return _parse_response(
-            response,
-            response_path=self.settings.oci_enterprise_ai_llm_response_path,
-            response_format=response_format,
-        )
+
+    def _with_output_limit_retry(
+        self,
+        call: Callable[[int], str],
+        *,
+        model_id: str,
+        budget: int,
+        prompt_tokens: int,
+    ) -> str:
+        """出力の上限で未完了の Structured Outputs を、上限を広げて 1 回だけ送り直す（#1719）。
+
+        推論のあるモデルは推論の token も出力の上限に数えるため、同じ入力でも上限に届くことがある。
+        理由が `max_output_tokens` のときだけ、モデルの出力の上限（と入力の上限の残り）まで広げて
+        送り直す。広げられないとき・2 回目も未完了のときは、理由・上限・使った token を
+        失敗の文に出す。
+        """
+        try:
+            return call(budget)
+        except EnterpriseAiDirectError as exc:
+            incomplete = exc.incomplete
+            if incomplete is None or not incomplete.output_limit_reached:
+                raise
+            widened = enterprise_ai_retry_output_token_budget(
+                self.settings, model_id, current=budget, prompt_tokens=prompt_tokens
+            )
+            if widened is None:
+                raise
+            logger.warning(
+                "enterprise_ai_output_limit_retry",
+                extra={
+                    "warning_code": "ENTERPRISE_AI_OUTPUT_LIMIT_RETRY",
+                    "model": model_id,
+                    "max_output_tokens": budget,
+                    "retry_max_output_tokens": widened,
+                    "output_tokens": incomplete.output_tokens,
+                    "reasoning_tokens": incomplete.reasoning_tokens,
+                },
+            )
+        try:
+            return call(widened)
+        except EnterpriseAiDirectError as exc:
+            if exc.incomplete is None:
+                raise
+            raise EnterpriseAiDirectError(
+                enterprise_ai_incomplete_message(exc.incomplete, model_id=model_id, retried=True),
+                code="incomplete",
+                model_id=model_id,
+                incomplete=exc.incomplete,
+            ) from exc
 
     def vision_model_id(self) -> str:
         return enterprise_ai_vision_model_id(self.settings) or self.model_id()
@@ -221,25 +300,41 @@ class OciEnterpriseAiDirectClient:
         connection = self.connection(model_id)
         if not connection.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
-        payload = _build_image_payload(
-            settings=self.settings,
+        prompt_tokens = estimate_input_tokens(prompt)
+
+        def call(budget: int) -> str:
+            payload = _build_image_payload(
+                settings=self.settings,
+                model_id=model_id,
+                image_bytes=image_bytes,
+                prompt=prompt,
+                mime_type=mime_type,
+                max_output_tokens=budget,
+                response_format=response_format,
+            )
+            response = self._post_json(
+                payload,
+                connection=connection,
+                path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
+                or self.settings.oci_enterprise_ai_llm_path,
+                model_id=model_id,
+            )
+            return _parse_response(
+                response,
+                response_path=self.settings.oci_enterprise_ai_vlm_response_path,
+                response_format=response_format,
+                max_output_tokens=budget,
+                model_id=model_id,
+            )
+
+        # 画像の処理も、Vision のモデルの出力の上限を使う（#1719。共通の VLM の上限は持たない）。
+        return self._with_output_limit_retry(
+            call,
             model_id=model_id,
-            image_bytes=image_bytes,
-            prompt=prompt,
-            mime_type=mime_type,
-            response_format=response_format,
-        )
-        response = self._post_json(
-            payload,
-            connection=connection,
-            path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
-            or self.settings.oci_enterprise_ai_llm_path,
-            model_id=model_id,
-        )
-        return _parse_response(
-            response,
-            response_path=self.settings.oci_enterprise_ai_vlm_response_path,
-            response_format=response_format,
+            budget=enterprise_ai_output_token_budget(
+                self.settings, model_id, prompt_tokens=prompt_tokens
+            ),
+            prompt_tokens=prompt_tokens,
         )
 
     def _post_json(
@@ -357,7 +452,7 @@ def _build_payload(
         "max_output_tokens": int(
             max_output_tokens
             if max_output_tokens is not None
-            else settings.oci_enterprise_ai_llm_max_output_tokens
+            else enterprise_ai_output_token_budget(settings, model_id)
         ),
         "temperature": 0,
         "response_format": dict(response_format) if response_format is not None else "",
@@ -387,6 +482,7 @@ def _build_image_payload(
     image_bytes: bytes,
     prompt: str,
     mime_type: str,
+    max_output_tokens: int | None = None,
     response_format: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     if response_format is not None:
@@ -404,7 +500,9 @@ def _build_image_payload(
         "image_data_url": data_url,
         "mime_type": mime_type,
         "max_output_tokens": int(
-            getattr(settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536)
+            max_output_tokens
+            if max_output_tokens is not None
+            else enterprise_ai_output_token_budget(settings, model_id)
         ),
         "temperature": 0,
     }
@@ -495,15 +593,27 @@ def _render_template_value(value: object, values: Mapping[str, Any]) -> object:
 
 
 def _parse_response(
-    response: Mapping[str, Any], *, response_path: str, response_format: Mapping[str, Any] | None
+    response: Mapping[str, Any],
+    *,
+    response_path: str,
+    response_format: Mapping[str, Any] | None,
+    max_output_tokens: int | None = None,
+    model_id: str = "",
 ) -> str:
     if response_format is None:
         return _parse_generated_text(response, response_path=response_path)
     _raise_for_response_error(response)
-    if response.get("status") in {"incomplete", "failed", "cancelled", "queued", "in_progress"}:
+    # 未完了（出力の上限など）は、理由・上限・使った token を失敗の文に出す（#1719。応答の本文と
+    # secret は出さない）。出力の上限が理由なら呼び出し側が上限を広げて 1 回だけ送り直す。
+    incomplete = enterprise_ai_incomplete_from_response(
+        response, max_output_tokens=max_output_tokens
+    )
+    if incomplete is not None:
         raise EnterpriseAiDirectError(
-            "Structured Outputs の応答が未完了です。出力上限とモデル設定を確認してください。",
+            enterprise_ai_incomplete_message(incomplete, model_id=model_id),
             code="incomplete",
+            model_id=model_id,
+            incomplete=incomplete,
         )
 
     def check_refusal(value: object) -> None:

@@ -36,12 +36,14 @@ function createModelSettings({
             display_name: "標準 LLM",
             vision_enabled: false,
             connection_id: "primary",
+            max_output_tokens: 32768,
           },
           {
             model_id: "enterprise-vision",
             display_name: "Vision LLM",
             vision_enabled: true,
             connection_id: secondary ? "secondary" : "primary",
+            max_output_tokens: 32768,
           },
         ],
         default_text_model_id: textModel,
@@ -54,8 +56,6 @@ function createModelSettings({
         vision_response_path: "",
         timeout_seconds: 60,
         max_retries: 3,
-        llm_max_output_tokens: 1200,
-        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",

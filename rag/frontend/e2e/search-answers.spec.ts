@@ -524,6 +524,7 @@ async function mockModelSettingsWithAnswerModels(page: Page) {
     display_name: "",
     vision_enabled: modelId !== "openai.gpt-oss-120b",
     connection_id: "primary",
+    max_output_tokens: 32768,
   }));
   const server = { defaults: { text: "openai.gpt-oss-120b", vision: "xai.grok-4.3" } };
   const settings = () => ({
@@ -550,8 +551,6 @@ async function mockModelSettingsWithAnswerModels(page: Page) {
         vision_response_path: "",
         timeout_seconds: 600,
         max_retries: 3,
-        llm_max_output_tokens: 1200,
-        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",

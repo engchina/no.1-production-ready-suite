@@ -13,7 +13,9 @@ from app.config import (
     DEFAULT_LOCAL_STORAGE_DIR,
     DEFAULT_MODEL_SETTINGS_FILE,
     DEFAULT_PARSER_ADAPTER_BACKEND,
+    EnterpriseAiConfiguredModel,
     Settings,
+    enterprise_ai_output_token_budget,
     resolve_model_settings_file,
 )
 
@@ -375,17 +377,19 @@ def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
         Settings(oci_enterprise_ai_timeout_seconds=0)
 
 
-def test_enterprise_ai_output_token_limits_are_bounded() -> None:
-    """VLM は大きめ、LLM は短めの既定出力上限を持つ。"""
-    settings = Settings()
-
-    assert settings.oci_enterprise_ai_llm_max_output_tokens == 1200
-    assert settings.oci_enterprise_ai_vlm_max_output_tokens == 65536
-
-    with pytest.raises(ValidationError):
-        Settings(oci_enterprise_ai_vlm_max_output_tokens=0)
-    with pytest.raises(ValidationError):
-        Settings(oci_enterprise_ai_vlm_max_output_tokens=65537)
+def test_enterprise_ai_output_token_limits_follow_each_model() -> None:
+    """出力の上限は登録モデルごとの値(#1719)。共通の LLM / VLM の出力の上限は持たない。"""
+    assert not [name for name in Settings.model_fields if name.endswith("_max_output_tokens")]
+    settings = Settings(
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="llm-a", max_output_tokens=16000),
+            EnterpriseAiConfiguredModel(model_id="llm-small", max_input_tokens=8192),
+        ]
+    )
+    assert enterprise_ai_output_token_budget(settings, "llm-a") == 16000
+    # 入力の上限の小さいモデルは入力の上限まで。登録の無いモデルは既定の 32768。
+    assert enterprise_ai_output_token_budget(settings, "llm-small") == 8192
+    assert enterprise_ai_output_token_budget(settings, "unknown") == 32768
 
 
 def test_pdf_segmentation_defaults_are_bounded() -> None:

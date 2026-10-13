@@ -2861,6 +2861,14 @@ class MetadataSqlGenerateData(BaseModel):
     sql: str = ""
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
+    # OCI Enterprise AI で作れず、規則ベース（名前をそのまま入れた SQL）にしたか（#1719）。
+    # 未設定で AI を使わなかった場合は False（`warnings` に出す）。
+    fallback: bool = False
+    # 規則ベースにした表（一部の組だけ失敗した場合。空 = 全部）。
+    fallback_objects: list[str] = Field(default_factory=list)
+    # 利用者向けの理由（1 文）と、「詳細」に出す失敗の元の文（理由・上限・使った token）。
+    fallback_reason: str = ""
+    fallback_detail: str = ""
     timing: TimingEnvelope
 
 

@@ -111,8 +111,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_vlm_input_mode: str = "auto"
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_llm_max_output_tokens: int = 1200
-    oci_enterprise_ai_vlm_max_output_tokens: int = 65536
+    # 出力の上限は登録モデルごとの `max_output_tokens`（#1719。既定 32768）。共通の LLM / VLM の
+    # 上限は持たない（呼び出しは pr_system_settings の enterprise_ai_output_token_budget）。
     # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
     # 解釈は pr_system_settings の enterprise_ai_seed。
     oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
@@ -173,10 +173,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # Ontology worker / reasoning。typo(例: "in-process")だと job が誰にも処理されず
     # queued のまま沈黙するため、起動時に Literal で検証する。
     nl2sql_ontology_worker_mode: Literal["inprocess", "external"] = "inprocess"
-    # AI 構築の抽出/命名呼び出し専用の出力トークン上限。汎用の
-    # oci_enterprise_ai_llm_max_output_tokens(既定 1200)では SCHEMA_NAMING の
-    # JSON が途中で切れて全体失敗するため、抽出系は大きめの予算を使う。
-    nl2sql_ontology_extraction_max_output_tokens: int = 8000
+    # AI 構築の抽出/命名呼び出しが要る出力トークンの量（#1719 で 8000 から 32768）。送る上限は
+    # モデルの出力の上限と入力の上限の残りで抑える（enterprise_ai_output_token_budget）。推論のある
+    # モデルは推論の token も数えるため、小さい値では SCHEMA_NAMING の JSON が途中で切れる。
+    nl2sql_ontology_extraction_max_output_tokens: int = 32768
     # GraphRAG 流 gleaning(取りこぼし回収の追加パス)。0 で無効。
     nl2sql_ontology_extraction_gleaning_passes: int = 1
     # 1 回の抽出呼び出しに載せる資料本文の上限(チャンクが大きいほど抽出漏れが増えるため)。
