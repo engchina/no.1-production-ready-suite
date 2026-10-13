@@ -776,7 +776,8 @@ main() {
   build_frontend
   configure_systemd
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH} and log in with the login user."
+  # URL（scheme・IP・port）は suite-init.sh の最後に出す（製品は HTTPS・公開の port を知らない。#1639）。
+  log "Initialization complete. The URLs are listed at the end of /var/log/suite-init.log (suite: and each product). Log in with the login user."
   log "Then configure OCI authentication and models in System settings."
 }
 
