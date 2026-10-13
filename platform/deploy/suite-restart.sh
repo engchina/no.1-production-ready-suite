@@ -8,10 +8,12 @@
 #      suite-init.sh がそのまま保つ。
 #   2. suite-init.sh を再実行する（依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・
 #      systemd の unit・Nginx・サービスの再起動）。suite-pull.sh で取得した最新のコードは、ここで使われる。
-#   3. 配備した製品の backend の /api/health を待つ。
+#   3. 配備全体を確かめる（platform/deploy/suite-health.sh の suite_check_deployment。#1642）: 有効な
+#      production-ready-* の service がすべて active か、配備した製品の backend の /api/health と、Nginx を通した
+#      /<製品>/api/health が応答するか、Nginx が active か。製品ごとに 1 行の要約を出し、NG なら journal の末尾を出す。
 # --no-build: build せず、有効（enabled）な production-ready-* の service と Nginx だけを再起動する。
 #   RAG の前処理 / parser で画面から「停止」にしたもの（disabled）は起動しない。証明書の更新の oneshot も対象にしない。
-# --status: 再起動せず、service の状態と health だけを表示する。
+# --status: 再起動せず、3. の確認だけを 1 回行う（待たない）。
 #
 # OS の再起動では、enabled の unit と Nginx が自動で起動する（WantedBy=multi-user.target）。
 set -euo pipefail
@@ -20,6 +22,8 @@ SUITE_DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUITE_RESTART_SCRIPT="${SUITE_DEPLOY_DIR}/suite-restart.sh"
 # shellcheck source=suite-nginx.sh
 source "${SUITE_DEPLOY_DIR}/suite-nginx.sh"
+# shellcheck source=suite-health.sh
+source "${SUITE_DEPLOY_DIR}/suite-health.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 SUITE_REPO_DIR="${SUITE_REPO_DIR:-${APP_ROOT}/no.1-production-ready-suite}"
@@ -29,10 +33,8 @@ SUITE_INIT_SCRIPT="${SUITE_INIT_SCRIPT:-${SUITE_DEPLOY_DIR}/suite-init.sh}"
 # suite-update.sh と共有する lock と log。
 SUITE_OPS_LOG="${SUITE_OPS_LOG:-/var/log/suite-ops.log}"
 SUITE_OPS_LOCK_FILE="${SUITE_OPS_LOCK_FILE:-/run/lock/production-ready-suite-ops.lock}"
-SUITE_UNIT_PATTERN="production-ready-*.service"
-SUITE_TLS_RENEW_SERVICE="production-ready-suite-tls-renew.service"
+# 確認（suite_check_deployment）がすべて OK になるまで待つ上限。
 SUITE_HEALTH_TIMEOUT_SECONDS="${SUITE_HEALTH_TIMEOUT_SECONDS:-180}"
-SUITE_HEALTH_INTERVAL_SECONDS="${SUITE_HEALTH_INTERVAL_SECONDS:-3}"
 
 restart_log() { printf '[suite-restart] %s\n' "$*"; }
 restart_fail() {
@@ -48,13 +50,14 @@ Usage: sudo platform/deploy/suite-restart.sh [--no-build | --status]
              systemd・Nginx）、全サービスを再起動して、各製品の backend の health を待ちます。
              suite-pull.sh で取得した最新のコードは、これで反映されます。
 --no-build  build せず、有効な production-ready-* の service と Nginx だけを再起動します。
---status    再起動せず、service の状態と health だけを表示します。
+--status    再起動せず、配備の確認（service の状態・各製品の backend と Nginx を通した health・Nginx）だけを
+             1 回行います。
 
 画面で保存した値（各製品の backend/.env・platform/.env）、Wallet、HTTPS の CA は保ちます。
 log は /var/log/suite-ops.log（再配備の詳細は /var/log/suite-init.log）。
 
 Environment overrides:
-  SUITE_HEALTH_TIMEOUT_SECONDS   health を待つ上限の秒数（既定 180）
+  SUITE_HEALTH_TIMEOUT_SECONDS   確認がすべて OK になるまで待つ上限の秒数（既定 180）
 EOF
 }
 
@@ -72,11 +75,7 @@ suite_ops_begin() {
   export SUITE_OPS_INHERITED=true
 }
 
-# 有効（enabled）な suite の service。証明書の更新の oneshot は除く。
-suite_enabled_units() {
-  systemctl list-unit-files --type=service --state=enabled --no-legend --plain "${SUITE_UNIT_PATTERN}" 2>/dev/null \
-    | awk '{print $1}' | grep -vxF "${SUITE_TLS_RENEW_SERVICE}" || true
-}
+# 有効（enabled）な suite の service（suite_enabled_units）は suite-health.sh にある。
 
 # 配備した製品（props/products.txt）。読めなければ 3 製品。
 suite_deployed_products() {
@@ -89,30 +88,12 @@ suite_deployed_products() {
   done
 }
 
-suite_wait_for_health() {
-  local product port url deadline failed=0
-  while read -r product; do
-    port="$(suite_backend_port "${product}")"
-    url="http://127.0.0.1:${port}/api/health"
-    deadline=$((SECONDS + SUITE_HEALTH_TIMEOUT_SECONDS))
-    until curl -fsS --max-time 5 -o /dev/null "${url}" 2>/dev/null; do
-      if [ "${SECONDS}" -ge "${deadline}" ]; then
-        restart_log "${product}: health が ${SUITE_HEALTH_TIMEOUT_SECONDS} 秒以内に応答しません（${url}）。sudo journalctl -u production-ready-${product}-backend -n 200 --no-pager で確認してください。"
-        failed=1
-        continue 2
-      fi
-      sleep "${SUITE_HEALTH_INTERVAL_SECONDS}"
-    done
-    restart_log "${product}: health OK（${url}）"
-  done < <(suite_deployed_products)
-  return "${failed}"
-}
-
-suite_report_status() {
-  local unit
-  for unit in $(suite_enabled_units) nginx.service; do
-    restart_log "  ${unit}: $(systemctl is-active "${unit}" 2>/dev/null || true)"
-  done
+# 配備全体の確認（suite-init.sh の最後と同じ。#1642）。
+suite_check_deployed() {
+  local products=()
+  mapfile -t products < <(suite_deployed_products)
+  SUITE_HEALTH_LOG=restart_log SUITE_CHECK_TIMEOUT_SECONDS="${SUITE_HEALTH_TIMEOUT_SECONDS}" \
+    suite_check_deployment "$(suite_local_nginx_base_url "${PROPS_DIR}")" "${products[@]}"
 }
 
 # 各製品の今の backend/.env を props へ写す（suite-init.sh が props から作り直しても値が変わらないように）。
@@ -172,6 +153,7 @@ suite_restart_main() {
       action="status"
       # 状態の確認では待たない（1 回だけ問い合わせる）。
       SUITE_HEALTH_TIMEOUT_SECONDS=0
+      SUITE_CHECK_SETTLE_SECONDS=0
       ;;
     "") ;;
     *) restart_usage >&2; return 2 ;;
@@ -190,10 +172,10 @@ suite_restart_main() {
       suite_restart_services
       ;;
   esac
-  restart_log "service の状態:"
-  suite_report_status
-  if suite_wait_for_health && [ "${status}" -eq 0 ]; then
-    restart_log "完了しました。すべての製品の backend が応答しています。"
+  if suite_check_deployed && [ "${status}" -eq 0 ]; then
+    if [ "${action}" != "status" ]; then
+      restart_log "完了しました。すべての service が active で、各製品が応答しています。"
+    fi
     return 0
   fi
   restart_fail "失敗または応答しない製品があります（上の log を確認してください）。"

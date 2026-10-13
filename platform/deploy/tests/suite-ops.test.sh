@@ -49,7 +49,7 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 )
 
 # 2. suite-restart.sh --no-build: 有効な production-ready-* の service（証明書の更新の oneshot を除く）と Nginx を
-#    再起動し、配備した製品の backend の health を待つ。
+#    再起動し、配備全体（service・backend と Nginx を通した health・Nginx）を確かめる。
 (
   export PROPS_DIR="${task_dir}/restart-props"
   mkdir -p "${PROPS_DIR}"
@@ -77,11 +77,30 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   grep -qxF "systemctl restart nginx" "${calls}" || fail "Nginx を再起動しない"
 
   [ "$(suite_deployed_products | tr '\n' ' ')" = "rag agent " ] || fail "配備した製品: $(suite_deployed_products | tr '\n' ' ')"
+  # 再起動の後の確認は suite-init.sh の最後と同じ suite_check_deployment（#1642。suite-health.test.sh が詳しく確かめる）。
+  # 配備した製品と、props の HTTPS の設定から Nginx を通す URL を決める。
   SUITE_HEALTH_TIMEOUT_SECONDS=0
-  curl() { case "$*" in *":8000/api/health"*) return 0 ;; *) return 7 ;; esac; }
-  if suite_wait_for_health >/dev/null; then fail "Agent が応答しないのに成功した"; fi
-  curl() { return 0; }
-  suite_wait_for_health >/dev/null || fail "すべて応答するのに失敗した"
+  SUITE_CHECK_SETTLE_SECONDS=0
+  systemctl() {
+    case "$1" in
+      list-unit-files) printf '%s\n' "production-ready-rag-backend.service enabled enabled" "production-ready-agent-backend.service enabled enabled" ;;
+      is-active) printf 'active\n' ;;
+      show) printf '0\n' ;;
+    esac
+  }
+  journalctl() { :; }
+  curl() { case "$*" in *":8000/api/health"* | *"127.0.0.1:443/rag/api/health"*) return 0 ;; *) return 7 ;; esac; }
+  if suite_check_deployed >/dev/null; then fail "Agent が応答しないのに成功した"; fi
+  curl() { printf '%s\n' "$*" >> "${calls}"; }
+  : > "${calls}"
+  check_out="$(suite_check_deployed)" || fail "すべて応答するのに失敗した"
+  printf '%s\n' "${check_out}" | grep -qxF '[suite-restart] check: agent backend OK / services 1/1 active / nginx OK' \
+    || fail "確認の要約: ${check_out}"
+  grep -qF "https://127.0.0.1:443/agent/api/health" "${calls}" || fail "Nginx を通した health を確かめない: $(cat "${calls}")"
+  printf 'false\n' > "${PROPS_DIR}/https_enabled.txt"
+  : > "${calls}"
+  suite_check_deployed >/dev/null || fail "HTTPS が off の確認に失敗した"
+  grep -qF "http://127.0.0.1:80/rag/api/health" "${calls}" || fail "HTTPS が off のときに http で確かめない: $(cat "${calls}")"
 )
 
 # 3. suite-restart.sh（既定）: 今のコードから build する。再配備の前に今の backend/.env を props へ写し

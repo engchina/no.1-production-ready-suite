@@ -49,6 +49,7 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
 - 製品の選択は Compute の cloud-init に入るため、選択を変えて apply すると **Compute は作り直されます**（OCI provider は `user_data` の変更で instance を置き換える）。データの正本は ADB で、
   Compute の中のローカルの保存（アップロードの原本・`platform/.env` を画面で変えた値・HTTPS の CA）は失われます。
 - 配備が終わると、`/var/log/suite-init.log` に入口の URL（`suite:`。`/` は Agent Control Plane へ転送。#1561）、製品ごとの URL、CA 証明書の URL を出します。
+  その後に配備全体の確認の結果（`check:` の行）を出します（下の「配備が正常かの確認」）。
 
 ## Autonomous AI Database（全製品で共有）
 
@@ -241,6 +242,9 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 - `semanage fcontext -a -t httpd_sys_content_t '<repository>/<製品>/frontend/dist(/.*)?'`: Nginx が配信する dist。build の後に `restorecon -R`。
 - `semanage fcontext -a -t cert_t '/u01/aipoc/ssl(/.*)?'`: Nginx が読む証明書と鍵（`/platform/ca.crt` も）。
 - `setsebool -P httpd_can_network_connect 1`: Nginx から `127.0.0.1` の各製品の backend への proxy。
+- `restorecon -v /usr/local/bin/uv /usr/local/bin/uvx`（各製品の `init_script.sh` の `install_uv`。#1642）: uv の installer は一時の場所から
+  移すため `bin_t` にならず、systemd が NL2SQL / Agent の unit の `ExecStart=/usr/local/bin/uv` を実行できない（`status=203/EXEC`）。
+  suite-v0.1.3 までの Compute は、`sudo restorecon -v /usr/local/bin/uv /usr/local/bin/uvx` の後、systemd の自動の再起動で起動する。
 - `http_port` / `https_port` が 80 / 443 以外なら `semanage port -a -t http_port_t -p tcp <port>`。
 - Ubuntu で配備した Compute は更新しません。Oracle Linux 9 にするには stack を apply して Compute を作り直してください（データの正本は ADB。
   Compute の中だけにあるものは下の「製品ごとの Compute の stack からの更新」と同じく引き継がれません）。
@@ -261,7 +265,7 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 | スクリプト（`platform/deploy/`） | 実行 | 内容 |
 |---|---|---|
 | `suite-pull.sh` | opc か `sudo` | repository の所有者（opc）で `origin/main` を取得し、`main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ。取得だけで、build・再起動はしない |
-| `suite-restart.sh` | `sudo` | 既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に各製品の `/api/health` を待つ。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は状態だけを出す |
+| `suite-restart.sh` | `sudo` | 既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に配備全体を確かめる（下の「配備が正常かの確認」）。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は再起動せず、確認だけを 1 回行う |
 | `suite-update.sh` | `sudo` | `suite-pull.sh` で取得し、取得した新しい `suite-restart.sh`（既定）を実行する |
 
 - `suite-init.sh` は props（Resource Manager の入力）から、各製品の `backend/.env` を作り直す。
@@ -270,9 +274,32 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   - `platform/.env`・Wallet・HTTPS の CA は、`suite-init.sh` がそのまま保つ。
 - 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
 - cloud-init は `git` と `tmux` を入れる。
+- 製品の `init_script.sh` は backend の `/api/health` を 3 秒ごとに最大 300 秒待ち（`SUITE_BACKEND_HEALTH_TIMEOUT_SECONDS`）、15 秒ごとに経過・状態・
+  再起動の回数を出す。service が `failed` になるか再起動を 3 回繰り返したら、すぐに status と journal を出して失敗にする（#1642）。
 - OS の再起動では、enabled の unit（`WantedBy=multi-user.target`）と Nginx が自動で起動する。
   - enabled の unit は、各製品の backend・worker と、起動にした RAG の前処理 / parser。
   - ADB は Compute の外にあるため、止まっていれば OCI のコンソールから起動する。
+
+### 配備が正常かの確認（#1642）
+
+`suite-init.sh` の最後（`suite-restart.sh` の最後と `--status` も同じ。`platform/deploy/suite-health.sh` の `suite_check_deployment`）に、次を確かめる。
+
+- 有効な `production-ready-*` の service（証明書の更新の oneshot を除く）がすべて `active` で、再起動を繰り返していないか
+- 配備した製品の backend の `/api/health`（`127.0.0.1:<port>`）と、Nginx を通した `/<製品>/api/health`（HTTPS が on なら `https://127.0.0.1:<https_port>`）
+- Nginx が `active` か
+
+結果は製品ごとに 1 行で出す。1 つでも NG なら、NG の service の journal の末尾を出し、0 以外で終わる。
+
+```
+[suite-init] check: rag backend OK / services 4/4 active / nginx OK
+[suite-init] check: nl2sql backend OK / services 5/5 active / nginx OK
+[suite-init] check: agent backend OK / services 1/1 active / nginx OK
+[suite-init] check: nginx.service active（https://127.0.0.1:443）
+[suite-init] check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答しています）。
+```
+
+- 配備の直後は `sudo tail -n 20 /var/log/suite-init.log` の最後の `check:` の行を見る。
+- 後から確かめるときは `sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh --status`（再起動しない）。
 
 ### ログインの試行の回数の共有（#1173）
 

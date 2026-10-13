@@ -23,6 +23,9 @@ fi
 INIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=scripts/rag-systemd.sh
 source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"
+# backend の起動の待ち方（suite_wait_for_service_health。#1642）は platform の配備の共通の helper（製品は単独では配備しない）。
+# shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-health.sh
+source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-health.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 # リポジトリの所有者（git pull・uv sync・frontend の build を行う）。
@@ -391,6 +394,25 @@ validate_nodejs_24() {
   log "Installed Node.js ${installed_version} with npm ${npm_version}."
 }
 
+# installer（astral.sh の install.sh）は一時の場所に展開してから /usr/local/bin へ移すため、SELinux が有効だと
+# /usr/local/bin/uv の context が bin_t にならない（移動は元の label を保つ）。systemd（init_t）は bin_t でない file を
+# ExecStart で実行できず 203/EXEC（Permission denied）になる（NL2SQL・Agent の unit は uv を ExecStart にする）。
+# 既に入っている場合も戻す（既存の配備は suite-restart.sh の再配備で直る）。#1642
+# UV_BIN_DIR の上書きは test が隔離した場所を使うためのもので、本番では変えない。
+restore_uv_selinux_context() {
+  local bin_dir="${UV_BIN_DIR:-/usr/local/bin}" paths=() path
+  if ! command -v selinuxenabled >/dev/null 2>&1 || ! selinuxenabled; then
+    return 0
+  fi
+  for path in "${bin_dir}/uv" "${bin_dir}/uvx"; do
+    if [ -e "${path}" ]; then
+      paths+=("${path}")
+    fi
+  done
+  if [ "${#paths[@]}" -gt 0 ]; then
+    restorecon -v "${paths[@]}"
+  fi
+}
 
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
@@ -401,6 +423,7 @@ install_uv() {
     chmod 0755 /usr/local/bin/uv
     uv --version
   fi
+  restore_uv_selinux_context
   # 全サービスの venv が使う Python 3.12 を、SERVICE_USER も読める共有の場所に入れる。
   install -d -m 0755 "${UV_PYTHON_INSTALL_DIR}"
   retry_command 3 env UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR}" uv python install "${RAG_PYTHON_VERSION}"
@@ -745,11 +768,9 @@ dump_service_diagnostics() {
 }
 
 # /api/health は OCI / AI の設定前でも 200 を返す（/api/ready は設定が揃うまで 503）。
+# 一定の間隔で待ち、backend が failed になるか再起動を繰り返したら、上限を待たずに status と journal を出す。
 wait_for_backend() {
-  local status=0
-  log "Waiting for backend health endpoint."
-  retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" || status="$?"
-  if [ "${status}" -eq 0 ]; then
+  if suite_wait_for_service_health "${BACKEND_UNIT}" "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"; then
     return 0
   fi
   log "Backend did not become healthy on ${BACKEND_HOST}:${BACKEND_PORT}."
@@ -757,7 +778,7 @@ wait_for_backend() {
     log "The RAG system schema was not initialized; check ADB reachability and ${PLATFORM_ENV_FILE}."
   fi
   dump_service_diagnostics "${BACKEND_UNIT}"
-  return "${status}"
+  return 1
 }
 
 main() {
