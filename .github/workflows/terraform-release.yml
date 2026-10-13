@@ -21,8 +21,16 @@ permissions:
   contents: write
 
 jobs:
+  # PR の CI と同じ配備の検証（各製品の init_script.sh・Terraform の fmt / validate / 契約・platform/deploy。#1592）。
+  verify:
+    name: Suite / Deploy
+    permissions:
+      contents: read
+    uses: ./.github/workflows/suite-deploy.yml
+
   package:
     name: Package and publish
+    needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -57,32 +65,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "1.5.7"
-
-      # stack が cloud-init から呼ぶ各製品の init_script.sh を検証する。
-      - name: Test deployment scripts
-        working-directory: .
-        run: |
-          bash -n terraform/stack/extract_wallet.sh
-          for product in rag nl2sql agent; do
-            bash -n "$product/init_script.sh"
-            echo "::group::$product/scripts/tests/init-script-deployment.test.sh"
-            (cd "$product" && bash scripts/tests/init-script-deployment.test.sh)
-            echo "::endgroup::"
-          done
-
-      - name: Format check
-        run: terraform fmt -check -recursive stack
-
-      - name: Validate Terraform
-        working-directory: terraform/stack
-        run: |
-          terraform init -backend=false
-          terraform validate
-
+      # init_script.sh・fmt・validate の検証は verify（suite-deploy.yml）が行う。ここは公開する zip を作って確かめる。
       - name: Build Terraform stack package
         run: python scripts/package_stack.py
 

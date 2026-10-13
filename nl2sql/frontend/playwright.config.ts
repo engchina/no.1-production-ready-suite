@@ -2,13 +2,45 @@ import { defineConfig, devices } from "@playwright/test";
 
 import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+import {
+  APP_BASE_URL,
+  FIXTURE_BASE_URL,
+  FIXTURE_PORT,
+  PLAYWRIGHT_PORT,
+  USE_PREVIEW_SERVER,
+} from "./tests/e2e/_helpers/web-server";
 
-const playwrightPort = process.env.PLAYWRIGHT_PORT ?? "3101";
-const playwrightBaseUrl = `http://127.0.0.1:${playwrightPort}`;
+// e2e は全 API を page.route で mock する前提(hermetic)。未モック API は
+// Vite 側の 404 middleware（dev サーバと preview）で終端し、実 backend / Oracle 環境へ接続しない。
+// preview の base は FRONTEND_BASE_PATH で変わるので、e2e では空にして `/` で配信する。
+const webServerEnv = { ...process.env, PLAYWRIGHT_HERMETIC_API: "1", FRONTEND_BASE_PATH: "" };
+const devServer = (port: string, url: string) => ({
+  command: `npm run dev -- --host 127.0.0.1 --port ${port}`,
+  url,
+  reuseExistingServer: !process.env.CI,
+  timeout: 120_000,
+  env: webServerEnv,
+});
+// PLAYWRIGHT_WEB_SERVER=preview（PR の CI。#1583）は画面を vite build の成果物の vite preview で配信し、
+// `tests/fixtures/*.tsx` を描く spec のために dev server も起動する（tests/e2e/_helpers/web-server.ts）。
+// build の成果物は配備用の dist/ と分ける（node_modules の下なので commit されない）。
+const previewOutDir = "node_modules/.e2e-preview";
+const webServer = USE_PREVIEW_SERVER
+  ? [
+      {
+        command: `npx vite build --outDir ${previewOutDir} --emptyOutDir --logLevel warn && npx vite preview --outDir ${previewOutDir} --host 127.0.0.1 --port ${PLAYWRIGHT_PORT} --strictPort`,
+        url: APP_BASE_URL,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+        env: webServerEnv,
+      },
+      devServer(FIXTURE_PORT, FIXTURE_BASE_URL),
+    ]
+  : devServer(PLAYWRIGHT_PORT, APP_BASE_URL);
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  // 対象の dev サーバ（再利用したものを含む）が hermetic であることを確認してから開始し、
+  // 対象の dev サーバ・preview（再利用したものを含む）が hermetic であることを確認してから開始し、
   // 実行前後で利用者の実環境の設定ファイルが変わっていないことを検査する。
   globalSetup: "./tests/e2e/global-setup.ts",
   timeout: 30_000,
@@ -28,18 +60,10 @@ export default defineConfig({
     ? [["github"], ["dot"], ["json", { outputFile: "playwright-report/results.json" }]]
     : "list",
   use: {
-    baseURL: playwrightBaseUrl,
+    baseURL: APP_BASE_URL,
     trace: "retain-on-failure",
   },
-  webServer: {
-    command: `npm run dev -- --host 127.0.0.1 --port ${playwrightPort}`,
-    url: playwrightBaseUrl,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    // e2e は全 API を page.route で mock する前提(hermetic)。未モック API は
-    // Vite 側の 404 middleware で終端し、実 backend / Oracle 環境へ接続しない。
-    env: { ...process.env, PLAYWRIGHT_HERMETIC_API: "1" },
-  },
+  webServer,
   projects: [
     {
       name: "desktop",

@@ -415,10 +415,12 @@ variable "instance_boot_volume_vpus" {
   }
 }
 
+# Compute の OS は Oracle Linux 9（platform image の Oracle-Linux-9.8-2026.09.18-0）。OCID は東京・大阪で固定する（#1611）。
+# 配備のスクリプト（platform/deploy・各製品の init_script.sh）は Oracle Linux 9 の dnf・firewalld・SELinux を前提にする。
 variable "instance_image_source_id" {
-  description = "Ubuntu image OCID of the Compute instance."
+  description = "Oracle Linux 9 image OCID of the Compute instance."
   type        = string
-  default     = "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
+  default     = "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
 }
 
 variable "subnet_ai_subnet_id" {
@@ -428,7 +430,7 @@ variable "subnet_ai_subnet_id" {
 }
 
 variable "ssh_authorized_keys" {
-  description = "SSH public keys authorized for the ubuntu user."
+  description = "SSH public keys authorized for the opc user."
   type        = string
   default     = ""
 }

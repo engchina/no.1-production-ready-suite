@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath, URL } from "node:url";
 
 const MISSING_BACKEND_URL_WARNING =
@@ -13,6 +14,20 @@ const MISSING_BACKEND_URL_WARNING =
 export function resolveFrontendBasePath(value: string | undefined): string {
   const trimmed = (value ?? "").trim().replace(/^\/+|\/+$/g, "");
   return trimmed ? `/${trimmed}/` : "/";
+}
+
+/** hermetic の e2e で、未モックの /api を 404 で終端する middleware（dev サーバと preview で共有する）。 */
+function hermeticApiNotFound(req: IncomingMessage, res: ServerResponse) {
+  const path = `/api${req.url ?? ""}`;
+  res.statusCode = 404;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(
+    JSON.stringify({
+      data: null,
+      error_messages: [`e2e unmocked API: ${req.method ?? "GET"} ${path}`],
+      warning_messages: [],
+    })
+  );
 }
 
 export default defineConfig(({ command, isPreview }) => {
@@ -39,18 +54,13 @@ export default defineConfig(({ command, isPreview }) => {
         configureServer(server) {
           if (!hermeticApi) return;
           if (warnMissingBackendUrl) server.config.logger.warn(MISSING_BACKEND_URL_WARNING);
-          server.middlewares.use("/api", (req, res) => {
-            const path = `/api${req.url ?? ""}`;
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "application/json; charset=utf-8");
-            res.end(
-              JSON.stringify({
-                data: null,
-                error_messages: [`e2e unmocked API: ${req.method ?? "GET"} ${path}`],
-                warning_messages: [],
-              })
-            );
-          });
+          server.middlewares.use("/api", hermeticApiNotFound);
+        },
+        // PR の CI の e2e は build の成果物を `vite preview` で配信する（#1583）。preview でも同じく終端する。
+        configurePreviewServer(server) {
+          if (!hermeticApi) return;
+          if (warnMissingBackendUrl) server.config.logger.warn(MISSING_BACKEND_URL_WARNING);
+          server.middlewares.use("/api", hermeticApiNotFound);
         },
       },
     ],

@@ -696,9 +696,10 @@ def test_search_scalar_prefilters_are_applied_to_retrieval() -> None:
     assert {c["document_id"] for c in _search({"content_kinds": "text"})} == {document_id}
     assert _search({"content_kinds": "table"}) == []
 
-    # page_number range: text には page_number metadata が無いため、scalar 述語は NULL を
-    # 除外する（SQL 標準挙動）。ページ番号で絞り込むと候補から外れる。
-    assert _search({"page_number_min": "1"}) == []
+    # page_number range: text の chunk も 1 ページ目（page_start=1。test_upload_ingest_search_flow）
+    # として保存されるので、1 以上は一致し、2 以上は除外される（#1595 で実 Oracle で確かめた）。
+    assert {c["document_id"] for c in _search({"page_number_min": "1"})} == {document_id}
+    assert _search({"page_number_min": "2"}) == []
 
     # uploaded_at 日付 range: 過去〜未来は一致、過去で閉じると除外。
     assert {

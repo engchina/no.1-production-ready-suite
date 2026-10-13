@@ -113,7 +113,7 @@ OCI Compute（Terraform で配備した環境）での手順を示す。パス�
 4. `platform/.env` を backend の実行ユーザー所有・`0600` にする。
 
    ```bash
-   sudo chown ubuntu:ubuntu <suite>/platform/.env && sudo chmod 0600 <suite>/platform/.env
+   sudo chown opc:opc <suite>/platform/.env && sudo chmod 0600 <suite>/platform/.env
    ```
 
 5. `nl2sql/scripts/update-after-pull.sh` を実行して再配備・再起動する（`platform/.env` の存在・権限と

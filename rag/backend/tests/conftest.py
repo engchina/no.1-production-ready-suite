@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import fcntl
 import gc
+import os
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
@@ -166,6 +167,18 @@ async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
     raise CommandUnavailableError(f"{argv[0]} はテストでは実行しません。")
 
 
+def _skip_or_fail_oracle(reason: str) -> None:
+    """実 Oracle を使えないときは skip する。`RAG_TEST_REQUIRE_ORACLE=1` なら失敗にする。
+
+    実 Oracle の結合テストの CI（oracle-integration.yml）は DB を用意して実行するので、
+    届かない・準備が足りないのは CI の壊れ。skip のまま成功にすると、テストが壊れたまま
+    気づかれない（#1595）。
+    """
+    if os.environ.get("RAG_TEST_REQUIRE_ORACLE") == "1":
+        pytest.fail(f"RAG_TEST_REQUIRE_ORACLE=1 のため失敗にします: {reason}", pytrace=False)
+    pytest.skip(reason)
+
+
 @pytest.fixture
 def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """実 Oracle AI Database を使う統合テスト用。未到達なら skip し、作成行を後始末する。
@@ -185,10 +198,10 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     from tests.support import TEST_REQUEST_HEADERS
 
     if not _oracle_test_db.db_available():
-        pytest.skip("実 Oracle AI Database に未到達のため統合テストをスキップします。")
+        _skip_or_fail_oracle("実 Oracle AI Database に未到達のため統合テストをスキップします。")
     skip_reason = _oracle_test_db.schema_skip_reason()
     if skip_reason is not None:
-        pytest.skip(skip_reason)
+        _skip_or_fail_oracle(skip_reason)
     settings = get_settings()
     # 実 Oracle の接続の項目だけを入れる。手元の model-settings.json（文書解析の既定など）は読まない
     # （テストの既定値を上書きして CI と違う経路を通るため。AI は決定論スタブに差し替える。#483）。

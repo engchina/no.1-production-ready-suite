@@ -3,6 +3,8 @@
 # ソース管理、.env の内容、Wallet の内容、systemd unit、Nginx 設定は変更しない。
 set -Eeuo pipefail
 
+# uv と Node.js の公式 tarball は /usr/local/bin にある（Oracle Linux の sudo の secure_path には無い。#1611）。
+PATH="${PATH}:/usr/local/bin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -17,8 +19,8 @@ FRONTEND_DIR="${APP_REPO_DIR}/frontend"
 PLATFORM_REPO_DIR="${PLATFORM_REPO_DIR:-${SUITE_REPO_DIR}/platform}"
 # 3製品共通の設定（PLATFORM_*。Wallet の場所を含む）は platform の共通 .env（#211）。
 PLATFORM_ENV_FILE="${PLATFORM_REPO_DIR}/.env"
-APP_USER="${APP_USER:-ubuntu}"
-APP_GROUP="${APP_GROUP:-ubuntu}"
+APP_USER="${APP_USER:-opc}"
+APP_GROUP="${APP_GROUP:-opc}"
 WALLET_DIR="${WALLET_DIR:-${APP_ROOT}/wallet}"
 RECOVERY_ROOT="${RECOVERY_ROOT:-${APP_ROOT}/recovery}"
 UPDATE_LOG_PATH="${UPDATE_LOG_PATH:-/var/log/nl2sql-update.log}"
@@ -126,7 +128,8 @@ run_as_app_user() {
     return
   fi
   if running_as_root; then
-    sudo -n -H -u "${APP_USER}" -- "$@"
+    # Oracle Linux の sudo の secure_path は /usr/local/bin（uv・Node.js の公式 tarball）を含まないため、PATH を渡す。
+    sudo -n -H -u "${APP_USER}" -- env PATH="${PATH}" "$@"
     return
   fi
   fail "${APP_USER} ユーザーとして実行できません。"
@@ -174,10 +177,10 @@ Usage: ./scripts/update-after-pull.sh [--check | --repair-only]
 --repair-only  build と frontend 公開を省略し、OCI 修復、migration、再起動だけを行います。
 
 このスクリプト自身は Git 操作、schema --recreate、DeepSec foundation 適用を行いません。
-ubuntu 実行時は sudo -n のみを使用し、パスワード入力を要求しません。
+opc 実行時は sudo -n のみを使用し、パスワード入力を要求しません。
 update / --repair-only は passwordless sudo があれば自動的に root で再実行します。
 passwordless sudo がない環境では sudo ./scripts/update-after-pull.sh で起動してください。
-root 起動時も build、依存同期、database CLI は ubuntu へ降権して実行します。
+root 起動時も build、依存同期、database CLI は opc へ降権して実行します。
 
 Environment overrides:
   PLATFORM_REPO_DIR             共有 platform directory (default: suite の platform/)
@@ -250,8 +253,8 @@ service_exists() {
 validate_fixed_oci_layout() {
   local configured_wallet resolved_root
   if ! test_mode_enabled; then
-    [ "${APP_USER}" = "ubuntu" ] || fail "実行ユーザー設定は ubuntu である必要があります。"
-    [ "${APP_GROUP}" = "ubuntu" ] || fail "実行グループ設定は ubuntu である必要があります。"
+    [ "${APP_USER}" = "opc" ] || fail "実行ユーザー設定は opc である必要があります。"
+    [ "${APP_GROUP}" = "opc" ] || fail "実行グループ設定は opc である必要があります。"
     [ "${APP_ROOT}" = "/u01/aipoc" ] || fail "APP_ROOT は /u01/aipoc 固定です。"
     [ "${APP_REPO_DIR}" = "/u01/aipoc/no.1-production-ready-suite/nl2sql" ] || \
       fail "アプリケーションパスが OCI の固定パスではありません。"

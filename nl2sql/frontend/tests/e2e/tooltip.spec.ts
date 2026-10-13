@@ -1,4 +1,9 @@
 import { expect, test, type Locator, type Page } from "./_helpers/test";
+import { FIXTURE_BASE_URL } from "./_helpers/web-server";
+
+// `tests/fixtures/*.tsx` を `/@react-refresh` と一緒に読み込むので、dev server の変換が要る。preview（PR の CI）でも
+// fixture 用の dev server を開く（tests/e2e/_helpers/web-server.ts。#1583）。
+test.use({ baseURL: FIXTURE_BASE_URL });
 
 // #372: 共有の Tooltip。アイコンだけの Button は既定で aria-label と同じ文言を、ホバー（遅延あり）と
 // キーボードのフォーカス（すぐ）で出す。Escape で閉じ、吹き出しへポインタを移しても消えない（WCAG 1.4.13）。

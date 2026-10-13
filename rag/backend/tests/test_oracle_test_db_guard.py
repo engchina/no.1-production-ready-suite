@@ -80,8 +80,34 @@ def test_ensure_schema_applies_non_destructive_migrations(
 def test_oracle_db_fixture_skips_with_reason_when_schema_was_not_updated(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
+    # 実 Oracle の結合テストの CI（RAG_TEST_REQUIRE_ORACLE=1）でも、既定の skip を確かめる。
+    monkeypatch.delenv("RAG_TEST_REQUIRE_ORACLE", raising=False)
     monkeypatch.setattr(_oracle_test_db, "db_available", lambda: True)
     monkeypatch.setattr(_oracle_test_db, "_schema_skip_reason", "理由のテスト")
 
     with pytest.raises(pytest.skip.Exception, match="理由のテスト"):
+        request.getfixturevalue("oracle_db")
+
+
+@pytest.mark.parametrize(
+    ("available", "schema_reason", "message"),
+    [
+        (False, None, "未到達"),
+        (True, "理由のテスト", "理由のテスト"),
+    ],
+    ids=["unreachable", "schema_not_updated"],
+)
+def test_oracle_db_fixture_fails_instead_of_skip_when_oracle_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    available: bool,
+    schema_reason: str | None,
+    message: str,
+) -> None:
+    """RAG_TEST_REQUIRE_ORACLE=1 では、実 Oracle を使えないとき skip せず失敗にする（#1595）。"""
+    monkeypatch.setenv("RAG_TEST_REQUIRE_ORACLE", "1")
+    monkeypatch.setattr(_oracle_test_db, "db_available", lambda: available)
+    monkeypatch.setattr(_oracle_test_db, "_schema_skip_reason", schema_reason)
+
+    with pytest.raises(pytest.fail.Exception, match=message):
         request.getfixturevalue("oracle_db")

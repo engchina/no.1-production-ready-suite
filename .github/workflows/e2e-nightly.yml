@@ -11,7 +11,7 @@ name: E2E Nightly
 
 on:
   schedule:
-    - cron: "0 18 * * *" # 03:00 JST
+    - cron: "7 18 * * *" # 03:07 JST（整点は遅れやすいのでずらす。#1595）
   workflow_dispatch:
     inputs:
       workers:

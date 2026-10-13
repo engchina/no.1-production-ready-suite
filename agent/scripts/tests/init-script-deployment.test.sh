@@ -17,9 +17,7 @@ prepare_case() {
   mkdir -p \
     "${case_dir}/app/props" \
     "${case_dir}/app/no.1-production-ready-suite/agent/backend" \
-    "${case_dir}/units" \
-    "${case_dir}/sites-available" \
-    "${case_dir}/sites-enabled"
+    "${case_dir}/units"
   export APP_ROOT="${case_dir}/app"
   export AGENT_INIT_TEST_MODE=true
   export SYSTEMD_UNIT_DIR="${case_dir}/units"
@@ -118,7 +116,7 @@ run_systemd_case
 unit="${TEST_TMP_DIR}/systemd/units/production-ready-agent-backend.service"
 test -f "${unit}" || fail "backend unit が作成されていない"
 grep -Fq -- '--bind 127.0.0.1:8020 --workers 1' "${unit}" || fail "backend の bind/worker 数が想定と異なる"
-grep -Fq 'User=ubuntu' "${unit}" || fail "backend が ubuntu user で動かない"
+grep -Fq 'User=opc' "${unit}" || fail "backend が opc user で動かない"
 grep -q '^enable production-ready-agent-backend.service$' "${TEST_TMP_DIR}/systemd/systemctl.log" \
   || fail "backend unit が enable されていない"
 if grep -q 'dispatcher' "${unit}"; then
