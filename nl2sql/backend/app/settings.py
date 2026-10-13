@@ -67,7 +67,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_client_lib_dir: str = ""
     oracle_wallet_dir: str = "/u01/aipoc/wallet"
     oracle_wallet_password: str = ""
-    oracle_deepsec_enabled: bool = True
+    oracle_deepsec_enabled: bool = False
     oracle_deepsec_data_user: str = "DEEPSEC_DATA_USER"
     oracle_deepsec_data_user_password: str = ""
     oracle_adb_ocid: str = ""
