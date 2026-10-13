@@ -21,6 +21,7 @@ from app import settings as app_settings_module
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import (
     AdminFeedbackReviewRequest,
+    AgentConversationCreateRequest,
     AgentTeamRunRequest,
     AllowedObjects,
     ExecuteRequest,
@@ -95,6 +96,7 @@ class _FakeOracleDb:
         self.feedback_vector_rows: list[tuple[object, ...]] = []
         self.select_ai_feedback_rows: list[tuple[object, ...]] = []
         self.select_ai_feedback_missing = False
+        self.select_ai_feedback_error = ""
         self.unsupported_agent_runtime = False
         self.run_team_signature_failures = 0
         self.run_team_calls = 0
@@ -190,7 +192,9 @@ class _FakeOracleCursor:
         ):
             if self.db.select_ai_feedback_missing:
                 raise RuntimeError("ORA-00942: table or view does not exist")
-        elif "DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in normalized_sql:
+            if self.db.select_ai_feedback_error and "DBMS_CLOUD_AI.FEEDBACK" in normalized_sql:
+                raise RuntimeError(self.db.select_ai_feedback_error)
+        elif "DBMS_CLOUD_AI.CREATE_CONVERSATION" in normalized_sql:
             if self.db.create_conversation_error:
                 raise RuntimeError(self.db.create_conversation_error)
             self._row = (self.db.agent_conversation_id,)
@@ -4059,6 +4063,69 @@ def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
     assert fake_db.commits >= 2
 
 
+def test_service_delete_select_ai_feedback_reports_missing_entry() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.select_ai_feedback_error = "ORA-20000: No matching feedback record for deletion."
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    deleted = service.delete_select_ai_feedback(
+        SelectAiFeedbackDeleteRequest(
+            profile_name="default",
+            sql_text="select ai showsql 登録していない質問",
+        )
+    )
+
+    assert deleted.executed is False
+    assert deleted.status == "not_found"
+    assert "すでに削除されています" in deleted.warnings[0]
+
+
+def test_service_add_select_ai_feedback_explains_unmatched_sql() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.select_ai_feedback_error = (
+        "ORA-20000: No matching SQL statement found for the SQL_ID or SQL text."
+    )
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    added = service.add_select_ai_feedback(
+        SelectAiFeedbackAddRequest(
+            profile_id="default",
+            question="請求金額を確認したい",
+            feedback_type="negative",
+            response="SELECT TOTAL_AMOUNT FROM INVOICES",
+        )
+    )
+
+    assert added.executed is False
+    assert added.status == "error"
+    assert "V$MAPPED_SQL" in added.warnings[0]
+
+
+def test_oracle_adapter_list_agent_conversations_reads_prompt_response_and_team() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    assert adapter.list_agent_conversations(team_name="NL2SQL_DEFAULT_TEAM", limit=5) == []
+
+    # USER_CLOUD_AI_CONVERSATION_PROMPTS には RESPONSE・TEAM_NAME の列が無い（#1681）。
+    sql = next(sql for sql in fake_db.executed if "USER_CLOUD_AI_CONVERSATION_PROMPTS" in sql)
+    assert "p.PROMPT_RESPONSE" in sql
+    assert "p.PROMPT_ACTION = 'AGENT'" in sql
+    assert "USER_AI_AGENT_TEAM_HISTORY" in sql
+    assert " RESPONSE," not in sql
+    assert fake_db.executed_params[-1] == {"limit": 5, "team_name": "NL2SQL_DEFAULT_TEAM"}
+
+
+def test_oracle_adapter_agent_privilege_check_includes_create_conversation() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    checks = adapter.check_select_ai_agent_privileges()
+
+    assert "dbms_cloud_ai_create_conversation" in [check["name"] for check in checks]
+    assert any("PROCEDURE_NAME = 'CREATE_CONVERSATION'" in sql for sql in fake_db.executed)
+
+
 def test_oracle_adapter_materializes_select_ai_feedback_lobs_before_disconnect() -> None:
     fake_db = _FakeOracleDb()
     fake_db.select_ai_feedback_rows = [
@@ -4364,17 +4431,26 @@ def test_oracle_adapter_drop_select_ai_agent_assets_executes_best_effort_drops()
     assert any("DBMS_SQL_TRANSLATOR.DROP_PROFILE" in sql for sql in fake_db.executed)
 
 
-def test_oracle_adapter_wraps_unsupported_select_ai_agent_runtime() -> None:
+def test_oracle_adapter_create_agent_conversation_uses_dbms_cloud_ai() -> None:
     fake_db = _FakeOracleDb()
-    fake_db.unsupported_agent_runtime = True
     adapter = _FakeRuntimeOracleAdapter(fake_db)
 
-    try:
+    conversation_id = adapter.create_agent_conversation()
+
+    # 会話の API は DBMS_CLOUD_AI にあり、DBMS_CLOUD_AI_AGENT には無い（#1681）。
+    assert conversation_id == "conversation-001"
+    assert fake_db.executed == ["SELECT DBMS_CLOUD_AI.CREATE_CONVERSATION() FROM DUAL"]
+
+
+def test_oracle_adapter_wraps_missing_create_conversation() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_conversation_error = (
+        'ORA-00904: "DBMS_CLOUD_AI"."CREATE_CONVERSATION": invalid identifier'
+    )
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    with pytest.raises(OracleAdapterError, match="DBMS_CLOUD_AI.CREATE_CONVERSATION を使えません"):
         adapter.create_agent_conversation()
-    except RuntimeError as exc:
-        assert "Select AI Agent runtime API" in str(exc)
-    else:  # pragma: no cover - defensive assertion branch
-        raise AssertionError("unsupported Select AI Agent runtime must be wrapped")
 
 
 def test_oracle_adapter_run_select_ai_agent_team_uses_conversation() -> None:
@@ -4388,9 +4464,40 @@ def test_oracle_adapter_run_select_ai_agent_team_uses_conversation() -> None:
 
     assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
     assert conversation_id == "conversation-001"
-    assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
-    assert any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
-    assert any("conversation_id => :conversation_id" in sql for sql in fake_db.executed)
+    assert "SELECT DBMS_CLOUD_AI.CREATE_CONVERSATION() FROM DUAL" in fake_db.executed
+    run_team = [
+        (sql, params)
+        for sql, params in zip(fake_db.executed, fake_db.executed_params, strict=True)
+        if "DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql
+    ]
+    # 公式の文書の引数 (team_name, user_prompt, params) で 1 回だけ呼び、
+    # conversation_id は params の JSON に入れる。
+    assert len(run_team) == 1
+    run_team_sql, run_team_params = run_team[0]
+    assert "conversation_id =>" not in run_team_sql
+    assert "params => :params" in run_team_sql
+    assert run_team_params is not None
+    assert run_team_params["params"] == '{"conversation_id":"conversation-001"}'
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
+def test_oracle_adapter_run_select_ai_agent_team_continues_given_conversation() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql, conversation_id = adapter.run_select_ai_agent_team(
+        team_name="NL2SQL_DEFAULT_TEAM",
+        question="そのうち東日本だけにして",
+        conversation_id="5DB53170-76E5-8A91-E063-EE17000AACE1",
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert conversation_id == "5DB53170-76E5-8A91-E063-EE17000AACE1"
+    assert not any("CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+    assert any(
+        (params or {}).get("params") == '{"conversation_id":"5DB53170-76E5-8A91-E063-EE17000AACE1"}'
+        for params in fake_db.executed_params
+    )
 
 
 def test_oracle_adapter_run_select_ai_agent_team_applies_call_timeout_override() -> None:
@@ -4408,23 +4515,20 @@ def test_oracle_adapter_run_select_ai_agent_team_applies_call_timeout_override()
     assert fake_db.call_timeouts == [300000, 300000]
 
 
-def test_oracle_adapter_run_select_ai_agent_team_falls_back_to_positional_signature() -> None:
+def test_oracle_adapter_run_select_ai_agent_team_reports_signature_error_without_retry() -> None:
     fake_db = _FakeOracleDb()
-    fake_db.run_team_signature_failures = 2
+    fake_db.run_team_signature_failures = 1
     adapter = _FakeRuntimeOracleAdapter(fake_db)
 
-    sql, conversation_id = adapter.run_select_ai_agent_team(
-        team_name="NL2SQL_DEFAULT_TEAM",
-        question="請求金額を確認したい",
-    )
+    with pytest.raises(OracleAdapterError, match="Select AI Agent runtime API"):
+        adapter.run_select_ai_agent_team(
+            team_name="NL2SQL_DEFAULT_TEAM",
+            tool_name="NL2SQL_DEFAULT_TOOL",
+            question="請求金額を確認したい",
+        )
 
-    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
-    assert conversation_id == "conversation-001"
-    assert fake_db.run_team_calls == 3
-    assert any(
-        "DBMS_CLOUD_AI_AGENT.RUN_TEAM(:team_name, :user_prompt, :params)" in sql
-        for sql in fake_db.executed
-    )
+    assert fake_db.run_team_calls == 1
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
 
 
 def test_oracle_adapter_run_select_ai_agent_team_uses_explicit_tool_on_profile_loss() -> None:
@@ -4443,22 +4547,22 @@ def test_oracle_adapter_run_select_ai_agent_team_uses_explicit_tool_on_profile_l
     assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
 
 
-def test_oracle_adapter_run_select_ai_agent_team_uses_tool_when_conversation_unavailable() -> None:
+def test_oracle_adapter_run_select_ai_agent_team_fails_when_conversation_unavailable() -> None:
     fake_db = _FakeOracleDb()
     fake_db.create_conversation_error = "ORA-01031: insufficient privileges"
     adapter = _FakeRuntimeOracleAdapter(fake_db)
 
-    sql, conversation_id = adapter.run_select_ai_agent_team(
-        team_name="NL2SQL_DEFAULT_TEAM",
-        tool_name="NL2SQL_DEFAULT_TOOL",
-        question="請求金額を確認したい",
-    )
+    # 会話を作れないとき、黙って RUN_TOOL に切り替えない（#1681）。
+    with pytest.raises(OracleAdapterError, match="会話（conversation_id）を作成できませんでした"):
+        adapter.run_select_ai_agent_team(
+            team_name="NL2SQL_DEFAULT_TEAM",
+            tool_name="NL2SQL_DEFAULT_TOOL",
+            question="請求金額を確認したい",
+        )
 
-    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
-    assert conversation_id == "run_tool:NL2SQL_DEFAULT_TOOL"
-    assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+    assert any("DBMS_CLOUD_AI.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
     assert not any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
-    assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
 
 
 def test_oracle_adapter_run_select_ai_agent_team_rejects_empty_conversation_without_tool() -> None:
@@ -4472,18 +4576,17 @@ def test_oracle_adapter_run_select_ai_agent_team_rejects_empty_conversation_with
             question="請求金額を確認したい",
         )
 
-    assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+    assert any("DBMS_CLOUD_AI.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
     assert not any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
     assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
 
 
-def test_service_run_select_ai_agent_team_does_not_deterministic_fallback_on_oracle_error() -> None:
+def test_service_run_select_ai_agent_team_does_not_fallback_when_conversation_fails() -> None:
     fake_db = _FakeOracleDb()
     fake_db.create_conversation_error = "ORA-01031: insufficient privileges"
-    fake_db.run_tool_error = "ORA-20000: tool not ready"
     service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
 
-    with pytest.raises(OracleAdapterError, match="tool not ready"):
+    with pytest.raises(OracleAdapterError, match="insufficient privileges"):
         service.run_select_ai_agent_team(
             AgentTeamRunRequest(
                 profile_id="default",
@@ -4492,7 +4595,53 @@ def test_service_run_select_ai_agent_team_does_not_deterministic_fallback_on_ora
             )
         )
 
-    assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
+def test_service_run_select_ai_agent_team_passes_request_conversation_id() -> None:
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    result = service.run_select_ai_agent_team(
+        AgentTeamRunRequest(
+            prompt="請求金額を確認したい",
+            conversation_id=" conversation-777 ",
+        )
+    )
+
+    assert result.conversation_id == "conversation-777"
+    assert result.engine_meta["agent_run_mode"] == "run_team"
+    assert result.warnings == []
+    assert not any("CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+
+
+def test_service_run_select_ai_agent_team_records_run_tool_fallback() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.run_team_profile_loss = True
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    result = service.run_select_ai_agent_team(AgentTeamRunRequest(prompt="請求金額を確認したい"))
+
+    assert result.conversation_id == "run_tool:NL2SQL_DEFAULT_TOOL"
+    assert result.engine_meta["agent_run_mode"] == "run_tool"
+    assert any("RUN_TOOL" in warning for warning in result.warnings)
+
+
+def test_service_create_select_ai_agent_conversation_does_not_return_fake_id_on_oracle() -> None:
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    created = service.create_select_ai_agent_conversation(AgentConversationCreateRequest())
+
+    assert created.conversation_id == "conversation-001"
+    assert created.runtime == "oracle"
+
+    fake_db.create_conversation_error = (
+        'ORA-00904: "DBMS_CLOUD_AI"."CREATE_CONVERSATION": invalid identifier'
+    )
+    # RUN_TEAM は CREATE_CONVERSATION で作っていない id を受け付けないため、偽の id を返さない。
+    with pytest.raises(OracleAdapterError, match="CREATE_CONVERSATION"):
+        service.create_select_ai_agent_conversation(AgentConversationCreateRequest())
 
 
 def test_service_preview_select_ai_agent_returns_oracle_conversation_meta() -> None:
@@ -4507,22 +4656,35 @@ def test_service_preview_select_ai_agent_returns_oracle_conversation_meta() -> N
     assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
     assert preview.engine_meta["runtime"] == "oracle"
     assert preview.engine_meta["conversation_id"] == "conversation-001"
+    assert preview.engine_meta["agent_run_mode"] == "run_team"
+    assert preview.fallback_reason == ""
 
 
-def test_service_preview_select_ai_agent_uses_tool_when_conversation_unavailable() -> None:
+def test_service_preview_select_ai_agent_fails_when_conversation_unavailable() -> None:
     fake_db = _FakeOracleDb()
     fake_db.create_conversation_error = "ORA-01031: insufficient privileges"
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    with pytest.raises(RuntimeError, match="会話（conversation_id）を作成できませんでした"):
+        service.preview(
+            PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI_AGENT)
+        )
+
+    assert not any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
+def test_service_preview_select_ai_agent_records_run_tool_fallback() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.run_team_profile_loss = True
     service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
 
     preview = service.preview(
         PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI_AGENT)
     )
 
-    assert preview.engine == Nl2SqlEngine.SELECT_AI_AGENT
     assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
-    assert preview.engine_meta["runtime"] == "oracle"
-    assert preview.engine_meta["conversation_id"] == "run_tool:NL2SQL_DEFAULT_TOOL"
-    assert preview.fallback_reason == ""
+    assert preview.engine_meta["agent_run_mode"] == "run_tool"
+    assert "RUN_TOOL" in preview.fallback_reason
 
 
 def test_service_preview_explicit_select_ai_agent_does_not_deterministic_fallback() -> None:
