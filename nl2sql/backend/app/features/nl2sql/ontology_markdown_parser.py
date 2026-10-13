@@ -3,13 +3,14 @@
 公開前の確認は、Markdown を LLM で解析し直すと、同じ表を指す概念を「未解決」にしたり、行の対応を
 落としたりして、毎回結果が変わる（公開が止まる）。下書きは `render_concepts` の決まった形
 （`#### 種類` → `##### 表示名 (`API 名`)` → `- 項目: 値`）なので、その形の行はここで読む。
-読めない行（自由に書き足した文・複雑な項目）が 1 行でもあれば `None` を返し、呼出元は LLM の解析に
-任せる。
+読めない行（自由に書き足した文・複雑な項目）は `parse_markdown_rules` が行番号で返し、呼出元は
+その行だけを LLM で解析する（#1735）。
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
@@ -102,21 +103,42 @@ def _value(field: str, text: str, defaults: dict[str, Any]) -> Any:
     return _VALUES.get(text, text) if field in {"data_type", "cardinality"} else text
 
 
-def parse_rendered_markdown(markdown: str) -> dict[str, Any] | None:
-    """`render_concepts` の形の Markdown を、`MarkdownExtraction` と同じ形の dict にする。
+@dataclass
+class RuleParse:
+    """決まった形で読めた定義・行と、読めなかった行（自由な行）の行番号（#1735）。"""
 
-    1 行でも読めなければ `None`（呼出元が LLM で解析する）。
+    definitions: list[BusinessDefinition] = field(default_factory=list)
+    lines: list[dict[str, Any]] = field(default_factory=list)
+    free_lines: list[int] = field(default_factory=list)
+
+    def extraction(self) -> dict[str, Any]:
+        """`MarkdownExtraction` と同じ形の dict（自由な行は含まない）。"""
+
+        return {
+            "definitions": list(self.definitions),
+            "coverage": [],
+            "lines": list(self.lines),
+            "issues_ja": [],
+        }
+
+
+def parse_markdown_rules(markdown: str) -> RuleParse:
+    """`render_concepts` の形の部分を決定論で読み、読めなかった行を `free_lines` に返す（#1735）。
+
+    決まった形の部分は常にここで読む（自由な行が混じっても、下書き全体を LLM に渡さない）。
+    読めない項目の行は、その行だけを自由な行にして定義の残りの項目は読む。定義として成り立たない
+    見出しの塊（必須の項目が無いなど）は、塊の全部の行を自由な行にする。
     """
 
-    definitions: list[BusinessDefinition] = []
-    lines: list[dict[str, Any]] = []
+    result = RuleParse()
     section, kind = "", ""
     current: dict[str, Any] | None = None
+    block: list[int] = []
 
-    def flush(end: int) -> bool:
-        nonlocal current
+    def flush(end: int) -> None:
+        nonlocal current, block
         if current is None:
-            return True
+            return
         start = current.pop("_start")
         current["evidence"] = [
             DefinitionEvidence(
@@ -129,66 +151,50 @@ def parse_rendered_markdown(markdown: str) -> dict[str, Any] | None:
         try:
             definition = DEFINITIONS.validate_python([current])[0]
         except ValidationError:
-            return False
-        definitions.append(definition)
-        lines.append(
-            dict(
-                start_line=start,
-                end_line=end,
-                disposition="definition",
-                definition_api_names=[definition.api_name],
+            result.free_lines.extend(block)
+        else:
+            result.definitions.append(definition)
+            result.lines.append(
+                dict(
+                    start_line=start,
+                    end_line=end,
+                    disposition="definition",
+                    definition_api_names=[definition.api_name],
+                )
             )
-        )
-        current = None
-        return True
+        current, block = None, []
 
-    rows = markdown.splitlines()
+    def context(number: int, reason: str) -> None:
+        result.lines.append(
+            dict(start_line=number, end_line=number, disposition="context", reason_ja=reason)
+        )
+
     last = 0
-    for number, raw in enumerate(rows, 1):
+    for number, raw in enumerate(markdown.splitlines(), 1):
         line = raw.rstrip()
         if not line.strip():
             continue
         if line.startswith("## "):
-            if not flush(last):
-                return None
+            flush(last)
             section, kind = line[3:].strip(), ""
-            lines.append(
-                dict(
-                    start_line=number,
-                    end_line=number,
-                    disposition="context",
-                    reason_ja="節の見出し",
-                )
-            )
+            context(number, "節の見出し")
         elif section.startswith("Q/A ") and section != CONCEPT_SECTION:
             # Q/A 由来の規則・構造パターンなど、概念の定義の外の節は SQL の生成の文脈として残す。
-            lines.append(
-                dict(
-                    start_line=number,
-                    end_line=number,
-                    disposition="context",
-                    reason_ja="概念の定義の外の節（SQL の生成の文脈）",
-                )
-            )
+            context(number, "概念の定義の外の節（SQL の生成の文脈）")
         elif section != CONCEPT_SECTION:
-            return None  # 概念の節の外の自由な文は LLM で解析する
+            result.free_lines.append(number)
         elif line.startswith("#### "):
-            if not flush(last):
-                return None
+            flush(last)
             kind = _KINDS.get(line[5:].strip(), "")
-            if not kind:
-                return None
-            lines.append(
-                dict(
-                    start_line=number,
-                    end_line=number,
-                    disposition="context",
-                    reason_ja="種類の見出し",
-                )
-            )
+            if kind:
+                context(number, "種類の見出し")
+            else:
+                result.free_lines.append(number)
         elif match := _HEADING.match(line):
-            if not flush(last) or not kind:
-                return None
+            flush(last)
+            if not kind:
+                result.free_lines.append(number)
+                continue
             current = {
                 "kind": kind,
                 "name_ja": match.group("name").strip(),
@@ -197,23 +203,42 @@ def parse_rendered_markdown(markdown: str) -> dict[str, Any] | None:
                 "_start": number,
                 "_heading": line,
             }
+            block = [number]
         elif (match := _ITEM.match(line)) and current is not None:
-            field = _FIELDS.get(match.group("label").strip())
-            if field is None or field in {"kind", "api_name"}:
-                return None
+            block.append(number)
+            field_name = _FIELDS.get(match.group("label").strip())
             defaults = _defaults(kind)
-            if field not in defaults:
-                return None
             try:
-                current[field] = _value(field, match.group("value").strip(), defaults)
+                if field_name is None or field_name in {"kind", "api_name"}:
+                    raise ValueError(match.group("label"))
+                if field_name not in defaults:
+                    raise ValueError(field_name)
+                current[field_name] = _value(field_name, match.group("value").strip(), defaults)
             except ValueError:
-                return None
+                # 読めない項目の行だけを自由な行にする（定義の残りの項目は読む）。
+                result.free_lines.append(number)
+                block.remove(number)
+                continue
         else:
-            return None
+            flush(last)
+            result.free_lines.append(number)
+            continue
         last = number
-    if not flush(last) or not definitions:
+    flush(last)
+    result.free_lines = sorted(set(result.free_lines))
+    return result
+
+
+def parse_rendered_markdown(markdown: str) -> dict[str, Any] | None:
+    """`render_concepts` の形の Markdown を、`MarkdownExtraction` と同じ形の dict にする。
+
+    1 行でも読めなければ `None`。
+    """
+
+    parsed = parse_markdown_rules(markdown)
+    if parsed.free_lines or not parsed.definitions:
         return None
-    return {"definitions": definitions, "coverage": [], "lines": lines, "issues_ja": []}
+    return parsed.extraction()
 
 
 _DEFAULTS: dict[str, dict[str, Any]] = {}

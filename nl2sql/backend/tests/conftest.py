@@ -168,6 +168,24 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "rule_parser: 公開前の確認で、決まった形の Markdown を決定論で読む経路を使う（#1729）",
     )
+    config.addinivalue_line(
+        "markers",
+        "parse_cache: 公開前の確認で、自由な行の LLM の解析の結果を使い回す（#1735）",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _markdown_parse_cache(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """既定のテストは、スタブの LLM の応答を変えて解析し直すため、解析の結果を使い回さない。
+
+    使い回し（同じ Markdown と schema なら同じ結果。#1735）は `@pytest.mark.parse_cache` を
+    付けたテストで確かめる。
+    """
+    if request.node.get_closest_marker("parse_cache"):
+        return
+    from app.features.nl2sql.ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+    monkeypatch.setattr(MarkdownOntologyWorkspace, "_cached_free_lines_parse", lambda *_args: None)
 
 
 @pytest.fixture(autouse=True)
@@ -181,4 +199,11 @@ def _markdown_rule_parser(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
         return
     import app.features.nl2sql.ontology_markdown_parser as parser
 
+    def all_free(markdown: str) -> parser.RuleParse:
+        # すべての行を「決まった形で読めない行」にして、LLM の経路（スタブ）に渡す。
+        return parser.RuleParse(
+            free_lines=[i for i, line in enumerate(markdown.splitlines(), 1) if line.strip()]
+        )
+
     monkeypatch.setattr(parser, "parse_rendered_markdown", lambda _markdown: None)
+    monkeypatch.setattr(parser, "parse_markdown_rules", all_free)

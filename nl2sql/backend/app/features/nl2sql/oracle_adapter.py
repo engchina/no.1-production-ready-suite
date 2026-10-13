@@ -221,6 +221,33 @@ def _domain_column_type(row: Sequence[Any]) -> str:
     return data_type
 
 
+def _catalog_column_type(
+    data_type: Any,
+    data_length: Any,
+    char_length: Any,
+    precision: Any,
+    scale: Any,
+    char_used: Any,
+) -> str:
+    """ALL_TAB_COLUMNS の 1 列を、精度・桁・長さを含む型の文字列にする（DDL の書き方）。"""
+
+    name = str(data_type or "").upper()
+    if name in {"VARCHAR2", "CHAR"} and (char_length or data_length):
+        if str(char_used or "").upper() == "C":
+            return f"{name}({int(char_length or data_length)} CHAR)"
+        return f"{name}({int(data_length or char_length)})"
+    if name in {"NVARCHAR2", "NCHAR"} and (char_length or data_length):
+        return f"{name}({int(char_length or data_length)})"
+    if name == "NUMBER" and precision is not None:
+        suffix = f",{int(scale)}" if scale else ""
+        return f"NUMBER({int(precision)}{suffix})"
+    if name == "FLOAT" and precision is not None:
+        return f"FLOAT({int(precision)})"
+    if name == "RAW" and data_length:
+        return f"RAW({int(data_length)})"
+    return name
+
+
 def _coerce_result_value(value: Any) -> Any:
     read = getattr(value, "read", None)
     if callable(read):
@@ -1018,7 +1045,12 @@ class OracleNl2SqlAdapter:
             "    c.nullable,\n"
             "    c.column_id,\n"
             "    t.num_rows,\n"
-            "    NVL(o.object_type, 'TABLE') AS object_type\n"
+            "    NVL(o.object_type, 'TABLE') AS object_type,\n"
+            "    c.data_length,\n"
+            "    c.char_length,\n"
+            "    c.data_precision,\n"
+            "    c.data_scale,\n"
+            "    c.char_used\n"
             "FROM all_tab_columns c\n"
             "LEFT JOIN all_tables t ON t.owner = c.owner AND t.table_name = c.table_name\n"
             "LEFT JOIN all_objects o\n"
@@ -1044,7 +1076,11 @@ class OracleNl2SqlAdapter:
                 table_comment = str(row[2] or table_name)
                 column_name = str(row[3])
                 column_comment = str(row[4] or column_name)
-                data_type = str(row[5])
+                # 精度・桁・長さを含む物理の型（`NUMBER(12,2)`・`VARCHAR2(50)`）にする。
+                # オントロジーの物理の型（Physical Type）が DB の列と一致する（#1733）。
+                data_type = (
+                    _catalog_column_type(row[5], *row[10:15]) if len(row) >= 15 else str(row[5])
+                )
                 nullable = str(row[6]).upper() == "Y"
                 row_count = int(row[8]) if row[8] is not None else None
                 table_type = str(row[9]).lower() if len(row) > 9 and row[9] else "table"

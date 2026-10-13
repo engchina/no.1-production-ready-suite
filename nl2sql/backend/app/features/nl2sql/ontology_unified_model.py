@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Collection, Iterable
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -887,7 +887,7 @@ def _is_ungrounded(d: BusinessDefinition) -> bool:
 
 
 def _prune_ai_output(
-    values: list[BusinessDefinition],
+    values: list[BusinessDefinition], previous: Collection[str] = ()
 ) -> tuple[list[BusinessDefinition], dict[str, str]]:
     """AI の出力から、graph に置けない雛形と、構造の検査と重なる不足情報を除く。"""
 
@@ -898,8 +898,7 @@ def _prune_ai_output(
         ]
     # 同じオブジェクトの同じ列に対応するプロパティが名前違いで 2 つあれば 1 つにする。
     remap: dict[str, str] = {}
-    seen: dict[tuple[str, str], str] = {}
-    by_api = {d.api_name: d for d in kept}
+    groups: dict[tuple[str, str], list[BusinessDefinition]] = {}
     for d in kept:
         if not (isinstance(d, PropertyDefinition) and d.kind == "property"):
             continue
@@ -919,12 +918,16 @@ def _prune_ai_output(
             d.object_type,
             f"{mapping_object_key(columns[0])}.{mapping_column_key(columns[0])}",
         )
-        if key in seen:
-            # 消す方の空でない項目（共有プロパティの参照など）と名前は残す方に寄せる（#1729）。
-            _absorb(by_api[seen[key]], d)
-            remap[d.api_name] = seen[key]
-        else:
-            seen[key] = d.api_name
+        groups.setdefault(key, []).append(d)
+    rank = _prefer_previous(previous)
+    for group in groups.values():
+        # 残すのは前の定義の名前（#1734）。消す方の空でない項目（共有プロパティの参照など）と
+        # 名前は残す方に寄せる（#1729）。
+        survivor = min(group, key=rank)
+        for d in group:
+            if d is not survivor:
+                _absorb(survivor, d)
+                remap[d.api_name] = survivor.api_name
     kept = [d for d in kept if d.api_name not in remap]
     # プロパティの対応は所属オブジェクトの表・ビューの列だけにする（他の表の列を 1 つの
     # プロパティに束ねない）。所属オブジェクトの表に 1 つも無ければ元のまま検証に任せる。
@@ -1051,9 +1054,9 @@ def _fill_property_types(
         if not physical:
             continue
         # 物理の型は DB の列が正（AI・Markdown の書いた型と違えば、業務の型も列に合わせる）。
-        previous, d.physical_type = d.physical_type, physical
-        if not d.data_type or (previous and _type_family(previous) != _type_family(physical)):
-            d.data_type = base_data_type(physical) or d.data_type
+        d.physical_type = physical
+        if base_data_type(physical) and _type_family(d.data_type) != _type_family(physical):
+            d.data_type = base_data_type(physical)
         if isinstance(info.get("nullable"), bool) and d.kind == "property":
             # 必須（Required）も DB の列が正（NOT NULL の列は必須）。
             d.required = not info["nullable"]
@@ -1360,47 +1363,120 @@ def _unify_objects(
     return rewrite_references(kept, remap), remap
 
 
+def _prefer_previous(
+    previous: Collection[str],
+) -> Callable[[BusinessDefinition], tuple[bool, bool]]:
+    """統合で残す定義の順位: 前の定義（下書き・公開版）の名前 → AI 以外が作ったもの。
+
+    同じ順位なら先に出たものを残す（`min` は最初の最小を返す）。利用者が付けた名前・前の名前を、
+    AI の名付けの揺れで上書きしない（#1734）。
+    """
+
+    return lambda d: (d.api_name not in previous, d.origin == "ai")
+
+
 def _dedupe_properties(
-    values: list[BusinessDefinition],
+    values: list[BusinessDefinition], previous: Collection[str] = ()
 ) -> tuple[list[BusinessDefinition], dict[str, str]]:
-    """同じオブジェクト型の同じ列に対応するプロパティを 1 つにする（名前が違っても）。"""
+    """同じオブジェクト型の同じ列に対応するプロパティを 1 つにする（名前が違っても）。
+
+    残すのは前の定義の名前（#1734）。
+    """
 
     remap: dict[str, str] = {}
-    seen: dict[tuple[str, frozenset[str]], BusinessDefinition] = {}
+    groups: dict[tuple[str, frozenset[str]], list[BusinessDefinition]] = {}
     for d in values:
         if not (isinstance(d, PropertyDefinition) and d.kind == "property"):
             continue
         columns = _column_signature(d)
         if not columns or len(columns) != len(d.mappings):
             continue
-        key = (d.object_type, columns)
-        if key in seen:
-            _absorb(seen[key], d)
-            remap[d.api_name] = seen[key].api_name
-        else:
-            seen[key] = d
+        groups.setdefault((d.object_type, columns), []).append(d)
+    rank = _prefer_previous(previous)
+    for group in groups.values():
+        survivor = min(group, key=rank)
+        for other in group:
+            if other is not survivor:
+                _absorb(survivor, other)
+                remap[other.api_name] = survivor.api_name
     if not remap:
         return values, {}
     kept = [d for d in values if not (d.kind == "property" and d.api_name in remap)]
     return rewrite_references(kept, remap), remap
 
 
-def _dedupe_shared(
-    values: list[BusinessDefinition],
-) -> tuple[list[BusinessDefinition], dict[str, str]]:
-    """表示名と業務の型が同じ共有プロパティ・値型を 1 つにする（再構築で同じものが増えない）。"""
+def shared_property_columns(values: list[BusinessDefinition]) -> dict[str, frozenset[str]]:
+    """共有プロパティ・値型の API 名 → それを使うプロパティの物理の列（と自身の列）の組。"""
 
-    remap: dict[str, str] = {}
-    seen: dict[tuple[str, str, str], BusinessDefinition] = {}
+    used: dict[str, set[str]] = {}
     for d in values:
-        if d.kind not in {"shared_property", "value_type"} or d.mappings:
+        if d.kind in {"shared_property", "value_type"}:
+            used.setdefault(d.api_name, set()).update(_column_signature(d))
+        if isinstance(d, PropertyDefinition) and d.kind == "property":
+            for field in ("shared_property", "value_type"):
+                name = getattr(d, field, "")
+                if name:
+                    used.setdefault(name, set()).update(_column_signature(d))
+    return {name: frozenset(columns) for name, columns in used.items()}
+
+
+def _dedupe_shared(
+    values: list[BusinessDefinition], previous: Collection[str] = ()
+) -> tuple[list[BusinessDefinition], dict[str, str]]:
+    """同じ物の共有プロパティ・値型を 1 つにする（再構築で同じものが増えない。#1734）。
+
+    同一性は名前ではなく、それを使うプロパティの物理の列の組（と業務の型）で決める。列の組が
+    分からないもの（どのプロパティからも使われていない）は、表示名と業務の型が同じものに寄せる。
+    残すのは前の定義の名前で、他方の名前は別名（altLabel）にする。
+    """
+
+    shared = [d for d in values if d.kind in {"shared_property", "value_type"}]
+    if len(shared) < 2:
+        return values, {}
+    columns = shared_property_columns(values)
+    parent: dict[int, BusinessDefinition] = {id(d): d for d in shared}
+
+    def root(d: BusinessDefinition) -> BusinessDefinition:
+        while parent[id(d)] is not d:
+            d = parent[id(d)]
+        return d
+
+    def join(left: BusinessDefinition, right: BusinessDefinition) -> None:
+        a, b = root(left), root(right)
+        if a is not b:
+            parent[id(b)] = a
+
+    by_columns: dict[tuple[str, frozenset[str], str], BusinessDefinition] = {}
+    by_name: dict[tuple[str, str, str], BusinessDefinition] = {}
+    for d in shared:
+        family = _type_family(getattr(d, "data_type", ""))
+        signature = columns.get(d.api_name, frozenset())
+        if signature:
+            first = by_columns.setdefault((d.kind, signature, family), d)
+            if first is not d:
+                join(first, d)
+        name_key = (d.kind, d.name_ja.strip(), family)
+        first = by_name.setdefault(name_key, d)
+        # 列の組が食い違う同じ名前の 2 つは別の物（名前では併合しない）。片方が未使用なら寄せる。
+        if first is not d and not (
+            signature and columns.get(first.api_name) and signature != columns[first.api_name]
+        ):
+            join(first, d)
+    groups: dict[int, list[BusinessDefinition]] = {}
+    for d in shared:
+        groups.setdefault(id(root(d)), []).append(d)
+    rank = _prefer_previous(previous)
+    remap: dict[str, str] = {}
+    for group in groups.values():
+        if len(group) < 2:
             continue
-        key = (d.kind, d.name_ja.strip(), _type_family(getattr(d, "data_type", "")))
-        if key in seen:
-            _absorb(seen[key], d)
-            remap[d.api_name] = seen[key].api_name
-        else:
-            seen[key] = d
+        survivor = min(
+            group, key=lambda d: (*rank(d)[:2], -len(columns.get(d.api_name, ())), d.api_name)
+        )
+        for other in group:
+            if other is not survivor:
+                _absorb(survivor, other)
+                remap[other.api_name] = survivor.api_name
     if not remap:
         return values, {}
     kept = [
@@ -1408,7 +1484,41 @@ def _dedupe_shared(
         for d in values
         if not (d.kind in {"shared_property", "value_type"} and d.api_name in remap)
     ]
-    return rewrite_references(kept, remap), remap
+    rewritten = rewrite_references(kept, remap)
+    for item in rewritten:
+        # 自分を指す参照（AI が共有プロパティ自身に書いた shared_property）は付けない。
+        if isinstance(item, PropertyDefinition) and item.shared_property == item.api_name:
+            item.shared_property = ""
+    return rewritten, remap
+
+
+def _drop_unused_shared(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], list[BusinessDefinition]]:
+    """どのプロパティからも使われない共有プロパティのうち、AI が作ったものを外す（#1734）。
+
+    利用者が作った（AI 以外の）ものは残す。外したものは呼出元が利用者に伝え、前の版にあれば
+    公開前の確認の差分に「削除」として出る。
+    """
+
+    columns = shared_property_columns(values)
+    referenced = {
+        name
+        for d in values
+        for _field, name in definition_references(d)
+        if not (d.kind == "shared_property" and name == d.api_name)
+    }
+    dropped: list[BusinessDefinition] = [
+        d
+        for d in values
+        if d.kind == "shared_property"
+        and d.origin == "ai"
+        and not columns.get(d.api_name)
+        and d.api_name not in referenced
+    ]
+    if not dropped:
+        return values, []
+    return [d for d in values if all(d is not x for x in dropped)], dropped
 
 
 def _dedupe_links(
@@ -1636,11 +1746,13 @@ def _infer_links(
             left, right = tables[source_key]["columns"], tables[target_key]["columns"]
             if column not in left or tables[source_key]["primary_key"] == [column]:
                 continue
+            # 型が分からない（空・読めない）列は、一致とも不一致ともしない。名前と相手の主キーとの
+            # 対応で補う（#1733）。
             types = {
                 _type_family(str(left[column].get("data_type", ""))),
                 _type_family(str(right[column].get("data_type", ""))),
-            }
-            if len(types) != 1:
+            } - {""}
+            if len(types) > 1:
                 continue
             add(
                 source_key,
@@ -1661,10 +1773,13 @@ class RepairResult:
         definitions: list[BusinessDefinition],
         remap: dict[str, str],
         dropped: list[BusinessDefinition],
+        unused_shared: list[BusinessDefinition] | None = None,
     ) -> None:
         self.definitions = definitions
         self.remap = remap
         self.dropped = dropped
+        # どのプロパティからも使われないため外した、AI の共有プロパティ（#1734）。
+        self.unused_shared = unused_shared or []
 
 
 def repair_definitions_report(
@@ -1673,6 +1788,7 @@ def repair_definitions_report(
     schema: dict[str, Any] | None = None,
     *,
     ai_output: bool = False,
+    previous: Collection[str] = (),
 ) -> RepairResult:
     """AI の出力・Markdown の解析結果を graph にできる形へ直す（#1720・#1729）。
 
@@ -1683,14 +1799,16 @@ def repair_definitions_report(
     4. まとめても表が決まらないオブジェクト型は外す（公開を止めない。外した定義を返す）。
     5. プロパティの型を業務の型（Base Type）と物理の型（Physical Type）に分ける。
     `ai_output` のときは、graph に置けない雛形・構造の検査と重なる不足情報を除き、外部キーか
-    同じ名前・型の ID 列から AI が作らなかったリンク型（Link Type）を足す。
+    同じ名前・型の ID 列から AI が作らなかったリンク型（Link Type）を足し、どのプロパティからも
+    使われない AI の共有プロパティを外す。`previous` は前の定義（下書き・公開版）の API 名で、
+    同じ列のプロパティ・同じ物の共有プロパティをまとめるときに残す名前にする（#1734）。
     """
 
     values = [d.model_copy(deep=True) for d in definitions]
     pruned: dict[str, str] = {}
     if ai_output:
         # AI 構築の出力だけ。利用者が Markdown に書いた定義は消さず、検証の診断に任せる。
-        values, pruned = _prune_ai_output(values)
+        values, pruned = _prune_ai_output(values, previous)
     _separate_name_clashes(values)
     for d in values:
         # 空の項目の書き写しは構造の検査（主キー・粒度・型・多重度の info）と重なるため除く。
@@ -1709,9 +1827,9 @@ def repair_definitions_report(
         if obj.title_property:
             obj.title_property = repair.resolve(obj.title_property) or ""
     values = [*values, *added]
-    values, property_remap = _dedupe_properties(values)
+    values, property_remap = _dedupe_properties(values, previous)
     values, link_remap = _dedupe_links(values)
-    values, shared_remap = _dedupe_shared(values)
+    values, shared_remap = _dedupe_shared(values, previous)
     remap.update(property_remap)
     remap.update(link_remap)
     remap.update(shared_remap)
@@ -1722,8 +1840,11 @@ def repair_definitions_report(
         _repair_optional_references(values)
     if ai_output and schema:
         values = [*values, *_infer_links(profile_id, values, schema)]
+    unused: list[BusinessDefinition] = []
+    if ai_output:
+        values, unused = _drop_unused_shared(values)
     ordered = sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name))
-    return RepairResult(ordered, remap, dropped)
+    return RepairResult(ordered, remap, dropped, unused)
 
 
 def _separate_name_clashes(values: list[BusinessDefinition]) -> None:
