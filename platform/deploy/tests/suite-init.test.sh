@@ -388,7 +388,7 @@ done
   [ ! -e "${calls}" ] || fail "adb_admin.env が無いのに uv を呼んだ"
   grep -q "アプリ用の DB ユーザーは作りません" "${out}" || fail "作らない旨の log: $(cat "${out}")"
   # adb_admin.env がある: suite-db-user.py apply を固定の oracledb で実行し、0600 にする。
-  printf "SUITE_DB_ADMIN_USER=ADMIN\nSUITE_DB_ADMIN_PASSWORD='stub'\nSUITE_DB_APP_USER='PRSUITE'\n" > "${PROPS_DIR}/adb_admin.env"
+  printf "SUITE_DB_ADMIN_USER=ADMIN\nSUITE_DB_ADMIN_PASSWORD='stub'\nSUITE_DB_APP_USER='ADB_APP_USER'\n" > "${PROPS_DIR}/adb_admin.env"
   chmod 0644 "${PROPS_DIR}/adb_admin.env"
   provision_db_app_user > "${out}" 2>&1 || fail "成功するはず: $(cat "${out}")"
   [ "$(stat -c %a "${PROPS_DIR}/adb_admin.env")" = "600" ] || fail "adb_admin.env は 0600"

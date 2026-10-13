@@ -266,7 +266,7 @@ DeepSec V001 と `DATA USER 認証` の同期を実行する `PLATFORM_ORACLE_US
 `CREATE PROCEDURE`、対象 object への `GRANT SELECT`（別の schema なら `GRANT ANY OBJECT PRIVILEGE`）、DeepSec metadata view 参照権限と、
 Data Grant の `GRANT ANY DATA ROLE`（DATA ROLE を END USER に付ける）・`ADMINISTER ANY DATA GRANT`（Data Grant の作成・削除）・
 `SET USE DATA GRANTS ONLY` が必要。Autonomous AI Database の `PDB_DBA` は最後の 3 つを含まない（無いと `ORA-01031`）。
-統合 stack の配備は、アプリ用の DB ユーザーに `PDB_DBA` とこの 3 つを付ける（[terraform/README.md「アプリ用の DB ユーザー」](../../terraform/README.md#アプリ用の-db-ユーザー1668)。#1668）。
+統合 stack の配備は、アプリ用の DB ユーザーに `PDB_DBA` とこの 3 つを付ける（[terraform/README.md「アプリ用の DB ユーザー」](../../terraform/README.md#アプリ用の-db-ユーザー16681675)。#1668・#1675）。
 `ORA-01017` が通常ユーザーの SELECT 実行時だけ発生する場合は、application RBAC ではなく
 DATA USER password の漂移を疑い、Deep Data Security 画面で password を保存し直すか、
 `Oracle へ同期` を再実行する。
@@ -688,7 +688,7 @@ context へ設定した data pool で実行する。
 確認不要の判定には通常の SELECT-only guard を再利用し、WITH で始まる更新文も管理 SQL として扱う。
 
 Select AI `DBMS_CLOUD_AI.GENERATE` と Select AI Agent の
-`DBMS_CLOUD_AI_AGENT.RUN_TEAM` / `RUN_TOOL` / `CREATE_CONVERSATION` は、非
+`DBMS_CLOUD_AI_AGENT.RUN_TEAM` / `RUN_TOOL` と会話の `DBMS_CLOUD_AI.CREATE_CONVERSATION` は、非
 `system_admin` の SQL 生成でも `system_admin` と同じ Thin + mTLS の通常 Oracle user 接続で実行し、
 DeepSec context は付けない。NL2SQL job の生成済み SELECT 実行は、非 `system_admin` では DeepSec
 context 付き data connection を使用する。`system_admin`、migration、DeepSec V001 適用、schema

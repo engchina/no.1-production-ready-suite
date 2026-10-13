@@ -950,7 +950,7 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
     )
     _require_all(
         _terraform_variable(variables, "adb_app_user_name"),
-        ['default     = "PRSUITE"', 'can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.adb_app_user_name))', '"ADMIN"'],
+        ['default     = "ADB_APP_USER"', 'can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.adb_app_user_name))', '"ADMIN"'],
         context="adb_app_user_name",
     )
     _require_all(
@@ -958,13 +958,25 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
         ["length(var.adb_app_user_password) >= 12", "length(var.adb_app_user_password) <= 30"],
         context="adb_app_user_password",
     )
+    # フォームの並び（#1675）: 使うかどうかは ADB の利用方法の直後、名前とパスワードは新規 / 既存の ADB の入力
+    # （ADMIN のパスワード）とネットワーク・アクセスの後の「アプリ用の DB ユーザー」の group。
     groups = _schema_groups(schema)
+    _, adb_members = groups.get("Autonomous AI Database", ("", []))
+    if adb_members[-2:] != ["adb_deployment_mode", "adb_app_user_enabled"]:
+        raise AssertionError(f"adb_app_user_enabled must follow adb_deployment_mode: {adb_members}")
     visible, members = groups.get("アプリ用の DB ユーザー", ("", []))
-    if visible != "true" or members != ["adb_app_user_enabled", "adb_app_user_name", "adb_app_user_password"]:
-        raise AssertionError(f"the application database user group must be visible and ordered: {members}")
+    if visible != "adb_app_user_enabled" or members != ["adb_app_user_name", "adb_app_user_password"]:
+        raise AssertionError(f"the application database user group must show the name and password when enabled: {members}")
+    titles = list(groups)
+    order = ["Autonomous AI Database", "Existing Autonomous AI Database", "New Autonomous AI Database", "ネットワーク・アクセス", "アプリ用の DB ユーザー"]
+    if [title for title in titles if title in order] != order:
+        raise AssertionError(f"ADB groups must be ordered as {order}: {titles}")
     _, existing = groups.get("Existing Autonomous AI Database", ("", []))
     if "existing_adb_admin_password" not in existing:
         raise AssertionError("existing_adb_admin_password must be in the existing ADB group")
+    # 既定はオン（#1668・#1675）。名前の既定は ADB_APP_USER。
+    _require_all(_schema_variable(schema, "adb_app_user_enabled"), ["type: boolean", "default: true"], context="adb_app_user_enabled schema")
+    _require_all(_schema_variable(schema, "adb_app_user_name"), ['default: "ADB_APP_USER"'], context="adb_app_user_name schema")
     for name in ("adb_app_user_name", "adb_app_user_password", "existing_adb_admin_password"):
         _require_all(_schema_variable(schema, name), ["visible: adb_app_user_enabled"], context=f"{name} schema")
     for name in ("existing_oracle_user", "existing_oracle_password"):
@@ -980,6 +992,10 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
             "effective_adb_admin_password = local.create_new_adb ? var.adb_password : var.existing_adb_admin_password",
             "effective_oracle_user = var.adb_app_user_enabled ? local.adb_app_user : (",
             "effective_oracle_password = var.adb_app_user_enabled ? var.adb_app_user_password : (",
+            # 使わないとき（adb_app_user_enabled=false）は #1668 の前と同じ: 新規の ADB は ADMIN / adb_password、
+            # 既存の ADB は existing_oracle_user / existing_oracle_password。
+            'local.create_new_adb ? "ADMIN" : var.existing_oracle_user',
+            "local.create_new_adb ? var.adb_password : var.existing_oracle_password",
             "!var.adb_app_user_enabled || trimspace(var.adb_app_user_password) != \"\"",
             "!var.adb_app_user_enabled || local.create_new_adb || trimspace(var.existing_adb_admin_password) != \"\"",
         ],

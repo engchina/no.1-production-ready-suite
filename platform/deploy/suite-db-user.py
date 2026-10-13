@@ -5,7 +5,7 @@ platform/deploy/suite-init.sh が、製品の配備（各製品の system schema
 
   python suite-db-user.py apply --admin-env <props/adb_admin.env> --app-env <props/platform.env> \
       --wallet-dir <Wallet を展開した directory> [--current-env <repository の platform/.env>]
-  python suite-db-user.py plan [--app-user PRSUITE]   # 実行する SQL を表示する（パスワードは出さない。DB に繋がない）
+  python suite-db-user.py plan [--app-user ADB_APP_USER]   # 実行する SQL を表示する（パスワードは出さない。DB に繋がない）
 
 - 冪等: ユーザーが無ければ CREATE USER、あれば profile・quota を合わせ、アプリのパスワードで接続できなければ
   パスワードを合わせて lock を外す。grant は毎回付け直す（付いていれば何も変わらない）。
@@ -346,7 +346,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     apply_parser.add_argument("--connect-attempts", type=int, default=5)
     apply_parser.add_argument("--connect-wait-seconds", type=float, default=20.0)
     plan_parser = sub.add_parser("plan", help="実行する SQL を表示する（DB に繋がない）")
-    plan_parser.add_argument("--app-user", default="PRSUITE")
+    plan_parser.add_argument("--app-user", default="ADB_APP_USER")
     plan_parser.add_argument("--existing", action="store_true", help="既にユーザーがあるときの SQL")
     return parser.parse_args(argv)
 
