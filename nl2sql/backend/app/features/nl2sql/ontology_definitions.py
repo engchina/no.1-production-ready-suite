@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DefinitionKind = Literal[
     "object_type",
@@ -84,6 +84,19 @@ class DefinitionMapping(DefinitionContract):
     object_name: str
     column_name: str = ""
     expression_sql: str = ""
+
+    @field_validator("column_name")
+    @classmethod
+    def whole_object_column(cls, value: str) -> str:
+        # AI が表・ビュー全体を `*` と書いても、列なしの対応として扱う（#1720）。
+        return "" if value.strip() == "*" else value
+
+    @model_validator(mode="after")
+    def drop_wildcard_expression(self) -> DefinitionMapping:
+        # `OWNER.OBJECT.*` の式は列なしの対応と同じ意味（式として検証しない）。
+        if not self.column_name and self.expression_sql.strip().endswith("*"):
+            self.expression_sql = ""
+        return self
 
 
 class TypedParameter(DefinitionContract):
@@ -268,7 +281,8 @@ class ConceptCoverage(DefinitionContract):
 
 class DefinitionFinding(DefinitionContract):
     code: str
-    severity: Literal["warning", "error"]
+    # info は graph を作れるが、補えば SQL の精度が上がる項目（公開を止めず、控えめに出す。#1720）。
+    severity: Literal["info", "warning", "error"]
     definition_id: str = ""
     field: str = ""
     message_ja: str

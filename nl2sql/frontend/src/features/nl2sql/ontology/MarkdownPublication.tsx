@@ -17,6 +17,8 @@ import { randomUuid } from "@/lib/randomUuid";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import type { OntologyFinding, OntologyMarkdownState, OntologyPublishJob } from "./types";
 import { OntologyFindings } from "./OntologyFindings";
+import { PublicationGraphSummary } from "./PublicationGraphSummary";
+import { conceptDisplayNames } from "./publicationSummary";
 import { DefinitionFields, TechnicalDetails } from "./ontologyResultPresentation";
 
 const MARKDOWN_BUSY = "markdown-check";
@@ -26,6 +28,7 @@ interface Preparation {
   id: string; status: string; draft_etag: string; expected_head: string; display_version: number;
   error_message_ja: string;
   findings: OntologyFinding[];
+  definitions?: Definition[];
   differences: { id: string; before: Definition | null; after: Definition | null }[];
   data_report?: Record<string, unknown>;
 }
@@ -146,14 +149,8 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
       </div>
       {hasErrors && <Banner severity="danger">{t("markdownOntology.errorsBlockPublish")}</Banner>}
       {value.status === "ready" && hasWarnings && !hasErrors && !dataValidationFailed && <Banner severity="warning">{t("markdownOntology.warningsPublishable")}</Banner>}
-      <OntologyFindings findings={findings} label={t("markdownOntology.findings")} />
-      {value.differences?.map(d=><Disclosure key={d.id} data-testid="ontology-publication-difference"
-        summary={String((d.after || d.before)?.name_ja ?? d.id)}
-        meta={<StatusBadge variant={d.before ? d.after ? "info" : "danger" : "success"} label={t(d.before ? d.after ? "markdownOntology.changed" : "markdownOntology.removed" : "markdownOntology.added")} />}
-        summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4 md:grid-cols-2">
-          <div className="min-w-0 space-y-3"><h4 className="text-sm font-semibold text-fg-muted">{t("markdownOntology.before")}</h4><DefinitionFields definition={d.before ?? {}} /></div>
-          <div className="min-w-0 space-y-3"><h4 className="text-sm font-semibold text-fg-muted">{t("markdownOntology.after")}</h4><DefinitionFields definition={d.after ?? {}} /></div>
-        </Disclosure>)}
+      <OntologyFindings findings={findings} label={t("markdownOntology.findings")} names={conceptDisplayNames(value.definitions ?? [])} />
+      {value.status !== "queued" && value.status !== "running" && <PublicationGraphSummary definitions={value.definitions ?? []} differences={value.differences ?? []} />}
       {value.status === "ready" && <>
         <Disclosure data-testid="ontology-publication-data-validation" summary={t("markdownOntology.dataValidation")} icon={ShieldCheck}
           summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4">

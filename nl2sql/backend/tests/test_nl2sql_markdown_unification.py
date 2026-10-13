@@ -235,7 +235,12 @@ def test_publish_uses_confirmed_snapshot_without_second_llm_and_keeps_history() 
     view, graph = rt.profile_view("sales")
     assert graph.revision.id == job.revision_id
     assert any(n.kind.value == "object_type" for n in graph.nodes)
-    assert published_context(rt, "sales", job.revision_id) == preparation["markdown"]
+    # LLM には下書きの本文ではなく、公開した定義から作る業務の知識だけを渡す（#1720）。
+    context = published_context(rt, "sales", job.revision_id)
+    assert context.startswith("# 業務オントロジー\n") and "受注" in context
+    assert preparation["markdown"] not in context
+    for internal in ("verified", "source_id", "なし", "未設定", "下書き", "根拠"):
+        assert internal not in context
     assert rt.profile_view("sales")[1].revision.id == job.revision_id  # repeated read
     assert rt.ontology_revision(job.revision_id).revision.id == job.revision_id
     with pytest.raises(OntologyNotFoundError):
@@ -248,7 +253,9 @@ def test_warning_only_publication_keeps_complete_diagnostics_without_revalidatio
     rt, svc, parser, preparation = prepared_workspace()
     assert preparation["status"] == "ready"
     assert preparation["findings"]
-    assert all(f["severity"] == "warning" for f in preparation["findings"])
+    # 補えば精度が上がる項目は info、公開を止めない（#1720）。
+    assert preparation["findings"]
+    assert all(f["severity"] in {"warning", "info"} for f in preparation["findings"])
     # 読取り専用の標本検証レポートも公開版に固定する。
     preparation["data_report"] = {"errors": 0, "instance_count": 1, "sample_limit": 50}
     svc._write("sales", preparation["id"], PREPARATION, preparation)
@@ -316,7 +323,7 @@ def test_sql_resolution_error_still_blocks_warning_publication() -> None:
     result = svc.preparation("sales", preparation["id"])
     assert result["status"] == "failed"
     assert any(f["severity"] == "error" for f in result["findings"])
-    assert any(f["severity"] == "warning" for f in result["findings"])
+    assert any(f["severity"] in {"warning", "info"} for f in result["findings"])
     with pytest.raises(OntologyVersionConflictError):
         svc.publish(
             "sales",
@@ -412,18 +419,12 @@ def test_historical_sql_context_keeps_original_markdown_after_new_publication(
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     request = JobCreateRequest(profile_id="sales", question="受注", use_ontology_context=True)
     profile = rt._strict_profile("sales")
-    assert (
-        service._job_published_ontology_markdown(
-            request=request, profile=profile, business_release_id=old.id
-        )
-        == first["markdown"]
-    )
-    assert (
-        service._job_published_ontology_markdown(
-            request=request, profile=profile, business_release_id=latest.id
-        )
-        == edited.draft_markdown
-    )
+    assert service._job_published_ontology_markdown(
+        request=request, profile=profile, business_release_id=old.id
+    ) == published_context(rt, "sales", old.id)
+    assert service._job_published_ontology_markdown(
+        request=request, profile=profile, business_release_id=latest.id
+    ) == published_context(rt, "sales", latest.id)
     assert (
         service._job_published_ontology_markdown(
             request=request, profile=profile, business_release_id=""
@@ -629,8 +630,10 @@ def test_all_types_publish_edit_and_keep_the_original_snapshot() -> None:
     assert changed.draft_revision.id != ready["source_revision_id"]
     assert changed.draft_version > changed.published_version
     assert svc.snapshot("sales", first.id) == old
-    assert published_context(rt, "sales", first.id) == original["markdown"]
-    assert original["markdown"] not in published_context(rt, "sales", first.id, {})
+    context = published_context(rt, "sales", first.id)
+    assert context.startswith("# 業務オントロジー\n")
+    assert original["markdown"] not in context
+    assert "APP." not in published_context(rt, "sales", first.id, {})
 
 
 async def test_removed_definition_import_api_is_not_exposed() -> None:
@@ -864,7 +867,7 @@ def test_column_scope_on_one_table_keeps_published_definitions_of_other_tables(
 
     tables = ["APP.ORDERS", "APP.CUSTOMERS"]
     partial = render(AllowedObjects(table_names=tables, columns={"APP.CUSTOMERS": ["ID"]}))
-    assert partial and "(`Order`)" in partial and "(`Order.id`)" in partial
+    assert partial and "### 受注（APP.ORDERS）" in partial
 
 
 @pytest.mark.parametrize("change", ["row_count", "comment", "glossary", "allowed_tables"])
@@ -942,7 +945,7 @@ def test_publication_with_legacy_full_scope_fingerprint_stays_usable() -> None:
     )
     snapshot["schema_hash"] = definition_fingerprint(schema)
     svc._write("sales", job.id, SNAPSHOT, snapshot)
-    assert published_context(rt, "sales", job.revision_id) == preparation["markdown"]
+    assert published_context(rt, "sales", job.revision_id).startswith("# 業務オントロジー\n")
 
 
 @pytest.mark.parametrize(

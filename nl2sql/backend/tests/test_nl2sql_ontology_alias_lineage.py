@@ -1,7 +1,5 @@
 """Issue #471: 引用識別子・派生投影の系譜を検証から公開コンテキストまで保持する。"""
 
-import json
-
 import pytest
 from test_nl2sql_ontology_scope_recovery import inspect, metric
 from test_nl2sql_ontology_workspace import model, no_auth  # noqa: F401
@@ -41,19 +39,17 @@ def test_metric_lineage_validates_publishes_and_remains_in_query_context(sql: st
     bundle = svc.review("sales", bundle.id, bundle.etag, [d.id for d in bundle.definitions], None)
     release = svc.publish("sales", bundle.id, bundle.etag, "", "publish", None)
     context = published_context(svc.runtime, "sales", release["id"])
-    result = json.loads(context.split("\n")[-1])
-    sales = next(d for d in result["definitions"] if d["api_name"] == "Sales")
-    assert sales["expression_sql"] == sql
-    assert sales["filter_sql"] == "APP.ORDERS.AMOUNT > 0"
+    # LLM には定義から作る業務の知識（指標の式・条件）を渡す（#1720）。
+    assert "- 売上（" in context
+    assert f"式: {sql}" in context
+    assert "条件: APP.ORDERS.AMOUNT > 0" in context
     narrowed = published_context(
         svc.runtime,
         "sales",
         release["id"],
         {"APP.ORDERS": ["ID", "CUSTOMER_ID"], "APP.CUSTOMERS": ["ID", "AMOUNT"]},
     )
-    assert "Sales" not in {
-        d["api_name"] for d in json.loads(narrowed.split("\n")[-1])["definitions"]
-    }
+    assert "- 売上（" not in narrowed
 
 
 @pytest.mark.parametrize(

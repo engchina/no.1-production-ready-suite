@@ -34,7 +34,12 @@ def all_concepts() -> list[dict[str, Any]]:
         {"kind": "shared_property", "api_name": "Amount", "name_ja": "金額", "data_type": "number"},
         {"kind": "value_type", "api_name": "Money", "name_ja": "金額型", "data_type": "number"},
         {"kind": "enumeration", "api_name": "Status", "name_ja": "状態", "property": "Order.id"},
-        {"kind": "metric", "api_name": "Total", "name_ja": "合計"},
+        {
+            "kind": "metric",
+            "api_name": "Total",
+            "name_ja": "合計",
+            "description_ja": "受注の合計。",
+        },
         {
             "kind": "business_rule",
             "api_name": "Rule",

@@ -58,7 +58,13 @@ def definition_payload() -> list[dict[str, Any]]:
             "return_type": "number",
         },
         {"kind": "action_type", "api_name": "approve", "name_ja": "承認", "object_type": "Order"},
-        {"kind": "interface", "api_name": "Approvable", "name_ja": "承認可能"},
+        # 名前だけの空の定義は AI の雛形として除くため、中身（説明）を持たせる（#1720）。
+        {
+            "kind": "interface",
+            "api_name": "Approvable",
+            "name_ja": "承認可能",
+            "description_ja": "承認の操作を持つ対象。",
+        },
     ]
 
 

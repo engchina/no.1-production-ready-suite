@@ -40,18 +40,79 @@ def test_evidence_must_match_profile_source_location_hash_and_verbatim_excerpt()
         ],
     )
     assert not any(
-        f.code == "EVIDENCE_UNRESOLVED" for f in inspect_definition_quality([item], [source])
+        f.code == "INFERENCE_WITHOUT_EVIDENCE" for f in inspect_definition_quality([item], [source])
     )
     assert item.evidence[0].verified
     item.evidence[0].locator = "line:2"
-    assert any(
-        f.code == "EVIDENCE_UNRESOLVED" for f in inspect_definition_quality([item], [source])
-    )
+    unresolved = [
+        f
+        for f in inspect_definition_quality([item], [source])
+        if f.code == "INFERENCE_WITHOUT_EVIDENCE"
+    ]
+    # 照合できない根拠は定義ごとに 1 件の info（公開を止めない。#1720）。
+    assert [(f.severity, f.definition_id) for f in unresolved] == [("info", "Contract")]
     assert not item.evidence[0].verified
     item.evidence[0].locator = "line:1"
     item.evidence[0].source_sha256 = "b" * 64
     inspect_definition_quality([item], [source])
     assert not item.evidence[0].verified
+
+
+@pytest.mark.parametrize(
+    "locator,verified",
+    [
+        ("ADMIN.V_DEPT_PROJECT", True),
+        ("ADMIN.V_DEPT_PROJECT.PROJECT_NAME, ADMIN.V_DEPT_PROJECT.DEPARTMENT_NAME", True),
+        ("ADMIN.V_DEPT_PROJECT.*", True),
+        ("ADMIN.V_DEPT_PROJECT.MISSING", False),
+        ("ADMIN.OUTSIDE", False),
+        ("line:1", False),
+    ],
+    ids=["object", "columns", "wildcard", "missing-column", "outside", "not-physical"],
+)
+def test_schema_evidence_is_verified_when_the_physical_names_are_in_the_profile(
+    locator: str, verified: bool
+) -> None:
+    """DB の schema を根拠にした evidence は、資料の検証値が無くても物理名で照合する（#1720）。"""
+
+    item = ObjectTypeDefinition(
+        api_name="v_dept_project",
+        name_ja="部門別プロジェクト",
+        evidence=[
+            DefinitionEvidence(
+                source_id="schema",
+                locator=locator,
+                source_kind="database",
+                source_sha256="N/A",
+                excerpt_ja="SQL Assist sample view",
+            )
+        ],
+    )
+    physical = {"ADMIN.V_DEPT_PROJECT": {"PROJECT_NAME", "DEPARTMENT_NAME"}}
+    findings = inspect_definition_quality([item], [], physical)
+    assert item.evidence[0].verified is verified
+    assert any(f.code == "INFERENCE_WITHOUT_EVIDENCE" for f in findings) is not verified
+
+
+def test_missing_identity_and_types_do_not_block_publication() -> None:
+    """識別子・粒度・型など graph を作れる項目の不足は info（公開を止めない。#1720）。"""
+
+    from app.features.nl2sql.ontology_definitions import PropertyDefinition
+
+    findings = inspect_definition_quality(
+        [
+            ObjectTypeDefinition(api_name="v_emp_dept", name_ja="従業員部門ビュー"),
+            PropertyDefinition(api_name="name", name_ja="名前", object_type="v_emp_dept"),
+        ],
+        [],
+    )
+    assert {f.code for f in findings} >= {
+        "OBJECT_IDENTITY_REQUIRED",
+        "OBJECT_GRAIN_REQUIRED",
+        "PROPERTY_TYPE_REQUIRED",
+    }
+    assert all(f.severity == "info" for f in findings)
+    assert all(f.definition_id for f in findings)
 
 
 def test_metric_incomplete_semantics_are_reported_instead_of_assumed() -> None:

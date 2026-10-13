@@ -179,7 +179,9 @@ def test_completed_link_keeps_original_evidence_aliases_and_conflicts(same_id: b
     assert link.join_expression_sql == JOIN
     assert link.aliases == ["旧名称", "補完名称"]
     assert link.evidence[0].excerpt_ja == "受注"
-    assert conflicts  # cardinality の意味の相違は補完で消さない
+    # unknown は未設定と同じ。補完で分かった基数を使い、競合にしない（#1720）。
+    assert link.cardinality == "one_to_many"
+    assert not conflicts
     assert original.join_expression_sql == ""  # checkpoint の原本は不変
 
 

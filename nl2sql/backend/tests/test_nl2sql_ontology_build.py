@@ -834,7 +834,11 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
         == "APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID"
         for relationship in schema_context["relationships"]
     )
-    assert finished.markdown_output.startswith("# オントロジー下書き")
+    # 下書きの見出し・入力の要約・中身の無い節は書かない（#1720）。
+    assert finished.markdown_output.startswith("## Q/A 由来 SQL 生成ルール")
+    assert "- なし" not in finished.markdown_output
+    assert "## 入力サマリー" not in finished.markdown_output
+    assert "## 物理オブジェクト" not in finished.markdown_output
     assert "## Q/A SQL 例" not in finished.markdown_output
     assert "## Q/A 由来 SQL 生成ルール" in finished.markdown_output
     assert _QA_SQL not in finished.markdown_output
@@ -843,9 +847,6 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert qa_patterns
     assert "question" not in qa_patterns[0]
     assert "APP.ORDERS" in qa_patterns[0]["physical_tables"]
-    assert "## 物理オブジェクト" in finished.markdown_output
-    assert "`APP.ORDERS` (table)" in finished.markdown_output
-    assert "業務名: 受注" in finished.markdown_output
     assert "#### オブジェクト型（Object Type）" in finished.markdown_output
     assert "受注 (`APP.ORDERS`)" in finished.markdown_output
     assert "#### リンク型（Link Type）" in finished.markdown_output
@@ -995,7 +996,8 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
     runtime, _store, legacy = harness
     client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
-    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 30_000)
+    # 抽出の指示（system prompt）が長くなった分の余裕を持たせる（#1720）。
+    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 32_000)
     qa_pairs = [
         QaPair(
             question=f"顧客別売上 {index}",
