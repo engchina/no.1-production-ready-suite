@@ -21,3 +21,5 @@
 3b4a5f2ebb72c018bf641f8097f5bdc891bd9981:nl2sql/backend/tests/test_settings_api.py:private-key:244
 # NL2SQL のシステム設定のテストのデータのダミーの鍵（本文が "DUMMYTESTKEYONLY NOTAREALPRIVATEKEY…"）。
 be1c804a37d246e1f2ac72bc0cc8f32e50ec8745:nl2sql/docs/test-data/nl2sql-system-settings/oci/oci_api_key.pem:private-key:1
+# #1719 の出力の上限のテストの、応答・失敗の文に出ないことを確かめるための合成の API key（"synthetic-secret-api-key-1719"）。
+232563bce207f88b6b19c13e68808312708fc25e:nl2sql/backend/tests/test_enterprise_ai_output_budget.py:generic-api-key:30
