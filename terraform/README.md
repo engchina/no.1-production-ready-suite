@@ -19,7 +19,7 @@
                              │ Wallet（1つ）
   ┌──────────────────────────┴───────────────────────────────────────────────┐
   │ Compute（1台。PRODUCTION_READY_SUITE）                                    │
-  │   Nginx :443（HTTPS。:80 は https へ 301）/ HTTPS が off なら :80            │
+  │   Nginx :443（HTTPS。:80 は開けない）/ HTTPS が off なら :80                 │
   │     /rag/    → frontend の dist、/rag/api/    → 127.0.0.1:8000（RAG）       │
   │     /nl2sql/ → frontend の dist、/nl2sql/api/ → 127.0.0.1:8010（NL2SQL）    │
   │     /agent/  → frontend の dist、/agent/api/  → 127.0.0.1:8020（Agent）     │
@@ -190,9 +190,11 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   | `/` | `/agent/` へ 302（Agent を配備しないときは、最初に配備した製品へ） |
   | `/platform/ca.crt` | 自作の Root CA の証明書（HTTPS が on のときだけ）。`/platform/` は platform（共通基盤）が配る共有の内容のために予約し、ほかの path は 404 |
 
-- **HTTPS（`https_enabled`、既定 on）**: Nginx が `https_port`（既定 443）で TLS 1.2 / 1.3 を受け、`http_port`（既定 80）への接続は 301 で
-  https（`https_port`）へ転送します（`https_port` を 80 にしたときは転送の server を置きません）。HSTS は付けません（IP の証明書のため）。
-  off にすると `http_port` の HTTP で、そのまま配信します（転送しません）。フォームには on なら `https_port`、off なら `http_port` が出ます。
+- **HTTPS（`https_enabled`、既定 on）**: Nginx が `https_port`（既定 443）だけで TLS 1.2 / 1.3 を受けます。`http_port`（既定 80）は
+  firewalld でも開けず、Nginx も listen しません（`http://` から https への転送もしません。#1638）。HSTS は付けません（IP の証明書のため）。
+  off にすると `http_port` の HTTP だけで配信します。フォームには on なら `https_port`、off なら `http_port` が出ます。
+  以前の配備（`http_port` も開けて https へ転送していた版）は、`suite-restart.sh` / `suite-update.sh` の再配備で firewalld に残った
+  `http_port` を閉じます（`firewall-cmd --permanent --remove-port=<http_port>/tcp`。`/var/log/suite-init.log` に出ます）。
   既定でない port は output の URL に付きます（例 `https://<IP>:8443/rag/`）。
 - **使えない port**: SSH（22）・よく使われる service（25 / 53 / 111 / 1521 / 1522 / 3306 / 5432 / 6379 / 9090）・Compute の中で製品が使う port
   （backend の 8000 / 8010 / 8020、RAG の前処理 / parser の 18000〜18099）と、1〜65535 の外。一覧は `terraform/stack/locals.tf` の
@@ -213,8 +215,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   - サーバー証明書は、期限の 30 日前から timer（`production-ready-suite-tls-renew.timer`、毎日）が作り直して Nginx を reload します。CA は作り直しません。
     状態は `sudo bash .../platform/deploy/suite-tls.sh status` で確認します。
 - **subnet の security list または NSG**（stack の外で管理。stack は ingress の規則・NSG を作りません。#259）で、利用者の端末からの
-  TCP `https_port`（HTTPS が off なら `http_port`）を許可してください。HTTPS が on のとき `http_port` も許可すると、`http://` で開いた利用者を
-  https へ転送できます。Compute の OS の firewall（firewalld）は suite-init.sh が選んだ port を開けます（`firewall-cmd --permanent --add-port=<port>/tcp`）。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
+  TCP `https_port`（HTTPS が off なら `http_port`）だけを許可してください（HTTPS が on のとき `http_port` は Compute で使いません）。
+  Compute の OS の firewall（firewalld）は suite-init.sh が選んだ port を開けます（`firewall-cmd --permanent --add-port=<port>/tcp`）。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
   127.0.0.1 なので、security list は要りません。
 - ログインのセッションは 3 製品で共通です（#1565。下の「ログインのセッションの共有（#1565）」）。`/`（Agent、無ければ最初の製品）を含め、
   どの製品の `/login` でログインしても全製品を使えます。
@@ -229,7 +231,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 | ログイン・実行ユーザー | `opc`（`ssh opc@<IP>`。3 製品のプロセスと repository の所有者。sudo は OCI の image の設定のまま無制限） |
 | package | `dnf`。BaseOS / AppStream だけを使い、EPEL・CodeReady Builder は有効にしない。Nginx は module `nginx:1.24`、Node.js は module `nodejs:24`（入らなければ公式の tarball を SHASUMS256 で確かめて `/usr/local/lib/nodejs`）。Python は今までどおり uv の `uv python install 3.12` |
 | Nginx | site は `/etc/nginx/conf.d/production-ready-suite.conf`。worker のユーザーは `nginx`、ログは `/var/log/nginx/production-ready-<製品>-*.log` |
-| firewall | `firewalld`。`http_port`（と HTTPS が on なら `https_port`）を `--permanent` で開ける |
+| firewall | `firewalld`。HTTPS が on なら `https_port` だけ、off なら `http_port` だけを `--permanent` で開ける（on のときに `http_port` が開いていれば閉じる。#1638） |
 | SELinux | enforcing のまま（無効にしない）。`suite-init.sh` の `configure_selinux` が次を設定する |
 | RAG の前処理 / parser の OS の依存 | LibreOffice（`libreoffice-core` / `-writer` / `-impress` / `-calc`、AppStream の 7.1）・`google-noto-sans-cjk-ttc-fonts` / `google-noto-serif-cjk-ttc-fonts`・`poppler-utils`・`tesseract` / `tesseract-langpack-eng` / `tesseract-langpack-jpn` |
 
@@ -241,7 +243,7 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 - `semanage fcontext -a -t httpd_sys_content_t '<repository>/<製品>/frontend/dist(/.*)?'`: Nginx が配信する dist。build の後に `restorecon -R`。
 - `semanage fcontext -a -t cert_t '/u01/aipoc/ssl(/.*)?'`: Nginx が読む証明書と鍵（`/platform/ca.crt` も）。
 - `setsebool -P httpd_can_network_connect 1`: Nginx から `127.0.0.1` の各製品の backend への proxy。
-- `http_port` / `https_port` が 80 / 443 以外なら `semanage port -a -t http_port_t -p tcp <port>`。
+- 公開する port（HTTPS が on なら `https_port`、off なら `http_port`）が 80 / 443 以外なら `semanage port -a -t http_port_t -p tcp <port>`。
 - Ubuntu で配備した Compute は更新しません。Oracle Linux 9 にするには stack を apply して Compute を作り直してください（データの正本は ADB。
   Compute の中だけにあるものは下の「製品ごとの Compute の stack からの更新」と同じく引き継がれません）。
 

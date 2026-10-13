@@ -57,7 +57,9 @@ source "${repo}/platform/deploy/suite-nginx.sh"
 
 site_all_https="$(suite_nginx_site true /srv/suite /srv/ssl 80 443 rag nl2sql agent)"
 assert_contains "${site_all_https}" "listen 443 ssl http2 default_server;" "HTTPS は 443"
-assert_contains "${site_all_https}" 'return 301 https://$host$request_uri;' "80 は https へ 301"
+# HTTPS が on なら http_port（80）は listen せず、https への転送の server も置かない（#1638）。
+assert_not_contains "${site_all_https}" "listen 80" "HTTPS が on なら 80 を listen しない"
+assert_not_contains "${site_all_https}" "return 301 https" "HTTPS が on でも http から https へ転送しない"
 assert_contains "${site_all_https}" "ssl_protocols TLSv1.2 TLSv1.3;" "TLS 1.2 / 1.3 だけ"
 assert_not_contains "${site_all_https}" "Strict-Transport-Security" "HSTS は付けない"
 assert_contains "${site_all_https}" "location = /platform/ca.crt" "CA 証明書を配る"
@@ -106,12 +108,15 @@ for directive in "proxy_buffering off;" "proxy_cache off;" "gzip off;"; do
   [ "$(count_of "${site_all_https}" "${directive}")" = 9 ] || fail "API の location の ${directive}"
 done
 # header: 要求の header（共有の Cookie）と応答の header（Content-Disposition 等）の buffer。
-[ "$(count_of "${site_all_https}" "large_client_header_buffers 4 16k;")" = 2 ] || fail "HTTP / HTTPS の server の large_client_header_buffers"
+# HTTPS が on なら server は HTTPS の 1 つだけ（http_port の転送の server は置かない。#1638）。
+[ "$(count_of "${site_all_https}" "large_client_header_buffers 4 16k;")" = 1 ] || fail "HTTPS の server の large_client_header_buffers"
+[ "$(count_of "${site_all_https}" "server {")" = 1 ] || fail "HTTPS が on なら server は 1 つだけ"
 assert_contains "${site_all_https}" "proxy_buffer_size 16k;" "応答の header の buffer"
 assert_contains "${site_all_https}" "proxy_buffers 8 16k;" "応答の buffer"
 
 site_http="$(suite_nginx_site false /srv/suite /srv/ssl 80 443 rag nl2sql agent)"
 assert_contains "${site_http}" "listen 80 default_server;" "HTTP は 80"
+[ "$(count_of "${site_http}" "large_client_header_buffers 4 16k;")" = 1 ] || fail "HTTP の server の large_client_header_buffers"
 assert_not_contains "${site_http}" "ssl" "HTTPS が off なら TLS を設定しない"
 assert_not_contains "${site_http}" "location = /platform/ca.crt" "HTTPS が off なら CA 証明書を配らない"
 assert_not_contains "${site_http}" "return 301 https" "HTTPS が off なら転送しない"
@@ -129,14 +134,17 @@ if suite_nginx_site true /srv/suite /srv/ssl 80 443 rag platform >/dev/null 2>&1
   fail "未知の製品なら失敗する"
 fi
 
-# port は変数（#1316）。既定でない port は listen と https への転送の先に入る。HTTPS が off なら http_port で直接配信する。
+# port は変数（#1316）。HTTPS が on なら https_port だけを listen し、http_port は使わない（#1638）。
+# HTTPS が off なら http_port で直接配信する。
 site_custom="$(suite_nginx_site true /srv/suite /srv/ssl 8080 8443 rag nl2sql agent)"
 assert_contains "${site_custom}" "listen 8443 ssl http2 default_server;" "https_port で listen する"
-assert_contains "${site_custom}" "listen 8080 default_server;" "http_port は https への転送"
-assert_contains "${site_custom}" 'return 301 https://$host:8443$request_uri;' "転送の先に https_port を付ける"
+assert_not_contains "${site_custom}" "listen 8080" "HTTPS が on なら http_port を listen しない"
+assert_not_contains "${site_custom}" "return 301 https" "HTTPS が on なら http_port から転送しない"
 site_same_port="$(suite_nginx_site true /srv/suite /srv/ssl 80 80 rag)"
 assert_contains "${site_same_port}" "listen 80 ssl http2 default_server;" "https_port が 80 なら 80 で HTTPS"
-assert_not_contains "${site_same_port}" "return 301 https" "https_port と http_port が同じなら転送の server を置かない"
+assert_not_contains "${site_same_port}" "return 301 https" "https_port と http_port が同じでも転送の server を置かない"
+# HTTPS が on なら http_port は使わないので検査しない。off なら https_port は検査しない。
+suite_nginx_site true /srv/suite /srv/ssl 22 443 rag >/dev/null 2>&1 || fail "HTTPS が on なのに http_port を検査した"
 site_http_custom="$(suite_nginx_site false /srv/suite /srv/ssl 8080 22 rag)"
 assert_contains "${site_http_custom}" "listen 8080 default_server;" "HTTPS が off なら http_port で配信する"
 assert_not_contains "${site_http_custom}" "return 301 https" "HTTPS が off なら転送しない"
@@ -375,14 +383,15 @@ if https_enabled:
     assert headers["content-disposition"] == 'attachment; filename="production-ready-root-ca.crt"', headers
     assert data == open(ca, "rb").read()
     assert "strict-transport-security" not in headers, headers
-    # TLS 1.2 / 1.3 の両方で接続でき、HTTP は https へ 301。
+    # TLS 1.2 / 1.3 の両方で接続でき、http_port は listen しない（HTTP から HTTPS へ転送しない。#1638）。
     for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
         assert call("/agent/", conn=connect(version))[0] == 200, version
     plain = http.client.HTTPConnection("127.0.0.1", http_port, timeout=10)
-    plain.request("GET", "/rag/api/health?x=1")
-    response = plain.getresponse()
-    assert response.status == 301, response.status
-    assert response.getheader("Location") == f"https://127.0.0.1:{https_port}/rag/api/health?x=1", response.getheader("Location")
+    try:
+        plain.request("GET", "/rag/api/health?x=1")
+        raise AssertionError(f"http_port {http_port} が listen されている: {plain.getresponse().status}")
+    except ConnectionRefusedError:
+        pass
 else:
     assert status == 404, status
 

@@ -435,20 +435,20 @@ variable "ssh_authorized_keys" {
   default     = ""
 }
 
-# HTTPS（#1316）。on なら Nginx が 443 で TLS 1.2 / 1.3 を受け、80 は 301 で https へ転送する。
+# HTTPS（#1316）。on なら Nginx が 443 で TLS 1.2 / 1.3 を受け、80 は開けない・listen しない（#1638）。
 # 証明書は Compute の中で作る自作の Root CA と、公開 IP・private IP の証明書。port と証明書の発行者は変数にしない
 # （platform/deploy/suite-tls.sh の固定値）。on のとき共通 .env の PLATFORM_AUTH_COOKIE_SECURE を true にする。
 variable "https_enabled" {
-  description = "Serve the products over HTTPS on port 443 with a private root CA and an IP address certificate generated on the Compute instance (HTTP on port 80 redirects to HTTPS). When false, the products are served over HTTP on port 80."
+  description = "Serve the products over HTTPS on port 443 with a private root CA and an IP address certificate generated on the Compute instance (port 80 is neither opened nor listened on). When false, the products are served over HTTP on port 80."
   type        = bool
   default     = true
 }
 
-# 公開の port（#1316）。HTTPS が on なら https_port で HTTPS を受け、http_port は https への転送だけ（同じ値なら転送しない）。
+# 公開の port（#1316）。HTTPS が on なら https_port だけで HTTPS を受け、http_port は開けない・listen しない（#1638）。
 # HTTPS が off なら http_port で HTTP をそのまま配信する。SSH・よく使われる service・Compute の中で使う port は
 # locals.tf の reserved_ports / reserved_port_ranges で拒む（compute.tf の precondition。配備のスクリプトも同じ一覧で確かめる）。
 variable "http_port" {
-  description = "Public HTTP port of Nginx. Serves the products when https_enabled is false; redirects to HTTPS when https_enabled is true (unless it equals https_port)."
+  description = "Public HTTP port of Nginx, used only when https_enabled is false. When https_enabled is true, this port is neither opened in the firewall nor listened on."
   type        = number
   default     = 80
 
