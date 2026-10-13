@@ -37,8 +37,9 @@ PR の CI の mobile の project は、画面幅に依存するテスト（`@res
 PR の smoke（ci.yml の `*_E2E_SMOKE`）が全 project で実行する spec は `--skip-specs` で渡し、
 選んだ spec から除く（同じ spec を 2 回実行しない。全件のときは smoke の job を飛ばす。#1525）。
 
-nightly だけで実行する spec（`*.nightly.spec.ts`。主要な画面の axe の確認など）は spec の一覧から除き、
-PR では選ばない（全件のときも。`platform/scripts/e2e-impact/nightly-only.ts`。#1595）。
+nightly だけで実行する spec（`*.nightly.spec.ts`。主要な画面の axe の確認など）は
+spec の一覧から除き、PR では選ばない（全件のときも。
+`platform/scripts/e2e-impact/nightly-only.ts`。#1595）。
 
 ローカルで同じ選択を見るには（nightly の記録を `gh` で取得する）:
 
