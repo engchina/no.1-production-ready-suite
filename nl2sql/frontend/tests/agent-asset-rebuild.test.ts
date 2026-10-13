@@ -42,7 +42,7 @@ test("成功は再構築済み（success）と、既存の画面と同じ書式�
   });
   assert.equal(view.variant, "success");
   assert.equal(view.badge, "再構築済み");
-  assert.equal(view.summary, `最後の再構築: ${formatDateTime(rebuiltAt)}`);
+  assert.equal(view.summary, `日時: ${formatDateTime(rebuiltAt)}`);
   assert.equal(view.failure, "");
 });
 

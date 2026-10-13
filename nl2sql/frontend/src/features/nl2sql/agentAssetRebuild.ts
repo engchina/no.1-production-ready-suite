@@ -40,7 +40,7 @@ export interface AgentAssetRebuildPresentation {
   variant: AgentAssetRebuildBadgeVariant;
   /** 見出しの `StatusBadge` の文言（状態は色だけでなく文字とアイコンで示す）。 */
   badge: string;
-  /** 日時（「最後の再構築: MM/DD HH:mm」）か、まだ再構築していないことの案内。 */
+  /** 日時（「日時: MM/DD HH:mm」）か、まだ再構築していないことの案内。 */
   summary: string;
   /** 失敗の要約。成功・未実行では空。 */
   failure: string;

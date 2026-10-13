@@ -1908,7 +1908,7 @@ const nl2sqlJa = {
   "profiles.oracle.assets.rebuild.status.never": "未再構築",
   "profiles.oracle.assets.rebuild.status.succeeded": "再構築済み",
   "profiles.oracle.assets.rebuild.status.failed": "再構築に失敗",
-  "profiles.oracle.assets.rebuild.at": "最後の再構築: {time}",
+  "profiles.oracle.assets.rebuild.at": "日時: {time}",
   "profiles.oracle.assets.rebuild.never":
     "まだ再構築していません。チェックをオンにして保存すると、アセットを作成します。",
   "profiles.oracle.assets.rebuild.failedFallback": "Select AI Agent アセットを再構築できませんでした。",

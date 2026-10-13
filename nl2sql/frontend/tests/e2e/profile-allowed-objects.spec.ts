@@ -3717,14 +3717,14 @@ test.describe("Select AI Agent アセットの最後の再構築", () => {
     await expect.poll(() => rebuildRequests).toBeGreaterThan(requestsBeforeSave);
     await expect(badge).toHaveText("再構築済み");
     await expect(badge.locator("[data-status-variant]")).toHaveAttribute("data-status-variant", "success");
-    await expect(summary).toHaveText("最後の再構築: 10/13 18:05");
+    await expect(summary).toHaveText("日時: 10/13 18:05");
     await expect(summary.locator("time")).toHaveAttribute("datetime", "2026-10-13T09:05:00+00:00");
 
     // 開き直しても、最後の再構築の日時と結果が分かる（保存の直後の進行の表示は消える）。
     await page.reload();
     await expect(page.getByTestId("profile-save-progress")).toHaveCount(0);
     await expect(badge).toHaveText("再構築済み");
-    await expect(summary).toHaveText("最後の再構築: 10/13 18:05");
+    await expect(summary).toHaveText("日時: 10/13 18:05");
     await expect(page.getByTestId("profile-agent-rebuild-failure")).toHaveCount(0);
     await status.scrollIntoViewIfNeeded();
     await expectNoDocumentHorizontalOverflow(page);
@@ -3744,7 +3744,7 @@ test.describe("Select AI Agent アセットの最後の再構築", () => {
     await page.reload();
     await expect(badge).toHaveText("再構築に失敗");
     await expect(badge.locator("[data-status-variant]")).toHaveAttribute("data-status-variant", "danger");
-    await expect(summary).toHaveText("最後の再構築: 10/13 19:30");
+    await expect(summary).toHaveText("日時: 10/13 19:30");
     await expect(page.getByTestId("profile-agent-rebuild-failure")).toHaveText(
       "Select AI Agent アセットを再構築できませんでした。データベース設定と Select AI Agent の構成を確認してから再試行してください。"
     );
