@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
-from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
-from rag_engine.parsing.table_structure import table_row_groups
 from rag_engine.chunking.constants import (
-    ChunkingConfig,
     SOURCE_TABLE_CROP_RELATIONSHIP,
+    ChunkingConfig,
     _compact_json_text,
     _int_value,
     _preview,
 )
+from rag_engine.chunking.layout import _engine_page_key, _visual_group_key
 from rag_engine.chunking.records import (
     _bbox_contains,
     _bbox_intersects,
@@ -24,7 +23,10 @@ from rag_engine.chunking.records import (
     _record_visual_role,
     _table_structure,
 )
-from rag_engine.chunking.layout import _engine_page_key, _visual_group_key
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
+from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+from rag_engine.parsing.table_structure import table_row_groups
+
 
 def _table_record_with_metadata(record: dict[str, Any], records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
@@ -155,16 +157,8 @@ def _table_visual_evidence_for_row_group(
         return []
 
     # 同じ table crop の重複 vector が全 row group を占有しないよう、先頭 group だけへ関連付ける。
-    source_table_crops = [
-        visual
-        for visual in visuals
-        if str(visual.get("relationship") or "") == SOURCE_TABLE_CROP_RELATIONSHIP
-    ]
-    row_visuals = [
-        visual
-        for visual in visuals
-        if str(visual.get("relationship") or "") != SOURCE_TABLE_CROP_RELATIONSHIP
-    ]
+    source_table_crops = [visual for visual in visuals if str(visual.get("relationship") or "") == SOURCE_TABLE_CROP_RELATIONSHIP]
+    row_visuals = [visual for visual in visuals if str(visual.get("relationship") or "") != SOURCE_TABLE_CROP_RELATIONSHIP]
     selected_table_crops = source_table_crops if include_source_table_crop else []
 
     table_bbox = _bbox_tuple(table_record.get("bbox"))
@@ -191,9 +185,11 @@ def _table_visual_evidence_for_row_group(
     matching_row_visuals = [
         visual
         for visual in row_visuals
-        if (row_start <= int(visual["row_index"]) <= row_end
+        if (
+            row_start <= int(visual["row_index"]) <= row_end
             if visual.get("row_index") is not None
-            else _visual_evidence_matches_row_group(visual, row_group_bbox))
+            else _visual_evidence_matches_row_group(visual, row_group_bbox)
+        )
     ]
     return [*selected_table_crops, *matching_row_visuals]
 
@@ -223,16 +219,19 @@ def _attach_unmatched_table_visuals(
         row_index = _int_value(visual.get("row_index"))
         visual_bbox = _bbox_tuple(visual.get("bbox"))
 
-        def distance(group: dict[str, Any]) -> float:
+        # 反復ごとの値は既定値で束縛する（min の key として同じ反復の中でだけ呼ぶ。B023）。
+        def distance(
+            group: dict[str, Any],
+            row_index: int | None = row_index,
+            visual_bbox: tuple[float, float, float, float] | None = visual_bbox,
+        ) -> float:
             row_start = _int_value(group.get("row_start")) or 0
             row_end = _int_value(group.get("row_end")) or 0
             if row_index is not None:
                 return float(max(row_start - row_index, row_index - row_end, 0))
             if table_bbox is None or visual_bbox is None or total_row_count <= 0:
                 return 0.0
-            band = _estimated_table_row_group_bbox(
-                table_bbox, row_start=row_start, row_end=row_end, total_row_count=total_row_count
-            )
+            band = _estimated_table_row_group_bbox(table_bbox, row_start=row_start, row_end=row_end, total_row_count=total_row_count)
             center_y = (visual_bbox[1] + visual_bbox[3]) / 2
             return max(band[1] - center_y, center_y - band[3], 0.0)
 
@@ -291,7 +290,9 @@ def _contained_table_visual_evidence(
         return []
     images: list[dict[str, Any]] = []
     # 表内 Picture とその OCR 文は表と同じ engine・page にしかないので、1 回絞り込んで使い回す (#871)。
-    page_records = [record for record in records if record is not table_record and _engine_page_key(record) == _engine_page_key(table_record)]
+    page_records = [
+        record for record in records if record is not table_record and _engine_page_key(record) == _engine_page_key(table_record)
+    ]
     for record in page_records:
         if str(record.get("category") or "") != "Picture":
             continue
@@ -327,12 +328,8 @@ def _contained_table_visual_evidence(
                 "vision_provider": str(raw.get("vision_provider") or ""),
                 "vision_model": str(raw.get("vision_model") or ""),
                 "vision_error": str(raw.get("vision_error") or ""),
-                "visual_kind": str(
-                    raw.get("visual_kind") or raw.get("picture_kind") or raw.get("visual_artifact_type") or ""
-                ),
-                "visual_structure": (
-                    dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}
-                ),
+                "visual_kind": str(raw.get("visual_kind") or raw.get("picture_kind") or raw.get("visual_artifact_type") or ""),
+                "visual_structure": (dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}),
                 "visual_role": visual_role_from_ref(raw),
             }
         )
@@ -425,10 +422,6 @@ def _normalized_table_context(table_context: Sequence[Any]) -> list[dict[str, An
             continue
         item = dict(table)
         visual_evidence = item.get("visual_evidence")
-        item["visual_evidence"] = (
-            _filter_image_evidence(visual_evidence)
-            if isinstance(visual_evidence, list)
-            else []
-        )
+        item["visual_evidence"] = _filter_image_evidence(visual_evidence) if isinstance(visual_evidence, list) else []
         tables.append(item)
     return tables

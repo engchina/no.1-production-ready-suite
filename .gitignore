@@ -18,3 +18,6 @@ terraform/stack/*.tfstate.*
 terraform/stack/*.tfvars
 terraform/stack/wallet*.zip
 terraform/stack/wallet_extracted/
+
+# 一時ファイルの置き場（/tmp は WSL の再起動で消える。commit しない。#1616）
+/tmp/

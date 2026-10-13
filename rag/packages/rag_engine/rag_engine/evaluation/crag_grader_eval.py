@@ -5,11 +5,13 @@
 評価は候補単位の precision / recall / F1 と、質問単位の誤拒（answerable なのに不足）・誤受理（answerable
 でないのに十分）を数える。ラベルは実データなのでリポジトリ外に置き、ここには集計と草稿の組み立てだけを置く。
 """
+
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 LABEL_SCHEMA_VERSION = 1
 
@@ -95,11 +97,14 @@ def summarize_grader_runs(labels: dict[str, Any], runs: dict[str, Sequence[dict[
             for uid, relevant in truth.items():
                 predicted = verdicts.get(uid, False)
                 if relevant and predicted:
-                    tp += 1; hit += 1
+                    tp += 1
+                    hit += 1
                 elif relevant and not predicted:
-                    fn += 1; miss += 1
+                    fn += 1
+                    miss += 1
                 elif not relevant and predicted:
-                    fp += 1; extra += 1
+                    fp += 1
+                    extra += 1
                 else:
                     tn += 1
             sufficient = bool(attempt.get("sufficient"))
@@ -110,19 +115,40 @@ def summarize_grader_runs(labels: dict[str, Any], runs: dict[str, Sequence[dict[
                 false_accepts += 1
         absent_total += absent
         unlabeled_total += unlabeled
-        rows.append({
-            "id": question["id"], "answerable": question.get("answerable"), "labeled": len(labeled),
-            "relevant_labels": sum(1 for c in labeled if c["relevant"]), "attempts": len(attempts),
-            "sufficient": sufficient_count, "hit": hit, "miss": miss, "extra": extra,
-            "absent": absent, "unlabeled": unlabeled,
-        })
+        rows.append(
+            {
+                "id": question["id"],
+                "answerable": question.get("answerable"),
+                "labeled": len(labeled),
+                "relevant_labels": sum(1 for c in labeled if c["relevant"]),
+                "attempts": len(attempts),
+                "sufficient": sufficient_count,
+                "hit": hit,
+                "miss": miss,
+                "extra": extra,
+                "absent": absent,
+                "unlabeled": unlabeled,
+            }
+        )
     precision, recall = _ratio(tp, tp + fp), _ratio(tp, tp + fn)
-    f1 = (2 * precision * recall / (precision + recall)) if precision and recall else (0.0 if precision is not None and recall is not None else None)
+    f1 = (
+        (2 * precision * recall / (precision + recall))
+        if precision and recall
+        else (0.0 if precision is not None and recall is not None else None)
+    )
     return {
-        "graded_attempts": graded, "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-        "precision": precision, "recall": recall, "f1": f1,
-        "false_refusals": false_refusals, "false_accepts": false_accepts,
-        "absent": absent_total, "unlabeled": unlabeled_total,
+        "graded_attempts": graded,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "false_refusals": false_refusals,
+        "false_accepts": false_accepts,
+        "absent": absent_total,
+        "unlabeled": unlabeled_total,
         "answerable_attempts": sum(r["attempts"] for r in rows if r["answerable"] is True),
         "unanswerable_attempts": sum(r["attempts"] for r in rows if r["answerable"] is False),
         "questions": rows,
@@ -142,20 +168,24 @@ def format_grader_summary(summary: dict[str, Any]) -> str:
         f"| {_fmt(summary['recall'])} ({summary['tp']}/{summary['tp'] + summary['fn']}) | {_fmt(summary['f1'])} "
         f"| {summary['false_refusals']}/{summary['answerable_attempts']} | {summary['false_accepts']}/{summary['unanswerable_attempts']} |",
         "",
-        f"ラベルにあるが提示されなかった候補（absent）: {summary['absent']} / 提示されたがラベルに無い候補（unlabeled）: {summary['unlabeled']}",
+        f"ラベルにあるが提示されなかった候補（absent）: {summary['absent']} / "
+        f"提示されたがラベルに無い候補（unlabeled）: {summary['unlabeled']}",
         "",
         "| id | answerable | ラベル数（relevant） | 評価回数 | 十分 | hit | miss | extra | absent | unlabeled |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for row in summary["questions"]:
         answerable = {True: "true", False: "false"}.get(row["answerable"], "—")
-        lines.append(f"| {row['id']} | {answerable} | {row['labeled']} ({row['relevant_labels']}) | {row['attempts']} "
-                     f"| {row['sufficient']} | {row['hit']} | {row['miss']} | {row['extra']} | {row['absent']} | {row['unlabeled']} |")
+        lines.append(
+            f"| {row['id']} | {answerable} | {row['labeled']} ({row['relevant_labels']}) | {row['attempts']} "
+            f"| {row['sufficient']} | {row['hit']} | {row['miss']} | {row['extra']} | {row['absent']} | {row['unlabeled']} |"
+        )
     return "\n".join(lines)
 
 
-def draft_question_labels(question_input: dict[str, Any], candidates: Sequence[dict[str, Any]],
-                          attempt: dict[str, Any], *, excerpt_chars: int = 200) -> dict[str, Any]:
+def draft_question_labels(
+    question_input: dict[str, Any], candidates: Sequence[dict[str, Any]], attempt: dict[str, Any], *, excerpt_chars: int = 200
+) -> dict[str, Any]:
     """評価器 1 回の verdict を草稿ラベルにする。人が `relevant` / `answerable` を見直す前提の下書き。
 
     candidates は `_crag_grade_candidates` の出力（chunk_uid / source / page / section / text）。verdict の無い候補は
@@ -166,28 +196,47 @@ def draft_question_labels(question_input: dict[str, Any], candidates: Sequence[d
     for candidate in candidates:
         uid = candidate.get("chunk_uid") or ""
         verdict = verdicts.get(uid)
-        drafted.append({
-            "chunk_uid": uid, "source": candidate.get("source", ""), "page": candidate.get("page", 0),
-            "section": candidate.get("section", ""), "excerpt": str(candidate.get("text", ""))[:excerpt_chars],
-            "relevant": bool(verdict["relevant"]) if verdict else None,
-            "note": str(verdict.get("reason", "")) if verdict else "",
-        })
-    return {**{k: question_input[k] for k in ("id", "question", "run_id", "retrieval_queries", "large_category") if k in question_input},
-            "answerable": None, "draft_sufficient": bool(attempt.get("sufficient")), "candidates": drafted}
+        drafted.append(
+            {
+                "chunk_uid": uid,
+                "source": candidate.get("source", ""),
+                "page": candidate.get("page", 0),
+                "section": candidate.get("section", ""),
+                "excerpt": str(candidate.get("text", ""))[:excerpt_chars],
+                "relevant": bool(verdict["relevant"]) if verdict else None,
+                "note": str(verdict.get("reason", "")) if verdict else "",
+            }
+        )
+    return {
+        **{k: question_input[k] for k in ("id", "question", "run_id", "retrieval_queries", "large_category") if k in question_input},
+        "answerable": None,
+        "draft_sufficient": bool(attempt.get("sufficient")),
+        "candidates": drafted,
+    }
 
 
 def format_review_sheet(labels: dict[str, Any]) -> str:
     """見直し用の Markdown。候補ごとに評価器の下書きと空欄（人の判定）を並べる。"""
     lines = []
     for question in labels["questions"]:
-        lines += [f"## {question['id']}", "", f"質問: {question['question']}", "",
-                  f"answerable（資料に答えがあるか。true / false を記入）: {question.get('answerable')}",
-                  f"評価器の下書き sufficient: {question.get('draft_sufficient')}", "",
-                  "| # | chunk_uid | 出典 / 頁 / 見出し | 抜粋 | 下書き relevant | 人の判定 | 理由 |", "|---|---|---|---|---|---|---|"]
+        lines += [
+            f"## {question['id']}",
+            "",
+            f"質問: {question['question']}",
+            "",
+            f"answerable（資料に答えがあるか。true / false を記入）: {question.get('answerable')}",
+            f"評価器の下書き sufficient: {question.get('draft_sufficient')}",
+            "",
+            "| # | chunk_uid | 出典 / 頁 / 見出し | 抜粋 | 下書き relevant | 人の判定 | 理由 |",
+            "|---|---|---|---|---|---|---|",
+        ]
         for number, candidate in enumerate(question["candidates"], 1):
             excerpt = " ".join(str(candidate.get("excerpt", "")).split())[:120]
-            lines.append(f"| {number} | `{candidate['chunk_uid']}` | {candidate.get('source', '')} p.{candidate.get('page', '')} {candidate.get('section', '')} "
-                         f"| {excerpt} | {candidate.get('relevant')} |  | {candidate.get('note', '')} |")
+            lines.append(
+                f"| {number} | `{candidate['chunk_uid']}` "
+                f"| {candidate.get('source', '')} p.{candidate.get('page', '')} {candidate.get('section', '')} "
+                f"| {excerpt} | {candidate.get('relevant')} |  | {candidate.get('note', '')} |"
+            )
         lines.append("")
     return "\n".join(lines)
 
@@ -206,8 +255,18 @@ def collect_runs(labels: dict[str, Any], grade: Callable[[dict[str, Any]], Any],
             result = grade(question)
             payload, candidates = result if isinstance(result, tuple) else (result, None)
             if candidates is not None:
-                payload = {**payload, "candidates": [{"chunk_uid": c.get("chunk_uid", ""), "source": c.get("source", ""),
-                                                      "page": c.get("page", 0), "section": c.get("section", "")} for c in candidates]}
+                payload = {
+                    **payload,
+                    "candidates": [
+                        {
+                            "chunk_uid": c.get("chunk_uid", ""),
+                            "source": c.get("source", ""),
+                            "page": c.get("page", 0),
+                            "section": c.get("section", ""),
+                        }
+                        for c in candidates
+                    ],
+                }
             attempts.append(payload)
         runs[question["id"]] = attempts
     return runs

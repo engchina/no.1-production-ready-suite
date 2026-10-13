@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -286,6 +287,34 @@ class AggregateTest(unittest.TestCase):
         self.assertNotIn((2, 3), by_key)
         self.assertEqual(by_key[(5, 6)].specs, {"b.spec.ts"})
 
+    def test_aggregate_counts_pr_scope_separately(self) -> None:
+        # PR の CI の mobile の project は @responsive などだけを実行する（#1582）。
+        # prScope の無い古い記録は、PR でも実行するものとして数える。
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            records = [
+                self._record("a.spec.ts", "desktop", 0, {}) | {"prScope": True},
+                self._record("a.spec.ts", "mobile", 0, {})
+                | {"project": "mobile", "prScope": False},
+                self._record("a.spec.ts", "old", 0, {}),
+            ]
+            for index, record in enumerate(records):
+                Path(directory, f"{index}.json").write_text(json.dumps(record))
+            data = impact.aggregate(directory, "rag", "c0")
+        entry = data["specs"]["a.spec.ts"]
+        self.assertEqual((entry["durationMs"], entry["tests"]), (3000, 3))
+        self.assertEqual((entry["prDurationMs"], entry["prTests"]), (2000, 2))
+
+    def test_merge_without_pr_scope_uses_full_duration(self) -> None:
+        new = _map(
+            {}, specs={"a": {"durationMs": 300, "tests": 3, "prDurationMs": 100, "prTests": 1}}
+        )
+        old = _map({}, specs={"a": {"durationMs": 200, "tests": 2}})
+        merged = impact.merge_maps([new, old])
+        assert merged is not None
+        self.assertEqual(merged["specs"]["a"]["prDurationMs"], 300)
+        self.assertEqual(merged["specs"]["a"]["prTests"], 3)
+
     def test_merge_ignores_other_commits(self) -> None:
         a = _map({}, tests=1, commit="c1")
         b = _map({}, tests=2, commit="c2")
@@ -320,6 +349,22 @@ class PlanShardsTest(unittest.TestCase):
         )
         self.assertEqual(impact.spec_durations(["a", "new"], recorded), {"a": 100, "new": 300})
         self.assertEqual(impact.spec_durations(["x"], None), {"x": impact.UNKNOWN_SPEC_MS})
+
+    def test_durations_use_pr_scope(self) -> None:
+        # PR の見積もりは、PR でも実行するテストの時間（prDurationMs）を使う（#1582）。
+        recorded = impact.ImpactMap(
+            _map(
+                {},
+                specs={
+                    "a": {"durationMs": 1000, "prDurationMs": 600},
+                    "b": {"durationMs": 300},
+                    "c": {"durationMs": 900, "prDurationMs": 500},
+                },
+            )
+        )
+        self.assertEqual(
+            impact.spec_durations(["a", "b", "new"], recorded), {"a": 600, "b": 300, "new": 500}
+        )
 
     def test_matrix_lists_specs_per_shard(self) -> None:
         product = impact.PRODUCTS["rag"]
@@ -702,6 +747,55 @@ class SelectIntegrationTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("bad.spec.ts", errors[0])
         self.assertIn("./fixtures/test", errors[0])
+
+
+class NightlyShardsTest(unittest.TestCase):
+    """nightly の shard の数と、記録がそろった run だけを使うこと（#1599）。"""
+
+    def test_nightly_matrix_matches_products(self) -> None:
+        workflow = (impact.ROOT / ".github/workflows/e2e-nightly.yml").read_text(encoding="utf-8")
+        rows = re.findall(r"\{ product: (\w+),.*?shard: (\d+), total: (\d+) \}", workflow)
+        self.assertTrue(rows)
+        for name, product in impact.PRODUCTS.items():
+            shards = sorted(int(shard) for row, shard, _ in rows if row == name)
+            totals = {int(total) for row, _, total in rows if row == name}
+            self.assertEqual(shards, list(range(1, product.nightly_shards + 1)), name)
+            self.assertEqual(totals, {product.nightly_shards}, name)
+
+    def _download(self, runs: list[tuple[int, int]]) -> list[Path]:
+        """runs は (run の id, その run の記録の数)。新しい順。"""
+        product = impact.PRODUCTS["agent"]
+        counts = dict(runs)
+
+        def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess:
+            if args[:3] == ["gh", "run", "list"]:
+                body = json.dumps([{"databaseId": run} for run, _ in runs])
+                return subprocess.CompletedProcess(args, 0, body, "")
+            run = int(args[3])
+            target = Path(args[args.index("--dir") + 1])
+            for shard in range(1, counts[run] + 1):
+                path = target / f"e2e-impact-agent-{shard}" / f"agent-{shard}.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(impact.subprocess, "run", side_effect=fake_run),
+                mock.patch("sys.stderr"),
+            ):
+                files = impact.download_maps(product, Path(tmp))
+            return [path.relative_to(tmp) for path in files]
+
+    def test_download_skips_run_with_missing_shard(self) -> None:
+        shards = impact.PRODUCTS["agent"].nightly_shards
+        files = self._download([(2, shards - 1), (1, shards)])
+        self.assertEqual(len(files), shards)
+        self.assertTrue(all(path.parts[0] == "1" for path in files))
+
+    def test_download_returns_nothing_without_complete_run(self) -> None:
+        shards = impact.PRODUCTS["agent"].nightly_shards
+        self.assertEqual(self._download([(2, shards - 1), (1, 0)]), [])
 
 
 if __name__ == "__main__":

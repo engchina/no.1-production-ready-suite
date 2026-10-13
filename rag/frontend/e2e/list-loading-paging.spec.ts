@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("文書一覧: 読み込み中は経過時間と表の Skeleton、表の中で縦スクロールし、ページは再読込でも残る", async ({ page }) => {
+test("文書一覧: 読み込み中は経過時間と表の Skeleton、表の中で縦スクロールし、ページは再読込でも残る", { tag: "@responsive" }, async ({ page }) => {
   const release = await mockDocuments(page, 25);
 
   await page.goto("/file-list");
@@ -46,7 +46,7 @@ test("文書一覧: 読み込み中は経過時間と表の Skeleton、表の中
   await expect(page.getByRole("link", { name: "doc-11.txt" })).toBeVisible();
 });
 
-test("検索・回答プロファイル一覧: 読み込み中は経過時間と表の Skeleton、2 ページ目へ移れる", async ({ page }) => {
+test("検索・回答プロファイル一覧: 読み込み中は経過時間と表の Skeleton、2 ページ目へ移れる", { tag: "@responsive" }, async ({ page }) => {
   const release = await mockSearchAnswerProfiles(page, 12);
 
   await page.goto("/search-answer-profiles");
@@ -66,7 +66,7 @@ test("検索・回答プロファイル一覧: 読み込み中は経過時間と
   await expectNoPageOverflow(page);
 });
 
-test("チャットの会話一覧: 読み込み中は経過時間と行の Skeleton、サーバー側のページングで 2 ページ目へ移れる", async ({ page }) => {
+test("チャットの会話一覧: 読み込み中は経過時間と行の Skeleton、サーバー側のページングで 2 ページ目へ移れる", { tag: "@responsive" }, async ({ page }) => {
   const { release, requests } = await mockConversations(page, 25);
 
   await page.goto("/chat?search_answer_profile_id=bv-1");

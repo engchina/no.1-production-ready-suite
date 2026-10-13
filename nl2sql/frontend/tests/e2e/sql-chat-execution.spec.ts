@@ -236,7 +236,7 @@ async function expectNoPageOverflow(page: Page) {
   ).toBeLessThanOrEqual(0);
 }
 
-test("送信のジョブが実行まで行い、結果の行を 1 回だけ受け取って吹き出しの中の表で縦横にスクロールする", async ({
+test("送信のジョブが実行まで行い、結果の行を 1 回だけ受け取って吹き出しの中の表で縦横にスクロールする", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   const state = await setup(page);
@@ -323,7 +323,7 @@ test("送信のジョブが実行まで行い、結果の行を 1 回だけ受�
   expect(state.receiveRequests).toHaveLength(1);
 });
 
-test("「すべての行を見る」は広いシートでページを送り、CSV は取得した行を書き出す", async ({
+test("「すべての行を見る」は広いシートでページを送り、CSV は取得した行を書き出す", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   await setup(page);

@@ -155,7 +155,7 @@ test("検索・回答プロファイルの一覧は IME の変換中に絞り込
   expect(queries.filter((q) => q !== "")).toEqual(["人事"]);
 });
 
-test("ナレッジベースの一覧も同じ部品で、入力に合わせて絞り込み、Enter はすぐ反映する", async ({ page }, testInfo) => {
+test("ナレッジベースの一覧も同じ部品で、入力に合わせて絞り込み、Enter はすぐ反映する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const queries = await mockList(page, "**/api/knowledge-bases**", knowledgeBases);
   await page.goto("/knowledge-bases");
   const search = page.getByRole("searchbox", { name: "名前・説明で検索" });

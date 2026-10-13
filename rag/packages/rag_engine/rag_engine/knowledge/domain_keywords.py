@@ -7,11 +7,11 @@ import json
 import re
 import shutil
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
-
+from typing import Any
 
 DOMAIN_KEYWORDS_SCHEMA_VERSION = 1
 DOMAIN_KEYWORDS_FILE_NAME = "domain_keywords.json"
@@ -24,6 +24,7 @@ MAX_EXTRACTED_DOMAIN_KEYWORDS = 16
 @dataclass(frozen=True)
 class DomainKeywordSaveResult:
     """ドメインキーワード保存時のパス、backup、件数を保持します。"""
+
     path: Path
     backup_path: Path | None
     keyword_count: int
@@ -45,10 +46,7 @@ def load_domain_keywords(output_dir: str | Path) -> list[str]:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return []
 
-    if isinstance(payload, dict):
-        raw_keywords = payload.get("keywords")
-    else:
-        raw_keywords = payload
+    raw_keywords = payload.get("keywords") if isinstance(payload, dict) else payload
     return normalize_domain_keywords(raw_keywords)
 
 
@@ -121,11 +119,7 @@ def add_domain_keywords(existing_keywords: Sequence[str], additions: Sequence[st
 def remove_domain_keywords(existing_keywords: Sequence[str], removals: Sequence[str]) -> list[str]:
     """指定 keyword を正規化 key で既存 list から取り除きます。"""
     removal_keys = {_keyword_key(keyword) for keyword in removals if _keyword_key(keyword)}
-    return [
-        keyword
-        for keyword in normalize_domain_keywords(existing_keywords)
-        if _keyword_key(keyword) not in removal_keys
-    ]
+    return [keyword for keyword in normalize_domain_keywords(existing_keywords) if _keyword_key(keyword) not in removal_keys]
 
 
 def extract_domain_keywords(
@@ -216,10 +210,10 @@ def _unique_backup_path(path: Path, backup_dir: Path, saved_at: datetime) -> Pat
 
 def _utc_now(now: datetime | None) -> datetime:
     if now is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now.astimezone(timezone.utc)
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:

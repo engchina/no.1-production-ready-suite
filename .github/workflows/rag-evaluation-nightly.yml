@@ -73,7 +73,7 @@ jobs:
   evaluation:
     # job 名の "RAG / " は ci-failure-issue.yml が Issue の製品 label を決めるのに使う。
     name: RAG / Golden set and search load
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 通常実行は 1 分未満。strict は Docling の parser サービスの準備(ローカルの実測: 空のキャッシュからの sync と
     # モデルの取得で約 60 秒、run の再 sync と起動で約 11 秒)と gate(約 30〜40 秒)が加わる。負荷の高いマシンでは
     # それぞれ約 160 秒・45 秒・180 秒だった。runner の速度差と real-world staging の分を見込んで、以前の 30 分に

@@ -1,7 +1,7 @@
 """prompt files の挙動を保護するテスト。"""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -24,8 +24,6 @@ from rag_engine.knowledge.prompt_files import (
 
 
 class PromptFileTests(unittest.TestCase):
-
-
     def test_read_prompt_file_uses_utf8(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.txt"
@@ -164,7 +162,7 @@ class PromptFileTests(unittest.TestCase):
             root = Path(tmp)
             path = root / "prompts" / "sample.txt"
             prompt_file = PromptFile("sample", "sample.txt", path, root / "prompts" / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             result = save_prompt_file(prompt_file, "new prompt", now=now)
 
@@ -177,7 +175,7 @@ class PromptFileTests(unittest.TestCase):
             path = root / "sample.txt"
             path.write_text("old prompt", encoding="utf-8")
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             result = save_prompt_file(prompt_file, "new prompt", now=now)
 
@@ -200,7 +198,7 @@ class PromptFileTests(unittest.TestCase):
             path = root / "sample.txt"
             path.write_text("v0", encoding="utf-8")
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
             contents = [f"v{index}" for index in range(1, 7)]
 
             with patch.object(prompt_files.shutil, "copy2", side_effect=slow_copy), ThreadPoolExecutor(6) as pool:
@@ -222,11 +220,10 @@ class PromptFileTests(unittest.TestCase):
             path = root / "sample.txt"
             path.write_text("old prompt", encoding="utf-8")
             prompt_file = PromptFile("sample", "sample.txt", path, root / "backups")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
-            with patch.object(Path, "write_text", side_effect=OSError("disk full")):
-                with self.assertRaisesRegex(OSError, "disk full"):
-                    save_prompt_file(prompt_file, "new prompt", now=now)
+            with patch.object(Path, "write_text", side_effect=OSError("disk full")), self.assertRaisesRegex(OSError, "disk full"):
+                save_prompt_file(prompt_file, "new prompt", now=now)
 
             backup_path = root / "backups" / "sample.20260901T123456Z.txt.bak"
             self.assertEqual(path.read_text(encoding="utf-8"), "old prompt")
@@ -237,8 +234,12 @@ class PromptFileTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             answer_prompt = PromptFile(
-                VLM_ANSWER_PROMPT_KEY, "vlm_answer.txt", root / "vlm_answer.txt", root / "backups",
-                DEFAULT_VLM_ANSWER_PROMPT, ("question", "images"),
+                VLM_ANSWER_PROMPT_KEY,
+                "vlm_answer.txt",
+                root / "vlm_answer.txt",
+                root / "backups",
+                DEFAULT_VLM_ANSWER_PROMPT,
+                ("question", "images"),
             )
             answer_prompt.path.write_text("old {{question}} {{images}}", encoding="utf-8")
 
@@ -261,11 +262,15 @@ class PromptFileTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             answer_prompt = PromptFile(
-                VLM_ANSWER_PROMPT_KEY, "vlm_answer.txt", root / "vlm_answer.txt", root / "backups",
-                DEFAULT_VLM_ANSWER_PROMPT, ("question", "images"),
+                VLM_ANSWER_PROMPT_KEY,
+                "vlm_answer.txt",
+                root / "vlm_answer.txt",
+                root / "backups",
+                DEFAULT_VLM_ANSWER_PROMPT,
+                ("question", "images"),
             )
             answer_prompt.path.write_text("旧形式のテンプレート", encoding="utf-8")
-            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+            now = datetime(2026, 9, 1, 12, 34, 56, tzinfo=UTC)
 
             with patch.dict(prompt_files.PROMPT_FILES, {VLM_ANSWER_PROMPT_KEY: answer_prompt}):
                 result = reset_prompt(VLM_ANSWER_PROMPT_KEY, now=now)

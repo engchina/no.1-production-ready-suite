@@ -6,10 +6,11 @@
 フレーズ検索にし、各クエリの上位 3 件が候補に確保される（#669）ことで、資料側の言い方に届かせる。
 LLM は使わない。
 """
+
 from __future__ import annotations
 
 import re
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS, task_contract
 from rag_engine.retrieval.text_search_tokenizer import escape_oracle_text_term
@@ -26,8 +27,11 @@ def target_phrases(question: str, tokenize: Callable[[str], Sequence[str]]) -> l
     総称語は除く。順序は対象語そのもの → 語数の少ない窓（略称に近い）→ 長い窓。上限 `MAX_TARGET_PHRASES`。
     """
     contract = task_contract(question)
-    targets = [t for t in dict.fromkeys([*contract.get("action_targets", ()), *contract.get("business_objects", ())])
-               if len(t) >= MIN_PHRASE_CHARS and t not in GENERIC_TARGET_WORDS]
+    targets = [
+        t
+        for t in dict.fromkeys([*contract.get("action_targets", ()), *contract.get("business_objects", ())])
+        if len(t) >= MIN_PHRASE_CHARS and t not in GENERIC_TARGET_WORDS
+    ]
     phrases: list[str] = []
     for target in targets:
         tokens = [t for t in tokenize(target) if t] or [target]
@@ -35,7 +39,7 @@ def target_phrases(question: str, tokenize: Callable[[str], Sequence[str]]) -> l
         compact_target = re.sub(r"\s+", "", target)
         for size in range(2, len(tokens) + 1):
             for start in range(0, len(tokens) - size + 1):
-                window = tokens[start:start + size]
+                window = tokens[start : start + size]
                 joined = "".join(window)
                 # tokenizer の正規化形（「見積り」）でつないだ窓は対象語に現れない。表層に一致する窓だけ使う。
                 if all(len(t) == 1 for t in window) or joined not in compact_target:
@@ -44,7 +48,7 @@ def target_phrases(question: str, tokenize: Callable[[str], Sequence[str]]) -> l
                 # 単字の語（「年」）を 1 つ抜いた窓。「基準年月」→「基準月」のような資料側の略し方に届く。
                 for drop in range(1, size - 1):
                     if len(window[drop]) == 1:
-                        candidates.append((size, "".join(window[:drop] + window[drop + 1:])))
+                        candidates.append((size, "".join(window[:drop] + window[drop + 1 :])))
         for _, phrase in sorted(candidates, key=lambda item: item[0]):
             phrase = re.sub(r"\s+", "", phrase)
             if len(phrase) >= MIN_PHRASE_CHARS and phrase not in GENERIC_TARGET_WORDS and phrase not in phrases:

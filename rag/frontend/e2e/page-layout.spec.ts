@@ -73,7 +73,7 @@ async function openPage(page: Page, path: string) {
 
 for (const width of [1920, 2560]) {
   for (const path of PATHS) {
-    test(`${width}px: ${path} は画面幅いっぱいで、タイトルと本文の左端が一致する`, async ({ page }, testInfo) => {
+    test(`${width}px: ${path} は画面幅いっぱいで、タイトルと本文の左端が一致する`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== "desktop", "広い画面の計測は desktop プロジェクトで行う");
       await page.setViewportSize({ width, height: 1000 });
       await openPage(page, path);
@@ -85,7 +85,7 @@ for (const width of [1920, 2560]) {
 }
 
 for (const path of PATHS) {
-  test(`375px: ${path} はタイトルと本文の左端が一致し、横にはみ出さない`, async ({ page }, testInfo) => {
+  test(`375px: ${path} はタイトルと本文の左端が一致し、横にはみ出さない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile", "狭い画面の計測は mobile プロジェクトで行う");
     await openPage(page, path);
 

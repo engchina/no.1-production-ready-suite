@@ -20,21 +20,35 @@ name: CI
 # main の push で失敗したら ci-failure-issue.yml が Issue を作る（ruleset の strict をやめたため。#339）。
 # PR の e2e は製品ごとの smoke と、差分に影響を受ける spec（e2e-impact。#885）。impact が全件の製品は smoke を
 # 飛ばし（全件が smoke の spec を含む）、selected のときは smoke の spec を impact から除く（#1525）。
+# PR の e2e の 375px の project は、画面幅に依存するテスト（@responsive）だけを実行する（workflow の env の
+# E2E_MOBILE_SCOPE。全件は e2e-nightly.yml。#1582）。
 
 on:
   pull_request:
   push:
     branches:
       - main
+  # Dependabot の自動 merge（GITHUB_TOKEN）は main の push の CI を起動しない（GitHub の仕様）。毎日 1 回、main で
+  # 最後に成功した CI からの変更を確かめる（変更が無ければ job は動かない。#1609）。
+  schedule:
+    - cron: "23 16 * * *"
+  workflow_dispatch:
 
+# PR は同じ branch の古い run を取り消す。main の push は commit ごとの group にし、続けて merge しても
+# 前の merge commit の run を取り消さない（#1585。changes は直前の commit との差分で job を選ぶため、取り消すと
+# その commit の変更が main の CI で確かめられない。同じ group は pending を 1 つしか保たないので sha で分ける）。
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # PR / main の push の E2E smoke の spec（frontend からの相対パス、空白区切り）。smoke の job と、e2e の影響分析
 # （e2e-impact の `--skip-specs`。selected のとき、smoke が全 project で実行する spec を impact から除く）の
 # 両方が読む（#1525）。NL2SQL の desktop だけで実行する spec（*_DESKTOP）は 375px を impact に残すので除外しない。
+# E2E_MOBILE_SCOPE: PR の e2e（smoke・impact）の 375px（mobile）の project は、画面幅に依存するテスト（@responsive の
+# tag と、名前の括弧で mobile / 375px を前提にするもの）だけを実行する。desktop は全件。main の push と nightly は
+# 全件（all）で、mobile の退行は e2e-nightly.yml が拾う（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
 env:
+  E2E_MOBILE_SCOPE: ${{ github.event_name == 'pull_request' && 'responsive' || 'all' }}
   RAG_E2E_SMOKE: >-
     e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
     e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts e2e/scrollbar-stability.spec.ts
@@ -48,11 +62,12 @@ env:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
       rag: ${{ steps.filter.outputs.rag }}
       nl2sql: ${{ steps.filter.outputs.nl2sql }}
@@ -100,11 +115,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # main の CI は、最後に成功した commit との差分を取るため履歴を取る（PR は paths-filter が API で取る）。
+          fetch-depth: ${{ github.event_name == 'pull_request' && 1 || 0 }}
+
+      # main の CI（push・schedule・手動）は、直前の commit ではなく、main で ci.yml が最後に成功した commit と比べる
+      # （#1609）。取り消された run・起動されなかった run（Dependabot の自動 merge）の commit の変更も、ここで確かめる。
+      # 見つからない・祖先でないときは空にし、paths-filter の既定（push は直前の commit）に任せる。
+      - name: Find the last successful main commit
+        id: base
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=20" \
+            -q '[.workflow_runs[] | select(.event != "pull_request")][0].head_sha // ""' || true)"
+          if [ -n "${sha}" ] && git merge-base --is-ancestor "${sha}" HEAD 2>/dev/null; then
+            echo "base=${sha}" >> "${GITHUB_OUTPUT}"
+            echo "最後に成功した main の CI の commit: ${sha}（${sha:0:12}..${GITHUB_SHA:0:12} を確かめる）"
+          else
+            echo "最後に成功した main の CI の commit が見つからない（paths-filter の既定で比べる）。"
+          fi
 
       - name: Filter paths
         id: filter
         uses: dorny/paths-filter@v4
         with:
+          base: ${{ steps.base.outputs.base }}
           # `!` の除外は、その filter の中で含めたファイルから除く（除外の無い filter は従来の some と同じ。v4.0.3 以降）。
           predicate-quantifier: some-with-excludes
           # rag_services_deps_files（変わった lock のディレクトリ）に使う。ほかの filter の true / false は変わらない。
@@ -221,7 +258,7 @@ jobs:
 
   secret-scan:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -245,14 +282,15 @@ jobs:
   # キャッシュの方針（#339）:
   #   - uv の cache は main の push だけが保存し、PR は main の cache を復元するだけにする
   #     （PR ごとに約 120 MB の cache を保存すると、repo の上限 10 GB を超えて main の cache が追い出される）。
-  #   - mypy の .mypy_cache は lock とブランチを key にし、無ければ main（同じ lock → 別の lock）から復元する。
-  #   - 共有 UI の dist と Playwright のブラウザは .github/actions/ の composite action がキャッシュする。
+  #   - mypy の .mypy_cache・npm の ~/.npm・Playwright のブラウザも main だけが保存し、PR は main の cache を
+  #     復元するだけにする（#1589。.github/actions/mypy-cache・npm-cache・playwright-browsers）。
+  #   - 共有 UI の dist は .github/actions/platform-ui がキャッシュする（数 MB。PR でも保存する）。
 
   platform-ui:
     name: Platform / UI (@production-ready/ui)
     needs: changes
     if: needs.changes.outputs.platform_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -265,11 +303,23 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: platform/package-lock.json
+
+      - name: Restore npm cache
+        id: npm-cache
+        uses: ./.github/actions/npm-cache
+        with:
+          name: platform
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      # main だけが保存する（PR は復元だけ。#1589）。
+      - name: Save npm cache
+        if: github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.key }}
 
       # root の typecheck / test / build はそれぞれ ui を build し直す（ローカルの単発実行のため）。
       # CI では ui を 1 回だけ build し、system-settings の型検査・テストはその dist を使う。
@@ -301,7 +351,7 @@ jobs:
     name: Platform / backend_core (production-ready-backend-core)
     needs: changes
     if: needs.changes.outputs.platform_backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -334,16 +384,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: platform-backend-core
           path: platform/packages/backend_core/.mypy_cache
-          key: mypy-platform-backend-core-${{ hashFiles('platform/packages/backend_core/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-platform-backend-core-${{ hashFiles('platform/packages/backend_core/uv.lock') }}-
-            mypy-platform-backend-core-
+          lockfile: platform/packages/backend_core/uv.lock
 
       - name: Type check
         run: uv run mypy src
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: platform/packages/backend_core/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
@@ -360,7 +417,7 @@ jobs:
     name: Platform / system_settings_backend (pr_system_settings)
     needs: changes
     if: needs.changes.outputs.platform_backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -391,16 +448,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: platform-system-settings
           path: platform/packages/system_settings_backend/.mypy_cache
-          key: mypy-platform-system-settings-${{ hashFiles('platform/packages/system_settings_backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-platform-system-settings-${{ hashFiles('platform/packages/system_settings_backend/uv.lock') }}-
-            mypy-platform-system-settings-
+          lockfile: platform/packages/system_settings_backend/uv.lock
 
       - name: Type check
         run: uv run mypy src
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: platform/packages/system_settings_backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
@@ -423,7 +487,7 @@ jobs:
     if: >-
       needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -455,16 +519,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: rag-backend
           path: rag/backend/.mypy_cache
-          key: mypy-rag-backend-${{ hashFiles('rag/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-rag-backend-${{ hashFiles('rag/backend/uv.lock') }}-
-            mypy-rag-backend-
+          lockfile: rag/backend/uv.lock
 
       - name: Type check
         run: uv run mypy .
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: rag/backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
       # -n auto: pytest-xdist で並列に実行する。実 Oracle のテストは pyproject の
@@ -493,7 +564,7 @@ jobs:
     name: RAG / Engine
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -527,7 +598,7 @@ jobs:
     name: Lint / services & scripts
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -551,8 +622,8 @@ jobs:
         run: |
           version="$(sed -n '/^name = "ruff"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
           test -n "${version}"
-          uvx "ruff@${version}" check rag/services platform/scripts
-          uvx "ruff@${version}" format --check rag/services platform/scripts
+          uvx "ruff@${version}" check rag/services rag/packages platform/scripts
+          uvx "ruff@${version}" format --check rag/services rag/packages platform/scripts
 
       # e2e の影響分析の選択の規則（platform/scripts/e2e_impact.py。#885）。標準ライブラリだけで動く。
       - name: Unit tests (platform/scripts)
@@ -623,7 +694,7 @@ jobs:
     name: RAG / Parser docling
     needs: changes
     if: needs.changes.outputs.rag_parser_docling == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -683,7 +754,7 @@ jobs:
     name: RAG / Parser asr
     needs: changes
     if: needs.changes.outputs.rag_parser_asr == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -739,7 +810,7 @@ jobs:
     name: RAG / Frontend
     needs: changes
     if: needs.changes.outputs.rag_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -753,16 +824,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            rag/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: rag/frontend
 
       # 型検査は build の `tsc --noEmit` が兼ねる。Playwright E2E は rag-e2e job（#133）。
       # デザインシステム遵守ルール（../../platform/docs/design-system/adherence.oxlintrc.json を ESLint に渡す）。
@@ -785,7 +851,7 @@ jobs:
       !cancelled() && needs.changes.result == 'success'
       && (needs.changes.outputs.rag_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.rag_mode != 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 実測は 1.5〜2 分（2026-10、2 worker。Playwright は約 1 分で、1 worker と差は無い。#1489）。
     timeout-minutes: 10
     defaults:
@@ -799,16 +865,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            rag/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: rag/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -816,7 +877,8 @@ jobs:
           working-directory: rag/frontend
 
       # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
-      # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project、CI=true で retries 2。
+      # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project（PR の mobile は @responsive だけ。
+      # workflow の env の E2E_MOBILE_SCOPE。#1582）、CI=true で retries 2。
       # worker 数は playwright.config.ts の CI の値（2。4 vCPU の runner。spec のファイル単位で並べる。#1489）。
       # spec は workflow の env の RAG_E2E_SMOKE（空白区切り。単語分割を意図している）。
       - name: Playwright E2E (smoke)
@@ -837,7 +899,7 @@ jobs:
     name: RAG / Compute init script
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -863,7 +925,7 @@ jobs:
     name: NL2SQL / Deployment scripts
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.rag == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -905,7 +967,7 @@ jobs:
     if: >-
       needs.changes.outputs.nl2sql_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
       || needs.changes.outputs.nl2sql_frontend_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -919,16 +981,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            nl2sql/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: nl2sql/frontend
 
       # デザインシステム遵守ルール（frontend/.oxlintrc.json が ../../platform の
       # docs/design-system/adherence.oxlintrc.json を extends）と oxlint 既定の correctness ルール。
@@ -952,7 +1009,7 @@ jobs:
       !cancelled() && needs.changes.result == 'success'
       && (needs.changes.outputs.nl2sql_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.nl2sql_mode != 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 実測は約 2.5 分（2026-10、2 worker。Playwright は 1.7〜1.9 分。1 worker・sql-chat の両 project では 5 分。#1489）。
     timeout-minutes: 10
     defaults:
@@ -966,16 +1023,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            nl2sql/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: nl2sql/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1012,7 +1064,7 @@ jobs:
     if: >-
       needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.mcp_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       NL2SQL_RUNTIME_MODE: memory
@@ -1047,16 +1099,23 @@ jobs:
         run: uv run ruff check .
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: nl2sql-backend
           path: nl2sql/backend/.mypy_cache
-          key: mypy-nl2sql-backend-${{ hashFiles('nl2sql/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-nl2sql-backend-${{ hashFiles('nl2sql/backend/uv.lock') }}-
-            mypy-nl2sql-backend-
+          lockfile: nl2sql/backend/uv.lock
 
       - name: Type check
         run: uv run mypy .
+
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: nl2sql/backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
@@ -1084,7 +1143,7 @@ jobs:
     if: >-
       needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -1107,13 +1166,12 @@ jobs:
           python-version: "3.12"
 
       - name: Restore mypy cache
-        uses: actions/cache@v6
+        id: mypy-cache
+        uses: ./.github/actions/mypy-cache
         with:
+          name: agent-backend
           path: agent/backend/.mypy_cache
-          key: mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-${{ github.head_ref || github.ref_name }}
-          restore-keys: |
-            mypy-agent-backend-${{ hashFiles('agent/backend/uv.lock') }}-
-            mypy-agent-backend-
+          lockfile: agent/backend/uv.lock
 
       # ruff format / ruff check / mypy / pytest / 検証 evidence の dry-run / release chain の rehearsal / bandit / pip-audit。
       - name: Run backend checks
@@ -1125,11 +1183,19 @@ jobs:
           # pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
           PYTEST_ARGS: "-n auto"
 
+      # main の push だけが保存する（PR は復元だけ。#1589）。
+      - name: Save mypy cache
+        if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: agent/backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.key }}
+
   agent-frontend:
     name: Agent / Frontend
     needs: changes
     if: needs.changes.outputs.agent_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -1143,16 +1209,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            agent/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: agent/frontend
 
       - name: Lint
         run: npm run lint
@@ -1169,7 +1230,7 @@ jobs:
       !cancelled() && needs.changes.result == 'success'
       && (needs.changes.outputs.agent_frontend == 'true' || needs.changes.outputs.platform_frontend == 'true')
       && needs.e2e-impact.outputs.agent_mode != 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 実測は約 2 分（2026-10、2 worker。Playwright は 1.2 分。1 worker では 1.8〜2.0 分。#1489）。
     timeout-minutes: 10
     defaults:
@@ -1183,16 +1244,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            agent/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: agent/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1230,7 +1286,7 @@ jobs:
   e2e-impact:
     name: E2E impact / 影響を受ける spec の選択
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1277,7 +1333,7 @@ jobs:
     name: RAG / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.rag_total }})
     needs: e2e-impact
     if: needs.e2e-impact.outputs.rag_mode == 'selected' || needs.e2e-impact.outputs.rag_mode == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
     timeout-minutes: 30
     strategy:
@@ -1295,16 +1351,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            rag/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: rag/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1335,7 +1386,7 @@ jobs:
     name: NL2SQL / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.nl2sql_total }})
     needs: e2e-impact
     if: needs.e2e-impact.outputs.nl2sql_mode == 'selected' || needs.e2e-impact.outputs.nl2sql_mode == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
     timeout-minutes: 30
     strategy:
@@ -1353,16 +1404,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            nl2sql/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: nl2sql/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1393,7 +1439,7 @@ jobs:
     name: Agent / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.agent_total }})
     needs: e2e-impact
     if: needs.e2e-impact.outputs.agent_mode == 'selected' || needs.e2e-impact.outputs.agent_mode == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
     timeout-minutes: 30
     strategy:
@@ -1411,16 +1457,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            agent/frontend/package-lock.json
-            platform/package-lock.json
 
-      - name: Build shared UI package
+      - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        with:
+          frontend: agent/frontend
 
       - name: Install Playwright browsers
         uses: ./.github/actions/playwright-browsers
@@ -1452,7 +1493,7 @@ jobs:
     name: Agent / Compute init script
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -1483,7 +1524,7 @@ jobs:
     if: >-
       needs.changes.outputs.terraform == 'true' || needs.changes.outputs.platform == 'true'
       || needs.changes.outputs.rag == 'true' || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -1545,7 +1586,7 @@ jobs:
     name: Suite / Scripts
     needs: changes
     if: needs.changes.outputs.scripts == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -1608,7 +1649,7 @@ jobs:
       - agent-e2e-impact
       - suite-terraform
       - suite-scripts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # skip（変更のない製品）は成功扱い。failure / cancelled が1つでもあれば失敗させる。

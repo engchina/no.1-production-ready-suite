@@ -6,7 +6,7 @@ test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
 for (const theme of ["light", "dark"] as const) {
   for (const width of [1280, 1920, 375]) {
-    test(`一覧・設定の本文は scrollbar の有無で幅が変わらない (${width}px, ${theme})`, async ({ page }, testInfo) => {
+    test(`一覧・設定の本文は scrollbar の有無で幅が変わらない (${width}px, ${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name.includes("mobile") ? width !== 375 : width === 375);
       // 画面固有の取得失敗でも AppShell の寸法を維持する。実 backend には接続しない。
       await page.route("**/api/**", (route) => route.fulfill({

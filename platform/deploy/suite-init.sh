@@ -54,9 +54,14 @@ NGINX_MODULE_STREAM="1.24"
 # suite-init.sh が dnf で入れる OS の package（製品の init_script.sh は製品が使うものだけを入れる）。
 SUITE_OS_PACKAGES=(firewalld git nginx openssl policycoreutils-python-utils tar unzip)
 TLS_RENEW_UNIT="production-ready-suite-tls-renew"
-# RAG の backend の RAG_MAX_UPLOAD_BYTES の既定値と、Nginx の multipart の余白（rag/init_script.sh と同じ値。
-# verify_stack_contract.py が照合する）。
+# 各製品の backend の <製品>_MAX_UPLOAD_BYTES の既定値と、Nginx の multipart の余白（#306・#1597。
+# verify_stack_contract.py が backend の既定値・suite-nginx.sh の既定の上限と照合する）。
+# shellcheck disable=SC2034 # product_client_max_body_size が製品の名前から参照する
 RAG_DEFAULT_MAX_UPLOAD_BYTES=209715200
+# shellcheck disable=SC2034 # product_client_max_body_size が製品の名前から参照する
+NL2SQL_DEFAULT_MAX_UPLOAD_BYTES=209715200
+# shellcheck disable=SC2034 # product_client_max_body_size が製品の名前から参照する
+AGENT_DEFAULT_MAX_UPLOAD_BYTES=104857600
 NGINX_UPLOAD_MARGIN_MIB=10
 
 SUITE_PRODUCTS=()
@@ -258,14 +263,18 @@ deploy_products() {
   done
 }
 
-# RAG の backend の RAG_MAX_UPLOAD_BYTES（backend/.env。無ければ既定値）+ multipart の余白（Refs #306）。
-rag_client_max_body_size() {
-  local env_file="${SUITE_REPO_DIR}/rag/backend/.env"
+# 製品の API の Nginx の本文の上限: backend の <製品>_MAX_UPLOAD_BYTES（backend/.env。無ければ既定値）+
+# multipart の余白（Refs #306・#1597）。$1: 製品（rag / nl2sql / agent）
+product_client_max_body_size() {
+  local product="$1"
+  local prefix="${1^^}"
+  local env_file="${SUITE_REPO_DIR}/${product}/backend/.env"
+  local default_name="${prefix}_DEFAULT_MAX_UPLOAD_BYTES"
   local bytes
-  bytes="$(sed -n 's/^RAG_MAX_UPLOAD_BYTES=//p' "${env_file}" 2>/dev/null | tail -n 1 | tr -d "[:space:]'\"")"
-  bytes="${bytes:-${RAG_DEFAULT_MAX_UPLOAD_BYTES}}"
+  bytes="$(sed -n "s/^${prefix}_MAX_UPLOAD_BYTES=//p" "${env_file}" 2>/dev/null | tail -n 1 | tr -d "[:space:]'\"")"
+  bytes="${bytes:-${!default_name}}"
   if ! printf '%s\n' "${bytes}" | grep -Eq '^[1-9][0-9]*$'; then
-    log "RAG_MAX_UPLOAD_BYTES must be a positive integer: ${bytes}"
+    log "${prefix}_MAX_UPLOAD_BYTES must be a positive integer: ${bytes}"
     return 1
   fi
   printf '%sM\n' "$(( (bytes + 1048575) / 1048576 + NGINX_UPLOAD_MARGIN_MIB ))"
@@ -322,8 +331,10 @@ EOF
 configure_nginx() {
   local template_dir="${SUITE_REPO_DIR}/platform/templates/nginx"
   local site="${NGINX_CONF_DIR}/${SUITE_SITE_NAME}.conf"
-  local body_size https=false product
-  body_size="$(rag_client_max_body_size)"
+  local https=false rag_body nl2sql_body agent_body
+  rag_body="$(product_client_max_body_size rag)"
+  nl2sql_body="$(product_client_max_body_size nl2sql)"
+  agent_body="$(product_client_max_body_size agent)"
   if https_enabled; then
     https=true
   fi
@@ -333,7 +344,9 @@ configure_nginx() {
   install -m 0644 "${template_dir}/logging.conf" "${NGINX_CONF_DIR}/production-ready-logging.conf"
   install -m 0644 "${template_dir}/login-rate-limit.conf" "${NGINX_CONF_DIR}/production-ready-login-rate-limit.conf"
   log "Configuring Nginx (HTTPS: ${https}, products: ${SUITE_PRODUCTS[*]})."
-  suite_nginx_site "${https}" "${SUITE_REPO_DIR}" "${SSL_DIR}" "${body_size}" "$(http_port)" "$(https_port)" \
+  SUITE_RAG_CLIENT_MAX_BODY_SIZE="${rag_body}" SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE="${nl2sql_body}" \
+    SUITE_AGENT_CLIENT_MAX_BODY_SIZE="${agent_body}" \
+    suite_nginx_site "${https}" "${SUITE_REPO_DIR}" "${SSL_DIR}" "$(http_port)" "$(https_port)" \
     "${SUITE_PRODUCTS[@]}" > "${site}.tmp"
   mv -f "${site}.tmp" "${site}"
   # Nginx の worker（nginx ユーザー）が frontend の dist を読めるよう、repository までの directory を辿れるようにする。

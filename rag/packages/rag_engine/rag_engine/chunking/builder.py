@@ -6,28 +6,24 @@ import hashlib
 import json
 import re
 import time
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
-from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
-from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, classify_picture_record, mark_picture_record_role
-from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
-from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, build_inquiry_chunk_metadata, inquiry_profile_contract_hash
 from rag_engine.chunking.constants import (
+    _PAGE_NUMBER_FOOTER_PATTERN,
     ATOMIC_CATEGORIES,
     CHILD_CHUNK_LEVEL,
     CHUNK_METADATA_SCHEMA_VERSION,
     CHUNK_SCHEMA_VERSION,
     CHUNK_STRATEGY,
-    ChunkingConfig,
     DEFAULT_CHILD_SEARCH_TEXT_MAX_CHARS,
-    DocumentChunk,
     METADATA_ONLY_CATEGORIES,
     PARENT_CHUNK_LEVEL,
     RUN_ID_PATTERN,
     SEARCH_TEXT_SCHEMA_VERSION,
     SECTION_CATEGORIES,
-    _PAGE_NUMBER_FOOTER_PATTERN,
+    ChunkingConfig,
+    DocumentChunk,
     _boilerplate_text_key,
     _clean_search_text,
     _int_value,
@@ -38,19 +34,7 @@ from rag_engine.chunking.constants import (
     _token_estimate,
     _unique_refs,
 )
-from rag_engine.chunking.records import (
-    _buffer_has_body,
-    _form_record_text,
-    _image_fallback_text,
-    _is_attached_atomic_annotation,
-    _is_form_like_record,
-    _join_records_text,
-    _record_can_supply_image_evidence,
-    _record_text,
-    _record_text_for_chunk,
-    _record_visual_role,
-    _records_char_count,
-)
+from rag_engine.chunking.evidence import _source_record_ref
 from rag_engine.chunking.headings import (
     _SENTENCE_BOUNDARY_PATTERN,
     _merge_logical_page_labels,
@@ -67,21 +51,48 @@ from rag_engine.chunking.layout import (
     _attached_layout_annotations_for_targets,
     _inline_icons_by_merge_target,
     _is_excluded_page_boilerplate_record,
-    _is_section_banner_text,
     _is_page_boilerplate_item,
+    _is_section_banner_text,
     _table_contained_visual_ids,
     _visual_group_key,
     _visual_groups,
 )
+from rag_engine.chunking.metadata import _chunk_metadata, _project_chunk_metadata, _validate_chunk_metadata_v4
+from rag_engine.chunking.records import (
+    _buffer_has_body,
+    _form_record_text,
+    _image_fallback_text,
+    _is_attached_atomic_annotation,
+    _is_form_like_record,
+    _join_records_text,
+    _record_can_supply_image_evidence,
+    _record_text,
+    _record_text_for_chunk,
+    _record_visual_role,
+    _records_char_count,
+)
+from rag_engine.chunking.search_text import _child_search_text, _without_screen_examples
 from rag_engine.chunking.tables import (
     _paired_picture_ocr_text,
     _table_record_with_metadata,
     _table_row_group_records,
     _table_supplements_by_table,
 )
-from rag_engine.chunking.evidence import _source_record_ref
-from rag_engine.chunking.search_text import _child_search_text, _without_screen_examples
-from rag_engine.chunking.metadata import _chunk_metadata, _project_chunk_metadata, _validate_chunk_metadata_v4
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
+from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
+from rag_engine.parsing.decorative_pictures import (
+    DECORATIVE_VISUAL_ROLE,
+    INLINE_ICON_VISUAL_ROLE,
+    classify_picture_record,
+    mark_picture_record_role,
+)
+from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
+from rag_engine.retrieval.inquiry_conditions import (
+    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
+    build_inquiry_chunk_metadata,
+    inquiry_profile_contract_hash,
+)
+
 
 def build_small_to_big_chunks(
     payload: dict[str, Any],
@@ -102,9 +113,7 @@ def build_small_to_big_chunks(
     変えても説明文は増えない。
     """
     source_file_name = str(payload.get("pdf_name") or "")
-    document_classification = classification_from_metadata(
-        classification if classification is not None else payload.get("classification")
-    )
+    document_classification = classification_from_metadata(classification if classification is not None else payload.get("classification"))
     if not source_page_count:
         source_page_count = _source_page_count(payload)
     document_info = normalize_document_metadata(payload.get("document_metadata"), source_file_name=source_file_name)
@@ -116,10 +125,15 @@ def build_small_to_big_chunks(
         engine_records = records.get(engine_id, [])
         if not engine_records:
             continue
-        engine_document = {**document_info, "first_page_context": extract_first_page_context(
-            engine_records, engine=engine_id,
-            analyzed_pages=[p.get('page') for p in payload.get('pages', []) if isinstance(p, dict)],
-            paginated=bool(source_page_count or any(r.get('page') for r in engine_records)))}
+        engine_document = {
+            **document_info,
+            "first_page_context": extract_first_page_context(
+                engine_records,
+                engine=engine_id,
+                analyzed_pages=[p.get("page") for p in payload.get("pages", []) if isinstance(p, dict)],
+                paginated=bool(source_page_count or any(r.get("page") for r in engine_records)),
+            ),
+        }
         engine_documents[engine_id] = engine_document
         children = _build_child_chunks_for_engine(
             engine_records,
@@ -148,7 +162,9 @@ def build_small_to_big_chunks(
     for chunk in all_chunks:
         chunk.metadata["document"] = dict(engine_documents[chunk.source_engine_id])
         chunk.metadata = _project_chunk_metadata(chunk.metadata)
-    return sorted(all_chunks, key=lambda chunk: (chunk.source_engine_id, 0 if chunk.chunk_level == CHILD_CHUNK_LEVEL else 1, chunk.chunk_seq))
+    return sorted(
+        all_chunks, key=lambda chunk: (chunk.source_engine_id, 0 if chunk.chunk_level == CHILD_CHUNK_LEVEL else 1, chunk.chunk_seq)
+    )
 
 
 def _before_picture_ocr(text: str) -> str:
@@ -169,24 +185,17 @@ def audit_chunk_retrieval_text(
     # Vision 成功時の OCR ブロックも意図的に除くので（#900）、`OCR抽出テキスト:` より前の本文だけを見る。
     # 保存済み chunk には record が無く Vision の成否を判別できないため、text の形で近似する。
     truncated = sum(
-        bool(chunk.text) and _clean_search_text(_without_screen_examples(_before_picture_ocr(chunk.text)))
-        not in _clean_search_text(chunk.retrieval_text)
+        bool(chunk.text)
+        and _clean_search_text(_without_screen_examples(_before_picture_ocr(chunk.text))) not in _clean_search_text(chunk.retrieval_text)
         for chunk in children
     )
     return {
         "child_count": len(children),
         "body_truncated_count": truncated,
         "body_truncated_rate": truncated / len(children) if children else 0.0,
-        "over_target_count": sum(
-            len(chunk.retrieval_text) > child_search_text_max_chars
-            for chunk in children
-        ),
+        "over_target_count": sum(len(chunk.retrieval_text) > child_search_text_max_chars for chunk in children),
         "max_search_text_chars": max((len(chunk.retrieval_text) for chunk in children), default=0),
     }
-
-
-
-
 
 
 def validate_run_id(value: Any) -> str:
@@ -282,7 +291,8 @@ def _build_child_chunks_for_engine(
             flush_text_buffer()
         # 見出しの木の規則は章節ナビゲーション（`layout_section_paths`）と共通 (#1517)。
         section_path, section_levels, section_depths, section_sources = _section_path_state_after(
-            (section_path, section_levels, section_depths, section_sources), record,
+            (section_path, section_levels, section_depths, section_sources),
+            record,
         )
         if category == "Table":
             heading_records = []
@@ -342,7 +352,9 @@ def _build_child_chunks_for_engine(
                 continue
             if category == "Picture":
                 picture_records = group or [record]
-                ocr_texts = [str(item.get("text") or "") for item in picture_records if str(item.get("raw_type") or "") == "picture_ocr_text"]
+                ocr_texts = [
+                    str(item.get("text") or "") for item in picture_records if str(item.get("raw_type") or "") == "picture_ocr_text"
+                ]
                 if not ocr_texts and not group:
                     ocr_texts = [_paired_picture_ocr_text(record, records)]
                 picture_raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
@@ -417,11 +429,7 @@ def _split_long_text_record(record: dict[str, Any], target_chars: int) -> list[d
     Form の項目を持つ record は、片ごとに form_context が重複するため分割しません。
     """
     text = _record_text(record)
-    if (
-        len(text) <= target_chars
-        or str(record.get("category") or "") not in {"Text", "List-item"}
-        or _is_form_like_record(record)
-    ):
+    if len(text) <= target_chars or str(record.get("category") or "") not in {"Text", "List-item"} or _is_form_like_record(record):
         return [record]
     pieces: list[str] = []
     current = ""
@@ -525,10 +533,8 @@ def _child_chunk(
     for record in ordered_records:
         body = _record_text_for_chunk(record)
         start = text.find(body) if body else -1
-        if (record.get('category') in {'Text', 'List-item'} and start >= 0
-                and text.find(body, start + 1) < 0):
-            native_ranges.append(dict(record_id=record.get('id'), page=record.get('page'),
-                                      start=start, end=start + len(body)))
+        if record.get("category") in {"Text", "List-item"} and start >= 0 and text.find(body, start + 1) < 0:
+            native_ranges.append(dict(record_id=record.get("id"), page=record.get("page"), start=start, end=start + len(body)))
     metadata.setdefault("layout", {})["native_text_ranges"] = native_ranges
     return DocumentChunk(
         chunk_id=f"chunk-{source_engine_id}-c{chunk_seq:06d}",
@@ -591,7 +597,7 @@ def _parent_chunk(
         if offset < 0:
             continue
         for item in (child.metadata.get("layout") or {}).get("native_text_ranges", []):
-            native_ranges.append({**item, 'start': offset + item['start'], 'end': offset + item['end']})
+            native_ranges.append({**item, "start": offset + item["start"], "end": offset + item["end"]})
         cursor = offset + len(child.text)
     metadata.setdefault("layout", {})["native_text_ranges"] = native_ranges
     return DocumentChunk(
@@ -744,11 +750,7 @@ def _metadata_by_page(records: Sequence[dict[str, Any]]) -> dict[int, dict[str, 
             }
         )
     for page_metadata in metadata.values():
-        candidates = (
-            page_metadata.get("_page_layout_candidates")
-            if isinstance(page_metadata.get("_page_layout_candidates"), list)
-            else []
-        )
+        candidates = page_metadata.get("_page_layout_candidates") if isinstance(page_metadata.get("_page_layout_candidates"), list) else []
         excluded_layout = []
         for item in candidates:
             key = (str(item.get("category") or ""), str(item.get("normalized_text") or ""))
@@ -777,8 +779,6 @@ def _parent_should_flush(buffer: Sequence[DocumentChunk], child: DocumentChunk, 
     return char_count > config.parent_target_chars
 
 
-
-
 def _source_page_count(payload: dict[str, Any]) -> int:
     for key in ("source_page_count", "page_count", "total_pages"):
         value = _int_value(payload.get(key))
@@ -793,8 +793,6 @@ def _source_page_count(payload: dict[str, Any]) -> int:
         if page is not None
     ]
     return max(record_pages) if record_pages else 0
-
-
 
 
 def _payload_classification(payload: dict[str, Any], chunks: Sequence[DocumentChunk]) -> dict[str, Any]:
@@ -845,6 +843,7 @@ def _normalize_chunk_metadata(metadata: dict[str, Any], payload: dict[str, Any])
     if normalized["content_hash"] != _text_sha256(str(payload.get("text") or "")):
         raise ValueError("chunk metadata v3 の content_hash が本文と一致しません。再チャンキングしてください。")
     return normalized
+
 
 def _chunk_from_payload(payload: Any) -> DocumentChunk:
     if not isinstance(payload, dict):

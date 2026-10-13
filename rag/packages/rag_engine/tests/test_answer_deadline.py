@@ -121,18 +121,16 @@ class LlmCallDeadlineTests(unittest.TestCase):
 
     def test_expired_deadline_does_not_call_llm(self):
         client = _FakeClient()
-        with bind_deadline(Deadline(0.0)):
-            with self.assertRaises(DeadlineExceeded):
-                _parse(client, _settings())
+        with bind_deadline(Deadline(0.0)), self.assertRaises(DeadlineExceeded):
+            _parse(client, _settings())
         self.assertEqual(client.calls, [])
 
     def test_cancelled_deadline_does_not_call_llm(self):
         client = _FakeClient()
         deadline = Deadline(300.0)
         deadline.cancel()
-        with bind_deadline(deadline):
-            with self.assertRaises(DeadlineExceeded):
-                _parse(client, _settings())
+        with bind_deadline(deadline), self.assertRaises(DeadlineExceeded):
+            _parse(client, _settings())
         self.assertEqual(client.calls, [])
 
     def test_retries_transport_errors_within_deadline(self):
@@ -144,9 +142,8 @@ class LlmCallDeadlineTests(unittest.TestCase):
     def test_does_not_retry_when_wait_exceeds_remaining(self):
         client = _FakeClient(errors=[TimeoutError("slow")])
         settings = _settings(llm_retry_initial_wait_seconds=30.0, llm_retry_max_wait_seconds=30.0)
-        with bind_deadline(Deadline(1.0)):
-            with self.assertRaises(DeadlineExceeded):
-                _parse(client, settings)
+        with bind_deadline(Deadline(1.0)), self.assertRaises(DeadlineExceeded):
+            _parse(client, settings)
         self.assertEqual(len(client.calls), 1)
 
     def test_does_not_retry_after_cancel_during_call(self):
@@ -168,9 +165,8 @@ class LlmCallDeadlineTests(unittest.TestCase):
             return clone
 
         client.with_options = with_options
-        with bind_deadline(deadline):
-            with self.assertRaises(DeadlineExceeded):
-                _parse(client, _settings())
+        with bind_deadline(deadline), self.assertRaises(DeadlineExceeded):
+            _parse(client, _settings())
         self.assertEqual(len(client.calls), 1)
 
 

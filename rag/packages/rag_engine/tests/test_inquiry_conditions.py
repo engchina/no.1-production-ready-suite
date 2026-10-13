@@ -7,7 +7,6 @@ from rag_engine.chunking import CHILD_CHUNK_LEVEL
 from rag_engine.retrieval.inquiry_conditions import (
     CONDITION_PROFILE,
     FILE_DATA_PROFILE,
-    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
     OPERATION_PROFILE,
     build_inquiry_chunk_metadata,
     inquiry_profile_contract_hash,
@@ -25,10 +24,16 @@ class InquiryConditionsTests(unittest.TestCase):
             raise AssertionError("I/O は呼ばない")
 
         def bound(matcher):
-            return bind_dependencies(AnswerDependencies(
-                search=unused, check_ready=unused, parse_text=unused, parse_images=unused, rerank=unused,
-                business_domains=matcher,
-            ))
+            return bind_dependencies(
+                AnswerDependencies(
+                    search=unused,
+                    check_ready=unused,
+                    parse_text=unused,
+                    parse_images=unused,
+                    rerank=unused,
+                    business_domains=matcher,
+                )
+            )
 
         question = "販管の業務Xで拠点名を変更する方法は？"
         self.assertEqual(parse_inquiry_conditions(question).business_domains, ("販売管理",))
@@ -49,9 +54,7 @@ class InquiryConditionsTests(unittest.TestCase):
         self.assertTrue(parsed.retrieval_queries)
 
     def test_parse_file_data_question_extracts_file_code_column_and_external_context(self):
-        parsed = parse_inquiry_conditions(
-            "倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。"
-        )
+        parsed = parse_inquiry_conditions("倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
 
         self.assertTrue(parsed.requires_file_data_confirmation)
         self.assertTrue(parsed.requires_external_context)
@@ -81,9 +84,7 @@ class InquiryConditionsTests(unittest.TestCase):
         self.assertEqual(parsed.metadata_filter.page_numbers, ())
 
     def test_display_lines_use_formal_query_understanding_labels(self):
-        parsed = parse_inquiry_conditions(
-            "倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。"
-        )
+        parsed = parse_inquiry_conditions("倉庫連携ゲートウェイから取込した result.csv で W1114 が出た。EC列を確認する必要がありますか。")
 
         display = "\n".join(parsed.display_lines())
 
@@ -181,10 +182,11 @@ class InquiryConditionsTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
 class ActiveChunkProfileTests(unittest.TestCase):
     def test_operation_profile_depends_only_on_trigger_terms(self):
         # Picture / Section-header の有無では変わらない（旧分岐は恒等式だった #885）。
-        from rag_engine.retrieval.inquiry_conditions import _active_chunk_profiles, _trigger_terms, _PROFILE_BY_ID
+        from rag_engine.retrieval.inquiry_conditions import _PROFILE_BY_ID, _active_chunk_profiles, _trigger_terms
 
         term = _trigger_terms(_PROFILE_BY_ID[OPERATION_PROFILE])[0]
         self.assertEqual(_active_chunk_profiles("説明図です。", ["Picture", "Section-header"]), [])

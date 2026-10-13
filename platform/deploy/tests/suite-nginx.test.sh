@@ -55,7 +55,7 @@ source "${repo}/platform/deploy/suite-nginx.sh"
 
 # ---------------------------------------------------------------- 1. 静的な検査
 
-site_all_https="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 rag nl2sql agent)"
+site_all_https="$(suite_nginx_site true /srv/suite /srv/ssl 80 443 rag nl2sql agent)"
 assert_contains "${site_all_https}" "listen 443 ssl http2 default_server;" "HTTPS は 443"
 assert_contains "${site_all_https}" 'return 301 https://$host$request_uri;' "80 は https へ 301"
 assert_contains "${site_all_https}" "ssl_protocols TLSv1.2 TLSv1.3;" "TLS 1.2 / 1.3 だけ"
@@ -75,34 +75,69 @@ assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8010\$pr_suite_
 assert_contains "${site_all_https}" "proxy_pass http://127.0.0.1:8020\$pr_suite_upstream_uri;" "Agent の backend は 8020"
 assert_contains "${site_all_https}" "|mcp)\$ {" "RAG の MCP は長い timeout"
 
-site_http="$(suite_nginx_site false /srv/suite /srv/ssl 210M 80 443 rag nl2sql agent)"
+# 3 製品の実際の動きに合わせた値（#1597。根拠は suite-nginx.sh の SUITE_* のコメント）。
+count_of() {
+  printf '%s\n' "$1" | grep -cF -- "$2" || true
+}
+# 長い待ち時間: RAG 660 秒（回答の上限 600 秒・画面 630 秒より長く）・NL2SQL 2460 秒（LLM 600 秒 × 4 回 + 60）・
+# Agent の tools/invoke 960 秒（外部 MCP の上限 900 秒 + 60）。ほかの API は 600 秒（SSE / WebSocket は heartbeat）。
+assert_contains "${site_all_https}" "search-answer-profiles/[^/]+/support-guides/[^/]+/try|" "RAG の業務ガイドを試すは長い timeout"
+assert_contains "${site_all_https}" "location ~ ^/nl2sql/api/(nl2sql/analyze|nl2sql/reverse/deep|" "NL2SQL の LLM の同期の API は長い timeout"
+assert_contains "${site_all_https}" "location ~ ^/agent/api/(tools/invoke)\$ {" "Agent の tools/invoke は長い timeout"
+for value in 660 2460 960; do
+  [ "$(count_of "${site_all_https}" "proxy_read_timeout ${value}s;")" = 1 ] || fail "proxy_read_timeout ${value}s が 1 か所ではない"
+  [ "$(count_of "${site_all_https}" "proxy_send_timeout ${value}s;")" = 1 ] || fail "proxy_send_timeout ${value}s が 1 か所ではない"
+done
+assert_contains "${site_all_https}" "proxy_read_timeout 600s;" "既定の待ち時間"
+# 本文の上限: backend の <製品>_MAX_UPLOAD_BYTES の既定値 + 10 MiB（RAG・NL2SQL 210M、Agent 110M）。製品の外は 10m。
+[ "$(count_of "${site_all_https}" "client_max_body_size 210M;")" = 4 ] || fail "RAG・NL2SQL の API の本文の上限"
+[ "$(count_of "${site_all_https}" "client_max_body_size 110M;")" = 2 ] || fail "Agent の API の本文の上限"
+assert_contains "${site_all_https}" "client_max_body_size 10m;" "製品の外の本文の上限"
+site_custom_body="$(SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE=60M suite_nginx_site true /srv/suite /srv/ssl 80 443 nl2sql)"
+[ "$(count_of "${site_custom_body}" "client_max_body_size 60M;")" = 2 ] || fail "NL2SQL の本文の上限を変えられない"
+# WebSocket は Agent だけ。Upgrade があるときだけ Connection: upgrade（map）。ほかは Connection を空にする。
+assert_contains "${site_all_https}" 'map $http_upgrade $pr_suite_connection_upgrade {' "WebSocket の Connection の map"
+assert_not_contains "${site_all_https}" 'proxy_set_header Connection "upgrade";' "WebSocket でない要求に upgrade を渡さない"
+[ "$(count_of "${site_all_https}" 'proxy_set_header Upgrade $http_upgrade;')" = 3 ] || fail "Upgrade は Agent の API の location だけ"
+[ "$(count_of "$(suite_nginx_site true /srv/suite /srv/ssl 80 443 rag nl2sql)" 'Upgrade')" = 0 ] \
+  || fail "RAG・NL2SQL に Upgrade を渡さない"
+# ストリーム: API の location（製品ごとに login・長い API・API 全体の 3 つ）は buffering・cache・gzip を切る。
+for directive in "proxy_buffering off;" "proxy_cache off;" "gzip off;"; do
+  [ "$(count_of "${site_all_https}" "${directive}")" = 9 ] || fail "API の location の ${directive}"
+done
+# header: 要求の header（共有の Cookie）と応答の header（Content-Disposition 等）の buffer。
+[ "$(count_of "${site_all_https}" "large_client_header_buffers 4 16k;")" = 2 ] || fail "HTTP / HTTPS の server の large_client_header_buffers"
+assert_contains "${site_all_https}" "proxy_buffer_size 16k;" "応答の header の buffer"
+assert_contains "${site_all_https}" "proxy_buffers 8 16k;" "応答の buffer"
+
+site_http="$(suite_nginx_site false /srv/suite /srv/ssl 80 443 rag nl2sql agent)"
 assert_contains "${site_http}" "listen 80 default_server;" "HTTP は 80"
 assert_not_contains "${site_http}" "ssl" "HTTPS が off なら TLS を設定しない"
 assert_not_contains "${site_http}" "location = /platform/ca.crt" "HTTPS が off なら CA 証明書を配らない"
 assert_not_contains "${site_http}" "return 301 https" "HTTPS が off なら転送しない"
 
-site_rag_only="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 rag)"
+site_rag_only="$(suite_nginx_site true /srv/suite /srv/ssl 80 443 rag)"
 assert_contains "${site_rag_only}" "return 302 /rag/;" "Agent が無いときは最初の製品へ"
 assert_not_contains "${site_rag_only}" "/agent/api/" "配備しない製品の location は書かない"
 assert_not_contains "${site_rag_only}" "/nl2sql/api/" "配備しない製品の location は書かない"
-site_nl2sql_agent="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 nl2sql agent)"
+site_nl2sql_agent="$(suite_nginx_site true /srv/suite /srv/ssl 80 443 nl2sql agent)"
 assert_contains "${site_nl2sql_agent}" "return 302 /agent/;" "Agent を優先する"
-if suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 >/dev/null 2>&1; then
+if suite_nginx_site true /srv/suite /srv/ssl 80 443 >/dev/null 2>&1; then
   fail "製品が 0 件なら失敗する"
 fi
-if suite_nginx_site true /srv/suite /srv/ssl 210M 80 443 rag platform >/dev/null 2>&1; then
+if suite_nginx_site true /srv/suite /srv/ssl 80 443 rag platform >/dev/null 2>&1; then
   fail "未知の製品なら失敗する"
 fi
 
 # port は変数（#1316）。既定でない port は listen と https への転送の先に入る。HTTPS が off なら http_port で直接配信する。
-site_custom="$(suite_nginx_site true /srv/suite /srv/ssl 210M 8080 8443 rag nl2sql agent)"
+site_custom="$(suite_nginx_site true /srv/suite /srv/ssl 8080 8443 rag nl2sql agent)"
 assert_contains "${site_custom}" "listen 8443 ssl http2 default_server;" "https_port で listen する"
 assert_contains "${site_custom}" "listen 8080 default_server;" "http_port は https への転送"
 assert_contains "${site_custom}" 'return 301 https://$host:8443$request_uri;' "転送の先に https_port を付ける"
-site_same_port="$(suite_nginx_site true /srv/suite /srv/ssl 210M 80 80 rag)"
+site_same_port="$(suite_nginx_site true /srv/suite /srv/ssl 80 80 rag)"
 assert_contains "${site_same_port}" "listen 80 ssl http2 default_server;" "https_port が 80 なら 80 で HTTPS"
 assert_not_contains "${site_same_port}" "return 301 https" "https_port と http_port が同じなら転送の server を置かない"
-site_http_custom="$(suite_nginx_site false /srv/suite /srv/ssl 210M 8080 22 rag)"
+site_http_custom="$(suite_nginx_site false /srv/suite /srv/ssl 8080 22 rag)"
 assert_contains "${site_http_custom}" "listen 8080 default_server;" "HTTPS が off なら http_port で配信する"
 assert_not_contains "${site_http_custom}" "return 301 https" "HTTPS が off なら転送しない"
 # 使えない port（範囲外・SSH・よく使われる service・Compute の中で使う port）は拒む。
@@ -110,7 +145,7 @@ for port in 0 65536 abc 22 25 53 111 1521 1522 3306 5432 6379 9090 8000 8010 802
   if suite_validate_public_port http_port "${port}" 2>/dev/null; then
     fail "使えない port ${port} を受け入れた"
   fi
-  if suite_nginx_site true /srv/suite /srv/ssl 210M 80 "${port}" rag >/dev/null 2>&1; then
+  if suite_nginx_site true /srv/suite /srv/ssl 80 "${port}" rag >/dev/null 2>&1; then
     fail "https_port ${port} で site を作った"
   fi
 done
@@ -150,6 +185,11 @@ class Handler(BaseHTTPRequestHandler):
         if "backend_limited=1" in self.path:
             body = b'{"error_code":"BACKEND_429"}'
             self.send_response(429)
+        elif "big_header=1" in self.path:
+            # 大きな応答の header（長いファイル名の Content-Disposition など）。既定の proxy_buffer_size（4k）なら 502。
+            body = b'{"big_header":true}'
+            self.send_response(200)
+            self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + "%E6%97%A5" * 1000)
         elif self.path.endswith("/stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -162,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
             return
         else:
-            body = json.dumps({"backend": name, "method": self.command, "path": self.path, "headers": dict(self.headers)}).encode()
+            body = json.dumps({"backend": name, "method": self.command, "path": self.path, "headers": dict(self.headers), "body_bytes": length}).encode()
             self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -204,7 +244,7 @@ run_case() {
   export SUITE_LISTEN_ADDRESS=127.0.0.1
   export SUITE_NGINX_LOG_DIR="${task_dir}/logs-${https_enabled}"
   mkdir -p "${SUITE_NGINX_LOG_DIR}"
-  suite_nginx_site "${https_enabled}" "${task_dir}/suite" "${task_dir}/ssl" 210M "${http_port}" "${https_port}" \
+  suite_nginx_site "${https_enabled}" "${task_dir}/suite" "${task_dir}/ssl" "${http_port}" "${https_port}" \
     rag nl2sql agent > "${task_dir}/site.conf"
   cat > "${task_dir}/nginx.conf" <<CONF
 pid ${task_dir}/nginx.pid;
@@ -217,6 +257,9 @@ http {
   fastcgi_temp_path ${task_dir}/fastcgi;
   uwsgi_temp_path ${task_dir}/uwsgi;
   scgi_temp_path ${task_dir}/scgi;
+  # Ubuntu の nginx.conf の gzip on に、JSON・SSE の圧縮を足した環境でも、API の応答は圧縮しない（#1597）。
+  gzip on;
+  gzip_types application/json text/event-stream;
   include ${repo}/platform/templates/nginx/logging.conf;
   include ${repo}/platform/templates/nginx/login-rate-limit.conf;
   include ${task_dir}/site.conf;
@@ -279,14 +322,40 @@ for product in ("rag", "nl2sql", "agent"):
 # Agent は WebSocket の Origin 検査のため、port を含む Host を渡す。
 agent_host = backend("/agent/api/runs")["headers"]["Host"]
 assert agent_host == f"127.0.0.1:{https_port if https_enabled else http_port}", agent_host
-# NL2SQL / Agent は Upgrade を渡す。
-assert backend("/agent/api/runs/r1/events/ws")["headers"].get("Connection") == "upgrade"
+# WebSocket（Agent）の要求だけ Upgrade と Connection: upgrade を渡す。ほかの要求・NL2SQL・RAG には渡さない（#1597）。
+def echo_headers(path, headers):
+    status, _, data = call(path, headers=headers)
+    assert status == 200, (path, status, data)
+    return json.loads(data)["headers"]
+ws_headers = {"Upgrade": "websocket", "Connection": "Upgrade"}
+upgraded = echo_headers("/agent/api/runs/r1/events/ws", ws_headers)
+assert (upgraded.get("Connection"), upgraded.get("Upgrade")) == ("upgrade", "websocket"), upgraded
+plain = echo_headers("/agent/api/runs/r1/events", {})
+assert "upgrade" not in (plain.get("Connection") or "").lower() and "Upgrade" not in plain, plain
+for product in ("rag", "nl2sql"):
+    other = echo_headers(f"/{product}/api/runs/r1/events/ws", ws_headers)
+    assert "upgrade" not in (other.get("Connection") or "").lower() and "Upgrade" not in other, (product, other)
+
+# 大きな Cookie（16k の buffer の範囲）と大きな応答の header を通す（#1597）。
+cookie = "pr_session=" + "a" * 43 + "; pr_csrf=" + "b" * 43 + "; other=" + "c" * 11000
+assert echo_headers("/nl2sql/api/me", {"Cookie": cookie})["Cookie"] == cookie
+status, headers, _ = call("/rag/api/documents/d1/content?big_header=1")
+assert status == 200 and len(headers["content-disposition"]) > 8000, (status, len(headers.get("content-disposition", "")))
+
+# 本文の上限: 製品の外の 10m を超える本文も、製品の API の location の上限（110M / 210M）の中なら通す。
+status, _, data = call("/agent/api/settings/database/wallet", "POST", b"x" * (11 * 1024 * 1024))
+assert status == 200 and json.loads(data)["body_bytes"] == 11 * 1024 * 1024, (status, data[:200])
+
+# gzip を有効にした環境でも、API の応答（JSON・SSE）は圧縮しない。
+status, headers, _ = call("/agent/api/runs", headers={"Accept-Encoding": "gzip"})
+assert status == 200 and "content-encoding" not in headers, headers
 
 # RAG の SSE: buffering せず、最初の event が終わりより先に届く。
 conn = connect()
-conn.request("POST", "/rag/api/search/stream", body=b"{}")
+conn.request("POST", "/rag/api/search/stream", body=b"{}", headers={"Accept-Encoding": "gzip"})
 response = conn.getresponse()
 assert response.status == 200 and response.getheader("Content-Type") == "text/event-stream", response.status
+assert response.getheader("Content-Encoding") is None, response.getheaders()
 started = time.monotonic()
 first = response.read1(64)
 first_at = time.monotonic() - started

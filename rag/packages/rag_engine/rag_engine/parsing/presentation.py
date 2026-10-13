@@ -1,7 +1,10 @@
 """既存 React viewer の表示形式への変換。"""
+
 from dataclasses import asdict
 from typing import Any
+
 from rag_engine.parsing.categories import CATEGORY_STYLES
+
 
 def viewer_payload(run) -> dict[str, Any]:
     """React viewer が必要とするページ、record、engine 情報を payload 化します。"""

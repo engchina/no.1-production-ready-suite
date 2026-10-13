@@ -5,6 +5,7 @@
 書かなかった。LLM を差し替えて、その回答の形（初回の草稿が段を 1 つの item に混ぜて不支持、是正で段を分けて
 支持）を決定的に再現する。
 """
+
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
 
 from rag_engine.generation import grounded
@@ -20,19 +21,28 @@ MERGED = "人事給与システムは労務部が担当で、労務部長が承�
 
 
 def _context():
-    return context(record(0, LEDGER, "システム台帳", page=1, source="system-ledger.xlsx"),
-                   record(1, CODES, "第 2 章 部署と略号", page=1, source="organization-rules.pdf"),
-                   record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
-                   record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"))
+    return context(
+        record(0, LEDGER, "システム台帳", page=1, source="system-ledger.xlsx"),
+        record(1, CODES, "第 2 章 部署と略号", page=1, source="organization-rules.pdf"),
+        record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
+        record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"),
+    )
 
 
 def _hops(by_text):
     """段ごとに 1 item（台帳の行 → 略号 → 承認者 → 期限）。"""
-    return (item(by_text[LEDGER], "人事給与システムの担当部署は略号「労」です。", LEDGER, kind="rule", request_id="Q1"),
-            item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。", kind="rule", request_id="Q1"),
-            item(by_text[APPROVERS], "労務部の承認者は労務部長です。", "労務部の承認者は労務部長です。", kind="rule", request_id="Q1"),
-            item(by_text[DEADLINES], "部長が承認する申請は、受付から 3 営業日以内に承認します。",
-                 "部長が承認する申請は、受付から 3 営業日以内に承認します。", kind="rule", request_id="Q1"))
+    return (
+        item(by_text[LEDGER], "人事給与システムの担当部署は略号「労」です。", LEDGER, kind="rule", request_id="Q1"),
+        item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。", kind="rule", request_id="Q1"),
+        item(by_text[APPROVERS], "労務部の承認者は労務部長です。", "労務部の承認者は労務部長です。", kind="rule", request_id="Q1"),
+        item(
+            by_text[DEADLINES],
+            "部長が承認する申請は、受付から 3 営業日以内に承認します。",
+            "部長が承認する申請は、受付から 3 営業日以内に承認します。",
+            kind="rule",
+            request_id="Q1",
+        ),
+    )
 
 
 def _supported(count, **extra):
@@ -63,10 +73,10 @@ def test_summary_rejected_for_a_merged_hop_is_published_after_the_correction_spl
     by_text = ids(ctx, QUESTION)
     merged = item(by_text[APPROVERS], MERGED, "労務部の承認者は労務部長です。", kind="rule", request_id="Q1")
     deadline = _hops(by_text)[3]
-    first = audit((0, "unsupported", "matched", ""), (1, "supported", "matched", ""),
-                  requests=[("Q1", "addressed")], summary_supported=False)
-    model = FakeModel([draft(merged, deadline, summary=CONCLUSION), draft(*_hops(by_text), summary=CONCLUSION)],
-                      [first, _supported(4)])
+    first = audit(
+        (0, "unsupported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=False
+    )
+    model = FakeModel([draft(merged, deadline, summary=CONCLUSION), draft(*_hops(by_text), summary=CONCLUSION)], [first, _supported(4)])
 
     result = run(model, ctx, QUESTION).response
 
@@ -82,8 +92,7 @@ def test_summary_rejected_while_every_item_was_supported_stays_unpublished():
     by_text = ids(ctx, QUESTION)
     hops = _hops(by_text)
     guarantee = "人事給与システムの変更は労務部長が承認し、申請はすぐに承認されます。"
-    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")],
-                  summary_supported=False)
+    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")], summary_supported=False)
     model = FakeModel([draft(*hops[:2], summary=guarantee), draft(*hops, summary=guarantee)], [first, _supported(4)])
 
     result = run(model, ctx, QUESTION).response
@@ -102,8 +111,7 @@ def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accept
     by_text = ids(ctx, QUESTION)
     hops = _hops(by_text)
     wrong = "人事給与システムの変更は管理本部長が承認し、受付から 5 営業日以内に承認します。"
-    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")],
-                  summary_supported=False)
+    first = audit(*[(index, "supported", "matched", "") for index in range(2)], requests=[("Q1", "partial")], summary_supported=False)
     model = FakeModel([draft(*hops[:2], summary=wrong), draft(*hops, summary=CONCLUSION)], [first, _supported(4)])
 
     result = run(model, ctx, QUESTION).response
@@ -117,13 +125,16 @@ def test_summary_rewritten_to_another_conclusion_follows_the_audit_of_the_accept
 
 def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
     """台帳の段が根拠に無ければ、つないだ結論を断定しない（足りない段を推測で埋めない）。"""
-    ctx = context(record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
-                  record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"))
+    ctx = context(
+        record(2, APPROVERS, "第 3 章 部署の承認者", page=2, source="organization-rules.pdf"),
+        record(3, DEADLINES, "承認の期限", page=1, source="approval-rules.pdf"),
+    )
     by_text = ids(ctx, QUESTION)
     hops = _hops({**by_text, LEDGER: "E-none", CODES: "E-none"})[2:]
     gap = {"kind": "gap", "text": "人事給与システムの担当部署は取得した資料に記載がありません。", "request_id": "Q1"}
-    rejected = audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "partial")],
-                     summary_supported=False)
+    rejected = audit(
+        (0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "partial")], summary_supported=False
+    )
     model = FakeModel([draft(*hops, gap, summary=CONCLUSION)], [rejected])
 
     text = run(model, ctx, QUESTION).response.answer_text
@@ -138,16 +149,23 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     # 説明が写し誤った文の語（管理本部）を使うので、逐語の先頭の文にも結び付けない。
-    miscopied = item(by_text[CODES], "略号「製」は製造部で、管理本部に属します。", "略号「製」: 製造部。管理本部に属します。",
-                     kind="rule", request_id="Q1")
-    model = FakeModel([draft(miscopied, *_hops(by_text)[1:], summary=CONCLUSION)],
-                      [_supported(3)])
+    miscopied = item(
+        by_text[CODES],
+        "略号「製」は製造部で、管理本部に属します。",
+        "略号「製」: 製造部。管理本部に属します。",
+        kind="rule",
+        request_id="Q1",
+    )
+    model = FakeModel([draft(miscopied, *_hops(by_text)[1:], summary=CONCLUSION)], [_supported(3)])
 
     result = run(model, ctx, QUESTION).response
 
     dropped = result.generation_trace["rounds"][0]["dropped"]
-    assert dropped[0]["miscopied"] == {"quoted": "管理本部に属します。", "original": "生産本部に属します。",
-                                       "verbatim_quote": "略号「製」: 製造部。生産本部に属します。"}
+    assert dropped[0]["miscopied"] == {
+        "quoted": "管理本部に属します。",
+        "original": "生産本部に属します。",
+        "verbatim_quote": "略号「製」: 製造部。生産本部に属します。",
+    }
     feedback = next(prompt for name, prompt in model.prompts[2:] if name == "GroundedDraft")
     assert '"original": "生産本部に属します。"' in feedback
 
@@ -172,8 +190,9 @@ def test_rule_quote_with_a_miscopied_trailing_sentence_binds_to_its_verbatim_fir
     spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}]
 
     def bound(kind, text):
-        return grounded.resolve_evidence(GroundedItem(kind=kind, text=text, evidence_id="E1",
-                                                      quote="略号「労」: 労務部。研究本部に属します。"), spans)
+        return grounded.resolve_evidence(
+            GroundedItem(kind=kind, text=text, evidence_id="E1", quote="略号「労」: 労務部。研究本部に属します。"), spans
+        )
 
     assert bound("rule", "略号「労」は労務部です。") == (spans[0], "略号「労」: 労務部。")
     assert bound("rule", "略号「労」は労務部で、研究本部に属します。")[0] is None  # 写し誤った語を説明に使う
@@ -187,7 +206,10 @@ def test_miscopied_sentence_needs_a_verbatim_first_sentence_in_the_named_evidenc
         return grounded.miscopied_sentence(GroundedItem(kind="rule", text="t", evidence_id=evidence_id, quote=quote), spans)
 
     assert miscopied("E1", "略号「労」: 労務部。生産本部に属します。") == {
-        "quoted": "生産本部に属します。", "original": "管理本部に属します。", "verbatim_quote": "略号「労」: 労務部。管理本部に属します。"}
+        "quoted": "生産本部に属します。",
+        "original": "管理本部に属します。",
+        "verbatim_quote": "略号「労」: 労務部。管理本部に属します。",
+    }
     assert miscopied("E1", "略号「労」: 総務部。管理本部に属します。") == {}  # 先頭の文から違う
     assert miscopied("E2", "略号「労」: 労務部。生産本部に属します。") == {}  # 指した根拠に無い
     assert miscopied("", "略号「労」: 労務部。生産本部に属します。") == {}  # 根拠を指していない
