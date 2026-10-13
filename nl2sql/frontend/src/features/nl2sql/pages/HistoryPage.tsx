@@ -350,6 +350,8 @@ function HistoryGrid({
                         aria-label={t("history.grid.show", { question: item.question })}
                         aria-describedby={`history-safety-help-${item.safety_is_safe ? "safe" : "blocked"}`}
                         aria-current={selected ? "true" : undefined}
+                        // 淡青面（bg-accent-subtle）の上の副次テキストを 1 段深くする（DataTable の選択行と同じ。#1595・WCAG 1.4.3）。
+                        data-surface-tint={selected ? "accent" : undefined}
                         className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors ${
                           selected
                             ? "border-l-accent-fg bg-accent-subtle"

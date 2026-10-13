@@ -4950,7 +4950,8 @@ test("DeepSec は構造化データ権限をロール別に編集する", { tag:
   // 対象 table/view は検索できる選択欄（SearchableSelectField。#608）。1 つを選ぶので、手書きの一覧・所有者の欄・
   // 「さらに読み込む」のボタンは持たない。続きは最後の候補から ↓（または一覧の下端までのスクロール）で読む。
   const objectButton = objectPicker.locator("#deepsec-entitlement-resource-0");
-  await expect(objectButton).toHaveAttribute("aria-required", "true");
+  // ボタン（role=button）は aria-required を持てない（axe の aria-allowed-attr。#1595）。
+  await expect(objectButton).not.toHaveAttribute("aria-required");
   await expect(objectPicker.getByRole("searchbox")).toHaveCount(0);
   await objectButton.click();
   const objectPopover = page.getByRole("dialog", { name: "対象 table/view" });
@@ -5031,9 +5032,11 @@ test("DeepSec は構造化データ権限をロール別に編集する", { tag:
     clearAllColumnsButton.press("Space")
   );
   await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).not.toBeChecked();
-  // 対象 object は検索できる選択欄（#608）。必須はラベルの印と選択欄の aria-required で伝える。
+  // 対象 object は検索できる選択欄（#608）。ボタンは aria-required を持てないので、必須はラベルの「必須」のタグを
+  // 読み上げて伝える（タグは aria-hidden にしない。#1595）。
   await expect(objectPicker.locator("label")).toHaveText("対象 table/view必須");
-  await expect(objectButton).toHaveAttribute("aria-required", "true");
+  await expect(objectPicker.locator("label [aria-hidden='true']")).toHaveCount(0);
+  await expect(objectButton).not.toHaveAttribute("aria-required");
   await expect(firstRule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("SALES.ORDERS");
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   const scopeModeLabelText = entitlementForm.locator("label[for='deepsec-entitlement-scope-mode-0']");
