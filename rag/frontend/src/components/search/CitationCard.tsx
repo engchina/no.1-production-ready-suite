@@ -51,7 +51,7 @@ export function CitationCard({
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
         <div data-testid="citation-main" className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-fg">
+            <span data-surface-tint="accent" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-fg">
               {index + 1}
             </span>
             <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
@@ -107,7 +107,7 @@ export function CitationCard({
                 </span>
               ) : null}
               {chunk.category_name ? (
-                <span className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
+                <span data-surface-tint="info" className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
                   {chunk.category_name}
                 </span>
               ) : null}

@@ -132,7 +132,7 @@ export function EvaluationSettingsClient() {
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+            <div data-surface-tint="info" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <ClipboardCheck size={20} aria-hidden />
             </div>
             <div>
@@ -166,6 +166,7 @@ export function EvaluationSettingsClient() {
                       onChange={() => selectSuite(item.name)}
                     />
                     <label
+                      data-surface-tint={selected ? "accent" : undefined}
                       htmlFor={`settings-evaluation-suite-${item.name}`}
                       className={cn(
                         "block h-full cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",

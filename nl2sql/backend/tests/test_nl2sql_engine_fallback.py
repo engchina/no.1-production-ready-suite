@@ -194,3 +194,80 @@ def test_deterministic_runtime_keeps_template_fallback_for_demo() -> None:
             "error": "",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "engine",
+    [Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT],
+    ids=["select-ai", "select-ai-agent"],
+)
+def test_select_ai_engines_never_call_enterprise_ai(
+    monkeypatch: pytest.MonkeyPatch, engine: Nl2SqlEngine
+) -> None:
+    """Select AI / Select AI Agent は失敗しても Enterprise AI へ切り替えない（#1684）。"""
+    direct = _FakeEnterpriseAiClient(_DIRECT_SQL)
+    service = _oracle_runtime_service(monkeypatch, direct=direct)
+
+    with pytest.raises(RuntimeError):
+        _generate(service, engine)
+
+    assert direct.calls == 0
+
+
+def test_direct_engine_ignores_profile_select_ai_model_and_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enterprise AI Direct は、業務プロファイルの Select AI 用の LLM Model・Region ではなく、
+    システム設定の既定のテキストモデルとその接続で呼ぶ（#1684）。"""
+    import json
+
+    import httpx
+
+    from app.features.nl2sql.enterprise_ai_client import OciEnterpriseAiDirectClient
+    from app.settings import Settings
+
+    seen: list[tuple[str, str]] = []
+    real_client = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, str(json.loads(request.content)["model"])))
+        return httpx.Response(200, json={"output_text": _DIRECT_SQL})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kwargs: real_client(transport=transport, **kwargs)
+    )
+    settings = Settings(
+        oci_enterprise_ai_endpoint=(
+            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
+        ),
+        oci_enterprise_ai_api_key="synthetic-test-key",
+        oci_enterprise_ai_project_ocid="ocid1.generativeaiproject.oc1.us-chicago-1.synthetic",
+        oci_enterprise_ai_default_text_model="openai.gpt-oss-120b",
+    )
+    service = _oracle_runtime_service(monkeypatch, direct=_FakeEnterpriseAiClient(_DIRECT_SQL))
+    service._enterprise_ai_client = OciEnterpriseAiDirectClient(settings)  # noqa: SLF001
+    profile = service.get_profile(None)
+    profile = profile.model_copy(
+        update={
+            "select_ai_config": profile.select_ai_config.model_copy(
+                update={"model": "xai.grok-4.6", "region": "ap-osaka-1"}
+            )
+        }
+    )
+
+    generated = service._generate_sql(  # noqa: SLF001
+        Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+        "社員一覧を確認したい",
+        profile,
+        AllowedObjects(),
+        10,
+        [],
+        allow_deterministic_fallback=False,
+    )
+
+    assert seen == [
+        ("inference.generativeai.us-chicago-1.oci.oraclecloud.com", "openai.gpt-oss-120b")
+    ]
+    assert generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+    assert generated.engine_meta["model"] == "openai.gpt-oss-120b"

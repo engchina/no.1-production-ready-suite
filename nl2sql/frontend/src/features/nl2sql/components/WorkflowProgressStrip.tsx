@@ -14,6 +14,7 @@ import {
   StatusBadge,
   useOperationTiming,
   DisclosureChevron,
+  surfaceTintFor,
 } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
@@ -187,6 +188,7 @@ export function WorkflowProgressStrip({
       >
         <div className="flex min-w-0 items-start gap-3">
           <span
+            data-surface-tint={surfaceTintFor(toneIconClass(tone))}
             className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${toneIconClass(tone)}`}
             aria-hidden="true"
           >

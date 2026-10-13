@@ -21,7 +21,10 @@ export const toneText: Record<FeedbackTone, string> = {
   danger: "text-danger-fg",
 };
 
-/** バナー等の面（枠 + 背景 + 文字）。 */
+/**
+ * バナー等の面（枠 + 背景 + 文字）。淡い面を塗るので、使う要素には `data-surface-tint={tone}` も付ける
+ * （内側の副次テキストを 4.5:1 にする。tokens/colors.css。#1671）。
+ */
 export const toneSurface: Record<FeedbackTone, string> = {
   success: "border-success-border bg-success-subtle text-success-fg",
   info: "border-info-border bg-info-subtle text-info-fg",

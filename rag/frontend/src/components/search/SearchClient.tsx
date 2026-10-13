@@ -22,6 +22,7 @@ import {
   Skeleton,
   StatusBadge,
   RunStopButton,
+  surfaceTintFor,
 } from "@production-ready/ui";
 import {
   Clock3,
@@ -911,7 +912,9 @@ function SearchRunPanel({
           <Clock3 size={16} className="text-accent-fg" aria-hidden />
           {t("search.run.title")}
         </h3>
-        <span className={runStatusClass(phase)}>{runStatusLabel(phase)}</span>
+        <span data-surface-tint={surfaceTintFor(runStatusClass(phase))} className={runStatusClass(phase)}>
+          {runStatusLabel(phase)}
+        </span>
       </div>
       {/* 今の工程と経過時間（#375）。検索のボタンは実行中に「停止」になりスピナーを出さないため、
           動くスピナーはここの 1 つだけ（#413）。 */}
@@ -935,6 +938,7 @@ function SearchRunPanel({
             {completedStages.map((stage, index) => (
               <span
                 key={`${stage.stage}-${stage.outcome}-${index}`}
+                data-surface-tint={surfaceTintFor(stageChipClass(stage.outcome))}
                 className={stageChipClass(stage.outcome)}
                 title={stageOutcomeLabel(stage.outcome)}
               >
@@ -1068,6 +1072,7 @@ function AutoFieldFilterChips({
           return (
             <span
               key={name}
+              data-surface-tint="info"
               className="inline-flex max-w-full items-center gap-0.5 rounded-full border border-border bg-info-subtle py-0.5 pl-2 text-xs font-medium leading-snug text-fg"
             >
               <span className="break-all">{t("search.autoFieldFilter.chip", { label })}</span>

@@ -555,6 +555,7 @@ export function EvaluationPage() {
                     return (
                       <label
                         key={capability.engine}
+                        data-surface-tint={capability.available && selected ? "accent" : undefined}
                         className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 transition ${
                           capability.available
                             ? selected
@@ -901,6 +902,7 @@ export function EvaluationPage() {
                     {recentJobs.map((job) => (
                       <article
                         key={job.job_id}
+                        data-surface-tint={job.job_id === currentJobId ? "accent" : undefined}
                         className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-center ${
                           job.job_id === currentJobId
                             ? "border-accent-emphasis bg-accent-subtle"
@@ -1011,7 +1013,7 @@ function SectionHeader({
   return (
     <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg">
+        <span data-surface-tint="accent" className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg">
           <Icon className="size-5" aria-hidden="true" />
         </span>
         <div className="min-w-0">

@@ -538,6 +538,7 @@ function FeedbackCards({
           // カードの操作以外の領域のクリックで選ぶ。キーボードは問題の概要のボタンで選ぶ（page-archetypes.md §0-7）。
           <li
             key={item.feedback_id}
+            data-surface-tint={current ? "accent" : undefined}
             aria-current={current ? "true" : undefined}
             onClick={(event) => {
               if ((event.target as HTMLElement).closest("button, a")) return;
@@ -809,7 +810,7 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
         const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
         const link = `${APP_ROUTES.documents}/${encodeURIComponent(citation.document_id)}?chunk_id=${encodeURIComponent(citation.chunk_id)}`;
         return (
-          <article key={`${citation.chunk_id}-${index}`} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
+          <article key={`${citation.chunk_id}-${index}`} data-surface-tint={targeted ? "accent" : undefined} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-fg">{citation.file_name ?? citation.document_id}</p>
@@ -866,7 +867,7 @@ function DetailSummary({ detail }: { detail: FeedbackDetail }) {
 }
 
 function LegacyNotice() {
-  return <div className="rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm text-warning-fg" role="status"><div className="flex items-start gap-2"><FileText size={16} className="mt-0.5 shrink-0" aria-hidden /><div><p className="font-medium">{t("feedback.detail.legacyTitle")}</p><p className="mt-1 text-xs leading-5">{t("feedback.detail.legacyHint")}</p></div></div></div>;
+  return <div data-surface-tint="warning" className="rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm text-warning-fg" role="status"><div className="flex items-start gap-2"><FileText size={16} className="mt-0.5 shrink-0" aria-hidden /><div><p className="font-medium">{t("feedback.detail.legacyTitle")}</p><p className="mt-1 text-xs leading-5">{t("feedback.detail.legacyHint")}</p></div></div></div>;
 }
 
 function TextSection({ title, value, empty = "—" }: { title: string; value: string | null; empty?: string }) {

@@ -4,6 +4,7 @@
 
 // --- lib ---
 export { cn } from "./lib/utils";
+export { surfaceTintFor, type SurfaceTint } from "./lib/surface-tint";
 export {
   INFORMATION_LIST_VISIBLE_ROWS,
   INFORMATION_TABLE_VISIBLE_ROWS,

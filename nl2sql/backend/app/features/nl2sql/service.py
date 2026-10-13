@@ -65,6 +65,8 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectClient,
     EnterpriseAiDirectError,
     OciEnterpriseAiDirectClient,
+    enterprise_ai_configuration_failure_message,
+    find_enterprise_ai_error,
 )
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
@@ -329,6 +331,7 @@ from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
     SelectAiCredentialMissingError,
+    SelectAiFeedbackNotFoundError,
     TabularImportValidationError,
     select_ai_object_list_entry,
 )
@@ -669,6 +672,15 @@ def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
     """
     if isinstance(exc, SchemaCatalogEmptyError):
         return str(exc), None
+    enterprise_error = find_enterprise_ai_error(exc)
+    if enterprise_error is not None and enterprise_error.configuration_error:
+        # OCI Enterprise AI の設定の誤り（401 / 403 / 404 / モデルが無い 400）は、時間をおいても
+        # 直らないので「もう一度」と案内せず、どのモデル・接続の呼び出しが失敗したかと確かめる所を
+        # 出す（#1684）。元の文は詳細に残す。
+        return (
+            enterprise_ai_configuration_failure_message(enterprise_error, "SQL の生成で "),
+            _job_failure_detail(exc),
+        )
     return _JOB_FAILED_MESSAGE, _job_failure_detail(exc)
 
 
@@ -679,7 +691,14 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     `null` のまま返さない（MCP の呼び出し側が失敗を分類できるようにする）。
     """
     codes = oracle_error_codes(exc)
-    return codes[0] if codes else fallback
+    if codes:
+        return codes[0]
+    # OCI Enterprise AI の HTTP の失敗は種類の分かるコード
+    # （ENTERPRISE_AI_AUTHORIZATION_FAILED など。3 製品で共通の対応表。#1684）。
+    enterprise_error = find_enterprise_ai_error(exc)
+    if enterprise_error is not None and enterprise_error.http_failure is not None:
+        return enterprise_error.http_failure.error_code
+    return fallback
 
 
 # チャットのジョブの中で実行した結果の行を、画面が受け取るまで置く文書の collection（#1176）。
@@ -2888,6 +2907,26 @@ def _utc_now() -> str:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
+
+
+_SELECT_AI_AGENT_RUN_TOOL_PREFIX = "run_tool:"
+
+
+def _select_ai_agent_run_mode(conversation_id: str) -> tuple[str, str]:
+    """Select AI Agent の実行が RUN_TEAM か、RUN_TOOL への切り替えかと、その警告を返す（#1681）。
+
+    adapter は team の profile が消えたときだけ RUN_TOOL に切り替え、conversation_id を
+    ``run_tool:<tool>`` にする。切り替えたことを engine_meta と利用者への警告に残す。
+    """
+    if conversation_id.startswith(_SELECT_AI_AGENT_RUN_TOOL_PREFIX):
+        tool_name = conversation_id[len(_SELECT_AI_AGENT_RUN_TOOL_PREFIX) :]
+        return (
+            "run_tool",
+            "Select AI Agent の team が参照する profile が見つからないため、"
+            f"team を通さずに tool（{tool_name}）を直接実行しました（RUN_TOOL）。"
+            "Select AI Agent の資産を再作成してください。",
+        )
+    return "run_team", ""
 
 
 def _record_engine_timing(
@@ -18832,7 +18871,7 @@ class Nl2SqlService:
             return SelectAiFeedbackMutationData(
                 runtime="oracle",
                 executed=False,
-                status="error",
+                status="not_found" if isinstance(exc, SelectAiFeedbackNotFoundError) else "error",
                 profile_name=request.profile_name,
                 warnings=[str(exc)],
             )
@@ -18844,6 +18883,9 @@ class Nl2SqlService:
         if not profile_name:
             profile_name = self._select_ai_profile_name(self.get_profile(request.profile_id))
         sql_text = self._select_ai_feedback_showsql(request.question)
+        # positive の評価も NEGATIVE + response（正しい SQL）で登録する。DBMS_CLOUD_AI.FEEDBACK は
+        # sql_text と response があれば、その select ai の文を実行していなくても登録できるが、
+        # positive・response なしは実行の記録（V$MAPPED_SQL）が無いと ORA-20000 になる（#1681）。
         stored_feedback_type = "NEGATIVE"
         response = (
             request.generated_sql.strip()
@@ -19226,14 +19268,17 @@ class Nl2SqlService:
                 team_name=team_name,
                 question=request.prompt,
                 tool_name=self._select_ai_agent_asset_names(profile)["tool"],
+                conversation_id=request.conversation_id.strip() or None,
             )
+            run_mode, run_warning = _select_ai_agent_run_mode(conversation_id)
             return AgentTeamRunData(
                 team_name=team_name,
                 prompt=request.prompt,
                 generated_sql=sql,
                 conversation_id=conversation_id,
                 runtime="oracle",
-                engine_meta={"package": "DBMS_CLOUD_AI_AGENT"},
+                warnings=[run_warning] if run_warning else [],
+                engine_meta={"package": "DBMS_CLOUD_AI_AGENT", "agent_run_mode": run_mode},
             )
         generated = self._generate_sql(
             Nl2SqlEngine.SELECT_AI_AGENT,
@@ -19342,20 +19387,18 @@ class Nl2SqlService:
         self, request: AgentConversationCreateRequest
     ) -> AgentConversationCreateData:
         del request
-        warnings: list[str] = []
         if self._use_oracle_runtime():
-            try:
-                return AgentConversationCreateData(
-                    conversation_id=self._oracle_adapter.create_agent_conversation(),
-                    runtime="oracle",
-                )
-            except OracleAdapterError as exc:
-                warnings.append(str(exc))
+            # 作れないときに偽の id（deterministic-<uuid>）を返さない。RUN_TEAM は
+            # DBMS_CLOUD_AI.CREATE_CONVERSATION で作っていない id を受け付けない（#1681。
+            # 実 ADB で ORA-06502）。失敗は OracleAdapterError のまま router が 502 にする。
+            return AgentConversationCreateData(
+                conversation_id=self._oracle_adapter.create_agent_conversation(),
+                runtime="oracle",
+            )
         return AgentConversationCreateData(
             conversation_id=f"deterministic-{uuid.uuid4()}",
             runtime="deterministic",
-            warnings=warnings
-            or ["Oracle runtime ではないため deterministic conversation id を返しました。"],
+            warnings=["Oracle runtime ではないため deterministic conversation id を返しました。"],
         )
 
     def cleanup_select_ai_agent_assets_low_level(
@@ -21982,14 +22025,18 @@ class Nl2SqlService:
                     error=str(exc),
                 )
                 raise
+            run_mode, run_warning = _select_ai_agent_run_mode(conversation_id)
             meta.update(
                 {
                     "select_ai_profile": self._select_ai_profile_name(profile),
                     "team_name": team_name,
                     "conversation_id": conversation_id,
+                    "agent_run_mode": run_mode,
                     "runtime": "oracle",
                 }
             )
+            if run_warning:
+                fallback_messages.append(run_warning)
         if not sql:
             _record_engine_timing(
                 engine_timings,

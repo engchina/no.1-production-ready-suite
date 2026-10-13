@@ -884,6 +884,8 @@ function PickerOption({
       aria-setsize={setSize}
       aria-labelledby={labelId}
       aria-describedby={describedBy || undefined}
+      // 淡青の面の上の補足（description / meta）を 4.5:1 にする（tokens/colors.css。#1671）。
+      data-surface-tint={selected && !disabled ? "accent" : undefined}
       className={cn(
         "absolute inset-x-0 flex items-center gap-3 border-b border-border px-3",
         ITEM_ROW_CLASS,

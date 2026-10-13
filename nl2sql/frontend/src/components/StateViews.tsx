@@ -52,6 +52,7 @@ export function ErrorState({
 }) {
   return (
     <div
+      data-surface-tint="danger"
       role="alert"
       className="flex flex-col items-center gap-3 rounded-lg border border-danger-border bg-danger-subtle p-8 text-center"
     >

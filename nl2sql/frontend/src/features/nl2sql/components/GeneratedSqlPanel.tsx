@@ -419,6 +419,7 @@ export function GeneratedSqlSummary({
             </span>
             {result.fallback_reason && (
               <span
+                data-surface-tint="warning"
                 className="rounded-md bg-warning-subtle px-2 py-1 text-xs text-warning-fg"
                 title={result.fallback_reason}
                 aria-label={t("nl2sql.result.fallbackWithReason", {

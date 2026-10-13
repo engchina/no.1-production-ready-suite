@@ -5,7 +5,7 @@ import { useWorkspaceActive } from "@/components/WorkspaceState";
 import { formatDateTime } from "@/lib/format";
 
 import { t } from "@/lib/i18n";
-import { useOperationTiming, type UseOperationTimingOptions } from "@production-ready/ui";
+import { useOperationTiming, type UseOperationTimingOptions, surfaceTintFor } from "@production-ready/ui";
 
 export type ExecutionActivityStatus = "running" | "success" | "error";
 type ExecutionActivityTone = "info" | "success" | "danger";
@@ -94,6 +94,7 @@ export function ExecutionActivityPanel({
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-2">
           <span
+            data-surface-tint={surfaceTintFor(statusClass)}
             className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${statusClass}`}
             aria-hidden="true"
           >
@@ -110,6 +111,7 @@ export function ExecutionActivityPanel({
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
           <span
+            data-surface-tint={surfaceTintFor(statusClass)}
             className={`inline-flex min-h-7 items-center rounded-md border px-2 py-1 text-xs font-semibold ${statusClass}`}
           >
             {t(statusLabelKey[status])}

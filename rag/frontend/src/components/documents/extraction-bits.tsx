@@ -92,7 +92,7 @@ export function InfoChip({
 /** 連番(#N など)を表す小さな丸バッジ。 */
 export function IndexBadge({ children }: { children: ReactNode }) {
   return (
-    <span className="tnum flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle px-1.5 text-xs font-semibold text-accent-fg">
+    <span data-surface-tint="accent" className="tnum flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle px-1.5 text-xs font-semibold text-accent-fg">
       {children}
     </span>
   );

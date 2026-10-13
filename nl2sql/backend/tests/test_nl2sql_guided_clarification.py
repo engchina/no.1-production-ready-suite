@@ -499,6 +499,42 @@ def test_invalid_llm_output_is_rejected() -> None:
     assert raised.value.code == "REQUIREMENT_AI_INVALID_OUTPUT"
 
 
+@pytest.mark.parametrize(
+    ("status", "configuration_error"),
+    [(404, True), (503, False)],
+    ids=["authorization", "temporary"],
+)
+def test_llm_http_failure_guidance_depends_on_kind(status: int, configuration_error: bool) -> None:
+    """設定の誤り（OCI の 404 など）は「もう一度」と案内せず、確かめる所を出す（#1684）。"""
+    from pr_system_settings.enterprise_ai_errors import classify_enterprise_ai_http_failure
+
+    from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
+
+    class _FailingLlm(_ScriptedLlm):
+        def generate(self, **kwargs: Any) -> str:
+            failure = classify_enterprise_ai_http_failure(status, "synthetic")
+            raise EnterpriseAiDirectError(
+                f"OCI Enterprise AI HTTP {status}: synthetic",
+                code=failure.kind,
+                retryable=failure.retryable,
+                http_failure=failure,
+                model_id="openai.gpt-oss-120b",
+                endpoint_host="inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+            )
+
+    runtime = _runtime(_FailingLlm())
+    with pytest.raises(RequirementAiUnavailableError) as raised:
+        _create(runtime)
+    assert raised.value.code == "REQUIREMENT_AI_FAILED"
+    if configuration_error:
+        assert "もう一度" not in raised.value.message_ja
+        assert "時間をおいても直りません" in raised.value.message_ja
+        assert "openai.gpt-oss-120b" in raised.value.message_ja
+        assert "既定のテキストモデル" in raised.value.message_ja
+    else:
+        assert "もう一度お試しください" in raised.value.message_ja
+
+
 # --- 2. 範囲の外・実在しない名前・未承認の結合を拒む ---------------------------------
 
 

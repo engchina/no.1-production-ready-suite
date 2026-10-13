@@ -140,7 +140,7 @@ export function GuardrailSettingsClient() {
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-warning-subtle text-warning-fg">
+            <div data-surface-tint="warning" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-warning-subtle text-warning-fg">
               <ShieldAlert size={20} aria-hidden />
             </div>
             <div>
@@ -180,6 +180,7 @@ export function GuardrailSettingsClient() {
                       onChange={() => selectBackend(item)}
                     />
                     <label
+                      data-surface-tint={selected ? "accent" : undefined}
                       htmlFor={`guardrail-backend-${item}`}
                       className={cn(
                         "flex min-h-20 cursor-pointer flex-col rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-focus-ring peer-focus-visible:outline-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
@@ -223,6 +224,7 @@ export function GuardrailSettingsClient() {
                       onChange={() => selectPolicy(item.name)}
                     />
                     <label
+                      data-surface-tint={selected ? "accent" : undefined}
                       htmlFor={`guardrail-policy-${item.name}`}
                       className={cn(
                         "block min-h-[7.43rem] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-focus-ring peer-focus-visible:outline-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
@@ -336,7 +338,7 @@ function PolicyChips({ policy }: { policy: GuardrailPolicyStatusData }) {
         {t("settings.guardrail.groundingRatio")} {policy.grounding_min_ratio.toFixed(2)}
       </span>
       {policy.audit_emphasis ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-warning-subtle px-1.5 text-xs font-medium text-warning-fg">
+        <span data-surface-tint="warning" className="inline-flex min-h-5 items-center rounded bg-warning-subtle px-1.5 text-xs font-medium text-warning-fg">
           {t("settings.guardrail.auditEmphasis")}
         </span>
       ) : null}
