@@ -157,7 +157,7 @@ async function startPendingRun(page: Page) {
   return { button, spinner };
 }
 
-test("実行ボタンのスピナーは 16px で回転レイヤーが固定されている", async ({ page }) => {
+test("実行ボタンのスピナーは 16px で回転レイヤーが固定されている", { tag: "@responsive" }, async ({ page }) => {
   const { spinner } = await startPendingRun(page);
 
   const style = await spinner.evaluate((node) => {
@@ -180,7 +180,7 @@ test("実行ボタンのスピナーは 16px で回転レイヤーが固定さ�
   expect(style.animationName).not.toBe("none");
 });
 
-test("スピナーは全周トラックを持ちシルエットが回転角に依存しない", async ({ page }) => {
+test("スピナーは全周トラックを持ちシルエットが回転角に依存しない", { tag: "@responsive" }, async ({ page }) => {
   const { button, spinner } = await startPendingRun(page);
 
   const shape = await spinner.evaluate((node) => {
@@ -206,7 +206,7 @@ test("スピナーは全周トラックを持ちシルエットが回転角に�
   await expect(button.locator("svg:visible")).toHaveCount(1);
 });
 
-test("回転しても見た目の重心が上下・左右に動かず、箱とボタンの位置・高さも変わらない（#1180）", async ({ page }) => {
+test("回転しても見た目の重心が上下・左右に動かず、箱とボタンの位置・高さも変わらない（#1180）", { tag: "@responsive" }, async ({ page }) => {
   const { button } = await startPendingRun(page);
   const box = button.locator(".pr-spinner");
   await expectSpinnerStable(box);
@@ -215,7 +215,7 @@ test("回転しても見た目の重心が上下・左右に動かず、箱と�
   await expect(box).toHaveCSS("height", "16px");
 });
 
-test("スピナーはボタンの垂直中心に配置される", async ({ page }) => {
+test("スピナーはボタンの垂直中心に配置される", { tag: "@responsive" }, async ({ page }) => {
   const { button, spinner } = await startPendingRun(page);
 
   const metrics = await spinner.evaluate((node) => {
@@ -231,7 +231,7 @@ test("スピナーはボタンの垂直中心に配置される", async ({ page 
   await expect(button).toBeDisabled();
 });
 
-test("回転中もスピナーの中心座標がフレーム間でドリフトしない", async ({ page }, testInfo) => {
+test("回転中もスピナーの中心座標がフレーム間でドリフトしない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const { button, spinner } = await startPendingRun(page);
 
   const samples = await spinner.evaluate(
@@ -262,7 +262,7 @@ test("回転中もスピナーの中心座標がフレーム間でドリフト�
   });
 });
 
-test("prefers-reduced-motion でもスピナーは回転を続ける（#440）", async ({ page }) => {
+test("prefers-reduced-motion でもスピナーは回転を続ける（#440）", { tag: "@responsive" }, async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const { spinner } = await startPendingRun(page);
 
@@ -276,7 +276,7 @@ test("prefers-reduced-motion でもスピナーは回転を続ける（#440）",
     .toBe("spin 1s");
 });
 
-test("sm/md/lg と icon-only の loading button でもスピナーは固定寸法で中央に残る", async ({
+test("sm/md/lg と icon-only の loading button でもスピナーは固定寸法で中央に残る", { tag: "@responsive" }, async ({
   page,
 }) => {
   const { spinner } = await startPendingRun(page);

@@ -738,7 +738,7 @@ test("OCI 認証設定はブラウザ草稿のダミー値を runtime 空値で�
   await expect(page.getByLabel(".env プレビュー")).toHaveCount(0);
 });
 
-test("NL2SQL のシステム設定画面を表示できる", async ({ page }) => {
+test("NL2SQL のシステム設定画面を表示できる", { tag: "@responsive" }, async ({ page }) => {
   await page.goto("/settings/oci");
   await expect(page.getByRole("heading", { name: "OCI 認証設定" }).first()).toBeVisible();
   await expect(page.getByLabel("ユーザー OCID")).toBeVisible();
@@ -1221,7 +1221,7 @@ for (const failure of OCI_CONNECTIVITY_FAILURES) {
   });
 }
 
-test("データベース設定は Wallet ZIP の下にサービス名を置き、保存済みパスワードを明示表示する", async ({
+test("データベース設定は Wallet ZIP の下にサービス名を置き、保存済みパスワードを明示表示する", { tag: "@responsive" }, async ({
   page,
 }) => {
   let revealCount = 0;
@@ -1423,7 +1423,7 @@ test("アップロード保存先は右側情報カラムを表示しない", as
   await expectNoHorizontalOverflow(page);
 });
 
-test("データベース設定は右側情報カラムを表示しない", async ({
+test("データベース設定は右側情報カラムを表示しない", { tag: "@responsive" }, async ({
   page,
 }) => {
   await page.unroute("**/api/settings/database");
@@ -1451,7 +1451,7 @@ test("データベース設定は右側情報カラムを表示しない", async
   await expectNoHorizontalOverflow(page);
 });
 
-test("OCI 秘密鍵と Wallet ZIP をドラッグ＆ドロップで即時アップロードできる", async ({
+test("OCI 秘密鍵と Wallet ZIP をドラッグ＆ドロップで即時アップロードできる", { tag: "@responsive" }, async ({
   page,
 }) => {
   let keyUploadCount = 0;
@@ -1665,7 +1665,7 @@ test("モデル設定の読込失敗から再試行し、未設定 Endpoint URL 
   await expectNoHorizontalOverflow(page);
 });
 
-test("モデル設定を3カードごとに独立保存し、非表示設定と未保存入力を保持する", async ({
+test("モデル設定を3カードごとに独立保存し、非表示設定と未保存入力を保持する", { tag: "@responsive" }, async ({
   page,
 }) => {
   await page.unroute("**/api/settings/model");
@@ -2167,7 +2167,7 @@ test("有効な Wallet がある場合は OCI 自動取得を呼ばない", asyn
   ).toHaveCount(0);
 });
 
-test("ADB 起動中は保存ボタンを無効化して保存表示のままにする", async ({ page }) => {
+test("ADB 起動中は保存ボタンを無効化して保存表示のままにする", { tag: "@responsive" }, async ({ page }) => {
   const settingsGate = createRequestGate();
   const startGate = createRequestGate();
   let settingsCount = 0;
@@ -2215,7 +2215,7 @@ test("ADB 起動中は保存ボタンを無効化して保存表示のままに�
   await expectNoHorizontalOverflow(page);
 });
 
-test("ADB 停止中は保存ボタンを無効化して保存表示のままにする", async ({ page }) => {
+test("ADB 停止中は保存ボタンを無効化して保存表示のままにする", { tag: "@responsive" }, async ({ page }) => {
   const settingsGate = createRequestGate();
   const stopGate = createRequestGate();
   let settingsCount = 0;
@@ -3155,7 +3155,7 @@ test("レビュー補完: OCI config 反映・namespace 取得・保存の actio
   await expect(page.getByText("Object Storage 設定を保存しました。", { exact: true })).toBeVisible();
 });
 
-test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・削除確認を保存 payload まで確認する", async ({ page }) => {
+test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・削除確認を保存 payload まで確認する", { tag: "@responsive" }, async ({ page }) => {
   let persisted = modelSettingsFixture();
   const writes: Array<Record<string, any>> = [];
   await page.route("**/api/settings/model", async (route) => {

@@ -53,6 +53,7 @@
 - PR と `main` の push で `.github/workflows/ci.yml` が動き、`changes` job が**変更のあった製品の job だけ**を動かす（platform の frontend / backend の分け方と、全製品を動かす変更の規則は `ci.yml` の冒頭）。製品のテストが platform の別の側のファイルを読むなら、`changes` の filter にそのファイルを足す。
 - 必須 check は **`CI OK`** だけ（skip は成功扱い）。**job を追加したら `ci-ok` の `needs` に足し、すべての job に `timeout-minutes`（通常 10〜15 分、e2e は実測の倍程度）を付ける。**
 - PR の e2e は約 1 分の smoke と、差分に影響を受ける spec（`e2e-impact`。smoke の spec は重ねず、全件なら smoke を飛ばす）。全件は `e2e-nightly.yml` が毎晩実行する。キャッシュの方針は `ci.yml` の platform の節のコメント。
+- **PR の e2e は desktop が全件、375px（mobile）の project は画面幅に依存する test（`@responsive` の tag と、名前の括弧で `mobile` / `375px` を前提にするもの）だけ**（`ci.yml` の `E2E_MOBILE_SCOPE=responsive`。#1582）。nightly とローカルは両方の project で全件。
 - backend の pytest は CI で並列（`-n auto`）に実行する。**テストは並列でも直列でも通るように書く**（`tmp_path`・`parametrize` の `ids=`・差し替えられる待ち・`xdist_group`。[backend-standard.md](./platform/docs/backend-standard.md)「テストの並列実行」）。
 - `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ（全件は `dependency-audit-nightly.yml`）、`bandit` は毎回。
 - **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。job の時間切れ（cancelled）も Issue になる（#1586）。
@@ -143,6 +144,7 @@
 - **UI/UX の作業（設計・実装・レビュー・改善）は必ず `ui-ux-pro-max` skill を使う。**
 - 変更ごとに Playwright で実画面を確かめる: desktop と 375px、必要に応じて空 / 読込 / エラー / ブロック、ライト / ダーク、1280px / 1920px（タイトルと本文の左端が揃う）、キーボード（最初の Tab で「本文へスキップ」、フォーカスリング、`Tabs` の ← → / Home / End）。状態は色だけで表さない。意図的な見た目の変更は README §7 と照合して PR に書く。
 - ローカルの e2e は関係する spec だけを、1 回おおむね 1 分以内で（`-g` や spec のパス）。
+- **画面幅で結果が変わる test には `{ tag: "@responsive" }` を付ける**（レイアウトの位置・幅・並び、ナビのドロワー、横スクロール・折り返し、タッチ端末の高さ・タップ、`isMobile` / project 名で確かめる内容が変わるもの。mobile だけで実行する test は必ず。spec 全体なら先頭の describe に）。中で `setViewportSize` で幅を決める test と、末尾の汎用の横あふれの確認だけの test には付けない。迷ったら付ける。規則の正本は `platform/scripts/e2e-impact/mobile-scope.ts`。PR の mobile と同じ範囲は `E2E_MOBILE_SCOPE=responsive npx playwright test …` で確かめる。
 - **画面のコードを変えたら、その画面を検証する既存の spec も同じ PR で直す（#885）。** 影響を受ける spec は `python3 platform/scripts/e2e_impact.py select --product <製品> --base origin/main --download`（CI の `e2e-impact` と同じ選択）で選び、PR の前に実行する。spec は `test` を製品の fixture（RAG・Agent `e2e/fixtures/test.ts`、NL2SQL `tests/e2e/_helpers/test.ts`）から import する（CI の `check-imports`）。
 
 ## 共通の技術方針

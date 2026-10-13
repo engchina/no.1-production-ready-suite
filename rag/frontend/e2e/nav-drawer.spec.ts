@@ -17,7 +17,7 @@ async function mockApi(page: Page) {
 const focusedInsideDrawer = (page: Page) =>
   page.evaluate(() => Boolean(document.activeElement?.closest('[data-testid="nav-drawer"]')));
 
-test.describe("md 未満のナビのドロワー", () => {
+test.describe("md 未満のナビのドロワー", { tag: "@responsive" }, () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await mockApi(page);
@@ -133,7 +133,7 @@ test.describe("md 未満のナビのドロワー", () => {
   });
 });
 
-test("desktop（1280px）は従来どおりサイドバーを本文の左に置き、メニューボタンを出さない", async ({ page }) => {
+test("desktop（1280px）は従来どおりサイドバーを本文の左に置き、メニューボタンを出さない", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto("/settings/appearance");

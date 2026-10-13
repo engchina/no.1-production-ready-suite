@@ -565,7 +565,7 @@ for (const [label, grants, showsAccess] of [
   });
 }
 
-test("業務プロファイル一覧検索はAPI totalを件数表示に使い検索結果だけを表示する", async ({ page }) => {
+test("業務プロファイル一覧検索はAPI totalを件数表示に使い検索結果だけを表示する", { tag: "@responsive" }, async ({ page }) => {
   const searchableProfiles = [
     {
       ...profiles[0],
@@ -705,7 +705,7 @@ test("業務プロファイルの対象オブジェクト件数は取得済み�
   );
 });
 
-test("業務プロファイル基本情報は名称とカテゴリの行を揃えて表示する", async ({ page }) => {
+test("業務プロファイル基本情報は名称とカテゴリの行を揃えて表示する", { tag: "@responsive" }, async ({ page }) => {
   await mockProfileApi(page);
   await page.goto("/profiles?profile=new");
 
@@ -767,7 +767,7 @@ test("業務プロファイル基本情報は名称とカテゴリの行を揃�
   }
 });
 
-test("業務プロファイルの更新操作はテーブル管理と同じ文言・順序・階層で動作する", async ({ page }) => {
+test("業務プロファイルの更新操作はテーブル管理と同じ文言・順序・階層で動作する", { tag: "@responsive" }, async ({ page }) => {
   let profileSearchRequests = 0;
   let schemaRefreshSubmissions = 0;
   let schemaRefreshPolls = 0;
@@ -1023,7 +1023,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
   expect(viewportWidth.scrollWidth).toBeLessThanOrEqual(viewportWidth.clientWidth + 1);
 });
 
-test("業務プロファイルは表とビューを固定高リストで管理できる", async ({ page }) => {
+test("業務プロファイルは表とビューを固定高リストで管理できる", { tag: "@responsive" }, async ({ page }) => {
   let savedPayload: Record<string, unknown> | null = null;
   let oracleSyncPayload: Record<string, unknown> | null = null;
   await mockProfileApi(page);
@@ -1364,7 +1364,7 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   expect(ontologyRequests).toBe(0);
 });
 
-test("Oracle 反映の再起動・期限切れを表示して明示的に再試行できる", async ({ page }, testInfo) => {
+test("Oracle 反映の再起動・期限切れを表示して明示的に再試行できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockProfileApi(page);
   let ontologyRequests = 0;
   let retryCalls = 0;
@@ -1625,7 +1625,7 @@ test("保存済み Region は Osaka を保持しキーボードで変更でき�
   await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toBeVisible();
 });
 
-test("既定の生成方式はこの環境で使える方式だけから選んで保存する (#1524)", async ({ page }, testInfo) => {
+test("既定の生成方式はこの環境で使える方式だけから選んで保存する (#1524)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockProfileApi(page);
   // Select AI Agent は使える・OCI Enterprise AI は未設定の環境。
   await page.route("**/api/nl2sql/engines", (route) =>
@@ -2207,7 +2207,7 @@ test("$ と NL2SQL_ のシステム object は業務プロファイルの対象�
   await expect(viewList.getByText("選択できるビューがありません。")).toBeVisible();
 });
 
-test("Select AI 設定は requested order で並び狭い幅でも重ならない", async ({ page }) => {
+test("Select AI 設定は requested order で並び狭い幅でも重ならない", { tag: "@responsive" }, async ({ page }) => {
   await mockProfileApi(page);
   await page.goto("/profiles");
 
@@ -2474,7 +2474,7 @@ test("業務プロファイルはcatalogが空のときDB管理用の現在schem
   await expect(viewList.getByText("V_EMP_DEPT", { exact: true })).toHaveCount(0);
 });
 
-test("業務プロファイルの対象オブジェクト空状態はExcelプレビュー風の広い面で表示する", async ({ page }) => {
+test("業務プロファイルの対象オブジェクト空状態はExcelプレビュー風の広い面で表示する", { tag: "@responsive" }, async ({ page }) => {
   await mockProfileApi(page, {
     catalog: { ...schemaCatalog, tables: [] },
     tableItems: [],
@@ -2762,7 +2762,7 @@ test("検索フィルタ適用中のスキーマ一括操作はヒットした o
   await expect(tableList.getByLabel("APP.TABLE_02")).toBeChecked();
 });
 
-test("50 件超のスキーマでも仮想スクロールの行位置がずれない", async ({ page }) => {
+test("50 件超のスキーマでも仮想スクロールの行位置がずれない", { tag: "@responsive" }, async ({ page }) => {
   const manyTables = {
     refreshed_at: schemaCatalog.refreshed_at,
     tables: Array.from({ length: 120 }, (_, index) => {
@@ -3000,7 +3000,7 @@ test("手動更新の失敗通知はクエリ再描画で消えない", async ({
   await expect(notice).toBeVisible();
 });
 
-test("保存が成功したら実行確認語をクリアして保存ボタンを再ゲートする", async ({ page }, testInfo) => {
+test("保存が成功したら実行確認語をクリアして保存ボタンを再ゲートする", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockProfileApi(page);
 
   await page.goto("/profiles?profile=default");

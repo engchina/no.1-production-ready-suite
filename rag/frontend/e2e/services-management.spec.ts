@@ -231,7 +231,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`サービス管理は稼働状態を表示する (${viewport.name})`, async ({ page }) => {
+  test(`サービス管理は稼働状態を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockServices(page);
 
@@ -400,7 +400,7 @@ test("unit が未登録・起動失敗のサービスは状態と案内を出す
   await expect(docling.getByText("/var/lib/production-ready-rag/.cache")).toBeVisible();
 });
 
-test("実行コマンドは既定で折りたたまれ、展開すると systemd のコマンドを表示する", async ({
+test("実行コマンドは既定で折りたたまれ、展開すると systemd のコマンドを表示する", { tag: "@responsive" }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });

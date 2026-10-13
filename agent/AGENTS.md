@@ -64,7 +64,7 @@
 - 各ページの型（A〜D）の割り当て、離脱ガードの対象画面、作業状態として残す field は [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。
 - サイドバーのアカウント領域（ユーザー・ロール・ログアウト・テーマ切替）は `SidebarAccountFooter` を `Sidebar` の `footer` に渡す。ダークテーマ（`data-theme="dark"`）に追従するため、色の直書きを残さない。
 - lint は `frontend/eslint.config.js` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
-- Playwright は `desktop` と `mobile-375`（Pixel 5、375×812、タッチ）の 2 project。spec の中で viewport を回しているテストと、画面幅に関係しない spec は `mobile-375` では実行しない（`playwright.config.ts`）。
+- Playwright は `desktop` と `mobile-375`（Pixel 5、375×812、タッチ）の 2 project。spec の中で viewport を回しているテストと、画面幅に関係しない spec は `mobile-375` では実行しない（`playwright.config.ts`）。PR の CI の `mobile-375` は、さらに `@responsive` の tag の test だけ（全件は nightly。直下の AGENTS.md「UI 変更の検証」）。
 
 ## API
 

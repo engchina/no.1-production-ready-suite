@@ -394,7 +394,7 @@ test("実行履歴の詳細では業務の言葉で出し、元の JSON は管�
 // #1314: 回答の対応（成果物 answer の outcome）を、RAG の回答の詳細（#1252）と同じ文言・色のバッジで出す。
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`回答の対応のバッジを検証のバッジと並べて見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`回答の対応のバッジを検証のバッジと並べて見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-outcome-1", [
         { ...answer("精算は申請から始めます。", outcome("conditional")), id: "answer-outcome-1" },
         supportTask(),
