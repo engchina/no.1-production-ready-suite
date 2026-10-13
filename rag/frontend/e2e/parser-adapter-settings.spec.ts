@@ -669,7 +669,15 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
     );
   });
   const payloads: Array<Record<string, unknown>> = [];
-  let connections = defaultConnections().map((connection) => ({ ...connection }));
+  // 保存で endpoint・model などが変わるので、defaultConnections の literal の型（as const）を広げる。
+  let connections: Array<
+    Omit<ReturnType<typeof defaultConnections>[number], "endpoint" | "model" | "api_key_configured" | "configured"> & {
+      endpoint: string;
+      model: string | null;
+      api_key_configured: boolean;
+      configured: boolean;
+    }
+  > = defaultConnections().map((connection) => ({ ...connection }));
   await page.route("**/api/settings/parser-adapters", async (route) => {
     if (route.request().method() === "PATCH") {
       const payload = route.request().postDataJSON() as Record<string, unknown>;

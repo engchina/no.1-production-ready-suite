@@ -63,7 +63,7 @@ for (const viewport of [
 test("検索・回答プロファイルを作成すると参照 KB と方針を含めて POST し、作成した検索・回答プロファイルのエディタへ置き換えて移る", async ({
   page,
 }) => {
-  let createBody: Record<string, unknown> | null = null;
+  let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
   });
@@ -117,7 +117,7 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
 });
 
 test("回答の設定は常に表示し、上書きした値を POST する（回答エンジンは送らない）", async ({ page }) => {
-  let createBody: Record<string, unknown> | null = null;
+  let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
   });
@@ -200,7 +200,7 @@ async function mockEntityIndexCoverage(
 }
 
 test("実体でつながる根拠の開閉と上限を保存し、実体の索引の無い参照先では案内する", async ({ page }) => {
-  let createBody: Record<string, unknown> | null = null;
+  let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
   });
@@ -270,7 +270,7 @@ test("実体でつながる根拠の開閉と上限を保存し、実体の索�
 });
 
 test("実体の索引のある参照先・数えられないときは案内を出さず、off は false で保存して上限も外す", async ({ page }) => {
-  let createBody: Record<string, unknown> | null = null;
+  let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
   });
@@ -406,7 +406,7 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
 test("章節で広げる根拠を off にすると上限の欄を閉じ、false だけを保存する", async ({
   page,
 }) => {
-  let createBody: Record<string, unknown> | null = null;
+  let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
   });
@@ -448,7 +448,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    let updateBody: Record<string, unknown> | null = null;
+    let updateBody = null as Record<string, unknown> | null;
     await mockDefaultSearchAnswerProfile(page, (body) => {
       updateBody = body;
     });
@@ -508,7 +508,7 @@ for (const viewport of [
 test("検索・回答プロファイルの名前と説明は必須で、空・空白だけでは作成せず最初の不正な欄へフォーカスする", async ({
   page,
 }) => {
-  let createBody: Record<string, unknown> | null = null;
+  let createBody = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (body) => {
     createBody = body;
   });
@@ -572,7 +572,7 @@ test("RAG 検索は検索・回答プロファイルを 1 つ選び、search_ans
     },
   ]);
 
-  let searchPayload: Record<string, unknown> | null = null;
+  let searchPayload = null as Record<string, unknown> | null;
   await page.route("**/api/search/stream", async (route) => {
     searchPayload = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({
