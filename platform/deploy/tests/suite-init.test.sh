@@ -253,8 +253,10 @@ prepare_case() {
   [ ! -s "${calls}" ] || fail "SELinux が無効なのに設定した: $(cat "${calls}")"
   # main の順: package → firewall → SELinux → 製品の配備（venv・unit の前に context の規則を置く）。
   main_body="$(sed -n '/^main() {$/,/^}$/p' "${repo}/platform/deploy/suite-init.sh")"
-  printf '%s\n' "${main_body}" | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|deploy_products)$' \
-    | awk '{printf "%s ", $1}' | grep -qx 'install_os_packages configure_firewall configure_selinux deploy_products ' \
+  # アプリ用の DB ユーザー（#1668）は、製品の配備（system schema の初期化）の前に作る。
+  printf '%s\n' "${main_body}" | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|deploy_products)$' \
+    | awk '{printf "%s ", $1}' \
+    | grep -qx 'install_os_packages configure_firewall configure_selinux provision_db_app_user deploy_products ' \
     || fail "main の順が違う"
   # 最後に配備全体を確かめる（#1642。log の最後の check の行が結果）。URL の一覧の後、失敗の判定の前。
   printf '%s\n' "${main_body}" | grep -E '^  (configure_nginx|report_urls|suite_check_deployment .*)$' \
@@ -356,6 +358,54 @@ done
   suite_run_schema_check() { printf 'status=ready\n'; }
   main > "${out}" 2>&1 || fail "すべて OK なのに失敗した: $(cat "${out}")"
   tail -n 1 "${out}" | grep -q 'check: OK' || fail "最後の行が OK ではない: $(tail -n 1 "${out}")"
+)
+
+# アプリ用の DB ユーザー（#1668）: props の adb_admin.env があるときだけ、製品の配備の前に suite-db-user.py を
+# uv run（固定の python-oracledb）で実行する。無ければ何もしない。失敗したら配備を止め、Wallet の一時の展開を消す。
+(
+  case_dir="${task_dir}/db-user"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  calls="${case_dir}/uv.calls"
+  selinux_enabled() { return 1; }
+  uv() {
+    printf '%s\n' "$*" >> "${calls}"
+    local arg previous=""
+    for arg in "$@"; do
+      if [ "${previous}" = "--wallet-dir" ]; then
+        [ -d "${arg}" ] || fail "Wallet の一時の directory が無い"
+        [ "$(stat -c %a "${arg}")" = "700" ] || fail "Wallet の一時の directory は 0700"
+        printf '%s\n' "${arg}" > "${case_dir}/wallet-dir"
+      fi
+      previous="${arg}"
+    done
+    return "${UV_STATUS:-0}"
+  }
+  out="${case_dir}/out.log"
+  # adb_admin.env が無い: 作らない（uv も呼ばない）。
+  provision_db_app_user > "${out}" 2>&1 || fail "adb_admin.env が無いのに失敗した: $(cat "${out}")"
+  [ ! -e "${calls}" ] || fail "adb_admin.env が無いのに uv を呼んだ"
+  grep -q "アプリ用の DB ユーザーは作りません" "${out}" || fail "作らない旨の log: $(cat "${out}")"
+  # adb_admin.env がある: suite-db-user.py apply を固定の oracledb で実行し、0600 にする。
+  printf "SUITE_DB_ADMIN_USER=ADMIN\nSUITE_DB_ADMIN_PASSWORD='stub'\nSUITE_DB_APP_USER='PRSUITE'\n" > "${PROPS_DIR}/adb_admin.env"
+  chmod 0644 "${PROPS_DIR}/adb_admin.env"
+  provision_db_app_user > "${out}" 2>&1 || fail "成功するはず: $(cat "${out}")"
+  [ "$(stat -c %a "${PROPS_DIR}/adb_admin.env")" = "600" ] || fail "adb_admin.env は 0600"
+  call="$(cat "${calls}")"
+  for expected in "run --no-project --python 3.12 --with oracledb==${SUITE_DB_USER_ORACLEDB_VERSION}" \
+    "suite-db-user.py apply" "--admin-env ${PROPS_DIR}/adb_admin.env" "--app-env ${PROPS_DIR}/platform.env" \
+    "--current-env ${SUITE_REPO_DIR}/platform/.env"; do
+    printf '%s\n' "${call}" | grep -qF -- "${expected}" || fail "uv の引数に ${expected} が無い: ${call}"
+  done
+  [ ! -e "$(cat "${case_dir}/wallet-dir")" ] || fail "Wallet の一時の directory を消していない"
+  grep -qxF "[suite-init] check: db user OK" "${out}" || fail "OK の行: $(cat "${out}")"
+  # 失敗: 0 以外で返し、NG の行を出し、一時の directory を消す。
+  status=0
+  UV_STATUS=1 provision_db_app_user > "${out}" 2>&1 || status=$?
+  [ "${status}" -eq 1 ] || fail "失敗を返さない（${status}）"
+  grep -qF "[suite-init] check: db user NG" "${out}" || fail "NG の行: $(cat "${out}")"
+  [ ! -e "$(cat "${case_dir}/wallet-dir")" ] || fail "失敗しても Wallet の一時の directory を消す"
 )
 
 echo "suite-init: pass"

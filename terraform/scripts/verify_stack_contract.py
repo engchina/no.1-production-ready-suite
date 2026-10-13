@@ -56,6 +56,8 @@ HIDDEN_VARIABLES = [
 ]
 SECRET_VARIABLES = [
     "adb_password",
+    "adb_app_user_password",
+    "existing_adb_admin_password",
     "existing_oracle_password",
     "existing_oracle_wallet_password",
     "app_admin_login_user_password",
@@ -711,11 +713,9 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
     )
     if "is_access_control_enabled" in adb:
         raise AssertionError("serverless Autonomous AI Database must not configure is_access_control_enabled")
-    if not re.search(
-        r"effective_oracle_wallet_password\s*=\s*local\.create_new_adb \? var\.adb_password : var\.existing_oracle_password",
-        adb,
-    ):
-        raise AssertionError("wallet password must reuse the ADB / existing DB password")
+    # Wallet のパスワードは接続のユーザーのパスワード（アプリ用の DB ユーザーなら ADMIN のパスワードにしない。#1668）。
+    if not re.search(r"effective_oracle_wallet_password\s*=\s*local\.effective_oracle_password\n", adb):
+        raise AssertionError("wallet password must reuse the connection password (never the ADMIN password of the app user mode)")
     if len(re.findall(r'(?m)^resource "oci_database_autonomous_database" ', adb)) != 1:
         raise AssertionError("the stack must create at most one Autonomous AI Database")
 
@@ -938,6 +938,102 @@ def _verify_bootstrap(bootstrap: str) -> None:
         bootstrap,
         ["clone_or_update_repo ", "run_suite_init\n"],
         context="bootstrap order",
+    )
+
+
+def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: str, bootstrap: str) -> None:
+    """アプリ用の DB ユーザー（#1668）: 入力・接続のユーザー・ADMIN のパスワードの置き場所・Compute での作成。"""
+    _require_all(
+        _terraform_variable(variables, "adb_app_user_enabled"),
+        ["type        = bool", "default     = true"],
+        context="adb_app_user_enabled",
+    )
+    _require_all(
+        _terraform_variable(variables, "adb_app_user_name"),
+        ['default     = "PRSUITE"', 'can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.adb_app_user_name))', '"ADMIN"'],
+        context="adb_app_user_name",
+    )
+    _require_all(
+        _terraform_variable(variables, "adb_app_user_password"),
+        ["length(var.adb_app_user_password) >= 12", "length(var.adb_app_user_password) <= 30"],
+        context="adb_app_user_password",
+    )
+    groups = _schema_groups(schema)
+    visible, members = groups.get("アプリ用の DB ユーザー", ("", []))
+    if visible != "true" or members != ["adb_app_user_enabled", "adb_app_user_name", "adb_app_user_password"]:
+        raise AssertionError(f"the application database user group must be visible and ordered: {members}")
+    _, existing = groups.get("Existing Autonomous AI Database", ("", []))
+    if "existing_adb_admin_password" not in existing:
+        raise AssertionError("existing_adb_admin_password must be in the existing ADB group")
+    for name in ("adb_app_user_name", "adb_app_user_password", "existing_adb_admin_password"):
+        _require_all(_schema_variable(schema, name), ["visible: adb_app_user_enabled"], context=f"{name} schema")
+    for name in ("existing_oracle_user", "existing_oracle_password"):
+        _require_all(
+            _schema_variable(schema, name), ["visible:\n      not:\n        - adb_app_user_enabled"], context=f"{name} schema"
+        )
+
+    normalized = re.sub(r"[ \t]+", " ", adb)
+    _require_all(
+        normalized,
+        [
+            "adb_app_user = upper(trimspace(var.adb_app_user_name))",
+            "effective_adb_admin_password = local.create_new_adb ? var.adb_password : var.existing_adb_admin_password",
+            "effective_oracle_user = var.adb_app_user_enabled ? local.adb_app_user : (",
+            "effective_oracle_password = var.adb_app_user_enabled ? var.adb_app_user_password : (",
+            "!var.adb_app_user_enabled || trimspace(var.adb_app_user_password) != \"\"",
+            "!var.adb_app_user_enabled || local.create_new_adb || trimspace(var.existing_adb_admin_password) != \"\"",
+        ],
+        context="application database user (adb.tf)",
+    )
+    # ADMIN のパスワードは platform/.env・各製品の backend/.env に書かない（props の adb_admin.env だけ）。
+    for heredoc in ("platform_env", "rag_backend_env", "nl2sql_backend_env", "agent_backend_env"):
+        body = _heredoc(locals_source, heredoc)
+        for forbidden in ("adb_password", "existing_adb_admin_password", "effective_adb_admin_password"):
+            if forbidden in body:
+                raise AssertionError(f"{heredoc} must not contain the ADMIN password ({forbidden})")
+    _require_all(
+        _heredoc(locals_source, "adb_admin_env"),
+        [
+            "SUITE_DB_ADMIN_USER=ADMIN",
+            "SUITE_DB_ADMIN_PASSWORD='${local.effective_adb_admin_password}'",
+            "SUITE_DB_APP_USER='${local.adb_app_user}'",
+        ],
+        context="adb_admin.env",
+    )
+    _require_all(
+        re.sub(r"[ \t]+", " ", locals_source),
+        ['adb_admin_env = var.adb_app_user_enabled ? base64gzip(local.adb_admin_env) : ""'],
+        context="adb_admin.env only with the application database user",
+    )
+    block = re.search(r'(?ms)^%\{ if adb_admin_env != "" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
+    if block is None or not re.search(
+        r'path: "/u01/aipoc/props/adb_admin.env"\n    permissions: "0600"\n    owner: "root:root"\n', block.group(1)
+    ):
+        raise AssertionError("adb_admin.env must be written root-only (0600) and only with the application database user")
+
+    # ユーザーの作成と grant は Compute の上（suite-init.sh が製品の配備の前に suite-db-user.py を実行）。ADB には
+    # Compute からしか接続できないため、Terraform（provider・local-exec）では DB に接続しない。
+    suite_init = (SUITE_DEPLOY_DIR / "suite-init.sh").read_text(encoding="utf-8")
+    main_body = re.search(r"(?ms)^main\(\) \{\n(.*?)^\}", suite_init)
+    if main_body is None:
+        raise AssertionError("suite-init.sh main not found")
+    _require_in_order(main_body.group(1), ["provision_db_app_user\n", "deploy_products\n"], context="suite-init main")
+    _require_all(
+        suite_init,
+        ['"${PROPS_DIR}/adb_admin.env"', 'python "${SUITE_DEPLOY_DIR}/suite-db-user.py" apply'],
+        context="suite-init provision_db_app_user",
+    )
+    script = (SUITE_DEPLOY_DIR / "suite-db-user.py").read_text(encoding="utf-8")
+    _require_all(
+        script,
+        [
+            '"GRANT PDB_DBA TO {user}"',
+            '"GRANT GRANT ANY DATA ROLE TO {user}"',
+            '"GRANT ADMINISTER ANY DATA GRANT TO {user}"',
+            '"GRANT SET USE DATA GRANTS ONLY TO {user}"',
+            'APP_PROFILE = "ORA_APP_PROFILE"',
+        ],
+        context="suite-db-user.py grants",
     )
 
 
@@ -1331,7 +1427,12 @@ def verify(package_path: Path) -> None:
         sources["output.tf"],
     )
     _verify_bootstrap(bootstrap)
+    _verify_app_db_user(sources["schema.yaml"], sources["variables.tf"], sources["adb.tf"], sources["locals.tf"], bootstrap)
     stack_sources = "\n".join([*sources.values(), bootstrap])
+    # ADB には Compute からしか接続できない（プライベート・エンドポイント・ACL）。アプリ用の DB ユーザーの作成などの
+    # DB の操作は Compute の suite-init.sh が行い、Terraform の provisioner（local-exec など）では行わない（#1668）。
+    if re.search(r'(?m)^\s*provisioner\s+"', stack_sources):
+        raise AssertionError("the stack must not run provisioners; database work runs on the Compute instance (#1668)")
     for removed in REMOVED_RAG_INPUTS:
         if removed in stack_sources:
             raise AssertionError(f"removed RAG stack input / output remains: {removed}")

@@ -74,12 +74,26 @@ locals {
     trimspace(local.existing_adb_db_name) != "" ? "${lower(local.existing_adb_db_name)}_high" : ""
   )
 
-  effective_adb_ocid               = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
-  effective_adb_name               = local.create_new_adb ? var.adb_name : local.existing_adb_db_name
-  effective_oracle_user            = local.create_new_adb ? "ADMIN" : var.existing_oracle_user
-  effective_oracle_password        = local.create_new_adb ? var.adb_password : var.existing_oracle_password
-  effective_oracle_dsn             = local.create_new_adb ? "${lower(var.adb_name)}_high" : local.effective_existing_oracle_dsn
-  effective_oracle_wallet_password = local.create_new_adb ? var.adb_password : var.existing_oracle_password
+  effective_adb_ocid   = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
+  effective_adb_name   = local.create_new_adb ? var.adb_name : local.existing_adb_db_name
+  effective_oracle_dsn = local.create_new_adb ? "${lower(var.adb_name)}_high" : local.effective_existing_oracle_dsn
+
+  # アプリ用の DB ユーザー（#1668）。有効なら 3 製品はこのユーザーで接続し、システムの表もこのユーザーの schema に作る。
+  # ユーザーの作成と grant は Compute の上で行う（cloud-init → platform/deploy/suite-init.sh が製品の配備の前に、
+  # ADMIN で接続して platform/deploy/suite-db-user.py を実行する）。ADB には Compute からしか接続できない
+  # （プライベート・エンドポイント・ACL）ため、Terraform（provider・local-exec）では DB に接続しない。
+  # 無効なら今までどおり（新規の ADB は ADMIN、既存の ADB は existing_oracle_user）。
+  adb_app_user                 = upper(trimspace(var.adb_app_user_name))
+  effective_adb_admin_password = local.create_new_adb ? var.adb_password : var.existing_adb_admin_password
+  effective_oracle_user = var.adb_app_user_enabled ? local.adb_app_user : (
+    local.create_new_adb ? "ADMIN" : var.existing_oracle_user
+  )
+  effective_oracle_password = var.adb_app_user_enabled ? var.adb_app_user_password : (
+    local.create_new_adb ? var.adb_password : var.existing_oracle_password
+  )
+  # Wallet のパスワードは接続のユーザーのパスワード（platform/.env の PLATFORM_ORACLE_WALLET_PASSWORD）。
+  # アプリ用のユーザーを使うときに ADMIN のパスワードを platform/.env に書かないため、ADMIN のパスワードにしない。
+  effective_oracle_wallet_password = local.effective_oracle_password
 }
 
 resource "oci_database_autonomous_database" "generated_database_autonomous_database" {
@@ -206,12 +220,32 @@ resource "oci_database_autonomous_database_wallet" "generated_autonomous_databas
       error_message = "IPアドレスまたはCIDRブロックによるアクセス制御を使用する場合は、許可する値を入力してください。"
     }
     precondition {
-      condition = local.create_new_adb || (
-        trimspace(var.existing_adb_ocid) != ""
-        && trimspace(var.existing_oracle_user) != ""
+      condition     = local.create_new_adb || trimspace(var.existing_adb_ocid) != ""
+      error_message = "existing_adb_ocid must be configured when adb_deployment_mode selects an existing Autonomous AI Database."
+    }
+    precondition {
+      condition = local.create_new_adb || var.adb_app_user_enabled || (
+        trimspace(var.existing_oracle_user) != ""
         && trimspace(var.existing_oracle_password) != ""
       )
-      error_message = "existing_adb_ocid, existing_oracle_user, and existing_oracle_password must be configured when adb_deployment_mode selects an existing Autonomous AI Database."
+      error_message = "existing_adb_ocid, existing_oracle_user, and existing_oracle_password must be configured when adb_deployment_mode selects an existing Autonomous AI Database and adb_app_user_enabled is false."
+    }
+    # アプリ用の DB ユーザー（#1668）。名前とパスワードの形は variables.tf の validation、ここでは入力どうしの関係を見る。
+    precondition {
+      condition     = !var.adb_app_user_enabled || trimspace(var.adb_app_user_password) != ""
+      error_message = "adb_app_user_password must be configured when adb_app_user_enabled is true."
+    }
+    precondition {
+      condition     = !var.adb_app_user_enabled || local.create_new_adb || trimspace(var.existing_adb_admin_password) != ""
+      error_message = "existing_adb_admin_password (the ADMIN password of the existing Autonomous AI Database) must be configured when adb_app_user_enabled is true. The Compute instance connects as ADMIN to create the application database user."
+    }
+    precondition {
+      condition     = !var.adb_app_user_enabled || !strcontains(lower(var.adb_app_user_password), lower(local.adb_app_user))
+      error_message = "adb_app_user_password must not contain adb_app_user_name (Autonomous AI Database password rule)."
+    }
+    precondition {
+      condition     = !var.adb_app_user_enabled || var.adb_app_user_password != local.effective_adb_admin_password
+      error_message = "adb_app_user_password must differ from the ADMIN password (adb_password / existing_adb_admin_password)."
     }
     precondition {
       condition     = trimspace(local.effective_adb_ocid) != ""

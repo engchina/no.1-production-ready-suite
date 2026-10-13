@@ -16,13 +16,13 @@
     "lint": "oxlint --deny-warnings"
   },
   "dependencies": {
-    "@fontsource/google-sans-code": "5.3.0",
+    "@fontsource/google-sans-code": "5.3.1",
     "@fontsource/noto-sans-jp": "5.3.0",
     "@fontsource/roboto": "5.3.0",
     "@production-ready/system-settings": "file:../../platform/packages/system-settings",
     "@production-ready/ui": "file:../../platform/packages/ui",
     "@tanstack/react-query": "^5.62.0",
-    "@xyflow/react": "^12.11.0",
+    "@xyflow/react": "^12.12.0",
     "lucide-react": "^0.468.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@playwright/test": "^1.61.0",
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
@@ -39,13 +39,13 @@
     "@vitejs/plugin-react": "^6.0.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "jiti": "2.7.0",
-    "oxlint": "1.82.0",
-    "postcss": "8.5.28",
+    "oxlint": "1.87.0",
+    "postcss": "8.5.29",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
     "vite": "^8.0.16"
   },
   "overrides": {
-    "postcss": "8.5.28"
+    "postcss": "8.5.29"
   }
 }
