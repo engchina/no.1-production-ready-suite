@@ -344,7 +344,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Restore npm cache
         id: npm-cache
@@ -446,9 +446,10 @@ jobs:
           path: platform/packages/backend_core/.mypy_cache
           key: ${{ steps.mypy-cache.outputs.key }}
 
-      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。--durations=20: 遅いテストの上位 20 件を
+      # log に出す（#1591。1 テストの上限は pyproject の pytest-timeout の timeout）。
       - name: Test
-        run: uv run pytest -n auto --cov=pr_backend_core
+        run: uv run pytest -n auto --durations=20 --cov=pr_backend_core
 
       - name: Security scan
         run: uv run bandit -r src
@@ -512,9 +513,10 @@ jobs:
           path: platform/packages/system_settings_backend/.mypy_cache
           key: ${{ steps.mypy-cache.outputs.key }}
 
-      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。--durations=20: 遅いテストの上位 20 件を
+      # log に出す（#1591。1 テストの上限は pyproject の pytest-timeout の timeout）。
       - name: Test
-        run: uv run pytest -n auto --cov=pr_system_settings
+        run: uv run pytest -n auto --durations=20 --cov=pr_system_settings
 
       - name: Security scan
         run: uv run bandit -r src
@@ -591,10 +593,10 @@ jobs:
       # --assert=plain: pytest の assert の書き換え（失敗したときに比べた値を出す仕組み）を止める。
       # CI にはテストの書き換え済みの .pyc が無く、worker ごとに全テスト（約 7 万行）を書き換えて、
       # それだけで Test の約 3 分の 1（約 10 秒）を占めていた（#401）。失敗したときだけ、失敗した
-      # テストを書き換えありで流し直して詳細を出す（step の結果は失敗のまま）。
+      # テストを書き換えありで流し直して詳細を出す（step の結果は失敗のまま）。--durations=20 は #1591。
       - name: Test
         run: |
-          uv run pytest -n auto --assert=plain && exit 0
+          uv run pytest -n auto --durations=20 --assert=plain && exit 0
           echo "失敗したテストを、assert の詳細付きで流し直します（--lf）。"
           uv run pytest --lf --lfnf=none --maxfail=20 || true
           exit 1
@@ -881,7 +883,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
@@ -893,6 +895,10 @@ jobs:
       # NL2SQL / Agent と同じく CI で実行する（#1099。以前は lint を実行せず、main の失敗を検出できなかった）。
       - name: Lint
         run: npm run lint
+
+      # e2e の spec・fixture・playwright.config.ts の型検査（tsconfig.e2e.json。Playwright は実行時に型を検査しない。#1591）。
+      - name: Type check (e2e)
+        run: npm run typecheck:e2e
 
       - name: Unit test
         run: npm test
@@ -924,7 +930,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
@@ -1187,9 +1193,10 @@ jobs:
           path: nl2sql/backend/.mypy_cache
           key: ${{ steps.mypy-cache.outputs.key }}
 
-      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
+      # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。--durations=20: 遅いテストの上位 20 件を
+      # log に出す（#1591。1 テストの上限は pyproject の pytest-timeout の timeout）。
       - name: Test
-        run: uv run pytest -n auto
+        run: uv run pytest -n auto --durations=20
 
       - name: Security scan
         run: uv run bandit -r app
@@ -1252,8 +1259,8 @@ jobs:
           SKIP_FRONTEND: "1"
           SKIP_AUDIT: ${{ needs.changes.outputs.agent_deps == 'true' && '0' || '1' }}
           UV_SYNC_ARGS: "--locked --dev"
-          # pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
-          PYTEST_ARGS: "-n auto"
+          # pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。遅いテストの上位 20 件を log に出す（#1591）。
+          PYTEST_ARGS: "-n auto --durations=20"
 
       # main の push だけが保存する（PR は復元だけ。#1589）。
       - name: Save mypy cache
@@ -1282,7 +1289,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
@@ -1291,6 +1298,10 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # e2e の spec・fixture・playwright.config.ts の型検査（tsconfig.e2e.json。Playwright は実行時に型を検査しない。#1591）。
+      - name: Type check (e2e)
+        run: npm run typecheck:e2e
 
       # 型検査は build の `tsc --noEmit` が兼ねる。
       - name: Build
@@ -1319,7 +1330,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
@@ -1429,7 +1440,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
@@ -1539,7 +1550,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Install dependencies and build shared UI
         uses: ./.github/actions/platform-ui
