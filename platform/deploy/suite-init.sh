@@ -49,7 +49,7 @@ SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 NGINX_CONF_DIR="${NGINX_CONF_DIR:-/etc/nginx/conf.d}"
 NGINX_MAIN_CONF="${NGINX_MAIN_CONF:-/etc/nginx/nginx.conf}"
 SUITE_SITE_NAME="production-ready-suite"
-# AppStream の nginx の module の stream（以前の Ubuntu 24.04 の Nginx と同じ 1.24 系）。
+# AppStream の nginx の module の stream（1.24 系。CI の Suite / Oracle Linux 9 も同じ stream で確かめる）。
 NGINX_MODULE_STREAM="1.24"
 # suite-init.sh が dnf で入れる OS の package（製品の init_script.sh は製品が使うものだけを入れる）。
 SUITE_OS_PACKAGES=(firewalld git nginx openssl policycoreutils-python-utils tar unzip)
