@@ -37,7 +37,10 @@ from app.security.permissions import (
 from app.security.service import get_security_service
 from app.settings import get_settings
 
-from .enterprise_ai_client import EnterpriseAiDirectError
+from .enterprise_ai_client import (
+    EnterpriseAiDirectError,
+    enterprise_ai_configuration_failure_message,
+)
 from .incremental_store import IncrementalVersionConflict
 from .models import (
     AdminFeedbackReviewData,
@@ -225,6 +228,22 @@ _CLASSIFIER_MODEL_UPLOAD_TYPE_DETAIL = (
     "pickle/joblib artifact は安全上の理由で import できません。"
     "coef / intercept / classes を含む JSON artifact を指定してください。"
 )
+
+
+def _enterprise_ai_sql_generation_exception(exc: EnterpriseAiDirectError) -> HTTPException:
+    """Enterprise AI で SQL を作れなかったときの応答。
+
+    設定の誤りは「再試行」と案内しない（#1684）。
+    """
+    if exc.configuration_error:
+        return HTTPException(
+            status_code=502,
+            detail=enterprise_ai_configuration_failure_message(exc, "SQL の生成で "),
+        )
+    return HTTPException(
+        status_code=502,
+        detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
+    )
 
 
 def _profile_name_conflict_exception(exc: ProfileNameConflict) -> HTTPException:
@@ -2359,10 +2378,7 @@ def structure_to_sql(
     try:
         return ApiResponse(data=nl2sql_service.structure_to_sql(req))
     except EnterpriseAiDirectError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
-        ) from exc
+        raise _enterprise_ai_sql_generation_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2374,10 +2390,7 @@ def question_to_sql(req: QuestionToSqlRequest, request: Request) -> ApiResponse[
     try:
         return ApiResponse(data=nl2sql_service.question_to_sql(req))
     except EnterpriseAiDirectError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
-        ) from exc
+        raise _enterprise_ai_sql_generation_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

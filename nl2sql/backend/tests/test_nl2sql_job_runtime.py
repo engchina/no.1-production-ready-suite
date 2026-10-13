@@ -595,3 +595,79 @@ def test_blocked_sql_job_has_error_code(monkeypatch: pytest.MonkeyPatch) -> None
     assert job.result is not None
     assert job.result.safety.is_safe is False
     assert job.error_code == SQL_BLOCKED_ERROR_CODE
+
+
+class _FailingEnterpriseAiClient(_FakeEnterpriseAiClient):
+    """OCI Enterprise AI の HTTP の失敗を返す client（#1684）。"""
+
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__("")
+        self.status = status
+        self.body = body
+        self.calls = 0
+
+    def model_id(self) -> str:
+        return "openai.gpt-oss-120b"
+
+    def generate(self, **_kwargs: Any) -> str:
+        from pr_system_settings.enterprise_ai_errors import classify_enterprise_ai_http_failure
+
+        from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
+
+        self.calls += 1
+        failure = classify_enterprise_ai_http_failure(self.status, self.body)
+        raise EnterpriseAiDirectError(
+            f"OCI Enterprise AI HTTP {self.status}: {self.body}",
+            code=failure.kind,
+            retryable=failure.retryable,
+            http_failure=failure,
+            model_id=self.model_id(),
+            endpoint_host="inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+        )
+
+
+_OCI_404_BODY = (
+    '{ "code": "404", "message": "Authorization failed or requested resource not found." }'
+)
+
+
+def test_enterprise_ai_authorization_failure_explains_settings_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enterprise AI Direct の 404（認可の失敗）は「時間をおいて」と案内しない（#1684）。"""
+    client = _FailingEnterpriseAiClient(404, _OCI_404_BODY)
+    owner = _worker(_repository(), client)
+    # 本番（oracle runtime）と同じく、生成の失敗をテンプレート SQL で埋めない。
+    monkeypatch.setattr(owner, "_use_oracle_runtime", lambda: True)
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.status == JobStatus.ERROR
+    assert client.calls == 1
+    assert job.error_code == "ENTERPRISE_AI_AUTHORIZATION_FAILED"
+    message = job.error_message or ""
+    assert "時間をおいてもう一度" not in message
+    assert "時間をおいても直りません" in message
+    assert "openai.gpt-oss-120b" in message
+    assert "inference.generativeai.us-chicago-1.oci.oraclecloud.com" in message
+    assert "HTTP 404" in message
+    assert "IAM" in message
+    assert "既定のテキストモデル" in message
+    assert "業務プロファイルの Region・LLM Model は Select AI・Select AI Agent 用" in message
+    assert job.error_detail is not None and "Authorization failed" in job.error_detail
+    steps = {step.stage: step.status for step in job.steps}
+    assert steps["generate_sql"] == JobStepStatus.ERROR
+
+
+def test_enterprise_ai_temporary_failure_keeps_retry_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一時的な失敗（5xx）は今までどおり「時間をおいて」と案内する。"""
+    owner = _worker(_repository(), _FailingEnterpriseAiClient(503, "busy"))
+    monkeypatch.setattr(owner, "_use_oracle_runtime", lambda: True)
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.status == JobStatus.ERROR
+    assert job.error_code == "ENTERPRISE_AI_UNAVAILABLE"
+    assert job.error_message is not None and job.error_message.startswith(
+        "SQL の生成に失敗しました。時間をおいてもう一度実行してください。"
+    )

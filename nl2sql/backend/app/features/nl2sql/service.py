@@ -65,6 +65,8 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectClient,
     EnterpriseAiDirectError,
     OciEnterpriseAiDirectClient,
+    enterprise_ai_configuration_failure_message,
+    find_enterprise_ai_error,
 )
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
@@ -669,6 +671,15 @@ def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
     """
     if isinstance(exc, SchemaCatalogEmptyError):
         return str(exc), None
+    enterprise_error = find_enterprise_ai_error(exc)
+    if enterprise_error is not None and enterprise_error.configuration_error:
+        # OCI Enterprise AI の設定の誤り（401 / 403 / 404 / モデルが無い 400）は、時間をおいても
+        # 直らないので「もう一度」と案内せず、どのモデル・接続の呼び出しが失敗したかと確かめる所を
+        # 出す（#1684）。元の文は詳細に残す。
+        return (
+            enterprise_ai_configuration_failure_message(enterprise_error, "SQL の生成で "),
+            _job_failure_detail(exc),
+        )
     return _JOB_FAILED_MESSAGE, _job_failure_detail(exc)
 
 
@@ -679,7 +690,14 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     `null` のまま返さない（MCP の呼び出し側が失敗を分類できるようにする）。
     """
     codes = oracle_error_codes(exc)
-    return codes[0] if codes else fallback
+    if codes:
+        return codes[0]
+    # OCI Enterprise AI の HTTP の失敗は種類の分かるコード
+    # （ENTERPRISE_AI_AUTHORIZATION_FAILED など。3 製品で共通の対応表。#1684）。
+    enterprise_error = find_enterprise_ai_error(exc)
+    if enterprise_error is not None and enterprise_error.http_failure is not None:
+        return enterprise_error.http_failure.error_code
+    return fallback
 
 
 # チャットのジョブの中で実行した結果の行を、画面が受け取るまで置く文書の collection（#1176）。
