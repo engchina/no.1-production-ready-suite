@@ -40,6 +40,7 @@ from .schemas import (
     DeepSecTargetObjectPageData,
     PermissionData,
     ProfileAccessProfileData,
+    ProfileAccessRoleData,
     RoleData,
     RolePermissionsUpdateRequest,
 )
@@ -139,17 +140,22 @@ def list_profile_access_profiles(
     page_profiles = page.items
     profile_ids = {profile.id for profile in page_profiles}
     roles = get_security_service().list_roles(include_archived=True)
-    allowed_roles_by_profile: dict[str, list[str]] = {profile_id: [] for profile_id in profile_ids}
+    allowed_roles_by_profile: dict[str, list[ProfileAccessRoleData]] = {
+        profile_id: [] for profile_id in profile_ids
+    }
     for role in roles:
         if role.archived:
             continue
+        access_role = ProfileAccessRoleData(
+            role_id=role.role_id, role_code=role.role_code, display_name=role.display_name
+        )
         if role.role_code == SYSTEM_ADMIN_ROLE_CODE or grants_all_profile_access(role.permissions):
             for profile_id in profile_ids:
-                allowed_roles_by_profile[profile_id].append(role.role_id)
+                allowed_roles_by_profile[profile_id].append(access_role)
             continue
         for profile_id in role.allowed_profile_ids:
             if profile_id in allowed_roles_by_profile:
-                allowed_roles_by_profile[profile_id].append(role.role_id)
+                allowed_roles_by_profile[profile_id].append(access_role)
     return ApiResponse(
         data=Page(
             items=[
@@ -159,7 +165,13 @@ def list_profile_access_profiles(
                     category=profile.category,
                     description=profile.description,
                     archived=profile.archived,
-                    allowed_role_ids=sorted(allowed_roles_by_profile.get(profile.id, [])),
+                    allowed_roles=sorted(
+                        allowed_roles_by_profile.get(profile.id, []),
+                        key=lambda role: (
+                            role.display_name or role.role_code,
+                            role.role_code,
+                        ),
+                    ),
                 )
                 for profile in page_profiles
             ],

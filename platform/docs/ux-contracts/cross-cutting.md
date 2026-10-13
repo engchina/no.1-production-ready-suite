@@ -22,6 +22,11 @@
 - 文言の変更の検証では、その locator を使う Playwright の spec を desktop と `mobile-375` の両方で流す。既存の skip は理由を明記する。build / logic のテストだけでは locator の古さを見つけられない前提で進める。
 - 共有パッケージの画面（`@production-ready/system-settings` など）の文言を変えるときは、3製品すべての E2E を同じ変更で直す。
 
+## ロールの表示（#1682）
+
+- 画面のロールは**ロール名（表示名。例「システム管理者」）**で出す。表示名が空ならロールコード。ロールの ID（UUID の `role_id`）とロールコードは、バッジ・チップ・表の列・選択肢・見出し・確認ダイアログ・`aria-label`・tooltip に出さない。ロールコードは、ロール管理と権限管理の編集の「ロールコード」の項目（属性）にだけ出す。
+- 参照できない（削除済みの）ロールは、ID を出さずに「（削除済みのロール）」と出す。文字列は `@production-ready/system-settings` の `roleDisplayName`、バッジは `RoleNameBadges`、一覧の行は `RoleNameRowTitleButton` を使い、製品で書かない。backend はロールの ID だけを返さず、表示名を添える。
+
 ## ページ遷移・未保存変更
 
 [workspace-state.md](./workspace-state.md) を参照。
