@@ -318,7 +318,7 @@ export function PageHeader({
 
   return (
     <header
-      // 通知（Toaster）はこの面に重ねて出す（#411。ページの操作は覆わない）。
+      // e2e がページの見出しの面を見分ける目印（通知は右下に固定し、この面を覆わない。#1728）。
       data-page-header=""
       className={cn(
         // 貼り付くのは lg 以上だけ。狭い画面では文字の折り返しでヘッダーが高くなり、貼り付くと本文の表示領域を常に削るため。
@@ -362,7 +362,7 @@ export function PageHeader({
             role="group"
             aria-label={actionsLabel}
             data-testid={actionsTestId}
-            // 通知（Toaster）はこの並びのすぐ左に右端をそろえ、ページの操作を覆わない（#411）。
+            // e2e がページの操作の並びを見分ける目印（通知がページの操作を覆わないことの確認に使う。#1728）。
             data-page-header-actions=""
             className="flex min-w-0 flex-wrap items-center gap-2"
           >

@@ -991,7 +991,7 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 
 ---
 
-## Toaster / toast / Banner — 変更（#351 / #411）
+## Toaster / toast / Banner — 変更（#351 / #411 / #1728）
 
 一時通知（`<Toaster/>` + `toast`）の表示時間と一時停止、Banner の閉じるボタンを UX 契約 messaging §3.1 にそろえました。製品で表示時間を補ったり、`toast.error` のラッパーを作ったりしないでください。
 
@@ -1013,19 +1013,20 @@ toast.error(error instanceof ApiError ? error.message : t("…"));  // 閉じる
 toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: undo } }); // 自動では消えない
 ```
 
-### 置き場所（#411）
+### 置き場所（#1728。#411 を置き換え）
 
-`<Toaster/>` は主操作を覆わない位置に通知を出します。製品で位置を変えないでください（`placement` プロップは削除）。規則の正本は UX 契約 messaging §3.1、見た目の決定は README §4「Toaster」。
+`<Toaster/>` は画面幅ごとに決まった 1 か所に通知を出し、ページの内容では動かしません。製品・画面で位置を変えないでください（`placement` プロップは無い）。規則の正本は UX 契約 messaging §3.1、見た目の決定は README §4「Toaster」。
 
 | 決めたこと | 理由 |
 |---|---|
-| md 以上は `PageHeader` に重ね、ページの操作のすぐ左に右端をそろえる（上端は `PageHeader` の上端 + 1rem。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem。#899）。操作が無い・タイトルの下へ折り返したときは右端から 1rem、操作の左右に 14rem が取れなければ `PageHeader` の下端 + 1rem の右、`PageHeader` が見えなければ画面の右上 | `PageHeader` のタイトルの面には操作が無い。ページの操作、内容の面の右上の操作（`ObjectActionBar` / `ContentActionBar`）、ページの末尾の操作（スクロールしきると画面の下端に来る）のどれからも離れる |
-| md 未満は上端の全幅。上端のバーに重ねて上端から 0.5rem、左はメニューのボタンの後ろ（`calc(1rem + var(--control-height-touch))`） | 375px では末尾の操作が全幅になり、下端の通知は必ず覆う。上端のバーの製品名には操作が無い |
-| `PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付け、`Toaster` はその位置を読む。通知が出ている間だけ、スクロール・リサイズ・`PageHeader` の大きさの変化に追従する | lg 未満の `PageHeader` は本文と一緒にスクロールする。画面を移ると `PageHeader` が差し替わる |
-| 通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） | E2E と目視で、どの規則で置いたかを確かめられる |
-| 新しい通知は下に足し、上から降りてくる（`toast-in`） | 読み上げ・Tab の順と見た目の順をそろえる。上端から出るものは上から現れる |
+| md 以上は画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）。新しい通知は下に足し、古い通知が上へ押し上げられる。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem（#899） | 位置を 1 か所に固定する（Sonner・Fluent 2 の既定と同じ）。以前は `PageHeader` の操作の位置で見出しの中ほどか右端かが変わった。8rem はチャットの入力欄と送信（下端から約 6.7rem）とページの末尾の操作（約 7rem まで）の上 |
+| md 未満は上端の全幅。上端のバーに重ねて上端から 0.5rem、左はメニューのボタンの後ろ（`calc(1rem + var(--control-height-touch))`） | 375px の下端には全幅の末尾の操作・チャットの入力欄・ソフトウェアキーボードが来る。上端のバーにはメニューのボタンのほかに操作が無い |
+| 位置は画面幅（`useNavDrawerMode`）だけで決め、`PageHeader` の位置・スクロールは読まない（`resolveToastPlacement({ narrow })`） | 画面ごとの位置の計算をやめる（#1728） |
+| 通知の領域に `data-toast-placement`（`bottom-right` / `top-bar`） | E2E と目視で、どの規則で置いたかを確かめられる |
+| 下端の通知は下から、上端の通知は上から現れる（`toast-in` の向きは領域の `--toast-enter-y`） | 置き場所の側から現れる |
+| 下端からの距離は共通の定数 `--toast-offset-bottom` だけで決め、画面ごとの余白・位置の上書きをしない | 主操作と重なる画面が出たら、定数か画面の作りを直す（製品で通知の位置を変えない） |
 
-E2E は NL2SQL の `tests/e2e/_helpers/toast.ts` の `expectToastStackAtTop`（ページの操作・メニューのボタンと重ならない、規則どおりの上端）で確かめます。通知を閉じてから押す回避（`dismissToasts`）は要りません。
+E2E は 3 製品の同じ内容の helper（RAG `e2e/_toast-placement.ts`・Agent `e2e/fixtures/toast-placement.ts`・NL2SQL `tests/e2e/_helpers/toast.ts`）で確かめます。`expectToastPlacement` は規則どおりの位置（desktop は右下、375px は上端のバー）を、`expectMainActionsClearOfToast` は通知の範囲（最も広い通知・本文と補足の 1 件）が主操作（`PageHeader` の操作・`FormActionBar`・`ObjectActionBar`・チャットの入力欄と送信・ページの末尾の操作）と重ならないことを確かめます（3 製品の `a11y.nightly.spec.ts` がサイドナビの全項目で実行）。通知を閉じてから押す回避（`dismissToasts`）は要りません。
 
 メッセージの部品（`Toast`・`Banner`・`FormStatus`・`ProcessingIndicator`・`BlockedPageNotice` の面と `MessageText`）は、共有の CSS の `.pr-message-text`（`word-break: auto-phrase`・`overflow-wrap: anywhere`・`text-wrap: pretty`）で日本語を文節で折り返します（#899。README §4「メッセージの本文の折り返し」）。製品でメッセージに `word-break` などを書かないでください。語の途中で折り返さないことは NL2SQL の `tests/e2e/message-wrapping.spec.ts`（文字ごとの描画位置から折り返しの位置を求め、`Intl.Segmenter` の語の境界と比べる）で確かめます。
 

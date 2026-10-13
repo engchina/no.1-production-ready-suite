@@ -36,13 +36,15 @@ describe("tokens CSS", () => {
     expect(read("tokens.css")).toMatch(/--text-xs:\s*var\(--font-size-xs\);/);
   });
 
-  it("通知（Toast）の幅は 22rem〜32rem のトークンが正本（#899）", () => {
+  it("通知（Toast）の幅は 22rem〜32rem、md 以上の下端からの距離は 8rem のトークンが正本（#899・#1728）", () => {
     const spacing = read("tokens/spacing.css");
     expect(spacing).toMatch(/--toast-width-min:\s*22rem;/);
     expect(spacing).toMatch(/--toast-width-max:\s*32rem;/);
+    expect(spacing).toMatch(/--toast-offset-bottom:\s*8rem;/);
     const placement = readFileSync(new URL("../src/lib/toast-placement.ts", import.meta.url), "utf8");
     expect(placement).toContain('"var(--toast-width-min)"');
     expect(placement).toContain('"var(--toast-width-max)"');
+    expect(placement).toContain('"var(--toast-offset-bottom)"');
     expect(placement).not.toMatch(/\d+rem, \$\{/);
   });
 

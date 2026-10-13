@@ -107,11 +107,12 @@ body {
 
 /* メッセージ機構のアニメーション。transform/opacity のみ・enter 150–200ms。
  * prefers-reduced-motion は下部で一括無効化。 */
-/* 通知は上端に出すため、上から降りてくる（#411）。 */
+/* 通知は置き場所の側から現れる（#1728）。md 以上の右下は下から、md 未満の上端は上から。
+ * 向きは Toaster が領域に `--toast-enter-y` で渡す（未指定は上から）。 */
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(-0.5rem);
+    transform: translateY(var(--toast-enter-y, -0.5rem));
   }
   to {
     opacity: 1;

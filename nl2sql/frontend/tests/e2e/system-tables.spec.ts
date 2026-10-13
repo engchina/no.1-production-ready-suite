@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route, type TestInfo } from "./_helpers/t
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
-import { expectToastStackAtTop } from "./_helpers/toast";
+import { expectToastPlacement } from "./_helpers/toast";
 
 function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
   return {
@@ -649,7 +649,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   await expect(region).toHaveAttribute("aria-live", "polite");
   const toastStatus = region.getByRole("status");
   await expect(toastStatus).toContainText("システムテーブルは最新です。変更はありません。");
-  await expectToastStackAtTop(page);
+  await expectToastPlacement(page);
   expect(
     await page.evaluate(() => document.activeElement?.closest('[role="region"]') != null)
   ).toBe(false);
