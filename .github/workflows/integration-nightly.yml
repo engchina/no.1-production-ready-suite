@@ -106,18 +106,23 @@ jobs:
           printf '%s\n' "${files[@]}"
           uv run pytest -n auto -rs "${files[@]}"
 
-      # NL2SQL: Oracle の明示 opt-in のテスト。Select AI（DBMS_CLOUD_AI）を使う
-      # test_select_ai_quoted_object_list_oracle_live.py・LLM の NL2SQL_SYNTHETIC_LLM_LIVE_TEST・
-      # ADB の DeepSec（test_deepsec_real_oracle_integration.py）は Free に無いので実行しない。
+      # NL2SQL: Oracle の明示 opt-in のテスト。Free に無い ADB の機能を使うもの（Select AI の
+      # test_select_ai_quoted_object_list_oracle_live.py・DBMS_CLOUD の DBA_LOAD_OPERATIONS を読む
+      # test_nl2sql_synthetic_oracle_live.py・DeepSec の test_deepsec_real_oracle_integration.py）と LLM の
+      # NL2SQL_SYNTHETIC_LLM_LIVE_TEST は実行しない。tests/conftest.py は platform/.env を読ませないので、
+      # 接続の設定を環境変数で渡す（PLATFORM_ORACLE_USER は conftest が APP に固定する）。
       - name: Oracle integration tests (NL2SQL)
         if: matrix.product == 'nl2sql'
         env:
           NL2SQL_RUN_ORACLE_INTEGRATION: "1"
           NL2SQL_SYNTHETIC_LIVE_TEST: "1"
         run: |
+          set -a
+          # shellcheck source=/dev/null
+          . ../../platform/.env
+          set +a
           uv run pytest -rs \
             tests/test_domain_management_oracle_live.py \
-            tests/test_nl2sql_synthetic_oracle_live.py \
             tests/test_nl2sql_synthetic_preview_oracle_live.py
 
       - name: Stop Oracle
@@ -216,9 +221,11 @@ jobs:
 
       - name: Coverage summary
         if: always()
+        # node の script の `${…}` は JavaScript の template literal（shell で展開しない）。
         run: |
           summary="${RUNNER_TEMP}/rag-frontend-coverage/coverage-summary.json"
           [ -f "${summary}" ] || exit 0
+          # shellcheck disable=SC2016
           node -e '
             const t = require(process.argv[1]).total;
             const row = (k, n) => `| ${n} | ${t[k].pct}% | ${t[k].covered} / ${t[k].total} |`;

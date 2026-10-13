@@ -4,8 +4,9 @@
 #   1b. VECTOR_MEMORY_SIZE を設定して instance を再起動する（ベクトル索引に要る）。
 #   2. PDB（FREEPDB1）にテストの利用者 APP を作る（NL2SQL の tests/conftest.py が PLATFORM_ORACLE_USER=APP に
 #      固定するので、3 製品とも APP を使う）。
-#   3. 接続の設定（PLATFORM_ORACLE_*。Wallet なし）を platform/.env と、あれば GITHUB_ENV に書く。
-#      NL2SQL の tests/conftest.py は platform/.env を読ませないので、環境変数にも書く。
+#   3. 接続の設定（PLATFORM_ORACLE_*。Wallet なし）を platform/.env に書く。環境変数（GITHUB_ENV）には書かない
+#      （RAG の設定のテストが環境変数の PLATFORM_ORACLE_USER を拾って失敗する）。platform/.env を読まない
+#      NL2SQL のテストには、その step で読み込ませる（integration-nightly.yml）。
 #
 # 使い方: ORACLE_CI_PASSWORD=<password> bash .github/scripts/oracle-free-ci.sh
 #   ORACLE_CONTAINER（既定 oracle）・ORACLE_PORT（既定 1521）・ORACLE_ENV_FILE（既定 platform/.env）・
@@ -73,6 +74,8 @@ END;
 /
 GRANT DB_DEVELOPER_ROLE TO APP;
 GRANT CREATE SESSION TO APP;
+-- RAG はベクトル索引の構築の値（NEIGHBORS / EFCONSTRUCTION）を v\$vector_graph_index から読む（ADB の ADMIN は読める）。
+GRANT SELECT ON SYS.V_\$VECTOR_GRAPH_INDEX TO APP;
 EXIT
 SQL
 echo "テストの利用者 APP を作りました。"
@@ -90,7 +93,4 @@ settings=(
 mkdir -p "$(dirname "${env_file}")"
 printf '%s\n' "${settings[@]}" > "${env_file}"
 chmod 600 "${env_file}"
-if [ -n "${GITHUB_ENV:-}" ]; then
-  printf '%s\n' "${settings[@]}" >> "${GITHUB_ENV}"
-fi
 echo "接続の設定を ${env_file} に書きました。"
