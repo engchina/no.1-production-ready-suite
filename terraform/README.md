@@ -6,7 +6,7 @@
 作成・設定するもの:
 
 - Oracle Autonomous AI Database を **1つ**（新規作成、または既存 ADB の選択）と、その Wallet。選んだ製品すべてで共有する
-- OCI Compute を **1台だけ**（Ubuntu。#1316）。選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`）をすべてこの 1 台に入れる
+- OCI Compute を **1台だけ**（Oracle Linux 9。ログインのユーザーは `opc`。#1316・#1611）。選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`）をすべてこの 1 台に入れる
 - Compute の cloud-init。suite monorepo を1回 clone し、[`platform/deploy/suite-init.sh`](../platform/deploy/suite-init.sh) が
   選んだ製品の `init_script.sh`（[`rag/`](../rag/init_script.sh) / [`nl2sql/`](../nl2sql/init_script.sh) / [`agent/`](../agent/init_script.sh)）を順に呼び、
   Nginx の site（製品の path の prefix と HTTPS）を 1 つだけ書く
@@ -30,7 +30,10 @@
 
 ## 対応リージョン
 
-- **stack は `ap-tokyo-1`（東京）と `ap-osaka-1`（大阪）だけをサポートします（#660）。** Compute の image（`instance_image_source_id`）は、この 2 つのリージョンの Ubuntu image だけを選択肢にしています。
+- **stack は `ap-tokyo-1`（東京）と `ap-osaka-1`（大阪）だけをサポートします（#660）。** Compute の image（`instance_image_source_id`）は、この 2 つのリージョンの Oracle Linux 9 の platform image（`Oracle-Linux-9.8-2026.09.18-0`）の OCID に固定しています（#1611）。
+  - `ap-tokyo-1`: `ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa`
+  - `ap-osaka-1`（既定）: `ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha`
+  - image を新しくするときは、`schema.yaml`・`variables.tf`・`terraform/scripts/verify_stack_contract.py`（`ORACLE_LINUX_IMAGES`）を同じ PR でそろえます。
   `us-chicago-1` など他のリージョンで stack を作ると、`region` の validation で plan が失敗します。
 - 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢も同じ 2 つです。
 
@@ -80,7 +83,7 @@ Compute には `platform/.env` を 1 つと、製品ごとの `backend/.env` を
 | `<製品>/backend/.env` | その製品だけの設定 | `RAG_` / `NL2SQL_` / `AGENT_` |
 
 `model-settings.json` は `platform/.env` と同じ場所の 1 つを 3 製品で共有し、アップロードの原本などのデータは製品ごとの
-`/u01/data/production-ready-<製品>`（各製品の Settings の既定値）に置きます。3 製品のプロセスは同じユーザー `ubuntu` で動きます
+`/u01/data/production-ready-<製品>`（各製品の Settings の既定値）に置きます。3 製品のプロセスは同じユーザー `opc` で動きます
 （共通の `platform/.env`・Wallet・`~/.oci/config` を画面から読み書きするため。#1316）。
 
 変数名の規則と既存環境の移行は [AGENTS.md](../AGENTS.md) の「設定（`.env`）とデータベース object の命名」と各製品の配備ドキュメントを参照してください。
@@ -110,13 +113,13 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   配備した前処理 / parser の unit の `systemctl enable --now / disable --now / restart` と `journalctl -u <unit>` を
   sudoers（`/etc/sudoers.d/production-ready-rag-services`）で許可します。利用者が最後に操作した起動 / 停止の状態は、再起動・再配備でも保たれます
   （初めて配備する unit は起動します）。
-- RAG も NL2SQL / Agent と同じユーザー `ubuntu` で動きます（#1316。以前の製品ごとの Compute では専用の `ragsvc`）。
+- RAG も NL2SQL / Agent と同じユーザー `opc` で動きます（#1316・#1611）。
 
 | 項目 | 値 |
 |---|---|
 | backend | `production-ready-rag-backend.service`（`127.0.0.1:8000`）と `production-ready-rag-ingestion-worker.service`。Nginx が `/rag/` で `frontend/dist` を配信し `/rag/api/` を proxy |
 | 前処理 / parser | `production-ready-rag-<service>.service`（`rag/services/*/*/.venv`、`127.0.0.1:18010〜18028`） |
-| 実行ユーザー | `ubuntu`（1 台の Compute。#1316） |
+| 実行ユーザー | `opc`（1 台の Compute。#1316・#1611） |
 | 設定 | `/u01/aipoc/no.1-production-ready-suite/rag/backend/.env` と `platform/.env`（`0600`） |
 | ログ | `/var/log/rag-init.log`、`sudo journalctl -u production-ready-rag-backend.service -f` |
 
@@ -125,7 +128,7 @@ sudo tail -f /var/log/rag-init.log
 systemctl list-units --all 'production-ready-rag-*'
 # RAG の system schema の初期化（冪等）を手動で再実行する
 cd /u01/aipoc/no.1-production-ready-suite/rag/backend
-sudo -u ubuntu .venv/bin/python -m app.rag.system_schema_cli initialize
+sudo -u opc .venv/bin/python -m app.rag.system_schema_cli initialize
 sudo systemctl restart production-ready-rag-backend.service
 ```
 
@@ -167,7 +170,7 @@ sudo tail -f /var/log/agent-init.log
 sudo journalctl -u production-ready-agent-backend -f
 curl -i http://127.0.0.1:8020/api/health
 # システムテーブル（認証・権限）の作成・更新（冪等）を手動で再実行する。画面の 運用設定 > システムテーブル でもできる
-cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
+cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
 ```
 
 既存の Agent の instance（Basic 認証で配備したもの）を更新する手順は [agent/docs/security-rbac.md §8](../agent/docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。
@@ -176,7 +179,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 
 - Compute は 1 台です。既定は **4 OCPU / 24 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
   文書の取込が多いときは OCPU とメモリを上げてください。
-- Nginx は 1 つの site（`/etc/nginx/sites-available/production-ready-suite`。`platform/deploy/suite-nginx.sh` が生成）で、製品を path の prefix で分けます。
+- Nginx は 1 つの site（`/etc/nginx/conf.d/production-ready-suite.conf`。`platform/deploy/suite-nginx.sh` が生成）で、製品を path の prefix で分けます。
+  `/etc/nginx/nginx.conf` は、package の既定の server（port 80）を外したもの（`platform/templates/nginx/nginx.conf`）に置き換えます。
 
   | path | 内容 |
   |---|---|
@@ -210,13 +214,36 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
     状態は `sudo bash .../platform/deploy/suite-tls.sh status` で確認します。
 - **subnet の security list または NSG**（stack の外で管理。stack は ingress の規則・NSG を作りません。#259）で、利用者の端末からの
   TCP `https_port`（HTTPS が off なら `http_port`）を許可してください。HTTPS が on のとき `http_port` も許可すると、`http://` で開いた利用者を
-  https へ転送できます。Compute の OS の firewall（iptables）は suite-init.sh が選んだ port を開けます。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
+  https へ転送できます。Compute の OS の firewall（firewalld）は suite-init.sh が選んだ port を開けます（`firewall-cmd --permanent --add-port=<port>/tcp`）。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
   127.0.0.1 なので、security list は要りません。
 - ログインのセッションは 3 製品で共通です（#1565。下の「ログインのセッションの共有（#1565）」）。`/`（Agent、無ければ最初の製品）を含め、
   どの製品の `/login` でログインしても全製品を使えます。
 - Wallet は `/u01/aipoc/wallet`、ログは `/var/log/cloud-init-custom.log`（bootstrap）・`/var/log/suite-init.log`（全体）・`/var/log/<製品>-init.log`。
 - apply 後の output に、`application_url`（`/`）、製品ごとの URL（`rag_application_url` など。配備しなかった製品は表示されない）、
   `ca_certificate_url`（HTTPS のとき）、`ssh_to_instance` が出ます。
+
+#### Compute の OS（Oracle Linux 9。#1611）
+
+| 項目 | Oracle Linux 9 の Compute |
+|---|---|
+| ログイン・実行ユーザー | `opc`（`ssh opc@<IP>`。3 製品のプロセスと repository の所有者。sudo は OCI の image の設定のまま無制限） |
+| package | `dnf`。BaseOS / AppStream だけを使い、EPEL・CodeReady Builder は有効にしない。Nginx は module `nginx:1.24`、Node.js は module `nodejs:24`（入らなければ公式の tarball を SHASUMS256 で確かめて `/usr/local/lib/nodejs`）。Python は今までどおり uv の `uv python install 3.12` |
+| Nginx | site は `/etc/nginx/conf.d/production-ready-suite.conf`。worker のユーザーは `nginx`、ログは `/var/log/nginx/production-ready-<製品>-*.log` |
+| firewall | `firewalld`。`http_port`（と HTTPS が on なら `https_port`）を `--permanent` で開ける |
+| SELinux | enforcing のまま（無効にしない）。`suite-init.sh` の `configure_selinux` が次を設定する |
+| RAG の前処理 / parser の OS の依存 | LibreOffice（`libreoffice-core` / `-writer` / `-impress` / `-calc`、AppStream の 7.1）・`google-noto-sans-cjk-ttc-fonts` / `google-noto-serif-cjk-ttc-fonts`・`poppler-utils`・`tesseract` / `tesseract-langpack-eng` / `tesseract-langpack-jpn` |
+
+SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
+
+- `semanage fcontext -a -t usr_t '/u01/aipoc/no.1-production-ready-suite(/.*)?'` と `restorecon -R`: systemd（`init_t`）は `/u01` の既定の
+  `default_t` のファイルを実行も読みもできないため、repository を `usr_t` にする（RAG の unit の `.venv/bin/gunicorn` と `EnvironmentFile`）。
+  新しく作るファイル（venv・`node_modules`・`git pull` の分）は親の `usr_t` を受け継ぐ。
+- `semanage fcontext -a -t httpd_sys_content_t '<repository>/<製品>/frontend/dist(/.*)?'`: Nginx が配信する dist。build の後に `restorecon -R`。
+- `semanage fcontext -a -t cert_t '/u01/aipoc/ssl(/.*)?'`: Nginx が読む証明書と鍵（`/platform/ca.crt` も）。
+- `setsebool -P httpd_can_network_connect 1`: Nginx から `127.0.0.1` の各製品の backend への proxy。
+- `http_port` / `https_port` が 80 / 443 以外なら `semanage port -a -t http_port_t -p tcp <port>`。
+- Ubuntu で配備した Compute は更新しません。Oracle Linux 9 にするには stack を apply して Compute を作り直してください（データの正本は ADB。
+  Compute の中だけにあるものは下の「製品ごとの Compute の stack からの更新」と同じく引き継がれません）。
 
 #### 製品ごとの Compute の stack からの更新（#1316）
 
@@ -233,7 +260,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 
 | スクリプト（`platform/deploy/`） | 実行 | 内容 |
 |---|---|---|
-| `suite-pull.sh` | ubuntu か `sudo` | repository の所有者（ubuntu）で `origin/main` を取得し、`main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ。取得だけで、build・再起動はしない |
+| `suite-pull.sh` | opc か `sudo` | repository の所有者（opc）で `origin/main` を取得し、`main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ。取得だけで、build・再起動はしない |
 | `suite-restart.sh` | `sudo` | 既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に各製品の `/api/health` を待つ。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は状態だけを出す |
 | `suite-update.sh` | `sudo` | `suite-pull.sh` で取得し、取得した新しい `suite-restart.sh`（既定）を実行する |
 
@@ -277,15 +304,15 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
 2. テーブルを作ります（冪等。既存の `PLATFORM_*` は変えません）。
 
    ```bash
-   # RAG の Compute
+   # RAG
    cd /u01/aipoc/no.1-production-ready-suite/rag/backend
-   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
-   # NL2SQL の Compute
+   sudo -u opc .venv/bin/python -m app.rag.system_schema_cli initialize
+   # NL2SQL
    cd /u01/aipoc/no.1-production-ready-suite/nl2sql/backend
-   sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
-   # Agent の Compute
+   sudo -u opc /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
+   # Agent
    cd /u01/aipoc/no.1-production-ready-suite/agent/backend
-   sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
+   sudo -u opc /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
    ```
 
 3. Nginx のログインの API の上限は、`platform/deploy/suite-nginx.sh` の site（`/<製品>/api/auth/login`）に入っています。
