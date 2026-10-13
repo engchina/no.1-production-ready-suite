@@ -43,6 +43,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: ${{ matrix.dir }}/uv.lock
           save-cache: "false"
 
@@ -76,6 +77,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          # 既定（auto）で cache が有効になるため、ほかの job と同じく保存前に prune する（#1664）。
+          prune-cache: true
 
       - name: Dependency audit
         run: |
