@@ -79,6 +79,7 @@ import { QuestionText } from "../components/QuestionText";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
+import { feedbackSearchConfigOrDefault } from "../feedbackSearchConfig";
 import {
   adminFeedbackReviewBadgeLabel,
   feedbackRatingLabel,
@@ -1360,11 +1361,11 @@ export function FeedbackManagementPage() {
                 min={0}
                 max={1}
                 step={0.05}
-                value={feedbackConfig?.similarity_threshold ?? 0}
+                value={feedbackSearchConfigOrDefault(feedbackConfig).similarity_threshold}
                 onChange={(value) => {
                   setFeedbackConfig((current) => ({
                     similarity_threshold: clamp(value, 0, 1),
-                    match_limit: current?.match_limit ?? 3,
+                    match_limit: feedbackSearchConfigOrDefault(current).match_limit,
                   }));
                 }}
               />
@@ -1375,10 +1376,10 @@ export function FeedbackManagementPage() {
                 min={1}
                 max={20}
                 step={1}
-                value={feedbackConfig?.match_limit ?? 3}
+                value={feedbackSearchConfigOrDefault(feedbackConfig).match_limit}
                 onChange={(value) => {
                   setFeedbackConfig((current) => ({
-                    similarity_threshold: current?.similarity_threshold ?? 0,
+                    similarity_threshold: feedbackSearchConfigOrDefault(current).similarity_threshold,
                     match_limit: Math.round(clamp(value, 1, 20)),
                   }));
                 }}

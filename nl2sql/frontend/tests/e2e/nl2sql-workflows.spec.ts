@@ -1803,8 +1803,9 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       state.feedbackConfigPayload = route.request().postDataJSON() as Record<string, unknown>;
       return fulfillJson(route, route.request().postDataJSON() as Record<string, unknown>);
     }
+    // 未保存の環境の既定（#1721）。
     return fulfillJson(route, {
-      similarity_threshold: 0,
+      similarity_threshold: 0.9,
       match_limit: 3,
     });
   });
@@ -10024,6 +10025,8 @@ test("feedback management keeps long query text contained in app feedback and si
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
   const similarityPanel = page.locator("#feedback-management-panel-similarityIndex");
   await expect(similarityPanel.getByLabel("最低スコア", { exact: true })).toBeVisible();
+  // 未保存の環境の既定は 0.9（#1721）。
+  await expect(similarityPanel.getByLabel("最低スコア", { exact: true })).toHaveValue("0.9");
   await expect(similarityPanel.getByLabel("最大候補数", { exact: true })).toBeVisible();
   await expect(similarityPanel.getByText("索引候補", { exact: true })).toHaveCount(0);
   await expect(similarityPanel.getByTestId("feedback-vector-entry")).toHaveCount(0);
@@ -10073,7 +10076,7 @@ test("Select AI feedback reserves the master-detail workspace during initial loa
   await page.route("**/api/nl2sql/feedback-config", async (route) => {
     await configGate;
     await fulfillJson(route, {
-      similarity_threshold: 0,
+      similarity_threshold: 0.9,
       match_limit: 3,
     });
   });
