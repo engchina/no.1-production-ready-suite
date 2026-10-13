@@ -44,6 +44,8 @@ from .object_identity import catalog_match_key, normalize_object_part, object_na
 from .object_visibility import (
     filter_user_visible_catalog,
     is_user_visible_schema_object,
+    user_visible_object_sql_filters,
+    user_visible_object_sql_predicate,
 )
 from .oracle_lob import configure_clob_fetch_as_text
 
@@ -51,6 +53,10 @@ PROFILE_NAMESPACE = "profiles"
 SCHEMA_NAMESPACE = "schema"
 STATE_NAMESPACE = "state"
 REQUIRED_MIGRATION_VERSIONS = (3, 5, 6)
+# schema snapshot（NL2SQL_SCHEMA_OBJECTS）から業務の object だけを読む条件（#1710）。
+_VISIBLE_SNAPSHOT_OBJECT_SQL = user_visible_object_sql_predicate(
+    object_column="OBJECT_NAME", owner_column="OWNER_NAME"
+)
 
 
 class IncrementalStoreError(RuntimeError):
@@ -1735,8 +1741,10 @@ class OracleIncrementalNl2SqlRepository:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)
             cursor.execute(
-                "SELECT OWNER_NAME, OBJECT_NAME, OBJECT_TYPE, LOGICAL_NAME, COMMENTS, "
-                "ROW_COUNT FROM NL2SQL_SCHEMA_OBJECTS ORDER BY OWNER_NAME, OBJECT_NAME"
+                "SELECT OWNER_NAME, OBJECT_NAME, OBJECT_TYPE, LOGICAL_NAME, COMMENTS, "  # nosec B608
+                "ROW_COUNT FROM NL2SQL_SCHEMA_OBJECTS WHERE "
+                + _VISIBLE_SNAPSHOT_OBJECT_SQL
+                + " ORDER BY OWNER_NAME, OBJECT_NAME"
             )
             object_rows = cursor.fetchall()
             cursor.execute(
@@ -1839,13 +1847,12 @@ class OracleIncrementalNl2SqlRepository:
         include_counts: bool = True,
     ) -> SchemaObjectPage:
         after = decode_keyset_cursor(cursor, 2)
-        where = [
-            "o.OWNER_NAME NOT LIKE '%$%'",
-            "o.OWNER_NAME NOT LIKE '%#%'",
-            "o.OBJECT_NAME NOT LIKE '%$%'",
-            "o.OBJECT_NAME NOT LIKE '%#%'",
-            "o.OBJECT_NAME NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
-        ]
+        # システムテーブルと Oracle の内部 object はページ・件数の SQL で最初から除く（#1710）。
+        where = list(
+            user_visible_object_sql_filters(
+                object_column="o.OBJECT_NAME", owner_column="o.OWNER_NAME"
+            )
+        )
         binds: dict[str, Any] = {"limit": limit + 1}
         if owner.strip():
             where.append("o.OWNER_NAME = :owner")
@@ -1999,12 +2006,8 @@ class OracleIncrementalNl2SqlRepository:
     def schema_manifest(self) -> dict[tuple[str, str], str]:
         with self._connection_factory() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT OWNER_NAME, OBJECT_NAME, LAST_DDL_AT FROM NL2SQL_SCHEMA_OBJECTS "
-                "WHERE OWNER_NAME NOT LIKE '%$%' "
-                "AND OWNER_NAME NOT LIKE '%#%' "
-                "AND OBJECT_NAME NOT LIKE '%$%' "
-                "AND OBJECT_NAME NOT LIKE '%#%' "
-                "AND OBJECT_NAME NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'"
+                "SELECT OWNER_NAME, OBJECT_NAME, LAST_DDL_AT "  # nosec B608 - 固定の条件
+                "FROM NL2SQL_SCHEMA_OBJECTS WHERE " + _VISIBLE_SNAPSHOT_OBJECT_SQL
             )
             rows = cursor.fetchall()
         record_repository("schema_manifest", rows=len(rows))
@@ -2070,7 +2073,11 @@ class OracleIncrementalNl2SqlRepository:
                         ":referenced_type)",
                         dependency.model_dump(mode="json"),
                     )
-                cursor.execute("SELECT COUNT(*), SUM(COLUMN_COUNT) FROM NL2SQL_SCHEMA_OBJECTS")
+                # head の件数も一覧と同じ規則で数える（古い snapshot の残りを数えない。#1710）。
+                cursor.execute(
+                    "SELECT COUNT(*), SUM(COLUMN_COUNT) "  # nosec B608 - 固定の条件
+                    "FROM NL2SQL_SCHEMA_OBJECTS WHERE " + _VISIBLE_SNAPSHOT_OBJECT_SQL
+                )
                 counts = cursor.fetchone() or (0, 0)
                 head_etag = hashlib.sha256(
                     f"{version}:{catalog.schema_fingerprint}".encode()
