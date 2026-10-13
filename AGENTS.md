@@ -35,6 +35,7 @@
 - **merge 後はローカルを `main` に切り替え、`git fetch --prune` のうえ `origin/main` へ fast-forward してから完了を報告する**（PR の merge 状態・ブランチ・同期を確かめる）。未保存の変更を破棄する `reset --hard` 等は使わない。同期できなければ理由と残作業を明示する。
 - docs-only や緊急の修正も同じ流れ。例外が要るなら理由を添えてユーザーに確認する。
 - 並行する別のセッションの未コミット変更・stash・worktree を、確認なしに破棄・上書きしない。
+- **一時ファイルは `/tmp` に置かず、repo の直下の `./tmp/` に置く**（開発環境の WSL がよく再起動し、`/tmp` が消えるため。#1616）。作業用の worktree は `.claude/worktrees/`、PR / Issue の本文・測定の結果・展開した binary などは `./tmp/<作業の名前>/`。`./tmp/` は `.gitignore` で無視し、commit しない。
 
 ### GitHub Issue / Pull Request の記述規約
 
