@@ -8,7 +8,6 @@ import {
   ChatAnswer,
   ChatProgress,
   ChatTurn,
-  Disclosure,
   StatusBadge,
 } from "@production-ready/ui";
 
@@ -382,6 +381,9 @@ export function ChatRequirementTurn({
                   onApplyWithRemaining={flow.generate}
                   trailingActions={cancelButton}
                 />
+                {state && controller.draft ? (
+                  <RequirementItemsList controller={controller} />
+                ) : null}
                 <RequirementSummary
                   controller={controller}
                   idPrefix="sql-chat-requirement"
@@ -422,16 +424,6 @@ export function ChatRequirementTurn({
             ) : null}
             {!showGenerate && phase !== "ended" && !controller.activeItem ? (
               <div className="flex flex-wrap justify-end gap-2">{cancelButton}</div>
-            ) : null}
-            {phase !== "ended" && state && controller.draft ? (
-              <Disclosure
-                summary={t("nl2sql.clarification.requirements")}
-                surface="sunken"
-                size="sm"
-                summaryProps={{ "data-testid": "sql-chat-requirement-items-toggle" }}
-              >
-                <RequirementItemsList controller={controller} heading={false} idPrefix="sql-chat" />
-              </Disclosure>
             ) : null}
           </section>
         ) : null}

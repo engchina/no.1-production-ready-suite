@@ -104,6 +104,37 @@ SECTION_LABELS_JA: dict[RequirementSection, str] = {
 _UNRESOLVED = {RequirementStatus.MISSING, RequirementStatus.AMBIGUOUS}
 _CLEAR = {RequirementStatus.CONFIRMED, RequirementStatus.INFERRED}
 
+# 「条件を追加」（値の無い部分に利用者が条件を足す。#1718）の項目の ID。`add:<section>` で送る。
+ADD_ITEM_PREFIX = "add:"
+# 足せる部分（SELECT・FROM は必ず値があり、「直す」で直す）。
+ADDABLE_SECTIONS = frozenset(
+    {
+        RequirementSection.JOIN,
+        RequirementSection.PERIOD,
+        RequirementSection.WHERE,
+        RequirementSection.GROUP_BY,
+        RequirementSection.ORDER_BY,
+        RequirementSection.LIMIT,
+        RequirementSection.SUBQUERY,
+        RequirementSection.OTHER,
+    }
+)
+
+
+def is_unspecified(item: RequirementItem) -> bool:
+    """値の無い確定・推測の項目（その句を使わない＝「指定なし」。#1718）。
+
+    確認の要る（不足・あいまい）項目とは区別する。値の無い推測を「AI の推測」とは示さない。
+    """
+
+    return (
+        item.status in _CLEAR
+        and not item.answered
+        and not item.value_ja.strip()
+        and not item.sql_hint.strip()
+    )
+
+
 # 相対的な期間の表現の種類（LLM は種類と件数だけを返し、日付はプログラムが計算する）。
 RELATIVE_PERIOD_KINDS = (
     "today",
@@ -225,7 +256,9 @@ SYSTEM_PROMPT = (  # nosec B608
     "4. 欄（section）: select（表示する列・式・集計関数・重複の除去）、from（使う表。必須）、"
     "join（複数の表の結合の経路・種類（INNER / LEFT など）・1 対多の結合で集計が膨らむおそれ）、"
     "where（絞り込みの列・演算子・値、状態・区分の値、NULL の扱い）、"
-    "period（相対的な期間の表現）、group_by（集計の単位）、order_by（並び順）、limit（件数の上限）、"
+    "period（相対的な期間の表現）、group_by（集計の単位）、order_by（並び順）、"
+    "limit（件数の上限。質問が「上位 N 件」「最新の 1 件」など件数を求めるときだけ出す。"
+    "求めていなければ limit の項目を出さず、missing にもしない。実行の行数は別に制限されます）、"
     "subquery（WITH・サブクエリが要るか・どう組むか。例: 部門ごとの平均を超える社員、前月比）、"
     "other（単位・通貨、「最新」「上位」の定義、指標の計算式の選択など、SQL "
     "の生成に要るそのほかの情報）。"
@@ -1192,6 +1225,7 @@ def enforce_requirement_rules(
     _enforce_joins(updated, context)
     _drop_settled_period_questions(items)
     _enforce_periods(items, context)
+    _settle_unrequested_limit(items)
     _enforce_risks(items, context)
     for item in items:
         item.refs_ja = refs_text(context, tables=item.tables, columns=item.columns)
@@ -2143,47 +2177,29 @@ def _enforce_risks(items: list[RequirementItem], context: RequirementContext) ->
             _drop_risk(items, "risk_cartesian_join")
     else:
         _drop_risk(items, "risk_cartesian_join")
-    # 3. 件数の上限が無い明細の出力。
-    if (
-        not _is_aggregate_query(items)
-        and not _has_clear(items, RequirementSection.LIMIT)
-        and not _has_unresolved(items, RequirementSection.LIMIT)
-    ):
-        default_limit = int(context.profile_context.get("default_row_limit") or 0)
-        candidates: list[RequirementCandidate] = []
-        if default_limit > 0:
-            candidates.append(
-                RequirementCandidate(
-                    id=stable_ontology_id(
-                        "requirement_candidate", "risk_no_limit", str(default_limit)
-                    ),
-                    label_ja=f"{default_limit} 件まで",
-                    description_ja="業務プロファイルの既定の行数の上限です。",
-                    evidence_ja="業務プロファイルの既定の行数の上限",
-                    source=RequirementSource.PROFILE,
-                    sql_hint=f"FETCH FIRST {default_limit} ROWS ONLY",
-                )
-            )
-        candidates.append(
-            RequirementCandidate(
-                id=stable_ontology_id("requirement_candidate", "risk_no_limit", "none"),
-                label_ja="上限を付けない（全件）",
-                description_ja="明細のすべての行を出します。",
-                evidence_ja="要件に件数の上限が無いこと",
-                source=RequirementSource.SCHEMA,
-            )
-        )
-        _risk_item(
-            items,
-            key="risk_no_limit",
-            section=RequirementSection.LIMIT,
-            label_ja="明細の件数の上限",
-            reason_ja="集計ではない明細の出力に、件数の上限がありません。",
-            question_ja="明細を何件まで出しますか？",
-            candidates=candidates,
-        )
-    else:
-        _drop_risk(items, "risk_no_limit")
+    # 件数の上限が無い明細の出力は確認しない（#1718。_settle_unrequested_limit）。
+    _drop_risk(items, "risk_no_limit")
+
+
+def _settle_unrequested_limit(items: list[RequirementItem]) -> None:
+    """件数の上限は、質問が件数（上位 N 件など）を求めるときだけ要件にする（#1718）。
+
+    質問に無い件数の上限を「不足」として聞かない（実行の行数は実行の側で制限する）。値の無い不足の
+    項目は「指定なし」にする。複数の解釈がある（「上位」の件数が無いなど）ときは聞く。
+    """
+
+    for item in items:
+        if (
+            item.section == RequirementSection.LIMIT
+            and item.status == RequirementStatus.MISSING
+            and not item.answered
+            and not item.value_ja.strip()
+        ):
+            item.status = RequirementStatus.INFERRED
+            item.question_ja = ""
+            item.reason_ja = ""
+            item.candidates = []
+            item.answer_kind = RequirementAnswerKind.FREE_TEXT
 
 
 UNDECIDED_MARK = "⟨未確定: {}⟩"
@@ -2402,6 +2418,8 @@ def apply_answer(
 
     updated = draft.model_copy(deep=True)
     item = next((value for value in updated.items if value.id == item_id), None)
+    if item is None and item_id.startswith(ADD_ITEM_PREFIX):
+        item = _added_item(updated, item_id)
     if item is None:
         raise RequirementAnswerInvalidError(
             "確認の項目が見つかりません。最新の状態を読み込み直してください。"
@@ -2484,6 +2502,54 @@ def apply_answer(
         updated.unanswerable_reason_ja = ""
     updated.version = draft.version + 1
     return enforce_requirement_rules(updated, context)
+
+
+def added_item_section(item_id: str) -> RequirementSection | None:
+    """「条件を追加」の ID（`add:<section>`）の部分。足せない部分・形の違う ID は None。"""
+
+    if not item_id.startswith(ADD_ITEM_PREFIX):
+        return None
+    try:
+        section = RequirementSection(item_id.removeprefix(ADD_ITEM_PREFIX))
+    except ValueError:
+        return None
+    return section if section in ADDABLE_SECTIONS else None
+
+
+def _added_item(draft: SqlRequirementDraft, item_id: str) -> RequirementItem:
+    """「条件を追加」で足す項目。同じ部分の「指定なし」の項目があれば、それに答える。"""
+
+    section = added_item_section(item_id)
+    if section is None:
+        raise RequirementAnswerInvalidError("この部分には条件を追加できません。")
+    existing = next(
+        (
+            item
+            for item in draft.items
+            if item.section == section and is_unspecified(item) and item.key != "period_date_column"
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    base = f"added_{section.value}"
+    keys = {item.key for item in draft.items}
+    key = base
+    index = 2
+    while key in keys:
+        key = f"{base}_{index}"
+        index += 1
+    item = RequirementItem(
+        id=stable_ontology_id("requirement_item", key),
+        key=key,
+        section=section,
+        label_ja=SECTION_LABELS_JA[section],
+        status=RequirementStatus.MISSING,
+        answer_kind=RequirementAnswerKind.FREE_TEXT,
+        source=RequirementSource.USER,
+    )
+    draft.items.append(item)
+    return item
 
 
 def _merge_join_tables(items: list[RequirementItem], tables: Sequence[str]) -> None:
@@ -2608,7 +2674,9 @@ def requirement_summary(draft: SqlRequirementDraft) -> str:
         section_items = [item for item in draft.items if item.section == section]
         for item in section_items:
             status = _STATUS_LABELS[item.status] if not item.answered else "確定（回答）"
-            value = item.value_ja or "（未確認）"
+            if is_unspecified(item):
+                status = "指定なし"
+            value = item.value_ja or ("（指定なし）" if item.status in _CLEAR else "（未確定）")
             detail: list[str] = []
             if item.refs_ja and item.refs_ja not in value:
                 detail.append(item.refs_ja)
@@ -2626,8 +2694,8 @@ def requirement_summary(draft: SqlRequirementDraft) -> str:
 _STATUS_LABELS = {
     RequirementStatus.CONFIRMED: "確定",
     RequirementStatus.INFERRED: "AI の推測",
-    RequirementStatus.MISSING: "不足",
-    RequirementStatus.AMBIGUOUS: "あいまい",
+    RequirementStatus.MISSING: "要確認",
+    RequirementStatus.AMBIGUOUS: "要確認",
 }
 
 
@@ -2696,12 +2764,15 @@ __all__ = [
     "RequirementAnswerInvalidError",
     "RequirementAnswerRecord",
     "RequirementContext",
+    "ADD_ITEM_PREFIX",
+    "added_item_section",
     "apply_answer",
     "build_draft",
     "build_requirement_context",
     "build_requirement_state",
     "call_requirement_llm",
     "generation_spec",
+    "is_unspecified",
     "requirement_summary",
     "unresolved_items",
 ]

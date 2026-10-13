@@ -2,13 +2,15 @@
 // 会話の中の確認（ChatRequirementTurn）が同じ部品・同じ API で、1 問ずつの質問・回答・確認済みの一覧からの直し・
 // 要件のまとめと SQL の骨組みを出す。session の作り方（業務プロファイルの推薦・会話の履歴）と、反映の後の操作
 // （質問の欄に入れる・チャットで SQL を生成する）だけを画面ごとに持つ。
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { CheckCircle2, Pencil, Send, X } from "lucide-react";
+// 「SQL の要件（AI の理解）」の一覧（#1718）も両方の画面で同じ部品・同じ振る舞いにする（違いは置き場所と幅だけ）。
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Check, CheckCircle2, Pencil, Plus, Send, X } from "lucide-react";
 
 import {
   Banner,
   Button,
   Disclosure,
+  DisclosureChevron,
   FieldError,
   ProcessingIndicator,
   StatusBadge,
@@ -16,7 +18,7 @@ import {
 } from "@production-ready/ui";
 
 import { useValuesChanged } from "@/lib/render-sync";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 
 import {
   answerQuerySessionClarification,
@@ -30,51 +32,23 @@ import type {
   RequirementItem,
   RequirementSection,
   RequirementState,
-  RequirementStatus,
   SqlRequirementDraft,
 } from "../ontology/types";
+import {
+  ADD_ITEM_PREFIX,
+  KIND_BADGE_VARIANT,
+  addConditionItem,
+  canAnswerWithCandidate,
+  requirementKindLabel,
+  requirementOverview,
+  sectionPartLabel,
+} from "../requirementView";
 
 export type RequirementBusyAction = "start" | "answer" | "apply" | "cancel" | "";
 type ButtonSize = "sm" | "md" | "lg";
 
-/** 画面の欄（SELECT / FROM と結合 / WHERE と期間 / GROUP BY / ORDER BY と件数 / WITH / そのほか）。 */
-const REQUIREMENT_GROUPS: { id: string; labelKey: I18nKey; sections: RequirementSection[] }[] = [
-  { id: "select", labelKey: "nl2sql.clarification.section.select", sections: ["select"] },
-  { id: "from", labelKey: "nl2sql.clarification.section.from", sections: ["from", "join"] },
-  { id: "where", labelKey: "nl2sql.clarification.section.where", sections: ["where", "period"] },
-  { id: "group_by", labelKey: "nl2sql.clarification.section.groupBy", sections: ["group_by"] },
-  { id: "order_by", labelKey: "nl2sql.clarification.section.orderBy", sections: ["order_by", "limit"] },
-  { id: "subquery", labelKey: "nl2sql.clarification.section.subquery", sections: ["subquery"] },
-  { id: "other", labelKey: "nl2sql.clarification.section.other", sections: ["other"] },
-];
-
-const SECTION_LABEL_KEY: Record<RequirementSection, I18nKey> = {
-  select: "nl2sql.clarification.section.select",
-  from: "nl2sql.clarification.section.from",
-  join: "nl2sql.clarification.section.from",
-  where: "nl2sql.clarification.section.where",
-  period: "nl2sql.clarification.section.where",
-  group_by: "nl2sql.clarification.section.groupBy",
-  order_by: "nl2sql.clarification.section.orderBy",
-  limit: "nl2sql.clarification.section.orderBy",
-  subquery: "nl2sql.clarification.section.subquery",
-  other: "nl2sql.clarification.section.other",
-};
-
-const STATUS_VARIANT: Record<RequirementStatus, "success" | "info" | "warning"> = {
-  confirmed: "success",
-  inferred: "info",
-  missing: "warning",
-  ambiguous: "warning",
-};
-
 export function isSessionOpen(session: QuerySession | null): session is QuerySession {
   return Boolean(session && session.status !== "done" && session.status !== "cancelled");
-}
-
-function itemStatusLabel(item: RequirementItem): string {
-  if (item.answered) return t("nl2sql.clarification.itemStatus.answered");
-  return t(`nl2sql.clarification.itemStatus.${item.status}` as I18nKey);
 }
 
 export function requirementPhaseBadge(state: RequirementState): {
@@ -109,7 +83,14 @@ export interface RequirementSessionController {
   /** 今の質問（確認済みの一覧から直している項目があればそれ）。 */
   activeItem: RequirementItem | null;
   correctingItem: RequirementItem | null;
+  /** 確認済みの一覧から直す項目を選ぶ（null で直すのをやめる。条件の追加もやめる）。 */
   setCorrectingItemId: (id: string | null) => void;
+  /** 「条件を追加」で、値の無い部分に条件を足す入力を出す（#1718）。 */
+  startAdding: (section: RequirementSection) => void;
+  /** 一覧の要確認の行で、候補を押して答える（#1718）。 */
+  answerWithCandidate: (item: RequirementItem, candidateId: string) => Promise<void>;
+  /** 候補を押して送っている候補の ID（その候補のボタンだけを loading にする）。 */
+  answeringCandidateId: string;
   selectedCandidateIds: string[];
   freeText: string;
   answerReady: boolean;
@@ -135,7 +116,10 @@ export function useRequirementSession(
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
   const [freeText, setFreeText] = useState("");
   // 確認済みの一覧から「直す」で選んだ項目（質問の欄の代わりに、この項目の入力を出す）。
-  const [correctingItemId, setCorrectingItemId] = useState<string | null>(null);
+  const [correctingItemId, setCorrectingItemIdState] = useState<string | null>(null);
+  // 「条件を追加」で足す部分（質問の欄の代わりに、その部分の自由入力を出す。#1718）。
+  const [addingSection, setAddingSection] = useState<RequirementSection | null>(null);
+  const [answeringCandidateId, setAnsweringCandidateId] = useState("");
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<RequirementBusyAction>(initialBusy);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -152,9 +136,19 @@ export function useRequirementSession(
   const state = sessionEnded ? null : session?.requirement_state ?? null;
   const draft = sessionEnded ? null : session?.requirement ?? null;
   const items = draft?.items ?? [];
-  const correctingItem = correctingItemId
-    ? items.find((item) => item.id === correctingItemId) ?? null
-    : null;
+  const correctingItem = addingSection
+    ? addConditionItem(addingSection)
+    : correctingItemId
+      ? items.find((item) => item.id === correctingItemId) ?? null
+      : null;
+  const setCorrectingItemId = (id: string | null) => {
+    setAddingSection(null);
+    setCorrectingItemIdState(id);
+  };
+  const startAdding = (section: RequirementSection) => {
+    setCorrectingItemIdState(null);
+    setAddingSection(section);
+  };
   const activeItem = correctingItem ?? state?.current_item ?? null;
 
   // 質問（または直す項目）が変わったレンダーで回答欄を空にする（effect で setState しない）。
@@ -199,16 +193,18 @@ export function useRequirementSession(
     }
   };
 
-  const submitAnswer = async () => {
-    if (!session || !activeItem || !answerReady || busyAction) return;
+  const sendAnswer = async (
+    itemId: string,
+    answer: { selected_candidate_ids: string[]; free_text: string }
+  ) => {
+    if (!session || busyAction) return;
     setBusyAction("answer");
     setError("");
     try {
       const updated = await answerQuerySessionClarification(session.id, {
         base_version: session.current_intent_version ?? 1,
-        item_id: activeItem.id,
-        selected_candidate_ids: selectedCandidateIds,
-        free_text: freeText.trim(),
+        item_id: itemId,
+        ...answer,
       });
       setSession(updated);
       setCorrectingItemId(null);
@@ -216,8 +212,25 @@ export function useRequirementSession(
       await reloadAfterConflict(cause, session);
       setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.answer"));
     } finally {
-      if (mountedRef.current) setBusyAction("");
+      if (mountedRef.current) {
+        setBusyAction("");
+        setAnsweringCandidateId("");
+      }
     }
+  };
+
+  const submitAnswer = async () => {
+    if (!activeItem || !answerReady) return;
+    await sendAnswer(activeItem.id, {
+      selected_candidate_ids: selectedCandidateIds,
+      free_text: freeText.trim(),
+    });
+  };
+
+  const answerWithCandidate = async (item: RequirementItem, candidateId: string) => {
+    if (busyAction) return;
+    setAnsweringCandidateId(candidateId);
+    await sendAnswer(item.id, { selected_candidate_ids: [candidateId], free_text: "" });
   };
 
   const applyRequirement = async (): Promise<QuerySession | null> => {
@@ -287,6 +300,9 @@ export function useRequirementSession(
     activeItem,
     correctingItem,
     setCorrectingItemId,
+    startAdding,
+    answerWithCandidate,
+    answeringCandidateId,
     selectedCandidateIds,
     freeText,
     answerReady,
@@ -376,6 +392,7 @@ export function RequirementQuestionForm({
   } = controller;
   if (!activeItem || !state) return null;
   const applyWithRemaining = showApply && unresolvedCount > 0;
+  const adding = Boolean(correctingItem?.id.startsWith(ADD_ITEM_PREFIX));
   const heading = correctingItem
     ? correctingItem.question_ja || t("nl2sql.clarification.correctLabel", { label: correctingItem.label_ja })
     : activeItem.question_ja || activeItem.label_ja;
@@ -389,22 +406,24 @@ export function RequirementQuestionForm({
       <div>
         <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-fg-muted">
           <span>
-            {correctingItem
+            {adding && correctingItem
+              ? t("nl2sql.clarification.addTitle", { part: correctingItem.label_ja })
+              : correctingItem
               ? t("nl2sql.clarification.correctTitle", { label: correctingItem.label_ja })
               : t("nl2sql.clarification.step", {
                   step: answeredCount + 1,
                   remaining: unresolvedCount,
                 })}
           </span>
-          <StatusBadge icon={false} variant="neutral" label={t(SECTION_LABEL_KEY[activeItem.section])} />
+          <StatusBadge icon={false} variant="neutral" label={sectionPartLabel(activeItem.section)} />
         </p>
         <h4 ref={questionHeadingRef} tabIndex={-1} className="mt-1 text-sm font-semibold leading-6 text-fg">
           {heading}
         </h4>
-        {correctingItem ? (
+        {correctingItem && !adding ? (
           <p className="mt-1 text-xs leading-5 text-fg-muted">
             {t("nl2sql.clarification.correctHint", {
-              value: correctingItem.value_ja || t("nl2sql.clarification.unset"),
+              value: correctingItem.value_ja || t("nl2sql.clarification.unspecifiedValue"),
             })}
           </p>
         ) : null}
@@ -476,7 +495,7 @@ export function RequirementQuestionForm({
             disabled={Boolean(busyAction)}
             onClick={() => controller.setCorrectingItemId(null)}
           >
-            {t("nl2sql.clarification.correctCancel")}
+            {adding ? t("nl2sql.clarification.addCancel") : t("nl2sql.clarification.correctCancel")}
           </Button>
         ) : null}
         {applyWithRemaining ? (
@@ -501,7 +520,11 @@ export function RequirementQuestionForm({
           disabled={!answerReady || Boolean(busyAction && busyAction !== "answer")}
           onClick={() => void controller.submitAnswer()}
         >
-          {correctingItem ? t("nl2sql.clarification.correctSubmit") : t("nl2sql.clarification.answer")}
+          {adding
+            ? t("nl2sql.clarification.addSubmit")
+            : correctingItem
+              ? t("nl2sql.clarification.correctSubmit")
+              : t("nl2sql.clarification.answer")}
         </Button>
         {correctingItem ? null : trailingActions}
       </div>
@@ -509,113 +532,226 @@ export function RequirementQuestionForm({
   );
 }
 
-/** 「SQL の要件（AI の理解）」の欄（表・列は物理名。推測は「直す」で直せる）。 */
-export function RequirementItemsList({
-  controller,
-  heading = true,
-  idPrefix = "nl2sql",
-}: {
-  controller: RequirementSessionController;
-  /** 見出しと説明を出す（Disclosure の中に入れるときは見出しを Disclosure が持つ）。 */
-  heading?: boolean;
-  idPrefix?: string;
-}) {
-  const { state, draft, items, activeItem, busyAction } = controller;
+/**
+ * 「SQL の要件（AI の理解）」（#1718）。値のある部分だけを 1 行ずつの一覧（項目名・値・状態・「直す」）にし、
+ * 値の無い部分は「指定なし: …」の 1 行と「条件を追加」にまとめる。状態は 確定 / AI の推測 / 要確認 の 3 つで、
+ * 要確認の行は質問と候補を出し、候補を押して答えられる。要確認が無ければ畳んで要約の 1 行にする。
+ * SQL 生成の画面とチャットで同じ部品・同じ振る舞い（画面ごとの分岐を持たない）。
+ */
+export function RequirementItemsList({ controller }: { controller: RequirementSessionController }) {
+  const { state, draft, items, activeItem, busyAction, answeringCandidateId } = controller;
+  const overview = requirementOverview(items);
+  const needsAnswer = overview.needsAnswerCount > 0;
+  // 要確認があれば開き、無ければ畳む。要確認の有無が変わったら、その既定に戻す（利用者は開閉できる）。
+  const [open, setOpen] = useState(needsAnswer);
+  const [addOpen, setAddOpen] = useState(false);
+  const needsAnswerChanged = useValuesChanged([needsAnswer]);
+  if (needsAnswerChanged) {
+    setOpen(needsAnswer);
+  }
+  const addGroupId = useId();
   if (!state || !draft) return null;
+  const editable = state.status !== "unanswerable";
+  const busy = Boolean(busyAction);
+  const showUnspecified =
+    overview.unspecifiedSections.length > 0 || (editable && overview.addableSections.length > 0);
   return (
     <section
-      aria-labelledby={heading ? `${idPrefix}-requirements-title` : undefined}
-      aria-label={heading ? undefined : t("nl2sql.clarification.requirements")}
-      className="grid min-w-0 gap-3"
+      aria-label={t("nl2sql.clarification.requirements")}
+      className="min-w-0"
       data-testid="nl2sql-clarification-requirements"
+      data-needs-answer={needsAnswer ? "true" : "false"}
     >
-      {heading ? (
-        <div>
-          <h4 id={`${idPrefix}-requirements-title`} className="text-sm font-semibold text-fg">
-            {t("nl2sql.clarification.requirements")}
-          </h4>
-          <p className="mt-0.5 text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.requirementsHint")}</p>
-        </div>
-      ) : (
+      <Disclosure
+        surface="sunken"
+        summary={t("nl2sql.clarification.requirements")}
+        // 畳んだときは要約の 1 行（要確認が無ければ「（確認の必要なし）」を添える）。状態のバッジは要確認の
+        // ときだけ出し、狭い画面で要約の幅を取らない。
+        description={
+          open
+            ? undefined
+            : needsAnswer
+              ? overview.summary || undefined
+              : `${overview.summary}${t("nl2sql.clarification.noAnswerNeededSuffix")}`
+        }
+        meta={
+          needsAnswer ? (
+            <StatusBadge
+              variant="warning"
+              label={t("nl2sql.clarification.needsAnswerCount", { count: overview.needsAnswerCount })}
+            />
+          ) : undefined
+        }
+        open={open}
+        onOpenChange={setOpen}
+        summaryProps={{ "data-testid": "nl2sql-clarification-requirements-toggle" }}
+        contentClassName="grid gap-2 p-3"
+      >
         <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.requirementsHint")}</p>
-      )}
-      <div className="grid gap-2 lg:grid-cols-2">
-        {REQUIREMENT_GROUPS.map((group) => {
-          const groupItems = items.filter((item) => group.sections.includes(item.section));
-          return (
-            <section
-              key={group.id}
-              aria-labelledby={`${idPrefix}-requirement-group-${group.id}`}
-              className="min-w-0 rounded-md border border-border bg-surface-sunken p-3"
-              data-testid={`nl2sql-requirement-group-${group.id}`}
-            >
-              <h5 id={`${idPrefix}-requirement-group-${group.id}`} className="text-xs font-semibold text-fg-muted">
-                {t(group.labelKey)}
-              </h5>
-              {groupItems.length === 0 ? (
-                <p className="mt-1 text-sm text-fg-subtle">{t("nl2sql.clarification.sectionEmpty")}</p>
-              ) : (
-                <ul className="mt-1 grid gap-2">
-                  {groupItems.map((item) => {
-                    const isCurrent = item.id === activeItem?.id;
-                    const unresolved = !item.answered && (item.status === "missing" || item.status === "ambiguous");
-                    return (
-                      <li
-                        key={item.id}
-                        className="grid gap-1 border-t border-border pt-2 first:border-t-0 first:pt-0"
-                        data-testid="nl2sql-requirement-item"
-                        data-item-key={item.key}
-                        data-item-status={item.answered ? "answered" : item.status}
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs text-fg-muted">{item.label_ja}</span>
-                          <span className="flex items-center gap-1">
-                            <StatusBadge
-                              variant={item.answered ? "success" : STATUS_VARIANT[item.status]}
-                              label={itemStatusLabel(item)}
-                            />
-                            {!unresolved && !isCurrent && state.status !== "unanswerable" ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                icon={Pencil}
-                                disabled={Boolean(busyAction)}
-                                aria-label={t("nl2sql.clarification.correctLabel", { label: item.label_ja })}
-                                onClick={() => controller.setCorrectingItemId(item.id)}
-                              >
-                                {t("nl2sql.clarification.correct")}
-                              </Button>
-                            ) : null}
-                          </span>
-                        </div>
+        {overview.listed.length > 0 ? (
+          <ul className="grid min-w-0 divide-y divide-border">
+            {overview.listed.map(({ item, kind }) => {
+              const part = sectionPartLabel(item.section);
+              const isCurrent = item.id === activeItem?.id;
+              const value = (item.value_ja ?? "").trim() || item.sql_hint || "";
+              const showLabel = item.label_ja && item.label_ja !== part && item.label_ja !== value;
+              return (
+                <li
+                  key={item.id}
+                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0 sm:grid-cols-[8rem_minmax(0,1fr)_auto]"
+                  data-testid="nl2sql-requirement-item"
+                  data-item-key={item.key}
+                  data-item-kind={kind}
+                  data-item-status={item.answered ? "answered" : item.status}
+                  data-current={isCurrent ? "true" : undefined}
+                >
+                  <span className="col-start-1 row-start-1 pt-1 text-xs font-medium text-fg-muted">{part}</span>
+                  <div className="col-span-2 row-start-2 grid min-w-0 gap-0.5 sm:col-span-1 sm:col-start-2 sm:row-start-1">
+                    {kind === "needs_answer" ? (
+                      <>
                         <p className="break-words text-sm font-medium leading-6 text-fg">
-                          {item.value_ja || t("nl2sql.clarification.unset")}
+                          {item.question_ja || item.label_ja}
                         </p>
-                        {item.refs_ja && !item.value_ja.includes(item.refs_ja) ? (
+                        {item.reason_ja ? (
+                          <p className="break-words text-xs leading-5 text-fg-muted">{item.reason_ja}</p>
+                        ) : null}
+                        {isCurrent ? (
+                          // 今の質問は回答欄（候補の説明・根拠・自由入力つき）で答える。同じ候補を 2 か所に出さない。
+                          <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.answeringInForm")}</p>
+                        ) : editable && canAnswerWithCandidate(item) ? (
+                          <div
+                            role="group"
+                            aria-label={t("nl2sql.clarification.candidates", { label: item.label_ja })}
+                            className="mt-1 flex min-w-0 flex-wrap gap-2"
+                          >
+                            {item.candidates.map((candidate) => (
+                              <Button
+                                key={candidate.id}
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                icon={Check}
+                                loading={answeringCandidateId === candidate.id}
+                                disabled={busy && answeringCandidateId !== candidate.id}
+                                aria-label={t("nl2sql.clarification.answerWithCandidate", {
+                                  candidate: candidate.label_ja,
+                                })}
+                                tooltip={candidate.description_ja || candidate.refs_ja || false}
+                                onClick={() => void controller.answerWithCandidate(item, candidate.id)}
+                              >
+                                {candidate.label_ja}
+                              </Button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <p className="break-words text-sm font-medium leading-6 text-fg">{value}</p>
+                        {showLabel ? (
+                          <p className="break-words text-xs leading-5 text-fg-muted">{item.label_ja}</p>
+                        ) : null}
+                        {item.refs_ja && !value.includes(item.refs_ja) ? (
                           <p className="break-all font-mono text-xs leading-5 text-fg-muted">{item.refs_ja}</p>
                         ) : null}
-                        {item.period?.range_ja && !item.value_ja.includes(item.period.range_ja) ? (
+                        {item.period?.range_ja && !value.includes(item.period.range_ja) ? (
                           <p className="text-xs leading-5 text-fg-muted">{item.period.range_ja}</p>
                         ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </section>
-          );
-        })}
-      </div>
-      {draft.warnings_ja.length > 0 ? (
-        <Disclosure summary={t("nl2sql.clarification.warnings")} surface="sunken">
-          <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-fg-muted">
-            {draft.warnings_ja.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
+                        {item.answered ? (
+                          <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.answeredNote")}</p>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                  <div className="col-start-2 row-start-1 flex items-center justify-end gap-1 sm:col-start-3">
+                    <StatusBadge variant={KIND_BADGE_VARIANT[kind]} label={requirementKindLabel(kind)} />
+                    {kind !== "needs_answer" && !isCurrent && editable ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        icon={Pencil}
+                        disabled={busy}
+                        aria-label={t("nl2sql.clarification.correctLabel", { label: item.label_ja })}
+                        onClick={() => controller.setCorrectingItemId(item.id)}
+                      >
+                        {t("nl2sql.clarification.correct")}
+                      </Button>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
-        </Disclosure>
-      ) : null}
+        ) : null}
+        {showUnspecified ? (
+          <div
+            className="grid min-w-0 gap-2 border-t border-border pt-2"
+            data-testid="nl2sql-requirement-unspecified"
+          >
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <p className="min-w-0 break-words text-xs leading-5 text-fg-muted">
+                {overview.unspecifiedSections.length > 0
+                  ? t("nl2sql.clarification.unspecified", {
+                      parts: overview.unspecifiedSections.map(sectionPartLabel).join("・"),
+                    })
+                  : null}
+              </p>
+              {editable && overview.addableSections.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  icon={Plus}
+                  disabled={busy}
+                  aria-expanded={addOpen}
+                  aria-controls={addGroupId}
+                  onClick={() => setAddOpen((current) => !current)}
+                  data-testid="nl2sql-requirement-add-toggle"
+                >
+                  <span>{t("nl2sql.clarification.addCondition")}</span>
+                  <DisclosureChevron expanded={addOpen} size={16} />
+                </Button>
+              ) : null}
+            </div>
+            {editable && addOpen ? (
+              <div
+                id={addGroupId}
+                role="group"
+                aria-label={t("nl2sql.clarification.addParts")}
+                className="flex min-w-0 flex-wrap gap-2"
+              >
+                {overview.addableSections.map((section) => (
+                  <Button
+                    key={section}
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Plus}
+                    disabled={busy}
+                    aria-label={t("nl2sql.clarification.addPartLabel", { part: sectionPartLabel(section) })}
+                    onClick={() => {
+                      setAddOpen(false);
+                      controller.startAdding(section);
+                    }}
+                  >
+                    {sectionPartLabel(section)}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {draft.warnings_ja.length > 0 ? (
+          <Disclosure summary={t("nl2sql.clarification.warnings")} size="sm">
+            <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-fg-muted">
+              {draft.warnings_ja.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </Disclosure>
+        ) : null}
+      </Disclosure>
     </section>
   );
 }
