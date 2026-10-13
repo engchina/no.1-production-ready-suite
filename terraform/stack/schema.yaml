@@ -238,7 +238,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB username"
-    description: "Value written to PLATFORM_ORACLE_USER in platform/.env (the shared settings file) of every product. Single quotes are not allowed."
+    description: "Value written to PLATFORM_ORACLE_USER in platform/.env (the shared settings file) of every product. Single quotes are not allowed. A dedicated database user (schema) for the suite is recommended; a user other than ADMIN needs the privileges and tablespace quota listed in terraform/README.md (Existing ADB with a user other than ADMIN), otherwise the table initialization fails and the deployment check reports NG."
     default: "ADMIN"
 
   existing_oracle_password:

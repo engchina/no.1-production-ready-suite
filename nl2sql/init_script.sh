@@ -413,6 +413,8 @@ initialize_database_schema() {
   log "WARNING: External workers remain stopped until both schema commands succeed."
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize"
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap"
+  # backend は起動する（画面から直せる）が、suite-init.sh の最後の確認は schema を NG にして非 0 で終わる（#1648）。
+  log "WARNING: The deployment check at the end of suite-init.sh reports 'check: nl2sql schema NG' until the schema is ready."
   return 0
 }
 

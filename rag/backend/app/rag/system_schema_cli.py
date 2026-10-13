@@ -1,4 +1,9 @@
-"""RAG system schema の status / initialize / recreate / delete-orphans CLI。"""
+"""RAG system schema の status / check / initialize / recreate / delete-orphans CLI。
+
+`check` は配備の最後の確認（platform/deploy/suite-health.sh。#1648）が使う。DDL を実行せずに
+状態を読み、ready なら 0、そうでなければ（読めないときも）1 で終わり、1 行の要約を標準出力に
+出す。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,11 @@ import sys
 from collections.abc import Sequence
 
 from pr_backend_core.logging import configure_cli_logging
+from pr_system_settings.system_schema import (
+    deployment_check_error_summary,
+    deployment_check_summary,
+    oracle_error_code,
+)
 
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
@@ -21,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="RAG Oracle system schema を管理します。")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status", help="DDL を実行せず現在状態を表示します。")
+    subparsers.add_parser(
+        "check",
+        help="DDL を実行せず、ready なら 0、そうでなければ 1 で終わります（配備の確認）。",
+    )
     initialize = subparsers.add_parser("initialize", help="不足 object を作成・更新します。")
     # データを消す未適用の migration（status の pending_destructive_migrations）は、
     # これが無ければ適用せずに止める（#619）。先に書き出し・バックアップを確かめてから付ける。
@@ -68,6 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     configure_cli_logging("rag")
     args = build_parser().parse_args(argv)
+    if args.command == "check":
+        return _check()
     try:
         if args.command == "status":
             result = system_schema_manager.status()
@@ -98,8 +114,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         print(json.dumps(error, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
+    except Exception as exc:
+        # 接続・権限の失敗（lease を取る前の制御テーブルの作成など）。SQL や資格情報は出さず、
+        # ORA コードだけを出す（配備の log から原因を辿れるように。#1648）。
+        error = {
+            "error_code": oracle_error_code(exc),
+            "error_message": f"システムテーブル操作に失敗しました（{type(exc).__name__}）。",
+        }
+        print(json.dumps(error, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def _check() -> int:
+    try:
+        ok, summary = deployment_check_summary(system_schema_manager.status())
+    except Exception as exc:
+        print(deployment_check_error_summary(exc))
+        return 1
+    print(summary)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

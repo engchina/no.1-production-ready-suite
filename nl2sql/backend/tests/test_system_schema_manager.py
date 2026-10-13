@@ -1047,3 +1047,48 @@ def test_action_package_migration_preserves_complete_plsql_and_transaction() -> 
     assert "COMMIT;" not in statements[1] and "AUTONOMOUS_TRANSACTION" not in statements[1]
     assert "FOR UPDATE WAIT 5" in statements[1]
     assert "CLIENT_IDENTIFIER" in statements[1]
+
+
+def test_cli_check_requires_system_and_security_tables(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """配備の確認（#1648）: system table が ready で、認証・権限の表がそろうときだけ 0。"""
+    import contextlib
+
+    import app.cli.app_security_migrate as security_migrate
+    import app.clients.oracle_runtime as oracle_runtime
+    from app.cli import nl2sql_system_schema
+
+    missing: list[str] = []
+    state: dict[str, Any] = {"status": "ready", "operation_state": {"status": "idle"}}
+
+    class _Pool:
+        @contextlib.contextmanager
+        def control_connection(self) -> Any:
+            yield object()
+
+    class _Manager:
+        def status(self) -> dict[str, Any]:
+            if isinstance(state.get("error"), Exception):
+                raise state["error"]
+            return state
+
+    monkeypatch.setattr(nl2sql_system_schema, "system_schema_manager", _Manager())
+    monkeypatch.setattr(oracle_runtime, "get_oracle_pool_manager", lambda: _Pool())
+    monkeypatch.setattr(security_migrate, "missing_security_tables", lambda _connection: missing)
+    monkeypatch.setattr("sys.argv", ["nl2sql_system_schema", "--check"])
+
+    assert nl2sql_system_schema.main() == 0
+    assert capsys.readouterr().out.strip() == "status=ready"
+
+    missing.append("NL2SQL_APP_ROLE_PROFILES")
+    assert nl2sql_system_schema.main() == 1
+    output = capsys.readouterr().out
+    assert "認証・権限の表が不足 1 件（NL2SQL_APP_ROLE_PROFILES" in output
+    assert "app_security_migrate --apply" in output
+
+    state["error"] = RuntimeError("ORA-01031: insufficient privileges password=secret")
+    assert nl2sql_system_schema.main() == 1
+    output = capsys.readouterr().out
+    assert "ORA-01031" in output
+    assert "secret" not in output

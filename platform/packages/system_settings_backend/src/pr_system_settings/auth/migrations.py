@@ -3,7 +3,7 @@
 3 製品が同じ Oracle schema で共有する。各製品の migration
 （NL2SQL の `app_security_migrate`、RAG / Agent のシステムテーブル初期化）から冪等に実行する。
 既存 object は ignored error で読み飛ばす。
-旧名からの改名（NL2SQL の `NL2SQL_APP_*`）は、それを持つ製品の migration が先に行う。
+旧名（統合の前の `NL2SQL_APP_*` など）からの改名は行わない（#1648。後方互換を持たない）。
 """
 
 from __future__ import annotations

@@ -358,6 +358,8 @@ initialize_database_schema() {
   log "WARNING: Database initialization is incomplete. Check ADB reachability, backend/.env and platform/.env (PLATFORM_ORACLE_*)."
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize"
   log "Recovery: sudo systemctl restart ${BACKEND_SERVICE}"
+  # backend は起動する（画面から直せる）が、suite-init.sh の最後の確認は schema を NG にして非 0 で終わる（#1648）。
+  log "WARNING: The deployment check at the end of suite-init.sh reports 'check: agent schema NG' until the schema is ready."
   return 0
 }
 

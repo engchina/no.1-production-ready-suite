@@ -61,12 +61,42 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
     3製品を載せる場合は、負荷に合わせて ECPU 数とストレージを上げてください。
   - 既存: ADB の OCID と、全製品の `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` に書く値を入力します。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
     stack は既存 ADB から Wallet を生成するだけで、ネットワーク・アクセス・mTLS・ACL は変更しません。
+    ADMIN 以外のユーザーで接続するときは、下の「[既存の ADB で ADMIN 以外のユーザーを使うとき](#既存の-adb-で-admin-以外のユーザーを使うとき1648)」の権限が要ります。
 - 新規 ADB の場合、全製品が `ADMIN` で接続します。製品のテーブルは `RAG_` / `NL2SQL_` / `AGENT_`、3製品で共有するユーザー・ロール・セッションのテーブルは `PLATFORM_` の接頭辞で分かれているため、同じスキーマでも衝突しません（#212）。
 - ネットワーク・アクセス（既定はプライベート・エンドポイント）の画面構成は Autonomous AI Database の作成画面に合わせています。
   ACL（許可された IP および VCN）を使う場合は、Compute の subnet（または VCN）を許可してください。
   プライベート・エンドポイントの場合は、Compute の subnet から ADB へ TCP `1522` で到達できる必要があります。
 - DB の password / user / DSN に single quote は使えません（共通 `.env` では値を single quote で囲むため）。
 - ADB の DDL は Terraform にも cloud-init にも持ちません。各製品の `init_script.sh` がアプリの CLI（冪等）で作成・更新します。
+  作成・更新に失敗しても backend は起動します（画面の システムテーブル から直せる）が、配備の最後の確認が `check: <製品> schema NG` で失敗します（[配備が正常かの確認](#配備が正常かの確認1642)）。
+
+### 既存の ADB で ADMIN 以外のユーザーを使うとき（#1648）
+
+- **3 製品の専用の DB ユーザー（schema）を作ることを推奨します。** 3 製品は同じ schema に `PLATFORM_` / `RAG_` / `NL2SQL_` / `AGENT_` の表・索引・sequence・package を作ります。
+  業務データや別のアプリケーション（旧版の単独の製品を含む）と同じ schema（とくに `ADMIN`）に入れると、同じ名前の表と衝突し、
+  NL2SQL の業務プロファイル・管理 SQL の対象にも 3 製品以外の object が並びます。
+- 初期化は、旧名の表（統合の前の `RAG_APP_*` / `NL2SQL_APP_*` など）を改名・削除しません（NL2SQL はその名前を log に出して残します）。
+  RAG / Agent の初期化は、台帳（`RAG_SCHEMA_MIGRATIONS` / `AGENT_SCHEMA_MIGRATIONS`）に記録の無い schema に残る廃止した表を、
+  承認（`--allow-destructive`、画面では削除の確認）が無ければ削除せずに止めます。
+- 権限（ADMIN で付与します。`<user>` は `PLATFORM_ORACLE_USER`）。CI の実 Oracle の結合テスト（`.github/scripts/oracle-free-ci.sh`）と同じ構成です。
+
+  ```sql
+  CREATE USER <user> IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA;
+  -- 表・索引・sequence・view・procedure（NL2SQL の package）・SQL ドメインの作成
+  GRANT DB_DEVELOPER_ROLE TO <user>;
+  GRANT CREATE SESSION TO <user>;
+  -- RAG: ベクトル索引の構築の値（NEIGHBORS / EFCONSTRUCTION）を読む
+  GRANT SELECT ON SYS.V_$VECTOR_GRAPH_INDEX TO <user>;
+  ```
+
+  - `DB_DEVELOPER_ROLE` を使わない場合は、`CREATE TABLE`・`CREATE SEQUENCE`・`CREATE VIEW`・`CREATE PROCEDURE` と、RAG の全文検索（Oracle Text の索引・lexer・stoplist）の `CTXAPP`（または `EXECUTE ON CTXSYS.CTX_DDL`）を付与します。
+  - 表領域の quota が無いと `ORA-01950`、権限が無いと `ORA-01031`（Oracle Text は `PLS-00201`）で初期化が失敗し、配備の最後の確認が NG になります。
+  - NL2SQL が SQL を生成・実行する業務データが別の schema にあるときは、その表・view の `SELECT` を付与します。
+  - NL2SQL の機能ごとに使うとき: フィードバックのベクトルの再構築は `EXECUTE ON DBMS_LOCK`、Select AI は `EXECUTE ON DBMS_CLOUD_AI` と `EXECUTE ON DBMS_CLOUD`、
+    合成データの生成は `SELECT ON SYS.DBA_LOAD_OPERATIONS` と `SELECT ON SYS.V_$SESSION`。
+  - NL2SQL の Deep Data Security（`NL2SQL_ORACLE_DEEPSEC_ENABLED=true`）: `CREATE ROLE`・`CREATE END USER`・`ALTER END USER`・`CREATE DATA ROLE`・
+    `GRANT ANY ROLE`・`CREATE CONTEXT`・`CREATE PROCEDURE` と、DeepSec の metadata（`DBA_END_USERS`・`DBA_DATA_ROLES`・`DBA_ROLES`・`DBA_CONTEXT`・
+    `DBA_DATA_GRANTS`・`DBA_TAB_PRIVS`・`DBA_POLICIES`）の参照。詳しくは [nl2sql/docs/security-rbac-deepsec.md](../nl2sql/docs/security-rbac-deepsec.md)「DeepSec V001 の前提」。
 
 ## 製品ごとの入力と instance 上の構成
 
@@ -289,6 +319,9 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 - 有効な `production-ready-*` の service（証明書の更新の oneshot を除く）がすべて `active` で、再起動を繰り返していないか
 - 配備した製品の backend の `/api/health`（`127.0.0.1:<port>`）と、Nginx を通した `/<製品>/api/health`（HTTPS が on なら `https://127.0.0.1:<https_port>`）
 - Nginx が `active` か
+- 各製品の system schema が ready か（#1648。製品の schema の CLI の `check`。DDL は実行しない）。`init_script.sh` は表の作成・更新に
+  失敗しても backend を起動する（画面から直せる）ため、health だけでは OK に見える。NG なら CLI の要約（状態・不足の object・
+  前回の失敗の ORA コード）、製品の初期化の log（`/var/log/<製品>-init.log`）の最後の ORA コード、権限の不足の手がかりを出す
 
 結果は製品ごとに 1 行で出す。1 つでも NG なら、NG の service の journal の末尾を出し、0 以外で終わる。
 
@@ -297,8 +330,15 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 [suite-init] check: nl2sql backend OK / services 5/5 active / nginx OK
 [suite-init] check: agent backend OK / services 1/1 active / nginx OK
 [suite-init] check: nginx.service active（https://127.0.0.1:443）
-[suite-init] check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答しています）。
+[suite-init] check: rag schema OK（status=ready）
+[suite-init] check: nl2sql schema OK（status=ready）
+[suite-init] check: agent schema OK（status=ready）
+[suite-init] check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答し、system schema が ready です）。
 ```
+
+schema の CLI（backend の directory で `sudo -u opc .venv/bin/python <下の引数>`。ready なら 0）:
+RAG `-m app.rag.system_schema_cli check`・NL2SQL `-m app.cli.nl2sql_system_schema --check`（`app_security_migrate` の表も見る）・
+Agent `-m app.cli.agent_system_schema --check`。
 
 - 配備の直後は `sudo tail -n 20 /var/log/suite-init.log` の最後の `check:` の行を見る。
 - 後から確かめるときは `sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh --status`（再起動しない）。

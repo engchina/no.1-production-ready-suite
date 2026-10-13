@@ -23,6 +23,7 @@ from app.rag.system_schema import (
     MIGRATIONS,
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
+    RETIRED_TABLES_APPROVAL,
     SystemSchemaActiveJobsError,
     SystemSchemaBusyError,
     SystemSchemaError,
@@ -641,6 +642,52 @@ def test_fresh_database_reports_no_destructive_migrations() -> None:
     no_op = manager.initialize()
     assert no_op["operation"] == "no_op"
     assert no_op["pending_destructive_migrations"] == []
+
+
+def test_retired_tables_without_ledger_are_not_dropped_without_approval() -> None:
+    """台帳に記録の無い schema の廃止した表は、承認が無ければ消さない（missing でも。#1648）。
+
+    既存の ADB の schema に、旧版の単独の製品・別のアプリケーションの同じ名前の表があるとき。
+    """
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    database.objects[("RAG_PROMPT_VERSIONS", "TABLE")] = datetime.now(UTC)
+    claimed = list(database.claimed_operation_kinds)
+
+    status = manager.status()
+    assert status["status"] == "missing"
+    approvals = status["pending_destructive_migrations"]
+    assert [item["name"] for item in approvals] == [RETIRED_TABLES_APPROVAL]
+    assert "RAG_PROMPT_VERSIONS" in approvals[0]["description"]
+    assert "専用の schema" in approvals[0]["description"]
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert ("RAG_PROMPT_VERSIONS", "TABLE") in database.objects
+    assert database.claimed_operation_kinds == claimed
+    assert not any(statement.upper().startswith("DROP") for statement in database.executed)
+
+    result = manager.initialize(allow_destructive=True)
+    assert result["status"] == "ready"
+    assert ("RAG_PROMPT_VERSIONS", "TABLE") not in database.objects
+    assert result["pending_destructive_migrations"] == []
+
+
+def test_retired_tables_with_ledger_are_dropped_as_rag_owned() -> None:
+    """台帳に記録があれば RAG が初期化した schema で、廃止した表は承認なしに消す（#1648）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.objects[("RAG_PROMPT_VERSIONS", "TABLE")] = datetime.now(UTC)
+
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert status["pending_destructive_migrations"] == []
+
+    result = manager.initialize()
+    assert result["status"] == "ready"
+    assert ("RAG_PROMPT_VERSIONS", "TABLE") not in database.objects
 
 
 def test_recreate_drops_retired_standard_engine_tables() -> None:

@@ -734,46 +734,34 @@ def test_security_migration_splitter_never_executes_comment_only_buffers() -> No
     ]
 
 
-def test_deepsec_entitlement_migration_uses_compressed_table_safe_column_type() -> None:
-    migration_path = (
-        Path(__file__).resolve().parents[1]
-        / "migrations"
-        / "010_deepsec_real_data_entitlements.sql"
-    )
-    sql = migration_path.read_text(encoding="utf-8")
-    scope_filters_migration = (
-        Path(__file__).resolve().parents[1] / "migrations" / "012_deepsec_scope_filters.sql"
-    ).read_text(encoding="utf-8")
+def test_security_ddl_is_the_final_shape_without_legacy_migrations() -> None:
+    """セキュリティの DDL は 004 の 1 つだけで、最終の形の表を作る（#1648）。
 
-    assert "COLUMN_NAMES VARCHAR2(4000)" in sql
-    assert "COLUMN_NAMES CLOB" not in sql
-    assert "TARGET_TYPE VARCHAR2(32)" in sql
-    assert "SCOPE_FILTERS VARCHAR2(4000)" in scope_filters_migration
-    assert "SCOPE_FILTERS CLOB" not in scope_filters_migration
-    assert "'FILTERS'" in scope_filters_migration
+    旧名・旧形からの移行（改名・列の追加・行の削除と追加）の migration は、初めての release の前に
+    削除した。圧縮表でも作れるよう、JSON の列は VARCHAR2 のままにする。
+    """
+    migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+    base_sql = (migration_dir / "004_app_security_rbac.sql").read_text(encoding="utf-8")
 
-    base_migration = (
-        Path(__file__).resolve().parents[1] / "migrations" / "004_app_security_rbac.sql"
-    )
-    base_sql = base_migration.read_text(encoding="utf-8")
     assert "TARGET_TYPE VARCHAR2(32)" in base_sql
+    assert "COLUMN_NAMES VARCHAR2(4000)" in base_sql
     assert "SCOPE_FILTERS VARCHAR2(4000)" in base_sql
-    assert "'FILTERS'" in base_sql
-
-
-def test_role_profile_access_migration_backfills_active_profile_read_roles() -> None:
-    migration_path = (
-        Path(__file__).resolve().parents[1] / "migrations" / "016_app_role_profiles.sql"
-    )
-    sql = migration_path.read_text(encoding="utf-8")
-
-    assert "CREATE TABLE NL2SQL_APP_ROLE_PROFILES" in sql
-    assert "PRIMARY KEY (ROLE_ID, PROFILE_ID)" in sql
-    assert "NL2SQL_APP_ROLE_PERMISSIONS" in sql
-    assert "nl2sql.profiles.read" in sql
-    assert "r.ARCHIVED = 0" in sql
-    assert "p.ARCHIVED = 0" in sql
-    assert "r.ROLE_CODE <> 'SYSTEM_ADMIN'" in sql
+    assert "SCOPE_EXPRESSION CLOB" in base_sql
+    assert "'EXPRESSION'" in base_sql
+    assert "CREATE TABLE NL2SQL_APP_ROLE_PROFILES" in base_sql
+    assert "PRIMARY KEY (ROLE_ID, PROFILE_ID)" in base_sql
+    assert base_sql.count("ON DELETE CASCADE") == 2
+    statements = split_ddl(base_sql)
+    assert all(statement.startswith("CREATE TABLE") for statement in statements)
+    for removed in (
+        "005_security_namespace_nl2sql.sql",
+        "009_remove_security_audit_log.sql",
+        "016_app_role_profiles.sql",
+        "023_security_permissions_menu.sql",
+        "024_platform_auth_tables.sql",
+        "025_role_access_cascade.sql",
+    ):
+        assert not (migration_dir / removed).exists()
 
 
 def test_dashboard_permission_is_retired_for_appearance_settings() -> None:
@@ -3227,7 +3215,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
         reset_security_service()
 
 
-def test_security_migration_preview_includes_audit_cleanup(
+def test_security_migration_preview_lists_platform_and_nl2sql_ddl(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -3236,16 +3224,11 @@ def test_security_migration_preview_includes_audit_cleanup(
     assert security_migrate_main() == 0
 
     output = capsys.readouterr().out
-    assert "migration=004" in output
-    assert "migration=005" in output
-    assert "migration=009" in output
-    assert "migration=012" in output
-    assert "migration=016" in output
-    assert "migration=020" in output
-    assert "migration=023" in output
-    assert "migration=024" in output
     assert "migration=platform-auth" in output
-    assert "migration=025" in output
+    assert "migration=004 statements=4" in output
+    assert "mode=preview" in output
+    for removed in ("migration=005", "migration=009", "migration=024", "migration=025"):
+        assert removed not in output
 
 
 class _MigrationCursor:
@@ -3258,12 +3241,14 @@ class _MigrationCursor:
     def __exit__(self, *_: object) -> None:
         return None
 
-    def execute(self, statement: str, *_: object) -> None:
+    def execute(self, statement: str, binds: dict[str, str] | None = None) -> None:
         self.statement = statement
+        self.binds = binds or {}
 
     def fetchall(self) -> list[tuple[str]]:
-        if "USER_OBJECTS" in self.statement:
-            return [(name,) for name in sorted(self.tables)]
+        if "USER_TABLES" in self.statement:
+            names = set(self.binds.values())
+            return [(name,) for name in sorted(self.tables & names)]
         return []
 
 
@@ -3297,59 +3282,64 @@ def _patch_security_migration(monkeypatch: pytest.MonkeyPatch, tables: set[str])
     return batches
 
 
-def test_security_migration_moves_auth_tables_to_platform_before_nl2sql_tables(
+def test_security_migration_creates_platform_tables_before_nl2sql_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """改名（024）→ PLATFORM_* の作成 → NL2SQL 固有の DDL（004）→ … → CASCADE 化（025）（#212）。"""
+    """PLATFORM_* の作成 → NL2SQL 固有の DDL（004）の順で、作成だけを行う（#212・#1648）。"""
     import app.cli.app_security_migrate as migrate
 
-    batches = _patch_security_migration(monkeypatch, {"NL2SQL_APP_USERS", "NL2SQL_APP_ROLES"})
-    migrate.apply_security_migrations()
+    batches = _patch_security_migration(monkeypatch, set())
+    result = migrate.apply_security_migrations()
 
-    def position(marker: str) -> int:
-        return next(
-            index
-            for index, batch in enumerate(batches)
-            if any(marker in statement for statement in batch)
-        )
-
-    rename = position("ALTER TABLE NL2SQL_APP_USERS RENAME TO PLATFORM_USERS")
-    platform_ddl = position("CREATE TABLE PLATFORM_USERS (")
-    nl2sql_ddl = position("CREATE TABLE NL2SQL_APP_ROLE_PERMISSIONS (")
-    cascade = position("REFERENCES PLATFORM_ROLES (ROLE_ID) ON DELETE CASCADE")
-    assert rename < platform_ddl < nl2sql_ddl < cascade == len(batches) - 1
-    # NL2SQL 固有のテーブルだけが残り、共通テーブルの作成は platform の DDL に一本化した。
-    nl2sql_statements = "\n".join(batches[nl2sql_ddl])
+    assert len(batches) == 2
+    assert any("CREATE TABLE PLATFORM_ROLES" in statement for statement in batches[0])
+    nl2sql_statements = "\n".join(batches[1])
+    assert "CREATE TABLE NL2SQL_APP_ROLE_PERMISSIONS (" in nl2sql_statements
     assert "CREATE TABLE NL2SQL_APP_USERS" not in nl2sql_statements
-    assert "CREATE TABLE NL2SQL_AUTH_SESSIONS" not in nl2sql_statements
     assert "REFERENCES PLATFORM_ROLES" in nl2sql_statements
+    assert result["legacy_tables"] == []
 
 
-def test_security_migration_stops_when_old_and_platform_tables_both_exist(
+def test_security_migration_never_renames_or_drops_legacy_tables(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """既存の ADB の同じ schema に旧名の表があっても、承認なしに改名・削除・変更しない（#1648）。
+
+    以前は毎回の配備で RAG_APP_* → NL2SQL_APP_* → PLATFORM_* の RENAME、旧監査ログの表の DROP、
+    権限の行の DELETE を実行していた。今は名前を出して残す。
+    """
+    legacy = {
+        "RAG_APP_USERS",
+        "RAG_APP_ROLE_PERMISSIONS",
+        "RAG_AUTH_AUDIT_LOG",
+        "NL2SQL_APP_USERS",
+        "NL2SQL_AUTH_AUDIT_LOG",
+        "PLATFORM_USERS",
+    }
+    batches = _patch_security_migration(monkeypatch, legacy)
+    monkeypatch.setattr("sys.argv", ["app_security_migrate", "--apply", "--skip-bootstrap"])
+
+    assert security_migrate_main() == 0
+
+    executed = [statement.upper() for batch in batches for statement in batch]
+    destructive = re.compile(r"^\s*(RENAME|DROP|DELETE|TRUNCATE|UPDATE|INSERT|MERGE|ALTER)\b")
+    assert not [statement for statement in executed if destructive.match(statement)]
+    for name in legacy - {"PLATFORM_USERS"}:
+        assert not any(name in statement for statement in executed)
+    captured = capsys.readouterr()
+    assert "legacy_tables=5" in captured.out
+    for name in ("RAG_APP_USERS", "RAG_AUTH_AUDIT_LOG", "NL2SQL_APP_USERS"):
+        assert name in captured.err
+    assert "改名・削除・変更せずに残します" in captured.err
+
+
+def test_missing_security_tables_lists_tables_the_apply_creates() -> None:
     import app.cli.app_security_migrate as migrate
 
-    batches = _patch_security_migration(monkeypatch, {"NL2SQL_APP_USERS", "PLATFORM_USERS"})
-    with pytest.raises(RuntimeError, match="NL2SQL_APP_USERS/PLATFORM_USERS"):
-        migrate.apply_security_migrations()
-    assert batches == []
-
-
-def test_security_migration_user_uuid_rename_ignores_missing_constraint() -> None:
-    """014 can be re-run after constraint renames have already been applied."""
-
-    source = (
-        Path(__file__).resolve().parents[1] / "app" / "cli" / "app_security_migrate.py"
-    ).read_text(encoding="utf-8")
-    block = re.search(
-        r"user_uuid_rename_results = oracle_statement_executor\.execute\((?P<body>.*?)\n\s*\)",
-        source,
-        flags=re.S,
-    )
-
-    assert block is not None
-    assert "ORA-23292" in block.group("body")
+    connection = _MigrationConnection(set(migrate.SECURITY_TABLES) - {"NL2SQL_APP_ROLE_PROFILES"})
+    assert migrate.missing_security_tables(connection) == ["NL2SQL_APP_ROLE_PROFILES"]
+    assert migrate.missing_security_tables(_MigrationConnection(set(migrate.SECURITY_TABLES))) == []
 
 
 def test_auth_api_sets_http_only_session_and_requires_csrf(
