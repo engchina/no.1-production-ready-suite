@@ -77,6 +77,7 @@ class _Transport:
             response = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
             if isinstance(response, Exception):
                 raise response
+            assert isinstance(response, httpx.Response)
             return response
 
         def client(**kwargs: Any) -> httpx.Client:

@@ -145,11 +145,11 @@ def test_provider_message_reads_openai_error_body() -> None:
 def test_provider_message_hides_secrets_and_truncates() -> None:
     from pr_system_settings.enterprise_ai_errors import enterprise_ai_provider_message
 
-    secret = "sk-abcdefghijklmnop1234"
-    message = enterprise_ai_provider_message(
-        f'{{"error": {{"message": "bad key {secret} Authorization: Bearer abc.def api_key=xyz"}}}}'
-    )
-    assert secret not in message
+    # 検出の対象にならないよう、実在しない key の形を組み立てる。
+    fake_key = "sk-" + "fake0" * 4
+    body = f"bad key {fake_key} Authorization: Bearer abc.def api_key=xyz"
+    message = enterprise_ai_provider_message(f'{{"error": {{"message": "{body}"}}}}')
+    assert fake_key not in message
     assert "abc.def" not in message
     assert "xyz" not in message
     long = enterprise_ai_provider_message("x" * 1000)
