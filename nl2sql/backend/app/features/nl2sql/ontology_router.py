@@ -4197,10 +4197,10 @@ class OntologyApiRuntime:
     ) -> SqlRequirementSpec:
         """SQL の生成の job に渡す、反映済みの AI要件確認の構造化した要件（#1439）。
 
-        本人の session・同じ業務プロファイル・反映済み・反映した質問の文と同じ質問だけを受け付ける
-        （画面で質問の文を書き換えたら、要件は渡さない）。チャットのジョブ（#1442）は、チャットで
-        確かめた session・同じ会話の続き（前のターン）・利用者が送った質問の文と同じものだけを
-        受け付ける（チャットの吹き出しには利用者の質問を残し、生成は確かめた質問の文で行う）。
+        本人の session・同じ業務プロファイル・反映済み・確かめた時の利用者の質問の文と同じ質問だけを
+        受け付ける（画面で質問の文を書き換えたら、要件は渡さない）。チャットのジョブ（#1442）は、
+        チャットで確かめた session・同じ会話の続き（前のターン）だけを受け付ける。両方の画面とも
+        利用者の質問の文は書き換えず、生成だけを確かめた質問の文で行う（#1727）。
         """
 
         with self._lock:
@@ -4232,23 +4232,23 @@ class OntologyApiRuntime:
                 "チャットで確かめた要件はチャットに、SQL 生成の画面で確かめた要件は"
                 " SQL 生成の画面にだけ使えます。",
             )
-        if chat:
-            if (session.chat_previous_job_id or None) != (previous_job_id or None):
-                raise OntologyStateConflictError(
-                    "REQUIREMENT_CONVERSATION_CHANGED",
-                    "会話が AI要件確認の後に変わりました。もう一度質問を送ってください。",
-                )
-            if question.strip() != session.original_question.strip():
-                raise OntologyStateConflictError(
-                    "REQUIREMENT_QUESTION_CHANGED",
-                    "質問の文が AI要件確認で確かめた質問と違います。もう一度質問を送ってください。",
-                )
-            return generation_spec(session)
-        if question.strip() != session.requirement.clarified_question_ja.strip():
+        if chat and (session.chat_previous_job_id or None) != (previous_job_id or None):
+            raise OntologyStateConflictError(
+                "REQUIREMENT_CONVERSATION_CHANGED",
+                "会話が AI要件確認の後に変わりました。もう一度質問を送ってください。",
+            )
+        # 両方の画面とも、利用者が入力した質問の文（入力欄の値）を送る。確かめた質問の文は
+        # 生成にだけ使い（`JobCreateRequest.generation_question`）、利用者の入力を書き換えない
+        # （#1727）。
+        if question.strip() != session.original_question.strip():
             raise OntologyStateConflictError(
                 "REQUIREMENT_QUESTION_CHANGED",
-                "質問の文が AI要件確認で反映した文と違います。要件を外して生成するか、"
-                "確認をやり直してください。",
+                "質問の文が AI要件確認で確かめた質問と違います。"
+                + (
+                    "もう一度質問を送ってください。"
+                    if chat
+                    else "要件を外して生成するか、確認をやり直してください。"
+                ),
             )
         return generation_spec(session)
 

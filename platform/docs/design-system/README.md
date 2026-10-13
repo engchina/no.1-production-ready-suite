@@ -783,23 +783,24 @@ import { SearchField } from "@production-ready/ui";
 | 要約の文の右に、画面固有の補足を `meta` で置ける（NL2SQL の「取得上限 100 件」・実行した接続の `StatusBadge`。#1178）。行数・列数・打ち切りは部品の要約が出すので `meta` で重ねない | 画面で指定した条件は結果と並べて見せる。同じ数を 2 か所に出さない |
 | 表の形の JSON（ツールの結果・成果物）と回答の本文の Markdown の表は、`toTabularData` / `splitMarkdownTables` で列と行にしてから渡す（#1158）。表とみなすのは `{ columns, rows }`・`{ rows }`・オブジェクトの配列で、セルは文字列・数値・真偽値・null だけ。表でない値（入れ子の値・列の分からない 0 行など）は `null` で、製品は今の表示（JSON・本文）のまま出す。Markdown の表の値がすべて数の列は `type: "number"`（右寄せ） | 判定を製品ごとに書くと、同じ JSON が製品で表になったりならなかったりする。入れ子の値を 1 つのセルの JSON にすると読めないので、表にしない |
 
-### `Toaster`（変更）— ★ 置き場所は上端の見出しの面（#411）
+### `Toaster`（変更）— ★ 置き場所は画面幅ごとに決まった 1 か所（#1728。#411 を置き換え）
 
-通知（Toast）は**主操作を覆わない位置**に出します。置き場所は `Toaster` が決め、製品では変えません（`placement` プロップは削除）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。考え方は「画面の上端の見出しの面（`PageHeader` / 上端のバー）に重ね、その面の操作は覆わない」です。
+通知（Toast）は**画面幅ごとに決まった 1 か所**に出し、ページの内容（`PageHeader` の操作の有無・幅、スクロール）では動かしません。置き場所は `Toaster` が決め、製品・画面では変えません（`placement` プロップは無い）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。
 
 | 幅 | 置き場所（`data-toast-placement`） |
 |---|---|
-| md 以上 | `page-header`: `PageHeader`（`<header data-page-header>`）に重ね、ページの操作（`[data-page-header-actions]`）のすぐ左に右端をそろえる（間 1rem）。上端は `PageHeader` の上端 + 1rem。幅は内容に合わせて `--toast-width-min`（22rem）〜`--toast-width-max`（32rem）の間で広がる（置ける幅がそれより狭ければ置ける幅まで。#899）。ページの操作が無い、または操作がタイトルの下へ折り返して左にある（lg 未満）ときは、画面の右端から 1rem |
-| md 以上（狭い） | `below-page-header`: ページの操作の左右のどちらにも 14rem が取れないときは、`PageHeader` の下端 + 1rem の右 |
-| md 以上（見出しなし） | `top-right`: `PageHeader` がスクロールで見えない（lg 未満）・無い画面は、画面の右上（上端・右端から 1rem） |
-| md 未満 | `top-bar`: 上端の全幅（右 1rem）。上端のバーに重ねて上端から 0.5rem。左はメニューのボタン（左の余白 0.5rem + 44px）の後ろ `calc(1rem + var(--control-height-touch))` から（上端のバーが無い画面は 1rem） |
+| md 以上 | `bottom-right`: 画面の右下。右端から 1rem（`max(1rem, env(safe-area-inset-right))`）、下端から `--toast-offset-bottom`（**8rem** = 112px。`max(var(--toast-offset-bottom), env(safe-area-inset-bottom))`）。新しい通知は下に足し、古い通知が上へ押し上げられる。下から現れる（`--toast-enter-y: 0.5rem`）。幅は内容に合わせて `--toast-width-min`（22rem）〜`--toast-width-max`（32rem）（#899） |
+| md 未満 | `top-bar`: 上端の全幅。上端のバーに重ねて上端から 0.5rem（`max(0.5rem, env(safe-area-inset-top))`）、右端から 1rem、左はメニューのボタン（左の余白 0.5rem + 44px）の後ろ `calc(1rem + var(--control-height-touch))`。新しい通知は下に足す。上から現れる（`--toast-enter-y: -0.5rem`） |
 
-- **下端・右上（`PageHeader` の下）に置かない。** 操作は `PageHeader` の右端、内容の面の右上（`ObjectActionBar` / `ContentActionBar`。`PageHeader` のすぐ下に来やすい）、内容の末尾（`FormActionBar`。ページの末尾の操作は必ず画面の下端に来る）に集まる。右下の通知は末尾の操作を覆い、ポインタが乗ると一時停止（#351）で消えなくなり、閉じるまで押せなかった（#391 / #411）。`PageHeader` の下の右上は、内容の面の右上の操作を覆う（Agent の連携機能の詳細の「その他の操作」で確認）。`PageHeader` のタイトルの面と上端のバーの製品名には操作が無い
+- **位置を内容で動かさない。** 以前（#411）は `PageHeader` のページの操作の位置を測って通知の右端をその左にそろえたため、操作のある画面（NL2SQL の SQL 生成の「表示を更新」「DB 構造を再取得」など）では見出しの中ほど、無い画面では右端に出て、利用者がどこを見ればよいかが一定しなかった。Sonner（shadcn/ui の既定）・Fluent 2 の Toast（既定は bottom-end）と同じく、desktop は右下の 1 か所に固定する
+- **下端から 8rem（共通の定数）にする理由**: desktop で画面の下端に固定される主操作は、3 製品のチャットの入力欄と送信の行（画面の下端から約 6.7rem = 94px まで）と、スクロールしきったページの末尾の操作（`FormActionBar`・`ContentActionBar` の「SQL 生成」「保存」など。下端から約 7rem まで）。8rem はそのすぐ上で、ポインタが通知に乗って自動の消去が止まって（一時停止。#351）も主操作を押せる。Material の Snackbar が下端の操作（bottom app bar・FAB）の上に出すのと同じ考え方を、画面ごとの計算ではなく 1 つの定数で行う。値を変えるときは 3 製品の全画面の e2e（下記）で確かめる。製品・画面ごとに変えない
+- **375px は上端（下端にしない理由）**: 375px では画面の下端が親指の届く範囲で、全幅のページの末尾の操作（縦に積んだ「保存」「変更を破棄」）・チャットの入力欄と送信・ソフトウェアキーボードが来る。下端の通知はこれらを覆い、避けるには下端の余白を大きく空けるか通知を画面の中ほどに浮かせることになる。上端のバーにはメニューのボタンのほかに操作が無く、#411 からの位置（固定）を変えない。スマートフォンの OS の通知も上端から出る
 - 一時停止（ホバー・フォーカス中はすべての通知の自動消滅を止める）と表示時間は変えない
-- **幅は内容に合わせる（#899）**: md 以上は `min-width: min(var(--toast-width-min), 置ける幅)`・`max-width: min(var(--toast-width-max), 置ける幅)` の shrink-to-fit。上限（32rem = 448px、本文の 1 行が約 25 字）までは折り返さない。積んだ通知は最も広い通知の幅にそろう。md 未満は画面の幅（左右の間隔の内側）。以前の固定の 22rem では、短い 1 文（「Oracle Profile の反映が完了しました。」）でも「…完了しま / した。」と語の途中で 2 行になった。上限は Material の Snackbar（344〜672px）・Atlassian の Flag（400px）の間で、PageHeader のタイトルを覆いすぎない幅。Carbon の Toast（288px 固定）より広いのは、日本語の 1 文が英語より横に長いため
-- 位置は通知が出ている間だけ、スクロール（祖先のどれでも）・リサイズ・`PageHeader` の大きさの変化に追従する（`requestAnimationFrame` でまとめる）。計算は `lib/toast-placement.ts` の `resolveToastPlacement`
-- 新しい通知は下に足す（DOM の順 = 読み上げ・Tab の順 = 見た目の順）。登場は上から降りる（`toast-in`: `translateY(-0.5rem)` → 0、200ms、reduced-motion では動かさない）
-- それでも覆いうるもの: 2 件以上積んだときの下の通知（本文の先頭。desktop は右寄り、375px は `PageHeader`）、lg 未満で `PageHeader` の「その他の操作」のメニューが左へ広がったときのメニューの上端、desktop のページのタイトル（一時的）
+- **幅は内容に合わせる（#899）**: md 以上は `min-width: min(var(--toast-width-min), calc(100vw - 2rem))`・`max-width: min(var(--toast-width-max), calc(100vw - 2rem))` の shrink-to-fit。上限（32rem = 448px、本文の 1 行が約 25 字）までは折り返さない。積んだ通知は最も広い通知の幅にそろう。md 未満は画面の幅（左右の間隔の内側）。以前の固定の 22rem では、短い 1 文（「Oracle Profile の反映が完了しました。」）でも「…完了しま / した。」と語の途中で 2 行になった。上限は Material の Snackbar（344〜672px）・Atlassian の Flag（400px）の間。Carbon の Toast（288px 固定）より広いのは、日本語の 1 文が英語より横に長いため
+- 計算は `lib/toast-placement.ts` の `resolveToastPlacement({ narrow })`（画面幅だけを読む。`PageHeader` の位置・スクロールは読まない）。`PageHeader` の `data-page-header` / `data-page-header-actions` は e2e の目印として残す
+- 新しい通知は下に足す（DOM の順 = 読み上げ・Tab の順 = 見た目の上下の順）
+- それでも覆いうるもの: desktop で通知の位置（右下、下端から 8〜14rem ほど）にスクロールで来た本文の中ほどの欄・ボタン（スクロールすれば離れる）。375px で 2 件以上積んだときの下の通知（スクロールしていない `PageHeader` の操作に届く）。連続した操作で通知を積み上げない（messaging.md §4.2）
+- 確かめる e2e: 3 製品の `a11y.nightly.spec.ts` の「〈画面〉の主操作は通知の置き場所と重ならない」（サイドナビの全項目、desktop と 375px。`PageHeader` の操作・`FormActionBar`・`ObjectActionBar`・チャットの入力欄と送信・ページの末尾の操作）と、代表の画面の `expectToastPlacement`（NL2SQL `toast-placement.spec.ts` ほか、RAG `oci-settings-layout.spec.ts`、Agent `agent-settings.spec.ts`）。helper は 3 製品に同じ内容で置く（RAG `e2e/_toast-placement.ts`・Agent `e2e/fixtures/toast-placement.ts`・NL2SQL `tests/e2e/_helpers/toast.ts`）
 
 ### メッセージの本文の折り返し（新設）— ★ 日本語を文節で折り返し、語の途中で切らない（#899）
 
@@ -1020,7 +1021,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**80点あります。**
+QA に事前共有してください。**92点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1115,6 +1116,7 @@ QA に事前共有してください。**80点あります。**
 | 89 | **灰色の地（`bg-surface-hover`）のチップ・事実の欄の副次テキストが少し濃くなる**（#1671。`data-surface-tint="neutral"`） | 灰色の地 #f2f4f7 の上の `text-fg-muted` は #6b7280（4.39:1。axe の color-contrast の違反。RAG の品質評価・設定の画面の事実の欄・方針のチップ、NL2SQL の SQL 生成評価の指標など） → 地を常に塗る要素に `data-surface-tint="neutral"` を付け、#5d6878（5.13:1）にする。`hover:` だけで塗る行は対象外。ダークは変わらない | WCAG 2.1 AA（1.4.3）。淡い色の面と同じ仕組みで直し、lint（`bg-surface-hover` も対象）で付け忘れを止める |
 | 90 | **NL2SQL の「Select AI Credential が無いので操作できない」案内が、共有の `PreconditionBanner` になる**（#1688） | #1683 の業務プロファイルの保存の案内は製品で `Banner` を組み、導線「Select AI Credential を開く」（`KeyRound`、方向のアイコン無し）と「Credential を再確認」、本文は「運用設定 > Select AI Credential 管理で作成するまで、保存できません」 | 共有の `PreconditionBanner`（warning・導線 → 再試行）。導線はナビと同じ `FileKey` に `ArrowRight`、ボタンは「再試行」、本文は DB ゲートと同じ形（「運用設定の「Select AI Credential」で作成してから、再試行してください。」/ 開けない利用者は「システム管理者に連絡して、…を依頼してください。」）。SQL 生成・チャット・合成データ・SQL 生成評価も同じ部品 | 設定が足りないので操作できない案内を、DB ゲート（messaging §3.4.1）と同じ部品・文の形・導線の順にそろえる（messaging §3.4.2） |
 | 91 | **サイドナビのアカウント欄の 1 行目がログイン ID になり、それ以外の画面のユーザーが表示名で出る**（#1696。`useSidebarAccount` / `userDisplayName`） | アカウント欄の 1 行目は表示名（構成のシステム管理者は表示名が `system_admin`。#1644）。ユーザー管理の一覧の行と詳細の見出しはログイン ID（mono）が主・表示名が補足、削除の確認は「「ID」（表示名: 名前）を…」。NL2SQL の実行履歴の実行者は「ログイン ID（表示名）」と詳細に「ユーザー UUID: …」、利用者が見つからないと「ユーザー情報なし（UUID）」。Agent の承認の判断者・版の公開者はログイン ID、API キーの利用者は見つからないと UUID → アカウント欄の 1 行目はログイン ID（local の DEBUG は「ローカル利用者」、2 行目はロール名のまま）。それ以外の画面は表示名（構成のシステム管理者は「システム管理者」。空ならログイン ID）の 1 行（mono にしない）で、一覧は表示名の順に並ぶ。引けない利用者は「（削除済みのユーザー）」、自動の処理の判断は「システム（自動）」。ログイン ID はユーザー管理の「ログインユーザーID」の項目にだけ出す | 自分のアカウントはログインに使う ID で確かめ、ほかの画面の利用者は人に分かる名前で示す。内部の ID を出さない（UX 契約 cross-cutting.md「ユーザーの表示」） |
+| 92 | **通知（Toast）が、desktop はどの画面でも画面の右下（下端から 8rem）に出る**（#1728） | md 以上は `PageHeader` に重ねてページの操作のすぐ左（操作のある画面では見出しの中ほど、無い画面では右端。操作の左右が狭ければ `PageHeader` の下、見出しがスクロールで見えなければ右上）に出て、上から降りてきた → 画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）に固定。新しい通知は下に足し、古い通知が上へ押し上げられる。下から現れる。375px は従来どおり上端のバー（左はメニューのボタンの後ろから。上端のバーの有無で変えない） | 通知の位置が画面（ページの操作の有無）によって変わり、どこを見ればよいかが一定しなかった。下端から 8rem は、チャットの入力欄と送信・ページの末尾の操作の上（§4「`Toaster`」、UX 契約 messaging.md §3.1） |
 
 ### API の非互換
 
@@ -1152,6 +1154,7 @@ QA に事前共有してください。**80点あります。**
 | `Sidebar` / `NavSection` / `createUiStore`（#1563） | `NavSection` に `defaultCollapsed?: boolean`（保存値が無いときに閉じる。既定 false）。`Sidebar` の `onToggleSection` を廃止し、見出しの開閉は今の開閉の逆を `onSetSectionCollapsed` で保存する。ui-store の `toggleSection` を廃止（既定を知らないトグルは、既定で閉じたセクションを 1 回目に開けない） |
 | `DisclosureChevron`（#397） | 折りたたみの向きが `rotate-90`（左向き）→ `-rotate-90`（右向き）。`getComputedStyle(icon).rotate` を検証している E2E は `"90deg"` → `"-90deg"`。`expanded="group"` は残すが、入れ子の `<details>` では外側の open に引きずられるため新規コードは `Disclosure` か boolean を使う |
 | `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |
+| `Toaster`（#1728） | 通知の領域の `data-toast-placement` が `bottom-right`（md 以上）/ `top-bar`（md 未満）の 2 つになる（`page-header` / `below-page-header` / `top-right` は廃止）。`lib/toast-placement.ts` の `ToastPlacementInput` は `{ narrow }` だけ（`readToastPlacementInput`・`PAGE_HEADER_SELECTOR`・`PAGE_HEADER_ACTIONS_SELECTOR`・`NAV_DRAWER_SHELL_SELECTOR` は削除。パッケージの公開 API ではない）。新しいトークン `--toast-offset-bottom`（8rem）。`toast-in` の向きは領域の `--toast-enter-y`。E2E で通知を上端にある前提で探している spec は、`expectToastPlacement`（3 製品の e2e の helper）で確かめる |
 | `FixedSplitPane`（#1572） | `preferredWidePane` プロップと `FixedSplitWidePane` 型・`fixedSplitStateForPreferredWidePane` を**削除。** 保存が無いときの初期位置は常に 50%（`fixedSplitStateForRatio("equal")`） |
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |

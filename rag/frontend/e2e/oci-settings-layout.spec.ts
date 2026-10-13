@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "./fixtures/test";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, LOCAL_AUTH_ME } from "./_helpers";
+import { expectToastPlacement, overlaps } from "./_toast-placement";
 
 type OciStageStatus = "success" | "failed" | "skipped";
 const OCI_STAGE_KEYS = ["config_format", "key_file", "region", "authentication"] as const;
@@ -579,8 +580,9 @@ test("秘密鍵ファイルは固定 path へ上書きアップロードでき�
   expect(uploadContentType).toContain("multipart/form-data");
 });
 
-// #411: 通知は主操作を覆わない。以前は画面の右下に出ていたため、ページの末尾（スクロールしきると画面の下端）の
-// 保存ボタンを覆い、ポインタが通知に乗ると自動の消去が止まって（#351）押せなくなっていた。
+// #1728: 通知は画面幅ごとに決まった 1 か所（desktop は画面の右下で下端から 8rem、375px は上端のバー）に出し、
+// 主操作を覆わない。ページの末尾（スクロールしきると画面の下端）の保存ボタンは通知より下に来るので、
+// ポインタが通知に乗って自動の消去が止まって（#351）も押せる。
 async function expectHitsItself(target: Locator) {
   const hit = await target.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -614,8 +616,9 @@ for (const viewport of [
     await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
     const notice = page.getByRole("region", { name: "通知" }).getByRole("status").first();
     await expect(notice).toBeVisible();
+    await expectToastPlacement(page);
 
-    // ページの末尾までスクロールすると、最後の保存ボタンは画面の下端に来る（以前の通知の位置）。
+    // ページの末尾までスクロールすると、最後の保存ボタンは画面の下端に来る。
     await page.locator("main").evaluate((main) => {
       main.scrollTop = main.scrollHeight;
     });
@@ -628,6 +631,9 @@ for (const viewport of [
     await notice.hover();
     await expect(notice).toBeVisible();
     await expectHitsItself(save);
+    expect(overlaps((await notice.boundingBox())!, box)).toBe(false);
+    // スクロールしても通知の位置は変わらない。
+    await expectToastPlacement(page);
     await save.click({ timeout: 5_000 });
     await expect.poll(() => objectStorageSaves).toBe(1);
     await expectNoPageOverflow(page);

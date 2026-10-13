@@ -4,98 +4,51 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../src/components/app-shell/AppShell";
-import { PageHeader } from "../src/components/app-shell/PageHeader";
+import { PageHeader, type PageHeaderAction } from "../src/components/app-shell/PageHeader";
 import { Toaster } from "../src/components/ui/toast";
-import { resolveToastPlacement, type ToastPlacementInput } from "../src/lib/toast-placement";
+import { resolveToastPlacement } from "../src/lib/toast-placement";
 import { toast, useToastStore } from "../src/store/toast-store";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// #411: 通知は主操作（PageHeader のページの操作・内容の面の右上の操作・ページの末尾の操作）を覆わない位置に出す。
-const desktop: ToastPlacementInput = {
-  narrow: false,
-  topBar: false,
-  viewportWidth: 1280,
-  remPx: 14,
-  header: { top: 0, bottom: 107, left: 252 },
-  headerActions: { left: 953, right: 1252 },
-};
-
+// #1728: 通知は画面幅ごとに決まった 1 か所に出し、ページの内容（PageHeader の操作の有無・幅・スクロール）で動かさない。
+// 以前（#411）は PageHeader の操作の位置を測ってその左に置いたため、操作のある画面では見出しの中ほど、無い画面では右端に出た。
 describe("resolveToastPlacement", () => {
-  it("md 以上: PageHeader に重ね、ページの操作のすぐ左に右端をそろえる（下端には置かない）", () => {
-    const { mode, style } = resolveToastPlacement(desktop);
-    expect(mode).toBe("page-header");
-    expect(style.top).toBe("calc(0px + 1rem)");
-    expect(style.right).toBe("calc(327px + 1rem)");
-    expect(style.minWidth).toBe("min(var(--toast-width-min), 673px)");
-    expect(style.maxWidth).toBe("min(var(--toast-width-max), 673px)");
+  it("md 以上: 画面の右下（右端から 1rem、下端から --toast-offset-bottom）。上端には置かない", () => {
+    const { mode, style } = resolveToastPlacement({ narrow: false });
+    expect(mode).toBe("bottom-right");
+    expect(style.bottom).toBe("max(var(--toast-offset-bottom), env(safe-area-inset-bottom))");
+    expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
+    expect(style.top).toBeUndefined();
     expect(style.left).toBeUndefined();
-    expect(style).not.toHaveProperty("bottom");
-  });
-
-  it("md 以上: ページの操作が無い PageHeader では画面の右端から 1rem", () => {
-    const { mode, style } = resolveToastPlacement({ ...desktop, headerActions: null });
-    expect(mode).toBe("page-header");
-    expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(style.minWidth).toBe("min(var(--toast-width-min), 1000px)");
-    expect(style.maxWidth).toBe("min(var(--toast-width-max), 1000px)");
-  });
-
-  it("md 以上: ページの操作がタイトルの下へ折り返して左にあるときは、PageHeader の右端に重ねる", () => {
-    const { mode, style } = resolveToastPlacement({ ...desktop, headerActions: { left: 280, right: 513 } });
-    expect(mode).toBe("page-header");
-    expect(style.top).toBe("calc(0px + 1rem)");
-    expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(style.minWidth).toBe("min(var(--toast-width-min), 739px)");
-    expect(style.maxWidth).toBe("min(var(--toast-width-max), 739px)");
-  });
-
-  it("md 以上: ページの操作の左右のどちらにも 14rem が取れなければ、PageHeader の下端の 1rem 下の右に出す", () => {
-    // 14rem = 196px。左: 操作の左端 − PageHeader の左端 − 2rem が 195px。右: 画面の右端 − 1rem − 操作の右端 − 1rem が 100px。
-    const { mode, style } = resolveToastPlacement({ ...desktop, headerActions: { left: 252 + 28 + 195, right: 1152 } });
-    expect(mode).toBe("below-page-header");
-    expect(style.top).toBe("calc(107px + 1rem)");
-    expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(style.maxWidth).toBe("min(var(--toast-width-max), calc(100vw - 2 * 1rem))");
+    expect(style.maxHeight).toBe("calc(100dvh - max(var(--toast-offset-bottom), env(safe-area-inset-bottom)) - 1rem)");
+    // 下から現れる。
+    expect(style["--toast-enter-y"]).toBe("0.5rem");
   });
 
   it("md 以上: 幅は固定にせず、内容に合わせて下限〜上限のトークンの間で広がる（#899）", () => {
-    // 固定の 22rem では「Oracle Profile の反映が完了しました。」が「…完了しま / した。」と語の途中で 2 行に折り返した。
-    const { style } = resolveToastPlacement(desktop);
+    const { style } = resolveToastPlacement({ narrow: false });
     expect(style).not.toHaveProperty("width");
-    // トークンの値は tokens-css.test.ts で確かめる。
+    expect(style.minWidth).toBe("min(var(--toast-width-min), calc(100vw - 2 * 1rem))");
+    expect(style.maxWidth).toBe("min(var(--toast-width-max), calc(100vw - 2 * 1rem))");
   });
 
-  it("md 以上: lg 未満で PageHeader が一部だけ見えている間は画面の上端に合わせ、見えなくなったら画面の右上", () => {
-    expect(resolveToastPlacement({ ...desktop, header: { top: -60, bottom: 47, left: 252 } }).style.top).toBe(
-      "calc(0px + 1rem)"
-    );
-    for (const header of [{ top: -107, bottom: 0, left: 252 }, null]) {
-      const { mode, style } = resolveToastPlacement({ ...desktop, header });
-      expect(mode).toBe("top-right");
-      expect(style.top).toBe("max(1rem, env(safe-area-inset-top))");
-      expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    }
-  });
-
-  it("md 未満: 上端の全幅。上端のバーがあればメニューのボタン（左の 0.5rem + 44px）を覆わない", () => {
-    const withBar = resolveToastPlacement({ ...desktop, narrow: true, topBar: true });
-    expect(withBar.mode).toBe("top-bar");
-    expect(withBar.style.top).toBe("max(0.5rem, env(safe-area-inset-top))");
-    expect(withBar.style.left).toBe("calc(1rem + var(--control-height-touch))");
-    expect(withBar.style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(withBar.style.minWidth).toBeUndefined();
-    expect(withBar.style.maxWidth).toBeUndefined();
-
-    const withoutBar = resolveToastPlacement({ ...desktop, narrow: true, topBar: false, header: null });
-    expect(withoutBar.style.left).toBe("max(1rem, env(safe-area-inset-left))");
+  it("md 未満: 上端の全幅。上端のバーに重ね、メニューのボタン（左の 0.5rem + 44px）を覆わない", () => {
+    const { mode, style } = resolveToastPlacement({ narrow: true });
+    expect(mode).toBe("top-bar");
+    expect(style.top).toBe("max(0.5rem, env(safe-area-inset-top))");
+    expect(style.left).toBe("calc(1rem + var(--control-height-touch))");
+    expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
+    expect(style.bottom).toBeUndefined();
+    expect(style.minWidth).toBeUndefined();
+    expect(style.maxWidth).toBeUndefined();
+    // 上から現れる。
+    expect(style["--toast-enter-y"]).toBe("-0.5rem");
   });
 });
 
 let container: HTMLDivElement;
 let root: Root;
-let headerRect = { top: 0, bottom: 0, left: 0 };
-let actionsLeft = 0;
 
 function mockViewport(narrow: boolean) {
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -110,10 +63,10 @@ function render(node: ReactNode) {
   act(() => root.render(node));
 }
 
-function Page() {
+function Page({ actions }: { actions: PageHeaderAction[] }) {
   return (
     <AppShell sidebar={<nav aria-label="サイドナビゲーション" />}>
-      <PageHeader title="コメント管理" actions={[{ id: "save", kind: "primary", label: "保存" }]} />
+      <PageHeader title="コメント管理" actions={actions} />
       <Toaster />
     </AppShell>
   );
@@ -121,27 +74,23 @@ function Page() {
 
 const region = () => document.body.querySelector<HTMLElement>('[role="region"][aria-label="通知"]');
 
+/** 通知の領域の置き場所（data 属性と inline style）。 */
+function placementOf(el: HTMLElement) {
+  return {
+    mode: el.dataset.toastPlacement,
+    top: el.style.top,
+    bottom: el.style.bottom,
+    left: el.style.left,
+    right: el.style.right,
+    minWidth: el.style.minWidth,
+    maxWidth: el.style.maxWidth,
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   useToastStore.getState().clear();
   useToastStore.getState().resume();
-  headerRect = { top: 0, bottom: 0, left: 0 };
-  actionsLeft = 0;
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    let rect: { top: number; bottom: number; left: number; right?: number } = { top: 0, bottom: 0, left: 0 };
-    if (this.hasAttribute("data-page-header")) rect = headerRect;
-    if (this.hasAttribute("data-page-header-actions")) rect = { top: 18, bottom: 54, left: actionsLeft, right: 1252 };
-    return {
-      x: rect.left,
-      y: rect.top,
-      width: 0,
-      height: rect.bottom - rect.top,
-      right: 0,
-      ...rect,
-      toJSON: () => ({}),
-    } as DOMRect;
-  });
-  vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -156,49 +105,74 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Toaster の置き場所（#411）", () => {
-  it("md 以上: PageHeader に重ね、ページの操作のすぐ左に出す", () => {
+describe("Toaster の置き場所（#1728）", () => {
+  it("md 以上: ページの操作の有無・数によらず、同じ右下に出る", () => {
     mockViewport(false);
-    headerRect = { top: 0, bottom: 107, left: 252 };
-    actionsLeft = 953;
-    render(<Page />);
-    act(() => {
-      toast.success("保存しました");
-    });
-    const el = region()!;
-    expect(el.dataset.toastPlacement).toBe("page-header");
-    expect(el.style.right).toBe("calc(327px + 1rem)");
-    expect(el.style.bottom).toBe("");
-    expect(el.style.left).toBe("");
+    const placements = [] as ReturnType<typeof placementOf>[];
+    const variants: PageHeaderAction[][] = [
+      [],
+      [{ id: "save", kind: "primary", label: "保存" }],
+      [
+        { id: "refresh", kind: "utility", label: "表示を更新" },
+        { id: "fetch", kind: "secondary", label: "DB 構造を再取得" },
+        { id: "save", kind: "primary", label: "保存" },
+      ],
+    ];
+    for (const actions of variants) {
+      render(<Page actions={actions} />);
+      act(() => {
+        toast.success("保存しました");
+      });
+      placements.push(placementOf(region()!));
+      act(() => useToastStore.getState().clear());
+    }
+    // happy-dom は `max(…, env(…))` の値を style に残さないので、値そのものは resolveToastPlacement のテストで確かめる。
+    expect(placements[0]).toMatchObject({ mode: "bottom-right", top: "", left: "" });
+    expect(placements[1]).toEqual(placements[0]);
+    expect(placements[2]).toEqual(placements[0]);
+    expect(region()!.style.getPropertyValue("--toast-enter-y")).toBe("0.5rem");
   });
 
-  it("md 以上: lg 未満で PageHeader が本文と一緒にスクロールして見えなくなったら、画面の右上へ移る", () => {
+  it("md 以上: スクロールしても位置を変えない", () => {
     mockViewport(false);
-    headerRect = { top: 0, bottom: 107, left: 252 };
-    actionsLeft = 953;
-    render(<Page />);
+    render(<Page actions={[{ id: "save", kind: "primary", label: "保存" }]} />);
     act(() => {
       toast.success("保存しました");
     });
-    expect(region()!.dataset.toastPlacement).toBe("page-header");
-    headerRect = { top: -120, bottom: -13, left: 252 };
+    const before = placementOf(region()!);
     act(() => {
       document.dispatchEvent(new Event("scroll"));
+      window.dispatchEvent(new Event("resize"));
       vi.advanceTimersByTime(32);
     });
-    expect(region()!.dataset.toastPlacement).toBe("top-right");
+    expect(placementOf(region()!)).toEqual(before);
   });
 
-  it("md 未満: 上端のバーに重ね、メニューのボタンを覆わない", () => {
-    mockViewport(true);
-    headerRect = { top: 49, bottom: 240, left: 0 };
-    render(<Page />);
+  it("新しい通知は下に足す（DOM の順 = 読み上げ・Tab の順 = 見た目の上下の順）", () => {
+    mockViewport(false);
+    render(<Page actions={[]} />);
     act(() => {
-      toast.success("保存しました");
+      toast.success("1 件目");
+      toast.info("2 件目");
     });
-    const el = region()!;
-    expect(el.dataset.toastPlacement).toBe("top-bar");
-    expect(el.style.left).toBe("calc(1rem + var(--control-height-touch))");
-    expect(el.style.bottom).toBe("");
+    const texts = Array.from(region()!.querySelectorAll('[role="status"]')).map((node) => node.textContent);
+    expect(texts[0]).toContain("1 件目");
+    expect(texts[1]).toContain("2 件目");
+  });
+
+  it("md 未満: 上端のバーに重ね、メニューのボタンを覆わない（ページの操作の有無によらない）", () => {
+    mockViewport(true);
+    for (const actions of [[], [{ id: "save", kind: "primary", label: "保存" }]] as PageHeaderAction[][]) {
+      render(<Page actions={actions} />);
+      act(() => {
+        toast.success("保存しました");
+      });
+      const el = region()!;
+      expect(el.dataset.toastPlacement).toBe("top-bar");
+      expect(el.style.left).toBe("calc(1rem + var(--control-height-touch))");
+      expect(el.style.bottom).toBe("");
+      expect(el.style.getPropertyValue("--toast-enter-y")).toBe("-0.5rem");
+      act(() => useToastStore.getState().clear());
+    }
   });
 });

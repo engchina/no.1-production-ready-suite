@@ -283,11 +283,12 @@ class _ReadyRequirementRuntime:
         assert chat is False and previous_job_id is None
         session = self.sessions[session_id]
         assert session.requirement_applied_at is not None
-        assert question == session.requirement.clarified_question_ja  # type: ignore[union-attr]
+        # job の質問の文は利用者の質問のまま（書き直した文は生成にだけ使う。#1727）。
+        assert question == session.original_question
         return SqlRequirementSpec(
             session_id=session_id,
             profile_id=profile_id,
-            clarified_question=question,
+            clarified_question=session.requirement.clarified_question_ja,  # type: ignore[union-attr]
             tables=["APP.EMPLOYEE"],
         )
 
@@ -702,10 +703,13 @@ def test_recommend_profile_limits_to_requested_candidates(
     assert (is_error, content["error_code"]) == (True, "MCP_TOOL_ARGUMENTS_INVALID")
 
 
-def test_query_with_sql_statement_skips_requirement_llm(
+def test_query_with_sql_statement_runs_requirement_check_like_any_question(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:
-    """質問が SQL の文（SELECT / WITH の 1 文）なら AI要件確認をせずにジョブを作る（#1715）。"""
+    """質問が SQL の文でも、ほかの質問と同じに AI要件確認を行う（#1727）。
+
+    判断は SQL を 1 つに決める最低限の情報があるかだけで、SQL の文かどうかでは分けない。
+    """
     user = users.create("mcp.sql", permissions={"menu.query"}, allowed_profile_ids={"sales"})
     runtime = ontology_router.ontology_runtime
     assert isinstance(runtime, _ReadyRequirementRuntime)
@@ -717,12 +721,10 @@ def test_query_with_sql_statement_skips_requirement_llm(
         )
     )
     assert is_error is False
-    assert runtime.created == []
+    assert [request.question for request in runtime.created] == ["select * from employee;"]
     request, _, _ = fake_service.started[0]
-    assert request.question == "select * from employee;"
-    assert request.requirement_session_id is None
-    assert content["requirement"]["status"] == "skipped"
-    assert "SQL の文" in content["requirement"]["message"]
+    assert request.requirement_session_id == "qs-1"
+    assert content["requirement"]["status"] == "applied"
 
 
 def test_query_passes_row_limit_and_actor_and_returns_result(
@@ -740,8 +742,10 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
     assert request.row_limit == 100
     assert request.profile_id == "sales"
     assert request.use_ontology_context is True
-    # 確かめた要件（書き直した質問の文と構造化した要件・表の範囲）で SQL を作る（#1441）。
-    assert request.question == "売上一覧（APP.EMPLOYEE）"
+    # 確かめた要件（書き直した質問の文と構造化した要件・表の範囲）で SQL を作る（#1441）。質問の文は
+    # 利用者の質問のままにし、書き直した文は生成にだけ使う（#1727）。
+    assert request.question == "売上一覧"
+    assert request.generation_question == "売上一覧（APP.EMPLOYEE）"
     assert request.requirement_session_id == "qs-1"
     assert request.sql_requirement is not None
     assert request.allowed_objects.table_names == ["APP.EMPLOYEE"]

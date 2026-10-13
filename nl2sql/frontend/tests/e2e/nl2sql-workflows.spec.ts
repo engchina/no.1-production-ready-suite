@@ -15,7 +15,7 @@ import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectedControlHeight } from "./_helpers/control-height";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
-import { expectToastStackAtTop } from "./_helpers/toast";
+import { expectToastPlacement } from "./_helpers/toast";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -12677,8 +12677,8 @@ test("synthetic completion uses a top toast without a result action or another g
   await expect(page.getByText("合成データの生成が完了しました", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("link", { name: "結果を確認" })).toHaveCount(0);
   expect((await heading.boundingBox())?.y).toBe(before?.y);
-  // #411: 通知は上端の見出しの面に出す（desktop は PageHeader に重ねてページの操作の左、375px は上端のバー）。
-  await expectToastStackAtTop(page);
+  // #1728: 通知は決まった 1 か所に出す（desktop は画面の右下、375px は上端のバー）。
+  await expectToastPlacement(page);
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("synthetic-completion-toast.png") });
   await notifications.getByRole("button", { name: "閉じる", exact: true }).focus();
@@ -12831,7 +12831,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   const syntheticResultsSection = syntheticPanel.locator("section[aria-labelledby='synthetic-results-heading']");
   await expect(syntheticResultsSection.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
   await expect(syntheticResultsSection.getByText("生成後に結果テーブルを選択すると表示できます。").first()).toBeVisible();
-  await expectToastStackAtTop(page);
+  await expectToastPlacement(page);
 
   const resultsGate = createRequestGate();
   const syntheticResultsRequests: URL[] = [];
@@ -12896,7 +12896,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect.poll(() => syntheticResultsRequests.length).toBe(2);
   expect(syntheticResultsRequests[1].searchParams.get("limit")).toBe("100000");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
-  await expectToastStackAtTop(page);
+  await expectToastPlacement(page);
   await expectNoHorizontalScroll(page);
 });
 
@@ -12925,7 +12925,7 @@ test("synthetic data reports preflight rejection beside the generate action", { 
       "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
     )
   ).toBeVisible();
-  await expectToastStackAtTop(page);
+  await expectToastPlacement(page);
   await expectNoHorizontalScroll(page);
 });
 

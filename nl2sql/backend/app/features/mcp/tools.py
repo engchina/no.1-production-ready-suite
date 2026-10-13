@@ -85,7 +85,6 @@ from app.features.nl2sql.service import (
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
-from app.features.nl2sql.sql_input import is_sql_statement_input
 from app.features.nl2sql.sql_requirement import RequirementAiUnavailableError
 from app.security.permissions import (
     PROFILE_READ_PERMISSION,
@@ -115,8 +114,6 @@ _REQUIREMENT_SKIPPED_MESSAGE = (
     "OCI Enterprise AI が設定されていないため、AI要件確認をせずに SQL を生成しました。"
 )
 REQUIREMENT_AI_NOT_CONFIGURED_CODE = "REQUIREMENT_AI_NOT_CONFIGURED"
-# 質問が SQL の文（SELECT / WITH の 1 文）は確かめることが無いので LLM を呼ばない（#1715）。
-_REQUIREMENT_SQL_INPUT_MESSAGE = "質問が SQL の文のため、AI要件確認をせずに SQL を生成しました。"
 # この業務プロファイルの範囲では SQL を作れない（AI要件確認。#1441）。
 REQUIREMENT_UNANSWERABLE_CODE = "REQUIREMENT_UNANSWERABLE"
 # 変更できない（終了した・実行中の）AI要件確認の session。
@@ -769,19 +766,6 @@ def build_mcp_server(request: Request) -> McpServer:
                 ),
             )
 
-        if arguments.requirement_session_id is None and is_sql_statement_input(arguments.question):
-            result = await start_and_wait(
-                JobCreateRequest(
-                    question=arguments.question,
-                    profile_id=arguments.profile_id,
-                    row_limit=arguments.row_limit,
-                ),
-                arguments.wait_seconds,
-            )
-            result.requirement = RequirementOutput(
-                session_id="", status="skipped", message=_REQUIREMENT_SQL_INPUT_MESSAGE
-            )
-            return result
         started = time.monotonic()
         try:
             data = await run_sync_io(requirement_step)
@@ -830,13 +814,14 @@ def build_mcp_server(request: Request) -> McpServer:
         draft = data.session.requirement
         if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
             raise HTTPException(status_code=409, detail="AI要件確認の要件がありません。")
-        # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。
+        # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。質問の文は
+        # 利用者の質問のままにし、書き直した文は生成にだけ使う（`generation_question`。#1727）。
         # 生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする（#1524）。
         # use_ontology_context 等は画面と同じく JobCreateRequest の既定で作る。
         # row_limit は必ず渡す（None だと全件を取得する）。
         job_request = _with_requirement(
             JobCreateRequest(
-                question=draft.clarified_question_ja,
+                question=data.session.original_question,
                 profile_id=arguments.profile_id,
                 row_limit=arguments.row_limit,
                 requirement_session_id=data.session.id,

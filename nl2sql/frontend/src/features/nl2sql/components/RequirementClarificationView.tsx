@@ -27,14 +27,14 @@ import {
 /** 検査の段階（業務プロファイルの推薦 → 確定 → 要件の下書き）。チャットは下書きだけ。 */
 export type RequirementStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
 
-/** 確定した要件の行き先の文言（SQL 生成の画面: 質問の欄へ反映、チャット: SQL を生成）。 */
+/** 確定した要件の行き先の文言（SQL 生成の画面: 次の SQL の生成に渡す（質問の欄は書き換えない。#1727）、チャット: SQL を生成）。 */
 export interface RequirementApplyLabels {
   ready: string;
   apply: string;
   applyWithRemaining: string;
 }
 
-export const REQUIREMENT_APPLY_TO_QUESTION_LABELS: RequirementApplyLabels = {
+export const REQUIREMENT_APPLY_TO_GENERATION_LABELS: RequirementApplyLabels = {
   ready: t("nl2sql.clarification.ready"),
   apply: t("nl2sql.clarification.apply"),
   applyWithRemaining: t("nl2sql.clarification.applyWithRemaining"),
