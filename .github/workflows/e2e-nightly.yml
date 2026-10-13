@@ -13,6 +13,14 @@ on:
   schedule:
     - cron: "0 18 * * *" # 03:00 JST
   workflow_dispatch:
+    inputs:
+      workers:
+        # worker の数の測定に使う（#1593。platform/scripts/e2e-impact/ci-run.ts の E2E_WORKERS）。空なら CI_WORKERS。
+        # 測定は main 以外の branch でも実行できる（PR の e2e-impact は main の run の記録だけを使う）。
+        description: "Playwright の worker の数（空なら playwright.config.ts の CI の値）"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -64,13 +72,15 @@ jobs:
         with:
           working-directory: ${{ matrix.product }}/frontend
 
-      # worker 数は各製品の playwright.config.ts の CI の値（2。4 vCPU の runner。#1489）。retry で通ったテスト（flaky）は log の
+      # worker 数は各製品の playwright.config.ts の CI の値（2。4 vCPU の runner。#1489）。手動の実行は inputs.workers で変えられる（#1593）。retry で通ったテスト（flaky）は log の
       # 「N flaky」に出る。増えたら、そのテストの待ちを直す（#175）。
       - name: Playwright E2E
         run: npx playwright test --shard=${{ matrix.shard }}/${{ matrix.total }}
         env:
           # テストごとの実行範囲の記録（platform/scripts/e2e-impact/fixture.ts。#885）。
           E2E_IMPACT_DIR: ${{ runner.temp }}/e2e-impact-records
+          # 手動の実行で worker の数を変えて測る（#1593）。schedule では空で、CI_WORKERS になる。
+          E2E_WORKERS: ${{ inputs.workers }}
 
       # 失敗したテストも記録は有効なので、結果に関わらず集計して保存する。
       - name: Aggregate impact records
