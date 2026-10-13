@@ -1,0 +1,217 @@
+name: Integration Nightly
+
+# PR の CI（ci.yml）では確かめない結合の検査を、毎晩 main で実行する（#1595。PR の時間は増やさない）。
+#   - oracle: Oracle AI Database Free の container に、3 製品の system schema の migration（配備の init_script.sh と
+#     同じ CLI）を 2 回ずつ当て（2 回目で冪等を確かめる）、実の Oracle の結合テストを実行する。ADB 固有の機能
+#     （Select AI・DBMS_CLOUD・Wallet・DeepSec）は Free に無いので、それを使うテストは実行しない（下の各 step）。
+#   - coverage: backend の pytest と RAG の frontend の vitest の coverage を step summary に出す（閾値はまだ
+#     決めていない。失敗にはしない。PR の CI は coverage を計測しない）。
+# 失敗（job の時間切れを含む）は ci-failure-issue.yml が Issue にする（workflow 名は同じファイルの workflows と
+# そろえる）。job 名の " / " の前は Issue の製品の label になる（.github/scripts/report-workflow-failure.sh）。
+
+on:
+  schedule:
+    - cron: "53 17 * * *" # 02:53 JST（整点を避ける。E2E Nightly の前）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Oracle AI Database Free の image（版を固定する。Oracle の公式の registry で、login は要らない）。
+  ORACLE_FREE_IMAGE: container-registry.oracle.com/database/free:23.26.3.0-lite
+
+jobs:
+  oracle:
+    name: ${{ matrix.label }} / Oracle integration
+    runs-on: ubuntu-24.04
+    # Oracle Free の起動は runner で約 2〜3 分（ローカルの WSL では約 5 分）。テストは数分。
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { product: rag, label: RAG }
+          - { product: nl2sql, label: NL2SQL }
+          - { product: agent, label: Agent }
+    defaults:
+      run:
+        working-directory: ${{ matrix.product }}/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.product }}/backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # DB の起動を待つ間に依存を入れる。password は run ごとに作り、log に出さない。
+      - name: Start Oracle AI Database Free
+        working-directory: .
+        run: |
+          password="Ci$(openssl rand -hex 12)_Aa1"
+          echo "::add-mask::${password}"
+          echo "ORACLE_CI_PASSWORD=${password}" >> "${GITHUB_ENV}"
+          docker run -d --name oracle -p 1521:1521 -e ORACLE_PWD="${password}" "${ORACLE_FREE_IMAGE}"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Wait for Oracle and create the test user
+        working-directory: .
+        run: bash .github/scripts/oracle-free-ci.sh
+
+      - name: Apply system schema migrations (twice)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            echo "migration ${attempt} 回目"
+            case "${{ matrix.product }}" in
+              rag) uv run python -m app.rag.system_schema_cli initialize ;;
+              nl2sql)
+                uv run python -m app.cli.nl2sql_system_schema --initialize
+                uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
+                ;;
+              agent) uv run python -m app.cli.agent_system_schema --initialize ;;
+            esac
+          done
+
+      # RAG: 実の Oracle に依存するテスト（fixture `oracle_db`・tests/_oracle_test_db.py）を実行する。
+      - name: Oracle integration tests (RAG)
+        if: matrix.product == 'rag'
+        run: |
+          mapfile -t files < <(grep -rlE --include='test_*.py' 'oracle_db|_oracle_test_db' tests | sort)
+          printf '%s\n' "${files[@]}"
+          uv run pytest -n auto -rs "${files[@]}"
+
+      # NL2SQL: Oracle の明示 opt-in のテスト。Select AI（DBMS_CLOUD_AI）を使う
+      # test_select_ai_quoted_object_list_oracle_live.py・LLM の NL2SQL_SYNTHETIC_LLM_LIVE_TEST・
+      # ADB の DeepSec（test_deepsec_real_oracle_integration.py）は Free に無いので実行しない。
+      - name: Oracle integration tests (NL2SQL)
+        if: matrix.product == 'nl2sql'
+        env:
+          NL2SQL_RUN_ORACLE_INTEGRATION: "1"
+          NL2SQL_SYNTHETIC_LIVE_TEST: "1"
+        run: |
+          uv run pytest -rs \
+            tests/test_domain_management_oracle_live.py \
+            tests/test_nl2sql_synthetic_oracle_live.py \
+            tests/test_nl2sql_synthetic_preview_oracle_live.py
+
+      - name: Stop Oracle
+        if: always()
+        working-directory: .
+        run: |
+          docker logs oracle > "${RUNNER_TEMP}/oracle.log" 2>&1 || true
+          tail -n 50 "${RUNNER_TEMP}/oracle.log" || true
+          docker rm -f oracle || true
+
+  backend-coverage:
+    name: ${{ matrix.label }} / Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dir: platform/packages/backend_core, cov: pr_backend_core, label: Platform backend_core }
+          - { dir: platform/packages/system_settings_backend, cov: pr_system_settings, label: Platform system_settings }
+          - { dir: rag/backend, cov: app, label: RAG }
+          - { dir: nl2sql/backend, cov: app, label: NL2SQL }
+          - { dir: agent/backend, cov: app, label: Agent }
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.dir }}/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Test with coverage
+        run: uv run pytest -n auto --cov=${{ matrix.cov }} --cov-report=
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.label }} の coverage（${{ matrix.cov }}）"
+            echo
+            uv run coverage report --format=total | sed 's/^/合計: /; s/$/%/'
+            echo
+            echo "<details><summary>ファイルごと</summary>"
+            echo
+            uv run coverage report --format=markdown --skip-covered --sort=cover
+            echo
+            echo "</details>"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  rag-frontend-coverage:
+    name: RAG / Frontend coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: rag/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install dependencies and build shared UI
+        uses: ./.github/actions/platform-ui
+        with:
+          frontend: rag/frontend
+
+      # coverage の provider は vitest と同じ版でなければならない。package.json に足さず（PR の install を
+      # 増やさない）、ここで入っている vitest の版のものを一時的に入れる。
+      - name: Install coverage provider
+        run: |
+          version="$(node -p "require('vitest/package.json').version")"
+          npm install --no-save --no-audit --no-fund "@vitest/coverage-v8@${version}"
+
+      - name: Unit test with coverage
+        run: >-
+          npx vitest run --coverage.enabled --coverage.provider=v8
+          --coverage.reporter=text-summary --coverage.reporter=json-summary
+          --coverage.reportsDirectory="${RUNNER_TEMP}/rag-frontend-coverage"
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          summary="${RUNNER_TEMP}/rag-frontend-coverage/coverage-summary.json"
+          [ -f "${summary}" ] || exit 0
+          node -e '
+            const t = require(process.argv[1]).total;
+            const row = (k, n) => `| ${n} | ${t[k].pct}% | ${t[k].covered} / ${t[k].total} |`;
+            console.log("### RAG の frontend の coverage（vitest）\n");
+            console.log("| 指標 | 割合 | 件数 |\n|---|---|---|");
+            for (const [k, n] of [["lines","行"],["statements","文"],["functions","関数"],["branches","分岐"]]) console.log(row(k, n));
+          ' "${summary}" >> "${GITHUB_STEP_SUMMARY}"
