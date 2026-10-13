@@ -52,11 +52,11 @@ import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
+import { roleDisplayName } from "./RoleNameBadges";
 import { userDisplayName } from "./userDisplayName";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
-  SecurityIdentityLines,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
@@ -131,9 +131,10 @@ function compareText(left: string, right: string, direction: DataTableSort["dire
 }
 
 function assignedRoleLabel(role: AssignedRole) {
-  return role.archived
-    ? t("security.users.archivedRoleLabel", { role: role.display_name })
-    : role.display_name;
+  // ロール名で出す。参照できない（削除済みの）ロールは ID（UUID）を出さない（#1682）。
+  const name = roleDisplayName(role);
+  if (role.deleted || name === roleDisplayName(null)) return name;
+  return role.archived ? t("security.users.archivedRoleLabel", { role: name }) : name;
 }
 
 function userStatusLabel(user: SecurityUser) {
@@ -231,11 +232,13 @@ export function UserManagementPage({
             archived: role.archived,
           }
         : {
+            // 一覧に無いロール。ID を名前の欄に入れない（#1682）。
             role_id: id,
-            role_code: id,
-            display_name: id,
+            role_code: "",
+            display_name: "",
             is_built_in: false,
             archived: true,
+            deleted: true,
           };
     });
   }, [roleById]);
@@ -1085,7 +1088,8 @@ export function UserManagementPage({
                               onChange={() => selectRole(role.role_id)}
                             />
                             <span className="min-w-0">
-                              <SecurityIdentityLines id={role.role_code} name={role.display_name} />
+                              {/* ロール名だけを出す（コード・ID は出さない。#1682） */}
+                              <span className="block break-words font-medium">{roleDisplayName(role)}</span>
                               {hint ? <span className="mt-1 block text-xs leading-5 text-fg-muted">{hint}</span> : null}
                             </span>
                           </label>
@@ -1197,11 +1201,7 @@ function UserDetailPanel({
                 icon={false}
                 key={role.role_id}
                 variant={role.archived ? "neutral" : "info"}
-                label={
-                  role.archived
-                    ? t("security.users.archivedRoleLabel", { role: role.display_name })
-                    : role.display_name
-                }
+                label={assignedRoleLabel(role)}
               />
             ))}
           </div>
