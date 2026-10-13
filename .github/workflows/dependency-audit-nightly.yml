@@ -7,7 +7,7 @@ name: Dependency Audit Nightly
 
 on:
   schedule:
-    - cron: "30 18 * * *" # 03:30 JST
+    - cron: "41 18 * * *" # 03:41 JST（整点・30 分は遅れやすいのでずらす。#1595）
   workflow_dispatch:
 
 permissions:

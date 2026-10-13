@@ -404,7 +404,7 @@ jobs:
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest -n auto --cov=pr_backend_core
+        run: uv run pytest -n auto
 
       - name: Security scan
         run: uv run bandit -r src
@@ -468,7 +468,7 @@ jobs:
 
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。
       - name: Test
-        run: uv run pytest -n auto --cov=pr_system_settings
+        run: uv run pytest -n auto
 
       - name: Security scan
         run: uv run bandit -r src
@@ -908,11 +908,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
+      # bash と runner の python3（標準ライブラリだけ）で足りるので setup-python は入れない（#1595）。
       # ネイティブ配備（uv の venv + systemd + Nginx。#286）。systemctl 等は fake で、生成した sudoers は visudo で検査する。
       - name: Test Compute init script
         run: |
@@ -934,11 +930,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
+      # bash と runner の python3（標準ライブラリだけ）で足りるので setup-python は入れない（#1595）。
       - name: Test deployment update and recovery scripts
         run: |
           bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh scripts/start-frontend.sh ../rag/scripts/start-frontend.sh ../agent/scripts/start-frontend.sh
@@ -1502,11 +1494,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
+      # bash と runner の python3（標準ライブラリだけ）で足りるので setup-python は入れない（#1595）。
       - name: Test Compute init script
         run: |
           bash -n init_script.sh scripts/tests/init-script-deployment.test.sh
