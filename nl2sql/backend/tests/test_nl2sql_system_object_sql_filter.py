@@ -106,7 +106,7 @@ class _SqliteCursor:
         return rows
 
     def fetchone(self) -> tuple[Any, ...] | None:
-        return self._cursor.fetchone()
+        return cast(tuple[Any, ...] | None, self._cursor.fetchone())
 
     def __iter__(self) -> Iterator[tuple[Any, ...]]:
         return iter(self.fetchall())
