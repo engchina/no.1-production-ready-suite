@@ -15,6 +15,7 @@ on:
       - E2E Nightly
       - RAG Evaluation Nightly
       - Dependency Audit Nightly
+      - Integration Nightly
     types:
       - completed
   workflow_dispatch:
