@@ -131,7 +131,10 @@ def test_employee_spelling_references_and_numeric_types_are_normalized() -> None
     ):
         assert value not in markdown
     assert "従業員番号" in markdown and "ADMIN.EMPLOYEE.EMPLOYEE_ID" in markdown
-    assert "\n- 対象オブジェクト: Employee\n- データ型: number" in markdown
+    assert (
+        "\n- 所属のオブジェクト型（Object Type）: Employee"
+        "\n- 業務の型（Base Type）: 数値（decimal）"
+    ) in markdown
 
 
 def test_same_column_with_distinct_meanings_or_scopes_is_not_merged() -> None:

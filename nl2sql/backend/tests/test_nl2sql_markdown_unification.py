@@ -117,7 +117,12 @@ def test_identity_dedup_and_conflicts_do_not_merge_same_physical_object() -> Non
     assert next(v for v in values if v.api_name == "Order").aliases == ["注文"]
     changed = prop.model_copy(update={"data_type": "string"})
     _, conflicts = merge_definitions("sales", [prop, changed])
-    assert conflicts and "データ型" in conflicts[0]
+    # 競合は業務の名前で「何が問題か」と「どうすればよいか」を書く（#1729）。
+    assert conflicts == [
+        "『受注番号』の業務の型が 2 通り（整数（integer） と 文字列（string））作られました。"
+        "整数（integer） を使います。違う場合は Markdown の『受注番号』の「業務の型」の行を"
+        "直してください。"
+    ]
 
 
 def test_legacy_names_sharing_a_physical_table_remain_distinct_and_order_independent() -> None:
@@ -697,13 +702,20 @@ def test_build_content_notes_are_saved_without_becoming_conflicts_or_job_warning
         assert any(d.get("message_ja") == note for d in internal["diagnostics"])
     assert "profile_concept_" not in markdown
     assert "source_id:" not in markdown
+    # AI の指標の SQL が確かめられなければ下書きに入れず、公開を止めない（best effort。#1729）。
+    invalid = next(d for d in all_concepts() if d.kind == "metric")
     for definition in all_concepts():
-        assert markdown.count(f"(`{definition.api_name}`)") == 1
+        assert markdown.count(f"(`{definition.api_name}`)") == int(
+            definition.api_name != invalid.api_name
+        )
+    assert any(
+        f"『{invalid.name_ja}』の SQL の式を確かめられなかった" in str(d.get("message_ja"))
+        for d in internal["diagnostics"]
+    )
     preparation = workspace.prepare("sales", job.draft_etag, "check-invalid-sql", None)
     workspace.run_preparation("sales", preparation["id"])
     result = workspace.preparation("sales", preparation["id"])
-    assert result["status"] == "failed"
-    assert any(f.get("code") == "SQL_EXPRESSION_INVALID" for f in result["findings"])
+    assert not any(f.get("code") == "SQL_EXPRESSION_INVALID" for f in result["findings"])
     saved = rt.ontology_markdown_state("sales")
     assert saved.draft_markdown == markdown
 

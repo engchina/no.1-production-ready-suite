@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  appendToBusinessText,
   conceptDisplayNames,
+  findingName,
   findingTarget,
   partitionFindings,
+  pendingSuggestions,
+  summarizeChanges,
   summarizeOntologyGraph,
-  visibleDifferences,
   type PublicationDefinition,
 } from "../src/features/nl2sql/ontology/publicationSummary.ts";
 
@@ -44,13 +47,15 @@ test("同じ名前のプロパティには属するオブジェクトの名前�
   assert.equal(names.get("employee_name"), "従業員名");
 });
 
-test("差分の一覧は内部の概念（値型）を出さない", () => {
-  const shown = visibleDifferences([
-    { id: "a", before: null, after: definitions[3] },
-    { id: "b", before: null, after: definitions[7] },
-    { id: "c", before: definitions[7], after: null },
-  ]);
-  assert.deepEqual(shown.map(difference => difference.id), ["a"]);
+test("同じ定義を重ねて渡しても所属の名前を添えず、名前に所属があれば重ねない (#1729)", () => {
+  const project = { kind: "object_type", api_name: "project", name_ja: "プロジェクト" };
+  const ownDepartmentId = { kind: "property", api_name: "department_id_fk_proj", name_ja: "部門ID（プロジェクト）", object_type: "project" };
+  const startDate = { kind: "property", api_name: "start_date", name_ja: "開始日", object_type: "project" };
+  const names = conceptDisplayNames([project, ownDepartmentId, startDate, project, ownDepartmentId, startDate]);
+  assert.equal(names.get("start_date"), "開始日");
+  assert.equal(names.get("department_id_fk_proj"), "部門ID（プロジェクト）");
+  const other = { kind: "property", api_name: "project_department_id", name_ja: "部門ID（プロジェクト）", object_type: "project" };
+  assert.equal(conceptDisplayNames([project, ownDepartmentId, other]).get("project_department_id"), "部門ID（プロジェクト）");
 });
 
 test("診断は公開を止めるもの・警告・補うと精度が上がるものに分け、対象の名前を出す", () => {
@@ -64,6 +69,48 @@ test("診断は公開を止めるもの・警告・補うと精度が上がる�
   assert.equal(partition.warnings.length, 1);
   assert.equal(partition.improvements.length, 1);
   const names = conceptDisplayNames(definitions);
-  assert.equal(findingTarget(findings[2], names), "従業員部門ビュー（v_emp_dept） / primary_key / OBJECT_IDENTITY_REQUIRED");
-  assert.equal(findingTarget(findings[1], names), "DEFINITION_CONFLICT");
+  // 対象は業務の名前で出し、ID・項目・診断コードは技術的な詳細に分ける（#1729）。
+  assert.equal(findingName(findings[2], names), "従業員部門ビュー");
+  assert.equal(findingName(findings[1], names), "");
+  assert.equal(findingTarget(findings[2]), "v_emp_dept / primary_key / OBJECT_IDENTITY_REQUIRED");
+});
+
+test("初めての公開は件数の 1 行と確認が要るものだけにし、値型は出さない (#1729)", () => {
+  const findings = [
+    { severity: "warning", code: "DEFINITION_CONFLICT", definition_id: "employee_name", message_ja: "『従業員』の『従業員名』の必須が 2 通り…" },
+    { severity: "info", code: "OBJECT_GRAIN_REQUIRED", definition_id: "employee", message_ja: "粒度" },
+  ];
+  const summary = summarizeChanges(definitions.map((after, index) => ({ id: `d-${index}`, before: null, after })), findings, definitions);
+  assert.equal(summary.first, true);
+  assert.equal(summary.total, 8);
+  assert.deepEqual(summary.review.map(row => row.name), ["従業員名"]);
+  assert.equal(summary.review[0].issues.length, 1);
+});
+
+test("2 回目の公開は確認が要る変更（問題・削除）を上に、問題の無い変更を畳む (#1729)", () => {
+  const before = { kind: "property", api_name: "employee_name", name_ja: "従業員名", object_type: "employee", data_type: "string", id: "p1" };
+  const after = { ...before, data_type: "number", unit: "円" };
+  const removed = { kind: "property", api_name: "email", name_ja: "メール", object_type: "employee" };
+  const added = { kind: "object_type", api_name: "project", name_ja: "プロジェクト" };
+  const summary = summarizeChanges([
+    { id: "p1", before, after },
+    { id: "p2", before: removed, after: null },
+    { id: "o1", before: null, after: added },
+  ], [{ severity: "error", definition_id: "p1", message_ja: "問題" }], [...definitions, after, added]);
+  assert.equal(summary.first, false);
+  assert.deepEqual(summary.counts, { added: 1, changed: 1, removed: 1 });
+  assert.deepEqual(summary.review.map(row => [row.name, row.status]), [["従業員名", "changed"], ["メール", "removed"]]);
+  assert.deepEqual(summary.review[0].fields, ["data_type", "unit"]);
+  assert.deepEqual(summary.others.map(row => row.name), ["プロジェクト"]);
+});
+
+test("改善案は業務説明に書かれた文を重ねず、追記は前の内容を残す (#1729)", () => {
+  const suggestions = [
+    { severity: "error", text: "部門（department）は ADMIN.DEPARTMENT の表で、主キーは DEPARTMENT_ID。" },
+    { severity: "info", text: "従業員は DEPARTMENT_ID で部門に属する（多対 1）。" },
+  ];
+  const written = "受注の業務です。\n部門（department）は ADMIN.DEPARTMENT の表で、 主キーは DEPARTMENT_ID。";
+  assert.deepEqual(pendingSuggestions(suggestions, written).map(item => item.severity), ["info"]);
+  assert.equal(appendToBusinessText("受注の業務です。\n\n", "追記"), "受注の業務です。\n追記");
+  assert.equal(appendToBusinessText("", "追記"), "追記");
 });

@@ -16,6 +16,7 @@ from .ontology_definitions import (
     BusinessDefinition,
     DefinitionEvidence,
     DefinitionMapping,
+    LinkTypeDefinition,
     MetricDefinitionV2,
     ObjectTypeDefinition,
     PropertyDefinition,
@@ -34,92 +35,11 @@ from .ontology_models import (
 )
 from .ontology_sql_validation import identifier_token
 from .ontology_store import canonical_json, stable_ontology_id
+from .ontology_terms import CONCEPT_LABELS, FIELD_LABELS, VALUE_LABELS, plain_label
 
-CONCEPT_LABELS = {
-    "object_type": "オブジェクト型（Object Type）",
-    "property": "プロパティ（Property）",
-    "link_type": "リンク型（Link Type）",
-    "interface": "インターフェース（Interface）",
-    "function": "関数（Function）",
-    "action_type": "アクション型（Action Type）",
-    "shared_property": "共有プロパティ（Shared Property）",
-    "value_type": "値型（Value Type）",
-    "enumeration": "列挙型（Enumeration）",
-    "metric": "指標（Metric）",
-    "business_rule": "業務ルール（Business Rule）",
-    "business_event": "業務イベント（Business Event）",
-    "object_set": "オブジェクト集合（Object Set）",
-}
 CONCEPT_ORDER = tuple(CONCEPT_LABELS)
 DEFINITIONS = TypeAdapter(list[BusinessDefinition])
 PHYSICAL_KINDS = {"schema", "table", "view", "column"}
-FIELD_LABELS = {
-    "description_ja": "説明",
-    "grain_ja": "業務上の粒度",
-    "lifecycle_ja": "ライフサイクル",
-    "title_property": "表示名の項目",
-    "additivity": "加算特性",
-    "constraints_ja": "制約",
-    "interface": "インターフェース",
-    "interface_property": "インターフェースの項目",
-    "property_mapping": "項目の対応",
-    "assignments": "更新する項目",
-    "parameter": "入力項目",
-    "label_ja": "表示名",
-    "code": "値",
-    "aliases": "別名",
-    "mappings": "対応する表・列",
-    "api_name": "識別名",
-    "name_ja": "名称",
-    "writable": "更新可能",
-    "timezone": "タイムゾーン",
-    "allowed_values": "選択可能な値",
-    "inverse_name_ja": "逆方向の関係名",
-    "optional": "任意の関係",
-    "intermediary_object": "中間オブジェクト",
-    "valid_time_ja": "有効期間",
-    "error_policy_ja": "エラー時の扱い",
-    "permission_requirement_ja": "必要な権限",
-    "failure_policy_ja": "失敗時の扱い",
-    "severity": "違反時の扱い",
-    "primary_key": "主識別子",
-    "properties": "プロパティ",
-    "implements": "実装するインターフェース",
-    "object_type": "対象オブジェクト",
-    "data_type": "データ型",
-    "required": "必須",
-    "source": "関係の起点",
-    "target": "関係の終点",
-    "cardinality": "多重度",
-    "join_expression_sql": "結合条件",
-    "expression_sql": "定義 SQL",
-    "filter_sql": "絞り込み条件",
-    "aggregation": "集計方法",
-    "grain": "集計粒度",
-    "distinct_keys": "重複排除キー",
-    "dependencies": "依存する定義",
-    "parameters": "パラメーター",
-    "return_type": "戻り値",
-    "applies_to": "適用対象",
-    "predicate_sql": "業務条件",
-    "values": "列挙値",
-    "property": "対象プロパティ",
-    "shared_property": "共有プロパティ",
-    "value_type": "値型",
-    "extends": "継承元",
-    "required_links": "必須の関係",
-    "required_actions": "必須の操作",
-    "preconditions_ja": "前提条件",
-    "affected_properties": "影響するプロパティ",
-    "evidence": "根拠",
-    "missing_information_ja": "要確認事項",
-    "unit": "単位",
-    "currency": "通貨",
-    "null_policy_ja": "NULL の扱い",
-    "time_policy_ja": "時間の扱い",
-    "time_property": "時間プロパティ",
-    "timestamp_property": "発生日時プロパティ",
-}
 
 
 def api_name(value: str) -> str:
@@ -381,7 +301,8 @@ def legacy_definitions(graph: SchemaOntology) -> list[BusinessDefinition]:
 
 
 def concept_name_key(name: str) -> str:
-    return name.replace("_", "").casefold()
+    # `ADMIN.DEPARTMENT` と `admin_department` のような表記の差は同じ名前とみなす（#1729）。
+    return name.replace("_", "").replace(".", "").casefold()
 
 
 def resolve_concept_name(name: str, definitions: list[BusinessDefinition]) -> str:
@@ -441,6 +362,11 @@ def _normalize_definition_spellings(
         # しない。そのままでは別の表・列の定義が 1 つに併合される（#1720）。
         if d.id.casefold() in CONCEPT_LABELS:
             d.id = ""
+        # api_name が種類名だけ（`link_type` / `property` など）の定義は、物理の対応（所属・列・
+        # 両端）から名前を作る。そのままでは別の関係・別の列の定義が 1 つに併合される（#1729）。
+        if is_kind_name(d.api_name) and (derived := derived_api_name(d)):
+            d.api_name = derived
+        _normalize_property_type(d)
         for m in d.mappings:
             # 列そのものの式（列 `ADMIN.T.C` に式 `ADMIN.T.C`）は列の対応と同じ（#1720）。
             if m.column_name and object_match_key(m.expression_sql) == (
@@ -548,13 +474,71 @@ def rewrite_references(
     return DEFINITIONS.validate_python(rewritten)
 
 
+class ConflictNote(str):
+    """統合の競合の説明（利用者が読む平易な 2 文）。どの定義のものかを `api_name` で持つ。"""
+
+    api_name: str
+    field: str
+    values: tuple[str, ...]
+
+    def __new__(
+        cls, text: str, api_name: str = "", field: str = "", values: tuple[str, ...] = ()
+    ) -> ConflictNote:
+        note = super().__new__(cls, text)
+        note.api_name, note.field, note.values = api_name, field, values
+        return note
+
+    def detail(self) -> dict[str, Any]:
+        return {"api_name": self.api_name, "field": self.field, "values": list(self.values)}
+
+
+def _plain_value(field: str, value: Any) -> str:
+    if isinstance(value, bool):
+        text = "はい" if value else "いいえ"
+    elif isinstance(value, str) and value in VALUE_LABELS:
+        text = VALUE_LABELS[value]
+    else:
+        text = _human(value)
+    text = " ".join(text.split())
+    return text if len(text) <= 80 else text[:79] + "…"
+
+
+def _conflict_note(
+    prior: BusinessDefinition, field: str, current: Any, value: Any, names: dict[str, str]
+) -> ConflictNote:
+    owner = names.get(getattr(prior, "object_type", "") or "", "")
+    subject = f"『{owner}』の『{prior.name_ja}』" if owner else f"『{prior.name_ja}』"
+    label = plain_label(field)
+    used, other = _plain_value(field, current), _plain_value(field, value)
+    return ConflictNote(
+        f"{subject}の{label}が 2 通り（{used} と {other}）作られました。{used} を使います。"
+        f"違う場合は Markdown の『{prior.name_ja}』の「{label}」の行を直してください。",
+        prior.api_name,
+        field,
+        (used, other),
+    )
+
+
 def merge_definitions(
     profile_id: str, definitions: list[BusinessDefinition]
 ) -> tuple[list[BusinessDefinition], list[str]]:
+    """同じ概念の定義を 1 つにまとめる。
+
+    同一性の根拠は (種類, API 名) と明示的な安定 ID。ただし、物理の表・列（リンク型は両端と
+    結合のキー）が食い違う定義は、名前・ID が同じでも別の概念にする（#1729）。競合は
+    `ConflictNote`（利用者が読む平易な文）で返す。
+    """
+
     merged: dict[tuple[str, str], BusinessDefinition] = {}
     conflicts: list[str] = []
     remap: dict[str, str] = {}
-    for original in _normalize_definition_spellings(definitions):
+    normalized = _normalize_definition_spellings(definitions)
+    names: dict[str, str] = {}
+    kinds: dict[str, set[str]] = {}
+    for d in normalized:
+        names.setdefault(d.api_name, d.name_ja)
+        kinds.setdefault(d.api_name, set()).add(d.kind)
+    for original in normalized:
         item = original.model_copy(deep=True)
         # 単一バッチ内の重複も除去する。複数定義の併合時だけに限定しない。
         for field in ("aliases", "evidence", "missing_information_ja", "mappings"):
@@ -569,6 +553,16 @@ def merge_definitions(
             (d for d in merged.values() if item.id and d.id == item.id and d.kind == item.kind),
             None,
         )
+        if prior is not None and not same_physical_concept(prior, item):
+            # 同じ名前・ID でも別の列・別の関係。別の概念として残す（#1729）。
+            base = derived_api_name(item) or item.api_name
+            name = base if base != prior.api_name else f"{base}_2"
+            suffix = 2
+            while any(d.api_name == name for d in merged.values()):
+                suffix += 1
+                name = f"{base}_{suffix}"
+            item.api_name, item.id = name, ""
+            identity, prior = (item.kind, item.api_name), None
         if prior is None:
             item.id = item.id or stable_ontology_id(
                 "profile_concept", profile_id, item.kind, item.api_name
@@ -592,8 +586,13 @@ def merge_definitions(
                                 and left.expression_sql != right.expression_sql
                             ):
                                 conflicts.append(
-                                    f"{prior.api_name} / 物理マッピング: "
-                                    f"{left.expression_sql} ↔ {right.expression_sql}"
+                                    _conflict_note(
+                                        prior,
+                                        "expression_sql",
+                                        left.expression_sql,
+                                        right.expression_sql,
+                                        names,
+                                    )
                                 )
                 unique = {
                     canonical_json(v.model_dump(mode="json") if hasattr(v, "model_dump") else v): v
@@ -604,34 +603,70 @@ def merge_definitions(
                 # 参照の一覧は和集合にする（抽出の回ごとに一部だけ挙げても競合にしない。#1720）。
                 setattr(prior, field, list(dict.fromkeys([*current, *getattr(item, field)])))
             elif field == "description_ja" and value and value != current:
-                prior.description_ja = "\n".join(dict.fromkeys([current, str(value)]))
+                prior.description_ja = "\n".join(dict.fromkeys(filter(None, [current, str(value)])))
             elif field == "name_ja" and value and value != current:
-                prior.aliases = list(dict.fromkeys([*prior.aliases, str(value)]))
+                if _looks_physical_name(current, prior) and not _looks_physical_name(value, prior):
+                    # 列名そのまま（`BUDGET`）より業務の名前（「予算」）を表示名にする（#1729）。
+                    prior.aliases = list(dict.fromkeys([*prior.aliases, current]))
+                    prior.name_ja = str(value)
+                else:
+                    prior.aliases = list(dict.fromkeys([*prior.aliases, str(value)]))
             elif (
                 isinstance(value, bool)
                 and current != value
                 and field in item.model_fields_set
                 and field in prior.model_fields_set
             ):
-                conflicts.append(
-                    f"{prior.api_name} / {FIELD_LABELS.get(field, field)}: {current} ↔ {value}"
-                )
+                conflicts.append(_conflict_note(prior, field, current, value, names))
+            elif field == "inverse_name_ja":
+                # 逆向きの名前は表示のための名前。構築の回ごとの言い換えは競合にしない。
+                if not current and value:
+                    setattr(prior, field, str(value))
+            elif field in {"shared_property", "value_type"} and current != value:
+                # 正しい種類を指す方を使う（AI が自分の API 名などを書いた参照は競合にしない）。
+                if field not in kinds.get(str(current), set()) and field in kinds.get(
+                    str(value), set()
+                ):
+                    setattr(prior, field, value)
+                elif field in kinds.get(str(current), set()) and field in kinds.get(
+                    str(value), set()
+                ):
+                    conflicts.append(_conflict_note(prior, field, current, value, names))
             elif field in _UNKNOWN_IS_EMPTY_FIELDS and "unknown" in {current, value}:
                 # unknown は未設定と同じ。分かった値を使い、競合にしない（#1720）。
                 if current == "unknown":
                     setattr(prior, field, getattr(item, field))
             elif not current and value:
                 setattr(prior, field, getattr(item, field))
+            elif field == "physical_type" and value and current != value:
+                # 同じ列の物理の型の表記差（`NUMBER(10)` と `NUMBER(10,0)`）は業務の型が同じなら
+                # 競合にしない。
+                if base_data_type(str(current)) != base_data_type(str(value)):
+                    conflicts.append(_conflict_note(prior, field, current, value, names))
             elif value and current != getattr(item, field):
                 # 同一性が一致しても意味の違いは隠さない。
                 conflicts.append(
-                    f"{prior.api_name} / {FIELD_LABELS.get(field, field)}: "
-                    f"{canonical_json(prior.model_dump(mode='json')[field])} ↔ "
-                    f"{canonical_json(value)}"
+                    _conflict_note(prior, field, prior.model_dump(mode="json")[field], value, names)
                 )
+    for d in merged.values():
+        d.aliases = _clean_aliases(d)
     values = rewrite_references(list(merged.values()), remap)
+    unique_conflicts = list({str(c): c for c in conflicts}.values())
     return sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name)), sorted(
-        set(conflicts)
+        unique_conflicts
+    )
+
+
+def _looks_physical_name(name: Any, d: BusinessDefinition) -> bool:
+    """表示名が物理の名前（列名・API 名）のままか。"""
+
+    text = str(name or "").strip()
+    if not text:
+        return True
+    physical = {object_match_key(m.column_name) for m in d.mappings if m.column_name}
+    physical.update({object_match_key(m.object_name) for m in d.mappings if m.object_name})
+    return bool(re.fullmatch(r"[A-Za-z0-9_.]+", text)) and (
+        object_match_key(text) in physical or concept_name_key(text) == concept_name_key(d.api_name)
     )
 
 
@@ -705,13 +740,21 @@ class _ObjectPropertyRepair:
     def _resolve(self, name: str) -> str | None:
         obj = self.obj
         prop = self.by_name.get(name)
-        if prop is not None and (
-            prop.kind != "property"  # 種類の誤りは検証の診断に任せる
-            or (isinstance(prop, PropertyDefinition) and prop.object_type == obj.api_name)
+        # オブジェクト型の properties が共有プロパティを指すときは、このオブジェクト型の表の同じ列の
+        # プロパティ（共有プロパティを参照する）に付け替える（Foundry の共有プロパティ。#1729）。
+        shared = prop if prop is not None and prop.kind == "shared_property" else None
+        if (
+            prop is not None
+            and shared is None
+            and (
+                prop.kind != "property"  # 種類の誤りは検証の診断に任せる
+                or (isinstance(prop, PropertyDefinition) and prop.object_type == obj.api_name)
+            )
         ):
             return name
         if (
-            isinstance(prop, PropertyDefinition)
+            shared is None
+            and isinstance(prop, PropertyDefinition)
             and not prop.object_type
             and all(mapping_object_key(m) in self.tables for m in prop.mappings)
         ):
@@ -733,6 +776,8 @@ class _ObjectPropertyRepair:
         table, key = target
         existing = next((d for d in self.own if self._mapped(table, key, d.mappings)), None)
         if existing is not None:
+            if shared is not None and not existing.shared_property:
+                existing.shared_property = shared.api_name
             return existing.api_name
         source = next(m for m in obj.mappings if mapping_object_key(m) == table)
         column_info = self.columns.get(table, {}).get(key, {})
@@ -762,7 +807,13 @@ class _ObjectPropertyRepair:
             unit=template.unit if template else "",
             currency=template.currency if template else "",
             allowed_values=list(template.allowed_values) if template else [],
-            shared_property=template.shared_property if template else "",
+            shared_property=(
+                shared.api_name
+                if shared is not None
+                else template.shared_property
+                if template
+                else ""
+            ),
             value_type=template.value_type if template else "",
             mappings=[
                 DefinitionMapping(
@@ -791,7 +842,9 @@ class _ObjectPropertyRepair:
 # AI が空の項目を書き写した不足情報（「description_ja: 記載なし」「主キーが不明」など）。
 # 構造の検査（識別子・粒度・型・基数）が同じことを info で出すため、重ねない（#1720）。
 _STRUCTURAL_NOTE = re.compile(
-    r"(description_ja|primary_key|grain_ja|title_property|cardinality|data_type|主キー)"
+    r"(description_ja|primary_key|grain_ja|title_property|cardinality|data_type|主キー|"
+    # LLM が Markdown の解析で書く、空の項目の説明（「主識別子は…ここでは空欄にする」など。#1729）。
+    r"主識別子|識別子|表示名項目|粒度|多重度|基数|データ型|記載なし|空欄)"
 )
 _CONTENT_EXEMPT_FIELDS = frozenset(
     {
@@ -833,7 +886,9 @@ def _is_ungrounded(d: BusinessDefinition) -> bool:
     )
 
 
-def _prune_ai_output(values: list[BusinessDefinition]) -> list[BusinessDefinition]:
+def _prune_ai_output(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], dict[str, str]]:
     """AI の出力から、graph に置けない雛形と、構造の検査と重なる不足情報を除く。"""
 
     kept = [d for d in values if not _is_ungrounded(d)]
@@ -844,6 +899,7 @@ def _prune_ai_output(values: list[BusinessDefinition]) -> list[BusinessDefinitio
     # 同じオブジェクトの同じ列に対応するプロパティが名前違いで 2 つあれば 1 つにする。
     remap: dict[str, str] = {}
     seen: dict[tuple[str, str], str] = {}
+    by_api = {d.api_name: d for d in kept}
     for d in kept:
         if not (isinstance(d, PropertyDefinition) and d.kind == "property"):
             continue
@@ -864,6 +920,8 @@ def _prune_ai_output(values: list[BusinessDefinition]) -> list[BusinessDefinitio
             f"{mapping_object_key(columns[0])}.{mapping_column_key(columns[0])}",
         )
         if key in seen:
+            # 消す方の空でない項目（共有プロパティの参照など）と名前は残す方に寄せる（#1729）。
+            _absorb(by_api[seen[key]], d)
             remap[d.api_name] = seen[key]
         else:
             seen[key] = d.api_name
@@ -880,33 +938,767 @@ def _prune_ai_output(values: list[BusinessDefinition]) -> list[BusinessDefinitio
             own = [m for m in d.mappings if mapping_object_key(m) in tables[d.object_type]]
             if own:
                 d.mappings = own
-    return rewrite_references(kept, remap)
+    return rewrite_references(kept, remap), remap
 
 
-def repair_definitions(
+# ---------------------------------------------------------------------------
+# 業務の型と物理の型（#1729）
+# ---------------------------------------------------------------------------
+
+BASE_DATA_TYPES = ("string", "integer", "number", "boolean", "date", "datetime")
+_BASE_TYPE_ALIASES = {
+    "decimal": "number",
+    "double": "number",
+    "float": "number",
+    "long": "integer",
+    "int": "integer",
+    "timestamp": "datetime",
+    "text": "string",
+    "bool": "boolean",
+}
+_PHYSICAL_TYPE = re.compile(
+    r"(?P<name>[A-Za-z_][A-Za-z_ 0-9]*?)\s*"
+    r"(?:\(\s*(?P<precision>\d+|\*)\s*(?:,\s*(?P<scale>-?\d+)\s*)?(?:\s+(?:BYTE|CHAR))?\))?"
+    r"(?:\s+WITH(?:\s+LOCAL)?\s+TIME\s+ZONE)?",
+    re.IGNORECASE,
+)
+
+
+def base_data_type(value: str) -> str:
+    """業務の型（Base Type）。物理の型（`NUMBER(12,2)`）・訳（「整数（integer）」）も受け付ける。"""
+
+    text = str(value or "").strip()
+    lowered = text.casefold()
+    if not text:
+        return ""
+    if lowered in BASE_DATA_TYPES:
+        return lowered
+    for base in BASE_DATA_TYPES:
+        if VALUE_LABELS.get(base, "").casefold() == lowered:
+            return base
+    if lowered in _BASE_TYPE_ALIASES:
+        return _BASE_TYPE_ALIASES[lowered]
+    match = _PHYSICAL_TYPE.fullmatch(text)
+    if match is None:
+        return ""
+    name = " ".join(match.group("name").upper().split())
+    precision, scale = match.group("precision"), match.group("scale")
+    if name in {"VARCHAR2", "NVARCHAR2", "VARCHAR", "CHAR", "NCHAR", "CLOB", "NCLOB", "LONG"}:
+        return "string"
+    if name == "NUMBER":
+        if precision and precision != "*" and (scale is None or int(scale) == 0):
+            return "integer"
+        return "number"
+    if name in {"INTEGER", "SMALLINT"}:
+        return "integer"
+    if name in {"FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE", "NUMERIC", "REAL"}:
+        return "number"
+    if name == "DATE":
+        return "date"
+    if name.startswith("TIMESTAMP"):
+        return "datetime"
+    if name == "BOOLEAN":
+        return "boolean"
+    return ""
+
+
+def _is_physical_type(value: str) -> bool:
+    text = str(value or "").strip()
+    lowered = text.casefold()
+    return bool(base_data_type(text)) and not (
+        lowered in BASE_DATA_TYPES
+        or lowered in _BASE_TYPE_ALIASES
+        or any(VALUE_LABELS.get(b, "").casefold() == lowered for b in BASE_DATA_TYPES)
+    )
+
+
+def _type_family(value: str) -> str:
+    base = base_data_type(value)
+    return "number" if base == "integer" else base
+
+
+def _normalize_property_type(d: BusinessDefinition) -> None:
+    """データ型を業務の型にそろえ、物理の型（精度・桁）は `physical_type` に移す。"""
+
+    if not isinstance(d, PropertyDefinition):
+        return
+    raw = d.data_type.strip()
+    if _is_physical_type(raw):
+        d.physical_type = d.physical_type or raw
+    base = base_data_type(raw)
+    if base:
+        d.data_type = base
+    if d.physical_type and not d.data_type:
+        d.data_type = base_data_type(d.physical_type)
+
+
+def _fill_property_types(
+    values: list[BusinessDefinition], columns: dict[str, dict[str, dict[str, Any]]]
+) -> None:
+    """1 つの列に対応するプロパティは、schema の列の型から業務の型・物理の型を補う。"""
+
+    for d in values:
+        _normalize_property_type(d)
+        if not isinstance(d, PropertyDefinition):
+            continue
+        targets = [m for m in d.mappings if m.column_name and not m.expression_sql]
+        if len(targets) != 1:
+            continue
+        info = columns.get(mapping_object_key(targets[0]), {}).get(
+            mapping_column_key(targets[0]), {}
+        )
+        physical = str(info.get("data_type") or "").strip()
+        if not physical:
+            continue
+        # 物理の型は DB の列が正（AI・Markdown の書いた型と違えば、業務の型も列に合わせる）。
+        previous, d.physical_type = d.physical_type, physical
+        if not d.data_type or (previous and _type_family(previous) != _type_family(physical)):
+            d.data_type = base_data_type(physical) or d.data_type
+        if isinstance(info.get("nullable"), bool) and d.kind == "property":
+            # 必須（Required）も DB の列が正（NOT NULL の列は必須）。
+            d.required = not info["nullable"]
+
+
+SCHEMA_RESOLVED_FIELDS = frozenset({"data_type", "physical_type", "required"})
+
+
+def schema_resolved_conflicts(
+    conflicts: Iterable[str],
+    definitions: list[BusinessDefinition],
+    schema: dict[str, Any] | None,
+    remap: dict[str, str] | None = None,
+) -> list[str]:
+    """DB の列の型・NOT NULL で値が決まった競合と、同じ列のプロパティの統合で同じ定義を指すように
+    なった参照の競合を除く（利用者が直すことは無い。#1729）。
+
+    `remap` は統合で消えた名前 → 残した名前（`repair_definitions_report` の結果）。
+    """
+
+    columns = _schema_columns(schema)
+    by_name = {d.api_name: d for d in definitions}
+
+    def same_after_merge(note: ConflictNote) -> bool:
+        # 参照の食い違い（主キー・タイトルのプロパティなど）が、同じ列のプロパティの統合で
+        # 同じ定義を指すようになったもの。
+        tokens = [
+            {(remap or {}).get(t.strip(), t.strip()) for t in str(v).split(" / ")}
+            for v in note.values
+        ]
+        return len(tokens) == 2 and tokens[0] == tokens[1]
+
+    def same_column(note: ConflictNote) -> bool:
+        # 主キー・タイトルのプロパティの食い違いが、同じ名前の列（別の表のプロパティを指した
+        # AI の参照は、修復でこのオブジェクト型の列のプロパティに付け替える）を指すもの。
+        if note.field not in {"primary_key", "title_property", "properties"}:
+            return False
+        columns = []
+        for value in note.values:
+            names = [t.strip() for t in str(value).split(" / ") if t.strip()]
+            keys = set()
+            for name in names:
+                target = by_name.get((remap or {}).get(name, name))
+                mapped = [m for m in getattr(target, "mappings", []) if _plain_column(m)]
+                if len(mapped) == 1:
+                    keys.add(mapping_column_key(mapped[0]))
+                elif target is None and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
+                    # 定義の無い名前は列名とみなして修復する（`_ObjectPropertyRepair`）。
+                    keys.add(object_match_key(name))
+                else:
+                    keys.add(f"?{name}")
+            columns.append(keys)
+        return len(columns) == 2 and columns[0] == columns[1]
+
+    def resolved(note: str) -> bool:
+        if not isinstance(note, ConflictNote):
+            return False
+        if same_after_merge(note) or same_column(note):
+            return True
+        if note.field not in SCHEMA_RESOLVED_FIELDS:
+            return False
+        d = by_name.get((remap or {}).get(note.api_name, note.api_name))
+        if d is not None and d.kind in {"shared_property", "value_type"}:
+            # 共有プロパティ・値型の型・必須は、所属のプロパティ（DB の列が正）が持つ。
+            return True
+        targets = [m for m in getattr(d, "mappings", []) if _plain_column(m)]
+        return len(targets) == 1 and mapping_column_key(targets[0]) in columns.get(
+            mapping_object_key(targets[0]), {}
+        )
+
+    return [note for note in conflicts if not resolved(note)]
+
+
+def _borrow_business_names(values: list[BusinessDefinition]) -> None:
+    """表示名が列名のまま（`BUDGET`）のプロパティは、同じ列名の別のプロパティの業務の名前を使う。
+
+    AI が一部のオブジェクト型（ビューなど）にだけ日本語の名前を付けたとき、同じ名前の列は同じ
+    意味として名前をそろえる（列名から推測で訳さない）。
+    """
+
+    named: dict[str, str] = {}
+    for d in values:
+        if isinstance(d, PropertyDefinition) and not _looks_physical_name(d.name_ja, d):
+            for m in d.mappings:
+                if _plain_column(m):
+                    named.setdefault(mapping_column_key(m), d.name_ja)
+    for d in values:
+        if not isinstance(d, PropertyDefinition) or not _looks_physical_name(d.name_ja, d):
+            continue
+        keys = {mapping_column_key(m) for m in d.mappings if _plain_column(m)}
+        if len(keys) == 1 and (name := named.get(next(iter(keys)))):
+            d.aliases = list(dict.fromkeys([*d.aliases, d.name_ja]))
+            d.name_ja = name
+
+
+# ---------------------------------------------------------------------------
+# 同じ物理の表・列・関係を指す概念の統合（#1729）
+# ---------------------------------------------------------------------------
+
+# 概念 ID（`profile_concept_<hex>`）などの内部の識別子。別名（Alias）にしない。
+_INTERNAL_IDENTIFIER = re.compile(r"^[a-z][a-z_]*_[0-9a-f]{12,}$")
+
+
+def is_kind_name(value: str) -> bool:
+    """`object_type` / `property` など、種類の名前だけの値（同一性の根拠にしない）。"""
+
+    return str(value or "").strip().casefold() in CONCEPT_LABELS
+
+
+def _identifier(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_").lower()
+    return (text if text and text[0].isalpha() else f"concept_{text}")[:120]
+
+
+def _plain_column(m: DefinitionMapping) -> bool:
+    """式の無い列の対応（列そのものの式 `ADMIN.T.C` も同じ）。"""
+
+    return bool(m.column_name) and (
+        not m.expression_sql
+        or object_match_key(m.expression_sql) == f"{mapping_object_key(m)}.{mapping_column_key(m)}"
+    )
+
+
+def _column_signature(d: BusinessDefinition) -> frozenset[str]:
+    return frozenset(
+        f"{mapping_object_key(m)}.{mapping_column_key(m)}" for m in d.mappings if _plain_column(m)
+    )
+
+
+def _table_signature(d: BusinessDefinition) -> frozenset[str]:
+    return frozenset(mapping_object_key(m) for m in d.mappings if m.object_name)
+
+
+def join_key(sql: str) -> str:
+    """結合条件の照合キー（`A.X = B.Y AND …` の左右・並びの違いを無視する）。"""
+
+    parts = []
+    for condition in re.split(r"\s+AND\s+", sql.strip(), flags=re.IGNORECASE):
+        sides = [s for s in condition.split("=") if s.strip()]
+        if len(sides) != 2:
+            return " ".join(sql.upper().split())
+        parts.append("=".join(sorted(object_match_key(s.strip()) for s in sides)))
+    return " AND ".join(sorted(parts))
+
+
+def same_physical_concept(left: BusinessDefinition, right: BusinessDefinition) -> bool:
+    """同じ名前の 2 つの定義が、物理の表・列（関係は両端と結合のキー）で食い違わないか。
+
+    名前や ID（種類の名前など）が同じでも、別の列・別の両端を指す定義は別の概念にする（#1729）。
+    """
+
+    if left.kind == "link_type" and right.kind == "link_type":
+        ends = [
+            frozenset(concept_name_key(getattr(d, f, "")) for f in ("source", "target"))
+            for d in (left, right)
+        ]
+        if all("" not in e for e in ends) and ends[0] != ends[1]:
+            return False
+        joins = [join_key(getattr(d, "join_expression_sql", "")) for d in (left, right)]
+        return not (all(joins) and joins[0] != joins[1])
+    if left.kind == "object_type" and right.kind == "object_type":
+        tables = [_table_signature(left), _table_signature(right)]
+        return not (all(tables) and tables[0] != tables[1])
+    columns = [_column_signature(left), _column_signature(right)]
+    if all(columns) and columns[0] != columns[1]:
+        return False
+    owners = [concept_name_key(getattr(d, "object_type", "")) for d in (left, right)]
+    return not (all(owners) and owners[0] != owners[1])
+
+
+def derived_api_name(d: BusinessDefinition) -> str:
+    """物理の対応（所属・列・両端）から作る API 名。作れなければ空。"""
+
+    if d.kind == "link_type":
+        source, target = getattr(d, "source", ""), getattr(d, "target", "")
+        return _identifier(f"{source}_to_{target}") if source and target else ""
+    columns = [m for m in d.mappings if m.column_name]
+    if columns:
+        owner = getattr(d, "object_type", "") or columns[0].object_name
+        return _identifier(f"{owner}_{columns[0].column_name}")
+    tables = [m for m in d.mappings if m.object_name]
+    return _identifier(tables[0].object_name) if tables else ""
+
+
+def _clean_aliases(d: BusinessDefinition, extra: Iterable[str] = ()) -> list[str]:
+    seen = {d.name_ja.strip().casefold(), d.api_name.casefold()}
+    result: list[str] = []
+    for alias in [*d.aliases, *extra]:
+        text = str(alias or "").strip()
+        if not text or text.casefold() in seen or _INTERNAL_IDENTIFIER.match(text):
+            continue
+        seen.add(text.casefold())
+        result.append(text)
+    return result
+
+
+def _absorb(survivor: BusinessDefinition, other: BusinessDefinition) -> None:
+    """other の名前・別名・空でない項目を survivor に寄せる（survivor の値を優先する）。"""
+
+    survivor.aliases = _clean_aliases(survivor, [other.name_ja, *other.aliases])
+    for field in ("aliases", "evidence", "missing_information_ja", "mappings"):
+        current = getattr(survivor, field)
+        unique = {
+            canonical_json(v.model_dump(mode="json") if hasattr(v, "model_dump") else v): v
+            for v in [*current, *getattr(other, field)]
+        }
+        setattr(survivor, field, list(unique.values()))
+    for field in type(survivor).model_fields:
+        if field in {"id", "api_name", "kind", "name_ja", "origin", "review_status"}:
+            continue
+        if field in {"aliases", "evidence", "missing_information_ja", "mappings"}:
+            continue
+        current, value = getattr(survivor, field), getattr(other, field, None)
+        if field in _UNION_REFERENCE_FIELDS and isinstance(current, list):
+            setattr(survivor, field, list(dict.fromkeys([*current, *(value or [])])))
+        elif (field in _UNKNOWN_IS_EMPTY_FIELDS and current == "unknown" and value) or (
+            current in ("", [], None) and value not in ("", [], None)
+        ):
+            setattr(survivor, field, value)
+    survivor.aliases = _clean_aliases(survivor)
+
+
+def _owned(values: list[BusinessDefinition], name: str) -> list[PropertyDefinition]:
+    return [
+        d
+        for d in values
+        if isinstance(d, PropertyDefinition) and d.kind == "property" and d.object_type == name
+    ]
+
+
+def _name_keys(d: BusinessDefinition) -> set[str]:
+    keys = {concept_name_key(d.api_name), d.name_ja.strip().casefold()}
+    keys.update(a.strip().casefold() for a in d.aliases)
+    return {k for k in keys if k}
+
+
+def _unify_objects(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], dict[str, str]]:
+    """同じ表・ビューを指すオブジェクト型を 1 つにまとめる（#1729）。
+
+    表の無いオブジェクト型は、所属のプロパティの列がすべて 1 つの表にあればその表を対応に
+    する。なお表が無ければ、名前・別名が一致する表のあるオブジェクト型に寄せる（「部署」と
+    「部門」と `department` など）。残すのはプロパティ・関係の多い方で、他方の名前は別名にする。
+    """
+
+    by_name = {d.api_name: d for d in values}
+    objects = [d for d in values if isinstance(d, ObjectTypeDefinition)]
+    for obj in objects:
+        if obj.mappings:
+            continue
+        props = [
+            *_owned(values, obj.api_name),
+            *[p for n in obj.properties if isinstance(p := by_name.get(n), PropertyDefinition)],
+        ]
+        tables = {mapping_object_key(m): m for p in props for m in p.mappings if m.column_name}
+        if len(tables) == 1:
+            source = next(iter(tables.values()))
+            obj.mappings = [DefinitionMapping(owner=source.owner, object_name=source.object_name)]
+
+    def score(obj: ObjectTypeDefinition) -> tuple[int, int, bool, bool]:
+        properties = set(obj.properties) | {p.api_name for p in _owned(values, obj.api_name)}
+        links = sum(
+            obj.api_name in {getattr(d, "source", ""), getattr(d, "target", "")}
+            for d in values
+            if d.kind == "link_type"
+        )
+        return (len(properties), links, obj.origin != "legacy", "." not in obj.api_name)
+
+    remap: dict[str, str] = {}
+
+    def final(name: str) -> str:
+        while name in remap:
+            name = remap[name]
+        return name
+
+    groups: dict[frozenset[str], list[ObjectTypeDefinition]] = {}
+    for obj in objects:
+        signature = _table_signature(obj)
+        if signature and all(not m.column_name and not m.expression_sql for m in obj.mappings):
+            groups.setdefault(signature, []).append(obj)
+    for group in groups.values():
+        survivor = max(group, key=score)
+        for other in group:
+            if other is not survivor:
+                _absorb(survivor, other)
+                remap[other.api_name] = survivor.api_name
+    for obj in objects:
+        if obj.mappings or obj.api_name in remap:
+            continue
+        keys = _name_keys(obj)
+        matches = {
+            final(o.api_name)
+            for o in objects
+            if o is not obj and o.mappings and keys & _name_keys(o)
+        }
+        if len(matches) == 1:
+            _absorb(by_name[next(iter(matches))], obj)
+            remap[obj.api_name] = next(iter(matches))
+    if not remap:
+        return values, {}
+    remap = {name: final(name) for name in remap}
+    kept = [d for d in values if not (d.kind == "object_type" and d.api_name in remap)]
+    return rewrite_references(kept, remap), remap
+
+
+def _dedupe_properties(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], dict[str, str]]:
+    """同じオブジェクト型の同じ列に対応するプロパティを 1 つにする（名前が違っても）。"""
+
+    remap: dict[str, str] = {}
+    seen: dict[tuple[str, frozenset[str]], BusinessDefinition] = {}
+    for d in values:
+        if not (isinstance(d, PropertyDefinition) and d.kind == "property"):
+            continue
+        columns = _column_signature(d)
+        if not columns or len(columns) != len(d.mappings):
+            continue
+        key = (d.object_type, columns)
+        if key in seen:
+            _absorb(seen[key], d)
+            remap[d.api_name] = seen[key].api_name
+        else:
+            seen[key] = d
+    if not remap:
+        return values, {}
+    kept = [d for d in values if not (d.kind == "property" and d.api_name in remap)]
+    return rewrite_references(kept, remap), remap
+
+
+def _dedupe_shared(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], dict[str, str]]:
+    """表示名と業務の型が同じ共有プロパティ・値型を 1 つにする（再構築で同じものが増えない）。"""
+
+    remap: dict[str, str] = {}
+    seen: dict[tuple[str, str, str], BusinessDefinition] = {}
+    for d in values:
+        if d.kind not in {"shared_property", "value_type"} or d.mappings:
+            continue
+        key = (d.kind, d.name_ja.strip(), _type_family(getattr(d, "data_type", "")))
+        if key in seen:
+            _absorb(seen[key], d)
+            remap[d.api_name] = seen[key].api_name
+        else:
+            seen[key] = d
+    if not remap:
+        return values, {}
+    kept = [
+        d
+        for d in values
+        if not (d.kind in {"shared_property", "value_type"} and d.api_name in remap)
+    ]
+    return rewrite_references(kept, remap), remap
+
+
+def _dedupe_links(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], dict[str, str]]:
+    """同じ両端・同じ結合のキーのリンク型を 1 つにする。"""
+
+    remap: dict[str, str] = {}
+    seen: dict[tuple[frozenset[str], str], BusinessDefinition] = {}
+    for d in values:
+        if d.kind != "link_type":
+            continue
+        join = join_key(getattr(d, "join_expression_sql", ""))
+        if not join:
+            continue
+        key = (frozenset((getattr(d, "source", ""), getattr(d, "target", ""))), join)
+        if key in seen:
+            _absorb(seen[key], d)
+            remap[d.api_name] = seen[key].api_name
+        else:
+            seen[key] = d
+    if not remap:
+        return values, {}
+    kept = [d for d in values if not (d.kind == "link_type" and d.api_name in remap)]
+    return rewrite_references(kept, remap), remap
+
+
+def _drop_unmapped_objects(
+    values: list[BusinessDefinition],
+) -> tuple[list[BusinessDefinition], list[BusinessDefinition]]:
+    """まとめても表・ビューが決まらないオブジェクト型と、それに属する定義を外す（#1729）。
+
+    graph に置けないため公開を止めず、今回の公開に含めない（best effort）。外した定義は呼出元が
+    利用者に伝える。
+    """
+
+    dropped: list[BusinessDefinition] = [
+        d for d in values if d.kind == "object_type" and not d.mappings
+    ]
+    if not dropped:
+        return values, []
+    names = {d.api_name for d in dropped}
+    kept = [d for d in values if d.api_name not in names or d.kind != "object_type"]
+    while True:
+        cascade = [
+            d
+            for d in kept
+            if (d.kind == "property" and getattr(d, "object_type", "") in names)
+            or (
+                d.kind == "link_type"
+                and {getattr(d, "source", ""), getattr(d, "target", "")} & names
+            )
+            or (
+                d.kind in {"action_type", "business_event", "object_set"}
+                and getattr(d, "object_type", "") in names
+            )
+            or (d.kind == "enumeration" and getattr(d, "property", "") in names)
+        ]
+        if not cascade:
+            break
+        dropped.extend(cascade)
+        names.update(d.api_name for d in cascade)
+        kept = [d for d in kept if all(d is not c for c in cascade)]
+    cleaned = []
+    for d in kept:
+        raw = d.model_dump(mode="json")
+        for field, value in definition_references(d):
+            current = raw.get(field)
+            if isinstance(current, str) and current in names:
+                raw[field] = ""
+            elif isinstance(current, list) and value in names:
+                raw[field] = [v for v in current if not (isinstance(v, str) and v in names)]
+        cleaned.append(raw)
+    return DEFINITIONS.validate_python(cleaned), dropped
+
+
+# ---------------------------------------------------------------------------
+# 外部キー・同じ名前と型の ID 列からのリンク型（#1720・#1729）
+# ---------------------------------------------------------------------------
+
+
+def schema_tables(schema: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    tables: dict[str, dict[str, Any]] = {}
+    for obj in (schema or {}).get("objects", []):
+        owner, name = str(obj.get("owner", "")), str(obj.get("object_name", ""))
+        key = f"{object_match_key(owner)}.{object_match_key(name)}"
+        columns = {}
+        for column in obj.get("columns", []):
+            if isinstance(column, dict):
+                text = str(column.get("column_name", column.get("column", column.get("name", ""))))
+                columns[object_match_key(text)] = {**column, "column": text}
+        primary = [
+            [object_match_key(str(c)) for c in constraint.get("columns", [])]
+            for constraint in obj.get("constraints", [])
+            if constraint.get("constraint_type") == "P"
+        ]
+        tables[key] = {
+            "qualified": str(obj.get("object") or f"{owner}.{name}"),
+            "object_name": name,
+            "kind": str(obj.get("object_type", "")).lower(),
+            "columns": columns,
+            "primary_key": primary[0] if primary else [],
+            "has_constraints": bool(obj.get("constraints")),
+        }
+    return tables
+
+
+def _infer_links(
+    profile_id: str, values: list[BusinessDefinition], schema: dict[str, Any] | None
+) -> list[BusinessDefinition]:
+    """表の間の関係を、外部キーの制約か、同じ名前・型の ID 列から作る（AI が作らなかった分）。
+
+    同じ名前の列は、相手の表の主キー（制約。制約の無い表は「表名_ID」）のときだけ関係にする。
+    `ID` だけの列名や、両方の主キーが同じ列（1 対 1 か判断できない）は推測しない。
+    """
+
+    tables = schema_tables(schema)
+    objects: dict[str, ObjectTypeDefinition] = {}
+    for d in values:
+        if isinstance(d, ObjectTypeDefinition):
+            signature = _table_signature(d)
+            if len(signature) == 1 and next(iter(signature)) in tables:
+                objects.setdefault(next(iter(signature)), d)
+    existing = {
+        frozenset((getattr(d, "source", ""), getattr(d, "target", "")))
+        for d in values
+        if d.kind == "link_type"
+    }
+    names = {d.api_name for d in values}
+    created: list[BusinessDefinition] = []
+
+    def add(
+        source_key: str,
+        target_key: str,
+        pairs: list[tuple[str, str]],
+        cardinality: str,
+        description: str,
+    ) -> None:
+        source, target = objects[source_key], objects[target_key]
+        if frozenset((source.api_name, target.api_name)) in existing:
+            return
+        existing.add(frozenset((source.api_name, target.api_name)))
+        left, right = tables[source_key], tables[target_key]
+        join = " AND ".join(
+            f"{left['qualified']}.{left['columns'][a]['column']} = "
+            f"{right['qualified']}.{right['columns'][b]['column']}"
+            for a, b in pairs
+        )
+        name = _identifier(f"{source.api_name}_to_{target.api_name}")
+        suffix = 2
+        while name in names:
+            name = _identifier(f"{source.api_name}_to_{target.api_name}_{suffix}")
+            suffix += 1
+        names.add(name)
+        optional = any(left["columns"][a].get("nullable", True) is not False for a, _ in pairs)
+        created.append(
+            LinkTypeDefinition(
+                api_name=name,
+                id=stable_ontology_id("profile_concept", profile_id, "link_type", name),
+                name_ja=f"{source.name_ja}の{target.name_ja}",
+                inverse_name_ja=f"{target.name_ja}の{source.name_ja}",
+                description_ja=description,
+                source=source.api_name,
+                target=target.api_name,
+                cardinality=cardinality,
+                optional=optional,
+                join_expression_sql=join,
+                evidence=[
+                    DefinitionEvidence(
+                        source_id="schema",
+                        locator=join,
+                        source_kind="database",
+                        assertion="join_expression_sql",
+                    )
+                ],
+                origin="ai",
+            )
+        )
+
+    for relationship in (schema or {}).get("relationships", []):
+        if relationship.get("kind") != "foreign_key":
+            continue
+        source_key = object_match_key(str(relationship.get("source_object", "")))
+        target_key = object_match_key(str(relationship.get("target_object", "")))
+        if source_key not in objects or target_key not in objects or source_key == target_key:
+            continue
+        pairs = []
+        for condition in relationship.get("join_conditions", []):
+            left = object_match_key(str(condition.get("left", ""))).rsplit(".", 1)[-1]
+            right = object_match_key(str(condition.get("right", ""))).rsplit(".", 1)[-1]
+            if left in tables[source_key]["columns"] and right in tables[target_key]["columns"]:
+                pairs.append((left, right))
+        if not pairs:
+            continue
+        cardinality = str(relationship.get("cardinality") or "many_to_one")
+        if cardinality not in {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}:
+            cardinality = "many_to_one"
+        add(
+            source_key,
+            target_key,
+            pairs,
+            cardinality,
+            f"外部キーの制約（{relationship['id']}）による関係。"
+            if relationship.get("id")
+            else "外部キーの制約による関係。",
+        )
+
+    def key_columns(table_key: str) -> list[str]:
+        table = tables[table_key]
+        if table["primary_key"]:
+            return list(table["primary_key"])
+        guess = object_match_key(f"{table['object_name']}_ID")
+        if table["kind"] != "view" and not table["has_constraints"] and guess in table["columns"]:
+            return [guess]
+        return []
+
+    for source_key in objects:
+        for target_key in objects:
+            if source_key == target_key:
+                continue
+            keys = key_columns(target_key)
+            if len(keys) != 1 or keys[0] == "ID":
+                continue
+            column = keys[0]
+            left, right = tables[source_key]["columns"], tables[target_key]["columns"]
+            if column not in left or tables[source_key]["primary_key"] == [column]:
+                continue
+            types = {
+                _type_family(str(left[column].get("data_type", ""))),
+                _type_family(str(right[column].get("data_type", ""))),
+            }
+            if len(types) != 1:
+                continue
+            add(
+                source_key,
+                target_key,
+                [(column, column)],
+                "many_to_one",
+                f"両方の表・ビューにある同じ名前・型の列 {right[column]['column']} で結合する関係"
+                "（外部キーの制約は無い）。",
+            )
+    return created
+
+
+class RepairResult:
+    """`repair_definitions` の結果。統合で消えた名前（→ 残した名前）と、外した定義を持つ。"""
+
+    def __init__(
+        self,
+        definitions: list[BusinessDefinition],
+        remap: dict[str, str],
+        dropped: list[BusinessDefinition],
+    ) -> None:
+        self.definitions = definitions
+        self.remap = remap
+        self.dropped = dropped
+
+
+def repair_definitions_report(
     profile_id: str,
     definitions: list[BusinessDefinition],
     schema: dict[str, Any] | None = None,
     *,
     ai_output: bool = False,
-) -> list[BusinessDefinition]:
-    """AI の出力を graph にできる形へ直す（#1720）。
+) -> RepairResult:
+    """AI の出力・Markdown の解析結果を graph にできる形へ直す（#1720・#1729）。
 
-    オブジェクトの properties / 識別子が他のオブジェクトのプロパティや未定義の名前を指すときは、
-    そのオブジェクトの表・列に対応するプロパティを作って付け替える。`ai_output` のときは、
-    graph に置けない雛形（種類ごとの空の定義）・構造の検査と重なる不足情報・同じ列の重複した
-    プロパティも除く。
-
-    AI は列名が同じ（`DEPARTMENT_ID`・2 つのビューの `DEPARTMENT_NAME`）プロパティを 1 つだけ
-    作り、複数のオブジェクトから参照しがちである。そのままでは graph が壊れ公開を止めるため、
-    オブジェクトの表に同じ列があればオブジェクトごとのプロパティに分ける。列が無い参照は外す
-    （best effort。graph を作れる範囲を最大にし、推測で列を足さない）。
+    1. 同じ表・ビューを指すオブジェクト型を 1 つにまとめる（表の無い方は名前・別名で寄せる）。
+    2. オブジェクト型の properties / 主キー（Primary Key）が他のオブジェクト型のプロパティや未定義の
+       名前を指すときは、そのオブジェクト型の表の列に対応するプロパティを作って付け替える。
+    3. 同じオブジェクト型の同じ列のプロパティ、同じ両端・結合のキーのリンク型を 1 つにする。
+    4. まとめても表が決まらないオブジェクト型は外す（公開を止めない。外した定義を返す）。
+    5. プロパティの型を業務の型（Base Type）と物理の型（Physical Type）に分ける。
+    `ai_output` のときは、graph に置けない雛形・構造の検査と重なる不足情報を除き、外部キーか
+    同じ名前・型の ID 列から AI が作らなかったリンク型（Link Type）を足す。
     """
 
     values = [d.model_copy(deep=True) for d in definitions]
+    pruned: dict[str, str] = {}
     if ai_output:
         # AI 構築の出力だけ。利用者が Markdown に書いた定義は消さず、検証の診断に任せる。
-        values = _prune_ai_output(values)
+        values, pruned = _prune_ai_output(values)
+    _separate_name_clashes(values)
+    for d in values:
+        # 空の項目の書き写しは構造の検査（主キー・粒度・型・多重度の info）と重なるため除く。
+        d.missing_information_ja = [
+            note for note in d.missing_information_ja if not _STRUCTURAL_NOTE.search(note)
+        ]
+    values, remap = _unify_objects(values)
+    remap = {**pruned, **remap}
     by_name: dict[str, BusinessDefinition] = {d.api_name: d for d in values}
     columns = _schema_columns(schema)
     added: list[BusinessDefinition] = []
@@ -916,7 +1708,105 @@ def repair_definitions(
         obj.primary_key = repair.names(obj.primary_key)
         if obj.title_property:
             obj.title_property = repair.resolve(obj.title_property) or ""
-    return sorted([*values, *added], key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name))
+    values = [*values, *added]
+    values, property_remap = _dedupe_properties(values)
+    values, link_remap = _dedupe_links(values)
+    values, shared_remap = _dedupe_shared(values)
+    remap.update(property_remap)
+    remap.update(link_remap)
+    remap.update(shared_remap)
+    values, dropped = _drop_unmapped_objects(values)
+    _fill_property_types(values, columns)
+    _borrow_business_names(values)
+    if ai_output:
+        _repair_optional_references(values)
+    if ai_output and schema:
+        values = [*values, *_infer_links(profile_id, values, schema)]
+    ordered = sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name))
+    return RepairResult(ordered, remap, dropped)
+
+
+def _separate_name_clashes(values: list[BusinessDefinition]) -> None:
+    """種類の違う定義が同じ API 名（`project_id` のプロパティと共有プロパティなど）のとき、
+    オブジェクト型・プロパティ・リンク型を残し、他方に種類の名前を付けて分ける（#1729）。
+
+    共有プロパティ・値型の参照（`shared_property` / `value_type`）は分けた名前に付け替える。
+    """
+
+    priority = {"object_type": 0, "property": 1, "link_type": 2}
+    groups: dict[str, list[BusinessDefinition]] = {}
+    for d in values:
+        groups.setdefault(d.api_name, []).append(d)
+    names = {d.api_name for d in values}
+    renamed: dict[tuple[str, str], str] = {}
+    for name, group in groups.items():
+        if len({d.kind for d in group}) < 2:
+            continue
+        keep = min(group, key=lambda d: priority.get(d.kind, 9))
+        for d in group:
+            if d is keep or d.kind == keep.kind:
+                continue
+            new = _identifier(f"{name}_{d.kind}")
+            suffix = 2
+            while new in names:
+                new = _identifier(f"{name}_{d.kind}_{suffix}")
+                suffix += 1
+            names.add(new)
+            renamed[(d.kind, name)] = new
+            d.api_name = new
+    if not renamed:
+        return
+    for d in values:
+        for field in ("shared_property", "value_type"):
+            current = getattr(d, field, "")
+            if current and (field, current) in renamed:
+                setattr(d, field, renamed[(field, current)])
+
+
+def _repair_optional_references(values: list[BusinessDefinition]) -> None:
+    """AI のプロパティの共有プロパティ・値型の参照が別の種類を指すとき、同じ名前の正しい種類に
+    付け替え、無ければ外す（任意の項目なので graph を壊さず公開を止めない。#1729）。"""
+
+    for field, kind in (("shared_property", "shared_property"), ("value_type", "value_type")):
+        candidates = [d for d in values if d.kind == kind]
+        for d in values:
+            name = getattr(d, field, "") if isinstance(d, PropertyDefinition) else ""
+            if not name or any(c.api_name == name for c in candidates):
+                continue
+            target = next((v for v in values if v.api_name == name), None)
+            label = target.name_ja if target is not None else ""
+            matches = [
+                c
+                for c in candidates
+                if c.name_ja == (label or d.name_ja)
+                or concept_name_key(c.api_name).startswith(concept_name_key(name))
+            ]
+            setattr(d, field, matches[0].api_name if len(matches) == 1 else "")
+        for d in values:
+            # 業務の型が違う共有プロパティ・値型は、同じ意味とはいえないため参照を外す。
+            target = next((c for c in candidates if c.api_name == getattr(d, field, "")), None)
+            if (
+                isinstance(d, PropertyDefinition)
+                and isinstance(target, PropertyDefinition)
+                and target.data_type
+                and d.data_type
+                and _type_family(target.data_type) != _type_family(d.data_type)
+            ):
+                setattr(d, field, "")
+
+
+def repair_definitions(
+    profile_id: str,
+    definitions: list[BusinessDefinition],
+    schema: dict[str, Any] | None = None,
+    *,
+    ai_output: bool = False,
+) -> list[BusinessDefinition]:
+    """`repair_definitions_report` の定義だけを返す。"""
+
+    return repair_definitions_report(
+        profile_id, definitions, schema, ai_output=ai_output
+    ).definitions
 
 
 def _human(value: Any) -> str:
@@ -975,7 +1865,12 @@ def render_concepts(
                     "missing_information_ja",
                 } or value in ("", [], None):
                     continue
-                lines.append(f"- {FIELD_LABELS.get(field, field)}: {_human(value)}")
+                shown = (
+                    VALUE_LABELS[value]
+                    if field in {"data_type", "cardinality"} and value in VALUE_LABELS
+                    else _human(value)
+                )
+                lines.append(f"- {FIELD_LABELS.get(field, field)}: {shown}")
             # 不足情報（missing_information_ja）は公開前の確認の「補うと精度が上がる項目」に出す。
             # Markdown の本文には書かない（#1720）。
             lines.append("")
@@ -984,10 +1879,7 @@ def render_concepts(
 
 
 _CARDINALITY_JA = {
-    "one_to_one": "一対一",
-    "one_to_many": "一対多",
-    "many_to_one": "多対一",
-    "many_to_many": "多対多",
+    key: VALUE_LABELS[key] for key in ("one_to_one", "one_to_many", "many_to_one", "many_to_many")
 }
 
 
@@ -1066,17 +1958,18 @@ def render_llm_context(definitions: Iterable[BusinessDefinition], qa_markdown: s
         details = _details(
             [
                 ("列", physical(prop)),
-                ("型", prop.data_type),
-                ("単位", prop.unit),
-                ("通貨", prop.currency),
-                ("許可値", allowed),
-                ("別名", aliases(prop)),
+                (plain_label("data_type"), VALUE_LABELS.get(prop.data_type, prop.data_type)),
+                (plain_label("physical_type"), prop.physical_type),
+                (plain_label("unit"), prop.unit),
+                (plain_label("currency"), prop.currency),
+                (plain_label("allowed_values"), allowed),
+                (plain_label("aliases"), aliases(prop)),
             ]
         )
         return indent + "- " + _with_details(prop.name_ja, details, prop.description_ja)
 
     if objects:
-        lines.extend(["", "## オブジェクト"])
+        lines.extend(["", f"## {CONCEPT_LABELS['object_type']}"])
         for obj in objects:
             head = f"### {obj.name_ja}"
             table = " / ".join(
@@ -1086,10 +1979,13 @@ def render_llm_context(definitions: Iterable[BusinessDefinition], qa_markdown: s
             if _description(obj.description_ja):
                 lines.append(_description(obj.description_ja))
             facts = [
-                ("別名", aliases(obj)),
-                ("識別子", [label(n) for n in obj.primary_key]),
-                ("粒度", obj.grain_ja),
-                ("表示名", label(obj.title_property) if obj.title_property else ""),
+                (FIELD_LABELS["aliases"], aliases(obj)),
+                (FIELD_LABELS["primary_key"], [label(n) for n in obj.primary_key]),
+                (FIELD_LABELS["grain_ja"], obj.grain_ja),
+                (
+                    FIELD_LABELS["title_property"],
+                    label(obj.title_property) if obj.title_property else "",
+                ),
             ]
             lines.extend(f"- {name}: {value}" for name, raw in facts if (value := _joined(raw)))
             props = owned.get(obj.api_name, [])
@@ -1099,28 +1995,36 @@ def render_llm_context(definitions: Iterable[BusinessDefinition], qa_markdown: s
                 if all(prop is not seen for seen in ordered):
                     ordered.append(prop)
             if ordered:
-                lines.append("- プロパティ:")
+                lines.append(f"- {FIELD_LABELS['properties']}:")
                 lines.extend(property_line(p, "  ") for p in ordered)
     orphans = [p for p in properties if p.object_type not in {o.api_name for o in objects}]
     shared = [
         d for d in values if isinstance(d, PropertyDefinition) and d.kind == "shared_property"
     ]
-    if orphans or shared:
-        lines.extend(["", "## 共通のプロパティ"])
-        lines.extend(property_line(p) for p in [*shared, *orphans])
+    if shared:
+        lines.extend(["", f"## {CONCEPT_LABELS['shared_property']}"])
+        lines.extend(property_line(p) for p in shared)
+    if orphans:
+        lines.extend(["", f"## 所属の無い{CONCEPT_LABELS['property']}"])
+        lines.extend(property_line(p) for p in orphans)
     links = [d for d in values if d.kind == "link_type"]
     if links:
-        lines.extend(["", "## 関係"])
+        lines.extend(["", f"## {CONCEPT_LABELS['link_type']}"])
         for link in links:
             intermediary = getattr(link, "intermediary_object", "")
-            details = "、".join(
-                part
-                for part in (
-                    _CARDINALITY_JA.get(getattr(link, "cardinality", ""), ""),
-                    _details([("結合", getattr(link, "join_expression_sql", ""))]),
-                    _details([("経由", label(intermediary) if intermediary else "")]),
-                )
-                if part
+            details = _details(
+                [
+                    (
+                        plain_label("cardinality"),
+                        _CARDINALITY_JA.get(getattr(link, "cardinality", ""), ""),
+                    ),
+                    (plain_label("join_expression_sql"), getattr(link, "join_expression_sql", "")),
+                    (
+                        plain_label("intermediary_object"),
+                        label(intermediary) if intermediary else "",
+                    ),
+                    (plain_label("inverse_name_ja"), getattr(link, "inverse_name_ja", "")),
+                ]
             )
             head = (
                 f"{label(getattr(link, 'source', ''))} → {label(getattr(link, 'target', ''))}"
@@ -1129,32 +2033,40 @@ def render_llm_context(definitions: Iterable[BusinessDefinition], qa_markdown: s
             lines.append("- " + _with_details(head, details, link.description_ja))
     metrics = [d for d in values if isinstance(d, MetricDefinitionV2)]
     if metrics:
-        lines.extend(["", "## 指標"])
+        lines.extend(["", f"## {CONCEPT_LABELS['metric']}"])
         for metric in metrics:
+            # semantic layer の書き方（測定値・集計方法・ディメンション・時間のディメンション・
+            # 絞り込みの条件）にそろえる（#1729）。
             details = _details(
                 [
-                    ("式", metric.expression_sql),
-                    ("条件", metric.filter_sql),
-                    ("集計", metric.aggregation),
-                    ("粒度", [label(n) for n in metric.grain]),
-                    ("重複排除", [label(n) for n in metric.distinct_keys]),
-                    ("時間", label(metric.time_property) if metric.time_property else ""),
-                    ("時間の扱い", metric.time_policy_ja),
-                    ("単位", metric.unit),
-                    ("通貨", metric.currency),
-                    ("NULL", metric.null_policy_ja),
-                    ("別名", aliases(metric)),
+                    ("測定値", metric.expression_sql),
+                    (plain_label("aggregation"), metric.aggregation),
+                    (plain_label("grain"), [label(n) for n in metric.grain]),
+                    (
+                        plain_label("time_property"),
+                        label(metric.time_property) if metric.time_property else "",
+                    ),
+                    (plain_label("time_policy_ja"), metric.time_policy_ja),
+                    (plain_label("filter_sql"), metric.filter_sql),
+                    (plain_label("distinct_keys"), [label(n) for n in metric.distinct_keys]),
+                    (plain_label("unit"), metric.unit),
+                    (plain_label("currency"), metric.currency),
+                    (plain_label("null_policy_ja"), metric.null_policy_ja),
+                    (plain_label("aliases"), aliases(metric)),
                 ]
             )
             lines.append("- " + _with_details(metric.name_ja, details, metric.description_ja))
     rules = [d for d in values if d.kind == "business_rule"]
     if rules:
-        lines.extend(["", "## 業務ルール"])
+        lines.extend(["", f"## {CONCEPT_LABELS['business_rule']}"])
         for rule in rules:
             details = _details(
                 [
-                    ("条件", getattr(rule, "predicate_sql", "")),
-                    ("対象", [label(n) for n in getattr(rule, "applies_to", [])]),
+                    (plain_label("predicate_sql"), getattr(rule, "predicate_sql", "")),
+                    (
+                        plain_label("applies_to"),
+                        [label(n) for n in getattr(rule, "applies_to", [])],
+                    ),
                 ]
             )
             lines.append("- " + _with_details(rule.name_ja, details, rule.description_ja))
@@ -1164,11 +2076,14 @@ def render_llm_context(definitions: Iterable[BusinessDefinition], qa_markdown: s
         for d in others:
             details = _details(
                 [
-                    ("式", getattr(d, "expression_sql", "")),
-                    ("条件", getattr(d, "filter_sql", "")),
-                    ("対象", label(target) if (target := getattr(d, "object_type", "")) else ""),
-                    ("戻り値", getattr(d, "return_type", "")),
-                    ("別名", aliases(d)),
+                    (plain_label("expression_sql"), getattr(d, "expression_sql", "")),
+                    (plain_label("filter_sql"), getattr(d, "filter_sql", "")),
+                    (
+                        "対象",
+                        label(target) if (target := getattr(d, "object_type", "")) else "",
+                    ),
+                    (plain_label("return_type"), getattr(d, "return_type", "")),
+                    (plain_label("aliases"), aliases(d)),
                 ]
             )
             lines.append("- " + _with_details(d.name_ja, details, d.description_ja))

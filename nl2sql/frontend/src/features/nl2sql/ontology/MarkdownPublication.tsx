@@ -18,7 +18,9 @@ import { useWorkspaceState, useResetExecutionConsent } from "@/components/Worksp
 import type { OntologyFinding, OntologyMarkdownState, OntologyPublishJob } from "./types";
 import { OntologyFindings } from "./OntologyFindings";
 import { PublicationGraphSummary } from "./PublicationGraphSummary";
-import { conceptDisplayNames } from "./publicationSummary";
+import { PublicationChanges } from "./PublicationChanges";
+import { ImprovementSuggestionPanel } from "./ImprovementSuggestionPanel";
+import { conceptDisplayNames, type ImprovementSuggestion, type PublicationDifference } from "./publicationSummary";
 import { DefinitionFields, TechnicalDetails } from "./ontologyResultPresentation";
 
 const MARKDOWN_BUSY = "markdown-check";
@@ -29,12 +31,16 @@ interface Preparation {
   error_message_ja: string;
   findings: OntologyFinding[];
   definitions?: Definition[];
-  differences: { id: string; before: Definition | null; after: Definition | null }[];
+  differences?: PublicationDifference[];
+  suggestions?: ImprovementSuggestion[];
   data_report?: Record<string, unknown>;
 }
 
-export function MarkdownPublication({ profileId, profileLabel, signature, disabled, save, onPublished, onBusyChange }: {
+export function MarkdownPublication({ profileId, profileLabel, signature, disabled, save, onPublished, onBusyChange, businessText = "", onAppendBusinessText }: {
   profileId: string; profileLabel: string; signature: string; disabled: boolean;
+  /** 「業務説明（自然言語）」の今の値（改善案が重ねて言わないため）と、利用者が押したときの追記。 */
+  businessText?: string;
+  onAppendBusinessText?: (text: string) => void;
   save: () => Promise<OntologyMarkdownState | null | undefined>;
   onPublished: (job: OntologyPublishJob) => void;
   onBusyChange: Dispatch<SetStateAction<string>>;
@@ -144,13 +150,21 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
     {value && <section className="grid min-w-0 gap-3" aria-label={t("markdownOntology.check")}>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-      <h3 className="text-sm font-semibold">{t("markdownOntology.check")}</h3>
+      <div className="grid min-w-0 gap-1">
+        <h3 className="text-sm font-semibold">{t("markdownOntology.check")}</h3>
+        <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.checkHint")}</p>
+      </div>
       <StatusBadge variant={hasErrors || dataValidationFailed || value.status === "failed" ? "danger" : value.status === "ready" ? hasWarnings ? "warning" : "success" : "info"} label={t(`markdownOntology.status.${hasErrors || dataValidationFailed ? "failed" : value.status}`)} />
       </div>
       {hasErrors && <Banner severity="danger">{t("markdownOntology.errorsBlockPublish")}</Banner>}
       {value.status === "ready" && hasWarnings && !hasErrors && !dataValidationFailed && <Banner severity="warning">{t("markdownOntology.warningsPublishable")}</Banner>}
+      {/* 残ったエラー・警告を解くための、業務説明に追記する改善案（#1729）。エラー・警告が無ければ出さない。 */}
+      {(hasErrors || hasWarnings) && <ImprovementSuggestionPanel suggestions={value.suggestions ?? []} businessText={businessText} onAppend={onAppendBusinessText} />}
       <OntologyFindings findings={findings} label={t("markdownOntology.findings")} names={conceptDisplayNames(value.definitions ?? [])} />
-      {value.status !== "queued" && value.status !== "running" && <PublicationGraphSummary definitions={value.definitions ?? []} differences={value.differences ?? []} />}
+      {value.status !== "queued" && value.status !== "running" && <>
+        <PublicationGraphSummary definitions={value.definitions ?? []} />
+        <PublicationChanges differences={value.differences ?? []} findings={findings} definitions={value.definitions ?? []} />
+      </>}
       {value.status === "ready" && <>
         <Disclosure data-testid="ontology-publication-data-validation" summary={t("markdownOntology.dataValidation")} icon={ShieldCheck}
           summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4">

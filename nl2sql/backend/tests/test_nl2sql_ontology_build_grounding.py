@@ -199,7 +199,9 @@ def test_unresolved_or_invalid_link_still_warns(initial: str) -> None:
     assert any("OrderCustomer / join_expression_sql" in w for w in result.warnings_ja)
 
 
-def test_differing_supported_join_conditions_remain_conflicts() -> None:
+def test_differing_join_conditions_are_kept_as_separate_links() -> None:
+    """同じ名前でも結合のキーが違うリンク型は別の関係として残す（併合して競合にしない。#1729）。"""
+
     combined, _ = merge_build_extractions(extraction(), extraction(JOIN.replace("=", "<>")))
     result = ground_qa_links(
         combined,
@@ -207,8 +209,11 @@ def test_differing_supported_join_conditions_remain_conflicts() -> None:
         SCHEMA,
     )
     assert not result.warnings_ja
-    _, conflicts = merge_definitions("sales", result.definitions)
-    assert any("<>" in conflict for conflict in conflicts)
+    merged, conflicts = merge_definitions("sales", result.definitions)
+    links = [d for d in merged if d.kind == "link_type"]
+    assert sorted(d.join_expression_sql for d in links) == sorted([JOIN, JOIN.replace("=", "<>")])
+    assert len({d.api_name for d in links}) == 2
+    assert not conflicts
 
 
 @pytest.mark.parametrize("glean", [False, True])

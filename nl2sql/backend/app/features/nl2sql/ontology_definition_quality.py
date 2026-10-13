@@ -13,6 +13,7 @@ from .ontology_definitions import (
     DefinitionSource,
     PropertyDefinition,
 )
+from .ontology_terms import plain_label
 
 # 物理の表・列が業務プロファイルの範囲にあれば、DB の schema を根拠にした evidence は照合済みにする
 # （LLM が書く資料の検証値・原文の引用は、schema の JSON とは一致しない。#1720）。
@@ -112,8 +113,9 @@ def inspect_definition_quality(
             finding(
                 "INFERENCE_WITHOUT_EVIDENCE",
                 "evidence",
-                "資料やスキーマと照合できる根拠がありません。"
-                "業務の資料・Q/A を構築に加えると、根拠を確かめられます。",
+                "資料やスキーマで確かめられる根拠がありません。"
+                "業務の資料・Q/A を構築に加えると、根拠を確かめられます"
+                "（何もしなくても公開できます）。",
             )
         for missing in item.missing_information_ja:
             finding("INFORMATION_REQUIRED", "missing_information_ja", missing)
@@ -124,30 +126,33 @@ def inspect_definition_quality(
                 finding(
                     "OBJECT_IDENTITY_REQUIRED",
                     "primary_key",
-                    "識別子（1 行を特定する列）が未設定です。"
-                    "分かれば Markdown のオブジェクトに「識別子」を書くと、"
-                    "件数・重複の判定の精度が上がります。",
+                    "主キー（1 行を特定する列）が分かりません。"
+                    "分かれば Markdown のオブジェクト型に「主キー」を書くと、"
+                    "件数・重複の判定が正確になります（何もしなくても公開できます）。",
                 )
             if not item.grain_ja:
                 finding(
                     "OBJECT_GRAIN_REQUIRED",
                     "grain_ja",
-                    "業務上の粒度（1 行が何を表すか）が未設定です。"
-                    "分かれば Markdown のオブジェクトに「粒度」を書くと、集計の精度が上がります。",
+                    "粒度（1 行が何を表すか）が書かれていません。"
+                    "分かれば Markdown のオブジェクト型に「粒度」を書くと、集計が正確になります"
+                    "（何もしなくても公開できます）。",
                 )
         elif isinstance(item, PropertyDefinition):
             if not item.data_type:
                 finding(
                     "PROPERTY_TYPE_REQUIRED",
                     "data_type",
-                    "プロパティのデータ型が未設定です。"
-                    "分かれば Markdown に「データ型」を書いてください。",
+                    "業務の型（文字列・数値・日付など）が分かりません。"
+                    "分かれば Markdown のプロパティに「業務の型」を書いてください"
+                    "（何もしなくても公開できます）。",
                 )
         elif item.kind == "link_type" and item.cardinality == "unknown":
             finding(
                 "CARDINALITY_REQUIRED",
                 "cardinality",
-                "関係の基数（多対一など）が未設定です。分かれば Markdown の関係に書いてください。",
+                "多重度（1 対多など）が分かりません。分かれば Markdown のリンク型に「多重度」を"
+                "書くと、件数の数え方が正確になります（何もしなくても公開できます）。",
             )
         elif item.kind == "metric":
             required = (
@@ -164,7 +169,13 @@ def inspect_definition_quality(
                     finding(
                         "METRIC_SEMANTICS_REQUIRED",
                         field,
-                        f"指標の {field} が未設定です。分かれば Markdown の指標に書いてください。",
+                        f"指標の「{plain_label(field)}」が書かれていません。"
+                        + (
+                            "Markdown の指標に書くまで、この指標は SQL に使えません。"
+                            if field in {"expression_sql", "aggregation"}
+                            else "分かれば Markdown の指標に書いてください"
+                            "（何もしなくても公開できます）。"
+                        ),
                         severity=(
                             "warning" if field in {"expression_sql", "aggregation"} else "info"
                         ),
@@ -173,14 +184,16 @@ def inspect_definition_quality(
                 finding(
                     "METRIC_ADDITIVITY_REQUIRED",
                     "additivity",
-                    "指標の加算可能な軸が未設定です。分かれば Markdown の指標に書いてください。",
+                    "指標の加法性（足し合わせてよいか）が書かれていません。"
+                    "分かれば Markdown の指標に書いてください（何もしなくても公開できます）。",
                 )
         elif item.kind == "function":
             if not item.return_type or not (item.expression_sql or item.implementation_key):
                 finding(
                     "CONFIGURATION_REQUIRED",
                     "implementation_key",
-                    "戻り値・計算方法または登録済み実装の設定が必要です。",
+                    "関数の戻り値の型と計算の方法（式）が書かれていません。"
+                    "使う場合は Markdown の関数に書いてください。",
                 )
         elif item.kind == "action_type" and (
             not item.permission_requirement_ja
@@ -190,6 +203,7 @@ def inspect_definition_quality(
             finding(
                 "CONFIGURATION_REQUIRED",
                 "implementation_key",
-                "対象属性・権限・失敗処理の設定が必要です。",
+                "アクション型の更新する項目・必要な権限・失敗時の扱いが書かれていません。"
+                "使う場合は Markdown のアクション型に書いてください。",
             )
     return findings

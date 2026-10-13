@@ -856,7 +856,7 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert "受注金額合計" in finished.markdown_output
     assert "APP.ORDERS.AMOUNT" in finished.markdown_output
     assert "#### 業務ルール（Business Rule）" not in finished.markdown_output
-    assert "別名:" in finished.markdown_output
+    assert "別名（Alias）:" in finished.markdown_output
     assert "オーダー" in finished.markdown_output
     assert "解決が必要な定義の競合" not in finished.markdown_output
     assert "## 採用外候補" not in finished.markdown_output
