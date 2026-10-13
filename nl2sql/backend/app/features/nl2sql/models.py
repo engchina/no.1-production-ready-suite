@@ -2302,36 +2302,6 @@ class SelectAiCredentialReadinessData(BaseModel):
     credential_exists: bool | None = None
 
 
-class ProfileAgentAssetRebuildStatus(StrEnum):
-    """業務 Profile の Select AI Agent アセットの最後の再構築の結果（#1691）。"""
-
-    NEVER = "never"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
-class ProfileAgentAssetRebuildData(BaseModel):
-    """業務 Profile の Select AI Agent アセットを最後に再構築した日時と結果（#1691）。
-
-    Oracle 反映のジョブ（profile_sync）の記録から引く。業務 Profile に書くと版（ETag）が進み、
-    編集中の保存と競合するため、業務 Profile の取得の応答とは別に返す。
-    """
-
-    profile_id: str = Field(min_length=1)
-    status: ProfileAgentAssetRebuildStatus = ProfileAgentAssetRebuildStatus.NEVER
-    # 再構築が終わった（失敗した）日時。まだ再構築していなければ空。
-    rebuilt_at: str = ""
-    job_id: str = ""
-    # 再構築した業務 Profile の版。
-    profile_etag: str = ""
-    # 最後の再構築の後に業務 Profile が保存された（アセットに入っていない変更がある）。
-    profile_changed_since: bool = False
-    team_name: str = ""
-    # 失敗の要約（利用者向けの日本語。ORA・PL/SQL の stack は含めない）。
-    error_code: str = ""
-    error_message_ja: str = ""
-
-
 class SelectAiProfilesExportData(BaseModel):
     """Select AI profiles JSON export response."""
 

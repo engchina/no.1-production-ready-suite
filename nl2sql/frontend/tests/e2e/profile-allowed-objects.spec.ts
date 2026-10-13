@@ -246,21 +246,6 @@ const profileOntologyView = {
   },
 };
 
-function agentAssetRebuild(overrides: Record<string, unknown> = {}) {
-  return {
-    profile_id: "default",
-    status: "never",
-    rebuilt_at: "",
-    job_id: "",
-    profile_etag: "",
-    profile_changed_since: false,
-    team_name: "",
-    error_code: "",
-    error_message_ja: "",
-    ...overrides,
-  };
-}
-
 async function mockProfileApi(
   page: Page,
   options: {
@@ -440,10 +425,6 @@ async function mockProfileApi(
   );
   await page.route("**/api/nl2sql/profiles/*/ontology-view", (route) =>
     fulfillJson(route, profileOntologyView)
-  );
-  // Select AI Agent アセットの最後の再構築（#1691）。既定はまだ再構築していない。
-  await page.route("**/api/nl2sql/profiles/*/agent-asset-rebuild", (route) =>
-    fulfillJson(route, agentAssetRebuild({ profile_id: route.request().url().split("/").at(-2) ?? "" }))
   );
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
     fulfillJson(route, {
@@ -3651,149 +3632,4 @@ test("Select AI Agent アセットの再構築のチェックは保存して開�
   await page.reload();
   await expect(page.getByLabel("名称")).toHaveValue("DEFAULT_PROFILE");
   await expect(rebuild).not.toBeChecked();
-});
-
-// ---- Select AI Agent アセットを最後に再構築した日時と結果（#1691） ------------------------------
-
-test.describe("Select AI Agent アセットの最後の再構築", () => {
-  // 日時は既存の画面と同じ formatDateTime（MM/DD HH:mm。端末の時刻帯）で出す。期待値を決めるため時刻帯を固定する。
-  test.use({ timezoneId: "Asia/Tokyo" });
-
-  test("最後の再構築の日時と結果を、保存の後も開き直した後も出す (#1691)", { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await mockProfileApi(page);
-    let rebuild = agentAssetRebuild();
-    let rebuildRequests = 0;
-    await page.route("**/api/nl2sql/profiles/default/agent-asset-rebuild", async (route) => {
-      rebuildRequests += 1;
-      await fulfillJson(route, rebuild);
-    });
-    await page.route("**/api/nl2sql/oracle-sync-jobs/*", async (route) => {
-      // 保存の Oracle 反映のジョブが再構築を含めて終わったら、最後の再構築が成功になる。
-      rebuild = agentAssetRebuild({
-        status: "succeeded",
-        rebuilt_at: "2026-10-13T09:05:00+00:00",
-        job_id: "profile-sync-default",
-        profile_etag: "etag-default",
-        team_name: "NL2SQL_DEFAULT_TEAM",
-      });
-      await fulfillJson(route, {
-        job_id: "profile-sync-default",
-        profile_id: "default",
-        profile_etag: "etag-default",
-        status: "succeeded",
-        phase: "succeeded",
-        rebuild_agent_assets: true,
-        error_code: "",
-        error_message_ja: "",
-        created_at: "2026-10-13T09:04:00Z",
-        finished_at: "2026-10-13T09:05:00Z",
-        agent_result: {
-          engine: "select_ai_agent",
-          refreshed: true,
-          status: "ready",
-          refreshed_at: "2026-10-13T09:05:00+00:00",
-          profile_name: "NL2SQL_DEFAULT_PROFILE",
-          team_name: "NL2SQL_DEFAULT_TEAM",
-          warning: "",
-          asset_names: {},
-          engine_meta: {},
-        },
-      });
-    });
-
-    await page.goto("/profiles?profile=default");
-    const status = page.getByRole("group", { name: "最後の再構築" });
-    const badge = page.getByTestId("profile-agent-rebuild-badge");
-    const summary = page.getByTestId("profile-agent-rebuild-summary");
-    // まだ再構築していない。状態は色だけでなく文字で示す。
-    await expect(badge).toHaveText("未再構築");
-    await expect(badge.locator("[data-status-variant]")).toHaveAttribute("data-status-variant", "neutral");
-    await expect(summary).toHaveText(
-      "まだ再構築していません。チェックをオンにして保存すると、アセットを作成します。"
-    );
-    // 状態の欄は再構築のチェックの直下（同じ「Select AI Agent アセット」の欄の中）に出す。
-    const rebuildCheckbox = page.getByRole("checkbox", {
-      name: "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する",
-    });
-    const checkboxBox = await rebuildCheckbox.locator("xpath=ancestor::label[1]").boundingBox();
-    const statusBox = await status.boundingBox();
-    expect(checkboxBox && statusBox && statusBox.y >= checkboxBox.y + checkboxBox.height).toBeTruthy();
-
-    // 再構築をオンにして保存すると、ジョブの終わりに取り直して成功を出す。
-    await page.getByLabel("名称").fill("DEFAULT_PROFILE");
-    await rebuildCheckbox.check();
-    await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
-    const requestsBeforeSave = rebuildRequests;
-    await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect.poll(() => rebuildRequests).toBeGreaterThan(requestsBeforeSave);
-    await expect(badge).toHaveText("再構築済み");
-    await expect(badge.locator("[data-status-variant]")).toHaveAttribute("data-status-variant", "success");
-    await expect(summary).toHaveText("日時: 10/13 18:05");
-    await expect(summary.locator("time")).toHaveAttribute("datetime", "2026-10-13T09:05:00+00:00");
-
-    // 開き直しても、最後の再構築の日時と結果が分かる（保存の直後の進行の表示は消える）。
-    await page.reload();
-    await expect(page.getByTestId("profile-save-progress")).toHaveCount(0);
-    await expect(badge).toHaveText("再構築済み");
-    await expect(summary).toHaveText("日時: 10/13 18:05");
-    await expect(page.getByTestId("profile-agent-rebuild-failure")).toHaveCount(0);
-    await status.scrollIntoViewIfNeeded();
-    await expectNoDocumentHorizontalOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath("agent-rebuild-succeeded.png") });
-
-    // 最後の再構築が失敗し、その後にオフで保存した業務プロファイル。
-    rebuild = agentAssetRebuild({
-      status: "failed",
-      rebuilt_at: "2026-10-13T10:30:00+00:00",
-      job_id: "profile-sync-failed",
-      profile_etag: "etag-old",
-      profile_changed_since: true,
-      error_code: "AGENT_ASSETS_REBUILD_FAILED",
-      error_message_ja:
-        "Select AI Agent アセットを再構築できませんでした。データベース設定と Select AI Agent の構成を確認してから再試行してください。",
-    });
-    await page.reload();
-    await expect(badge).toHaveText("再構築に失敗");
-    await expect(badge.locator("[data-status-variant]")).toHaveAttribute("data-status-variant", "danger");
-    await expect(summary).toHaveText("日時: 10/13 19:30");
-    await expect(page.getByTestId("profile-agent-rebuild-failure")).toHaveText(
-      "Select AI Agent アセットを再構築できませんでした。データベース設定と Select AI Agent の構成を確認してから再試行してください。"
-    );
-    await expect(page.getByTestId("profile-agent-rebuild-changed")).toHaveText(
-      "最後の再構築の後に業務プロファイルが保存されています。アセットに反映するには、チェックをオンにして保存してください。"
-    );
-    await expect(page.getByTestId("profile-agent-rebuild-failure")).not.toContainText("ORA-");
-    await status.scrollIntoViewIfNeeded();
-    await expectNoDocumentHorizontalOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath("agent-rebuild-failed.png") });
-  });
-
-  test("最後の再構築を読めないときは欄の中に原因と再試行を出し、再試行で読み直す (#1691)", async ({ page }) => {
-    await mockProfileApi(page);
-    let fail = true;
-    await page.route("**/api/nl2sql/profiles/default/agent-asset-rebuild", async (route) => {
-      if (fail) {
-        await route.fulfill({
-          status: 503,
-          contentType: "application/json",
-          body: JSON.stringify({ detail: "データベースに接続できません。" }),
-        });
-        return;
-      }
-      await fulfillJson(
-        route,
-        agentAssetRebuild({ status: "succeeded", rebuilt_at: "2026-10-13T09:05:00+00:00" })
-      );
-    });
-
-    await page.goto("/profiles?profile=default");
-    const error = page.getByTestId("profile-agent-rebuild-error");
-    await expect(error).toBeVisible();
-    // 読めなかったことを「まだ再構築していません」と取り違えない。
-    await expect(page.getByTestId("profile-agent-rebuild-summary")).toHaveCount(0);
-    fail = false;
-    await error.getByRole("button", { name: "再試行" }).click();
-    await expect(page.getByTestId("profile-agent-rebuild-badge")).toHaveText("再構築済み");
-    await expect(error).toHaveCount(0);
-  });
 });
