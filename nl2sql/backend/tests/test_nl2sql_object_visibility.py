@@ -21,6 +21,7 @@ from app.features.nl2sql.object_visibility import (
     filter_user_visible_catalog,
     is_user_visible_object_name,
     is_user_visible_schema_object,
+    system_object_prefix_sql_filters,
 )
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
 from app.features.nl2sql.service import Nl2SqlService
@@ -303,3 +304,24 @@ def test_shared_platform_and_other_product_tables_are_hidden(name: str) -> None:
     # 接頭辞が一致しない業務テーブルは従来どおり見える。
     assert is_user_visible_object_name("PLATFORMS") is True
     assert is_user_visible_object_name("APP.RAGE_EVENTS") is True
+
+
+def test_system_object_prefix_sql_filters_match_python_visibility() -> None:
+    """SQL の除外の条件は Python の可視性の判定と同じ接頭辞を、大文字小文字を区別せずに除く。
+
+    #1708
+    """
+
+    filters = system_object_prefix_sql_filters("o.object_name")
+
+    assert filters == (
+        "UPPER(o.object_name) NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
+        "UPPER(o.object_name) NOT LIKE 'PLATFORM\\_%' ESCAPE '\\'",
+        "UPPER(o.object_name) NOT LIKE 'RAG\\_%' ESCAPE '\\'",
+        "UPPER(o.object_name) NOT LIKE 'AGENT\\_%' ESCAPE '\\'",
+    )
+    for name in ("NL2SQL_X", "platform_users", "Rag_Chunks", "AGENT_RUNS"):
+        assert not is_user_visible_object_name(name)
+    # `_` は LIKE の 1 文字の wildcard なので escape する（`RAGX…` のような業務の表を落とさない）。
+    assert is_user_visible_object_name("RAGXDATA")
+    assert all("\\_%" in item for item in filters)

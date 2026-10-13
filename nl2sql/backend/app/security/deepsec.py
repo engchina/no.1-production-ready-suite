@@ -29,7 +29,10 @@ from app.features.nl2sql.object_identity import (
     parse_object_identity,
     qualified_object_name,
 )
-from app.features.nl2sql.object_visibility import is_user_visible_schema_object
+from app.features.nl2sql.object_visibility import (
+    is_user_visible_schema_object,
+    system_object_prefix_sql_filters,
+)
 from app.settings import BACKEND_ENV_FILE, Settings, get_settings
 
 from .domain import (
@@ -402,6 +405,12 @@ def _scope_value_type(data_type: str) -> str:
 def _like_pattern(value: str, *, prefix: str, suffix: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{prefix}{escaped}{suffix}"
+
+
+# NL2SQL・共通基盤・他製品のシステムテーブルは SQL で除く。Python だけで落とすと、同じ schema の
+# `AGENT_` / `PLATFORM_` / `RAG_` の表が 1 ページの大半を占めて view が次のページに回り、
+# 件数もずれる（#1708）。
+_SYSTEM_OBJECT_PREFIX_FILTERS = system_object_prefix_sql_filters("o.object_name")
 
 
 def _encode_target_object_cursor(owner: str, object_name: str) -> str:
@@ -1258,7 +1267,7 @@ class DeepSecService:
             "o.owner NOT LIKE '%#%'",
             "o.object_name NOT LIKE '%$%'",
             "o.object_name NOT LIKE '%#%'",
-            "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
+            *_SYSTEM_OBJECT_PREFIX_FILTERS,
         ]
         binds: dict[str, object] = dict(owner_binds)
         if profile_id:
@@ -1381,11 +1390,12 @@ class DeepSecService:
             if owner and object_name and _deepsec_target_visible(owner, object_name)
         ]
         next_cursor = None
-        if len(rows) > normalized_limit and items:
-            last_item = items[-1]
+        if len(rows) > normalized_limit and page_rows:
+            # Python の可視性の判定で落とした行がページの末尾に続いても次へ進めるよう、
+            # 候補ではなく SQL で取った最後の行から作る（#1708）。
+            last_row = page_rows[-1]
             next_cursor = _encode_target_object_cursor(
-                str(last_item["owner"]),
-                str(last_item["name"]),
+                str(last_row[0] or ""), str(last_row[1] or "")
             )
         return {
             "runtime": "oracle",
@@ -1425,7 +1435,7 @@ class DeepSecService:
             "o.owner NOT LIKE '%#%'",
             "o.object_name NOT LIKE '%$%'",
             "o.object_name NOT LIKE '%#%'",
-            "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
+            *_SYSTEM_OBJECT_PREFIX_FILTERS,
         ]
         binds: dict[str, object] = {
             **owner_binds,

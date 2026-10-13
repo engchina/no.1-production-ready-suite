@@ -4690,6 +4690,78 @@ test("DeepSec Data Grant picker は live metadata 0 件時に総件数を誤表�
   await expectNoPageHorizontalScroll(page);
 });
 
+// #1708: 1 ページ目の候補が一覧の高さに満たず続きがあるとき（以前の backend は共通基盤・他製品のシステムテーブルを
+// 取った後に落とし、1 ページ目が表 3 件だけになった）、スクロールを待たずに続きを読み、後ろに並ぶ view まで出す。
+test("DeepSec の対象 table/view は 1 ページ目が短くても続きの view まで出す", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const role = {
+    ...systemRole,
+    role_id: "role-short-page",
+    role_code: "SHORT_PAGE_ROLE",
+    display_name: "短いページのロール",
+    is_built_in: false,
+    permissions: ["menu.security_deepsec"],
+    data_entitlements: [],
+  };
+  const object = (name: string, objectType: string) => ({
+    ...deepSecTargetObject,
+    owner: "ADMIN",
+    name,
+    qualified_name: `ADMIN.${name}`,
+    object_type: objectType,
+    comment: "",
+  });
+  const requests: URL[] = [];
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 0 },
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+  await page.route("**/api/security/deepsec/data-entitlements", (route) => fulfill(route, [role]));
+  await page.route("**/api/security/deepsec/target-objects?*", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    const second = url.searchParams.get("cursor") === "page-2";
+    return fulfill(route, {
+      runtime: "oracle",
+      owner: "",
+      items: second
+        ? [object("V_DEPT_PROJECT", "VIEW"), object("V_EMP_DEPT", "VIEW")]
+        : [object("DEPARTMENT", "TABLE"), object("EMPLOYEE", "TABLE"), object("PROJECT", "TABLE")],
+      total: null,
+      counts_included: false,
+      next_cursor: second ? null : "page-2",
+      warnings: [],
+    });
+  });
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限" }).click();
+  const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
+  await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+  await entitlementForm.locator("#deepsec-entitlement-resource-0").click();
+  const popover = page.getByRole("dialog", { name: "対象 table/view" });
+
+  // スクロールも ↓ もせずに、続きの view まで出る。
+  await expect(popover.getByRole("option")).toHaveCount(5);
+  await expect(popover.getByRole("option", { name: /ADMIN\.V_EMP_DEPT/ })).toBeVisible();
+  await expect(popover.getByText("5 件", { exact: true })).toBeVisible();
+  // 続きは 1 回だけ読む（続きが無くなったら止まる）。
+  expect(requests.filter((url) => url.searchParams.get("cursor") === "page-2")).toHaveLength(1);
+  expect(requests.at(-1)?.searchParams.get("cursor")).toBe("page-2");
+  await popover.getByRole("option", { name: /ADMIN\.V_EMP_DEPT/ }).click();
+  await expect(entitlementForm.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("ADMIN.V_EMP_DEPT");
+  await expectNoPageHorizontalScroll(page);
+});
+
 test("DeepSec は構造化データ権限をロール別に編集する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDatabaseGateReady(page);
   const queryRole = {

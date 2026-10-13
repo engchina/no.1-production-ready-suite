@@ -33,6 +33,7 @@ afterEach(() => {
   host.remove();
   document.body.innerHTML = "";
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const OPTIONS: SearchableSelectOption[] = Array.from({ length: 300 }, (_, index) => ({
@@ -416,6 +417,7 @@ describe("SearchableSelectField", () => {
   });
 
   it("サーバー側の検索（remote）では、最後の候補から ↓ で続きを読む", () => {
+    listHeights({ scrollHeight: 600, clientHeight: 300 }); // 一覧があふれている（自動では読まない）
     const onLoadMore = vi.fn();
     const button = mountSingle({
       options: OPTIONS.slice(0, 3),
@@ -430,4 +432,46 @@ describe("SearchableSelectField", () => {
     keydown(input, "ArrowDown");
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
+
+  it("読み込んだ候補が一覧の高さに満たず続きがあるときは、スクロールを待たずに続きを読む（#1708）", () => {
+    listHeights({ scrollHeight: 150, clientHeight: 150 }); // 3 件で一覧がスクロールしない
+    const onLoadMore = vi.fn();
+    const remote = { total: null as number | null, hasMore: true, loadingMore: false, searching: false, onLoadMore };
+    const button = mountSingle({ options: OPTIONS.slice(0, 3), remote: { ...remote, total: 300 } });
+    expect(onLoadMore).not.toHaveBeenCalled(); // 開くまでは読まない
+    click(button);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    // 読み込み中は待ち、読み終えて候補が増えても一覧に満たなければ、もう一度読む。
+    act(() => root.render(<SingleHarness options={OPTIONS.slice(0, 3)} remote={{ ...remote, total: 300, loadingMore: true }} />));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    act(() => root.render(<SingleHarness options={OPTIONS.slice(0, 5)} remote={{ ...remote, total: 300 }} />));
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
+
+    // 続きを読んでも候補が増えなければ、自動では繰り返さない。
+    act(() => root.render(<SingleHarness options={OPTIONS.slice(0, 5)} remote={{ ...remote, total: 300, loadingMore: true }} />));
+    act(() => root.render(<SingleHarness options={OPTIONS.slice(0, 5)} remote={{ ...remote, total: 300 }} />));
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
+
+    // 続きが無ければ読まない。
+    act(() => root.render(<SingleHarness options={OPTIONS.slice(0, 7)} remote={{ ...remote, total: 7, hasMore: false }} />));
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
+  });
+
+  it("検索中は自動で続きを読まない", () => {
+    listHeights({ scrollHeight: 150, clientHeight: 150 });
+    const onLoadMore = vi.fn();
+    const button = mountSingle({
+      options: OPTIONS.slice(0, 3),
+      remote: { total: 300, hasMore: true, loadingMore: false, searching: true, onLoadMore },
+    });
+    click(button);
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
 });
+
+/** happy-dom はレイアウトしないので、一覧の高さを決めて「あふれているか」を再現する。 */
+function listHeights({ scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) {
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(scrollHeight);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(clientHeight);
+}
