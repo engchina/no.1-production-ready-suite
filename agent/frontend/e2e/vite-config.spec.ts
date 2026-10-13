@@ -25,7 +25,8 @@ function resolveConfig(env: ProxyEnv): UserConfig {
   }
 }
 
-function startDevServer(config: UserConfig) {
+// dev サーバ（configureServer）と、PR の CI の e2e が使う preview（configurePreviewServer。#1583）の両方を確かめる。
+function startDevServer(config: UserConfig, hook: "configureServer" | "configurePreviewServer" = "configureServer") {
   const plugin = config.plugins?.find(
     (p): p is Plugin => typeof p === "object" && p !== null && "name" in p && p.name === "agent-playwright-hermetic-api",
   );
@@ -36,7 +37,7 @@ function startDevServer(config: UserConfig) {
     config: { logger: { warn: (message: string) => warnings.push(message) } },
   };
   if (!plugin) throw new Error("hermetic API plugin が見つかりません");
-  (plugin.configureServer as (server: ViteDevServer) => void)(server as unknown as ViteDevServer);
+  (plugin[hook] as (server: ViteDevServer) => void)(server as unknown as ViteDevServer);
   return { middlewarePaths, warnings };
 }
 
@@ -61,6 +62,16 @@ test.describe("vite.config /api proxy", () => {
     const { middlewarePaths, warnings } = startDevServer(config);
     expect(middlewarePaths).toEqual(["/api"]);
     expect(warnings).toEqual([]);
+  });
+
+  test("vite preview（PR の CI の e2e。#1583）でも、hermetic なら /api を 404 の middleware で終端する", () => {
+    expect(startDevServer(resolveConfig({ PLAYWRIGHT_HERMETIC_API: "1" }), "configurePreviewServer").middlewarePaths).toEqual(["/api"]);
+    const { middlewarePaths, warnings } = startDevServer(resolveConfig({}), "configurePreviewServer");
+    expect(middlewarePaths).toEqual(["/api"]);
+    expect(warnings).toHaveLength(1);
+    expect(
+      startDevServer(resolveConfig({ BACKEND_URL: "http://127.0.0.1:18999" }), "configurePreviewServer").middlewarePaths
+    ).toEqual([]);
   });
 });
 
