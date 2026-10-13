@@ -61,16 +61,19 @@ values supplied in Resource Manager, written to `platform/.env`:
 - `PLATFORM_ADMIN_LOGIN_USER_ID=system_admin`
 - `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`
 
-Deep Data Security is enabled by default in Terraform deployments. If
-`nl2sql_oracle_deepsec_enabled=false`, `NL2SQL_ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
-password is written empty:
+Deep Data Security is disabled by default in Terraform deployments; turn it on
+only where it is used (#1707). With the default `nl2sql_oracle_deepsec_enabled=false`,
+`NL2SQL_ORACLE_DEEPSEC_ENABLED=false` is written and the DATA USER password is written
+empty. With `nl2sql_oracle_deepsec_enabled=true`, the DATA USER password
+(`nl2sql_oracle_deepsec_data_user_password`) is required:
 
-- `NL2SQL_ORACLE_DEEPSEC_ENABLED` (`true` by default)
+- `NL2SQL_ORACLE_DEEPSEC_ENABLED` (`false` by default)
 - `NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER`
 - `NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD`
 
-After deployment, open `システム設定 > Deep Data Security`, apply the V001 steps in
-order, then run the Data Grant verification.
+To use it, open `セキュリティ設定 > Deep Data Security` after deployment (saving the
+DATA USER password there also writes `NL2SQL_ORACLE_DEEPSEC_ENABLED=true` to
+`backend/.env`), apply the V001 steps in order, then run the Data Grant verification.
 
 The stack reserves a fixed Oracle Select AI credential name and the default
 Select AI region:

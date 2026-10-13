@@ -520,6 +520,17 @@ def _verify_schema(schema: str, variables: str) -> None:
         ["- deploy_nl2sql", "- nl2sql_oracle_deepsec_enabled", "confirmation: true"],
         context="DeepSec password conditional schema",
     )
+    # Deep Data Security は使う環境だけが有効にする（既定は無効。#1707）。
+    _require_all(
+        _schema_variable(schema, "nl2sql_oracle_deepsec_enabled"),
+        ["type: boolean", "required: true", "visible: deploy_nl2sql", "default: false"],
+        context="nl2sql_oracle_deepsec_enabled schema default",
+    )
+    _require_all(
+        _terraform_variable(variables, "nl2sql_oracle_deepsec_enabled"),
+        ["type        = bool", "default     = false"],
+        context="nl2sql_oracle_deepsec_enabled Terraform default",
+    )
     compute_visible, compute = groups.get("Compute", ("", []))
     if compute_visible != "true" or any(name.startswith(PRODUCTS) for name in compute):
         raise AssertionError(f"shared Compute group must hold only shared inputs: {compute}")

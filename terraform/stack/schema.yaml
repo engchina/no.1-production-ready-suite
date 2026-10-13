@@ -765,8 +765,8 @@ variables:
     required: true
     visible: deploy_nl2sql
     title: "NL2SQL_ORACLE_DEEPSEC_ENABLED"
-    description: "Deep Data Securityを有効にする場合はオンにします。オンの場合のみDeepSec DATA USER passwordが必要です。"
-    default: true
+    description: "Deep Data Securityを有効にする場合はオンにします（既定はオフ）。オンの場合のみDeepSec DATA USER passwordが必要です。"
+    default: false
 
   nl2sql_oracle_deepsec_data_user_password:
     type: password

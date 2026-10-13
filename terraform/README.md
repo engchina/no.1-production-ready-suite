@@ -280,7 +280,8 @@ sudo systemctl restart production-ready-rag-backend.service
 ### NL2SQL（`deploy_nl2sql`）
 
 - ログイン: 構成管理者 `SYSTEM_ADMIN`（ユーザー ID は `system_admin` 固定、RAG と共通）。`app_admin_login_user_password`（12〜30 文字、`admin` と `"` を含まない）。
-- Deep Data Security: `nl2sql_oracle_deepsec_enabled`（既定 `true`）。有効な場合は `nl2sql_oracle_deepsec_data_user_password` が必要です。
+- Deep Data Security: `nl2sql_oracle_deepsec_enabled`（既定 `false`。使う環境だけがオンにします。#1707）。オンの場合は `nl2sql_oracle_deepsec_data_user_password` が必要です。
+  配備した後に「セキュリティ設定 > Deep Data Security」で DATA USER のパスワードを保存しても有効になります（`backend/.env` に `NL2SQL_ORACLE_DEEPSEC_ENABLED=true` を書きます）。
 - Nginx + systemd に直接配備します（Docker は使いません）。backend は `127.0.0.1:8010`（ローカルの開発と同じ。#1316 で 8000 から変えた）。
 - instance 上の構成・更新手順・障害対応は [nl2sql/docs/compute-operations.md](../nl2sql/docs/compute-operations.md) を参照してください。
 
