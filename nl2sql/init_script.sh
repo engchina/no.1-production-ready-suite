@@ -510,7 +510,8 @@ main() {
   build_frontend
   configure_systemd
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH}"
+  # URL（scheme・IP・port）は suite-init.sh の最後に出す（製品は HTTPS・公開の port を知らない。#1639）。
+  log "Initialization complete. The URLs are listed at the end of /var/log/suite-init.log (suite: and each product)."
 }
 
 if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then
