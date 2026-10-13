@@ -251,6 +251,10 @@ timeout に拡張できる。これは production 既定値ではない。
 
 ## DeepSec V001 の前提
 
+DeepSec は既定で無効（`NL2SQL_ORACLE_DEEPSEC_ENABLED` の未指定・`backend/.env.example`・Terraform の
+`nl2sql_oracle_deepsec_enabled` の既定は `false`。#1707）で、使う環境だけが有効にする。Deep Data Security 画面で
+DATA USER password を保存すると、`backend/.env` に `NL2SQL_ORACLE_DEEPSEC_ENABLED=true` を書いて有効にする。
+
 DeepSec は python-oracledb Thin mode のみ対応する。`NL2SQL_ORACLE_DEEPSEC_ENABLED=true` の場合、
 `PLATFORM_ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
 fail-fast する。DATA USER password は Deep Data Security 画面から保存でき、保存後は API を再起動せずに
@@ -286,7 +290,7 @@ PLATFORM_ORACLE_WALLET_PASSWORD=<wallet-password-if-required>
 
 Thin mTLS の Wallet / config directory には `tnsnames.ora` と `ewallet.pem` を配置する。
 `sqlnet.ora` と `cwallet.sso` は Thick 互換の Oracle Net 構成向けであり、DeepSec 有効時の必須条件にはしない。
-DeepSec 無効の非標準運用で Thick 専用機能が必要な場合のみ、別 service/process として設計し直す。
+DeepSec 無効の運用で Thick 専用機能が必要な場合のみ、別 service/process として設計し直す。
 
 本システムは database access token や python-oracledb の `set_end_user_security_context()` を使わず、
 共有 `DEEPSEC_DATA_USER` の direct logon と application context / `CLIENT_IDENTIFIER` で実行時 user を

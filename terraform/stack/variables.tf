@@ -639,9 +639,9 @@ variable "app_admin_login_user_password" {
 }
 
 variable "nl2sql_oracle_deepsec_enabled" {
-  description = "Enable Deep Data Security in the NL2SQL backend/.env."
+  description = "Enable Deep Data Security in the NL2SQL backend/.env. Disabled by default; enable it only where it is used."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "nl2sql_oracle_deepsec_data_user_password" {
