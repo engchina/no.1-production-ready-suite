@@ -8,6 +8,10 @@
 #   - Oracle は無い（DSN は誰も listen しない 127.0.0.1 の port）。各製品の system schema の初期化は失敗し、
 #     init_script.sh の degraded（web は動かし、DB を使う worker は止めたまま）で進む。DB の結合は
 #     Integration Nightly（oracle-integration.yml）が確かめる。
+#   - suite-init.sh の最後の配備の確認（platform/deploy/suite-health.sh の suite_check_deployment）の system schema
+#     の確認（#1648）は、SUITE_CHECK_SCHEMA=skip で飛ばす（#1656。DB が無いので ready にならない）。schema が ready か
+#     は Integration Nightly（実 Oracle）で確かめる。代わりに verify で、各製品の schema の確認の CLI が配備した venv
+#     で動き、「DB に繋がらない（SCHEMA_STATUS_UNAVAILABLE）」を返す（ほかの理由で失敗しない）ことを確かめる。
 #   - SELinux は container では無効（suite-init.sh の configure_selinux は「disabled」で飛ばす）。enforcing の
 #     context・boolean は対象外で、実機（OCI）で確かめる。
 #   - firewalld は container の中で動かす（privileged）。OCI の security list・公開 IP は無い（assign_public_ip=false）。
@@ -16,7 +20,7 @@
 # 使い方: bash .github/scripts/deploy-run-through.sh <up|deploy|verify|logs|down>
 #   up      container の image を作り、起動し、repository と props を置く
 #   deploy  suite-init.sh を実行する
-#   verify  Nginx を通して 3 製品の画面・API の health・CA の証明書を確かめる
+#   verify  Nginx を通して 3 製品の画面・API の health・CA の証明書と、schema の確認の CLI を確かめる
 #   logs    診断（各 init の log・失敗した unit の journal）を出す
 #   down    container を消す
 # 環境変数: DOCKER（既定 docker。手元は podman）・DEPLOY_CONTAINER（既定 pr-deploy-ol9）・
@@ -206,7 +210,7 @@ up() {
 deploy() {
   local start="${SECONDS}" status=0
   "${docker_cmd}" exec "${container}" bash -c \
-    "APP_ROOT=${app_root} bash ${repo_dir}/platform/deploy/suite-init.sh" || status=$?
+    "APP_ROOT=${app_root} SUITE_CHECK_SCHEMA=skip bash ${repo_dir}/platform/deploy/suite-init.sh" || status=$?
   log "suite-init.sh: 終了 ${status}（$((SECONDS - start)) 秒）。"
   return "${status}"
 }
@@ -232,6 +236,23 @@ verify() {
     check "${product} の画面" "https://127.0.0.1/${product}/" 200 container
     check "${product} の API の health" "https://127.0.0.1/${product}/api/health" 200 container
     check "${product} の画面（host から）" "https://127.0.0.1:${host_port}/${product}/" 200 host
+  done
+  # system schema の確認の CLI（suite-init.sh では SUITE_CHECK_SCHEMA=skip で飛ばした。#1656）: 本番と同じ
+  # suite_run_schema_check（製品のユーザー・配備した venv）で実行し、DB に繋がらないこと（SCHEMA_STATUS_UNAVAILABLE）
+  # だけで失敗することを確かめる（module が無い・import の失敗・要約が無いなどは NG）。
+  local output status summary
+  for product in ${products}; do
+    status=0
+    output="$("${docker_cmd}" exec "${container}" bash -c \
+      "SUITE_REPO_DIR=${repo_dir} && source ${repo_dir}/platform/deploy/suite-health.sh && suite_run_schema_check ${product}")" \
+      || status=$?
+    summary="$(printf '%s\n' "${output}" | sed '/^[[:space:]]*$/d' | tail -n 1)"
+    if [ "${status}" -ne 0 ] && printf '%s\n' "${summary}" | grep -qF '（SCHEMA_STATUS_UNAVAILABLE'; then
+      log "OK ${product} の schema の確認の CLI: DB に繋がらない（${summary}）"
+    else
+      log "NG ${product} の schema の確認の CLI: 終了 ${status}・${summary:-要約なし}（期待: 非 0 で SCHEMA_STATUS_UNAVAILABLE）"
+      failures=$((failures + 1))
+    fi
   done
   # 入口（/）は転送する。CA の証明書は配る。HTTPS が on のときは port 80 で listen しない（#1638）。
   check "入口の転送" "https://127.0.0.1/" 302 container
