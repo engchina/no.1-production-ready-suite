@@ -122,7 +122,7 @@ export function VectorIndexSettingsClient() {
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+            <div data-surface-tint="info" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <Boxes size={20} aria-hidden />
             </div>
             <div>
@@ -156,6 +156,7 @@ export function VectorIndexSettingsClient() {
                       onChange={() => selectProfile(item.name)}
                     />
                     <label
+                      data-surface-tint={selected ? "accent" : undefined}
                       htmlFor={`settings-vector-index-profile-${item.name}`}
                       className={cn(
                         "block h-full cursor-pointer min-h-[8rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
@@ -246,7 +247,7 @@ export function VectorIndexSettingsClient() {
 function ProfileChips({ profile }: { profile: VectorIndexProfileStatusData }) {
   return (
     <span className="mt-2 flex flex-wrap gap-1">
-      <span className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
+      <span data-surface-tint="info" className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
         {t("settings.vectorIndex.targetAccuracy")} {profile.target_accuracy}
       </span>
       <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">

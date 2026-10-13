@@ -772,6 +772,7 @@ export function DbObjectStepIndicator({
                 }`}
               />
               <span
+                data-surface-tint={!complete && current ? "accent" : undefined}
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors ${
                   complete
                     ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"

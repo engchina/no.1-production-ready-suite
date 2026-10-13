@@ -39,6 +39,7 @@ export function AgentTemplatePicker({
               return (
                 <button
                   key={template.id}
+                  data-surface-tint={current ? "accent" : undefined}
                   type="button"
                   aria-pressed={current}
                   aria-label={t("agent.template.apply", { name: template.name })}

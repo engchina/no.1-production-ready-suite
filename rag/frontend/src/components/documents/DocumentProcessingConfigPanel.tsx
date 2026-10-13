@@ -389,6 +389,7 @@ export function DocumentProcessingConfigPanel({
                     return (
                       <div
                         key={item.field}
+                        data-surface-tint={overridden ? "info" : undefined}
                         data-config-field={item.field}
                         className={cn(
                           "min-w-0 rounded-md border px-2.5 py-2",
@@ -398,7 +399,7 @@ export function DocumentProcessingConfigPanel({
                         <div className="flex min-w-0 items-start justify-between gap-1">
                           <span className="min-w-0 text-xs leading-4 text-fg-muted">{t(item.label)}</span>
                           {overridden ? (
-                            <span className="shrink-0 rounded-sm bg-info-subtle px-1 text-xs font-medium text-info-fg">
+                            <span data-surface-tint="info" className="shrink-0 rounded-sm bg-info-subtle px-1 text-xs font-medium text-info-fg">
                               {t("knowledgeBases.adapter.ribbon.overrideBadge")}
                             </span>
                           ) : null}

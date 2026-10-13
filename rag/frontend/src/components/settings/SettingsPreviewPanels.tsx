@@ -101,7 +101,7 @@ function SettingsCardHeader({
 }) {
   return (
     <div className="flex min-w-0 items-start gap-3">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+      <span data-surface-tint="info" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
         <Icon size={20} aria-hidden />
       </span>
       <span className="min-w-0 space-y-1">

@@ -174,6 +174,7 @@ function QuestionMatchedSpans({
         part.matched ? (
           <mark
             key={index}
+            data-surface-tint="accent"
             className="rounded bg-accent-muted px-0.5 font-medium text-fg underline decoration-accent-fg decoration-2 underline-offset-2"
           >
             {part.text}

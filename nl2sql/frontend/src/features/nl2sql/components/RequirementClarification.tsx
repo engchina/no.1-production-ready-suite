@@ -420,6 +420,7 @@ export function RequirementQuestionForm({
             return (
               <label
                 key={candidate.id}
+                data-surface-tint="accent"
                 className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
               >
                 <input

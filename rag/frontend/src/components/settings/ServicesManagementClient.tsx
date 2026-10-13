@@ -21,6 +21,7 @@ import {
   ListSkeleton,
   presentApiError,
   useActionPending,
+  surfaceTintFor,
 } from "@production-ready/ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -294,7 +295,7 @@ export function ServicesManagementClient() {
         <CardHeader>
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+              <div data-surface-tint="info" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                 <Server size={20} aria-hidden />
               </div>
               <div>
@@ -707,6 +708,7 @@ function ServiceActionFailure({
 function ServiceExecutionPolicyBadge({ policy }: { policy: ServiceExecutionPolicy }) {
   return (
     <span
+      data-surface-tint={policy === "required_no_fallback" ? "danger" : policy === "in_process_when_disabled" ? "info" : undefined}
       className={cn(
         "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-xs font-medium",
         policy === "required_no_fallback"
@@ -822,6 +824,7 @@ function ModeBadge({ mode }: { mode: DeploymentMode }) {
   const Icon = mode === "dev" ? TerminalSquare : Server;
   return (
     <span
+      data-surface-tint={mode === "dev" ? "info" : "accent"}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
         mode === "dev" ? "bg-info-subtle text-info-fg" : "bg-accent-muted text-accent-fg-strong"
@@ -837,6 +840,7 @@ function ModeBadge({ mode }: { mode: DeploymentMode }) {
 function ControlBadge({ enabled }: { enabled: boolean }) {
   return (
     <span
+      data-surface-tint={enabled ? "success" : undefined}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
         enabled ? "bg-success-subtle text-success-fg" : "bg-surface-hover text-fg-muted"
@@ -854,6 +858,7 @@ export function ServiceProfileBadge({ profile }: { profile: ServiceProfile }) {
   const meta = PROFILE_META[profile];
   return (
     <span
+      data-surface-tint={surfaceTintFor(meta.className)}
       className={cn(
         "inline-flex rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
         meta.className

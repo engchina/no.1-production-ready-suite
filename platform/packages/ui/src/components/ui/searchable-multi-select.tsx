@@ -477,6 +477,7 @@ export function SearchableMultiSelect({
           {chips.map((option) => (
             <li
               key={option.value}
+              data-surface-tint="info"
               className="inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-md border border-accent-emphasis bg-info-subtle py-0.5 pl-2 pr-0.5 text-xs font-medium text-fg"
             >
               {/* 名前は切らずに折り返す（選択の完全な表示）。 */}

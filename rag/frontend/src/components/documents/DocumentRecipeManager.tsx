@@ -43,6 +43,7 @@ import {
   Spinner,
   TimedLoadingState,
   TextField,
+  surfaceTintFor,
 } from "@production-ready/ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -326,7 +327,7 @@ export function DocumentRecipeManager({
               {/* 実行中の工程のスピナーは下の工程の丸が出す（同じ処理のスピナーは 1 つ。#416）。 */}
               <RecipeStatusBadge recipe={selected} spin={false} />
               {selected.needs_reprocessing ? (
-                <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
+                <span data-surface-tint="warning" className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
                   {t("documents.recipes.reprocess")}
                 </span>
               ) : null}
@@ -466,6 +467,7 @@ function RecipeCard({
   const completed = completedStepCount(recipe);
   return (
     <button
+      data-surface-tint={selected ? "accent" : undefined}
       type="button"
       aria-pressed={selected}
       onClick={onSelect}
@@ -555,7 +557,10 @@ function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView
   // 実行中で回さないときは、実行中を示す静止アイコン（Play。status.icon）にする。
   const Icon = status.icon;
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}>
+    <span
+      data-surface-tint={surfaceTintFor(status.className)}
+      className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}
+    >
       {/* 回すアイコンは共有の Spinner（全周トラック・180 度対称のアーク・reduced-motion 対応。#395 / #1180） */}
       {status.spin && spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
       {t(status.label)}
@@ -593,6 +598,7 @@ function RecipeLayerStatusChips({ statuses }: { statuses: RecipeLayerStatusView[
       {statuses.map((entry) => (
         <span
           key={entry.layer}
+          data-surface-tint={entry.rebuildRequired ? "warning" : surfaceTintFor(LAYER_STATUS_TONES[entry.status])}
           title={layerChipTitle(entry)}
           data-testid={`recipe-layer-${entry.layer}`}
           data-rebuild-required={entry.rebuildRequired ? "true" : undefined}
@@ -920,13 +926,14 @@ function AddModeOption({
         onChange={onSelect}
       />
       <label
+        data-surface-tint={selected ? "accent" : undefined}
         htmlFor={id}
         className={cn(
           "flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring",
           selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
         )}
       >
-        <span className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
+        <span data-surface-tint={selected ? "accent" : undefined} className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
           {icon}
         </span>
         <span className="flex-1">{label}</span>

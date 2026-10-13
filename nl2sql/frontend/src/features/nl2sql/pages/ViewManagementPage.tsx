@@ -177,6 +177,7 @@ function ViewJoinWherePanel({
             {JOIN_WHERE_OUTPUT_SCOPE_KEYS.map((scope) => (
               <span
                 key={scope}
+                data-surface-tint="info"
                 role="listitem"
                 className="inline-flex min-h-8 items-center rounded-full border border-info-border bg-info-subtle px-3 text-xs font-medium text-info-fg"
               >

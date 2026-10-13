@@ -130,6 +130,8 @@ export function Disclosure({
       open={open}
       onToggle={handleToggle}
       data-state={open ? "open" : "closed"}
+      // 状態色の面の上の補足（description）を 4.5:1 にする（tokens/colors.css。#1671）。
+      data-surface-tint={toned ? tone : undefined}
       className={cn(
         "min-w-0",
         card && "rounded-md border",

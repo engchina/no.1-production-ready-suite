@@ -388,6 +388,7 @@ function BackendOption({
   return (
     <label
       htmlFor={id}
+      data-surface-tint={checked ? "info" : undefined}
       className={cn(
         "flex min-h-32 cursor-pointer items-start gap-3 rounded-md border bg-surface p-4 text-left transition-colors",
         checked

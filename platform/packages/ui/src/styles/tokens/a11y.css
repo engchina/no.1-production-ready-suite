@@ -53,6 +53,8 @@
     --color-warning-fg: CanvasText; --color-warning-emphasis: Canvas; --color-warning-subtle: Canvas; --color-warning-border: CanvasText;
     --color-danger-fg:  CanvasText; --color-danger-emphasis:  Canvas; --color-danger-subtle:  Canvas; --color-danger-border:  CanvasText;
     --color-info-fg:    CanvasText; --color-info-emphasis:    Canvas; --color-info-subtle:    Canvas; --color-info-border:    CanvasText;
+    /* [data-surface-tint] の内側で success / warning の文字が参照する深い値（colors.css。#1671） */
+    --color-success-fg-strong: CanvasText; --color-warning-fg-strong: CanvasText;
   }
   /* ponytail: .pr-* クラス向けの境界線・Highlight 規則は、TIER 3 を cva / Tailwind で
      実装する PR 4 で各コンポーネントの forced-colors: バリアントとして入れる。 */
@@ -60,7 +62,7 @@
 
 @media (prefers-contrast: more) {
   /* [data-surface] は含めない: 暗い面は自前の罫線（白の透過）を持つ。
-     [data-surface-tint] は含める: 淡アクセント面が文字を 1 段深くした値（colors.css）を、ここでさらに強める。 */
+     [data-surface-tint] は含める: 淡い色の面が文字を 1 段深くした値（colors.css）を、ここでさらに強める。 */
   :root, [data-theme], [data-surface-tint] {
     --color-fg-muted:       light-dark(var(--neutral-700), var(--neutral-100));
     --color-fg-subtle:      light-dark(var(--neutral-600), var(--neutral-350));

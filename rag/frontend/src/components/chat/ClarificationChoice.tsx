@@ -75,6 +75,7 @@ export function ClarificationChoice({
             return (
               <label
                 key={option.id}
+                data-surface-tint="accent"
                 className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface p-3 has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
               >
                 <input
