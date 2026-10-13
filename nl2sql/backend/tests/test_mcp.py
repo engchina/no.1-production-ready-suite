@@ -702,6 +702,29 @@ def test_recommend_profile_limits_to_requested_candidates(
     assert (is_error, content["error_code"]) == (True, "MCP_TOOL_ARGUMENTS_INVALID")
 
 
+def test_query_with_sql_statement_skips_requirement_llm(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    """質問が SQL の文（SELECT / WITH の 1 文）なら AI要件確認をせずにジョブを作る（#1715）。"""
+    user = users.create("mcp.sql", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    runtime = ontology_router.ontology_runtime
+    assert isinstance(runtime, _ReadyRequirementRuntime)
+
+    is_error, content = _structured(
+        _run(
+            _call("nl2sql_query", {"question": "select * from employee;", "profile_id": "sales"}),
+            token=_token(user.user_uuid),
+        )
+    )
+    assert is_error is False
+    assert runtime.created == []
+    request, _, _ = fake_service.started[0]
+    assert request.question == "select * from employee;"
+    assert request.requirement_session_id is None
+    assert content["requirement"]["status"] == "skipped"
+    assert "SQL の文" in content["requirement"]["message"]
+
+
 def test_query_passes_row_limit_and_actor_and_returns_result(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:

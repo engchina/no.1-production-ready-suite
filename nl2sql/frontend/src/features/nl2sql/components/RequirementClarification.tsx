@@ -2,10 +2,11 @@
 // 会話の中の確認（ChatRequirementTurn）が同じ部品・同じ API で、1 問ずつの質問・回答・確認済みの一覧からの直し・
 // 要件のまとめと SQL の骨組みを出す。session の作り方（業務プロファイルの推薦・会話の履歴）と、反映の後の操作
 // （質問の欄に入れる・チャットで SQL を生成する）だけを画面ごとに持つ。
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { CheckCircle2, Pencil, Send, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { CheckCircle2, MessageSquareText, Pencil, RotateCcw, Send, X } from "lucide-react";
 
 import {
+  ApiErrorBanner,
   Banner,
   Button,
   Disclosure,
@@ -15,6 +16,7 @@ import {
   TextareaField,
 } from "@production-ready/ui";
 
+import { isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 
@@ -33,6 +35,7 @@ import type {
   RequirementStatus,
   SqlRequirementDraft,
 } from "../ontology/types";
+import { isRequirementCheckUnavailable, requirementNextStep } from "../requirementCheck";
 
 export type RequirementBusyAction = "start" | "answer" | "apply" | "cancel" | "";
 type ButtonSize = "sm" | "md" | "lg";
@@ -99,8 +102,12 @@ export interface RequirementSessionController {
   setSession: (session: QuerySession | null) => void;
   busyAction: RequirementBusyAction;
   setBusyAction: (action: RequirementBusyAction) => void;
-  error: string;
-  setError: (message: string) => void;
+  /**
+   * 回答・反映・中止の失敗（画面の文、または API の失敗。API の失敗は「詳細」付きで出す。#1715）。
+   * 出すのは `RequirementErrorBanner`。
+   */
+  error: unknown;
+  setError: (error: unknown) => void;
   /** 中止・期限切れなどで終わった（質問と回答の欄を出さない）。 */
   sessionEnded: boolean;
   state: RequirementState | null;
@@ -136,7 +143,7 @@ export function useRequirementSession(
   const [freeText, setFreeText] = useState("");
   // 確認済みの一覧から「直す」で選んだ項目（質問の欄の代わりに、この項目の入力を出す）。
   const [correctingItemId, setCorrectingItemId] = useState<string | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>("");
   const [busyAction, setBusyAction] = useState<RequirementBusyAction>(initialBusy);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
   const mountedRef = useRef(false);
@@ -214,7 +221,7 @@ export function useRequirementSession(
       setCorrectingItemId(null);
     } catch (cause) {
       await reloadAfterConflict(cause, session);
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.answer"));
+      setError(cause instanceof Error ? cause : t("nl2sql.clarification.error.answer"));
     } finally {
       if (mountedRef.current) setBusyAction("");
     }
@@ -249,7 +256,7 @@ export function useRequirementSession(
       return applied;
     } catch (cause) {
       await reloadAfterConflict(cause, session);
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.apply"));
+      setError(cause instanceof Error ? cause : t("nl2sql.clarification.error.apply"));
       return null;
     } finally {
       if (mountedRef.current) setBusyAction("");
@@ -265,7 +272,7 @@ export function useRequirementSession(
       await cancelQuerySession(session.id);
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.cancel"));
+      setError(cause instanceof Error ? cause : t("nl2sql.clarification.error.cancel"));
       return false;
     } finally {
       if (mountedRef.current) setBusyAction("");
@@ -304,6 +311,156 @@ export function useRequirementSession(
 }
 
 /** 答えられない質問・最低の基準（SELECT / FROM）・再検査の上限の知らせ。 */
+/**
+ * 要件の検査（AI要件確認の session の作成・読み込み）の状態。SQL 生成の画面（ボタンで開く）とチャット（送信の
+ * ときに自動）で同じ hook を使い、検査中・失敗・OCI Enterprise AI が無いときの扱いを 1 か所で決める（#1715）。
+ */
+export interface RequirementCheckRunner {
+  /** 検査の最中（session の作成の応答を待っている）。 */
+  checking: boolean;
+  /** 検査の失敗（`RequirementCheckFailure` で、理由・「詳細」・もう一度確認・確認せずに生成・中止を出す）。 */
+  checkError: unknown;
+  /**
+   * 検査を行う。成功したら結果を返し、失敗は `checkError` に入れて null を返す。`isCurrent` が false になった
+   * （中止した・別の送信に移った）ときは状態を変えずに null を返す。OCI Enterprise AI が無い
+   * （`REQUIREMENT_AI_NOT_CONFIGURED`）ときは `onUnavailable` を呼ぶ（確認せずに SQL を作る）。
+   */
+  run: <T>(
+    task: () => Promise<T>,
+    options?: { isCurrent?: () => boolean; onUnavailable?: () => void }
+  ) => Promise<T | null>;
+  /** 検査の表示を外す（中止・別の送信に移ったとき）。 */
+  reset: () => void;
+}
+
+export function useRequirementCheck(initialChecking = false): RequirementCheckRunner {
+  const [checking, setChecking] = useState(initialChecking);
+  const [checkError, setCheckError] = useState<unknown>(null);
+  const run = useCallback(
+    async <T,>(
+      task: () => Promise<T>,
+      options: { isCurrent?: () => boolean; onUnavailable?: () => void } = {}
+    ): Promise<T | null> => {
+      const isCurrent = options.isCurrent ?? (() => true);
+      setCheckError(null);
+      setChecking(true);
+      try {
+        const result = await task();
+        if (!isCurrent()) return null;
+        setChecking(false);
+        return result;
+      } catch (cause) {
+        if (!isCurrent()) return null;
+        setChecking(false);
+        if (isAbortError(cause)) return null;
+        if (options.onUnavailable && isRequirementCheckUnavailable(cause)) {
+          options.onUnavailable();
+          return null;
+        }
+        setCheckError(cause);
+        return null;
+      }
+    },
+    []
+  );
+  const reset = useCallback(() => {
+    setChecking(false);
+    setCheckError(null);
+  }, []);
+  return { checking, checkError, run, reset };
+}
+
+/**
+ * 検査の後の次の扱い（チャットと SQL 生成の画面で共通。#1442 / #1715）。確認が要らない（`direct`）ときは聞かずに
+ * 反映し、反映済み（`applied`）と合わせて `onApplied` で次へ進む（チャットは SQL の生成、SQL 生成の画面は質問の
+ * 欄へ反映）。確認が要るときは session を出して 1 問ずつ聞く。反映できなければまとめと「反映」を出してやり直せる。
+ */
+export function useRequirementProceed(controller: RequirementSessionController) {
+  const { setSession, setError } = controller;
+  const [directing, setDirecting] = useState(false);
+  const proceed = useCallback(
+    async (
+      loaded: QuerySession,
+      onApplied: (applied: QuerySession) => void,
+      isCurrent: () => boolean = () => true
+    ) => {
+      const step = requirementNextStep(loaded);
+      if (step === "applied") {
+        onApplied(loaded);
+        return;
+      }
+      if (step !== "direct") {
+        setSession(loaded);
+        return;
+      }
+      setDirecting(true);
+      try {
+        const applied = await applyQuerySessionRequirement(loaded.id, {
+          base_version: loaded.current_intent_version ?? 1,
+        });
+        if (!isCurrent()) return;
+        onApplied({ ...applied, requirement: applied.requirement ?? loaded.requirement });
+      } catch (cause) {
+        if (!isCurrent()) return;
+        setSession(loaded);
+        setError(cause instanceof Error ? cause : t("nl2sql.clarification.error.apply"));
+      } finally {
+        setDirecting(false);
+      }
+    },
+    [setError, setSession]
+  );
+  return { proceed, directing };
+}
+
+/**
+ * 要件の検査ができなかったときの表示（チャットと SQL 生成の画面で共通。#1442 / #1715）。理由（backend の 1 行）と
+ * 「詳細」（失敗の種類・HTTP ステータス・モデル・所要時間・request ID）を `ApiErrorBanner` で出し、
+ * 「もう一度確認」「確認せずに SQL を生成」と、画面の中止の操作を並べる。
+ */
+export function RequirementCheckFailure({
+  error,
+  onRetry,
+  onSkip,
+  cancelAction,
+  size = "sm",
+  testId,
+}: {
+  error: unknown;
+  onRetry: () => void;
+  onSkip: () => void;
+  cancelAction?: ReactNode;
+  size?: ButtonSize;
+  testId?: string;
+}) {
+  return (
+    <ApiErrorBanner
+      error={error}
+      fallback={t("chat.requirement.failed")}
+      nextAction={t("chat.requirement.failed.action")}
+      testId={testId}
+      action={
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" size={size} icon={RotateCcw} onClick={onRetry}>
+            {t("chat.requirement.retry")}
+          </Button>
+          <Button type="button" variant="secondary" size={size} icon={MessageSquareText} onClick={onSkip}>
+            {t("chat.requirement.skip")}
+          </Button>
+          {cancelAction}
+        </div>
+      }
+    />
+  );
+}
+
+/** 回答・反映・中止の失敗（画面の文は Banner、API の失敗は「詳細」付きの `ApiErrorBanner`。#1715）。 */
+export function RequirementErrorBanner({ error }: { error: unknown }) {
+  if (!error) return null;
+  if (typeof error === "string") return <Banner severity="danger">{error}</Banner>;
+  return <ApiErrorBanner error={error} fallback={t("nl2sql.requirementFailure.fallback")} />;
+}
+
 export function RequirementStateBanners({ state, unresolvedCount }: { state: RequirementState | null; unresolvedCount: number }) {
   if (!state) return null;
   return (

@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CheckCircle2, Sparkles, X } from "lucide-react";
+import { CheckCircle2, X } from "lucide-react";
 
-import { Banner, Button, ProcessingIndicator, StatusBadge } from "@production-ready/ui";
+import { Button, StatusBadge } from "@production-ready/ui";
 
-import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 import {
@@ -16,14 +15,15 @@ import type { OntologyProfileRecommendation, QuerySession } from "../ontology/ty
 import type { Nl2SqlEngine } from "../types";
 import {
   isSessionOpen,
-  RequirementAnswerProgress,
-  RequirementItemsList,
-  RequirementQuestionForm,
-  requirementPhaseBadge,
-  RequirementStateBanners,
-  RequirementSummary,
+  useRequirementCheck,
+  useRequirementProceed,
   useRequirementSession,
 } from "./RequirementClarification";
+import {
+  REQUIREMENT_APPLY_TO_QUESTION_LABELS,
+  RequirementClarificationView,
+  type RequirementStartPhase,
+} from "./RequirementClarificationView";
 
 interface GuidedClarificationPanelProps {
   question: string;
@@ -36,13 +36,18 @@ interface GuidedClarificationPanelProps {
    * 画面に反映できなかった（草稿を保存できない）ときは false を返し、パネルを残す。
    */
   onApplyQuestion: (question: string, profileId: string, sessionId: string) => boolean;
+  /**
+   * 要件の検査ができなかったときの「確認せずに SQL を生成」（チャットと同じ操作。#1715）。パネルを閉じ、
+   * 入力した質問のまま SQL を生成する。
+   */
+  onSkip: () => void;
 }
-
-type ClarificationStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
 
 /**
  * SQL 生成の画面の AI要件確認（#1439）。業務プロファイルの推薦・確定の後に session を作り、1 問ずつの回答・直し・
- * 要件のまとめ・反映を出す。回答・直し・反映・中止と、質問・一覧・まとめの部品はチャットと共通（#1442）。
+ * 要件のまとめ・反映を出す。AI要件確認の基準で、チャットも同じ hook と同じ部品（`RequirementClarificationView`）を
+ * 使う（#1715）。この画面だけの違いは入口（「AI要件確認」のボタン・業務プロファイルの推薦と確定）と、確定した
+ * 要件の行き先（質問の欄へ反映）。
  */
 export function GuidedClarificationPanel({
   question,
@@ -51,14 +56,18 @@ export function GuidedClarificationPanel({
   allowedObjects,
   onClose,
   onApplyQuestion,
+  onSkip,
 }: GuidedClarificationPanelProps) {
-  const controller = useRequirementSession("start");
-  const { session, setSession, busyAction, setBusyAction, error, setError, sessionEnded, state, draft } =
-    controller;
-  const activeItem = controller.activeItem;
+  const controller = useRequirementSession();
+  const { session, busyAction, setError } = controller;
+  // 要件の検査（業務プロファイルの推薦・確定・session の作成）の状態と失敗はチャットと同じ hook（#1715）。
+  const requirementCheck = useRequirementCheck(true);
+  const { run: runCheck } = requirementCheck;
+  const { proceed, directing } = useRequirementProceed(controller);
+  const starting = requirementCheck.checking || directing;
   const [recommendation, setRecommendation] = useState<OntologyProfileRecommendation | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
-  const [startPhase, setStartPhase] = useState<ClarificationStartPhase>("recommend_profile");
+  const [startPhase, setStartPhase] = useState<RequirementStartPhase>("recommend_profile");
   const startedRef = useRef(false);
   const startControllerRef = useRef<AbortController | null>(null);
   // 画面を離れた（unmount・再読込）ときに、サーバーの session を中止するための参照。
@@ -102,9 +111,10 @@ export function GuidedClarificationPanel({
       return;
     }
     sessionRef.current = created;
-    setSession(created);
     setRecommendation(null);
     setError("");
+    // 確認が要らない（聞くことが無い）ときは、聞かずに反映して質問の欄へ入れる（チャットと同じ。#1715）。
+    await proceed(created, applyToQuestion, () => !signal.aborted);
   };
 
   // パネルを閉じずに画面を離れた（別のページへ移動・再読込・タブを閉じる）ときは、
@@ -140,13 +150,16 @@ export function GuidedClarificationPanel({
   useLayoutEffect(() => {
     startSessionRef.current = startSession;
   });
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+  /** 検査を始める（業務プロファイルの推薦 → 確定 → session の作成）。「もう一度確認」も同じ処理。 */
+  const beginCheck = () => {
+    startControllerRef.current?.abort();
     const abort = new AbortController();
     startControllerRef.current = abort;
-    void recommendOntologyProfiles(question, { signal: abort.signal })
-      .then(async (result) => {
+    setError("");
+    setStartPhase("recommend_profile");
+    void runCheck(
+      async () => {
+        const result = await recommendOntologyProfiles(question, { signal: abort.signal });
         if (abort.signal.aborted) return;
         if (profileId.toLowerCase() === "all") {
           setRecommendation(result);
@@ -157,49 +170,51 @@ export function GuidedClarificationPanel({
           return;
         }
         await startSessionRef.current(result, profileId, abort.signal);
-      })
-      .catch((cause: unknown) => {
-        if (!abort.signal.aborted && !isAbortError(cause)) {
-          setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.start"));
-        }
-      })
-      .finally(() => {
-        if (startControllerRef.current === abort) startControllerRef.current = null;
-        if (!abort.signal.aborted) setBusyAction("");
-      });
-  }, [allowedObjects, engine, profileId, question, setBusyAction, setError]);
+      },
+      { isCurrent: () => !abort.signal.aborted }
+    ).finally(() => {
+      if (startControllerRef.current === abort) startControllerRef.current = null;
+    });
+  };
+  const beginCheckRef = useRef(beginCheck);
+  useLayoutEffect(() => {
+    beginCheckRef.current = beginCheck;
+  });
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    beginCheckRef.current();
+  }, []);
 
   const confirmRecommendedProfile = async () => {
-    if (!recommendation || !selectedProfileId || busyAction) return;
+    if (!recommendation || !selectedProfileId || busyAction || starting) return;
     const abort = new AbortController();
     startControllerRef.current = abort;
-    setBusyAction("start");
     setError("");
-    try {
-      await startSession(recommendation, selectedProfileId, abort.signal);
-    } catch (cause) {
-      if (!abort.signal.aborted && !isAbortError(cause)) {
-        setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.start"));
-      }
-    } finally {
-      if (startControllerRef.current === abort) startControllerRef.current = null;
-      if (!abort.signal.aborted) setBusyAction("");
-    }
+    await runCheck(() => startSession(recommendation, selectedProfileId, abort.signal), {
+      isCurrent: () => !abort.signal.aborted,
+    });
+    if (startControllerRef.current === abort) startControllerRef.current = null;
   };
 
-  const applyRequirement = async () => {
-    const applied = await controller.applyRequirement();
-    if (!applied) return;
+  /** 確定した要件を質問の欄へ反映する（この画面の行き先。チャットは SQL の生成）。 */
+  function applyToQuestion(applied: QuerySession) {
     releasedRef.current = true;
     onApplyQuestion(
       applied.requirement?.clarified_question_ja?.trim() ?? "",
       applied.profile_id,
       applied.id
     );
+  }
+
+  const applyRequirement = async () => {
+    const applied = await controller.applyRequirement();
+    if (!applied) return;
+    applyToQuestion(applied);
   };
 
   const closePanel = async () => {
-    if (busyAction === "start") {
+    if (starting) {
       startControllerRef.current?.abort();
       onClose();
       return;
@@ -225,159 +240,76 @@ export function GuidedClarificationPanel({
     </Button>
   );
 
-  const badge = state ? requirementPhaseBadge(state) : null;
-  const showApply = controller.showApply;
-
-  return (
-    <section
-      aria-labelledby="nl2sql-guided-clarification-title"
-      className="grid gap-4 rounded-md border border-accent-emphasis bg-surface p-4"
-      data-testid="nl2sql-guided-clarification"
-    >
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <Sparkles size={20} className="text-accent-fg" aria-hidden="true" />
-          <h3 id="nl2sql-guided-clarification-title" className="text-base font-semibold text-fg">
-            {t("nl2sql.clarification.title")}
-          </h3>
-          {badge ? <StatusBadge variant={badge.variant} label={badge.label} /> : null}
-          {state ? (
-            <span className="text-xs text-fg-muted" data-testid="nl2sql-clarification-review-round">
-              {t("nl2sql.clarification.reviewRound", {
-                round: state.review_round,
-                max: state.max_review_rounds,
-              })}
-            </span>
-          ) : null}
-        </div>
-        <p className="mt-1 text-sm leading-6 text-fg-muted">
-          {state?.message_ja || t("nl2sql.clarification.description")}
-        </p>
-      </div>
-
-      <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {state?.message_ja}
-      </div>
-
-      {error && !sessionEnded ? <Banner severity="danger">{error}</Banner> : null}
-      {sessionEnded ? (
-        <Banner severity="warning">
-          {session?.error_message_ja || t("nl2sql.clarification.ended")}
-        </Banner>
-      ) : null}
-
-      {busyAction === "start" ? (
-        <div
-          className="rounded-md border border-border bg-surface-sunken p-4"
-          data-start-phase={startPhase}
-        >
-          <ProcessingIndicator
-            active
-            operationKey="guided-clarification-start"
-            label={
-              startPhase === "recommend_profile"
-                ? t("nl2sql.clarification.loading.recommendProfile")
-                : startPhase === "confirm_profile"
-                  ? t("nl2sql.clarification.loading.confirmProfile")
-                  : t("nl2sql.clarification.loading.prepareQuestions")
-            }
-            placement="panel"
-            testId="nl2sql-guided-start-progress"
-          />
-        </div>
-      ) : null}
-      <RequirementAnswerProgress active={busyAction === "answer"} />
-
-      {recommendation && !session ? (
-        <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
-          <legend className="px-1 text-sm font-semibold text-fg">
-            {t("nl2sql.clarification.profileQuestion")}
-          </legend>
-          <p className="text-xs leading-5 text-fg-muted">
-            {t("nl2sql.clarification.profileReason")}
-          </p>
-          <div className="grid gap-2">
-            {recommendation.candidates.slice(0, 3).map((candidate, index) => (
-              <label
-                key={`${candidate.profile_id}:${candidate.ontology_revision_id}`}
-                data-surface-tint="accent"
-                className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-              >
-                <input
-                  type="radio"
-                  name="guided-profile"
-                  checked={selectedProfileId === candidate.profile_id}
-                  onChange={() => setSelectedProfileId(candidate.profile_id)}
-                  className="mt-1 h-4 w-4 accent-accent-emphasis"
-                />
-                <span className="min-w-0">
-                  <span className="flex flex-wrap items-center gap-2 font-medium text-fg">
-                    {candidate.profile_name}
-                    {index === 0 ? <StatusBadge icon={false} variant="info" label={t("nl2sql.clarification.recommended")} /> : null}
-                  </span>
-                  {candidate.reasons_ja.length ? (
-                    <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
-                      {candidate.reasons_ja.join(" ")}
-                    </span>
+  // 入口の前段: 「ALL」の業務プロファイルのときは、推薦から使う業務プロファイルを選ぶ。
+  const profileChooser =
+    recommendation && !session ? (
+      <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
+        <legend className="px-1 text-sm font-semibold text-fg">
+          {t("nl2sql.clarification.profileQuestion")}
+        </legend>
+        <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.profileReason")}</p>
+        <div className="grid gap-2">
+          {recommendation.candidates.slice(0, 3).map((candidate, index) => (
+            <label
+              key={`${candidate.profile_id}:${candidate.ontology_revision_id}`}
+              data-surface-tint="accent"
+              className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
+            >
+              <input
+                type="radio"
+                name="guided-profile"
+                checked={selectedProfileId === candidate.profile_id}
+                onChange={() => setSelectedProfileId(candidate.profile_id)}
+                className="mt-1 h-4 w-4 accent-accent-emphasis"
+              />
+              <span className="min-w-0">
+                <span className="flex flex-wrap items-center gap-2 font-medium text-fg">
+                  {candidate.profile_name}
+                  {index === 0 ? (
+                    <StatusBadge icon={false} variant="info" label={t("nl2sql.clarification.recommended")} />
                   ) : null}
                 </span>
-              </label>
-            ))}
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="primary"
-              size="lg"
-              disabled={!selectedProfileId || Boolean(busyAction)}
-              icon={CheckCircle2}
-              onClick={() => void confirmRecommendedProfile()}
-            >
-              {t("nl2sql.clarification.confirmProfile")}
-            </Button>
-            {closeButton}
-          </div>
-        </fieldset>
-      ) : null}
-
-      <RequirementStateBanners state={state} unresolvedCount={controller.unresolvedCount} />
-
-      <RequirementQuestionForm
-        controller={controller}
-        onApplyWithRemaining={() => void applyRequirement()}
-        trailingActions={closeButton}
-      />
-
-      {state && draft ? <RequirementItemsList controller={controller} /> : null}
-
-      <RequirementSummary controller={controller} />
-
-      {showApply && !activeItem ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <span className="flex items-center gap-2 text-sm text-success-fg">
-            <CheckCircle2 size={16} aria-hidden="true" />
-            {t("nl2sql.clarification.ready")}
-          </span>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="primary"
-              size="lg"
-              loading={busyAction === "apply"}
-              disabled={Boolean(busyAction && busyAction !== "apply")}
-              onClick={() => void applyRequirement()}
-              icon={Sparkles}
-            >
-              {t("nl2sql.clarification.apply")}
-            </Button>
-            {closeButton}
-          </div>
+                {candidate.reasons_ja.length ? (
+                  <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
+                    {candidate.reasons_ja.join(" ")}
+                  </span>
+                ) : null}
+              </span>
+            </label>
+          ))}
         </div>
-      ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            disabled={!selectedProfileId || Boolean(busyAction) || starting}
+            icon={CheckCircle2}
+            onClick={() => void confirmRecommendedProfile()}
+          >
+            {t("nl2sql.clarification.confirmProfile")}
+          </Button>
+          {closeButton}
+        </div>
+      </fieldset>
+    ) : null;
 
-      {!activeItem && !showApply && !(recommendation && !session) ? (
-        <div className="flex flex-wrap justify-end border-t border-border pt-4">{closeButton}</div>
-      ) : null}
-    </section>
+  return (
+    <RequirementClarificationView
+      controller={controller}
+      check={{ ...requirementCheck, checking: starting }}
+      startPhase={startPhase}
+      onRetry={() => (recommendation ? void confirmRecommendedProfile() : beginCheck())}
+      onSkip={() => {
+        startControllerRef.current?.abort();
+        onSkip();
+      }}
+      onApply={() => void applyRequirement()}
+      onClose={() => void closePanel()}
+      labels={REQUIREMENT_APPLY_TO_QUESTION_LABELS}
+      startSlot={profileChooser}
+      size="lg"
+      idPrefix="nl2sql"
+    />
   );
 }

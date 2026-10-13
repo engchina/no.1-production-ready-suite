@@ -240,6 +240,14 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # AI要件確認で、全部の質問に答えた後に要件のまとめを LLM で検査し直す回数の上限（#1439）。
     # 上限に達したら、残った確認の項目を画面に明示し、利用者が SQL の生成に進むかを決める。
     nl2sql_requirement_max_review_rounds: int = Field(default=3, ge=1, le=10)
+    # AI要件確認の LLM の呼び出し（#1715）。利用者が画面で待つので、共通の LLM の設定
+    # （待ち時間 600 秒・再試行 3 回）より短くする。出力の上限は共通の LLM の上限（既定 1200）を
+    # 使わない: 推論（reasoning）の token も上限に数えるモデル（openai.gpt-oss-120b など）は
+    # 1200 では JSON を書く前に上限に達して失敗する（2026-10-13 の実測。推論は 800〜2000 token、
+    # 要件の JSON は 1000〜2500 token）。
+    nl2sql_requirement_timeout_seconds: float = Field(default=90.0, gt=0.0, le=600.0)
+    nl2sql_requirement_max_retries: int = Field(default=1, ge=0, le=5)
+    nl2sql_requirement_max_output_tokens: int = Field(default=8000, ge=1000, le=65536)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""

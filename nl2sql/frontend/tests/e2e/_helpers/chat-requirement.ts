@@ -28,8 +28,8 @@ export interface ChatRequirementMockOptions {
   answers?: RequirementStage[];
   /** 作成の応答を遅らせる（要件の検査の経過を確かめる）。 */
   createDelayMs?: number;
-  /** 作成を失敗させる（HTTP status と本文の error）。 */
-  createFailure?: { status: number; error: string };
+  /** 作成を失敗させる（HTTP status と本文の error。`body` を渡すとその本文で返す。#1715）。 */
+  createFailure?: { status: number; error: string; body?: Record<string, unknown> };
 }
 
 function path(request: Request) {
@@ -69,7 +69,7 @@ export async function mockChatRequirement(
         if (options.createFailure) {
           return route.fulfill({
             status: options.createFailure.status,
-            json: { error: options.createFailure.error },
+            json: options.createFailure.body ?? { error: options.createFailure.error },
           });
         }
         state.stage = options.create ?? "clear";

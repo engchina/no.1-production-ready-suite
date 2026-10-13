@@ -20,8 +20,18 @@ import type {
   QuerySessionSqlConfirmationRequest,
   RequirementApplyRequest,
 } from "./types";
+import {
+  apiErrorDetail,
+  DEFAULT_API_ERROR_DETAIL_LABELS,
+  httpApiErrorPresentation,
+  type ApiErrorDetailLabels,
+  type ApiErrorPresentable,
+  type ApiErrorPresentation,
+} from "@production-ready/ui";
+
 import { apiFetch } from "../../../lib/api.ts";
 import { API_TIMEOUT_MS } from "../../../lib/requestPolicy.ts";
+import { requirementFailureDetails } from "../requirementFailure.ts";
 
 interface ApiEnvelope<T> {
   data?: T;
@@ -37,15 +47,61 @@ interface RequestOptions {
   keepalive?: boolean;
 }
 
-// HTTP status を保持するエラー(ポーリング側で 404 = job 消失を判別するため)
-export class ApiError extends Error {
-  readonly status: number;
+/** 失敗の応答の、画面の「詳細」に出す値（problem の code・request ID、AI要件確認の LLM の失敗。#1715）。 */
+export interface ApiErrorMeta {
+  errorCode?: string;
+  requestId?: string;
+  /** backend の `error_details`（AI要件確認の LLM の失敗の種類・HTTP ステータス・モデル ID・所要時間など）。 */
+  errorDetails?: unknown;
+}
 
-  constructor(message: string, status: number) {
+// HTTP status を保持するエラー(ポーリング側で 404 = job 消失を判別するため)
+export class ApiError extends Error implements ApiErrorPresentable {
+  readonly status: number;
+  readonly errorCode?: string;
+  readonly requestId?: string;
+  readonly errorDetails?: unknown;
+
+  constructor(message: string, status: number, meta: ApiErrorMeta = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.errorCode = meta.errorCode;
+    this.requestId = meta.requestId;
+    this.errorDetails = meta.errorDetails;
   }
+
+  /**
+   * 失敗の面の要約（backend の利用者向けの文）と「詳細」（HTTP ステータス・エラーコード・AI要件確認の LLM の
+   * 失敗の値・request ID）。共通の `ApiErrorBanner` が使う（messaging.md §10.3）。
+   */
+  toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
+    const resolved = labels ?? DEFAULT_API_ERROR_DETAIL_LABELS;
+    const base = httpApiErrorPresentation(
+      { status: this.status, messages: [this.message], errorCode: this.errorCode },
+      resolved
+    );
+    return {
+      summary: base.summary,
+      details: [
+        ...base.details,
+        ...requirementFailureDetails(this.errorDetails),
+        ...apiErrorDetail(resolved.requestId, this.requestId),
+      ],
+    };
+  }
+}
+
+function errorMeta(payload: ApiEnvelope<unknown>): ApiErrorMeta {
+  const record = payload as Record<string, unknown>;
+  const problem = isRecord(record.problem) ? record.problem : {};
+  const code = typeof problem.code === "string" ? problem.code : record.error_code;
+  const requestId = problem.request_id;
+  return {
+    errorCode: typeof code === "string" && code ? code : undefined,
+    requestId: typeof requestId === "string" && requestId ? requestId : undefined,
+    errorDetails: isRecord(record.error_details) ? record.error_details : undefined,
+  };
 }
 
 export class QuerySessionVersionConflictError extends Error {
@@ -160,7 +216,7 @@ async function request<T>(
       const { currentVersion, session } = conflictDetails(payload);
       throw new QuerySessionVersionConflictError(message, currentVersion, session);
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, errorMeta(payload));
   }
   if (payload.data !== undefined) return payload.data;
   return payload as T;
