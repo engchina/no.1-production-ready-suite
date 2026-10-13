@@ -19,7 +19,7 @@ runs:
 
     - name: Restore Playwright browsers
       id: cache
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-chromium-shell
@@ -35,7 +35,7 @@ runs:
     # （PR の範囲の Playwright の cache が約 540 MB あった。#1589）。PR は main の cache が無ければ取得し直す。
     - name: Save Playwright browsers
       if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-${{ steps.version.outputs.version }}-chromium-shell
