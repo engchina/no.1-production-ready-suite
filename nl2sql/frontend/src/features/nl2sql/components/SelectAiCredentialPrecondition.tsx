@@ -43,7 +43,7 @@ export function SelectAiCredentialPrecondition({
         canOpenSettings
           ? "selectAiCredential.precondition.message"
           : "selectAiCredential.precondition.contactAdmin",
-        { operation, action, name: credentialName || "OCI_CRED" },
+        { operation, action, name: credentialName || "NL2SQL_OCI_CRED" },
       )}
       settingsLink={
         canOpenSettings

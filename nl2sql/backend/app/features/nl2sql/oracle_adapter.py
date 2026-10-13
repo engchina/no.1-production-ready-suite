@@ -56,6 +56,7 @@ from .object_visibility import (
     is_user_visible_object_name,
     is_user_visible_owner_name,
     is_user_visible_schema_object,
+    user_visible_object_sql_predicate,
 )
 from .oracle_lob import configure_clob_fetch_as_text, configure_connection_clob_fetch_as_text
 from .sql_lexing import _tokens as sql_tokens
@@ -119,6 +120,27 @@ def select_ai_object_list_entry(identity: OracleObjectIdentity) -> dict[str, str
         "name": format_object_part(identity.object_name),
     }
 
+
+# 辞書ビューから業務の object を取る SQL の条件。システムテーブル（NL2SQL_ / PLATFORM_ / RAG_ /
+# AGENT_）と Oracle の内部 object（名前に $ / #）を最初から除き、取得量・件数に入れない（#1710）。
+_CATALOG_VISIBLE_SQL = user_visible_object_sql_predicate(
+    object_column="c.table_name", owner_column="c.owner"
+)
+_OBJECT_VISIBLE_SQL = user_visible_object_sql_predicate(
+    object_column="o.object_name", owner_column="o.owner"
+)
+_DEPENDENCY_VISIBLE_SQL = user_visible_object_sql_predicate(
+    object_column="d.name", owner_column="d.owner"
+)
+_DEPENDENCY_REFERENCED_VISIBLE_SQL = user_visible_object_sql_predicate(
+    object_column="d.referenced_name", owner_column="d.referenced_owner"
+)
+_TABLE_VISIBLE_SQL = user_visible_object_sql_predicate(
+    object_column="t.table_name", owner_column="t.owner"
+)
+_VIEW_VISIBLE_SQL = user_visible_object_sql_predicate(
+    object_column="v.view_name", owner_column="v.owner"
+)
 
 WALLET_PASSWORD_REQUIRED_ERROR = (
     "Oracle Wallet がパスワードを必要としています。"  # nosec B105
@@ -1009,11 +1031,7 @@ class OracleNl2SqlAdapter:
             " AND cc.table_name = c.table_name\n"
             " AND cc.column_name = c.column_name\n"
             f"WHERE {owner_filter}\n"
-            "  AND c.owner NOT LIKE '%$%'\n"
-            "  AND c.owner NOT LIKE '%#%'\n"
-            "  AND c.table_name NOT LIKE '%$%'\n"
-            "  AND c.table_name NOT LIKE '%#%'\n"
-            "  AND c.table_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            f"  AND {_CATALOG_VISIBLE_SQL}\n"
             f"  {target_filter}\n"
             "ORDER BY c.owner, c.table_name, c.column_id"
         )
@@ -1070,28 +1088,25 @@ class OracleNl2SqlAdapter:
         """ALL_* から現在ユーザーが実際に参照できる業務 schema を列挙する。"""
 
         allowlist = self._configured_schema_owner_allowlist()
-        sql = """
-            SELECT
-                o.owner,
-                NVL(u.oracle_maintained, 'N') AS oracle_maintained,
-                MAX(CASE WHEN o.owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')
-                         THEN 1 ELSE 0 END) AS is_current,
-                COUNT(DISTINCT CASE WHEN o.object_type = 'TABLE'
-                                    THEN o.object_name END) AS table_count,
-                COUNT(DISTINCT CASE WHEN o.object_type IN ('VIEW', 'MATERIALIZED VIEW')
-                                    THEN o.object_name END) AS view_count
-            FROM all_objects o
-            JOIN all_users u ON u.username = o.owner
-            WHERE o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
-              AND o.status = 'VALID'
-              AND o.owner NOT LIKE '%$%'
-              AND o.owner NOT LIKE '%#%'
-              AND o.object_name NOT LIKE '%$%'
-              AND o.object_name NOT LIKE '%#%'
-              AND o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-            GROUP BY o.owner, NVL(u.oracle_maintained, 'N')
-            ORDER BY o.owner
-        """
+        # _OBJECT_VISIBLE_SQL は固定の条件（利用者の入力を含まない）。
+        sql = (
+            "SELECT\n"  # nosec B608
+            "    o.owner,\n"
+            "    NVL(u.oracle_maintained, 'N') AS oracle_maintained,\n"
+            "    MAX(CASE WHEN o.owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')\n"
+            "             THEN 1 ELSE 0 END) AS is_current,\n"
+            "    COUNT(DISTINCT CASE WHEN o.object_type = 'TABLE'\n"
+            "                        THEN o.object_name END) AS table_count,\n"
+            "    COUNT(DISTINCT CASE WHEN o.object_type IN ('VIEW', 'MATERIALIZED VIEW')\n"
+            "                        THEN o.object_name END) AS view_count\n"
+            "FROM all_objects o\n"
+            "JOIN all_users u ON u.username = o.owner\n"
+            "WHERE o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')\n"
+            "  AND o.status = 'VALID'\n"
+            f"  AND {_OBJECT_VISIBLE_SQL}\n"
+            "GROUP BY o.owner, NVL(u.oracle_maintained, 'N')\n"
+            "ORDER BY o.owner"
+        )
         owners: list[SchemaOwnerSummary] = []
         excluded_maintained: set[str] = set()
         current_owner = self.settings.oracle_user.strip().upper()
@@ -1172,11 +1187,7 @@ class OracleNl2SqlAdapter:
             f"WHERE {owner_filter}\n"
             "  AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')\n"
             "  AND o.status = 'VALID'\n"
-            "  AND o.owner NOT LIKE '%$%'\n"
-            "  AND o.owner NOT LIKE '%#%'\n"
-            "  AND o.object_name NOT LIKE '%$%'\n"
-            "  AND o.object_name NOT LIKE '%#%'\n"
-            "  AND o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            f"  AND {_OBJECT_VISIBLE_SQL}\n"
             f"  {target_filter}\n"
             "ORDER BY o.owner, o.object_name"
         )
@@ -1334,16 +1345,8 @@ class OracleNl2SqlAdapter:
             "WHERE d.type IN ('VIEW', 'MATERIALIZED VIEW')\n"
             "  AND d.referenced_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')\n"
             f"  AND {owner_filter}\n"
-            "  AND d.owner NOT LIKE '%$%'\n"
-            "  AND d.owner NOT LIKE '%#%'\n"
-            "  AND d.name NOT LIKE '%$%'\n"
-            "  AND d.name NOT LIKE '%#%'\n"
-            "  AND d.name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
-            "  AND d.referenced_owner NOT LIKE '%$%'\n"
-            "  AND d.referenced_owner NOT LIKE '%#%'\n"
-            "  AND d.referenced_name NOT LIKE '%$%'\n"
-            "  AND d.referenced_name NOT LIKE '%#%'\n"
-            "  AND d.referenced_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'\n"
+            f"  AND {_DEPENDENCY_VISIBLE_SQL}\n"
+            f"  AND {_DEPENDENCY_REFERENCED_VISIBLE_SQL}\n"
             f"  {target_filter}\n"
             "ORDER BY d.name, d.referenced_owner, d.referenced_name"
         )
@@ -1841,11 +1844,7 @@ class OracleNl2SqlAdapter:
                 FROM all_views v
                 LEFT JOIN all_tab_comments c
                   ON c.owner = v.owner AND c.table_name = v.view_name
-                WHERE v.view_name NOT LIKE '%$%'
-                  AND v.view_name NOT LIKE '%#%'
-                  AND v.view_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-                  AND v.owner NOT LIKE '%$%'
-                  AND v.owner NOT LIKE '%#%'
+                WHERE {visible_filter}
                   AND {owner_filter}
                 ORDER BY v.owner, v.view_name
             """
@@ -1856,16 +1855,16 @@ class OracleNl2SqlAdapter:
                 FROM all_tables t
                 LEFT JOIN all_tab_comments c
                   ON c.owner = t.owner AND c.table_name = t.table_name
-                WHERE t.table_name NOT LIKE '%$%'
-                  AND t.table_name NOT LIKE '%#%'
-                  AND t.table_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'
-                  AND t.owner NOT LIKE '%$%'
-                  AND t.owner NOT LIKE '%#%'
+                WHERE {visible_filter}
                   AND {owner_filter}
                 ORDER BY t.owner, t.table_name
             """
         with self.connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql.format(owner_filter=owner_filter), owner_binds)
+            visible_filter = _VIEW_VISIBLE_SQL if normalized_type == "view" else _TABLE_VISIBLE_SQL
+            cursor.execute(
+                sql.format(owner_filter=owner_filter, visible_filter=visible_filter),
+                owner_binds,
+            )
             rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
         return [
             {

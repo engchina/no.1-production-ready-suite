@@ -78,11 +78,11 @@ DATA USER password there also writes `NL2SQL_ORACLE_DEEPSEC_ENABLED=true` to
 The stack reserves a fixed Oracle Select AI credential name and the default
 Select AI region:
 
-- `NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED`
+- `NL2SQL_SELECT_AI_CREDENTIAL_NAME=NL2SQL_OCI_CRED`
 - `NL2SQL_SELECT_AI_REGION=us-chicago-1`
 
 After deployment, open `運用設定 > Select AI Credential`.
-The administrator explicitly creates `OCI_CRED` for the current Oracle schema
+The administrator explicitly creates `NL2SQL_OCI_CRED` for the current Oracle schema
 from the server-side OCI config signing key. The private key is passed to
 `DBMS_CLOUD.CREATE_CREDENTIAL` only as an Oracle bind variable; Terraform,
 browser responses, and persisted application settings never receive it. An
@@ -118,6 +118,23 @@ If you override these Terraform variables outside the form for HTTPS, use
 `nl2sql_app_environment=production` with `nl2sql_app_auth_cookie_secure=true`.
 
 ## Updating an Existing Compute Deployment
+
+### Renaming the Select AI credential to `NL2SQL_OCI_CRED` (#1712)
+
+The Select AI credential is now named `NL2SQL_OCI_CRED` so that it follows the
+database object prefix rule and does not collide with an `OCI_CRED` owned by
+another application in the same schema. The backend no longer uses the old
+name. After updating an instance whose credential is still `OCI_CRED`:
+
+1. Open `運用設定 > Select AI Credential` as an administrator and create the
+   credential. The screen shows `NL2SQL_OCI_CRED` as missing; creating it also
+   writes `NL2SQL_SELECT_AI_CREDENTIAL_NAME=NL2SQL_OCI_CRED` to `backend/.env`.
+   (Alternatively, set that value in `backend/.env` yourself and restart the
+   backend before creating the credential.)
+2. Run the Oracle 反映 (Profile sync) again for each business profile so that
+   the `DBMS_CLOUD_AI` profiles reference `NL2SQL_OCI_CRED`.
+3. Only if no other application in the schema uses it, drop the old credential
+   with `BEGIN DBMS_CLOUD.DROP_CREDENTIAL('OCI_CRED'); END;`.
 
 ### Moving to the shared `platform/.env` (#211)
 

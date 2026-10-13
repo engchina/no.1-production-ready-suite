@@ -1,7 +1,7 @@
 """Select AI の Credential の事前条件（#1683 / #1688）。
 
 DBMS_CLOUD_AI Profile は Select AI の Credential（`NL2SQL_SELECT_AI_CREDENTIAL_NAME`。既定
-`OCI_CRED`）を参照する。Credential が無いと、業務プロファイルの Oracle 反映・Select AI /
+`NL2SQL_OCI_CRED`）を参照する。Credential が無いと、業務プロファイルの Oracle 反映・Select AI /
 Select AI Agent での SQL の生成・合成データ・SQL 生成評価・Select AI Agent アセットの再構築が
 Oracle の処理の途中で失敗する。これらの操作は、Oracle に触る処理を始める前にここで確かめ、
 無ければ 409 `SELECT_AI_CREDENTIAL_MISSING` で止める。画面は
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 SELECT_AI_CREDENTIAL_ENGINES = frozenset({Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT})
 
 # DBMS_CLOUD_AI が参照する Credential が無いときの ORA（実 ADB で確認。#1683）:
-#   ORA-20004: Credential "ADMIN"."OCI_CRED" does not exist
+#   ORA-20004: Credential "ADMIN"."NL2SQL_OCI_CRED" does not exist
 _CREDENTIAL_MISSING_ORA_RE = re.compile(
     r"\bORA-20004\b[^\n]*\bcredential\b[^\n]*\bdoes not exist\b", re.IGNORECASE
 )

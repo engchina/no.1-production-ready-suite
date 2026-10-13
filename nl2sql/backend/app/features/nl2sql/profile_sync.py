@@ -15,8 +15,6 @@ from uuid import uuid4
 from app.settings import get_settings
 
 from .models import (
-    ProfileAgentAssetRebuildData,
-    ProfileAgentAssetRebuildStatus,
     ProfileSelectAiProfileRequest,
     ProfileSyncJobData,
     ProfileSyncJobPhase,
@@ -47,18 +45,6 @@ _ORACLE_ERROR_CODE_RE = re.compile(r"\bORA-\d{4,5}\b", re.IGNORECASE)
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-_EPOCH = datetime.fromtimestamp(0, UTC)
-
-
-def _parse_timestamp(value: str) -> datetime:
-    """ジョブの ISO 8601 の日時を比べられる形にする。読めなければ最も古い日時として扱う。"""
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return _EPOCH
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _profile_sync_public_error(
@@ -220,59 +206,6 @@ class ProfileSyncService:
     def readiness(self) -> SelectAiCredentialReadinessData:
         """Oracle 反映の事前条件（Select AI の Credential が作成済みか）を副作用なしで返す。"""
         return select_ai_credential_readiness(self._oracle_adapter(), get_settings())
-
-    def last_agent_rebuild(self, profile_id: str) -> ProfileAgentAssetRebuildData:
-        """業務 Profile の Select AI Agent アセットを最後に再構築した日時と結果を返す（#1691）。
-
-        Oracle 反映のジョブの記録から、再構築の工程まで進んだもの（成功した再構築・再構築の工程での
-        失敗）だけを見る。DBMS_CLOUD_AI Profile の反映で止まったジョブ・再構築しない保存は数えない。
-        副作用は無い（期限切れのジョブの確定もしない）。業務 Profile が無ければ KeyError。
-        """
-        profile = self._service.get_profile(profile_id)
-        latest: tuple[datetime, ProfileSyncJobData, bool] | None = None
-        for document in self.store.list_documents(
-            "jobs", {"profile_id": profile.id, "job_type": "profile_sync"}
-        ):
-            try:
-                job = ProfileSyncJobData.model_validate(document["payload"])
-            except (KeyError, ValueError):
-                continue
-            agent_result = job.agent_result
-            if agent_result is not None and agent_result.refreshed:
-                succeeded = True
-                finished = agent_result.refreshed_at or job.finished_at
-            elif (
-                job.status == ProfileSyncJobStatus.FAILED
-                and job.failed_phase == ProfileSyncJobPhase.REBUILDING_AGENT_ASSETS
-            ):
-                succeeded = False
-                finished = job.finished_at
-            else:
-                continue
-            finished_at = _parse_timestamp(finished or job.created_at)
-            if latest is None or finished_at > latest[0]:
-                latest = (finished_at, job, succeeded)
-        if latest is None:
-            return ProfileAgentAssetRebuildData(profile_id=profile.id)
-        finished_at, job, succeeded = latest
-        current_etag = str(getattr(profile, "etag", "") or "")
-        return ProfileAgentAssetRebuildData(
-            profile_id=profile.id,
-            status=(
-                ProfileAgentAssetRebuildStatus.SUCCEEDED
-                if succeeded
-                else ProfileAgentAssetRebuildStatus.FAILED
-            ),
-            rebuilt_at=finished_at.isoformat() if finished_at != _EPOCH else "",
-            job_id=job.job_id,
-            profile_etag=job.profile_etag,
-            profile_changed_since=bool(
-                job.profile_etag and current_etag and job.profile_etag != current_etag
-            ),
-            team_name=job.agent_result.team_name if succeeded and job.agent_result else "",
-            error_code="" if succeeded else job.error_code,
-            error_message_ja="" if succeeded else job.error_message_ja,
-        )
 
     def assert_ready(self) -> None:
         """Credential が無いと分かったら、job を作らずに止める（#1683）。"""

@@ -67,8 +67,6 @@ import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
 } from "../components/SchemaRefreshFeedback";
-import { profileAgentAssetRebuildKey } from "../agentAssetRebuild";
-import { AgentAssetRebuildStatus } from "../components/AgentAssetRebuildStatus";
 import { ProfileSaveProgress } from "../components/ProfileSaveProgress";
 import { SelectAiCredentialPrecondition } from "../components/SelectAiCredentialPrecondition";
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
@@ -1133,7 +1131,6 @@ function ProfileEditor({
           />
           <span>{t("profiles.oracle.assets.refreshAgent")}</span>
         </label>
-        {selectedProfile ? <AgentAssetRebuildStatus profileId={selectedProfile.id} /> : null}
       </section>
 
       {/* 保存（Oracle 反映）の事前条件。保存の操作の直前に出し、満たすまで「保存」を無効にする
@@ -1633,10 +1630,6 @@ export function ProfileManagementPage() {
     // 成功・失敗のどちらでも最新版を取り直し、次の保存の If-Match が古い ETag で 409 にならないようにする。
     void queryClient.invalidateQueries({
       queryKey: nl2sqlIncrementalKeys.profile(finishedOracleSyncJob.profileId),
-    });
-    // 「Select AI Agent アセット」の欄の最後の再構築（成功・失敗のどちらでも変わる。#1691）。
-    void queryClient.invalidateQueries({
-      queryKey: profileAgentAssetRebuildKey(finishedOracleSyncJob.profileId),
     });
     if (!finishedOracleSyncJob.succeeded) return;
     if (finishedOracleSyncJob.invalidateSelectAi) {

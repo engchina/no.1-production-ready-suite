@@ -1,69 +1,47 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CheckCircle2, MessageSquareText, Play, RotateCcw, Sparkles, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import {
-  ApiErrorBanner,
-  Banner,
-  Button,
-  ChatAnswer,
-  ChatProgress,
-  ChatTurn,
-  StatusBadge,
-} from "@production-ready/ui";
+import { ChatAnswer, ChatTurn } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 
-import {
-  applyQuerySessionRequirement,
-  cancelQuerySession,
-  createQuerySession,
-  getQuerySession,
-} from "../ontology/api";
-import type { QuerySession } from "../ontology/types";
-import { CHAT_PROGRESS_LABELS } from "../chatProgress";
+import { cancelQuerySession, createQuerySession, getQuerySession } from "../ontology/api";
 import {
   chatRequirementIdempotencyKey,
   chatRequirementSessionRequest,
-  chatRequirementStep,
-  isRequirementCheckUnavailable,
   type ChatRequirementCheck,
 } from "../chatRequirement";
 import {
   isSessionOpen,
-  RequirementAnswerProgress,
-  RequirementItemsList,
-  RequirementQuestionForm,
-  requirementPhaseBadge,
-  RequirementStateBanners,
-  RequirementSummary,
+  useRequirementCheck,
+  useRequirementProceed,
   useRequirementSession,
+  type RequirementCheckRunner,
   type RequirementSessionController,
 } from "./RequirementClarification";
+import { RequirementClarificationView, type RequirementApplyLabels } from "./RequirementClarificationView";
 
 /**
- * チャットの AI要件確認の段階。
- *
- * - `checking`: 要件の検査（session の作成・作業状態から戻した session の読み込み・確認の要らない質問の反映）。
- * - `failed`: 要件の検査ができなかった（もう一度確かめる・確認せずに SQL を生成する・中止を選ぶ）。
- * - `ask` / `summary` / `ended`: 会話の中の確認（1 問ずつの質問 / まとめ / 終わった確認）。
+ * チャットの AI要件確認（#1442）。SQL 生成の画面の AI要件確認（`GuidedClarificationPanel`）を基準にし、同じ hook
+ * （`useRequirementSession`・`useRequirementCheck`・`useRequirementProceed`）と同じ部品
+ * （`RequirementClarificationView`）を使う（#1715）。チャットだけの違いは入口（送信のときに自動で始め、会話の続きを
+ * 検査に渡す）と、確定した要件の行き先（SQL の生成）だけ。
  */
-export type ChatRequirementPhase = "idle" | "checking" | "failed" | "ask" | "summary" | "ended";
-
 export interface ChatRequirementFlow {
   check: ChatRequirementCheck | null;
   controller: RequirementSessionController;
-  phase: ChatRequirementPhase;
-  checkError: unknown;
+  requirementCheck: RequirementCheckRunner;
   /** 要件の検査の最中（入力欄の送信のボタンは「停止」になり、押すと確認を中止する）。 */
   running: boolean;
+  /** 会話の欄の末尾へ追う key（確認の質問・まとめが変わったとき）。 */
+  scrollKey: string;
   /** もう一度確かめる（新しい session を作る）。 */
   retry: () => void;
   /** 確認せずに SQL を生成する（要件の検査ができなかったとき）。 */
   skip: () => void;
   /** 確認を中止する（質問は入力欄に戻す）。 */
   cancel: () => void;
-  /** まとめを確かめた要件で SQL を生成する。 */
+  /** 確かめた要件で SQL を生成する。 */
   generate: () => void;
   /** 会話・業務プロファイルを変えたときに、確認を外す（サーバーの session は中止する）。 */
   discard: () => void;
@@ -87,10 +65,6 @@ interface ChatRequirementFlowOptions {
   enabled: boolean;
 }
 
-/**
- * チャットで質問を送ったときの、SQL を作る前の要件の検査と会話の中の確認（#1442）。session の作成・回答・直し・
- * 反映・中止は SQL 生成の画面の AI要件確認と同じ API・同じ useRequirementSession で行う。
- */
 export function useChatRequirementFlow({
   check,
   setCheck,
@@ -100,9 +74,9 @@ export function useChatRequirementFlow({
 }: ChatRequirementFlowOptions): ChatRequirementFlow {
   const controller = useRequirementSession();
   const { session, setSession, setError } = controller;
-  const [creating, setCreating] = useState(false);
-  const [directing, setDirecting] = useState(false);
-  const [checkError, setCheckError] = useState<unknown>(null);
+  const requirementCheck = useRequirementCheck();
+  const { run: runCheck, reset: resetCheck } = requirementCheck;
+  const { proceed, directing } = useRequirementProceed(controller);
   // 検査を始めた送信（job ID）。StrictMode・再レンダーで二重に始めない。
   const startedRef = useRef("");
   // 作成の応答の前に中止した送信（応答が届いたら session を中止する）。
@@ -115,74 +89,40 @@ export function useChatRequirementFlow({
   });
   const clientJobId = check?.request.client_job_id ?? "";
 
-  /** 作った・読み直した session で次へ進む（確認が要らなければ聞かずに反映して SQL を作る）。 */
-  const proceed = useCallback(
-    async (current: ChatRequirementCheck, loaded: QuerySession) => {
-      const step = chatRequirementStep(loaded);
-      if (step === "applied") {
-        onSubmitRef.current(current, loaded.id, loaded.requirement?.clarified_question_ja);
-        return;
-      }
-      if (step !== "direct") {
-        setSession(loaded);
-        return;
-      }
-      setDirecting(true);
-      try {
-        const applied = await applyQuerySessionRequirement(loaded.id, {
-          base_version: loaded.current_intent_version ?? 1,
-        });
-        if (checkRef.current?.request.client_job_id !== current.request.client_job_id) return;
-        onSubmitRef.current(
-          current,
-          applied.id,
-          applied.requirement?.clarified_question_ja ?? loaded.requirement?.clarified_question_ja
-        );
-      } catch (cause) {
-        // 反映できなければ、まとめを出して「SQL を生成」でやり直せるようにする。
-        setSession(loaded);
-        setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.apply"));
-      } finally {
-        setDirecting(false);
-      }
-    },
-    [setError, setSession]
-  );
-
   // 送った質問の要件の検査を始める（作業状態から戻したときは、作った session を読み直して続ける）。
   useEffect(() => {
     if (!enabled || !check || startedRef.current === check.request.client_job_id) return;
     const current = check;
-    startedRef.current = current.request.client_job_id;
-    setCheckError(null);
-    setCreating(true);
-    const load = current.sessionId
-      ? getQuerySession(current.sessionId)
-      : createQuerySession(chatRequirementSessionRequest(current.request), {
-          idempotencyKey: chatRequirementIdempotencyKey(current.request.client_job_id),
-        });
-    void load
-      .then(async (loaded) => {
-        const id = current.request.client_job_id;
-        if (abandonedRef.current.has(id) || checkRef.current?.request.client_job_id !== id) {
-          if (isSessionOpen(loaded)) void cancelQuerySession(loaded.id).catch(() => undefined);
-          return;
-        }
-        if (!current.sessionId) setCheck({ ...current, sessionId: loaded.id });
-        setCreating(false);
-        await proceed(current, loaded);
-      })
-      .catch((cause: unknown) => {
-        if (checkRef.current?.request.client_job_id !== current.request.client_job_id) return;
-        setCreating(false);
+    const id = current.request.client_job_id;
+    startedRef.current = id;
+    const isCurrent = () => !abandonedRef.current.has(id) && checkRef.current?.request.client_job_id === id;
+    void runCheck(
+      async () => {
+        const loaded = current.sessionId
+          ? await getQuerySession(current.sessionId)
+          : await createQuerySession(chatRequirementSessionRequest(current.request), {
+              idempotencyKey: chatRequirementIdempotencyKey(id),
+            });
+        // 作成の応答の前に中止した・別の送信に移ったときは、作られた確認をサーバーで中止する。
+        if (!isCurrent() && isSessionOpen(loaded)) void cancelQuerySession(loaded.id).catch(() => undefined);
+        return loaded;
+      },
+      {
+        isCurrent,
         // OCI Enterprise AI が無い環境では要件の検査を使えないので、確認せずに SQL を作る。
-        if (!current.sessionId && isRequirementCheckUnavailable(cause)) {
-          onSubmitRef.current(current, null);
-          return;
-        }
-        setCheckError(cause);
-      });
-  }, [check, enabled, proceed, setCheck]);
+        onUnavailable: current.sessionId ? undefined : () => onSubmitRef.current(current, null),
+      }
+    ).then(async (loaded) => {
+      if (!loaded) return;
+      if (!current.sessionId) setCheck({ ...current, sessionId: loaded.id });
+      await proceed(
+        loaded,
+        (applied) =>
+          onSubmitRef.current(current, applied.id, applied.requirement?.clarified_question_ja),
+        isCurrent
+      );
+    });
+  }, [check, enabled, proceed, runCheck, setCheck]);
 
   // 別の送信に移ったら、前の送信の確認の状態を外す（render 中に前の値と比べて直す）。
   const [shownJobId, setShownJobId] = useState(clientJobId);
@@ -191,18 +131,19 @@ export function useChatRequirementFlow({
     setSession(null);
     setError("");
     controller.setCorrectingItemId(null);
-    setCheckError(null);
+    resetCheck();
   }
 
-  const restart = () => {
+  const running = requirementCheck.checking || directing;
+
+  const retry = () => {
     if (!check) return;
     // 新しい session で確かめ直す（ジョブはまだ作っていないので、job ID と作成の key を新しくする）。
-    const next: ChatRequirementCheck = {
+    setCheck({
       ...check,
       request: { ...check.request, client_job_id: randomUuid() },
       sessionId: "",
-    };
-    setCheck(next);
+    });
   };
 
   const skip = () => {
@@ -212,9 +153,9 @@ export function useChatRequirementFlow({
 
   const cancel = () => {
     if (!check) return;
-    if (creating || directing) {
+    if (running) {
       abandonedRef.current.add(check.request.client_job_id);
-      setCreating(false);
+      resetCheck();
       onCancelled(check);
       return;
     }
@@ -227,7 +168,7 @@ export function useChatRequirementFlow({
     if (!check) return;
     abandonedRef.current.add(check.request.client_job_id);
     if (isSessionOpen(session)) void cancelQuerySession(session.id).catch(() => undefined);
-    setCreating(false);
+    resetCheck();
     setCheck(null);
   };
 
@@ -241,22 +182,19 @@ export function useChatRequirementFlow({
     });
   };
 
-  const step = session ? chatRequirementStep(session) : null;
-  let phase: ChatRequirementPhase;
-  if (!check) phase = "idle";
-  else if (creating || directing) phase = "checking";
-  else if (!session) phase = checkError ? "failed" : "checking";
-  else if (step === "ended") phase = "ended";
-  else if (step === "ask") phase = "ask";
-  else phase = "summary";
-
   return {
     check,
     controller,
-    phase,
-    checkError,
-    running: phase === "checking",
-    retry: restart,
+    // 自動の反映（確認が要らないとき）の間も検査中として出す。
+    requirementCheck: { ...requirementCheck, checking: running },
+    running,
+    scrollKey: [
+      running ? "running" : "",
+      requirementCheck.checkError ? "failed" : "",
+      session?.status ?? "",
+      session?.current_intent_version ?? "",
+    ].join(":"),
+    retry,
     skip,
     cancel,
     generate,
@@ -264,7 +202,7 @@ export function useChatRequirementFlow({
   };
 }
 
-/** チャットの会話の中の AI要件確認の 1 往復（送った質問の吹き出しと、その下の検査・確認・まとめ）。 */
+/** チャットの会話の中の AI要件確認の 1 往復（送った質問の吹き出しと、その下の AI要件確認）。 */
 export function ChatRequirementTurn({
   flow,
   canExecuteSql,
@@ -272,161 +210,30 @@ export function ChatRequirementTurn({
   flow: ChatRequirementFlow;
   canExecuteSql: boolean;
 }) {
-  const { check, controller, phase } = flow;
+  const { check } = flow;
   if (!check) return null;
-  const { state, busyAction, error, session } = controller;
-  const badge = state ? requirementPhaseBadge(state) : null;
-  const cancelButton = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      icon={X}
-      loading={busyAction === "cancel"}
-      disabled={busyAction === "answer" || busyAction === "apply"}
-      onClick={flow.cancel}
-      data-testid="sql-chat-requirement-cancel"
-    >
-      {t("nl2sql.clarification.cancel")}
-    </Button>
-  );
-  const generateLabel = canExecuteSql
-    ? t("chat.requirement.generate")
-    : t("chat.requirement.generateOnly");
-  const showGenerate = phase === "summary" && controller.showApply && !controller.activeItem;
+  // 確定した要件の行き先は SQL の生成（SQL 生成の画面は質問の欄への反映）。
+  const labels: RequirementApplyLabels = {
+    ready: t("chat.requirement.ready"),
+    apply: canExecuteSql ? t("chat.requirement.generate") : t("chat.requirement.generateOnly"),
+    applyWithRemaining: t("chat.requirement.generateWithRemaining"),
+  };
   return (
     <ChatTurn question={check.request.question} testId="sql-chat-requirement-turn">
-      <ChatAnswer testId="sql-chat-requirement" className="gap-4">
-        {phase === "checking" ? (
-          <ChatProgress
-            key={check.request.client_job_id}
-            steps={[
-              {
-                id: "requirement_check",
-                label: t("chat.progress.requirement.running"),
-                status: "running",
-                startedAt: new Date(check.sentAtMs).toISOString(),
-              },
-            ]}
-            labels={CHAT_PROGRESS_LABELS}
-            testId="sql-chat-progress"
-          />
-        ) : null}
-        {phase === "failed" ? (
-          <ApiErrorBanner
-            error={flow.checkError}
-            fallback={t("chat.requirement.failed")}
-            nextAction={t("chat.requirement.failed.action")}
-            testId="sql-chat-requirement-error"
-            action={
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="secondary" size="sm" icon={RotateCcw} onClick={flow.retry}>
-                  {t("chat.requirement.retry")}
-                </Button>
-                <Button type="button" variant="secondary" size="sm" icon={MessageSquareText} onClick={flow.skip}>
-                  {t("chat.requirement.skip")}
-                </Button>
-                {cancelButton}
-              </div>
-            }
-          />
-        ) : null}
-        {phase === "ask" || phase === "summary" || phase === "ended" ? (
-          <section
-            aria-labelledby="sql-chat-requirement-title"
-            className="grid min-w-0 gap-3"
-            data-testid="sql-chat-requirement-clarification"
-            data-phase={phase}
-          >
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />
-                <h3 id="sql-chat-requirement-title" className="text-sm font-semibold text-fg">
-                  {t("nl2sql.clarification.title")}
-                </h3>
-                {badge && phase !== "ended" ? <StatusBadge variant={badge.variant} label={badge.label} /> : null}
-                {state && phase !== "ended" ? (
-                  <span className="text-xs text-fg-muted" data-testid="nl2sql-clarification-review-round">
-                    {t("nl2sql.clarification.reviewRound", {
-                      round: state.review_round,
-                      max: state.max_review_rounds,
-                    })}
-                  </span>
-                ) : null}
-              </div>
-              {phase !== "ended" ? (
-                <p className="mt-1 text-sm leading-6 text-fg-muted">
-                  {state?.message_ja || t("chat.requirement.description")}
-                </p>
-              ) : null}
-            </div>
-            <div aria-live="polite" aria-atomic="true" className="sr-only">
-              {state?.message_ja}
-            </div>
-            {error && phase !== "ended" ? <Banner severity="danger">{error}</Banner> : null}
-            {phase === "ended" ? (
-              <Banner severity="warning">
-                {session?.error_message_ja || t("chat.requirement.ended")}
-              </Banner>
-            ) : null}
-            <RequirementAnswerProgress active={busyAction === "answer"} />
-            {phase !== "ended" ? (
-              <>
-                <RequirementStateBanners state={state} unresolvedCount={controller.unresolvedCount} />
-                <RequirementQuestionForm
-                  controller={controller}
-                  size="sm"
-                  idPrefix="sql-chat-requirement"
-                  applyWithRemainingLabel={t("chat.requirement.generateWithRemaining")}
-                  onApplyWithRemaining={flow.generate}
-                  trailingActions={cancelButton}
-                />
-                {state && controller.draft ? (
-                  <RequirementItemsList controller={controller} />
-                ) : null}
-                <RequirementSummary
-                  controller={controller}
-                  idPrefix="sql-chat-requirement"
-                  className="grid gap-3"
-                />
-              </>
-            ) : null}
-            {showGenerate ? (
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="flex items-center gap-2 text-sm text-success-fg">
-                  <CheckCircle2 size={16} aria-hidden="true" />
-                  {t("chat.requirement.ready")}
-                </span>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="sm"
-                    icon={Play}
-                    loading={busyAction === "apply"}
-                    disabled={Boolean(busyAction && busyAction !== "apply")}
-                    onClick={flow.generate}
-                    data-testid="sql-chat-requirement-generate"
-                  >
-                    {generateLabel}
-                  </Button>
-                  {cancelButton}
-                </div>
-              </div>
-            ) : null}
-            {phase === "ended" ? (
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button type="button" variant="secondary" size="sm" icon={RotateCcw} onClick={flow.retry}>
-                  {t("chat.requirement.retry")}
-                </Button>
-                {cancelButton}
-              </div>
-            ) : null}
-            {!showGenerate && phase !== "ended" && !controller.activeItem ? (
-              <div className="flex flex-wrap justify-end gap-2">{cancelButton}</div>
-            ) : null}
-          </section>
-        ) : null}
+      <ChatAnswer testId="sql-chat-requirement">
+        <RequirementClarificationView
+          key={check.request.client_job_id}
+          controller={flow.controller}
+          check={flow.requirementCheck}
+          startPhase="prepare_questions"
+          onRetry={flow.retry}
+          onSkip={flow.skip}
+          onApply={flow.generate}
+          onClose={flow.cancel}
+          labels={labels}
+          size="sm"
+          idPrefix="sql-chat"
+        />
       </ChatAnswer>
     </ChatTurn>
   );

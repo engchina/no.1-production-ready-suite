@@ -321,7 +321,7 @@ def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_st
         ) -> SelectAiDbProfileMutationData:
             assert profile_id == self.profile.id
             self.oracle_calls += 1
-            error = SelectAiCredentialMissingError("OCI_CRED", "ADMIN")
+            error = SelectAiCredentialMissingError("NL2SQL_OCI_CRED", "ADMIN")
             error.__cause__ = RuntimeError("ORA-06512: at line 2291 private stack")
             raise error
 
@@ -339,7 +339,7 @@ def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_st
 
     assert failed.status == ProfileSyncJobStatus.FAILED
     assert failed.error_code == "SELECT_AI_CREDENTIAL_MISSING"
-    assert "OCI_CRED" in failed.error_message_ja
+    assert "NL2SQL_OCI_CRED" in failed.error_message_ja
     # Credential は運用設定の専用の画面で作る（#658）。作る場所を案内する（#1683）。
     assert "運用設定の「Select AI Credential」で作成してから" in failed.error_message_ja
     assert "ORA-" not in failed.error_message_ja
@@ -539,7 +539,7 @@ def test_select_ai_credential_preflight_happens_before_profile_drop(
         adapter.upsert_select_ai_profile_low_level(
             profile_name="INVOICE_PROFILE",
             original_name="OLD_PROFILE",
-            attributes={"provider": "oci", "credential_name": "OCI_CRED"},
+            attributes={"provider": "oci", "credential_name": "NL2SQL_OCI_CRED"},
         )
 
     assert exc_info.value.code == "SELECT_AI_CREDENTIAL_MISSING"
@@ -697,7 +697,7 @@ def _oracle_settings() -> SimpleNamespace:
         nl2sql_ontology_worker_mode="external",
         nl2sql_profile_sync_job_timeout_seconds=300.0,
         nl2sql_runtime_mode="oracle",
-        nl2sql_select_ai_credential_name="oci_cred",
+        nl2sql_select_ai_credential_name="nl2sql_oci_cred",
     )
 
 
@@ -723,7 +723,7 @@ def test_profile_sync_start_without_credential_stops_before_creating_job(
 
     readiness = sync.readiness()
     assert readiness.credential_required is True
-    assert readiness.credential_name == "OCI_CRED"
+    assert readiness.credential_name == "NL2SQL_OCI_CRED"
     assert readiness.credential_exists is False
 
     with pytest.raises(SelectAiCredentialMissingError) as exc_info:
@@ -733,9 +733,9 @@ def test_profile_sync_start_without_credential_stops_before_creating_job(
             idempotency_key="no-credential",
         )
 
-    assert exc_info.value.credential_name == "OCI_CRED"
+    assert exc_info.value.credential_name == "NL2SQL_OCI_CRED"
     assert exc_info.value.schema_name == "ADMIN"
-    assert adapter.calls == ["OCI_CRED", "OCI_CRED"]
+    assert adapter.calls == ["NL2SQL_OCI_CRED", "NL2SQL_OCI_CRED"]
     # job も Idempotency-Key の予約も作らず、Oracle の反映（CREATE_PROFILE）にも進まない。
     assert store.list_documents("jobs", {"profile_id": "profile-1"}) == []
     assert store.get_idempotency("profile_sync", "no-credential") is None
@@ -753,7 +753,7 @@ def test_profile_sync_start_with_credential_queues_job(
         idempotency_key="with-credential",
     )
     assert started.status == ProfileSyncJobStatus.QUEUED
-    assert adapter.calls == ["OCI_CRED"]
+    assert adapter.calls == ["NL2SQL_OCI_CRED"]
     # 同じ要求の再送は受付済みの job を返し、事前条件を確かめ直さない。
     again = sync.start(
         "profile-1",
@@ -761,7 +761,7 @@ def test_profile_sync_start_with_credential_queues_job(
         idempotency_key="with-credential",
     )
     assert again.job_id == started.job_id
-    assert adapter.calls == ["OCI_CRED"]
+    assert adapter.calls == ["NL2SQL_OCI_CRED"]
     completed = sync.run_persisted(started.job_id)
     assert completed.status == ProfileSyncJobStatus.SUCCEEDED
     assert service.oracle_calls == 1
@@ -769,7 +769,7 @@ def test_profile_sync_start_with_credential_queues_job(
 
 @pytest.mark.parametrize(
     ("runtime_mode", "credential_name"),
-    [("deterministic", "OCI_CRED"), ("oracle", "")],
+    [("deterministic", "NL2SQL_OCI_CRED"), ("oracle", "")],
     ids=["deterministic-runtime", "credential-name-unset"],
 )
 def test_profile_sync_readiness_skips_credential_check_when_not_referenced(
@@ -857,7 +857,7 @@ def test_profile_sync_maps_credential_ora_from_create_profile(
                 profile_name="INVOICE_PROFILE",
                 warnings=[
                     "Oracle PL/SQL 実行に失敗しました: ORA-20004: Credential "
-                    '"ADMIN"."OCI_CRED" does not exist\nORA-06512: at line 1'
+                    '"ADMIN"."NL2SQL_OCI_CRED" does not exist\nORA-06512: at line 1'
                 ],
             )
 
@@ -906,7 +906,7 @@ def test_profile_sync_router_returns_409_without_credential_and_202_with_it(
         assert readiness.status_code == 200
         assert readiness.json()["data"] == {
             "credential_required": True,
-            "credential_name": "OCI_CRED",
+            "credential_name": "NL2SQL_OCI_CRED",
             "credential_exists": False,
         }
 

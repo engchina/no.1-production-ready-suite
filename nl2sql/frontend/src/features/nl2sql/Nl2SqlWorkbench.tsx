@@ -75,6 +75,7 @@ import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
 import { useSelectAiCredentialReadiness } from "./useSelectAiCredentialReadiness";
 import { prefillFromSearchParams } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
+import { requirementCheckSkipReason } from "./requirementCheck";
 import { profileDisplayLabel } from "./profileDisplay";
 import type {
   HistoryData,
@@ -972,9 +973,11 @@ function ExecutableNl2SqlWorkbench() {
   const rewriteChanged =
     !!rewriteData && rewriteData.rewritten_question.trim() !== question.trim();
 
-  const submit = async () => {
+  const submit = async (options: { closingClarification?: boolean } = {}) => {
     const trimmed = question.trim();
-    if (!trimmed || active || !profileSelectionReady || selectAiCredentialBlocked) return;
+    // AI要件確認のパネルから「確認せずに SQL を生成」したときは、閉じる途中のパネルを開いている扱いにしない。
+    const busy = options.closingClarification ? jobActive || detecting : active;
+    if (!trimmed || busy || !profileSelectionReady || selectAiCredentialBlocked) return;
     beginActionFeedback();
     clearGeneratedOutput();
     setSubmitting(true);
@@ -1003,6 +1006,20 @@ function ExecutableNl2SqlWorkbench() {
       setSubmitting(false);
     }
   };
+
+  // AI要件確認の「確認せずに SQL を生成」（チャットと同じ操作。#1715）。パネルを閉じ、入力した質問のまま生成する。
+  const skipGuidedClarification = () => {
+    setGuidedClarificationOpen(false);
+    void submit({ closingClarification: true });
+  };
+  // 質問が SQL の文なら AI要件確認は要らない（チャットと同じ判定。LLM を呼ばない。#1715）。
+  const guidedClarificationSkipReason = requirementCheckSkipReason(question);
+  // 「AI要件確認」を押せない理由（未入力・SQL の文）。操作前の案内なので赤いエラーにしない。
+  const guidedClarificationHintId = !question.trim()
+    ? "nl2sql-guided-query-required"
+    : guidedClarificationSkipReason
+      ? "nl2sql-guided-sql-input"
+      : undefined;
 
   const handleApplyClarifiedQuestion = useCallback((clarifiedQuestion: string, confirmedProfileId: string, sessionId: string): boolean => {
     if (confirmedProfileId !== profileId) {
@@ -1320,6 +1337,7 @@ function ExecutableNl2SqlWorkbench() {
                             allowedObjects={toAllowedObjects(selection)}
                             onClose={() => setGuidedClarificationOpen(false)}
                             onApplyQuestion={handleApplyClarifiedQuestion}
+                            onSkip={skipGuidedClarification}
                           />
                         ) : (
                           <div className="flex flex-wrap items-center gap-2">
@@ -1328,8 +1346,10 @@ function ExecutableNl2SqlWorkbench() {
                               variant="secondary"
                               size="md"
 
-                              disabled={!question.trim() || active || !profileSelectionReady}
-                              aria-describedby={!question.trim() ? "nl2sql-guided-query-required" : undefined}
+                              disabled={
+                                !question.trim() || active || !profileSelectionReady || Boolean(guidedClarificationSkipReason)
+                              }
+                              aria-describedby={guidedClarificationHintId}
                               onClick={() => {
                                 setActionError("");
                                 setGuidedClarificationOpen(true);
@@ -1379,6 +1399,15 @@ function ExecutableNl2SqlWorkbench() {
                         {!question.trim() && !guidedClarificationOpen ? (
                           <p id="nl2sql-guided-query-required" className="text-xs leading-5 text-fg-muted">
                             {t("nl2sql.clarification.queryRequired")}
+                          </p>
+                        ) : null}
+                        {guidedClarificationSkipReason && !guidedClarificationOpen ? (
+                          <p
+                            id="nl2sql-guided-sql-input"
+                            className="text-xs leading-5 text-fg-muted"
+                            data-testid="nl2sql-guided-sql-input"
+                          >
+                            {t("nl2sql.clarification.sqlInput")}
                           </p>
                         ) : null}
                         {engine === "select_ai" && (

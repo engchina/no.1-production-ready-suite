@@ -218,7 +218,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
 
   const databaseSettings = databaseSettingsFixture();
   let selectAiCredential: {
-    credential_name: "OCI_CRED";
+    credential_name: "NL2SQL_OCI_CRED";
     schema_name: string;
     exists: boolean;
     region: "ap-osaka-1" | "us-chicago-1";
@@ -226,7 +226,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
     missing_fields: string[];
     operation: "created" | "recreated" | null;
   } = {
-    credential_name: "OCI_CRED" as const,
+    credential_name: "NL2SQL_OCI_CRED" as const,
     schema_name: "ADMIN",
     exists: false,
     region: "us-chicago-1",
@@ -2594,7 +2594,7 @@ test("Select AI Credential を明示確認で作成し、成功状態だけを�
 }) => {
   let posted: Record<string, unknown> | null = null;
   let credential = {
-    credential_name: "OCI_CRED",
+    credential_name: "NL2SQL_OCI_CRED",
     schema_name: "ADMIN",
     exists: false,
     region: "ap-osaka-1",
@@ -2614,7 +2614,7 @@ test("Select AI Credential を明示確認で作成し、成功状態だけを�
   await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
   await expect(card.getByRole("heading", { name: "Select AI Credential" })).toBeVisible();
-  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
   await card.getByRole("combobox", { name: "Select AI 既定リージョン" }).click();
   await page.getByRole("option", { name: "us-chicago-1" }).click();
@@ -2643,7 +2643,7 @@ test("既存 Select AI Credential の再作成は確認語だけで直接実行�
 }) => {
   let recreateRequest: Record<string, unknown> | null = null;
   const existing = {
-    credential_name: "OCI_CRED",
+    credential_name: "NL2SQL_OCI_CRED",
     schema_name: "ADMIN",
     exists: true,
     region: "ap-osaka-1",
@@ -2685,7 +2685,7 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
   await page.route("**/api/settings/database/select-ai-credential", (route) => {
     statusRequests += 1;
     return fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
       region: "ap-osaka-1",
@@ -2726,7 +2726,7 @@ test("Select AI Credential 状態の取得中は経過時間付きの読み込�
   await page.route("**/api/settings/database/select-ai-credential", async (route) => {
     await pending;
     await fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
       region: "us-chicago-1",
@@ -2744,7 +2744,7 @@ test("Select AI Credential 状態の取得中は経過時間付きの読み込�
   await expectNoHorizontalOverflow(page);
   release();
   await expect(loading).toHaveCount(0);
-  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
 });
 
 test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で再取得できる", async ({
@@ -2809,7 +2809,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
       });
     }
     return fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
       region: "ap-osaka-1",
@@ -2821,7 +2821,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
 
   await page.goto("/settings/select-ai-credential");
   const card = page.getByTestId("select-ai-credential-card");
-  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
   const initialStatusRequests = statusRequests;
   failNextRequest = true;
@@ -2831,7 +2831,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   await expect(alert).toHaveCount(1);
   await expect(alert).toContainText(apiError);
   await expect(alert).toContainText("req-select-ai-status-refresh");
-  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+  await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
   await expect(card.getByRole("button", { name: "状態を再取得" })).toHaveCount(1);
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
@@ -2858,7 +2858,7 @@ test("Select AI Credential API 失敗は固定 alert だけに表示し Toast �
       return;
     }
     await fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
       region: "ap-osaka-1",
@@ -3114,7 +3114,7 @@ test("Credential 確認は region 変更と実行失敗で解除し、処理中�
       creates += 1;
       await gate.promise;
       await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Credential 操作失敗" }) });
-    } else await fulfillJson(route, { credential_name: "OCI_CRED", schema_name: "ADMIN", exists: false,
+    } else await fulfillJson(route, { credential_name: "NL2SQL_OCI_CRED", schema_name: "ADMIN", exists: false,
       region: "us-chicago-1", oci_auth_ready: true, missing_fields: [], operation: null });
   });
   await page.goto("/settings/select-ai-credential");

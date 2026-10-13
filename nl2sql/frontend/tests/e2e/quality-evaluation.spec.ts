@@ -1349,7 +1349,7 @@ test("Select AI Credential が無いと Select AI の評価の開始を止めて
   await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
     envelope(route, {
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: readiness.exists,
     })
   );
