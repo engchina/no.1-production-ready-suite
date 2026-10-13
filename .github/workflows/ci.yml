@@ -1655,6 +1655,10 @@ jobs:
       - name: Test pr-merge-check
         run: bash scripts/tests/pr-merge-check.test.sh
 
+      # 実 Oracle の結合テストの skip の監視（oracle-integration.yml。#1595）。runner の python3 で動く。
+      - name: Test pytest-skip-gate
+        run: bash scripts/tests/pytest-skip-gate.test.sh
+
       # 版を固定し、release の checksum で確かめてから使う。shellcheck は runner のものを使う。
       - name: Actionlint
         env:
