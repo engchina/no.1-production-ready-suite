@@ -13,6 +13,8 @@ export type RequirementStage =
   | "applied"
   // 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない。#1442）。
   | "clear"
+  // #1718: `select * from employee` 相当の質問で、使う表が要確認（ADMIN.EMPLOYEE / ADMIN.EMPLOYEE_HISTORY）。
+  | "select_all_table"
   // #1718: `select * from employee` 相当（確定 2 つと、値の無い部分＝指定なし）。
   | "select_all"
   // #1718: select_all に「条件を追加」で並び順を足した後。
@@ -401,6 +403,37 @@ const employeeBasisAnswered = item({
   answer_ja: "実行日（2026-10-11）から",
 });
 
+const employeeTableQuestion = item({
+  id: "item-employee-from",
+  key: "from_employee",
+  section: "from",
+  label_ja: "使用テーブル",
+  status: "ambiguous",
+  question_ja: "「社員」は、どの表ですか？",
+  reason_ja: "社員の表が 2 つあり、質問からは決められません。",
+  answer_kind: "single_select",
+  candidates: [
+    {
+      id: "candidate-employee",
+      label_ja: "ADMIN.EMPLOYEE（社員）",
+      evidence_ja: "表のコメント",
+      source: "schema",
+      tables: ["ADMIN.EMPLOYEE"],
+      columns: [],
+      relationship_ids: [],
+    },
+    {
+      id: "candidate-employee-history",
+      label_ja: "ADMIN.EMPLOYEE_HISTORY（社員の履歴）",
+      evidence_ja: "表のコメント",
+      source: "schema",
+      tables: ["ADMIN.EMPLOYEE_HISTORY"],
+      columns: [],
+      relationship_ids: [],
+    },
+  ],
+});
+
 const employeeWithoutPeriod = employeeUnspecified.filter((value) => value.section !== "period");
 
 const SKELETON = [
@@ -418,6 +451,7 @@ const PENDING_SKELETON = SKELETON.replace(
 );
 
 const EMPLOYEE_STAGES: RequirementStage[] = [
+  "select_all_table",
   "select_all",
   "select_all_ordered",
   "date_column",
@@ -466,7 +500,7 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
           stage === "minimum" ||
           stage === "multi_select" ||
           stage === "clear" ||
-          stage === "select_all" ||
+          stage === "select_all_table" ||
           stage === "date_column" ||
           stage === "all_confirmed"
         ? 0
@@ -527,8 +561,10 @@ function itemsFor(stage: RequirementStage): Record<string, unknown>[] {
       ];
     case "limit":
       return [fromItem, selectItem, joinItem, periodAnswered, groupItem, orderItem, currencyQuestion];
+    case "select_all_table":
+      return [employeeTableQuestion, employeeSelect, ...employeeUnspecified];
     case "select_all":
-      return [employeeFrom, employeeSelect, ...employeeUnspecified];
+      return [{ ...employeeFrom, source: "user", answered: true, answer_ja: "ADMIN.EMPLOYEE（社員）" }, employeeSelect, ...employeeUnspecified];
     case "select_all_ordered":
       return [
         employeeFrom,

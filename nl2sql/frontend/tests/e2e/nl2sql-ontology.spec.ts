@@ -1169,10 +1169,18 @@ async function applyRequirementColorScheme(page: Page, colorScheme: "light" | "d
 for (const colorScheme of ["light", "dark"] as const) {
   test(`AI要件確認は select * の要件を 2 行と「指定なし」の 1 行で示し、畳んだ要約にする (${colorScheme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const viewport = testInfo.project.name;
-    const payloads = await mockApi(page, { createStage: "select_all", answerStage: "select_all_ordered" });
+    const payloads = await mockApi(page, {
+      createStage: "select_all_table",
+      answerStages: ["select_all", "select_all_ordered"],
+    });
     await page.goto("/query");
     await applyRequirementColorScheme(page, colorScheme);
-    const panel = await startRequirementCheck(page, "select * from employee");
+    // `select * from employee` 相当の質問（SQL の文そのものは AI要件確認を飛ばすので、自然文で聞く。#1715）。
+    const panel = await startRequirementCheck(page, "社員をすべて表示");
+    // 確認が要らなければ聞かずに反映する（#1715）。ここでは表が 2 つあるので、表だけを聞く。
+    const tableQuestion = panel.getByTestId("nl2sql-clarification-question");
+    await tableQuestion.getByRole("radio", { name: /ADMIN\.EMPLOYEE（社員）/ }).check();
+    await tableQuestion.getByRole("button", { name: "この内容で回答" }).click();
 
     const requirements = panel.getByTestId("nl2sql-clarification-requirements");
     await expect(requirements).toHaveAttribute("data-needs-answer", "false");
@@ -1224,7 +1232,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await question.getByLabel("その他（自由入力）").fill("EMPLOYEE.HIRE_DATE の新しい順");
     await question.getByRole("button", { name: "この条件を追加" }).click();
     expect(payloads.clarificationAnswer).toEqual({
-      base_version: 1,
+      base_version: 2,
       item_id: "add:order_by",
       selected_candidate_ids: [],
       free_text: "EMPLOYEE.HIRE_DATE の新しい順",
