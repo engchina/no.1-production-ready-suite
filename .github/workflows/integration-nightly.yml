@@ -13,13 +13,19 @@ on:
   schedule:
     - cron: "53 17 * * *" # 02:53 JST（整点を避ける。E2E Nightly の前）
   workflow_dispatch:
+  # この workflow と準備の script を変えた PR でも実行して確かめる（必須の check ではない）。
+  pull_request:
+    paths:
+      - .github/workflows/integration-nightly.yml
+      - .github/scripts/oracle-free-ci.sh
 
 permissions:
   contents: read
 
 concurrency:
   group: integration-nightly-${{ github.ref }}
-  cancel-in-progress: false
+  # PR だけ古い run を取り消す（main の nightly は取り消さない）。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Oracle AI Database Free の image（版を固定する。Oracle の公式の registry で、login は要らない）。
