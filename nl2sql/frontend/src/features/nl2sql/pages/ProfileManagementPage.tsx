@@ -156,6 +156,11 @@ interface ProfileFormState {
   selectAiConfig: ProfileSelectAiConfig;
   /** 既定の生成方式（#1524）。 */
   defaultEngine: Nl2SqlEngine;
+  /**
+   * 保存（Oracle 反映）のたびに Select AI Agent アセットも再構築するか（#1690）。業務プロファイルに
+   * 保存する設定で、開き直しても保つ（「実行設定・同期表示をリセット」の対象ではない）。
+   */
+  rebuildAgentAssetsOnSave: boolean;
 }
 
 
@@ -182,6 +187,7 @@ const EMPTY_FORM: ProfileFormState = {
   allowedViews: [],
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
   defaultEngine: "select_ai",
+  rebuildAgentAssetsOnSave: false,
 };
 
 function emptyProfileForm(): ProfileFormState {
@@ -327,6 +333,7 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
     allowedViews: normalized.allowed_views,
     selectAiConfig,
     defaultEngine: normalized.default_engine ?? "select_ai",
+    rebuildAgentAssetsOnSave: normalized.rebuild_agent_assets_on_save ?? false,
   };
 }
 
@@ -340,6 +347,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     sql_rules: [],
     safety_policy: "select_only",
     default_engine: form.defaultEngine,
+    rebuild_agent_assets_on_save: form.rebuildAgentAssetsOnSave,
     select_ai_config: {
       ...form.selectAiConfig,
       profile_name: profileName,
@@ -1230,7 +1238,8 @@ function ProfileSaveResultRegion({
         submissionError={oracleSyncSubmissionError}
         submissionErrorCode={oracleSyncSubmissionErrorCode}
         profileId={profileId}
-        rebuildAgentAssets={rebuildAgentAssets}
+        // 工程の表示は、実行したジョブが再構築を含むかで決める（保存の後にチェックを変えても変えない）。
+        rebuildAgentAssets={oracleSyncJob?.rebuild_agent_assets ?? rebuildAgentAssets}
         retrying={retryingOracleSync}
         onRetry={onRetryOracleSync}
       />
@@ -1276,7 +1285,11 @@ export function ProfileManagementPage() {
     direction: "asc",
   });
   const [oracleConfirmation, setOracleConfirmation] = useState("");
-  const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
+  // 「保存時に Select AI Agent アセットも再構築する」は業務プロファイルの属性（#1690）。フォームに持ち、
+  // 保存の payload と未保存の判定に入れる。
+  const rebuildAgentAssets = form.rebuildAgentAssetsOnSave;
+  const setRebuildAgentAssets = (value: boolean) =>
+    setForm((current) => ({ ...current, rebuildAgentAssetsOnSave: value }));
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
@@ -2061,7 +2074,6 @@ export function ProfileManagementPage() {
   }, []);
   const canClearOracleExecution = Boolean(
     oracleConfirmation ||
-      rebuildAgentAssets ||
       oracleSyncJobId ||
       oracleSyncProfileId ||
       oracleSyncJob ||
@@ -2071,7 +2083,6 @@ export function ProfileManagementPage() {
 
   const clearOracleExecution = () => {
     setOracleConfirmation("");
-    setRebuildAgentAssets(false);
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
