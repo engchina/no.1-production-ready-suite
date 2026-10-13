@@ -169,7 +169,7 @@ export function RequirementClarificationView({
         trailingActions={closeButton}
       />
 
-      {state && draft ? <RequirementItemsList controller={controller} idPrefix={idPrefix} /> : null}
+      {state && draft ? <RequirementItemsList controller={controller} /> : null}
 
       <RequirementSummary controller={controller} idPrefix={idPrefix} />
 

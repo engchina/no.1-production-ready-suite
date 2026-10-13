@@ -140,6 +140,7 @@ from .sql_requirement import (
     RequirementAiUnavailableError,
     RequirementAnswerInvalidError,
     RequirementContext,
+    added_item_section,
     apply_answer,
     build_draft,
     build_requirement_context,
@@ -4112,6 +4113,16 @@ class OntologyApiRuntime:
         item = next(
             (value for value in current.requirement.items if value.id == request.item_id), None
         )
+        if item is None and (added := added_item_section(request.item_id)) is not None:
+            # 「条件を追加」で足した項目（#1718）。
+            item = next(
+                (
+                    value
+                    for value in draft.items
+                    if value.section == added and value.answered and value.source.value == "user"
+                ),
+                None,
+            )
 
         with self._lock:
             # 別 request / worker が更新・取消した状態を読み直し、版を再検証してから保存する。

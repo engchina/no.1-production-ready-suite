@@ -1187,6 +1187,8 @@ def test_skeleton_after_delegated_order_has_no_undecided() -> None:
     assert _clause_lines(skeleton, "WHERE") == []
     assert _clause_lines(skeleton, "ORDER BY") == []
     assert "-- 並び順: 質問の内容から妥当に判断してください" in skeleton
+    # 件数の上限は質問が求めていないので、骨組みにも入れない（#1718）。
+    assert "FETCH FIRST" not in skeleton
 
 
 def test_settled_items_without_fragment_stay_out_of_a_clause_with_fragments() -> None:
@@ -1959,3 +1961,154 @@ def test_mcp_query_answer_requires_session_and_an_answer(
         )
         assert is_error is True
         assert error["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+
+
+# --- #1718 指定なし・要確認・条件を追加・件数の上限 -------------------------------------
+
+
+def _employee_like_output() -> dict[str, Any]:
+    """`select * from employee` 相当: 確定 2 つと、値の無い推測（＝指定なし）の部分。"""
+
+    return _output(
+        _from_orders(),
+        _item(
+            "select_all",
+            "select",
+            "confirmed",
+            label="表示列",
+            value="APP.ORDERS.*",
+            tables=["APP.ORDERS"],
+            sql_hint="ORDERS.*",
+        ),
+        _item("join_none", "join", "inferred", label="結合"),
+        _item(
+            "period_none",
+            "period",
+            "inferred",
+            label="期間",
+            columns=["APP.ORDERS.ORDER_DATE"],
+        ),
+        _item("where_none", "where", "inferred", label="絞り込み"),
+        _item("group_none", "group_by", "inferred", label="集計"),
+        _item("order_none", "order_by", "inferred", label="並び順"),
+        _item("limit_none", "limit", "missing", label="件数上限", question="何件まで出しますか？"),
+        _item("subquery_none", "subquery", "inferred", label="サブクエリ"),
+        _item("other_none", "other", "inferred", label="その他"),
+    )
+
+
+def test_items_without_value_are_unspecified_not_unresolved() -> None:
+    from app.features.nl2sql.sql_requirement import is_unspecified
+
+    llm = _ScriptedLlm(_employee_like_output())
+    created = _create(_runtime(llm), "select * from orders")
+    state = _state(created)
+    items = _items(created)
+    # 値のある 2 つ（確定）だけが一覧に出し、残りは「指定なし」。件数の上限を「不足」にしない。
+    valued = [item for item in items if not is_unspecified(item)]
+    assert {item.key for item in valued} == {"from_orders", "select_all"}
+    limit = next(item for item in items if item.key == "limit_none")
+    assert limit.status == RequirementStatus.INFERRED
+    assert limit.question_ja == ""
+    assert state.unresolved_items == []
+    assert state.can_apply
+    assert "（指定なし）" in state.summary_ja
+    assert "未確認" not in state.summary_ja
+    assert "FETCH FIRST" not in state.sql_skeleton
+
+
+def test_limit_is_kept_when_the_question_asks_for_top_n() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _select_total(),
+            _item(
+                "limit_top",
+                "limit",
+                "confirmed",
+                label="件数上限",
+                value="上位 5 件",
+                sql_hint="FETCH FIRST 5 ROWS ONLY",
+            ),
+            _item(
+                "limit_ambiguous",
+                "limit",
+                "ambiguous",
+                label="上位の件数",
+                question="上位何件を出しますか？",
+                candidates=[_candidate("5 件", evidence="業務プロファイルの既定")],
+            ),
+        )
+    )
+    created = _create(_runtime(llm), "受注金額の上位")
+    items = {item.key: item for item in _items(created)}
+    assert items["limit_top"].value_ja == "上位 5 件"
+    # 件数の解釈が複数あるときは聞く（不足だけを指定なしにする）。
+    assert items["limit_ambiguous"].status == RequirementStatus.AMBIGUOUS
+    assert "FETCH FIRST 5 ROWS ONLY" in _state(created).sql_skeleton
+
+
+def test_add_condition_to_an_unspecified_section_creates_a_confirmed_item() -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped()),
+        # 追加の後の再検査（足りない情報なし）。
+        lambda _context: _output(_from_orders(), _select_total(), _where_shipped()),
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    assert _state(created).unresolved_items == []
+    answered = runtime.answer_clarification(
+        created.session.id,
+        ClarificationAnswerRequest(
+            base_version=created.session.current_intent_version,
+            item_id="add:order_by",
+            free_text="ORDERS.AMOUNT の多い順",
+        ),
+    )
+    added = [item for item in _items(answered) if item.section == RequirementSection.ORDER_BY]
+    assert len(added) == 1
+    assert added[0].answered
+    assert added[0].status == RequirementStatus.CONFIRMED
+    assert added[0].value_ja == "ORDERS.AMOUNT の多い順"
+    assert added[0].columns == ["APP.ORDERS.AMOUNT"]
+    assert answered.session.requirement_answers[-1].item_id == "add:order_by"
+
+
+def test_add_condition_reuses_the_unspecified_item_of_the_section() -> None:
+    llm = _ScriptedLlm(
+        _employee_like_output(),
+        lambda _context: _output(_from_orders()),
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime, "select * from orders")
+    answered = runtime.answer_clarification(
+        created.session.id,
+        ClarificationAnswerRequest(
+            base_version=created.session.current_intent_version,
+            item_id="add:where",
+            free_text="ORDERS.STATUS が SHIPPED",
+        ),
+    )
+    where = [item for item in _items(answered) if item.section == RequirementSection.WHERE]
+    assert [item.key for item in where] == ["where_none"]
+    assert where[0].answered
+
+
+@pytest.mark.parametrize(
+    "item_id",
+    ["add:select", "add:from", "add:unknown", "add:"],
+    ids=["select", "from", "unknown", "empty"],
+)
+def test_add_condition_rejects_sections_that_cannot_be_added(item_id: str) -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total()))
+    runtime = _runtime(llm)
+    created = _create(runtime)
+    with pytest.raises(OntologyIntegrityError):
+        runtime.answer_clarification(
+            created.session.id,
+            ClarificationAnswerRequest(
+                base_version=created.session.current_intent_version,
+                item_id=item_id,
+                free_text="何か",
+            ),
+        )

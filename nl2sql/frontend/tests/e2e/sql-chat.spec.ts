@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "./_helpers/test";
+import { expect, test, type Locator, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
   mockChatRequirement,
@@ -1298,6 +1298,75 @@ for (const width of [1280, 375]) {
 const noHorizontalOverflow = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
+/** 縦に長い領域を切らずに撮る（幅はそのまま、高さだけを一時的に広げる）。 */
+async function screenshotWhole(page: Page, locator: Locator, path: string) {
+  const viewport = page.viewportSize();
+  const box = await locator.boundingBox();
+  if (viewport && box && box.height + 200 > viewport.height) {
+    await page.setViewportSize({ width: viewport.width, height: Math.ceil(box.height + 400) });
+    await locator.scrollIntoViewIfNeeded();
+    await locator.screenshot({ path });
+    await page.setViewportSize(viewport);
+    return;
+  }
+  await locator.screenshot({ path });
+}
+
+// #1718: チャットの「SQL の要件（AI の理解）」は SQL 生成の画面と同じ部品・同じ振る舞い（違いは置き場所と幅）。
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`チャットの要件は要確認の行で候補を押して答え、答えたら畳んだ要約にする (#1718, ${colorScheme})`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    const viewport = testInfo.project.name;
+    const state = await setup(page, {
+      create: "date_column",
+      answers: ["date_column_basis_answered", "date_column_answered"],
+    });
+    await page.goto("/chat");
+    await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill("直近 1 年の社員");
+    await composer.press("Enter");
+
+    const turn = page.getByTestId("sql-chat-requirement-turn");
+    const requirements = turn.getByTestId("nl2sql-clarification-requirements");
+    await expect(requirements).toHaveAttribute("data-needs-answer", "true");
+    await expect(requirements.getByTestId("nl2sql-clarification-requirements-toggle")).toContainText("要確認 2 件");
+    const question = turn.getByTestId("nl2sql-clarification-question");
+    await expect(question).toHaveAttribute("data-item-key", "period_date_column");
+    const row = requirements.locator('[data-testid="nl2sql-requirement-item"][data-item-key="period_reference_basis"]');
+    await expect(row.getByText("「直近 1 年」は、いつから数えますか？")).toBeVisible();
+    await expect(requirements.getByTestId("nl2sql-requirement-unspecified")).toContainText(
+      "指定なし: 結合・絞り込み・集計・並び順・サブクエリ・その他"
+    );
+    expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await screenshotWhole(page, turn, testInfo.outputPath(`chat-date-column-needs-answer-${viewport}-${colorScheme}.png`));
+
+    await row.getByRole("button", { name: "「実行日（2026-10-11）から」と答える" }).click();
+    await expect.poll(() => state.requirement.answers.length).toBe(1);
+    expect(state.requirement.answers[0]).toMatchObject({
+      item_id: "item-e-basis",
+      selected_candidate_ids: ["candidate-basis-execution"],
+      free_text: "",
+    });
+    await expect(requirements.getByTestId("nl2sql-clarification-requirements-toggle")).toContainText("要確認 1 件");
+    await question.getByRole("radio", { name: /EMPLOYEE\.HIRE_DATE/ }).check();
+    await question.getByRole("button", { name: "この内容で回答" }).click();
+    await expect.poll(() => state.requirement.answers.length).toBe(2);
+    await expect(requirements).toHaveAttribute("data-needs-answer", "false");
+    const toggle = requirements.getByTestId("nl2sql-clarification-requirements-toggle");
+    await expect(toggle).toContainText("確認の必要なし");
+    await expect(toggle).toContainText("使用テーブル ADMIN.EMPLOYEE ／ 表示列 ADMIN.EMPLOYEE.*");
+    await expect(turn.getByRole("button", { name: /この要件で SQL を生成/ })).toBeVisible();
+    expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await screenshotWhole(page, turn, testInfo.outputPath(`chat-date-column-answered-${viewport}-${colorScheme}.png`));
+    await toggle.click();
+    await expect(requirements.getByTestId("nl2sql-requirement-item")).toHaveCount(5);
+    await screenshotWhole(page, turn, testInfo.outputPath(`chat-date-column-answered-open-${viewport}-${colorScheme}.png`));
+  });
+}
+
 // desktop（1280px）と 375px は playwright の project で分ける。
 test("チャットで確認の質問・回答・まとめ・骨組みを経て SQL を作る (#1442)", { tag: "@responsive" }, async ({
   page,
@@ -1321,9 +1390,15 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   await expect(page.getByTestId("sql-chat-send")).toBeDisabled();
   expect(state.requests).toHaveLength(0);
   expect(state.requirement.creates[0]).toMatchObject({ chat: true, previous_job_id: null });
-  // AI要件確認の表示は SQL 生成の画面と同じ部品（#1715）。SQL の要件（物理名の欄）も同じく開いて出す。
+  // AI要件確認の表示は SQL 生成の画面と同じ部品（#1715）。SQL の要件（AI の理解）も同じ部品（#1718）で、
+  // 要確認があるので開き、物理名の一覧を見られる。
   await expect(turn.getByTestId("nl2sql-guided-clarification")).toBeVisible();
-  await expect(turn.getByTestId("nl2sql-requirement-group-select")).toContainText("CUSTOMERS.REGION");
+  const requirements = turn.getByTestId("nl2sql-clarification-requirements");
+  await expect(requirements.getByTestId("nl2sql-clarification-requirements-toggle")).toHaveText(/SQL の要件（AI の理解）/);
+  await expect(requirements).toHaveAttribute("data-needs-answer", "true");
+  await expect(
+    requirements.locator('[data-testid="nl2sql-requirement-item"][data-item-key="select_region_total"]')
+  ).toContainText("CUSTOMERS.REGION");
   expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
   await turn.screenshot({ path: testInfo.outputPath(`chat-requirement-question-${width}.png`) });
 

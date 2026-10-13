@@ -12,7 +12,21 @@ export type RequirementStage =
   | "multi_select"
   | "applied"
   // 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない。#1442）。
-  | "clear";
+  | "clear"
+  // #1718: `select * from employee` 相当の質問で、使う表が要確認（ADMIN.EMPLOYEE / ADMIN.EMPLOYEE_HISTORY）。
+  | "select_all_table"
+  // #1718: `select * from employee` 相当（確定 2 つと、値の無い部分＝指定なし）。
+  | "select_all"
+  // #1718: select_all に「条件を追加」で並び順を足した後。
+  | "select_all_ordered"
+  // #1718: 期間で絞る日付の列（今の質問）と、期間の基準日（一覧の候補で答える）が要確認。
+  | "date_column"
+  // #1718: date_column の基準日を一覧の候補で答えた後（日付の列はまだ要確認）。
+  | "date_column_basis_answered"
+  // #1718: date_column の基準日と日付の列を答えた後。
+  | "date_column_answered"
+  // #1718: すべての部分が確定。
+  | "all_confirmed";
 
 export const REQUIREMENT_SESSION_ID = "requirement-session-1";
 export const REQUIREMENT_QUESTION = "今年度の地域ごとの受注金額";
@@ -20,6 +34,7 @@ export const REQUIREMENT_CLARIFIED_QUESTION =
   "2026-04-01〜2027-03-31（ORDERS.ORDER_DATE）の APP.ORDERS の ORDERS.AMOUNT の合計を、CUSTOMERS.REGION ごとに、合計の降順で表示してください。";
 
 const baseItem = {
+  value_ja: "",
   reason_ja: "",
   question_ja: "",
   answer_kind: "free_text",
@@ -35,7 +50,7 @@ const baseItem = {
   answer_ja: "",
 };
 
-function item(fields: Record<string, unknown>) {
+function item(fields: Record<string, unknown>): typeof baseItem & Record<string, unknown> {
   return { ...baseItem, ...fields };
 }
 
@@ -226,6 +241,201 @@ const statusQuestion = item({
   ],
 });
 
+// --- #1718 の例（ADMIN.EMPLOYEE） ---------------------------------------------------------
+
+const employeeFrom = item({
+  id: "item-employee-from",
+  key: "from_employee",
+  section: "from",
+  label_ja: "使用テーブル",
+  value_ja: "ADMIN.EMPLOYEE",
+  status: "confirmed",
+  tables: ["ADMIN.EMPLOYEE"],
+  refs_ja: "ADMIN.EMPLOYEE（社員）",
+});
+
+const employeeSelect = item({
+  id: "item-employee-select",
+  key: "select_all",
+  section: "select",
+  label_ja: "表示列",
+  value_ja: "ADMIN.EMPLOYEE.*",
+  status: "confirmed",
+  tables: ["ADMIN.EMPLOYEE"],
+  sql_hint: "EMPLOYEE.*",
+});
+
+/** 値の無い推測（＝その句を使わない「指定なし」）。期間は日付の列だけが付いている（#1718 の症状）。 */
+const employeeUnspecified = [
+  item({ id: "item-e-join", key: "join_none", section: "join", label_ja: "結合", status: "inferred" }),
+  item({
+    id: "item-e-period",
+    key: "period_none",
+    section: "period",
+    label_ja: "期間",
+    status: "inferred",
+    columns: ["ADMIN.EMPLOYEE.HIRE_DATE"],
+    refs_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+  }),
+  item({ id: "item-e-where", key: "where_none", section: "where", label_ja: "絞り込み", status: "inferred" }),
+  item({ id: "item-e-group", key: "group_none", section: "group_by", label_ja: "集計", status: "inferred" }),
+  item({ id: "item-e-order", key: "order_none", section: "order_by", label_ja: "並び順", status: "inferred" }),
+  item({ id: "item-e-limit", key: "limit_none", section: "limit", label_ja: "件数上限", status: "inferred" }),
+  item({ id: "item-e-subquery", key: "subquery_none", section: "subquery", label_ja: "サブクエリ", status: "inferred" }),
+  item({ id: "item-e-other", key: "other_none", section: "other", label_ja: "その他", status: "inferred" }),
+];
+
+const employeeOrderAdded = item({
+  id: "item-e-order",
+  key: "order_none",
+  section: "order_by",
+  label_ja: "並び順",
+  value_ja: "EMPLOYEE.HIRE_DATE の新しい順",
+  status: "confirmed",
+  source: "user",
+  answered: true,
+  answer_ja: "EMPLOYEE.HIRE_DATE の新しい順",
+  columns: ["ADMIN.EMPLOYEE.HIRE_DATE"],
+  refs_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+});
+
+const employeePeriod = item({
+  id: "item-e-period-value",
+  key: "period_last_year",
+  section: "period",
+  label_ja: "期間",
+  value_ja: "直近 1 年（2025-10-12〜2026-10-11）",
+  status: "confirmed",
+  sql_hint: "",
+});
+
+const employeeDateColumnQuestion = item({
+  id: "item-e-date-column",
+  key: "period_date_column",
+  section: "period",
+  label_ja: "期間で絞る日付の列",
+  status: "ambiguous",
+  question_ja: "「直近 1 年」は、どの日付の列で絞りますか？",
+  reason_ja: "ADMIN.EMPLOYEE に日付の列が 2 つあり、質問からは決められません。",
+  answer_kind: "single_select",
+  candidates: [
+    {
+      id: "candidate-hire-date",
+      label_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+      description_ja: "社員が入社した日",
+      evidence_ja: "列のコメント",
+      source: "schema",
+      tables: [],
+      columns: ["ADMIN.EMPLOYEE.HIRE_DATE"],
+      relationship_ids: [],
+      refs_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+    },
+    {
+      id: "candidate-updated-at",
+      label_ja: "EMPLOYEE.UPDATED_AT（更新日）",
+      description_ja: "社員の情報を更新した日",
+      evidence_ja: "列のコメント",
+      source: "schema",
+      tables: [],
+      columns: ["ADMIN.EMPLOYEE.UPDATED_AT"],
+      relationship_ids: [],
+      refs_ja: "EMPLOYEE.UPDATED_AT（更新日）",
+    },
+  ],
+});
+
+const employeeDateColumnAnswered = item({
+  ...employeeDateColumnQuestion,
+  value_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+  status: "confirmed",
+  question_ja: "",
+  reason_ja: "",
+  candidates: [],
+  source: "user",
+  answered: true,
+  answer_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+  columns: ["ADMIN.EMPLOYEE.HIRE_DATE"],
+  refs_ja: "EMPLOYEE.HIRE_DATE（入社日）",
+});
+
+const employeeBasisQuestion = item({
+  id: "item-e-basis",
+  key: "period_reference_basis",
+  section: "period",
+  label_ja: "期間の基準日",
+  status: "ambiguous",
+  question_ja: "「直近 1 年」は、いつから数えますか？",
+  reason_ja: "基準日によって期間が変わります。",
+  answer_kind: "single_select",
+  candidates: [
+    {
+      id: "candidate-basis-execution",
+      label_ja: "実行日（2026-10-11）から",
+      description_ja: "2025-10-12〜2026-10-11",
+      evidence_ja: "基準日（実行日）",
+      source: "calendar",
+      tables: [],
+      columns: [],
+      relationship_ids: [],
+    },
+    {
+      id: "candidate-basis-latest",
+      label_ja: "データの最新日から",
+      description_ja: "日付は SQL の中で求めます",
+      evidence_ja: "基準日の選択（データの最新日）",
+      source: "calendar",
+      tables: [],
+      columns: [],
+      relationship_ids: [],
+    },
+  ],
+});
+
+const employeeBasisAnswered = item({
+  ...employeeBasisQuestion,
+  value_ja: "実行日（2026-10-11）から",
+  status: "confirmed",
+  question_ja: "",
+  reason_ja: "",
+  candidates: [],
+  source: "user",
+  answered: true,
+  answer_ja: "実行日（2026-10-11）から",
+});
+
+const employeeTableQuestion = item({
+  id: "item-employee-from",
+  key: "from_employee",
+  section: "from",
+  label_ja: "使用テーブル",
+  status: "ambiguous",
+  question_ja: "「社員」は、どの表ですか？",
+  reason_ja: "社員の表が 2 つあり、質問からは決められません。",
+  answer_kind: "single_select",
+  candidates: [
+    {
+      id: "candidate-employee",
+      label_ja: "ADMIN.EMPLOYEE（社員）",
+      evidence_ja: "表のコメント",
+      source: "schema",
+      tables: ["ADMIN.EMPLOYEE"],
+      columns: [],
+      relationship_ids: [],
+    },
+    {
+      id: "candidate-employee-history",
+      label_ja: "ADMIN.EMPLOYEE_HISTORY（社員の履歴）",
+      evidence_ja: "表のコメント",
+      source: "schema",
+      tables: ["ADMIN.EMPLOYEE_HISTORY"],
+      columns: [],
+      relationship_ids: [],
+    },
+  ],
+});
+
+const employeeWithoutPeriod = employeeUnspecified.filter((value) => value.section !== "period");
+
 const SKELETON = [
   "SELECT CUSTOMERS.REGION, SUM(ORDERS.AMOUNT)",
   "FROM APP.ORDERS",
@@ -239,6 +449,36 @@ const PENDING_SKELETON = SKELETON.replace(
   "WHERE ORDERS.ORDER_DATE >= DATE '2026-04-01' AND ORDERS.ORDER_DATE < DATE '2027-04-01'",
   "WHERE ⟨未確定: 期間⟩"
 );
+
+const EMPLOYEE_STAGES: RequirementStage[] = [
+  "select_all_table",
+  "select_all",
+  "select_all_ordered",
+  "date_column",
+  "date_column_basis_answered",
+  "date_column_answered",
+];
+
+function employeeSkeleton(stage: RequirementStage, ready: boolean) {
+  const lines = ["SELECT EMPLOYEE.*", "FROM ADMIN.EMPLOYEE"];
+  if (stage === "date_column" || stage === "date_column_basis_answered" || stage === "date_column_answered") {
+    lines.push(
+      ready
+        ? "WHERE EMPLOYEE.HIRE_DATE >= DATE '2025-10-12' AND EMPLOYEE.HIRE_DATE < DATE '2026-10-12'"
+        : "WHERE ⟨未確定: 期間で絞る日付の列⟩"
+    );
+  }
+  if (stage === "select_all_ordered") lines.push("-- 並び順: EMPLOYEE.HIRE_DATE の新しい順");
+  return lines.join("\n");
+}
+
+export function requirementClarifiedQuestion(stage: RequirementStage) {
+  if (stage === "date_column" || stage === "date_column_basis_answered" || stage === "date_column_answered") {
+    return "EMPLOYEE.HIRE_DATE が直近 1 年（2025-10-12〜2026-10-11）の ADMIN.EMPLOYEE のすべての列を表示してください。";
+  }
+  if (EMPLOYEE_STAGES.includes(stage)) return "ADMIN.EMPLOYEE のすべての列を表示してください。";
+  return REQUIREMENT_CLARIFIED_QUESTION;
+}
 
 function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
   const unresolved = items.filter(
@@ -256,7 +496,13 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
     answered_count: items.filter((value) => value.answered).length,
     review_round: limit
       ? 3
-      : stage === "needs_answer" || stage === "minimum" || stage === "multi_select" || stage === "clear"
+      : stage === "needs_answer" ||
+          stage === "minimum" ||
+          stage === "multi_select" ||
+          stage === "clear" ||
+          stage === "select_all_table" ||
+          stage === "date_column" ||
+          stage === "all_confirmed"
         ? 0
         : 1,
     max_review_rounds: 3,
@@ -265,7 +511,11 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
     minimum_missing_ja: minimum,
     can_apply: minimum.length === 0 && (ready || limit),
     summary_ja: "",
-    sql_skeleton: ready || limit ? SKELETON : PENDING_SKELETON,
+    sql_skeleton: EMPLOYEE_STAGES.includes(stage)
+      ? employeeSkeleton(stage, ready)
+      : ready || limit
+        ? SKELETON
+        : PENDING_SKELETON,
     message_ja: ready
       ? "SQL の要件を確認できました。まとめを確かめてから反映してください。"
       : limit
@@ -311,6 +561,47 @@ function itemsFor(stage: RequirementStage): Record<string, unknown>[] {
       ];
     case "limit":
       return [fromItem, selectItem, joinItem, periodAnswered, groupItem, orderItem, currencyQuestion];
+    case "select_all_table":
+      return [employeeTableQuestion, employeeSelect, ...employeeUnspecified];
+    case "select_all":
+      return [{ ...employeeFrom, source: "user", answered: true, answer_ja: "ADMIN.EMPLOYEE（社員）" }, employeeSelect, ...employeeUnspecified];
+    case "select_all_ordered":
+      return [
+        employeeFrom,
+        employeeSelect,
+        ...employeeUnspecified.map((value) => (value.key === "order_none" ? employeeOrderAdded : value)),
+      ];
+    case "date_column":
+      return [
+        employeeFrom,
+        employeeSelect,
+        employeePeriod,
+        employeeDateColumnQuestion,
+        employeeBasisQuestion,
+        ...employeeWithoutPeriod,
+      ];
+    case "date_column_basis_answered":
+      return [
+        employeeFrom,
+        employeeSelect,
+        employeePeriod,
+        employeeDateColumnQuestion,
+        employeeBasisAnswered,
+        ...employeeWithoutPeriod,
+      ];
+    case "date_column_answered":
+      return [
+        employeeFrom,
+        employeeSelect,
+        employeePeriod,
+        employeeDateColumnAnswered,
+        employeeBasisAnswered,
+        ...employeeWithoutPeriod,
+      ];
+    case "all_confirmed":
+      return [fromItem, selectItem, joinItem, periodAnswered, groupItem, orderItem].map((value) =>
+        value.status === "inferred" ? { ...value, status: "confirmed" } : value
+      );
     case "minimum":
       return [
         item({
@@ -363,7 +654,7 @@ export function requirementSessionData(stage: RequirementStage, version = 1) {
       requirement: {
         version,
         question_original: REQUIREMENT_QUESTION,
-        clarified_question_ja: REQUIREMENT_CLARIFIED_QUESTION,
+        clarified_question_ja: requirementClarifiedQuestion(stage),
         items,
         unanswerable_reason_ja: "",
         warnings_ja: stage === "needs_answer" ? ["Schema に無い・業務プロファイルの範囲の外の名前を除きました: APP.SALES"] : [],
