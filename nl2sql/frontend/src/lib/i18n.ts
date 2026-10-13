@@ -1900,7 +1900,7 @@ const nl2sqlJa = {
   "profiles.oracle.saveExecute": "保存実行",
   "profiles.oracle.executeHint": "業務プロファイルを保存し、Oracle 反映ジョブを開始します。実行するには ADMIN_EXECUTE を入力してください。",
   "profiles.oracle.assets.title": "Select AI Agent アセット",
-  "profiles.oracle.assets.hint": "Select AI Agent(tool / agent / task / team)を業務プロファイルから作り直します。Agent 機能を使う場合のみチェックしてください。",
+  "profiles.oracle.assets.hint": "Select AI Agent(tool / agent / task / team)を業務プロファイルから作り直します。Agent 機能を使う場合のみチェックしてください。この設定は業務プロファイルに保存され、オンの間は保存のたびに再構築します。オフにしても既存のアセットは削除しません。",
   "profiles.oracle.assets.refreshAgent": "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する",
   "profiles.oracle.assets.lastRefresh": "直近の資産更新結果",
   "profiles.oracle.saveConfirmTitle": "Oracle Profile 保存の確認",

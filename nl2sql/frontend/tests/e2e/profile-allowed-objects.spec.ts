@@ -3032,7 +3032,9 @@ test("保存が成功したら実行確認語をクリアして保存ボタン�
   await expectNoDocumentHorizontalOverflow(page);
   await clearButton.press("Enter");
   await expect(confirmationField).toHaveValue("");
-  await expect(rebuild).not.toBeChecked();
+  // 「保存時に Select AI Agent アセットも再構築する」は業務プロファイルの設定で、実行設定のリセットの
+  // 対象ではない（#1690）。
+  await expect(rebuild).toBeChecked();
   await expect(page.getByLabel("名称")).toHaveValue("SALES_PROFILE");
   await expect(page.getByLabel("カテゴリ")).toHaveValue("finance");
   await expect(saveButton).toBeDisabled();
@@ -3560,4 +3562,63 @@ test("状態を確かめられないときは保存を止めず、反映の開�
   await page.screenshot({
     path: testInfo.outputPath("credential-409.png"),
   });
+});
+
+// ---- 「保存時に Select AI Agent アセットも再構築する」は業務プロファイルに保存する（#1690） ------------
+
+test("Select AI Agent アセットの再構築のチェックは保存して開き直しても保つ (#1690)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  // 保存した業務プロファイルを返す（PATCH の内容を次の GET に反映する）。
+  let stored: Record<string, unknown> = { ...profiles[0], etag: "etag-default" };
+  const patchPayloads: Array<Record<string, unknown>> = [];
+  const syncPayloads: Array<Record<string, unknown>> = [];
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    const method = route.request().method();
+    if (method === "PATCH") {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      patchPayloads.push(payload);
+      stored = { ...stored, ...payload, etag: `etag-default-${patchPayloads.length}` };
+    } else if (method !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await fulfillJson(route, stored);
+  });
+  await page.route("**/api/nl2sql/profiles/default/oracle-sync-jobs", async (route) => {
+    syncPayloads.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fallback();
+  });
+
+  await page.goto("/profiles?profile=default");
+  const rebuild = page.getByRole("checkbox", {
+    name: "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する",
+  });
+  await expect(rebuild).not.toBeChecked();
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
+  await rebuild.check();
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("profile-save-progress")).toBeVisible();
+  expect(patchPayloads.at(-1)?.rebuild_agent_assets_on_save).toBe(true);
+  expect(syncPayloads.at(-1)?.rebuild_agent_assets).toBe(true);
+
+  // 開き直すと、保存した値でチェックされている。
+  await page.reload();
+  await expect(page.getByLabel("名称")).toHaveValue("DEFAULT_PROFILE");
+  await expect(rebuild).toBeChecked();
+  await rebuild.scrollIntoViewIfNeeded();
+  await expectNoDocumentHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("agent-rebuild-reloaded.png") });
+
+  // 外して保存すると、開き直しても外れている（既存のアセットは消さない）。
+  await rebuild.uncheck();
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => patchPayloads.length).toBe(2);
+  expect(patchPayloads.at(-1)?.rebuild_agent_assets_on_save).toBe(false);
+  await expect.poll(() => syncPayloads.length).toBe(2);
+  expect(syncPayloads.at(-1)?.rebuild_agent_assets).toBe(false);
+  await page.reload();
+  await expect(page.getByLabel("名称")).toHaveValue("DEFAULT_PROFILE");
+  await expect(rebuild).not.toBeChecked();
 });

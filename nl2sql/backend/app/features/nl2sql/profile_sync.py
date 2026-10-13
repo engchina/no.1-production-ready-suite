@@ -155,13 +155,19 @@ class ProfileSyncService:
             raise ValueError("実行には confirmation=ADMIN_EXECUTE が必要です。")
         profile = self._service.get_profile(profile_id)
         original_name = self._profile_original_name(profile)
+        # 要求が省略したら、業務プロファイルの設定（保存のたびに再構築するか）に従う（#1690）。
+        rebuild_agent_assets = (
+            request.rebuild_agent_assets
+            if request.rebuild_agent_assets is not None
+            else bool(getattr(profile, "rebuild_agent_assets_on_save", False))
+        )
         request_hash = hashlib.sha256(
             canonical_json(
                 {
                     "profile_id": profile.id,
                     "profile_etag": profile.etag,
                     "original_name": original_name,
-                    "rebuild_agent_assets": request.rebuild_agent_assets,
+                    "rebuild_agent_assets": rebuild_agent_assets,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -181,7 +187,7 @@ class ProfileSyncService:
                 profile_id=profile.id,
                 profile_etag=profile.etag,
                 original_name=original_name,
-                rebuild_agent_assets=request.rebuild_agent_assets,
+                rebuild_agent_assets=rebuild_agent_assets,
                 created_at=_now(),
                 deadline_at=self._new_deadline(),
             )
