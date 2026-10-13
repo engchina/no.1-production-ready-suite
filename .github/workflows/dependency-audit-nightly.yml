@@ -16,7 +16,7 @@ permissions:
 jobs:
   pip-audit:
     name: ${{ matrix.name }} (pip-audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -60,7 +60,7 @@ jobs:
   # docling 等）も配備で入るので --all-extras を付ける。lock は glob で集めるので、サービスを足しても対象に入る。
   rag-services-pip-audit:
     name: RAG / packages & services (pip-audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
