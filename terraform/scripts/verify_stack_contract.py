@@ -950,6 +950,9 @@ def _verify_reserved_ports(locals_source: str) -> None:
     sh_ranges = re.findall(r'"(\d+)-(\d+)"', (re.search(r"(?m)^SUITE_RESERVED_PORT_RANGES=\((.*)\)$", suite_nginx) or [""])[0])
     if tf_ports is None or sh_ports is None:
         raise AssertionError("reserved ports are missing from locals.tf or platform/deploy/suite-nginx.sh")
+    # 公開する port は 1 つだけ（HTTPS が on なら https_port、off なら http_port。#1638）。
+    if "public_ports = var.https_enabled ? [var.https_port] : [var.http_port]" not in locals_source:
+        raise AssertionError("locals.tf public_ports must be [https_port] when HTTPS is on and [http_port] when off (#1638)")
     tf_set = {int(port) for port in tf_ports.group(1).split(",")}
     sh_set = {int(port) for port in sh_ports.group(1).split()}
     if tf_set != sh_set or sorted(tf_ranges) != sorted(sh_ranges) or not tf_ranges:
@@ -1005,7 +1008,6 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
         [
             "listen ${https_listen} ssl http2 default_server;",
             "ssl_protocols TLSv1.2 TLSv1.3;",
-            "return 301 https://${https_authority}\\$request_uri;",
             "location = /platform/ca.crt {",
             "default_type application/x-x509-ca-cert;",
             'filename="production-ready-root-ca.crt"',
@@ -1019,6 +1021,9 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
     )
     if "Strict-Transport-Security" in suite_nginx:
         raise AssertionError("HSTS must not be sent (IP certificate signed by a private CA)")
+    # HTTPS が on のときは http_port を listen せず、HTTP から HTTPS へ転送しない（#1638）。
+    if "return 301 https://" in suite_nginx:
+        raise AssertionError("platform/deploy/suite-nginx.sh must not redirect http_port to HTTPS (#1638)")
     if "ca.key" in suite_nginx:
         raise AssertionError("the CA private key must never be served")
     _require_all(
@@ -1394,6 +1399,9 @@ def _verify_oracle_linux(
             'suite_dnf module enable "nginx:${NGINX_MODULE_STREAM}"',
             "systemctl enable --now firewalld",
             'firewall-cmd --permanent --add-port="${port}/tcp"',
+            # HTTPS が on なら、以前に開けた http_port を閉じる（#1638）。
+            'firewall-cmd --permanent --query-port="${http}/tcp"',
+            'firewall-cmd --permanent --remove-port="${http}/tcp"',
             "firewall-cmd --reload",
             "setsebool -P httpd_can_network_connect 1",
             'semanage fcontext -a -t usr_t "${SUITE_REPO_DIR}(/.*)?"',
