@@ -37,6 +37,7 @@ export function LogicalStepsList({
         >
           {ordered && (
             <span
+              data-surface-tint="neutral"
               className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-hover text-xs font-medium text-fg-muted"
               aria-hidden="true"
             >
@@ -51,6 +52,7 @@ export function LogicalStepsList({
               <span className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-fg-muted">
                 <span className="sr-only">{t("nl2sql.logicalSteps.technicalSrLabel")}</span>
                 <span
+                  data-surface-tint="neutral"
                   className="mt-0.5 shrink-0 rounded bg-surface-hover px-1.5 font-medium"
                   aria-hidden="true"
                 >

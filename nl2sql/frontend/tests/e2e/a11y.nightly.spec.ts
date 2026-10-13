@@ -3,12 +3,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "./_helpers/test";
 import { mockChatRequirement } from "./_helpers/chat-requirement";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { openSidebarNav } from "./_helpers/sidebar-nav";
 
 /**
- * 主要な画面の axe（a11y）の確認（#1595）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
+ * 画面の axe（a11y）の確認（#1595・#1671）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
  * （名前の `*.nightly.spec.ts`。platform/scripts/e2e-impact/nightly-only.ts）。
  * ローカルは `npx playwright test tests/e2e/a11y.nightly.spec.ts`。
  *
+ * - 対象はサイドナビの全項目の画面（SCREENS。ナビとずれたら「ナビの全項目」のテストが失敗する）と、淡い色の面
+ *   （選んだ行・状態の表示）が出る状態（STATES）。それぞれライトとダークで確かめる。
+ * - API は mock。画面ごとの mock が無い API は 503（取得の失敗の表示）にする。
  * - 対象は WCAG 2.x の A / AA（2.0 と 2.1）。失敗にするのは impact が serious / critical の違反だけ。
  * - 違反は rule id・impact・件数・対象（selector）を失敗の文と添付（axe-violations.json）に出す。
  * - 既知の例外は KNOWN_EXCEPTIONS に rule id・画面・理由を書く（直すのに設計の判断が要るもの。別 Issue で直す）。
@@ -16,6 +20,8 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 const BLOCKING_IMPACTS = new Set(["serious", "critical"]);
+const THEMES = ["light", "dark"] as const;
+type Theme = (typeof THEMES)[number];
 
 /** 既知の例外（画面の path → 除く rule id）。空なら除かない。 */
 const KNOWN_EXCEPTIONS: Record<string, readonly string[]> = {};
@@ -69,6 +75,21 @@ const HISTORY = [
   },
 ];
 
+/**
+ * 画面ごとの mock が無い API は 503（取得の失敗）にする（後から登録した route が優先）。画面は取得の失敗の表示
+ * （danger の淡い面の ErrorState / Banner）になり、それも axe で確かめる。形の合わない応答で画面を壊さない。
+ */
+async function mockFallbackApi(page: Page) {
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    (route) =>
+      route.fulfill({
+        status: 503,
+        json: { data: null, error_messages: ["e2e: この API の応答は用意していません。"], warning_messages: [] },
+      }),
+  );
+}
+
 /** 主要な画面の取得を数件ずつ返す（読み込んだ後の画面を確かめる）。 */
 async function mockMainScreens(page: Page) {
   await mockDatabaseGateReady(page);
@@ -85,11 +106,69 @@ async function mockMainScreens(page: Page) {
   );
 }
 
-const SCREENS = [
-  { name: "チャット", path: "/chat", heading: "チャット" },
-  { name: "実行履歴", path: "/history", heading: "実行履歴" },
-  { name: "システム設定（外観と証明書）", path: "/settings/appearance", heading: "外観と証明書" },
+interface Screen {
+  path: string;
+  /** 画面を開く前に足す mock（後から登録した route が優先する）。 */
+  setup?: (page: Page) => Promise<void>;
+  /** 読み込んだ後の確認・操作（淡い面が出ていることなど）。 */
+  act?: (page: Page) => Promise<void>;
+}
+
+/** サイドナビの全項目（nav-config.ts の並び）。 */
+const SCREENS: Screen[] = [
+  { path: "/chat" },
+  { path: "/query" },
+  { path: "/direct-sql" },
+  { path: "/sql-to-question" },
+  { path: "/history" },
+  { path: "/admin-sql" },
+  { path: "/table-management" },
+  { path: "/view-management" },
+  { path: "/data-management" },
+  { path: "/comment-management" },
+  { path: "/annotation-management" },
+  { path: "/domain-management" },
+  { path: "/glossary-rules" },
+  { path: "/global-rules" },
+  { path: "/sample-data" },
+  { path: "/profiles" },
+  { path: "/ontology-build" },
+  { path: "/feedback-management" },
+  { path: "/question-classifier-models" },
+  { path: "/evaluation" },
+  { path: "/settings/security/permissions" },
+  { path: "/settings/security/deepsec" },
+  { path: "/settings/security/users" },
+  { path: "/settings/security/roles" },
+  { path: "/settings/system-tables" },
+  { path: "/settings/select-ai-credential" },
+  { path: "/settings/oci" },
+  { path: "/settings/upload-storage" },
+  { path: "/settings/model" },
+  { path: "/settings/database" },
+  { path: "/settings/appearance" },
 ];
+
+/** 淡い色の面（選んだ行・状態の表示）が出る状態。 */
+const STATES: (Screen & { name: string })[] = [
+  {
+    name: "実行履歴の選んだ行と安全性の状態",
+    path: "/history",
+    act: async (page) => {
+      await page.getByText("今月の売上を確認").first().click();
+      await expect(page.locator('[data-surface-tint="accent"]').first()).toBeAttached();
+    },
+  },
+];
+
+const pathOf = (screen: Screen) => screen.path.split("?")[0];
+
+/** テーマは ui-store（localStorage）の保存値で決める（既定はライト）。 */
+async function useTheme(page: Page, theme: Theme) {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+  }, theme);
+}
 
 /** 表示の途中（フェードイン・色の transition）の色で color-contrast を測らない。無限の animation（Spinner など）は待たない。 */
 async function waitForSettledAnimations(page: Page) {
@@ -124,18 +203,47 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
   expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
 }
 
-test.describe("主要な画面の a11y（axe）", { tag: "@a11y" }, () => {
+async function openAndCheck(page: Page, testInfo: TestInfo, screen: Screen, theme: Theme) {
+  await useTheme(page, theme);
+  await screen.setup?.(page);
+  await page.goto(screen.path);
+  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
+  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。
+  // mock の無い API は 503 で、TanStack Query の再試行（既定 3 回）を終えてから失敗の表示になる。
+  await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
+  await screen.act?.(page);
+  await expectNoSeriousViolations(page, testInfo, pathOf(screen));
+}
+
+test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
   test.beforeEach(async ({ page }) => {
+    await mockFallbackApi(page);
     await mockMainScreens(page);
   });
 
-  for (const screen of SCREENS) {
-    test(`${screen.name}（${screen.path}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
-      await page.goto(screen.path);
-      await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
-      // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。
-      await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
-      await expectNoSeriousViolations(page, testInfo, screen.path);
-    });
+  test("SCREENS はサイドナビの全項目と同じ", async ({ page }) => {
+    await page.goto("/chat");
+    const sidebar = await openSidebarNav(page);
+    const collapsed = sidebar.locator('button[aria-controls^="nav-section-"][aria-expanded="false"]');
+    while ((await collapsed.count()) > 0) await collapsed.first().click();
+    const hrefs = await sidebar
+      .locator("nav a[href]")
+      .evaluateAll((links) => links.map((link) => new URL((link as HTMLAnchorElement).href).pathname));
+    expect(hrefs).toEqual(SCREENS.map(pathOf));
+  });
+
+  for (const theme of THEMES) {
+    for (const screen of SCREENS) {
+      test(`${pathOf(screen)}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
+        await openAndCheck(page, testInfo, screen, theme);
+      });
+    }
+    for (const state of STATES) {
+      test(`${state.name}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
+        await openAndCheck(page, testInfo, state, theme);
+      });
+    }
   }
 });

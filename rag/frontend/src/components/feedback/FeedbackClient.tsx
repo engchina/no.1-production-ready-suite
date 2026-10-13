@@ -419,7 +419,7 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
                 return (
                   <div key={item.reason} className="grid grid-cols-[minmax(8rem,1fr)_minmax(5rem,1fr)_auto] items-center gap-2 text-xs">
                     <span className="truncate text-fg" title={t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}>{t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}</span>
-                    <span className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
+                    <span data-surface-tint="neutral" className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
                       <span className="block h-full rounded-full bg-danger-emphasis" style={{ width: `${Math.round(ratio * 100)}%` }} />
                     </span>
                     <span className="w-20 text-right tabular-nums text-fg-muted">{formatNumber(item.count)} / {formatRate(ratio)}</span>

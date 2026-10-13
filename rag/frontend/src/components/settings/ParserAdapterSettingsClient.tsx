@@ -556,7 +556,7 @@ function ExternalConnectionCard({
   const clearApiKeyId = `external-parser-${backend}-clear-api-key`;
 
   return (
-    <div className="min-w-0 rounded-md border border-border bg-surface-hover p-4">
+    <div data-surface-tint="neutral" className="min-w-0 rounded-md border border-border bg-surface-hover p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h4 className="text-sm font-semibold text-fg">{backendLabel(backend)}</h4>
@@ -785,7 +785,7 @@ function ConnectionTestResult({
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-surface-hover p-3">
+    <div data-surface-tint="neutral" className="rounded-md border border-border bg-surface-hover p-3">
       <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>

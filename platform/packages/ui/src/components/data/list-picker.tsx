@@ -808,6 +808,7 @@ function GroupHeader({
   const hasBulk = Boolean(group.onSelectAll || group.onClearAll);
   return (
     <div
+      data-surface-tint="neutral"
       className="absolute inset-x-0 grid content-center gap-1.5 border-b border-border bg-surface-hover px-3 py-2"
       style={{ top }}
       data-list-picker-row="header"

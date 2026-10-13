@@ -379,7 +379,7 @@ const f = { label: "spin" };
 });
 
 describe("adherence: 淡い色の面には data-surface-tint（#1671）", () => {
-  it("淡い面（accent の subtle / muted、状態色の subtle）を className に持ち data-surface-tint の無い要素を検出する", async () => {
+  it("淡い面（accent の subtle / muted、状態色の subtle、灰色の surface-hover）を className に持ち data-surface-tint の無い要素を検出する", async () => {
     const messages = await lint(`
 const a = <div className="rounded-md bg-info-subtle p-3 text-fg-muted">x</div>;
 const b = <li className={cn("px-3", selected && "bg-accent-subtle")}>x</li>;
@@ -387,8 +387,9 @@ const c = <span className={\`rounded \${tone} bg-warning-subtle/60\`}>x</span>;
 const d = <label className="border has-[:checked]:bg-accent-muted">x</label>;
 const e = <div className={selected ? "bg-success-subtle" : "bg-surface"}>x</div>;
 const f = <div className="md:bg-danger-subtle aria-selected:bg-accent-subtle">x</div>;
+const g = <span className="rounded bg-surface-hover px-1.5 text-xs text-fg-muted">x</span>;
 `);
-    expect(linesWith(messages, SURFACE_TINT)).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(linesWith(messages, SURFACE_TINT)).toEqual([2, 3, 4, 5, 6, 7, 8]);
   });
 
   it("data-surface-tint（式でも可）・spread・hover だけの面・別の className 属性・面でない class は許す", async () => {
@@ -396,10 +397,10 @@ const f = <div className="md:bg-danger-subtle aria-selected:bg-accent-subtle">x<
 const a = <div data-surface-tint="info" className="rounded-md bg-info-subtle p-3 text-fg-muted">x</div>;
 const b = <li data-surface-tint={selected ? "accent" : undefined} className={cn(selected && "bg-accent-subtle")}>x</li>;
 const c = <div {...rowProps} className="bg-accent-subtle">x</div>;
-const d = <div className="hover:bg-accent-subtle group-hover:bg-info-subtle focus-visible:bg-accent-subtle">x</div>;
+const d = <div className="hover:bg-accent-subtle group-hover:bg-info-subtle focus-visible:bg-accent-subtle hover:bg-surface-hover">x</div>;
 const e = <div className="bg-accent-emphasis text-fg-on-accent border-info-border text-danger-fg">x</div>;
 const f = <Disclosure summaryClassName="bg-warning-subtle">x</Disclosure>;
-const g = <div className="bg-surface-hover bg-accent-subtle-like">x</div>;
+const g = <div className="bg-surface-sunken bg-accent-subtle-like">x</div>;
 `);
     expect(linesWith(messages, SURFACE_TINT)).toEqual([]);
   });

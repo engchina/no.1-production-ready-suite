@@ -66,7 +66,10 @@ async function expectBoundedRowLimit(input: Locator, action: Locator) {
   const label = input.locator("xpath=../../..");
   const helper = label.locator("p").first();
   await expect(helper).toContainText("1〜100000 の整数。");
-  await expect(helper).toHaveCSS("white-space", "nowrap");
+  // sm（640px）以上は 1 行、375px では折り返して横にスクロールさせない（#1671）。
+  const narrow = (input.page().viewportSize()?.width ?? 1280) < 640;
+  await expect(helper).toHaveCSS("white-space", narrow ? "normal" : "nowrap");
+  expect(await helper.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   for (const value of ["", "0", "-1", "1.5", "100001"]) {
     await input.fill(value);
     await expect(input).toHaveAttribute("aria-invalid", "true");
@@ -8029,16 +8032,24 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   const helperLayout = await rowLimitHelper.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
-    return { lines: range.getClientRects().length, height: element.clientHeight, lineHeight: parseFloat(getComputedStyle(element).lineHeight) };
+    return {
+      lines: range.getClientRects().length,
+      height: element.clientHeight,
+      lineHeight: parseFloat(getComputedStyle(element).lineHeight),
+      overflowX: element.scrollWidth > element.clientWidth,
+    };
   });
-  expect(helperLayout.lines).toBe(1);
-  expect(helperLayout.height).toBe(Math.round(helperLayout.lineHeight));
-  await rowLimitInput.focus();
-  await rowLimitInput.press("Tab");
+  // 横にスクロールさせない（375px では折り返す。横スクロールの領域はキーボードで届かず、axe の
+  // scrollable-region-focusable・WCAG 1.4.10 の reflow に反する。#1671）。desktop は 1 行に収まる。
+  expect(helperLayout.overflowX).toBe(false);
   if (testInfo.project.name === "mobile-375") {
-    await expect(rowLimitHelper).toBeFocused();
-    await rowLimitHelper.press("ArrowRight");
-    await expect.poll(() => rowLimitHelper.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    expect(helperLayout.lines).toBeGreaterThanOrEqual(1);
+    await rowLimitInput.focus();
+    await rowLimitInput.press("Tab");
+    await expect(rowLimitHelper).not.toBeFocused();
+  } else {
+    expect(helperLayout.lines).toBe(1);
+    expect(helperLayout.height).toBe(Math.round(helperLayout.lineHeight));
   }
   await rowLimitHelper.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("direct-sql-default-row-limit.png"), fullPage: true });

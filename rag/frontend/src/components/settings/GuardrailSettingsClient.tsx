@@ -331,10 +331,10 @@ export function GuardrailSettingsClient() {
 function PolicyChips({ policy }: { policy: GuardrailPolicyStatusData }) {
   return (
     <span className="mt-2 flex flex-wrap gap-1">
-      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
+      <span data-surface-tint="neutral" className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.guardrail.groundingOverlap")} {policy.grounding_min_overlap}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
+      <span data-surface-tint="neutral" className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.guardrail.groundingRatio")} {policy.grounding_min_ratio.toFixed(2)}
       </span>
       {policy.audit_emphasis ? (
@@ -348,7 +348,7 @@ function PolicyChips({ policy }: { policy: GuardrailPolicyStatusData }) {
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-surface-hover p-3">
+    <div data-surface-tint="neutral" className="rounded-md border border-border bg-surface-hover p-3">
       <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>

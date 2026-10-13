@@ -71,12 +71,13 @@ describe("surfaceTintFor（淡い面の class から系統を返す）", () => {
     expect(surfaceTintFor("bg-success-subtle/60")).toBe("success");
     expect(surfaceTintFor("has-[:checked]:bg-warning-subtle")).toBe("warning");
     expect(surfaceTintFor("aria-selected:bg-danger-subtle")).toBe("danger");
+    expect(surfaceTintFor("rounded bg-surface-hover text-fg-muted")).toBe("neutral");
   });
 
   it("hover / focus だけの面・淡い面でない class・空は undefined", () => {
-    expect(surfaceTintFor("hover:bg-accent-subtle group-hover:bg-info-subtle")).toBeUndefined();
+    expect(surfaceTintFor("hover:bg-accent-subtle group-hover:bg-info-subtle hover:bg-surface-hover")).toBeUndefined();
     expect(surfaceTintFor("bg-accent-emphasis text-fg-on-accent")).toBeUndefined();
-    expect(surfaceTintFor("bg-info-muted bg-surface-hover")).toBeUndefined();
+    expect(surfaceTintFor("bg-info-muted bg-surface-sunken")).toBeUndefined();
     expect(surfaceTintFor("")).toBeUndefined();
     expect(surfaceTintFor(undefined)).toBeUndefined();
     expect(surfaceTintFor(false)).toBeUndefined();
@@ -102,8 +103,9 @@ describe("共有の部品は淡い面に data-surface-tint を付ける（#1671�
 
   it("対応表・定数に淡い面の class を置くファイルは、使う要素に data-surface-tint を付ける", () => {
     // lint は対応表から要素までを追えないため、ファイルの中に data-surface-tint があることだけを確かめる。
-    // 例外: Button の aria-pressed の面（cva の variant。文字は text-fg で、淡い面の上でも 14:1 以上）。
-    const exceptions = new Set(["ui/src/components/ui/button.tsx"]);
+    // 例外: Button の aria-pressed の面（cva の variant。文字は text-fg で、淡い面の上でも 14:1 以上）と、
+    // Skeleton（文字を持たない読み込み中の形）。
+    const exceptions = new Set(["ui/src/components/ui/button.tsx", "ui/src/components/ui/skeleton.tsx"]);
     const withIndirect = results.filter((result) => result.indirect.length > 0);
     const withoutTint = withIndirect
       .filter((result) => !exceptions.has(result.file.slice(packagesDir.length)))
