@@ -1,14 +1,9 @@
 import { X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FocusEvent } from "react";
 import { createPortal } from "react-dom";
 
 import { useNavDrawerMode } from "../app-shell/nav-drawer";
-import {
-  PAGE_HEADER_SELECTOR,
-  readToastPlacementInput,
-  resolveToastPlacement,
-  type ToastPlacement,
-} from "../../lib/toast-placement";
+import { resolveToastPlacement } from "../../lib/toast-placement";
 import { cn } from "../../lib/utils";
 import { useToastStore, type ToastItem } from "../../store/toast-store";
 
@@ -24,12 +19,11 @@ export interface ToasterProps {
 /**
  * Toast 表示領域。アプリ最上位で一度だけ描画する。フォーカスを奪わず aria-live で読み上げる（toast-accessibility）。
  *
- * 置き場所（#411。`lib/toast-placement.ts`）は主操作を覆わない位置にし、製品では変えない。
- * 画面の上端の見出しの面に重ね、その面の操作は覆わない。
- * - md 以上: PageHeader に重ね、ページの操作は覆わない（通常はページの操作のすぐ左）。PageHeader が見えなければ画面の右上。
- *   ページの末尾（画面の下端）の操作と、内容の面の右上の操作（ObjectActionBar / ContentActionBar）から離れる。
- * - md 未満: 上端の全幅。上端のバーに重ね、メニューのボタンは覆わない。
- * 通知は上から順に積む（新しい通知は下に足す。読み上げ・Tab の順と見た目の順をそろえる）。
+ * 置き場所（#1728。`lib/toast-placement.ts`）は画面幅ごとに決まった 1 か所で、ページの内容では動かさない。製品では変えない。
+ * - md 以上: 画面の右下（右端から 1rem、下端から `--toast-offset-bottom`）。新しい通知は下に足し、古い通知を上へ押し上げる。
+ *   下端からの距離は、画面の下端に固定された主操作（チャットの入力欄と送信）とページの末尾の操作の上に出る共通の定数。
+ * - md 未満: 上端の全幅。上端のバーに重ね、メニューのボタンは覆わない（下端は全幅の操作・入力欄・キーボードが来る）。
+ * どちらも DOM の順（読み上げ・Tab の順）と見た目の上下の順は同じ（古い通知が上、新しい通知が下）。
  *
  * 幅（#899）: md 以上は内容に合わせて `--toast-width-min`〜`--toast-width-max`（22〜32rem）の間で広がり、
  * 積んだ通知は最も広い通知の幅にそろう。本文は `.pr-message-text` で日本語を文節で折り返す（語の途中で切らない）。
@@ -45,7 +39,8 @@ export interface ToasterProps {
  */
 export function Toaster({ dismissLabel = "閉じる", regionLabel = "通知" }: ToasterProps = {}) {
   const toasts = useToastStore((state) => state.toasts);
-  const placement = useToastPlacement(toasts.length > 0);
+  const narrow = useNavDrawerMode();
+  const placement = useMemo(() => resolveToastPlacement({ narrow }), [narrow]);
   const pause = useToastStore((state) => state.pause);
   const resume = useToastStore((state) => state.resume);
   const [mounted, setMounted] = useState(false);
@@ -72,7 +67,7 @@ export function Toaster({ dismissLabel = "閉じる", regionLabel = "通知" }: 
       aria-relevant="additions"
       data-toast-placement={placement.mode}
       className="pointer-events-none fixed z-[var(--z-toast)] flex flex-col gap-2 overflow-y-auto"
-      style={placement.style}
+      style={placement.style as CSSProperties}
     >
       {toasts.map((item) => (
         <ToastCard key={item.id} item={item} dismissLabel={dismissLabel} onEngage={setEngaged} />
@@ -80,58 +75,6 @@ export function Toaster({ dismissLabel = "閉じる", regionLabel = "通知" }: 
     </div>,
     document.body
   );
-}
-
-/**
- * 置き場所を画面から求める。通知が出ている間だけ、スクロール（祖先のどれでも）・リサイズ・PageHeader の大きさの変化に追従する
- * （lg 未満の PageHeader は本文と一緒にスクロールする。ページの操作の幅は loading などで変わる）。
- */
-function useToastPlacement(active: boolean): ToastPlacement {
-  const narrow = useNavDrawerMode();
-  const [placement, setPlacement] = useState<ToastPlacement>(() =>
-    resolveToastPlacement({ narrow, topBar: false, viewportWidth: 0, remPx: 16, header: null, headerActions: null })
-  );
-
-  useLayoutEffect(() => {
-    const measure = () => {
-      const next = resolveToastPlacement(readToastPlacementInput(document, narrow));
-      setPlacement((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
-    };
-    measure();
-    if (!active) return undefined;
-
-    let frame = 0;
-    const schedule = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        measure();
-      });
-    };
-    // 画面を移ると PageHeader が差し替わる。外れた要素の大きさは 0 になって通知が来るので、そのたびに今の PageHeader を見直す。
-    let observed: Element | null = null;
-    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
-      const header = document.querySelector(PAGE_HEADER_SELECTOR);
-      if (header !== observed) {
-        if (observed) resize?.unobserve(observed);
-        observed = header;
-        if (header) resize?.observe(header);
-      }
-      schedule();
-    });
-    observed = document.querySelector(PAGE_HEADER_SELECTOR);
-    if (observed) resize?.observe(observed);
-    document.addEventListener("scroll", schedule, { capture: true, passive: true });
-    window.addEventListener("resize", schedule, { passive: true });
-    return () => {
-      if (frame) cancelAnimationFrame(frame);
-      resize?.disconnect();
-      document.removeEventListener("scroll", schedule, { capture: true });
-      window.removeEventListener("resize", schedule);
-    };
-  }, [active, narrow]);
-
-  return placement;
 }
 
 function ToastCard({

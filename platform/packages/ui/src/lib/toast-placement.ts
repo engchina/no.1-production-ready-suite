@@ -1,167 +1,88 @@
 /**
- * Toast（一時通知）の置き場所（#411）。
+ * Toast（一時通知）の置き場所（#1728。#411 の「PageHeader の操作の位置を測ってその左に置く」規則を置き換えた）。
  *
- * 通知は主操作を覆わない位置に出す。デザインシステムでは操作が次の場所に集まり、どれも画面の上端の見出しの面の
- * 「操作以外の部分」（ページのタイトル・製品名）とは重ならない。
+ * 通知は画面ごとに動かさず、画面幅（md 以上 / md 未満）ごとに決まった 1 か所に出す。ページの内容（PageHeader の操作の
+ * 有無・幅・スクロール）では位置を変えない（利用者が毎回同じ所を見ればよい。Sonner・Fluent 2 などの
+ * 「位置は 1 か所に固定し、内容で動かさない」作り）。
  *
- * - ページの操作: PageHeader の右端（lg 以上は上端に貼り付く）。
- * - 対象・コンテンツの操作: ObjectActionBar / ContentActionBar は内容の面の右上（PageHeader のすぐ下に来やすい）。
- * - フォームの操作: FormActionBar は内容の末尾（左寄せ）。ページの末尾の操作はそれ以上スクロールできないため、
- *   必ず画面の下端に来る。375px では全幅。
- *
- * そのため、通知は上端の見出しの面に重ね、その面の操作は覆わない。
- *
- * - md 以上: PageHeader に重ねる（上端は PageHeader の上端から 1rem）。ページの操作（`[data-page-header-actions]`）は覆わない。
- *   - ページの操作が無い、またはページの操作の右に 14rem 以上空いている（lg 未満で操作がタイトルの下へ折り返したとき）:
- *     画面の右端から 1rem。
- *   - ページの操作が右端にある（通常）: ページの操作のすぐ左に右端をそろえる。
- *   - どちらにも 14rem の幅が取れないときは、PageHeader の下端の 1rem 下の右に出す。
- *   - PageHeader がスクロールで見えない・無いときは、画面の右上（上端・右端から 1rem）。
- * - md 未満: 上端の全幅。上端のバー（メニューのボタンと製品名）に重ね、メニューのボタンは覆わない。
+ * - md 以上（`bottom-right`）: 画面の右下。右端から 1rem、下端から `--toast-offset-bottom`（8rem）。新しい通知は下に足し、
+ *   古い通知が上へ押し上げられる。下端からの距離は、画面の下端に固定された主操作（3 製品のチャットの入力欄と送信の行。
+ *   desktop では画面の下端から約 6.7rem まで）と、ページの末尾の操作（スクロールしきると画面の下端から約 7rem まで）の
+ *   上に出るように決めた共通の定数で、製品・画面では変えない。ページの操作（PageHeader の右上）は上端にあるので覆わない。
+ * - md 未満（`top-bar`）: 上端の全幅。上端のバー（メニューのボタンと製品名）に重ね、メニューのボタン（左の 0.5rem + 44px）の
+ *   後ろから右端の 1rem まで。375px では画面の下端が親指の届く範囲で、全幅のページの末尾の操作・チャットの入力欄・
+ *   ソフトウェアキーボードが来るため、下端には置かない。上端のバーにはメニューのボタンのほかに操作が無い。
  *
  * 幅（#899）: md 以上は内容に合わせて広がり、`--toast-width-min`（22rem）〜`--toast-width-max`（32rem）の間で決まる
- * （置ける幅がそれより狭ければ置ける幅まで）。固定の幅にすると、短い 1 文でも語の途中で 2 行に折り返していた
- * （「Oracle Profile の反映が完了しま / した。」）。md 未満は画面の幅（左右の間隔の内側）いっぱい。
+ * （画面がそれより狭ければ画面の幅まで）。md 未満は左右の間隔の内側いっぱい。
  */
 
-/** 画面の端・PageHeader・ページの操作との間隔。 */
+/** 画面の端との間隔。 */
 const EDGE = "1rem";
-const EDGE_REM = 1;
+/** md 以上の下端からの距離（`tokens/spacing.css`。#1728）。 */
+const OFFSET_BOTTOM = "var(--toast-offset-bottom)";
 /** md 未満の上端の間隔（上端のバーに重ねる）。 */
 const NARROW_TOP = "0.5rem";
 /**
  * md 未満で、上端のバーのメニューのボタンを覆わないための左の間隔。
  * ボタンはバーの左の余白（`px-2` = 0.5rem）の後ろに 44px（`--control-height-touch`）。その後ろに 0.5rem 空ける。
  */
-const NARROW_TOP_BAR_LEFT = "calc(1rem + var(--control-height-touch))";
+const NARROW_LEFT = "calc(1rem + var(--control-height-touch))";
 /** md 以上の幅の下限と上限（`tokens/spacing.css`。#899）。この間で内容に合わせて広がる。 */
 const MIN_WIDTH = "var(--toast-width-min)";
 const MAX_WIDTH = "var(--toast-width-max)";
-/** PageHeader に重ねるときに必要な最小の幅（これより狭ければ PageHeader の下に出す）。 */
-const MIN_HEADER_WIDTH_REM = 14;
 
-export type ToastPlacementMode = "top-bar" | "page-header" | "below-page-header" | "top-right";
+export type ToastPlacementMode = "bottom-right" | "top-bar";
 
 export interface ToastPlacementInput {
   /** md 未満（`NAV_DRAWER_QUERY`）。 */
   narrow: boolean;
-  /** AppShell の上端のバー（md 未満のドロワーのナビ）がある。 */
-  topBar: boolean;
-  /** 画面（layout viewport）の幅（px）。 */
-  viewportWidth: number;
-  /** 1rem の px。 */
-  remPx: number;
-  /** PageHeader の画面上の位置（px）。PageHeader が無いときは null。 */
-  header: { top: number; bottom: number; left: number } | null;
-  /** ページの操作の並びの左端・右端（px）。ページの操作が無いときは null。 */
-  headerActions: { left: number; right: number } | null;
 }
 
 export interface ToastPlacement {
   mode: ToastPlacementMode;
   style: {
-    top: string;
+    top?: string;
+    bottom?: string;
     left?: string;
     right: string;
     /** md 以上だけ。内容に合わせた幅（shrink-to-fit）の下限・上限。md 未満は left / right で画面の幅に広げる。 */
     minWidth?: string;
     maxWidth?: string;
     maxHeight: string;
+    /** 登場の向き（`toast-in` の始まりの縦のずれ）。下端の通知は下から、上端の通知は上から現れる。 */
+    "--toast-enter-y": string;
   };
 }
 
 const SAFE_RIGHT = `max(${EDGE}, env(safe-area-inset-right))`;
-const SAFE_TOP = `max(${EDGE}, env(safe-area-inset-top))`;
+const SAFE_BOTTOM = `max(${OFFSET_BOTTOM}, env(safe-area-inset-bottom))`;
+const SAFE_NARROW_TOP = `max(${NARROW_TOP}, env(safe-area-inset-top))`;
+const AVAILABLE_WIDTH = `calc(100vw - 2 * ${EDGE})`;
 
-function maxHeight(top: string) {
-  return `calc(100dvh - ${top} - ${EDGE})`;
-}
-
-/** 置ける幅（`available`）の中で、内容に合わせて下限〜上限の幅に広がる。 */
-function widthRange(available: string) {
-  return { minWidth: `min(${MIN_WIDTH}, ${available})`, maxWidth: `min(${MAX_WIDTH}, ${available})` };
-}
-
-export function resolveToastPlacement({
-  narrow,
-  topBar,
-  viewportWidth,
-  remPx,
-  header,
-  headerActions,
-}: ToastPlacementInput): ToastPlacement {
+/** 画面幅ごとの決まった置き場所。ページの内容は読まない。 */
+export function resolveToastPlacement({ narrow }: ToastPlacementInput): ToastPlacement {
   if (narrow) {
-    const top = `max(${NARROW_TOP}, env(safe-area-inset-top))`;
     return {
       mode: "top-bar",
       style: {
-        top,
-        left: topBar ? NARROW_TOP_BAR_LEFT : `max(${EDGE}, env(safe-area-inset-left))`,
+        top: SAFE_NARROW_TOP,
+        left: NARROW_LEFT,
         right: SAFE_RIGHT,
-        maxHeight: maxHeight(top),
+        maxHeight: `calc(100dvh - ${SAFE_NARROW_TOP} - ${EDGE})`,
+        "--toast-enter-y": "-0.5rem",
       },
     };
   }
-
-  const width = widthRange(`calc(100vw - 2 * ${EDGE})`);
-  const headerVisible = header !== null && header.bottom > 0;
-  if (!headerVisible) {
-    return { mode: "top-right", style: { top: SAFE_TOP, right: SAFE_RIGHT, ...width, maxHeight: maxHeight(SAFE_TOP) } };
-  }
-
-  const headerTop = `calc(${Math.max(0, Math.round(header.top))}px + ${EDGE})`;
-  const minWidth = MIN_HEADER_WIDTH_REM * remPx;
-  const gap = EDGE_REM * remPx;
-  // ページの操作の右（画面の右端から 1rem まで）に置ける幅。操作が無ければ PageHeader の幅いっぱい。
-  const rightSpace = viewportWidth - gap - (headerActions ? headerActions.right + gap : header.left + gap);
-  if (!headerActions || rightSpace >= minWidth) {
-    return {
-      mode: "page-header",
-      style: {
-        top: headerTop,
-        right: SAFE_RIGHT,
-        ...widthRange(`${Math.floor(rightSpace)}px`),
-        maxHeight: maxHeight(headerTop),
-      },
-    };
-  }
-
-  // ページの操作の左、PageHeader の左端（とそこからの 1rem）までに置ける幅。
-  const leftSpace = headerActions.left - gap - (header.left + gap);
-  if (leftSpace >= minWidth) {
-    const right = `calc(${Math.round(viewportWidth - headerActions.left)}px + ${EDGE})`;
-    return {
-      mode: "page-header",
-      style: { top: headerTop, right, ...widthRange(`${Math.floor(leftSpace)}px`), maxHeight: maxHeight(headerTop) },
-    };
-  }
-
-  const top = `calc(${Math.round(header.bottom)}px + ${EDGE})`;
-  return { mode: "below-page-header", style: { top, right: SAFE_RIGHT, ...width, maxHeight: maxHeight(top) } };
-}
-
-/** PageHeader の目印（`<header data-page-header>`）。 */
-export const PAGE_HEADER_SELECTOR = "[data-page-header]";
-/** PageHeader のページの操作の並びの目印。 */
-export const PAGE_HEADER_ACTIONS_SELECTOR = "[data-page-header-actions]";
-/** AppShell の上端のバーがあるとき（md 未満）の目印。 */
-export const NAV_DRAWER_SHELL_SELECTOR = '[data-nav-mode="drawer"]';
-
-/** 画面から置き場所の入力を読む。 */
-export function readToastPlacementInput(doc: Document, narrow: boolean): ToastPlacementInput {
-  const header = doc.querySelector<HTMLElement>(PAGE_HEADER_SELECTOR);
-  const headerRect = header?.getBoundingClientRect() ?? null;
-  const actions = header?.querySelector<HTMLElement>(PAGE_HEADER_ACTIONS_SELECTOR) ?? null;
-  const view = doc.defaultView;
-  const remPx = view ? parseFloat(view.getComputedStyle(doc.documentElement).fontSize) || 16 : 16;
   return {
-    narrow,
-    topBar: doc.querySelector(NAV_DRAWER_SHELL_SELECTOR) !== null,
-    viewportWidth: doc.documentElement.clientWidth || view?.innerWidth || 0,
-    remPx,
-    header: headerRect ? { top: headerRect.top, bottom: headerRect.bottom, left: headerRect.left } : null,
-    headerActions: actions
-      ? (({ left, right }) => ({ left, right }))(actions.getBoundingClientRect())
-      : null,
+    mode: "bottom-right",
+    style: {
+      bottom: SAFE_BOTTOM,
+      right: SAFE_RIGHT,
+      minWidth: `min(${MIN_WIDTH}, ${AVAILABLE_WIDTH})`,
+      maxWidth: `min(${MAX_WIDTH}, ${AVAILABLE_WIDTH})`,
+      maxHeight: `calc(100dvh - ${SAFE_BOTTOM} - ${EDGE})`,
+      "--toast-enter-y": "0.5rem",
+    },
   };
 }

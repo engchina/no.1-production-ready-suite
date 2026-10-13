@@ -1,7 +1,8 @@
-// #411: 通知（Toaster）が主操作を覆わないことを実ブラウザで確かめる fixture。
+// #1728: 通知（Toaster）が決まった 1 か所に出て、主操作を覆わないことを実ブラウザで確かめる fixture。
 // PageHeader の右端にページの操作、ページの末尾の右にコンテンツの操作（NL2SQL のコメント管理の「SQL 生成」と同じ位置）を置く。
 // 本文の先頭の右にも内容の面の操作（ContentActionBar。ObjectActionBar と同じ位置）を置く。
-// 通知は PageHeader に重ねてページの操作のすぐ左に出る（desktop）。375px は上端のバーに重なる。
+// `?actions=none` は PageHeader にページの操作を置かない（操作の有無で通知の位置が変わらないことを確かめる）。
+// 通知は画面の右下（desktop）、375px は上端のバーに出る。
 import { AppShell, Button, ContentActionBar, PageBody, PageHeader, Section, Toaster, toast } from "@production-ready/ui";
 import { Copy, RefreshCw, Save, Sparkles } from "lucide-react";
 import { useState } from "react";
@@ -9,6 +10,8 @@ import { createRoot } from "react-dom/client";
 import "../../src/globals.css";
 
 const lines = Array.from({ length: 40 }, (_, index) => `- COLUMN_${index + 1}: VARCHAR2(120) NULLABLE=Y COMMENT=列 ${index + 1}`);
+
+const withoutPageActions = new URLSearchParams(window.location.search).get("actions") === "none";
 
 function ToastPlacement() {
   const [saved, setSaved] = useState(0);
@@ -19,7 +22,7 @@ function ToastPlacement() {
       <PageHeader
         title="コメント管理"
         subtitle="テーブル・ビューを選択し、COMMENT ON SQL を生成して確認語入力後に適用します。"
-        actions={[
+        actions={withoutPageActions ? [] : [
           { id: "refresh", kind: "utility", label: "表示を更新", icon: RefreshCw, onClick: () => toast.info("表示を更新しました") },
           {
             id: "save",

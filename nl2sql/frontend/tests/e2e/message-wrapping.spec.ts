@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "./_helpers/test";
 
-import { expectToastStackAtTop } from "./_helpers/toast";
+import { expectToastPlacement } from "./_helpers/toast";
 import { FIXTURE_BASE_URL } from "./_helpers/web-server";
 
 // `tests/fixtures/*.tsx` を `/@react-refresh` と一緒に読み込むので、dev server の変換が要る。preview（PR の CI）でも
@@ -91,7 +91,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.getByRole("group", { name: "ページ操作" }).getByRole("button", { name: "保存", exact: true }).click();
     const synced = region.getByRole("status").filter({ hasText: "Oracle Profile の反映が完了しました。" });
     await expect(synced).toBeVisible();
-    await expectToastStackAtTop(page);
+    await expectToastPlacement(page);
     const syncedLines = await wrappedLines(synced.locator("[data-message-text]"));
     expect(syncedLines.midWord).toEqual([]);
     // 以前の「…完了しま / した。」（`Intl.Segmenter` は「しま｜した」を語の境界とみなすため、行の先頭で確かめる）。
@@ -115,7 +115,7 @@ for (const theme of ["light", "dark"] as const) {
       // 積んだ通知は最も広い通知の幅にそろい、上限（32rem）を超えない。
       expect((await region.boundingBox())!.width).toBeLessThanOrEqual(32 * rem + 1);
     }
-    await expectToastStackAtTop(page);
+    await expectToastPlacement(page);
 
     // Banner（見出し・本文）と FormStatus。
     const banner = page.getByRole("alert").filter({ hasText: "システムテーブルの作成に失敗しました。" });

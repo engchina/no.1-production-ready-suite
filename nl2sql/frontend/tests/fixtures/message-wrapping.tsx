@@ -1,6 +1,6 @@
 // #899: 通知（Toast）と画面の中のメッセージ（Banner・FormStatus・結果パネル）が、語の途中で折り返さないことを
 // 実ブラウザで確かめる fixture。業務プロファイルの保存の後の通知（「Oracle Profile の反映が完了しました。」）を、
-// 実画面と同じく PageHeader のページの操作のすぐ左に出す。
+// 実画面と同じ置き場所（desktop は画面の右下、375px は上端のバー。#1728）に出す。
 import {
   AppShell,
   Banner,

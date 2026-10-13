@@ -2,6 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
+import { expectToastPlacement, overlaps } from "./fixtures/toast-placement";
 
 /**
  * ページ全体（documentElement）と本文（`<main>`）が横にはみ出さないこと。
@@ -797,8 +798,9 @@ test.describe("Agent Runtime settings", () => {
     });
   }
 
-  // #411: 通知は主操作を覆わない。以前は画面の右下に出ていたため、ページの末尾（スクロールしきると画面の下端）の
-  // 保存ボタンを覆い、ポインタが通知に乗ると自動の消去が止まって（#351）押せなくなっていた。
+  // #1728: 通知は画面幅ごとに決まった 1 か所（desktop は画面の右下で下端から 8rem、375px は上端のバー）に出し、
+  // 主操作を覆わない。ページの末尾（スクロールしきると画面の下端）の保存ボタンは通知より下に来るので、
+  // ポインタが通知に乗って自動の消去が止まって（#351）も押せる。
   for (const viewport of [
     { name: "desktop", width: 1280, height: 720 },
     { name: "mobile", width: 375, height: 812 },
@@ -831,8 +833,9 @@ test.describe("Agent Runtime settings", () => {
       const notice = page.getByRole("region", { name: "通知" }).getByRole("status").filter({ hasText: "設定を保存しました" });
       await expect(notice).toBeVisible();
       await expect.poll(saves).toBe(1);
+      await expectToastPlacement(page);
 
-      // ページの末尾までスクロールすると、保存ボタンは画面の下端に来る（以前の通知の位置）。
+      // ページの末尾までスクロールすると、保存ボタンは画面の下端に来る。
       await chooseSelectFieldOption(defaultMode, "approval");
       await page.locator("main").evaluate((main) => {
         main.scrollTop = main.scrollHeight;
@@ -850,6 +853,9 @@ test.describe("Agent Runtime settings", () => {
         return top !== null && element.contains(top);
       });
       expect(hit).toBe(true);
+      expect(overlaps((await notice.boundingBox())!, box)).toBe(false);
+      // スクロールしても通知の位置は変わらない。
+      await expectToastPlacement(page);
       await save.click({ timeout: 5_000 });
       await expect.poll(saves).toBe(2);
       await expectNoHorizontalOverflow(page);

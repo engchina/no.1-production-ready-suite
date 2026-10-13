@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 
 import { expect, test, type Page, type TestInfo } from "./fixtures/test";
 import { apiEnvelope, expandSidebarSections, mockLocalAuth, openSidebarNav, SYSTEM_TABLES_STATUS_OK } from "./_helpers";
+import { expectMainActionsClearOfToast } from "./_toast-placement";
 
 /**
  * 画面の axe（a11y）の確認（#1595・#1671）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
@@ -13,6 +14,7 @@ import { apiEnvelope, expandSidebarSections, mockLocalAuth, openSidebarNav, SYST
  * - 違反は rule id・impact・件数・対象（selector）を失敗の文と添付（axe-violations.json）に出す。
  * - API は mock。画面ごとの mock が無い GET は空の一覧を返す（未定義の API で画面が読み込み中のまま止まらない）。
  * - 既知の例外は KNOWN_EXCEPTIONS に rule id・画面・理由を書く（直すのに設計の判断が要るもの。別 Issue で直す）。
+ * - 同じ SCREENS で、通知（Toast）の決まった置き場所が主操作と重ならないことも確かめる（#1728。ライトだけ、desktop と 375px）。
  */
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
@@ -381,7 +383,8 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
   expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
 }
 
-async function openAndCheck(page: Page, testInfo: TestInfo, screen: Screen, theme: Theme) {
+/** 画面を開き、読み込んだ後の状態にする。 */
+async function openScreen(page: Page, screen: Screen, theme: Theme) {
   await useTheme(page, theme);
   await screen.setup?.(page);
   await page.goto(screen.path);
@@ -393,6 +396,10 @@ async function openAndCheck(page: Page, testInfo: TestInfo, screen: Screen, them
   await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByText(/^(この項目|「.+」)を表示できません$/)).toHaveCount(0);
   await screen.act?.(page);
+}
+
+async function openAndCheck(page: Page, testInfo: TestInfo, screen: Screen, theme: Theme) {
+  await openScreen(page, screen, theme);
   await expectNoSeriousViolations(page, testInfo, pathOf(screen));
 }
 
@@ -425,5 +432,14 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
         await openAndCheck(page, testInfo, state, theme);
       });
     }
+  }
+  // #1728: 通知（Toast）の決まった置き場所（desktop は画面の右下、375px は上端のバー）が、主操作（PageHeader の
+  // ページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信・ページの末尾の操作）と重ならない。
+  // 通知は本文より上に重なるので、重なると操作が隠れる（WCAG 2.2 の 2.4.11 Focus Not Obscured の考え方）。
+  for (const screen of SCREENS) {
+    test(`${pathOf(screen)} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page }) => {
+      await openScreen(page, screen, "light");
+      await expectMainActionsClearOfToast(page);
+    });
   }
 });
