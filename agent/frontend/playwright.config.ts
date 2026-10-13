@@ -20,6 +20,11 @@ export default defineConfig({
   // PR は 1、main の push と nightly は 2（#1593。platform/scripts/e2e-impact/ci-run.ts）。
   // retries が無いと trace: "on-first-retry" も記録されない。
   retries: ciRetries(),
+  // CI は失敗・flaky を PR の注釈（github）に、log を dot にし、json は nightly の flaky の一覧に使う
+  // （platform/scripts/playwright_report_summary.py。#1591）。
+  reporter: process.env.CI
+    ? [["github"], ["dot"], ["json", { outputFile: "playwright-report/results.json" }]]
+    : "list",
   timeout: 30_000,
   expect: {
     timeout: 7_500,

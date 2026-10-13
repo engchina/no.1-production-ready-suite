@@ -22,7 +22,11 @@ export default defineConfig({
     timeout: 8_000,
   },
   fullyParallel: true,
-  reporter: process.env.CI ? "dot" : "list",
+  // CI は失敗・flaky を PR の注釈（github）に、log を dot にし、json は nightly の flaky の一覧に使う
+  // （platform/scripts/playwright_report_summary.py。#1591）。
+  reporter: process.env.CI
+    ? [["github"], ["dot"], ["json", { outputFile: "playwright-report/results.json" }]]
+    : "list",
   use: {
     baseURL: playwrightBaseUrl,
     trace: "retain-on-failure",

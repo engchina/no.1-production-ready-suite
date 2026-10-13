@@ -215,7 +215,7 @@ for (const viewport of [
 }
 
 test("RAG 検索は文書の分類と基準日を filters に入れて送る", async ({ page }) => {
-  let searchBody: Record<string, unknown> | null = null;
+  let searchBody = null as Record<string, unknown> | null;
   await mockDocumentDetail(page);
   await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
     route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
@@ -247,7 +247,7 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
 });
 
 test("検索引用で構造 metadata chip を確認できる", async ({ page }) => {
-  let feedbackPayload: Record<string, unknown> | null = null;
+  let feedbackPayload = null as Record<string, unknown> | null;
   await mockDocumentDetail(page);
   await page.route("**/api/search/stream", async (route) => {
     await route.fulfill({

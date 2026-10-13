@@ -254,7 +254,14 @@ test("重複文書が参照する正本の削除は、確認ダイアログで�
 test("削除の影響を確認できないときは削除せず、原因を通知する", async ({ page }) => {
   const documents: DocumentSummary[] = [documentSummary("doc-1", "policy.txt", "INDEXED")];
   let deleteCalls = 0;
-  await mockDocumentIndexApi(page, documents, () => (deleteCalls += 1), "error");
+  await mockDocumentIndexApi(
+    page,
+    documents,
+    () => {
+      deleteCalls += 1;
+    },
+    "error"
+  );
 
   await page.goto("/file-list");
   await page.getByRole("button", { name: "policy.txt の操作" }).click();
