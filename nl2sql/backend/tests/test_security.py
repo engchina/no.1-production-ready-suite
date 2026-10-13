@@ -5316,6 +5316,7 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
                 "display_name": "アーカイブ表示ロール",
                 "is_built_in": False,
                 "archived": True,
+                "deleted": False,
             }
         ]
 
@@ -5406,7 +5407,10 @@ def test_user_data_marks_unresolved_assigned_role_as_inactive() -> None:
 
     assert data.role_ids == ["missing-role-id"]
     assert data.assigned_roles[0].role_id == "missing-role-id"
-    assert data.assigned_roles[0].display_name == "missing-role-id"
+    # 参照できないロールは名前の欄に ID を入れず、削除済みとして返す（#1682）。
+    assert data.assigned_roles[0].display_name == ""
+    assert data.assigned_roles[0].role_code == ""
+    assert data.assigned_roles[0].deleted is True
     assert data.assigned_roles[0].archived is True
 
 
