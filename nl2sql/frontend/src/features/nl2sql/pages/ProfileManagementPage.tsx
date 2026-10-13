@@ -40,6 +40,7 @@ import {
   type ListPickerItem,
   TextareaField,
 } from "@production-ready/ui";
+import { RoleNameBadges } from "@production-ready/system-settings";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 
@@ -1032,12 +1033,12 @@ function ProfileEditor({
         <section className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
           <h3 className="text-sm font-semibold text-fg">{t("profiles.access.title")}</h3>
           <p className="text-sm text-fg-muted">{t("profiles.access.hint")}</p>
-          {profileAccessProfile.allowed_role_ids.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {profileAccessProfile.allowed_role_ids.map((roleId) => (
-                <StatusBadge icon={false} key={roleId} variant="neutral" label={roleId} />
-              ))}
-            </div>
+          {profileAccessProfile.allowed_roles.length > 0 ? (
+            // ロールはロール名で出す。ID（UUID）・コードは出さない（#1682）。
+            <RoleNameBadges
+              roles={profileAccessProfile.allowed_roles}
+              ariaLabel={t("profiles.access.title")}
+            />
           ) : (
             <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
               {t("profiles.access.none")}

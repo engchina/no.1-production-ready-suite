@@ -158,16 +158,22 @@ class AssignedRoleData(BaseModel):
     display_name: str
     is_built_in: bool
     archived: bool
+    # 削除済み等で参照できないロール。画面は ID を出さずに「（削除済みのロール）」と出す（#1682）。
+    deleted: bool = False
 
     @classmethod
     def unresolved(cls, role_id: str) -> AssignedRoleData:
-        """削除済み等で参照できないロール。無効として表示する。"""
+        """削除済み等で参照できないロール。無効として表示する。
+
+        ロールコード・表示名の欄に ID（UUID）を入れない。画面に ID が出るため（#1682）。
+        """
         return cls(
             role_id=role_id,
-            role_code=role_id,
-            display_name=role_id,
+            role_code="",
+            display_name="",
             is_built_in=False,
             archived=True,
+            deleted=True,
         )
 
 

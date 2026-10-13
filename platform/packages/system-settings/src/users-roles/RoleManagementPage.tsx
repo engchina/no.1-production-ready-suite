@@ -49,6 +49,7 @@ import {
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { t } from "./messages";
+import { RoleNameRowTitleButton, roleDisplayName } from "./RoleNameBadges";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
@@ -57,8 +58,6 @@ import {
   SecuritySearchField,
   SecurityClearSearchAction,
   describeErrorMessageOnly,
-  SecurityIdentityRowTitleButton,
-  identitySecondaryName,
   isAbortError,
   mapFieldErrors,
   securityFilteredCount,
@@ -209,8 +208,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         if (sort.key === "status") {
           return compareText(roleStatusText(left), roleStatusText(right), sort.direction);
         }
-        // 1 列目はロールコードを主表示するため、コードで並べる。
-        return compareText(left.role_code, right.role_code, sort.direction);
+        // 1 列目はロール名を出すため、ロール名で並べる（#1682）。
+        return compareText(roleDisplayName(left), roleDisplayName(right), sort.direction);
       });
   }, [roles, search, sort]);
 
@@ -455,10 +454,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     if (
       !(await confirm({
         title: t("security.roles.delete"),
-        description: t("security.roles.deleteConfirm", {
-          name: role.display_name,
-          code: role.role_code,
-        }),
+        description: t("security.roles.deleteConfirm", { name: roleDisplayName(role) }),
         confirmLabel: t("common.delete"),
         tone: "danger",
         dismissOnOverlay: false,
@@ -557,11 +553,10 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
       render: (role) => {
         const selected = visibleSelectedId === role.role_id;
         return (
-          <SecurityIdentityRowTitleButton
-            id={role.role_code}
-            name={role.display_name}
+          <RoleNameRowTitleButton
+            securityRole={role}
             current={selected}
-            aria-label={t("security.roles.showRole", { name: role.role_code })}
+            aria-label={t("security.roles.showRole", { name: roleDisplayName(role) })}
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
@@ -718,7 +713,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 getRowKey={(role) => role.role_id}
                 rowProps={(role) => ({
                   className: INFORMATION_TABLE_ROW_CLASS,
-                  "aria-label": t("security.roles.showRole", { name: role.role_code }),
+                  "aria-label": t("security.roles.showRole", { name: roleDisplayName(role) }),
                 })}
                 ariaLabel={t("security.roles.list")}
                 testId="security-roles-grid"
@@ -928,18 +923,15 @@ function RoleDetailPanel({
               className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg"
             >
               <ShieldCheck size={20} aria-hidden="true" />
-              <span className="min-w-0 break-all font-mono">{role.role_code}</span>
+              <span className="min-w-0 break-words">{roleDisplayName(role)}</span>
             </h2>
             <RoleStatusBadges role={role} />
           </div>
-          {identitySecondaryName(role.role_code, role.display_name) ? (
-            <p className="mt-1 break-words text-xs text-fg-muted">{role.display_name}</p>
-          ) : null}
         </div>
         {canManage ? (
           <ObjectActionBar
             actions={actions}
-            ariaLabel={`${t("security.common.actions")}: ${role.role_code}`}
+            ariaLabel={`${t("security.common.actions")}: ${roleDisplayName(role)}`}
             testId="security-roles-detail-actions"
           />
         ) : null}

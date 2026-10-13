@@ -5325,6 +5325,7 @@ def test_user_api_includes_archived_assigned_role_metadata_without_runtime_permi
                 "display_name": "アーカイブ表示ロール",
                 "is_built_in": False,
                 "archived": True,
+                "deleted": False,
             }
         ]
 
@@ -5415,7 +5416,10 @@ def test_user_data_marks_unresolved_assigned_role_as_inactive() -> None:
 
     assert data.role_ids == ["missing-role-id"]
     assert data.assigned_roles[0].role_id == "missing-role-id"
-    assert data.assigned_roles[0].display_name == "missing-role-id"
+    # 参照できないロールは名前の欄に ID を入れず、削除済みとして返す（#1682）。
+    assert data.assigned_roles[0].display_name == ""
+    assert data.assigned_roles[0].role_code == ""
+    assert data.assigned_roles[0].deleted is True
     assert data.assigned_roles[0].archived is True
 
 
@@ -6014,6 +6018,52 @@ def test_profile_access_profiles_search_and_page_on_server(
     assert ids_of(q="試験会計")[0] == ["p5"]
     # 選択済みの名前の解決（ids）は検索語と関係なく ID で引く。
     assert ids_of(ids=["p4", "p2", "missing"])[0] == ["p2", "p4"]
+
+
+def test_profile_access_profiles_return_role_names_not_only_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """業務プロファイルを使えるロールは、ロール名も返す（画面に UUID を出さない。#1682）。"""
+    from app.features.nl2sql import service as nl2sql_service_module
+    from app.security import router as security_router_module
+
+    feature_service = Nl2SqlService(store=MemoryNl2SqlStore())
+    for profile_id in ("p1", "p2"):
+        feature_service.create_profile(
+            Nl2SqlProfile(
+                id=profile_id, name=f"ロール表示 {profile_id}", category="", description=""
+            )
+        )
+    security = _service()
+    actor, _, _ = _login(security)
+    role = security.create_role(
+        role_code="PROFILE_P1_USER",
+        display_name="P1 の利用者",
+        description="",
+        allowed_profile_ids={"p1"},
+        actor=actor,
+    )
+    monkeypatch.setattr(nl2sql_service_module, "nl2sql_service", feature_service)
+    monkeypatch.setattr(security_router_module, "get_security_service", lambda: security)
+
+    page = security_router_module.list_profile_access_profiles(
+        OffsetParams(limit=50, offset=0), include_archived=False, q="", ids=["p1", "p2"]
+    ).data
+    assert page is not None
+    allowed = {item.id: item.allowed_roles for item in page.items}
+    p1 = {item.role_code: item for item in allowed["p1"]}
+    p2 = {item.role_code: item for item in allowed["p2"]}
+    # 構成の system admin はすべての業務プロファイルを使え、ロール名を添えて返る。
+    assert SYSTEM_ADMIN_ROLE_CODE in p1 and SYSTEM_ADMIN_ROLE_CODE in p2
+    assert p1[SYSTEM_ADMIN_ROLE_CODE].display_name
+    assert p1["PROFILE_P1_USER"].display_name == "P1 の利用者"
+    assert p1["PROFILE_P1_USER"].role_id == role.role_id
+    assert "PROFILE_P1_USER" not in p2
+    names = [item.display_name for item in allowed["p1"]]
+    assert names == sorted(names)
+    for roles in allowed.values():
+        for item in roles:
+            assert item.display_name and item.display_name != item.role_id
 
 
 @pytest.mark.parametrize(

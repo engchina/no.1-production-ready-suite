@@ -244,6 +244,16 @@ export {
   type RolePermissionSummary,
 } from "./users-roles/RoleManagementPage";
 export { USERS_ROLES_MESSAGES, type UsersRolesMessageKey } from "./users-roles/messages";
+// ロールの表示（ロール名。表示名が空ならコード、ID は出さない。#1682）
+export {
+  RoleNameBadges,
+  RoleNameRowTitleButton,
+  compareRoleDisplayNames,
+  deletedRoleLabel,
+  roleDisplayName,
+  type RoleNameBadgesProps,
+  type RoleNameReference,
+} from "./users-roles/RoleNameBadges";
 export {
   SecurityDetailField,
   SecurityEmptySelection,
