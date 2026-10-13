@@ -186,7 +186,9 @@ def _rendered_keys(body: str) -> set[str]:
 
 def test_terraform_backend_env_renders_select_ai_credential_name() -> None:
     """Select AI credential 名は env 専用キーのため Terraform が書き込む必要がある。"""
-    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in _terraform_env_body("nl2sql_backend_env")
+    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=NL2SQL_OCI_CRED" in _terraform_env_body(
+        "nl2sql_backend_env"
+    )
     assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in _terraform_env_body("nl2sql_backend_env")
 
 

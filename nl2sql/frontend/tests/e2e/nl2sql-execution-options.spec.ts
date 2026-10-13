@@ -751,7 +751,7 @@ test("Select AI Credential が無いと Select AI の生成の前に事前条件
   await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
     fulfillJson(route, {
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: readiness.exists,
     })
   );
@@ -763,7 +763,7 @@ test("Select AI Credential が無いと Select AI の生成の前に事前条件
   const run = page.getByRole("button", { name: "SQL を生成して実行" });
   await expect(precondition).toContainText("Select AI Credential が作成されていません");
   await expect(precondition).toContainText(
-    "Select AI・Select AI Agent での SQL の生成には Select AI Credential（OCI_CRED）が必要です。作成するまでSQL を生成して実行できません。"
+    "Select AI・Select AI Agent での SQL の生成には Select AI Credential（NL2SQL_OCI_CRED）が必要です。作成するまでSQL を生成して実行できません。"
   );
   await expect(precondition.getByRole("link", { name: "Select AI Credential を開く" })).toHaveAttribute(
     "href",

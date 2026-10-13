@@ -1939,7 +1939,7 @@ const nl2sqlJa = {
   "profiles.oracle.sync.verifyFailed":
     "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
-    "現在の Oracle schema に OCI_CRED がありません。運用設定の「Select AI Credential」で作成してから、Oracle 反映を再試行してください。",
+    "現在の Oracle schema に NL2SQL_OCI_CRED がありません。運用設定の「Select AI Credential」で作成してから、Oracle 反映を再試行してください。",
   "profiles.oracle.sync.credentialMissingBeforeStart":
     "業務 Profile は保存されましたが、Select AI Credential が無いため Oracle 反映を開始できませんでした。運用設定の「Select AI Credential」で作成してから、Oracle 反映を再試行してください。",
   "profiles.oracle.precondition.operation": "業務プロファイルの保存（DBMS_CLOUD_AI Profile への反映）",

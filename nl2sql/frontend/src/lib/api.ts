@@ -567,7 +567,7 @@ export type SelectAiCredentialOperation =
   "created" | "recreated" | "already_exists";
 
 export interface SelectAiCredentialData {
-  credential_name: "OCI_CRED";
+  credential_name: "NL2SQL_OCI_CRED";
   schema_name: string;
   exists: boolean;
   region: SelectAiCredentialRegion;

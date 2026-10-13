@@ -108,7 +108,7 @@ class _FakeSelectAiCredentialAdapter:
         self.calls: list[dict[str, Any]] = []
 
     def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
-        assert credential_name == "OCI_CRED"
+        assert credential_name == "NL2SQL_OCI_CRED"
         return "ADMIN", self.exists
 
     def create_select_ai_credential(self, **kwargs: Any) -> str:
@@ -165,16 +165,16 @@ def test_select_ai_credential_create_and_recreate_persist_safe_settings(
     assert response.status_code == 200
     assert response.json()["data"]["operation"] == expected_operation
     assert response.json()["data"]["exists"] is True
-    assert fake_adapter.calls[0]["credential_name"] == "OCI_CRED"
+    assert fake_adapter.calls[0]["credential_name"] == "NL2SQL_OCI_CRED"
     assert fake_adapter.calls[0]["recreate"] is recreate
     normalized_private_key = fake_adapter.calls[0]["private_key"]
     assert "BEGIN PRIVATE KEY" not in normalized_private_key
     assert "\n" not in normalized_private_key
     env_text = env_file.read_text(encoding="utf-8")
     assert "KEEP_ME=1" in env_text
-    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in env_text
+    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=NL2SQL_OCI_CRED" in env_text
     assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in env_text
-    assert settings.nl2sql_select_ai_credential_name == "OCI_CRED"
+    assert settings.nl2sql_select_ai_credential_name == "NL2SQL_OCI_CRED"
     assert settings.nl2sql_select_ai_region == "us-chicago-1"
     secret_body = b"".join(
         line for line in key_content.splitlines() if not line.startswith(b"-----")
@@ -227,7 +227,7 @@ def test_select_ai_credential_status_failure_returns_problem_contract(
 ) -> None:
     class FailingAdapter(_FakeSelectAiCredentialAdapter):
         def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
-            raise RuntimeError("raw Oracle target=ADMIN.OCI_CRED ocid1.tenancy.oc1..leaked")
+            raise RuntimeError("raw Oracle target=ADMIN.NL2SQL_OCI_CRED ocid1.tenancy.oc1..leaked")
 
     monkeypatch.setattr(
         settings_router,
@@ -356,7 +356,7 @@ def test_select_ai_credential_status_reports_missing_or_invalid_key_without_secr
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["credential_name"] == "OCI_CRED"
+    assert data["credential_name"] == "NL2SQL_OCI_CRED"
     assert data["schema_name"] == "ADMIN"
     assert data["exists"] is False
     assert data["oci_auth_ready"] is False

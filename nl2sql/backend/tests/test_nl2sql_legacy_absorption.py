@@ -810,7 +810,7 @@ def test_select_ai_region_prefers_profile_then_select_ai_default_then_oci(
 def test_select_ai_profile_upsert_preserves_credential_missing_exception() -> None:
     class MissingCredentialAdapter:
         def upsert_select_ai_profile_low_level(self, **_kwargs: object) -> dict[str, object]:
-            raise SelectAiCredentialMissingError("OCI_CRED", "ADMIN")
+            raise SelectAiCredentialMissingError("NL2SQL_OCI_CRED", "ADMIN")
 
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     cast(Any, service)._oracle_adapter = MissingCredentialAdapter()
@@ -820,7 +820,7 @@ def test_select_ai_profile_upsert_preserves_credential_missing_exception() -> No
         service.upsert_select_ai_db_profile(
             SelectAiDbProfileUpsertRequest(
                 profile_name="NL2SQL_DEFAULT_PROFILE",
-                attributes={"provider": "oci", "credential_name": "OCI_CRED"},
+                attributes={"provider": "oci", "credential_name": "NL2SQL_OCI_CRED"},
                 confirmation="NL2SQL_DEFAULT_PROFILE",
             )
         )

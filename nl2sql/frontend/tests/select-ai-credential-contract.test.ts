@@ -22,7 +22,7 @@ test("Select AI Credential API keeps the fixed name and supported region contrac
     apiSource,
     /export type SelectAiCredentialRegion = "ap-osaka-1" \| "us-chicago-1"/u,
   );
-  assert.match(apiSource, /credential_name: "OCI_CRED"/u);
+  assert.match(apiSource, /credential_name: "NL2SQL_OCI_CRED"/u);
   assert.match(apiSource, /getSelectAiCredential/u);
   assert.match(apiSource, /createSelectAiCredential/u);
   assert.match(queriesSource, /selectAiCredential/u);

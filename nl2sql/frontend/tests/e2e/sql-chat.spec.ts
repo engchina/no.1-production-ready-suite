@@ -1499,7 +1499,7 @@ test("Select AI Credential が無いと Select AI の送信を止めて入力欄
       body: JSON.stringify({
         data: {
           credential_required: true,
-          credential_name: "OCI_CRED",
+          credential_name: "NL2SQL_OCI_CRED",
           credential_exists: readiness.exists,
         },
       }),

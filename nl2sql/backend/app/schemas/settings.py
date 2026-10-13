@@ -76,7 +76,7 @@ SystemTableOperationResult = SystemSchemaOperation
 class SelectAiCredentialData(BaseModel):
     """Select AI Credential の安全な表示用状態。秘密鍵本文は含めない。"""
 
-    credential_name: Literal["OCI_CRED"] = "OCI_CRED"
+    credential_name: Literal["NL2SQL_OCI_CRED"] = "NL2SQL_OCI_CRED"
     schema_name: str
     exists: bool
     region: SelectAiCredentialRegion
