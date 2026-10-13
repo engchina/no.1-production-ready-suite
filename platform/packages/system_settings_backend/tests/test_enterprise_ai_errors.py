@@ -107,3 +107,51 @@ def test_model_test_404_tip_is_authorization_not_missing_model() -> None:
     # HTTP の失敗でないとき（タイムアウトなど）は、これまでどおりの案内。
     timeout_tips = _model_test_troubleshooting("enterprise_text", "timeout after 5s", "Timeout")
     assert any("タイムアウト" in tip for tip in timeout_tips)
+
+
+# --- HTTP 以外の種類と、応答の理由の取り出し（#1715） -------------------------------------
+
+
+def test_call_failure_kinds_have_codes_and_labels() -> None:
+    from typing import get_args
+
+    from pr_system_settings.enterprise_ai_errors import (
+        ENTERPRISE_AI_CALL_FAILURE_ERROR_CODES,
+        ENTERPRISE_AI_FAILURE_KIND_LABELS_JA,
+        EnterpriseAiCallFailureKind,
+    )
+
+    kinds = set(get_args(EnterpriseAiCallFailureKind))
+    assert kinds == set(ENTERPRISE_AI_CALL_FAILURE_ERROR_CODES)
+    assert kinds == set(ENTERPRISE_AI_FAILURE_KIND_LABELS_JA)
+    assert ENTERPRISE_AI_CALL_FAILURE_ERROR_CODES["timeout"] == "ENTERPRISE_AI_TIMEOUT"
+    assert ENTERPRISE_AI_CALL_FAILURE_ERROR_CODES["authorization"] == (
+        "ENTERPRISE_AI_AUTHORIZATION_FAILED"
+    )
+
+
+def test_provider_message_reads_openai_error_body() -> None:
+    from pr_system_settings.enterprise_ai_errors import enterprise_ai_provider_message
+
+    body = (
+        '{"error":{"message":"Internal server error","type":"server_error",'
+        '"param":null,"code":"internal_error"}}'
+    )
+    assert enterprise_ai_provider_message(body) == "Internal server error (internal_error)"
+    assert enterprise_ai_provider_message("") == ""
+    assert enterprise_ai_provider_message("upstream   connect\n error") == "upstream connect error"
+
+
+def test_provider_message_hides_secrets_and_truncates() -> None:
+    from pr_system_settings.enterprise_ai_errors import enterprise_ai_provider_message
+
+    # 検出の対象にならないよう、実在しない key の形を組み立てる。
+    fake_key = "sk-" + "fake0" * 4
+    body = f"bad key {fake_key} Authorization: Bearer abc.def api_key=xyz"
+    message = enterprise_ai_provider_message(f'{{"error": {{"message": "{body}"}}}}')
+    assert fake_key not in message
+    assert "abc.def" not in message
+    assert "xyz" not in message
+    long = enterprise_ai_provider_message("x" * 1000)
+    assert len(long) == 300
+    assert long.endswith("…")

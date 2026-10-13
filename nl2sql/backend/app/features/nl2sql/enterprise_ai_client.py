@@ -18,6 +18,7 @@ from typing import Any, Protocol, cast
 import httpx
 from pr_system_settings.enterprise_ai_errors import (
     ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
+    EnterpriseAiCallFailureKind,
     EnterpriseAiHttpFailure,
     EnterpriseAiIncomplete,
     classify_enterprise_ai_http_failure,
@@ -25,6 +26,7 @@ from pr_system_settings.enterprise_ai_errors import (
     enterprise_ai_failure_actions,
     enterprise_ai_incomplete_from_response,
     enterprise_ai_incomplete_message,
+    enterprise_ai_provider_message,
 )
 from pr_system_settings.model import (
     enterprise_ai_output_token_budget,
@@ -73,6 +75,10 @@ class EnterpriseAiDirectError(RuntimeError):
         model_id: str = "",
         endpoint_host: str = "",
         incomplete: EnterpriseAiIncomplete | None = None,
+        provider_message: str = "",
+        upstream_request_id: str = "",
+        attempts: int = 0,
+        timeout_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -80,8 +86,24 @@ class EnterpriseAiDirectError(RuntimeError):
         self.http_failure = http_failure
         self.model_id = model_id
         self.endpoint_host = endpoint_host
+        # 画面の「詳細」に出す値（#1715）。provider_message は応答の本文の理由（秘密の値を
+        # 伏せた短い文）、upstream_request_id は OCI の `opc-request-id`（無ければ応答の `id`）。
+        self.provider_message = provider_message
+        self.upstream_request_id = upstream_request_id
+        self.attempts = attempts
+        self.timeout_seconds = timeout_seconds
+        self.elapsed_ms: int | None = None
+        self.max_output_tokens: int | None = None
+        self.incomplete_reason = incomplete.reason if incomplete is not None else ""
         # 未完了の応答の理由・上限・使った token（#1719。`code == "incomplete"` のとき）。
         self.incomplete = incomplete
+
+    @property
+    def failure_kind(self) -> EnterpriseAiCallFailureKind | None:
+        """失敗の種類（platform の共通の表。#1715）。分からなければ None。"""
+        if self.http_failure is not None:
+            return self.http_failure.kind
+        return _CALL_FAILURE_KINDS_BY_CODE.get(self.code)
 
     @property
     def configuration_error(self) -> bool:
@@ -95,6 +117,16 @@ class EnterpriseAiDirectError(RuntimeError):
         return enterprise_ai_failure_actions(
             self.http_failure, model_id=self.model_id, endpoint_host=self.endpoint_host
         )
+
+
+# HTTP 以外の失敗の code → 共通の種類（#1715）。
+_CALL_FAILURE_KINDS_BY_CODE: dict[str, EnterpriseAiCallFailureKind] = {
+    "timeout": "timeout",
+    "connection": "connection",
+    "incomplete": "incomplete",
+    "response_format": "response_format",
+    "refusal": "refusal",
+}
 
 
 # アプリが直接呼ぶ OCI Enterprise AI のモデルの決め方（#1684）。失敗の案内に添える。
@@ -209,21 +241,31 @@ class OciEnterpriseAiDirectClient:
                 max_output_tokens=budget,
                 response_format=response_format,
             )
-            response = self._post_json(
-                payload,
-                connection=self.connection(model_id),
-                path=self.settings.oci_enterprise_ai_llm_path,
-                timeout_seconds=timeout_seconds,
-                max_retries=max_retries,
-                model_id=model_id,
-            )
-            return _parse_response(
-                response,
-                response_path=self.settings.oci_enterprise_ai_llm_response_path,
-                response_format=response_format,
-                max_output_tokens=budget,
-                model_id=model_id,
-            )
+            started = time.perf_counter()
+            try:
+                response = self._post_json(
+                    payload,
+                    connection=self.connection(model_id),
+                    path=self.settings.oci_enterprise_ai_llm_path,
+                    timeout_seconds=timeout_seconds,
+                    max_retries=max_retries,
+                    model_id=model_id,
+                )
+                return _parse_response(
+                    response,
+                    response_path=self.settings.oci_enterprise_ai_llm_response_path,
+                    response_format=response_format,
+                    max_output_tokens=budget,
+                    model_id=model_id,
+                )
+            except EnterpriseAiDirectError as exc:
+                # 画面の「詳細」に出す値を足す（#1715）。
+                exc.model_id = exc.model_id or model_id
+                exc.elapsed_ms = int((time.perf_counter() - started) * 1000)
+                raw_max_tokens = payload.get("max_output_tokens")
+                if isinstance(raw_max_tokens, int):
+                    exc.max_output_tokens = raw_max_tokens
+                raise
 
         return self._with_output_limit_retry(
             call,
@@ -276,12 +318,19 @@ class OciEnterpriseAiDirectClient:
         except EnterpriseAiDirectError as exc:
             if exc.incomplete is None:
                 raise
-            raise EnterpriseAiDirectError(
+            retried = EnterpriseAiDirectError(
                 enterprise_ai_incomplete_message(exc.incomplete, model_id=model_id, retried=True),
                 code="incomplete",
                 model_id=model_id,
                 incomplete=exc.incomplete,
-            ) from exc
+                provider_message=exc.provider_message,
+                upstream_request_id=exc.upstream_request_id,
+                attempts=exc.attempts,
+                timeout_seconds=exc.timeout_seconds,
+            )
+            retried.elapsed_ms = exc.elapsed_ms
+            retried.max_output_tokens = exc.max_output_tokens
+            raise retried from exc
 
     def vision_model_id(self) -> str:
         return enterprise_ai_vision_model_id(self.settings) or self.model_id()
@@ -381,7 +430,13 @@ class OciEnterpriseAiDirectClient:
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
                     raise EnterpriseAiDirectError(
-                        last_error, code="timeout", retryable=True
+                        last_error,
+                        code="timeout",
+                        retryable=True,
+                        model_id=model_id,
+                        endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
+                        attempts=attempt + 1,
+                        timeout_seconds=timeout,
                     ) from exc
                 except httpx.HTTPError as exc:
                     last_error = str(exc)
@@ -389,7 +444,14 @@ class OciEnterpriseAiDirectClient:
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
                     raise EnterpriseAiDirectError(
-                        f"OCI Enterprise AI HTTP error: {exc}", code="connection", retryable=True
+                        f"OCI Enterprise AI HTTP error: {exc}",
+                        code="connection",
+                        retryable=True,
+                        model_id=model_id,
+                        endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
+                        provider_message=type(exc).__name__,
+                        attempts=attempt + 1,
+                        timeout_seconds=timeout,
                     ) from exc
                 if response.status_code in retryable and attempt < retry_count:
                     last_error = f"HTTP {response.status_code}: {response.text[:300]}"
@@ -407,6 +469,10 @@ class OciEnterpriseAiDirectClient:
                         http_failure=failure,
                         model_id=model_id or str(payload.get("model") or ""),
                         endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
+                        provider_message=enterprise_ai_provider_message(body),
+                        upstream_request_id=_upstream_request_id(response),
+                        attempts=attempt + 1,
+                        timeout_seconds=timeout,
                     )
                 try:
                     parsed = response.json()
@@ -415,15 +481,37 @@ class OciEnterpriseAiDirectClient:
                         "OCI Enterprise AI response が JSON ではありません。",
                         code="response_format",
                         retryable=True,
+                        upstream_request_id=_upstream_request_id(response),
+                        attempts=attempt + 1,
                     ) from exc
                 if not isinstance(parsed, Mapping):
                     raise EnterpriseAiDirectError(
                         "OCI Enterprise AI response が object ではありません。",
                         code="response_format",
                         retryable=True,
+                        upstream_request_id=_upstream_request_id(response),
+                        attempts=attempt + 1,
                     )
-                return parsed
+                # 応答の検査の失敗（未完了・形式の誤り）の「詳細」に request id を出す（#1715）。
+                return _ResponseBody(parsed, upstream_request_id=_upstream_request_id(response))
         raise EnterpriseAiDirectError(last_error or "OCI Enterprise AI call failed.")
+
+
+class _ResponseBody(dict[str, Any]):
+    """応答の本文（JSON object）と、HTTP の header の OCI の request id。"""
+
+    def __init__(self, body: Mapping[str, Any], *, upstream_request_id: str = "") -> None:
+        super().__init__(body)
+        self.upstream_request_id = upstream_request_id
+
+
+def _upstream_request_id(response: httpx.Response) -> str:
+    """OCI の request id（`opc-request-id`。無ければ一般の `x-request-id`）。"""
+    for name in ("opc-request-id", "x-request-id", "request-id"):
+        value = response.headers.get(name)
+        if value:
+            return str(value)[:200]
+    return ""
 
 
 def _build_payload(
@@ -603,18 +691,23 @@ def _parse_response(
     if response_format is None:
         return _parse_generated_text(response, response_path=response_path)
     _raise_for_response_error(response)
+    request_id = str(getattr(response, "upstream_request_id", "") or response.get("id") or "")[:200]
     # 未完了（出力の上限など）は、理由・上限・使った token を失敗の文に出す（#1719。応答の本文と
     # secret は出さない）。出力の上限が理由なら呼び出し側が上限を広げて 1 回だけ送り直す。
     incomplete = enterprise_ai_incomplete_from_response(
         response, max_output_tokens=max_output_tokens
     )
     if incomplete is not None:
-        raise EnterpriseAiDirectError(
+        error = EnterpriseAiDirectError(
             enterprise_ai_incomplete_message(incomplete, model_id=model_id),
             code="incomplete",
             model_id=model_id,
             incomplete=incomplete,
+            provider_message=f"status={incomplete.status}"
+            + (f", reason={incomplete.reason}" if incomplete.reason else ""),
+            upstream_request_id=request_id,
         )
+        raise error
 
     def check_refusal(value: object) -> None:
         if isinstance(value, Mapping):
@@ -650,7 +743,13 @@ def _parse_response(
     try:
         return validate_json_output(text(candidate), response_format)
     except ValueError as exc:
-        raise EnterpriseAiDirectError(str(exc), code="response_format", retryable=True) from exc
+        raise EnterpriseAiDirectError(
+            str(exc),
+            code="response_format",
+            retryable=True,
+            provider_message=str(exc)[:300],
+            upstream_request_id=request_id,
+        ) from exc
 
 
 def _parse_generated_text(response: Mapping[str, Any], *, response_path: str) -> str:

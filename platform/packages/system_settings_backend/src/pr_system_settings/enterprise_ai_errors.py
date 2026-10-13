@@ -15,10 +15,19 @@
 OCI の 404 は「モデルが無い」ではなく「認可されない」ことが多いので、403 と同じ `authorization` に
 分ける。OpenAI 互換の別の API（ターシャリ接続など）の 404 は Endpoint URL / API パスの誤りのことも
 あるので、案内に両方を書く。
+
+HTTP の失敗のほかに、応答が届かない・使えない失敗も同じ表で種類に分ける（#1715）:
+`timeout`（待ち時間の上限）・`connection`（接続できない）・`incomplete`（出力の上限などで応答が
+途中で終わった）・`response_format`（応答が指定の形式ではない）・`refusal`（モデルが応答を拒否した）。
+2026-10-13 の実測（#1715。AI要件確認の構造化出力）: `openai.gpt-oss-120b` は出力の上限 1200 で推論の
+token が上限を使い切り `status=incomplete`（`incomplete_details.reason=max_output_tokens`）、
+上限を上げても JSON が崩れて空白を上限まで出し続けることがある。`xai.grok-4.3` はときどき
+HTTP 500 `Internal server error`（`internal_error`）を返す。
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -32,6 +41,21 @@ EnterpriseAiFailureKind = Literal[
     "rate_limit",
     "unavailable",
     "request",
+]
+
+# HTTP の失敗以外の種類（#1715）。
+EnterpriseAiCallFailureKind = Literal[
+    "model_not_found",
+    "authentication",
+    "authorization",
+    "rate_limit",
+    "unavailable",
+    "request",
+    "timeout",
+    "connection",
+    "incomplete",
+    "response_format",
+    "refusal",
 ]
 
 # 再試行してよい status code（一時的な失敗）。これ以外の 4xx は再試行しても直らない。
@@ -49,6 +73,43 @@ ENTERPRISE_AI_FAILURE_ERROR_CODES: Final[dict[EnterpriseAiFailureKind, str]] = {
     "unavailable": "ENTERPRISE_AI_UNAVAILABLE",
     "request": "ENTERPRISE_AI_REQUEST_REJECTED",
 }
+
+# HTTP 以外の種類の error code（#1715。HTTP の種類は ENTERPRISE_AI_FAILURE_ERROR_CODES）。
+ENTERPRISE_AI_CALL_FAILURE_ERROR_CODES: Final[dict[EnterpriseAiCallFailureKind, str]] = {
+    "model_not_found": ENTERPRISE_AI_FAILURE_ERROR_CODES["model_not_found"],
+    "authentication": ENTERPRISE_AI_FAILURE_ERROR_CODES["authentication"],
+    "authorization": ENTERPRISE_AI_FAILURE_ERROR_CODES["authorization"],
+    "rate_limit": ENTERPRISE_AI_FAILURE_ERROR_CODES["rate_limit"],
+    "unavailable": ENTERPRISE_AI_FAILURE_ERROR_CODES["unavailable"],
+    "request": ENTERPRISE_AI_FAILURE_ERROR_CODES["request"],
+    "timeout": "ENTERPRISE_AI_TIMEOUT",
+    "connection": "ENTERPRISE_AI_CONNECTION_FAILED",
+    "incomplete": "ENTERPRISE_AI_OUTPUT_INCOMPLETE",
+    "response_format": "ENTERPRISE_AI_INVALID_RESPONSE",
+    "refusal": "ENTERPRISE_AI_REFUSED",
+}
+# 画面の「詳細」に出す種類の名前（#1715）。
+ENTERPRISE_AI_FAILURE_KIND_LABELS_JA: Final[dict[EnterpriseAiCallFailureKind, str]] = {
+    "model_not_found": "モデルが無い（設定の誤り）",
+    "authentication": "認証の失敗（設定の誤り）",
+    "authorization": "認可の失敗（設定の誤り）",
+    "rate_limit": "呼び出しの上限（429）",
+    "unavailable": "サービスの一時的な失敗（5xx）",
+    "request": "要求の誤り（4xx）",
+    "timeout": "タイムアウト",
+    "connection": "接続の失敗",
+    "incomplete": "応答が途中で終わった",
+    "response_format": "応答の形式の誤り",
+    "refusal": "応答の拒否",
+}
+
+# 応答の本文から外す秘密の値（API key・Bearer token など。#1715）。
+_SECRET_PATTERNS: Final = (
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b\s*[:=]\s*\S+"),
+)
+_PROVIDER_MESSAGE_MAX_LENGTH: Final = 300
 
 _MODEL_NOT_FOUND_RE: Final = re.compile(r"entity with key .+ not found", re.IGNORECASE)
 # 3 製品の失敗の文の書き方: NL2SQL / Agent `OCI Enterprise AI HTTP 404: …`、
@@ -165,6 +226,36 @@ def enterprise_ai_failure_actions(
         f"リクエストが受け付けられませんでした（HTTP {status}）。"
         "「詳細」の応答の理由（モデルが受け付けない設定など）を確かめてください。"
     ]
+
+
+def enterprise_ai_provider_message(body: str, *, limit: int = _PROVIDER_MESSAGE_MAX_LENGTH) -> str:
+    """失敗の応答の本文から、画面の「詳細」に出せる短い理由を取り出す（#1715）。
+
+    OpenAI 互換の `{"error": {"message": …, "code": …}}` は message と code だけを使う。秘密の値
+    （Bearer token・API key など）は伏せ、空白をまとめて `limit` 文字で切る。
+    """
+    text = (body or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        error = parsed.get("error", parsed)
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            code = str(error.get("code") or error.get("type") or "").strip()
+            if message or code:
+                text = f"{message} ({code})" if message and code else message or code
+        elif isinstance(error, str) and error.strip():
+            text = error.strip()
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("***", text)
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
 
 
 # --------------------------------------------------------------------------- 未完了の応答（#1719）

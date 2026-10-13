@@ -6,6 +6,7 @@ import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -327,6 +328,7 @@ async def http_exception_problem_handler(
 
     code: str | None = None
     field_errors: list[Mapping[str, str]] = []
+    error_details: Mapping[str, Any] | None = None
     if exc.status_code == 500:
         detail = "サーバー内部でエラーが発生しました。時間をおいて再試行してください。"
     elif isinstance(exc.detail, str) and exc.detail.strip():
@@ -355,7 +357,12 @@ async def http_exception_problem_handler(
             ),
             "リクエストの処理に失敗しました。入力内容を確認してください。",
         )
-        if code and code not in detail:
+        raw_error_details = exc.detail.get("error_details")
+        if isinstance(raw_error_details, Mapping) and raw_error_details:
+            # 画面の「詳細」に出す値（AI要件確認の LLM の失敗など。#1715）。code は problem の
+            # code と「詳細」に出すので、本文の先頭に付けない。
+            error_details = dict(raw_error_details)
+        elif code and code not in detail:
             detail = f"{code}: {detail}"
     else:
         detail = "リクエストの処理に失敗しました。入力内容を確認してください。"
@@ -366,6 +373,7 @@ async def http_exception_problem_handler(
         code=code,
         field_errors=field_errors,
         headers=exc.headers,
+        extra={"error_details": error_details} if error_details else None,
     )
 
 

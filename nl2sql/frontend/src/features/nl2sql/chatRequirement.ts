@@ -6,7 +6,7 @@
 // 送った質問と session の ID は作業状態に残し、再読込・画面の移動の後も同じ確認を続ける。
 //
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
-import type { QuerySession, QuerySessionCreateRequest } from "./ontology/types";
+import type { QuerySessionCreateRequest } from "./ontology/types";
 import type { Nl2SqlEngine } from "./types";
 
 /** チャットの 1 回の送信の内容。再送信は同じ内容（同じ job ID）で送り直す。 */
@@ -100,42 +100,3 @@ export function chatRequirementIdempotencyKey(clientJobId: string): string {
   return `nl2sql:chat-requirement:${clientJobId}`;
 }
 
-/**
- * session の次の扱い。
- *
- * - `direct`: 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない）。
- *   聞かずに反映して SQL を作る。
- * - `applied`: 反映済み（反映の後、ジョブの投入の前に画面を離れた）。そのまま SQL を作る。
- * - `ask`: 確認の質問がある・答えられない・最低の基準を満たさない（会話の中で聞く・知らせる）。
- * - `summary`: 全部に答えた。まとめ（再検査・SQL の骨組み）を確かめてから SQL を作る。
- * - `ended`: 中止・期限切れ・失敗で終わった。
- */
-export type ChatRequirementStep = "direct" | "applied" | "ask" | "summary" | "ended";
-
-export function chatRequirementStep(session: QuerySession): ChatRequirementStep {
-  if (session.status === "cancelled" || session.status === "error") return "ended";
-  if (session.requirement_applied_at) return "applied";
-  if (session.status === "done") return "ended";
-  const state = session.requirement_state;
-  if (!state) return "ended";
-  if (state.status === "unanswerable" || state.current_item || !state.can_apply) return "ask";
-  if (
-    state.status === "ready" &&
-    state.unresolved_items.length === 0 &&
-    state.answered_count === 0 &&
-    state.review_round === 0
-  ) {
-    return "direct";
-  }
-  return "summary";
-}
-
-/** 要件の検査を使えない設定（OCI Enterprise AI が無い）。このときは確認せずに SQL を作る。 */
-export function isRequirementCheckUnavailable(error: unknown): boolean {
-  return (
-    isRecord(error) &&
-    error.status === 503 &&
-    typeof error.message === "string" &&
-    error.message.includes("REQUIREMENT_AI_NOT_CONFIGURED")
-  );
-}
