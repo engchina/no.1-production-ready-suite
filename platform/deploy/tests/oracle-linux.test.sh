@@ -138,6 +138,7 @@ chmod -R a+rX "${app_root}"
   # shellcheck source=../suite-init.sh
   source "${repo}/platform/deploy/suite-init.sh"
   systemctl() { printf 'systemctl %s\n' "$*" >> "${task_dir}/systemctl.log"; }
+  # shellcheck disable=SC2034 # source した suite-init.sh の configure_nginx が読む。
   SUITE_PRODUCTS=(rag nl2sql agent)
   configure_tls >/dev/null 2>&1
   configure_nginx >/dev/null
