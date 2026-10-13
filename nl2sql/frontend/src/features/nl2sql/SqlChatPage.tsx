@@ -93,6 +93,9 @@ import {
 } from "./chatProgress";
 import type { JobCreateData, JobData, Nl2SqlEngine } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
+import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
+import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
+import { useSelectAiCredentialReadiness } from "./useSelectAiCredentialReadiness";
 
 interface Conversation {
   id: string;
@@ -319,6 +322,11 @@ export function SqlChatPage() {
     detail.data?.profile.default_engine,
   );
   const engineDescriptionId = useId();
+  // Select AI / Select AI Agent の生成は Select AI の Credential が前提（#1688）。無いと分かったら
+  // 入力欄の下に事前条件を示し、送信を止める（OCI Enterprise AI の生成は止めない）。
+  const selectAiCredential = useSelectAiCredentialReadiness();
+  const selectAiCredentialBlocked =
+    engineUsesSelectAiCredential(engine) && selectAiCredential.missing;
   const engineOption =
     CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
   const chatKey = [
@@ -426,7 +434,8 @@ export function SqlChatPage() {
       );
       await queryClient.invalidateQueries({ queryKey: chatKey });
     },
-    onError: () => {
+    onError: (error) => {
+      selectAiCredential.refreshAfterError(error);
       // 送った質問は残し、理由と「再送信」を出す（入力を失わない。#907）。
       setPendingSend((current) =>
         current
@@ -515,7 +524,8 @@ export function SqlChatPage() {
       (conversation.isPending || conversation.isError)) ||
     // 要件の確認の間は次の質問を送らない（確認に答えるか、中止してから送る。#1442）。
     Boolean(requirementCheck) ||
-    turns.length >= 50;
+    turns.length >= 50 ||
+    selectAiCredentialBlocked;
   function submit() {
     const question = draft.trim();
     if (!question || blocked || sendingRef.current) return;
@@ -831,6 +841,18 @@ export function SqlChatPage() {
                   }
                   footer={
                     <>
+                      {selectAiCredentialBlocked ? (
+                        <SelectAiCredentialPrecondition
+                          id="sql-chat-credential-precondition"
+                          testId="sql-chat-credential-precondition"
+                          operation={t("selectAiCredential.precondition.operation.generate")}
+          action={t("chat.send")}
+          credentialName={selectAiCredential.credentialName}
+                          canOpenSettings={selectAiCredential.canOpenSettings}
+                          rechecking={selectAiCredential.rechecking}
+                          onRecheck={() => void selectAiCredential.recheck()}
+                        />
+                      ) : null}
                       {stop.isError ? (
                         <ApiErrorBanner
                           error={stop.error}

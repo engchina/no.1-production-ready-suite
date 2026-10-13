@@ -341,7 +341,7 @@ def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_st
     assert failed.error_code == "SELECT_AI_CREDENTIAL_MISSING"
     assert "OCI_CRED" in failed.error_message_ja
     # Credential は運用設定の専用の画面で作る（#658）。作る場所を案内する（#1683）。
-    assert "運用設定 > Select AI Credential 管理" in failed.error_message_ja
+    assert "運用設定の「Select AI Credential」で作成してから" in failed.error_message_ja
     assert "ORA-" not in failed.error_message_ja
     retried = sync.retry(failed.job_id)
     assert retried.retry_of_job_id == failed.job_id
@@ -891,13 +891,18 @@ def test_profile_sync_router_returns_409_without_credential_and_202_with_it(
     sync, _service, adapter, _store = _credential_sync(monkeypatch, exists=False)
     monkeypatch.setattr(profile_sync_module, "profile_sync_service", sync)
     monkeypatch.setattr(nl2sql_router, "_assert_profile_access", lambda *_a, **_k: None)
+    # 状態の API は共通の確認（select_ai_readiness）で、service の adapter を読む（#1688）。
+    monkeypatch.setattr("app.features.nl2sql.select_ai_readiness.get_settings", _oracle_settings)
+    from app.features.nl2sql.service import nl2sql_service
+
+    monkeypatch.setattr(nl2sql_service, "_oracle_adapter", adapter)
     app = FastAPI()
     app.include_router(nl2sql_router.router, prefix="/api")
     app.dependency_overrides[nl2sql_router._require_persistence] = lambda: None  # noqa: SLF001
     body = {"confirmation": "ADMIN_EXECUTE", "rebuild_agent_assets": False}
 
     with TestClient(app) as client:
-        readiness = client.get("/api/nl2sql/oracle-sync-readiness")
+        readiness = client.get("/api/nl2sql/select-ai/credential-readiness")
         assert readiness.status_code == 200
         assert readiness.json()["data"] == {
             "credential_required": True,
@@ -912,7 +917,7 @@ def test_profile_sync_router_returns_409_without_credential_and_202_with_it(
         )
         assert missing.status_code == 409
         assert "SELECT_AI_CREDENTIAL_MISSING" in missing.text
-        assert "Select AI の Credential を先に作成してください" in missing.text
+        assert "運用設定の「Select AI Credential」で作成してから" in missing.text
         assert "ORA-" not in missing.text
 
         adapter.exists = True

@@ -1856,7 +1856,7 @@ test("Credential 不足からデータベース設定で作成し、履歴 job �
   const settingsLink = failedStatus.getByRole("link", { name: "Select AI Credential を開く" });
   await settingsLink.click();
   // Select AI Credential は運用設定の専用の画面（#658）。
-  await expect(page).toHaveURL(/\/settings\/select-ai-credential\?/);
+  await expect(page).toHaveURL(/\/settings\/select-ai-credential$/u);
 
   const card = page.getByTestId("select-ai-credential-card");
   await card.getByTestId("execution-confirmation-field").getByRole("textbox").fill(
@@ -3422,7 +3422,7 @@ test("DBMS_CLOUD_AI Profile の反映後に Agent アセットの再構築だけ
 // ---- 保存（Oracle 反映）の事前条件: Select AI の Credential（#1683） ----------------------------
 
 async function mockOracleSyncReadiness(page: Page, state: { exists: boolean | null }) {
-  await page.route("**/api/nl2sql/oracle-sync-readiness", (route) =>
+  await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
     fulfillJson(route, {
       credential_required: true,
       credential_name: "OCI_CRED",
@@ -3452,12 +3452,9 @@ test("Select AI Credential が無いと保存の前に事前条件を示して�
   await expect(precondition).toBeVisible();
   await expect(precondition).toContainText("Select AI Credential が作成されていません");
   await expect(precondition).toContainText("Select AI Credential（OCI_CRED）が必要です");
-  await expect(precondition).toContainText("運用設定 > Select AI Credential 管理");
+  await expect(precondition).toContainText("運用設定の「Select AI Credential」で作成してから、再試行してください。");
   const settingsLink = precondition.getByRole("link", { name: "Select AI Credential を開く" });
-  await expect(settingsLink).toHaveAttribute(
-    "href",
-    /\/settings\/select-ai-credential\?returnTo=%2Fprofiles%3Fprofile%3Ddefault$/u
-  );
+  await expect(settingsLink).toHaveAttribute("href", /\/settings\/select-ai-credential$/u);
 
   // 事前条件の案内は「保存」の操作の直前（確認語の欄の上）に出し、保存は確認語を入れても押せない。
   const confirmationField = page.getByTestId("execution-confirmation-field");
@@ -3482,9 +3479,9 @@ test("Select AI Credential が無いと保存の前に事前条件を示して�
   expect(syncRequests).toBe(0);
   expect(profileWrites).toBe(0);
 
-  // 別の画面で Credential を作った後に「再確認」すると、案内が消えて保存できる。
+  // 別の画面で Credential を作った後に「再試行」すると、案内が消えて保存できる。
   readiness.exists = true;
-  await precondition.getByRole("button", { name: "Credential を再確認" }).click();
+  await precondition.getByRole("button", { name: "再試行" }).click();
   await expect(precondition).toHaveCount(0);
   await expect(saveButton).toBeEnabled();
   await expect(saveButton).not.toHaveAttribute("aria-describedby", /.+/u);
@@ -3534,7 +3531,7 @@ test("Credential の画面の権限が無い利用者には、リンクの代わ
   await page.goto("/profiles?profile=default");
 
   const precondition = page.getByTestId("profile-save-credential-precondition");
-  await expect(precondition).toContainText("管理者に作成を依頼してください");
+  await expect(precondition).toContainText("システム管理者に連絡して、Select AI Credential の作成を依頼してください。");
   await expect(precondition.getByRole("link")).toHaveCount(0);
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
@@ -3550,7 +3547,7 @@ test("状態を確かめられないときは保存を止めず、反映の開�
     readiness.exists = false;
     const message =
       'SELECT_AI_CREDENTIAL_MISSING: Select AI Credential "ADMIN"."OCI_CRED" が存在しません。' +
-      "Select AI の Credential を先に作成してください（運用設定 > Select AI Credential 管理）。";
+      "Select AI・Select AI Agent の処理には Select AI Credential が必要です。運用設定の「Select AI Credential」で作成してから、再試行してください。";
     await route.fulfill({
       status: 409,
       contentType: "application/json",
@@ -3585,7 +3582,7 @@ test("状態を確かめられないときは保存を止めず、反映の開�
   const progress = page.getByTestId("profile-save-progress");
   await expect(progress).toContainText("Select AI Credential が無いため Oracle 反映を開始できませんでした");
   const link = progress.getByRole("link", { name: "Select AI Credential を開く" });
-  await expect(link).toHaveAttribute("href", /\/settings\/select-ai-credential\?returnTo=/u);
+  await expect(link).toHaveAttribute("href", /\/settings\/select-ai-credential$/u);
   // 反映を始められなかったので「反映はバックグラウンドで続きます」の Toast は出さない。
   await expect(page.getByText("Oracle Profile の反映はバックグラウンドで続きます。")).toHaveCount(0);
   // 409 の後は事前条件を取り直し、保存の前に案内を出す。

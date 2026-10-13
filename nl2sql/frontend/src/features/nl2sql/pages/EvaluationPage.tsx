@@ -41,6 +41,10 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
+import { SelectAiCredentialPrecondition } from "../components/SelectAiCredentialPrecondition";
+import { enginesUseSelectAiCredential } from "../selectAiCredentialReadiness";
+import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
+
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
@@ -81,6 +85,9 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
+
+/** 「評価を開始」の aria-describedby が指す、Select AI の Credential の事前条件（#1688）。 */
+const EVALUATION_CREDENTIAL_PRECONDITION_ID = "quality-evaluation-credential-precondition";
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
 /**
@@ -228,6 +235,7 @@ export function EvaluationPage() {
     },
     onError: (cause) => {
       setStartError(qualityEvaluationStartErrorMessage(cause));
+      selectAiCredential.refreshAfterError(cause);
     },
   });
 
@@ -309,8 +317,14 @@ export function EvaluationPage() {
     return Object.keys(next).length === 0;
   };
 
+  // Select AI / Select AI Agent の評価は Select AI の Credential が前提（#1688）。選んだ方式に含まれ、
+  // Credential が無いと分かったら「評価を開始」の直前に事前条件を示し、開始を止める。
+  const selectAiCredential = useSelectAiCredentialReadiness();
+  const selectAiCredentialBlocked =
+    enginesUseSelectAiCredential(engines) && selectAiCredential.missing;
+
   const startEvaluation = () => {
-    if (conditionsLocked) return;
+    if (conditionsLocked || selectAiCredentialBlocked) return;
     setDownloadError(null);
     setStartError("");
     if (validate()) startMutation.mutate();
@@ -655,6 +669,19 @@ export function EvaluationPage() {
               <div data-testid="quality-evaluation-judge-note">
                 <Banner severity="info">{t("qualityEvaluation.judge.note")}</Banner>
               </div>
+              {/* Select AI の Credential の事前条件（#1688）。開始の操作の直前に全幅で出す。 */}
+              {selectAiCredentialBlocked ? (
+                <SelectAiCredentialPrecondition
+                  id={EVALUATION_CREDENTIAL_PRECONDITION_ID}
+                  testId="quality-evaluation-credential-precondition"
+                  operation={t("selectAiCredential.precondition.operation.evaluation")}
+          action={t("selectAiCredential.precondition.action.evaluationStart")}
+          credentialName={selectAiCredential.credentialName}
+                  canOpenSettings={selectAiCredential.canOpenSettings}
+                  rechecking={selectAiCredential.rechecking}
+                  onRecheck={() => void selectAiCredential.recheck()}
+                />
+              ) : null}
               <div
                 className="grid min-w-0 justify-items-end gap-2 border-t border-border pt-4"
                 data-testid="quality-evaluation-action-footer"
@@ -669,8 +696,13 @@ export function EvaluationPage() {
                     startMutation.isPending ||
                     capabilitiesRefreshing ||
                     !capabilities?.judge.available ||
-                    selectedUnavailable
-                  } icon={Play}>
+                    selectedUnavailable ||
+                    selectAiCredentialBlocked
+                  }
+                  aria-describedby={
+                    selectAiCredentialBlocked ? EVALUATION_CREDENTIAL_PRECONDITION_ID : undefined
+                  }
+                  icon={Play}>
                   {t("qualityEvaluation.action.start")}
                 </Button>
                 {startMutation.isPending ? (

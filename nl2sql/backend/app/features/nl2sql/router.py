@@ -137,7 +137,6 @@ from .models import (
     ProfileSummaryPage,
     ProfileSyncJobData,
     ProfileSyncJobRequest,
-    ProfileSyncReadinessData,
     ProfileUpsertRequest,
     ProfileUsageContext,
     QueryResults,
@@ -151,6 +150,7 @@ from .models import (
     SampleDataMutationRequest,
     SampleDataset,
     SelectAiAgentAssetsData,
+    SelectAiCredentialReadinessData,
     SelectAiDbProfileDetailData,
     SelectAiDbProfileDropRequest,
     SelectAiDbProfileMutationData,
@@ -199,6 +199,12 @@ from .quality_evaluation_service import (
     QualityEvaluationJobStateError,
     QualityEvaluationValidationError,
     quality_evaluation_service,
+)
+from .select_ai_readiness import (
+    assert_select_ai_credential_ready,
+    select_ai_credential_missing_detail,
+    select_ai_credential_readiness,
+    uses_select_ai_credential,
 )
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
@@ -586,6 +592,9 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="他の利用者の会話は継続できません。") from exc
+    except SelectAiCredentialMissingError as exc:
+        # Select AI / Select AI Agent の生成は Credential が前提（#1688）。
+        raise _select_ai_credential_missing_exception(exc) from exc
     except JobIdConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1241,31 +1250,32 @@ def upsert_profile_select_ai_profile(
 
 
 def _select_ai_credential_missing_exception(exc: SelectAiCredentialMissingError) -> HTTPException:
-    """Oracle 反映の事前条件（Select AI の Credential）が足りないときの 409（#1683）。"""
-    from .profile_sync import select_ai_credential_missing_message
+    """Select AI の Credential が足りないときの 409（#1683 / #1688）。"""
+    return HTTPException(status_code=409, detail=select_ai_credential_missing_detail(exc))
 
-    return HTTPException(
-        status_code=409,
-        detail={
-            "code": exc.code,
-            "message_ja": select_ai_credential_missing_message(exc),
-        },
-    )
+
+def _assert_select_ai_credential_ready() -> None:
+    """Oracle に触る前に Select AI の Credential を確かめ、無ければ 409 で止める（#1688）。"""
+    try:
+        assert_select_ai_credential_ready(nl2sql_service._oracle_adapter)  # noqa: SLF001
+    except SelectAiCredentialMissingError as exc:
+        raise _select_ai_credential_missing_exception(exc) from exc
 
 
 @router.get(
-    "/oracle-sync-readiness",
-    response_model=ApiResponse[ProfileSyncReadinessData],
+    "/select-ai/credential-readiness",
+    response_model=ApiResponse[SelectAiCredentialReadinessData],
 )
-def get_profile_oracle_sync_readiness() -> ApiResponse[ProfileSyncReadinessData]:
-    """業務 Profile の保存（Oracle 反映）の事前条件を返す。
+def get_select_ai_credential_readiness() -> ApiResponse[SelectAiCredentialReadinessData]:
+    """Select AI の Credential が作成済みかを返す（#1683 / #1688）。
 
-    運用設定の Select AI Credential の画面の権限が無い利用者（業務プロファイルの管理者）でも、
-    保存の前に Credential が作成済みかを知れるようにする（#1683）。秘密は返さない。
+    業務プロファイルの保存（Oracle 反映）・SQL 生成とチャットの Select AI / Select AI Agent・
+    合成データ・SQL 生成評価の画面が、操作の前に事前条件を示すのに使う。運用設定の
+    Select AI Credential 管理の権限が無い利用者でも読める。秘密は返さない。
     """
-    from .profile_sync import profile_sync_service
-
-    return ApiResponse(data=profile_sync_service.readiness())
+    return ApiResponse(
+        data=select_ai_credential_readiness(nl2sql_service._oracle_adapter)  # noqa: SLF001
+    )
 
 
 @router.post(
@@ -1382,6 +1392,7 @@ def refresh_select_ai_profile(
 ) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI profile を作成/更新する adapter boundary。"""
     _assert_profile_access(request, profile_id, default_profile=True)
+    _assert_select_ai_credential_ready()
     try:
         return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
     except KeyError as exc:
@@ -1397,6 +1408,7 @@ def refresh_select_ai_agent_assets(
 ) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI Agent assets を作成/更新する adapter boundary。"""
     _assert_profile_access(request, profile_id, default_profile=True)
+    _assert_select_ai_credential_ready()
     try:
         return ApiResponse(data=nl2sql_service.refresh_select_ai_agent_assets(profile_id))
     except KeyError as exc:
@@ -1607,6 +1619,7 @@ def run_select_ai_agent_team(
     req: AgentTeamRunRequest,
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent team を実行する。"""
+    _assert_select_ai_credential_ready()
     try:
         return ApiResponse(data=nl2sql_service.run_select_ai_agent_team(req))
     except OracleAdapterError as exc:
@@ -1618,6 +1631,7 @@ def run_select_ai_agent_tool(
     req: AgentToolRunRequest,
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent tool を明示名で実行する。"""
+    _assert_select_ai_credential_ready()
     try:
         return ApiResponse(data=nl2sql_service.run_select_ai_agent_tool(req))
     except OracleAdapterError as exc:
@@ -2278,6 +2292,10 @@ async def create_quality_evaluation(
     content = await file.read(maximum + 1)
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = str(getattr(principal, "user_uuid", ""))
+    if uses_select_ai_credential(engines):
+        # Select AI / Select AI Agent の評価は Credential が前提。
+        # 評価の job を作る前に止める（#1688）。
+        await run_sync_io(_assert_select_ai_credential_ready)
     try:
         data = await run_sync_io(
             quality_evaluation_service.submit,

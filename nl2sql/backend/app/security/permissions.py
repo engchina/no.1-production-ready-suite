@@ -688,6 +688,9 @@ _ONTOLOGY_READ = _allowed("menu.ontology_build", PROFILE_READ_PERMISSION, QUERY_
 _ONTOLOGY_WRITE = _allowed("menu.ontology_build", PROFILE_MANAGE_PERMISSION)
 _ORACLE_SYNC = _allowed(PROFILE_MANAGE_PERMISSION, SELECT_AI_ASSETS_REFRESH_PERMISSION)
 _SELECT_AI_FEEDBACK = _allowed(FEEDBACK_MANAGE_PERMISSION, SELECT_AI_ASSETS_MANAGE_PERMISSION)
+_SELECT_AI_CREDENTIAL_READINESS = (
+    _ORACLE_SYNC | _QUERY_GENERATE | _SYNTHETIC_DATA | _EVALUATION | _SELECT_AI_ASSETS_MANAGE
+)
 
 # (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
 # 前方一致では割り当てない。登録のない route は `UNCLASSIFIED_PERMISSION` になり、
@@ -995,8 +998,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/ontology/revisions/{revision_id}/drafts"): _ONTOLOGY_BUILD,
     ("POST", "/nl2sql/ontology/revisions/{revision_id}/publish"): _ONTOLOGY_BUILD,
     # ---- Oracle への同期 ----
-    # 保存（Oracle 反映）の事前条件（Select AI の Credential が作成済みか。#1683）。
-    ("GET", "/nl2sql/oracle-sync-readiness"): _ORACLE_SYNC,
+    # Select AI の Credential が作成済みか（#1683 / #1688）。業務プロファイルの保存（Oracle 反映）・
+    # SQL 生成とチャット・合成データ・SQL 生成評価・Select AI の資産の画面が、操作の前に読む。
+    ("GET", "/nl2sql/select-ai/credential-readiness"): _SELECT_AI_CREDENTIAL_READINESS,
     ("GET", "/nl2sql/oracle-sync-jobs/{job_id}"): _ORACLE_SYNC,
     ("POST", "/nl2sql/oracle-sync-jobs/{job_id}/retry"): _ORACLE_SYNC,
     # ---- Select AI / Select AI Agent の資産 ----

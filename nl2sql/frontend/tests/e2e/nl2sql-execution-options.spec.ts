@@ -744,3 +744,53 @@ test("用語置換が起きないときは書き換えカードを表示せず�
   await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
   await expect(page.getByText("変更前の質問")).toHaveCount(0);
 });
+
+test("Select AI Credential が無いと Select AI の生成の前に事前条件を示して実行を止め、Enterprise AI は止めない (#1688)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const api = await mockNl2SqlWorkbenchApi(page);
+  const readiness = { exists: false };
+  await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
+    fulfillJson(route, {
+      credential_required: true,
+      credential_name: "OCI_CRED",
+      credential_exists: readiness.exists,
+    })
+  );
+  await page.goto("/query");
+  await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
+  await page.getByRole("button", { name: /^Select AI(?! Agent)/ }).click();
+
+  const precondition = page.getByTestId("nl2sql-credential-precondition");
+  const run = page.getByRole("button", { name: "SQL を生成して実行" });
+  await expect(precondition).toContainText("Select AI Credential が作成されていません");
+  await expect(precondition).toContainText(
+    "Select AI・Select AI Agent での SQL の生成には Select AI Credential（OCI_CRED）が必要です。作成するまでSQL を生成して実行できません。"
+  );
+  await expect(precondition.getByRole("link", { name: "Select AI Credential を開く" })).toHaveAttribute(
+    "href",
+    /\/settings\/select-ai-credential$/u
+  );
+  await expect(run).toBeDisabled();
+  await expect(run).toHaveAttribute("aria-describedby", "nl2sql-credential-precondition");
+  // 案内は実行の操作の行の直前に、同じ幅で出す。
+  const [noticeBox, runBox] = await Promise.all([precondition.boundingBox(), run.boundingBox()]);
+  expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(runBox!.y);
+  await expectNoHorizontalOverflow(page);
+  await precondition.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("query-credential-missing.png") });
+
+  // Select AI Agent も止める。OCI Enterprise AI の直接の生成は Credential を使わないので止めない。
+  await page.getByRole("button", { name: /^Select AI Agent/ }).click();
+  await expect(precondition).toBeVisible();
+  await page.getByRole("button", { name: /^Enterprise AI Direct/ }).click();
+  await expect(precondition).toHaveCount(0);
+  await expect(run).toBeEnabled();
+
+  // Credential を作った後に「再試行」すると、Select AI でも実行できる。
+  await page.getByRole("button", { name: /^Select AI(?! Agent)/ }).click();
+  readiness.exists = true;
+  await precondition.getByRole("button", { name: "再試行" }).click();
+  await expect(precondition).toHaveCount(0);
+  await run.click();
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.jobPayload).toMatchObject({ engine: "select_ai" });
+});

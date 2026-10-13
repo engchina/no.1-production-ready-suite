@@ -1342,3 +1342,50 @@ test("job の削除・中止の失敗は backend の理由を起点の近くに�
   await expect(page.getByText("他のユーザーのSQL生成評価 job を操作する権限がありません。")).toHaveCount(0);
   await progress.screenshot({ path: testInfo.outputPath("evaluation-cancel-failure.png") });
 });
+
+test("Select AI Credential が無いと Select AI の評価の開始を止めて事前条件を示し、Enterprise AI だけなら開始できる (#1688)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = await mockQualityApi(page);
+  const readiness = { exists: false };
+  await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
+    envelope(route, {
+      credential_required: true,
+      credential_name: "OCI_CRED",
+      credential_exists: readiness.exists,
+    })
+  );
+  await page.goto("/evaluation");
+  await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [
+    {
+      name: "quality-cases.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock xlsx",
+    },
+  ]);
+  const precondition = page.getByTestId("quality-evaluation-credential-precondition");
+  const start = page.getByRole("button", { name: "評価を開始" });
+  // Select AI を選ぶまでは出さない（選んだ方式が Credential を使うときだけ）。
+  await expect(precondition).toHaveCount(0);
+  await page.getByRole("checkbox").nth(0).check();
+  await expect(precondition).toContainText("Select AI Credential が作成されていません");
+  await expect(precondition).toContainText("作成するまで評価を開始できません。");
+  await expect(start).toBeDisabled();
+  await expect(start).toHaveAttribute("aria-describedby", "quality-evaluation-credential-precondition");
+  // 開始の操作の行（区切り線の上）の直前に出す。
+  const noticeBox = await visibleBox(precondition);
+  const footerBox = await visibleBox(page.getByTestId("quality-evaluation-action-footer"));
+  expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(footerBox.y);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+  ).toBe(true);
+  await precondition.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("evaluation-credential-missing.png") });
+
+  // Enterprise AI だけなら Credential を使わないので開始できる。
+  await page.getByRole("checkbox").nth(0).uncheck();
+  await page.getByRole("checkbox").nth(2).check();
+  await expect(precondition).toHaveCount(0);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect.poll(() => state.submittedBody()).toContain("enterprise_ai_direct");
+  expect(state.submittedBody()).not.toContain('name="engines"\r\n\r\nselect_ai\r\n');
+});

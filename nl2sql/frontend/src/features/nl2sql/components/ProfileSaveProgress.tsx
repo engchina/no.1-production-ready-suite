@@ -1,4 +1,4 @@
-import { Bot, KeyRound, RefreshCw } from "lucide-react";
+import { ArrowRight, Bot, FileKey, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import {
@@ -9,6 +9,7 @@ import {
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 
 import { engineLabel } from "../labels";
 import {
@@ -17,10 +18,7 @@ import {
   type ProfileSaveProgressStepId,
   type ProfileSaveProgressStepStatus,
 } from "../profileSyncPresentation";
-import {
-  SELECT_AI_CREDENTIAL_MISSING_CODE,
-  selectAiCredentialSettingsHref,
-} from "../profileSyncReadiness";
+import { SELECT_AI_CREDENTIAL_MISSING_CODE } from "../selectAiCredentialReadiness";
 import type { AssetRefreshData, ProfileSyncJobData } from "../types";
 import { WorkflowProgressStrip, type WorkflowProgressTone } from "./WorkflowProgressStrip";
 
@@ -87,11 +85,6 @@ function failureMessage(
   return detail ? `${summary} ${detail}` : summary;
 }
 
-function credentialSettingsHref(job: ProfileSyncJobData | null) {
-  // Select AI Credential は運用設定の専用の画面（#658）。
-  return selectAiCredentialSettingsHref(job?.profile_id ?? "", job?.job_id ?? "");
-}
-
 function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
   return (
     <section
@@ -130,7 +123,6 @@ export function ProfileSaveProgress({
   job,
   submissionError,
   submissionErrorCode = "",
-  profileId = "",
   rebuildAgentAssets,
   retrying,
   onRetry,
@@ -139,8 +131,6 @@ export function ProfileSaveProgress({
   submissionError: string;
   /** 反映の開始の失敗の code（409 `SELECT_AI_CREDENTIAL_MISSING` など）。 */
   submissionErrorCode?: string;
-  /** ジョブが無い（開始の前に止まった）ときの、設定の画面からの戻り先の業務プロファイル。 */
-  profileId?: string;
   rebuildAgentAssets: boolean;
   retrying: boolean;
   onRetry: () => void;
@@ -209,15 +199,17 @@ export function ProfileSaveProgress({
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 {credentialMissing ? (
                   <ButtonLink
-                    to={job ? credentialSettingsHref(job) : selectAiCredentialSettingsHref(profileId)}
+                    // 前提の案内（PreconditionBanner）と同じ導線: 運用設定の「Select AI Credential」（#1688）。
+                    to={APP_ROUTES.settingsSelectAiCredential}
                     linkComponent={Link}
                     variant="secondary"
                     size="sm"
-                    icon={KeyRound}
+                    icon={FileKey}
+                    trailingIcon={ArrowRight}
                     className="w-full sm:w-auto"
                     testId="profile-save-progress-open-credential"
                   >
-                    {t("profiles.oracle.sync.openSelectAiCredential")}
+                    {t("selectAiCredential.precondition.open")}
                   </ButtonLink>
                 ) : null}
                 <Button

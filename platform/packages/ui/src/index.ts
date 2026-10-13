@@ -354,6 +354,11 @@ export {
   type SaveErrorBannerProps,
 } from "./components/feedback/save-error-banner";
 export {
+  PreconditionBanner,
+  type PreconditionBannerLink,
+  type PreconditionBannerProps,
+} from "./components/feedback/precondition-banner";
+export {
   FeedbackControls,
   isSameFeedback,
   type FeedbackControlsLabels,
