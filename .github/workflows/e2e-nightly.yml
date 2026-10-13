@@ -20,7 +20,7 @@ permissions:
 jobs:
   e2e:
     name: ${{ matrix.product }} / E2E nightly (${{ matrix.shard }}/${{ matrix.total }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 2 worker の実測（2026-10-12 の main。実行範囲の記録を含む）: RAG 1 shard 17〜18.5 分、NL2SQL 1 shard 11〜17.5 分、
     # Agent 1 shard 12.5 分（2 shard。#1525）。1 worker・Agent 1 shard の頃は Agent が約 40 分かかり、40 分の上限で
     # 止まった（#1599）。上限は製品ごとに実測の倍程度にする（matrix の timeout）。shard の数を変えたら、
