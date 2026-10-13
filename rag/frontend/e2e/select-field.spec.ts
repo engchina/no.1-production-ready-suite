@@ -237,7 +237,7 @@ test("overflow: hidden の親の中でも一覧が切れず、選択肢を押せ
   await expect(region).toContainText("ap-osaka-1");
 });
 
-test("画面の下端では一覧を上に開き、画面の外にはみ出さない", async ({ page }) => {
+test("画面の下端では一覧を上に開き、画面の外にはみ出さない", { tag: "@responsive" }, async ({ page }) => {
   await page.goto("/evaluation");
   const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
   await expect(rankingMetric).toBeVisible();
@@ -263,7 +263,7 @@ test("画面の下端では一覧を上に開き、画面の外にはみ出さ�
   await expect(rankingMetric).toContainText("Faithfulness（根拠への忠実性）");
 });
 
-test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", async ({ page }) => {
+test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", { tag: "@responsive" }, async ({ page }) => {
   await page.goto("/evaluation");
   const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
   await rankingMetric.focus();
@@ -292,7 +292,7 @@ test("7 件以上の一覧でも、キーボードで強調した選択肢を表
   await expect(rankingMetric).toContainText("引用の追跡可能性");
 });
 
-test("文字の入力で選択肢に飛ぶ（typeahead）", async ({ page }) => {
+test("文字の入力で選択肢に飛ぶ（typeahead）", { tag: "@responsive" }, async ({ page }) => {
   // 評価の指標の表示名は日本語になった（#591）ため、英字の選択肢を持つリージョンで確かめる。
   await page.goto("/settings/oci");
   const region = page.getByRole("combobox", { name: "リージョン", exact: true });

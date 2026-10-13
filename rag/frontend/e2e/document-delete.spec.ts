@@ -136,7 +136,7 @@ test("行のメニューからの削除は確認ダイアログを通り、キ�
   expect(deleteCalls).toBe(1);
 });
 
-test("選択したドキュメントを一括削除できる", async ({ page }) => {
+test("選択したドキュメントを一括削除できる", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   const documents: DocumentSummary[] = [
     documentSummary("doc-1", "policy.txt", "UPLOADED"),

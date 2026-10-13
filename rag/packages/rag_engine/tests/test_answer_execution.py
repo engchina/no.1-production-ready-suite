@@ -2,16 +2,22 @@
 
 import re
 import unittest
-from grounded_stub import echo_model
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from unittest.mock import patch
 
+from grounded_stub import echo_model
+from test_answer_generation import (
+    _answer_context,
+    _chunk_run_stub,
+    _crag_grade,
+    _record,
+    _rerank_ready_settings,
+    heading,
+)
+
 import rag_engine.generation.answering as generation
 from rag_engine.config import get_settings
-from test_answer_generation import (
-    _answer_context, _chunk_run_stub, _crag_grade, _record, _rerank_ready_settings, heading,
-)
 
 
 class AnswerExecutionTests(unittest.TestCase):
@@ -44,13 +50,21 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertEqual(offsets, sorted(offsets))
 
     def test_boundaries_pair_nested_steps_and_preserve_parent_details(self):
-        display = generation.format_question_display("質問", [
-            "回答生成フロー 開始", "  フローの設定",
-            "文書検索（1回目） 開始", "  検索条件",
-            "Rerank 開始", "  対象: 3 件", "Rerank 終了",
-            "  回答に渡す根拠: 1 件", "文書検索（1回目） 終了 @1.2s/0",
-            "回答生成フロー 終了 @25.6s/3",
-        ])
+        display = generation.format_question_display(
+            "質問",
+            [
+                "回答生成フロー 開始",
+                "  フローの設定",
+                "文書検索（1回目） 開始",
+                "  検索条件",
+                "Rerank 開始",
+                "  対象: 3 件",
+                "Rerank 終了",
+                "  回答に渡す根拠: 1 件",
+                "文書検索（1回目） 終了 @1.2s/0",
+                "回答生成フロー 終了 @25.6s/3",
+            ],
+        )
         self.assertNotIn("今回の処理を実行順に表示します。", display)
         # 見出しは工程ごとに1回、番号付きの節と字下げで階層を示す。正常に終わった工程に終了行は付けない。
         self.assertIn("\n1. 回答生成フロー ［LLM 3 回 / 25.6 秒］\n   フローの設定\n", display)
@@ -67,10 +81,14 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertEqual(generation.extract_original_question(display), "質問")
 
     def test_boundaries_keep_error_status_and_do_not_parse_detail_text(self):
-        display = generation.format_question_display("質問", [
-            "質問拡張戦略 開始", "  検索文: 手続き 開始",
-            "質問拡張戦略 終了（エラーで中断）",
-        ])
+        display = generation.format_question_display(
+            "質問",
+            [
+                "質問拡張戦略 開始",
+                "  検索文: 手続き 開始",
+                "質問拡張戦略 終了（エラーで中断）",
+            ],
+        )
         self.assertRegex(display, heading("質問拡張戦略"))
         self.assertIn("\n   状態: エラーで中断", display)
         self.assertIn("検索文: 手続き 開始", display)  # 詳細文は工程として解釈しない
@@ -81,17 +99,22 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertIn("\n1. 検索\n", empty)
         interrupted = generation.format_question_display("質問", ["検索 開始", "  結果: 1 件"])
         self.assertIn("状態: 中断", interrupted)
-        faq = generation.format_question_display("質問", [
-            "Approved FAQ候補の確認 開始", "  候補: 1 件",
-            "Approved FAQ候補の確認 終了", "候補の選択待ちです。",
-        ])
+        faq = generation.format_question_display(
+            "質問",
+            [
+                "Approved FAQ候補の確認 開始",
+                "  候補: 1 件",
+                "Approved FAQ候補の確認 終了",
+                "候補の選択待ちです。",
+            ],
+        )
         self.assertRegex(faq, heading("Approved FAQ候補の確認"))
         self.assertTrue(faq.endswith("候補の選択待ちです。"))
 
     def test_llm_calls_are_counted_per_step_and_reset_per_answer(self):
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies, llm_call_count, parse_text_response
-        deps = AnswerDependencies(search=None, check_ready=None, parse_text=lambda *a, **k: "ok",
-                                  parse_images=None, rerank=None)
+
+        deps = AnswerDependencies(search=None, check_ready=None, parse_text=lambda *a, **k: "ok", parse_images=None, rerank=None)
         lines = []
         token = generation._execution_lines.set(lines)
         try:
@@ -111,25 +134,40 @@ class AnswerExecutionTests(unittest.TestCase):
     def test_all_strategy_and_flow_names_match_options(self):
         for strategy, label in generation.QUERY_STRATEGIES:
             for flow, flow_label in generation.ANSWER_FLOWS:
-                with self.subTest(strategy=strategy, flow=flow), patch.object(
-                    generation, "build_query_expansion",
-                    return_value=generation.QueryExpansionResult(
-                        original_question="質問", selected_strategy=strategy,
-                        effective_strategy=generation.HYDE_STRATEGY if strategy == generation.AUTO_ROUTING_STRATEGY else strategy,
-                        generated_queries=("追加の検索文",),
+                with (
+                    self.subTest(strategy=strategy, flow=flow),
+                    patch.object(
+                        generation,
+                        "build_query_expansion",
+                        return_value=generation.QueryExpansionResult(
+                            original_question="質問",
+                            selected_strategy=strategy,
+                            effective_strategy=generation.HYDE_STRATEGY if strategy == generation.AUTO_ROUTING_STRATEGY else strategy,
+                            generated_queries=("追加の検索文",),
+                        ),
                     ),
-                ), patch.object(generation, "_grade_crag_retrieval", return_value=generation.CragRetrievalAttempt(
-                    attempt=1, query="質問", retrieval_queries=("質問",), sufficient=True,
-                )):
+                    patch.object(
+                        generation,
+                        "_grade_crag_retrieval",
+                        return_value=generation.CragRetrievalAttempt(
+                            attempt=1,
+                            query="質問",
+                            retrieval_queries=("質問",),
+                            sufficient=True,
+                        ),
+                    ),
+                ):
                     result = self.run_answer(query_strategy=label, answer_flow=flow_label)
                 self.assertIn(f"設定: {label}", result.question_display)
                 effective = generation.HYDE_LABEL if strategy == generation.AUTO_ROUTING_STRATEGY else label
                 self.assertIn(f"結果: {effective}", result.question_display)
                 self.assertIn(f"設定: {flow_label}", result.question_display)
-                self.assert_order(result.question_display, heading("質問拡張戦略"), heading("回答生成フロー"),
-                                  heading("回答文の生成と根拠確認（1回目）"))
-                self.assertEqual(generation.answer_result_payload(result, answer_id="a1", run_id="abcdef")["question_display"],
-                                 result.question_display)
+                self.assert_order(
+                    result.question_display, heading("質問拡張戦略"), heading("回答生成フロー"), heading("回答文の生成と根拠確認（1回目）")
+                )
+                self.assertEqual(
+                    generation.answer_result_payload(result, answer_id="a1", run_id="abcdef")["question_display"], result.question_display
+                )
 
     def test_mayor_intent_is_combined_and_auxiliary_query_is_visible(self):
         result = self.run_answer("倉庫を移転したので、拠点名を変更する方法を教えてほしい")
@@ -252,13 +290,11 @@ class AnswerExecutionTests(unittest.TestCase):
         self.parse.assert_not_called()
 
     def test_adb_preflight_failure_does_not_run_expansion(self):
-        with patch.object(generation, "check_adb_hybrid_search_ready",
-                          side_effect=generation.AdbHybridSearchUnavailable("not ready")):
+        with patch.object(generation, "check_adb_hybrid_search_ready", side_effect=generation.AdbHybridSearchUnavailable("not ready")):
             result = self.run_answer()
         self.assert_order(result.question_display, heading("検索の準備確認"), "状態: 中止")
         self.assertNotRegex(result.question_display, heading("質問拡張戦略"))
         self.parse.assert_not_called()
-
 
     def test_rerank_failure_reports_fallback_without_reordering(self):
         lines = []
@@ -276,8 +312,15 @@ class AnswerExecutionTests(unittest.TestCase):
         self.parse.side_effect = None
         self.parse.return_value = _crag_grade(sufficient=False, rewritten_query="追加検索")
         result = self.run_answer(answer_flow=generation.CRAG_ANSWER_FLOW_LABEL)
-        self.assert_order(result.question_display, heading("文書検索（1回目）"), heading("根拠確認（1回目）"),
-                          heading("補正検索の準備"), heading("文書検索（2回目）"), "状態: エラーで中断", "状態: 中止")
+        self.assert_order(
+            result.question_display,
+            heading("文書検索（1回目）"),
+            heading("根拠確認（1回目）"),
+            heading("補正検索の準備"),
+            heading("文書検索（2回目）"),
+            "状態: エラーで中断",
+            "状態: 中止",
+        )
         self.assertNotRegex(result.question_display, heading("根拠確認（2回目）"))
         self.assertNotIn("回答文の生成（", result.question_display)
 
@@ -295,8 +338,11 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertNotIn("エラーで中断", result.question_display)
 
     def test_new_and_legacy_memos_are_removed_on_retry(self):
-        for separator in (generation.QUESTION_DISPLAY_METADATA_SEPARATOR, "--- 回答生成メモ ---",
-                          generation.QUERY_STRATEGY_DISPLAY_SEPARATOR):
+        for separator in (
+            generation.QUESTION_DISPLAY_METADATA_SEPARATOR,
+            "--- 回答生成メモ ---",
+            generation.QUERY_STRATEGY_DISPLAY_SEPARATOR,
+        ):
             with self.subTest(separator=separator):
                 result = self.run_answer(f"原質問\n\n{separator}\n以前の記録")
                 self.assertEqual(result.original_question, "原質問")

@@ -116,8 +116,12 @@ class SettledConfirmations:
     excluded: tuple[dict[str, str], ...] = ()
 
     def diagnostics(self) -> dict[str, Any]:
-        return {"user": list(self.user), "system": list(self.system), "document": list(self.document),
-                "excluded": [dict(entry) for entry in self.excluded]}
+        return {
+            "user": list(self.user),
+            "system": list(self.system),
+            "document": list(self.document),
+            "excluded": [dict(entry) for entry in self.excluded],
+        }
 
 
 def _known_condition(text: str, known_conditions: Sequence[tuple[str, str]]) -> str:
@@ -187,9 +191,7 @@ def requires_environment_data(
     return external_data_required and not any(confirmation_item_facts(item)["text"] for item in items)
 
 
-def envelope_requests(
-    requests: Sequence[Mapping[str, Any]], reviews: Sequence[Mapping[str, Any]] | None
-) -> list[dict[str, str]]:
+def envelope_requests(requests: Sequence[Mapping[str, Any]], reviews: Sequence[Mapping[str, Any]] | None) -> list[dict[str, str]]:
     """要求単位ごとの充足。背景（kind=context）の要求は含めない。"""
     by_id = {str(review.get("request_id")): review for review in reviews or ()}
     result: list[dict[str, str]] = []
@@ -254,9 +256,7 @@ def build_envelope(
     unanswered = [entry for entry in request_entries if entry["status"] in {"partial", "missing"}]
     environment = [line for line in confirmations if not line.startswith(REFERENCE_CONFIRMATION_PREFIX)]
     # 実行できる説明が無く、監査した要求がすべて答えられていない: 資料から答えられない（#1491）。
-    no_answer = (
-        not actionable and bool(request_entries) and all(entry["status"] == "missing" for entry in request_entries)
-    )
+    no_answer = not actionable and bool(request_entries) and all(entry["status"] == "missing" for entry in request_entries)
     conditions = _unique([*(str(item.get("condition") or "") for item in unsettled), *user_conditions])
     handoff: list[str] = []
     if unanswered:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 PICTURE_OCR_TEXT_LABEL = "OCR抽出テキスト"
 LEGACY_PICTURE_OCR_TEXT_LABELS = ("Docling OCR",)
 

@@ -149,8 +149,11 @@ def pdf_text_lines_in_bbox(pdf_path: str | Path, page_number: int, bbox: dict) -
                 textpage = page.get_textpage()
                 try:
                     page_lines = set(lines(textpage.get_text_range()))
-                    bounded = lines(textpage.get_text_bounded(
-                        left=float(bbox["l"]), bottom=min(top, bottom), right=float(bbox["r"]), top=max(top, bottom)))
+                    bounded = lines(
+                        textpage.get_text_bounded(
+                            left=float(bbox["l"]), bottom=min(top, bottom), right=float(bbox["r"]), top=max(top, bottom)
+                        )
+                    )
                 finally:
                     textpage.close()
             finally:
@@ -246,10 +249,7 @@ def _import_pdfium():
     try:
         import pypdfium2 as pdfium
     except ImportError as exc:
-        raise RuntimeError(
-            "pypdfium2 が未インストールのため PDF を処理できません。"
-            "`pip install pypdfium2` を実行してください。"
-        ) from exc
+        raise RuntimeError("pypdfium2 が未インストールのため PDF を処理できません。`pip install pypdfium2` を実行してください。") from exc
     return pdfium
 
 

@@ -9,25 +9,26 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from grounded_stub import AnswerOutput
+
+from rag_engine.config import get_settings
 from rag_engine.generation.answering import (
-    AnswerContext,
-    AnswerRecord,
     QUESTION_DISPLAY_METADATA_SEPARATOR,
     RUNTIME_KNOWLEDGE_SEPARATOR,
     SIMPLE_RETRIEVAL_LABEL,
     STANDARD_ANSWER_FLOW_LABEL,
+    AnswerContext,
+    AnswerRecord,
     answer_question_result,
     answer_result_payload,
     extract_original_question,
 )
-from grounded_stub import AnswerOutput
 from rag_engine.knowledge.runtime_knowledge import (
     RUNTIME_KNOWLEDGE_FILE_NAME,
     build_runtime_knowledge_context,
     load_runtime_knowledge,
     runtime_retrieval_queries,
 )
-from rag_engine.config import get_settings
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
 
 
@@ -120,14 +121,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         self.assertEqual(trace["matched_rules"][0]["next_review_at"], "2026-10-01T00:00:00Z")
 
     def test_settings_reads_runtime_knowledge_path(self):
-        with patch.dict(os.environ, {"RUNTIME_KNOWLEDGE_PATH": "~/runtime-rules.json"}, clear=True):
-            with patch("rag_engine.config.load_dotenv"):
-                settings = get_settings(dotenv_path=None)
+        with patch.dict(os.environ, {"RUNTIME_KNOWLEDGE_PATH": "~/runtime-rules.json"}, clear=True), patch("rag_engine.config.load_dotenv"):
+            settings = get_settings(dotenv_path=None)
 
         self.assertEqual(settings.runtime_knowledge_path, Path("~/runtime-rules.json").expanduser())
 
     def test_answer_flow_uses_runtime_knowledge_for_search_prompt_display_and_payload(self):
         from grounded_stub import stub_generation
+
         stub_generation(self)
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
@@ -151,7 +152,10 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             context = AnswerContext(records=records, text="[chunk] 納品書 再発行条件")
 
             with (
-                patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=SimpleNamespace(chunk_run_id="abcdef-1234567890ab")),
+                patch(
+                    "rag_engine.generation.answering.load_latest_or_source_chunk_run",
+                    return_value=SimpleNamespace(chunk_run_id="abcdef-1234567890ab"),
+                ),
                 patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
                 patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", return_value=context) as build_context,
                 patch("rag_engine.generation.answering.load_domain_keywords", return_value=[]),

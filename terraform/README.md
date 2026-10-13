@@ -181,7 +181,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
   | path | 内容 |
   |---|---|
   | `/rag/` `/nl2sql/` `/agent/` | 各製品の frontend（`FRONTEND_BASE_PATH=/<製品>/` で build した dist）。画面の URL は `index.html` に返す |
-  | `/<製品>/api/...` | 製品の prefix だけを外して各 backend（`127.0.0.1:8000` / `8010` / `8020`）へ。SSE・MCP（RAG の回答生成は 660 秒）・ログインの上限（#1173）も今までと同じ |
+  | `/<製品>/api/...` | 製品の prefix だけを外して各 backend（`127.0.0.1:8000` / `8010` / `8020`）へ。SSE・MCP・ログインの上限（#1173）も今までと同じ。待ち時間は既定 600 秒（SSE / WebSocket は heartbeat）、LLM を同期で呼ぶ API は RAG 660 秒・NL2SQL 2460 秒・Agent の `tools/invoke` 960 秒。本文の上限は各製品の `<製品>_MAX_UPLOAD_BYTES` + 10 MiB（既定は RAG・NL2SQL 210M、Agent 110M）。値の根拠は `platform/deploy/suite-nginx.sh`（#1597） |
   | `/<製品>/health` | backend の `/api/health` |
   | `/` | `/agent/` へ 302（Agent を配備しないときは、最初に配備した製品へ） |
   | `/platform/ca.crt` | 自作の Root CA の証明書（HTTPS が on のときだけ）。`/platform/` は platform（共通基盤）が配る共有の内容のために予約し、ほかの path は 404 |

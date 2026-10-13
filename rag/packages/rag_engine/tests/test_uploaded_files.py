@@ -17,18 +17,17 @@ from rag_engine.workflows.uploaded_files import (
 )
 
 
-def _run(root: Path, run_id: str, name: str, content: bytes, *, mtime: float, chunk_run_id: str = "",
-         vision: bool | None = None) -> Path:
+def _run(root: Path, run_id: str, name: str, content: bytes, *, mtime: float, chunk_run_id: str = "", vision: bool | None = None) -> Path:
     """run を 1 つ作る。vision が None 以外なら、その値で解析済み（results.json あり）にする。"""
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
     (run_dir / "source.pdf").write_bytes(content)
-    (run_dir / "viewer-data.json").write_text(
-        json.dumps({"run_id": run_id, "pdf_name": name, "source_page_count": 3}), encoding="utf-8")
+    (run_dir / "viewer-data.json").write_text(json.dumps({"run_id": run_id, "pdf_name": name, "source_page_count": 3}), encoding="utf-8")
     if vision is not None:
         (run_dir / "results.json").write_text(
-            json.dumps({"run_id": run_id, "statuses": [
-                {"engine": "docling", "available": True, "use_docling_vision": vision}]}), encoding="utf-8")
+            json.dumps({"run_id": run_id, "statuses": [{"engine": "docling", "available": True, "use_docling_vision": vision}]}),
+            encoding="utf-8",
+        )
     if chunk_run_id:
         (run_dir / "chunks" / chunk_run_id).mkdir(parents=True)
     os.utime(run_dir / "source.pdf", (mtime, mtime))
@@ -53,15 +52,16 @@ class UploadedFileTests(unittest.TestCase):
 
         files = list_uploaded_files(self.root)
 
-        self.assertEqual([(f.file_name, f.run_ids) for f in files], [
-            ("manual.pdf", ("aaaaaa02", "aaaaaa01")), ("other.pdf", ("bbbbbb01",)), ("manual.pdf", ("cccccc01",))])
+        self.assertEqual(
+            [(f.file_name, f.run_ids) for f in files],
+            [("manual.pdf", ("aaaaaa02", "aaaaaa01")), ("other.pdf", ("bbbbbb01",)), ("manual.pdf", ("cccccc01",))],
+        )
         self.assertEqual(files[0].chunk_run_ids, ("c0ffee01",))
         self.assertIn("manual.pdf（3 ページ / チャンク済み", files[0].label)
         self.assertIn("チャンク未作成", files[1].label)
         # 一覧の表の列: ファイル名・ページ数・サイズ・解析・AI 読み取り・チャンク・Embedding。
         # 実行回数・最終更新は出さない。embedded_sources を渡さないときは Embedding の有無を判定しない（未確認）。
-        self.assertEqual(files[0].columns,
-                         ["manual.pdf", "3 ページ", "1 KB", "未解析", "-", "チャンク済み", "未確認"])
+        self.assertEqual(files[0].columns, ["manual.pdf", "3 ページ", "1 KB", "未解析", "-", "チャンク済み", "未確認"])
         self.assertEqual(files[1].columns[3:], ["未解析", "-", "未作成", "未確認"])
         # ADB の (SHA-256, ファイル名) と一致するファイルだけが「保存済み」。同名で内容の違うファイルは一致しない。
         embedded = list_uploaded_files(self.root, embedded_sources={(files[0].sha256, "manual.pdf")})
@@ -81,8 +81,10 @@ class UploadedFileTests(unittest.TestCase):
 
         files = list_uploaded_files(self.root)
 
-        self.assertEqual([(f.file_name, f.analyzed, f.vision) for f in files], [
-            ("manual.pdf", True, False), ("other.pdf", True, True), ("third.pdf", False, None)])
+        self.assertEqual(
+            [(f.file_name, f.analyzed, f.vision) for f in files],
+            [("manual.pdf", True, False), ("other.pdf", True, True), ("third.pdf", False, None)],
+        )
         self.assertEqual([f.columns[4] for f in files], ["なし", "あり", "-"])
 
     def test_materialized_file_keeps_the_original_name(self):
@@ -110,8 +112,7 @@ class UploadedFileTests(unittest.TestCase):
             calls.append((kwargs, (self.root / "aaaaaa01").is_dir()))
             return 1
 
-        result = delete_uploaded_file(self.root, target, SimpleNamespace(adb_settings=object()),
-                                      delete_documents=delete_documents)
+        result = delete_uploaded_file(self.root, target, SimpleNamespace(adb_settings=object()), delete_documents=delete_documents)
 
         self.assertEqual((result.file_name, result.run_count, result.database_deleted), ("manual.pdf", 2, 1))
         self.assertEqual(calls[0][0]["source_file_sha256"], target.sha256)
@@ -148,8 +149,12 @@ class UploadedFileTests(unittest.TestCase):
 
     def test_without_database_settings_only_local_files_are_deleted(self):
         _run(self.root, "aaaaaa01", "manual.pdf", b"manual", mtime=100)
-        result = delete_uploaded_file(self.root, list_uploaded_files(self.root)[0], SimpleNamespace(adb_settings=None),
-                                      delete_documents=lambda *a, **k: self.fail("ADB 未設定では呼ばない"))
+        result = delete_uploaded_file(
+            self.root,
+            list_uploaded_files(self.root)[0],
+            SimpleNamespace(adb_settings=None),
+            delete_documents=lambda *a, **k: self.fail("ADB 未設定では呼ばない"),
+        )
         self.assertIsNone(result.database_deleted)
         self.assertFalse((self.root / "aaaaaa01").exists())
 

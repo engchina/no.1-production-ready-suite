@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from contextvars import ContextVar
-from datetime import datetime, timezone
 import json
 import logging
+from contextvars import ContextVar
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,13 +50,16 @@ class PageProgress:
     def write(self) -> None:
         """実行ディレクトリへ現状を保存する。失敗時も解析は継続する。"""
         payload = {
-            "engine": "docling", "stage": self.stage,
+            "engine": "docling",
+            "stage": self.stage,
             "total_pages": len(self.expected),
-            "completed_pages": len(self.completed), "failed_pages": len(self.failed),
+            "completed_pages": len(self.completed),
+            "failed_pages": len(self.failed),
             "pending_pages": len(self.expected - self.completed - self.failed),
             "completed_page_numbers": sorted(self.completed),
-            "failed_page_numbers": sorted(self.failed), "last_page": self.last_page,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "failed_page_numbers": sorted(self.failed),
+            "last_page": self.last_page,
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,9 +69,12 @@ class PageProgress:
         except OSError:
             _LOG.warning("ページ進捗の保存に失敗しました: %s", self.path, exc_info=True)
         try:
-            print(f"[docling-progress] run={self.path.parent.name} stage={self.stage} "
-                  f"completed={len(self.completed)}/{len(self.expected)} "
-                  f"failed={len(self.failed)} last_page={self.last_page}", flush=True)
+            print(
+                f"[docling-progress] run={self.path.parent.name} stage={self.stage} "
+                f"completed={len(self.completed)}/{len(self.expected)} "
+                f"failed={len(self.failed)} last_page={self.last_page}",
+                flush=True,
+            )
         except OSError:
             _LOG.warning("ページ進捗のログ出力に失敗しました", exc_info=True)
 

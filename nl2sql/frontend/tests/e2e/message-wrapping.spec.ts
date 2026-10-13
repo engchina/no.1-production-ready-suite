@@ -77,7 +77,7 @@ async function wrappedLines(target: Locator): Promise<WrappedLines> {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: 通知と画面の中のメッセージは語の途中で折り返さない`, async ({ page }, testInfo) => {
+  test(`${theme}: 通知と画面の中のメッセージは語の途中で折り返さない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
     const region = page.getByRole("region", { name: "通知", exact: true });

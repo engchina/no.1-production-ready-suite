@@ -314,7 +314,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`チャットで会話を始めて根拠付き回答を表示する (${viewport.name})`, async ({ page }) => {
+  test(`チャットで会話を始めて根拠付き回答を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockChat(page);
 
@@ -425,7 +425,7 @@ for (const viewport of [
   { name: "desktop", width: 2048 },
   { name: "mobile", width: 375 },
 ]) {
-  test(`長い日本語回答がカード幅を使用する (${viewport.name})`, async ({ page }) => {
+  test(`長い日本語回答がカード幅を使用する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await openPersistedConversation(page, viewport.width, [
       userMessage,
       { ...assistantMessage, content: longJapaneseAnswer },
@@ -534,7 +534,7 @@ test("検索・回答プロファイル未選択ではチャットを促す空�
   await expectNoPageOverflow(page);
 });
 
-test("会話一覧の読み込み中状態をカード内に表示する", async ({ page }) => {
+test("会話一覧の読み込み中状態をカード内に表示する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   const releaseConversationList = await mockChat(page, "loading");
 
@@ -686,7 +686,7 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
   await expectNoPageOverflow(page);
 });
 
-test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", async ({ page }) => {
+test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const answerDiagnostics = {
     confidence: "high",
@@ -816,7 +816,7 @@ test("IME の変換を確定する Enter では送信しない（#459）", async
   await expect.poll(() => calls).toBe(1);
 });
 
-test("送信と停止は同じボタンで、生成中の Enter では停止しない（#413）", async ({ page }) => {
+test("送信と停止は同じボタンで、生成中の Enter では停止しない（#413）", { tag: "@responsive" }, async ({ page }) => {
   await mockChat(page);
   let calls = 0;
   let aborted = 0;
@@ -873,7 +873,7 @@ test("送信と停止は同じボタンで、生成中の Enter では停止し�
   await expectNoPageOverflow(page);
 });
 
-test("会話の履歴は既定で閉じ、開くとチャットの左に並び、開閉の状態が再読込で残る（#664）", async ({ page }) => {
+test("会話の履歴は既定で閉じ、開くとチャットの左に並び、開閉の状態が再読込で残る（#664）", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page, "ready", [userMessage, assistantMessage]);
   await page.goto("/chat");
@@ -909,7 +909,7 @@ test("会話の履歴は既定で閉じ、開くとチャットの左に並び�
   await expectNoPageOverflow(page);
 });
 
-test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す（#664）", async ({
+test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す（#664）", { tag: "@responsive" }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });

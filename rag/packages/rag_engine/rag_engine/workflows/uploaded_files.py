@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from rag_engine.chunking.storage import CHUNKS_DIRECTORY, load_chunk_run_by_id
 from rag_engine.config import Settings
@@ -27,6 +28,7 @@ SOURCE_FILE_NAME = "source.pdf"
 @dataclass(frozen=True)
 class UploadedFile:
     """同じ内容・同じファイル名の run をまとめた 1 ファイル。run_ids は新しい順。"""
+
     sha256: str
     file_name: str
     page_count: int
@@ -50,10 +52,15 @@ class UploadedFile:
         実行回数と最終更新は preview run も数えて解析の回数・時刻を表さないため、表には出さない。
         """
         size = f"{self.size_bytes / 1024 / 1024:.1f} MB" if self.size_bytes >= 1024 * 1024 else f"{max(1, self.size_bytes // 1024)} KB"
-        return [self.file_name, f"{self.page_count} ページ", size, "解析済み" if self.analyzed else "未解析",
-                "-" if self.vision is None else ("あり" if self.vision else "なし"),
-                "チャンク済み" if self.chunk_run_ids else "未作成",
-                "未確認" if self.embedded is None else ("保存済み" if self.embedded else "未保存")]
+        return [
+            self.file_name,
+            f"{self.page_count} ページ",
+            size,
+            "解析済み" if self.analyzed else "未解析",
+            "-" if self.vision is None else ("あり" if self.vision else "なし"),
+            "チャンク済み" if self.chunk_run_ids else "未作成",
+            "未確認" if self.embedded is None else ("保存済み" if self.embedded else "未保存"),
+        ]
 
     @property
     def label(self) -> str:
@@ -66,6 +73,7 @@ class UploadedFile:
 @dataclass(frozen=True)
 class UploadedFileDeletion:
     """削除結果。database_deleted が None のときは ADB が未設定で、ローカルだけを削除した。"""
+
     file_name: str
     run_count: int
     database_deleted: int | None
@@ -128,8 +136,9 @@ def list_uploaded_files(
         file_name = Path(str(payload.get("pdf_name") or "")).name if isinstance(payload, dict) else ""
         if not file_name.lower().endswith(".pdf"):
             continue
-        group = groups.setdefault((sha256, file_name), {"runs": [], "page_count": 0, "chunk_run_ids": [],
-                                                        "size_bytes": stat.st_size, "analyzed_runs": []})
+        group = groups.setdefault(
+            (sha256, file_name), {"runs": [], "page_count": 0, "chunk_run_ids": [], "size_bytes": stat.st_size, "analyzed_runs": []}
+        )
         group["runs"].append((stat.st_mtime, run_dir.name))
         results = run_dir / "results.json"
         if results.is_file():
@@ -141,11 +150,14 @@ def list_uploaded_files(
             group["chunk_run_ids"].extend(path.name for path in chunk_root.iterdir() if path.is_dir())
     files = [
         UploadedFile(
-            sha256=sha256, file_name=file_name, page_count=group["page_count"],
+            sha256=sha256,
+            file_name=file_name,
+            page_count=group["page_count"],
             run_ids=tuple(run_id for _, run_id in sorted(group["runs"], reverse=True)),
             updated_at=max(mtime for mtime, _ in group["runs"]),
             chunk_run_ids=tuple(dict.fromkeys(group["chunk_run_ids"])),
-            size_bytes=group["size_bytes"], analyzed=bool(group["analyzed_runs"]),
+            size_bytes=group["size_bytes"],
+            analyzed=bool(group["analyzed_runs"]),
             vision=max(group["analyzed_runs"])[1] if group["analyzed_runs"] else None,
             embedded=None if embedded_sources is None else (sha256, file_name) in embedded_sources,
         )

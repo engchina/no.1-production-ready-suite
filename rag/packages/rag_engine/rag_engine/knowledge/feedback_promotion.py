@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Sequence
-
+from typing import Any
 
 PROJECT_ROOT = Path.cwd()
 DEFAULT_RETRIEVAL_EVAL_DATASET = PROJECT_ROOT / "eval" / "retrieval_representative_questions.json"
@@ -90,11 +90,7 @@ def append_retrieval_eval_cases(dataset_path: str | Path, cases: Sequence[dict[s
     """既存 dataset へ重複を避けて eval case を追記します。"""
     path = Path(dataset_path)
     payload = _load_eval_dataset(path)
-    existing_ids = {
-        str(case.get("case_id") or "")
-        for case in payload.get("cases", [])
-        if isinstance(case, dict)
-    }
+    existing_ids = {str(case.get("case_id") or "") for case in payload.get("cases", []) if isinstance(case, dict)}
     added = 0
     for case in cases:
         case_id = str(case.get("case_id") or "").strip()

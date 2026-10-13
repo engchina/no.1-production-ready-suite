@@ -398,10 +398,18 @@ for unexpected in configure_nginx nginx_client_max_body_size sites-available pro
 done
 grep -Fq 'FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/rag/}"' "${REPO_DIR}/init_script.sh" \
   || fail "frontend を /rag/ を base に build しない"
-suite_nginx="${REPO_DIR}/../platform/deploy/suite-nginx.sh"
-grep -Fq 'location ~ ^/rag/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)\$ {' "${suite_nginx}" \
-  || fail "評価・回答生成・MCP の待ち時間を延ばす location がない"
-grep -Fq 'proxy_read_timeout 660s;' "${suite_nginx}" \
+# suite の Nginx の site を生成して確かめる（path と待ち時間の値は suite-nginx.sh の SUITE_RAG_LONG_API_*。#1597）。
+suite_site="$(bash -c 'source "$1"; suite_nginx_site false /srv/suite /srv/ssl 80 443 rag' _ \
+  "${REPO_DIR}/../platform/deploy/suite-nginx.sh")"
+for path in 'search' 'search/stream' 'search/answers/[^/]+/evaluation' \
+  'search-answer-profiles/[^/]+/support-guides/[^/]+/try' 'evaluation/run' 'evaluation/compare' \
+  'chat/conversations/[^/]+/messages/stream' 'chat/conversations/[^/]+/messages/[^/]+/stream' 'mcp'; do
+  printf '%s\n' "${suite_site}" | grep -E '^    location ~ \^/rag/api/\(' | grep -Fq "|${path}|" \
+    || printf '%s\n' "${suite_site}" | grep -E '^    location ~ \^/rag/api/\(' | grep -Fq "(${path}|" \
+    || printf '%s\n' "${suite_site}" | grep -E '^    location ~ \^/rag/api/\(' | grep -Fq "|${path})" \
+    || fail "評価・回答生成・MCP の待ち時間を延ばす location に ${path} がない"
+done
+printf '%s\n' "${suite_site}" | grep -Fq 'proxy_read_timeout 660s;' \
   || fail "評価・回答生成の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
 # backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の設定の上限）が Nginx（660 秒）・画面（630 秒）より短いこと。
 answer_timeout_max="$(sed -n 's/^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = \([0-9]*\)\.0$/\1/p' "${REPO_DIR}/backend/app/config.py")"

@@ -96,7 +96,7 @@ prepare_case() {
   [ "${SUITE_FAILED_PRODUCTS[*]}" = "rag" ] || fail "失敗した製品: ${SUITE_FAILED_PRODUCTS[*]}"
 )
 
-# 4. Nginx: site を 1 つだけ書き、製品ごとの site と default を外す。RAG の上限は backend/.env から。
+# 4. Nginx: site を 1 つだけ書き、製品ごとの site と default を外す。製品の API の本文の上限は backend/.env から（#1597）。
 (
   case_dir="${task_dir}/nginx"
   prepare_case "${case_dir}"
@@ -118,18 +118,25 @@ prepare_case() {
   done
   grep -q 'listen 443 ssl http2 default_server;' "${site}" || fail "HTTPS の site ではない"
   grep -q 'client_max_body_size 210M;' "${site}" || fail "RAG の既定の上限（200 MiB + 10 MiB）"
+  grep -q 'client_max_body_size 110M;' "${site}" || fail "Agent の既定の上限（100 MiB + 10 MiB）"
   grep -q 'return 302 /agent/;' "${site}" || fail "/ は /agent/"
   if grep -q '/nl2sql/' "${site}"; then fail "配備しない NL2SQL の location を書いた"; fi
   [ -f "${NGINX_CONF_DIR}/production-ready-logging.conf" ] || fail "logging.conf を置かない"
   [ -f "${NGINX_CONF_DIR}/production-ready-login-rate-limit.conf" ] || fail "login-rate-limit.conf を置かない"
   grep -qx 'nginx -t' "${case_dir}/commands.log" || fail "nginx -t を実行しない"
   printf 'RAG_MAX_UPLOAD_BYTES=104857600\n' > "${case_dir}/app/no.1-production-ready-suite/rag/backend/.env"
-  [ "$(rag_client_max_body_size)" = "110M" ] || fail "RAG_MAX_UPLOAD_BYTES から上限を作る"
+  [ "$(product_client_max_body_size rag)" = "110M" ] || fail "RAG_MAX_UPLOAD_BYTES から上限を作る"
   # MiB へ切り上げ、引用符を扱う。不正な値なら失敗する（#306）。
   printf "RAG_MAX_UPLOAD_BYTES='1000000'\n" > "${case_dir}/app/no.1-production-ready-suite/rag/backend/.env"
-  [ "$(rag_client_max_body_size)" = "11M" ] || fail "RAG_MAX_UPLOAD_BYTES を MiB へ切り上げていない"
+  [ "$(product_client_max_body_size rag)" = "11M" ] || fail "RAG_MAX_UPLOAD_BYTES を MiB へ切り上げていない"
   printf 'RAG_MAX_UPLOAD_BYTES=200MB\n' > "${case_dir}/app/no.1-production-ready-suite/rag/backend/.env"
-  if rag_client_max_body_size >/dev/null 2>&1; then fail "不正な RAG_MAX_UPLOAD_BYTES を受け入れた"; fi
+  if product_client_max_body_size rag >/dev/null 2>&1; then fail "不正な RAG_MAX_UPLOAD_BYTES を受け入れた"; fi
+  # NL2SQL / Agent も backend/.env の <製品>_MAX_UPLOAD_BYTES から（無ければ backend の既定値 + 10 MiB。#1597）。
+  [ "$(product_client_max_body_size nl2sql)" = "210M" ] || fail "NL2SQL の既定の上限（200 MiB + 10 MiB）"
+  [ "$(product_client_max_body_size agent)" = "110M" ] || fail "Agent の既定の上限（100 MiB + 10 MiB）"
+  mkdir -p "${case_dir}/app/no.1-production-ready-suite/nl2sql/backend"
+  printf 'NL2SQL_MAX_UPLOAD_BYTES=52428800\n' > "${case_dir}/app/no.1-production-ready-suite/nl2sql/backend/.env"
+  [ "$(product_client_max_body_size nl2sql)" = "60M" ] || fail "NL2SQL_MAX_UPLOAD_BYTES から上限を作る"
 )
 
 # 5. HTTPS: 証明書と更新の timer。off なら timer を外す。

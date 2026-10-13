@@ -9,10 +9,10 @@ import pypdfium2 as pdfium
 from PIL import Image
 
 from rag_engine.chunking import ChunkingConfig, build_small_to_big_chunks
+from rag_engine.config import get_settings
+from rag_engine.models.layout import LayoutRecord
 from rag_engine.parsing.picture_descriptions import describe_docling_pictures
 from rag_engine.parsing.rendering import render_pdf_pages
-from rag_engine.models.layout import LayoutRecord
-from rag_engine.config import get_settings
 from rag_engine.parsing.table_vision import missing_table_image_regions
 
 
@@ -34,9 +34,19 @@ def _fixture(root, rotation=0):
     pages = render_pdf_pages(pdf_path, [1], root, 72)
     # 0 度では画像 bbox は [20, 50, 80, 90]、90 度では [210, 20, 250, 80]。
     bbox = [10, 40, 180, 100] if rotation == 0 else [200, 10, 260, 180]
-    table = LayoutRecord("table-1", "docling", 1, 1, bbox, "image_top_left",
-                         pages[0].width, pages[0].height, "Table",
-                         "<table><tr><th>説明</th></tr><tr><td>右の説明</td></tr></table>", raw_type="table")
+    table = LayoutRecord(
+        "table-1",
+        "docling",
+        1,
+        1,
+        bbox,
+        "image_top_left",
+        pages[0].width,
+        pages[0].height,
+        "Table",
+        "<table><tr><th>説明</th></tr><tr><td>右の説明</td></tr></table>",
+        raw_type="table",
+    )
     return pdf_path, pages, table
 
 
@@ -47,8 +57,7 @@ def test_detects_uncovered_images_and_excludes_text_only_or_covered_tables():
             pdf_path, pages, table = _fixture(root, rotation)
             regions = missing_table_image_regions([table], pages, pdf_path)
             assert len(regions[table.id]) == 1
-            picture = replace(table, id="picture-1", category="Picture", raw_type="picture",
-                              bbox=regions[table.id][0], text="既存画像説明")
+            picture = replace(table, id="picture-1", category="Picture", raw_type="picture", bbox=regions[table.id][0], text="既存画像説明")
             assert missing_table_image_regions([table, picture], pages, pdf_path) == {}
             plain = replace(table, bbox=[0, 0, 10, 10])
             assert missing_table_image_regions([plain], pages, pdf_path) == {}
@@ -61,8 +70,9 @@ def test_table_vision_preserves_html_and_adds_full_supplement_to_parent_and_chil
         original = table.text
         supplement = "次月処理を行います。キャンセルで中止。" + "補足" * 150 + "末尾の重要条件"
         with patch("rag_engine.parsing.picture_descriptions.describe_picture", return_value={"retrieval_text": supplement}) as vision:
-            stats = describe_docling_pictures([table], pages, run_dir=root, pdf_name=pdf_path.name,
-                                             settings=get_settings(), pdf_path=pdf_path)
+            stats = describe_docling_pictures(
+                [table], pages, run_dir=root, pdf_name=pdf_path.name, settings=get_settings(), pdf_path=pdf_path
+            )
         assert (stats.targets, stats.succeeded, stats.failed) == (1, 1, 0)
         assert table.text == original
         assert table.raw["table_vision_text"].endswith("末尾の重要条件")
@@ -74,8 +84,9 @@ def test_table_vision_preserves_html_and_adds_full_supplement_to_parent_and_chil
         assert {c.chunk_level for c in chunks} == {"child", "parent"}
         assert all(supplement in c.text for c in chunks)
         with patch("rag_engine.parsing.picture_descriptions.describe_picture") as vision:
-            stats = describe_docling_pictures([table], pages, run_dir=root, pdf_name=pdf_path.name,
-                                             settings=get_settings(), pdf_path=pdf_path)
+            stats = describe_docling_pictures(
+                [table], pages, run_dir=root, pdf_name=pdf_path.name, settings=get_settings(), pdf_path=pdf_path
+            )
             assert stats.targets == 0
             vision.assert_not_called()
 
@@ -86,8 +97,9 @@ def test_table_vision_failure_preserves_table_and_records_error():
         pdf_path, pages, table = _fixture(root)
         original = table.text
         with patch("rag_engine.parsing.picture_descriptions.describe_picture", side_effect=RuntimeError("unavailable")):
-            stats = describe_docling_pictures([table], pages, run_dir=root, pdf_name=pdf_path.name,
-                                             settings=get_settings(), pdf_path=pdf_path)
+            stats = describe_docling_pictures(
+                [table], pages, run_dir=root, pdf_name=pdf_path.name, settings=get_settings(), pdf_path=pdf_path
+            )
         assert (stats.succeeded, stats.failed) == (0, 1)
         assert table.text == original
         assert "unavailable" in table.raw["vision_error"]
@@ -97,13 +109,15 @@ def test_table_vision_failure_preserves_table_and_records_error():
 def test_large_table_supplement_survives_row_group_chunking_once():
     with TemporaryDirectory() as tmp:
         _, _, table = _fixture(Path(tmp))
-        table.text = "<table><tr><th>説明</th></tr>" + "".join(
-            f"<tr><td>{i}: {'手続きの説明' * 50}</td></tr>" for i in range(20)
-        ) + "</table>"
+        table.text = (
+            "<table><tr><th>説明</th></tr>" + "".join(f"<tr><td>{i}: {'手続きの説明' * 50}</td></tr>" for i in range(20)) + "</table>"
+        )
         table.raw["table_vision_text"] = "固有のダイアログ補足"
         chunks = build_small_to_big_chunks(
-            {"pdf_name": "manual.pdf", "records": [table.to_dict()]}, source_run_id="test",
-            selected_engine_ids=["docling"], config=ChunkingConfig(child_target_chars=300, table_child_target_chars=300, parent_target_chars=1200),
+            {"pdf_name": "manual.pdf", "records": [table.to_dict()]},
+            source_run_id="test",
+            selected_engine_ids=["docling"],
+            config=ChunkingConfig(child_target_chars=300, table_child_target_chars=300, parent_target_chars=1200),
         )
         children = [c for c in chunks if c.chunk_level == "child"]
         assert len(children) > 1
@@ -143,19 +157,20 @@ def test_picture_finishes_before_table_fallback_detection():
             root = Path(tmp)
             pdf_path, pages, table = _fixture(root)
             region = missing_table_image_regions([table], pages, pdf_path)[table.id][0]
-            picture = replace(table, id="picture", seq_no=2, category="Picture", raw_type="picture",
-                              bbox=region, text="", raw={})
+            picture = replace(table, id="picture", seq_no=2, category="Picture", raw_type="picture", bbox=region, text="", raw={})
             calls = []
 
+            # describe_picture の side_effect として同じ反復の中でだけ呼ぶため、遅延束縛は問題にならない。
             def describe(_path, metadata, _settings, **kwargs):
-                calls.append(metadata["record_id"])
-                if fail_picture and metadata["record_id"] == "picture":
+                calls.append(metadata["record_id"])  # noqa: B023
+                if fail_picture and metadata["record_id"] == "picture":  # noqa: B023
                     raise RuntimeError("picture unavailable")
                 return {"retrieval_text": "確認ダイアログで登録を実行します。", "visual_kind": "screenshot"}
 
             with patch("rag_engine.parsing.picture_descriptions.describe_picture", side_effect=describe):
-                stats = describe_docling_pictures([table, picture], pages, run_dir=root, pdf_name=pdf_path.name,
-                                                 settings=get_settings(), pdf_path=pdf_path)
+                stats = describe_docling_pictures(
+                    [table, picture], pages, run_dir=root, pdf_name=pdf_path.name, settings=get_settings(), pdf_path=pdf_path
+                )
             assert calls == (["picture", table.id] if fail_picture else ["picture"])
             assert stats.targets == (2 if fail_picture else 1)
             assert stats.failed == int(fail_picture)

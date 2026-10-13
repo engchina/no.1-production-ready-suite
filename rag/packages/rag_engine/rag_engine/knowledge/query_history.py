@@ -6,11 +6,11 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Sequence
-
+from typing import Any
 
 QUERY_HISTORY_SCHEMA_VERSION = 1
 QUERY_HISTORY_DIR_NAME = "query_history"
@@ -26,6 +26,7 @@ QUERY_HISTORY_MAX_QUESTION_CHARS = 500
 @dataclass(frozen=True)
 class QueryHistoryRecord:
     """質問履歴 JSONL の 1 レコードを表します。"""
+
     query_id: str
     created_at: str
     question: str
@@ -39,6 +40,7 @@ class QueryHistoryRecord:
 @dataclass(frozen=True)
 class QueryHistorySuggestion:
     """履歴頻度から提示する質問候補を保持します。"""
+
     question: str
     count: int
     unique_run_count: int
@@ -104,7 +106,7 @@ def load_query_history_records(
     path = query_history_path(output_dir)
     if not path.exists():
         return []
-    cutoff = _retention_cutoff(retention_days, now or datetime.now(timezone.utc))
+    cutoff = _retention_cutoff(retention_days, now or datetime.now(UTC))
     records: list[QueryHistoryRecord] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         if not raw_line.strip():
@@ -322,17 +324,17 @@ def _parse_timestamp(value: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     return parsed
 
 
 def _create_query_id(question: str, run_id: str, answer_id: str, created_at: str) -> str:
-    seed = f"{question}\0{run_id}\0{answer_id}\0{created_at}".encode("utf-8")
+    seed = f"{question}\0{run_id}\0{answer_id}\0{created_at}".encode()
     return hashlib.sha256(seed).hexdigest()[:16]
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _clean_question(value: Any) -> str:

@@ -2,7 +2,7 @@ import { expect, test } from "./_helpers/test";
 
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920, 375]) {
-    test(`${theme} ${width}px: 更新操作の枠・状態・キーボードを維持する`, async ({ page, isMobile }, testInfo) => {
+    test(`${theme} ${width}px: 更新操作の枠・状態・キーボードを維持する`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
       test.skip(isMobile !== (width === 375), "viewport に対応する project で検証する");
       await page.setViewportSize({ width, height: 900 });
       await page.route("**/__header-utilities", route => route.fulfill({ contentType: "text/html", body:

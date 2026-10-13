@@ -2,7 +2,7 @@
 
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -18,15 +18,15 @@ from rag_engine.knowledge.approved_faq import (
     approved_faq_import_row_from_answer_feedback,
     approved_faq_records_signature,
     approved_faq_semantic_cache_path,
-    approved_faq_table_rows,
     approved_faq_suggestion_choices,
     approved_faq_suggestion_labels,
+    approved_faq_table_rows,
     build_approved_faq_semantic_index,
     delete_approved_faq_records,
     find_direct_approved_faq_answer,
-    load_approved_faq_semantic_index,
     load_approved_faq_excel_rows,
     load_approved_faq_records,
+    load_approved_faq_semantic_index,
     promote_answer_feedback_to_approved_faq,
     save_approved_faq_payload,
     select_approved_faq_suggestion,
@@ -151,10 +151,7 @@ class ApprovedFaqTests(unittest.TestCase):
                 records,
                 model="test-embedding",
                 dimensions=3,
-                embedder=lambda texts, settings: [
-                    [0.0, 1.0, 0.0] if "mayor" in text else [1.0, 0.0, 0.0]
-                    for text in texts
-                ],
+                embedder=lambda texts, settings: [[0.0, 1.0, 0.0] if "mayor" in text else [1.0, 0.0, 0.0] for text in texts],
                 settings=None,
             )
             suggestions = suggest_approved_faq_questions(
@@ -184,7 +181,12 @@ class ApprovedFaqTests(unittest.TestCase):
                 self.assertEqual(direct(question), [])
                 # 入力中の候補提示（低い閾値）には引き続き出る。
                 self.assertEqual([s.record.id for s in suggest_approved_faq_questions(question, records, min_score=0.1)], ["faq-1"])
-        for question in (faq_question, "納品書の発行手順を教えてください？", "納品書の発行手順を教えてください", " 納品書の発行手順を 教えてください。"):
+        for question in (
+            faq_question,
+            "納品書の発行手順を教えてください？",
+            "納品書の発行手順を教えてください",
+            " 納品書の発行手順を 教えてください。",
+        ):
             with self.subTest(question):
                 self.assertEqual(direct(question), ["faq-1"])
 
@@ -259,7 +261,7 @@ class ApprovedFaqTests(unittest.TestCase):
             self.assertIsNone(wrong_model)
 
     def test_adds_approved_faq_record_and_skips_duplicate_question(self):
-        now = datetime(2026, 9, 8, 9, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 9, 0, tzinfo=UTC)
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq_golden_qa.json"
             _write_corpus(path)
@@ -300,7 +302,7 @@ class ApprovedFaqTests(unittest.TestCase):
             result = delete_approved_faq_records(
                 path,
                 " faq-1\nfaq-2,faq-1 ",
-                now=datetime(2026, 9, 8, 9, 5, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 8, 9, 5, tzinfo=UTC),
             )
             records = load_approved_faq_records(path)
 
@@ -350,7 +352,7 @@ class ApprovedFaqTests(unittest.TestCase):
                     )
                 ],
                 mode=APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT,
-                now=datetime(2026, 9, 8, 9, 10, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 8, 9, 10, tzinfo=UTC),
             )
             records = load_approved_faq_records(path)
 
@@ -385,7 +387,7 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertEqual(rows[0].row, 2)
 
     def test_promotes_corrected_answer_feedback_to_approved_faq(self):
-        now = datetime(2026, 9, 8, 9, 20, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 9, 20, tzinfo=UTC)
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq_golden_qa.json"
             _write_corpus(path)
@@ -458,18 +460,38 @@ class ApprovedFaqTests(unittest.TestCase):
     def test_feedback_replacement_inherits_curated_fields_of_the_existing_record(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq.json"
-            save_approved_faq_payload({"records": [{
-                "id": "approved-faq-curated", "question": "申請期限は？", "alternate_questions": ["締切はいつ？"],
-                "approved_answer": "旧回答", "status": "approved", "business": "経理",
-                "classification": {"major": "規程"}, "tags": ["curated", "correct"],
-                "source": {"source_run_id": "run-real", "source_file_name": "rule.pdf"},
-                "timestamps": {"created_at": "2026-01-01T00:00:00+00:00"},
-            }]}, path=path)
-            promote_answer_feedback_to_approved_faq(path, {
-                "feedback_id": "fb-fix", "feedback_type": "incorrect_answer", "run_id": "run-x", "answer_id": "a1",
-                "question": "申請期限は？", "corrected_answer": "月末です。", "answer_trace": {},
-            })
-            record, = load_approved_faq_records(path)
+            save_approved_faq_payload(
+                {
+                    "records": [
+                        {
+                            "id": "approved-faq-curated",
+                            "question": "申請期限は？",
+                            "alternate_questions": ["締切はいつ？"],
+                            "approved_answer": "旧回答",
+                            "status": "approved",
+                            "business": "経理",
+                            "classification": {"major": "規程"},
+                            "tags": ["curated", "correct"],
+                            "source": {"source_run_id": "run-real", "source_file_name": "rule.pdf"},
+                            "timestamps": {"created_at": "2026-01-01T00:00:00+00:00"},
+                        }
+                    ]
+                },
+                path=path,
+            )
+            promote_answer_feedback_to_approved_faq(
+                path,
+                {
+                    "feedback_id": "fb-fix",
+                    "feedback_type": "incorrect_answer",
+                    "run_id": "run-x",
+                    "answer_id": "a1",
+                    "question": "申請期限は？",
+                    "corrected_answer": "月末です。",
+                    "answer_trace": {},
+                },
+            )
+            (record,) = load_approved_faq_records(path)
         self.assertEqual(record.approved_answer, "月末です。")
         self.assertEqual(record.alternate_questions, ("締切はいつ？",))
         self.assertEqual(record.business, "経理")
@@ -482,31 +504,44 @@ class ApprovedFaqTests(unittest.TestCase):
 
     def test_correct_feedback_skips_faq_direct_and_unanswerable_answers(self):
         base = {"feedback_id": "fb", "run_id": "run-x", "answer_id": "a1", "question": "質問"}
-        faq_direct = {**base, "feedback_type": "correct",
-                      "answer_trace": {"answer_text": "承認済み回答", "retrieval_scope": "approved_faq"}}
-        unanswerable = {**base, "feedback_type": "correct", "answer_trace": {
-            "answer_text": "回答できません。", "confidence": "low", "insufficient_reason": "根拠不足"}}
-        partial = {**base, "feedback_type": "correct", "answer_trace": {
-            "answer_text": "一部の回答", "confidence": "medium", "insufficient_reason": "残りは不明"}}
+        faq_direct = {
+            **base,
+            "feedback_type": "correct",
+            "answer_trace": {"answer_text": "承認済み回答", "retrieval_scope": "approved_faq"},
+        }
+        unanswerable = {
+            **base,
+            "feedback_type": "correct",
+            "answer_trace": {"answer_text": "回答できません。", "confidence": "low", "insufficient_reason": "根拠不足"},
+        }
+        partial = {
+            **base,
+            "feedback_type": "correct",
+            "answer_trace": {"answer_text": "一部の回答", "confidence": "medium", "insufficient_reason": "残りは不明"},
+        }
         self.assertIn("再登録は不要", approved_faq_feedback_skip_reason(faq_direct))
         self.assertIn("根拠不足", approved_faq_feedback_skip_reason(unanswerable))
         self.assertEqual(approved_faq_feedback_skip_reason(partial), "")
         self.assertIsNone(approved_faq_import_row_from_answer_feedback(faq_direct))
         self.assertIsNone(approved_faq_import_row_from_answer_feedback(unanswerable))
         # FAQ 直接回答を修正する場合、approved-faq-* の保存先を出典 run として記録しない。
-        corrected = approved_faq_import_row_from_answer_feedback({
-            **faq_direct, "run_id": "approved-faq-0123", "feedback_type": "incorrect_answer", "corrected_answer": "修正"})
+        corrected = approved_faq_import_row_from_answer_feedback(
+            {**faq_direct, "run_id": "approved-faq-0123", "feedback_type": "incorrect_answer", "corrected_answer": "修正"}
+        )
         self.assertNotIn("run_id", corrected.source)
         self.assertEqual(corrected.source["answer_run_id"], "approved-faq-0123")
 
     def test_knowledge_base_feedback_is_promoted_to_the_evidence_document_not_the_open_file(self):
         """Knowledge Base 検索では、回答の保存先（UI で開いていたファイル）と根拠文書が異なる (#545)。"""
+
         def feedback(scope):
             return {
-                "feedback_id": "feedback-kb", "feedback_type": "correct", "run_id": "run-open-file-x",
-                "answer_id": "answer-kb", "question": "拠点名を変更する方法を教えてください。",
-                "answer_trace": {"answer_text": "文書 Y の手順です。", "retrieval_scope": scope,
-                                 "primary_source_run_id": "run-evidence-y"},
+                "feedback_id": "feedback-kb",
+                "feedback_type": "correct",
+                "run_id": "run-open-file-x",
+                "answer_id": "answer-kb",
+                "question": "拠点名を変更する方法を教えてください。",
+                "answer_trace": {"answer_text": "文書 Y の手順です。", "retrieval_scope": scope, "primary_source_run_id": "run-evidence-y"},
             }
 
         row = approved_faq_import_row_from_answer_feedback(feedback("knowledge_base"))
@@ -514,13 +549,18 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertEqual(row.source["answer_run_id"], "run-open-file-x")
         self.assertNotIn("run_id", row.source)  # run_id は出典として照合されるため、保存先を入れない
 
-        promoted = ApprovedFaqRecord(id="faq-from-kb", question=row.question, approved_answer=row.approved_answer,
-                                     status="approved", source=row.source)
+        promoted = ApprovedFaqRecord(
+            id="faq-from-kb", question=row.question, approved_answer=row.approved_answer, status="approved", source=row.source
+        )
         matched = {}
         for open_run in ("run-open-file-x", "run-evidence-y"):
             suggestions = suggest_approved_faq_questions(
-                row.question, [promoted], scope={"source_run_id": open_run},
-                scope_mode=APPROVED_FAQ_SCOPE_MODE_STRICT_WHEN_AVAILABLE, min_score=0.92)
+                row.question,
+                [promoted],
+                scope={"source_run_id": open_run},
+                scope_mode=APPROVED_FAQ_SCOPE_MODE_STRICT_WHEN_AVAILABLE,
+                min_score=0.92,
+            )
             matched[open_run] = [suggestion.scope_matches for suggestion in suggestions]
         self.assertEqual(matched, {"run-open-file-x": [()], "run-evidence-y": [("source_run_id",)]})
 
@@ -530,7 +570,7 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertNotIn("source_run_id", current.source)
 
     def test_promotes_correct_feedback_with_generated_answer_and_skips_empty_wrong_feedback(self):
-        now = datetime(2026, 9, 8, 9, 25, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 9, 25, tzinfo=UTC)
         correct_feedback = {
             "feedback_id": "feedback-2",
             "feedback_type": "correct",
@@ -627,10 +667,16 @@ if __name__ == "__main__":
 
 def test_semantic_index_cache_is_written_atomically(tmp_path):
     """cache は一時ファイル → replace で書き、途中の状態や一時ファイルを残さない (#828)。"""
-    from rag_engine.knowledge.approved_faq import (ApprovedFaqSemanticIndex, ApprovedFaqSemanticItem,
-                                               load_approved_faq_semantic_index, save_approved_faq_semantic_index)
-    index = ApprovedFaqSemanticIndex(model="m", dimensions=2, records_signature="sig",
-                                     items=(ApprovedFaqSemanticItem("r1", "質問", "h1", (0.1, 0.2)),))
+    from rag_engine.knowledge.approved_faq import (
+        ApprovedFaqSemanticIndex,
+        ApprovedFaqSemanticItem,
+        load_approved_faq_semantic_index,
+        save_approved_faq_semantic_index,
+    )
+
+    index = ApprovedFaqSemanticIndex(
+        model="m", dimensions=2, records_signature="sig", items=(ApprovedFaqSemanticItem("r1", "質問", "h1", (0.1, 0.2)),)
+    )
     cache = tmp_path / "cache" / "semantic.json"
     save_approved_faq_semantic_index(cache, index)
     assert [p.name for p in cache.parent.iterdir()] == ["semantic.json"]

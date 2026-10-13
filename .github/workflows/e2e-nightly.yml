@@ -6,6 +6,8 @@ name: E2E Nightly
 # ci-failure-issue.yml が Issue にする。
 # 全件の実行で spec ごとの実行範囲（coverage）を記録し、artifact `e2e-impact-<製品>-<shard>` にする（#885）。
 # PR の CI の e2e-impact job が、これを使って差分に影響を受ける spec を選ぶ（platform/scripts/e2e_impact.py）。
+# PR の CI は 375px（mobile）の project で画面幅に依存するテスト（@responsive）だけを実行する（ci.yml の
+# E2E_MOBILE_SCOPE。#1582）。ここでは E2E_MOBILE_SCOPE を付けず、両方の project で全件を実行して mobile の退行を拾う。
 
 on:
   schedule:

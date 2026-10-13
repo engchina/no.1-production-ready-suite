@@ -1,9 +1,11 @@
 """CRAG の評価済み起点から、既取得 pool の文脈を限定的に回復する。"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from rag_engine.retrieval.operation_context import operation_labels
 
@@ -11,6 +13,7 @@ from rag_engine.retrieval.operation_context import operation_labels
 @dataclass(frozen=True)
 class ContextRecovery:
     """採用した追加根拠と、監査可能な起点・停止理由。"""
+
     records: tuple[Any, ...] = ()
     anchor_ids: tuple[str, ...] = ()
     reason: str = ""
@@ -22,27 +25,33 @@ def _uid(record: Any) -> str:
 
 def _scope(record: Any) -> tuple[str, ...]:
     """局所IDの偶然の一致で文書やchunk版を跨がせない。"""
-    return (str(record.source), str(record.source_run_id), str(record.engine),
-            _uid(record).partition(":")[0])
+    return (str(record.source), str(record.source_run_id), str(record.engine), _uid(record).partition(":")[0])
 
 
 def _unit(record: Any) -> tuple[str, ...]:
     """機能ユニット（section_path の番号付き見出しまで）。番号見出しがなければ空。"""
     from rag_engine.chunking import _section_unit
+
     return _section_unit((getattr(record, "metadata", {}) or {}).get("section_path") or [])
 
 
 def _compatible(anchor: Any, candidate: Any) -> bool:
     labels = operation_labels(anchor)
     # 「開始日」「操作説明」だけの一致は機能の同一性を証明しない。
-    identified = len(labels) == 1 and bool(re.search(
-        r"[-－—―ー]\([0-9A-Z]+\).+|\([A-Z]{1,3}[0-9]{6,8}\)", next(iter(labels))))
-    return (identified and bool(_uid(anchor)) and bool(anchor.source) and _scope(anchor) == _scope(candidate)
-            and len(labels) == 1 and labels == operation_labels(candidate))
+    identified = len(labels) == 1 and bool(re.search(r"[-－—―ー]\([0-9A-Z]+\).+|\([A-Z]{1,3}[0-9]{6,8}\)", next(iter(labels))))
+    return (
+        identified
+        and bool(_uid(anchor))
+        and bool(anchor.source)
+        and _scope(anchor) == _scope(candidate)
+        and len(labels) == 1
+        and labels == operation_labels(candidate)
+    )
 
 
-def recover_definition_records(question: str, visible: Sequence[Any], pool: Sequence[Any],
-                               *, max_records: int = 6, max_chars: int = 24000) -> ContextRecovery:
+def recover_definition_records(
+    question: str, visible: Sequence[Any], pool: Sequence[Any], *, max_records: int = 6, max_chars: int = 24000
+) -> ContextRecovery:
     """既取得poolの同一機能から明示項目の定義原文を回復する。
 
     物理的な一つ隣だけでは図表分割により定義へ届かないため、同じ文書・版・
@@ -50,31 +59,41 @@ def recover_definition_records(question: str, visible: Sequence[Any], pool: Sequ
     本文と重複する定義は追加しない。外部I/Oは行わない。
     """
     from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+
     labels = definition_labels(question)
     if not labels:
-        return ContextRecovery(reason='not_a_definition_request')
+        return ContextRecovery(reason="not_a_definition_request")
     selected, anchors, used = [], set(), 0
-    for candidate in sorted(pool, key=lambda r: (r.chunk_level != 'child', len(r.text), _uid(r))):
+    for candidate in sorted(pool, key=lambda r: (r.chunk_level != "child", len(r.text), _uid(r))):
         definitions = definition_ranges(candidate.text, labels)
         if not definitions:
             continue
         compatible = [r for r in visible if _compatible(r, candidate)]
         body = candidate.text.strip()
-        if (not compatible or not body or any(_scope(candidate) == _scope(r) and body in r.text for r in (*visible, *selected))
-                or len(selected) >= max_records or used + len(body) > max_chars):
+        if (
+            not compatible
+            or not body
+            or any(_scope(candidate) == _scope(r) and body in r.text for r in (*visible, *selected))
+            or len(selected) >= max_records
+            or used + len(body) > max_chars
+        ):
             continue
-        if all(any(_scope(candidate) == _scope(r) and d['text'] in r.text for r in (*visible, *selected)) for d in definitions):
+        if all(any(_scope(candidate) == _scope(r) and d["text"] in r.text for r in (*visible, *selected)) for d in definitions):
             continue
         selected.append(candidate)
         anchors.add(_uid(compatible[0]))
         used += len(body)
-    return ContextRecovery(tuple(selected), tuple(sorted(anchors)),
-                           'definition_recovered' if selected else 'no_new_compatible_definition')
+    return ContextRecovery(tuple(selected), tuple(sorted(anchors)), "definition_recovered" if selected else "no_new_compatible_definition")
 
 
 def recover_context_records(
-    visible: Sequence[Any], pool: Sequence[Any], anchor_ids: Sequence[str], mode: str,
-    *, max_records: int = 6, max_chars: int = 24000,
+    visible: Sequence[Any],
+    pool: Sequence[Any],
+    anchor_ids: Sequence[str],
+    mode: str,
+    *,
+    max_records: int = 6,
+    max_chars: int = 24000,
 ) -> ContextRecovery:
     """閲覧済みの一意IDを起点に child/parent/parent近傍を取得する。
 
@@ -102,13 +121,17 @@ def recover_context_records(
     selected: dict[str, Any] = {}
     used = 0
     for anchor in anchors[:3]:
-        peers = sorted((r for r in pool if _scope(r) == _scope(anchor)
-                        and r.chunk_level == ("child" if mode == "neighbor_children" else "parent")),
-                       key=lambda r: (r.chunk_seq, _uid(r)))
+        peers = sorted(
+            (r for r in pool if _scope(r) == _scope(anchor) and r.chunk_level == ("child" if mode == "neighbor_children" else "parent")),
+            key=lambda r: (r.chunk_seq, _uid(r)),
+        )
         parent_uid = anchor.parent_chunk_uid if anchor.chunk_level == "child" else _uid(anchor)
         if mode == "neighbor_children":
-            positions = [i for i, r in enumerate(peers) if _uid(r) == _uid(anchor)
-                         or (anchor.chunk_level == "parent" and r.parent_chunk_uid == _uid(anchor))]
+            positions = [
+                i
+                for i, r in enumerate(peers)
+                if _uid(r) == _uid(anchor) or (anchor.chunk_level == "parent" and r.parent_chunk_uid == _uid(anchor))
+            ]
         else:
             positions = [i for i, r in enumerate(peers) if _uid(r) == parent_uid]
         candidates = []
@@ -119,8 +142,9 @@ def recover_context_records(
         elif mode == "same_unit":
             origin = positions[0] if positions else 0
             unit = _unit(anchor)
-            candidates = sorted((r for r in peers if unit and _unit(r) == unit),
-                                key=lambda r: (abs(peers.index(r) - origin), peers.index(r)))
+            candidates = sorted(
+                (r for r in peers if unit and _unit(r) == unit), key=lambda r: (abs(peers.index(r) - origin), peers.index(r))
+            )
             positions = []
         for position in positions:
             # 途中の別機能を飛び越えて似た見出しへ連結しない。
@@ -141,5 +165,6 @@ def recover_context_records(
                 continue
             selected[uid] = candidate
             used += len(body)
-    return ContextRecovery(tuple(selected.values()), tuple(_uid(r) for r in anchors[:3]),
-                           "expanded" if selected else "no_new_compatible_evidence")
+    return ContextRecovery(
+        tuple(selected.values()), tuple(_uid(r) for r in anchors[:3]), "expanded" if selected else "no_new_compatible_evidence"
+    )

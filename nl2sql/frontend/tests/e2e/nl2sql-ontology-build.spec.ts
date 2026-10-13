@@ -871,7 +871,7 @@ async function mockProfileScopedApi(page: Page) {
   return state;
 }
 
-test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編集 → 公開の導線が機能する", async ({ context, page }, testInfo) => {
+test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編集 → 公開の導線が機能する", { tag: "@responsive" }, async ({ context, page }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? "3101"}`,
   });
@@ -2265,7 +2265,7 @@ test("プロファイルが無いときは案内を表示し AI 構築は出さ�
   await expect(page.getByRole("button", { name: "AI 構築を実行" })).toHaveCount(0);
 });
 
-test("旧 tab URL を正規化し、モバイルでは単一ページを縦積みにする", async ({ page }) => {
+test("旧 tab URL を正規化し、モバイルでは単一ページを縦積みにする", { tag: "@responsive" }, async ({ page }) => {
   await mockApi(page);
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.setViewportSize({ width: 375, height: 812 });
@@ -2291,7 +2291,7 @@ test("旧 tab URL を正規化し、モバイルでは単一ページを縦積�
   expect(overflow).toBe(false);
 });
 
-test("オントロジー View の API エラーを表示し、キーボードで再試行して復旧する", async ({
+test("オントロジー View の API エラーを表示し、キーボードで再試行して復旧する", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockApi(page);
@@ -2673,7 +2673,7 @@ test("失敗した構築 job は「再実行」ボタンで retry API から再�
   await expect(page.getByTestId("ontology-build-steps")).toContainText("オントロジー構築の処理状況");
 });
 
-test("強制終了した構築は理由と下書きを表示し保存済み入力から再実行できる", async ({ page }, testInfo) => {
+test("強制終了した構築は理由と下書きを表示し保存済み入力から再実行できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await existingMarkdown(page);
   const failedJob = buildJob("cancelled", "failed");
   failedJob.job.error_message_ja = "構築処理の実行プロセスとの接続が失われました。保存済み入力と抽出結果を使って再実行してください。";
@@ -3185,7 +3185,7 @@ for (const saveExplicitly of [true, false]) {
 
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920]) {
-    test(`統合概念生成は5段階とログを一度だけ表示する ${theme} ${width}`, async ({ page }, testInfo) => {
+    test(`統合概念生成は5段階とログを一度だけ表示する ${theme} ${width}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== "desktop" && width !== 1280, "375幅は各テーマ1回確認");
       if (testInfo.project.name === "desktop") await page.setViewportSize({width, height: 1000});
       await page.addInitScript(theme => {
@@ -3275,7 +3275,7 @@ test("既存定義取り込みの廃止後も空の草稿から構築できる",
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(generatedDraftMarkdown);
 });
 
-test("既存定義取り込みの廃止後も草稿の保存と公開を操作できる", async ({ page }, testInfo) => {
+test("既存定義取り込みの廃止後も草稿の保存と公開を操作できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const state = await existingMarkdown(page);
   const text = generatedDraftMarkdown + "\n手動で追記した業務定義";
   await page.getByTestId("ontology-markdown-draft-editor").fill(text);
@@ -3308,7 +3308,7 @@ test("既存定義取り込みの廃止後も草稿の保存と公開を操作�
 });
 
 for (const reason of ["timeout", "restart"] as const) {
-  test(`公開準備の${reason}後に再試行し、確認前は公開しない`, async ({ page }, testInfo) => {
+  test(`公開準備の${reason}後に再試行し、確認前は公開しない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const state = await existingMarkdown(page);
     let attempts = 0;
     let failed = false;
@@ -3352,7 +3352,7 @@ for (const reason of ["timeout", "restart"] as const) {
 }
 
 for (const status of ["failed", "ready"] as const) {
-  test(`公開診断を限高・集約しエラーを阻止する (${status})`, async ({ page }, testInfo) => {
+  test(`公開診断を限高・集約しエラーを阻止する (${status})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const state = await mockApi(page);
     state.jobPolls = 2;
     state.draftMarkdown = generatedDraftMarkdown;
@@ -3407,7 +3407,7 @@ for (const status of ["failed", "ready"] as const) {
   });
 }
 
-test("警告のみで公開し再読込後も診断を参照・保存できる", async ({ page }, testInfo) => {
+test("警告のみで公開し再読込後も診断を参照・保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const state = await existingMarkdown(page);
   const message = "根拠を確認できない推論です。業務担当者の確認が必要です。";
   const findings = Array.from({ length: 40 }, (_, i) => ({ severity: "warning", code: "INFERENCE_WITHOUT_EVIDENCE", definition_id: `property-${i}`, field: "evidence", message_ja: message }));
@@ -3457,7 +3457,7 @@ test("警告のみで公開し再読込後も診断を参照・保存できる",
 });
 
 for (const operationalWarning of [false, true]) {
-  test(`構築の資料不足は Markdown の補足に保持する (${operationalWarning})`, async ({ page }, testInfo) => {
+  test(`構築の資料不足は Markdown の補足に保持する (${operationalWarning})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const state = await mockApi(page);
     state.jobPolls = 2;
     const notes = [
@@ -3510,7 +3510,7 @@ for (const operationalWarning of [false, true]) {
 }
 
 
-test("従業員 Markdown は業務内容だけを整形表示して公開できる", async ({ page }, testInfo) => {
+test("従業員 Markdown は業務内容だけを整形表示して公開できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const content = readFileSync(new URL("../fixtures/ontology-employee.md", import.meta.url), "utf8");
   const state = await mockApi(page);
   state.jobPolls = 2;
@@ -3551,7 +3551,7 @@ test("従業員 Markdown は業務内容だけを整形表示して公開でき�
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText("従業員番号");
 });
 
-test("公開確認は標準の折りたたみ・フォーム・状態表示を使用する", async ({ page }, testInfo) => {
+test("公開確認は標準の折りたたみ・フォーム・状態表示を使用する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const state = await mockApi(page);
   state.jobPolls = 2;
   state.draftMarkdown = generatedDraftMarkdown;

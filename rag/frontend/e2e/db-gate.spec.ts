@@ -170,7 +170,7 @@ test("状態の確認中は経過時間付きの読み込み表示を出す", as
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
 });
 
-test("確認が 10 秒を超えて遅延の案内が出ても、読み込みのカードとスピナーは動かない（#902）", async ({ page }) => {
+test("確認が 10 秒を超えて遅延の案内が出ても、読み込みのカードとスピナーは動かない（#902）", { tag: "@responsive" }, async ({ page }) => {
   await page.clock.install();
   await routeAuth(page);
   await page.route("**/api/ready/database", () => new Promise<void>(() => undefined));
@@ -213,7 +213,7 @@ test("確認が 10 秒を超えて遅延の案内が出ても、読み込みの�
 });
 
 for (const theme of ["light", "dark"] as const) {
-  test(`確認中のスピナーは回転しても見た目の重心が上下・左右に動かず、カードと行も動かない（#1180、${theme}）`, async ({ page }, testInfo) => {
+  test(`確認中のスピナーは回転しても見た目の重心が上下・左右に動かず、カードと行も動かない（#1180、${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await routeAuth(page);
     // アプリの外観の設定（localStorage）でテーマを切り替える。
     await page.addInitScript((value) => {

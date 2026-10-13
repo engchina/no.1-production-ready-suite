@@ -7,10 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from rag_engine.config import get_settings
+from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.parsing.picture_descriptions import VisionDescriptionStats
-from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.config import get_settings
 
 
 class AnalysisVisionTests(unittest.TestCase):

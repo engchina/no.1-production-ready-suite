@@ -35,13 +35,9 @@ def faq_answer_prompt(question: str, faq_question: str, faq_answer: str) -> str:
     )
 
 
-def answer_from_approved_faq(
-    question: str, faq_question: str, faq_answer: str, settings: Any
-) -> str:
+def answer_from_approved_faq(question: str, faq_question: str, faq_answer: str, settings: Any) -> str:
     """質問・類似問・承認済みの回答から回答の本文を作る（既定の回答のモデル）。"""
     from rag_engine.adapters.oci import parse_text_response
 
-    draft = parse_text_response(
-        SYSTEM_PROMPT, faq_answer_prompt(question, faq_question, faq_answer), settings, FaqAnswerDraft
-    )
+    draft = parse_text_response(SYSTEM_PROMPT, faq_answer_prompt(question, faq_question, faq_answer), settings, FaqAnswerDraft)
     return draft.answer.strip()

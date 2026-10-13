@@ -233,7 +233,7 @@ test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで
   expect(streamed).toBe(false);
 });
 
-test("類似問を使わない場合は回答と根拠パネルを表示する", async ({ page }) => {
+test("類似問を使わない場合は回答と根拠パネルを表示する", { tag: "@responsive" }, async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
   await mockAnswerStream(page);
