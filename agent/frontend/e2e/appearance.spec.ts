@@ -13,7 +13,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`外観と証明書でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, async ({ page }) => {
+  test(`外観と証明書でライト / ダーク / 自動を切り替え、再読込後も保持する (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto("/settings/appearance");
@@ -54,7 +54,7 @@ for (const viewport of [
   { name: "mobile", width: 375, height: 812 },
 ]) {
   for (const theme of ["ライト", "ダーク"] as const) {
-    test(`外観と証明書の HTTPS の証明書（${viewport.name}・${theme}）`, async ({ page }) => {
+    test(`外観と証明書の HTTPS の証明書（${viewport.name}・${theme}）`, { tag: "@responsive" }, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/settings/appearance");
       await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: theme }).click();
@@ -87,7 +87,7 @@ for (const viewport of [
   }
 }
 
-test("サイドナビのシステム設定に外観と証明書がある", async ({ page }) => {
+test("サイドナビのシステム設定に外観と証明書がある", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/settings/appearance");
   await expect(page.getByRole("link", { name: "外観と証明書" })).toHaveAttribute("href", "/settings/appearance");
@@ -97,7 +97,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`サイドナビは利用者向け → 管理者向け（AI 活用 → Agent 構築 → … → システム設定）の順に並べる (${viewport.name})`, async ({ page }) => {
+  test(`サイドナビは利用者向け → 管理者向け（AI 活用 → Agent 構築 → … → システム設定）の順に並べる (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/settings/appearance");
     // 375px ではナビがドロワー（#367）。開いてから並びを読む。

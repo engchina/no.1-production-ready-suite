@@ -295,7 +295,7 @@ test("項目抽出の項目の定義を追加・検証・保存できる", async
 });
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`未保存の環境は標準の項目を使い、保存した定義を「標準の項目に戻す」で戻せる (${scheme})`, async ({
+  test(`未保存の環境は標準の項目を使い、保存した定義を「標準の項目に戻す」で戻せる (${scheme})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     // #556: 一度も保存していない環境は標準の 4 項目。375px ではナビを畳んで本文の幅で確かめる。

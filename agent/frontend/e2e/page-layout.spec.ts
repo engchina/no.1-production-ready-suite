@@ -31,7 +31,7 @@ async function measureLayout(page: Page) {
 }
 
 // Agent の全画面は画面幅いっぱい（共有 PageHeader / PageBody の `wide`）で統一する（#28。#13 の Run・監査だけの wide を置き換え）。
-test.describe("画面幅（PageHeader / PageBody の wide）", () => {
+test.describe("画面幅（PageHeader / PageBody の wide）", { tag: "@responsive" }, () => {
   for (const { width, height } of [
     { width: 1920, height: 1080 },
     { width: 2560, height: 1200 },
@@ -56,7 +56,7 @@ test.describe("画面幅（PageHeader / PageBody の wide）", () => {
   }
 });
 
-test.describe("操作前の案内", () => {
+test.describe("操作前の案内", { tag: "@responsive" }, () => {
   test("MCP 接続の未設定は、ツールを取得できない理由として関連付ける", async ({ page }) => {
     await page.goto("/settings/mcp-connections?id=rag");
 

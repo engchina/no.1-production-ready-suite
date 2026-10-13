@@ -81,7 +81,7 @@ test.beforeEach(async ({ page }) => {
   await mockApi(page);
 });
 
-test("サイドバーを producer / consumer 思想のユーザー向け 5 セクションで表示する", async ({ page }) => {
+test("サイドバーを producer / consumer 思想のユーザー向け 5 セクションで表示する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
 
@@ -220,7 +220,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   await expect(sidebar.getByRole("link", { name: "監査ログ" })).toHaveCount(0);
 });
 
-test("削除済みの安全境界 URL は専用 API を呼ばず、既存の全体 fallback へ移動する", async ({ page }) => {
+test("削除済みの安全境界 URL は専用 API を呼ばず、既存の全体 fallback へ移動する", { tag: "@responsive" }, async ({ page }) => {
   let diagnosticsRequests = 0;
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
@@ -235,7 +235,7 @@ test("削除済みの安全境界 URL は専用 API を呼ばず、既存の全�
   expect(diagnosticsRequests).toBe(0);
 });
 
-test("削除済みの監査ログ URL は専用 API を呼ばず、既存の全体 fallback へ移動する", async ({ page }) => {
+test("削除済みの監査ログ URL は専用 API を呼ばず、既存の全体 fallback へ移動する", { tag: "@responsive" }, async ({ page }) => {
   let auditRequests = 0;
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
@@ -249,7 +249,7 @@ test("削除済みの監査ログ URL は専用 API を呼ばず、既存の全�
   expect(auditRequests).toBe(0);
 });
 
-test("管理 SQL 画面からサイドバーを操作しても表示が空白にならない", async ({ page }) => {
+test("管理 SQL 画面からサイドバーを操作しても表示が空白にならない", { tag: "@responsive" }, async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -284,7 +284,7 @@ test("管理 SQL 画面からサイドバーを操作しても表示が空白に
   expect(pageErrors).toEqual([]);
 });
 
-test("管理 SQL 権限だけの既定入口は管理 SQL 画面へ振り分ける", async ({ page }) => {
+test("管理 SQL 権限だけの既定入口は管理 SQL 画面へ振り分ける", { tag: "@responsive" }, async ({ page }) => {
   await page.unroute("**/api/**");
   await mockApi(page, {
     ...SYSTEM_ADMIN_USER,
@@ -308,7 +308,7 @@ test("管理 SQL 権限だけの既定入口は管理 SQL 画面へ振り分け�
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
 });
 
-test("共通ルールは用語・同義語の直下に独立メニューとして並び、専用ページへ遷移する", async ({
+test("共通ルールは用語・同義語の直下に独立メニューとして並び、専用ページへ遷移する", { tag: "@responsive" }, async ({
   page,
 }) => {
   await page.route("**/api/nl2sql/legacy-learning-material", async (route) => {
@@ -341,7 +341,7 @@ test("共通ルールは用語・同義語の直下に独立メニューとし�
   await expect(page.getByRole("heading", { name: "共通 SQL 生成ルール", level: 2 })).toBeVisible();
 });
 
-test("セクション折りたたみで所属項目だけを隠し、他セクションは維持する", async ({ page }) => {
+test("セクション折りたたみで所属項目だけを隠し、他セクションは維持する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
 
@@ -362,7 +362,7 @@ test("セクション折りたたみで所属項目だけを隠し、他セク�
   await expect(sidebar.getByText("OCI 認証", { exact: true })).toBeHidden();
 });
 
-test("手動で展開したセクションは再読み込み後も保存状態を維持する", async ({ page }) => {
+test("手動で展開したセクションは再読み込み後も保存状態を維持する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
 
@@ -380,7 +380,7 @@ test("手動で展開したセクションは再読み込み後も保存状態�
   await expect(sidebar.getByText("フィードバック管理", { exact: true })).toBeHidden();
 });
 
-test("アクティブ経路のセクションは保存済み折りたたみ状態から自動展開する", async ({ page }) => {
+test("アクティブ経路のセクションは保存済み折りたたみ状態から自動展開する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
 
@@ -396,7 +396,7 @@ test("アクティブ経路のセクションは保存済み折りたたみ状�
   );
 });
 
-test("セクション見出しはキーボードで開閉できる", async ({ page }) => {
+test("セクション見出しはキーボードで開閉できる", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   // root は最初の許可画面へ振り分ける。data router の navigate は非同期なので、振り分けが終わってから
@@ -426,7 +426,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
   await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
 });
 
-test("SQL 生成権限がない既定入口は root から最初の許可画面へ振り分ける", async ({ page }) => {
+test("SQL 生成権限がない既定入口は root から最初の許可画面へ振り分ける", { tag: "@responsive" }, async ({ page }) => {
   await page.unroute("**/api/**");
   await mockApi(page, {
     ...SYSTEM_ADMIN_USER,
@@ -449,7 +449,7 @@ test("SQL 生成権限がない既定入口は root から最初の許可画面�
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
 });
 
-test("settings_upload_storage 権限だけの既定入口は保存先設定へ振り分ける", async ({
+test("settings_upload_storage 権限だけの既定入口は保存先設定へ振り分ける", { tag: "@responsive" }, async ({
   page,
 }) => {
   await page.unroute("**/api/**");
@@ -475,7 +475,7 @@ test("settings_upload_storage 権限だけの既定入口は保存先設定へ�
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
 });
 
-test("メニュー権限がない root は無権限画面へ移動し、再転送を繰り返さない", async ({ page }) => {
+test("メニュー権限がない root は無権限画面へ移動し、再転送を繰り返さない", { tag: "@responsive" }, async ({ page }) => {
   await page.unroute("**/api/**");
   await mockApi(page, {
     ...SYSTEM_ADMIN_USER,
@@ -497,7 +497,7 @@ test("メニュー権限がない root は無権限画面へ移動し、再転�
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
 });
 
-test("375px 幅ではナビがドロワーになり、開くと主要リンクへ到達できる（#367）", async ({ page }) => {
+test("375px 幅ではナビがドロワーになり、開くと主要リンクへ到達できる（#367）", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/");
   // `/` は `/query` へ移る。移る前にドロワーを開くと、移ったときに閉じて展開のボタンが見えなくなる

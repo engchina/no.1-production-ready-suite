@@ -20,7 +20,7 @@ async function openFixture(page: Page, theme: "light" | "dark") {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: 通知はホバー・フォーカス中に止まり、danger は閉じるまで残る`, async ({ page }, testInfo) => {
+  test(`${theme}: 通知はホバー・フォーカス中に止まり、danger は閉じるまで残る`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
     const region = page.getByRole("region", { name: "通知", exact: true });

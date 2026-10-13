@@ -30,6 +30,10 @@ PR の CI（`.github/workflows/ci.yml` の `e2e-impact`）は `select` で、bas
 の製品（NL2SQL）は、1 shard の目安より長い spec をその spec だけの Playwright の `--shard` で
 テスト単位に分け、残りの spec を LPT で詰める（#1525）。記録が無ければ全体を `--shard` で分ける。
 
+PR の CI の mobile の project は、画面幅に依存するテスト（`@responsive` など）だけを実行する
+（`platform/scripts/e2e-impact/mobile-scope.ts`。#1582）。時間の見積もりは、nightly の記録の
+うち PR でも実行するテストの時間（`prDurationMs`。記録の fixture の `prScope`）を使う。
+
 PR の smoke（ci.yml の `*_E2E_SMOKE`）が全 project で実行する spec は `--skip-specs` で渡し、
 選んだ spec から除く（同じ spec を 2 回実行しない。全件のときは smoke の job を飛ばす。#1525）。
 
@@ -461,9 +465,16 @@ def aggregate(records_dir: Path, product: str, commit: str) -> dict:
     tests = 0
     for record in latest.values():
         spec = record["spec"]
-        entry = specs.setdefault(spec, {"durationMs": 0, "tests": 0})
+        entry = specs.setdefault(
+            spec, {"durationMs": 0, "tests": 0, "prDurationMs": 0, "prTests": 0}
+        )
         entry["durationMs"] += int(record["durationMs"])
         entry["tests"] += 1
+        # PR の CI でも実行するテスト（mobile の project は @responsive など。#1582）。
+        # prScope の無い古い fixture の記録は、実行するものとして数える。
+        if record.get("prScope", True):
+            entry["prDurationMs"] += int(record["durationMs"])
+            entry["prTests"] += 1
         if not record["loaded"]:
             continue
         tests += 1
@@ -515,9 +526,15 @@ def merge_maps(maps: list[dict]) -> dict | None:
     for m in maps:
         merged["tests"] += m["tests"]
         for spec, entry in m["specs"].items():
-            target = merged["specs"].setdefault(spec, {"durationMs": 0, "tests": 0})
+            target = merged["specs"].setdefault(
+                spec, {"durationMs": 0, "tests": 0, "prDurationMs": 0, "prTests": 0}
+            )
             target["durationMs"] += entry["durationMs"]
             target["tests"] += entry["tests"]
+            # prDurationMs の無い記録（#1582 より前の nightly）は、全件を PR の時間とする
+            # （過大の見積もり）。
+            target["prDurationMs"] += entry.get("prDurationMs", entry["durationMs"])
+            target["prTests"] += entry.get("prTests", entry["tests"])
         for path, info in m["files"].items():
             target = merged["files"].setdefault(path, {"loadedBy": set(), "functions": {}})
             target["loadedBy"].update(info["loadedBy"])
@@ -969,13 +986,22 @@ def select(product: Product, impact: ImpactMap | None, base: str, head: str = "H
     return selection
 
 
+def pr_duration(entry: dict) -> int:
+    """PR の CI で実行するテストの時間（mobile の project は @responsive などだけ。#1582）。"""
+    return int(entry.get("prDurationMs", entry["durationMs"]))
+
+
+def pr_tests(entry: dict) -> int:
+    return int(entry.get("prTests", entry.get("tests", 0)))
+
+
 def spec_durations(specs: Iterable[str], impact: ImpactMap | None) -> dict[str, int]:
-    """spec ごとの見積もりの時間（nightly の実測の合計。記録が無い spec は、記録のある spec の
-    中央値）。"""
-    known = sorted(entry["durationMs"] for entry in (impact.specs.values() if impact else []))
+    """spec ごとの見積もりの時間（nightly の実測のうち、PR の CI でも実行するテストの合計。記録が
+    無い spec は、記録のある spec の中央値）。"""
+    known = sorted(pr_duration(entry) for entry in (impact.specs.values() if impact else []))
     default = known[len(known) // 2] if known else UNKNOWN_SPEC_MS
     recorded = impact.specs if impact else {}
-    return {spec: int(recorded.get(spec, {}).get("durationMs", default)) for spec in specs}
+    return {spec: pr_duration(recorded[spec]) if spec in recorded else default for spec in specs}
 
 
 def shard_count(product: Product, selection: Selection, impact: ImpactMap | None) -> int:
@@ -1086,7 +1112,9 @@ def shard_matrix(
     durations = spec_durations(targets, impact)
     if product.fully_parallel:
         assert impact is not None
-        tests = {spec: int(impact.specs.get(spec, {}).get("tests", 0)) for spec in targets}
+        tests = {
+            spec: pr_tests(impact.specs[spec]) if spec in impact.specs else 0 for spec in targets
+        }
         shards = plan_split_shards(durations, count, {s: n for s, n in tests.items() if n})
     else:
         shards = plan_shards(durations, count)

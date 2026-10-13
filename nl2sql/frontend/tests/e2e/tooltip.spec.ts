@@ -30,7 +30,7 @@ async function box(locator: Locator) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: ホバーで遅れて出し、吹き出しへ移っても消えず、Escape で閉じる`, async ({ page }, testInfo) => {
+  test(`${theme}: ホバーで遅れて出し、吹き出しへ移っても消えず、Escape で閉じる`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "ホバーは desktop だけ");
     await openFixture(page, theme);
     const close = page.getByTestId("close");
@@ -75,7 +75,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(tooltip).toHaveCount(0);
   });
 
-  test(`${theme}: キーボードのフォーカスですぐに出し、違う文言は aria-describedby で説明にする`, async ({ page }, testInfo) => {
+  test(`${theme}: キーボードのフォーカスですぐに出し、違う文言は aria-describedby で説明にする`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "キーボードは desktop だけ");
     await openFixture(page, theme);
     const prev = page.getByTestId("prev");
@@ -105,7 +105,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(tooltip).toHaveCount(0);
   });
 
-  test(`${theme}: 固定ヘッダーのボタンは下へ反転してヘッダーの上に出し、画面の右端では内側にずらす`, async ({ page }, testInfo) => {
+  test(`${theme}: 固定ヘッダーのボタンは下へ反転してヘッダーの上に出し、画面の右端では内側にずらす`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "ホバーは desktop だけ");
     await openFixture(page, theme);
     const help = page.getByTestId("help");
@@ -136,7 +136,7 @@ for (const theme of ["light", "dark"] as const) {
     expect(edgeBubble.x + edgeBubble.width).toBeLessThanOrEqual(375 - 8 + 1);
   });
 
-  test(`${theme}: タッチ端末（375px）では押しても出さない`, async ({ page }, testInfo) => {
+  test(`${theme}: タッチ端末（375px）では押しても出さない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile-375", "タッチ端末は mobile-375 だけ");
     await openFixture(page, theme);
     expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(true);

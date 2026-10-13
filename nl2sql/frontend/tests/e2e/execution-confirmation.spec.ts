@@ -8,7 +8,7 @@ import { FIXTURE_BASE_URL } from "./_helpers/web-server";
 test.use({ baseURL: FIXTURE_BASE_URL });
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme}: 実行確認語の統一表示・状態・キーボード操作`, async ({ page }, testInfo) => {
+  test(`${theme}: 実行確認語の統一表示・状態・キーボード操作`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.route("**/__execution-confirmation**", route => route.fulfill({
       contentType: "text/html",
       body: `<html class="${theme === "dark" ? "dark" : ""}" lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/tests/fixtures/execution-confirmation.tsx"></script></body></html>`,

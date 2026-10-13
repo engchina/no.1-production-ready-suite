@@ -300,7 +300,7 @@ async function mockProfileManagement(
   };
 }
 
-test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻れる", async ({ page }) => {
+test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻れる", { tag: "@responsive" }, async ({ page }) => {
   await mockProfileManagement(page);
   await page.goto("/profiles");
 
@@ -349,7 +349,7 @@ test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻�
   await expect(page.getByLabel("名称")).toHaveValue("経理プロファイル");
 });
 
-test("プロファイル名のリンク（共有 RowTitleButton の href）は Tab で届き、Enter でエディタを開き、Ctrl / ⌘ + クリックで新しいタブに開ける", async ({ page }, testInfo) => {
+test("プロファイル名のリンク（共有 RowTitleButton の href）は Tab で届き、Enter でエディタを開き、Ctrl / ⌘ + クリックで新しいタブに開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
   // #421: 一覧の行の題名のボタンを packages/ui の共有部品にそろえた（NL2SQL の手書きを置き換え）。
   // #583: URL（?profile=）で開くので、題名はリンクの形にして新しいタブでも開けるようにした。
   await mockProfileManagement(page);
@@ -470,7 +470,7 @@ test("リセットとアーカイブ関連 UI は表示しない", async ({ page
   expect(viewport.body).toBeLessThanOrEqual(viewport.window);
 });
 
-test("ローカルフォントで全体と並べ替え列名を描画しキーボードで操作できる", async ({ page, context, baseURL }, testInfo) => {
+test("ローカルフォントで全体と並べ替え列名を描画しキーボードで操作できる", { tag: "@responsive" }, async ({ page, context, baseURL }, testInfo) => {
   const origin = new URL(baseURL!).origin;
   const externalRequests: string[] = [];
   const fontResponses: { url: string; ok: boolean }[] = [];
@@ -553,7 +553,7 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   await page.screenshot({ path: testInfo.outputPath("profile-local-fonts.png"), fullPage: true });
 });
 
-test("標準プロファイルも一覧と編集画面から確認付きで削除できる", async ({ page }) => {
+test("標準プロファイルも一覧と編集画面から確認付きで削除できる", { tag: "@responsive" }, async ({ page }) => {
   const api = await mockProfileManagement(page);
   await page.goto("/profiles");
 
@@ -615,7 +615,7 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   await expectNoPageHorizontalOverflow(page);
 });
 
-test("編集画面からプロファイルを確認付きで削除できる", async ({ page }) => {
+test("編集画面からプロファイルを確認付きで削除できる", { tag: "@responsive" }, async ({ page }) => {
   const api = await mockProfileManagement(page);
   await page.goto("/profiles");
 
@@ -674,7 +674,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   await expectNoPageHorizontalOverflow(page);
 });
 
-test("プロファイル削除時に Oracle 資産 cleanup の警告を表示する", async ({ page }) => {
+test("プロファイル削除時に Oracle 資産 cleanup の警告を表示する", { tag: "@responsive" }, async ({ page }) => {
   await mockProfileManagement(page, { oracleCleanupWarning: true });
   await page.goto("/profiles");
 

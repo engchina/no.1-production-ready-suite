@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 // 開発用 dev サーバ（3000）と衝突しない既定ポート。
 const port = process.env.PLAYWRIGHT_PORT ?? "3100";
@@ -54,6 +56,9 @@ export default defineConfig({
     {
       name: "mobile",
       use: { ...devices["Pixel 5"], viewport: { width: 375, height: 812 } },
+      // PR の CI は E2E_MOBILE_SCOPE=responsive で、画面幅に依存するテスト（@responsive など）だけを実行する。
+      // nightly とローカルは全件（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
+      ...mobileProjectScope(),
     },
   ],
 });

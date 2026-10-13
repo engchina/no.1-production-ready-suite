@@ -38,7 +38,7 @@ function overlaps(a: { x: number; y: number; width: number; height: number }, b:
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: 通知を出したまま、ページの操作と末尾の主操作を押せる（一時停止は維持）`, async ({ page }, testInfo) => {
+  test(`${theme}: 通知を出したまま、ページの操作と末尾の主操作を押せる（一時停止は維持）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
     const region = page.getByRole("region", { name: "通知", exact: true });
