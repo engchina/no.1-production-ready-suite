@@ -1174,6 +1174,22 @@ def _markdown_json_payloads(markdown: str, block_pattern: re.Pattern[str]) -> li
     return payloads
 
 
+def qa_markdown_sections(markdown: str) -> str:
+    """Q/A 由来の SQL 生成ルール・構造パターンの節のうち、中身があるものだけを返す（#1720）。"""
+
+    sections: list[str] = []
+    for title in (_QA_SQL_RULE_SECTION_TITLE, _QA_SQL_PATTERN_SECTION_TITLE):
+        match = re.search(
+            rf"^{re.escape(title)}[ \t]*\n(?P<body>.*?)(?=^#{{1,2}} |\Z)",
+            markdown,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        body = match.group("body").strip() if match else ""
+        if body and body != "- なし":
+            sections.append(f"{title}\n{body}")
+    return "\n\n".join(sections)
+
+
 def _qa_pair_from_markdown_payload(payload: object) -> QaPair | None:
     if not isinstance(payload, Mapping):
         return None
@@ -2051,7 +2067,26 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "インターフェースは必須プロパティ・関係・アクションと実装オブジェクトの対応を定義する。"
     "業務名・説明・同義語は日本語とし、現場の別名・略称を aliases に記録する。"
     "evidence は入力の source_id と locator、原文の引用を記録し、assertion に対象フィールドを書く。"
-    "DB は source_id=schema、locator=OWNER.OBJECT とする。"
+    "DB は source_id=schema、locator=OWNER.OBJECT または OWNER.OBJECT.COLUMN とする。"
+    # graph を作れる範囲を最大にし、足りない項目は推測で埋めない（#1720）。
+    "best effort で、schema_context から作れるオブジェクト・プロパティ・関係はすべて作る。"
+    "根拠の無い種類は、名前だけの空の雛形（api_name が種類名の定義など）を作らず、"
+    "coverage に理由を書く。"
+    "情報が足りない任意の項目（識別子・粒度・単位・基数など）は推測で埋めず空のままにする。"
+    "空の項目を missing_information_ja に書き写さない（「説明なし」「主キー不明」など）。"
+    "missing_information_ja は、資料どうしの矛盾など利用者が判断すべき点だけにする。"
+    "プロパティは 1 つのオブジェクトに属し、object_type はそのオブジェクトの api_name、"
+    "mappings はそのオブジェクトの表・ビューの列にする。"
+    "同じ列名が複数の表・ビューにあるとき（例: 2 つのビューの DEPARTMENT_NAME）は、"
+    "オブジェクトごとに別の api_name のプロパティを作る"
+    "（例: v_emp_dept_department_name）。他のオブジェクトのプロパティを properties に入れない。"
+    "オブジェクトの mappings の column_name に * を書かない。表・ビュー全体の対応は"
+    "column_name を空文字にする。"
+    "主キー・一意制約が無い表・ビュー（ビューは制約を持たない）の primary_key は、"
+    "資料で確かめられなければ空にする。"
+    "外部キー制約が無くても、同じ名前・型の ID 列（例: EMPLOYEE.DEPARTMENT_ID と"
+    " DEPARTMENT.DEPARTMENT_ID）があれば、その列で結合する関係を link_type として作り、"
+    "join_expression_sql に OWNER.OBJECT.COLUMN = OWNER.OBJECT.COLUMN の形で書く。"
 )
 
 
@@ -4575,8 +4610,10 @@ class OntologyBuildService:
             prompt = (
                 "schema_context を根拠に主要6種類・補助7種類の関連概念を"
                 " definitions に抽出してください。"
-                "各表・ビューの日本語の業務名・説明・同義語、Property と主識別子、"
-                "制約から確認できる関係を含め、根拠のない業務契約は創作しないでください。"
+                "各表・ビューの日本語の業務名・説明・同義語、オブジェクトごとの Property、"
+                "制約で分かる主識別子、制約または同じ名前・型の ID 列で分かる関係を含め、"
+                "根拠のない業務契約は創作しないでください。"
+                "分からない項目は空のままにし、作れる範囲で graph を作ってください。"
             )
             try:
                 _ensure_llm_call_fits(prompt, schema_context)
@@ -4933,7 +4970,12 @@ class OntologyBuildService:
             for message in _unique_non_empty_messages([*job.warnings_ja, *warnings])
             if _is_content_note(message)
         ]
-        from .ontology_unified_model import legacy_definitions, merge_definitions, render_concepts
+        from .ontology_unified_model import (
+            legacy_definitions,
+            merge_definitions,
+            render_concepts,
+            repair_definitions,
+        )
 
         candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
             [draft.payload for draft in draft_inputs],
@@ -4954,6 +4996,13 @@ class OntologyBuildService:
                 *legacy_definitions(candidates),
                 *[d for result in validated_extractions for d in result.extraction.definitions],
             ],
+        )
+        # AI の出力を graph にできる形へ直す（共有した列のプロパティの分割など。#1720）。
+        unified_definitions = repair_definitions(
+            job.profile_id,
+            unified_definitions,
+            json.loads(schema_context),
+            ai_output=True,
         )
         merge_conflicts = list(concept_conflicts)
         from .ontology_definition_validation import validate_definitions
@@ -5002,19 +5051,26 @@ class OntologyBuildService:
                 ontology=ontology,
                 profile_view=view,
             )
-            if "## Q/A 由来 SQL 生成ルール" in markdown_output:
-                markdown_output = (
-                    "# オントロジー下書き\n\n## Q/A 由来 SQL 生成ルール"
-                    + markdown_output.split("## Q/A 由来 SQL 生成ルール", 1)[1]
-                )
+            # 中身の無い節・入力の要約・物理オブジェクトの一覧は書かない（#1720）。
+            # Q/A 由来のルール・構造パターンは中身があるときだけ残す。
             markdown_output = (
-                markdown_output.split("## 業務エンティティ", 1)[0].rstrip()
-                + "\n\n"
-                + render_concepts(
-                    unified_definitions,
-                    concept_conflicts,
-                    [c for result in validated_extractions for c in result.extraction.coverage],
+                "\n\n".join(
+                    part.strip()
+                    for part in (
+                        qa_markdown_sections(markdown_output),
+                        render_concepts(
+                            unified_definitions,
+                            concept_conflicts,
+                            [
+                                c
+                                for result in validated_extractions
+                                for c in result.extraction.coverage
+                            ],
+                        ),
+                    )
+                    if part.strip()
                 )
+                + "\n"
             )
             self._set_definition_phase(job_id, "markdown", "succeeded")
             self._set_definition_phase(job_id, "save", "running")

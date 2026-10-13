@@ -44,8 +44,10 @@ Q/A の補助的な `DUAL` / `SYS.DUAL` 参照は SQL の名前解決に限っ�
 
 ### 公開診断と警告の保持
 
-- 公開前の error / warning は最大18remの縦スクロール領域に表示する。同一 severity・メッセージを1回に集約し、件数と対象の definition ID / field / code を確認できる。表示上の集約で元の診断を削除しない。
-- `EVIDENCE_UNRESOLVED` / `INFERENCE_WITHOUT_EVIDENCE` など warning のみなら、警告を確認したうえで公開できる。SQL の列解決・構造・参照の error や標本検証の error は公開を阻止する。
+- 診断は 3 段階（#1720）。**error**（公開を阻止）は graph が壊れて SQL の接地に使えないものだけ（物理の表・列が無い / 業務プロファイルの範囲外 `MAPPING_OUTSIDE_PROFILE`、参照先の概念が無い `REFERENCE_INVALID`、他オブジェクトのプロパティ `PROPERTY_OWNER_MISMATCH`、不正な SQL 式、Markdown の解析が報告した矛盾、標本検証の error）。**warning** は公開できるが SQL の意味に効くもの（指標の式・集約が無い、同じ概念の値の食い違い `DEFINITION_CONFLICT`。先の値を使う）。**info** は graph を作れるが補えば精度が上がる項目（識別子 `OBJECT_IDENTITY_REQUIRED`・粒度 `OBJECT_GRAIN_REQUIRED`・型・基数・根拠 `INFERENCE_WITHOUT_EVIDENCE`・不足情報）。view など制約の無いオブジェクトは識別子が未設定のまま公開できる。
+- error / warning は最大18remの縦スクロール領域に表示し、同一 severity・メッセージを1回に集約して、件数と対象（概念の名前と definition ID / field / code）を確認できる。info は「補うと精度が上がる項目」の 1 つの畳んだ領域にまとめ、公開の状態は「公開できます」のまま（警告の帯を出さない）。表示上の集約で元の診断を削除しない。
+- 根拠（evidence）は定義ごとに 1 件だけ照合の結果を出す（evidence ごとに重ねない）。DB の schema を根拠にした evidence（`source_id=schema` / `source_kind=database`、位置は `OWNER.OBJECT[.COLUMN]` の並びや結合条件）は、資料の検証値が無くても、物理の表・列が業務プロファイルの範囲にあれば照合済みにする。
+- 公開前の確認は、公開するオントロジーの構成（オブジェクト・関係・プロパティの件数と、オブジェクトごとのプロパティと関係）を先に示し、概念ごとの差分は畳む。値型など内部の概念は差分の一覧に出さず、同じ名前の概念には属するオブジェクトの名前を添える。
 - 公開時点の `findings` と `data_report` は immutable snapshot に含める。後続の公開でも旧版の記録は変更しない。公開済みタブで確認し、版 ID を含む JSON をダウンロードできる。
 - 過去版は `GET /api/nl2sql/profiles/{profile_id}/ontology-markdown/publications/{snapshot_id}/diagnostics` で取得できる。Profile の閲覧権限と snapshot の Profile 所有権を確認し、元の findings・標本検証レポートを返す。
 - 旧 snapshot に診断 field がない場合は保存済み preparation を参照する。記録が残っていない場合は `available=false` として区別し、「警告なし」とは扱わない。再解析・再検証は行わない。
@@ -101,5 +103,11 @@ Markdown は業務名称・属性・関係・必要な表列対応を記載し�
 生成時の定義と Markdown のハッシュを対応づけ、未編集の稿を公開する際は対応定義を再利用する。Profile / Schema / 参照 / SQL の機械検証は再実行する。編集済みの稿は再解析し、削除した定義を過去の構築結果から復元しない。旧形式の稿も再解析するが、内部診断行を業務本文として扱わない。
 
 同じ業務オブジェクト・同じ物理列に対応する同名属性の snake_case / PascalCase を統合し、参照を合わせる。異なる意味や所属先の属性は統合しない。同一属性の integer / number は、根拠のない整数制約を加えない number に合わせる。表対応の表名を誤って SQL 式にも出力した場合は、表対応を維持して冗長な式だけを除去する。実際の列 SQL や曖昧な参照の検査は省略しない。
+
+AI 構築の出力は best effort で graph にする（#1720）。マッピングの列 `*` は表・ビュー全体の対応（列なし）として扱う。オブジェクトの properties / 識別子が他のオブジェクトのプロパティ（同じ列名を 2 つの view で共有した `DEPARTMENT_NAME` など）や未定義の名前を指すときは、そのオブジェクトの表に同じ列があればオブジェクトごとのプロパティ（`v_emp_dept_department_name`）を作って付け替え、列が無い参照は外す（推測で列を足さない）。種類ごとの空の雛形・同じ列の重複したプロパティ・空の項目を書き写した不足情報は、AI の出力からだけ除く（利用者が Markdown に書いた定義は消さず、検証の診断に任せる）。統合では参照の一覧（properties など）を和集合にし、基数の `unknown` は未設定として分かった値を使う。生成の指示も、情報が足りない項目は推測で埋めず空のままにし、外部キーが無くても同じ名前・型の ID 列から関係を作るよう求める。
+
+下書きの Markdown は中身の無い節（Q/A 由来のルール・構造パターンが無いときの「なし」）・入力の要約・物理オブジェクトの一覧・既定値の項目（「必須: いいえ」など）・列そのものの式・不足情報の「補足」を書かない。
+
+**LLM に渡すオントロジー**（Select AI / Select AI Agent / Enterprise AI の prompt。`ontology_published_context.published_context` が唯一の入口）は、下書きの本文ではなく、公開した定義から `ontology_unified_model.render_llm_context` で作る。オブジェクト（表）・プロパティ（列・型・単位・許可値・別名）・関係（多重度と結合条件）・指標（式・集約・粒度）・業務ルール・用語だけを書き、根拠・検証の状態・不足情報・値型・書き方の説明・空の項目は入れない。Q/A 由来の SQL 生成ルール・構造パターンは、中身があり Profile 全体を許可した実行のときだけ添える。
 
 保存済み Markdown や公開版は自動で書き換えない。新しい書式と生成定義の再利用は再構築した下書きから適用する。

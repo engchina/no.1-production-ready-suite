@@ -3580,7 +3580,10 @@ test("公開確認は標準の折りたたみ・フォーム・状態表示を�
   await loadOntologyBuildWorkspace(page);
   await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
   const check = page.getByRole("region", { name: "公開前の確認", exact: true });
+  // 概念ごとの差分は畳み、開いたときだけ並べる（#1720）。
   const differences = check.getByTestId("ontology-publication-difference");
+  await expect(differences.first()).toBeHidden();
+  await check.getByTestId("ontology-publication-differences").locator("summary").first().press("Enter");
   await expect(differences).toHaveCount(7);
   const differenceSummary = differences.nth(1).locator("summary");
   await differenceSummary.focus();
@@ -3622,6 +3625,71 @@ test("公開確認は標準の折りたたみ・フォーム・状態表示を�
   await expect(check.getByRole("button", { name: "確認した内容を公開", exact: true })).toBeEnabled();
   await summary.press("Enter");
   await expect(input).toBeHidden();
+});
+
+test("公開前の確認は graph の構成を先に示し、補うと精度が上がる項目と差分を畳む (#1720)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = await mockApi(page);
+  state.jobPolls = 2;
+  state.draftMarkdown = generatedDraftMarkdown;
+  const object = (api_name: string, name_ja: string, table: string, properties: string[]) =>
+    ({ kind: "object_type", api_name, name_ja, properties, mappings: [{ owner: "ADMIN", object_name: table, column_name: "" }] });
+  const property = (api_name: string, name_ja: string, object_type: string) => ({ kind: "property", api_name, name_ja, object_type });
+  const definitions = [
+    object("department", "部門", "DEPARTMENT", ["department_name"]),
+    object("employee", "従業員", "EMPLOYEE", ["employee_name"]),
+    object("v_emp_dept", "従業員部門ビュー", "V_EMP_DEPT", ["v_emp_dept_department_name"]),
+    property("department_name", "部門名", "department"),
+    property("employee_name", "従業員名", "employee"),
+    property("v_emp_dept_department_name", "部門名", "v_emp_dept"),
+    { kind: "link_type", api_name: "employee_department", name_ja: "所属", source: "employee", target: "department" },
+    { kind: "value_type", api_name: "string_type", name_ja: "文字列型" },
+  ];
+  const identity = "識別子（1 行を特定する列）が未設定です。分かれば Markdown のオブジェクトに「識別子」を書くと、件数・重複の判定の精度が上がります。";
+  const preparation = {
+    id: "best-effort", status: "ready", draft_etag: state.draftMarkdownEtag, expected_head: "", display_version: 4,
+    findings: [{ severity: "info", code: "OBJECT_IDENTITY_REQUIRED", definition_id: "v_emp_dept", field: "primary_key", message_ja: identity }],
+    definitions,
+    differences: definitions.map((after, index) => ({ id: `d-${index}`, before: null, after })),
+    error_message_ja: "",
+  };
+  await page.route("**/ontology-markdown/prepare", route => fulfillJson(route, preparation));
+  await page.route("**/ontology-markdown/preparations/*", route => fulfillJson(route, preparation));
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+  const check = page.getByRole("region", { name: "公開前の確認", exact: true });
+  // info だけなら公開でき、警告の帯や「公開前のエラー・警告」の一覧を出さない。
+  await expect(check.getByText("公開できます", { exact: true })).toBeVisible();
+  await expect(page.getByText(/警告がありますが公開できます/)).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "公開前のエラー・警告", exact: true })).toHaveCount(0);
+  const graph = check.getByTestId("ontology-publication-graph");
+  for (const [label, value] of [["オブジェクト", "3"], ["関係", "1"], ["プロパティ", "3"]]) {
+    await expect(graph.getByText(label, { exact: true }).first().locator("xpath=following-sibling::dd")).toHaveText(value);
+  }
+  await expect(graph.getByText("ADMIN.V_EMP_DEPT", { exact: true })).toBeVisible();
+  const improvements = check.getByTestId("ontology-improvement-findings");
+  await expect(improvements.getByText(identity)).toBeHidden();
+  await improvements.locator("summary").first().press("Enter");
+  await expect(improvements.getByText(identity)).toBeVisible();
+  await improvements.getByText("対象・項目・診断コードを確認", { exact: true }).click();
+  await expect(improvements.getByText("従業員部門ビュー（v_emp_dept） / primary_key / OBJECT_IDENTITY_REQUIRED", { exact: true })).toBeVisible();
+  const differences = check.getByTestId("ontology-publication-differences");
+  await differences.locator("summary").first().press("Enter");
+  const items = differences.getByTestId("ontology-publication-difference");
+  // 値型（内部の概念）は出さず、同じ名前はどのオブジェクトのものかを添える。
+  await expect(items).toHaveCount(7);
+  await expect(differences.getByText("文字列型", { exact: true })).toHaveCount(0);
+  await expect(differences.getByText("部門名（従業員部門ビュー）", { exact: true })).toBeVisible();
+  await expect(differences.getByText("部門名（部門）", { exact: true })).toBeVisible();
+  await expect(check.getByRole("button", { name: "確認した内容を公開", exact: true })).toBeEnabled();
+  for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await check.screenshot({ path: testInfo.outputPath(`publication-best-effort-${width}-${theme}.png`) });
+    }
+  }
 });
 
 test("取得済みの業務プロファイルの再取得が失敗しても、構築の作業領域と選んだ資料を残す", async ({ page }, testInfo) => {

@@ -29,7 +29,8 @@ export function PublishedOntologyDiagnostics({ state }: { state: OntologyMarkdow
       {available && <Button icon={Download} type="button" variant="secondary" size="sm" onClick={download}>{t("markdownOntology.exportDiagnostics")}</Button>}
     </div>
     {available ? findings.length ? <>
-      <Banner severity="warning">{t("markdownOntology.publishedWarningsRetained")}</Banner>
+      {/* 補えば精度が上がる項目（info）だけなら警告の帯を出さない（#1720）。 */}
+      {findings.some(finding => finding.severity !== "info") && <Banner severity="warning">{t("markdownOntology.publishedWarningsRetained")}</Banner>}
       <OntologyFindings findings={findings} label={t("markdownOntology.publishedFindingList")} />
     </> : <p className="text-sm text-fg-muted">{t("markdownOntology.noFindings")}</p>
       : <p className="text-sm text-fg-muted">{t("markdownOntology.diagnosticsUnavailable")}</p>}

@@ -51,6 +51,12 @@ def mapping_column_key(mapping: DefinitionMapping) -> str:
     return object_match_key(mapping.column_name)
 
 
+def is_whole_object_column(column_name: str) -> bool:
+    """列なし（表・ビュー全体）の対応。AI が `*` と書いた列も列なしとして扱う（#1720）。"""
+
+    return column_name.strip() in {"", "*"}
+
+
 def schema_objects(payload: dict[str, Any]) -> dict[str, set[str]]:
     """AI 構築 schema context の object → 列を、`object_identity` の照合キーで返す。"""
 
@@ -143,9 +149,9 @@ def interface_contracts(
 def validate_definitions(
     bundle: ProfileOntologyBundle, schema: dict[str, Any]
 ) -> list[DefinitionFinding]:
-    findings = inspect_definition_quality(bundle.definitions, bundle.sources)
     definitions = {item.api_name: item for item in bundle.definitions}
     physical = schema_objects(schema)
+    findings = inspect_definition_quality(bundle.definitions, bundle.sources, physical)
     for item in bundle.definitions:
 
         def error(code: str, field: str, message: str, definition_id: str = item.id) -> None:
@@ -217,7 +223,9 @@ def validate_definitions(
                     error(
                         "PROPERTY_OWNER_MISMATCH",
                         "title_property" if name == item.title_property else "properties",
-                        f"{name} は別オブジェクトのプロパティです。",
+                        f"{name} は {prop.object_type or '別のオブジェクト'} のプロパティです。"
+                        f"{item.api_name} の列として使うときは、{item.api_name} のプロパティを"
+                        "別に定義するか、共通のプロパティ（Shared Property）にしてください。",
                     )
             for implementation in item.implements:
                 refs.append(("implements", implementation.interface, {"interface"}))
@@ -316,20 +324,35 @@ def validate_definitions(
         for field, name, kinds in refs:
             target = definitions.get(name)
             if target is None or (kinds and target.kind not in kinds):
-                error("REFERENCE_INVALID", field, f"概念参照 {name or '未設定'} を解決できません。")
+                error(
+                    "REFERENCE_INVALID",
+                    field,
+                    f"概念参照 {name or '未設定'} を解決できません。"
+                    "Markdown にその定義を書くか、参照を削除してください。",
+                )
         for field in ("time_property", "timestamp_property"):
             name = getattr(item, field, "")
             if name and (name not in definitions or definitions[name].kind != "property"):
                 error("REFERENCE_INVALID", field, f"時刻プロパティ {name} を解決できません。")
         for mapping in item.mappings:
             key = mapping_object_key(mapping)
-            if key not in physical or (
-                mapping.column_name and mapping_column_key(mapping) not in physical[key]
+            if key not in physical:
+                error(
+                    "MAPPING_OUTSIDE_PROFILE",
+                    "mappings",
+                    f"{key} は業務プロファイルの対象に含まれていません。"
+                    "業務プロファイルの対象の表・ビューに追加するか、"
+                    "Markdown からこの対応を削除してください。",
+                )
+            elif not is_whole_object_column(mapping.column_name) and (
+                mapping_column_key(mapping) not in physical[key]
             ):
                 error(
                     "MAPPING_OUTSIDE_PROFILE",
                     "mappings",
-                    f"{key}.{mapping.column_name} は現在の Profile 範囲にありません。",
+                    f"{key}.{mapping.column_name} は {key} に無い列か、"
+                    "業務プロファイルで使えない列です。列名を直すか、"
+                    "Markdown からこの対応を削除してください。",
                 )
         for field, sql, expression_scope in definition_expressions(item, definitions, physical):
             if not sql:

@@ -41,6 +41,7 @@ from .ontology_unified_model import (
     is_reconciled_spelling_issue,
     merge_definitions,
     project_graph,
+    repair_definitions,
     resolve_concept_name,
 )
 
@@ -480,16 +481,22 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             else:
                 parsed = self._parse_markdown(value)
             definitions, conflicts = merge_definitions(profile_id, parsed.definitions)
+            # 同じ列名のプロパティを複数のオブジェクトで共有した参照は、オブジェクトごとに分ける
+            # （#1720）。分けたプロパティは元のオブジェクトの行に対応する。
+            merged_names = {d.api_name for d in definitions}
+            definitions = repair_definitions(profile_id, definitions, json.loads(value["schema"]))
+            repaired_names = {d.api_name for d in definitions} - merged_names
             # 根拠の可否は機械検証が判定する。LLM の補足を error に格上げしない。
-            issues = [
-                *[
-                    issue
-                    for issue in parsed.issues_ja
-                    if not is_evidence_note(issue)
-                    and not is_reconciled_spelling_issue(issue, parsed.definitions, definitions)
-                ],
-                *conflicts,
+            reported = [
+                issue
+                for issue in parsed.issues_ja
+                if not is_evidence_note(issue)
+                and not is_reconciled_spelling_issue(issue, parsed.definitions, definitions)
             ]
+            # 同じ概念の値の食い違い（統合の競合）は先の値で graph を作れるため、公開を止めず
+            # 警告にする。Markdown の解析が報告した矛盾・不正だけを、公開を止めるエラーにする。#1720
+            issues = [] if generated else reported
+            merge_conflicts = [*(reported if generated else []), *conflicts]
             developer_lines: set[int] = {
                 i
                 for i, line in enumerate(value["markdown"].splitlines(), 1)
@@ -497,7 +504,7 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             }
             covered = set(developer_lines)
             names = {d.api_name for d in definitions}
-            linked_names: set[str] = set()
+            linked_names: set[str] = set(repaired_names)
             for line in parsed.lines:
                 # 旧診断だけの行は本文として再解釈しない。定義を含む範囲は検査を続ける。
                 if (
@@ -563,6 +570,15 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             findings = validate_definitions(bundle, json.loads(value["schema"]))
             value["findings"] = [f.model_dump(mode="json") for f in findings]
             value["findings"].extend({"severity": "error", "message_ja": issue} for issue in issues)
+            value["findings"].extend(
+                {
+                    "severity": "warning",
+                    "code": "DEFINITION_CONFLICT",
+                    "message_ja": f"{conflict}（先に作られた値を使います。"
+                    "Markdown で 1 つにそろえると確かです）",
+                }
+                for conflict in merge_conflicts
+            )
             value["definitions"] = [d.model_dump(mode="json") for d in definitions]
             declared = {c.kind: c for c in parsed.coverage}
             value["coverage"] = [
@@ -682,6 +698,12 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 "定義自体の矛盾や不正な SQL は検証する。"
                 "文脈を定義として捏造しない。implementation_key や実行権限は作らない。"
                 "削除された定義を以前の情報から復元しない。"
+                # graph を作れる範囲を最大にし、足りない項目は推測で埋めない（#1720）。
+                "記載の無い任意の項目（識別子・粒度・単位など）は推測で埋めず空のままにする。"
+                "プロパティは 1 つのオブジェクトに属する。同じ列名を複数のオブジェクトで使うときは"
+                "オブジェクトごとに別の api_name のプロパティにし、"
+                "他のオブジェクトのプロパティを properties に入れない。"
+                "表・ビュー全体の対応は column_name を空文字にし、* を書かない。"
             ),
             response_format=response_format(MarkdownExtraction),
             max_output_tokens=get_settings().nl2sql_ontology_extraction_max_output_tokens,

@@ -386,9 +386,10 @@ def test_published_context_is_frozen_and_filters_physical_columns(
 ) -> None:
     svc, _, release, _ = ready(monkeypatch)
     context = published_context(svc.runtime, "sales", release["id"], {"APP.ORDERS": ["ID"]})
-    assert release["id"] in context
-    assert '"api_name":"Order.status"' not in context
-    assert '"api_name":"approve"' not in context
+    # 許可されない列（STATUS）のプロパティと、SQL に使わないアクションは渡さない（#1720）。
+    assert context.startswith("# 業務オントロジー\n")
+    assert "状態" not in context and "STATUS" not in context
+    assert "承認" not in context
     assert published_context(svc.runtime, "sales", "") == ""
     assert svc.release("sales", release["id"])["id"] == release["id"]
 
