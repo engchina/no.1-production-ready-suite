@@ -18,6 +18,7 @@ import secrets
 import threading
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -122,6 +123,29 @@ def _b64url_decode(value: str) -> bytes:
 
 def constant_time_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
+# 構成管理者の token の署名鍵の PBKDF2-HMAC-SHA256 の反復回数
+# （OWASP Password Storage Cheat Sheet）。
+CONFIGURED_ADMIN_TOKEN_KEY_ITERATIONS = 600_000
+
+
+@lru_cache(maxsize=4)
+def _derive_configured_admin_token_key(prefix: str, login_user_id: str, password: str) -> bytes:
+    """構成管理者の token の HMAC の鍵を、パスワードから PBKDF2-HMAC-SHA256 で導出する（#1646）。
+
+    以前はパスワードの SHA-256 1 回で、token が漏れるとパスワードをオフラインで高速に総当たり
+    できた。遅い KDF で 1 回の試行の費用を上げ、同じ資格情報の鍵はプロセス内で再利用する
+    （token の発行・検証のたびに導出しない。パスワードを変えると別の鍵になる）。salt は
+    3 製品で同じ鍵にするため、接頭辞と login ID から決める（どの製品の token も
+    ほかの製品で検証できる。#1565）。
+    """
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        f"{prefix}:{login_user_id}".encode(),
+        CONFIGURED_ADMIN_TOKEN_KEY_ITERATIONS,
+    )
 
 
 class AuthService:
@@ -944,10 +968,11 @@ class AuthService:
         ほかの製品で検証できる。パスワードを変えると、発行済みの token はすべて無効になる。
         """
         configured_login_user_id, configured_password = self._ensure_configured_system_admin_ready()
-        configured_secret = (
-            f"{self.configured_admin_token_prefix}:{configured_login_user_id}:{configured_password}"
+        return _derive_configured_admin_token_key(
+            self.configured_admin_token_prefix,
+            configured_login_user_id,
+            configured_password,
         )
-        return hashlib.sha256(configured_secret.encode("utf-8")).digest()
 
     def _ensure_configured_system_admin_ready(self) -> tuple[str, str]:
         login_user_id, password = self._configured_system_admin_credentials()

@@ -13,8 +13,12 @@ export interface MessageTextSegment {
   separatorBefore: string;
 }
 
-const FALLBACK_BOUNDARY =
-  /[。！？；]+(?:[」』】）)\]"'”’]*)|[.!?]+(?:[)\]"'”’]*)(?=\s|$)/gu;
+/** 全角の文末の記号。続く閉じ括弧・引用符までを 1 つの文末にする。 */
+const FULLWIDTH_TERMINATORS = new Set(["。", "！", "？", "；"]);
+const FULLWIDTH_CLOSERS = new Set(["」", "』", "】", "）", ")", "]", '"', "'", "”", "’"]);
+/** 半角の文末の記号。空白か本文の末尾が続くときだけ文末にする（`3.14`・`a!b` は切らない）。 */
+const ASCII_TERMINATORS = new Set([".", "!", "?"]);
+const ASCII_CLOSERS = new Set([")", "]", '"', "'", "”", "’"]);
 
 /**
  * 通知本文は prose として扱うため、改行・タブ・連続空白を 1 つの空白へ正規化する。
@@ -24,10 +28,32 @@ export function normalizeMessageText(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
 
+function skipWhile(text: string, start: number, chars: ReadonlySet<string>): number {
+  let index = start;
+  while (index < text.length && chars.has(text[index] ?? "")) index += 1;
+  return index;
+}
+
+/**
+ * 句読点の境界を 1 回の走査で求める。正規表現（`[.!?]+…(?=\s|$)`）は `!` の連続で
+ * 開始位置ごとに読み直して O(n²) になるため、記号の連続の先頭からだけ読む。
+ */
 function collectFallbackBoundaries(text: string): number[] {
   const boundaries: number[] = [];
-  for (const match of text.matchAll(FALLBACK_BOUNDARY)) {
-    if (match.index != null) boundaries.push(match.index + match[0].length);
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    if (FULLWIDTH_TERMINATORS.has(char)) {
+      const end = skipWhile(text, skipWhile(text, index, FULLWIDTH_TERMINATORS), FULLWIDTH_CLOSERS);
+      boundaries.push(end);
+      index = end;
+    } else if (ASCII_TERMINATORS.has(char)) {
+      const end = skipWhile(text, skipWhile(text, index, ASCII_TERMINATORS), ASCII_CLOSERS);
+      if (end === text.length || /\s/u.test(text[end] ?? "")) boundaries.push(end);
+      index = end;
+    } else {
+      index += 1;
+    }
   }
   return boundaries;
 }

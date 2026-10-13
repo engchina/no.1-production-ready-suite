@@ -225,6 +225,28 @@ def test_configured_system_admin_token_is_shared_across_products() -> None:
         changed.authenticate_session(token)
 
 
+def test_configured_system_admin_token_key_is_derived_with_pbkdf2() -> None:
+    """署名鍵はパスワードの SHA-256 1 回ではなく PBKDF2-HMAC-SHA256 で導出する（#1646）。"""
+    import hashlib
+
+    service, _ = _service()
+    key = service._configured_system_admin_token_key()
+    assert key == hashlib.pbkdf2_hmac(
+        "sha256",
+        CONFIGURED_PASSWORD.encode("utf-8"),
+        f"{service.configured_admin_token_prefix}:system_admin".encode(),
+        auth_service.CONFIGURED_ADMIN_TOKEN_KEY_ITERATIONS,
+    )
+    assert auth_service.CONFIGURED_ADMIN_TOKEN_KEY_ITERATIONS >= 600_000
+    plain = f"{service.configured_admin_token_prefix}:system_admin:{CONFIGURED_PASSWORD}"
+    assert key != hashlib.sha256(plain.encode("utf-8")).digest()
+    # 同じ資格情報の鍵はプロセス内で再利用する（token の検証のたびに導出しない）。
+    started = time.perf_counter()
+    for _ in range(20):
+        assert service._configured_system_admin_token_key() == key
+    assert time.perf_counter() - started < 1.0
+
+
 def test_revoke_session_token_revokes_only_database_sessions() -> None:
     """ログインのときに、ブラウザが持っていた古いセッションを失効させる（#1565）。"""
     service, _ = _service()

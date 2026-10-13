@@ -24,3 +24,10 @@ test("identifierWrapSegments は識別子を . _ $ # の直後で分割し、連
     assert.equal(identifierWrapSegments(value).join(""), value);
   }
 });
+
+test("identifierWrapSegments は区切りの無い長い値・区切りの長い連続でも時間内に終わる（#1646）", () => {
+  const started = performance.now();
+  assert.deepEqual(identifierWrapSegments('"'.repeat(200_000)), ['"'.repeat(200_000)]);
+  assert.deepEqual(identifierWrapSegments(`A${".".repeat(200_000)}B`), [`A${".".repeat(200_000)}`, "B"]);
+  assert.ok(performance.now() - started < 1000);
+});

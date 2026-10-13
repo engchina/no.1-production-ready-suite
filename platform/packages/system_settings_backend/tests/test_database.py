@@ -124,6 +124,23 @@ def test_patch_failure_keeps_runtime(tmp_path: Path) -> None:
     assert h.saved == []
 
 
+def test_same_path_compares_requested_path_lexically(tmp_path: Path) -> None:
+    """利用者の path は字句だけで比べ、symlink を辿るのは設定の path だけ（#1646）。"""
+    _same_path = shared_db._same_path
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    assert _same_path(str(tmp_path / "x" / ".." / "real"), str(real))
+    # 設定が symlink で、画面が実体の path を送るときは同じとみなす。
+    assert _same_path(str(real), str(link))
+    # 利用者の path の symlink は辿らない（filesystem を参照しない）。
+    assert not _same_path(str(link), str(real))
+    assert not _same_path("", str(real))
+    assert not _same_path(str(real), "")
+
+
 def test_patch_rejects_other_wallet_dir_so_wallet_install_cannot_replace_it(
     tmp_path: Path,
 ) -> None:

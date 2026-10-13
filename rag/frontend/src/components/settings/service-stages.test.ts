@@ -12,6 +12,8 @@ import { SERVICE_CATEGORY_ROUTES, serviceStages } from "./service-stages";
 // ナビを並べ替え・改名したとき、backend のカタログに工程を足したとき、設定画面の説明を変えたときのずれを検出する。
 
 const readSource = (path: string) => readFileSync(resolve(__dirname, path), "utf8");
+/** 正規表現の特殊文字をすべて escape する（`.` だけでは `\` などが残る）。 */
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const catalogSource = readSource("../../../../backend/app/services/catalog.py");
 const appSource = readSource("../../App.tsx");
 
@@ -70,7 +72,7 @@ describe("サービス管理の工程とサイドナビ", () => {
       const stage = stages.find((candidate) => SERVICE_CATEGORY_ROUTES[candidate.category] === item.href);
       if (!stage) continue;
       const header = appSource.match(
-        new RegExp(`title=\\{t\\("${item.labelKey.replace(/\./g, "\\.")}"\\)\\}\\s*subtitle=\\{t\\("([^"]+)"\\)\\}`)
+        new RegExp(`title=\\{t\\("${escapeRegExp(item.labelKey)}"\\)\\}\\s*subtitle=\\{t\\("([^"]+)"\\)\\}`)
       );
       expect(header?.[1], item.href).toBeDefined();
       expect(stage.descriptionKey).toBe(header?.[1]);

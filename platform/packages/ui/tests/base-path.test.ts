@@ -11,6 +11,15 @@ describe("base path（#1316）", () => {
     expect(normalizeBasePath("/rag")).toBe("/rag/");
     expect(normalizeBasePath("/rag/")).toBe("/rag/");
     expect(normalizeBasePath("//nl2sql//")).toBe("/nl2sql/");
+    expect(normalizeBasePath("///")).toBe("/");
+  });
+
+  it("`/` の長い連続でも時間内に終わる（#1646）", () => {
+    const started = performance.now();
+    expect(normalizeBasePath(`${"/".repeat(200_000)}rag${"/".repeat(200_000)}x`)).toBe(
+      `/rag${"/".repeat(200_000)}x/`
+    );
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   it("router の basename は / のとき undefined（今までどおり）", () => {

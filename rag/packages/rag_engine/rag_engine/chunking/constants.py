@@ -341,8 +341,25 @@ def _flatten_table_html(text: str) -> str:
     flat = re.sub(r"</t[dh]>", " | ", text, flags=re.I)
     flat = re.sub(r"</tr>", " / ", flat, flags=re.I)
     flat = re.sub(r"<[^<>]{1,40}>", " ", flat)
-    flat = re.sub(r"(?:\s*\|\s*)+/", " /", flat)
+    flat = _drop_cell_separators_before_row_end(flat)
     return re.sub(r"\s+", " ", flat).strip(" |/")
+
+
+def _drop_cell_separators_before_row_end(text: str) -> str:
+    """行の区切り ` / ` の直前に残るセルの区切り ` | `（と空白）を外します。
+
+    以前の `(?:\\s*\\|\\s*)+/` は `/` の無い `| | | …` で指数的に後戻りした（#1646）。
+    `/` で分け、各区間の末尾の空白と `|` を 1 回だけ読んで外す（`|` が無い区間は変えない）。
+    """
+    parts = text.split("/")
+    for index in range(len(parts) - 1):
+        part = parts[index]
+        end = len(part)
+        while end > 0 and (part[end - 1].isspace() or part[end - 1] == "|"):
+            end -= 1
+        if "|" in part[end:]:
+            parts[index] = part[:end] + " "
+    return "/".join(parts)
 
 
 def _context_preview(text: str, max_chars: int) -> str:
