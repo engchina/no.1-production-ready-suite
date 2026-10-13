@@ -839,6 +839,7 @@ jobs:
       # uv.lock / pyproject.toml が変わったディレクトリだけ（全件は dependency-audit-nightly.yml）。
       # RAG / Parser <name> と同じく lock から書き出した requirements（hash 付き。path 依存は --no-emit-local で
       # 除く）を検査する。package の extra（rag_engine の docling 等）も配備で入るので --all-extras を付ける。
+      # torch の CPU 版（+cpu）は、RAG / Parser docling と同じく同じ版の PyPI の torch として検査する（#1650）。
       - name: Dependency audit (rag/packages, rag/services)
         if: needs.changes.outputs.rag_services_deps != ''
         env:
@@ -861,6 +862,7 @@ jobs:
             echo "::group::${dir}"
             (cd "${dir}" && uv export --locked --no-dev --all-extras --no-emit-local --format requirements.txt \
               -o "${RUNNER_TEMP}/requirements.txt" -q \
+              && sed -i -E 's/^(torch[a-z]*)==([^ ;+]+)\+cpu /\1==\2 /' "${RUNNER_TEMP}/requirements.txt" \
               && uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt") \
               || { status=1; echo "::error file=${dir}/uv.lock::pip-audit が既知の脆弱性を検出しました（uv lock --upgrade-package で修正版へ上げる）。"; }
             echo "::endgroup::"
@@ -895,13 +897,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 本番と同じ venv（uv sync --locked --no-dev）を rag-services.sh で作る。GPU の無い runner なので
-      # CUDA の wheel を入れず CPU 版の torch を入れ（rag-evaluation-nightly.yml と同じ）、モデルは取得しない。
-      # テスト（text layer の抽出・LayoutRecord の変換・cv2 の import）はモデルを使わない（#1512）。
+      # 本番と同じ venv（uv sync --locked --no-dev）を rag-services.sh で作る。lock の torch は CPU 版（#1650）。
+      # モデルは取得しない。テスト（text layer の抽出・LayoutRecord の変換・cv2 の import）はモデルを使わない（#1512）。
       - name: Install dependencies
         working-directory: rag
         env:
-          RAG_SERVICES_TORCH: cpu
           RAG_SERVICES_MODELS: skip
         run: scripts/rag-services.sh sync parser-docling
 
@@ -921,12 +921,15 @@ jobs:
 
       # venv に pip-audit を入れないため、lock から書き出した requirements（hash 付き）を検査する。
       # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local。backend の --skip-editable と同じ）。
+      # torch の CPU 版（2.13.0+cpu。#1650）は PyPI に無い版で pip-audit が「検査できない」と飛ばすので、
+      # 同じ版の PyPI の torch として検査する（ローカル版の +cpu を外す。脆弱性は CPU 版と CUDA 版で同じ）。
       - name: Dependency audit
         if: needs.changes.outputs.rag_parser_docling_deps == 'true'
         run: |
           version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
           test -n "${version}"
           uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
+          sed -i -E 's/^(torch[a-z]*)==([^ ;+]+)\+cpu /\1==\2 /' "${RUNNER_TEMP}/requirements.txt"
           uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
 
   rag-parser-asr:

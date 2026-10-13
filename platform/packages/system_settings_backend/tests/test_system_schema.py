@@ -28,6 +28,8 @@ from pr_system_settings.system_schema import (
     clamp_ddl_lock_timeout,
     classify_system_schema_status,
     delete_orphan_rows_sql,
+    deployment_check_error_summary,
+    deployment_check_summary,
     drop_foreign_key_sql,
     enable_foreign_key_sql,
     foreign_keys_from_create_table,
@@ -122,6 +124,64 @@ def test_small_helpers() -> None:
     assert clamp_ddl_lock_timeout(-1) == 0
     assert clamp_ddl_lock_timeout(999) == 120
     assert idle_operation_state()["status"] == "idle"
+
+
+def test_deployment_check_summary_is_ok_only_when_ready_and_idle() -> None:
+    """配備の確認（#1648）: ready で操作が実行中でないときだけ OK。NG は原因を 1 行にまとめる。"""
+
+    assert deployment_check_summary(
+        {"status": "ready", "operation_state": idle_operation_state()}
+    ) == (
+        True,
+        "status=ready",
+    )
+    ok, summary = deployment_check_summary(
+        {"status": "ready", "operation_state": {"status": "running"}}
+    )
+    assert not ok
+    assert "操作 running" in summary
+
+    # 権限の不足で作れなかった: 前回の操作の失敗の ORA コードを出す（missing は不足の一覧を
+    # 出さない）。
+    ok, summary = deployment_check_summary(
+        {
+            "status": "missing",
+            "missing_objects": [{"name": "DEMO_ITEMS"}],
+            "pending_versions": ["001"],
+            "operation_state": {"status": "failed", "last_error_code": "ORA-01031"},
+        }
+    )
+    assert not ok
+    assert summary == "status=missing・操作 failed・前回の操作の失敗 ORA-01031"
+
+    names = [{"name": f"DEMO_{index}"} for index in range(7)]
+    ok, summary = deployment_check_summary(
+        {
+            "status": "partial",
+            "missing_objects": names,
+            "pending_versions": ["001", "002"],
+            "pending_destructive_migrations": [{"name": "003_drop", "description": "x"}],
+            "operation_state": idle_operation_state(),
+        }
+    )
+    assert not ok
+    assert "不足 7 件（DEMO_0, DEMO_1, DEMO_2, DEMO_3, DEMO_4, …）" in summary
+    assert "未適用の migration 2 件" in summary
+    assert "承認が要る削除 1 件（003_drop。書き出してから --allow-destructive で初期化）" in summary
+
+
+def test_deployment_check_error_summary_exposes_only_codes() -> None:
+    assert (
+        deployment_check_error_summary(RuntimeError("ORA-01017: invalid username/password; secret"))
+        == "状態を読めません（ORA-01017）"
+    )
+    assert deployment_check_error_summary(ValueError("password=secret")) == (
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ValueError）"
+    )
+    assert (
+        deployment_check_error_summary(SystemSchemaError("SCHEMA_X", "message"))
+        == "状態を読めません（SCHEMA_X）"
+    )
 
 
 def test_api_models_keep_the_contract() -> None:

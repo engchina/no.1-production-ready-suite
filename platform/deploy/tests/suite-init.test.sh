@@ -305,4 +305,57 @@ for product in rag nl2sql agent; do
   done
 done
 
+# 8. 権限の不足で表の初期化に失敗した配備（#1648）: 製品の init_script.sh は backend を起動して 0 で終わる（画面から
+#    直せる）が、最後の確認（suite_check_deployment）の system schema が NG になり、main は 0 以外で終わる。
+(
+  case_dir="${task_dir}/schema-ng"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  printf 'rag nl2sql\n' > "${PROPS_DIR}/products.txt"
+  out="${case_dir}/main.log"
+  install_os_packages() { :; }
+  configure_firewall() { :; }
+  configure_selinux() { :; }
+  configure_tls() { :; }
+  configure_nginx() { :; }
+  report_urls() { :; }
+  run_product_init() { log "deployed $1"; }
+  systemctl() {
+    case "$1" in
+      list-unit-files)
+        printf '%s\n' "production-ready-rag-backend.service enabled enabled" \
+          "production-ready-nl2sql-backend.service enabled enabled"
+        ;;
+      is-active) printf 'active\n' ;;
+      show) printf '0\n' ;;
+    esac
+  }
+  curl() { return 0; }
+  journalctl() { :; }
+  # shellcheck disable=SC2034 # suite_check_deployment（source した suite-health.sh）が読む
+  SUITE_CHECK_SETTLE_SECONDS=0
+  # shellcheck disable=SC2034 # 同上
+  SUITE_PRODUCT_LOG_DIR="${case_dir}"
+  suite_run_schema_check() {
+    case "$1" in
+      nl2sql) printf 'status=missing・操作 failed・前回の操作の失敗 ORA-01031\n'; return 1 ;;
+      *) printf 'status=ready\n' ;;
+    esac
+  }
+  status=0
+  main > "${out}" 2>&1 || status=$?
+  [ "${status}" -ne 0 ] || fail "schema が NG なのに main が 0 で終わった: $(cat "${out}")"
+  [ "${#SUITE_FAILED_PRODUCTS[@]}" -eq 0 ] || fail "製品の配備は成功している: ${SUITE_FAILED_PRODUCTS[*]}"
+  grep -qxF '[suite-init] check: nl2sql schema NG（status=missing・操作 failed・前回の操作の失敗 ORA-01031）' "${out}" \
+    || fail "schema の NG の行: $(cat "${out}")"
+  grep -qF '[suite-init] check: nl2sql の DB ユーザー（PLATFORM_ORACLE_USER）の権限が足りない可能性があります' "${out}" \
+    || fail "権限の不足の手がかり: $(cat "${out}")"
+  tail -n 1 "${out}" | grep -q 'check: NG' || fail "最後の行が NG ではない: $(tail -n 1 "${out}")"
+  # schema が ready なら 0 で終わる。
+  suite_run_schema_check() { printf 'status=ready\n'; }
+  main > "${out}" 2>&1 || fail "すべて OK なのに失敗した: $(cat "${out}")"
+  tail -n 1 "${out}" | grep -q 'check: OK' || fail "最後の行が OK ではない: $(tail -n 1 "${out}")"
+)
+
 echo "suite-init: pass"

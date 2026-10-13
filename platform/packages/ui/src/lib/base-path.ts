@@ -13,7 +13,12 @@
 export function normalizeBasePath(base: string | null | undefined): string {
   const trimmed = (base ?? "").trim();
   if (!trimmed || trimmed === "/" || trimmed === "./") return "/";
-  const withoutSlashes = trimmed.replace(/^\/+|\/+$/g, "");
+  // 前後の `/` を外す。`/\/+$/` の正規表現は `/` の連続の途中で O(n²) になるため、添字で外す。
+  let start = 0;
+  let end = trimmed.length;
+  while (start < end && trimmed[start] === "/") start += 1;
+  while (end > start && trimmed[end - 1] === "/") end -= 1;
+  const withoutSlashes = trimmed.slice(start, end);
   return withoutSlashes ? `/${withoutSlashes}/` : "/";
 }
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
@@ -444,19 +444,65 @@ def classify_system_schema_status(
     )
 
 
-def pending_destructive_migrations(
-    status: str, pending_versions: Sequence[str]
-) -> list[dict[str, str]]:
-    """未適用の、データを消す migration（未初期化の DB は実行しないので無い。#619）。"""
+# 台帳に記録の無い schema に残る廃止した表の削除（#1648）。状態の
+# `pending_destructive_migrations` にこの名前で出し、作成・更新は承認（`allow_destructive`）が
+# 無ければ止める。
+RETIRED_TABLES_APPROVAL = "retired_tables_without_ledger"
 
-    if status == "missing":
+
+def unowned_retired_tables(
+    objects: Collection[tuple[str, str]], applied_checksums: Mapping[str, str]
+) -> list[str]:
+    """作成・更新で削除する廃止した表のうち、Agent が作ったと台帳から分からないもの（#1648）。
+
+    台帳（AGENT_SCHEMA_MIGRATIONS）に記録があれば、この schema は Agent が初期化したもので、廃止した
+    表も Agent が作ったものとして承認なしに消す（データを消す migration は別に承認を求める）。記録が
+    無い schema（既存の ADB の、旧版の単独の製品・別のアプリケーションと共有する schema など）では、
+    同じ名前の表を承認なしに消さない。
+    """
+
+    if applied_checksums:
         return []
-    pending = set(pending_versions)
     return [
-        {"name": migration.name, "description": migration.destructive_note}
-        for migration in MIGRATIONS
-        if migration.destructive and migration.name in pending
+        name
+        for name, object_type in RETIRED_MANAGED_OBJECTS
+        if object_type == "TABLE" and (name, "TABLE") in objects
     ]
+
+
+def pending_destructive_migrations(
+    status: str,
+    pending_versions: Sequence[str],
+    *,
+    retired_tables: Sequence[str] = (),
+) -> list[dict[str, str]]:
+    """未適用の、データを消す migration（未初期化の DB は実行しないので無い。#619）と、
+    台帳に記録の無い廃止した表の削除（状態によらず。#1648）。"""
+
+    pending = set(pending_versions)
+    items = (
+        []
+        if status == "missing"
+        else [
+            {"name": migration.name, "description": migration.destructive_note}
+            for migration in MIGRATIONS
+            if migration.destructive and migration.name in pending
+        ]
+    )
+    if retired_tables:
+        items.append(
+            {
+                "name": RETIRED_TABLES_APPROVAL,
+                "description": (
+                    f"廃止した表（{', '.join(retired_tables)}）を削除します。"
+                    "この schema には Agent の台帳（AGENT_SCHEMA_MIGRATIONS）の記録が無く、"
+                    "Agent が作った表か確かめられません。別のアプリケーションや旧版の表なら、"
+                    "Agent を専用の schema（DB ユーザー）に配備してください。削除してよい場合は、"
+                    "必要なデータを書き出してから承認してください。"
+                ),
+            }
+        )
+    return items
 
 
 class SystemSchemaManager(SystemSchemaManagerBase):
@@ -510,7 +556,9 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             "schema_head": MIGRATIONS[-1].name,
             "applied_versions": matching,
             "pending_versions": pending,
-            "pending_destructive_migrations": pending_destructive_migrations(status, pending),
+            "pending_destructive_migrations": pending_destructive_migrations(
+                status, pending, retired_tables=unowned_retired_tables(objects, applied)
+            ),
             "expected_object_count": len(expected),
             "existing_object_count": len(existing),
             "expected_table_count": len(MANAGED_TABLES),
@@ -718,6 +766,7 @@ __all__ = [
     "PRESERVED_TABLES",
     "RECREATE_CONFIRMATION",
     "RETIRED_MANAGED_OBJECTS",
+    "RETIRED_TABLES_APPROVAL",
     "MigrationArtifact",
     "SystemSchemaError",
     "SystemSchemaManager",
@@ -725,4 +774,5 @@ __all__ = [
     "managed_manifest_from_schema",
     "pending_destructive_migrations",
     "system_schema_manager",
+    "unowned_retired_tables",
 ]

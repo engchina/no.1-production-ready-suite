@@ -300,8 +300,13 @@ isolated.
 
 Backend startup remains independent of database reachability and table
 existence. The bootstrap tries both migrations first, but if the database is not
-ready yet the application still starts in degraded mode. Check
-`/var/log/nl2sql-init.log` for `WARNING: Continuing in degraded mode`, then run:
+ready yet the application still starts in degraded mode. The deployment check at
+the end of `suite-init.sh` then reports `check: nl2sql schema NG` (from
+`nl2sql_system_schema --check`, which also requires the `app_security_migrate`
+tables) and exits non-zero (#1648). Check `/var/log/nl2sql-init.log` for
+`WARNING: Continuing in degraded mode` and the ORA code (for example `ORA-01031`
+or `ORA-01950` when the database user lacks a privilege or tablespace quota; see
+`terraform/README.md`), then run:
 
 ```bash
 cd /u01/aipoc/no.1-production-ready-suite/nl2sql/backend

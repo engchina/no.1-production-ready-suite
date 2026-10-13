@@ -30,6 +30,8 @@ const ENTITY: Record<string, string> = {
 /**
  * Docling の表 HTML を読みやすいテキストへ落とす(行=改行、セル=" | ")。
  * 表でない text はそのまま返す。セル単位の確認は表セルパネルが担う。
+ * HTML の無害化ではない: 結果は React の text node にだけ入れ(HTML として解釈しない)、
+ * `&lt;` などの実体参照はセルの文字として戻す(#1646。CodeQL の incomplete-multi-character-sanitization は誤検知)。
  */
 export function tableHtmlToText(text: string): string {
   if (!/^\s*<table[\s>]/i.test(text)) return text;

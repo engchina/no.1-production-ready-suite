@@ -611,6 +611,8 @@ initialize_database_schema() {
   log "Recovery: or open System settings > Database > RAG system tables in the application."
   # データを削除する未適用の migration は承認が無ければ適用しない（#619。docs/deployment.md）。
   log "If status shows pending_destructive_migrations, export the data first (docs/deployment.md), then run initialize --allow-destructive."
+  # backend は起動する（画面から直せる）が、suite-init.sh の最後の確認は schema を NG にして非 0 で終わる（#1648）。
+  log "WARNING: The deployment check at the end of suite-init.sh reports 'check: rag schema NG' until the schema is ready."
   return 0
 }
 

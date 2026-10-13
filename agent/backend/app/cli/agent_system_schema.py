@@ -1,6 +1,7 @@
 """Agent のシステムテーブルの状態・作成 / 更新・全再作成の CLI（#751。NL2SQL と同じ形）。
 
     uv run python -m app.cli.agent_system_schema --status
+    uv run python -m app.cli.agent_system_schema --check
     uv run python -m app.cli.agent_system_schema --initialize [--allow-destructive]
     uv run python -m app.cli.agent_system_schema --recreate \
         --confirmation RECREATE_AGENT_SYSTEM_TABLES
@@ -9,6 +10,9 @@
 `PLATFORM_*` と組み込み SYSTEM_ADMIN ロールを先に冪等に用意してから、`AGENT_*` の不足分と
 未適用の migration を当てる。データを消す migration は `--allow-destructive` が無ければ止める
 （画面の確認ダイアログと同じ。#619）。何度実行してもよい。ユーザーは作らない。
+
+`--check` は配備の最後の確認（platform/deploy/suite-health.sh。#1648）が使う。DDL を実行せずに状態を
+読み、ready なら 0、そうでなければ（読めないときも）1 で終わり、1 行の要約を標準出力に出す。
 """
 
 from __future__ import annotations
@@ -19,6 +23,11 @@ from collections.abc import Sequence
 from typing import Any
 
 from pr_backend_core.logging import configure_cli_logging
+from pr_system_settings.system_schema import (
+    deployment_check_error_summary,
+    deployment_check_summary,
+    oracle_error_code,
+)
 
 from app.system_schema import SystemSchemaError, system_schema_manager
 
@@ -32,6 +41,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--status", action="store_true", help="状態だけを読む（DDL なし）")
+    actions.add_argument(
+        "--check", action="store_true", help="ready なら 0、それ以外は 1 で終わる（配備の確認）"
+    )
     actions.add_argument("--initialize", action="store_true", help="作成・更新する")
     actions.add_argument("--recreate", action="store_true", help="管理対象を削除して作り直す")
     parser.add_argument("--confirmation", default=None, help="--recreate の確認語")
@@ -41,6 +53,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="データを消す未適用の migration を当てることを承認する",
     )
     args = parser.parse_args(argv)
+    if args.check:
+        return _check()
 
     try:
         if args.status:
@@ -61,7 +75,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _stable_json(
                 {
                     "error": {
-                        "code": "SCHEMA_OPERATION_FAILED",
+                        # 権限の不足などは ORA コードを出す（配備の log から辿れる。#1648）。
+                        "code": oracle_error_code(exc),
                         "message": f"システムテーブル操作に失敗しました（{type(exc).__name__}）。",
                     },
                     "ok": False,
@@ -71,6 +86,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print(_stable_json({"data": result, "ok": True}))  # noqa: T201
     return 0
+
+
+def _check() -> int:
+    try:
+        ok, summary = deployment_check_summary(system_schema_manager.status())
+    except Exception as exc:
+        print(deployment_check_error_summary(exc))  # noqa: T201
+        return 1
+    print(summary)  # noqa: T201
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI boundary

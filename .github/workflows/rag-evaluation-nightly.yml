@@ -155,9 +155,7 @@ jobs:
         if: steps.mode.outputs.adapter_contract_strict == 'true'
         working-directory: rag
         timeout-minutes: 15
-        env:
-          # GPU の無い runner では CUDA の wheel(約 2.7GB)を入れず、CPU 版の torch を使う。
-          RAG_SERVICES_TORCH: cpu
+        # docling の lock は CPU 版の torch を持ち、CUDA の wheel を入れない(#1650)。
         run: |
           set -euo pipefail
           mkdir -p artifacts

@@ -19,6 +19,7 @@ on:
       - Dependency Audit Nightly
       - CodeQL
       - Integration Nightly
+      - Deploy Nightly
     types:
       - completed
   workflow_dispatch:

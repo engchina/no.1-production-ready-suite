@@ -12,11 +12,31 @@ dependencies = [
 # docling サービスだけが使う(backend には入れない)。
 # docling-parse 7.21 以前は、1 バイトの埋め込みフォントで文字コード 0x20 に割り当てた字（LibreOffice の
 # PDF で起きる。例「記」「架」）を空白にして落とす。7.22.2 で直っているため下限にする（#1505）。
-docling = ["docling>=2.0", "docling-parse>=7.22.2,<8.0", "pypdfium2>=5.0,<6.0", "pillow>=10.0"]
+# torch / torchvision は CPU 版の index から入れるため、extra に直接書く（uv の sources は直接の依存にだけ効く。#1650）。
+docling = [
+    "docling>=2.0",
+    "docling-parse>=7.22.2,<8.0",
+    "pypdfium2>=5.0,<6.0",
+    "pillow>=10.0",
+    "torch>=2.13,<3",
+    "torchvision>=0.28,<1",
+]
 pdf = ["pypdfium2>=5.0,<6.0", "pillow>=10.0"]
 japanese = ["PyStemmer==3.1.0", "sudachidict_full==20260723", "sudachipy==0.6.11"]
 oracle = ["oci>=2.185.0", "oracledb>=2.5.0"]
 excel = ["openpyxl>=3.1", "xlrd>=2.0", "pandas>=2.0"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+# torch / torchvision は PyTorch の CPU 版の index から入れる（#1650）。PyPI の Linux の wheel は CUDA 版で、
+# triton・nvidia-* / cuda-* の wheel（数 GB）を依存に持つが、配備先・CI に GPU は無い。
+# explicit = true で、この index は sources で指定した package にだけ使う（ほかの依存は PyPI から入れる）。
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 # CI（`RAG / Engine`）は `uv sync --locked` で入れる。lock から取るので PyPI の索引に頼らない（#387）。

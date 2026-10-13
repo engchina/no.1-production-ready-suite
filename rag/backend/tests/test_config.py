@@ -612,8 +612,11 @@ def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> N
     )
     optional = pyproject["project"]["optional-dependencies"]
 
-    assert optional["docling"] == ["docling==2.132.0"]
-    assert optional["unstructured"] == ["unstructured[all-docs]==0.27.8"]
+    # torch / torchvision は CPU 版の index から入れるため extra に直接書く(#1650)。
+    cpu_torch = ["torch>=2.13,<3", "torchvision>=0.28,<1"]
+    assert optional["docling"] == ["docling==2.132.0", *cpu_torch]
+    assert optional["unstructured"] == ["unstructured[all-docs]==0.27.8", *cpu_torch]
+    assert pyproject["tool"]["uv"]["sources"]["torch"] == {"index": "pytorch-cpu"}
     # Marker は削除した(#270)。combined extra も提供しない(サービス分離の理由)。
     assert set(optional) == {"docling", "unstructured"}
     # backend は共有 contract package を path 依存で取り込む。
