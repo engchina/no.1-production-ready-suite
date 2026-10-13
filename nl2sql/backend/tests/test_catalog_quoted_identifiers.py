@@ -23,6 +23,7 @@ from app.features.nl2sql.models import (
     SchemaRefreshTargetObject,
     SchemaTable,
 )
+from app.features.nl2sql.object_visibility import system_object_prefix_sql_filters
 from app.features.nl2sql.ontology_build import _ScopeResolver, build_schema_context
 from app.features.nl2sql.ontology_catalog import (
     build_schema_ontology,
@@ -278,6 +279,10 @@ def test_oracle_repository_search_binds_catalog_names_for_owner_cursor_and_profi
     sql, binds = cursor.executed[0]
 
     assert binds["owner"] == "Sales"
+    # 大文字化して比べるのはシステムテーブルの接頭辞の除外（#1710）だけ。
+    # 対象の名前は完全一致で比べる。
+    for system_filter in system_object_prefix_sql_filters("o.OBJECT_NAME"):
+        sql = sql.replace(system_filter, "")
     assert "UPPER(o.OBJECT_NAME)" not in sql
     assert json.loads(binds["allowed_names_json"]) == [
         {"owner": "", "name": "ORDERS"},

@@ -31,7 +31,7 @@ from app.features.nl2sql.object_identity import (
 )
 from app.features.nl2sql.object_visibility import (
     is_user_visible_schema_object,
-    system_object_prefix_sql_filters,
+    user_visible_object_sql_filters,
 )
 from app.settings import BACKEND_ENV_FILE, Settings, get_settings
 
@@ -407,10 +407,12 @@ def _like_pattern(value: str, *, prefix: str, suffix: str) -> str:
     return f"{prefix}{escaped}{suffix}"
 
 
-# NL2SQL・共通基盤・他製品のシステムテーブルは SQL で除く。Python だけで落とすと、同じ schema の
-# `AGENT_` / `PLATFORM_` / `RAG_` の表が 1 ページの大半を占めて view が次のページに回り、
-# 件数もずれる（#1708）。
-_SYSTEM_OBJECT_PREFIX_FILTERS = system_object_prefix_sql_filters("o.object_name")
+# NL2SQL・共通基盤・他製品のシステムテーブルと Oracle の内部 object（名前に $ / #）は SQL で除く。
+# Python だけで落とすと、同じ schema の `AGENT_` / `PLATFORM_` / `RAG_` の表が 1 ページの大半を
+# 占めて view が次のページに回り、件数もずれる（#1708）。条件は他の一覧と共通（#1710）。
+_SYSTEM_OBJECT_SQL_FILTERS = user_visible_object_sql_filters(
+    object_column="o.object_name", owner_column="o.owner"
+)
 
 
 def _encode_target_object_cursor(owner: str, object_name: str) -> str:
@@ -1263,11 +1265,7 @@ class DeepSecService:
             "o.status = 'VALID'",
             "NVL(u.oracle_maintained, 'N') = 'N'",
             "o.owner NOT IN ('SYS', 'SYSTEM')",
-            "o.owner NOT LIKE '%$%'",
-            "o.owner NOT LIKE '%#%'",
-            "o.object_name NOT LIKE '%$%'",
-            "o.object_name NOT LIKE '%#%'",
-            *_SYSTEM_OBJECT_PREFIX_FILTERS,
+            *_SYSTEM_OBJECT_SQL_FILTERS,
         ]
         binds: dict[str, object] = dict(owner_binds)
         if profile_id:
@@ -1431,11 +1429,7 @@ class DeepSecService:
             "o.status = 'VALID'",
             "NVL(u.oracle_maintained, 'N') = 'N'",
             "o.owner NOT IN ('SYS', 'SYSTEM')",
-            "o.owner NOT LIKE '%$%'",
-            "o.owner NOT LIKE '%#%'",
-            "o.object_name NOT LIKE '%$%'",
-            "o.object_name NOT LIKE '%#%'",
-            *_SYSTEM_OBJECT_PREFIX_FILTERS,
+            *_SYSTEM_OBJECT_SQL_FILTERS,
         ]
         binds: dict[str, object] = {
             **owner_binds,
