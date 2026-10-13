@@ -9,6 +9,7 @@ const SYSTEM_ADMIN_USER: CurrentUser = {
   status: "ACTIVE",
   force_password_change: false,
   role_codes: ["SYSTEM_ADMIN"],
+  role_display_names: ["システム管理者"],
   is_system_admin: true,
   permissions: [],
   data_entitlements: [],

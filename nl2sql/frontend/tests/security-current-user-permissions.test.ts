@@ -16,6 +16,7 @@ function currentUser(overrides: Partial<CurrentUser>): CurrentUser {
     status: "ACTIVE",
     force_password_change: false,
     role_codes: [],
+    role_display_names: [],
     is_system_admin: false,
     permissions: [],
     data_entitlements: [],

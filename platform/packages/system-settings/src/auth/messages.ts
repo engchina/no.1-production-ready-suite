@@ -35,7 +35,10 @@ export const AUTH_MESSAGES = {
   forbiddenBack: "利用可能な画面へ戻る",
   sidebarPassword: "パスワード変更",
   sidebarLogout: "ログアウト",
+  /** アカウント欄のロールの行の全文（title と読み上げ）。見える行はロールの表示名だけ（#1644）。 */
   sidebarRoles: "ロール: {roles}",
+  /** 複数のロールの表示名の区切り。 */
+  sidebarRoleSeparator: "、",
   sidebarDebugMode: "ログイン省略",
 };
 

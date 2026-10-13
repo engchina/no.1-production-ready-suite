@@ -7,13 +7,15 @@ const account = vi.hoisted(() => ({ current: null as SidebarAccount | null }));
 vi.mock("../src/auth/RequireAuth", () => ({ useSidebarAccount: () => account.current }));
 
 const { SidebarAccountSection } = await import("../src/auth/SidebarAccountSection");
+const { sidebarRoleNames } = await vi.importActual<typeof import("../src/auth/RequireAuth")>("../src/auth/RequireAuth");
 
 const routes = { login: "/login", passwordChange: "/password/change" };
 
 function base(overrides: Partial<SidebarAccount>): SidebarAccount {
   return {
     name: "営業ユーザー",
-    roles: "ロール: SALES",
+    roles: "営業",
+    rolesLabel: "ロール: 営業",
     actions: [],
     onLogout: () => undefined,
     labels: { logout: "ログアウト", switchToLight: "", switchToDark: "" },
@@ -32,17 +34,29 @@ describe("サイドバーのアカウント欄（#307）", () => {
     account.current = base({});
     const html = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed={false} />);
     expect(html).toContain("営業ユーザー");
-    expect(html).toContain("ロール: SALES");
+    // 見える行はロールの表示名だけ、title と読み上げは「ロール: …」の全文（#1644）。
+    expect(html).toContain('title="ロール: 営業"');
+    expect(html).toContain('<span class="sr-only">ロール: 営業</span><span aria-hidden="true">営業</span>');
     expect(html).toContain("ログアウト");
     expect(html).not.toContain("ログイン省略");
   });
 
   it("ログイン省略では利用者名とログイン省略の表示を出し、ログアウトは出さない", () => {
-    account.current = base({ name: "ローカル利用者", roles: "ロール: SYSTEM_ADMIN", onLogout: undefined, debugMode: true });
+    account.current = base({ name: "ローカル利用者", roles: "システム管理者", rolesLabel: "ロール: システム管理者", onLogout: undefined, debugMode: true });
     const html = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed={false} />);
     expect(html).toContain("ローカル利用者");
     expect(html).toContain("ログイン省略");
     expect(html).toContain('role="status"');
     expect(html).not.toContain("ログアウト");
+  });
+});
+
+describe("アカウント欄のロール（#1644）", () => {
+  it("code ではなく表示名を「、」でつなぎ、表示名の無いロールだけ code を出す", () => {
+    expect(sidebarRoleNames({ role_codes: ["SYSTEM_ADMIN"], role_display_names: ["システム管理者"] }, "、")).toBe("システム管理者");
+    expect(
+      sidebarRoleNames({ role_codes: ["SALES", "HR", "OPS"], role_display_names: ["営業", " ", "運用"] }, "、")
+    ).toBe("営業、HR、運用");
+    expect(sidebarRoleNames({ role_codes: ["SALES"], role_display_names: [] }, "、")).toBe("SALES");
   });
 });

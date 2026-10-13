@@ -143,6 +143,7 @@ async function mockSecurityApi(page: Page) {
     login_user_id: "admin",
     display_name: "管理 太郎",
     role_codes: ["SYSTEM_ADMIN"],
+    role_display_names: ["システム管理者"],
     is_system_admin: true,
     permissions: ALL_PERMISSION_CODES,
     allowed_search_answer_profile_ids: null,

@@ -394,6 +394,9 @@ def test_database_user_login_me_and_logout(
     data = login_response.json()["data"]
     assert data["user_uuid"] == user.user_uuid
     assert data["is_system_admin"] is False
+    # ロールの表示名は role_codes と同じ順（サイドナビのアカウント欄に出す。#1644）。
+    assert len(data["role_display_names"]) == len(data["role_codes"]) == 1
+    assert data["role_display_names"][0].startswith("ロール ")
     # implies を展開した実効権限。
     assert set(data["permissions"]) == {"menu.search", "rag.feedback.manage", "menu.feedback"}
     assert data["allowed_search_answer_profile_ids"] == ["bv-2"]

@@ -168,6 +168,7 @@ export interface CurrentUserPayload {
   status: string;
   force_password_change: boolean;
   role_codes: string[];
+  role_display_names: string[];
   is_system_admin: boolean;
   permissions: string[];
   allowed_agent_ids: string[] | null;
@@ -183,6 +184,7 @@ export const LOCAL_CURRENT_USER: CurrentUserPayload = {
   status: "ACTIVE",
   force_password_change: false,
   role_codes: ["SYSTEM_ADMIN"],
+  role_display_names: ["システム管理者"],
   is_system_admin: true,
   permissions: ALL_PERMISSION_CODES,
   allowed_agent_ids: null,
@@ -208,6 +210,8 @@ export function dbUser(overrides: Partial<CurrentUserPayload> = {}): CurrentUser
     debug_mode: false,
     password_change_allowed: true,
     ...overrides,
+    // ロールの表示名を渡さずに role_codes だけを変えた利用者は、表示名を code にする（表示名の無いロールと同じ）。
+    role_display_names: overrides.role_display_names ?? [...(overrides.role_codes ?? ["AGENT_USER"])],
   };
   return { ...user, permissions: expandPermissions(user.permissions) };
 }

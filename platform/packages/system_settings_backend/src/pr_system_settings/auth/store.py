@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
+    SYSTEM_ADMIN_ROLE_DISPLAY_NAME,
     SYSTEM_ADMIN_ROLE_ID,
     RoleRecord,
     SessionRecord,
@@ -53,7 +54,6 @@ PRODUCT_ROLE_PERMISSION_TABLES = {
     "agent": "AGENT_ROLE_PERMISSIONS",
 }
 
-SYSTEM_ADMIN_ROLE_DISPLAY_NAME = "システム管理者"
 SYSTEM_ADMIN_ROLE_DESCRIPTION = "すべてのアプリケーション機能を管理する組み込みロールです。"
 
 _LOGIN_USER_ID_CONFLICT_MESSAGE = (

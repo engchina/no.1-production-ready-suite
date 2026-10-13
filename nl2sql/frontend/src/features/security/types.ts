@@ -113,6 +113,8 @@ export interface CurrentUser {
   status: string;
   force_password_change: boolean;
   role_codes: string[];
+  /** ロールの表示名（`role_codes` と同じ順。#1644）。 */
+  role_display_names: string[];
   is_system_admin: boolean;
   permissions: string[];
   data_entitlements: DataEntitlement[];
