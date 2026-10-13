@@ -509,6 +509,8 @@ function createState() {
     // 保存先（`GET /api/runtime/storage`。#839）。既定は Oracle に保存している状態。
     runtimeStorage: clone(RUNTIME_STORAGE_PERSISTENT) as Json,
     runs: [] as Json[],
+    // 発行した図の URL の数（`GET /api/runs/{id}/figure-url`）。実際の署名つき URL と同じく、発行ごとに URL を変える（#1667）。
+    figureUrlsIssued: 0,
     agents: d.agents as unknown as Json[],
     skills: d.skills as unknown as Json[],
     tools: d.tools as unknown as Json[],
@@ -1232,8 +1234,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     // RAG の図の根拠を開く短命の URL（#1311）。spec は `http://rag.e2e.test/**` を page.route で応答する。
     if (method === "GET" && at("runs", "*", "figure-url")) {
+      // 同じ URL を返すと、Chromium（Playwright 1.64 以降）は同じ文書の中で読み込んだ画像を
+      // no-store でも使い回し、開き直したときに RAG へ取りに行かない（#1667）。
+      state.figureUrlsIssued += 1;
+      const chunkId = encodeURIComponent(query.get("chunk_id") ?? "");
       return {
-        url: `http://rag.e2e.test/api/figures/f1.${encodeURIComponent(query.get("chunk_id") ?? "")}.sig`,
+        url: `http://rag.e2e.test/api/figures/f1.${chunkId}.${state.figureUrlsIssued}.sig`,
         expires_at: "2026-06-28T00:05:00+00:00",
       };
     }

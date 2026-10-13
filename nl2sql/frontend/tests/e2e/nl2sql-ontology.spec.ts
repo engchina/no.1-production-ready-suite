@@ -1170,19 +1170,39 @@ test("AI要件確認は作成の途中で閉じても、作成された確認を
 
 test("AI要件確認の途中で再読込するとサーバーの確認を中止する", async ({ page }) => {
   const payloads = await mockApi(page);
+  // 再読込の途中（pagehide）の keepalive の request は、Playwright の request の event にも route にも
+  // 現れない（Playwright 1.64 の Chromium では毎回。以前も route に届かないことがあった。#1667）。
+  // 画面が中止を送ったことは、fetch の呼び出しを再読込をまたいで残る sessionStorage に記録して確かめる。
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/query-sessions/")) {
+        const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+        const calls = JSON.parse(sessionStorage.getItem("e2e-query-session-fetches") ?? "[]") as unknown[];
+        calls.push({ url, method, keepalive: init?.keepalive === true });
+        sessionStorage.setItem("e2e-query-session-fetches", JSON.stringify(calls));
+      }
+      return originalFetch(input, init);
+    };
+  });
   await page.goto("/query");
 
   const panel = await startRequirementCheck(page);
   await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();
   expect(payloads.cancel).toBeUndefined();
 
-  // 再読込の途中の keepalive の request は、route の mock に届く前に navigation で落ちることがある
-  // （main でも 6 回中 3 回）。画面が中止を送ったことを request で確かめる。
-  const cancelRequest = page.waitForRequest(
-    (request) => request.method() === "POST" && request.url().endsWith(`/query-sessions/${REQUIREMENT_SESSION_ID}/cancel`)
-  );
   await page.reload();
-  await cancelRequest;
+  const cancelCalls = await page.evaluate(
+    (sessionId) =>
+      (JSON.parse(sessionStorage.getItem("e2e-query-session-fetches") ?? "[]") as {
+        url: string;
+        method: string;
+        keepalive: boolean;
+      }[]).filter((call) => call.url.endsWith(`/query-sessions/${sessionId}/cancel`)),
+    REQUIREMENT_SESSION_ID
+  );
+  expect(cancelCalls).toEqual([expect.objectContaining({ method: "POST", keepalive: true })]);
 });
 
 test("AI要件確認は期限切れで終わった確認の質問を出さず、理由と閉じるだけを出す", async ({ page }, testInfo) => {
