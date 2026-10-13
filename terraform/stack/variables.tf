@@ -60,6 +60,15 @@ variable "adb_deployment_mode" {
   }
 }
 
+# アプリ用の DB ユーザー（#1668・#1675）。新規 / 既存の ADB のどちらでも使える。既定は有効（推奨。名前の既定は ADB_APP_USER。ADMIN を常用しない。
+# アプリの不具合・管理 SQL の誤りを DB 全体の管理者の権限で実行させず、ADMIN のパスワードを各製品の .env に置かない）。
+# Compute の platform/deploy/suite-init.sh が、製品の配備の前に ADMIN で接続してこのユーザーを作り、権限を付ける。
+variable "adb_app_user_enabled" {
+  description = "Create an application database user (not ADMIN) on the Compute instance and connect every product with it. The Compute instance connects as ADMIN once per deployment to create the user and grant PDB_DBA plus the Deep Data Security privileges."
+  type        = bool
+  default     = true
+}
+
 variable "existing_adb_ocid" {
   description = "Existing Autonomous AI Database OCID used when adb_deployment_mode selects an existing database."
   type        = string
@@ -71,49 +80,6 @@ variable "existing_adb_ocid" {
       || can(regex("^ocid1\\.autonomousdatabase\\.", var.existing_adb_ocid))
     )
     error_message = "existing_adb_ocid must be an Autonomous AI Database OCID."
-  }
-}
-
-# アプリ用の DB ユーザー（#1668）。新規 / 既存の ADB のどちらでも使える。既定は有効（ADMIN を常用しない。
-# アプリの不具合・管理 SQL の誤りを DB 全体の管理者の権限で実行させず、ADMIN のパスワードを各製品の .env に置かない）。
-# Compute の platform/deploy/suite-init.sh が、製品の配備の前に ADMIN で接続してこのユーザーを作り、権限を付ける。
-variable "adb_app_user_enabled" {
-  description = "Create an application database user (not ADMIN) on the Compute instance and connect every product with it. The Compute instance connects as ADMIN once per deployment to create the user and grant PDB_DBA plus the Deep Data Security privileges."
-  type        = bool
-  default     = true
-}
-
-variable "adb_app_user_name" {
-  description = "Application database user (schema) name. Every product connects with it and creates its tables in this schema."
-  type        = string
-  default     = "PRSUITE"
-
-  validation {
-    condition = (
-      can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.adb_app_user_name))
-      && !contains(["ADMIN", "SYS", "SYSTEM", "PUBLIC", "DEEPSEC_DATA_USER", "GGADMIN", "ADBSNMP"], upper(var.adb_app_user_name))
-      && !can(regex("^(?i)(ORA_|SYS)", var.adb_app_user_name))
-    )
-    error_message = "adb_app_user_name must start with a letter, contain only letters, digits and underscores (up to 30 characters), and must not be an Oracle-maintained name such as ADMIN, SYS, SYSTEM or DEEPSEC_DATA_USER."
-  }
-}
-
-variable "adb_app_user_password" {
-  description = "Password of the application database user (also used as the wallet password). 12 to 30 characters with at least one uppercase letter, one lowercase letter and one digit; must not contain double quotes, single quotes or the user name."
-  type        = string
-  sensitive   = true
-  default     = ""
-
-  validation {
-    condition = var.adb_app_user_password == "" || (
-      length(var.adb_app_user_password) >= 12
-      && length(var.adb_app_user_password) <= 30
-      && can(regex("[A-Z]", var.adb_app_user_password))
-      && can(regex("[a-z]", var.adb_app_user_password))
-      && can(regex("[0-9]", var.adb_app_user_password))
-      && !can(regex("[\"'\r\n]", var.adb_app_user_password))
-    )
-    error_message = "adb_app_user_password must be 12 to 30 characters, include an uppercase letter, a lowercase letter and a digit, and must not contain double quotes, single quotes or line breaks."
   }
 }
 
@@ -405,6 +371,42 @@ variable "adb_is_mtls_connection_required" {
   description = "Require mutual TLS (mTLS) connections for Autonomous AI Database."
   type        = bool
   default     = true
+}
+
+# アプリ用の DB ユーザーの名前とパスワード（adb_app_user_enabled のとき。フォームでは ADB の新規 / 既存の入力の後の
+# 「アプリ用の DB ユーザー」の group）。ADMIN のパスワードは新規なら adb_password、既存なら existing_adb_admin_password。
+variable "adb_app_user_name" {
+  description = "Application database user (schema) name. Every product connects with it and creates its tables in this schema."
+  type        = string
+  default     = "ADB_APP_USER"
+
+  validation {
+    condition = (
+      can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.adb_app_user_name))
+      && !contains(["ADMIN", "SYS", "SYSTEM", "PUBLIC", "DEEPSEC_DATA_USER", "GGADMIN", "ADBSNMP"], upper(var.adb_app_user_name))
+      && !can(regex("^(?i)(ORA_|SYS)", var.adb_app_user_name))
+    )
+    error_message = "adb_app_user_name must start with a letter, contain only letters, digits and underscores (up to 30 characters), and must not be an Oracle-maintained name such as ADMIN, SYS, SYSTEM or DEEPSEC_DATA_USER."
+  }
+}
+
+variable "adb_app_user_password" {
+  description = "Password of the application database user (also used as the wallet password). 12 to 30 characters with at least one uppercase letter, one lowercase letter and one digit; must not contain double quotes, single quotes or the user name."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = var.adb_app_user_password == "" || (
+      length(var.adb_app_user_password) >= 12
+      && length(var.adb_app_user_password) <= 30
+      && can(regex("[A-Z]", var.adb_app_user_password))
+      && can(regex("[a-z]", var.adb_app_user_password))
+      && can(regex("[0-9]", var.adb_app_user_password))
+      && !can(regex("[\"'\r\n]", var.adb_app_user_password))
+    )
+    error_message = "adb_app_user_password must be 12 to 30 characters, include an uppercase letter, a lowercase letter and a digit, and must not contain double quotes, single quotes or line breaks."
+  }
 }
 
 variable "instance_display_name" {

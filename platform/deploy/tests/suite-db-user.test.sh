@@ -108,7 +108,7 @@ app_pass="Stub-App-Pass-22"
 screen_pass="Stub-Screen-Pass-3"
 
 write_case() {
-  local dir="$1" app_user="${2:-PRSUITE}" env_user="${3:-PRSUITE}"
+  local dir="$1" app_user="${2:-ADB_APP_USER}" env_user="${3:-ADB_APP_USER}"
   mkdir -p "${dir}"
   printf "SUITE_DB_ADMIN_USER=ADMIN\nSUITE_DB_ADMIN_PASSWORD='%s'\nSUITE_DB_APP_USER='%s'\n" "${admin_pass}" "${app_user}" \
     > "${dir}/admin.env"
@@ -140,31 +140,31 @@ assert_no_secret() {
 base_state='{"admin_user": "ADMIN", "admin_password": "'"${admin_pass}"'", "executed": [], "connects": []}'
 
 # 1. plan: 付ける権限の一覧（DB に繋がない）。
-plan="$("${python_bin}" "${script}" plan --app-user prsuite)"
-expected_plan='CREATE USER PRSUITE IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;
-GRANT PDB_DBA TO PRSUITE;
-GRANT GRANT ANY DATA ROLE TO PRSUITE;
-GRANT ADMINISTER ANY DATA GRANT TO PRSUITE;
-GRANT SET USE DATA GRANTS ONLY TO PRSUITE;'
+plan="$("${python_bin}" "${script}" plan --app-user adb_app_user)"
+expected_plan='CREATE USER ADB_APP_USER IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;
+GRANT PDB_DBA TO ADB_APP_USER;
+GRANT GRANT ANY DATA ROLE TO ADB_APP_USER;
+GRANT ADMINISTER ANY DATA GRANT TO ADB_APP_USER;
+GRANT SET USE DATA GRANTS ONLY TO ADB_APP_USER;'
 [ "${plan}" = "${expected_plan}" ] || fail "plan: ${plan}"
-"${python_bin}" "${script}" plan --app-user PRSUITE --existing | head -n 1 \
-  | grep -qxF 'ALTER USER PRSUITE DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;' \
+"${python_bin}" "${script}" plan --app-user ADB_APP_USER --existing | head -n 1 \
+  | grep -qxF 'ALTER USER ADB_APP_USER DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;' \
   || fail "既存のユーザーの plan"
 
 # 2. 新しく作る: CREATE USER（アプリのパスワード）→ grant → アプリのユーザーで接続して権限を確かめる。
 case_dir="${task_dir}/create"
-write_case "${case_dir}" prsuite prsuite
+write_case "${case_dir}" adb_app_user adb_app_user
 run_apply "${case_dir}" "${base_state}" || fail "作成が失敗した: $(cat "${case_dir}/out.log")"
 sql="$(executed "${case_dir}")"
-printf '%s\n' "${sql}" | grep -qxF "CREATE USER PRSUITE IDENTIFIED BY \"${app_pass}\" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE" \
+printf '%s\n' "${sql}" | grep -qxF "CREATE USER ADB_APP_USER IDENTIFIED BY \"${app_pass}\" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE" \
   || fail "CREATE USER: ${sql}"
-for grant in "GRANT PDB_DBA TO PRSUITE" "GRANT GRANT ANY DATA ROLE TO PRSUITE" "GRANT ADMINISTER ANY DATA GRANT TO PRSUITE" \
-  "GRANT SET USE DATA GRANTS ONLY TO PRSUITE"; do
+for grant in "GRANT PDB_DBA TO ADB_APP_USER" "GRANT GRANT ANY DATA ROLE TO ADB_APP_USER" "GRANT ADMINISTER ANY DATA GRANT TO ADB_APP_USER" \
+  "GRANT SET USE DATA GRANTS ONLY TO ADB_APP_USER"; do
   printf '%s\n' "${sql}" | grep -qxF "${grant}" || fail "${grant} が無い: ${sql}"
 done
 if printf '%s\n' "${sql}" | grep -q "GRANT DBA "; then fail "ADB では DBA ではなく PDB_DBA を付ける"; fi
-grep -qF '[suite-db-user] CREATE USER PRSUITE IDENTIFIED BY "***"' "${case_dir}/out.log" || fail "CREATE の log: $(cat "${case_dir}/out.log")"
-tail -n 1 "${case_dir}/out.log" | grep -qF "[suite-db-user] OK: PRSUITE で接続でき" || fail "OK の行: $(cat "${case_dir}/out.log")"
+grep -qF '[suite-db-user] CREATE USER ADB_APP_USER IDENTIFIED BY "***"' "${case_dir}/out.log" || fail "CREATE の log: $(cat "${case_dir}/out.log")"
+tail -n 1 "${case_dir}/out.log" | grep -qF "[suite-db-user] OK: ADB_APP_USER で接続でき" || fail "OK の行: $(cat "${case_dir}/out.log")"
 "${python_bin}" - "${case_dir}" <<'PY' || fail "接続の引数"
 import json, sys
 state = json.load(open(sys.argv[1] + "/state.json"))
@@ -173,7 +173,7 @@ assert first["user"] == "ADMIN" and first["dsn"] == "suiteadb_high", first
 assert first["wallet"] == sys.argv[1] + "/wallet", first
 # Wallet のパスワードは platform.env の PLATFORM_ORACLE_WALLET_PASSWORD（ADMIN のパスワードではない）。
 assert first["wallet_password"] == "Stub-App-Pass-22", first
-assert state["connects"][-1]["user"] == "PRSUITE", state["connects"]
+assert state["connects"][-1]["user"] == "ADB_APP_USER", state["connects"]
 PY
 assert_no_secret "${case_dir}"
 
@@ -184,10 +184,10 @@ state="${base_state%\}}, \"existing\": [\"LOCKED\", \"N\"], \"app_password\": \"
 run_apply "${case_dir}" "${state}" || fail "既存のユーザーで失敗した: $(cat "${case_dir}/out.log")"
 sql="$(executed "${case_dir}")"
 if printf '%s\n' "${sql}" | grep -q "^CREATE USER"; then fail "既存なのに CREATE USER した"; fi
-printf '%s\n' "${sql}" | grep -qxF "ALTER USER PRSUITE DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE" \
+printf '%s\n' "${sql}" | grep -qxF "ALTER USER ADB_APP_USER DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE" \
   || fail "profile・quota を合わせていない: ${sql}"
-printf '%s\n' "${sql}" | grep -qxF "ALTER USER PRSUITE IDENTIFIED BY \"${app_pass}\" ACCOUNT UNLOCK" || fail "パスワードを合わせていない: ${sql}"
-printf '%s\n' "${sql}" | grep -qxF "ALTER USER PRSUITE EXPIRE PASSWORD ROLLOVER PERIOD" || fail "rollover を終えていない: ${sql}"
+printf '%s\n' "${sql}" | grep -qxF "ALTER USER ADB_APP_USER IDENTIFIED BY \"${app_pass}\" ACCOUNT UNLOCK" || fail "パスワードを合わせていない: ${sql}"
+printf '%s\n' "${sql}" | grep -qxF "ALTER USER ADB_APP_USER EXPIRE PASSWORD ROLLOVER PERIOD" || fail "rollover を終えていない: ${sql}"
 grep -qF "（ORA-01017）" "${case_dir}/out.log" || fail "合わせた理由の log: $(cat "${case_dir}/out.log")"
 assert_no_secret "${case_dir}"
 
@@ -201,7 +201,7 @@ if executed "${case_dir}" | grep -q "IDENTIFIED BY"; then fail "合っている�
 # 5. 画面で保存した platform/.env のパスワードを優先する（同じユーザーのとき）。別のユーザーなら props の値。
 case_dir="${task_dir}/screen"
 write_case "${case_dir}"
-printf "PLATFORM_ORACLE_USER='prsuite'\nPLATFORM_ORACLE_PASSWORD='%s'\n" "${screen_pass}" > "${case_dir}/current.env"
+printf "PLATFORM_ORACLE_USER='adb_app_user'\nPLATFORM_ORACLE_PASSWORD='%s'\n" "${screen_pass}" > "${case_dir}/current.env"
 run_apply "${case_dir}" "${base_state}" --current-env "${case_dir}/current.env" || fail "画面の値で失敗した: $(cat "${case_dir}/out.log")"
 executed "${case_dir}" | grep -qF "IDENTIFIED BY \"${screen_pass}\"" || fail "画面で保存したパスワードを使っていない"
 assert_no_secret "${case_dir}"
@@ -233,10 +233,10 @@ grep -qF "NG（DPY-6005）" "${case_dir}/out.log" || fail "接続の NG の行: 
 
 # 8. 設定の誤り: props のユーザーが食い違う・使えない名前・Oracle の管理のユーザー・grant の失敗・権限が効いていない。
 case_dir="${task_dir}/mismatch"
-write_case "${case_dir}" PRSUITE OTHER
+write_case "${case_dir}" ADB_APP_USER OTHER
 status=0
 run_apply "${case_dir}" "${base_state}" || status=$?
-[ "${status}" -eq 1 ] && grep -qF "PLATFORM_ORACLE_USER（OTHER）がアプリ用のユーザー（PRSUITE）と違います" "${case_dir}/out.log" \
+[ "${status}" -eq 1 ] && grep -qF "PLATFORM_ORACLE_USER（OTHER）がアプリ用のユーザー（ADB_APP_USER）と違います" "${case_dir}/out.log" \
   || fail "食い違いを検出しない: $(cat "${case_dir}/out.log")"
 for name in ADMIN SYS DEEPSEC_DATA_USER ORA_X 9USER 'A-B'; do
   case_dir="${task_dir}/name-${name//[^A-Za-z0-9]/_}"
@@ -255,7 +255,7 @@ write_case "${case_dir}"
 status=0
 run_apply "${case_dir}" "${base_state%\}}, \"fail_sql\": {\"match\": \"GRANT PDB_DBA\", \"error\": \"ORA-01031: insufficient privileges\"}}" \
   || status=$?
-[ "${status}" -eq 1 ] && grep -qF "NG（ORA-01031）: GRANT PDB_DBA TO PRSUITE が失敗しました" "${case_dir}/out.log" \
+[ "${status}" -eq 1 ] && grep -qF "NG（ORA-01031）: GRANT PDB_DBA TO ADB_APP_USER が失敗しました" "${case_dir}/out.log" \
   || fail "grant の失敗: $(cat "${case_dir}/out.log")"
 case_dir="${task_dir}/missing-privs"
 write_case "${case_dir}"
@@ -265,9 +265,9 @@ run_apply "${case_dir}" "${base_state%\}}, \"session_privs\": [\"CREATE TABLE\",
   "${case_dir}/out.log" || fail "権限の不足を検出しない: $(cat "${case_dir}/out.log")"
 case_dir="${task_dir}/password-has-user"
 write_case "${case_dir}"
-printf "PLATFORM_ORACLE_USER='PRSUITE'\nPLATFORM_ORACLE_PASSWORD='Xprsuite-Pass-1'\nPLATFORM_ORACLE_DSN='suiteadb_high'\n" > "${case_dir}/platform.env"
+printf "PLATFORM_ORACLE_USER='ADB_APP_USER'\nPLATFORM_ORACLE_PASSWORD='Xadb_app_user-Pass-1'\nPLATFORM_ORACLE_DSN='suiteadb_high'\n" > "${case_dir}/platform.env"
 status=0
 run_apply "${case_dir}" "${base_state}" || status=$?
-[ "${status}" -eq 1 ] && grep -qF "ユーザー名（PRSUITE）を含めないでください" "${case_dir}/out.log" || fail "ユーザー名を含むパスワード"
+[ "${status}" -eq 1 ] && grep -qF "ユーザー名（ADB_APP_USER）を含めないでください" "${case_dir}/out.log" || fail "ユーザー名を含むパスワード"
 
 echo "suite-db-user: pass"
