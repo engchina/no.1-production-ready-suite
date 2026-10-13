@@ -3071,6 +3071,11 @@ async def test_recommend_profile_returns_business_profile_and_rewrite() -> None:
 async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         await _api_import_sample(client)
+        # 最低スコアの既定（0.9。#1721）ではなく、管理者の GOOD の有無で候補が変わることを確かめる。
+        config_resp = await client.patch(
+            "/api/nl2sql/feedback-config", json={"similarity_threshold": 0.0}
+        )
+        assert config_resp.status_code == 200
         job_resp = await client.post(
             "/api/nl2sql/jobs",
             json={"question": "社員一覧を確認したい", "engine": "select_ai"},
@@ -3602,6 +3607,8 @@ def test_oracle_adapter_apply_comment_statements_strips_semicolon() -> None:
 
 def test_similar_history_returns_only_admin_good_feedback() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     for suffix, user_rating, admin_rating in (
         ("user-good", FeedbackRating.GOOD, None),
         ("admin-good", FeedbackRating.BAD, FeedbackRating.GOOD),
@@ -3658,6 +3665,8 @@ def test_similar_history_excludes_admin_good_when_target_table_mismatches() -> N
 
 def test_similar_history_keeps_matching_project_without_good_profile_score_inflation() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._catalog = _similar_history_sample_catalog()
     service._history.append(
         HistoryItem(
@@ -3737,6 +3746,8 @@ def test_service_similar_history_filters_oracle_vector_result_by_target_table(
         ),
     ]
     service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._catalog = _similar_history_sample_catalog()
     service._history = [
         HistoryItem(
@@ -3931,6 +3942,8 @@ def test_admin_good_feedback_publish_warning_keeps_deterministic_similar_history
 
     fake_db = _FakeOracleDb()
     service = _OracleRuntimeNl2SqlService(_FailingPublishOracleAdapter(fake_db))
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._history.append(
         HistoryItem(
             id="hist-warning-001",
@@ -4240,6 +4253,8 @@ def test_service_similar_history_uses_oracle_vector_search(
         )
     ]
     service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._embedding_client = _FakeEmbeddingClient()
     service._history = [
         HistoryItem(

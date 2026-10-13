@@ -112,6 +112,7 @@ from .metadata_sql_batches import (
     plan_metadata_sql_batches,
 )
 from .models import (
+    DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD,
     STORED_JOB_REQUEST_CONTEXT,
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
@@ -4282,7 +4283,7 @@ class Nl2SqlService:
         self._feedback: dict[str, FeedbackRating] = {}
         self._feedback_indexed_ids: set[str] = set()
         self._feedback_index_lock = _FEEDBACK_INDEX_OPERATION_LOCK
-        self._feedback_similarity_threshold = 0.0
+        self._feedback_similarity_threshold = DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD
         self._feedback_match_limit = 3
         self._classifier_examples: list[ClassifierTrainingExample] = []
         self._classifier_artifact: dict[str, Any] | None = None
@@ -4486,7 +4487,7 @@ class Nl2SqlService:
             }
             self._feedback_indexed_ids = feedback_indexed_ids
             self._feedback_similarity_threshold = float(
-                feedback_config.get("similarity_threshold", 0.0)
+                feedback_config.get("similarity_threshold", DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD)
             )
             self._feedback_match_limit = int(feedback_config.get("match_limit", 3))
             self._classifier_examples = classifier_examples
@@ -9630,7 +9631,9 @@ class Nl2SqlService:
         match_limit: int | None = None
         indexed_ids: set[str] | None = None
         if isinstance(config_value, Mapping):
-            similarity_threshold = float(config_value.get("similarity_threshold", 0.0))
+            similarity_threshold = float(
+                config_value.get("similarity_threshold", DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD)
+            )
             match_limit = int(config_value.get("match_limit", 3))
         if isinstance(indexed_value, Sequence) and not isinstance(
             indexed_value, (str, bytes, bytearray)
