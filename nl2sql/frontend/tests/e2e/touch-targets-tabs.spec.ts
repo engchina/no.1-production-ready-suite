@@ -1,4 +1,9 @@
 import { expect, test, type Locator, type Page } from "./_helpers/test";
+import { FIXTURE_BASE_URL } from "./_helpers/web-server";
+
+// `tests/fixtures/*.tsx` を `/@react-refresh` と一緒に読み込むので、dev server の変換が要る。preview（PR の CI）でも
+// fixture 用の dev server を開く（tests/e2e/_helpers/web-server.ts。#1583）。
+test.use({ baseURL: FIXTURE_BASE_URL });
 
 // #364: タッチ端末（pointer: coarse）でだけ、ToggleChip / Switch の当たり判定を見た目のまま 44px 以上に広げる。
 // 隣り合う・折り返した部品の当たり判定が、互いの見た目を覆わないことも確かめる。
