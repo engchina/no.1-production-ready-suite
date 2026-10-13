@@ -4722,7 +4722,8 @@ test("「実行を中止」の要求の失敗は中止のボタンの行に出�
 });
 
 test("job ポーリングの通信断が続くと追跡を停止しエラー表示と UI ロック解除を行う", async ({ page }) => {
-  test.slow();
+  // 2.5 秒ごとの状態確認を page.clock で進め、実時間で待たない（#1593）。
+  await page.clock.install();
   await mockNl2SqlApi(page);
   // 作成は成功するが、以後の状態確認がネットワーク断で失敗し続けるケース。
   await page.route("**/api/nl2sql/jobs/job-default-001", (route) => route.abort("failed"));
@@ -4735,9 +4736,8 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
 
   // 2.5s 間隔 × 連続 3 回失敗(即時 tick 含む)で追跡を断念する。
   const actionError = page.getByTestId("nl2sql-action-feedback-error");
-  await expect(actionError).toContainText("ジョブの状態確認に連続して失敗したため", {
-    timeout: 15_000,
-  });
+  await pollWithClock(page, async () => (await actionError.count()) ? actionError.textContent() : "", 2_500)
+    .toContain("ジョブの状態確認に連続して失敗したため");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(runButton).toBeEnabled();
   await expect(resetButton).toBeEnabled();
