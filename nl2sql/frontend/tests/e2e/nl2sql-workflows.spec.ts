@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
+import { pollWithClock } from "./_helpers/clock";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "./_helpers/test";
 import { closeSidebarNav, openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
@@ -2819,17 +2820,6 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   );
 
   return state;
-}
-
-/**
- * `page.clock.install()` した画面で、時計を `stepMs` ずつ進めながら値を待つ（#1593）。
- * 定期取得（実行中の job は 2 秒）や経過時間の表示（1 秒）を実時間で待たない。
- */
-function pollWithClock<T>(page: Page, read: () => Promise<T>, stepMs: number) {
-  return expect.poll(async () => {
-    await page.clock.runFor(stepMs);
-    return read();
-  });
 }
 
 async function expectNoHorizontalScroll(page: Page) {
@@ -12607,20 +12597,10 @@ for (const status of ["completed", "partial", "failed", "no_data"]) {
       return fulfillJson(route, [syntheticRunFixture(current)]);
     });
     await page.goto("/admin-sql");
-    await expect
-      .poll(async () => {
-        await page.clock.runFor(2_000);
-        return reads;
-      })
-      .toBeGreaterThanOrEqual(2);
+    await pollWithClock(page, async () => reads, 2_000).toBeGreaterThanOrEqual(2);
     current = status;
     const notifications = page.getByRole("region", { name: "通知", exact: true });
-    await expect
-      .poll(async () => {
-        await page.clock.runFor(2_000);
-        return notifications.getByRole("status").count();
-      })
-      .toBe(1);
+    await pollWithClock(page, () => notifications.getByRole("status").count(), 2_000).toBe(1);
     await expect(notifications).toContainText("APP.INVOICES");
     await expect(notifications.getByRole("button", { name: "結果を確認" })).toHaveCount(0);
     await expect(notifications.getByRole("button")).toHaveCount(1);
