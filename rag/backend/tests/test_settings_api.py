@@ -67,7 +67,10 @@ def _saved_env_value(settings: Settings, name: str) -> str | None:
 
 def _persisted_parser(settings: Settings) -> dict[str, Any]:
     """「文書解析」で保存した parser-settings.json（共有の model-settings ではない。#1701）。"""
-    return json.loads(PARSER_SETTINGS_STORE.path(settings).read_text(encoding="utf-8"))
+    persisted: dict[str, Any] = json.loads(
+        PARSER_SETTINGS_STORE.path(settings).read_text(encoding="utf-8")
+    )
+    return persisted
 
 
 def _saved_enterprise_ai_api_key(settings: Settings) -> str | None:
