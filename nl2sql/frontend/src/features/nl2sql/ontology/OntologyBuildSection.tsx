@@ -1,5 +1,6 @@
 import { buildEventStage, orderedBuildProgress } from "./unifiedConcepts";
 import { MarkdownPublication } from "./MarkdownPublication";
+import { appendToBusinessText } from "./publicationSummary";
 import { PublishedOntologyDiagnostics } from "./PublishedOntologyDiagnostics";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -2013,6 +2014,13 @@ export function OntologyBuildSection({
           save={async () => draftDirty ? await saveDraftMarkdown({silent:true}) : markdownState}
           onPublished={setPublishJob}
           onBusyChange={setBusy}
+          businessText={businessText}
+          onAppendBusinessText={(text) => {
+            // 利用者が「業務説明に追記」を押したときだけ書き換える（#1727・#1729）。
+            setBusinessText(current => appendToBusinessText(current, text));
+            toast.success(t("markdownOntology.suggestion.appended"));
+            document.getElementById("ontology-build-business-text")?.focus();
+          }}
         />}
         {!markdownLoading && publishJob ? (
           <div

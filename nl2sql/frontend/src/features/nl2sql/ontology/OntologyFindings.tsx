@@ -1,6 +1,6 @@
 import { Disclosure, StatusBadge } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
-import { findingTarget, partitionFindings } from "./publicationSummary";
+import { findingName, findingTarget, partitionFindings } from "./publicationSummary";
 import type { OntologyFinding } from "./types";
 
 interface FindingGroup { message: string; severity: string; items: OntologyFinding[] }
@@ -18,14 +18,20 @@ function groupFindings(findings: OntologyFinding[]): FindingGroup[] {
   return [...groups.values()].sort((a, b) => Number(b.severity === "error") - Number(a.severity === "error"));
 }
 
+/**
+ * 診断の対象は業務の名前で出し、内部の ID・項目名・診断コードは「技術的な詳細」に畳む（#1729）。
+ */
 function FindingTargets({ items, names }: { items: OntologyFinding[]; names?: Map<string, string> }) {
-  return <Disclosure variant="plain" size="sm" summary={t("markdownOntology.findingTargets")}>
-    <ul className="grid min-w-0 gap-1">
-      {[...new Set(items.map(item => findingTarget(item, names) || t("markdownOntology.generalFinding")))].map(target =>
-        <li key={target} className="break-all text-fg-muted">{target}</li>
-      )}
-    </ul>
-  </Disclosure>;
+  const targets = [...new Set(items.map(item => findingName(item, names)).filter(Boolean))];
+  const technical = [...new Set(items.map(item => findingTarget(item)).filter(Boolean))];
+  return <div className="grid min-w-0 gap-2">
+    {targets.length > 0 && <p className="break-words text-xs text-fg-muted">{t("markdownOntology.findingTargetsLabel", { names: targets.join("、") })}</p>}
+    {technical.length > 0 && <Disclosure variant="plain" size="sm" summary={t("ontologyUi.technicalDetails")}>
+      <ul className="grid min-w-0 gap-1">
+        {technical.map(target => <li key={target} className="break-all font-mono text-xs text-fg-muted">{target}</li>)}
+      </ul>
+    </Disclosure>}
+  </div>;
 }
 
 /**

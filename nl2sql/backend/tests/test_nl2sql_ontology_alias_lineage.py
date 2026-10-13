@@ -41,8 +41,8 @@ def test_metric_lineage_validates_publishes_and_remains_in_query_context(sql: st
     context = published_context(svc.runtime, "sales", release["id"])
     # LLM には定義から作る業務の知識（指標の式・条件）を渡す（#1720）。
     assert "- 売上（" in context
-    assert f"式: {sql}" in context
-    assert "条件: APP.ORDERS.AMOUNT > 0" in context
+    assert f"測定値: {sql}" in context
+    assert "絞り込みの条件: APP.ORDERS.AMOUNT > 0" in context
     narrowed = published_context(
         svc.runtime,
         "sales",

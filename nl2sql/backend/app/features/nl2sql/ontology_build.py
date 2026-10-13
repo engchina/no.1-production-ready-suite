@@ -2087,6 +2087,23 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "外部キー制約が無くても、同じ名前・型の ID 列（例: EMPLOYEE.DEPARTMENT_ID と"
     " DEPARTMENT.DEPARTMENT_ID）があれば、その列で結合する関係を link_type として作り、"
     "join_expression_sql に OWNER.OBJECT.COLUMN = OWNER.OBJECT.COLUMN の形で書く。"
+    # 業界の標準のモデルに沿う（#1729。profile-ontology-capabilities.md「オントロジーの標準」）。
+    "オントロジーは Palantir Foundry の Ontology のモデルに沿う。"
+    "オブジェクト型（object_type）は表示名 name_ja・api_name（snake_case）・説明 description_ja・"
+    "主キー primary_key・タイトルのプロパティ title_property・対応する表 mappings を持つ。"
+    "プロパティ（property）は業務の型 data_type（string / integer / number / boolean / date / "
+    "datetime のいずれか）と、精度・桁を含む物理の型 physical_type（例: NUMBER(12,2)・"
+    "VARCHAR2(50)）・必須 required・単位 unit・説明・所属 object_type を持つ。"
+    "複数のオブジェクト型で同じ意味のものは共有プロパティ（shared_property）にする。"
+    "リンク型（link_type）は両端 source / target・多重度 cardinality・結合のキー "
+    "join_expression_sql・それぞれの向きの名前 name_ja / inverse_name_ja を持つ。"
+    "用語は SKOS の考え方で、name_ja を優先ラベル、aliases を別ラベル、"
+    "description_ja を定義とする。"
+    "指標（metric）は semantic layer の書き方で、expression_sql を測定値、aggregation を集計方法、"
+    "grain をディメンション、time_property を時間のディメンション、"
+    "filter_sql を絞り込みの条件とする。"
+    "api_name に種類の名前（object_type・property・link_type など）を使わない。"
+    "name_ja・説明・別名は日本語で書き、表・列・api_name・SQL は英語のまま書く。"
 )
 
 
@@ -4974,7 +4991,8 @@ class OntologyBuildService:
             legacy_definitions,
             merge_definitions,
             render_concepts,
-            repair_definitions,
+            repair_definitions_report,
+            schema_resolved_conflicts,
         )
 
         candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
@@ -4998,11 +5016,21 @@ class OntologyBuildService:
             ],
         )
         # AI の出力を graph にできる形へ直す（共有した列のプロパティの分割など。#1720）。
-        unified_definitions = repair_definitions(
+        # 同じ表を指すオブジェクト型の統合と、外部キー・同じ名前と型の ID 列の関係も作る（#1729）。
+        repair = repair_definitions_report(
             job.profile_id,
             unified_definitions,
             json.loads(schema_context),
             ai_output=True,
+        )
+        unified_definitions = repair.definitions
+        # 業務説明に追記された改善案の文の粒度・主キーは、AI が読み落としても入れる（#1729）。
+        from .ontology_improvement_suggestion import apply_business_text_facts
+
+        apply_business_text_facts(unified_definitions, business_text)
+        # DB の列の型・NOT NULL で値が決まった競合は利用者に出さない（#1729）。
+        concept_conflicts = schema_resolved_conflicts(
+            concept_conflicts, unified_definitions, json.loads(schema_context), repair.remap
         )
         merge_conflicts = list(concept_conflicts)
         from .ontology_definition_validation import validate_definitions
@@ -5019,15 +5047,49 @@ class OntologyBuildService:
             sources=definition_sources,
         )
         build_findings = validate_definitions(provisional, json.loads(schema_context))
+        # AI が作った式（業務ルール・指標など）の SQL が確かめられなければ、下書きに入れない
+        # （graph には要らず、公開を止めない。best effort。#1729）。
+        invalid_sql = {
+            f.definition_id
+            for f in build_findings
+            if f.code == "SQL_EXPRESSION_INVALID" and f.severity == "error"
+        }
+        dropped_sql = [
+            d
+            for d in unified_definitions
+            if (d.id in invalid_sql or d.api_name in invalid_sql)
+            and d.kind in {"business_rule", "metric", "function", "object_set", "action_type"}
+        ]
+        if dropped_sql:
+            unified_definitions = [
+                d for d in unified_definitions if all(d is not x for x in dropped_sql)
+            ]
+            content_notes.extend(
+                f"『{d.name_ja}』の SQL の式を確かめられなかったため、下書きに含めませんでした。"
+                "必要なら Markdown に正しい式で書き足してください。"
+                for d in dropped_sql
+            )
+            provisional = provisional.model_copy(update={"definitions": unified_definitions})
+            build_findings = validate_definitions(provisional, json.loads(schema_context))
+        # 利用者に見せる文には内部の ID・項目名を出さず、業務の名前を使う（#1729）。
+        finding_names = {
+            key: d.name_ja for d in unified_definitions for key in (d.id, d.api_name) if key
+        }
         concept_conflicts.extend(
-            f"{f.definition_id} / {f.field}: {f.message_ja}"
+            f"『{finding_names.get(f.definition_id, f.definition_id)}』: {f.message_ja}"
             for f in build_findings
             if f.severity == "error"
         )
         content_notes.extend(
-            f"{f.definition_id} / {f.field}: {f.message_ja}"
+            f"『{finding_names.get(f.definition_id, f.definition_id)}』: {f.message_ja}"
             for f in build_findings
             if f.severity == "warning"
+        )
+        content_notes.extend(
+            f"『{d.name_ja}』は対応する表・ビューが分からないため、下書きに含めませんでした。"
+            "含める場合は、業務プロファイルに表・ビューを足して構築し直してください。"
+            for d in repair.dropped
+            if d.kind == "object_type"
         )
         self._set_definition_phase(
             job_id,

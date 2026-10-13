@@ -51,7 +51,7 @@ _EDGE_KIND_LABELS_JA: dict[OntologyEdgeKind, str] = {
 
 
 def _node_kind_label_ja(kind: OntologyNodeKind) -> str:
-    from .ontology_unified_model import CONCEPT_LABELS
+    from .ontology_terms import CONCEPT_LABELS
 
     return CONCEPT_LABELS.get(kind.value, _NODE_KIND_LABELS_JA.get(kind, kind.value))
 

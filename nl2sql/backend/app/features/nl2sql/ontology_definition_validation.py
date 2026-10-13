@@ -32,6 +32,7 @@ from .ontology_sql_validation import (
     token_identifier,
     validated_sql,
 )
+from .ontology_terms import VALUE_LABELS
 
 
 def mapping_object_key(mapping: DefinitionMapping) -> str:
@@ -131,6 +132,20 @@ def validated_definition_expression(
     return validated_sql(tree, local)
 
 
+def _type_family(value: str) -> str:
+    """業務の型の比較のキー（整数は数値の一部。型名の大文字小文字は区別しない）。"""
+
+    text = value.strip().casefold()
+    return "number" if text in {"integer", "number"} else text
+
+
+def _label(definitions: dict[str, BusinessDefinition], name: str) -> str:
+    """参照先の表示名（無ければ API 名）。"""
+
+    target = definitions.get(name)
+    return target.name_ja if target is not None else name
+
+
 def interface_contracts(
     definitions: dict[str, BusinessDefinition], name: str
 ) -> list[InterfaceDefinition]:
@@ -166,17 +181,33 @@ def validate_definitions(
             )
 
         if sum(d.api_name == item.api_name for d in bundle.definitions) > 1:
-            error("DUPLICATE_NAME", "api_name", "概念名が重複しています。")
+            error(
+                "DUPLICATE_NAME",
+                "api_name",
+                f"同じ API 名（{item.api_name}）の定義が 2 つあります。"
+                "Markdown で片方の見出しの API 名を変えるか、1 つにまとめてください。",
+            )
         if not item.id or sum(d.id == item.id for d in bundle.definitions) > 1:
-            error("DUPLICATE_DEFINITION_ID", "id", "概念 ID は空でない一意な値が必要です。")
+            error(
+                "DUPLICATE_DEFINITION_ID",
+                "id",
+                "定義を見分ける内部の番号が重なりました。"
+                "もう一度「オントロジーを公開」を押して確認し直してください。",
+            )
         if isinstance(item, PropertyDefinition):
             for field in ("value_type", "shared_property"):
                 target = definitions.get(getattr(item, field, ""))
-                if isinstance(target, PropertyDefinition) and target.data_type != item.data_type:
+                if (
+                    isinstance(target, PropertyDefinition)
+                    and target.data_type
+                    and item.data_type
+                    and _type_family(target.data_type) != _type_family(item.data_type)
+                ):
                     error(
                         "PROPERTY_DATA_TYPE_MISMATCH",
                         field,
-                        f"{target.api_name} とデータ型が一致しません。",
+                        f"『{target.name_ja}』と業務の型が違います。"
+                        "どちらかの「業務の型」を直してそろえてください。",
                     )
             values = item.allowed_values
             data_type = item.data_type
@@ -187,9 +218,17 @@ def validate_definitions(
             data_type = getattr(prop, "data_type", "")
             value_field = "values"
             if len(set(values)) != len(values):
-                error("ENUM_CODE_DUPLICATE", "values", "列挙コードが重複しています。")
+                error(
+                    "ENUM_CODE_DUPLICATE",
+                    "values",
+                    "列挙値に同じ値が 2 回あります。重なった値を 1 つ削除してください。",
+                )
             if any(not member.code or not member.label_ja for member in item.values):
-                error("ENUM_MEMBER_INCOMPLETE", "values", "列挙コードと表示名が必要です。")
+                error(
+                    "ENUM_MEMBER_INCOMPLETE",
+                    "values",
+                    "列挙値に値か表示名の無いものがあります。値と表示名の両方を書いてください。",
+                )
         else:
             values, data_type, value_field = [], "", ""
         if data_type in XSD_TYPES:
@@ -198,7 +237,9 @@ def validate_definitions(
                     error(
                         "ALLOWED_VALUE_TYPE_INVALID",
                         value_field,
-                        f"値 {value!r} は {data_type} の値ではありません。",
+                        f"許可する値 {value!r} が業務の型"
+                        f"（{VALUE_LABELS.get(data_type, data_type)}）に合いません。"
+                        "値か業務の型を直してください。",
                     )
         refs: list[tuple[str, str, set[str]]] = []
         if isinstance(item, ObjectTypeDefinition):
@@ -211,7 +252,8 @@ def validate_definitions(
                 error(
                     "OBJECT_MAPPING_REQUIRED",
                     "mappings",
-                    "オブジェクトの物理マッピングが必要です。",
+                    "対応する表・ビューが決まっていません。業務プロファイルに表・ビューを足すか、"
+                    "Markdown のこのオブジェクト型に「対応する表・列」を書いてください。",
                 )
             for name in {
                 *item.properties,
@@ -223,9 +265,11 @@ def validate_definitions(
                     error(
                         "PROPERTY_OWNER_MISMATCH",
                         "title_property" if name == item.title_property else "properties",
-                        f"{name} は {prop.object_type or '別のオブジェクト'} のプロパティです。"
-                        f"{item.api_name} の列として使うときは、{item.api_name} のプロパティを"
-                        "別に定義するか、共通のプロパティ（Shared Property）にしてください。",
+                        f"『{prop.name_ja}』は"
+                        f"『{_label(definitions, prop.object_type) or '別のオブジェクト型'}』の"
+                        "プロパティで、このオブジェクト型の列ではありません。"
+                        "このオブジェクト型でも使うなら、このオブジェクト型のプロパティを別に書くか、"
+                        "共有プロパティ（Shared Property）にしてください。",
                     )
             for implementation in item.implements:
                 refs.append(("implements", implementation.interface, {"interface"}))
@@ -248,8 +292,9 @@ def validate_definitions(
                         error(
                             "INTERFACE_PROPERTY_MISMATCH",
                             "implements",
-                            f"{interface.api_name}.{requirement.api_name} "
-                            "の実装契約を満たしません。",
+                            f"インターフェース『{interface.name_ja}』が求めるプロパティ"
+                            f"『{requirement.name_ja}』を満たしていません。"
+                            "対応するプロパティの業務の型・必須を合わせてください。",
                         )
                 for name in {name for contract in contracts for name in contract.required_links}:
                     link = definitions.get(name)
@@ -261,7 +306,8 @@ def validate_definitions(
                         error(
                             "INTERFACE_LINK_MISMATCH",
                             "implements",
-                            f"必須リンク {name} が実装されていません。",
+                            f"インターフェースが求めるリンク型『{_label(definitions, name)}』が"
+                            "ありません。そのリンク型を書くか、インターフェースの指定を外してください。",
                         )
                 for name in {name for contract in contracts for name in contract.required_actions}:
                     action = definitions.get(name)
@@ -273,7 +319,8 @@ def validate_definitions(
                         error(
                             "INTERFACE_ACTION_MISMATCH",
                             "implements",
-                            f"必須アクション {name} が実装されていません。",
+                            f"インターフェースが求めるアクション型『{_label(definitions, name)}』が"
+                            "ありません。そのアクション型を書くか、インターフェースの指定を外してください。",
                         )
         elif isinstance(item, PropertyDefinition):
             if item.kind == "property":
@@ -282,7 +329,8 @@ def validate_definitions(
                     error(
                         "PROPERTY_MAPPING_REQUIRED",
                         "mappings",
-                        "プロパティの物理マッピングが必要です。",
+                        "対応する列が決まっていません。"
+                        "Markdown のこのプロパティに「対応する表・列」を書いてください。",
                     )
             if item.shared_property:
                 refs.append(("shared_property", item.shared_property, {"shared_property"}))
@@ -303,7 +351,11 @@ def validate_definitions(
             while pending:
                 name = pending.pop()
                 if name == item.api_name:
-                    error("INTERFACE_CYCLE", "extends", "インターフェース継承が循環しています。")
+                    error(
+                        "INTERFACE_CYCLE",
+                        "extends",
+                        "インターフェースの継承が循環しています。どこかの継承元を外してください。",
+                    )
                     break
                 parent = definitions.get(name)
                 if name not in visited and parent is not None and parent.kind == "interface":
@@ -327,22 +379,30 @@ def validate_definitions(
                 error(
                     "REFERENCE_INVALID",
                     field,
-                    f"概念参照 {name or '未設定'} を解決できません。"
-                    "Markdown にその定義を書くか、参照を削除してください。",
+                    (
+                        f"参照している『{_label(definitions, name)}』が見つかりません。"
+                        if name
+                        else "参照先が書かれていません。"
+                    )
+                    + "Markdown にその定義を書くか、参照を削除してください。",
                 )
         for field in ("time_property", "timestamp_property"):
             name = getattr(item, field, "")
             if name and (name not in definitions or definitions[name].kind != "property"):
-                error("REFERENCE_INVALID", field, f"時刻プロパティ {name} を解決できません。")
+                error(
+                    "REFERENCE_INVALID",
+                    field,
+                    f"時間の項目に指定した『{name}』がプロパティとして見つかりません。"
+                    "プロパティの API 名を直してください。",
+                )
         for mapping in item.mappings:
             key = mapping_object_key(mapping)
             if key not in physical:
                 error(
                     "MAPPING_OUTSIDE_PROFILE",
                     "mappings",
-                    f"{key} は業務プロファイルの対象に含まれていません。"
-                    "業務プロファイルの対象の表・ビューに追加するか、"
-                    "Markdown からこの対応を削除してください。",
+                    f"表・ビュー {key} は業務プロファイルの対象に入っていません。"
+                    "業務プロファイルの対象に追加するか、Markdown からこの対応を削除してください。",
                 )
             elif not is_whole_object_column(mapping.column_name) and (
                 mapping_column_key(mapping) not in physical[key]
@@ -350,7 +410,7 @@ def validate_definitions(
                 error(
                     "MAPPING_OUTSIDE_PROFILE",
                     "mappings",
-                    f"{key}.{mapping.column_name} は {key} に無い列か、"
+                    f"列 {key}.{mapping.column_name} は表・ビューに無いか、"
                     "業務プロファイルで使えない列です。列名を直すか、"
                     "Markdown からこの対応を削除してください。",
                 )
@@ -367,7 +427,7 @@ def validate_definitions(
                         error(
                             "METRIC_AGGREGATION_MISMATCH",
                             field,
-                            "宣言した集約関数と SQL が一致しません。",
+                            "集計方法と式の集計関数が違います。どちらかを直してそろえてください。",
                         )
                     scope = build_scope(tree) if isinstance(tree, exp.Query) else None
                     if item.filter_sql:
@@ -393,7 +453,8 @@ def validate_definitions(
                             error(
                                 "METRIC_FILTER_MISMATCH",
                                 "filter_sql",
-                                "業務フィルタが指標 SQL の必須条件に含まれていません。",
+                                "絞り込みの条件が式の WHERE に入っていません。"
+                                "式に条件を入れるか、絞り込みの条件を直してください。",
                             )
 
                     def declared_keys(names: list[str]) -> set[str]:
@@ -402,7 +463,8 @@ def validate_definitions(
                             prop = definitions.get(name)
                             if not isinstance(prop, PropertyDefinition) or len(prop.mappings) != 1:
                                 raise ValueError(
-                                    f"{name} の集約キー mapping が一意ではありません。"
+                                    f"『{_label(definitions, name)}』の対応する列が 1 つに"
+                                    "決まりません。"
                                 )
                             mapping = prop.mappings[0]
                             value = (
@@ -437,7 +499,8 @@ def validate_definitions(
                             error(
                                 "METRIC_DISTINCT_MISMATCH",
                                 "distinct_keys",
-                                "SQL の重複排除列が宣言したキーと一致しません。",
+                                "式の重複排除（DISTINCT）の列と重複排除のキーが違います。"
+                                "どちらかを直してそろえてください。",
                             )
                     if item.grain and isinstance(tree, exp.Query):
                         group = tree.args.get("group")
@@ -450,18 +513,21 @@ def validate_definitions(
                             error(
                                 "METRIC_GRAIN_MISMATCH",
                                 "grain",
-                                "SQL の GROUP BY が宣言した集約粒度と一致しません。",
+                                "式の GROUP BY とディメンションが違います。"
+                                "どちらかを直してそろえてください。",
                             )
                     if any(True for _ in tree.find_all(exp.Join)) and aggregates:
                         error(
                             "JOIN_GRAIN_REVIEW_REQUIRED",
                             "expression_sql",
-                            "結合後集計の重複を防ぐ事前集計または粒度検証が必要です。",
+                            "結合してから集計する式は、行が重なって数が増えることがあります。"
+                            "結合の前に集計するか、ディメンションで重ならないことを確かめてください。",
                         )
             except (ValueError, sqlglot.errors.SqlglotError) as exc:
                 error(
                     "SQL_EXPRESSION_INVALID",
                     field,
-                    f"Oracle SQL 式を検証できません: {str(exc)[:160]}",
+                    f"SQL の式を確かめられませんでした（{str(exc)[:160]}）。"
+                    "Markdown の式を Oracle の SQL に直してください。",
                 )
     return findings

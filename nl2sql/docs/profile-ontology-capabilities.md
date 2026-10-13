@@ -9,9 +9,25 @@ Markdown を業務定義の編集・公開元とする。画面の順序は **�
 | 主要6種類 | Object Type → Property → Link Type → Interface → Function → Action Type |
 | 補助7種類 | Shared Property → Value Type → Enumeration → Metric → Business Rule → Business Event → Object Set |
 
-旧業務エンティティは Object Type、旧属性・指標・ルール等は対応する分類に変換する。新規生成は型付き `definitions` を正本とし、旧形式への二重出力を要求しない。同一性は Profile と分類、安定 ID / API 名で確認し、同じ表示名や同じ物理表という理由だけで併合しない。説明・別名・証拠・マッピングは保持し、式・型・制約等の異なる値は Markdown の確認事項へ残す。Schema / 表 / ビュー / 列は物理層に保持する。
+旧業務エンティティは Object Type、旧属性・指標・ルール等は対応する分類に変換する。新規生成は型付き `definitions` を正本とし、旧形式への二重出力を要求しない。同一性は Profile と分類、安定 ID / API 名で確認する。ただし名前・ID が同じでも、物理の表・列（リンク型は両端と結合のキー）が食い違う定義は別の概念にする（API 名が種類の名前 `link_type`・`property` だけの定義は、所属・列・両端から API 名を作る。#1729）。同じ表・ビューを指すオブジェクト型は 1 つにまとめる（下の「同じ物の統合」）。説明・別名・証拠・マッピングは保持し、式・型・制約等の異なる値は Markdown の確認事項へ残す。Schema / 表 / ビュー / 列は物理層に保持する。
 
 すべての分類を確認するが、根拠のないインスタンスは作らない。件数と根拠不足・不適用・失敗理由は coverage として保持する。
+
+## オントロジーの標準
+
+オントロジーの中身は業界の標準のモデルに沿い、専門性を保つ（#1729。規則は [AGENTS.md](../AGENTS.md)「オントロジーの標準」）。画面の説明・診断は平易な日本語にするが、中身の構造は崩さない。生成は best effort で、無い項目は空でよい（推測で埋めない）。
+
+| 標準 | このオントロジーの項目 |
+| --- | --- |
+| Foundry の Object Type: display name・API name・description・primary key・title property・backing datasource | オブジェクト型（Object Type）: `name_ja`・`api_name`（snake_case）・`description_ja`・`primary_key`・`title_property`・`mappings`（表・ビュー） |
+| Foundry の Property: base type・physical type・required・unit・description・所属 | プロパティ（Property）: `data_type`（業務の型 string / integer / number / boolean / date / datetime）・`physical_type`（精度・桁を含む DB の型。DB の列が正）・`required`（NOT NULL の列は必須）・`unit`・`description_ja`・`object_type` |
+| Foundry の Shared Property | 共有プロパティ（Shared Property）: 複数のオブジェクト型で同じ意味のもの。オブジェクト型は自分の表の列のプロパティを持ち、`shared_property` で共有プロパティを指す |
+| Foundry の Link Type: 両端・cardinality・foreign key・各向きの名前 | リンク型（Link Type）: `source` / `target`・`cardinality`・`join_expression_sql`（結合のキー）・`name_ja` / `inverse_name_ja` |
+| SKOS: prefLabel・altLabel・definition | `name_ja`（優先ラベル）・`aliases`（別ラベル）・`description_ja`（定義） |
+| semantic layer の metric: measure・aggregation・dimension・grain・time dimension・filter | 指標（Metric）: `expression_sql`（測定値）・`aggregation`（集計方法）・`grain`（ディメンション。集計の粒度を決める）・`time_property`（時間のディメンション）・`filter_sql`（絞り込みの条件） |
+
+- 記述は日本語が主で、専門用語は「日本語（英語）」で併記する。訳は `backend/app/features/nl2sql/ontology_terms.json` の 1 つの対応表に置き、Markdown の生成（`render_concepts`・`render_llm_context`）・診断の文・画面の i18n（`ontologyResults.kind.*` / `ontologyResults.field.*`）が同じ訳を使う。物理の名前（表・列・API 名・SQL）は訳さない。
+- AI 構築の生成の指示（`ontology_build.py` の system prompt）にこの標準を書き、出力は Pydantic のモデル（`ontology_definitions.py`）で形をそろえる。
 
 ## 構築
 
@@ -34,8 +50,8 @@ Q/A の補助的な `DUAL` / `SYS.DUAL` 参照は SQL の名前解決に限っ�
 ## Markdown の公開
 
 - 下書きを保存して `POST /profiles/{profile_id}/ontology-markdown/prepare` に ETag と `Idempotency-Key` を渡す。
-- 準備タスクは Markdown、元 revision、Profile / Schema の fingerprint、期待する公開 head を固定する。OCI Enterprise AI が全行の扱いと13分類を解析する。未解析行、解釈できない行、概念の欠落、競合、静的検証エラーがあれば公開できない。
-- `GET .../preparations/{preparation_id}` で進捗、定義ごとの増減・前後差分、行位置と検査事項を確認する。必要に応じて `POST .../preparations/{preparation_id}/validate-data` で標本データと受入テストを検証する。
+- 準備タスクは Markdown、元 revision、Profile / Schema の fingerprint、期待する公開 head を固定する。下書きの決まった形（`#### 種類` → `##### 表示名 (`API 名`)` → `- 項目: 値`。#1729 より前の項目名も読む）は `ontology_markdown_parser.parse_rendered_markdown` が決定論で読み、読めない行（自由な文・複雑な項目）があるときだけ OCI Enterprise AI が全行の扱いと13分類を解析する（LLM の解析は同じ表を指す概念・行の対応が毎回ぶれ、公開を止めていた）。節・種類の見出しと空行は定義ではないため、LLM が「見出しのみ」と未解決にしても公開を止めない。未解析行、解釈できない行、概念の欠落、競合、静的検証エラーがあれば公開できない。
+- `GET .../preparations/{preparation_id}` で進捗、解析した定義（`definitions`）、前の公開版との差分（`differences`）、検査事項（`findings`）、業務説明に追記する改善案（`suggestions`）、解析の経路（`parser`: `rule` / `llm`）を確認する。必要に応じて `POST .../preparations/{preparation_id}/validate-data` で標本データと受入テストを検証する。
 - 確認ダイアログは Profile と実際の公開版を示す。`POST .../publish` は preparation ID、draft ETag、expected head、確認フラグ、冪等キーを必須とする。確認後に LLM を再実行しない。
 - Markdown、構造化定義、graph、OWL / SHACL / 検証結果を一つの immutable snapshot に保存し、draft と head の CAS を含む同一 transaction で公開 pointer を更新する。失敗時は旧 head を維持する。
 - 公開成功後は Markdown とグラフを再取得する。公開後の編集は次の下書き版を作り、以前の公開本文と成果物を書き換えない。
@@ -45,9 +61,13 @@ Q/A の補助的な `DUAL` / `SYS.DUAL` 参照は SQL の名前解決に限っ�
 ### 公開診断と警告の保持
 
 - 診断は 3 段階（#1720）。**error**（公開を阻止）は graph が壊れて SQL の接地に使えないものだけ（物理の表・列が無い / 業務プロファイルの範囲外 `MAPPING_OUTSIDE_PROFILE`、参照先の概念が無い `REFERENCE_INVALID`、他オブジェクトのプロパティ `PROPERTY_OWNER_MISMATCH`、不正な SQL 式、Markdown の解析が報告した矛盾、標本検証の error）。**warning** は公開できるが SQL の意味に効くもの（指標の式・集約が無い、同じ概念の値の食い違い `DEFINITION_CONFLICT`。先の値を使う）。**info** は graph を作れるが補えば精度が上がる項目（識別子 `OBJECT_IDENTITY_REQUIRED`・粒度 `OBJECT_GRAIN_REQUIRED`・型・基数・根拠 `INFERENCE_WITHOUT_EVIDENCE`・不足情報）。view など制約の無いオブジェクトは識別子が未設定のまま公開できる。
-- error / warning は最大18remの縦スクロール領域に表示し、同一 severity・メッセージを1回に集約して、件数と対象（概念の名前と definition ID / field / code）を確認できる。info は「補うと精度が上がる項目」の 1 つの畳んだ領域にまとめ、公開の状態は「公開できます」のまま（警告の帯を出さない）。表示上の集約で元の診断を削除しない。
+- 診断の文は利用者が読む平易な日本語で、「何が問題か（業務の名前）」と「どうすればよいか（何もしなくてよい / Markdown のどの行をどう直す / 業務プロファイルに表を足す など）」の 2 文にする（#1729）。統合の競合も「『従業員』の『部門ID』の業務の型が 2 通り（…）作られました。… を使います。違う場合は Markdown の『部門ID』の「業務の型」の行を直してください。」の形にする。
+- error / warning は最大18remの縦スクロール領域に表示し、同一 severity・メッセージを1回に集約して、件数と対象（概念の業務の名前）を出す。内部の ID・項目名・診断コードは「技術的な詳細」に畳む。info は「補うと精度が上がる項目」の 1 つの畳んだ領域にまとめ、公開の状態は「公開できます」のまま（警告の帯を出さない）。表示上の集約で元の診断を削除しない。
 - 根拠（evidence）は定義ごとに 1 件だけ照合の結果を出す（evidence ごとに重ねない）。DB の schema を根拠にした evidence（`source_id=schema` / `source_kind=database`、位置は `OWNER.OBJECT[.COLUMN]` の並びや結合条件）は、資料の検証値が無くても、物理の表・列が業務プロファイルの範囲にあれば照合済みにする。
-- 公開前の確認は、公開するオントロジーの構成（オブジェクト・関係・プロパティの件数と、オブジェクトごとのプロパティと関係）を先に示し、概念ごとの差分は畳む。値型など内部の概念は差分の一覧に出さず、同じ名前の概念には属するオブジェクトの名前を添える。
+- 公開前の確認の見出しに「公開すると何が変わるかを確かめる所」と書く。並びは 公開を止める問題の帯 → **業務説明に追記する改善案** → エラー・警告 → 補うと精度が上がる項目 → 公開するオントロジーの構成 → 概念ごとの差分 → 実データの検証。
+- **業務説明に追記する改善案**（#1729。`ontology_improvement_suggestion.improvement_suggestions`）: 残ったエラー・警告・補うと精度が上がる項目から、業務説明（自然言語）に追記して「AI 構築を実行」をやり直すための業務の言葉の文を、LLM を使わず決定論で作る（オブジェクト型と表の対応・主キー・粒度・関係の結合のキーと多重度・型の食い違いは DB の列の型）。公開を止めるエラーを解く文を先に並べ、分からない値は推測で書かず「（○○を確認して書いてください）」と空ける。エラー・警告が無いときは出さない。既に業務説明に書かれた文は重ねて出さない。「コピー」と「業務説明に追記」（押したときだけ業務説明の後ろに足す。自動で書き換えない。#1727）を置く。
+- 公開するオントロジーの構成（オブジェクト型・リンク型・プロパティの件数と、オブジェクト型ごとのプロパティとリンク型）を示す。値型など内部の概念は数えず、同じ名前のプロパティには属するオブジェクト型の名前を 1 回だけ添える（名前に既にあれば添えない。同じ定義を重ねて数えない）。
+- **概念ごとの差分**（#1729）は前の公開版から何が変わるかを示す。既定では確認が要るもの（公開を止める問題・警告のある概念と、削除）だけを件数とともに上に出し、問題の無い変更は「問題なし N 件」に畳む。初回の公開（すべて追加）は「初めての公開です。N 件の概念を追加します」の 1 行と確認が要るものだけにし、「追加」のバッジを並べない。1 行ごとに業務の名前と、平易な 1 文（何が変わるか / 何が問題か / どうすればよいか）を出し、API 名・ID・前後の値は「技術的な詳細」に畳む。
 - 公開時点の `findings` と `data_report` は immutable snapshot に含める。後続の公開でも旧版の記録は変更しない。公開済みタブで確認し、版 ID を含む JSON をダウンロードできる。
 - 過去版は `GET /api/nl2sql/profiles/{profile_id}/ontology-markdown/publications/{snapshot_id}/diagnostics` で取得できる。Profile の閲覧権限と snapshot の Profile 所有権を確認し、元の findings・標本検証レポートを返す。
 - 旧 snapshot に診断 field がない場合は保存済み preparation を参照する。記録が残っていない場合は `available=false` として区別し、「警告なし」とは扱わない。再解析・再検証は行わない。
@@ -106,8 +126,17 @@ Markdown は業務名称・属性・関係・必要な表列対応を記載し�
 
 AI 構築の出力は best effort で graph にする（#1720）。マッピングの列 `*` は表・ビュー全体の対応（列なし）として扱う。オブジェクトの properties / 識別子が他のオブジェクトのプロパティ（同じ列名を 2 つの view で共有した `DEPARTMENT_NAME` など）や未定義の名前を指すときは、そのオブジェクトの表に同じ列があればオブジェクトごとのプロパティ（`v_emp_dept_department_name`）を作って付け替え、列が無い参照は外す（推測で列を足さない）。種類ごとの空の雛形・同じ列の重複したプロパティ・空の項目を書き写した不足情報は、AI の出力からだけ除く（利用者が Markdown に書いた定義は消さず、検証の診断に任せる）。統合では参照の一覧（properties など）を和集合にし、基数の `unknown` は未設定として分かった値を使う。生成の指示も、情報が足りない項目は推測で埋めず空のままにし、外部キーが無くても同じ名前・型の ID 列から関係を作るよう求める。
 
+**同じ物の統合と関係（#1729）**（`ontology_unified_model.repair_definitions_report`。AI 構築と公開前の確認の両方）:
+
+- 同じ表・ビューを指すオブジェクト型は 1 つにまとめる。表の対応が無いオブジェクト型は、所属のプロパティの列がすべて 1 つの表にあればその表を対応にし、なお無ければ名前・別名が一致する表のあるオブジェクト型に寄せる（「部署」`ADMIN.DEPARTMENT` と「部門」`department`）。残すのはプロパティ・関係の多い方で、他方の表示名は別名にする。内部の ID（`profile_concept_…`）は別名にしない。
+- 同じオブジェクト型の同じ列のプロパティ、同じ両端・結合のキーのリンク型、表示名と業務の型が同じ共有プロパティを 1 つにする。種類の違う同じ API 名は、オブジェクト型・プロパティ・リンク型を残し他方に種類の名前を付けて分ける。
+- まとめても表が決まらないオブジェクト型と、それに属する定義は公開に含めない（公開を止めず、警告で知らせる）。
+- 業務の型・物理の型・必須は DB の列が正。列で値が決まった競合と、同じ列のプロパティの統合で同じ定義を指すようになった参照の競合は出さない。表示名が列名のまま（`BUDGET`）のプロパティは、同じ列名の別のプロパティの業務の名前を使う。
+- AI 構築では、AI が作らなかったリンク型を、外部キーの制約か、同じ名前・型の列（相手の表の主キー。制約の無い表は「表名_ID」）から作る（多対 1、両方の向きの名前つき）。`ID` だけの列名や、両方の主キーが同じ列は推測しない。AI の式（業務ルール・指標など）の SQL が確かめられなければ、下書きに入れない。
+- 業務説明に追記された改善案の文（下の「業務説明に追記する改善案」の形）の粒度・主キーは、AI が読み落としても定義に入れる（「（…を確認して書いてください）」のままの所は使わない）。
+
 下書きの Markdown は中身の無い節（Q/A 由来のルール・構造パターンが無いときの「なし」）・入力の要約・物理オブジェクトの一覧・既定値の項目（「必須: いいえ」など）・列そのものの式・不足情報の「補足」を書かない。
 
-**LLM に渡すオントロジー**（Select AI / Select AI Agent / Enterprise AI の prompt。`ontology_published_context.published_context` が唯一の入口）は、下書きの本文ではなく、公開した定義から `ontology_unified_model.render_llm_context` で作る。オブジェクト（表）・プロパティ（列・型・単位・許可値・別名）・関係（多重度と結合条件）・指標（式・集約・粒度）・業務ルール・用語だけを書き、根拠・検証の状態・不足情報・値型・書き方の説明・空の項目は入れない。Q/A 由来の SQL 生成ルール・構造パターンは、中身があり Profile 全体を許可した実行のときだけ添える。
+**LLM に渡すオントロジー**（Select AI / Select AI Agent / Enterprise AI の prompt。`ontology_published_context.published_context` が唯一の入口）は、下書きの本文ではなく、公開した定義から `ontology_unified_model.render_llm_context` で作る。見出し・項目名は「オントロジーの標準」の訳（`## オブジェクト型（Object Type）`・`主キー（Primary Key）`・`## リンク型（Link Type）`・`結合のキー`・`## 指標（Metric）`・`測定値`・`集計方法`・`ディメンション` など）にそろえる。オブジェクト型（表）・プロパティ（列・業務の型・物理の型・単位・許可する値・別名）・リンク型（多重度・結合のキー・逆向きの名前）・指標（測定値・集計方法・ディメンション・時間のディメンション・絞り込みの条件）・業務ルール・用語だけを書き、根拠・検証の状態・不足情報・値型・書き方の説明・空の項目は入れない。Q/A 由来の SQL 生成ルール・構造パターンは、中身があり Profile 全体を許可した実行のときだけ添える。
 
 保存済み Markdown や公開版は自動で書き換えない。新しい書式と生成定義の再利用は再構築した下書きから適用する。

@@ -38,11 +38,14 @@ from .ontology_store import OntologyVersionConflict, canonical_json, stable_onto
 from .ontology_unified_model import (
     CONCEPT_ORDER,
     DEFINITIONS,
+    ConflictNote,
+    concept_name_key,
     is_reconciled_spelling_issue,
     merge_definitions,
     project_graph,
-    repair_definitions,
+    repair_definitions_report,
     resolve_concept_name,
+    schema_resolved_conflicts,
 )
 
 # 公開版を無効にするのは、定義の検証結果が変わりうる変更(対象 object・列・型・制約・関係)だけ。
@@ -261,6 +264,10 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 "markdown_hash": definition_fingerprint(markdown),
                 "definitions": [d.model_dump(mode="json") for d in definitions],
                 "conflicts": conflicts,
+                # 競合がどの定義のものか（画面の「概念ごとの差分」で行に結び付ける。#1729）。
+                "conflict_targets": {
+                    str(c): c.detail() for c in conflicts if isinstance(c, ConflictNote)
+                },
                 "diagnostics": diagnostics,
             },
         )
@@ -308,6 +315,7 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 + timedelta(seconds=get_settings().nl2sql_ontology_preparation_timeout_seconds)
             ).isoformat(),
             findings=[],
+            suggestions=[],
             differences=[],
             definitions=[],
             coverage=[],
@@ -479,13 +487,30 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                     ],
                 )
             else:
-                parsed = self._parse_markdown(value)
+                # 下書きの決まった形（`render_concepts`）は決定論で読み、読めないときだけ LLM で
+                # 解析する（LLM の解析は同じ表を指す概念・行の対応が毎回ぶれる。#1729）。
+                from . import ontology_markdown_parser
+
+                rule = ontology_markdown_parser.parse_rendered_markdown(value["markdown"])
+                value["parser"] = "rule" if rule is not None else "llm"
+                parsed = (
+                    MarkdownExtraction.model_validate(rule)
+                    if rule is not None
+                    else self._parse_markdown(value)
+                )
             definitions, conflicts = merge_definitions(profile_id, parsed.definitions)
             # 同じ列名のプロパティを複数のオブジェクトで共有した参照は、オブジェクトごとに分ける
             # （#1720）。分けたプロパティは元のオブジェクトの行に対応する。
+            # 同じ表を指すオブジェクト型は 1 つにまとめ、表が決まらないものは外す（#1729）。
             merged_names = {d.api_name for d in definitions}
-            definitions = repair_definitions(profile_id, definitions, json.loads(value["schema"]))
+            repair = repair_definitions_report(profile_id, definitions, json.loads(value["schema"]))
+            definitions = repair.definitions
             repaired_names = {d.api_name for d in definitions} - merged_names
+            # まとめた・外した概念の名前は、Markdown の行・見出しが解析結果にあるものとして扱う。
+            absorbed_keys = {
+                concept_name_key(n) for n in [*repair.remap, *(d.api_name for d in repair.dropped)]
+            }
+            conflict_targets = dict((generated or {}).get("conflict_targets") or {})
             # 根拠の可否は機械検証が判定する。LLM の補足を error に格上げしない。
             reported = [
                 issue
@@ -496,14 +521,32 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             # 同じ概念の値の食い違い（統合の競合）は先の値で graph を作れるため、公開を止めず
             # 警告にする。Markdown の解析が報告した矛盾・不正だけを、公開を止めるエラーにする。#1720
             issues = [] if generated else reported
-            merge_conflicts = [*(reported if generated else []), *conflicts]
+            merge_conflicts = [
+                *(reported if generated else []),
+                *schema_resolved_conflicts(
+                    conflicts, definitions, json.loads(value["schema"]), repair.remap
+                ),
+            ]
             developer_lines: set[int] = {
                 i
                 for i, line in enumerate(value["markdown"].splitlines(), 1)
                 if is_developer_note(line)
+                # 節・種類の見出し（`##`〜`####`）と空行は構造だけで定義ではない。
+                # LLM が「見出しのみ」と未解決にしても公開を止めない
+                # （概念の見出し `#####` は検査を続ける。#1729）。
+                or re.match(r"^#{1,4}\s", line)
+                or not line.strip()
             }
             covered = set(developer_lines)
             names = {d.api_name for d in definitions}
+            labels = {d.api_name: d.name_ja for d in [*definitions, *repair.dropped]}
+
+            def known(name: str) -> bool:
+                return (
+                    resolve_concept_name(name, definitions) in names
+                    or concept_name_key(name) in absorbed_keys
+                )
+
             linked_names: set[str] = set(repaired_names)
             for line in parsed.lines:
                 # 旧診断だけの行は本文として再解釈しない。定義を含む範囲は検査を続ける。
@@ -527,25 +570,30 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                         resolve_concept_name(n, definitions) for n in line.definition_api_names
                     )
                 elif line.disposition == "context" and not line.reason_ja.strip():
-                    issues.append(f"行 {line.start_line}: 文脈として除外する理由がありません。")
+                    issues.append(
+                        f"Markdown の {line.start_line} 行目が定義にも説明にもなっていません。"
+                        "定義の項目に書き直すか、不要なら削除してください。"
+                    )
                 if line.end_line < line.start_line or line.end_line > len(
                     value["markdown"].splitlines()
                 ):
-                    issues.append(f"行 {line.start_line}: 解析範囲が不正です。")
+                    issues.append(
+                        f"Markdown の {line.start_line} 行目を読み取れませんでした。"
+                        "もう一度「オントロジーを公開」を押して確認し直してください。"
+                    )
                 covered.update(range(line.start_line, line.end_line + 1))
                 if (line.disposition == "unresolved" and not is_evidence_note(line.reason_ja)) or (
                     line.disposition == "definition"
                     and (
                         not line.definition_api_names
-                        or not {
-                            resolve_concept_name(n, definitions) for n in line.definition_api_names
-                        }
-                        <= names
+                        or not all(known(n) for n in line.definition_api_names)
                     )
                 ):
+                    reason = line.reason_ja.strip().rstrip("。")
                     issues.append(
-                        f"行 {line.start_line}–{line.end_line}: "
-                        + (line.reason_ja or "定義を解釈できません。")
+                        f"Markdown の {line.start_line}–{line.end_line} 行目を定義として"
+                        f"読み取れませんでした{f'（{reason}）' if reason else ''}。"
+                        "行の書き方を見直すか、不要なら削除してください。"
                     )
             uncovered = [
                 i
@@ -553,17 +601,33 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 if line.strip() and i not in covered
             ]
             if uncovered:
-                issues.append("未解析の行: " + ", ".join(map(str, uncovered)))
+                issues.append(
+                    f"Markdown の {', '.join(map(str, uncovered))} 行目を読み取れませんでした。"
+                    "「##### 名前 (`API 名`)」の見出しと「- 項目: 値」の形に直すか、"
+                    "不要なら削除してください。"
+                )
             if not definitions:
-                issues.append("公開する業務定義がありません。")
+                issues.append(
+                    "公開するオブジェクト型やプロパティがありません。"
+                    "「AI 構築を実行」で下書きを作るか、Markdown に定義を書いてください。"
+                )
             for name in names - linked_names:
-                issues.append(f"{name}: Markdown の対応行がありません。")
-            for name in re.findall(r"^##### .+? \(`([^`]+)`\)", value["markdown"], re.M):
-                if resolve_concept_name(name, definitions) not in names:
-                    issues.append(f"{name}: Markdown の概念が解析結果に含まれていません。")
+                issues.append(
+                    f"『{labels.get(name, name)}』が Markdown のどの行から作られたか分かりません。"
+                    "もう一度「オントロジーを公開」を押して確認し直してください。"
+                )
+            for heading, name in re.findall(r"^##### (.+?) \(`([^`]+)`\)", value["markdown"], re.M):
+                if not known(name):
+                    issues.append(
+                        f"Markdown の『{heading}』を定義として読み取れませんでした。"
+                        "見出しの下の項目の書き方を確かめ、もう一度確認してください。"
+                    )
             for definition in definitions:
                 if getattr(definition, "implementation_key", ""):
-                    issues.append(f"{definition.api_name}: 実装設定は公開対象ではありません。")
+                    issues.append(
+                        f"『{definition.name_ja}』の実装（Implementation）は公開できません。"
+                        "Markdown から実装の行を削除してください。"
+                    )
             bundle = self._bundle(value, definitions)
             from .ontology_definition_validation import validate_definitions
 
@@ -574,12 +638,42 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 {
                     "severity": "warning",
                     "code": "DEFINITION_CONFLICT",
-                    "message_ja": f"{conflict}（先に作られた値を使います。"
-                    "Markdown で 1 つにそろえると確かです）",
+                    "definition_id": repair.remap.get(
+                        detail.get("api_name", ""), detail.get("api_name", "")
+                    ),
+                    "field": detail.get("field", ""),
+                    "detail": detail,
+                    "message_ja": str(conflict),
                 }
                 for conflict in merge_conflicts
+                for detail in [
+                    conflict.detail()
+                    if isinstance(conflict, ConflictNote)
+                    else dict(conflict_targets.get(str(conflict)) or {})
+                ]
+            )
+            value["findings"].extend(
+                {
+                    "severity": "warning",
+                    "code": "OBJECT_EXCLUDED_WITHOUT_TABLE",
+                    "definition_id": d.api_name,
+                    "message_ja": f"『{d.name_ja}』は対応する表・ビューが分からないため、"
+                    "今回の公開には含めません。含める場合は、業務プロファイルに表・ビューを足すか、"
+                    f"Markdown の『{d.name_ja}』に「対応する表・列」を書いてください。",
+                }
+                for d in repair.dropped
+                if d.kind == "object_type"
             )
             value["definitions"] = [d.model_dump(mode="json") for d in definitions]
+            # 業務説明に追記する改善案（残ったエラー・警告から決定論で作る。#1729）。
+            from .ontology_improvement_suggestion import improvement_suggestions
+
+            value["suggestions"] = improvement_suggestions(
+                definitions,
+                value["findings"],
+                json.loads(value["schema"]),
+                excluded=repair.dropped,
+            )
             declared = {c.kind: c for c in parsed.coverage}
             value["coverage"] = [
                 dict(
@@ -684,6 +778,9 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 "補助分類: shared_property/value_type/enumeration/metric/"
                 "business_rule/business_event/object_set。"
                 "記載の概念 ID と api_name を維持し、物理表だけで概念を併合しない。"
+                # 同じ表を指す概念は後段で 1 つにまとめる（#1729）。解析では落とさない。
+                "同じ表・ビューを指す概念が複数あっても、未解決や矛盾にせず、"
+                "それぞれ見出しの api_name のまま definitions に出す（後段で 1 つにまとめる）。"
                 "別名、型固有フィールド、関係、マッピング、根拠を保持する。"
                 "snake_case と PascalCase の表記差で定義を捨てない。"
                 "根拠の検証は後段で行うため、evidence の検証不能を理由に定義を除外しない。"
@@ -704,6 +801,11 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 "オブジェクトごとに別の api_name のプロパティにし、"
                 "他のオブジェクトのプロパティを properties に入れない。"
                 "表・ビュー全体の対応は column_name を空文字にし、* を書かない。"
+                # 標準の型の項目と、API 名の扱い（#1729）。
+                "data_type は業務の型（string / integer / number / boolean / date / datetime）、"
+                "精度・桁を含む型（NUMBER(12,2) など）は physical_type に書く。"
+                "API 名は見出しの `…` の値をそのまま使い、種類の名前（object_type・property・"
+                "link_type など）を API 名にしない。"
             ),
             response_format=response_format(MarkdownExtraction),
             max_output_tokens=get_settings().nl2sql_ontology_extraction_max_output_tokens,

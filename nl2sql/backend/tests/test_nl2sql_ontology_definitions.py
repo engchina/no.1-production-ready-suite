@@ -36,6 +36,8 @@ def definition_payload() -> list[dict[str, Any]]:
             "primary_key": ["Order.id"],
             "properties": ["Order.id"],
             "grain_ja": "受注単位",
+            # 表の決まらないオブジェクト型は公開に含めないため、対応する表を持たせる（#1729）。
+            "mappings": [{"owner": "APP", "object_name": "ORDERS"}],
         },
         {
             "kind": "property",
@@ -43,6 +45,7 @@ def definition_payload() -> list[dict[str, Any]]:
             "name_ja": "受注番号",
             "object_type": "Order",
             "data_type": "integer",
+            "mappings": [{"owner": "APP", "object_name": "ORDERS", "column_name": "ID"}],
         },
         {
             "kind": "link_type",

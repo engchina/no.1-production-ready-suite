@@ -178,7 +178,11 @@ def test_repair_splits_shared_columns_per_object_and_publishes_without_errors() 
     ]
     # 未定義の名前は、オブジェクトの表に同じ列があればプロパティを作る（型は schema から）。
     assert by_name["budget"].object_type == "project"
-    assert by_name["budget"].data_type == "VARCHAR2"
+    # 業務の型（Base Type）と物理の型（Physical Type）を分ける（#1729）。
+    assert (by_name["budget"].data_type, by_name["budget"].physical_type) == (
+        "string",
+        "VARCHAR2",
+    )
     assert "start_date" in by_name
     # 列が無い参照は外す（推測で列を足さない）。
     assert "missing_column" not in by_name
@@ -209,9 +213,12 @@ def test_mapping_outside_profile_names_the_object_and_the_fix() -> None:
     messages = {
         f.definition_id: f.message_ja for f in findings if f.code == "MAPPING_OUTSIDE_PROFILE"
     }
-    assert "ADMIN.OTHER は業務プロファイルの対象に含まれていません" in messages["object_other"]
-    assert "対象の表・ビューに追加" in messages["object_other"]
-    assert "ADMIN.DEPARTMENT.GHOST は ADMIN.DEPARTMENT に無い列" in messages["property_ghost"]
+    assert (
+        "表・ビュー ADMIN.OTHER は業務プロファイルの対象に入っていません"
+        in (messages["object_other"])
+    )
+    assert "業務プロファイルの対象に追加" in messages["object_other"]
+    assert "列 ADMIN.DEPARTMENT.GHOST は表・ビューに無いか" in messages["property_ghost"]
 
 
 def test_merge_unions_property_lists_instead_of_conflicting() -> None:
@@ -237,9 +244,15 @@ def test_llm_context_keeps_business_knowledge_and_drops_internal_details() -> No
     context = render_llm_context(definitions)
     assert context.startswith("# 業務オントロジー\n")
     assert "### 従業員部門ビュー（ADMIN.V_EMP_DEPT）" in context
-    assert "  - 部門名（列: ADMIN.V_EMP_DEPT.DEPARTMENT_NAME、型: VARCHAR2）" in context
-    assert "結合: ADMIN.EMPLOYEE.DEPARTMENT_ID = ADMIN.DEPARTMENT.DEPARTMENT_ID" in context
-    assert "- 人数（式: COUNT(ADMIN.EMPLOYEE.EMPLOYEE_ID)、集計: count）" in context
+    # 標準の用語（業務の型・物理の型・結合のキー・測定値・集計方法）で書く（#1729）。
+    assert "## オブジェクト型（Object Type）" in context
+    assert (
+        "  - 部門名（列: ADMIN.V_EMP_DEPT.DEPARTMENT_NAME、業務の型: 文字列（string）、"
+        "物理の型: VARCHAR2）"
+    ) in context
+    assert "## リンク型（Link Type）" in context
+    assert "結合のキー: ADMIN.EMPLOYEE.DEPARTMENT_ID = ADMIN.DEPARTMENT.DEPARTMENT_ID" in context
+    assert "- 人数（測定値: COUNT(ADMIN.EMPLOYEE.EMPLOYEE_ID)、集計方法: count）" in context
     for internal in (
         "なし",
         "未設定",
@@ -312,8 +325,10 @@ def test_ai_placeholders_duplicates_and_structural_notes_are_pruned() -> None:
     assert pruned["department"].title_property == "department_name"
     assert pruned["department"].missing_information_ja == ["資料 A と B で部門の定義が違う"]
     # 利用者が Markdown に書いた定義（ai_output でない）は消さず、検証の診断に任せる。
-    kept = repair_definitions("sample", values, SCHEMA)
-    assert {"object_type", "property", "department_department_name"} <= {d.api_name for d in kept}
+    # ただし表の決まらないオブジェクト型は公開に含めず、同じ列のプロパティは 1 つにする（#1729）。
+    kept = {d.api_name for d in repair_definitions("sample", values, SCHEMA)}
+    assert {"property", "department_name", "metric"} <= kept
+    assert not {"object_type", "department_department_name"} & kept
 
 
 def test_orphan_property_is_adopted_by_the_object_that_lists_it() -> None:

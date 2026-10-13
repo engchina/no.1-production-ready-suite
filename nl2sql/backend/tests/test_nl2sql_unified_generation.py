@@ -176,6 +176,8 @@ def test_gleaning_completes_existing_fields_keeps_conflicts_and_warning(
                                 "api_name": "Order",
                                 "name_ja": "受注",
                                 "grain_ja": "受注単位",
+                                # 表の決まらないオブジェクト型は公開に含めない（#1729）。
+                                "mappings": [{"owner": "APP", "object_name": "ORDERS"}],
                             },
                             {
                                 "kind": "shared_property",

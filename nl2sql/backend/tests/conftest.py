@@ -161,3 +161,24 @@ def _fresh_database_status_cache() -> Iterator[None]:
     clear_database_status_cache()
     yield
     clear_database_status_cache()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "rule_parser: 公開前の確認で、決まった形の Markdown を決定論で読む経路を使う（#1729）",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _markdown_rule_parser(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """公開前の確認の Markdown の解析は、既定のテストでは LLM の経路（スタブ）を通す。
+
+    決まった形の Markdown を決定論で読む経路（`ontology_markdown_parser`）は、
+    `@pytest.mark.rule_parser` を付けたテストで確かめる（#1729）。
+    """
+    if request.node.get_closest_marker("rule_parser"):
+        return
+    import app.features.nl2sql.ontology_markdown_parser as parser
+
+    monkeypatch.setattr(parser, "parse_rendered_markdown", lambda _markdown: None)

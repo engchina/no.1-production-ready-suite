@@ -157,7 +157,10 @@ class ObjectTypeDefinition(DefinitionBase):
 class PropertyDefinition(DefinitionBase):
     kind: Literal["property", "shared_property", "value_type"] = "property"
     object_type: str = ""
+    # 業務の型（Base Type: string / integer / number / boolean / date / datetime）と、精度・桁を
+    # 含む物理の型（Physical Type: `NUMBER(12,2)` など）を分けて持つ（Foundry の Property。#1729）。
     data_type: str = ""
+    physical_type: str = ""
     required: bool = False
     unit: str = ""
     currency: str = ""
