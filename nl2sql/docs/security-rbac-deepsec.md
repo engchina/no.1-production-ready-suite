@@ -296,7 +296,10 @@ DeepSec 無効の非標準運用で Thick 専用機能が必要な場合のみ�
 
 1. status の driver mode、前提権限、既存 object 名を確認する。
 2. `DATA USER 認証` tab で DATA USER password を保存し、必要に応じて `Oracle へ同期` で DB 側へ反映する。
-3. V001 の SQL preview と SHA-256 checksum を確認する。V001.1 は END USER 作成・password 変更を含まない。
+3. V001 の SQL preview と SHA-256 checksum を確認する。V001.1 は DATA ROLE を付ける前に、保存済みの DATA USER password で
+   `CREATE END USER IF NOT EXISTS ...` を実行する（新しい配備で END USER が無いと `GRANT DATA ROLE` が `ORA-52516` になるため。#1676）。
+   既に END USER があれば作り直さず、password の変更・同期は `DATA USER 認証` の `Oracle へ同期` が行う。preview と checksum の
+   password は placeholder のままで、DATA USER password が未保存なら適用は 409 で止まる。
 4. 各 step は `ADMIN_EXECUTE` 実行確認語を入力して順番に適用する。API は version、step、checksum、confirmation だけを
    受け付け、SQL 本文は受け付けない。
 5. 失敗した場合は ledger の完了 step を保持し、原因を解消して失敗 step から再開する。

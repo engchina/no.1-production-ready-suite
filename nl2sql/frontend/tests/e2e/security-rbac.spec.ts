@@ -679,7 +679,8 @@ function deepSecPlan(
         step_no: 1,
         key: "principals_and_roles",
         title: "共有 DATA USER とロール",
-        description: "DATA USER に関連付ける最小 DB role と local DATA ROLE を準備します。",
+        description:
+          "保存済みの DATA USER パスワードで DATA USER（END USER）を作り（既にあれば作り直さない）、関連付ける最小 DB role と local DATA ROLE を準備します。",
         checksum: "a".repeat(64),
         status: applied ? "APPLIED" : "PENDING",
         error_message: "",
@@ -689,6 +690,7 @@ function deepSecPlan(
           "GRANT CREATE SESSION TO NL2SQL_APP_DB_ROLE",
           "CREATE DATA ROLE IF NOT EXISTS NL2SQL_APP_DATA_ROLE",
           "GRANT NL2SQL_APP_DB_ROLE TO NL2SQL_APP_DATA_ROLE",
+          "CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER IDENTIFIED BY <secret:NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD> SCHEMA APP_OWNER",
           "GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER",
         ],
       },
@@ -4053,8 +4055,11 @@ test("DeepSec は構成状態の確認中でも SQL plan を先に表示する",
   await expect(page.getByRole("heading", { name: "V001.1 共有 DATA USER とロール" })).toBeVisible();
   await expect(page.locator("pre:visible")).toHaveCount(0);
   await page.getByText("SQL とチェックサムを表示", { exact: true }).first().click();
-  await expect(step1.locator("pre:visible")).toHaveCount(5);
-  await expect(step1.getByText("CREATE END USER", { exact: false })).toHaveCount(0);
+  await expect(step1.locator("pre:visible")).toHaveCount(6);
+  // V001.1 は DATA USER（END USER）を先に作る。パスワードは placeholder のまま表示する（#1676）。
+  await expect(
+    step1.getByText("CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER IDENTIFIED BY <secret:NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD>", { exact: false })
+  ).toBeVisible();
   await expect(step1.getByText("ALTER END USER", { exact: false })).toHaveCount(0);
   await expect(step1.getByText("GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER", { exact: false })).toBeVisible();
   await page.getByRole("tab", { name: "データ権限" }).click();
@@ -4290,7 +4295,7 @@ for (const driverMode of ["thin", "thick"] as const) {
     await expect(disabledBanner).toBeVisible();
     await expect(page.getByText("未構成", { exact: true }).first()).toBeVisible();
     await page.getByRole("tab", { name: "基盤構成" }).click();
-    await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。", { exact: true })).toBeVisible();
+    await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。V001.1 はこのパスワードで DATA USER（END USER）を作ります（既にあれば作り直しません）。", { exact: true })).toBeVisible();
     const applySection = page.getByTestId("security-deepsec-foundation-apply-section");
     await expect(applySection.getByRole("button", { name: "基盤構成を適用" })).toBeDisabled();
     await expectNoPageHorizontalScroll(page);
@@ -4342,7 +4347,7 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   ).toBeVisible();
   await expect(page.getByText("未設定", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "基盤構成" }).click();
-  await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。", { exact: true })).toBeVisible();
+  await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。V001.1 はこのパスワードで DATA USER（END USER）を作ります（既にあれば作り直しません）。", { exact: true })).toBeVisible();
   await expect(page.getByTestId("security-deepsec-foundation-apply-section").getByRole("button", { name: "基盤構成を適用" })).toBeDisabled();
   await page.getByRole("button", { name: "DATA USER 認証へ" }).click();
 
@@ -4408,7 +4413,7 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   await expect(syncButton).toBeEnabled();
   await expect(page.getByText("API を再起動")).toHaveCount(0);
   await page.getByRole("tab", { name: "基盤構成" }).click();
-  await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("基盤構成を始める前に、DATA USER パスワードを保存してください。V001.1 はこのパスワードで DATA USER（END USER）を作ります（既にあれば作り直しません）。", { exact: true })).toHaveCount(0);
   const applySection = page.getByTestId("security-deepsec-foundation-apply-section");
   const confirmationField = applySection.getByTestId("execution-confirmation-field");
   const confirmationInput = confirmationField.getByRole("textbox", { name: "実行確認語" });
