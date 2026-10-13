@@ -550,11 +550,13 @@ def test_get_settings_reloads_deepsec_values_saved_by_another_worker(
     app_settings.reset_settings_cache()
     try:
         settings = app_settings.get_settings()
-        assert settings.oracle_deepsec_enabled is False
+        # 既定は有効（#1636）。
+        assert settings.oracle_deepsec_enabled is True
 
-        # 別の worker の update_config が backend/.env を書いた状態。
+        # 別の worker の update_config が backend/.env を書いた状態
+        # （無効にし、利用者の password を保存）。
         env_file.write_text(
-            "NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n"
+            "NL2SQL_ORACLE_DEEPSEC_ENABLED=false\n"
             "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n"
             "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=OtherWorker!123\n",
             encoding="utf-8",
@@ -562,7 +564,7 @@ def test_get_settings_reloads_deepsec_values_saved_by_another_worker(
 
         reloaded = app_settings.get_settings()
         assert reloaded is settings
-        assert settings.oracle_deepsec_enabled is True
+        assert settings.oracle_deepsec_enabled is False
         assert settings.oracle_deepsec_data_user_password == "OtherWorker!123"
     finally:
         app_settings.reset_settings_cache()
@@ -624,3 +626,9 @@ def test_data_pool_is_recreated_when_data_user_password_changes(
     assert second is not first
     assert closed == ["DeepSecret!123"]
     assert [item.get("password") for item in created] == ["DeepSecret!123", "Rotated!Secret123"]
+
+
+def test_deepsec_is_enabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deep Data Security の既定は有効（配備の stack・.env.example と同じ。#1636）。"""
+    monkeypatch.delenv("NL2SQL_ORACLE_DEEPSEC_ENABLED", raising=False)
+    assert app_settings.Settings.model_fields["oracle_deepsec_enabled"].default is True
