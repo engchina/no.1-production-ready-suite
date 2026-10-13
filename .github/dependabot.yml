@@ -152,7 +152,11 @@ updates:
     ignore:
       - dependency-name: docling
       - dependency-name: docling-slim
-      # torch の CPU 版は rag-services.sh が lock と同じ版を CPU の index から入れる。major は個別に判断する。
+      # torch / torchvision は pyproject.toml の [[tool.uv.index]]（pytorch-cpu。explicit）の CPU 版を lock に持つ（#1650）。
+      # Dependabot の uv の更新は pyproject.toml の index の指定のまま uv lock で lock を作り直す。PyPI の CUDA 版に戻った
+      # lock（triton・nvidia-* / cuda-* を持つ、torch の source が CPU の index でない）は、
+      # rag/scripts/tests/init-script-deployment.test.sh（Suite / Deploy）が失敗にする。
+      # major は個別に判断する。
       - dependency-name: torch
         update-types: ["version-update:semver-major"]
       - dependency-name: torchvision

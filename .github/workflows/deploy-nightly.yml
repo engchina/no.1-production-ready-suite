@@ -42,7 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # RAG の parser（docling の lock は CUDA 版の torch と nvidia-* の wheel を入れる）・LibreOffice・3 製品の node_modules と venv で数 GB を使う。runner の
+      # RAG の parser（docling の CPU 版の torch。#1650）・LibreOffice・3 製品の node_modules と venv で数 GB を使う。runner の
       # 使わない SDK を消して空きを作る。
       - name: Free disk space
         run: |
