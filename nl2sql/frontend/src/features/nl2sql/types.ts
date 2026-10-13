@@ -1117,6 +1117,15 @@ export type ProfileSyncJobPhase =
   | "failed"
   | "cancelled";
 
+/** 業務プロファイルの保存（Oracle 反映）の事前条件（`GET /api/nl2sql/oracle-sync-readiness`。#1683）。 */
+export interface ProfileSyncReadinessData {
+  /** Oracle runtime で Credential 名が設定されているときだけ true。 */
+  credential_required: boolean;
+  credential_name: string;
+  /** USER_CREDENTIALS で確かめた結果。確かめられなかったときは null。 */
+  credential_exists: boolean | null;
+}
+
 export interface ProfileSyncJobData {
   job_id: string;
   profile_id: string;
