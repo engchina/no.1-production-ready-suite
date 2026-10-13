@@ -13,10 +13,8 @@
 # GPU の service（ASR）は扱わない。
 # 3 製品は 1 台の Compute にセットで配備する（#1316。単独では配備しない）。platform/deploy/suite-init.sh が呼び、
 # Nginx の site は suite が 1 つだけ書く（ここでは書かない）。frontend は FRONTEND_BASE_PATH（/rag/）を base に build し、
-# プロセスは NL2SQL / Agent と同じユーザー（SERVICE_USER=ubuntu。suite が渡す）で動かす（共通の platform/.env・Wallet を共有するため）。
+# プロセスは NL2SQL / Agent と同じユーザー（SERVICE_USER=opc。suite が渡す）で動かす（共通の platform/.env・Wallet を共有するため）。
 set -euo pipefail
-
-export DEBIAN_FRONTEND=noninteractive
 
 if [ "${RAG_INIT_TEST_MODE:-false}" != "true" ]; then
   exec > >(tee -a /var/log/rag-init.log) 2>&1
@@ -28,9 +26,9 @@ source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 # リポジトリの所有者（git pull・uv sync・frontend の build を行う）。
-APP_USER="${APP_USER:-ubuntu}"
+APP_USER="${APP_USER:-opc}"
 APP_GROUP="${APP_GROUP:-${APP_USER}}"
-# RAG のプロセスを動かす専用のユーザー。APP_USER（OCI の Ubuntu では sudo を無制限に持つ）とは分け、
+# RAG のプロセスを動かす専用のユーザー。APP_USER（OCI の Oracle Linux の opc は sudo を無制限に持つ）とは分け、
 # sudo は sudoers で許可した unit の操作だけにする。
 SERVICE_USER="${SERVICE_USER:-ragsvc}"
 SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
@@ -68,10 +66,6 @@ WORKER_UNIT="production-ready-rag-ingestion-worker.service"
 # TimeoutStopSec は grace + 子の停止待ち + 戻す DB の処理より長くする（テストで照合する）。
 WORKER_SHUTDOWN_GRACE_SECONDS=60
 WORKER_TIMEOUT_STOP_SEC=90
-NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
-NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
-NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-NODESOURCE_REPO_URL="https://deb.nodesource.com/node_24.x"
 NODEJS_OFFICIAL_RELEASE_BASE_URL="${NODEJS_OFFICIAL_RELEASE_BASE_URL:-https://nodejs.org/download/release/latest-v24.x}"
 NODEJS_OFFICIAL_INSTALL_DIR="${NODEJS_OFFICIAL_INSTALL_DIR:-/usr/local/lib/nodejs}"
 NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
@@ -109,26 +103,6 @@ log() {
 
 trap 'status=$?; log "Initialization failed at line ${LINENO} with status ${status}: ${BASH_COMMAND}"; exit "${status}"' ERR
 
-wait_for_apt_availability() {
-  local locks=(
-    /var/lib/dpkg/lock
-    /var/lib/dpkg/lock-frontend
-    /var/lib/apt/lists/lock
-    /var/cache/apt/archives/lock
-  )
-  local elapsed=0
-  local timeout=600
-
-  while fuser "${locks[@]}" >/dev/null 2>&1; do
-    if [ "${elapsed}" -ge "${timeout}" ]; then
-      log "Timed out waiting for apt/dpkg locks."
-      return 1
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-}
-
 retry_command() {
   local attempts="$1"
   shift
@@ -148,9 +122,9 @@ retry_command() {
   return "${status}"
 }
 
-apt_get() {
-  wait_for_apt_availability
-  retry_command 5 apt-get "$@"
+# OS の package は dnf で入れる（Compute の OS は Oracle Linux 9。#1611）。dnf は他の dnf の lock を待つ。
+dnf_cmd() {
+  retry_command 5 dnf -y "$@"
 }
 
 run_as_app_user() {
@@ -218,35 +192,30 @@ load_rag_services() {
   log "RAG services: ${RAG_SERVICES[*]}"
 }
 
-# 前処理 / parser が使う OS のコマンド（LibreOffice・poppler・tesseract・CJK フォント）。
+# 前処理 / parser が使う OS のコマンド（LibreOffice・poppler・tesseract・CJK フォント）。Oracle Linux 9 の
+# AppStream / BaseOS の package（EPEL・CodeReady Builder は要らない。#1611）。
 service_os_packages() {
   case "$1" in
     preprocess-office-to-pdf)
-      printf '%s\n' libreoffice-core libreoffice-writer libreoffice-impress libreoffice-calc fonts-noto-cjk
+      printf '%s\n' libreoffice-core libreoffice-writer libreoffice-impress libreoffice-calc \
+        google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
       ;;
     preprocess-pdf-to-page-images)
-      printf '%s\n' fonts-noto-cjk
+      printf '%s\n' google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
       ;;
     parser-unstructured)
-      printf '%s\n' poppler-utils tesseract-ocr tesseract-ocr-jpn
+      printf '%s\n' poppler-utils tesseract tesseract-langpack-eng tesseract-langpack-jpn
       ;;
   esac
 }
 
-install_system_packages() {
-  local packages=(
-    build-essential
-    ca-certificates
-    curl
-    git
-    gnupg
-    nginx
-    netfilter-persistent
-    openssl
-    sudo
-    unzip
-    wget
-  )
+# RAG が使う OS の package（Nginx・firewalld は platform/deploy/suite-init.sh が入れる）。gcc・make は wheel の
+# 無い Python の依存を build するため。curl は image にある。
+BASE_SYSTEM_PACKAGES=(ca-certificates gcc gcc-c++ git make openssl sudo tar unzip)
+
+# 入れる package（基本のものと、配備する前処理 / parser が使うもの）。1 行に 1 つ。
+system_packages() {
+  local packages=("${BASE_SYSTEM_PACKAGES[@]}")
   local service package
   for service in "${RAG_SERVICES[@]}"; do
     while IFS= read -r package; do
@@ -255,9 +224,15 @@ install_system_packages() {
       fi
     done < <(service_os_packages "${service}")
   done
+  printf '%s\n' "${packages[@]}"
+}
+
+install_system_packages() {
+  local packages=()
+  mapfile -t packages < <(system_packages)
   log "Installing system packages: ${packages[*]}"
-  apt_get update
-  apt_get install -y --no-install-recommends "${packages[@]}"
+  # 推奨の package（weak dependency）は入れない（以前の apt の --no-install-recommends と同じ）。
+  dnf_cmd install --setopt=install_weak_deps=False "${packages[@]}"
 }
 
 install_nodejs() {
@@ -273,74 +248,28 @@ install_nodejs() {
     fi
   fi
 
-  if install_nodejs_from_nodesource; then
+  if install_nodejs_from_dnf_module; then
     return
   fi
 
-  log "NodeSource Node.js 24 installation failed; falling back to official Node.js tarball."
+  log "AppStream Node.js 24 installation failed; falling back to official Node.js tarball."
   install_nodejs_from_official_tarball || return 1
 }
 
-install_nodejs_from_nodesource() {
-  log "Installing Node.js 24 from NodeSource."
-  install_nodesource_apt_repository || return 1
-  apt_get update || return 1
-  ensure_nodejs_24_candidate || return 1
-  apt_get install -y nodejs || return 1
+# Node.js 24 は Oracle Linux の AppStream の module（nodejs:24）から入れる。
+install_nodejs_from_dnf_module() {
+  log "Installing Node.js 24 from the AppStream module (nodejs:24)."
+  dnf_cmd module reset nodejs || return 1
+  dnf_cmd module enable "nodejs:24" || return 1
+  dnf_cmd install nodejs npm || return 1
   validate_nodejs_24 || return 1
-}
-
-install_nodesource_apt_repository() {
-  local architecture
-  local keyring_tmp
-
-  install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING_PATH}")" "$(dirname "${NODESOURCE_SOURCE_PATH}")" || return 1
-  keyring_tmp="$(mktemp)" || return 1
-  if ! curl -fsSL "${NODESOURCE_KEY_URL}" | gpg --dearmor --yes -o "${keyring_tmp}"; then
-    rm -f "${keyring_tmp}"
-    return 1
-  fi
-  install -m 0644 "${keyring_tmp}" "${NODESOURCE_KEYRING_PATH}" || {
-    rm -f "${keyring_tmp}"
-    return 1
-  }
-  rm -f "${keyring_tmp}"
-  architecture="$(dpkg --print-architecture)" || return 1
-
-  if ! cat > "${NODESOURCE_SOURCE_PATH}" <<EOF
-Types: deb
-URIs: ${NODESOURCE_REPO_URL}
-Suites: nodistro
-Components: main
-Architectures: ${architecture}
-Signed-By: ${NODESOURCE_KEYRING_PATH}
-EOF
-  then
-    return 1
-  fi
-  chmod 0644 "${NODESOURCE_SOURCE_PATH}" || return 1
-}
-
-ensure_nodejs_24_candidate() {
-  local candidate
-  if ! candidate="$(apt-cache policy nodejs | awk '/Candidate:/ {print $2; exit}')"; then
-    log "Unable to inspect nodejs apt candidate."
-    return 1
-  fi
-  if [ -z "${candidate}" ] || [ "${candidate}" = "(none)" ] || ! printf '%s\n' "${candidate}" | grep -q '^24\.'; then
-    log "NodeSource nodejs candidate is not Node.js 24: ${candidate:-<none>}"
-    apt-cache policy nodejs || true
-    return 1
-  fi
 }
 
 resolve_nodejs_official_platform() {
   local architecture
 
   NODEJS_OFFICIAL_PLATFORM=""
-  if ! command -v dpkg >/dev/null 2>&1 || ! architecture="$(dpkg --print-architecture)" || [ -z "${architecture}" ]; then
-    architecture="$(uname -m)" || return 1
-  fi
+  architecture="$(uname -m)" || return 1
 
   case "${architecture}" in
     amd64 | x86_64)

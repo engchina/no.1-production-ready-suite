@@ -20,13 +20,14 @@ link_system_command() {
 write_mock_commands() {
   local command_name
 
-  for command_name in awk bash cat chmod cp dirname grep gzip install ln mktemp rm seq sha256sum sleep tar; do
+  for command_name in awk bash cat chmod cp dirname grep gzip install ln mktemp rm seq sha256sum tar; do
     link_system_command "${command_name}"
   done
 
-  cat > "${MOCK_BIN_DIR}/fuser" <<'MOCK'
+  # dnf の retry の待ち（retry_command の sleep）を飛ばす。
+  cat > "${MOCK_BIN_DIR}/sleep" <<'MOCK'
 #!/usr/bin/env bash
-exit 1
+exit 0
 MOCK
 
   cat > "${MOCK_BIN_DIR}/curl" <<'MOCK'
@@ -61,13 +62,6 @@ write_response() {
 }
 
 case "${url}" in
-  *nodesource-repo.gpg.key)
-    if [ -n "${output}" ]; then
-      printf 'mock-nodesource-key\n' > "${output}"
-    else
-      printf 'mock-nodesource-key\n'
-    fi
-    ;;
   */SHASUMS256.txt)
     write_response "${MOCK_OFFICIAL_SHASUMS}"
     ;;
@@ -81,37 +75,6 @@ case "${url}" in
 esac
 MOCK
 
-  cat > "${MOCK_BIN_DIR}/gpg" <<'MOCK'
-#!/usr/bin/env bash
-set -euo pipefail
-out=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -o)
-      out="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-cat >/dev/null
-printf 'mock-keyring\n' > "${out}"
-MOCK
-
-  cat > "${MOCK_BIN_DIR}/dpkg" <<'MOCK'
-#!/usr/bin/env bash
-if [ "${1:-}" = "--print-architecture" ]; then
-  if [ "${MOCK_DPKG_FAIL:-0}" = "1" ]; then
-    exit 1
-  fi
-  printf '%s\n' "${MOCK_DPKG_ARCH:-amd64}"
-  exit 0
-fi
-exit 1
-MOCK
-
   cat > "${MOCK_BIN_DIR}/uname" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "-m" ]; then
@@ -121,29 +84,17 @@ fi
 exit 1
 MOCK
 
-  cat > "${MOCK_BIN_DIR}/apt-cache" <<'MOCK'
+  # Oracle Linux の dnf（AppStream の module nodejs:24。#1611）。MOCK_DNF_FAIL の部分の引数で失敗する。
+  cat > "${MOCK_BIN_DIR}/dnf" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'apt-cache %s\n' "$*" >> "${MOCK_CALL_LOG}"
-if [ "${MOCK_APT_CACHE_FAIL:-0}" = "1" ]; then
+printf 'dnf %s\n' "$*" >> "${MOCK_CALL_LOG}"
+if [ -n "${MOCK_DNF_FAIL:-}" ] && [[ " $* " == *" ${MOCK_DNF_FAIL} "* ]]; then
   exit 1
 fi
-if [ "${1:-}" = "policy" ] && [ "${2:-}" = "nodejs" ]; then
-  printf 'nodejs:\n'
-  printf '  Installed: (none)\n'
-  printf '  Candidate: %s\n' "$(cat "${MOCK_STATE_DIR}/candidate")"
-  exit 0
-fi
-exit 1
-MOCK
-
-  cat > "${MOCK_BIN_DIR}/apt-get" <<'MOCK'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'apt-get %s\n' "$*" >> "${MOCK_CALL_LOG}"
-if [ "${1:-}" = "install" ] && [ "${2:-}" = "-y" ] && [ "${3:-}" = "nodejs" ]; then
+if [ "$*" = "-y install nodejs npm" ]; then
   printf '%s\n' "${MOCK_INSTALLED_NODE_VERSION:-v24.13.0}" > "${MOCK_STATE_DIR}/node-version"
-  if [ "${MOCK_APT_INSTALL_CREATES_NPM:-1}" = "1" ]; then
+  if [ "${MOCK_DNF_INSTALL_CREATES_NPM:-1}" = "1" ]; then
     cat > "${MOCK_BIN_DIR}/npm" <<'NPM'
 #!/usr/bin/env bash
 printf '%s\n' "${MOCK_NPM_VERSION:-11.6.2}"
@@ -159,13 +110,10 @@ cat "${MOCK_STATE_DIR}/node-version"
 MOCK
 
   chmod +x \
-    "${MOCK_BIN_DIR}/apt-cache" \
-    "${MOCK_BIN_DIR}/apt-get" \
     "${MOCK_BIN_DIR}/curl" \
-    "${MOCK_BIN_DIR}/dpkg" \
-    "${MOCK_BIN_DIR}/fuser" \
-    "${MOCK_BIN_DIR}/gpg" \
+    "${MOCK_BIN_DIR}/dnf" \
     "${MOCK_BIN_DIR}/node" \
+    "${MOCK_BIN_DIR}/sleep" \
     "${MOCK_BIN_DIR}/uname"
 }
 
@@ -219,23 +167,22 @@ COREPACK
 run_nodejs_case() {
   local scenario="$1"
   local initial_node_version="$2"
-  local candidate_version="$3"
+  local installed_node_version="$3"
   local install_creates_npm="$4"
   local entrypoint="$5"
-  local apt_cache_fail="$6"
+  local dnf_fail="$6"
   local official_mode="$7"
-  local dpkg_arch="$8"
+  local machine="$8"
 
   LAST_SCENARIO_DIR="${TEST_TMP_DIR}/${scenario}"
   MOCK_BIN_DIR="${LAST_SCENARIO_DIR}/bin"
-  mkdir -p "${MOCK_BIN_DIR}" "${LAST_SCENARIO_DIR}/state" "${LAST_SCENARIO_DIR}/keyrings" "${LAST_SCENARIO_DIR}/sources"
+  mkdir -p "${MOCK_BIN_DIR}" "${LAST_SCENARIO_DIR}/state"
   MOCK_STATE_DIR="${LAST_SCENARIO_DIR}/state"
   MOCK_CALL_LOG="${LAST_SCENARIO_DIR}/calls.log"
   MOCK_OFFICIAL_SHASUMS="${LAST_SCENARIO_DIR}/missing-SHASUMS256.txt"
   MOCK_OFFICIAL_TARBALL="${LAST_SCENARIO_DIR}/missing-node.tar.gz"
   : > "${MOCK_CALL_LOG}"
   printf '%s\n' "${initial_node_version}" > "${MOCK_STATE_DIR}/node-version"
-  printf '%s\n' "${candidate_version}" > "${MOCK_STATE_DIR}/candidate"
   if [ "${official_mode}" != "none" ]; then
     create_official_node_fixture "${official_mode}"
   fi
@@ -245,25 +192,22 @@ run_nodejs_case() {
     export APPLICATION_PORT=80
     export APP_ROOT="${LAST_SCENARIO_DIR}/app-root"
     export NL2SQL_INIT_TEST_MODE=true
-    export NODESOURCE_KEYRING_PATH="${LAST_SCENARIO_DIR}/keyrings/nodesource.gpg"
-    export NODESOURCE_SOURCE_PATH="${LAST_SCENARIO_DIR}/sources/nodesource.sources"
     export NODEJS_OFFICIAL_RELEASE_BASE_URL="https://nodejs.test/download/release/latest-v24.x"
     export NODEJS_OFFICIAL_INSTALL_DIR="${LAST_SCENARIO_DIR}/official-install"
     export NODEJS_OFFICIAL_BIN_DIR="${MOCK_BIN_DIR}"
-    export MOCK_APT_CACHE_FAIL="${apt_cache_fail}"
-    export MOCK_APT_INSTALL_CREATES_NPM="${install_creates_npm}"
+    export MOCK_DNF_FAIL="${dnf_fail}"
+    export MOCK_DNF_INSTALL_CREATES_NPM="${install_creates_npm}"
     export MOCK_BIN_DIR
     export MOCK_CALL_LOG
-    export MOCK_DPKG_ARCH="${dpkg_arch}"
-    export MOCK_INSTALLED_NODE_VERSION="v24.13.0"
+    export MOCK_INSTALLED_NODE_VERSION="${installed_node_version}"
     export MOCK_NPM_VERSION="11.6.2"
     export MOCK_OFFICIAL_SHASUMS
     export MOCK_OFFICIAL_TARBALL
     export MOCK_STATE_DIR
-    export MOCK_UNAME_MACHINE="x86_64"
+    export MOCK_UNAME_MACHINE="${machine}"
 
     # init_script prepends system paths for production; reset PATH afterward so
-    # tests never see this host's real node/npm/apt.
+    # tests never see this host's real node/npm/dnf.
     # shellcheck source=/dev/null
     source "${REPO_DIR}/init_script.sh"
     PATH="${MOCK_BIN_DIR}"
@@ -271,59 +215,55 @@ run_nodejs_case() {
   )
 }
 
-run_nodejs_case "nodesource-recovers-node18-without-npm" "v18.19.1" "24.13.0-1nodesource1" "1" "install_nodejs" "0" "none" "amd64"
-grep -q 'node_24.x' "${LAST_SCENARIO_DIR}/sources/nodesource.sources"
-grep -q "Signed-By: ${LAST_SCENARIO_DIR}/keyrings/nodesource.gpg" "${LAST_SCENARIO_DIR}/sources/nodesource.sources"
-grep -q 'apt-get update' "${LAST_SCENARIO_DIR}/calls.log"
-grep -q 'apt-get install -y nodejs' "${LAST_SCENARIO_DIR}/calls.log"
+run_nodejs_case "dnf-module-recovers-node18-without-npm" "v18.19.1" "v24.13.0" "1" "install_nodejs" "" "none" "x86_64"
+grep -qx 'dnf -y module reset nodejs' "${LAST_SCENARIO_DIR}/calls.log"
+grep -qx 'dnf -y module enable nodejs:24' "${LAST_SCENARIO_DIR}/calls.log"
+grep -qx 'dnf -y install nodejs npm' "${LAST_SCENARIO_DIR}/calls.log"
 test "$(cat "${LAST_SCENARIO_DIR}/state/node-version")" = "v24.13.0"
 test -x "${LAST_SCENARIO_DIR}/bin/npm"
 
-if run_nodejs_case "nodesource-only-rejects-missing-npm" "v18.19.1" "24.13.0-1nodesource1" "0" "install_nodejs_from_nodesource" "0" "none" "amd64"; then
-  echo "NodeSource npm 欠落状態を成功扱いしてしまいました。" >&2
+if run_nodejs_case "dnf-module-only-rejects-missing-npm" "v18.19.1" "v24.13.0" "0" "install_nodejs_from_dnf_module" "" "none" "x86_64"; then
+  echo "AppStream の npm 欠落状態を成功扱いしてしまいました。" >&2
   exit 1
 fi
-grep -q 'apt-get install -y nodejs' "${LAST_SCENARIO_DIR}/calls.log"
+grep -qx 'dnf -y install nodejs npm' "${LAST_SCENARIO_DIR}/calls.log"
 test ! -e "${LAST_SCENARIO_DIR}/bin/npm"
 
-run_nodejs_case "fallback-apt-cache-fails" "v18.19.1" "24.13.0-1nodesource1" "1" "install_nodejs" "1" "valid" "amd64"
-grep -q 'apt-cache policy nodejs' "${LAST_SCENARIO_DIR}/calls.log"
-if grep -q 'apt-get install -y nodejs' "${LAST_SCENARIO_DIR}/calls.log"; then
-  echo "apt-cache 失敗後に apt-get install が実行されました。" >&2
+run_nodejs_case "fallback-module-enable-fails" "v18.19.1" "v24.13.0" "1" "install_nodejs" "enable" "valid" "x86_64"
+test "$(grep -cx 'dnf -y module enable nodejs:24' "${LAST_SCENARIO_DIR}/calls.log")" -eq 5
+if grep -q 'dnf -y install nodejs' "${LAST_SCENARIO_DIR}/calls.log"; then
+  echo "module enable の失敗後に dnf install が実行されました。" >&2
   exit 1
 fi
 test "$("${LAST_SCENARIO_DIR}/bin/node" --version)" = "v24.19.0"
 test "$("${LAST_SCENARIO_DIR}/bin/npm" --version)" = "11.6.2"
 
-run_nodejs_case "fallback-non-node24-candidate" "v18.19.1" "18.19.1+dfsg-6ubuntu5" "1" "install_nodejs" "0" "valid" "amd64"
-if grep -q 'apt-get install -y nodejs' "${LAST_SCENARIO_DIR}/calls.log"; then
-  echo "Node.js 24 以外の候補で apt-get install が実行されました。" >&2
-  exit 1
-fi
+run_nodejs_case "fallback-non-node24-from-dnf" "v18.19.1" "v20.19.5" "1" "install_nodejs" "" "valid" "x86_64"
+grep -qx 'dnf -y install nodejs npm' "${LAST_SCENARIO_DIR}/calls.log"
 test "$("${LAST_SCENARIO_DIR}/bin/node" --version)" = "v24.19.0"
 test "$("${LAST_SCENARIO_DIR}/bin/npm" --version)" = "11.6.2"
 
-run_nodejs_case "fallback-after-nodesource-validation-fails" "v18.19.1" "24.13.0-1nodesource1" "0" "install_nodejs" "0" "valid" "amd64"
-grep -q 'apt-get install -y nodejs' "${LAST_SCENARIO_DIR}/calls.log"
+run_nodejs_case "fallback-after-dnf-validation-fails" "v18.19.1" "v24.13.0" "0" "install_nodejs" "" "valid" "x86_64"
+grep -qx 'dnf -y install nodejs npm' "${LAST_SCENARIO_DIR}/calls.log"
 test "$("${LAST_SCENARIO_DIR}/bin/node" --version)" = "v24.19.0"
 test "$("${LAST_SCENARIO_DIR}/bin/npm" --version)" = "11.6.2"
 
-if run_nodejs_case "rejects-unsupported-official-arch" "v18.19.1" "18.19.1+dfsg-6ubuntu5" "1" "install_nodejs" "0" "valid" "riscv64"; then
+if run_nodejs_case "rejects-unsupported-official-arch" "v18.19.1" "v24.13.0" "1" "install_nodejs" "enable" "valid" "riscv64"; then
   echo "unsupported architecture を成功扱いしてしまいました。" >&2
   exit 1
 fi
 
-if run_nodejs_case "rejects-checksum-mismatch" "v18.19.1" "18.19.1+dfsg-6ubuntu5" "1" "install_nodejs" "0" "checksum_mismatch" "amd64"; then
+if run_nodejs_case "rejects-checksum-mismatch" "v18.19.1" "v24.13.0" "1" "install_nodejs" "enable" "checksum_mismatch" "x86_64"; then
   echo "checksum mismatch を成功扱いしてしまいました。" >&2
   exit 1
 fi
 
-if run_nodejs_case "rejects-missing-matching-tarball" "v18.19.1" "18.19.1+dfsg-6ubuntu5" "1" "install_nodejs" "0" "missing_match" "amd64"; then
+if run_nodejs_case "rejects-missing-matching-tarball" "v18.19.1" "v24.13.0" "1" "install_nodejs" "enable" "missing_match" "x86_64"; then
   echo "matching tarball 欠落を成功扱いしてしまいました。" >&2
   exit 1
 fi
 
-if run_nodejs_case "rejects-official-missing-npm" "v18.19.1" "18.19.1+dfsg-6ubuntu5" "1" "install_nodejs" "0" "missing_npm" "amd64"; then
+if run_nodejs_case "rejects-official-missing-npm" "v18.19.1" "v24.13.0" "1" "install_nodejs" "enable" "missing_npm" "x86_64"; then
   echo "official tarball npm 欠落状態を成功扱いしてしまいました。" >&2
   exit 1
 fi

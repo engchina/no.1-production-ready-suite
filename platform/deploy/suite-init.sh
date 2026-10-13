@@ -15,9 +15,14 @@
 #   products.txt（配備する製品。空白区切り）・https_enabled.txt（true / false）・http_port.txt / https_port.txt（公開の port）・
 #   assign_public_ip.txt（true / false）
 #   platform.env（3 製品で共通の platform/.env）・<製品>.backend.env（各製品の backend/.env）・rag_services.txt・wallet.zip など
+#
+# Compute の OS は Oracle Linux 9（#1611）。package は dnf（Nginx は AppStream の module）、firewall は firewalld、
+# SELinux は enforcing のまま、次の設定で動かす（configure_selinux）:
+#   - suite の repository を usr_t にする（systemd が venv の実行ファイルと EnvironmentFile を読めるように。
+#     /u01 の既定の default_t は systemd も Nginx も読めない）。新しく作るファイルは親の usr_t を受け継ぐ。
+#   - 各製品の frontend の dist は httpd_sys_content_t、証明書の directory は cert_t（Nginx が読む）。
+#   - Nginx から 127.0.0.1 の backend への proxy は httpd_can_network_connect。80 / 443 以外の公開の port は http_port_t。
 set -euo pipefail
-
-export DEBIAN_FRONTEND=noninteractive
 
 if [ "${SUITE_INIT_TEST_MODE:-false}" != "true" ]; then
   exec > >(tee -a /var/log/suite-init.log) 2>&1
@@ -32,17 +37,22 @@ source "${SUITE_DEPLOY_DIR}/suite-tls.sh"
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 # 3 製品のプロセスは同じユーザーで動かす（共通の platform/.env・model-settings.json・Wallet・~/.oci を
 # 画面から読み書きするため。#1316。製品ごとの Compute では RAG だけ専用の ragsvc で動かしていた）。
-APP_USER="${APP_USER:-ubuntu}"
+APP_USER="${APP_USER:-opc}"
 APP_GROUP="${APP_GROUP:-${APP_USER}}"
 APP_HOME="${APP_HOME:-/home/${APP_USER}}"
 SUITE_REPO_DIR="${SUITE_REPO_DIR:-${APP_ROOT}/no.1-production-ready-suite}"
 PROPS_DIR="${PROPS_DIR:-${APP_ROOT}/props}"
 SSL_DIR="${SUITE_SSL_DIR:-${APP_ROOT}/ssl}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+# Oracle Linux の Nginx は /etc/nginx/conf.d/*.conf を読む（site も conf.d に置く）。nginx.conf は package の既定の
+# server（port 80）を外したもの（platform/templates/nginx/nginx.conf）に置き換える。
 NGINX_CONF_DIR="${NGINX_CONF_DIR:-/etc/nginx/conf.d}"
-NGINX_SITES_AVAILABLE_DIR="${NGINX_SITES_AVAILABLE_DIR:-/etc/nginx/sites-available}"
-NGINX_SITES_ENABLED_DIR="${NGINX_SITES_ENABLED_DIR:-/etc/nginx/sites-enabled}"
+NGINX_MAIN_CONF="${NGINX_MAIN_CONF:-/etc/nginx/nginx.conf}"
 SUITE_SITE_NAME="production-ready-suite"
+# AppStream の nginx の module の stream（1.24 系。CI の Suite / Oracle Linux 9 も同じ stream で確かめる）。
+NGINX_MODULE_STREAM="1.24"
+# suite-init.sh が dnf で入れる OS の package（製品の init_script.sh は製品が使うものだけを入れる）。
+SUITE_OS_PACKAGES=(firewalld git nginx openssl policycoreutils-python-utils tar unzip)
 TLS_RENEW_UNIT="production-ready-suite-tls-renew"
 # 各製品の backend の <製品>_MAX_UPLOAD_BYTES の既定値と、Nginx の multipart の余白（#306・#1597。
 # verify_stack_contract.py が backend の既定値・suite-nginx.sh の既定の上限と照合する）。
@@ -114,22 +124,96 @@ validate_ports() {
   fi
 }
 
-# OS の firewall で http_port（と HTTPS が on なら https_port）を開ける。subnet の security list は stack の外で管理する。
-configure_firewall() {
-  local port ports
-  ports=("$(http_port)")
+# 公開する port（http_port と、HTTPS が on なら https_port。同じ値なら 1 つ）。
+public_ports() {
+  local http https
+  http="$(http_port)"
+  printf '%s\n' "${http}"
   if https_enabled; then
-    ports+=("$(https_port)")
+    https="$(https_port)"
+    if [ "${https}" != "${http}" ]; then
+      printf '%s\n' "${https}"
+    fi
   fi
-  if ! command -v iptables >/dev/null 2>&1; then
+}
+
+suite_dnf() {
+  local attempt status=0
+  for attempt in 1 2 3 4 5; do
+    if dnf -y "$@"; then
+      return 0
+    fi
+    status="$?"
+    log "dnf failed with status ${status} on attempt ${attempt}/5: dnf -y $*"
+    sleep $((attempt * 5))
+  done
+  return "${status}"
+}
+
+# OS の package（Nginx・firewalld・SELinux の道具など）。Nginx は AppStream の module の stream を固定して入れる。
+install_os_packages() {
+  log "Installing OS packages: ${SUITE_OS_PACKAGES[*]} (nginx:${NGINX_MODULE_STREAM})."
+  suite_dnf module enable "nginx:${NGINX_MODULE_STREAM}"
+  suite_dnf install "${SUITE_OS_PACKAGES[@]}"
+}
+
+# OS の firewall（firewalld）で公開の port を開ける。subnet の security list は stack の外で管理する。
+configure_firewall() {
+  local port
+  systemctl enable --now firewalld
+  while IFS= read -r port; do
+    firewall-cmd --permanent --add-port="${port}/tcp"
+  done < <(public_ports)
+  firewall-cmd --reload
+  log "firewalld: opened $(public_ports | tr '\n' ' ')(tcp)."
+}
+
+# SELinux（Oracle Linux 9 の既定の enforcing のまま動かす）。無効の環境では何もしない。
+selinux_enabled() {
+  command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled
+}
+
+# 製品の配備（venv・systemd の unit）の前に行う SELinux の設定。file context の規則は、同じ規則があれば
+# semanage が置き換える（再実行してよい）。
+configure_selinux() {
+  local port product
+  if ! selinux_enabled; then
+    log "SELinux is disabled; skipping SELinux contexts."
     return 0
   fi
-  for port in "${ports[@]}"; do
-    if ! iptables -C INPUT -m state --state NEW -p tcp --dport "${port}" -j ACCEPT 2>/dev/null; then
-      iptables -I INPUT 6 -m state --state NEW -p tcp --dport "${port}" -j ACCEPT || true
+  log "Configuring SELinux contexts (repository usr_t, frontend dist httpd_sys_content_t, certificates cert_t)."
+  semanage fcontext -a -t usr_t "${SUITE_REPO_DIR}(/.*)?"
+  for product in "${SUITE_PRODUCTS_ORDER[@]}"; do
+    semanage fcontext -a -t httpd_sys_content_t "${SUITE_REPO_DIR}/${product}/frontend/dist(/.*)?"
+  done
+  semanage fcontext -a -t cert_t "${SSL_DIR}(/.*)?"
+  restorecon -R "${SUITE_REPO_DIR}"
+  # Nginx から 127.0.0.1 の各製品の backend へ proxy する。
+  setsebool -P httpd_can_network_connect 1
+  while IFS= read -r port; do
+    case "${port}" in
+      80 | 443) ;;
+      # 既に別の type（例: 8080 の http_cache_port_t）なら semanage が http_port_t に置き換える。
+      *) semanage port -a -t http_port_t -p tcp "${port}" ;;
+    esac
+  done < <(public_ports)
+}
+
+# Nginx が読むファイルの context を戻す（frontend の build は dist を作り直す。証明書は configure_tls が作る）。
+restore_nginx_contexts() {
+  local product paths=()
+  selinux_enabled || return 0
+  for product in "${SUITE_PRODUCTS[@]}"; do
+    if [ -d "${SUITE_REPO_DIR}/${product}/frontend/dist" ]; then
+      paths+=("${SUITE_REPO_DIR}/${product}/frontend/dist")
     fi
   done
-  netfilter-persistent save || true
+  if [ -d "${SSL_DIR}" ]; then
+    paths+=("${SSL_DIR}")
+  fi
+  if [ "${#paths[@]}" -gt 0 ]; then
+    restorecon -R "${paths[@]}"
+  fi
 }
 
 # 製品の init_script.sh に渡す環境変数（1 行に 1 つ）。
@@ -246,15 +330,17 @@ EOF
 
 configure_nginx() {
   local template_dir="${SUITE_REPO_DIR}/platform/templates/nginx"
-  local site="${NGINX_SITES_AVAILABLE_DIR}/${SUITE_SITE_NAME}"
-  local https=false product rag_body nl2sql_body agent_body
+  local site="${NGINX_CONF_DIR}/${SUITE_SITE_NAME}.conf"
+  local https=false rag_body nl2sql_body agent_body
   rag_body="$(product_client_max_body_size rag)"
   nl2sql_body="$(product_client_max_body_size nl2sql)"
   agent_body="$(product_client_max_body_size agent)"
   if https_enabled; then
     https=true
   fi
-  mkdir -p "${NGINX_CONF_DIR}" "${NGINX_SITES_AVAILABLE_DIR}" "${NGINX_SITES_ENABLED_DIR}"
+  mkdir -p "${NGINX_CONF_DIR}"
+  # package の既定の server（port 80）を外した nginx.conf（suite の site が公開の port の default_server になる）。
+  install -m 0644 "${template_dir}/nginx.conf" "${NGINX_MAIN_CONF}"
   install -m 0644 "${template_dir}/logging.conf" "${NGINX_CONF_DIR}/production-ready-logging.conf"
   install -m 0644 "${template_dir}/login-rate-limit.conf" "${NGINX_CONF_DIR}/production-ready-login-rate-limit.conf"
   log "Configuring Nginx (HTTPS: ${https}, products: ${SUITE_PRODUCTS[*]})."
@@ -263,14 +349,9 @@ configure_nginx() {
     suite_nginx_site "${https}" "${SUITE_REPO_DIR}" "${SSL_DIR}" "$(http_port)" "$(https_port)" \
     "${SUITE_PRODUCTS[@]}" > "${site}.tmp"
   mv -f "${site}.tmp" "${site}"
-  ln -sfn "${site}" "${NGINX_SITES_ENABLED_DIR}/${SUITE_SITE_NAME}"
-  # 以前の製品ごとの Compute の site（製品の init_script.sh が書いていたもの）と既定の site は使わない。
-  rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/default"
-  for product in "${SUITE_PRODUCTS_ORDER[@]}"; do
-    rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/production-ready-${product}"
-  done
-  # Nginx の worker が frontend の dist を読めるよう、repository までの directory を辿れるようにする。
+  # Nginx の worker（nginx ユーザー）が frontend の dist を読めるよう、repository までの directory を辿れるようにする。
   chmod o+x "${APP_ROOT}" "${SUITE_REPO_DIR}" 2>/dev/null || true
+  restore_nginx_contexts
   nginx -t
   systemctl enable nginx
   systemctl reload nginx || systemctl restart nginx
@@ -311,7 +392,9 @@ main() {
   log "Starting single-Compute deployment."
   load_products
   validate_ports
+  install_os_packages
   configure_firewall
+  configure_selinux
   deploy_products
   configure_tls
   configure_nginx

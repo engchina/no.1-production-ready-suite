@@ -86,7 +86,9 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）の既定はこの `127.0.0.1:<port>`。
 `backend/.env` に以前の Docker Compose の service 名（`http://parser-docling:8000` など）が残っている場合は `127.0.0.1:<port>` に直す（#356 から読み替えない）。
 
-1. OS のコマンドを入れる（Ubuntu。使うサービスの分だけでよい）。
+1. OS のコマンドを入れる（開発の Ubuntu / WSL。使うサービスの分だけでよい。本番の Compute（Oracle Linux 9）では `init_script.sh` が dnf で
+   `libreoffice-core` / `-writer` / `-impress` / `-calc`・`google-noto-sans-cjk-ttc-fonts` / `google-noto-serif-cjk-ttc-fonts`・`poppler-utils`・
+   `tesseract` / `tesseract-langpack-eng` / `tesseract-langpack-jpn` を入れる。#1611）。
 
    ```bash
    sudo apt-get install -y --no-install-recommends \
@@ -310,8 +312,8 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
    ```bash
    # OCI Compute（手で行う場合）
    cd /u01/aipoc/no.1-production-ready-suite/rag
-   sudo -u ubuntu bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
-   sudo -u ubuntu bash -c 'cd services/parsers/docling && uv sync --locked --no-dev --python 3.12'
+   sudo -u opc bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
+   sudo -u opc bash -c 'cd services/parsers/docling && uv sync --locked --no-dev --python 3.12'
 
    # ローカル
    cd rag/backend && uv sync --locked
@@ -363,7 +365,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
    ```bash
    # OCI Compute
    cd /u01/aipoc/no.1-production-ready-suite/rag
-   sudo -u ubuntu bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
+   sudo -u opc bash -c 'cd backend && uv sync --locked --no-dev --python 3.12'
 
    # ローカル
    cd rag/backend && uv sync --locked
@@ -432,7 +434,7 @@ systemd の unit に移した。サービス管理画面は docker compose で�
 
 ```bash
 cd /u01/aipoc/no.1-production-ready-suite
-sudo -u ubuntu git fetch --depth 1 origin <suite-v の tag> && sudo -u ubuntu git checkout -f FETCH_HEAD
+sudo -u opc git fetch --depth 1 origin <suite-v の tag> && sudo -u opc git checkout -f FETCH_HEAD
 # 既定の解析エンジン（Docling）と、画面からの起動 / 停止を有効にする（stack の新しい既定と同じ）
 sudo sed -i -e 's/^RAG_PARSER_ADAPTER_BACKEND=.*/RAG_PARSER_ADAPTER_BACKEND=docling/' \
   -e '/^RAG_PARSER_UNSTRUCTURED_ENABLED=/d' \
@@ -507,7 +509,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 **システムテーブルを更新すると、3 つのテーブルの行は戻せない。** `rag_agent_memories` は更新の前に書き出す。`init_script.sh` の再実行と画面の「システム設定 > データベース > RAG システムテーブル」の更新も、システムテーブルを更新する（`init_script.sh` は `system_schema_cli initialize` を実行する）ので、書き出してから行う。この migration はデータを削除するので、#619 から更新は承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が無ければ止まる（上の「既存環境の更新手順の共通の注意」）。
 
 1. #596 の版のコードを取得する（`git pull` など）。まだ backend の再起動・`init_script.sh` の再実行・システムテーブルの更新はしない。
-2. `rag_agent_memories` を書き出す。書き出しの CLI（`app.rag.legacy_export`）は標準ライブラリと既存の Oracle 接続だけを使うので、取得したコードを今の venv で実行できる（import のエラーになる場合は、先に backend の venv を `uv sync --locked --no-dev` で更新する。Compute ではリポジトリの所有者 `ubuntu` で実行する）。テーブルが無い環境では何も書かずに `"status": "table_missing"` を出して終わる。`rag_prompt_versions`・`rag_generation_settings` も残したい場合は、`--table` を変えて同じように書き出す。
+2. `rag_agent_memories` を書き出す。書き出しの CLI（`app.rag.legacy_export`）は標準ライブラリと既存の Oracle 接続だけを使うので、取得したコードを今の venv で実行できる（import のエラーになる場合は、先に backend の venv を `uv sync --locked --no-dev` で更新する。Compute ではリポジトリの所有者 `opc` で実行する）。テーブルが無い環境では何も書かずに `"status": "table_missing"` を出して終わる。`rag_prompt_versions`・`rag_generation_settings` も残したい場合は、`--table` を変えて同じように書き出す。
 
    ```bash
    # OCI Compute（init_script.sh で配備した環境）
@@ -1062,15 +1064,17 @@ OCI Resource Manager の統合 Terraform stack（monorepo root の [`terraform/s
 
 3 製品は 1 台の Compute にセットで配備する（`platform/deploy/suite-init.sh` が `rag/init_script.sh` を呼ぶ。#1316。単独では配備しない）。下の表と次の点が違う。
 
-- 実行ユーザーは NL2SQL / Agent と同じ `ubuntu`（共通の `platform/.env`・Wallet・`~/.oci/config` を 3 製品で読み書きするため）。`ragsvc` は作らない
-  （下の表と手順の `sudo -u ragsvc HOME=/var/lib/production-ready-rag` は `sudo -u ubuntu` に読み替える）。sudoers は `ubuntu` に同じ unit の操作を許可する。
+- Compute の OS は Oracle Linux 9（#1611）。OS の package は dnf、firewall は firewalld、SELinux は enforcing のまま（repository は `usr_t`、
+  frontend の dist は `httpd_sys_content_t`。`platform/deploy/suite-init.sh` の `configure_selinux`。[terraform/README.md](../../terraform/README.md)）。
+- 実行ユーザーは NL2SQL / Agent と同じ `opc`（共通の `platform/.env`・Wallet・`~/.oci/config` を 3 製品で読み書きするため）。`ragsvc` は作らない
+  （下の表と手順の `sudo -u ragsvc HOME=/var/lib/production-ready-rag` は `sudo -u opc` に読み替える）。sudoers は `opc` に同じ unit の操作を許可する。
 - frontend は `FRONTEND_BASE_PATH=/rag/` で build し、Nginx の 1 つの site（suite）が `/rag/` で配信して `/rag/api/` を prefix を外して backend へ proxy する
   （SSE・MCP の長い timeout・ログインの上限・upload の上限は同じ）。RAG の `init_script.sh` は Nginx の site を書かない。
 ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL / Agent と共有する）、RAG の system schema はアプリの CLI（`app.rag.system_schema_cli initialize`）で適用する。
 
 | 構成要素 | 内容 |
 |---|---|
-| 実行ユーザー | 専用の system user `ragsvc`（home `/var/lib/production-ready-rag`）。リポジトリは `ubuntu` の所有で、`ubuntu` が git pull・uv sync・frontend の build を行う |
+| 実行ユーザー | 専用の system user `ragsvc`（home `/var/lib/production-ready-rag`）。リポジトリは `opc` の所有で、`opc` が git pull・uv sync・frontend の build を行う |
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |

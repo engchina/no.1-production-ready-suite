@@ -2,15 +2,18 @@
 output: {all: '| tee -a /var/log/cloud-init-custom.log'}
 bootcmd:
   - mkdir -p /u01/aipoc/props ${wallet_dir_host}
+# Compute の OS は Oracle Linux 9（cloud-init は dnf で入れる。#1611）。curl は image にある（curl-minimal と
+# 衝突しないよう名前を書かない）。firewalld と SELinux の道具（semanage）は platform/deploy/suite-init.sh が使う。
 package_update: true
 package_upgrade: false
 packages:
   - ca-certificates
-  - curl
   - dos2unix
+  - firewalld
   - git
-  - netfilter-persistent
   - openssl
+  - policycoreutils-python-utils
+  - tar
   - tmux
   - unzip
 write_files:
@@ -87,8 +90,6 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
-      export DEBIAN_FRONTEND=noninteractive
-
       APP_ROOT="/u01/aipoc"
       # 3 製品（rag/ nl2sql/ agent/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
       SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"
@@ -130,7 +131,7 @@ write_files:
       }
 
       # 選んだ製品を 1 台に配備する（#1316）。各製品の init_script.sh は suite-init.sh が順に呼び、
-      # Nginx の site（/rag/ /nl2sql/ /agent/、HTTPS）と firewall（80 / 443）は suite-init.sh が 1 つだけ書く。
+      # Nginx の site（/rag/ /nl2sql/ /agent/、HTTPS）・firewalld（公開の port）・SELinux は suite-init.sh が 1 か所で設定する。
       run_suite_init() {
         local init_script="$${SUITE_REPO_DIR}/platform/deploy/suite-init.sh"
         if [ ! -f "$${init_script}" ]; then
