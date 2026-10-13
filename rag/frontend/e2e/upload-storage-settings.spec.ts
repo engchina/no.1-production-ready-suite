@@ -464,7 +464,7 @@ async function mockDocumentDetail(
   page: Page,
   documentId: string,
   fileName: string,
-  sourceProfile = uploadSourceProfile(fileName)
+  sourceProfile: UploadSourceProfileFixture = uploadSourceProfile(fileName)
 ) {
   await page.route(`**/api/documents/${documentId}`, async (route) => {
     await route.fulfill({
@@ -625,6 +625,11 @@ function ingestionJob(
       status === "QUEUED" || status === "RUNNING" ? null : "2026-06-15T00:00:03Z",
   };
 }
+
+// テキストと音声の source_profile の両方を渡せる型（text_charset などの値の型が違う）。
+type UploadSourceProfileFixture =
+  | ReturnType<typeof uploadSourceProfile>
+  | ReturnType<typeof audioUploadSourceProfile>;
 
 function uploadSourceProfile(fileName = "upload.txt") {
   return {

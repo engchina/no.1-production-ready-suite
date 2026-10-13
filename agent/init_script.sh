@@ -36,7 +36,7 @@ BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8020"
 # checkpoint repository は process 内に状態を持つため、gunicorn は 1 worker に固定する。
 BACKEND_WORKERS="1"
-NODE_MAJOR="22"
+NODE_MAJOR="24"
 NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
 NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
 NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
@@ -127,8 +127,8 @@ install_system_packages() {
 }
 
 # Node.js は NodeSource の apt repository を優先し、失敗時は公式 tarball（SHASUMS256 検証付き）へ fallback する。
-# Agent の CI と同じ Node.js 22 系を使う。
-# 1 台の Compute（#1316）では RAG / NL2SQL が先に Node.js 24 を入れる。Agent は 22 以上なら使う
+# RAG / NL2SQL と CI と同じ Node.js 24 系を使う（#1591。以前は 22 で、Agent だけを配備すると CI と版がずれた）。
+# 1 台の Compute（#1316）では RAG / NL2SQL が先に Node.js 24 を入れる。Agent は 24 以上なら使う
 # （入れ替えると先に build した製品と版がずれる）。
 node_version_accepted() {
   local version="$1"

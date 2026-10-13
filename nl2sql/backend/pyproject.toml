@@ -49,6 +49,7 @@ dev = [
   "pytest-asyncio>=0.25",
   "pytest-cov>=6.0",
   "pytest-xdist>=3.8",
+  "pytest-timeout>=2.3",
   "ruff>=0.9",
   "mypy>=1.14",
   "bandit>=1.8",
@@ -92,3 +93,6 @@ plugins = ["pydantic.mypy"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
+# 1 つのテストが止まったら 120 秒で失敗にし、stack を出す（pytest-timeout。#1591）。job の上限（15 分）まで
+# 待たない。遅いテストは `@pytest.mark.timeout(<秒>)` で個別に延ばす。
+timeout = 120

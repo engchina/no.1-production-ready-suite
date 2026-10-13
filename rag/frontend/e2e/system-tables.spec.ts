@@ -156,8 +156,8 @@ async function mockSettings(
             orphaned_foreign_keys: options.foreignKeyDrift
               ? [{ ...chunkSetsDocumentForeignKey, orphan_rows: 240 }]
               : [],
-            operation: recreatePayload.recreate ? "recreated" : "initialized",
-            dropped_object_count: recreatePayload.recreate ? 96 : 0,
+            operation: recreatePayload?.recreate ? "recreated" : "initialized",
+            dropped_object_count: recreatePayload?.recreate ? 96 : 0,
             created_object_count: 96,
           },
           error_messages: [],
