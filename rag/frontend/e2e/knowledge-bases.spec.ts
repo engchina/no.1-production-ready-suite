@@ -1094,7 +1094,7 @@ function makeKnowledgeBase(
   };
 }
 
-function makeDocument(overrides: Partial<DocumentSummary> & { id: string; file_name: string }) {
+function makeDocument(overrides: Partial<DocumentSummary> & { id: string; file_name: string }): DocumentSummary {
   return {
     status: "UPLOADED",
     category_name: null,
