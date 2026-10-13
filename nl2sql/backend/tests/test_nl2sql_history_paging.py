@@ -382,7 +382,7 @@ def test_history_resolves_configured_admin_without_changing_saved_identity(
         assert data is not None
         items = {item.actor_user_uuid: item for item in data.items}
         assert items[configured_uuid].actor_login_user_id == "system_admin"
-        assert items[configured_uuid].actor_display_name == "system_admin"
+        assert items[configured_uuid].actor_display_name == "システム管理者"
         for user_uuid in ["unknown", ""]:
             assert items[user_uuid].actor_login_user_id == ""
             assert items[user_uuid].actor_display_name == ""

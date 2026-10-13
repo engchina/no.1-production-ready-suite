@@ -307,7 +307,7 @@ async function expectSameWidth(a: Locator, b: Locator) {
   expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
 }
 
-test("管理者は実行ユーザーを一覧と詳細で確認し同名・削除済み・未記録を区別できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("管理者は実行ユーザーを一覧と詳細で表示名で確認し、ログイン ID・UUID を出さず、削除済み・未記録を区別できる（#1696）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const items = historyItems.map((item, index) => ({
     ...item,
     actor_user_uuid: `actor-${index}`,
@@ -316,21 +316,27 @@ test("管理者は実行ユーザーを一覧と詳細で確認し同名・削�
   }));
   items.push({ ...items[0], id: "deleted", question: "削除済みユーザーの履歴", actor_user_uuid: "deleted-user", actor_login_user_id: "", actor_display_name: "" });
   items.push({ ...items[0], id: "legacy", question: "古い履歴", actor_user_uuid: "", actor_login_user_id: "", actor_display_name: "" });
+  // 表示名の無い利用者はログイン ID を出す。
+  items[1].actor_display_name = "";
   items[2].actor_display_name = "長い表示名".repeat(12);
   items[2].actor_login_user_id = "long_login_id_".repeat(10);
   await mockHistory(page, items);
   await page.goto("/history");
   const first = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-  await expect(first.getByTestId("history-executor")).toHaveText("実行ユーザー: analyst-0（同じ表示名）");
+  await expect(first.getByTestId("history-executor")).toHaveText("実行ユーザー: 同じ表示名");
   const second = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
   await second.focus();
   await page.keyboard.press("Enter");
   const detail = page.getByTestId("history-detail").getByTestId("history-executor");
-  await expect(detail).toContainText("analyst-1（同じ表示名）");
-  await expect(detail).toContainText("ユーザー UUID: actor-1");
-  await expect(detail).toContainText("ログイン ID と表示名は現在のユーザー情報です。");
+  await expect(detail).toContainText("実行ユーザー: analyst-1");
+  await expect(detail).not.toContainText("actor-1");
+  await expect(detail).toContainText("表示名は現在のユーザー情報です。");
+  await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" }).click();
+  await expect(detail).toContainText("実行ユーザー: 同じ表示名");
+  await expect(detail).not.toContainText("analyst-0");
+  await expect(detail).not.toContainText("actor-0");
   await page.getByRole("button", { name: "削除済みユーザーの履歴 の履歴を表示" }).click();
-  await expect(detail).toContainText("ユーザー情報なし（deleted-user）");
+  await expect(detail).toHaveText("実行ユーザー: （削除済みのユーザー）");
   await page.getByRole("button", { name: "古い履歴 の履歴を表示" }).click();
   await expect(detail).toHaveText("実行ユーザー: 記録なし");
   const longRow = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });

@@ -7,7 +7,7 @@ const account = vi.hoisted(() => ({ current: null as SidebarAccount | null }));
 vi.mock("../src/auth/RequireAuth", () => ({ useSidebarAccount: () => account.current }));
 
 const { SidebarAccountSection } = await import("../src/auth/SidebarAccountSection");
-const { sidebarRoleNames } = await vi.importActual<typeof import("../src/auth/RequireAuth")>("../src/auth/RequireAuth");
+const { sidebarAccountName, sidebarRoleNames } = await vi.importActual<typeof import("../src/auth/RequireAuth")>("../src/auth/RequireAuth");
 
 const routes = { login: "/login", passwordChange: "/password/change" };
 
@@ -58,5 +58,16 @@ describe("アカウント欄のロール（#1644）", () => {
       sidebarRoleNames({ role_codes: ["SALES", "HR", "OPS"], role_display_names: ["営業", " ", "運用"] }, "、")
     ).toBe("営業、HR、運用");
     expect(sidebarRoleNames({ role_codes: ["SALES"], role_display_names: [] }, "、")).toBe("SALES");
+  });
+});
+
+describe("アカウント欄の 1 行目（#1696）", () => {
+  it("ログイン ID を出し、ほかの画面の表示名は使わない。local（debug）は表示名", () => {
+    expect(sidebarAccountName({ login_user_id: "system_admin", display_name: "システム管理者", debug_mode: false })).toBe(
+      "system_admin"
+    );
+    expect(sidebarAccountName({ login_user_id: "sales.user", display_name: "営業ユーザー", debug_mode: false })).toBe("sales.user");
+    expect(sidebarAccountName({ login_user_id: " ", display_name: "営業ユーザー", debug_mode: false })).toBe("営業ユーザー");
+    expect(sidebarAccountName({ login_user_id: "local", display_name: "ローカル利用者", debug_mode: true })).toBe("ローカル利用者");
   });
 });

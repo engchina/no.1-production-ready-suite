@@ -22,6 +22,10 @@
 - 文言の変更の検証では、その locator を使う Playwright の spec を desktop と `mobile-375` の両方で流す。既存の skip は理由を明記する。build / logic のテストだけでは locator の古さを見つけられない前提で進める。
 - 共有パッケージの画面（`@production-ready/system-settings` など）の文言を変えるときは、3製品すべての E2E を同じ変更で直す。
 
+## ユーザーの表示（#1696）
+
+- **サイドナビのアカウント欄の 1 行目だけはログイン ID（例 `system_admin`。2 行目はロール名）、それ以外のすべての画面はユーザーの表示名**（例「システム管理者」）で出す（実行履歴の実行者・承認の判断者・版の公開者・作成者 / 更新者・ユーザーの選択欄・ユーザー管理の一覧と見出し・確認ダイアログ・`aria-label`）。表示名が空ならログイン ID。UUID とログイン ID は出さない（ログイン ID はユーザー管理の「ログインユーザーID」の項目にだけ出す）。引けない利用者（削除済みなど）は「（削除済みのユーザー）」。文字列は `@production-ready/system-settings` の `userDisplayName` / `deletedUserLabel` を使い、backend はログイン ID・UUID だけを返さず表示名を添える。
+
 ## ページ遷移・未保存変更
 
 [workspace-state.md](./workspace-state.md) を参照。

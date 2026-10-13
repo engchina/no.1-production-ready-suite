@@ -72,9 +72,9 @@ _SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE = (
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。"
 )
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"  # nosec B105
-# 表示名は名前だけにし、ロールを括弧で連結しない。ロールはサイドナビのアカウント欄の 2 行目・
-# 履歴の実行者の欄などが別に示す（#1644）。
-_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = FIXED_ADMIN_LOGIN_USER_ID
+# 表示名は名前だけにし、ロールを括弧で連結しない（#1644）。画面はサイドナビの 1 行目だけが
+# ログイン ID（`system_admin`）、それ以外の画面は表示名「システム管理者」を出す（#1696）。
+_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = "システム管理者"
 _ADMIN_PASSWORD_PATTERN = re.compile(
     r'^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*["]).{12,30}$'
 )
@@ -416,7 +416,14 @@ class AuthService:
     ) -> dict[str, UserIdentity]:
         if not actor.is_system_admin:
             raise SecurityApiError(403, "履歴の実行者情報はシステム管理者のみ確認できます。")
-        # 構成管理者は認証テーブルに存在しない。履歴表示には公開 identity だけを補完する。
+        return self.display_identities(user_uuids)
+
+    def display_identities(self, user_uuids: list[str]) -> dict[str, UserIdentity]:
+        """画面に出す利用者の名前（UUID → identity）。引けない利用者は省く。
+
+        構成管理者は認証テーブルに存在しないため、公開 identity（表示名「システム管理者」）を
+        補完する。権限の判定は呼び出し側が行う（#1696）。
+        """
         stored_uuids = [
             user_uuid
             for user_uuid in user_uuids
@@ -424,12 +431,38 @@ class AuthService:
         ]
         identities = self.store.get_user_identities(stored_uuids) if stored_uuids else {}
         if CONFIGURED_SYSTEM_ADMIN_USER_UUID in user_uuids:
-            identities[CONFIGURED_SYSTEM_ADMIN_USER_UUID] = UserIdentity(
-                user_uuid=CONFIGURED_SYSTEM_ADMIN_USER_UUID,
-                login_user_id=FIXED_ADMIN_LOGIN_USER_ID,
-                display_name=_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME,
-            )
+            identities[CONFIGURED_SYSTEM_ADMIN_USER_UUID] = self._configured_admin_identity()
         return identities
+
+    def display_identities_by_login(self, login_user_ids: list[str]) -> dict[str, UserIdentity]:
+        """画面に出す利用者の名前（ログイン ID → identity）。引けない利用者は省く（#1696）。
+
+        ログイン ID だけを記録した項目（Agent の承認の判断者など）の表示名を引く。
+        """
+        identities: dict[str, UserIdentity] = {}
+        for login_user_id in dict.fromkeys(login_user_ids):
+            normalized = (login_user_id or "").strip()
+            if not normalized:
+                continue
+            if normalized == FIXED_ADMIN_LOGIN_USER_ID:
+                identities[login_user_id] = self._configured_admin_identity()
+                continue
+            user = self.store.get_user_by_login_user_id(normalized.casefold())
+            if user is not None:
+                identities[login_user_id] = UserIdentity(
+                    user_uuid=user.user_uuid,
+                    login_user_id=user.login_user_id,
+                    display_name=user.display_name,
+                )
+        return identities
+
+    @staticmethod
+    def _configured_admin_identity() -> UserIdentity:
+        return UserIdentity(
+            user_uuid=CONFIGURED_SYSTEM_ADMIN_USER_UUID,
+            login_user_id=FIXED_ADMIN_LOGIN_USER_ID,
+            display_name=_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME,
+        )
 
     def create_user(
         self,

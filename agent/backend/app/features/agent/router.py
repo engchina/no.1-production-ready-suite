@@ -259,7 +259,7 @@ from app.features.agent.usage import (
     build_usage_report,
     resolve_timezone,
 )
-from app.features.agent.user_names import user_display_names
+from app.features.agent.user_names import login_display_names, user_display_names
 from app.observability import (
     ObservabilityStatus,
     TraceEventsData,
@@ -1841,7 +1841,11 @@ async def list_runs(
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RunsData]:
     runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
-    return ApiResponse(data=RunsData(runs=runs))
+    deciders = sorted(
+        {approval.decided_by for run in runs for approval in run.approvals if approval.decided_by}
+    )
+    names = await run_in_threadpool(login_display_names, deciders) if deciders else {}
+    return ApiResponse(data=RunsData(runs=runs, user_display_names=names))
 
 
 @router.post("/runs", response_model=ApiResponse[RunState])
@@ -3134,7 +3138,16 @@ async def list_agents(request: Request) -> ApiResponse[AgentsData]:
     agents = [
         agent for agent in runtime_repository.list_agents() if _agent_allowed(request, agent.id)
     ]
-    return ApiResponse(data=AgentsData(agents=agents))
+    return ApiResponse(data=await _agents_data(agents))
+
+
+async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
+    """業務 Agent の一覧と、版の公開者の表示名（画面は表示名で出す。#1696）。"""
+    publishers = sorted(
+        {version.published_by for agent in agents for version in agent.versions if version.published_by}
+    )
+    names = await run_in_threadpool(login_display_names, publishers) if publishers else {}
+    return AgentsData(agents=agents, user_display_names=names)
 
 
 # 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。
@@ -3250,7 +3263,7 @@ async def publish_agent(
     """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。"""
     try:
         agent = runtime_repository.publish_agent(
-            agent_id, note=payload.note, published_by=_actor_display_name(request)
+            agent_id, note=payload.note, published_by=_actor_login_user_id(request)
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
@@ -3271,7 +3284,7 @@ async def restore_agent_version(
     """前の版を公開し直し、下書きもその内容にする（#770）。"""
     try:
         agent = runtime_repository.restore_agent_version(
-            agent_id, version, published_by=_actor_display_name(request)
+            agent_id, version, published_by=_actor_login_user_id(request)
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="業務 Agent の版が見つかりません。") from exc
@@ -3319,7 +3332,7 @@ async def delete_agent(
         await run_in_threadpool(get_security_service().remove_agent_assignments, agent_id)
     except Exception:
         logger.warning("agent_role_assignment_cleanup_failed", extra={"agent_id": agent_id})
-    return ApiResponse(data=AgentsData(agents=runtime_repository.list_agents()))
+    return ApiResponse(data=await _agents_data(runtime_repository.list_agents()))
 
 
 def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettings:
@@ -4014,7 +4027,8 @@ def _policy_has_roles(policy: ActorPolicy, allowed_roles: set[str]) -> bool:
     return "admin" in policy.roles or bool(policy.roles.intersection(allowed_roles))
 
 
-def _actor_display_name(connection: object) -> str:
+def _actor_login_user_id(connection: object) -> str:
+    """版の公開者として記録するログイン ID。画面は一覧の応答の表示名で出す（#1696）。"""
     principal = _request_principal(connection)
     return principal.login_user_id if principal is not None else "anonymous"
 

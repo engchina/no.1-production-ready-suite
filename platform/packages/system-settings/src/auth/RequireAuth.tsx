@@ -92,7 +92,18 @@ export function sidebarRoleNames(
 }
 
 /**
- * `SidebarAccountFooter` に渡す値（表示名・ロール・パスワード変更・ログアウト）を作る（#220）。
+ * アカウント欄の 1 行目。ログイン ID（code）を出す。ほかの画面は表示名を出す（#1696）。
+ * ログインの無い local（debug）はログイン ID が固定の記号なので、表示名（「ローカル利用者」など）を出す。
+ */
+export function sidebarAccountName(
+  user: Pick<BaseCurrentUser, "login_user_id" | "display_name" | "debug_mode">
+): string {
+  if (user.debug_mode) return user.display_name;
+  return user.login_user_id.trim() || user.display_name;
+}
+
+/**
+ * `SidebarAccountFooter` に渡す値（ログイン ID・ロール名・パスワード変更・ログアウト）を作る（#220・#1696）。
  * 未ログインなら null。ログアウト後はログイン画面へ移す。
  */
 export function useSidebarAccount({
@@ -112,7 +123,7 @@ export function useSidebarAccount({
   const passwordChangeActive =
     pathname === routes.passwordChange || pathname.startsWith(`${routes.passwordChange}/`);
   return {
-    name: user.display_name,
+    name: sidebarAccountName(user),
     roles,
     rolesLabel: formatMessage(m.sidebarRoles, { roles }),
     debugMode: user.debug_mode,

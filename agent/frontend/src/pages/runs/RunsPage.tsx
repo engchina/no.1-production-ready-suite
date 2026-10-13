@@ -117,7 +117,8 @@ export function RunsPage() {
     onSuccess: (run) => {
       toast.success(t("run.createdToast"));
       setSelectedRunId(run.id);
-      queryClient.setQueryData<{ runs: RunState[] }>(["runs"], (current) => ({
+      queryClient.setQueryData<{ runs: RunState[]; user_display_names?: Record<string, string> }>(["runs"], (current) => ({
+        ...current,
         runs: [run, ...(current?.runs ?? []).filter((item) => item.id !== run.id)],
       }));
       editor.openItem(run.id, { replace: true });
@@ -160,7 +161,8 @@ export function RunsPage() {
         toast.info(t("approval.changedDuringReview"));
       }
       // 返却値を先に反映し、再取得を待つ間の二重判断を防ぐ。
-      queryClient.setQueryData<{ runs: RunState[] }>(["runs"], (current) => ({
+      queryClient.setQueryData<{ runs: RunState[]; user_display_names?: Record<string, string> }>(["runs"], (current) => ({
+        ...current,
         runs: (current?.runs ?? []).map((run) => (run.id === updatedRun.id ? updatedRun : run)),
       }));
       refreshRunQueries();

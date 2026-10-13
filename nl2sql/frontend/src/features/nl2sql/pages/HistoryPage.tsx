@@ -1,3 +1,4 @@
+import { userDisplayName } from "@production-ready/system-settings";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -65,17 +66,18 @@ function HistoryExecutor({ item, detailed = false }: { item: HistoryItem; detail
   const { user } = useAuth();
   if (!user?.is_system_admin) return null;
   const uuid = item.actor_user_uuid?.trim();
-  const loginId = item.actor_login_user_id?.trim();
-  const name = item.actor_display_name?.trim();
-  const nameIncludesLoginId = name?.startsWith(`${loginId}（`) && name.endsWith("）");
-  const identity = !uuid ? t("history.actor.unrecorded")
-    : loginId ? (name && name !== loginId ? (nameIncludesLoginId ? name : t("history.actor.identity", { name, loginId })) : loginId)
-    : t("history.actor.missing", { uuid });
+  // 実行者は表示名（空ならログイン ID）で出し、UUID は出さない。見つからない利用者は削除済みの文言（#1696）。
+  const identity = !uuid
+    ? t("history.actor.unrecorded")
+    : userDisplayName(
+        { display_name: item.actor_display_name, login_user_id: item.actor_login_user_id },
+        t("history.actor.missing")
+      );
+  const resolved = Boolean(uuid && (item.actor_display_name?.trim() || item.actor_login_user_id?.trim()));
   return (
     <span className="grid min-w-0 gap-1 text-sm leading-relaxed text-fg [overflow-wrap:anywhere]" data-testid="history-executor">
       <span>{t("history.actor.label")}: {identity}</span>
-      {detailed && uuid && loginId && <span className="text-fg-muted">{t("history.actor.uuid", { uuid })}</span>}
-      {detailed && loginId && <span className="text-fg-muted">{t("history.actor.hint")}</span>}
+      {detailed && resolved && <span className="text-fg-muted">{t("history.actor.hint")}</span>}
     </span>
   );
 }

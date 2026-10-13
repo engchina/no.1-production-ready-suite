@@ -489,7 +489,7 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
   allowUsersSuccess = true;
   await retry.press("Enter");
 
-  await expect(page.getByRole("button", { name: "migration.recovered を表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "復旧確認ユーザー を表示" })).toBeVisible();
   await expect(initialError).toHaveCount(0);
   expect(userRequests).toBeGreaterThanOrEqual(2);
 
@@ -507,7 +507,7 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
     .getByRole("alert")
     .filter({ hasText: "users-migration-refresh-request" });
   await expect(refreshError).toBeVisible();
-  await expect(page.getByRole("button", { name: "migration.recovered を表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "復旧確認ユーザー を表示" })).toBeVisible();
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 812 });
@@ -584,7 +584,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
   await lastUserRow.locator("td").nth(1).click();
   await expect(lastUserRow).toHaveAttribute("data-selected", "true");
   await expect(
-    page.getByRole("heading", { name: lastUser.login_user_id, exact: true })
+    page.getByRole("heading", { name: lastUser.display_name, exact: true })
   ).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 

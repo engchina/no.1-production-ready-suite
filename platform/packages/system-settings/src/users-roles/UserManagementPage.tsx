@@ -23,6 +23,7 @@ import {
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  RowTitleButton,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -51,6 +52,7 @@ import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
+import { userDisplayName } from "./userDisplayName";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
@@ -60,8 +62,6 @@ import {
   SecuritySearchField,
   SecurityClearSearchAction,
   describeErrorMessageOnly,
-  SecurityIdentityRowTitleButton,
-  identitySecondaryName,
   isAbortError,
   mapFieldErrors,
   nextUserRoleIds,
@@ -275,8 +275,8 @@ export function UserManagementPage({
       .sort((left, right) => {
         if (sort.key === "roles") return compareText(roleSummary(left), roleSummary(right), sort.direction);
         if (sort.key === "status") return compareText(userStatusLabel(left), userStatusLabel(right), sort.direction);
-        // 1 列目は ID を主表示するため、ID で並べる。
-        return compareText(left.login_user_id, right.login_user_id, sort.direction);
+        // 1 列目は表示名を出すため、表示名で並べる（#1696）。
+        return compareText(userDisplayName(left), userDisplayName(right), sort.direction);
       });
   }, [roleSummary, search, sort, users]);
 
@@ -626,10 +626,7 @@ export function UserManagementPage({
     if (
       !(await confirm({
         title: t("security.users.delete"),
-        description: t("security.users.deleteConfirm", {
-          name: user.display_name,
-          id: user.login_user_id,
-        }),
+        description: t("security.users.deleteConfirm", { name: userDisplayName(user) }),
         confirmLabel: t("common.delete"),
         tone: "danger",
         dismissOnOverlay: false,
@@ -654,7 +651,7 @@ export function UserManagementPage({
       setFieldErrors({});
       setCopyPasswordError("");
       setResetPasswordError(null);
-      toast.success(t("security.users.deleteSuccess", { name: user.display_name }));
+      toast.success(t("security.users.deleteSuccess", { name: userDisplayName(user) }));
     } catch (cause) {
       setActionError(
         cause instanceof Error && cause.message.trim()
@@ -745,11 +742,11 @@ export function UserManagementPage({
       render: (user) => {
         const selected = visibleSelectedId === user.user_uuid;
         return (
-          <SecurityIdentityRowTitleButton
-            id={user.login_user_id}
-            name={user.display_name}
+          // 表示名だけを出す。ログイン ID は詳細の「ログインユーザーID」の項目に出す（#1696）。
+          <RowTitleButton
+            title={userDisplayName(user)}
             current={selected}
-            aria-label={t("security.users.showUser", { name: user.login_user_id })}
+            aria-label={t("security.users.showUser", { name: userDisplayName(user) })}
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
@@ -897,7 +894,7 @@ export function UserManagementPage({
                     selectUser(user.user_uuid);
                   }}
                   getRowKey={(user) => user.user_uuid}
-                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.login_user_id }) })}
+                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: userDisplayName(user) }) })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
                   scrollAriaLabel={t("security.common.listScrollLabel", {
@@ -1157,18 +1154,15 @@ function UserDetailPanel({
           <div className="flex flex-wrap items-center gap-2">
             <h2 id="security-users-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
               <UserRound size={20} aria-hidden="true" />
-              <span className="min-w-0 break-all font-mono">{user.login_user_id}</span>
+              <span className="min-w-0 break-words">{userDisplayName(user)}</span>
             </h2>
             <UserStatusBadges user={user} />
           </div>
-          {identitySecondaryName(user.login_user_id, user.display_name) ? (
-            <p className="mt-1 break-words text-xs text-fg-muted">{user.display_name}</p>
-          ) : null}
         </div>
         {canManage ? (
           <ObjectActionBar
             actions={actions}
-            ariaLabel={`${t("security.common.actions")}: ${user.login_user_id}`}
+            ariaLabel={`${t("security.common.actions")}: ${userDisplayName(user)}`}
             testId="security-users-detail-actions"
           />
         ) : null}
