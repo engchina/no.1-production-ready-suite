@@ -81,6 +81,8 @@ export function GuidedClarificationPanel({
   // 「確認を中止して閉じる」で中止済み、または要件を反映した（閉じた）session は中止しない。
   const releasedRef = useRef(false);
   const mountedRef = useRef(false);
+  // session を作った時の利用者の質問（サーバーの `original_question`。生成のときに照らし合わせる。#1727）。
+  const sessionQuestionRef = useRef("");
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
@@ -104,6 +106,7 @@ export function GuidedClarificationPanel({
     setStartPhase("prepare_questions");
     // 作成の request は中断しない。送った後に中断すると、サーバーに作られた session の ID が
     // 分からず中止できないため、応答を待ってから中止する。
+    sessionQuestionRef.current = question;
     const created = await createQuerySession({
       question,
       profile_id: targetProfileId,
@@ -119,7 +122,8 @@ export function GuidedClarificationPanel({
     sessionRef.current = created;
     setRecommendation(null);
     setError("");
-    // 確認が要らない（聞くことが無い）ときは、聞かずに反映して質問の欄へ入れる（チャットと同じ。#1715）。
+    // 確認が要らない（聞くことが無い）ときは、聞かずに反映して次の SQL の生成に渡す（チャットと同じ。#1715）。
+    // 質問の欄は書き換えない（#1727）。
     await proceed(created, applyToGeneration, () => !signal.aborted);
   };
 
@@ -205,12 +209,13 @@ export function GuidedClarificationPanel({
 
   /**
    * 確定した要件を次の SQL の生成に渡す（この画面の行き先。チャットはすぐ SQL を生成）。質問の欄は利用者の入力の
-   * まま（#1727）。session が覚えている利用者の質問（サーバーが生成のときに照らし合わせる文）を渡す。
+   * まま（#1727）。session を作った利用者の質問（サーバーが生成のときに `original_question` と照らし合わせる文）を
+   * 渡す。
    */
   function applyToGeneration(applied: QuerySession) {
     releasedRef.current = true;
     onApplyRequirement(
-      applied.original_question ?? question,
+      sessionQuestionRef.current || question,
       applied.requirement?.clarified_question_ja?.trim() ?? "",
       applied.profile_id,
       applied.id
