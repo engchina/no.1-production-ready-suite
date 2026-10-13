@@ -120,6 +120,19 @@ class _TargetObjectCursor:
                 for row in rows
                 if str(row[0] or "").upper() not in self._pool.oracle_maintained_owners
             ]
+        if self._pool.apply_prefix_filters:
+            # SQL のシステムテーブルの接頭辞の除外（#1708）を再現する。
+            excluded_prefixes = [
+                prefix
+                for prefix in ("NL2SQL_", "PLATFORM_", "RAG_", "AGENT_")
+                if f"UPPER(O.OBJECT_NAME) NOT LIKE '{prefix.replace('_', chr(92) + '_')}%'"
+                in upper_sql
+            ]
+            rows = [
+                row
+                for row in rows
+                if not str(row[1] or "").upper().startswith(tuple(excluded_prefixes))
+            ]
         allowed_owners = {
             str(value).upper()
             for key, value in binds.items()
@@ -192,8 +205,10 @@ class _TargetObjectPools:
         column_rows: list[tuple[Any, ...]] | None = None,
         oracle_maintained_owners: set[str] | None = None,
         count_result: int | None = None,
+        apply_prefix_filters: bool = True,
     ) -> None:
         self.object_rows = object_rows
+        self.apply_prefix_filters = apply_prefix_filters
         self.column_rows = column_rows or []
         self.oracle_maintained_owners = {
             owner.upper() for owner in (oracle_maintained_owners or set())
@@ -414,8 +429,81 @@ def test_target_objects_exclude_system_objects_and_allowlist_owners() -> None:
     sql = pool.executed[0][0]
     assert "JOIN ALL_USERS u" in sql
     assert "NVL(u.oracle_maintained, 'N') = 'N'" in sql
-    assert "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'" in sql
+    for prefix in ("NL2SQL", "PLATFORM", "RAG", "AGENT"):
+        assert f"UPPER(o.object_name) NOT LIKE '{prefix}\\_%' ESCAPE '\\'" in sql
     assert "o.owner IN (:owner_0, :owner_1, :owner_2)" in sql
+
+
+def test_target_objects_fill_page_with_views_after_system_tables() -> None:
+    """共通基盤・他製品のシステムテーブルが多くても、1 ページ目に view まで届く（#1708）。
+
+    以前は `PLATFORM_` / `RAG_` / `AGENT_` を SQL で除かず、取った行から Python で落としていたため、
+    1 ページ目が業務の表 3 件だけになり、後ろに並ぶ view が次のページに回っていた。
+    """
+
+    system_rows = [
+        ("ADMIN", f"{prefix}{index:02d}", "TABLE", 0, "")
+        for prefix in ("AGENT_RUNS_", "PLATFORM_USERS_", "RAG_CHUNKS_")
+        for index in range(20)
+    ]
+    business_rows = [
+        ("ADMIN", "DEPARTMENT", "TABLE", 5, ""),
+        ("ADMIN", "EMPLOYEE", "TABLE", 20, ""),
+        ("ADMIN", "PROJECT", "TABLE", 8, ""),
+        ("ADMIN", "V_DEPT_PROJECT", "VIEW", None, ""),
+        ("ADMIN", "V_EMP_DEPT", "VIEW", None, ""),
+    ]
+    rows = sorted([*system_rows, *business_rows], key=lambda row: (row[0], row[1]))
+    pool = _TargetObjectPools(object_rows=rows, count_result=len(business_rows))
+    service = _target_object_service(_settings(), pool)
+
+    page = service.target_objects(limit=50, include_counts=True)
+    items = cast(list[dict[str, object]], page["items"])
+
+    assert [(item["qualified_name"], item["object_type"]) for item in items] == [
+        ("ADMIN.DEPARTMENT", "TABLE"),
+        ("ADMIN.EMPLOYEE", "TABLE"),
+        ("ADMIN.PROJECT", "TABLE"),
+        ("ADMIN.V_DEPT_PROJECT", "VIEW"),
+        ("ADMIN.V_EMP_DEPT", "VIEW"),
+    ]
+    assert page["next_cursor"] is None
+    assert page["total"] == len(business_rows)
+    page_sql = pool.executed[0][0]
+    count_sql = pool.executed[1][0]
+    assert "SELECT COUNT(*)" in count_sql
+    for sql in (page_sql, count_sql):
+        for prefix in ("NL2SQL", "PLATFORM", "RAG", "AGENT"):
+            assert f"UPPER(o.object_name) NOT LIKE '{prefix}\\_%' ESCAPE '\\'" in sql
+
+
+def test_target_objects_cursor_continues_past_rows_hidden_in_python() -> None:
+    """Python の可視性の判定で落とした行がページの末尾に続いても、次のページへ進める（#1708）。"""
+
+    pool = _TargetObjectPools(
+        object_rows=[
+            ("APP", "ORDERS", "TABLE", 1, ""),
+            ("APP", "PLATFORM_A", "TABLE", 0, ""),
+            ("APP", "PLATFORM_B", "TABLE", 0, ""),
+            ("APP", "PLATFORM_C", "TABLE", 0, ""),
+            ("APP", "V_ORDERS", "VIEW", None, ""),
+        ],
+        # SQL の除外が効かない行（カタログの名前の揺れなど）を Python だけが落とす場合を再現する。
+        apply_prefix_filters=False,
+    )
+    service = _target_object_service(_settings(), pool)
+
+    first = service.target_objects(limit=3)
+    assert [item["qualified_name"] for item in cast(list[dict[str, object]], first["items"])] == [
+        "APP.ORDERS"
+    ]
+    assert first["next_cursor"]
+
+    second = service.target_objects(limit=3, cursor=cast(str, first["next_cursor"]))
+    assert [item["qualified_name"] for item in cast(list[dict[str, object]], second["items"])] == [
+        "APP.V_ORDERS"
+    ]
+    assert second["next_cursor"] is None
 
 
 def test_target_object_detail_returns_columns_from_live_metadata() -> None:

@@ -200,6 +200,26 @@ export function SearchableSelectField({
     });
   }, [open, active, popoverTop]);
 
+  // 続きはスクロールか最後の候補からの ↓ で読むが、読み込んだ候補が一覧の高さに満たないと一覧がスクロールせず、
+  // マウスでは続きに届かない（サーバーが短いページを返したとき。#1708）。そのときは続きを自動で読む。
+  // 読み込み中・検索中は待ち、続きが無くなるか一覧があふれたら止まる。続きを読んでも候補が増えなければ
+  // 自動ではもう読まない（サーバーが続きを返さないときに繰り返さない。↓ では読める）。
+  const remoteHasMore = Boolean(remote?.hasMore);
+  const remoteLoadingMore = Boolean(remote?.loadingMore);
+  const autoLoadedCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!open || searching) {
+      autoLoadedCountRef.current = null; // 閉じた・検索し直したら、新しい一覧として数え直す
+      return;
+    }
+    if (!remoteHasMore || remoteLoadingMore || autoLoadedCountRef.current === visible.length) return;
+    const listbox = listboxRef.current;
+    if (listbox && listbox.scrollHeight - listbox.clientHeight > LOAD_MORE_THRESHOLD_PX) return;
+    autoLoadedCountRef.current = visible.length;
+    // remote.onLoadMore は呼び出し側で毎回作り直されうるので、依存に入れない。
+    remote?.onLoadMore();
+  }, [open, remoteHasMore, remoteLoadingMore, searching, visible.length]);
+
   function openPopover() {
     if (disabled) return;
     revealActiveRef.current = true;

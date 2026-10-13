@@ -7,7 +7,8 @@ from .models import SchemaCatalog, SchemaObjectPage
 _SYSTEM_OBJECT_NAME_MARKERS = frozenset({"$", "#"})
 # 3 製品は同じ schema を共有する（#212）。共通基盤（PLATFORM_: 認証テーブルなど）と他製品の
 # テーブル（RAG_ / AGENT_）も業務データではないため、業務ユーザーの対象一覧に出さない。
-_SYSTEM_OBJECT_NAME_PREFIXES = ("NL2SQL_", "PLATFORM_", "RAG_", "AGENT_")
+# 一覧を SQL で絞る呼び出し側（Deep Data Security の対象の一覧など）も同じ接頭辞を使う（#1708）。
+SYSTEM_OBJECT_NAME_PREFIXES = ("NL2SQL_", "PLATFORM_", "RAG_", "AGENT_")
 # 上の判定で拒否したときの文言。NL2SQL の表だけでなく共通基盤・他製品の表と Oracle の内部 object も
 # 対象なので、「NL2SQL のシステム object」とだけ書かない（#933）。
 SYSTEM_OBJECT_BLOCKED_MESSAGE = (
@@ -15,6 +16,21 @@ SYSTEM_OBJECT_BLOCKED_MESSAGE = (
     "名前に $ / # を含む Oracle の内部 object は業務データではないため、ここでは扱えません。"
     "NL2SQL_ の表はシステムテーブル管理から管理します。"
 )
+
+
+def system_object_prefix_sql_filters(column_sql: str) -> tuple[str, ...]:
+    """`SYSTEM_OBJECT_NAME_PREFIXES` の object を SQL で除く条件（AND でつなぐ断片）を返す。
+
+    一覧を SQL でページング・件数取得するときは、取った後に Python で落とさず SQL で除く。
+    後から落とすと 1 ページが数件になり、件数（total）もずれる（#1708）。
+    `column_sql` は固定の列の式（例: ``o.object_name``）だけを渡す（利用者の入力を渡さない）。
+    大文字小文字は `is_user_visible_object_name` と同じく区別しない。
+    """
+
+    return tuple(
+        f"UPPER({column_sql}) NOT LIKE '{prefix.replace('_', chr(92) + '_')}%' ESCAPE '\\'"
+        for prefix in SYSTEM_OBJECT_NAME_PREFIXES
+    )
 
 
 def _split_identifier_parts(value: str) -> list[str]:
@@ -60,7 +76,7 @@ def _is_user_visible_object_part(object_name: str) -> bool:
     return (
         bool(normalized)
         and not any(marker in normalized for marker in _SYSTEM_OBJECT_NAME_MARKERS)
-        and not normalized.startswith(_SYSTEM_OBJECT_NAME_PREFIXES)
+        and not normalized.startswith(SYSTEM_OBJECT_NAME_PREFIXES)
     )
 
 
