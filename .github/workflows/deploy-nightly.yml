@@ -6,8 +6,9 @@ name: Deploy Nightly
 # Nginx を通した /rag/ /nl2sql/ /agent/ の画面と API の health を確かめる（中身は .github/scripts/deploy-run-through.sh）。
 # PR の CI（Suite / Deploy・Suite / Oracle Linux 9）は fake の command と package の名前の解決までを確かめ、実際の
 # 配備はここで毎晩確かめる（数十分かかるため、PR ではこの workflow と script を変えたときだけ実行する）。
-# 対象外（script の冒頭に理由）: Oracle（DB は無く、system schema の初期化は degraded で進む。DB の結合は
-# Integration Nightly）・SELinux（container では無効。enforcing の context は実機で確かめる）・OCI の network と公開 IP・
+# 対象外（script の冒頭に理由）: Oracle（DB は無く、system schema の初期化は degraded で進む。suite-init.sh の最後の
+# schema の確認は SUITE_CHECK_SCHEMA=skip で飛ばし、verify で CLI が「DB に繋がらない」を返すことだけを確かめる（#1656）。
+# DB の結合は Integration Nightly）・SELinux（container では無効。enforcing の context は実機で確かめる）・OCI の network と公開 IP・
 # git の更新の経路。
 # 失敗（job の時間切れを含む）は ci-failure-issue.yml が Issue にする（workflow 名は同じファイルの workflows と
 # そろえる）。job 名の " / " の前は Issue の製品の label になる（Suite は platform）。

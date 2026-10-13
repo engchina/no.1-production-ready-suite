@@ -14,6 +14,9 @@
 #     （#1648）。init_script.sh は表の初期化に失敗しても backend を起動する（画面から直せる）ため、health だけでは
 #     OK に見える。NG なら CLI の要約（状態・不足・前回の失敗の ORA コード）と、権限の不足の手がかりを出す。
 #     テストは suite_run_schema_check を差し替える（DB に繋がらない）。
+#     SUITE_CHECK_SCHEMA=skip のときだけ schema の確認を飛ばし、製品ごとに skipped の行を出す（#1656）。DB の無い
+#     配備の通し（CI の Deploy Nightly。.github/scripts/deploy-run-through.sh）用で、運用者が使う設定ではない。
+#     既定（未設定）は確かめる。
 #
 # log は呼び出し元の関数（既定 log。SUITE_HEALTH_LOG で関数名を変えられる）で出す。
 # 製品の init_script.sh は、配備した repository の platform/deploy/ からこのファイルを source する（製品は単独では
@@ -32,6 +35,8 @@ SUITE_CHECK_INTERVAL_SECONDS="${SUITE_CHECK_INTERVAL_SECONDS:-3}"
 SUITE_CHECK_JOURNAL_LINES="${SUITE_CHECK_JOURNAL_LINES:-80}"
 # system schema の確認（#1648）: 1 製品の CLI の上限の秒数と、製品の init の log の場所。
 SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS="${SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS:-120}"
+# schema の確認を飛ばす（skip だけを認める。CI の DB の無い配備の通し用。#1656）。既定は確かめる。
+SUITE_CHECK_SCHEMA="${SUITE_CHECK_SCHEMA:-check}"
 SUITE_PRODUCT_LOG_DIR="${SUITE_PRODUCT_LOG_DIR:-/var/log}"
 SUITE_UNIT_PATTERN="production-ready-*.service"
 SUITE_TLS_RENEW_SERVICE="production-ready-suite-tls-renew.service"
@@ -247,7 +252,7 @@ _suite_check_schema() {
 suite_check_deployment() {
   local base="$1"
   shift
-  local start="${SECONDS}" line unit product
+  local start="${SECONDS}" line unit product schema_note="system schema が ready です"
   declare -gA _SUITE_CHECK_RESTARTS=() _SUITE_CHECK_CHANGED_AT=()
   _SUITE_CHECK_SETTLE="${SUITE_CHECK_SETTLE_SECONDS}"
   _suite_health_log "check: 配備を確かめます（製品 $*、上限 ${SUITE_CHECK_TIMEOUT_SECONDS} 秒）。"
@@ -259,14 +264,22 @@ suite_check_deployment() {
     sleep "${SUITE_CHECK_INTERVAL_SECONDS}"
   done
   # system schema は待たずに 1 回だけ確かめる（backend は起動時に DDL を実行しないので、待っても変わらない）。
-  for product in "$@"; do
-    _suite_check_schema "${product}"
-  done
+  # SUITE_CHECK_SCHEMA=skip（CI の DB の無い配備の通し。#1656）は確かめずに skipped の行だけを出す。
+  if [ "${SUITE_CHECK_SCHEMA}" = "skip" ]; then
+    schema_note="system schema の確認は飛ばしました（SUITE_CHECK_SCHEMA=skip）"
+    for product in "$@"; do
+      _SUITE_CHECK_LINES+=("check: ${product} schema skipped（SUITE_CHECK_SCHEMA=skip）")
+    done
+  else
+    for product in "$@"; do
+      _suite_check_schema "${product}"
+    done
+  fi
   for line in "${_SUITE_CHECK_LINES[@]}"; do
     _suite_health_log "${line}"
   done
   if [ "${_SUITE_CHECK_OK}" = "true" ]; then
-    _suite_health_log "check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答し、system schema が ready です）。"
+    _suite_health_log "check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答し、${schema_note}）。"
     return 0
   fi
   for unit in "${_SUITE_CHECK_BAD_UNITS[@]}"; do

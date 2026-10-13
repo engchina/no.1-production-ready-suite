@@ -286,6 +286,30 @@ fake_sleep() {
   grep -qF '[suite-init] check: rag schema NG（確認の CLI が要約を出さずに終わりました（終了コード 1。' "${out}" \
     || fail "要約の無い失敗の行: $(cat "${out}")"
 
+  # SUITE_CHECK_SCHEMA=skip（CI の DB の無い配備の通し。#1656）: CLI を呼ばず、製品ごとに skipped の行を出して成功する。
+  suite_run_schema_check() { printf 'schema-check %s\n' "$1" >> "${calls}"; return 1; }
+  : > "${out}"
+  : > "${calls}"
+  SUITE_CHECK_SCHEMA=skip SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag nl2sql \
+    || fail "schema の確認を飛ばしたのに失敗した: $(cat "${out}")"
+  [ ! -s "${calls}" ] || fail "skip なのに schema の CLI を呼んだ: $(cat "${calls}")"
+  for expected in \
+    '[suite-init] check: rag schema skipped（SUITE_CHECK_SCHEMA=skip）' \
+    '[suite-init] check: nl2sql schema skipped（SUITE_CHECK_SCHEMA=skip）'; do
+    grep -qxF "${expected}" "${out}" || fail "skipped の行（${expected}）: $(cat "${out}")"
+  done
+  tail -n 1 "${out}" | grep -qF 'check: OK（' || fail "最後の行が OK ではない: $(tail -n 1 "${out}")"
+  tail -n 1 "${out}" | grep -qF 'system schema の確認は飛ばしました（SUITE_CHECK_SCHEMA=skip）' \
+    || fail "OK の行に skip を書かない: $(tail -n 1 "${out}")"
+  # skip 以外の値と既定（未設定）は確かめる（本番の既定は変えない）。
+  : > "${out}"
+  : > "${calls}"
+  if SUITE_CHECK_SCHEMA=check SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then
+    fail "skip 以外の値で schema の NG を飛ばした"
+  fi
+  [ "$(cat "${calls}")" = "schema-check rag" ] || fail "skip 以外の値で schema の CLI を呼ばない: $(cat "${calls}")"
+  if grep -qF 'schema skipped' "${out}"; then fail "skip 以外の値で skipped を出した: $(cat "${out}")"; fi
+
   # 本物の suite_run_schema_check: 製品のユーザーで backend の .venv の python の check を実行する。venv が無ければ NG。
   unset -f suite_run_schema_check
   # shellcheck source=../suite-health.sh
