@@ -997,6 +997,42 @@ def test_detail_without_filter_or_limit_needs_no_question() -> None:
     assert not any(item.key.startswith("risk_no_") for item in _items(created))
 
 
+def test_sql_statement_question_is_checked_like_any_question_and_needs_no_question() -> None:
+    """質問が SQL の文でも飛ばさず同じに確かめ、最低限が決まるので質問 0 件で進む（#1727）。
+
+    SQL の文かどうかは判断に使わない（判断は SQL を 1 つに決める最低限の情報があるかだけ）。
+    LLM の指示にも `select * from employee` を質問 0 件の例として入れる。
+    """
+    from app.features.nl2sql.sql_requirement import SYSTEM_PROMPT
+
+    assert "select * from employee" in SYSTEM_PROMPT
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _item(
+                "select_all",
+                "select",
+                "confirmed",
+                label="全列",
+                value="*",
+                columns=[],
+                sql_hint="*",
+            ),
+            clarified="APP.ORDERS の全列の一覧",
+        )
+    )
+    created = _create(_runtime(llm), "select * from orders;")
+    # SQL の文でも LLM で確かめる（飛ばさない）。質問はそのまま LLM に渡す。
+    assert len(llm.calls) == 1
+    assert "select * from orders;" in llm.calls[0]["prompt"]
+    state = _state(created)
+    assert state.unresolved_items == []
+    assert state.current_item is None
+    assert state.status == RequirementPhase.READY
+    assert state.can_apply is True
+    assert state.answered_count == 0
+
+
 def test_join_without_condition_is_confirmed_as_cartesian_risk() -> None:
     llm = _ScriptedLlm(
         _output(
@@ -1369,7 +1405,9 @@ def test_apply_closes_session_and_builds_generation_spec() -> None:
                 free_text="x",
             ),
         )
-    question = _draft(applied).clarified_question_ja
+    # job の質問の文は利用者の質問のまま（入力欄を書き換えない。書き直した文は生成にだけ使う。
+    # #1727）。
+    question = applied.session.original_question
     spec = runtime.applied_requirement_spec(
         created.session.id,
         actor_user_uuid="user-1",
@@ -1643,7 +1681,8 @@ def test_job_request_takes_requirement_only_from_applied_session(
     created = _create(runtime)
     applied = runtime.apply_requirement(created.session.id, RequirementApplyRequest(base_version=1))
     assert applied.session.requirement is not None
-    question = _draft(applied).clarified_question_ja
+    # 画面は入力欄の値（利用者の質問）を送る。確かめた質問の文は生成にだけ使う（#1727）。
+    question = applied.session.original_question
     monkeypatch.setattr(ontology_router_module, "ontology_runtime", runtime)
     principal = SimpleNamespace(user_uuid="user-1", is_system_admin=False)
     forged = SqlRequirementSpec(
@@ -1667,6 +1706,13 @@ def test_job_request_takes_requirement_only_from_applied_session(
     assert resolved.sql_requirement.session_id == created.session.id
     assert resolved.sql_requirement.tables == ["APP.ORDERS"]
     assert resolved.allowed_objects.table_names == ["APP.ORDERS"]
+    assert resolved.question == "出荷済みの受注金額の合計"
+    assert resolved.generation_question == _draft(applied).clarified_question_ja
+    # 確かめた質問の文（書き直した文）を質問として送っても、利用者の質問と違うので受け付けない。
+    rewritten = request.model_copy(update={"question": _draft(applied).clarified_question_ja})
+    with pytest.raises(HTTPException) as raised:
+        nl2sql_router._with_requirement(rewritten, principal)
+    assert raised.value.status_code == 409
 
     changed = request.model_copy(update={"question": "書き換えた質問"})
     with pytest.raises(HTTPException) as raised:
@@ -1843,7 +1889,9 @@ def test_mcp_query_asks_one_question_then_generates_after_answer(
     # 回答で要件を更新し、確かめた要件（書き直した質問の文・構造化した要件・表）で SQL を作る。
     assert len(jobs.started) == 1
     job = jobs.started[0]
-    assert job.question == done["requirement"]["clarified_question"]
+    # job の質問の文は利用者の質問のまま、生成は確かめた質問の文で行う（#1727）。
+    assert job.question == "出荷済みの受注金額の合計"
+    assert job.generation_question == done["requirement"]["clarified_question"]
     assert job.requirement_session_id == requirement["session_id"]
     assert job.sql_requirement is not None
     assert job.sql_requirement.tables == ["APP.ORDERS"]

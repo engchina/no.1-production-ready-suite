@@ -1,20 +1,9 @@
-// AI要件確認（#1439 / #1442）を始めるか・使えるかの判定。SQL 生成の画面（ボタンで開く）とチャット（送信の
-// ときに自動）が同じ関数で決める（#1715。画面ごとの差は入口だけ）。
+// AI要件確認（#1439 / #1442）を使えるか・次にどうするかの判定。SQL 生成の画面（ボタンで開く）とチャット（送信の
+// ときに自動）が同じ関数で決める（#1715。画面ごとの差は入口だけ）。入力が SQL の文かどうかでは分けない
+// （判断は SQL を 1 つに決める最低限の情報があるかだけ。#1727）。
 //
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
 import type { QuerySession } from "./ontology/types";
-import { isSqlStatementInput } from "./sqlInput.ts";
-
-/** AI要件確認をしない理由（`sql_statement`: 質問が SQL の文そのもので、確かめることが無い）。 */
-export type RequirementCheckSkipReason = "sql_statement";
-
-/**
- * 質問で AI要件確認を飛ばすか（飛ばす理由。確かめるなら null）。チャットは確かめずに SQL を作り、SQL 生成の画面は
- * 「AI要件確認」を押せなくして理由を出す。LLM は呼ばない。
- */
-export function requirementCheckSkipReason(question: string): RequirementCheckSkipReason | null {
-  return isSqlStatementInput(question) ? "sql_statement" : null;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -34,7 +23,7 @@ export function isRequirementCheckUnavailable(error: unknown): boolean {
  * session の次の扱い。
  *
  * - `direct`: 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない）。
- *   聞かずに反映して次へ進む（チャットは SQL を作り、SQL 生成の画面は質問の欄へ反映する）。
+ *   聞かずに反映して次へ進む（チャットは SQL を作り、SQL 生成の画面は次の SQL の生成に渡す。どちらも利用者の質問は書き換えない。#1727）。
  * - `applied`: 反映済み（反映の後、次へ進む前に画面を離れた）。そのまま次へ進む。
  * - `ask`: 確認の質問がある・答えられない・最低の基準を満たさない（1 問ずつ聞く・知らせる）。
  * - `summary`: 全部に答えた。まとめ（再検査・SQL の骨組み）を確かめてから次へ進む。

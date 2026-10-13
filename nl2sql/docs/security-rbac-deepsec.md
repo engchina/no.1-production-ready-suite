@@ -170,8 +170,9 @@ platform の `docs/backend-standard.md`「製品間の連携（MCP とサービ�
 `nl2sql_query` は SQL を作る前に AI要件確認（`POST /api/nl2sql/query-sessions` の guided と同じ。#1441）を行い、確認の要る項目があれば
 `status=needs_clarification` と `requirement.question` を返す（ジョブは作らない）。続きの `requirement_session_id` は本人の session だけで、
 業務プロファイルは同じ `profile_id` に限る。業務プロファイルは呼び出し元が `profile_id` で明示して選ぶため、画面の推薦の確認（確認の token）は
-求めない。OCI Enterprise AI を設定していない構成（`REQUIREMENT_AI_NOT_CONFIGURED`）と、質問が SQL の文（SELECT / WITH で始まる 1 文。#1715）の
-ときは確かめずにジョブを作り、`requirement.status=skipped` を返す。AI要件確認の LLM の失敗（`REQUIREMENT_AI_FAILED` /
+求めない。OCI Enterprise AI を設定していない構成（`REQUIREMENT_AI_NOT_CONFIGURED`）の
+ときは確かめずにジョブを作り、`requirement.status=skipped` を返す（質問が SQL の文でも飛ばさずに同じに確かめる。#1727）。
+ジョブの `question` は利用者の質問のままにし、確かめた質問の文は生成にだけ使う（#1727）。AI要件確認の LLM の失敗（`REQUIREMENT_AI_FAILED` /
 `REQUIREMENT_AI_INVALID_OUTPUT`）は、`structuredContent` の `details` に失敗の種類・HTTP ステータス・モデル ID・所要時間・request id を添える（#1715）。
 
 `menu.query` はすべてのツールを使える。`menu.direct_sql` だけのロールはどのツールも使えない

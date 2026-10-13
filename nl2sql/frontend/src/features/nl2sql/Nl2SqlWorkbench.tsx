@@ -9,6 +9,7 @@ import {
   useConfirm,
   ActionResultRegion,
   TimedLoadingState,
+  Disclosure,
   DisclosureChevron,
   FieldActionRow,
   InfoTip,
@@ -75,7 +76,6 @@ import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
 import { useSelectAiCredentialReadiness } from "./useSelectAiCredentialReadiness";
 import { prefillFromSearchParams } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
-import { requirementCheckSkipReason } from "./requirementCheck";
 import { profileDisplayLabel } from "./profileDisplay";
 import type {
   HistoryData,
@@ -236,10 +236,11 @@ function ExecutableNl2SqlWorkbench() {
   const [importingSample, setImportingSample] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [guidedClarificationOpen, setGuidedClarificationOpen] = useState(false);
-  // AI要件確認で反映した要件（#1439）。質問の文と業務プロファイルが反映した時のままなら、
-  // job の作成で session の ID を送り、サーバーが構造化した要件を SQL の生成に渡す。
+  // AI要件確認で反映した要件（#1439）。質問の文（利用者の入力）と業務プロファイルが確かめた時のままなら、
+  // job の作成で session の ID を送り、サーバーが構造化した要件と確かめた質問の文を SQL の生成に渡す。
+  // 確かめた質問の文（clarifiedQuestion）は要件の表示にだけ出し、質問の欄は書き換えない（#1727）。
   const [appliedRequirement, setAppliedRequirement] = useState<
-    { sessionId: string; question: string; profileId: string } | null
+    { sessionId: string; question: string; clarifiedQuestion: string; profileId: string } | null
   >(null);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const schemaDetailRequests = useRef(new Set<string>());
@@ -1012,29 +1013,30 @@ function ExecutableNl2SqlWorkbench() {
     setGuidedClarificationOpen(false);
     void submit({ closingClarification: true });
   };
-  // 質問が SQL の文なら AI要件確認は要らない（チャットと同じ判定。LLM を呼ばない。#1715）。
-  const guidedClarificationSkipReason = requirementCheckSkipReason(question);
-  // 「AI要件確認」を押せない理由（未入力・SQL の文）。操作前の案内なので赤いエラーにしない。
-  const guidedClarificationHintId = !question.trim()
-    ? "nl2sql-guided-query-required"
-    : guidedClarificationSkipReason
-      ? "nl2sql-guided-sql-input"
-      : undefined;
+  // 「AI要件確認」を押せない理由（未入力）。操作前の案内なので赤いエラーにしない。質問が SQL の文でも押せる
+  // （利用者の明示の操作なので確かめる。SQL の文で確認を飛ばすのはチャットの送信だけ。#1727）。
+  const guidedClarificationHintId = !question.trim() ? "nl2sql-guided-query-required" : undefined;
 
-  const handleApplyClarifiedQuestion = useCallback((clarifiedQuestion: string, confirmedProfileId: string, sessionId: string): boolean => {
+  // AI要件確認で確定した要件を SQL の生成に渡す（#1439）。利用者が入力した質問（質問の欄の値）は書き換えない
+  // （#1727。確認が要らずに聞かずに反映したときも同じ）。確かめた質問の文は要件の表示に出し、生成にだけ使う。
+  const handleApplyRequirement = useCallback((
+    sourceQuestion: string,
+    clarifiedQuestion: string,
+    confirmedProfileId: string,
+    sessionId: string,
+  ): boolean => {
     if (confirmedProfileId !== profileId) {
-      // Profile ごとの草稿を先に書き、切替時の復元が確認結果を上書きしないようにする。
-      if (!writeDraft(`question:${confirmedProfileId}`, clarifiedQuestion)) {
+      // 業務プロファイルの草稿へ、利用者の質問をそのまま先に書く（切替時の復元が質問の欄を別の文にしない）。
+      if (!writeDraft(`question:${confirmedProfileId}`, sourceQuestion)) {
         setActionError(t("workspace.storageFailed"));
         return false;
       }
       setProfileId(confirmedProfileId);
-    } else {
-      setQuestion(clarifiedQuestion);
     }
     setAppliedRequirement({
       sessionId,
-      question: clarifiedQuestion.trim(),
+      question: sourceQuestion.trim(),
+      clarifiedQuestion: clarifiedQuestion.trim(),
       profileId: confirmedProfileId,
     });
     setRewriteData(null);
@@ -1042,15 +1044,10 @@ function ExecutableNl2SqlWorkbench() {
     setGuidedClarificationOpen(false);
     toast.success(t("nl2sql.clarification.applied"));
     requestAnimationFrame(() => {
-      const textarea = questionTextareaRef.current;
-      if (!textarea) return;
-      textarea.focus({ preventScroll: true });
-      const caret = clarifiedQuestion.length;
-      textarea.setSelectionRange(caret, caret);
-      textarea.scrollTop = textarea.scrollHeight;
+      questionTextareaRef.current?.focus({ preventScroll: true });
     });
     return true;
-  }, [profileId, setProfileId, setQuestion, writeDraft]);
+  }, [profileId, setProfileId, writeDraft]);
 
   return (
     <>
@@ -1336,7 +1333,7 @@ function ExecutableNl2SqlWorkbench() {
                             engine={engine}
                             allowedObjects={toAllowedObjects(selection)}
                             onClose={() => setGuidedClarificationOpen(false)}
-                            onApplyQuestion={handleApplyClarifiedQuestion}
+                            onApplyRequirement={handleApplyRequirement}
                             onSkip={skipGuidedClarification}
                           />
                         ) : (
@@ -1346,9 +1343,7 @@ function ExecutableNl2SqlWorkbench() {
                               variant="secondary"
                               size="md"
 
-                              disabled={
-                                !question.trim() || active || !profileSelectionReady || Boolean(guidedClarificationSkipReason)
-                              }
+                              disabled={!question.trim() || active || !profileSelectionReady}
                               aria-describedby={guidedClarificationHintId}
                               onClick={() => {
                                 setActionError("");
@@ -1367,24 +1362,36 @@ function ExecutableNl2SqlWorkbench() {
                         )}
                         {appliedRequirement && !guidedClarificationOpen ? (
                           requirementActive ? (
-                            <div
-                              className="flex flex-wrap items-center gap-2"
-                              data-testid="nl2sql-requirement-active"
-                            >
-                              <StatusBadge
-                                variant="info"
-                                label={t("nl2sql.clarification.requirementActive")}
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                icon={X}
-                                disabled={active}
-                                onClick={() => setAppliedRequirement(null)}
-                              >
-                                {t("nl2sql.clarification.requirementRemove")}
-                              </Button>
+                            <div className="grid gap-1" data-testid="nl2sql-requirement-active">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  variant="info"
+                                  label={t("nl2sql.clarification.requirementActive")}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  icon={X}
+                                  disabled={active}
+                                  onClick={() => setAppliedRequirement(null)}
+                                >
+                                  {t("nl2sql.clarification.requirementRemove")}
+                                </Button>
+                              </div>
+                              {/* 確かめた質問の文は質問の欄に入れず、ここに出す（チャットの回答と同じ畳んだ詳細。#1727）。 */}
+                              {appliedRequirement.clarifiedQuestion ? (
+                                <Disclosure
+                                  variant="plain"
+                                  size="sm"
+                                  summary={t("chat.requirement.applied")}
+                                  summaryProps={{ "data-testid": "nl2sql-requirement-question" }}
+                                >
+                                  <p className="break-words text-sm leading-6 text-fg">
+                                    {appliedRequirement.clarifiedQuestion}
+                                  </p>
+                                </Disclosure>
+                              ) : null}
                             </div>
                           ) : (
                             <p
@@ -1399,15 +1406,6 @@ function ExecutableNl2SqlWorkbench() {
                         {!question.trim() && !guidedClarificationOpen ? (
                           <p id="nl2sql-guided-query-required" className="text-xs leading-5 text-fg-muted">
                             {t("nl2sql.clarification.queryRequired")}
-                          </p>
-                        ) : null}
-                        {guidedClarificationSkipReason && !guidedClarificationOpen ? (
-                          <p
-                            id="nl2sql-guided-sql-input"
-                            className="text-xs leading-5 text-fg-muted"
-                            data-testid="nl2sql-guided-sql-input"
-                          >
-                            {t("nl2sql.clarification.sqlInput")}
                           </p>
                         ) : null}
                         {engine === "select_ai" && (

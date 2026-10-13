@@ -80,7 +80,6 @@ import {
   type ChatJobRequest,
   type ChatRequirementCheck,
 } from "./chatRequirement";
-import { requirementCheckSkipReason } from "./requirementCheck";
 import { JobFailureBody } from "./components/JobFailureBody";
 import {
   useProfileUsageContext,
@@ -544,12 +543,6 @@ export function SqlChatPage() {
     const sent = createOptimisticChatMessage(question);
     const check: ChatRequirementCheck = { request, sentAtMs: sent.sentAtMs, sessionId: "" };
     setDraft("");
-    // 質問が SQL の文なら確かめることが無いので、要件の検査（LLM）をせずに SQL を作る（SQL 生成の画面と同じ
-    // 判定。#1715）。
-    if (requirementCheckSkipReason(question)) {
-      submitJob(check, null);
-      return;
-    }
     setRequirementCheck(check);
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
