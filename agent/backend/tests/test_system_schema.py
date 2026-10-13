@@ -39,6 +39,7 @@ from app.system_schema import (
     MIGRATIONS,
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
+    RETIRED_TABLES_APPROVAL,
     RUN_FACTS_STATEMENTS,
     RUNTIME_STATEMENTS,
     SystemSchemaError,
@@ -379,8 +380,10 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     manager = _manager(database)
     status = manager.status()
     assert status["status"] == "partial"
+    # 台帳が無いので、廃止した表の削除も別に承認を求める（#1648）。
     assert [item["name"] for item in status["pending_destructive_migrations"]] == [
-        "20261002_003_retire_role_business_views"
+        "20261002_003_retire_role_business_views",
+        RETIRED_TABLES_APPROVAL,
     ]
     assert status["retired_objects"] == [
         {"name": "AGENT_ROLE_BUSINESS_VIEWS", "object_type": "TABLE"}
@@ -399,6 +402,43 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     # 廃止した権限コードだけを消す。
     assert database.role_permissions == {("role-a", "menu.runs")}
     assert set(database.migrations) == {migration.name for migration in MIGRATIONS}
+
+
+def test_retired_table_without_ledger_is_not_dropped_without_approval() -> None:
+    """台帳の無い schema の廃止した表は、missing でも承認が無ければ消さない（#1648）。"""
+    database = _FakeDatabase()
+    database.table("AGENT_ROLE_BUSINESS_VIEWS")
+    manager = _manager(database)
+
+    status = manager.status()
+    assert status["status"] == "missing"
+    approvals = status["pending_destructive_migrations"]
+    assert [item["name"] for item in approvals] == [RETIRED_TABLES_APPROVAL]
+    assert "AGENT_ROLE_BUSINESS_VIEWS" in approvals[0]["description"]
+
+    with pytest.raises(SystemSchemaError) as refused:
+        manager.initialize()
+    assert refused.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") in database.objects
+    assert not any(item.startswith("DROP") for item in database.executed)
+
+    result = manager.initialize(allow_destructive=True)
+    assert result["status"] == "ready"
+    assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
+
+
+def test_retired_table_with_ledger_is_dropped_as_agent_owned() -> None:
+    """台帳に記録があれば Agent が作った表として、承認なしに消す（#1648）。"""
+    database = _FakeDatabase()
+    manager = _manager(database)
+    manager.initialize()
+    database.table("AGENT_ROLE_BUSINESS_VIEWS")
+
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert status["pending_destructive_migrations"] == []
+    assert manager.initialize()["status"] == "ready"
+    assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
 
 
 def test_recreate_requires_confirmation_and_keeps_shared_auth_tables() -> None:
@@ -519,4 +559,36 @@ def test_cli_status_and_initialize(
     assert agent_system_schema.main(["--status"]) == 1
     output = capsys.readouterr().out
     assert "SCHEMA_OPERATION_FAILED" in output
+    assert "secret" not in output
+
+
+def test_cli_check_returns_zero_only_when_ready(
+    monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """配備の確認（#1648）: ready なら 0、それ以外（読めないときも）は 1 と 1 行の要約。"""
+    database = _FakeDatabase()
+    manager = _manager(database)
+    monkeypatch.setattr(agent_system_schema, "system_schema_manager", manager)
+
+    assert agent_system_schema.main(["--check"]) == 1
+    assert capsys.readouterr().out.strip() == "status=missing"
+    manager.initialize()
+    assert agent_system_schema.main(["--check"]) == 0
+    assert capsys.readouterr().out.strip() == "status=ready"
+
+    class _Denied:
+        def status(self) -> dict[str, Any]:
+            raise RuntimeError("ORA-01031: insufficient privileges password=secret")
+
+        def initialize(self, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("ORA-01031: insufficient privileges password=secret")
+
+    monkeypatch.setattr(agent_system_schema, "system_schema_manager", _Denied())
+    assert agent_system_schema.main(["--check"]) == 1
+    output = capsys.readouterr().out
+    assert "ORA-01031" in output
+    assert "secret" not in output
+    assert agent_system_schema.main(["--initialize"]) == 1
+    output = capsys.readouterr().out
+    assert json.loads(output)["error"]["code"] == "ORA-01031"
     assert "secret" not in output

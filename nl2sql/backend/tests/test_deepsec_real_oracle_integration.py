@@ -996,7 +996,6 @@ def test_deepsec_expression_only_isolated_objects() -> None:
     """現行基盤を再構成せず、専用 table/grant のみ作成して実述語を照合する。"""
     import oracledb
 
-    from app.cli.app_security_migrate import split_ddl
     from app.security.deepsec import DEEPSEC_DATA_ROLE, DEEPSEC_DB_ROLE
     from app.security.scope_expression import compile_expression
 
@@ -1156,21 +1155,15 @@ def test_deepsec_expression_only_isolated_objects() -> None:
             cursor.execute(f"SELECT ID FROM {owner}.{department}")
             assert cursor.fetchall() == [("D3",)]
         with service.pools.control_connection() as conn, conn.cursor() as cursor:
-            # 新規 CLOB migration を隔離した旧構造へ適用して 4KB 超の JSON を roundtrip。
+            # migration 004 と同じ SCOPE_EXPRESSION（CLOB）と mode 制約の表を、圧縮表として
+            # 隔離して作り、4KB 超の JSON を roundtrip する（旧形からの ALTER は #1648 で削除）。
             cursor.execute(
-                f"CREATE TABLE {storage}(SCOPE_MODE VARCHAR2(32), CONSTRAINT {check_name} "
-                "CHECK (SCOPE_MODE IN ('ALL','FILTERS'))) "
+                f"CREATE TABLE {storage}(SCOPE_MODE VARCHAR2(32), SCOPE_EXPRESSION CLOB, "
+                f"CONSTRAINT {check_name} "
+                "CHECK (SCOPE_MODE IN ('ALL','COLUMN_EQUALS','FILTERS','EXPRESSION'))) "
                 "COLUMN STORE COMPRESS FOR QUERY HIGH ROW LEVEL LOCKING"
             )
             created.append(storage)
-            migration = (
-                (BACKEND_DIR / "migrations/020_deepsec_scope_expression.sql")
-                .read_text()
-                .replace("NL2SQL_APP_DATA_ENTITLEMENTS", storage)
-                .replace("CK_NL2SQL_APP_DE_SCOPE_MODE", check_name)
-            )
-            for statement in split_ddl(migration):
-                cursor.execute(statement)
             cursor.setinputsizes(payload=oracledb.DB_TYPE_CLOB)
             payload = json.dumps({"root": root, "padding": "x" * 5000}, ensure_ascii=False)
             cursor.execute(

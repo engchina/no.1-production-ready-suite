@@ -169,7 +169,8 @@ def test_nightly_rag_workflow_starts_docling_service_for_strict() -> None:
 
     start = steps["Start Docling parser service"]
     assert strict in start
-    assert "RAG_SERVICES_TORCH: cpu" in start
+    # docling の lock が CPU 版の torch を持つので、置き換えの環境変数は要らない(#1650)。
+    assert "RAG_SERVICES_TORCH" not in start
     assert "timeout-minutes:" in start
     assert "scripts/rag-services.sh sync parser-docling" in start
     assert "scripts/rag-services.sh run parser-docling > artifacts/" in start

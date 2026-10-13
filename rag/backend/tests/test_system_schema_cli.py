@@ -101,3 +101,50 @@ def test_initialize_passes_destructive_approval_only_when_given(
     assert system_schema_cli.main(["initialize", "--allow-destructive"]) == 0
     assert json.loads(capsys.readouterr().out)["operation"] == "migrated"
     assert calls == [{"allow_destructive": False}, {"allow_destructive": True}]
+
+
+def test_check_returns_zero_only_when_ready(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """配備の確認（#1648）: ready なら 0、それ以外は 1 と 1 行の要約（ORA コードを含む）。"""
+
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {"status": "ready", "operation_state": {"status": "idle"}},
+    )
+    assert system_schema_cli.main(["check"]) == 0
+    assert capsys.readouterr().out.strip() == "status=ready"
+
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {
+            "status": "missing",
+            "operation_state": {"status": "failed", "last_error_code": "ORA-01031"},
+        },
+    )
+    assert system_schema_cli.main(["check"]) == 1
+    assert "ORA-01031" in capsys.readouterr().out
+
+    def unavailable() -> dict[str, Any]:
+        raise RuntimeError("ORA-01017: invalid credential secret")
+
+    monkeypatch.setattr(system_schema_manager, "status", unavailable)
+    assert system_schema_cli.main(["check"]) == 1
+    output = capsys.readouterr().out
+    assert "ORA-01017" in output
+    assert "secret" not in output
+
+
+def test_initialize_reports_ora_code_for_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """lease の前の失敗（制御テーブルの作成の権限不足など）も ORA コードを出す（#1648）。"""
+
+    def initialize(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("ORA-01031: insufficient privileges")
+
+    monkeypatch.setattr(system_schema_manager, "initialize", initialize)
+    assert system_schema_cli.main(["initialize"]) == 1
+    assert json.loads(capsys.readouterr().err)["error_code"] == "ORA-01031"

@@ -117,6 +117,8 @@ fake_sleep() {
   journal="${task_dir}/journal.log"
   log() { printf '[suite-init] %s\n' "$*" >> "${out}"; }
   journalctl() { printf 'journalctl %s\n' "$*" >> "${journal}"; }
+  # system schema の確認（#1648）は DB に繋がないよう差し替える（3. で詳しく確かめる）。
+  suite_run_schema_check() { printf 'status=ready\n'; }
   fake_sleep
   SUITE_CHECK_TIMEOUT_SECONDS=30
   states_file="${task_dir}/states"
@@ -165,7 +167,10 @@ fake_sleep() {
     '[suite-init] check: rag backend OK / services 2/2 active / nginx OK' \
     '[suite-init] check: nl2sql backend OK / services 2/2 active / nginx OK' \
     '[suite-init] check: agent backend OK / services 1/1 active / nginx OK' \
-    '[suite-init] check: nginx.service active（https://127.0.0.1:443）'; do
+    '[suite-init] check: nginx.service active（https://127.0.0.1:443）' \
+    '[suite-init] check: rag schema OK（status=ready）' \
+    '[suite-init] check: nl2sql schema OK（status=ready）' \
+    '[suite-init] check: agent schema OK（status=ready）'; do
     grep -qxF "${expected}" "${out}" || fail "OK の要約（${expected}）: $(cat "${out}")"
   done
   if grep -q "tls-renew" "${out}"; then fail "証明書の更新の oneshot を確かめた"; fi
@@ -208,6 +213,129 @@ fake_sleep() {
   grep -qxF '[suite-init] check: rag backend OK / services 2/2 active / nginx NG' "${out}" || fail "Nginx の NG: $(cat "${out}")"
   grep -qxF '[suite-init] check: nginx.service NG（inactive）' "${out}" || fail "Nginx の状態: $(cat "${out}")"
   grep -qxF "journalctl -u nginx.service -n 80 --no-pager" "${journal}" || fail "Nginx の journal: $(cat "${journal}")"
+)
+
+# 2b. system schema の確認（#1648）: init_script.sh は表の初期化に失敗しても backend を起動する（health は OK）。
+#     schema の CLI の check が ready でなければ check を NG にし、要約・初期化の log の最後の ORA・権限の手がかりを出して
+#     非 0 で終わる。schema の確認は待たずに 1 回だけ。CLI は製品のユーザーで backend の .venv の python で実行する。
+(
+  # shellcheck source=../suite-nginx.sh
+  source "${repo}/platform/deploy/suite-nginx.sh"
+  # shellcheck source=../suite-health.sh
+  source "${repo}/platform/deploy/suite-health.sh"
+  out="${task_dir}/schema.log"
+  calls="${task_dir}/schema-calls.log"
+  log() { printf '[suite-init] %s\n' "$*" >> "${out}"; }
+  journalctl() { :; }
+  fake_sleep
+  systemctl() {
+    case "$1" in
+      list-unit-files)
+        printf '%s\n' "production-ready-rag-backend.service enabled enabled" \
+          "production-ready-nl2sql-backend.service enabled enabled"
+        ;;
+      is-active) printf 'active\n' ;;
+      show) printf '0\n' ;;
+    esac
+  }
+  curl() { return 0; }
+  SUITE_PRODUCT_LOG_DIR="${task_dir}/var-log"
+  mkdir -p "${SUITE_PRODUCT_LOG_DIR}"
+  printf '%s\n' '[nl2sql-init] Initializing NL2SQL system schema with an idempotent migration.' \
+    '{"error":{"code":"ORA-01031","message":"システムテーブル操作に失敗しました（DatabaseError）。"},"ok":false}' \
+    > "${SUITE_PRODUCT_LOG_DIR}/nl2sql-init.log"
+  suite_run_schema_check() {
+    printf 'schema-check %s\n' "$1" >> "${calls}"
+    case "$1" in
+      nl2sql)
+        printf 'log line\nstatus=missing・操作 failed・前回の操作の失敗 ORA-01031\n'
+        return 1
+        ;;
+      *) printf 'status=ready\n' ;;
+    esac
+  }
+  : > "${out}"
+  : > "${calls}"
+  start="${SECONDS}"
+  if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag nl2sql; then
+    fail "schema が NG なのに成功した: $(cat "${out}")"
+  fi
+  [ "${SECONDS}" -eq "${start}" ] || fail "service が OK なのに schema の NG で待った（$((SECONDS - start)) 秒）"
+  [ "$(cat "${calls}")" = "$(printf 'schema-check rag\nschema-check nl2sql')" ] || fail "schema の確認は製品ごとに 1 回: $(cat "${calls}")"
+  for expected in \
+    '[suite-init] check: rag backend OK / services 1/1 active / nginx OK' \
+    '[suite-init] check: nl2sql backend OK / services 1/1 active / nginx OK' \
+    '[suite-init] check: rag schema OK（status=ready）' \
+    '[suite-init] check: nl2sql schema NG（status=missing・操作 failed・前回の操作の失敗 ORA-01031）' \
+    "[suite-init] check: nl2sql の初期化の log（${SUITE_PRODUCT_LOG_DIR}/nl2sql-init.log）の最後のエラー: ORA-01031"; do
+    grep -qxF "${expected}" "${out}" || fail "schema の NG の行（${expected}）: $(cat "${out}")"
+  done
+  grep -qF 'check: nl2sql の DB ユーザー（PLATFORM_ORACLE_USER）の権限が足りない可能性があります。terraform/README.md' "${out}" \
+    || fail "権限の不足の手がかり: $(cat "${out}")"
+  if grep -qF 'check: rag の DB ユーザー' "${out}"; then fail "OK の製品に手がかりを出した"; fi
+  tail -n 1 "${out}" | grep -q "check: NG" || fail "最後の行が NG ではない: $(tail -n 1 "${out}")"
+
+  # 時間切れ（timeout の 124）と、要約を出さない失敗。
+  suite_run_schema_check() { return 124; }
+  : > "${out}"
+  if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then fail "時間切れで成功した"; fi
+  grep -qxF '[suite-init] check: rag schema NG（確認が 120 秒以内に終わりません）' "${out}" || fail "時間切れの行: $(cat "${out}")"
+  suite_run_schema_check() { return 1; }
+  : > "${out}"
+  if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then fail "要約の無い失敗で成功した"; fi
+  grep -qF '[suite-init] check: rag schema NG（確認の CLI が要約を出さずに終わりました（終了コード 1。' "${out}" \
+    || fail "要約の無い失敗の行: $(cat "${out}")"
+
+  # SUITE_CHECK_SCHEMA=skip（CI の DB の無い配備の通し。#1656）: CLI を呼ばず、製品ごとに skipped の行を出して成功する。
+  suite_run_schema_check() { printf 'schema-check %s\n' "$1" >> "${calls}"; return 1; }
+  : > "${out}"
+  : > "${calls}"
+  SUITE_CHECK_SCHEMA=skip SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag nl2sql \
+    || fail "schema の確認を飛ばしたのに失敗した: $(cat "${out}")"
+  [ ! -s "${calls}" ] || fail "skip なのに schema の CLI を呼んだ: $(cat "${calls}")"
+  for expected in \
+    '[suite-init] check: rag schema skipped（SUITE_CHECK_SCHEMA=skip）' \
+    '[suite-init] check: nl2sql schema skipped（SUITE_CHECK_SCHEMA=skip）'; do
+    grep -qxF "${expected}" "${out}" || fail "skipped の行（${expected}）: $(cat "${out}")"
+  done
+  tail -n 1 "${out}" | grep -qF 'check: OK（' || fail "最後の行が OK ではない: $(tail -n 1 "${out}")"
+  tail -n 1 "${out}" | grep -qF 'system schema の確認は飛ばしました（SUITE_CHECK_SCHEMA=skip）' \
+    || fail "OK の行に skip を書かない: $(tail -n 1 "${out}")"
+  # skip 以外の値と既定（未設定）は確かめる（本番の既定は変えない）。
+  : > "${out}"
+  : > "${calls}"
+  if SUITE_CHECK_SCHEMA=check SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then
+    fail "skip 以外の値で schema の NG を飛ばした"
+  fi
+  [ "$(cat "${calls}")" = "schema-check rag" ] || fail "skip 以外の値で schema の CLI を呼ばない: $(cat "${calls}")"
+  if grep -qF 'schema skipped' "${out}"; then fail "skip 以外の値で skipped を出した: $(cat "${out}")"; fi
+
+  # 本物の suite_run_schema_check: 製品のユーザーで backend の .venv の python の check を実行する。venv が無ければ NG。
+  unset -f suite_run_schema_check
+  # shellcheck source=../suite-health.sh
+  source "${repo}/platform/deploy/suite-health.sh"
+  SUITE_REPO_DIR="${task_dir}/suite"
+  APP_USER=opc
+  for product in rag nl2sql agent; do
+    mkdir -p "${SUITE_REPO_DIR}/${product}/backend/.venv/bin"
+    : > "${SUITE_REPO_DIR}/${product}/backend/.venv/bin/python"
+    /bin/chmod 0755 "${SUITE_REPO_DIR}/${product}/backend/.venv/bin/python"
+  done
+  runuser() { printf '%s\n' "$*" >> "${calls}"; printf 'status=ready\n'; }
+  : > "${calls}"
+  [ "$(suite_run_schema_check rag)" = "status=ready" ] || fail "runuser の出力を返さない"
+  suite_run_schema_check nl2sql >/dev/null
+  suite_run_schema_check agent >/dev/null
+  grep -qF -- "-u opc -- env HOME=/home/opc" "${calls}" || fail "製品のユーザーで実行しない: $(cat "${calls}")"
+  for expected in \
+    "cd '${SUITE_REPO_DIR}/rag/backend' && exec timeout 120 .venv/bin/python -m app.rag.system_schema_cli check" \
+    "cd '${SUITE_REPO_DIR}/nl2sql/backend' && exec timeout 120 .venv/bin/python -m app.cli.nl2sql_system_schema --check" \
+    "cd '${SUITE_REPO_DIR}/agent/backend' && exec timeout 120 .venv/bin/python -m app.cli.agent_system_schema --check"; do
+    grep -qF -- "${expected}" "${calls}" || fail "schema の確認の command（${expected}）: $(cat "${calls}")"
+  done
+  rm -rf "${SUITE_REPO_DIR}/agent/backend/.venv"
+  if output="$(suite_run_schema_check agent)"; then fail "venv が無いのに成功した"; fi
+  [ "${output}" = "backend の venv がありません（${SUITE_REPO_DIR}/agent/backend/.venv）" ] || fail "venv が無いときの要約: ${output}"
 )
 
 # 3. suite_local_nginx_base_url: props の HTTPS と port（無ければ HTTPS on・443）。
