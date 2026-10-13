@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
+import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
 
 const frontendPort = process.env.PLAYWRIGHT_PORT ?? "3042";
@@ -22,11 +23,12 @@ export default defineConfig({
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",
   fullyParallel: false,
-  // CI（4 vCPU の runner）は 2 worker で spec のファイル単位で並べる（#1489）。手元は従来どおり 1 worker。
-  workers: process.env.CI ? 2 : 1,
-  // RAG / NL2SQL と同じく CI だけ retries 2（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
+  // CI（4 vCPU の runner）は CI_WORKERS の worker で spec のファイル単位で並べる（#1489・#1593）。手元は従来どおり 1 worker。
+  workers: ciWorkers(1),
+  // RAG / NL2SQL と同じく CI だけ retry する（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
+  // PR は 1、main の push と nightly は 2（#1593。platform/scripts/e2e-impact/ci-run.ts）。
   // retries が無いと trace: "on-first-retry" も記録されない。
-  retries: process.env.CI ? 2 : 0,
+  retries: ciRetries(),
   // CI は失敗・flaky を PR の注釈（github）に、log を dot にし、json は nightly の flaky の一覧に使う
   // （platform/scripts/playwright_report_summary.py。#1591）。
   reporter: process.env.CI

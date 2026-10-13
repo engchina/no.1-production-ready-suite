@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
 
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
@@ -22,11 +23,12 @@ export default defineConfig({
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",
   timeout: 30_000,
-  // CI（4 vCPU の runner）は 2 worker で spec のファイル単位で並べる（#1489）。手元は従来どおり 1 worker。
-  workers: process.env.CI ? 2 : 1,
-  // CI はヘッドレス環境のタイミング差で e2e が稀に flake するため retry する。
+  // CI（4 vCPU の runner）は CI_WORKERS の worker で spec のファイル単位で並べる（#1489・#1593）。手元は従来どおり 1 worker。
+  workers: ciWorkers(1),
+  // CI はヘッドレス環境のタイミング差で e2e が稀に flake するため retry する。PR は 1、main の push と nightly は 2
+  // （#1593。platform/scripts/e2e-impact/ci-run.ts）。
   // retries 未設定だと trace: "on-first-retry" も機能せず、1 件の flake で CI 全体が赤になる。
-  retries: process.env.CI ? 2 : 0,
+  retries: ciRetries(),
   expect: {
     timeout: 5_000,
   },
