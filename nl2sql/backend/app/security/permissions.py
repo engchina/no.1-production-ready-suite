@@ -993,6 +993,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/ontology/revisions/{revision_id}/drafts"): _ONTOLOGY_BUILD,
     ("POST", "/nl2sql/ontology/revisions/{revision_id}/publish"): _ONTOLOGY_BUILD,
     # ---- Oracle への同期 ----
+    # 保存（Oracle 反映）の事前条件（Select AI の Credential が作成済みか。#1683）。
+    ("GET", "/nl2sql/oracle-sync-readiness"): _ORACLE_SYNC,
     ("GET", "/nl2sql/oracle-sync-jobs/{job_id}"): _ORACLE_SYNC,
     ("POST", "/nl2sql/oracle-sync-jobs/{job_id}/retry"): _ORACLE_SYNC,
     # ---- Select AI / Select AI Agent の資産 ----

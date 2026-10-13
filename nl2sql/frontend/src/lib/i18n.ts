@@ -1926,7 +1926,15 @@ const nl2sqlJa = {
   "profiles.oracle.sync.verifyFailed":
     "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
-    "現在の Oracle schema に OCI_CRED がありません。データベース設定で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
+    "現在の Oracle schema に OCI_CRED がありません。運用設定 > Select AI Credential 管理で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
+  "profiles.oracle.sync.credentialMissingBeforeStart":
+    "業務 Profile は保存されましたが、Select AI Credential が無いため Oracle 反映を開始できませんでした。運用設定 > Select AI Credential 管理で作成してから、Oracle 反映を再試行してください。",
+  "profiles.oracle.precondition.credentialMissing.title": "Select AI Credential が作成されていません",
+  "profiles.oracle.precondition.credentialMissing.body":
+    "保存すると、業務プロファイルを DBMS_CLOUD_AI Profile へ反映します。反映には Select AI Credential（{name}）が必要です。運用設定 > Select AI Credential 管理で作成するまで、保存できません。",
+  "profiles.oracle.precondition.credentialMissing.bodyAskAdmin":
+    "保存すると、業務プロファイルを DBMS_CLOUD_AI Profile へ反映します。反映には Select AI Credential（{name}）が必要です。作成するまで保存できません。Select AI Credential 管理の権限を持つ管理者に作成を依頼してください。",
+  "profiles.oracle.precondition.credentialMissing.recheck": "Credential を再確認",
   "profiles.oracle.sync.openSelectAiCredential": "Select AI Credential を開く",
   "profiles.oracle.progress.title": "業務プロファイル保存・Oracle反映",
   "profiles.oracle.progress.stepsLabel": "業務プロファイル保存とOracle反映の処理ステップ",

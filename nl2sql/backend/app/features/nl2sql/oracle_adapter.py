@@ -75,9 +75,10 @@ class SelectAiCredentialMissingError(OracleAdapterError):
     def __init__(self, credential_name: str, schema_name: str) -> None:
         self.credential_name = credential_name
         self.schema_name = schema_name
-        super().__init__(
-            f'Select AI Credential "{schema_name}"."{credential_name}" が存在しません。'
+        qualified = (
+            f'"{schema_name}"."{credential_name}"' if schema_name else f'"{credential_name}"'
         )
+        super().__init__(f"Select AI Credential {qualified} が存在しません。")
 
 
 class SelectAiCredentialExistsError(OracleAdapterError):

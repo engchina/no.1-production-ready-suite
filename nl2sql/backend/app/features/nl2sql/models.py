@@ -2280,6 +2280,16 @@ class ProfileSyncJobData(BaseModel):
     finished_at: str = ""
 
 
+class ProfileSyncReadinessData(BaseModel):
+    """業務 Profile の Oracle 反映（保存）を始める前の事前条件（#1683）。秘密は含めない。"""
+
+    # Oracle runtime で Credential 名が設定されているときだけ、Credential が要る。
+    credential_required: bool = False
+    credential_name: str = ""
+    # USER_CREDENTIALS で確かめた結果。確かめられなかった（DB に接続できない等）ときは None。
+    credential_exists: bool | None = None
+
+
 class SelectAiProfilesExportData(BaseModel):
     """Select AI profiles JSON export response."""
 

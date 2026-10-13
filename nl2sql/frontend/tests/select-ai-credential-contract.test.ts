@@ -60,7 +60,7 @@ test("new Profiles use the Select AI default while existing explicit regions rem
 
 test("credential-missing Profile sync uses one fixed error surface and recovery link", () => {
   assert.match(profileProgressSource, /SELECT_AI_CREDENTIAL_MISSING/u);
-  assert.match(profileProgressSource, /settingsSelectAiCredential/u);
+  assert.match(profileProgressSource, /selectAiCredentialSettingsHref/u);
   assert.match(profileProgressSource, /profiles\.oracle\.sync\.openSelectAiCredential/u);
   assert.doesNotMatch(
     profilePageSource,

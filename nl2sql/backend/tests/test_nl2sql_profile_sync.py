@@ -340,7 +340,8 @@ def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_st
     assert failed.status == ProfileSyncJobStatus.FAILED
     assert failed.error_code == "SELECT_AI_CREDENTIAL_MISSING"
     assert "OCI_CRED" in failed.error_message_ja
-    assert "データベース設定" in failed.error_message_ja
+    # Credential は運用設定の専用の画面で作る（#658）。作る場所を案内する（#1683）。
+    assert "運用設定 > Select AI Credential 管理" in failed.error_message_ja
     assert "ORA-" not in failed.error_message_ja
     retried = sync.retry(failed.job_id)
     assert retried.retry_of_job_id == failed.job_id
@@ -672,3 +673,253 @@ def test_profile_sync_concurrent_claim_only_mutates_oracle_once(
     assert service.oracle_calls == 1
     assert sync.run_persisted(job.job_id).status == ProfileSyncJobStatus.SUCCEEDED
     assert service.oracle_calls == 1
+
+
+# --- 保存（Oracle 反映）の事前条件: Select AI の Credential（#1683） ---------------------------
+
+
+class _CredentialStatusAdapter:
+    """`get_select_ai_credential_status` だけを持つ adapter（USER_CREDENTIALS の結果）。"""
+
+    def __init__(self, *, exists: bool | None) -> None:
+        self.exists = exists
+        self.calls: list[str] = []
+
+    def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
+        self.calls.append(credential_name)
+        if self.exists is None:
+            raise RuntimeError("DPY-6005: cannot connect to database")
+        return "ADMIN", self.exists
+
+
+def _oracle_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        nl2sql_ontology_worker_mode="external",
+        nl2sql_profile_sync_job_timeout_seconds=300.0,
+        nl2sql_runtime_mode="oracle",
+        nl2sql_select_ai_credential_name="oci_cred",
+    )
+
+
+def _credential_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exists: bool | None,
+    settings: Any = _oracle_settings,
+) -> tuple[ProfileSyncService, _FakeProfileService, _CredentialStatusAdapter, Any]:
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", settings)
+    store = InMemoryOntologyStore()
+    service = _FakeProfileService()
+    adapter = _CredentialStatusAdapter(exists=exists)
+    service._oracle_adapter = adapter  # type: ignore[attr-defined]  # noqa: SLF001
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    return sync, service, adapter, store
+
+
+def test_profile_sync_start_without_credential_stops_before_creating_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync, service, adapter, store = _credential_sync(monkeypatch, exists=False)
+
+    readiness = sync.readiness()
+    assert readiness.credential_required is True
+    assert readiness.credential_name == "OCI_CRED"
+    assert readiness.credential_exists is False
+
+    with pytest.raises(SelectAiCredentialMissingError) as exc_info:
+        sync.start(
+            "profile-1",
+            ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+            idempotency_key="no-credential",
+        )
+
+    assert exc_info.value.credential_name == "OCI_CRED"
+    assert exc_info.value.schema_name == "ADMIN"
+    assert adapter.calls == ["OCI_CRED", "OCI_CRED"]
+    # job も Idempotency-Key の予約も作らず、Oracle の反映（CREATE_PROFILE）にも進まない。
+    assert store.list_documents("jobs", {"profile_id": "profile-1"}) == []
+    assert store.get_idempotency("profile_sync", "no-credential") is None
+    assert service.oracle_calls == 0
+
+
+def test_profile_sync_start_with_credential_queues_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync, service, adapter, _store = _credential_sync(monkeypatch, exists=True)
+
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="with-credential",
+    )
+    assert started.status == ProfileSyncJobStatus.QUEUED
+    assert adapter.calls == ["OCI_CRED"]
+    # 同じ要求の再送は受付済みの job を返し、事前条件を確かめ直さない。
+    again = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="with-credential",
+    )
+    assert again.job_id == started.job_id
+    assert adapter.calls == ["OCI_CRED"]
+    completed = sync.run_persisted(started.job_id)
+    assert completed.status == ProfileSyncJobStatus.SUCCEEDED
+    assert service.oracle_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "credential_name"),
+    [("deterministic", "OCI_CRED"), ("oracle", "")],
+    ids=["deterministic-runtime", "credential-name-unset"],
+)
+def test_profile_sync_readiness_skips_credential_check_when_not_referenced(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_mode: str,
+    credential_name: str,
+) -> None:
+    def settings() -> SimpleNamespace:
+        return SimpleNamespace(
+            nl2sql_ontology_worker_mode="external",
+            nl2sql_profile_sync_job_timeout_seconds=300.0,
+            nl2sql_runtime_mode=runtime_mode,
+            nl2sql_select_ai_credential_name=credential_name,
+        )
+
+    sync, _service, adapter, _store = _credential_sync(monkeypatch, exists=False, settings=settings)
+
+    readiness = sync.readiness()
+    assert readiness.credential_required is False
+    assert readiness.credential_exists is None
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key=f"skip-{runtime_mode}",
+    )
+    assert started.status == ProfileSyncJobStatus.QUEUED
+    assert adapter.calls == []
+
+
+def test_profile_sync_credential_status_failure_does_not_block_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync, _service, adapter, _store = _credential_sync(monkeypatch, exists=None)
+
+    readiness = sync.readiness()
+    assert readiness.credential_required is True
+    assert readiness.credential_exists is None
+    # 確かめられないときは止めない（反映の手順が同じ失敗を返す）。
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="status-unavailable",
+    )
+    assert started.status == ProfileSyncJobStatus.QUEUED
+    assert adapter.calls
+
+
+def test_profile_sync_retry_without_credential_stops_before_creating_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync, service, adapter, store = _credential_sync(monkeypatch, exists=True)
+    service.fail_oracle = True
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="retry-credential",
+    )
+    failed = sync.run_persisted(started.job_id)
+    assert failed.status == ProfileSyncJobStatus.FAILED
+
+    adapter.exists = False
+    with pytest.raises(SelectAiCredentialMissingError):
+        sync.retry(failed.job_id)
+    jobs = store.list_documents("jobs", {"profile_id": "profile-1"})
+    assert [document["job_id"] for document in jobs] == [failed.job_id]
+
+
+def test_profile_sync_maps_credential_ora_from_create_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """事前の確認の後に Credential が消えたとき、CREATE_PROFILE の ORA-20004 も同じ案内にする。"""
+
+    class CreateProfileCredentialOraService(_FakeProfileService):
+        def upsert_profile_select_ai_profile(
+            self,
+            profile_id: str,
+            _request: object,
+        ) -> SelectAiDbProfileMutationData:
+            self.oracle_calls += 1
+            # service は OracleAdapterError を warnings に入れた error の結果を返す（実 ADB の文）。
+            return SelectAiDbProfileMutationData(
+                runtime="oracle",
+                executed=False,
+                status="error",
+                profile_name="INVOICE_PROFILE",
+                warnings=[
+                    "Oracle PL/SQL 実行に失敗しました: ORA-20004: Credential "
+                    '"ADMIN"."OCI_CRED" does not exist\nORA-06512: at line 1'
+                ],
+            )
+
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = CreateProfileCredentialOraService()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="credential-ora",
+    )
+
+    failed = sync.run_persisted(started.job_id)
+
+    assert failed.status == ProfileSyncJobStatus.FAILED
+    assert failed.error_code == "SELECT_AI_CREDENTIAL_MISSING"
+    assert "Select AI Credential" in failed.error_message_ja
+    assert "ORA-" not in failed.error_message_ja
+
+
+def test_profile_sync_router_returns_409_without_credential_and_202_with_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.features.nl2sql import profile_sync as profile_sync_module
+    from app.features.nl2sql import router as nl2sql_router
+
+    sync, _service, adapter, _store = _credential_sync(monkeypatch, exists=False)
+    monkeypatch.setattr(profile_sync_module, "profile_sync_service", sync)
+    monkeypatch.setattr(nl2sql_router, "_assert_profile_access", lambda *_a, **_k: None)
+    app = FastAPI()
+    app.include_router(nl2sql_router.router, prefix="/api")
+    app.dependency_overrides[nl2sql_router._require_persistence] = lambda: None  # noqa: SLF001
+    body = {"confirmation": "ADMIN_EXECUTE", "rebuild_agent_assets": False}
+
+    with TestClient(app) as client:
+        readiness = client.get("/api/nl2sql/oracle-sync-readiness")
+        assert readiness.status_code == 200
+        assert readiness.json()["data"] == {
+            "credential_required": True,
+            "credential_name": "OCI_CRED",
+            "credential_exists": False,
+        }
+
+        missing = client.post(
+            "/api/nl2sql/profiles/profile-1/oracle-sync-jobs",
+            json=body,
+            headers={"Idempotency-Key": "router-missing"},
+        )
+        assert missing.status_code == 409
+        assert "SELECT_AI_CREDENTIAL_MISSING" in missing.text
+        assert "Select AI の Credential を先に作成してください" in missing.text
+        assert "ORA-" not in missing.text
+
+        adapter.exists = True
+        created = client.post(
+            "/api/nl2sql/profiles/profile-1/oracle-sync-jobs",
+            json=body,
+            headers={"Idempotency-Key": "router-ready"},
+        )
+        assert created.status_code == 202
+        assert created.json()["data"]["status"] == "queued"

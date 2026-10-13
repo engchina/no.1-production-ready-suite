@@ -133,6 +133,7 @@ from .models import (
     ProfileSummaryPage,
     ProfileSyncJobData,
     ProfileSyncJobRequest,
+    ProfileSyncReadinessData,
     ProfileUpsertRequest,
     ProfileUsageContext,
     QueryResults,
@@ -173,7 +174,11 @@ from .models import (
     normalize_profile_identifier,
     validate_profile_identifier,
 )
-from .oracle_adapter import OracleAdapterError, TabularImportValidationError
+from .oracle_adapter import (
+    OracleAdapterError,
+    SelectAiCredentialMissingError,
+    TabularImportValidationError,
+)
 from .profile_access import (
     allowed_profile_ids_for_request,
     assert_profile_access,
@@ -1215,6 +1220,34 @@ def upsert_profile_select_ai_profile(
         ) from exc
 
 
+def _select_ai_credential_missing_exception(exc: SelectAiCredentialMissingError) -> HTTPException:
+    """Oracle 反映の事前条件（Select AI の Credential）が足りないときの 409（#1683）。"""
+    from .profile_sync import select_ai_credential_missing_message
+
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": exc.code,
+            "message_ja": select_ai_credential_missing_message(exc),
+        },
+    )
+
+
+@router.get(
+    "/oracle-sync-readiness",
+    response_model=ApiResponse[ProfileSyncReadinessData],
+)
+def get_profile_oracle_sync_readiness() -> ApiResponse[ProfileSyncReadinessData]:
+    """業務 Profile の保存（Oracle 反映）の事前条件を返す。
+
+    運用設定の Select AI Credential の画面の権限が無い利用者（業務プロファイルの管理者）でも、
+    保存の前に Credential が作成済みかを知れるようにする（#1683）。秘密は返さない。
+    """
+    from .profile_sync import profile_sync_service
+
+    return ApiResponse(data=profile_sync_service.readiness())
+
+
 @router.post(
     "/profiles/{profile_id}/oracle-sync-jobs",
     response_model=ApiResponse[ProfileSyncJobData],
@@ -1239,6 +1272,8 @@ def create_profile_oracle_sync_job(
                 idempotency_key=idempotency_key,
             )
         )
+    except SelectAiCredentialMissingError as exc:
+        raise _select_ai_credential_missing_exception(exc) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
@@ -1285,6 +1320,8 @@ def retry_profile_oracle_sync_job(
             raise KeyError(job_id)
         _assert_profile_access(request, job.profile_id)
         return ApiResponse(data=profile_sync_service.retry(job_id))
+    except SelectAiCredentialMissingError as exc:
+        raise _select_ai_credential_missing_exception(exc) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=404,
