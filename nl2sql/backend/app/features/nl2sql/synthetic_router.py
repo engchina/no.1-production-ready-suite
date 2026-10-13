@@ -5,6 +5,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pr_backend_core import ApiResponse
 
+from .oracle_adapter import SelectAiCredentialMissingError
+from .select_ai_readiness import (
+    assert_select_ai_credential_ready,
+    select_ai_credential_missing_detail,
+)
 from .synthetic_models import SyntheticApplyRequest, SyntheticRunRequest
 from .synthetic_service import get_synthetic_service
 
@@ -15,7 +20,16 @@ router = APIRouter(prefix="/synthetic-data", tags=["synthetic-data"])
 def create_run(
     req: SyntheticRunRequest, request: Request, response: Response
 ) -> ApiResponse[dict[str, Any]]:
-    run = get_synthetic_service().create(req, getattr(request.state, "principal", None))
+    service = get_synthetic_service()
+    try:
+        # 合成データは業務プロファイルの DBMS_CLOUD_AI Profile（Select AI の Credential を
+        # 参照する）で作る。Credential が無ければ run を作る前に止める（#1688）。
+        assert_select_ai_credential_ready(service.adapter)
+    except SelectAiCredentialMissingError as exc:
+        raise HTTPException(
+            status_code=409, detail=select_ai_credential_missing_detail(exc)
+        ) from exc
+    run = service.create(req, getattr(request.state, "principal", None))
     response.headers["Location"] = f"/api/nl2sql/synthetic-data/runs/{run.run_id}"
     return ApiResponse(data=run.public())
 

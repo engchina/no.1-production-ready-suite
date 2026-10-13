@@ -1939,16 +1939,23 @@ const nl2sqlJa = {
   "profiles.oracle.sync.verifyFailed":
     "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
-    "現在の Oracle schema に OCI_CRED がありません。運用設定 > Select AI Credential 管理で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
+    "現在の Oracle schema に OCI_CRED がありません。運用設定の「Select AI Credential」で作成してから、Oracle 反映を再試行してください。",
   "profiles.oracle.sync.credentialMissingBeforeStart":
-    "業務 Profile は保存されましたが、Select AI Credential が無いため Oracle 反映を開始できませんでした。運用設定 > Select AI Credential 管理で作成してから、Oracle 反映を再試行してください。",
-  "profiles.oracle.precondition.credentialMissing.title": "Select AI Credential が作成されていません",
-  "profiles.oracle.precondition.credentialMissing.body":
-    "保存すると、業務プロファイルを DBMS_CLOUD_AI Profile へ反映します。反映には Select AI Credential（{name}）が必要です。運用設定 > Select AI Credential 管理で作成するまで、保存できません。",
-  "profiles.oracle.precondition.credentialMissing.bodyAskAdmin":
-    "保存すると、業務プロファイルを DBMS_CLOUD_AI Profile へ反映します。反映には Select AI Credential（{name}）が必要です。作成するまで保存できません。Select AI Credential 管理の権限を持つ管理者に作成を依頼してください。",
-  "profiles.oracle.precondition.credentialMissing.recheck": "Credential を再確認",
-  "profiles.oracle.sync.openSelectAiCredential": "Select AI Credential を開く",
+    "業務 Profile は保存されましたが、Select AI Credential が無いため Oracle 反映を開始できませんでした。運用設定の「Select AI Credential」で作成してから、Oracle 反映を再試行してください。",
+  "profiles.oracle.precondition.operation": "業務プロファイルの保存（DBMS_CLOUD_AI Profile への反映）",
+  "selectAiCredential.precondition.title": "Select AI Credential が作成されていません",
+  // 文言の形は DB ゲート（messaging.md §3.4.1）にそろえる: 何が足りないか → 何ができないか →
+  // 「運用設定の「〇〇」で…してから、再試行してください。」/ 開けない利用者は「システム管理者に連絡して、…を依頼してください。」。
+  "selectAiCredential.precondition.message":
+    "{operation}には Select AI Credential（{name}）が必要です。作成するまで{action}できません。運用設定の「Select AI Credential」で作成してから、再試行してください。",
+  "selectAiCredential.precondition.contactAdmin":
+    "{operation}には Select AI Credential（{name}）が必要です。作成するまで{action}できません。システム管理者に連絡して、Select AI Credential の作成を依頼してください。",
+  "selectAiCredential.precondition.open": "Select AI Credential を開く",
+  "selectAiCredential.precondition.operation.generate": "Select AI・Select AI Agent での SQL の生成",
+  "selectAiCredential.precondition.operation.synthetic": "合成データの生成（DBMS_CLOUD_AI）",
+  "selectAiCredential.precondition.action.syntheticStart": "生成を開始",
+  "selectAiCredential.precondition.action.evaluationStart": "評価を開始",
+  "selectAiCredential.precondition.operation.evaluation": "Select AI・Select AI Agent の SQL 生成評価",
   "profiles.oracle.progress.title": "業務プロファイル保存・Oracle反映",
   "profiles.oracle.progress.stepsLabel": "業務プロファイル保存とOracle反映の処理ステップ",
   "profiles.oracle.progress.jobId": "ジョブ {id}",

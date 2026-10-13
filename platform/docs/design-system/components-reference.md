@@ -2173,6 +2173,66 @@ toast.error(apiErrorMessage(error, t("…failed")));
 
 ---
 
+## PreconditionBanner — **新規**（#1688）
+
+**操作の前提（設定・資源）が足りないので、その操作ができない**ことを、操作の区画の先頭に常設で示す warning の Banner。UX 契約 messaging.md §3.4.2 の実装。ページ全体が使えないときは `BlockedPageNotice`（§3.4）、DB の不通は `DatabaseGate` / `DatabaseUnavailableNotice` を使う。
+
+```tsx
+<PreconditionBanner
+  id="profile-save-credential-precondition"
+  title="Select AI Credential が作成されていません"
+  message="業務プロファイルの保存（DBMS_CLOUD_AI Profile への反映）には Select AI Credential（OCI_CRED）が必要です。作成するまで保存できません。運用設定の「Select AI Credential」で作成してから、再試行してください。"
+  settingsLink={canOpen ? { to: "/settings/select-ai-credential", label: "Select AI Credential を開く", icon: FileKey, linkComponent: Link } : undefined}
+  onRetry={recheck}
+  retrying={rechecking}
+/>
+<Button disabled={blocked} aria-describedby={blocked ? "profile-save-credential-precondition" : undefined}>保存</Button>
+```
+
+### PreconditionBanner の props
+
+```ts
+type PreconditionBannerLink = {
+  to: string;
+  /** 「〇〇を開く」（〇〇はサイドナビの表示名）。 */
+  label: string;
+  /** 移動先のナビのアイコン。 */
+  icon: LucideIcon;
+  linkComponent?: ButtonLinkComponent;
+  testId?: string;
+};
+
+type PreconditionBannerProps = {
+  /** 押せなくした操作の aria-describedby に渡す id。 */
+  id?: string;
+  title: string;
+  message: ReactNode;
+  /** 前提を満たす画面を開ける利用者のときだけ渡す。 */
+  settingsLink?: PreconditionBannerLink;
+  onRetry?: () => void;
+  /** 既定「再試行」。 */
+  retryLabel?: string;
+  retrying?: boolean;
+  retryTestId?: string;
+  testId?: string;
+  className?: string;
+};
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| warning の `Banner`（`role="status"`・アイコン付き）。閉じる × は付けない | 失敗ではなく状況（messaging §3.4）。前提を満たすまで残す |
+| 見出しは何が足りないか、本文は「何に要るか → 作るまで何ができないか → 運用設定の「〇〇」で…してから、再試行してください。」 | DB ゲート（§3.4.1）と同じ文の形。押せない理由を常設で示す（README §4「`disabled` のボタンはフォーカスを受けないので、使えない理由は画面の文言で示す」） |
+| 導線は `ButtonLink`（secondary・sm・移動先のナビのアイコン・`ArrowRight`）、続けて「再試行」（secondary・sm・`RefreshCw`） | DB の縮退の Banner と同じ部品と寸法。導線を再試行より前に置く（§3.4.1。Tab 順） |
+| 導線は前提を満たす画面を開ける利用者だけに出す。開けない利用者には本文で「システム管理者に連絡して、…を依頼してください。」 | 押しても開けない導線を出さない（§3.4.1） |
+| 押せなくした操作は `disabled` にし、`id` を `aria-describedby` で結ぶ | 読み上げでも押せない理由が分かる |
+| 「再試行」の `loading` は押したときだけ | 画面のフォーカスでの取り直しで回さない（buttons.md §8） |
+
+- 単体テストは `packages/ui/tests/precondition-banner.test.tsx`。
+- 使う画面: NL2SQL の Select AI Credential の事前条件（業務プロファイルの保存・SQL 生成・チャット・合成データ・SQL 生成評価。`SelectAiCredentialPrecondition`）。
+
+---
+
 ## SaveErrorBanner — **新規**（#585）
 
 ヘッダー（`PageHeader`）に保存がある全画面のエディタで、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、`PageBody` の最初の子に置く。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
