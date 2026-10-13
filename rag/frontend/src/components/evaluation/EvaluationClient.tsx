@@ -977,7 +977,7 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
           {t("evaluation.compare.title")}
         </h2>
         {comparison.best_experiment_id ? (
-          <span className="rounded-full bg-success-subtle px-3 py-1 text-xs font-medium text-success-fg">
+          <span data-surface-tint="success" className="rounded-full bg-success-subtle px-3 py-1 text-xs font-medium text-success-fg">
             {t("evaluation.compare.best")}: {comparison.best_experiment_id}
           </span>
         ) : null}

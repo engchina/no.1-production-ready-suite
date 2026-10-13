@@ -2307,6 +2307,10 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   await expect(page.getByTestId("profile-select-ai-reasoning-note")).toHaveText(
     /Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません/
   );
+  // Region・LLM Model は Select AI 用で、Enterprise AI Direct は既定のテキストモデルを使う（#1684）。
+  await expect(page.getByTestId("profile-select-ai-reasoning-note")).toContainText(
+    "Region・LLM Model は Select AI・Select AI Agent（Oracle の AI profile）にだけ使います。Enterprise AI Direct は、システム設定 › モデル の既定のテキストモデルを使います。"
+  );
 
   await page.setViewportSize({ width: 375, height: 900 });
   const mobileViewport = await page.evaluate(() => ({

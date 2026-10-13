@@ -166,7 +166,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+          <div data-surface-tint="info" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
             <Sparkles size={20} aria-hidden />
           </div>
           <div>

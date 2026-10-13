@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode, useId } from "react";
 
+import { surfaceTintFor } from "../../lib/surface-tint";
 import { cn } from "../../lib/utils";
 
 import { RequiredBadge } from "./required-badge";
@@ -43,6 +44,7 @@ const STATUS_CLASS: Record<ExecutionConfirmationStatus, string> = {
   mismatch: "border-danger-border bg-danger-subtle text-danger-fg",
   pending: "border-border bg-surface text-fg-muted",
 };
+
 
 const PHRASE_TOKEN = "{phrase}";
 
@@ -141,6 +143,7 @@ export function ExecutionConfirmationField({
             {expectedSuffix}
           </span>
           <span
+            data-surface-tint={surfaceTintFor(STATUS_CLASS[status])}
             className={cn(
               "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
               STATUS_CLASS[status]

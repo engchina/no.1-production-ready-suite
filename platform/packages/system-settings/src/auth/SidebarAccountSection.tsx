@@ -35,6 +35,7 @@ export function SidebarAccountSection({ routes, collapsed: collapsedPreference, 
       notice={
         account.debugMode ? (
           <div
+            data-surface-tint="warning"
             className={cn(
               "flex min-h-9 items-center gap-2 rounded-md border border-warning-border bg-warning-subtle text-warning-fg",
               collapsed ? "justify-center px-1" : "px-2 py-1.5"

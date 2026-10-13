@@ -1714,6 +1714,7 @@ function FeedbackHistoryRow({
 }) {
   return (
     <button
+      data-surface-tint={selected ? "accent" : undefined}
       type="button"
       data-testid="feedback-history-row"
       aria-current={selected ? "true" : undefined}
@@ -1749,7 +1750,7 @@ function FeedbackHistoryRow({
         </span>
       </span>
       {item.feedback_comment && (
-        <span className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-fg">
+        <span data-surface-tint="accent" className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-fg">
           {item.feedback_comment}
         </span>
       )}

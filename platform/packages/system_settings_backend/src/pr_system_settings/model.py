@@ -45,6 +45,11 @@ from fastapi import APIRouter, HTTPException, params
 from pr_backend_core.schemas import ApiResponse
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
+from .enterprise_ai_errors import (
+    classify_enterprise_ai_http_failure,
+    enterprise_ai_failure_actions,
+    enterprise_ai_http_status_from_message,
+)
 from .env_file import write_env_values
 
 logger = logging.getLogger(__name__)
@@ -1787,6 +1792,25 @@ def _model_test_troubleshooting(
                 " embedding/rerank 呼び出しを許可しているか確認してください。",
             ]
         )
+    http_status = (
+        enterprise_ai_http_status_from_message(raw_error)
+        if target_type in {"enterprise_text", "enterprise_vision"}
+        else None
+    )
+    if http_status is not None:
+        # Enterprise AI の HTTP の失敗は、3 製品で共通の対応表で案内する（#1684。OCI の 404 は
+        # 「モデルが無い」ではなく API key の認可の失敗で、モデルが無いときは 400 になる）。
+        tips.extend(
+            enterprise_ai_failure_actions(
+                classify_enterprise_ai_http_failure(http_status, raw_error)
+            )
+        )
+        if any(token in lowered for token in ("timeout", "timed out")):
+            tips.append(
+                "タイムアウトです。ネットワーク経路を確認し、"
+                "必要ならタイムアウト秒数を一時的に長くしてください。"
+            )
+        return list(dict.fromkeys(tips))
     if any(token in lowered for token in ("401", "unauthorized", "authentication")):
         tips.append(
             "認証エラーです。API key / OCI config の資格情報を再発行または再保存してください。"
@@ -1798,8 +1822,9 @@ def _model_test_troubleshooting(
         )
     if any(token in lowered for token in ("404", "not found")):
         tips.append(
-            "Endpoint、API パス、model ID のいずれかが見つかっていません。"
-            "リージョンと model deployment 名も確認してください。"
+            "Endpoint、API パス、model ID のいずれかが見つからないか、IAM policy が"
+            "この呼び出しを許可していません（OCI は権限の不足も 404 で返します）。"
+            "リージョンと IAM policy も確認してください。"
         )
     if any(token in lowered for token in ("timeout", "timed out")):
         tips.append(

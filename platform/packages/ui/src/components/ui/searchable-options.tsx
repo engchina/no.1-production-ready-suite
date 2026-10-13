@@ -164,6 +164,8 @@ export function SearchableOptionRow({
       role="option"
       aria-selected={selected}
       data-active={active || undefined}
+      // 淡青の面の上の補足（description / meta）を 4.5:1 にする（tokens/colors.css。#1671）。
+      data-surface-tint={selected || active ? "accent" : undefined}
       // 押してもフォーカスは検索欄に残す（aria-activedescendant で強調を伝える）。
       onMouseDown={(event: MouseEvent) => event.preventDefault()}
       // pointerdown で選ぶとタッチで一覧をスクロールしただけで選ばれるため、click で選ぶ。
@@ -202,7 +204,10 @@ export function SearchableOptionRow({
           {option.label}
         </span>
         {option.badge ? (
-          <span className="ml-1.5 inline-block rounded-sm bg-info-subtle px-1 align-middle text-xs font-medium text-accent-fg">
+          <span
+            data-surface-tint="info"
+            className="ml-1.5 inline-block rounded-sm bg-info-subtle px-1 align-middle text-xs font-medium text-accent-fg"
+          >
             {option.badge}
           </span>
         ) : null}

@@ -350,6 +350,7 @@ function BatchUploadFailureList({
                 {item.source_profile.quality_warnings.slice(0, 2).map((warning) => (
                   <span
                     key={warning}
+                    data-surface-tint="warning"
                     className="rounded-full border border-warning-border bg-warning-subtle px-2 py-0.5 text-warning-fg"
                   >
                     {t(sourceWarningKey(warning))}
@@ -522,7 +523,7 @@ function UploadStorageNotice({ canOpenSettings }: { canOpenSettings: boolean }) 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm text-fg md:flex-row md:items-center md:justify-between">
       <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+        <div data-surface-tint="info" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
           {query.data.backend === "oci" ? (
             <Cloud size={20} aria-hidden />
           ) : (

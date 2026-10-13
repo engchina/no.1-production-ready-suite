@@ -3359,7 +3359,7 @@ test("実行エンジンは選び方と各方式を説明し Select AI を既定
   const descriptions = [
     "質問に表や項目の情報を添えて、AI に SQL 生成を依頼します。",
     "AI エージェントが質問を受け取り、用意された SQL 生成ツールを呼び出して SQL を生成します。",
-    "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。",
+    "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。モデルはシステム設定 › モデル の既定のテキストモデルです。",
   ];
   for (const description of descriptions) {
     const text = engineGroup.getByText(description, { exact: true });

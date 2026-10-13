@@ -22,7 +22,7 @@ const nl2sqlJa = {
   "chat.engine.enterprise": "Enterprise AI",
   "chat.engine.selectAi.desc": "Oracle Select AI が、業務プロファイルの表・項目の情報から SQL を生成します。",
   "chat.engine.selectAiAgent.desc": "Select AI Agent が SQL 生成ツールを呼び出して SQL を生成します。業務プロファイルの Select AI Agent の資産の同期が必要です。",
-  "chat.engine.enterprise.desc": "OCI Enterprise AI に表・項目の情報を直接渡して SQL を生成します。",
+  "chat.engine.enterprise.desc": "OCI Enterprise AI に表・項目の情報を直接渡して SQL を生成します。モデルはシステム設定 › モデル の既定のテキストモデルです。",
   "chat.history": "会話の履歴",
   "chat.closeHistory": "会話の履歴を閉じる",
   "chat.new": "新しい会話",
@@ -1198,7 +1198,7 @@ const nl2sqlJa = {
   "nl2sql.engine.selectAi": "Select AI",
   "nl2sql.engine.selectAi.desc": "質問に表や項目の情報を添えて、AI に SQL 生成を依頼します。",
   "nl2sql.engine.direct": "Enterprise AI Direct",
-  "nl2sql.engine.direct.desc": "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。",
+  "nl2sql.engine.direct.desc": "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。モデルはシステム設定 › モデル の既定のテキストモデルです。",
   "nl2sql.engine.select_ai_agent": "Select AI Agent",
   "nl2sql.engine.select_ai": "Select AI",
   "nl2sql.engine.enterprise_ai_direct": "Enterprise AI Direct",
@@ -1641,7 +1641,7 @@ const nl2sqlJa = {
     "上の「AI 構築 → Markdown 下書き確認 → オントロジーを公開」を完了すると、この Profile が許可した表・ビューと公開済みの関係が、関係グラフとしてここに表示されます。",
   "profiles.editor.selectAi": "Select AI 設定",
   "profiles.selectAi.reasoningNote":
-    "Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。seed はこの設定の値を AI profile に入れます。",
+    "Region・LLM Model は Select AI・Select AI Agent（Oracle の AI profile）にだけ使います。Enterprise AI Direct は、システム設定 › モデル の既定のテキストモデルを使います。Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。seed はこの設定の値を AI profile に入れます。",
   "profiles.ontologyBuild.title": "オントロジー構築",
   "profiles.ontologyBuild.hint":
     "スキーマ情報・業務説明・Q/A(質問と正解 SQL)から Markdown 下書きを生成します。公開済み Markdown だけが SQL 生成に使われます。",

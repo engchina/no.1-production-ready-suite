@@ -28,6 +28,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
+from .enterprise_ai_client import (
+    enterprise_ai_configuration_failure_message,
+    find_enterprise_ai_error,
+)
 from .models import (
     AllowedObjects,
     Nl2SqlProfile,
@@ -892,6 +896,13 @@ def call_requirement_llm(
             response_format=requirement_response_format(),
         )
     except Exception as exc:
+        enterprise_error = find_enterprise_ai_error(exc)
+        if enterprise_error is not None and enterprise_error.configuration_error:
+            # 設定の誤り（401 / 403 / 404 / モデルが無い 400）は「もう一度」と案内しない（#1684）。
+            raise RequirementAiUnavailableError(
+                "REQUIREMENT_AI_FAILED",
+                enterprise_ai_configuration_failure_message(enterprise_error, "AI要件確認で "),
+            ) from exc
         raise RequirementAiUnavailableError(
             "REQUIREMENT_AI_FAILED",
             "AI要件確認の LLM の呼び出しに失敗しました。もう一度お試しください。",

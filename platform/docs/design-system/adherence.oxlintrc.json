@@ -153,6 +153,10 @@
           {
             "selector": "JSXAttribute[name.name='textareaClassName'] :matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-/])",
             "message": "複数行の入力欄（TextareaField）の高さを textareaClassName の h-* / min-h-* で決めない。rows で行数を渡す（高さは行数と行の高さで決まり、文字の大きさ・等幅の設定に追従する。docs/design-system/README.md §4「操作部品の高さと幅」、#613 / #800）。伸びすぎを止める max-h-* は使ってよい。"
+          },
+          {
+            "selector": "JSXOpeningElement:not(:has(> JSXAttribute[name.name='data-surface-tint'])):not(:has(> JSXSpreadAttribute)) > JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|\\s)(?:(?:sm|md|lg|xl|2xl|max-(?:sm|md|lg|xl|2xl)|has-\\[[^\\]\\s]*\\]|(?:group-|peer-)?aria-[\\w-]+|(?:group-|peer-)?data-\\[[^\\]\\s]*\\]|(?:group-|peer-)?data-[\\w-]+):)*!?bg-(?:accent-(?:subtle|muted)|(?:info|success|warning|danger)-subtle)(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:(?:sm|md|lg|xl|2xl|max-(?:sm|md|lg|xl|2xl)|has-\\[[^\\]\\s]*\\]|(?:group-|peer-)?aria-[\\w-]+|(?:group-|peer-)?data-\\[[^\\]\\s]*\\]|(?:group-|peer-)?data-[\\w-]+):)*!?bg-(?:accent-(?:subtle|muted)|(?:info|success|warning|danger)-subtle)(?![\\w-])/])",
+            "message": "淡い色の面（bg-accent-subtle / bg-accent-muted / bg-info-subtle / bg-success-subtle / bg-warning-subtle / bg-danger-subtle）を className に持つ要素には、同じ要素に data-surface-tint=\"accent|info|success|warning|danger\"（塗る面の系統。条件で塗るなら同じ条件の式）を付ける。付けないと内側の text-fg-muted・text-accent-fg がライトで 4.5:1 を下回る（tokens/colors.css、docs/design-system/README.md §6「淡い色の面の上の文字」、#1671）。StatusBadge / Banner / Disclosure の tone などの部品で表せるなら部品を使う（部品は自分で付ける）。hover: / focus: だけで塗る面は対象外。"
           }
         ]
       }

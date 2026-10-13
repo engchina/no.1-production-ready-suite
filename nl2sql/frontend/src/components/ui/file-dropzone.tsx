@@ -186,6 +186,15 @@ export function FileDropzone({
       <FieldLabel htmlFor={inputId} label={label} required={required} />
       <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <label
+          data-surface-tint={
+            interactionDisabled
+              ? undefined
+              : isDragActive || (!visibleError && hasSelection)
+                ? "accent"
+                : visibleError
+                  ? "danger"
+                  : undefined
+          }
           htmlFor={inputId}
           data-testid={dataTestId ? `${dataTestId}-dropzone` : undefined}
           data-drag-active={String(isDragActive)}
@@ -211,6 +220,7 @@ export function FileDropzone({
           )}
         >
           <span
+            data-surface-tint="accent"
             className={cn(
               "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
               hasSelection || isDragActive
@@ -234,6 +244,7 @@ export function FileDropzone({
             </span>
           </span>
           <span
+            data-surface-tint={hasSelection ? "accent" : undefined}
             className={cn(
               "inline-block max-w-24 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:max-w-56",
               hasSelection
