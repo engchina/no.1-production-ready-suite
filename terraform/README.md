@@ -233,6 +233,12 @@ Compute には `platform/.env` を 1 つと、製品ごとの `backend/.env` を
 
 変数名の規則と既存環境の移行は [AGENTS.md](../AGENTS.md) の「設定（`.env`）とデータベース object の命名」と各製品の配備ドキュメントを参照してください。
 
+**LLM の出力の上限（#1719）**: 出力の上限は「システム設定 › モデル」の登録モデルごとの「出力の上限（tokens）」（既定 32768、入力の上限以下）です。
+#1719 より前の共通の上限（`llm_max_output_tokens`。既定 1200）は読み捨て、`PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` /
+`_VLM_MAX_OUTPUT_TOKENS` も読みません。既存の環境を更新したら、システム設定 › モデル で各モデルの出力の上限が 32768（以上・入力の上限以下）
+になっていることを確かめて「登録モデル: 保存」で保存し直してください（`model-settings.json` が version 6 になります）。推論のあるモデルは推論の
+token も出力の上限に数えるため、1200 のような小さい値ではコメント管理・AI要件確認などの Structured Outputs が未完了になります。
+
 ### RAG（`deploy_rag`）
 
 RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv の venv + systemd + Nginx）で動かします（#286）。
