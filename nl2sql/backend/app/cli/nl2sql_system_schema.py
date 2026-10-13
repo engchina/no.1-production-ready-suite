@@ -15,6 +15,7 @@ from pr_backend_core.logging import configure_cli_logging
 from pr_system_settings.system_schema import (
     deployment_check_error_summary,
     deployment_check_summary,
+    operation_failure_hint,
     oracle_error_code,
 )
 
@@ -63,18 +64,16 @@ def main() -> int:
         )
         return 2
     except Exception as exc:
-        print(  # noqa: T201
-            _stable_json(
-                {
-                    "error": {
-                        # 権限の不足などは ORA コードを出す（配備の log から辿れる。#1648）。
-                        "code": oracle_error_code(exc),
-                        "message": "システムテーブル操作に失敗しました。",
-                    },
-                    "ok": False,
-                }
-            )
-        )
+        error: dict[str, Any] = {
+            # 権限の不足などは ORA コードを出す（配備の log から辿れる。#1648）。
+            "code": oracle_error_code(exc),
+            "message": "システムテーブル操作に失敗しました。",
+        }
+        # ORA でない失敗（設定の読み込みなど）は secret を含まない手がかりを出す（#1701）。
+        hint = operation_failure_hint(exc)
+        if hint:
+            error["hint"] = hint
+        print(_stable_json({"error": error, "ok": False}))  # noqa: T201
         return 1
 
     print(_stable_json({"data": result, "ok": True}))  # noqa: T201

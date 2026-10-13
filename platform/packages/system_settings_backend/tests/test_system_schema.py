@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from pr_system_settings.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
@@ -36,6 +37,7 @@ from pr_system_settings.system_schema import (
     idle_operation_state,
     inspect_foreign_keys,
     iso_timestamp,
+    operation_failure_hint,
     oracle_error_code,
     orphan_rows_sql,
     require_destructive_migration_confirmation,
@@ -170,13 +172,14 @@ def test_deployment_check_summary_is_ok_only_when_ready_and_idle() -> None:
     assert "承認が要る削除 1 件（003_drop。書き出してから --allow-destructive で初期化）" in summary
 
 
-def test_deployment_check_error_summary_exposes_only_codes() -> None:
+def test_deployment_check_error_summary_exposes_only_codes_or_safe_hint() -> None:
     assert (
         deployment_check_error_summary(RuntimeError("ORA-01017: invalid username/password; secret"))
         == "状態を読めません（ORA-01017）"
     )
+    # ORA でない失敗は手がかり（型と message の 1 行目）を出し、代入の値は伏せる（#1701）。
     assert deployment_check_error_summary(ValueError("password=secret")) == (
-        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ValueError）"
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ValueError: password=***）"
     )
     assert (
         deployment_check_error_summary(SystemSchemaError("SCHEMA_X", "message"))
@@ -1251,3 +1254,58 @@ def test_delete_orphaned_rows_retries_validate_once_and_reports_child_rows() -> 
     assert "別の表の行が参照" in error.value.public_message
     assert blocked.operation_updates[-1] == "failed:ORA-02292"
     assert blocked.foreign_keys["DEMO_ITEMS_PARENT_FK"][1] is False
+
+
+class _ParserSection(BaseModel):
+    adapter_backend: int
+
+
+def test_operation_failure_hint_follows_cause_chain_with_first_lines() -> None:
+    """設定の読み込みの失敗は、外側の message（path）と原因の 1 行目を出す（#1701）。"""
+    try:
+        try:
+            raise ValueError("JSON object ではありません。\n2 行目は出さない")
+        except ValueError as inner:
+            raise ValueError("設定ファイルを読み込めません: /srv/settings.json") from inner
+    except ValueError as exc:
+        hint = operation_failure_hint(exc)
+
+    assert hint == (
+        "ValueError: 設定ファイルを読み込めません: /srv/settings.json"
+        " ← ValueError: JSON object ではありません。"
+    )
+
+
+def test_operation_failure_hint_hides_validation_input_values() -> None:
+    """pydantic の検証エラーは件数と項目の位置だけを出し、値（input_value）は出さない。"""
+    try:
+        _ParserSection.model_validate({"adapter_backend": "top-secret-value"})
+    except ValidationError as exc:
+        hint = operation_failure_hint(exc)
+
+    assert hint == "ValidationError: _ParserSection の検証エラー 1 件（adapter_backend）"
+    assert "top-secret-value" not in (hint or "")
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("api_key=sk-secret-1 を確認", "RuntimeError: api_key=*** を確認"),
+        ("PASSWORD: hunter2", "RuntimeError: PASSWORD: ***"),
+        (
+            "connect https://user:pw@db.example.com/x",
+            "RuntimeError: connect https://***@db.example.com/x",
+        ),
+        ("", "RuntimeError"),
+    ],
+    ids=["assignment", "colon", "url-credential", "empty"],
+)
+def test_operation_failure_hint_masks_secrets(message: str, expected: str) -> None:
+    assert operation_failure_hint(RuntimeError(message)) == expected
+
+
+def test_operation_failure_hint_is_none_for_oracle_errors_and_truncates() -> None:
+    assert operation_failure_hint(RuntimeError("ORA-01031: insufficient privileges")) is None
+    hint = operation_failure_hint(RuntimeError("x" * 1000)) or ""
+    assert hint.endswith("…")
+    assert len(hint) < 400

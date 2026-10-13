@@ -137,6 +137,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     from app.services import control as service_control
 
     monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
+    monkeypatch.setenv("RAG_PARSER_SETTINGS_FILE", str(tmp_path / "parser-settings.json"))
     # 共通 .env（モデルの API key・OCI / DB / 保存先の画面保存先）と RAG の backend/.env
     # （parser の API key・RAG 固有の画面保存先）は tmp へ分離する（#211）。
     monkeypatch.setattr(app_config, "PLATFORM_ENV_FILE", tmp_path / "platform.env")
@@ -260,6 +261,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.app_admin_login_user_password = ""
     settings.app_auth_cookie_secure = False
     settings.model_settings_file = str(tmp_path / "model-settings.json")
+    settings.rag_parser_settings_file = str(tmp_path / "parser-settings.json")
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""
     settings.oci_enterprise_ai_secondary_endpoint = ""

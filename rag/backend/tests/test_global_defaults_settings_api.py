@@ -73,12 +73,12 @@ def test_patch_post_parse_only_persists_env_and_keeps_parser_selection(
 ) -> None:
     """「解析後の処理」だけの保存は .env に書き、解析エンジンの設定を変えない。
 
-    解析エンジンの設定（model-settings.json）には触れない。
+    解析エンジンの設定（parser-settings.json）には触れない。
     """
     settings.rag_vision_enabled = False
     settings.rag_field_extraction_enabled = False
     settings.rag_navigation_summary_enabled = False
-    model_settings_file = Path(settings.model_settings_file)
+    parser_settings_file = app_config.PARSER_SETTINGS_STORE.path(settings)
 
     resp = client.patch(
         "/api/settings/parser-adapters",
@@ -99,8 +99,8 @@ def test_patch_post_parse_only_persists_env_and_keeps_parser_selection(
     assert saved["RAG_VISION_ENABLED"] == "true"
     assert saved["RAG_FIELD_EXTRACTION_ENABLED"] == "false"
     assert saved["RAG_NAVIGATION_SUMMARY_ENABLED"] == "true"
-    # 解析エンジンの共有設定ファイルには触れない。
-    assert not model_settings_file.exists()
+    # 解析エンジンの設定ファイルには触れない。
+    assert not parser_settings_file.exists()
 
 
 def test_patch_post_parse_keeps_unrelated_env_lines(settings: Settings) -> None:
@@ -131,10 +131,11 @@ def test_patch_parser_selection_with_post_parse_saves_both(settings: Settings) -
     assert body["adapter_backend"] == "unstructured"
     assert body["field_extraction_enabled"] is True
     assert settings.rag_field_extraction_enabled is True
-    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
-    assert persisted["parser_adapters"]["adapter_backend"] == "unstructured"
-    # 「解析後の処理」は model-settings.json に書かない（保存先は backend/.env）。
-    assert "field_extraction_enabled" not in persisted["parser_adapters"]
+    parser_file = app_config.PARSER_SETTINGS_STORE.path(settings)
+    persisted = json.loads(parser_file.read_text(encoding="utf-8"))
+    assert persisted["adapter_backend"] == "unstructured"
+    # 「解析後の処理」は parser-settings.json に書かない（保存先は backend/.env）。
+    assert "field_extraction_enabled" not in persisted
     assert dotenv_values(_env_file())["RAG_FIELD_EXTRACTION_ENABLED"] == "true"
 
 

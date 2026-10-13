@@ -1,15 +1,13 @@
 """設定 API のテスト。"""
 
 import asyncio
+import copy
 import hashlib
 import json
 import stat
-import time
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
-from threading import Event
 from types import SimpleNamespace
 from typing import Any
 from zipfile import ZipFile
@@ -20,7 +18,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from pr_system_settings import database as shared_database
 from pr_system_settings import oci_connectivity
-from pr_system_settings.model import ModelSettingsStore, save_model_settings
 from pr_system_settings.model_test_input import MODEL_TEST_IMAGE_BYTES
 from pytest import MonkeyPatch
 
@@ -34,7 +31,7 @@ from app.clients.oracle import (
 )
 from app.config import (
     MODEL_SETTINGS_STORE,
-    PARSER_ADAPTERS_SECTION,
+    PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
     Settings,
     get_settings,
@@ -44,8 +41,6 @@ from app.main import app
 from app.rag import parser_adapter_readiness
 from app.schemas.settings import (
     EnterpriseAiModelSettings,
-    ModelSettingsPayload,
-    ParserAdapterSettingsUpdate,
 )
 from app.services.control import service_runtime_env
 from tests.support import AsgiTestClient
@@ -63,11 +58,16 @@ async def _run_inline(operation: Any) -> Any:
 def _saved_env_value(settings: Settings, name: str) -> str | None:
     """保存された secret。モデルの API key は共通 .env、parser の key は backend/.env。"""
     env_file = (
-        MODEL_SETTINGS_STORE.section_env_file(settings)
+        PARSER_SETTINGS_STORE.env_file(settings)
         if name.startswith("RAG_")
         else MODEL_SETTINGS_STORE.env_file(settings)
     )
     return dotenv_values(env_file).get(name)
+
+
+def _persisted_parser(settings: Settings) -> dict[str, Any]:
+    """「文書解析」で保存した parser-settings.json（共有の model-settings ではない。#1701）。"""
+    return json.loads(PARSER_SETTINGS_STORE.path(settings).read_text(encoding="utf-8"))
 
 
 def _saved_enterprise_ai_api_key(settings: Settings) -> str | None:
@@ -274,8 +274,7 @@ def test_parser_adapter_settings_no_longer_handle_docling_vision(
     assert resp.status_code == 200
     assert "docling_vision_enabled" not in resp.json()["data"]
     assert settings.rag_vision_enabled is False
-    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
-    assert "docling_vision_enabled" not in persisted["parser_adapters"]
+    assert "docling_vision_enabled" not in _persisted_parser(settings)
     assert (
         "docling_vision_enabled" not in client.get("/api/settings/parser-adapters").json()["data"]
     )
@@ -317,9 +316,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     assert settings.rag_parser_docling_enabled is True
     assert settings.rag_parser_mineru_enabled is True
     assert settings.rag_parser_dots_ocr_enabled is False
-    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
-    assert persisted["version"] == 5
-    parser = persisted["parser_adapters"]
+    parser = _persisted_parser(settings)
     assert parser["adapter_backend"] == "mineru"
     assert parser["docling_enabled"] is True
     assert parser["mineru_enabled"] is True
@@ -362,10 +359,11 @@ def test_update_external_parser_connection_retains_and_clears_secret(
     }
     assert "top-secret" not in retained.text
     assert settings.rag_parser_mineru_api_key == "top-secret"
-    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
-    assert persisted["parser_adapters"]["mineru_api_host"] == "https://mineru.example.com"
+    parser = _persisted_parser(settings)
+    assert parser["mineru_api_host"] == "https://mineru.example.com"
     # parser の API key も JSON ではなく .env に保存する（#106）。
-    assert "mineru_api_key" not in persisted["parser_adapters"]
+    assert "mineru_api_key" not in parser
+    assert "top-secret" not in PARSER_SETTINGS_STORE.path(settings).read_text(encoding="utf-8")
     assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "top-secret"
 
     cleared = client.patch(
@@ -381,27 +379,24 @@ def test_update_external_parser_connection_retains_and_clears_secret(
     assert "top-secret" not in cleared.text
 
 
-def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_it(
+def test_parser_settings_file_reloads_in_worker_and_model_save_does_not_touch_it(
     monkeypatch: MonkeyPatch,
 ) -> None:
+    """文書解析の設定は parser-settings.json に保存し、共有の model-settings に書かない(#1701)。"""
     settings = get_settings()
-    settings_file = Path(settings.model_settings_file)
+    model_file = Path(settings.model_settings_file)
+    parser_file = PARSER_SETTINGS_STORE.path(settings)
     monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://existing.example.com")
     settings.set_runtime_enterprise_ai_api_key("existing-model-secret")
     worker_settings = Settings(
         _env_file=None,
-        model_settings_file=str(settings_file),
+        rag_parser_settings_file=str(parser_file),
         rag_parser_adapter_backend="local",
         rag_parser_dots_ocr_api_host="",
-        rag_parser_dots_ocr_api_key="",
     )
     # 別 worker は別プロセスなので、読込状態を持つ store も別になる。
-    worker_store = ModelSettingsStore(
-        resolve_path=lambda current: Path(current.model_settings_file),
-        env_file=lambda current: MODEL_SETTINGS_STORE.env_file(current),
-        sections=(PARSER_ADAPTERS_SECTION,),
-        section_env_file=lambda current: MODEL_SETTINGS_STORE.section_env_file(current),
-    )
+    worker_store = copy.copy(PARSER_SETTINGS_STORE)
+    worker_store.reset()
     worker_store.load(worker_settings)
 
     response = client.patch(
@@ -421,103 +416,31 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     )
 
     assert response.status_code == 200
-    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert (
-        persisted["enterprise_ai"]["connections"][0]["endpoint"] == "https://existing.example.com"
-    )
-    # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
-    assert "api_key" not in persisted["enterprise_ai"]
-    assert _saved_enterprise_ai_api_key(settings) == "existing-model-secret"
+    assert not model_file.exists()
+    assert stat.S_IMODE(parser_file.stat().st_mode) == 0o600
+    lock_file = parser_file.with_name(f"{parser_file.name}.lock")
+    assert stat.S_IMODE(lock_file.stat().st_mode) == 0o600
+    assert "parser-secret" not in parser_file.read_text(encoding="utf-8")
+    assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "parser-secret"
+    assert settings.rag_parser_dots_ocr_api_key == "parser-secret"
     worker_store.reload_if_changed(worker_settings)
     assert worker_settings.rag_parser_adapter_backend == "dots_ocr"
     assert worker_settings.rag_parser_dots_ocr_api_host == "https://dots.example.com/v1"
     assert worker_settings.rag_parser_dots_ocr_model == "dots-production"
-    assert worker_settings.rag_parser_dots_ocr_api_key == "parser-secret"
 
+    parser_before = parser_file.read_text(encoding="utf-8")
     model_response = client.patch("/api/settings/model", json=_payload())
 
     assert model_response.status_code == 200
-    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
+    persisted = json.loads(model_file.read_text(encoding="utf-8"))
+    assert "parser_adapters" not in persisted
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
-    assert "dots_ocr_api_key" not in persisted["parser_adapters"]
+    assert parser_file.read_text(encoding="utf-8") == parser_before
     assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "parser-secret"
-    assert persisted["parser_adapters"]["dots_ocr_model"] == "dots-production"
+    assert get_settings().rag_parser_adapter_backend == "dots_ocr"
 
 
-def test_parallel_model_and_parser_updates_preserve_both_sections(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    settings = get_settings()
-    settings_file = Path(settings.model_settings_file)
-    settings.oci_enterprise_ai_endpoint = "https://existing.example.com"
-    settings.set_runtime_enterprise_ai_api_key("existing-model-secret")
-    parser_inside_persist = Event()
-    model_started = Event()
-    allow_parser_write = Event()
-    original_get_settings = get_settings
-    original_persist = MODEL_SETTINGS_STORE.write_document
-
-    def signal_model_start() -> Settings:
-        current = original_get_settings()
-        if parser_inside_persist.is_set():
-            model_started.set()
-        return current
-
-    def pause_first_persist(
-        candidate: Settings,
-        payload: ModelSettingsPayload,
-    ) -> None:
-        if not parser_inside_persist.is_set():
-            parser_inside_persist.set()
-            assert allow_parser_write.wait(timeout=2)
-        original_persist(candidate, payload)
-
-    monkeypatch.setattr(settings_routes, "get_settings", signal_model_start)
-    monkeypatch.setattr(MODEL_SETTINGS_STORE, "write_document", pause_first_persist)
-    parser_update = ParserAdapterSettingsUpdate.model_validate(
-        {
-            "adapter_backend": "dots_ocr",
-            "dots_ocr_enabled": True,
-            "connections": [
-                {
-                    "backend": "dots_ocr",
-                    "endpoint": "https://dots.example.com/v1",
-                    "model": "dots-production",
-                    "api_key": "parser-secret",
-                }
-            ],
-        }
-    )
-    model_update = ModelSettingsPayload.model_validate(_payload())
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        parser_future = pool.submit(
-            asyncio.run,
-            settings_routes.update_parser_adapter_settings(parser_update),
-        )
-        assert parser_inside_persist.wait(timeout=2)
-        model_future = pool.submit(
-            lambda: save_model_settings(signal_model_start(), MODEL_SETTINGS_STORE, model_update)
-        )
-        assert model_started.wait(timeout=2)
-        time.sleep(0.05)
-        try:
-            assert not model_future.done()
-        finally:
-            allow_parser_write.set()
-        parser_future.result(timeout=2)
-        model_future.result(timeout=2)
-
-    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
-    assert "dots_ocr_api_key" not in persisted["parser_adapters"]
-    assert _saved_env_value(settings, "RAG_PARSER_DOTS_OCR_API_KEY") == "parser-secret"
-    assert persisted["parser_adapters"]["dots_ocr_model"] == "dots-production"
-    lock_file = settings_file.with_name(f"{settings_file.name}.lock")
-    assert stat.S_IMODE(lock_file.stat().st_mode) == 0o600
-
-
-def test_update_parser_adapter_settings_does_not_mutate_runtime_when_shared_write_fails(
+def test_update_parser_adapter_settings_does_not_mutate_runtime_when_write_fails(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -526,7 +449,7 @@ def test_update_parser_adapter_settings_does_not_mutate_runtime_when_shared_writ
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings, "model_settings_file", str(tmp_path))
+    monkeypatch.setattr(settings, "rag_parser_settings_file", str(tmp_path))
 
     resp = client.patch(
         "/api/settings/parser-adapters",
@@ -1429,7 +1352,8 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert persisted["enterprise_ai"]["llm_max_output_tokens"] == 1600
     assert persisted["enterprise_ai"]["vlm_max_output_tokens"] == 64000
     assert persisted["generative_ai"]["embedding_dim"] == 1536
-    assert persisted["parser_adapters"]["adapter_backend"] == "unstructured"
+    # 文書解析の設定は共有の model-settings.json に書かない（#1701）。
+    assert "parser_adapters" not in persisted
     assert "sk-update-secret" not in resp.text
 
 
@@ -3539,39 +3463,6 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     assert (
         client.patch("/api/settings/answer-records", json={"retention_days": -1}).status_code == 422
     )
-
-
-def test_legacy_parser_api_key_in_json_moves_to_env_on_parser_save() -> None:
-    """旧 JSON（v2）に残っている parser の API key は読み込み、次の保存で .env へ移す（#106）。"""
-    settings = get_settings()
-    settings_file = Path(settings.model_settings_file)
-    settings_file.write_text(
-        json.dumps(
-            {
-                "version": 2,
-                "enterprise_ai": {"models": []},
-                "generative_ai": {},
-                "parser_adapters": {
-                    "adapter_backend": "mineru",
-                    "mineru_enabled": True,
-                    "mineru_api_host": "https://mineru.example.com",
-                    "mineru_api_key": "legacy-parser-secret",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    load_persisted_model_settings(settings)
-    assert settings.rag_parser_mineru_api_key == "legacy-parser-secret"
-    assert settings.legacy_model_secret_detected is True
-
-    resp = client.patch("/api/settings/parser-adapters", json={"adapter_backend": "mineru"})
-
-    assert resp.status_code == 200
-    assert "legacy-parser-secret" not in settings_file.read_text(encoding="utf-8")
-    assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "legacy-parser-secret"
-    assert settings.rag_parser_mineru_api_key == "legacy-parser-secret"
-    assert settings.legacy_model_secret_detected is False
 
 
 def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:

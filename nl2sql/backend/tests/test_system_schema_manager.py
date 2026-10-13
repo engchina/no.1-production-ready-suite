@@ -1092,3 +1092,22 @@ def test_cli_check_requires_system_and_security_tables(
     output = capsys.readouterr().out
     assert "ORA-01031" in output
     assert "secret" not in output
+
+    # ORA でない失敗（設定の読み込みなど）は、値を伏せた手がかりを出す（#1701）。
+    state["error"] = ValueError("設定ファイルを読み込めません: /srv/x.json password=secret")
+    assert nl2sql_system_schema.main() == 1
+    output = capsys.readouterr().out
+    assert "設定ファイルを読み込めません: /srv/x.json" in output
+    assert "secret" not in output
+
+    monkeypatch.setattr("sys.argv", ["nl2sql_system_schema", "--status"])
+    assert nl2sql_system_schema.main() == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error["code"] == "SCHEMA_OPERATION_FAILED"
+    assert error["hint"] == "ValueError: 設定ファイルを読み込めません: /srv/x.json password=***"
+
+    state["error"] = RuntimeError("ORA-01031: insufficient privileges")
+    assert nl2sql_system_schema.main() == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error["code"] == "ORA-01031"
+    assert "hint" not in error

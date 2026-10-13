@@ -16,6 +16,7 @@ from pr_backend_core.logging import configure_cli_logging
 from pr_system_settings.system_schema import (
     deployment_check_error_summary,
     deployment_check_summary,
+    operation_failure_hint,
     oracle_error_code,
 )
 
@@ -116,11 +117,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except Exception as exc:
         # 接続・権限の失敗（lease を取る前の制御テーブルの作成など）。SQL や資格情報は出さず、
-        # ORA コードだけを出す（配備の log から原因を辿れるように。#1648）。
+        # ORA コードだけを出す（配備の log から原因を辿れるように。#1648）。ORA でない失敗
+        # （設定の読み込みなど）は、secret を含まない手がかりを出す（#1701）。
         error = {
             "error_code": oracle_error_code(exc),
             "error_message": f"システムテーブル操作に失敗しました（{type(exc).__name__}）。",
         }
+        hint = operation_failure_hint(exc)
+        if hint:
+            error["hint"] = hint
         print(json.dumps(error, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))

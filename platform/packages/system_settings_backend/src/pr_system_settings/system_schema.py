@@ -8,7 +8,9 @@ RAG と NL2SQL が別々に持っていた schema manager の共通部分を置�
 - 適用済み migration の台帳（`<製品>_SCHEMA_MIGRATIONS`。checksum が一致したものだけを適用済みに
   する）
 - 全再作成の確認語の検証（DB に触る前に、完全一致だけを通す）
-- 操作の失敗の安全化（公開するのは ORA コードだけ。SQL・資格情報は返さない）と、ORA-00054 の 409
+- 操作の失敗の安全化（公開するのは ORA コードだけ。SQL・資格情報は返さない）と、ORA-00054 の 409。
+  ORA でない失敗（設定の読み込みなど）は、CLI に secret を含まない手がかり（例外の message の
+  1 行目。値は出さない）を出す（#1701）
 - API の型（操作の状態・初期化の request）と、状態を取得できないときの 503
 - 外部キーの差分（正本の `CREATE TABLE` にあるが既存の表に無い FK の検出・追加と、参照先の無い
   既存の行の件数。#505。削除規則の違い・無効化（DISABLED）の検出と修正、利用者の明示操作による
@@ -39,7 +41,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .database_status import clear_database_status_cache
 
@@ -93,6 +95,14 @@ ORPHAN_ROWS_CHANGED = "SCHEMA_ORPHAN_ROWS_CHANGED"
 ORPHAN_DELETION_OPERATION = "delete_orphaned_rows"
 
 _ORA_CODE_PATTERN = re.compile(r"ORA-\d{5}", flags=re.IGNORECASE)
+# 失敗の手がかり（#1701）で伏せる値: `password=…` のような代入と、URL の中の資格情報。
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b([\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|credential|private[_-]?key)"
+    r"[\w.-]*)(\s*[=:]\s*)\S+"
+)
+_URL_CREDENTIAL_PATTERN = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@")
+FAILURE_HINT_MAX_CHARS = 300
+FAILURE_HINT_MAX_DEPTH = 4
 
 ConnectionFactory = Callable[[], AbstractContextManager[Any]]
 
@@ -202,6 +212,48 @@ def oracle_error_code(exc: BaseException) -> str:
 
     match = _ORA_CODE_PATTERN.search(str(exc))
     return match.group(0).upper() if match else SCHEMA_OPERATION_FAILED
+
+
+def operation_failure_hint(exc: BaseException) -> str | None:
+    """ORA でない失敗（設定の読み込みなど）の原因の手がかり（#1701）。ORA の失敗は None。
+
+    配備の log から原因を辿れるよう、例外の型と message の 1 行目を、原因（`__cause__` /
+    `__context__`）の順に `←` でつなぐ。SQL・資格情報を出さないよう、2 行目以降は捨て、
+    `password=…` のような代入の値と URL の資格情報は伏せる。pydantic の `ValidationError` は
+    値（`input_value`）を出さず、件数と項目の位置だけを出す。
+    """
+
+    if oracle_error_code(exc) != SCHEMA_OPERATION_FAILED:
+        return None
+    lines: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(lines) < FAILURE_HINT_MAX_DEPTH:
+        seen.add(id(current))
+        lines.append(_exception_line(current))
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return " ← ".join(lines)
+
+
+def _exception_line(exc: BaseException) -> str:
+    name = type(exc).__name__
+    if isinstance(exc, ValidationError):
+        locations = [
+            ".".join(str(part) for part in error["loc"]) or "(root)"
+            for error in exc.errors(include_url=False, include_input=False, include_context=False)
+        ]
+        shown = ", ".join(locations[:5]) + (", …" if len(locations) > 5 else "")
+        return f"{name}: {exc.title} の検証エラー {exc.error_count()} 件（{shown}）"
+    text = next((line.strip() for line in str(exc).splitlines() if line.strip()), "")
+    if not text:
+        return name
+    text = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2***", text)
+    text = _URL_CREDENTIAL_PATTERN.sub(r"\1***@", text)
+    if len(text) > FAILURE_HINT_MAX_CHARS:
+        text = f"{text[:FAILURE_HINT_MAX_CHARS]}…"
+    return f"{name}: {text}"
 
 
 def iso_timestamp(value: Any) -> str | None:
@@ -355,14 +407,18 @@ def deployment_check_summary(status: Mapping[str, Any]) -> tuple[bool, str]:
 
 
 def deployment_check_error_summary(exc: BaseException) -> str:
-    """状態を読めないとき（接続・権限）の要約。公開するのは ORA コード（無ければ例外の型）だけ。"""
+    """状態を読めないとき（接続・権限・設定）の要約。
+
+    ORA の失敗は ORA コードだけを出す。ORA でない失敗は、secret を含まない手がかり
+    （`operation_failure_hint`。例外の型と message の 1 行目）を出す（#1701）。
+    """
 
     if isinstance(exc, SystemSchemaError):
         code = exc.code
     else:
         code = oracle_error_code(exc)
         if code == SCHEMA_OPERATION_FAILED:
-            code = f"{SCHEMA_STATUS_UNAVAILABLE}: {type(exc).__name__}"
+            code = f"{SCHEMA_STATUS_UNAVAILABLE}: {operation_failure_hint(exc)}"
     return f"状態を読めません（{code}）"
 
 
