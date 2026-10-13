@@ -442,6 +442,8 @@ jobs:
   # キャッシュの方針（#339）:
   #   - uv の cache は main の push だけが保存し、PR は main の cache を復元するだけにする
   #     （PR ごとに約 120 MB の cache を保存すると、repo の上限 10 GB を超えて main の cache が追い出される）。
+  #     保存前に `uv cache prune --ci` で PyPI から取れる wheel を落とすため、`prune-cache: true` を明示する
+  #     （setup-uv v9 から既定が false になり、prune しない cache は約 5 倍になる。#1664）。
   #   - mypy の .mypy_cache・npm の ~/.npm・Playwright のブラウザも main だけが保存し、PR は main の cache を
   #     復元するだけにする（#1589。.github/actions/mypy-cache・npm-cache・playwright-browsers）。
   #   - 共有 UI の dist は .github/actions/platform-ui がキャッシュする（数 MB。PR でも保存する）。
@@ -528,6 +530,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: platform/packages/backend_core/uv.lock
           save-cache: ${{ github.event_name == 'push' }}
 
@@ -597,6 +600,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: platform/packages/system_settings_backend/uv.lock
           save-cache: ${{ github.event_name == 'push' }}
 
@@ -671,6 +675,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: rag/backend/uv.lock
           save-cache: ${{ github.event_name == 'push' }}
 
@@ -750,6 +755,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: rag/packages/rag_engine/uv.lock
           cache-suffix: rag-engine
           save-cache: ${{ github.event_name == 'push' }}
@@ -783,6 +789,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: |
             rag/services/**/uv.lock
             rag/packages/*/uv.lock
@@ -885,6 +892,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: rag/services/parsers/docling/uv.lock
           cache-suffix: rag-parser-docling
           save-cache: ${{ github.event_name == 'push' }}
@@ -948,6 +956,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: rag/services/parsers/asr/uv.lock
           cache-suffix: rag-parser-asr
           save-cache: ${{ github.event_name == 'push' }}
@@ -1211,6 +1220,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: nl2sql/backend/uv.lock
           save-cache: ${{ github.event_name == 'push' }}
 
@@ -1290,6 +1300,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: agent/backend/uv.lock
           save-cache: ${{ github.event_name == 'push' }}
 
