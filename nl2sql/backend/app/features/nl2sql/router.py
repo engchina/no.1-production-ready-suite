@@ -126,6 +126,7 @@ from .models import (
     PersistenceStatusData,
     PreviewData,
     PreviewRequest,
+    ProfileAgentAssetRebuildData,
     ProfileDeleteData,
     ProfileLearningMaterialImportData,
     ProfilePatchRequest,
@@ -1309,6 +1310,30 @@ def create_profile_oracle_sync_job(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/profiles/{profile_id}/agent-asset-rebuild",
+    response_model=ApiResponse[ProfileAgentAssetRebuildData],
+)
+def get_profile_agent_asset_rebuild(
+    profile_id: str,
+    request: Request,
+) -> ApiResponse[ProfileAgentAssetRebuildData]:
+    """業務 Profile の Select AI Agent アセットを最後に再構築した日時と結果を返す（#1691）。
+
+    業務 Profile の版（ETag）と別に返し、編集画面を開き直しても前回の再構築が分かるようにする。
+    """
+    _assert_profile_access(request, profile_id)
+
+    from .profile_sync import profile_sync_service
+
+    try:
+        return ApiResponse(data=profile_sync_service.last_agent_rebuild(profile_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
 
 
 @router.get(

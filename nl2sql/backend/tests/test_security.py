@@ -2369,8 +2369,8 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # （#1524）は業務プロファイルの管理と SQL の生成の権限。業務プロファイルの保存（Oracle 反映）の
     # 事前条件の Select AI の Credential の状態（#1683 / #1688）は、Credential が前提の操作の
     # いずれかの権限で読める。
-    assert len(mounted) == 281
-    assert len(ROUTE_PERMISSIONS) == 272
+    assert len(mounted) == 282
+    assert len(ROUTE_PERMISSIONS) == 273
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",
@@ -2391,6 +2391,11 @@ def test_route_permissions_cover_every_mounted_route() -> None:
         assert (
             ROUTE_PERMISSIONS[("GET", path)] == ROUTE_PERMISSIONS[("GET", "/nl2sql/jobs/{job_id}")]
         )
+    # Select AI Agent アセットの最後の再構築（#1691）は、業務プロファイルの編集と同じ権限。
+    assert (
+        ROUTE_PERMISSIONS[("GET", "/nl2sql/profiles/{profile_id}/agent-asset-rebuild")]
+        == ROUTE_PERMISSIONS[("PATCH", "/nl2sql/profiles/{profile_id}")]
+    )
     assert set(ROUTE_PERMISSIONS).isdisjoint(OPEN_API_OPERATIONS)
     assert set(ROUTE_PERMISSIONS) | set(OPEN_API_OPERATIONS) == mounted
     for key, permissions in ROUTE_PERMISSIONS.items():
