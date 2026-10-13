@@ -62,8 +62,11 @@ permissions:
 # 全件（all）で、mobile の退行は e2e-nightly.yml が拾う（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
 # E2E_RETRIES: PR の e2e の retries は 1、main の push は 2（nightly は env を付けないので 2）。PR で flaky のテストを
 # 3 回実行しないため。1 回の retry で通らないテストは PR を赤にして直す（#1593。platform/scripts/e2e-impact/ci-run.ts）。
+# E2E_NIGHTLY_ONLY: nightly だけで実行する spec（*.nightly.spec.ts。主要な画面の axe の確認）を、PR と main の push の
+# e2e で実行しない（全件の shard でも。e2e-nightly.yml は付けない。#1595。platform/scripts/e2e-impact/nightly-only.ts）。
 env:
   E2E_MOBILE_SCOPE: ${{ github.event_name == 'pull_request' && 'responsive' || 'all' }}
+  E2E_NIGHTLY_ONLY: skip
   E2E_RETRIES: ${{ github.event_name == 'pull_request' && '1' || '2' }}
   RAG_E2E_SMOKE: >-
     e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts

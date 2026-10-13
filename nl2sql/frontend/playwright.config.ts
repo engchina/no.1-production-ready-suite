@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+import { nightlyOnlyIgnore } from "../../platform/scripts/e2e-impact/nightly-only";
 import {
   APP_BASE_URL,
   FIXTURE_BASE_URL,
@@ -40,6 +41,9 @@ const webServer = USE_PREVIEW_SERVER
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // nightly だけで実行する spec（*.nightly.spec.ts。主要な画面の axe）は、ci.yml（E2E_NIGHTLY_ONLY=skip）の PR の e2e で
+  // 実行しない（#1595。platform/scripts/e2e-impact/nightly-only.ts）。
+  testIgnore: nightlyOnlyIgnore(),
   // 対象の dev サーバ・preview（再利用したものを含む）が hermetic であることを確認してから開始し、
   // 実行前後で利用者の実環境の設定ファイルが変わっていないことを検査する。
   globalSetup: "./tests/e2e/global-setup.ts",

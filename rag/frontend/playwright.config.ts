@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+import { nightlyOnlyIgnore } from "../../platform/scripts/e2e-impact/nightly-only";
 
 const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 // 開発用 dev サーバ（3000）と衝突しない既定ポート。
@@ -19,6 +20,9 @@ const webServerCommand = usePreviewServer
 
 export default defineConfig({
   testDir: "./e2e",
+  // nightly だけで実行する spec（*.nightly.spec.ts。主要な画面の axe）は、ci.yml（E2E_NIGHTLY_ONLY=skip）の PR の e2e で
+  // 実行しない（#1595。platform/scripts/e2e-impact/nightly-only.ts）。
+  testIgnore: nightlyOnlyIgnore(),
   // 起動した dev サーバが hermetic であることを確認し、実行前後で利用者の実環境の
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",

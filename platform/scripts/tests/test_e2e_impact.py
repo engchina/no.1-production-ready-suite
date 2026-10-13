@@ -693,6 +693,32 @@ class SelectIntegrationTest(unittest.TestCase):
         selection = impact.select(impact.PRODUCTS["rag"], None, self.base)
         self.assertTrue(selection.full)
 
+    # 主要な画面の axe などの nightly だけの spec（*.nightly.spec.ts）は、記録が無くても、変えても、
+    # 全件でも選ばない（#1595）。
+    NIGHTLY = "rag/frontend/e2e/a11y.nightly.spec.ts"
+
+    def test_unrecorded_nightly_only_spec_is_not_selected(self) -> None:
+        self._write(self.NIGHTLY, "import { test } from './fixtures/test';\n")
+        selection = self._edit("rag/frontend/src/Page.tsx", "return label;", "return label + 1;")
+        self.assertEqual(set(selection.specs), {self.page, self.node})
+        self.assertNotIn(self.NIGHTLY, impact.list_specs(impact.PRODUCTS["rag"]))
+
+    def test_changed_nightly_only_spec_is_not_selected(self) -> None:
+        self._write(self.NIGHTLY, "import { test } from './fixtures/test';\n// x\n")
+        selection = self._commit_and_select()
+        self.assertEqual(selection.specs, {})
+        self.assertEqual(selection.full, [])
+
+    def test_full_run_excludes_nightly_only_spec(self) -> None:
+        self._write(self.NIGHTLY, "import { test } from './fixtures/test';\n")
+        self._write("rag/frontend/package.json", '{"name": "x"}\n')
+        selection = self._commit_and_select()
+        self.assertTrue(selection.full)
+        matrix, _ = impact.shard_matrix(impact.PRODUCTS["rag"], selection, self.map)
+        specs = " ".join(row["specs"] for row in matrix)
+        self.assertIn("e2e/page.spec.ts", specs)
+        self.assertNotIn("nightly", specs)
+
     def test_backend_change_selects_nothing(self) -> None:
         self._write("rag/backend/app.py", "x = 1\n")
         selection = self._commit_and_select()
