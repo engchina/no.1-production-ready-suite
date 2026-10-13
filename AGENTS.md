@@ -59,7 +59,7 @@
 - `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ、`bandit` は毎回。`npm audit` は PR では実行しない。全件は `dependency-audit-nightly.yml` が毎晩（pip-audit と、4 つの `package-lock.json` の `npm audit --omit=dev --audit-level=high`）。
 - **依存の manifest / lock（`package.json`・`package-lock.json`・`uv.lock`・`pyproject.toml`）か workflow・composite action を変えた PR は、`Dependency review` が追加・更新した依存の脆弱性（high 以上で失敗）と license を確かめる**（#1588）。
 - **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。job の時間切れ（cancelled）も Issue になる（#1586）。
-- runner は `runs-on: ubuntu-24.04`（本番の Compute の Ubuntu と同じ版。`ubuntu-latest` は使わない。#1587）。版を上げるときは本番の image と同じ PR でそろえる。
+- runner は `runs-on: ubuntu-24.04`（`ubuntu-latest` は使わない。#1587）。本番の Compute の OS は Oracle Linux 9 だが、GitHub に Oracle Linux の runner が無いので ubuntu-24.04 を使い、OS の差は `oraclelinux:9` の container の job（`Suite / Oracle Linux 9`。配備のスクリプトの変更時）で確かめる（#1611）。
 - main の push の CI は commit ごとに実行し、続けて merge しても前の run を取り消さない（PR だけ古い run を取り消す。#1585）。main の CI（push・毎日の schedule・手動）は、main で最後に成功した CI の commit からの変更で job を選ぶ。Dependabot の自動 merge（`GITHUB_TOKEN`）は push の CI を起動しないので、毎日の schedule で確かめる（#1609）。
 - secret 検出は `.gitleaks.toml` / `.gitleaksignore`（書き方は `.gitleaks.toml` の冒頭）。誤検知は fingerprint 単位で `.gitleaksignore` に理由付きで除外する。
 - Dependabot は 3 製品の backend（uv）・frontend（npm）、platform の package（uv・npm。lock だけを上げる）、RAG のサービス、actions を対象にする。公開から 5 日の `cooldown` を置き、npm は monthly（lock の変更は e2e の全件になる）、security updates は entry ごとの group にまとめる。patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
@@ -165,7 +165,8 @@
 - 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない。Agent も組み込み Runtime で、Docker の Runtime は持たない）。
 - Terraform stack は `terraform/stack/` に 1 つだけ。ADB を 1 つ作り（新規 / 既存）、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低 1 つ）を 1 台の Compute に入れる。製品固有の入力は `rag_` / `nl2sql_` / `agent_` を付ける。
 - Compute の上では `platform/deploy/suite-init.sh` が各製品の `init_script.sh`（製品は単独では配備しない）を順に呼び、Nginx の site（`/rag/` `/nl2sql/` `/agent/` の prefix・HTTPS・自作の CA・公開の port）を 1 つだけ書く。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。frontend の base は build の `FRONTEND_BASE_PATH`（未指定は `/`。配備は `/<製品>/`）。
-- CI は `Suite / Terraform` が `terraform/scripts/package_stack.py`・`verify_stack_contract.py` と `platform/deploy/tests/` を実行する。
+- **Compute の OS は Oracle Linux 9（image の OCID は `terraform/stack` で固定）、ログインと 3 製品のプロセスのユーザーは `opc`**（#1611）。配備のスクリプトは `dnf`（Nginx は AppStream の module）・`firewalld`・SELinux（enforcing のまま。context と boolean は `suite-init.sh` の `configure_selinux`）を前提にし、Ubuntu の分岐を持たない。
+- CI は `Suite / Terraform` が `terraform/scripts/package_stack.py`・`verify_stack_contract.py` と `platform/deploy/tests/` を、`Suite / Oracle Linux 9` が `oraclelinux:9` の container で package の名前と Nginx の配置を確かめる。
 - release tag は `suite-v*`（`terraform-release.yml` が zip と sha256 を公開する）。製品ごとの release（`<製品>-v*`）は作らない（既存の `nl2sql-v*` は残す）。README の配備ボタンは `releases/latest/download/<asset>` を指す（asset 名は変えない。新しい release を GitHub の Latest にする）。
 
 ### ローカルの検証の範囲
