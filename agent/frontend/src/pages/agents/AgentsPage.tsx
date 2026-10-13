@@ -23,7 +23,7 @@ import {
 } from "@production-ready/ui";
 import { agentApi, type AgentProfile, type AgentVersion } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { PagedDataTable, QueryState } from "@/components/ListViews";
+import { listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import {
   ListSearchField,
   listCountLabel,
@@ -317,6 +317,9 @@ export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile;
           rowProps={() => ({ className: "align-top" })}
           tableClassName="w-full min-w-[40rem]"
           ariaLabel={t("agent.version.title")}
+          // 375px では横にスクロールする（min-w-[40rem]）。キーボードでも届くよう、スクロール領域に名前と Tab を付ける
+          // （WCAG 2.1.1。axe の scrollable-region-focusable。#1671）。
+          scrollAriaLabel={listScrollLabel(t("agent.version.title"))}
         />
       )}
     </Section>

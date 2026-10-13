@@ -359,7 +359,7 @@ function ReasonCounts({ summary }: { summary: FeedbackSummary }) {
                 <span className="truncate text-fg" title={reasonLabel(item.reason)}>
                   {reasonLabel(item.reason)}
                 </span>
-                <span className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
+                <span data-surface-tint="neutral" className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
                   <span className="block h-full rounded-full bg-danger-emphasis" style={{ width: `${Math.round(ratio * 100)}%` }} />
                 </span>
                 <span className="w-20 text-right tabular-nums text-fg-muted">

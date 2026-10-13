@@ -201,6 +201,7 @@ function ScoreMeter({
         <span className="tnum shrink-0 text-fg">{valueText}</span>
       </div>
       <div
+        data-surface-tint="neutral"
         role="meter"
         aria-label={t("search.citation.score.meter", { label, value: valueText })}
         aria-valuemin={0}

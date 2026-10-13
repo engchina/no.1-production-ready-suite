@@ -602,7 +602,7 @@ function SuiteSelector({
           onValueChange={onChange}
           width="lg"
         />
-        <div className="rounded-md border border-border bg-surface-hover p-3">
+        <div data-surface-tint="neutral" className="rounded-md border border-border bg-surface-hover p-3">
           <p className="text-xs font-medium text-fg-muted">
             {requestHasThresholds
               ? t("evaluation.suite.thresholdsPreviewOverride")

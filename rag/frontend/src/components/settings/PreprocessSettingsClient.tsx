@@ -262,7 +262,7 @@ function Badge({ tone, children }: { tone: "info" | "muted" | "warning"; childre
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-surface-hover p-3">
+    <div data-surface-tint="neutral" className="rounded-md border border-border bg-surface-hover p-3">
       <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>

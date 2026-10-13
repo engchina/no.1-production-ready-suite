@@ -414,7 +414,7 @@ export function GeneratedSqlSummary({
               variant={result.safety.is_safe ? "success" : "danger"}
               label={result.safety.is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
             />
-            <span className="rounded-md bg-surface-hover px-2 py-1 text-xs text-fg">
+            <span data-surface-tint="neutral" className="rounded-md bg-surface-hover px-2 py-1 text-xs text-fg">
               {engineLabel(result.engine)}
             </span>
             {result.fallback_reason && (

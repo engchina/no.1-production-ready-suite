@@ -569,7 +569,7 @@ export function EvaluationPage() {
                     return (
                       <label
                         key={capability.engine}
-                        data-surface-tint={capability.available && selected ? "accent" : undefined}
+                        data-surface-tint={!capability.available ? "neutral" : selected ? "accent" : undefined}
                         className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 transition ${
                           capability.available
                             ? selected
@@ -1159,6 +1159,7 @@ function JobProgress({
         </div>
       ) : null}
       <div
+        data-surface-tint="neutral"
         className="h-2 overflow-hidden rounded-full bg-surface-hover"
         role="progressbar"
         aria-valuemin={0}
@@ -1210,7 +1211,7 @@ function JobProgress({
 
 function Metric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-surface-hover p-3">
+    <div data-surface-tint="neutral" className="min-w-0 rounded-lg border border-border bg-surface-hover p-3">
       <dt className="text-xs text-fg-muted">{label}</dt>
       <dd className={`mt-1 break-words text-sm font-semibold ${danger ? "text-danger-fg" : "text-fg"}`}>
         {value}
@@ -1418,6 +1419,7 @@ function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) 
       summaryProps={{ "data-testid": "quality-evaluation-analysis-toggle" }}
     >
       <div
+        data-surface-tint="neutral"
         className="grid min-w-0 gap-2 rounded-md bg-surface-hover p-3 text-fg-muted"
         data-testid="quality-evaluation-analysis-detail"
       >
@@ -1485,7 +1487,7 @@ function SqlBlock({ sql, error }: { sql: string; error?: string }) {
     );
   }
   return (
-    <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-hover p-2 font-mono text-xs leading-5 text-fg">
+    <pre data-surface-tint="neutral" className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-hover p-2 font-mono text-xs leading-5 text-fg">
       {sql}
     </pre>
   );

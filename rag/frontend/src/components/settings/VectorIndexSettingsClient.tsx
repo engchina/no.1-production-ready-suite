@@ -250,10 +250,10 @@ function ProfileChips({ profile }: { profile: VectorIndexProfileStatusData }) {
       <span data-surface-tint="info" className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
         {t("settings.vectorIndex.targetAccuracy")} {profile.target_accuracy}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
+      <span data-surface-tint="neutral" className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.vectorIndex.neighbors")} {profile.neighbors}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
+      <span data-surface-tint="neutral" className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.vectorIndex.efconstruction")} {profile.efconstruction}
       </span>
     </span>
@@ -262,7 +262,7 @@ function ProfileChips({ profile }: { profile: VectorIndexProfileStatusData }) {
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-surface-hover p-3">
+    <div data-surface-tint="neutral" className="rounded-md border border-border bg-surface-hover p-3">
       <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>

@@ -178,9 +178,10 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   淡い色の面の文字（[data-surface-tint="accent|info|success|warning|danger"]、platform #64 / #1671）
+   淡い色の面の文字（[data-surface-tint="accent|info|success|warning|danger|neutral"]、platform #64 / #1671）
 
-   淡い色の面（--color-accent-subtle / -muted と、状態色の --color-<s>-subtle）を塗った要素に付ける。
+   淡い色の面（--color-accent-subtle / -muted と、状態色の --color-<s>-subtle）と、灰色の面を常に塗る要素
+   （bg-surface-hover のチップ・事実の欄など。fg-muted は 4.39:1。値は "neutral"）に付ける。
    ライトの --color-fg-muted（#6b7280）は canvas / surface 上で 4.5:1 を満たすが、淡い面の上では
    accent 4.36 / info 3.96 / success 4.26 / warning 4.34 / danger 3.96:1 に下がる（WCAG 1.4.3 不適合）。
    --color-accent-fg（4.03〜4.43:1）と、他の系統の淡い面の上の success / warning の文字（4.11〜4.49:1）も同じ。

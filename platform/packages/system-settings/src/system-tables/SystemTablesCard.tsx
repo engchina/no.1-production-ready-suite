@@ -678,7 +678,7 @@ function SummaryItem({
   descriptionClassName?: string;
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-surface-hover p-3">
+    <div data-surface-tint="neutral" className="min-w-0 rounded-md border border-border bg-surface-hover p-3">
       <p className="text-xs text-fg-muted">{label}</p>
       <p className="mt-1 break-words font-sans text-sm font-semibold text-fg">{value}</p>
       {description ? (

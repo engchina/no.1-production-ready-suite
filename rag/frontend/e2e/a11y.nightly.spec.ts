@@ -1,19 +1,24 @@
 import AxeBuilder from "@axe-core/playwright";
 
 import { expect, test, type Page, type TestInfo } from "./fixtures/test";
-import { apiEnvelope, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { apiEnvelope, expandSidebarSections, mockLocalAuth, openSidebarNav, SYSTEM_TABLES_STATUS_OK } from "./_helpers";
 
 /**
- * 主要な画面の axe（a11y）の確認（#1595）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
+ * 画面の axe（a11y）の確認（#1595・#1671）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
  * （名前の `*.nightly.spec.ts`。platform/scripts/e2e-impact/nightly-only.ts）。ローカルは `npx playwright test e2e/a11y.nightly.spec.ts`。
  *
+ * - 対象はサイドナビの全項目の画面（SCREENS。ナビとずれたら「ナビの全項目」のテストが失敗する）と、淡い色の面
+ *   （選んだ行・状態の表示）が出る状態（STATES）。それぞれライトとダークで確かめる。
  * - 対象は WCAG 2.x の A / AA（2.0 と 2.1）。失敗にするのは impact が serious / critical の違反だけ。
  * - 違反は rule id・impact・件数・対象（selector）を失敗の文と添付（axe-violations.json）に出す。
+ * - API は mock。画面ごとの mock が無い GET は空の一覧を返す（未定義の API で画面が読み込み中のまま止まらない）。
  * - 既知の例外は KNOWN_EXCEPTIONS に rule id・画面・理由を書く（直すのに設計の判断が要るもの。別 Issue で直す）。
  */
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 const BLOCKING_IMPACTS = new Set(["serious", "critical"]);
+const THEMES = ["light", "dark"] as const;
+type Theme = (typeof THEMES)[number];
 
 /** 既知の例外（画面の path → 除く rule id）。空なら除かない。 */
 const KNOWN_EXCEPTIONS: Record<string, readonly string[]> = {};
@@ -22,6 +27,21 @@ const NOW = "2026-09-28T00:00:00Z";
 
 function listPage(items: unknown[]) {
   return apiEnvelope({ items, total: items.length, limit: 50, offset: 0, has_next: false });
+}
+
+/**
+ * 画面ごとの mock が無い API は 503（取得の失敗）にする（後から登録した route が優先）。画面は取得の失敗の表示
+ * （danger の淡い面の ErrorState / Banner）になり、それも axe で確かめる。形の合わない応答で画面を壊さない。
+ */
+async function mockFallbackApi(page: Page) {
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    (route) =>
+      route.fulfill({
+        status: 503,
+        json: { data: null, error_messages: ["e2e: この API の応答は用意していません。"], warning_messages: [] },
+      }),
+  );
 }
 
 /** 主要な画面の一覧を数件ずつ返す（読み込んだ後の画面を確かめる）。 */
@@ -36,10 +56,12 @@ async function mockMainScreens(page: Page) {
     updated_at: NOW,
     archived_at: null,
   };
-  const documents = Array.from({ length: 3 }, (_, index) => ({
+  // 状態の表示（StatusBadge の success / warning / danger / neutral）を並べる。処理中の状態は自動の再取得が続くので使わない。
+  const statuses = ["INDEXED", "REVIEW", "ERROR", "UPLOADED"];
+  const documents = statuses.map((status, index) => ({
     id: `doc-${index + 1}`,
     file_name: `doc-${index + 1}.txt`,
-    status: "INDEXED",
+    status,
     category_name: null,
     content_type: "text/plain",
     file_size_bytes: 128,
@@ -87,12 +109,244 @@ async function mockMainScreens(page: Page) {
   });
 }
 
-const SCREENS = [
-  { name: "チャット", path: "/chat?search_answer_profile_id=bv-1", heading: "チャット" },
-  { name: "文書インデックス", path: "/file-list", heading: "文書インデックス" },
-  { name: "検索・回答プロファイル", path: "/search-answer-profiles", heading: "検索・回答プロファイル" },
-  { name: "システム設定（外観と証明書）", path: "/settings/appearance", heading: "外観と証明書" },
+/** 設定の画面（選んだカード = accent の淡い面、方針のチップ、状態の表示）と、フィードバックの一覧・詳細。 */
+async function mockSettingsAndFeedback(page: Page) {
+  const policies = [
+    { name: "standard", grounding_min_overlap: 3, grounding_min_ratio: 0.12, audit_emphasis: false },
+    { name: "strict", grounding_min_overlap: 5, grounding_min_ratio: 0.3, audit_emphasis: false },
+    { name: "regulated", grounding_min_overlap: 5, grounding_min_ratio: 0.3, audit_emphasis: true },
+  ];
+  await page.route("**/api/settings/guardrail", (route) =>
+    route.fulfill({
+      json: apiEnvelope({
+        policy: "regulated",
+        block_prompt_injection: true,
+        mask_sensitive_identifiers: true,
+        max_query_chars: 2000,
+        grounding_min_overlap: 5,
+        grounding_min_ratio: 0.3,
+        audit_emphasis: true,
+        policies: policies.map((policy) => ({
+          ...policy,
+          origin: "x",
+          recommended_for: ["general"],
+          selected: policy.name === "regulated",
+        })),
+        backend: "local",
+        oci_configured: false,
+        oci_warning_code: null,
+        config_source: "runtime",
+      }),
+    }),
+  );
+  const strategies = ["structure_aware", "recursive_character", "small_to_big", "fixed_size"];
+  await page.route("**/api/settings/chunking", (route) =>
+    route.fulfill({
+      json: apiEnvelope({
+        strategy: "small_to_big",
+        chunk_size: 800,
+        overlap: 120,
+        min_chars: 120,
+        delimiter: "\\n\\n",
+        context_header_enabled: true,
+        chunk_child_target_chars: 400,
+        chunk_table_child_target_chars: 600,
+        chunk_parent_target_chars: 2400,
+        chunk_parent_max_pages: 2,
+        chunk_parent_max_children: 8,
+        strategies: strategies.map((name) => ({
+          name,
+          origin: name,
+          recommended_for: ["pdf"],
+          selected: name === "small_to_big",
+        })),
+        config_source: "runtime",
+      }),
+    }),
+  );
+  await page.route("**/api/settings/answer-prompts**", (route) =>
+    route.fulfill({
+      json: apiEnvelope({
+        prompts: [
+          {
+            key: "vlm_answer",
+            content: "保存版 {{question}} {{images}}",
+            default_content: "既定のテンプレート {{question}} {{images}}",
+            customized: true,
+            required_placeholders: ["question", "images"],
+            updated_at: NOW,
+          },
+        ],
+        stages: [{ id: "routing", prompts: [{ id: "system", content: "ルーティングの system" }] }],
+      }),
+    }),
+  );
+  await page.route("**/api/settings/database/system-tables", (route) => route.fulfill({ json: SYSTEM_TABLES_STATUS_OK }));
+
+  const feedbackItem = (id: string, rating: "helpful" | "not_helpful", targetType: "answer" | "citation") => ({
+    feedback_id: id,
+    trace_id: `trace-${id}`,
+    search_answer_profile_id: "bv-1",
+    search_answer_profile_name: "経理アシスタント",
+    target_type: targetType,
+    source_surface: targetType === "answer" ? "chat" : "search",
+    document_id: targetType === "citation" ? "doc-1" : null,
+    chunk_id: targetType === "citation" ? "doc-1:0" : null,
+    message_id: targetType === "answer" ? "msg-1" : null,
+    rating,
+    reason: rating === "not_helpful" ? "incorrect" : null,
+    comment: rating === "not_helpful" ? "規程が更新されています。" : null,
+    created_at: NOW,
+    conversation_id: targetType === "answer" ? "conv-1" : null,
+    conversation_title: targetType === "answer" ? "経費申請" : null,
+    model: "oci.generativeai.command-r-plus",
+    file_name: targetType === "citation" ? "経費規程.pdf" : null,
+    question_preview: "最新の経費申請期限を教えて",
+    comment_preview: rating === "not_helpful" ? "規程が更新されています。" : null,
+    has_comment: rating === "not_helpful",
+  });
+  const summary = {
+    total: 3,
+    helpful_count: 1,
+    not_helpful_count: 2,
+    helpful_rate: 0.3333,
+    answer_total: 2,
+    answer_helpful_rate: 0.5,
+    citation_total: 1,
+    citation_helpful_rate: 0,
+    reason_counts: [{ reason: "incorrect", count: 2 }],
+  };
+  const feedbackItems = [
+    feedbackItem("feedback-answer", "not_helpful", "answer"),
+    feedbackItem("feedback-citation", "not_helpful", "citation"),
+    feedbackItem("feedback-helpful", "helpful", "answer"),
+  ];
+  await page.route("**/api/feedback**", async (route) => {
+    const url = new URL(route.request().url());
+    const item = feedbackItems.find((candidate) => url.pathname === `/api/feedback/${candidate.feedback_id}`);
+    if (item) {
+      await route.fulfill({
+        json: apiEnvelope({
+          ...item,
+          content_source: "chat_message",
+          question: "最新の経費申請期限を教えて",
+          answer: "2024年版の経費規程では翌月10日です。",
+          citations: [
+            {
+              document_id: "doc-1",
+              chunk_id: "doc-1:0",
+              file_name: "経費規程.pdf",
+              section_title: "申請期限",
+              page_number: 3,
+              content_preview: "経費申請は利用月の翌月5日までに行います。",
+              rerank_score: 0.94,
+            },
+          ],
+          execution: {
+            outcome: "success",
+            search_mode: "hybrid",
+            elapsed_ms: 842,
+            retrieved_count: 20,
+            reranked_count: 5,
+            citation_count: 1,
+            guardrail_codes: [],
+            config_fingerprint: "9f3a57a3d91bdaf0",
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      json: apiEnvelope({
+        summary,
+        previous_summary: summary,
+        items: { items: feedbackItems, total: feedbackItems.length, limit: 50, offset: 0, has_next: false },
+      }),
+    });
+  });
+}
+
+interface Screen {
+  path: string;
+  /** 画面を開く前に足す mock（後から登録した route が優先する）。 */
+  setup?: (page: Page) => Promise<void>;
+  /** 読み込んだ後の操作（行を選ぶなど）。 */
+  act?: (page: Page) => Promise<void>;
+}
+
+/** サイドナビの全項目（nav-config.ts の並び）。 */
+const SCREENS: Screen[] = [
+  { path: "/chat?search_answer_profile_id=bv-1" },
+  { path: "/search" },
+  { path: "/upload" },
+  { path: "/file-list" },
+  { path: "/knowledge-bases" },
+  { path: "/search-answer-profiles" },
+  { path: "/settings/pipeline" },
+  { path: "/settings/preprocess" },
+  { path: "/settings/parser-adapters" },
+  { path: "/settings/chunking" },
+  { path: "/settings/vector-index" },
+  { path: "/settings/graph" },
+  { path: "/settings/retrieval" },
+  { path: "/settings/prompts" },
+  { path: "/settings/guardrail" },
+  { path: "/settings/evaluation" },
+  { path: "/evaluation" },
+  { path: "/feedback" },
+  { path: "/settings/security/permissions" },
+  { path: "/settings/security/users" },
+  { path: "/settings/security/roles" },
+  { path: "/settings/system-tables" },
+  { path: "/settings/huggingface" },
+  { path: "/settings/services" },
+  { path: "/settings/oci" },
+  { path: "/settings/upload-storage" },
+  { path: "/settings/model" },
+  { path: "/settings/database" },
+  { path: "/settings/appearance" },
 ];
+
+/** 淡い色の面（選んだ行・状態の表示）が出る状態。 */
+const STATES: (Screen & { name: string })[] = [
+  {
+    name: "フィードバックの選んだカードと詳細",
+    path: "/feedback?period=30&feedback=feedback-answer",
+    act: async (page) => {
+      // 選んだカード（accent の淡い面）と、評価の状態の表示（danger）がある。375px は詳細だけを出す（一覧は隠れる）。
+      await expect(page.locator('[data-surface-tint="accent"]').first()).toBeAttached();
+      await expect(page.locator('[data-surface-tint="danger"]').first()).toBeAttached();
+      await expect(page.locator("[data-surface-tint]:visible").first()).toBeVisible();
+    },
+  },
+  {
+    name: "文書インデックスの状態の表示",
+    path: "/file-list",
+    act: async (page) => {
+      for (const tint of ["success", "warning", "danger"]) {
+        await expect(page.locator(`[data-surface-tint="${tint}"]`).first()).toBeVisible();
+      }
+    },
+  },
+  {
+    name: "安全チェックの選んだ方針と注意のチップ",
+    path: "/settings/guardrail",
+    act: async (page) => {
+      await expect(page.locator('label[data-surface-tint="accent"]').first()).toBeVisible();
+      await expect(page.locator('[data-surface-tint="warning"]').first()).toBeVisible();
+      await expect(page.locator('[data-surface-tint="neutral"]').first()).toBeVisible();
+    },
+  },
+];
+
+const pathOf = (screen: Screen) => screen.path.split("?")[0];
+
+/** テーマは ui-store（localStorage）の保存値で決める（既定はライト）。 */
+async function useTheme(page: Page, theme: Theme) {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+  }, theme);
+}
 
 /** 表示の途中（フェードイン・色の transition）の色で color-contrast を測らない。無限の animation（Spinner など）は待たない。 */
 async function waitForSettledAnimations(page: Page) {
@@ -127,20 +381,49 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
   expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
 }
 
-test.describe("主要な画面の a11y（axe）", { tag: "@a11y" }, () => {
+async function openAndCheck(page: Page, testInfo: TestInfo, screen: Screen, theme: Theme) {
+  await useTheme(page, theme);
+  await screen.setup?.(page);
+  await page.goto(screen.path);
+  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
+  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。描画の失敗（CardErrorBoundary）は mock の不足。
+  // mock の無い API は 503 で、TanStack Query の再試行（既定 3 回）を終えてから失敗の表示になる。
+  await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.getByText(/^(この項目|「.+」)を表示できません$/)).toHaveCount(0);
+  await screen.act?.(page);
+  await expectNoSeriousViolations(page, testInfo, pathOf(screen));
+}
+
+test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
   test.beforeEach(async ({ page }) => {
-    await mockDatabaseReady(page);
+    await mockFallbackApi(page);
     await mockLocalAuth(page);
     await mockMainScreens(page);
+    await mockSettingsAndFeedback(page);
   });
 
-  for (const screen of SCREENS) {
-    test(`${screen.name}（${screen.path}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
-      await page.goto(screen.path);
-      await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
-      // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。
-      await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
-      await expectNoSeriousViolations(page, testInfo, screen.path);
-    });
+  test("SCREENS はサイドナビの全項目と同じ", async ({ page }) => {
+    await page.goto("/chat?search_answer_profile_id=bv-1");
+    const sidebar = await openSidebarNav(page);
+    await expandSidebarSections(sidebar);
+    const hrefs = await sidebar
+      .locator("nav a[href]")
+      .evaluateAll((links) => links.map((link) => new URL((link as HTMLAnchorElement).href).pathname));
+    expect(hrefs).toEqual(SCREENS.map(pathOf));
+  });
+
+  for (const theme of THEMES) {
+    for (const screen of SCREENS) {
+      test(`${pathOf(screen)}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
+        await openAndCheck(page, testInfo, screen, theme);
+      });
+    }
+    for (const state of STATES) {
+      test(`${state.name}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
+        await openAndCheck(page, testInfo, state, theme);
+      });
+    }
   }
 });
