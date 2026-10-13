@@ -141,7 +141,7 @@ npx playwright test e2e/<対象>.spec.ts  # 関係する spec だけ（smoke・�
 npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（未指定なら 404 の hermetic モード）
 
 # 外部 parser のサービス（services/parsers/<name>。venv は parser ごと）
-RAG_SERVICES_TORCH=cpu RAG_SERVICES_MODELS=skip scripts/rag-services.sh sync parser-docling
+RAG_SERVICES_MODELS=skip scripts/rag-services.sh sync parser-docling   # torch は lock の CPU 版（#1650）
 cd services/parsers/docling && uv run --no-sync --with pytest python -m pytest -q tests
 ```
 

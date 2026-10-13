@@ -62,6 +62,8 @@ jobs:
   # lock から書き出した requirements（hash 付き）を検査する（#1513。docling・asr 以外は #1534 で足した）。
   # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local）。package の extra（rag_engine の
   # docling 等）も配備で入るので --all-extras を付ける。lock は glob で集めるので、サービスを足しても対象に入る。
+  # torch の CPU 版（2.13.0+cpu。#1650）は PyPI に無い版で pip-audit が飛ばすので、+cpu を外して同じ版の PyPI の
+  # torch として検査する（脆弱性は CPU 版と CUDA 版で同じ）。
   rag-services-pip-audit:
     name: RAG / packages & services (pip-audit)
     runs-on: ubuntu-24.04
@@ -85,6 +87,7 @@ jobs:
             echo "::group::${dir}"
             (cd "${dir}" && uv export --locked --no-dev --all-extras --no-emit-local --format requirements.txt \
               -o "${RUNNER_TEMP}/requirements.txt" -q \
+              && sed -i -E 's/^(torch[a-z]*)==([^ ;+]+)\+cpu /\1==\2 /' "${RUNNER_TEMP}/requirements.txt" \
               && uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt") \
               || { status=1; echo "::error file=${lock}::pip-audit が既知の脆弱性を検出しました（uv lock --upgrade-package で修正版へ上げる）。"; }
             echo "::endgroup::"

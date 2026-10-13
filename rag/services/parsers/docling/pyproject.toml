@@ -17,6 +17,10 @@ dependencies = [
     # rapidocr と docling の TableFormer が import する cv2 は、GUI 版ではなく headless 版で入れる
     # (#310)。GUI 版は libxcb / libGL / glib を要し、slim の base image では import が失敗する。
     "opencv-python-headless>=4.10,<6.0",
+    # docling（docling-ibm-models）の推論が使う torch / torchvision を、CPU 版の index から入れるために直接の依存に
+    # 書く（uv の [tool.uv.sources] は直接の依存にだけ効く。index は下の [[tool.uv.index]]。#1650）。
+    "torch>=2.13,<3",
+    "torchvision>=0.28,<1",
 ]
 
 [tool.uv]
@@ -28,6 +32,16 @@ exclude-dependencies = ["opencv-python"]
 production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 rag-engine = { path = "../../../packages/rag_engine", editable = true }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+# torch / torchvision は PyTorch の CPU 版の index から入れる（#1650）。PyPI の Linux の wheel は CUDA 版で、
+# triton・nvidia-* / cuda-* の wheel（数 GB）を依存に持つが、配備先の Compute は GPU を持たない。
+# explicit = true で、この index は上の sources で指定した package にだけ使う（ほかの依存は PyPI から入れる）。
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

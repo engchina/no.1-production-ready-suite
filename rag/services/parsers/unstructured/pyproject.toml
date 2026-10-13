@@ -10,16 +10,32 @@ dependencies = [
     # unstructured-inference が import する cv2 は、GUI 版ではなく headless 版で入れる(#310)。
     # GUI 版は libxcb / libGL / glib を要し、slim の base image では import が失敗する。
     "opencv-python-headless>=4.10,<5.0",
+    # unstructured-inference（hi_res の layout の推論）が使う torch / torchvision を、CPU 版の index から入れるために
+    # 直接の依存に書く（uv の [tool.uv.sources] は直接の依存にだけ効く。index は下の [[tool.uv.index]]。#1650）。
+    "torch>=2.13,<3",
+    "torchvision>=0.28,<1",
 ]
 
 [tool.uv]
 # unstructured-inference が要求する GUI 版の opencv-python を入れない(cv2 は上の headless 版が
 # 提供する)。両方を入れると同じ cv2 パッケージを上書きし合うため、依存の解決から外す。
-exclude-dependencies = ["opencv-python"]
+# triton（GPU の kernel の compiler。約 190MB）は openai-whisper（音声の文字起こし）が Linux の x86_64 で直接の依存に
+# 持つが、CUDA の GPU でだけ使う（whisper は CUDA のときだけ import する）。GPU の無い配備先では使わないので入れない（#1650）。
+exclude-dependencies = ["opencv-python", "triton"]
 
 [tool.uv.sources]
 production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+# torch / torchvision は PyTorch の CPU 版の index から入れる（#1650）。PyPI の Linux の wheel は CUDA 版で、
+# triton・nvidia-* / cuda-* の wheel（数 GB）を依存に持つが、配備先の Compute は GPU を持たない。
+# explicit = true で、この index は上の sources で指定した package にだけ使う（ほかの依存は PyPI から入れる）。
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
