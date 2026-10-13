@@ -244,7 +244,7 @@ _suite_check_schema() {
   # 権限の不足（insufficient privileges・表領域の quota・Oracle Text の CTX_DDL・参照できない view など）。
   if printf '%s %s\n' "${summary}" "${last_error}" \
     | grep -qE 'ORA-01031|ORA-01950|ORA-01536|ORA-00942|ORA-04043|PLS-00201'; then
-    _SUITE_CHECK_LINES+=("check: ${product} の DB ユーザー（PLATFORM_ORACLE_USER）の権限が足りない可能性があります。terraform/README.md「既存の ADB で ADMIN 以外のユーザーを使うとき」の権限を付けてから、初期化をやり直してください。")
+    _SUITE_CHECK_LINES+=("check: ${product} の DB ユーザー（PLATFORM_ORACLE_USER）の権限が足りない可能性があります。terraform/README.md「アプリ用の DB ユーザー」の権限を付けてから（配備の props に adb_admin.env があれば suite-restart.sh で付け直せる）、初期化をやり直してください。")
   fi
   _SUITE_CHECK_LINES+=("check: ${product} の初期化のやり直しは ${log_file} の Recovery の行（画面の システムテーブル でもできる）。")
 }

@@ -262,8 +262,11 @@ DATA USER の接続 pool を作り直す（#1022）。環境変数で与えた�
 も同期する。同期に失敗した場合、`backend/.env`（`NL2SQL_ORACLE_DEEPSEC_*`）と runtime 設定は保存前へ戻す。
 
 DeepSec V001 と `DATA USER 認証` の同期を実行する `PLATFORM_ORACLE_USER` には少なくとも `CREATE ROLE`、
-`CREATE END USER`、`ALTER END USER`、`CREATE DATA ROLE`、`GRANT ANY ROLE` / Data Role grant、`CREATE CONTEXT`、
-`CREATE PROCEDURE`、対象 object への `GRANT SELECT`、および DeepSec metadata view 参照権限が必要。
+`CREATE END USER`、`ALTER END USER`、`CREATE DATA ROLE`、`GRANT ANY ROLE`、`CREATE ANY CONTEXT`、
+`CREATE PROCEDURE`、対象 object への `GRANT SELECT`（別の schema なら `GRANT ANY OBJECT PRIVILEGE`）、DeepSec metadata view 参照権限と、
+Data Grant の `GRANT ANY DATA ROLE`（DATA ROLE を END USER に付ける）・`ADMINISTER ANY DATA GRANT`（Data Grant の作成・削除）・
+`SET USE DATA GRANTS ONLY` が必要。Autonomous AI Database の `PDB_DBA` は最後の 3 つを含まない（無いと `ORA-01031`）。
+統合 stack の配備は、アプリ用の DB ユーザーに `PDB_DBA` とこの 3 つを付ける（[terraform/README.md「アプリ用の DB ユーザー」](../../terraform/README.md#アプリ用の-db-ユーザー1668)。#1668）。
 `ORA-01017` が通常ユーザーの SELECT 実行時だけ発生する場合は、application RBAC ではなく
 DATA USER password の漂移を疑い、Deep Data Security 画面で password を保存し直すか、
 `Oracle へ同期` を再実行する。

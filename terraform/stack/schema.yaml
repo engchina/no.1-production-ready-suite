@@ -45,6 +45,13 @@ variableGroups:
       - adb_compartment_ocid
       - adb_deployment_mode
 
+  - title: "アプリ用の DB ユーザー"
+    visible: true
+    variables:
+      - adb_app_user_enabled
+      - adb_app_user_name
+      - adb_app_user_password
+
   - title: Existing Autonomous AI Database
     visible:
       eq:
@@ -52,6 +59,7 @@ variableGroups:
         - "既存の Autonomous AI Database を選択"
     variables:
       - existing_adb_ocid
+      - existing_adb_admin_password
       - existing_oracle_user
       - existing_oracle_password
       - existing_oracle_dsn
@@ -233,18 +241,55 @@ variables:
     dependsOn:
       compartmentId: ${adb_compartment_ocid}
 
+  adb_app_user_enabled:
+    type: boolean
+    required: false
+    visible: true
+    title: "アプリ用の DB ユーザーを使う"
+    description: "有効（推奨）にすると、Compute が配備のときに ADMIN で ADB に接続し、アプリ用のユーザー（ADMIN ではないユーザー）を作って権限（PDB_DBA と Deep Data Security の権限）を付けます。3 製品はこのユーザーで接続し、システムの表もこのユーザーの schema に作ります。ADMIN のパスワードは platform/.env に書きません。無効にすると、新規の ADB は ADMIN、既存の ADB は「Existing DB username」で接続します。"
+    default: true
+
+  adb_app_user_name:
+    type: string
+    required: false
+    visible: adb_app_user_enabled
+    title: "アプリ用の DB ユーザー名"
+    description: "英字で始まる 30 文字以内の英字・数字・_（ADMIN・SYS など Oracle の管理のユーザーは使えません）。PLATFORM_ORACLE_USER に書きます。"
+    default: "PRSUITE"
+    pattern: "^[A-Za-z][A-Za-z0-9_]{0,29}$"
+
+  adb_app_user_password:
+    type: password
+    required: false
+    visible: adb_app_user_enabled
+    title: "アプリ用の DB ユーザーのパスワード"
+    description: "12〜30 文字で、英大文字・英小文字・数字を 1 つ以上含めます（ユーザー名・二重引用符・単一引用符は使えません。ADMIN のパスワードとは別にしてください）。PLATFORM_ORACLE_PASSWORD と Wallet のパスワードに使います。"
+    confirmation: true
+
+  existing_adb_admin_password:
+    type: password
+    required: false
+    visible: adb_app_user_enabled
+    title: "既存の ADB の ADMIN パスワード"
+    description: "アプリ用の DB ユーザーを作るために、Compute が配備のときに ADMIN で接続します（ADB には Compute から接続します）。platform/.env・各製品の .env には書かず、Compute の root だけが読める /u01/aipoc/props/adb_admin.env に置きます。単一引用符は使えません。"
+    confirmation: true
+
   existing_oracle_user:
     type: string
     required: false
-    visible: true
+    visible:
+      not:
+        - adb_app_user_enabled
     title: "Existing DB username"
-    description: "Value written to PLATFORM_ORACLE_USER in platform/.env (the shared settings file) of every product. Single quotes are not allowed. A dedicated database user (schema) for the suite is recommended; a user other than ADMIN needs the privileges and tablespace quota listed in terraform/README.md (Existing ADB with a user other than ADMIN), otherwise the table initialization fails and the deployment check reports NG."
+    description: "Value written to PLATFORM_ORACLE_USER in platform/.env (the shared settings file) of every product. Single quotes are not allowed. A dedicated database user (schema) for the suite is recommended; a user other than ADMIN needs the privileges and tablespace quota listed in terraform/README.md (application database user), otherwise the table initialization fails and the deployment check reports NG. Used only when the application database user is disabled."
     default: "ADMIN"
 
   existing_oracle_password:
     type: password
     required: false
-    visible: true
+    visible:
+      not:
+        - adb_app_user_enabled
     title: "Existing DB password"
     description: "Value written to PLATFORM_ORACLE_PASSWORD in platform/.env (the shared settings file) of every product. Single quotes are not allowed."
     confirmation: true
@@ -390,7 +435,7 @@ variables:
     required: false
     visible: true
     title: "Database ADMIN password"
-    description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password of every product. Single quotes are not allowed."
+    description: "ADMIN password of the new ADB. With the application database user (default), the Compute instance uses it only to create that user, and it is not written to platform/.env. Without it, it is also the wallet password and the Oracle connection password of every product. Single quotes are not allowed."
     confirmation: true
     pattern: '^$|^[^"''\r\n]{12,30}$'
 

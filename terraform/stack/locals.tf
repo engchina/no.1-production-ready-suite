@@ -190,6 +190,18 @@ PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session
 PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf
 EOT
 
+  # ---------------------------------------------------------------- アプリ用の DB ユーザー（#1668）
+
+  # Compute の platform/deploy/suite-init.sh が、製品の配備の前に ADMIN で接続してアプリ用のユーザーを作るための入力
+  # （/u01/aipoc/props/adb_admin.env。root の 0600）。ADMIN のパスワードは platform/.env・各製品の backend/.env には
+  # 書かない。再配備（suite-restart.sh / suite-update.sh）で権限を付け直すため、props に残す。
+  # アプリ用のユーザーのパスワードは platform.env の PLATFORM_ORACLE_PASSWORD（suite-db-user.py がそこから読む）。
+  adb_admin_env = <<-EOT
+SUITE_DB_ADMIN_USER=ADMIN
+SUITE_DB_ADMIN_PASSWORD='${local.effective_adb_admin_password}'
+SUITE_DB_APP_USER='${local.adb_app_user}'
+EOT
+
   # ---------------------------------------------------------------- cloud-init
 
   # 製品ごとの backend/.env（配備する製品だけ。/u01/aipoc/props/<製品>.backend.env）。
@@ -200,6 +212,7 @@ EOT
   }
 
   cloud_init_user_data = base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
+    adb_admin_env       = var.adb_app_user_enabled ? base64gzip(local.adb_admin_env) : ""
     adb_name            = local.effective_adb_name
     adb_ocid            = local.effective_adb_ocid
     application_git_ref = var.application_git_ref
