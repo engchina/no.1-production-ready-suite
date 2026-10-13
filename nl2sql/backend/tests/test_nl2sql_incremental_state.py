@@ -36,6 +36,7 @@ from app.features.nl2sql.incremental_store import (
     _read_lob,
 )
 from app.features.nl2sql.models import (
+    DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD,
     AdminFeedbackReviewRequest,
     ClassifierTrainingExample,
     FeedbackIndexRequest,
@@ -628,7 +629,7 @@ def test_incremental_feedback_state_is_restored_lazily_after_restart() -> None:
 
     restarted = _incremental_service(repository)
 
-    assert restarted._feedback_similarity_threshold == 0.0  # noqa: SLF001
+    assert restarted._feedback_similarity_threshold == DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD  # noqa: SLF001
     assert restarted._feedback_indexed_ids == set()  # noqa: SLF001
     config = restarted.feedback_search_config()
     entries = restarted.list_feedback_entries()
@@ -639,6 +640,20 @@ def test_incremental_feedback_state_is_restored_lazily_after_restart() -> None:
     assert {item.history_id for item in entries.items if item.indexed} == {
         item.id for item in histories
     }
+
+
+def test_incremental_feedback_search_config_defaults_to_0_9_when_not_saved() -> None:
+    # 未保存の環境と、最低スコアを持たない保存値では、最低スコアの既定 0.9 を使う（#1721）。
+    assert DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD == 0.9
+    unsaved = _incremental_service(MemoryIncrementalNl2SqlRepository(seed_default=False))
+    assert unsaved.feedback_search_config().similarity_threshold == 0.9
+    assert unsaved.feedback_search_config().match_limit == 3
+
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document("singletons", "feedback_search_config", {"value": {"match_limit": 5}})
+    partial = _incremental_service(repository).feedback_search_config()
+    assert partial.similarity_threshold == 0.9
+    assert partial.match_limit == 5
 
 
 def test_incremental_feedback_search_config_patch_preserves_omitted_fields() -> None:
@@ -1678,6 +1693,8 @@ async def test_similar_history_lob_read_does_not_block_following_job(
         ],
     )
     service = _incremental_service(repository)
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     profile = Nl2SqlProfile(
         id="default",
         name="標準プロファイル",

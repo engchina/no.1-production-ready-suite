@@ -1730,10 +1730,14 @@ class FeedbackSearchConfigRequest(BaseModel):
     match_limit: int | None = Field(default=None, ge=1, le=20)
 
 
+# 類似検索インデックスの「最低スコア」の既定（設定を保存していないときの値。#1721）。
+DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD = 0.9
+
+
 class FeedbackSearchConfigData(BaseModel):
     """Current feedback learning retrieval config."""
 
-    similarity_threshold: float = 0.0
+    similarity_threshold: float = DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD
     match_limit: int = 3
 
 
