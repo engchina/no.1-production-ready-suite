@@ -10,7 +10,7 @@ description: >-
 # 保存は型検査の後に job で行う（composite action は job の終わりの post の step を持てない）:
 #   - name: Save mypy cache
 #     if: github.ref == 'refs/heads/main' && steps.mypy-cache.outputs.cache-hit != 'true'
-#     uses: actions/cache/save@v6
+#     uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
 #     with:
 #       path: <backend>/.mypy_cache
 #       key: ${{ steps.mypy-cache.outputs.key }}
@@ -46,7 +46,7 @@ runs:
 
     - name: Restore mypy cache
       id: restore
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ inputs.path }}
         key: ${{ steps.key.outputs.key }}

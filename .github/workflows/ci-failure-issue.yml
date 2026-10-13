@@ -9,12 +9,15 @@ name: CI failure issue
 # 動作確認: `gh workflow run ci-failure-issue.yml -f run_id=<失敗した run の ID>`（main 以外の run も対象にできる）。
 
 on:
-  workflow_run:
+  # workflow_run は main の文脈で動き、PR の code を checkout・実行しない（.github/scripts を main から読み、
+  # run の metadata だけを使う。PR の run は if で除く）。zizmor の dangerous-triggers はこの理由で除く（#1594）。
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows:
       - CI
       - E2E Nightly
       - RAG Evaluation Nightly
       - Dependency Audit Nightly
+      - CodeQL
       - Integration Nightly
     types:
       - completed
@@ -45,8 +48,9 @@ jobs:
       issues: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           sparse-checkout: .github/scripts
 
       - name: Create or update issue

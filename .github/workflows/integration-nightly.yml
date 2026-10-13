@@ -52,16 +52,18 @@ jobs:
         working-directory: ${{ matrix.dir }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
           cache-dependency-glob: ${{ matrix.dir }}/uv.lock
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -95,10 +97,12 @@ jobs:
         working-directory: rag/frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
@@ -108,9 +112,10 @@ jobs:
           frontend: rag/frontend
 
       # coverage の provider は vitest と同じ版でなければならない。package.json に足さず（PR の install を
-      # 増やさない）、ここで入っている vitest の版のものを一時的に入れる。
+      # 増やさない）、ここで入っている vitest の版のものを一時的に入れる。lock の外の install だが、版は lock の
+      # vitest と同じに固定し、nightly だけで実行するので zizmor の adhoc-packages を除く（#1594）。
       - name: Install coverage provider
-        run: |
+        run: | # zizmor: ignore[adhoc-packages]
           version="$(node -p "require('vitest/package.json').version")"
           npm install --no-save --no-audit --no-fund "@vitest/coverage-v8@${version}"
 
