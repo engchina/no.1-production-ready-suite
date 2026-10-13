@@ -22,7 +22,7 @@ const nl2sqlJa = {
   "chat.engine.enterprise": "Enterprise AI",
   "chat.engine.selectAi.desc": "Oracle Select AI が、業務プロファイルの表・項目の情報から SQL を生成します。",
   "chat.engine.selectAiAgent.desc": "Select AI Agent が SQL 生成ツールを呼び出して SQL を生成します。業務プロファイルの Select AI Agent の資産の同期が必要です。",
-  "chat.engine.enterprise.desc": "OCI Enterprise AI に表・項目の情報を直接渡して SQL を生成します。",
+  "chat.engine.enterprise.desc": "OCI Enterprise AI に表・項目の情報を直接渡して SQL を生成します。モデルはシステム設定 › モデル の既定のテキストモデルです。",
   "chat.history": "会話の履歴",
   "chat.closeHistory": "会話の履歴を閉じる",
   "chat.new": "新しい会話",
@@ -1198,7 +1198,7 @@ const nl2sqlJa = {
   "nl2sql.engine.selectAi": "Select AI",
   "nl2sql.engine.selectAi.desc": "質問に表や項目の情報を添えて、AI に SQL 生成を依頼します。",
   "nl2sql.engine.direct": "Enterprise AI Direct",
-  "nl2sql.engine.direct.desc": "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。",
+  "nl2sql.engine.direct.desc": "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。モデルはシステム設定 › モデル の既定のテキストモデルです。",
   "nl2sql.engine.select_ai_agent": "Select AI Agent",
   "nl2sql.engine.select_ai": "Select AI",
   "nl2sql.engine.enterprise_ai_direct": "Enterprise AI Direct",
@@ -1641,7 +1641,7 @@ const nl2sqlJa = {
     "上の「AI 構築 → Markdown 下書き確認 → オントロジーを公開」を完了すると、この Profile が許可した表・ビューと公開済みの関係が、関係グラフとしてここに表示されます。",
   "profiles.editor.selectAi": "Select AI 設定",
   "profiles.selectAi.reasoningNote":
-    "Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。seed はこの設定の値を AI profile に入れます。",
+    "Region・LLM Model は Select AI・Select AI Agent（Oracle の AI profile）にだけ使います。Enterprise AI Direct は、システム設定 › モデル の既定のテキストモデルを使います。Select AI・Select AI Agent には、システム設定 › モデル の推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。seed はこの設定の値を AI profile に入れます。",
   "profiles.ontologyBuild.title": "オントロジー構築",
   "profiles.ontologyBuild.hint":
     "スキーマ情報・業務説明・Q/A(質問と正解 SQL)から Markdown 下書きを生成します。公開済み Markdown だけが SQL 生成に使われます。",
@@ -1900,7 +1900,7 @@ const nl2sqlJa = {
   "profiles.oracle.saveExecute": "保存実行",
   "profiles.oracle.executeHint": "業務プロファイルを保存し、Oracle 反映ジョブを開始します。実行するには ADMIN_EXECUTE を入力してください。",
   "profiles.oracle.assets.title": "Select AI Agent アセット",
-  "profiles.oracle.assets.hint": "Select AI Agent(tool / agent / task / team)を業務プロファイルから作り直します。Agent 機能を使う場合のみチェックしてください。",
+  "profiles.oracle.assets.hint": "Select AI Agent(tool / agent / task / team)を業務プロファイルから作り直します。Agent 機能を使う場合のみチェックしてください。この設定は業務プロファイルに保存され、オンの間は保存のたびに再構築します。オフにしても既存のアセットは削除しません。",
   "profiles.oracle.assets.refreshAgent": "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する",
   "profiles.oracle.assets.lastRefresh": "直近の資産更新結果",
   "profiles.oracle.saveConfirmTitle": "Oracle Profile 保存の確認",
@@ -1926,7 +1926,15 @@ const nl2sqlJa = {
   "profiles.oracle.sync.verifyFailed":
     "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
-    "現在の Oracle schema に OCI_CRED がありません。データベース設定で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
+    "現在の Oracle schema に OCI_CRED がありません。運用設定 > Select AI Credential 管理で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
+  "profiles.oracle.sync.credentialMissingBeforeStart":
+    "業務 Profile は保存されましたが、Select AI Credential が無いため Oracle 反映を開始できませんでした。運用設定 > Select AI Credential 管理で作成してから、Oracle 反映を再試行してください。",
+  "profiles.oracle.precondition.credentialMissing.title": "Select AI Credential が作成されていません",
+  "profiles.oracle.precondition.credentialMissing.body":
+    "保存すると、業務プロファイルを DBMS_CLOUD_AI Profile へ反映します。反映には Select AI Credential（{name}）が必要です。運用設定 > Select AI Credential 管理で作成するまで、保存できません。",
+  "profiles.oracle.precondition.credentialMissing.bodyAskAdmin":
+    "保存すると、業務プロファイルを DBMS_CLOUD_AI Profile へ反映します。反映には Select AI Credential（{name}）が必要です。作成するまで保存できません。Select AI Credential 管理の権限を持つ管理者に作成を依頼してください。",
+  "profiles.oracle.precondition.credentialMissing.recheck": "Credential を再確認",
   "profiles.oracle.sync.openSelectAiCredential": "Select AI Credential を開く",
   "profiles.oracle.progress.title": "業務プロファイル保存・Oracle反映",
   "profiles.oracle.progress.stepsLabel": "業務プロファイル保存とOracle反映の処理ステップ",

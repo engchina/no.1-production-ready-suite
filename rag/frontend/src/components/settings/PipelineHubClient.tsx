@@ -98,7 +98,7 @@ function StageCard({ item, step }: { item: NavItem; step: number }) {
       aria-label={t("settings.pipeline.openStage", { name })}
       className="flex h-full gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-accent-emphasis hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
     >
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent-subtle text-accent-fg">
+      <span data-surface-tint="accent" className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent-subtle text-accent-fg">
         <Icon size={20} aria-hidden />
       </span>
       <span className="min-w-0">

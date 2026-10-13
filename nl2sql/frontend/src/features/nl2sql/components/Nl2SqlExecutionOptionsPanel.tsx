@@ -96,7 +96,7 @@ export function Nl2SqlExecutionOptionsPanel({
             {t("nl2sql.executionOptions.title")}
           </span>
           {hasChangedOptions ? (
-            <span className="shrink-0 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
+            <span data-surface-tint="accent" className="shrink-0 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
               {t("nl2sql.selectAiOverrides.activeBadge")}
             </span>
           ) : null}

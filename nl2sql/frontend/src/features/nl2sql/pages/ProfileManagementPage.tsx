@@ -68,6 +68,14 @@ import {
   SchemaRefreshProcessing,
 } from "../components/SchemaRefreshFeedback";
 import { ProfileSaveProgress } from "../components/ProfileSaveProgress";
+import { ProfileSaveCredentialPrecondition } from "../components/ProfileSaveCredentialPrecondition";
+import {
+  PROFILE_ORACLE_SYNC_READINESS_KEY,
+  PROFILE_ORACLE_SYNC_READINESS_URL,
+  PROFILE_SAVE_CREDENTIAL_PRECONDITION_ID,
+  isSelectAiCredentialMissing,
+  isSelectAiCredentialMissingError,
+} from "../profileSyncReadiness";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   nl2sqlIncrementalKeys,
@@ -102,6 +110,7 @@ import type {
   ProfileSummary,
   ProfileSelectAiConfig,
   ProfileSyncJobData,
+  ProfileSyncReadinessData,
   ProfileUpsertPayload,
   SchemaObjectSummary,
   SchemaTable,
@@ -148,6 +157,11 @@ interface ProfileFormState {
   selectAiConfig: ProfileSelectAiConfig;
   /** 既定の生成方式（#1524）。 */
   defaultEngine: Nl2SqlEngine;
+  /**
+   * 保存（Oracle 反映）のたびに Select AI Agent アセットも再構築するか（#1690）。業務プロファイルに
+   * 保存する設定で、開き直しても保つ（「実行設定・同期表示をリセット」の対象ではない）。
+   */
+  rebuildAgentAssetsOnSave: boolean;
 }
 
 
@@ -174,6 +188,7 @@ const EMPTY_FORM: ProfileFormState = {
   allowedViews: [],
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
   defaultEngine: "select_ai",
+  rebuildAgentAssetsOnSave: false,
 };
 
 function emptyProfileForm(): ProfileFormState {
@@ -319,6 +334,7 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
     allowedViews: normalized.allowed_views,
     selectAiConfig,
     defaultEngine: normalized.default_engine ?? "select_ai",
+    rebuildAgentAssetsOnSave: normalized.rebuild_agent_assets_on_save ?? false,
   };
 }
 
@@ -332,6 +348,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     sql_rules: [],
     safety_policy: "select_only",
     default_engine: form.defaultEngine,
+    rebuild_agent_assets_on_save: form.rebuildAgentAssetsOnSave,
     select_ai_config: {
       ...form.selectAiConfig,
       profile_name: profileName,
@@ -835,6 +852,12 @@ function ProfileEditor({
   canClearOracleExecution,
   oracleSyncJob,
   oracleSyncSubmissionError,
+  oracleSyncSubmissionErrorCode,
+  selectAiCredentialMissing,
+  selectAiCredentialName,
+  canOpenSelectAiCredential,
+  recheckingSelectAiCredential,
+  onRecheckSelectAiCredential,
   saveError,
   saveConflict,
   reloadingLatest,
@@ -889,6 +912,14 @@ function ProfileEditor({
   canClearOracleExecution: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
+  oracleSyncSubmissionErrorCode: string;
+  /** 保存（Oracle 反映）の事前条件の Select AI の Credential が無いと分かった（#1683）。 */
+  selectAiCredentialMissing: boolean;
+  selectAiCredentialName: string;
+  /** 運用設定の Select AI Credential 管理を開けるか（無ければリンクの代わりに管理者への依頼を案内する）。 */
+  canOpenSelectAiCredential: boolean;
+  recheckingSelectAiCredential: boolean;
+  onRecheckSelectAiCredential: () => void;
   /** プロファイルの保存（PATCH / POST）の失敗。保存ボタンの直下だけに出す（messaging.md §3.3.1。#585）。 */
   saveError: string;
   /** 保存の失敗がほかの更新との競合（409）。失敗の文の下に「最新の内容を読み込む」を出す（#1111）。 */
@@ -1107,6 +1138,17 @@ function ProfileEditor({
         </label>
       </section>
 
+      {/* 保存（Oracle 反映）の事前条件。保存の操作の直前に出し、満たすまで「保存」を無効にする
+          （DeepSec の事前条件と同じ出し方。messaging.md §10。#1683）。 */}
+      {selectAiCredentialMissing ? (
+        <ProfileSaveCredentialPrecondition
+          credentialName={selectAiCredentialName}
+          selectedProfileId={selectedProfile?.id ?? ""}
+          canOpenSettings={canOpenSelectAiCredential}
+          rechecking={recheckingSelectAiCredential}
+          onRecheck={onRecheckSelectAiCredential}
+        />
+      ) : null}
       <ExecutionConfirmationField
         value={oracleConfirmation}
         onChange={onOracleConfirmationChange}
@@ -1121,7 +1163,10 @@ function ProfileEditor({
               variant="primary"
               size="lg"
               loading={saving}
-              disabled={!oracleConfirmed || saving}
+              disabled={!oracleConfirmed || saving || selectAiCredentialMissing}
+              aria-describedby={
+                selectAiCredentialMissing ? PROFILE_SAVE_CREDENTIAL_PRECONDITION_ID : undefined
+              }
               onClick={onSave} icon={Save}>
               <span>{t("profiles.action.save")}</span>
             </Button>
@@ -1155,9 +1200,11 @@ function ProfileEditor({
         </div>
       ) : null}
       <ProfileSaveResultRegion
+        profileId={selectedProfile?.id ?? ""}
         rebuildAgentAssets={rebuildAgentAssets}
         oracleSyncJob={oracleSyncJob}
         oracleSyncSubmissionError={oracleSyncSubmissionError}
+        oracleSyncSubmissionErrorCode={oracleSyncSubmissionErrorCode}
         retryingOracleSync={retryingOracleSync}
         onRetryOracleSync={onRetryOracleSync}
       />
@@ -1166,15 +1213,19 @@ function ProfileEditor({
 }
 
 function ProfileSaveResultRegion({
+  profileId,
   rebuildAgentAssets,
   oracleSyncJob,
   oracleSyncSubmissionError,
+  oracleSyncSubmissionErrorCode,
   retryingOracleSync,
   onRetryOracleSync,
 }: {
+  profileId: string;
   rebuildAgentAssets: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
+  oracleSyncSubmissionErrorCode: string;
   retryingOracleSync: boolean;
   onRetryOracleSync: () => void;
 }) {
@@ -1186,7 +1237,10 @@ function ProfileSaveResultRegion({
       <ProfileSaveProgress
         job={oracleSyncJob}
         submissionError={oracleSyncSubmissionError}
-        rebuildAgentAssets={rebuildAgentAssets}
+        submissionErrorCode={oracleSyncSubmissionErrorCode}
+        profileId={profileId}
+        // 工程の表示は、実行したジョブが再構築を含むかで決める（保存の後にチェックを変えても変えない）。
+        rebuildAgentAssets={oracleSyncJob?.rebuild_agent_assets ?? rebuildAgentAssets}
         retrying={retryingOracleSync}
         onRetry={onRetryOracleSync}
       />
@@ -1232,10 +1286,16 @@ export function ProfileManagementPage() {
     direction: "asc",
   });
   const [oracleConfirmation, setOracleConfirmation] = useState("");
-  const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
+  // 「保存時に Select AI Agent アセットも再構築する」は業務プロファイルの属性（#1690）。フォームに持ち、
+  // 保存の payload と未保存の判定に入れる。
+  const rebuildAgentAssets = form.rebuildAgentAssetsOnSave;
+  const setRebuildAgentAssets = (value: boolean) =>
+    setForm((current) => ({ ...current, rebuildAgentAssetsOnSave: value }));
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
+  // Oracle 反映の開始の失敗の code（Credential が無い 409 なら、ジョブの失敗と同じ案内とリンクを出す。#1683）。
+  const [oracleSyncSubmissionErrorCode, setOracleSyncSubmissionErrorCode] = useState("");
   const [profileSaveError, setProfileSaveError] = useState("");
   // 完了を通知済みの Oracle 同期 job ID。render 中に比べるため state で持つ。
   const [reportedOracleSyncJobId, setReportedOracleSyncJobId] = useState("");
@@ -1332,6 +1392,29 @@ export function ProfileManagementPage() {
     staleTime: 10_000,
     retry: false,
   });
+  // 保存（Oracle 反映）の事前条件: Select AI の Credential が作成済みか（#1683）。運用設定の
+  // Select AI Credential の画面の権限が無くても読める API で確かめる。別のタブで作って戻ったときに
+  // 案内が消えるよう、画面のフォーカスで取り直す。読めないときは止めない（backend の 409 が守る）。
+  const oracleSyncReadinessQuery = useQuery({
+    queryKey: PROFILE_ORACLE_SYNC_READINESS_KEY,
+    queryFn: ({ signal }) =>
+      apiGet<ProfileSyncReadinessData>(PROFILE_ORACLE_SYNC_READINESS_URL, { signal }),
+    staleTime: 30_000,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+  const selectAiCredentialMissing = isSelectAiCredentialMissing(oracleSyncReadinessQuery.data);
+  const canOpenSelectAiCredential = auth.hasPermission(MENU_PERMISSIONS.settingsSelectAiCredential);
+  // 「再確認」を押したときだけボタンを loading にする（フォーカスでの取り直しでは回さない。buttons.md §8）。
+  const [recheckingSelectAiCredential, setRecheckingSelectAiCredential] = useState(false);
+  const recheckSelectAiCredential = async () => {
+    setRecheckingSelectAiCredential(true);
+    try {
+      await oracleSyncReadinessQuery.refetch();
+    } finally {
+      setRecheckingSelectAiCredential(false);
+    }
+  };
   const oracleSyncJobQuery = useQuery({
     queryKey: ["nl2sql", "oracle-sync-job", oracleSyncJobId],
     queryFn: () => apiGet<ProfileSyncJobData>(`/api/nl2sql/oracle-sync-jobs/${oracleSyncJobId}`),
@@ -1414,6 +1497,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setOracleSyncSubmissionErrorCode("");
     setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
@@ -1651,6 +1735,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setOracleSyncSubmissionErrorCode("");
     setProfileSaveError("");
     setProfileSaveConflict(false);
     lastOracleConfirmationRef.current = "";
@@ -1743,10 +1828,12 @@ export function ProfileManagementPage() {
     if (nextNameError || hasProfileRequiredErrors(nextRequiredErrors)) {
       return;
     }
+    if (selectAiCredentialMissing) return;
     setNameError(null);
     setRequiredErrors({});
     setOracleSyncJobId("");
     setOracleSyncSubmissionError("");
+    setOracleSyncSubmissionErrorCode("");
     setProfileSaveError("");
     setProfileSaveConflict(false);
     setReportedOracleSyncJobId("");
@@ -1778,10 +1865,6 @@ export function ProfileManagementPage() {
           setSearchParams({ profile: saved.id }, { replace: true });
         }
       }
-      // 1 文目は何が起きたかだけにし、Oracle Profile の反映の続きは description に分ける（#899）。
-      toast.success(t("profiles.message.saved"), {
-        description: t("profiles.message.savedOracleSyncing"),
-      });
     } catch (err) {
       if (isProfileNameConflictError(err)) {
         setNameError("duplicate");
@@ -1807,6 +1890,7 @@ export function ProfileManagementPage() {
 
     try {
       setOracleSyncSubmissionError("");
+      setOracleSyncSubmissionErrorCode("");
       const submittedOracleConfirmation = oracleConfirmation.trim();
       lastOracleConfirmationRef.current = submittedOracleConfirmation;
       const job = await apiPost<ProfileSyncJobData>(
@@ -1828,10 +1912,20 @@ export function ProfileManagementPage() {
         setOracleSyncProfileId(job.profile_id);
       }
       queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
+      // 1 文目は何が起きたかだけにし、Oracle Profile の反映の続きは description に分ける（#899）。
+      // 反映を始められなかったとき（Credential が無い 409 など）は「バックグラウンドで続きます」と
+      // 言えないので出さず、保存したことと失敗は結果の領域の 1 か所で示す（messaging.md §10.1。#1683）。
+      toast.success(t("profiles.message.saved"), {
+        description: t("profiles.message.savedOracleSyncing"),
+      });
     } catch (err) {
       setOracleSyncSubmissionError(
         err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
       );
+      setOracleSyncSubmissionErrorCode(err instanceof ApiError ? (err.errorCode ?? "") : "");
+      if (isSelectAiCredentialMissingError(err)) {
+        void queryClient.invalidateQueries({ queryKey: PROFILE_ORACLE_SYNC_READINESS_KEY });
+      }
     } finally {
       setLoading("");
     }
@@ -1892,6 +1986,7 @@ export function ProfileManagementPage() {
           );
       lastOracleConfirmationRef.current = retryConfirmation;
       setOracleSyncSubmissionError("");
+      setOracleSyncSubmissionErrorCode("");
       setReportedOracleSyncJobId("");
       setOracleSyncJobId(job.job_id);
       setOracleSyncProfileId(job.profile_id);
@@ -1900,6 +1995,10 @@ export function ProfileManagementPage() {
       setOracleSyncSubmissionError(
         err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
       );
+      setOracleSyncSubmissionErrorCode(err instanceof ApiError ? (err.errorCode ?? "") : "");
+      if (isSelectAiCredentialMissingError(err)) {
+        void queryClient.invalidateQueries({ queryKey: PROFILE_ORACLE_SYNC_READINESS_KEY });
+      }
     } finally {
       setLoading("");
     }
@@ -1976,7 +2075,6 @@ export function ProfileManagementPage() {
   }, []);
   const canClearOracleExecution = Boolean(
     oracleConfirmation ||
-      rebuildAgentAssets ||
       oracleSyncJobId ||
       oracleSyncProfileId ||
       oracleSyncJob ||
@@ -1986,10 +2084,10 @@ export function ProfileManagementPage() {
 
   const clearOracleExecution = () => {
     setOracleConfirmation("");
-    setRebuildAgentAssets(false);
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
+    setOracleSyncSubmissionErrorCode("");
     setProfileSaveError("");
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
@@ -2030,6 +2128,12 @@ export function ProfileManagementPage() {
       canClearOracleExecution={canClearOracleExecution}
       oracleSyncJob={oracleSyncJob}
       oracleSyncSubmissionError={oracleSyncSubmissionError}
+      oracleSyncSubmissionErrorCode={oracleSyncSubmissionErrorCode}
+      selectAiCredentialMissing={selectAiCredentialMissing}
+      selectAiCredentialName={oracleSyncReadinessQuery.data?.credential_name ?? ""}
+      canOpenSelectAiCredential={canOpenSelectAiCredential}
+      recheckingSelectAiCredential={recheckingSelectAiCredential}
+      onRecheckSelectAiCredential={() => void recheckSelectAiCredential()}
       saveError={profileSaveError}
       saveConflict={profileSaveConflict}
       reloadingLatest={loading === "reload-latest"}

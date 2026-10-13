@@ -835,7 +835,7 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
         ) : null}
       </div>
       <DetailSection title={t("evaluation.detail.question")}>
-        <p className="whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-fg">{result.case.question}</p>
+        <p data-surface-tint="accent" className="whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-fg">{result.case.question}</p>
       </DetailSection>
       <DetailSection title={t("evaluation.detail.expected")}>
         <p className="whitespace-pre-wrap break-words text-fg">{result.case.expected}</p>

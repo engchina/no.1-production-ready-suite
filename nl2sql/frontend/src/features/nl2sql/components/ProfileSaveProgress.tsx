@@ -1,15 +1,14 @@
-import { Bot, Database, RefreshCw } from "lucide-react";
+import { Bot, KeyRound, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import {
   Banner,
   Button,
-  buttonVariants,
+  ButtonLink,
   StatusBadge,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
-import { APP_ROUTES } from "@/lib/routes";
 
 import { engineLabel } from "../labels";
 import {
@@ -18,6 +17,10 @@ import {
   type ProfileSaveProgressStepId,
   type ProfileSaveProgressStepStatus,
 } from "../profileSyncPresentation";
+import {
+  SELECT_AI_CREDENTIAL_MISSING_CODE,
+  selectAiCredentialSettingsHref,
+} from "../profileSyncReadiness";
 import type { AssetRefreshData, ProfileSyncJobData } from "../types";
 import { WorkflowProgressStrip, type WorkflowProgressTone } from "./WorkflowProgressStrip";
 
@@ -65,9 +68,13 @@ function failureMessage(
   job: ProfileSyncJobData | null,
   submissionError: string,
   failedStep: ProfileSaveProgressStepId | undefined,
+  credentialMissing: boolean,
 ) {
-  if (job?.error_code === "SELECT_AI_CREDENTIAL_MISSING") {
-    return t("profiles.oracle.sync.credentialMissing");
+  if (credentialMissing) {
+    // 開始の前に 409 で止まった（行は保存済み）か、反映の手順で Credential が無かった（#1683）。
+    return submissionError && !job
+      ? t("profiles.oracle.sync.credentialMissingBeforeStart")
+      : t("profiles.oracle.sync.credentialMissing");
   }
   const detail = submissionError || job?.error_message_ja || "";
   const summary = submissionError
@@ -81,13 +88,8 @@ function failureMessage(
 }
 
 function credentialSettingsHref(job: ProfileSyncJobData | null) {
-  const returnParams = new URLSearchParams();
-  if (job?.profile_id) returnParams.set("profile", job.profile_id);
-  if (job?.job_id) returnParams.set("syncJobId", job.job_id);
-  const returnTo = `${APP_ROUTES.profiles}?${returnParams.toString()}`;
-  const settingsParams = new URLSearchParams({ returnTo });
   // Select AI Credential は運用設定の専用の画面（#658）。
-  return `${APP_ROUTES.settingsSelectAiCredential}?${settingsParams.toString()}`;
+  return selectAiCredentialSettingsHref(job?.profile_id ?? "", job?.job_id ?? "");
 }
 
 function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
@@ -127,12 +129,18 @@ function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
 export function ProfileSaveProgress({
   job,
   submissionError,
+  submissionErrorCode = "",
+  profileId = "",
   rebuildAgentAssets,
   retrying,
   onRetry,
 }: {
   job: ProfileSyncJobData | null;
   submissionError: string;
+  /** 反映の開始の失敗の code（409 `SELECT_AI_CREDENTIAL_MISSING` など）。 */
+  submissionErrorCode?: string;
+  /** ジョブが無い（開始の前に止まった）ときの、設定の画面からの戻り先の業務プロファイル。 */
+  profileId?: string;
   rebuildAgentAssets: boolean;
   retrying: boolean;
   onRetry: () => void;
@@ -145,7 +153,9 @@ export function ProfileSaveProgress({
 
   const failed = presentation.status === "failed" || presentation.status === "submission_failed";
   const failedStep = presentation.steps.find((step) => step.status === "error")?.id;
-  const credentialMissing = job?.error_code === "SELECT_AI_CREDENTIAL_MISSING";
+  const credentialMissing =
+    job?.error_code === SELECT_AI_CREDENTIAL_MISSING_CODE ||
+    (Boolean(submissionError) && submissionErrorCode === SELECT_AI_CREDENTIAL_MISSING_CODE);
   const shortJobId = job
     ? `${job.job_id.slice(0, 12)}${job.job_id.length > 12 ? "…" : ""}`
     : "";
@@ -198,13 +208,17 @@ export function ProfileSaveProgress({
             action={
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 {credentialMissing ? (
-                  <Link
-                    to={credentialSettingsHref(job)}
-                    className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
+                  <ButtonLink
+                    to={job ? credentialSettingsHref(job) : selectAiCredentialSettingsHref(profileId)}
+                    linkComponent={Link}
+                    variant="secondary"
+                    size="sm"
+                    icon={KeyRound}
+                    className="w-full sm:w-auto"
+                    testId="profile-save-progress-open-credential"
                   >
-                    <Database size={16} aria-hidden="true" />
-                    <span>{t("profiles.oracle.sync.openSelectAiCredential")}</span>
-                  </Link>
+                    {t("profiles.oracle.sync.openSelectAiCredential")}
+                  </ButtonLink>
                 ) : null}
                 <Button
                   type="button"
@@ -218,7 +232,7 @@ export function ProfileSaveProgress({
               </div>
             }
           >
-            {failureMessage(job, submissionError, failedStep)}
+            {failureMessage(job, submissionError, failedStep, credentialMissing)}
           </Banner>
         ) : undefined
       }

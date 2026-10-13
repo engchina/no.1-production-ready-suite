@@ -467,7 +467,7 @@ function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: 
       </dl>
       <section className="space-y-1">
         <h3 className="text-xs font-semibold text-fg-muted">{t("feedback.detail.question")}</h3>
-        <p className="whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-fg">{item.question}</p>
+        <p data-surface-tint="accent" className="whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-fg">{item.question}</p>
       </section>
       <section className="space-y-1">
         <h3 className="text-xs font-semibold text-fg-muted">{t("feedback.detail.answer")}</h3>

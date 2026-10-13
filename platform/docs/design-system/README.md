@@ -16,7 +16,7 @@
 |---|---|---|
 | `ARCHITECTURE.md` | **3アプリがこの DS をどう使うかの契約書。3チーム全員が読む** | 最初にこれを読む |
 | `css/` | design system の**実ソース**（プレーン CSS） | `packages/ui/src/styles/` に**ほぼそのまま移植できます** |
-| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替え / 任意の表示（「(任意)」・placeholder の「任意」）/ 手書きの必須表示を検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`AGENTS.md`「lint」節） |
+| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替え / 任意の表示（「(任意)」・placeholder の「任意」）/ 手書きの必須表示 / 淡い色の面の `data-surface-tint` の付け忘れを検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`AGENTS.md`「lint」節） |
 | `components-reference.md` | 新規・変更されたコンポーネントの**参照実装**（React + インラインスタイル） | **そのまま出荷しない。** `packages/ui` の既存 `.tsx` / Tailwind の書き方に合わせて書き直す |
 | `reference/` | **目視確認用の HTML** | ブラウザで開いて見た目を確認するだけ。製品コードではない |
 
@@ -62,7 +62,8 @@ TIER 2   tokens/colors.css          --color-surface / --color-fg-muted / --color
                                     ★ アプリとコンポーネントが参照してよいのはここだけ
 TIER 2.5 [data-surface="inverted"]  常に暗い面（サイドバー）
          [data-surface="code"]      常に暗い面（SQL / ログ）
-         [data-surface-tint="accent"] 淡アクセント面の上の文字だけを深くする（DataTable の選択行）
+         [data-surface-tint="accent|info|success|warning|danger"]
+                                    淡い色の面の上の文字だけを深くする（DataTable の選択行・StatusBadge・Banner など）
 TIER 3   components/components.css  hover / focus / disabled の状態のみ。TIER 2 のみ参照
          tokens/a11y.css            forced-colors / prefers-contrast の応答層（最後に @import）
 ```
@@ -942,7 +943,20 @@ import { SearchField } from "@production-ready/ui";
 
 暗い面ではトーンが沈むため、`-muted` / `-subtle` の混合率をダークで上げています。塗りの上の文字は常に `--color-fg-on-accent`（白・両テーマ 4.9:1 以上）。**製品ごとのアクセント色は作らない。**
 
-**淡アクセント面の上の文字（`[data-surface-tint="accent"]`、platform #64）。** `--color-accent-subtle` の上ではライトの `--color-fg-muted` が 4.36:1、`--color-accent-fg` が 4.44:1 に下がり AA を満たしません。淡アクセント面を塗る要素（`DataTable` の選択行）に `data-surface-tint="accent"` を付けると、内側の `--color-fg-muted` がライト `--neutral-650`（5.09:1、ダークは据え置き 7.58:1）に、`--color-accent-fg` が `--color-accent-fg-strong`（6.43:1 / 7.35:1）に替わります。`[data-surface]` と違って面のトークン一式は宣言し直さないので、`prefers-contrast: more` の強い値は残ります（a11y.css もこのセレクタを対象にしています）。
+**淡い色の面の上の文字（`[data-surface-tint]`、platform #64 / #1671）。** 淡い色の面（`--color-accent-subtle` / `-muted` と、状態色の `--color-<s>-subtle`）の上では、ライトの `--color-fg-muted`（#6b7280）が accent 4.36 / info 3.96 / success 4.26 / warning 4.34 / danger 3.96:1、`--color-accent-fg` が 4.03〜4.43:1 に下がり AA を満たしません。他の系統の淡い面に載せた success / warning の文字（info の面の上の warning 4.12:1 など）も同じです。淡い面を塗る要素に `data-surface-tint="<系統>"` を付けると、内側の文字が次の値に替わります（ダークはすべて据え置きで 5.5:1 以上）。
+
+| 内側の文字 | ライトの値 | 淡い面の上のコントラスト（ライト） |
+|---|---|---|
+| `--color-fg-muted` | `--neutral-650`（#5d6878） | 4.63〜5.09:1（ダーク 6.58〜7.58:1） |
+| `--color-accent-fg` | `--color-accent-fg-strong`（`--blue-650`） | 5.84〜6.43:1 |
+| `--color-success-fg` | `--color-success-fg-strong`（`--green-800` #065f46）。success の面の上は `-fg` のまま（4.84:1） | 6.29〜6.92:1 |
+| `--color-warning-fg` | `--color-warning-fg-strong`（`--amber-800` #92400e）。warning の面の上は `-fg` のまま（4.51:1） | 5.80〜6.39:1 |
+
+`info-fg`（5.84:1 以上）・`danger-fg`（5.30:1 以上）・`fg` は深くしなくても満たします。値は系統によらず同じで、系統は「どの面か」と自分の系統の文字を元の色に保つためだけに使います。`[data-surface]` と違って面のトークン一式は宣言し直さないので、`prefers-contrast: more` の強い値は残ります（a11y.css もこのセレクタを対象にしています）。トークンの単体テスト（`packages/ui/tests/tokens-css.test.ts`）が、5 つの淡い面と accent-muted の上の `fg` / `fg-muted` / `accent-fg` / 状態色の `fg` を両テーマで計算して 4.5:1 以上を確かめます。
+
+- **部品は自分で付けます**: `DataTable` の選択行、`StatusBadge`、`Banner`、`ConfirmDialog` のアイコン、`Disclosure` の tone、`BlockedPageNotice`、`ExecutionConfirmationField` の状態、`SelectField` / `SearchableOptions` / `ListPicker` の選んだ・強調した行、`Tabs` の件数、`ErrorState` など。
+- **製品が `bg-*-subtle` を className に書くときは、同じ要素に `data-surface-tint` を付けます**（条件で塗るなら同じ条件の式）。adherence の lint（`design-system/restricted-syntax`）が付け忘れを検出します。対応表・関数で class を組み立てる箇所は lint が追えないので、`data-surface-tint={surfaceTintFor(className)}`（`@production-ready/ui`）で付けます。
+- 対象は、変種なしと、持続する状態の変種（`has-[:checked]:` / `aria-*:` / `data-*:`）・画面幅の変種で塗る面です。`hover:` / `focus:` だけで一時的に塗る面は対象外です。
 
 ### 状態色 — 4系統 × 4役割
 
@@ -1096,7 +1110,8 @@ QA に事前共有してください。**80点あります。**
 | 84 | **左右の分割（`FixedSplitPane`）の分割線の初期位置が、すべての画面で 50%（左右 1:1）になる**（#1572） | 保存が無いときは画面ごとの `preferredWidePane` で左か右が黄金比で広かった（一覧 + 詳細は詳細側、RAG / NL2SQL のフィードバック・SQL から質問を生成は左） | 画面ごとに初めの見え方が違い、どちらが広いかに意味を読み取らせていた。1:1 から始め、広げたい側は利用者が divider で決める。動かした位置は今までどおり `splitId` ごとに localStorage に残り、次からはそれを使う。ダブルクリック / Enter / Space の切り替えの順（1:1 → 左を広く → 右を広く）と Home（1:1）は変えない |
 | 85 | **サイドナビは初めて開いたとき「AI 活用」だけを展開し、ほかのセクションを閉じる**（#1563。`NavSection.defaultCollapsed`） | 保存済みの開閉が無いとき、RAG・Agent はすべてのセクションを展開、NL2SQL は製品の独自の処理（`initiallyCollapsed`）で「AI 活用」だけを展開していた → 3 製品とも共有 `Sidebar` が nav config の `defaultCollapsed` で「AI 活用」だけを展開し、ほかは閉じる。今のページを含むセクションは閉じていても開く（従来どおり）。利用者が開閉した状態は ui-store（localStorage）に保存し、既定より優先する | 管理の画面まで並ぶ長いナビを、業務の入口から始めやすくする。既定の開閉を製品ごとに書かず、3 製品で同じ仕組みにする |
 | 86 | **サイドナビのアカウント欄が「名前」と「ロールの表示名」の 2 行になり、各行が欄の幅で省略記号で切れる**（#1644。`SidebarAccountFooter` の `rolesLabel`・`/api/auth/me` の `role_display_names`） | 外枠の grid の `auto` の列が名前の全幅まで広がり、長い名前（「system_admin（システム管理者）」）は省略記号の出ないまま右端で切れていた（ログアウトの行もサイドナビの外まで広がっていた）。2 行目はロールの code（「ロール: SYSTEM_ADMIN」）。構成のシステム管理者の名前はロールを括弧で連結していた。全文は行の `title`（`名前（ロール）`）だけ。名前とロールの行の高さ 50px → 列を `minmax(0, 1fr)`（`grid-cols-1`）にし、1 行目は名前（構成のシステム管理者は `system_admin`）、2 行目はロールの表示名（複数は「、」でつなぐ。「ロール: 」は付けない）。各行は 1 行の `truncate`（入らない行だけ末尾に「…」、折り返さない）。全文は各行の `title`（ロールは「ロール: …」）と DOM の文字（読み上げはロールの行も「ロール: …」）。行の高さは名前 `leading-6`・ロール `leading-5`（字面を切らない。#658）、上下の余白を詰めて名前とロールの行は 42px（欄の全体は 156px → 148px）。名前の長さで高さは変わらない | 名前と補足を別の行に分け、各行を 1 行で省略するのは GitHub・Slack・Linear・Vercel・Atlassian・Fluent などのアカウント表示と同じ。省略記号で切れたことが分かり、欄の高さが変わらない。ロールは利用者に分かる表示名で示す。`Tooltip` はフォーカスできるトリガーの部品なので、切り詰めた文字の全文には使わない（§4「`Tooltip`」） |
-| 87 | **画面のロールが ID（UUID）・ロールコードではなくロール名（表示名）で出る**（#1682。`RoleNameBadges` / `RoleNameRowTitleButton` / `roleDisplayName`） | NL2SQL の業務プロファイルの「利用可能ロール」はロールの UUID のバッジ（構成のシステム管理者は `00000000-0000-0000-0000-000000000001`）。ロール管理・権限管理・Deep Data Security のロールの一覧の行と詳細の見出しは、1 行目がロールコード（mono）・2 行目が表示名（muted）。ユーザー管理の割り当てロールの選択肢も同じ 2 段。参照できない（削除済みの）ロールはユーザー管理で UUID。ロールの削除の確認は「「CODE」（ロール名: 名前）を…」 → すべてロール名（表示名。空ならコード）の 1 行（mono にしない）。一覧はロール名の順に並ぶ。削除済みのロールは「（削除済みのロール）」。ロールコードは、ロール管理と権限管理の編集の「ロールコード」の項目にだけ出す | 利用者に分かる名前でロールを示し、内部の ID・コードを出さない（UX 契約 cross-cutting.md「ロールの表示」） |
+| 87 | **淡い色の面の上の副次テキスト・アクセントの文字が少し濃くなる**（#1671。`[data-surface-tint]`） | 淡い色の面（`bg-accent-subtle` / `-muted`・`bg-info|success|warning|danger-subtle`）の上の `text-fg-muted` はライトで #6b7280（3.96〜4.36:1）、`text-accent-fg` は #1a73c1（4.03〜4.43:1）。深くしていたのは `DataTable` の選択行（accent）だけ → 淡い面を塗る要素（共有の部品と 3 製品の選んだ行・カード・チップ・アイコンの地・状態の表示）に `data-surface-tint` を付け、内側の `fg-muted` を #5d6878（4.63〜5.09:1）、`accent-fg` を #155a97（5.84〜6.43:1）、他の系統の面の上の success / warning の文字を #065f46 / #92400e にする。`Tabs` の件数は選んでいないとき（灰色の地。4.39:1）も #5d6878 になる。ダークは変わらない。淡い面の色・状態色のバッジの自分の系統の文字の色は変えない | WCAG 2.1 AA（1.4.3、4.5:1）。トークンの層で直し、付け忘れを lint で止める（§6「淡い色の面の上の文字」） |
+| 88 | **画面のロールが ID（UUID）・ロールコードではなくロール名（表示名）で出る**（#1682。`RoleNameBadges` / `RoleNameRowTitleButton` / `roleDisplayName`） | NL2SQL の業務プロファイルの「利用可能ロール」はロールの UUID のバッジ（構成のシステム管理者は `00000000-0000-0000-0000-000000000001`）。ロール管理・権限管理・Deep Data Security のロールの一覧の行と詳細の見出しは、1 行目がロールコード（mono）・2 行目が表示名（muted）。ユーザー管理の割り当てロールの選択肢も同じ 2 段。参照できない（削除済みの）ロールはユーザー管理で UUID。ロールの削除の確認は「「CODE」（ロール名: 名前）を…」 → すべてロール名（表示名。空ならコード）の 1 行（mono にしない）。一覧はロール名の順に並ぶ。削除済みのロールは「（削除済みのロール）」。ロールコードは、ロール管理と権限管理の編集の「ロールコード」の項目にだけ出す | 利用者に分かる名前でロールを示し、内部の ID・コードを出さない（UX 契約 cross-cutting.md「ロールの表示」） |
 
 ### API の非互換
 

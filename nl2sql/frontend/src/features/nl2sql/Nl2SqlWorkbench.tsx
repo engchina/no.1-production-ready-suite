@@ -1203,6 +1203,7 @@ function ExecutableNl2SqlWorkbench() {
                       PROFILE_RECOMMENDATION_APPLY_THRESHOLD) &&
                   recommendation.recommended_profile_id !== profileId && (
                     <div
+                      data-surface-tint="accent"
                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-sm"
                       data-testid="nl2sql-recommend-hint"
                     >
@@ -1385,7 +1386,7 @@ function ExecutableNl2SqlWorkbench() {
                                   {t("nl2sql.selectAiOverrides.title")}
                                 </span>
                                 {hasSelectAiOverrideInputs && (
-                                  <span className="shrink-0 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
+                                  <span data-surface-tint="accent" className="shrink-0 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
                                     {t("nl2sql.selectAiOverrides.activeBadge")}
                                   </span>
                                 )}

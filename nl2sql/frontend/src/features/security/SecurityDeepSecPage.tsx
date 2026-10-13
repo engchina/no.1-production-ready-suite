@@ -2079,6 +2079,7 @@ export function SecurityDeepSecPage() {
                         return (
                           <button
                             key={role.role_id}
+                            data-surface-tint={selected ? "accent" : undefined}
                             type="button"
                             className={cn(
                               "min-w-0 rounded-md border border-border bg-surface-sunken p-2.5 text-left transition hover:border-accent-emphasis",
@@ -2209,6 +2210,7 @@ export function SecurityDeepSecPage() {
                                 return (
                                   <button
                                     key={entitlement.client_key}
+                                    data-surface-tint={selected ? "accent" : undefined}
                                     type="button"
                                     className={cn(
                                       "min-w-0 rounded-md border border-border bg-surface p-3 text-left transition hover:border-accent-emphasis",
@@ -2374,7 +2376,7 @@ export function SecurityDeepSecPage() {
                                             <ListSkeleton rows={3} rowClassName="h-8" />
                                           </TimedLoadingState>
                                         ) : detailError ? (
-                                          <p className="rounded-md border border-danger-border bg-danger-subtle p-3 text-sm text-danger-fg">
+                                          <p data-surface-tint="danger" className="rounded-md border border-danger-border bg-danger-subtle p-3 text-sm text-danger-fg">
                                             {detailError}
                                           </p>
                                         ) : detail?.columns.length ? (

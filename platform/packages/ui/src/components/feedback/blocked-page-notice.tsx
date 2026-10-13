@@ -57,6 +57,7 @@ export function BlockedPageNotice({
         aria-labelledby={titleId}
       >
         <div
+          data-surface-tint={tone}
           className={cn("mx-auto grid size-12 place-items-center rounded-full", TONE_CHIP[tone], toneText[tone])}
           aria-hidden
         >

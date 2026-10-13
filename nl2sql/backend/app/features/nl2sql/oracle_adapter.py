@@ -67,6 +67,20 @@ class OracleAdapterError(RuntimeError):
     """Oracle adapter の実行時エラー。"""
 
 
+class SelectAiFeedbackNotFoundError(OracleAdapterError):
+    """削除する DBMS_CLOUD_AI の feedback が無い（ORA-20000: No matching feedback record）。"""
+
+
+def _looks_like_select_ai_feedback_not_found(message: str) -> bool:
+    # DBMS_CLOUD_AI.FEEDBACK(operation => 'DELETE') の、対象が無いときの ORA-20000（#1681）。
+    return "NO MATCHING FEEDBACK RECORD" in message.upper()
+
+
+def _looks_like_select_ai_feedback_sql_unmatched(message: str) -> bool:
+    # positive・response の無い ADD で、select ai の実行の記録（V$MAPPED_SQL）が無いとき。
+    return "NO MATCHING SQL STATEMENT" in message.upper()
+
+
 class SelectAiCredentialMissingError(OracleAdapterError):
     """DBMS_CLOUD_AI Profile が参照する Credential が現 schema に存在しない。"""
 
@@ -75,9 +89,10 @@ class SelectAiCredentialMissingError(OracleAdapterError):
     def __init__(self, credential_name: str, schema_name: str) -> None:
         self.credential_name = credential_name
         self.schema_name = schema_name
-        super().__init__(
-            f'Select AI Credential "{schema_name}"."{credential_name}" が存在しません。'
+        qualified = (
+            f'"{schema_name}"."{credential_name}"' if schema_name else f'"{credential_name}"'
         )
+        super().__init__(f"Select AI Credential {qualified} が存在しません。")
 
 
 class SelectAiCredentialExistsError(OracleAdapterError):
@@ -2747,6 +2762,11 @@ class OracleNl2SqlAdapter:
                 )
                 conn.commit()
             except Exception as exc:
+                if _looks_like_select_ai_feedback_not_found(str(exc)):
+                    raise SelectAiFeedbackNotFoundError(
+                        "削除する Select AI feedback が見つかりません（すでに削除されています）。"
+                        f"一覧を再読み込みしてください: {exc}"
+                    ) from exc
                 raise OracleAdapterError(f"Select AI feedback の削除に失敗しました: {exc}") from exc
         return {
             "runtime": "oracle",
@@ -2765,7 +2785,14 @@ class OracleNl2SqlAdapter:
         response: str,
         feedback_content: str,
     ) -> dict[str, Any]:
-        """Add one DBMS_CLOUD_AI feedback entry."""
+        """Add one DBMS_CLOUD_AI feedback entry.
+
+        ``sql_text``（``select ai showsql <質問>``）と ``response``（正しい SQL）を渡す。この形は、
+        その文を ``select ai`` で実行していなくても登録できる（公式の文書の「Provide Feedback
+        Without Prior Usage」。#1681 で実 ADB でも確かめた）。``positive`` や ``response`` の無い
+        feedback は、実行の記録（V$MAPPED_SQL）が無いと ORA-20000 になるため、service は
+        ``NEGATIVE`` と ``response`` で登録する。
+        """
         safe_profile, index_name, table_name = _select_ai_feedback_index_names(profile_name)
         with self.connection() as conn, conn.cursor() as cursor:
             try:
@@ -2792,6 +2819,13 @@ class OracleNl2SqlAdapter:
                 )
                 conn.commit()
             except Exception as exc:
+                if _looks_like_select_ai_feedback_sql_unmatched(str(exc)):
+                    raise OracleAdapterError(
+                        "Select AI feedback を追加できませんでした。"
+                        "response（正しい SQL）の無い feedback は、同じ `select ai` の文を実行した"
+                        "記録（V$MAPPED_SQL）が必要です。正しい SQL を入れてください: "
+                        f"{exc}"
+                    ) from exc
                 raise OracleAdapterError(f"Select AI feedback の追加に失敗しました: {exc}") from exc
         return {
             "runtime": "oracle",
@@ -2984,31 +3018,42 @@ class OracleNl2SqlAdapter:
     def list_agent_conversations(
         self, *, team_name: str | None = None, limit: int = 20
     ) -> list[dict[str, Any]]:
-        """Fetch recent Select AI Agent conversation prompts when dictionary view exists."""
+        """Fetch recent Select AI Agent conversation prompts when dictionary view exists.
+
+        USER_CLOUD_AI_CONVERSATION_PROMPTS の応答の列は PROMPT_RESPONSE で、team の名前は無い。
+        Select AI Agent の prompt は PROMPT_ACTION = 'AGENT' で、team は
+        USER_AI_AGENT_TEAM_HISTORY の CONVERSATION_ID から引く（#1681 で実 ADB で確かめた）。
+        """
         filters = []
         binds: dict[str, Any] = {"limit": max(limit, 1)}
         if team_name:
-            filters.append("UPPER(TEAM_NAME) = UPPER(:team_name)")
+            filters.append(
+                "EXISTS (SELECT 1 FROM USER_AI_AGENT_TEAM_HISTORY h "
+                "WHERE h.CONVERSATION_ID = p.CONVERSATION_ID "
+                "AND UPPER(h.TEAM_NAME) = UPPER(:team_name))"
+            )
             binds["team_name"] = team_name
-        where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
+        agent_where = " AND ".join(["p.PROMPT_ACTION = 'AGENT'", *filters])
         conversation_sql = (
-            "SELECT CONVERSATION_ID, PROMPT, RESPONSE, CREATED, TEAM_NAME "  # nosec B608
-            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS "
-            f"{where_clause} "
-            "ORDER BY CREATED DESC "
+            "SELECT p.CONVERSATION_ID, p.PROMPT, p.PROMPT_RESPONSE, p.CREATED, "  # nosec B608
+            "(SELECT MAX(h.TEAM_NAME) FROM USER_AI_AGENT_TEAM_HISTORY h "
+            "WHERE h.CONVERSATION_ID = p.CONVERSATION_ID) AS TEAM_NAME "
+            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS p "
+            f"WHERE {agent_where} "
+            "ORDER BY p.CREATED DESC "
             "FETCH FIRST :limit ROWS ONLY"
         )
+        # team の履歴の view を読めない ADB 向けに、prompt だけを返す（team で絞るときは使わない）。
         prompt_sql = (
-            "SELECT CONVERSATION_ID, PROMPT, NULL, CREATED, NULL "  # nosec B608
-            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS "
-            f"{where_clause} "
-            "ORDER BY CREATED DESC "
+            "SELECT p.CONVERSATION_ID, p.PROMPT, p.PROMPT_RESPONSE, p.CREATED, NULL "  # nosec B608
+            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS p "
+            "WHERE p.PROMPT_ACTION = 'AGENT' "
+            "ORDER BY p.CREATED DESC "
             "FETCH FIRST :limit ROWS ONLY"
         )
-        candidates = [
-            (conversation_sql, binds),
-            (prompt_sql, binds),
-        ]
+        candidates = [(conversation_sql, binds)]
+        if not team_name:
+            candidates.append((prompt_sql, binds))
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
             for sql, params in candidates:
@@ -3116,6 +3161,25 @@ class OracleNl2SqlAdapter:
                     """,
                     ok_message="DBMS_CLOUD_AI_AGENT package が参照可能です。",
                     warning_message="DBMS_CLOUD_AI_AGENT package を参照できません。",
+                )
+            )
+            checks.append(
+                check_count(
+                    cursor,
+                    name="dbms_cloud_ai_create_conversation",
+                    sql="""
+                    SELECT COUNT(*)
+                    FROM ALL_PROCEDURES
+                    WHERE OBJECT_NAME = 'DBMS_CLOUD_AI'
+                      AND PROCEDURE_NAME = 'CREATE_CONVERSATION'
+                    """,
+                    ok_message=(
+                        "DBMS_CLOUD_AI.CREATE_CONVERSATION（Select AI Agent の会話）を使えます。"
+                    ),
+                    warning_message=(
+                        "DBMS_CLOUD_AI.CREATE_CONVERSATION を参照できません。"
+                        "Select AI Agent の会話を作れません"
+                    ),
                 )
             )
             checks.append(
@@ -3921,132 +3985,67 @@ class OracleNl2SqlAdapter:
         team_name: str,
         question: str,
         tool_name: str | None = None,
+        conversation_id: str | None = None,
         call_timeout_seconds: float | None = None,
     ) -> tuple[str, str]:
-        try:
-            conversation_id = self.create_agent_conversation(
+        """Select AI Agent の team を、会話（conversation_id）を付けて RUN_TEAM で実行する。
+
+        conversation_id は ``DBMS_CLOUD_AI.CREATE_CONVERSATION`` で作る（渡されたらそれを続ける）。
+        作れなければ、RUN_TOOL に切り替えずに失敗を返す（RUN_TOOL は team の agent・task の
+        指示を通らず、利用者が選んだ方式と違う結果になるため）。RUN_TEAM の引数は公式の文書の
+        ``(team_name, user_prompt, params)`` で、conversation_id は ``params`` の JSON に入れる。
+        """
+        active_conversation_id = (conversation_id or "").strip()
+        if not active_conversation_id:
+            active_conversation_id = self.create_agent_conversation(
                 call_timeout_seconds=call_timeout_seconds
             )
-        except OracleAdapterError as exc:
-            if tool_name and tool_name.strip():
-                try:
-                    return self.run_select_ai_agent_tool(
-                        tool_name=tool_name.strip(),
-                        question=question,
-                        call_timeout_seconds=call_timeout_seconds,
-                    )
-                except OracleAdapterError as tool_exc:
-                    raise OracleAdapterError(
-                        "Select AI Agent conversation_id を作成できず、RUN_TOOL にも失敗しました。"
-                        "Agent assets を再作成し、DBMS_CLOUD_AI_AGENT の権限と接続状態を"
-                        "確認してください。"
-                        f" conversation 原因: {exc}; RUN_TOOL 原因: {tool_exc}"
-                    ) from tool_exc
-            raise OracleAdapterError(
-                "Select AI Agent conversation_id を作成できませんでした。"
-                "Agent assets を再作成し、DBMS_CLOUD_AI_AGENT の権限と接続状態を確認してください。"
-                f" 原因: {exc}"
-            ) from exc
         params = json.dumps(
-            {"conversation_id": conversation_id},
+            {"conversation_id": active_conversation_id},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        candidates = [
-            (
-                """
-                SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
-                    team_name => :team_name,
-                    user_prompt => :user_prompt,
-                    conversation_id => :conversation_id,
-                    params => :params
-                )
-                FROM DUAL
-                """,
-                {
-                    "team_name": team_name,
-                    "user_prompt": question,
-                    "conversation_id": conversation_id,
-                    "params": params,
-                },
-            )
-        ]
-        candidates.append(
-            (
-                """
-                SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
-                    team_name => :team_name,
-                    user_prompt => :user_prompt,
-                    params => :params
-                )
-                FROM DUAL
-                """,
-                {"team_name": team_name, "user_prompt": question, "params": params},
-            )
-        )
-        candidates.extend(
-            [
-                (
-                    """
-                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(:team_name, :user_prompt, :params)
-                    FROM DUAL
-                    """,
-                    {"team_name": team_name, "user_prompt": question, "params": params},
-                ),
-                (
-                    """
-                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
-                        :team_name,
-                        :user_prompt,
-                        :conversation_id,
-                        :params
-                    )
-                    FROM DUAL
-                    """,
-                    {
-                        "team_name": team_name,
-                        "user_prompt": question,
-                        "conversation_id": conversation_id,
-                        "params": params,
-                    },
-                ),
-                (
-                    """
-                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(:team_name, :user_prompt)
-                    FROM DUAL
-                    """,
-                    {"team_name": team_name, "user_prompt": question},
-                ),
-            ]
-        )
-        errors: list[str] = []
         connection = (
             self.connection(call_timeout_seconds=call_timeout_seconds)
             if call_timeout_seconds is not None
             else self.connection()
         )
         with connection as conn, conn.cursor() as cursor:
-            for sql, bindings in candidates:
-                try:
-                    cursor.execute(sql, bindings)
-                    row = cursor.fetchone()
-                    text = _coerce_text(row[0] if row else "")
-                    return _extract_select_statement(text), conversation_id
-                except Exception as exc:
-                    message = str(exc)
-                    if self._looks_like_agent_profile_loss(message):
-                        return self.run_select_ai_agent_tool(
-                            tool_name=tool_name or self._tool_name_from_team_name(team_name),
-                            question=question,
-                            call_timeout_seconds=call_timeout_seconds,
-                        )
-                    if self._looks_like_signature_error(message):
-                        errors.append(message)
-                        continue
+            try:
+                cursor.execute(
+                    """
+                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
+                        team_name => :team_name,
+                        user_prompt => :user_prompt,
+                        params => :params
+                    )
+                    FROM DUAL
+                    """,
+                    {"team_name": team_name, "user_prompt": question, "params": params},
+                )
+                row = cursor.fetchone()
+                text = _coerce_text(row[0] if row else "")
+                return _extract_select_statement(text), active_conversation_id
+            except Exception as exc:
+                message = str(exc)
+                if not self._looks_like_agent_profile_loss(message):
                     raise self._agent_runtime_error(exc) from exc
-        if errors:
-            raise self._agent_runtime_error(RuntimeError("; ".join(errors)))
-        raise OracleAdapterError("Select AI Agent team の実行結果を取得できませんでした。")
+        # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
+        # conversation_id は "run_tool:<tool>" になり、service が engine_meta と warning に残す。
+        fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
+        logger.warning(
+            "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
+            extra={
+                "event": "select_ai_agent_run_tool_fallback",
+                "team_name": team_name,
+                "tool_name": fallback_tool,
+            },
+        )
+        return self.run_select_ai_agent_tool(
+            tool_name=fallback_tool,
+            question=question,
+            call_timeout_seconds=call_timeout_seconds,
+        )
 
     def run_select_ai_agent_tool(
         self,
@@ -4083,6 +4082,12 @@ class OracleNl2SqlAdapter:
         return _extract_select_statement(text), f"run_tool:{tool_name}"
 
     def create_agent_conversation(self, *, call_timeout_seconds: float | None = None) -> str:
+        """Select AI Agent の会話の id を ``DBMS_CLOUD_AI.CREATE_CONVERSATION`` で作る（#1681）。
+
+        会話の API は ``DBMS_CLOUD_AI`` にあり、``DBMS_CLOUD_AI_AGENT`` には無い（公式の文書と
+        実 ADB で確かめた）。Select AI Agent（2025-10）は Select AI Conversations（2025-09）
+        より後に入ったため、Agent を使える ADB では必ず使える。
+        """
         connection = (
             self.connection(call_timeout_seconds=call_timeout_seconds)
             if call_timeout_seconds is not None
@@ -4090,13 +4095,16 @@ class OracleNl2SqlAdapter:
         )
         with connection as conn, conn.cursor() as cursor:
             try:
-                cursor.execute("SELECT DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION() FROM DUAL")
+                cursor.execute("SELECT DBMS_CLOUD_AI.CREATE_CONVERSATION() FROM DUAL")
             except Exception as exc:
-                raise self._agent_runtime_error(exc) from exc
+                raise self._agent_conversation_error(exc) from exc
             row = cursor.fetchone()
         conversation_id = _coerce_text(row[0] if row else "").strip()
         if not conversation_id:
-            raise OracleAdapterError("Select AI Agent conversation_id を作成できませんでした。")
+            raise OracleAdapterError(
+                "Select AI Agent の会話（conversation_id）を作成できませんでした。"
+                "DBMS_CLOUD_AI.CREATE_CONVERSATION が空の値を返しました。"
+            )
         return conversation_id
 
     def _select_ai_profile_attributes(
@@ -4311,6 +4319,20 @@ class OracleNl2SqlAdapter:
                 f"DBMS_CLOUD_AI_AGENT の version / 権限を確認してください: {message}"
             )
         return OracleAdapterError(f"Oracle Select AI Agent 実行に失敗しました: {message}")
+
+    def _agent_conversation_error(self, exc: Exception) -> OracleAdapterError:
+        message = str(exc)
+        if self._looks_like_signature_error(message):
+            return OracleAdapterError(
+                "Select AI Agent の会話（conversation_id）を作成できませんでした。"
+                "この database では DBMS_CLOUD_AI.CREATE_CONVERSATION を使えません。"
+                "Select AI の会話に対応した Oracle Autonomous AI Database と、"
+                f"DBMS_CLOUD_AI の EXECUTE 権限を確認してください: {message}"
+            )
+        return OracleAdapterError(
+            "Select AI Agent の会話（conversation_id）を作成できませんでした。"
+            f"DBMS_CLOUD_AI の権限と接続状態を確認してください: {message}"
+        )
 
     def _looks_like_agent_profile_loss(self, message: str) -> bool:
         normalized = message.upper()

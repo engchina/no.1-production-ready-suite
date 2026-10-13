@@ -15,6 +15,13 @@ from collections.abc import Mapping
 from typing import Any, Protocol, cast
 
 import httpx
+from pr_system_settings.enterprise_ai_errors import (
+    ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
+    EnterpriseAiHttpFailure,
+    classify_enterprise_ai_http_failure,
+    enterprise_ai_endpoint_host,
+    enterprise_ai_failure_actions,
+)
 
 from app.settings import (
     EnterpriseAiConnection,
@@ -39,14 +46,76 @@ LEADING_THINKING_TAG_RE = re.compile(r"^\s*<(think|thinking)>.*?</\1>\s*", re.I 
 
 
 class EnterpriseAiDirectError(RuntimeError):
-    """Enterprise AI direct 呼び出しの実行時エラー。"""
+    """Enterprise AI direct 呼び出しの実行時エラー。
+
+    HTTP の失敗は `http_failure`（platform の共通の対応表の分類。#1684）と、呼んだモデル・接続の
+    ホストを持つ。ジョブの失敗の案内は、これで設定の誤り（時間をおいても直らない）を見分ける。
+    """
 
     def __init__(
-        self, message: str, *, code: str = "provider_error", retryable: bool = False
+        self,
+        message: str,
+        *,
+        code: str = "provider_error",
+        retryable: bool = False,
+        http_failure: EnterpriseAiHttpFailure | None = None,
+        model_id: str = "",
+        endpoint_host: str = "",
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.http_failure = http_failure
+        self.model_id = model_id
+        self.endpoint_host = endpoint_host
+
+    @property
+    def configuration_error(self) -> bool:
+        """設定（モデル・接続・API key・IAM policy）の誤りによる失敗か。"""
+        return self.http_failure is not None and self.http_failure.configuration_error
+
+    def failure_actions(self) -> list[str]:
+        """確かめる所の案内（HTTP の失敗でなければ空）。"""
+        if self.http_failure is None:
+            return []
+        return enterprise_ai_failure_actions(
+            self.http_failure, model_id=self.model_id, endpoint_host=self.endpoint_host
+        )
+
+
+# アプリが直接呼ぶ OCI Enterprise AI のモデルの決め方（#1684）。失敗の案内に添える。
+ENTERPRISE_AI_DIRECT_MODEL_NOTE = (
+    "NL2SQL がアプリから呼ぶ OCI Enterprise AI（生成方法の Enterprise AI Direct・"
+    "AI要件確認など）は、システム設定 › モデル の既定のテキストモデルと、"
+    "そのモデルを登録した接続を使います。業務プロファイルの Region・LLM Model は "
+    "Select AI・Select AI Agent 用で、この呼び出しには使いません。"
+)
+
+
+def find_enterprise_ai_error(exc: BaseException | None) -> EnterpriseAiDirectError | None:
+    """例外（原因の連鎖を含む）から、HTTP の失敗を持つ Enterprise AI の失敗を探す。"""
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, EnterpriseAiDirectError) and current.http_failure is not None:
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def enterprise_ai_configuration_failure_message(
+    error: EnterpriseAiDirectError, subject: str
+) -> str:
+    """設定の誤りによる失敗の、利用者向けの文（時間をおいても直らないことと、確かめる所）。"""
+    return " ".join(
+        [
+            f"{subject}OCI Enterprise AI の呼び出しが設定の誤りで失敗しました。"
+            "時間をおいても直りません。管理者に次の確認を依頼してください。",
+            *error.failure_actions(),
+            ENTERPRISE_AI_DIRECT_MODEL_NOTE,
+        ]
+    )
 
 
 class EnterpriseAiDirectClient(Protocol):
@@ -118,12 +187,16 @@ class OciEnterpriseAiDirectClient:
             max_output_tokens=max_output_tokens,
             response_format=response_format,
         )
+        # 既定のテキストモデル（システム設定の「モデル」）とその接続で呼ぶ。業務プロファイルの
+        # LLM Model・Region は Select AI の AI profile 用で、ここでは使わない（#1684）。
+        model_id = self.model_id()
         response = self._post_json(
             payload,
-            connection=self.connection(self.model_id()),
+            connection=self.connection(model_id),
             path=self.settings.oci_enterprise_ai_llm_path,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            model_id=model_id,
         )
         return _parse_response(
             response,
@@ -161,6 +234,7 @@ class OciEnterpriseAiDirectClient:
             connection=connection,
             path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
             or self.settings.oci_enterprise_ai_llm_path,
+            model_id=model_id,
         )
         return _parse_response(
             response,
@@ -176,6 +250,7 @@ class OciEnterpriseAiDirectClient:
         path: str,
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
+        model_id: str = "",
     ) -> Mapping[str, Any]:
         # Endpoint URL は入力どおり使い、API path を付ける(#1440。3 製品で platform の関数)。
         url = connection.request_url(path)
@@ -199,7 +274,7 @@ class OciEnterpriseAiDirectClient:
             ),
             0,
         )
-        retryable = {429, 500, 502, 503, 504}
+        retryable = ENTERPRISE_AI_RETRYABLE_STATUS_CODES
         last_error = ""
         with httpx.Client(timeout=timeout) as client:
             for attempt in range(retry_count + 1):
@@ -226,22 +301,17 @@ class OciEnterpriseAiDirectClient:
                     time.sleep(min(0.2 * (attempt + 1), 1.0))
                     continue
                 if response.status_code >= 400:
+                    # 分類は 3 製品で共通の対応表（#1684）。OCI の 404 は認可の失敗で、
+                    # モデルが無いときは 400 になる。設定の誤りは再試行しない。
+                    body = response.text[:500]
+                    failure = classify_enterprise_ai_http_failure(response.status_code, body)
                     raise EnterpriseAiDirectError(
-                        f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}",
-                        code=(
-                            "authentication"
-                            if response.status_code in {401, 403}
-                            else (
-                                "rate_limit"
-                                if response.status_code == 429
-                                else (
-                                    "unavailable"
-                                    if response.status_code in retryable
-                                    else "request"
-                                )
-                            )
-                        ),
-                        retryable=response.status_code in retryable,
+                        f"OCI Enterprise AI HTTP {response.status_code}: {body}",
+                        code=failure.kind,
+                        retryable=failure.retryable,
+                        http_failure=failure,
+                        model_id=model_id or str(payload.get("model") or ""),
+                        endpoint_host=enterprise_ai_endpoint_host(connection.endpoint),
                     )
                 try:
                     parsed = response.json()

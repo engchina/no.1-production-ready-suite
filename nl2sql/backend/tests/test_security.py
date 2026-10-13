@@ -2366,9 +2366,13 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # SQL チャットの一覧・会話取得も、生成権限で保護する（#871）。チャットのターンの SQL の実行
     # （#1154）と、ジョブの中で実行した結果の受け取り（#1176）は実行の権限で保護する。ジョブの
     # 処理の段階のイベント（polling・SSE。#1359）はジョブの取得と同じ権限。生成の方式の選択肢
-    # （#1524）は業務プロファイルの管理と SQL の生成の権限。
-    assert len(mounted) == 280
-    assert len(ROUTE_PERMISSIONS) == 271
+    # （#1524）は業務プロファイルの管理と SQL の生成の権限。業務プロファイルの保存（Oracle 反映）の
+    # 事前条件（#1683）は Oracle 反映の job と同じ権限。
+    assert len(mounted) == 281
+    assert len(ROUTE_PERMISSIONS) == 272
+    assert ROUTE_PERMISSIONS[("GET", "/nl2sql/oracle-sync-readiness")] == frozenset(
+        {"nl2sql.profiles.manage", "nl2sql.select_ai_assets.refresh"}
+    )
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/engines")] == frozenset(
         {PROFILE_MANAGE_PERMISSION, QUERY_GENERATE_PERMISSION}
     )

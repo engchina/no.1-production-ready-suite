@@ -20,6 +20,7 @@ from .models import (
     ProfileSyncJobPhase,
     ProfileSyncJobRequest,
     ProfileSyncJobStatus,
+    ProfileSyncReadinessData,
 )
 from .ontology_observability import record_job
 from .ontology_store import OntologyStore, OntologyVersionConflict, canonical_json
@@ -34,6 +35,17 @@ _TERMINAL_STATUSES = {
     ProfileSyncJobStatus.CANCELLED,
 }
 _ORACLE_ERROR_CODE_RE = re.compile(r"\bORA-\d{4,5}\b", re.IGNORECASE)
+# DBMS_CLOUD_AI.CREATE_PROFILE が参照する Credential が無いときの ORA（実 ADB で確認。#1683）:
+#   ORA-20004: Credential "ADMIN"."OCI_CRED" does not exist
+# 事前の USER_CREDENTIALS の確認の後に Credential が消えた場合などに、反映の手順で出る。
+_CREDENTIAL_MISSING_ORA_RE = re.compile(
+    r"\bORA-20004\b[^\n]*\bcredential\b[^\n]*\bdoes not exist\b", re.IGNORECASE
+)
+_CREDENTIAL_MISSING_MESSAGE = (
+    "Select AI の Credential を先に作成してください（運用設定 > Select AI Credential 管理）。"
+    "業務プロファイルの Oracle への反映は、DBMS_CLOUD_AI Profile が参照する Credential "
+    "が作成済みであることが前提です。"
+)
 
 
 def _now() -> str:
@@ -49,6 +61,8 @@ def _profile_sync_public_error(
     Agent アセットの再構築で失敗したときは、DBMS_CLOUD_AI Profile の反映は済んでいるため
     「Oracle Profile の反映に失敗」とは書かず、失敗した工程を示す。
     """
+    if isinstance(exc, SelectAiCredentialMissingError) or _is_credential_missing_oracle_error(exc):
+        return SelectAiCredentialMissingError.code, select_ai_credential_missing_message(exc)
     if phase == ProfileSyncJobPhase.REBUILDING_AGENT_ASSETS:
         message = "Select AI Agent アセットを再構築できませんでした。"
         if isinstance(exc, OracleAdapterError) or _ORACLE_ERROR_CODE_RE.search(str(exc)):
@@ -61,15 +75,6 @@ def _profile_sync_public_error(
         if detail:
             message = f"{message} {detail[:500]}"
         return "AGENT_ASSETS_REBUILD_FAILED", f"{message} 再試行してください。"
-    if isinstance(exc, SelectAiCredentialMissingError):
-        return (
-            exc.code,
-            (
-                f'Select AI Credential "{exc.schema_name}"."{exc.credential_name}" '
-                "が存在しません。データベース設定で Credential を作成してから、"
-                "Oracle 反映を再試行してください。"
-            ),
-        )
     if isinstance(exc, OracleAdapterError) or _ORACLE_ERROR_CODE_RE.search(str(exc)):
         return (
             "PROFILE_SYNC_FAILED",
@@ -83,6 +88,30 @@ def _profile_sync_public_error(
     if detail:
         message = f"{message} {detail[:500]}"
     return "PROFILE_SYNC_FAILED", f"{message} 再試行してください。"
+
+
+def _is_credential_missing_oracle_error(exc: BaseException) -> bool:
+    """例外とその原因の連鎖のどこかに、Credential が無いときの ORA があるか。"""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if _CREDENTIAL_MISSING_ORA_RE.search(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def select_ai_credential_missing_message(exc: BaseException | None = None) -> str:
+    """Credential が無いときの利用者向けの文。ORA と PL/SQL の stack は出さない。"""
+    if isinstance(exc, SelectAiCredentialMissingError) and exc.credential_name:
+        name = (
+            f'"{exc.schema_name}"."{exc.credential_name}"'
+            if exc.schema_name
+            else f'"{exc.credential_name}"'
+        )
+        return f"Select AI Credential {name} が存在しません。{_CREDENTIAL_MISSING_MESSAGE}"
+    return f"Select AI Credential が存在しません。{_CREDENTIAL_MISSING_MESSAGE}"
 
 
 class ProfileSyncExecutionLost(RuntimeError):
@@ -126,16 +155,29 @@ class ProfileSyncService:
             raise ValueError("実行には confirmation=ADMIN_EXECUTE が必要です。")
         profile = self._service.get_profile(profile_id)
         original_name = self._profile_original_name(profile)
+        # 要求が省略したら、業務プロファイルの設定（保存のたびに再構築するか）に従う（#1690）。
+        rebuild_agent_assets = (
+            request.rebuild_agent_assets
+            if request.rebuild_agent_assets is not None
+            else bool(getattr(profile, "rebuild_agent_assets_on_save", False))
+        )
         request_hash = hashlib.sha256(
             canonical_json(
                 {
                     "profile_id": profile.id,
                     "profile_etag": profile.etag,
                     "original_name": original_name,
-                    "rebuild_agent_assets": request.rebuild_agent_assets,
+                    "rebuild_agent_assets": rebuild_agent_assets,
                 }
             ).encode("utf-8")
         ).hexdigest()
+        with self._lock:
+            existing = self._idempotent_job(idempotency_key, request_hash)
+        if existing is not None:
+            return existing
+        # 同じ要求の再送（Idempotency-Key）は受付済みの job を返し、新しく受け付けるときだけ
+        # Oracle に触る前の事前条件を確かめる（#1683）。
+        self.assert_ready()
         with self._lock:
             existing = self._idempotent_job(idempotency_key, request_hash)
             if existing is not None:
@@ -145,7 +187,7 @@ class ProfileSyncService:
                 profile_id=profile.id,
                 profile_etag=profile.etag,
                 original_name=original_name,
-                rebuild_agent_assets=request.rebuild_agent_assets,
+                rebuild_agent_assets=rebuild_agent_assets,
                 created_at=_now(),
                 deadline_at=self._new_deadline(),
             )
@@ -189,6 +231,48 @@ class ProfileSyncService:
                 raise
         self._dispatch(job.job_id)
         return job.model_copy(deep=True)
+
+    def readiness(self) -> ProfileSyncReadinessData:
+        """Oracle 反映の事前条件（Select AI の Credential が作成済みか）を副作用なしで返す。
+
+        deterministic runtime・Credential 名が未設定のときは Credential を参照しないので、
+        確かめない（`credential_required=False`）。確かめられなかったときは
+        `credential_exists=None` にし、開始を止めない（反映の手順が同じ失敗を返す）。
+        """
+        required, credential_name, exists, _schema_name = self._credential_check()
+        return ProfileSyncReadinessData(
+            credential_required=required,
+            credential_name=credential_name,
+            credential_exists=exists,
+        )
+
+    def assert_ready(self) -> None:
+        """Credential が無いと分かったら、job を作らずに止める（#1683）。"""
+        required, credential_name, exists, schema_name = self._credential_check()
+        if required and exists is False:
+            raise SelectAiCredentialMissingError(credential_name, schema_name)
+
+    def _credential_check(self) -> tuple[bool, str, bool | None, str]:
+        settings = get_settings()
+        runtime_mode = str(getattr(settings, "nl2sql_runtime_mode", "") or "").strip().lower()
+        credential_name = (
+            str(getattr(settings, "nl2sql_select_ai_credential_name", "") or "").strip().upper()
+        )
+        if runtime_mode != "oracle" or not credential_name:
+            return False, credential_name, None, ""
+        adapter = getattr(self._service, "_oracle_adapter", None)
+        status = getattr(adapter, "get_select_ai_credential_status", None)
+        if status is None:
+            return True, credential_name, None, ""
+        try:
+            schema_name, exists = status(credential_name)
+        except Exception as exc:
+            logger.warning(
+                "Select AI Credential の状態を確認できませんでした。",
+                extra={"credential_name": credential_name, "error_type": type(exc).__name__},
+            )
+            return True, credential_name, None, ""
+        return True, credential_name, bool(exists), str(schema_name or "")
 
     def _idempotent_job(
         self,
@@ -338,6 +422,7 @@ class ProfileSyncService:
                     "状態を再確認してください。"
                 )
         profile = self._service.get_profile(previous.profile_id)
+        self.assert_ready()
         job = ProfileSyncJobData(
             job_id=f"profile_sync_{uuid4().hex}",
             profile_id=profile.id,

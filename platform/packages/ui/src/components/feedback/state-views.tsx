@@ -38,6 +38,7 @@ export function ErrorState({
   return (
     <div
       role="alert"
+      data-surface-tint="danger"
       className="flex flex-col items-center gap-3 rounded-lg border border-danger-border bg-danger-subtle p-8 text-center"
     >
       <AlertCircle size={24} className="text-danger-fg" aria-hidden />

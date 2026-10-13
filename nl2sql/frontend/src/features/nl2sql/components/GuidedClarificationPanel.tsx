@@ -300,6 +300,7 @@ export function GuidedClarificationPanel({
             {recommendation.candidates.slice(0, 3).map((candidate, index) => (
               <label
                 key={`${candidate.profile_id}:${candidate.ontology_revision_id}`}
+                data-surface-tint="accent"
                 className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
               >
                 <input

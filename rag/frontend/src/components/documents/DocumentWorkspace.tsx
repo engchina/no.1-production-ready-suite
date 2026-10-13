@@ -85,6 +85,7 @@ import {
   TextField,
   TimedLoadingState,
   apiErrorMessage,
+  surfaceTintFor,
 } from "@production-ready/ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
@@ -1935,7 +1936,10 @@ function PhaseJobRow({
       <li className="rounded-md border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold text-fg">{t(jobPhaseKey(phase))}</span>
-          <span className={recipeStepStatusClass(step.status)}>
+          <span
+            data-surface-tint={surfaceTintFor(recipeStepStatusClass(step.status))}
+            className={recipeStepStatusClass(step.status)}
+          >
             {t(recipeStepStatusKey(step.status))}
           </span>
           <span className="text-xs text-fg-muted">{t("flow.jobs.inlineExecution")}</span>
@@ -1964,7 +1968,10 @@ function PhaseJobRow({
     <li className="rounded-md border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-fg">{t(jobPhaseKey(phase))}</span>
-        <span className={step ? recipeStepStatusClass(step.status) : jobStatusClass(job.status)}>
+        <span
+          data-surface-tint={surfaceTintFor(step ? recipeStepStatusClass(step.status) : jobStatusClass(job.status))}
+          className={step ? recipeStepStatusClass(step.status) : jobStatusClass(job.status)}
+        >
           {t(step ? recipeStepStatusKey(step.status) : jobStatusKey(job.status))}
         </span>
         {preprocessConverted != null ? (
@@ -2212,7 +2219,10 @@ function IngestionSegmentsPanel({
               className="rounded-md border border-border bg-surface-sunken p-3 text-sm"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className={segmentStatusClass(segment.status)}>
+                <span
+                  data-surface-tint={surfaceTintFor(segmentStatusClass(segment.status))}
+                  className={segmentStatusClass(segment.status)}
+                >
                   {segmentStatusLabel(segment.status)}
                 </span>
                 <span className="tnum text-xs text-fg-muted">
@@ -2727,6 +2737,7 @@ function DocumentChunksPanel({
         return (
           <li key={chunk.chunk_id}>
             <button
+              data-surface-tint={selected ? "accent" : undefined}
               ref={selected ? selectedChunkRef : undefined}
               type="button"
               className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
@@ -2738,12 +2749,12 @@ function DocumentChunksPanel({
               <div className="flex flex-wrap items-center gap-2">
                 <IndexBadge>#{chunk.chunk_index + 1}</IndexBadge>
                 {chunk.content_kind ? (
-                  <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
+                  <span data-surface-tint="accent" className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
                     {chunk.content_kind}
                   </span>
                 ) : null}
                 {chunk.page_start ? (
-                  <span className="tnum rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
+                  <span data-surface-tint="info" className="tnum rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
                     {progressRangeLabel(
                       "flow.segments.pageSingle",
                       "flow.segments.pageRange",
@@ -2753,7 +2764,7 @@ function DocumentChunksPanel({
                   </span>
                 ) : null}
                 {chunk.bbox ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-success-subtle px-2 py-0.5 text-xs text-success-fg">
+                  <span data-surface-tint="success" className="inline-flex items-center gap-1 rounded-full bg-success-subtle px-2 py-0.5 text-xs text-success-fg">
                     <LocateFixed size={14} aria-hidden />
                     bbox
                   </span>
@@ -2819,7 +2830,7 @@ function SourceDerivationPanel({
         <li className="rounded-md border border-border bg-surface px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <div className="text-xs text-fg-muted">{t("provenance.canonical")}</div>
-            <span className="rounded bg-info-subtle px-1.5 py-0.5 text-xs font-medium text-info-fg">
+            <span data-surface-tint="info" className="rounded bg-info-subtle px-1.5 py-0.5 text-xs font-medium text-info-fg">
               {t(`settings.preprocess.profile.${derivation.preprocessProfile}` as I18nKey)}
             </span>
           </div>

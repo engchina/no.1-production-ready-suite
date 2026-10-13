@@ -2100,14 +2100,14 @@ function CsvUploadWorkspace({
             <div className="grid gap-1">
               <p className="font-semibold text-fg">{t("dataMgmt.csv.rowErrors")}</p>
               {result.row_errors.map((error) => (
-                <p key={error} className="rounded-md border border-danger-border bg-danger-subtle px-3 py-2 text-danger-fg">
+                <p key={error} data-surface-tint="danger" className="rounded-md border border-danger-border bg-danger-subtle px-3 py-2 text-danger-fg">
                   {error}
                 </p>
               ))}
             </div>
           )}
           {result.hint && (
-            <p className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-accent-fg">{result.hint}</p>
+            <p data-surface-tint="accent" className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-accent-fg">{result.hint}</p>
           )}
           {result.sample_rows.length > 0 && (
             <div className="grid gap-1">

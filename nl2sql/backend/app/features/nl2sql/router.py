@@ -37,7 +37,10 @@ from app.security.permissions import (
 from app.security.service import get_security_service
 from app.settings import get_settings
 
-from .enterprise_ai_client import EnterpriseAiDirectError
+from .enterprise_ai_client import (
+    EnterpriseAiDirectError,
+    enterprise_ai_configuration_failure_message,
+)
 from .incremental_store import IncrementalVersionConflict
 from .models import (
     AdminFeedbackReviewData,
@@ -133,6 +136,7 @@ from .models import (
     ProfileSummaryPage,
     ProfileSyncJobData,
     ProfileSyncJobRequest,
+    ProfileSyncReadinessData,
     ProfileUpsertRequest,
     ProfileUsageContext,
     QueryResults,
@@ -173,7 +177,11 @@ from .models import (
     normalize_profile_identifier,
     validate_profile_identifier,
 )
-from .oracle_adapter import OracleAdapterError, TabularImportValidationError
+from .oracle_adapter import (
+    OracleAdapterError,
+    SelectAiCredentialMissingError,
+    TabularImportValidationError,
+)
 from .profile_access import (
     allowed_profile_ids_for_request,
     assert_profile_access,
@@ -225,6 +233,22 @@ _CLASSIFIER_MODEL_UPLOAD_TYPE_DETAIL = (
     "pickle/joblib artifact は安全上の理由で import できません。"
     "coef / intercept / classes を含む JSON artifact を指定してください。"
 )
+
+
+def _enterprise_ai_sql_generation_exception(exc: EnterpriseAiDirectError) -> HTTPException:
+    """Enterprise AI で SQL を作れなかったときの応答。
+
+    設定の誤りは「再試行」と案内しない（#1684）。
+    """
+    if exc.configuration_error:
+        return HTTPException(
+            status_code=502,
+            detail=enterprise_ai_configuration_failure_message(exc, "SQL の生成で "),
+        )
+    return HTTPException(
+        status_code=502,
+        detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
+    )
 
 
 def _profile_name_conflict_exception(exc: ProfileNameConflict) -> HTTPException:
@@ -1215,6 +1239,34 @@ def upsert_profile_select_ai_profile(
         ) from exc
 
 
+def _select_ai_credential_missing_exception(exc: SelectAiCredentialMissingError) -> HTTPException:
+    """Oracle 反映の事前条件（Select AI の Credential）が足りないときの 409（#1683）。"""
+    from .profile_sync import select_ai_credential_missing_message
+
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": exc.code,
+            "message_ja": select_ai_credential_missing_message(exc),
+        },
+    )
+
+
+@router.get(
+    "/oracle-sync-readiness",
+    response_model=ApiResponse[ProfileSyncReadinessData],
+)
+def get_profile_oracle_sync_readiness() -> ApiResponse[ProfileSyncReadinessData]:
+    """業務 Profile の保存（Oracle 反映）の事前条件を返す。
+
+    運用設定の Select AI Credential の画面の権限が無い利用者（業務プロファイルの管理者）でも、
+    保存の前に Credential が作成済みかを知れるようにする（#1683）。秘密は返さない。
+    """
+    from .profile_sync import profile_sync_service
+
+    return ApiResponse(data=profile_sync_service.readiness())
+
+
 @router.post(
     "/profiles/{profile_id}/oracle-sync-jobs",
     response_model=ApiResponse[ProfileSyncJobData],
@@ -1239,6 +1291,8 @@ def create_profile_oracle_sync_job(
                 idempotency_key=idempotency_key,
             )
         )
+    except SelectAiCredentialMissingError as exc:
+        raise _select_ai_credential_missing_exception(exc) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
@@ -1285,6 +1339,8 @@ def retry_profile_oracle_sync_job(
             raise KeyError(job_id)
         _assert_profile_access(request, job.profile_id)
         return ApiResponse(data=profile_sync_service.retry(job_id))
+    except SelectAiCredentialMissingError as exc:
+        raise _select_ai_credential_missing_exception(exc) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=404,
@@ -1550,8 +1606,11 @@ def run_select_ai_agent_tool(
 def create_select_ai_agent_conversation(
     req: AgentConversationCreateRequest,
 ) -> ApiResponse[AgentConversationCreateData]:
-    """Oracle Select AI Agent conversation を作成する。"""
-    return ApiResponse(data=nl2sql_service.create_select_ai_agent_conversation(req))
+    """Oracle Select AI Agent conversation を作成する（DBMS_CLOUD_AI.CREATE_CONVERSATION）。"""
+    try:
+        return ApiResponse(data=nl2sql_service.create_select_ai_agent_conversation(req))
+    except OracleAdapterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/select-ai-agent/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])
@@ -2359,10 +2418,7 @@ def structure_to_sql(
     try:
         return ApiResponse(data=nl2sql_service.structure_to_sql(req))
     except EnterpriseAiDirectError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
-        ) from exc
+        raise _enterprise_ai_sql_generation_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2374,10 +2430,7 @@ def question_to_sql(req: QuestionToSqlRequest, request: Request) -> ApiResponse[
     try:
         return ApiResponse(data=nl2sql_service.question_to_sql(req))
     except EnterpriseAiDirectError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
-        ) from exc
+        raise _enterprise_ai_sql_generation_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

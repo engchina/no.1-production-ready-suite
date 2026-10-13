@@ -1071,6 +1071,7 @@ export function UserManagementPage({
                         return (
                           <label
                             key={role.role_id}
+                            data-surface-tint={!disabled && selected ? "info" : undefined}
                             className={cn(
                               "flex min-h-11 items-start gap-2 rounded-md border p-2.5 text-sm transition-colors",
                               disabled

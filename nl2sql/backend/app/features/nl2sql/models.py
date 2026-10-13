@@ -377,6 +377,11 @@ class Nl2SqlProfile(BaseModel):
     # 既定の生成方式（#1524）。生成の方式を指定しないジョブ（Agent の MCP の `nl2sql_query`・API）が
     # 使い、SQL 生成・チャットの画面の初期の選択にもなる。
     default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    # 保存（Oracle 反映）のたびに Select AI Agent アセット（tool / agent / task / team）も
+    # 再構築するか（#1690）。Select AI Agent を使う業務プロファイルの設定として保存し、
+    # 画面を開き直しても保つ。
+    # オフにしても既存のアセットは消さない（削除は Select AI Agent アセットの cleanup の操作）。
+    rebuild_agent_assets_on_save: bool = False
     archived: bool = False
     version: int = Field(default=1, ge=1)
     etag: str = ""
@@ -541,6 +546,7 @@ class ProfileUpsertRequest(BaseModel):
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
     default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    rebuild_agent_assets_on_save: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
@@ -582,6 +588,7 @@ class ProfilePatchRequest(BaseModel):
     few_shot_examples: list[dict[str, str]] | None = None
     select_ai_config: ProfileSelectAiConfigPatch | None = None
     default_engine: Nl2SqlEngine | None = None
+    rebuild_agent_assets_on_save: bool | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -2252,7 +2259,8 @@ class ProfileSyncJobPhase(StrEnum):
 class ProfileSyncJobRequest(AdminExecutionConfirmation):
     """Oracle Profile 同期を受け付ける要求。確認語は job へ保存しない。"""
 
-    rebuild_agent_assets: bool = False
+    # 省略すると業務プロファイルの `rebuild_agent_assets_on_save` に従う（#1690）。
+    rebuild_agent_assets: bool | None = None
 
 
 class ProfileSyncJobData(BaseModel):
@@ -2278,6 +2286,16 @@ class ProfileSyncJobData(BaseModel):
     deadline_at: str = ""
     started_at: str = ""
     finished_at: str = ""
+
+
+class ProfileSyncReadinessData(BaseModel):
+    """業務 Profile の Oracle 反映（保存）を始める前の事前条件（#1683）。秘密は含めない。"""
+
+    # Oracle runtime で Credential 名が設定されているときだけ、Credential が要る。
+    credential_required: bool = False
+    credential_name: str = ""
+    # USER_CREDENTIALS で確かめた結果。確かめられなかった（DB に接続できない等）ときは None。
+    credential_exists: bool | None = None
 
 
 class SelectAiProfilesExportData(BaseModel):

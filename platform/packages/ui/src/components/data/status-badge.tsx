@@ -8,6 +8,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { surfaceTintFor } from "../../lib/surface-tint";
 import { cn } from "../../lib/utils";
 
 /**
@@ -63,6 +64,7 @@ export function StatusBadge({
   return (
     <span
       data-status-variant={variant}
+      data-surface-tint={surfaceTintFor(VARIANT_STYLES[variant])}
       className={cn(
         "inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium",
         VARIANT_STYLES[variant],

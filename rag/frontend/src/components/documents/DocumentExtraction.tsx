@@ -318,7 +318,7 @@ function AssetSummariesPanel({ assets }: { assets: ExtractionAsset[] }) {
         {assets.map((asset) => (
           <li key={asset.asset_id} className="rounded-md border border-border bg-surface-sunken p-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
+              <span data-surface-tint="accent" className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
                 {elementKindLabel(asset.kind)}
               </span>
               <span className="break-all text-xs font-medium text-fg">
@@ -365,6 +365,7 @@ function ExtractionFieldsPanel({ fields }: { fields: ExtractionField[] }) {
               </span>
               {typeof field.confidence === "number" ? (
                 <span
+                  data-surface-tint={lowConfidence ? "warning" : "success"}
                   className={`tnum inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
                     lowConfidence ? "bg-warning-subtle text-warning-fg" : "bg-success-subtle text-success-fg"
                   }`}
@@ -431,6 +432,7 @@ function ElementItem({
   return (
     <li>
       <button
+        data-surface-tint={selected ? "accent" : undefined}
         ref={buttonRef}
         type="button"
         className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
@@ -440,7 +442,7 @@ function ElementItem({
         onClick={() => onSelect?.(id)}
       >
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
+          <span data-surface-tint="accent" className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
             {elementKindLabel(element.kind)}
           </span>
           {element.content_kind ? (
@@ -454,12 +456,13 @@ function ElementItem({
             </span>
           ) : null}
           {element.section_path?.length ? (
-            <span className="min-w-0 max-w-full rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
+            <span data-surface-tint="info" className="min-w-0 max-w-full rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
               <span className="break-words">{element.section_path.join(" > ")}</span>
             </span>
           ) : null}
           {typeof element.confidence === "number" ? (
             <span
+              data-surface-tint={lowConfidence ? "warning" : "success"}
               className={`tnum inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
                 lowConfidence ? "bg-warning-subtle text-warning-fg" : "bg-success-subtle text-success-fg"
               }`}
@@ -542,6 +545,7 @@ function TableCellsPanel({
                     return (
                       <button
                         key={key}
+                        data-surface-tint={selected ? "accent" : undefined}
                         ref={selected ? selectedTableCellRef : undefined}
                         type="button"
                         className={`min-h-11 rounded border px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
@@ -562,7 +566,7 @@ function TableCellsPanel({
                             })}
                           </span>
                           {cell.bbox ? (
-                            <span className="rounded bg-success-subtle px-1.5 py-0.5 text-xs text-success-fg">
+                            <span data-surface-tint="success" className="rounded bg-success-subtle px-1.5 py-0.5 text-xs text-success-fg">
                               bbox
                             </span>
                           ) : null}

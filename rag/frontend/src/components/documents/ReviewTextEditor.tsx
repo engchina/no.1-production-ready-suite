@@ -111,7 +111,7 @@ export function ReviewTextEditor({
                     htmlFor={fieldId}
                     className="flex flex-wrap items-center gap-2 text-xs text-fg-muted"
                   >
-                    <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent-fg">
+                    <span data-surface-tint="accent" className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent-fg">
                       {element.kind}
                     </span>
                     {typeof element.page_number === "number" ? (
@@ -120,7 +120,7 @@ export function ReviewTextEditor({
                       </span>
                     ) : null}
                     {element.section_path?.length ? (
-                      <span className="min-w-0 max-w-full break-words rounded-full bg-info-subtle px-2 py-0.5 text-info-fg">
+                      <span data-surface-tint="info" className="min-w-0 max-w-full break-words rounded-full bg-info-subtle px-2 py-0.5 text-info-fg">
                         {element.section_path.join(" > ")}
                       </span>
                     ) : null}
