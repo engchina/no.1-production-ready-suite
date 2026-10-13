@@ -10,7 +10,7 @@ name: Terraform Release Package
 #   - release する commit が main にある（手動の実行は main の branch から。tag はその commit が main の祖先）。
 #   - その commit で main の CI（ci.yml。push・schedule・手動）が成功している。Dependabot の自動 merge の commit は
 #     push の CI が動かないので、毎日の schedule か `gh workflow run ci.yml --ref main` の成功を待ってから release する。
-#   - 配備のテスト（platform/deploy/tests。ci.yml の Suite / Terraform と同じ）が通る。
+#   - 配備の検証（suite-deploy.yml。PR の CI の Suite / Deploy と同じ）が通る。
 # zip には provenance（actions/attest-build-provenance）を付ける。利用者は
 # `gh attestation verify <zip> --repo engchina/no.1-production-ready-suite` で、この workflow が作ったことを確かめられる。
 
@@ -29,56 +29,34 @@ on:
 permissions: {}
 
 jobs:
-  package:
-    name: Package and publish
+  # release する commit が main にあり、その commit で main の CI が成功していることを確かめる（#1594）。
+  guard:
+    name: Check release commit
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
-      # release の作成と asset の upload
-      contents: write
+      contents: read
       # main の CI の成功の確認
       actions: read
-      # provenance（Sigstore の署名と attestation の保存）
-      id-token: write
-      attestations: write
-    defaults:
-      run:
-        working-directory: terraform
-    env:
-      PACKAGE_NAME: production-ready-suite-terraform-stack.zip
     steps:
-      - name: Resolve release tag
-        working-directory: .
+      - name: Check the ref of a manual run
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
           REF: ${{ github.ref }}
-          INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF" != "refs/heads/main" ]; then
             echo "::error::手動の release は main の branch から実行する（実行した ref: $REF）"
             exit 1
           fi
-          if [ "$EVENT_NAME" = "push" ]; then
-            tag="$REF_NAME"
-          else
-            tag="suite-$(printf '%s' "$INPUT_VERSION" | tr -d '[:space:]')"
-          fi
-          if ! printf '%s' "$tag" | grep -Eq '^suite-v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::invalid release tag: $tag (expected suite-vX.Y.Z)"
-            exit 1
-          fi
-          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # tag の commit が main の祖先かを確かめるため、履歴を取る。
+          # commit が main の祖先かを確かめるため、履歴を取る。
           fetch-depth: 0
 
       - name: Check the commit is on main and its CI succeeded
-        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ github.sha }}
@@ -95,50 +73,60 @@ jobs:
           fi
           echo "main の CI の成功を確かめた（$TARGET_SHA。成功した run: $runs）"
 
+  # PR の CI と同じ配備の検証（各製品の init_script.sh・Terraform の fmt / validate / 契約・platform/deploy。#1592）。
+  verify:
+    name: Suite / Deploy
+    needs: guard
+    permissions:
+      contents: read
+    uses: ./.github/workflows/suite-deploy.yml
+
+  package:
+    name: Package and publish
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # release の作成と asset の upload
+      contents: write
+      # provenance（Sigstore の署名と attestation の保存）
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      PACKAGE_NAME: production-ready-suite-terraform-stack.zip
+    steps:
+      - name: Resolve release tag
+        working-directory: .
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            tag="$REF_NAME"
+          else
+            tag="suite-$(printf '%s' "$INPUT_VERSION" | tr -d '[:space:]')"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^suite-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::invalid release tag: $tag (expected suite-vX.Y.Z)"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: "1.5.7"
-
-      # stack が cloud-init から呼ぶ各製品の init_script.sh を検証する。
-      - name: Test deployment scripts
-        working-directory: .
-        run: |
-          bash -n terraform/stack/extract_wallet.sh
-          for product in rag nl2sql agent; do
-            bash -n "$product/init_script.sh"
-            echo "::group::$product/scripts/tests/init-script-deployment.test.sh"
-            (cd "$product" && bash scripts/tests/init-script-deployment.test.sh)
-            echo "::endgroup::"
-          done
-
-      # 1 台の Compute の配備（platform/deploy）。ci.yml の Suite / Terraform の同名の step と同じ内容にする。
-      - name: Test single-Compute deployment (platform/deploy)
-        working-directory: .
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends nginx openssl
-          bash -n platform/deploy/suite-init.sh platform/deploy/suite-nginx.sh platform/deploy/suite-tls.sh \
-            platform/deploy/suite-pull.sh platform/deploy/suite-restart.sh platform/deploy/suite-update.sh
-          bash platform/deploy/tests/suite-tls.test.sh
-          bash platform/deploy/tests/suite-init.test.sh
-          bash platform/deploy/tests/suite-nginx.test.sh
-          bash platform/deploy/tests/suite-ops.test.sh
-
-      - name: Format check
-        run: terraform fmt -check -recursive stack
-
-      - name: Validate Terraform
-        working-directory: terraform/stack
-        run: |
-          terraform init -backend=false
-          terraform validate
-
+      # init_script.sh・fmt・validate の検証は verify（suite-deploy.yml）が行う。ここは公開する zip を作って確かめる。
       - name: Build Terraform stack package
         run: python scripts/package_stack.py
 

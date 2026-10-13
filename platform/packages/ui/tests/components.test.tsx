@@ -330,6 +330,33 @@ describe("SidebarAccountFooter", () => {
     expect(html).toContain("ログアウト");
   });
 
+  it("名前とロールは 1 行ずつ省略記号で切り、各行の title に全文を出す（括弧で連結しない。#1644）", () => {
+    const html = renderToStaticMarkup(
+      <SidebarAccountFooter
+        name="system_admin"
+        roles="システム管理者"
+        rolesLabel="ロール: システム管理者"
+        collapsed={false}
+        onLogout={() => {}}
+      />
+    );
+    // 列は minmax(0, 1fr)。auto の列は nowrap の名前の幅まで広がり、行がサイドバーの外へはみ出す。
+    expect(html).toMatch(/^<div class="grid grid-cols-1 gap-1">/);
+    expect(html).toMatch(/<div class="[^"]*\bmin-w-0 flex-1\b[^"]*">/);
+    expect(html).toMatch(/<div class="[^"]*\btruncate whitespace-nowrap\b[^"]*" title="system_admin">system_admin<\/div>/);
+    // 見える行は表示名だけ、title と読み上げは「ロール: …」の全文。
+    expect(html).toMatch(
+      /<div class="[^"]*\btruncate whitespace-nowrap\b[^"]*" title="ロール: システム管理者"><span class="sr-only">ロール: システム管理者<\/span><span aria-hidden="true">システム管理者<\/span><\/div>/
+    );
+    expect(html).not.toMatch(/line-clamp/);
+  });
+
+  it("rolesLabel を省くとロールの行は roles をそのまま出し、title も roles", () => {
+    const html = renderToStaticMarkup(<SidebarAccountFooter name="山田" roles="管理者" collapsed={false} />);
+    expect(html).toMatch(/title="管理者">管理者<\/div>/);
+    expect(html).not.toContain("sr-only");
+  });
+
   it("折りたたみ時は行アクションとログアウトに読み上げ名を付け、ユーザー名は出さない", () => {
     const html = renderToStaticMarkup(
       <SidebarAccountFooter name="山田" collapsed actions={[password]} onLogout={() => {}} />

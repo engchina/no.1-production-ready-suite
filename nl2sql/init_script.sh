@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export DEBIAN_FRONTEND=noninteractive
-
 if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then
   exec > >(tee -a /var/log/nl2sql-init.log) 2>&1
 fi
 
+INIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# backend の起動の待ち方（suite_wait_for_service_health。#1642）は platform の配備の共通の helper（製品は単独では配備しない）。
+# shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-health.sh
+source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-health.sh"
+
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
-APP_USER="${APP_USER:-ubuntu}"
+APP_USER="${APP_USER:-opc}"
 APP_GROUP="${APP_GROUP:-${APP_USER}}"
 # NL2SQL と共有 platform は monorepo（no.1-production-ready-suite）の nl2sql/ と platform/ にある。
 SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
@@ -29,10 +32,6 @@ BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${APP_ROOT}/props/backend.env}"
 FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"
 # true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
 PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
-NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
-NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
-NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-NODESOURCE_REPO_URL="https://deb.nodesource.com/node_24.x"
 NODEJS_OFFICIAL_RELEASE_BASE_URL="${NODEJS_OFFICIAL_RELEASE_BASE_URL:-https://nodejs.org/download/release/latest-v24.x}"
 NODEJS_OFFICIAL_INSTALL_DIR="${NODEJS_OFFICIAL_INSTALL_DIR:-/usr/local/lib/nodejs}"
 NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
@@ -46,26 +45,6 @@ log() {
 }
 
 trap 'status=$?; log "Initialization failed at line ${LINENO} with status ${status}: ${BASH_COMMAND}"; exit "${status}"' ERR
-
-wait_for_apt_availability() {
-  local locks=(
-    /var/lib/dpkg/lock
-    /var/lib/dpkg/lock-frontend
-    /var/lib/apt/lists/lock
-    /var/cache/apt/archives/lock
-  )
-  local elapsed=0
-  local timeout=600
-
-  while fuser "${locks[@]}" >/dev/null 2>&1; do
-    if [ "${elapsed}" -ge "${timeout}" ]; then
-      log "Timed out waiting for apt/dpkg locks."
-      return 1
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-}
 
 retry_command() {
   local attempts="$1"
@@ -86,9 +65,9 @@ retry_command() {
   return "${status}"
 }
 
-apt_get() {
-  wait_for_apt_availability
-  retry_command 5 apt-get "$@"
+# OS の package は dnf で入れる（Compute の OS は Oracle Linux 9。#1611）。dnf は他の dnf の lock を待つ。
+dnf_cmd() {
+  retry_command 5 dnf -y "$@"
 }
 
 run_as_app_user() {
@@ -101,19 +80,13 @@ run_as_app_user_in_dir() {
   run_as_app_user bash -lc "cd '${workdir}' && $*"
 }
 
+# NL2SQL が使う OS の package（Nginx・firewalld は platform/deploy/suite-init.sh が入れる）。
+# gcc・make は wheel の無い Python の依存を build するため。curl は image にある。
+SYSTEM_PACKAGES=(ca-certificates gcc gcc-c++ git make tar unzip)
+
 install_system_packages() {
-  log "Installing system packages."
-  apt_get update
-  apt_get install -y \
-    build-essential \
-    ca-certificates \
-    curl \
-    git \
-    gnupg \
-    nginx \
-    netfilter-persistent \
-    unzip \
-    wget
+  log "Installing system packages: ${SYSTEM_PACKAGES[*]}"
+  dnf_cmd install "${SYSTEM_PACKAGES[@]}"
 }
 
 install_nodejs() {
@@ -129,74 +102,28 @@ install_nodejs() {
     fi
   fi
 
-  if install_nodejs_from_nodesource; then
+  if install_nodejs_from_dnf_module; then
     return
   fi
 
-  log "NodeSource Node.js 24 installation failed; falling back to official Node.js tarball."
+  log "AppStream Node.js 24 installation failed; falling back to official Node.js tarball."
   install_nodejs_from_official_tarball || return 1
 }
 
-install_nodejs_from_nodesource() {
-  log "Installing Node.js 24 from NodeSource."
-  install_nodesource_apt_repository || return 1
-  apt_get update || return 1
-  ensure_nodejs_24_candidate || return 1
-  apt_get install -y nodejs || return 1
+# Node.js 24 は Oracle Linux の AppStream の module（nodejs:24）から入れる。
+install_nodejs_from_dnf_module() {
+  log "Installing Node.js 24 from the AppStream module (nodejs:24)."
+  dnf_cmd module reset nodejs || return 1
+  dnf_cmd module enable "nodejs:24" || return 1
+  dnf_cmd install nodejs npm || return 1
   validate_nodejs_24 || return 1
-}
-
-install_nodesource_apt_repository() {
-  local architecture
-  local keyring_tmp
-
-  install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING_PATH}")" "$(dirname "${NODESOURCE_SOURCE_PATH}")" || return 1
-  keyring_tmp="$(mktemp)" || return 1
-  if ! curl -fsSL "${NODESOURCE_KEY_URL}" | gpg --dearmor --yes -o "${keyring_tmp}"; then
-    rm -f "${keyring_tmp}"
-    return 1
-  fi
-  install -m 0644 "${keyring_tmp}" "${NODESOURCE_KEYRING_PATH}" || {
-    rm -f "${keyring_tmp}"
-    return 1
-  }
-  rm -f "${keyring_tmp}"
-  architecture="$(dpkg --print-architecture)" || return 1
-
-  if ! cat > "${NODESOURCE_SOURCE_PATH}" <<EOF
-Types: deb
-URIs: ${NODESOURCE_REPO_URL}
-Suites: nodistro
-Components: main
-Architectures: ${architecture}
-Signed-By: ${NODESOURCE_KEYRING_PATH}
-EOF
-  then
-    return 1
-  fi
-  chmod 0644 "${NODESOURCE_SOURCE_PATH}" || return 1
-}
-
-ensure_nodejs_24_candidate() {
-  local candidate
-  if ! candidate="$(apt-cache policy nodejs | awk '/Candidate:/ {print $2; exit}')"; then
-    log "Unable to inspect nodejs apt candidate."
-    return 1
-  fi
-  if [ -z "${candidate}" ] || [ "${candidate}" = "(none)" ] || ! printf '%s\n' "${candidate}" | grep -q '^24\.'; then
-    log "NodeSource nodejs candidate is not Node.js 24: ${candidate:-<none>}"
-    apt-cache policy nodejs || true
-    return 1
-  fi
 }
 
 resolve_nodejs_official_platform() {
   local architecture
 
   NODEJS_OFFICIAL_PLATFORM=""
-  if ! command -v dpkg >/dev/null 2>&1 || ! architecture="$(dpkg --print-architecture)" || [ -z "${architecture}" ]; then
-    architecture="$(uname -m)" || return 1
-  fi
+  architecture="$(uname -m)" || return 1
 
   case "${architecture}" in
     amd64 | x86_64)
@@ -318,16 +245,36 @@ validate_nodejs_24() {
   log "Installed Node.js ${installed_version} with npm ${npm_version}."
 }
 
+# installer（astral.sh の install.sh）は一時の場所に展開してから /usr/local/bin へ移すため、SELinux が有効だと
+# /usr/local/bin/uv の context が bin_t にならない（移動は元の label を保つ）。systemd（init_t）は bin_t でない file を
+# ExecStart で実行できず 203/EXEC（Permission denied）になる（NL2SQL・Agent の unit は uv を ExecStart にする）。
+# 既に入っている場合も戻す（既存の配備は suite-restart.sh の再配備で直る）。#1642
+# UV_BIN_DIR の上書きは test が隔離した場所を使うためのもので、本番では変えない。
+restore_uv_selinux_context() {
+  local bin_dir="${UV_BIN_DIR:-/usr/local/bin}" paths=() path
+  if ! command -v selinuxenabled >/dev/null 2>&1 || ! selinuxenabled; then
+    return 0
+  fi
+  for path in "${bin_dir}/uv" "${bin_dir}/uvx"; do
+    if [ -e "${path}" ]; then
+      paths+=("${path}")
+    fi
+  done
+  if [ "${#paths[@]}" -gt 0 ]; then
+    restorecon -v "${paths[@]}"
+  fi
+}
+
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
     log "uv $(uv --version) is already installed."
-    return
+  else
+    log "Installing uv."
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+    chmod 0755 /usr/local/bin/uv
+    uv --version
   fi
-
-  log "Installing uv."
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
-  chmod 0755 /usr/local/bin/uv
-  uv --version
+  restore_uv_selinux_context
 }
 
 data_dir_has_entries() {
@@ -565,15 +512,14 @@ dump_service_diagnostics() {
   journalctl -u "${service}" -n 160 --no-pager || true
 }
 
+# 一定の間隔で待ち、backend が failed になるか再起動を繰り返したら、上限を待たずに status と journal を出す。
 wait_for_backend() {
-  log "Waiting for backend health endpoint."
-  if retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"; then
+  if suite_wait_for_service_health production-ready-nl2sql-backend.service "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"; then
     return 0
   fi
-  local status="$?"
   log "Backend did not become healthy on ${BACKEND_HOST}:${BACKEND_PORT}."
   dump_service_diagnostics production-ready-nl2sql-backend.service
-  return "${status}"
+  return 1
 }
 
 main() {
@@ -588,7 +534,8 @@ main() {
   build_frontend
   configure_systemd
   wait_for_backend
-  log "Initialization complete. Open http://<compute-ip>${FRONTEND_BASE_PATH}"
+  # URL（scheme・IP・port）は suite-init.sh の最後に出す（製品は HTTPS・公開の port を知らない。#1639）。
+  log "Initialization complete. The URLs are listed at the end of /var/log/suite-init.log (suite: and each product)."
 }
 
 if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then

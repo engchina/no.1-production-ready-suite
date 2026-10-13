@@ -32,7 +32,7 @@ INIT_LOG_PATH="${INIT_LOG_PATH:-/var/log/${TAIL_LOGS_PRODUCT}-init.log}"
 UPDATE_LOG_PATH="${UPDATE_LOG_PATH:-/var/log/${TAIL_LOGS_PRODUCT}-update.log}"
 
 # Nginx 経由の health は /<製品>/health。scheme と port は cloud-init の props（https_enabled.txt / https_port.txt /
-# http_port.txt。#1316）から決める（HTTPS が on なら https_port、http_port は https への転送だけ）。
+# http_port.txt。#1316）から決める（HTTPS が on なら https_port、off なら http_port。on のとき http_port は使わない。#1638）。
 SUITE_PROPS_DIR="${SUITE_PROPS_DIR:-/u01/aipoc/props}"
 suite_prop() {
   tr -d '[:space:]' 2>/dev/null < "${SUITE_PROPS_DIR}/$1" || true

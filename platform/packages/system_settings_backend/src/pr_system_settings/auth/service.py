@@ -30,6 +30,7 @@ from .domain import (
     CONFIGURED_SYSTEM_ADMIN_USER_UUID,
     FIXED_ADMIN_LOGIN_USER_ID,
     SYSTEM_ADMIN_ROLE_CODE,
+    SYSTEM_ADMIN_ROLE_DISPLAY_NAME,
     SYSTEM_ADMIN_ROLE_ID,
     Principal,
     RoleRecord,
@@ -70,7 +71,9 @@ _SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE = (
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。"
 )
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"  # nosec B105
-_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = f"{FIXED_ADMIN_LOGIN_USER_ID}（システム管理者）"
+# 表示名は名前だけにし、ロールを括弧で連結しない。ロールはサイドナビのアカウント欄の 2 行目・
+# 履歴の実行者の欄などが別に示す（#1644）。
+_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = FIXED_ADMIN_LOGIN_USER_ID
 _ADMIN_PASSWORD_PATTERN = re.compile(
     r'^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*["]).{12,30}$'
 )
@@ -779,13 +782,15 @@ class AuthService:
     def _principal_kwargs(
         self, user: UserRecord, session: SessionRecord, active_roles: list[RoleRecord]
     ) -> dict[str, Any]:
+        roles = sorted(active_roles, key=lambda role: role.role_code)
         return {
             "user_uuid": user.user_uuid,
             "login_user_id": user.login_user_id,
             "display_name": user.display_name,
             "status": user.status,
             "force_password_change": user.force_password_change,
-            "role_codes": sorted(role.role_code for role in active_roles),
+            "role_codes": [role.role_code for role in roles],
+            "role_display_names": [role.display_name for role in roles],
             "permissions": self._role_permissions(active_roles),
             "session_id": session.session_id,
             "csrf_token_hash": session.csrf_token_hash,
@@ -1033,6 +1038,7 @@ class AuthService:
             status="ACTIVE",
             force_password_change=False,
             role_codes=[SYSTEM_ADMIN_ROLE_CODE],
+            role_display_names=[SYSTEM_ADMIN_ROLE_DISPLAY_NAME],
             permissions=self.all_permissions(),
             session_id=session_id,
             csrf_token_hash=csrf_token_hash,

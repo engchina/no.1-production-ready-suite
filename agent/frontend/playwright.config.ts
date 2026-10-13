@@ -1,11 +1,21 @@
 import { defineConfig, devices } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
+import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
 
 const frontendPort = process.env.PLAYWRIGHT_PORT ?? "3042";
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 const frontendCwd = fileURLToPath(new URL(".", import.meta.url));
+// PLAYWRIGHT_WEB_SERVER=preview なら、vite build の成果物を vite preview で配信する（PR の CI。#1583）。
+// dev サーバより画面の読み込みが速い。e2e の影響分析の記録（E2E_IMPACT_DIR。nightly）は dev サーバの
+// `/src/...` の URL と inline の sourcemap を使うので、記録するときは dev サーバのままにする。
+const usePreviewServer = process.env.PLAYWRIGHT_WEB_SERVER === "preview" && !process.env.E2E_IMPACT_DIR;
+// 成果物は配備用の dist/ と分ける（node_modules の下なので commit されない）。
+const previewOutDir = "node_modules/.e2e-preview";
+const webServerCommand = usePreviewServer
+  ? `npx vite build --outDir ${previewOutDir} --emptyOutDir --logLevel warn && npx vite preview --outDir ${previewOutDir} --host 127.0.0.1 --port ${frontendPort} --strictPort`
+  : `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -13,11 +23,12 @@ export default defineConfig({
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",
   fullyParallel: false,
-  // CI（4 vCPU の runner）は 2 worker で spec のファイル単位で並べる（#1489）。手元は従来どおり 1 worker。
-  workers: process.env.CI ? 2 : 1,
-  // RAG / NL2SQL と同じく CI だけ retries 2（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
+  // CI（4 vCPU の runner）は CI_WORKERS の worker で spec のファイル単位で並べる（#1489・#1593）。手元は従来どおり 1 worker。
+  workers: ciWorkers(1),
+  // RAG / NL2SQL と同じく CI だけ retry する（#339）。遅い runner で 1 件の一時的な遅延が CI 全体を赤にしないため。
+  // PR は 1、main の push と nightly は 2（#1593。platform/scripts/e2e-impact/ci-run.ts）。
   // retries が無いと trace: "on-first-retry" も記録されない。
-  retries: process.env.CI ? 2 : 0,
+  retries: ciRetries(),
   // CI は失敗・flaky を PR の注釈（github）に、log を dot にし、json は nightly の flaky の一覧に使う
   // （platform/scripts/playwright_report_summary.py。#1591）。
   reporter: process.env.CI
@@ -34,15 +45,18 @@ export default defineConfig({
   // e2e は実 backend を起動しない。すべての API は e2e/fixtures/mock-api.ts の page.route で
   // mock し、未モックの /api は Vite の hermetic middleware が 404 で終端する。
   webServer: {
-    command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
+    command: webServerCommand,
     cwd: frontendCwd,
     url: frontendUrl,
     // 既存の（hermetic でない）dev サーバを再利用すると実 backend へ proxy されるため、常に起動する。
     reuseExistingServer: false,
-    timeout: 30_000,
+    // preview は先に vite build を行う（数秒）。
+    timeout: usePreviewServer ? 120_000 : 30_000,
     env: {
       ...process.env,
       PLAYWRIGHT_HERMETIC_API: "1",
+      // base は FRONTEND_BASE_PATH で変わるので、e2e では空にして `/` で配信する（dev サーバと preview）。
+      FRONTEND_BASE_PATH: "",
       // 念のため proxy 先も到達不能な宛先にしておく（hermetic では proxy 自体を無効化している）。
       BACKEND_URL: "http://127.0.0.1:9",
     },

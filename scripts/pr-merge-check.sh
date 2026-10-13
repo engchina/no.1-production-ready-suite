@@ -51,12 +51,29 @@ GLOBAL_PATTERNS=(
   "platform/scripts/e2e-impact/*"
 )
 
-# is_global <path>: GLOBAL_PATTERNS のどれかに当たれば 0。
+# 製品の下の依存のファイル（その製品のその部分だけに効く。#1634）。
+PRODUCT_DEP_PATTERNS=(
+  "rag/*/package.json" "rag/*/package-lock.json" "rag/*/uv.lock" "rag/*/pyproject.toml"
+  "nl2sql/*/package.json" "nl2sql/*/package-lock.json" "nl2sql/*/uv.lock" "nl2sql/*/pyproject.toml"
+  "agent/*/package.json" "agent/*/package-lock.json" "agent/*/uv.lock" "agent/*/pyproject.toml"
+)
+
+# is_global <path> <PR の変更の一覧>: 全体に効くなら 0。
+# 製品の下の依存のファイル（例: agent/backend/uv.lock）は、PR がそのディレクトリの下を触るときだけ全体に効くとみなす
+# （別の製品・別の backend の lock は、その PR の build・テストの前提を変えない。#1634）。
 is_global() {
-  local pattern
+  local file="$1" touched="$2" pattern dir
+  for pattern in "${PRODUCT_DEP_PATTERNS[@]}"; do
+    # shellcheck disable=SC2053 # 右辺はパターンとして照合する。
+    if [[ "${file}" == ${pattern} ]]; then
+      dir="${file%/*}/"
+      awk -v d="${dir}" 'index($0, d) == 1 { found = 1 } END { exit !found }' <<<"${touched}" && return 0
+      return 1
+    fi
+  done
   for pattern in "${GLOBAL_PATTERNS[@]}"; do
     # shellcheck disable=SC2053 # 右辺はパターンとして照合する。
-    [[ "$1" == ${pattern} ]] && return 0
+    [[ "${file}" == ${pattern} ]] && return 0
   done
   return 1
 }
@@ -165,7 +182,7 @@ fi
 same="$(comm -12 <(sort -u <<<"${changed}") <(sort -u <<<"${touched}") | sed '/^$/d')"
 global=""
 while IFS= read -r file; do
-  if is_global "${file}"; then
+  if is_global "${file}" "${touched}"; then
     global+="${file}"$'\n'
   fi
 done <<<"${changed}"

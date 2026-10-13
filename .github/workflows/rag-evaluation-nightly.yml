@@ -1,8 +1,14 @@
 name: RAG Evaluation Nightly
 
+# 評価の本体（evaluation_cli・search_load_cli）は RAG_EVALUATION_API_BASE_URL（repo の variable か手動の入力）が
+# あるときだけ動く。未設定の定期の実行は fixture / contract の gate（parser adapter の契約・file-processing の
+# golden set。決定論で約 1 分）だけで、manifest の構造は PR の RAG / Backend の pytest
+# （test_file_processing_evaluation.py・test_parser_adapter_contract.py）も確かめるため、定期の実行は
+# 毎晩ではなく毎週にする（#1595）。URL を設定して毎晩の評価にするときは cron を戻す。
+# workflow 名は ci-failure-issue.yml の workflows と同じにする（変えると失敗が Issue にならない）。
 on:
   schedule:
-    - cron: "17 18 * * *"
+    - cron: "17 18 * * 6" # 日曜 03:17 JST
   workflow_dispatch:
     inputs:
       api_base_url:

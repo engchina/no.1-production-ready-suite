@@ -94,6 +94,29 @@ ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
 ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql", "agent")
 # Compute と ADB をサポートするリージョン（#660。us-chicago-1 はサポートしない）。
 SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1")
+# Compute の OS は Oracle Linux 9（platform image の Oracle-Linux-9.8-2026.09.18-0。#1611）。OCID は固定する。
+ORACLE_LINUX_IMAGES = {
+    "ap-tokyo-1": "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa",
+    "ap-osaka-1": "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha",
+}
+DEFAULT_IMAGE_REGION = "ap-osaka-1"
+# Oracle Linux のログインのユーザー。3 製品のプロセスもこのユーザーで動かす。
+COMPUTE_USER = "opc"
+# 配備のスクリプト（cloud-init・platform/deploy・各製品の init_script.sh）に残さない Ubuntu 固有の command・path（#1611）。
+UBUNTU_ONLY_TOKENS = (
+    "apt-get",
+    "apt-cache",
+    "dpkg",
+    "DEBIAN_FRONTEND",
+    "sites-available",
+    "sites-enabled",
+    "www-data",
+    "netfilter-persistent",
+    "iptables",
+    "update-ca-certificates",
+    "/home/ubuntu",
+    "nodesource",
+)
 # 廃止した入力（Agent の Nginx Basic 認証。#215）。stack と init_script.sh に残さない。
 REMOVED_AGENT_BASIC_AUTH = (
     "agent_app_basic_auth_user",
@@ -927,6 +950,9 @@ def _verify_reserved_ports(locals_source: str) -> None:
     sh_ranges = re.findall(r'"(\d+)-(\d+)"', (re.search(r"(?m)^SUITE_RESERVED_PORT_RANGES=\((.*)\)$", suite_nginx) or [""])[0])
     if tf_ports is None or sh_ports is None:
         raise AssertionError("reserved ports are missing from locals.tf or platform/deploy/suite-nginx.sh")
+    # 公開する port は 1 つだけ（HTTPS が on なら https_port、off なら http_port。#1638）。
+    if "public_ports = var.https_enabled ? [var.https_port] : [var.http_port]" not in locals_source:
+        raise AssertionError("locals.tf public_ports must be [https_port] when HTTPS is on and [http_port] when off (#1638)")
     tf_set = {int(port) for port in tf_ports.group(1).split(",")}
     sh_set = {int(port) for port in sh_ports.group(1).split()}
     if tf_set != sh_set or sorted(tf_ranges) != sorted(sh_ranges) or not tf_ranges:
@@ -982,7 +1008,6 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
         [
             "listen ${https_listen} ssl http2 default_server;",
             "ssl_protocols TLSv1.2 TLSv1.3;",
-            "return 301 https://${https_authority}\\$request_uri;",
             "location = /platform/ca.crt {",
             "default_type application/x-x509-ca-cert;",
             'filename="production-ready-root-ca.crt"',
@@ -996,6 +1021,9 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
     )
     if "Strict-Transport-Security" in suite_nginx:
         raise AssertionError("HSTS must not be sent (IP certificate signed by a private CA)")
+    # HTTPS が on のときは http_port を listen せず、HTTP から HTTPS へ転送しない（#1638）。
+    if "return 301 https://" in suite_nginx:
+        raise AssertionError("platform/deploy/suite-nginx.sh must not redirect http_port to HTTPS (#1638)")
     if "ca.key" in suite_nginx:
         raise AssertionError("the CA private key must never be served")
     _require_all(
@@ -1020,7 +1048,8 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
             '"SERVICE_USER=${APP_USER}"',
             "suite_tls_ensure",
             "suite_nginx_site",
-            'rm -f -- "${NGINX_SITES_ENABLED_DIR:?}/default"',
+            'local site="${NGINX_CONF_DIR}/${SUITE_SITE_NAME}.conf"',
+            'install -m 0644 "${template_dir}/nginx.conf" "${NGINX_MAIN_CONF}"',
         ],
         context="platform/deploy/suite-init.sh",
     )
@@ -1325,6 +1354,84 @@ def verify(package_path: Path) -> None:
             **deploy_sources,
         }
     )
+    _verify_oracle_linux(
+        sources["schema.yaml"],
+        sources["variables.tf"],
+        sources["output.tf"],
+        bootstrap,
+        {**{f"{p}/init_script.sh": s for p, s in init_sources.items()}, **deploy_sources},
+    )
+
+
+def _verify_oracle_linux(
+    schema: str, variables: str, outputs: str, bootstrap: str, scripts: dict[str, str]
+) -> None:
+    """Compute の OS（Oracle Linux 9）・ユーザー（opc）と、配備のスクリプトの OS の前提（#1611）。"""
+    image_schema = _schema_variable(schema, "instance_image_source_id")
+    enum = re.findall(r'(?m)^      - "(ocid1\.image\.[^"]+)"$', image_schema)
+    if sorted(enum) != sorted(ORACLE_LINUX_IMAGES.values()):
+        raise AssertionError(f"the Compute image must be the pinned Oracle Linux 9 images: {enum}")
+    default_image = ORACLE_LINUX_IMAGES[DEFAULT_IMAGE_REGION]
+    if f'default: "{default_image}"' not in image_schema or f'default     = "{default_image}"' not in variables:
+        raise AssertionError("the default Compute image must be the Oracle Linux 9 image of ap-osaka-1")
+    if "Oracle Linux 9" not in image_schema:
+        raise AssertionError("the Compute image description must say Oracle Linux 9")
+    if f"ssh -o ServerAliveInterval=10 {COMPUTE_USER}@" not in outputs:
+        raise AssertionError(f"ssh_to_instance must log in as {COMPUTE_USER}")
+    for name, source in {"schema.yaml": schema, "variables.tf": variables, "output.tf": outputs, **scripts}.items():
+        if re.search(r"(?i)ubuntu", source):
+            raise AssertionError(f"{name} must not assume Ubuntu (#1611)")
+    for name, source in {"bootstrap": bootstrap, **scripts}.items():
+        leftovers = [token for token in UBUNTU_ONLY_TOKENS if token in source]
+        if leftovers:
+            raise AssertionError(f"{name} must not use Ubuntu-only commands or paths (#1611): {leftovers}")
+    for product in PRODUCTS:
+        _require_all(
+            scripts[f"{product}/init_script.sh"],
+            [f'APP_USER="${{APP_USER:-{COMPUTE_USER}}}"', 'retry_command 5 dnf -y "$@"'],
+            context=f"{product}/init_script.sh (Oracle Linux)",
+        )
+    _require_all(
+        scripts["platform/deploy/suite-init.sh"],
+        [
+            f'APP_USER="${{APP_USER:-{COMPUTE_USER}}}"',
+            'NGINX_MODULE_STREAM="1.24"',
+            'suite_dnf module enable "nginx:${NGINX_MODULE_STREAM}"',
+            "systemctl enable --now firewalld",
+            'firewall-cmd --permanent --add-port="${port}/tcp"',
+            # HTTPS が on なら、以前に開けた http_port を閉じる（#1638）。
+            'firewall-cmd --permanent --query-port="${http}/tcp"',
+            'firewall-cmd --permanent --remove-port="${http}/tcp"',
+            "firewall-cmd --reload",
+            "setsebool -P httpd_can_network_connect 1",
+            'semanage fcontext -a -t usr_t "${SUITE_REPO_DIR}(/.*)?"',
+            'semanage fcontext -a -t httpd_sys_content_t "${SUITE_REPO_DIR}/${product}/frontend/dist(/.*)?"',
+            'semanage fcontext -a -t cert_t "${SSL_DIR}(/.*)?"',
+            'semanage port -a -t http_port_t -p tcp "${port}"',
+            'restorecon -R "${SUITE_REPO_DIR}"',
+        ],
+        context="platform/deploy/suite-init.sh (Oracle Linux)",
+    )
+    # 製品の venv・systemd の unit を作る前に、SELinux の context の規則を置く。
+    _require_in_order(
+        scripts["platform/deploy/suite-init.sh"],
+        ["  install_os_packages\n", "  configure_firewall\n", "  configure_selinux\n", "  deploy_products\n"],
+        context="platform/deploy/suite-init.sh main order (Oracle Linux)",
+    )
+    template = (REPO_ROOT / "platform" / "templates" / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    _require_all(
+        template,
+        ["user nginx;", "include /usr/share/nginx/modules/*.conf;", "include /etc/nginx/conf.d/*.conf;"],
+        context="platform/templates/nginx/nginx.conf",
+    )
+    if re.search(r"(?m)^\s*(?:server|listen)\b", template):
+        raise AssertionError("platform/templates/nginx/nginx.conf must not keep the package default server")
+    packages = re.search(r"(?ms)^packages:\n(.*?)^\S", bootstrap)
+    if packages is None or "  - curl\n" in packages.group(1):
+        raise AssertionError("cloud-init packages must not list curl (curl-minimal of the Oracle Linux image conflicts)")
+    for name in ("firewalld", "policycoreutils-python-utils"):
+        if f"  - {name}\n" not in packages.group(1):
+            raise AssertionError(f"cloud-init must install {name}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

@@ -113,6 +113,7 @@ describe("利用者の対象範囲", () => {
     status: "ACTIVE",
     force_password_change: false,
     role_codes: ["HR"],
+    role_display_names: ["人事"],
     is_system_admin: false,
     permissions: ["menu.search", "menu.chat"],
     allowed_search_answer_profile_ids: ["bv-2", "bv-1"],

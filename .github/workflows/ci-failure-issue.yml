@@ -18,6 +18,7 @@ on:
       - RAG Evaluation Nightly
       - Dependency Audit Nightly
       - CodeQL
+      - Integration Nightly
     types:
       - completed
   workflow_dispatch:

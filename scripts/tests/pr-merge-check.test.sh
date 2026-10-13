@@ -156,8 +156,7 @@ set_pr rag/old.py
 run_case "main で rename されたファイルを PR が変えた" needs-update-branch 3 1
 
 # --- (b) main で全体に効くファイルが変わった（PR は別のファイルだけを触る）。
-for path in package.json rag/frontend/package.json platform/package-lock.json rag/frontend/package-lock.json \
-  rag/backend/uv.lock rag/services/parsers/docling/uv.lock nl2sql/backend/pyproject.toml .python-version \
+for path in package.json platform/package-lock.json .python-version \
   .github/workflows/ci.yml .github/actions/platform-ui/action.yml \
   agent/frontend/playwright.config.ts nl2sql/frontend/vite.config.ts rag/frontend/vitest.config.ts \
   rag/frontend/tsconfig.json platform/packages/ui/tsconfig.build.json \
@@ -169,6 +168,23 @@ for path in package.json rag/frontend/package.json platform/package-lock.json ra
   run_case "全体に効くファイル ${path}" needs-update-branch 3 1
   expect_log "全体に効くファイル ${path}" "  ${path}"
 done
+
+# --- 製品の下の依存のファイル（#1634）: PR がそのディレクトリの下を触るときだけ、全体に効く。
+for path in rag/frontend/package.json rag/frontend/package-lock.json rag/backend/uv.lock \
+  rag/services/parsers/docling/uv.lock nl2sql/backend/pyproject.toml agent/backend/uv.lock; do
+  dir="${path%/*}"
+  set_main docs/note.md "${path}"
+  set_pr terraform/a.tf
+  run_case "別の場所の製品の依存 ${path}" ready-to-merge 0 1
+  set_main docs/note.md "${path}"
+  set_pr "${dir}/src/a.txt"
+  run_case "同じ場所の製品の依存 ${path}" needs-update-branch 3 1
+  expect_log "同じ場所の製品の依存 ${path}" "  ${path}"
+done
+# 別の製品の backend の lock は、ほかの製品の PR に効かない。
+set_main agent/backend/uv.lock nl2sql/backend/uv.lock
+set_pr rag/backend/uv.lock
+run_case "別の製品の lock だけが変わった" ready-to-merge 0 1
 
 # --- CI の開始の時点と、PR の head の取得。
 set_main rag/a.py

@@ -184,7 +184,7 @@ variables:
     required: true
     visible: true
     title: "HTTPS（443）"
-    description: "オンにすると、Nginx が https_port（既定 443）で HTTPS を受け、80 への接続は HTTPS へ転送します。証明書は Compute の中で作る自作の Root CA と、Compute の公開 IP・private IP の証明書です（発行者は固定）。ブラウザの警告を消すには、各製品の「システム設定 > 外観と証明書」から CA の証明書を取り込みます。オフにすると http_port（既定 80）の HTTP だけで、そのまま配信します（転送しません）。subnet の security list（または NSG）で使う port の TCP を許可してください。"
+    description: "オンにすると、Nginx が https_port（既定 443）で HTTPS を受けます（80 は開けず、listen もしません）。証明書は Compute の中で作る自作の Root CA と、Compute の公開 IP・private IP の証明書です（発行者は固定）。ブラウザの警告を消すには、各製品の「システム設定 > 外観と証明書」から CA の証明書を取り込みます。オフにすると http_port（既定 80）の HTTP だけで配信します。subnet の security list（または NSG）で使う port の TCP を許可してください。"
     default: true
 
   https_port:
@@ -192,7 +192,7 @@ variables:
     required: true
     visible: https_enabled
     title: "HTTPS port"
-    description: "Nginx が HTTPS を受ける port（既定 443）。HTTP の 80 への接続は HTTPS へ転送します。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    description: "Nginx が HTTPS を受ける port（既定 443）。HTTPS が on のときはこの port だけを開けます。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
     default: 443
 
   http_port:
@@ -202,7 +202,7 @@ variables:
       not:
         - https_enabled
     title: "HTTP port"
-    description: "HTTPS を使わないときに Nginx が HTTP を受ける port（既定 80）。HTTPS へは転送しません。SSH（22）・よく使われる service の port・Compute の中で製品が使う port は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    description: "HTTPS が off のときだけ使う、Nginx が HTTP を受ける port（既定 80）。HTTPS が on のときは開けず、listen もしません。SSH（22）・よく使われる service の port・Compute の中で製品が使う port は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
     default: 80
 
   adb_compartment_ocid:
@@ -557,11 +557,11 @@ variables:
     required: true
     visible: true
     title: "Compute image"
-    description: "Ubuntu image of every Compute instance. Choose it according to your region."
+    description: "Oracle Linux 9 image (Oracle-Linux-9.8-2026.09.18-0) of every Compute instance. Choose it according to your region."
     enum:
-      - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaaoiusqhftxmiyjlulnxx5mdnqfv6pjx4hdcoks3exn7gsrcwpkpdq"
-      - "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
-    default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
+      - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa"
+      - "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
+    default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
 
   instance_display_name:
     type: string
@@ -627,7 +627,7 @@ variables:
     required: true
     visible: true
     title: "SSHキーの追加"
-    description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、ubuntuユーザーのSSH接続に使用します。"
+    description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、opcユーザーのSSH接続に使用します。"
 
   deploy_rag:
     type: boolean

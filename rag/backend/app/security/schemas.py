@@ -24,6 +24,8 @@ class CurrentUserData(BaseModel):
     status: str
     force_password_change: bool
     role_codes: list[str]
+    # ロールの表示名（`role_codes` と同じ順）。サイドナビのアカウント欄に出す（#1644）。
+    role_display_names: list[str]
     is_system_admin: bool
     permissions: list[str]
     # None（null）は制限なし。
@@ -41,6 +43,7 @@ class CurrentUserData(BaseModel):
             status=principal.status,
             force_password_change=principal.force_password_change,
             role_codes=list(principal.role_codes),
+            role_display_names=principal.role_names(),
             is_system_admin=principal.is_system_admin,
             permissions=sorted(principal.permissions),
             allowed_search_answer_profile_ids=_sorted_or_none(

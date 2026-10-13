@@ -32,8 +32,9 @@ NL2SQL `frontend/dist` (built with `FRONTEND_BASE_PATH=/nl2sql/`) at `/nl2sql/`
 and reverse proxies `/nl2sql/api/` to the backend with the `/nl2sql` prefix
 removed. NL2SQL is not deployed on its own: the three products are deployed
 together by the suite, and `nl2sql/init_script.sh` does not write an Nginx site.
-Open TCP `https_port` (and `http_port` for the redirect to HTTPS) publicly in the
-security list or NSG; see `terraform/README.md` for the ports and the HTTPS
+Open TCP `https_port` (or `http_port` when HTTPS is off) publicly in the
+security list or NSG. When HTTPS is on, `http_port` is neither opened nor
+listened on, and HTTP is not redirected to HTTPS (#1638); see `terraform/README.md` for the ports and the HTTPS
 certificate. If ADB uses a
 private endpoint, the selected network must still allow Compute to reach ADB on
 TCP `1522`.
@@ -129,7 +130,7 @@ uv run --project platform/packages/backend_core \
   python platform/scripts/migrate_env_to_platform.py --product nl2sql          # review
 uv run --project platform/packages/backend_core \
   python platform/scripts/migrate_env_to_platform.py --product nl2sql --apply  # rewrite
-sudo chown ubuntu:ubuntu platform/.env && sudo chmod 0600 platform/.env
+sudo chown opc:opc platform/.env && sudo chmod 0600 platform/.env
 ```
 
 Then run `./scripts/update-after-pull.sh` as below. See
@@ -137,12 +138,12 @@ Then run `./scripts/update-after-pull.sh` as below. See
 for details.
 
 After manually pulling the required repositories, run the post-pull update
-script as the `ubuntu` user when passwordless sudo is available. The script uses
-only non-interactive `sudo -n` and never prompts for the `ubuntu` password. If
+script as the `opc` user when passwordless sudo is available. The script uses
+only non-interactive `sudo -n` and never prompts for the `opc` password. If
 the instance does not grant passwordless sudo, start the script through an
 existing root-capable path with `sudo ./scripts/update-after-pull.sh`. In root
 mode, dependency synchronization, frontend builds, and database CLIs are still
-executed as `ubuntu`; only systemd, snapshots, logging, and permission repair
+executed as `opc`; only systemd, snapshots, logging, and permission repair
 retain root privileges. The script does not run Git commands and does not
 rewrite `backend/.env`, `platform/.env`, the Wallet contents, systemd units, or the Nginx
 configuration.
@@ -173,8 +174,8 @@ frontend into a staging directory while the current services remain available.
 Only after those steps succeed does it enter the maintenance window.
 
 Before stopping services, mutating modes create a root-only snapshot below
-`/u01/aipoc/recovery`. They then enforce `/u01/aipoc` as `root:ubuntu 0775`,
-`/u01/aipoc/wallet` as `ubuntu:ubuntu 0700`, and Wallet files, the install lock,
+`/u01/aipoc/recovery`. They then enforce `/u01/aipoc` as `root:opc 0775`,
+`/u01/aipoc/wallet` as `opc:opc 0700`, and Wallet files, the install lock,
 `backend/.env`, and `platform/.env` as `0600`. `PLATFORM_ORACLE_WALLET_DIR` in
 `platform/.env` remains fixed at `/u01/aipoc/wallet`; the `.env` file is parsed
 without sourcing secret values.
@@ -268,13 +269,15 @@ when it contains local documents or settings.
 
 The cloud-init bootstrap:
 
-1. Installs Nginx, Node.js 24, uv, and build dependencies.
+1. Installs Node.js 24, uv, and build dependencies with `dnf` (the Compute OS is
+   Oracle Linux 9; Nginx, firewalld, and SELinux are configured by
+   `platform/deploy/suite-init.sh`. #1611).
 2. Clones the suite monorepo (NL2SQL and the shared platform) once.
 3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
 4. Writes the runtime `backend/.env` and the shared `platform/.env`.
 5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
-6. Keeps `/u01/aipoc/wallet` at `ubuntu:ubuntu 0700` with files at `0600`, and
-   sets `/u01/aipoc` to `root:ubuntu 0775` for Wallet install locks and atomic
+6. Keeps `/u01/aipoc/wallet` at `opc:opc 0700` with files at `0600`, and
+   sets `/u01/aipoc` to `root:opc 0775` for Wallet install locks and atomic
    temporary/backup directories.
 7. Runs `nl2sql_system_schema --initialize` and
    `app_security_migrate --apply --skip-bootstrap` with retries.
@@ -287,8 +290,8 @@ The cloud-init bootstrap:
 This Resource Manager deployment is a direct systemd + Nginx installation.
 Docker is not installed or required on the Compute instance.
 
-Node.js installation uses the NodeSource apt repository first. If apt candidate
-inspection, installation, or post-install validation fails, the init script
+Node.js installation uses the Oracle Linux AppStream module `nodejs:24` first. If
+enabling the module, installation, or post-install validation fails, the init script
 falls back to the official Node.js `latest-v24.x` Linux tarball with
 `SHASUMS256.txt` verification. Override `NODEJS_OFFICIAL_RELEASE_BASE_URL` or
 `NODEJS_OFFICIAL_INSTALL_DIR` only for controlled mirrors or recovery testing;
@@ -302,8 +305,8 @@ ready yet the application still starts in degraded mode. Check
 
 ```bash
 cd /u01/aipoc/no.1-production-ready-suite/nl2sql/backend
-sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
-sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
+sudo -u opc /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
+sudo -u opc /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 sudo systemctl restart production-ready-nl2sql-backend
 sudo systemctl enable --now production-ready-nl2sql-schema-refresh-worker
 sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker

@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Connect } from "vite";
 import { fileURLToPath, URL } from "node:url";
 
 /**
@@ -11,6 +11,20 @@ export function frontendBasePath(value: string | undefined): string {
   const trimmed = (value ?? "").trim().replace(/^\/+|\/+$/g, "");
   return trimmed ? `/${trimmed}/` : "/";
 }
+
+// 未モックの /api を 404 で終端する（実 backend へ proxy しない）。dev サーバと preview で共有する。
+const hermeticApiMiddleware: Connect.NextHandleFunction = (req, res) => {
+  const path = `/api${req.url ?? ""}`;
+  res.statusCode = 404;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(
+    JSON.stringify({
+      data: null,
+      error_messages: [`e2e unmocked API: ${req.method ?? "GET"} ${path}`],
+      warning_messages: [],
+    })
+  );
+};
 
 const MISSING_BACKEND_URL_WARNING =
   "[agent] BACKEND_URL が未設定のため /api を proxy せず 404 を返します（hermetic）。backend に接続する場合は BACKEND_URL=http://127.0.0.1:8020 npm run dev のように明示してください。";
@@ -36,18 +50,13 @@ export default defineConfig(() => {
           if (!hermeticApi) return;
           if (warnMissingBackendUrl) server.config.logger.warn(MISSING_BACKEND_URL_WARNING);
           // 未モックの /api は実 backend へ proxy せず 404 で終端する。
-          server.middlewares.use("/api", (req, res) => {
-            const path = `/api${req.url ?? ""}`;
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "application/json; charset=utf-8");
-            res.end(
-              JSON.stringify({
-                data: null,
-                error_messages: [`e2e unmocked API: ${req.method ?? "GET"} ${path}`],
-                warning_messages: [],
-              })
-            );
-          });
+          server.middlewares.use("/api", hermeticApiMiddleware);
+        },
+        // PR の CI の e2e は build の成果物を `vite preview` で配信する（#1583）。preview でも同じく終端する。
+        configurePreviewServer(server) {
+          if (!hermeticApi) return;
+          if (warnMissingBackendUrl) server.config.logger.warn(MISSING_BACKEND_URL_WARNING);
+          server.middlewares.use("/api", hermeticApiMiddleware);
         },
       },
     ],
