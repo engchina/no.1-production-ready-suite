@@ -219,6 +219,7 @@ def test_merge_unions_property_lists_instead_of_conflicting() -> None:
     second = obj("employee", "従業員", "EMPLOYEE", ["employee_id", "employee_name"])
     merged, conflicts = merge_definitions("sample", [first, second])
     assert not conflicts
+    assert isinstance(merged[0], ObjectTypeDefinition)
     assert merged[0].properties == ["employee_id", "employee_name"]
 
 
@@ -298,13 +299,15 @@ def test_ai_placeholders_duplicates_and_structural_notes_are_pruned() -> None:
         "description_ja: 記載なし",
         "資料 A と B で部門の定義が違う",
     ]
-    values = [
+    values: list[Any] = [
         department,
         prop("department_name", "部門名", "department", "DEPARTMENT", "DEPARTMENT_NAME"),
         duplicate,
         *placeholders,
     ]
-    pruned = {d.api_name: d for d in repair_definitions("sample", values, SCHEMA, ai_output=True)}
+    pruned: dict[str, Any] = {
+        d.api_name: d for d in repair_definitions("sample", values, SCHEMA, ai_output=True)
+    }
     assert set(pruned) == {"department", "department_name"}
     assert pruned["department"].title_property == "department_name"
     assert pruned["department"].missing_information_ja == ["資料 A と B で部門の定義が違う"]
@@ -316,6 +319,32 @@ def test_ai_placeholders_duplicates_and_structural_notes_are_pruned() -> None:
 def test_orphan_property_is_adopted_by_the_object_that_lists_it() -> None:
     orphan = prop("email", "メール", "", "EMPLOYEE", "EMAIL")
     employee = obj("employee", "従業員", "EMPLOYEE", ["email"])
-    by_name = {d.api_name: d for d in repair_definitions("sample", [employee, orphan], SCHEMA)}
+    by_name: dict[str, Any] = {
+        d.api_name: d for d in repair_definitions("sample", [employee, orphan], SCHEMA)
+    }
     assert by_name["employee"].properties == ["email"]
     assert by_name["email"].object_type == "employee"
+
+
+def test_kind_name_ids_from_ai_do_not_merge_different_concepts() -> None:
+    """AI が全定義の id に種類名を付けても、別の表・列の定義を 1 つに併合しない。"""
+
+    values = ai_output()
+    for d in values:
+        d.id = d.kind
+    merged, _ = merge_definitions("sample", values)
+    objects = [d.api_name for d in merged if d.kind == "object_type"]
+    assert objects == ["department", "employee", "project", "v_dept_project", "v_emp_dept"]
+    assert len({d.id for d in merged}) == len(merged)
+
+
+def test_ai_property_mappings_are_limited_to_the_owning_object_tables() -> None:
+    bundled = prop("department_id", "部門ID", "department", "DEPARTMENT", "DEPARTMENT_ID")
+    bundled.mappings = [*bundled.mappings, mapping("EMPLOYEE", "EMPLOYEE_ID")]
+    values: list[Any] = [obj("department", "部門", "DEPARTMENT", ["department_id"]), bundled]
+    by_name: dict[str, Any] = {
+        d.api_name: d for d in repair_definitions("sample", values, SCHEMA, ai_output=True)
+    }
+    assert [(m.object_name, m.column_name) for m in by_name["department_id"].mappings] == [
+        ("DEPARTMENT", "DEPARTMENT_ID")
+    ]

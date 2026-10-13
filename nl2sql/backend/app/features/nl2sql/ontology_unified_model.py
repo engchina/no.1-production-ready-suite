@@ -437,6 +437,10 @@ def _normalize_definition_spellings(
     values = [d.model_copy(deep=True) for d in definitions]
     groups: dict[tuple[Any, ...], list[PropertyDefinition]] = {}
     for d in values:
+        # 種類名の ID（AI が全定義に `object_type` / `property` などを付けた値）は同一性の根拠に
+        # しない。そのままでは別の表・列の定義が 1 つに併合される（#1720）。
+        if d.id.casefold() in CONCEPT_LABELS:
+            d.id = ""
         for m in d.mappings:
             # 列そのものの式（列 `ADMIN.T.C` に式 `ADMIN.T.C`）は列の対応と同じ（#1720）。
             if m.column_name and object_match_key(m.expression_sql) == (
@@ -864,6 +868,18 @@ def _prune_ai_output(values: list[BusinessDefinition]) -> list[BusinessDefinitio
         else:
             seen[key] = d.api_name
     kept = [d for d in kept if d.api_name not in remap]
+    # プロパティの対応は所属オブジェクトの表・ビューの列だけにする（他の表の列を 1 つの
+    # プロパティに束ねない）。所属オブジェクトの表に 1 つも無ければ元のまま検証に任せる。
+    tables = {
+        d.api_name: {mapping_object_key(m) for m in d.mappings}
+        for d in kept
+        if isinstance(d, ObjectTypeDefinition) and d.mappings
+    }
+    for d in kept:
+        if isinstance(d, PropertyDefinition) and d.kind == "property" and d.object_type in tables:
+            own = [m for m in d.mappings if mapping_object_key(m) in tables[d.object_type]]
+            if own:
+                d.mappings = own
     return rewrite_references(kept, remap)
 
 

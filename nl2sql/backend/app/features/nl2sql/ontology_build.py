@@ -2070,8 +2070,8 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "DB は source_id=schema、locator=OWNER.OBJECT または OWNER.OBJECT.COLUMN とする。"
     # graph を作れる範囲を最大にし、足りない項目は推測で埋めない（#1720）。
     "best effort で、schema_context から作れるオブジェクト・プロパティ・関係はすべて作る。"
-    "根拠の無い種類は、名前だけの空の雛形（api_name が種類名の定義など）を作らず、"
-    "coverage に理由を書く。"
+    "根拠の無い種類は空の定義を作らず、coverage に理由を書く。"
+    "新しい定義の id は空文字にし、既存定義を補完するときだけ既存の id を使う。"
     "情報が足りない任意の項目（識別子・粒度・単位・基数など）は推測で埋めず空のままにする。"
     "空の項目を missing_information_ja に書き写さない（「説明なし」「主キー不明」など）。"
     "missing_information_ja は、資料どうしの矛盾など利用者が判断すべき点だけにする。"
