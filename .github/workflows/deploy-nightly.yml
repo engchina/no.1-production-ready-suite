@@ -34,8 +34,8 @@ jobs:
   run-through:
     name: Suite / Deploy run-through (Oracle Linux 9)
     runs-on: ubuntu-24.04
-    # 見積もり（dnf・LibreOffice・RAG の parser の torch と CUDA の wheel・3 製品の npm の build を含む）。初回の実測で倍程度に直す。
-    timeout-minutes: 90
+    # 実測（2026-10-13・PR #1647: job 15m43s、suite-init.sh 618 秒）の倍程度。
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
