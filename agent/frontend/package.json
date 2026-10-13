@@ -10,7 +10,8 @@
     "start": "vite preview --host 0.0.0.0 --port 3002",
     "typecheck": "tsc --noEmit",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json",
-    "check": "npm run lint && npm run build && npm run test:e2e",
+    "check": "npm run lint && npm run build && npm run test && npm run test:e2e",
+    "test": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -41,7 +42,8 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.62.0",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   },
   "overrides": {
     "postcss": "8.5.28"

@@ -9,7 +9,7 @@ const { rules: adherenceRules } = adherence.overrides[0];
 
 // Agent の全画面は画面幅いっぱい（共有 PageHeader / PageBody の `wide`）で統一する（#28、NL2SQL #566 と同じ基準）。
 // PageHeader と PageBody の wide がずれると 1920px 以上でタイトルと本文の左端がずれるため、
-// 補助の PageBody（読み込み中・エラー表示）も含めて `wide` を値なしで必ず渡す。frontend に unit test 基盤がないので lint で検査する。
+// 補助の PageBody（読み込み中・エラー表示）も含めて `wide` を値なしで必ず渡す。単体テスト（vitest）は src/lib の関数だけで画面を描かないので lint で検査する。
 const PAGE_LAYOUT_ELEMENT = "JSXOpeningElement[name.name=/^Page(Header|Body)$/]";
 const pageWidthRules = [
   {

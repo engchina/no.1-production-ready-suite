@@ -1354,6 +1354,10 @@ jobs:
       - name: Type check (e2e)
         run: npm run typecheck:e2e
 
+      # src/lib の純粋な関数の単体テスト（vitest。RAG / Frontend と同じ。#1595）。画面の振る舞いは e2e が確かめる。
+      - name: Unit test
+        run: npm test
+
       # 型検査は build の `tsc --noEmit` が兼ねる。
       - name: Build
         run: npm run build
