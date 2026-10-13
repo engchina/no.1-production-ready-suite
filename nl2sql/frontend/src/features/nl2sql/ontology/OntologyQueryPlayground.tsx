@@ -301,6 +301,7 @@ function ServerSearchResultPanel({
                   </span>
                   <span className="flex items-center gap-2">
                     <span
+                      data-surface-tint="neutral"
                       className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-hover"
                       aria-hidden="true"
                     >
@@ -692,7 +693,7 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
                 <p className="text-xs leading-5 text-fg-muted">
                   {join.sourceLabel} → {join.targetLabel}
                 </p>
-                <code className="break-all rounded bg-surface-hover px-2 py-1 font-mono text-xs leading-5 text-fg">
+                <code data-surface-tint="neutral" className="break-all rounded bg-surface-hover px-2 py-1 font-mono text-xs leading-5 text-fg">
                   {join.joinCondition}
                 </code>
               </div>
@@ -1012,6 +1013,7 @@ export function OntologyQueryPlayground({
           {selectedEdgeId && (() => { const definition = graph?.edges.find(e=>e.id===selectedEdgeId)?.metadata?.definition; return definition && typeof definition === "object" && !Array.isArray(definition) ? <section aria-label={t("ontologyResults.kind.link_type")} className="rounded-md border border-border p-3"><h3 className="text-sm font-semibold">{t("ontologyResults.kind.link_type")}</h3><DefinitionFields definition={definition as Record<string, unknown>} /></section> : null; })()}
           {!result ? (
             <div
+              data-surface-tint="neutral"
               className="rounded-md border border-border bg-surface-hover px-3 py-2"
               data-testid="ontology-playground-ready-state"
             >

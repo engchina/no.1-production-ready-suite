@@ -609,7 +609,7 @@ function DeepSecPlanSteps({
               className="flex min-w-0 flex-wrap items-center gap-2"
               aria-label={`${versionLabel} ${step.title}`}
             >
-              <span className="inline-flex shrink-0 items-center rounded-md border border-border bg-surface-hover px-2 py-0.5 font-sans text-xs font-semibold leading-5 tabular-nums text-fg-muted">
+              <span data-surface-tint="neutral" className="inline-flex shrink-0 items-center rounded-md border border-border bg-surface-hover px-2 py-0.5 font-sans text-xs font-semibold leading-5 tabular-nums text-fg-muted">
                 {versionLabel}
               </span>
               <span className="min-w-0 break-words">{step.title}</span>

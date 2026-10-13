@@ -1,12 +1,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page, TestInfo } from "@playwright/test";
 
-import { expect, test } from "./fixtures/mock-api";
+import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
+import { expandSidebarSections, openSidebarNav } from "./fixtures/nav";
 
 /**
- * 主要な画面の axe（a11y）の確認（#1595）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
+ * 画面の axe（a11y）の確認（#1595・#1671）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
  * （名前の `*.nightly.spec.ts`。platform/scripts/e2e-impact/nightly-only.ts）。ローカルは `npx playwright test e2e/a11y.nightly.spec.ts`。
  *
+ * - 対象はサイドナビの全項目の画面（SCREENS。ナビとずれたら「ナビの全項目」のテストが失敗する）と、淡い色の面
+ *   （選んだ行・状態の表示）が出る状態（STATES）。それぞれライトとダークで確かめる。API は mock-api の fixture。
  * - 対象は WCAG 2.x の A / AA（2.0 と 2.1）。失敗にするのは impact が serious / critical の違反だけ。
  * - 違反は rule id・impact・件数・対象（selector）を失敗の文と添付（axe-violations.json）に出す。
  * - 既知の例外は KNOWN_EXCEPTIONS に rule id・画面・理由を書く（直すのに設計の判断が要るもの。別 Issue で直す）。
@@ -14,17 +17,122 @@ import { expect, test } from "./fixtures/mock-api";
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 const BLOCKING_IMPACTS = new Set(["serious", "critical"]);
+const THEMES = ["light", "dark"] as const;
+type Theme = (typeof THEMES)[number];
 
 /** 既知の例外（画面の path → 除く rule id）。空なら除かない。 */
 const KNOWN_EXCEPTIONS: Record<string, readonly string[]> = {};
 
-const SCREENS = [
-  { name: "チャット", path: "/chat" },
-  { name: "業務 Agent", path: "/agents" },
-  { name: "実行", path: "/runs" },
-  { name: "承認", path: "/approvals" },
-  { name: "システム設定（モデル）", path: "/settings/model" },
+interface Screen {
+  path: string;
+  /** 画面を開く前に mock の状態を足す。 */
+  setup?: (mockApi: MockApi) => void;
+  /** 読み込んだ後の確認・操作（淡い面が出ていることなど）。 */
+  act?: (page: Page) => Promise<void>;
+}
+
+/** サイドナビの全項目（nav-config.ts の並び）。 */
+const SCREENS: Screen[] = [
+  { path: "/chat" },
+  { path: "/runs" },
+  { path: "/approvals" },
+  { path: "/agents" },
+  { path: "/skills" },
+  { path: "/automations" },
+  { path: "/plugins/marketplaces" },
+  { path: "/evaluation" },
+  { path: "/feedback" },
+  { path: "/usage" },
+  { path: "/audit" },
+  { path: "/settings/security/permissions" },
+  { path: "/settings/security/users" },
+  { path: "/settings/security/roles" },
+  { path: "/settings/system-tables" },
+  { path: "/runtimes" },
+  { path: "/settings/mcp-connections" },
+  { path: "/settings/api-keys" },
+  { path: "/settings/runtime-snapshot" },
+  { path: "/settings/oci" },
+  { path: "/settings/upload-storage" },
+  { path: "/settings/model" },
+  { path: "/settings/database" },
+  { path: "/settings/appearance" },
 ];
+
+function seedRun(mockApi: MockApi, id: string, status: string, approvals: Record<string, unknown>[] = []) {
+  mockApi.state.runs.unshift({
+    id,
+    goal: `目標 ${id}`,
+    agent_id: "default",
+    runtime_id: "builtin",
+    status,
+    steps: [],
+    events: [],
+    approvals,
+    artifacts: [],
+    pending_tool_calls: [],
+    metadata: {},
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
+
+function approval(id: string, runId: string, status: string) {
+  return {
+    id,
+    run_id: runId,
+    step_id: `${id}-step`,
+    tool_call: { name: `tool_${id}`, arguments: {} },
+    status,
+    reason: "",
+    created_at: MOCK_NOW,
+  };
+}
+
+/** 実行の状態の表示（success / danger / warning / neutral）と承認待ちを並べる。 */
+function seedRuns(mockApi: MockApi) {
+  seedRun(mockApi, "run-completed", "completed");
+  seedRun(mockApi, "run-failed", "failed");
+  seedRun(mockApi, "run-cancelled", "cancelled");
+  seedRun(mockApi, "run-waiting", "waiting_approval", [approval("approval-1", "run-waiting", "pending")]);
+}
+
+/** 淡い色の面（選んだ行・状態の表示）が出る状態。 */
+const STATES: (Screen & { name: string })[] = [
+  {
+    name: "実行の一覧の状態の表示と選んだ実行",
+    path: "/runs?id=run-failed",
+    setup: seedRuns,
+    act: async (page) => {
+      await expect(page.locator('[data-surface-tint="danger"]').first()).toBeAttached();
+      await expect(page.locator("[data-surface-tint]:visible").first()).toBeVisible();
+    },
+  },
+  {
+    name: "承認待ちの一覧と選んだ承認",
+    path: "/approvals?id=approval-1",
+    setup: seedRuns,
+    act: async (page) => {
+      await expect(page.locator('[data-surface-tint="warning"]').first()).toBeAttached();
+    },
+  },
+  {
+    name: "業務 Agent の選んだ行",
+    path: "/agents?id=default",
+    act: async (page) => {
+      await expect(page.locator("[data-surface-tint]").first()).toBeAttached();
+    },
+  },
+];
+
+const pathOf = (screen: Screen) => screen.path.split("?")[0];
+
+/** テーマは ui-store（localStorage）の保存値で決める（既定はライト）。 */
+async function useTheme(page: Page, theme: Theme) {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("production-ready-agent.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+  }, theme);
+}
 
 /** 表示の途中（フェードイン・色の transition）の色で color-contrast を測らない。無限の animation（Spinner など）は待たない。 */
 async function waitForSettledAnimations(page: Page) {
@@ -59,14 +167,40 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
   expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
 }
 
-test.describe("主要な画面の a11y（axe）", { tag: "@a11y" }, () => {
-  for (const screen of SCREENS) {
-    test(`${screen.name}（${screen.path}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
-      await page.goto(screen.path);
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-      // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。
-      await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
-      await expectNoSeriousViolations(page, testInfo, screen.path);
-    });
+async function openAndCheck(page: Page, mockApi: MockApi, testInfo: TestInfo, screen: Screen, theme: Theme) {
+  await useTheme(page, theme);
+  screen.setup?.(mockApi);
+  await page.goto(screen.path);
+  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
+  // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。
+  await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
+  await screen.act?.(page);
+  await expectNoSeriousViolations(page, testInfo, pathOf(screen));
+}
+
+test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
+  test("SCREENS はサイドナビの全項目と同じ", async ({ page }) => {
+    await page.goto("/chat");
+    const sidebar = await openSidebarNav(page);
+    await expandSidebarSections(sidebar);
+    const hrefs = await sidebar
+      .locator("nav a[href]")
+      .evaluateAll((links) => links.map((link) => new URL((link as HTMLAnchorElement).href).pathname));
+    expect(hrefs).toEqual(SCREENS.map(pathOf));
+  });
+
+  for (const theme of THEMES) {
+    for (const screen of SCREENS) {
+      test(`${pathOf(screen)}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page, mockApi }, testInfo) => {
+        await openAndCheck(page, mockApi, testInfo, screen, theme);
+      });
+    }
+    for (const state of STATES) {
+      test(`${state.name}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page, mockApi }, testInfo) => {
+        await openAndCheck(page, mockApi, testInfo, state, theme);
+      });
+    }
   }
 });

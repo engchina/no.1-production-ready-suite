@@ -173,7 +173,10 @@ function UsageContent({
             ]}
           />
           {totals.runs === 0 ? (
-            <EmptyState title={t("usage.empty.title")} hint={t("usage.empty.description")} />
+            // 選んだタブの aria-controls が指す tabpanel を、0 件のときも置く（WCAG 4.1.2。axe の aria-valid-attr-value。#1671）。
+            <TabPanel idPrefix="usage" id={view} value={view}>
+              <EmptyState title={t("usage.empty.title")} hint={t("usage.empty.description")} />
+            </TabPanel>
           ) : (
             <>
               <TabPanel idPrefix="usage" id="agent" value={view}>
@@ -342,7 +345,7 @@ function ShareBar({ value, total }: { value: number; total: number }) {
   const percent = Math.round(ratio * 1000) / 10;
   return (
     <div className="grid grid-cols-[minmax(3rem,1fr)_auto] items-center gap-2 text-xs">
-      <span className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
+      <span data-surface-tint="neutral" className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
         <span className="block h-full rounded-full bg-accent-emphasis" style={{ width: `${Math.min(100, percent)}%` }} />
       </span>
       <span className="w-12 text-right tabular-nums text-fg-muted">{`${percent}%`}</span>
