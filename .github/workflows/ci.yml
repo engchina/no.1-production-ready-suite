@@ -29,6 +29,8 @@ name: CI
 # runner は ubuntu-24.04 に固定する（#1587）。本番の Compute の OS は Oracle Linux 9 だが（#1611）、GitHub に
 # Oracle Linux の runner は無いため、テストの実行には ubuntu-24.04 を使う。OS の差（dnf の package の名前・
 # Nginx の配置）は `Suite / Oracle Linux 9`（container: oraclelinux:9）が配備のスクリプトの変更時に確かめる。
+# 実 Oracle の結合テスト（Oracle AI Database Free。oracle-integration.yml）は、その製品の DB の層（changes の
+# <製品>_oracle）が変わったときだけ実行する。3 製品は integration-nightly.yml が毎晩確かめる（#1595）。
 
 on:
   pull_request:
@@ -92,6 +94,8 @@ jobs:
       deploy: ${{ steps.filter.outputs.deploy == 'true' || steps.filter.outputs.ci == 'true' }}
       # Compute の OS（Oracle Linux 9）に依存する配備のスクリプト（#1611）。
       deploy_os: ${{ steps.filter.outputs.deploy_os == 'true' || steps.filter.outputs.ci == 'true' }}
+      # Terraform の stack の IaC の検査（Suite / Terraform IaC。trivy config。#1595）を動かす変更。
+      terraform: ${{ steps.filter.outputs.terraform }}
       scripts: ${{ steps.filter.outputs.scripts == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_frontend: >-
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.ci == 'true'
@@ -133,6 +137,11 @@ jobs:
         ${{ steps.filter.outputs.ci == 'true' && 'all' || steps.filter.outputs.rag_services_deps_files }}
       # Dependency review（#1588）を動かす、依存の manifest / lock と workflow・composite action の変更。
       deps_manifest: ${{ steps.filter.outputs.deps_manifest }}
+      # 実 Oracle の結合テスト（oracle-integration.yml。#1595）を動かす、その製品の DB の層の変更。
+      # ci.yml の変更では動かさない（PR の時間を増やさない。3 製品は毎晩 integration-nightly.yml が確かめる）。
+      rag_oracle: ${{ steps.filter.outputs.rag_oracle == 'true' || steps.filter.outputs.oracle_common == 'true' }}
+      nl2sql_oracle: ${{ steps.filter.outputs.nl2sql_oracle == 'true' || steps.filter.outputs.oracle_common == 'true' }}
+      agent_oracle: ${{ steps.filter.outputs.agent_oracle == 'true' || steps.filter.outputs.oracle_common == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -233,6 +242,8 @@ jobs:
               - "agent/frontend/**"
               - "agent/backend/app/features/agent/router.py"
               - "agent/backend/app/security/permissions.py"
+            terraform:
+              - "terraform/**"
             # 配備の検証（suite-deploy.yml）が読むもの。製品の frontend（init_script.sh の検証は build を fake にする）・
             # 共有 UI・Markdown は読まない（#1592）。
             deploy:
@@ -319,6 +330,44 @@ jobs:
               - "**/pyproject.toml"
               - ".github/workflows/**"
               - ".github/actions/**"
+            # 実 Oracle の結合テスト（oracle-integration.yml。#1595）の対象の DB の層: migration・system schema・
+            # Oracle の adapter / store・実 Oracle の fixture とテスト。ここに無い DB のコードを足したら、ここにも足す。
+            oracle_common:
+              - ".github/workflows/oracle-integration.yml"
+              - ".github/scripts/oracle-free-ci.sh"
+              - ".github/scripts/pytest-skip-gate.py"
+              - "platform/packages/backend_core/src/pr_backend_core/oracle_*.py"
+              - "platform/packages/system_settings_backend/src/pr_system_settings/system_schema.py"
+              - "platform/packages/system_settings_backend/src/pr_system_settings/auth/migrations.py"
+              - "platform/packages/system_settings_backend/src/pr_system_settings/auth/store.py"
+            rag_oracle:
+              - "rag/backend/app/rag/system_schema*.py"
+              - "rag/backend/app/rag/oracle_schema.py"
+              - "rag/backend/app/rag/schema_migrations/**"
+              - "rag/backend/app/rag/*_migration.py"
+              - "rag/backend/app/clients/oracle*.py"
+              - "rag/backend/tests/conftest.py"
+              - "rag/backend/tests/_oracle_test_db.py"
+              - "rag/backend/tests/_ai_stubs.py"
+              - "rag/backend/tests/test_*oracle*.py"
+            nl2sql_oracle:
+              - "nl2sql/backend/migrations/**"
+              - "nl2sql/backend/app/cli/nl2sql_system_schema.py"
+              - "nl2sql/backend/app/cli/app_security_migrate.py"
+              - "nl2sql/backend/app/cli/nl2sql_migrate_state.py"
+              - "nl2sql/backend/app/features/settings/system_schema*.py"
+              - "nl2sql/backend/app/features/nl2sql/oracle_*.py"
+              - "nl2sql/backend/app/features/nl2sql/*store.py"
+              - "nl2sql/backend/app/features/nl2sql/synthetic_oracle.py"
+              - "nl2sql/backend/tests/conftest.py"
+              - "nl2sql/backend/tests/*oracle_live*.py"
+            agent_oracle:
+              - "agent/backend/app/system_schema.py"
+              - "agent/backend/app/oracle_connection.py"
+              - "agent/backend/app/cli/agent_system_schema.py"
+              - "agent/backend/app/features/agent/*_store.py"
+              - "agent/backend/app/features/agent/storage_*.py"
+              - "agent/backend/app/features/agent/*_migration.py"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
             # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
             platform_other:
@@ -503,7 +552,7 @@ jobs:
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。--durations=20: 遅いテストの上位 20 件を
       # log に出す（#1591。1 テストの上限は pyproject の pytest-timeout の timeout）。
       - name: Test
-        run: uv run pytest -n auto --durations=20 --cov=pr_backend_core
+        run: uv run pytest -n auto --durations=20
 
       - name: Security scan
         run: uv run bandit -r src
@@ -568,7 +617,7 @@ jobs:
       # -n auto: pytest-xdist で runner の CPU 数だけ並列に実行する（#344）。--durations=20: 遅いテストの上位 20 件を
       # log に出す（#1591。1 テストの上限は pyproject の pytest-timeout の timeout）。
       - name: Test
-        run: uv run pytest -n auto --durations=20 --cov=pr_system_settings
+        run: uv run pytest -n auto --durations=20
 
       - name: Security scan
         run: uv run bandit -r src
@@ -1573,6 +1622,33 @@ jobs:
             runuser -u pr-ci -- env NGINX_BIN=/usr/sbin/nginx bash "platform/deploy/tests/${test_script}.test.sh"
           done
 
+  # Terraform の stack の IaC の検査（trivy config。#1595）。terraform/ が変わったときだけ実行する
+  # （製品・platform の変更では stack は変わらない）。HIGH / CRITICAL の misconfiguration で失敗する。
+  # 版を固定し、release の checksum で確かめてから使う（actionlint と同じ。third-party の action は使わない）。
+  suite-terraform-iac:
+    name: Suite / Terraform IaC (trivy config)
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Trivy config
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIVY_VERSION: "0.74.0"
+        run: |
+          dir="${RUNNER_TEMP}/trivy"
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          gh release download "v${TRIVY_VERSION}" --repo aquasecurity/trivy --dir "${dir}" \
+            --pattern "${archive}" --pattern "trivy_${TRIVY_VERSION}_checksums.txt"
+          (cd "${dir}" && sha256sum --check --ignore-missing "trivy_${TRIVY_VERSION}_checksums.txt" \
+            && tar -xzf "${archive}" trivy)
+          "${dir}/trivy" config --skip-version-check --cache-dir "${RUNNER_TEMP}/trivy-cache" \
+            --severity HIGH,CRITICAL --exit-code 1 terraform/stack
+
   # ---------------------------------------------------------------- root の scripts/
 
   # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh。#1328）を shellcheck と、
@@ -1595,6 +1671,10 @@ jobs:
       - name: Test pr-merge-check
         run: bash scripts/tests/pr-merge-check.test.sh
 
+      # 実 Oracle の結合テストの skip の監視（oracle-integration.yml。#1595）。runner の python3 で動く。
+      - name: Test pytest-skip-gate
+        run: bash scripts/tests/pytest-skip-gate.test.sh
+
       # 版を固定し、release の checksum で確かめてから使う。shellcheck は runner のものを使う。
       - name: Actionlint
         env:
@@ -1614,6 +1694,33 @@ jobs:
   # job を追加したら、この needs にも追加する（ここに無い job の失敗は CI OK に反映されない）。
   # すべての job に timeout-minutes を付ける（通常 10〜15 分、e2e は実測の倍程度。既定の 360 分のまま止まると
   # runner と PR の待ちを長く塞ぐ）。
+  # 実 Oracle の結合テスト（Oracle AI Database Free。#1595）。その製品の DB の層（changes の <製品>_oracle）が
+  # 変わったときだけ実行する（それ以外の PR では実行しない）。3 製品の全件は integration-nightly.yml が毎晩。
+  # job の timeout-minutes は呼び出し先（oracle-integration.yml）にある。
+  rag-oracle:
+    name: RAG / Oracle
+    needs: changes
+    if: needs.changes.outputs.rag_oracle == 'true'
+    uses: ./.github/workflows/oracle-integration.yml
+    with:
+      product: rag
+
+  nl2sql-oracle:
+    name: NL2SQL / Oracle
+    needs: changes
+    if: needs.changes.outputs.nl2sql_oracle == 'true'
+    uses: ./.github/workflows/oracle-integration.yml
+    with:
+      product: nl2sql
+
+  agent-oracle:
+    name: Agent / Oracle
+    needs: changes
+    if: needs.changes.outputs.agent_oracle == 'true'
+    uses: ./.github/workflows/oracle-integration.yml
+    with:
+      product: agent
+
   ci-ok:
     name: CI OK
     if: always()
@@ -1643,7 +1750,11 @@ jobs:
       - agent-e2e-impact
       - suite-deploy
       - suite-oracle-linux
+      - suite-terraform-iac
       - suite-scripts
+      - rag-oracle
+      - nl2sql-oracle
+      - agent-oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
