@@ -20,7 +20,7 @@ import {
   useRequirementSession,
 } from "./RequirementClarification";
 import {
-  REQUIREMENT_APPLY_TO_QUESTION_LABELS,
+  REQUIREMENT_APPLY_TO_GENERATION_LABELS,
   RequirementClarificationView,
   type RequirementStartPhase,
 } from "./RequirementClarificationView";
@@ -32,10 +32,16 @@ interface GuidedClarificationPanelProps {
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
   /**
-   * 確認した要件を反映した（session は閉じた）。質問の文と session の ID を渡す（#1439）。
+   * 確認した要件を反映した（session は閉じた）。確かめた時の利用者の質問・確かめた質問の文・業務プロファイル・
+   * session の ID を渡す（#1439）。質問の欄は書き換えない（#1727。確かめた質問の文は要件の表示と生成にだけ使う）。
    * 画面に反映できなかった（草稿を保存できない）ときは false を返し、パネルを残す。
    */
-  onApplyQuestion: (question: string, profileId: string, sessionId: string) => boolean;
+  onApplyRequirement: (
+    sourceQuestion: string,
+    clarifiedQuestion: string,
+    profileId: string,
+    sessionId: string
+  ) => boolean;
   /**
    * 要件の検査ができなかったときの「確認せずに SQL を生成」（チャットと同じ操作。#1715）。パネルを閉じ、
    * 入力した質問のまま SQL を生成する。
@@ -47,7 +53,7 @@ interface GuidedClarificationPanelProps {
  * SQL 生成の画面の AI要件確認（#1439）。業務プロファイルの推薦・確定の後に session を作り、1 問ずつの回答・直し・
  * 要件のまとめ・反映を出す。AI要件確認の基準で、チャットも同じ hook と同じ部品（`RequirementClarificationView`）を
  * 使う（#1715）。この画面だけの違いは入口（「AI要件確認」のボタン・業務プロファイルの推薦と確定）と、確定した
- * 要件の行き先（質問の欄へ反映）。
+ * 要件の行き先（次の「SQL を生成して実行」に渡す。質問の欄は書き換えない。#1727）。
  */
 export function GuidedClarificationPanel({
   question,
@@ -55,7 +61,7 @@ export function GuidedClarificationPanel({
   engine,
   allowedObjects,
   onClose,
-  onApplyQuestion,
+  onApplyRequirement,
   onSkip,
 }: GuidedClarificationPanelProps) {
   const controller = useRequirementSession();
@@ -114,7 +120,7 @@ export function GuidedClarificationPanel({
     setRecommendation(null);
     setError("");
     // 確認が要らない（聞くことが無い）ときは、聞かずに反映して質問の欄へ入れる（チャットと同じ。#1715）。
-    await proceed(created, applyToQuestion, () => !signal.aborted);
+    await proceed(created, applyToGeneration, () => !signal.aborted);
   };
 
   // パネルを閉じずに画面を離れた（別のページへ移動・再読込・タブを閉じる）ときは、
@@ -197,10 +203,14 @@ export function GuidedClarificationPanel({
     if (startControllerRef.current === abort) startControllerRef.current = null;
   };
 
-  /** 確定した要件を質問の欄へ反映する（この画面の行き先。チャットは SQL の生成）。 */
-  function applyToQuestion(applied: QuerySession) {
+  /**
+   * 確定した要件を次の SQL の生成に渡す（この画面の行き先。チャットはすぐ SQL を生成）。質問の欄は利用者の入力の
+   * まま（#1727）。session が覚えている利用者の質問（サーバーが生成のときに照らし合わせる文）を渡す。
+   */
+  function applyToGeneration(applied: QuerySession) {
     releasedRef.current = true;
-    onApplyQuestion(
+    onApplyRequirement(
+      applied.original_question ?? question,
       applied.requirement?.clarified_question_ja?.trim() ?? "",
       applied.profile_id,
       applied.id
@@ -210,7 +220,7 @@ export function GuidedClarificationPanel({
   const applyRequirement = async () => {
     const applied = await controller.applyRequirement();
     if (!applied) return;
-    applyToQuestion(applied);
+    applyToGeneration(applied);
   };
 
   const closePanel = async () => {
@@ -306,7 +316,7 @@ export function GuidedClarificationPanel({
       }}
       onApply={() => void applyRequirement()}
       onClose={() => void closePanel()}
-      labels={REQUIREMENT_APPLY_TO_QUESTION_LABELS}
+      labels={REQUIREMENT_APPLY_TO_GENERATION_LABELS}
       startSlot={profileChooser}
       size="lg"
       idPrefix="nl2sql"

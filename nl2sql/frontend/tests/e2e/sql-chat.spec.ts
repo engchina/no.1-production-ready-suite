@@ -1436,6 +1436,8 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   await expect(applied).toHaveText(/AI要件確認で確かめた質問/);
   await applied.click();
   await expect(answered.getByText(REQUIREMENT_CLARIFIED_QUESTION)).toBeVisible();
+  // 回答して確定しても、入力欄に確かめた質問の文を入れない（#1727）。
+  await expect(composer).toHaveValue("");
   // SQL を作ったら次の質問を送れる。
   await composer.fill("多い順にして");
   await expect(page.getByTestId("sql-chat-send")).toBeEnabled();
@@ -1575,17 +1577,26 @@ test("要件の検査の失敗は、理由と「詳細」（種類・HTTP ステ
   await expect(error.getByRole("button", { name: "確認を中止" })).toBeVisible();
 });
 
-test("質問が SQL の文なら、要件の検査（LLM）をせずにそのまま SQL を作る (#1715)", async ({ page }) => {
-  const state = await setup(page, { create: "needs_answer" });
+test("質問が SQL の文でも同じに要件を確かめ、確認が要らなければ聞かずに SQL を作る。送った質問は書き換えない (#1727)", async ({ page }) => {
+  // 既定の mock は「確認が要らない」（質問 0 件）。SQL の文かどうかで確認を飛ばさない。
+  const state = await setup(page);
   await page.goto("/chat");
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
-  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
-  await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
-  expect(state.requirement.creates).toHaveLength(0);
-  expect(state.requests[0]).toMatchObject({ question: "select * from employee", chat: true });
-  expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
+  const turn = page.getByTestId("sql-chat-turn");
+  await expect(turn).toHaveCount(1);
+  expect(state.requirement.creates).toHaveLength(1);
+  expect(state.requirement.creates[0]).toMatchObject({ question: "select * from employee", chat: true });
+  expect(state.requests[0]).toMatchObject({
+    question: "select * from employee",
+    chat: true,
+    requirement_session_id: REQUIREMENT_SESSION_ID,
+  });
+  // 吹き出しは利用者が送った質問のまま、入力欄に確かめた質問の文を入れない（#1727）。
+  await expect(turn.getByText("select * from employee", { exact: true })).toBeVisible();
+  await expect(composer).toHaveValue("");
+  await expect(turn.getByTestId("sql-chat-turn-requirement")).toBeVisible();
 });
 
 test("OCI Enterprise AI が無い環境では、要件の検査を使わずにそのまま SQL を作る (#1442)", async ({ page }) => {

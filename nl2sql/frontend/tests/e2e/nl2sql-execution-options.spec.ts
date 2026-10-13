@@ -541,11 +541,15 @@ test("AI要件確認は確認した要件を質問へ反映し、構造化した
 
   const questionInput = page.locator("#nl2sql-question-input");
   await expect(panel).toHaveCount(0);
-  await expect(questionInput).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
+  // 利用者が入力した質問は書き換えない（#1727）。
+  await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
   await expect(questionInput).toBeFocused();
   await expect(
-    page.getByText("確認した要件を質問に反映しました。「SQL を生成して実行」で、構造化した要件も SQL の生成に渡します。")
+    page.getByText("確認した要件を反映しました。質問の欄はそのままで、「SQL を生成して実行」で確認した要件を SQL の生成に渡します。")
   ).toBeVisible();
+  // 確かめた質問の文は質問の欄でなく、要件の表示に出す。
+  await page.getByTestId("nl2sql-requirement-question").click();
+  await expect(page.getByTestId("nl2sql-requirement-active")).toContainText(REQUIREMENT_CLARIFIED_QUESTION);
   await expect(page.getByText("生成したSQL")).toHaveCount(0);
   expect(api.jobPayload).toBeNull();
   await expectNoHorizontalOverflow(page);
@@ -573,7 +577,7 @@ test("AI要件確認は確認した要件を質問へ反映し、構造化した
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect.poll(() => api.jobPayload).not.toBeNull();
   expect(api.jobPayload).toMatchObject({
-    question: REQUIREMENT_CLARIFIED_QUESTION,
+    question: REQUIREMENT_QUESTION,
     requirement_session_id: REQUIREMENT_SESSION_ID,
   });
 });

@@ -104,7 +104,6 @@ const nl2sqlJa = {
   "nl2sql.requirementFailure.endpointHost": "接続先",
   "nl2sql.requirementFailure.failureCode": "失敗のコード",
   "nl2sql.requirementFailure.fallback": "AI要件確認の操作に失敗しました。",
-  "nl2sql.clarification.sqlInput": "質問が SQL の文なので、AI要件確認は要りません。そのまま SQL を生成できます。",
   "chat.requirement.retry": "もう一度確認",
   "chat.requirement.skip": "確認せずに SQL を生成",
   "chat.requirement.applied": "AI要件確認で確かめた質問",
@@ -1330,7 +1329,7 @@ const nl2sqlJa = {
   "nl2sql.clarification.apply": "要件を SQL の生成に反映",
   "nl2sql.clarification.applyWithRemaining": "残りを AI に任せて反映",
   "nl2sql.clarification.applied":
-    "確認した要件を質問に反映しました。「SQL を生成して実行」で、構造化した要件も SQL の生成に渡します。",
+    "確認した要件を反映しました。質問の欄はそのままで、「SQL を生成して実行」で確認した要件を SQL の生成に渡します。",
   "nl2sql.clarification.ended": "この確認は終了しました。閉じてから、もう一度始めてください。",
   "nl2sql.clarification.requirementActive": "AI要件確認の要件を SQL の生成に渡します",
   "nl2sql.clarification.requirementRemove": "要件を外す",

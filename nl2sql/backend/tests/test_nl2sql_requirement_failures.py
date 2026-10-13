@@ -1,4 +1,4 @@
-"""AI要件確認の LLM の失敗の理由と「詳細」、SQL の文の入力の判定（#1715）。
+"""AI要件確認の LLM の失敗の理由と「詳細」、最低限の要件だけを確かめる方針（#1715・#1727）。
 
 OCI Enterprise AI は httpx.MockTransport（決定論）で受ける。応答の形は 2026-10-13 の実測
 （`xai.grok-4.3` の HTTP 500 `internal_error`、`openai.gpt-oss-120b` の `status=incomplete`・
@@ -18,7 +18,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.features.nl2sql.enterprise_ai_client import OciEnterpriseAiDirectClient
 from app.features.nl2sql.ontology_router import _raise_domain_error
-from app.features.nl2sql.sql_input import is_sql_statement_input
 from app.features.nl2sql.sql_requirement import (
     RequirementAiUnavailableError,
     RequirementContext,
@@ -329,74 +328,7 @@ async def test_api_returns_reason_and_details() -> None:
     assert "error_details" not in legacy.json()
 
 
-# --- 4. SQL の文の入力の判定 ---------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "select * from employee",
-        "SELECT * FROM EMPLOYEE;",
-        "  select e.* from employee e where e.name = 'それ; は' ;  ",
-        "-- 社員の一覧\nselect * from employee",
-        "/* 社員 */ select count(*) from employee -- 件数\n",
-        'select "社員名" from "社員"',
-        "with t as (select * from employee) select * from t",
-        "WITH dept_avg (dept, avg_sal) AS (SELECT 1, 2 FROM dual) SELECT * FROM dept_avg;",
-        "select\n  name\nfrom\n  employee\n;;",
-    ],
-    ids=[
-        "lower",
-        "upper-semicolon",
-        "literal-semicolon",
-        "line-comment",
-        "block-comment",
-        "quoted-japanese",
-        "with",
-        "with-columns",
-        "multiline",
-    ],
-)
-def test_sql_statement_input(text: str) -> None:
-    assert is_sql_statement_input(text) is True
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "",
-        "社員の一覧を出して",
-        "select * from employee の件数を出して",
-        "selectの使い方",
-        "select * from employee; delete from employee",
-        "select * from employee where name = 'abc",
-        "/* 閉じていない select * from employee",
-        "select the top customers",
-        "delete from employee",
-        "update employee set salary = 0",
-        "with 社員 as (select 1 from dual) select * from 社員",
-        "with the employees from tokyo",
-    ],
-    ids=[
-        "empty",
-        "japanese",
-        "sql-then-japanese",
-        "japanese-select",
-        "two-statements",
-        "unclosed-literal",
-        "unclosed-comment",
-        "english-without-from",
-        "delete",
-        "update",
-        "japanese-cte-name",
-        "english-with",
-    ],
-)
-def test_not_sql_statement_input(text: str) -> None:
-    assert is_sql_statement_input(text) is False
-
-
-# --- 5. 最低限の要件だけを確かめる方針（#1715） ---------------------------------------
+# --- 4. 最低限の要件だけを確かめる方針（#1715） ---------------------------------------
 
 
 def test_system_prompt_asks_only_for_the_minimum() -> None:
