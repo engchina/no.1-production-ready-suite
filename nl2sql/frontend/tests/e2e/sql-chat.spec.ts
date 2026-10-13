@@ -1486,3 +1486,63 @@ test("確認の途中で再読込しても、同じ確認を続けられる (#14
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
   expect(state.requests[0]).toMatchObject({ requirement_session_id: REQUIREMENT_SESSION_ID });
 });
+
+test("Select AI Credential が無いと Select AI の送信を止めて入力欄の下に事前条件を示し、Enterprise AI は送れる (#1688)", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  const state = await setup(page);
+  const readiness = { exists: false };
+  await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          credential_required: true,
+          credential_name: "OCI_CRED",
+          credential_exists: readiness.exists,
+        },
+      }),
+    }),
+  );
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  const send = page.getByTestId("sql-chat-send");
+  const precondition = page.getByTestId("sql-chat-credential-precondition");
+  await expect(precondition).toContainText("Select AI Credential が作成されていません");
+  await expect(precondition).toContainText("作成するまで送信できません。");
+  await composer.fill("カテゴリ別売上");
+  // 書いた質問は残し、送信だけを止める（Enter でも送らない）。
+  await expect(send).toHaveAttribute("aria-disabled", "true");
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("カテゴリ別売上");
+  expect(state.requests).toHaveLength(0);
+  // 入力欄の下（送信の行の直下）に全幅で出す。
+  const composerBox = (await composer.boundingBox())!;
+  const noticeBox = (await precondition.boundingBox())!;
+  expect(noticeBox.y).toBeGreaterThanOrEqual(composerBox.y + composerBox.height);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+  await precondition.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("chat-credential-missing.png") });
+
+  // OCI Enterprise AI の直接の生成は Credential を使わないので送れる。
+  await chooseSelectFieldOption(
+    page.getByRole("combobox", { name: "生成方法", exact: true }),
+    "enterprise_ai_direct",
+  );
+  await expect(precondition).toHaveCount(0);
+  await chooseSelectFieldOption(
+    page.getByRole("combobox", { name: "生成方法", exact: true }),
+    "select_ai",
+  );
+  readiness.exists = true;
+  await precondition.getByRole("button", { name: "再試行" }).click();
+  await expect(precondition).toHaveCount(0);
+  await composer.press("Enter");
+  await expect.poll(() => state.requests.length).toBe(1);
+  expect(state.requests[0]).toMatchObject({ engine: "select_ai", chat: true });
+});

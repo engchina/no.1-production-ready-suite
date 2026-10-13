@@ -18949,3 +18949,48 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
   );
   await expectNoHorizontalScroll(page);
 });
+
+test("Select AI Credential が無いと合成データの生成開始を止め、確認語の欄の上に事前条件を示す (#1688)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const readiness = { exists: false };
+  await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
+    fulfillJson(route, {
+      credential_required: true,
+      credential_name: "OCI_CRED",
+      credential_exists: readiness.exists,
+    })
+  );
+  let writes = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", async (route) => {
+    if (route.request().method() === "GET") return fulfillJson(route, []);
+    writes++;
+    return fulfillJson(route, syntheticRunFixture("pending"));
+  });
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const workspace = page.locator("#data-management-panel-synthetic");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+
+  const precondition = workspace.getByTestId("synthetic-credential-precondition");
+  const generate = workspace.getByRole("button", { name: "生成開始" });
+  await expect(precondition).toContainText("Select AI Credential が作成されていません");
+  await expect(precondition).toContainText("作成するまで生成を開始できません。");
+  await expect(generate).toBeDisabled();
+  await expect(generate).toHaveAttribute("aria-describedby", "synthetic-credential-precondition");
+  const noticeBox = (await precondition.boundingBox())!;
+  const confirmationBox = (await workspace.getByTestId("execution-confirmation-field").boundingBox())!;
+  expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(confirmationBox.y);
+  await expectNoHorizontalScroll(page);
+  await precondition.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("synthetic-credential-missing.png") });
+  expect(writes).toBe(0);
+
+  readiness.exists = true;
+  await precondition.getByRole("button", { name: "再試行" }).click();
+  await expect(precondition).toHaveCount(0);
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect.poll(() => writes).toBe(1);
+});
