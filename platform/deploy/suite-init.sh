@@ -34,6 +34,8 @@ SUITE_DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SUITE_DEPLOY_DIR}/suite-nginx.sh"
 # shellcheck source=suite-tls.sh
 source "${SUITE_DEPLOY_DIR}/suite-tls.sh"
+# shellcheck source=suite-health.sh
+source "${SUITE_DEPLOY_DIR}/suite-health.sh"
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 # 3 製品のプロセスは同じユーザーで動かす（共通の platform/.env・model-settings.json・Wallet・~/.oci を
@@ -362,7 +364,8 @@ configure_nginx() {
   restore_nginx_contexts
   nginx -t
   systemctl enable nginx
-  systemctl reload nginx || systemctl restart nginx
+  # 初回は Nginx が止まっている（reload は「not active, cannot reload」で失敗する）。止まっていれば起動する。
+  systemctl reload-or-restart nginx
 }
 
 # 利用者が開く URL の起点（既定の port 80 / 443 は書かない）。
@@ -408,10 +411,14 @@ main() {
   configure_nginx
   log "Deployment finished. Log in as system_admin (PLATFORM_ADMIN_LOGIN_USER_PASSWORD)."
   report_urls
+  # 配備全体の確認（service・backend と Nginx を通した health・Nginx。#1642）。log の最後の check の行が結果。
+  local check_status=0
+  suite_check_deployment "$(suite_local_nginx_base_url "${PROPS_DIR}")" "${SUITE_PRODUCTS[@]}" || check_status=$?
   if [ "${#SUITE_FAILED_PRODUCTS[@]}" -gt 0 ]; then
     log "Failed products: ${SUITE_FAILED_PRODUCTS[*]}"
     return 1
   fi
+  return "${check_status}"
 }
 
 if [ "${SUITE_INIT_TEST_MODE:-false}" != "true" ]; then

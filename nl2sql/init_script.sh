@@ -5,6 +5,11 @@ if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then
   exec > >(tee -a /var/log/nl2sql-init.log) 2>&1
 fi
 
+INIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# backend の起動の待ち方（suite_wait_for_service_health。#1642）は platform の配備の共通の helper（製品は単独では配備しない）。
+# shellcheck source-path=SCRIPTDIR source=../platform/deploy/suite-health.sh
+source "${INIT_SCRIPT_DIR}/../platform/deploy/suite-health.sh"
+
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 APP_USER="${APP_USER:-opc}"
 APP_GROUP="${APP_GROUP:-${APP_USER}}"
@@ -240,16 +245,36 @@ validate_nodejs_24() {
   log "Installed Node.js ${installed_version} with npm ${npm_version}."
 }
 
+# installer（astral.sh の install.sh）は一時の場所に展開してから /usr/local/bin へ移すため、SELinux が有効だと
+# /usr/local/bin/uv の context が bin_t にならない（移動は元の label を保つ）。systemd（init_t）は bin_t でない file を
+# ExecStart で実行できず 203/EXEC（Permission denied）になる（NL2SQL・Agent の unit は uv を ExecStart にする）。
+# 既に入っている場合も戻す（既存の配備は suite-restart.sh の再配備で直る）。#1642
+# UV_BIN_DIR の上書きは test が隔離した場所を使うためのもので、本番では変えない。
+restore_uv_selinux_context() {
+  local bin_dir="${UV_BIN_DIR:-/usr/local/bin}" paths=() path
+  if ! command -v selinuxenabled >/dev/null 2>&1 || ! selinuxenabled; then
+    return 0
+  fi
+  for path in "${bin_dir}/uv" "${bin_dir}/uvx"; do
+    if [ -e "${path}" ]; then
+      paths+=("${path}")
+    fi
+  done
+  if [ "${#paths[@]}" -gt 0 ]; then
+    restorecon -v "${paths[@]}"
+  fi
+}
+
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
     log "uv $(uv --version) is already installed."
-    return
+  else
+    log "Installing uv."
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+    chmod 0755 /usr/local/bin/uv
+    uv --version
   fi
-
-  log "Installing uv."
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
-  chmod 0755 /usr/local/bin/uv
-  uv --version
+  restore_uv_selinux_context
 }
 
 data_dir_has_entries() {
@@ -487,15 +512,14 @@ dump_service_diagnostics() {
   journalctl -u "${service}" -n 160 --no-pager || true
 }
 
+# 一定の間隔で待ち、backend が failed になるか再起動を繰り返したら、上限を待たずに status と journal を出す。
 wait_for_backend() {
-  log "Waiting for backend health endpoint."
-  if retry_command 30 curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"; then
+  if suite_wait_for_service_health production-ready-nl2sql-backend.service "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"; then
     return 0
   fi
-  local status="$?"
   log "Backend did not become healthy on ${BACKEND_HOST}:${BACKEND_PORT}."
   dump_service_diagnostics production-ready-nl2sql-backend.service
-  return "${status}"
+  return 1
 }
 
 main() {

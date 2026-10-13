@@ -7,7 +7,8 @@ name: Suite / Deploy
 #   - 各製品の init_script.sh と配備・更新のスクリプト（systemctl 等は fake。生成した sudoers は visudo で検査）
 #   - Nginx のログの契約・frontend の起動スクリプト（隔離した Nginx）
 #   - OCI Resource Manager の統合 stack（terraform/stack。fmt・validate・zip・契約の検証。#217）
-#   - 1 台の Compute の配備（platform/deploy。suite-init・自作の CA と IP の証明書・Nginx の site。#1316）
+#   - 1 台の Compute の配備（platform/deploy。suite-init・自作の CA と IP の証明書・Nginx の site。#1316）と、
+#     起動の待ち方・配備全体の確認（suite-health。#1642）
 # 実テナンシーへの配備確認は手動で行う。
 
 on:
@@ -90,8 +91,11 @@ jobs:
       - name: Single-Compute deployment (platform/deploy)
         run: |
           bash -n platform/deploy/suite-init.sh platform/deploy/suite-nginx.sh platform/deploy/suite-tls.sh \
-            platform/deploy/suite-pull.sh platform/deploy/suite-restart.sh platform/deploy/suite-update.sh
+            platform/deploy/suite-pull.sh platform/deploy/suite-restart.sh platform/deploy/suite-update.sh \
+            platform/deploy/suite-health.sh
           bash platform/deploy/tests/suite-tls.test.sh
           bash platform/deploy/tests/suite-init.test.sh
+          # backend の起動の待ち方・配備全体の確認・各製品の install_uv の SELinux の context（#1642）。
+          bash platform/deploy/tests/suite-health.test.sh
           bash platform/deploy/tests/suite-nginx.test.sh
           bash platform/deploy/tests/suite-ops.test.sh

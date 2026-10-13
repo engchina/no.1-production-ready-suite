@@ -256,6 +256,12 @@ prepare_case() {
   printf '%s\n' "${main_body}" | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|deploy_products)$' \
     | awk '{printf "%s ", $1}' | grep -qx 'install_os_packages configure_firewall configure_selinux deploy_products ' \
     || fail "main の順が違う"
+  # 最後に配備全体を確かめる（#1642。log の最後の check の行が結果）。URL の一覧の後、失敗の判定の前。
+  printf '%s\n' "${main_body}" | grep -E '^  (configure_nginx|report_urls|suite_check_deployment .*)$' \
+    | awk '{printf "%s ", $1}' | grep -qx 'configure_nginx report_urls suite_check_deployment ' \
+    || fail "main の最後に配備の確認が無い"
+  # 初回は Nginx が止まっている（reload は失敗の log を出す）。止まっていれば起動する。
+  grep -qxF '  systemctl reload-or-restart nginx' "${repo}/platform/deploy/suite-init.sh" || fail "Nginx を reload-or-restart しない"
 )
 
 # 6. 完了の log の URL（#1561）: 入口（suite）を製品の URL の上に出し、転送先を添える。
