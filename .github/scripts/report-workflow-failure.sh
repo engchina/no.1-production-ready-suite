@@ -27,14 +27,28 @@ commit_title="$(jq -r '(.head_commit.message // "") | split("\n")[0]' <<<"${run_
 run_started="$(jq -r '.run_started_at // .created_at' <<<"${run_json}")"
 
 # 失敗した job と、その中で失敗した step。集約用の `CI OK` は他の job の失敗を映すだけなので除く。
+# job の時間切れ（timeout-minutes）は job も run も cancelled になるため、cancelled の job は annotation で
+# 時間切れかを確かめて失敗に含める（#1586）。手で取り消した job は含めない。
+all_jobs="$(gh api --paginate "repos/${repo}/actions/runs/${RUN_ID}/jobs?per_page=100" -q '.jobs[]' | jq -s '.')"
+timed_out_ids="$(
+  jq -r '.[] | select(.conclusion == "cancelled") | .id' <<<"${all_jobs}" | while IFS= read -r job_id; do
+    [ -n "${job_id}" ] || continue
+    if gh api "repos/${repo}/check-runs/${job_id}/annotations" -q '.[].message' 2>/dev/null \
+      | grep -q 'exceeded the maximum execution time'; then
+      printf '%s\n' "${job_id}"
+    fi
+  done | jq -R 'tonumber' | jq -s '.'
+)"
 failed_jobs="$(
-  gh api --paginate "repos/${repo}/actions/runs/${RUN_ID}/jobs?per_page=100" \
-    -q '.jobs[]
-        | select(.conclusion == "failure" or .conclusion == "timed_out")
-        | select(.name != "CI OK")
-        | {name, url: .html_url,
-           steps: ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))}' \
-    | jq -s '.'
+  jq --argjson timed_out "${timed_out_ids}" '
+    [ .[]
+      | select(.conclusion == "failure" or .conclusion == "timed_out"
+               or (.conclusion == "cancelled" and (.id as $id | $timed_out | index($id))))
+      | select(.name != "CI OK")
+      | {name, url: .html_url,
+         steps: (if .conclusion == "cancelled" then "時間切れ（timeout-minutes）"
+                 else ([.steps[]? | select(.conclusion == "failure") | .name] | join(", ")) end)} ]' \
+    <<<"${all_jobs}"
 )"
 
 product_of() {
@@ -54,6 +68,13 @@ label_of() {
     *) echo "platform" ;;
   esac
 }
+
+run_conclusion="$(jq -r '.conclusion // ""' <<<"${run_json}")"
+# 取り消された run で時間切れの job が無ければ、手で取り消したもの。通知しない。
+if [ "${run_conclusion}" = "cancelled" ] && [ "$(jq 'length' <<<"${failed_jobs}")" -eq 0 ]; then
+  echo "run ${RUN_ID} は取り消され、時間切れの job はありません（通知しない）。"
+  exit 0
+fi
 
 # job が取れない失敗（workflow の構文エラー等）も通知する。
 if [ "$(jq 'length' <<<"${failed_jobs}")" -eq 0 ]; then
