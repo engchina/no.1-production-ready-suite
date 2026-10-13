@@ -3,7 +3,7 @@
 # CI の `Suite / Oracle Linux 9`（container: oraclelinux:9、root）が実行する。Oracle Linux 以外では何もしない。
 #   1. 配備のスクリプト（cloud-init・suite-init.sh・3 製品の init_script.sh）が dnf で入れる package の名前が、
 #      Oracle Linux 9 の repository（BaseOS・AppStream。EPEL・CodeReady Builder は使わない）と module
-#      （nginx:1.24・nodejs:24・nodejs:22）で解決できる（`dnf install --assumeno` で依存まで解決し、入れない）
+#      （nginx:1.24・nodejs:24）で解決できる（`dnf install --assumeno` で依存まで解決し、入れない）
 #   2. 配備のスクリプトが前提にする command が image にある・bash -n
 #   3. suite-init.sh の configure_tls / configure_nginx が書く本番と同じ配置（/etc/nginx/nginx.conf・conf.d）を、
 #      Oracle Linux の Nginx が読み（package の既定の server と衝突しない）、HTTPS で /agent/ へ転送する
@@ -71,7 +71,7 @@ for module in "${modules[@]}"; do
     *) fail "未知の module: ${module}" ;;
   esac
 done
-# Agent が単独で入れる Node.js の module（nodejs:22）も repository にあること。
+# 配備のスクリプトが使う module（nginx:1.24・3 製品の nodejs:24。#1591）が repository にあること。
 for module in "${modules[@]}" nodejs:24; do
   dnf -q module info "${module}" >/dev/null 2>&1 || fail "module が無い: ${module}"
 done

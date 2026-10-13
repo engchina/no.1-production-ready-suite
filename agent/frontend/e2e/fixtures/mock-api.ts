@@ -1739,7 +1739,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       requireKnownSkills(body.skill_ids);
       requireUsableScopes(body.data_scopes, null);
       const agent = {
-        id,
         description: "",
         instructions: "",
         migration_required: false,

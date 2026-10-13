@@ -41,9 +41,22 @@ function seedSet(mockApi: MockApi) {
   mockApi.state.evaluationSets.push(structuredClone(SET));
 }
 
+type EvaluationResultFixture = {
+  case: (typeof SET.cases)[number];
+  status: string;
+  run_id: string;
+  answer: string;
+  judgement: { verdict: string; score: number; summary: string; missing_points: string[] };
+  tool_calls: string[];
+  tool_selection_correct: boolean | null;
+  error: string | null;
+  duration_ms: number;
+};
+
 function seedFinishedJobs(mockApi: MockApi) {
   seedSet(mockApi);
-  const results = [
+  // 配列の要素ごとの literal の型（空の配列は never[]）にせず、ケースの結果の型にそろえる。
+  const results: EvaluationResultFixture[] = [
     {
       case: SET.cases[0],
       status: "judged",
