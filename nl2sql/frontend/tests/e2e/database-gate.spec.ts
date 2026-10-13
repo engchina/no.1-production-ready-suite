@@ -22,6 +22,7 @@ test.beforeEach(async ({ page }) => {
       status: "ACTIVE",
       force_password_change: false,
       role_codes: ["SYSTEM_ADMIN"],
+      role_display_names: ["システム管理者"],
       is_system_admin: true,
       permissions: [],
       data_entitlements: [],

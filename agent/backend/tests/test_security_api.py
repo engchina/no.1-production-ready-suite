@@ -364,6 +364,9 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
     data = login_response.json()["data"]
     assert data["user_uuid"] == user.user_uuid
     assert data["is_system_admin"] is False
+    # ロールの表示名は role_codes と同じ順（サイドナビのアカウント欄に出す。#1644）。
+    assert len(data["role_display_names"]) == len(data["role_codes"]) == 1
+    assert data["role_display_names"][0].startswith("ロール ")
     # implies を展開した実効権限。
     assert set(data["permissions"]) == {
         "agent.runs.operate",
@@ -548,6 +551,7 @@ def test_local_mode_uses_all_permissions_without_login() -> None:
     data = response.json()["data"]
     assert data["debug_mode"] is True
     assert data["is_system_admin"] is True
+    assert data["role_display_names"] == ["システム管理者"]
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
     assert data["allowed_agent_ids"] is None
     assert data["password_change_allowed"] is False

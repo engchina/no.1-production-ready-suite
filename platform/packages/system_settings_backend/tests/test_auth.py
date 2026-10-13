@@ -132,6 +132,9 @@ def test_login_creates_session_and_authenticates_with_role_permissions() -> None
     principal, token, csrf = service.login("admin", ADMIN_PASSWORD)
     assert principal.is_system_admin
     assert principal.role_ids == [SYSTEM_ADMIN_ROLE_ID]
+    # 画面のアカウント欄に出すロールの表示名（#1644）。
+    assert principal.role_display_names == ["システム管理者"]
+    assert principal.role_names() == ["システム管理者"]
     again = service.authenticate_session(token)
     assert again.user_uuid == principal.user_uuid
     service.verify_csrf(again, csrf, csrf)
@@ -168,6 +171,9 @@ def test_configured_system_admin_uses_signed_token_without_tables() -> None:
     principal, token, _ = service.login("system_admin", CONFIGURED_PASSWORD)
     assert principal.user_uuid == CONFIGURED_SYSTEM_ADMIN_USER_UUID
     assert principal.permissions == service.all_permissions()
+    # 表示名は名前だけ（ロールを括弧で連結しない）。ロールは表示名で別に返す（#1644）。
+    assert principal.display_name == "system_admin"
+    assert principal.role_names() == ["システム管理者"]
     assert token.startswith(service.configured_admin_token_prefix + ".")
     assert service.authenticate_session(token).user_uuid == CONFIGURED_SYSTEM_ADMIN_USER_UUID
     # 大小文字だけ違う login ID は DB ユーザーへもフォールバックしない。
@@ -177,6 +183,24 @@ def test_configured_system_admin_uses_signed_token_without_tables() -> None:
     other = token.replace(service.configured_admin_token_prefix, "other-prefix", 1)
     with pytest.raises(SecurityApiError):
         service.authenticate_session(other)
+
+
+def test_principal_role_names_fall_back_to_code_without_display_name() -> None:
+    """表示名の無い principal（local debug など）は、SYSTEM_ADMIN は既定の表示名、ほかは code。"""
+    principal = Principal(
+        user_uuid="u",
+        login_user_id="local",
+        display_name="ローカル利用者",
+        status="ACTIVE",
+        force_password_change=False,
+        role_codes=["RAG_EDITOR", "SYSTEM_ADMIN"],
+        permissions=set(),
+        session_id="s",
+        csrf_token_hash="",  # nosec B106 - テストの値
+    )
+    assert principal.role_names() == ["RAG_EDITOR", "システム管理者"]
+    principal.role_display_names = ["編集者", ""]
+    assert principal.role_names() == ["編集者", "システム管理者"]
 
 
 class _OtherProductService(_ProductService):

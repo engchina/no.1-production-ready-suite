@@ -29,6 +29,7 @@ export function SidebarAccountSection({ routes, collapsed: collapsedPreference, 
     <SidebarAccountFooter
       name={account.name}
       roles={account.roles}
+      rolesLabel={account.rolesLabel}
       collapsed={collapsed}
       labels={account.labels}
       notice={

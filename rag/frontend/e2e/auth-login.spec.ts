@@ -274,15 +274,24 @@ test("アカウント欄のパスワード変更とログアウト", async ({ pa
   expect(auth.logoutCalls).toBe(1);
 });
 
+/** 修正前（#1644）のアカウント欄の名前・ロールの行の高さ（px）。欄を今より高くしない。 */
+const ACCOUNT_ROW_HEIGHT_BEFORE = 50;
+
 /** アカウント欄（名前とロールの 2 行）の各行の行数・省略・サイドナビの内側に収まるかを測る。 */
 async function measureAccountFooter(page: Page) {
   return page.getByTestId("sidebar-account").evaluate((row) => {
     const sidebar = row.closest("aside")!.getBoundingClientRect();
+    const footer = row.closest("aside > div")!.getBoundingClientRect();
     const lines = Array.from(row.querySelectorAll<HTMLElement>("[title]")).map((element) => {
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
+      // 見える文字（読み上げだけの sr-only を除く）。
+      const visible = Array.from(element.childNodes)
+        .filter((node) => !(node instanceof HTMLElement && node.classList.contains("sr-only")))
+        .map((node) => node.textContent)
+        .join("");
       return {
-        text: element.textContent,
+        text: visible,
         title: element.getAttribute("title"),
         lines: Math.round(rect.height / Number.parseFloat(style.lineHeight)),
         truncated: element.scrollWidth > element.clientWidth + 1,
@@ -290,7 +299,7 @@ async function measureAccountFooter(page: Page) {
         insideSidebar: rect.left >= sidebar.left && rect.right <= sidebar.right + 0.5,
       };
     });
-    return { height: row.getBoundingClientRect().height, lines };
+    return { height: row.getBoundingClientRect().height, footerHeight: footer.height, lines };
   });
 }
 
@@ -307,51 +316,63 @@ async function expectAccountFooterInsideSidebar(page: Page) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`アカウント欄は名前とロールを 1 行ずつ出し、長い行だけ省略記号で切って title に全文を出す（${theme}。#1644）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`アカウント欄は名前とロールの表示名を 1 行ずつ出し、長い行だけ省略記号で切って title に全文を出す（${theme}。#1644）`, { tag: "@responsive" }, async ({ page }) => {
     // 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れておく。
     await page.addInitScript((value) => {
       window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
     }, theme);
-    const user = (displayName: string, roleCodes: string[]) =>
+    const user = (displayName: string, roles: [code: string, name: string][]) =>
       dbUser({
         login_user_id: "system_admin",
         display_name: displayName,
-        role_codes: roleCodes,
+        role_codes: roles.map(([code]) => code),
+        role_display_names: roles.map(([, name]) => name),
         is_system_admin: true,
         permissions: ALL_PERMISSION_CODES,
         allowed_search_answer_profile_ids: null,
         allowed_knowledge_base_ids: null,
       });
-    // 構成のシステム管理者の表示名は名前だけ（ロールを括弧で連結しない）。ロールは 2 行目。
-    const auth = await mockAuthApi(page, user("system_admin", ["SYSTEM_ADMIN"]));
+    // 構成のシステム管理者: 1 行目は名前だけ（ロールを括弧で連結しない）、2 行目はロールの表示名（code ではない）。
+    const auth = await mockAuthApi(page, user("system_admin", [["SYSTEM_ADMIN", "システム管理者"]]));
 
     await page.goto("/settings/appearance");
     await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(theme === "dark");
     const sidebar = await openSidebarNav(page);
     await expect(sidebar.getByText("system_admin", { exact: true })).toBeVisible();
-    await expect(sidebar.getByText("ロール: SYSTEM_ADMIN", { exact: true })).toBeVisible();
+    await expect(sidebar.getByText("システム管理者", { exact: true })).toBeVisible();
+    // ロールの code（SYSTEM_ADMIN）は出さない。
+    await expect(sidebar.getByText(/SYSTEM_ADMIN/)).toHaveCount(0);
     const short = await measureAccountFooter(page);
     expect(short.lines).toEqual([
       expect.objectContaining({ text: "system_admin", title: "system_admin", lines: 1, truncated: false, insideSidebar: true }),
-      expect.objectContaining({ text: "ロール: SYSTEM_ADMIN", title: "ロール: SYSTEM_ADMIN", lines: 1, truncated: false, insideSidebar: true }),
+      expect.objectContaining({ text: "システム管理者", title: "ロール: システム管理者", lines: 1, truncated: false, insideSidebar: true }),
     ]);
+    // 読み上げはロールの行も「ロール: …」の全文。
+    await expect(page.getByTestId("sidebar-account")).toContainText("ロール: システム管理者");
+    // 欄は修正前より高くしない。
+    expect(short.height).toBeLessThanOrEqual(ACCOUNT_ROW_HEIGHT_BEFORE);
     await expectAccountFooterInsideSidebar(page);
 
     // 1 行に入らない名前・ロールは折り返さず、各行の末尾を省略記号で切る。全文は title と DOM の文字（読み上げ）に残り、
-    // 欄の高さは変わらず、右へはみ出さない。
+    // 欄の高さは変わらず、右へはみ出さない。複数のロールは表示名を「、」でつなぐ。
     const longName = "山田 太郎 ナレッジベース運用責任者 品質評価と監査の担当 第二事業部";
-    const longRoles = ["SYSTEM_ADMIN", "RAG_KNOWLEDGE_ADMIN", "RAG_EVALUATION_REVIEWER"];
+    const longRoles: [string, string][] = [
+      ["SYSTEM_ADMIN", "システム管理者"],
+      ["RAG_KNOWLEDGE_ADMIN", "ナレッジベース管理者"],
+      ["RAG_EVALUATION_REVIEWER", "品質評価の確認者"],
+    ];
     auth.current = user(longName, longRoles);
     await page.reload();
     const reloaded = await openSidebarNav(page);
     await expect(reloaded.getByText(longName, { exact: true })).toBeVisible();
     const long = await measureAccountFooter(page);
-    const longRoleText = `ロール: ${longRoles.join(", ")}`;
+    const longRoleNames = "システム管理者、ナレッジベース管理者、品質評価の確認者";
     expect(long.lines).toEqual([
       { text: longName, title: longName, lines: 1, truncated: true, ellipsis: true, insideSidebar: true },
-      { text: longRoleText, title: longRoleText, lines: 1, truncated: true, ellipsis: true, insideSidebar: true },
+      { text: longRoleNames, title: `ロール: ${longRoleNames}`, lines: 1, truncated: true, ellipsis: true, insideSidebar: true },
     ]);
     expect(Math.abs(long.height - short.height)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(long.footerHeight - short.footerHeight)).toBeLessThanOrEqual(0.5);
     await expectAccountFooterInsideSidebar(page);
     await expectNoPageOverflow(page);
 
@@ -374,6 +395,7 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
           login_user_id: "local",
           display_name: "ローカル利用者",
           role_codes: ["SYSTEM_ADMIN"],
+          role_display_names: ["システム管理者"],
           is_system_admin: true,
           permissions: ALL_PERMISSION_CODES,
           allowed_search_answer_profile_ids: null,

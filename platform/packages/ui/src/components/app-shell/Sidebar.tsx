@@ -296,6 +296,7 @@ export interface SidebarFooterAction {
 export function SidebarAccountFooter({
   name,
   roles,
+  rolesLabel,
   collapsed: collapsedPreference,
   theme = "light",
   onToggleTheme,
@@ -305,7 +306,10 @@ export function SidebarAccountFooter({
   labels = { logout: "ログアウト", switchToLight: "ライトテーマに切り替え", switchToDark: "ダークテーマに切り替え" },
 }: {
   name?: string;
+  /** 2 行目に出すロール（翻訳済みの表示名）。 */
   roles?: string;
+  /** ロールの行の全文（「ロール: …」など）。title と読み上げに使い、見える行は `roles` のまま。 */
+  rolesLabel?: string;
   collapsed: boolean;
   /** 現在適用中のテーマ（system 設定の場合は解決後の値）。`onToggleTheme` と一緒に渡す。 */
   theme?: "light" | "dark";
@@ -325,16 +329,25 @@ export function SidebarAccountFooter({
       {name && !collapsed ? (
         // 1 行目は名前、2 行目は補足（ロール）。各行は 1 行で省略記号で切り、高さを変えない（#1644）。
         // 全文は各行の title（Tooltip はフォーカスできるトリガー用。README §4「Tooltip」）。DOM の文字は省略しないので、
-        // 読み上げは常に全文になる。truncate は行の高さで切り取るため、行の高さは字面（約 1.45em）以上にする（#658）。
-        <div className="flex min-h-11 min-w-0 items-center gap-2.5 px-3 py-1" data-testid="sidebar-account">
+        // 読み上げは常に全文になる。truncate は行の高さで切り取るため、行の高さは字面（約 1.45em）以上にする（名前 14px は
+        // leading-6 = 21px、ロール 12px は leading-5 = 17.5px。#658）。上下の余白を詰め、欄の高さは修正前の 50px より低い 42px。
+        <div className="flex min-h-11 min-w-0 items-center gap-2.5 px-3 py-0.5" data-testid="sidebar-account">
           <UserRound className="shrink-0" size={20} aria-hidden />
           <div className="min-w-0 flex-1">
             <div className="truncate whitespace-nowrap text-sm font-medium leading-6 text-fg" title={name}>
               {name}
             </div>
             {roles ? (
-              <div className="truncate whitespace-nowrap text-xs leading-5 text-fg-subtle" title={roles}>
-                {roles}
+              <div className="truncate whitespace-nowrap text-xs leading-5 text-fg-subtle" title={rolesLabel ?? roles}>
+                {rolesLabel ? (
+                  <>
+                    {/* 読み上げは「ロール: …」の全文、見える行は表示名だけ。 */}
+                    <span className="sr-only">{rolesLabel}</span>
+                    <span aria-hidden>{roles}</span>
+                  </>
+                ) : (
+                  roles
+                )}
               </div>
             ) : null}
           </div>

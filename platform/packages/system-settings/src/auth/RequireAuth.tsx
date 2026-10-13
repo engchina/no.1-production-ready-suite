@@ -5,7 +5,7 @@ import { ApiErrorState, TimedLoadingState, type SidebarFooterAction } from "@pro
 
 import { useAuth } from "./AuthProvider";
 import { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./messages";
-import type { AuthRoutes } from "./types";
+import type { AuthRoutes, BaseCurrentUser } from "./types";
 
 export interface RequireAuthProps {
   routes: AuthRoutes;
@@ -66,7 +66,10 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
 
 export interface SidebarAccount {
   name: string;
+  /** ロールの表示名（複数は区切りでつなぐ）。アカウント欄の 2 行目に出す。 */
   roles: string;
+  /** ロールの行の全文（「ロール: …」）。title と読み上げに使う。 */
+  rolesLabel: string;
   /** パスワード変更（許可されている場合だけ）。 */
   actions: SidebarFooterAction[];
   /** ローカル DEBUG（ログイン省略）では undefined。 */
@@ -74,6 +77,18 @@ export interface SidebarAccount {
   labels: { logout: string; switchToLight: string; switchToDark: string };
   /** ローカル DEBUG（ログイン省略）で入っているか。製品はその旨の notice を出す。 */
   debugMode: boolean;
+}
+
+/**
+ * アカウント欄に出すロール。code ではなく表示名を区切りでつなぐ。表示名の無いロールだけ code（#1644）。
+ */
+export function sidebarRoleNames(
+  user: Pick<BaseCurrentUser, "role_codes" | "role_display_names">,
+  separator: string
+): string {
+  return user.role_codes
+    .map((code, index) => user.role_display_names?.[index]?.trim() || code)
+    .join(separator);
 }
 
 /**
@@ -93,11 +108,13 @@ export function useSidebarAccount({
   const m = { ...AUTH_MESSAGES, ...messages };
   const user = auth.user;
   if (!user) return null;
+  const roles = sidebarRoleNames(user, m.sidebarRoleSeparator);
   const passwordChangeActive =
     pathname === routes.passwordChange || pathname.startsWith(`${routes.passwordChange}/`);
   return {
     name: user.display_name,
-    roles: formatMessage(m.sidebarRoles, { roles: user.role_codes.join(", ") }),
+    roles,
+    rolesLabel: formatMessage(m.sidebarRoles, { roles }),
     debugMode: user.debug_mode,
     labels: { logout: m.sidebarLogout, switchToLight: "", switchToDark: "" },
     actions:
