@@ -9,10 +9,14 @@ name: CI
 # それを読む RAG / Engine・RAG / Backend・Agent / Backend だけを動かす（frontend・e2e は動かさない。#1488）。
 # 製品の frontend と E2E smoke の job は、その製品の frontend（と frontend のテストが読む backend の一部のファイル。
 # <製品>_frontend）か共有 UI の変更でだけ動く。e2e は API をすべてモックするので backend のコードを実行しない（#1531）。
-# frontend が読む frontend の外のファイルが filter に入っていることは platform/scripts/ci_frontend_paths.py が確かめる。
+# 製品の backend の job（Backend・Engine・services の lint）は、その製品の frontend 以外（と backend のテストが読む
+# frontend の一部のファイル。<製品>_backend）か共通の backend の変更でだけ動く（#1592）。
+# 配備の検証（Suite / Deploy。suite-deploy.yml）は、製品の frontend・共有 UI・Markdown だけの変更では動かない（#1592）。
+# frontend が読む frontend の外のファイル・backend が読む frontend のファイルが filter に入っていることは
+# platform/scripts/ci_frontend_paths.py が確かめる。
 # MCP ツールの契約（platform/contracts/mcp/）は 3 製品の backend のテストだけが読むので、backend の job だけを動かす（#1531）。
-# platform の Markdown（AGENTS.md・README・docs/ux-contracts 等）だけの変更では製品の job を動かさない
-# （docs/design-system/ は lint 設定を含むため frontend に数える）。
+# platform の Markdown（AGENTS.md・README・docs/ux-contracts・docs/design-system 等）だけの変更では製品の job を動かさない
+# （docs/design-system/ の Markdown 以外（lint の設定・plugin・reference）は frontend に数える。#1592）。
 # RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
 # path 依存（rag_parser_core・rag_engine・backend_core）・テストのデータ・venv を作るスクリプトが変わったときだけ動かす
 # （rag/ の他の変更では動かさない。テストのある docling・asr だけ。#1512）。
@@ -22,6 +26,9 @@ name: CI
 # 飛ばし（全件が smoke の spec を含む）、selected のときは smoke の spec を impact から除く（#1525）。
 # PR の e2e の 375px の project は、画面幅に依存するテスト（@responsive）だけを実行する（workflow の env の
 # E2E_MOBILE_SCOPE。全件は e2e-nightly.yml。#1582）。
+# runner は ubuntu-24.04 に固定する（#1587）。本番の Compute の OS は Oracle Linux 9 だが（#1611）、GitHub に
+# Oracle Linux の runner は無いため、テストの実行には ubuntu-24.04 を使う。OS の差（dnf の package の名前・
+# Nginx の配置）は `Suite / Oracle Linux 9`（container: oraclelinux:9）が配備のスクリプトの変更時に確かめる。
 # 実 Oracle の結合テスト（Oracle AI Database Free。oracle-integration.yml）は、その製品の DB の層（changes の
 # <製品>_oracle）が変わったときだけ実行する。3 製品は integration-nightly.yml が毎晩確かめる（#1595）。
 
@@ -60,6 +67,10 @@ env:
     e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
     e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
     e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts e2e/scrollbar-stability.spec.ts
+  # PR / main の push の e2e（smoke・impact）は、3 製品の playwright.config.ts の webServer が vite build の成果物を
+  # vite preview で配信する（dev server より約 25〜30% 速い。build は job ごとに 1〜2 秒。#1583）。
+  # nightly（e2e-nightly.yml）は e2e-impact の記録が dev server の URL と sourcemap を使うので dev server のまま。
+  PLAYWRIGHT_WEB_SERVER: preview
 
 jobs:
   changes:
@@ -71,9 +82,19 @@ jobs:
       pull-requests: read
       actions: read
     outputs:
-      rag: ${{ steps.filter.outputs.rag }}
-      nl2sql: ${{ steps.filter.outputs.nl2sql }}
-      agent: ${{ steps.filter.outputs.agent }}
+      # 製品の backend の job（Backend・Engine 等）を動かす変更。`<製品>/frontend/**` を除き、backend のテストが読む
+      # frontend のファイル（<製品>_backend_frontend）を足す（#1592。ci_frontend_paths.py が漏れを検出する）。
+      rag_backend: >-
+        ${{ steps.filter.outputs.rag_backend == 'true' || steps.filter.outputs.rag_backend_frontend == 'true' }}
+      nl2sql_backend: >-
+        ${{ steps.filter.outputs.nl2sql_backend == 'true' || steps.filter.outputs.nl2sql_backend_frontend == 'true' }}
+      agent_backend: >-
+        ${{ steps.filter.outputs.agent_backend == 'true' || steps.filter.outputs.agent_backend_frontend == 'true' }}
+      # 配備の検証（Suite / Deploy。suite-deploy.yml）を動かす変更（#1592）。
+      deploy: ${{ steps.filter.outputs.deploy == 'true' || steps.filter.outputs.ci == 'true' }}
+      # Compute の OS（Oracle Linux 9）に依存する配備のスクリプト（#1611）。
+      deploy_os: ${{ steps.filter.outputs.deploy_os == 'true' || steps.filter.outputs.ci == 'true' }}
+      # Terraform の stack の IaC の検査（Suite / Terraform IaC。trivy config。#1595）を動かす変更。
       terraform: ${{ steps.filter.outputs.terraform }}
       scripts: ${{ steps.filter.outputs.scripts == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_frontend: >-
@@ -159,12 +180,15 @@ jobs:
             ci:
               - ".github/workflows/ci.yml"
               - ".github/actions/**"
+            # 設計システムの Markdown（README.md 等）は frontend のコード・テスト・e2e が読まないので、frontend の job を
+            # 動かさない（#1592。lint の設定 adherence.oxlintrc.json・plugin・reference は frontend に数える）。
             platform_frontend:
               - "platform/packages/ui/**"
               - "platform/packages/system-settings/**"
               - "platform/docs/design-system/**"
               - "platform/package.json"
               - "platform/package-lock.json"
+              - "!platform/docs/design-system/**/*.md"
             platform_backend:
               - "platform/packages/backend_core/**"
               - "platform/packages/system_settings_backend/**"
@@ -177,12 +201,33 @@ jobs:
               - "platform/contracts/answer-passages/**"
             mcp_contract:
               - "platform/contracts/mcp/**"
-            rag:
+            # 製品の backend（frontend を除く製品のすべて。#1592）。
+            rag_backend:
               - "rag/**"
-            nl2sql:
+              - "!rag/frontend/**"
+            nl2sql_backend:
               - "nl2sql/**"
-            agent:
+              - "!nl2sql/frontend/**"
+            agent_backend:
               - "agent/**"
+              - "!agent/frontend/**"
+            # backend のテストが読む frontend のファイル（ナビ・権限・i18n の一致、引用の fixture）。backend のテストが
+            # frontend のファイルを新しく読んだら、ここに足す（ci_frontend_paths.py が検出する。#1592）。
+            rag_backend_frontend:
+              - "rag/frontend/src/components/layout/nav-config.ts"
+              - "rag/frontend/src/lib/i18n.ts"
+              - "rag/frontend/src/lib/permissions.ts"
+              - "rag/frontend/src/lib/stored-citations.fixture.json"
+            nl2sql_backend_frontend:
+              - "nl2sql/frontend/src/components/layout/nav-config.ts"
+              - "nl2sql/frontend/src/features/security/menu-permissions.ts"
+              - "nl2sql/frontend/src/lib/i18n.ts"
+              - "nl2sql/frontend/src/lib/nl2sql-base-i18n.ts"
+            agent_backend_frontend:
+              - "agent/frontend/src/components/layout/nav-config.ts"
+              - "agent/frontend/src/lib/i18n.ts"
+              - "agent/frontend/src/lib/permissions.ts"
+              - "agent/frontend/src/lib/rag-i18n.ts"
             # 製品の frontend と、frontend の単体テスト・e2e が読む backend のファイル（#1531）。
             # frontend のテストが frontend の外のファイルを新しく読んだら、ここに足す（ci_frontend_paths.py が検出する）。
             rag_frontend:
@@ -199,6 +244,33 @@ jobs:
               - "agent/backend/app/security/permissions.py"
             terraform:
               - "terraform/**"
+            # 配備の検証（suite-deploy.yml）が読むもの。製品の frontend（init_script.sh の検証は build を fake にする）・
+            # 共有 UI・Markdown は読まない（#1592）。
+            deploy:
+              - "rag/**"
+              - "nl2sql/**"
+              - "agent/**"
+              - "terraform/**"
+              - "platform/**"
+              - ".github/workflows/suite-deploy.yml"
+              - "!rag/frontend/**"
+              - "!nl2sql/frontend/**"
+              - "!agent/frontend/**"
+              - "!platform/packages/ui/**"
+              - "!platform/packages/system-settings/**"
+              - "!platform/docs/design-system/**"
+              - "!platform/package.json"
+              - "!platform/package-lock.json"
+              - "!**/*.md"
+            # Compute の OS（Oracle Linux 9）の上で動く配備のスクリプトと、それが使う設定の雛形（#1611）。
+            deploy_os:
+              - "terraform/**"
+              - "platform/deploy/**"
+              - "platform/templates/nginx/**"
+              - "*/init_script.sh"
+              - "rag/scripts/rag-systemd.sh"
+              - "rag/scripts/rag-services.sh"
+              - "nl2sql/scripts/update-after-pull.sh"
             # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）と .github/
             # （workflow の actionlint、.github/scripts の shellcheck。#1525。以前は ci.yml 以外の workflow の変更で
             # 何も検査しなかった）。
@@ -562,7 +634,7 @@ jobs:
     # 品質評価のテストが「確かめられていない点」の節の事例（platform/contracts/answer-passages/）を読む（#1456）。
     # MCP ツールの契約（platform/contracts/mcp/rag-tools.json）も読む（#1531）。
     if: >-
-      needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_backend == 'true'
+      needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -640,7 +712,7 @@ jobs:
   rag-engine:
     name: RAG / Engine
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
+    if: needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.answer_passages_contract == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -674,7 +746,7 @@ jobs:
   services-scripts-lint:
     name: Lint / services & scripts
     needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -975,64 +1047,7 @@ jobs:
           path: rag/frontend/test-results
           retention-days: 7
 
-  # OCI Resource Manager の統合 stack（terraform/）が cloud-init から呼ぶ RAG の init_script.sh を検証する（#217）。
-  rag-init-script:
-    name: RAG / Compute init script
-    needs: changes
-    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: rag
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # bash と runner の python3（標準ライブラリだけ）で足りるので setup-python は入れない（#1595）。
-      # ネイティブ配備（uv の venv + systemd + Nginx。#286）。systemctl 等は fake で、生成した sudoers は visudo で検査する。
-      - name: Test Compute init script
-        run: |
-          bash -n init_script.sh scripts/rag-systemd.sh scripts/rag-services.sh scripts/tests/init-script-deployment.test.sh
-          bash scripts/tests/init-script-deployment.test.sh
-
   # ---------------------------------------------------------------- nl2sql
-
-  nl2sql-deploy-scripts:
-    name: NL2SQL / Deployment scripts
-    needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.rag == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: nl2sql
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # bash と runner の python3（標準ライブラリだけ）で足りるので setup-python は入れない（#1595）。
-      - name: Test deployment update and recovery scripts
-        run: |
-          bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh scripts/start-frontend.sh ../rag/scripts/start-frontend.sh ../agent/scripts/start-frontend.sh
-          bash scripts/tests/git-pull.test.sh
-          bash scripts/tests/init-script-deployment.test.sh
-          # Node.js 24 の入れ方（NodeSource → 公式 tarball・checksum）とデータの場所の移行。以前は frontend の
-          # `npm run test:startup` だけが呼び、CI では実行していなかった（#1525）。
-          bash scripts/tests/init-script-nodejs.test.sh
-          bash scripts/tests/update-after-pull.test.sh
-          bash scripts/tests/tail-logs.test.sh
-          bash ../platform/scripts/tests/log-viewer.test.sh
-
-      # ログインの上限（#1173）の実 HTTP の確認は Suite / Terraform の platform/deploy/tests/suite-nginx.test.sh（#1316）。
-      - name: Verify Nginx logging contract
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends nginx
-          bash ../platform/scripts/tests/nginx-logging.test.sh
-          bash scripts/tests/start-frontend.test.sh
-          bash scripts/tests/start-frontend.test.sh ../rag/scripts/start-frontend.sh
-          bash scripts/tests/start-frontend.test.sh ../agent/scripts/start-frontend.sh
 
   nl2sql-frontend:
     name: NL2SQL / Frontend
@@ -1112,7 +1127,7 @@ jobs:
       # worker 数は playwright.config.ts の CI の値（2。fullyParallel でテスト単位で並ぶ）。#175 の遅い環境での flake の後に
       # `--workers=1` で 1 worker に固定していたが、smoke が 4〜6 分に伸びたため外した（#1489）。
       # 最も重い sql-chat（両 project で約 80 テスト中 58）と database-gate は desktop だけにし、375px の確認は
-      # impact（チャットの画面に触る PR）と nightly に任せる。dev server の起動を 1 回にするため 1 回の実行にまとめ、
+      # impact（チャットの画面に触る PR）と nightly に任せる。build と preview の起動を 1 回にするため 1 回の実行にまとめ、
       # `--grep-invert` で mobile-375 の 2 spec を外す（grep は「project 名 spec のファイル名 題名」に当たる）。
       # spec は workflow の env（NL2SQL_E2E_SMOKE は全 project、NL2SQL_E2E_SMOKE_DESKTOP は desktop だけ。
       # DESKTOP を変えたら --grep-invert の spec 名もそろえる）。
@@ -1135,7 +1150,7 @@ jobs:
     needs: changes
     # MCP ツールの契約（platform/contracts/mcp/nl2sql-tools.json）も読む（#1531）。
     if: >-
-      needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_backend == 'true'
+      needs.changes.outputs.nl2sql_backend == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.mcp_contract == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1215,7 +1230,7 @@ jobs:
     needs: changes
     # MCP ツールの契約（platform/contracts/mcp/）も読む（#1531）。
     if: >-
-      needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_backend == 'true'
+      needs.changes.outputs.agent_backend == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1390,7 +1405,8 @@ jobs:
       - name: Check e2e imports
         run: python3 platform/scripts/e2e_impact.py check-imports
 
-      # frontend が読む frontend の外のファイルが、frontend の job を動かす filter に入っていること（#1531）。
+      # frontend が読む frontend の外のファイルが frontend の job を動かす filter に（#1531）、backend のテストが読む
+      # frontend のファイルが backend の job を動かす filter に（#1592）入っていること。
       - name: Check frontend paths in the CI filter
         run: python3 platform/scripts/ci_frontend_paths.py
 
@@ -1566,90 +1582,45 @@ jobs:
           path: agent/frontend/test-results
           retention-days: 7
 
-  # OCI Resource Manager の統合 stack（terraform/）が cloud-init から呼ぶ Agent の init_script.sh を検証する（#217）。
-  agent-init-script:
-    name: Agent / Compute init script
+  # ---------------------------------------------------------------- 配備（init_script.sh・Terraform・platform/deploy）
+
+  # 1 台の Compute の配備の検証（#1592）。RAG / NL2SQL / Agent の init_script.sh と配備のスクリプト・Terraform の
+  # stack・platform/deploy を 1 つの job で検査する（以前の 4 つの job。中身は suite-deploy.yml。release も再利用する）。
+  suite-deploy:
+    name: Suite / Deploy
     needs: changes
-    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.deploy == 'true'
+    uses: ./.github/workflows/suite-deploy.yml
+
+  # 本番の Compute の OS（Oracle Linux 9。#1611）で、配備のスクリプトが dnf で入れる package の名前（依存まで
+  # 解決し、入れない）・前提の command・bash -n と、本番と同じ配置（/etc/nginx/nginx.conf・conf.d）の Nginx を
+  # 確かめ、platform/deploy のテストも Oracle Linux の bash・openssl・Nginx で実行する。GitHub に Oracle Linux の
+  # runner は無いため、ubuntu-24.04 の上の container で動かす。SELinux・firewalld・systemd は container で
+  # 動かないため、実機（OCI）の確認は手動で行う（PR の手順）。
+  suite-oracle-linux:
+    name: Suite / Oracle Linux 9
+    needs: changes
+    if: needs.changes.outputs.deploy_os == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: agent
+    container: oraclelinux:9
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # bash と runner の python3（標準ライブラリだけ）で足りるので setup-python は入れない（#1595）。
-      - name: Test Compute init script
+      - name: Check packages, commands and Nginx on Oracle Linux 9
+        run: bash platform/deploy/tests/oracle-linux.test.sh
+
+      # oracle-linux.test.sh が nginx（module の 1.24）・openssl・python3 を入れている。Nginx の worker を
+      # root から切り替えないよう、テストは root 以外のユーザーで実行する（runner の Ubuntu と同じ条件）。
+      - name: Test single-Compute deployment on Oracle Linux 9 (platform/deploy)
         run: |
-          bash -n init_script.sh scripts/tests/init-script-deployment.test.sh
-          bash scripts/tests/init-script-deployment.test.sh
-
-  # ---------------------------------------------------------------- terraform
-
-  # OCI Resource Manager の統合 stack（#217）。ADB 1つ＋選んだ製品をすべて入れる 1 台の Compute（#1316）。
-  # 契約検証は各製品の init_script.sh・Settings と、自前の Dockerfile・compose が無いこと（Agent の第三者 Runtime の
-  # compose だけ。#356）も確かめるため、どの製品の変更でも実行する。
-  # 実テナンシーへの配備確認は手動で行う。
-  suite-terraform:
-    name: Suite / Terraform
-    needs: changes
-    if: >-
-      needs.changes.outputs.terraform == 'true' || needs.changes.outputs.platform == 'true'
-      || needs.changes.outputs.rag == 'true' || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: terraform
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Check shell scripts
-        run: bash -n stack/extract_wallet.sh
-
-      - name: Format check
-        run: terraform fmt -check -recursive stack
-
-      - name: Initialize Terraform
-        working-directory: terraform/stack
-        run: terraform init -backend=false
-
-      - name: Validate Terraform
-        working-directory: terraform/stack
-        run: terraform validate
-
-      - name: Package stack
-        run: python scripts/package_stack.py --output /tmp/production-ready-suite-terraform-stack.zip
-
-      - name: Verify stack contract
-        run: python scripts/verify_stack_contract.py /tmp/production-ready-suite-terraform-stack.zip
-
-      # 1 台の Compute の配備（platform/deploy。#1316）: suite-init の振る舞い、自作の CA と IP の証明書（openssl）、
-      # Nginx の site（prefix・SSE・MCP・login の上限・/ → /agent/・HTTPS on / off）を隔離した Nginx で検証する。
-      - name: Test single-Compute deployment (platform/deploy)
-        working-directory: .
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends nginx openssl
-          bash -n platform/deploy/suite-init.sh platform/deploy/suite-nginx.sh platform/deploy/suite-tls.sh \
-            platform/deploy/suite-pull.sh platform/deploy/suite-restart.sh platform/deploy/suite-update.sh
-          bash platform/deploy/tests/suite-tls.test.sh
-          bash platform/deploy/tests/suite-init.test.sh
-          bash platform/deploy/tests/suite-nginx.test.sh
-          bash platform/deploy/tests/suite-ops.test.sh
+          dnf -y -q install util-linux procps-ng diffutils findutils
+          useradd --create-home pr-ci
+          chmod -R a+rX "${GITHUB_WORKSPACE}"
+          for test_script in suite-tls suite-init suite-nginx; do
+            runuser -u pr-ci -- env NGINX_BIN=/usr/sbin/nginx bash "platform/deploy/tests/${test_script}.test.sh"
+          done
 
   # Terraform の stack の IaC の検査（trivy config。#1595）。terraform/ が変わったときだけ実行する
   # （製品・platform の変更では stack は変わらない）。HIGH / CRITICAL の misconfiguration で失敗する。
@@ -1767,20 +1738,18 @@ jobs:
       - rag-parser-asr
       - rag-frontend
       - rag-e2e
-      - rag-init-script
-      - nl2sql-deploy-scripts
       - nl2sql-frontend
       - nl2sql-e2e
       - nl2sql-backend
       - agent-backend
       - agent-frontend
       - agent-e2e
-      - agent-init-script
       - e2e-impact
       - rag-e2e-impact
       - nl2sql-e2e-impact
       - agent-e2e-impact
-      - suite-terraform
+      - suite-deploy
+      - suite-oracle-linux
       - suite-terraform-iac
       - suite-scripts
       - rag-oracle

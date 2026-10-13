@@ -13,14 +13,13 @@ fail() {
 prepare_case() {
   local case_dir="$1"
   mkdir -p "${case_dir}/app/props" "${case_dir}/app/no.1-production-ready-suite" "${case_dir}/units" \
-    "${case_dir}/conf.d" "${case_dir}/sites-available" "${case_dir}/sites-enabled"
+    "${case_dir}/conf.d"
   ln -s "${repo}/platform" "${case_dir}/app/no.1-production-ready-suite/platform"
   export SUITE_INIT_TEST_MODE=true
   export APP_ROOT="${case_dir}/app"
   export SYSTEMD_UNIT_DIR="${case_dir}/units"
   export NGINX_CONF_DIR="${case_dir}/conf.d"
-  export NGINX_SITES_AVAILABLE_DIR="${case_dir}/sites-available"
-  export NGINX_SITES_ENABLED_DIR="${case_dir}/sites-enabled"
+  export NGINX_MAIN_CONF="${case_dir}/nginx.conf"
   export SUITE_SSL_DIR="${case_dir}/ssl"
 }
 
@@ -70,7 +69,7 @@ prepare_case() {
   rag_env="$(product_init_env rag false)"
   if printf '%s\n' "$(product_init_env rag false)" | grep -q 'PR_SUITE_MODE'; then fail "単独の配備の mode は無い"; fi
   for expected in "FRONTEND_BASE_PATH=/rag/" "BACKEND_ENV_SOURCE=${PROPS_DIR}/rag.backend.env" \
-    "PR_SUITE_SKIP_PLATFORM_UI_BUILD=false" "SERVICE_USER=ubuntu" "SERVICE_GROUP=ubuntu" "SERVICE_HOME=/home/ubuntu"; do
+    "PR_SUITE_SKIP_PLATFORM_UI_BUILD=false" "SERVICE_USER=opc" "SERVICE_GROUP=opc" "SERVICE_HOME=/home/opc"; do
     printf '%s\n' "${rag_env}" | grep -qxF "${expected}" || fail "RAG の環境変数に ${expected} が無い"
   done
   agent_env="$(product_init_env agent true)"
@@ -104,18 +103,17 @@ prepare_case() {
   source "${repo}/platform/deploy/suite-init.sh"
   SUITE_PRODUCTS=(rag agent)
   printf 'true\n' > "${PROPS_DIR}/https_enabled.txt"
-  for name in default production-ready-rag production-ready-agent; do
-    touch "${NGINX_SITES_ENABLED_DIR}/${name}"
-  done
   mkdir -p "${SUITE_REPO_DIR}/rag/backend" 2>/dev/null || true
   nginx() { printf 'nginx %s\n' "$*" >> "${case_dir}/commands.log"; }
   systemctl() { printf 'systemctl %s\n' "$*" >> "${case_dir}/commands.log"; }
   configure_nginx >/dev/null
-  site="${NGINX_SITES_AVAILABLE_DIR}/production-ready-suite"
-  [ -L "${NGINX_SITES_ENABLED_DIR}/production-ready-suite" ] || fail "site を有効にしない"
-  for name in default production-ready-rag production-ready-agent; do
-    [ ! -e "${NGINX_SITES_ENABLED_DIR}/${name}" ] || fail "${name} を外さない"
-  done
+  # Oracle Linux の Nginx（#1611）: site は conf.d の .conf、nginx.conf は package の既定の server を外したもの。
+  site="${NGINX_CONF_DIR}/production-ready-suite.conf"
+  [ -f "${site}" ] || fail "site を conf.d に置かない"
+  cmp -s "${NGINX_MAIN_CONF}" "${repo}/platform/templates/nginx/nginx.conf" || fail "nginx.conf を置き換えない"
+  grep -qx 'user nginx;' "${NGINX_MAIN_CONF}" || fail "nginx.conf の worker は nginx ユーザー"
+  grep -qF 'include /etc/nginx/conf.d/*.conf;' "${NGINX_MAIN_CONF}" || fail "nginx.conf が conf.d を読まない"
+  if grep -Eq '^\s*(server|listen)\b' "${NGINX_MAIN_CONF}"; then fail "nginx.conf に既定の server が残っている"; fi
   grep -q 'listen 443 ssl http2 default_server;' "${site}" || fail "HTTPS の site ではない"
   grep -q 'client_max_body_size 210M;' "${site}" || fail "RAG の既定の上限（200 MiB + 10 MiB）"
   grep -q 'client_max_body_size 110M;' "${site}" || fail "Agent の既定の上限（100 MiB + 10 MiB）"
@@ -157,6 +155,77 @@ prepare_case() {
   printf 'false\n' > "${PROPS_DIR}/https_enabled.txt"
   configure_tls >/dev/null
   [ ! -e "${SYSTEMD_UNIT_DIR}/production-ready-suite-tls-renew.timer" ] || fail "HTTPS が off なら timer を外す"
+)
+
+# 5b. Oracle Linux 9（#1611）: dnf の package、firewalld で公開の port、SELinux の context・boolean・port。
+(
+  case_dir="${task_dir}/oracle-linux"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  calls="${case_dir}/commands.log"
+  dnf() { printf 'dnf %s\n' "$*" >> "${calls}"; }
+  systemctl() { printf 'systemctl %s\n' "$*" >> "${calls}"; }
+  firewall-cmd() { printf 'firewall-cmd %s\n' "$*" >> "${calls}"; }
+  selinuxenabled() { return 0; }
+  semanage() { printf 'semanage %s\n' "$*" >> "${calls}"; }
+  restorecon() { printf 'restorecon %s\n' "$*" >> "${calls}"; }
+  setsebool() { printf 'setsebool %s\n' "$*" >> "${calls}"; }
+  install_os_packages >/dev/null
+  grep -qx 'dnf -y module enable nginx:1.24' "${calls}" || fail "Nginx の module の stream を固定しない"
+  grep -qx "dnf -y install ${SUITE_OS_PACKAGES[*]}" "${calls}" || fail "OS の package を dnf で入れない"
+  for name in nginx firewalld policycoreutils-python-utils; do
+    printf ' %s ' "${SUITE_OS_PACKAGES[*]}" | grep -qF " ${name} " || fail "${name} を入れない"
+  done
+  # 既定（HTTPS on・80 / 443）: 両方を開け、http_port_t の追加は要らない。
+  : > "${calls}"
+  configure_firewall >/dev/null
+  configure_selinux >/dev/null
+  grep -qx 'systemctl enable --now firewalld' "${calls}" || fail "firewalld を有効にしない"
+  grep -qx 'firewall-cmd --permanent --add-port=80/tcp' "${calls}" || fail "80 を開けない"
+  grep -qx 'firewall-cmd --permanent --add-port=443/tcp' "${calls}" || fail "443 を開けない"
+  grep -qx 'firewall-cmd --reload' "${calls}" || fail "firewalld を reload しない"
+  grep -qxF "semanage fcontext -a -t usr_t ${SUITE_REPO_DIR}(/.*)?" "${calls}" || fail "repository を usr_t にしない"
+  for product in rag nl2sql agent; do
+    grep -qxF "semanage fcontext -a -t httpd_sys_content_t ${SUITE_REPO_DIR}/${product}/frontend/dist(/.*)?" "${calls}" \
+      || fail "${product} の dist を httpd_sys_content_t にしない"
+  done
+  grep -qxF "semanage fcontext -a -t cert_t ${SUITE_SSL_DIR}(/.*)?" "${calls}" || fail "証明書を cert_t にしない"
+  grep -qxF "restorecon -R ${SUITE_REPO_DIR}" "${calls}" || fail "repository の context を戻さない"
+  grep -qx 'setsebool -P httpd_can_network_connect 1' "${calls}" || fail "Nginx から backend へ proxy できない"
+  if grep -q '^semanage port' "${calls}"; then fail "80 / 443 は http_port_t に足さない"; fi
+  # 既定でない port は firewalld で開け、http_port_t にする。HTTPS が off なら https_port は開けない。
+  printf '8080\n' > "${PROPS_DIR}/http_port.txt"
+  printf '8443\n' > "${PROPS_DIR}/https_port.txt"
+  : > "${calls}"
+  configure_firewall >/dev/null
+  configure_selinux >/dev/null
+  grep -qx 'firewall-cmd --permanent --add-port=8080/tcp' "${calls}" || fail "http_port を開けない"
+  grep -qx 'firewall-cmd --permanent --add-port=8443/tcp' "${calls}" || fail "https_port を開けない"
+  grep -qx 'semanage port -a -t http_port_t -p tcp 8080' "${calls}" || fail "http_port を http_port_t にしない"
+  grep -qx 'semanage port -a -t http_port_t -p tcp 8443' "${calls}" || fail "https_port を http_port_t にしない"
+  printf 'false\n' > "${PROPS_DIR}/https_enabled.txt"
+  : > "${calls}"
+  configure_firewall >/dev/null
+  if grep -q '8443' "${calls}"; then fail "HTTPS が off なのに https_port を開けた"; fi
+  # Nginx が読む dist と証明書の context を、build と証明書の作成の後に戻す。
+  SUITE_PRODUCTS=(rag agent)
+  mkdir -p "${SUITE_REPO_DIR}/rag/frontend/dist" "${SUITE_REPO_DIR}/agent/frontend/dist" "${SUITE_SSL_DIR}"
+  : > "${calls}"
+  restore_nginx_contexts
+  grep -qxF "restorecon -R ${SUITE_REPO_DIR}/rag/frontend/dist ${SUITE_REPO_DIR}/agent/frontend/dist ${SUITE_SSL_DIR}" "${calls}" \
+    || fail "dist と証明書の context を戻さない: $(cat "${calls}")"
+  # SELinux が無効なら何もしない。
+  selinuxenabled() { return 1; }
+  : > "${calls}"
+  configure_selinux >/dev/null
+  restore_nginx_contexts
+  [ ! -s "${calls}" ] || fail "SELinux が無効なのに設定した: $(cat "${calls}")"
+  # main の順: package → firewall → SELinux → 製品の配備（venv・unit の前に context の規則を置く）。
+  main_body="$(sed -n '/^main() {$/,/^}$/p' "${repo}/platform/deploy/suite-init.sh")"
+  printf '%s\n' "${main_body}" | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|deploy_products)$' \
+    | awk '{printf "%s ", $1}' | grep -qx 'install_os_packages configure_firewall configure_selinux deploy_products ' \
+    || fail "main の順が違う"
 )
 
 # 6. 完了の log の URL（#1561）: 入口（suite）を製品の URL の上に出し、転送先を添える。

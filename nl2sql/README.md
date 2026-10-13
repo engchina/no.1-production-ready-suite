@@ -50,7 +50,7 @@ OCI Autonomous Database が `Stopped`（停止済み）の場合は起動し、`
 DB に接続できず migration が失敗すると、frontend のビルドが成功していても新しい画面は公開されず、
 旧 frontend が維持され、external worker は停止・無効化されます。
 
-通常のデプロイユーザー (`ubuntu`) で、次のコマンドを実行します。
+通常のデプロイユーザー (`opc`。Compute の OS は Oracle Linux 9) で、次のコマンドを実行します。
 [`scripts/git-pull.sh`](scripts/git-pull.sh) が suite repository を更新し、
 **pull が成功した場合だけ** `&&` に続く再デプロイを実行します。
 
