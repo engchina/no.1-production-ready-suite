@@ -1817,6 +1817,7 @@ def repair_definitions_report(
         ]
     values, remap = _unify_objects(values)
     remap = {**pruned, **remap}
+    _repair_owner_references(values)
     by_name: dict[str, BusinessDefinition] = {d.api_name: d for d in values}
     columns = _schema_columns(schema)
     added: list[BusinessDefinition] = []
@@ -1845,6 +1846,58 @@ def repair_definitions_report(
         values, unused = _drop_unused_shared(values)
     ordered = sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name))
     return RepairResult(ordered, remap, dropped, unused)
+
+
+def _repair_owner_references(values: list[BusinessDefinition]) -> None:
+    """所属・両端が無いオブジェクト型（`object_type` など種類の名前）を指すとき、物理の表で直す。
+
+    プロパティは列の表、リンク型は結合のキーの表が、ちょうど 1 つのオブジェクト型の表なら、
+    その オブジェクト型に付け替える（名前ではなく物理の表・列を根拠にする。#1729・#1734）。
+    決まらなければそのままにし、検証の診断に任せる。
+    """
+
+    objects = {d.api_name for d in values if d.kind == "object_type"}
+    by_table: dict[str, list[str]] = {}
+    for d in values:
+        if isinstance(d, ObjectTypeDefinition):
+            signature = _table_signature(d)
+            if len(signature) == 1:
+                by_table.setdefault(next(iter(signature)), []).append(d.api_name)
+
+    def owner_of(table: str) -> str:
+        owners = by_table.get(table, [])
+        return owners[0] if len(owners) == 1 else ""
+
+    for d in values:
+        if isinstance(d, PropertyDefinition) and d.kind == "property":
+            if d.object_type in objects:
+                continue
+            tables = {mapping_object_key(m) for m in d.mappings if _plain_column(m)}
+            owner = owner_of(next(iter(tables))) if len(tables) == 1 else ""
+            if owner:
+                d.object_type = owner
+        elif isinstance(d, LinkTypeDefinition):
+            if d.source in objects and d.target in objects:
+                continue
+            sides: list[tuple[str, ...]] = []
+            for condition in re.split(r"\s+AND\s+", d.join_expression_sql.strip(), flags=re.I):
+                parts = [p.strip() for p in condition.split("=")]
+                if len(parts) != 2:
+                    sides = []
+                    break
+                sides.append(tuple(object_match_key(p).rsplit(".", 1)[0] for p in parts))
+            ends = {tuple(owner_of(t) for t in pair) for pair in sides}
+            if len(ends) != 1:
+                continue
+            left, right = next(iter(ends))
+            if not left or not right or left == right:
+                continue
+            if d.source in objects and d.target not in objects:
+                d.target = right if d.source == left else left if d.source == right else d.target
+            elif d.target in objects and d.source not in objects:
+                d.source = left if d.target == right else right if d.target == left else d.source
+            elif d.source not in objects and d.target not in objects:
+                d.source, d.target = left, right
 
 
 def _separate_name_clashes(values: list[BusinessDefinition]) -> None:

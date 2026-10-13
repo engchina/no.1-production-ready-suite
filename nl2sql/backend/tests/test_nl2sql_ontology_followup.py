@@ -534,3 +534,30 @@ def test_build_marks_ai_output_as_ai_and_drops_its_unused_shared_property(
     bundle = ProfileOntologyDefinitionService(rt).get("sales", job.result_bundle_id)
     assert all(d.origin == "ai" for d in bundle.definitions)
     assert "OrderNumberShared" not in {d.api_name for d in bundle.definitions}
+
+
+def test_kind_name_owner_references_are_repaired_by_physical_tables() -> None:
+    """AI が所属・両端に種類の名前（`object_type`）を書いても、列・結合のキーの表で直す。"""
+
+    from app.features.nl2sql.ontology_definitions import LinkTypeDefinition
+
+    values = [
+        obj("department", "部門", "DEPARTMENT"),
+        obj("employee", "従業員", "EMPLOYEE"),
+        prop("department_created_at", "作成日", "object_type", "DEPARTMENT", "CREATED_AT"),
+        LinkTypeDefinition(
+            api_name="employee_department_link",
+            name_ja="所属部門",
+            source="employee",
+            target="object_type",
+            cardinality="many_to_one",
+            join_expression_sql="ADMIN.EMPLOYEE.DEPARTMENT_ID = ADMIN.DEPARTMENT.DEPARTMENT_ID",
+        ),
+    ]
+    report = repair_definitions_report("s", values, SCHEMA, ai_output=True)
+    by_name = {d.api_name: d for d in report.definitions}
+    created = by_name["department_created_at"]
+    assert isinstance(created, PropertyDefinition) and created.object_type == "department"
+    link = by_name["employee_department_link"]
+    assert isinstance(link, LinkTypeDefinition)
+    assert (link.source, link.target) == ("employee", "department")
