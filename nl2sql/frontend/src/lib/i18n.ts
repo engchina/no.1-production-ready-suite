@@ -1903,6 +1903,19 @@ const nl2sqlJa = {
   "profiles.oracle.assets.hint": "Select AI Agent(tool / agent / task / team)を業務プロファイルから作り直します。Agent 機能を使う場合のみチェックしてください。この設定は業務プロファイルに保存され、オンの間は保存のたびに再構築します。オフにしても既存のアセットは削除しません。",
   "profiles.oracle.assets.refreshAgent": "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する",
   "profiles.oracle.assets.lastRefresh": "直近の資産更新結果",
+  // 最後の再構築の日時と結果（#1691）。保存の Oracle 反映のジョブの記録から引き、開き直しても出す。
+  "profiles.oracle.assets.rebuild.title": "最後の再構築",
+  "profiles.oracle.assets.rebuild.status.never": "未再構築",
+  "profiles.oracle.assets.rebuild.status.succeeded": "再構築済み",
+  "profiles.oracle.assets.rebuild.status.failed": "再構築に失敗",
+  "profiles.oracle.assets.rebuild.at": "最後の再構築: {time}",
+  "profiles.oracle.assets.rebuild.never":
+    "まだ再構築していません。チェックをオンにして保存すると、アセットを作成します。",
+  "profiles.oracle.assets.rebuild.failedFallback": "Select AI Agent アセットを再構築できませんでした。",
+  "profiles.oracle.assets.rebuild.changedSince":
+    "最後の再構築の後に業務プロファイルが保存されています。アセットに反映するには、チェックをオンにして保存してください。",
+  "profiles.oracle.assets.rebuild.loading": "最後の再構築を読み込んでいます",
+  "profiles.oracle.assets.rebuild.loadError": "最後の再構築を読み込めませんでした。",
   "profiles.oracle.saveConfirmTitle": "Oracle Profile 保存の確認",
   "profiles.oracle.saveConfirmDescription": "{name} を Oracle に保存します。既存 Profile は更新されます。",
   "profiles.oracle.sync.status.queued": "Oracle 反映: 待機中",
