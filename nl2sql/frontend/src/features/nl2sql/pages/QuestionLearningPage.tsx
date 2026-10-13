@@ -1481,6 +1481,8 @@ function TrainingCandidatesPanel({
                 <li
                   key={item.history_id}
                   data-testid="qcm-training-candidate"
+                  // 淡青面（bg-accent-subtle）の上の副次テキストを 1 段深くする（DataTable の選択行と同じ。#1595・WCAG 1.4.3）。
+                  data-surface-tint={selectedItem ? "accent" : undefined}
                   className={`grid min-w-0 gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
                     selectedItem
                       ? "border-l-accent-fg bg-accent-subtle"
