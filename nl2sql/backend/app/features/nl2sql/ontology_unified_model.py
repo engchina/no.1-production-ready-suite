@@ -1658,15 +1658,32 @@ def _infer_links(
         description: str,
     ) -> None:
         source, target = objects[source_key], objects[target_key]
-        if frozenset((source.api_name, target.api_name)) in existing:
-            return
-        existing.add(frozenset((source.api_name, target.api_name)))
         left, right = tables[source_key], tables[target_key]
         join = " AND ".join(
             f"{left['qualified']}.{left['columns'][a]['column']} = "
             f"{right['qualified']}.{right['columns'][b]['column']}"
             for a, b in pairs
         )
+        if frozenset((source.api_name, target.api_name)) in existing:
+            # AI が結合のキーの無いリンク型を作っていれば、制約・同じ名前の列の結合のキーで
+            # 補う（向きが逆なら多重度も逆にする。#1733）。
+            for d in values:
+                if (
+                    isinstance(d, LinkTypeDefinition)
+                    and {d.source, d.target} == {source.api_name, target.api_name}
+                    and not d.join_expression_sql.strip()
+                ):
+                    d.join_expression_sql = join
+                    if d.cardinality == "unknown":
+                        reverse = {"many_to_one": "one_to_many", "one_to_many": "many_to_one"}
+                        oriented: Any = (
+                            cardinality
+                            if d.source == source.api_name
+                            else reverse.get(cardinality, cardinality)
+                        )
+                        d.cardinality = oriented
+            return
+        existing.add(frozenset((source.api_name, target.api_name)))
         name = _identifier(f"{source.api_name}_to_{target.api_name}")
         suffix = 2
         while name in names:

@@ -561,3 +561,26 @@ def test_kind_name_owner_references_are_repaired_by_physical_tables() -> None:
     link = by_name["employee_department_link"]
     assert isinstance(link, LinkTypeDefinition)
     assert (link.source, link.target) == ("employee", "department")
+
+
+def test_ai_link_without_join_key_gets_join_from_view_id_column() -> None:
+    """AI が結合のキーの無いビュー → 表のリンク型を作っても、ID 列の結合のキーで補う。"""
+
+    from app.features.nl2sql.ontology_definitions import LinkTypeDefinition
+
+    values = [
+        *_view_and_project(),
+        LinkTypeDefinition(
+            api_name="v_dept_project_to_project",
+            name_ja="プロジェクト",
+            source="project",
+            target="v_dept_project",
+        ),
+    ]
+    report = repair_definitions_report("s", values, _view_schema("NUMBER"), ai_output=True)
+    links = [d for d in report.definitions if isinstance(d, LinkTypeDefinition)]
+    assert len(links) == 1
+    assert links[0].join_expression_sql == (
+        "ADMIN.V_DEPT_PROJECT.PROJECT_ID = ADMIN.PROJECT.PROJECT_ID"
+    )
+    assert links[0].cardinality == "one_to_many"
