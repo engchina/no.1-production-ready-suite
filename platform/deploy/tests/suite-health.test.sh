@@ -69,7 +69,8 @@ fake_sleep() {
   : > "${out}"
   start="${SECONDS}"
   if suite_wait_for_service_health demo.service http://127.0.0.1:1/api/health; then fail "failed なのに成功した"; fi
-  [ "${SECONDS}" -eq "${start}" ] || fail "failed で待った（$((SECONDS - start)) 秒）"
+  # 置き換えた sleep は間隔（3 秒）以上を足すので、実時間の秒の境目のずれ（1 秒）は許す（#1677）。
+  [ $((SECONDS - start)) -le 1 ] || fail "failed で待った（$((SECONDS - start)) 秒）"
   grep -q "状態 failed" "${out}" || fail "failed の log: $(cat "${out}")"
 
   # active のまま応答しない: 上限で失敗し、15 秒ごとに経過・状態・再起動の回数を出す。
@@ -209,7 +210,7 @@ fake_sleep() {
   if SUITE_CHECK_TIMEOUT_SECONDS=0 SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then
     fail "Nginx が止まっているのに成功した"
   fi
-  [ "${SECONDS}" -eq "${start}" ] || fail "1 回だけの確認で待った"
+  [ $((SECONDS - start)) -le 1 ] || fail "1 回だけの確認で待った（$((SECONDS - start)) 秒）"
   grep -qxF '[suite-init] check: rag backend OK / services 2/2 active / nginx NG' "${out}" || fail "Nginx の NG: $(cat "${out}")"
   grep -qxF '[suite-init] check: nginx.service NG（inactive）' "${out}" || fail "Nginx の状態: $(cat "${out}")"
   grep -qxF "journalctl -u nginx.service -n 80 --no-pager" "${journal}" || fail "Nginx の journal: $(cat "${journal}")"
