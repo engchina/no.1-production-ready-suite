@@ -509,6 +509,14 @@ function createState() {
     // 保存先（`GET /api/runtime/storage`。#839）。既定は Oracle に保存している状態。
     runtimeStorage: clone(RUNTIME_STORAGE_PERSISTENT) as Json,
     runs: [] as Json[],
+    // 承認の判断者・版の公開者（ログイン ID）→ 表示名（`GET /api/runs` / `GET /api/agents` の `user_display_names`。#1696）。
+    // ここに無いログイン ID は削除済みの利用者として扱う。
+    userDisplayNames: {
+      local: "ローカル利用者",
+      system_admin: "システム管理者",
+      "reviewer.user": "確認 花子",
+      "another.reviewer": "別の 確認者",
+    } as Record<string, string>,
     // 発行した図の URL の数（`GET /api/runs/{id}/figure-url`）。実際の署名つき URL と同じく、発行ごとに URL を変える（#1667）。
     figureUrlsIssued: 0,
     agents: d.agents as unknown as Json[],
@@ -1115,7 +1123,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- Run / 承認 / 監査 ---
   // 一覧は利用者の対象範囲の業務 Agent の Run だけ（backend の `_filter_runs_for_actor`）。
-  if (method === "GET" && at("runs")) return { runs: state.runs.filter((run) => agentAllowed(state, run.agent_id)) };
+  if (method === "GET" && at("runs"))
+    return {
+      runs: state.runs.filter((run) => agentAllowed(state, run.agent_id)),
+      user_display_names: state.userDisplayNames,
+    };
   // チャット（#768）。mock の Run はすぐ完了し、質問を引いた回答の成果物を持つ（実行中・承認待ちは spec が state を書き換える）。
   if (method === "POST" && at("runs")) {
     // backend の create_run と同じ確認（対象範囲・業務 Agent の有無・移行・無効・下書き・公開）。
@@ -1727,7 +1739,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       );
     };
     // 一覧は利用者の対象範囲の業務 Agent だけ（backend の list_agents）。
-    if (method === "GET" && at("agents")) return { agents: state.agents.filter((agent) => agentAllowed(state, agent.id)) };
+    if (method === "GET" && at("agents"))
+      return {
+        agents: state.agents.filter((agent) => agentAllowed(state, agent.id)),
+        user_display_names: state.userDisplayNames,
+      };
     if (method === "POST" && at("agents")) {
       // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
       const id = String(body.id ?? `agent-${state.agents.length + 1}`).trim();

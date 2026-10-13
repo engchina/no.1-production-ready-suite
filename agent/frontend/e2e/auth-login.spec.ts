@@ -203,7 +203,9 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/runs");
       await expandSidebarOnMobile(page);
-      await expect(sidebar(page).getByText("管理 太郎")).toBeVisible();
+      // アカウント欄の 1 行目はログイン ID。表示名はほかの画面で使い、アカウント欄には出さない（#1696）。
+      await expect(sidebar(page).getByText("admin.user", { exact: true })).toBeVisible();
+      await expect(sidebar(page).getByText("管理 太郎")).toHaveCount(0);
       await sidebar(page).getByRole("button", { name: "パスワード変更" }).click();
       await expect(page).toHaveURL(/\/password\/change$/);
       // 戻るは開いていた画面へ戻す。

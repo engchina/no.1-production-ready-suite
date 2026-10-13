@@ -90,7 +90,7 @@ for (const approved of [true, false]) {
     expect(mockApi.lastRequest("POST", "/api/approvals/approval-layout/decision")).toBeUndefined();
     await detailAction(page, label);
     await dialog.getByRole("button", { name: label, exact: true }).click();
-    await expect(page.getByTestId("approval-decision-record")).toContainText("local");
+    await expect(page.getByTestId("approval-decision-record")).toContainText("ローカル利用者");
     await expect(page.getByTestId("approval-decision-record")).toContainText("2026/06/28 09:00");
     await expect(page).toHaveURL(/id=approval-layout$/);
     await expect(page.getByRole("region", { name: "承認の詳細" })).toContainText(approved ? "承認済み" : "却下済み");
@@ -158,7 +158,9 @@ test("確認中に他の操作者が判断した承認には古い状態で送�
   await expect
     .poll(() => mockApi.requests.filter((item) => item.path === "/api/runs").length, { timeout: 8_000 })
     .toBeGreaterThan(requestCount);
-  await expect(page.getByTestId("approval-decision-record")).toContainText("another.reviewer");
+  // 判断者は表示名で出し、ログイン ID は出さない（#1696）。
+  await expect(page.getByTestId("approval-decision-record")).toContainText("別の 確認者");
+  await expect(page.getByTestId("approval-decision-record")).not.toContainText("another.reviewer");
   await page.getByRole("alertdialog").getByRole("button", { name: "承認", exact: true }).click();
   await expect(
     page.getByText("この承認の状態が変わりました。最新の内容を確認してください。", { exact: true })
@@ -229,7 +231,8 @@ test("閲覧だけの利用者には判断を出さず、判断済みの承認�
   await expect(page.getByText("この承認を判断する権限がありません。内容の閲覧のみできます。")).toBeVisible();
   await expect(page.getByTestId("approval-object-actions")).toHaveCount(0);
   await page.goto("/approvals?id=approval-completed");
-  await expect(page.getByTestId("approval-decision-record")).toContainText("reviewer.user");
+  await expect(page.getByTestId("approval-decision-record")).toContainText("確認 花子");
+  await expect(page.getByTestId("approval-decision-record")).not.toContainText("reviewer.user");
   await expect(page.getByTestId("approval-object-actions")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "実行の結果と経過を確認" })).toHaveAttribute(
     "href",
@@ -337,3 +340,20 @@ for (const path of ["/approvals", "/approvals?id=approval-layout"]) {
     await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
   });
 }
+
+test("判断者は表示名で出し、引けない利用者・自動の処理はログイン ID を出さない（#1696）", async ({ page, mockApi }, testInfo) => {
+  seedApproval(mockApi, "approval-admin", "approved").decided_by = "system_admin";
+  seedApproval(mockApi, "approval-deleted", "rejected").decided_by = "deleted.user";
+  seedApproval(mockApi, "approval-system", "cancelled").decided_by = "system";
+  const record = page.getByTestId("approval-decision-record");
+
+  await page.goto("/approvals?id=approval-admin");
+  await expect(record).toContainText("判断者システム管理者");
+  await expect(record).not.toContainText("system_admin");
+  await record.screenshot({ path: testInfo.outputPath("approval-decided-by-display-name.png") });
+  await page.goto("/approvals?id=approval-deleted");
+  await expect(record).toContainText("判断者（削除済みのユーザー）");
+  await expect(record).not.toContainText("deleted.user");
+  await page.goto("/approvals?id=approval-system");
+  await expect(record).toContainText("判断者システム（自動）");
+});

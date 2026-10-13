@@ -183,6 +183,8 @@ test("システム管理者は、キーを連携用の専用の利用者とし�
   await page.getByLabel("名前").fill("基幹システム");
   await page.getByRole("radio", { name: "使えるすべての業務 Agent" }).check();
   await page.locator("#api-key-run-as").click();
+  // 選択肢の利用者は表示名だけで、ログイン ID は出さない（#1696）。
+  await expect(page.getByRole("option", { name: /実行 花子/ })).not.toContainText("operator.user");
   await page.getByRole("option", { name: /実行 花子/ }).click();
   await page.getByTestId("api-key-create").click();
   await expect(page.getByTestId("api-key-token")).toBeVisible();
@@ -199,4 +201,26 @@ test("システム管理者でなければ、実行する利用者は選べな�
   await page.goto("/settings/api-keys");
   await expect(page.getByRole("heading", { name: "API キーの作成" })).toBeVisible();
   await expect(page.locator("#api-key-run-as")).toHaveCount(0);
+});
+
+test("利用者を引けないキー（削除済みの利用者）は UUID を出さず「（削除済みのユーザー）」と出す（#1696）", async ({ page, mockApi }, testInfo) => {
+  mockApi.state.apiKeys.push({
+    id: "00000000000000bb",
+    name: "古いキー",
+    owner_user_uuid: "6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5",
+    owner_display_name: "",
+    created_by_user_uuid: "6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5",
+    created_by_display_name: "",
+    agent_ids: null,
+    token_prefix: "prak_00000000000000bb_abcd",
+    created_at: MOCK_NOW,
+    expires_at: null,
+    last_used_at: null,
+    expired: false,
+  });
+  await page.goto("/settings/api-keys");
+  const row = page.getByRole("table", { name: "API キーの一覧" }).getByRole("row", { name: /古いキー/ });
+  await expect(row).toContainText("（削除済みのユーザー）");
+  await expect(row).not.toContainText("6f1c2d3e");
+  await row.screenshot({ path: testInfo.outputPath("api-key-deleted-user.png") });
 });
