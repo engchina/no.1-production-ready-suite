@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import uuid
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -91,8 +91,9 @@ def test_select_ai_job_without_credential_returns_409_before_creating_job(
         nl2sql_router.create_job(job, request)
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail["code"] == "SELECT_AI_CREDENTIAL_MISSING"
-    assert "運用設定の「Select AI Credential」で作成してから" in exc_info.value.detail["message_ja"]
+    detail = cast(dict[str, str], exc_info.value.detail)
+    assert detail["code"] == "SELECT_AI_CREDENTIAL_MISSING"
+    assert "運用設定の「Select AI Credential」で作成してから" in detail["message_ja"]
     assert adapter.calls == 1
     # ジョブを作らない（同じ client_job_id のジョブは無い）。
     assert service.get_job(str(job.client_job_id)) is None
@@ -166,7 +167,8 @@ def test_quality_evaluation_with_select_ai_engine_returns_409_before_submit(
     monkeypatch.setattr(nl2sql_router, "_assert_profile_access", lambda *_a, **_k: None)
     submitted: list[Any] = []
     monkeypatch.setattr(
-        nl2sql_router.quality_evaluation_service, "submit", lambda **kw: submitted.append(kw)
+        "app.features.nl2sql.router.quality_evaluation_service.submit",
+        lambda **kw: submitted.append(kw),
     )
     files = {"file": ("evaluation.xlsx", io.BytesIO(b"x"), "application/octet-stream")}
 

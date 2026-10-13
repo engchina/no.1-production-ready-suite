@@ -893,7 +893,9 @@ def test_profile_sync_router_returns_409_without_credential_and_202_with_it(
     monkeypatch.setattr(nl2sql_router, "_assert_profile_access", lambda *_a, **_k: None)
     # 状態の API は共通の確認（select_ai_readiness）で、service の adapter を読む（#1688）。
     monkeypatch.setattr("app.features.nl2sql.select_ai_readiness.get_settings", _oracle_settings)
-    monkeypatch.setattr(nl2sql_router.nl2sql_service, "_oracle_adapter", adapter)
+    from app.features.nl2sql.service import nl2sql_service
+
+    monkeypatch.setattr(nl2sql_service, "_oracle_adapter", adapter)
     app = FastAPI()
     app.include_router(nl2sql_router.router, prefix="/api")
     app.dependency_overrides[nl2sql_router._require_persistence] = lambda: None  # noqa: SLF001
