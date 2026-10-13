@@ -10,6 +10,9 @@
  *   desktop は今までどおり全件。
  * - nightly（e2e-nightly.yml）とローカルは env を付けない（`all`）。両方の project で全件を実行し、mobile の退行は
  *   nightly で拾う。
+ * - PR の E2E impact は、選んだ spec がほぼ全件（全件か、PR の範囲の見積もりが製品の全体の 60% 以上）のとき
+ *   `none` にし、mobile の project を実行しない（desktop だけ。#1652。platform/scripts/e2e_impact.py の
+ *   `mobile_scope`）。共有の外枠の変更などで PR の時間が最も長くなるときに、mobile は nightly に任せる。
  *
  * tag の付け方（`test("…", { tag: "@responsive" }, async …)`、describe にも付けられる）:
  *
@@ -35,17 +38,24 @@ export const MOBILE_TITLE = /[(（][^()（）]*(?:\bmobile(?:-\d+)?\b|(?<![\d.])
 
 const RESPONSIVE = new RegExp(`${RESPONSIVE_TAG}\\b`);
 
-export type MobileScope = "all" | "responsive";
+export type MobileScope = "all" | "responsive" | "none";
 
 export function mobileScope(value: string | undefined = process.env.E2E_MOBILE_SCOPE): MobileScope {
   if (!value || value === "all") return "all";
   if (value === "responsive") return "responsive";
-  throw new Error(`E2E_MOBILE_SCOPE は all か responsive です（${value}）`);
+  if (value === "none") return "none";
+  throw new Error(`E2E_MOBILE_SCOPE は all・responsive・none のどれかです（${value}）`);
 }
+
+/** どのテストの名前にも一致しない（`none` の mobile の project は 0 件。--pass-with-no-tests で成功する）。 */
+const NOTHING = /(?!)/;
 
 /** mobile の project に足す `grep`（`all` なら何も足さない）。 */
 export function mobileProjectScope(value?: string): { grep?: RegExp[] } {
-  return mobileScope(value) === "responsive" ? { grep: [RESPONSIVE, MOBILE_TITLE] } : {};
+  const scope = mobileScope(value);
+  if (scope === "responsive") return { grep: [RESPONSIVE, MOBILE_TITLE] };
+  if (scope === "none") return { grep: [NOTHING] };
+  return {};
 }
 
 /** PR の CI（`E2E_MOBILE_SCOPE=responsive`）でも実行するテストか。desktop などの project は常に true。 */

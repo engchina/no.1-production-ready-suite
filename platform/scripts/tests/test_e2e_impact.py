@@ -458,6 +458,44 @@ class SkipSmokeSpecsTest(unittest.TestCase):
         self.assertIn("rag/frontend/e2e/a.spec.ts", selection.specs)
 
 
+class MobileScopeTest(unittest.TestCase):
+    """ほぼ全件の選択では PR の mobile の project を実行しない（#1652）。"""
+
+    def setUp(self) -> None:
+        self.product = impact.PRODUCTS["rag"]
+        root = "rag/frontend/e2e"
+        self.specs = {
+            f"{root}/a.spec.ts": {"durationMs": 800, "prDurationMs": 600},
+            f"{root}/b.spec.ts": {"durationMs": 300},
+            f"{root}/c.spec.ts": {"durationMs": 100},
+        }
+        self.recorded = impact.ImpactMap(_map({}, specs=self.specs))
+
+    def _selection(self, *names: str) -> impact.Selection:
+        selection = impact.Selection(self.product)
+        selection.add([f"rag/frontend/e2e/{name}" for name in names], "変更")
+        return selection
+
+    def test_full_run_skips_mobile(self) -> None:
+        selection = impact.Selection(self.product)
+        selection.need_full("package.json")
+        self.assertEqual(impact.mobile_scope(selection, self.recorded), "none")
+        self.assertEqual(impact.mobile_scope(selection, None), "none")
+
+    def test_most_of_the_time_skips_mobile(self) -> None:
+        # 全体 1000（PR の範囲）。a だけで 600（60%）。
+        self.assertEqual(impact.mobile_scope(self._selection("a.spec.ts"), self.recorded), "none")
+
+    def test_part_of_the_time_keeps_responsive(self) -> None:
+        selection = self._selection("b.spec.ts", "c.spec.ts")
+        self.assertEqual(impact.mobile_scope(selection, self.recorded), "responsive")
+
+    def test_without_records_keeps_responsive(self) -> None:
+        self.assertEqual(impact.mobile_scope(self._selection("a.spec.ts"), None), "responsive")
+        empty = impact.Selection(self.product)
+        self.assertEqual(impact.mobile_scope(empty, self.recorded), "responsive")
+
+
 MODEL_MESSAGES = "platform/packages/system-settings/src/model/messages.ts"
 AUTH_MESSAGES = "platform/packages/system-settings/src/auth/messages.ts"
 

@@ -60,6 +60,8 @@ permissions:
 # E2E_MOBILE_SCOPE: PR の e2e（smoke・impact）の 375px（mobile）の project は、画面幅に依存するテスト（@responsive の
 # tag と、名前の括弧で mobile / 375px を前提にするもの）だけを実行する。desktop は全件。main の push と nightly は
 # 全件（all）で、mobile の退行は e2e-nightly.yml が拾う（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
+# E2E impact は、選択がほぼ全件（全件か、見積もりが製品の全体の 60% 以上）のとき mobile の project を実行しない
+# （e2e-impact の <製品>_mobile_scope=none。desktop だけ。#1652）。
 # E2E_RETRIES: PR の e2e の retries は 1、main の push は 2（nightly は env を付けないので 2）。PR で flaky のテストを
 # 3 回実行しないため。1 回の retry で通らないテストは PR を赤にして直す（#1593。platform/scripts/e2e-impact/ci-run.ts）。
 env:
@@ -1433,12 +1435,15 @@ jobs:
       rag_mode: ${{ steps.select.outputs.rag_mode }}
       rag_matrix: ${{ steps.select.outputs.rag_matrix }}
       rag_total: ${{ steps.select.outputs.rag_total }}
+      rag_mobile_scope: ${{ steps.select.outputs.rag_mobile_scope }}
       nl2sql_mode: ${{ steps.select.outputs.nl2sql_mode }}
       nl2sql_matrix: ${{ steps.select.outputs.nl2sql_matrix }}
       nl2sql_total: ${{ steps.select.outputs.nl2sql_total }}
+      nl2sql_mobile_scope: ${{ steps.select.outputs.nl2sql_mobile_scope }}
       agent_mode: ${{ steps.select.outputs.agent_mode }}
       agent_matrix: ${{ steps.select.outputs.agent_matrix }}
       agent_total: ${{ steps.select.outputs.agent_total }}
+      agent_mobile_scope: ${{ steps.select.outputs.agent_mobile_scope }}
     steps:
       # base との差分と、nightly の記録の commit（main の履歴）の両方を使うため全履歴を取る。
       - name: Checkout
@@ -1512,6 +1517,8 @@ jobs:
         env:
           SPECS: ${{ matrix.specs }}
           PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
+          # ほぼ全件の選択では mobile の project を実行しない（none。#1652）。それ以外は workflow の env と同じ responsive。
+          E2E_MOBILE_SCOPE: ${{ needs.e2e-impact.outputs.rag_mobile_scope || 'responsive' }}
         run: |
           # shellcheck disable=SC2086
           npx playwright test --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
@@ -1567,6 +1574,8 @@ jobs:
         env:
           SPECS: ${{ matrix.specs }}
           PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
+          # ほぼ全件の選択では mobile の project を実行しない（none。#1652）。それ以外は workflow の env と同じ responsive。
+          E2E_MOBILE_SCOPE: ${{ needs.e2e-impact.outputs.nl2sql_mobile_scope || 'responsive' }}
         run: |
           # shellcheck disable=SC2086
           npx playwright test --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS
@@ -1622,6 +1631,8 @@ jobs:
         env:
           SPECS: ${{ matrix.specs }}
           PLAYWRIGHT_SHARD: ${{ matrix.playwright_shard }}
+          # ほぼ全件の選択では mobile の project を実行しない（none。#1652）。それ以外は workflow の env と同じ responsive。
+          E2E_MOBILE_SCOPE: ${{ needs.e2e-impact.outputs.agent_mobile_scope || 'responsive' }}
         run: |
           # shellcheck disable=SC2086
           npx playwright test --pass-with-no-tests --shard="$PLAYWRIGHT_SHARD" $SPECS

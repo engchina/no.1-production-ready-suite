@@ -33,6 +33,8 @@ PR の CI（`.github/workflows/ci.yml` の `e2e-impact`）は `select` で、bas
 PR の CI の mobile の project は、画面幅に依存するテスト（`@responsive` など）だけを実行する
 （`platform/scripts/e2e-impact/mobile-scope.ts`。#1582）。時間の見積もりは、nightly の記録の
 うち PR でも実行するテストの時間（`prDurationMs`。記録の fixture の `prScope`）を使う。
+選択がほぼ全件（全件か、見積もりが製品の全体の `MOBILE_SKIP_RATIO` 以上）のときは、mobile の
+project を実行しない（`<製品>_mobile_scope=none`。共有の外枠の変更など。#1652）。
 
 PR の smoke（ci.yml の `*_E2E_SMOKE`）が全 project で実行する spec は `--skip-specs` で渡し、
 選んだ spec から除く（同じ spec を 2 回実行しない。全件のときは smoke の job を飛ばす。#1525）。
@@ -65,6 +67,9 @@ MAP_VERSION = 1
 # PR の 1 shard の目安（nightly の所要時間で見積もる）。
 SHARD_TARGET_MS = 6 * 60 * 1000
 UNKNOWN_SPEC_MS = 60 * 1000
+# 選んだ spec の見積もり（PR の範囲）が製品の全体のこの割合以上なら、PR の impact の
+# mobile の project を実行しない（desktop だけ。mobile は nightly に任せる。#1652）。
+MOBILE_SKIP_RATIO = 0.6
 
 
 @dataclass(frozen=True)
@@ -1004,6 +1009,22 @@ def spec_durations(specs: Iterable[str], impact: ImpactMap | None) -> dict[str, 
     return {spec: pr_duration(recorded[spec]) if spec in recorded else default for spec in specs}
 
 
+def mobile_scope(selection: Selection, impact: ImpactMap | None) -> str:
+    """PR の impact の job の mobile の project の範囲（`E2E_MOBILE_SCOPE`。#1652）。
+
+    全件か、選んだ spec の見積もり（PR の範囲）が製品の全体の `MOBILE_SKIP_RATIO` 以上なら `none`
+    （desktop だけ）。それ以外は `responsive`（画面幅に依存するテストだけ。#1582）。記録が無ければ
+    割合が分からないので `responsive` のまま。
+    """
+    if selection.full:
+        return "none"
+    if not selection.specs or not impact or not impact.specs:
+        return "responsive"
+    total = sum(pr_duration(entry) for entry in impact.specs.values())
+    selected = sum(spec_durations(selection.specs, impact).values())
+    return "none" if total and selected >= total * MOBILE_SKIP_RATIO else "responsive"
+
+
 def shard_count(product: Product, selection: Selection, impact: ImpactMap | None) -> int:
     if selection.full:
         return product.max_shards
@@ -1241,6 +1262,7 @@ def summary(
     count: int,
     shards: list[Shard],
     impact: ImpactMap | None,
+    mobile: str = "responsive",
 ) -> str:
     product = selection.product
     lines = [f"### e2e の影響分析: {product.name}", ""]
@@ -1271,6 +1293,15 @@ def summary(
         lines.append(f"- shard の見積もり（nightly の実測。LPT で詰める）: {estimates}")
     elif count:
         lines.append("- shard はテスト単位（Playwright の `--shard`。`fullyParallel`）")
+    if mode != "none":
+        lines.append(
+            "- mobile の project: "
+            + (
+                "実行しない（ほぼ全件のため desktop だけ。mobile は nightly。#1652）"
+                if mobile == "none"
+                else "画面幅に依存するテストだけ（`@responsive` など。#1582）"
+            )
+        )
     for note in list(dict.fromkeys(selection.notes))[:30]:
         lines.append(f"- 注: {note}")
     return "\n".join(lines) + "\n"
@@ -1292,7 +1323,8 @@ def command_select(args: argparse.Namespace) -> int:
     skip_smoke_specs(selection, (args.skip_specs or "").split())
     mode = "full" if selection.full else ("selected" if selection.specs else "none")
     matrix, shards = shard_matrix(product, selection, impact)
-    text = summary(selection, mode, len(matrix), shards, impact)
+    mobile = mobile_scope(selection, impact)
+    text = summary(selection, mode, len(matrix), shards, impact, mobile)
     print(text)
     if args.step_summary:
         with open(args.step_summary, "a", encoding="utf-8") as handle:
@@ -1303,6 +1335,7 @@ def command_select(args: argparse.Namespace) -> int:
             f"{product.name}_mode": mode,
             f"{product.name}_matrix": json.dumps(matrix, ensure_ascii=False),
             f"{product.name}_total": str(len(matrix)),
+            f"{product.name}_mobile_scope": mobile,
         },
     )
     return 0
