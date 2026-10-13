@@ -64,7 +64,7 @@
 - secret 検出は `.gitleaks.toml` / `.gitleaksignore`（書き方は `.gitleaks.toml` の冒頭）。誤検知は fingerprint 単位で `.gitleaksignore` に理由付きで除外する。
 - Dependabot は 3 製品の backend（uv）・frontend（npm）、platform の package（uv・npm。lock だけを上げる）、RAG のサービス、actions を対象にする。公開から 5 日の `cooldown` を置き、npm は monthly（lock の変更は e2e の全件になる）、security updates は entry ごとの group にまとめる。patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
 - Python の整形は `ruff format`（black は使わない。CI は `uv run ruff format --check .`）。整形だけの commit は `.git-blame-ignore-revs` に載せる。pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend のファイルへの `ruff format --check` / `ruff check`。
-- root の `scripts/` と `.github/` は `Suite / Scripts` が検査する（shellcheck・`scripts/tests/`・workflow の actionlint）。
+- root の `scripts/` と `.github/` は `Suite / Scripts` が検査する（shellcheck・`scripts/tests/`・workflow の actionlint・zizmor。zizmor の設定と除外の理由は `.github/zizmor.yml`）。
 
 ## デザインシステム / UI（platform が正本）
 

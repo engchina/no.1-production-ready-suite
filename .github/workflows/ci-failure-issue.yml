@@ -9,7 +9,9 @@ name: CI failure issue
 # 動作確認: `gh workflow run ci-failure-issue.yml -f run_id=<失敗した run の ID>`（main 以外の run も対象にできる）。
 
 on:
-  workflow_run:
+  # workflow_run は main の文脈で動き、PR の code を checkout・実行しない（.github/scripts を main から読み、
+  # run の metadata だけを使う。PR の run は if で除く）。zizmor の dangerous-triggers はこの理由で除く（#1594）。
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows:
       - CI
       - E2E Nightly
