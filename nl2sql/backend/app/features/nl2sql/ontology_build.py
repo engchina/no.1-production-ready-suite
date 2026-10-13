@@ -23,7 +23,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args
 from uuid import uuid4
 
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
@@ -2725,6 +2725,20 @@ _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
     OntologyBuildStepName.PROPOSAL_REGISTRATION: "Markdown 下書き生成",
 }
 _MAX_JOB_EVENTS = 100
+# 定義のフェーズのうち、アクティビティのイベントに付けられるもの(名前 → OntologyBuildPhase)。
+# cast を使わずに Literal へ写す(mypy の版で `in` による絞り込みの有無が違っても通るように。#1661)。
+_EVENT_PHASE_BY_NAME: dict[str, OntologyBuildPhase] = {
+    name: name for name in get_args(OntologyBuildPhase)
+}
+
+
+def _running_event_phase(phases: Sequence[DefinitionPhase]) -> OntologyBuildPhase | None:
+    """最後に実行中になった定義のフェーズを、イベントに付けられるときだけ返す。"""
+
+    active = next((p for p in reversed(phases) if p.status == "running"), None)
+    return _EVENT_PHASE_BY_NAME.get(active.name) if active else None
+
+
 # 完了(succeeded/failed/cancelled)job の in-memory 保持上限。超過分は start 時に古い順へ破棄する
 _MAX_FINISHED_JOBS = 20
 _TERMINAL_STATUSES = {
@@ -3838,18 +3852,7 @@ class OntologyBuildService:
 
         def mutate(job: OntologyBuildJob) -> None:
             if event.phase is None:
-                active = next(
-                    (p for p in reversed(job.definition_phases) if p.status == "running"), None
-                )
-                if active and active.name in {
-                    "freeze",
-                    "evidence",
-                    "concepts",
-                    "validation",
-                    "markdown",
-                    "save",
-                }:
-                    event.phase = cast(OntologyBuildPhase, active.name)
+                event.phase = _running_event_phase(job.definition_phases)
             job.events.append(event)
             if len(job.events) > _MAX_JOB_EVENTS:
                 del job.events[: len(job.events) - _MAX_JOB_EVENTS]

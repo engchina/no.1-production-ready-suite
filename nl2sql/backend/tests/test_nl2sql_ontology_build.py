@@ -33,6 +33,7 @@ from app.features.nl2sql.ontology_build import (
     select_qa_sql_examples_from_markdown,
 )
 from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
+from app.features.nl2sql.ontology_definitions import DefinitionPhase
 from app.features.nl2sql.ontology_models import (
     BusinessRuleDefinition,
     BusinessRuleExecutionMode,
@@ -755,6 +756,26 @@ def test_internal_schema_resolved_diagnostics_are_not_user_warnings() -> None:
     assert "schema_resolved_join_conditions" not in markdown
     assert actionable_warning in markdown
     assert rejection_warning in markdown
+
+
+@pytest.mark.parametrize(
+    ("phases", "expected"),
+    [
+        ([("freeze", "succeeded"), ("concepts", "running")], "concepts"),
+        ([("concepts", "running"), ("save", "running")], "save"),
+        ([("objects", "running")], None),
+        ([("freeze", "succeeded")], None),
+        ([], None),
+    ],
+    ids=["event-phase", "last-running", "not-event-phase", "none-running", "empty"],
+)
+def test_running_event_phase_maps_only_event_phases(
+    phases: list[tuple[Any, Any]], expected: str | None
+) -> None:
+    """phase の無いイベントには、実行中の定義のフェーズのうち付けられるものだけを付ける(#1661)。"""
+
+    definition_phases = [DefinitionPhase(name=name, status=status) for name, status in phases]
+    assert ontology_build_module._running_event_phase(definition_phases) == expected
 
 
 def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
