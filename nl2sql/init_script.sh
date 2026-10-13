@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export DEBIAN_FRONTEND=noninteractive
-
 if [ "${NL2SQL_INIT_TEST_MODE:-false}" != "true" ]; then
   exec > >(tee -a /var/log/nl2sql-init.log) 2>&1
 fi
 
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
-APP_USER="${APP_USER:-ubuntu}"
+APP_USER="${APP_USER:-opc}"
 APP_GROUP="${APP_GROUP:-${APP_USER}}"
 # NL2SQL と共有 platform は monorepo（no.1-production-ready-suite）の nl2sql/ と platform/ にある。
 SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
@@ -29,10 +27,6 @@ BACKEND_ENV_SOURCE="${BACKEND_ENV_SOURCE:-${APP_ROOT}/props/backend.env}"
 FRONTEND_BASE_PATH="${FRONTEND_BASE_PATH:-/nl2sql/}"
 # true なら共有 UI（platform）を build し直さない（suite で先の製品が build したとき）。
 PR_SUITE_SKIP_PLATFORM_UI_BUILD="${PR_SUITE_SKIP_PLATFORM_UI_BUILD:-false}"
-NODESOURCE_KEYRING_PATH="${NODESOURCE_KEYRING_PATH:-/usr/share/keyrings/nodesource.gpg}"
-NODESOURCE_SOURCE_PATH="${NODESOURCE_SOURCE_PATH:-/etc/apt/sources.list.d/nodesource.sources}"
-NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-NODESOURCE_REPO_URL="https://deb.nodesource.com/node_24.x"
 NODEJS_OFFICIAL_RELEASE_BASE_URL="${NODEJS_OFFICIAL_RELEASE_BASE_URL:-https://nodejs.org/download/release/latest-v24.x}"
 NODEJS_OFFICIAL_INSTALL_DIR="${NODEJS_OFFICIAL_INSTALL_DIR:-/usr/local/lib/nodejs}"
 NODEJS_OFFICIAL_BIN_DIR="${NODEJS_OFFICIAL_BIN_DIR:-/usr/local/bin}"
@@ -46,26 +40,6 @@ log() {
 }
 
 trap 'status=$?; log "Initialization failed at line ${LINENO} with status ${status}: ${BASH_COMMAND}"; exit "${status}"' ERR
-
-wait_for_apt_availability() {
-  local locks=(
-    /var/lib/dpkg/lock
-    /var/lib/dpkg/lock-frontend
-    /var/lib/apt/lists/lock
-    /var/cache/apt/archives/lock
-  )
-  local elapsed=0
-  local timeout=600
-
-  while fuser "${locks[@]}" >/dev/null 2>&1; do
-    if [ "${elapsed}" -ge "${timeout}" ]; then
-      log "Timed out waiting for apt/dpkg locks."
-      return 1
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-}
 
 retry_command() {
   local attempts="$1"
@@ -86,9 +60,9 @@ retry_command() {
   return "${status}"
 }
 
-apt_get() {
-  wait_for_apt_availability
-  retry_command 5 apt-get "$@"
+# OS の package は dnf で入れる（Compute の OS は Oracle Linux 9。#1611）。dnf は他の dnf の lock を待つ。
+dnf_cmd() {
+  retry_command 5 dnf -y "$@"
 }
 
 run_as_app_user() {
@@ -101,19 +75,13 @@ run_as_app_user_in_dir() {
   run_as_app_user bash -lc "cd '${workdir}' && $*"
 }
 
+# NL2SQL が使う OS の package（Nginx・firewalld は platform/deploy/suite-init.sh が入れる）。
+# gcc・make は wheel の無い Python の依存を build するため。curl は image にある。
+SYSTEM_PACKAGES=(ca-certificates gcc gcc-c++ git make tar unzip)
+
 install_system_packages() {
-  log "Installing system packages."
-  apt_get update
-  apt_get install -y \
-    build-essential \
-    ca-certificates \
-    curl \
-    git \
-    gnupg \
-    nginx \
-    netfilter-persistent \
-    unzip \
-    wget
+  log "Installing system packages: ${SYSTEM_PACKAGES[*]}"
+  dnf_cmd install "${SYSTEM_PACKAGES[@]}"
 }
 
 install_nodejs() {
@@ -129,74 +97,28 @@ install_nodejs() {
     fi
   fi
 
-  if install_nodejs_from_nodesource; then
+  if install_nodejs_from_dnf_module; then
     return
   fi
 
-  log "NodeSource Node.js 24 installation failed; falling back to official Node.js tarball."
+  log "AppStream Node.js 24 installation failed; falling back to official Node.js tarball."
   install_nodejs_from_official_tarball || return 1
 }
 
-install_nodejs_from_nodesource() {
-  log "Installing Node.js 24 from NodeSource."
-  install_nodesource_apt_repository || return 1
-  apt_get update || return 1
-  ensure_nodejs_24_candidate || return 1
-  apt_get install -y nodejs || return 1
+# Node.js 24 は Oracle Linux の AppStream の module（nodejs:24）から入れる。
+install_nodejs_from_dnf_module() {
+  log "Installing Node.js 24 from the AppStream module (nodejs:24)."
+  dnf_cmd module reset nodejs || return 1
+  dnf_cmd module enable "nodejs:24" || return 1
+  dnf_cmd install nodejs npm || return 1
   validate_nodejs_24 || return 1
-}
-
-install_nodesource_apt_repository() {
-  local architecture
-  local keyring_tmp
-
-  install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING_PATH}")" "$(dirname "${NODESOURCE_SOURCE_PATH}")" || return 1
-  keyring_tmp="$(mktemp)" || return 1
-  if ! curl -fsSL "${NODESOURCE_KEY_URL}" | gpg --dearmor --yes -o "${keyring_tmp}"; then
-    rm -f "${keyring_tmp}"
-    return 1
-  fi
-  install -m 0644 "${keyring_tmp}" "${NODESOURCE_KEYRING_PATH}" || {
-    rm -f "${keyring_tmp}"
-    return 1
-  }
-  rm -f "${keyring_tmp}"
-  architecture="$(dpkg --print-architecture)" || return 1
-
-  if ! cat > "${NODESOURCE_SOURCE_PATH}" <<EOF
-Types: deb
-URIs: ${NODESOURCE_REPO_URL}
-Suites: nodistro
-Components: main
-Architectures: ${architecture}
-Signed-By: ${NODESOURCE_KEYRING_PATH}
-EOF
-  then
-    return 1
-  fi
-  chmod 0644 "${NODESOURCE_SOURCE_PATH}" || return 1
-}
-
-ensure_nodejs_24_candidate() {
-  local candidate
-  if ! candidate="$(apt-cache policy nodejs | awk '/Candidate:/ {print $2; exit}')"; then
-    log "Unable to inspect nodejs apt candidate."
-    return 1
-  fi
-  if [ -z "${candidate}" ] || [ "${candidate}" = "(none)" ] || ! printf '%s\n' "${candidate}" | grep -q '^24\.'; then
-    log "NodeSource nodejs candidate is not Node.js 24: ${candidate:-<none>}"
-    apt-cache policy nodejs || true
-    return 1
-  fi
 }
 
 resolve_nodejs_official_platform() {
   local architecture
 
   NODEJS_OFFICIAL_PLATFORM=""
-  if ! command -v dpkg >/dev/null 2>&1 || ! architecture="$(dpkg --print-architecture)" || [ -z "${architecture}" ]; then
-    architecture="$(uname -m)" || return 1
-  fi
+  architecture="$(uname -m)" || return 1
 
   case "${architecture}" in
     amd64 | x86_64)
