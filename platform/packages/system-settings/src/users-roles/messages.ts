@@ -49,6 +49,8 @@ export const USERS_ROLES_MESSAGES = {
     "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
   "security.roles.builtIn": "組み込み",
   "security.roles.code": "ロールコード",
+  // 削除済み等で参照できないロール。ID（UUID）は出さない（#1682）。
+  "security.roles.deletedRole": "（削除済みのロール）",
   "security.roles.codeConflict":
     "このロールコードは既に使用されています。別のコードを入力してください。",
   "security.roles.codeInvalid":
@@ -61,7 +63,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.custom": "カスタム",
   "security.roles.delete": "削除",
   "security.roles.deleteConfirm":
-    "「{code}」（ロール名: {name}）を完全に削除します。ロールに設定した権限も削除され、元に戻せません。",
+    "「{name}」を完全に削除します。ロールに設定した権限も削除され、元に戻せません。",
   "security.roles.deleteError":
     "ロールを削除できませんでした。割り当てユーザーを解除し、最新の表示で再試行してください。",
   "security.roles.deleteSuccess": "{name} を完全に削除しました。",

@@ -11,6 +11,8 @@ export interface AssignedRole {
   display_name: string;
   is_built_in: boolean;
   archived: boolean;
+  /** 削除済み等で参照できないロール。`role_code` / `display_name` は空で、画面は ID を出さない（#1682）。 */
+  deleted?: boolean;
 }
 
 export interface SecurityUser {

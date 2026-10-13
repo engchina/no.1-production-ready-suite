@@ -40,6 +40,7 @@ import {
   type ListPickerItem,
   TextareaField,
 } from "@production-ready/ui";
+import { RoleNameBadges } from "@production-ready/system-settings";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 
@@ -66,6 +67,8 @@ import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
 } from "../components/SchemaRefreshFeedback";
+import { profileAgentAssetRebuildKey } from "../agentAssetRebuild";
+import { AgentAssetRebuildStatus } from "../components/AgentAssetRebuildStatus";
 import { ProfileSaveProgress } from "../components/ProfileSaveProgress";
 import { ProfileSaveCredentialPrecondition } from "../components/ProfileSaveCredentialPrecondition";
 import {
@@ -156,6 +159,11 @@ interface ProfileFormState {
   selectAiConfig: ProfileSelectAiConfig;
   /** 既定の生成方式（#1524）。 */
   defaultEngine: Nl2SqlEngine;
+  /**
+   * 保存（Oracle 反映）のたびに Select AI Agent アセットも再構築するか（#1690）。業務プロファイルに
+   * 保存する設定で、開き直しても保つ（「実行設定・同期表示をリセット」の対象ではない）。
+   */
+  rebuildAgentAssetsOnSave: boolean;
 }
 
 
@@ -182,6 +190,7 @@ const EMPTY_FORM: ProfileFormState = {
   allowedViews: [],
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
   defaultEngine: "select_ai",
+  rebuildAgentAssetsOnSave: false,
 };
 
 function emptyProfileForm(): ProfileFormState {
@@ -327,6 +336,7 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
     allowedViews: normalized.allowed_views,
     selectAiConfig,
     defaultEngine: normalized.default_engine ?? "select_ai",
+    rebuildAgentAssetsOnSave: normalized.rebuild_agent_assets_on_save ?? false,
   };
 }
 
@@ -340,6 +350,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     sql_rules: [],
     safety_policy: "select_only",
     default_engine: form.defaultEngine,
+    rebuild_agent_assets_on_save: form.rebuildAgentAssetsOnSave,
     select_ai_config: {
       ...form.selectAiConfig,
       profile_name: profileName,
@@ -1029,12 +1040,12 @@ function ProfileEditor({
         <section className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
           <h3 className="text-sm font-semibold text-fg">{t("profiles.access.title")}</h3>
           <p className="text-sm text-fg-muted">{t("profiles.access.hint")}</p>
-          {profileAccessProfile.allowed_role_ids.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {profileAccessProfile.allowed_role_ids.map((roleId) => (
-                <StatusBadge icon={false} key={roleId} variant="neutral" label={roleId} />
-              ))}
-            </div>
+          {profileAccessProfile.allowed_roles.length > 0 ? (
+            // ロールはロール名で出す。ID（UUID）・コードは出さない（#1682）。
+            <RoleNameBadges
+              roles={profileAccessProfile.allowed_roles}
+              ariaLabel={t("profiles.access.title")}
+            />
           ) : (
             <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
               {t("profiles.access.none")}
@@ -1127,6 +1138,7 @@ function ProfileEditor({
           />
           <span>{t("profiles.oracle.assets.refreshAgent")}</span>
         </label>
+        {selectedProfile ? <AgentAssetRebuildStatus profileId={selectedProfile.id} /> : null}
       </section>
 
       {/* 保存（Oracle 反映）の事前条件。保存の操作の直前に出し、満たすまで「保存」を無効にする
@@ -1230,7 +1242,8 @@ function ProfileSaveResultRegion({
         submissionError={oracleSyncSubmissionError}
         submissionErrorCode={oracleSyncSubmissionErrorCode}
         profileId={profileId}
-        rebuildAgentAssets={rebuildAgentAssets}
+        // 工程の表示は、実行したジョブが再構築を含むかで決める（保存の後にチェックを変えても変えない）。
+        rebuildAgentAssets={oracleSyncJob?.rebuild_agent_assets ?? rebuildAgentAssets}
         retrying={retryingOracleSync}
         onRetry={onRetryOracleSync}
       />
@@ -1276,7 +1289,11 @@ export function ProfileManagementPage() {
     direction: "asc",
   });
   const [oracleConfirmation, setOracleConfirmation] = useState("");
-  const [rebuildAgentAssets, setRebuildAgentAssets] = useState(false);
+  // 「保存時に Select AI Agent アセットも再構築する」は業務プロファイルの属性（#1690）。フォームに持ち、
+  // 保存の payload と未保存の判定に入れる。
+  const rebuildAgentAssets = form.rebuildAgentAssetsOnSave;
+  const setRebuildAgentAssets = (value: boolean) =>
+    setForm((current) => ({ ...current, rebuildAgentAssetsOnSave: value }));
   const [oracleSyncJobId, setOracleSyncJobId] = useState("");
   const [oracleSyncProfileId, setOracleSyncProfileId] = useState("");
   const [oracleSyncSubmissionError, setOracleSyncSubmissionError] = useState("");
@@ -1642,6 +1659,10 @@ export function ProfileManagementPage() {
     // 成功・失敗のどちらでも最新版を取り直し、次の保存の If-Match が古い ETag で 409 にならないようにする。
     void queryClient.invalidateQueries({
       queryKey: nl2sqlIncrementalKeys.profile(finishedOracleSyncJob.profileId),
+    });
+    // 「Select AI Agent アセット」の欄の最後の再構築（成功・失敗のどちらでも変わる。#1691）。
+    void queryClient.invalidateQueries({
+      queryKey: profileAgentAssetRebuildKey(finishedOracleSyncJob.profileId),
     });
     if (!finishedOracleSyncJob.succeeded) return;
     if (finishedOracleSyncJob.invalidateSelectAi) {
@@ -2061,7 +2082,6 @@ export function ProfileManagementPage() {
   }, []);
   const canClearOracleExecution = Boolean(
     oracleConfirmation ||
-      rebuildAgentAssets ||
       oracleSyncJobId ||
       oracleSyncProfileId ||
       oracleSyncJob ||
@@ -2071,7 +2091,6 @@ export function ProfileManagementPage() {
 
   const clearOracleExecution = () => {
     setOracleConfirmation("");
-    setRebuildAgentAssets(false);
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");

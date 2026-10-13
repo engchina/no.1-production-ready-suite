@@ -40,6 +40,7 @@ import { formatMessage } from "../auth/messages";
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
+import { RoleNameRowTitleButton, roleDisplayName } from "../users-roles/RoleNameBadges";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
@@ -47,8 +48,6 @@ import {
   SecurityPanelHeader,
   SecuritySearchField,
   SecurityClearSearchAction,
-  SecurityIdentityRowTitleButton,
-  identitySecondaryName,
   isAbortError,
   securityFilteredCount,
   securityFilteredCountWithSelected,
@@ -378,8 +377,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
             sort.direction,
           );
         }
-        // 1 列目はロールコードを主表示するため、コードで並べる。
-        return compareText(left.role_code, right.role_code, sort.direction);
+        // 1 列目はロール名を出すため、ロール名で並べる（#1682）。
+        return compareText(roleDisplayName(left), roleDisplayName(right), sort.direction);
       });
   }, [permissionByCode, roleSearchText, roles, search, sort]);
 
@@ -599,11 +598,10 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       render: (role) => {
         const selected = visibleSelectedId === role.role_id;
         return (
-          <SecurityIdentityRowTitleButton
-            id={role.role_code}
-            name={role.display_name}
+          <RoleNameRowTitleButton
+            securityRole={role}
             current={selected}
-            aria-label={formatMessage(m.showRole, { name: role.role_code })}
+            aria-label={formatMessage(m.showRole, { name: roleDisplayName(role) })}
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
@@ -756,7 +754,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 getRowKey={(role) => role.role_id}
                 rowProps={(role) => ({
                   className: INFORMATION_TABLE_ROW_CLASS,
-                  "aria-label": formatMessage(m.showRole, { name: role.role_code }),
+                  "aria-label": formatMessage(m.showRole, { name: roleDisplayName(role) }),
                 })}
                 ariaLabel={m.listTitle}
                 testId="security-permissions-grid"
@@ -796,7 +794,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
             >
               <SecurityPanelHeader
                 icon={Pencil}
-                title={formatMessage(m.formTitle, { role: editingRole?.role_code ?? "" })}
+                title={formatMessage(m.formTitle, { role: editingRole ? roleDisplayName(editingRole) : "" })}
                 description={m.formHint}
                 headingId="security-permissions-form-heading"
               />
@@ -1327,18 +1325,15 @@ function PermissionDetailPanel<R extends PermissionRole>({
               className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg"
             >
               <ShieldCheck size={20} aria-hidden="true" />
-              <span className="min-w-0 break-all font-mono">{role.role_code}</span>
+              <span className="min-w-0 break-words">{roleDisplayName(role)}</span>
             </h2>
             <RoleStatusBadges role={role} />
           </div>
-          {identitySecondaryName(role.role_code, role.display_name) ? (
-            <p className="mt-1 break-words text-xs text-fg-muted">{role.display_name}</p>
-          ) : null}
         </div>
         {canManage && actions.length > 0 ? (
           <ObjectActionBar
             actions={actions}
-            ariaLabel={`${m.actions}: ${role.role_code}`}
+            ariaLabel={`${m.actions}: ${roleDisplayName(role)}`}
             testId="security-permissions-detail-actions"
           />
         ) : null}

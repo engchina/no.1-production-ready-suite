@@ -142,6 +142,8 @@ export interface Nl2SqlProfile {
   select_ai_config: ProfileSelectAiConfig;
   /** 既定の生成方式（#1524）。SQL 生成・チャットの初期の選択と、方式を指定しないジョブ（Agent の MCP）が使う。 */
   default_engine?: Nl2SqlEngine;
+  /** 保存（Oracle 反映）のたびに Select AI Agent アセットも再構築するか（#1690）。 */
+  rebuild_agent_assets_on_save?: boolean;
   archived: boolean;
   object_scope_version?: number;
   version?: number;
@@ -287,6 +289,7 @@ export interface ProfileUpsertPayload {
   few_shot_examples?: Array<Record<string, string>>;
   select_ai_config: ProfileSelectAiConfig;
   default_engine: Nl2SqlEngine;
+  rebuild_agent_assets_on_save: boolean;
 }
 
 export interface ProfileLearningMaterialImportData {
