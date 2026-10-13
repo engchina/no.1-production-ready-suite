@@ -53,7 +53,10 @@ test("AI要件確認の未入力案内は操作前に赤いエラー（role=aler
   const workbench = readFileSync(new URL("../src/features/nl2sql/Nl2SqlWorkbench.tsx", import.meta.url), "utf8");
   assert.match(workbench, /<p id="nl2sql-guided-query-required" className="text-xs leading-5 text-fg-muted">/u);
   assert.doesNotMatch(workbench, /<FieldError[\s\S]{0,80}nl2sql-guided-query-required/u);
-  assert.match(workbench, /aria-describedby=\{!question\.trim\(\) \? "nl2sql-guided-query-required" : undefined\}/u);
+  assert.match(workbench, /const guidedClarificationHintId = !question\.trim\(\)\s+\? "nl2sql-guided-query-required"/u);
+  assert.match(workbench, /aria-describedby=\{guidedClarificationHintId\}/u);
+  // 質問が SQL の文のときの案内（#1715）も、操作前の案内として muted の文で出す。
+  assert.match(workbench, /id="nl2sql-guided-sql-input"\s+className="text-xs leading-5 text-fg-muted"/u);
 });
 
 test("wide のカード内の中身に最大幅を付けず、100% を使う（#575）", () => {

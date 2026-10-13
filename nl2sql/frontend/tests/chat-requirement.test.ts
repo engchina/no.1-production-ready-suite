@@ -6,13 +6,16 @@ import test from "node:test";
 import {
   chatRequirementIdempotencyKey,
   chatRequirementSessionRequest,
-  chatRequirementStep,
   decodeChatRequirementCheck,
   encodeChatRequirementCheck,
-  isRequirementCheckUnavailable,
   parseChatRequirementCheck,
   type ChatJobRequest,
 } from "../src/features/nl2sql/chatRequirement.ts";
+import {
+  isRequirementCheckUnavailable,
+  requirementCheckSkipReason,
+  requirementNextStep as chatRequirementStep,
+} from "../src/features/nl2sql/requirementCheck.ts";
 import type {
   QuerySession,
   RequirementItem,
@@ -194,4 +197,11 @@ test("作業状態には JSON の文字列で残し、空・壊れた文字列�
   assert.equal(encodeChatRequirementCheck(null), "");
   assert.equal(decodeChatRequirementCheck(""), null);
   assert.equal(decodeChatRequirementCheck("{"), null);
+});
+
+test("AI要件確認を飛ばす判定は SQL の文だけ（チャットと SQL 生成の画面で共通。#1715）", () => {
+  assert.equal(requirementCheckSkipReason("select * from employee"), "sql_statement");
+  assert.equal(requirementCheckSkipReason("with t as (select 1 from dual) select * from t;"), "sql_statement");
+  assert.equal(requirementCheckSkipReason("社員の一覧"), null);
+  assert.equal(requirementCheckSkipReason("select * from employee の件数"), null);
 });

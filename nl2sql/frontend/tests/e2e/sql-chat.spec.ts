@@ -1321,10 +1321,8 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   await expect(page.getByTestId("sql-chat-send")).toBeDisabled();
   expect(state.requests).toHaveLength(0);
   expect(state.requirement.creates[0]).toMatchObject({ chat: true, previous_job_id: null });
-  // SQL の要件（AI の理解）は会話の中では畳んでおき、開くと物理名の欄を見られる。
-  const itemsToggle = turn.getByTestId("sql-chat-requirement-items-toggle");
-  await expect(itemsToggle).toHaveText(/SQL の要件（AI の理解）/);
-  await itemsToggle.click();
+  // AI要件確認の表示は SQL 生成の画面と同じ部品（#1715）。SQL の要件（物理名の欄）も同じく開いて出す。
+  await expect(turn.getByTestId("nl2sql-guided-clarification")).toBeVisible();
   await expect(turn.getByTestId("nl2sql-requirement-group-select")).toContainText("CUSTOMERS.REGION");
   expect(await noHorizontalOverflow(page)).toBeLessThanOrEqual(0);
   await turn.screenshot({ path: testInfo.outputPath(`chat-requirement-question-${width}.png`) });
@@ -1419,8 +1417,8 @@ test("要件の検査の最中は送信のボタンが「停止」になり、�
   await composer.fill("今年度の地域ごとの受注金額");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-requirement-turn");
-  // 検査の経過は回答の場所の処理の段階（ChatProgress）で出す。
-  await expect(turn.getByTestId("sql-chat-progress")).toContainText("SQL を作るのに足りない情報を確かめています");
+  // 検査の経過は SQL 生成の画面の AI要件確認と同じ表示（#1715）。
+  await expect(turn.getByTestId("nl2sql-guided-start-progress")).toContainText("SQL の要件の下書きを作っています");
   const send = page.getByTestId("sql-chat-send");
   await expect(send).toHaveAccessibleName("停止");
   await send.click();
@@ -1439,13 +1437,79 @@ test("要件の検査ができなかったときは、もう一度確認する�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
-  const error = page.getByTestId("sql-chat-requirement-error");
+  const error = page.getByTestId("nl2sql-guided-clarification-error");
   await expect(error).toContainText("AI要件確認の LLM の呼び出しに失敗しました。");
   await expect(error).toContainText("もう一度確認するか、確認せずに SQL を生成してください。");
   await expect(error.getByRole("button", { name: "もう一度確認" })).toBeVisible();
   await error.getByRole("button", { name: "確認せずに SQL を生成" }).click();
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
   expect(state.requests[0]).toMatchObject({ question: "カテゴリ別売上", chat: true });
+  expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
+});
+
+test("要件の検査の失敗は、理由と「詳細」（種類・HTTP ステータス・モデル・所要時間・request ID）を出す (#1715)", async ({ page }) => {
+  await setup(page, {
+    createFailure: {
+      status: 503,
+      error: "",
+      body: {
+        data: null,
+        error_messages: [
+          "AI要件確認の LLM（openai.gpt-oss-120b）の応答が、出力の上限（8000 token）に達して途中で終わりました。",
+        ],
+        error_code: "REQUIREMENT_AI_FAILED",
+        problem: {
+          type: "urn:nl2sql:problem:REQUIREMENT_AI_FAILED",
+          title: "Service Unavailable",
+          status: 503,
+          detail: "AI要件確認の LLM の応答が途中で終わりました。",
+          code: "REQUIREMENT_AI_FAILED",
+          request_id: "req-chat-1",
+          retryable: true,
+          field_errors: [],
+        },
+        error_details: {
+          kind: "incomplete",
+          kind_label_ja: "応答が途中で終わった",
+          model_id: "openai.gpt-oss-120b",
+          elapsed_ms: 35600,
+          max_output_tokens: 8000,
+          upstream_request_id: "resp_incomplete_1",
+          provider_message: "status=incomplete, reason=max_output_tokens",
+        },
+      },
+    },
+  });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("最近入社した社員");
+  await composer.press("Enter");
+  const error = page.getByTestId("nl2sql-guided-clarification-error");
+  await expect(error).toContainText("出力の上限（8000 token）に達して途中で終わりました。");
+  await expect(error).toContainText("もう一度確認するか、確認せずに SQL を生成してください。");
+  await expect(error).toContainText("応答が途中で終わった");
+  await expect(error).toContainText("openai.gpt-oss-120b");
+  await expect(error).toContainText("35.6 秒");
+  await expect(error).toContainText("8000 token");
+  await expect(error).toContainText("resp_incomplete_1");
+  await expect(error).toContainText("req-chat-1");
+  await expect(error).toContainText("REQUIREMENT_AI_FAILED");
+  // 要約に code を重ねない（code は「詳細」のエラーコードだけ）。
+  await expect(error).not.toContainText("(REQUIREMENT_AI_FAILED)");
+  await expect(error.getByRole("button", { name: "もう一度確認" })).toBeVisible();
+  await expect(error.getByRole("button", { name: "確認を中止" })).toBeVisible();
+});
+
+test("質問が SQL の文なら、要件の検査（LLM）をせずにそのまま SQL を作る (#1715)", async ({ page }) => {
+  const state = await setup(page, { create: "needs_answer" });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("select * from employee");
+  await composer.press("Enter");
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
+  expect(state.requirement.creates).toHaveLength(0);
+  expect(state.requests[0]).toMatchObject({ question: "select * from employee", chat: true });
   expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
 });
 
@@ -1461,7 +1525,7 @@ test("OCI Enterprise AI が無い環境では、要件の検査を使わずに�
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
-  await expect(page.getByTestId("sql-chat-requirement-error")).toHaveCount(0);
+  await expect(page.getByTestId("nl2sql-guided-clarification-error")).toHaveCount(0);
   expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
 });
 
