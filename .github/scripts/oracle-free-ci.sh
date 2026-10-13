@@ -19,7 +19,9 @@ timeout_seconds="${ORACLE_READY_TIMEOUT_SECONDS:-900}"
 docker_cmd="${DOCKER:-docker}"
 
 deadline=$((SECONDS + timeout_seconds))
-until "${docker_cmd}" logs "${container}" 2>&1 | grep -q "DATABASE IS READY TO USE"; do
+# grep -q は一致した時点で終わり、log を書き出し中の docker logs が SIGPIPE で失敗して、pipefail で
+# 一致しなかった扱いになる（log が長いと起きる）。grep には最後まで読ませる。
+until "${docker_cmd}" logs "${container}" 2>&1 | grep "DATABASE IS READY TO USE" > /dev/null; do
   if [ "$("${docker_cmd}" inspect -f '{{.State.Running}}' "${container}" 2>/dev/null)" != "true" ]; then
     echo "::error::Oracle の container（${container}）が止まりました。"
     "${docker_cmd}" logs "${container}" 2>&1 | tail -n 50
@@ -34,13 +36,27 @@ until "${docker_cmd}" logs "${container}" 2>&1 | grep -q "DATABASE IS READY TO U
 done
 echo "Oracle の起動を確認しました（${SECONDS} 秒）。"
 
-# password は標準入力で渡す（process の引数・log に出さない）。DB_DEVELOPER_ROLE は表・view・sequence・
-# procedure・SQL ドメインなどの作成の権限をまとめた role。
+# password は標準入力で渡す（process の引数に出さない）。sqlplus は失敗した文を置換の後の値で表示するので、
+# CREATE USER は PL/SQL の中で実行し、失敗の文言を差し替えて password を log に出さない（文言は英語。
+# container の NLS では日本語が化ける）。
+# lite の image の FREEPDB1 には USERS の tablespace が無く、既定の SYSTEM は ASSM ではない（SecureFile の LOB を
+# 作れない）ので、USERS を作る。DB_DEVELOPER_ROLE は表・view・sequence・procedure・SQL ドメインなどの作成の
+# 権限をまとめた role。
 "${docker_cmd}" exec -i "${container}" sqlplus -s / as sysdba <<SQL
 WHENEVER SQLERROR EXIT FAILURE
 SET FEEDBACK OFF
+SET VERIFY OFF
 ALTER SESSION SET CONTAINER = FREEPDB1;
-CREATE USER APP IDENTIFIED BY "${ORACLE_CI_PASSWORD}" QUOTA UNLIMITED ON USERS;
+CREATE TABLESPACE USERS DATAFILE '/opt/oracle/oradata/FREE/FREEPDB1/users01.dbf'
+  SIZE 256M AUTOEXTEND ON NEXT 64M;
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE USER APP IDENTIFIED BY "${ORACLE_CI_PASSWORD}"'
+    || ' DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS';
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE_APPLICATION_ERROR(-20001, 'CREATE USER APP failed: ' || SQLERRM);
+END;
+/
 GRANT DB_DEVELOPER_ROLE TO APP;
 GRANT CREATE SESSION TO APP;
 EXIT
