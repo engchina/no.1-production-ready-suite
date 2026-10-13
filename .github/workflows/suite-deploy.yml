@@ -8,7 +8,7 @@ name: Suite / Deploy
 #   - Nginx のログの契約・frontend の起動スクリプト（隔離した Nginx）
 #   - OCI Resource Manager の統合 stack（terraform/stack。fmt・validate・zip・契約の検証。#217）
 #   - 1 台の Compute の配備（platform/deploy。suite-init・自作の CA と IP の証明書・Nginx の site。#1316）と、
-#     起動の待ち方・配備全体の確認（suite-health。#1642）
+#     起動の待ち方・配備全体の確認（suite-health。#1642）・アプリ用の DB ユーザーの作成（suite-db-user。#1668）
 # 実テナンシーへの配備確認は手動で行う。
 
 on:
@@ -101,3 +101,5 @@ jobs:
           bash platform/deploy/tests/suite-health.test.sh
           bash platform/deploy/tests/suite-nginx.test.sh
           bash platform/deploy/tests/suite-ops.test.sh
+          # 配備で ADMIN からアプリ用の DB ユーザーを作る script（python-oracledb は stub。#1668）。
+          bash platform/deploy/tests/suite-db-user.test.sh

@@ -59,10 +59,14 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
 - `adb_deployment_mode` で「新規 Autonomous AI Database の作成」か「既存の Autonomous AI Database を選択」を選びます。
   - 新規: 既定の DB 名は `SUITEADB`、workload は `LH`（Lakehouse。#1558）、ECPU は `2`。
     3製品を載せる場合は、負荷に合わせて ECPU 数とストレージを上げてください。
-  - 既存: ADB の OCID と、全製品の `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` に書く値を入力します。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
+  - 既存: ADB の OCID を選びます。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
     stack は既存 ADB から Wallet を生成するだけで、ネットワーク・アクセス・mTLS・ACL は変更しません。
-    ADMIN 以外のユーザーで接続するときは、下の「[既存の ADB で ADMIN 以外のユーザーを使うとき](#既存の-adb-で-admin-以外のユーザーを使うとき1648)」の権限が要ります。
-- 新規 ADB の場合、全製品が `ADMIN` で接続します。製品のテーブルは `RAG_` / `NL2SQL_` / `AGENT_`、3製品で共有するユーザー・ロール・セッションのテーブルは `PLATFORM_` の接頭辞で分かれているため、同じスキーマでも衝突しません（#212）。
+    アプリ用の DB ユーザーを使う（既定）ときは ADMIN のパスワード（`existing_adb_admin_password`）を、使わないときは
+    全製品の `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` に書く値（`existing_oracle_user` / `existing_oracle_password`）を入力します。
+- **3 製品は既定で、アプリ用の DB ユーザー（ADMIN ではないユーザー。既定の名前は `PRSUITE`）で接続し、システムの表もそのユーザーの schema に作ります**
+  （下の「[アプリ用の DB ユーザー](#アプリ用の-db-ユーザー1668)」。#1668）。新規 / 既存の ADB のどちらでも使えます。
+  使わない（`adb_app_user_enabled=false`）ときは、新規の ADB は `ADMIN`、既存の ADB は `existing_oracle_user` で接続します。
+  製品のテーブルは `RAG_` / `NL2SQL_` / `AGENT_`、3製品で共有するユーザー・ロール・セッションのテーブルは `PLATFORM_` の接頭辞で分かれているため、同じスキーマでも衝突しません（#212）。
 - ネットワーク・アクセス（既定はプライベート・エンドポイント）の画面構成は Autonomous AI Database の作成画面に合わせています。
   ACL（許可された IP および VCN）を使う場合は、Compute の subnet（または VCN）を許可してください。
   プライベート・エンドポイントの場合は、Compute の subnet から ADB へ TCP `1522` で到達できる必要があります。
@@ -70,7 +74,82 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
 - ADB の DDL は Terraform にも cloud-init にも持ちません。各製品の `init_script.sh` がアプリの CLI（冪等）で作成・更新します。
   作成・更新に失敗しても backend は起動します（画面の システムテーブル から直せる）が、配備の最後の確認が `check: <製品> schema NG` で失敗します（[配備が正常かの確認](#配備が正常かの確認1642)）。
 
-### 既存の ADB で ADMIN 以外のユーザーを使うとき（#1648）
+### アプリ用の DB ユーザー（#1668）
+
+ADMIN を常用しないため（アプリの不具合・NL2SQL の管理 SQL の誤りを DB 全体の管理者の権限で実行させない。ADMIN のパスワードを
+`opc` が読む `.env` に置かない）、既定（`adb_app_user_enabled=true`）で 3 製品はアプリ用の DB ユーザーで接続します。
+
+| 入力 | 新規の ADB | 既存の ADB |
+|---|---|---|
+| ADMIN のパスワード | `adb_password`（ADB の作成に使うもの） | `existing_adb_admin_password` |
+| アプリ用のユーザー | `adb_app_user_name`（既定 `PRSUITE`）・`adb_app_user_password` | 同じ |
+
+- **どこで作るか**: ユーザーの作成と grant は、**Compute の上で**行います。cloud-init が ADMIN のパスワードとユーザー名を
+  `/u01/aipoc/props/adb_admin.env`（root の 0600）に置き、`platform/deploy/suite-init.sh` が製品の配備（各製品の system schema の初期化）の前に、
+  Compute から ADMIN で ADB に接続して `platform/deploy/suite-db-user.py` を実行します（Wallet・mTLS は製品と同じ。`uv run --no-project --with oracledb==<版>`）。
+  ADB はプライベート・エンドポイント・ACL で Compute からしか接続できないため、Terraform（provider・`local-exec`）では DB に接続しません
+  （`verify_stack_contract.py` が stack に provisioner が無いことを確かめます）。
+- **冪等**: ユーザーが無ければ `CREATE USER`、あれば profile・quota を合わせます。アプリのパスワードで接続できなければ（`ORA-01017` など）
+  パスワードを合わせて lock を外します。パスワードは `platform/.env`（画面の「システム設定 > データベース」で保存した値）を優先し、無ければ stack の入力です。
+  grant は毎回付け直します。最後にアプリ用のユーザーで接続し、権限が効いていることを確かめます。
+- **失敗したとき**: ORA の番号と手がかりを `/var/log/suite-init.log` に出し（`[suite-db-user] NG（ORA-01017）: …`・`[suite-init] check: db user NG`）、
+  製品を配備せずに失敗します（ユーザーが無いと 3 製品とも接続できないため）。直したら `sudo .../platform/deploy/suite-restart.sh` でやり直します。
+- **ADMIN のパスワードの置き場所**: `platform/.env`・各製品の `backend/.env`・Wallet のパスワード（`PLATFORM_ORACLE_WALLET_PASSWORD` はアプリ用のユーザーのパスワード）には書きません。
+  `/u01/aipoc/props/adb_admin.env`（root の 0600）にだけ置き、配備の再実行（`suite-restart.sh` / `suite-update.sh`）のたびに、新しい版が要る権限を付け直します
+  （使った後に消すと、再配備で権限を足せなくなるため残します）。値は Terraform の state と、Compute の cloud-init の user_data（インスタンスのメタデータ）にも入るため、
+  ほかの secret と同じく機密として扱ってください。不要になったら `sudo rm /u01/aipoc/props/adb_admin.env` で消せます（その後の再配備はユーザーの準備を飛ばします）。
+
+付ける権限（`python3 platform/deploy/suite-db-user.py plan --app-user PRSUITE` で表示できる）:
+
+```sql
+CREATE USER PRSUITE IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;
+GRANT PDB_DBA TO PRSUITE;                       -- Autonomous AI Database の DBA 相当
+GRANT GRANT ANY DATA ROLE TO PRSUITE;           -- Deep Data Security: DATA ROLE を END USER に付ける
+GRANT ADMINISTER ANY DATA GRANT TO PRSUITE;     -- Deep Data Security: Data Grant の作成・削除
+GRANT SET USE DATA GRANTS ONLY TO PRSUITE;      -- Deep Data Security: 表を Data Grant だけで読ませる
+```
+
+- **`DBA` ではなく `PDB_DBA`**: Autonomous AI Database の ADMIN は `DBA` を `WITH ADMIN OPTION` で持たず、他のユーザーに grant できません
+  （[ADMIN User Roles and Privileges](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/autonomous-admin-user-roles.html)）。
+  実 ADB では `GRANT DBA TO <user>` はエラーにならず、`PDB_DBA` と `UNLIMITED TABLESPACE` が付きました。ADMIN は `PDB_DBA` を `WITH ADMIN OPTION` で持ちます。
+- **`PDB_DBA` で足りるもの**（実 ADB でアプリ用のユーザーとして実行して確かめた。#1668）: 表・索引・sequence・view・package・trigger・IDENTITY・SQL ドメイン・annotation、
+  Oracle AI Vector Search（`VECTOR` 列・HNSW の索引・`V$VECTOR_GRAPH_INDEX`）、Oracle Text（`CTX_DDL`・`CTXSYS.CONTEXT` の索引。`CTXAPP`）、
+  Select AI（`DBMS_CLOUD.CREATE_CREDENTIAL`・`DBMS_CLOUD_AI.CREATE_PROFILE` / `DROP_PROFILE`・`DBMS_CLOUD_AI_AGENT`）、`DBMS_LOCK`（無名 block）、
+  合成データの監視（`DBA_LOAD_OPERATIONS`・`V$SESSION`）、別の schema の業務データの参照と `DBMS_METADATA.GET_DDL`、
+  Deep Data Security の role・`CREATE END USER` / `DROP END USER`・`CREATE DATA ROLE`・`CREATE OR REPLACE CONTEXT`・metadata（`DBA_END_USERS` など）の参照。
+  3 製品の system schema の初期化（RAG・NL2SQL・Agent の CLI）も `ready` になりました。
+- **`PDB_DBA` に無く、足すもの**: Deep Data Security の `GRANT DATA ROLE … TO <END USER>`（`GRANT ANY DATA ROLE`）、`SET USE DATA GRANTS ONLY ON <表>`
+  （`SET USE DATA GRANTS ONLY`）、`CREATE DATA GRANT`（`ADMINISTER ANY DATA GRANT`）。無いと `ORA-01031` です。表領域は `PDB_DBA` に `UNLIMITED TABLESPACE` が
+  無いため `QUOTA UNLIMITED ON DATA` にします。
+- **要らないもの**: Select AI の network ACL（`DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE`。provider は OCI Generative AI で、
+  [公式の文書](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/select-ai-manage-profiles.html)が不要と書く）、
+  resource principal（`DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL`。credential は API キーの形だけ）。
+  role 経由の権限は definer-rights の stored PL/SQL では効かない（例: package の中の `DBMS_LOCK` は `PLS-00201`）ため、
+  今後 package の中から `DBMS_*` を呼ぶときは `EXECUTE` を直接 grant する必要があります（今のコードは無名 block から呼ぶので不要）。
+- **profile**: `ORA_APP_PROFILE`（`PASSWORD_LIFE_TIME UNLIMITED`・`FAILED_LOGIN_ATTEMPTS UNLIMITED`）。既定の `DEFAULT` だと 360 日でパスワードが切れて
+  3 製品が接続できなくなり、10 回の失敗で lock されます。`ORA_APP_PROFILE` は `PASSWORD_ROLLOVER_TIME`（90 日）のあいだ古いパスワードでも接続できるため、
+  パスワードを合わせた後は `ALTER USER … EXPIRE PASSWORD ROLLOVER PERIOD` で新しいパスワードだけにします。profile が無い DB では `DEFAULT` のままにし、log に出します。
+- **ADMIN で配備していた環境**: 表は移しません（未リリースのため移行の仕組みは持ちません）。アプリ用のユーザーで配備し直すと、新しい schema に空の表を作ります
+  （ADMIN の schema の `PLATFORM_*` などは残ります。要らなければ ADMIN で消してください）。NL2SQL の Deep Data Security の object のうち、
+  role `NL2SQL_APP_DB_ROLE`・DATA ROLE `NL2SQL_APP_DATA_ROLE`・END USER `DEEPSEC_DATA_USER`・context `NL2SQL_APP_USER_CTX` は DB 全体で 1 つの名前です。
+  ADMIN で Deep Data Security を適用していた ADB では、先に ADMIN の構成で解除（`ADMIN_RESET`）してから、新しいユーザーで適用し直してください。
+
+配備の後の確認（ADMIN で接続して実行）:
+
+```sql
+SELECT USERNAME, ACCOUNT_STATUS, PROFILE, DEFAULT_TABLESPACE FROM DBA_USERS WHERE USERNAME = 'PRSUITE';
+SELECT GRANTED_ROLE FROM DBA_ROLE_PRIVS WHERE GRANTEE = 'PRSUITE';          -- PDB_DBA
+SELECT PRIVILEGE FROM DBA_SYS_PRIVS WHERE GRANTEE = 'PRSUITE' ORDER BY 1;   -- 足した 3 つ
+SELECT TABLESPACE_NAME, MAX_BYTES FROM DBA_TS_QUOTAS WHERE USERNAME = 'PRSUITE';  -- DATA / -1
+SELECT COUNT(*) FROM DBA_TABLES WHERE OWNER = 'PRSUITE' AND TABLE_NAME LIKE 'PLATFORM\_%' ESCAPE '\';
+```
+
+`/var/log/suite-init.log` に `[suite-db-user] OK: PRSUITE で接続でき、権限が付いています（profile ORA_APP_PROFILE、quota UNLIMITED ON DATA）。` と
+`[suite-init] check: db user OK` が出て、最後の `check:` の行で 3 製品の schema が `ready` になります。
+
+### アプリ用の DB ユーザーを使わずに、自分で用意したユーザーで接続するとき（#1648）
+
+`adb_app_user_enabled=false` で、既存の ADB の `existing_oracle_user` に ADMIN 以外のユーザーを指定する場合です。
 
 - **3 製品の専用の DB ユーザー（schema）を作ることを推奨します。** 3 製品は同じ schema に `PLATFORM_` / `RAG_` / `NL2SQL_` / `AGENT_` の表・索引・sequence・package を作ります。
   業務データや別のアプリケーション（旧版の単独の製品を含む）と同じ schema（とくに `ADMIN`）に入れると、同じ名前の表と衝突し、
@@ -78,7 +157,8 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
 - 初期化は、旧名の表（統合の前の `RAG_APP_*` / `NL2SQL_APP_*` など）を改名・削除しません（NL2SQL はその名前を log に出して残します）。
   RAG / Agent の初期化は、台帳（`RAG_SCHEMA_MIGRATIONS` / `AGENT_SCHEMA_MIGRATIONS`）に記録の無い schema に残る廃止した表を、
   承認（`--allow-destructive`、画面では削除の確認）が無ければ削除せずに止めます。
-- 権限（ADMIN で付与します。`<user>` は `PLATFORM_ORACLE_USER`）。CI の実 Oracle の結合テスト（`.github/scripts/oracle-free-ci.sh`）と同じ構成です。
+- 権限は、上の「[アプリ用の DB ユーザー](#アプリ用の-db-ユーザー1668)」の一式（`PDB_DBA` と Deep Data Security の 3 つ、`QUOTA UNLIMITED ON DATA`）を ADMIN で付けるのが
+  確実です。最小にしたいときは、CI の実 Oracle の結合テスト（`.github/scripts/oracle-free-ci.sh`）と同じ次の構成に、使う機能の分を足します。
 
   ```sql
   CREATE USER <user> IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA;
@@ -92,11 +172,12 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   - `DB_DEVELOPER_ROLE` を使わない場合は、`CREATE TABLE`・`CREATE SEQUENCE`・`CREATE VIEW`・`CREATE PROCEDURE` と、RAG の全文検索（Oracle Text の索引・lexer・stoplist）の `CTXAPP`（または `EXECUTE ON CTXSYS.CTX_DDL`）を付与します。
   - 表領域の quota が無いと `ORA-01950`、権限が無いと `ORA-01031`（Oracle Text は `PLS-00201`）で初期化が失敗し、配備の最後の確認が NG になります。
   - NL2SQL が SQL を生成・実行する業務データが別の schema にあるときは、その表・view の `SELECT` を付与します。
-  - NL2SQL の機能ごとに使うとき: フィードバックのベクトルの再構築は `EXECUTE ON DBMS_LOCK`、Select AI は `EXECUTE ON DBMS_CLOUD_AI` と `EXECUTE ON DBMS_CLOUD`、
-    合成データの生成は `SELECT ON SYS.DBA_LOAD_OPERATIONS` と `SELECT ON SYS.V_$SESSION`。
-  - NL2SQL の Deep Data Security（`NL2SQL_ORACLE_DEEPSEC_ENABLED=true`）: `CREATE ROLE`・`CREATE END USER`・`ALTER END USER`・`CREATE DATA ROLE`・
-    `GRANT ANY ROLE`・`CREATE CONTEXT`・`CREATE PROCEDURE` と、DeepSec の metadata（`DBA_END_USERS`・`DBA_DATA_ROLES`・`DBA_ROLES`・`DBA_CONTEXT`・
-    `DBA_DATA_GRANTS`・`DBA_TAB_PRIVS`・`DBA_POLICIES`）の参照。詳しくは [nl2sql/docs/security-rbac-deepsec.md](../nl2sql/docs/security-rbac-deepsec.md)「DeepSec V001 の前提」。
+  - NL2SQL の機能ごとに使うとき: フィードバックのベクトルの再構築は `EXECUTE ON DBMS_LOCK`、Select AI は `EXECUTE ON DBMS_CLOUD_AI`・`EXECUTE ON DBMS_CLOUD`
+    （Select AI Agent は `EXECUTE ON DBMS_CLOUD_AI_AGENT`）、合成データの生成は `SELECT ON SYS.DBA_LOAD_OPERATIONS` と `SELECT ON SYS.V_$SESSION`。
+  - NL2SQL の Deep Data Security（`NL2SQL_ORACLE_DEEPSEC_ENABLED=true`）: `CREATE ROLE`・`GRANT ANY ROLE`・`GRANT ANY OBJECT PRIVILEGE`・`CREATE END USER`・
+    `ALTER END USER`・`DROP END USER`・`CREATE DATA ROLE`・`DROP DATA ROLE`・`CREATE ANY CONTEXT`・`DROP ANY CONTEXT`・`CREATE PROCEDURE`・
+    `GRANT ANY DATA ROLE`・`ADMINISTER ANY DATA GRANT`・`SET USE DATA GRANTS ONLY` と、DeepSec の metadata（`DBA_END_USERS`・`DBA_DATA_ROLES`・`DBA_ROLES`・`DBA_CONTEXT`・
+    `DBA_DATA_GRANTS`・`DBA_TAB_PRIVS`・`DBA_POLICIES`。`SELECT_CATALOG_ROLE`）の参照。詳しくは [nl2sql/docs/security-rbac-deepsec.md](../nl2sql/docs/security-rbac-deepsec.md)「DeepSec V001 の前提」。
 
 ## 製品ごとの入力と instance 上の構成
 

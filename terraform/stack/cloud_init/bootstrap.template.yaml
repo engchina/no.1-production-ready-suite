@@ -31,6 +31,15 @@ write_files:
     encoding: "gzip+base64"
     content: |
       ${platform_env}
+%{ if adb_admin_env != "" ~}
+  # アプリ用の DB ユーザー（#1668）: ADMIN のパスワードとアプリ用のユーザーの名前。root だけが読める。
+  - path: "/u01/aipoc/props/adb_admin.env"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "gzip+base64"
+    content: |
+      ${adb_admin_env}
+%{ endif ~}
   - path: "/u01/aipoc/props/wallet.zip"
     permissions: "0600"
     owner: "root:root"
