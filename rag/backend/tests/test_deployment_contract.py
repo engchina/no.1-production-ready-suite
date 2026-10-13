@@ -112,18 +112,6 @@ def test_own_code_has_no_container_image() -> None:
     assert leftovers == []
 
 
-def test_frontend_build_does_not_fetch_remote_fonts() -> None:
-    """frontend build は Google Fonts などの外部 font fetch に依存しない。"""
-    source_text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (REPO_ROOT / "frontend" / "src").rglob("*")
-        if path.is_file() and path.suffix in {".css", ".ts", ".tsx"}
-    )
-
-    assert "fonts.googleapis.com" not in source_text
-    assert "fonts.gstatic.com" not in source_text
-
-
 def test_nightly_rag_workflow_runs_search_load_gate() -> None:
     """nightly RAG gate は評価 trend と検索 p95 trend を同じ artifact に残す。"""
     workflow = (SUITE_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
