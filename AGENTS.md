@@ -58,6 +58,7 @@
 - backend の pytest は CI で並列（`-n auto`）に実行する。**テストは並列でも直列でも通るように書く**（`tmp_path`・`parametrize` の `ids=`・差し替えられる待ち・`xdist_group`。[backend-standard.md](./platform/docs/backend-standard.md)「テストの並列実行」）。
 - `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ、`bandit` は毎回。`npm audit` は PR では実行しない。全件は `dependency-audit-nightly.yml` が毎晩（pip-audit と、4 つの `package-lock.json` の `npm audit --omit=dev --audit-level=high`）。
 - **依存の manifest / lock（`package.json`・`package-lock.json`・`uv.lock`・`pyproject.toml`）か workflow・composite action を変えた PR は、`Dependency review` が追加・更新した依存の脆弱性（high 以上で失敗）と license を確かめる**（#1588）。
+- CodeQL（python・javascript-typescript・actions）は `codeql.yml` が毎週の schedule と手動だけで実行する（PR では実行しない。#1594）。
 - **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。job の時間切れ（cancelled）も Issue になる（#1586）。
 - runner は `runs-on: ubuntu-24.04`（本番の Compute の Ubuntu と同じ版。`ubuntu-latest` は使わない。#1587）。版を上げるときは本番の image と同じ PR でそろえる。
 - main の push の CI は commit ごとに実行し、続けて merge しても前の run を取り消さない（PR だけ古い run を取り消す。#1585）。main の CI（push・毎日の schedule・手動）は、main で最後に成功した CI の commit からの変更で job を選ぶ。Dependabot の自動 merge（`GITHUB_TOKEN`）は push の CI を起動しないので、毎日の schedule で確かめる（#1609）。

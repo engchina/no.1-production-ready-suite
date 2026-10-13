@@ -17,6 +17,7 @@ on:
       - E2E Nightly
       - RAG Evaluation Nightly
       - Dependency Audit Nightly
+      - CodeQL
     types:
       - completed
   workflow_dispatch:
