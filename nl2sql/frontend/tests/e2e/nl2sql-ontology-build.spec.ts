@@ -5,6 +5,7 @@ import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
+import { pollWithClock } from "./_helpers/clock";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -1906,6 +1907,8 @@ test("Markdown オントロジーの読込はキャンセル操作を表示せ�
 });
 
 test("Profile の読込失敗から再試行できる", async ({ page }) => {
+  // 失敗の表示までの TanStack Query の再試行（3 回）を page.clock で進める（#1593）。
+  await page.clock.install();
   await mockApi(page);
   let allowProfiles = false;
   await page.unroute("**/api/nl2sql/profiles/search?*");
@@ -1940,9 +1943,7 @@ test("Profile の読込失敗から再試行できる", async ({ page }) => {
   });
   await page.goto("/ontology-build?profile=default");
   const profilePanel = page.getByRole("region", { name: "対象プロファイル" });
-  await expect(profilePanel.getByText("プロファイルの読込に失敗しました。")).toBeVisible({
-    timeout: 20000,
-  });
+  await pollWithClock(page, () => profilePanel.getByText("プロファイルの読込に失敗しました。").count(), 2_000).toBe(1);
   allowProfiles = true;
   await profilePanel.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
@@ -2220,6 +2221,8 @@ test("job 取得が 404 のときポーリングを停止しエラー表示で�
 });
 
 test("job 取得が連続失敗しても長時間猶予内は監視を継続する", async ({ page }) => {
+  // 1 秒ごとのポーリングを page.clock で進め、実時間で 10 秒待たない（#1593）。
+  await page.clock.install();
   await mockApi(page);
   let polls = 0;
   await page.route("**/api/nl2sql/ontology-build/*", async (route) => {
@@ -2238,7 +2241,7 @@ test("job 取得が連続失敗しても長時間猶予内は監視を継続す�
   await expect(
     section.getByText("構築状況の取得に連続して失敗した", { exact: false })
   ).toHaveCount(0);
-  await expect.poll(() => polls, { timeout: 12000 }).toBeGreaterThanOrEqual(8);
+  await pollWithClock(page, async () => polls, 1_000).toBeGreaterThanOrEqual(8);
   const building = section.getByRole("button", { name: "AI 構築を実行" });
   await expect(building).toBeDisabled();
   // job の間は、開始のボタンは loading にしない。スピナーは進行状況の帯の 1 つだけ（#416）。
@@ -2246,8 +2249,8 @@ test("job 取得が連続失敗しても長時間猶予内は監視を継続す�
   await expect(page.getByTestId("ontology-build-steps")).toBeVisible();
   await expectSingleSpinner(page, page.getByTestId("ontology-build-steps"));
   const before = polls;
-  await page.waitForTimeout(2500);
-  expect(polls).toBeGreaterThan(before);
+  await page.clock.runFor(2_500);
+  await expect.poll(() => polls).toBeGreaterThan(before);
 });
 
 test("プロファイルが無いときは案内を表示し AI 構築は出さない", async ({ page }) => {
@@ -3674,6 +3677,8 @@ test("取得済みの業務プロファイルの再取得が失敗しても、�
 });
 
 test("業務プロファイルの追加読み込みが失敗しても、選択欄を残して追加読み込みだけを再試行できる", async ({ page }) => {
+  // 失敗の表示までの TanStack Query の再試行（3 回）を page.clock で進める（#1593）。
+  await page.clock.install();
   await mockApi(page);
   const secondPageProfile = { ...profiles[0], id: "sales", name: "SALES_PROFILE", category: "販売" };
   let failNextPage = true;
@@ -3720,7 +3725,7 @@ test("業務プロファイルの追加読み込みが失敗しても、選択�
   await profilePanel.getByRole("button", { name: "さらに読み込む", exact: true }).click();
 
   // 追加読み込みの失敗は、読み込み済みの選択欄を残し、追加読み込みの位置に出す。
-  await expect(profilePanel.getByText("一時的な接続エラー", { exact: false })).toBeVisible();
+  await pollWithClock(page, () => profilePanel.getByText("一時的な接続エラー", { exact: false }).count(), 2_000).toBe(1);
   await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
   await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
 

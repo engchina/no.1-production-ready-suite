@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
+import { pollWithClock } from "./_helpers/clock";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "./_helpers/test";
 import { closeSidebarNav, openSidebarNav } from "./_helpers/sidebar-nav";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
@@ -4721,7 +4722,8 @@ test("「実行を中止」の要求の失敗は中止のボタンの行に出�
 });
 
 test("job ポーリングの通信断が続くと追跡を停止しエラー表示と UI ロック解除を行う", async ({ page }) => {
-  test.slow();
+  // 2.5 秒ごとの状態確認を page.clock で進め、実時間で待たない（#1593）。
+  await page.clock.install();
   await mockNl2SqlApi(page);
   // 作成は成功するが、以後の状態確認がネットワーク断で失敗し続けるケース。
   await page.route("**/api/nl2sql/jobs/job-default-001", (route) => route.abort("failed"));
@@ -4734,9 +4736,8 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
 
   // 2.5s 間隔 × 連続 3 回失敗(即時 tick 含む)で追跡を断念する。
   const actionError = page.getByTestId("nl2sql-action-feedback-error");
-  await expect(actionError).toContainText("ジョブの状態確認に連続して失敗したため", {
-    timeout: 15_000,
-  });
+  await pollWithClock(page, async () => (await actionError.count()) ? actionError.textContent() : "", 2_500)
+    .toContain("ジョブの状態確認に連続して失敗したため");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(runButton).toBeEnabled();
   await expect(resetButton).toBeEnabled();
@@ -12311,6 +12312,8 @@ for (const uuidAvailable of [false, true]) {
 }
 
 test("synthetic waiting uses shared live timing beside the action and freezes duration", async ({ page }, testInfo) => {
+  // 経過時間（1 秒）と実行中の run の定期取得（2 秒）は page.clock で進める（#1593）。
+  await page.clock.install();
   await mockNl2SqlApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   const gate = createRequestGate();
@@ -12341,7 +12344,7 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   // 共有 Spinner(svg.animate-spin)。旧 data-loading-icon 属性は移行で廃止。
   await expect(workspace.locator("svg.animate-spin")).toHaveCount(1);
   const firstSubmissionTime = await submitting.getByRole("timer").textContent();
-  await expect.poll(() => submitting.getByRole("timer").textContent()).not.toBe(firstSubmissionTime);
+  await pollWithClock(page, () => submitting.getByRole("timer").textContent(), 1_000).not.toBe(firstSubmissionTime);
   gate.release();
   const processing = page.getByTestId("synthetic-run-processing");
   const timer = processing.getByRole("timer");
@@ -12361,12 +12364,13 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   };
   const pendingElapsed = await elapsedSeconds();
   expect(pendingElapsed).toBeGreaterThanOrEqual(65);
-  await expect.poll(elapsedSeconds).toBeGreaterThan(pendingElapsed);
+  await pollWithClock(page, elapsedSeconds, 1_000).toBeGreaterThan(pendingElapsed);
   await expect(processing).toContainText("通常より時間がかかっています");
   const createdAt = run!.created_at;
   run = { ...run!, status: "running", started_at: new Date().toISOString() };
   // Polling updates the phase; no manual refresh or repeated generation is needed.
-  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  const runStatus = () => panel.getByTestId("synthetic-run-status").textContent();
+  await pollWithClock(page, runStatus, 2_000).toBe("生成中");
   await expect(processing).toContainText("Oracle でデータを生成しています。");
   expect(await elapsedSeconds()).toBeGreaterThanOrEqual(pendingElapsed);
   await page.reload();
@@ -12374,16 +12378,15 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   expect(await elapsedSeconds()).toBeGreaterThanOrEqual(pendingElapsed);
   await expect(generate).toBeDisabled();
   run = { ...run!, status: "verifying" };
-  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("結果を確認中");
+  await pollWithClock(page, runStatus, 2_000).toBe("結果を確認中");
   await expect(processing).toContainText("追加されたデータの件数と生成結果を確認しています。");
   await panel.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("synthetic-waiting.png"), fullPage: false });
   await expectNoHorizontalScroll(page);
   run = { ...syntheticRunFixture("completed"), created_at: createdAt, finished_at: new Date(Date.parse(createdAt) + 80_000).toISOString() };
-  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await pollWithClock(page, runStatus, 2_000).toBe("合成データの生成が完了しました");
   await expect(timer).toHaveAccessibleName("処理時間 01:20");
   await expect(processing.locator("svg.animate-spin")).toHaveCount(0);
-  await page.clock.install();
   await page.clock.fastForward(5_000);
   await expect(timer).toHaveAccessibleName("処理時間 01:20");
   await expect(panel.getByRole("button", { name: "結果データを確認" })).toHaveCount(0);
@@ -12584,6 +12587,8 @@ test("synthetic completion uses a top toast without a result action or another g
 
 for (const status of ["completed", "partial", "failed", "no_data"]) {
   test(`synthetic ${status} toast dismisses and does not replay on polling or reload`, async ({ page }) => {
+    // 実行中の run の定期取得（2 秒）・通知の自動の消去（4 秒）・staleTime（1 秒）を runFor で進め、実時間で待たない（#1593）。
+    await page.clock.install();
     await mockNl2SqlApi(page);
     let current = "running";
     let reads = 0;
@@ -12592,15 +12597,16 @@ for (const status of ["completed", "partial", "failed", "no_data"]) {
       return fulfillJson(route, [syntheticRunFixture(current)]);
     });
     await page.goto("/admin-sql");
-    await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+    await pollWithClock(page, async () => reads, 2_000).toBeGreaterThanOrEqual(2);
     current = status;
     const notifications = page.getByRole("region", { name: "通知", exact: true });
-    await expect(notifications.getByRole("status")).toHaveCount(1);
+    await pollWithClock(page, () => notifications.getByRole("status").count(), 2_000).toBe(1);
     await expect(notifications).toContainText("APP.INVOICES");
     await expect(notifications.getByRole("button", { name: "結果を確認" })).toHaveCount(0);
     await expect(notifications.getByRole("button")).toHaveCount(1);
     if (status === "completed") {
-      await expect(notifications.getByRole("status")).toHaveCount(0, { timeout: 6_000 });
+      await page.clock.runFor(4_100);
+      await expect(notifications.getByRole("status")).toHaveCount(0);
     } else {
       const dismiss = notifications.getByRole("button", { name: "閉じる", exact: true });
       await dismiss.focus();
@@ -12614,6 +12620,7 @@ for (const status of ["completed", "partial", "failed", "no_data"]) {
     // TanStack Query の focusManager は window で visibilitychange を購読する。
     await expect
       .poll(async () => {
+        await page.clock.runFor(1_100);
         await page.evaluate(() => {
           window.dispatchEvent(new Event("visibilitychange"));
         });
