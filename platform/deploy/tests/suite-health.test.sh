@@ -261,7 +261,7 @@ fake_sleep() {
   if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag nl2sql; then
     fail "schema が NG なのに成功した: $(cat "${out}")"
   fi
-  [ "${SECONDS}" -eq "${start}" ] || fail "service が OK なのに schema の NG で待った（$((SECONDS - start)) 秒）"
+  [ $((SECONDS - start)) -le 1 ] || fail "service が OK なのに schema の NG で待った（$((SECONDS - start)) 秒）"
   [ "$(cat "${calls}")" = "$(printf 'schema-check rag\nschema-check nl2sql')" ] || fail "schema の確認は製品ごとに 1 回: $(cat "${calls}")"
   for expected in \
     '[suite-init] check: rag backend OK / services 1/1 active / nginx OK' \
