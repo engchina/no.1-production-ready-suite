@@ -538,7 +538,11 @@ for (const [label, grants, showsAccess] of [
             category: "",
             description: "",
             archived: false,
-            allowed_role_ids: ["ROLE_A"],
+            // ロールはコードを添えて返る。画面は ID（UUID）を出さない（#1682）。
+            allowed_roles: [
+              { role_id: "00000000-0000-0000-0000-000000000001", role_code: "SYSTEM_ADMIN" },
+              { role_id: "6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5", role_code: "ROLE_A" },
+            ],
           },
         ],
         total: 1,
@@ -555,7 +559,11 @@ for (const [label, grants, showsAccess] of [
     await expect(page).not.toHaveURL(/\/forbidden$/u);
     if (showsAccess) {
       await expect(page.getByText("利用可能ロール", { exact: true })).toBeVisible();
-      await expect(page.getByText("ROLE_A", { exact: true })).toBeVisible();
+      const accessRoles = page.getByRole("list", { name: "利用可能ロール" });
+      await expect(accessRoles.getByRole("listitem")).toHaveText(["SYSTEM_ADMIN", "ROLE_A"]);
+      // ロールの ID（UUID）は文字にも属性にも出さない（#1682）。
+      await expect(page.locator("main")).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/u);
+      expect(await page.locator("main").innerHTML()).not.toContain("00000000-0000-0000-0000-000000000001");
       expect(accessRequests).toBeGreaterThan(0);
     } else {
       // ロール管理だけの利用者は API が 403 になるため取りに行かない（403 は画面全体を権限エラーへ切り替える）。

@@ -51,6 +51,7 @@ import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
+import { deletedRoleLabel } from "./RoleCodeBadges";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
@@ -131,9 +132,10 @@ function compareText(left: string, right: string, direction: DataTableSort["dire
 }
 
 function assignedRoleLabel(role: AssignedRole) {
-  return role.archived
-    ? t("security.users.archivedRoleLabel", { role: role.display_name })
-    : role.display_name;
+  // 参照できない（削除済みの）ロールは ID（UUID）を出さない（#1682）。
+  if (role.deleted || (!role.role_code.trim() && !role.display_name.trim())) return deletedRoleLabel();
+  const name = role.display_name.trim() || role.role_code;
+  return role.archived ? t("security.users.archivedRoleLabel", { role: name }) : name;
 }
 
 function userStatusLabel(user: SecurityUser) {
@@ -231,11 +233,13 @@ export function UserManagementPage({
             archived: role.archived,
           }
         : {
+            // 一覧に無いロール。ID を名前の欄に入れない（#1682）。
             role_id: id,
-            role_code: id,
-            display_name: id,
+            role_code: "",
+            display_name: "",
             is_built_in: false,
             archived: true,
+            deleted: true,
           };
     });
   }, [roleById]);
@@ -1202,11 +1206,7 @@ function UserDetailPanel({
                 icon={false}
                 key={role.role_id}
                 variant={role.archived ? "neutral" : "info"}
-                label={
-                  role.archived
-                    ? t("security.users.archivedRoleLabel", { role: role.display_name })
-                    : role.display_name
-                }
+                label={assignedRoleLabel(role)}
               />
             ))}
           </div>

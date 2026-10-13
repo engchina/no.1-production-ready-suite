@@ -244,6 +244,14 @@ export {
   type RolePermissionSummary,
 } from "./users-roles/RoleManagementPage";
 export { USERS_ROLES_MESSAGES, type UsersRolesMessageKey } from "./users-roles/messages";
+// ロールの表示（ロールコード。ID は出さない。#1682）
+export {
+  RoleCodeBadges,
+  deletedRoleLabel,
+  roleCodeLabel,
+  type RoleCodeBadgesProps,
+  type RoleCodeReference,
+} from "./users-roles/RoleCodeBadges";
 export {
   SecurityDetailField,
   SecurityEmptySelection,

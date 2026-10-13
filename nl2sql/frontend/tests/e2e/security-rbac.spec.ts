@@ -2740,6 +2740,38 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expectNoPageHorizontalScroll(page);
 });
 
+test("ユーザー管理は削除済みの割り当てロールを ID（UUID）ではなく「（削除済みのロール）」と表示する（#1682）", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const deletedRoleId = "6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5";
+  await page.route("**/api/security/roles?include_archived=false", (route) => fulfill(route, [systemRole]));
+  await page.route("**/api/security/users", (route) =>
+    fulfill(route, [
+      {
+        user_uuid: "deleted-role-user",
+        login_user_id: "deleted.role.user",
+        display_name: "削除済みロール利用者",
+        status: "ACTIVE",
+        force_password_change: false,
+        locked_until: null,
+        version: 1,
+        role_ids: [deletedRoleId],
+        // backend の AssignedRoleData.unresolved() の形（コード・表示名は空、deleted）。
+        assigned_roles: [
+          { role_id: deletedRoleId, role_code: "", display_name: "", is_built_in: false, archived: true, deleted: true },
+        ],
+        is_bootstrap_admin: false,
+      },
+    ])
+  );
+
+  await page.goto("/settings/security/users");
+
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByText("（削除済みのロール）", { exact: true })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText(deletedRoleId);
+  expect(await page.locator("main").innerHTML()).not.toContain(deletedRoleId);
+});
+
 test("ユーザー管理はアーカイブ済み割り当てロールを無効として表示し、新規選択肢には出さない", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const viewerRole = {
@@ -3131,7 +3163,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         category: "共通",
         description: "標準の業務プロファイル",
         archived: false,
-        allowed_role_ids: ["role-query-default"],
+        allowed_roles: [{ role_id: "role-query-default", role_code: "QUERY_DEFAULT" }],
       },
       {
         id: "finance",
@@ -3139,7 +3171,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         category: "会計",
         description: "財務部門向け",
         archived: false,
-        allowed_role_ids: [],
+        allowed_roles: [],
       },
       ...Array.from({ length: 18 }, (_, index) => ({
         id: `verification-${String(index + 1).padStart(2, "0")}`,
@@ -3147,7 +3179,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         category: "検証",
         description: "スクロール領域の表示確認用プロファイル",
         archived: false,
-        allowed_role_ids: [],
+        allowed_roles: [],
       })),
     ]))
   );
@@ -3321,7 +3353,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
         category: "共通",
         description: "標準の業務プロファイル",
         archived: false,
-        allowed_role_ids: ["role-profile-manager"],
+        allowed_roles: [{ role_id: "role-profile-manager", role_code: "PROFILE_MANAGER" }],
       },
       {
         id: "finance",
@@ -3329,7 +3361,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
         category: "会計",
         description: "財務部門向け",
         archived: false,
-        allowed_role_ids: ["role-profile-manager"],
+        allowed_roles: [{ role_id: "role-profile-manager", role_code: "PROFILE_MANAGER" }],
       },
     ]))
   );
@@ -3590,7 +3622,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
         category: "共通",
         description: "標準の業務プロファイル",
         archived: false,
-        allowed_role_ids: ["role-archived-data"],
+        allowed_roles: [{ role_id: "role-archived-data", role_code: "DATA_ADMIN" }],
       },
       {
         id: "finance",
@@ -3598,7 +3630,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
         category: "会計",
         description: "財務部門向け",
         archived: false,
-        allowed_role_ids: [],
+        allowed_roles: [],
       },
     ]))
   );

@@ -6003,6 +6003,49 @@ def test_profile_access_profiles_search_and_page_on_server(
     assert ids_of(ids=["p4", "p2", "missing"])[0] == ["p2", "p4"]
 
 
+def test_profile_access_profiles_return_role_codes_not_only_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """業務プロファイルを使えるロールは、ロールコードも返す（画面に UUID を出さない。#1682）。"""
+    from app.features.nl2sql import service as nl2sql_service_module
+    from app.security import router as security_router_module
+
+    feature_service = Nl2SqlService(store=MemoryNl2SqlStore())
+    for profile_id in ("p1", "p2"):
+        feature_service.create_profile(
+            Nl2SqlProfile(
+                id=profile_id, name=f"ロール表示 {profile_id}", category="", description=""
+            )
+        )
+    security = _service()
+    actor, _, _ = _login(security)
+    role = security.create_role(
+        role_code="PROFILE_P1_USER",
+        display_name="P1 の利用者",
+        description="",
+        allowed_profile_ids={"p1"},
+        actor=actor,
+    )
+    monkeypatch.setattr(nl2sql_service_module, "nl2sql_service", feature_service)
+    monkeypatch.setattr(security_router_module, "get_security_service", lambda: security)
+
+    page = security_router_module.list_profile_access_profiles(
+        OffsetParams(limit=50, offset=0), include_archived=False, q="", ids=["p1", "p2"]
+    ).data
+    assert page is not None
+    allowed = {item.id: item.allowed_roles for item in page.items}
+    p1_codes = [item.role_code for item in allowed["p1"]]
+    p2_codes = [item.role_code for item in allowed["p2"]]
+    # 構成の system admin はすべての業務プロファイルを使え、コード（SYSTEM_ADMIN）で返る。
+    assert SYSTEM_ADMIN_ROLE_CODE in p1_codes and SYSTEM_ADMIN_ROLE_CODE in p2_codes
+    assert "PROFILE_P1_USER" in p1_codes and "PROFILE_P1_USER" not in p2_codes
+    assert p1_codes == sorted(p1_codes)
+    assert {item.role_id for item in allowed["p1"]} >= {role.role_id}
+    for roles in allowed.values():
+        for item in roles:
+            assert item.role_code and item.role_code != item.role_id
+
+
 @pytest.mark.parametrize(
     "menu", ["menu.comment_management", "menu.annotation_management", "menu.domain_management"]
 )

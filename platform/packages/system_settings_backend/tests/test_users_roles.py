@@ -80,9 +80,13 @@ def test_role_code_errors_match_the_screen(role_code: str, message: str) -> None
     assert "permissions" not in RoleUpdateRequest.model_fields
 
 
-def test_unresolved_assigned_role_is_archived() -> None:
-    role = AssignedRoleData.unresolved("gone")
-    assert (role.role_code, role.display_name, role.archived) == ("gone", "gone", True)
+def test_unresolved_assigned_role_is_archived_without_exposing_its_id() -> None:
+    """参照できないロールは削除済みとして返し、コード・表示名に ID を入れない（#1682）。"""
+    role_id = "00000000-0000-0000-0000-00000000dead"
+    role = AssignedRoleData.unresolved(role_id)
+    assert (role.role_code, role.display_name, role.archived, role.deleted) == ("", "", True, True)
+    assert role.role_id == role_id
+    assert role_id not in (role.role_code, role.display_name)
 
 
 def test_password_policy_reports_every_violation() -> None:
