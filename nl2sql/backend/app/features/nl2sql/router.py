@@ -1550,8 +1550,11 @@ def run_select_ai_agent_tool(
 def create_select_ai_agent_conversation(
     req: AgentConversationCreateRequest,
 ) -> ApiResponse[AgentConversationCreateData]:
-    """Oracle Select AI Agent conversation を作成する。"""
-    return ApiResponse(data=nl2sql_service.create_select_ai_agent_conversation(req))
+    """Oracle Select AI Agent conversation を作成する（DBMS_CLOUD_AI.CREATE_CONVERSATION）。"""
+    try:
+        return ApiResponse(data=nl2sql_service.create_select_ai_agent_conversation(req))
+    except OracleAdapterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/select-ai-agent/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])
