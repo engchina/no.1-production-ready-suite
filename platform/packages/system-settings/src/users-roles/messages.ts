@@ -102,8 +102,10 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.column.user": "ユーザー",
   "security.users.createActions": "ユーザー作成操作",
   "security.users.delete": "削除",
+  // 削除済み・取得できない利用者。UUID は出さない（#1696）。
+  "security.users.deletedUser": "（削除済みのユーザー）",
   "security.users.deleteConfirm":
-    "「{id}」（表示名: {name}）を完全に削除します。ユーザー本体、割り当てロール、既存セッションは削除され、元に戻せません。",
+    "「{name}」を完全に削除します。ユーザー本体、割り当てロール、既存セッションは削除され、元に戻せません。",
   "security.users.deleteError":
     "ユーザーを削除できませんでした。無効状態、保護対象、最新バージョンを確認して再試行してください。",
   "security.users.deleteSuccess": "{name} を完全に削除しました。",

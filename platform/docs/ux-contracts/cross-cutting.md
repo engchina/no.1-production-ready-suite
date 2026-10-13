@@ -27,6 +27,10 @@
 - 画面のロールは**ロール名（表示名。例「システム管理者」）**で出す。表示名が空ならロールコード。ロールの ID（UUID の `role_id`）とロールコードは、バッジ・チップ・表の列・選択肢・見出し・確認ダイアログ・`aria-label`・tooltip に出さない。ロールコードは、ロール管理と権限管理の編集の「ロールコード」の項目（属性）にだけ出す。
 - 参照できない（削除済みの）ロールは、ID を出さずに「（削除済みのロール）」と出す。文字列は `@production-ready/system-settings` の `roleDisplayName`、バッジは `RoleNameBadges`、一覧の行は `RoleNameRowTitleButton` を使い、製品で書かない。backend はロールの ID だけを返さず、表示名を添える。
 
+## ユーザーの表示（#1696）
+
+- **サイドナビのアカウント欄の 1 行目だけはログイン ID（例 `system_admin`。2 行目はロール名）、それ以外のすべての画面はユーザーの表示名**（例「システム管理者」）で出す（実行履歴の実行者・承認の判断者・版の公開者・作成者 / 更新者・ユーザーの選択欄・ユーザー管理の一覧と見出し・確認ダイアログ・`aria-label`）。表示名が空ならログイン ID。UUID とログイン ID は出さない（ログイン ID はユーザー管理の「ログインユーザーID」の項目にだけ出す）。引けない利用者（削除済みなど）は「（削除済みのユーザー）」。文字列は `@production-ready/system-settings` の `userDisplayName` / `deletedUserLabel` を使い、backend はログイン ID・UUID だけを返さず表示名を添える。
+
 ## ページ遷移・未保存変更
 
 [workspace-state.md](./workspace-state.md) を参照。

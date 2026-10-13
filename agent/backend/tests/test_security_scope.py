@@ -30,12 +30,15 @@ from starlette.websockets import WebSocketDisconnect
 from app.features.agent import builtin_runtime
 from app.features.agent.runtime import (
     AgentProfile,
+    ApprovalDecisionRequest,
     RunCreateRequest,
     RunState,
     runtime_repository,
 )
 from app.features.agent.tools import ToolCall
+from app.features.agent.user_names import login_display_names, user_display_names
 from app.main import app
+from app.security.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 from app.security.service import set_security_service
 
 AGENT_A = "agent-scope-a-215"
@@ -480,3 +483,56 @@ def test_trace_events_are_scoped_for_restricted_principal(
         ]["events"]
     }
     assert scope_data.run_b.id in all_ids
+
+
+def test_approval_decider_and_version_publisher_are_shown_by_display_name(
+    auth: ProductionAuth, scope_data: ScopeData
+) -> None:
+    """判断者・公開者はログイン ID で保存し、一覧の応答は表示名を添える（#1696）。
+
+    構成のシステム管理者は「システム管理者」、引けない利用者と記号（`system`）は対応表に入れない
+    （画面は UUID・ログイン ID を出さずに「（削除済みのユーザー）」「システム（自動）」と出す）。
+    """
+    approver = auth.user_with_permissions(
+        "named-approver", ["agent.approvals.decide"], agent_ids=[AGENT_A]
+    )
+    auth.store.users[approver.user_uuid].display_name = "承認 花子"
+    approval_id = scope_data.run_a1.approvals[0].id
+    decided = client.post(
+        f"/api/approvals/{approval_id}/decision",
+        json={"approved": True},
+        headers=login("named-approver"),
+    )
+    assert decided.status_code == 200, decided.text
+    # 削除済みの利用者・自動の処理の判断は表示名を引けない。
+    gone = scope_data.run_a2.approvals[0]
+    runtime_repository.decide_approval(
+        gone.id, ApprovalDecisionRequest(approved=False, decided_by="deleted.user")
+    )
+
+    admin = login_configured_admin()
+    runs = client.get("/api/runs", headers=admin)
+    assert runs.status_code == 200, runs.text
+    data = runs.json()["data"]
+    approvals = {item["id"]: item for run in data["runs"] for item in run["approvals"]}
+    # 保存するのはログイン ID のまま。
+    assert approvals[approval_id]["decided_by"] == "named-approver"
+    assert data["user_display_names"]["named-approver"] == "承認 花子"
+    assert "deleted.user" not in data["user_display_names"]
+
+    published = client.post(f"/api/agents/{AGENT_A}/publish", json={}, headers=admin)
+    assert published.status_code == 200, published.text
+    assert published.json()["data"]["versions"][-1]["published_by"] == "system_admin"
+    agents = client.get("/api/agents", headers=admin).json()["data"]
+    assert agents["user_display_names"] == {"system_admin": "システム管理者"}
+
+    # API キーの利用者（UUID で記録）も、構成のシステム管理者を表示名で引ける。
+    names = user_display_names([CONFIGURED_SYSTEM_ADMIN_USER_UUID, approver.user_uuid, "missing"])
+    assert names == {
+        CONFIGURED_SYSTEM_ADMIN_USER_UUID: "システム管理者",
+        approver.user_uuid: "承認 花子",
+    }
+    assert login_display_names(["system_admin", "named-approver", "system", "gone"]) == {
+        "system_admin": "システム管理者",
+        "named-approver": "承認 花子",
+    }

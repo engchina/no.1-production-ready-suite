@@ -262,7 +262,9 @@ test("アカウント欄のパスワード変更とログアウト", async ({ pa
   await page.goto("/settings/appearance");
   // 375px ではナビがドロワー（#367）。開いて文言付きの操作を使う。
   const sidebar = await openSidebarNav(page);
-  await expect(sidebar.getByText("管理 太郎")).toBeVisible();
+  // アカウント欄の 1 行目はログイン ID。表示名はほかの画面で使い、アカウント欄には出さない（#1696）。
+  await expect(sidebar.getByText("admin.user", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("管理 太郎")).toHaveCount(0);
   await sidebar.getByRole("button", { name: "パスワード変更" }).click();
   await expect(page).toHaveURL(/\/password\/change$/);
   await page.getByRole("button", { name: "戻る" }).click();
@@ -316,14 +318,14 @@ async function expectAccountFooterInsideSidebar(page: Page) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`アカウント欄は名前とロールの表示名を 1 行ずつ出し、長い行だけ省略記号で切って title に全文を出す（${theme}。#1644）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`アカウント欄はログイン ID とロールの表示名を 1 行ずつ出し、長い行だけ省略記号で切って title に全文を出す（${theme}。#1644・#1696）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     // 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れておく。
     await page.addInitScript((value) => {
       window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
     }, theme);
-    const user = (displayName: string, roles: [code: string, name: string][]) =>
+    const user = (loginUserId: string, displayName: string, roles: [code: string, name: string][]) =>
       dbUser({
-        login_user_id: "system_admin",
+        login_user_id: loginUserId,
         display_name: displayName,
         role_codes: roles.map(([code]) => code),
         role_display_names: roles.map(([, name]) => name),
@@ -332,8 +334,8 @@ for (const theme of ["light", "dark"] as const) {
         allowed_search_answer_profile_ids: null,
         allowed_knowledge_base_ids: null,
       });
-    // 構成のシステム管理者: 1 行目は名前だけ（ロールを括弧で連結しない）、2 行目はロールの表示名（code ではない）。
-    const auth = await mockAuthApi(page, user("system_admin", [["SYSTEM_ADMIN", "システム管理者"]]));
+    // 構成のシステム管理者: 1 行目はログイン ID（表示名「システム管理者」ではない。#1696）、2 行目はロールの表示名（code ではない）。
+    const auth = await mockAuthApi(page, user("system_admin", "システム管理者", [["SYSTEM_ADMIN", "システム管理者"]]));
 
     await page.goto("/settings/appearance");
     await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(theme === "dark");
@@ -343,6 +345,7 @@ for (const theme of ["light", "dark"] as const) {
     // ロールの code（SYSTEM_ADMIN）は出さない。
     await expect(sidebar.getByText(/SYSTEM_ADMIN/)).toHaveCount(0);
     const short = await measureAccountFooter(page);
+    await page.getByTestId("sidebar-account").screenshot({ path: testInfo.outputPath(`sidebar-account-login-id-${theme}.png`) });
     expect(short.lines).toEqual([
       expect.objectContaining({ text: "system_admin", title: "system_admin", lines: 1, truncated: false, insideSidebar: true }),
       expect.objectContaining({ text: "システム管理者", title: "ロール: システム管理者", lines: 1, truncated: false, insideSidebar: true }),
@@ -355,16 +358,19 @@ for (const theme of ["light", "dark"] as const) {
 
     // 1 行に入らない名前・ロールは折り返さず、各行の末尾を省略記号で切る。全文は title と DOM の文字（読み上げ）に残り、
     // 欄の高さは変わらず、右へはみ出さない。複数のロールは表示名を「、」でつなぐ。
-    const longName = "山田 太郎 ナレッジベース運用責任者 品質評価と監査の担当 第二事業部";
+    // 1 行目はログイン ID。表示名（長い日本語の名前）はアカウント欄に出さない（#1696）。
+    const longDisplayName = "山田 太郎 ナレッジベース運用責任者 品質評価と監査の担当 第二事業部";
+    const longName = "yamada.taro.knowledge-base-operations-lead.quality-audit.div2";
     const longRoles: [string, string][] = [
       ["SYSTEM_ADMIN", "システム管理者"],
       ["RAG_KNOWLEDGE_ADMIN", "ナレッジベース管理者"],
       ["RAG_EVALUATION_REVIEWER", "品質評価の確認者"],
     ];
-    auth.current = user(longName, longRoles);
+    auth.current = user(longName, longDisplayName, longRoles);
     await page.reload();
     const reloaded = await openSidebarNav(page);
     await expect(reloaded.getByText(longName, { exact: true })).toBeVisible();
+    await expect(reloaded.getByText(longDisplayName)).toHaveCount(0);
     const long = await measureAccountFooter(page);
     const longRoleNames = "システム管理者、ナレッジベース管理者、品質評価の確認者";
     expect(long.lines).toEqual([

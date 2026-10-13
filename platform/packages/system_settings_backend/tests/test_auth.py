@@ -172,7 +172,9 @@ def test_configured_system_admin_uses_signed_token_without_tables() -> None:
     assert principal.user_uuid == CONFIGURED_SYSTEM_ADMIN_USER_UUID
     assert principal.permissions == service.all_permissions()
     # 表示名は名前だけ（ロールを括弧で連結しない）。ロールは表示名で別に返す（#1644）。
-    assert principal.display_name == "system_admin"
+    # 表示名は「システム管理者」、ログイン ID は system_admin（サイドナビの 1 行目。#1696）。
+    assert principal.display_name == "システム管理者"
+    assert principal.login_user_id == "system_admin"
     assert principal.role_names() == ["システム管理者"]
     assert token.startswith(service.configured_admin_token_prefix + ".")
     assert service.authenticate_session(token).user_uuid == CONFIGURED_SYSTEM_ADMIN_USER_UUID
@@ -773,3 +775,32 @@ def test_authorize_request_keeps_path_based_public_paths_without_open_operations
     # POST も認証を飛ばして route まで届く（route が principal を読むので AttributeError になる）。
     with pytest.raises(AttributeError):
         client.post("/probe")
+
+
+def test_display_identities_include_configured_admin_and_resolve_login_ids() -> None:
+    """画面に出す利用者の名前は表示名を返し、構成管理者は「システム管理者」（#1696）。"""
+    service, _ = _service()
+    admin = _admin(service)
+    role = service.create_role(
+        role_code="NAME_VIEWER", display_name="名前確認", description="", actor=admin
+    )
+    user, _ = service.create_user(
+        login_user_id="name.user",
+        display_name="名前ユーザー",
+        role_ids=[role.role_id],
+        temporary_password="NameUserPass!12345",
+        actor=admin,
+    )
+
+    by_uuid = service.display_identities(
+        [CONFIGURED_SYSTEM_ADMIN_USER_UUID, user.user_uuid, "missing-uuid", ""]
+    )
+    assert by_uuid[CONFIGURED_SYSTEM_ADMIN_USER_UUID].display_name == "システム管理者"
+    assert by_uuid[CONFIGURED_SYSTEM_ADMIN_USER_UUID].login_user_id == "system_admin"
+    assert by_uuid[user.user_uuid].display_name == "名前ユーザー"
+    assert "missing-uuid" not in by_uuid
+
+    by_login = service.display_identities_by_login(["system_admin", "Name.User", "gone", ""])
+    assert by_login["system_admin"].display_name == "システム管理者"
+    assert by_login["Name.User"].display_name == "名前ユーザー"
+    assert "gone" not in by_login and "" not in by_login

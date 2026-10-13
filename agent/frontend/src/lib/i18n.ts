@@ -1324,6 +1324,8 @@ const agentJa = {
   "approval.decidedAt": "判断日時（JST）",
   "approval.decidedBy": "判断者",
   "approval.notRecorded": "記録されていません",
+  // 自動の処理が記録した判断者・公開者（`system` など）。利用者の表示名の代わりに出す（#1696）。
+  "user.systemActor": "システム（自動）",
   "approval.decisionRecord": "判断の記録",
   "approval.finished": "この承認は終了しています。再度の判断はできません。",
   "approval.relatedRun": "関連する実行",

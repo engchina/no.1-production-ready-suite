@@ -45,6 +45,7 @@ import { approvalStatusView, runStatusView } from "@/lib/status-labels";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { JsonPreview } from "@/pages/shared/page-helpers";
 import { isOwnDecision } from "@/pages/shared/approval-decision";
+import { actorDisplayName } from "@/pages/shared/user-names";
 import { useAuth } from "@/components/security/AuthProvider";
 import { useViewSwitchFocus } from "@/pages/shared/view-switch-focus";
 
@@ -93,7 +94,8 @@ export function ApprovalsPage() {
         toast.info(t("approval.changedDuringReview"));
       }
       // 判断の返却値を先に反映し、再取得を待つ間の二重判断を防ぐ。対象の URL は変えない（#877）。
-      queryClient.setQueryData<{ runs: RunState[] }>(["runs"], (current) => ({
+      queryClient.setQueryData<{ runs: RunState[]; user_display_names?: Record<string, string> }>(["runs"], (current) => ({
+        ...current,
         runs: (current?.runs ?? []).map((run) => (run.id === updatedRun.id ? updatedRun : run)),
       }));
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -381,7 +383,10 @@ export function ApprovalsPage() {
                     <dl className="grid gap-4 sm:grid-cols-2">
                       <ApprovalFact
                         label={t("approval.decidedBy")}
-                        value={selected.approval.decided_by || t("approval.notRecorded")}
+                        value={
+                          actorDisplayName(selected.approval.decided_by, runs.data?.user_display_names) ??
+                          t("approval.notRecorded")
+                        }
                       />
                       <ApprovalFact
                         label={t("approval.decidedAt")}

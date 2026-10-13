@@ -36,6 +36,7 @@ import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { AgentEditorView } from "@/pages/agents/AgentEditorView";
 import { formatDate } from "@/pages/shared/page-helpers";
+import { actorDisplayName } from "@/pages/shared/user-names";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 export function AgentsPage() {
@@ -225,6 +226,8 @@ export function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
 /** 公開した版の一覧と「この版に戻す」（#770）。 */
 export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile; readOnly: boolean }) {
   const queryClient = useQueryClient();
+  // 公開者の表示名は一覧の応答にある（同じ query の cache を読む）。
+  const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const confirm = useConfirm();
   const restore = useMutation({
     mutationFn: (version: number) => agentApi.restoreAgentVersion(agent.id, version),
@@ -270,7 +273,8 @@ export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile;
       key: "published_by",
       header: t("agent.version.publishedBy"),
       className: "text-fg-muted",
-      render: (version) => version.published_by || "-",
+      // 公開者は表示名で出す（ログイン ID は出さない。#1696）。
+      render: (version) => actorDisplayName(version.published_by, agents.data?.user_display_names) ?? "-",
     },
     {
       key: "note",

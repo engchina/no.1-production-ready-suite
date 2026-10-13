@@ -555,10 +555,14 @@ class ApprovalDecisionRequest(BaseModel):
 
 class RunsData(BaseModel):
     runs: list[RunState]
+    # 承認の判断者（ログイン ID）→ 表示名。画面は判断者を表示名で出す（保存しない。#1696）。
+    user_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentsData(BaseModel):
     agents: list[AgentProfile]
+    # 版の公開者（ログイン ID）→ 表示名。画面は公開者を表示名で出す（保存しない。#1696）。
+    user_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class ArtifactsData(BaseModel):

@@ -3392,7 +3392,7 @@ def test_auth_api_sets_http_only_session_and_requires_csrf(
             assert me.status_code == 200
             assert me.json()["data"]["role_codes"] == ["SYSTEM_ADMIN"]
             # 構成のシステム管理者は名前だけを表示名にし、ロールは表示名で返す（#1644）。
-            assert me.json()["data"]["display_name"] == "system_admin"
+            assert me.json()["data"]["display_name"] == "システム管理者"
             assert me.json()["data"]["role_display_names"] == ["システム管理者"]
             assert me.json()["data"]["force_password_change"] is False
 

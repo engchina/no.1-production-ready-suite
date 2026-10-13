@@ -254,6 +254,12 @@ export {
   type RoleNameBadgesProps,
   type RoleNameReference,
 } from "./users-roles/RoleNameBadges";
+// ユーザーの表示（サイドナビ以外は表示名。ログイン ID・UUID は出さない。#1696）
+export {
+  deletedUserLabel,
+  userDisplayName,
+  type UserNameReference,
+} from "./users-roles/userDisplayName";
 export {
   SecurityDetailField,
   SecurityEmptySelection,

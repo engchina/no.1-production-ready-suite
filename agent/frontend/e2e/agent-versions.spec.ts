@@ -62,6 +62,8 @@ for (const viewport of [
     await expect(page.getByText("公開中 v1").first()).toBeVisible();
     const versions = page.getByRole("table", { name: "版の履歴" });
     await expect(versions.getByText("v1", { exact: true })).toBeVisible();
+    // 公開者は表示名で出し、ログイン ID（local）は出さない（#1696）。
+    await expect(versions).toContainText("ローカル利用者");
 
     // 下書きを変えて保存すると「公開していない変更あり」。再公開で v2。
     await page.getByLabel("指示").fill("v2 の指示");
@@ -141,4 +143,23 @@ test("公開していない Agent は、管理者が「下書きで実行」に�
   await page.getByRole("button", { name: "実行を作成" }).click();
   await expect.poll(() => bodies.length).toBe(1);
   expect(bodies[0]).toEqual({ goal: "試す", agent_id: "agent-770", draft: true });
+});
+
+test("版の公開者は表示名で出し、ログイン ID・削除済みの利用者の ID を出さない（#1696）", async ({ page, mockApi }, testInfo) => {
+  seedDraftAgent(mockApi);
+  const agent = mockApi.state.agents.find((item) => item.id === "agent-770")!;
+  agent.versions = [
+    { version: 1, name: "経理の Agent", description: "", instructions: "v1", skill_ids: [], model_id: "", note: "", published_at: MOCK_NOW, published_by: "system_admin" },
+    { version: 2, name: "経理の Agent", description: "", instructions: "v2", skill_ids: [], model_id: "", note: "", published_at: MOCK_NOW, published_by: "gone.user" },
+  ];
+  agent.published_version = 2;
+  agent.unpublished_changes = false;
+  await page.goto("/agents?id=agent-770");
+
+  const versions = page.getByRole("table", { name: "版の履歴" });
+  await expect(versions.getByRole("row").filter({ hasText: "v1" })).toContainText("システム管理者");
+  await expect(versions.getByRole("row").filter({ hasText: "v2" })).toContainText("（削除済みのユーザー）");
+  await expect(versions).not.toContainText("system_admin");
+  await expect(versions).not.toContainText("gone.user");
+  await versions.screenshot({ path: testInfo.outputPath("agent-versions-published-by.png") });
 });

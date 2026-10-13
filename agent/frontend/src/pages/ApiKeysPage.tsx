@@ -29,6 +29,7 @@ import {
   ApiErrorState,
   apiErrorMessage,
 } from "@production-ready/ui";
+import { deletedUserLabel, userDisplayName } from "@production-ready/system-settings";
 
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { PagedDataTable } from "@/components/ListViews";
@@ -91,7 +92,8 @@ export function ApiKeysPage() {
       { value: "", label: t("apiKeys.create.runAsSelf", { name: user?.display_name ?? "" }) },
       ...(users.data ?? [])
         .filter((item) => item.user_uuid !== user?.user_uuid && item.status === "ACTIVE" && !item.force_password_change)
-        .map((item) => ({ value: item.user_uuid, label: item.display_name, description: item.login_user_id })),
+        // 利用者は表示名で出す（ログイン ID は出さない。#1696）。表示名が空ならログイン ID。
+        .map((item) => ({ value: item.user_uuid, label: userDisplayName(item) })),
     ],
     [users.data, user]
   );
@@ -404,7 +406,8 @@ function KeysTable({
       key: "owner",
       header: t("apiKeys.column.owner"),
       className: "text-xs text-fg",
-      render: (key) => key.owner_display_name || key.owner_user_uuid,
+      // 引けない利用者（削除済みなど）は UUID を出さない（#1696）。
+      render: (key) => key.owner_display_name || deletedUserLabel(),
     },
     {
       key: "createdBy",
@@ -412,7 +415,7 @@ function KeysTable({
       className: "text-xs text-fg",
       render: (key) => (
         <>
-          <span className="block">{key.created_by_display_name || key.created_by_user_uuid}</span>
+          <span className="block">{key.created_by_display_name || deletedUserLabel()}</span>
           <span className="block tabular-nums text-fg-muted">{formatDateTime(key.created_at)}</span>
         </>
       ),

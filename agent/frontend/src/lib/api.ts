@@ -1372,8 +1372,9 @@ export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
   getRuntimeStorage: () => request<RuntimeStorageStatus>("/api/runtime/storage"),
+  // `user_display_names` は承認の判断者（ログイン ID）→ 表示名（#1696）。
   listRuns: () =>
-    request<{ runs: RunState[] }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
+    request<{ runs: RunState[]; user_display_names?: Record<string, string> }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
   publishAgent: (agentId: string, note = "") =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
       method: "POST",
@@ -1534,7 +1535,8 @@ export const agentApi = {
       body: JSON.stringify(payload),
     }),
   listTools: () => request<{ tools: ToolDefinition[] }>("/api/tools"),
-  listAgents: () => request<{ agents: AgentProfile[] }>("/api/agents"),
+  // `user_display_names` は版の公開者（ログイン ID）→ 表示名（#1696）。
+  listAgents: () => request<{ agents: AgentProfile[]; user_display_names?: Record<string, string> }>("/api/agents"),
   createAgent: (payload: AgentProfileWritePayload) =>
     request<AgentProfile>("/api/agents", {
       method: "POST",

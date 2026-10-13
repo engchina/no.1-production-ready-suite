@@ -352,7 +352,7 @@ const nl2sqlJa = {
   "security.users.enableSuccess": "ユーザーを有効化しました。次回ログインから利用できます。",
   "security.users.delete": "削除",
   "security.users.deleteConfirm":
-    "「{id}」（表示名: {name}）を完全に削除します。ユーザー本体、割り当てロール、既存セッションは削除され、元に戻せません。",
+    "「{name}」を完全に削除します。ユーザー本体、割り当てロール、既存セッションは削除され、元に戻せません。",
   "security.users.deleteSuccess": "{name} を完全に削除しました。",
   "security.users.deleteError":
     "ユーザーを削除できませんでした。無効状態、保護対象、最新バージョンを確認して再試行してください。",
@@ -2581,11 +2581,9 @@ const nl2sqlJa = {
   "history.rewritten": "書き換えた質問",
   "history.profile": "プロファイル",
   "history.actor.label": "実行ユーザー",
-  "history.actor.identity": "{loginId}（{name}）",
-  "history.actor.missing": "ユーザー情報なし（{uuid}）",
+  "history.actor.missing": "（削除済みのユーザー）",
   "history.actor.unrecorded": "記録なし",
-  "history.actor.uuid": "ユーザー UUID: {uuid}",
-  "history.actor.hint": "ログイン ID と表示名は現在のユーザー情報です。",
+  "history.actor.hint": "表示名は現在のユーザー情報です。",
   "history.rows": "結果行数",
   "history.columns": "結果列数",
   "history.sql": "実行 SQL",
