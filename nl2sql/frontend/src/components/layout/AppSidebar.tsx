@@ -68,7 +68,7 @@ export function AppSidebar() {
       onSetSectionCollapsed={setSectionCollapsed}
       linkComponent={Link}
       labels={labels}
-      // 表示名・ロール・パスワード変更・ログアウト（ログイン省略時はその表示）は共通の部品が出す（#307）。
+      // ログイン ID・ロール名・パスワード変更・ログアウト（ログイン省略時はその表示）は共通の部品が出す（#307・#1696）。
       footer={
         <SidebarAccountSection
           routes={{ login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange }}

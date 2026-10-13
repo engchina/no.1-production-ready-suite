@@ -36,6 +36,7 @@ import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { AgentEditorView } from "@/pages/agents/AgentEditorView";
 import { formatDate } from "@/pages/shared/page-helpers";
+import { actorDisplayName } from "@/pages/shared/user-names";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 export function AgentsPage() {

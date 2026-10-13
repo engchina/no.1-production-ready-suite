@@ -399,7 +399,7 @@ def test_configured_admin_history_identity_uses_no_credentials_or_auth_tables(
     monkeypatch.setattr(history_security, "_configured_system_admin_credentials", credentials)
     admin = _principal(admin=True)
     assert history_security.history_user_identities(admin, []) == {}
-    expected = UserIdentity(configured_uuid, "system_admin", "system_admin")
+    expected = UserIdentity(configured_uuid, "system_admin", "システム管理者")
     assert history_security.history_user_identities(
         admin, [configured_uuid, configured_uuid, ""]
     ) == {configured_uuid: expected}
@@ -423,5 +423,5 @@ def test_history_identity_resolves_only_reserved_uuid_and_keeps_other_users(
     lookup.assert_called_once_with(["user-1", "missing"])
     assert result == {
         "user-1": ordinary,
-        configured_uuid: UserIdentity(configured_uuid, "system_admin", "system_admin"),
+        configured_uuid: UserIdentity(configured_uuid, "system_admin", "システム管理者"),
     }

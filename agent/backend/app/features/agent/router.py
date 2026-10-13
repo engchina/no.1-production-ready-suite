@@ -3144,7 +3144,12 @@ async def list_agents(request: Request) -> ApiResponse[AgentsData]:
 async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
     """業務 Agent の一覧と、版の公開者の表示名（画面は表示名で出す。#1696）。"""
     publishers = sorted(
-        {version.published_by for agent in agents for version in agent.versions if version.published_by}
+        {
+            version.published_by
+            for agent in agents
+            for version in agent.versions
+            if version.published_by
+        }
     )
     names = await run_in_threadpool(login_display_names, publishers) if publishers else {}
     return AgentsData(agents=agents, user_display_names=names)

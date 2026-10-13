@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def user_display_names(user_uuids: list[str]) -> dict[str, str]:
-    """利用者の UUID → 表示名（local のローカル利用者・構成のシステム管理者を含む）。引けない人は省く。"""
+    """利用者の UUID → 表示名（ローカル利用者・構成のシステム管理者を含む）。引けない人は省く。"""
     names: dict[str, str] = {}
     if LOCAL_DEBUG_USER_UUID in user_uuids:
         names[LOCAL_DEBUG_USER_UUID] = local_debug_principal().display_name
@@ -36,7 +36,7 @@ def user_display_names(user_uuids: list[str]) -> dict[str, str]:
 
 
 def login_display_names(login_user_ids: list[str]) -> dict[str, str]:
-    """ログイン ID → 表示名（承認の判断者・版の公開者のようにログイン ID だけを記録した項目。#1696）。
+    """ログイン ID → 表示名（承認の判断者・版の公開者などログイン ID だけを記録した項目。#1696）。
 
     local のローカル利用者・構成のシステム管理者を含む。引けない人と記号（`system` など）は省く。
     """
