@@ -203,7 +203,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_enterprise_ai_direct_enabled: bool = True
     nl2sql_select_ai_profile_prefix: str = "NL2SQL"
     nl2sql_select_ai_provider: str = "oci"
-    nl2sql_select_ai_credential_name: str = "OCI_CRED"
+    nl2sql_select_ai_credential_name: str = "NL2SQL_OCI_CRED"
     nl2sql_select_ai_region: str = "us-chicago-1"
     nl2sql_select_ai_model: str = ""
     nl2sql_schema_owner_allowlist: list[str] = Field(default_factory=list)

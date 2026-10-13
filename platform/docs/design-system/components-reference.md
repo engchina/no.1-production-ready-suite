@@ -2181,7 +2181,7 @@ toast.error(apiErrorMessage(error, t("…failed")));
 <PreconditionBanner
   id="profile-save-credential-precondition"
   title="Select AI Credential が作成されていません"
-  message="業務プロファイルの保存（DBMS_CLOUD_AI Profile への反映）には Select AI Credential（OCI_CRED）が必要です。作成するまで保存できません。運用設定の「Select AI Credential」で作成してから、再試行してください。"
+  message="業務プロファイルの保存（DBMS_CLOUD_AI Profile への反映）には Select AI Credential（NL2SQL_OCI_CRED）が必要です。作成するまで保存できません。運用設定の「Select AI Credential」で作成してから、再試行してください。"
   settingsLink={canOpen ? { to: "/settings/select-ai-credential", label: "Select AI Credential を開く", icon: FileKey, linkComponent: Link } : undefined}
   onRetry={recheck}
   retrying={rechecking}

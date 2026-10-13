@@ -275,7 +275,7 @@ async function mockProfileApi(
 ) {
   await page.route("**/api/settings/database/select-ai-credential", (route) =>
     fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
       region: "us-chicago-1",
@@ -1622,7 +1622,7 @@ test("Credential が Osaka でも新規 Region は Chicago で未編集の破棄
   await mockProfileApi(page);
   await page.route("**/api/settings/database/select-ai-credential", (route) =>
     fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: true,
       region: "ap-osaka-1",
@@ -1801,7 +1801,7 @@ test("Credential 不足からデータベース設定で作成し、履歴 job �
   await page.route("**/api/settings/database/select-ai-credential", async (route) => {
     if (route.request().method() === "POST") credentialCreated = true;
     await fulfillJson(route, {
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       schema_name: "ADMIN",
       exists: credentialCreated,
       region: "ap-osaka-1",
@@ -1851,7 +1851,7 @@ test("Credential 不足からデータベース設定で作成し、履歴 job �
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   const failedStatus = page.getByTestId("profile-save-progress");
-  await expect(failedStatus).toContainText("現在の Oracle schema に OCI_CRED がありません");
+  await expect(failedStatus).toContainText("現在の Oracle schema に NL2SQL_OCI_CRED がありません");
   await expect(failedStatus).not.toContainText("ORA-06512");
   const settingsLink = failedStatus.getByRole("link", { name: "Select AI Credential を開く" });
   await settingsLink.click();
@@ -3425,7 +3425,7 @@ async function mockOracleSyncReadiness(page: Page, state: { exists: boolean | nu
   await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
     fulfillJson(route, {
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: state.exists,
     })
   );
@@ -3451,7 +3451,7 @@ test("Select AI Credential が無いと保存の前に事前条件を示して�
   const precondition = page.getByTestId("profile-save-credential-precondition");
   await expect(precondition).toBeVisible();
   await expect(precondition).toContainText("Select AI Credential が作成されていません");
-  await expect(precondition).toContainText("Select AI Credential（OCI_CRED）が必要です");
+  await expect(precondition).toContainText("Select AI Credential（NL2SQL_OCI_CRED）が必要です");
   await expect(precondition).toContainText("運用設定の「Select AI Credential」で作成してから、再試行してください。");
   const settingsLink = precondition.getByRole("link", { name: "Select AI Credential を開く" });
   await expect(settingsLink).toHaveAttribute("href", /\/settings\/select-ai-credential$/u);
@@ -3546,7 +3546,7 @@ test("状態を確かめられないときは保存を止めず、反映の開�
     // 開始の時点で Credential が無いと分かった（backend の事前条件の確認）。
     readiness.exists = false;
     const message =
-      'SELECT_AI_CREDENTIAL_MISSING: Select AI Credential "ADMIN"."OCI_CRED" が存在しません。' +
+      'SELECT_AI_CREDENTIAL_MISSING: Select AI Credential "ADMIN"."NL2SQL_OCI_CRED" が存在しません。' +
       "Select AI・Select AI Agent の処理には Select AI Credential が必要です。運用設定の「Select AI Credential」で作成してから、再試行してください。";
     await route.fulfill({
       status: 409,

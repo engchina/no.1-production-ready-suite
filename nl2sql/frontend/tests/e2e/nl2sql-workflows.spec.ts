@@ -18967,7 +18967,7 @@ test("Select AI Credential が無いと合成データの生成開始を止め�
   await page.route("**/api/nl2sql/select-ai/credential-readiness", (route) =>
     fulfillJson(route, {
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: readiness.exists,
     })
   );

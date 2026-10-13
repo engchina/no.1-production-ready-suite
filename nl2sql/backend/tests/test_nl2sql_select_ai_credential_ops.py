@@ -40,7 +40,7 @@ class _CredentialAdapter:
 
     def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
         self.calls += 1
-        assert credential_name == "OCI_CRED"
+        assert credential_name == "NL2SQL_OCI_CRED"
         if self.exists is None:
             raise RuntimeError("DPY-6005: cannot connect to database")
         return "ADMIN", self.exists
@@ -48,7 +48,7 @@ class _CredentialAdapter:
 
 def _oracle_settings() -> SimpleNamespace:
     return SimpleNamespace(
-        nl2sql_runtime_mode="oracle", nl2sql_select_ai_credential_name="OCI_CRED"
+        nl2sql_runtime_mode="oracle", nl2sql_select_ai_credential_name="NL2SQL_OCI_CRED"
     )
 
 
@@ -130,7 +130,7 @@ def test_select_ai_job_is_not_blocked_when_status_is_unavailable_or_runtime_is_d
     monkeypatch.setattr(
         "app.features.nl2sql.select_ai_readiness.get_settings",
         lambda: SimpleNamespace(
-            nl2sql_runtime_mode="deterministic", nl2sql_select_ai_credential_name="OCI_CRED"
+            nl2sql_runtime_mode="deterministic", nl2sql_select_ai_credential_name="NL2SQL_OCI_CRED"
         ),
     )
     calls = adapter.calls
@@ -155,7 +155,7 @@ def test_credential_readiness_api_reports_the_state(
     assert response.status_code == 200
     assert response.json()["data"] == {
         "credential_required": True,
-        "credential_name": "OCI_CRED",
+        "credential_name": "NL2SQL_OCI_CRED",
         "credential_exists": False,
     }
 
@@ -231,7 +231,7 @@ def test_helpers_classify_engines_and_ora() -> None:
     assert uses_select_ai_credential([Nl2SqlEngine.ENTERPRISE_AI_DIRECT]) is False
     error = RuntimeError("wrapped")
     error.__cause__ = RuntimeError(
-        'ORA-20004: Credential "ADMIN"."OCI_CRED" does not exist\nORA-06512: at line 1'
+        'ORA-20004: Credential "ADMIN"."NL2SQL_OCI_CRED" does not exist\nORA-06512: at line 1'
     )
     assert is_credential_missing_oracle_error(error) is True
     assert is_credential_missing_oracle_error(RuntimeError("ORA-20004: other")) is False
