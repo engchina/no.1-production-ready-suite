@@ -13,6 +13,8 @@ name: Terraform Release Package
 #   - 配備の検証（suite-deploy.yml。PR の CI の Suite / Deploy と同じ）が通る。
 # zip には provenance（actions/attest-build-provenance）を付ける。利用者は
 # `gh attestation verify <zip> --repo engchina/no.1-production-ready-suite` で、この workflow が作ったことを確かめられる。
+# workflow を変えたら `gh workflow run terraform-release.yml --ref main -f version=v0.0.0 -f dry_run=true` で、
+# 公開せずに確かめられる（tag の push の経路は dry run できない）。
 
 on:
   push:
@@ -24,6 +26,11 @@ on:
         description: "version（例: v0.1.0）。suite-<version> の tag と release を作る"
         required: true
         type: string
+      dry_run:
+        description: "true なら release・provenance を作らず、確認（main・CI の成功・配備の検証・zip の契約）だけを行う"
+        required: false
+        default: false
+        type: boolean
 
 # 権限は job に渡す（#1594）。
 permissions: {}
@@ -139,12 +146,14 @@ jobs:
           sha256sum "$PACKAGE_NAME" > "$PACKAGE_NAME.sha256"
 
       - name: Attest build provenance
+        if: ${{ !inputs.dry_run }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: terraform/dist/${{ env.PACKAGE_NAME }}
 
       # workflow_dispatch では tag がまだ無いので、実行した commit に作る。push（tag）ではその tag を使う。
       - name: Create or update GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ github.sha }}
