@@ -1730,10 +1730,14 @@ class FeedbackSearchConfigRequest(BaseModel):
     match_limit: int | None = Field(default=None, ge=1, le=20)
 
 
+# 類似検索インデックスの「最低スコア」の既定（設定を保存していないときの値。#1721）。
+DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD = 0.9
+
+
 class FeedbackSearchConfigData(BaseModel):
     """Current feedback learning retrieval config."""
 
-    similarity_threshold: float = 0.0
+    similarity_threshold: float = DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD
     match_limit: int = 3
 
 
@@ -2302,36 +2306,6 @@ class SelectAiCredentialReadinessData(BaseModel):
     credential_exists: bool | None = None
 
 
-class ProfileAgentAssetRebuildStatus(StrEnum):
-    """業務 Profile の Select AI Agent アセットの最後の再構築の結果（#1691）。"""
-
-    NEVER = "never"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
-class ProfileAgentAssetRebuildData(BaseModel):
-    """業務 Profile の Select AI Agent アセットを最後に再構築した日時と結果（#1691）。
-
-    Oracle 反映のジョブ（profile_sync）の記録から引く。業務 Profile に書くと版（ETag）が進み、
-    編集中の保存と競合するため、業務 Profile の取得の応答とは別に返す。
-    """
-
-    profile_id: str = Field(min_length=1)
-    status: ProfileAgentAssetRebuildStatus = ProfileAgentAssetRebuildStatus.NEVER
-    # 再構築が終わった（失敗した）日時。まだ再構築していなければ空。
-    rebuilt_at: str = ""
-    job_id: str = ""
-    # 再構築した業務 Profile の版。
-    profile_etag: str = ""
-    # 最後の再構築の後に業務 Profile が保存された（アセットに入っていない変更がある）。
-    profile_changed_since: bool = False
-    team_name: str = ""
-    # 失敗の要約（利用者向けの日本語。ORA・PL/SQL の stack は含めない）。
-    error_code: str = ""
-    error_message_ja: str = ""
-
-
 class SelectAiProfilesExportData(BaseModel):
     """Select AI profiles JSON export response."""
 
@@ -2861,6 +2835,14 @@ class MetadataSqlGenerateData(BaseModel):
     sql: str = ""
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
+    # OCI Enterprise AI で作れず、規則ベース（名前をそのまま入れた SQL）にしたか（#1719）。
+    # 未設定で AI を使わなかった場合は False（`warnings` に出す）。
+    fallback: bool = False
+    # 規則ベースにした表（一部の組だけ失敗した場合。空 = 全部）。
+    fallback_objects: list[str] = Field(default_factory=list)
+    # 利用者向けの理由（1 文）と、「詳細」に出す失敗の元の文（理由・上限・使った token）。
+    fallback_reason: str = ""
+    fallback_detail: str = ""
     timing: TimingEnvelope
 
 

@@ -421,6 +421,8 @@ interface MockApiOptions {
   createStage?: RequirementStage;
   /** 回答の応答。 */
   answerStage?: RequirementStage;
+  /** AI要件確認の作成を失敗させる（HTTP status と応答の本文。#1715）。 */
+  createFailure?: { status: number; body: Record<string, unknown> };
 }
 
 async function waitForMockDelay(delayMs: number) {
@@ -731,6 +733,10 @@ async function mockApi(
       payloads.create = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string }).clarification_mode === "guided") {
         await waitForMockDelay(guidedStartDelayMs);
+        if (options.createFailure) {
+          payloads.createFailures = Number(payloads.createFailures ?? 0) + 1;
+          return route.fulfill({ status: options.createFailure.status, json: options.createFailure.body });
+        }
         return fulfill(route, requirementSessionData(options.createStage ?? "needs_answer"));
       }
       return fulfill(route, sessionData("awaiting_intent_confirmation"));
@@ -1243,6 +1249,94 @@ test("AI要件確認は期限切れで終わった確認の質問を出さず、
   await panel.getByRole("button", { name: "確認を中止して閉じる" }).click();
   await expect(panel).toHaveCount(0);
   expect(payloads.cancel).toBeUndefined();
+});
+
+// AI要件確認の LLM の失敗の応答（backend の problem と error_details。2026-10-13 の xai.grok-4.3 の HTTP 500 の形。#1715）。
+const REQUIREMENT_LLM_FAILURE = {
+  status: 503,
+  body: {
+    data: null,
+    error_messages: [
+      "AI要件確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500、2 回試行）。サービス側の一時的な障害の可能性があります。",
+    ],
+    error_code: "REQUIREMENT_AI_FAILED",
+    problem: {
+      type: "urn:nl2sql:problem:REQUIREMENT_AI_FAILED",
+      title: "Service Unavailable",
+      status: 503,
+      detail: "AI要件確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500、2 回試行）。",
+      code: "REQUIREMENT_AI_FAILED",
+      request_id: "req-requirement-1",
+      retryable: true,
+      field_errors: [],
+    },
+    error_details: {
+      kind: "unavailable",
+      kind_label_ja: "サービスの一時的な失敗（5xx）",
+      error_code: "ENTERPRISE_AI_UNAVAILABLE",
+      http_status: 500,
+      model_id: "xai.grok-4.3",
+      elapsed_ms: 28350,
+      attempts: 2,
+      upstream_request_id: "opc-req-500",
+      provider_message: "Internal server error (internal_error)",
+    },
+  },
+};
+
+test("AI要件確認は確認の要らない質問では聞かずに反映する（チャットと同じ流れ。#1715）", async ({ page }) => {
+  const payloads = await mockApi(page, { createStage: "clear" });
+  await page.goto("/query");
+  const panel = await startRequirementCheck(page, "社員の一覧");
+  // 最低限の要件（SELECT・FROM）が決まり、聞くことが無い: 質問を出さずに反映して閉じる。
+  await expect(panel).toHaveCount(0);
+  expect(payloads.apply).toEqual({ base_version: 1 });
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_CLARIFIED_QUESTION);
+  await expect(page.getByTestId("nl2sql-requirement-active")).toBeVisible();
+  expect(payloads.clarificationAnswer).toBeUndefined();
+});
+
+test("AI要件確認は SQL の文の質問では押せず、確認が要らない理由を出す (#1715)", async ({ page }) => {
+  const payloads = await mockApi(page);
+  await page.goto("/query");
+  await page.locator("#nl2sql-question-input").fill("select * from orders;");
+  const start = page.getByRole("button", { name: "AI要件確認", exact: true });
+  await expect(start).toBeDisabled();
+  await expect(page.getByTestId("nl2sql-guided-sql-input")).toHaveText(
+    "質問が SQL の文なので、AI要件確認は要りません。そのまま SQL を生成できます。"
+  );
+  await expect(start).toHaveAttribute("aria-describedby", "nl2sql-guided-sql-input");
+  // SQL の語で始まる日本語の質問は SQL の文として扱わない（チャットと同じ判定）。
+  await page.locator("#nl2sql-question-input").fill("select * from orders の件数を出して");
+  await expect(start).toBeEnabled();
+  await expect(page.getByTestId("nl2sql-guided-sql-input")).toHaveCount(0);
+  expect(payloads.create).toBeUndefined();
+});
+
+test("AI要件確認の検査の失敗は理由と詳細を出し、確認せずに SQL を生成できる (#1715)", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page, { createFailure: REQUIREMENT_LLM_FAILURE });
+  await page.goto("/query");
+  const panel = await startRequirementCheck(page);
+  const error = panel.getByTestId("nl2sql-guided-clarification-error");
+  // チャットと同じ部品（理由・「詳細」・もう一度確認・確認せずに SQL を生成・中止）。
+  await expect(error).toContainText("サーバーのエラーを返しました（HTTP 500、2 回試行）");
+  await expect(error).toContainText("もう一度確認するか、確認せずに SQL を生成してください。");
+  await expect(error).toContainText("xai.grok-4.3");
+  await expect(error).toContainText("opc-req-500");
+  await expect(error).toContainText("Internal server error (internal_error)");
+  await expect(error).toContainText("req-requirement-1");
+  await expect(error).toContainText("28.4 秒");
+  await expectNoPageOverflow(page);
+  await error.screenshot({ path: testInfo.outputPath("guided-clarification-failure.png") });
+
+  await error.getByRole("button", { name: "もう一度確認" }).click();
+  await expect.poll(() => payloads.createFailures).toBe(2);
+  await expect(error).toBeVisible();
+
+  await error.getByRole("button", { name: "確認せずに SQL を生成" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => payloads.job).toMatchObject({ question: REQUIREMENT_QUESTION });
+  expect(payloads.job).not.toHaveProperty("requirement_session_id");
 });
 
 test("AI要件確認の中止は主操作の右側から元の質問を保って閉じる", async ({ page }) => {

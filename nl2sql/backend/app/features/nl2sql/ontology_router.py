@@ -3089,6 +3089,16 @@ class OntologyApiRuntime:
     def _requirement_client(self) -> Any:
         return getattr(self.legacy_service, "_enterprise_ai_client", None)
 
+    def _requirement_llm_options(self) -> dict[str, Any]:
+        """AI要件確認の LLM の待ち時間・再試行・出力の上限（#1715）。"""
+
+        settings = get_settings()
+        return {
+            "timeout_seconds": float(settings.nl2sql_requirement_timeout_seconds),
+            "max_retries": int(settings.nl2sql_requirement_max_retries),
+            "max_output_tokens": int(settings.nl2sql_requirement_max_output_tokens),
+        }
+
     def _create_requirement_session(
         self,
         request: QuerySessionApiCreate,
@@ -3127,6 +3137,7 @@ class OntologyApiRuntime:
                 question=request.question,
                 context=context,
                 mode="draft",
+                **self._requirement_llm_options(),
             )
         draft = build_draft(output, context, question=request.question, model=model)
         if not ontology_current:
@@ -4088,6 +4099,7 @@ class OntologyApiRuntime:
                     context=context,
                     mode="review",
                     draft=draft,
+                    **self._requirement_llm_options(),
                 )
             draft = build_draft(
                 output,
@@ -6101,6 +6113,13 @@ def _raise_domain_error(exc: Exception) -> NoReturn:
     # dict ではなく読みやすい日本語メッセージ 1 本にする(code は括弧で併記)。
     code = getattr(exc, "code", type(exc).__name__)
     message_ja = str(getattr(exc, "message_ja", "") or str(exc) or "処理に失敗しました。")
+    if isinstance(exc, RequirementAiUnavailableError) and exc.details:
+        # AI要件確認の LLM の失敗は、理由（1 行）と「詳細」（種類・HTTP ステータス・モデル ID・
+        # 所要時間・request id）を分けて返す（#1715。code は problem の code と「詳細」に出す）。
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": code, "message_ja": message_ja, "error_details": exc.details},
+        ) from exc
     detail = f"{message_ja}({code})"
     finding_codes = getattr(exc, "finding_codes", None)
     if finding_codes:

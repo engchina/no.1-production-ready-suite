@@ -532,7 +532,8 @@ def test_llm_http_failure_guidance_depends_on_kind(status: int, configuration_er
         assert "openai.gpt-oss-120b" in raised.value.message_ja
         assert "既定のテキストモデル" in raised.value.message_ja
     else:
-        assert "もう一度お試しください" in raised.value.message_ja
+        assert "サーバーのエラー" in raised.value.message_ja
+        assert "HTTP 503" in raised.value.message_ja
 
 
 # --- 2. 範囲の外・実在しない名前・未承認の結合を拒む ---------------------------------
@@ -973,7 +974,8 @@ def test_screen_text_and_summary_use_physical_names() -> None:
 # --- 7. 危険・重い問い合わせの確認 -------------------------------------------------------
 
 
-def test_detail_without_filter_or_limit_is_confirmed() -> None:
+def test_detail_without_filter_or_limit_needs_no_question() -> None:
+    """絞り込み・件数の上限が質問に無い明細は「指定なし」として確認しない（#1715。最低限の要件）。"""
     llm = _ScriptedLlm(
         _output(
             _from_orders(),
@@ -987,16 +989,12 @@ def test_detail_without_filter_or_limit_is_confirmed() -> None:
         )
     )
     created = _create(_runtime(llm), "受注の一覧")
-    state = created.requirement_state
-    assert state is not None
-    keys = [item.key for item in state.unresolved_items]
-    assert "risk_no_filter" in keys
-    assert "risk_no_limit" in keys
-    no_limit = next(item for item in state.unresolved_items if item.key == "risk_no_limit")
-    assert no_limit.candidates[0].label_ja == "100 件まで"
-    no_filter = next(item for item in state.unresolved_items if item.key == "risk_no_filter")
-    assert "APP.ORDERS" in no_filter.reason_ja
-    assert "件数は読まずに" in no_filter.reason_ja
+    state = _state(created)
+    assert state.unresolved_items == []
+    assert state.current_item is None
+    assert state.status == RequirementPhase.READY
+    assert state.can_apply is True
+    assert not any(item.key.startswith("risk_no_") for item in _items(created))
 
 
 def test_join_without_condition_is_confirmed_as_cartesian_risk() -> None:
@@ -1138,10 +1136,8 @@ def test_skeleton_settled_items_without_fragment_are_not_undecided() -> None:
     assert "-- 並び順: 並び順の指定なし （ORDER BY を付けない）" in skeleton
 
 
-def test_skeleton_after_answering_all_rows_and_delegated_order_has_no_undecided() -> None:
-    """「絞り込まずに全件」と、自由入力で AI に任せた並び順を答えた後の骨組みに
-    ⟨未確定⟩ を出さない。
-    """
+def test_skeleton_after_delegated_order_has_no_undecided() -> None:
+    """自由入力で AI に任せた並び順を答えた後の骨組みに ⟨未確定⟩ を出さない。"""
 
     def review(_context: dict[str, Any]) -> dict[str, Any]:
         return _output(
@@ -1179,29 +1175,18 @@ def test_skeleton_after_answering_all_rows_and_delegated_order_has_no_undecided(
     runtime = _runtime(llm)
     created = _create(runtime, "受注の一覧")
     first = _state(created)
-    # 未確定の項目だけが ⟨未確定⟩。
+    # 未確定の項目だけが ⟨未確定⟩。絞り込み・件数の上限は「指定なし」で確認しない（#1715）。
     assert "⟨未確定: 並び順⟩" in first.sql_skeleton
-    assert "⟨未確定: 絞り込みの条件⟩" in first.sql_skeleton
-    data = created
-    for _ in range(4):
-        current = _state(data).current_item
-        if current is None:
-            break
-        if current.key == "risk_no_filter":
-            data = _answer(runtime, data)  # 絞り込まずに全件を対象にする
-        elif current.key == "risk_no_limit":
-            data = _answer(runtime, data)  # 100 件まで
-        else:
-            data = _answer(runtime, data, free_text="質問の内容から妥当に判断してください")
+    assert "絞り込みの条件" not in first.sql_skeleton
+    assert [item.key for item in first.unresolved_items] == ["order_by"]
+    data = _answer(runtime, created, free_text="質問の内容から妥当に判断してください")
     state = _state(data)
     assert state.status == RequirementPhase.READY, state.message_ja
     skeleton = state.sql_skeleton
     assert "⟨未確定" not in skeleton
     assert _clause_lines(skeleton, "WHERE") == []
     assert _clause_lines(skeleton, "ORDER BY") == []
-    assert "-- 絞り込みの条件: 絞り込まずに全件を対象にする" in skeleton
     assert "-- 並び順: 質問の内容から妥当に判断してください" in skeleton
-    assert "FETCH FIRST 100 ROWS ONLY" in skeleton
 
 
 def test_settled_items_without_fragment_stay_out_of_a_clause_with_fragments() -> None:
@@ -1317,7 +1302,8 @@ def test_settled_period_does_not_ask_fiscal_start_again(free_text: str) -> None:
 
 
 def test_fiscal_start_is_still_asked_when_the_settled_period_is_not_a_fiscal_year() -> None:
-    """「先月」を日付で確定しても、年度ごとの集計に要る年度の開始月は聞く。"""
+    """「先月」は実行日から日付の範囲が 1 つに決まるので聞かない（#1715）が、年度ごとの集計に要る
+    年度の開始月は聞く。"""
 
     last_month = _item(
         "period_last_month",
@@ -1333,30 +1319,22 @@ def test_fiscal_start_is_still_asked_when_the_settled_period_is_not_a_fiscal_yea
             "date_column": "APP.ORDERS.ORDER_DATE",
         },
     )
-
-    def review(_context: dict[str, Any]) -> dict[str, Any]:
-        return _output(
-            _from_orders(),
-            _select_total(),
-            _item(
-                "fiscal_year_start_month",
-                "group_by",
-                "missing",
-                label="年度の開始月",
-                question="年度ごとの集計の年度は何月に始まりますか？",
-                answer_kind="free_text",
-            ),
-        )
-
-    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), last_month), review)
-    runtime = _runtime(llm)
-    data = _create(runtime, "先月の受注金額の年度ごとの合計")
-    data = _answer(runtime, data)  # 日付の列か期間（2026-09-01〜2026-09-30）
-    data = _answer(runtime, data)
-    assert len(llm.calls) == 2
-    state = _state(data)
-    assert state.current_item is not None
-    assert state.current_item.key == "fiscal_year_start_month"
+    fiscal_start = _item(
+        "fiscal_year_start_month",
+        "group_by",
+        "missing",
+        label="年度の開始月",
+        question="年度ごとの集計の年度は何月に始まりますか？",
+        answer_kind="free_text",
+    )
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), last_month, fiscal_start))
+    data = _create(_runtime(llm), "先月の受注金額の年度ごとの合計")
+    period = next(item for item in _items(data) if item.key == "period_last_month")
+    assert period.status == RequirementStatus.INFERRED
+    assert period.period is not None and period.period.start_date
+    keys = [item.key for item in _state(data).unresolved_items]
+    assert "period_last_month" not in keys
+    assert "fiscal_year_start_month" in keys
 
 
 # --- 9. 反映・SQL の生成に渡す要件 -----------------------------------------------------

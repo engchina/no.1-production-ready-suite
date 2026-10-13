@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
@@ -110,6 +110,12 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
         return default
 
 
+def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
+    """1 以上の整数(値なし・整数でない・1 未満は既定)。"""
+    value = _env_int(env, name, default)
+    return value if value >= 1 else default
+
+
 def _env_float(env: Mapping[str, str], name: str, default: float) -> float:
     try:
         return float(env.get(name, default))
@@ -142,6 +148,11 @@ def normalize_llm_api_mode(value: str | None, default: str = DEFAULT_LLM_API_MOD
     return OPENAI_RESPONSES_LLM_API_MODE
 
 
+# 1 回の呼び出しの出力の上限の既定(tokens。#1719。platform の DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS と同じ)。
+# 回答の上限(`answer_max_tokens`)の既定と、モデルの出力の上限が渡されないときの値。
+DEFAULT_MODEL_OUTPUT_TOKENS = 32768
+
+
 @dataclass(frozen=True)
 class LlmProviderSettings:
     """1 つの LLM provider の接続先、認証、model 能力を保持します。"""
@@ -159,6 +170,9 @@ class LlmProviderSettings:
     # 推論(思考)の量の送る値(#1425。Responses API の `reasoning.effort`)。空は送らない。
     # backend が platform の `reasoning_effort_to_send` で決めて渡す(none は空)。
     reasoning_effort: str = ""
+    # モデルの 1 回の呼び出しの出力の上限(tokens。#1719。推論のあるモデルは推論の token も含む)。backend が
+    # platform の `enterprise_ai_output_token_budget`(モデルの出力の上限と入力の上限の小さい方)で決めて渡す。
+    max_output_tokens: int = DEFAULT_MODEL_OUTPUT_TOKENS
 
     @property
     def base_url(self) -> str:
@@ -205,6 +219,8 @@ class Settings:
     llm_retries: int
     llm_retry_initial_wait_seconds: float
     llm_retry_max_wait_seconds: float
+    # 構造化出力の呼び出し 1 回の出力の上限(tokens。既定 32768。#1719)。送る値はこれと呼ぶモデルの出力の上限
+    # (`LlmProviderSettings.max_output_tokens`)の小さい方(`llm_output_token_limit`)。
     answer_max_tokens: int
     # LLM / VLM の呼び出しの seed(#1434。backend が platform の `enterprise_ai_seed` で決めて
     # `OCI_ENTERPRISE_AI_SEED` で渡す。既定 42)。Responses API の top-level の `seed` で送る。
@@ -358,6 +374,14 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         if env.get("OCI_ENTERPRISE_AI_VLM_MODEL", "").strip()
         else answer_reasoning
     )
+    # 出力の上限もモデルごと(#1719)。backend が platform の `enterprise_ai_output_token_budget` で決めて渡す。
+    # Vision のモデルを指定しないときは回答のモデルの値。
+    answer_output_tokens = _positive_int(env, "OCI_ENTERPRISE_AI_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS)
+    vision_output_tokens = (
+        _positive_int(env, "OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS)
+        if env.get("OCI_ENTERPRISE_AI_VLM_MODEL", "").strip()
+        else answer_output_tokens
+    )
     llm_providers = {
         ENTERPRISE_AI_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_LLM_PROVIDER,
@@ -368,6 +392,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             model=answer_model,
             endpoint=endpoint,
             reasoning_effort=answer_reasoning,
+            max_output_tokens=answer_output_tokens,
         ),
         ENTERPRISE_AI_VISION_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -379,6 +404,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             supports_vision=True,
             endpoint=vision_endpoint,
             reasoning_effort=vision_reasoning,
+            max_output_tokens=vision_output_tokens,
         ),
     }
     default_vision_llm = normalize_llm_provider_id(
@@ -429,7 +455,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             env, "LLM_RETRY_INITIAL_WAIT_SECONDS", _env_float(env, "VISION_RETRY_INITIAL_WAIT_SECONDS", 2.0)
         ),
         llm_retry_max_wait_seconds=_env_float(env, "LLM_RETRY_MAX_WAIT_SECONDS", _env_float(env, "VISION_RETRY_MAX_WAIT_SECONDS", 30.0)),
-        answer_max_tokens=_env_int(env, "ANSWER_MAX_TOKENS", 24576),
+        answer_max_tokens=_positive_int(env, "ANSWER_MAX_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
         llm_seed=_env_int(env, "OCI_ENTERPRISE_AI_SEED", DEFAULT_LLM_SEED),
         default_rerank_enabled=_env_bool(env, "RAG_ENGINE_DEFAULT_RERANK_ENABLED", True),
         approved_faq_semantic_matching_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_MATCHING_ENABLED", True),
@@ -597,3 +623,13 @@ def get_llm_provider(settings: Settings, provider_id: str | None, default: str =
     if provider is None:
         raise RuntimeError(f"Unknown LLM provider: {provider_id}")
     return provider
+
+
+def llm_output_token_limit(settings: Settings, provider: Any) -> int:
+    """構造化出力の呼び出し 1 回の出力の上限(#1719)。
+
+    回答の上限(`answer_max_tokens`。既定 32768)と、呼ぶモデルの出力の上限(`max_output_tokens`。backend が
+    platform の `enterprise_ai_output_token_budget` で決めて渡す)の小さい方。
+    """
+    model_limit = int(getattr(provider, "max_output_tokens", DEFAULT_MODEL_OUTPUT_TOKENS) or DEFAULT_MODEL_OUTPUT_TOKENS)
+    return max(1, min(int(settings.answer_max_tokens), model_limit))

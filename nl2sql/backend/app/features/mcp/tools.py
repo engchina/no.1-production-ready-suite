@@ -85,6 +85,7 @@ from app.features.nl2sql.service import (
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
+from app.features.nl2sql.sql_input import is_sql_statement_input
 from app.features.nl2sql.sql_requirement import RequirementAiUnavailableError
 from app.security.permissions import (
     PROFILE_READ_PERMISSION,
@@ -114,6 +115,8 @@ _REQUIREMENT_SKIPPED_MESSAGE = (
     "OCI Enterprise AI が設定されていないため、AI要件確認をせずに SQL を生成しました。"
 )
 REQUIREMENT_AI_NOT_CONFIGURED_CODE = "REQUIREMENT_AI_NOT_CONFIGURED"
+# 質問が SQL の文（SELECT / WITH の 1 文）は確かめることが無いので LLM を呼ばない（#1715）。
+_REQUIREMENT_SQL_INPUT_MESSAGE = "質問が SQL の文のため、AI要件確認をせずに SQL を生成しました。"
 # この業務プロファイルの範囲では SQL を作れない（AI要件確認。#1441）。
 REQUIREMENT_UNANSWERABLE_CODE = "REQUIREMENT_UNANSWERABLE"
 # 変更できない（終了した・実行中の）AI要件確認の session。
@@ -442,7 +445,10 @@ def _translate_domain_errors[A, R](
             finding_codes = getattr(exc, "finding_codes", None)
             if finding_codes:
                 message = f"{message} 対象: {', '.join(str(item) for item in finding_codes)}"
-            raise McpToolError(exc.code, message) from exc
+            # AI要件確認の LLM の失敗は、種類・HTTP ステータス・モデル ID・所要時間などを添える
+            # （#1715。secret・prompt は入れない）。
+            details = getattr(exc, "details", None)
+            raise McpToolError(exc.code, message, details=details or None) from exc
 
     return wrapped
 
@@ -763,6 +769,19 @@ def build_mcp_server(request: Request) -> McpServer:
                 ),
             )
 
+        if arguments.requirement_session_id is None and is_sql_statement_input(arguments.question):
+            result = await start_and_wait(
+                JobCreateRequest(
+                    question=arguments.question,
+                    profile_id=arguments.profile_id,
+                    row_limit=arguments.row_limit,
+                ),
+                arguments.wait_seconds,
+            )
+            result.requirement = RequirementOutput(
+                session_id="", status="skipped", message=_REQUIREMENT_SQL_INPUT_MESSAGE
+            )
+            return result
         started = time.monotonic()
         try:
             data = await run_sync_io(requirement_step)

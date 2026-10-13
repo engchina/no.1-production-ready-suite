@@ -1,6 +1,7 @@
 """出力の上限で未完了になった応答の送り直しの記録（#1527）を、OpenAI の client を差し替えて確かめる。
 
-上限（`answer_max_tokens`）で未完了なら上限を 2 倍にして 1 回だけ送り直す（#987）。その回数と未完了の理由を、
+上限（`answer_max_tokens` とモデルの出力の上限の小さい方。#1719）で未完了なら上限を 2 倍にして 1 回だけ送り直す
+（#987）。2 倍はモデルの出力の上限で抑え、広げられなければ送り直さない（#1719）。その回数と未完了の理由を、
 工程の記録（execution_steps の llm_usage）と log（`llm_call_usage`）に残す。
 """
 
@@ -94,6 +95,56 @@ class OutputRetryRecordTest(unittest.TestCase):
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertLogs(oci.__name__, level="INFO"):
             result = oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
         self.assertEqual((result.text, client.budgets), ("ok", [1000]))
+
+    def test_retry_is_capped_by_the_model_output_limit(self):
+        """送り直しの 2 倍は、モデルの出力の上限で抑える（#1719）。"""
+        client = _Client([_incomplete("max_output_tokens"), _completed()])
+        provider = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="", max_output_tokens=1500)
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertLogs(oci.__name__, level="INFO"):
+            oci._openai_parsed([], settings, TextOutput, provider)
+        self.assertEqual(client.budgets, [1000, 1500])
+
+    def test_first_budget_is_capped_and_not_retried_when_it_cannot_widen(self):
+        """最初の上限はモデルの出力の上限で抑え、それ以上に広げられなければ送り直さない（#1719）。
+
+        失敗の文には、理由・送った上限・使った出力（うち推論）の token を出す。
+        """
+        client = _Client([_incomplete("max_output_tokens"), _completed()])
+        provider = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="", max_output_tokens=1000)
+        settings = get_settings(environ={}, dotenv_path=None)
+        self.assertEqual(settings.answer_max_tokens, 32768)
+        usage_token = llm_usage.set(LlmUsage())
+        try:
+            with (
+                mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+                self.assertLogs(oci.__name__, level="INFO"),
+                self.assertRaises(oci.IncompleteResponse) as raised,
+            ):
+                oci._openai_parsed([], settings, TextOutput, provider)
+            usage = llm_usage.get().snapshot()
+        finally:
+            llm_usage.reset(usage_token)
+        self.assertEqual(client.budgets, [1000])
+        self.assertNotIn("output_retries", usage)
+        message = str(raised.exception)
+        self.assertEqual(raised.exception.reason, "max_output_tokens")
+        for expected in ("stub-model", "理由=max_output_tokens", "出力の上限=1000 tokens", "使った出力=50 tokens（うち推論 0）"):
+            self.assertIn(expected, message)
+        self.assertNotIn("送り直しても", message)
+
+    def test_incomplete_after_retry_reports_the_widened_limit(self):
+        client = _Client([_incomplete("max_output_tokens"), _incomplete("max_output_tokens")])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with (
+            mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+            self.assertLogs(oci.__name__, level="INFO"),
+            self.assertRaises(oci.IncompleteResponse) as raised,
+        ):
+            oci._openai_parsed([], settings, TextOutput, PROVIDER)
+        self.assertEqual(client.budgets, [1000, 2000])
+        self.assertIn("上限を広げて送り直しても", str(raised.exception))
+        self.assertIn("出力の上限=2000 tokens", str(raised.exception))
 
     def test_completed_call_keeps_the_usage_shape(self):
         usage, _records = self.call(_Client([_completed()]))

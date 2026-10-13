@@ -962,8 +962,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/nl2sql/profiles/{profile_id}/ontology-view"): _PROFILE_MANAGE,
     ("POST", "/nl2sql/profiles/{profile_id}/ontology-view/materialize"): _PROFILE_MANAGE,
     ("GET", "/nl2sql/profiles/{profile_id}/ontology-view/mermaid"): _PROFILE_MANAGE,
-    # Select AI Agent アセットの最後の再構築（編集画面に出す。#1691）。
-    ("GET", "/nl2sql/profiles/{profile_id}/agent-asset-rebuild"): _PROFILE_MANAGE,
     ("POST", "/nl2sql/profiles/{profile_id}/oracle-sync-jobs"): _PROFILE_MANAGE,
     ("POST", "/nl2sql/profiles/{profile_id}/restore"): _PROFILE_MANAGE,
     ("POST", "/nl2sql/profiles/{profile_id}/select-ai-profile"): _PROFILE_MANAGE,

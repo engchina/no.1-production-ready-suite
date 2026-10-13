@@ -281,8 +281,6 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_vlm_response_path = ""
     settings.oci_enterprise_ai_timeout_seconds = 600.0
     settings.oci_enterprise_ai_max_retries = 3
-    settings.oci_enterprise_ai_llm_max_output_tokens = 1200
-    settings.oci_enterprise_ai_vlm_max_output_tokens = 65536
     settings.oci_enterprise_ai_vlm_input_mode = "files_api"
     settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False

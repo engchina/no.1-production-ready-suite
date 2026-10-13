@@ -1803,8 +1803,9 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       state.feedbackConfigPayload = route.request().postDataJSON() as Record<string, unknown>;
       return fulfillJson(route, route.request().postDataJSON() as Record<string, unknown>);
     }
+    // 未保存の環境の既定（#1721）。
     return fulfillJson(route, {
-      similarity_threshold: 0,
+      similarity_threshold: 0.9,
       match_limit: 3,
     });
   });
@@ -10024,6 +10025,8 @@ test("feedback management keeps long query text contained in app feedback and si
   await page.getByRole("tab", { name: "類似検索インデックス" }).click();
   const similarityPanel = page.locator("#feedback-management-panel-similarityIndex");
   await expect(similarityPanel.getByLabel("最低スコア", { exact: true })).toBeVisible();
+  // 未保存の環境の既定は 0.9（#1721）。
+  await expect(similarityPanel.getByLabel("最低スコア", { exact: true })).toHaveValue("0.9");
   await expect(similarityPanel.getByLabel("最大候補数", { exact: true })).toBeVisible();
   await expect(similarityPanel.getByText("索引候補", { exact: true })).toHaveCount(0);
   await expect(similarityPanel.getByTestId("feedback-vector-entry")).toHaveCount(0);
@@ -10073,7 +10076,7 @@ test("Select AI feedback reserves the master-detail workspace during initial loa
   await page.route("**/api/nl2sql/feedback-config", async (route) => {
     await configGate;
     await fulfillJson(route, {
-      similarity_threshold: 0,
+      similarity_threshold: 0.9,
       match_limit: 3,
     });
   });
@@ -12005,6 +12008,95 @@ for (const metadata of [
     await expectNoHorizontalScroll(page);
   });
 }
+
+const METADATA_FALLBACK_DETAIL =
+  "モデル「xai.grok-4.3」の応答が上限を広げて送り直しても出力の上限に達して未完了でした" +
+  "（status=incomplete・理由=max_output_tokens・出力の上限=32768 tokens・使った出力=32768 tokens（うち推論 31000））。";
+
+for (const metadata of [
+  { mode: "comment", path: "comments", sql: "COMMENT ON TABLE APP.INVOICES IS 'INVOICES';" },
+  { mode: "annotation", path: "annotations", sql: "ALTER TABLE APP.INVOICES ANNOTATIONS (ADD OR REPLACE \"DESCRIPTION\" 'INVOICES');" },
+  { mode: "domain", path: "domains", sql: "CREATE DOMAIN IF NOT EXISTS APP.INVOICE_ID_D AS NUMBER;" },
+] as const) {
+  test(
+    `${metadata.mode}-management は AI で作れずに規則ベースにした SQL を、理由と詳細つきの danger の Banner で出す (#1719)`,
+    { tag: "@responsive" },
+    async ({ page }) => {
+      await mockNl2SqlApi(page);
+      await page.unroute(`**/api/nl2sql/${metadata.path}/generate-sql`);
+      await page.route(`**/api/nl2sql/${metadata.path}/generate-sql`, (route) =>
+        fulfillJson(route, {
+          sql: metadata.sql,
+          source: "deterministic",
+          warnings: [],
+          fallback: true,
+          fallback_objects: [],
+          fallback_reason:
+            "OCI Enterprise AI の応答が出力の上限に達して未完了でした。システム設定 › モデル で既定のテキストモデルの「出力の上限（tokens）」を大きくするか、対象の表を減らしてやり直してください。",
+          fallback_detail: METADATA_FALLBACK_DETAIL,
+          timing,
+        })
+      );
+      await page.goto(`/${metadata.mode}-management`);
+      await page.getByRole("option", { name: /INVOICES/ }).check();
+      await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+      const inputPanel = page.locator(`#${metadata.mode}-management-panel-input`);
+      await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
+      const executePanel = page.locator(`#${metadata.mode}-management-panel-execute`);
+      const fallback = executePanel.getByTestId(`${metadata.mode}-management-ai-fallback`);
+      await expect(fallback).toBeVisible();
+      await expect(fallback.getByRole("alert")).toContainText(
+        "AI で SQL を生成できなかったため、規則ベースの SQL を表示しています"
+      );
+      await expect(fallback).toContainText("表・列の名前をそのまま説明に入れた仮のもの");
+      await expect(fallback).toContainText("「出力の上限（tokens）」を大きくする");
+      // 失敗の内容（理由・上限・使った token）は「詳細」に畳み、失敗なので開いて出す。
+      await expect(fallback.getByText("理由=max_output_tokens", { exact: false })).toBeVisible();
+      // AI を使わなかった場合（未設定）と分けて、AI で作れなかったことを状態の文言で示す。
+      await expect(executePanel.getByText("規則ベース（AI で生成できず）", { exact: true })).toBeVisible();
+      await expect(executePanel.getByText("規則ベース（AI 未使用）", { exact: true })).toHaveCount(0);
+      await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(metadata.sql);
+      // 規則ベースの結果を「生成が完了しました」の成功の Toast と重ねない。
+      await expect(page.getByText("SQL 生成が完了しました。")).toHaveCount(0);
+      const box = await fallback.boundingBox();
+      const panelBox = await executePanel.boundingBox();
+      expect(box && panelBox && box.width).toBeGreaterThan((panelBox?.width ?? 0) - 64);
+      await expectNoHorizontalScroll(page);
+      if (process.env.METADATA_FALLBACK_SCREENSHOT_DIR) {
+        await page.screenshot({
+          path: `${process.env.METADATA_FALLBACK_SCREENSHOT_DIR}/${metadata.mode}-fallback-${test.info().project.name}.png`,
+          fullPage: true,
+        });
+      }
+    }
+  );
+}
+
+test("comment-management は一部の表だけ規則ベースにした結果を、表の名前つきで出す (#1719)", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/comments/generate-sql");
+  await page.route("**/api/nl2sql/comments/generate-sql", (route) =>
+    fulfillJson(route, {
+      sql: "COMMENT ON TABLE APP.INVOICES IS '請求';",
+      source: "oci_enterprise_ai",
+      warnings: [],
+      fallback: true,
+      fallback_objects: ["APP.INVOICES"],
+      fallback_reason: "OCI Enterprise AI の呼び出しに失敗しました。時間をおいてやり直してください。",
+      fallback_detail: "APP.INVOICES: timeout after 600.0s",
+      timing,
+    })
+  );
+  await page.goto("/comment-management");
+  await page.getByRole("option", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  await page.locator("#comment-management-panel-input").getByRole("button", { name: "SQL 生成" }).click();
+  const executePanel = page.locator("#comment-management-panel-execute");
+  const fallback = executePanel.getByTestId("comment-management-ai-fallback");
+  await expect(fallback).toContainText("一部の表は AI で SQL を生成できず、規則ベースの SQL にしています");
+  await expect(fallback).toContainText("規則ベースにした表: APP.INVOICES");
+  await expect(executePanel.getByText("OCI Enterprise AI（一部は規則ベース）", { exact: true })).toBeVisible();
+});
 
 test("ドメイン管理は SQL 実行後に構造と既存ドメインを取り直す", async ({ page }) => {
   // 実行前の関連付けのまま更新/削除を生成しないよう、実行後に inventory を再取得する。

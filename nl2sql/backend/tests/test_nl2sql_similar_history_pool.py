@@ -238,6 +238,8 @@ def test_similar_history_route_scopes_empty_profile_to_principal_allowed_profile
 
 def test_similar_history_response_projects_private_history_fields() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._history = [  # noqa: SLF001
         _history(1, admin=FeedbackRating.GOOD, profile_id="sales").model_copy(
             update={
@@ -525,6 +527,8 @@ def test_oracle_vector_empty_template_does_not_embed_labels(
 
 def test_similar_history_ignores_question_template_labels_for_scoring() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    # 最低スコアの既定（0.9。#1721）ではなく、候補の絞り込み・並びを確かめるため 0 にする。
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._history = [  # noqa: SLF001
         _history(
             1,

@@ -47,10 +47,16 @@ from agents.tool_context import ToolContext
 from openai import APIStatusError, AsyncOpenAI, BadRequestError
 from openai.types.shared import Reasoning, ReasoningEffort
 from pr_backend_core.observability.request_context import bind_log_context
+from pr_system_settings.enterprise_ai_errors import (
+    enterprise_ai_incomplete_from_response,
+    enterprise_ai_incomplete_message,
+)
 from pr_system_settings.model import (
+    DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
+    enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
     enterprise_ai_seed,
     reasoning_effort_to_send,
@@ -187,6 +193,8 @@ class ModelTarget:
     reasoning_effort: str = ""
     # LLM の呼び出しの seed（#1434。システム設定 > モデル の共通の値、既定 42）。
     seed: int = 42
+    # 1 回の呼び出しの出力の上限（#1719。システム設定 > モデル の登録モデルの値。既定 32768）。
+    max_output_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
         return f"ModelTarget(model_id={self.model_id!r}, endpoint={self.endpoint!r})"
@@ -224,6 +232,8 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
         seed=enterprise_ai_seed(settings),
+        # モデルの出力の上限と入力の上限の小さい方（#1719。prompt は会話で伸びるので見積もらない）。
+        max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
     )
 
 
@@ -234,15 +244,19 @@ def model_settings_for(target: ModelTarget) -> ModelSettings:
       （none は送らない。解釈は platform の `reasoning_effort_to_send`）
     - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため、SDK の
       `extra_body`。解釈は platform の `seed_to_send`）
+    - モデルの出力の上限を `max_output_tokens` で送る（#1719。SDK の `max_tokens`。送らないと
+      endpoint の既定の上限になり、推論のあるモデルは推論だけで上限に達することがある）
     """
     extra_body = {"seed": seed_to_send(target.seed)}
+    max_tokens = max(1, int(target.max_output_tokens))
     effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
-        return ModelSettings(store=False, extra_body=extra_body)
+        return ModelSettings(store=False, max_tokens=max_tokens, extra_body=extra_body)
     # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。
     return ModelSettings(
         store=False,
         reasoning=Reasoning(effort=cast(ReasoningEffort, effort)),
+        max_tokens=max_tokens,
         extra_body=extra_body,
     )
 
@@ -314,6 +328,33 @@ def model_error_code(exc: BaseException) -> str | None:
     return None
 
 
+MODEL_OUTPUT_INCOMPLETE_CODE = "runtime.model_output_incomplete"
+
+
+def _raise_for_incomplete(response: Any, request: Mapping[str, Any]) -> None:
+    """未完了の応答（`status=incomplete`）を、理由・上限・使った token の分かる失敗にする（#1719）。
+
+    SDK は未完了を `ModelBehaviorError`（型名だけが Run の失敗に残る）にするため、その前に
+    platform の `enterprise_ai_incomplete_message` の文で失敗させる。送った上限はもうモデルの
+    出力の上限（`max_output_tokens`）なので、広げて送り直さない。
+    """
+    if getattr(response, "status", None) != "incomplete":
+        return
+    data = response.model_dump() if hasattr(response, "model_dump") else response
+    if not isinstance(data, Mapping):
+        return
+    limit = request.get("max_output_tokens")
+    incomplete = enterprise_ai_incomplete_from_response(
+        data, max_output_tokens=limit if isinstance(limit, int) else None
+    )
+    if incomplete is None:
+        return
+    raise BuiltinRuntimeError(
+        MODEL_OUTPUT_INCOMPLETE_CODE,
+        enterprise_ai_incomplete_message(incomplete, model_id=str(request.get("model") or "")),
+    )
+
+
 class _OciStreamingResponses:
     def __init__(self, inner: Any) -> None:
         self._inner = inner
@@ -334,7 +375,10 @@ class _OciResponses:
         attempt = 0
         while True:
             try:
-                return await self._inner.create(**request)
+                response = await self._inner.create(**request)
+                if not request.get("stream"):
+                    _raise_for_incomplete(response, request)
+                return response
             except BadRequestError as exc:
                 if (
                     model_error_code(exc) != MODEL_OUTPUT_INVALID_CODE

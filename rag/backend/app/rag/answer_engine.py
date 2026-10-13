@@ -54,6 +54,7 @@ from app.config import (
     enterprise_ai_default_model_id,
     enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
+    enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_seed,
     enterprise_ai_vision_model_id,
@@ -316,6 +317,15 @@ def build_engine_settings(
         # 統合の 1 回分の大きさを、この値の割合で決める(値の解釈は platform の 1 か所)。
         "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": str(
             enterprise_ai_max_input_tokens(settings, answer_model)
+        ),
+        # 回答のモデルと Vision のモデルの出力の上限(tokens。#1719)。rag_engine は回答の上限
+        # (answer_max_tokens。既定 32768)とこの値の小さい方を送り、未完了の送り直しもこの値で抑える
+        # (値の解釈は platform の enterprise_ai_output_token_budget。prompt は見積もらない)。
+        "OCI_ENTERPRISE_AI_MAX_OUTPUT_TOKENS": str(
+            enterprise_ai_output_token_budget(settings, answer_model)
+        ),
+        "OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS": str(
+            enterprise_ai_output_token_budget(settings, vision_model)
         ),
         # rag_engine は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
         # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して

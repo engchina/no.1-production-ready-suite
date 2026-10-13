@@ -18,9 +18,11 @@ from pydantic import BaseModel
 
 from rag_engine.config import (
     DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS,
+    DEFAULT_MODEL_OUTPUT_TOKENS,
     LlmProviderSettings,
     Settings,
     get_llm_provider,
+    llm_output_token_limit,
     oci_inference_endpoint,
 )
 from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt, render_prompt_template
@@ -468,9 +470,51 @@ def _parse_multimodal_once[StructuredOutputT: BaseModel](
     return _parse_openai_multimodal_once(system_prompt, prompt, image_paths, settings, text_format, provider)
 
 
-# 出力上限で未完了になったときに予算を広げる倍率と、広げた送信の回数（1 回だけ）。
+# 出力上限で未完了になったときに予算を広げる倍率と、広げた送信の回数（1 回だけ）。広げた上限はモデルの出力の
+# 上限（`LlmProviderSettings.max_output_tokens`。#1719）を超えない。
 INCOMPLETE_OUTPUT_BUDGET_FACTOR = 2
 INCOMPLETE_OUTPUT_REASON = "max_output_tokens"
+
+
+def _model_output_limit(provider: LlmProviderSettings) -> int:
+    """呼ぶモデルの出力の上限（tokens。#1719。backend が platform のモデル設定から渡す）。"""
+    return max(1, int(getattr(provider, "max_output_tokens", DEFAULT_MODEL_OUTPUT_TOKENS) or DEFAULT_MODEL_OUTPUT_TOKENS))
+
+
+def _retry_output_budget(budget: int, provider: LlmProviderSettings) -> int | None:
+    """出力の上限で未完了になった呼び出しを送り直すときの上限（#987・#1719）。
+
+    今の上限の 2 倍をモデルの出力の上限で抑える。今の上限より広げられなければ None（同じ上限で送り直しても
+    終わらないので、送り直さない）。
+    """
+    widened = min(budget * INCOMPLETE_OUTPUT_BUDGET_FACTOR, _model_output_limit(provider))
+    return widened if widened > budget else None
+
+
+def _incomplete_error(
+    exc: IncompleteResponse, response: Any, provider: LlmProviderSettings, max_output_tokens: int, *, retried: bool
+) -> IncompleteResponse:
+    """未完了の応答の失敗の文に、理由・出力の上限・使った出力（うち推論）の token を出す（#1719）。
+
+    rag_engine は platform に依存しないため、platform の `enterprise_ai_incomplete_message` と同じ項目をここで
+    組み立てる。応答の本文は含めない。
+    """
+    usage = response_usage(response)
+    detail = (
+        f"status={_value(response, 'status') or '-'}・理由={exc.reason or '不明'}・出力の上限={max_output_tokens} tokens"
+        f"・使った出力={usage['output_tokens']} tokens（うち推論 {usage['reasoning_tokens']}）"
+    )
+    if exc.reason == INCOMPLETE_OUTPUT_REASON:
+        retry = "上限を広げて送り直しても" if retried else ""
+        message = (
+            f"モデル「{provider.model}」の応答が{retry}出力の上限に達して未完了でした（{detail}）。"
+            "推論のあるモデルは推論の token も出力の上限に数えます。"
+            "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくしてください。"
+        )
+    else:
+        message = f"モデル「{provider.model}」の応答が未完了でした（{detail}）。"
+    return IncompleteResponse(message, exc.reason)
+
 
 # 回答の期限の残りに合わせた出力の上限（#1548）。同じ接続・モデルの直近の完了した呼び出しの出力の速さ
 # （出力の token ÷ 往復の秒）の最大に余裕の倍率を掛け、残りの秒で出せる token の数を上限にする。速さは
@@ -523,14 +567,16 @@ def _openai_parsed[StructuredOutputT: BaseModel](
 
     推論型モデルは推論 token が出力予算を消費するため、同じ入力でも実行ごとに `max_output_tokens` へ
     届くかどうかが変わる。上限が理由の未完了だけ予算を 2 倍にして 1 回だけ送り直す。別の理由の未完了と
-    2 回目の失敗はそのまま送出する (#987)。
+    2 回目の失敗はそのまま送出する (#987)。最初の上限は回答の上限とモデルの出力の上限の小さい方
+    （`llm_output_token_limit`）、送り直しの 2 倍もモデルの出力の上限で抑え、広げられなければ送り直さない
+    （#1719）。未完了で終わるときは、理由・上限・使った token を失敗の文に出す。
 
     回答の期限がある文脈では、出力の上限を残りの秒で出せる token の数に抑える（`deadline_output_budget`。
     #1548）。抑えた上限で未完了になったら、残りの時間では終わらないので送り直さず、今の期限を切って
     `DeadlineExceeded` にする（回答の時間の配分は、期限で切れた呼び出しと同じく確かめ終わった分で確定する）。
     応答が返らなかった呼び出し（timeout・接続の失敗）も、秒と理由を log と工程の記録に残す。
     """
-    budget = max(1, int(settings.answer_max_tokens))
+    budget = llm_output_token_limit(settings, provider)
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。
     reasoning: dict[str, Any] = {"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}
     for attempt in range(2):
@@ -569,9 +615,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 raise DeadlineExceeded(
                     f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
                 ) from exc
-            if attempt or exc.reason != INCOMPLETE_OUTPUT_REASON:
-                raise
-            budget *= INCOMPLETE_OUTPUT_BUDGET_FACTOR
+            widened = None if attempt or exc.reason != INCOMPLETE_OUTPUT_REASON else _retry_output_budget(send_budget, provider)
+            if widened is None:
+                raise _incomplete_error(exc, response, provider, send_budget, retried=bool(attempt)) from exc
+            budget = widened
             # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
             # ぶれが送り直しによるかを確かめる）。
             record_llm_output_retry()

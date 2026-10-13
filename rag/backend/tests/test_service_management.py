@@ -233,6 +233,9 @@ def test_service_runtime_env_injects_oci_enterprise_ai_settings() -> None:
     assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL"] == "xai.grok-4.3"
     assert env["PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
+    # 出力の上限はモデルごとの値(#1719。登録の無いモデルは既定の 32768)。
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS"] == "32768"
+    assert env["PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS"] == "32768"
     # docling サービスは Vision を呼ばない(#497)。rag_engine の接頭辞なしの名前は渡さない。
     assert "OCI_ENTERPRISE_AI_ENDPOINT" not in env
     assert "OCI_ENTERPRISE_AI_API_KEY" not in env

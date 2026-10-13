@@ -15,6 +15,14 @@
 - 登録モデルごとに入力の上限 `max_input_tokens`（tokens）を持つ（#1437。既定 128000）。
   回答の根拠などの入力の予算は `input_token_budget` で token の数として決める（値の解釈と
   token の見積もり `estimate_input_tokens` はここだけ。3 製品はこれを使う）
+- 登録モデルごとに出力の上限 `max_output_tokens`（tokens）を持つ（#1719。既定 32768。
+  入力の上限以下）。
+  入力の上限は prompt と応答の合計（context）で、出力の上限はその中の応答の分（推論のあるモデルは
+  推論の token も含む）。呼び出しの `max_output_tokens` は `enterprise_ai_output_token_budget`
+  （モデルの出力の上限と、入力の上限から prompt の見積もりを引いた残りの小さい方）で決め、
+  未完了（`incomplete` / `max_output_tokens`）の送り直しは `enterprise_ai_retry_output_token_budget`
+  でモデルの上限まで広げる。共通の LLM / VLM の出力の上限（#1719 より前の
+  `llm_max_output_tokens` / `vlm_max_output_tokens`）は持たない
 - LLM / VLM の呼び出しの seed `seed` を全モデルで共通に 1 つ持つ（#1434。既定 42）。
   3 製品の呼び出しは `enterprise_ai_seed` / `seed_payload`（解釈はここだけ）で top-level の
   `seed` を送り、NL2SQL は Select AI の AI profile の `seed` 属性の既定にも使う
@@ -81,7 +89,10 @@ ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
 # （項目が無い = 既定の medium）。
 # 5: 登録モデルの `max_input_tokens`（#1437）。4 の JSON はそのまま読める
 # （項目が無い = 既定の 128000）。
-MODEL_SETTINGS_DOCUMENT_VERSION = 5
+# 6: 登録モデルの `max_output_tokens`（#1719）。共通の `llm_max_output_tokens` /
+# `vlm_max_output_tokens` は持たず、5 の JSON のそれらは読み捨てる（項目の無いモデル =
+# 既定の 32768。入力の上限がそれより小さいモデルは入力の上限）。
+MODEL_SETTINGS_DOCUMENT_VERSION = 6
 # この版より前の JSON だけが API key（`enterprise_ai.api_key`）を持てた
 # （v3 から secret は `.env`）。
 MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION = 3
@@ -130,6 +141,16 @@ ENTERPRISE_AI_REASONING_EFFORT_OMIT: Final = "none"
 DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS: Final = 128_000
 ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN: Final = 4_096
 ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX: Final = 2_000_000
+# モデルの出力の上限（tokens。#1719）。登録モデルごとに持ち、値が無いとき（#1719 より前の設定・
+# env だけで設定したモデル）は既定の 32768（入力の上限がそれより小さいモデルは入力の上限）。
+# 推論のあるモデルは推論の token も出力の上限に数えるため、表・列の多い Structured Outputs でも
+# 足りる大きさにする（2026-10-13 の実測: openai.gpt-oss-120b・推論 medium は 5 表・32 列のコメントで
+# 出力 2756 token（うち推論 1506）、上限 1200 では推論だけで上限に達して incomplete）。範囲は
+# 1〜2000000（OCI の公式文書の context は xai.grok-4.3 が 1M、openai.gpt-oss-120b が 128k。
+# 128k 以上を入れられるようにする）で、入力の上限（context）以下。
+DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS: Final = 32_768
+ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN: Final = 1
+ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX: Final = 2_000_000
 ENTERPRISE_AI_SEED_MIN: Final = 0
 ENTERPRISE_AI_SEED_MAX: Final = 2_147_483_647
 DEFAULT_ENTERPRISE_AI_SEED: Final = 42
@@ -163,6 +184,40 @@ class EnterpriseAiConfiguredModel(BaseModel):
         ge=ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN,
         le=ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX,
     )
+    # 出力の上限（tokens。#1719）。入力の上限（context）の中の応答の分で、推論のあるモデルは推論の
+    # token も含む。未指定（#1719 より前の設定も）は既定の 32768（入力の上限がそれより小さければ
+    # 入力の上限）。範囲外と、入力の上限を超える値は読み込み・保存とも検証エラー。
+    max_output_tokens: int = Field(
+        default=DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+        ge=ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN,
+        le=ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_max_output_tokens(cls, value: object) -> object:
+        """出力の上限の値が無いモデルは、既定（32768）と入力の上限の小さい方にする（#1719）。"""
+        if not isinstance(value, Mapping):
+            return value
+        current = value.get("max_output_tokens")
+        if current is not None and not (isinstance(current, str) and not current.strip()):
+            return value
+        result = dict(value)
+        result["max_output_tokens"] = min(
+            DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+            max_input_tokens_to_use(result.get("max_input_tokens")),
+        )
+        return result
+
+    @model_validator(mode="after")
+    def output_within_input(self) -> EnterpriseAiConfiguredModel:
+        """出力の上限は入力の上限（prompt と応答の合計）以下にする（#1719）。"""
+        if self.max_output_tokens > self.max_input_tokens:
+            raise ValueError(
+                "出力の上限は入力の上限（prompt と応答の合計）以下にしてください"
+                f"（出力の上限 {self.max_output_tokens}・入力の上限 {self.max_input_tokens}）。"
+            )
+        return self
 
     @field_validator("model_id", "display_name")
     @classmethod
@@ -191,6 +246,14 @@ class EnterpriseAiConfiguredModel(BaseModel):
             return DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS
         if isinstance(value, bool):
             raise ValueError("入力の上限は整数で入力してください。")
+        return value
+
+    @field_validator("max_output_tokens", mode="before")
+    @classmethod
+    def reject_bool_max_output_tokens(cls, value: object) -> object:
+        """真偽値は検証エラーにする（bool は int の部分型のため）。"""
+        if isinstance(value, bool):
+            raise ValueError("出力の上限は整数で入力してください。")
         return value
 
     @field_validator("connection_id", mode="before")
@@ -255,8 +318,6 @@ class EnterpriseAiModelSettings(BaseModel):
     vision_response_path: str = Field(default="", max_length=1024)
     timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     max_retries: int = Field(default=3, ge=0, le=5)
-    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
-    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
     # LLM / VLM の呼び出しの seed（#1434）。全モデルで共通で、既定は 42。範囲外は検証エラー。
     seed: int = Field(
         default=DEFAULT_ENTERPRISE_AI_SEED,
@@ -783,6 +844,92 @@ def estimate_input_tokens(text: str) -> int:
     return (len(value) - ascii_count) + (ascii_count + 3) // 4
 
 
+def max_output_tokens_to_use(value: object) -> int:
+    """設定の値を、使う出力の上限（tokens）にする（#1719。解釈はここだけ）。
+
+    整数で範囲（1〜2000000）の中ならその値、値なし・範囲外・整数でない値は既定の 32768。
+    保存・読み込みは `EnterpriseAiConfiguredModel` が検証するので、ここで既定に戻すのは
+    env の直書きなどの値だけ。
+    """
+    if isinstance(value, bool) or value is None:
+        return DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
+    if not ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN <= number <= ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX:
+        return DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
+    return number
+
+
+def enterprise_ai_max_output_tokens(settings: Any, model_id: str) -> int:
+    """モデルに設定した出力の上限（tokens。#1719）。入力の上限を超えない。
+
+    登録モデルにない ID（env だけで設定した場合など）は、登録モデルの既定と同じ 32768。
+    """
+    normalized = model_id.strip()
+    limit = next(
+        (
+            max_output_tokens_to_use(model.max_output_tokens)
+            for model in enterprise_ai_model_catalog(settings)
+            if model.model_id == normalized
+        ),
+        DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+    )
+    return min(limit, enterprise_ai_max_input_tokens(settings, model_id))
+
+
+def output_token_budget(
+    *,
+    max_input_tokens: object,
+    max_output_tokens: object,
+    prompt_tokens: int = 0,
+    requested: int | None = None,
+) -> int:
+    """1 回の呼び出しの `max_output_tokens`（#1719。値の解釈はここだけ）。
+
+    - 機能が要る量（`requested`）を渡したときは、既定（32768）を下回らない（推論のあるモデルは
+      推論の token も数えるため、小さい上限では Structured Outputs が未完了になる）
+    - モデルの出力の上限を超えない
+    - 入力の上限（prompt と応答の合計）から prompt の見積もりを引いた残りを超えない
+      （出力の上限の大きいモデルで prompt が入らずに失敗するのを防ぐ）
+    """
+    model_limit = min(
+        max_output_tokens_to_use(max_output_tokens), max_input_tokens_to_use(max_input_tokens)
+    )
+    room = max_input_tokens_to_use(max_input_tokens) - max(0, int(prompt_tokens))
+    wanted = (
+        model_limit
+        if requested is None
+        else max(int(requested), min(DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS, model_limit))
+    )
+    return max(1, min(wanted, model_limit, room))
+
+
+def enterprise_ai_output_token_budget(
+    settings: Any, model_id: str, *, prompt_tokens: int = 0, requested: int | None = None
+) -> int:
+    """モデルの 1 回の呼び出しの `max_output_tokens`（#1719。`output_token_budget` を参照）。"""
+    return output_token_budget(
+        max_input_tokens=enterprise_ai_max_input_tokens(settings, model_id),
+        max_output_tokens=enterprise_ai_max_output_tokens(settings, model_id),
+        prompt_tokens=prompt_tokens,
+        requested=requested,
+    )
+
+
+def enterprise_ai_retry_output_token_budget(
+    settings: Any, model_id: str, *, current: int, prompt_tokens: int = 0
+) -> int | None:
+    """出力の上限で未完了になった呼び出しを送り直すときの上限（#1719）。
+
+    モデルの出力の上限（と入力の上限の残り）まで広げる。今の上限より広げられなければ None
+    （同じ上限で送り直しても終わらないので、送り直さない）。
+    """
+    widened = enterprise_ai_output_token_budget(settings, model_id, prompt_tokens=prompt_tokens)
+    return widened if widened > int(current) else None
+
+
 def _seed_input(value: object) -> object:
     """seed の入力の前処理（#1434）。
 
@@ -1104,8 +1251,6 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
             timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
             max_retries=settings.oci_enterprise_ai_max_retries,
-            llm_max_output_tokens=settings.oci_enterprise_ai_llm_max_output_tokens,
-            vlm_max_output_tokens=settings.oci_enterprise_ai_vlm_max_output_tokens,
             seed=enterprise_ai_seed(settings),
         ),
         generative_ai=GenerativeAiModelSettings(
@@ -1138,8 +1283,6 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     settings.oci_enterprise_ai_vlm_response_path = enterprise.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise.max_retries
-    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise.llm_max_output_tokens
-    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise.vlm_max_output_tokens
     _set_if_field(settings, "oci_enterprise_ai_seed", enterprise.seed)
     settings.oci_genai_embedding_model = generative.embedding_model
     settings.oci_genai_embedding_dim = generative.embedding_dim
@@ -1251,8 +1394,8 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     vision_response_path: str = ""
     timeout_seconds: float = 600.0
     max_retries: int = 3
-    llm_max_output_tokens: int = 1200
-    vlm_max_output_tokens: int = 65536
+    # #1719 より前の `llm_max_output_tokens` / `vlm_max_output_tokens` は、知らない key として
+    # 読み捨てる（出力の上限は登録モデルごとの `max_output_tokens`）。
     # #1434。値の無い JSON（#1434 より前）は既定の 42。範囲外は読み込みも検証エラー。
     seed: int = Field(
         default=DEFAULT_ENTERPRISE_AI_SEED,
@@ -1578,6 +1721,7 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
                         "connection_id",
                         "reasoning_effort",
                         "max_input_tokens",
+                        "max_output_tokens",
                     }
                 )
                 for model in enterprise.models
@@ -1593,8 +1737,6 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
             "vision_response_path": enterprise.vision_response_path,
             "timeout_seconds": enterprise.timeout_seconds,
             "max_retries": enterprise.max_retries,
-            "llm_max_output_tokens": enterprise.llm_max_output_tokens,
-            "vlm_max_output_tokens": enterprise.vlm_max_output_tokens,
             "seed": enterprise.seed,
         },
         "generative_ai": generative.model_dump(),

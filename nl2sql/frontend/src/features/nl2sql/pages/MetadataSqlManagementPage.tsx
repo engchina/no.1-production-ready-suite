@@ -10,6 +10,7 @@ import { Database,
 } from "lucide-react";
 
 import {
+  ApiErrorDetailList,
   Button,
   Banner,
   EmptyState,
@@ -589,7 +590,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         warnings: [...(domainInventory?.warnings ?? []), ...samples.warnings, ...generatedSql.warnings],
       });
       setGenerationResetSignal((value) => value + 1);
-      toast.success(t("metadataSql.toast.generated"));
+      // AI で作れずに規則ベースにした結果（#1719）は、SQL 実行の区画の danger の Banner だけで示す
+      // （同じ結果を成功の Toast と重ねない。messaging.md §4.2）。
+      if (!generatedSql.fallback) toast.success(t("metadataSql.toast.generated"));
     } catch (err) {
       if (isCurrent()) setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
     } finally {
@@ -1203,7 +1206,7 @@ function MetadataExecutePanel({
         description={t("metadataSql.execute.hint")}
         action={
           generated ? (
-            <StatusBadge icon={false} variant={generated.source === "oci_enterprise_ai" ? "success" : "neutral"} label={metadataSourceLabel(generated.source)} />
+            <StatusBadge icon={false} variant={metadataSourceVariant(generated)} label={metadataSourceLabel(generated)} />
           ) : null
         }
       />
@@ -1221,6 +1224,7 @@ function MetadataExecutePanel({
             <EmptyState title={t("metadataSql.execute.emptyTitle")} hint={t("metadataSql.execute.emptyHint")} />
           )}
 
+          {generated?.fallback ? <MetadataFallbackBanner pageId={pageId} generated={generated} /> : null}
           <WarningsBanner warnings={generated?.warnings} />
 
           <StatementRunnerCard
@@ -1241,11 +1245,59 @@ function MetadataExecutePanel({
   );
 }
 
-/** SQL を生成した方式（API の内部値）を利用者向けの文言にする（#962。ビュー管理の #949 と同じ）。 */
-function metadataSourceLabel(source: string) {
-  return source === "oci_enterprise_ai"
-    ? t("metadataSql.source.ociEnterpriseAi")
+/**
+ * SQL を生成した方式（API の内部値）を利用者向けの文言にする（#962。ビュー管理の #949 と同じ）。
+ * AI で作れずに規則ベースにした結果（#1719）は、AI を使わなかった場合と分けて示す。
+ */
+function metadataSourceLabel(generated: MetadataSqlGenerateData) {
+  if (generated.source === "oci_enterprise_ai") {
+    return generated.fallback
+      ? t("metadataSql.source.partialFallback")
+      : t("metadataSql.source.ociEnterpriseAi");
+  }
+  return generated.fallback
+    ? t("metadataSql.source.fallback")
     : t("metadataSql.source.deterministic");
+}
+
+function metadataSourceVariant(generated: MetadataSqlGenerateData) {
+  if (generated.fallback) return "warning" as const;
+  return generated.source === "oci_enterprise_ai" ? ("success" as const) : ("neutral" as const);
+}
+
+/**
+ * AI で作れずに規則ベース（表・列の名前をそのまま入れた SQL）にしたことを、danger の Banner で出す（#1719。
+ * messaging.md §10.3）。1 文目に何が起きたか、次に仮の SQL であることと理由、失敗の内容（理由・出力の上限・
+ * 使った token）は「詳細」に畳み、失敗なので開いて出す。
+ */
+function MetadataFallbackBanner({
+  pageId,
+  generated,
+}: {
+  pageId: string;
+  generated: MetadataSqlGenerateData;
+}) {
+  const objects = generated.fallback_objects ?? [];
+  const detail = generated.fallback_detail?.trim() ?? "";
+  return (
+    <div className="min-w-0" data-testid={`${pageId}-ai-fallback`}>
+      <Banner
+        severity="danger"
+        title={objects.length > 0 ? t("metadataSql.fallback.partialTitle") : t("metadataSql.fallback.title")}
+      >
+        <div className="min-w-0 space-y-2">
+          <p>{t("metadataSql.fallback.body")}</p>
+          {objects.length > 0 ? (
+            <p>{t("metadataSql.fallback.objects", { objects: objects.join(", ") })}</p>
+          ) : null}
+          {generated.fallback_reason ? <p>{generated.fallback_reason}</p> : null}
+          <ApiErrorDetailList
+            details={detail ? [{ label: t("metadataSql.fallback.detailLabel"), value: detail }] : []}
+          />
+        </div>
+      </Banner>
+    </div>
+  );
 }
 
 function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {

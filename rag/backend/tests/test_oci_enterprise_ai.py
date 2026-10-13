@@ -83,7 +83,8 @@ async def test_oci_vlm_posts_structured_extraction_payload() -> None:
     assert "cells" in table_schema["properties"]
     cell_properties = table_schema["properties"]["cells"]["items"]["properties"]
     assert "bbox" in cell_properties
-    assert payload["max_output_tokens"] == 65536
+    # 出力の上限は Vision のモデルの値(#1719。登録の無いモデルは既定の 32768)。
+    assert payload["max_output_tokens"] == 32768
     assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
 
 
@@ -592,7 +593,8 @@ async def test_oci_generate_posts_rag_generation_payload() -> None:
     assert payload["model"] == "enterprise-llm"
     assert payload["instructions"]
     assert payload["temperature"] == 0.0
-    assert payload["max_output_tokens"] == 1200
+    # 出力の上限はテキストのモデルの値(#1719。登録の無いモデルは既定の 32768)。
+    assert payload["max_output_tokens"] == 32768
     input_items = payload["input"]
     assert isinstance(input_items, list)
     assert input_items[0]["role"] == "user"
@@ -832,6 +834,56 @@ async def test_oci_vlm_reports_incomplete_max_output_tokens() -> None:
         await client.extract_with_vlm(b"pdf-bytes", "OCR", mime_type="application/pdf")
 
 
+async def test_oci_incomplete_message_reports_reason_limit_and_used_tokens() -> None:
+    """出力の上限で未完了の失敗の文に、理由・上限・使った token(うち推論)を出す(#1719)。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "id": "resp_incomplete",
+            "object": "response",
+            "status": "incomplete",
+            "model": "enterprise-llm",
+            "max_output_tokens": 1200,
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {
+                "input_tokens": 900,
+                "output_tokens": 1200,
+                "output_tokens_details": {"reasoning_tokens": 1198},
+            },
+            "output": [],
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    with pytest.raises(EnterpriseAiIncompleteResponseError) as raised:
+        await client.generate("質問", "根拠")
+
+    message = str(raised.value)
+    assert "モデル「enterprise-llm」" in message
+    assert "理由=max_output_tokens" in message
+    assert "出力の上限=1200 tokens" in message
+    assert "使った出力=1200 tokens(うち推論 1198)" in message
+    assert "出力の上限(tokens)" in message
+
+
+async def test_oci_payloads_use_each_model_output_limit() -> None:
+    """テキストと Vision の呼び出しは、それぞれのモデルの出力の上限を送る(#1719)。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(model_id="enterprise-llm", max_output_tokens=16000),
+        EnterpriseAiConfiguredModel(
+            model_id="enterprise-vlm", max_input_tokens=200000, max_output_tokens=100000
+        ),
+    ]
+    transport = FakeEnterpriseAiTransport({"output_text": "回答"})
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    await client.generate("質問", "根拠")
+    await client.generate_from_images([b"png"], "読み取ってください")
+
+    assert transport.calls[0]["payload"]["max_output_tokens"] == 16000
+    assert transport.calls[1]["payload"]["max_output_tokens"] == 100000
+
+
 async def test_oci_generate_reports_openai_responses_error_before_empty_text() -> None:
     """Responses API の failed status/error は空 text ではなく実エラーとして返す。"""
     transport = FakeEnterpriseAiTransport(
@@ -918,7 +970,7 @@ async def test_oci_generate_uses_configured_payload_template() -> None:
     assert answer == "テンプレート回答"
     payload = transport.calls[0]["payload"]
     assert payload["metadata"] == {"task": "rag_answer_generation", "language": "ja"}
-    assert payload["input"]["params"] == {"temperature": 0.0, "max_output_tokens": 1200}
+    assert payload["input"]["params"] == {"temperature": 0.0, "max_output_tokens": 32768}
     assert payload["input"]["messages"][0]["role"] == "system"
     assert payload["input"]["messages"][1]["role"] == "user"
     assert "質問" in payload["input"]["messages"][1]["content"]

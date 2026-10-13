@@ -29,10 +29,13 @@ test("Enterprise AI model settings keep the default text / vision model fields i
   assert.doesNotMatch(apiSource, /\bdefault_model_id\b/u);
 });
 
-test("Enterprise AI model settings keep max output token fields in frontend contract", () => {
+test("Enterprise AI model settings keep the per-model max output tokens in frontend contract (#1719)", () => {
+  // 出力の上限は登録モデルごと。共通の LLM / VLM の出力の上限は持たない。
+  assert.match(backendSettingsSchemaSource, /max_output_tokens: int = Field\(/u);
+  assert.match(apiSource, /max_output_tokens\?: number;/u);
+  assert.match(settingsE2eSource, /max_output_tokens:/u);
   for (const field of ["llm_max_output_tokens", "vlm_max_output_tokens"]) {
-    assert.match(backendSettingsSchemaSource, new RegExp(`${field}: int`, "u"));
-    assert.match(apiSource, new RegExp(`${field}: number;`, "u"));
-    assert.match(settingsE2eSource, new RegExp(`${field}:`, "u"));
+    assert.doesNotMatch(backendSettingsSchemaSource, new RegExp(`${field}: int`, "u"));
+    assert.doesNotMatch(apiSource, new RegExp(`${field}: number;`, "u"));
   }
 });

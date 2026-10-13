@@ -64,8 +64,6 @@ function data(modelIds: string[] = ["llm"]): ModelSettingsData {
         vision_response_path: "",
         timeout_seconds: 600,
         max_retries: 3,
-        llm_max_output_tokens: 1200,
-        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",
@@ -200,6 +198,8 @@ describe("ModelSettingsPage の登録モデルの入力の上限（#1437）", ()
 
     await setInputValue("enterprise-model-max-input-tokens-0", "4096");
     expect(fieldError("enterprise-model-max-input-tokens-0")).toBeUndefined();
+    // 出力の上限（#1719）は入力の上限以下にする。
+    await setInputValue("enterprise-model-max-output-tokens-0", "4096");
     await submitModels();
     expect(updateModelSettings).toHaveBeenCalledTimes(1);
     expect(updateModelSettings.mock.calls[0]?.[0].enterprise_ai.models[0]?.max_input_tokens).toBe(4096);

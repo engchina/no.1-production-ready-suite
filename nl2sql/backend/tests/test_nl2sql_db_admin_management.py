@@ -2169,7 +2169,9 @@ def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql()
     assert result.source == "deterministic"
     assert 'ADD OR REPLACE "DESCRIPTION"' in result.sql
     assert "ADD IF NOT EXISTS COMMENT" not in result.sql
-    assert any("ORA-11548" in warning for warning in result.warnings)
+    # AI の失敗は warnings ではなく fallback の理由・詳細に出す（#1719）。
+    assert result.fallback is True
+    assert "ORA-11548" in result.fallback_detail
 
 
 def test_multi_annotation_generation_preserves_explicit_add_and_normalizes_omitted_items() -> None:
@@ -2579,7 +2581,8 @@ def test_metadata_sql_target_preservation_uses_object_boundaries() -> None:
 
     assert result.source == "deterministic"
     assert 'COMMENT ON TABLE "APP"."EMP"' in result.sql
-    assert any("owner 修飾を保持しなかった" in warning for warning in result.warnings)
+    assert result.fallback is True
+    assert "owner 修飾を保持しません" in result.fallback_detail
 
 
 def test_metadata_sql_router_returns_400_for_invalid_target(
@@ -5585,7 +5588,8 @@ def test_domain_generation_uses_enterprise_ai_and_falls_back_on_violations() -> 
     policy_fallback = service.generate_domain_sql(request)
     assert policy_fallback.source == "deterministic"
     assert 'CREATE DOMAIN IF NOT EXISTS "APP"."CUSTOMER_ID_D"' in policy_fallback.sql
-    assert any("fallback" in warning for warning in policy_fallback.warnings)
+    assert policy_fallback.fallback is True
+    assert policy_fallback.fallback_reason
 
     service._enterprise_ai_client = FakeEnterpriseAiClient(
         "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_DOM AS NUMBER;\n"
@@ -5593,7 +5597,8 @@ def test_domain_generation_uses_enterprise_ai_and_falls_back_on_violations() -> 
     )
     outside = service.generate_domain_sql(request)
     assert outside.source == "deterministic"
-    assert any("選択した表以外" in warning for warning in outside.warnings)
+    assert outside.fallback is True
+    assert "選択した表以外" in outside.fallback_detail
 
 
 _DOMAIN_INVENTORY: dict[str, Any] = {
@@ -5840,7 +5845,8 @@ def test_domain_generation_prompt_carries_operation_and_allows_inventory_tables(
     )
     outside = service.generate_domain_sql(request.model_copy(update={"operation": "delete"}))
     assert outside.source == "deterministic"
-    assert any("選択した表以外" in warning for warning in outside.warnings)
+    assert outside.fallback is True
+    assert "選択した表以外" in outside.fallback_detail
 
 
 def test_deterministic_annotation_skips_domain_columns_and_comment_prompt_guides_codes() -> None:

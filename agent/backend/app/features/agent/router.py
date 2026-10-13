@@ -65,6 +65,7 @@ from pr_system_settings.model import (
     build_model_router,
     enterprise_ai_connection_for_model,
     model_payload,
+    output_token_budget,
     reasoning_payload,
     seed_to_send,
 )
@@ -788,6 +789,7 @@ def _enterprise_text_payload(
 ) -> dict[str, object]:
     system_prompt = "根拠に基づいて日本語で簡潔に回答してください。"
     user_message = f"{context}\n\n質問: {prompt}" if context else prompt
+    max_output_tokens = _model_output_token_budget(settings, _enterprise_text_model_id(settings))
     values = {
         "model": _enterprise_text_model_id(settings),
         "project": project_ocid,
@@ -803,7 +805,7 @@ def _enterprise_text_payload(
             {"role": "user", "content": user_message},
         ],
         "temperature": 0,
-        "max_output_tokens": settings.llm_max_output_tokens,
+        "max_output_tokens": max_output_tokens,
     }
     if settings.text_payload_template.strip():
         return _render_model_payload_template(settings.text_payload_template, values)
@@ -815,8 +817,21 @@ def _enterprise_text_payload(
             "instructions": system_prompt,
             "input": [{"role": "user", "content": user_message}],
             "temperature": 0,
-            "max_output_tokens": settings.llm_max_output_tokens,
+            "max_output_tokens": max_output_tokens,
         },
+    )
+
+
+def _model_output_token_budget(settings: EnterpriseAiModelSettings, model_id: str) -> int:
+    """テストするモデルの `max_output_tokens`（#1719。モデルの出力の上限と入力の上限の小さい方）。
+
+    画面の保存前の値（`settings.models`）で決める（推論の量と同じ）。登録の無いモデルは
+    既定の 32768。値の解釈は platform の `output_token_budget`。
+    """
+    model = next((item for item in settings.models if item.model_id == model_id), None)
+    return output_token_budget(
+        max_input_tokens=model.max_input_tokens if model else None,
+        max_output_tokens=model.max_output_tokens if model else None,
     )
 
 
@@ -857,7 +872,7 @@ def _enterprise_vision_payload(
         "prompt": prompt,
         "input": [{"role": "user", "content": content}],
         "messages": [{"role": "user", "content": content}],
-        "max_output_tokens": settings.vlm_max_output_tokens,
+        "max_output_tokens": _model_output_token_budget(settings, settings.default_vision_model_id),
     }
     if settings.vision_payload_template.strip():
         return _render_model_payload_template(settings.vision_payload_template, values)
@@ -867,7 +882,9 @@ def _enterprise_vision_payload(
         {
             "model": settings.default_vision_model_id,
             "input": [{"role": "user", "content": content}],
-            "max_output_tokens": settings.vlm_max_output_tokens,
+            "max_output_tokens": _model_output_token_budget(
+                settings, settings.default_vision_model_id
+            ),
         },
     )
 
