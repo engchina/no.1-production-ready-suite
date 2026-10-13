@@ -6,7 +6,10 @@
  *   PR では flaky のテストを 3 回実行していた（retries 2）。1 回の retry で通らないものは PR を赤にして直し、
  *   遅い環境でだけ出る flaky は nightly の retries 2 と「N flaky」の報告で拾う（#175）。
  * - workers: CI（GitHub の ubuntu-24.04。4 vCPU）は `CI_WORKERS`。手元は製品の値（引数）。
- *   2 と 3 の実測の比較は #1593 の PR に書いた。値を変えるときは、同じ方式で測り直す。
+ *   2 と 3 の実測（2026-10-13、e2e-nightly の手動の実行。#1593 の PR #1621）: 3 は Playwright の時間の合計が
+ *   NL2SQL 96.0 → 89.9 分・RAG 29.2 → 28.4 分・Agent 19.8 → 18.2 分と少ししか減らず、NL2SQL で retries 2 でも
+ *   通らない 4 件（locator.setChecked の時間切れなど）と flaky 2 件が出た（2 は 0 件）。そのため 2 にしている。
+ *   値を変えるときは、同じ方式（`gh workflow run e2e-nightly.yml -f workers=<N>`）で測り直す。
  *
  * `E2E_RETRIES` / `E2E_WORKERS` で上書きできる（worker の数の測定に使う）。
  */
