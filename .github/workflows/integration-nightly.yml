@@ -90,7 +90,12 @@ jobs:
       # RAG: 実の Oracle に依存するテスト（fixture `oracle_db`・tests/_oracle_test_db.py）を実行する。
       - name: Oracle integration tests (RAG)
         if: matrix.product == 'rag'
+        # fixture は DB に届かないと skip するため、先に届くことを確かめる（skip のまま成功にしない）。
         run: |
+          if ! uv run python -c 'import sys; from tests._oracle_test_db import db_available; sys.exit(0 if db_available() else 1)'; then
+            echo "::error::実 Oracle に接続できません（PLATFORM_ORACLE_*）。"
+            exit 1
+          fi
           mapfile -t files < <(grep -rlE --include='test_*.py' 'oracle_db|_oracle_test_db' tests | sort)
           printf '%s\n' "${files[@]}"
           uv run pytest -n auto -rs "${files[@]}"
