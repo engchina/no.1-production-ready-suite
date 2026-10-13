@@ -35,6 +35,7 @@
 - **merge 後はローカルを `main` に切り替え、`git fetch --prune` のうえ `origin/main` へ fast-forward してから完了を報告する**（PR の merge 状態・ブランチ・同期を確かめる）。未保存の変更を破棄する `reset --hard` 等は使わない。同期できなければ理由と残作業を明示する。
 - docs-only や緊急の修正も同じ流れ。例外が要るなら理由を添えてユーザーに確認する。
 - 並行する別のセッションの未コミット変更・stash・worktree を、確認なしに破棄・上書きしない。
+- **一時ファイルは `/tmp` に置かず、repo の直下の `./tmp/` に置く**（開発環境の WSL がよく再起動し、`/tmp` が消えるため。#1616）。作業用の worktree は `.claude/worktrees/`、PR / Issue の本文・測定の結果・展開した binary などは `./tmp/<作業の名前>/`。`./tmp/` は `.gitignore` で無視し、commit しない。
 
 ### GitHub Issue / Pull Request の記述規約
 
@@ -56,7 +57,9 @@
 - **PR の e2e は desktop が全件、375px（mobile）の project は画面幅に依存する test（`@responsive` の tag と、名前の括弧で `mobile` / `375px` を前提にするもの）だけ**（`ci.yml` の `E2E_MOBILE_SCOPE=responsive`。#1582）。nightly とローカルは両方の project で全件。
 - backend の pytest は CI で並列（`-n auto`）に実行する。**テストは並列でも直列でも通るように書く**（`tmp_path`・`parametrize` の `ids=`・差し替えられる待ち・`xdist_group`。[backend-standard.md](./platform/docs/backend-standard.md)「テストの並列実行」）。
 - `pip-audit` はその backend の `uv.lock` / `pyproject.toml`（か `ci.yml`）が変わったときだけ（全件は `dependency-audit-nightly.yml`）、`bandit` は毎回。
-- **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。
+- **schedule の workflow を足したら `ci-failure-issue.yml` の `workflows` にも足す**（nightly の失敗も Issue になる）。job の時間切れ（cancelled）も Issue になる（#1586）。
+- runner は `runs-on: ubuntu-24.04`（本番の Compute の Ubuntu と同じ版。`ubuntu-latest` は使わない。#1587）。版を上げるときは本番の image と同じ PR でそろえる。
+- main の push の CI は commit ごとに実行し、続けて merge しても前の run を取り消さない（PR だけ古い run を取り消す。#1585）。main の CI（push・毎日の schedule・手動）は、main で最後に成功した CI の commit からの変更で job を選ぶ。Dependabot の自動 merge（`GITHUB_TOKEN`）は push の CI を起動しないので、毎日の schedule で確かめる（#1609）。
 - secret 検出は `.gitleaks.toml` / `.gitleaksignore`（書き方は `.gitleaks.toml` の冒頭）。誤検知は fingerprint 単位で `.gitleaksignore` に理由付きで除外する。
 - Dependabot の patch / minor は `CI OK` の後に自動 merge される。major・一式の更新・group PR の失敗の扱いは `.github/dependabot.yml` の冒頭。
 - Python の整形は `ruff format`（black は使わない。CI は `uv run ruff format --check .`）。整形だけの commit は `.git-blame-ignore-revs` に載せる。pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend のファイルへの `ruff format --check` / `ruff check`。
