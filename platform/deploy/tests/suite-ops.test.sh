@@ -89,6 +89,8 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
     esac
   }
   journalctl() { :; }
+  # system schema の確認（#1648）は DB に繋がないよう差し替える（suite-health.test.sh が詳しく確かめる）。
+  suite_run_schema_check() { printf 'status=ready\n'; }
   curl() { case "$*" in *":8000/api/health"* | *"127.0.0.1:443/rag/api/health"*) return 0 ;; *) return 7 ;; esac; }
   if suite_check_deployed >/dev/null; then fail "Agent が応答しないのに成功した"; fi
   curl() { printf '%s\n' "$*" >> "${calls}"; }

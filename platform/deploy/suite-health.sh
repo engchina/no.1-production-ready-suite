@@ -10,6 +10,10 @@
 #     service（証明書の更新の oneshot を除く）がすべて active か、各製品の backend の health、Nginx が active か、
 #     Nginx を通した各製品の health を確かめ、製品ごとに 1 行の要約を出す。NG なら NG の service の journal の
 #     末尾を出して失敗を返す。backend の port は suite-nginx.sh の suite_backend_port（呼び出し元が source する）。
+#     各製品の system schema が ready かも、製品の schema の CLI の check（DDL を実行しない）で 1 回だけ確かめる
+#     （#1648）。init_script.sh は表の初期化に失敗しても backend を起動する（画面から直せる）ため、health だけでは
+#     OK に見える。NG なら CLI の要約（状態・不足・前回の失敗の ORA コード）と、権限の不足の手がかりを出す。
+#     テストは suite_run_schema_check を差し替える（DB に繋がらない）。
 #
 # log は呼び出し元の関数（既定 log。SUITE_HEALTH_LOG で関数名を変えられる）で出す。
 # 製品の init_script.sh は、配備した repository の platform/deploy/ からこのファイルを source する（製品は単独では
@@ -26,6 +30,9 @@ SUITE_CHECK_TIMEOUT_SECONDS="${SUITE_CHECK_TIMEOUT_SECONDS:-180}"
 SUITE_CHECK_SETTLE_SECONDS="${SUITE_CHECK_SETTLE_SECONDS:-10}"
 SUITE_CHECK_INTERVAL_SECONDS="${SUITE_CHECK_INTERVAL_SECONDS:-3}"
 SUITE_CHECK_JOURNAL_LINES="${SUITE_CHECK_JOURNAL_LINES:-80}"
+# system schema の確認（#1648）: 1 製品の CLI の上限の秒数と、製品の init の log の場所。
+SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS="${SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS:-120}"
+SUITE_PRODUCT_LOG_DIR="${SUITE_PRODUCT_LOG_DIR:-/var/log}"
 SUITE_UNIT_PATTERN="production-ready-*.service"
 SUITE_TLS_RENEW_SERVICE="production-ready-suite-tls-renew.service"
 
@@ -174,10 +181,73 @@ _suite_check_poll() {
   fi
 }
 
+# 各製品の system schema の確認の CLI の引数（backend の .venv の python に渡す。DDL を実行しない。#1648）。
+suite_schema_check_args() {
+  case "$1" in
+    rag) printf '%s\n' "-m app.rag.system_schema_cli check" ;;
+    nl2sql) printf '%s\n' "-m app.cli.nl2sql_system_schema --check" ;;
+    agent) printf '%s\n' "-m app.cli.agent_system_schema --check" ;;
+    *) return 1 ;;
+  esac
+}
+
+# 製品の schema の確認を、製品のプロセスと同じユーザー（APP_USER）で実行する。標準出力の最後の行が要約、
+# 終了コード 0 が ready（124 は時間切れ）。CLI の log（標準エラー）は出さない。テストはこの関数を差し替える。
+suite_run_schema_check() {
+  local product="$1"
+  local user="${APP_USER:-opc}"
+  local home="${APP_HOME:-/home/${user}}"
+  local backend_dir="${SUITE_REPO_DIR:-/u01/aipoc/no.1-production-ready-suite}/${product}/backend"
+  local args
+  if ! args="$(suite_schema_check_args "${product}")"; then
+    printf '確認の方法がありません（%s）\n' "${product}"
+    return 1
+  fi
+  if [ ! -x "${backend_dir}/.venv/bin/python" ]; then
+    printf 'backend の venv がありません（%s/.venv）\n' "${backend_dir}"
+    return 1
+  fi
+  runuser -u "${user}" -- env HOME="${home}" PATH="/usr/local/bin:/usr/bin:/bin" \
+    bash -c "cd '${backend_dir}' && exec timeout ${SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS} .venv/bin/python ${args}" \
+    2>/dev/null
+}
+
+# 1 製品の system schema の確認。結果を _SUITE_CHECK_LINES に足し、NG なら _SUITE_CHECK_OK=false にする。
+# NG のときは、製品の初期化の log の最後の ORA / PLS のコードと、権限の不足の手がかりも出す。
+_suite_check_schema() {
+  local product="$1"
+  local output summary status=0 log_file last_error
+  output="$(suite_run_schema_check "${product}")" || status=$?
+  summary="$(printf '%s\n' "${output}" | sed '/^[[:space:]]*$/d' | tail -n 1)"
+  if [ "${status}" -eq 0 ]; then
+    _SUITE_CHECK_LINES+=("check: ${product} schema OK（${summary:-ready}）")
+    return 0
+  fi
+  _SUITE_CHECK_OK=false
+  if [ "${status}" -eq 124 ]; then
+    summary="確認が ${SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS} 秒以内に終わりません"
+  fi
+  if [ -z "${summary}" ]; then
+    summary="確認の CLI が要約を出さずに終わりました（終了コード ${status}。backend で .venv/bin/python $(suite_schema_check_args "${product}" || true) を実行して確かめてください）"
+  fi
+  _SUITE_CHECK_LINES+=("check: ${product} schema NG（${summary}）")
+  log_file="${SUITE_PRODUCT_LOG_DIR}/${product}-init.log"
+  last_error="$(grep -oE '(ORA|PLS)-[0-9]{5}' "${log_file}" 2>/dev/null | tail -n 1 || true)"
+  if [ -n "${last_error}" ]; then
+    _SUITE_CHECK_LINES+=("check: ${product} の初期化の log（${log_file}）の最後のエラー: ${last_error}")
+  fi
+  # 権限の不足（insufficient privileges・表領域の quota・Oracle Text の CTX_DDL・参照できない view など）。
+  if printf '%s %s\n' "${summary}" "${last_error}" \
+    | grep -qE 'ORA-01031|ORA-01950|ORA-01536|ORA-00942|ORA-04043|PLS-00201'; then
+    _SUITE_CHECK_LINES+=("check: ${product} の DB ユーザー（PLATFORM_ORACLE_USER）の権限が足りない可能性があります。terraform/README.md「既存の ADB で ADMIN 以外のユーザーを使うとき」の権限を付けてから、初期化をやり直してください。")
+  fi
+  _SUITE_CHECK_LINES+=("check: ${product} の初期化のやり直しは ${log_file} の Recovery の行（画面の システムテーブル でもできる）。")
+}
+
 suite_check_deployment() {
   local base="$1"
   shift
-  local start="${SECONDS}" line unit
+  local start="${SECONDS}" line unit product
   declare -gA _SUITE_CHECK_RESTARTS=() _SUITE_CHECK_CHANGED_AT=()
   _SUITE_CHECK_SETTLE="${SUITE_CHECK_SETTLE_SECONDS}"
   _suite_health_log "check: 配備を確かめます（製品 $*、上限 ${SUITE_CHECK_TIMEOUT_SECONDS} 秒）。"
@@ -188,17 +258,21 @@ suite_check_deployment() {
     fi
     sleep "${SUITE_CHECK_INTERVAL_SECONDS}"
   done
+  # system schema は待たずに 1 回だけ確かめる（backend は起動時に DDL を実行しないので、待っても変わらない）。
+  for product in "$@"; do
+    _suite_check_schema "${product}"
+  done
   for line in "${_SUITE_CHECK_LINES[@]}"; do
     _suite_health_log "${line}"
   done
   if [ "${_SUITE_CHECK_OK}" = "true" ]; then
-    _suite_health_log "check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答しています）。"
+    _suite_health_log "check: OK（すべての service が active で、各製品の health が backend と Nginx の両方で応答し、system schema が ready です）。"
     return 0
   fi
   for unit in "${_SUITE_CHECK_BAD_UNITS[@]}"; do
     _suite_health_log "check: ${unit} の journal の末尾（${SUITE_CHECK_JOURNAL_LINES} 行）:"
     journalctl -u "${unit}" -n "${SUITE_CHECK_JOURNAL_LINES}" --no-pager 2>&1 || true
   done
-  _suite_health_log "check: NG（上の check の行と journal を確認してください。backend が NG なら sudo journalctl -u production-ready-<製品>-backend -n 200 --no-pager）。"
+  _suite_health_log "check: NG（上の check の行と journal を確認してください。backend が NG なら sudo journalctl -u production-ready-<製品>-backend -n 200 --no-pager、schema が NG なら /var/log/<製品>-init.log）。"
   return 1
 }

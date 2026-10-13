@@ -301,6 +301,71 @@ def idle_operation_state() -> dict[str, Any]:
     }
 
 
+# ---- 配備の確認（#1648） --------------------------------------------------------
+#
+# 配備の最後の確認（platform/deploy/suite-health.sh の suite_check_deployment）が、各製品の
+# schema の CLI の `check` を実行し、終了コード（0 = ready）と 1 行の要約を log に出す。
+# init_script.sh は初期化に失敗しても backend を起動する（画面から直せる）ため、ここで NG にして
+# 配備の失敗として見せる。
+
+# 要約に出す不足の object・承認が要る削除の名前の上限（残りは件数だけ）。
+DEPLOYMENT_CHECK_NAME_LIMIT = 5
+
+
+def _limited_names(names: Sequence[str]) -> str:
+    shown = ", ".join(names[:DEPLOYMENT_CHECK_NAME_LIMIT])
+    return f"{shown}, …" if len(names) > DEPLOYMENT_CHECK_NAME_LIMIT else shown
+
+
+def deployment_check_summary(status: Mapping[str, Any]) -> tuple[bool, str]:
+    """状態から、配備の確認の結果（ready か）と 1 行の要約を返す。
+
+    ready で、操作が実行中でないときだけ OK。NG の要約には、状態・不足の object・未適用の
+    migration・承認が要る削除・前回の操作の失敗（ORA コードだけ）を入れる。SQL・資格情報は
+    入れない。
+    """
+
+    state = str(status.get("status") or "unknown")
+    operation = status.get("operation_state") or {}
+    operation_status = str(operation.get("status") or "idle")
+    ok = state == "ready" and operation_status != "running"
+    parts = [f"status={state}"]
+    if ok:
+        return True, parts[0]
+    missing = [str(item.get("name", "")) for item in status.get("missing_objects") or []]
+    if missing and state != "missing":
+        parts.append(f"不足 {len(missing)} 件（{_limited_names(missing)}）")
+    pending = list(status.get("pending_versions") or [])
+    if pending and state != "missing":
+        parts.append(f"未適用の migration {len(pending)} 件")
+    destructive = [
+        str(item.get("name", "")) for item in status.get("pending_destructive_migrations") or []
+    ]
+    if destructive:
+        parts.append(
+            f"承認が要る削除 {len(destructive)} 件（{_limited_names(destructive)}。"
+            "書き出してから --allow-destructive で初期化）"
+        )
+    if operation_status != "idle":
+        parts.append(f"操作 {operation_status}")
+    last_error = operation.get("last_error_code")
+    if last_error:
+        parts.append(f"前回の操作の失敗 {last_error}")
+    return False, "・".join(parts)
+
+
+def deployment_check_error_summary(exc: BaseException) -> str:
+    """状態を読めないとき（接続・権限）の要約。公開するのは ORA コード（無ければ例外の型）だけ。"""
+
+    if isinstance(exc, SystemSchemaError):
+        code = exc.code
+    else:
+        code = oracle_error_code(exc)
+        if code == SCHEMA_OPERATION_FAILED:
+            code = f"{SCHEMA_STATUS_UNAVAILABLE}: {type(exc).__name__}"
+    return f"状態を読めません（{code}）"
+
+
 def system_tables_status_error(exc: BaseException) -> HTTPException:
     """状態を取得できないときの 503（公開するのは ORA コードだけ）。"""
 
@@ -1441,6 +1506,7 @@ class SystemSchemaManagerBase(ABC):
 __all__ = [
     "CONTROL_KEY",
     "DEFAULT_LEASE_SECONDS",
+    "DEPLOYMENT_CHECK_NAME_LIMIT",
     "DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED",
     "FOREIGN_KEY_DELETE_RULES",
     "FOREIGN_KEY_NOT_FOUND",
@@ -1486,6 +1552,8 @@ __all__ = [
     "classify_system_schema_status",
     "count_orphan_rows",
     "delete_orphan_rows_sql",
+    "deployment_check_error_summary",
+    "deployment_check_summary",
     "drop_foreign_key_sql",
     "enable_foreign_key_sql",
     "foreign_keys_from_create_table",

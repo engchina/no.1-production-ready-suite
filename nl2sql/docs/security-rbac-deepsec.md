@@ -94,26 +94,11 @@ platform の `pr_system_settings.auth` にあり、NL2SQL はその上に NL2SQL
 NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `NL2SQL_APP_DATA_ENTITLEMENTS` /
 `NL2SQL_DEEPSEC_MIGRATIONS` は名前を変えない。旧名との互換は持たない（旧名のテーブルは読まない）。
 
-### 既存環境の更新手順
-
-DeepSec を使っていない環境は、手順 1〜2 だけでよい。DeepSec を有効にしている環境では、手順 3 が終わるまで
-DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないため、メンテナンス時間に行う。
-
-1. 新しい backend を配備する前に、旧 backend を止める（旧 backend は旧テーブル名を読む）。
-2. `uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` を実行する。
-   - migration 024 が 4 テーブルと index / constraint を `PLATFORM_*` へ改名する（データは保つ）。
-     旧名と新名のテーブルが両方ある場合は、どちらのデータを残すかを確認するよう求めて停止する。
-   - platform の DDL が `PLATFORM_*` を冪等に作る（新規環境ではここで作られる）。
-   - migration 025 が `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` の FK を
-     `ON DELETE CASCADE` に張り直す。他の製品からロールを削除したとき、NL2SQL の権限も消えるようにするため。
-     `NL2SQL_APP_DATA_ENTITLEMENTS` の FK は削除制限のままにする（Data Grant の後始末を DeepSec で行う）。
-3. DeepSec を有効にしている場合は、`Deep Data Security` 画面で次を行う。
-   - `基盤構成` で V001 の step 1・2 を再適用する。条件式・`NL2SQL_DEEPSEC_CTX_PKG`・GRANT が
-     `PLATFORM_*` を参照するよう変わり、checksum が変わるため、自動的に「未適用」になっている。
-   - `データ権限` で各ロールの Data Grant をプレビューし、再適用する。migrate は Data Grant の状態を
-     PENDING に戻している（旧テーブル名を参照する Data Grant の条件式は、改名後は使えない）。
-   - `検証` で基盤構成と Data Grant を確認する。
-4. 新しい backend を起動する。
+`app_security_migrate --apply` は `PLATFORM_*`（platform の DDL）と migration 004 の表を作るだけで、既存の表は変えない。
+旧名・旧形からの移行（`RAG_APP_*` → `NL2SQL_APP_*` → `PLATFORM_*` の改名、旧監査ログの表の削除、権限の行の
+削除・追加、列の追加）の migration は、初めての release の前に削除した（#1648。既存の ADB の同じ schema に旧版の
+単独の製品などの同じ名前の表があっても、承認なしに改名・削除しないため）。旧名の表があれば、改名・削除・変更せずに
+名前を標準エラーに出して残す。旧版の環境のデータを移す手順は持たない（新しい schema に配備し直す）。
 
 なお、NL2SQL の業務プロファイルの対象一覧・管理 SQL は、`NL2SQL_` に加えて `PLATFORM_` / `RAG_` / `AGENT_`
 で始まるオブジェクトをシステムオブジェクトとして扱い、表示・操作の対象にしない（3 製品が同じ schema を
@@ -149,9 +134,8 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
   （`app.main._assert_route_manifest`）で失敗し、実行時も拒否する（#510）。権限なしで通す操作（公開・ログインだけ・
   MCP・`GET /nl2sql/persistence`）は `OPEN_API_OPERATIONS` に置く。API を追加するときは、同じ PR で
   `ROUTE_PERMISSIONS` に登録する。
-- 旧「ロール・権限管理」（`menu.security_roles`）を持つロールには、`app_security_migrate` の
-  migration 023 が `menu.security_permissions` を追加し、権限の付与を続けられるようにする。
-  旧 action 権限 `security.roles.manage` も両方へ正規化する。
+- 旧 action 権限 `security.roles.manage` は、ロール管理と権限管理の両方へ正規化する（旧「ロール・権限管理」の
+  ロールに `menu.security_permissions` を足していた migration 023 は #1648 で削除した）。
 - ユーザー・ロールの request / response の形とパスワードポリシーは platform の
   `pr_system_settings.users_roles` を正とし、NL2SQL は `RoleData` に権限・Data Grant・業務プロファイル
   利用権限を足して返す。
@@ -656,8 +640,8 @@ D1/D3 に変更すると関連条件に一致する ID=1 も返った。これ�
 `GET /api/security/deepsec/scope-profiles` と `GET /api/security/deepsec/relations` が設定候補を返す。
 対象一覧の `profile_id` は候補を絞る任意パラメーターで、runtime 認可には追加しない。
 
-デプロイ時は `backend` で `uv run python -m app.cli.app_security_migrate --apply` を実行し、
-migration `020_deepsec_scope_expression.sql` の nullable `SCOPE_EXPRESSION` CLOB と mode 制約を適用する。
+nullable の `SCOPE_EXPRESSION` CLOB と mode 制約（`EXPRESSION`）は、`app_security_migrate --apply` が migration 004 で
+作る（旧形の表に列を足す migration 020 は #1648 で削除した）。
 旧 `FILTERS` / `COLUMN_EQUALS` はそのまま読み、編集・保存したルールのみ新形式にする。
 既存 entitlement ID / Data Grant 名 / checksum / apply 状態は未変更時に保持する。
 複雑ルールへの旧形式上書きは拒否する。新 UI が明示的に全行へ変更する場合のみ

@@ -1,6 +1,8 @@
--- NL2SQL role permissions, data entitlements, and DeepSec ledger.
+-- NL2SQL role permissions, business profile access, data entitlements, and DeepSec ledger.
 -- Users, roles, user-role assignments, and sessions are PLATFORM_* tables (platform auth, #212);
--- app_security_migrate creates them before this file. Apply before APP_AUTH_ENABLED=true startup.
+-- app_security_migrate creates them before this file. Existing tables are kept (ORA-00955 is
+-- ignored). This is the only security DDL: migrations from older names and shapes were removed
+-- before the first release (#1648), so legacy tables are never renamed, altered, or dropped.
 
 CREATE TABLE NL2SQL_APP_ROLE_PERMISSIONS (
     ROLE_ID VARCHAR2(36) NOT NULL,
@@ -24,6 +26,7 @@ CREATE TABLE NL2SQL_APP_DATA_ENTITLEMENTS (
     SCOPE_MODE VARCHAR2(32) DEFAULT 'ALL' NOT NULL,
     SCOPE_COLUMN VARCHAR2(128),
     SCOPE_FILTERS VARCHAR2(4000) DEFAULT '[]' NOT NULL,
+    SCOPE_EXPRESSION CLOB,
     DATA_GRANT_NAME VARCHAR2(128),
     SQL_CHECKSUM VARCHAR2(64),
     APPLY_STATUS VARCHAR2(16) DEFAULT 'PENDING' NOT NULL,
@@ -35,7 +38,9 @@ CREATE TABLE NL2SQL_APP_DATA_ENTITLEMENTS (
     CONSTRAINT CK_NL2SQL_APP_DE_TARGET_TYPE CHECK (
         TARGET_TYPE IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
     ),
-    CONSTRAINT CK_NL2SQL_APP_DE_SCOPE_MODE CHECK (SCOPE_MODE IN ('ALL', 'COLUMN_EQUALS', 'FILTERS')),
+    CONSTRAINT CK_NL2SQL_APP_DE_SCOPE_MODE CHECK (
+        SCOPE_MODE IN ('ALL', 'COLUMN_EQUALS', 'FILTERS', 'EXPRESSION')
+    ),
     CONSTRAINT CK_NL2SQL_APP_DE_APPLY_STATUS CHECK (
         APPLY_STATUS IN ('PENDING', 'RUNNING', 'APPLIED', 'FAILED')
     ),
@@ -56,6 +61,12 @@ CREATE TABLE NL2SQL_DEEPSEC_MIGRATIONS (
     CONSTRAINT CK_NL2SQL_DEEPSEC_MIG_STATUS CHECK (STATUS IN ('PENDING', 'RUNNING', 'APPLIED', 'FAILED'))
 );
 
--- Oracle treats an empty string as NULL. These ALTER statements also repair
--- installations created by an earlier revision of this migration.
-ALTER TABLE NL2SQL_DEEPSEC_MIGRATIONS MODIFY (ERROR_MESSAGE DEFAULT '-');
+CREATE TABLE NL2SQL_APP_ROLE_PROFILES (
+    ROLE_ID VARCHAR2(36) NOT NULL,
+    PROFILE_ID VARCHAR2(128) NOT NULL,
+    CREATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT PK_NL2SQL_APP_ROLE_PROFILES PRIMARY KEY (ROLE_ID, PROFILE_ID),
+    CONSTRAINT FK_NL2SQL_APP_RPROF_ROLE FOREIGN KEY (ROLE_ID) REFERENCES PLATFORM_ROLES (ROLE_ID)
+        ON DELETE CASCADE
+);
