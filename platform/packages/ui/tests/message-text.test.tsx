@@ -60,6 +60,18 @@ describe("MessageText", () => {
     expect(html).toContain("変更はありません。");
   });
 
+  it("半角の文末は空白か末尾が続くときだけ区切り、記号の長い連続でも時間内に終わる（#1646）", () => {
+    expect(segmentMessageText("v3.14 を使う!! 次へ。").map((segment) => segment.text)).toEqual([
+      "v3.14 を使う!!",
+      "次へ。",
+    ]);
+    // 以前の正規表現は `!` の連続の各位置から読み直して O(n²) になった（20 万文字で数十秒）。
+    const started = performance.now();
+    const segments = segmentMessageText(`${"!".repeat(200_000)}a`);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(segments.map((segment) => segment.text).join("")).toBe(`${"!".repeat(200_000)}a`);
+  });
+
   it("日本語を文節で折り返す指定（.pr-message-text）を本文に付ける（#899）", () => {
     const html = renderToStaticMarkup(<MessageText text={"Oracle Profile の反映が完了しました。"} />);
     expect(html).toMatch(/class="pr-message-text[^"]*"[^>]*data-message-text/);

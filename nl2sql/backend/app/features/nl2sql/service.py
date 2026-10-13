@@ -1088,7 +1088,24 @@ _QUESTION_TARGET_TABLE_SLOT_LABELS = (
     "対象テーブル",
     "対象テーブル（複数可）",
 )
-_QUESTION_SLOT_PATTERN = re.compile(r"^\s*([^：:\n]{1,80})\s*[：:]\s*(.*)$")
+_QUESTION_SLOT_SEPARATOR = re.compile(r"[：:]")
+_QUESTION_SLOT_LABEL_MAX_CHARS = 80
+
+
+def _split_question_slot_line(line: str) -> tuple[str, str] | None:
+    """`ラベル: 値` の行を (ラベル, 値) に分ける。ラベルが空・長すぎる行は None。
+
+    最初の `:` / `：` で分ける。以前の `^\\s*([^：:\\n]{1,80})\\s*[：:]` は、空白とラベルの
+    文字の重なりで、空白の長い 1 行に数十秒かかった（#1646）。
+    """
+
+    separator = _QUESTION_SLOT_SEPARATOR.search(line)
+    if not separator:
+        return None
+    label = line[: separator.start()].strip()
+    if not label or len(label) > _QUESTION_SLOT_LABEL_MAX_CHARS:
+        return None
+    return label, line[separator.end() :].lstrip()
 
 
 def _normalize_question_slot_label(value: str) -> str:
@@ -1126,15 +1143,15 @@ def _parse_structured_question_slots(question: str) -> _StructuredQuestionSlots:
     current_label = ""
     has_template = False
     for raw_line in str(question or "").splitlines():
-        match = _QUESTION_SLOT_PATTERN.match(raw_line)
-        if match:
-            label_key = _normalize_question_slot_label(match.group(1))
+        slot_line = _split_question_slot_line(raw_line)
+        if slot_line:
+            label_key = _normalize_question_slot_label(slot_line[0])
             label = _QUESTION_SLOT_LABEL_KEYS.get(label_key)
             if label:
                 has_template = True
                 current_label = label
                 current_value = slots.get(label, "")
-                line_value = match.group(2)
+                line_value = slot_line[1]
                 slots[label] = f"{current_value}\n{line_value}" if current_value else line_value
                 continue
         if current_label:
@@ -1963,17 +1980,34 @@ def _schema_refresh_target_for_statement(
             object_type="materialized_view",
             expected_state="present",
         )
-    column = re.match(
-        r"^comment\s+on\s+column\s+(.+?)\s+is\b",
-        stripped,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if column:
+    column_ref = _comment_on_column_ref(stripped)
+    if column_ref:
         return _schema_refresh_target_from_column_ref(
-            column.group(1),
+            column_ref,
             current_owner=current_owner,
         )
     return None
+
+
+_COMMENT_ON_COLUMN_PREFIX = re.compile(r"comment\s+on\s+column\s+", re.IGNORECASE)
+_COMMENT_ON_COLUMN_IS = re.compile(r"\sis\b", re.IGNORECASE)
+
+
+def _comment_on_column_ref(statement: str) -> str | None:
+    """`COMMENT ON COLUMN 対象 IS …` の対象を返す。形が違えば None。
+
+    前置きと ` IS` の位置を別々に求める。`(.+?)\\s+is\\b` は空白の長い連続で
+    開始位置ごとに読み直して O(n²) になるため（#1646）。
+    """
+
+    prefix = _COMMENT_ON_COLUMN_PREFIX.match(statement)
+    if not prefix:
+        return None
+    body = statement[prefix.end() :]
+    keyword = _COMMENT_ON_COLUMN_IS.search(body)
+    if not keyword:
+        return None
+    return body[: keyword.start() + 1].rstrip() or None
 
 
 def _dedupe_schema_refresh_targets(
@@ -2471,27 +2505,50 @@ def _annotation_statement_error(statement: str) -> str:
 
 # アノテーション・ドメインの policy の判定に使う字句（#940）。空白・コメントは捨て、引用識別子・
 # 文字列リテラルは 1 つの字句にする。
-_POLICY_SQL_TOKEN_RE = re.compile(
-    r"""\s+|--[^\n]*|/\*.*?\*/|"(?:[^"]|"")*"|'(?:[^']|'')*'|[A-Za-z_][\w$#]*|\S""",
-    re.DOTALL,
-)
+_POLICY_SQL_WORD_RE = re.compile(r"[A-Za-z_][\w$#]*")
 _POLICY_SQL_IDENTIFIER_RE = re.compile(r'"(?:[^"]|"")+"|[A-Za-z_][\w$#]*')
 
 
 def _policy_sql_tokens(statement: str) -> list[str] | None:
-    """文を policy の判定用の字句へ分ける。閉じていない引用・コメントがあれば None（拒否側）。"""
+    """文を policy の判定用の字句へ分ける。閉じていない引用・コメントがあれば None（拒否側）。
+
+    1 回の走査で分ける。以前の正規表現（`/\\*.*?\\*/` など）は、閉じないコメントの繰り返しで
+    開始位置ごとに末尾まで読み直して O(n²) になり、閉じないコメントを `/` と `*` の字句として
+    通していた（#1646）。字句は空白・`--` の行コメント・`/* */` を除いた、引用の識別子・文字列
+    （`""` / `''` は中の引用）、`[A-Za-z_][\\w$#]*` の語、それ以外の 1 文字。
+    """
     tokens: list[str] = []
-    for match in _POLICY_SQL_TOKEN_RE.finditer(statement):
-        token = match.group(0)
-        if token.isspace() or token.startswith("--"):
-            continue
-        if token.startswith("/*"):
-            if not token.endswith("*/") or len(token) < 4:
+    length = len(statement)
+    index = 0
+    while index < length:
+        char = statement[index]
+        if char.isspace():
+            index += 1
+        elif statement.startswith("--", index):
+            line_end = statement.find("\n", index)
+            index = length if line_end < 0 else line_end
+        elif statement.startswith("/*", index):
+            comment_end = statement.find("*/", index + 2)
+            if comment_end < 0:
                 return None
-            continue
-        if token in {'"', "'"}:
-            return None
-        tokens.append(token)
+            index = comment_end + 2
+        elif char in {'"', "'"}:
+            cursor = index + 1
+            while True:
+                close = statement.find(char, cursor)
+                if close < 0:
+                    return None
+                if statement.startswith(char, close + 1):
+                    cursor = close + 2
+                    continue
+                break
+            tokens.append(statement[index : close + 1])
+            index = close + 1
+        else:
+            word = _POLICY_SQL_WORD_RE.match(statement, index)
+            token = word.group(0) if word else char
+            tokens.append(token)
+            index += len(token)
     if tokens and tokens[-1] == ";":
         tokens.pop()
     return tokens
@@ -3400,8 +3457,25 @@ def _split_select_expressions(select_list: str) -> list[str]:
     return expressions
 
 
+_EXPRESSION_ALIAS_KEYWORD = re.compile(r"\sas\s", re.IGNORECASE)
+_TRAILING_LIMIT_CLAUSE = re.compile(r"\slimit\s+\d+$", re.IGNORECASE)
+
+
+def _ends_with_limit_clause(sql: str) -> bool:
+    """SQL が `… LIMIT n`（末尾の空白と `;` 1 つは許す）で終わるか。
+
+    末尾の空白と `;` を先に外す。`\\s+limit\\s+\\d+\\s*;?\\s*$` の検索は、空白の長い連続で
+    開始位置ごとに読み直して O(n²) になるため（#1646）。
+    """
+
+    body = sql.rstrip().removesuffix(";").rstrip()
+    return bool(_TRAILING_LIMIT_CLAUSE.search(body))
+
+
 def _strip_expression_alias(expression: str) -> str:
-    without_alias = re.split(r"\s+as\s+", expression, maxsplit=1, flags=re.IGNORECASE)[0]
+    # 最初の ` AS ` の前を残す（`\s+as\s+` の分割は空白の長い連続で O(n²) になる。#1646）。
+    alias = _EXPRESSION_ALIAS_KEYWORD.search(expression)
+    without_alias = expression[: alias.start()].rstrip() if alias else expression
     tokens = without_alias.strip().split()
     if len(tokens) > 1 and re.fullmatch(r"[a-zA-Z_][\w$#]*", tokens[-1]):
         return " ".join(tokens[:-1])
@@ -9234,7 +9308,7 @@ class Nl2SqlService:
             current_owner=current_owner,
         ):
             blocked_reason = "許可されていない列を参照しています。"
-        if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
+        if _ends_with_limit_clause(sql):
             warnings.append("Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。")
         elif row_limit and "fetch first" not in sql.lower():
             warnings.append(f"SQL に行数制限がないため、取得は先頭 {row_limit} 件までになります。")
@@ -14083,8 +14157,10 @@ class Nl2SqlService:
                 current["comment"] = "" if comment == "-" else comment
             elif line.startswith("- "):
                 column_name, _sep, remainder = line[2:].partition(":")
-                match = re.search(r"\sCOMMENT=(.*)$", line)
-                comment = match.group(1).strip() if match else ""
+                # 最初の ` COMMENT=` の後ろ。`\sCOMMENT=(.*)$` の照合を、位置の検索と
+                # 切り出しに分ける（#1646）。
+                match = re.search(r"\sCOMMENT=", line)
+                comment = line[match.end() :].strip() if match else ""
                 data_type = re.split(r"\sNULLABLE=", remainder, maxsplit=1)[0].strip()
                 # DOMAIN= は COMMENT= より前に置かれる(コメント本文の DOMAIN= を拾わない)。
                 head = line.split(" COMMENT=", 1)[0]
@@ -22630,7 +22706,7 @@ class Nl2SqlService:
                 recommendations.append("修復候補 SQL を確認してから再実行してください。")
             return recommendations
         recommendations = ["実行前に生成 SQL と対象表を確認してください。"]
-        if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
+        if _ends_with_limit_clause(sql):
             recommendations.append(
                 "Oracle では LIMIT 句を使えないため、必要なら "
                 "FETCH FIRST n ROWS ONLY に修正してください。"

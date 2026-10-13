@@ -204,6 +204,20 @@ class ChunkingTests(unittest.TestCase):
         self.assertNotIn("visual_structure", visual_context)
         self.assertNotIn("{", visual_context)
 
+    def test_flatten_table_html_finishes_quickly_on_many_cell_separators(self):
+        """`/` の無い `| | | …` でも時間内に終わる（以前の正規表現は指数的に後戻りした。#1646）。"""
+        import time
+
+        from rag_engine.chunking import _flatten_table_html
+
+        started = time.perf_counter()
+        flat = _flatten_table_html("<table>x" + "</td>" * 50_000 + "y</table>")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(flat, "x " + "| " * 50_000 + "y")
+        # 行の末尾のセルの区切りは外し、`/` の前に `|` の無い区間は変えない。
+        self.assertEqual(_flatten_table_html("<table><tr><td>a</td><td>b</td></tr></table>"), "a | b")
+        self.assertEqual(_flatten_table_html("<p>2024/01/01</p>"), "2024/01/01")
+
     def test_retrieval_text_context_is_plain_text_without_cut_html_or_json(self):
         """埋め込み用の補足は、HTML や JSON の途中で切れた文字列を含まず、表の内容を半端に二重化しない (#592)。"""
         from rag_engine.chunking import _context_preview, _flatten_table_html, _table_search_text, _table_visual_evidence_text

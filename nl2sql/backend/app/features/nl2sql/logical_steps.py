@@ -99,8 +99,16 @@ def _split_columns(clause: str) -> list[str]:
     return [part.strip() for part in _clean(clause).split(",") if part.strip()]
 
 
+_BETWEEN_WORD = re.compile(r"between\b", re.IGNORECASE)
+_CONNECTOR_WORD = re.compile(r"\s+(and|or)\s+", re.IGNORECASE)
+
+
 def _split_conditions(clause: str) -> list[tuple[str, str]]:
-    """WHERE 句を AND / OR で素朴に分割する(括弧内と BETWEEN の AND は分割しない)。"""
+    """WHERE 句を AND / OR で素朴に分割する(括弧内と BETWEEN の AND は分割しない)。
+
+    照合は位置を指定して行い(`text[index:]` を毎文字複製しない)、AND / OR は空白の連続の
+    先頭だけで照合する。空白の連続の途中から読み直すと O(n²) になるため(#1646)。
+    """
 
     text = _clean(clause)
     conditions: list[tuple[str, str]] = []
@@ -116,20 +124,23 @@ def _split_conditions(clause: str) -> list[tuple[str, str]]:
         elif char == ")":
             depth = max(0, depth - 1)
         if depth == 0:
-            if re.match(r"\bbetween\b", text[index:], re.IGNORECASE):
+            previous = text[index - 1] if index > 0 else ""
+            if not (previous.isalnum() or previous == "_") and _BETWEEN_WORD.match(text, index):
                 pending_between = True
-            match = re.match(r"\s+(and|or)\s+", text[index:], re.IGNORECASE)
+            match = None
+            if char.isspace() and not previous.isspace():
+                match = _CONNECTOR_WORD.match(text, index)
             if match:
                 if pending_between and match.group(1).lower() == "and":
                     # BETWEEN a AND b の AND は条件の区切りではない。
                     pending_between = False
-                    buffer.append(text[index : index + match.end()])
-                    index += match.end()
+                    buffer.append(text[index : match.end()])
+                    index = match.end()
                     continue
                 conditions.append((connector, "".join(buffer).strip()))
                 connector = "かつ" if match.group(1).lower() == "and" else "または"
                 buffer = []
-                index += match.end()
+                index = match.end()
                 continue
         buffer.append(char)
         index += 1
@@ -144,6 +155,31 @@ def _format_value(value: str) -> str:
     if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
         return text[1:-1].replace("%", "")
     return text.replace('"', "")
+
+
+# 前置きだけを正規表現で照合し、値は文字列の操作で取り出す。`(.+?)\s+AND\s+(.+)$` のように
+# 空白と任意の文字が重なる式は、空白の長い連続で O(n²) に後戻りするため(#1646)。
+_BETWEEN_PREFIX = re.compile(r"(NOT\s+)?BETWEEN\s", re.IGNORECASE)
+_BETWEEN_AND = re.compile(r"\sAND\s", re.IGNORECASE)
+_LIKE_PREFIX = re.compile(r"(NOT\s+)?LIKE\s", re.IGNORECASE)
+
+
+def _between_bounds(rest: str) -> tuple[bool, str, str] | None:
+    """`[NOT] BETWEEN 下限 AND 上限` を (否定か, 下限, 上限) に分ける。形が違えば None。"""
+
+    prefix = _BETWEEN_PREFIX.match(rest)
+    if not prefix:
+        return None
+    body = rest[prefix.end() :]
+    separator = _BETWEEN_AND.search(body)
+    if not separator:
+        return None
+    low = body[: separator.start()].strip()
+    high = body[separator.end() :].strip()
+    # 以前の `(.+?)` / `(.+)` と同じく、改行をまたぐ値と空の値は読み下さない。
+    if not low or not high or "\n" in low or "\n" in high:
+        return None
+    return bool(prefix.group(1)), low, high
 
 
 def _strip_outer_parens(text: str) -> str:
@@ -191,11 +227,12 @@ def _condition_business(
         return f"{label}が設定されている"
     if upper.startswith("IS NULL"):
         return f"{label}が未設定の"
-    between = re.match(r"^(NOT\s+)?BETWEEN\s+(.+?)\s+AND\s+(.+)$", rest, re.IGNORECASE)
+    between = _between_bounds(rest)
     if between:
-        low = _format_value(between.group(2))
-        high = _format_value(between.group(3))
-        suffix = "の範囲外の" if between.group(1) else "の範囲の"
+        negated, low_text, high_text = between
+        low = _format_value(low_text)
+        high = _format_value(high_text)
+        suffix = "の範囲外の" if negated else "の範囲の"
         return f"{label}が{low}〜{high}{suffix}"
     in_match = re.match(r"^(NOT\s+)?IN\s*\((.+)\)$", rest, re.IGNORECASE | re.DOTALL)
     if in_match:
@@ -204,9 +241,10 @@ def _condition_business(
         )
         suffix = "のいずれでもない" if in_match.group(1) else "のいずれかの"
         return f"{label}が{values}{suffix}"
-    like_match = re.match(r"^(NOT\s+)?LIKE\s+(.+)$", rest, re.IGNORECASE)
-    if like_match:
-        value = _format_value(like_match.group(2))
+    like_match = _LIKE_PREFIX.match(rest)
+    like_value = rest[like_match.end() :].strip() if like_match else ""
+    if like_match and like_value and "\n" not in like_value:
+        value = _format_value(like_value)
         suffix = "を含まない" if like_match.group(1) else "を含む"
         return f"{label}が{value}{suffix}"
     for operator, word in _COMPARISON_BUSINESS:

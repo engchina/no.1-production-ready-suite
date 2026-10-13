@@ -15,6 +15,7 @@ from __future__ import annotations
 import fcntl
 import io
 import logging
+import os
 import re
 import shutil
 import stat
@@ -537,10 +538,20 @@ def _timeout_details(settings: Any) -> dict[str, str | int | float | bool | None
 # --------------------------------------------------------------------------- persistence
 
 
-def _same_path(left: str, right: str) -> bool:
-    if not left or not right:
+def _same_path(requested: str, configured: str) -> bool:
+    """利用者が送った path が、server の設定の path と同じか。
+
+    利用者の path は filesystem を参照せず、字句だけで正規化して比べる（`~` の展開・絶対 path 化・
+    `..` の解消）。symlink を辿る `resolve()` は server の設定の path にだけ使う（#1646）。
+    """
+    if not requested or not configured:
         return False
-    return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    requested_path = os.path.normpath(os.path.abspath(os.path.expanduser(requested)))
+    configured_path = Path(configured).expanduser()
+    return requested_path in {
+        os.path.normpath(os.path.abspath(configured_path)),
+        str(configured_path.resolve()),
+    }
 
 
 def _requested_wallet_dir(base: Any, payload: DatabaseSettingsUpdate) -> str:

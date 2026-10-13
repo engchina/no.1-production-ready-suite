@@ -51,7 +51,14 @@ const PHRASE_TOKEN = "{phrase}";
  * 区切りのない長い区間だけ `overflow-wrap:anywhere` で折り返す。コピー・読み上げの文字は元のまま。
  */
 function identifierSegments(value: string): string[] {
-  return value.match(/[^._$#]*[._$#]+|[^._$#]+$/g) ?? [value];
+  // 区切りの連続を捕獲して分け、直前の区間に付け直す（1 回の走査で終わる。CodeQL の多項式 ReDoS を避ける）。
+  const parts = value.split(/([._$#]+)/);
+  const segments: string[] = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const segment = (parts[index] ?? "") + (parts[index + 1] ?? "");
+    if (segment) segments.push(segment);
+  }
+  return segments.length > 0 ? segments : [value];
 }
 
 export interface ExecutionConfirmationFieldProps {
