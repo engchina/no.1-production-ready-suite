@@ -54,7 +54,14 @@ def all_concepts() -> list[BusinessDefinition]:
             object_type="Order",
             affected_properties=["Order.id"],
         ),
-        dict(kind="shared_property", api_name="SharedId", data_type="integer"),
+        # どのプロパティからも使われない AI の共有プロパティは下書きから外すため（#1734）、
+        # 列の対応を持たせる。
+        dict(
+            kind="shared_property",
+            api_name="SharedId",
+            data_type="integer",
+            mappings=[{"owner": "APP", "object_name": "ORDERS", "column_name": "ID"}],
+        ),
         dict(kind="value_type", api_name="IdType", data_type="integer"),
         dict(
             kind="enumeration",

@@ -31,7 +31,14 @@ def all_concepts() -> list[dict[str, Any]]:
     definitions[2]["join_expression_sql"] = "APP.ORDERS.CUSTOMER_ID = APP.ORDERS.ID"
     return [
         *definitions,
-        {"kind": "shared_property", "api_name": "Amount", "name_ja": "金額", "data_type": "number"},
+        # 使われない AI の共有プロパティは外すため、列の対応を持たせる（#1734）。
+        {
+            "kind": "shared_property",
+            "api_name": "Amount",
+            "name_ja": "金額",
+            "data_type": "number",
+            "mappings": [{"owner": "APP", "object_name": "ORDERS", "column_name": "ID"}],
+        },
         {"kind": "value_type", "api_name": "Money", "name_ja": "金額型", "data_type": "number"},
         {"kind": "enumeration", "api_name": "Status", "name_ja": "状態", "property": "Order.id"},
         {
@@ -184,6 +191,9 @@ def test_gleaning_completes_existing_fields_keeps_conflicts_and_warning(
                                 "api_name": "Amount",
                                 "name_ja": "金額",
                                 "data_type": "number",
+                                "mappings": [
+                                    {"owner": "APP", "object_name": "ORDERS", "column_name": "ID"}
+                                ],
                             },
                         ],
                         "warnings_ja": ["受注金額の通貨に資料間の矛盾があります。"],

@@ -2327,6 +2327,47 @@ def _ensure_llm_call_fits(prompt: str, context: str) -> None:
     )
 
 
+def _with_prior_context(prompt: str, context: str, prior: dict[str, Any] | None) -> tuple[str, str]:
+    """LLM の入力に、前の定義の要約と前の確認の直すべき点を足す（#1734）。
+
+    上限（`_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS`）を超えるときは、前の定義の要約から削り、
+    診断（直すべき点）を優先して残す。足せなければ元の入力のまま。
+    """
+
+    if not prior:
+        return prompt, context
+    from .ontology_build_prior import PRIOR_PROMPT, shrink_prior_summary
+
+    try:
+        payload = json.loads(context)
+    except ValueError:
+        return prompt, context
+    if not isinstance(payload, dict):
+        return prompt, context
+    with_prior = prompt + PRIOR_PROMPT
+    findings = list(prior.get("previous_check_findings") or [])
+    summary = prior.get("previous_ontology")
+    summaries: list[dict[str, Any] | None] = [
+        *(shrink_prior_summary(summary) if summary else []),
+        None,
+    ]
+    while True:
+        for candidate in summaries:
+            extra: dict[str, Any] = {}
+            if findings:
+                extra["previous_check_findings"] = findings
+            if candidate:
+                extra["previous_ontology"] = candidate
+            if not extra:
+                return prompt, context
+            text = json.dumps({**payload, **extra}, ensure_ascii=False, sort_keys=True)
+            if _llm_call_chars(with_prior, text) <= _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+                return with_prior, text
+        if not findings:
+            return prompt, context
+        findings = findings[: len(findings) // 2]
+
+
 def _schema_context_payload(schema_context: str) -> dict[str, Any]:
     try:
         loaded = json.loads(schema_context)
@@ -4288,6 +4329,20 @@ class OntologyBuildService:
                 step.status = OntologyBuildStepStatus.SKIPPED
                 step.finished_at = now
 
+    def _prior_build_context(self, profile_id: str) -> dict[str, Any] | None:
+        """前の定義の要約と前の確認の直すべき点（読めなければ無しで構築を続ける）。"""
+
+        from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+        try:
+            return MarkdownOntologyWorkspace(self._runtime).prior_build_context(profile_id)
+        except Exception as exc:
+            logger.warning(
+                "前の定義を読めなかったため、前の定義なしで AI 構築を続けます。",
+                extra={"profile_id": profile_id, "error_type": type(exc).__name__},
+            )
+            return None
+
     def _run(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
         if self._is_cancelled(job_id):
             return
@@ -4792,6 +4847,20 @@ class OntologyBuildService:
                 )
             )
 
+        # 前の定義（下書き → 公開版 → 無し）の名前・物理の対応と、前の確認の直すべき点を
+        # LLM の入力に入れる（名付けの揺れを抑え、前の問題を狙って直す。#1734）。
+        prior = self._prior_build_context(job.profile_id)
+        if prior:
+            llm_tasks = [
+                replace(task, prompt=prompt, context=context)
+                for task in llm_tasks
+                for prompt, context in [_with_prior_context(task.prompt, task.context, prior)]
+            ]
+            self._emit(
+                job_id,
+                "前の定義の名前と、前回の公開前の確認の直すべき点を AI に渡します。",
+                phase="concepts",
+            )
         # 各タスクは 1 回再試行 → なお失敗なら batch を二分割して再帰する。
         # 一部 batch の失敗はジョブ全体を止めず warning として継続し、
         # 全タスク失敗のときだけジョブを FAILED にする(部分成功)。
@@ -5008,11 +5077,27 @@ class OntologyBuildService:
             nodes=list(candidate_nodes.values()),
             edges=list(candidate_edges.values()),
         )
+        # 前の定義（下書き・公開版の業務層）の名前。同じ列のプロパティ・同じ物の共有プロパティを
+        # まとめるとき、AI の名付けの揺れで前の名前を上書きしない（#1734）。
+        previous_definitions = legacy_definitions(ontology)
+        previous_names = {d.api_name for d in previous_definitions}
+        previous_ids = {d.id for d in previous_definitions if d.id}
         unified_definitions, concept_conflicts = merge_definitions(
             job.profile_id,
             [
-                *legacy_definitions(candidates),
-                *[d for result in validated_extractions for d in result.extraction.definitions],
+                # 今回の AI の候補（前の定義に無いもの）の作った人は AI（#1734）。
+                *[
+                    d
+                    if d.id in previous_ids or d.api_name in previous_names
+                    else d.model_copy(update={"origin": "ai"})
+                    for d in legacy_definitions(candidates)
+                ],
+                # AI の出力の「作った人」は常に AI（LLM が書いた origin は使わない。#1734）。
+                *[
+                    d.model_copy(update={"origin": "ai"})
+                    for result in validated_extractions
+                    for d in result.extraction.definitions
+                ],
             ],
         )
         # AI の出力を graph にできる形へ直す（共有した列のプロパティの分割など。#1720）。
@@ -5022,6 +5107,7 @@ class OntologyBuildService:
             unified_definitions,
             json.loads(schema_context),
             ai_output=True,
+            previous=previous_names,
         )
         unified_definitions = repair.definitions
         # 業務説明に追記された改善案の文の粒度・主キーは、AI が読み落としても入れる（#1729）。
@@ -5090,6 +5176,11 @@ class OntologyBuildService:
             "含める場合は、業務プロファイルに表・ビューを足して構築し直してください。"
             for d in repair.dropped
             if d.kind == "object_type"
+        )
+        content_notes.extend(
+            f"共有プロパティ『{d.name_ja}』はどのプロパティからも使われていないため、"
+            "下書きから外しました。必要なら Markdown に書き足してください。"
+            for d in repair.unused_shared
         )
         self._set_definition_phase(
             job_id,

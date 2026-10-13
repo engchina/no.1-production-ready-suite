@@ -6956,6 +6956,12 @@ class Nl2SqlService:
     ) -> list[SchemaTable]:
         views: list[SchemaTable] = []
         current_owner = self._current_schema_owner()
+        # ビューの列の型・NOT NULL は、元の表の列から取る（#1733）。全列を VARCHAR2 にすると、
+        # オントロジーの構築で数値の ID 列が文字列になり、ビュー → 表のリンク型を補えない。
+        base_columns = {
+            table.table_name: {column.column_name: column for column in table.columns}
+            for table in self._sample_tables_from_ddl(dataset)
+        }
         for statement in self._sample_sql_sections(dataset)["views"]:
             match = re.search(
                 r"CREATE\s+OR\s+REPLACE\s+VIEW\s+([A-Z0-9_]+)\s+AS\s+SELECT\s+(.*?)\s+FROM\s+",
@@ -6965,15 +6971,30 @@ class Nl2SqlService:
             if not match:
                 continue
             view_name = _normalize_identifier(match.group(1))
-            columns = [
-                SchemaColumn(
-                    column_name=self._sample_select_column_name(token),
-                    logical_name=self._sample_select_column_name(token),
-                    data_type="VARCHAR2",
+            aliases = {
+                _normalize_identifier(alias or table): _normalize_identifier(table)
+                for table, alias in re.findall(
+                    r"\b(?:FROM|JOIN)\s+([A-Z0-9_]+)(?:\s+(?!ON\b|JOIN\b|WHERE\b)([A-Z0-9_]+))?",
+                    statement[match.end(2) :],
+                    flags=re.IGNORECASE,
                 )
-                for token in match.group(2).split(",")
-                if self._sample_select_column_name(token)
-            ]
+            }
+            outer_join = bool(re.search(r"\b(?:LEFT|RIGHT|FULL)\b", statement, flags=re.I))
+            columns = []
+            for token in match.group(2).split(","):
+                name = self._sample_select_column_name(token)
+                if not name:
+                    continue
+                source = self._sample_view_source_column(token, aliases, base_columns)
+                columns.append(
+                    SchemaColumn(
+                        column_name=name,
+                        logical_name=name,
+                        # 元の列が分からない式は型を「不明」（空）にし、VARCHAR2 と決めつけない。
+                        data_type=source.data_type if source else "",
+                        nullable=outer_join or source is None or source.nullable,
+                    )
+                )
             views.append(
                 SchemaTable(
                     table_name=view_name,
@@ -7002,7 +7023,28 @@ class Nl2SqlService:
             if token.upper() in stop_words:
                 break
             selected.append(token)
-        return " ".join(selected) or "VARCHAR2"
+        return " ".join(selected)
+
+    @staticmethod
+    def _sample_view_source_column(
+        token: str,
+        aliases: dict[str, str],
+        base_columns: dict[str, dict[str, SchemaColumn]],
+    ) -> SchemaColumn | None:
+        """ビューの選択の項目（`p.PROJECT_ID [AS X]`）が指す元の表の列。式なら None。"""
+
+        expression = re.sub(r"\s+AS\s+[A-Z0-9_]+$", "", token.strip(), flags=re.I).strip()
+        match = re.fullmatch(r"(?:([A-Z0-9_]+)\.)?([A-Z0-9_]+)", expression, flags=re.I)
+        if match is None:
+            return None
+        column = _normalize_identifier(match.group(2))
+        if match.group(1):
+            table = aliases.get(_normalize_identifier(match.group(1)), "")
+            return base_columns.get(table, {}).get(column)
+        found = [
+            cols[column] for t in aliases.values() if column in (cols := base_columns.get(t, {}))
+        ]
+        return found[0] if len(found) == 1 else None
 
     def _sample_select_column_name(self, token: str) -> str:
         cleaned = token.strip()

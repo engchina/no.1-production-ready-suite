@@ -43,6 +43,10 @@ def extraction(expression: str = JOIN) -> OntologyBuildExtraction:
                     "api_name": "Amount",
                     "name_ja": "金額",
                     "data_type": "number",
+                    # 使われない AI の共有プロパティは外すため、列の対応を持たせる（#1734）。
+                    "mappings": [
+                        {"owner": "APP", "object_name": "ORDERS", "column_name": "AMOUNT"}
+                    ],
                 },
             ],
         }
