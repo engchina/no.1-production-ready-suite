@@ -1,9 +1,8 @@
 name: Integration Nightly
 
-# PR の CI（ci.yml）では確かめない結合の検査を、毎晩 main で実行する（#1595。PR の時間は増やさない）。
-#   - oracle: Oracle AI Database Free の container に、3 製品の system schema の migration（配備の init_script.sh と
-#     同じ CLI）を 2 回ずつ当て（2 回目で冪等を確かめる）、実の Oracle の結合テストを実行する。ADB 固有の機能
-#     （Select AI・DBMS_CLOUD・Wallet・DeepSec）は Free に無いので、それを使うテストは実行しない（下の各 step）。
+# PR の CI（ci.yml）では毎回は確かめない結合の検査を、毎晩 main で実行する（#1595。PR の時間は増やさない）。
+#   - oracle: 3 製品の実 Oracle の結合テスト（Oracle AI Database Free。中身は oracle-integration.yml）。PR と main の
+#     push では、ci.yml が DB の層を変えた製品だけを同じ workflow で実行する。
 #   - coverage: backend の pytest と RAG の frontend の vitest の coverage を step summary に出す（閾値はまだ
 #     決めていない。失敗にはしない。PR の CI は coverage を計測しない）。
 # 失敗（job の時間切れを含む）は ci-failure-issue.yml が Issue にする（workflow 名は同じファイルの workflows と
@@ -13,30 +12,17 @@ on:
   schedule:
     - cron: "53 17 * * *" # 02:53 JST（整点を避ける。E2E Nightly の前）
   workflow_dispatch:
-  # この workflow と準備の script を変えた PR でも実行して確かめる（必須の check ではない）。
-  pull_request:
-    paths:
-      - .github/workflows/integration-nightly.yml
-      - .github/scripts/oracle-free-ci.sh
 
 permissions:
   contents: read
 
 concurrency:
   group: integration-nightly-${{ github.ref }}
-  # PR だけ古い run を取り消す（main の nightly は取り消さない）。
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  # Oracle AI Database Free の image（版を固定する。Oracle の公式の registry で、login は要らない）。
-  ORACLE_FREE_IMAGE: container-registry.oracle.com/database/free:23.26.3.0-lite
+  cancel-in-progress: false
 
 jobs:
   oracle:
-    name: ${{ matrix.label }} / Oracle integration
-    runs-on: ubuntu-24.04
-    # Oracle Free の起動は runner で約 2〜3 分（ローカルの WSL では約 5 分）。テストは数分。
-    timeout-minutes: 30
+    name: ${{ matrix.label }} / Oracle
     strategy:
       fail-fast: false
       matrix:
@@ -44,94 +30,9 @@ jobs:
           - { product: rag, label: RAG }
           - { product: nl2sql, label: NL2SQL }
           - { product: agent, label: Agent }
-    defaults:
-      run:
-        working-directory: ${{ matrix.product }}/backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: ${{ matrix.product }}/backend/uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      # DB の起動を待つ間に依存を入れる。password は run ごとに作り、log に出さない。
-      - name: Start Oracle AI Database Free
-        working-directory: .
-        run: |
-          password="Ci$(openssl rand -hex 12)_Aa1"
-          echo "::add-mask::${password}"
-          echo "ORACLE_CI_PASSWORD=${password}" >> "${GITHUB_ENV}"
-          docker run -d --name oracle -p 1521:1521 -e ORACLE_PWD="${password}" "${ORACLE_FREE_IMAGE}"
-
-      - name: Install dependencies
-        run: uv sync --locked --dev
-
-      - name: Wait for Oracle and create the test user
-        working-directory: .
-        run: bash .github/scripts/oracle-free-ci.sh
-
-      - name: Apply system schema migrations (twice)
-        run: |
-          set -euo pipefail
-          for attempt in 1 2; do
-            echo "migration ${attempt} 回目"
-            case "${{ matrix.product }}" in
-              rag) uv run python -m app.rag.system_schema_cli initialize ;;
-              nl2sql)
-                uv run python -m app.cli.nl2sql_system_schema --initialize
-                uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
-                ;;
-              agent) uv run python -m app.cli.agent_system_schema --initialize ;;
-            esac
-          done
-
-      # RAG: 実の Oracle に依存するテスト（fixture `oracle_db`・tests/_oracle_test_db.py）を実行する。
-      - name: Oracle integration tests (RAG)
-        if: matrix.product == 'rag'
-        # fixture は DB に届かないと skip するため、先に届くことを確かめる（skip のまま成功にしない）。
-        run: |
-          if ! uv run python -c 'import sys; from tests._oracle_test_db import db_available; sys.exit(0 if db_available() else 1)'; then
-            echo "::error::実 Oracle に接続できません（PLATFORM_ORACLE_*）。"
-            exit 1
-          fi
-          mapfile -t files < <(grep -rlE --include='test_*.py' 'oracle_db|_oracle_test_db' tests | sort)
-          printf '%s\n' "${files[@]}"
-          uv run pytest -n auto -rs "${files[@]}"
-
-      # NL2SQL: Oracle の明示 opt-in のテスト。Free に無い ADB の機能を使うもの（Select AI の
-      # test_select_ai_quoted_object_list_oracle_live.py・DBMS_CLOUD の DBA_LOAD_OPERATIONS を読む
-      # test_nl2sql_synthetic_oracle_live.py・DeepSec の test_deepsec_real_oracle_integration.py）と LLM の
-      # NL2SQL_SYNTHETIC_LLM_LIVE_TEST は実行しない。tests/conftest.py は platform/.env を読ませないので、
-      # 接続の設定を環境変数で渡す（PLATFORM_ORACLE_USER は conftest が APP に固定する）。
-      - name: Oracle integration tests (NL2SQL)
-        if: matrix.product == 'nl2sql'
-        env:
-          NL2SQL_RUN_ORACLE_INTEGRATION: "1"
-          NL2SQL_SYNTHETIC_LIVE_TEST: "1"
-        run: |
-          set -a
-          # shellcheck source=/dev/null
-          . ../../platform/.env
-          set +a
-          uv run pytest -rs \
-            tests/test_domain_management_oracle_live.py \
-            tests/test_nl2sql_synthetic_preview_oracle_live.py
-
-      - name: Stop Oracle
-        if: always()
-        working-directory: .
-        run: |
-          docker logs oracle > "${RUNNER_TEMP}/oracle.log" 2>&1 || true
-          tail -n 50 "${RUNNER_TEMP}/oracle.log" || true
-          docker rm -f oracle || true
+    uses: ./.github/workflows/oracle-integration.yml
+    with:
+      product: ${{ matrix.product }}
 
   backend-coverage:
     name: ${{ matrix.label }} / Coverage
