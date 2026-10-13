@@ -38,16 +38,22 @@ os.environ["PLATFORM_AUTH_ARGON2_PARALLELISM"] = "1"
 
 
 async def _run_sync_in_test_thread[T](
-    function: Callable[..., T],
+    func: Callable[..., T],
+    /,
     *args: Any,
     **kwargs: Any,
 ) -> T:
-    """Run sync FastAPI callables off-loop without AnyIO's test-time worker hang."""
+    """Run sync FastAPI callables off-loop without AnyIO's test-time worker hang.
+
+    第 1 引数は Starlette の ``run_in_threadpool`` と同じく位置専用にする。fastapi 0.142 は
+    ``run_in_threadpool(_run_sync_endpoint, function=..., arguments=...)`` と呼ぶため、
+    名前で受けると ``function`` が衝突する(#1673)。
+    """
 
     loop = asyncio.get_running_loop()
     future: asyncio.Future[T] = loop.create_future()
     context = contextvars.copy_context()
-    call = functools.partial(function, *args, **kwargs)
+    call = functools.partial(func, *args, **kwargs)
 
     def complete(ok: bool, value: T | BaseException) -> None:
         if future.cancelled():
