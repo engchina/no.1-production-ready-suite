@@ -112,6 +112,8 @@ jobs:
       # ディレクトリだけを検査する（空白区切りのファイルの一覧。ci.yml の変更では all = 全 lock。#1534）。
       rag_services_deps: >-
         ${{ steps.filter.outputs.ci == 'true' && 'all' || steps.filter.outputs.rag_services_deps_files }}
+      # Dependency review（#1588）を動かす、依存の manifest / lock と workflow・composite action の変更。
+      deps_manifest: ${{ steps.filter.outputs.deps_manifest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -241,6 +243,14 @@ jobs:
               - "rag/services/*/*/pyproject.toml"
               - "!rag/services/parsers/docling/**"
               - "!rag/services/parsers/asr/**"
+            # Dependency review が見る依存の manifest / lock（npm・uv）と、action の参照（#1588）。
+            deps_manifest:
+              - "**/package.json"
+              - "**/package-lock.json"
+              - "**/uv.lock"
+              - "**/pyproject.toml"
+              - ".github/workflows/**"
+              - ".github/actions/**"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
             # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
             platform_other:
@@ -276,6 +286,26 @@ jobs:
           GITLEAKS_CONFIG: .gitleaks.toml
           # OSS リポジトリ向けライセンスは不要(private の場合のみ要設定)
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  # PR が追加・更新した依存（npm・uv の lock、GitHub Actions）の既知の脆弱性と license を、GitHub の dependency graph の
+  # base と head の差分で確かめる（#1588）。lock / manifest が変わった PR だけ（約 10 秒）。high 以上の脆弱性で失敗する。
+  # PR が触らない依存の advisory は dependency-audit-nightly.yml（pip-audit・npm audit）が毎晩検査する。
+  # license は job の summary に出すだけ（allow / deny の一覧は決めていない）。
+  dependency-review:
+    name: Dependency review
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.deps_manifest == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    # API で base と head の dependency graph を比べるので checkout は要らない。
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          show-openssf-scorecard: false
 
   # ---------------------------------------------------------------- platform
   #
@@ -1624,6 +1654,7 @@ jobs:
     needs:
       - changes
       - secret-scan
+      - dependency-review
       - platform-ui
       - platform-backend-core
       - platform-system-settings-backend
