@@ -6,15 +6,18 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  RoleCodeBadges,
+  RoleManagementPage,
+  RoleNameBadges,
   UserManagementPage,
-  roleCodeLabel,
+  roleDisplayName,
+  type RoleManagementApi,
   type SecurityRole,
   type SecurityUser,
   type UserManagementApi,
 } from "../src";
 
-// #1682: 画面にロールの ID（UUID）を出さず、ロールコードを出す。参照できないロールは「（削除済みのロール）」。
+// #1682: 画面にロールの ID（UUID）もロールコードも出さず、ロール名（表示名）を出す。
+// 表示名が空ならコード、参照できないロールは「（削除済みのロール）」。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,33 +60,36 @@ function expectNoUuidShown(scope: HTMLElement) {
   }
 }
 
-describe("roleCodeLabel（#1682）", () => {
-  it("ロールコードを返し、コードが無い・削除済みは ID を出さない文言にする", () => {
-    expect(roleCodeLabel({ role_code: "SYSTEM_ADMIN" })).toBe("SYSTEM_ADMIN");
-    expect(roleCodeLabel({ role_code: "  HR_USER " })).toBe("HR_USER");
-    expect(roleCodeLabel({ role_code: "", deleted: true })).toBe("（削除済みのロール）");
-    expect(roleCodeLabel({ role_code: "HR_USER", deleted: true })).toBe("（削除済みのロール）");
-    expect(roleCodeLabel({ role_code: null })).toBe("（削除済みのロール）");
-    expect(roleCodeLabel(undefined, "削除されたロール")).toBe("削除されたロール");
+describe("roleDisplayName（#1682）", () => {
+  it("表示名を返し、空ならコード、どちらも無い・削除済みは ID を出さない文言にする", () => {
+    expect(roleDisplayName({ display_name: "システム管理者", role_code: "SYSTEM_ADMIN" })).toBe("システム管理者");
+    expect(roleDisplayName({ display_name: "  人事利用者 ", role_code: "HR_USER" })).toBe("人事利用者");
+    expect(roleDisplayName({ display_name: "", role_code: "HR_USER" })).toBe("HR_USER");
+    expect(roleDisplayName({ display_name: "", role_code: "", deleted: true })).toBe("（削除済みのロール）");
+    expect(roleDisplayName({ display_name: "人事利用者", role_code: "HR_USER", deleted: true })).toBe("（削除済みのロール）");
+    expect(roleDisplayName({ display_name: null, role_code: null })).toBe("（削除済みのロール）");
+    expect(roleDisplayName(undefined, "削除されたロール")).toBe("削除されたロール");
   });
 });
 
-describe("RoleCodeBadges（#1682）", () => {
-  it("ロールをロールコードのバッジで並べ、ID を出さない", async () => {
+describe("RoleNameBadges（#1682）", () => {
+  it("ロールをロール名のバッジで並べ、ID もコードも出さない", async () => {
     await render(
-      <RoleCodeBadges
+      <RoleNameBadges
         ariaLabel="利用可能ロール"
         roles={[
-          { role_id: SYSTEM_ADMIN_ID, role_code: "SYSTEM_ADMIN" },
-          { role_id: "r-hr", role_code: "HR_USER" },
-          { role_id: DELETED_ID, role_code: "", deleted: true },
+          { role_id: SYSTEM_ADMIN_ID, role_code: "SYSTEM_ADMIN", display_name: "システム管理者" },
+          { role_id: "r-hr", role_code: "HR_USER", display_name: "人事利用者" },
+          { role_id: DELETED_ID, role_code: "", display_name: "", deleted: true },
         ]}
       />,
     );
-    const list = host.querySelector<HTMLUListElement>('[data-testid="role-code-badges"]');
+    const list = host.querySelector<HTMLUListElement>('[data-testid="role-name-badges"]');
     expect(list?.getAttribute("aria-label")).toBe("利用可能ロール");
     const labels = Array.from(list?.querySelectorAll("li") ?? []).map((item) => item.textContent?.trim());
-    expect(labels).toEqual(["SYSTEM_ADMIN", "HR_USER", "（削除済みのロール）"]);
+    expect(labels).toEqual(["システム管理者", "人事利用者", "（削除済みのロール）"]);
+    expect(host.textContent).not.toContain("SYSTEM_ADMIN");
+    expect(host.textContent).not.toContain("HR_USER");
     expectNoUuidShown(host);
   });
 });
@@ -149,6 +155,32 @@ describe("ユーザー管理の削除済みのロール（#1682）", () => {
 
     expect(host.textContent).toContain("システム管理者");
     expect(host.textContent).toContain("（削除済みのロール）");
+    expectNoUuidShown(host);
+  });
+});
+
+describe("ロール管理の一覧と詳細（#1682）", () => {
+  it("一覧の行・詳細の見出し・行の読み上げはロール名で、ID を出さない", async () => {
+    const api: RoleManagementApi = {
+      roles: () =>
+        Promise.resolve([
+          { ...securityRole(SYSTEM_ADMIN_ID, "SYSTEM_ADMIN", "システム管理者"), is_built_in: true },
+          securityRole("r-hr", "HR_USER", "人事利用者"),
+        ]),
+      createRole: never,
+      updateRole: never,
+      archiveRole: never,
+      restoreRole: never,
+      deleteRole: never,
+    };
+    await render(<RoleManagementPage api={api} canManage />);
+
+    const grid = host.querySelector<HTMLElement>('[data-testid="security-roles-grid"]');
+    expect(grid?.textContent).toContain("システム管理者");
+    expect(grid?.textContent).toContain("人事利用者");
+    expect(grid?.textContent).not.toContain("SYSTEM_ADMIN");
+    expect(grid?.textContent).not.toContain("HR_USER");
+    expect(host.querySelector("#security-roles-detail-heading")?.textContent?.trim()).toBe("システム管理者");
     expectNoUuidShown(host);
   });
 });

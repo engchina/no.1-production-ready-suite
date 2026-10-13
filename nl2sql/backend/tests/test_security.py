@@ -6003,10 +6003,10 @@ def test_profile_access_profiles_search_and_page_on_server(
     assert ids_of(ids=["p4", "p2", "missing"])[0] == ["p2", "p4"]
 
 
-def test_profile_access_profiles_return_role_codes_not_only_ids(
+def test_profile_access_profiles_return_role_names_not_only_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """業務プロファイルを使えるロールは、ロールコードも返す（画面に UUID を出さない。#1682）。"""
+    """業務プロファイルを使えるロールは、ロール名も返す（画面に UUID を出さない。#1682）。"""
     from app.features.nl2sql import service as nl2sql_service_module
     from app.security import router as security_router_module
 
@@ -6034,16 +6034,19 @@ def test_profile_access_profiles_return_role_codes_not_only_ids(
     ).data
     assert page is not None
     allowed = {item.id: item.allowed_roles for item in page.items}
-    p1_codes = [item.role_code for item in allowed["p1"]]
-    p2_codes = [item.role_code for item in allowed["p2"]]
-    # 構成の system admin はすべての業務プロファイルを使え、コード（SYSTEM_ADMIN）で返る。
-    assert SYSTEM_ADMIN_ROLE_CODE in p1_codes and SYSTEM_ADMIN_ROLE_CODE in p2_codes
-    assert "PROFILE_P1_USER" in p1_codes and "PROFILE_P1_USER" not in p2_codes
-    assert p1_codes == sorted(p1_codes)
-    assert {item.role_id for item in allowed["p1"]} >= {role.role_id}
+    p1 = {item.role_code: item for item in allowed["p1"]}
+    p2 = {item.role_code: item for item in allowed["p2"]}
+    # 構成の system admin はすべての業務プロファイルを使え、ロール名を添えて返る。
+    assert SYSTEM_ADMIN_ROLE_CODE in p1 and SYSTEM_ADMIN_ROLE_CODE in p2
+    assert p1[SYSTEM_ADMIN_ROLE_CODE].display_name
+    assert p1["PROFILE_P1_USER"].display_name == "P1 の利用者"
+    assert p1["PROFILE_P1_USER"].role_id == role.role_id
+    assert "PROFILE_P1_USER" not in p2
+    names = [item.display_name for item in allowed["p1"]]
+    assert names == sorted(names)
     for roles in allowed.values():
         for item in roles:
-            assert item.role_code and item.role_code != item.role_id
+            assert item.display_name and item.display_name != item.role_id
 
 
 @pytest.mark.parametrize(

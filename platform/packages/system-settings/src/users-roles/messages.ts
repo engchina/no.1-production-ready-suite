@@ -63,7 +63,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.custom": "カスタム",
   "security.roles.delete": "削除",
   "security.roles.deleteConfirm":
-    "「{code}」（ロール名: {name}）を完全に削除します。ロールに設定した権限も削除され、元に戻せません。",
+    "「{name}」を完全に削除します。ロールに設定した権限も削除され、元に戻せません。",
   "security.roles.deleteError":
     "ロールを削除できませんでした。割り当てユーザーを解除し、最新の表示で再試行してください。",
   "security.roles.deleteSuccess": "{name} を完全に削除しました。",

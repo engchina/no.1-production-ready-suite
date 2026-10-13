@@ -51,11 +51,10 @@ import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
-import { deletedRoleLabel } from "./RoleCodeBadges";
+import { roleDisplayName } from "./RoleNameBadges";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
-  SecurityIdentityLines,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
@@ -132,9 +131,9 @@ function compareText(left: string, right: string, direction: DataTableSort["dire
 }
 
 function assignedRoleLabel(role: AssignedRole) {
-  // 参照できない（削除済みの）ロールは ID（UUID）を出さない（#1682）。
-  if (role.deleted || (!role.role_code.trim() && !role.display_name.trim())) return deletedRoleLabel();
-  const name = role.display_name.trim() || role.role_code;
+  // ロール名で出す。参照できない（削除済みの）ロールは ID（UUID）を出さない（#1682）。
+  const name = roleDisplayName(role);
+  if (role.deleted || name === roleDisplayName(null)) return name;
   return role.archived ? t("security.users.archivedRoleLabel", { role: name }) : name;
 }
 
@@ -1091,7 +1090,8 @@ export function UserManagementPage({
                               onChange={() => selectRole(role.role_id)}
                             />
                             <span className="min-w-0">
-                              <SecurityIdentityLines id={role.role_code} name={role.display_name} />
+                              {/* ロール名だけを出す（コード・ID は出さない。#1682） */}
+                              <span className="block break-words font-medium">{roleDisplayName(role)}</span>
                               {hint ? <span className="mt-1 block text-xs leading-5 text-fg-muted">{hint}</span> : null}
                             </span>
                           </label>

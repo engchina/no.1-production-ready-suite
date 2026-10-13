@@ -87,7 +87,7 @@ describe("ロール管理の読み込みと操作の失敗（#1038）", () => {
     await click(buttons("再試行")[0]);
 
     expect(host.textContent).not.toContain("ロールを読み込めませんでした。");
-    expect(host.querySelector('[data-testid="security-roles-grid"]')?.textContent).toContain("ANALYST");
+    expect(host.querySelector('[data-testid="security-roles-grid"]')?.textContent).toContain("分析者");
     expect(buttons("新規作成")).toHaveLength(1);
   });
 
@@ -105,7 +105,7 @@ describe("ロール管理の読み込みと操作の失敗（#1038）", () => {
     await click(buttons("表示を更新")[0]);
 
     expect(occurrences("更新に失敗しました。")).toBe(1);
-    expect(host.querySelector('[data-testid="security-roles-grid"]')?.textContent).toContain("ANALYST");
+    expect(host.querySelector('[data-testid="security-roles-grid"]')?.textContent).toContain("分析者");
     expect(buttons("再試行")).toHaveLength(0);
   });
 

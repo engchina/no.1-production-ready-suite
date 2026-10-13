@@ -146,7 +146,9 @@ def list_profile_access_profiles(
     for role in roles:
         if role.archived:
             continue
-        access_role = ProfileAccessRoleData(role_id=role.role_id, role_code=role.role_code)
+        access_role = ProfileAccessRoleData(
+            role_id=role.role_id, role_code=role.role_code, display_name=role.display_name
+        )
         if role.role_code == SYSTEM_ADMIN_ROLE_CODE or grants_all_profile_access(role.permissions):
             for profile_id in profile_ids:
                 allowed_roles_by_profile[profile_id].append(access_role)
@@ -165,7 +167,10 @@ def list_profile_access_profiles(
                     archived=profile.archived,
                     allowed_roles=sorted(
                         allowed_roles_by_profile.get(profile.id, []),
-                        key=lambda role: (role.role_code, role.role_id),
+                        key=lambda role: (
+                            role.display_name or role.role_code,
+                            role.role_code,
+                        ),
                     ),
                 )
                 for profile in page_profiles

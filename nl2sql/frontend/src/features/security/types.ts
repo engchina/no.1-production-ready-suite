@@ -148,7 +148,7 @@ export interface ProfileAccessProfile {
   category: string;
   description: string;
   archived: boolean;
-  /** 業務プロファイルを使えるロール（ロールコードの順）。画面はロールコードを出し、ID は出さない（#1682）。 */
+  /** 業務プロファイルを使えるロール（ロール名の順）。画面はロール名を出し、ID・コードは出さない（#1682）。 */
   allowed_roles: ProfileAccessRole[];
 }
 
@@ -156,6 +156,7 @@ export interface ProfileAccessProfile {
 export interface ProfileAccessRole {
   role_id: string;
   role_code: string;
+  display_name: string;
 }
 
 /** 権限管理の業務プロファイルの候補の 1 ページ（検索とページング。#608）。 */

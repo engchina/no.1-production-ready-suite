@@ -71,9 +71,9 @@ import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
-  SecurityIdentityLines,
   SecuritySearchField,
-  identitySecondaryName,
+  compareRoleDisplayNames,
+  roleDisplayName,
 } from "@production-ready/system-settings";
 import { securityApi } from "./api";
 import type {
@@ -760,8 +760,8 @@ export function SecurityDeepSecPage() {
     const q = entitlementSearch.trim().toLowerCase();
     return entitlementRoles
       .filter((role) => (q ? entitlementRoleSearchText(role).includes(q) : true))
-      // ロールコードを主表示するため、コードで並べる。
-      .sort((left, right) => left.role_code.localeCompare(right.role_code, "ja"));
+      // ロール名を出すため、ロール名で並べる（#1682）。
+      .sort(compareRoleDisplayNames);
   }, [entitlementRoles, entitlementSearch]);
   const visibleSelectedEntitlementRoleId =
     activeView === "data-permissions"
@@ -2090,7 +2090,8 @@ export function SecurityDeepSecPage() {
                           >
                             <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                               <span className="min-w-0">
-                                <SecurityIdentityLines id={role.role_code} name={role.display_name} className="text-sm" />
+                                {/* ロール名だけを出す（コード・ID は出さない。#1682） */}
+                                <span className="block break-words text-sm font-medium">{roleDisplayName(role)}</span>
                               </span>
                               <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
                             </span>
@@ -2120,12 +2121,9 @@ export function SecurityDeepSecPage() {
                         <div className="grid min-w-0 gap-3 border-b border-border pb-3">
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div className="min-w-0">
-                              <h3 id="deepsec-entitlement-editor-title" className="break-all font-mono text-base font-semibold">
-                                {selectedEntitlementRole.role_code}
+                              <h3 id="deepsec-entitlement-editor-title" className="break-words text-base font-semibold">
+                                {roleDisplayName(selectedEntitlementRole)}
                               </h3>
-                              {identitySecondaryName(selectedEntitlementRole.role_code, selectedEntitlementRole.display_name) ? (
-                                <p className="mt-1 break-words text-xs text-fg-muted">{selectedEntitlementRole.display_name}</p>
-                              ) : null}
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <StatusBadge
