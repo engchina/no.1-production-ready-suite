@@ -164,6 +164,9 @@ venv.bak/
 
 # Local model settings saved by the backend UI
 backend/model-settings.json
+# 文書解析の画面の保存先（#1701）
+backend/parser-settings.json
+backend/parser-settings.json.lock
 
 # Prompt version store saved by the backend (prompt versioning)
 backend/prompt-versions.json

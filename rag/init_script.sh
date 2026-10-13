@@ -454,7 +454,7 @@ prepare_filesystem() {
   install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${DATA_DIR}"
   # git pull・uv sync・frontend の build は APP_USER が行う。
   chown -R "${APP_USER}:${APP_GROUP}" "${SUITE_REPO_DIR}"
-  # 画面から保存する .env（backend/.env・platform/.env・model-settings.json）は、同じディレクトリの
+  # 画面から保存する .env（backend/.env・platform/.env・model-settings.json・backend/parser-settings.json）は、同じディレクトリの
   # 一時ファイルと lock で置き換えるため、SERVICE_USER が backend/ と platform/ に書けるようにする。
   chgrp "${SERVICE_GROUP}" "${BACKEND_DIR}" "${PLATFORM_DIR}"
   chmod 2775 "${BACKEND_DIR}" "${PLATFORM_DIR}"
@@ -469,6 +469,8 @@ restore_service_owned_files() {
     "${PLATFORM_DIR}/model-settings.json" \
     "${PLATFORM_DIR}/model-settings.json.lock" \
     "${BACKEND_DIR}/.env" \
+    "${BACKEND_DIR}/parser-settings.json" \
+    "${BACKEND_DIR}/parser-settings.json.lock" \
     "${SERVICE_RUNTIME_ENV_FILE}"; do
     if [ -e "${path}" ]; then
       chown "${SERVICE_USER}:${SERVICE_GROUP}" "${path}"

@@ -7,7 +7,7 @@
 | ファイル | 内容 | 変数名 |
 |---|---|---|
 | `platform/.env`（雛形 `platform/.env.example`） | 3製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース）。システム設定画面の保存先。`model-settings.json` も同じディレクトリに置き、3製品で共有する | `PLATFORM_*` |
-| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など） | `RAG_*` |
+| `rag/backend/.env`（雛形 `rag/backend/.env.example`） | RAG 固有の設定（認証・文書解析・検索・回答・HuggingFace など）。「文書解析」画面で保存した解析エンジンと接続は同じディレクトリの `parser-settings.json`（`RAG_PARSER_SETTINGS_FILE`。#1701）に置き、共有の `model-settings.json` には書かない | `RAG_*` |
 
 backend は 環境変数 → `platform/.env` → `backend/.env` の順に読む（環境変数が最優先）。共通 `.env` の場所は
 `PLATFORM_ENV_FILE` で上書きできる（既定はリポジトリの `platform/.env`）。旧名（接頭辞のない名前や `HF_TOKEN` /
@@ -455,7 +455,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - 問題が無ければ Docker の資源を消してよい（任意）: `docker volume ls -q | grep '^production-ready-rag_'`、
   `docker images --format '{{.Repository}}' | grep '^production-ready-rag-'` を確認して削除し、Docker 自体が不要なら
   `sudo apt-get purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` で外す。
-- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`）は host のファイルなので、そのまま引き継がれる。
+- 画面から保存した値（`platform/.env`・`model-settings.json`・`backend/.env`・`backend/parser-settings.json`）は host のファイルなので、そのまま引き継がれる。
 
 ### ローカル（Docker Compose で前処理 / parser を動かしていた環境）
 
@@ -482,7 +482,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 ### 既定の解析エンジンの変更（Unstructured → Docling）
 
-- `RAG_PARSER_ADAPTER_BACKEND` と `model-settings.json` の `parser_adapters` を保存していない環境は、Docling が既定になる。
+- `RAG_PARSER_ADAPTER_BACKEND` と、画面で保存した解析エンジン（#1701 からは `backend/parser-settings.json`）が無い環境は、Docling が既定になる。
   Unstructured を使い続ける場合は「検索・回答設定 › 文書解析」で Unstructured を選んで保存する（または `RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
 - Docling は PDF と画像だけを解析する。それ以外の形式は取込を始める前に止まるので、「[既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方](#既定の解析エンジンdoclingで扱える形式とそれ以外の形式の取り込み方286)」のとおり処理レシピで Unstructured（または Office→PDF）を選ぶ。
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
@@ -706,6 +706,25 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - 利用者フィードバック（`rag_citation_feedback`）は #408 から送った利用者（`user_id_hash`）で分ける。一覧・件数・集計・詳細（評価ケースの作成・承認済み FAQ への反映を含む）は、SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけがすべての利用者の分を扱い、ほかのロールは自分が送った分だけを扱う（`rag.feedback.manage` を持っていても同じ。NL2SQL の実行履歴と同じ規則）。他人のフィードバックの ID を指定すると 403 になる。列は以前から保存しているので schema の変更はない。送信者の記録がない古い行は SYSTEM_ADMIN だけに見える。
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す（その後 #1565 で 3 製品共通の `pr_session` / `pr_csrf` になった。[terraform/README.md](../../terraform/README.md)「ログインのセッションの共有（#1565）」）。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
+
+## 既存環境の更新手順（#1701 文書解析の設定を parser-settings.json へ分ける）
+
+「検索・回答設定 › 文書解析」で保存する解析エンジンと外部接続（Endpoint・モデル）を、3 製品で共有する
+`platform/model-settings.json` の `parser_adapters` から、RAG 専用の `rag/backend/parser-settings.json`
+（`RAG_PARSER_SETTINGS_FILE` で変えられる。相対パスは `backend/` 基準）へ移した。NL2SQL / Agent が先にモデル設定を
+保存すると `parser_adapters` の無いファイルになり、RAG の設定の読み込み・システムテーブルの CLI・backend が失敗していた
+（`ValueError: v2 以降の設定には parser_adapters が必要です。`）。表の変更（migration）は無い。
+
+1. 更新後の RAG は `model-settings.json` の `parser_adapters` を読まない（移行・読み替えはしない。残っていても害は無い）。
+   `parser-settings.json` が無いうちは `backend/.env` の `RAG_PARSER_*` と既定値（Docling）で動く。
+2. 画面で既定以外の解析エンジン（Unstructured・MinerU・Dots.OCR など）や接続を保存していた環境は、更新後に
+   「検索・回答設定 › 文書解析」で選び直して保存する（`parser-settings.json` が作られる）。parser の API key は今までどおり
+   `backend/.env`（`RAG_PARSER_MINERU_API_KEY` など）にあるので入れ直さなくてよい。
+3. Compute では `init_script.sh` が `parser-settings.json`（と `.lock`）の所有者をサービスのユーザーへ戻す。SELinux の
+   context は repository の `usr_t` を受け継ぐので追加の設定は無い。`backend/.env` と同じく、Compute の中だけにあるファイル
+   なので、作り直す前に残す場合は写しておく。
+4. システムテーブルの CLI（`app.rag.system_schema_cli`。NL2SQL・Agent の CLI も同じ）は、ORA ではない失敗（設定の
+   読み込みなど）で、secret を含まない原因の手がかり（`hint`。例外の型と message の 1 行目）を出す。
 
 ## 既存環境の更新手順（#1437 長い章節を抽出してから統合・モデルの入力の上限）
 

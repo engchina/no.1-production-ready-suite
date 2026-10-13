@@ -21,12 +21,7 @@ from pr_backend_core.config import (
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
-from pr_system_settings.model import (
-    ModelSecretStateMixin,
-    ModelSettingsSection,
-    ModelSettingsStore,
-    SectionSecret,
-)
+from pr_system_settings.model import ModelSecretStateMixin, ModelSettingsStore
 from pr_system_settings.model import (
     enterprise_ai_connection_for_model as enterprise_ai_connection_for_model,
 )
@@ -56,6 +51,8 @@ from rag_pipeline_core.chunking import (
 )
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
+from app.parser_settings_store import ParserSettingsStore
+
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
@@ -79,7 +76,7 @@ ParserAdapterBackend = Literal[
     "oci_document_understanding",
 ]
 # 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR)。
-# 保存済みの設定(model-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に残っていても
+# 保存済みの設定(parser-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に残っていても
 # 取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
 # 旧値は再保存時に消えるため、既存データを書き換える migration は持たない。
 REMOVED_PARSER_ADAPTER_BACKENDS = frozenset({"marker", "unlimited_ocr", "glm_ocr"})
@@ -226,6 +223,8 @@ BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
 # 3製品共通の設定（`PLATFORM_*`）を置く `platform/.env`。`PLATFORM_ENV_FILE` で上書きできる。
 PLATFORM_ENV_FILE = platform_env_file(BACKEND_ROOT)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
+# 文書解析の設定（RAG 専用。#1701）。相対 path は backend/ 基準。
+DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
@@ -268,7 +267,10 @@ def _without_profile_only_fields(
 
 
 class _PersistedParserAdapterSettings(BaseModel):
-    """UI から保存された文書解析 backend と外部接続設定。"""
+    """UI から保存された文書解析 backend と外部接続設定（`parser-settings.json`。#1701）。
+
+    API key は持たない（RAG の backend/.env の `RAG_PARSER_*_API_KEY`）。
+    """
 
     # 既定エンジンは Docling(#286)。選択中の engine の flag だけを既定で有効にする。
     adapter_backend: ParserAdapterBackend = DEFAULT_PARSER_ADAPTER_BACKEND
@@ -277,10 +279,8 @@ class _PersistedParserAdapterSettings(BaseModel):
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
     mineru_api_host: str = Field(default="", max_length=2048)
-    mineru_api_key: str = Field(default="", max_length=4096)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
-    dots_ocr_api_key: str = Field(default="", max_length=4096)
 
     # 削除済みエンジンの項目(marker_enabled 等)と、画面から外した docling_vision_enabled(#497。
     # Vision の既定は backend/.env の RAG_VISION_ENABLED で決める。#528)は
@@ -358,6 +358,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     model_settings_file: str = Field(
         default=DEFAULT_MODEL_SETTINGS_FILE,
         description="UI から保存した共有ランタイム設定 JSON。存在する場合は .env より優先する。",
+    )
+    rag_parser_settings_file: str = Field(
+        default=DEFAULT_PARSER_SETTINGS_FILE,
+        description=(
+            "「文書解析」画面から保存した解析エンジンと外部接続の JSON（RAG 専用。#1701）。"
+            "存在する場合は .env より優先する。相対 path は backend/ 基準。"
+        ),
     )
 
     # --- HuggingFace モデルダウンロード ---
@@ -1970,6 +1977,7 @@ def _settings_singleton() -> Settings:
     """
     settings = Settings(_env_file=(PLATFORM_ENV_FILE, BACKEND_ENV_FILE))
     load_persisted_model_settings(settings)
+    load_persisted_parser_settings(settings)
     # 以後の .env の変更を差分で取り込むため、今の .env の内容を基準として覚える。
     reload_env_settings_if_changed(settings)
     return settings
@@ -1980,6 +1988,7 @@ def get_settings() -> Settings:
     settings = _settings_singleton()
     reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
+    PARSER_SETTINGS_STORE.reload_if_changed(settings)
     return settings
 
 
@@ -1987,6 +1996,7 @@ def reset_settings_cache() -> None:
     """テストや明示的な再初期化のため Settings singleton を破棄する。"""
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
+    PARSER_SETTINGS_STORE.reset()
     _ENV_RELOAD_STATE.key = None
     _ENV_RELOAD_STATE.snapshot = None
 
@@ -2016,8 +2026,8 @@ def reload_env_settings_if_changed(settings: Settings) -> None:
     設定画面の保存は `.env` に書き、保存を受けたプロセスの Settings だけを書き換える。
     ほかのプロセスは、`.env` の更新時刻が変わったら読み直し、前回読んだ内容から
     **変わった項目だけ** を反映する（プロセスの中で変えた値や、`.env` にない値を既定値へ戻さない）。
-    反映後は model-settings.json の値をかけ直す。`.env` のパスが変わったとき（テストの tmp など）は
-    基準を取り直すだけにする。
+    反映後は model-settings.json と parser-settings.json の値をかけ直す。`.env` のパスが
+    変わったとき（テストの tmp など）は基準を取り直すだけにする。
     """
     files = (PLATFORM_ENV_FILE, BACKEND_ENV_FILE)
     key = tuple((str(path), _env_file_mtime_ns(path)) for path in files)
@@ -2053,6 +2063,7 @@ def reload_env_settings_if_changed(settings: Settings) -> None:
             setattr(settings, name, getattr(snapshot, name))
         if changed:
             load_persisted_model_settings(settings)
+            load_persisted_parser_settings(settings)
 
 
 def resolve_model_settings_file(path_value: str) -> Path:
@@ -2068,14 +2079,20 @@ def resolve_model_settings_file(path_value: str) -> Path:
 
 
 _PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
+# parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
+PARSER_SECRET_ATTRS = ("rag_parser_mineru_api_key", "rag_parser_dots_ocr_api_key")
 
 
-def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any] | None, version: int) -> None:
-    """model-settings.json の parser 節を Settings へ反映する（v1 にはない）。"""
-    if raw is None:
-        if version >= 2:
-            raise ValueError("v2 以降の設定には parser_adapters が必要です。")
-        return
+def resolve_parser_settings_file(path_value: str) -> Path:
+    """RAG_PARSER_SETTINGS_FILE を RAG の backend/.env と同じディレクトリ基準で解決する。"""
+    path = Path(path_value.strip() or DEFAULT_PARSER_SETTINGS_FILE).expanduser()
+    if path.is_absolute():
+        return path
+    return (BACKEND_ENV_FILE.parent / path).resolve()
+
+
+def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any]) -> None:
+    """parser-settings.json の内容を Settings へ反映する（無い項目は既定値）。"""
     parser = _PersistedParserAdapterSettings.model_validate(raw)
     for name in _PARSER_ADAPTER_FIELDS:
         setattr(settings, f"rag_parser_{name}", getattr(parser, name))
@@ -2086,27 +2103,25 @@ def _dump_parser_adapters(settings: Settings) -> dict[str, Any]:
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
-# RAG は同じファイルに parser adapter の設定を同居させる。
-PARSER_ADAPTERS_SECTION = ModelSettingsSection(
-    name="parser_adapters",
-    load=_load_parser_adapters,
-    dump=_dump_parser_adapters,
-    # parser の API key は JSON に書かず、RAG の backend/.env に保存する（#106 / #211）。
-    secrets=tuple(
-        SectionSecret(key=key, attr=f"rag_parser_{key}", env=f"RAG_PARSER_{key.upper()}")
-        for key in _PARSER_ADAPTER_FIELDS
-        if key.endswith("_api_key")
-    ),
-)
 MODEL_SETTINGS_STORE = ModelSettingsStore(
     resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),
-    # モデルの API key（PLATFORM_OCI_ENTERPRISE_AI_API_KEY）は共通 `.env`、parser の API key
-    # （RAG_PARSER_*_API_KEY）は RAG の backend/.env に保存する（#211）。
+    # モデルの API key（PLATFORM_OCI_ENTERPRISE_AI_API_KEY）は共通 `.env` に保存する（#211）。
     # テストで差し替えられるよう、呼出時に module の値を参照する。
     env_file=lambda _settings: PLATFORM_ENV_FILE,
-    sections=(PARSER_ADAPTERS_SECTION,),
-    section_env_file=lambda _settings: BACKEND_ENV_FILE,
 )
+# 文書解析の設定は RAG 専用のファイルに置き、共有の model-settings.json には書かない（#1701）。
+PARSER_SETTINGS_STORE = ParserSettingsStore(
+    resolve_path=lambda settings: resolve_parser_settings_file(settings.rag_parser_settings_file),
+    env_file=lambda _settings: BACKEND_ENV_FILE,
+    load=_load_parser_adapters,
+    dump=_dump_parser_adapters,
+    secrets=tuple((attr, settings_env_name("RAG_", attr)) for attr in PARSER_SECRET_ATTRS),
+)
+
+
+def load_persisted_parser_settings(settings: Settings) -> None:
+    """「文書解析」画面で保存した parser-settings.json があれば Settings へ上書き適用する。"""
+    PARSER_SETTINGS_STORE.load(settings)
 
 
 def load_persisted_model_settings(settings: Settings) -> None:

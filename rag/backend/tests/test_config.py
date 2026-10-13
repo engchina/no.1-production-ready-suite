@@ -471,7 +471,7 @@ def test_removed_parser_backends_fall_back_to_default(
 
 @pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
 def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str) -> None:
-    """model-settings.json に削除したエンジン(#270)が残っていても読み込みで既定へ寄せる。"""
+    """parser-settings.json に削除したエンジン(#270)が残っていても読み込みで既定へ寄せる。"""
     # 既定(docling)以外から始め、読み込みで既定エンジンへ寄ったことを区別できるようにする。
     settings = Settings(_env_file=None, rag_parser_adapter_backend="unstructured")
     config_module._load_parser_adapters(
@@ -483,7 +483,6 @@ def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str)
             f"{removed}_model": "removed-model",
             "unstructured_enabled": True,
         },
-        3,
     )
 
     assert settings.rag_parser_adapter_backend == "docling"
@@ -493,7 +492,7 @@ def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str)
 
 
 def test_saved_parser_settings_ignore_stale_docling_vision_flag() -> None:
-    """model-settings.json に残った docling_vision_enabled(#497 で画面から削除)は読まない。
+    """parser-settings.json に残った docling_vision_enabled(#497 で画面から削除)は読まない。
 
     Vision の全体の既定は backend/.env の RAG_VISION_ENABLED で決める（#528）。読み込みは失敗せず、
     次に保存すると消える。
@@ -502,7 +501,6 @@ def test_saved_parser_settings_ignore_stale_docling_vision_flag() -> None:
     config_module._load_parser_adapters(
         settings,
         {"adapter_backend": "docling", "docling_enabled": True, "docling_vision_enabled": True},
-        3,
     )
 
     assert settings.rag_parser_adapter_backend == "docling"
@@ -547,28 +545,45 @@ def test_saved_parser_settings_without_backend_load_as_docling() -> None:
         rag_parser_docling_enabled=False,
         rag_parser_unstructured_enabled=True,
     )
-    config_module._load_parser_adapters(settings, {}, 3)
+    config_module._load_parser_adapters(settings, {})
 
     assert settings.rag_parser_adapter_backend == "docling"
     assert settings.rag_parser_docling_enabled is True
     assert settings.rag_parser_unstructured_enabled is False
 
     settings = Settings(_env_file=None, rag_parser_adapter_backend="unstructured")
-    config_module._load_parser_adapters(settings, {"adapter_backend": "auto"}, 3)
+    config_module._load_parser_adapters(settings, {"adapter_backend": "auto"})
     assert settings.rag_parser_adapter_backend == "docling"
 
 
-def test_v1_model_settings_without_parser_section_keeps_docling_default(
-    monkeypatch: pytest.MonkeyPatch,
+def test_missing_parser_settings_file_keeps_docling_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """parser 節の無い v1 の model-settings.json では Settings の既定(Docling)がそのまま残る。"""
+    """parser-settings.json が無ければ Settings の既定(Docling)がそのまま残る(#1701)。"""
     monkeypatch.delenv("RAG_PARSER_ADAPTER_BACKEND", raising=False)
     monkeypatch.delenv("RAG_PARSER_DOCLING_ENABLED", raising=False)
-    settings = Settings(_env_file=None)
-    config_module._load_parser_adapters(settings, None, 1)
+    settings = Settings(
+        _env_file=None, rag_parser_settings_file=str(tmp_path / "parser-settings.json")
+    )
+    config_module.load_persisted_parser_settings(settings)
 
     assert settings.rag_parser_adapter_backend == "docling"
     assert settings.rag_parser_docling_enabled is True
+
+
+def test_relative_parser_settings_file_resolves_from_backend_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """RAG_PARSER_SETTINGS_FILE の相対 path は RAG の backend/ 基準(#1701)。"""
+    monkeypatch.setattr(config_module, "BACKEND_ENV_FILE", tmp_path / "backend" / ".env")
+
+    assert (
+        config_module.resolve_parser_settings_file("")
+        == (tmp_path / "backend" / "parser-settings.json").resolve()
+    )
+    assert config_module.resolve_parser_settings_file("/srv/parser.json") == Path(
+        "/srv/parser.json"
+    )
 
 
 def test_saved_unstructured_selection_is_kept() -> None:
@@ -577,7 +592,6 @@ def test_saved_unstructured_selection_is_kept() -> None:
     config_module._load_parser_adapters(
         settings,
         {"adapter_backend": "unstructured", "unstructured_enabled": True},
-        3,
     )
 
     assert settings.rag_parser_adapter_backend == "unstructured"

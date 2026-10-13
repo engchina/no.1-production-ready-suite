@@ -560,6 +560,10 @@ def test_cli_status_and_initialize(
     output = capsys.readouterr().out
     assert "SCHEMA_OPERATION_FAILED" in output
     assert "secret" not in output
+    # ORA でない失敗は、値を伏せた手がかりを出す（#1701）。
+    assert json.loads(output)["error"]["hint"] == (
+        "RuntimeError: DPY-6005: cannot connect password=***"
+    )
 
 
 def test_cli_check_returns_zero_only_when_ready(

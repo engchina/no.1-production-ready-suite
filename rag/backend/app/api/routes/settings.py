@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.database import build_database_router
-from pr_system_settings.model import build_model_router, model_payload
+from pr_system_settings.model import build_model_router
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
     MODEL_TEST_IMAGE_BYTES,
@@ -51,6 +51,8 @@ from app.clients.oracle import (
 )
 from app.config import (
     MODEL_SETTINGS_STORE,
+    PARSER_SECRET_ATTRS,
+    PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
     Settings,
     enterprise_ai_connection_for_model,
@@ -350,7 +352,7 @@ async def update_parser_adapter_settings(
 ) -> ApiResponse[ParserAdapterSettingsData]:
     """任意 parser adapter の backend/feature flag と「解析後の処理」を保存し runtime へ反映する。
 
-    - 解析エンジン（`adapter_backend` と feature flag・接続）は model-settings.json（#103）。
+    - 解析エンジン（`adapter_backend` と feature flag・接続）は parser-settings.json（#1701）。
     - 「解析後の処理」（Vision・項目抽出・章節木。#528）は backend/.env。ほかのプロセスは
       `.env` の更新時刻の変化で読み直す（#466）。
     """
@@ -363,22 +365,22 @@ async def update_parser_adapter_settings(
         for name, value in post_parse_updates.items():
             setattr(settings, name, value)
     if parser_fields:
-        # モデル設定と同じ model-settings.json を、同じロックの下で書き換える（#103）。
-        # API key（モデル・parser）は JSON に書かず .env に保存し、
-        # 旧 JSON に残っていれば移す（#106）。
+        # 解析エンジンは RAG 専用の parser-settings.json に保存する（共有の model-settings.json には
+        # 書かない。#1701）。API key は JSON に書かず backend/.env に保存する（#106）。
         try:
-            with MODEL_SETTINGS_STORE.lock(settings):
-                MODEL_SETTINGS_STORE.reload_if_changed(settings)
+            with PARSER_SETTINGS_STORE.lock(settings):
+                PARSER_SETTINGS_STORE.reload_if_changed(settings)
                 candidate = _parser_adapter_settings_candidate(settings, payload)
-                api_key = settings.oci_enterprise_ai_api_key
-                MODEL_SETTINGS_STORE.save(candidate, model_payload(settings), api_key=api_key)
+                PARSER_SETTINGS_STORE.save(candidate)
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
-                detail="設定を共有永続化ファイルへ保存できませんでした。",
+                detail="文書解析の設定を保存できませんでした。",
             ) from exc
-        # 保存したファイルから読み直し、runtime を保存した状態にそろえる。
-        MODEL_SETTINGS_STORE.load(settings, refresh_secret=True)
+        # 保存したファイルから読み直し、API key は保存した値にそろえる。
+        PARSER_SETTINGS_STORE.load(settings)
+        for name in PARSER_SECRET_ATTRS:
+            setattr(settings, name, getattr(candidate, name))
     return ApiResponse(data=_parser_adapter_settings_data(settings))
 
 
