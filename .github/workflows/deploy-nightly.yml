@@ -16,13 +16,19 @@ on:
   schedule:
     - cron: "47 15 * * *" # 00:47 JST（整点を避け、ほかの nightly と重ならない時間）
   workflow_dispatch:
+  # この workflow と script を変えた PR でも実行して確かめる（必須の check ではない。ほかの PR では動かない）。
+  pull_request:
+    paths:
+      - .github/workflows/deploy-nightly.yml
+      - .github/scripts/deploy-run-through.sh
 
 permissions:
   contents: read
 
 concurrency:
   group: deploy-nightly-${{ github.ref }}
-  cancel-in-progress: false
+  # PR だけ古い run を取り消す（main の nightly は取り消さない）。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   run-through:
