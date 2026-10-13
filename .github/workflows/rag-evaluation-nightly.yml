@@ -65,6 +65,9 @@ on:
         default: ""
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: rag-evaluation-nightly-${{ github.ref }}
   cancel-in-progress: true

@@ -41,6 +41,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# token の既定は読み取りだけにする（#1594）。ほかの権限が要る job は job の permissions で足す。
+permissions:
+  contents: read
+
 # PR / main の push の E2E smoke の spec（frontend からの相対パス、空白区切り）。smoke の job と、e2e の影響分析
 # （e2e-impact の `--skip-specs`。selected のとき、smoke が全 project で実行する spec を impact から除く）の
 # 両方が読む（#1525）。NL2SQL の desktop だけで実行する spec（*_DESKTOP）は 375px を impact に残すので除外しない。
@@ -271,6 +275,10 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # gitleaks-action は PR の commit の一覧を API で取る。
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

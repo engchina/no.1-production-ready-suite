@@ -16,9 +16,8 @@ name: Dependabot auto-merge
 
 on: pull_request
 
-permissions:
-  contents: write
-  pull-requests: write
+# 書き込みの権限は merge する job だけに渡す（#1594）。
+permissions: {}
 
 concurrency:
   group: dependabot-auto-merge-${{ github.event.pull_request.number }}
@@ -31,6 +30,9 @@ jobs:
     timeout-minutes: 5
     # 人間の PR では実行しない。
     if: github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
