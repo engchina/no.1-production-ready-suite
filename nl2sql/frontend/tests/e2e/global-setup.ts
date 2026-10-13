@@ -3,6 +3,8 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { FIXTURE_BASE_URL } from "./_helpers/web-server";
+
 const HERMETIC_MARKER = "e2e unmocked API";
 
 // 実 backend が書き込む、利用者の実環境の設定ファイル（backend/app/features/settings/router.py の
@@ -55,6 +57,8 @@ export default async function globalSetup(config: FullConfig) {
     throw new Error("playwright.config.ts の use.baseURL が未設定です。");
   }
   await assertHermeticApi(baseURL);
+  // preview（PR の CI。#1583）では、部品の fixture を描く spec が開く dev server も確かめる。
+  if (FIXTURE_BASE_URL !== baseURL) await assertHermeticApi(FIXTURE_BASE_URL);
 
   const before = new Map<string, string>();
   for (const path of protectedFiles(config)) {
