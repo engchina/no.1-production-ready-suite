@@ -358,9 +358,10 @@ class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
         team_name: str,
         question: str,
         tool_name: str | None = None,
+        conversation_id: str | None = None,
         call_timeout_seconds: float | None = None,
     ) -> tuple[str, str]:
-        del team_name, tool_name, call_timeout_seconds
+        del team_name, tool_name, conversation_id, call_timeout_seconds
         self.questions.append(question)
         return "SELECT TOTAL_AMOUNT FROM INVOICES", "conversation-001"
 
