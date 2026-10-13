@@ -193,7 +193,12 @@ up() {
     *) log "systemd が起動しません。"; exit 1 ;;
   esac
   in_container "install -d -m 0755 ${repo_dir}"
-  git -C "${repo_root}" archive --format=tar HEAD | "${docker_cmd}" exec -i "${container}" tar -x -C "${repo_dir}"
+  # DEPLOY_SOURCE_TAR（git archive の tar）があればそれを、無ければ HEAD を置く。
+  if [ -n "${DEPLOY_SOURCE_TAR:-}" ]; then
+    "${docker_cmd}" exec -i "${container}" tar -x -C "${repo_dir}" < "${DEPLOY_SOURCE_TAR}"
+  else
+    git -C "${repo_root}" archive --format=tar HEAD | "${docker_cmd}" exec -i "${container}" tar -x -C "${repo_dir}"
+  fi
   write_props
   log "repository と props を置きました（products: ${products}）。"
 }
