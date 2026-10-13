@@ -17811,8 +17811,13 @@ test("feedback refresh preserves drafts and pending review locks competing actio
   await expect(page.getByText("Feedback 類似検索設定を保存しました。", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "アプリ内フィードバック" }).click();
   await page.getByRole("link", { name: "学習候補で確認" }).click();
-  await expect(page).toHaveURL(/question-classifier-models/);
+  await expect(page).toHaveURL(/question-classifier-models\?tab=candidates&history_id=hist-001/);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  // 未保存の編集が無いときのリンクは `<a>` の文書の遷移になる（FormActionBar の href）。URL が変わった直後は
+  // 新しい文書の script が未実行で styles も無いので、移動先の画面が描かれるまで待つ（afterEach の字体の確認が
+  // 読み込み途中の文書を見ないため。#1738）。
+  await expect(page.getByRole("heading", { level: 1, name: "質問分類モデル管理", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "学習候補", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 test("learning candidate failed previous page preserves the cursor for retry", async ({ page }, testInfo) => {
