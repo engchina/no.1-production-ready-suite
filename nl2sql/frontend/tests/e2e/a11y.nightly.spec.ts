@@ -91,8 +91,18 @@ const SCREENS = [
   { name: "システム設定（外観と証明書）", path: "/settings/appearance", heading: "外観と証明書" },
 ];
 
+/** 表示の途中（フェードイン・色の transition）の色で color-contrast を測らない。無限の animation（Spinner など）は待たない。 */
+async function waitForSettledAnimations(page: Page) {
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every((animation) => animation.playState !== "running" || animation.effect?.getComputedTiming().iterations === Infinity),
+  );
+}
+
 async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: string) {
   const exceptions = KNOWN_EXCEPTIONS[path] ?? [];
+  await waitForSettledAnimations(page);
   const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).disableRules([...exceptions]).analyze();
   const blocking = results.violations.filter((violation) => BLOCKING_IMPACTS.has(violation.impact ?? ""));
   const summary = blocking.map((violation) => ({
@@ -100,7 +110,10 @@ async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: s
     impact: violation.impact,
     count: violation.nodes.length,
     help: violation.help,
-    targets: violation.nodes.slice(0, 5).map((node) => node.target.join(" ")),
+    // 対象の selector と、axe の理由の 1 行目（color-contrast なら実測の比と色）。
+    targets: violation.nodes
+      .slice(0, 5)
+      .map((node) => `${node.target.join(" ")}（${node.failureSummary?.split("\n").at(1)?.trim() ?? ""}）`),
   }));
   if (summary.length) {
     await testInfo.attach("axe-violations.json", { body: JSON.stringify(summary, null, 2), contentType: "application/json" });
