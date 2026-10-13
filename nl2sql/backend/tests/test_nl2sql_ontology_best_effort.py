@@ -311,3 +311,11 @@ def test_ai_placeholders_duplicates_and_structural_notes_are_pruned() -> None:
     # 利用者が Markdown に書いた定義（ai_output でない）は消さず、検証の診断に任せる。
     kept = repair_definitions("sample", values, SCHEMA)
     assert {"object_type", "property", "department_department_name"} <= {d.api_name for d in kept}
+
+
+def test_orphan_property_is_adopted_by_the_object_that_lists_it() -> None:
+    orphan = prop("email", "メール", "", "EMPLOYEE", "EMAIL")
+    employee = obj("employee", "従業員", "EMPLOYEE", ["email"])
+    by_name = {d.api_name: d for d in repair_definitions("sample", [employee, orphan], SCHEMA)}
+    assert by_name["employee"].properties == ["email"]
+    assert by_name["email"].object_type == "employee"

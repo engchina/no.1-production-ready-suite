@@ -706,6 +706,15 @@ class _ObjectPropertyRepair:
             or (isinstance(prop, PropertyDefinition) and prop.object_type == obj.api_name)
         ):
             return name
+        if (
+            isinstance(prop, PropertyDefinition)
+            and not prop.object_type
+            and all(mapping_object_key(m) in self.tables for m in prop.mappings)
+        ):
+            # 所属の無いプロパティは、参照したオブジェクトの表の列なら、そのオブジェクトに属させる。
+            prop.object_type = obj.api_name
+            self.own.append(prop)
+            return name
         target = next(
             (
                 (table, key)
