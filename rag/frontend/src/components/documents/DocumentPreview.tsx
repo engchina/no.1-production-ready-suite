@@ -411,6 +411,7 @@ function BboxPreviewOverlay({
       style={{ aspectRatio: bboxPageAspectRatio(focusPageSize) }}
     >
       <span
+        data-surface-tint="accent"
         aria-hidden
         data-bbox-mode={overlayRect.coordinateMode}
         data-bbox-unit={overlayRect.unit}
@@ -434,6 +435,7 @@ function BboxLocator({
   const overlayStyle = bboxOverlayStyle(overlayRect);
   return (
     <div
+      data-surface-tint="info"
       role="status"
       aria-live="polite"
       className="rounded-md border border-info-border bg-info-subtle p-3 text-info-fg"
@@ -455,6 +457,7 @@ function BboxLocator({
           style={{ aspectRatio: bboxPageAspectRatio(focusPageSize) }}
         >
           <span
+            data-surface-tint="accent"
             aria-hidden
             data-bbox-mode={overlayRect.coordinateMode}
             data-bbox-unit={overlayRect.unit}

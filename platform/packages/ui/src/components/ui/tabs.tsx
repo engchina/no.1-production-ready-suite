@@ -236,6 +236,9 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix = "pr", class
               <span
                 id={badgeId}
                 data-testid={item.badgeTestId}
+                // 選んだタブの淡青の地（accent-muted）と、選んでいない灰色の地（surface-hover。fg-muted は 4.39:1）の
+                // どちらでも件数を 4.5:1 にする（tokens/colors.css。#1671）。
+                data-surface-tint="accent"
                 className="tnum inline-flex min-w-6 items-center justify-center rounded-full bg-surface-hover px-1.5 text-xs font-normal text-fg-muted group-aria-selected:bg-accent-muted group-aria-selected:text-accent-fg-strong"
               >
                 {badge}

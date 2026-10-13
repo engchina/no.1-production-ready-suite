@@ -195,6 +195,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - `rgba()` / `rgb()` / `hsl()` / `oklch()` などの生の色 → 色トークン（透過は `/15` の修飾か `color-mix`。#800）
 - 文字サイズ・行間・字間の数値（`fontSize: 11`）と、inline style の余白・角丸の数値（`marginTop: 2`）→ `var(--font-size-*)` / `var(--space-*)` / `var(--radius-*)` か Tailwind のユーティリティ（#800）
 - `TextareaField` の高さを `textareaClassName` の `h-*` / `min-h-*` で決める → `rows`（#613 / #800）
+- 淡い色の面（`bg-accent-subtle` / `-muted`・`bg-<状態色>-subtle`）を className に持つ要素に `data-surface-tint` が無い → 同じ要素に `data-surface-tint="<系統>"`（内側の副次テキストを 4.5:1 にする。対応表で組み立てる class は `surfaceTintFor(className)`。README §6「淡い色の面の上の文字」、#1671）
 
 prop の妥当性（`Button` に存在しない prop を渡す等）は lint ではなく TypeScript の型チェックで検出します。
 

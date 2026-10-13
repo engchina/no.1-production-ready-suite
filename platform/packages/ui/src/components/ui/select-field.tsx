@@ -449,6 +449,8 @@ export function SelectField<T extends string>({
                   // e2e が値で選択肢を選べるように、値を data 属性に出す（表示には使わない）。
                   data-value={option.value}
                   aria-selected={selected}
+                  // 淡青の面の上の補足（description）を 4.5:1 にする（tokens/colors.css。#1671）。
+                  data-surface-tint={selected || highlighted ? "accent" : undefined}
                   onMouseEnter={() => {
                     revealHighlightRef.current = false;
                     setHighlightedIndex(index);

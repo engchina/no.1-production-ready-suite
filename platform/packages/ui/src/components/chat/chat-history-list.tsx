@@ -169,7 +169,9 @@ export function ChatHistoryList({
           if (editor !== null) {
             return (
               <li key={item.id}>
-                <div className="rounded-md bg-accent-subtle p-2">{editor}</div>
+                <div data-surface-tint="accent" className="rounded-md bg-accent-subtle p-2">
+                  {editor}
+                </div>
               </li>
             );
           }
@@ -177,6 +179,7 @@ export function ChatHistoryList({
           return (
             <li key={item.id} className="group">
               <div
+                data-surface-tint={current ? "accent" : undefined}
                 className={cn(
                   "grid grid-cols-[minmax(0,1fr)_auto] rounded-md transition-colors",
                   INFORMATION_LIST_ROW_CLASS,

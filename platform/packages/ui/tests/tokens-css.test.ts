@@ -92,8 +92,9 @@ describe("tokens CSS", () => {
     expect(rule).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--color-focus-ring\);/);
   });
 
-  it("淡アクセント面（[data-surface-tint=\"accent\"]）の副次・アクセント文字は両テーマで 4.5:1 以上", () => {
+  describe("淡い色の面（[data-surface-tint]）の上の文字は両テーマで 4.5:1 以上（platform #64 / #1671）", () => {
     const palette = read("tokens/palette.css");
+    const a11y = read("tokens/a11y.css");
     const rgb = (name: string) => {
       const hex = palette.match(new RegExp(`--${name}:\\s*#([0-9a-f]{6});`, "i"))?.[1];
       if (!hex) throw new Error(`--${name} が palette.css に無い`);
@@ -108,25 +109,102 @@ describe("tokens CSS", () => {
       return (hi + 0.05) / (lo + 0.05);
     };
     const mix = (a: number[], ratio: number, b: number[]) => a.map((v, i) => v * ratio + b[i] * (1 - ratio));
+    /** colors.css の `--<token>: light-dark(var(--<light>), var(--<dark>));` から原色の名前を取る */
+    const lightDark = (css: string, token: string) => {
+      const match = css.match(new RegExp(`--${token}:\\s*light-dark\\(var\\(--([\\w-]+)\\),\\s*var\\(--([\\w-]+)\\)\\);`));
+      if (!match) throw new Error(`--${token} の light-dark() が見つからない`);
+      return { light: match[1], dark: match[2] };
+    };
+    const tintBlock = colors.match(/\[data-surface-tint\] \{([^}]*)\}/)?.[1] ?? "";
 
-    const scope = colors.match(/\[data-surface-tint="accent"\] \{([^}]*)\}/)?.[1] ?? "";
-    expect(scope).toMatch(/--color-fg-muted:\s*light-dark\(var\(--neutral-650\), var\(--neutral-350\)\);/);
-    expect(scope).toMatch(/--color-accent-fg:\s*var\(--color-accent-fg-strong\);/);
-    expect(colors).toMatch(/--color-accent-fg-strong:\s*light-dark\(var\(--blue-650\), var\(--blue-300\)\);/);
-    // --color-accent-subtle = emphasis（ライト blue-500 / ダーク blue-600）を surface（neutral-0 / neutral-900）に 8% / 16%
-    const light = mix(rgb("blue-500"), 0.08, rgb("neutral-0"));
-    const dark = mix(rgb("blue-600"), 0.16, rgb("neutral-900"));
-    for (const [fg, bg] of [["neutral-650", light], ["blue-650", light], ["neutral-350", dark], ["blue-300", dark]] as const) {
-      expect(contrast(rgb(fg), bg)).toBeGreaterThanOrEqual(4.5);
+    // 淡い面の地。accent はライト blue-500 / ダーク blue-600 を surface（neutral-0 / neutral-900）に混ぜる（colors.css）。
+    const surfaces = {
+      light: {
+        "accent-subtle": mix(rgb("blue-500"), 0.08, rgb("neutral-0")),
+        "accent-muted": mix(rgb("blue-500"), 0.12, rgb("neutral-0")),
+        "info-subtle": rgb(lightDark(colors, "color-info-subtle").light),
+        "success-subtle": rgb(lightDark(colors, "color-success-subtle").light),
+        "warning-subtle": rgb(lightDark(colors, "color-warning-subtle").light),
+        "danger-subtle": rgb(lightDark(colors, "color-danger-subtle").light),
+      },
+      dark: {
+        "accent-subtle": mix(rgb("blue-600"), 0.16, rgb("neutral-900")),
+        "accent-muted": mix(rgb("blue-600"), 0.22, rgb("neutral-900")),
+        "info-subtle": rgb(lightDark(colors, "color-info-subtle").dark),
+        "success-subtle": rgb(lightDark(colors, "color-success-subtle").dark),
+        "warning-subtle": rgb(lightDark(colors, "color-warning-subtle").dark),
+        "danger-subtle": rgb(lightDark(colors, "color-danger-subtle").dark),
+      },
+    } as const;
+    type Theme = keyof typeof surfaces;
+    type Surface = keyof (typeof surfaces)["light"];
+
+    /** [data-surface-tint="<tone>"] の内側で、各文字のトークンが解決する原色 */
+    const tintedText = (tone: string, theme: Theme) => {
+      const pick = (token: string) => lightDark(colors, token)[theme];
+      return {
+        fg: pick("color-fg"),
+        "fg-muted": lightDark(tintBlock, "color-fg-muted")[theme],
+        "accent-fg": pick("color-accent-fg-strong"),
+        "info-fg": pick("color-info-fg"),
+        "danger-fg": pick("color-danger-fg"),
+        "success-fg": tone === "success" ? pick("color-success-fg") : pick("color-success-fg-strong"),
+        "warning-fg": tone === "warning" ? pick("color-warning-fg") : pick("color-warning-fg-strong"),
+      };
+    };
+    const toneOf = (surface: Surface) => surface.split("-")[0];
+
+    it("[data-surface-tint] は副次・アクセントの文字を深くし、他の系統の success / warning を深い値にする", () => {
+      expect(tintBlock).toMatch(/--color-fg-muted:\s*light-dark\(var\(--neutral-650\), var\(--neutral-350\)\);/);
+      expect(tintBlock).toMatch(/--color-accent-fg:\s*var\(--color-accent-fg-strong\);/);
+      expect(colors).toMatch(/--color-accent-fg-strong:\s*light-dark\(var\(--blue-650\), var\(--blue-300\)\);/);
+      expect(colors).toMatch(
+        /\[data-surface-tint\]:not\(\[data-surface-tint="success"\]\) \{ --color-success-fg: var\(--color-success-fg-strong\); \}/
+      );
+      expect(colors).toMatch(
+        /\[data-surface-tint\]:not\(\[data-surface-tint="warning"\]\) \{ --color-warning-fg: var\(--color-warning-fg-strong\); \}/
+      );
+    });
+
+    for (const theme of ["light", "dark"] as const) {
+      for (const surface of Object.keys(surfaces[theme]) as Surface[]) {
+        it(`${theme}: ${surface} の上の文字（fg / fg-muted / accent-fg / 状態色の fg）`, () => {
+          for (const [text, color] of Object.entries(tintedText(toneOf(surface), theme))) {
+            expect(contrast(rgb(color), surfaces[theme][surface]), `${text}（--${color}）on ${surface}`).toBeGreaterThanOrEqual(4.5);
+          }
+        });
+      }
     }
-    // 変更前の値（fg-muted = neutral-600、accent-fg = blue-500）はライトで不足していた
-    expect(contrast(rgb("neutral-600"), light)).toBeLessThan(4.5);
 
-    // [data-surface] と違い、面のトークン一式を宣言し直さない。a11y の応答層は対象に含める
-    expect(colors).not.toMatch(/\[data-surface\], \[data-surface-tint\]/);
-    const a11y = read("tokens/a11y.css");
-    expect(a11y.match(/:root, \[data-theme\], \[data-surface\], \[data-surface-tint\] \{/g)).toHaveLength(2);
-    expect(a11y).toMatch(/:root, \[data-theme\], \[data-surface-tint\] \{\s*--color-fg-muted:/);
+    it("変更前の値（fg-muted = neutral-600、accent-fg = blue-500、warning-fg = amber-700）はライトで不足していた", () => {
+      const { light } = surfaces;
+      for (const surface of Object.keys(light) as Surface[]) {
+        expect(contrast(rgb("neutral-600"), light[surface]), surface).toBeLessThan(4.5);
+        expect(contrast(rgb("blue-500"), light[surface]), surface).toBeLessThan(4.5);
+      }
+      expect(contrast(rgb("amber-700"), light["info-subtle"])).toBeLessThan(4.5);
+      expect(contrast(rgb("green-700"), light["danger-subtle"])).toBeLessThan(4.5);
+    });
+
+    it("prefers-contrast: more の値（[data-surface-tint] も対象）も淡い面の上で 4.5:1 以上", () => {
+      const block = a11y.match(/:root, \[data-theme\], \[data-surface-tint\] \{([^}]*)\}/)?.[1] ?? "";
+      for (const theme of ["light", "dark"] as const) {
+        for (const token of ["color-fg-muted", "color-accent-fg"]) {
+          const color = lightDark(block, token)[theme];
+          for (const [surface, bg] of Object.entries(surfaces[theme])) {
+            expect(contrast(rgb(color), bg), `${theme} ${token} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+          }
+        }
+      }
+    });
+
+    it("面のトークン一式は宣言し直さず、a11y の応答層（forced-colors / prefers-contrast）は対象に含める", () => {
+      expect(colors).not.toMatch(/\[data-surface\], \[data-surface-tint\]/);
+      expect(a11y.match(/:root, \[data-theme\], \[data-surface\], \[data-surface-tint\] \{/g)).toHaveLength(2);
+      expect(a11y).toMatch(/:root, \[data-theme\], \[data-surface-tint\] \{\s*--color-fg-muted:/);
+      // :not() の分だけ詳細度が高い success / warning の上書きも、強制カラーモードではシステム色になる
+      expect(a11y).toMatch(/--color-success-fg-strong: CanvasText; --color-warning-fg-strong: CanvasText;/);
+    });
   });
 
   it(".dark に色値の手書き宣言を持たない（テーマは light-dark() で解決する）", () => {

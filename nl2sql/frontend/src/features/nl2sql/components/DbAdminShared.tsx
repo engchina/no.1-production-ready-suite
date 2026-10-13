@@ -209,6 +209,7 @@ export function StepIndicator({
       {steps.map((label, index) => (
         <li
           key={label}
+          data-surface-tint={index <= activeIndex ? "accent" : undefined}
           className={`rounded-md border px-3 py-2 text-sm font-semibold ${
             index <= activeIndex ? "border-accent-emphasis bg-accent-subtle text-accent-fg" : "border-border bg-surface text-fg-muted"
           }`}
@@ -671,6 +672,7 @@ export function SelectionListPanel({
               return (
                 <label
                   key={name}
+                  data-surface-tint={selected ? "accent" : undefined}
                   className={`flex min-h-11 min-w-0 cursor-pointer items-center gap-2 rounded-md border p-3 text-sm transition-colors ${
                     selected
                       ? "border-accent-emphasis bg-accent-subtle text-accent-fg"
@@ -1104,6 +1106,7 @@ export function ObjectListPanel({
           {filtered.map((item) => (
             <button
               key={item.name}
+              data-surface-tint={item.name === selectedName ? "accent" : undefined}
               type="button"
               role="listitem"
               aria-current={item.name === selectedName ? "true" : undefined}

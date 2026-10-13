@@ -187,6 +187,16 @@ export function FileDropzone({
           htmlFor={inputId}
           data-testid={dataTestId ? `${dataTestId}-dropzone` : undefined}
           data-drag-active={String(isDragActive)}
+          // 淡い面（ドラッグ中・選択済みは accent、エラーは danger）の上の文字を 4.5:1 にする（#1671）。
+          data-surface-tint={
+            interactionDisabled
+              ? undefined
+              : isDragActive || (!visibleError && hasSelection)
+                ? "accent"
+                : visibleError
+                  ? "danger"
+                  : undefined
+          }
           aria-busy={loading}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
@@ -209,6 +219,7 @@ export function FileDropzone({
           )}
         >
           <span
+            data-surface-tint="accent"
             className={cn(
               "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
               hasSelection || isDragActive
@@ -232,6 +243,7 @@ export function FileDropzone({
             </span>
           </span>
           <span
+            data-surface-tint={hasSelection ? "accent" : undefined}
             className={cn(
               "inline-block max-w-24 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:max-w-56",
               hasSelection

@@ -32,6 +32,7 @@ export function Dropzone({
 
   return (
     <div
+      data-surface-tint={dragOver ? "info" : undefined}
       role="button"
       tabIndex={0}
       aria-disabled={disabled}
