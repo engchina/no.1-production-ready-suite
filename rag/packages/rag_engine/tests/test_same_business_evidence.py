@@ -1,4 +1,5 @@
 """質問が業務を名指ししたとき、rerank 後の候補をその業務（フォルダ分類）の文書に絞る (#954)。"""
+
 from types import SimpleNamespace
 
 import rag_engine.generation.answering as answering
@@ -12,9 +13,21 @@ def _child(index, large_category, source, business_domains=()):
     # 本文由来の業務推定は別業務の文書でも他業務名を含み得るので、絞り込みの根拠にしないことを確かめる
     if business_domains:
         metadata["retrieval_profile"] = {"business_domains": list(business_domains)}
-    return AnswerRecord(id=f"c{index}", engine="docling", engine_label="Docling", page=index, seq_no=index, category="Chunk",
-                        text=f"使用可能な処理を選び実行ボタンを押します。{index}", source=source, chunk_level="child",
-                        chunk_id=f"c{index}", chunk_uid=f"uid:c{index}", source_run_id="run", metadata=metadata)
+    return AnswerRecord(
+        id=f"c{index}",
+        engine="docling",
+        engine_label="Docling",
+        page=index,
+        seq_no=index,
+        category="Chunk",
+        text=f"使用可能な処理を選び実行ボタンを押します。{index}",
+        source=source,
+        chunk_level="child",
+        chunk_id=f"c{index}",
+        chunk_uid=f"uid:c{index}",
+        source_run_id="run",
+        metadata=metadata,
+    )
 
 
 QUESTION = "倉庫連携メニューの権限を付与する操作を教えてほしい。"
@@ -31,8 +44,7 @@ def test_only_the_named_business_documents_remain_in_rank_order():
 
 
 def test_numbered_category_and_plain_business_name_compare_equal():
-    kept = rerank_records(QUESTION, [_child(1, "20_業務B", "b.pdf"), _child(2, "10_業務A", "a.pdf")], None,
-                          business_domains=("10_業務A",))
+    kept = rerank_records(QUESTION, [_child(1, "20_業務B", "b.pdf"), _child(2, "10_業務A", "a.pdf")], None, business_domains=("10_業務A",))
 
     assert [record.id for record in kept] == ["c2"]
 

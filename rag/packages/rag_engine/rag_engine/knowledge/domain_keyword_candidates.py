@@ -6,16 +6,17 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any
 
 from rag_engine.adapters.oracle.connection import connect_adb_thin, load_adb_settings
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     CHILD_SEARCH_TEXT_HEADER,
-    CHUNKS_DIRECTORY,
     CHUNK_METADATA_SCHEMA_VERSION,
+    CHUNKS_DIRECTORY,
     LATEST_CHUNKS_FILE,
     ChunkingResult,
     DocumentChunk,
@@ -23,7 +24,6 @@ from rag_engine.chunking import (
 )
 from rag_engine.knowledge.domain_keywords import normalize_domain_keyword, normalize_domain_keywords
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, tokenize_text_search_query
-
 
 DEFAULT_DOMAIN_KEYWORD_CANDIDATE_LIMIT = 300
 DEFAULT_DOMAIN_KEYWORD_SOURCE_CHUNK_LIMIT = 2000
@@ -43,6 +43,7 @@ _KANA_OR_CJK = re.compile(r"[ぁ-ゖァ-ヺ一-龯々〆ヵヶ]")
 @dataclass(frozen=True)
 class DomainKeywordCandidate:
     """ドメインキーワード候補、出現回数、由来 sample を保持します。"""
+
     keyword: str
     score: float
     frequency: int
@@ -53,6 +54,7 @@ class DomainKeywordCandidate:
 @dataclass(frozen=True)
 class DomainKeywordSourceText:
     """候補抽出に投入するチャンク本文と出典を保持します。"""
+
     chunk_id: str
     document_id: str
     text: str
@@ -65,6 +67,7 @@ class DomainKeywordCandidateTokenizationError(RuntimeError):
 @dataclass(frozen=True)
 class DomainKeywordSourceLoadResult:
     """ADB から読み込んだ候補抽出ソースと件数統計を保持します。"""
+
     sources: list[DomainKeywordSourceText]
     processed_chunk_count: int
     total_chunk_count: int
@@ -78,6 +81,7 @@ class DomainKeywordSourceLoadResult:
 @dataclass(frozen=True)
 class DomainKeywordSuggestionResult:
     """候補抽出結果と入力ソース数を保持します。"""
+
     candidates: list[DomainKeywordCandidate]
     processed_chunk_count: int
     total_chunk_count: int
@@ -463,10 +467,7 @@ def _candidate_stats_ok(keyword: str, frequency: int, chunk_count: int) -> bool:
         return True
     if _KANA_OR_CJK.search(keyword) and len(key) >= 3 and chunk_count >= 1:
         return frequency >= 1
-    return (
-        frequency >= DOMAIN_KEYWORD_CANDIDATE_MIN_FREQUENCY
-        and chunk_count >= DOMAIN_KEYWORD_CANDIDATE_MIN_CHUNKS
-    )
+    return frequency >= DOMAIN_KEYWORD_CANDIDATE_MIN_FREQUENCY and chunk_count >= DOMAIN_KEYWORD_CANDIDATE_MIN_CHUNKS
 
 
 def _candidate_score(

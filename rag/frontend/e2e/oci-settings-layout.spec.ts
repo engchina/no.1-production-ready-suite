@@ -594,7 +594,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, async ({ page }) => {
+  test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     let objectStorageSaves = 0;
     await mockApi(page, {

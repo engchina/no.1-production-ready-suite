@@ -435,7 +435,7 @@ test("Oracle RDF Network 管理カードと API 呼び出しを表示しない",
   await expectNoPageOverflow(page);
 });
 
-test("詳細表はデスクトップ8行・モバイル5行の高さに収め、次行から内部スクロールする", async ({ page }, testInfo) => {
+test("詳細表はデスクトップ8行・モバイル5行の高さに収め、次行から内部スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const expectedRows = expectedInformationRows(testInfo);
   let objectCount = expectedRows;
   await page.route("**/api/settings/database/system-tables", (route) =>
@@ -626,7 +626,7 @@ test("システムテーブル管理権限だけの利用者は初期化を実�
   await expectNoPageOverflow(page);
 });
 
-test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる操作を統一する", async ({ page }, testInfo) => {
+test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる操作を統一する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables("ready"))
   );

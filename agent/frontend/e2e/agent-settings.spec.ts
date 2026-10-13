@@ -209,7 +209,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
 }
 
 test.describe("Agent Runtime settings", () => {
-  test("RAG 由来のシステム設定 4 画面を表示・保存できる", async ({ page, mockApi }) => {
+  test("RAG 由来のシステム設定 4 画面を表示・保存できる", { tag: "@responsive" }, async ({ page, mockApi }) => {
     await mockMissingOciRuntimeSettings(page);
     await page.goto("/settings/oci");
     await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
@@ -397,7 +397,7 @@ test.describe("Agent Runtime settings", () => {
     await savePolicy();
   });
 
-  test("MCP 接続を API キーで追加し、ツールを取得して削除できる", async ({ page, mockApi }) => {
+  test("MCP 接続を API キーで追加し、ツールを取得して削除できる", { tag: "@responsive" }, async ({ page, mockApi }) => {
     await page.goto("/settings/mcp-connections");
 
     await expect(page.getByRole("heading", { name: "MCP 接続", level: 1 })).toBeVisible();
@@ -803,7 +803,7 @@ test.describe("Agent Runtime settings", () => {
     { name: "desktop", width: 1280, height: 720 },
     { name: "mobile", width: 375, height: 812 },
   ]) {
-    test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, async ({ page, mockApi }) => {
+    test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       // 保存ボタンが画面の下端に来るよう、ツールの一覧を長くする（MCP 接続のツールは並ばないため。#757）。
       for (let index = 1; index <= 12; index += 1) {

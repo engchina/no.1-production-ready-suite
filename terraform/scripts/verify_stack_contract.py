@@ -1026,6 +1026,187 @@ def _verify_suite_deploy(init_sources: dict[str, str]) -> None:
     )
 
 
+def _shell_scalar(source: str, name: str, *, context: str) -> str:
+    """`NAME=value` か `NAME="${NAME:-value}"` の値（既定値）。"""
+    match = re.search(rf'(?m)^{name}=(?:"\$\{{{name}:-([^}}]+)\}}"|([^\s#]+))$', source)
+    if match is None:
+        raise AssertionError(f"{context}: {name} not found")
+    return match.group(1) or match.group(2)
+
+
+def _shell_array(source: str, name: str, *, context: str) -> list[str]:
+    match = re.search(rf"(?ms)^{name}=\((.*?)^\)$", source)
+    if match is None:
+        raise AssertionError(f"{context}: {name} not found")
+    return re.findall(r"'([^']+)'", match.group(1))
+
+
+def _python_number(source: str, pattern: str, *, context: str) -> float:
+    match = re.search(pattern, source)
+    if match is None:
+        raise AssertionError(f"{context}: {pattern} not found")
+    return float(math.prod(float(part.replace("_", "")) for part in match.group(1).split("*")))
+
+
+def _route_paths(module: Path, prefix: str = "") -> set[str]:
+    """FastAPI の route の path（`@router.<method>(path)`。module の str 定数と APIRouter の prefix を解く）。"""
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    constants: dict[str, str] = {}
+
+    def value(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return constants.get(node.id)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = value(node.left), value(node.right)
+            return None if left is None or right is None else left + right
+        return None
+
+    router_prefix = ""
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if isinstance(node.value, ast.Call) and getattr(node.value.func, "id", "") == "APIRouter":
+                if name == "router":
+                    router_prefix = next((value(k.value) or "" for k in node.value.keywords if k.arg == "prefix"), "")
+            elif (text := value(node.value)) is not None:
+                constants[name] = text
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and getattr(decorator.func.value, "id", "") == "router"
+                and decorator.args
+                and (path := value(decorator.args[0])) is not None
+            ):
+                paths.add(prefix + router_prefix + path)
+    return paths
+
+
+def _rag_route_paths() -> set[str]:
+    """RAG の /api の下の route（app/api/router.py の include_router の prefix を付ける）。"""
+    api_dir = REPO_ROOT / "rag" / "backend" / "app" / "api"
+    tree = ast.parse((api_dir / "router.py").read_text(encoding="utf-8"))
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "include_router" and node.args):
+            continue
+        target = node.args[0]
+        if not (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)):
+            continue
+        module = api_dir / "routes" / f"{target.value.id}.py"
+        prefix = next(
+            (k.value.value for k in node.keywords if k.arg == "prefix" and isinstance(k.value, ast.Constant)), ""
+        )
+        if module.exists():
+            paths |= _route_paths(module, prefix)
+    return paths
+
+
+def _verify_nginx_limits() -> None:
+    """Nginx の時間切れ・本文の上限・ストリームの値を、3 製品の backend の値と照合する（#1597）。"""
+    context = "platform/deploy/suite-nginx.sh"
+    suite_nginx = (SUITE_DEPLOY_DIR / "suite-nginx.sh").read_text(encoding="utf-8")
+    suite_init = (SUITE_DEPLOY_DIR / "suite-init.sh").read_text(encoding="utf-8")
+    rag_config = (REPO_ROOT / "rag" / "backend" / "app" / "config.py").read_text(encoding="utf-8")
+    nl2sql_settings = (REPO_ROOT / "nl2sql" / "backend" / "app" / "settings.py").read_text(encoding="utf-8")
+    agent_settings = (REPO_ROOT / "agent" / "backend" / "app" / "settings.py").read_text(encoding="utf-8")
+    agent_router_path = REPO_ROOT / "agent" / "backend" / "app" / "features" / "agent" / "router.py"
+    agent_router = agent_router_path.read_text(encoding="utf-8")
+    nl2sql_router_path = REPO_ROOT / "nl2sql" / "backend" / "app" / "features" / "nl2sql" / "router.py"
+
+    # 本文の上限: backend の <製品>_MAX_UPLOAD_BYTES の既定値 + 余白（suite-init.sh と suite-nginx.sh の既定）。
+    margin_mib = int(_shell_scalar(suite_init, "NGINX_UPLOAD_MARGIN_MIB", context="platform/deploy/suite-init.sh"))
+    upload_defaults = {
+        "rag": _python_number(rag_config, r"max_upload_bytes: int = Field\(default=([0-9 *]+),", context="rag config"),
+        "nl2sql": _python_number(nl2sql_settings, r"max_upload_bytes: int = ([0-9 *]+)\n", context="nl2sql settings"),
+        "agent": _python_number(agent_settings, r"max_upload_bytes: int = ([0-9 *]+)\n", context="agent settings"),
+    }
+    for product, default_bytes in upload_defaults.items():
+        name = f"{product.upper()}_DEFAULT_MAX_UPLOAD_BYTES"
+        if f"{name}={int(default_bytes)}" not in suite_init:
+            raise AssertionError(f"platform/deploy/suite-init.sh {name} must match the {product} backend default")
+        expected = f"{math.ceil(default_bytes / 1048576) + margin_mib}M"
+        actual = _shell_scalar(suite_nginx, f"SUITE_{product.upper()}_CLIENT_MAX_BODY_SIZE", context=context)
+        if actual != expected:
+            raise AssertionError(f"{context}: {product} client_max_body_size must be {expected} (backend + margin): {actual}")
+
+    # 時間切れ: 既定は 600 秒。SSE / WebSocket の heartbeat はそれより十分短い（間が空かない）。
+    default_timeout = float(_shell_scalar(suite_nginx, "SUITE_PROXY_TIMEOUT_SECONDS", context=context))
+    chat_progress = (
+        REPO_ROOT / "platform" / "packages" / "backend_core" / "src" / "pr_backend_core" / "chat_progress.py"
+    ).read_text(encoding="utf-8")
+    heartbeats = {
+        "pr_backend_core.chat_progress": _python_number(
+            chat_progress, r"(?m)^CHAT_PROGRESS_SSE_HEARTBEAT_SECONDS = ([0-9.]+)", context="chat_progress"
+        ),
+        "rag chat SSE": _python_number(
+            (REPO_ROOT / "rag" / "backend" / "app" / "api" / "routes" / "chat.py").read_text(encoding="utf-8"),
+            r"(?m)^SSE_HEARTBEAT_SECONDS = ([0-9.]+)",
+            context="rag chat",
+        ),
+        "agent run SSE": _python_number(
+            (REPO_ROOT / "agent" / "backend" / "app" / "features" / "agent" / "runtime.py").read_text(encoding="utf-8"),
+            r"idle_timeout_seconds: float = ([0-9.]+)",
+            context="agent runtime",
+        ),
+        "agent run WebSocket": _python_number(
+            agent_router, r"heartbeat_interval_seconds: float = ([0-9.]+)", context="agent router"
+        ),
+    }
+    for name, seconds in heartbeats.items():
+        if not 0 < seconds * 4 <= default_timeout:
+            raise AssertionError(f"{name} heartbeat {seconds}s must be well below proxy_read_timeout {default_timeout}s")
+
+    # RAG: 回答の通しの上限（上限 600 秒）< 画面の待ち時間（630 秒）< Nginx。
+    rag_timeout = float(_shell_scalar(suite_nginx, "SUITE_RAG_LONG_API_TIMEOUT_SECONDS", context=context))
+    rag_answer_max = _python_number(
+        rag_config, r"(?m)^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = ([0-9.]+)", context="rag config"
+    )
+    rag_api = (REPO_ROOT / "rag" / "frontend" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    for name in ("ANSWER_GENERATION_TIMEOUT_MS", "ANSWER_EVALUATION_TIMEOUT_MS"):
+        frontend_seconds = _python_number(rag_api, rf"export const {name} = ([0-9_]+);", context="rag api.ts") / 1000
+        if not rag_answer_max < frontend_seconds < rag_timeout:
+            raise AssertionError(
+                f"RAG {name} ({frontend_seconds}s) must be between the answer limit ({rag_answer_max}s) "
+                f"and Nginx ({rag_timeout}s)"
+            )
+    # NL2SQL: LLM 1 回の timeout × 試行の回数（再試行 + 1。timeout も再試行する）+ 60 秒。
+    nl2sql_timeout = float(_shell_scalar(suite_nginx, "SUITE_NL2SQL_LONG_API_TIMEOUT_SECONDS", context=context))
+    llm_seconds = _python_number(
+        nl2sql_settings, r"oci_enterprise_ai_timeout_seconds: float = ([0-9.]+)", context="nl2sql settings"
+    )
+    llm_retries = _python_number(
+        nl2sql_settings, r"oci_enterprise_ai_max_retries: int = ([0-9]+)", context="nl2sql settings"
+    )
+    if nl2sql_timeout != llm_seconds * (llm_retries + 1) + 60:
+        raise AssertionError(
+            f"{context}: SUITE_NL2SQL_LONG_API_TIMEOUT_SECONDS must be {llm_seconds} x {llm_retries + 1} + 60"
+        )
+    # Agent: 外部 MCP の timeout の上限 + 60 秒（tools/invoke はツールの応答を同期で待つ）。
+    agent_timeout = float(_shell_scalar(suite_nginx, "SUITE_AGENT_LONG_API_TIMEOUT_SECONDS", context=context))
+    mcp_max = _python_number(agent_router, r"(?m)^_MCP_TIMEOUT_MAX_SECONDS = ([0-9.]+)", context="agent router")
+    if agent_timeout != mcp_max + 60:
+        raise AssertionError(f"{context}: SUITE_AGENT_LONG_API_TIMEOUT_SECONDS must be {mcp_max} + 60")
+
+    # 長い待ち時間の API は、今の backend の route にある（route の名前が変わったら気づく）。
+    routes = {
+        "rag": _rag_route_paths(),
+        "nl2sql": _route_paths(nl2sql_router_path),
+        "agent": _route_paths(agent_router_path),
+    }
+    for product, paths in routes.items():
+        patterns = {re.sub(r"\{[^}]+\}", "[^/]+", path) for path in paths}
+        for path in _shell_array(suite_nginx, f"SUITE_{product.upper()}_LONG_API_PATHS", context=context):
+            if f"/{path}" not in patterns:
+                raise AssertionError(f"{context}: {product} long API path /api/{path} is not a backend route")
+
+
 def _verify_init_scripts(init_sources: dict[str, str]) -> None:
     for product, source in init_sources.items():
         _require_all(source, INIT_SCRIPT_CONTRACTS[product], context=f"{product}/init_script.sh")
@@ -1130,6 +1311,7 @@ def verify(package_path: Path) -> None:
             raise AssertionError(f"removed per-product Compute input / resource remains (#1316): {removed}")
     _verify_init_scripts(init_sources)
     _verify_suite_deploy(init_sources)
+    _verify_nginx_limits()
     _verify_reserved_ports(sources["locals.tf"])
     _verify_no_own_container_images()
     deploy_sources = {

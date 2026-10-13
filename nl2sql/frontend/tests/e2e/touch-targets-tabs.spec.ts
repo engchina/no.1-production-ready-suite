@@ -47,7 +47,7 @@ async function hitExtent(page: Page, locator: Locator, name: string) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: タッチ端末でだけ ToggleChip / Switch の当たり判定が 44px 以上になり、隣の見た目を覆わない`, async ({ page }, testInfo) => {
+  test(`${theme}: タッチ端末でだけ ToggleChip / Switch の当たり判定が 44px 以上になり、隣の見た目を覆わない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
     expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(mobile);
@@ -133,7 +133,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.screenshot({ path: testInfo.outputPath(`touch-targets-${theme}.png`), fullPage: true });
   });
 
-  test(`${theme}: Tabs はスクロールできる方向の端だけをフェードし、キーボードで選んだタブを見せる`, async ({ page }, testInfo) => {
+  test(`${theme}: Tabs はスクロールできる方向の端だけをフェードし、キーボードで選んだタブを見せる`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
     const tablist = page.getByRole("tablist", { name: "表示の切り替え" });

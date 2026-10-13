@@ -9,15 +9,14 @@ import os
 import tempfile
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from rag_engine.knowledge.classification import classification_from_metadata
-from rag_engine.parsing.coordinates import clamp_bbox
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.models.layout import LayoutRecord, PageImage
-
+from rag_engine.parsing.coordinates import clamp_bbox
 
 PARSE_INPUT_SCHEMA_VERSION = 1
 PARSE_INPUT_DIRECTORY = "parse_inputs"
@@ -26,6 +25,7 @@ PARSE_INPUT_DIRECTORY = "parse_inputs"
 @dataclass
 class RestoredParseInput:
     """保存済み全ファイル解析入力から復元した engine 別データを保持します。"""
+
     engine_id: str
     engine_label: str
     completed_at: str
@@ -39,12 +39,14 @@ class RestoredParseInput:
 @dataclass
 class ParseInputRestoreResult:
     """復元できた解析入力、警告、利用可能 engine を保持します。"""
+
     inputs: list[RestoredParseInput] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
 class ParseInputValidationError(ValueError):
     """保存済み parse input が現在のファイルと一致しない状態を表します。"""
+
     pass
 
 
@@ -158,7 +160,7 @@ def save_parse_input(
             "engine_id": engine_id,
             "engine_label": engine_label,
             "scope": "whole_file",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
             "options": {
                 "dpi": dpi,
                 "min_confidence": min_confidence,
@@ -360,10 +362,18 @@ def _restore_record(
                 raise ParseInputValidationError("表内画像領域の bbox が不正です。") from exc
             if not all(math.isfinite(value) for value in box):
                 raise ParseInputValidationError("表内画像領域の bbox が有限値ではありません。")
-            scaled_regions.append(clamp_bbox([
-                box[0] * current_page.width / stored_width, box[1] * current_page.height / stored_height,
-                box[2] * current_page.width / stored_width, box[3] * current_page.height / stored_height,
-            ], current_page.width, current_page.height))
+            scaled_regions.append(
+                clamp_bbox(
+                    [
+                        box[0] * current_page.width / stored_width,
+                        box[1] * current_page.height / stored_height,
+                        box[2] * current_page.width / stored_width,
+                        box[3] * current_page.height / stored_height,
+                    ],
+                    current_page.width,
+                    current_page.height,
+                )
+            )
         raw["table_missing_picture_regions"] = scaled_regions
     return LayoutRecord(
         id=record_id,

@@ -4,20 +4,24 @@ from __future__ import annotations
 
 import hashlib
 import re
-from importlib.metadata import version, PackageNotFoundError
 import time
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+import rag_engine.resources.model_pool as model_pool
 from rag_engine.adapters.parsers import ENGINE_LABELS, ENGINE_ORDER, build_adapters
 from rag_engine.adapters.parsers.base import AnalysisContext
-import rag_engine.resources.model_pool as model_pool
+from rag_engine.config import Settings
 from rag_engine.knowledge.classification import classification_from_metadata
-from rag_engine.resources.jsonl import write_jsonl
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
+from rag_engine.models.layout import AnalysisRun, EngineStatus, LayoutRecord, PageImage, write_json
+from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, file_digest, load_base_checkpoint, save_base_checkpoint
 from rag_engine.parsing.pages import parse_page_range
 from rag_engine.parsing.parse_inputs import RestoredParseInput, file_sha256, load_parse_inputs, save_parse_input
 from rag_engine.parsing.rendering import get_source_page_count, prepare_source_for_analysis, source_frame_warnings
+from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
+from rag_engine.resources.jsonl import write_jsonl
 
 
 def _installed_parser_version(engine_id: str) -> str | None:
@@ -28,15 +32,14 @@ def _installed_parser_version(engine_id: str) -> str | None:
         return version("docling")
     except PackageNotFoundError:
         return None
-from rag_engine.models.layout import AnalysisRun, EngineStatus, LayoutRecord, PageImage, write_json
-from rag_engine.parsing.checkpoints import (CheckpointError, checkpoint_lock, file_digest,
-    load_base_checkpoint, save_base_checkpoint)
-from rag_engine.config import Settings
-from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
 
 
 def create_run_id(
-    pdf_path: str | Path, page_range: str, engine_ids: list[str], *, source_sha256: str = "",
+    pdf_path: str | Path,
+    page_range: str,
+    engine_ids: list[str],
+    *,
+    source_sha256: str = "",
 ) -> str:
     """入力ファイル、ページ指定、解析エンジンから一意な実行 ID を作ります。
 
@@ -95,15 +98,16 @@ def analyze_pdf(
             raise CheckpointError("元ファイルと保存済みsource PDFのどちらもありません。")
     page_count = get_source_page_count(count_source)
     pages_to_run = (
-        list(range(1, page_count + 1))
-        if parse_entire_file
-        else parse_page_range(page_range, page_count, settings.max_default_pages)
+        list(range(1, page_count + 1)) if parse_entire_file else parse_page_range(page_range, page_count, settings.max_default_pages)
     )
     effective_dpi = dpi or settings.render_dpi
     # 入力の SHA-256 は run ID・checkpoint identity・parse input で共有し、ファイルを 1 回だけ読む。
     source_digest = file_sha256(source_path) if source_available else ""
     run_id = resume_run_id or create_run_id(
-        source_path, ",".join(str(page) for page in pages_to_run), selected, source_sha256=source_digest,
+        source_path,
+        ",".join(str(page) for page in pages_to_run),
+        selected,
+        source_sha256=source_digest,
     )
     run_dir = settings.output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -120,14 +124,27 @@ def analyze_pdf(
             except PackageNotFoundError:
                 slim_version = None
             identity = {
-                "source_sha256": source_digest, "source_name": source_path.name,
-                "pages": pages_to_run, "dpi": effective_dpi, "min_confidence": min_confidence,
-                "parse_entire_file": parse_entire_file, "classification": document_classification,
-                "document_metadata": document_info, "parser_version": _installed_parser_version("docling"),
-                "slim_version": slim_version, "checkpoint_version": 1,
-                "parser_settings": {name: getattr(settings, name) for name in (
-                    "docling_device", "docling_num_threads", "docling_do_ocr",
-                    "docling_do_table_structure", "docling_keep_picture_child_text")},
+                "source_sha256": source_digest,
+                "source_name": source_path.name,
+                "pages": pages_to_run,
+                "dpi": effective_dpi,
+                "min_confidence": min_confidence,
+                "parse_entire_file": parse_entire_file,
+                "classification": document_classification,
+                "document_metadata": document_info,
+                "parser_version": _installed_parser_version("docling"),
+                "slim_version": slim_version,
+                "checkpoint_version": 1,
+                "parser_settings": {
+                    name: getattr(settings, name)
+                    for name in (
+                        "docling_device",
+                        "docling_num_threads",
+                        "docling_do_ocr",
+                        "docling_do_table_structure",
+                        "docling_keep_picture_child_text",
+                    )
+                },
             }
         if checkpoint is not None:
             if checkpoint["identity"] != identity:
@@ -144,7 +161,10 @@ def analyze_pdf(
                 raise CheckpointError("保存済みsource PDFが欠落または変更されています。")
         else:
             run_pdf_path, pages = prepare_source_for_analysis(
-                source_path, pages_to_run, run_dir, effective_dpi,
+                source_path,
+                pages_to_run,
+                run_dir,
+                effective_dpi,
             )
             for page in pages:
                 page.image_url = f"/artifacts/{run_id}/pages/{Path(page.image_path).name}"
@@ -175,8 +195,9 @@ def analyze_pdf(
                 continue
             started = time.monotonic()
             try:
-                engine_records = ([LayoutRecord(**record) for record in checkpoint["records"]]
-                                  if checkpoint is not None else adapter.analyze(context))
+                engine_records = (
+                    [LayoutRecord(**record) for record in checkpoint["records"]] if checkpoint is not None else adapter.analyze(context)
+                )
             except Exception as exc:
                 statuses.append(
                     EngineStatus(
@@ -193,13 +214,22 @@ def analyze_pdf(
             persist_semantic_visual_crops(engine_records, pages, run_dir=run_dir)
             if selected == ["docling"] and checkpoint is None:
                 save_base_checkpoint(
-                    run_dir / "base_checkpoint.json", identity=identity,
-                    request={"pdf_path": str(source_path.resolve()), "page_range": page_range,
-                             "engine_ids": selected, "min_confidence": min_confidence,
-                             "dpi": effective_dpi, "use_docling_vision": use_docling_vision,
-                             "parse_entire_file": parse_entire_file,
-                             "classification": document_classification, "document_metadata": document_info},
-                    pages=pages, records=engine_records, pdf_path=str(Path(run_pdf_path).resolve()),
+                    run_dir / "base_checkpoint.json",
+                    identity=identity,
+                    request={
+                        "pdf_path": str(source_path.resolve()),
+                        "page_range": page_range,
+                        "engine_ids": selected,
+                        "min_confidence": min_confidence,
+                        "dpi": effective_dpi,
+                        "use_docling_vision": use_docling_vision,
+                        "parse_entire_file": parse_entire_file,
+                        "classification": document_classification,
+                        "document_metadata": document_info,
+                    },
+                    pages=pages,
+                    records=engine_records,
+                    pdf_path=str(Path(run_pdf_path).resolve()),
                 )
             message = "解析が完了しました。"
             if engine_id == "docling" and use_docling_vision:
@@ -214,11 +244,7 @@ def analyze_pdf(
                         settings=settings,
                         pdf_path=Path(run_pdf_path),
                     )
-                    message = (
-                        "解析が完了しました。"
-                        f" Vision 説明: 成功 {vision.succeeded}/{vision.targets} 件"
-                        f" / 失敗 {vision.failed} 件。"
-                    )
+                    message = f"解析が完了しました。 Vision 説明: 成功 {vision.succeeded}/{vision.targets} 件 / 失敗 {vision.failed} 件。"
                     if vision.discovery_failed:
                         message += " Table画像検出が失敗したため対象総数は未確定です。"
                 except CheckpointError:
@@ -345,10 +371,7 @@ def preview_pdf(
             engine=restored_input.engine_id,
             label=ENGINE_LABELS[restored_input.engine_id],
             available=True,
-            message=(
-                "保存済みのファイル全体の解析結果を読み込みました。"
-                f" 保存日時: {restored_input.completed_at}"
-            ),
+            message=(f"保存済みのファイル全体の解析結果を読み込みました。 保存日時: {restored_input.completed_at}"),
             count=len(restored_input.records),
             saved_input_path=str(restored_input.path),
             use_docling_vision=restored_input.use_docling_vision,

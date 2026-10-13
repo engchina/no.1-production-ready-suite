@@ -137,7 +137,7 @@ test("選んでも一覧は開いたままで、「完了」で閉じて検索�
   await expectNoPageOverflow(page);
 });
 
-test("検索欄の右の開閉・消去のボタンは検索欄と同じ高さ（md 36px、タッチ端末 44px）", async ({ page }) => {
+test("検索欄の右の開閉・消去のボタンは検索欄と同じ高さ（md 36px、タッチ端末 44px）", { tag: "@responsive" }, async ({ page }) => {
   await mockKnowledgeBases(page, MANY);
   await page.goto("/evaluation");
 
@@ -255,7 +255,7 @@ test("文書インデックスの絞り込み: ボタンから検索して選び
   await expect(dialog).toHaveCount(0);
 });
 
-test("文書インデックスの状態は選択の欄 1 つで絞り込む（11 種の chip を折り返さない）", async ({ page }) => {
+test("文書インデックスの状態は選択の欄 1 つで絞り込む（11 種の chip を折り返さない）", { tag: "@responsive" }, async ({ page }) => {
   await mockKnowledgeBases(page, 3);
   const documentRequests = await mockDocuments(page);
   await page.goto("/file-list");

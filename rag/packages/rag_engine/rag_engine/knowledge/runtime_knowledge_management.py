@@ -11,7 +11,7 @@ import re
 import tempfile
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -69,10 +69,18 @@ def _validate_payload(payload: Any) -> None:
             if key in seen:
                 raise ValueError(f"{kind} の {identity} が重複しています。既存ファイルを確認してください。")
             seen.add(key)
-            legacy_fields = ("synonyms", "abbreviations", "abbrev", "alias", "definition", "body", "note", "document", "path", "lifecycle_status") if kind == "terms" else ("terms", "keywords", "aliases", "when", "body", "text", "rule", "document", "path", "lifecycle_status")
+            legacy_fields = (
+                ("synonyms", "abbreviations", "abbrev", "alias", "definition", "body", "note", "document", "path", "lifecycle_status")
+                if kind == "terms"
+                else ("terms", "keywords", "aliases", "when", "body", "text", "rule", "document", "path", "lifecycle_status")
+            )
             if any(field in row for field in legacy_fields):
-                raise ValueError(f"{kind} に旧形式の項目があります。標準フィールドへ移行してから再読込してください。既存ファイルは変更していません。")
-            text_fields = (identity, "source", "status", "description") if kind == "terms" else (identity, "source", "status", "title", "content")
+                raise ValueError(
+                    f"{kind} に旧形式の項目があります。標準フィールドへ移行してから再読込してください。既存ファイルは変更していません。"
+                )
+            text_fields = (
+                (identity, "source", "status", "description") if kind == "terms" else (identity, "source", "status", "title", "content")
+            )
             if any(field in row and not isinstance(row[field], str) for field in text_fields):
                 raise ValueError(f"{kind} のテキスト項目は文字列で指定してください。")
             list_field = "aliases" if kind == "terms" else "triggers"
@@ -124,9 +132,18 @@ def _labels(value: str, label: str, limit: int) -> list[str]:
 
 
 def edit_knowledge(
-    snapshot: KnowledgeSnapshot, kind: str, selected: str | None, *,
-    name: str = "", title: str = "", labels: str = "", content: str = "",
-    source: str = "", enabled: bool = True, delete: bool = False, confirmed: bool = False,
+    snapshot: KnowledgeSnapshot,
+    kind: str,
+    selected: str | None,
+    *,
+    name: str = "",
+    title: str = "",
+    labels: str = "",
+    content: str = "",
+    source: str = "",
+    enabled: bool = True,
+    delete: bool = False,
+    confirmed: bool = False,
 ) -> tuple[KnowledgeSnapshot, Path | None]:
     """選択行を更新・削除し、未選択なら追加する。未知のメタデータと他行を保持する。
 
@@ -164,7 +181,7 @@ def edit_knowledge(
         # 既存の承認・再確認・下書き状態は、利用可否を変更した場合だけ置き換える。
         if index is None or bool(enabled) != (row.get("status", "") in RUNTIME_KNOWLEDGE_ACTIVE_STATUSES):
             row["status"] = "approved" if enabled else "deprecated"
-        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        row["updated_at"] = datetime.now(UTC).isoformat()
         if index is None:
             rows.append(row)
         else:
@@ -181,7 +198,7 @@ def edit_knowledge(
         if old is not None:
             directory = path.parent / "runtime_knowledge_backups"
             directory.mkdir(parents=True, exist_ok=True)
-            backup = directory / f"{path.stem}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}-{uuid4().hex}.json"
+            backup = directory / f"{path.stem}-{datetime.now(UTC):%Y%m%dT%H%M%S%f}-{uuid4().hex}.json"
             with backup.open("xb") as stream:
                 os.chmod(backup, 0o600)
                 stream.write(old)

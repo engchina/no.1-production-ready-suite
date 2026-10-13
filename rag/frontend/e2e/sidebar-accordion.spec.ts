@@ -12,7 +12,7 @@ async function mockApi(page: Page) {
   });
 }
 
-test.describe("サイドナビのセクション折りたたみ", () => {
+test.describe("サイドナビのセクション折りたたみ", { tag: "@responsive" }, () => {
   test("保存値が無いときは AI 活用と今のページのセクションだけを開き、開閉は再読み込み後も保つ（#1563）", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await mockApi(page);

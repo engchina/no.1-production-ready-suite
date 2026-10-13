@@ -15,11 +15,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_engine.evaluation.answer_eval import (
+    _CITED_CHUNK_ID,
     MAX_EVALUATION_INPUT_BYTES,
     ClaimCheck,
     EvaluationContractError,
     EvaluationInputTooLarge,
-    _CITED_CHUNK_ID,
     _answer_passages,
     _bind_claims,
     _evidence_fragments,
@@ -248,10 +248,14 @@ def _recheck_unreferenced_passages(
     by_passage: dict[str, list[ClaimCheck]] = {}
     for claim in claims:
         by_passage.setdefault(claim.answer_passage_id, []).append(claim)
-    targets = [passage for passage in passages if (group := by_passage.get(passage["id"]))
-               and any(claim.status == "citation_error" for claim in group)
-               and not any(claim.status in {"unsupported", "contradicted"} for claim in group)
-               and all(_writes_no_id(claim) for claim in group)]
+    targets = [
+        passage
+        for passage in passages
+        if (group := by_passage.get(passage["id"]))
+        and any(claim.status == "citation_error" for claim in group)
+        and not any(claim.status in {"unsupported", "contradicted"} for claim in group)
+        and all(_writes_no_id(claim) for claim in group)
+    ]
     if not targets:
         return claims, []
     target_ids = {passage["id"] for passage in targets}
@@ -261,20 +265,24 @@ def _recheck_unreferenced_passages(
         return claims, []
     inputs = {**fixed, "answer_passages": list(targets), "evidence_items": candidates}
     try:
-        output = _parse_checked(VALIDATION_SYSTEM_PROMPT, inputs, settings, ClaimAuditOutput, provider_id,
-                                _passage_check(targets, str(fixed.get("answer_text") or "")))
+        output = _parse_checked(
+            VALIDATION_SYSTEM_PROMPT,
+            inputs,
+            settings,
+            ClaimAuditOutput,
+            provider_id,
+            _passage_check(targets, str(fixed.get("answer_text") or "")),
+        )
     except Exception:
         # 確かめ直しは最初の判定を補うだけなので、失敗しても最初の判定を返す。
         logger.warning("answer validation recheck failed", exc_info=True)
         return claims, []
-    rebound = _bind_claims(output, {item["evidence_id"]: item for item in candidates}, targets,
-                           passage_citations=True)
+    rebound = _bind_claims(output, {item["evidence_id"]: item for item in candidates}, targets, passage_citations=True)
     replacements: dict[str, list[ClaimCheck]] = {}
     for claim in rebound.claim_checks:
         if claim.answer_passage_id in target_ids:
             replacements.setdefault(claim.answer_passage_id, []).append(claim)
-    settled = {passage_id for passage_id, group in replacements.items()
-               if all(claim.status == "supported" for claim in group)}
+    settled = {passage_id for passage_id, group in replacements.items() if all(claim.status == "supported" for claim in group)}
     result: list[ClaimCheck] = []
     for claim in claims:
         passage_id = claim.answer_passage_id
@@ -311,18 +319,31 @@ def validate_answer_claims(
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
     headers = table_header_lines(answer_text)
     heading_lines = list_heading_lines(answer_text)
-    passages = [passage for passage in _answer_passages(answer_text)
-                if not is_non_claim_passage(passage["text"], table_headers=headers, heading_lines=heading_lines)]
+    passages = [
+        passage
+        for passage in _answer_passages(answer_text)
+        if not is_non_claim_passage(passage["text"], table_headers=headers, heading_lines=heading_lines)
+    ]
     base: dict[str, Any] = {"rubric_version": VALIDATION_RUBRIC_VERSION, "claim_checks": []}
     if not passages:
         return {**base, "status": "no_claims"}
     readable = {str(item.get("id") or "") for item in evidence_items}
-    settled = {passage_id: chunk_ids for passage_id, chunk_ids in _settled_passages(answer_text, passages, audited or {}).items()
-               if chunk_ids and set(chunk_ids) <= readable}
+    settled = {
+        passage_id: chunk_ids
+        for passage_id, chunk_ids in _settled_passages(answer_text, passages, audited or {}).items()
+        if chunk_ids and set(chunk_ids) <= readable
+    }
     reused = [
-        ClaimCheck(answer_quote=passage["text"], answer_passage_id=passage["id"], status="supported",
-                   source_id=settled[passage["id"]][0], evidence_quote="", reason=REUSED_CLAIM_REASON)
-        for passage in passages if passage["id"] in settled
+        ClaimCheck(
+            answer_quote=passage["text"],
+            answer_passage_id=passage["id"],
+            status="supported",
+            source_id=settled[passage["id"]][0],
+            evidence_quote="",
+            reason=REUSED_CLAIM_REASON,
+        )
+        for passage in passages
+        if passage["id"] in settled
     ]
     remaining = [passage for passage in passages if passage["id"] not in settled]
     fixed: dict[str, Any] = {
@@ -340,7 +361,11 @@ def validate_answer_claims(
         inputs = {**fixed, "evidence_items": evidence}
         try:
             output = _parse_checked(
-                VALIDATION_SYSTEM_PROMPT, inputs, settings, ClaimAuditOutput, provider_id,
+                VALIDATION_SYSTEM_PROMPT,
+                inputs,
+                settings,
+                ClaimAuditOutput,
+                provider_id,
                 _passage_check(remaining, answer_text),
             )
         except EvaluationInputTooLarge:
@@ -351,12 +376,12 @@ def validate_answer_claims(
         # ID を書かない段落の出典が決まらなければ、回答の他の段落が引いた根拠で確かめ直す（#1412）。再利用した段落の
         # 根拠も「他の段落が引いた根拠」に入れる。
         rebound, rechecked = _recheck_unreferenced_passages(
-            [*bound.claim_checks, *reused], fixed, remaining, evidence, catalog, settings, provider_id)
+            [*bound.claim_checks, *reused], fixed, remaining, evidence, catalog, settings, provider_id
+        )
         bound_claims = [claim for claim in rebound if claim.answer_passage_id not in settled]
     checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
     claims = [
-        *[claim for passage in passages if passage["id"] in settled
-          for claim in reused if claim.answer_passage_id == passage["id"]],
+        *[claim for passage in passages if passage["id"] in settled for claim in reused if claim.answer_passage_id == passage["id"]],
         *bound_claims,
         *[
             ClaimCheck(
@@ -386,5 +411,4 @@ def validate_answer_claims(
     }
 
 
-__all__ = ["REUSED_CLAIM_REASON", "VALIDATION_RUBRIC_VERSION", "audited_answer_items", "audited_line_key",
-           "validate_answer_claims"]
+__all__ = ["REUSED_CLAIM_REASON", "VALIDATION_RUBRIC_VERSION", "audited_answer_items", "audited_line_key", "validate_answer_claims"]

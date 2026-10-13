@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE
-from rag_engine.parsing.picture_text import LEGACY_PICTURE_OCR_TEXT_LABELS, PICTURE_OCR_TEXT_LABEL
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
     ATOMIC_CATEGORIES,
@@ -34,6 +33,9 @@ from rag_engine.chunking.records import (
     _table_structure,
     _visual_group_key,
 )
+from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE
+from rag_engine.parsing.picture_text import LEGACY_PICTURE_OCR_TEXT_LABELS, PICTURE_OCR_TEXT_LABEL
+
 
 def _is_excluded_page_boilerplate_record(
     record: dict[str, Any],
@@ -276,9 +278,13 @@ def _nearest_layout_target(
         if not _is_annotation_target_record(target):
             continue
         target_seq = _int_value(target.get("seq_no"))
-        if annotation_seq is not None and target_seq is not None and max_seq_gap is not None:
-            if abs(annotation_seq - target_seq) > max_seq_gap:
-                continue
+        if (
+            annotation_seq is not None
+            and target_seq is not None
+            and max_seq_gap is not None
+            and abs(annotation_seq - target_seq) > max_seq_gap
+        ):
+            continue
         candidates.append((_layout_target_score(annotation, target, prefer_previous=prefer_previous), target))
     if not candidates:
         return None
@@ -293,9 +299,7 @@ def _is_annotation_target_record(record: dict[str, Any]) -> bool:
     if category == "Picture":
         if str(record.get("raw_type") or "") == "picture_ocr_text":
             return False
-        if _record_visual_role(record) in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}:
-            return False
-        return True
+        return _record_visual_role(record) not in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}
     if category == "Table":
         return True
     return bool(_record_text(record)) or bool(_form_field_payload(record))

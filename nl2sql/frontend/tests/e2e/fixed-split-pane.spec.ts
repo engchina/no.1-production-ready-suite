@@ -135,7 +135,7 @@ function expectNearRatio(actual: number, expected: number) {
   expect(Math.abs(actual - expected)).toBeLessThan(0.12);
 }
 
-test("固定分割 slide は三档切替・ページ別保存・モバイル単列を満たす", async ({ page }) => {
+test("固定分割 slide は三档切替・ページ別保存・モバイル単列を満たす", { tag: "@responsive" }, async ({ page }) => {
   await page.addInitScript(() => {
     if (!window.sessionStorage.getItem("fixed-split-pane-test-cleared")) {
       window.localStorage.removeItem("production-ready-nl2sql.fixedSplitPane.table-management-list");
@@ -233,7 +233,7 @@ test("固定分割 slide は三档切替・ページ別保存・モバイル単�
   expect(await documentHorizontalScroll(page)).toBe(false);
 });
 
-test("データ管理の分割線は左右の内容幅を保ち、狭い画面では単列化する", async ({ page }) => {
+test("データ管理の分割線は左右の内容幅を保ち、狭い画面では単列化する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 1000 });
   await page.addInitScript(() => {
     window.localStorage.removeItem("production-ready-nl2sql.fixedSplitPane.data-management-preview");

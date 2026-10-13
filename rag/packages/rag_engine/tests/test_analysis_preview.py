@@ -9,11 +9,11 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from rag_engine.parsing.analysis import create_run_id, preview_pdf
-from rag_engine.knowledge.classification import classification_from_selection
-from rag_engine.parsing.parse_inputs import file_sha256, save_parse_input
-from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.config import get_settings
+from rag_engine.knowledge.classification import classification_from_selection
+from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.analysis import create_run_id, preview_pdf
+from rag_engine.parsing.parse_inputs import file_sha256, save_parse_input
 
 
 class PreviewPdfTests(unittest.TestCase):

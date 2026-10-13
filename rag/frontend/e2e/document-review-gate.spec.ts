@@ -320,7 +320,7 @@ test("承認すると chunk job を投入し成功 toast を出す", async ({ pa
   expect(calls.approve).toBe(1);
 });
 
-test("構造化要素の修正を保持し、保存後だけ承認できる", async ({ page }) => {
+test("構造化要素の修正を保持し、保存後だけ承認できる", { tag: "@responsive" }, async ({ page }) => {
   const calls = await mockReviewWorkspace(page);
   await page.goto(`/documents/${DOC_ID}`);
 
@@ -461,7 +461,7 @@ test("未保存変更は確認後に破棄し、保存済み表示へ戻せる",
   expect(calls.save).toBe(0);
 });
 
-test("未保存変更がある状態でページを離れると破棄確認を出す", async ({ page }) => {
+test("未保存変更がある状態でページを離れると破棄確認を出す", { tag: "@responsive" }, async ({ page }) => {
   await mockReviewWorkspace(page);
   await page.goto(`/documents/${DOC_ID}`);
 
@@ -501,7 +501,7 @@ test("REVIEW の再処理は確認ダイアログを挟む", async ({ page }) =>
   await expect(dialog).toHaveCount(0);
 });
 
-test("レシピを切り替えるときは未保存の修正の破棄を確認し、別のレシピへ持ち越さない（#944）", async ({
+test("レシピを切り替えるときは未保存の修正の破棄を確認し、別のレシピへ持ち越さない（#944）", { tag: "@responsive" }, async ({
   page,
 }) => {
   const calls = await mockReviewWorkspace(page);
@@ -592,7 +592,7 @@ test("レシピを切り替えるときは未保存の修正の破棄を確認�
   expect(recipe2Saves).toBe(0);
 });
 
-test("処理レシピの操作の失敗は、そのレシピを選んでいるときだけ出す（#944）", async ({ page }) => {
+test("処理レシピの操作の失敗は、そのレシピを選んでいるときだけ出す（#944）", { tag: "@responsive" }, async ({ page }) => {
   await mockReviewWorkspace(page);
   const recipe2 = { ...recipeView(), recipe_id: "recipe-2", slot_no: 2 };
   await page.route(`**/api/documents/${DOC_ID}/recipes`, (route) =>

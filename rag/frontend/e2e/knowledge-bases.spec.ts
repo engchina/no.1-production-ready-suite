@@ -154,7 +154,7 @@ for (const viewport of [
   });
 }
 
-test("狭い画面幅(375px)でもページ全体が横スクロール(崩れ)しない", async ({ page }) => {
+test("狭い画面幅(375px)でもページ全体が横スクロール(崩れ)しない", { tag: "@responsive" }, async ({ page }) => {
   const state = createKnowledgeBaseState();
   await mockKnowledgeBaseApi(page, state);
 
@@ -490,7 +490,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, theme: "light" as const },
   { name: "mobile", width: 375, height: 812, theme: "dark" as const },
 ]) {
-  test(`文書を追加は 3,000 件から検索して複数を選び、一度に追加できる (${viewport.name} / ${viewport.theme})`, async ({
+  test(`文書を追加は 3,000 件から検索して複数を選び、一度に追加できる (${viewport.name} / ${viewport.theme})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });

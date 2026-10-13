@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from rag_engine.config import Settings
-
 from rag_engine.adapters.parsers.base import LayoutAdapter
 from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter
+from rag_engine.config import Settings
 
 ENGINE_ORDER = [
     "docling",

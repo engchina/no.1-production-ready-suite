@@ -1120,7 +1120,7 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
 
 for (const scenario of scenarios) {
   test(
-    `${scenario.title}はデスクトップ8行・モバイル5行の高さに収める`,
+    `${scenario.title}はデスクトップ8行・モバイル5行の高さに収める`, { tag: "@responsive" },
     async ({ page }, testInfo) => {
       await mockObjectManagementApi(page, scenario);
       await page.goto(scenario.path);
@@ -1143,7 +1143,7 @@ for (const scenario of scenarios) {
   );
 
   test(
-    `${scenario.title}の列情報はデスクトップ8行・モバイル5行の高さで内部スクロールする`,
+    `${scenario.title}の列情報はデスクトップ8行・モバイル5行の高さで内部スクロールする`, { tag: "@responsive" },
     async ({ page }, testInfo) => {
       await mockObjectManagementApi(page, scenario, { columnCount: 30 });
       await page.goto(scenario.path);
@@ -1299,7 +1299,7 @@ for (const scenario of metadataScenarios) {
     await expectNoHorizontalScroll(page);
   });
 
-  test(`${scenario.title}は対象の一覧を 5 / 8 行の固定高さに収め、中をスクロールする`, async ({ page }) => {
+  test(`${scenario.title}は対象の一覧を 5 / 8 行の固定高さに収め、中をスクロールする`, { tag: "@responsive" }, async ({ page }) => {
     await mockMetadataManagementApi(page);
     await page.goto(scenario.path);
 
@@ -1323,7 +1323,7 @@ for (const scenario of metadataScenarios) {
     expect(fit.overflowY).toBe("auto");
   });
 
-  test(`${scenario.title}は検索・所有者・種類フィルタを共通配置する`, async ({ page }, testInfo) => {
+  test(`${scenario.title}は検索・所有者・種類フィルタを共通配置する`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockOwnerFilterDbAdminObjectsApi(page);
     const ownerPrefixRequests: string[] = [];
     const exactOwnerRequests: string[] = [];
@@ -1433,7 +1433,7 @@ for (const scenario of metadataScenarios) {
   });
 }
 
-test("合成データ生成は対象テーブル一覧を5行の固定高さに収める", async ({ page }) => {
+test("合成データ生成は対象テーブル一覧を5行の固定高さに収める", { tag: "@responsive" }, async ({ page }) => {
   const syntheticTables = Array.from(
     { length: 8 },
     (_, index) => `APP.SYNTHETIC_TABLE_${String(index + 1).padStart(2, "0")}`
@@ -1485,7 +1485,7 @@ test("データ管理のテーブル・ビュー件数 badge は API 総数を�
   await expect(page.getByTestId("data-preview-object-footer")).toContainText("100 / 151 件を表示");
 });
 
-test("データプレビューは検索・所有者・種別フィルタを共通配置する", async ({ page }, testInfo) => {
+test("データプレビューは検索・所有者・種別フィルタを共通配置する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDataManagementApi(page);
   await page.goto("/data-management");
 
@@ -1552,7 +1552,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   }
 });
 
-test("データ管理の対象ピッカーはヘッダーで並び替えできる", async ({ page }, testInfo) => {
+test("データ管理の対象ピッカーはヘッダーで並び替えできる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockSortableDataManagementApi(page);
   await page.goto("/data-management");
 
@@ -1872,7 +1872,7 @@ test("テーブル管理は DevTools web-vitals の startTime 例外だけを co
   expect(consoleErrors).toEqual([]);
 });
 
-test("テーブル管理・ビュー管理は共通検索と所有者入力で一覧を絞り込む", async ({ page }) => {
+test("テーブル管理・ビュー管理は共通検索と所有者入力で一覧を絞り込む", { tag: "@responsive" }, async ({ page }) => {
   await mockOwnerFilterDbAdminObjectsApi(page);
   const ownerPrefixRequests: string[] = [];
   const exactOwnerRequests: string[] = [];
@@ -1933,7 +1933,7 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   await expectNoHorizontalScroll(page);
 });
 
-test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー操作を折り返さず、一覧操作列を持たない", async ({ page }) => {
+test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー操作を折り返さず、一覧操作列を持たない", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
   await mockObjectManagementApi(page, scenarios[0]);
   await page.goto("/table-management");
@@ -2010,7 +2010,7 @@ test("テーブル管理の一覧下端は操作列なしで行選択できる",
   await expect(page.getByTestId("table-management-detail-header")).toContainText("APP.TABLE_30");
 });
 
-test("テーブル管理の少件数一覧も操作列なしで行選択できる", async ({ page }) => {
+test("テーブル管理の少件数一覧も操作列なしで行選択できる", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 900 });
   await mockObjectManagementApi(page, scenarios[0], { itemCount: 1 });
   await page.goto("/table-management");
@@ -2027,7 +2027,7 @@ test("テーブル管理の少件数一覧も操作列なしで行選択でき�
   await expect(row).toHaveAttribute("data-selected", "true");
 });
 
-test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初回表示で後追い取得する", async ({
+test("テーブル詳細は列タブでは DDL を取得せず、DDL タブ初回表示で後追い取得する", { tag: "@responsive" }, async ({
   page,
 }) => {
   const detailUrls: string[] = [];
@@ -2828,7 +2828,7 @@ test("テーブル詳細は A→B→A の遅延応答でも最後に選んだ A 
   await expect(page.getByTestId("db-admin-detail-columns")).toContainText("TABLE_A の識別子");
 });
 
-test("Excel/CSV 取込フォームは取込方法を表示せずファイル選択を全幅で表示する", async ({ page }) => {
+test("Excel/CSV 取込フォームは取込方法を表示せずファイル選択を全幅で表示する", { tag: "@responsive" }, async ({ page }) => {
   await mockObjectManagementApi(page, scenarios[0]);
   await page.goto("/table-management");
   await clickPageHeaderAction(

@@ -138,9 +138,7 @@ def _service_app(*, configured: bool, captured: dict[str, object]) -> TestClient
 
 def test_service_health_reflects_configuration() -> None:
     assert _service_app(configured=True, captured={}).get("/health").json()["status"] == "ok"
-    assert (
-        _service_app(configured=False, captured={}).get("/health").json()["status"] == "degraded"
-    )
+    assert _service_app(configured=False, captured={}).get("/health").json()["status"] == "degraded"
 
 
 def test_service_parse_roundtrips_and_forwards_document_id() -> None:
@@ -209,9 +207,7 @@ def test_remap_maps_bounding_polygon_to_bbox() -> None:
     assert first.metadata["bbox_unit"] == "ratio"
     assert first.metadata["bbox_source"] == "line"
     # table cell → bbox。
-    cells_with_bbox = [
-        cell for table in extraction.tables for cell in table.cells if cell.bbox
-    ]
+    cells_with_bbox = [cell for table in extraction.tables for cell in table.cells if cell.bbox]
     assert cells_with_bbox and cells_with_bbox[0].bbox == [0.1, 0.3, 0.3, 0.35]
 
 

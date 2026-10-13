@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from rag_engine.parsing.parse_inputs import file_sha256, filename_key, parse_input_path, save_parse_input
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.parse_inputs import file_sha256, filename_key, parse_input_path, save_parse_input
 
 
 class ParseInputTests(unittest.TestCase):
@@ -116,21 +116,20 @@ class ParseInputTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_text("previous", encoding="utf-8")
 
-            with patch("rag_engine.parsing.parse_inputs.os.replace", side_effect=OSError("replace failed")):
-                with self.assertRaises(OSError):
-                    save_parse_input(
-                        output_dir=output_dir,
-                        source_path=source,
-                        source_sha256=file_sha256(source),
-                        page_count=1,
-                        engine_id="docling",
-                        engine_label="Docling",
-                        pages=[_page(1)],
-                        records=[_record("docling", 1, 1, "new")],
-                        dpi=300,
-                        min_confidence=0.5,
-                        use_docling_vision=False,
-                    )
+            with patch("rag_engine.parsing.parse_inputs.os.replace", side_effect=OSError("replace failed")), self.assertRaises(OSError):
+                save_parse_input(
+                    output_dir=output_dir,
+                    source_path=source,
+                    source_sha256=file_sha256(source),
+                    page_count=1,
+                    engine_id="docling",
+                    engine_label="Docling",
+                    pages=[_page(1)],
+                    records=[_record("docling", 1, 1, "new")],
+                    dpi=300,
+                    min_confidence=0.5,
+                    use_docling_vision=False,
+                )
 
             self.assertEqual(target.read_text(encoding="utf-8"), "previous")
             self.assertEqual(list(target.parent.glob("*.tmp")), [])

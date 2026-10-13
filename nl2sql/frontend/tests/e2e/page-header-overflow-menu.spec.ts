@@ -28,7 +28,7 @@ async function expectInsideViewport(page: Page, locator: Locator) {
   expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height);
 }
 
-test("375px: 折り返して左端に来た「その他の操作」は、メニューを左端揃えで画面内に開く", async ({ page, isMobile }) => {
+test("375px: 折り返して左端に来た「その他の操作」は、メニューを左端揃えで画面内に開く", { tag: "@responsive" }, async ({ page, isMobile }) => {
   test.skip(!isMobile, "375px の project で検証する");
   await openFixture(page);
   const header = page.locator("header").first();
@@ -94,7 +94,7 @@ test("375px: 折り返して左端に来た「その他の操作」は、メニ�
   await expect(page.locator("output")).toHaveText("更新回数: 1");
 });
 
-test("右寄りの「その他の操作」は、従来どおりメニューの右端をボタンの右端にそろえる", async ({ page, isMobile }) => {
+test("右寄りの「その他の操作」は、従来どおりメニューの右端をボタンの右端にそろえる", { tag: "@responsive" }, async ({ page, isMobile }) => {
   test.skip(isMobile, "desktop の project で検証する");
   // lg 未満（「その他の操作」を出す幅）で、操作が折り返さずヘッダーの右端にある状態。
   await page.setViewportSize({ width: 900, height: 900 });

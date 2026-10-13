@@ -9,12 +9,12 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter
-from rag_engine.knowledge.classification import classification_from_selection
-from rag_engine.parsing.parse_inputs import parse_input_path
-from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.config import get_settings
+from rag_engine.knowledge.classification import classification_from_selection
+from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.analysis import analyze_pdf
+from rag_engine.parsing.parse_inputs import parse_input_path
 
 
 class FullFileAnalysisTests(unittest.TestCase):
@@ -76,9 +76,7 @@ class FullFileAnalysisTests(unittest.TestCase):
 
             results_payload = json.loads(Path(run.json_path).read_text(encoding="utf-8"))
             viewer_payload = json.loads(Path(run.viewer_data_path).read_text(encoding="utf-8"))
-            saved_payload = json.loads(
-                parse_input_path(settings.output_dir, source.name, "docling").read_text(encoding="utf-8")
-            )
+            saved_payload = json.loads(parse_input_path(settings.output_dir, source.name, "docling").read_text(encoding="utf-8"))
 
             self.assertEqual(run.classification["large_category"], "20_在庫管理")
             self.assertEqual(results_payload["classification"]["middle_category"], "20_操作説明書")
@@ -108,9 +106,7 @@ class FullFileAnalysisTests(unittest.TestCase):
                     use_docling_vision=True,
                 )
 
-            saved_payload = json.loads(
-                parse_input_path(settings.output_dir, source.name, "docling").read_text(encoding="utf-8")
-            )
+            saved_payload = json.loads(parse_input_path(settings.output_dir, source.name, "docling").read_text(encoding="utf-8"))
             self.assertTrue(saved_payload["parse"]["options"]["use_docling_vision"])
             self.assertTrue(run.statuses[0].use_docling_vision)
 

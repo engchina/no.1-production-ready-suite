@@ -7,6 +7,7 @@ needs_environment_data になっていた。草稿の external_data_items の項
 needs_environment_data にする。
 LLM は差し替え、評価の質問の形（評価用の合成資料の原文）で入出力だけを確かめる。
 """
+
 import json
 import unittest
 
@@ -21,7 +22,10 @@ PREMISE = "本書の操作ができるのは「ポータル管理者」ロール
 GRANT_INDIVIDUAL = "個別の利用者に付与する場合: 利用者の詳細画面の「権限」タブで、付与する権限を選んで「付与」を押します。"
 GRANT_GROUP = "グループに付与する場合: グループの詳細画面の「権限」タブで付与します。"
 DELETE_APPROVAL = "削除の前に、所属部署の部門長の承認を得てください。承認の無い削除は行いません。"
-E1023_LOG = "サーバーの認証ログ（auth.log）で、エラーが出た時刻の行を確かめます。「token expired」とあれば原因 A、「permission denied」とあれば原因 B です。"
+E1023_LOG = (
+    "サーバーの認証ログ（auth.log）で、エラーが出た時刻の行を確かめます。「token expired」"
+    "とあれば原因 A、「permission denied」とあれば原因 B です。"
+)
 
 ROLE = "操作する利用者自身が「ポータル管理者」ロールを持つか（自分で操作するか、所属部署のポータル管理者への依頼になるかの確認）"
 TARGET = "付与対象が「個別の利用者」か「グループ」か（操作する画面を決めるため）"
@@ -45,8 +49,11 @@ def rule(eid, text, request_id="Q1"):
 def answer(question, texts, external_data_items, *, external_data_required=True):
     ctx = context(*(record(i, text, "アクセス権限の付与", page=1, source=MANUAL) for i, text in enumerate(texts)))
     eids = ids(ctx, question)
-    steps = {**draft(*(rule(eids[text], text) for text in texts), summary=""),
-             "external_data_required": external_data_required, "external_data_items": external_data_items}
+    steps = {
+        **draft(*(rule(eids[text], text) for text in texts), summary=""),
+        "external_data_required": external_data_required,
+        "external_data_items": external_data_items,
+    }
     reviews = [(index, "supported", "matched", "") for index in range(len(texts))]
     return run(FakeModel([steps], [audit(*reviews, requests=[("Q1", "addressed")])]), ctx, question).response
 
@@ -54,8 +61,11 @@ def answer(question, texts, external_data_items, *, external_data_required=True)
 class UserConditionOutcomeTest(unittest.TestCase):
     def test_grant_permission_with_role_and_target_conditions_is_conditional(self):
         # cr-grant-permission-known-target: 手順を答え、ロールと付与先の種類だけを確かめる。
-        response = answer("アクセス権限を付与したいです。どの画面で操作しますか？", [PREMISE, GRANT_INDIVIDUAL, GRANT_GROUP],
-                          [user_condition(TARGET), user_condition(ROLE)])
+        response = answer(
+            "アクセス権限を付与したいです。どの画面で操作しますか？",
+            [PREMISE, GRANT_INDIVIDUAL, GRANT_GROUP],
+            [user_condition(TARGET), user_condition(ROLE)],
+        )
         envelope = response.envelope
         self.assertEqual(envelope["outcome"], "conditional")
         self.assertEqual(envelope["conditions"], [TARGET, ROLE])
@@ -69,8 +79,12 @@ class UserConditionOutcomeTest(unittest.TestCase):
         self.assertIn(f"{grounded.CONFIRMATIONS_SECTION_TITLE}\n\n・条件: {TARGET}\n・条件: {ROLE}", response.answer_text)
         self.assertNotIn("実データ", response.answer_text)
         # 確かめる条件が無ければ、同じ手順は answered（conditional は条件だけによる）。
-        plain = answer("アクセス権限を付与したいです。どの画面で操作しますか？", [PREMISE, GRANT_INDIVIDUAL, GRANT_GROUP], [],
-                       external_data_required=False)
+        plain = answer(
+            "アクセス権限を付与したいです。どの画面で操作しますか？",
+            [PREMISE, GRANT_INDIVIDUAL, GRANT_GROUP],
+            [],
+            external_data_required=False,
+        )
         self.assertEqual(plain.envelope["outcome"], "answered")
 
     def test_delete_account_with_approval_condition_is_conditional(self):
@@ -104,13 +118,13 @@ class UserConditionOutcomeTest(unittest.TestCase):
 
 class ExternalDataItemTest(unittest.TestCase):
     def _draft(self, items, required=True):
-        return GroundedDraft.model_validate({"summary": "", "items": [], "confidence": "low",
-                                             "external_data_required": required, "external_data_items": items})
+        return GroundedDraft.model_validate(
+            {"summary": "", "items": [], "confidence": "low", "external_data_required": required, "external_data_items": items}
+        )
 
     def _requires(self, value):
         settled = grounded.settle_confirmations(value)
-        return requires_environment_data(settled, items=value.confirmation_items(),
-                                         external_data_required=value.external_data_required)
+        return requires_environment_data(settled, items=value.confirmation_items(), external_data_required=value.external_data_required)
 
     def test_plain_text_items_are_treated_as_system_values(self):
         # 構造化出力を強制できない接続の応答（文字列だけ）は、今までどおり現場の実データにする。
@@ -121,8 +135,10 @@ class ExternalDataItemTest(unittest.TestCase):
     def test_legacy_kind_is_mapped_to_who_can_answer(self):
         # #1492 より前の記録の種類（kind）は、誰が答えられるかに写す（ほかの事実は保守的に埋める）。
         value = self._draft([{"text": ROLE, "kind": "user_condition"}, {"text": AUTH_LOG, "kind": "environment"}])
-        self.assertEqual([(item.who_can_answer, item.already_known, item.decides) for item in value.external_data_items],
-                         [("user", False, True), ("system", False, True)])
+        self.assertEqual(
+            [(item.who_can_answer, item.already_known, item.decides) for item in value.external_data_items],
+            [("user", False, True), ("system", False, True)],
+        )
 
     def test_only_user_conditions_do_not_require_environment_data(self):
         value = self._draft([user_condition(ROLE), user_condition(" ")])
@@ -148,8 +164,7 @@ class ExternalDataItemTest(unittest.TestCase):
 class BuildEnvelopeUserConditionsTest(unittest.TestCase):
     def test_user_conditions_make_an_answered_envelope_conditional(self):
         matched = {"kind": "operation", "text": "手順", "applies": "matched", "condition": ""}
-        common = {"requests": (), "reviews": [], "items": [matched], "gaps": (), "confirmations": (),
-                  "external_data_required": False}
+        common = {"requests": (), "reviews": [], "items": [matched], "gaps": (), "confirmations": (), "external_data_required": False}
         self.assertEqual(build_envelope(**common)["outcome"], "answered")
         envelope = build_envelope(user_conditions=[ROLE], **common)
         self.assertEqual(envelope["outcome"], "conditional")

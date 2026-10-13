@@ -1,16 +1,20 @@
 """回答生成の実行記録。工程の開始・詳細・終了を呼出単位で記録し、利用者向けに整形する。"""
+
 from __future__ import annotations
 
-from time import monotonic
 import re
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import wraps
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from time import monotonic
+from typing import Any
+
 from rag_engine.dependencies import llm_call_count
-from rag_engine.resources.llm_usage import LlmUsage, llm_usage as _llm_usage, usage_delta, usage_snapshot
 from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARATOR, extract_original_question
+from rag_engine.resources.llm_usage import LlmUsage, usage_delta, usage_snapshot
+from rag_engine.resources.llm_usage import llm_usage as _llm_usage
 
 
 @dataclass
@@ -42,6 +46,7 @@ class _ExecutionStep:
     def hide(self) -> None:
         """利用者に伝える内容がない工程は記録から省く（異常終了した場合は省かない）。"""
         self.hidden = True
+
 
 # Gradio の並行リクエスト間で実行記録が混ざらないよう、呼び出し単位で分離する。
 _structured_steps: ContextVar[list[dict[str, Any]] | None] = ContextVar("rag_engine_steps", default=None)
@@ -104,10 +109,10 @@ def _notify_step(name: str, outcome: str, elapsed: float) -> None:
     listener = _step_listener.get()
     if listener is None:
         return
-    try:
+    # 進捗の通知は補助。回答の処理を止めない。
+    with suppress(Exception):
         listener(name, outcome, elapsed)
-    except Exception:  # noqa: BLE001 - 進捗の通知は補助。回答の処理を止めない。
-        pass
+
 
 class AnswerExecutionError(RuntimeError):
     """失敗時も完了済み工程と中断箇所を質問欄へ返すための例外。"""
@@ -116,6 +121,7 @@ class AnswerExecutionError(RuntimeError):
         """元のエラー本文と、保存前の実行記録を保持する。"""
         super().__init__(message)
         self.question_display = question_display
+
 
 @contextmanager
 def _execution_step(name: str, purpose: str = ""):
@@ -151,8 +157,13 @@ def _execution_step(name: str, purpose: str = ""):
         _notify_step(name, "error" if failed else "success", elapsed)
         llm_calls = llm_call_count.get() - llm_before
         if steps is not None:
-            steps[index] = {"name": name, "status": step.status or "complete", "elapsed_seconds": elapsed,
-                            "llm_calls": llm_calls, **_step_metrics_delta(metrics_before)}
+            steps[index] = {
+                "name": name,
+                "status": step.status or "complete",
+                "elapsed_seconds": elapsed,
+                "llm_calls": llm_calls,
+                **_step_metrics_delta(metrics_before),
+            }
             # LLM の token の数（入力・出力・推論）と呼び出しの秒の和。遅い工程の理由を確かめる（#1516）。
             if usage := usage_delta(usage_before):
                 steps[index]["llm_usage"] = usage
@@ -164,14 +175,20 @@ def _execution_step(name: str, purpose: str = ""):
                 # 所要時間と LLM 呼出回数は終了行の末尾に付け、整形時に見出しへ移す（_END_METRICS）。
                 lines.append(f"{name} 終了{suffix} @{elapsed:.1f}s/{llm_calls}")
 
+
 def format_question_display(original_question: str, execution_lines: Sequence[str]) -> str:
     """原質問に工程境界・対応番号付きの記録を付加する。記録自体の順序は変更しない。"""
     if not execution_lines:
         return original_question
-    return "\n".join([
-        original_question, "", QUESTION_DISPLAY_METADATA_SEPARATOR,
-        *_format_execution_boundaries(execution_lines),
-    ]).strip()
+    return "\n".join(
+        [
+            original_question,
+            "",
+            QUESTION_DISPLAY_METADATA_SEPARATOR,
+            *_format_execution_boundaries(execution_lines),
+        ]
+    ).strip()
+
 
 _END_METRICS = re.compile(r" @([\d.]+)s/(\d+)$")
 
@@ -241,13 +258,13 @@ def _format_execution_boundaries(execution_lines: Sequence[str]) -> list[str]:
             render(item, str(count), 0)
     measured = [item for item in root["items"] if isinstance(item, dict) and item["elapsed"] is not None]
     if measured:
-        rendered.extend(["", f"合計: LLM {sum(item['llm'] for item in measured)} 回 / "
-                             f"{sum(item['elapsed'] for item in measured):.1f} 秒"])
+        rendered.extend(["", f"合計: LLM {sum(item['llm'] for item in measured)} 回 / {sum(item['elapsed'] for item in measured):.1f} 秒"])
     return rendered
 
 
 def _record_answer_execution(function):
     """結果に実行順の記録を付け、例外でも記録を保持して呼び出し元へ伝える。"""
+
     @wraps(function)
     def wrapped(question, *args, **kwargs):
         lines: list[str] = []
@@ -271,4 +288,5 @@ def _record_answer_execution(function):
             llm_call_count.reset(llm_token)
             _execution_lines.reset(token)
             _structured_steps.reset(step_token)
+
     return wrapped

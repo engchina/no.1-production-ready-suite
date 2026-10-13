@@ -44,7 +44,7 @@ async function detailAction(page: Page, name: string) {
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
-test("全幅のキューから詳細を開き、URL と検索・選択行を戻る操作で保つ", async ({ page, mockApi }) => {
+test("全幅のキューから詳細を開き、URL と検索・選択行を戻る操作で保つ", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedApproval(mockApi);
   seedApproval(mockApi, "approval-other");
   await page.goto("/approvals");
@@ -74,7 +74,7 @@ test("全幅のキューから詳細を開き、URL と検索・選択行を戻�
 });
 
 for (const approved of [true, false]) {
-  test(`${approved ? "承認" : "却下"}の確認は対象を示し、判断後も同じ承認の記録を表示する`, async ({
+  test(`${approved ? "承認" : "却下"}の確認は対象を示し、判断後も同じ承認の記録を表示する`, { tag: "@responsive" }, async ({
     page,
     mockApi,
   }) => {
@@ -103,7 +103,7 @@ for (const approved of [true, false]) {
   });
 }
 
-test("判断中は押した操作だけを処理中にし、返却値で即時に判断済みへ更新する", async ({ page, mockApi }) => {
+test("判断中は押した操作だけを処理中にし、返却値で即時に判断済みへ更新する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedApproval(mockApi);
   let releasePost!: () => void;
   let releaseGet!: () => void;
@@ -147,7 +147,7 @@ test("判断中は押した操作だけを処理中にし、返却値で即時�
   }
 });
 
-test("確認中に他の操作者が判断した承認には古い状態で送信しない", async ({ page, mockApi }) => {
+test("確認中に他の操作者が判断した承認には古い状態で送信しない", { tag: "@responsive" }, async ({ page, mockApi }) => {
   const approval = seedApproval(mockApi);
   await page.goto("/approvals?id=approval-layout");
   await detailAction(page, "承認");
@@ -167,7 +167,7 @@ test("確認中に他の操作者が判断した承認には古い状態で送�
   await expect(page).toHaveURL(/id=approval-layout$/);
 });
 
-test("判断の失敗は理由を知らせ、同じ承認で再試行できる", async ({ page, mockApi }) => {
+test("判断の失敗は理由を知らせ、同じ承認で再試行できる", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedApproval(mockApi);
   let fail = true;
   await page.route("**/api/approvals/approval-layout/decision", async (route) => {
@@ -188,7 +188,7 @@ test("判断の失敗は理由を知らせ、同じ承認で再試行できる",
   await expect(page.getByTestId("approval-decision-record")).toBeVisible();
 });
 
-test("判断の返却値が取消済みなら、承認成功と案内せず最新の記録を表示する", async ({ page, mockApi }) => {
+test("判断の返却値が取消済みなら、承認成功と案内せず最新の記録を表示する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   const approval = seedApproval(mockApi);
   await page.route("**/api/approvals/approval-layout/decision", async (route) => {
     approval.status = "cancelled";
@@ -205,7 +205,7 @@ test("判断の返却値が取消済みなら、承認成功と案内せず最�
   await expect(page).toHaveURL(/id=approval-layout$/);
 });
 
-test("古い判断記録の欠けた日時や操作者を捏造しない", async ({ page, mockApi }) => {
+test("古い判断記録の欠けた日時や操作者を捏造しない", { tag: "@responsive" }, async ({ page, mockApi }) => {
   const approval = seedApproval(mockApi, "approval-legacy", "approved");
   approval.decided_by = null;
   approval.decided_at = null;
@@ -219,7 +219,7 @@ test("古い判断記録の欠けた日時や操作者を捏造しない", async
   ).toHaveCount(3);
 });
 
-test("閲覧だけの利用者には判断を出さず、判断済みの承認も URL で読める", async ({ page, mockApi }) => {
+test("閲覧だけの利用者には判断を出さず、判断済みの承認も URL で読める", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedApproval(mockApi);
   seedApproval(mockApi, "approval-completed", "approved");
   mockApi.setCurrentUser(
@@ -237,7 +237,7 @@ test("閲覧だけの利用者には判断を出さず、判断済みの承認�
   );
 });
 
-test("存在しない承認と取得中・取得エラー・空のキューを区別する", async ({ page, mockApi }) => {
+test("存在しない承認と取得中・取得エラー・空のキューを区別する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedApproval(mockApi);
   await page.goto("/approvals?id=missing-approval");
   await expect(page.getByText("対象が見つかりません")).toBeVisible();
@@ -268,7 +268,7 @@ test("存在しない承認と取得中・取得エラー・空のキューを�
   await expect(page.getByText("保留中の承認はありません", { exact: true })).toBeVisible();
 });
 
-test("2ページ目から詳細を開いて戻ると、同じページと行に戻る", async ({ page, mockApi }) => {
+test("2ページ目から詳細を開いて戻ると、同じページと行に戻る", { tag: "@responsive" }, async ({ page, mockApi }) => {
   for (let index = 0; index < 23; index++) seedApproval(mockApi, `approval-${index}`);
   await page.goto("/approvals");
   await page.getByTestId("approval-list-pagination").getByRole("button", { name: "次へ", exact: true }).click();
@@ -285,7 +285,7 @@ for (const viewport of [
   { width: 375, height: 812 },
   { width: 812, height: 375 },
 ]) {
-  test(`全幅の承認は明暗・文字拡大でもページ外へスクロールしない (${viewport.width}px)`, async ({
+  test(`全幅の承認は明暗・文字拡大でもページ外へスクロールしない (${viewport.width}px)`, { tag: "@responsive" }, async ({
     page,
     mockApi,
   }, testInfo) => {
@@ -328,7 +328,7 @@ for (const viewport of [
 
 // #1122: 開いた直後はフォーカスを動かさない。最初の Tab は「本文へスキップ」（一覧 ↔ 詳細の切り替えだけ見出し・行へ移す）。
 for (const path of ["/approvals", "/approvals?id=approval-layout"]) {
-  test(`${path} を開いた直後の最初の Tab で「本文へスキップ」にフォーカスが当たる`, async ({ page, mockApi }) => {
+  test(`${path} を開いた直後の最初の Tab で「本文へスキップ」にフォーカスが当たる`, { tag: "@responsive" }, async ({ page, mockApi }) => {
     seedApproval(mockApi);
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

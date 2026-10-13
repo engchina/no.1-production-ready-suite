@@ -457,7 +457,7 @@ async function minimumTextContrast(page: Page, selector: string) {
 const screenshotDir = process.env.SYSTEM_TABLES_SCREENSHOT_DIR;
 
 for (const theme of ["light", "dark"] as const) {
-  test(`外部キーの差分と参照先のない行の警告を並べ、文字のコントラストを保つ（#511・${theme}）`, async ({
+  test(`外部キーの差分と参照先のない行の警告を並べ、文字のコントラストを保つ（#511・${theme}）`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await useTheme(page, theme);
@@ -616,7 +616,7 @@ const destructiveMigration = {
 };
 
 for (const theme of ["light", "dark"] as const) {
-  test(`データを削除する未適用の migration は警告し、確認ダイアログで承認したときだけ適用する（#619・${theme}）`, async ({
+  test(`データを削除する未適用の migration は警告し、確認ダイアログで承認したときだけ適用する（#619・${theme}）`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await useTheme(page, theme);
