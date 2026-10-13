@@ -177,7 +177,7 @@ REQUIRED_BACKEND_ENV_LINES = {
         "NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER\n",
         'NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.nl2sql_oracle_deepsec_enabled ? '
         'var.nl2sql_oracle_deepsec_data_user_password : ""}\n',
-        "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED\n",
+        "NL2SQL_SELECT_AI_CREDENTIAL_NAME=NL2SQL_OCI_CRED\n",
     ],
     "agent": [
         "AGENT_AUTH_MODE=production\n",

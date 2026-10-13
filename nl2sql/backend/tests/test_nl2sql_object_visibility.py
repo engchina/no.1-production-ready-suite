@@ -229,10 +229,16 @@ def test_oracle_admin_list_filters_both_markers_in_sql_and_response(
         "APP.TD_NL2SQL_ORDERS",
         "NL2SQL_APP.ORDERS",
     ]
-    assert "NOT LIKE '%$%'" in cursor.executed
-    assert "NOT LIKE '%#%'" in cursor.executed
-    assert "NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'" in cursor.executed
-    assert "OWNER NOT LIKE 'NL2SQL" not in cursor.executed.upper()
+    for fragment in (
+        "INSTR(t.owner, '$') = 0",
+        "INSTR(t.owner, '#') = 0",
+        "INSTR(t.table_name, '$') = 0",
+        "INSTR(t.table_name, '#') = 0",
+        *system_object_prefix_sql_filters("t.table_name"),
+    ):
+        assert fragment in cursor.executed
+    # owner 名は接頭辞で除かない（`NL2SQL_APP` などの業務の schema を見せる）。
+    assert "UPPER(T.OWNER) NOT LIKE" not in cursor.executed.upper()
 
 
 def test_saved_profile_scope_does_not_expose_system_objects() -> None:

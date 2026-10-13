@@ -15,7 +15,7 @@ test("Credential が要り、無いと確かめられたときだけ事前条件
   assert.equal(
     isSelectAiCredentialMissing({
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: false,
     }),
     true,
@@ -23,7 +23,7 @@ test("Credential が要り、無いと確かめられたときだけ事前条件
   assert.equal(
     isSelectAiCredentialMissing({
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: true,
     }),
     false,
@@ -32,7 +32,7 @@ test("Credential が要り、無いと確かめられたときだけ事前条件
   assert.equal(
     isSelectAiCredentialMissing({
       credential_required: true,
-      credential_name: "OCI_CRED",
+      credential_name: "NL2SQL_OCI_CRED",
       credential_exists: null,
     }),
     false,

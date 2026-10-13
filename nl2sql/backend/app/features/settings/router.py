@@ -121,7 +121,7 @@ run_in_threadpool = run_sync_io
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 OCI_DIRECTORY_MODE = 0o700
 OCI_PRIVATE_KEY_MAX_BYTES = 64 * 1024
-SELECT_AI_CREDENTIAL_NAME = "OCI_CRED"
+SELECT_AI_CREDENTIAL_NAME = "NL2SQL_OCI_CRED"
 SELECT_AI_CREDENTIAL_REGIONS = frozenset({"ap-osaka-1", "us-chicago-1"})
 OCI_USER_OCID_RE = re.compile(r"^ocid1\.user\.[A-Za-z0-9.-]+$", re.IGNORECASE)
 OCI_TENANCY_OCID_RE = re.compile(r"^ocid1\.tenancy\.[A-Za-z0-9.-]+$", re.IGNORECASE)
@@ -241,7 +241,7 @@ def create_select_ai_credential(
             status_code=409,
             code="SELECT_AI_CREDENTIAL_EXISTS",
             message=(
-                "OCI_CRED は既に存在します。上書きせず、必要な場合だけ"
+                "NL2SQL_OCI_CRED は既に存在します。上書きせず、必要な場合だけ"
                 "「Credential を再作成」を実行してください。"
             ),
         )
@@ -270,7 +270,7 @@ def create_select_ai_credential(
             status_code=409,
             code="SELECT_AI_CREDENTIAL_EXISTS",
             message=(
-                "OCI_CRED は既に存在します。上書きせず、必要な場合だけ"
+                "NL2SQL_OCI_CRED は既に存在します。上書きせず、必要な場合だけ"
                 "「Credential を再作成」を実行してください。"
             ),
         )
