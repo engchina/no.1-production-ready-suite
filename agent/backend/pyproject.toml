@@ -20,7 +20,7 @@ dependencies = [
   "websockets>=15,<17",
   "production-ready-backend-core",
   "production-ready-system-settings-backend",
-  "openai-agents==0.22.3",
+  "openai-agents==0.23.1",
   # 品質評価の評価セットの Excel の取り込み・書き出し（NL2SQL と同じ。#776）。
   "openpyxl>=3.1",
 ]
