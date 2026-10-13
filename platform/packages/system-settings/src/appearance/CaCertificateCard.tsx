@@ -71,6 +71,8 @@ export function CaCertificateCard({ messages: m, url = CA_CERTIFICATE_PATH, prob
     { label: m.caCertificateStepsMacLabel, text: m.caCertificateStepsMac },
     { label: m.caCertificateStepsIosLabel, text: m.caCertificateStepsIos },
     { label: m.caCertificateStepsAndroidLabel, text: m.caCertificateStepsAndroid },
+    { label: m.caCertificateStepsEdgeLabel, text: m.caCertificateStepsEdge },
+    { label: m.caCertificateStepsChromeLabel, text: m.caCertificateStepsChrome },
     { label: m.caCertificateStepsFirefoxLabel, text: m.caCertificateStepsFirefox },
   ];
 

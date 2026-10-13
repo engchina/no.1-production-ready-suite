@@ -78,9 +78,16 @@ describe("外観と証明書の HTTPS の証明書", () => {
     expect(link?.textContent).toBe("CA の証明書をダウンロード");
     const steps = host.querySelector('[data-testid="appearance-ca-certificate-steps"]');
     expect(steps?.textContent).toContain("端末への取り込み方");
-    for (const os of ["Windows", "macOS", "iPhone / iPad", "Android", "Firefox"]) {
-      expect(steps?.textContent).toContain(os);
-    }
+    // OS の見出しは使うブラウザを添え、ブラウザの項は Edge → Chrome → Firefox の順（#1662）。
+    expect(Array.from(steps?.querySelectorAll("dt") ?? [], (dt) => dt.textContent)).toEqual([
+      "Windows（Edge・Chrome）",
+      "macOS（Safari・Chrome・Edge）",
+      "iPhone / iPad（すべてのブラウザ）",
+      "Android（Chrome）",
+      "Edge",
+      "Chrome",
+      "Firefox",
+    ]);
     expect(host.querySelector('[data-testid="appearance-ca-certificate-unavailable"]')).toBeNull();
   });
 
