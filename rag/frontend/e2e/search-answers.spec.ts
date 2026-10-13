@@ -92,7 +92,9 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
 
   const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
   await expect(trigger).toContainText("検索・回答プロファイルを検索して選択…");
-  await expect(trigger).toHaveAttribute("aria-required", "true");
+  // 必須はラベルの「必須」のタグで読み上げる（ボタンは aria-required を持てない。#1595）。
+  await expect(trigger).not.toHaveAttribute("aria-required");
+  await expect(trigger).toHaveAccessibleName(/検索・回答プロファイル\s*必須/);
   // 欄の下に説明文（helper）は出さない（#664）。
   await expect(page.getByText("選んだ検索・回答プロファイルが参照するナレッジベースを検索し")).toHaveCount(0);
 
@@ -374,7 +376,8 @@ for (const viewport of [
       const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
       await expect(trigger).toBeVisible();
       await expect(trigger).toContainText("検索・回答プロファイルを検索して選択…");
-      await expect(trigger).toHaveAttribute("aria-required", "true");
+      await expect(trigger).not.toHaveAttribute("aria-required");
+      await expect(trigger).toHaveAccessibleName(/検索・回答プロファイル\s*必須/);
       await expect(page.getByText("選んだ検索・回答プロファイルが参照するナレッジベースを検索し")).toHaveCount(0);
       return trigger.evaluate((button) => {
         // 欄（ラベル・ボタン）を置いた親の、内側の幅いっぱいに置く。
