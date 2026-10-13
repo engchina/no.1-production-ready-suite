@@ -6286,8 +6286,14 @@ class Nl2SqlService:
                         warnings=warnings,
                     )
         else:
+            catalog_blocker = self._local_catalog_write_blocker()
             blocker = self._sample_deterministic_import_blocker(step, dataset)
-            if blocker:
+            if catalog_blocker:
+                warnings.append(catalog_blocker)
+                results = self._statement_results(
+                    statements, status="blocked", error_message=catalog_blocker
+                )
+            elif blocker:
                 warnings.append(blocker)
                 results = self._statement_results(
                     statements,
@@ -6422,6 +6428,9 @@ class Nl2SqlService:
                     self._persist_local_catalog()
                 except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
                     warnings.append(f"Sample data 削除後の catalog 保存に失敗しました: {exc}")
+        elif blocker := self._local_catalog_write_blocker():
+            warnings.append(blocker)
+            results = self._statement_results(statements, status="blocked", error_message=blocker)
         else:
             self._remove_sample_from_state(dataset, legacy_objects=legacy)
             results = self._statement_results(statements, status="applied_to_local_state")
@@ -6838,10 +6847,32 @@ class Nl2SqlService:
         elif profile is not None:
             self._profiles[_SAMPLE_PROFILE_ID] = profile.model_copy(update={"archived": True})
 
+    def _local_catalog_write_blocker(self) -> str:
+        """DB を使わない経路（deterministic）のカタログを Oracle の永続化先へ書けない理由（#1736）。
+
+        DB を使わずに作ったカタログ（サンプルの DDL から組み立てた表・ビュー）で、実 DB から
+        再取得した Oracle のカタログのスナップショットを上書きしない。
+        """
+
+        if (
+            isinstance(self._incremental_repository, OracleIncrementalNl2SqlRepository)
+            and not self._use_oracle_runtime()
+        ):
+            return (
+                "DB を使わない実行環境のため、サンプルデータの結果を Oracle の DB 構造の一覧に"
+                "保存できません。実行環境を Oracle（NL2SQL_RUNTIME_MODE=oracle）にして"
+                "やり直してください。"
+            )
+        return ""
+
     def _persist_local_catalog(self) -> None:
         repository = self._incremental_repository
         if repository is None:
             self._persist_state()
+            return
+        if self._local_catalog_write_blocker():
+            # 呼出元が先に止める。ここでも Oracle のカタログを上書きしない（#1736）。
+            logger.warning("nl2sql_local_catalog_write_blocked")
             return
         manifest = {
             (table.owner, table.table_name): self._catalog.refreshed_at

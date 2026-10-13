@@ -2262,6 +2262,31 @@ class _OntologyBuildLlmTask:
     text_batch: list[_BuildTextUnit] | None = None
     schema_payload: dict[str, Any] | None = None
     definition_phase: str = "concepts"
+    # 前の定義の要約と前の確認の直すべき点（`_with_prior_context`）。二分割した子タスクにも
+    # 付け直す（#1736）。`prompt` / `context` には付けた後の値が入る。
+    prior: dict[str, Any] | None = None
+
+    def with_prior(self, prior: dict[str, Any] | None) -> _OntologyBuildLlmTask:
+        """前の定義の要約を付けたタスク（上限を超えるときは要約から削る）。"""
+
+        from .ontology_build_prior import PRIOR_PROMPT
+
+        if not prior:
+            return self
+        prompt, context = _with_prior_context(
+            self.prompt.removesuffix(PRIOR_PROMPT), self.context, prior
+        )
+        return replace(self, prompt=prompt, context=context, prior=prior)
+
+    def child(self, context: str, **changes: Any) -> _OntologyBuildLlmTask:
+        """context を差し替えた子タスク。前の定義の要約は付け直す（#1736）。"""
+
+        from .ontology_build_prior import PRIOR_PROMPT
+
+        base = replace(
+            self, prompt=self.prompt.removesuffix(PRIOR_PROMPT), context=context, **changes
+        )
+        return base.with_prior(self.prior)
 
     def split(self) -> list[_OntologyBuildLlmTask] | None:
         """batch を二分割した子タスクを返す(分割不能・要素 1 件以下は None)。"""
@@ -2272,15 +2297,10 @@ class _OntologyBuildLlmTask:
             middle = len(self.qa_batch) // 2
             qa_halves = [self.qa_batch[:middle], self.qa_batch[middle:]]
             return [
-                _OntologyBuildLlmTask(
-                    name=self.name,
-                    prompt=self.prompt,
-                    context=_dump_qa_context(self.schema_payload, half),
-                    progress_ja=self.progress_ja,
+                self.child(
+                    _dump_qa_context(self.schema_payload, half),
                     cross_check_sql=[pair.sql for pair in half],
                     qa_batch=half,
-                    schema_payload=self.schema_payload,
-                    definition_phase=self.definition_phase,
                 )
                 for half in qa_halves
             ]
@@ -2288,17 +2308,12 @@ class _OntologyBuildLlmTask:
             middle = len(self.text_batch) // 2
             text_halves = [self.text_batch[:middle], self.text_batch[middle:]]
             return [
-                _OntologyBuildLlmTask(
-                    name=self.name,
-                    prompt=self.prompt,
-                    context=_dump_text_context(self.schema_payload, text_half),
-                    progress_ja=self.progress_ja,
+                self.child(
+                    _dump_text_context(self.schema_payload, text_half),
                     source_evidence=[
                         evidence for unit in text_half if (evidence := unit.evidence()) is not None
                     ],
                     text_batch=text_half,
-                    schema_payload=self.schema_payload,
-                    definition_phase=self.definition_phase,
                 )
                 for text_half in text_halves
             ]
@@ -2325,6 +2340,13 @@ def _ensure_llm_call_fits(prompt: str, context: str) -> None:
         "LLM 入力が上限を超えています。Profile の対象 object を減らすか、"
         "単一行・単一ページ・単一セルの内容を分割して再実行してください。"
     )
+
+
+def _owner_label(names: dict[str, str], owner: str) -> str:
+    """構築の注記の「『オブジェクト型』の」（所属が分からなければ空）。"""
+
+    label = names.get(owner, "")
+    return f"『{label}』の" if label else ""
 
 
 def _with_prior_context(prompt: str, context: str, prior: dict[str, Any] | None) -> tuple[str, str]:
@@ -4082,10 +4104,9 @@ class OntologyBuildService:
             children = task.split()
             if task.text_batch is not None and task.schema_payload is not None:
                 children = [
-                    replace(
-                        task,
+                    task.child(
+                        _dump_text_context(task.schema_payload, batch),
                         text_batch=batch,
-                        context=_dump_text_context(task.schema_payload, batch),
                         source_evidence=[e for unit in batch if (e := unit.evidence())],
                     )
                     for batch in _batch_text_units(
@@ -4851,11 +4872,7 @@ class OntologyBuildService:
         # LLM の入力に入れる（名付けの揺れを抑え、前の問題を狙って直す。#1734）。
         prior = self._prior_build_context(job.profile_id)
         if prior:
-            llm_tasks = [
-                replace(task, prompt=prompt, context=context)
-                for task in llm_tasks
-                for prompt, context in [_with_prior_context(task.prompt, task.context, prior)]
-            ]
+            llm_tasks = [task.with_prior(prior) for task in llm_tasks]
             self._emit(
                 job_id,
                 "前の定義の名前と、前回の公開前の確認の直すべき点を AI に渡します。",
@@ -5099,6 +5116,8 @@ class OntologyBuildService:
                     for d in result.extraction.definitions
                 ],
             ],
+            # 前の定義の説明・更新可能を正にする（再構築で説明を連結しない。#1736）。
+            previous=previous_names,
         )
         # AI の出力を graph にできる形へ直す（共有した列のプロパティの分割など。#1720）。
         # 同じ表を指すオブジェクト型の統合と、外部キー・同じ名前と型の ID 列の関係も作る（#1729）。
@@ -5181,6 +5200,22 @@ class OntologyBuildService:
             f"共有プロパティ『{d.name_ja}』はどのプロパティからも使われていないため、"
             "下書きから外しました。必要なら Markdown に書き足してください。"
             for d in repair.unused_shared
+        )
+        # 対応する列の決まらない AI のプロパティと、ビューの依存だけで結合のキーの無い AI の
+        # リンク型は、graph に置けないため下書きから外す（公開を止めない。#1736）。
+        owner_names = {d.api_name: d.name_ja for d in unified_definitions}
+        content_notes.extend(
+            f"{_owner_label(owner_names, getattr(d, 'object_type', ''))}『{d.name_ja}』は"
+            "対応する列が分からないため、下書きから外しました。"
+            "必要なら Markdown のプロパティに「対応する表・列」を書き足してください。"
+            for d in repair.unmapped_properties
+        )
+        content_notes.extend(
+            f"『{owner_names.get(getattr(d, 'source', ''), getattr(d, 'source', ''))}』と"
+            f"『{owner_names.get(getattr(d, 'target', ''), getattr(d, 'target', ''))}』の"
+            "リンク型は、結合のキー（つなぐ列）が分からないため下書きから外しました。"
+            "つなぐ列があれば、Markdown にリンク型と「結合のキー」を書き足してください。"
+            for d in repair.keyless_links
         )
         self._set_definition_phase(
             job_id,

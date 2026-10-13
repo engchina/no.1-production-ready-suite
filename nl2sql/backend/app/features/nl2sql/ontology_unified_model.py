@@ -13,6 +13,7 @@ from .object_identity import catalog_match_key, object_match_key, object_part_na
 from .ontology_catalog import SchemaOntology
 from .ontology_definition_validation import mapping_column_key, mapping_object_key
 from .ontology_definitions import (
+    ActionTypeDefinition,
     BusinessDefinition,
     DefinitionEvidence,
     DefinitionMapping,
@@ -519,19 +520,66 @@ def _conflict_note(
     )
 
 
+def _description_parts(text: str) -> list[str]:
+    """説明の文の単位（行と、Markdown の 1 行に並べた ` / ` の区切り）。空白の違いは無視する。"""
+
+    return [
+        " ".join(part.split())
+        for line in str(text or "").splitlines()
+        for part in line.split(" / ")
+        if part.strip()
+    ]
+
+
+def _merged_description(current: str, value: str) -> str:
+    """説明をまとめる。同じ文は重ねず、まだ無い文だけを後ろに足す（#1736）。"""
+
+    seen = {part.casefold() for part in _description_parts(current)}
+    added = [
+        part
+        for part in dict.fromkeys(_description_parts(value))
+        if part.casefold() not in seen and not any(part.casefold() in known for known in seen)
+    ]
+    if not added:
+        return current
+    if not current.strip():
+        return "\n".join(added)
+    return "\n".join([current, *added])
+
+
+def _action_assigned_properties(values: Iterable[BusinessDefinition]) -> set[str]:
+    """アクション型（Action Type）が値を書き換えるプロパティ（更新可能の根拠）。"""
+
+    names: set[str] = set()
+    for d in values:
+        if isinstance(d, ActionTypeDefinition):
+            names.update(a.property for a in d.assignments if a.property)
+            names.update(d.affected_properties)
+    return names
+
+
 def merge_definitions(
-    profile_id: str, definitions: list[BusinessDefinition]
+    profile_id: str,
+    definitions: list[BusinessDefinition],
+    previous: Collection[str] = (),
 ) -> tuple[list[BusinessDefinition], list[str]]:
     """同じ概念の定義を 1 つにまとめる。
 
     同一性の根拠は (種類, API 名) と明示的な安定 ID。ただし、物理の表・列（リンク型は両端と
     結合のキー）が食い違う定義は、名前・ID が同じでも別の概念にする（#1729）。競合は
     `ConflictNote`（利用者が読む平易な文）で返す。
+
+    `previous` は前の定義（下書き → 公開版）の API 名（AI 構築のとき。先に並べる）。前の定義の
+    説明・更新可能は正にし、AI の出力の言い換えを連結しない・上書きしない（#1736）。説明は
+    同じ文を重ねない。AI の出力どうしで更新可能（Writable）が食い違うときは、アクション型が
+    値を書き換えるプロパティだけを更新可能にし、競合にしない（推測で更新可能にしない）。
     """
 
     merged: dict[tuple[str, str], BusinessDefinition] = {}
     conflicts: list[str] = []
     remap: dict[str, str] = {}
+    # AI の出力どうしで更新可能が食い違ったプロパティ（統合の後に、アクション型で決める）。
+    writable_by_action: list[BusinessDefinition] = []
     normalized = _normalize_definition_spellings(definitions)
     names: dict[str, str] = {}
     kinds: dict[str, set[str]] = {}
@@ -603,7 +651,11 @@ def merge_definitions(
                 # 参照の一覧は和集合にする（抽出の回ごとに一部だけ挙げても競合にしない。#1720）。
                 setattr(prior, field, list(dict.fromkeys([*current, *getattr(item, field)])))
             elif field == "description_ja" and value and value != current:
-                prior.description_ja = "\n".join(dict.fromkeys(filter(None, [current, str(value)])))
+                if _looks_physical_name(current, prior):
+                    # 表名・API 名だけの説明（`V_DEPT_PROJECT`）は、業務の説明に置き換える。
+                    prior.description_ja = _merged_description("", str(value))
+                elif prior.api_name not in previous:
+                    prior.description_ja = _merged_description(str(current), str(value))
             elif field == "name_ja" and value and value != current:
                 if _looks_physical_name(current, prior) and not _looks_physical_name(value, prior):
                     # 列名そのまま（`BUDGET`）より業務の名前（「予算」）を表示名にする（#1729）。
@@ -617,6 +669,11 @@ def merge_definitions(
                 and field in item.model_fields_set
                 and field in prior.model_fields_set
             ):
+                if field == "writable" and item.origin == "ai":
+                    # 前の定義の値が正。AI の出力どうしはアクション型で決める（#1736）。
+                    if prior.api_name not in previous and prior.origin == "ai":
+                        writable_by_action.append(prior)
+                    continue
                 conflicts.append(_conflict_note(prior, field, current, value, names))
             elif field == "inverse_name_ja":
                 # 逆向きの名前は表示のための名前。構築の回ごとの言い換えは競合にしない。
@@ -650,6 +707,11 @@ def merge_definitions(
                 )
     for d in merged.values():
         d.aliases = _clean_aliases(d)
+    if writable_by_action:
+        assigned = {remap.get(n, n) for n in _action_assigned_properties(merged.values())}
+        for d in writable_by_action:
+            if isinstance(d, PropertyDefinition):
+                d.writable = d.api_name in assigned
     values = rewrite_references(list(merged.values()), remap)
     unique_conflicts = list({str(c): c for c in conflicts}.values())
     return sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name)), sorted(
@@ -1035,6 +1097,55 @@ def _normalize_property_type(d: BusinessDefinition) -> None:
         d.data_type = base_data_type(d.physical_type)
 
 
+def link_source_nullable(
+    link: BusinessDefinition,
+    values: Iterable[BusinessDefinition],
+    columns: dict[str, dict[str, dict[str, Any]]],
+) -> bool | None:
+    """リンク型の起点側の結合のキーの列に NULL 可の列があるか（DB の列から。分からなければ None）。
+
+    任意の関係（Optional）の根拠にする（起点の行が終点を持たないことがあるか。#1736）。
+    """
+
+    if not isinstance(link, LinkTypeDefinition) or not link.join_expression_sql.strip():
+        return None
+    source = next(
+        (d for d in values if isinstance(d, ObjectTypeDefinition) and d.api_name == link.source),
+        None,
+    )
+    tables = _table_signature(source) if source is not None else frozenset()
+    if len(tables) != 1:
+        return None
+    table = next(iter(tables))
+    nullable: list[bool] = []
+    for condition in re.split(r"\s+AND\s+", link.join_expression_sql.strip(), flags=re.I):
+        sides = [object_match_key(p.strip()) for p in condition.split("=")]
+        if len(sides) != 2:
+            return None
+        own = [side for side in sides if side.rsplit(".", 1)[0] == table]
+        if len(own) != 1:
+            return None
+        info = columns.get(table, {}).get(own[0].rsplit(".", 1)[-1])
+        if info is None or not isinstance(info.get("nullable"), bool):
+            return None
+        nullable.append(info["nullable"])
+    return any(nullable) if nullable else None
+
+
+def _fill_link_optional(
+    values: list[BusinessDefinition], columns: dict[str, dict[str, dict[str, Any]]]
+) -> None:
+    """結合のキーのあるリンク型の任意の関係は、DB の列の NULL 可で決める。
+
+    必須（Required）と同じく DB の列が正（#1736）。
+    """
+
+    for d in values:
+        nullable = link_source_nullable(d, values, columns)
+        if isinstance(d, LinkTypeDefinition) and nullable is not None:
+            d.optional = nullable
+
+
 def _fill_property_types(
     values: list[BusinessDefinition], columns: dict[str, dict[str, dict[str, Any]]]
 ) -> None:
@@ -1116,9 +1227,12 @@ def schema_resolved_conflicts(
             return False
         if same_after_merge(note) or same_column(note):
             return True
+        d = by_name.get((remap or {}).get(note.api_name, note.api_name))
+        if note.field == "optional" and d is not None:
+            # 任意の関係は、起点の結合のキーの列の NULL 可で決まる（#1736）。
+            return link_source_nullable(d, definitions, columns) is not None
         if note.field not in SCHEMA_RESOLVED_FIELDS:
             return False
-        d = by_name.get((remap or {}).get(note.api_name, note.api_name))
         if d is not None and d.kind in {"shared_property", "value_type"}:
             # 共有プロパティ・値型の型・必須は、所属のプロパティ（DB の列が正）が持つ。
             return True
@@ -1522,12 +1636,12 @@ def _drop_unused_shared(
 
 
 def _dedupe_links(
-    values: list[BusinessDefinition],
+    values: list[BusinessDefinition], previous: Collection[str] = ()
 ) -> tuple[list[BusinessDefinition], dict[str, str]]:
-    """同じ両端・同じ結合のキーのリンク型を 1 つにする。"""
+    """同じ両端・同じ結合のキーのリンク型を 1 つにする（残すのは前の定義の名前。#1736）。"""
 
     remap: dict[str, str] = {}
-    seen: dict[tuple[frozenset[str], str], BusinessDefinition] = {}
+    groups: dict[tuple[frozenset[str], str], list[BusinessDefinition]] = {}
     for d in values:
         if d.kind != "link_type":
             continue
@@ -1535,11 +1649,14 @@ def _dedupe_links(
         if not join:
             continue
         key = (frozenset((getattr(d, "source", ""), getattr(d, "target", ""))), join)
-        if key in seen:
-            _absorb(seen[key], d)
-            remap[d.api_name] = seen[key].api_name
-        else:
-            seen[key] = d
+        groups.setdefault(key, []).append(d)
+    rank = _prefer_previous(previous)
+    for group in groups.values():
+        survivor = min(group, key=rank)
+        for d in group:
+            if d is not survivor:
+                _absorb(survivor, d)
+                remap[d.api_name] = survivor.api_name
     if not remap:
         return values, {}
     kept = [d for d in values if not (d.kind == "link_type" and d.api_name in remap)]
@@ -1615,15 +1732,37 @@ def schema_tables(schema: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
             for constraint in obj.get("constraints", [])
             if constraint.get("constraint_type") == "P"
         ]
+        unique = [
+            frozenset(object_match_key(str(c)) for c in constraint.get("columns", []))
+            for constraint in obj.get("constraints", [])
+            if constraint.get("constraint_type") in {"P", "U"} and constraint.get("columns")
+        ]
         tables[key] = {
             "qualified": str(obj.get("object") or f"{owner}.{name}"),
             "object_name": name,
             "kind": str(obj.get("object_type", "")).lower(),
             "columns": columns,
             "primary_key": primary[0] if primary else [],
+            # 主キー・一意キーの列の組（多重度を決める根拠。#1736）。
+            "unique_keys": unique,
             "has_constraints": bool(obj.get("constraints")),
         }
     return tables
+
+
+def view_dependency_pairs(schema: dict[str, Any] | None) -> set[frozenset[str]]:
+    """ビューと、その元の表・ビュー（`OWNER.OBJECT` の照合キー）の組。"""
+
+    return {
+        frozenset(
+            (
+                object_match_key(str(r.get("source_object", ""))),
+                object_match_key(str(r.get("target_object", ""))),
+            )
+        )
+        for r in (schema or {}).get("relationships", [])
+        if r.get("kind") == "view_dependency"
+    }
 
 
 def _infer_links(
@@ -1642,6 +1781,32 @@ def _infer_links(
             signature = _table_signature(d)
             if len(signature) == 1 and next(iter(signature)) in tables:
                 objects.setdefault(next(iter(signature)), d)
+    by_name = {d.api_name: d for d in values}
+
+    def unique_keys(table_key: str) -> list[frozenset[str]]:
+        # 主キー・一意キーの制約と、オブジェクト型の主キー（ビューには制約が無い）の列の組。
+        keys = list(tables[table_key]["unique_keys"])
+        columns: set[str] = set()
+        for name in objects[table_key].primary_key:
+            prop = by_name.get(name)
+            mapped = [
+                m
+                for m in getattr(prop, "mappings", [])
+                if _plain_column(m) and mapping_object_key(m) == table_key
+            ]
+            if len(mapped) != 1:
+                return keys
+            columns.add(mapping_column_key(mapped[0]))
+        if columns:
+            keys.append(frozenset(columns))
+        return keys
+
+    def to_one(source_key: str, source_columns: Iterable[str]) -> str:
+        # 起点の列の組が起点の主キー・一意キーなら 1 対 1、そうでなければ多対 1（#1736）。
+        return (
+            "one_to_one" if frozenset(source_columns) in unique_keys(source_key) else "many_to_one"
+        )
+
     existing = {
         frozenset((getattr(d, "source", ""), getattr(d, "target", "")))
         for d in values
@@ -1775,7 +1940,7 @@ def _infer_links(
                 source_key,
                 target_key,
                 [(column, column)],
-                "many_to_one",
+                to_one(source_key, [column]),
                 f"両方の表・ビューにある同じ名前・型の列 {right[column]['column']} で結合する関係"
                 "（外部キーの制約は無い）。",
             )
@@ -1791,12 +1956,18 @@ class RepairResult:
         remap: dict[str, str],
         dropped: list[BusinessDefinition],
         unused_shared: list[BusinessDefinition] | None = None,
+        unmapped_properties: list[BusinessDefinition] | None = None,
+        keyless_links: list[BusinessDefinition] | None = None,
     ) -> None:
         self.definitions = definitions
         self.remap = remap
         self.dropped = dropped
         # どのプロパティからも使われないため外した、AI の共有プロパティ（#1734）。
         self.unused_shared = unused_shared or []
+        # 対応する列が決まらないため外した、AI のプロパティ（#1736）。
+        self.unmapped_properties = unmapped_properties or []
+        # ビューの依存だけで結合のキーが無いため外した、AI のリンク型（#1736）。
+        self.keyless_links = keyless_links or []
 
 
 def repair_definitions_report(
@@ -1819,6 +1990,9 @@ def repair_definitions_report(
     同じ名前・型の ID 列から AI が作らなかったリンク型（Link Type）を足し、どのプロパティからも
     使われない AI の共有プロパティを外す。`previous` は前の定義（下書き・公開版）の API 名で、
     同じ列のプロパティ・同じ物の共有プロパティをまとめるときに残す名前にする（#1734）。
+    `ai_output` のときは、対応する列の無い AI のプロパティは、共有プロパティ・値型の列か API 名と
+    同じ列（所属の表のもの）で補い、決まらなければ外す。結合のキーの無い AI のリンク型は、同じ
+    両端のリンク型に寄せ、ビューの依存だけのものは外す（#1736）。前の定義と利用者の定義は外さない。
     """
 
     values = [d.model_copy(deep=True) for d in definitions]
@@ -1845,8 +2019,10 @@ def repair_definitions_report(
         if obj.title_property:
             obj.title_property = repair.resolve(obj.title_property) or ""
     values = [*values, *added]
+    if ai_output:
+        _recover_property_mappings(values, columns, previous)
     values, property_remap = _dedupe_properties(values, previous)
-    values, link_remap = _dedupe_links(values)
+    values, link_remap = _dedupe_links(values, previous)
     values, shared_remap = _dedupe_shared(values, previous)
     remap.update(property_remap)
     remap.update(link_remap)
@@ -1858,11 +2034,199 @@ def repair_definitions_report(
         _repair_optional_references(values)
     if ai_output and schema:
         values = [*values, *_infer_links(profile_id, values, schema)]
+    _fill_link_optional(values, columns)
     unused: list[BusinessDefinition] = []
+    unmapped: list[BusinessDefinition] = []
+    keyless: list[BusinessDefinition] = []
     if ai_output:
+        # 補った結合のキーが既存のリンク型と同じなら 1 つにし、残りの結合のキーの無いものを
+        # 同じ両端で 1 つにする（#1736）。
+        values, inferred_remap = _dedupe_links(values, previous)
+        remap.update(inferred_remap)
+        values, keyless_remap, keyless = _settle_keyless_links(values, schema, previous)
+        remap.update(keyless_remap)
+        values, unmapped = _drop_unmapped_properties(values, previous)
         values, unused = _drop_unused_shared(values)
     ordered = sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name))
-    return RepairResult(ordered, remap, dropped, unused)
+    return RepairResult(ordered, remap, dropped, unused, unmapped, keyless)
+
+
+def _removable_ai(d: BusinessDefinition, previous: Collection[str]) -> bool:
+    """AI 構築が外してよい定義（今回の AI の出力で、前の定義にも利用者の定義にも無い）。"""
+
+    return d.origin == "ai" and d.api_name not in previous
+
+
+def _without_references(
+    values: list[BusinessDefinition], names: Collection[str]
+) -> list[BusinessDefinition]:
+    """外した定義を指す参照（オブジェクト型の properties・主キーなど）を空にする。"""
+
+    cleaned = []
+    for d in values:
+        raw = d.model_dump(mode="json")
+        for field, value in definition_references(d):
+            current = raw.get(field)
+            if isinstance(current, str) and current in names:
+                raw[field] = ""
+            elif isinstance(current, list) and value in names:
+                raw[field] = [v for v in current if not (isinstance(v, str) and v in names)]
+        cleaned.append(raw)
+    return DEFINITIONS.validate_python(cleaned)
+
+
+def _recover_property_mappings(
+    values: list[BusinessDefinition],
+    columns: dict[str, dict[str, dict[str, Any]]],
+    previous: Collection[str],
+) -> None:
+    """対応する列の無い AI のプロパティに、所属のオブジェクト型の表の列を補う（#1736）。
+
+    根拠は物理の列だけ: (1) 参照する共有プロパティ・値型の対応のうち、所属の表の列がちょうど 1 つ
+    (2) 所属の表がちょうど 1 つで、API 名（所属の API 名の接頭辞を除く）と同じ名前の列が DB にある。
+    決まらなければそのままにする（`_drop_unmapped_properties` が外す）。
+    """
+
+    by_name = {d.api_name: d for d in values}
+    for d in values:
+        if not (
+            isinstance(d, PropertyDefinition)
+            and d.kind == "property"
+            and not d.mappings
+            and _removable_ai(d, previous)
+        ):
+            continue
+        owner = by_name.get(d.object_type)
+        if not isinstance(owner, ObjectTypeDefinition):
+            continue
+        sources = {mapping_object_key(m): m for m in owner.mappings if m.object_name}
+        borrowed = {
+            (mapping_object_key(m), mapping_column_key(m)): m
+            for name in (d.shared_property, d.value_type)
+            if name and name != d.api_name and (shared := by_name.get(name)) is not None
+            for m in shared.mappings
+            if _plain_column(m) and mapping_object_key(m) in sources
+        }
+        found: tuple[str, str] | None = None
+        if len(borrowed) == 1:
+            (table, _key), mapping = next(iter(borrowed.items()))
+            found = (table, mapping.column_name)
+        elif not borrowed and len(sources) == 1:
+            table = next(iter(sources))
+            prefix = f"{owner.api_name}_"
+            for bare in dict.fromkeys([d.api_name, d.api_name.removeprefix(prefix)]):
+                info = columns.get(table, {}).get(object_match_key(bare))
+                if info is not None:
+                    found = (table, str(info.get("column") or bare))
+                    break
+        if found is None:
+            continue
+        table, column = found
+        source = sources[table]
+        d.mappings = [
+            DefinitionMapping(
+                owner=source.owner, object_name=source.object_name, column_name=column
+            )
+        ]
+        d.evidence = [
+            *d.evidence,
+            DefinitionEvidence(
+                source_id="schema",
+                locator=f"{table}.{object_match_key(column)}",
+                source_kind="database",
+                assertion="mappings",
+            ),
+        ]
+
+
+def _drop_unmapped_properties(
+    values: list[BusinessDefinition], previous: Collection[str]
+) -> tuple[list[BusinessDefinition], list[BusinessDefinition]]:
+    """対応する列が決まらない AI のプロパティを外す（graph に置けず、公開を止めるため。#1736）。
+
+    前の定義と利用者が書いたプロパティは外さない（検証の診断で直してもらう）。外したものは
+    呼出元が構築の注記で知らせる。
+    """
+
+    dropped: list[BusinessDefinition] = [
+        d
+        for d in values
+        if isinstance(d, PropertyDefinition)
+        and d.kind == "property"
+        and not d.mappings
+        and _removable_ai(d, previous)
+    ]
+    if not dropped:
+        return values, []
+    names = {d.api_name for d in dropped}
+    kept = [d for d in values if all(d is not x for x in dropped)]
+    return _without_references(kept, names), dropped
+
+
+_JOIN_NOTE = re.compile(r"(join_expression_sql|join|結合)", re.IGNORECASE)
+
+
+def _settle_keyless_links(
+    values: list[BusinessDefinition],
+    schema: dict[str, Any] | None,
+    previous: Collection[str],
+) -> tuple[list[BusinessDefinition], dict[str, str], list[BusinessDefinition]]:
+    """結合のキーの無い AI のリンク型を、同じ両端で 1 つにする（#1736）。
+
+    - 同じ両端に結合のキーのあるリンク型があれば、そちらに寄せる（名前は別名にする）。
+    - 同じ両端に結合のキーの無いものしか無ければ、1 つにまとめる（残すのは前の定義の名前）。
+    - ビューと、その元の表・ビューの間の依存（data lineage）だけで結合のキーが無いものは外す
+      （結合できる列の対応が無く、リンク型にならない）。
+    前の定義と利用者のリンク型は外さない。結合のキーのあるリンク型の、結合のキーの不足情報は除く。
+    """
+
+    links = [d for d in values if isinstance(d, LinkTypeDefinition)]
+    for d in links:
+        if d.join_expression_sql.strip():
+            d.missing_information_ja = [
+                note for note in d.missing_information_ja if not _JOIN_NOTE.search(note)
+            ]
+    tables: dict[str, str] = {}
+    for obj in values:
+        if isinstance(obj, ObjectTypeDefinition):
+            signature = _table_signature(obj)
+            if len(signature) == 1:
+                tables[obj.api_name] = next(iter(signature))
+    lineage = view_dependency_pairs(schema)
+    groups: dict[frozenset[str], list[LinkTypeDefinition]] = {}
+    for d in links:
+        groups.setdefault(frozenset((d.source, d.target)), []).append(d)
+    rank = _prefer_previous(previous)
+    remap: dict[str, str] = {}
+    dropped: list[BusinessDefinition] = []
+    for ends, group in groups.items():
+        keyless = [d for d in group if not d.join_expression_sql.strip()]
+        removable = [d for d in keyless if _removable_ai(d, previous)]
+        if not removable:
+            continue
+        keyed = [d for d in group if d.join_expression_sql.strip()]
+        kept = [d for d in group if all(d is not r for r in removable)]
+        if keyed or kept:
+            survivor = min(kept, key=lambda d: (*rank(d), not d.join_expression_sql.strip()))
+        elif frozenset(tables.get(name, "") for name in ends) in lineage:
+            dropped.extend(removable)
+            continue
+        else:
+            survivor = min(removable, key=rank)
+        for d in removable:
+            if d is not survivor:
+                _absorb(survivor, d)
+                remap[d.api_name] = survivor.api_name
+    if not remap and not dropped:
+        return values, {}, []
+    gone = {id(d) for d in dropped} | {
+        id(d) for d in links if d.api_name in remap and remap[d.api_name] != d.api_name
+    }
+    kept_values = [d for d in values if id(d) not in gone]
+    kept_values = rewrite_references(kept_values, remap)
+    if dropped:
+        kept_values = _without_references(kept_values, {d.api_name for d in dropped})
+    return kept_values, remap, dropped
 
 
 def _repair_owner_references(values: list[BusinessDefinition]) -> None:
