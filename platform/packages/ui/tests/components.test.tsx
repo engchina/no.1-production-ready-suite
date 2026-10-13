@@ -330,6 +330,21 @@ describe("SidebarAccountFooter", () => {
     expect(html).toContain("ログアウト");
   });
 
+  it("名前とロールは 1 行ずつ省略記号で切り、各行の title に全文を出す（括弧で連結しない。#1644）", () => {
+    const html = renderToStaticMarkup(
+      <SidebarAccountFooter name="system_admin" roles="ロール: SYSTEM_ADMIN" collapsed={false} onLogout={() => {}} />
+    );
+    // 列は minmax(0, 1fr)。auto の列は nowrap の名前の幅まで広がり、行がサイドバーの外へはみ出す。
+    expect(html).toMatch(/^<div class="grid grid-cols-1 gap-1">/);
+    expect(html).toMatch(/<div class="[^"]*\bmin-w-0 flex-1\b[^"]*">/);
+    expect(html).toMatch(/<div class="[^"]*\btruncate whitespace-nowrap\b[^"]*" title="system_admin">system_admin<\/div>/);
+    expect(html).toMatch(
+      /<div class="[^"]*\btruncate whitespace-nowrap\b[^"]*" title="ロール: SYSTEM_ADMIN">ロール: SYSTEM_ADMIN<\/div>/
+    );
+    expect(html).not.toContain("system_admin（");
+    expect(html).not.toMatch(/line-clamp/);
+  });
+
   it("折りたたみ時は行アクションとログアウトに読み上げ名を付け、ユーザー名は出さない", () => {
     const html = renderToStaticMarkup(
       <SidebarAccountFooter name="山田" collapsed actions={[password]} onLogout={() => {}} />

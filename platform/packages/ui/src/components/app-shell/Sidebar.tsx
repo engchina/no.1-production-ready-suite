@@ -319,13 +319,24 @@ export function SidebarAccountFooter({
   const collapsed = useSidebarCollapsed(collapsedPreference);
   const themeLabel = theme === "dark" ? labels.switchToLight : labels.switchToDark;
   return (
-    <div className="grid gap-1">
+    // grid の列は minmax(0, 1fr)（grid-cols-1）。暗黙の auto の列は項目の最小幅（nowrap の名前の全幅）まで広がり、
+    // 名前の行がサイドバーの右端からはみ出して省略記号の出ないまま切り取られていた（#1644）。
+    <div className="grid grid-cols-1 gap-1">
       {name && !collapsed ? (
-        <div className="flex min-h-11 items-center gap-2.5 px-3 py-2" title={roles ? `${name}（${roles}）` : name}>
+        // 1 行目は名前、2 行目は補足（ロール）。各行は 1 行で省略記号で切り、高さを変えない（#1644）。
+        // 全文は各行の title（Tooltip はフォーカスできるトリガー用。README §4「Tooltip」）。DOM の文字は省略しないので、
+        // 読み上げは常に全文になる。truncate は行の高さで切り取るため、行の高さは字面（約 1.45em）以上にする（#658）。
+        <div className="flex min-h-11 min-w-0 items-center gap-2.5 px-3 py-1" data-testid="sidebar-account">
           <UserRound className="shrink-0" size={20} aria-hidden />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-fg">{name}</div>
-            {roles ? <div className="truncate text-xs text-fg-subtle">{roles}</div> : null}
+          <div className="min-w-0 flex-1">
+            <div className="truncate whitespace-nowrap text-sm font-medium leading-6 text-fg" title={name}>
+              {name}
+            </div>
+            {roles ? (
+              <div className="truncate whitespace-nowrap text-xs leading-5 text-fg-subtle" title={roles}>
+                {roles}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

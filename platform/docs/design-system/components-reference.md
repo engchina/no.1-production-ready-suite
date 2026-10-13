@@ -829,9 +829,11 @@ export function SidebarAccountFooter({ account, collapsed = false, theme = "ligh
       {collapsed ? null : (
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2-5)", minHeight: "var(--nav-item-height)", padding: "var(--space-2) var(--space-3)" }}>
           <Icon name="UserRound" size={18} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "var(--text-label)", color: "var(--color-fg)" }}>{account.name}</div>
-            {account.roles ? <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "var(--text-meta)", color: "var(--color-fg-subtle)" }}>{account.roles}</div> : null}
+          {/* 1 行目は名前、2 行目はロール。各行は 1 行で省略記号で切り、全文は各行の title（#1644）。
+              容れ物は flex: 1 + minWidth: 0、外側の grid の列は minmax(0, 1fr)（auto の列は名前の全幅まで広がり、省略記号が出ずに切れる）。 */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div title={account.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "var(--text-label)", color: "var(--color-fg)" }}>{account.name}</div>
+            {account.roles ? <div title={account.roles} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "var(--text-meta)", color: "var(--color-fg-subtle)" }}>{account.roles}</div> : null}
           </div>
         </div>
       )}

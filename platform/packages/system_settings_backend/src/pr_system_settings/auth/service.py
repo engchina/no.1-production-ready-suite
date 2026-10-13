@@ -70,7 +70,9 @@ _SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE = (
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。"
 )
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"  # nosec B105
-_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = f"{FIXED_ADMIN_LOGIN_USER_ID}（システム管理者）"
+# 表示名は名前だけにし、ロールを括弧で連結しない。ロールはサイドナビのアカウント欄の 2 行目・
+# 履歴の実行者の欄などが別に示す（#1644）。
+_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = FIXED_ADMIN_LOGIN_USER_ID
 _ADMIN_PASSWORD_PATTERN = re.compile(
     r'^(?!.*admin)(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?!.*["]).{12,30}$'
 )
