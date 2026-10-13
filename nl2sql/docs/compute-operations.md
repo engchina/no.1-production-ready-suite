@@ -32,8 +32,9 @@ NL2SQL `frontend/dist` (built with `FRONTEND_BASE_PATH=/nl2sql/`) at `/nl2sql/`
 and reverse proxies `/nl2sql/api/` to the backend with the `/nl2sql` prefix
 removed. NL2SQL is not deployed on its own: the three products are deployed
 together by the suite, and `nl2sql/init_script.sh` does not write an Nginx site.
-Open TCP `https_port` (and `http_port` for the redirect to HTTPS) publicly in the
-security list or NSG; see `terraform/README.md` for the ports and the HTTPS
+Open TCP `https_port` (or `http_port` when HTTPS is off) publicly in the
+security list or NSG. When HTTPS is on, `http_port` is neither opened nor
+listened on, and HTTP is not redirected to HTTPS (#1638); see `terraform/README.md` for the ports and the HTTPS
 certificate. If ADB uses a
 private endpoint, the selected network must still allow Compute to reach ADB on
 TCP `1522`.

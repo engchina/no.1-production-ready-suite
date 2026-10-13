@@ -14,8 +14,8 @@ locals {
   reserved_ports = [22, 25, 53, 111, 1521, 1522, 3306, 5432, 6379, 9090, 8000, 8010, 8020]
   # RAG の前処理 / parser（127.0.0.1:18010〜18028。rag/scripts/rag-systemd.sh）とその予備。
   reserved_port_ranges = [[18000, 18099]]
-  # 実際に公開する port（HTTPS が off なら http_port だけ）。
-  public_ports = var.https_enabled ? distinct([var.http_port, var.https_port]) : [var.http_port]
+  # 実際に公開する port（HTTPS が on なら https_port だけ、off なら http_port だけ。#1638）。
+  public_ports = var.https_enabled ? [var.https_port] : [var.http_port]
   public_ports_reserved = [
     for port in local.public_ports : port
     if contains(local.reserved_ports, port) || anytrue([for range in local.reserved_port_ranges : port >= range[0] && port <= range[1]])

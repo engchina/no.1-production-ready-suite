@@ -177,13 +177,20 @@ prepare_case() {
   for name in nginx firewalld policycoreutils-python-utils; do
     printf ' %s ' "${SUITE_OS_PACKAGES[*]}" | grep -qF " ${name} " || fail "${name} を入れない"
   done
-  # 既定（HTTPS on・80 / 443）: 両方を開け、http_port_t の追加は要らない。
+  # 既定（HTTPS on・80 / 443）: 443 だけを開け、80 は開けない（#1638）。http_port_t の追加は要らない。
+  # 新しい Compute では 80 は permanent で開いていない（--query-port は 1）。
+  firewall-cmd() {
+    printf 'firewall-cmd %s\n' "$*" >> "${calls}"
+    case "$*" in --permanent\ --query-port=*) return 1 ;; esac
+  }
   : > "${calls}"
   configure_firewall >/dev/null
   configure_selinux >/dev/null
   grep -qx 'systemctl enable --now firewalld' "${calls}" || fail "firewalld を有効にしない"
-  grep -qx 'firewall-cmd --permanent --add-port=80/tcp' "${calls}" || fail "80 を開けない"
   grep -qx 'firewall-cmd --permanent --add-port=443/tcp' "${calls}" || fail "443 を開けない"
+  if grep -q -- '--add-port=80/tcp' "${calls}"; then fail "HTTPS が on なのに 80 を開けた"; fi
+  grep -qx 'firewall-cmd --permanent --query-port=80/tcp' "${calls}" || fail "以前に開けた 80 を確かめない"
+  if grep -q -- '--remove-port' "${calls}"; then fail "開いていない 80 を閉じようとした"; fi
   grep -qx 'firewall-cmd --reload' "${calls}" || fail "firewalld を reload しない"
   grep -qxF "semanage fcontext -a -t usr_t ${SUITE_REPO_DIR}(/.*)?" "${calls}" || fail "repository を usr_t にしない"
   for product in rag nl2sql agent; do
@@ -194,20 +201,43 @@ prepare_case() {
   grep -qxF "restorecon -R ${SUITE_REPO_DIR}" "${calls}" || fail "repository の context を戻さない"
   grep -qx 'setsebool -P httpd_can_network_connect 1' "${calls}" || fail "Nginx から backend へ proxy できない"
   if grep -q '^semanage port' "${calls}"; then fail "80 / 443 は http_port_t に足さない"; fi
-  # 既定でない port は firewalld で開け、http_port_t にする。HTTPS が off なら https_port は開けない。
+  # 再配備（suite-restart.sh / suite-update.sh）: 以前の配備で開けた 80 が permanent に残っていれば閉じる（#1638）。
+  firewall-cmd() {
+    printf 'firewall-cmd %s\n' "$*" >> "${calls}"
+    case "$*" in --permanent\ --query-port=*) return 0 ;; esac
+  }
+  : > "${calls}"
+  removed_log="$(configure_firewall)"
+  grep -qx 'firewall-cmd --permanent --add-port=443/tcp' "${calls}" || fail "再配備で 443 を開けない"
+  grep -qx 'firewall-cmd --permanent --remove-port=80/tcp' "${calls}" || fail "以前に開けた 80 を閉じない"
+  printf '%s\n' "${removed_log}" | grep -q 'closed 80/tcp' || fail "80 を閉じたことを log に出さない: ${removed_log}"
+  [ "$(tail -n 1 "${calls}")" = 'firewall-cmd --reload' ] || fail "80 を閉じた後に reload しない"
+  # 既定でない port は firewalld で開け、http_port_t にする。HTTPS が on なら http_port は開けない（開いていれば閉じる）。
   printf '8080\n' > "${PROPS_DIR}/http_port.txt"
   printf '8443\n' > "${PROPS_DIR}/https_port.txt"
   : > "${calls}"
   configure_firewall >/dev/null
   configure_selinux >/dev/null
-  grep -qx 'firewall-cmd --permanent --add-port=8080/tcp' "${calls}" || fail "http_port を開けない"
   grep -qx 'firewall-cmd --permanent --add-port=8443/tcp' "${calls}" || fail "https_port を開けない"
-  grep -qx 'semanage port -a -t http_port_t -p tcp 8080' "${calls}" || fail "http_port を http_port_t にしない"
+  if grep -q -- '--add-port=8080/tcp' "${calls}"; then fail "HTTPS が on なのに http_port を開けた"; fi
+  grep -qx 'firewall-cmd --permanent --remove-port=8080/tcp' "${calls}" || fail "以前に開けた http_port を閉じない"
   grep -qx 'semanage port -a -t http_port_t -p tcp 8443' "${calls}" || fail "https_port を http_port_t にしない"
+  if grep -q '^semanage port .* 8080$' "${calls}"; then fail "HTTPS が on なのに http_port を http_port_t にした"; fi
+  # https_port と http_port が同じなら、開けた port を閉じない。
+  printf '8443\n' > "${PROPS_DIR}/http_port.txt"
+  : > "${calls}"
+  configure_firewall >/dev/null
+  if grep -q -- '--remove-port' "${calls}"; then fail "https_port と同じ http_port を閉じた"; fi
+  printf '8080\n' > "${PROPS_DIR}/http_port.txt"
+  # HTTPS が off なら http_port だけを開け、https_port は開けない。http_port は閉じない。
   printf 'false\n' > "${PROPS_DIR}/https_enabled.txt"
   : > "${calls}"
   configure_firewall >/dev/null
+  configure_selinux >/dev/null
+  grep -qx 'firewall-cmd --permanent --add-port=8080/tcp' "${calls}" || fail "HTTPS が off なのに http_port を開けない"
+  grep -qx 'semanage port -a -t http_port_t -p tcp 8080' "${calls}" || fail "http_port を http_port_t にしない"
   if grep -q '8443' "${calls}"; then fail "HTTPS が off なのに https_port を開けた"; fi
+  if grep -q -- '--remove-port' "${calls}"; then fail "HTTPS が off なのに port を閉じた"; fi
   # Nginx が読む dist と証明書の context を、build と証明書の作成の後に戻す。
   SUITE_PRODUCTS=(rag agent)
   mkdir -p "${SUITE_REPO_DIR}/rag/frontend/dist" "${SUITE_REPO_DIR}/agent/frontend/dist" "${SUITE_SSL_DIR}"

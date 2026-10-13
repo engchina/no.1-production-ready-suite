@@ -153,10 +153,13 @@ fi
 nginx
 python3 - "${app_root}/ssl/ca.crt" <<'PY'
 import http.client, ssl, sys
+# HTTPS が on（既定）なら 80 は listen しない（HTTP から HTTPS へ転送しない。#1638）。
 plain = http.client.HTTPConnection("127.0.0.1", 80, timeout=10)
-plain.request("GET", "/rag/")
-response = plain.getresponse()
-assert response.status == 301 and response.getheader("Location") == "https://127.0.0.1/rag/", (response.status, response.getheaders())
+try:
+    plain.request("GET", "/rag/")
+    raise AssertionError(f"80 が listen されている: {plain.getresponse().status}")
+except ConnectionRefusedError:
+    pass
 context = ssl.create_default_context(cafile=sys.argv[1])
 conn = http.client.HTTPSConnection("127.0.0.1", 443, timeout=10, context=context)
 conn.request("GET", "/")

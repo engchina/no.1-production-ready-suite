@@ -8,7 +8,8 @@
 #   （RAG 8000・NL2SQL 8010・Agent 8020。RAG の前処理 / parser は 18010〜18028。すべて 127.0.0.1）。
 # - Nginx の site は 1 つだけ（platform/deploy/suite-nginx.sh）。/rag/ /nl2sql/ /agent/ と、/ → /agent/。
 # - HTTPS（既定 on）: 自作の Root CA と IP のサーバー証明書（platform/deploy/suite-tls.sh）で https_port（既定 443）。
-#   http_port（既定 80）は 301 で https へ。HTTPS が off なら http_port でそのまま配信する。
+#   HTTPS が on のときは http_port（既定 80）を firewalld でも Nginx でも使わない（開けない・listen しない。#1638）。
+#   HTTPS が off なら http_port でそのまま配信する。
 #   CA の証明書は /platform/ca.crt で配る（CA の秘密鍵は Compute の中だけ）。
 #
 # cloud-init が /u01/aipoc/props に置くもの:
@@ -119,23 +120,21 @@ https_port() {
 }
 
 # 公開の port が使えるか（SSH・よく使われる service・Compute の中で使う port を拒む）を、配備の前に確かめる。
+# 使わない側の port（HTTPS が on なら http_port、off なら https_port）は見ない（#1638）。
 validate_ports() {
-  suite_validate_public_port http_port "$(http_port)" || return 1
   if https_enabled; then
     suite_validate_public_port https_port "$(https_port)" || return 1
+  else
+    suite_validate_public_port http_port "$(http_port)" || return 1
   fi
 }
 
-# 公開する port（http_port と、HTTPS が on なら https_port。同じ値なら 1 つ）。
+# 公開する port（HTTPS が on なら https_port だけ、off なら http_port だけ。#1638）。
 public_ports() {
-  local http https
-  http="$(http_port)"
-  printf '%s\n' "${http}"
   if https_enabled; then
-    https="$(https_port)"
-    if [ "${https}" != "${http}" ]; then
-      printf '%s\n' "${https}"
-    fi
+    https_port
+  else
+    http_port
   fi
 }
 
@@ -160,12 +159,21 @@ install_os_packages() {
 }
 
 # OS の firewall（firewalld）で公開の port を開ける。subnet の security list は stack の外で管理する。
+# HTTPS が on のときは http_port を開けない。以前の配備（HTTP から HTTPS への転送のために http_port を開けていた版、
+# または HTTPS が off の配備）で開けた http_port が permanent に残っていれば、再配備（suite-restart.sh /
+# suite-update.sh）のときに閉じる（#1638）。
 configure_firewall() {
-  local port
+  local port http
   systemctl enable --now firewalld
   while IFS= read -r port; do
     firewall-cmd --permanent --add-port="${port}/tcp"
   done < <(public_ports)
+  http="$(http_port)"
+  if https_enabled && [ "${http}" != "$(https_port)" ] \
+    && firewall-cmd --permanent --query-port="${http}/tcp" >/dev/null 2>&1; then
+    firewall-cmd --permanent --remove-port="${http}/tcp"
+    log "firewalld: closed ${http}/tcp (http_port is not used while HTTPS is enabled)."
+  fi
   firewall-cmd --reload
   log "firewalld: opened $(public_ports | tr '\n' ' ')(tcp)."
 }

@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
 import {
   APP_BASE_URL,
@@ -43,11 +44,12 @@ export default defineConfig({
   // 実行前後で利用者の実環境の設定ファイルが変わっていないことを検査する。
   globalSetup: "./tests/e2e/global-setup.ts",
   timeout: 30_000,
-  // RAG と同じく CI だけ retries 2。遅い runner で 1 件の一時的な遅延が shard 全体を赤にしないため（#175）。
+  // RAG と同じく CI だけ retry する。遅い runner で 1 件の一時的な遅延が shard 全体を赤にしないため（#175）。
+  // PR は 1、main の push と nightly は 2（#1593。platform/scripts/e2e-impact/ci-run.ts）。
   // retry で通ったテストは flaky として report に残る。nightly（e2e-nightly.yml）でも拾う。
-  retries: process.env.CI ? 2 : 0,
-  // CI（4 vCPU の runner）は 2 worker。ci.yml・e2e-nightly.yml は `--workers` で上書きしない（#1489）。
-  workers: process.env.CI ? 2 : 4,
+  retries: ciRetries(),
+  // CI（4 vCPU の runner）は CI_WORKERS の worker。ci.yml・e2e-nightly.yml は `--workers` で上書きしない（#1489・#1593）。
+  workers: ciWorkers(4),
   expect: {
     timeout: 8_000,
   },

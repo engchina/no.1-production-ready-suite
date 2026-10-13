@@ -8,9 +8,9 @@
 #   /platform/...             platform の共有の内容のために予約する（今は ca.crt 以外は 404）
 #   /                         /agent/ へ 302（Agent を配備しないときは、最初に配備した製品へ）
 #
-# HTTPS が on のとき: https_port（既定 443）で TLS 1.2 / 1.3、http_port（既定 80）はすべて 301 で https へ
-# （http_port と https_port が同じなら転送の server は置かない）。HSTS は付けない（IP の証明書のため）。
-# HTTPS が off のとき: http_port で HTTP をそのまま配信する（転送しない）。port は stack の変数（#1316）。
+# HTTPS が on のとき: https_port（既定 443）で TLS 1.2 / 1.3 だけを受ける。http_port（既定 80）は listen しない
+# （HTTP から HTTPS への転送の server も置かない。#1638）。HSTS は付けない（IP の証明書のため）。
+# HTTPS が off のとき: http_port で HTTP をそのまま配信する。port は stack の変数（#1316）。
 # backend へは $request_uri から prefix だけを外した URI をそのまま渡す（%2F などのエンコードを変えない）。
 
 # 各製品の backend の port（127.0.0.1 だけで listen する）。ローカルの開発の port と同じ（#1316 で NL2SQL を 8000 → 8010）。
@@ -403,7 +403,8 @@ EOF
 
 # site を標準出力に書く。
 #   $1: HTTPS（true / false）  $2: suite の repository  $3: 証明書の directory
-#   $4: http_port  $5: https_port  $6...: 配備する製品（rag / nl2sql / agent）
+#   $4: http_port（HTTPS が off のときだけ使う）  $5: https_port（HTTPS が on のときだけ使う）
+#   $6...: 配備する製品（rag / nl2sql / agent）
 # 製品の API の本文の上限は SUITE_<製品>_CLIENT_MAX_BODY_SIZE（suite-init.sh が backend/.env から作る）。
 # 環境変数 SUITE_LISTEN_ADDRESS は test が 127.0.0.1 だけで listen するためのもの（本番は全 address）。
 suite_nginx_site() {
@@ -417,7 +418,6 @@ suite_nginx_site() {
   local address="${SUITE_LISTEN_ADDRESS:-}"
   local http_listen="${address:+${address}:}${http_port}"
   local https_listen="${address:+${address}:}${https_port}"
-  local https_authority='$host'
   local product
 
   if [ "${#products[@]}" -eq 0 ]; then
@@ -430,12 +430,11 @@ suite_nginx_site() {
       return 1
     fi
   done
-  suite_validate_public_port http_port "${http_port}" || return 1
+  # 使う側の port だけを確かめる（HTTPS が on なら http_port は使わない。#1638）。
   if [ "${https_enabled}" = "true" ]; then
     suite_validate_public_port https_port "${https_port}" || return 1
-  fi
-  if [ "${https_port}" != "443" ]; then
-    https_authority="\$host:${https_port}"
+  else
+    suite_validate_public_port http_port "${http_port}" || return 1
   fi
 
   cat <<'EOF'
@@ -454,25 +453,9 @@ map $http_upgrade $pr_suite_connection_upgrade {
 EOF
 
   if [ "${https_enabled}" = "true" ]; then
+    # http_port は listen しない（HTTP から HTTPS への転送もしない。HSTS は付けない。#1638）。
     cat <<EOF
 
-EOF
-    if [ "${http_port}" != "${https_port}" ]; then
-      cat <<EOF
-# HTTP は HTTPS へ転送するだけ（HSTS は付けない。IP の証明書と自作の CA のため）。
-server {
-    listen ${http_listen} default_server;
-    server_name _;
-    access_log off;
-EOF
-      _suite_client_header_buffers
-      cat <<EOF
-    return 301 https://${https_authority}\$request_uri;
-}
-
-EOF
-    fi
-    cat <<EOF
 server {
     listen ${https_listen} ssl http2 default_server;
 
