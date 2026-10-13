@@ -26,6 +26,9 @@ name: CI
 # 飛ばし（全件が smoke の spec を含む）、selected のときは smoke の spec を impact から除く（#1525）。
 # PR の e2e の 375px の project は、画面幅に依存するテスト（@responsive）だけを実行する（workflow の env の
 # E2E_MOBILE_SCOPE。全件は e2e-nightly.yml。#1582）。
+# runner は ubuntu-24.04 に固定する（#1587）。本番の Compute の OS は Oracle Linux 9 だが（#1611）、GitHub に
+# Oracle Linux の runner は無いため、テストの実行には ubuntu-24.04 を使う。OS の差（dnf の package の名前・
+# Nginx の配置）は `Suite / Oracle Linux 9`（container: oraclelinux:9）が配備のスクリプトの変更時に確かめる。
 
 on:
   pull_request:
@@ -62,6 +65,10 @@ env:
     e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
     e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
     e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts e2e/scrollbar-stability.spec.ts
+  # PR / main の push の e2e（smoke・impact）は、3 製品の playwright.config.ts の webServer が vite build の成果物を
+  # vite preview で配信する（dev server より約 25〜30% 速い。build は job ごとに 1〜2 秒。#1583）。
+  # nightly（e2e-nightly.yml）は e2e-impact の記録が dev server の URL と sourcemap を使うので dev server のまま。
+  PLAYWRIGHT_WEB_SERVER: preview
 
 jobs:
   changes:
@@ -83,6 +90,8 @@ jobs:
         ${{ steps.filter.outputs.agent_backend == 'true' || steps.filter.outputs.agent_backend_frontend == 'true' }}
       # 配備の検証（Suite / Deploy。suite-deploy.yml）を動かす変更（#1592）。
       deploy: ${{ steps.filter.outputs.deploy == 'true' || steps.filter.outputs.ci == 'true' }}
+      # Compute の OS（Oracle Linux 9）に依存する配備のスクリプト（#1611）。
+      deploy_os: ${{ steps.filter.outputs.deploy_os == 'true' || steps.filter.outputs.ci == 'true' }}
       scripts: ${{ steps.filter.outputs.scripts == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_frontend: >-
         ${{ steps.filter.outputs.platform_frontend == 'true' || steps.filter.outputs.ci == 'true'
@@ -242,6 +251,15 @@ jobs:
               - "!platform/package.json"
               - "!platform/package-lock.json"
               - "!**/*.md"
+            # Compute の OS（Oracle Linux 9）の上で動く配備のスクリプトと、それが使う設定の雛形（#1611）。
+            deploy_os:
+              - "terraform/**"
+              - "platform/deploy/**"
+              - "platform/templates/nginx/**"
+              - "*/init_script.sh"
+              - "rag/scripts/rag-systemd.sh"
+              - "rag/scripts/rag-services.sh"
+              - "nl2sql/scripts/update-after-pull.sh"
             # root の scripts/（monorepo の開発の補助。setup-worktree.sh・pr-merge-check.sh）と .github/
             # （workflow の actionlint、.github/scripts の shellcheck。#1525。以前は ci.yml 以外の workflow の変更で
             # 何も検査しなかった）。
@@ -1060,7 +1078,7 @@ jobs:
       # worker 数は playwright.config.ts の CI の値（2。fullyParallel でテスト単位で並ぶ）。#175 の遅い環境での flake の後に
       # `--workers=1` で 1 worker に固定していたが、smoke が 4〜6 分に伸びたため外した（#1489）。
       # 最も重い sql-chat（両 project で約 80 テスト中 58）と database-gate は desktop だけにし、375px の確認は
-      # impact（チャットの画面に触る PR）と nightly に任せる。dev server の起動を 1 回にするため 1 回の実行にまとめ、
+      # impact（チャットの画面に触る PR）と nightly に任せる。build と preview の起動を 1 回にするため 1 回の実行にまとめ、
       # `--grep-invert` で mobile-375 の 2 spec を外す（grep は「project 名 spec のファイル名 題名」に当たる）。
       # spec は workflow の env（NL2SQL_E2E_SMOKE は全 project、NL2SQL_E2E_SMOKE_DESKTOP は desktop だけ。
       # DESKTOP を変えたら --grep-invert の spec 名もそろえる）。
@@ -1525,6 +1543,36 @@ jobs:
     if: needs.changes.outputs.deploy == 'true'
     uses: ./.github/workflows/suite-deploy.yml
 
+  # 本番の Compute の OS（Oracle Linux 9。#1611）で、配備のスクリプトが dnf で入れる package の名前（依存まで
+  # 解決し、入れない）・前提の command・bash -n と、本番と同じ配置（/etc/nginx/nginx.conf・conf.d）の Nginx を
+  # 確かめ、platform/deploy のテストも Oracle Linux の bash・openssl・Nginx で実行する。GitHub に Oracle Linux の
+  # runner は無いため、ubuntu-24.04 の上の container で動かす。SELinux・firewalld・systemd は container で
+  # 動かないため、実機（OCI）の確認は手動で行う（PR の手順）。
+  suite-oracle-linux:
+    name: Suite / Oracle Linux 9
+    needs: changes
+    if: needs.changes.outputs.deploy_os == 'true'
+    runs-on: ubuntu-24.04
+    container: oraclelinux:9
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check packages, commands and Nginx on Oracle Linux 9
+        run: bash platform/deploy/tests/oracle-linux.test.sh
+
+      # oracle-linux.test.sh が nginx（module の 1.24）・openssl・python3 を入れている。Nginx の worker を
+      # root から切り替えないよう、テストは root 以外のユーザーで実行する（runner の Ubuntu と同じ条件）。
+      - name: Test single-Compute deployment on Oracle Linux 9 (platform/deploy)
+        run: |
+          dnf -y -q install util-linux procps-ng diffutils findutils
+          useradd --create-home pr-ci
+          chmod -R a+rX "${GITHUB_WORKSPACE}"
+          for test_script in suite-tls suite-init suite-nginx; do
+            runuser -u pr-ci -- env NGINX_BIN=/usr/sbin/nginx bash "platform/deploy/tests/${test_script}.test.sh"
+          done
+
   # ---------------------------------------------------------------- root の scripts/
 
   # monorepo の開発の補助のスクリプト（setup-worktree.sh・pr-merge-check.sh。#1328）を shellcheck と、
@@ -1594,6 +1642,7 @@ jobs:
       - nl2sql-e2e-impact
       - agent-e2e-impact
       - suite-deploy
+      - suite-oracle-linux
       - suite-scripts
     runs-on: ubuntu-24.04
     timeout-minutes: 5

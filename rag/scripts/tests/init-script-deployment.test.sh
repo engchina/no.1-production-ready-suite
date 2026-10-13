@@ -22,8 +22,6 @@ prepare_case() {
     "${case_dir}/app/no.1-production-ready-suite/platform" \
     "${case_dir}/units" \
     "${case_dir}/sudoers.d" \
-    "${case_dir}/sites-available" \
-    "${case_dir}/sites-enabled" \
     "${case_dir}/bin" \
     "${case_dir}/service-home"
   export APP_ROOT="${case_dir}/app"
@@ -503,5 +501,25 @@ if FAKE_UV_LOG="${torch_uv_log}" PATH="${TEST_TMP_DIR}/torch-cpu/bin:${PATH}" RA
   bash "${torch_rag_dir}/scripts/rag-services.sh" sync parser-docling > /dev/null 2>&1; then
   fail "RAG_SERVICES_TORCH に cpu 以外を受け付けた"
 fi
+
+# --- OS の package（Oracle Linux 9 の dnf。#1611）: 前処理 / parser の分だけ足す。Nginx は suite-init.sh が入れる ---
+os_packages="$(
+  RAG_INIT_TEST_MODE=true bash -c 'source "$1/init_script.sh"; RAG_SERVICES=(parser-docling); system_packages; echo ---; RAG_SERVICES=(parser-docling preprocess-office-to-pdf parser-unstructured preprocess-pdf-to-page-images); system_packages' _ "${REPO_DIR}"
+)"
+base_packages="${os_packages%%---*}"
+all_packages="${os_packages#*---}"
+for package in gcc make git sudo unzip; do
+  printf '%s\n' "${base_packages}" | grep -qx "${package}" || fail "基本の package に ${package} が無い"
+done
+for package in libreoffice-core google-noto-sans-cjk-ttc-fonts poppler-utils tesseract tesseract-langpack-jpn; do
+  printf '%s\n' "${base_packages}" | grep -qx "${package}" && fail "parser-docling だけなのに ${package} を入れる"
+  printf '%s\n' "${all_packages}" | grep -qx "${package}" || fail "前処理 / parser の package に ${package} が無い"
+done
+test "$(printf '%s\n' "${all_packages}" | grep -cx 'google-noto-sans-cjk-ttc-fonts')" -eq 1 || fail "同じ package を重ねて入れる"
+for package in nginx netfilter-persistent build-essential fonts-noto-cjk tesseract-ocr; do
+  printf '%s\n' "${all_packages}" | grep -qx "${package}" && fail "${package} を入れる（Oracle Linux に無い・suite が入れる）"
+done
+grep -Fq 'dnf_cmd install --setopt=install_weak_deps=False "${packages[@]}"' "${REPO_DIR}/init_script.sh" \
+  || fail "推奨の package を入れずに dnf で入れない"
 
 echo "rag init_script deployment behavior verified."

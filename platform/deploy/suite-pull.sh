@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 配備した Compute の上で、suite の repository を origin の main の最新にする（#1566）。
 #
-# - repository は cloud-init が `git clone --depth 1` で入れ、各製品の init_script.sh が ubuntu に chown する。
+# - repository は cloud-init が `git clone --depth 1` で入れ、各製品の init_script.sh が opc に chown する。
 #   root のまま git を実行すると「dubious ownership」で失敗するため、git は repository の所有者で実行する。
 # - 追跡ファイルに変更があれば中止する（手で直したファイルを黙って消さない）。未追跡のファイルは保ち、
 #   取得したファイルと衝突するときは git が更新を拒否する。
@@ -23,7 +23,7 @@ pull_usage() {
 Usage: platform/deploy/suite-pull.sh
 
 suite の repository（既定 /u01/aipoc/no.1-production-ready-suite）を origin の main の最新にします。
-ubuntu でも sudo でも実行できます（git は repository の所有者で実行します）。
+opc でも sudo でも実行できます（git は repository の所有者で実行します）。
 追跡ファイルに変更があるときは中止します。取得したコードは、sudo で suite-restart.sh を実行すると
 build・再起動されて反映されます（suite-update.sh は取得から build・再起動までをまとめて行います）。
 

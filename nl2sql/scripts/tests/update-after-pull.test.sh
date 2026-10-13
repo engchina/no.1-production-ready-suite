@@ -368,7 +368,7 @@ test_root_privilege_dispatch() (
 
   APP_USER=deployment-user
   run_as_app_user true
-  grep -Fxq 'sudo|-n -H -u deployment-user -- true' "${case_dir}/events"
+  grep -Fxq "sudo|-n -H -u deployment-user -- env PATH=${PATH} true" "${case_dir}/events"
 )
 
 test_root_lock_owner_transition() (

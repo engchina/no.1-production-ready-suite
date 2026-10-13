@@ -6,6 +6,15 @@ import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-sco
 const frontendPort = process.env.PLAYWRIGHT_PORT ?? "3042";
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 const frontendCwd = fileURLToPath(new URL(".", import.meta.url));
+// PLAYWRIGHT_WEB_SERVER=preview なら、vite build の成果物を vite preview で配信する（PR の CI。#1583）。
+// dev サーバより画面の読み込みが速い。e2e の影響分析の記録（E2E_IMPACT_DIR。nightly）は dev サーバの
+// `/src/...` の URL と inline の sourcemap を使うので、記録するときは dev サーバのままにする。
+const usePreviewServer = process.env.PLAYWRIGHT_WEB_SERVER === "preview" && !process.env.E2E_IMPACT_DIR;
+// 成果物は配備用の dist/ と分ける（node_modules の下なので commit されない）。
+const previewOutDir = "node_modules/.e2e-preview";
+const webServerCommand = usePreviewServer
+  ? `npx vite build --outDir ${previewOutDir} --emptyOutDir --logLevel warn && npx vite preview --outDir ${previewOutDir} --host 127.0.0.1 --port ${frontendPort} --strictPort`
+  : `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -34,15 +43,18 @@ export default defineConfig({
   // e2e は実 backend を起動しない。すべての API は e2e/fixtures/mock-api.ts の page.route で
   // mock し、未モックの /api は Vite の hermetic middleware が 404 で終端する。
   webServer: {
-    command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
+    command: webServerCommand,
     cwd: frontendCwd,
     url: frontendUrl,
     // 既存の（hermetic でない）dev サーバを再利用すると実 backend へ proxy されるため、常に起動する。
     reuseExistingServer: false,
-    timeout: 30_000,
+    // preview は先に vite build を行う（数秒）。
+    timeout: usePreviewServer ? 120_000 : 30_000,
     env: {
       ...process.env,
       PLAYWRIGHT_HERMETIC_API: "1",
+      // base は FRONTEND_BASE_PATH で変わるので、e2e では空にして `/` で配信する（dev サーバと preview）。
+      FRONTEND_BASE_PATH: "",
       // 念のため proxy 先も到達不能な宛先にしておく（hermetic では proxy 自体を無効化している）。
       BACKEND_URL: "http://127.0.0.1:9",
     },

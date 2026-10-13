@@ -16,7 +16,7 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 ## 配備した後の運用
 
-Compute に SSH で入って実行します（repository は `/u01/aipoc/no.1-production-ready-suite`）。
+Compute（Oracle Linux 9）に `opc` で SSH して実行します（`ssh opc@<IP>`。output の `ssh_to_instance`。repository は `/u01/aipoc/no.1-production-ready-suite`）。
 
 最新のコード（main）を取得して反映する（取得 → build → 全サービスの再起動）:
 

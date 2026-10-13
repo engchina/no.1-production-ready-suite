@@ -115,7 +115,7 @@ require_uv() {
   fi
 }
 
-# サービスが使う OS のコマンドが無ければ知らせる（apt で入れる。rag/docs/deployment.md）。
+# サービスが使う OS のコマンドが無ければ知らせる（Oracle Linux 9 は dnf で入れる。rag/docs/deployment.md）。
 warn_missing_os_tools() {
   local service
   for service in "${SELECTED[@]}"; do
@@ -125,7 +125,7 @@ warn_missing_os_tools() {
         ;;
       parser-unstructured)
         command -v pdftoppm >/dev/null 2>&1 || log "注意: ${service} は poppler-utils（pdftoppm）を使います。"
-        command -v tesseract >/dev/null 2>&1 || log "注意: ${service} は tesseract-ocr（jpn）を使います。"
+        command -v tesseract >/dev/null 2>&1 || log "注意: ${service} は tesseract（tesseract-langpack-jpn）を使います。"
         ;;
     esac
   done

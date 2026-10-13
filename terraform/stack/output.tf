@@ -59,5 +59,5 @@ output "ca_certificate_url" {
 
 output "ssh_to_instance" {
   description = "SSH command for the Compute instance."
-  value       = "ssh -o ServerAliveInterval=10 ubuntu@${local.instance_access_ip}"
+  value       = "ssh -o ServerAliveInterval=10 opc@${local.instance_access_ip}"
 }
