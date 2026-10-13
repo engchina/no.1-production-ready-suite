@@ -413,7 +413,7 @@ const nl2sqlJa = {
   "security.roles.restoreConfirm": "このロールを復元すると、このロールに紐づくユーザーへ、このロール由来の権限が次回リクエストから反映されます。",
   "security.roles.delete": "削除",
   "security.roles.deleteConfirm":
-    "「{code}」（ロール名: {name}）を完全に削除します。保存済みの機能権限と業務プロファイルの関連は削除され、元に戻せません。",
+    "「{name}」を完全に削除します。保存済みの機能権限と業務プロファイルの関連は削除され、元に戻せません。",
   "security.roles.deleteSuccess": "{name} を完全に削除しました。",
   "security.roles.deleteError":
     "ロールを削除できませんでした。割り当てユーザーを解除し、有効な状態で空の Data Grant を適用してから再度アーカイブし、最新の表示で再試行してください。",

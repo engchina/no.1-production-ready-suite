@@ -617,8 +617,9 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
   const lastRoleRow = roleScrollRegion.locator("tbody tr").last();
   await lastRoleRow.locator("td").nth(1).click();
   await expect(lastRoleRow).toHaveAttribute("data-selected", "true");
+  // 詳細の見出しはロール名（コード・ID は出さない。#1682）。
   await expect(
-    page.getByRole("heading", { name: lastRole.role_code, exact: true })
+    page.getByRole("heading", { name: lastRole.display_name, exact: true })
   ).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 });
@@ -2740,6 +2741,38 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expectNoPageHorizontalScroll(page);
 });
 
+test("ユーザー管理は削除済みの割り当てロールを ID（UUID）ではなく「（削除済みのロール）」と表示する（#1682）", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const deletedRoleId = "6f1c2d3e-4b5a-4c6d-8e7f-90a1b2c3d4e5";
+  await page.route("**/api/security/roles?include_archived=false", (route) => fulfill(route, [systemRole]));
+  await page.route("**/api/security/users", (route) =>
+    fulfill(route, [
+      {
+        user_uuid: "deleted-role-user",
+        login_user_id: "deleted.role.user",
+        display_name: "削除済みロール利用者",
+        status: "ACTIVE",
+        force_password_change: false,
+        locked_until: null,
+        version: 1,
+        role_ids: [deletedRoleId],
+        // backend の AssignedRoleData.unresolved() の形（コード・表示名は空、deleted）。
+        assigned_roles: [
+          { role_id: deletedRoleId, role_code: "", display_name: "", is_built_in: false, archived: true, deleted: true },
+        ],
+        is_bootstrap_admin: false,
+      },
+    ])
+  );
+
+  await page.goto("/settings/security/users");
+
+  const grid = page.getByTestId("security-users-grid");
+  await expect(grid.getByText("（削除済みのロール）", { exact: true })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText(deletedRoleId);
+  expect(await page.locator("main").innerHTML()).not.toContain(deletedRoleId);
+});
+
 test("ユーザー管理はアーカイブ済み割り当てロールを無効として表示し、新規選択肢には出さない", async ({ page }) => {
   await mockDatabaseGateReady(page);
   const viewerRole = {
@@ -2922,8 +2955,9 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await expect(grid.locator("tbody tr")).toHaveCount(2);
   const viewerRoleRow = grid.locator("tbody tr").filter({ hasText: "アプリ閲覧" });
   await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
-  // 一覧はロールコード順（SECURITY_VIEWER < SYSTEM_ADMIN）、詳細見出しはコード（#584）。
-  await expect(page.getByRole("region", { name: "SECURITY_VIEWER" })).toBeVisible();
+  // 一覧はロール名の順（アプリ閲覧 < システム管理者）、詳細見出しはロール名（#584・#1682）。
+  await expect(page.getByRole("region", { name: "アプリ閲覧" })).toBeVisible();
+  await expect(grid).not.toContainText("SECURITY_VIEWER");
   await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
   await viewerRoleRow.locator("td").nth(2).click();
@@ -3131,7 +3165,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         category: "共通",
         description: "標準の業務プロファイル",
         archived: false,
-        allowed_role_ids: ["role-query-default"],
+        allowed_roles: [{ role_id: "role-query-default", role_code: "QUERY_DEFAULT", display_name: "SQL 利用者" }],
       },
       {
         id: "finance",
@@ -3139,7 +3173,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         category: "会計",
         description: "財務部門向け",
         archived: false,
-        allowed_role_ids: [],
+        allowed_roles: [],
       },
       ...Array.from({ length: 18 }, (_, index) => ({
         id: `verification-${String(index + 1).padStart(2, "0")}`,
@@ -3147,7 +3181,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
         category: "検証",
         description: "スクロール領域の表示確認用プロファイル",
         archived: false,
-        allowed_role_ids: [],
+        allowed_roles: [],
       })),
     ]))
   );
@@ -3321,7 +3355,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
         category: "共通",
         description: "標準の業務プロファイル",
         archived: false,
-        allowed_role_ids: ["role-profile-manager"],
+        allowed_roles: [{ role_id: "role-profile-manager", role_code: "PROFILE_MANAGER", display_name: "業務プロファイル管理ロール" }],
       },
       {
         id: "finance",
@@ -3329,7 +3363,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
         category: "会計",
         description: "財務部門向け",
         archived: false,
-        allowed_role_ids: ["role-profile-manager"],
+        allowed_roles: [{ role_id: "role-profile-manager", role_code: "PROFILE_MANAGER", display_name: "業務プロファイル管理ロール" }],
       },
     ]))
   );
@@ -3590,7 +3624,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
         category: "共通",
         description: "標準の業務プロファイル",
         archived: false,
-        allowed_role_ids: ["role-archived-data"],
+        allowed_roles: [{ role_id: "role-archived-data", role_code: "DATA_ADMIN", display_name: "データ管理者" }],
       },
       {
         id: "finance",
@@ -3598,7 +3632,7 @@ test("アーカイブ済みロールは権限が無効であることを明示�
         category: "会計",
         description: "財務部門向け",
         archived: false,
-        allowed_role_ids: [],
+        allowed_roles: [],
       },
     ]))
   );
@@ -3825,7 +3859,7 @@ test("アーカイブ済みカスタムロールの削除は409を保持し再�
   await page.getByRole("menuitem", { name: "削除" }).click();
   const deleteDialog = page.getByRole("alertdialog", { name: "削除" });
   await expect(deleteDialog).toContainText(
-    "「ARCHIVED_DELETE」（ロール名: 削除対象ロール）を完全に削除します。"
+    "「削除対象ロール」を完全に削除します。"
   );
   await expect(deleteDialog).toContainText("ロールに設定した権限も削除され");
   await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
@@ -7281,12 +7315,17 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
         const button = row.querySelector("button")!;
         const firstCellShadow = getComputedStyle(row.firstElementChild!).boxShadow;
         const bar = firstCellShadow.match(/(rgba?\([^)]*\)) [\d.]+px 0px 0px 0px inset/);
+        const subtitle = button.querySelector(":scope > span:nth-of-type(2)");
+        const code = button.querySelector("span.font-mono");
         return {
-          // 1 行目 = ID/コード（mono）、2 行目 = 表示名（muted）の順で描画する（#584）。
-          // 共有 RowTitleButton（#421）の題名の枠の中に ID、補足の枠に表示名を置く。
+          // ユーザーは 1 行目 = ログインユーザーID（mono）、2 行目 = 表示名（muted）の順で描画する（#584）。
+          // ロールはロール名だけを出す（コード・ID は出さない。#1682）。
+          // 共有 RowTitleButton（#421）の題名の枠の中に ID / ロール名、補足の枠に表示名を置く。
           firstLineIsCode: button.firstElementChild?.querySelector(".font-mono") != null,
-          name: contrast(rgb(getComputedStyle(button.querySelector(":scope > span:nth-of-type(2)")!).color), rowBg),
-          code: contrast(rgb(getComputedStyle(button.querySelector("span.font-mono")!).color), rowBg),
+          hasSubtitle: subtitle != null,
+          title: contrast(rgb(getComputedStyle(button.firstElementChild!).color), rowBg),
+          name: subtitle ? contrast(rgb(getComputedStyle(subtitle).color), rowBg) : 0,
+          code: code ? contrast(rgb(getComputedStyle(code).color), rowBg) : 0,
           body: contrast(rgb(getComputedStyle(row).color), rowBg),
           bar: bar ? contrast(rgb(bar[1]), rowBg) : 0,
           rowBgLuminance: luminance(rowBg),
@@ -7294,9 +7333,16 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
       });
       // ダークの選択行は暗い地のまま（明るい地に文字を載せない）。
       if (theme === "dark") expect(measured.rowBgLuminance).toBeLessThan(0.05);
-      expect(measured.firstLineIsCode, `${prefix} ${theme} ID 先`).toBe(true);
-      expect(measured.name, `${prefix} ${theme} 表示名`).toBeGreaterThanOrEqual(4.5);
-      expect(measured.code, `${prefix} ${theme} コード`).toBeGreaterThanOrEqual(4.5);
+      expect(measured.title, `${prefix} ${theme} 題名`).toBeGreaterThanOrEqual(4.5);
+      if (prefix === "security-users") {
+        expect(measured.firstLineIsCode, `${prefix} ${theme} ID 先`).toBe(true);
+        expect(measured.name, `${prefix} ${theme} 表示名`).toBeGreaterThanOrEqual(4.5);
+        expect(measured.code, `${prefix} ${theme} コード`).toBeGreaterThanOrEqual(4.5);
+      } else {
+        // ロールの行はロール名だけ（コードの mono も補足の行も出さない。#1682）。
+        expect(measured.firstLineIsCode, `${prefix} ${theme} コードを出さない`).toBe(false);
+        expect(measured.hasSubtitle, `${prefix} ${theme} 補足なし`).toBe(false);
+      }
       expect(measured.body, `${prefix} ${theme} 本文`).toBeGreaterThanOrEqual(4.5);
       // 選択を背景色の差だけで示さない（WCAG 1.4.1）。左バーは非テキストの 3:1 以上。
       expect(measured.bar, `${prefix} ${theme} 左バー`).toBeGreaterThanOrEqual(3);

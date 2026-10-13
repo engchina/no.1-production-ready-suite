@@ -682,13 +682,22 @@ class CurrentUserData(BaseModel):
         )
 
 
+class ProfileAccessRoleData(BaseModel):
+    """業務プロファイルを使えるロール。画面はロール名を出し、ID（UUID）・コードは出さない（#1682）。"""
+
+    role_id: str
+    role_code: str
+    display_name: str
+
+
 class ProfileAccessProfileData(BaseModel):
     id: str
     name: str
     category: str = ""
     description: str = ""
     archived: bool = False
-    allowed_role_ids: list[str] = Field(default_factory=list)
+    # ロール名の順。ID だけを返すと画面が UUID を出すため、名前とコードを添える（#1682）。
+    allowed_roles: list[ProfileAccessRoleData] = Field(default_factory=list)
 
 
 class PermissionData(BaseModel):

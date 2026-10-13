@@ -31,21 +31,24 @@ test("併記するときは ID を先に書く", () => {
   assert.equal(identityInlineLabel("DATA_ADMIN", "DATA_ADMIN"), "DATA_ADMIN");
 });
 
-test("ユーザー / ロール / DeepSec の名前と ID の組は ID 先の共通表示を使い、ID で並べる", () => {
+test("ユーザーは ID 先の共通表示を使い ID で並べ、ロールはロール名だけを出してロール名で並べる", () => {
   const users = sharedSource("UserManagementPage.tsx");
   const roles = sharedSource("RoleManagementPage.tsx");
   const deepsec = source("SecurityDeepSecPage.tsx");
 
   // 一覧の行の題名は共有の RowTitleButton に ID と表示名を載せた SecurityIdentityRowTitleButton（#421）。
   assert.match(users, /<SecurityIdentityRowTitleButton\s+id=\{user\.login_user_id\}\s+name=\{user\.display_name\}/u);
-  assert.match(users, /<SecurityIdentityLines id=\{role\.role_code\} name=\{role\.display_name\} \/>/u);
   assert.match(users, /compareText\(left\.login_user_id, right\.login_user_id, sort\.direction\)/u);
   assert.doesNotMatch(users, /compareText\(left\.display_name/u);
 
-  assert.match(roles, /<SecurityIdentityRowTitleButton\s+id=\{role\.role_code\}\s+name=\{role\.display_name\}/u);
-  assert.match(roles, /compareText\(left\.role_code, right\.role_code, sort\.direction\)/u);
-  assert.doesNotMatch(roles, /compareText\(left\.display_name/u);
+  // ロールはロール名（表示名。空ならコード）だけを出し、ID・コードを出さない（#1682）。
+  assert.match(users, /\{roleDisplayName\(role\)\}/u);
+  assert.doesNotMatch(users, /<SecurityIdentityLines id=\{role\.role_code\}/u);
+  assert.match(roles, /<RoleNameRowTitleButton\s+securityRole=\{role\}/u);
+  assert.match(roles, /compareText\(roleDisplayName\(left\), roleDisplayName\(right\), sort\.direction\)/u);
+  assert.doesNotMatch(roles, /id=\{role\.role_code\}/u);
 
-  assert.match(deepsec, /<SecurityIdentityLines id=\{role\.role_code\} name=\{role\.display_name\}/u);
-  assert.match(deepsec, /left\.role_code\.localeCompare\(right\.role_code, "ja"\)/u);
+  assert.match(deepsec, /\{roleDisplayName\(role\)\}/u);
+  assert.match(deepsec, /\.sort\(compareRoleDisplayNames\)/u);
+  assert.doesNotMatch(deepsec, /id=\{role\.role_code\}/u);
 });
