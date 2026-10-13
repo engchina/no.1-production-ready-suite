@@ -1120,8 +1120,8 @@ export type ProfileSyncJobPhase =
   | "failed"
   | "cancelled";
 
-/** 業務プロファイルの保存（Oracle 反映）の事前条件（`GET /api/nl2sql/oracle-sync-readiness`。#1683）。 */
-export interface ProfileSyncReadinessData {
+/** Select AI の Credential の事前条件（`GET /api/nl2sql/select-ai/credential-readiness`。#1683 / #1688）。 */
+export interface SelectAiCredentialReadinessData {
   /** Oracle runtime で Credential 名が設定されているときだけ true。 */
   credential_required: boolean;
   credential_name: string;

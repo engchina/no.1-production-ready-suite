@@ -344,6 +344,7 @@ from .reverse_prompts import (
     stage_prompt,
 )
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
+from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
 from .sql_lexing import prepare_oracle_query
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
@@ -8082,6 +8083,10 @@ class Nl2SqlService:
             job_id = str(request.client_job_id)
         else:
             job_id = str(uuid.uuid4())
+        if request.engine in SELECT_AI_CREDENTIAL_ENGINES:
+            # Select AI / Select AI Agent の生成は Select AI の Credential が前提。新しいジョブを
+            # 作る前に確かめ、無ければ止める（画面・Agent の MCP とも同じ。#1688）。
+            assert_select_ai_credential_ready(self._oracle_adapter)
         conversation_id = ""
         if request.is_chat_turn:
             if not actor_user_uuid:

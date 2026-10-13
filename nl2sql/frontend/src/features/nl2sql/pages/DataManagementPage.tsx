@@ -33,6 +33,8 @@ import {
 } from "@production-ready/ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
+import { SelectAiCredentialPrecondition } from "../components/SelectAiCredentialPrecondition";
+import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 import { SyntheticReview } from "../SyntheticReview";
 
 import { PageNotice } from "@/components/page-notice";
@@ -148,6 +150,9 @@ function nextObjectPickerSort(
   }
   return { key, direction: "asc" };
 }
+
+/** 合成データの「生成」の aria-describedby が指す、Select AI の Credential の事前条件（#1688）。 */
+const SYNTHETIC_CREDENTIAL_PRECONDITION_ID = "synthetic-credential-precondition";
 
 export function DataManagementPage() {
   const queryClient = useQueryClient();
@@ -386,8 +391,27 @@ export function DataManagementPage() {
   const syntheticExpectedConfirmation =
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
   const syntheticDataConfirmed = syntheticConfirmation.trim() === syntheticExpectedConfirmation;
+  // 合成データは業務プロファイルの DBMS_CLOUD_AI Profile で作るので、Select AI の Credential が前提
+  // （#1688）。無いと分かったら生成の操作の直前に事前条件を示し、生成を止める。
+  const selectAiCredential = useSelectAiCredentialReadiness();
+  const syntheticCredentialPrecondition = selectAiCredential.missing ? (
+    <SelectAiCredentialPrecondition
+      id={SYNTHETIC_CREDENTIAL_PRECONDITION_ID}
+      testId="synthetic-credential-precondition"
+      operation={t("selectAiCredential.precondition.operation.synthetic")}
+          action={t("selectAiCredential.precondition.action.syntheticStart")}
+          credentialName={selectAiCredential.credentialName}
+      canOpenSettings={selectAiCredential.canOpenSettings}
+      rechecking={selectAiCredential.rechecking}
+      onRecheck={() => void selectAiCredential.recheck()}
+    />
+  ) : null;
   const canGenerateSyntheticData = Boolean(
-    syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed && !syntheticLoading
+    syntheticProfileName.trim() &&
+      syntheticSelectedTables.length > 0 &&
+      syntheticDataConfirmed &&
+      !syntheticLoading &&
+      !selectAiCredential.missing
   );
   // 生成条件のリセットは入力（と生成開始の失敗表示）だけを戻す。表示中の結果は「表示件数・結果をリセット」、
   // サーバーに残る生成（生成状況・確認・適用）は「確認用データを破棄」で扱う。
@@ -908,6 +932,7 @@ export function DataManagementPage() {
     } catch (err) {
       setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData", "syntheticRun.submitUnknown"));
       setSyntheticErrorOperation("generate");
+      selectAiCredential.refreshAfterError(err);
     } finally {
       setSyntheticLoading("");
     }
@@ -1328,6 +1353,7 @@ export function DataManagementPage() {
               syntheticConfirmation={syntheticConfirmation}
               syntheticDataConfirmed={syntheticDataConfirmed}
               canGenerateSyntheticData={canGenerateSyntheticData}
+              syntheticCredentialPrecondition={syntheticCredentialPrecondition}
               canClearSyntheticGeneration={canClearSyntheticGeneration}
               syntheticRows={syntheticRows}
               syntheticSampleRows={syntheticSampleRows}
@@ -2151,6 +2177,7 @@ function SyntheticWorkspace({
   syntheticConfirmation,
   syntheticDataConfirmed,
   canGenerateSyntheticData,
+  syntheticCredentialPrecondition,
   canClearSyntheticGeneration,
   syntheticRows,
   syntheticSampleRows,
@@ -2201,6 +2228,8 @@ function SyntheticWorkspace({
   syntheticConfirmation: string;
   syntheticDataConfirmed: boolean;
   canGenerateSyntheticData: boolean;
+  /** Select AI の Credential が無いときの事前条件の案内（#1688）。無ければ null。 */
+  syntheticCredentialPrecondition: ReactNode;
   canClearSyntheticGeneration: boolean;
   syntheticRows: number;
   syntheticSampleRows: number;
@@ -2454,6 +2483,7 @@ function SyntheticWorkspace({
 
         <fieldset className="grid gap-3 rounded-md border border-border bg-surface p-3">
           <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.executeTitle")}</legend>
+          {syntheticCredentialPrecondition}
           <ExecutionConfirmationField
             value={syntheticConfirmation}
             onChange={onSyntheticConfirmationChange}
@@ -2472,6 +2502,9 @@ function SyntheticWorkspace({
                   className="w-full sm:w-auto"
                   loading={submitting}
                   disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
+                  aria-describedby={
+                    syntheticCredentialPrecondition ? SYNTHETIC_CREDENTIAL_PRECONDITION_ID : undefined
+                  }
                   onClick={onGenerateSyntheticData} icon={Database}>
                   <span>{t("dataTools.syntheticData.generate")}</span>
                 </Button>

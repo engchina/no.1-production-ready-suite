@@ -2288,8 +2288,12 @@ class ProfileSyncJobData(BaseModel):
     finished_at: str = ""
 
 
-class ProfileSyncReadinessData(BaseModel):
-    """業務 Profile の Oracle 反映（保存）を始める前の事前条件（#1683）。秘密は含めない。"""
+class SelectAiCredentialReadinessData(BaseModel):
+    """Select AI の Credential の事前条件（#1683 / #1688）。秘密は含めない。
+
+    業務 Profile の Oracle 反映・Select AI / Select AI Agent での生成・合成データ・SQL 生成評価の
+    前に、画面が Credential の有無を知るのに使う。
+    """
 
     # Oracle runtime で Credential 名が設定されているときだけ、Credential が要る。
     credential_required: bool = False

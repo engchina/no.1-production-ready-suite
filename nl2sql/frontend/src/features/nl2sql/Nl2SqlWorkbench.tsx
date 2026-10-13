@@ -70,6 +70,9 @@ import {
 import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
 import { submitNl2SqlJob } from "./jobSubmission";
+import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
+import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
+import { useSelectAiCredentialReadiness } from "./useSelectAiCredentialReadiness";
 import { prefillFromSearchParams } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
 import { profileDisplayLabel } from "./profileDisplay";
@@ -113,6 +116,9 @@ function profileRecommendationSignature(question: string, profileId: string) {
 function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistoryItem[] {
   return items;
 }
+
+/** 「SQL を生成して実行」の aria-describedby が指す、Select AI の Credential の事前条件（#1688）。 */
+const QUERY_CREDENTIAL_PRECONDITION_ID = "nl2sql-credential-precondition";
 
 function engineUsesSimilarHistoryFewShot(engine: Nl2SqlEngine): boolean {
   return engine !== "select_ai" && engine !== "select_ai_agent";
@@ -263,6 +269,11 @@ function ExecutableNl2SqlWorkbench() {
   const selectedProfile = selectedProfileQuery.data?.profile ?? null;
   // 生成の方式は業務プロファイルごとに残し、選んでいなければ業務プロファイルの既定の生成方式にする（#1524）。
   const [engine, setEngine] = useProfileEngine(profileId, selectedProfile?.default_engine);
+  // Select AI / Select AI Agent の生成は Select AI の Credential が前提（#1688）。無いと分かったら
+  // 「SQL を生成して実行」の直前に事前条件を示し、実行を止める（OCI Enterprise AI の生成は止めない）。
+  const selectAiCredential = useSelectAiCredentialReadiness();
+  const selectAiCredentialBlocked =
+    engineUsesSelectAiCredential(engine) && selectAiCredential.missing;
   const profileOptions = useMemo(() => {
     if (!selectedProfile || profiles.some((profile) => profile.id === selectedProfile.id)) {
       return profiles;
@@ -963,7 +974,7 @@ function ExecutableNl2SqlWorkbench() {
 
   const submit = async () => {
     const trimmed = question.trim();
-    if (!trimmed || active || !profileSelectionReady) return;
+    if (!trimmed || active || !profileSelectionReady || selectAiCredentialBlocked) return;
     beginActionFeedback();
     clearGeneratedOutput();
     setSubmitting(true);
@@ -986,6 +997,7 @@ function ExecutableNl2SqlWorkbench() {
       trackJob(data, startedAt);
     } catch (err) {
       showActionError(err, t("nl2sql.error.submitFailed"));
+      selectAiCredential.refreshAfterError(err);
       clearTrackedJob();
     } finally {
       setSubmitting(false);
@@ -1647,6 +1659,19 @@ function ExecutableNl2SqlWorkbench() {
                     </section>
                   )}
 
+                  {/* Select AI の Credential の事前条件（#1688）。実行の操作の直前に全幅で出す。 */}
+                  {selectAiCredentialBlocked ? (
+                    <SelectAiCredentialPrecondition
+                      id={QUERY_CREDENTIAL_PRECONDITION_ID}
+                      testId="nl2sql-credential-precondition"
+                      operation={t("selectAiCredential.precondition.operation.generate")}
+          action={t("nl2sql.action.run")}
+          credentialName={selectAiCredential.credentialName}
+                      canOpenSettings={selectAiCredential.canOpenSettings}
+                      rechecking={selectAiCredential.rechecking}
+                      onRecheck={() => void selectAiCredential.recheck()}
+                    />
+                  ) : null}
                   {/* 主アクションバー(button spec §2/§4): size lg、primary → secondary、
                       border-t で末尾に区切る。 */}
                   <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -1657,7 +1682,10 @@ function ExecutableNl2SqlWorkbench() {
                       // 送信中だけ loading にする。job の間は disabled にし、スピナーは下の進行状況
                       // （OperationStatusStrip）が 1 つ出す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
                       loading={submitting}
-                      disabled={!question.trim() || active || !profileSelectionReady}
+                      disabled={!question.trim() || active || !profileSelectionReady || selectAiCredentialBlocked}
+                      aria-describedby={
+                        selectAiCredentialBlocked ? QUERY_CREDENTIAL_PRECONDITION_ID : undefined
+                      }
                       onClick={() => void submit()} icon={Play}>
                       <span>{t("nl2sql.action.run")}</span>
                     </Button>

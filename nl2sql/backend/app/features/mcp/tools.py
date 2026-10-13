@@ -68,6 +68,7 @@ from app.features.nl2sql.ontology_router import (
     RequirementApplyRequest,
 )
 from app.features.nl2sql.ontology_service import OntologyNotFoundError, OntologyServiceError
+from app.features.nl2sql.oracle_adapter import SelectAiCredentialMissingError
 from app.features.nl2sql.profile_access import (
     allowed_profile_ids_for_request,
     assert_profile_access,
@@ -75,6 +76,7 @@ from app.features.nl2sql.profile_access import (
     profile_access_denied,
 )
 from app.features.nl2sql.router import _with_requirement
+from app.features.nl2sql.select_ai_readiness import select_ai_credential_missing_message
 from app.features.nl2sql.service import (
     JOB_FAILED_ERROR_CODE,
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
@@ -431,6 +433,9 @@ def _translate_domain_errors[A, R](
             raise McpToolError(exc.reason_code, exc.public_message) from exc
         except SchemaCatalogEmptyError as exc:
             raise McpToolError(SCHEMA_CATALOG_EMPTY_ERROR_CODE, str(exc)) from exc
+        except SelectAiCredentialMissingError as exc:
+            # Select AI / Select AI Agent の生成は Credential が前提（画面の 409 と同じ。#1688）。
+            raise McpToolError(exc.code, select_ai_credential_missing_message(exc)) from exc
         except OntologyServiceError as exc:
             # AI要件確認の業務エラー（Schema が読めない・LLM が使えない・session の終了など）。
             message = exc.message_ja
