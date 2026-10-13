@@ -321,6 +321,15 @@ describe("SearchableSelectField", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("required はボタンに aria-required を付けず（role=button は持てない）、ラベルの「必須」のタグを読み上げる（#1595）", () => {
+    const button = mountSingle({ initial: "kb-1", required: true });
+    expect(button.hasAttribute("aria-required")).toBe(false);
+    const [labelId] = button.getAttribute("aria-labelledby")!.split(" ");
+    const label = document.getElementById(labelId)!;
+    expect(label.textContent).toBe("ナレッジベース必須");
+    expect(label.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
   it("leadingIcon はボタンの先頭に読み上げない 16px のアイコンを出し、ボタンの名前を変えない（#635）", () => {
     const button = mountSingle({ leadingIcon: Search, placeholder: "検索・回答プロファイルを選択…" });
     const icon = button.querySelector("svg");

@@ -121,6 +121,11 @@ _DEEPSEC_ENABLED_KEY = "NL2SQL_ORACLE_DEEPSEC_ENABLED"
 _DEEPSEC_DATA_USER_KEY = "NL2SQL_ORACLE_DEEPSEC_DATA_USER"
 _DEEPSEC_DATA_USER_PASSWORD_KEY = "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD"  # nosec B105
 _ORACLE_PASSWORD_REUSE_RE = re.compile(r"\bORA-28007\b", re.IGNORECASE)
+# ORA-52516: END USER or DATA ROLE <name> does not exist.（名前は英語の文のときだけ取れる。#1676）
+_ORACLE_MISSING_PRINCIPAL_RE = re.compile(
+    r"\bORA-52516\b(?::\s*END USER or DATA ROLE\s+(?P<name>\"?[^\s\"]+\"?))?",
+    re.IGNORECASE,
+)
 _DEEPSEC_CONFIG_KEYS = frozenset(
     {
         _DEEPSEC_ENABLED_KEY,
@@ -332,13 +337,35 @@ def _statement_failure_message(lead: str, error: Mapping[str, object]) -> str:
     """Oracle の文の失敗を、利用者向けの日本語の 1 文目と Oracle の応答に分けて返す（#1022）。
 
     以前は Oracle の文（ORA-...）だけ、空なら英語の "SQL execution failed" を返していた。
+    次に何をすればよいかが分かる Oracle の error は、案内の文を lead の後ろに足す（#1676）。
     """
 
     detail = str(error.get("error_message") or "").strip()
     index = error.get("index")
     position = f"{index} 番目の文で失敗しました。" if isinstance(index, int) else ""
     oracle_detail = f"Oracle の応答: {detail}" if detail else "Oracle の応答はありません。"
-    return f"{lead}（{position}{oracle_detail}）"
+    hint = _oracle_error_hint(detail)
+    return f"{lead}{hint}（{position}{oracle_detail}）"
+
+
+def _oracle_error_hint(detail: str) -> str:
+    """Oracle の error に対応する、利用者向けの次の操作の案内（無ければ空）。"""
+
+    match = _ORACLE_MISSING_PRINCIPAL_RE.search(detail)
+    if match is None:
+        return ""
+    name = (match.group("name") or "").strip('"').upper()
+    if name == DEEPSEC_DATA_ROLE:
+        return (
+            f"DATA ROLE {DEEPSEC_DATA_ROLE} がまだ Oracle にありません。"
+            "「基盤構成」で V001.1 を適用してから、もう一度実行してください。"
+        )
+    return (
+        "DATA USER（END USER）がまだ Oracle にありません。「DATA USER 認証」で "
+        "DATA USER パスワードを保存して「Oracle へ同期」を実行するか、「基盤構成」で "
+        "V001.1 をもう一度適用してください"
+        "（V001.1 は保存済みのパスワードで DATA USER を作ります）。"
+    )
 
 
 def _sql_literal(value: str) -> str:
@@ -884,7 +911,10 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
         step_no=1,
         key="principals_and_roles",
         title="共有 DATA USER とロール",
-        description="DATA USER に関連付ける最小 DB role と local DATA ROLE を準備します。",
+        description=(
+            "保存済みの DATA USER パスワードで DATA USER（END USER）を作り"
+            "（既にあれば作り直さない）、関連付ける最小 DB role と local DATA ROLE を準備します。"
+        ),
         statements=(
             f"CREATE ROLE {role}",
             f"GRANT CREATE SESSION TO {role}",
@@ -894,6 +924,11 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
             ),
             f"CREATE DATA ROLE IF NOT EXISTS {data_role}",
             f"GRANT {role} TO {data_role}",
+            # 新しい配備では END USER がまだ無く、DATA ROLE の付与が ORA-52516 になる（#1676）。
+            # 保存済みのパスワードで先に作る。既にあれば何もしない（パスワードの同期は
+            # 「DATA USER 認証」の「Oracle へ同期」のまま）。
+            # 計画とチェックサムは placeholder のまま。
+            _data_user_create_statement(settings),
             f"GRANT DATA ROLE {data_role} TO {data_user}",
         ),
         ignored_error_codes=frozenset({"ORA-01921"}),
@@ -2125,6 +2160,16 @@ class DeepSecService:
             )
         if not self.settings.oracle_deepsec_enabled:
             raise SecurityApiError(409, "NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+        if not self.settings.oracle_deepsec_data_user_password:
+            # V001.1 は保存済みのパスワードで DATA USER（END USER）を作る（#1676）。未保存のまま
+            # 進めると validate_deepsec_configuration の OracleAdapterError が 500 になるので、
+            # 先に止める。
+            raise SecurityApiError(
+                409,
+                "DATA USER パスワードが保存されていません。Deep Data Security 画面の"
+                "「DATA USER 認証」で DATA USER パスワードを保存してから、"
+                "基盤構成を適用してください。",
+            )
         self.pools.validate_deepsec_configuration()
         plan = {step.step_no: step for step in build_v001_plan(self.settings)}
         step = plan.get(step_no)
@@ -2161,12 +2206,16 @@ class DeepSecService:
                 )
             errors = [item for item in results if item["status"] == "error"]
             if errors:
+                # V001.1 は DATA USER のパスワードを含む文を実行するので、
+                # Oracle の応答から念のため除く。
                 raise SecurityApiError(
                     409,
-                    _statement_failure_message(
-                        f"DeepSec の手順 {step.step_no}「{step.title}」の適用に失敗しました。"
-                        "原因を解消してから、この手順をもう一度適用してください。",
-                        errors[0],
+                    self._redact_secret(
+                        _statement_failure_message(
+                            f"DeepSec の手順 {step.step_no}「{step.title}」の適用に失敗しました。"
+                            "原因を解消してから、この手順をもう一度適用してください。",
+                            errors[0],
+                        )
                     ),
                 )
             self.security.store.set_deepsec_state(
@@ -2704,11 +2753,14 @@ class DeepSecService:
     def _preview_sql(statement: str) -> str:
         return re.sub(r"\s+$", "", statement.strip())
 
-    def _safe_error(self, exc: Exception) -> str:
-        text = str(exc).replace("\n", " ")
+    def _redact_secret(self, text: str) -> str:
         secret = self.settings.oracle_deepsec_data_user_password
         if secret:
             text = text.replace(secret, "[REDACTED]")
+        return text
+
+    def _safe_error(self, exc: Exception) -> str:
+        text = self._redact_secret(str(exc).replace("\n", " "))
         # DATA USER password は exception に出ない前提だが、長い driver detail は切り捨てる。
         return text[:1000]
 

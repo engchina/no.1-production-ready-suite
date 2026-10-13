@@ -62,8 +62,11 @@ permissions:
 # 全件（all）で、mobile の退行は e2e-nightly.yml が拾う（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
 # E2E_RETRIES: PR の e2e の retries は 1、main の push は 2（nightly は env を付けないので 2）。PR で flaky のテストを
 # 3 回実行しないため。1 回の retry で通らないテストは PR を赤にして直す（#1593。platform/scripts/e2e-impact/ci-run.ts）。
+# E2E_NIGHTLY_ONLY: nightly だけで実行する spec（*.nightly.spec.ts。主要な画面の axe の確認）を、PR と main の push の
+# e2e で実行しない（全件の shard でも。e2e-nightly.yml は付けない。#1595。platform/scripts/e2e-impact/nightly-only.ts）。
 env:
   E2E_MOBILE_SCOPE: ${{ github.event_name == 'pull_request' && 'responsive' || 'all' }}
+  E2E_NIGHTLY_ONLY: skip
   E2E_RETRIES: ${{ github.event_name == 'pull_request' && '1' || '2' }}
   RAG_E2E_SMOKE: >-
     e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
@@ -527,7 +530,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -597,7 +600,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -672,7 +675,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -752,7 +755,7 @@ jobs:
 
       # lock（#387）から入れる。PyPI の索引（/simple/）が落ちても、lock の中のファイルの URL から取れる。
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -786,7 +789,7 @@ jobs:
 
       # サービスごとの venv の依存（下の Unit tests）を、ほかの job と同じく main の push だけが保存する。
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -889,7 +892,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -953,7 +956,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -1217,7 +1220,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -1297,7 +1300,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -1367,6 +1370,10 @@ jobs:
       # e2e の spec・fixture・playwright.config.ts の型検査（tsconfig.e2e.json。Playwright は実行時に型を検査しない。#1591）。
       - name: Type check (e2e)
         run: npm run typecheck:e2e
+
+      # src/lib の純粋な関数の単体テスト（vitest。RAG / Frontend と同じ。#1595）。画面の振る舞いは e2e が確かめる。
+      - name: Unit test
+        run: npm test
 
       # 型検査は build の `tsc --noEmit` が兼ねる。
       - name: Build
@@ -1763,7 +1770,7 @@ jobs:
           "${dir}/actionlint" -color
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: false
 

@@ -60,6 +60,10 @@ export interface SearchableSelectFieldProps {
    * ボタンの `aria-describedby` に渡す（SelectField の `describedBy` と同じ）。
    */
   describedBy?: string;
+  /**
+   * 必須の欄。ラベルの後ろに「必須」のタグを出す。ボタン（role=button）は aria-required を持てないので、
+   * タグをラベルの一部として読み上げる（FieldLabel の `requiredAnnouncedByControl={false}` と同じ。#1595）。
+   */
   required?: boolean;
   requiredLabel?: string;
   /** 何も選んでいないときのボタンの文言。 */
@@ -383,7 +387,8 @@ export function SearchableSelectField({
     <div ref={rootRef} className={cn("space-y-1.5", fieldWidthClass(width), className)}>
       <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
-        {required && requiredLabel ? <RequiredBadge label={requiredLabel} aria-hidden /> : null}
+        {/* ボタンは aria-required を持てない（axe の aria-allowed-attr）ので、タグを読み上げ対象に残す（#1595）。 */}
+        {required && requiredLabel ? <RequiredBadge label={requiredLabel} /> : null}
       </label>
       <button
         ref={buttonRef}
@@ -395,7 +400,6 @@ export function SearchableSelectField({
         aria-labelledby={`${labelId} ${valueId}`}
         aria-describedby={describedBy}
         aria-invalid={Boolean(error) || undefined}
-        aria-required={required || undefined}
         disabled={disabled}
         onClick={() => (open ? close(false) : openPopover())}
         onKeyDown={handleButtonKeyDown}

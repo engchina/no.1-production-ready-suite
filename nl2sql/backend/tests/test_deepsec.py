@@ -302,8 +302,11 @@ def test_v001_registry_is_stable_and_preview_never_contains_secret() -> None:
     second = build_v001_plan(settings)
     assert [step.checksum for step in first] == [step.checksum for step in second]
     preview = "\n".join(statement for step in first for statement in step.statements)
-    assert PASSWORD_PLACEHOLDER not in preview
+    # V001.1 は DATA USER を作る文を含むが、計画とチェックサムは placeholder のまま（#1676）。
+    assert PASSWORD_PLACEHOLDER in preview
     assert settings.oracle_deepsec_data_user_password not in preview
+    other = build_v001_plan(_settings(data_user_password="AnotherSecret!456"))
+    assert [step.checksum for step in first] == [step.checksum for step in other]
 
 
 def test_v001_plan_contains_foundation_only_without_probe_flow() -> None:
@@ -317,11 +320,20 @@ def test_v001_plan_contains_foundation_only_without_probe_flow() -> None:
     assert "GRANT SELECT ON APP_OWNER.PLATFORM_USER_ROLES TO NL2SQL_APP_DB_ROLE" in preview
     assert "GRANT SELECT ON APP_OWNER.PLATFORM_ROLES TO NL2SQL_APP_DB_ROLE" in preview
     assert "GRANT SELECT ON APP_OWNER.NL2SQL_APP_DATA_ENTITLEMENTS TO NL2SQL_APP_DB_ROLE" in preview
-    assert "CREATE END USER" not in preview
     assert "ALTER END USER" not in preview
-    assert PASSWORD_PLACEHOLDER not in preview
     assert "GRANT NL2SQL_APP_DB_ROLE TO NL2SQL_APP_DATA_ROLE" in preview
     assert "GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER" in preview
+    # 新しい配備では END USER が無いので、DATA ROLE を付ける前に作る（#1676）。
+    role_statements = list(plan[0].statements)
+    create_end_user = (
+        "CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER "
+        f"IDENTIFIED BY {PASSWORD_PLACEHOLDER} SCHEMA APP_OWNER"
+    )
+    assert create_end_user in role_statements
+    assert role_statements.index(create_end_user) < role_statements.index(
+        "GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER"
+    )
+    assert sum("END USER" in statement for statement in plan[1].statements) == 0
 
 
 def test_target_objects_read_live_metadata_and_filter_owner_search() -> None:
@@ -1319,6 +1331,166 @@ def test_apply_rejects_unknown_checksum_before_oracle_execution() -> None:
     service = DeepSecService(settings, security, OraclePoolManager(settings))
     with pytest.raises(SecurityApiError, match="チェックサム"):
         service.apply_step(1, "0" * 64, DEEPSEC_APPLY_CONFIRMATION, _principal())
+
+
+def test_apply_role_step_creates_missing_end_user_before_data_role_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """END USER が無い新しい配備から V001.1 を適用できる（#1676）。"""
+
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role_step = build_v001_plan(settings)[0]
+    executed: list[list[str]] = []
+    executor_kwargs: list[dict[str, object]] = []
+
+    def fake_execute(_conn: object, statements: list[str], **kwargs: object) -> list[object]:
+        executed.append(list(statements))
+        executor_kwargs.append(kwargs)
+        return [
+            {"status": "success", "index": index}
+            for index, _statement in enumerate(statements, start=1)
+        ]
+
+    monkeypatch.setattr("app.security.deepsec.close_oracle_pools", lambda: None)
+    monkeypatch.setattr("app.security.deepsec.oracle_statement_executor.execute", fake_execute)
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    result = service.apply_step(
+        role_step.step_no,
+        role_step.checksum,
+        DEEPSEC_APPLY_CONFIRMATION,
+        _principal(),
+    )
+
+    assert result["status"] == "APPLIED"
+    assert PASSWORD_PLACEHOLDER not in repr(result)
+    assert settings.oracle_deepsec_data_user_password not in repr(result)
+    statements = executed[0]
+    create_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER")
+    )
+    grant_index = statements.index("GRANT DATA ROLE NL2SQL_APP_DATA_ROLE TO DEEPSEC_DATA_USER")
+    assert create_index < grant_index
+    # 実行する文だけ placeholder を保存済みのパスワードに置き換える。
+    assert statements[create_index] == (
+        'CREATE END USER IF NOT EXISTS DEEPSEC_DATA_USER IDENTIFIED BY "DeepSecret!123" '
+        "SCHEMA APP_OWNER"
+    )
+    assert not any(statement.startswith("ALTER END USER") for statement in statements)
+    assert executor_kwargs[0]["include_sql"] is False
+    plan = service.plan()
+    step_payload = plan["steps"][0]  # type: ignore[index]
+    assert step_payload["status"] == "APPLIED"
+    plan_sql = "\n".join(step_payload["sql"])
+    assert PASSWORD_PLACEHOLDER in plan_sql
+    assert settings.oracle_deepsec_data_user_password not in repr(plan)
+
+
+def test_apply_without_saved_data_user_password_returns_409_before_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """パスワード未保存の適用は 500 でなく、保存を促す 409 で止める（#1676）。"""
+
+    settings = _settings(data_user_password="")
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    service = DeepSecService(settings, security, OraclePoolManager(settings))
+    role_step = build_v001_plan(settings)[0]
+
+    def fail_if_executed(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        raise AssertionError("Oracle executor must not run without a saved DATA USER password")
+
+    monkeypatch.setattr("app.security.deepsec.oracle_statement_executor.execute", fail_if_executed)
+
+    with pytest.raises(SecurityApiError) as exc_info:
+        service.apply_step(
+            role_step.step_no,
+            role_step.checksum,
+            DEEPSEC_APPLY_CONFIRMATION,
+            _principal(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "DATA USER パスワードが保存されていません" in str(exc_info.value.public_message)
+    assert "「DATA USER 認証」で DATA USER パスワードを保存してから" in str(
+        exc_info.value.public_message
+    )
+    assert store.get_deepsec_states() == {}
+    plan = service.plan()
+    assert plan["has_data_user_password"] is False
+
+
+@pytest.mark.parametrize(
+    ("oracle_error", "expected", "unexpected"),
+    [
+        (
+            "ORA-52516: END USER or DATA ROLE DEEPSEC_DATA_USER does not exist.",
+            "DATA USER（END USER）がまだ Oracle にありません。",
+            "DATA ROLE NL2SQL_APP_DATA_ROLE がまだ",
+        ),
+        (
+            "ORA-52516: END USER or DATA ROLE NL2SQL_APP_DATA_ROLE does not exist.",
+            "DATA ROLE NL2SQL_APP_DATA_ROLE がまだ Oracle にありません。",
+            "DATA USER（END USER）がまだ",
+        ),
+        (
+            "ORA-52516: 別の言語の応答",
+            "DATA USER（END USER）がまだ Oracle にありません。",
+            "DATA ROLE NL2SQL_APP_DATA_ROLE がまだ",
+        ),
+    ],
+    ids=["end-user", "data-role", "localized"],
+)
+def test_apply_maps_ora_52516_to_next_action_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    oracle_error: str,
+    expected: str,
+    unexpected: str,
+) -> None:
+    settings = _settings()
+    store = InMemorySecurityStore()
+    security = SecurityService(store, settings)
+    security.bootstrap()
+    role_step = build_v001_plan(settings)[0]
+    monkeypatch.setattr(
+        "app.security.deepsec.oracle_statement_executor.execute",
+        lambda _conn, _statements, **_kwargs: [
+            {"status": "success", "index": 1},
+            # Oracle の応答にパスワードが混ざっても利用者には出さない。
+            {"status": "error", "index": 9, "error_message": f"{oracle_error} DeepSecret!123"},
+        ],
+    )
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: _FakePool(_FakeConnection([])))
+    service = DeepSecService(settings, security, manager)
+
+    with pytest.raises(SecurityApiError) as exc_info:
+        service.apply_step(
+            role_step.step_no,
+            role_step.checksum,
+            DEEPSEC_APPLY_CONFIRMATION,
+            _principal(),
+        )
+
+    detail = str(exc_info.value.public_message)
+    assert exc_info.value.status_code == 409
+    assert expected in detail
+    assert unexpected not in detail
+    assert "9 番目の文で失敗しました。" in detail
+    assert "ORA-52516" in detail
+    assert "DeepSecret!123" not in detail
+    plan = service.plan()
+    step_payload = plan["steps"][0]  # type: ignore[index]
+    assert step_payload["status"] == "FAILED"
+    assert "DeepSecret!123" not in str(step_payload["error_message"])
 
 
 @pytest.mark.parametrize("confirmation", ["", "ADMIN", "admin_execute"])

@@ -436,7 +436,7 @@ const nl2sqlJa = {
   "security.deepsec.tabs.dataUserHint": "共有 DATA USER の固定名と認証情報を管理します。",
   "security.deepsec.tabs.foundationHint": "共有 DATA USER とアプリケーションコンテキストを、定義済みの順序で準備します。",
   "security.deepsec.tabs.dataPermissionsHint": "実 table/view に対するロール別 Data Grant を管理・適用・検証します。",
-  "security.deepsec.prerequisite.password": "基盤構成を始める前に、DATA USER パスワードを保存してください。",
+  "security.deepsec.prerequisite.password": "基盤構成を始める前に、DATA USER パスワードを保存してください。V001.1 はこのパスワードで DATA USER（END USER）を作ります（既にあれば作り直しません）。",
   "security.deepsec.prerequisite.foundation": "Data Grant を適用する前に、「基盤構成」で V001.1 と V001.2 を完了してください。",
   "security.deepsec.actions.openDataUser": "DATA USER 認証へ",
   "security.deepsec.actions.openFoundation": "基盤構成へ",

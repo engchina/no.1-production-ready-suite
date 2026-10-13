@@ -1,0 +1,146 @@
+import AxeBuilder from "@axe-core/playwright";
+
+import { expect, test, type Page, type TestInfo } from "./fixtures/test";
+import { apiEnvelope, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+
+/**
+ * 主要な画面の axe（a11y）の確認（#1595）。nightly（e2e-nightly.yml）だけで実行し、PR の e2e では実行しない
+ * （名前の `*.nightly.spec.ts`。platform/scripts/e2e-impact/nightly-only.ts）。ローカルは `npx playwright test e2e/a11y.nightly.spec.ts`。
+ *
+ * - 対象は WCAG 2.x の A / AA（2.0 と 2.1）。失敗にするのは impact が serious / critical の違反だけ。
+ * - 違反は rule id・impact・件数・対象（selector）を失敗の文と添付（axe-violations.json）に出す。
+ * - 既知の例外は KNOWN_EXCEPTIONS に rule id・画面・理由を書く（直すのに設計の判断が要るもの。別 Issue で直す）。
+ */
+
+const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
+const BLOCKING_IMPACTS = new Set(["serious", "critical"]);
+
+/** 既知の例外（画面の path → 除く rule id）。空なら除かない。 */
+const KNOWN_EXCEPTIONS: Record<string, readonly string[]> = {};
+
+const NOW = "2026-09-28T00:00:00Z";
+
+function listPage(items: unknown[]) {
+  return apiEnvelope({ items, total: items.length, limit: 50, offset: 0, has_next: false });
+}
+
+/** 主要な画面の一覧を数件ずつ返す（読み込んだ後の画面を確かめる）。 */
+async function mockMainScreens(page: Page) {
+  const profile = {
+    id: "bv-1",
+    name: "経理アシスタント",
+    description: "経理の規程を答える",
+    status: "ACTIVE",
+    knowledge_base_count: 1,
+    created_at: NOW,
+    updated_at: NOW,
+    archived_at: null,
+  };
+  const documents = Array.from({ length: 3 }, (_, index) => ({
+    id: `doc-${index + 1}`,
+    file_name: `doc-${index + 1}.txt`,
+    status: "INDEXED",
+    category_name: null,
+    content_type: "text/plain",
+    file_size_bytes: 128,
+    content_sha256: "a".repeat(64),
+    duplicate_of_document_id: null,
+    uploaded_at: NOW,
+    indexed_at: NOW,
+    knowledge_bases: [],
+    source_profile: null,
+  }));
+  const conversations = Array.from({ length: 3 }, (_, index) => ({
+    id: `conv-${index + 1}`,
+    search_answer_profile_id: "bv-1",
+    title: `会話 ${index + 1}`,
+    status: "ACTIVE",
+    message_count: 2,
+    created_at: NOW,
+    updated_at: NOW,
+  }));
+  await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: listPage([]) }));
+  await page.route("**/api/documents**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "GET" && url.pathname === "/api/documents") {
+      await route.fulfill({ json: listPage(documents) });
+      return;
+    }
+    await route.fulfill({ json: apiEnvelope([]) });
+  });
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "GET" && url.pathname === "/api/search-answer-profiles") {
+      await route.fulfill({ json: listPage([profile]) });
+      return;
+    }
+    await route.fulfill({ status: 404, json: { detail: "not found" } });
+  });
+  await page.route("**/api/chat/models", (route) => route.fulfill({ json: apiEnvelope([]) }));
+  await page.route("**/api/chat/conversations**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "GET" && url.pathname === "/api/chat/conversations") {
+      await route.fulfill({ json: listPage(conversations) });
+      return;
+    }
+    await route.fulfill({ status: 404, json: { detail: "not found" } });
+  });
+}
+
+const SCREENS = [
+  { name: "チャット", path: "/chat?search_answer_profile_id=bv-1", heading: "チャット" },
+  { name: "文書インデックス", path: "/file-list", heading: "文書インデックス" },
+  { name: "検索・回答プロファイル", path: "/search-answer-profiles", heading: "検索・回答プロファイル" },
+  { name: "システム設定（外観と証明書）", path: "/settings/appearance", heading: "外観と証明書" },
+];
+
+/** 表示の途中（フェードイン・色の transition）の色で color-contrast を測らない。無限の animation（Spinner など）は待たない。 */
+async function waitForSettledAnimations(page: Page) {
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every((animation) => animation.playState !== "running" || animation.effect?.getComputedTiming().iterations === Infinity),
+  );
+}
+
+async function expectNoSeriousViolations(page: Page, testInfo: TestInfo, path: string) {
+  const exceptions = KNOWN_EXCEPTIONS[path] ?? [];
+  await waitForSettledAnimations(page);
+  const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).disableRules([...exceptions]).analyze();
+  const blocking = results.violations.filter((violation) => BLOCKING_IMPACTS.has(violation.impact ?? ""));
+  const summary = blocking.map((violation) => ({
+    rule: violation.id,
+    impact: violation.impact,
+    count: violation.nodes.length,
+    help: violation.help,
+    // 対象の selector と、axe の理由の 1 行目（color-contrast なら実測の比と色）。
+    targets: violation.nodes
+      .slice(0, 5)
+      .map((node) => `${node.target.join(" ")}（${node.failureSummary?.split("\n").at(1)?.trim() ?? ""}）`),
+  }));
+  if (summary.length) {
+    await testInfo.attach("axe-violations.json", { body: JSON.stringify(summary, null, 2), contentType: "application/json" });
+  }
+  const message = summary
+    .map((item) => `${item.rule}（${item.impact}・${item.count} 件）: ${item.help}\n    ${item.targets.join("\n    ")}`)
+    .join("\n");
+  expect(summary, `${path} の serious / critical の a11y 違反:\n${message}`).toEqual([]);
+}
+
+test.describe("主要な画面の a11y（axe）", { tag: "@a11y" }, () => {
+  test.beforeEach(async ({ page }) => {
+    await mockDatabaseReady(page);
+    await mockLocalAuth(page);
+    await mockMainScreens(page);
+  });
+
+  for (const screen of SCREENS) {
+    test(`${screen.name}（${screen.path}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
+      await page.goto(screen.path);
+      await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
+      // 読み込み中の Skeleton ではなく、読み込んだ後の画面を確かめる。
+      await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
+      await expectNoSeriousViolations(page, testInfo, screen.path);
+    });
+  }
+});

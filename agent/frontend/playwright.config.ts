@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { ciRetries, ciWorkers } from "../../platform/scripts/e2e-impact/ci-run";
 import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+import { nightlyOnlyIgnore } from "../../platform/scripts/e2e-impact/nightly-only";
 
 const frontendPort = process.env.PLAYWRIGHT_PORT ?? "3042";
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
@@ -19,6 +20,9 @@ const webServerCommand = usePreviewServer
 
 export default defineConfig({
   testDir: "./e2e",
+  // nightly だけで実行する spec（*.nightly.spec.ts。主要な画面の axe）は、ci.yml（E2E_NIGHTLY_ONLY=skip）の PR の e2e で
+  // 実行しない（#1595。platform/scripts/e2e-impact/nightly-only.ts）。
+  testIgnore: nightlyOnlyIgnore(),
   // 起動した dev サーバが hermetic であることを確認し、実行前後で利用者の実環境の
   // 設定ファイルが変わっていないことを検査する。
   globalSetup: "./e2e/global-setup.ts",
@@ -81,6 +85,8 @@ export default defineConfig({
         "**/base-path.spec.ts",
         "**/self-hosted-fonts.spec.ts",
         "**/permission-catalog.spec.ts",
+        // project の testIgnore は config の testIgnore を上書きするので、ここにも足す（#1595）。
+        ...nightlyOnlyIgnore(),
       ],
       // spec の中で viewport を回しているテスト（題名に「(desktop」「（mobile）」「mobile-375: 」や「1920px」を含む）は、
       // その中で 375px を確かめているので二重に実行しない。

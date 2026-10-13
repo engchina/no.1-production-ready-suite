@@ -37,6 +37,10 @@ PR の CI の mobile の project は、画面幅に依存するテスト（`@res
 PR の smoke（ci.yml の `*_E2E_SMOKE`）が全 project で実行する spec は `--skip-specs` で渡し、
 選んだ spec から除く（同じ spec を 2 回実行しない。全件のときは smoke の job を飛ばす。#1525）。
 
+nightly だけで実行する spec（`*.nightly.spec.ts`。主要な画面の axe の確認など）は
+spec の一覧から除き、PR では選ばない（全件のときも。
+`platform/scripts/e2e-impact/nightly-only.ts`。#1595）。
+
 ローカルで同じ選択を見るには（nightly の記録を `gh` で取得する）:
 
     python3 platform/scripts/e2e_impact.py select --product rag --base origin/main --download
@@ -98,6 +102,10 @@ PLATFORM_FRONTEND = ("platform/packages/ui/", "platform/packages/system-settings
 IMPACT_TOOLING = ("platform/scripts/e2e-impact/",)
 CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".json")
 UNIT_TEST = re.compile(r"(\.test\.[cm]?[jt]sx?$|/__tests__/)")
+# nightly（e2e-nightly.yml）だけで実行する spec（主要な画面の axe など）。PR では選ばない（#1595）。
+# playwright.config.ts も ci.yml の `E2E_NIGHTLY_ONLY=skip` で除く
+# （platform/scripts/e2e-impact/nightly-only.ts）。
+NIGHTLY_ONLY_SPEC = re.compile(r"\.nightly\.spec\.ts$")
 FULL_RUN_FILES = re.compile(
     r"^(package\.json|package-lock\.json|index\.html|vite\.config\.[cm]?[jt]s|"
     r"playwright\.config\.[cm]?[jt]s|tsconfig[^/]*\.json)$"
@@ -634,9 +642,12 @@ def relative_to_frontend(product: Product, spec: str) -> str:
 
 
 def list_specs(product: Product) -> list[str]:
+    """PR で実行しうる spec（nightly だけの `*.nightly.spec.ts` を除く。#1595）。"""
     root = ROOT / product.test_root
     return sorted(
-        str(path.relative_to(ROOT)).replace(os.sep, "/") for path in root.rglob("*.spec.ts")
+        str(path.relative_to(ROOT)).replace(os.sep, "/")
+        for path in root.rglob("*.spec.ts")
+        if not NIGHTLY_ONLY_SPEC.search(path.name)
     )
 
 
