@@ -310,7 +310,7 @@ test("実体の索引のある参照先・数えられないときは案内を�
   await expectNoPageOverflow(page);
 });
 
-test("章節で広げる根拠は既定 on で、選んだ上限だけを保存する（抜き出す呼び出しの上限を含む）", async ({
+test("章節で広げる根拠は既定 on で、選んだ上限だけを保存する（抜き出す呼び出しの上限を含む）", { tag: "@responsive" }, async ({
   page,
 }) => {
   const bodies: Record<string, unknown>[] = [];

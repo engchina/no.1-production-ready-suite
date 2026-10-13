@@ -514,7 +514,7 @@ async function expectHistoryToggleAtStart(page: Page) {
   expect(conversationBox.x + conversationBox.width - (newThreadBox.x + newThreadBox.width)).toBeLessThanOrEqual(24);
 }
 
-test("会話の履歴は既定で閉じ、開くと会話の左に並び、開閉の状態が再読込で残る (1280px)", async ({ page, mockApi }) => {
+test("会話の履歴は既定で閉じ、開くと会話の左に並び、開閉の状態が再読込で残る (1280px)", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedThread(mockApi, {});
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/chat");
@@ -563,7 +563,7 @@ test("会話の履歴は既定で閉じ、開くと会話の左に並び、開�
   await expectNoHorizontalOverflow(page);
 });
 
-test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す", async ({
+test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す", { tag: "@responsive" }, async ({
   page,
   mockApi,
 }) => {

@@ -199,7 +199,7 @@ for (const viewport of [
 }
 
 // #349: 回答の引用のプレビューでも、要素の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
-test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", async ({
+test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockKbPage(page, 1);
@@ -266,7 +266,7 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   await expectNoPageOverflow(page);
 });
 
-test("KB 検索テストの引用が内部スクロールしてもページ末尾に空白を作らない", async ({ page }) => {
+test("KB 検索テストの引用が内部スクロールしてもページ末尾に空白を作らない", { tag: "@responsive" }, async ({ page }) => {
   await mockKbPage(page, 1);
   await page.route("**/api/search/stream", (route) =>
     route.fulfill({
@@ -471,7 +471,7 @@ test("文書の詳細を開けない利用者には、所属文書と引用か�
   await expectNoPageOverflow(page);
 });
 
-test("検索テストと停止は同じボタンで、フォーカスを保ったまま切り替わる（#413）", async ({ page }) => {
+test("検索テストと停止は同じボタンで、フォーカスを保ったまま切り替わる（#413）", { tag: "@responsive" }, async ({ page }) => {
   await mockKbPage(page, 1);
   let calls = 0;
   let aborted = 0;

@@ -307,7 +307,7 @@ async function expectSameWidth(a: Locator, b: Locator) {
   expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
 }
 
-test("管理者は実行ユーザーを一覧と詳細で確認し同名・削除済み・未記録を区別できる", async ({ page }, testInfo) => {
+test("管理者は実行ユーザーを一覧と詳細で確認し同名・削除済み・未記録を区別できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const items = historyItems.map((item, index) => ({
     ...item,
     actor_user_uuid: `actor-${index}`,
@@ -369,7 +369,7 @@ test("SQL 生成を使える利用者は履歴から質問を引き継いで再�
   expect(new URL(page.url()).searchParams.get("question")).toBe(historyItems[0].question);
 });
 
-test("実行履歴の安全とブロックの定義は操作なしで読めて履歴選択でも参照できる", async ({ page }, testInfo) => {
+test("実行履歴の安全とブロックの定義は操作なしで読めて履歴選択でも参照できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockHistory(page);
   await page.goto("/history");
   const help = page.getByRole("region", { name: "安全状態の見方" });
@@ -403,7 +403,7 @@ test("実行履歴の安全とブロックの定義は操作なしで読めて�
   await expect(blockedRow).toHaveAttribute("aria-current", "true");
 });
 
-test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳細確認できる", async ({ page }) => {
+test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳細確認できる", { tag: "@responsive" }, async ({ page }) => {
   const historyRequests: URL[] = [];
   await mockHistory(page, historyItems, historyRequests);
   await page.goto("/history");
@@ -490,7 +490,7 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
 });
 
-test("履歴の並べ替えは共有 Button のトグルでキーボード操作できる", async ({ page }, testInfo) => {
+test("履歴の並べ替えは共有 Button のトグルでキーボード操作できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockHistory(page);
   await page.goto("/history");
   await expect(historyRows(page)).toHaveCount(3);
@@ -547,7 +547,7 @@ test("実行履歴行クリックは主スクロールを保持して詳細だ�
   expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
 });
 
-test("実行履歴は長い質問を分割比率と画面幅に応じて安全に折り返す", async ({ page }) => {
+test("実行履歴は長い質問を分割比率と画面幅に応じて安全に折り返す", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 2048, height: 1000 });
   await page.addInitScript(() => {
     if (!window.sessionStorage.getItem("history-dense-layout-split-cleared")) {
@@ -725,7 +725,7 @@ test("実行履歴の利用者評価フィルターに要確認は表示しな�
   await expect(options.filter({ hasText: "要確認" })).toHaveCount(0);
 });
 
-test("実行履歴一覧はサーバページをローカルで二重ページングしない", async ({ page }) => {
+test("実行履歴一覧はサーバページをローカルで二重ページングしない", { tag: "@responsive" }, async ({ page }) => {
   const manyItems = Array.from({ length: 12 }, (_, index) => ({
     id: `history-${index}`,
     question: `質問 ${String(index).padStart(2, "0")}`,
@@ -925,7 +925,7 @@ test.afterEach(async ({ page }, testInfo) => {
 
 
 for (const theme of ["light", "dark"]) {
-  test(`構成管理者の実行履歴はユーザー名を重複せず表示する: ${theme}`, async ({ page, isMobile }, testInfo) => {
+  test(`構成管理者の実行履歴はユーザー名を重複せず表示する: ${theme}`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
     await page.addInitScript(value => {
       localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
     }, theme);

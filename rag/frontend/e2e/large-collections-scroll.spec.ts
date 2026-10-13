@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const viewport of VIEWPORTS) {
-test(`ナレッジベース詳細の所属文書は多くても高さ固定でスクロールする (${viewport.name})`, async ({ page }) => {
+test(`ナレッジベース詳細の所属文書は多くても高さ固定でスクロールする (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   const DOC_COUNT = 30;
   const kb = {
@@ -91,7 +91,7 @@ test(`ナレッジベース詳細の所属文書は多くても高さ固定で�
 }
 
 for (const viewport of VIEWPORTS) {
-test(`評価のケース結果は多くても高さ固定・ヘッダー固定でスクロールする (${viewport.name})`, async ({ page }) => {
+test(`評価のケース結果は多くても高さ固定・ヘッダー固定でスクロールする (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   const CASE_COUNT = 40;
   await page.route("**/api/knowledge-bases**", async (route) => {

@@ -287,6 +287,34 @@ class AggregateTest(unittest.TestCase):
         self.assertNotIn((2, 3), by_key)
         self.assertEqual(by_key[(5, 6)].specs, {"b.spec.ts"})
 
+    def test_aggregate_counts_pr_scope_separately(self) -> None:
+        # PR の CI の mobile の project は @responsive などだけを実行する（#1582）。
+        # prScope の無い古い記録は、PR でも実行するものとして数える。
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            records = [
+                self._record("a.spec.ts", "desktop", 0, {}) | {"prScope": True},
+                self._record("a.spec.ts", "mobile", 0, {})
+                | {"project": "mobile", "prScope": False},
+                self._record("a.spec.ts", "old", 0, {}),
+            ]
+            for index, record in enumerate(records):
+                Path(directory, f"{index}.json").write_text(json.dumps(record))
+            data = impact.aggregate(directory, "rag", "c0")
+        entry = data["specs"]["a.spec.ts"]
+        self.assertEqual((entry["durationMs"], entry["tests"]), (3000, 3))
+        self.assertEqual((entry["prDurationMs"], entry["prTests"]), (2000, 2))
+
+    def test_merge_without_pr_scope_uses_full_duration(self) -> None:
+        new = _map(
+            {}, specs={"a": {"durationMs": 300, "tests": 3, "prDurationMs": 100, "prTests": 1}}
+        )
+        old = _map({}, specs={"a": {"durationMs": 200, "tests": 2}})
+        merged = impact.merge_maps([new, old])
+        assert merged is not None
+        self.assertEqual(merged["specs"]["a"]["prDurationMs"], 300)
+        self.assertEqual(merged["specs"]["a"]["prTests"], 3)
+
     def test_merge_ignores_other_commits(self) -> None:
         a = _map({}, tests=1, commit="c1")
         b = _map({}, tests=2, commit="c2")
@@ -321,6 +349,22 @@ class PlanShardsTest(unittest.TestCase):
         )
         self.assertEqual(impact.spec_durations(["a", "new"], recorded), {"a": 100, "new": 300})
         self.assertEqual(impact.spec_durations(["x"], None), {"x": impact.UNKNOWN_SPEC_MS})
+
+    def test_durations_use_pr_scope(self) -> None:
+        # PR の見積もりは、PR でも実行するテストの時間（prDurationMs）を使う（#1582）。
+        recorded = impact.ImpactMap(
+            _map(
+                {},
+                specs={
+                    "a": {"durationMs": 1000, "prDurationMs": 600},
+                    "b": {"durationMs": 300},
+                    "c": {"durationMs": 900, "prDurationMs": 500},
+                },
+            )
+        )
+        self.assertEqual(
+            impact.spec_durations(["a", "b", "new"], recorded), {"a": 600, "b": 300, "new": 500}
+        )
 
     def test_matrix_lists_specs_per_shard(self) -> None:
         product = impact.PRODUCTS["rag"]

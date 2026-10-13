@@ -42,7 +42,7 @@ async function openPage(page: Page, route: string) {
   await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
 }
 
-test.describe("本文幅", () => {
+test.describe("本文幅", { tag: "@responsive" }, () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/**", (route) =>
       route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ data: null, error_messages: ["e2e unmocked"], warning_messages: [] }) })
@@ -81,7 +81,7 @@ test.describe("本文幅", () => {
   });
 });
 
-test("AI要件確認の未入力案内は補助テキストで、無効なボタンに関連付ける", async ({ page }) => {
+test("AI要件確認の未入力案内は補助テキストで、無効なボタンに関連付ける", { tag: "@responsive" }, async ({ page }) => {
   await page.route("**/api/**", (route) =>
     route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ data: null, error_messages: ["e2e unmocked"], warning_messages: [] }) })
   );

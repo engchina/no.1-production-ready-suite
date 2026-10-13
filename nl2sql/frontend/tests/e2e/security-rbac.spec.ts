@@ -515,7 +515,7 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
   await expectNoPageHorizontalScroll(page);
 });
 
-test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行で固定表頭の内部スクロールになる", async ({
+test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行で固定表頭の内部スクロールになる", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   await mockDatabaseGateReady(page);
@@ -922,7 +922,7 @@ test("構成管理者はパスワード変更入口を表示し、サイドバ�
   await expect(page.getByRole("button", { name: "戻る" })).toBeVisible();
 });
 
-test("通常ユーザーはパスワード変更ページから元の画面へ戻れる", async ({ page }) => {
+test("通常ユーザーはパスワード変更ページから元の画面へ戻れる", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/auth/me");
   await page.route("**/api/auth/me", (route) =>
@@ -2609,7 +2609,7 @@ test("詳細アクションメニューを閉じた直後に別要素へフォ�
   await expect(trigger).not.toBeFocused();
 });
 
-test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", async ({ page }) => {
+test("ユーザー管理は一覧・作成・編集をテーブル管理型パネルで統一する", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   const users = [
     {
@@ -2853,7 +2853,7 @@ test("ユーザー管理は復元済みロールを通常表示し、割り当�
   await expect(page.getByRole("radio", { name: /データ管理者/ })).toBeVisible();
 });
 
-test("ロール管理はテーブル一覧と詳細で表示し、権限の選択は権限管理で行う", async ({ page }) => {
+test("ロール管理はテーブル一覧と詳細で表示し、権限の選択は権限管理で行う", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   const permissionRows = [
     {
@@ -3118,7 +3118,7 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
   expect(submitCount).toBe(3);
 });
 
-test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設定できる", async ({ page }) => {
+test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設定できる", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");
   await page.route("**/api/security/profile-access/profiles**", (route) =>
@@ -3497,7 +3497,7 @@ test("権限管理は詳細で権限名を伏せ、編集では SQL 生成由来
   await expectNoPageHorizontalScroll(page);
 });
 
-test("ロール編集のその他の操作のメニューは画面の下端でも画面の中に開く", async ({ page }) => {
+test("ロール編集のその他の操作のメニューは画面の下端でも画面の中に開く", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   // ロール管理のフォームは基本情報だけなので、短い viewport で操作バーを下端に置く（#206）。
   await page.setViewportSize({ width: 1365, height: 480 });
@@ -3554,7 +3554,7 @@ test("ロール編集のその他の操作のメニューは画面の下端で�
   }
 });
 
-test("ロール管理の compact header は操作が 2 つなら畳まず、短い viewport でも横にはみ出さない", async ({ page }) => {
+test("ロール管理の compact header は操作が 2 つなら畳まず、短い viewport でも横にはみ出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.setViewportSize({ width: 375, height: 360 });
   await page.route("**/api/security/roles?include_archived=true", (route) =>
@@ -3954,7 +3954,7 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
   }
 });
 
-test("DeepSec は3つの管理タブで認証・基盤構成・データ権限を分ける", async ({ page }, testInfo) => {
+test("DeepSec は3つの管理タブで認証・基盤構成・データ権限を分ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1440, height: 900 });
   }
@@ -4088,7 +4088,7 @@ test("DeepSec は構成状態の取得失敗を Header Badge と再読込導線�
   await expect(page.getByRole("tab", { name: "DATA USER 認証" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試行導線を示す", async ({
+test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試行導線を示す", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   await mockDatabaseGateReady(page);
@@ -4297,7 +4297,7 @@ for (const driverMode of ["thin", "thick"] as const) {
   });
 }
 
-test("DeepSec は DATA USER password をページから保存し再起動なしで適用可能にする", async ({ page }) => {
+test("DeepSec は DATA USER password をページから保存し再起動なしで適用可能にする", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   let hasPassword = false;
   let savedPassword = "";
@@ -4648,7 +4648,7 @@ test("DeepSec Data Grant picker は live metadata 0 件時に総件数を誤表�
   await expectNoPageHorizontalScroll(page);
 });
 
-test("DeepSec は構造化データ権限をロール別に編集する", async ({ page }, testInfo) => {
+test("DeepSec は構造化データ権限をロール別に編集する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDatabaseGateReady(page);
   const queryRole = {
     role_id: "role-query",
@@ -5359,7 +5359,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await expectNoPageHorizontalScroll(page);
 });
 
-test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維持する", async ({ page }, testInfo) => {
+test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1600, height: 948 });
   }
@@ -5692,7 +5692,7 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
   await expectElementCenterUnobscured(applyButton);
 });
 
-test("DeepSec は基盤構成からDB構成を確認語つきで解除する", async ({ page }) => {
+test("DeepSec は基盤構成からDB構成を確認語つきで解除する", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   let applied = true;
   let statusRequests = 0;

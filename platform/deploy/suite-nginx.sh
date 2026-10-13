@@ -22,6 +22,71 @@ SUITE_AGENT_BACKEND_PORT="${SUITE_AGENT_BACKEND_PORT:-8020}"
 # 1 台に置く製品の並び（Nginx の location の順。/ の転送先は agent を優先する）。
 SUITE_PRODUCTS_ORDER=(rag nl2sql agent)
 
+# 製品の API の本文の上限（client_max_body_size）。各製品の backend の <製品>_MAX_UPLOAD_BYTES の既定値
+# （RAG・NL2SQL 200 MiB、Agent 100 MiB）+ multipart の余白 10 MiB（#306・#1597）。suite-init.sh が
+# backend/.env の値から作り直して渡す。verify_stack_contract.py が backend の既定値と照合する。
+#   RAG: 文書のアップロード（1 ファイル。複数のファイルは画面が 1 要求の合計を上限以内に分けて送る。#280）
+#   NL2SQL: オントロジーの構築の資料（1 要求の合計）
+#   Agent: 共通のアップロードの上限（Wallet の zip 20 MiB・評価セットの Excel 2 MiB と、上限の無い
+#   スナップショットの import・MCP の本文の受け口）
+SUITE_RAG_CLIENT_MAX_BODY_SIZE="${SUITE_RAG_CLIENT_MAX_BODY_SIZE:-210M}"
+SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE="${SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE:-210M}"
+SUITE_AGENT_CLIENT_MAX_BODY_SIZE="${SUITE_AGENT_CLIENT_MAX_BODY_SIZE:-110M}"
+
+# backend へ転送する API の待ち時間（秒。proxy_read_timeout / proxy_send_timeout）。値の根拠（#1597）:
+# - 既定（全 API）600 秒: SSE / WebSocket は 10〜15 秒ごとに heartbeat を送る（共通の進み具合の SSE
+#   pr_backend_core.chat_progress・RAG のチャットの SSE・Agent の Run の SSE / WebSocket）ので、間が空かない。
+# - RAG の LLM を呼ぶ同期の API 660 秒: 回答の通しの上限 rag_answer_timeout_seconds（既定・上限 600 秒）と
+#   画面の待ち時間 630 秒より長く。RAG 検索のストリーム（search/stream）は heartbeat が無く、LLM 1 回の間
+#   （最大 600 秒）何も届かない。
+# - NL2SQL の LLM を呼ぶ同期の API 2460 秒: LLM 1 回の timeout 600 秒 × 試行 4 回
+#   （oci_enterprise_ai_max_retries 3。timeout も再試行する）+ 余白 60 秒。SQL から質問へ（reverse/deep）の
+#   通しの期限 1800 秒もこの中。画面は 65 分まで待つ（API_TIMEOUT_MS.longRunningJob）。
+# - Agent のツールの直接の呼び出し（tools/invoke）960 秒: 外部 MCP の timeout の上限 900 秒
+#   （_MCP_TIMEOUT_MAX_SECONDS。RAG の既定は 630 秒）+ 余白 60 秒。
+SUITE_PROXY_TIMEOUT_SECONDS=600
+# shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
+SUITE_RAG_LONG_API_TIMEOUT_SECONDS=660
+# shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
+SUITE_NL2SQL_LONG_API_TIMEOUT_SECONDS=2460
+# shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
+SUITE_AGENT_LONG_API_TIMEOUT_SECONDS=960
+# 長い待ち時間にする API（/<製品>/api/ の後ろの path の正規表現。完全一致）。
+# RAG: 保存済みの回答の評価（#304）・チャットと RAG 検索の回答生成（#375）・作成中の回答の再購読（#1175）・
+# 品質評価の同期の API（#383）・業務ガイドの下書きを試す（#1288）と、同じ回答生成を呼ぶ MCP（rag_search）。
+# shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
+SUITE_RAG_LONG_API_PATHS=(
+  'search'
+  'search/stream'
+  'search/answers/[^/]+/evaluation'
+  'search-answer-profiles/[^/]+/support-guides/[^/]+/try'
+  'evaluation/run'
+  'evaluation/compare'
+  'chat/conversations/[^/]+/messages/stream'
+  'chat/conversations/[^/]+/messages/[^/]+/stream'
+  'mcp'
+)
+# NL2SQL: LLM を同期で呼ぶ API（SQL の分析・SQL から質問へ・コメント / 注釈 / ドメインの SQL の生成・
+# DB 管理の失敗の分析と結合条件の抽出）。SQL の生成と実行は job（POST /nl2sql/jobs と進み具合の SSE）。
+# shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
+SUITE_NL2SQL_LONG_API_PATHS=(
+  'nl2sql/analyze'
+  'nl2sql/reverse/deep'
+  'nl2sql/reverse/sql'
+  'nl2sql/reverse/question-sql'
+  'nl2sql/comments/suggest'
+  'nl2sql/comments/generate-sql'
+  'nl2sql/annotations/generate-sql'
+  'nl2sql/domains/generate-sql'
+  'nl2sql/db-admin/analyze-error'
+  'nl2sql/db-admin/extract-join-where'
+)
+# Agent: ツールを同期で呼ぶ API（RAG の rag_search などの外部 MCP を待つ）。Run は非同期で、進み具合は SSE / WebSocket。
+# shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
+SUITE_AGENT_LONG_API_PATHS=(
+  'tools/invoke'
+)
+
 # 公開の port（http_port / https_port）に使えない port（#1316）。Terraform の locals.tf の reserved_ports と
 # reserved_port_ranges と同じ値にする（verify_stack_contract.py が照合する。手で実行したときも先に失敗させる）。
 #   22: SSH / 25: SMTP / 53: DNS / 111: rpcbind / 1521・1522: Oracle の listener（ADB の接続と紛らわしい）/
@@ -54,6 +119,28 @@ suite_validate_public_port() {
       return 1
     fi
   done
+}
+
+# 製品の API の client_max_body_size。
+suite_client_max_body_size() {
+  case "$1" in
+    rag) printf '%s\n' "${SUITE_RAG_CLIENT_MAX_BODY_SIZE}" ;;
+    nl2sql) printf '%s\n' "${SUITE_NL2SQL_CLIENT_MAX_BODY_SIZE}" ;;
+    agent) printf '%s\n' "${SUITE_AGENT_CLIENT_MAX_BODY_SIZE}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# 製品の長い待ち時間の API の location の正規表現と待ち時間（秒）。
+suite_long_api_regex() {
+  local -n paths="SUITE_${1^^}_LONG_API_PATHS"
+  local IFS='|'
+  printf '^/%s/api/(%s)$\n' "$1" "${paths[*]}"
+}
+
+suite_long_api_timeout() {
+  local -n seconds="SUITE_${1^^}_LONG_API_TIMEOUT_SECONDS"
+  printf '%s\n' "${seconds}"
 }
 
 suite_backend_port() {
@@ -93,12 +180,14 @@ suite_contains() {
   return 1
 }
 
-# backend へ渡す proxy の共通の header。
+# backend へ渡す proxy の共通の設定。
 #   $1: Host header（Agent は WebSocket の Origin と Host の一致を確かめるため、port を含む $http_host）
-#   $2: Connection header（"upgrade" なら Upgrade も渡す。"" なら keep-alive の upstream 向けに空）
+#   $2: "websocket" なら、WebSocket の要求（Upgrade がある）のときだけ Upgrade と Connection: upgrade を渡す
+#       （map $pr_suite_connection_upgrade。ほかの要求は Connection を空にする）。WebSocket を持つのは Agent だけ。
+#   $3: X-Forwarded-Prefix（/<製品>）
 _suite_proxy_headers() {
   local host_header="$1"
-  local connection="$2"
+  local websocket="$2"
   cat <<EOF
         proxy_http_version 1.1;
         proxy_set_header Host ${host_header};
@@ -108,40 +197,53 @@ _suite_proxy_headers() {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Prefix ${3};
 EOF
-  if [ "${connection}" = "upgrade" ]; then
+  if [ "${websocket}" = "websocket" ]; then
     cat <<'EOF'
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection $pr_suite_connection_upgrade;
 EOF
   else
     cat <<'EOF'
         proxy_set_header Connection "";
 EOF
   fi
+  # SSE（text/event-stream）と応答の流れを溜めない: buffering・cache・gzip を切る（gzip は出力を溜めて
+  # 圧縮するため、SSE の event と heartbeat が届かなくなる。backend も X-Accel-Buffering: no を付ける）。
   cat <<'EOF'
         proxy_buffering off;
         proxy_cache off;
+        gzip off;
+EOF
+}
+
+# 製品の API の location の先頭（ログの設定まで）。
+#   $1: 製品  $2: location の指定（"= /rag/api/auth/login" など）
+_suite_api_location_head() {
+  local product="$1"
+  cat <<EOF
+    location $2 {
+        set \$pr_service_name "production-ready-${product}";
+        access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-access.log production_ready_json if=\$pr_loggable;
+        error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-error.log warn;
 EOF
 }
 
 # 製品ごとの location。今までの各製品の init_script.sh の location（SSE・MCP・login の上限・health）を
 # /<製品>/ の下へ移したもの。
-#   $1: 製品  $2: frontend の dist  $3: API の client_max_body_size
+#   $1: 製品  $2: frontend の dist
 _suite_product_locations() {
   local product="$1"
   local dist_dir="$2"
-  local body_size="$3"
-  local port host_header connection
+  local port host_header websocket body_size timeout
   port="$(suite_backend_port "${product}")"
+  body_size="$(suite_client_max_body_size "${product}")"
+  timeout="$(suite_long_api_timeout "${product}")"
   host_header="\$host"
-  connection=""
-  case "${product}" in
-    nl2sql) connection="upgrade" ;;
-    agent)
-      host_header="\$http_host"
-      connection="upgrade"
-      ;;
-  esac
+  websocket=""
+  if [ "${product}" = "agent" ]; then
+    host_header="\$http_host"
+    websocket="websocket"
+  fi
 
   cat <<EOF
 
@@ -156,50 +258,41 @@ _suite_product_locations() {
     }
 
     # ログインの API だけ、送信元 IP ごとに緩く上限を掛ける（#1173。zone は
-    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend（PLATFORM_AUTH_LOGIN_*）。
-    location = /${product}/api/auth/login {
-        set \$pr_service_name "production-ready-${product}";
-        access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-access.log production_ready_json if=\$pr_loggable;
-        error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-error.log warn;
+    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend（PLATFORM_AUTH_LOGIN_*。
+    # 既定は 15 分にログイン名ごと 5 回・送信元 IP ごと 20 回）で、ここはそれより緩い（1 秒 1 回・burst 30）。
+EOF
+  _suite_api_location_head "${product}" "= /${product}/api/auth/login"
+  cat <<EOF
         limit_req zone=pr_login burst=30 nodelay;
         limit_req_status 429;
         error_page 429 = @pr_login_rate_limited;
         proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
 EOF
-  _suite_proxy_headers "${host_header}" "${connection}" "/${product}"
+  _suite_proxy_headers "${host_header}" "${websocket}" "/${product}"
   echo "    }"
 
-  if [ "${product}" = "rag" ]; then
-    cat <<EOF
+  cat <<'EOF'
 
-    # LLM を複数回呼ぶ処理だけ待ち時間を延ばす（backend の上限 600 秒と画面の timeout 630 秒より長く）。
-    # 保存済みの回答の評価（#304）・チャットと RAG 検索の回答生成（#375）・作成中の回答の再購読（#1175）・
-    # 品質評価（#383）と、同じ回答生成を呼ぶ MCP（rag_search）。
-    location ~ ^/rag/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)\$ {
-        set \$pr_service_name "production-ready-rag";
-        access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-rag-access.log production_ready_json if=\$pr_loggable;
-        error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-rag-error.log warn;
-        client_max_body_size ${body_size};
-        proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
+    # LLM を呼ぶ同期の API だけ待ち時間を延ばす（値の根拠は suite-nginx.sh の SUITE_*_LONG_API_*。#1597）。
 EOF
-    _suite_proxy_headers "${host_header}" "${connection}" "/${product}"
-    cat <<'EOF'
-        proxy_send_timeout 660s;
-        proxy_read_timeout 660s;
-    }
-EOF
-  fi
-
+  _suite_api_location_head "${product}" "~ $(suite_long_api_regex "${product}")"
   cat <<EOF
-
-    location /${product}/api/ {
-        set \$pr_service_name "production-ready-${product}";
-        access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-access.log production_ready_json if=\$pr_loggable;
-        error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-${product}-error.log warn;
         client_max_body_size ${body_size};
         proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
 EOF
-  _suite_proxy_headers "${host_header}" "${connection}" "/${product}"
+  _suite_proxy_headers "${host_header}" "${websocket}" "/${product}"
+  cat <<EOF
+        proxy_send_timeout ${timeout}s;
+        proxy_read_timeout ${timeout}s;
+    }
+
+EOF
+  _suite_api_location_head "${product}" "/${product}/api/"
+  cat <<EOF
+        client_max_body_size ${body_size};
+        proxy_pass http://127.0.0.1:${port}\$pr_suite_upstream_uri;
+EOF
+  _suite_proxy_headers "${host_header}" "${websocket}" "/${product}"
   cat <<EOF
     }
 
@@ -221,15 +314,23 @@ EOF
 EOF
 }
 
+# 要求の header の buffer（HTTP / HTTPS の server で共通）。既定（4 × 8k）は 1 行（Cookie・URL）が 8k まで。
+# 共有の Cookie（#1565。pr_session / pr_csrf は各 43 文字）は小さいが、Cookie は port を問わず host
+# （IP）ごとに送られ、同じ host の別のアプリの Cookie も載る。HTTP/2 の header もこの値で上限を決める。
+_suite_client_header_buffers() {
+  cat <<'EOF'
+    large_client_header_buffers 4 16k;
+EOF
+}
+
 # server の中身（HTTP / HTTPS で共通）。
 _suite_server_body() {
   local https_enabled="$1"
   local repo_dir="$2"
   local ssl_dir="$3"
-  local rag_body_size="$4"
-  shift 4
+  shift 3
   local products=("$@")
-  local product body_size root_target
+  local product root_target
 
   root_target="$(suite_root_redirect_target "${products[@]}")"
   cat <<EOF
@@ -242,10 +343,19 @@ _suite_server_body() {
     access_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-suite-access.log production_ready_json if=\$pr_loggable;
     error_log ${SUITE_NGINX_LOG_DIR:-/var/log/nginx}/production-ready-suite-error.log warn;
 
+    # 製品の外（frontend・CA 証明書・ログイン）の本文の上限。API は製品ごとの location で backend の上限 + 余白。
     client_max_body_size 10m;
+EOF
+  _suite_client_header_buffers
+  cat <<EOF
     proxy_connect_timeout 60s;
-    proxy_send_timeout 600s;
-    proxy_read_timeout 600s;
+    proxy_send_timeout ${SUITE_PROXY_TIMEOUT_SECONDS}s;
+    proxy_read_timeout ${SUITE_PROXY_TIMEOUT_SECONDS}s;
+    # 応答の header を読む buffer（proxy_buffering off でも使う）。既定（4k）は、RAG の文書の
+    # Content-Disposition（ファイル名 512 バイトまで → filename* の percent-encode で 1.5 KB まで）・
+    # Content-Security-Policy・Set-Cookie（pr_session / pr_csrf）・X-Request-ID が重なると足りなくなり 502 になる。
+    proxy_buffer_size 16k;
+    proxy_buffers 8 16k;
 
     location @pr_login_rate_limited {
         default_type application/json;
@@ -279,12 +389,7 @@ EOF
 
   for product in "${SUITE_PRODUCTS_ORDER[@]}"; do
     suite_contains "${product}" "${products[@]}" || continue
-    case "${product}" in
-      rag) body_size="${rag_body_size}" ;;
-      nl2sql) body_size="200M" ;;
-      agent) body_size="100M" ;;
-    esac
-    _suite_product_locations "${product}" "${repo_dir}/${product}/frontend/dist" "${body_size}"
+    _suite_product_locations "${product}" "${repo_dir}/${product}/frontend/dist"
   done
 
   cat <<'EOF'
@@ -297,17 +402,17 @@ EOF
 }
 
 # site を標準出力に書く。
-#   $1: HTTPS（true / false）  $2: suite の repository  $3: 証明書の directory  $4: RAG の API の client_max_body_size
-#   $5: http_port  $6: https_port  $7...: 配備する製品（rag / nl2sql / agent）
+#   $1: HTTPS（true / false）  $2: suite の repository  $3: 証明書の directory
+#   $4: http_port  $5: https_port  $6...: 配備する製品（rag / nl2sql / agent）
+# 製品の API の本文の上限は SUITE_<製品>_CLIENT_MAX_BODY_SIZE（suite-init.sh が backend/.env から作る）。
 # 環境変数 SUITE_LISTEN_ADDRESS は test が 127.0.0.1 だけで listen するためのもの（本番は全 address）。
 suite_nginx_site() {
   local https_enabled="$1"
   local repo_dir="$2"
   local ssl_dir="$3"
-  local rag_body_size="$4"
-  local http_port="$5"
-  local https_port="$6"
-  shift 6
+  local http_port="$4"
+  local https_port="$5"
+  shift 5
   local products=("$@")
   local address="${SUITE_LISTEN_ADDRESS:-}"
   local http_listen="${address:+${address}:}${http_port}"
@@ -340,6 +445,12 @@ map $request_uri $pr_suite_upstream_uri {
     default "/";
     "~^/(?:rag|nl2sql|agent)(?<pr_suite_rest>/api(?:[/?].*)?)$" $pr_suite_rest;
 }
+# WebSocket（Agent の /api/runs/{run_id}/events/ws）の要求のときだけ upstream へ Connection: upgrade を渡す。
+# ほかの要求に upgrade を渡さない（#1597）。
+map $http_upgrade $pr_suite_connection_upgrade {
+    default upgrade;
+    "" "";
+}
 EOF
 
   if [ "${https_enabled}" = "true" ]; then
@@ -353,6 +464,9 @@ server {
     listen ${http_listen} default_server;
     server_name _;
     access_log off;
+EOF
+      _suite_client_header_buffers
+      cat <<EOF
     return 301 https://${https_authority}\$request_uri;
 }
 
@@ -380,6 +494,6 @@ server {
 
 EOF
   fi
-  _suite_server_body "${https_enabled}" "${repo_dir}" "${ssl_dir}" "${rag_body_size}" "${products[@]}"
+  _suite_server_body "${https_enabled}" "${repo_dir}" "${ssl_dir}" "${products[@]}"
   echo "}"
 }

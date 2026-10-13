@@ -3204,6 +3204,17 @@ def test_sse_events_returns_recorded_events() -> None:
     assert "event: run.completed" in resp.text
 
 
+def test_sse_events_disable_proxy_buffering() -> None:
+    # Nginx の buffering と cache を切る（#1597）。follow の有無で同じ header。
+    run_id = _seed_api_run("SSE の header を確認する")["id"]
+    for query in ("", "?follow=true"):
+        resp = client.get(f"/api/runs/{run_id}/events{query}")
+        assert resp.status_code == 200
+        assert resp.headers["x-accel-buffering"] == "no"
+        assert resp.headers["cache-control"] == "no-cache"
+        assert "event: run.completed" in resp.text
+
+
 def test_sse_events_after_cursor_returns_later_events() -> None:
     run = _seed_api_run("SSE cursor を確認する")
     first_event_id = run["events"][0]["id"]

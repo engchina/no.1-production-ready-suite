@@ -3324,7 +3324,7 @@ test("query workbench waits for a real profile id before profile detail and sche
   expect(unexpectedDefaultRequests).toEqual([]);
 });
 
-test("query workbench keeps the schema picker inside a single column with long identifiers", async ({ page }) => {
+test("query workbench keeps the schema picker inside a single column with long identifiers", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   await useOverflowSchemaCatalog(page);
 
@@ -3490,7 +3490,7 @@ test("スキーマ参照から連続挿入すると各項目が改行区切り�
 
 for (const theme of ["light", "dark"]) {
   for (const wide of [false, true]) {
-    test(`クエリのテンプレートは全置換し、自由入力で空に戻す: ${theme} ${wide ? "1920px" : "標準幅"}`, async ({ page, isMobile }, testInfo) => {
+    test(`クエリのテンプレートは全置換し、自由入力で空に戻す: ${theme} ${wide ? "1920px" : "標準幅"}`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
       test.skip(wide && isMobile, "1920px は desktop project で検証する");
       if (wide) await page.setViewportSize({ width: 1920, height: 1000 });
       await page.addInitScript(value => {
@@ -3631,7 +3631,7 @@ test("スキーマ参照はアコーディオンで、表名クリックで表�
   await expect(question).toHaveValue("\"請求\""); // chevron では変化しない
 });
 
-test("クエリとスキーマ参照は desktop で左右並置、mobile で縦積みになる", async ({ page }) => {
+test("クエリとスキーマ参照は desktop で左右並置、mobile で縦積みになる", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
@@ -4451,7 +4451,7 @@ test("引用名の許可表ではスキーマ参照を大文字の同名表ま�
   expect(detailPaths).not.toContain("Mixed_Case");
 });
 
-test("query workbench generates SQL through the job flow and shows results", async ({ page }, testInfo) => {
+test("query workbench generates SQL through the job flow and shows results", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -4572,7 +4572,7 @@ test("query workbench generates SQL through the job flow and shows results", asy
   await expectNoHorizontalScroll(page);
 });
 
-test("query workbench shows job action errors below the execution buttons", async ({ page }) => {
+test("query workbench shows job action errors below the execution buttons", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   const agentError =
     "Oracle Select AI Agent 実行に失敗しました: Select AI Agent conversation_id を作成できませんでした。";
@@ -6458,7 +6458,7 @@ test("空の抽出条件では rewrite カードを出さず、条件を増や�
   await expectNoHorizontalScroll(page);
 });
 
-test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認できる", async ({ page }, testInfo) => {
+test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   const questionText = "部署ごとの従業員氏名を表示";
   const generatedSql =
@@ -7902,7 +7902,7 @@ test("Workbench のサンプルデータ投入は executed=false を成功表示
   await expectNoHorizontalScroll(page);
 });
 
-test("Select AI の今回だけの生成条件を job に渡し、reset で消去できる", async ({ page }) => {
+test("Select AI の今回だけの生成条件を job に渡し、reset で消去できる", { tag: "@responsive" }, async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 375, height: 900 });
   await page.goto("/query");
@@ -7972,7 +7972,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await expectNoHorizontalScroll(page);
 });
 
-test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQL を拒否する", async ({ page }, testInfo) => {
+test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQL を拒否する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/execute", (route) => {
     api.executePayload = route.request().postDataJSON() as Record<string, unknown>;
@@ -8336,7 +8336,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
   await expectMainScrolledBelowTop(page);
 });
 
-test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL を実行する", async ({ page }) => {
+test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL を実行する", { tag: "@responsive" }, async ({ page }) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -8754,7 +8754,7 @@ test("管理 SQL の差分同期不整合はDB構造再取得CTAを表示する"
   await expectNoHorizontalScroll(page);
 });
 
-test("SQL ファイル入力は入力欄と同じ高さのまま選択とドラッグ＆ドロップで読み込める", async ({ page }) => {
+test("SQL ファイル入力は入力欄と同じ高さのまま選択とドラッグ＆ドロップで読み込める", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockNl2SqlApi(page);
@@ -8925,7 +8925,7 @@ test("SQL ファイル入力は入力欄と同じ高さのまま選択とドラ�
     .not.toBe(lightBackground);
 });
 
-test("AI 活用の 4 画面はナビ切替で入力を保持し、リセットで消える", async ({ page }, testInfo) => {
+test("AI 活用の 4 画面はナビ切替で入力を保持し、リセットで消える", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
   await page.goto("/query");
 
@@ -9441,7 +9441,7 @@ test("sql to question page invalidates stale results when inputs change", async 
 
 });
 
-test("sql to question page keeps controls usable without page overflow at 375px", async ({ page }) => {
+test("sql to question page keeps controls usable without page overflow at 375px", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await mockNl2SqlApi(page);
   await page.goto("/sql-to-question");
@@ -9680,7 +9680,7 @@ test("admin good feedback is available as similar history without manual index r
   expect(rebuildRequested).toBe(false);
 });
 
-test("feedback management page mirrors Select AI feedback operations", async ({ page }, testInfo) => {
+test("feedback management page mirrors Select AI feedback operations", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/feedback-management?tab=entries");
@@ -10076,7 +10076,7 @@ test("Select AI feedback reserves the master-detail workspace during initial loa
   await expect(skeleton).toHaveCount(0);
 });
 
-test("Select AI feedback stacks its workspace and keeps controls usable at 375px", async ({ page }, testInfo) => {
+test("Select AI feedback stacks its workspace and keeps controls usable at 375px", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.setViewportSize(
     testInfo.project.name === "desktop"
       ? { width: 2048, height: 1000 }
@@ -10112,7 +10112,7 @@ test("Select AI feedback stacks its workspace and keeps controls usable at 375px
   await expectNoHorizontalScroll(page);
 });
 
-test("app feedback uses the shared responsive pagination for cursor pages", async ({ page }) => {
+test("app feedback uses the shared responsive pagination for cursor pages", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const api = await mockNl2SqlApi(page);
   await page.unroute(/\/api\/nl2sql\/feedback(?:\?.*)?$/);
@@ -10213,7 +10213,7 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expectNoHorizontalScroll(page);
 });
 
-test("feedback management keeps utility actions usable in empty and load error states", async ({ page }, testInfo) => {
+test("feedback management keeps utility actions usable in empty and load error states", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/feedback-config", (route) =>
     route.fulfill({
@@ -10494,7 +10494,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
   await expect(page.getByRole("button", { name: "類似履歴検索" })).toHaveCount(0);
 });
 
-test("question classifier model management page trains classifier and finds learning candidates", async ({ page }, testInfo) => {
+test("question classifier model management page trains classifier and finds learning candidates", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
   await page.unroute("**/api/nl2sql/classifier/predict");
   await page.route("**/api/nl2sql/classifier/predict", (route) =>
@@ -10638,7 +10638,7 @@ test("question classifier model management page trains classifier and finds lear
   await expectNoHorizontalScroll(page);
 });
 
-test("question classifier model management shows the training failure under the train button", async ({
+test("question classifier model management shows the training failure under the train button", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockNl2SqlApi(page);
@@ -11536,7 +11536,7 @@ test("data preparation read results use the shared detail skeleton without stale
 });
 
 for (const pageId of ["comment-management", "annotation-management", "domain-management"]) {
-  test(`${pageId} の取得・SQL 生成ボタンは共通の主操作サイズでキーボード実行できる`, async ({ page }, testInfo) => {
+  test(`${pageId} の取得・SQL 生成ボタンは共通の主操作サイズでキーボード実行できる`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     await page.goto(`/${pageId}`);
     // ヘッダーの操作群は説明文の長さに関わらずタイトルと同じ行(右上)に並ぶ(#672)。1280 / 1920 の両幅で確認する。
@@ -11607,7 +11607,7 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
   });
 }
 
-test("JOIN WHERE and metadata read result branches replace their result areas with shared skeletons", async ({ page }) => {
+test("JOIN WHERE and metadata read result branches replace their result areas with shared skeletons", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -12258,7 +12258,7 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
 }
 
 for (const uuidAvailable of [false, true]) {
-  test(`synthetic submission with randomUUID ${uuidAvailable ? "available" : "unavailable"} creates persistent history`, async ({ page }, testInfo) => {
+  test(`synthetic submission with randomUUID ${uuidAvailable ? "available" : "unavailable"} creates persistent history`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     if (!uuidAvailable) {
       // HTTP のクラウドでは randomUUID のみ未提供。localhost の通常テストでは見逃す。
@@ -12541,7 +12541,7 @@ test("synthetic run status outage keeps prior state and never resubmits", async 
   expect(submits).toBe(0);
 });
 
-test("synthetic completion uses a top toast without a result action or another generation", async ({ page }, testInfo) => {
+test("synthetic completion uses a top toast without a result action or another generation", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let status = "running";
   let writes = 0;
@@ -12639,7 +12639,7 @@ test("synthetic missing history does not silently select another run", async ({ 
   await expect(page.getByTestId("synthetic-run-status")).toHaveCount(0);
 });
 
-test("synthetic data table bulk selection and results use the shared skeleton preset", async ({ page }) => {
+test("synthetic data table bulk selection and results use the shared skeleton preset", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -12790,7 +12790,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expectNoHorizontalScroll(page);
 });
 
-test("synthetic data reports preflight rejection beside the generate action", async ({ page }) => {
+test("synthetic data reports preflight rejection beside the generate action", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/api/nl2sql/synthetic-data/runs", (route) => route.request().method() === "GET"
@@ -13120,7 +13120,7 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
   await expectNoHorizontalScroll(page);
 });
 
-test("data management CSV upload layout keeps table, file, mode, and execution in full-width rows", async ({ page }) => {
+test("data management CSV upload layout keeps table, file, mode, and execution in full-width rows", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -13381,7 +13381,7 @@ test("同名の既存オブジェクトと衝突するサンプルは警告し�
   await expectNoHorizontalScroll(page);
 });
 
-test("sample data and data management run imported workflows", async ({ page }) => {
+test("sample data and data management run imported workflows", { tag: "@responsive" }, async ({ page }) => {
   // 1 回に 21〜28 秒かかり、既定の 30 秒に近い。並列で負荷が高いと時間切れになるため延ばす。
   test.slow();
   const api = await mockNl2SqlApi(page);
@@ -14699,7 +14699,7 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
   await expectNoHorizontalScroll(page);
 });
 
-test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表示する", async ({ page }) => {
+test("Excel/CSV取込はDB構造再取得を待たず結果を実行枠下に表示する", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   let schemaRefreshPolls = 0;
   let dbAdminObjectRequests = 0;
@@ -15195,7 +15195,7 @@ test("ビュー作成の差分同期不整合はDB構造再取得CTAを表示す
   await expect.poll(() => manualRefreshStarted).toBe(1);
 });
 
-test("table and view management pages run guarded DDL and AI workflows", async ({ page }) => {
+test("table and view management pages run guarded DDL and AI workflows", { tag: "@responsive" }, async ({ page }) => {
   test.slow();
   const api = await mockNl2SqlApi(page);
 
@@ -16273,7 +16273,7 @@ test("profile sync keeps result visible while DB Profile targeted refresh asks f
   await expect.poll(() => manualRefreshSubmits).toBe(1);
 });
 
-test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方向に溢れない", async ({
+test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方向に溢れない", { tag: "@responsive" }, async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -16471,7 +16471,7 @@ test("workspace: 一時保存不可を明示し再読込で入力を失う前に
 });
 
 for (const targetCount of [1, 12]) {
-  test(`synthetic target list uses shared bounded density with ${targetCount} targets`, async ({ page }, testInfo) => {
+  test(`synthetic target list uses shared bounded density with ${targetCount} targets`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     const run = syntheticRunFixture("failed");
     const longError = `ORA-20000: ${"生成条件を確認してください。".repeat(8)} ${"X".repeat(180)}`;
@@ -17999,7 +17999,7 @@ test("sql to question generates SQL independently from the natural question and 
 });
 
 // Issue #427: 質問は明示登録した最小スナップショットとして復元する。
-test("sql to question retains candidates through navigation, reload and failed reference revalidation", async ({ page }, testInfo) => {
+test("sql to question retains candidates through navigation, reload and failed reference revalidation", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let mutations = 0;
   page.on("request", (request) => {
@@ -18089,7 +18089,7 @@ test("sql to question isolates candidate snapshots by DB and account and clears 
 });
 
 for (const invalid of ["expired", "malformed", "different-sql"] as const) {
-  test(`sql to question does not restore ${invalid} candidate snapshots`, async ({ page }) => {
+  test(`sql to question does not restore ${invalid} candidate snapshots`, { tag: "@responsive" }, async ({ page }) => {
     await mockNl2SqlApi(page);
     await page.goto("/sql-to-question");
     await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
@@ -18670,7 +18670,7 @@ test("SELECT SQL の重名列は別々の値を表示し予約済み列名を保
   await page.screenshot({ path: testInfo.outputPath("direct-sql-duplicate-columns.png") });
 });
 
-test("synthetic preview requires all tables and fresh consent before applying the same batch", async ({ page }, testInfo) => {
+test("synthetic preview requires all tables and fresh consent before applying the same batch", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let run = { ...syntheticRunFixture("completed"), preview: true, review_status: "ready", applied_at: null as string | null,
     targets: [syntheticRunFixture("completed").targets[0], { ...syntheticRunFixture("completed").targets[0], table_name: "APP.CUSTOMERS" }] };
@@ -18785,7 +18785,7 @@ for (const outcome of ["discard", "apply-error", "partial"] as const) {
 
 
 for (const theme of ["light", "dark"]) {
-  test(`header utility outline matches import across management pages: ${theme}`, async ({ page, isMobile }, testInfo) => {
+  test(`header utility outline matches import across management pages: ${theme}`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
     await mockNl2SqlApi(page);
     for (const path of ["/table-management", "/view-management", "/data-management"]) {
       await page.goto(path);
@@ -18822,7 +18822,7 @@ for (const theme of ["light", "dark"]) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`action roles and placement remain consistent in metadata and synthetic workflows ${theme}`, async ({ page }, testInfo) => {
+  test(`action roles and placement remain consistent in metadata and synthetic workflows ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     await page.addInitScript(() => sessionStorage.clear());
     const mobile = testInfo.project.name === "mobile-375";

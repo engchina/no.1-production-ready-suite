@@ -185,7 +185,7 @@ test("保存先が無いときは知らせ、読み込み中は経過時間を�
   );
 });
 
-test("Webhook の秘密のコピーに失敗しても秘密を Toast に出さず、欄を選択する (#790)", async ({ page }) => {
+test("Webhook の秘密のコピーに失敗しても秘密を Toast に出さず、欄を選択する (#790)", { tag: "@responsive" }, async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,

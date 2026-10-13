@@ -13,7 +13,7 @@ async function openFixture(page: Page, theme: "light" | "dark") {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`${theme}: loading 中もフォーカスを保ち、二重に送信しない`, async ({ page }, testInfo) => {
+  test(`${theme}: loading 中もフォーカスを保ち、二重に送信しない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await openFixture(page, theme);
     const save = page.getByTestId("save");
     const copy = page.getByTestId("copy");
@@ -76,7 +76,7 @@ for (const theme of ["light", "dark"] as const) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
   });
 
-  test(`${theme}: フォーカスの表示は outline 1 つで、PageHeader の操作はグループごとに区切る`, async ({ page }, testInfo) => {
+  test(`${theme}: フォーカスの表示は outline 1 つで、PageHeader の操作はグループごとに区切る`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-375";
     await openFixture(page, theme);
 

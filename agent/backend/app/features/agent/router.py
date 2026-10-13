@@ -44,6 +44,7 @@ from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse, Page
 from pr_backend_core.api import OffsetParams, offset_params, paginate, paginate_slice
 from pr_backend_core.chat_progress import (
+    CHAT_PROGRESS_SSE_HEADERS,
     ChatProgressPage,
     chat_progress_page,
     chat_progress_sse_response,
@@ -2865,9 +2866,16 @@ async def stream_run_events(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    # 中継（Nginx）の buffering と cache を切る header は、共通の進み具合の SSE と同じ（#1597）。
     if not follow:
-        return Response("".join(_sse_events(events)), media_type="text/event-stream")
-    return StreamingResponse(_sse_events(events), media_type="text/event-stream")
+        return Response(
+            "".join(_sse_events(events)),
+            media_type="text/event-stream",
+            headers=CHAT_PROGRESS_SSE_HEADERS,
+        )
+    return StreamingResponse(
+        _sse_events(events), media_type="text/event-stream", headers=CHAT_PROGRESS_SSE_HEADERS
+    )
 
 
 def _readable_run(request: Request, run_id: str) -> RunState:

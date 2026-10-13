@@ -1,6 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
+import { mobileProjectScope } from "../../platform/scripts/e2e-impact/mobile-scope";
+
 const frontendPort = process.env.PLAYWRIGHT_PORT ?? "3042";
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 const frontendCwd = fileURLToPath(new URL(".", import.meta.url));
@@ -64,6 +66,9 @@ export default defineConfig({
       // spec の中で viewport を回しているテスト（題名に「(desktop」「（mobile）」「mobile-375: 」や「1920px」を含む）は、
       // その中で 375px を確かめているので二重に実行しない。
       grepInvert: /[(（](desktop|mobile)|(desktop|mobile-375): |\d{4}px/,
+      // PR の CI は E2E_MOBILE_SCOPE=responsive で、画面幅に依存するテスト（@responsive など）だけを実行する。
+      // nightly とローカルは全件（#1582。platform/scripts/e2e-impact/mobile-scope.ts）。
+      ...mobileProjectScope(),
     },
   ],
 });
