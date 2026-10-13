@@ -3333,9 +3333,17 @@ for (const theme of ["ライト", "ダーク"] as const) {
     await page.reload();
     await expect(card.getByRole("link", { name: "CA の証明書をダウンロード" })).toHaveAttribute("href", "/platform/ca.crt");
     await card.getByText("端末への取り込み方").click();
-    for (const os of ["Windows", "macOS", "iPhone / iPad", "Android", "Firefox"]) {
-      await expect(card.getByText(os, { exact: true })).toBeVisible();
-    }
+    // OS の見出しは使うブラウザを添え、ブラウザの項は Edge → Chrome → Firefox の順（#1662）。
+    await expect(card.getByTestId("appearance-ca-certificate-steps").locator("dt")).toHaveText([
+      "Windows（Edge・Chrome）",
+      "macOS（Safari・Chrome・Edge）",
+      "iPhone / iPad（すべてのブラウザ）",
+      "Android（Chrome）",
+      "Edge",
+      "Chrome",
+      "Firefox",
+    ]);
+    await expect(card.getByText("Firefox", { exact: true })).toBeVisible();
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
