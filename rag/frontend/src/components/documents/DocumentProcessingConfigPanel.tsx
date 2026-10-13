@@ -419,7 +419,7 @@ export function DocumentProcessingConfigPanel({
             <div id="document-processing-config-editor" className="mt-4 space-y-4 border-t border-border pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-fg-muted">{t("documents.processingConfig.editHint")}</p>
-                <span className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg-muted">
+                <span data-surface-tint="neutral" className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg-muted">
                   {overrideCount > 0
                     ? t("knowledgeBases.adapter.overrideCount", {
                         count: overrideCount,

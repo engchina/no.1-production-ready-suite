@@ -48,6 +48,7 @@ export function UploadSendingState({
       {hasBytes ? (
         <div className="grid min-w-0 gap-1.5" data-testid="upload-progress">
           <div
+            data-surface-tint="neutral"
             className="h-2 overflow-hidden rounded-full bg-surface-hover"
             role="progressbar"
             aria-label={t("upload.progress.aria")}

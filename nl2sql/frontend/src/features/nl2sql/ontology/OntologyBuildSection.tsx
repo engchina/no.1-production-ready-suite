@@ -1928,6 +1928,7 @@ export function OntologyBuildSection({
             {!canEditDraftRevision && !draftMarkdown.trim() ? (
               // Draft 未生成時は巨大なコードエディタ枠を出さず、簡潔な空状態にする
               <div
+                data-surface-tint="neutral"
                 data-testid="ontology-markdown-draft-empty"
                 className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-surface-hover px-4 py-6"
               >
@@ -1992,6 +1993,7 @@ export function OntologyBuildSection({
             ) : (
               // 公開前は巨大なコードビューア枠を出さず、簡潔な空状態にする
               <div
+                data-surface-tint="neutral"
                 data-testid="ontology-markdown-published-viewer"
                 aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
                 className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-surface-hover px-4 py-6"

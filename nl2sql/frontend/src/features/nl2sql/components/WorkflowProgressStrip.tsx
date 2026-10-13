@@ -265,6 +265,7 @@ export function WorkflowProgressStrip({
                   />
                 )}
                 <span
+                  data-surface-tint={surfaceTintFor(stepCircleClass(step.status))}
                   className={`relative z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${stepCircleClass(step.status)}`}
                 >
                   <StepIcon status={step.status} index={index} spinning={spinnerTarget === index} />

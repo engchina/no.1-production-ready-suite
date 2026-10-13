@@ -276,7 +276,7 @@ export function DocumentRecipeManager({
             <h2 className="text-sm font-semibold text-fg">
               {t("documents.recipes.title")}
             </h2>
-            <span className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
+            <span data-surface-tint="neutral" className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
               {t("documents.recipes.count", { count: recipes.length })}
             </span>
           </div>
@@ -933,7 +933,7 @@ function AddModeOption({
           selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
         )}
       >
-        <span data-surface-tint={selected ? "accent" : undefined} className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
+        <span data-surface-tint={selected ? "accent" : "neutral"} className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
           {icon}
         </span>
         <span className="flex-1">{label}</span>

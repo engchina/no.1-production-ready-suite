@@ -708,7 +708,7 @@ function ServiceActionFailure({
 function ServiceExecutionPolicyBadge({ policy }: { policy: ServiceExecutionPolicy }) {
   return (
     <span
-      data-surface-tint={policy === "required_no_fallback" ? "danger" : policy === "in_process_when_disabled" ? "info" : undefined}
+      data-surface-tint={policy === "required_no_fallback" ? "danger" : policy === "in_process_when_disabled" ? "info" : "neutral"}
       className={cn(
         "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-xs font-medium",
         policy === "required_no_fallback"
@@ -840,7 +840,7 @@ function ModeBadge({ mode }: { mode: DeploymentMode }) {
 function ControlBadge({ enabled }: { enabled: boolean }) {
   return (
     <span
-      data-surface-tint={enabled ? "success" : undefined}
+      data-surface-tint={enabled ? "success" : "neutral"}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
         enabled ? "bg-success-subtle text-success-fg" : "bg-surface-hover text-fg-muted"
@@ -915,7 +915,7 @@ function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
       <HardDriveDownload size={14} aria-hidden />
       <span className="text-fg-muted">{t("settings.services.modelCache.label")}:</span>
       <span className="font-mono break-all text-fg">{cache.path}</span>
-      <span className="rounded-sm bg-surface-hover px-1.5 py-0.5 text-xs font-medium text-fg-muted">
+      <span data-surface-tint="neutral" className="rounded-sm bg-surface-hover px-1.5 py-0.5 text-xs font-medium text-fg-muted">
         {t("settings.services.modelCache.readonly")}
       </span>
     </p>

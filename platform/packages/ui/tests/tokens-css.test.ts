@@ -126,6 +126,8 @@ describe("tokens CSS", () => {
         "success-subtle": rgb(lightDark(colors, "color-success-subtle").light),
         "warning-subtle": rgb(lightDark(colors, "color-warning-subtle").light),
         "danger-subtle": rgb(lightDark(colors, "color-danger-subtle").light),
+        // 灰色の面（hover の地を常に塗るチップなど）。fg-muted は 4.39:1 で、同じ [data-surface-tint="neutral"] で深くする。
+        "surface-hover": rgb(lightDark(colors, "color-surface-hover").light),
       },
       dark: {
         "accent-subtle": mix(rgb("blue-600"), 0.16, rgb("neutral-900")),
@@ -134,6 +136,7 @@ describe("tokens CSS", () => {
         "success-subtle": rgb(lightDark(colors, "color-success-subtle").dark),
         "warning-subtle": rgb(lightDark(colors, "color-warning-subtle").dark),
         "danger-subtle": rgb(lightDark(colors, "color-danger-subtle").dark),
+        "surface-hover": rgb(lightDark(colors, "color-surface-hover").dark),
       },
     } as const;
     type Theme = keyof typeof surfaces;
@@ -152,7 +155,7 @@ describe("tokens CSS", () => {
         "warning-fg": tone === "warning" ? pick("color-warning-fg") : pick("color-warning-fg-strong"),
       };
     };
-    const toneOf = (surface: Surface) => surface.split("-")[0];
+    const toneOf = (surface: Surface) => (surface === "surface-hover" ? "neutral" : surface.split("-")[0]);
 
     it("[data-surface-tint] は副次・アクセントの文字を深くし、他の系統の success / warning を深い値にする", () => {
       expect(tintBlock).toMatch(/--color-fg-muted:\s*light-dark\(var\(--neutral-650\), var\(--neutral-350\)\);/);
@@ -180,7 +183,7 @@ describe("tokens CSS", () => {
       const { light } = surfaces;
       for (const surface of Object.keys(light) as Surface[]) {
         expect(contrast(rgb("neutral-600"), light[surface]), surface).toBeLessThan(4.5);
-        expect(contrast(rgb("blue-500"), light[surface]), surface).toBeLessThan(4.5);
+        if (surface !== "surface-hover") expect(contrast(rgb("blue-500"), light[surface]), surface).toBeLessThan(4.5);
       }
       expect(contrast(rgb("amber-700"), light["info-subtle"])).toBeLessThan(4.5);
       expect(contrast(rgb("green-700"), light["danger-subtle"])).toBeLessThan(4.5);

@@ -103,7 +103,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
           <CardTitle className="flex items-center gap-2 text-base">
             <Files className="size-4 text-fg-muted" aria-hidden />
             {t("knowledgeBases.documents.title")}
-            <span className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
+            <span data-surface-tint="neutral" className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
               {kb.document_count}
             </span>
           </CardTitle>

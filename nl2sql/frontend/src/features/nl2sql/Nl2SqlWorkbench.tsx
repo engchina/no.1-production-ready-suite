@@ -1429,7 +1429,7 @@ function ExecutableNl2SqlWorkbench() {
                                       <UserCog size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
                                       <span>{t("nl2sql.selectAiOverrides.roleToggle")}</span>
                                       {selectAiRoleHasOverride && (
-                                        <span className="rounded-full bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
+                                        <span data-surface-tint="neutral" className="rounded-full bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
                                           {t("nl2sql.selectAiOverrides.activeBadge")}
                                         </span>
                                       )}
@@ -1540,7 +1540,7 @@ function ExecutableNl2SqlWorkbench() {
                       <div className="flex flex-wrap items-center gap-2">
                         {/* source（deterministic 等）は内部識別子なので画面には出さない。 */}
                         {rewriteData.model && (
-                          <span className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg">
+                          <span data-surface-tint="neutral" className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg">
                             {rewriteData.model}
                           </span>
                         )}

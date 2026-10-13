@@ -56,7 +56,8 @@ export function RowLimitField({
         inputClassName="aria-[invalid=true]:border-danger-fg"
         width="xs"
       />
-      <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-fg-muted">
+      {/* sm 以上は 1 行。375px では折り返す（横スクロールの領域にするとキーボードで届かない。WCAG 2.1.1。#1671）。 */}
+      <p id={helperId} className="text-xs leading-5 text-fg-muted sm:overflow-x-auto sm:whitespace-nowrap">
         {helper}
       </p>
       <FieldError id={errorId} message={error} />
