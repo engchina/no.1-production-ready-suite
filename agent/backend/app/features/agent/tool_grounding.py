@@ -49,6 +49,7 @@ BLOCK と同じ考え方）。
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, Any
 
@@ -189,6 +190,24 @@ def tools_consulted(steps: list[RunStep]) -> bool:
             continue
         return True
     return False
+
+
+def tool_output_texts(steps: list[RunStep]) -> list[str]:
+    """この Run でモデルが呼んで成功した MCP 接続のツールの結果（JSON の文。#1934）。
+
+    回答前の確認の選択肢がツールの結果にあるかを確かめるのに使う。Control Plane が自分で
+    呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は入れない。
+    """
+    texts: list[str] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or MCP_TOOL_SEPARATOR not in call.name:
+            continue
+        if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
+            continue
+        if result.success and result.output is not None:
+            texts.append(json.dumps(result.output, ensure_ascii=False, default=str))
+    return texts
 
 
 def grounding_used(steps: list[RunStep]) -> bool:
@@ -400,5 +419,6 @@ __all__ = [
     "retried",
     "retry_input",
     "retry_message",
+    "tool_output_texts",
     "tools_consulted",
 ]
