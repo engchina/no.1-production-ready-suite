@@ -13,9 +13,18 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.endpoint.copy": "URL をコピー",
   "apiKeys.endpoint.copied": "URL をコピーしました",
   "apiKeys.endpoint.copyFailed": "コピーできませんでした。URL を選択してコピーしてください。",
+  "apiKeys.endpoint.local": "この画面の URL",
+  "apiKeys.endpoint.public": "公開の URL（OCI）",
+  "apiKeys.endpoint.same": "この画面の URL（公開の URL と同じ）",
+  "apiKeys.endpoint.copyLabel": "{product}の{kind}: URL をコピー",
+  "apiKeys.endpoint.caNote":
+    "https の URL が配備の自作の CA の証明書のときは、MCP クライアントにも CA を信頼させます（Claude Code は例の NODE_EXTRA_CA_CERTS）。CA の証明書:",
   "apiKeys.endpoint.example": "Claude Code の登録の例",
   "apiKeys.endpoint.exampleNote":
-    "<API キー> は発行したキーに置き換えます。キーはファイルや共有の設定に書かず、環境変数などに置いてください。",
+    "PR_API_KEY に発行したキーを入れます。--header は単一引用符のまま登録し、キーの値を設定ファイルに書かせません。MCP のサーバー名は組み込みのスキルに合わせて rag / nl2sql にします。",
+  "apiKeys.example.keyComment": "発行したキー（シェルの起動ファイルや secret の管理に置き、repo に書かない）",
+  "apiKeys.example.timeoutComment": "MCP のツールの待ち時間（ミリ秒）。既定の 60 秒では rag_search が切れる",
+  "apiKeys.example.caComment": "自作の CA の証明書（{url} を保存したファイル）",
   "apiKeys.create.title": "API キーを発行",
   "apiKeys.create.description":
     "キーは端末・用途ごとに分けて発行します（1 人 {max} 件まで）。秘密は発行の直後に 1 回だけ表示します。",

@@ -459,6 +459,42 @@ public_base_url() {
   fi
 }
 
+# KEY=VALUE の .env の 1 つの key を書き換える（無ければ末尾に足す）。所有者と mode は元のファイルのまま。
+suite_set_env_value() {
+  local file="$1" key="$2" value="$3" tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  grep -v "^${key}=" "${file}" > "${tmp}" || true
+  printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+  cat "${tmp}" > "${file}"
+  rm -f -- "${tmp}"
+}
+
+# 公開の基底の URL（#1870）: 利用者が開く URL の起点（public_base_url。https・公開の port）を、platform/.env の
+# PLATFORM_PUBLIC_BASE_URL に書く（API キーの画面の接続先の「公開の URL」）。host は公開 IP（suite-tls.sh と
+# 同じ決め方。無ければ private IP）。backend が起動する前（製品の配備の前）に、props の platform.env（初回に
+# 各製品の init_script.sh が platform/.env へ写す）と、既にある repository の platform/.env（再配備）の両方へ書く。
+# IP が分からなければ書かない（画面は開いている URL だけを出す）。
+configure_public_base_url() {
+  local host base file
+  host="$(SUITE_TLS_PROPS_DIR="${PROPS_DIR}" suite_tls_detect_public_ip 2>/dev/null || true)"
+  if [ -n "${host}" ]; then
+    printf '%s\n' "${host}" > "${PROPS_DIR}/public_ip.txt"
+  else
+    host="$(suite_tls_detect_private_ip 2>/dev/null || true)"
+  fi
+  if [ -z "${host}" ]; then
+    log "public URL: 公開 IP も private IP も分からないため、PLATFORM_PUBLIC_BASE_URL は書きません。"
+    return 0
+  fi
+  base="$(public_base_url "${host}")"
+  for file in "${PROPS_DIR}/platform.env" "${SUITE_REPO_DIR}/platform/.env"; do
+    if [ -f "${file}" ]; then
+      suite_set_env_value "${file}" PLATFORM_PUBLIC_BASE_URL "${base}"
+    fi
+  done
+  log "public URL: PLATFORM_PUBLIC_BASE_URL=${base}"
+}
+
 report_urls() {
   local host base product
   host="$(tr -d '[:space:]' 2>/dev/null < "${PROPS_DIR}/public_ip.txt" || true)"
@@ -487,6 +523,8 @@ main() {
     SUITE_DB_USER_FAILED=true
     log "WARNING: アプリ用の DB ユーザーを準備できませんでした。製品の配備と起動は続けます（DB に接続できるようになったら sudo ${SUITE_DEPLOY_DIR}/suite-restart.sh を実行してください）。"
   fi
+  # 公開の URL（API キーの画面の接続先。#1870）は backend の起動（製品の配備）の前に platform/.env へ書く。
+  configure_public_base_url
   deploy_products
   configure_tls
   configure_nginx
