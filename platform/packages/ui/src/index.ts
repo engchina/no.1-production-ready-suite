@@ -201,6 +201,30 @@ export {
   type UseChatHistoryActionsOptions,
 } from "./components/chat/use-chat-history-actions";
 export {
+  ClarificationCard,
+  clarificationAnswers,
+  isClarificationEntryAnswered,
+  type ClarificationAnswer,
+  type ClarificationBusyAction,
+  type ClarificationCardProps,
+  type ClarificationDraft,
+  type ClarificationDraftEntry,
+  type ClarificationItem,
+  type ClarificationOption,
+} from "./components/chat/clarification-card";
+export {
+  ClarificationRecord,
+  clarificationRecordAnswerText,
+  type ClarificationRecordEntry,
+  type ClarificationRecordProps,
+} from "./components/chat/clarification-record";
+export {
+  DEFAULT_CLARIFICATION_LABELS,
+  clarificationLabels,
+  type ClarificationLabels,
+  type ClarificationNouns,
+} from "./components/chat/clarification-labels";
+export {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,

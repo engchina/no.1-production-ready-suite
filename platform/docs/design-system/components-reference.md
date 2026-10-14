@@ -3256,3 +3256,100 @@ import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-read
 
 - 描くもの: 見出し（`#`〜`######`）・段落（中の改行は `<br>`）・`-` / `*` / `+` / `1.` の箇条書き（字下げで入れ子）・` ``` ` / `~~~` のコードブロック（`data-language`）・`>` の引用・`---` の区切り線、行の中の `` `code` ``・`**強調**`・`*斜体*`・`[文字](https://…)`・`<https://…>`・裸の URL、`\*` の取り消し。
 - 描かないもの: 生の HTML（文字のまま）・表（段落の文字のまま。`splitMarkdownTables` で先に取り出す）・画像・`_斜体_`（識別子の `_` を斜体にしない）・`http(s)` / `mailto` 以外のリンク。
+
+---
+
+## ClarificationCard / ClarificationRecord — **新規**（#1839）
+
+回答前の確認のカードと、利用者の答えを会話に残す表示（3 製品共通）。決めたことと理由は README §4「`ClarificationCard` / `ClarificationRecord`」、振る舞い（いつ聞くか・操作の結果・往復の上限・履歴）は UX 契約 [confirm-before-answer.md](../ux-contracts/confirm-before-answer.md)。
+
+```tsx
+import {
+  ApiErrorBanner,
+  ChatAnswer,
+  ClarificationCard,
+  ClarificationRecord,
+  clarificationLabels,
+} from "@production-ready/ui";
+
+// NL2SQL は名詞だけを渡す（RAG・Agent は既定の「回答」のまま labels を渡さない）。
+const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生成" });
+
+<ChatAnswer>
+  <ClarificationCard
+    variant="plain"                                   // 回答の枠の中なら枠を重ねない
+    labels={labels}
+    items={[{
+      id: item.id,
+      prompt: item.question_ja,                       // 確認事項
+      reason: item.reason_ja,                         // 確認する理由
+      selection: item.answer_kind === "multi_select" ? "multiple" : "single",
+      meta: <StatusBadge icon={false} variant="neutral" label="FROM" />,
+      options: item.candidates.map((c) => ({
+        id: c.id,
+        label: c.label_ja,
+        description: c.description_ja,
+        detail: <span className="break-all font-mono">{c.refs_ja}</span>,   // 製品固有の中身
+      })),
+    }]}
+    progress={{ current: answered + 1, total: answered + unresolved }}   // 1 件ずつ聞くとき
+    round={{ current: reviewRound, max: maxReviewRounds }}
+    busyAction={busy}                                  // "confirm" | "skip" | "cancel" | null
+    error={error ? <ApiErrorBanner error={error} fallback={t("…")} /> : null}
+    onConfirm={(answers) => submit(answers)}           // [{ itemId, optionIds, otherText }]
+    onSkip={() => skipAndAnswerWithAssumptions()}
+    onCancel={() => cancelAndRestoreQuestion()}
+  >
+    <RequirementItemsList controller={controller} />  {/* 製品の中身（任意） */}
+  </ClarificationCard>
+</ChatAnswer>
+
+// 確定・スキップの後は会話の利用者の側に残す
+<ClarificationRecord
+  entries={[{ id: "period", prompt: "どの期間の売上を見ますか？", selected: ["今月"], otherText: "" }]}
+  outcome="answered"                                   // スキップは "skipped"
+  labels={labels}
+/>
+```
+
+### ClarificationCard の props
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `items` | `ClarificationItem[]` | — | 確認事項（ふつうは 1 件）。`{ id, prompt, reason?, selection?: "single" \| "multiple", options: ClarificationOption[], meta?, optional? }`。`optional` は答えなくても確定できる確認事項（NL2SQL の確認のカードの表の選び直し・直しの自由入力） |
+| `items[].options[]` | `ClarificationOption` | — | `{ id, label, description?, detail?, disabled? }`。`detail` は製品固有の中身（物理名・根拠・章節）。1 回 8 個までを目安にする |
+| `onConfirm` | `(answers: ClarificationAnswer[]) => void` | — | 「この内容で〈回答〉」。`{ itemId, optionIds, otherText }`（自由入力は前後の空白を除く）。すべての確認事項に答えるまで押せない |
+| `onSkip` | `() => void` | — | 「確認せずに〈回答〉」。渡さなければ出さない（3 製品とも渡す） |
+| `onCancel` | `() => void` | — | 「確認をやめる」（質問を入力欄に戻す）。渡さなければ出さない |
+| `progress` | `{ current, total }` | — | 1 件ずつ聞くときの位置「確認事項 1 / 3」。無くて 2 件以上なら「確認事項 2 件」 |
+| `round` | `{ current, max }` | — | 「確認 1 回目（上限 2 回）」。`current >= max` で「これが最後の確認です。…」を添える |
+| `busyAction` | `"confirm" \| "skip" \| "cancel" \| null` | `null` | 押したボタンだけ `loading`、ほかの操作と入力は `disabled` |
+| `disabled` | `boolean` | `false` | カード全体を操作できない（古い会話の確認） |
+| `value` / `onValueChange` | `ClarificationDraft` | — | 受控の答え（作業状態に残すとき）。`Record<itemId, { optionIds, otherText }>` |
+| `defaultValue` | `ClarificationDraft` | `{}` | 非受控の初期の答え。確認事項（`items` の ID）が変わると空に戻る |
+| `blockedReason` | `string \| null` | `null` | 製品が決める押せない理由（NL2SQL の未送信の直し）。文があれば確定を押せず、確定の `aria-describedby` にする |
+| `children` | `ReactNode` | — | 確認事項の下・操作の行の上に置く製品の中身 |
+| `error` | `ReactNode` | — | 操作の失敗（`ApiErrorBanner`）。操作の行の直上 |
+| `actions` | `ReactNode` | — | 確定の右に置く製品の操作（NL2SQL の「直しを伝える」。同じ `size` の `Button`）。多用しない |
+| `labels` | `Partial<ClarificationLabels>` | `DEFAULT_CLARIFICATION_LABELS` | 文言。ふつうは `clarificationLabels({ stage, action })` を渡す。`skipHint` / `cancelHint` を空にすると補足を出さない（入力欄に戻らない取り消し） |
+| `size` | `"sm" \| "md" \| "lg"` | `"md"` | ボタンの高さ（チャットの回答の中は md、画面のパネルは lg） |
+| `headingLevel` | `2 \| 3 \| 4` | `3` | 題の見出しの段（確認事項の文はその 1 段下） |
+| `autoFocus` | `boolean` | `false` | 最初に出たときに最初の確認事項の文（題の 1 段下の見出し）へフォーカスを移す（確認事項が変わったときは常に移す） |
+| `variant` | `"card" \| "plain"` | `"card"` | `plain` は枠なし（回答の枠の中） |
+| `idPrefix` / `className` / `testId` | `string` | `testId="clarification-card"` | `testId` から `-confirm` / `-skip` / `-cancel` / `-blocked` / `-meta` / `-last-round` / `-item`（`data-item-id`）/ `-option`（`data-option-id`）/ `-other` を作る |
+
+- helper: `clarificationAnswers(items, draft)`（確定した答えを組む）、`isClarificationEntryAnswered(entry)`。
+
+### ClarificationRecord の props
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `entries` | `ClarificationRecordEntry[]` | — | `{ id, prompt, selected: string[], otherText? }`（選んだ選択肢の名前と自由入力） |
+| `outcome` | `"answered" \| "skipped"` | `"answered"` | `skipped` は「確認せずに回答しました（前提を示して回答）」と確認事項だけを出す |
+| `variant` | `"bubble" \| "disclosure"` | `"bubble"` | `bubble` は会話の利用者の側の吹き出し、`disclosure` は回答の枠の中の折りたたみ |
+| `defaultOpen` | `boolean` | `false` | `disclosure` の初期の開閉 |
+| `labels` | `Partial<ClarificationLabels>` | `DEFAULT_CLARIFICATION_LABELS` | 題「回答前に確認した内容」・「その他: …」・「（答えなし）」 |
+| `className` / `testId` | `string` | `testId="clarification-record"` | 外側に `data-outcome` を付ける。`-entry`（`data-entry-id`）/ `-skipped` |
+
+- helper: `clarificationRecordAnswerText(entry, labels)`（「東日本、西日本、その他: 沖縄」）。
+- 単体テストは `packages/ui/tests/clarification-card.test.tsx`。
