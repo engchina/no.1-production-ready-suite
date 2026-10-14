@@ -1154,5 +1154,7 @@ def test_cli_reports_real_cause_of_pool_timeout_without_secrets(
     monkeypatch.setattr("sys.argv", ["nl2sql_system_schema", "--check"])
     assert nl2sql_system_schema.main() == 1
     output = capsys.readouterr().out
-    assert output.startswith("状態を読めません（DPY-6005: ADB が停止しているか")
+    assert output.startswith(
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: DPY-6005: ADB が停止しているか"
+    )
     assert "Pa55-word-x" not in output
