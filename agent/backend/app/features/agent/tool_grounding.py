@@ -142,7 +142,8 @@ def grounded_in_thread(previous_steps: Iterable[list[RunStep]]) -> bool:
 
     そうなら、今の Run がツールを呼ばずに前の回答を言い換え・整形・要約しても拒答にしない
     （「前の回答を表にして」「もっと短く」など）。前のターンの事実の確かめは、前のターンで
-    裏付けた根拠を今のターンの最終の検証に渡す仕組み（#1837）に任せる。
+    裏付けた根拠を今のターンの最終の検証に渡す仕組み（#1837）に任せる（今のターンに根拠が無くても、
+    その根拠だけで検証する。#1879）。
     """
     return any(grounding_used(steps) for steps in previous_steps)
 
