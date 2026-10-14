@@ -107,7 +107,12 @@ export function ApiKeysAdminPage({ api, messages }: ApiKeysAdminPageProps) {
                       resultCountLabel={t("apiKeys.list.count", { count: visibleKeys.length })}
                     />
                   }
-                  summary={t("apiKeys.list.count", { count: visibleKeys.length })}
+                  // 件数はツールバーの右の 1 か所（「全 N 件」「N 件（全 M 件）」。読み上げは検索欄が行う。#1891）。
+                  count={{
+                    total: allKeys.length,
+                    matched: query.trim() ? visibleKeys.length : undefined,
+                    live: false,
+                  }}
                   testId="api-key-list-toolbar"
                 />
                 <ApiKeysTable
@@ -115,6 +120,9 @@ export function ApiKeysAdminPage({ api, messages }: ApiKeysAdminPageProps) {
                   t={t}
                   showOwner
                   resetKey={query}
+                  pagingKey="apiKeysAdmin"
+                  paginationAriaLabel={t("apiKeys.list.pagerLabel")}
+                  paginationTestId="api-keys-admin-pagination"
                   onRevoke={(key) => void confirmRevoke(key)}
                   empty={<EmptyState title={t("apiKeys.list.noMatch")} />}
                 />

@@ -2127,6 +2127,31 @@ def test_build_engine_settings_passes_answer_round_latency(tmp_path: Any) -> Non
     assert changed.answer_max_correction_rounds == 1
 
 
+def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None:
+    """停滞した LLM の呼び出しの打ち切りと送り直し(既定 ON・20 秒・0.25・1 回)を
+    rag_engine に渡す(#1926)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    assert default.llm_stall_detection is True
+    assert default.llm_stall_idle_seconds == 20.0
+    assert default.llm_stall_min_rate_ratio == 0.25
+    assert default.llm_stall_resends == 1
+    changed = build_engine_settings(
+        Settings(
+            rag_llm_stall_detection_enabled=False,
+            rag_llm_stall_idle_seconds=45,
+            rag_llm_stall_min_rate_ratio=0.5,
+            rag_llm_stall_resends=2,
+        ),
+        output_dir=tmp_path,
+    )
+    assert changed.llm_stall_detection is False
+    assert changed.llm_stall_idle_seconds == 45.0
+    assert changed.llm_stall_min_rate_ratio == 0.5
+    assert changed.llm_stall_resends == 2
+
+
 def _engine_effort(value: str) -> str:
     return "" if value == "model" else value
 

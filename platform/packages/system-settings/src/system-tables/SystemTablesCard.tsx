@@ -13,6 +13,7 @@ import {
   DataTable,
   Disclosure,
   ExecutionConfirmationField,
+  ListToolbar,
   Skeleton,
   StatusBadge,
   TimedLoadingState,
@@ -762,6 +763,14 @@ function SystemTablesDetails({
             </span>
           ) : null}
         </p>
+        {/* 一覧の件数はツールバーの右の ListCount（#1891）。見出しの「存在 / 必須」は状態の数で、一覧の件数とは別。
+            ページングはしない: 製品ごとに決まった数十件の管理オブジェクトを、種類・状態を見比べて点検する一覧で、
+            ページに分けると不足しているオブジェクトが別のページに隠れる（表の中は 8 行で縦スクロール）。 */}
+        <ListToolbar
+          className="mb-3"
+          count={{ total: objects.length, live: false, testId: "system-tables-count" }}
+          testId="system-tables-toolbar"
+        />
         <DataTable<SystemObjectMetadata>
           columns={[
             {

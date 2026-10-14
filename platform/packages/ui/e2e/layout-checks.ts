@@ -211,6 +211,13 @@ export async function findFieldsOffWidthScale(
         if (steps.some((step) => near(width, step))) continue;
         const formGrid = box.closest<HTMLElement>("[data-form-grid]");
         if (formGrid && near(width, contentWidth(formGrid))) continue;
+        // 入力欄と操作の行（FieldActionRow）の `full` の欄は、行の幅から操作の幅を除いた残りに伸びる。
+        // 行（の外枠）が置き場所の幅いっぱいなら `full` とみなす（#1891 段 4）。
+        const actionRow = box.closest<HTMLElement>("[data-field-action-row]");
+        const rowContainer = actionRow?.parentElement?.parentElement;
+        if (actionRow && rowContainer && actionRow.getBoundingClientRect().width >= contentWidth(rowContainer) - tolerance) {
+          continue;
+        }
         let container: HTMLElement | null = box.parentElement;
         while (container && container.getBoundingClientRect().width <= width + tolerance) {
           container = container.parentElement;

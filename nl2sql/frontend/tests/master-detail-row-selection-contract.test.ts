@@ -15,6 +15,11 @@ const securityRolesSource = readFileSync(
   new URL("../../../platform/packages/system-settings/src/users-roles/RoleManagementPage.tsx", import.meta.url),
   "utf8"
 );
+// 一覧の行の選択とページング（今のページの行から選ぶ）は 2 画面で共通の hook（#1891）。
+const securitySharedSource = readFileSync(
+  new URL("../../../platform/packages/system-settings/src/users-roles/shared.tsx", import.meta.url),
+  "utf8"
+);
 const profileManagementSource = readFileSync(
   new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
   "utf8"
@@ -29,19 +34,20 @@ test("一覧/詳細ページは共有 DataTable の行選択（selectedRowKey / 
     assert.match(source, /onRowClick=/u);
   }
 
-  assert.match(securityUsersSource, /selectedVisibleKey/u);
-  assert.match(securityUsersSource, /selectedRowKey=\{visibleSelectedId\}/u);
+  // 選択は今のページの行から決める共通の hook（usePagedSelectionList。#1891）。
+  assert.match(securitySharedSource, /selectedVisibleKey/u);
   // 利用者が選んだ行は manual として保持し、絞り込み後も選択を残す（render で読むため state で持つ。#181）。
-  assert.match(securityUsersSource, /preserveSelected: selection\.manual/u);
+  assert.match(securitySharedSource, /preserveSelected: selection\.manual/u);
+  assert.match(securityUsersSource, /usePagedSelectionList/u);
+  assert.match(securityUsersSource, /selectedRowKey=\{visibleSelectedId\}/u);
   assert.match(securityUsersSource, /selectUser\(user\.user_uuid\)/u);
   assert.match(securityUsersSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
   assert.match(securityUsersSource, /className: INFORMATION_TABLE_ROW_CLASS/u);
   assert.match(securityUsersSource, /scrollTestId="security-users-scroll-region"/u);
   assert.match(securityUsersSource, /scrollAriaLabel/u);
 
-  assert.match(securityRolesSource, /selectedVisibleKey/u);
+  assert.match(securityRolesSource, /usePagedSelectionList/u);
   assert.match(securityRolesSource, /selectedRowKey=\{visibleSelectedId\}/u);
-  assert.match(securityRolesSource, /preserveSelected: selection\.manual/u);
   assert.match(securityRolesSource, /selectRole\(role\.role_id\)/u);
   assert.match(securityRolesSource, /visibleRows=\{INFORMATION_TABLE_VISIBLE_ROWS\}/u);
   assert.match(securityRolesSource, /className: INFORMATION_TABLE_ROW_CLASS/u);

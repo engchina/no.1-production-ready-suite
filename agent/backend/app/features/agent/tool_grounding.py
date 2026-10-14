@@ -32,7 +32,8 @@ BLOCK と同じ考え方）。
 - 確認のツールを渡した Run（#1881 の追加）でも、ツールを 1 つも呼ばずに本文で確認の質問だけを返した
   回答は 1 回差し戻す（確認のツールを渡したときの文。差し戻しの後も本文の聞き返しなら、拒答に
   せずそのまま出し、`text_clarification` を経過に残す）。あいさつへの返事（「こんにちは。ご用件を
-  お知らせください。」。#1879）は確認の質問ではないので差し戻さない（`is_greeting_reply`）。
+  お知らせください。」。#1879）と、お礼・質問でない入力に用件を聞く返事（#1929）は確認の質問ではないので
+  差し戻さない（`is_greeting_reply`）。
 - 利用者に確認しない Run（業務 Agent の方針「前提を示して回答」と、利用者が「確認せずに回答」を
   選んだ Run。無人の Run は除く。#1903）では、確認の質問だけの回答も差し戻しの対象にし、差し戻しの
   文は「確認の質問はせず、資料・業務データのツールで調べ、決まらない点は前提を示して答える
@@ -48,11 +49,17 @@ BLOCK と同じ考え方）。
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, OUTCOME_SCHEMA_VERSION
-from app.features.agent.answer_passages import greets, is_clarification_only, is_greeting_only
+from app.features.agent.answer_passages import (
+    asks_for_request,
+    greets,
+    is_clarification_only,
+    is_greeting_only,
+)
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.confirmation import CONFIRMATION_TOOL
 from app.features.agent.support_task import (
@@ -185,6 +192,24 @@ def tools_consulted(steps: list[RunStep]) -> bool:
     return False
 
 
+def tool_output_texts(steps: list[RunStep]) -> list[str]:
+    """この Run でモデルが呼んで成功した MCP 接続のツールの結果（JSON の文。#1934）。
+
+    回答前の確認の選択肢がツールの結果にあるかを確かめるのに使う。Control Plane が自分で
+    呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は入れない。
+    """
+    texts: list[str] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or MCP_TOOL_SEPARATOR not in call.name:
+            continue
+        if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
+            continue
+        if result.success and result.output is not None:
+            texts.append(json.dumps(result.output, ensure_ascii=False, default=str))
+    return texts
+
+
 def grounding_used(steps: list[RunStep]) -> bool:
     """モデルが根拠・データのツールを呼んで結果を得たか（成功した呼び出しだけ）。"""
     for step in steps:
@@ -215,12 +240,15 @@ def is_exempt_answer(answer: str, steps: list[RunStep]) -> bool:
 
 
 def is_greeting_reply(answer: str, question: str = "") -> bool:
-    """あいさつへの返事か（#1879。あいさつを含む回答か、利用者の質問があいさつだけ）。
+    """あいさつ・質問でない入力への返事か（#1879・#1929）。
 
-    「こんにちは。ご用件をお知らせください。」のように用件を聞く回答は、質問の解釈を確かめる
-    確認の質問ではないので、本文の確認の質問の差し戻し（#1881・#1903）の対象にしない。
+    あいさつ・お礼を含む回答か、利用者の質問があいさつ・お礼だけか、用件（何を知りたいか）を
+    聞くだけの回答（`asks_for_request`。「テスト」への「社内の規程や手順について、知りたいことを
+    お知らせください。」）。「こんにちは。ご用件をお知らせください。」のように用件を聞く回答は、
+    質問の解釈を確かめる確認の質問ではないので、本文の確認の質問の差し戻し（#1881・#1903）の
+    対象にしない。
     """
-    return greets(answer) or is_greeting_only(question)
+    return greets(answer) or is_greeting_only(question) or asks_for_request(answer)
 
 
 def needs_grounding(
@@ -391,5 +419,6 @@ __all__ = [
     "retried",
     "retry_input",
     "retry_message",
+    "tool_output_texts",
     "tools_consulted",
 ]

@@ -6,13 +6,20 @@
 1. 検索の当たり: 利用者が使えるプロファイルの参照先のナレッジベース（ACTIVE・利用者が使える KB）を
    まとめて 1 回 hybrid 検索し（質問の埋め込みは 1 回。検索と同じ見え方の条件）、当たった文書が
    属するナレッジベースからプロファイルに点を付ける（順位が上ほど高い）。同じ文書名・同じ本文の
-   chunk（同じ資料を複数のナレッジベースに入れたもの）は同じ順位に数える。
+   chunk（同じ資料を複数のナレッジベースに入れたもの）は同じ順位に数える。点に数えるのは上位の
+   `RANK_DEPTH` 件の本文だけ（#1865。下位の弱い当たりを多く持つ大きいプロファイルが、上位の
+   当たりを持つプロファイルを数で上回らないようにする）。
 2. 名前・説明の重なり: 質問とプロファイルの名前・説明・参照先のナレッジベースの名前の文字の
    2-gram の重なり（検索の当たりが同じときの手がかり。重みは小さい）。
 
-1 位と近い点の候補が、1 位と違う文書に当たっていれば「割れた」とみなし、推薦を null にして候補の
-一覧を返す（呼び出し元が利用者に確かめる。「回答前の確認」#1839 の選択肢にできる形）。近い候補が
-1 位と同じ文書にしか当たっていなければ、どれを選んでも根拠は同じなので 1 位を推薦する。
+1 位と近い点の候補が、1 位と 1 つも同じ文書に当たっていなければ（上位の文書が重ならない）「割れた」
+とみなし、推薦を null にして候補の一覧を返す（呼び出し元が利用者に確かめる。「回答前の確認」#1839 の
+選択肢にできる形）。近い候補が 1 位と同じ文書にも当たっていれば、同じ資料を持つプロファイル
+（評価の写し・版の違う取り込みなど）なので 1 位を推薦する（#1865。上位の文書の集合が少しでも違えば
+割れとした以前の規則は、同じ資料の写しの間で割れが多かった）。
+
+値（`RANK_OFFSET`・`RANK_DEPTH`・`CLOSE_SCORE_RATIO`）は #1865 の評価の問（プロファイル名を書かない
+34 問。開発の環境の 41 プロファイル）で決めた。
 """
 
 from __future__ import annotations
@@ -31,12 +38,16 @@ logger = logging.getLogger(__name__)
 
 # 1 回の検索で読む chunk の数（同じ資料を複数の KB に入れた環境でも、別の資料まで届く数）。
 RECOMMEND_RETRIEVAL_TOP_K = 80
-# 順位の重み 1 / (順位 + RANK_OFFSET)。上位の数件の差を残しつつ、1 件の当たりだけで決まらない。
-RANK_OFFSET = 5
-# 名前・説明の重なり（0〜1）の重み。1 位の当たり（1/6）より小さく、当たりの同点を分ける程度。
+# 順位の重み 1 / (順位 + RANK_OFFSET)。上位の当たりを重くする（#1865 で 5 → 2）。
+RANK_OFFSET = 2
+# 点に数える本文の順位の上限（#1865）。下位の弱い当たりの数で大きいプロファイルが勝たない
+# ようにする。
+RANK_DEPTH = 10
+# 名前・説明の重なり（0〜1）の重み。1 位の当たり（1/3）より小さく、当たりの同点を分ける程度。
 LEXICAL_WEIGHT = 0.05
-# 1 位の点のこの割合以上の候補を「近い」とみなす。
-CLOSE_SCORE_RATIO = 0.75
+# 1 位の点のこの割合以上の候補を「近い」とみなす（#1865 で 0.75 → 0.7。順位 1 と 2 の重みの比が
+# ちょうど 0.75 になり、境目に乗らないようにする）。
+CLOSE_SCORE_RATIO = 0.7
 # 候補ごとに示す当たった文書名の数・近さの判定に使う文書の数。
 CANDIDATE_DOCUMENTS = 3
 DESCRIPTION_MAX_CHARS = 200
@@ -141,6 +152,8 @@ def rank_profiles(
         key = (_document_name(chunk), chunk.text)
         if key not in rank_of_content:
             rank_of_content[key] = len(rank_of_content) + 1
+        if rank_of_content[key] > RANK_DEPTH:
+            continue
         weight = 1.0 / (rank_of_content[key] + RANK_OFFSET)
         reached: set[str] = set()
         for kb_id in membership.get(chunk.document_id, set()):
@@ -175,7 +188,14 @@ def rank_profiles(
     top = candidates[0]
     close = [item for item in candidates[1:] if item.score >= top.score * CLOSE_SCORE_RATIO]
     top_documents = set(top.documents[:CANDIDATE_DOCUMENTS])
-    split = any(set(item.documents[:CANDIDATE_DOCUMENTS]) != top_documents for item in close)
+    if top_documents:
+        # 1 位と上位の文書が 1 つも重ならない近い候補があれば割れ（同じ資料の写しは割れにしない）。
+        split = any(
+            not (set(item.documents[:CANDIDATE_DOCUMENTS]) & top_documents) for item in close
+        )
+    else:
+        # 当たりが無く名前・説明の重なりだけで並んだときは、近い候補があれば決めない。
+        split = bool(close)
     best = top.score
     shown = candidates[: max(1, min(limit, RECOMMEND_LIMIT_MAX))]
     for item in shown:

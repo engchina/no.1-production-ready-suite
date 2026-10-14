@@ -163,6 +163,25 @@ token を出す。
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・
 `llm_attempt`・`llm_max_output_tokens`）に残す（#1527）。
 
+**停滞した LLM の呼び出しの送り直し（#1926）**: OCI Enterprise AI の呼び出しは、まれ（#1912 の記録の 206 件で約 1%）に
+通常の 1/10 以下の速さ（13〜23 token/秒。中央値 224）に落ち、同じ token 数で 36 秒 → 183 秒かかった。回答の期限がある文脈では
+LLM の呼び出しを streaming で受け（`rag_engine.adapters.oci._stream_parsed`）、次のとき stream を閉じて同じ要求を送り直す
+（`RAG_LLM_STALL_RESENDS` 回まで。最後の送信は検出せずに期限まで待つ。期限の残りが停滞の秒より短いときの timeout は停滞ではなく
+期限切れ）。
+
+- event（最初の event を含む）が `RAG_LLM_STALL_IDLE_SECONDS`（既定 20 秒）来ない（`stall_idle`。httpx の read timeout）。
+  同じ接続・モデルの直近の呼び出しの最大の間隔の中央値の 3 倍が長ければそちら（推論を stream しないモデル）。
+- 最初の delta（推論・出力の event）から 10 秒が経った後、直近 10 秒の delta の数（event/秒）が、同じ接続・モデルの直近 8 回の
+  完了した呼び出し（delta 256 件以上）の速さの中央値 × `RAG_LLM_STALL_MIN_RATE_RATIO`（既定 0.25）を下回った（`stall_slow`）。
+
+判定の基準は process の中の直近の呼び出しから学び、3 回たまるまでは検出しない（基準の無いモデルを誤って打ち切らない）。
+取込などの期限の無い呼び出しは従来どおり streaming しない（`responses.parse`）。`RAG_LLM_STALL_DETECTION_ENABLED=false` で従来の
+受け方に戻る。打ち切った呼び出しは `llm_status=failed` と理由（`stall_idle` / `stall_slow`）で log と `llm_usage` の
+`incomplete_reasons` に、送り直しの回数は `stall_resends` に残る。streaming で受けた呼び出しは、log に最初の event までの秒
+（`llm_first_event_seconds`。待ち）・出力の速さ（`llm_delta_rate`。停滞）・最大の間隔（`llm_max_gap_seconds`）を、工程の
+`llm_usage` にその工程の最大の待ち（`first_event_seconds_max`）と最も遅い速さ（`delta_rate_min`）を残し、遅い呼び出しが待ちか
+出力の途中の停滞かを記録から見分けられる。
+
 **是正の「改善なし」の打ち切り（#1527）**: 時間が残っていても、次のときは是正の組を始めず、それまでの最良の組で
 確定する（工程「是正の打ち切り」。`round_budget.stop.reason` が `no_improvement_*`）。時間の上限ではないので、本文の
 「確かめられていない点」には出さない（残った不足は採用した組の回答がそのまま示す）。
@@ -179,6 +198,12 @@ token を出す。
   前の組の降格は、次の草稿が同じ引用で書き直さない限り原文のまま引き継がれ（`carry_over`）、監査に掛からないので、
   作り直しても指摘から消えない。#1864 の記録では、この形の次の組（4 組）はどれも降格の数が減らず、1 組 14〜63 秒を
   使っていた。1 組目の後の降格だけの指摘は、付け足した前提を直せることがある（6 組中 2 組）ので作り直す。
+- 1 組目の指摘が、監査が質問の対象ではない（`not_applicable`）とした説明の降格だけ（`no_improvement_not_applicable_only`。
+  #1925。`grounded.not_applicable_only`。降格したどの説明の理由も監査の not_applicable で、写し誤り・答えていない要求・
+  使われていない根拠・目的のずれが無い）。not_applicable は言い回しではなく引いた原文の対象が質問と違うという判定で、
+  同じ根拠のまま作り直しても直らない。#1864・#1912 の記録の 4 件は、どれも 2 組目が採用されず（作り直した草稿はその説明を
+  落とし、`carry_over` が原文のまま引き継いで同点）、1 組 8.6〜10.5 秒を使っていた。答えていない要求が残るとき（多段の問の
+  途中の段を誤って not_applicable にした監査の揺れで要求が欠けたとき）は従来どおり作り直す。
 
 `round_budget.rounds[]` には各組の採否（`accepted`）・指摘の比較の形（`feedback_signature`）・summary の支持も残し、
 打ち切りを LLM なしで replay できる。

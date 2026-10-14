@@ -8,6 +8,7 @@ import {
   CardTitle,
   ErrorState,
   FormActionBar,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   PageBody,
@@ -271,21 +272,25 @@ export function UploadStorageSettingsPage({
               </fieldset>
 
               {form.backend === "local" ? (
-                <TextField
-                  id="upload-storage-local-dir"
-                  label={m.fieldLocalStorageDir}
-                  value={form.localStorageDir}
-                  onValueChange={(value) => updateForm({ localStorageDir: value })}
-                  helper={m.helperLocalStorageDir}
-                  placeholder={placeholders?.localStorageDir}
-                  error={errors.localStorageDir}
-                  required
-                  requiredLabel={m.required}
-                />
+                // パスは全幅（FormGrid の最大 60rem まで。#1891）。
+                <FormGrid columns={1}>
+                  <TextField
+                    id="upload-storage-local-dir"
+                    label={m.fieldLocalStorageDir}
+                    value={form.localStorageDir}
+                    onValueChange={(value) => updateForm({ localStorageDir: value })}
+                    helper={m.helperLocalStorageDir}
+                    placeholder={placeholders?.localStorageDir}
+                    error={errors.localStorageDir}
+                    width="full"
+                    required
+                    requiredLabel={m.required}
+                  />
+                </FormGrid>
               ) : (
                 <div className="space-y-4">
-                  {/* リージョン・ネームスペース・バケットは短い値なので、広い画面（2xl）では 1 行に並べる。 */}
-                  <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2 2xl:grid-cols-3">
+                  {/* リージョン・ネームスペース・バケットは短い値なので、値の長さの段（sm / md）にする（#1891）。 */}
+                  <FormGrid>
                     <SelectField
                       id="upload-storage-object-storage-region"
                       label={m.fieldObjectStorageRegion}
@@ -295,6 +300,7 @@ export function UploadStorageSettingsPage({
                       helper={m.helperObjectStorageRegion}
                       placeholder={m.regionPlaceholder}
                       error={errors.objectStorageRegion}
+                      width="sm"
                       required
                       requiredLabel={m.required}
                     />
@@ -306,6 +312,7 @@ export function UploadStorageSettingsPage({
                       helper={m.helperObjectStorageNamespace}
                       placeholder="mytenancynamespace"
                       error={errors.objectStorageNamespace}
+                      width="md"
                       readOnly
                       required
                       requiredLabel={m.required}
@@ -318,11 +325,11 @@ export function UploadStorageSettingsPage({
                       helper={m.helperObjectStorageBucket}
                       placeholder={placeholders?.objectStorageBucket}
                       error={errors.objectStorageBucket}
+                      width="md"
                       required
                       requiredLabel={m.required}
-                      className="lg:col-span-full 2xl:col-span-1"
                     />
-                  </div>
+                  </FormGrid>
                   {ociSettingsMissing ? (
                     // 状況の警告は Banner 1 枚にし、対処の操作は Banner の action に置く（面を二重にしない。messaging.md §10。#722）。
                     <Banner

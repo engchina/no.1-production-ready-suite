@@ -470,21 +470,30 @@ def test_assume_policy_sends_back_text_clarification_and_keeps_it_after_the_retr
 
 
 @pytest.mark.parametrize(
-    "answer",
+    ("question", "answer"),
     [
-        "こんにちは。お手伝いできることがありましたら、お知らせください。",
-        "こんにちは。ご用件をお知らせください。",
+        ("こんにちは", "こんにちは。お手伝いできることがありましたら、お知らせください。"),
+        ("こんにちは", "こんにちは。ご用件をお知らせください。"),
+        # お礼・質問でない入力に用件を聞く返事（#1929。スキルの「入力の種類を分ける」）。
+        (
+            "ありがとう",
+            "どういたしまして。ほかに社内の規程や手順について知りたいことがあれば、"
+            "お知らせください。",
+        ),
+        ("テスト", "社内の規程や手順について、知りたいことをお知らせください。"),
+        ("あ", "何についてお調べしましょうか？"),
     ],
-    ids=["help", "request"],
+    ids=["help", "request", "thanks", "test-input", "short-input"],
 )
 def test_greeting_that_asks_for_the_request_is_not_sent_back(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, question: str, answer: str
 ) -> None:
-    """あいさつに用件を聞いて答えた回答（#1879）は確認の質問として扱い、差し戻し・拒答にしない。"""
+    """あいさつ・お礼・質問でない入力に用件を聞いて答えた回答（#1879・#1929）は確認の質問として
+    扱い、差し戻し・拒答にしない（確認のツールを渡した Run でも）。"""
     del mcp
     model = _script(monkeypatch, [assistant_message(answer)])
 
-    run = _run("こんにちは")
+    run = _run(question)
 
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     assert len(model.calls) == 1
@@ -777,6 +786,20 @@ def test_text_clarification_is_a_target_unless_it_replies_to_a_greeting() -> Non
     )
     assert tool_grounding.is_greeting_reply("", "こんにちは！")
     assert not tool_grounding.is_greeting_reply(question, "あの件どうなった？")
+    # お礼・質問でない入力に用件を聞く返事（#1929）も差し戻さない（対象の聞き返しは今どおり）。
+    assert tool_grounding.is_greeting_reply("", "ありがとう")
+    assert tool_grounding.is_greeting_reply("どういたしまして。ほかに知りたいことはありますか？")
+    assert tool_grounding.is_greeting_reply(
+        "社内の規程や手順について、知りたいことをお知らせください。", "テスト"
+    )
+    assert not tool_grounding.is_greeting_reply("どの申請についてのご質問ですか？", "テスト")
+    assert tool_grounding.needs_grounding(
+        "よろしくお願いします。どの申請ですか？",
+        steps=[],
+        tool_names=tools,
+        clarification_exempt=False,
+        question="申請の期限は？",
+    )
 
 
 def test_retry_input_drops_the_assistant_message_and_its_reasoning() -> None:

@@ -9,6 +9,8 @@ import {
   EmptyState,
   ErrorState,
   FormActionBar,
+  FormGrid,
+  type FieldWidth,
   FormSkeleton,
   FormStatus,
   PageBody,
@@ -919,13 +921,14 @@ export function ModelSettingsPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {/* 3 項目とも短い値なので、広い画面（2xl）では 1 行に並べる。 */}
-              <div className="grid gap-x-6 gap-y-5 md:grid-cols-2 2xl:grid-cols-3">
+              {/* 3 項目とも短い値なので、値の長さの段（モデル ID は md、次元数は xs）で FormGrid に並べる（#1891）。 */}
+              <FormGrid>
                 <TestableTextField
                   id="genai-embedding-model"
                   label={t("settings.model.genai.embeddingModel")}
                   value={draft.generative_ai.embedding_model}
                   placeholder={t("settings.model.placeholder.embeddingModel")}
+                  width="md"
                   onChange={(value) =>
                     updateGenerative("embedding_model", value)
                   }
@@ -954,8 +957,8 @@ export function ModelSettingsPage({
                   label={t("settings.model.genai.rerankModel")}
                   value={draft.generative_ai.rerank_model}
                   placeholder={t("settings.model.placeholder.rerankModel")}
+                  width="md"
                   onChange={(value) => updateGenerative("rerank_model", value)}
-                  className="md:col-span-2 2xl:col-span-1"
                   testing={testingKey === "rerank"}
                   onTest={() =>
                     void handleTestModel("rerank", {
@@ -965,7 +968,7 @@ export function ModelSettingsPage({
                     })
                   }
                 />
-              </div>
+              </FormGrid>
               {/* テストの結果は操作した欄の列の中ではなく、カードの全幅で出す（messaging.md §10。#705）。 */}
               <ModelTestResultPanel
                 result={testResults.embedding}
@@ -1115,8 +1118,8 @@ function ConnectionTabContent({
           </Button>
         )}
       </div>
-      {/* Endpoint URL は長いので 1 行を使う。Project OCID と API key は広い画面（2xl）で同じ行に置く。 */}
-      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+      {/* Endpoint URL・Project OCID は長いので全幅（FormGrid の最大 60rem まで）、API key は lg の段（#1891）。 */}
+      <FormGrid>
         <TextField
           id={connectionFieldId(connectionId, "endpoint")}
           label={t("settings.model.enterprise.endpoint")}
@@ -1149,7 +1152,8 @@ function ConnectionTabContent({
             )
           }
           onValueChange={(value) => onChange({ endpoint: value })}
-          className="md:col-span-2"
+          width="full"
+          className="col-span-full"
         />
         <TextField
           id={connectionFieldId(connectionId, "project_ocid")}
@@ -1165,7 +1169,8 @@ function ConnectionTabContent({
           }
           error={errors?.project_ocid}
           onValueChange={(value) => onChange({ project_ocid: value })}
-          className="md:col-span-2 2xl:col-span-1"
+          width="full"
+          className="col-span-full"
         />
         <SecretField
           id={connectionFieldId(connectionId, "api_key")}
@@ -1193,9 +1198,9 @@ function ConnectionTabContent({
                 }
               : undefined
           }
-          className="md:col-span-2 2xl:col-span-1"
+          width="lg"
         />
-      </div>
+      </FormGrid>
     </div>
   );
 }
@@ -1323,9 +1328,12 @@ function ModelCatalogEditor({
           {t("settings.model.enterprise.addModel")}
         </Button>
       </div>
+      {/* 2xl 以上は表頭のある表の形の編集グリッド（列の幅は表頭の列が決める）。欄は値の種類の幅を上限に列へ収めるので、
+          e2e の幅の段の検査（findFieldsOffWidthScale）からは外す（表の中の欄と同じ扱い。#1891）。 */}
       <div
         id="enterprise-model-catalog"
         className="overflow-hidden rounded-md border border-border bg-surface-sunken"
+        data-field-width-exempt=""
       >
         <div
           className={cn(
@@ -1363,6 +1371,7 @@ function ModelCatalogEditor({
                 label={`${t("settings.model.enterprise.modelId")} ${modelNumber}`}
                 value={model.model_id}
                 placeholder={t("settings.model.placeholder.modelId")}
+                width="md"
                 error={modelIdErrors[index]}
                 onChange={(value) => onModelChange(index, { model_id: value })}
               />
@@ -1371,6 +1380,7 @@ function ModelCatalogEditor({
                 label={`${t("settings.model.enterprise.displayName")} ${modelNumber}`}
                 value={model.display_name}
                 placeholder={displayNamePlaceholder}
+                width="md"
                 onChange={(value) =>
                   onModelChange(index, { display_name: value })
                 }
@@ -1383,6 +1393,7 @@ function ModelCatalogEditor({
                 })}
                 value={modelConnectionId(model)}
                 options={connectionOptions(connections)}
+                width="md"
                 error={connectionErrors[index]}
                 onValueChange={(value) =>
                   onModelChange(index, { connection_id: value })
@@ -1400,6 +1411,7 @@ function ModelCatalogEditor({
                   model.reasoning_effort ?? DEFAULT_ENTERPRISE_AI_REASONING_EFFORT
                 }
                 options={REASONING_EFFORT_OPTIONS}
+                width="sm"
                 describedBy={REASONING_EFFORT_HELP_ID}
                 onValueChange={(value) =>
                   onModelChange(index, { reasoning_effort: value })
@@ -1418,6 +1430,7 @@ function ModelCatalogEditor({
                 max={ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX}
                 step={1}
                 value={maxInputTokensInputValue(model)}
+                width="xs"
                 aria-describedby={MAX_INPUT_TOKENS_HELP_ID}
                 error={maxInputTokensErrors[index]}
                 onValueChange={(next) =>
@@ -1442,6 +1455,7 @@ function ModelCatalogEditor({
                 max={ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX}
                 step={1}
                 value={maxOutputTokensInputValue(model)}
+                width="xs"
                 aria-describedby={MAX_OUTPUT_TOKENS_HELP_ID}
                 error={maxOutputTokensErrors[index]}
                 onValueChange={(next) =>
@@ -1668,7 +1682,7 @@ function DefaultModelFields({
           {t("settings.model.defaults.description")}
         </p>
       </div>
-      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+      <FormGrid>
         <SelectField
           id={DEFAULT_MODEL_FIELD_IDS.default_text_model_id}
           label={t("settings.model.defaults.text")}
@@ -1677,6 +1691,7 @@ function DefaultModelFields({
           options={textModelOptions(enterprise.models)}
           placeholder={t("settings.model.defaults.placeholder")}
           helper={t("settings.model.defaults.textHelp")}
+          width="lg"
           error={errors.default_text_model_id}
           onValueChange={(value) => onChange("default_text_model_id", value)}
         />
@@ -1688,10 +1703,11 @@ function DefaultModelFields({
           options={visionModelOptions(enterprise.models)}
           placeholder={t("settings.model.defaults.placeholder")}
           helper={t("settings.model.defaults.visionHelp")}
+          width="lg"
           error={errors.default_vision_model_id}
           onValueChange={(value) => onChange("default_vision_model_id", value)}
         />
-      </div>
+      </FormGrid>
     </section>
   );
 }
@@ -1739,7 +1755,7 @@ function SeedFields({
           {t("settings.model.seed.description")}
         </p>
       </div>
-      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+      <FormGrid>
         <TextField
           id={SEED_FIELD_ID}
           label={t("settings.model.seed.label")}
@@ -1750,6 +1766,8 @@ function SeedFields({
           max={ENTERPRISE_AI_SEED_MAX}
           step={1}
           value={Number.isNaN(value) ? "" : value}
+          // 最大 2147483647（10 桁）が入る sm（xs の 8rem には入らない。#1891）。
+          width="sm"
           helper={t("settings.model.seed.help")}
           error={
             showError && !isValidSeed(seed)
@@ -1761,7 +1779,7 @@ function SeedFields({
           }
           inputClassName="tnum"
         />
-      </div>
+      </FormGrid>
     </section>
   );
 }
@@ -1771,6 +1789,7 @@ function CompactTextInput({
   label,
   value,
   placeholder,
+  width,
   error,
   onChange,
 }: {
@@ -1778,6 +1797,7 @@ function CompactTextInput({
   label: string;
   value: string;
   placeholder?: string;
+  width?: FieldWidth;
   error?: string;
   onChange: (value: string) => void;
 }) {
@@ -1787,6 +1807,7 @@ function CompactTextInput({
       label={label}
       value={value}
       placeholder={placeholder}
+      width={width}
       error={error}
       onValueChange={onChange}
       // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面のラベルは
@@ -1802,6 +1823,7 @@ function TestableTextField({
   value,
   placeholder,
   helper,
+  width,
   className,
   testing,
   onChange,
@@ -1812,6 +1834,7 @@ function TestableTextField({
   value: string;
   placeholder?: string;
   helper?: string;
+  width?: FieldWidth;
   className?: string;
   testing: boolean;
   onChange: (value: string) => void;
@@ -1826,6 +1849,7 @@ function TestableTextField({
         value={value}
         placeholder={placeholder}
         helper={helper}
+        width={width}
         onChange={onChange}
         action={{
           label: t("settings.model.test.action"),
@@ -1924,6 +1948,7 @@ function NumberField({
   step,
   helper,
   readOnly,
+  width = "xs",
   onChange,
 }: {
   id: string;
@@ -1934,6 +1959,8 @@ function NumberField({
   step: number;
   helper?: string;
   readOnly?: boolean;
+  /** 幅（既定 xs。数値の欄。#1891）。 */
+  width?: FieldWidth;
   onChange: (value: number) => void;
 }) {
   return (
@@ -1950,6 +1977,7 @@ function NumberField({
       step={step}
       readOnly={readOnly}
       helper={helper}
+      width={width}
       onValueChange={(next) => onChange(Number(next))}
       inputClassName={cn("tnum", readOnly && "text-fg-muted")}
     />

@@ -1956,10 +1956,18 @@ async def rename_thread(
     user_uuid = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
+        # 変更は保存先（Oracle の checkpoint）への書き込みを lock の中で待つ。event loop を
+        # 塞がないよう threadpool で呼ぶ（#1935）。
+        thread = await run_in_threadpool(
+            runtime_repository.get_thread, thread_id, user_uuid=user_uuid, all_users=all_users
+        )
         _require_agent_access(request, thread.agent_id)
-        summary = runtime_repository.rename_thread(
-            thread_id, user_uuid=user_uuid, title=update.title, all_users=all_users
+        summary = await run_in_threadpool(
+            runtime_repository.rename_thread,
+            thread_id,
+            user_uuid=user_uuid,
+            title=update.title,
+            all_users=all_users,
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
@@ -1982,9 +1990,19 @@ async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
     user_uuid = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
+        # 削除は会話の Run を書き換えて保存先（Oracle の checkpoint）へ書くまで lock を持つ。
+        # 書き込みに数秒〜十数秒かかることがあり、event loop を塞ぐとほかの要求（作成中の回答の
+        # stream など）も止まるため threadpool で呼ぶ（#1935）。
+        thread = await run_in_threadpool(
+            runtime_repository.get_thread, thread_id, user_uuid=user_uuid, all_users=all_users
+        )
         _require_agent_access(request, thread.agent_id)
-        runtime_repository.delete_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
+        await run_in_threadpool(
+            runtime_repository.delete_thread,
+            thread_id,
+            user_uuid=user_uuid,
+            all_users=all_users,
+        )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except ThreadBusyError as exc:

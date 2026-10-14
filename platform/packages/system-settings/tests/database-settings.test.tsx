@@ -133,4 +133,37 @@ describe("DatabaseSettingsPage", () => {
       /Wallet状態:<\/span><span data-status-variant="warning"[^>]*>[\s\S]*?未設定<\/span>/,
     );
   });
+  it("欄は FormGrid に置き、値の種類の段の幅にする。OCID は全幅、placeholder は欄に収まる短い例（#1891）", () => {
+    const settings: DatabaseSettingsData = {
+      user: "app",
+      dsn: "",
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      client_lib_dir: "",
+      wallet_dir: "",
+      wallet_uploaded: false,
+      available_services: [],
+      has_password: false,
+      has_wallet_password: false,
+      readiness: "ok",
+      embedding_dimension: 1536,
+      vector_column: "EMBEDDING",
+      adb_ocid: "",
+      region: "ap-osaka-1",
+      config_source: "runtime",
+    };
+    const client = new QueryClient();
+    client.setQueryData(DATABASE_SETTINGS_QUERY_KEY, settings);
+    const html = render(<DatabaseSettingsPage api={api} />, client);
+
+    // 接続カードと ADB カードの欄の並びはどちらも FormGrid。
+    expect(html.match(/data-form-grid="2"/g)?.length).toBeGreaterThanOrEqual(2);
+    // DB ユーザーは名前の段（md）。
+    expect(html).toMatch(/<div class="[^"]*field-width-md[^"]*"><input[^>]*id="oracle-user"/);
+    // Wallet のサービス名（候補が無いときの入力欄）は名前の段（md）。
+    expect(html).toMatch(/<div class="[^"]*field-width-md[^"]*"><input[^>]*id="oracle-wallet-service"/);
+    // ADB OCID は長い値なので全幅（2 列にまたがる）。
+    expect(html).toMatch(/<div class="[^"]*col-span-full[^"]*"><label[^>]*for="adb-ocid"/);
+    expect(html).toContain('placeholder="未設定（platform/.env で設定）"');
+  });
 });

@@ -11,6 +11,7 @@ import {
   DataTable,
   EmptyState,
   FormActionBar,
+  FormGrid,
   Fieldset,
   ListSkeleton,
   ListToolbar,
@@ -40,7 +41,7 @@ import {
 import { useAuth } from "@/components/security/AuthProvider";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
-import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { ListSearchField, listCount, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import {
   agentApi,
   type AgentProfile,
@@ -378,10 +379,9 @@ function AutomationList({
                       label={t("automation.search")}
                       value={query}
                       onSearch={setQuery}
-                      count={visibleItems.length}
                     />
                   }
-                  summary={listCountLabel(visibleItems.length, allItems.length)}
+                  count={listCount(allItems.length, visibleItems.length, Boolean(query.trim()))}
                   testId="automation-list-toolbar"
                 />
                 <PagedDataTable<Automation>
@@ -628,10 +628,12 @@ function AutomationEditor({
                       ) : null}
                     </div>
                   ) : null}
-                  <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                  {/* 欄の並びは FormGrid（最大 60rem・2 列）、欄は値の種類の幅（#1891）。 */}
+                  <FormGrid>
                     <TextField
                       id="automation-name"
                       label={t("automation.name")}
+                      width="md"
                       required
                       maxLength={100}
                       value={draft.name}
@@ -641,6 +643,7 @@ function AutomationEditor({
                     <SelectField<string>
                       id="automation-agent"
                       label={t("automation.agent")}
+                      width="lg"
                       required
                       placeholder={t("automation.agentPlaceholder")}
                       value={draft.agentId}
@@ -656,12 +659,13 @@ function AutomationEditor({
                       disabled={agentsLoading}
                       onValueChange={(value) => setField("agentId", value)}
                     />
-                  </div>
+                  </FormGrid>
                   <ApprovalToolsNotice data={approvalTools.data} canOpenToolPolicy={canOpenToolPolicy} />
                   <TextareaField
                     id="automation-goal"
                     label={t("automation.goal")}
                     helper={t("automation.goalHelper")}
+                    width="full"
                     required
                     rows={4}
                     maxLength={4000}
@@ -685,10 +689,12 @@ function AutomationEditor({
             <Section title={t("automation.schedule")}>
               <Card>
                 <CardContent className="space-y-4 pt-5" data-testid="automation-schedule">
-                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {/* 頻度・時刻・タイムゾーンは短い値。値の幅で横に並べる（#1891）。 */}
+                  <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
                     <SelectField<ScheduleFrequency>
                       id="automation-frequency"
                       label={t("automation.frequency")}
+                      width="sm"
                       value={draft.schedule.frequency}
                       options={FREQUENCIES.map((item) => ({ value: item, label: t(`automation.frequency.${item}` as I18nKey) }))}
                       onValueChange={(value) => setSchedule({ frequency: value })}
@@ -697,6 +703,7 @@ function AutomationEditor({
                       <TextField
                         id="automation-minute"
                         label={t("automation.minute")}
+                        width="xs"
                         type="number"
                         min="0"
                         max="59"
@@ -707,6 +714,7 @@ function AutomationEditor({
                       <TextField
                         id="automation-time"
                         label={t("automation.time")}
+                        width="sm"
                         type="time"
                         value={draft.schedule.time}
                         onValueChange={(value) => setSchedule({ time: value })}
@@ -716,6 +724,7 @@ function AutomationEditor({
                       id="automation-timezone"
                       label={t("automation.timezone")}
                       helper={t("automation.timezoneHelper")}
+                      width="md"
                       error={timezoneError}
                       value={draft.schedule.timezone}
                       onValueChange={(value) => setSchedule({ timezone: value })}

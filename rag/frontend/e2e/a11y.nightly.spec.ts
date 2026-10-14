@@ -268,6 +268,64 @@ async function mockSettingsAndFeedback(page: Page) {
   });
 }
 
+/** 実行履歴（#1890）の一覧と詳細、API キー（全員の一覧・自分のキー。#1805・#1873）。 */
+async function mockHistoryAndApiKeys(page: Page) {
+  // 状態の表示（success / blocked / error）と、チャット・検索の両方を並べる。
+  const runs = (["success", "blocked", "error"] as const).map((status, index) => ({
+    run_id: `run-${index + 1}`,
+    surface: index % 2 === 0 ? "chat" : "search",
+    search_answer_profile_id: "bv-1",
+    search_answer_profile_name: "経理アシスタント",
+    question: `経費申請の期限 ${index + 1}`,
+    answer_generated: index % 2 === 0,
+    status,
+    answer_outcome: index % 2 === 0 ? "answered" : null,
+    verification: index % 2 === 0 ? "verified" : null,
+    confidence: index % 2 === 0 ? "high" : null,
+    needs_human_review: index % 2 === 0 ? false : null,
+    citation_count: 1,
+    elapsed_ms: 1200,
+    error_stage: status === "error" ? "retrieval" : null,
+    model_id: null,
+    conversation_id: index % 2 === 0 ? `conv-${index + 1}` : null,
+    message_id: index % 2 === 0 ? `msg-${index + 1}` : null,
+    created_at: NOW,
+    own: true,
+    user_display_name: null,
+  }));
+  await page.route("**/api/history/runs**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/history/runs") {
+      await route.fulfill({ status: 404, json: { data: null, error_messages: ["実行が見つかりません。"], warning_messages: [] } });
+      return;
+    }
+    await route.fulfill({ json: listPage(runs) });
+  });
+
+  const apiKey = (id: string, name: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    name,
+    token_prefix: `prak_${id}_SSSS`,
+    products: ["rag", "nl2sql", "agent"],
+    owner_user_uuid: "11111111-1111-1111-1111-111111111111",
+    owner_display_name: "利用者 一郎",
+    created_at: NOW,
+    expires_at: "2027-01-12T00:00:00Z",
+    last_used_at: NOW,
+    expired: false,
+    ...overrides,
+  });
+  // 有効なキーと期限切れのキー（状態の表示）。
+  const keys = [
+    apiKey("0123456789abcdef", "会社の PC の Claude Code"),
+    apiKey("fedcba9876543210", "検証用", { products: ["rag"], expires_at: "2026-09-01T00:00:00Z", expired: true }),
+  ];
+  await page.route("**/api/security/api-keys**", (route) => route.fulfill({ json: apiEnvelope({ keys }) }));
+  await page.route("**/api/account/api-keys**", (route) =>
+    route.fulfill({ json: apiEnvelope({ keys, public_base_url: "https://203.0.113.10" }) }),
+  );
+}
+
 interface Screen {
   path: string;
   /** 画面を開く前に足す mock（後から登録した route が優先する）。 */
@@ -280,6 +338,7 @@ interface Screen {
 const SCREENS: Screen[] = [
   { path: "/chat?search_answer_profile_id=bv-1" },
   { path: "/search" },
+  { path: "/history" },
   { path: "/upload" },
   { path: "/file-list" },
   { path: "/knowledge-bases" },
@@ -299,6 +358,7 @@ const SCREENS: Screen[] = [
   { path: "/settings/security/permissions" },
   { path: "/settings/security/users" },
   { path: "/settings/security/roles" },
+  { path: "/settings/security/api-keys" },
   { path: "/settings/system-tables" },
   { path: "/settings/huggingface" },
   { path: "/settings/services" },
@@ -308,6 +368,12 @@ const SCREENS: Screen[] = [
   { path: "/settings/database" },
   { path: "/settings/appearance" },
 ];
+
+/**
+ * サイドナビの行に無い画面（#1873。アカウントの画面はサイドナビの下部のアカウントの欄から開く）。
+ * SCREENS と同じく axe と通知の置き場所を確かめ、「ナビの全項目」の比較には含めない。
+ */
+const NON_NAV_SCREENS: Screen[] = [{ path: "/account" }, { path: "/account?tab=password" }];
 
 /** 淡い色の面（選んだ行・状態の表示）が出る状態。 */
 const STATES: (Screen & { name: string })[] = [
@@ -409,6 +475,7 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
     await mockLocalAuth(page);
     await mockMainScreens(page);
     await mockSettingsAndFeedback(page);
+    await mockHistoryAndApiKeys(page);
   });
 
   test("SCREENS はサイドナビの全項目と同じ", async ({ page }) => {
@@ -427,6 +494,11 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
         await openAndCheck(page, testInfo, screen, theme);
       });
     }
+    for (const screen of NON_NAV_SCREENS) {
+      test(`${screen.path}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
+        await openAndCheck(page, testInfo, screen, theme);
+      });
+    }
     for (const state of STATES) {
       test(`${state.name}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page }, testInfo) => {
         await openAndCheck(page, testInfo, state, theme);
@@ -436,8 +508,8 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
   // #1728: 通知（Toast）の決まった置き場所（desktop は画面の右下、375px は上端のバー）が、主操作（PageHeader の
   // ページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信・ページの末尾の操作）と重ならない。
   // 通知は本文より上に重なるので、重なると操作が隠れる（WCAG 2.2 の 2.4.11 Focus Not Obscured の考え方）。
-  for (const screen of SCREENS) {
-    test(`${pathOf(screen)} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page }) => {
+  for (const screen of [...SCREENS, ...NON_NAV_SCREENS]) {
+    test(`${screen.path} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page }) => {
       await openScreen(page, screen, "light");
       await expectMainActionsClearOfToast(page);
     });

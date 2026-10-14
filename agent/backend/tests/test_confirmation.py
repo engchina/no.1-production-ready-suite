@@ -1072,18 +1072,92 @@ def test_confirmation_without_tools_twice_asks_with_free_text_only(
     assert confirmation.items[0].options == []
 
 
-def test_confirmation_after_a_tool_keeps_the_options(
+_ANSWERED_QUERY = {"question": GOAL, "profile_id": PROFILE, "requirement_session_id": "qs-1"}
+
+
+def test_confirmation_after_a_tool_keeps_the_options_in_its_result(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """ツールで調べた後の確認は、そのまま中断して選択肢を出す。"""
+    """ツールで調べた後の確認は中断し、ツールの結果にある選択肢を出す（#1917・#1934）。"""
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
-    query = {"question": GOAL, "profile_id": PROFILE}
+    options = [
+        {"label": "営業", "description": ""},
+        {"label": "部門別の売上（全期間）", "description": ""},
+        {"label": "はい", "description": "答えの形はツールの結果に無くてもよい"},
+    ]
     _script(
         monkeypatch,
-        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
-        _ask("call-ask"),
+        [function_call("nl2sql__nl2sql_query", _ANSWERED_QUERY, call_id="call-1")],
+        _ask("call-ask", options=options),
     )
     run = _run()
     assert run.status == RunStatus.WAITING_CONFIRMATION
     [confirmation] = [item for item in run.confirmations if item.source == "agent"]
-    assert [option.label for option in confirmation.items[0].options] == ["今月", "今年度"]
+    assert [option.label for option in confirmation.items[0].options] == [
+        "営業",
+        "部門別の売上（全期間）",
+        "はい",
+    ]
+
+
+def test_options_not_in_the_tool_results_become_free_text(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """ツールの結果に無い選択肢（モデルが作った期間）は外し、2 つ未満なら自由入力（#1934）。"""
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", _ANSWERED_QUERY, call_id="call-1")],
+        _ask("call-ask"),
+    )
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = run.confirmations
+    assert confirmation.items[0].prompt == "どの期間の売上を見ますか？"
+    assert confirmation.items[0].options == []
+
+
+def test_agent_does_not_ask_again_what_nl2sql_asks(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """NL2SQL が確認事項を返した後の Agent 自身の確認は中断せず、NL2SQL のカードに任せる。"""
+    query = {"question": GOAL, "profile_id": PROFILE}
+    model = _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        _ask("call-ask"),
+        [assistant_message("確認事項に答えてください。")],
+    )
+    run = _run()
+    seen = _tool_output(model, 2, "call-ask")
+    assert seen["status"] == "tool_confirmation_pending"
+    assert run.status == RunStatus.COMPLETED
+    [confirmation] = run.confirmations
+    assert confirmation.source == "nl2sql"
+    assert confirmation.items[0].prompt == "SALES のどの日付の列で期間を絞りますか？"
+
+
+def test_option_grounding_ignores_spacing_width_and_trailing_notes() -> None:
+    from app.features.agent.confirmation import ground_options, option_grounded
+
+    corpus = '{"rows": [{"PRODUCT_NAME": "ノートパソコン"}], "profile": "MCP_TEST_SALES"}'
+    key = "".join(corpus.split()).casefold()
+    assert option_grounded("ノートパソコン（情報機器）", key)
+    assert option_grounded("ＭＣＰ＿ＴＥＳＴ＿ＳＡＬＥＳ", key)
+    assert option_grounded("いいえ", key)
+    assert not option_grounded("2026年10月", key)
+    item = item_from_arguments(
+        {
+            "question": "どの商品ですか？",
+            "options": [
+                {"label": "ノートパソコン", "description": ""},
+                {"label": "タブレット", "description": ""},
+                {"label": "MCP_TEST_SALES", "description": ""},
+            ],
+        }
+    )
+    grounded = ground_options(item, [corpus])
+    assert [(option.id, option.label) for option in grounded.options] == [
+        ("option_1", "ノートパソコン"),
+        ("option_2", "MCP_TEST_SALES"),
+    ]
