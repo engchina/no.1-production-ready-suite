@@ -688,7 +688,7 @@ export interface McpConnectionSettings {
   /** サービストークンの aud（呼び先の製品名）。service_token のときだけ。 */
   service_audience?: string | null;
   timeout_seconds: number;
-  /** builtin（RAG / NL2SQL）/ env / plugin:<id> / runtime。runtime だけ削除できる。 */
+  /** builtin（RAG / NL2SQL）/ env / runtime。runtime だけ削除できる。 */
   source: string;
   removable: boolean;
   /** 配備（環境変数）が URL を決めた標準の接続か（#1325）。true なら URL は変えられない。 */
@@ -747,7 +747,8 @@ export interface AgentSkill {
   description: string;
   instructions: string;
   mcp_requirements: { server_id: string; tool_names: string[] }[];
-  resource_ids: string[];
+  /** SKILL.md と同じディレクトリの references/ の参照文書（パスと文字数。本文は返さない。#1803）。 */
+  references: { path: string; characters: number }[];
   enabled: boolean;
   tags: string[];
   source: string;
@@ -766,55 +767,8 @@ export interface AgentSkillWritePayload {
   description?: string;
   instructions?: string;
   mcp_requirements?: { server_id: string; tool_names: string[] }[];
-  resource_ids?: string[];
   enabled?: boolean;
   tags?: string[];
-}
-
-export interface PluginManifest {
-  id: string;
-  name: string;
-  version?: string;
-  description?: string;
-  author?: string;
-  skills?: AgentSkill[];
-  mcp_servers?: Record<string, unknown>[];
-  resources?: PluginResource[];
-  /** @deprecated v1 manifest compatibility only. */
-  agents?: Record<string, unknown>[];
-}
-
-export interface PluginResource {
-  id: string;
-  kind: "prompt" | "workflow" | "template";
-  name: string;
-  version: string;
-  media_type: string;
-  content: string | Record<string, unknown>;
-  metadata: Record<string, unknown>;
-}
-
-export interface PluginSummary {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  author: string;
-  enabled: boolean;
-  skill_count: number;
-  mcp_count: number;
-  resource_count: number;
-  warnings: string[];
-  agent_count: number;
-}
-
-export interface PluginRecord extends PluginSummary {
-  manifest: PluginManifest;
-}
-
-export interface PluginListData {
-  plugins: PluginSummary[];
-  metadata: Record<string, unknown>;
 }
 
 export interface TraceExportRetryData {
@@ -1579,25 +1533,6 @@ export const agentApi = {
     }),
   reloadSkills: () =>
     request<AgentSkillListData>("/api/skills/reload", { method: "POST" }),
-  listPlugins: () => request<PluginListData>("/api/plugins"),
-  getPlugin: (pluginId: string) =>
-    request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`),
-  installPlugin: (payload: { manifest: PluginManifest }) =>
-    request<PluginRecord>("/api/plugins", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  setPluginEnabled: (pluginId: string, enabled: boolean) =>
-    request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ enabled }),
-    }),
-  uninstallPlugin: (pluginId: string) =>
-    request<PluginListData>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
-      method: "DELETE",
-    }),
-  reloadPlugins: () =>
-    request<PluginListData>("/api/plugins/reload", { method: "POST" }),
 };
 
 /**

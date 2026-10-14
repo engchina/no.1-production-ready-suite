@@ -11,7 +11,7 @@ function seedRuntimeSkill(mockApi: MockApi) {
     description: "経理の質問の手順",
     instructions: "",
     mcp_requirements: [],
-    resource_ids: [],
+    references: [],
     enabled: true,
     tags: [],
     source: "runtime",

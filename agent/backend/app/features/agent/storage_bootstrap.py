@@ -131,7 +131,7 @@ def _load_locked() -> None:
 
 
 def _restore_control_plane() -> None:
-    """画面・API で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）を読み込む（#764）。"""
+    """画面・API で変えた定義（Skill・MCP 接続・ツール権限など）を読み込む（#764）。"""
     try:
         restored = control_plane_store.restore_control_plane()
     except Exception as exc:

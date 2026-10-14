@@ -71,11 +71,9 @@ for (const viewport of [
       await page.locator("#skill-id").fill("e2e_json");
       await page.locator("#skill-name").fill("JSON 確認");
       await page.locator("#skill-mcp-requirements").fill("{");
-      await page.locator("#skill-resource-ids").fill("{}");
       await page.getByRole("button", { name: "作成" }).click();
 
       await expectFieldError(page, "skill-mcp-requirements", "MCP 依存 (JSON) は有効な JSON で入力してください。");
-      await expectFieldError(page, "skill-resource-ids", "リソース ID（JSON）は JSON の配列で入力してください。");
       await expect(page.locator("#skill-mcp-requirements")).toBeFocused();
       expect(patchCount(mockApi, "/api/skills", "POST")).toBe(0);
     });

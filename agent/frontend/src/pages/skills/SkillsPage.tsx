@@ -55,7 +55,6 @@ interface SkillFormState {
   tags: string;
   enabled: boolean;
   mcpRequirementsJson: string;
-  resourceIdsJson: string;
 }
 
 /** 作るスキルの ID（URL の path にも使う。backend の `SKILL_ID_PATTERN` と同じ。#926）。 */
@@ -75,7 +74,6 @@ const EMPTY_SKILL_FORM: SkillFormState = {
   tags: "",
   enabled: true,
   mcpRequirementsJson: "[]",
-  resourceIdsJson: "[]",
 };
 
 function skillFormOf(skill: AgentSkill | undefined): SkillFormState {
@@ -88,7 +86,6 @@ function skillFormOf(skill: AgentSkill | undefined): SkillFormState {
     tags: skill.tags.join(", "),
     enabled: skill.enabled,
     mcpRequirementsJson: JSON.stringify(skill.mcp_requirements, null, 2),
-    resourceIdsJson: JSON.stringify(skill.resource_ids, null, 2),
   };
 }
 
@@ -273,7 +270,6 @@ type SkillFieldErrors = {
   id?: string;
   name?: string;
   mcpRequirements?: string;
-  resourceIds?: string;
 };
 
 function SkillEditor({
@@ -309,7 +305,6 @@ function SkillEditor({
           .filter(Boolean),
         enabled: current.enabled,
         mcp_requirements: JSON.parse(current.mcpRequirementsJson) as { server_id: string; tool_names: string[] }[],
-        resource_ids: JSON.parse(current.resourceIdsJson) as string[],
       };
       if (editingId) {
         return agentApi.updateSkill(editingId, payload);
@@ -336,15 +331,10 @@ function SkillEditor({
       required: true,
       expect: "array",
     });
-    const resourceIds = parseJsonField(form.resourceIdsJson, t("skills.resourceIds"), {
-      required: true,
-      expect: "array",
-    });
     const errors: SkillFieldErrors = {
       id: editingId ? undefined : skillIdError(form.id),
       name: form.name.trim() ? undefined : t("skills.nameRequired"),
       mcpRequirements: mcpRequirements.ok ? undefined : mcpRequirements.error,
-      resourceIds: resourceIds.ok ? undefined : resourceIds.error,
     };
     setFieldErrors(errors);
     if (
@@ -352,7 +342,6 @@ function SkillEditor({
         ["skill-id", errors.id],
         ["skill-name", errors.name],
         ["skill-mcp-requirements", errors.mcpRequirements],
-        ["skill-resource-ids", errors.resourceIds],
       ])
     ) {
       return;
@@ -476,20 +465,6 @@ function SkillEditor({
                     onValueChange={(value) => {
                       setForm({ ...form, mcpRequirementsJson: value });
                       setFieldErrors((current) => ({ ...current, mcpRequirements: undefined }));
-                    }}
-                  />
-                  <TextareaField
-                    id="skill-resource-ids"
-                    label={t("skills.resourceIds")}
-                    required
-                    error={fieldErrors.resourceIds}
-                    value={form.resourceIdsJson}
-                    rows={8}
-                    monospace
-                    spellCheck={false}
-                    onValueChange={(value) => {
-                      setForm({ ...form, resourceIdsJson: value });
-                      setFieldErrors((current) => ({ ...current, resourceIds: undefined }));
                     }}
                   />
                 </CardContent>
@@ -630,7 +605,8 @@ function SkillReadOnlyDetail({ skill }: { skill: AgentSkill }) {
         <Card className="min-w-0">
           <CardContent className="grid min-w-0 gap-4 pt-5 md:grid-cols-2">
             <JsonPanel title={t("skills.mcpRequirements")} value={skill.mcp_requirements} />
-            <JsonPanel title={t("skills.resourceIds")} value={skill.resource_ids} />
+            {/* SKILL.md と同じディレクトリの references/ の参照文書（本文は Run のときだけ読む。#1803）。 */}
+            <JsonPanel title={t("skills.references")} value={skill.references} />
           </CardContent>
         </Card>
       </Section>

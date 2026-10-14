@@ -43,7 +43,7 @@ const skill = {
   mcp_requirements: [
     { server_id: "rag", tool_names: ["rag_search"] },
   ],
-  resource_ids: [],
+  references: [],
   enabled: true,
   tags: ["rag"],
   source: "builtin",

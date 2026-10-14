@@ -137,7 +137,6 @@
           ]
         }
       ],
-      "resource_ids": [],
       "enabled": true,
       "tags": [
         "rag",
@@ -146,7 +145,8 @@
       ],
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
+      "updated_at": "2026-06-28T00:00:00Z",
+      "references": []
     },
     {
       "id": "rag_and_structured_data",
@@ -168,7 +168,6 @@
           ]
         }
       ],
-      "resource_ids": [],
       "enabled": true,
       "tags": [
         "rag",
@@ -177,7 +176,8 @@
       ],
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
+      "updated_at": "2026-06-28T00:00:00Z",
+      "references": []
     },
     {
       "id": "structured_data_query",
@@ -195,7 +195,6 @@
           ]
         }
       ],
-      "resource_ids": [],
       "enabled": true,
       "tags": [
         "nl2sql",
@@ -204,7 +203,8 @@
       ],
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
+      "updated_at": "2026-06-28T00:00:00Z",
+      "references": []
     }
   ],
   "tools": [
@@ -244,11 +244,11 @@
                 "title": "Mcp Requirements",
                 "type": "array"
               },
-              "resource_ids": {
+              "references": {
                 "items": {
-                  "type": "string"
+                  "$ref": "#/$defs/SkillReference"
                 },
-                "title": "Resource Ids",
+                "title": "References",
                 "type": "array"
               },
               "enabled": {
@@ -287,7 +287,7 @@
             "type": "object"
           },
           "SkillMcpRequirement": {
-            "description": "Skill が使う MCP 接続とツールの許可リスト（#757）。\n\n`server_id` は MCP 接続の ID（`rag` / `nl2sql` / 登録した接続）。`control-plane` は\nControl Plane のツール（`tool_registry`）。`tool_names` が空なら接続のすべてのツールを使う。",
+            "description": "Skill が使う MCP 接続とツールの許可リスト（#757）。\n\n`server_id` は MCP 接続の ID（`rag` / `nl2sql` / 登録した接続）。`control-plane` は\nControl Plane のツール（`tool_registry`）。`tool_names` が空なら接続のすべてのツールを使う。\n`tool_names` は MCP のツールの素の名前（`rag_search`）。Skill の指示も素の名前で書いてよく、\n組み込み Runtime が Run のときにモデルへ渡す名前（`rag__rag_search`）へ書き直す（#1303）。",
             "properties": {
               "server_id": {
                 "title": "Server Id",
@@ -305,6 +305,30 @@
               "server_id"
             ],
             "title": "SkillMcpRequirement",
+            "type": "object"
+          },
+          "SkillReference": {
+            "description": "スキルの参照文書（SKILL.md と同じディレクトリの `references/` の 1 ファイル）。\n\n`path` はスキルのディレクトリからの相対パス（`references/guide.md`）。本文（`content`）は\nAPI の応答・保存に出さず（`exclude`）、`skill_reference_read` だけが読む。",
+            "properties": {
+              "path": {
+                "title": "Path",
+                "type": "string"
+              },
+              "characters": {
+                "default": 0,
+                "title": "Characters",
+                "type": "integer"
+              },
+              "content": {
+                "default": "",
+                "title": "Content",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "title": "SkillReference",
             "type": "object"
           }
         },
