@@ -4,7 +4,7 @@ import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, RUNTIME_STORAGE_MEMORY, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
 
-// #784: 業務 Agent の自動実行（スケジュール・Webhook）。
+// #784: 業務 Agent の自動実行（スケジュール。トリガーはスケジュールだけ。#1799）。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -31,11 +31,9 @@ function seedAutomation(mockApi: MockApi, overrides: Record<string, unknown> = {
     name: "毎朝の売上の要約",
     goal: "昨日の売上を要約してください。",
     enabled: true,
-    trigger: "schedule",
     schedule: { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: "Asia/Tokyo" },
     run_as_user_uuid: "local",
     created_by_user_uuid: "local",
-    webhook_token_prefix: null,
     next_run_at: MOCK_NOW,
     last_run_at: null,
     last_run_id: null,
@@ -50,7 +48,7 @@ function seedAutomation(mockApi: MockApi, overrides: Record<string, unknown> = {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`スケジュールの自動実行を作り、一覧に次回とトリガーを出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`スケジュールの自動実行を作り、一覧に次回とスケジュールを出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       await page.goto("/automations");
@@ -59,6 +57,9 @@ for (const viewport of VIEWPORTS) {
 
       await page.getByRole("button", { name: "自動実行を作成" }).first().click();
       await expect(page).toHaveURL(/\/automations\?id=new$/);
+      // トリガーはスケジュールだけなので、種類の選択は出さず、スケジュールの設定だけを出す（#1799）。
+      await expect(page.getByRole("heading", { name: "スケジュール", level: 2 })).toBeVisible();
+      await expect(page.getByRole("radio")).toHaveCount(0);
       // 必須の入力が無ければ保存しない。
       await page.getByRole("button", { name: "作成", exact: true }).first().click();
       await expect(page.getByText("名前を入力してください。")).toBeVisible();
@@ -79,9 +80,9 @@ for (const viewport of VIEWPORTS) {
         agent_id: "default",
         name: "週次の品質の点検",
         enabled: true,
-        trigger: "schedule",
         schedule: { frequency: "weekly", time: "08:30", weekdays: [0, 2], minute: 0 },
       });
+      expect(body).not.toHaveProperty("trigger");
       await expect(page.getByTestId("automation-next")).toContainText("次回の実行");
 
       await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
@@ -94,28 +95,28 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-test("Webhook の自動実行は保存後に URL を出し、秘密を 1 回だけ表示し、発行し直す前に確かめる", async ({ page, mockApi }) => {
-  await page.goto("/automations?id=new");
-  await page.getByLabel("名前").fill("受注の通知");
-  await page.locator("#automation-goal").fill("受け取った受注を確認し、在庫の不足があれば知らせてください。");
-  await page.getByRole("radio", { name: "Webhook" }).check();
-  await expect(page.getByText("保存すると Webhook の URL が決まります。")).toBeVisible();
-  await page.getByRole("button", { name: "作成", exact: true }).first().click();
-  await expect(page.getByText("自動実行を作成しました")).toBeVisible();
-  expect((mockApi.lastRequest("POST", "/api/automations")?.body as { schedule: unknown }).schedule).toBeNull();
+test("保存したスケジュールを編集し、次回と一覧のスケジュールを更新する", async ({ page, mockApi }) => {
+  seedAutomation(mockApi);
+  await page.goto("/automations?id=auto-seeded");
+  await expect(page.getByRole("heading", { name: "毎朝の売上の要約", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("automation-schedule")).toBeVisible();
+  await expect(page.getByTestId("automation-next")).toContainText("次回の実行");
 
-  await expect(page.getByTestId("automation-webhook-url")).toHaveText(/\/api\/hooks\/auto-1$/);
-  await expect(page.getByText("秘密はまだ発行していません。")).toBeVisible();
-  await page.getByTestId("automation-issue-token").click();
-  await expect(page.getByTestId("automation-webhook-secret")).toHaveValue(/^prwh_/);
-  await page.getByRole("button", { name: "保管しました" }).click();
-  await expect(page.getByTestId("automation-webhook-token")).toHaveCount(0);
+  await chooseSelectFieldOption(page.locator("#automation-frequency"), "hourly");
+  await page.getByLabel("分", { exact: true }).fill("15");
+  // 未保存の変更があるあいだは、保存済みの次回を出さない。
+  await expect(page.getByTestId("automation-next")).toHaveCount(0);
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("自動実行を保存しました")).toBeVisible();
+  const body = mockApi.lastRequest("PUT", "/api/automations/auto-seeded")?.body as Record<string, unknown>;
+  expect(body).toMatchObject({ schedule: { frequency: "hourly", minute: 15 } });
+  expect(body).not.toHaveProperty("trigger");
+  await expect(page.getByTestId("automation-next")).toContainText("次回の実行");
 
-  await page.getByTestId("automation-issue-token").click();
-  const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
-  await expect(dialog.getByText("秘密を発行し直しますか?")).toBeVisible();
-  await dialog.getByRole("button", { name: "キャンセル" }).click();
-  await expect(page.getByTestId("automation-webhook-token")).toHaveCount(0);
+  await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
+  const row = page.getByRole("table", { name: "自動実行の一覧" }).getByRole("row", { name: /毎朝の売上の要約/ });
+  await expect(row).toContainText("毎時 15 分");
+  await expect(page.getByRole("columnheader", { name: "スケジュール" })).toBeVisible();
 });
 
 test("一覧から今すぐ実行し、実行履歴に出す。未保存の離脱を確かめ、削除できる", async ({ page, mockApi }) => {
@@ -183,43 +184,4 @@ test("保存先が無いときは知らせ、読み込み中は経過時間を�
   await expect(page.getByTestId("storage-not-persistent-notice")).toContainText(
     "作成・変更した内容は、バックエンドの再起動で消えます"
   );
-});
-
-test("Webhook の秘密のコピーに失敗しても秘密を Toast に出さず、欄を選択する (#790)", { tag: "@responsive" }, async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
-    });
-  });
-  await page.goto("/automations?id=new");
-  await page.getByLabel("名前").fill("受注の通知");
-  await page.locator("#automation-goal").fill("受け取った受注を確認してください。");
-  await page.getByRole("radio", { name: "Webhook" }).check();
-  await page.getByRole("button", { name: "作成", exact: true }).first().click();
-  await expect(page.getByTestId("automation-webhook-url")).toBeVisible();
-
-  await page.getByRole("button", { name: "URL をコピー" }).click();
-  await expect(page.getByText("コピーできませんでした。表示中の URL を選択してコピーしてください。")).toBeVisible();
-
-  await page.getByTestId("automation-issue-token").click();
-  const secretField = page.getByTestId("automation-webhook-secret");
-  await expect(secretField).toHaveValue(/^prwh_/);
-  const secret = await secretField.inputValue();
-  // 発行の結果は起点の「秘密を発行」の直下に出す（messaging.md §10.1）。
-  const issueBox = await page.getByTestId("automation-issue-token").boundingBox();
-  const panelBox = await page.getByTestId("automation-webhook-token").boundingBox();
-  expect(panelBox?.y ?? 0).toBeGreaterThan((issueBox?.y ?? 0) + (issueBox?.height ?? 0) - 1);
-
-  const panel = page.getByTestId("automation-webhook-token");
-  await panel.getByRole("button", { name: "秘密をコピー" }).click();
-  await expect(panel.getByText("コピーできませんでした。表示中の秘密を選択してコピーしてください。")).toBeVisible();
-  await expect(secretField).toBeFocused();
-  const selection = await secretField.evaluate((input: HTMLInputElement) =>
-    input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0)
-  );
-  expect(selection).toBe(secret);
-  await expect(page.locator("[data-toast-placement]")).toContainText("コピーできませんでした");
-  await expect(page.locator("[data-toast-placement]")).not.toContainText(secret);
-  await expect(page.getByText(secret)).toHaveCount(0);
 });

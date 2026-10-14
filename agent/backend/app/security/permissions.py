@@ -150,7 +150,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 管理者が業務 Agent を作る画面（RAG「ナレッジ構築」・NL2SQL「データ準備」に当たる。#791）。
     _menu_permission(MENU_AGENTS, _GROUP_BUILD, "業務 Agent"),
     _menu_permission(MENU_SKILLS, _GROUP_BUILD, "スキル"),
-    # 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+    # 業務 Agent の自動実行（スケジュール。#784）。
     _menu_permission(MENU_AUTOMATIONS, _GROUP_BUILD, "自動実行"),
     # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #776）。
     _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
@@ -286,10 +286,7 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 
 # 公開 path。`/ready/database` は画面の DB ゲートがログイン前に使う（接続先・資格情報は返さない。
 # #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754 で削除した。
-# `/hooks/{automation_id}` は自動実行の Webhook（#784。route が自動実行の秘密で認証する）。
-PUBLIC_API_PATHS = frozenset(
-    {"/health", "/ready", "/ready/database", "/auth/login", "/hooks/{automation_id}"}
-)
+PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 # 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
@@ -302,7 +299,6 @@ OPEN_API_OPERATIONS = frozenset(
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
-        ("POST", "/hooks/{automation_id}"),
         # MCP（#778）。サービストークンか API キーで認証し、ツールごとに利用者の権限で判定する。
         ("POST", "/mcp"),
     }
@@ -415,14 +411,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/approvals/{approval_id}/decision"): _DECIDE,
     ("GET", "/audit/tool-calls"): _any(MENU_AUDIT),
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),
-    # 自動実行（#784）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は Agent 管理。
+    # 自動実行（#784）。作成・変更・削除・今すぐ実行は Agent 管理。
     ("GET", "/automations"): _any(MENU_AUTOMATIONS),
     ("POST", "/automations"): _ADMIN_ONLY,
     ("GET", "/automations/{automation_id}"): _any(MENU_AUTOMATIONS),
     ("PUT", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("DELETE", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("POST", "/automations/{automation_id}/run"): _ADMIN_ONLY,
-    ("POST", "/automations/{automation_id}/webhook-token"): _ADMIN_ONLY,
     # ---- 改善・運用 ----
     # 品質評価（#776。評価の Run は始めた利用者の Run。router が業務 Agent の対象範囲を確かめる）。
     ("GET", "/evaluation-sets"): _any(MENU_EVALUATION),

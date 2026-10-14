@@ -1306,7 +1306,7 @@ export function ProfileManagementPage() {
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
   const [dbProfileRefreshNeedsFull, setDbProfileRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
-  // 「表示を更新」をどこで押したか（ヘッダー / 失敗の案内）。スピナーは押したボタンだけが出す（#819）。
+  // 「最新情報を取得」をどこで押したか（ヘッダー / 失敗の案内）。スピナーは押したボタンだけが出す（#819）。
   const [loadOrigin, setLoadOrigin] = useState<"header" | "notice">("header");
   // message は初回ロード失敗の常設 Banner 専用(クエリ状態を監視する effect が所有する)。
   // 保存/削除の成否は toast、名前検証は nameError で扱う。
@@ -2169,7 +2169,7 @@ export function ProfileManagementPage() {
         placement="workspace"
         className="rounded-md border border-border bg-surface-sunken px-3 py-2"
         testId="profile-management-workspace-processing"
-        // 押した「表示を更新」が回っている間はスピナーを出さない。定期・他の操作の後の一覧の取り直しと、
+        // 押した「最新情報を取得」が回っている間はスピナーを出さない。定期・他の操作の後の一覧の取り直しと、
         // 業務プロファイルの再取得の job の間はボタンを回さないため、この表示がスピナーを出す（#819 / #821）。
         activityIcon={loading === "load" && !dbProfileRefreshing ? "none" : "spinner"}
       />
@@ -2178,7 +2178,7 @@ export function ProfileManagementPage() {
     Boolean(profileWorkspaceProcessing) &&
     (profiles.length > 0 || loading === "load" || schemaRefreshing || dbProfileRefreshing);
   const profileListLoading = !profilesLoaded || (loading === "load" && profiles.length === 0);
-  // 初回の読込は一覧の読込表示がスピナーを出す。ヘッダーの「表示を更新」は回さない（狭い画面では「その他の操作」の
+  // 初回の読込は一覧の読込表示がスピナーを出す。ヘッダーの「最新情報を取得」は回さない（狭い画面では「その他の操作」の
   // 中で見えない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const profileListShowsSpinner = profileListLoading && !showProfileWorkspaceProcessing;
   const headerDbProfileRefreshStatus =
@@ -2209,7 +2209,7 @@ export function ProfileManagementPage() {
         type="button"
         variant="secondary"
         size="sm"
-        // 押した再読込の間だけ回す。ヘッダーの「表示を更新」の再読込の間は無効にするだけ（#819）。
+        // 押した再読込の間だけ回す。ヘッダーの「最新情報を取得」の再読込の間は無効にするだけ（#819）。
         loading={loading === "load" && loadOrigin === "notice"}
         disabled={mutationBusy || (loading === "load" && loadOrigin !== "notice")}
         onClick={() => void load(false, "notice")}
@@ -2251,7 +2251,7 @@ export function ProfileManagementPage() {
                   icon: RefreshCw,
                   onClick: () => load(true, "header"),
                   // 押した再読込の間だけ回す。定期・他の操作の後の一覧の取り直し（profileListRefreshing）と、
-                  // 失敗の案内の「表示を更新」の再読込では回さない（#819）。
+                  // 失敗の案内の「最新情報を取得」の再読込では回さない（#819）。
                   loading: loading === "load" && loadOrigin === "header" && !profileListShowsSpinner,
                   disabled: profileListShowsSpinner || (loading === "load" && loadOrigin !== "header"),
                 },

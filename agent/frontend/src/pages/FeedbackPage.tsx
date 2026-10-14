@@ -100,7 +100,7 @@ export function FeedbackPage() {
     // 絞り込みを変えている間は前の結果を出したまま取り直す（Skeleton に戻さない）。
     placeholderData: keepPreviousData,
   });
-  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  // 「最新情報を取得」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
   const manualRefresh = useActionPending();
   const filtered = Boolean(rating || reason);
 

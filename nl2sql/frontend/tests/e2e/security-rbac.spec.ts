@@ -495,12 +495,12 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
 
   backgroundFailure = true;
   const userActions = page.getByTestId("security-users-actions");
-  const directRefresh = userActions.getByRole("button", { name: "表示を更新" });
+  const directRefresh = userActions.getByRole("button", { name: "最新情報を取得" });
   if ((await directRefresh.count()) > 0) {
     await directRefresh.click();
   } else {
     await userActions.getByTestId("page-actions-more").click();
-    await page.getByRole("menuitem", { name: "表示を更新" }).click();
+    await page.getByRole("menuitem", { name: "最新情報を取得" }).click();
   }
   const refreshError = page
     .locator("main")
@@ -3609,10 +3609,10 @@ test("ロール管理の compact header は操作が 2 つなら畳まず、短�
   const actions = page.getByTestId("security-roles-actions");
   // 共有 PageHeader は lg 未満で「その他の操作」+ 主操作に畳むが、メニューに入るのが 1 つだけなら
   // 畳まず両方を出す（1 項目のメニューを開かせない。#582）。
-  await expect(actions.getByRole("button")).toHaveText(["表示を更新", "新規作成"]);
+  await expect(actions.getByRole("button")).toHaveText(["最新情報を取得", "新規作成"]);
   await expect(actions.getByTestId("page-actions-more")).toHaveCount(0);
   const [refreshBox, createBox] = await Promise.all([
-    actions.getByRole("button", { name: "表示を更新" }).boundingBox(),
+    actions.getByRole("button", { name: "最新情報を取得" }).boundingBox(),
     actions.getByRole("button", { name: "新規作成" }).boundingBox(),
   ]);
   // 2 つは 1 行に並ぶ（折り返してヘッダーを高くしない）。
@@ -4129,7 +4129,8 @@ test("DeepSec は構成状態の取得失敗を Header Badge と再読込導線�
   await page.goto("/settings/security/deepsec");
 
   await expect(page.getByText("状態取得失敗", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "再読込" })).toBeVisible();
+  // ヘッダーにも同じ「最新情報を取得」があるので、失敗の通知の中のボタンに絞る（#1797）。
+  await expect(page.getByRole("alert").getByRole("button", { name: "最新情報を取得" })).toBeVisible();
   await expect(page.getByText("構成状態を取得できませんでした。", { exact: false })).toBeVisible();
   await expect(page.getByRole("tab", { name: "DATA USER 認証" })).toHaveAttribute("aria-selected", "true");
 });
@@ -4227,7 +4228,7 @@ test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試
   expect(planRequests).toBe(planRequestsBeforeRetry + 1);
 });
 
-test("DeepSec の読込中のスピナーは「表示を更新」の 1 つだけにする（#416）", async ({ page }) => {
+test("DeepSec の読込中のスピナーは「最新情報を取得」の 1 つだけにする（#416）", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.route("**/api/security/deepsec/status", (route) =>
     fulfill(route, {
@@ -4257,9 +4258,9 @@ test("DeepSec の読込中のスピナーは「表示を更新」の 1 つだけ
   try {
     await expect(planLoading).toBeVisible();
     await expect(planLoading.getByRole("timer")).toBeVisible();
-    // 計画の読込は経過時間と Skeleton だけ。スピナーはヘッダーの「表示を更新」の 1 つ。
+    // 計画の読込は経過時間と Skeleton だけ。スピナーはヘッダーの「最新情報を取得」の 1 つ。
     await expect(visibleSpinners(planLoading)).toHaveCount(0);
-    await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
+    await expectSingleSpinner(page, page.getByRole("button", { name: "最新情報を取得", exact: true }));
   } finally {
     releasePlan();
   }
@@ -6415,7 +6416,7 @@ test("DeepSec レビュー: 未保存権限は検索と再取得で保持しロ�
   await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
   await page.getByTestId("security-deepsec-entitlement-search").fill("");
   await page.route("**/api/security/deepsec/data-entitlements", route => fulfill(route, [{ ...role, version: 2 }, other]));
-  const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+  const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
   await refresh.click();
   await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
   let pendingApply: Route | undefined;
@@ -6482,7 +6483,7 @@ test("DeepSec レビュー: 取得対象から消えたロールの草稿は読�
   const column = page.getByRole("checkbox", { name: /DISPLAY_NAME/ });
   await column.check();
   await page.route("**/api/security/deepsec/data-entitlements", route => fulfill(route, [other]));
-  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("選択していたロールを取得できません。", { exact: false })).toBeVisible();
   await expect(column).toBeChecked();
   await expect(column).toBeDisabled();
@@ -6678,7 +6679,7 @@ for (const dirty of [false, true]) {
     await page.getByTestId("security-deepsec-sql-preview-generate").click();
     await expect.poll(() => versions.length).toBe(1);
     expect(versions).toEqual([dirty ? 1 : 2]);
-    await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+    await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
     await page.getByTestId("security-deepsec-sql-preview-generate").click();
     await expect.poll(() => versions.length).toBe(2);
     expect(versions).toEqual(dirty ? [1, 1] : [2, 2]);
@@ -6868,7 +6869,7 @@ test("DeepSec 再取得修正: 関連メタデータを更新し草稿保持と�
   });
   await page.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
   state.version = 2;
-  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect.poll(() => state.reads).toEqual({ profiles: 2, relations: 2, columns: 2 });
   await expect(related.getByLabel("値", { exact: true })).toHaveValue("東京");
   await expectSelectFieldValue(related.getByLabel("対象テーブルの列"), "DEPARTMENT_CODE");
@@ -6895,7 +6896,7 @@ test("DeepSec 再取得修正: 関連情報の待機と失敗を成功扱いせ�
   const state = await mockRefreshableRelatedMetadata(page);
   const related = await openReviewedRelatedCondition(page);
   state.hold = true;
-  const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+  const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
   await refresh.click();
   await expect.poll(() => Boolean(state.pending)).toBe(true);
   await expect(refresh).toBeDisabled();
