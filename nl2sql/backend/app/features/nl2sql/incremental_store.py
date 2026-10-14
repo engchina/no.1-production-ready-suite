@@ -157,6 +157,28 @@ def _memory_document_payload(value: Mapping[str, Any]) -> dict[str, Any]:
 
 _HISTORY_QUERY_FIELDS = ("question", "generated_sql", "feedback_comment")
 
+# 業務プロファイルのオントロジーの成果物（`NL2SQL_ONTOLOGY_ARTIFACTS`）は `PROFILE_ID` の列を
+# 持たない。所有者は payload の `profile_id` か、`session_id` の `profile-ontology:<profile_id>`
+# （`ontology_definition_service.profile_ontology_session_id`）で表す。業務プロファイルの削除と
+# 同じ transaction で、存在しない業務プロファイルの成果物（今回の分と、前に削除した業務プロファイル
+# の残り）を消す。所有者の無い成果物（ontology の revision の成果物など）には触らない（#1743）。
+_PROFILE_ONTOLOGY_SESSION_PREFIX = "profile-ontology:"
+_DELETE_ORPHAN_PROFILE_ONTOLOGY_ARTIFACTS_SQL = (
+    "DELETE FROM NL2SQL_ONTOLOGY_ARTIFACTS a WHERE "
+    "(JSON_VALUE(a.PAYLOAD_JSON, '$.profile_id' RETURNING VARCHAR2(128)) IS NOT NULL "
+    "AND NOT EXISTS (SELECT 1 FROM NL2SQL_PROFILES p WHERE p.PROFILE_ID = "
+    "JSON_VALUE(a.PAYLOAD_JSON, '$.profile_id' RETURNING VARCHAR2(128)))) "
+    "OR (a.SESSION_ID LIKE :session_prefix || '%' "
+    "AND NOT EXISTS (SELECT 1 FROM NL2SQL_PROFILES p WHERE p.PROFILE_ID = "
+    "SUBSTR(a.SESSION_ID, LENGTH(:session_prefix) + 1)))"
+)
+# 削除した業務プロファイルの、終わったオントロジーのジョブの記録。実行中のものは削除の後に
+# 取り消す（`ontology_build_service.cancel_profile_jobs`）。実行中の worker が読む行は消さない。
+_DELETE_PROFILE_FINISHED_ONTOLOGY_JOBS_SQL = (
+    "DELETE FROM NL2SQL_ONTOLOGY_JOBS WHERE PROFILE_ID = :profile_id "
+    "AND STATUS IN ('succeeded', 'succeeded_with_warnings', 'failed', 'cancelled')"
+)
+
 
 def _state_document_filter_value(value: object) -> str:
     if isinstance(value, bool):
@@ -1704,6 +1726,15 @@ class OracleIncrementalNl2SqlRepository:
                 cursor.execute(
                     "DELETE FROM NL2SQL_PROFILES WHERE PROFILE_ID = :profile_id",
                     {"profile_id": profile_id},
+                )
+                # オントロジーの構築の checkpoint・下書き・公開前の確認などの成果物と、終わった
+                # ジョブの記録を同じ transaction で消す（#1743）。
+                cursor.execute(
+                    _DELETE_ORPHAN_PROFILE_ONTOLOGY_ARTIFACTS_SQL,
+                    {"session_prefix": _PROFILE_ONTOLOGY_SESSION_PREFIX},
+                )
+                cursor.execute(
+                    _DELETE_PROFILE_FINISHED_ONTOLOGY_JOBS_SQL, {"profile_id": profile_id}
                 )
                 self._bump_token(cursor, PROFILE_NAMESPACE)
                 connection.commit()
