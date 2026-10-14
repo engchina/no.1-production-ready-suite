@@ -12,7 +12,7 @@
 - 起動時: `backfill` が Runtime repository の Run の事実をすべて MERGE する
   （既存の Run の集計を消さない）。
 - 日時は UTC の `TIMESTAMP`（タイムゾーンなし）で保存する。session のタイムゾーンに左右されず、
-  日の区切りは `FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE :timezone`（利用者のタイムゾーン）。
+  日の区切りは `FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone)`（利用者のタイムゾーン）。
 - memory / file の構成は保存しない（`reporting_store()` が None。メモリの Run を集計する）。
 - テーブルはシステムテーブル（`app.system_schema`）が作る。無い間は集計をメモリの Run に戻す。
 """
@@ -396,12 +396,14 @@ def usage_source_sql(scope: str) -> str:
     """利用状況の集計の元（期間と直前の期間の Run。日は利用者のタイムゾーンで区切る）。
 
     bind を含む式を GROUP BY に書くと ORA-00979 になるため、inline view の列にしてから集計する。
+    `AT TIME ZONE` の直後に素の bind を書くと ORA-00907 になるため、bind を括弧で囲む（#1822 で
+    実 Oracle の結合テストが見つけた。それまでは Oracle の構成でもメモリの Run を集計した）。
     """
     return (
         "SELECT AGENT_ID, AGENT_NAME, CREATED_BY_USER_UUID, MODEL, REQUESTS, INPUT_TOKENS, "
         "OUTPUT_TOKENS, TOTAL_TOKENS, "
         "CASE WHEN CREATED_AT >= :since THEN 1 ELSE 0 END AS IN_PERIOD, "
-        "TO_CHAR(FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE :timezone, 'YYYY-MM-DD') AS RUN_DAY "
+        "TO_CHAR(FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone), 'YYYY-MM-DD') AS RUN_DAY "
         f"FROM {RUN_FACTS_TABLE} "  # nosec B608 - 固定のテーブル名と bind の条件
         f"WHERE CREATED_AT >= :previous_since AND CREATED_AT <= :until{scope}"
     )
