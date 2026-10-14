@@ -267,6 +267,50 @@ def response_record(
     }
 
 
+# 最終の検証（RAG の `rag_validate_answer` の `premises`）に渡す前提の上限
+# （契約の maxItems・maxLength）。
+MAX_VALIDATION_PREMISES = 10
+_MAX_PREMISE_QUESTION_CHARS = 1000
+_MAX_PREMISE_ANSWER_CHARS = 2000
+
+
+def validation_premises(
+    metadata: Mapping[str, Any], confirmations: Sequence[ConfirmationRequest]
+) -> list[JsonObject]:
+    """利用者が回答前の確認で答えた前提（確認事項の文と答え。#1898）。
+
+    最終の検証（`rag_validate_answer` の `premises`）に渡し、答えをそのまま述べた段落と、資料の
+    規則を答えに当てはめた結論を「根拠で確かめられない」として外さないようにする。出所は、この
+    Run で答えた Agent 自身の確認（`confirmations` の `answered`）と、前の Run の確認に答えて
+    作ったこの Run の metadata `clarification_response`（答えたときだけ。「確認せずに回答」は
+    前提にしない）。
+    """
+    premises: list[JsonObject] = []
+
+    def add(question: object, parts: Sequence[object]) -> None:
+        values = [text for value in parts if (text := _text(value, _MAX_PREMISE_ANSWER_CHARS))]
+        answer = "、".join(values)[:_MAX_PREMISE_ANSWER_CHARS]
+        if answer:
+            premise = {"question": _text(question, _MAX_PREMISE_QUESTION_CHARS), "answer": answer}
+            if premise not in premises:
+                premises.append(premise)
+
+    response = metadata.get(RESPONSE_METADATA_KEY)
+    if isinstance(response, Mapping) and response.get("action") == "answer":
+        for entry in response.get("entries") or []:
+            if isinstance(entry, Mapping):
+                add(entry.get("prompt"), [*(entry.get("selected") or []), entry.get("other_text")])
+    for request in confirmations:
+        if request.status != "answered":
+            continue
+        answers = {answer.item_id: answer for answer in request.answers}
+        for item in request.items:
+            answer = answers.get(item.id)
+            if answer is not None:
+                add(item.prompt, [*answer_labels(item, answer), answer.other_text])
+    return premises[:MAX_VALIDATION_PREMISES]
+
+
 # ---- 業務 Agent の方針と往復 ----
 
 
@@ -756,6 +800,7 @@ __all__ = [
     "CONFIRMATION_TOOL",
     "DEFAULT_MAX_ROUNDS",
     "MAX_ROUNDS_LIMIT",
+    "MAX_VALIDATION_PREMISES",
     "METADATA_KEYS",
     "POLICY_ASSUME",
     "POLICY_CONFIRM",
@@ -791,4 +836,5 @@ __all__ = [
     "used_rounds",
     "validate_answers",
     "validate_max_rounds",
+    "validation_premises",
 ]

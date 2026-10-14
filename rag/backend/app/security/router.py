@@ -63,6 +63,8 @@ auth_router = build_auth_router(
     role_data=_role_data,
     # 外部の MCP クライアント向けの API キー（`/security/api-keys*`。#1805）。
     api_keys=True,
+    # 画面の接続先に出す公開の URL（PLATFORM_PUBLIC_BASE_URL。#1870）。
+    public_base_url=lambda: get_settings().app_public_base_url,
 )
 router.include_router(auth_router)
 

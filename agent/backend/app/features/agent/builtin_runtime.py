@@ -141,6 +141,7 @@ from app.features.agent.confirmation import (
     rag_conditions,
     response_instructions,
     used_rounds,
+    validation_premises,
 )
 from app.features.agent.skills import (
     reset_pinned_skills,
@@ -2226,6 +2227,7 @@ async def _validate_final_answer(
 
     モデルではなく Control Plane が、根拠を返した RAG の MCP 接続ごとに `rag_validate_answer` を
     呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
+    利用者が回答前の確認で答えた内容は前提（`premises`）として渡す（#1898）。
     判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
     「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
@@ -2336,6 +2338,9 @@ async def _validate_with_connection(
     recorder = _ToolRecorder(run.id)
     # 根拠の読み直しも Run と同じデータの範囲で行う（サービストークンの claim。#1379）。
     recorder.data_scopes = dict(data_scopes or {})
+    # 利用者が回答前の確認で答えた前提（#1898）。答えをそのまま述べた段落と、資料の規則を答えに
+    # 当てはめた結論を、資料の根拠だけで「確かめられない」として外さない。
+    premises = validation_premises(run.metadata, run.confirmations)
     step_id, result = await recorder.call(
         ToolCall(
             name=definition.name,
@@ -2345,6 +2350,7 @@ async def _validate_with_connection(
                 "evidence": refs,
                 # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
                 **connection_check_inputs(run.steps, evidence_tool),
+                **({"premises": premises} if premises else {}),
             },
             trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),
