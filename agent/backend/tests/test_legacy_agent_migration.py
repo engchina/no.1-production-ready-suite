@@ -18,6 +18,6 @@ def test_legacy_tool_migration_disables_unmappable_agent() -> None:
         )
     )
 
-    assert migrated.skill_ids == ["business_rag_research"]
+    assert migrated.skill_ids == ["business-rag-research"]
     assert migrated.migration_required is True
     assert migrated.enabled is False

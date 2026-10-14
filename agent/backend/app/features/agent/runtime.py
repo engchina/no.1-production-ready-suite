@@ -12,7 +12,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -56,7 +56,6 @@ from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
-    migrate_skill_ids,
 )
 from app.features.agent.support_task import (
     SUPPORT_TASK_KIND,
@@ -202,6 +201,11 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
 )
 
 
+def _unique_skill_ids(value: list[str]) -> list[str]:
+    """同じスキルを 2 回持たない（順序は保つ。改名の migration で重なった ID も 1 つ。#1816）。"""
+    return list(dict.fromkeys(value))
+
+
 class AgentVersion(BaseModel):
     """公開した業務 Agent の版（#770）。利用者の Run は公開中の版の内容で実行する。"""
 
@@ -215,6 +219,11 @@ class AgentVersion(BaseModel):
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
+
+    @field_validator("skill_ids")
+    @classmethod
+    def _unique_skills(cls, value: list[str]) -> list[str]:
+        return _unique_skill_ids(value)
 
 
 class AgentProfile(BaseModel):
@@ -251,6 +260,11 @@ class AgentProfile(BaseModel):
     @classmethod
     def _normalize_data_scopes(cls, value: AgentDataScopes) -> AgentDataScopes:
         return normalize_data_scopes(value)
+
+    @field_validator("skill_ids")
+    @classmethod
+    def _unique_skills(cls, value: list[str]) -> list[str]:
+        return _unique_skill_ids(value)
 
     def published(self) -> AgentVersion | None:
         return next(
@@ -799,11 +813,14 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
     def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
+    def thread_previous_runs(self, run_id: str) -> list[RunState]: ...
+    def thread_answer_validations(self, run_id: str) -> list[JsonObject]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -1207,6 +1224,46 @@ class AgentRuntimeRepository:
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
                 and (answer := run_answer_text(previous)) is not None
+            ]
+
+    def thread_previous_runs(self, run_id: str) -> list[RunState]:
+        """同じ会話の、この Run より前の完了した Run（回答のあるもの、古い順。複製）。
+
+        `thread_history`（モデルへ渡す前の往復）と同じ Run を選ぶ。根拠・データのツールを呼ばずに
+        前の回答を言い換え・整形する Run を拒答にしないかの判定に使う（#1835）。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            return [
+                previous.model_copy(deep=True)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                and run_answer_text(previous) is not None
+            ]
+
+    def thread_answer_validations(self, run_id: str) -> list[JsonObject]:
+        """同じ会話の前の完了した Run の、最終の検証の成果物の内容（古い順。#1837）。
+
+        前のターンで根拠で確かめた事実の根拠を、今のターンの最終の検証にも渡すのに使う。読むのは
+        `thread_history` と同じ、同じ会話のこの Run より前の完了した Run だけ（会話は作った利用者・
+        同じ Agent だけが続けられる）。成果物の種類は `answer_validation.ANSWER_VALIDATION_KIND`。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            return [
+                deepcopy(artifact.content)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                for artifact in previous.artifacts
+                if artifact.kind == "answer_validation" and isinstance(artifact.content, dict)
             ]
 
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
@@ -1682,6 +1739,41 @@ class AgentRuntimeRepository:
             self._append_event(run, RunEventType.RUNTIME_EVENT, message, {"severity": "warning"})
             self._persist_locked()
 
+    def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:
+        """根拠・データのツールを呼ばずに作った回答の差し戻し・拒答を残す（#1835）。
+
+        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）。元の回答は
+        利用者には出さず、Run の経過（イベント）にだけ残す。差し戻しの回数は metadata に残し、
+        承認待ちから再開した Run でも 2 回目を差し戻さない。
+        """
+        from app.features.agent.tool_grounding import METADATA_KEY, retried
+
+        with self._lock:
+            run = self._require_run(run_id)
+            record = run.metadata.get(METADATA_KEY)
+            record = dict(record) if isinstance(record, dict) else {}
+            if action == "retry":
+                record["retries"] = retried(run.metadata) + 1
+                message = (
+                    "根拠・データのツールで確かめずに回答を作ったため、"
+                    "ツールで確かめるようモデルに差し戻しました。"
+                )
+            else:
+                record["refused"] = True
+                message = (
+                    "根拠・データのツールで確かめられなかったため、"
+                    "回答を出さずにお答えできない旨の文に置き換えました。"
+                )
+            run.metadata[METADATA_KEY] = record
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                message,
+                {"tool_grounding": {"action": action, "original_answer": answer[:20000]}},
+            )
+            run.updated_at = _now()
+            self._persist_locked()
+
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None:
         """利用者が取り消した確認（#1441・#1445）を Run の metadata とイベントに残す。"""
         with self._lock:
@@ -2060,7 +2152,8 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     def _connect_oracle(self) -> Any:
         return self._oracle_connect_factory()
 
-    def _load_snapshot_from_oracle(self) -> None:
+    def _read_checkpoint_json(self) -> str | None:
+        """保存先の checkpoint の JSON（行・テーブルが無ければ None）。"""
         query = (
             f"SELECT snapshot_json FROM {self._oracle_table_name} "
             "WHERE checkpoint_key = :checkpoint_key"
@@ -2070,7 +2163,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
                 row = cursor.fetchone()
                 # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
-                snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+                return _oracle_lob_to_text(row[0]) if row is not None else None
         except Exception as exc:
             if not _is_oracle_table_missing_error(exc):
                 raise
@@ -2079,7 +2172,10 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 "agent_runtime_tables_missing",
                 extra={"table": self._oracle_table_name},
             )
-            return
+            return None
+
+    def _load_snapshot_from_oracle(self) -> None:
+        snapshot_json = self._read_checkpoint_json()
         if snapshot_json is None:
             return
         try:
@@ -2099,6 +2195,48 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         with self._connect_oracle() as connection, connection.cursor() as cursor:
             self._write_checkpoint_cursor(cursor, snapshot_json)
             connection.commit()
+
+    @contextmanager
+    def storage_rewrite(self) -> Iterator[Callable[[], None]]:
+        """保存先を外から書き換える間（データを書き換える migration。#1844）、変更と保存を止める。
+
+        この repository の変更はすべて lock の中で保存まで行うため、lock を持つ間は誰も
+        checkpoint を書かない（メモリの古い値で migration の結果を上書きしない）。呼び出し側は
+        書き換えの後に、渡された関数で保存先から読み直してから抜ける。待っていた変更は、読み直した
+        状態の上で行う。
+        """
+        with self._condition:
+            yield self._reload_from_oracle_locked
+            self._condition.notify_all()
+
+    def _reload_from_oracle_locked(self) -> None:
+        """checkpoint を読み直して状態を置き換える（行・テーブルが無ければ組み込みだけにする）。
+
+        全再作成の後は行が無いので、組み込みの業務 Agent だけに戻る（保存先と同じにする）。
+        読めない checkpoint は `AgentRuntimeCheckpointCorruptError`（状態は変えない）。
+        """
+        snapshot_json = self._read_checkpoint_json()
+        if snapshot_json is None:
+            snapshot, report = AgentRuntimeSnapshot(), SnapshotLoadReport()
+        else:
+            try:
+                snapshot, report = load_snapshot_tolerant(snapshot_json, source="oracle_reload")
+            except AgentRuntimeSnapshotCorruptError as exc:
+                raise AgentRuntimeCheckpointCorruptError(
+                    f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
+                    f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み直せません（{exc}）。"
+                ) from exc
+        self._replace_state_locked(snapshot)
+        self._load_report = report
+        if report.changed:
+            try:
+                self._persist_locked()
+            except Exception:  # noqa: BLE001 - 直した結果の保存の失敗で読み直しを止めない
+                logger.warning(
+                    "agent_runtime_snapshot_repair_not_saved",
+                    extra={"source": "oracle_reload"},
+                    exc_info=True,
+                )
 
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
         """Oracle row lock 下で最新 checkpoint を読み、Run lease を原子的に取得する。"""
@@ -3637,8 +3775,8 @@ def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile:
 
 
 _LEGACY_TOOL_SKILLS: dict[str, str] = {
-    "external_rag_search": "business_rag_research",
-    "external_nl2sql_query": "structured_data_query",
+    "external_rag_search": BUSINESS_RAG_RESEARCH_SKILL_ID,
+    "external_nl2sql_query": STRUCTURED_DATA_QUERY_SKILL_ID,
 }
 # 削除したツール（#756 / #757）。移行では無視する（Skill の推定にも、移行の失敗にも数えない）。
 _RETIRED_LEGACY_TOOLS: frozenset[str] = frozenset(
@@ -3690,7 +3828,7 @@ def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
 
 def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
     if agent.skill_ids or not agent.tool_names:
-        return _migrate_renamed_skills(agent)
+        return agent
     inferred = {
         skill_id
         for tool_name in agent.tool_names
@@ -3705,20 +3843,6 @@ def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
             "skill_ids": sorted(inferred),
             "migration_required": bool(unmapped),
             "enabled": agent.enabled and not unmapped,
-        },
-    )
-
-
-def _migrate_renamed_skills(agent: AgentProfile) -> AgentProfile:
-    """下書きと各版の Skill の旧 ID（`RENAMED_SKILL_IDS`）を新 ID に置き換える（#1573）。"""
-    return agent.model_copy(
-        deep=True,
-        update={
-            "skill_ids": migrate_skill_ids(agent.skill_ids),
-            "versions": [
-                item.model_copy(deep=True, update={"skill_ids": migrate_skill_ids(item.skill_ids)})
-                for item in agent.versions
-            ],
         },
     )
 
@@ -3819,6 +3943,11 @@ def get_runtime_repository() -> AgentRuntimeRepositoryContract:
 def runtime_repository_loaded() -> bool:
     """Run の repository を作り終えているか（作らない。接続を試さない）。"""
     return _repository is not None
+
+
+def loaded_runtime_repository() -> AgentRuntimeRepositoryContract | None:
+    """作り終えた Run の repository（未作成なら None。作らない。接続を試さない）。"""
+    return _repository
 
 
 def set_runtime_repository(repository: AgentRuntimeRepositoryContract | None) -> None:

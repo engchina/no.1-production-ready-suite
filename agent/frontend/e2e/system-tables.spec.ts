@@ -44,6 +44,37 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
+test(
+  "保存済みのデータを書き換えた後に再起動が要るプロセスは、作成・更新の直下に残す（#1844）",
+  { tag: "@responsive" },
+  async ({ page, mockApi }) => {
+    const dispatcher = "実行の dispatcher（python -m app.features.agent.runtime_dispatcher）";
+    mockApi.state.systemTablesRestartRequired = {
+      message: "保存済みのデータを書き換える migration を適用しました。次のプロセスは再起動してください。",
+      processes: [dispatcher],
+    };
+    await page.goto("/settings/system-tables");
+    const initialize = page.getByRole("button", { name: "作成・更新" });
+    await initialize.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "削除して更新" }).click();
+
+    const notice = page.getByRole("status").filter({ has: page.getByTestId("system-tables-restart-required") });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Agent のシステムテーブルを更新しました。再起動が必要なプロセスがあります");
+    await expect(notice.getByRole("listitem")).toHaveText([dispatcher]);
+    // 結果は操作の直下の Banner 1 か所だけ（Toast と重ねない。messaging.md §10.1）。
+    await expect(page.getByRole("region", { name: "通知" }).getByRole("status")).toHaveCount(0);
+    const actionBox = await initialize.boundingBox();
+    const noticeBox = await notice.boundingBox();
+    expect(actionBox && noticeBox && noticeBox.y >= actionBox.y + actionBox.height).toBeTruthy();
+    await expectNoPageOverflow(page);
+
+    // 状態を取り直したら消す（次の操作まで残す。messaging.md §10.4）。
+    await page.getByRole("button", { name: "最新情報を取得" }).click();
+    await expect(notice).toHaveCount(0);
+  },
+);
+
 test("サイドナビの運用設定は、システムテーブルから始まる（RAG / NL2SQL と同じ。#658）", async ({ page }) => {
   await page.goto("/settings/system-tables");
   // 375px（mobile-375 の project）ではナビはドロワーなので、開いてから見る（#823）。

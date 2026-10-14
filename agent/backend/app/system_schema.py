@@ -14,6 +14,10 @@ CLI（`python -m app.cli.agent_system_schema`）から明示されたときだ�
   `AGENT_RUNTIME_*`）と、画面で変えた定義（Skill・MCP 接続・ツール権限）の
   `AGENT_CONTROL_PLANE_ITEMS` もここで作る（#764。以前は Runtime repository が別の接続設定で
   作っていた）。全再作成はこれらも消す（Run の履歴も消える）。
+- これらの保存済みのデータを書き換える migration（`MigrationArtifact.rewrites`）と全再作成は、
+  動いている backend のメモリ（Run の repository・定義の registry）を保存先から読み直す（#1844。
+  `storage_bootstrap.rewrite_saved_data`）。結果の `restart_required` は、読み直せないプロセス
+  （dispatcher・読み直しに失敗した backend）の再起動の案内。
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from pr_system_settings.auth.migrations import apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
@@ -47,6 +51,13 @@ from app.oracle_connection import platform_oracle_connection
 from app.security.permissions import RETIRED_PERMISSION_CODES
 
 logger = logging.getLogger(__name__)
+
+# 保存済みのデータの置き場所（`storage_bootstrap.SAVED_DATA_AREAS` と同じ）。runtime は Run・業務
+# Agent の checkpoint（AGENT_RUNTIME_CHECKPOINTS）、control_plane は画面・API で変えた定義
+# （AGENT_CONTROL_PLANE_ITEMS）。
+RUNTIME_DATA = "runtime"
+CONTROL_PLANE_DATA = "control_plane"
+ALL_SAVED_DATA: frozenset[str] = frozenset({RUNTIME_DATA, CONTROL_PLANE_DATA})
 
 RECREATE_CONFIRMATION = "RECREATE_AGENT_SYSTEM_TABLES"
 CONTROL_TABLE = "AGENT_SCHEMA_OPERATIONS"
@@ -342,6 +353,9 @@ class MigrationArtifact:
     statements: tuple[str, ...]
     # データを消す migration の説明（空なら破壊的でない。checksum には含めない。#619）。
     destructive_note: str = ""
+    # 書き換える保存済みのデータ（`RUNTIME_DATA` / `CONTROL_PLANE_DATA`）。動いている backend の
+    # メモリを適用の後に読み直す（#1844。checksum には含めない）。
+    rewrites: frozenset[str] = frozenset()
 
     @property
     def checksum(self) -> str:
@@ -372,6 +386,25 @@ if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) |
     RETIRED_PERMISSION_CODES
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
+
+# 013 で改名する組み込みのスキルの ID（旧 → 新。#1816）。migration の SQL は checksum に
+# 入るため固定する。
+_RENAMED_SKILL_IDS_013: tuple[tuple[str, str], ...] = (
+    ("business_rag_research", "business-rag-research"),
+    ("structured_data_query", "structured-data-query"),
+    ("rag_and_structured_data", "rag-and-structured-data"),
+    # #1573 で `rag_and_structured_data` に改名した旧 ID（読み込みの読み替えは #1816 で消した）。
+    ("rag_then_structured_data", "rag-and-structured-data"),
+)
+
+
+def _replace_skill_ids_sql(column: str, renames: tuple[tuple[str, str], ...]) -> str:
+    """JSON の文字列値（引用符つきの ID）を置き換える入れ子の REPLACE（CLOB のまま）。"""
+    expression = column
+    for old, new in renames:
+        expression = f"REPLACE({expression}, '\"{old}\"', '\"{new}\"')"
+    return expression
+
 
 # 未初期化の DB（`missing`）と全再作成では、正本の DDL で最新の形を作り、migration は実行せずに
 # 記録だけする。それ以外は未適用・checksum 不一致の migration を順に適用する。
@@ -446,6 +479,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_008)})",
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'marketplace'",
         ),
+        rewrites=frozenset({CONTROL_PLANE_DATA}),
     ),
     MigrationArtifact(
         "20261014_009_remove_automation_webhook",
@@ -461,6 +495,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             "REMOVE '$.trigger', REMOVE '$.webhook_token_hash', REMOVE '$.webhook_token_prefix' "
             "RETURNING CLOB) WHERE ITEM_KIND = 'automation'",
         ),
+        rewrites=frozenset({CONTROL_PLANE_DATA}),
     ),
     MigrationArtifact(
         "20261014_010_remove_plugins",
@@ -472,6 +507,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_010)})",
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'plugin'",
         ),
+        rewrites=frozenset({CONTROL_PLANE_DATA}),
         destructive_note=(
             "導入済みのプラグイン（AGENT_CONTROL_PLANE_ITEMS の ITEM_KIND = 'plugin' の行）と、"
             "ロールのメニュー権限「プラグイン」を削除します。#1803 でプラグインの機能を削除し、"
@@ -490,6 +526,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_011)})",
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'api_key'",
         ),
+        rewrites=frozenset({CONTROL_PLANE_DATA}),
     ),
     MigrationArtifact(
         "20261014_012_run_fact_signals",
@@ -498,6 +535,25 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # 列を足すだけ（データは消さない）。既存の Run の事実の新しい列は、アプリの起動時の
         # backfill が Runtime repository にある Run から書く（保存期間の外の Run は空のまま）。
         RUN_FACTS_SIGNAL_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261014_013_rename_builtin_skill_ids",
+        "rename the builtin skill ids to agent skills names in saved agents (#1816)",
+        # 組み込みのスキルを Agent Skills の形式（repo 直下の skills/<name>/SKILL.md）にし、ID を
+        # 仕様の `name`（小文字・数字・ハイフン）に変えた。保存済みの業務 Agent（下書きと各版）の
+        # `skill_ids` は Run・業務 Agent の checkpoint の JSON の中にあるため、JSON の文字列値
+        # （引用符つき）を置き換える。#1573 で改名した旧 ID も同じ新 ID にする（重なった ID は
+        # 読み込みで 1 つにする）。データは消さないので、破壊的な migration にはしない。
+        (
+            "UPDATE AGENT_RUNTIME_CHECKPOINTS SET SNAPSHOT_JSON = "
+            + _replace_skill_ids_sql("SNAPSHOT_JSON", _RENAMED_SKILL_IDS_013)
+            + " WHERE "
+            + " OR ".join(
+                f"DBMS_LOB.INSTR(SNAPSHOT_JSON, '\"{old}\"') > 0"
+                for old, _new in _RENAMED_SKILL_IDS_013
+            ),
+        ),
+        rewrites=frozenset({RUNTIME_DATA}),
     ),
     MigrationArtifact(
         "20261014_014_run_fact_data_tool_calls",
@@ -655,6 +711,40 @@ def pending_destructive_migrations(
     return items
 
 
+class SavedDataOutcome(Protocol):
+    def restart_required(self) -> dict[str, object] | None: ...
+
+
+class SavedDataGuard(Protocol):
+    """保存済みのデータを書き換える処理を包み、同じプロセスのメモリを読み直す（#1844）。"""
+
+    def __call__[T](
+        self, areas: Collection[str], rewrite: Callable[[], T]
+    ) -> tuple[T, SavedDataOutcome]: ...
+
+
+def _rewrite_saved_data[T](
+    areas: Collection[str], rewrite: Callable[[], T]
+) -> tuple[T, SavedDataOutcome]:
+    # 遅延 import（Agent の機能はこのモジュールを import する。CLI でも同じ処理を通る）。
+    from app.features.agent.storage_bootstrap import rewrite_saved_data
+
+    return rewrite_saved_data(areas, rewrite)
+
+
+def rewritten_saved_data(before: Mapping[str, Any], *, recreate: bool) -> frozenset[str]:
+    """この操作が書き換える保存済みのデータ（全再作成はすべて、未初期化の DB は無し）。"""
+
+    if recreate:
+        return ALL_SAVED_DATA
+    if before["status"] == "missing":
+        return frozenset()
+    pending = set(before["pending_versions"])
+    return frozenset(
+        area for migration in MIGRATIONS if migration.name in pending for area in migration.rewrites
+    )
+
+
 class SystemSchemaManager(SystemSchemaManagerBase):
     """Agent の manifest と DDL の正本を、platform の骨格（lease・台帳）に渡す。"""
 
@@ -676,12 +766,14 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         *,
         lease_seconds: int = 900,
         ddl_lock_timeout_seconds: int = DEFAULT_DDL_LOCK_TIMEOUT_SECONDS,
+        saved_data_guard: SavedDataGuard | None = None,
     ) -> None:
         super().__init__(
             connection_factory or platform_oracle_connection,
             lease_seconds=lease_seconds,
             ddl_lock_timeout_seconds=ddl_lock_timeout_seconds,
         )
+        self._saved_data_guard: SavedDataGuard = saved_data_guard or _rewrite_saved_data
 
     def _operation_kind(self, recreate: bool) -> str:
         # AGENT_SCHEMA_OPERATIONS.OPERATION_KIND は大文字で書く（RAG と同じ）。
@@ -784,17 +876,17 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         if before["status"] == "ready" and not recreate:
             return self._no_op_result(connection, owner)
 
-        if recreate:
-            dropped_count += self._drop_managed_objects(connection, owner)
-
-        self._heartbeat(connection, owner)
-        # 全再作成は台帳（AGENT_SCHEMA_MIGRATIONS）も消すため、制御テーブルから作り直す（冪等）。
-        self._execute_statements(connection, (*CONTROL_STATEMENTS, *DOMAIN_STATEMENTS))
-        if before["status"] == "missing" or recreate:
-            for migration in MIGRATIONS:
-                self._record_migration(connection, migration)
-                applied_names.append(migration.name)
-        else:
+        def apply() -> int:
+            dropped = self._drop_managed_objects(connection, owner) if recreate else 0
+            self._heartbeat(connection, owner)
+            # 全再作成は台帳（AGENT_SCHEMA_MIGRATIONS）も消すため、制御テーブルから作り直す
+            # （冪等）。
+            self._execute_statements(connection, (*CONTROL_STATEMENTS, *DOMAIN_STATEMENTS))
+            if before["status"] == "missing" or recreate:
+                for migration in MIGRATIONS:
+                    self._record_migration(connection, migration)
+                    applied_names.append(migration.name)
+                return dropped
             pending = set(before["pending_versions"])
             for migration in MIGRATIONS:
                 if migration.name not in pending:
@@ -807,7 +899,13 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 )
                 self._record_migration(connection, migration)
                 applied_names.append(migration.name)
+            return dropped
 
+        # 保存済みのデータを書き換える間は、このプロセスの保存を止め、後でメモリを読み直す
+        # （#1844）。
+        rewritten = rewritten_saved_data(before, recreate=recreate)
+        dropped, saved_data = self._saved_data_guard(rewritten, apply)
+        dropped_count += dropped
         dropped_count += self._drop_retired_objects(connection)
         foreign_keys = self._repair_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
@@ -839,6 +937,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                     0, int(after["existing_object_count"]) - int(before["existing_object_count"])
                 )
             ),
+            "rewritten_saved_data": sorted(rewritten),
+            "restart_required": saved_data.restart_required(),
         }
 
     @staticmethod
@@ -899,7 +999,9 @@ system_schema_manager = SystemSchemaManager()
 
 
 __all__ = [
+    "ALL_SAVED_DATA",
     "BASE_STATEMENTS",
+    "CONTROL_PLANE_DATA",
     "CONTROL_PLANE_STATEMENTS",
     "CONTROL_STATEMENTS",
     "DOMAIN_STATEMENTS",
@@ -919,12 +1021,16 @@ __all__ = [
     "RECREATE_CONFIRMATION",
     "RETIRED_MANAGED_OBJECTS",
     "RETIRED_TABLES_APPROVAL",
+    "RUNTIME_DATA",
+    "SavedDataGuard",
+    "SavedDataOutcome",
     "MigrationArtifact",
     "SystemSchemaError",
     "SystemSchemaManager",
     "classify_system_schema_status",
     "managed_manifest_from_schema",
     "pending_destructive_migrations",
+    "rewritten_saved_data",
     "system_schema_manager",
     "unowned_retired_tables",
 ]

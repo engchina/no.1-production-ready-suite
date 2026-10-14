@@ -12,6 +12,8 @@
   保存する。読み込みでは暗号文と平文（#1101 より前の行）の両方を受け付け、起動時の復元で
   平文の秘密を見つけたら暗号化して保存し直す。
 - 起動時（`app.main` の startup）に `restore_control_plane()` で読み込み、宣言の後に重ねる。
+- データを書き換える migration の後は `reload_control_plane()` で保存先の内容に置き換える。
+  書き換えの間の保存は `writes_paused()` で止める（古いメモリの値で上書きしない。#1844）。
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
-from threading import Lock
+from threading import Condition, Lock
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_exception_fields
@@ -243,6 +245,15 @@ def build_control_plane_store() -> ControlPlaneItemStore:
 
 _store: ControlPlaneItemStore | None = None
 _restoring = False
+# 保存先を外から書き換える間（データを書き換える migration。#1844）の保存の停止。保存は短い間だけ
+# 「書き込み中」に数え、止める側は書き込み中の保存が終わるのを待ってから書き換える。
+_writes = Condition(Lock())
+_active_writes = 0
+_writes_paused = False
+WRITES_PAUSED_MESSAGE = (
+    "システムテーブルを更新しています。定義は保存していません。"
+    "しばらくしてから、もう一度実行してください。"
+)
 
 
 def get_control_plane_store() -> ControlPlaneItemStore:
@@ -268,16 +279,58 @@ def _restoring_items() -> Iterator[None]:
         _restoring = False
 
 
+@contextmanager
+def _write_slot() -> Iterator[None]:
+    """保存の 1 回。保存を止めている間は待たずに `ControlPlaneStoreError`（API は 503）。
+
+    待たせると、止める前のメモリの値から作った定義を、読み直しの後に保存してしまう。
+    """
+    global _active_writes
+    with _writes:
+        if _writes_paused:
+            raise ControlPlaneStoreError(WRITES_PAUSED_MESSAGE)
+        _active_writes += 1
+    try:
+        yield
+    finally:
+        with _writes:
+            _active_writes -= 1
+            _writes.notify_all()
+
+
+@contextmanager
+def writes_paused() -> Iterator[None]:
+    """保存先を外から書き換える間、定義の保存を止める（#1844）。
+
+    書き込み中の保存が終わるのを待ってから入る。抜けるまでの保存は `ControlPlaneStoreError`。
+    """
+    global _writes_paused
+    with _writes:
+        while _writes_paused:
+            _writes.wait()
+        _writes_paused = True
+        while _active_writes:
+            _writes.wait()
+    try:
+        yield
+    finally:
+        with _writes:
+            _writes_paused = False
+            _writes.notify_all()
+
+
 def _put(kind: ItemKind, item_id: str, document: JsonObject) -> None:
     if _restoring:
         return
-    get_control_plane_store().put(kind, item_id, document)
+    with _write_slot():
+        get_control_plane_store().put(kind, item_id, document)
 
 
 def _delete(kind: ItemKind, item_id: str) -> None:
     if _restoring:
         return
-    get_control_plane_store().delete(kind, item_id)
+    with _write_slot():
+        get_control_plane_store().delete(kind, item_id)
 
 
 # ---- 保存（router の変更の後に呼ぶ） ---------------------------------------------
@@ -385,47 +438,112 @@ def _reseal_plaintext_secrets(kind: ItemKind, item_id: str, document: JsonObject
 
 def _restore_item(kind: ItemKind, document: JsonObject) -> None:
     # 登録先は遅延 import（このモジュールは config / skills から import されない）。
-    from app.features.agent.config import McpConnectionConfig, runtime_config_store
-    from app.features.agent.skills import AgentSkillDefinition, skill_registry
+    from app.features.agent.automations import automation_store
+    from app.features.agent.config import runtime_config_store
+    from app.features.agent.evaluation import evaluation_set_store, evaluation_store
+    from app.features.agent.skills import skill_registry
+
+    item = _parse_item(kind, document)
+    if kind == "mcp_connection":
+        runtime_config_store.restore_mcp_server(item)
+    elif kind == "tool_policy":
+        runtime_config_store.patch_tool_policy(
+            default_mode=item.default_mode,
+            allow=sorted(item.allow),
+            ask=sorted(item.ask),
+            deny=sorted(item.deny),
+        )
+    elif kind == "skill":
+        skill_registry.upsert_custom(item)
+    elif kind == "automation":
+        automation_store.restore(item)
+    elif kind == "evaluation_set":
+        evaluation_set_store.restore(item)
+    elif kind == "evaluation_job":
+        evaluation_store.restore(item)
+
+
+def _parse_item(kind: ItemKind, document: JsonObject) -> Any:
+    """保存した 1 件を、登録先の型にする（秘密は復号する。不正なら例外）。"""
+    from app.features.agent.config import McpConnectionConfig, ToolPolicyRuntimeConfig
+    from app.features.agent.skills import AgentSkillDefinition
 
     document = _with_secrets(kind, document, _opened_secrets)
     if kind == "mcp_connection":
-        stored = McpConnectionConfig.model_validate(document)
-        runtime_config_store.restore_mcp_server(stored)
-    elif kind == "tool_policy":
+        return McpConnectionConfig.model_validate(document)
+    if kind == "tool_policy":
         from app.features.agent.profile_name_migration import migrate_tool_name
 
-        document = {
-            **document,
-            **{
-                key: [
-                    migrate_tool_name(item) if isinstance(item, str) else item
-                    for item in document.get(key, [])
-                ]
-                for key in ("allow", "ask", "deny")
-                if isinstance(document.get(key), list)
-            },
+        names = {
+            key: [
+                migrate_tool_name(item) if isinstance(item, str) else item
+                for item in (document.get(key) or [])
+            ]
+            for key in ("allow", "ask", "deny")
         }
-        runtime_config_store.patch_tool_policy(
+        return ToolPolicyRuntimeConfig(
             default_mode=str(document.get("default_mode") or "approval"),
-            allow=list(document.get("allow") or []),
-            ask=list(document.get("ask") or []),
-            deny=list(document.get("deny") or []),
+            allow=set(names["allow"]),
+            ask=set(names["ask"]),
+            deny=set(names["deny"]),
         )
-    elif kind == "skill":
-        skill_registry.upsert_custom(AgentSkillDefinition.model_validate(document))
-    elif kind == "automation":
-        from app.features.agent.automations import Automation, automation_store
+    if kind == "skill":
+        return AgentSkillDefinition.model_validate(document)
+    if kind == "automation":
+        from app.features.agent.automations import Automation
 
-        automation_store.restore(Automation.model_validate(document))
-    elif kind == "evaluation_set":
-        from app.features.agent.evaluation import EvaluationSet, evaluation_set_store
+        return Automation.model_validate(document)
+    if kind == "evaluation_set":
+        from app.features.agent.evaluation import EvaluationSet
 
-        evaluation_set_store.restore(EvaluationSet.model_validate(document))
-    elif kind == "evaluation_job":
-        from app.features.agent.evaluation import EvaluationJob, evaluation_store
+        return EvaluationSet.model_validate(document)
+    from app.features.agent.evaluation import EvaluationJob
 
-        evaluation_store.restore(EvaluationJob.model_validate(document))
+    return EvaluationJob.model_validate(document)
+
+
+# ---- 読み直し（データを書き換える migration の後。#1844） ----------------------------
+
+
+def reload_control_plane() -> dict[str, int] | None:
+    """保存先から読み直し、画面・API で変えた定義を保存先の内容で置き換える。
+
+    起動時の復元（宣言の後に重ねる）と違い、保存先から消えた定義はメモリからも消え、
+    宣言の接続・ツール権限は宣言の値に戻る。保存しない構成（`memory`）は何もしない（None）。
+    読めない項目は飛ばして記録する（起動時の復元と同じ）。
+    """
+    from app.features.agent.automations import automation_store
+    from app.features.agent.config import runtime_config_store
+    from app.features.agent.evaluation import evaluation_set_store, evaluation_store
+    from app.features.agent.skills import skill_registry
+
+    store = get_control_plane_store()
+    if not store.persistent:
+        return None
+    items = store.load()
+    parsed: dict[ItemKind, list[Any]] = {kind: [] for kind in ITEM_KINDS}
+    for kind in ITEM_KINDS:
+        for item_id, document in sorted(items.get(kind, {}).items()):
+            try:
+                parsed[kind].append(_parse_item(kind, document))
+            except Exception as exc:  # noqa: BLE001 - 1 件の不正で読み直しを止めない
+                logger.warning(
+                    "agent_control_plane_reload_failed",
+                    extra={"kind": kind, "item_id": item_id, **safe_exception_fields(exc)},
+                )
+    policies = parsed["tool_policy"]
+    runtime_config_store.replace_restored(
+        parsed["mcp_connection"], policies[-1] if policies else None
+    )
+    for skill_id in skill_registry.replace_runtime(parsed["skill"]):
+        logger.warning(
+            "agent_control_plane_reload_failed",
+            extra={"kind": "skill", "item_id": skill_id, "reason": "builtin_id"},
+        )
+    automation_store.replace_all(parsed["automation"])
+    evaluation_set_store.replace_all(parsed["evaluation_set"])
+    evaluation_store.replace_all(parsed["evaluation_job"])
+    return {kind: len(values) for kind, values in parsed.items()}
 
 
 # ---- 秘密の暗号化・復号 ------------------------------------------------------------

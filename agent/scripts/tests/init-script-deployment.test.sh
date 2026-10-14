@@ -77,6 +77,32 @@ run_install_env_case() (
   install_runtime_env
 )
 
+run_builtin_skills_case() (
+  local case_dir="${TEST_TMP_DIR}/builtin-skills-$1"
+  prepare_case "${case_dir}"
+  # shellcheck source=/dev/null
+  source "${REPO_DIR}/init_script.sh"
+  local name
+  for name in "${BUILTIN_SKILL_NAMES[@]}"; do
+    if [ "$1" = "missing" ] && [ "${name}" = "structured-data-query" ]; then
+      continue
+    fi
+    mkdir -p "${BUILTIN_SKILLS_DIR}/${name}"
+    printf -- '---\nname: %s\n---\n' "${name}" > "${BUILTIN_SKILLS_DIR}/${name}/SKILL.md"
+  done
+  check_builtin_skills
+)
+
+# --- 組み込みのスキル（repo 直下の skills/。#1816） ---
+run_builtin_skills_case present >/dev/null || fail "all built-in skills are present but the check failed"
+if run_builtin_skills_case missing >/dev/null 2>&1; then
+  fail "a missing built-in skill must stop the deployment"
+fi
+# 配備する repo の skills/ に、backend の BUILTIN_SKILL_IDS と同じ 3 つがある。
+for name in business-rag-research structured-data-query rag-and-structured-data; do
+  [ -f "${REPO_DIR}/../skills/${name}/SKILL.md" ] || fail "skills/${name}/SKILL.md is missing in the repo"
+done
+
 # --- 共通 .env（platform/.env）と Agent の backend/.env（#211） ---
 run_install_env_case
 install_suite="${TEST_TMP_DIR}/install-env/app/no.1-production-ready-suite"

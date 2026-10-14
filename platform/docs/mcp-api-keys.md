@@ -38,12 +38,24 @@ RAG（非構造化データ）と NL2SQL（構造化データ）は、標準の 
 ### Claude Code
 
 ```bash
-export PR_API_KEY='prak_...'   # 発行したキー（ファイルや共有の設定に書かない）
-claude mcp add --transport http production-ready-rag https://<host>/rag/api/mcp \
-  --header "Authorization: Bearer ${PR_API_KEY}"
-claude mcp add --transport http production-ready-nl2sql https://<host>/nl2sql/api/mcp \
-  --header "Authorization: Bearer ${PR_API_KEY}"
-claude mcp list
+export PR_API_KEY='prak_...'   # 発行したキー（repo や共有の設定に書かない）
+claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \
+  --header 'Authorization: Bearer ${PR_API_KEY}'
+claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp \
+  --header 'Authorization: Bearer ${PR_API_KEY}'
+claude mcp list                 # rag・nl2sql が ✔ Connected
+MCP_TOOL_TIMEOUT=600000 claude  # rag_search は 1〜3 分かかる（既定の 60 秒では切れる）
+```
+
+- MCP サーバーの名前は `rag` / `nl2sql` にする（組み込みのスキルがこの名前でツールを使う）。
+- `--header` は単引用符で渡す。設定（`~/.claude.json`）にはキーの値ではなく `${PR_API_KEY}` が保存され、Claude Code が起動のたびに環境変数から展開する。
+- スキルの入れ方・`claude -p` の許可（`--allowedTools "Skill,mcp__rag,mcp__nl2sql"`）・設定の JSON・つまずく所は [skills/README.md](../../skills/README.md)。
+
+### Codex
+
+```bash
+codex mcp add rag --url https://<host>/rag/api/mcp --bearer-token-env-var PR_API_KEY
+codex mcp add nl2sql --url https://<host>/nl2sql/api/mcp --bearer-token-env-var PR_API_KEY
 ```
 
 ### curl
@@ -60,7 +72,7 @@ NL2SQL の読み取りのツールの例は `nl2sql_list_profiles`。
 
 ## local の認証モード
 
-`RAG_AUTH_MODE=local` などログインを省略する開発の構成でも、`Authorization: Bearer prak_…` を付けた要求はキーを検証する（素通りにしない）。local の画面（ローカル利用者）で発行したキーはローカル利用者として動き、local でだけ使える（production では 401）。キーを付けない要求は、従来どおり全権限のローカル利用者になる。
+`RAG_AUTH_MODE=local` などログインを省略する開発の構成でも、`Authorization: Bearer prak_…` を付けた要求はキーを検証する（素通りにしない）。local の画面（ローカル利用者）で発行したキーはローカル利用者として動き、local でだけ使える（production では 401）。キーを付けない要求は、従来どおり全権限のローカル利用者になる。そのため local では、MCP クライアントの接続の確認（`claude mcp list` の Connected）だけではキーを確かめられない。キーが使われたかは「API キー」の最終利用日時で確かめる。
 
 ## 実装（開発者向け）
 

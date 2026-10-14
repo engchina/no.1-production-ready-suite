@@ -51,7 +51,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("Agent を作成しました")).toBeVisible();
       const body = mockApi.lastRequest("POST", "/api/agents")?.body as Record<string, unknown>;
       expect(body.name).toBe("営業分析");
-      expect(body.skill_ids).toEqual(["structured_data_query"]);
+      expect(body.skill_ids).toEqual(["structured-data-query"]);
       expect(String(body.instructions)).toContain("あなたは営業企画の分析担当です。");
       expect(body.template_id).toBe("sales-analytics");
       await expect(page.getByText("評価セット「営業分析（テンプレート）」を作りました")).toBeVisible();
@@ -64,6 +64,7 @@ for (const viewport of VIEWPORTS) {
           question: "今月の地域別の売上は？",
           expected: "地域ごとの金額",
           expected_tools: [],
+          expected_tools_in_order: false,
           source_run_id: null,
         },
       ]);
