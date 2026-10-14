@@ -91,6 +91,7 @@ RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備�
 RAG の検索・根拠の読み出しは MCP（`POST /rag/api/mcp`。開発は `http://localhost:8000/api/mcp`）で公開しています。
 画面の左下のアカウントのメニュー →「API キー」で自分のキーを発行し、`Authorization: Bearer <API キー>` を付けて接続します。
 キーは発行した利用者として動き、その利用者のロールの権限と検索・回答プロファイル / ナレッジベースの範囲で答えます。
+検索・回答プロファイルが決まっていないときは、`rag_recommend_search_answer_profile` に質問を渡すと、使えるプロファイルの資料を 1 回検索して合うものを推薦します（LLM は呼びません。候補が違う資料に割れたら `recommended_profile_id` が `null` で、候補の一覧を返します）。
 
 ```bash
 claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \

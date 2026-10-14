@@ -45,7 +45,8 @@ flowchart TD
   - 複数: 範囲外の値はツールのエラー（`agent_data_scope_violation`。使える ID と既定を返す）で、呼び先へ送らず予算にも
     数えない。値が無ければ Agent の既定（NL2SQL の `"default"` には落とさない）。schema の説明に使える ID を足す。
   - 一覧（`nl2sql_list_profiles` / `rag_list_search_answer_profiles`）は呼び先に上限の件数を求め、範囲で絞ってから
-    モデルが求めた件数に切る。`nl2sql_recommend_profile` の推薦が範囲外なら `null`、候補も範囲で絞る。
+    モデルが求めた件数に切る。推薦（`nl2sql_recommend_profile` / `rag_recommend_search_answer_profile`。#1850）は
+    候補の `profile_ids` を範囲で埋め、推薦が範囲外なら `null`、候補も範囲で絞る。
   - RAG で範囲を設定したら `knowledge_base_ids` を使わない（schema から除き、渡されたら外す）。
   - 記録: step の `tool_call.data_scope`（接続・使える ID・使った ID・モデルが求めた ID・`filled` / `overridden` /
     `kept` / `rejected` / `filtered`・使わなかったナレッジベース）と、絞った件数（`tool_result.audit_metadata.data_scope`）。

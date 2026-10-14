@@ -46,6 +46,16 @@ class SearchAnswerProfileKnowledgeBaseRef(KnowledgeBaseRef):
     status: KnowledgeBaseStatus
 
 
+class SearchAnswerProfileTarget(SearchAnswerProfileRef):
+    """質問から検索・回答プロファイルを推薦するときの候補(#1850)。
+
+    `knowledge_bases` は検索できる参照 KB だけ(ACTIVE で、利用者が使える KB)。
+    """
+
+    description: str | None = None
+    knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
+
+
 class SearchAnswerProfileSummary(SearchAnswerProfileRef):
     """一覧表示用の検索・回答プロファイル要約。"""
 
