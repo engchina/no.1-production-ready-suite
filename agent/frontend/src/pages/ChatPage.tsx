@@ -433,8 +433,9 @@ export function ChatPage() {
     <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
+        {/* カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
         <Card className="shrink-0">
-          <CardContent className="p-4 sm:p-5">
+          <CardContent className="pt-5">
             {agents.isLoading ? (
               <TimedLoadingState label={t("chat.agent.loading")} framed={false} testId="chat-agents-loading">
                 {/* ラベルと欄の寸法を予約する（RAG・NL2SQL の対象の欄と同じ形。#1153）。 */}

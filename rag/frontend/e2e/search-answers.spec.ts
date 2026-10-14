@@ -401,11 +401,10 @@ for (const viewport of [
     await page.goto("/chat");
     const chat = await measure();
     for (const box of [search, chat]) expect(Math.abs(box.width - box.inner)).toBeLessThanOrEqual(1);
-    // 高さは同じ幅のときに比べる。375px では 2 画面のカードの内側の幅が 7px 違い（RAG 検索のカードの余白が広い）、
-    // placeholder が 1 行に収まるかが変わる（#1771 でボタンの虫眼鏡を外し、文字の幅が 24px 広がった）。
-    if (Math.abs(search.width - chat.width) <= 1) {
-      expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
-    }
+    // 2 画面のカードは同じ余白（CardContent の既定）で、375px でも内側の幅と欄の高さが同じ（#1778）。
+    // 以前はチャットのカードだけ 375px の余白が狭く（p-4）、幅が 7px 違って placeholder の折り返しが変わった。
+    expect(Math.abs(search.width - chat.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
 
     await selectSearchAnswerProfile(page, "経理ビュー");
     await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");

@@ -661,9 +661,10 @@ export function SqlChatPage() {
       <PageHeader wide title={t("nav.chat")} subtitle={t("chat.subtitle")} />
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
         {/* 対象の業務プロファイル（#891）。RAG の検索・回答プロファイル・Agent の業務 Agent と同じく、
-            ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。 */}
+            ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。
+            カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
         <Card className="shrink-0">
-          <CardContent className="p-4 sm:p-5">
+          <CardContent className="pt-5">
             {profilesLoading ? (
               <TimedLoadingState
                 label={t("chat.profile.loading")}

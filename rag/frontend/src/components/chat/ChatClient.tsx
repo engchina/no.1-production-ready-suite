@@ -1557,9 +1557,10 @@ export function ChatClient() {
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
-        {/* 検索・回答プロファイル scope */}
+        {/* 検索・回答プロファイル scope。カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、
+            RAG 検索のカードと 375px でも内側の幅をそろえる（#1778）。 */}
         <Card className="shrink-0">
-          <CardContent className="p-4 sm:p-5">
+          <CardContent className="pt-5">
             {searchAnswerProfileLoading ? (
               <TimedLoadingState
                 label={t("chat.searchAnswerProfile.loading")}
@@ -1625,7 +1626,7 @@ export function ChatClient() {
         {searchAnswerProfilesFailed || noSearchAnswerProfiles ? null : !searchAnswerProfileLoading &&
           !searchAnswerProfileId ? (
           <Card className="min-h-0 flex-1">
-            <CardContent className="p-4 sm:p-5">
+            <CardContent className="pt-5">
               <EmptyState title={t("chat.searchAnswerProfile.required")} />
             </CardContent>
           </Card>
