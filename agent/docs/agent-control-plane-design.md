@@ -130,7 +130,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   Codex などは `skills/<name>/` をその Agent のスキルのディレクトリに写す。どちらも MCP サーバー `rag` / `nl2sql` の
   接続（URL と認証）は利用者がその Agent に設定する。
 - 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
-  テーブルの migration `20261014_012_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
+  テーブルの migration `20261014_013_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
 - 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
   （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag-and-structured-data` は順序を決めない判断のループ（足りないものを
   判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured-data-query` は短い番号付きの手順と `status` ごとの対応。
@@ -196,6 +196,13 @@ Agent はプラグインを持たず、スキルだけを持つ（#1798 でマ�
 - 承認: SDK の中断（`result.interruptions`）で承認待ちの step と ApprovalRequest を作り、`result.to_state().to_string()`
   を Run の metadata（`_builtin_sdk_state`）に保存して `waiting_approval` にする。すべて決まると `queued` に戻り、
   状態を復元して承認・却下を反映し再開する。承認済みのツールは中断時の step を実行中にして結果を記録する。
+  無人の Run は承認待ちにしない（`_unattended_approvals`）: 品質評価の Run（`evaluation_dry_run`。#776）は承認が要る
+  ツールを実行せずに dry-run の step を残し、自動実行の Run（`metadata.automation_id`。スケジュールも今すぐ実行も。#1813）は
+  承認が要るツールを呼ばない（無人の実行は事前に許可したツールだけを使う）。どちらも SDK の却下（`rejection_message`）で
+  モデルへ理由を返して回答まで続ける。自動実行では「自動実行では承認の要るツール（名前）を使えません。管理者がツールの
+  ポリシーで許可すると使えます。」を返し、取り消しの step（`error_code=automation.approval_required`、監査ログに出る）と
+  Run の経過のイベント（warning）を残す。自動実行の編集画面は `GET /api/automations/agents/{agent_id}/approval-tools`
+  （公開中の版のスキルのツールを Run と同じ `ToolPolicy.decide` で判定）で使えないツールを警告する。
   `_` で始まる key と Control Plane の予約の key（`RESERVED_RUN_METADATA_KEYS`。評価・自動実行・MCP・再実行の印）は、
   利用者が `POST /api/runs` の `metadata` で付けると 422 にする（再開の状態や出所を偽らせない。#1130）。
 - tracing: `set_tracing_disabled(True)`（業務データを外部へ送らない）。
@@ -240,6 +247,10 @@ RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索�
 `source_stale`）で読む（#1219）。チャットの出典は回答に使った根拠だけを、場所を添えて出す。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
+画面の一覧は `GET /api/settings/tool-policy/tools`（#1814。`tool_policy_catalog`）で、組み込みのツールに、URL を設定した
+MCP 接続の `tools/list`（ログイン中の利用者として取る）を足し、「既定に従う」の判定（Run と同じ `ToolPolicy.decide`）を
+添える。取れない接続は理由を出し、その接続のツールで保存したポリシーは「一覧にありません」の行として残す（保存し直しても
+消さない）。`readOnlyHint` の扱い（既定の判定）は変えていない。
 NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。
 
 - **利用者**: Run の作成時に、ログイン中の利用者（Cookie のセッション。local mode ではローカル利用者）の
@@ -408,7 +419,7 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
 ### 5.2 Run の事実と集計（#794）
 
 - 利用状況（#772）・フィードバック（#774）は、Oracle の構成では `AGENT_RUN_FACTS`（migration 007）を SQL で集計する。
-  期間は 7 / 30 / 90 / 180 / 365 日。日は `FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE :timezone`（画面のブラウザの
+  期間は 7 / 30 / 90 / 180 / 365 日。日は `FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone)`（画面のブラウザの
   タイムゾーン）で区切り、対象は Run の一覧と同じく利用できる業務 Agent だけ。フィードバックの一覧は
   `offset` / `limit` でサーバー側でページングする（新しい順。`RATED_AT DESC, RUN_ID DESC`）。
 - 1 Run = 1 行（業務 Agent・版・利用者・状態・起点・モデルの利用量・本人と管理者の評価・質問・回答・日時）。
@@ -417,6 +428,24 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   失敗はログ `agent_run_facts_not_saved` に残して捨てる）。起動時に Runtime repository の全 Run を backfill する。
 - テーブルが無い・DB の障害のあいだは、メモリの Run の集計に戻す（応答の `source` が `memory`。画面に集計元を出す）。
   memory / file の構成は保存せず、メモリの Run を集計する（`source=memory`）。
+- 確かめるべき実行（#1822。フィードバックの既定の見方。`GET /api/feedback/signals`）: 明示の評価は回答のごく一部にしか
+  付かないため、評価の付いていない Run も暗黙のシグナルから集める（モデルは呼ばない。定義は `run_signals.py`、Python の
+  `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則で、テストが SQLite で突き合わせる）。
+  | シグナル | 定義（Run の事実の列） |
+  |---|---|
+  | `not_helpful` 役に立たなかった | 本人か管理者の評価が `not_helpful`（`FEEDBACK_RATING` / `ADMIN_RATING`） |
+  | `validation_failed` 検証で確かめられない内容 | 成果物「回答の検証」が `completed` で、段落を外した・決定的な検査の error・本文を載せなかった・確かめきれなかった点を足した・読めない根拠があった（`VALIDATION_RESULT = 'failed'`） |
+  | `unvalidated` 検証できなかった | 検証そのものが失敗した `unvalidated`（`VALIDATION_RESULT = 'unvalidated'`。資料の根拠を使わなかった回答 `no_rag_evidence` は `ungrounded` として残すが、データだけの質問にも付くのでシグナルにしない） |
+  | `unanswered` 答えられなかった | 回答の対応（#1305）が `insufficient_evidence` / `needs_human`（`ANSWER_OUTCOME`） |
+  | `approval_rejected` 承認の却下 | 承認が `rejected`（`APPROVALS_REJECTED > 0`。終了で無効にした承認は数えない） |
+  | `tool_failed` ツールの失敗 | step が `failed`（`TOOL_FAILURES > 0`） |
+  | `run_failed` 実行の失敗・取り消し | Run の状態が `failed` / `cancelled` |
+
+  対象は期間（Run を作った日時）と業務 Agent で絞った、終わった Run（品質評価の Run を除く）。集計は対象の Run の数・
+  シグナルのある Run の数・種類ごとの数を前の同じ長さの期間と比べ、一覧は種類で絞って `CREATED_AT DESC, RUN_ID DESC` で
+  ページングする。列は migration 012 で足す（データは消さない）。既存の Run の事実の新しい列は起動時の backfill が
+  Runtime repository の Run から書く（Run の snapshot を整理した古い事実は空のままで、シグナルにならない）。migration 012 の
+  前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`）で利用状況・フィードバックの事実を書き続ける。
 - 品質評価（#776）の job は件数（旧 50 件）ではなく期間（終わった job を 365 日。安全のため 2,000 件まで）で残し、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
 - 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。
@@ -443,8 +472,13 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 チャット（`/chat`。#768）は業務利用者の入口。使ってよい Agent を選び、会話の履歴（既定で閉じ、会話の欄の上端の行の左端の
 開閉ボタンで開く。lg 以上は左のパネル、未満は side sheet。#889）・会話・入力欄を出す（RAG のチャットと同じ型）。1 往復が 1 Run で、`RunCreateRequest.thread_id` で会話を続ける
 （省略すると新しい会話。`RunState.thread_id` に入る）。組み込み Runtime は同じ会話の完了した前の Run の質問と回答
-（`kind="answer"` の成果物）を直近 10 往復までモデルの入力に付ける。会話の一覧・詳細は `GET /threads`・
+（`kind="answer"` の成果物）と使ったツールの名前（結果は渡さない）を、3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。新しい往復から
+ターン数と文字数に入るだけ。#1818）で、`<conversation_history untrusted="true">` の未信頼のデータとして質問の前の利用者の
+メッセージに付ける（assistant の発話としては渡さない）。会話の一覧・詳細は `GET /threads`・
 `GET /threads/{thread_id}`（作った利用者だけ。別の利用者・別の Agent の会話は 404 で、続けることもできない）。
+名前の変更は `PATCH /threads/{thread_id}`（`{"title"}`。1〜80 文字。最初の Run の `metadata.thread_title` に置く）、削除は
+`DELETE /threads/{thread_id}`（#1817。作った利用者だけ）。削除は Run を監査・フィードバック・評価・利用量のために残し、会話からの参照
+（`thread_id`）だけを外す（元の会話は `metadata.deleted_thread_id`）。回答の作成中・承認待ちの Run がある会話は 409。
 回答の処理の段階（画面の `ChatProgress`。#1359）は 3 製品共通の追記型のイベント（`pr_backend_core.chat_progress`）で、
 repository が Run のイベントを足すたびに（Run の lock の中で）`features/agent/chat_progress.py` が Run の状態から照合して
 `RunState.progress_events` に記録する（変わらなければ記録しない。checkpoint の snapshot に入るので保存先に関係なく残る）。

@@ -111,6 +111,10 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "app_auth_argon2_parallelism",
         # サービス間の token の署名鍵（Agent → RAG / NL2SQL の MCP。#230）
         "app_service_token_secret",
+        # チャットの同じ会話の前のターンを LLM に渡す予算（3 製品で同じ値。#1818）
+        "chat_history_max_turns",
+        "chat_history_max_chars_per_turn",
+        "chat_history_max_chars",
     }
 )
 

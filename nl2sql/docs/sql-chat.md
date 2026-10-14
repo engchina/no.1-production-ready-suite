@@ -64,6 +64,8 @@
 - オントロジー: チャットは `use_ontology_context: true`（SQL の生成の prompt に業務プロファイルの公開版のオントロジーの文脈を入れる）と `include_ontology_grounding: false`（生成後の接地確認をしない）を送る。チャットの画面は接地確認のグラフを表示しないため、結果の整形の段階でグラフを読まない（解釈の artifact `interpretation` も作らない。段階のログ `nl2sql_job_stage_step_finished` の `format_results` / `ontology_graph` は `skipped: true`・`skip_reason: "grounding_not_requested"`）。経路は SQL 生成と同じ `_run_job` で、要求の項目で接地確認を省くだけ（#1172）。`include_ontology_grounding` の未指定（SQL 生成の画面・MCP・API の既定）は `use_ontology_context` に従い、今までどおり公開版があれば接地確認する。接地確認は公開版の確定が前提のため、`use_ontology_context: false` なら指定にかかわらず行わない。
 - `GET /api/nl2sql/chats`: 本人の会話の先頭ジョブを、現在利用可能な業務プロファイルで絞って 50 件ずつ返す。続きは `next_cursor`。
 - `GET /api/nl2sql/chats/{conversation_id}`: 本人の会話と各ターンの永続ジョブを返す。ID は先頭のジョブ ID。
+- `PATCH /api/nl2sql/chats/{conversation_id}`（`{"title"}`。前後の空白を除いて 1〜80 文字）: 本人の会話の名前を変える（#1817）。名前は先頭のジョブの `chat_title` に置く（無ければ先頭の質問）。先頭のジョブの生成中は 409。
+- `DELETE /api/nl2sql/chats/{conversation_id}`: 本人の会話を消す（#1817）。ジョブは監査・フィードバック・実行履歴の元なので消さず、会話の全ジョブに `chat_deleted` の印を付けて会話の一覧・詳細・続きから外す。SQL の生成中のターンがあれば 409。他の利用者の会話は 403（管理者も変えない）。
 - 停止は既存の `POST /api/nl2sql/jobs/{job_id}/cancel`。既存の worker・lease・fence・再起動時の復旧を使う。
 - 処理の段階（#1359）: `GET /api/nl2sql/jobs/{job_id}/progress?since=<seq>`（polling。`ChatProgressPage`）と `GET /api/nl2sql/jobs/{job_id}/progress/stream?since=<seq>`（SSE。`Last-Event-ID` も受ける。`id:` に `seq`、イベントの無い間は 10 秒ごとに heartbeat、終端を送ったら閉じ、終わったジョブを続きから求めたら 204）。権限・所有者・業務プロファイルの判定は `GET /api/nl2sql/jobs/{job_id}` と同じ。SSE はジョブの文書を `run_sync_io` で 1 秒ごとに読み直すので、worker が別のプロセスでも届く。
 
@@ -73,7 +75,7 @@ Oracle の既存 `NL2SQL_STATE_DOCUMENTS` の `jobs` を正本にする。新し
 
 `menu.chat` は生成・業務プロファイル参照・スキーマ参照を含む。SQL 実行（`nl2sql.sql.execute`）とプロファイル管理は含まない（`menu.chat` だけの利用者のチャットは生成だけ）。会話の参照・継続は作成者に限り、現在のプロファイル利用権限を照合する。別のプロファイルに変えたら新しい会話にする。前のターンが未完了、会話が既に更新済み、存在しない親ジョブの場合は継続を拒否する。
 
-1 会話は 50 往復まで。モデルの文脈は直近 10 往復、履歴 JSON は 32,000 文字を目安に古い完全なターンを取り除く。質問は 10,000 文字まで、過去 SQL は 16,000 文字まで。結果行・credential・権限設定は文脈に入れない。過去の発言は参照データとして扱い、現在のスキーマ・対象範囲・安全規則は既存の生成パイプラインを正本にする。
+1 会話は 50 往復まで。モデルに渡す前の往復（質問・生成した SQL・状態）は 3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。既定 8 往復・1 往復 4,000 文字・合計 16,000 文字。新しい往復から詰め、入らない古い往復を落とし、長い SQL は切り詰める。#1818）で決め、SQL の生成には `<conversation_history untrusted="true">` の未信頼のデータとして渡す（AI要件確認は JSON の `conversation_history`）。質問は 10,000 文字まで。結果行・credential・権限設定は文脈に入れない。過去の発言は参照データとして扱い、現在のスキーマ・対象範囲・安全規則は既存の生成パイプラインを正本にする。
 
 ## 検証
 

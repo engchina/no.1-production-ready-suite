@@ -1,7 +1,9 @@
 """共通認証の API（3製品共通。NL2SQL の実装を基準に移設。#212）。
 
 `/auth/login|me|logout|password/change` と、ユーザー管理・ロール管理（基本情報）の
-`/security/users*` / `/security/roles*` を作る。ロールに付ける権限の API は製品が持つ。
+`/security/users*` / `/security/roles*`、外部の MCP クライアント向けの API キーの
+`/account/api-keys*`（自分のキー）と `/security/api-keys*`（管理）を作る（RAG / NL2SQL だけ。
+#1805）。ロールに付ける権限の API は製品が持つ。
 """
 
 from __future__ import annotations
@@ -28,7 +30,14 @@ from ..users_roles import (
     UserUpdateRequest,
     VersionRequest,
 )
-from .domain import Principal, RoleRecord, UserRecord
+from .api_keys import (
+    ApiKeyCreated,
+    ApiKeyCreateRequest,
+    ApiKeyRecord,
+    ApiKeysListData,
+    api_key_view,
+)
+from .domain import LOCAL_DEBUG_USER_UUID, Principal, RoleRecord, UserRecord
 from .errors import SecurityApiError
 from .service import AuthService
 
@@ -132,11 +141,15 @@ def build_auth_router(
     role_model: type[BaseModel],
     role_data: Callable[[RoleRecord], BaseModel],
     tags: list[str | Enum] | None = None,
+    api_keys: bool = False,
 ) -> APIRouter:
     """共通認証の API を作る。
 
     - `current_user_data(principal, debug_mode)`: `/auth/me` などの応答（製品が項目を足せる）。
     - `role_data(role)`: ロールの応答（製品が権限などを足した RoleData）。
+    - `api_keys`: 外部の MCP クライアント向けの API キーの API（`/account/api-keys*`・
+      `/security/api-keys*`）を足す
+      （外部に MCP を公開する RAG / NL2SQL だけ。#1805）。
     """
     router = APIRouter(tags=tags or ["security"])
     current_user_response: Any = ApiResponse[current_user_model]  # type: ignore[valid-type]
@@ -453,4 +466,71 @@ def build_auth_router(
             data=RoleDeleteData(role_id=deleted.role_id, role_code=deleted.role_code)
         )
 
+    if api_keys:
+        _add_api_key_routes(router, get_service=get_service, current_principal=current_principal)
     return router
+
+
+def _add_api_key_routes(
+    router: APIRouter,
+    *,
+    get_service: Callable[[], AuthService],
+    current_principal: Callable[[Request], Principal],
+) -> None:
+    """API キー（外部の MCP クライアント向け。RAG / NL2SQL 共通。#1805）の API。
+
+    - `/account/api-keys*`: 自分のキーの一覧・発行・失効（セルフサービス。ログインだけで使え、
+      メニュー権限を要しない。自分のキーだけを返す・消す）。
+    - `/security/api-keys*`: 管理の画面の全員のキーの一覧・失効（製品の manifest でメニュー権限
+      `menu.security_api_keys` を要求する）。発行は持たない（キーは各利用者が自分で発行する）。
+    """
+
+    def owner_names(service: AuthService, records: Sequence[ApiKeyRecord]) -> dict[str, str]:
+        identities = service.display_identities(
+            sorted({record.owner_user_uuid for record in records})
+        )
+        names = {uuid: identity.display_name for uuid, identity in identities.items()}
+        names.setdefault(LOCAL_DEBUG_USER_UUID, "ローカル利用者")
+        return names
+
+    def list_data(service: AuthService, records: Sequence[ApiKeyRecord]) -> ApiKeysListData:
+        names = owner_names(service, records)
+        return ApiKeysListData(keys=[api_key_view(record, names) for record in records])
+
+    @router.get("/account/api-keys", response_model=ApiResponse[ApiKeysListData])
+    def list_my_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
+        """自分の API キー（秘密と hash は返さない）。"""
+        service = get_service()
+        records = service.list_api_keys(current_principal(request))
+        return ApiResponse(data=list_data(service, records))
+
+    @router.post("/account/api-keys", response_model=ApiResponse[ApiKeyCreated])
+    def create_my_api_key(
+        payload: ApiKeyCreateRequest, request: Request
+    ) -> ApiResponse[ApiKeyCreated]:
+        """自分の API キーを発行する。秘密（`token`）はこの応答で 1 回だけ返す。"""
+        service = get_service()
+        record, token = service.create_api_key(payload, actor=current_principal(request))
+        view = api_key_view(record, owner_names(service, [record]))
+        return ApiResponse(data=ApiKeyCreated(key=view, token=token))
+
+    @router.delete("/account/api-keys/{key_id}", response_model=ApiResponse[dict[str, str]])
+    def revoke_my_api_key(key_id: str, request: Request) -> ApiResponse[dict[str, str]]:
+        """自分の API キーを失効させる（削除。すぐに使えなくなる）。"""
+        record = get_service().revoke_api_key(key_id, actor=current_principal(request))
+        return ApiResponse(data={"id": record.key_id})
+
+    @router.get("/security/api-keys", response_model=ApiResponse[ApiKeysListData])
+    def list_all_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
+        """全員の API キー（管理の画面。秘密と hash は返さない）。"""
+        service = get_service()
+        records = service.list_api_keys(current_principal(request), all_users=True)
+        return ApiResponse(data=list_data(service, records))
+
+    @router.delete("/security/api-keys/{key_id}", response_model=ApiResponse[dict[str, str]])
+    def revoke_any_api_key(key_id: str, request: Request) -> ApiResponse[dict[str, str]]:
+        """利用者の API キーを失効させる（管理の画面）。"""
+        record = get_service().revoke_api_key(
+            key_id, actor=current_principal(request), any_user=True
+        )
+        return ApiResponse(data={"id": record.key_id})

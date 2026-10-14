@@ -9,6 +9,11 @@
 import { apiErrorMessage } from "@production-ready/ui";
 import {
   rolePermissionTargetSearchParams,
+  type ApiKeyCreated,
+  type ApiKeyCreateRequest,
+  type ApiKeysAdminApi,
+  type ApiKeysList,
+  type MyApiKeysApi,
   type AuthApi,
   type DescribeApiError,
   type PermissionDefinition,
@@ -188,4 +193,20 @@ export const describeSecurityApiError: DescribeApiError = (error) => {
   // timeout・通信断は利用者向けの文、組み込みの例外（英語の文）は共通画面の既定の文にする（#906）。
   const message = apiErrorMessage(error, "");
   return message ? { message } : undefined;
+};
+
+/** 自分の API キー（`/api/account/api-keys*`。ログインだけで使える。#1805）。 */
+export const myApiKeysApi: MyApiKeysApi = {
+  list: () => request<ApiKeysList>("/api/account/api-keys"),
+  create: (payload: ApiKeyCreateRequest) =>
+    mutate<ApiKeyCreated>("/api/account/api-keys", send("POST", payload)),
+  revoke: (keyId: string) =>
+    mutate<unknown>(`/api/account/api-keys/${encodeURIComponent(keyId)}`, send("DELETE")),
+};
+
+/** 全員の API キー（`/api/security/api-keys*`。管理のメニュー権限。#1805）。 */
+export const apiKeysAdminApi: ApiKeysAdminApi = {
+  list: () => request<ApiKeysList>("/api/security/api-keys"),
+  revoke: (keyId: string) =>
+    mutate<unknown>(`/api/security/api-keys/${encodeURIComponent(keyId)}`, send("DELETE")),
 };

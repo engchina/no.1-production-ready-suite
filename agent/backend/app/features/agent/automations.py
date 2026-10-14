@@ -7,6 +7,10 @@
   予定の時刻を過ぎたら Run を作り、次回を計算し直す。停止中に過ぎた回は実行しない
   （起動時に次回へ送る）。
 - 画面の「今すぐ実行」でも Run を作る（Run の `metadata.automation_trigger` は `manual`）。
+- 無人の実行なので、承認が要るツールは呼ばない（組み込み Runtime が承認待ちにせずに却下して
+  モデルへ理由を返す。#1813）。編集画面は使えないツールを `approval_required_tools` で警告する。
+- 「前回」は、保存した `last_result`（Run を作った時点の結果）ではなく、前回の Run の今の状態を
+  表示のときに Run の保存先から引く（`with_last_run_status`。#1812）。
 - 前回の Run が終わっていなければ、その回は飛ばす（Run を積み上げない）。
 - スケジューラは API のプロセス（gunicorn は 1 worker）で回す。dispatcher のモードでは
   queued の Run を作るだけで、実行は dispatcher が行う（重複して起動しない）。
@@ -157,8 +161,44 @@ class Automation(AutomationInput):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class AutomationView(Automation):
+    """画面・API に返す自動実行（#1812）。
+
+    保存した定義に、表示のときに引く値を足す（足した値は保存しない）。
+    """
+
+    # 前回の Run（`last_run_id`）の今の状態（完了・失敗・承認待ちなど）。Run の記録が無ければ None。
+    last_run_status: RunStatus | None = None
+
+
+def with_last_run_status(items: list[Automation]) -> list[AutomationView]:
+    """前回の Run の状態を足す（#1812）。
+
+    Run の状態は Run の保存先（完了・失敗を書くのは組み込み Runtime と dispatcher）が正本なので、
+    自動実行の定義に写して保存し直さず、表示のときに引く。一覧の件数の Run を 1 件ずつ取りに
+    行かず、`run_statuses` で 1 回にまとめて引く。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    run_ids = [item.last_run_id for item in items if item.last_run_id]
+    statuses = runtime_repository.run_statuses(run_ids) if run_ids else {}
+    return [
+        AutomationView.model_validate(
+            {
+                **item.model_dump(),
+                "last_run_status": statuses.get(item.last_run_id) if item.last_run_id else None,
+            }
+        )
+        for item in items
+    ]
+
+
+def automation_view(item: Automation) -> AutomationView:
+    return with_last_run_status([item])[0]
+
+
 class AutomationsData(BaseModel):
-    automations: list[Automation] = Field(default_factory=list)
+    automations: list[AutomationView] = Field(default_factory=list)
     # False は定義の保存先（Oracle）が無い（再起動で消える）。
     persistent: bool = True
 
@@ -172,8 +212,18 @@ class AutomationRun(BaseModel):
 
 
 class AutomationDetail(BaseModel):
-    automation: Automation
+    automation: AutomationView
     runs: list[AutomationRun] = Field(default_factory=list)
+
+
+class AutomationToolCheck(BaseModel):
+    """自動実行で使えない（承認が要る）ツールの確認（編集画面の警告。#1813）。"""
+
+    agent_id: str
+    # 業務 Agent のスキルが使うツールのうち、ツールのポリシーで承認が要るもの（モデルに渡す名前）。
+    approval_required_tools: list[str] = Field(default_factory=list)
+    # ツールを確かめられなかった MCP 接続の理由（接続できないなど）。
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AutomationFired(BaseModel):

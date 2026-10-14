@@ -119,6 +119,36 @@ export interface ToolDefinition {
   audit_tags: string[];
 }
 
+/** ツール権限の画面のツール（Control Plane のツールと MCP 接続のツール。#1814）。 */
+export interface ToolPolicyTool {
+  name: string;
+  description: string;
+  /** `control-plane`（組み込みのツール）か MCP 接続の ID。 */
+  server_id: string;
+  server_label: string;
+  permission_level: ToolDefinition["permission_level"] | null;
+  side_effects: boolean | null;
+  /** ポリシーで個別に決めていないとき（既定に従う）の判定。不明なら null。 */
+  default_decision: "allow" | "ask" | "deny" | null;
+  /** false は一覧に無い（接続を取れない・ツールが無くなった）が、保存したポリシーにある名前。 */
+  available: boolean;
+}
+
+export interface ToolPolicyConnection {
+  server_id: string;
+  label: string;
+  /** false は URL を設定していない（一覧は取らない）。 */
+  configured: boolean;
+  tool_count: number;
+  /** 一覧を取れなかった理由。 */
+  error: string | null;
+}
+
+export interface ToolPolicyToolsData {
+  tools: ToolPolicyTool[];
+  connections: ToolPolicyConnection[];
+}
+
 export interface ToolCall {
   name: string;
   arguments: Record<string, unknown>;
@@ -424,8 +454,18 @@ export interface Automation extends AutomationInput {
   /** Run の作成（created）・前回の Run が終わっていないため飛ばした（skipped）・作れなかった（failed_to_start）。 */
   last_result: "created" | "skipped" | "failed_to_start" | null;
   last_message: string | null;
+  /** 前回の Run（`last_run_id`）の今の状態（表示のときに引く。#1812）。Run の記録が無ければ null。 */
+  last_run_status?: RunState["status"] | null;
   created_at: string;
   updated_at: string;
+}
+
+/** 業務 Agent のスキルが使うツールのうち、自動実行で使えない（承認が要る）もの（#1813）。 */
+export interface AutomationToolCheck {
+  agent_id: string;
+  approval_required_tools: string[];
+  /** ツールを確かめられなかった MCP 接続の理由。 */
+  warnings: string[];
 }
 
 export interface AutomationRun {
@@ -907,6 +947,76 @@ export interface FeedbackFilters {
   limit?: number;
 }
 
+/**
+ * 確かめるべき実行のシグナルの種類（表示の順。#1822）。定義は backend の `run_signals.py`。
+ * - not_helpful: 本人か管理者の評価が「役に立たなかった」
+ * - validation_failed: 最終の検証が根拠で確かめられない段落などのために回答を変えた
+ * - unvalidated: 最終の検証そのものが失敗した
+ * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
+ * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し
+ */
+export const SIGNAL_KINDS = [
+  "not_helpful",
+  "validation_failed",
+  "unvalidated",
+  "unanswered",
+  "approval_rejected",
+  "tool_failed",
+  "run_failed",
+] as const;
+export type SignalKind = (typeof SIGNAL_KINDS)[number];
+
+export interface SignalSummary {
+  /** 期間に作った、終わった実行（品質評価の実行を除く）。 */
+  runs: number;
+  /** シグナルのある実行。 */
+  flagged: number;
+  /** 対象の実行が 0 件のときは null。 */
+  flagged_rate: number | null;
+  /** すべての種類（表示の順。0 件も含む。1 つの実行が複数に入る）。 */
+  counts: { kind: SignalKind; count: number }[];
+}
+
+export interface SignalItem {
+  run_id: string;
+  thread_id: string | null;
+  agent_id: string;
+  agent_name: string;
+  user_uuid: string | null;
+  display_name: string;
+  question: string;
+  answer: string;
+  status: RunState["status"];
+  signals: SignalKind[];
+  answer_outcome: string | null;
+  validation_result: string | null;
+  tool_failures: number;
+  approvals_rejected: number;
+  feedback: RunFeedback | null;
+  admin_review: RunFeedback | null;
+  created_at: string;
+}
+
+/** 確かめるべき実行の集計と一覧（#1822）。`total` は種類の絞り込みに合う実行の件数。 */
+export interface SignalReport extends Page<SignalItem> {
+  days: FeedbackPeriodDays;
+  source: ReportSource;
+  since: string;
+  until: string;
+  kind: SignalKind | null;
+  summary: SignalSummary;
+  /** 直前の同じ長さの期間。 */
+  previous: SignalSummary;
+}
+
+export interface SignalFilters {
+  days: FeedbackPeriodDays;
+  agentId?: string;
+  kind?: SignalKind;
+  offset?: number;
+  limit?: number;
+}
+
 export interface ThreadSummary {
   thread_id: string;
   agent_id: string;
@@ -1262,6 +1372,15 @@ export const agentApi = {
     if (agentId) params.set("agent_id", agentId);
     return request<ThreadsData>(`/api/threads?${params.toString()}`);
   },
+  /** 会話の名前の変更（#1817。作った利用者だけ。前後の空白を除いて 1〜80 文字）。 */
+  renameThread: (threadId: string, title: string) =>
+    request<ThreadSummary>(`/api/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+  /** 会話の削除（#1817。Run は残し、会話からだけ外す。回答の作成中・承認待ちは 409）。 */
+  deleteThread: (threadId: string) =>
+    request<null>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
   putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
     requestRun(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
@@ -1283,6 +1402,15 @@ export const agentApi = {
     if (filters.offset) query.set("offset", String(filters.offset));
     if (filters.limit) query.set("limit", String(filters.limit));
     return request<FeedbackReport>(`/api/feedback?${query.toString()}`);
+  },
+  /** 確かめるべき実行（暗黙のシグナル。#1822）。 */
+  getFeedbackSignals: (filters: SignalFilters) => {
+    const query = new URLSearchParams({ days: String(filters.days) });
+    if (filters.agentId) query.set("agent_id", filters.agentId);
+    if (filters.kind) query.set("kind", filters.kind);
+    if (filters.offset) query.set("offset", String(filters.offset));
+    if (filters.limit) query.set("limit", String(filters.limit));
+    return request<SignalReport>(`/api/feedback/signals?${query.toString()}`);
   },
   /** 会話（Run の一覧）。チャットは取り直しの `signal`（中止・待ち時間の上限）を渡す（#1160）。 */
   getThread: (threadId: string, options: { signal?: AbortSignal } = {}) =>
@@ -1325,6 +1453,8 @@ export const agentApi = {
     }),
   deleteAutomation: (automationId: string) =>
     request<null>(`/api/automations/${encodeURIComponent(automationId)}`, { method: "DELETE" }),
+  automationApprovalTools: (agentId: string) =>
+    request<AutomationToolCheck>(`/api/automations/agents/${encodeURIComponent(agentId)}/approval-tools`),
   runAutomation: (automationId: string) =>
     request<AutomationFired>(`/api/automations/${encodeURIComponent(automationId)}/run`, { method: "POST" }),
   /** 品質評価（#776）。 */
@@ -1440,6 +1570,7 @@ export const agentApi = {
     }),
   getToolPolicySettings: () =>
     request<ToolPolicySettings>("/api/settings/tool-policy"),
+  listToolPolicyTools: () => request<ToolPolicyToolsData>("/api/settings/tool-policy/tools"),
   patchToolPolicySettings: (payload: Partial<ToolPolicySettings>) =>
     request<ToolPolicySettings>("/api/settings/tool-policy", {
       method: "PATCH",

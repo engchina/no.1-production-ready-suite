@@ -426,7 +426,7 @@ def test_usage_report_is_aggregated_in_sql() -> None:
     assert {item.day: item.runs for item in report.by_day}[date(2026, 10, 2)] == 2
     sql, binds = connection.executed[0]
     # 日は利用者のタイムゾーンで区切り、期間は東京の 9/26 0 時（UTC の 9/25 15:00）から。
-    assert "FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE :timezone" in sql
+    assert "FROM_TZ(CREATED_AT, 'UTC') AT TIME ZONE (:timezone)" in sql
     assert binds["timezone"] == "Asia/Tokyo"
     assert binds["since"] == datetime(2026, 9, 25, 15, 0)
     assert binds["previous_since"] == datetime(2026, 9, 18, 15, 0)

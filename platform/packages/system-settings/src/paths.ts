@@ -3,6 +3,7 @@ import {
   Cloud,
   Database,
   KeyRound,
+  KeySquare,
   Palette,
   Shield,
   Users,
@@ -95,3 +96,23 @@ export const USER_ROLE_NAV_ITEMS = [
   { key: "users", href: USER_ROLE_PATHS.users, labelKey: "nav.securityUsers", icon: Users },
   { key: "roles", href: USER_ROLE_PATHS.roles, labelKey: "nav.securityRoles", icon: Shield },
 ] as const satisfies readonly UserRoleNavItem[];
+
+/**
+ * API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）の画面のパス。
+ * `mine` は自分のキー（アカウントのメニューから開く）、`admin` は全員のキー（「ユーザーとロール」）。
+ */
+export const API_KEY_PATHS = {
+  mine: "/account/api-keys",
+  admin: "/settings/security/api-keys",
+} as const;
+
+/**
+ * サイドナビ「ユーザーとロール」の末尾に置く「API キー」（管理の画面。RAG / NL2SQL だけ。#1805）。
+ * KeyRound は共通の OCI 認証が使うため、別のアイコンにする（#658）。
+ */
+export const API_KEY_ADMIN_NAV_ITEM = {
+  key: "apiKeys",
+  href: API_KEY_PATHS.admin,
+  labelKey: "nav.securityApiKeys",
+  icon: KeySquare,
+} as const;

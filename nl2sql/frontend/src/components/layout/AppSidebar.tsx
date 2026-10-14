@@ -71,7 +71,12 @@ export function AppSidebar() {
       // ログイン ID・ロール名・パスワード変更・ログアウト（ログイン省略時はその表示）は共通の部品が出す（#307・#1696）。
       footer={
         <SidebarAccountSection
-          routes={{ login: APP_ROUTES.login, passwordChange: APP_ROUTES.passwordChange }}
+          routes={{
+            login: APP_ROUTES.login,
+            passwordChange: APP_ROUTES.passwordChange,
+            // 自分の API キー（外部の MCP クライアント向け。#1805）。
+            apiKeys: APP_ROUTES.accountApiKeys,
+          }}
           collapsed={collapsed}
         />
       }

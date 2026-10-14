@@ -202,7 +202,7 @@ def test_saved_snapshot_is_migrated_to_three_builtin_agents() -> None:
     ]
     assert default.versions[1].name == "資料・データ横断アシスタント"
     assert default.unpublished_changes is False
-    # 利用者の Agent はそのまま（旧 ID の置き換えはシステムテーブルの migration 012。#1816）。
+    # 利用者の Agent はそのまま（旧 ID の置き換えはシステムテーブルの migration 013。#1816）。
     migrated = _agent(repository, "custom-1573")
     assert migrated.name == "経理"
     assert migrated.skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research"]

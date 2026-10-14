@@ -252,6 +252,62 @@ RUN_FACTS_STATEMENTS: tuple[str, ...] = (
         CREATED_AT TIMESTAMP NOT NULL,
         FINISHED_AT TIMESTAMP,
         UPDATED_AT TIMESTAMP NOT NULL,
+        ANSWER_OUTCOME VARCHAR2(32),
+        VALIDATION_RESULT VARCHAR2(16),
+        TOOL_FAILURES NUMBER(10),
+        APPROVALS_REJECTED NUMBER(10),
+        CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
+    )
+    """,
+    "CREATE INDEX AGENT_RUN_FACTS_CREATED_IX ON AGENT_RUN_FACTS (CREATED_AT)",
+    "CREATE INDEX AGENT_RUN_FACTS_AGENT_CREATED_IX ON AGENT_RUN_FACTS (AGENT_ID, CREATED_AT)",
+    "CREATE INDEX AGENT_RUN_FACTS_RATED_IX ON AGENT_RUN_FACTS (RATED_AT)",
+)
+
+# 確かめるべき実行のシグナルの列（#1822。migration 012）。既存のテーブルに足す（データは消さない）。
+# ANSWER_OUTCOME は回答の対応（#1305）、VALIDATION_RESULT は最終の検証の結果
+# （`run_facts.VALIDATION_*`）、TOOL_FAILURES / APPROVALS_REJECTED は失敗したツールの呼び出しと
+# 却下した承認の数。
+RUN_FACTS_SIGNAL_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE AGENT_RUN_FACTS ADD (ANSWER_OUTCOME VARCHAR2(32))",
+    "ALTER TABLE AGENT_RUN_FACTS ADD (VALIDATION_RESULT VARCHAR2(16))",
+    "ALTER TABLE AGENT_RUN_FACTS ADD (TOOL_FAILURES NUMBER(10))",
+    "ALTER TABLE AGENT_RUN_FACTS ADD (APPROVALS_REJECTED NUMBER(10))",
+)
+
+# migration 007 が作った形（checksum に入るため固定する。最新の形は RUN_FACTS_STATEMENTS）。
+_RUN_FACTS_STATEMENTS_007: tuple[str, ...] = (
+    """
+    CREATE TABLE AGENT_RUN_FACTS (
+        RUN_ID VARCHAR2(128) NOT NULL,
+        AGENT_ID VARCHAR2(128) NOT NULL,
+        AGENT_NAME VARCHAR2(400 CHAR),
+        AGENT_VERSION VARCHAR2(32),
+        THREAD_ID VARCHAR2(128),
+        CREATED_BY_USER_UUID VARCHAR2(64),
+        STATUS VARCHAR2(32) NOT NULL,
+        RUN_SOURCE VARCHAR2(32) NOT NULL,
+        MODEL VARCHAR2(256 CHAR),
+        REQUESTS NUMBER(10),
+        INPUT_TOKENS NUMBER(19),
+        OUTPUT_TOKENS NUMBER(19),
+        TOTAL_TOKENS NUMBER(19),
+        FEEDBACK_RATING VARCHAR2(16),
+        FEEDBACK_REASON VARCHAR2(32),
+        FEEDBACK_COMMENT VARCHAR2(1000 CHAR),
+        FEEDBACK_USER_UUID VARCHAR2(64),
+        FEEDBACK_AT TIMESTAMP,
+        ADMIN_RATING VARCHAR2(16),
+        ADMIN_REASON VARCHAR2(32),
+        ADMIN_COMMENT VARCHAR2(1000 CHAR),
+        ADMIN_USER_UUID VARCHAR2(64),
+        ADMIN_AT TIMESTAMP,
+        RATED_AT TIMESTAMP,
+        QUESTION CLOB NOT NULL,
+        ANSWER CLOB,
+        CREATED_AT TIMESTAMP NOT NULL,
+        FINISHED_AT TIMESTAMP,
+        UPDATED_AT TIMESTAMP NOT NULL,
         CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
     )
     """,
@@ -309,9 +365,9 @@ if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) |
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
 
-# 012 で改名する組み込みのスキルの ID（旧 → 新。#1816）。migration の SQL は checksum に
+# 013 で改名する組み込みのスキルの ID（旧 → 新。#1816）。migration の SQL は checksum に
 # 入るため固定する。
-_RENAMED_SKILL_IDS_012: tuple[tuple[str, str], ...] = (
+_RENAMED_SKILL_IDS_013: tuple[tuple[str, str], ...] = (
     ("business_rag_research", "business-rag-research"),
     ("structured_data_query", "structured-data-query"),
     ("rag_and_structured_data", "rag-and-structured-data"),
@@ -380,7 +436,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "20261003_007_run_facts",
         "add run facts for usage / feedback reports beyond the in-memory runs (#794)",
         # 既存の Run の事実は、アプリの起動時の backfill が Runtime repository から書く。
-        RUN_FACTS_STATEMENTS,
+        _RUN_FACTS_STATEMENTS_007,
     ),
     MigrationArtifact(
         "20261014_008_remove_plugin_distribution_sources",
@@ -447,7 +503,15 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         ),
     ),
     MigrationArtifact(
-        "20261014_012_rename_builtin_skill_ids",
+        "20261014_012_run_fact_signals",
+        "add answer outcome / validation result / tool failure / rejected approval columns "
+        "to run facts for the runs to review (#1822)",
+        # 列を足すだけ（データは消さない）。既存の Run の事実の新しい列は、アプリの起動時の
+        # backfill が Runtime repository にある Run から書く（保存期間の外の Run は空のまま）。
+        RUN_FACTS_SIGNAL_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261014_013_rename_builtin_skill_ids",
         "rename the builtin skill ids to agent skills names in saved agents (#1816)",
         # 組み込みのスキルを Agent Skills の形式（repo 直下の skills/<name>/SKILL.md）にし、ID を
         # 仕様の `name`（小文字・数字・ハイフン）に変えた。保存済みの業務 Agent（下書きと各版）の
@@ -456,11 +520,11 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # 読み込みで 1 つにする）。データは消さないので、破壊的な migration にはしない。
         (
             "UPDATE AGENT_RUNTIME_CHECKPOINTS SET SNAPSHOT_JSON = "
-            + _replace_skill_ids_sql("SNAPSHOT_JSON", _RENAMED_SKILL_IDS_012)
+            + _replace_skill_ids_sql("SNAPSHOT_JSON", _RENAMED_SKILL_IDS_013)
             + " WHERE "
             + " OR ".join(
                 f"DBMS_LOB.INSTR(SNAPSHOT_JSON, '\"{old}\"') > 0"
-                for old, _new in _RENAMED_SKILL_IDS_012
+                for old, _new in _RENAMED_SKILL_IDS_013
             ),
         ),
     ),
@@ -861,6 +925,7 @@ __all__ = [
     "CONTROL_STATEMENTS",
     "DOMAIN_STATEMENTS",
     "RUNTIME_STATEMENTS",
+    "RUN_FACTS_SIGNAL_STATEMENTS",
     "RUN_FACTS_STATEMENTS",
     "CONTROL_TABLE",
     "DOMAIN_TABLES",

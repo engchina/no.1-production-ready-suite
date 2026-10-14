@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from fastapi import HTTPException, Request
 
+from .api_keys import ApiKeyRecord, bearer_api_key
 from .domain import Principal
 from .errors import (
     PASSWORD_CHANGE_REQUIRED_CODE,
@@ -27,6 +28,8 @@ from .service_token import profile_scope_from_claims
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 UNCLASSIFIED_PERMISSION = "__unclassified__"
+# API キーを MCP 以外の API に付けた（#1805）。画面用の Cookie / CSRF の API は機械から呼ばせない。
+API_KEY_NOT_ALLOWED_CODE = "SECURITY_API_KEY_NOT_ALLOWED"
 # path の変換指定（`{object_name:path}` の `:path`）。権限の manifest と OpenAPI は変換指定のない
 # `{object_name}` で書くので、照合の前に除く（#998）。
 _PATH_CONVERTER_RE = re.compile(r"\{([^{}:]+):[^{}]+\}")
@@ -81,6 +84,7 @@ async def authorize_request(
     service_token_paths: Collection[str] = (),
     service_token_audience: str = "",
     open_operations: Collection[tuple[str, str]] | None = None,
+    api_key_paths: Collection[str] = (),
 ) -> AsyncIterator[None]:
     """1 リクエストの認可。`async with` の中で route を実行する。
 
@@ -92,10 +96,37 @@ async def authorize_request(
     - `service_token_paths`（例: MCP の `/mcp`）: Cookie の代わりに
       `Authorization: Bearer <サービストークン>` の `sub` の利用者として認証する（#230）。
       Cookie を使わないので CSRF は照合しない。claims は `request.state.service_token_claims`。
+    - `api_key_paths`（外部に MCP を公開する RAG / NL2SQL の `/mcp`。#1805）を渡すと、
+      `Authorization: Bearer prak_…`（API キー）を local を含めて最初に検証し、キーの実行する
+      利用者として認証する。`api_key_paths` 以外の API にキーを付けたら 401。渡さない製品
+      （Agent）はキーを扱わない（Cookie の通常の認証になる）。
     - `open_operations`（method × path）を渡すと、公開 path でも集合にある操作だけ認証を飛ばす。
       同じ path に method を足しても黙って公開されない（集合にない操作は通常の認証と権限の判定）。
       渡さないときは path 単位（従来どおり。#490）。
     """
+    api_key = bearer_api_key(request.headers.get("authorization", "")) if api_key_paths else None
+    if api_key is not None and not _is_open_public_operation(
+        request, public_paths=public_paths, open_operations=open_operations
+    ):
+        # API キー（#1805）は local でも検証する（local の素通りにしない）。MCP の入口だけで使える。
+        principal = await _authenticate_api_key(
+            request,
+            api_key,
+            settings=settings,
+            service=service,
+            run_sync=run_sync,
+            permission_for_route=permission_for_route,
+            local_debug_principal=local_debug_principal,
+            unclassified_permission=unclassified_permission,
+            api_key_paths=api_key_paths,
+        )
+        request.state.principal = principal
+        token = enter_actor(principal)
+        try:
+            yield
+        finally:
+            exit_actor(token)
+        return
     if settings.local_debug_enabled:
         principal = local_debug_principal()
         request.state.principal = principal
@@ -108,12 +139,12 @@ async def authorize_request(
     if not settings.app_auth_enabled:
         yield
         return
-    route_path = permission_route_path(request)
-    if route_path in public_paths and (
-        open_operations is None or (request.method.upper(), route_path) in open_operations
+    if _is_open_public_operation(
+        request, public_paths=public_paths, open_operations=open_operations
     ):
         yield
         return
+    route_path = permission_route_path(request)
     try:
         if route_path in service_token_paths:
             principal = await _authenticate_service_token(
@@ -148,6 +179,66 @@ async def authorize_request(
         yield
     finally:
         exit_actor(token)
+
+
+def _is_open_public_operation(
+    request: Request,
+    *,
+    public_paths: Collection[str],
+    open_operations: Collection[tuple[str, str]] | None,
+) -> bool:
+    route_path = permission_route_path(request)
+    return route_path in public_paths and (
+        open_operations is None or (request.method.upper(), route_path) in open_operations
+    )
+
+
+async def _authenticate_api_key(
+    request: Request,
+    api_key: str,
+    *,
+    settings: AuthRequestSettings,
+    service: AuthService,
+    run_sync: RunSync,
+    permission_for_route: Callable[[str, str], frozenset[str] | None],
+    local_debug_principal: Callable[[], Principal],
+    unclassified_permission: str,
+    api_key_paths: Collection[str],
+) -> Principal:
+    """`Authorization: Bearer prak_…` の利用者（#1805）。
+
+    MCP の入口（`api_key_paths`。`POST /api/mcp`）だけで使える。それ以外の API に付けたら
+    401。Cookie を使わないので CSRF は照合しない。ツールごとの権限は MCP のツールが利用者の
+    権限で判定する（サービストークンと同じ）。
+    """
+    route_path = permission_route_path(request)
+    if route_path not in api_key_paths:
+        raise SecurityApiError(
+            401,
+            "API キーは MCP の入口（POST /api/mcp）でだけ使えます。"
+            "画面の API はログインして使ってください。",
+            code=API_KEY_NOT_ALLOWED_CODE,
+        )
+    authenticated: tuple[Principal, ApiKeyRecord] = await run_sync(
+        partial(
+            service.authenticate_api_key,
+            api_key,
+            local_principal=local_debug_principal,
+            local_enabled=settings.local_debug_enabled,
+        )
+    )
+    principal, record = authenticated
+    request.state.api_key_id = record.key_id
+    permissions = permission_for_route(request.method, route_path)
+    if permissions and unclassified_permission in permissions:
+        raise SecurityApiError(
+            403, "この API は権限一覧に登録されていません。", code=ROUTE_UNCLASSIFIED_CODE
+        )
+    if permissions is not None and not principal.has_any_permission(set(permissions)):
+        raise SecurityApiError(
+            403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
+        )
+    return principal
 
 
 async def _authenticate_service_token(

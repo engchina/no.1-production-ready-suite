@@ -192,15 +192,16 @@ def test_chat_safety_still_blocks_write_sql(
     assert job.result is not None and not job.result.safety.is_safe
 
 
-def test_chat_uses_recent_ten_turns_only(chat: ChatFixture) -> None:
+def test_chat_uses_recent_turns_within_shared_budget(chat: ChatFixture) -> None:
+    """既定の共通の予算（8 往復）に入る直近の往復だけを渡す（#1818）。"""
     service, _, client = chat
     previous = None
     for number in range(12):
         job = run(service, request(f"条件-{number:03}", previous))
         assert job.status == JobStatus.DONE
         previous = job.job_id
-    assert "条件-000" not in client.prompts[-1]
-    assert "条件-001" in client.prompts[-1]
+    assert "条件-002" not in client.prompts[-1]
+    assert "条件-003" in client.prompts[-1]
     assert "条件-010" in client.prompts[-1]
     assert "条件-011" in client.prompts[-1]
 
@@ -380,3 +381,80 @@ def test_create_job_route_maps_client_job_id_conflict_to_409(
     with pytest.raises(HTTPException) as conflict:
         router.create_job(owned.model_copy(update={"question": "別の質問"}), actor_request)
     assert conflict.value.status_code == 409
+
+
+def test_chat_rename_and_delete_keep_jobs(chat: ChatFixture) -> None:
+    """会話の名前の変更・削除は本人だけ。削除してもジョブは残し、会話から外す（#1817）。"""
+    from app.features.nl2sql.service import ChatConversationBusyError
+
+    service, repository, _ = chat
+    first = run(service, request())
+    second = run(service, request("多い順にして", first.job_id))
+
+    renamed = service.rename_sql_chat(first.job_id, actor="user-1", title=" 注文の確認 ")
+    assert renamed.title == "注文の確認"
+    observer = _worker(repository)
+    listed = observer.list_sql_chats(actor="user-1", profile_ids=None).items
+    assert [item.title for item in listed] == ["注文の確認"]
+    with pytest.raises(PermissionError):
+        service.rename_sql_chat(first.job_id, actor="other", title="横取り")
+    with pytest.raises(PermissionError):
+        service.delete_sql_chat(first.job_id, actor="other")
+
+    # SQL の生成中のターンがある会話は消さない。
+    pending = service.start_job(request("上位 5 件", second.job_id), actor_user_uuid="user-1")
+    with pytest.raises(ChatConversationBusyError):
+        service.delete_sql_chat(first.job_id, actor="user-1")
+    assert service.run_next_nl2sql_job(worker_id="chat-test", job_id=pending.job_id)
+
+    service.delete_sql_chat(first.job_id, actor="user-1")
+    restored = _worker(repository)
+    assert restored.list_sql_chats(actor="user-1", profile_ids=None).items == []
+    assert restored.get_sql_chat(first.job_id, actor="user-1") is None
+    with pytest.raises(ValueError, match="前の会話が見つかりません"):
+        restored.start_job(request("続き", pending.job_id), actor_user_uuid="user-1")
+    with pytest.raises(LookupError):
+        restored.rename_sql_chat(first.job_id, actor="user-1", title="x")
+    # ジョブは監査・フィードバック・実行履歴のために残る。
+    kept = restored.get_job(second.job_id, actor_user_uuid="user-1")
+    assert kept is not None and kept.status == JobStatus.DONE
+
+
+def test_chat_rename_and_delete_routes(chat: ChatFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`PATCH` / `DELETE /nl2sql/chats/{id}`（#1817）。生成中は 409、空の名前は検証で拒否。"""
+    from fastapi import HTTPException
+    from test_nl2sql_operation_profile_access import _request as api_request
+
+    from app.features.nl2sql import router
+    from app.features.nl2sql.models import SqlChatUpdateRequest
+    from app.security.permissions import QUERY_GENERATE_PERMISSION
+
+    service, _, _ = chat
+    monkeypatch.setattr(router, "nl2sql_service", service)
+    actor_request = api_request({"orders-profile"}, permissions={QUERY_GENERATE_PERMISSION})
+    created = router.create_job(request(), actor_request).data
+    assert created is not None
+    with pytest.raises(ValidationError):
+        SqlChatUpdateRequest(title="   ")
+    with pytest.raises(ValidationError):
+        SqlChatUpdateRequest(title="あ" * 81)
+
+    with pytest.raises(HTTPException) as busy:
+        router.rename_sql_chat(created.job_id, SqlChatUpdateRequest(title="x"), actor_request)
+    assert busy.value.status_code == 409
+    with pytest.raises(HTTPException) as busy_delete:
+        router.delete_sql_chat(created.job_id, actor_request)
+    assert busy_delete.value.status_code == 409
+    assert service.run_next_nl2sql_job(worker_id="chat-test", job_id=created.job_id)
+
+    renamed = router.rename_sql_chat(
+        created.job_id, SqlChatUpdateRequest(title="注文の確認"), actor_request
+    ).data
+    assert renamed is not None and renamed.title == "注文の確認"
+    router.delete_sql_chat(created.job_id, actor_request)
+    with pytest.raises(HTTPException) as missing:
+        router.get_sql_chat(created.job_id, actor_request)
+    assert missing.value.status_code == 404
+    with pytest.raises(HTTPException) as missing_delete:
+        router.delete_sql_chat(created.job_id, actor_request)
+    assert missing_delete.value.status_code == 404

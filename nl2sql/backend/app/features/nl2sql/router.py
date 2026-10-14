@@ -173,6 +173,8 @@ from .models import (
     SqlChatData,
     SqlChatExecuteData,
     SqlChatPage,
+    SqlChatSummary,
+    SqlChatUpdateRequest,
     StructureToSqlData,
     StructureToSqlRequest,
     SyntheticDataGenerateRequest,
@@ -211,6 +213,7 @@ from .select_ai_readiness import (
 )
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
+    ChatConversationBusyError,
     JobIdConflictError,
     JobProgressData,
     ProfileNameConflict,
@@ -710,6 +713,65 @@ def get_sql_chat(conversation_id: str, request: Request) -> ApiResponse[SqlChatD
         raise HTTPException(status_code=404, detail="会話が見つかりません。")
     _assert_profile_access(request, data.conversation.profile_id)
     return ApiResponse(data=data)
+
+
+_CHAT_NOT_FOUND_DETAIL = "会話が見つかりません。"
+_CHAT_FORBIDDEN_DETAIL = "他の利用者の会話は変更できません。"
+
+
+@router.patch("/chats/{conversation_id}", response_model=ApiResponse[SqlChatSummary])
+def rename_sql_chat(
+    conversation_id: str, update: SqlChatUpdateRequest, request: Request
+) -> ApiResponse[SqlChatSummary]:
+    """会話の名前を変える（#1817）。本人の会話だけ（管理者も他人の会話は変えない）。"""
+    principal = getattr(request.state, "principal", None)
+    actor = str(getattr(principal, "user_uuid", ""))
+    try:
+        current = nl2sql_service.get_sql_chat(conversation_id, actor=actor)
+        if current is None:
+            raise LookupError(conversation_id)
+        _assert_profile_access(request, current.conversation.profile_id)
+        data = nl2sql_service.rename_sql_chat(conversation_id, actor=actor, title=update.title)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=_CHAT_FORBIDDEN_DETAIL) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=_CHAT_NOT_FOUND_DETAIL) from exc
+    except ChatConversationBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="SQL の生成中は会話名を変更できません。生成が終わってから変更してください。",
+        ) from exc
+    return ApiResponse(data=data)
+
+
+@router.delete("/chats/{conversation_id}", response_model=ApiResponse[None])
+def delete_sql_chat(conversation_id: str, request: Request) -> ApiResponse[None]:
+    """会話を消す（#1817）。本人の会話だけ。
+
+    ジョブは監査・フィードバック・実行履歴のために残し、会話の一覧・詳細・続きから外す。
+    SQL の生成中のターンがある会話は 409（停止してから消す）。
+    """
+    principal = getattr(request.state, "principal", None)
+    actor = str(getattr(principal, "user_uuid", ""))
+    try:
+        current = nl2sql_service.get_sql_chat(conversation_id, actor=actor)
+        if current is None:
+            raise LookupError(conversation_id)
+        _assert_profile_access(request, current.conversation.profile_id)
+        nl2sql_service.delete_sql_chat(conversation_id, actor=actor)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=_CHAT_FORBIDDEN_DETAIL) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=_CHAT_NOT_FOUND_DETAIL) from exc
+    except ChatConversationBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "SQL の生成中の会話は削除できません。"
+                "停止するか、生成が終わってから削除してください。"
+            ),
+        ) from exc
+    return ApiResponse(data=None)
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])

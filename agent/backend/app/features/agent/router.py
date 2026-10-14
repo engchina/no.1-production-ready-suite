@@ -99,8 +99,12 @@ from app.features.agent.automations import (
     AutomationFired,
     AutomationInput,
     AutomationsData,
+    AutomationToolCheck,
+    AutomationView,
     automation_store,
+    automation_view,
     recent_runs,
+    with_last_run_status,
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
@@ -169,6 +173,13 @@ from app.features.agent.rag_figures import (
     issue_run_figure_url,
 )
 from app.features.agent.run_facts import fact_from_run
+from app.features.agent.run_signals import (
+    SIGNAL_PAGE_SIZE,
+    SIGNAL_PAGE_SIZE_MAX,
+    SignalKind,
+    SignalReport,
+    build_signal_report,
+)
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
     AgentNotPublishedError,
@@ -193,9 +204,12 @@ from app.features.agent.runtime import (
     RunStatus,
     RunStep,
     RuntimeToolCallAuditData,
+    ThreadBusyError,
     ThreadData,
     ThreadNotFoundError,
     ThreadsData,
+    ThreadSummary,
+    ThreadUpdateRequest,
     agent_unavailable_reason,
     builtin_resume_pending,
     reserved_run_metadata_keys,
@@ -210,6 +224,7 @@ from app.features.agent.skills import (
 )
 from app.features.agent.storage_status import RuntimeStorageStatus, runtime_storage_status
 from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData, find_template
+from app.features.agent.tool_policy_catalog import ToolPolicyToolsData, tool_policy_catalog
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalMcpToolsData,
@@ -1671,6 +1686,48 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
     return ApiResponse(data=thread)
 
 
+@router.patch("/threads/{thread_id}", response_model=ApiResponse[ThreadSummary])
+async def rename_thread(
+    thread_id: str, update: ThreadUpdateRequest, request: Request
+) -> ApiResponse[ThreadSummary]:
+    """会話の名前を変える（#1817）。作った利用者だけ（管理者も他人の会話は変えない）。"""
+    user_uuid = _run_creator_user_uuid(request)
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid)
+        _require_agent_access(request, thread.agent_id)
+        summary = runtime_repository.rename_thread(
+            thread_id, user_uuid=user_uuid, title=update.title
+        )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    return ApiResponse(data=summary)
+
+
+@router.delete("/threads/{thread_id}", response_model=ApiResponse[None])
+async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
+    """会話を消す（#1817）。作った利用者だけ。
+
+    Run は監査・フィードバック・評価のために残し、会話からの参照だけを外す。回答の作成中・
+    承認待ちの Run がある会話は 409（止めてから消す）。
+    """
+    user_uuid = _run_creator_user_uuid(request)
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid)
+        _require_agent_access(request, thread.agent_id)
+        runtime_repository.delete_thread(thread_id, user_uuid=user_uuid)
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    except ThreadBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "回答の作成中・承認待ちの会話は削除できません。"
+                "停止するか、回答が終わってから削除してください。"
+            ),
+        ) from exc
+    return ApiResponse(data=None)
+
+
 @router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])
 async def put_run_feedback(
     run_id: str,
@@ -1801,6 +1858,64 @@ async def get_feedback_report(
     return ApiResponse(data=report)
 
 
+_signal_paging = offset_params(default=SIGNAL_PAGE_SIZE, max_limit=SIGNAL_PAGE_SIZE_MAX)
+
+
+@router.get("/feedback/signals", response_model=ApiResponse[SignalReport])
+async def get_feedback_signals(
+    request: Request,
+    paging: Annotated[OffsetParams, Depends(_signal_paging)],
+    days: int = Query(default=30),
+    agent_id: str | None = Query(default=None, max_length=200),
+    kind: SignalKind | None = None,
+) -> ApiResponse[SignalReport]:
+    """確かめるべき実行（暗黙のシグナル。#1822）。権限はフィードバックと同じ（`menu.feedback`）。
+
+    評価の付いていない Run も、回答の検証の不合格・答えられなかった回答・承認の却下・ツールの
+    失敗・実行の失敗から集める。対象は利用できる業務 Agent の Run だけ。Oracle の構成は保存した
+    Run の事実（`AGENT_RUN_FACTS`）を SQL で集計し、一覧はサーバー側でページングする。
+    """
+    if days not in FEEDBACK_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)
+    now = datetime.now(UTC)
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    store = run_facts_store.reporting_store()
+    if store is not None:
+        try:
+            return ApiResponse(
+                data=await run_in_threadpool(
+                    store.signal_report,
+                    days=days,
+                    now=now,
+                    agent_ids=_report_agent_scope(request),
+                    agent_id=agent_id or None,
+                    kind=kind,
+                    offset=paging.offset,
+                    limit=paging.limit,
+                    agent_names=agent_names,
+                    user_names=user_display_names,
+                )
+            )
+        except run_facts_store.RunFactsUnavailableError:
+            logger.warning("agent_run_facts_table_missing", extra={"report": "signals"})
+        except Exception:  # noqa: BLE001 - DB の障害・未更新の列でも画面を出す（メモリの Run を集計）
+            logger.exception("agent_run_facts_report_failed", extra={"report": "signals"})
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    report = await run_in_threadpool(
+        build_signal_report,
+        [fact_from_run(run) for run in runs],
+        days=days,
+        now=now,
+        agent_id=agent_id or None,
+        kind=kind,
+        agent_names=agent_names,
+        user_names=user_display_names,
+        offset=paging.offset,
+        limit=paging.limit,
+    )
+    return ApiResponse(data=report)
+
+
 _PERIOD_DETAIL = (
     "期間は "
     + "・".join(str(days) for days in FEEDBACK_PERIOD_DAYS)
@@ -1877,16 +1992,50 @@ async def list_automations(request: Request) -> ApiResponse[AutomationsData]:
     """業務 Agent の自動実行（#784。利用できる業務 Agent のものだけ）。"""
     items = [item for item in automation_store.list() if _agent_allowed(request, item.agent_id)]
     return ApiResponse(
-        data=AutomationsData(automations=items, persistent=get_control_plane_store().persistent)
+        data=AutomationsData(
+            automations=with_last_run_status(items),
+            persistent=get_control_plane_store().persistent,
+        )
     )
 
 
-@router.post("/automations", response_model=ApiResponse[Automation])
+@router.get(
+    "/automations/agents/{agent_id}/approval-tools",
+    response_model=ApiResponse[AutomationToolCheck],
+)
+async def automation_approval_tools(
+    agent_id: str, request: Request
+) -> ApiResponse[AutomationToolCheck]:
+    """業務 Agent のスキルが使うツールのうち、自動実行で使えない（承認が要る）もの（#1813）。
+
+    自動実行の Run は承認が要るツールを呼ばないため、編集画面で警告する。業務 Agent は公開中の
+    版のスキル（自動実行の Run が使う版）で、MCP のツールはログイン中の利用者として
+    `tools/list` で取る。
+    """
+    _require_agent_access(request, agent_id)
+    try:
+        agent = _control_plane_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="業務 Agent が見つかりません。") from exc
+    published = agent.published()
+    skill_ids = list(published.skill_ids if published is not None else agent.skill_ids)
+    context = ToolInvocationContext(agent_id=agent_id, user_uuid=_run_creator_user_uuid(request))
+    names, warnings = await asyncio.to_thread(
+        builtin_runtime.approval_required_tools, skill_ids, context=context
+    )
+    return ApiResponse(
+        data=AutomationToolCheck(
+            agent_id=agent_id, approval_required_tools=names, warnings=warnings
+        )
+    )
+
+
+@router.post("/automations", response_model=ApiResponse[AutomationView])
 async def create_automation(
     payload: AutomationInput,
     request: Request,
     _: None = Depends(require_admin),
-) -> ApiResponse[Automation]:
+) -> ApiResponse[AutomationView]:
     """自動実行を作る。Run は作った利用者として作る（RAG / NL2SQL の MCP もこの利用者）。"""
     _require_agent_access(request, payload.agent_id)
     _require_runnable_agent(payload.agent_id)
@@ -1897,23 +2046,25 @@ async def create_automation(
         created = automation_store.create(payload, owner=owner, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=created)
+    return ApiResponse(data=automation_view(created))
 
 
 @router.get("/automations/{automation_id}", response_model=ApiResponse[AutomationDetail])
 async def get_automation(automation_id: str, request: Request) -> ApiResponse[AutomationDetail]:
     """自動実行と、最近の Run（新しい順に 10 件）。"""
     item = _automation_for_actor(request, automation_id)
-    return ApiResponse(data=AutomationDetail(automation=item, runs=recent_runs(item.id)))
+    return ApiResponse(
+        data=AutomationDetail(automation=automation_view(item), runs=recent_runs(item.id))
+    )
 
 
-@router.put("/automations/{automation_id}", response_model=ApiResponse[Automation])
+@router.put("/automations/{automation_id}", response_model=ApiResponse[AutomationView])
 async def update_automation(
     automation_id: str,
     payload: AutomationInput,
     request: Request,
     _: None = Depends(require_admin),
-) -> ApiResponse[Automation]:
+) -> ApiResponse[AutomationView]:
     item = _automation_for_actor(request, automation_id)
     agent_changed = payload.agent_id != item.agent_id
     if agent_changed:
@@ -1927,7 +2078,7 @@ async def update_automation(
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=updated)
+    return ApiResponse(data=automation_view(updated))
 
 
 @router.delete("/automations/{automation_id}", response_model=ApiResponse[None])
@@ -3158,6 +3309,16 @@ async def list_mcp_connection_tool_definitions(
 @router.get("/settings/tool-policy", response_model=ApiResponse[ToolPolicySettings])
 async def get_tool_policy_settings() -> ApiResponse[ToolPolicySettings]:
     return ApiResponse(data=_tool_policy_settings_response())
+
+
+@router.get("/settings/tool-policy/tools", response_model=ApiResponse[ToolPolicyToolsData])
+async def list_tool_policy_tools(request: Request) -> ApiResponse[ToolPolicyToolsData]:
+    """ツール権限の画面のツール（Control Plane のツールと MCP 接続のツール。#1814）。
+
+    MCP 接続のツールはログイン中の利用者として `tools/list` で取る（取れない接続は理由を返す）。
+    """
+    context = ToolInvocationContext(user_uuid=_run_creator_user_uuid(request))
+    return ApiResponse(data=await asyncio.to_thread(tool_policy_catalog, context))
 
 
 @router.patch("/settings/tool-policy", response_model=ApiResponse[ToolPolicySettings])

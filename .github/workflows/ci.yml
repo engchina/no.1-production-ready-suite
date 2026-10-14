@@ -382,6 +382,10 @@ jobs:
               - "agent/backend/app/features/agent/*_store.py"
               - "agent/backend/app/features/agent/storage_*.py"
               - "agent/backend/app/features/agent/*_migration.py"
+              # Run の事実と確かめるべき実行のシグナルの SQL（#1822）と、実 Oracle の結合テスト。
+              - "agent/backend/app/features/agent/run_facts.py"
+              - "agent/backend/app/features/agent/run_signals.py"
+              - "agent/backend/tests/*oracle_live*.py"
             # frontend / backend のどちらにも属さない platform のファイル（.env.example・contracts/・scripts/・templates/ 等）。
             # answer-passages の事例は answer_passages_contract だけで判定する（読むのは backend のテストだけ。#1488）。
             platform_other:

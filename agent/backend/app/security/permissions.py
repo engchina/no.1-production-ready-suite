@@ -388,6 +388,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # チャットの会話（#768）。会話は作った利用者だけが読む（handler が利用者で絞る）。
     ("GET", "/threads"): _any(MENU_CHAT),
     ("GET", "/threads/{thread_id}"): _any(MENU_CHAT),
+    # 会話の名前の変更・削除（#1817）。作った利用者だけ（handler が利用者で絞る）。
+    ("PATCH", "/threads/{thread_id}"): _any(MENU_CHAT),
+    ("DELETE", "/threads/{thread_id}"): _any(MENU_CHAT),
     ("GET", _RUN): _RUN_DETAIL,
     ("GET", f"{_RUN}/audit"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts"): _RUN_DETAIL,
@@ -408,6 +411,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/automations"): _any(MENU_AUTOMATIONS),
     ("POST", "/automations"): _ADMIN_ONLY,
     ("GET", "/automations/{automation_id}"): _any(MENU_AUTOMATIONS),
+    # 自動実行で使えない（承認が要る）ツールの確認（#1813。編集画面の警告）。
+    ("GET", "/automations/agents/{agent_id}/approval-tools"): _any(MENU_AUTOMATIONS),
     ("PUT", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("DELETE", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("POST", "/automations/{automation_id}/run"): _ADMIN_ONLY,
@@ -436,6 +441,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 改善・運用 ----
     # フィードバック（#774。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
     ("GET", "/feedback"): _any(MENU_FEEDBACK),
+    # 確かめるべき実行（#1822。暗黙のシグナル。対象はフィードバックと同じ）。
+    ("GET", "/feedback/signals"): _any(MENU_FEEDBACK),
     # 利用状況（#772。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
     ("GET", "/usage"): _any(MENU_USAGE),
     # ---- 運用設定 ----
@@ -452,6 +459,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/runtime/snapshot/import"): _ADMIN_ONLY,
     # ナビに出さない設定（ツール権限）は管理者だけ。
     ("GET", "/settings/tool-policy"): _ADMIN_ONLY,
+    # ツール権限の画面のツール（MCP 接続のツールを含む。#1814）。
+    ("GET", "/settings/tool-policy/tools"): _ADMIN_ONLY,
     ("PATCH", "/settings/tool-policy"): _ADMIN_ONLY,
     # ---- システム設定（3 製品共通。RAG / NL2SQL と同じくメニュー権限で保存・操作できる） ----
     ("GET", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE, MENU_SETTINGS_OCI),

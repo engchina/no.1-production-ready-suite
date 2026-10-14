@@ -14,12 +14,10 @@ import {
   Banner,
   Card,
   CardContent,
-  TextField,
   ToggleChip,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
-  toast,
-  useConfirm,
+  useChatHistoryActions,
   ChatUserMessage,
   createOptimisticChatMessage,
   chatProgressStepsFromEvents,
@@ -36,13 +34,9 @@ import {
   useChatHistoryPanel,
 } from "@production-ready/ui";
 import {
-  Check,
-  Pencil,
   RotateCcw,
   Search,
   Square,
-  Trash2,
-  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -62,7 +56,6 @@ import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
-import { isSubmitEnter } from "@/lib/keyboard";
 import type {
   ApprovedFaqSuggestionData,
   ClarificationAnswer,
@@ -70,7 +63,6 @@ import type {
   ChatMessage,
   CompareModel,
   ConversationDetail,
-  ConversationSummary,
   RetrievedChunk,
 } from "@/lib/api";
 import { api, ApiError } from "@/lib/api";
@@ -600,7 +592,22 @@ export function ChatClient() {
   const createConversation = useCreateConversation();
   const updateConversation = useUpdateConversation();
   const deleteConversation = useDeleteConversation();
-  const confirm = useConfirm();
+  // 会話の名前の変更・削除（3 製品共通の useChatHistoryActions。#1817）。
+  const historyActions = useChatHistoryActions({
+    onRename: (id, title) => updateConversation.mutateAsync({ id, payload: { title } }),
+    onDelete: (id) => deleteConversation.mutateAsync(id),
+    // 開いている会話を消すときは、送信・生成を止めて選択を外す（消した会話を開いたままにしない）。
+    onBeforeDelete: (item) => {
+      if (item.id !== activeId) return;
+      cancelSending();
+      setLiveTurn(null);
+      setErrorText("");
+      setActiveId(null);
+    },
+    errorMessage: (error, fallback) =>
+      error instanceof ApiError ? error.messages.join(" / ") : fallback,
+  });
+  const { cancelRename } = historyActions;
   const compareModelsQuery = useCompareModels();
   const compareModels = compareModelsQuery.data ?? EMPTY_COMPARE_MODELS;
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
@@ -641,13 +648,9 @@ export function ChatClient() {
   // 回答の段階（`progress`）が無いとき（保存に失敗した・取り直しが間に合わない）も、この画面の間は「処理の経過」を残す。
   const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressEvent[]>>({});
   const [errorText, setErrorText] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [titleDraft, setTitleDraft] = useState("");
-  const [titleError, setTitleError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const previousSearchAnswerProfileIdRef = useRef(searchAnswerProfileId);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const titleInputRef = useRef<HTMLInputElement>(null);
 
   // 検索・回答プロファイルを切り替えたら会話選択と進行中ストリームをリセットする。
   useEffect(() => {
@@ -662,9 +665,8 @@ export function ChatClient() {
     setFaqChoice(null);
     setClarifyChoice(null);
     setErrorText("");
-    setEditingId(null);
-    setTitleError("");
-  }, [searchAnswerProfileId, setActiveId, setFaqChoice, setClarifyChoice]);
+    cancelRename();
+  }, [searchAnswerProfileId, setActiveId, setFaqChoice, setClarifyChoice, cancelRename]);
 
   // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。末尾を見ている間は新しいメッセージ・受信中の回答に
   // 合わせて末尾へ追い、上を読んでいる間は引き戻さず「最新へ」を出す。会話を開いたら末尾から読み始める。
@@ -760,13 +762,6 @@ export function ChatClient() {
     );
   }
 
-  useEffect(() => {
-    if (editingId) titleInputRef.current?.focus();
-  }, [editingId]);
-
-  useEffect(() => {
-    if (titleError && !updateConversation.isPending) titleInputRef.current?.focus();
-  }, [titleError, updateConversation.isPending]);
 
   // 送信中・停止した質問は、保存済みの会話の同じ質問を出さない（画面が決めた id で `start` の前から除く。#1175）。
   const liveUserMessageId = liveTurn ? (liveTurn.user?.message_id ?? liveTurn.clientMessageId) : undefined;
@@ -904,66 +899,6 @@ export function ChatClient() {
       focusComposer();
     } catch {
       setErrorText(t("chat.error.send"));
-    }
-  }
-
-  function startRename(conversation: ConversationSummary) {
-    setEditingId(conversation.id);
-    setTitleDraft(conversation.title ?? t("chat.sessions.untitled"));
-    setTitleError("");
-  }
-
-  function cancelRename() {
-    setEditingId(null);
-    setTitleError("");
-  }
-
-  async function saveRename() {
-    if (!editingId || updateConversation.isPending) return;
-    const title = titleDraft.trim();
-    if (!title) {
-      setTitleError(t("chat.sessions.renameEmpty"));
-      titleInputRef.current?.focus();
-      return;
-    }
-    setTitleError("");
-    try {
-      await updateConversation.mutateAsync({ id: editingId, payload: { title } });
-      setEditingId(null);
-    } catch (error) {
-      setTitleError(
-        error instanceof ApiError
-          ? error.messages.join(" / ")
-          : t("chat.sessions.renameError")
-      );
-      titleInputRef.current?.focus();
-    }
-  }
-
-  // 会話の削除は取り消せないため、確認ダイアログを通す（buttons.md §5.1）。
-  async function removeConversation(conversation: ConversationSummary) {
-    const title = conversation.title ?? t("chat.sessions.untitled");
-    const ok = await confirm({
-      title: t("chat.sessions.deleteConfirm.title"),
-      description: t("chat.sessions.deleteConfirm.description", { title }),
-      confirmLabel: t("chat.sessions.deleteConfirm.confirm"),
-      tone: "danger",
-      dismissOnOverlay: false,
-    });
-    if (!ok) return;
-    try {
-      if (conversation.id === activeId) {
-        cancelSending();
-        setLiveTurn(null);
-        setErrorText("");
-        setActiveId(null);
-      }
-      await deleteConversation.mutateAsync(conversation.id);
-      toast.success(t("chat.sessions.deleted"));
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.messages.join(" / ") : t("chat.sessions.deleteError")
-      );
     }
   }
 
@@ -1419,9 +1354,8 @@ export function ChatClient() {
 
   // 会話の履歴の中身（読み込み中・失敗・0 件・一覧・ページ送り）。lg 以上はインラインのパネル、
   // lg 未満はモーダルの side sheet に入れる（どちらか一方だけを描く）。
-  const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation]));
   const historyContent = (
-    // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。名前の変更・削除は RAG だけ（API がある）。
+    // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。名前の変更・削除も 3 製品共通（#1817）。
     <ChatHistoryList
       items={conversations.map((conversation) => ({
         id: conversation.id,
@@ -1455,82 +1389,8 @@ export function ChatClient() {
         list: "chat-conversation-list",
         pagination: "chat-conversations-pagination",
       }}
-      renderEditor={(item) =>
-        editingId === item.id ? (
-          <div className="flex items-start gap-1">
-            <TextField
-              ref={titleInputRef}
-              id={`conversation-title-${item.id}`}
-              label={t("chat.sessions.renameLabel")}
-              labelHidden
-              className="min-w-0 flex-1"
-              value={titleDraft}
-              maxLength={80}
-              required
-              disabled={updateConversation.isPending}
-              error={titleError || undefined}
-              onValueChange={setTitleDraft}
-              onKeyDown={(event) => {
-                if (isSubmitEnter(event)) {
-                  event.preventDefault();
-                  void saveRename();
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  cancelRename();
-                }
-              }}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              iconOnly
-              disabled={updateConversation.isPending}
-              aria-label={t("chat.sessions.renameSave")}
-              onClick={() => void saveRename()}
-              icon={Check}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              iconOnly
-              disabled={updateConversation.isPending}
-              aria-label={t("chat.sessions.renameCancel")}
-              onClick={cancelRename}
-              icon={X}
-            />
-          </div>
-        ) : null
-      }
-      renderActions={(item) => {
-        const conversation = conversationById.get(item.id);
-        if (!conversation) return null;
-        return (
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              iconOnly
-              aria-label={t("chat.sessions.rename", { title: item.title })}
-              onClick={() => startRename(conversation)}
-              icon={Pencil}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              tone="danger"
-              iconOnly
-              disabled={deleteConversation.isPending}
-              aria-label={t("chat.sessions.delete", { title: item.title })}
-              onClick={() => void removeConversation(conversation)}
-              icon={Trash2}
-            />
-          </>
-        );
-      }}
+      renderEditor={historyActions.renderEditor}
+      renderActions={historyActions.renderActions}
       // 3 製品共通の会話の履歴のページング（#1265 / #1266）。次のページを取得している間は、表示中のページの範囲を出す。
       pagination={
         conversationsData

@@ -228,6 +228,15 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission("menu.security_users", "ユーザーとロール", "ユーザー管理"),
     _menu_permission("menu.security_roles", "ユーザーとロール", "ロール管理"),
+    # 全員のキーの一覧と失効（管理の画面）。自分のキーの発行・失効はログインだけで使える（#1805）。
+    _permission(
+        "menu.security_api_keys",
+        "ユーザーとロール",
+        "API キー",
+        "「API キー」の画面を表示し、全員の API キー（外部の MCP クライアント向け）の一覧の表示と"
+        "失効ができます。自分のキーの発行・失効は、この権限が無くてもアカウントのメニューから"
+        "できます。",
+    ),
     _menu_permission(
         "menu.settings_system_tables",
         "運用設定",
@@ -567,6 +576,10 @@ AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth
 # MCP は認証済みなら通し、ツールごとの権限はツール側（app.features.mcp.tools）で判定する。
 MCP_API_PATH = "/mcp"
 SERVICE_TOKEN_API_PATHS = frozenset({MCP_API_PATH})
+# 外部の MCP クライアントの API キー（`Authorization: Bearer prak_…`。#1805）で認証する path。
+# MCP の入口だけ。ほかの API にキーを付けたら 401（画面用の Cookie / CSRF の API を機械から
+# 呼ばせない）。
+API_KEY_API_PATHS = frozenset({MCP_API_PATH})
 MCP_AUDIENCE = "nl2sql"
 # 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
@@ -580,6 +593,10 @@ OPEN_API_OPERATIONS = frozenset(
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
         ("POST", MCP_API_PATH),
+        # 自分の API キーの発行・一覧・失効（#1805）。公開 path ではないのでログインは要る。
+        ("GET", "/account/api-keys"),
+        ("POST", "/account/api-keys"),
+        ("DELETE", "/account/api-keys/{key_id}"),
         # DB の状態の確認は、ログインした全員が使う（読み込みの失敗の画面）。
         # 公開 path ではないのでログインは要る。
         ("GET", "/nl2sql/persistence"),
@@ -700,6 +717,9 @@ _SELECT_AI_CREDENTIAL_READINESS = (
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- ユーザーとロール（platform の共通 router。#503） ----
     **SECURITY_USER_ROLE_ROUTE_PERMISSIONS,
+    # 全員の API キーの一覧と失効（管理の画面。platform の共通 router。#1805）。
+    ("GET", "/security/api-keys"): _allowed("menu.security_api_keys"),
+    ("DELETE", "/security/api-keys/{key_id}"): _allowed("menu.security_api_keys"),
     # ---- セキュリティ設定: 権限管理・業務プロファイル利用権限 ----
     ("GET", "/security/permissions"): _SECURITY_PERMISSIONS,
     ("GET", "/security/profile-access/profiles"): _SECURITY_PERMISSIONS,
@@ -772,6 +792,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/nl2sql/engines"): _allowed(PROFILE_MANAGE_PERMISSION, QUERY_GENERATE_PERMISSION),
     ("GET", "/nl2sql/chats"): _QUERY_GENERATE,
     ("GET", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
+    # 会話の名前の変更・削除（#1817）。本人の会話だけ（handler が利用者で絞る）。
+    ("PATCH", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
+    ("DELETE", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
     ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
     # 処理の段階のイベント（polling・SSE。#1359）。ジョブの取得と同じ権限。
     ("GET", "/nl2sql/jobs/{job_id}/progress"): _QUERY_HISTORY_READ,

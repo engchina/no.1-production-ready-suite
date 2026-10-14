@@ -1,7 +1,8 @@
 """Run の事実（1 Run = 1 行。#794）。
 
-利用状況（#772）・フィードバック（#774）の集計の入力。Run の snapshot（`RunState`）から、集計に要る
-項目（業務 Agent・利用者・状態・モデルの利用量・起点・本人と管理者の評価・質問と回答・日時）だけを
+利用状況（#772）・フィードバック（#774）・確かめるべき実行（#1822）の集計の入力。Run の snapshot
+（`RunState`）から、集計に要る項目（業務 Agent・利用者・状態・モデルの利用量・起点・本人と管理者の
+評価・回答の対応と最終の検証の結果・ツールの失敗と承認の却下の件数・質問と回答・日時）だけを
 取り出す。Oracle の構成では `AGENT_RUN_FACTS` に MERGE して SQL で集計し（`run_facts_store`）、
 memory / file の構成ではメモリの Run からその場で作って Python で集計する。
 """
@@ -14,11 +15,20 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.features.agent.answer_validation import (
+    ANSWER_VALIDATION_KIND,
+    REASON_NO_RAG_EVIDENCE,
+    STATUS_COMPLETED,
+    STATUS_SKIPPED,
+    STATUS_UNVALIDATED,
+)
 from app.features.agent.runtime import (
+    ApprovalStatus,
     RunEventType,
     RunFeedback,
     RunState,
     RunStatus,
+    StepStatus,
     run_answer_text,
 )
 
@@ -31,6 +41,18 @@ RUN_SOURCE_AUTOMATION = "automation"
 RUN_SOURCE_MCP = "mcp"
 RUN_SOURCE_REPLAY = "replay"
 RUN_SOURCE_USER = "user"
+
+# 最終の検証の結果（成果物「回答の検証」から決める。#1822）。列 `VALIDATION_RESULT` の値。
+VALIDATION_PASSED = "passed"
+# 根拠で確かめられない・矛盾する段落・決定的な検査の error・読めない根拠があり、回答から外すか
+# 「確かめられていない点」を足した（利用者に見せる回答を検証が変えた）。
+VALIDATION_FAILED = "failed"
+# 検証そのものが失敗した（呼び出し・接続・応答の失敗、長すぎる回答など）。
+VALIDATION_UNVALIDATED = "unvalidated"
+# RAG の根拠のツールを持つ Agent が、資料の根拠を使わずに答えた（`no_rag_evidence`）。
+VALIDATION_UNGROUNDED = "ungrounded"
+# 確かめる対象が無い（確認の質問だけ・RAG の根拠のツールを持たない Agent など）。
+VALIDATION_SKIPPED = "skipped"
 
 _TERMINAL_EVENTS = {
     RunEventType.RUN_COMPLETED,
@@ -63,6 +85,13 @@ class RunFact(BaseModel):
     admin_review: RunFeedback | None = None
     question: str = ""
     answer: str | None = None
+    # 回答の対応（成果物 `answer` の `outcome.value`。#1305）。記録の無い Run は None。
+    answer_outcome: str | None = None
+    # 最終の検証の結果（`VALIDATION_*`）。検証の記録が無い Run は None。
+    validation_result: str | None = None
+    # 失敗したツールの呼び出しの数と、却下した承認の数（#1822）。
+    tool_failures: int = 0
+    approvals_rejected: int = 0
     created_at: datetime
     finished_at: datetime | None = None
 
@@ -99,6 +128,73 @@ def _finished_at(run: RunState) -> datetime | None:
     return run.updated_at
 
 
+def _latest_artifact_content(run: RunState, kind: str) -> dict[str, Any] | None:
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == kind and isinstance(artifact.content, dict):
+            return artifact.content
+    return None
+
+
+def run_answer_outcome(run: RunState) -> str | None:
+    """回答の対応（`answer_outcome.answer_outcome` の `value`。#1305）。"""
+    content = _latest_artifact_content(run, "answer")
+    outcome = content.get("outcome") if content else None
+    value = outcome.get("value") if isinstance(outcome, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _positive(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _has_items(value: object) -> bool:
+    return isinstance(value, list) and len(value) > 0
+
+
+def run_validation_result(run: RunState) -> str | None:
+    """最終の検証の結果（成果物「回答の検証」。#1246・#1277・#1822）。
+
+    判定が出た（`completed`）検証は、利用者に見せる回答を変えたか（段落を外した・決定的な検査の
+    error・本文を載せなかった・確かめきれなかった点を足した・読めない根拠があった）で
+    不合格 / 合格を分ける（`answer_validation.publish_answer` の `withheld` と結果の根拠）。
+    """
+    content = _latest_artifact_content(run, ANSWER_VALIDATION_KIND)
+    if content is None:
+        return None
+    status = content.get("status")
+    if status == STATUS_UNVALIDATED:
+        if content.get("reason") == REASON_NO_RAG_EVIDENCE:
+            return VALIDATION_UNGROUNDED
+        return VALIDATION_UNVALIDATED
+    if status == STATUS_SKIPPED:
+        return VALIDATION_SKIPPED
+    if status != STATUS_COMPLETED:
+        return None
+    withheld = content.get("withheld")
+    withheld = withheld if isinstance(withheld, dict) else {}
+    result = content.get("result")
+    result = result if isinstance(result, dict) else {}
+    altered = (
+        _positive(withheld.get("claims"))
+        or _positive(withheld.get("findings"))
+        or _positive(withheld.get("unverified"))
+        or withheld.get("all") is True
+        or _has_items(result.get("stale_evidence"))
+        or _has_items(result.get("missing_evidence"))
+    )
+    return VALIDATION_FAILED if altered else VALIDATION_PASSED
+
+
+def run_tool_failures(run: RunState) -> int:
+    """失敗したツールの呼び出し（step）の数。"""
+    return sum(1 for step in run.steps if step.status == StepStatus.FAILED)
+
+
+def run_approvals_rejected(run: RunState) -> int:
+    """却下した承認の数（終了で無効にした承認は数えない）。"""
+    return sum(1 for approval in run.approvals if approval.status == ApprovalStatus.REJECTED)
+
+
 def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
     """Run の snapshot から事実を作る（Run は変えない）。"""
     usage = run.usage
@@ -121,6 +217,10 @@ def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
         admin_review=run.admin_review.model_copy() if run.admin_review is not None else None,
         question=run.goal,
         answer=run_answer_text(run),
+        answer_outcome=run_answer_outcome(run),
+        validation_result=run_validation_result(run),
+        tool_failures=run_tool_failures(run),
+        approvals_rejected=run_approvals_rejected(run),
         created_at=run.created_at,
         finished_at=_finished_at(run),
     )
@@ -133,7 +233,16 @@ __all__ = [
     "RUN_SOURCE_MCP",
     "RUN_SOURCE_REPLAY",
     "RUN_SOURCE_USER",
+    "VALIDATION_FAILED",
+    "VALIDATION_PASSED",
+    "VALIDATION_SKIPPED",
+    "VALIDATION_UNGROUNDED",
+    "VALIDATION_UNVALIDATED",
     "RunFact",
     "fact_from_run",
+    "run_answer_outcome",
+    "run_approvals_rejected",
     "run_source",
+    "run_tool_failures",
+    "run_validation_result",
 ]

@@ -1522,6 +1522,17 @@ class JobData(BaseModel):
     progress_events: list[ChatProgressEvent] = Field(default_factory=list)
 
 
+class SqlChatUpdateRequest(BaseModel):
+    """会話の名前の変更（#1817。RAG・Agent の会話名と同じ規則: 前後の空白を除いて 1〜80 文字）。"""
+
+    title: str = Field(..., min_length=1, max_length=80)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class SqlChatSummary(BaseModel):
     """永続ジョブを会話の単位で表示する。"""
 

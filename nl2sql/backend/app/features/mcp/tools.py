@@ -407,7 +407,9 @@ class Nl2SqlJobResult(BaseModel):
         description=(
             "失敗の分類。status が error のときは必ず入る。Oracle のエラーなら ORA-xxxxx / "
             "DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・SQL_EXECUTION_FAILED・"
-            "SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED、"
+            "SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED・"
+            "NL2SQL_PROFILE_REVALIDATION_REQUIRED（公開の後に業務プロファイルか Schema が変わり、"
+            "管理者が業務定義を再検証して公開するまで再試行しても直らない）、"
             "OCI Enterprise AI の HTTP の失敗なら ENTERPRISE_AI_AUTHORIZATION_FAILED・"
             "ENTERPRISE_AI_AUTHENTICATION_FAILED・ENTERPRISE_AI_MODEL_NOT_FOUND"
             "（設定の誤りで、再試行しても直らない）・ENTERPRISE_AI_RATE_LIMITED・"

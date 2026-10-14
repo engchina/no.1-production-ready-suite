@@ -414,6 +414,99 @@ function feedbackReportFromRuns(
   };
 }
 
+/** 確かめるべき実行のシグナルの種類（表示の順。#1822。backend の `run_signals.SignalKind`）。 */
+export const SIGNAL_KINDS = [
+  "not_helpful",
+  "validation_failed",
+  "unvalidated",
+  "unanswered",
+  "approval_rejected",
+  "tool_failed",
+  "run_failed",
+] as const;
+
+/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証の記録は見ない）。 */
+function runSignals(run: Json): string[] {
+  const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
+  const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+  const outcome = ((answer?.content as Json | undefined)?.outcome as Json | undefined)?.value;
+  const toolFailures = ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length;
+  const rejected = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length;
+  const checks: Record<string, boolean> = {
+    not_helpful: notHelpful,
+    validation_failed: false,
+    unvalidated: false,
+    unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
+    approval_rejected: rejected > 0,
+    tool_failed: toolFailures > 0,
+    run_failed: run.status === "failed" || run.status === "cancelled",
+  };
+  return SIGNAL_KINDS.filter((kind) => checks[kind]);
+}
+
+function signalSummary(runs: Json[]): Json {
+  const flagged = runs.filter((run) => runSignals(run).length > 0);
+  return {
+    runs: runs.length,
+    flagged: flagged.length,
+    flagged_rate: runs.length ? flagged.length / runs.length : null,
+    counts: SIGNAL_KINDS.map((kind) => ({ kind, count: runs.filter((run) => runSignals(run).includes(kind)).length })),
+  };
+}
+
+/** Run から `GET /api/feedback/signals` の応答を作る（前の期間は 0 件。#1822）。 */
+function signalReportFromRuns(
+  runs: Json[],
+  days: number,
+  filters: { agentId: string | null; kind: string | null },
+  page: { offset: number; limit: number }
+): Json {
+  const scoped = runs.filter(
+    (run) =>
+      ["completed", "failed", "cancelled"].includes(String(run.status)) &&
+      !(run.metadata as Json | undefined)?.evaluation_job_id &&
+      (!filters.agentId || run.agent_id === filters.agentId)
+  );
+  const items = scoped
+    .filter((run) => {
+      const signals = runSignals(run);
+      return signals.length > 0 && (!filters.kind || signals.includes(filters.kind));
+    })
+    .map((run) => {
+      const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+      const outcome = ((answer?.content as Json | undefined)?.outcome as Json | undefined)?.value ?? null;
+      return {
+        run_id: run.id,
+        thread_id: run.thread_id ?? null,
+        agent_id: run.agent_id,
+        agent_name: run.agent_id === "default" ? DEFAULT_AGENT_NAME : "",
+        user_uuid: run.created_by_user_uuid ?? null,
+        display_name: "ローカル利用者",
+        question: run.goal,
+        answer: answerTextOf(run),
+        status: run.status,
+        signals: runSignals(run),
+        answer_outcome: outcome,
+        validation_result: null,
+        tool_failures: ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length,
+        approvals_rejected: ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length,
+        feedback: run.feedback ?? null,
+        admin_review: run.admin_review ?? null,
+        created_at: run.created_at ?? MOCK_NOW,
+      };
+    });
+  return {
+    days,
+    source: "memory",
+    since: MOCK_NOW,
+    until: MOCK_NOW,
+    kind: filters.kind,
+    summary: signalSummary(scoped),
+    previous: signalSummary([]),
+    ...pageOfItems(items, page),
+  };
+}
+
 /** 集計で選べる期間（日。#794）。 */
 export const REPORT_PERIOD_DAYS = [7, 30, 90, 180, 365];
 const REPORT_PERIOD_DETAIL = "期間は 7・30・90・180・365 日のどれかにしてください。";
@@ -509,10 +602,15 @@ function createState() {
     dataScopeCandidateErrors: {} as Record<string, { status: number; message: string }>,
     // フィードバック（`GET /api/feedback`。#774）。null なら Run の評価から作る。
     feedbackReport: null as Json | null,
+    // 確かめるべき実行（`GET /api/feedback/signals`。#1822）。null なら Run から作る。
+    signalReport: null as Json | null,
     // 自動実行（#784）。`automationRuns` は自動実行ごとの実行履歴。
     automations: [] as Json[],
     automationsPersistent: true,
     automationRuns: {} as Record<string, Json[]>,
+    // 業務 Agent ごとの、自動実行で使えない（承認が要る）ツール（#1813）と、確かめられなかった接続の理由。
+    automationApprovalTools: {} as Record<string, string[]>,
+    automationApprovalWarnings: {} as Record<string, string[]>,
     // 品質評価（#776）。新しい順。作成直後は実行中で、`pollsUntilDone` 回の取得の後に完了する。
     evaluations: [] as Json[],
     evaluationPollsUntilDone: 1,
@@ -528,6 +626,10 @@ function createState() {
     toolPolicy: d.toolPolicy as Json,
     // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
     mcpConnections: d.mcpConnections as Json as { connections: Json[] },
+    // MCP 接続ごとの tools/list（未指定の接続は MOCK_MCP_TOOLS。#1814）。
+    mcpConnectionTools: {} as Record<string, Json[]>,
+    // tools/list を取れない接続の理由（#1814）。
+    mcpConnectionErrors: {} as Record<string, string>,
     modelSettings: d.modelSettings as Json,
     databaseSettings: d.databaseSettings as Json,
     adbInfo: d.adbInfo as Json,
@@ -898,6 +1000,67 @@ function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, tot
   };
 }
 
+/** backend の `tool_policy_catalog` と同じ一覧（URL の無い接続は取得できない理由を返す）。 */
+function toolPolicyTools(state: MockApiState): Json {
+  const policy = state.toolPolicy as { default_mode: string; allow: string[]; ask: string[]; deny: string[] };
+  const decide = (level: string, sideEffects: boolean) =>
+    level === "read" && !sideEffects ? "allow" : policy.default_mode === "deny" ? "deny" : "ask";
+  const tools: Json[] = (state.tools as Json[]).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    server_id: "control-plane",
+    server_label: "",
+    permission_level: tool.permission_level,
+    side_effects: tool.side_effects,
+    default_decision: decide(String(tool.permission_level), Boolean(tool.side_effects)),
+    available: true,
+  }));
+  const connections: Json[] = [];
+  for (const connection of state.mcpConnections.connections) {
+    const serverId = String(connection.server_id);
+    const label = String(connection.label || serverId);
+    const listed =
+      connection.configured && !state.mcpConnectionErrors[serverId] ? (state.mcpConnectionTools[serverId] ?? MOCK_MCP_TOOLS) : [];
+    connections.push({
+      server_id: serverId,
+      label,
+      tool_count: listed.length,
+      configured: Boolean(connection.configured),
+      error: (state.mcpConnectionErrors[serverId] as string | undefined) ?? null,
+    });
+    for (const tool of listed) {
+      const readOnly = Boolean(tool.read_only);
+      tools.push({
+        name: `${serverId}__${tool.name}`,
+        description: `[${label}] ${tool.description}`,
+        server_id: serverId,
+        server_label: label,
+        permission_level: readOnly ? "read" : "write",
+        side_effects: !readOnly,
+        default_decision: decide(readOnly ? "read" : "write", !readOnly),
+        available: true,
+      });
+    }
+  }
+  const listed = new Set(tools.map((tool) => String(tool.name)));
+  const saved = [...policy.allow, ...policy.ask, ...policy.deny].filter((name) => !listed.has(name)).sort();
+  for (const name of new Set(saved)) {
+    const [serverId, toolName] = name.split("__");
+    const source = toolName ? serverId : "control-plane";
+    tools.push({
+      name,
+      description: "",
+      server_id: source,
+      server_label: String(connections.find((connection) => connection.server_id === source)?.label ?? ""),
+      permission_level: null,
+      side_effects: null,
+      default_decision: null,
+      available: false,
+    });
+  }
+  return { tools, connections };
+}
+
 /** 1 リクエストを state に対して処理する。未対応は undefined を返す。 */
 function handle(state: MockApiState, method: string, path: string, query: URLSearchParams, body: Json) {
   const segments = path.replace(/^\/api\/?/, "").split("/").map(decodeURIComponent);
@@ -1092,6 +1255,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       page
     );
   }
+  // 確かめるべき実行（#1822）。`state.signalReport` があればそれを返し（一覧は種類で絞る）、無ければ Run から作る。
+  if (method === "GET" && at("feedback", "signals")) {
+    const days = Number(query.get("days") ?? 30);
+    if (!REPORT_PERIOD_DAYS.includes(days)) throw new HttpError(422, REPORT_PERIOD_DETAIL);
+    const page = pageOf(query);
+    const kind = query.get("kind");
+    if (state.signalReport) {
+      const report = state.signalReport;
+      const all = (report.items as Json[] | undefined) ?? [];
+      const items = kind ? all.filter((item) => (item.signals as string[]).includes(kind)) : all;
+      const total = kind ? items.length : ((report.total as number | undefined) ?? items.length);
+      return { source: "memory", ...report, kind, ...pageOfItems(items, page, total) };
+    }
+    return signalReportFromRuns(state.runs, days, { agentId: query.get("agent_id"), kind }, page);
+  }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");
     const grouped = new Map<string, Json[]>();
@@ -1107,13 +1285,44 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const threads = [...grouped.entries()].map(([threadId, runs]) => ({
       thread_id: threadId,
       agent_id: runs[0].agent_id,
-      title: String(runs[0].goal).split("\n")[0],
+      // 利用者が変えた名前（#1817。backend は最初の Run の metadata.thread_title）。
+      title: String((runs[0].metadata as Json | undefined)?.thread_title ?? runs[0].goal).split("\n")[0],
       run_count: runs.length,
       last_status: runs[runs.length - 1].status,
       created_at: runs[0].created_at,
       updated_at: runs[runs.length - 1].updated_at,
     })).reverse();
     return pageOfItems(threads, { offset, limit });
+  }
+  // 会話の名前の変更・削除（#1817）。削除は Run を残し、会話からの参照（thread_id）だけを外す。
+  if ((method === "PATCH" || method === "DELETE") && at("threads", "*")) {
+    const runs = state.runs.filter((run) => run.thread_id === second);
+    if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
+    if (method === "PATCH") {
+      const title = String(body.title ?? "").trim();
+      if (!title || title.length > 80) throw new HttpError(422, "会話名を入力してください。");
+      runs[0].metadata = { ...((runs[0].metadata as Json | undefined) ?? {}), thread_title: title };
+      return {
+        thread_id: second,
+        agent_id: runs[0].agent_id,
+        title,
+        run_count: runs.length,
+        last_status: runs[runs.length - 1].status,
+        created_at: runs[0].created_at,
+        updated_at: runs[runs.length - 1].updated_at,
+      };
+    }
+    if (runs.some((run) => !["completed", "failed", "cancelled"].includes(String(run.status)))) {
+      throw new HttpError(
+        409,
+        "回答の作成中・承認待ちの会話は削除できません。停止するか、回答が終わってから削除してください。"
+      );
+    }
+    for (const run of runs) {
+      run.metadata = { ...((run.metadata as Json | undefined) ?? {}), deleted_thread_id: second };
+      run.thread_id = null;
+    }
+    return null;
   }
   if (method === "GET" && at("threads", "*")) {
     const runs = state.runs.filter((run) => run.thread_id === second);
@@ -1525,6 +1734,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     state.automations.unshift(item);
     return item;
   }
+  if (method === "GET" && at("automations", "agents", "*", "approval-tools")) {
+    const agentId = String(third);
+    findOr404(state.agents, "id", agentId, "agent");
+    return {
+      agent_id: agentId,
+      approval_required_tools: state.automationApprovalTools[agentId] ?? [],
+      warnings: state.automationApprovalWarnings[agentId] ?? [],
+    };
+  }
   if (head === "automations" && second) {
     const item = findOr404(state.automations, "id", second, "automation");
     if (method === "GET" && at("automations", "*")) {
@@ -1550,6 +1768,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_trigger: "manual",
         last_result: "created",
         last_message: "実行を作りました。",
+        // 前回の Run の今の状態（backend は表示のときに Run の保存先から引く。#1812）。
+        last_run_status: "queued",
       });
       return { run_id: runId, result: "created", message: "実行を作りました。" };
     }
@@ -1804,6 +2024,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- 設定 ---
   if (head === "settings") {
+    // ツール権限の画面のツール（組み込みと MCP 接続のツール。#1814）。判定は backend の ToolPolicy.decide と同じ。
+    if (method === "GET" && at("settings", "tool-policy", "tools")) return toolPolicyTools(state);
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",
       "tool-policy": "toolPolicy",

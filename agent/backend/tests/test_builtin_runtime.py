@@ -16,19 +16,24 @@ import pytest
 from agents import FunctionTool, Usage
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from mcp_support import fake_product_mcp
+from pr_backend_core.chat_history import CHAT_HISTORY_UNTRUSTED_NOTE, ChatHistoryTurn
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
+    AUTOMATION_APPROVAL_SKIPPED_CODE,
     BUILTIN_RUNTIME_ID,
+    DELETED_THREAD_METADATA_KEY,
     AgentProfile,
     AgentProfilePatch,
     ApprovalDecisionRequest,
     RunCreateRequest,
     RunStatus,
+    ThreadBusyError,
     ThreadNotFoundError,
+    automation_approval_message,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -258,6 +263,92 @@ def test_rejected_tool_is_not_executed(monkeypatch: MonkeyPatch, calls: _Calls) 
     assert run.status == RunStatus.COMPLETED
     assert calls.items == []
     assert [step.status for step in run.steps] == ["cancelled"]
+
+
+def test_automation_run_does_not_wait_for_approval(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    """自動実行の Run は無人なので、承認が要るツールを呼ばずに回答まで続ける（#1813）。"""
+    model = _script(
+        monkeypatch,
+        [
+            function_call(LOOKUP, {"query": "売上"}, call_id="call-l"),
+            function_call(WRITE, {"query": "登録"}, call_id="call-w"),
+        ],
+        [assistant_message("売上は 3 件です。確かめられなかった点: 登録はできませんでした。")],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            goal="売上を調べて登録して",
+            agent_id=AGENT_ID,
+            metadata={"automation_id": "auto_1813", "automation_trigger": "schedule"},
+        ),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, run.id)
+
+    finished = runtime_repository.get_run(run.id)
+    # 承認待ちにせず、承認の要らないツールだけを実行して完了する。
+    assert finished.status == RunStatus.COMPLETED
+    assert finished.approvals == []
+    assert [name for name, _, _ in calls.items] == [LOOKUP]
+    # 監査（ツールの step）と Run の経過に、承認が要るため使わなかったことを残す。
+    skipped = next(
+        step for step in finished.steps if step.tool_call and step.tool_call.name == WRITE
+    )
+    assert skipped.status == "cancelled"
+    assert skipped.tool_result is not None
+    assert skipped.tool_result.error_code == AUTOMATION_APPROVAL_SKIPPED_CODE
+    assert skipped.tool_result.policy_decision == "ask"
+    assert any(
+        event.payload.get("error_code") == AUTOMATION_APPROVAL_SKIPPED_CODE
+        and WRITE in event.message
+        for event in finished.events
+    )
+    # モデルにはツールの結果として、自動実行では使えないことを返す。
+    assert automation_approval_message(WRITE) in str(model.calls[1].input)
+    assert "_builtin_sdk_state" not in finished.metadata
+
+
+def test_chat_run_still_waits_for_approval_of_the_same_tool(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """自動実行でない Run（チャット）は今どおり承認待ちにする（#1813）。"""
+    _script(monkeypatch, [function_call(WRITE, {"query": "登録"}, call_id="call-chat")])
+    run_id = _create_run("登録して")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    waiting = runtime_repository.get_run(run_id)
+    assert waiting.status == RunStatus.WAITING_APPROVAL
+    assert calls.items == []
+    assert not any(
+        step.tool_result and step.tool_result.error_code == AUTOMATION_APPROVAL_SKIPPED_CODE
+        for step in waiting.steps
+    )
+
+
+def test_automation_approval_tools_lists_tools_that_need_approval(calls: _Calls) -> None:
+    """自動実行の編集画面の警告: 業務 Agent のスキルのツールのうち承認が要るもの（#1813）。"""
+    from security_support import client
+
+    del calls
+    response = client.get(f"/api/automations/agents/{AGENT_ID}/approval-tools")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    # 判定は Run と同じ ToolPolicy.decide（読み取りは承認なし、書き込みは既定で承認）。
+    assert data == {"agent_id": AGENT_ID, "approval_required_tools": [WRITE], "warnings": []}
+
+    # ツールのポリシーで許可すれば、自動実行でも使える（警告に出ない）。
+    original = runtime_config_store.get_tool_policy()
+    runtime_config_store.patch_tool_policy(allow=[WRITE])
+    try:
+        allowed = client.get(f"/api/automations/agents/{AGENT_ID}/approval-tools")
+        assert allowed.json()["data"]["approval_required_tools"] == []
+    finally:
+        runtime_config_store.patch_tool_policy(allow=sorted(original.allow))
+
+    missing = client.get("/api/automations/agents/no-such-agent-1813/approval-tools")
+    assert missing.status_code == 404
 
 
 def _usage(requests: int, input_tokens: int, output_tokens: int) -> Usage:
@@ -905,11 +996,19 @@ def test_thread_passes_previous_turns_to_the_model(monkeypatch: MonkeyPatch, cal
     anyio.run(builtin_runtime.execute_run, second.id)
 
     assert runtime_repository.get_run(second.id).status == RunStatus.COMPLETED
-    # 1 回目は質問だけ、2 回目は前の質問と回答を付けてモデルへ渡す。
+    # 1 回目は質問だけ、2 回目は前の質問と回答を未信頼のデータとして付けてモデルへ渡す（#1818）。
     assert model.calls[0].input == [{"role": "user", "content": "今月の売上は？"}]
     assert model.calls[1].input == [
-        {"role": "user", "content": "今月の売上は？"},
-        {"role": "assistant", "content": "今月の売上は 120 万円です。"},
+        {
+            "role": "user",
+            "content": (
+                f"{CHAT_HISTORY_UNTRUSTED_NOTE}\n"
+                '<conversation_history untrusted="true">\n<turn>\n'
+                "<question>今月の売上は？</question>\n"
+                "<answer>今月の売上は 120 万円です。</answer>\n"
+                "</turn>\n</conversation_history>"
+            ),
+        },
         {"role": "user", "content": "先月と比べると？"},
     ]
 
@@ -924,6 +1023,61 @@ def test_thread_passes_previous_turns_to_the_model(monkeypatch: MonkeyPatch, cal
         "今月の売上は？",
         2,
         RunStatus.COMPLETED,
+    )
+
+
+def test_conversation_input_keeps_recent_turns_within_shared_budget(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """前の往復は共通の予算で新しい順に詰め、古い往復を落とし、0 なら付けない（#1818）。"""
+    from types import SimpleNamespace
+
+    from app.features.agent import runtime as runtime_module
+
+    turns = [
+        ChatHistoryTurn.of(("question", f"質問{index}"), ("answer", "回" * 900))
+        for index in range(1, 6)
+    ]
+    monkeypatch.setattr(
+        runtime_module.runtime_repository, "thread_history", lambda run_id: list(turns)
+    )
+    budget = SimpleNamespace(
+        chat_history_max_turns=8, chat_history_max_chars_per_turn=500, chat_history_max_chars=1000
+    )
+    monkeypatch.setattr(builtin_runtime, "get_settings", lambda: budget)
+    items = builtin_runtime.conversation_input("run_x", "次の質問")
+    assert isinstance(items, list)
+    history = items[0]["content"]
+    # 1 往復を 500 文字に切り詰め、合計 1,000 文字に入る新しい 2 往復だけを渡す。
+    assert "質問5" in history and "質問4" in history and "質問3" not in history
+    assert "…（以下省略）" in history
+    assert items[1] == {"role": "user", "content": "次の質問"}
+
+    budget.chat_history_max_turns = 0
+    assert builtin_runtime.conversation_input("run_x", "次の質問") == "次の質問"
+
+
+def test_run_history_turn_includes_tool_names_not_results() -> None:
+    """前の Run の往復は、使ったツールの名前だけを持ち、結果を持たない（#1818）。"""
+    from app.features.agent.runtime import RunState, RunStep, run_history_turn
+    from app.features.agent.tools import ToolCall
+
+    run = RunState(
+        id="run_x",
+        goal="売上は？",
+        agent_id=AGENT_ID,
+        status=RunStatus.COMPLETED,
+        steps=[
+            RunStep(run_id="run_x", tool_call=ToolCall(name="rag__rag_search", arguments={})),
+            RunStep(run_id="run_x", tool_call=ToolCall(name="nl2sql__nl2sql_query", arguments={})),
+            RunStep(run_id="run_x", tool_call=ToolCall(name="rag__rag_search", arguments={})),
+        ],
+    )
+    turn = run_history_turn(run, "120 万円です。")
+    assert turn.parts == (
+        ("question", "売上は？"),
+        ("answer", "120 万円です。"),
+        ("tools", "rag__rag_search、nl2sql__nl2sql_query"),
     )
 
 
@@ -947,6 +1101,83 @@ def test_thread_belongs_to_its_user_and_agent(calls: _Calls) -> None:
         runtime_repository.get_thread(thread_id, user_uuid="99999999-0000-0000-0000-000000000000")
     others = runtime_repository.list_threads(user_uuid="99999999-0000-0000-0000-000000000000")
     assert thread_id not in {item.thread_id for item in others}
+
+
+def test_thread_rename_and_delete_keep_runs(calls: _Calls) -> None:
+    """会話の名前の変更・削除は作った利用者だけ。削除しても Run は残す（#1817）。"""
+    del calls
+    other = "99999999-0000-0000-0000-000000000000"
+    run_id = _create_run("最初の質問")
+    thread_id = runtime_repository.get_run(run_id).thread_id
+    assert thread_id is not None
+
+    summary = runtime_repository.rename_thread(thread_id, user_uuid=USER_UUID, title="売上の確認")
+    assert summary.title == "売上の確認"
+    [listed] = [
+        item
+        for item in runtime_repository.list_threads(user_uuid=USER_UUID)
+        if item.thread_id == thread_id
+    ]
+    assert listed.title == "売上の確認"
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.rename_thread(thread_id, user_uuid=other, title="横取り")
+
+    # 回答の作成中の会話は消さない。
+    with pytest.raises(ThreadBusyError):
+        runtime_repository.delete_thread(thread_id, user_uuid=USER_UUID)
+    runtime_repository.cancel_run(run_id)
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.delete_thread(thread_id, user_uuid=other)
+    runtime_repository.delete_thread(thread_id, user_uuid=USER_UUID)
+
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.get_thread(thread_id, user_uuid=USER_UUID)
+    assert thread_id not in {
+        item.thread_id for item in runtime_repository.list_threads(user_uuid=USER_UUID)
+    }
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="続き", agent_id=AGENT_ID, thread_id=thread_id),
+            created_by_user_uuid=USER_UUID,
+        )
+    # Run は監査・フィードバック・評価のために残る（会話からの参照だけを外す）。
+    kept = runtime_repository.get_run(run_id)
+    assert kept.thread_id is None
+    assert kept.metadata[DELETED_THREAD_METADATA_KEY] == thread_id
+
+
+def test_thread_api_renames_and_deletes(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    """`PATCH` / `DELETE /api/threads/{thread_id}`（#1817）。空の名前は 422、作成中は 409。"""
+    del calls
+    from security_support import client
+
+    monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
+    created = client.post("/api/runs", json={"goal": "最初の質問", "agent_id": AGENT_ID})
+    assert created.status_code == 200, created.text
+    run_id = created.json()["data"]["id"]
+    thread_id = created.json()["data"]["thread_id"]
+
+    renamed = client.patch(f"/api/threads/{thread_id}", json={"title": "  売上の確認  "})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["data"]["title"] == "売上の確認"
+    assert client.patch(f"/api/threads/{thread_id}", json={"title": "   "}).status_code == 422
+    assert client.patch(f"/api/threads/{thread_id}", json={"title": "あ" * 81}).status_code == 422
+    missing = "thread_" + "0" * 32
+    assert client.patch(f"/api/threads/{missing}", json={"title": "x"}).status_code == 404
+    assert client.delete(f"/api/threads/{missing}").status_code == 404
+
+    busy = client.delete(f"/api/threads/{thread_id}")
+    assert busy.status_code == 409
+    assert busy.json()["error_messages"] == [
+        "回答の作成中・承認待ちの会話は削除できません。"
+        "停止するか、回答が終わってから削除してください。"
+    ]
+    assert client.post(f"/api/runs/{run_id}/cancel").status_code == 200
+    deleted = client.delete(f"/api/threads/{thread_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert client.get(f"/api/threads/{thread_id}").status_code == 404
+    listed = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]["items"]
+    assert thread_id not in {item["thread_id"] for item in listed}
 
 
 def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls) -> None:

@@ -81,7 +81,7 @@ async function openThread(page: Page) {
   const viewport = page.viewportSize();
   await page.getByTestId("chat-history-toggle").click();
   if (viewport && viewport.width >= 1024) {
-    await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件を調べて/ }).click();
+    await page.getByTestId("chat-history").getByRole("button", { name: /^契約の更新条件を調べて/ }).click();
   } else {
     await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件を調べて").click();
   }

@@ -26,6 +26,7 @@ import {
 
 import {
   SYSTEM_SETTINGS_NAV_ITEMS,
+  API_KEY_ADMIN_NAV_ITEM,
   USER_ROLE_NAV_ITEMS,
   type HasPermission,
   type SystemSettingsKey,
@@ -221,11 +222,21 @@ export const NAV_SECTIONS: NavSection[] = [
 
     // 共有パッケージの型は platform 側の @types/react で解決されるため、icon だけ RAG の型へそろえる
     // （実体は同じ lucide-react のコンポーネント）。
-    items: USER_ROLE_NAV_ITEMS.map((item) => ({
-      ...item,
-      icon: item.icon as LucideIcon,
-      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
-    })),
+    items: [
+      ...USER_ROLE_NAV_ITEMS.map((item) => ({
+        ...item,
+        icon: item.icon as LucideIcon,
+        permission: USER_ROLE_MENU_PERMISSIONS[item.key],
+      })),
+      // 全員の API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）。自分のキーは
+      // アカウントのメニューから開く。
+      {
+        href: API_KEY_ADMIN_NAV_ITEM.href,
+        labelKey: "nav.securityApiKeys",
+        icon: API_KEY_ADMIN_NAV_ITEM.icon as LucideIcon,
+        permission: MENU_PERMISSIONS.securityApiKeys,
+      },
+    ],
   },
   {
     // RAG 固有の運用設定（システムテーブル、モデルの取得先、parser などのサービスの起動・停止）。

@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from pr_backend_core import Page
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
+from pr_backend_core.chat_history import ChatHistoryTurn
 from pr_backend_core.chat_progress import (
     ChatProgressEvent,
     ChatProgressStepEvent,
@@ -66,6 +67,7 @@ from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
     ToolPolicy,
+    ToolPolicyDecision,
     ToolResult,
     mcp_base_tool_name,
     tool_registry,
@@ -412,6 +414,28 @@ EVALUATION_DRY_RUN_MESSAGE = (
 )
 # 評価の Run の印（`metadata`）。組み込み Runtime は承認が要るツールを実行せずに続ける。
 EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
+# 自動実行から作った Run の印（`metadata`。#784）。無人の実行なので、組み込み Runtime は承認が
+# 要るツールを呼ばずに続ける（#1813。承認待ちで止めない）。
+AUTOMATION_ID_KEY = "automation_id"
+# 自動実行の Run で、承認が要るため使わなかったツールの step の error_code（#1813）。
+AUTOMATION_APPROVAL_SKIPPED_CODE = "automation.approval_required"
+
+
+def automation_approval_message(tool_name: str) -> str:
+    """自動実行の Run で承認が要るツールを呼んだときにモデルへ返す文（#1813）。"""
+    return (
+        f"自動実行では承認の要るツール（{tool_name}）を使えません。"
+        "管理者がツールのポリシーで許可すると使えます。"
+        "このツールで確かめる予定だったことは、回答の「確かめられなかった点」に書き、"
+        "ここまでの情報で回答を完成させてください。"
+    )
+
+
+def is_automation_run(metadata: Mapping[str, Any]) -> bool:
+    """自動実行（スケジュール・今すぐ実行）から作った Run か（#1813）。"""
+    return bool(metadata.get(AUTOMATION_ID_KEY))
+
+
 # Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
 # 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
 # ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
@@ -422,7 +446,7 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         EVALUATION_DRY_RUN_KEY,
         "evaluation_job_id",
         "evaluation_case_id",
-        "automation_id",
+        AUTOMATION_ID_KEY,
         "automation_trigger",
         "source",
         "mcp_session",
@@ -520,6 +544,30 @@ class ThreadNotFoundError(LookupError):
     """会話が無い・別の利用者や別の Agent の会話（#768）。"""
 
 
+class ThreadBusyError(ValueError):
+    """回答の作成中・承認待ちの Run がある会話は削除しない（#1817）。"""
+
+
+# 会話の名前（利用者が変えたもの。#1817）。会話の最初の Run の metadata に置く
+# （Run と一緒に保存される）。
+THREAD_TITLE_METADATA_KEY = "thread_title"
+# 会話から外した Run の元の会話（#1817）。Run は監査・フィードバック・評価のために残す。
+DELETED_THREAD_METADATA_KEY = "deleted_thread_id"
+# 会話の名前の上限（RAG の会話名と同じ。#1817）。
+THREAD_TITLE_MAX_LENGTH = 80
+
+
+class ThreadUpdateRequest(BaseModel):
+    """会話の名前の変更（#1817。RAG の `ConversationUpdateRequest` と同じ規則）。"""
+
+    title: str = Field(..., min_length=1, max_length=THREAD_TITLE_MAX_LENGTH)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class ThreadSummary(BaseModel):
     thread_id: str
     agent_id: str
@@ -551,6 +599,44 @@ def run_answer_text(run: RunState) -> str | None:
             if isinstance(text, str):
                 return text
     return None
+
+
+def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
+    """会話の一覧の 1 行（`runs` は作成順）。
+
+    名前は利用者が変えた名前、無ければ最初の質問の 1 行目。
+    """
+    custom = runs[0].metadata.get(THREAD_TITLE_METADATA_KEY)
+    title = (
+        custom.strip()
+        if isinstance(custom, str) and custom.strip()
+        else runs[0].goal.strip().splitlines()[0][:THREAD_TITLE_MAX_LENGTH]
+    )
+    return ThreadSummary(
+        thread_id=thread_id,
+        agent_id=runs[0].agent_id,
+        title=title,
+        run_count=len(runs),
+        last_status=runs[-1].status,
+        created_at=runs[0].created_at,
+        updated_at=max(run.updated_at for run in runs),
+    )
+
+
+def run_history_turn(run: RunState, answer: str) -> ChatHistoryTurn:
+    """前の Run を LLM に渡す 1 往復にする（質問・回答・使ったツールの名前。#1818）。
+
+    ツールの結果は大きく、次の質問にはほとんど要らないので名前だけにする（Anthropic の
+    context editing が古いツールの結果から消すのと同じ考え方）。
+    """
+    tool_names: list[str] = []
+    for step in run.steps:
+        name = step.tool_call.name if step.tool_call is not None else ""
+        if name and name not in tool_names:
+            tool_names.append(name)
+    return ChatHistoryTurn.of(
+        ("question", run.goal), ("answer", answer), ("tools", "、".join(tool_names))
+    )
 
 
 def run_support_task(run: RunState) -> JsonObject | None:
@@ -729,7 +815,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
-    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
+    def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -739,7 +825,13 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, *, user_uuid: str | None, agent_id: str | None = None
     ) -> list[ThreadSummary]: ...
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
+    def rename_thread(
+        self, thread_id: str, *, user_uuid: str | None, title: str
+    ) -> ThreadSummary: ...
+    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
@@ -1103,21 +1195,23 @@ class AgentRuntimeRepository:
             raise ThreadNotFoundError(thread_id)
         return runs
 
-    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]:
-        """同じ会話の前の往復（質問と回答。完了したものだけ、古い順、最大 `limit` 往復）。"""
+    def thread_history(self, run_id: str) -> list[ChatHistoryTurn]:
+        """同じ会話の前の往復（質問・回答・使ったツールの名前。完了したものだけ、古い順）。
+
+        渡す量（ターン数・文字数）は呼ぶ側が共通の予算で決める（#1818）。ツールの結果は渡さない。
+        """
         with self._lock:
             run = self._require_run(run_id)
             if run.thread_id is None:
                 return []
-            turns = [
-                (previous.goal, answer)
+            return [
+                run_history_turn(previous, answer)
                 for previous in self._thread_runs_locked(run.thread_id)
                 if previous.id != run.id
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
                 and (answer := run_answer_text(previous)) is not None
             ]
-            return turns[-limit:] if limit > 0 else []
 
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
         """支援タスクの目的（会話の最初の質問）と、前の完了した Run の状態（#1243）。
@@ -1229,17 +1323,7 @@ class AgentRuntimeRepository:
             summaries = []
             for thread_id, runs in grouped.items():
                 runs.sort(key=lambda item: item.created_at)
-                summaries.append(
-                    ThreadSummary(
-                        thread_id=thread_id,
-                        agent_id=runs[0].agent_id,
-                        title=runs[0].goal.strip().splitlines()[0][:80],
-                        run_count=len(runs),
-                        last_status=runs[-1].status,
-                        created_at=runs[0].created_at,
-                        updated_at=max(run.updated_at for run in runs),
-                    )
-                )
+                summaries.append(_thread_summary(thread_id, runs))
             return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
@@ -1250,6 +1334,32 @@ class AgentRuntimeRepository:
                 agent_id=runs[0].agent_id,
                 runs=[run.model_copy(deep=True) for run in runs],
             )
+
+    def rename_thread(self, thread_id: str, *, user_uuid: str | None, title: str) -> ThreadSummary:
+        """会話の名前を変える（作った利用者だけ。#1817）。名前は最初の Run の metadata に置く。"""
+        with self._lock:
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs[0].metadata[THREAD_TITLE_METADATA_KEY] = title.strip()[:THREAD_TITLE_MAX_LENGTH]
+            self._persist_locked()
+            return _thread_summary(thread_id, runs)
+
+    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None:
+        """会話を消す（作った利用者だけ。#1817）。
+
+        Run は監査・フィードバック・評価のケース・利用量の元なので消さず、会話からの参照
+        （`thread_id`）だけを外す。会話の一覧・詳細・続きから見えなくなる。元の会話は
+        metadata の `deleted_thread_id` に残す。回答の作成中・承認待ちの Run があれば消さない。
+        """
+        with self._lock:
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            if any(not _is_terminal(run.status) for run in runs):
+                raise ThreadBusyError(thread_id)
+            for run in runs:
+                run.metadata[DELETED_THREAD_METADATA_KEY] = thread_id
+                run.thread_id = None
+            self._persist_locked()
+            for run in runs:
+                self._record_fact_locked(run)
 
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None:
         """実行を始める（取消済み・終了済みなら None）。"""
@@ -1479,6 +1589,47 @@ class AgentRuntimeRepository:
 
         モデルがどのツールをどの引数で呼ぼうとしたかを、品質評価のツールの選択の判定に使う。
         """
+        self._record_unexecuted_steps(
+            run_id,
+            calls,
+            error=lambda _call: EVALUATION_DRY_RUN_MESSAGE,
+            error_code="evaluation.dry_run",
+            event=lambda call: (
+                f"評価中のため、承認が要るツール {call.name} を実行しませんでした。",
+                {"tool_name": call.name, "evaluation_dry_run": True},
+            ),
+        )
+
+    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None:
+        """自動実行の Run で、承認が要るため使わなかったツールの呼び出しを残す（#1813）。
+
+        step（監査ログのツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
+        """
+        self._record_unexecuted_steps(
+            run_id,
+            calls,
+            error=lambda call: automation_approval_message(call.name),
+            error_code=AUTOMATION_APPROVAL_SKIPPED_CODE,
+            event=lambda call: (
+                f"自動実行のため、承認が要るツール {call.name} を使いませんでした。",
+                {
+                    "tool_name": call.name,
+                    "severity": "warning",
+                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
+                },
+            ),
+        )
+
+    def _record_unexecuted_steps(
+        self,
+        run_id: str,
+        calls: Sequence[ToolCall],
+        *,
+        error: Callable[[ToolCall], str],
+        error_code: str,
+        event: Callable[[ToolCall], tuple[str, JsonObject]],
+    ) -> None:
+        """承認が要るため実行しなかったツールの呼び出しを、取り消しの step とイベントに残す。"""
         now = _now()
         with self._lock:
             run = self._require_run(run_id)
@@ -1491,8 +1642,9 @@ class AgentRuntimeRepository:
                         tool_result=ToolResult(
                             name=call.name,
                             success=False,
-                            error=EVALUATION_DRY_RUN_MESSAGE,
-                            error_code="evaluation.dry_run",
+                            error=error(call),
+                            error_code=error_code,
+                            policy_decision=ToolPolicyDecision.ASK,
                             started_at=now,
                             completed_at=now,
                         ),
@@ -1500,14 +1652,22 @@ class AgentRuntimeRepository:
                         completed_at=now,
                     )
                 )
-                self._append_event(
-                    run,
-                    RunEventType.RUNTIME_EVENT,
-                    f"評価中のため、承認が要るツール {call.name} を実行しませんでした。",
-                    {"tool_name": call.name, "evaluation_dry_run": True},
-                )
+                message, payload = event(call)
+                self._append_event(run, RunEventType.RUNTIME_EVENT, message, payload)
             run.updated_at = now
             self._persist_locked()
+
+    def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]:
+        """Run の状態をまとめて引く（自動実行の一覧の「前回」。#1812）。
+
+        Run を 1 件ずつ複製せずに、ロックを 1 回だけ取って状態だけを返す。無い Run は含めない。
+        """
+        with self._lock:
+            return {
+                run_id: run.status
+                for run_id in run_ids
+                if (run := self._runs.get(run_id)) is not None
+            }
 
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None:
         """モデルの利用量（再開を含めた累計）を Run に記録する（#772）。"""

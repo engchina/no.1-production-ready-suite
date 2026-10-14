@@ -251,7 +251,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/chat");
       if (viewport.width >= 1024) {
         await page.getByTestId("chat-history-toggle").click();
-        await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
+        await page.getByTestId("chat-history").getByRole("button", { name: /^契約の更新条件は？/ }).click();
       } else {
         await page.getByTestId("chat-history-toggle").click();
         await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
@@ -486,7 +486,7 @@ async function openSeedThread(page: Page) {
   if (viewport && viewport.width >= 1024) {
     const toggle = page.getByTestId("chat-history-toggle");
     if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-    await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
+    await page.getByTestId("chat-history").getByRole("button", { name: /^契約の更新条件は？/ }).click();
     return;
   }
   await page.getByTestId("chat-history-toggle").click();
@@ -790,7 +790,7 @@ test("会話の履歴の読み込みに失敗したら「まだ会話があり�
   await expect(history.getByText("まだ会話がありません")).toHaveCount(0);
   fail = false;
   await error.getByRole("button", { name: "再試行" }).click();
-  await expect(history.getByRole("button", { name: /契約の更新条件は？/ })).toBeVisible();
+  await expect(history.getByRole("button", { name: /^契約の更新条件は？/ })).toBeVisible();
   await expect(error).toHaveCount(0);
 });
 

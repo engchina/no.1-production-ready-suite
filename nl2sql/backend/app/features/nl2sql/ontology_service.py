@@ -101,6 +101,16 @@ class OntologyStateConflictError(OntologyServiceError):
     pass
 
 
+# 公開の後に業務プロファイルか DB の構造（スキーマ）が変わり、公開版の業務定義をそのまま使えない
+# （公開版の指紋が今の業務プロファイル・Schema と合わない）。時間をおいても直らず、管理者が
+# 「オントロジー構築」で Markdown を確認し直して公開するまで続く（#1827）。
+BUSINESS_SCOPE_CHANGED_CODE = "BUSINESS_SCOPE_CHANGED"
+BUSINESS_SCOPE_CHANGED_MESSAGE_JA = (
+    "公開の後に業務プロファイルか DB の構造（スキーマ）が変わったため、"
+    "公開版の業務定義を使えません。「オントロジー構築」で Markdown を確認し直して公開してください。"
+)
+
+
 # 操作が途絶えて中止した query session の error_code と、利用者への案内（#1274）。
 QUERY_SESSION_EXPIRED_CODE = "QUERY_SESSION_EXPIRED"
 QUERY_SESSION_EXPIRED_MESSAGE_JA = (
@@ -2712,6 +2722,8 @@ class OntologyQuerySessionService:
 
 
 __all__ = [
+    "BUSINESS_SCOPE_CHANGED_CODE",
+    "BUSINESS_SCOPE_CHANGED_MESSAGE_JA",
     "OntologyGateBlockedError",
     "OntologyIntegrityError",
     "OntologyNotFoundError",

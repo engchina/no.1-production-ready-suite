@@ -193,6 +193,14 @@ export {
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";
 export {
+  CHAT_HISTORY_TITLE_MAX_LENGTH,
+  DEFAULT_CHAT_HISTORY_ACTION_LABELS,
+  useChatHistoryActions,
+  type ChatHistoryActionLabels,
+  type ChatHistoryActions,
+  type UseChatHistoryActionsOptions,
+} from "./components/chat/use-chat-history-actions";
+export {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
@@ -365,6 +373,8 @@ export {
   SaveErrorBanner,
   type SaveErrorBannerProps,
 } from "./components/feedback/save-error-banner";
+// 作成・発行の直後に 1 回だけ見せる秘密（API キーなど。#1805）
+export { OneTimeSecret, type OneTimeSecretProps } from "./components/feedback/one-time-secret";
 export {
   PreconditionBanner,
   type PreconditionBannerLink,
