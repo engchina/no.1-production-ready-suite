@@ -531,6 +531,10 @@ function createState() {
     toolPolicy: d.toolPolicy as Json,
     // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
     mcpConnections: d.mcpConnections as Json as { connections: Json[] },
+    // MCP 接続ごとの tools/list（未指定の接続は MOCK_MCP_TOOLS。#1814）。
+    mcpConnectionTools: {} as Record<string, Json[]>,
+    // tools/list を取れない接続の理由（#1814）。
+    mcpConnectionErrors: {} as Record<string, string>,
     modelSettings: d.modelSettings as Json,
     databaseSettings: d.databaseSettings as Json,
     adbInfo: d.adbInfo as Json,
@@ -899,6 +903,67 @@ function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, tot
     offset: page.offset,
     has_next: page.offset + pageItems.length < count,
   };
+}
+
+/** backend の `tool_policy_catalog` と同じ一覧（URL の無い接続は取得できない理由を返す）。 */
+function toolPolicyTools(state: MockApiState): Json {
+  const policy = state.toolPolicy as { default_mode: string; allow: string[]; ask: string[]; deny: string[] };
+  const decide = (level: string, sideEffects: boolean) =>
+    level === "read" && !sideEffects ? "allow" : policy.default_mode === "deny" ? "deny" : "ask";
+  const tools: Json[] = (state.tools as Json[]).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    server_id: "control-plane",
+    server_label: "",
+    permission_level: tool.permission_level,
+    side_effects: tool.side_effects,
+    default_decision: decide(String(tool.permission_level), Boolean(tool.side_effects)),
+    available: true,
+  }));
+  const connections: Json[] = [];
+  for (const connection of state.mcpConnections.connections) {
+    const serverId = String(connection.server_id);
+    const label = String(connection.label || serverId);
+    const listed =
+      connection.configured && !state.mcpConnectionErrors[serverId] ? (state.mcpConnectionTools[serverId] ?? MOCK_MCP_TOOLS) : [];
+    connections.push({
+      server_id: serverId,
+      label,
+      tool_count: listed.length,
+      configured: Boolean(connection.configured),
+      error: (state.mcpConnectionErrors[serverId] as string | undefined) ?? null,
+    });
+    for (const tool of listed) {
+      const readOnly = Boolean(tool.read_only);
+      tools.push({
+        name: `${serverId}__${tool.name}`,
+        description: `[${label}] ${tool.description}`,
+        server_id: serverId,
+        server_label: label,
+        permission_level: readOnly ? "read" : "write",
+        side_effects: !readOnly,
+        default_decision: decide(readOnly ? "read" : "write", !readOnly),
+        available: true,
+      });
+    }
+  }
+  const listed = new Set(tools.map((tool) => String(tool.name)));
+  const saved = [...policy.allow, ...policy.ask, ...policy.deny].filter((name) => !listed.has(name)).sort();
+  for (const name of new Set(saved)) {
+    const [serverId, toolName] = name.split("__");
+    const source = toolName ? serverId : "control-plane";
+    tools.push({
+      name,
+      description: "",
+      server_id: source,
+      server_label: String(connections.find((connection) => connection.server_id === source)?.label ?? ""),
+      permission_level: null,
+      side_effects: null,
+      default_decision: null,
+      available: false,
+    });
+  }
+  return { tools, connections };
 }
 
 /** 1 リクエストを state に対して処理する。未対応は undefined を返す。 */
@@ -1818,6 +1883,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- 設定 ---
   if (head === "settings") {
+    // ツール権限の画面のツール（組み込みと MCP 接続のツール。#1814）。判定は backend の ToolPolicy.decide と同じ。
+    if (method === "GET" && at("settings", "tool-policy", "tools")) return toolPolicyTools(state);
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",
       "tool-policy": "toolPolicy",

@@ -454,6 +454,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/runtime/snapshot/import"): _ADMIN_ONLY,
     # ナビに出さない設定（ツール権限）は管理者だけ。
     ("GET", "/settings/tool-policy"): _ADMIN_ONLY,
+    # ツール権限の画面のツール（MCP 接続のツールを含む。#1814）。
+    ("GET", "/settings/tool-policy/tools"): _ADMIN_ONLY,
     ("PATCH", "/settings/tool-policy"): _ADMIN_ONLY,
     # ---- システム設定（3 製品共通。RAG / NL2SQL と同じくメニュー権限で保存・操作できる） ----
     ("GET", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE, MENU_SETTINGS_OCI),

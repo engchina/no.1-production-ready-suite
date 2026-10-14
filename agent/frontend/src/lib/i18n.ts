@@ -6,7 +6,7 @@ const agentJa = {
   "app.sidebarTitle.line1": "Production Ready",
   "app.sidebarTitle.line2": "Agent",
   "app.route.loading": "画面を読み込んでいます",
-  "settings.toolPolicy.search": "ツール名・説明で絞り込み",
+  "settings.toolPolicy.search": "ツール名・説明・接続で絞り込み",
   "evaluation.summary.failedHint":
     "業務 Agent の公開状態とモデルの設定を確かめてから、もう一度評価してください。",
   "evaluation.summary.failedDetails": "詳細",
@@ -775,7 +775,8 @@ const agentJa = {
   "page.settings.rag.subtitle": "業務 RAG は外部サービスとして接続する",
   "page.settings.nl2sql.subtitle": "構造化データ取得は外部 NL2SQL として接続する",
   "page.settings.mcp.subtitle": "RAG・NL2SQL・外部の MCP の接続先と認証を管理する",
-  "page.settings.toolPolicy.subtitle": "ツールごとに、自動で実行するか・承認を求めるか・拒否するかと、既定の動作を管理する",
+  "page.settings.toolPolicy.subtitle":
+    "組み込みのツールと MCP 接続（RAG・NL2SQL・外部）のツールごとに、自動で実行するか・承認を求めるか・拒否するかと、既定の動作を管理する",
   "page.settings.runtimeSnapshot.subtitle": "業務 Agent・実行の履歴などのデータをバックアップし、検証して復元します。",
 
   "common.empty.title": "まだデータがありません",
@@ -1007,6 +1008,16 @@ const agentJa = {
   "settings.toolPolicy.tool": "ツール",
   "settings.toolPolicy.policy": "ポリシー",
   "settings.toolPolicy.default": "既定に従う",
+  "settings.toolPolicy.defaultWith": "既定に従う（{decision}）",
+  // MCP 接続のツール（#1814）。
+  "settings.toolPolicy.connection": "接続",
+  "settings.toolPolicy.builtin": "組み込み",
+  "settings.toolPolicy.unavailable": "一覧にありません",
+  "settings.toolPolicy.connectionErrorsTitle": "一部の MCP 接続のツールを取得できませんでした",
+  "settings.toolPolicy.connectionErrorsBody":
+    "取得できなかった接続のツールで保存したポリシーは、一覧に無い行として残り、そのまま使われます。接続の設定と状態は MCP 接続の画面で確かめてください。",
+  "settings.toolPolicy.connectionError": "{label}: {error}",
+  "settings.toolPolicy.openMcpConnections": "MCP 接続を開く",
   "settings.toolPolicy.allow": "自動実行",
   "settings.toolPolicy.ask": "承認を要求",
   "settings.toolPolicy.deny": "拒否",
