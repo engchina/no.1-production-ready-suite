@@ -125,7 +125,7 @@
                 "type": "string"
               },
               "status": {
-                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成で確かめなかった）",
+                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成・業務プロファイルの方針が「前提を示して SQL を生成する」・skip_clarification で確かめなかった）",
                 "title": "Status",
                 "type": "string"
               },
@@ -628,6 +628,12 @@
             ],
             "default": null,
             "description": "requirement.question への利用者の答え（requirement_session_id と一緒に渡す）。利用者が答えていない問いを推測で埋めない"
+          },
+          "skip_clarification": {
+            "default": false,
+            "description": "利用者が確認せずに SQL を生成するよう選んだとき true（#1839）。確認事項を聞かず、要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない",
+            "title": "Skip Clarification",
+            "type": "boolean"
           }
         },
         "required": [
@@ -691,7 +697,7 @@
                 "type": "string"
               },
               "status": {
-                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成で確かめなかった）",
+                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成・業務プロファイルの方針が「前提を示して SQL を生成する」・skip_clarification で確かめなかった）",
                 "title": "Status",
                 "type": "string"
               },

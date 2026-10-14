@@ -3,19 +3,23 @@
 // 要件のまとめと SQL の骨組みを出す。session の作り方（業務プロファイルの推薦・会話の履歴）と、反映の後の操作
 // （質問の欄に入れる・チャットで SQL を生成する）だけを画面ごとに持つ。
 // 「SQL の要件（AI の理解）」の一覧（#1718）も両方の画面で同じ部品・同じ振る舞いにする（違いは置き場所と幅だけ）。
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Check, CheckCircle2, MessageSquareText, Pencil, Plus, RotateCcw, Send, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Check, MessageSquareText, Pencil, Plus, RotateCcw } from "lucide-react";
 
 import {
   ApiErrorBanner,
   Banner,
   Button,
+  ClarificationCard,
+  clarificationLabels,
   Disclosure,
   DisclosureChevron,
-  FieldError,
   ProcessingIndicator,
   StatusBadge,
-  TextareaField,
+  type ClarificationBusyAction,
+  type ClarificationItem,
+  type ClarificationLabels,
+  type ClarificationOption,
 } from "@production-ready/ui";
 
 import { isAbortError } from "@/lib/api";
@@ -108,7 +112,11 @@ export interface RequirementSessionController {
   answerReady: boolean;
   selectCandidate: (candidateId: string) => void;
   changeFreeText: (value: string) => void;
-  questionHeadingRef: RefObject<HTMLHeadingElement | null>;
+  /**
+   * 共通のカード（`ClarificationCard`）の答えを受け取る。選択肢と自由入力はどちらか一方にする（backend の契約。
+   * 選び直したら自由入力を空に、書いたら選択を外す）。
+   */
+  setAnswerDraft: (optionIds: string[], otherText: string) => void;
   submitAnswer: () => Promise<void>;
   /**
    * 確認のカード（確認の質問が無い・全部に答えた後）で選び直せる対象の表（#1761）。AI が決めた表に、業務
@@ -145,7 +153,6 @@ export function useRequirementSession(
   const [answeringCandidateId, setAnsweringCandidateId] = useState("");
   const [error, setError] = useState<unknown>("");
   const [busyAction, setBusyAction] = useState<RequirementBusyAction>(initialBusy);
-  const questionHeadingRef = useRef<HTMLHeadingElement>(null);
   const mountedRef = useRef(false);
   useEffect(() => {
     mountedRef.current = true;
@@ -180,12 +187,6 @@ export function useRequirementSession(
     setSelectedCandidateIds([]);
     setFreeText("");
   }
-  const activeItemId = activeItem?.id;
-  useEffect(() => {
-    if (activeItemId) {
-      requestAnimationFrame(() => questionHeadingRef.current?.focus({ preventScroll: true }));
-    }
-  }, [activeItemId]);
 
   const answerReady = selectedCandidateIds.length > 0 || Boolean(freeText.trim());
 
@@ -205,6 +206,18 @@ export function useRequirementSession(
   const changeFreeText = (value: string) => {
     setFreeText(value);
     if (value) setSelectedCandidateIds([]);
+  };
+
+  const setAnswerDraft = (optionIds: string[], otherText: string) => {
+    const sameIds =
+      optionIds.length === selectedCandidateIds.length &&
+      optionIds.every((id, index) => id === selectedCandidateIds[index]);
+    if (!sameIds && (optionIds.length > 0 || otherText === freeText)) {
+      setSelectedCandidateIds(optionIds);
+      setFreeText("");
+      return;
+    }
+    changeFreeText(otherText);
   };
 
   const reloadAfterConflict = async (cause: unknown, current: QuerySession) => {
@@ -342,7 +355,7 @@ export function useRequirementSession(
     answerReady,
     selectCandidate,
     changeFreeText,
-    questionHeadingRef,
+    setAnswerDraft,
     submitAnswer,
     confirmTarget,
     correctionPending: Boolean(correction),
@@ -420,7 +433,7 @@ export function useRequirementCheck(initialChecking = false): RequirementCheckRu
 /**
  * 検査の後の次の扱い（チャットと SQL 生成の画面で共通。#1442 / #1715 / #1761）。反映済み（`applied`。反映の後、
  * 次へ進む前に画面を離れた）なら `onApplied` で次へ進む。それ以外は、確認の質問の件数にかかわらず session を
- * 出し、利用者の確認（「この要件で SQL を生成して実行」）を待つ。聞くことが無くても自動では反映しない（#1761）。
+ * 出し、利用者の確認（「この内容で SQL を生成して実行」）を待つ。聞くことが無くても自動では反映しない（#1761）。
  */
 export function useRequirementProceed(controller: RequirementSessionController) {
   const { setSession } = controller;
@@ -522,148 +535,243 @@ export function RequirementAnswerProgress({ active }: { active: boolean }) {
   );
 }
 
+/** 回答前の確認のカードの文言（#1839）。文型は共通の `clarificationLabels`、NL2SQL は名詞だけを i18n から渡す。 */
+export function requirementClarificationLabels(): ClarificationLabels {
+  return {
+    ...clarificationLabels({
+      stage: t("nl2sql.clarification.stage"),
+      action: t("nl2sql.clarification.action"),
+    }),
+    other: t("nl2sql.clarification.other"),
+    otherPlaceholder: t("nl2sql.clarification.otherPlaceholder"),
+    cancel: t("nl2sql.clarification.close"),
+  };
+}
+
+/** 回答の候補を共通のカードの選択肢にする（説明・物理名・根拠は選択肢の `detail` に出す）。 */
+function candidateOption(candidate: RequirementCandidate): ClarificationOption {
+  const refs = candidate.refs_ja && candidate.refs_ja !== candidate.label_ja ? candidate.refs_ja : "";
+  return {
+    id: candidate.id,
+    label: candidate.label_ja,
+    description: candidate.description_ja || undefined,
+    detail:
+      refs || candidate.evidence_ja ? (
+        <>
+          {refs ? <span className="block break-all font-mono">{refs}</span> : null}
+          {candidate.evidence_ja ? (
+            <span className="block text-fg-subtle">
+              {t("nl2sql.clarification.evidence", { evidence: candidate.evidence_ja })}
+            </span>
+          ) : null}
+        </>
+      ) : undefined,
+  };
+}
+
+/** カードの処理中の操作（押したボタンだけを loading にする）。 */
+function cardBusyAction(
+  busyAction: RequirementBusyAction,
+  map: Partial<Record<RequirementBusyAction, ClarificationBusyAction>>
+): ClarificationBusyAction | null {
+  return map[busyAction] ?? null;
+}
+
 /**
- * 1 ページに 1 問の質問の欄（選択肢・複数選択・自由入力）。確認済みの一覧から直している項目があれば、その項目の
- * 入力を出す。`trailingActions` は回答のボタンの右に置く操作（中止など）。
+ * 回答前の確認のカード（#1839。3 製品共通の `ClarificationCard` に載せ替えた。#1439 / #1442 / #1761 の振る舞いは
+ * そのまま）。2 つの段階を同じカードで出す。
+ *
+ * - **確認事項に答える段階**（今の質問・一覧から直している項目がある）: 1 件ずつ、選択肢（説明・物理名・根拠）と
+ *   「その他（自由入力）」。確定は「この内容で回答」（回答を送り、AI が要件を検査し直す）。スキップ「確認せずに
+ *   SQL を生成」は、要件が SQL の生成に進める（SELECT / FROM が明確）なら残りを AI の推測のまま反映し、進めない
+ *   なら確認を使わずに SQL を作る。一覧から直しているときは「直した内容で更新」「直すのをやめる」。
+ * - **確かめて生成する段階**（聞くことが無い・全部に答えた）: 対象の表の選び直し（候補があるとき）と
+ *   「その他（自由入力）」の直し。確定は「この内容で SQL を生成して実行」。直しを入力している間は確定を押せず、
+ *   押せない理由を確定の説明に出し、「直しを伝える」で AI に伝える（#1772 / #1776）。
+ *
+ * 選択肢と自由入力はどちらか一方（backend がどちらか 1 つで答える契約。複数選択でも同じ）。
  */
-export function RequirementQuestionForm({
+export function RequirementCard({
   controller,
-  size = "lg",
-  applyWithRemainingLabel = t("chat.requirement.generateWithRemaining"),
-  onApplyWithRemaining,
-  trailingActions,
-  idPrefix = "nl2sql-clarification",
+  size,
+  applyLabel,
+  onApply,
+  onSkip,
+  onClose,
+  idPrefix,
 }: {
   controller: RequirementSessionController;
-  size?: ButtonSize;
-  applyWithRemainingLabel?: string;
-  onApplyWithRemaining: () => void;
-  trailingActions?: ReactNode;
-  idPrefix?: string;
+  size: ButtonSize;
+  /** 確かめて生成する段階の確定の文言（実行の権限で「…して実行」/「…を生成」）。 */
+  applyLabel: string;
+  /** 確かめた要件で SQL を生成する（反映して次へ進む）。 */
+  onApply: () => void;
+  /** 確認を使わずに SQL を生成する（要件が生成に進めないときのスキップ）。 */
+  onSkip: () => void;
+  /** 確認をやめる（質問を入力欄に戻す・SQL 生成の画面のパネルを閉じる）。 */
+  onClose: () => void;
+  idPrefix: string;
 }) {
   const {
     activeItem,
     correctingItem,
     state,
     busyAction,
-    error,
     selectedCandidateIds,
     freeText,
-    answerReady,
-    questionHeadingRef,
     showApply,
     unresolvedCount,
     answeredCount,
+    confirmTarget,
+    correctionKind,
   } = controller;
-  if (!activeItem || !state) return null;
-  const applyWithRemaining = showApply && unresolvedCount > 0;
-  const adding = Boolean(correctingItem?.id.startsWith(ADD_ITEM_PREFIX));
-  const heading = correctingItem
-    ? correctingItem.question_ja || t("nl2sql.clarification.correctLabel", { label: correctingItem.label_ja })
-    : activeItem.question_ja || activeItem.label_ja;
-  return (
-    <fieldset
-      className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-4"
-      data-testid="nl2sql-clarification-question"
-      data-item-key={activeItem.key}
-    >
-      <legend className="sr-only">{heading}</legend>
-      <div>
-        <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-fg-muted">
-          <span>
-            {adding && correctingItem
-              ? t("nl2sql.clarification.addTitle", { part: correctingItem.label_ja })
-              : correctingItem
-              ? t("nl2sql.clarification.correctTitle", { label: correctingItem.label_ja })
-              : t("nl2sql.clarification.step", {
-                  step: answeredCount + 1,
-                  remaining: unresolvedCount,
-                })}
-          </span>
+  const baseLabels = requirementClarificationLabels();
+  if (!state) return null;
+  // 確認の往復の何回目か（最初の確認が 1 回目。AI の再検査のたびに 1 回増え、再検査の上限の回が最後の確認）。
+  const round = { current: state.review_round + 1, max: state.max_review_rounds + 1 };
+
+  if (activeItem) {
+    const adding = Boolean(correctingItem?.id.startsWith(ADD_ITEM_PREFIX));
+    const prompt = correctingItem
+      ? correctingItem.question_ja || t("nl2sql.clarification.correctLabel", { label: correctingItem.label_ja })
+      : activeItem.question_ja || activeItem.label_ja;
+    const item: ClarificationItem = {
+      id: activeItem.id,
+      prompt,
+      reason: activeItem.reason_ja || undefined,
+      selection: activeItem.answer_kind === "multi_select" ? "multiple" : "single",
+      options: activeItem.candidates.map(candidateOption),
+      meta: (
+        <>
           <StatusBadge icon={false} variant="neutral" label={sectionPartLabel(activeItem.section)} />
-        </p>
-        <h4 ref={questionHeadingRef} tabIndex={-1} className="mt-1 text-sm font-semibold leading-6 text-fg">
-          {heading}
-        </h4>
-        {correctingItem && !adding ? (
-          <p className="mt-1 text-xs leading-5 text-fg-muted">
-            {t("nl2sql.clarification.correctHint", {
-              value: correctingItem.value_ja || t("nl2sql.clarification.unspecifiedValue"),
-            })}
-          </p>
-        ) : null}
-        {activeItem.reason_ja ? (
-          <p className="mt-1 text-xs leading-5 text-fg-muted">{activeItem.reason_ja}</p>
-        ) : null}
-      </div>
-
-      {activeItem.candidates.length > 0 ? (
-        <RequirementCandidateOptions
-          name={`requirement-${activeItem.id}`}
-          type={activeItem.answer_kind === "multi_select" ? "checkbox" : "radio"}
-          candidates={activeItem.candidates}
-          isChecked={(candidate) => selectedCandidateIds.includes(candidate.id)}
-          disabled={Boolean(busyAction)}
-          onSelect={(candidate) => controller.selectCandidate(candidate.id)}
+          {correctingItem ? (
+            <span className="text-xs text-fg-muted">
+              {adding ? (
+                t("nl2sql.clarification.addTitle", { part: correctingItem.label_ja })
+              ) : (
+                <>
+                  <span>{t("nl2sql.clarification.correctTitle", { label: correctingItem.label_ja })}</span>
+                  <span className="ml-2">
+                    {t("nl2sql.clarification.correctHint", {
+                      value: correctingItem.value_ja || t("nl2sql.clarification.unspecifiedValue"),
+                    })}
+                  </span>
+                </>
+              )}
+            </span>
+          ) : null}
+        </>
+      ),
+    };
+    // スキップは、要件が SQL の生成に進めるなら残りを AI の推測のまま反映し、進めないなら確認を使わずに作る。
+    const skipApplies = showApply && unresolvedCount > 0;
+    return (
+      <div className="min-w-0" data-testid="nl2sql-clarification-question" data-item-key={activeItem.key}>
+        <ClarificationCard
+          variant="plain"
+          size={size}
+          headingLevel={4}
+          // 確認事項が出たとき（SQL 生成の画面のボタン・チャットの送信の後）は、確認事項の文へフォーカスを移す。
+          autoFocus
+          idPrefix={`${idPrefix}-clarification`}
+          testId="nl2sql-clarification-card"
+          items={[item]}
+          value={{ [activeItem.id]: { optionIds: selectedCandidateIds, otherText: freeText } }}
+          onValueChange={(draft) => {
+            const entry = draft[activeItem.id];
+            if (entry) controller.setAnswerDraft(entry.optionIds, entry.otherText);
+          }}
+          progress={
+            correctingItem ? undefined : { current: answeredCount + 1, total: answeredCount + unresolvedCount }
+          }
+          round={round}
+          busyAction={cardBusyAction(busyAction, {
+            answer: "confirm",
+            apply: "skip",
+            cancel: "cancel",
+          })}
+          onConfirm={() => void controller.submitAnswer()}
+          onSkip={correctingItem ? undefined : skipApplies ? onApply : onSkip}
+          onCancel={correctingItem ? () => controller.setCorrectingItemId(null) : onClose}
+          labels={{
+            ...baseLabels,
+            confirm: adding
+              ? t("nl2sql.clarification.addSubmit")
+              : correctingItem
+                ? t("nl2sql.clarification.correctSubmit")
+                : t("nl2sql.clarification.answer"),
+            ...(correctingItem
+              ? {
+                  cancel: adding ? t("nl2sql.clarification.addCancel") : t("nl2sql.clarification.correctCancel"),
+                  cancelHint: "",
+                }
+              : {}),
+          }}
         />
-      ) : null}
+      </div>
+    );
+  }
 
-      <TextareaField
-        id={`${idPrefix}-free-text`}
-        label={t("nl2sql.clarification.other")}
-        value={freeText}
-        onChange={(event) => controller.changeFreeText(event.currentTarget.value)}
-        disabled={Boolean(busyAction)}
-        rows={2}
-        placeholder={t("nl2sql.clarification.otherPlaceholder")}
-      />
-      {!answerReady && error ? (
-        <FieldError id={`${idPrefix}-answer-error`} message={t("nl2sql.clarification.answerRequired")} />
-      ) : null}
-      <div className="flex flex-wrap justify-end gap-2">
-        {correctingItem ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size={size}
-            icon={X}
-            disabled={Boolean(busyAction)}
-            onClick={() => controller.setCorrectingItemId(null)}
-          >
-            {adding ? t("nl2sql.clarification.addCancel") : t("nl2sql.clarification.correctCancel")}
-          </Button>
-        ) : null}
-        {applyWithRemaining ? (
+  if (!showApply) return null;
+  const currentId = confirmTarget ? currentCandidateId(confirmTarget) : "";
+  const checkedId = selectedCandidateIds[0] ?? currentId;
+  const confirmItemId = confirmTarget?.id ?? `${idPrefix}-confirm`;
+  const pendingHint =
+    correctionKind === "free_text"
+      ? t("nl2sql.clarification.otherPendingHint")
+      : correctionKind === "table"
+        ? t("nl2sql.clarification.targetPendingHint")
+        : null;
+  const item: ClarificationItem = confirmTarget
+    ? {
+        id: confirmTarget.id,
+        prompt: t("nl2sql.clarification.confirmTargetPrompt", { label: confirmTarget.label_ja }),
+        options: confirmTarget.candidates.map(candidateOption),
+        meta: <StatusBadge icon={false} variant="neutral" label={sectionPartLabel(confirmTarget.section)} />,
+        optional: true,
+      }
+    : { id: confirmItemId, prompt: t("nl2sql.clarification.confirmPrompt"), options: [], optional: true };
+  const sendingCorrection = busyAction === "answer";
+  return (
+    <div className="min-w-0" data-testid="nl2sql-clarification-confirm">
+      <ClarificationCard
+        variant="plain"
+        size={size}
+        headingLevel={4}
+        idPrefix={`${idPrefix}-confirm`}
+        testId="nl2sql-clarification-card"
+        items={[item]}
+        value={{
+          [item.id]: { optionIds: confirmTarget && checkedId ? [checkedId] : [], otherText: freeText },
+        }}
+        onValueChange={(draft) => {
+          const entry = draft[item.id];
+          if (entry) controller.setAnswerDraft(entry.optionIds, entry.otherText);
+        }}
+        round={round}
+        busyAction={cardBusyAction(busyAction, { apply: "confirm", cancel: "cancel" })}
+        disabled={sendingCorrection}
+        blockedReason={pendingHint}
+        onConfirm={onApply}
+        onCancel={onClose}
+        labels={{ ...baseLabels, confirm: applyLabel }}
+        actions={
           <Button
             type="button"
             variant="secondary"
             size={size}
-            icon={CheckCircle2}
-            loading={busyAction === "apply"}
-            disabled={Boolean(busyAction && busyAction !== "apply")}
-            onClick={onApplyWithRemaining}
+            icon={MessageSquareText}
+            className="w-full sm:w-auto"
+            loading={sendingCorrection}
+            disabled={!controller.correctionPending || Boolean(busyAction && !sendingCorrection)}
+            onClick={() => void controller.submitCorrection()}
+            data-testid="nl2sql-clarification-confirm-answer"
           >
-            {applyWithRemainingLabel}
+            {t("nl2sql.clarification.sendCorrection")}
           </Button>
-        ) : null}
-        <Button
-          icon={Send}
-          type="button"
-          variant="primary"
-          size={size}
-          loading={busyAction === "answer"}
-          disabled={!answerReady || Boolean(busyAction && busyAction !== "answer")}
-          onClick={() => void controller.submitAnswer()}
-        >
-          {adding
-            ? t("nl2sql.clarification.addSubmit")
-            : correctingItem
-              ? t("nl2sql.clarification.correctSubmit")
-              : t("nl2sql.clarification.answer")}
-        </Button>
-        {correctingItem ? null : trailingActions}
-      </div>
-    </fieldset>
+        }
+      />
+    </div>
   );
 }
 
@@ -936,178 +1044,5 @@ export function RequirementSummary({
         <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.skeletonNote")}</p>
       </div>
     </section>
-  );
-}
-
-/** 回答の候補（ラジオ・チェックボックス。候補の説明・物理名・根拠つき）。質問の欄と確認のカードで共通。 */
-function RequirementCandidateOptions({
-  name,
-  type,
-  candidates,
-  isChecked,
-  disabled,
-  onSelect,
-}: {
-  name: string;
-  type: "radio" | "checkbox";
-  candidates: RequirementCandidate[];
-  isChecked: (candidate: RequirementCandidate) => boolean;
-  disabled: boolean;
-  onSelect: (candidate: RequirementCandidate) => void;
-}) {
-  return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {candidates.map((candidate) => (
-        <label
-          key={candidate.id}
-          data-surface-tint="accent"
-          className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-        >
-          <input
-            type={type}
-            name={name}
-            value={candidate.id}
-            checked={isChecked(candidate)}
-            disabled={disabled}
-            onChange={() => onSelect(candidate)}
-            className="mt-1 h-4 w-4 accent-accent-emphasis"
-          />
-          <span className="min-w-0">
-            <span className="block break-words font-medium">{candidate.label_ja}</span>
-            {candidate.description_ja ? (
-              <span className="mt-0.5 block text-xs leading-5 text-fg-muted">{candidate.description_ja}</span>
-            ) : null}
-            {candidate.refs_ja && candidate.refs_ja !== candidate.label_ja ? (
-              <span className="mt-0.5 block break-all font-mono text-xs leading-5 text-fg-muted">
-                {candidate.refs_ja}
-              </span>
-            ) : null}
-            {candidate.evidence_ja ? (
-              <span className="mt-0.5 block text-xs leading-5 text-fg-subtle">
-                {t("nl2sql.clarification.evidence", { evidence: candidate.evidence_ja })}
-              </span>
-            ) : null}
-          </span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-/**
- * 確認のカード（#1761）。確認の質問が無い（質問 0 件）・全部に答えた後に、要件のまとめの下で必ず出し、利用者が
- * 確かめてから SQL の生成に進む（自動では進まない）。AI が決めた対象の表に候補があれば選び直せ、「その他（自由
- * 入力）」で解釈を直せる。直しは「この内容で回答」で回答として送り、AI の再検査が要件を直す。直しを入力している
- * 間は「この要件で SQL を生成して実行」を押せない（入力した直しを捨てて進まない）。直しが未送信の間は、押せない
- * 理由と次の操作を入力欄の補足に出し、生成のボタンの aria-describedby でつなぐ（自由入力は #1772、表の選び直しは
- * #1776。文は直しの種類で選ぶ）。SQL 生成の画面とチャットで同じ部品・同じ文言（違いは置き場所に合わせた操作
- * 部品の高さだけ）。
- */
-export function RequirementConfirmForm({
-  controller,
-  readyLabel,
-  applyLabel,
-  onApply,
-  closeButton,
-  size,
-  idPrefix,
-}: {
-  controller: RequirementSessionController;
-  readyLabel: string;
-  applyLabel: string;
-  onApply: () => void;
-  closeButton: ReactNode;
-  size: ButtonSize;
-  idPrefix: string;
-}) {
-  const { confirmTarget, selectedCandidateIds, freeText, busyAction, correctionPending, correctionKind } = controller;
-  const currentId = confirmTarget ? currentCandidateId(confirmTarget) : "";
-  const checkedId = selectedCandidateIds[0] ?? currentId;
-  const legendId = `${idPrefix}-confirm-title`;
-  // 押せない理由の補足（#1772 / #1776）。未送信の直しがある間だけ出す（空白だけの自由入力・元の表の選択は直しに
-  // ならず生成も押せるので出さない）。自由入力と表の選び直しは同時に未送信にならないので、文は 1 つだけ。
-  const pendingHintId = `${idPrefix}-confirm-pending`;
-  const pendingHint =
-    correctionKind === "free_text"
-      ? t("nl2sql.clarification.otherPendingHint")
-      : correctionKind === "table"
-        ? t("nl2sql.clarification.targetPendingHint")
-        : "";
-  return (
-    <fieldset
-      aria-labelledby={legendId}
-      className="grid min-w-0 gap-3 border-t border-border pt-4"
-      data-testid="nl2sql-clarification-confirm"
-    >
-      <p id={legendId} className="flex items-center gap-2 text-sm text-success-fg">
-        <CheckCircle2 size={16} aria-hidden="true" />
-        {readyLabel}
-      </p>
-      {confirmTarget ? (
-        <div
-          role="radiogroup"
-          aria-label={t("nl2sql.clarification.candidates", { label: confirmTarget.label_ja })}
-          className="grid min-w-0 gap-2"
-          data-testid="nl2sql-clarification-confirm-target"
-        >
-          <p className="text-xs font-medium text-fg-muted">
-            {t("nl2sql.clarification.candidates", { label: confirmTarget.label_ja })}
-          </p>
-          <RequirementCandidateOptions
-            name={`${idPrefix}-confirm-target`}
-            type="radio"
-            candidates={confirmTarget.candidates}
-            isChecked={(candidate) => candidate.id === checkedId}
-            disabled={Boolean(busyAction)}
-            onSelect={(candidate) => controller.selectCandidate(candidate.id)}
-          />
-        </div>
-      ) : null}
-      <TextareaField
-        id={`${idPrefix}-confirm-free-text`}
-        label={t("nl2sql.clarification.other")}
-        value={freeText}
-        onChange={(event) => controller.changeFreeText(event.currentTarget.value)}
-        disabled={Boolean(busyAction)}
-        rows={2}
-        placeholder={t("nl2sql.clarification.otherPlaceholder")}
-        helper={
-          pendingHint ? (
-            // 補足の段落の id は部品の中で決まるため、生成のボタンから指せるよう文に id を付ける。
-            <span id={pendingHintId} data-testid="nl2sql-clarification-confirm-pending-hint">
-              {pendingHint}
-            </span>
-          ) : undefined
-        }
-      />
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          type="button"
-          variant="secondary"
-          size={size}
-          icon={Send}
-          loading={busyAction === "answer"}
-          disabled={!correctionPending || Boolean(busyAction && busyAction !== "answer")}
-          onClick={() => void controller.submitCorrection()}
-          data-testid="nl2sql-clarification-confirm-answer"
-        >
-          {t("nl2sql.clarification.answer")}
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          size={size}
-          loading={busyAction === "apply"}
-          disabled={correctionPending || Boolean(busyAction && busyAction !== "apply")}
-          aria-describedby={pendingHint ? pendingHintId : undefined}
-          onClick={onApply}
-          icon={Sparkles}
-          data-testid="nl2sql-clarification-apply"
-        >
-          {applyLabel}
-        </Button>
-        {closeButton}
-      </div>
-    </fieldset>
   );
 }

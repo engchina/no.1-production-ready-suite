@@ -183,6 +183,7 @@ export function useProfileUsageContext(profileId: string) {
             allowed_tables: profile.allowed_tables,
             allowed_views: profile.allowed_views,
             default_engine: profile.default_engine ?? "select_ai",
+            clarification_policy: profile.clarification_policy ?? "confirm",
             archived: profile.archived,
             object_scope_version: profile.object_scope_version ?? 1,
             version: profile.version ?? 1,

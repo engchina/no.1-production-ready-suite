@@ -102,6 +102,12 @@ class _FakeNl2SqlService:
     def list_profiles(self, *, include_archived: bool = False) -> list[Nl2SqlProfile]:
         return list(self.profiles)
 
+    def get_profile(self, profile_id: str, **_kwargs: Any) -> Nl2SqlProfile:
+        for profile in self.profiles:
+            if profile.id == profile_id:
+                return profile
+        raise KeyError(profile_id)
+
     def search_profiles(
         self,
         *,

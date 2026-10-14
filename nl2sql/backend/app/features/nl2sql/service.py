@@ -8643,6 +8643,10 @@ class Nl2SqlService:
                     if job.request.sql_requirement is not None
                     else ""
                 ),
+                requirement_answers=job.request.requirement_answers,
+                requirement_skipped=(
+                    job.request.requirement_skipped and job.request.sql_requirement is None
+                ),
                 conversation_id=job.conversation_id,
                 previous_job_id=job.request.previous_job_id,
                 generation_only=job.request.generation_only,

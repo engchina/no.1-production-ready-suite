@@ -54,6 +54,7 @@ from app.features.nl2sql.models import (
     JobCreateRequest,
     JobData,
     JobStatus,
+    Nl2SqlProfile,
     ProfileRecommendationRequest,
 )
 from app.features.nl2sql.ontology_models import (
@@ -103,15 +104,26 @@ JOB_POLL_INTERVAL_SECONDS = 0.5
 _TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.ERROR})
 _JOB_NOT_FOUND_MESSAGE = "指定されたジョブが見つかりません。"
 _REQUIREMENT_NOT_FOUND_MESSAGE = (
-    "指定された AI要件確認が見つかりません。requirement_session_id を付けずに "
+    "指定された回答前の確認が見つかりません。requirement_session_id を付けずに "
     "nl2sql_query を呼び直してください。"
 )
 _REQUIREMENT_CLOSED_MESSAGE = (
-    "この AI要件確認は終了しています（取り消し・期限切れ）。requirement_session_id を付けずに "
+    "この回答前の確認は終了しています（取り消し・期限切れ）。requirement_session_id を付けずに "
     "nl2sql_query を呼び直してください。"
 )
 _REQUIREMENT_SKIPPED_MESSAGE = (
-    "OCI Enterprise AI が設定されていないため、AI要件確認をせずに SQL を生成しました。"
+    "OCI Enterprise AI が設定されていないため、回答前の確認をせずに SQL を生成しました。"
+)
+# 業務プロファイルの「曖昧な質問の扱い」が「前提を示して SQL を生成する」（#1839）で、
+# 確認せずに作った。
+_REQUIREMENT_ASSUMED_MESSAGE = (
+    "業務プロファイルの方針（前提を示して SQL を生成する）により、確認せずに SQL を生成しました。"
+    "回答では、確かめていない前提（AI の推測）を利用者に示してください。"
+)
+# 利用者が「確認せずに SQL を生成」を選んだ（`skip_clarification`。#1839）。
+_REQUIREMENT_USER_SKIPPED_MESSAGE = (
+    "利用者が確認せずに SQL を生成するよう選んだため、確認事項を聞かずに SQL を生成しました。"
+    "回答では、確かめていない前提（AI の推測）を利用者に示してください。"
 )
 REQUIREMENT_AI_NOT_CONFIGURED_CODE = "REQUIREMENT_AI_NOT_CONFIGURED"
 # この業務プロファイルの範囲では SQL を作れない（AI要件確認。#1441）。
@@ -137,6 +149,8 @@ _INSTRUCTIONS = (
     "nl2sql_query が needs_clarification を返したら SQL はまだ作っていません。"
     "requirement.question の問いを利用者に 1 つだけ確かめ、答えを answer に入れ、"
     "requirement.session_id を requirement_session_id に渡して nl2sql_query を呼び直します。"
+    "利用者が確認せずに進めると選んだら、requirement_session_id と skip_clarification: true で"
+    "呼び直します（前提を示して SQL を生成し、requirement.status は skipped）。"
 )
 
 
@@ -255,11 +269,21 @@ class QueryInput(_Input):
             "利用者が答えていない問いを推測で埋めない"
         ),
     )
+    skip_clarification: bool = Field(
+        default=False,
+        description=(
+            "利用者が確認せずに SQL を生成するよう選んだとき true（#1839）。確認事項を聞かず、"
+            "要件を反映できれば反映し、できなければ確認を使わずに作る（requirement.status は"
+            " skipped）。利用者が選んでいないのに true にしない。answer と一緒には指定しない"
+        ),
+    )
 
     @model_validator(mode="after")
     def _answer_needs_session(self) -> QueryInput:
         if self.answer is not None and self.requirement_session_id is None:
             raise ValueError("answer は requirement_session_id と一緒に指定してください。")
+        if self.answer is not None and self.skip_clarification:
+            raise ValueError("answer と skip_clarification は一緒に指定できません。")
         return self
 
 
@@ -356,7 +380,8 @@ class RequirementOutput(BaseModel):
     status: str = Field(
         description=(
             "needs_answer / ready / unanswerable / applied / cancelled / skipped"
-            "（OCI Enterprise AI が無い構成で確かめなかった）"
+            "（OCI Enterprise AI が無い構成・業務プロファイルの方針が"
+            "「前提を示して SQL を生成する」・skip_clarification で確かめなかった）"
         )
     )
     question: RequirementQuestionOutput | None = None
@@ -549,6 +574,16 @@ def _requirement_output(data: QuerySessionData) -> RequirementOutput:
         or (draft.sql_skeleton if draft is not None else ""),
         message=state.message_ja if state is not None else "",
     )
+
+
+def _profile_assumes(profile_id: str) -> bool:
+    """業務プロファイルの「曖昧な質問の扱い」が「前提を示して SQL を生成する」か（#1839）。"""
+
+    try:
+        profile = Nl2SqlProfile.model_validate(nl2sql_service.get_profile(profile_id))
+    except (KeyError, ValueError):
+        return False
+    return profile.clarification_policy == "assume"
 
 
 def _requirement_ready(data: QuerySessionData) -> bool:
@@ -789,7 +824,41 @@ def build_mcp_server(request: Request) -> McpServer:
             )
             return result
         if data.session.requirement_applied_at is None:
-            if not _requirement_ready(data):
+            # 業務プロファイルの方針が「前提を示して SQL を生成する」か、利用者が「確認せずに
+            # SQL を生成」を選んだ（skip_clarification）なら聞かない（#1839）。要件を反映できる
+            # （確認事項が無い・再検査の上限で残りを AI に任せられる）なら反映し、できないなら
+            # 確認を使わずに作る（画面の「確認せずに SQL を生成」と同じ）。
+            assume = arguments.skip_clarification or await run_sync_io(
+                _profile_assumes, arguments.profile_id
+            )
+            state = data.requirement_state
+            if (
+                assume
+                and not _requirement_ready(data)
+                and not (state is not None and state.can_apply)
+            ):
+                if data.session.status not in _CLOSED_SESSION_STATUSES:
+                    await run_sync_io(runtime.cancel_session, data.session.id)
+                remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
+                result = await start_and_wait(
+                    JobCreateRequest(
+                        question=arguments.question,
+                        profile_id=arguments.profile_id,
+                        row_limit=arguments.row_limit,
+                    ),
+                    remaining,
+                )
+                result.requirement = RequirementOutput(
+                    session_id="",
+                    status="skipped",
+                    message=(
+                        _REQUIREMENT_USER_SKIPPED_MESSAGE
+                        if arguments.skip_clarification
+                        else _REQUIREMENT_ASSUMED_MESSAGE
+                    ),
+                )
+                return result
+            if not _requirement_ready(data) and not assume:
                 requirement = _requirement_output(data)
                 if requirement.question is not None:
                     # 確認の要る項目がある: SQL を作らずに 1 問だけ返す。
@@ -815,7 +884,7 @@ def build_mcp_server(request: Request) -> McpServer:
             )
         draft = data.session.requirement
         if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
-            raise HTTPException(status_code=409, detail="AI要件確認の要件がありません。")
+            raise HTTPException(status_code=409, detail="回答前の確認の要件がありません。")
         # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。質問の文は
         # 利用者の質問のままにし、書き直した文は生成にだけ使う（`generation_question`。#1727）。
         # 生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする（#1524）。
