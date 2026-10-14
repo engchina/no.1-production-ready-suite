@@ -30,9 +30,9 @@ async function expectNoPageOverflow(page: Page) {
     .toBeLessThanOrEqual(0);
 }
 
-/** 編集の画面の保存は PageHeader の右端（#618）。 */
+/** 編集の画面の保存はフォームの末尾の確定の行（#1786。#618 の PageHeader の右端から移した）。 */
 function editActions(page: Page) {
-  return page.locator("[data-page-header-actions]");
+  return page.locator("[data-form-action-bar-sticky]");
 }
 
 for (const viewport of VIEWPORTS) {

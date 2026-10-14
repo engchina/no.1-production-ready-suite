@@ -186,7 +186,7 @@ test.describe("AI Agent Control Plane", () => {
     await expect(model).toContainText("既定のテキストモデル（xai.grok-4）");
     await model.click();
     await page.getByRole("option", { name: "gpt-oss-120b" }).click();
-    await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存" }).click();
+    await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("Agent を保存しました")).toBeVisible();
     expect(agentPatches.at(-1)).toMatchObject({ model_id: "openai.gpt-oss-120b" });
 

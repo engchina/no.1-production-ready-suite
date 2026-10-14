@@ -433,3 +433,66 @@ test("権限管理の対象が大量でもサーバー側で検索し、50 件�
   expect(api.saved[0]).toMatchObject({ knowledge_base_ids: ["kb-2999"] });
   await expectNoPageOverflow(page);
 });
+
+// #1786: 詳細・作成・編集の画面の確定（作成・保存）は、フォームの末尾の左（入力欄の左端）に置き、その右に「変更を破棄」。
+// PageHeader の右上には置かない。一覧の「新規作成」（作成の画面を開く）はヘッダーのまま。
+test("ユーザー・ロールの作成と編集の確定は、フォームの末尾の左に「作成」「保存」→「変更を破棄」の順で出す", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  await mockSecurityApi(page);
+  const headerActions = page.locator("[data-page-header-actions]");
+
+  /** 確定の行がフォームの最後の欄の下にあり、primary の左端が入力欄の左端にそろうこと。 */
+  async function expectConfirmAtFormEnd(groupName: string, firstField: string, lastField: string, labels: string[]) {
+    const actions = page.getByRole("group", { name: groupName });
+    await expect(actions).toBeVisible();
+    await expect(actions.getByRole("button")).toHaveText(labels);
+    // ヘッダーの右上には確定を置かない。
+    for (const label of labels) {
+      await expect(headerActions.getByRole("button", { name: label, exact: true })).toHaveCount(0);
+    }
+    // フォームの末尾まで見えるようにする（375px では行が画面の下端に貼り付いているため、本来の位置に戻す）。
+    await page.locator(lastField).evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await expect(actions).toHaveAttribute("data-stuck", "false");
+    const primary = actions.getByRole("button", { name: labels[0], exact: true });
+    const discard = actions.getByRole("button", { name: labels[1], exact: true });
+    const [primaryBox, discardBox, fieldBox, lastBox] = await Promise.all([
+      primary.boundingBox(),
+      discard.boundingBox(),
+      page.getByLabel(firstField, { exact: false }).first().boundingBox(),
+      page.locator(lastField).boundingBox(),
+    ]);
+    // primary の左端は入力欄の左端（GOV.UK / Carbon のフォームと同じく左寄せ）。
+    expect(Math.abs(primaryBox!.x - fieldBox!.x)).toBeLessThanOrEqual(1);
+    // 変更を破棄は primary の右の同じ行（375px でも縦に積まない）。
+    expect(discardBox!.x).toBeGreaterThan(primaryBox!.x + primaryBox!.width - 1);
+    expect(Math.abs(discardBox!.y - primaryBox!.y)).toBeLessThanOrEqual(1);
+    // 確定の行は最後の欄の下（フォームの末尾）。
+    expect(primaryBox!.y).toBeGreaterThanOrEqual(lastBox!.y + lastBox!.height);
+    // 変更が無いときの変更を破棄は disabled。
+    await expect(discard).toBeDisabled();
+    return actions;
+  }
+
+  await page.goto("/settings/security/users");
+  await expect(page.getByTestId("security-users-grid").getByText("人事 花子")).toBeVisible();
+  await headerActions.getByRole("button", { name: "新規作成", exact: true }).click();
+  let actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "[role=radiogroup][aria-labelledby=security-users-role-legend]", ["作成", "変更を破棄"]);
+  // 入力すると変更を破棄が押せ、押すと開いたときの値に戻す。
+  const displayName = page.getByRole("textbox", { name: "表示名" });
+  await displayName.fill("採用 次郎");
+  await actions.getByRole("button", { name: "変更を破棄", exact: true }).click();
+  await expect(displayName).toHaveValue("");
+
+  await page.goto("/settings/security/users");
+  await page.getByTestId("security-users-grid").getByText("人事 花子").click();
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
+  actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "[role=radiogroup][aria-labelledby=security-users-role-legend]", ["保存", "変更を破棄"]);
+  await expect(actions).toHaveAttribute("data-form-action-bar-sticky", "card");
+
+  await page.goto("/settings/security/roles");
+  await expect(page.getByTestId("security-roles-grid")).toContainText("人事利用者");
+  await headerActions.getByRole("button", { name: "新規作成", exact: true }).click();
+  await expectConfirmAtFormEnd("ロールの確定", "ロールコード", "#security-role-description", ["作成", "変更を破棄"]);
+  await expectNoPageOverflow(page);
+});

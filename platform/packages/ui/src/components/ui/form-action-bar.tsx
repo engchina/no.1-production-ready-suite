@@ -142,7 +142,14 @@ function VisibleAction({
       data-testid={action.testId}
       data-form-action-id={action.id}
       data-form-action-kind={variant}
-      onClick={() => void action.onClick?.()}
+      // フォームの末尾の確定（#1786）: 押した瞬間（mousedown）に入力欄の blur の検証が走って欄の下にエラーが出ると、
+      // 下にあるこの行が押している間に動き、クリックが外れて送信されない（375px で欄が縦に積まれるとき）。
+      // mousedown ではフォーカスを動かさず、click でボタンへフォーカスを移してから操作する（blur の検証は click の後）。
+      onMouseDown={inline ? (event: ReactMouseEvent<HTMLButtonElement>) => event.preventDefault() : undefined}
+      onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+        if (inline) event.currentTarget.focus({ preventScroll: true });
+        void action.onClick?.();
+      }}
     >
       <span>{action.label}</span>
     </Button>

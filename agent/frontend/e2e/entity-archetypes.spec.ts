@@ -60,8 +60,8 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    // #585: ヘッダーに保存がある全画面のエディタは、欄に結び付かない保存の失敗をヘッダーの直下の 1 か所だけに出す。
-    test("保存に失敗すると理由をヘッダーの直下だけに出し、Toast に重ねない", async ({ page }) => {
+    // #585 / #1786: 全画面のエディタは、欄に結び付かない保存の失敗を確定の行（フォームの末尾）の直上の 1 か所だけに出す。
+    test("保存に失敗すると理由を確定の行の直上だけに出し、Toast に重ねない", async ({ page }) => {
       const message = "同じ名前の業務 Agent があります。別の名前にしてください。";
       await page.route("**/api/agents", async (route) => {
         if (route.request().method() !== "POST") return route.fallback();
@@ -72,19 +72,26 @@ for (const viewport of VIEWPORTS) {
       });
       await page.goto("/agents?id=new");
       await page.locator("#new-agent-name").fill("重複する Agent");
-      await page.getByRole("button", { name: "作成", exact: true }).click();
+      const actions = page.getByRole("group", { name: "確定の操作" });
+      // 複数のカードを 1 つの保存で確定する画面は、最後のカードの下の確定の行が画面の下端に貼り付く（#1786）。
+      await expect(actions).toHaveAttribute("data-form-action-bar-sticky", "page");
+      await expect(actions).toHaveAttribute("data-stuck", "true");
+      await expect(actions).toBeInViewport();
+      // ヘッダーには確定を置かない。
+      await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true })).toHaveCount(0);
+      await actions.getByRole("button", { name: "作成", exact: true }).click();
 
       const banner = page.getByTestId("agent-save-error");
       await expect(banner.getByRole("alert")).toHaveText(message);
       await expect(banner).toBeInViewport();
       await expect(page.getByText(message)).toHaveCount(1);
-      // 見出しの直下（本文の最初の要素）に置く。
-      const [bannerTop, headerBottom] = await Promise.all([
-        banner.evaluate((element) => element.getBoundingClientRect().top),
-        page.locator("header[data-page-header]").evaluate((element) => element.getBoundingClientRect().bottom),
+      // 確定の行の直上に置く（ボタンと失敗が並んで見える）。
+      const [bannerBottom, actionsTop] = await Promise.all([
+        banner.evaluate((element) => element.getBoundingClientRect().bottom),
+        actions.evaluate((element) => element.getBoundingClientRect().top),
       ]);
-      expect(bannerTop).toBeGreaterThanOrEqual(headerBottom);
-      expect(bannerTop - headerBottom).toBeLessThan(64);
+      expect(actionsTop).toBeGreaterThanOrEqual(bannerBottom);
+      expect(actionsTop - bannerBottom).toBeLessThan(48);
       await expect(page).toHaveURL(/\/agents\?id=new$/);
       await expectNoHorizontalOverflow(page);
     });
