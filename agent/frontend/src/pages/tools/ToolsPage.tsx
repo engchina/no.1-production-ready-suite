@@ -21,7 +21,7 @@ import { AgentSplitPane } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import {
   ListSearchField,
-  listCountLabel,
+  listCount,
   matchesSearch,
   NoMatchState,
   useListSearch,
@@ -76,10 +76,9 @@ export function ToolsPage() {
                       label={t("tool.search")}
                       value={toolQuery}
                       onSearch={setToolQuery}
-                      count={visibleTools.length}
                     />
                   }
-                  summary={listCountLabel(visibleTools.length, list.length)}
+                  count={listCount(list.length, visibleTools.length, Boolean(toolQuery.trim()))}
                   testId="tool-list-toolbar"
                 />
                 <PagedDataTable

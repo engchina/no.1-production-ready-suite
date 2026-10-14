@@ -14,10 +14,10 @@ import {
   EmptyState,
   Fieldset,
   FormActionBar,
+  FormGrid,
   FormStatus,
+  ListToolbar,
   OneTimeSecret,
-  PageBody,
-  PageHeader,
   SelectField,
   TableSkeleton,
   TextField,
@@ -52,7 +52,7 @@ type AgentScopeMode = "all" | "selected";
 const CHOICE_CLASS =
   "flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle";
 
-export interface MyApiKeysPageProps {
+export interface MyApiKeysPanelProps {
   api: MyApiKeysApi;
   /** 今開いている画面から見た MCP の接続先（`mcpEndpoints` で作る）。公開の URL は一覧の応答から足す（#1870）。 */
   endpoints: McpEndpoint[];
@@ -65,14 +65,15 @@ export interface MyApiKeysPageProps {
 }
 
 /**
- * 自分の API キー（アカウントのメニューから開く。3 製品共通。#1805・#1874）。
+ * 自分の API キー（アカウントの画面の「API キー」のタブ。3 製品共通。#1805・#1873・#1874）。
+ * 見出し（`PageHeader`）と余白（`PageBody`）はアカウントの画面が持ち、ここは中身のカードだけを描く。
  *
- * - ログインしている利用者は誰でも、自分のキーを発行・一覧・失効できる（メニュー権限を要しない）。
+ * - ログインしている利用者は誰でも、自分のキーを発行・一覧・削除できる（メニュー権限を要しない）。
  * - キーは発行した利用者として動き、利用者の現在のロールで権限とデータの範囲を判定する。
  * - 秘密は発行の直後に 1 回だけ、起点の「発行」の直下に全幅で出す（messaging.md §10.1）。
  * - Agent を選んだキーは、使える業務 Agent を「すべて」か「選んだものだけ」にできる（#1874。最小権限）。
  */
-export function MyApiKeysPage({ api, endpoints, messages, agentScopeOptions }: MyApiKeysPageProps) {
+export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: MyApiKeysPanelProps) {
   const t = apiKeysTranslator(messages);
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -148,176 +149,185 @@ export function MyApiKeysPage({ api, endpoints, messages, agentScopeOptions }: M
 
   return (
     <>
-      <PageHeader wide title={t("apiKeys.mine.title")} subtitle={t("apiKeys.mine.subtitle")} />
-      <PageBody wide>
-        <McpEndpointsCard endpoints={endpoints} publicBaseUrl={keys.data?.public_base_url ?? ""} t={t} />
+      <McpEndpointsCard endpoints={endpoints} publicBaseUrl={keys.data?.public_base_url ?? ""} t={t} />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("apiKeys.create.title")}</CardTitle>
-            <CardDescription>{t("apiKeys.create.description", { max: API_KEY_MAX_PER_USER })}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {atLimit ? (
-              <Banner severity="info">{t("apiKeys.create.limit", { max: API_KEY_MAX_PER_USER })}</Banner>
-            ) : null}
-            <div className="grid gap-4 md:grid-cols-2">
-              <TextField
-                id="api-key-name"
-                label={t("apiKeys.create.name")}
-                required
-                value={name}
-                maxLength={API_KEY_NAME_MAX_LENGTH}
-                placeholder={t("apiKeys.create.namePlaceholder")}
-                error={nameError}
-                onValueChange={setName}
-              />
-              <SelectField<ExpiryOption>
-                id="api-key-expiry"
-                label={t("apiKeys.create.expiry")}
-                value={expiry}
-                options={EXPIRY_OPTIONS.map((option) => ({ value: option, label: t(`apiKeys.create.expiry.${option}`) }))}
-                onValueChange={setExpiry}
-              />
-            </div>
-            <Fieldset legend={t("apiKeys.create.products")} required error={productsError}>
-              <div className="flex flex-wrap gap-2">
-                {API_KEY_PRODUCTS.map((item) => (
-                  <label key={item} data-surface-tint="accent" className={CHOICE_CLASS}>
-                    {/* 製品の複数選択。選択肢が 3 つだけなので、ネイティブの checkbox をラベルで包む。 */}
-                    <input
-                      type="checkbox"
-                      name="api-key-products"
-                      value={item}
-                      checked={products.includes(item)}
-                      onChange={(event) => toggleProduct(item, event.currentTarget.checked)}
-                      className="accent-accent-emphasis"
-                      data-testid={`api-key-product-${item}`}
-                    />
-                    {t(`apiKeys.product.${item}`)}
-                  </label>
-                ))}
-              </div>
-            </Fieldset>
-            {agentSelected && agentScopeOptions !== undefined ? (
-              <div className="grid gap-3">
-                <Fieldset role="radiogroup" legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
-                  <div className="flex flex-wrap gap-2">
-                    {(["all", "selected"] as const).map((mode) => (
-                      <label key={mode} data-surface-tint="accent" className={CHOICE_CLASS}>
-                        {/* 2 つから 1 つを選ぶ。選択肢が 2 つだけなので、ネイティブの radio をラベルで包む。 */}
-                        <input
-                          type="radio"
-                          name="api-key-agent-scope"
-                          value={mode}
-                          checked={agentScope === mode}
-                          onChange={() => setAgentScope(mode)}
-                          className="accent-accent-emphasis"
-                          data-testid={`api-key-agent-scope-${mode}`}
-                        />
-                        {t(`apiKeys.create.agentScope.${mode}`)}
-                      </label>
-                    ))}
-                  </div>
-                </Fieldset>
-                {agentScope === "selected" ? (
-                  <Fieldset legend={t("apiKeys.create.agentScope.selected")} required error={agentScopeError}>
-                    {agentScopeOptions.length === 0 ? (
-                      <p className="text-sm text-fg-muted">{t("apiKeys.create.agentScope.empty")}</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-2" data-testid="api-key-agent-options">
-                        {agentScopeOptions.map((option) => (
-                          <label key={option.id} data-surface-tint="accent" className={CHOICE_CLASS}>
-                            {/* 業務 Agent の複数選択。件数が少ないので、ネイティブの checkbox をラベルで包む。 */}
-                            <input
-                              type="checkbox"
-                              name="api-key-agent-ids"
-                              value={option.id}
-                              checked={agentIds.includes(option.id)}
-                              onChange={(event) => toggleAgent(option.id, event.currentTarget.checked)}
-                              className="accent-accent-emphasis"
-                              data-testid={`api-key-agent-${option.id}`}
-                            />
-                            <span className="min-w-0 break-words">{option.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </Fieldset>
-                ) : null}
-              </div>
-            ) : agentSelected ? (
-              <p className="text-xs leading-5 text-fg-muted" data-testid="api-key-agent-scope-elsewhere">
-                {t("apiKeys.create.agentScope.elsewhere")}
-              </p>
-            ) : null}
-            <FormActionBar
-              ariaLabel={t("apiKeys.create.title")}
-              primaryActions={[
-                {
-                  id: "create",
-                  label: t("apiKeys.create.submit"),
-                  icon: KeySquare,
-                  loading: create.isPending,
-                  disabled: atLimit,
-                  onClick: submit,
-                  testId: "api-key-create",
-                },
-              ]}
-              status={
-                create.error ? (
-                  <FormStatus tone="danger" message={apiErrorMessage(create.error, t("apiKeys.operationFailed"))} />
-                ) : null
-              }
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("apiKeys.create.title")}</CardTitle>
+          <CardDescription>{t("apiKeys.create.description", { max: API_KEY_MAX_PER_USER })}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {atLimit ? (
+            <Banner severity="info">{t("apiKeys.create.limit", { max: API_KEY_MAX_PER_USER })}</Banner>
+          ) : null}
+          {/* 欄は値の種類の幅（名前 md・有効期限 sm。#1891）。 */}
+          <FormGrid>
+            <TextField
+              id="api-key-name"
+              label={t("apiKeys.create.name")}
+              width="md"
+              required
+              value={name}
+              maxLength={API_KEY_NAME_MAX_LENGTH}
+              placeholder={t("apiKeys.create.namePlaceholder")}
+              error={nameError}
+              onValueChange={setName}
             />
-            {created ? (
-              <OneTimeSecret
-                key={created.token}
-                id="api-key-created-token"
-                title={t("apiKeys.created.title")}
-                description={t("apiKeys.created.description")}
-                label={t("apiKeys.created.label")}
-                value={created.token}
-                copyLabel={t("apiKeys.created.copy")}
-                copiedMessage={t("apiKeys.created.copied")}
-                copyFailedMessage={t("apiKeys.created.copyFailed")}
-                doneLabel={t("apiKeys.created.done")}
-                onDone={() => setCreated(null)}
-                testId="api-key-created"
-                valueTestId="api-key-token"
-              />
-            ) : null}
-          </CardContent>
-        </Card>
+            <SelectField<ExpiryOption>
+              id="api-key-expiry"
+              label={t("apiKeys.create.expiry")}
+              width="sm"
+              value={expiry}
+              options={EXPIRY_OPTIONS.map((option) => ({ value: option, label: t(`apiKeys.create.expiry.${option}`) }))}
+              onValueChange={setExpiry}
+            />
+          </FormGrid>
+          <Fieldset legend={t("apiKeys.create.products")} required error={productsError}>
+            <div className="flex flex-wrap gap-2">
+              {API_KEY_PRODUCTS.map((item) => (
+                <label key={item} data-surface-tint="accent" className={CHOICE_CLASS}>
+                  {/* 製品の複数選択。選択肢が 3 つだけなので、ネイティブの checkbox をラベルで包む。 */}
+                  <input
+                    type="checkbox"
+                    name="api-key-products"
+                    value={item}
+                    checked={products.includes(item)}
+                    onChange={(event) => toggleProduct(item, event.currentTarget.checked)}
+                    className="accent-accent-emphasis"
+                    data-testid={`api-key-product-${item}`}
+                  />
+                  {t(`apiKeys.product.${item}`)}
+                </label>
+              ))}
+            </div>
+          </Fieldset>
+          {agentSelected && agentScopeOptions !== undefined ? (
+            <div className="grid gap-3">
+              <Fieldset role="radiogroup" legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
+                <div className="flex flex-wrap gap-2">
+                  {(["all", "selected"] as const).map((mode) => (
+                    <label key={mode} data-surface-tint="accent" className={CHOICE_CLASS}>
+                      {/* 2 つから 1 つを選ぶ。選択肢が 2 つだけなので、ネイティブの radio をラベルで包む。 */}
+                      <input
+                        type="radio"
+                        name="api-key-agent-scope"
+                        value={mode}
+                        checked={agentScope === mode}
+                        onChange={() => setAgentScope(mode)}
+                        className="accent-accent-emphasis"
+                        data-testid={`api-key-agent-scope-${mode}`}
+                      />
+                      {t(`apiKeys.create.agentScope.${mode}`)}
+                    </label>
+                  ))}
+                </div>
+              </Fieldset>
+              {agentScope === "selected" ? (
+                <Fieldset legend={t("apiKeys.create.agentScope.selected")} required error={agentScopeError}>
+                  {agentScopeOptions.length === 0 ? (
+                    <p className="text-sm text-fg-muted">{t("apiKeys.create.agentScope.empty")}</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2" data-testid="api-key-agent-options">
+                      {agentScopeOptions.map((option) => (
+                        <label key={option.id} data-surface-tint="accent" className={CHOICE_CLASS}>
+                          {/* 業務 Agent の複数選択。件数が少ないので、ネイティブの checkbox をラベルで包む。 */}
+                          <input
+                            type="checkbox"
+                            name="api-key-agent-ids"
+                            value={option.id}
+                            checked={agentIds.includes(option.id)}
+                            onChange={(event) => toggleAgent(option.id, event.currentTarget.checked)}
+                            className="accent-accent-emphasis"
+                            data-testid={`api-key-agent-${option.id}`}
+                          />
+                          <span className="min-w-0 break-words">{option.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </Fieldset>
+              ) : null}
+            </div>
+          ) : agentSelected ? (
+            <p className="text-xs leading-5 text-fg-muted" data-testid="api-key-agent-scope-elsewhere">
+              {t("apiKeys.create.agentScope.elsewhere")}
+            </p>
+          ) : null}
+          <FormActionBar
+            ariaLabel={t("apiKeys.create.title")}
+            primaryActions={[
+              {
+                id: "create",
+                label: t("apiKeys.create.submit"),
+                icon: KeySquare,
+                loading: create.isPending,
+                disabled: atLimit,
+                onClick: submit,
+                testId: "api-key-create",
+              },
+            ]}
+            status={
+              create.error ? (
+                <FormStatus tone="danger" message={apiErrorMessage(create.error, t("apiKeys.operationFailed"))} />
+              ) : null
+            }
+          />
+          {created ? (
+            <OneTimeSecret
+              key={created.token}
+              id="api-key-created-token"
+              title={t("apiKeys.created.title")}
+              description={t("apiKeys.created.description")}
+              label={t("apiKeys.created.label")}
+              value={created.token}
+              copyLabel={t("apiKeys.created.copy")}
+              copiedMessage={t("apiKeys.created.copied")}
+              copyFailedMessage={t("apiKeys.created.copyFailed")}
+              doneLabel={t("apiKeys.created.done")}
+              onDone={() => setCreated(null)}
+              testId="api-key-created"
+              valueTestId="api-key-token"
+            />
+          ) : null}
+        </CardContent>
+      </Card>
 
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>{t("apiKeys.list.mine")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {keys.isLoading ? (
-              <TimedLoadingState label={t("apiKeys.list.loading")} testId="api-keys-loading">
-                <TableSkeleton columns={5} />
-              </TimedLoadingState>
-            ) : keys.error ? (
-              <ApiErrorState
-                error={keys.error}
-                fallback={t("apiKeys.list.loadFailed")}
-                retryLabel={t("apiKeys.retry")}
-                onRetry={() => void keys.refetch()}
-              />
-            ) : (
+      <Card className="min-w-0">
+        <CardHeader>
+          <CardTitle>{t("apiKeys.list.mine")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {keys.isLoading ? (
+            <TimedLoadingState label={t("apiKeys.list.loading")} testId="api-keys-loading">
+              <TableSkeleton columns={5} />
+            </TimedLoadingState>
+          ) : keys.error ? (
+            <ApiErrorState
+              error={keys.error}
+              fallback={t("apiKeys.list.loadFailed")}
+              retryLabel={t("apiKeys.retry")}
+              onRetry={() => void keys.refetch()}
+            />
+          ) : allKeys.length === 0 ? (
+            <EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />
+          ) : (
+            <div className="grid min-w-0 gap-2">
+              {/* 件数はツールバーの右の 1 か所（「全 N 件」。#1891）。 */}
+              <ListToolbar count={{ total: allKeys.length }} testId="my-api-key-list-toolbar" />
               <ApiKeysTable
                 keys={allKeys}
                 t={t}
                 showOwner={false}
                 onRevoke={(key) => void confirmRevoke(key)}
                 empty={<EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />}
+                pagingKey="myApiKeys"
+                paginationAriaLabel={t("apiKeys.list.pagerLabel")}
+                paginationTestId="my-api-keys-pagination"
               />
-            )}
-          </CardContent>
-        </Card>
-      </PageBody>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </>
   );
 }

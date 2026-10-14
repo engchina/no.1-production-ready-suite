@@ -44,6 +44,7 @@ from app.system_schema import (
     RUN_FACTS_DATA_TOOL_STATEMENTS,
     RUN_FACTS_SIGNAL_STATEMENTS,
     RUN_FACTS_STATEMENTS,
+    RUNTIME_CHECKPOINT_VERSION_STATEMENTS,
     RUNTIME_STATEMENTS,
     SystemSchemaError,
     SystemSchemaManager,
@@ -389,7 +390,21 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     )
     # 既存の DB では Runtime repository が作っていたテーブルを、migration 006 で管理対象にする。
     migration_006 = next(item for item in MIGRATIONS if item.name.startswith("20261002_006"))
-    assert migration_006.statements == (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS)
+    # 006 の DDL は適用済みの checksum を変えないよう、版の列を足す前の形で固定する（#1916）。
+    assert migration_006.statements[1:] == (*RUNTIME_STATEMENTS[1:], *CONTROL_PLANE_STATEMENTS)
+    assert "VERSION_NO" not in migration_006.statements[0]
+    assert migration_006.checksum == (
+        "5443fab145f3619005f31c0734de4af53fc66cad101d59ad7588546f1ca9594a"
+    )
+    # checkpoint の版と最後に書いたプロセス（#1916）は列を足すだけ（データを消さない）で、最新の
+    # 形の CREATE TABLE にもある。適用の後は動いている backend が checkpoint を読み直す。
+    migration_015 = next(item for item in MIGRATIONS if item.name.startswith("20261015_015"))
+    assert migration_015.statements == RUNTIME_CHECKPOINT_VERSION_STATEMENTS
+    assert not migration_015.destructive
+    assert migration_015.rewrites == frozenset({"runtime"})
+    for column in ("VERSION_NO NUMBER(19) DEFAULT 0 NOT NULL", "WRITER_ID VARCHAR2(200)"):
+        assert any(f"ADD ({column})" in statement for statement in migration_015.statements)
+        assert column in RUNTIME_STATEMENTS[0]
     # 既存の DB には migration 007 で Run の事実のテーブルと索引を足す（#794）。
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
     # 007 の DDL は適用済みの checksum を変えないよう、列を足す前の形で固定する（#1822）。

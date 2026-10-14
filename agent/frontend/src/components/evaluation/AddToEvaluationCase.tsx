@@ -4,6 +4,7 @@ import { ClipboardPlus } from "lucide-react";
 import {
   Disclosure,
   FormActionBar,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   SelectField,
@@ -198,10 +199,11 @@ function CaseForm({
         submit();
       }}
     >
-      <div className="grid gap-3 @2xl:grid-cols-2">
+      <FormGrid>
         <SelectField<string>
           id={`${testId}-set`}
           label={t("evaluation.add.set")}
+          width="lg"
           required
           value={setId}
           options={options}
@@ -217,6 +219,7 @@ function CaseForm({
           <TextField
             id={`${testId}-new-set-name`}
             label={t("evaluation.add.newSetName")}
+            width="md"
             required
             maxLength={100}
             value={newName}
@@ -233,7 +236,8 @@ function CaseForm({
           value={question}
           error={submitted ? errors.question : undefined}
           onValueChange={setQuestion}
-          className="@2xl:col-span-full"
+          width="full"
+          className="col-span-full"
         />
         <TextareaField
           id={`${testId}-expected`}
@@ -245,7 +249,8 @@ function CaseForm({
           value={expected}
           error={submitted ? errors.expected : undefined}
           onValueChange={setExpected}
-          className="@2xl:col-span-full"
+          width="full"
+          className="col-span-full"
         />
         <TextField
           id={`${testId}-tools`}
@@ -253,9 +258,10 @@ function CaseForm({
           helper={draft.expected_tools.length ? t("evaluation.add.toolsFromRun") : t("evaluation.set.expectedToolsHelper")}
           value={tools}
           onValueChange={setTools}
-          className="@2xl:col-span-full"
+          width="full"
+          className="col-span-full"
         />
-      </div>
+      </FormGrid>
       <FormActionBar
         ariaLabel={t("evaluation.add.actions")}
         primaryActions={[

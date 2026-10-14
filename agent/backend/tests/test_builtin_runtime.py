@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import re
 from collections.abc import Iterator
@@ -36,6 +37,7 @@ from app.features.agent.runtime import (
     ThreadNotFoundError,
     automation_approval_message,
     builtin_resume_pending,
+    get_runtime_repository,
     mcp_approval_message,
     runtime_repository,
 )
@@ -1307,6 +1309,51 @@ def test_thread_api_renames_and_deletes(monkeypatch: MonkeyPatch, calls: _Calls)
     assert client.get(f"/api/threads/{thread_id}").status_code == 404
     listed = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]["items"]
     assert thread_id not in {item["thread_id"] for item in listed}
+
+
+def test_thread_api_writes_storage_off_the_event_loop(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """会話の名前の変更・削除は、保存先への書き込みを threadpool で待つ（#1935）。
+
+    Oracle の checkpoint の書き込みは数秒〜十数秒かかることがあり、event loop の上で待つと
+    ほかの要求（作成中の回答の stream など）も止まる。
+    """
+    del calls
+    from security_support import client
+
+    repository = get_runtime_repository()
+    where: list[tuple[str, bool]] = []
+
+    def record(name: str) -> None:
+        original = getattr(repository, name)
+
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                asyncio.get_running_loop()
+                on_loop = True
+            except RuntimeError:
+                on_loop = False
+            where.append((name, on_loop))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(repository, name, wrapper)
+
+    monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
+    created = client.post("/api/runs", json={"goal": "最初の質問", "agent_id": AGENT_ID})
+    assert created.status_code == 200, created.text
+    run_id = created.json()["data"]["id"]
+    thread_id = created.json()["data"]["thread_id"]
+    assert client.post(f"/api/runs/{run_id}/cancel").status_code == 200
+    for name in ("get_thread", "rename_thread", "delete_thread"):
+        record(name)
+
+    renamed = client.patch(f"/api/threads/{thread_id}", json={"title": "売上の確認"})
+    assert renamed.status_code == 200, renamed.text
+    assert client.delete(f"/api/threads/{thread_id}").status_code == 200
+
+    assert {name for name, _ in where} == {"get_thread", "rename_thread", "delete_thread"}
+    assert [name for name, on_loop in where if on_loop] == []
 
 
 def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls) -> None:

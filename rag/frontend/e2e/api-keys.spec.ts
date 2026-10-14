@@ -8,9 +8,11 @@ import {
   mockDatabaseReady,
   openSidebarNav,
 } from "./_helpers";
+import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 
 // 外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通の画面。#1805）。
-// 自分のキーはアカウントのメニューから開き（メニュー権限なし）、全員のキーは「ユーザーとロール」の管理の画面。
+// 自分のキーはアカウントの画面の「API キー」のタブ（サイドナビのアカウントの欄から開く。メニュー権限なし。#1873）、
+// 全員のキーは「ユーザーとロール」の管理の画面。
 
 const TOKEN = "prak_0123456789abcdef_" + "S".repeat(43);
 
@@ -69,16 +71,19 @@ async function mockMyKeys(page: Page) {
 }
 
 test.describe("API キー", { tag: "@responsive" }, () => {
-  test("アカウントのメニューから自分のキーを発行し、秘密を 1 回だけ見て、失効できる（権限なし）", async ({ page }) => {
+  test("アカウントの画面の「API キー」のタブで自分のキーを発行し、秘密を 1 回だけ見て、削除できる（権限なし）", async ({ page }) => {
     const calls = await mockMyKeys(page);
     // 自分のキーの画面はメニュー権限を要しない（検索だけの利用者）。
     await mockAuthUser(page, { permissions: ["menu.search"] });
 
     await page.goto("/search");
     const sidebar = await openSidebarNav(page);
-    await sidebar.getByRole("button", { name: "API キー" }).click();
-    await expect(page).toHaveURL(/\/account\/api-keys$/);
-    await expect(page.getByRole("heading", { name: "API キー", level: 1 })).toBeVisible();
+    // 個人の「API キー」はサイドナビの行に無く、アカウントの欄から開くアカウントの画面のタブ（#1873）。
+    await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
+    await sidebar.getByRole("link", { name: /^アカウント設定を開く/ }).click();
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "API キー" })).toHaveAttribute("aria-selected", "true");
     // 開発の dev server（base が /）では開いている製品の URL だけを出す。
     await expect(page.getByTestId("api-keys-endpoint-rag")).toContainText("/api/mcp");
 
@@ -134,8 +139,13 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(page.getByTestId("api-key-token")).toHaveCount(0);
 
     await page.getByTestId("api-key-row-actions-0123456789abcdef-trigger").click();
-    await page.getByRole("menuitem", { name: "失効" }).click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "失効" }).click();
+    // 「削除」は 1 つの操作。確認のダイアログで、すぐに使えなくなり元に戻せないことを伝える（#1873）。
+    await page.getByRole("menuitem", { name: "削除" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("「会社の PC の Claude Code」を削除しますか");
+    await expect(dialog).toContainText("すぐに使えなくなり、元に戻せません");
+    await dialog.getByRole("button", { name: "削除" }).click();
+    await expect(page.getByText("API キーを削除しました")).toBeVisible();
     await expect(page.getByText("API キーはまだありません。")).toBeVisible();
     expect(calls.revoked).toEqual(["0123456789abcdef"]);
   });
@@ -174,3 +184,89 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(page).toHaveURL(/\/forbidden$/);
   });
 });
+
+// 一覧の件数とページ送り（#1891）: 件数は検索欄と同じ行の右の ListCount 1 か所（高さ・中心をそろえる）、
+// ページ送りは表の直下の advanced（範囲・表示件数・最初へ・前へ・ページ番号・次へ・最後へ）で 1 ページなら出さない。
+// ページ番号と表示件数は作業状態（sessionStorage）に残る。
+function manyKeys(count: number): KeyPayload[] {
+  return Array.from({ length: count }, (_, index) => {
+    const id = String(index + 1).padStart(16, "0");
+    return key({ id, name: `キー ${String(index + 1).padStart(2, "0")}`, token_prefix: `prak_${id}_SSSS` });
+  });
+}
+
+async function useTheme(page: Page, theme: "light" | "dark") {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+  }, theme);
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`API キーの一覧の件数とページ送り（全員のキー・自分のキー、${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await useTheme(page, theme);
+    await mockDatabaseReady(page);
+    let adminKeys = manyKeys(1);
+    await page.route("**/api/security/api-keys**", (route) => route.fulfill({ json: apiEnvelope({ keys: adminKeys }) }));
+    let myKeys = manyKeys(1);
+    await page.route("**/api/account/api-keys**", (route) =>
+      route.fulfill({ json: apiEnvelope({ keys: myKeys, public_base_url: "" }) })
+    );
+    await mockAuthUser(page, { permissions: ["menu.search", "menu.security_api_keys"] });
+    const wide = (page.viewportSize()?.width ?? 0) >= 640;
+
+    // 1 件: 件数は「全 1 件」、ページ送りは出さない。件数は検索欄と同じ行で、縦の中心がそろう。
+    await page.goto("/settings/security/api-keys");
+    const toolbar = page.getByTestId("api-key-list-toolbar");
+    const count = toolbar.locator("[data-list-count]");
+    await expect(count).toHaveText("全 1 件");
+    await expect(page.getByTestId("api-keys-admin-pagination")).toHaveCount(0);
+    if (wide) {
+      const searchBox = await page.locator("#api-key-search").boundingBox();
+      const countBox = await count.boundingBox();
+      expect(searchBox && countBox).toBeTruthy();
+      if (searchBox && countBox) {
+        expect(Math.abs(searchBox.y + searchBox.height / 2 - (countBox.y + countBox.height / 2))).toBeLessThan(2);
+      }
+    }
+    expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+    expect(await findClippedPlaceholders(page)).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`api-keys-admin-1-${theme}.png`), fullPage: true });
+
+    // 23 件: 10 件ずつ、ページ番号を入れて移り、表示件数を変えると 1 ページ目へ。再読込でもページと件数が残る。
+    adminKeys = manyKeys(23);
+    await page.reload();
+    await expect(count).toHaveText("全 23 件");
+    const pagination = page.getByTestId("api-keys-admin-pagination");
+    await expect(pagination).toContainText("1–10 / 23 件");
+    await expect(page.getByRole("table", { name: "API キーの一覧" }).locator("tbody tr")).toHaveCount(10);
+    await jumpToPage(pagination, 3);
+    await expect(pagination).toContainText("21–23 / 23 件");
+    await page.reload();
+    await expect(pagination).toContainText("21–23 / 23 件");
+    await pagination.getByRole("combobox", { name: "表示件数" }).click();
+    await page.getByRole("option", { name: "25 件" }).click();
+    await expect(pagination).toContainText("1–23 / 23 件");
+    await expect(page.getByRole("table", { name: "API キーの一覧" }).locator("tbody tr")).toHaveCount(23);
+    // 検索で絞ると「N 件（全 M 件）」。
+    await page.locator("#api-key-search").fill("キー 1");
+    await expect(count).toHaveText(/^\d+ 件（全 23 件）$/);
+    expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: testInfo.outputPath(`api-keys-admin-23-${theme}.png`), fullPage: true });
+
+    // 自分のキー（アカウントの画面）: 1 件はページ送りなし、12 件は表の直下にページ送り。
+    await page.goto("/account?tab=api-keys");
+    const myCount = page.getByTestId("my-api-key-list-toolbar").locator("[data-list-count]");
+    await expect(myCount).toHaveText("全 1 件");
+    await expect(page.getByTestId("my-api-keys-pagination")).toHaveCount(0);
+    myKeys = manyKeys(12);
+    await page.reload();
+    await expect(myCount).toHaveText("全 12 件");
+    const myPagination = page.getByTestId("my-api-keys-pagination");
+    await expect(myPagination).toContainText("1–10 / 12 件");
+    await myPagination.getByRole("button", { name: "次へ" }).click();
+    await expect(myPagination).toContainText("11–12 / 12 件");
+    expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+    expect(await findClippedPlaceholders(page)).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`api-keys-mine-12-${theme}.png`), fullPage: true });
+  });
+}

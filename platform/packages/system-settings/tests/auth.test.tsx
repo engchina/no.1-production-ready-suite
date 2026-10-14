@@ -201,6 +201,13 @@ describe("認証画面", () => {
     expect(html).toContain("ログイン");
   });
 
+  it("ログイン画面は「パスワードを忘れた場合」の案内を同じ画面に開ける（#1873。メールの送信は無い）", () => {
+    const html = render(<LoginPage brand={brand} routes={routes} entryRoute={() => "/"} />);
+    expect(html).toContain('data-testid="auth-login-forgot-password"');
+    expect(html).toContain("パスワードを忘れた場合");
+    expect(html).toContain("<details");
+  });
+
   it("文言は messages で一部だけ上書きできる", () => {
     const html = render(
       <LoginPage

@@ -46,8 +46,7 @@ export const DATABASE_MESSAGES = {
   "settings.adb.operationStatus.not_configured": "未設定",
   "settings.adb.operationStatus.success": "成功",
   "settings.adb.operational.lifecycle": "OCI ADB",
-  "settings.adb.placeholder.ocidEmpty":
-    "ADB OCID が設定されていません（platform/.env で設定）",
+  "settings.adb.placeholder.ocidEmpty": "未設定（platform/.env で設定）",
   "settings.adb.processing.refresh": "Autonomous Database の情報と Wallet を取得しています",
   "settings.adb.processing.start": "Autonomous Database を起動しています",
   "settings.adb.processing.stop": "Autonomous Database を停止しています",

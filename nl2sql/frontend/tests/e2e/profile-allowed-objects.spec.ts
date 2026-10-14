@@ -3147,15 +3147,15 @@ test("引用符付きで保存された許可オブジェクトもチェック�
   await expect(viewList).toContainText("選択 0 件");
 });
 
-test("手動更新の失敗通知はクエリ再描画で消えない", async ({ page }) => {
+test("手動更新の失敗通知はクエリ再描画で消えない", { tag: "@responsive" }, async ({ page }) => {
   await mockProfileApi(page);
 
-  let headRequests = 0;
   // mockProfileApi より後に登録した route が優先される。
-  // 初回ロードは成功させ、更新操作の再取得だけ失敗させる。
+  // 初回の読込（画面の取り直しを含む）は成功させ、ヘッダーの「最新情報を取得」の後の再取得だけ失敗させる。
+  // 初回の読込は catalog/head を 2 回取りうるので、回数ではなく操作の前後で切り替える（#1922）。
+  let failHead = false;
   await page.route("**/api/schema/catalog/head", async (route) => {
-    headRequests += 1;
-    if (headRequests === 1) {
+    if (!failHead) {
       await fulfillJson(route, {
         catalog_version: 1,
         schema_fingerprint: "fingerprint",
@@ -3172,10 +3172,20 @@ test("手動更新の失敗通知はクエリ再描画で消えない", async ({
 
   await page.goto("/profiles");
   await expect(page.getByTestId("profile-management-list")).toBeVisible();
-
-  await page.getByRole("button", { name: "最新情報を取得" }).click();
-
   const notice = page.getByText("プロファイルの読込に失敗しました。");
+  await expect(notice).toHaveCount(0);
+
+  failHead = true;
+  // ヘッダーの「最新情報を取得」。lg 未満（375px）では「その他の操作」のメニューに畳まれる。
+  const actions = page.getByTestId("profile-management-actions");
+  const refreshButton = actions.getByRole("button", { name: "最新情報を取得", exact: true });
+  if (await refreshButton.isVisible()) {
+    await refreshButton.click();
+  } else {
+    await actions.getByRole("button", { name: "その他の操作" }).click();
+    await page.getByRole("menuitem", { name: "最新情報を取得", exact: true }).click();
+  }
+
   await expect(notice).toBeVisible();
   // 再取得完了後の再描画でも保持され続ける(別 state で持つ)。
   await expect(notice).toBeVisible({ timeout: 3_000 });

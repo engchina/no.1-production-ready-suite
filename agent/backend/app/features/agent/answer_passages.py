@@ -1055,15 +1055,27 @@ def environment_check_passages(answer: str) -> set[str]:
 # あいさつ・お礼の決まった文（#1879。「こんにちは。ご用件をお知らせください。」の
 # 「こんにちは。」）。語を固定し、事実の語が入る余地を置かない。あいさつだけで質問・依頼の無い
 # 回答は、質問が無いので確認の質問だけの回答にならない。
+# お礼への返事（「どういたしまして。」「お役に立ててよかったです。」）も含める（#1929）。
 _GREETING_PATTERN = (
-    r"(?:こんにちは|こんばんは|おはようございます|お疲れ(?:さま|様)です|はじめまして|初めまして"
-    r"|いつもお世話になっております|(?:どうも)?ありがとうございます)[。．！!]?"
+    r"(?:こんにちは|こんばんは|おはよう(?:ございます)?|お疲れ(?:さま|様)です|はじめまして|初めまして"
+    r"|いつもお世話になっております|(?:どうも)?ありがとう(?:ございます|ございました)?"
+    r"|こちらこそ(?:[、,]?ありがとうございます)?|どういたしまして"
+    r"|お役に立て(?:て|たなら)(?:よかった|良かった|うれしい|嬉しい)です)[。．！!]?"
 )
 _GREETING = re.compile(_GREETING_PATTERN)
+# 利用者の入力・回答の結びのくだけたあいさつ（「よろしく」「どうも」「お疲れさま」。#1929）。
+# 利用者の入力があいさつだけか（`is_greeting_only`）と、確認の質問に添える前置きにだけ使う
+# （回答があいさつを含むか（`greets`）には数えない。確認の質問の結びの「よろしくお願いします。」で
+# 本文の聞き返しの差し戻しを外さない）。
+_CASUAL_GREETING_PATTERN = (
+    r"(?:どうも|お疲れ(?:さま|様)|(?:こちらこそ[、,]?)?(?:どうぞ)?よろしく"
+    r"(?:お願い(?:します|いたします|致します))?)[。．！!]?"
+)
+_ANY_GREETING = re.compile(_GREETING_PATTERN + r"|" + _CASUAL_GREETING_PATTERN)
 # 確認の質問に添える前置きと答え方の案内（#1454）。確認の質問だけの回答かの判定にだけ使い、
 # 段落の判定（`non_claim_passages`）は変えない。
 _CLARIFY_NOTE = re.compile(
-    _GREETING_PATTERN + r"|"
+    _GREETING_PATTERN + r"|" + _CASUAL_GREETING_PATTERN + r"|"
     # 前置き（「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」）。
     r".*(?:確認|確かめ)させて(?:ください|下さい|いただきます|いただけますか)[。．]?"
     r"|.*(?:が|は)(?:まだ)?(?:分かって|わかって|決まって|伺って|お聞きして)いません[。．]?"
@@ -1130,7 +1142,54 @@ def greets(text: str) -> bool:
 def is_greeting_only(text: str) -> bool:
     """あいさつ・お礼の決まった文だけか（利用者の質問が「こんにちは」だけなど）。"""
     sentences = _sentences(text)
-    return bool(sentences) and all(_GREETING.fullmatch(sentence) for sentence in sentences)
+    return bool(sentences) and all(_ANY_GREETING.fullmatch(sentence) for sentence in sentences)
+
+
+# 用件（何を知りたいか）を聞く質問の決まった形（#1929。「社内の規程や手順について、知りたいことを
+# お知らせください。」「何についてお調べしましょうか？」）。対象（文書・システム・期間など）を
+# 確かめる確認の質問とは分ける。前に付く「〜について」はスキルの対象の範囲を示すだけで、数字・
+# 逆接・操作を含む文は除く（`asks_for_request`）。
+_ASK_REQUEST = re.compile(
+    r"(?:[^。？?!！]{0,40}?について[、,]?\s*)?"
+    r"(?:ほかに|他に)?[、,]?\s*(?:何か|なにか)?[、,]?\s*"
+    r"(?:(?:どのような|どんな)?(?:ご用件|ご用|ご質問|お問い合わせ|ご相談|お調べしたいこと"
+    r"|調べたいこと|知りたいこと|お知りになりたいこと|お困りのこと|お手伝いできること)"
+    r"|(?:何|なに)(?:を|について)(?:お調べ|調べ|お手伝い)|どのようなこと|どんなこと)"
+    r"[^。？?!！]{0,30}?(?:[？?]|(?:お知らせ|お聞かせ|教えて|お申し付け)(?:ください|下さい))"
+    r"[。．!！]?"
+)
+
+
+def asks_for_request(answer: str) -> bool:
+    """用件（何を知りたいか）を聞くだけの回答か（#1929）。
+
+    あいさつ・お礼・質問でない入力（「テスト」）に、ツールを呼ばずに用件を聞いて返す回答
+    （「社内の規程や手順について、知りたいことをお知らせください。」）。確認の質問だけの回答
+    （`is_clarification_only`）で、質問の段落がすべて用件を聞く決まった形のもの。質問の解釈を
+    確かめる確認の質問（「どのシステムの申請ですか？」）は含めない。
+    """
+    if not is_clarification_only(answer):
+        return False
+    kinds = non_claim_passages(answer)
+    asked = False
+    for line in answer.split("\n"):
+        for _start, _end, text in passage_spans(line):
+            if kinds.get(text) != KIND_QUESTION and not _is_clarification_question(text):
+                continue
+            value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+            sentences = [value[start:end].strip() for start, end in sentence_ranges(value)]
+            for sentence in (item for item in sentences if item):
+                if _CLARIFY_NOTE.fullmatch(sentence) and not is_question(sentence):
+                    continue
+                if (
+                    not _ASK_REQUEST.fullmatch(sentence)
+                    or _ADVERSATIVE.search(sentence)
+                    or _OPERATION.search(sentence)
+                    or re.search(r"[0-9０-９]", sentence)
+                ):
+                    return False
+                asked = True
+    return asked
 
 
 def is_clarification_only(answer: str) -> bool:
@@ -1197,6 +1256,7 @@ __all__ = [
     "KIND_TABLE",
     "KIND_UNVERIFIED",
     "asks_environment_data",
+    "asks_for_request",
     "case_label",
     "case_labels",
     "environment_check_passages",

@@ -36,8 +36,8 @@ interface Screen {
 /** サイドナビの全項目（nav-config.ts の並び）。 */
 const SCREENS: Screen[] = [
   { path: "/chat" },
-  { path: "/runs" },
   { path: "/approvals" },
+  { path: "/runs" },
   { path: "/agents" },
   { path: "/skills" },
   { path: "/automations" },
@@ -58,6 +58,38 @@ const SCREENS: Screen[] = [
   { path: "/settings/database" },
   { path: "/settings/appearance" },
 ];
+
+/**
+ * サイドナビの行に無い画面（#1873。アカウントの画面はサイドナビの下部のアカウントの欄から開く）。
+ * SCREENS と同じく axe と通知の置き場所を確かめ、「ナビの全項目」の比較には含めない。
+ */
+const NON_NAV_SCREENS: Screen[] = [
+  { path: "/account", setup: seedApiKeys },
+  { path: "/account?tab=password" },
+];
+
+/** 自分の API キー（有効なキーと期限切れのキー）。 */
+function seedApiKeys(mockApi: MockApi) {
+  const key = (id: string, name: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    name,
+    token_prefix: `prak_${id}_E2Ex`,
+    products: ["rag", "nl2sql", "agent"],
+    resource_scopes: {},
+    owner_user_uuid: "11111111-1111-1111-1111-111111111111",
+    owner_display_name: "利用者 一郎",
+    created_at: MOCK_NOW,
+    expires_at: "2027-01-12T00:00:00Z",
+    last_used_at: MOCK_NOW,
+    expired: false,
+    ...overrides,
+  });
+  mockApi.state.apiKeys.keys = [
+    key("0123456789abcdef", "会社の PC の Claude Code"),
+    key("fedcba9876543210", "検証用", { products: ["agent"], expires_at: "2026-09-01T00:00:00Z", expired: true }),
+  ];
+  mockApi.state.apiKeys.publicBaseUrl = "https://203.0.113.10";
+}
 
 function seedRun(mockApi: MockApi, id: string, status: string, approvals: Record<string, unknown>[] = []) {
   mockApi.state.runs.unshift({
@@ -202,6 +234,11 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
         await openAndCheck(page, mockApi, testInfo, screen, theme);
       });
     }
+    for (const screen of NON_NAV_SCREENS) {
+      test(`${screen.path}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page, mockApi }, testInfo) => {
+        await openAndCheck(page, mockApi, testInfo, screen, theme);
+      });
+    }
     for (const state of STATES) {
       test(`${state.name}（${theme}）に WCAG 2.1 A / AA の serious / critical の違反が無い`, async ({ page, mockApi }, testInfo) => {
         await openAndCheck(page, mockApi, testInfo, state, theme);
@@ -211,8 +248,8 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
   // #1728: 通知（Toast）の決まった置き場所（desktop は画面の右下、375px は上端のバー）が、主操作（PageHeader の
   // ページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信・ページの末尾の操作）と重ならない。
   // 通知は本文より上に重なるので、重なると操作が隠れる（WCAG 2.2 の 2.4.11 Focus Not Obscured の考え方）。
-  for (const screen of SCREENS) {
-    test(`${pathOf(screen)} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+  for (const screen of [...SCREENS, ...NON_NAV_SCREENS]) {
+    test(`${screen.path} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page, mockApi }) => {
       await openScreen(page, mockApi, screen, "light");
       await expectMainActionsClearOfToast(page);
     });

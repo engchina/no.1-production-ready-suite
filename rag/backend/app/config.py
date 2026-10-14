@@ -1093,6 +1093,78 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
         ),
     )
+    rag_answer_audit_compact_reasons: bool = Field(
+        default=False,
+        description=(
+            "(既定 OFF。#1912)生成後の監査の reason を、判定が通った説明"
+            "(supported かつ matched)と答えている要求(addressed)では空文字にさせる。"
+            "監査の見える出力は約 5 割減るが、同じ入力の対の比較で監査が甘くなった"
+            "(通らなかった判定が 5 件 → 1 件)ため既定では使わない。品質評価の比較用。"
+        ),
+    )
+    rag_answer_max_correction_rounds: int = Field(
+        default=2,
+        ge=0,
+        le=2,
+        description=(
+            "回答文の生成と根拠確認の是正の組(作り直し)の回数の上限(#1912。0〜2。"
+            "既定 2 は従来と同じ)。是正 1 組は生成と監査の LLM の呼び出しを 1 回ずつ足す"
+            "(#1864 の記録で 1 組 5〜63 秒)。"
+            "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
+        ),
+    )
+    rag_answer_partial_correction: bool = Field(
+        default=False,
+        description=(
+            "(#1924。既定 OFF)回答文の生成と根拠確認の是正の組(作り直し)で、指摘の説明の書き直しと"
+            "新しい説明だけを生成させ、支持済みの説明は前の組の並びのまま引き継ぐ"
+            "(引き継いだ説明もその組の監査に掛ける。#1011)。是正の組の生成の出力"
+            "(約 180 token/秒で秒に比例する)を減らすための設定。openai.gpt-oss-120b では"
+            "指示しても支持済みの説明の約 5〜6 割を書き直し、"
+            "出力が減らなかったため既定では使わない。"
+        ),
+    )
+    rag_llm_stall_detection_enabled: bool = Field(
+        default=True,
+        description=(
+            "(#1926)回答(検索の回答・チャット)の LLM の呼び出しを streaming で受け、"
+            "停滞した呼び出しを打ち切って同じ要求を送り直す。OCI Enterprise AI の呼び出しは"
+            "まれ(記録の約 1%)に通常の 1/10 以下の速さ(13〜23 token/秒。中央値 224)に落ち、"
+            "同じ token 数で 36 秒 → 183 秒かかった。"
+            "判定の基準は同じ接続・モデルの直近の完了した呼び出し(3 回以上)から学ぶ。"
+            "回答の期限の無い呼び出し(取込など)は従来どおり streaming しない。"
+        ),
+    )
+    rag_llm_stall_idle_seconds: float = Field(
+        default=20.0,
+        ge=5.0,
+        le=120.0,
+        description=(
+            "(#1926)応答の event(最初の event を含む)がこの秒だけ来なければ停滞として打ち切る。"
+            "直近の呼び出しの最大の間隔の 3 倍が長ければそちら(推論を stream しないモデル)。"
+            "記録では最初の event まで 0.1〜0.2 秒、event の間隔は 1 秒未満。"
+        ),
+    )
+    rag_llm_stall_min_rate_ratio: float = Field(
+        default=0.25,
+        gt=0.0,
+        le=0.9,
+        description=(
+            "(#1926)直近 10 秒の出力の速さ(delta の event/秒)が、直近の完了した呼び出しの"
+            "速さの中央値のこの割合を下回れば停滞として打ち切る。"
+            "記録の 10 パーセンタイルは中央値の約 0.65、遅い呼び出しは約 0.06〜0.1。"
+        ),
+    )
+    rag_llm_stall_resends: int = Field(
+        default=1,
+        ge=0,
+        le=2,
+        description=(
+            "(#1926)停滞で打ち切って送り直す回数の上限(LLM の呼び出し 1 回あたり)。"
+            "最後の送信は停滞を検出せずに回答の期限まで待つ。"
+            "0 は打ち切らない(streaming の時刻の記録だけ)。"
+        ),
+    )
     rag_section_skip_regrade_at_scope: bool = Field(
         default=True,
         description=(

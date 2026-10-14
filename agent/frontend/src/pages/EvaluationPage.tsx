@@ -18,10 +18,11 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   ListSkeleton,
   MessageText,
-  offsetForPage,
+  ListToolbar,
   OffsetPagination,
   PageBody,
   PageHeader,
+  PAGE_SIZE_OPTIONS,
   ProcessingIndicator,
   RowActionMenu,
   RowTitleButton,
@@ -41,7 +42,8 @@ import {
 } from "@production-ready/ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedPage } from "@/components/ListViews";
+import { listTotal } from "@/components/ListFilters";
+import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
 import { EvaluationCompare } from "@/components/evaluation/EvaluationCompare";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
@@ -241,7 +243,8 @@ function EvaluationOverview({
     queryFn: () => agentApi.listEvaluationSets(agentId),
     enabled: Boolean(agentId),
   });
-  const [jobsPage, setJobsPage] = usePersistedPage("evaluationJobs");
+  // 最近の評価のページと表示件数（作業状態。#1891）。
+  const jobsPaging = usePersistedServerPaging("evaluationJobs");
   // 最新の評価（1 ページ目）。表示する評価の既定と、実行中の評価の有無に使う。
   // 一覧が 1 ページ目のときは同じ query key なので 1 回だけ取得する。
   const latest = useQuery({
@@ -256,8 +259,10 @@ function EvaluationOverview({
     },
   });
   const jobs = useQuery({
-    queryKey: ["evaluations", jobsPage],
-    queryFn: () => agentApi.listEvaluations({ offset: offsetForPage(jobsPage, JOBS_PAGE_SIZE), limit: JOBS_PAGE_SIZE }),
+    // 既定の件数の 1 ページ目は `latest` と同じ query key（1 回だけ取得する）。
+    queryKey:
+      jobsPaging.limit === JOBS_PAGE_SIZE ? ["evaluations", jobsPaging.page] : ["evaluations", jobsPaging.page, jobsPaging.limit],
+    queryFn: () => agentApi.listEvaluations({ offset: jobsPaging.offset, limit: jobsPaging.limit }),
     // ページを送っている間は今のページを出したまま取り直す。
     placeholderData: keepPreviousData,
   });
@@ -472,6 +477,7 @@ function EvaluationOverview({
               <EmptyState title={t("evaluation.jobs.empty")} hint={t("evaluation.jobs.emptyHint")} />
             ) : (
               <div className="grid min-w-0 gap-2">
+                <ListToolbar count={listTotal(jobs.data.total)} testId="evaluation-jobs-toolbar" />
                 <JobsTable
                   jobs={jobs.data.items}
                   shownJobId={shownJobId}
@@ -483,7 +489,9 @@ function EvaluationOverview({
                   limit={jobs.data.limit}
                   total={jobs.data.total}
                   count={jobs.data.items.length}
-                  onPageChange={(page) => setJobsPage(page)}
+                  onPageChange={(page) => jobsPaging.setPage(page)}
+                  onPageSizeChange={jobsPaging.setPageSize}
+                  pageSizeOptions={PAGE_SIZE_OPTIONS}
                   labels={agentPaginationLabels()}
                   ariaLabel={t("evaluation.jobs.pagerLabel")}
                   testId="evaluation-jobs-pagination"
@@ -600,14 +608,17 @@ function SetsTable({
     },
   ];
   return (
-    <PagedDataTable<EvaluationSetItem>
-      pageKey="evaluationSets"
-      rows={sets}
-      columns={columns}
-      getRowKey={(item) => item.id}
-      ariaLabel={t("evaluation.sets.label")}
-      tableClassName="w-full min-w-[51rem]"
-    />
+    <div className="grid min-w-0 gap-2">
+      <ListToolbar count={listTotal(sets.length)} testId="evaluation-sets-toolbar" />
+      <PagedDataTable<EvaluationSetItem>
+        pageKey="evaluationSets"
+        rows={sets}
+        columns={columns}
+        getRowKey={(item) => item.id}
+        ariaLabel={t("evaluation.sets.label")}
+        tableClassName="w-full min-w-[51rem]"
+      />
+    </div>
   );
 }
 
@@ -811,15 +822,18 @@ function ResultsTable({
     },
   ];
   return (
-    <PagedDataTable<EvaluationCaseResult>
-      pageKey="evaluationResults"
-      rows={results}
-      columns={columns}
-      getRowKey={(result) => result.case.id}
-      ariaLabel={t("evaluation.results.label")}
-      tableClassName="w-full min-w-[54rem]"
-      resetKey={jobId}
-    />
+    <div className="grid min-w-0 gap-2">
+      <ListToolbar count={listTotal(results.length)} testId="evaluation-results-toolbar" />
+      <PagedDataTable<EvaluationCaseResult>
+        pageKey="evaluationResults"
+        rows={results}
+        columns={columns}
+        getRowKey={(result) => result.case.id}
+        ariaLabel={t("evaluation.results.label")}
+        tableClassName="w-full min-w-[54rem]"
+        resetKey={jobId}
+      />
+    </div>
   );
 }
 

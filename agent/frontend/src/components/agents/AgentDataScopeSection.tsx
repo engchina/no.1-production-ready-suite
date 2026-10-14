@@ -214,6 +214,8 @@ function DataScopeCard({
               id={fieldId}
               label={t(keys.label)}
               helper={t(modeHint[mode])}
+              // 対象の選択（検索・回答プロファイル / 業務プロファイル）は lg（#1891）。
+              width="lg"
               options={options}
               selectedOptions={selectedOptions}
               value={ids}
@@ -234,6 +236,7 @@ function DataScopeCard({
                 id={`${fieldId}-default`}
                 label={t(keys.defaultLabel)}
                 helper={t("agent.dataScope.defaultHint")}
+                width="lg"
                 required
                 disabled={disabled || readOnly}
                 value={scope.default_profile_id}

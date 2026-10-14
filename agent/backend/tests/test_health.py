@@ -23,6 +23,7 @@ os.environ["AGENT_CORS_ORIGINS"] = '["http://localhost:3002"]'
 import anyio
 import httpx
 import pytest
+from checkpoint_support import CheckpointTable
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from mcp_support import fake_product_mcp
@@ -216,6 +217,8 @@ class _FakeOracleStore:
     def __init__(self) -> None:
         self.created_objects: set[str] = set()
         self.snapshot_by_key: dict[str, str] = {}
+        # Run の checkpoint の版つきの読み書き（#1916。行は snapshot_by_key と共有する）。
+        self.checkpoints = CheckpointTable(rows=self.snapshot_by_key)
         self.rows_by_table: dict[str, list[dict[str, Any]]] = {}
         self.session_statements: list[str] = []
         self.executed_statements: list[str] = []
@@ -245,6 +248,7 @@ class _FakeOracleCursor:
         self._connection = connection
         self._row: tuple[Any, ...] | None = None
         self._rows: list[tuple[Any, ...]] = []
+        self.rowcount = 0
 
     def _lob(self, value: Any) -> Any:
         # JSON の CLOB 列を LOB として返す（文字列のまま返すと閉じた後の読み出しを検出できない）。
@@ -284,10 +288,9 @@ class _FakeOracleCursor:
                 raise RuntimeError("ORA-00955: name is already used by an existing object")
             self._store.created_objects.add(object_name)
             return
-        if normalized.startswith("SELECT SNAPSHOT_JSON"):
-            checkpoint_key = str(params["checkpoint_key"])
-            snapshot = self._store.snapshot_by_key.get(checkpoint_key)
-            self._row = (snapshot,) if snapshot is not None else None
+        checkpoint = self._store.checkpoints.execute(statement, params)
+        if checkpoint is not None:
+            self._row, self.rowcount = checkpoint.row, checkpoint.rowcount
             return
         if (
             normalized.startswith("SELECT PAYLOAD_JSON")
@@ -329,10 +332,6 @@ class _FakeOracleCursor:
                 limit = int(effective_params.get("limit", len(rows)))
                 rows = rows[offset : offset + limit]
             self._rows = rows
-            return
-        if normalized.startswith("MERGE INTO AGENT_RUNTIME_CHECKPOINTS"):
-            checkpoint_key = str(params["checkpoint_key"])
-            self._store.snapshot_by_key[checkpoint_key] = str(params["snapshot_json"])
             return
         if normalized.startswith("MERGE INTO AGENT_RUNTIME_"):
             table_name = normalized.split()[2]

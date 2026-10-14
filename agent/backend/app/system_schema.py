@@ -130,14 +130,29 @@ BASE_STATEMENTS: tuple[str, ...] = (
 # Run・業務 Agent の checkpoint（snapshot の JSON）と、oracle_normalized の監査用の
 # projection（#764）。名前は `app.features.agent.runtime` の RUNTIME_CHECKPOINT_TABLE /
 # RUNTIME_PROJECTION_PREFIX と同じ。
-RUNTIME_STATEMENTS: tuple[str, ...] = (
+#
+# VERSION_NO は checkpoint を書くたびに 1 つ増やす版、WRITER_ID は最後に書いたプロセス（#1916）。
+# 書き込みは読んだ版と同じときだけ行い、別のプロセスが先に書いていたら Run・業務 Agent の単位で
+# まとめ直す（`runtime_checkpoint_store`）。
+_RUNTIME_CHECKPOINTS_TABLE = """
+    CREATE TABLE AGENT_RUNTIME_CHECKPOINTS (
+        CHECKPOINT_KEY VARCHAR2(128) PRIMARY KEY,
+        SNAPSHOT_JSON CLOB NOT NULL,
+        UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+        VERSION_NO NUMBER(19) DEFAULT 0 NOT NULL,
+        WRITER_ID VARCHAR2(200)
+    )
     """
+# migration 006 が作った形（checksum に入るため固定する。最新の形は _RUNTIME_CHECKPOINTS_TABLE）。
+_RUNTIME_CHECKPOINTS_TABLE_006 = """
     CREATE TABLE AGENT_RUNTIME_CHECKPOINTS (
         CHECKPOINT_KEY VARCHAR2(128) PRIMARY KEY,
         SNAPSHOT_JSON CLOB NOT NULL,
         UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
     )
-    """,
+    """
+RUNTIME_STATEMENTS: tuple[str, ...] = (
+    _RUNTIME_CHECKPOINTS_TABLE,
     """
     CREATE TABLE AGENT_RUNTIME_RUNS (
         RUN_ID VARCHAR2(128) PRIMARY KEY,
@@ -209,6 +224,18 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
     "ON AGENT_RUNTIME_APPROVALS (RUN_ID, STATUS, CREATED_AT)",
     "CREATE INDEX AGENT_RUNTIME_ARTIFACTS_RUN_KIND_IX "
     "ON AGENT_RUNTIME_ARTIFACTS (RUN_ID, KIND, CREATED_AT)",
+)
+
+# migration 006 が作った Run の保存先の形（checksum に入るため固定する）。
+_RUNTIME_STATEMENTS_006: tuple[str, ...] = (_RUNTIME_CHECKPOINTS_TABLE_006, *RUNTIME_STATEMENTS[1:])
+
+# checkpoint の版と最後に書いたプロセス（#1916。migration 015）。既存のテーブルに列を足す
+# （データは消さない。既存の行の版は 0 から始まる）。これから checkpoint の JSON を書き換える
+# migration は `VERSION_NO = VERSION_NO + 1` も行う（別のプロセスが古いメモリで書き戻さず、
+# まとめ直すように）。
+RUNTIME_CHECKPOINT_VERSION_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE AGENT_RUNTIME_CHECKPOINTS ADD (VERSION_NO NUMBER(19) DEFAULT 0 NOT NULL)",
+    "ALTER TABLE AGENT_RUNTIME_CHECKPOINTS ADD (WRITER_ID VARCHAR2(200))",
 )
 
 # 画面・API で変えた定義（#764）。ITEM_KIND は skill / mcp_connection / tool_policy /
@@ -452,7 +479,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "20261002_006_runtime_and_control_plane_tables",
         "manage run checkpoint / projection tables and add control plane items (#764)",
         # 以前は Runtime repository が作っていた。既存のテーブルは ORA-00955 として読み飛ばす。
-        (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS),
+        (*_RUNTIME_STATEMENTS_006, *CONTROL_PLANE_STATEMENTS),
     ),
     MigrationArtifact(
         "20261003_007_run_facts",
@@ -562,6 +589,15 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # Runtime repository にある Run から書く（保存期間の外の Run は空のままで、シグナルに
         # しない）。
         RUN_FACTS_DATA_TOOL_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261015_015_runtime_checkpoint_version",
+        "add the version and writer columns to the run checkpoint so that two processes "
+        "do not overwrite each other's updates (#1916)",
+        # 列を足すだけ（データは消さない）。動いている backend は適用の後に checkpoint を読み直し、
+        # その時点から版を確かめて書く（列が無いあいだは今までどおり確かめずに書き、警告を残す）。
+        RUNTIME_CHECKPOINT_VERSION_STATEMENTS,
+        rewrites=frozenset({RUNTIME_DATA}),
     ),
 )
 
@@ -1007,6 +1043,7 @@ __all__ = [
     "DOMAIN_STATEMENTS",
     "RUNTIME_STATEMENTS",
     "RUN_FACTS_DATA_TOOL_STATEMENTS",
+    "RUNTIME_CHECKPOINT_VERSION_STATEMENTS",
     "RUN_FACTS_SIGNAL_STATEMENTS",
     "RUN_FACTS_STATEMENTS",
     "CONTROL_TABLE",

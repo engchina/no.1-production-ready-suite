@@ -387,6 +387,20 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
             "1" if settings.rag_crag_short_candidate_ids else "0"
         ),
+        # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
+        "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS": (
+            "1" if settings.rag_answer_audit_compact_reasons else "0"
+        ),
+        "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
+        # 是正の組の部分の作り直し(#1924)。
+        "RAG_ENGINE_ANSWER_PARTIAL_CORRECTION": (
+            "1" if settings.rag_answer_partial_correction else "0"
+        ),
+        # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
+        "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
+        "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
+        "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO": str(settings.rag_llm_stall_min_rate_ratio),
+        "RAG_ENGINE_LLM_STALL_RESENDS": str(settings.rag_llm_stall_resends),
         "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
             "1" if settings.rag_section_skip_regrade_at_scope else "0"
         ),
