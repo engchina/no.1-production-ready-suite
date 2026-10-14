@@ -368,6 +368,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # Agent が MCP（`POST /api/mcp`）を利用者として呼ぶサービストークンの署名鍵（#230 / #232）。
     # 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET。空なら MCP は 503 で拒否する。
     app_service_token_secret: str = Field(default="", repr=False)
+    # 外部の MCP クライアントの API キーの 1 分あたりの呼び出しの回数（#1874。0 は上限なし）。
+    app_api_key_calls_per_minute: int = Field(default=60, ge=0, le=100_000)
     model_settings_file: str = Field(
         default=DEFAULT_MODEL_SETTINGS_FILE,
         description="UI から保存した共有ランタイム設定 JSON。存在する場合は .env より優先する。",

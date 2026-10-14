@@ -1011,6 +1011,14 @@ const agentJa = {
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
+  // Run のきっかけ（実行履歴・監査ログの列。#1874）。
+  "run.source": "きっかけ",
+  "run.source.user": "画面",
+  "run.source.automation": "自動実行",
+  "run.source.evaluation": "品質評価",
+  "run.source.replay": "再実行",
+  "run.source.mcp": "MCP",
+  "run.source.mcpKey": "MCP（{name}）",
   "run.form.goalDefault": "外部データを確認して要点を整理する",
   "run.goalRequired": "目標を入力してください。",
   "run.form.tool": "ツール",

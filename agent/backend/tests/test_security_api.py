@@ -35,8 +35,10 @@ from app.main import app
 from app.security import dependencies as security_dependencies
 from app.security.permissions import (
     ALL_PERMISSION_CODES,
+    API_KEY_API_PATHS,
     AUTHENTICATED_WITHOUT_PERMISSION,
     CAPABILITY_ROLES,
+    LOGIN_ONLY_API_PATHS,
     OPEN_API_OPERATIONS,
     PERMISSION_CATALOG,
     PUBLIC_API_PATHS,
@@ -103,9 +105,13 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     open_operations = {
         (method, path) for method, path in operations if permission_for_route(method, path) is None
     }
-    # Agent は外部に MCP を公開しない（#1809）。権限なしで通すのは公開・ログインだけの path。
+    # 権限なしで通すのは公開・ログインだけの path と、外部の MCP クライアントの入口（#1874。
+    # API キーで認証し、ツールごとに利用者の権限で判定する）。
     assert {path for _method, path in open_operations} == (
-        set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION)
+        set(PUBLIC_API_PATHS)
+        | set(AUTHENTICATED_WITHOUT_PERMISSION)
+        | set(API_KEY_API_PATHS)
+        | set(LOGIN_ONLY_API_PATHS)
     )
     # 権限なしで通す path に method を足したら、ここで気づく（method 単位で照合する。#490）。
     assert open_operations == set(OPEN_API_OPERATIONS)
@@ -252,8 +258,11 @@ def test_manifest_key_assignments() -> None:
     assert _perm("PUT", "/security/roles/{role_id}/access") == {"menu.security_permissions"}
     # 外部 Runtime の Binding の MCP は #754 で削除した（公開 path に残さない）。
     assert "/mcp/{binding_id}" not in PUBLIC_API_PATHS
-    # Agent は外部に MCP を公開しない（#1809）。`POST /mcp` を権限なしで通さない。
-    assert ("POST", "/mcp") not in OPEN_API_OPERATIONS
+    # 外部の MCP クライアントの入口（#1874）。`POST /mcp` だけを権限なしで通し、GET は通さない。
+    assert ("POST", "/mcp") in OPEN_API_OPERATIONS
+    assert ("GET", "/mcp") not in OPEN_API_OPERATIONS
+    assert frozenset({"/mcp"}) == API_KEY_API_PATHS
+    assert _perm("GET", "/security/api-keys") == {"agent.admin"}
     assert permission_for_route("GET", "/runtime/status") == frozenset(
         {"menu.runtimes", "menu.agents", "agent.runs.operate"}
     )

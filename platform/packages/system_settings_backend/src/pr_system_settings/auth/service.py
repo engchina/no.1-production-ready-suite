@@ -30,10 +30,12 @@ from ..env_file import write_env_values
 from ..users_roles import PasswordPolicyError, generate_temporary_password, validate_password
 from .api_keys import (
     API_KEY_MAX_PER_USER,
+    DEFAULT_API_KEY_CALLS_PER_MINUTE,
     ApiKeyCreateRequest,
     ApiKeyRecord,
     ApiKeyStore,
     InMemoryApiKeyStore,
+    api_key_rate_limiter,
     new_api_key,
     parse_api_key_id,
     token_matches,
@@ -100,7 +102,8 @@ API_KEY_INVALID_MESSAGE = "API キーが無効です（誤り・失効済み）�
 API_KEY_EXPIRED_MESSAGE = "API キーの有効期限が切れています。新しいキーを作成してください。"
 API_KEY_INVALID_CODE = "SECURITY_API_KEY_INVALID"
 API_KEY_PRODUCT_FORBIDDEN_CODE = "SECURITY_API_KEY_PRODUCT_FORBIDDEN"
-_PRODUCT_LABELS = {"rag": "RAG", "nl2sql": "NL2SQL"}
+API_KEY_RATE_LIMITED_CODE = "SECURITY_API_KEY_RATE_LIMITED"
+_PRODUCT_LABELS = {"rag": "RAG", "nl2sql": "NL2SQL", "agent": "Agent"}
 
 
 class AuthSettings(Protocol):
@@ -975,6 +978,7 @@ class AuthService:
             owner_user_uuid=actor.user_uuid,
             products=list(request.products),
             expires_in_days=request.expires_in_days,
+            resource_scopes={str(key): value for key, value in request.resource_scopes.items()},
         )
         self._api_key_call(lambda: self.api_key_store.create(record))
         return record, token
@@ -1022,6 +1026,7 @@ class AuthService:
                 "キーの「使える製品」を確認してください。",
                 code=API_KEY_PRODUCT_FORBIDDEN_CODE,
             )
+        self._limit_api_key_calls(record)
         try:
             self.api_key_store.touch_last_used(key_id, now=now)
         except Exception:  # noqa: BLE001 - 最後に使った日時の保存は認証を止めない
@@ -1041,6 +1046,27 @@ class AuthService:
                     "API キーで動く利用者が無効か、初回のパスワード変更が済んでいません。",
                 ) from None
         return dataclass_replace(principal, session_id=f"api-key:{key_id}"), record
+
+    def _limit_api_key_calls(self, record: ApiKeyRecord) -> None:
+        """キーごとの 1 分あたりの呼び出しの回数（`PLATFORM_API_KEY_CALLS_PER_MINUTE`。#1874）。
+
+        超えたら 429 と `Retry-After`（秒）。MCP のクライアントはこの時間の後に呼び直す。
+        """
+        configured = getattr(
+            self.settings, "app_api_key_calls_per_minute", DEFAULT_API_KEY_CALLS_PER_MINUTE
+        )
+        limit = int(configured if configured is not None else DEFAULT_API_KEY_CALLS_PER_MINUTE)
+        retry_after = api_key_rate_limiter.acquire(record.key_id, limit=limit)
+        if retry_after is None:
+            return
+        raise SecurityApiError(
+            429,
+            f"この API キーの呼び出しが多すぎます（1 分あたり {limit} 回まで）。"
+            f"{retry_after} 秒ほど待ってから呼び直してください。",
+            code=API_KEY_RATE_LIMITED_CODE,
+            retryable=True,
+            headers={"Retry-After": str(retry_after)},
+        )
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
         # 要求ごとに通る経路のため、ロールの数によらず一括で読む（#793）。

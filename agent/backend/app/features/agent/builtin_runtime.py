@@ -1785,36 +1785,51 @@ async def _unattended_approvals(
       しないため、承認が要るツールは呼ばない（無人の実行は事前に許可したツールだけを使う）。
       モデルへは「自動実行では使えない」と返し、確かめられなかった点として回答を完成させる。
       step（監査）と Run の経過に、承認が要るため使わなかったことを残す。
+    - 外部の MCP クライアントの Run（#1874。`metadata.source=mcp`）: 承認する人が画面に
+      いるとは限らないため、自動実行と同じく承認が要るツールを呼ばない。
 
-    それ以外の Run（チャット・MCP など）はそのまま返す（承認待ちにする）。
+    それ以外の Run（画面のチャット・実行）はそのまま返す（承認待ちにする）。
     """
     from app.features.agent.runtime import (
         AUTOMATION_APPROVAL_SKIPPED_CODE,
         EVALUATION_DRY_RUN_KEY,
         EVALUATION_DRY_RUN_MESSAGE,
+        MCP_APPROVAL_SKIPPED_CODE,
         automation_approval_message,
         is_automation_run,
+        is_mcp_run,
+        mcp_approval_message,
         runtime_repository,
     )
 
     evaluation = bool(run.metadata.get(EVALUATION_DRY_RUN_KEY))
-    if not evaluation and not is_automation_run(run.metadata):
+    mcp = not evaluation and is_mcp_run(run.metadata)
+    if not evaluation and not mcp and not is_automation_run(run.metadata):
         return result
     for _ in range(_max_turns()):
         interruptions = list(getattr(result, "interruptions", []) or [])
+        if mcp:
+            # MCP の Run は回答前の確認（`ask_user_confirmation`。#1839）を出せる（呼び出し元の
+            # クライアントが agent_answer_confirmation で答える）。確認は残し、承認だけを断る
+            # （SDK は決めていない中断を次の結果にもう一度返す）。
+            interruptions = [
+                item for item in interruptions if _interruption_call(item).name != CONFIRMATION_TOOL
+            ]
         if not interruptions:
             return result
         calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
         if evaluation:
             runtime_repository.record_builtin_dry_run_steps(run.id, calls)
         else:
-            runtime_repository.record_builtin_unattended_skips(run.id, calls)
+            runtime_repository.record_builtin_unattended_skips(run.id, calls, mcp=mcp)
             logger.info(
                 "builtin_runtime_tool_call_rejected",
                 extra={
                     "run_id": run.id,
                     "tool_names": [call.name for call in calls],
-                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
+                    "error_code": (
+                        MCP_APPROVAL_SKIPPED_CODE if mcp else AUTOMATION_APPROVAL_SKIPPED_CODE
+                    ),
                 },
             )
         state = result.to_state()
@@ -1824,6 +1839,8 @@ async def _unattended_approvals(
                 rejection_message=(
                     EVALUATION_DRY_RUN_MESSAGE
                     if evaluation
+                    else mcp_approval_message(call.name)
+                    if mcp
                     else automation_approval_message(call.name)
                 ),
             )

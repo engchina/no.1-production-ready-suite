@@ -18,6 +18,7 @@ PLATFORM_AUTH_DDL_IGNORED_ERRORS = frozenset(
         "ORA-02260",  # table can have only one primary key
         "ORA-02261",  # such unique or primary key already exists
         "ORA-02275",  # such a referential constraint already exists
+        "ORA-01430",  # column being added already exists in table（列の追加の冪等）
     }
 )
 
@@ -102,11 +103,11 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IX_PLATFORM_LOGIN_ATTEMPTS_AT ON PLATFORM_LOGIN_ATTEMPTS (ATTEMPTED_AT)",
-    # 外部の MCP クライアント向けの API キー（RAG / NL2SQL。#1805）。秘密は保存せず、キー全体の
+    # 外部の MCP クライアント向けの API キー（3 製品。#1805・#1874）。秘密は保存せず、キー全体の
     # SHA-256（16 進 64 文字）だけを持つ。OWNER_USER_UUID は発行した利用者（キーはこの利用者として
     # 動く）。構成管理者・local の利用者は PLATFORM_USERS に行が無いため外部キーにしない
     # （利用者の削除のときに消す）。
-    # PRODUCTS は使える製品のカンマ区切り（rag / nl2sql。外部に MCP を公開するのはこの 2 製品）。
+    # PRODUCTS は使える製品のカンマ区切り（rag / nl2sql / agent。#1874 で agent を足した）。
     """
     CREATE TABLE PLATFORM_API_KEYS (
         KEY_ID VARCHAR2(16) NOT NULL,
@@ -118,10 +119,14 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
         CREATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
         EXPIRES_AT TIMESTAMP WITH TIME ZONE,
         LAST_USED_AT TIMESTAMP WITH TIME ZONE,
+        RESOURCE_SCOPES CLOB,
         CONSTRAINT PK_PLATFORM_API_KEYS PRIMARY KEY (KEY_ID)
     )
     """,
     "CREATE INDEX IX_PLATFORM_API_KEYS_OWNER ON PLATFORM_API_KEYS (OWNER_USER_UUID)",
+    # 製品ごとの対象の範囲（#1874。JSON `{"agent": ["<業務 Agent の ID>", …]}`。NULL は範囲なし）。
+    # #1805 で作った表に足す（作り直したばかりの表では ORA-01430 で読み飛ばす）。
+    "ALTER TABLE PLATFORM_API_KEYS ADD (RESOURCE_SCOPES CLOB)",
 )
 
 
