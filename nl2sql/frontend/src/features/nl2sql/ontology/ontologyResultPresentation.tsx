@@ -23,12 +23,22 @@ export function fieldLabel(field: string) {
   const key = `ontologyResults.field.${field}` as Parameters<typeof t>[0];
   return t(key) === key ? field : t(key);
 }
+/** 値が無い（null・空文字・空の配列・中身がすべて空の object）か。詳細のパネルで「未設定」を出さないために使う（#1788）。 */
+export function isEmptyDefinitionValue(value: unknown): boolean {
+  if (value == null || value === "") return true;
+  if (Array.isArray(value)) return value.every(isEmptyDefinitionValue);
+  if (typeof value === "object") return Object.values(value).every(isEmptyDefinitionValue);
+  return false;
+}
 export function DefinitionValue({
   value,
   names = {},
+  hideEmpty = false,
 }: {
   value: unknown;
   names?: Record<string, string>;
+  /** true なら、入れ子の object の値の無い項目を出さない。 */
+  hideEmpty?: boolean;
 }) {
   if (value == null || value === "" || (Array.isArray(value) && !value.length))
     return <span>{t("ontologyResults.unspecified")}</span>;
@@ -39,24 +49,28 @@ export function DefinitionValue({
   if (Array.isArray(value))
     return (
       <ul className="grid gap-1">
-        {value.map((item, index) => (
-          <li key={index}>
-            <DefinitionValue value={item} names={names} />
-          </li>
-        ))}
+        {value
+          .filter((item) => !hideEmpty || !isEmptyDefinitionValue(item))
+          .map((item, index) => (
+            <li key={index}>
+              <DefinitionValue value={item} names={names} hideEmpty={hideEmpty} />
+            </li>
+          ))}
       </ul>
     );
   if (typeof value === "object")
     return (
       <dl className="grid gap-2">
-        {Object.entries(value).map(([key, item]) => (
-          <div key={key}>
-            <dt className="font-medium">{fieldLabel(key)}</dt>
-            <dd className="pl-3">
-              <DefinitionValue value={item} names={names} />
-            </dd>
-          </div>
-        ))}
+        {Object.entries(value)
+          .filter(([, item]) => !hideEmpty || !isEmptyDefinitionValue(item))
+          .map(([key, item]) => (
+            <div key={key}>
+              <dt className="font-medium">{fieldLabel(key)}</dt>
+              <dd className="pl-3">
+                <DefinitionValue value={item} names={names} hideEmpty={hideEmpty} />
+              </dd>
+            </div>
+          ))}
       </dl>
     );
   return (
@@ -65,8 +79,58 @@ export function DefinitionValue({
     </span>
   );
 }
-export function DefinitionFields({ definition }: { definition: Record<string, unknown> }) {
-  return <dl className="grid min-w-0 gap-2 text-sm">{Object.entries(definition).filter(([key]) => !["id", "implementation_key", "origin", "review_status"].includes(key)).map(([key,value]) =>
-    <div className="min-w-0 break-words" key={key}><dt className="font-medium">{fieldLabel(key)}</dt><dd><DefinitionValue value={key === "kind" && typeof value === "string" ? t(`ontologyResults.kind.${value}`) : value} /></dd></div>
-  )}</dl>;
+const DEFINITION_HIDDEN_KEYS = ["id", "implementation_key", "origin", "review_status"];
+
+/** ラベルと値の並び（DefinitionFields と同じ見た目）。グラフの詳細のパネルで、定義の外の項目を先に並べるのに使う。 */
+export function DetailFieldList({
+  items,
+  testId,
+}: {
+  items: { key: string; label: string; value: ReactNode }[];
+  testId?: string;
+}) {
+  if (!items.length) return null;
+  return (
+    <dl className="grid min-w-0 gap-2 text-sm" data-testid={testId}>
+      {items.map((item) => (
+        <div className="min-w-0 break-words" key={item.key}>
+          <dt className="font-medium">{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export function DefinitionFields({
+  definition,
+  hideEmpty = false,
+  omitKeys = [],
+}: {
+  definition: Record<string, unknown>;
+  /** true なら値の無い項目（「未設定」）を出さない（グラフの詳細のパネル。#1788）。 */
+  hideEmpty?: boolean;
+  /** 別の所に出した項目を重ねて出さない。 */
+  omitKeys?: string[];
+}) {
+  const entries = Object.entries(definition).filter(
+    ([key, value]) =>
+      !DEFINITION_HIDDEN_KEYS.includes(key) &&
+      !omitKeys.includes(key) &&
+      (!hideEmpty || !isEmptyDefinitionValue(value))
+  );
+  return (
+    <DetailFieldList
+      items={entries.map(([key, value]) => ({
+        key,
+        label: fieldLabel(key),
+        value: (
+          <DefinitionValue
+            value={key === "kind" && typeof value === "string" ? t(`ontologyResults.kind.${value}`) : value}
+            hideEmpty={hideEmpty}
+          />
+        ),
+      }))}
+    />
+  );
 }

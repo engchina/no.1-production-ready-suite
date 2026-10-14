@@ -1,7 +1,7 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
-import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
+import { clickOntologyEdge, expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -970,8 +970,8 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
   await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
   await expect(metricCard).toHaveCSS("opacity", "1");
-  await expect(playground.getByTestId("ontology-node-details-panel")).toContainText(
-    "グラフ上のノードを選択"
+  await expect(playground.getByTestId("ontology-selection-details-panel")).toContainText(
+    "グラフ上のノードや関係の線を選択"
   );
   await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
@@ -991,8 +991,8 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
   await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
   await expect(metricCard).toHaveCSS("opacity", "1");
-  await expect(playground.getByTestId("ontology-node-details-panel")).toContainText(
-    "グラフ上のノードを選択"
+  await expect(playground.getByTestId("ontology-selection-details-panel")).toContainText(
+    "グラフ上のノードや関係の線を選択"
   );
   await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
@@ -1627,4 +1627,142 @@ test("ノード種別は共有バッジで長い日本語名を欠けずに表�
   await object.focus();
   await page.keyboard.press("Enter");
   await expect(object).toBeFocused();
+});
+
+// 線（リンク型）の詳細は、ノードと同じ右（375px ではグラフの上）の詳細のパネルに出す（#1788）。
+const linkTypeOntologyGraph = {
+  nodes: [
+    {
+      id: "project",
+      kind: "object_type",
+      business_name_ja: "プロジェクト",
+      technical_name: "ADB_APP_USER.PROJECT",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: {
+        definition: {
+          kind: "object_type",
+          api_name: "project",
+          name_ja: "プロジェクト",
+          primary_key: ["project_id"],
+          lifecycle_ja: "",
+          implements: [],
+        },
+      },
+    },
+    {
+      id: "department",
+      kind: "object_type",
+      business_name_ja: "部門",
+      technical_name: "ADB_APP_USER.DEPARTMENT",
+      review_status: "approved",
+      validation_status: "passed",
+    },
+  ],
+  edges: [
+    {
+      id: "project-department",
+      kind: "link_type",
+      source_node_id: "project",
+      target_node_id: "department",
+      relationship_name_ja: "プロジェクト所属部門",
+      cardinality: "many_to_one",
+      review_status: "approved",
+      validation_status: "passed",
+      metadata: {
+        definition: {
+          kind: "link_type",
+          api_name: "project_department",
+          name_ja: "プロジェクト所属部門",
+          source: "project",
+          target: "department",
+          inverse_name_ja: "部門所属プロジェクト",
+          cardinality: "many_to_one",
+          optional: false,
+          join_expression_sql:
+            "ADB_APP_USER.PROJECT.DEPARTMENT_ID = ADB_APP_USER.DEPARTMENT.DEPARTMENT_ID",
+          intermediary_object: "",
+          valid_time_ja: "",
+          mappings: [],
+          missing_information_ja: [],
+          evidence: [
+            {
+              source_id: "schema",
+              locator: "FK_PROJECT_DEPARTMENT",
+              source_kind: "database",
+              source_sha256: "",
+              verified: true,
+            },
+          ],
+        },
+      },
+    },
+  ],
+};
+
+test("線をクリックすると関係の詳細をノードと同じ詳細のパネルに出し、グラフの上には出さない (#1788)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockApi(page, { ontologyGraph: linkTypeOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+
+  const details = playground.getByTestId("ontology-selection-details-panel");
+  await expect(details.getByRole("heading", { name: "詳細", exact: true })).toBeVisible();
+  await expect(details).toContainText("グラフ上のノードや関係の線を選択");
+
+  const edge = playground.locator('.react-flow__edge[data-id="project-department"]');
+  await expect(edge).toHaveCount(1);
+  await clickOntologyEdge(page, edge);
+
+  await expect(details.getByRole("heading", { name: "関係の詳細", exact: true })).toBeVisible();
+  const edgeDetails = details.getByTestId("ontology-edge-details");
+  await expect(edgeDetails).toContainText("プロジェクト所属部門");
+  await expect(edgeDetails).toContainText("リンク型（Link Type）");
+  // 関係を理解するのに要る項目（結合のキー・起点・終点・多重度）を先に出す。
+  const labels = await edgeDetails.locator("dl > div > dt").allTextContents();
+  expect(labels.slice(0, 4)).toEqual([
+    "結合のキー（Join Key）",
+    "起点（Source）",
+    "終点（Target）",
+    "多重度（Cardinality）",
+  ]);
+  await expect(edgeDetails).toContainText(
+    "ADB_APP_USER.PROJECT.DEPARTMENT_ID = ADB_APP_USER.DEPARTMENT.DEPARTMENT_ID"
+  );
+  await expect(edgeDetails).toContainText("N:1");
+  await expect(edgeDetails).toContainText("部門所属プロジェクト");
+  // 値の無い項目（未設定）は出さない。
+  await expect(edgeDetails).not.toContainText("未設定");
+  await expect(edgeDetails).not.toContainText("中間のオブジェクト型");
+  await expect(edgeDetails).not.toContainText("有効期間");
+  // グラフの上（質問の欄の下）には出さない。
+  await expect(playground.getByText("逆向きの名前（Inverse Name）")).toHaveCount(1);
+  await expect(playground.getByRole("region", { name: "リンク型（Link Type）" })).toHaveCount(0);
+
+  // 詳細のパネルは、ノードの詳細と同じ所（desktop は右、375px はグラフの上）にある。
+  const graphBox = await playground.getByTestId("ontology-playground-graph-region").boundingBox();
+  const detailsBox = await details.boundingBox();
+  expect(graphBox).not.toBeNull();
+  expect(detailsBox).not.toBeNull();
+  if ((page.viewportSize()?.width ?? 0) >= 1280) {
+    expect(detailsBox!.x).toBeGreaterThanOrEqual(graphBox!.x + graphBox!.width);
+  } else {
+    expect(detailsBox!.y + detailsBox!.height).toBeLessThanOrEqual(graphBox!.y);
+  }
+  await expectNoHorizontalScroll(page);
+  await details.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("edge-details.png") });
+
+  // ノードのクリックは今どおりノードの詳細を出す。
+  await playground.getByTestId("ontology-node-card-project").click();
+  await expect(details.getByRole("heading", { name: "ノード詳細", exact: true })).toBeVisible();
+  await expect(details.getByTestId("ontology-edge-details")).toHaveCount(0);
+  await expect(details).toContainText("プロジェクト");
+  await expect(details).toContainText("主キー（Primary Key）");
+  await expect(details).not.toContainText("ライフサイクル");
+  await expect(details).not.toContainText("未設定");
+  await details.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("node-details.png") });
 });

@@ -2637,6 +2637,10 @@ def _qa_pair_context_payload(schema_context: Mapping[str, Any], pair: QaPair) ->
     resolved_columns: list[dict[str, str]] = []
     ignored_aliases: list[str] = []
     for column in graph.columns:
+        if str(column.name).strip() == "*":
+            # `別名.*` / `owner.表.*` は列名 `*` の列ではなく、表の全列（#1787）。表は
+            # schema_resolved_objects で解決し、列の未解決として LLM に渡さない。
+            continue
         if _ignore_sql_column_reference(
             column,
             projection_aliases=projection_aliases,
