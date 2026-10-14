@@ -143,9 +143,12 @@ def _run(
     *,
     agent_id: str = AGENT_ID,
     metadata: dict[str, Any] | None = None,
+    thread_id: str | None = None,
 ) -> RunState:
     created = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal=goal, agent_id=agent_id, metadata=metadata or {}),
+        RunCreateRequest(
+            goal=goal, agent_id=agent_id, metadata=metadata or {}, thread_id=thread_id
+        ),
         created_by_user_uuid=USER_UUID,
     )
     anyio.run(builtin_runtime.execute_run, created.id)
@@ -350,6 +353,82 @@ def test_agent_without_grounding_tools_is_not_a_target(
     assert len(model.calls) == 1
     assert run_answer_text(run) == "こんにちは。"
     assert _grounding_events(run) == []
+
+
+def test_rephrasing_an_answer_grounded_earlier_in_the_thread_is_not_sent_back(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """同じ会話の前の Run がツールで答えていれば、ツールを呼ばない言い換え・整形を拒答にしない。"""
+    model = _script(
+        monkeypatch,
+        [function_call(SEARCH, {"query": "経費精算 締め日"}, call_id="call-1")],
+        [assistant_message("締め日は毎月 20 日です。提出先は経理部です。")],
+        [assistant_message("| 項目 | 内容 |\n| --- | --- |\n| 締め日 | 毎月 20 日 |")],
+    )
+    first = _run("経費精算の締め日と提出先は？")
+    assert len(mcp.calls_of("rag_search")) == 1
+
+    second = _run("前の回答を表にして", thread_id=first.thread_id)
+
+    assert second.status == RunStatus.COMPLETED, second.events[-1].message
+    assert len(model.calls) == 3
+    assert run_answer_text(second) == "| 項目 | 内容 |\n| --- | --- |\n| 締め日 | 毎月 20 日 |"
+    assert _grounding_events(second) == []
+    assert tool_grounding.METADATA_KEY not in second.metadata
+
+
+def test_thread_without_grounded_answers_is_still_refused(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """前の Run もツールで答えていない（拒答した）会話では、続きの Run も差し戻し・拒答にする。"""
+    del mcp
+    model = _script(
+        monkeypatch,
+        [assistant_message(UNGROUNDED)],
+        [assistant_message(UNGROUNDED)],
+        [assistant_message("大阪は第二の都市です。")],
+        [assistant_message("大阪は第二の都市です。")],
+    )
+    first = _run()
+    assert (run_answer_text(first) or "").startswith(tool_grounding.REFUSAL_HEAD)
+
+    second = _run("大阪は？", thread_id=first.thread_id)
+
+    assert len(model.calls) == 4
+    assert (run_answer_text(second) or "").startswith(tool_grounding.REFUSAL_HEAD)
+    assert [item["action"] for item in _grounding_events(second)] == ["retry", "refused"]
+
+
+def test_only_runs_within_the_history_budget_count(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """会話の履歴の上限（PLATFORM_CHAT_HISTORY_MAX_TURNS）より前の Run の根拠は数えない。"""
+    del mcp
+    monkeypatch.setattr(get_settings(), "chat_history_max_turns", 1)
+    model = _script(
+        monkeypatch,
+        [function_call(SEARCH, {"query": "経費精算 締め日"}, call_id="call-1")],
+        [assistant_message("締め日は毎月 20 日です。")],
+        [assistant_message("確認させてください。\nどの部署の経費ですか？")],
+        [assistant_message("締め日は 20 日です。")],
+        [assistant_message("締め日は 20 日です。")],
+    )
+    first = _run("経費精算の締め日は？")
+    # 2 つ目は確認の質問だけ（ツールを呼んでいないが拒答の対象外）。
+    second = _run("営業部の場合は？", thread_id=first.thread_id)
+    assert _answer_content(second)["outcome"]["value"] == "needs_clarification"
+
+    third = _run("もっと短く", thread_id=first.thread_id)
+
+    # 上限 1 では直前の Run（ツールを呼んでいない）だけを見るので、差し戻し・拒答になる。
+    assert len(model.calls) == 5
+    assert (run_answer_text(third) or "").startswith(tool_grounding.REFUSAL_HEAD)
+
+    # 上限が 0（履歴を渡さない）なら、前の Run を見ない。
+    monkeypatch.setattr(get_settings(), "chat_history_max_turns", 0)
+    assert not builtin_runtime._grounded_in_thread(second.id)  # noqa: SLF001
+    monkeypatch.setattr(get_settings(), "chat_history_max_turns", 8)
+    assert builtin_runtime._grounded_in_thread(third.id)  # noqa: SLF001
 
 
 def test_guard_can_be_turned_off(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:

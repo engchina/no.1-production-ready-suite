@@ -13,7 +13,9 @@ BLOCK と同じ考え方）。
 - 数える呼び出し: モデルが根拠・データのツールを呼んだ step（成功・失敗・承認の却下・評価の
   dry-run・自動実行で承認が要るため呼ばなかったものも、モデルが確かめようとしたので数える）。
   Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は数えない。
-- 除外: 利用者が確認を取り消した Run（「資料の検索は不要」など。#1441・#1445）と、
+- 除外: 同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中）が根拠・
+  データのツールで答えた Run（前の回答の言い換え・整形。事実の確かめは #1837 の最終の検証）と、
+  利用者が確認を取り消した Run（「資料の検索は不要」など。#1441・#1445）と、
   利用者への確認の質問だけの回答（`is_clarification_only`）と、NL2SQL の AI要件確認で
   止まった Run（`nl2sql_clarification_pending`）。曖昧で対象が分からない質問は拒答ではなく確認の
   質問にする（ユーザーの決定。差し戻しの文でも、ツールを呼ばずに確認の質問だけを返してよいと伝える）。
@@ -120,6 +122,29 @@ def grounding_attempted(steps: list[RunStep]) -> bool:
             continue
         return True
     return False
+
+
+def grounding_used(steps: list[RunStep]) -> bool:
+    """モデルが根拠・データのツールを呼んで結果を得たか（成功した呼び出しだけ）。"""
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not is_grounding_tool(call.name):
+            continue
+        if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
+            continue
+        if result.success and step.status == "completed":
+            return True
+    return False
+
+
+def grounded_in_thread(previous_steps: Iterable[list[RunStep]]) -> bool:
+    """同じ会話の前の Run（会話の履歴の上限の中）のどれかが、根拠・データのツールで答えたか。
+
+    そうなら、今の Run がツールを呼ばずに前の回答を言い換え・整形・要約しても拒答にしない
+    （「前の回答を表にして」「もっと短く」など）。前のターンの事実の確かめは、前のターンで
+    裏付けた根拠を今のターンの最終の検証に渡す仕組み（#1837）に任せる。
+    """
+    return any(grounding_used(steps) for steps in previous_steps)
 
 
 def is_exempt_answer(answer: str, steps: list[RunStep]) -> bool:
@@ -236,7 +261,9 @@ __all__ = [
     "REFUSAL_HEAD",
     "RETRY_MESSAGE",
     "grounding_attempted",
+    "grounded_in_thread",
     "grounding_tools",
+    "grounding_used",
     "is_exempt_answer",
     "is_grounding_tool",
     "needs_grounding",

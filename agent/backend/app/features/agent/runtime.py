@@ -803,6 +803,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
     def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
+    def thread_previous_runs(self, run_id: str) -> list[RunState]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -1198,6 +1199,25 @@ class AgentRuntimeRepository:
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
                 and (answer := run_answer_text(previous)) is not None
+            ]
+
+    def thread_previous_runs(self, run_id: str) -> list[RunState]:
+        """同じ会話の、この Run より前の完了した Run（回答のあるもの、古い順。複製）。
+
+        `thread_history`（モデルへ渡す前の往復）と同じ Run を選ぶ。根拠・データのツールを呼ばずに
+        前の回答を言い換え・整形する Run を拒答にしないかの判定に使う（#1835）。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            return [
+                previous.model_copy(deep=True)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                and run_answer_text(previous) is not None
             ]
 
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:

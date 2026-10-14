@@ -1721,6 +1721,9 @@ async def _require_tool_grounding(
             answer, steps=list(current.steps), tool_names=tool_names
         ):
             return result, False
+        if _grounded_in_thread(run.id):
+            # 同じ会話の前の Run がツールで答えた。前の回答の言い換え・整形を拒答にしない。
+            return result, False
         if tool_grounding.retried(current.metadata) >= tool_grounding.MAX_RETRIES:
             runtime_repository.record_tool_grounding(run.id, "refused", answer)
             logger.info(
@@ -1745,6 +1748,18 @@ async def _require_tool_grounding(
         )
         result = await _unattended_approvals(run, sdk_agent, result, data_scopes)
     return result, False
+
+
+def _grounded_in_thread(run_id: str) -> bool:
+    """会話の履歴の上限（`PLATFORM_CHAT_HISTORY_MAX_TURNS`。#1818）の中の前の Run のどれかが、
+    根拠・データのツールで答えたか（#1835）。上限が 0（履歴を渡さない）なら前の Run を見ない。"""
+    from app.features.agent.runtime import runtime_repository
+
+    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
+    if max_turns <= 0:
+        return False
+    previous = runtime_repository.thread_previous_runs(run_id)[-max_turns:]
+    return tool_grounding.grounded_in_thread(list(item.steps) for item in previous)
 
 
 def _refusal_text(agent: Any, sdk_agent: Agent[Any]) -> str:
