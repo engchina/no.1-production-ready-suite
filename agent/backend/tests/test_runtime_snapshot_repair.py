@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from checkpoint_support import CheckpointConnection, CheckpointTable
 from pytest import MonkeyPatch
 
 from app.features.agent import control_plane_store, runtime, storage_backend, storage_status
@@ -40,63 +41,20 @@ from app.settings import get_settings
 # --------------------------------------------------------------------------------------------
 
 
-class _Checkpoints:
+class _Checkpoints(CheckpointTable):
     def __init__(self, snapshot_json: str | None = None) -> None:
-        self.rows: dict[str, str] = {}
+        super().__init__()
         if snapshot_json is not None:
             self.rows["default"] = snapshot_json
         self.connects = 0
 
-    def connect(self) -> _Connection:
+    def connect(self) -> CheckpointConnection:
         self.connects += 1
-        return _Connection(self)
+        return super().connect()
 
     def stored(self) -> dict[str, Any]:
         value: dict[str, Any] = json.loads(self.rows["default"])
         return value
-
-
-class _Cursor:
-    def __init__(self, store: _Checkpoints) -> None:
-        self._store = store
-        self._row: tuple[str] | None = None
-
-    def __enter__(self) -> _Cursor:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-    def setinputsizes(self, **_sizes: object) -> None:
-        return None
-
-    def execute(self, statement: str, **params: Any) -> None:
-        normalized = " ".join(statement.upper().split())
-        if normalized.startswith("SELECT SNAPSHOT_JSON"):
-            value = self._store.rows.get(str(params["checkpoint_key"]))
-            self._row = (value,) if value is not None else None
-        elif normalized.startswith("MERGE INTO"):
-            self._store.rows[str(params["checkpoint_key"])] = str(params["snapshot_json"])
-
-    def fetchone(self) -> tuple[str] | None:
-        return self._row
-
-
-class _Connection:
-    def __init__(self, store: _Checkpoints) -> None:
-        self._store = store
-
-    def __enter__(self) -> _Connection:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-    def cursor(self) -> _Cursor:
-        return _Cursor(self._store)
-
-    def commit(self) -> None:
-        return None
 
 
 # --------------------------------------------------------------------------------------------
@@ -385,7 +343,7 @@ class _FlakyConnect:
         self.failures = failures
         self.calls = 0
 
-    def __call__(self) -> _Connection:
+    def __call__(self) -> CheckpointConnection:
         self.calls += 1
         if self.calls <= self.failures:
             raise RuntimeError("DPY-6005: cannot connect to database")
@@ -440,7 +398,7 @@ def test_lazy_repository_is_built_on_first_use_and_retried_after_failure(
 def test_non_connection_errors_are_not_reported_as_unavailable(monkeypatch: MonkeyPatch) -> None:
     calls: list[int] = []
 
-    def denied() -> _Connection:
+    def denied() -> CheckpointConnection:
         calls.append(1)
         raise RuntimeError("ORA-01031: insufficient privileges")
 

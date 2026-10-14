@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from checkpoint_support import CheckpointTable
 from pytest import MonkeyPatch
 from security_support import client
 from test_system_schema import (
@@ -57,11 +58,11 @@ WAIT_SECONDS = 10.0
 BLOCKED_SECONDS = 0.2
 
 
-class _Checkpoints:
-    """AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY → SNAPSHOT_JSON）。"""
+class _Checkpoints(CheckpointTable):
+    """AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY → SNAPSHOT_JSON と版）。"""
 
     def __init__(self) -> None:
-        self.rows: dict[str, str] = {}
+        super().__init__()
         # migration 013 の UPDATE の直前に呼ぶ（書き換えの途中で止めるテスト用）。
         self.before_rewrite: Callable[[], None] = lambda: None
 
@@ -80,6 +81,7 @@ class _CheckpointCursor:
     def __init__(self, checkpoints: _Checkpoints) -> None:
         self._checkpoints = checkpoints
         self._row: tuple[Any, ...] | None = None
+        self.rowcount = 0
 
     def __enter__(self) -> _CheckpointCursor:
         return self
@@ -91,15 +93,10 @@ class _CheckpointCursor:
         return None
 
     def execute(self, statement: str, **params: Any) -> None:
-        upper = " ".join(statement.upper().split())
-        key = str(params["checkpoint_key"])
-        if upper.startswith("SELECT SNAPSHOT_JSON"):
-            text = self._checkpoints.rows.get(key)
-            self._row = (text,) if text is not None else None
-        elif upper.startswith("MERGE INTO AGENT_RUNTIME_CHECKPOINTS"):
-            self._checkpoints.rows[key] = str(params["snapshot_json"])
-        else:  # pragma: no cover - 想定外の SQL を見逃さない
+        result = self._checkpoints.execute(statement, params)
+        if result is None:  # pragma: no cover - 想定外の SQL を見逃さない
             raise AssertionError(statement)
+        self._row, self.rowcount = result.row, result.rowcount
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self._row
@@ -286,12 +283,12 @@ def test_failed_reload_asks_to_restart_backend(
 ) -> None:
     """読み直せなければ（checkpoint を読めない）、この backend の再起動を求める。"""
 
-    def broken() -> str | None:
+    def broken() -> None:
         raise RuntimeError("DPY-4011: the database or network closed the connection")
 
     repository = runtime.loaded_runtime_repository()
     assert isinstance(repository, AgentRuntimeOracleCheckpointRepository)
-    monkeypatch.setattr(repository, "_read_checkpoint_json", broken)
+    monkeypatch.setattr(repository, "_read_checkpoint", broken)
 
     data = environment.manager.initialize()
 
