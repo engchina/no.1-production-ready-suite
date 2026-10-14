@@ -7,7 +7,10 @@ import pytest
 
 from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.main import app
-from app.rag.search_answer_profile_knowledge import resolve_clarification
+from app.rag.search_answer_profile_knowledge import (
+    clarification_record,
+    resolve_clarification,
+)
 from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from tests.support import AsgiTestClient
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
@@ -93,6 +96,35 @@ def test_clarification_is_saved_on_the_rule_and_suggested_for_matching_questions
     assert removed.json()["data"]["suggestion"] is None
 
 
+def test_assume_policy_does_not_suggest_clarifications(
+    fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """方針が「前提を示して回答する」なら、ルールに当たっても確認を出さない（#1839）。"""
+    from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+
+    client.put(
+        f"{BASE}/runtime-knowledge/rules/R01/clarification", json={"clarification": CLARIFICATION}
+    )
+    original = fake_oracle.get_search_answer_profile
+
+    async def assume(search_answer_profile_id: str) -> Any:
+        view = await original(search_answer_profile_id)
+        assert view is not None
+        return view.model_copy(
+            update={
+                "config": SearchAnswerProfileConfig(
+                    knowledge_base_ids=["kb-1"], clarification_policy="assume"
+                )
+            }
+        )
+
+    monkeypatch.setattr(fake_oracle, "get_search_answer_profile", assume)
+    data = client.post(
+        f"{BASE}/clarifications/suggest", json={"query": "申請の期限はいつですか"}
+    ).json()["data"]
+    assert data["suggestion"] is None
+
+
 def test_clarification_validation(fake_oracle: FakeKnowledgeOracle) -> None:
     url = f"{BASE}/runtime-knowledge/rules/R01/clarification"
     one_option = {**CLARIFICATION, "options": CLARIFICATION["options"][:1]}
@@ -154,6 +186,36 @@ def test_resolve_clarification_rejects_unknown_rules_and_options(
     answer: ClarificationAnswer,
 ) -> None:
     assert resolve_clarification(_payload(), answer) is None
+
+
+def test_other_text_is_used_even_when_the_rule_saved_allow_other_false() -> None:
+    """「その他（自由入力）」は常に出す（#1839）。古い保存の allow_other=False でも受け付ける。"""
+    payload = {"rules": [{"id": "R01", "clarification": {**CLARIFICATION, "allow_other": False}}]}
+    resolved = resolve_clarification(
+        payload, ClarificationAnswer(rule_id="R01", other_text="海外出張の日当")
+    )
+    assert resolved is not None
+    assert "その他（利用者の入力）: 海外出張の日当" in resolved[0].context
+
+
+def test_clarification_record_for_the_conversation() -> None:
+    """会話に残す「回答前に確認した内容」（#1839）。名前は保存済みのルールから引き直す。"""
+    answer = ClarificationAnswer(rule_id="R01", option_ids=["travel"], other_text=" 海外 ")
+    assert clarification_record(_payload(), "R01", answer) == {
+        "outcome": "answered",
+        "entries": [
+            {
+                "prompt": CLARIFICATION["question"],
+                "selected": ["出張旅費"],
+                "other_text": "海外",
+            }
+        ],
+    }
+    assert clarification_record(_payload(), "R01", None) == {
+        "outcome": "skipped",
+        "entries": [{"prompt": CLARIFICATION["question"]}],
+    }
+    assert clarification_record(_payload(), "R99", None) is None
 
 
 def test_single_choice_rejects_multiple_options() -> None:

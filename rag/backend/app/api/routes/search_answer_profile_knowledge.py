@@ -508,6 +508,9 @@ async def post_clarification_suggest(
     """質問に出す確認(一致したルールのうち確認を持つ最初の 1 件。#717)。"""
     oracle = OracleClient()
     view = await _require_search_answer_profile(oracle, search_answer_profile_id)
+    # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
+    if view.config.clarification_policy == "assume":
+        return ApiResponse(data=ClarificationSuggestionsData())
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
     found = await asyncio.to_thread(suggest_clarification, payload, request.query)
     if found is None:

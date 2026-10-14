@@ -163,12 +163,12 @@ for (const theme of ["light", "dark"] as const) {
     await expect(known.getByText("確かめた条件（2）")).toBeVisible();
     await expect(known.getByRole("listitem")).toHaveText([
       "受注の種類: 通常受注（質問の文から読み取り）",
-      "出荷済みか: いいえ（確認の質問への答え）",
+      "出荷済みか: いいえ（回答前の確認の答え）",
     ]);
     const conflicting = conditions.getByTestId("guide-conditions-conflicting");
     await expect(conflicting.getByText("質問から複数の候補が読み取れた条件（1）")).toBeVisible();
     await expect(conflicting.getByRole("listitem")).toHaveText([
-      "システムの版: 「v1」と「v2」 — 確認の質問で確かめる",
+      "システムの版: 「v1」と「v2」 — 回答前の確認で確かめる",
     ]);
     const unknown = conditions.getByTestId("guide-conditions-unknown");
     await expect(unknown.getByText("分からない条件（1）")).toBeVisible();

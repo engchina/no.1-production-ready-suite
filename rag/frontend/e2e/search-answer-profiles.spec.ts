@@ -440,6 +440,30 @@ test("章節で広げる根拠を off にすると上限の欄を閉じ、false 
   expect(query.section_expansion_max_levels ?? null).toBeNull();
 });
 
+test("回答前の確認の方針（曖昧な質問の扱い）を検索・回答プロファイルに保存できる (#1839)", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  let updateBody = null as Record<string, unknown> | null;
+  await mockDefaultSearchAnswerProfile(page, (body) => {
+    updateBody = body;
+  });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const section = page.getByTestId("search-answer-profile-clarification");
+  await expect(section.getByText("回答前の確認", { exact: true })).toBeVisible();
+  const policy = section.getByRole("combobox", { name: "曖昧な質問の扱い" });
+  // 古い保存（方針が無い）は「確認してから回答する」。
+  await expect(policy).toContainText("確認してから回答する");
+  await policy.click();
+  await page.getByRole("option", { name: "前提を示して回答する" }).click();
+  await expect(policy).toContainText("前提を示して回答する");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("全社共通の検索設定");
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect
+    .poll(() => (updateBody?.config as { clarification_policy?: string } | undefined)?.clarification_policy)
+    .toBe("assume");
+  await expectNoPageOverflow(page);
+});
+
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },

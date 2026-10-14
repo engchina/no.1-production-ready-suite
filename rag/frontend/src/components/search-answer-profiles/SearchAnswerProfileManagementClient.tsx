@@ -187,14 +187,25 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
 
 /** 旧保存 JSON に無い項目は null(継承)で補う。 */
 function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): SearchAnswerProfileConfig {
-  return { ...config, query: { ...emptyQueryConfig(), ...config.query } };
+  return {
+    ...config,
+    query: { ...emptyQueryConfig(), ...config.query },
+    clarification_policy: config.clarification_policy ?? "confirm",
+  };
 }
+
+/** 回答前の確認の方針（#1839）。 */
+const CLARIFICATION_POLICY_OPTIONS: SelectFieldOption<"confirm" | "assume">[] = [
+  { value: "confirm", label: t("searchAnswerProfiles.clarification.policy.confirm") },
+  { value: "assume", label: t("searchAnswerProfiles.clarification.policy.assume") },
+];
 
 function emptyConfig(): SearchAnswerProfileConfig {
   return {
     version: 1,
     knowledge_base_ids: [],
     query: emptyQueryConfig(),
+    clarification_policy: "confirm",
   };
 }
 
@@ -976,6 +987,31 @@ function SearchAnswerProfileEditor({
                     defaultOnOverride="strict"
                     disabled={locked}
                     onChange={(value) => updateQuery({ guardrail_policy: value })}
+                  />
+                </div>
+              </fieldset>
+              {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。ルールごとの確認は下の「プロファイルの知識」。 */}
+              <fieldset
+                className="space-y-3 rounded-lg border border-border p-4"
+                data-testid="search-answer-profile-clarification"
+              >
+                <legend className="px-1 text-sm font-semibold text-fg">
+                  {t("searchAnswerProfiles.clarification.title")}
+                </legend>
+                <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.clarification.helper")}</p>
+                <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                  <h3 className="text-sm font-medium text-fg">{t("searchAnswerProfiles.clarification.policy")}</h3>
+                  <SelectField
+                    id="search-answer-profile-clarification-policy"
+                    label={t("searchAnswerProfiles.clarification.policy")}
+                    value={config.clarification_policy ?? "confirm"}
+                    options={CLARIFICATION_POLICY_OPTIONS}
+                    helper={t("searchAnswerProfiles.clarification.policyHelper")}
+                    disabled={locked}
+                    onValueChange={(value) =>
+                      setConfig((current) => ({ ...current, clarification_policy: value }))
+                    }
+                    className="min-w-0 [&>label]:sr-only"
                   />
                 </div>
               </fieldset>
