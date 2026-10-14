@@ -14,6 +14,9 @@ lock の中で）`record_run_progress(run)` を呼ぶ。Run の状態から段�
 - `approval_wait`（2 回目から `#n`。kind `approval`、params `{"tools": 承認を待つツール名}`）:
   承認を求めた回ごとに 1 つ。承認を待つツールの前に出し、ツールは待機中で出す（承認の後に実行）。
   その回の承認がすべて決まったら完了。
+- `confirmation_wait`（2 回目から `#n`。kind `confirmation`）: Agent 自身の回答前の確認
+  （`ask_user_confirmation`。#1839）で利用者の答えを待つ。答え・スキップで完了。確認のツールの呼び出し
+  そのものは段階に出さない（利用者の答えを返すだけ）。
 - `respond`（2 回目から `#n`。kind `respond`）: ツールがすべて終わり（承認の待ちも無く）、モデルが
   回答を作っている。その後に別のツールを呼んだら、その段階は kind `plan`（進め方の検討）に変えて
   完了にする（完了した段階を実行中に戻さない・消さない。#1358）。
@@ -29,17 +32,22 @@ from typing import TYPE_CHECKING
 from pr_backend_core.chat_progress import ChatProgressRecorder, ChatProgressStepState
 
 if TYPE_CHECKING:
+    from app.features.agent.confirmation import ConfirmationRequest
     from app.features.agent.runtime import ApprovalRequest, RunState, RunStep
 
 # 段階の id・種類（画面の段階の定義の key と同じ）。
 PLAN_STEP = "plan"
 RESPOND_STEP = "respond"
 APPROVAL_STEP = "approval_wait"
+CONFIRMATION_STEP = "confirmation_wait"
+# 回答前の確認のツール（段階には確認の待ちとして出し、ツールの呼び出しとしては出さない）。
+_CONFIRMATION_TOOL = "ask_user_confirmation"
 TOOL_STEP_PREFIX = "tool:"
 KIND_PLAN = "plan"
 KIND_TOOL = "tool"
 KIND_APPROVAL = "approval"
 KIND_RESPOND = "respond"
+KIND_CONFIRMATION = "confirmation"
 # 承認を待つツール名をつなぐ記号（画面の補足にそのまま出す）。
 TOOL_NAME_SEPARATOR = "、"
 
@@ -83,7 +91,11 @@ def _reconcile(run: RunState, recorder: ChatProgressRecorder) -> None:
     if not recorder.steps():
         recorder.start(PLAN_STEP, kind=KIND_PLAN, at=run.created_at)
 
-    tool_steps = [step for step in run.steps if step.tool_call is not None]
+    tool_steps = [
+        step
+        for step in run.steps
+        if step.tool_call is not None and step.tool_call.name != _CONFIRMATION_TOOL
+    ]
     approvals = {approval.id: approval for approval in run.approvals}
     rounds = approval_rounds(run.approvals)
     round_index = {approval.id: index for index, round_ in enumerate(rounds) for approval in round_}
@@ -98,6 +110,13 @@ def _reconcile(run: RunState, recorder: ChatProgressRecorder) -> None:
             index = round_index[approval.id]
             _sync_approval_round(recorder, rounds[index], index)
         _sync_tool_step(recorder, step, step_id, name, approval)
+
+    confirmations = sorted(
+        (item for item in run.confirmations if item.source == "agent"),
+        key=lambda item: item.created_at,
+    )
+    for index, confirmation in enumerate(confirmations):
+        _sync_confirmation(recorder, confirmation, index)
 
     if status == "running" and _ready_to_respond(run, tool_steps) and not _thinking_steps(recorder):
         recorder.start(_next_respond_id(recorder), kind=KIND_RESPOND)
@@ -190,11 +209,35 @@ def _sync_approval_round(
     recorder.finish(step_id, kind=KIND_APPROVAL, at=max(decided) if decided else None)
 
 
+def _sync_confirmation(
+    recorder: ChatProgressRecorder, confirmation: ConfirmationRequest, index: int
+) -> None:
+    """Agent 自身の回答前の確認の待ち（#1839）。答えるまで実行中、答え・スキップで完了。"""
+    step_id = CONFIRMATION_STEP if index == 0 else f"{CONFIRMATION_STEP}#{index + 1}"
+    current = recorder.step(step_id)
+    if current is not None and current.status in _RECORDED_FINISHED:
+        return
+    if confirmation.status == "pending":
+        if current is None or current.status == "pending":
+            _close_thinking(recorder, at=confirmation.created_at)
+        recorder.start(step_id, kind=KIND_CONFIRMATION, at=confirmation.created_at)
+        return
+    if current is None:
+        _close_thinking(recorder, at=confirmation.created_at)
+        recorder.start(step_id, kind=KIND_CONFIRMATION, at=confirmation.created_at)
+    if confirmation.status in {"answered", "skipped"}:
+        recorder.finish(step_id, kind=KIND_CONFIRMATION, at=confirmation.decided_at)
+    else:
+        recorder.finish(step_id, "skipped", kind=KIND_CONFIRMATION, at=confirmation.decided_at)
+
+
 def _ready_to_respond(run: RunState, tool_steps: list[RunStep]) -> bool:
-    """ツールがすべて終わり、承認の待ちも無い（モデルが結果から回答を作っている）。"""
+    """ツールがすべて終わり、承認・確認の待ちも無い（モデルが結果から回答を作っている）。"""
     if not tool_steps:
         return False
     if any(str(approval.status) == "pending" for approval in run.approvals):
+        return False
+    if any(item.source == "agent" and item.status == "pending" for item in run.confirmations):
         return False
     return all(str(step.status) in _FINISHED_TOOL_STATUSES for step in tool_steps)
 

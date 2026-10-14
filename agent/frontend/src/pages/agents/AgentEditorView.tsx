@@ -29,6 +29,7 @@ import {
 } from "@production-ready/ui";
 import {
   agentApi,
+  type ClarificationPolicy,
   type AgentDataScopes,
   type AgentProfile,
   type AgentTemplate,
@@ -56,7 +57,17 @@ interface AgentDraft {
   model_id: string;
   /** データの範囲（#1378。ID を並べ替え、空の接続は持たない形）。 */
   data_scopes: AgentDataScopes;
+  /** 回答前の確認（#1839）。曖昧な質問の扱いと確認の上限（往復）。 */
+  clarification_policy: ClarificationPolicy;
+  clarification_max_rounds: number;
 }
+
+/**
+ * 確認の上限（往復）の選択肢。0 は既定（2 回）。NL2SQL の業務プロファイルと同じく 0 か 2〜6（1 回は選べない）。
+ * backend の `confirmation.DEFAULT_MAX_ROUNDS` / `MAX_ROUNDS_LIMIT`。
+ */
+const DEFAULT_CLARIFICATION_MAX_ROUNDS = 0;
+const CLARIFICATION_MAX_ROUNDS_OPTIONS = [0, 2, 3, 4, 5, 6] as const;
 
 function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
   return {
@@ -67,6 +78,8 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     skill_ids: [...(agent?.skill_ids ?? [])].sort(),
     model_id: agent?.model_id ?? "",
     data_scopes: normalizeDataScopes(agent?.data_scopes),
+    clarification_policy: agent?.clarification_policy === "assume" ? "assume" : "confirm",
+    clarification_max_rounds: agent?.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
   };
 }
 
@@ -127,6 +140,8 @@ export function AgentEditorView({
   const [skillIds, setSkillIds] = useState<string[]>(saved.skill_ids);
   const [modelId, setModelId] = useState(saved.model_id);
   const [dataScopes, setDataScopes] = useState<AgentDataScopes>(saved.data_scopes);
+  const [clarificationPolicy, setClarificationPolicy] = useState<ClarificationPolicy>(saved.clarification_policy);
+  const [clarificationMaxRounds, setClarificationMaxRounds] = useState(saved.clarification_max_rounds);
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [nameError, setNameError] = useState<string | null>(null);
   // 新規作成で選んだ業種テンプレート（#780）。作成した業務 Agent に残す（#810）。
@@ -196,6 +211,8 @@ export function AgentEditorView({
         skill_ids: [...(payload.skill_ids ?? [])].sort(),
         model_id: payload.model_id ?? "",
         data_scopes: normalizeDataScopes(payload.data_scopes),
+        clarification_policy: payload.clarification_policy ?? "confirm",
+        clarification_max_rounds: payload.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
       });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
@@ -214,6 +231,8 @@ export function AgentEditorView({
     setSkillIds(next.skill_ids);
     setModelId(next.model_id);
     setDataScopes(next.data_scopes);
+    setClarificationPolicy(next.clarification_policy);
+    setClarificationMaxRounds(next.clarification_max_rounds);
     setBaseline(next);
     setNameError(null);
   }
@@ -225,6 +244,8 @@ export function AgentEditorView({
     skill_ids: [...skillIds].sort(),
     model_id: modelId,
     data_scopes: normalizeDataScopes(dataScopes),
+    clarification_policy: clarificationPolicy,
+    clarification_max_rounds: clarificationMaxRounds,
   };
   // Agent のフォームの dirty を 1 つの離脱ガードで守る（#87）。
   const dirtySources = useDirtySources();
@@ -251,6 +272,8 @@ export function AgentEditorView({
     setSkillIds(baseline.skill_ids);
     setModelId(baseline.model_id);
     setDataScopes(baseline.data_scopes);
+    setClarificationPolicy(baseline.clarification_policy);
+    setClarificationMaxRounds(baseline.clarification_max_rounds);
     setNewEnabled(true);
     setNameError(null);
     setTemplateId(null);
@@ -313,6 +336,8 @@ export function AgentEditorView({
       skill_ids: skillIds,
       model_id: modelId,
       data_scopes: normalizeDataScopes(dataScopes),
+      clarification_policy: clarificationPolicy,
+      clarification_max_rounds: clarificationMaxRounds,
     };
     if (agent) {
       setName(payload.name);
@@ -516,6 +541,40 @@ export function AgentEditorView({
               readOnly={readOnly}
               disabled={pending}
             />
+            {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定。用語は UX 契約 confirm-before-answer.md）。 */}
+            <Section title={t("agent.clarification.title")} description={t("agent.clarification.description")}>
+              <Card className="min-w-0">
+                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2" data-testid="agent-clarification">
+                  <SelectField
+                    id={`${fieldId}-agent-clarification-policy`}
+                    label={t("agent.clarification.policy")}
+                    helper={t("agent.clarification.policyHint")}
+                    value={clarificationPolicy}
+                    options={[
+                      { value: "confirm", label: t("agent.clarification.policy.confirm") },
+                      { value: "assume", label: t("agent.clarification.policy.assume") },
+                    ]}
+                    onValueChange={(value) => setClarificationPolicy(value === "assume" ? "assume" : "confirm")}
+                  />
+                  <SelectField
+                    id={`${fieldId}-agent-clarification-max-rounds`}
+                    label={t("agent.clarification.maxRounds")}
+                    helper={t("agent.clarification.maxRoundsHint")}
+                    // 前提を示して回答するときは確認しないので、上限は使わない。
+                    disabled={clarificationPolicy === "assume"}
+                    value={String(clarificationMaxRounds)}
+                    options={CLARIFICATION_MAX_ROUNDS_OPTIONS.map((rounds) => ({
+                      value: String(rounds),
+                      label:
+                        rounds === 0
+                          ? t("agent.clarification.maxRounds.default")
+                          : t("agent.clarification.maxRounds.value", { count: rounds }),
+                    }))}
+                    onValueChange={(value) => setClarificationMaxRounds(Number(value))}
+                  />
+                </CardContent>
+              </Card>
+            </Section>
           </fieldset>
           {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
           <SaveErrorBanner

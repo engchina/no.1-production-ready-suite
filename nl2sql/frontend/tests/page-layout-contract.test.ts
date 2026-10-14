@@ -49,13 +49,13 @@ test("メモリモードの警告バナーも全幅で、直下の PageHeader �
   assert.match(gate, /<PageBody wide className="pb-0">/u);
 });
 
-test("AI要件確認の未入力案内は操作前に赤いエラー（role=alert）で出さない", () => {
+test("回答前の確認の未入力案内は操作前に赤いエラー（role=alert）で出さない", () => {
   const workbench = readFileSync(new URL("../src/features/nl2sql/Nl2SqlWorkbench.tsx", import.meta.url), "utf8");
   assert.match(workbench, /<p id="nl2sql-guided-query-required" className="text-xs leading-5 text-fg-muted">/u);
   assert.doesNotMatch(workbench, /<FieldError[\s\S]{0,80}nl2sql-guided-query-required/u);
   assert.match(workbench, /const guidedClarificationHintId = !question\.trim\(\)\s+\? "nl2sql-guided-query-required"/u);
   assert.match(workbench, /aria-describedby=\{guidedClarificationHintId\}/u);
-  // 質問が SQL の文でも押せる（#1727）ので、「AI要件確認は要りません」の案内は出さない。
+  // 質問が SQL の文でも押せる（#1727）ので、「回答前の確認は要りません」の案内は出さない。
   assert.doesNotMatch(workbench, /nl2sql-guided-sql-input/u);
 });
 

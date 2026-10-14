@@ -65,6 +65,7 @@ for (const viewport of VIEWPORTS) {
           expected: "地域ごとの金額",
           expected_tools: [],
           expected_tools_in_order: false,
+          clarification_answers: [],
           source_run_id: null,
         },
       ]);

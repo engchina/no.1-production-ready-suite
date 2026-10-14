@@ -121,6 +121,9 @@ NEXT_STEP_CONTINUE_WITH_TOOLS = "continue_with_tools"
 NEXT_STEP_ANSWER_WITH_CONFIRMATIONS = "answer_with_confirmations"
 # 利用者に条件を確かめる（手順・分岐の答えを出さない。#1322）。
 NEXT_STEP_ASK_CLARIFICATION = "ask_clarification"
+# 回答前の確認をしない Run（業務 Agent の方針が「前提を示して回答する」・確認の上限・無人の Run・
+# 利用者が「確認せずに回答」を選んだ。#1839）で、確認の代わりに前提を示して答える次の手。
+NEXT_STEP_ANSWER_WITH_ASSUMPTIONS = "answer_with_assumptions"
 # 業務ガイドの照合（#1322）の次の手: 人へ引き継ぐ / 条件ごとに答える / 業務ガイドに沿って答える。
 NEXT_STEP_HANDOFF = "handoff"
 NEXT_STEP_ANSWER_BY_CONDITIONS = "answer_by_conditions"
@@ -235,6 +238,29 @@ def ask_clarification_step(clarifications: object, *, reason: str) -> JsonObject
             "確かめてください（選択肢があれば添える。推測で選ばない）。"
             "利用者が答えたら、その値を conditions（条件の id → 値）に入れて続けてください。"
         ),
+    }
+
+
+ASSUMPTION_INSTRUCTION = (
+    "条件によって手順・答えが変わり、その条件が分かっていません。この実行では利用者に確認しません"
+    "（回答前の確認をしない）。questions の条件を聞き返さず、何を前提にしたかを回答の中で示して"
+    "答えるか、条件ごとに分けて、どの場合の手順かを示して答えてください。"
+)
+
+
+def assume_step(next_step: JsonObject | None) -> JsonObject | None:
+    """利用者に確かめる次の手を、前提を示して答える次の手にする（#1839。ほかの手はそのまま）。"""
+    if not isinstance(next_step, dict) or next_step.get("action") != NEXT_STEP_ASK_CLARIFICATION:
+        return next_step
+    if next_step.get("kind") == KIND_NL2SQL:
+        # NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（Agent は受け渡すだけ）。
+        return next_step
+    return {
+        "action": NEXT_STEP_ANSWER_WITH_ASSUMPTIONS,
+        "reason": next_step.get("reason"),
+        "tools": [],
+        "questions": next_step.get("questions", []),
+        "instruction": ASSUMPTION_INSTRUCTION,
     }
 
 
@@ -1471,14 +1497,24 @@ def build_support_task(
     max_tool_calls_per_task: int,
     now: datetime | None = None,
     cancellations: list[JsonObject] | None = None,
+    answered_conditions: dict[str, str] | None = None,
+    ask_rag: bool = True,
 ) -> JsonObject:
     """前の Run までの状態に、この Run の step（ツールの引数と結果）を重ねた状態。
 
     `cancellations` はこの Run で取り消した確認（#1441・#1445。Run の metadata の記録）。
+    `answered_conditions` は利用者が回答前の確認のカードで答えた RAG の条件（#1839。条件の id →
+    値）。`ask_rag` が False（回答前の確認をしない Run）なら、RAG の確かめ中の問いを残さない。
     """
     builder = _StateBuilder(previous)
     # 取り消しは Run の始めに決まる（この Run の step より前）。
     builder.apply_cancellations(list(cancellations or []))
+    if answered_conditions:
+        # 確かめ中の問いの名前を条件の名前にする。
+        builder.add_labels(builder.pending)
+        start = (now or _now()).isoformat()
+        for condition_id, value in answered_conditions.items():
+            builder.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=start)
     for step in steps:
         call = step.tool_call
         if call is None or step.status not in {"completed", "failed"}:
@@ -1495,6 +1531,8 @@ def build_support_task(
             builder.apply_evidence(output)
         if base == NL2SQL_QUERY:
             builder.apply_nl2sql(call.name, call.arguments, result)
+    if not ask_rag:
+        builder.set_rag_pending([])
     run = run_consumption(steps)
     before = previous_task_consumption(previous)
     task = {

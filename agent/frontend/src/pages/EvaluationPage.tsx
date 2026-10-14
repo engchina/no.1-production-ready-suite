@@ -752,7 +752,16 @@ function ResultsTable({
         <RowTitleButton title={result.case.question} subtitle={result.case.id} onClick={() => onOpen(result)} />
       ),
     },
-    { key: "verdict", header: t("evaluation.column.verdict"), render: (result) => <CaseBadge result={result} /> },
+    {
+      key: "verdict",
+      header: t("evaluation.column.verdict"),
+      render: (result) => (
+        <span className="flex flex-col items-start gap-1">
+          <CaseBadge result={result} />
+          <ClarificationNote result={result} />
+        </span>
+      ),
+    },
     {
       key: "score",
       header: t("evaluation.column.score"),
@@ -810,6 +819,54 @@ function ToolSelection({ result }: { result: EvaluationCaseResult }) {
   );
 }
 
+/** 問い返しへの往復の数と、問い返しで終わったか（#1845。色だけでなく文で出す）。 */
+function ClarificationNote({ result }: { result: EvaluationCaseResult }) {
+  const rounds = result.clarification_rounds?.length ?? 0;
+  if (!rounds && !result.ended_with_clarification) return null;
+  return (
+    <span className="text-xs text-fg-muted" data-testid="evaluation-clarification-note">
+      {[
+        rounds ? t("evaluation.clarification.rounds", { count: rounds }) : null,
+        result.ended_with_clarification ? t("evaluation.clarification.ended") : null,
+      ]
+        .filter(Boolean)
+        .join("・")}
+    </span>
+  );
+}
+
+function ClarificationRounds({ result }: { result: EvaluationCaseResult }) {
+  const rounds = result.clarification_rounds ?? [];
+  if (!rounds.length && !result.ended_with_clarification) return null;
+  return (
+    <DetailSection title={t("evaluation.clarification.detailTitle")}>
+      <ol className="space-y-3" data-testid="evaluation-clarification-rounds">
+        {rounds.map((round, index) => (
+          <li key={round.run_id} className="space-y-1 rounded-md border border-border p-3">
+            <p className="break-all text-xs text-fg-muted">
+              {t("evaluation.clarification.detailRound", { number: index + 1, run: round.run_id })}
+            </p>
+            <ul className="list-disc space-y-1 pl-5 text-fg">
+              {round.questions.map((question) => (
+                <li key={`${question.kind}-${question.item_id}`} className="break-words">
+                  {question.label ? `${question.label}: ${question.question}` : question.question}
+                </li>
+              ))}
+            </ul>
+            <p className="whitespace-pre-wrap break-words text-fg">
+              <span className="text-fg-muted">{`${t("evaluation.clarification.sent")}: `}</span>
+              {round.message}
+            </p>
+          </li>
+        ))}
+      </ol>
+      {result.ended_with_clarification ? (
+        <p className="text-xs text-fg-muted">{t("evaluation.clarification.endedHint")}</p>
+      ) : null}
+    </DetailSection>
+  );
+}
+
 function allExpectedCalled(result: EvaluationCaseResult): boolean {
   return result.case.expected_tools.every((tool) =>
     result.tool_calls.some((called) => called === tool || called.endsWith(`__${tool}`))
@@ -857,6 +914,7 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
       <DetailSection title={t("evaluation.detail.expected")}>
         <p className="whitespace-pre-wrap break-words text-fg">{result.case.expected}</p>
       </DetailSection>
+      <ClarificationRounds result={result} />
       <DetailSection title={t("evaluation.detail.answer")}>
         {result.answer ? (
           <div className="rounded-md border border-border p-3">

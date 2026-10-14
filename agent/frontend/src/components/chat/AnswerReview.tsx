@@ -268,6 +268,7 @@ function validationMessage(validation: ReviewValidation): string {
       if (validation.cause === "emptyAnswer") return t("chat.review.message.skippedEmpty");
       if (validation.cause === "clarification") return t("chat.review.message.skippedClarification");
       if (validation.cause === "ragDeclined") return t("chat.review.message.skippedRagDeclined");
+      if (validation.cause === "noToolGrounding") return t("chat.review.message.skippedNoToolGrounding");
       return t("chat.review.message.skipped");
   }
 }

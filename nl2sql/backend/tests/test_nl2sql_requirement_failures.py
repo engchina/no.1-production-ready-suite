@@ -193,7 +193,7 @@ def test_timeout_names_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _Transport(monkeypatch, httpx.ReadTimeout("timed out"))
     error = _failure(_settings(), max_retries=0, timeout_seconds=90.0)
 
-    assert f"AI要件確認の LLM（{MODEL}）が 90 秒以内に応答しませんでした" in error.message_ja
+    assert f"回答前の確認の LLM（{MODEL}）が 90 秒以内に応答しませんでした" in error.message_ja
     assert error.details["kind"] == "timeout"
     assert error.details["timeout_seconds"] == 90.0
     assert transport.timeouts == [90.0]
@@ -298,7 +298,7 @@ async def test_api_returns_reason_and_details() -> None:
         _raise_domain_error(
             RequirementAiUnavailableError(
                 "REQUIREMENT_AI_FAILED",
-                "AI要件確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500）。",
+                "回答前の確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500）。",
                 details={"kind": "unavailable", "http_status": 500, "model_id": MODEL},
             )
         )
@@ -317,7 +317,7 @@ async def test_api_returns_reason_and_details() -> None:
     assert response.status_code == 503
     body = response.json()
     assert body["error_messages"] == [
-        "AI要件確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500）。"
+        "回答前の確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500）。"
     ]
     assert body["error_code"] == "REQUIREMENT_AI_FAILED"
     assert body["problem"]["code"] == "REQUIREMENT_AI_FAILED"

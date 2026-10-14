@@ -17441,7 +17441,7 @@ test("自動判定中はクエリの競合操作を停止し、失敗後に再�
   await page.screenshot({ path: testInfo.outputPath("profile-detect-pending.png") });
   try {
     await expect(input).toBeDisabled();
-    await expect(page.getByRole("button", { name: "AI要件確認", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "回答前の確認", exact: true })).toBeDisabled();
     await expect(page.locator("#nl2sql-profile-select")).toBeDisabled();
     await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "新しい質問を開始", exact: true })).toBeDisabled();

@@ -108,6 +108,10 @@ from app.features.agent.automations import (
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
+from app.features.agent.confirmation import (
+    ConfirmationAnswerError,
+    ConfirmationDecisionRequest,
+)
 from app.features.agent.control_plane_store import (
     ControlPlaneStoreError,
     get_control_plane_store,
@@ -181,6 +185,7 @@ from app.features.agent.run_signals import (
     build_signal_report,
 )
 from app.features.agent.runtime import (
+    AGENT_UNPUBLISHED_MESSAGE,
     BUILTIN_RUNTIME_ID,
     AgentNotPublishedError,
     AgentProfile,
@@ -193,6 +198,8 @@ from app.features.agent.runtime import (
     ApprovalStatus,
     Artifact,
     ArtifactsData,
+    ConfirmationClosedError,
+    ConfirmationOutcome,
     FeedbackRating,
     FeedbackReason,
     RunCreateRequest,
@@ -2832,6 +2839,82 @@ async def cancel_run(
         return ApiResponse(data=runtime_repository.cancel_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+
+
+@router.post(
+    "/runs/{run_id}/confirmations/{confirmation_id}",
+    response_model=ApiResponse[ConfirmationOutcome],
+)
+async def decide_confirmation(
+    run_id: str,
+    confirmation_id: str,
+    decision: ConfirmationDecisionRequest,
+    request: Request,
+    _: None = Depends(require_operator),
+) -> ApiResponse[ConfirmationOutcome]:
+    """回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。
+
+    答えるのは Run を作った利用者だけ（チャットの会話と同じ。管理者も他人の確認には答えない）。
+    Agent 自身の確認は同じ Run を再開し、ツールの結果の確認（NL2SQL・RAG）は答えを構造化した
+    次の Run を同じ会話に作って実行する。やめると質問を返す（画面が入力欄に戻す）。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    _require_agent_access(request, run.agent_id)
+    if run.created_by_user_uuid != _run_creator_user_uuid(request):
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE)
+    if decision.action == "answer" or decision.action == "skip":
+        # 次の Run を作る・再開する前に、業務 Agent が今も使えるかを確かめる（POST /runs と同じ）。
+        try:
+            reason = agent_unavailable_reason(_control_plane_agent(run.agent_id))
+        except KeyError:
+            reason = agent_unavailable_reason(None)
+        if reason is not None and run.metadata.get("agent_version") != "draft":
+            raise HTTPException(
+                status_code=409, detail={"code": "agent_unavailable", "message": reason}
+            )
+    principal = _request_principal(request)
+    try:
+        outcome = runtime_repository.decide_confirmation(
+            run_id,
+            confirmation_id,
+            action=decision.action,
+            answers=decision.answers,
+            decided_by=principal.login_user_id if principal is not None else None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="回答前の確認が見つかりません。") from exc
+    except ConfirmationClosedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "confirmation_closed",
+                "message": (
+                    "この確認は答え済みか、会話が先へ進んだため答えられません。"
+                    "会話を読み込み直してください。"
+                ),
+            },
+        ) from exc
+    except ConfirmationAnswerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AgentNotPublishedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "agent_unpublished", "message": AGENT_UNPUBLISHED_MESSAGE},
+        ) from exc
+    if outcome.next_run is not None:
+        _schedule_builtin_run(outcome.next_run)
+    _schedule_builtin_run(outcome.run)
+    if outcome.closed_sessions:
+        # 「確認をやめる」: NL2SQL の AI要件確認の session を閉じる（閉じられなければ期限で）。
+        task = asyncio.get_running_loop().create_task(
+            builtin_runtime.close_requirement_sessions(run_id, outcome.closed_sessions)
+        )
+        _builtin_tasks.add(task)
+        task.add_done_callback(_builtin_tasks.discard)
+    return ApiResponse(data=outcome)
 
 
 @router.post("/runs/{run_id}/resume", response_model=ApiResponse[RunState])

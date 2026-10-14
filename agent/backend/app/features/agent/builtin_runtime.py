@@ -39,6 +39,7 @@ from agents import (
     ModelSettings,
     OpenAIResponsesModel,
     RunConfig,
+    RunContextWrapper,
     Runner,
     RunState,
     set_tracing_disabled,
@@ -69,7 +70,7 @@ from pr_system_settings.model import (
     seed_to_send,
 )
 
-from app.features.agent import data_scope
+from app.features.agent import data_scope, tool_grounding
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_validation import (
@@ -92,6 +93,7 @@ from app.features.agent.answer_validation import (
     STATUS_SKIPPED,
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
+    carried_evidence,
     combine_validations,
     connection_check_inputs,
     run_evidence_groups,
@@ -118,6 +120,24 @@ from app.features.agent.clarification_cancel import (
     pending_of,
 )
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.confirmation import (
+    CONFIRMATION_TOOL,
+    RESPONSE_METADATA_KEY,
+    SOURCE_AGENT,
+    SOURCE_NL2SQL,
+    SOURCE_RAG,
+    ConfirmationBudget,
+    ConfirmationRequest,
+    confirmation_gate,
+    confirmation_tool,
+    item_from_arguments,
+    items_from_pending,
+    nl2sql_context,
+    policy_instructions,
+    rag_conditions,
+    response_instructions,
+    used_rounds,
+)
 from app.features.agent.skills import (
     reset_pinned_skills,
     resolve_skill,
@@ -137,6 +157,7 @@ from app.features.agent.support_task import (
     RAG_SEARCH,
     SupportTaskBudget,
     adjusted_search_limits,
+    assume_step,
     budget_exceeded_message,
     build_support_task,
     guide_check_note,
@@ -605,6 +626,12 @@ def compose_instructions(
     sections = [
         "あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。"
         "ツールの結果に無いことは推測で補わず、分からないと答えてください。"
+        # 業務の事実はツールの結果だけで答える（#1835。ツールを呼ばずに作った回答は Control Plane
+        # が差し戻し、それでも呼ばなければ拒答にする）。
+        "業務の事実（規程・手順・数値・状態・記録など）は、ツールの結果だけで答えてください。"
+        "ツールで確かめられないとき・業務の範囲外の質問のときは、一般的な知識で答えず、"
+        "確かめられないため答えられないと答えてください。"
+        "質問が曖昧で対象が分からないときは、確認の質問をしてください。"
     ]
     if agent_instructions.strip():
         agent_names = instruction_tool_names(skill_ids, exposed)
@@ -735,6 +762,14 @@ class _ToolRecorder:
         self.data_scopes: data_scope.AgentDataScopes = {}
         # 照合した（する）接続。並列の呼び出しでも 1 回だけにする。
         self._guide_checked: set[str] = set()
+        # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
+        # 答える」に変える。
+        self.confirmation: ConfirmationBudget | None = None
+
+    def _without_asking(self, next_step: dict[str, Any] | None) -> dict[str, Any] | None:
+        if self.confirmation is None or self.confirmation.asks:
+            return next_step
+        return assume_step(next_step)
 
     async def invoke(
         self,
@@ -824,7 +859,7 @@ class _ToolRecorder:
             output = result.output or {}
             base = mcp_base_tool_name(name)
             if base == RAG_SEARCH and isinstance(output, dict):
-                next_step = rag_next_step(output, self.environment_tools)
+                next_step = self._without_asking(rag_next_step(output, self.environment_tools))
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == NL2SQL_QUERY and isinstance(output, dict):
@@ -840,7 +875,7 @@ class _ToolRecorder:
                 # モデルが自分で引いた業務ガイドにも次の手を足す（業務ガイドだけで答えさせない）。
                 note = guide_check_note(output, evidence_gathered=False)
                 if note is not None:
-                    output = {**output, "next_step": note["next_step"]}
+                    output = {**output, "next_step": self._without_asking(note["next_step"])}
             if isinstance(output, dict):
                 output = self.hop_hints(
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits
@@ -998,7 +1033,10 @@ class _ToolRecorder:
         )
         if not result.success or not isinstance(result.output, dict):
             return None
-        return guide_check_note(result.output)
+        note = guide_check_note(result.output)
+        if note is not None:
+            note = {**note, "next_step": self._without_asking(note.get("next_step"))}
+        return note
 
     async def call(
         self,
@@ -1071,14 +1109,18 @@ def build_function_tools(
     known_conditions: Mapping[str, str] | None = None,
     data_scopes: data_scope.AgentDataScopes | None = None,
     declined: Collection[str] = (),
+    confirmation: ConfirmationBudget | None = None,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
     `declined` はこの Run で利用者が確認を取り消した種類（#1441・#1445。そのツールは渡さない）。
+    `confirmation` は回答前の確認の往復（#1839）。確認できる Run にだけ `ask_user_confirmation` を
+    渡し、呼び出しごとに中断するか（利用者の答えを待つか）を往復の残りで決める。
     """
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
     recorder.data_scopes = dict(data_scopes or {})
+    recorder.confirmation = confirmation
     entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
     for name in tool_names:
         registered = tool_registry.get(name)
@@ -1089,6 +1131,9 @@ def build_function_tools(
         from app.features.agent.skill_references import reference_tool
 
         entries.append(reference_tool(reference_keys))
+    if confirmation is not None and (confirmation.asks or confirmation.known_calls):
+        # 答えた確認の再開では、上限に達していてもツールを渡す（SDK が同じ呼び出しを実行する）。
+        entries.append(confirmation_tool())
     tools: list[FunctionTool] = []
     seen: set[str] = set()
     for definition, handler in entries:
@@ -1136,7 +1181,11 @@ def build_function_tools(
                 params_json_schema=schema,
                 on_invoke_tool=on_invoke,
                 strict_json_schema=_strict_schema(schema),
-                needs_approval=decision == ToolPolicyDecision.ASK,
+                needs_approval=(
+                    confirmation_gate(confirmation)
+                    if definition.name == CONFIRMATION_TOOL and confirmation is not None
+                    else decision == ToolPolicyDecision.ASK
+                ),
                 timeout_seconds=max(definition.timeout_seconds, 1.0) * 2,
             )
         )
@@ -1170,8 +1219,13 @@ def build_sdk_agent(
     known_conditions: Mapping[str, str] | None = None,
     data_scopes: data_scope.AgentDataScopes | None = None,
     cancellations: list[dict[str, Any]] | None = None,
+    confirmation: ConfirmationBudget | None = None,
+    confirmation_response: Mapping[str, Any] | None = None,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
+
+    `confirmation` は回答前の確認の往復（#1839）、`confirmation_response` はこの Run が答えた
+    ツールの結果の確認（metadata `clarification_response`）。方針と答えを指示に足す。
 
     `support_task` は前の Run から引き継いだ支援タスクの状態（指示の末尾に足す。#1243）。
     `cancellations` はこの Run で利用者が取り消した確認（#1441・#1445）。その種類のツールを渡さず、
@@ -1197,6 +1251,7 @@ def build_sdk_agent(
         known_conditions=known_conditions,
         data_scopes=data_scopes,
         declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
+        confirmation=confirmation,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -1212,6 +1267,15 @@ def build_sdk_agent(
     cancel_text = cancel_instructions(list(cancellations or []))
     if cancel_text:
         composed = f"{composed}\n\n{cancel_text}"
+    if confirmation is not None:
+        # 回答前の確認の方針と、カードで答えた内容（#1839）。ツールの名前はモデルに渡す名前にする。
+        confirmation_names = instruction_tool_names(skill_ids, exposed)
+        for text in (
+            policy_instructions(confirmation, tool_exposed=CONFIRMATION_TOOL in exposed),
+            response_instructions(confirmation_response),
+        ):
+            if text:
+                composed = f"{composed}\n\n{render_tool_names(text, confirmation_names)}"
     return Agent(
         name=name or "agent",
         instructions=composed,
@@ -1309,9 +1373,40 @@ class _SupportTaskRun:
     instructions: str
     max_rag_calls_per_run: int
     max_tool_calls_per_task: int
+    # 回答前の確認（#1839）: 往復の残り・カードの答え（次の Run の metadata）・答えた RAG の条件。
+    confirmation: ConfirmationBudget | None = None
+    response: dict[str, Any] | None = None
+    answered_conditions: dict[str, str] | None = None
+
+    def known_conditions(self) -> dict[str, str]:
+        """前の Run までに分かった条件と、この Run で利用者がカードで答えた条件。"""
+        return {**support_task_known_conditions(self.previous), **(self.answered_conditions or {})}
 
 
-def _support_task_run(run: Any) -> _SupportTaskRun:
+def confirmation_budget(run: Any, agent: Any) -> ConfirmationBudget:
+    """この Run の回答前の確認の往復（業務 Agent の方針・上限、無人の Run、確認せずに回答）。"""
+    from app.features.agent.runtime import EVALUATION_DRY_RUN_KEY, is_automation_run
+
+    metadata = run.metadata if isinstance(run.metadata, dict) else {}
+    response = metadata.get(RESPONSE_METADATA_KEY)
+    skipped = isinstance(response, dict) and response.get("action") == "skip"
+    confirmations = list(getattr(run, "confirmations", []) or [])
+    budget = ConfirmationBudget(
+        # 利用者が「確認せずに回答」を選んだ Run は、聞き直さずに前提を示して答える。
+        policy="assume" if skipped else str(getattr(agent, "clarification_policy", "confirm")),
+        max_rounds=int(getattr(agent, "clarification_max_rounds", 0) or 0),
+        used=used_rounds(metadata, confirmations),
+        unattended=bool(metadata.get(EVALUATION_DRY_RUN_KEY)) or is_automation_run(metadata),
+    )
+    budget.known_calls = {
+        item.call_id
+        for item in confirmations
+        if item.source == SOURCE_AGENT and item.call_id and item.status in {"answered", "skipped"}
+    }
+    return budget
+
+
+def _support_task_run(run: Any, agent: Any = None) -> _SupportTaskRun:
     """前の Run の状態と、この Run の step から予算の残りを作る。
 
     再開した Run は、それまでの step を数えるので消費を 0 に戻さない。
@@ -1322,6 +1417,8 @@ def _support_task_run(run: Any) -> _SupportTaskRun:
     max_rag = int(settings.agent_max_rag_calls_per_run)
     max_task = int(settings.agent_max_tool_calls_per_task)
     goal, previous = runtime_repository.support_task_context(run.id)
+    response = run.metadata.get(RESPONSE_METADATA_KEY) if isinstance(run.metadata, dict) else None
+    response = response if isinstance(response, dict) else None
     return _SupportTaskRun(
         goal=goal,
         previous=previous,
@@ -1339,21 +1436,29 @@ def _support_task_run(run: Any) -> _SupportTaskRun:
         ),
         max_rag_calls_per_run=max_rag,
         max_tool_calls_per_task=max_task,
+        confirmation=confirmation_budget(run, agent) if agent is not None else None,
+        response=response,
+        answered_conditions=rag_conditions(response or {}),
     )
 
 
-def _save_support_task(run_id: str, task: _SupportTaskRun) -> None:
+def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | None:
     """支援タスクの状態を Run の成果物に残す（ツールを呼ばず、引き継ぐ状態も無ければ残さない）。
 
-    状態は補助のため、作れなくても Run は止めない。
+    状態は補助のため、作れなくても Run は止めない。残した状態を返す（残さなければ None）。
     """
     from app.features.agent.runtime import runtime_repository
 
     try:
         run = runtime_repository.get_run(run_id)
         cancellations = _run_cancellations(run)
-        if task.previous is None and not has_support_task_activity(run.steps) and not cancellations:
-            return
+        if (
+            task.previous is None
+            and not has_support_task_activity(run.steps)
+            and not cancellations
+            and not task.answered_conditions
+        ):
+            return None
         content = build_support_task(
             task.previous,
             steps=run.steps,
@@ -1364,13 +1469,17 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> None:
             max_rag_calls_per_run=task.max_rag_calls_per_run,
             max_tool_calls_per_task=task.max_tool_calls_per_task,
             cancellations=cancellations,
+            answered_conditions=task.answered_conditions,
+            ask_rag=task.confirmation is None or task.confirmation.asks,
         )
         runtime_repository.save_support_task(run_id, content)
+        return content
     except Exception as exc:  # noqa: BLE001 - 状態は補助。残せなくても回答は返す
         logger.warning(
             "builtin_runtime_support_task_failed",
             extra={"run_id": run_id, "exception_type": type(exc).__name__},
         )
+        return None
 
 
 async def execute_run(run_id: str) -> None:
@@ -1385,7 +1494,7 @@ async def execute_run(run_id: str) -> None:
         # 公開中の版に固定したスキルで動く（#1855。下書きの Run・固定の無い古い版は今のスキル）。
         pinned = use_pinned_skills(agent.pinned_skills)
         try:
-            task = _support_task_run(run)
+            task = _support_task_run(run, agent)
             cancellations = await _apply_clarification_cancel(run, task.previous, agent.data_scopes)
             sdk_agent = await asyncio.to_thread(
                 build_sdk_agent,
@@ -1399,9 +1508,11 @@ async def execute_run(run_id: str) -> None:
                 budget=task.budget,
                 support_task=task.instructions,
                 goal=support_task_goal(run.goal, task.previous),
-                known_conditions=support_task_known_conditions(task.previous),
+                known_conditions=task.known_conditions(),
                 data_scopes=agent.data_scopes,
                 cancellations=cancellations,
+                confirmation=task.confirmation,
+                confirmation_response=task.response,
             )
             result = await Runner.run(
                 sdk_agent,
@@ -1410,6 +1521,9 @@ async def execute_run(run_id: str) -> None:
                 run_config=_run_config(run_id, sdk_agent),
             )
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+            result, refused = await _require_tool_grounding(
+                run, sdk_agent, result, agent.data_scopes
+            )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1417,6 +1531,7 @@ async def execute_run(run_id: str) -> None:
                 task,
                 rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                 data_scopes=agent.data_scopes,
+                refusal=_refusal_text(agent, sdk_agent) if refused else None,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
@@ -1436,7 +1551,7 @@ async def resume_run(run_id: str) -> None:
         run, agent, state_text, decisions = resumed
         pinned = use_pinned_skills(agent.pinned_skills)
         try:
-            task = _support_task_run(run)
+            task = _support_task_run(run, agent)
             # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
             cancellations = _run_cancellations(run)
             sdk_agent = await asyncio.to_thread(
@@ -1451,9 +1566,11 @@ async def resume_run(run_id: str) -> None:
                 budget=task.budget,
                 support_task=task.instructions,
                 goal=support_task_goal(run.goal, task.previous),
-                known_conditions=support_task_known_conditions(task.previous),
+                known_conditions=task.known_conditions(),
                 data_scopes=agent.data_scopes,
                 cancellations=cancellations,
+                confirmation=task.confirmation,
+                confirmation_response=task.response,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
@@ -1466,6 +1583,9 @@ async def resume_run(run_id: str) -> None:
                 sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
             )
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+            result, refused = await _require_tool_grounding(
+                run, sdk_agent, result, agent.data_scopes
+            )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1473,6 +1593,7 @@ async def resume_run(run_id: str) -> None:
                 task,
                 rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                 data_scopes=agent.data_scopes,
+                refusal=_refusal_text(agent, sdk_agent) if refused else None,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
@@ -1603,6 +1724,35 @@ async def _cancel_requirement_session(
     return status if isinstance(status, str) and status else "cancelled"
 
 
+async def close_requirement_sessions(run_id: str, sessions: list[dict[str, Any]]) -> None:
+    """「確認をやめる」で外した NL2SQL の AI要件確認の session を閉じる（#1839）。
+
+    閉じられなくても利用者の操作は済んでいる（session は操作が途絶えると期限で閉じる）。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    with bind_log_context(run_id=run_id):
+        try:
+            run = runtime_repository.get_run(run_id)
+            agent = next(
+                (item for item in runtime_repository.list_agents() if item.id == run.agent_id),
+                None,
+            )
+            for index, session in enumerate(sessions):
+                await _cancel_requirement_session(
+                    run,
+                    str(session.get("connection") or "") or data_scope.NL2SQL_CONNECTION_ID,
+                    str(session.get("requirement_session_id") or ""),
+                    trace_id=f"{CANCEL_TRACE_PREFIX}{run.id}_withdrawn_{index}",
+                    data_scopes=agent.data_scopes if agent is not None else None,
+                )
+        except Exception as exc:  # noqa: BLE001 - 閉じられなくても期限で閉じる
+            logger.warning(
+                "builtin_runtime_withdrawn_session_close_failed",
+                extra={"run_id": run_id, "exception_type": type(exc).__name__},
+            )
+
+
 def _scoped_call(call: ToolCall, data_scopes: data_scope.AgentDataScopes | None) -> ToolCall:
     """承認・dry-run に記録する呼び出しに、データの範囲を当てる（実行するときと同じ引数。#1378）。
 
@@ -1677,6 +1827,101 @@ async def _unattended_approvals(
     return result
 
 
+def _answer_text(output: object) -> str:
+    return (
+        output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
+    )
+
+
+async def _require_tool_grounding(
+    run: Any,
+    sdk_agent: Agent[Any],
+    result: Any,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> tuple[Any, bool]:
+    """根拠・データのツールを呼ばずに作った回答を差し戻し、それでも呼ばなければ拒答にする（#1835）。
+
+    根拠・データのツールを持つ Run で、モデルがどれも呼ばずに最終の回答を作ったら（確認の質問
+    だけの回答は除く。`tool_grounding.needs_grounding`）、`tool_grounding.MAX_RETRIES` 回まで
+    「ツールで確かめてから答える。確かめられないなら拒答する」を利用者のメッセージとして足して
+    Run を続ける（同じ SDK の Agent・ツール・予算。利用量は前の分に積む）。続けた Run が承認で
+    止まったら、そのまま返す（承認待ち。無人の Run は `_unattended_approvals` で続ける）。
+    差し戻しても呼ばなければ、2 つ目の値を True にして返す（`_finish` が拒答の文に置き換える）。
+    差し戻しと元の回答は Run の経過に残す。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    if not get_settings().agent_tool_grounding_required:
+        return result, False
+    tool_names = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+    if not tool_grounding.grounding_tools(tool_names):
+        return result, False
+    while not list(getattr(result, "interruptions", []) or []):
+        answer = _answer_text(result.final_output)
+        current = runtime_repository.get_run(run.id)
+        if declined_kinds(current.metadata):
+            # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
+            # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
+            return result, False
+        if not tool_grounding.needs_grounding(
+            answer, steps=list(current.steps), tool_names=tool_names
+        ):
+            return result, False
+        if _grounded_in_thread(run.id):
+            # 同じ会話の前の Run がツールで答えた。前の回答の言い換え・整形を拒答にしない。
+            return result, False
+        if tool_grounding.retried(current.metadata) >= tool_grounding.MAX_RETRIES:
+            runtime_repository.record_tool_grounding(run.id, "refused", answer)
+            logger.info(
+                "builtin_runtime_tool_grounding_refused",
+                extra={"run_id": run.id, "tool_names": tool_names},
+            )
+            return result, True
+        runtime_repository.record_tool_grounding(run.id, "retry", answer)
+        logger.info(
+            "builtin_runtime_tool_grounding_retry",
+            extra={"run_id": run.id, "tool_names": tool_names},
+        )
+        # 利用量は新しい Run の文脈に前の分を足して続ける（承認待ちで保存する状態にも入る）。
+        context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
+        context.usage.add(result.context_wrapper.usage)
+        result = await Runner.run(
+            sdk_agent,
+            tool_grounding.retry_input(result.to_input_list(), answer),
+            context=context,
+            max_turns=_max_turns(),
+            run_config=_run_config(run.id, sdk_agent),
+        )
+        result = await _unattended_approvals(run, sdk_agent, result, data_scopes)
+    return result, False
+
+
+def _grounded_in_thread(run_id: str) -> bool:
+    """会話の履歴の上限（`PLATFORM_CHAT_HISTORY_MAX_TURNS`。#1818）の中の前の Run のどれかが、
+    根拠・データのツールで答えたか（#1835）。上限が 0（履歴を渡さない）なら前の Run を見ない。"""
+    from app.features.agent.runtime import runtime_repository
+
+    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
+    if max_turns <= 0:
+        return False
+    previous = runtime_repository.thread_previous_runs(run_id)[-max_turns:]
+    return tool_grounding.grounded_in_thread(list(item.steps) for item in previous)
+
+
+def _refusal_text(agent: Any, sdk_agent: Agent[Any]) -> str:
+    """拒答の文（業務 Agent の説明・スキルの表示名と、モデルに渡したツールから。#1835）。"""
+    skill_names = [
+        skill.name
+        for skill_id in getattr(agent, "skill_ids", []) or []
+        if (skill := resolve_skill(skill_id)) is not None and skill.enabled
+    ]
+    return tool_grounding.refusal_text(
+        description=str(getattr(agent, "description", "") or ""),
+        skill_names=skill_names,
+        tool_names=[str(getattr(tool, "name", "")) for tool in sdk_agent.tools],
+    )
+
+
 def _interruption_call(item: Any) -> ToolCall:
     """SDK の中断（承認待ち）の項目を、記録する呼び出しにする。"""
     return ToolCall(
@@ -1693,24 +1938,47 @@ async def _finish(
     *,
     rag_tools: bool = False,
     data_scopes: data_scope.AgentDataScopes | None = None,
+    refusal: str | None = None,
 ) -> None:
+    """Run を承認待ちにするか、回答を確定する。
+
+    `refusal` があれば（根拠・データのツールを呼ばずに作った回答。#1835）、モデルの回答の代わりに
+    その拒答の文を回答にし、最終の検証はせずに `skipped`（`no_tool_grounding`）を残す。
+    """
     from app.features.agent.runtime import runtime_repository
 
     # 承認待ちで止めるときも残す（再開した Run は同じ成果物を上書きする。#1243）。
-    if task is not None:
-        _save_support_task(run_id, task)
+    state_content = _save_support_task(run_id, task) if task is not None else None
     interruptions = list(getattr(result, "interruptions", []) or [])
     if interruptions:
         # 承認で見せる引数は、実行するときと同じくデータの範囲を当てたもの（#1378）。
-        calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
+        # Agent 自身の回答前の確認（#1839）は承認ではなく、利用者の答えを待つ確認にする。
+        calls: list[ToolCall] = []
+        confirmations: list[ConfirmationRequest] = []
+        for item in interruptions:
+            call = _interruption_call(item)
+            if call.name == CONFIRMATION_TOOL:
+                confirmations.append(_agent_confirmation(call, task))
+            else:
+                calls.append(_scoped_call(call, data_scopes))
         runtime_repository.request_builtin_approvals(
-            run_id, calls, state=result.to_state().to_string()
+            run_id, calls, state=result.to_state().to_string(), confirmations=confirmations
         )
         return
-    output = result.final_output
-    answer = (
-        output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
-    )
+    if refusal is not None:
+        runtime_repository.save_builtin_artifact(
+            run_id,
+            kind=ANSWER_VALIDATION_KIND,
+            name=ANSWER_VALIDATION_NAME,
+            content=validation_content(
+                STATUS_SKIPPED, reason=tool_grounding.REASON_NO_TOOL_GROUNDING
+            ),
+        )
+        runtime_repository.complete_builtin_run(
+            run_id, refusal, outcome=tool_grounding.refusal_outcome()
+        )
+        return
+    answer = _answer_text(result.final_output)
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None
@@ -1735,8 +2003,82 @@ async def _finish(
             )
             answer = with_unverified_notice(answer)
     runtime_repository.complete_builtin_run(
-        run_id, answer, outcome=_answer_outcome(run_id, model_answer, validation)
+        run_id,
+        answer,
+        outcome=_answer_outcome(run_id, model_answer, validation),
+        confirmations=_tool_confirmations(task, state_content),
     )
+
+
+def _agent_confirmation(call: ToolCall, task: _SupportTaskRun | None) -> ConfirmationRequest:
+    """`ask_user_confirmation` の中断を、利用者の答えを待つ確認にする（#1839）。"""
+    budget = task.confirmation if task is not None else None
+    round_ = (budget.rounds.get(call.trace_id or "") or budget.used) if budget is not None else 1
+    return ConfirmationRequest(
+        source=SOURCE_AGENT,
+        call_id=call.trace_id or "",
+        items=[item_from_arguments(call.arguments)],
+        round=max(round_, 1),
+        max_rounds=budget.max_rounds if budget is not None else 1,
+    )
+
+
+def _pending_key(entry: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(entry.get("kind") or KIND_RAG),
+        str(entry.get("condition_id") or ""),
+        str(entry.get("requirement_session_id") or ""),
+    )
+
+
+def _tool_confirmations(
+    task: _SupportTaskRun | None, content: Mapping[str, Any] | None
+) -> list[ConfirmationRequest]:
+    """この Run のツールの結果が返した確認事項を、画面の回答前の確認にする（#1839）。
+
+    確認事項は呼び先（NL2SQL・RAG）が作ったまま受け渡す。この Run で新しく確かめ中になった問いだけ
+    （前の Run から残っている問いは出し直さない）。無人の Run は出さない。RAG の確認は、利用者に
+    確認できる Run だけ（方針が「前提を示して回答する」・上限に達した Run では前提を示して
+    答えている）。
+    NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（聞かれたものを出す）。スキップは
+    次の Run で `skip_clarification` を付けて呼び直させる。
+    """
+    budget = task.confirmation if task is not None else None
+    if task is None or budget is None or budget.unattended or not isinstance(content, Mapping):
+        return []
+    previous = task.previous.get("pending_clarifications") if task.previous else None
+    seen = {_pending_key(entry) for entry in previous or [] if isinstance(entry, Mapping)}
+    pending = [
+        entry
+        for entry in content.get("pending_clarifications") or []
+        if isinstance(entry, Mapping) and _pending_key(entry) not in seen
+    ]
+    nl2sql = [entry for entry in pending if entry.get("kind") == KIND_NL2SQL]
+    if nl2sql:
+        items = items_from_pending(nl2sql[:1], SOURCE_NL2SQL)
+        if items:
+            return [
+                ConfirmationRequest(
+                    source=SOURCE_NL2SQL,
+                    items=items,
+                    round=budget.used + 1,
+                    max_rounds=budget.max_rounds,
+                    context=nl2sql_context(nl2sql[0]),
+                )
+            ]
+    rag = [entry for entry in pending if entry.get("kind") != KIND_NL2SQL]
+    if rag and budget.asks:
+        items = items_from_pending(rag, SOURCE_RAG)
+        if items:
+            return [
+                ConfirmationRequest(
+                    source=SOURCE_RAG,
+                    items=items,
+                    round=budget.used + 1,
+                    max_rounds=budget.max_rounds,
+                )
+            ]
+    return []
 
 
 def _answer_outcome(
@@ -1812,8 +2154,13 @@ async def _validate_final_answer(
         return content
 
     run = runtime_repository.get_run(run_id)
+    # 会話の続きでは、前のターン（モデルに渡す往復の数まで）の検証で回答の段落を裏付けた根拠も
+    # 渡す（#1837。前のターンの事実を言い直した段落を、今のターンの根拠だけで外さない）。
+    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
+    previous = runtime_repository.thread_answer_validations(run_id) if max_turns > 0 else []
+    carried = carried_evidence(previous[-max_turns:] if max_turns > 0 else [])
     # 回答が引用した根拠を先にして、上限で切っても検証に入れる（#1364）。
-    groups = run_evidence_groups(run.steps, answer)
+    groups = run_evidence_groups(run.steps, answer, carried=carried)
     if not groups:
         if KIND_RAG in declined_kinds(run.metadata):
             # 利用者が「資料の検索は不要」とした（#1445）。資料と照らし合わせない（注記しない）。
