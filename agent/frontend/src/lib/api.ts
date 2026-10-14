@@ -130,6 +130,8 @@ export interface ToolPolicyTool {
   side_effects: boolean | null;
   /** ポリシーで個別に決めていないとき（既定に従う）の判定。不明なら null。 */
   default_decision: "allow" | "ask" | "deny" | null;
+  /** その判定の理由（#1832）。read_only / untrusted_annotation / default_mode。 */
+  default_reason?: "standard" | "read_only" | "untrusted_annotation" | "default_mode" | null;
   /** false は一覧に無い（接続を取れない・ツールが無くなった）が、保存したポリシーにある名前。 */
   available: boolean;
 }
@@ -139,6 +141,8 @@ export interface ToolPolicyConnection {
   label: string;
   /** false は URL を設定していない（一覧は取らない）。 */
   configured: boolean;
+  /** ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832）。 */
+  trust_tool_annotations?: boolean;
   tool_count: number;
   /** 一覧を取れなかった理由。 */
   error: string | null;
@@ -700,6 +704,8 @@ export interface McpConnectionSettings {
   service_token_configured: boolean;
   /** AGENT_MCP_SERVICE_USER_LOGIN_ID があるか（Run の利用者がいない呼び出しで使う）。 */
   service_user_configured: boolean;
+  /** ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に true）。 */
+  trust_tool_annotations?: boolean;
 }
 
 export interface McpConnectionsData {
@@ -719,6 +725,7 @@ export interface McpConnectionWritePayload {
   oauth_client_secret?: string | null;
   oauth_scope?: string | null;
   service_audience?: string | null;
+  trust_tool_annotations?: boolean;
 }
 
 export interface ExternalMcpToolInfo {
@@ -727,8 +734,10 @@ export interface ExternalMcpToolInfo {
   input_schema: Record<string, unknown>;
   output_schema?: Record<string, unknown> | null;
   server_id?: string | null;
-  /** MCP の readOnlyHint。false のツールは既定で承認が必要。 */
+  /** MCP の readOnlyHint。注釈を信頼する接続では、true のツールは既定で承認なし。 */
   read_only: boolean;
+  /** ツール権限で個別に決めていないときの判定（#1832）。 */
+  default_decision?: "allow" | "ask" | "deny" | null;
   /** Agent のモデルに渡すツール名（`<接続>__<ツール>`）。 */
   function_name?: string | null;
   metadata: Record<string, unknown>;
@@ -1085,6 +1094,8 @@ export interface RuntimeStorageStatus {
 export interface ApprovalDecisionPayload {
   approved: boolean;
   comment?: string;
+  /** 承認して、今後このツールは自動で実行（ツール権限の allow に足す。Agent 管理だけ。#1832）。 */
+  always_allow?: boolean;
 }
 
 // --- 認証（platform の共通認証。#215） ---

@@ -26,6 +26,7 @@ import {
   SaveErrorBanner,
   Section,
   StatusBadge,
+  Switch,
   toast,
   useConfirm,
   type DataTableColumn,
@@ -222,7 +223,9 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
                 })}
                 testId="mcp-tools-result"
               />
-              {tools.length ? <McpToolsList tools={tools} /> : null}
+              {tools.length ? (
+                <McpToolsList tools={tools} trusted={connection.trust_tool_annotations !== false} />
+              ) : null}
             </>
           ) : null}
         </CardContent>
@@ -267,8 +270,16 @@ function McpToolsFailure({
   );
 }
 
-function McpToolApprovalBadge({ tool }: { tool: ExternalMcpToolInfo }) {
-  // readOnlyHint の無いツールは、ツール権限で許可しない限り実行の前に承認を求める。
+function McpToolApprovalBadge({ tool, trusted }: { tool: ExternalMcpToolInfo; trusted: boolean }) {
+  // readOnlyHint の無いツールは、ツール権限で許可しない限り実行の前に承認を求める。注釈を信頼しない接続では
+  // readOnlyHint のツールも承認を求める（#1832）。標準の接続の nl2sql_query のように backend の既定で
+  // 承認なしのツールは、backend の判定（default_decision）に従う。
+  if (!tool.read_only && tool.default_decision === "allow") {
+    return <StatusBadge variant="neutral" label={t("settings.mcpConnections.autoByDefault")} icon={false} />;
+  }
+  if (tool.read_only && !trusted) {
+    return <StatusBadge variant="warning" label={t("settings.mcpConnections.readOnlyUntrusted")} icon={false} />;
+  }
   return tool.read_only ? (
     <StatusBadge variant="neutral" label={t("settings.mcpConnections.readOnly")} icon={false} />
   ) : (
@@ -276,7 +287,7 @@ function McpToolApprovalBadge({ tool }: { tool: ExternalMcpToolInfo }) {
   );
 }
 
-function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
+function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; trusted: boolean }) {
   // 取り直した一覧は別の結果なので、そのときだけ 1 ページ目へ戻す。
   const { page, setPage, totalPages, pageItems, range } = usePagination(tools, DEFAULT_PAGE_SIZE, { resetKey: tools });
   const labels = agentPaginationLabels();
@@ -303,7 +314,7 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
     {
       key: "approval",
       header: t("settings.mcpConnections.approval"),
-      render: (tool) => <McpToolApprovalBadge tool={tool} />,
+      render: (tool) => <McpToolApprovalBadge tool={tool} trusted={trusted} />,
     },
     {
       key: "input_schema",
@@ -338,7 +349,7 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
           <div key={tool.name} className="rounded-md border border-border p-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <p className="min-w-0 break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
-              <McpToolApprovalBadge tool={tool} />
+              <McpToolApprovalBadge tool={tool} trusted={trusted} />
             </div>
             <p className="mt-1 text-sm leading-6 text-fg-muted">{tool.description || "-"}</p>
             <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-fg-muted">
@@ -422,6 +433,8 @@ interface McpConnectionFormState {
   oauthClientId: string;
   oauthClientSecret: string;
   oauthScope: string;
+  /** ツールの注釈（readOnlyHint）を信頼する（#1832。既定はオン。標準の接続は常に使う）。 */
+  trustToolAnnotations: boolean;
 }
 
 const EMPTY_MCP_FORM: McpConnectionFormState = {
@@ -437,6 +450,8 @@ const EMPTY_MCP_FORM: McpConnectionFormState = {
   oauthClientId: "",
   oauthClientSecret: "",
   oauthScope: "",
+  // 既定はオン（#1832。ユーザーの決定）。信頼しない接続はオフにする。
+  trustToolAnnotations: true,
 };
 
 /**
@@ -464,6 +479,7 @@ function mcpFormOf(connection: McpConnectionSettings | undefined): McpConnection
     authMode: connection.auth_mode,
     serviceAudience: connection.service_audience ?? "",
     timeoutSeconds: String(connection.timeout_seconds),
+    trustToolAnnotations: connection.trust_tool_annotations !== false,
   };
 }
 
@@ -672,6 +688,8 @@ function McpConnectionEditor({
       }
       if (!builtin) {
         payload.auth_mode = current.authMode;
+        // 標準の接続は注釈を常に使う（送らない。#1832）。
+        payload.trust_tool_annotations = current.trustToolAnnotations;
       }
       if (current.authMode === "api_key" && current.apiKey) {
         payload.api_key = current.apiKey;
@@ -867,6 +885,24 @@ function McpConnectionEditor({
                     autoComplete="off"
                     onValueChange={(value) => setForm({ ...form, sessionId: value })}
                   />
+                  {/* ツールの注釈（readOnlyHint）の信頼（#1832）。標準の接続は常に使う（変えられない）。 */}
+                  <div className="space-y-1 lg:col-span-2" data-testid="mcp-trust-annotations">
+                    <label className="inline-flex items-center gap-2 text-sm text-fg">
+                      <Switch
+                        checked={builtin || form.trustToolAnnotations}
+                        disabled={builtin}
+                        aria-label={t("settings.mcpConnections.trustAnnotations")}
+                        aria-describedby="mcp-trust-annotations-helper"
+                        onCheckedChange={(checked) => setForm({ ...form, trustToolAnnotations: checked })}
+                      />
+                      {t("settings.mcpConnections.trustAnnotations")}
+                    </label>
+                    <p id="mcp-trust-annotations-helper" className="text-xs leading-5 text-fg-muted">
+                      {builtin
+                        ? t("settings.mcpConnections.trustAnnotationsBuiltin")
+                        : t("settings.mcpConnections.trustAnnotationsHelper")}
+                    </p>
+                  </div>
                 </CardContent>
               </Card>
             </Section>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, History, RefreshCw, X } from "lucide-react";
+import { Check, CheckCheck, History, RefreshCw, X } from "lucide-react";
 import {
   Banner,
   ButtonLink,
@@ -82,14 +82,27 @@ export function ApprovalsPage() {
   const manualRefresh = useActionPending();
   const runs = useQuery({ queryKey: ["runs"], queryFn: agentApi.listRuns, refetchInterval: 5000 });
   const decide = useMutation({
-    mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
-      // 決定者はログイン中の利用者から server が決める（#215）。
-      agentApi.decideApproval(approval.id, { approved }),
-    onSuccess: (updatedRun, { approval, approved }) => {
+    mutationFn: ({
+      approval,
+      approved,
+      alwaysAllow = false,
+    }: {
+      approval: ApprovalRequest;
+      approved: boolean;
+      alwaysAllow?: boolean;
+    }) =>
+      // 決定者はログイン中の利用者から server が決める（#215）。「今後は自動」はツール権限も変える（#1832）。
+      agentApi.decideApproval(approval.id, alwaysAllow ? { approved, always_allow: true } : { approved }),
+    onSuccess: (updatedRun, { approval, approved, alwaysAllow }) => {
       // 押した判断が自分の判断として残ったときだけ成功と案内する（ほかの操作者が先に判断した承認は、backend が
       // 状態を変えずに 200 で返す。#1119）。
       if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
-        toast.success(approved ? t("approval.decided") : t("approval.rejected"));
+        if (alwaysAllow) {
+          toast.success(t("approval.approvedAlways", { tool: approval.tool_call.name }));
+          void queryClient.invalidateQueries({ queryKey: ["settings", "tool-policy"] });
+        } else {
+          toast.success(approved ? t("approval.decided") : t("approval.rejected"));
+        }
       } else {
         toast.info(t("approval.changedDuringReview"));
       }
@@ -147,19 +160,27 @@ export function ApprovalsPage() {
     editor.openItem(id);
   }
 
-  async function decideApproval(approval: ApprovalRequest, approved: boolean) {
+  async function decideApproval(approval: ApprovalRequest, approved: boolean, alwaysAllow = false) {
     if (decide.isPending || !capabilities.decideApprovals || approval.status !== "pending") return;
     const row = approvals.find((item) => item.approval.id === approval.id);
+    const context = t("approval.confirmContext", {
+      tool: approval.tool_call.name,
+      goal: row?.run.goal ?? "",
+      id: approval.id,
+    });
+    // 「今後は自動」はポリシーが変わること（全体に効くこと・戻し方）を確認のダイアログで示す（#1832）。
     const ok = await confirm({
-      title: approved ? t("run.approveTitle") : t("run.rejectTitle"),
-      description: t("approval.confirmContext", {
-        tool: approval.tool_call.name,
-        goal: row?.run.goal ?? "",
-        id: approval.id,
-      }),
-      confirmLabel: approved ? t("common.approve") : t("common.reject"),
+      title: alwaysAllow
+        ? t("approval.approveAlwaysTitle", { tool: approval.tool_call.name })
+        : approved
+          ? t("run.approveTitle")
+          : t("run.rejectTitle"),
+      description: alwaysAllow
+        ? `${t("approval.approveAlwaysDescription", { tool: approval.tool_call.name })} ${context}`
+        : context,
+      confirmLabel: alwaysAllow ? t("approval.approveAlways") : approved ? t("common.approve") : t("common.reject"),
       cancelLabel: t("common.cancel"),
-      tone: approved ? "info" : "danger",
+      tone: alwaysAllow ? "warning" : approved ? "info" : "danger",
     });
     if (ok) {
       // 確認中にポーリングで更新された場合は、現在の cache を読み、古い状態で送らない。
@@ -171,7 +192,7 @@ export function ApprovalsPage() {
         toast.info(t("approval.changedDuringReview"));
         return;
       }
-      decide.mutate({ approval: latest, approved });
+      decide.mutate({ approval: latest, approved, alwaysAllow });
     }
   }
 
@@ -183,7 +204,11 @@ export function ApprovalsPage() {
       icon: Check,
       visible: capabilities.decideApprovals && approval.status === "pending",
       disabled: decide.isPending,
-      loading: decide.isPending && decide.variables?.approval.id === approval.id && decide.variables.approved,
+      loading:
+        decide.isPending &&
+        decide.variables?.approval.id === approval.id &&
+        decide.variables.approved &&
+        !decide.variables.alwaysAllow,
       onSelect: () => decideApproval(approval, true),
     },
     {
@@ -195,6 +220,18 @@ export function ApprovalsPage() {
       disabled: decide.isPending,
       loading: decide.isPending && decide.variables?.approval.id === approval.id && !decide.variables.approved,
       onSelect: () => decideApproval(approval, false),
+    },
+    {
+      // 承認して、今後このツールは自動で実行（ツール権限を変えられる Agent 管理だけ。#1832）。承認・却下の
+      // 後に置く（狭い画面では「その他の操作」に入り、承認と却下を直接押せるままにする）。
+      id: "approve-always",
+      label: t("approval.approveAlways"),
+      icon: CheckCheck,
+      visible: capabilities.decideApprovals && capabilities.admin && approval.status === "pending",
+      disabled: decide.isPending,
+      loading:
+        decide.isPending && decide.variables?.approval.id === approval.id && Boolean(decide.variables.alwaysAllow),
+      onSelect: () => decideApproval(approval, true, true),
     },
   ];
 

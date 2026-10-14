@@ -11,7 +11,7 @@ function seedApproval(mockApi: MockApi, id = "approval-layout", status = "pendin
     run_id: `run-${id}`,
     step_id: `step-${id}`,
     status,
-    tool_call: { name: "nl2sql__nl2sql_query", arguments: { question: "売上を集計して", scope: "承認済みの国内取引" } },
+    tool_call: { name: "crm__update_order", arguments: { question: "売上を集計して", scope: "承認済みの国内取引" } },
     reason: "データの参照範囲を確認してください。",
     created_at: MOCK_NOW,
     decided_by: status === "pending" ? null : "reviewer.user",
@@ -356,4 +356,47 @@ test("判断者は表示名で出し、引けない利用者・自動の処理�
   await expect(record).not.toContainText("deleted.user");
   await page.goto("/approvals?id=approval-system");
   await expect(record).toContainText("判断者システム（自動）");
+});
+
+// #1832: 承認して、今後このツールは自動で実行（ツール権限の allow に足す。Agent 管理だけ）。
+test("承認して今後は自動で実行すると、確認でポリシーの変更を示してツール権限に入れる", { tag: "@responsive" }, async ({
+  page,
+  mockApi,
+}, testInfo) => {
+  seedApproval(mockApi);
+  await page.goto("/approvals?id=approval-layout");
+  await detailAction(page, "承認して今後は自動で実行");
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("今後「crm__update_order」を自動で実行しますか?");
+  await expect(dialog).toContainText("ツール権限の「crm__update_order」のポリシーを「自動実行」に変えます");
+  await expect(dialog).toContainText("承認 ID: approval-layout");
+  await page.screenshot({ path: testInfo.outputPath("approval-always-allow-dialog.png") });
+  await dialog.getByRole("button", { name: "承認して今後は自動で実行", exact: true }).click();
+  await expect(page.getByText("承認しました。今後「crm__update_order」は自動で実行します")).toBeVisible();
+  expect(mockApi.lastRequest("POST", "/api/approvals/approval-layout/decision")?.body).toEqual({
+    approved: true,
+    always_allow: true,
+  });
+  expect((mockApi.state.toolPolicy as { allow: string[] }).allow).toContain("crm__update_order");
+  await expect(page.getByRole("region", { name: "承認の詳細" })).toContainText("承認済み");
+});
+
+test("承認だけができる利用者には「今後は自動で実行」を出さない", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedApproval(mockApi);
+  mockApi.setCurrentUser(
+    dbUser({
+      permissions: ["menu.approvals", "agent.runs.view", "agent.approvals.decide"],
+      allowed_agent_ids: ["default"],
+    })
+  );
+  await page.goto("/approvals?id=approval-layout");
+  const bar = page.getByTestId("approval-object-actions");
+  await expect(bar).toBeVisible();
+  const more = bar.getByRole("button", { name: /その他の操作/ });
+  if (await more.count()) await more.click();
+  await expect(
+    page.getByRole("button", { name: "承認", exact: true }).or(page.getByRole("menuitem", { name: "承認", exact: true }))
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "承認して今後は自動で実行" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "承認して今後は自動で実行" })).toHaveCount(0);
 });

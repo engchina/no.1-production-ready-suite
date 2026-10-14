@@ -53,6 +53,15 @@ class McpConnectionConfig(BaseModel):
     # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL を画面・API で変えられず、
     # 保存した URL も復元しない。起動のたびに設定から決める（保存した値は使わない）。
     base_url_locked: bool = False
+    # ツールの注釈（`readOnlyHint`）を既定の判定に使うか（#1832。既定はオン。接続ごとにオフに
+    # できる）。オフの接続では `readOnlyHint=true` のツールも、ポリシーで個別に決めなければ既定の
+    # 動作にする（MCP の仕様: 信頼しない接続の注釈は判断に使わない）。保存した値の無い既存の接続も
+    # オン。標準の接続（RAG / NL2SQL）は Agent の側がツールの性質を知っているので常に使う。
+    trust_tool_annotations: bool = True
+
+    def annotations_trusted(self) -> bool:
+        """ツールの注釈（readOnlyHint）を既定の判定に使うか（標準の接続は常に使う。#1832）。"""
+        return self.source == "builtin" or self.trust_tool_annotations
 
     def effective_auth_mode(self) -> McpAuthMode:
         if self.auth_mode is not None:
@@ -151,6 +160,7 @@ class AgentRuntimeConfigStore:
         oauth_client_secret: str | None = None,
         oauth_scope: str | None = None,
         service_audience: str | None = None,
+        trust_tool_annotations: bool | None = None,
     ) -> McpConnectionConfig:
         """接続を追加・更新する。None は「変えない」、空文字は「消す」。"""
         sid = server_id.strip()
@@ -183,6 +193,8 @@ class AgentRuntimeConfigStore:
                 config.oauth_scope = oauth_scope or None
             if service_audience is not None:
                 config.service_audience = service_audience or None
+            if trust_tool_annotations is not None and config.source != "builtin":
+                config.trust_tool_annotations = trust_tool_annotations
             return config.model_copy(deep=True)
 
     def restore_mcp_server(self, stored: McpConnectionConfig) -> None:
@@ -216,6 +228,7 @@ class AgentRuntimeConfigStore:
             else:
                 fields["auth_mode"] = stored.auth_mode
                 fields["service_audience"] = stored.service_audience
+                fields["trust_tool_annotations"] = stored.trust_tool_annotations
             self._mcp_servers[stored.server_id] = current.model_copy(update=fields)
 
     def remove_mcp_server(self, server_id: str) -> None:
@@ -230,6 +243,16 @@ class AgentRuntimeConfigStore:
 
     def get_tool_policy(self) -> ToolPolicyRuntimeConfig:
         with self._lock:
+            return self._tool_policy.model_copy(deep=True)
+
+    def allow_tool(self, name: str) -> ToolPolicyRuntimeConfig:
+        """ツールを「自動実行」（allow）にする（承認の画面の「今後は自動で実行」。#1832）。
+
+        「承認を要求」（ask）に入っていれば外す。拒否（deny）のツールは承認に出ないので変えない。
+        """
+        with self._lock:
+            self._tool_policy.ask.discard(name)
+            self._tool_policy.allow.add(name)
             return self._tool_policy.model_copy(deep=True)
 
     def patch_tool_policy(

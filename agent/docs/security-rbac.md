@@ -141,6 +141,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - Nginx は `/api/` に `proxy_set_header Host $http_host;`（port を含む）を渡します。前段に HTTPS の終端を置く場合も、ブラウザの Origin と
   backend に届く Host を一致させてください。
 - 承認の決定者（`decided_by`）は利用者の `login_user_id` です（HTTP の body・WebSocket の message の値は使わない。local は `local`）。
+- 承認の「承認して今後は自動で実行」（`POST /api/approvals/{approval_id}/decision` の `always_allow=true`。#1832）はツール権限を変えるので、`agent.approvals.decide` に加えて `agent.admin` が要る（ない利用者は 403 で、承認もしない）。ツールのポリシーは全業務 Agent・全利用者に効く。Run のイベントとログ `agent_tool_policy_always_allow` に残す。WebSocket の承認では選べない。
 
 ## 7. 画面以外からの呼出し
 
@@ -193,5 +194,5 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - メニュー権限 `menu.automations`（Agent 構築 /「自動実行」）。作成・変更・削除・今すぐ実行は `agent.admin`。
 - 自動実行は作った利用者として Run を作る（実行のたびに利用者の現在の権限と対象範囲を確かめ、実行できなければ「開始できず」）。前回の Run が終わっていなければ、その回は飛ばす。
 - 起動はスケジュール（毎日・平日・毎週・毎時）と、画面の「今すぐ実行」だけ。外から自動実行を起動する公開の入口は持たない（#1799）。
-- 無人の実行なので、ツール権限で承認が要るツールは呼ばない（承認待ちで止めない。#1813）。モデルへは使えないことを返し、Run の監査に `automation.approval_required` の step を残す。自動実行で使うには、ツール権限でそのツールを「自動実行」（allow）にする。編集画面の警告は `GET /api/automations/agents/{agent_id}/approval-tools`（`menu.automations`）。
+- 無人の実行なので、ツール権限で承認が要るツールは呼ばない（承認待ちで止めない。#1813）。モデルへは使えないことを返し、Run の監査に `automation.approval_required` の step を残す。自動実行で使うには、ツール権限でそのツールを「自動実行」（allow）にする（承認の画面の「承認して今後は自動で実行」でもよい。#1832）。NL2SQL の `nl2sql_query` は既定で承認なし（#1832）なので、ツール権限で ask にしていなければ自動実行でも使える。編集画面の警告は `GET /api/automations/agents/{agent_id}/approval-tools`（`menu.automations`）。
 - 「前回」は自動実行に保存した結果（Run を作った・飛ばした・開始できず）ではなく、Run を作った回はその Run の今の状態を表示のときに引いて出す（#1812）。

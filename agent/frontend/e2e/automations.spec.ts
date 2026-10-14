@@ -248,11 +248,11 @@ for (const viewport of VIEWPORTS) {
 for (const viewport of VIEWPORTS) {
   test(`承認が要るツールを自動実行で使えないと警告し、ツール権限へ案内する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    mockApi.state.automationApprovalTools.default = ["nl2sql__nl2sql_query"];
+    mockApi.state.automationApprovalTools.default = ["crm__update_order"];
     await page.goto("/automations?id=new");
     const notice = page.getByTestId("automation-approval-tools");
     await expect(notice).toContainText("自動実行ではこのツールは使えません");
-    await expect(notice.getByRole("list", { name: "承認が要るツール" })).toContainText("nl2sql__nl2sql_query");
+    await expect(notice.getByRole("list", { name: "承認が要るツール" })).toContainText("crm__update_order");
     await expect(notice).toContainText("確かめられなかった点として回答します");
     const open = page.getByTestId("automation-open-tool-policy");
     await expect(open).toHaveAttribute("href", /\/settings\/tool-policy$/);
@@ -280,12 +280,12 @@ test("承認が要るツールが無い業務 Agent では警告を出さず、�
 
 test("Agent 管理の権限が無い利用者には、ツール権限の変更を管理者に頼むよう案内する", async ({ page, mockApi }) => {
   seedAutomation(mockApi);
-  mockApi.state.automationApprovalTools.default = ["nl2sql__nl2sql_query"];
+  mockApi.state.automationApprovalTools.default = ["crm__update_order"];
   mockApi.setCurrentUser(dbUser({ permissions: ["menu.automations"] }));
   mockApi.state.auth.currentUser!.allowed_agent_ids = ["default"];
   await page.goto("/automations?id=auto-seeded");
   const notice = page.getByTestId("automation-approval-tools");
-  await expect(notice).toContainText("nl2sql__nl2sql_query");
+  await expect(notice).toContainText("crm__update_order");
   await expect(notice).toContainText("管理者が変更できます");
   await expect(page.getByTestId("automation-open-tool-policy")).toHaveCount(0);
 });
