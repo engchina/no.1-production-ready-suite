@@ -1,12 +1,24 @@
 /**
  * 外部の MCP クライアント向けの API キーの API 契約（backend は `pr_system_settings.auth.api_keys`。#1805）。
- * 外部に MCP を公開する RAG / NL2SQL だけが使う（Agent は持たない）。
+ * 外部に MCP を公開する 3 製品が使う（Agent は業務 Agent へのチャット。#1874）。
  * 通信（認証 cookie・CSRF・エラー形式）は製品の API client が持ち、この型を満たす `api` を画面へ渡す。
  */
 
 /** キーを使える製品（外部に MCP を公開する製品）。 */
-export const API_KEY_PRODUCTS = ["rag", "nl2sql"] as const;
+export const API_KEY_PRODUCTS = ["rag", "nl2sql", "agent"] as const;
 export type ApiKeyProduct = (typeof API_KEY_PRODUCTS)[number];
+
+/**
+ * 製品 → キーで使える対象の ID（#1874。最小権限）。製品の key が無ければ、その製品では利用者が使える
+ * すべての対象。今は Agent の業務 Agent（`agent`）だけを絞れる。
+ */
+export type ApiKeyResourceScopes = Partial<Record<ApiKeyProduct, string[]>>;
+
+/** 範囲を選ぶ候補（Agent の画面で発行するときの業務 Agent）。 */
+export interface ApiKeyScopeOption {
+  id: string;
+  name: string;
+}
 
 /** 期限の日数（null は無期限）。 */
 export const API_KEY_EXPIRY_DAYS = [30, 90, 365] as const;
@@ -33,6 +45,8 @@ export interface ApiKey {
   expires_at: string | null;
   last_used_at: string | null;
   expired: boolean;
+  /** 製品ごとの対象の範囲（#1874。無い製品はすべて）。 */
+  resource_scopes?: ApiKeyResourceScopes;
 }
 
 export interface ApiKeysList {
@@ -44,6 +58,8 @@ export interface ApiKeyCreateRequest {
   products: ApiKeyProduct[];
   /** null は無期限。 */
   expires_in_days: ApiKeyExpiryDays | null;
+  /** 製品ごとの対象の範囲（#1874。省くとすべて）。 */
+  resource_scopes?: ApiKeyResourceScopes;
 }
 
 /** 発行の応答。`token` はこの 1 回だけ返る。 */

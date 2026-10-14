@@ -16,6 +16,7 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキル。組み込
 
 - RAG・NL2SQL の画面の左下のアカウントのメニュー →「API キー」で発行した自分のキー（使える製品に RAG と NL2SQL を選ぶ）。キーの扱い・応答は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md)。
 - 接続先: `https://<host>/rag/api/mcp` と `https://<host>/nl2sql/api/mcp`（開発の dev server は `http://localhost:8000/api/mcp` と `http://localhost:8010/api/mcp`）。
+- 業務 Agent に質問するなら Agent の `https://<host>/agent/api/mcp`（開発は `http://localhost:8020/api/mcp`。キーの使える製品に Agent を選ぶ）。下の「業務 Agent を専門家として呼ぶ」。
 
 ### 1. スキルを入れる
 
@@ -103,6 +104,19 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 - **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。Claude Code が進み具合で待ち時間を延ばすかは確かめていない（未確認）ので、`MCP_TOOL_TIMEOUT` は付ける。
 - 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。モデルを呼ばない。4〜8 秒）で根拠を集め、公開の前に `rag_validate_answer` で監査する。
 
+## 業務 Agent を専門家として呼ぶ（Agent の MCP）
+
+業務 Agent（画面で作った、社内の資料・業務データを調べて答える Agent）を、外部の Agent からチャットのツールで呼べる（#1874）。スキルは要らない。MCP サーバーの名前は `agent` にする。
+
+```bash
+claude mcp add --scope user --transport http agent https://<host>/agent/api/mcp \
+  --header 'Authorization: Bearer ${PR_API_KEY}'
+claude -p "業務 Agent の一覧を確かめ、経理の業務 Agent に今月の経費の精算の期限を聞いてください。" \
+  --allowedTools "mcp__agent"
+```
+
+- ツールは `agent_list` → `agent_chat`（`thread_id` で続き）→ 確認が返ったら `agent_answer_confirmation` → 終わっていなければ `agent_get_run`。詳細は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md#agent-のツール)。
+- キーで使える業務 Agent を絞るときは、Agent の画面でキーを発行する（「選んだ業務 Agent だけ」）。
 
 ## Codex で使う
 

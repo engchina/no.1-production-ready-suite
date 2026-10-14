@@ -1428,3 +1428,97 @@ def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
         result = validate_answer_claims("重要度の段階は？", line, EVIDENCE, settings=None)
     assert seen == [[line.strip()]]
     assert result["counts"] == {"supported": 1}
+
+
+PREMISE_ANSWER = (
+    "利用者の回答により、部門長の承認は得ていません。\n\n"
+    "承認が得られていないため、アカウントは削除できません。\n\n"
+    "削除の承認は人事部長が行います。"
+)
+PREMISE_EVIDENCE = [
+    {
+        "id": "c1",
+        "source": "manual.pdf",
+        "page_start": 2,
+        "page_end": 2,
+        "text": "削除の前に、所属部署の部門長の承認を得てください。承認の無い削除は行いません。",
+    }
+]
+
+
+def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> None:
+    """利用者が確認で答えた前提を根拠の前に渡し、答えを述べた段落と答えに規則を当てはめた結論を確かめる (#1898)。
+
+    前提だけで裏付けた段落の出典は前提の id、資料の根拠と合わせて裏付けた段落の出典は資料の根拠。前提は検証した
+    根拠（evidence_ids）に数えない。
+    """
+    from rag_engine.evaluation.answer_validation import PREMISE_ID_PREFIX, PREMISE_SOURCE, is_premise_id, premise_items
+
+    seen: dict = {}
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.update(payload=payload, system=system)
+        premise, document = payload["evidence_items"]
+        ids = [item["id"] for item in payload["answer_passages"]]
+
+        def check(passage_id: str, status: str, evidence_id: str) -> dict:
+            return {
+                "answer_quote": "段落",
+                "answer_passage_id": passage_id,
+                "status": status,
+                "evidence_id": evidence_id,
+                "source_id": "",
+                "evidence_quote": "",
+                "reason": "判定",
+            }
+
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    check(ids[0], "supported", premise["evidence_id"]),
+                    check(ids[1], "supported", f"{premise['evidence_id']},{document['evidence_id']}"),
+                    check(ids[2], "unsupported", ""),
+                ]
+            }
+        )
+
+    premises = [{"question": "所属部署の部門長の承認は得ていますか？", "answer": " いいえ "}, {"question": "空", "answer": ""}]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("アカウントを削除する手順", PREMISE_ANSWER, PREMISE_EVIDENCE, settings=None, premises=premises)
+
+    premise = seen["payload"]["evidence_items"][0]
+    assert (premise["id"], premise["source"]) == (f"{PREMISE_ID_PREFIX}1", PREMISE_SOURCE)
+    # モデルには根拠の本文の文字の形をそろえて渡す（「？」は半角になる。#1350）。
+    assert premise["text"].endswith("\n利用者の答え: いいえ")
+    assert premise_items(premises)[0]["text"] == "確認の質問: 所属部署の部門長の承認は得ていますか？\n利用者の答え: いいえ"
+    assert PREMISE_SOURCE in seen["system"]
+    assert result["counts"] == {"supported": 2, "unsupported": 1}
+    stated, concluded, other = result["claim_checks"]
+    assert (stated["status"], stated["source_id"]) == ("supported", "premise:1")
+    assert (concluded["status"], concluded["source_id"]) == ("supported", "c1")
+    assert other["status"] == "unsupported"
+    assert result["evidence_ids"] == ["c1"]
+    assert is_premise_id("premise:1") and not is_premise_id("c1") and not is_premise_id(None)
+    # 前提の件数は上限まで、答えの無い前提は渡さない。
+    assert len(premise_items([{"question": "q", "answer": "a"}] * 20)) == 10
+    only_answer = premise_items([{"question": "", "answer": "はい"}])
+    assert only_answer == [{"id": "premise:1", "source": PREMISE_SOURCE, "text": "利用者の答え: はい"}]
+
+
+def test_premises_are_not_truncated_by_the_evidence_budget() -> None:
+    """根拠を予算で切り詰めても、前に置いた前提は残る (#1898)。"""
+    seen: list = []
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.append(payload["evidence_items"])
+        return ClaimAuditOutput.model_validate({"claim_checks": []})
+
+    long_evidence = [{"id": f"c{i}", "source": "m.pdf", "page_start": 1, "page_end": 1, "text": "あ" * 4000} for i in range(200)]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims(
+            "q", "承認は得ていません。", long_evidence, settings=None, premises=[{"question": "承認は？", "answer": "いいえ"}]
+        )
+    assert result["evidence_truncated"] is True
+    assert seen[0][0]["id"] == "premise:1"

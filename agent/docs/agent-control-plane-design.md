@@ -407,6 +407,31 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   開く起点は `AGENT_EXTERNAL_RAG_PUBLIC_URL`（空なら RAG が返す URL。MCP の URL の host）で、画面は開くたびに
   URL を取り直し、画像を読めなければ（期限切れ・資料の更新・権限）取り直しの操作を出す。
 
+### 4.2 外部の MCP クライアントに業務 Agent を公開する（#1874）
+
+外部の Agent（Claude Code・Codex など）が業務 Agent を「専門家」として呼べるよう、`POST /api/mcp`
+（`features/agent/mcp_server.py`。共通の `pr_backend_core.mcp`、Streamable HTTP の JSON 応答）でチャットのツールを出す。
+契約は `platform/contracts/mcp/agent-tools.json`（`tests/test_mcp_contract.py`）。
+
+- 認証は共通の API キーだけ（`authorize_api_request` の `api_key_paths={"/mcp"}`。使える製品に `agent`）。キーを発行した
+  利用者の capability と対象範囲（ロールの業務 Agent）で判定し、キーの範囲（`PLATFORM_API_KEYS.RESOURCE_SCOPES` の
+  `agent`）があれば「利用者の範囲 ∩ キーの範囲」に絞る（外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。local の認証モードでも
+  キーを付けた要求は検証し、付けない要求はローカル利用者になる。
+- ツール: `agent_list`（公開中の版の名前・説明・スキル）、`agent_chat`（`POST /runs` と同じ規則で Run を作る。下書きは
+  使えない。`thread_id` で同じ会話を続ける）、`agent_get_run`（自分の Run の状態・回答・RAG の根拠・回答前の確認・使った
+  ツール）、`agent_answer_confirmation`（`decide_confirmation` と同じ。`answer` / `skip`。「確認をやめる」は出さない）。
+  回答は `wait_seconds` まで待ち（既定 50 秒・30 秒、最大 300 秒。in-process でもこのプロセスの Run を待つだけで、
+  dispatcher の構成でも保存先を読み直して待つ）、終わらなければ `in_progress=true` を返す。
+- MCP の Run の印は `metadata.source=mcp` とキーの ID・名前（`api_key_id` / `api_key_name`。予約の key）。回答前の確認の
+  答えで作る次の Run にも引き継ぐ。印のある Run は、無人の実行（#1813）と同じく承認の要るツールを呼ばず、モデルへは
+  「外部の MCP クライアントからの実行では使えない」と返す（step の `error_code` は `mcp.approval_required`）。
+  Agent 自身の回答前の確認（`ask_user_confirmation`）は断らず、クライアントが答える。
+- 上限: キーごとの 1 分あたりの呼び出し（共通の認証。`PLATFORM_API_KEY_CALLS_PER_MINUTE`、429 と `Retry-After`）と、
+  直近 24 時間に作る Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`。`agent_chat` / `agent_answer_confirmation` が数え、
+  超えたら `API_KEY_RUN_LIMIT`・`status` 429・`details.retry_after_seconds`）。
+- 向きは「外部のクライアント → Agent → RAG / NL2SQL」。RAG / NL2SQL は Agent の MCP を呼ばない。A2A（Agent2Agent）
+  プロトコルは持たない。
+
 ## 5. Dispatcher and persistence
 
 開発時は API のプロセスで実行する（`AGENT_RUNTIME_DISPATCH_MODE=in_process`。asyncio の task）。本番で別プロセスに
@@ -667,13 +692,17 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 モデルに渡さない。根拠は RAG が今の権限と版で読み直す）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
 分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
-影響範囲・承認。#1276）も動かす。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
+影響範囲・承認。#1276）も動かす。利用者が回答前の確認で答えた内容（この Run で答えた `ask_user_confirmation` と、前の Run の
+確認に答えて作った Run の `clarification_response`。「確認せずに回答」は除く）は、確認事項の文と答えを前提（`premises`。10 件まで。
+#1898）として渡し、RAG は資料ではない前提として根拠と並べて、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を
+確かめる（前提は資料の内容の裏付けには使わない）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
 サービストークン・step）を通し、「承認」は待たない。予算には数えない。接続ごとの判定は段落（`answer_quote`）ごとに
 まとめ（どれかの接続が矛盾と判定すれば矛盾、そうでなくどれかの接続が裏付ければ裏付けあり）、結果は成果物
 （`kind="answer_validation"`・「回答の検証」。接続ごとの結果は `connections`）に残す。valid でなければ、根拠で確かめられ
 なかった段落を回答から外し（確かめていない手順を公開しない。handoff §12）、外した段落〔80 文字まで〕と判定の種類の
 短い文（「根拠で確かめられない」など。検証のモデルが書いた理由は内部の語を含むので本文に出さず、成果物と回答の下の
-「回答の確かめ」に残す。#1833）、古い版・見つからない根拠の件数を「確かめられていない点」として足す。外した段落の
+「回答の確かめ」に残す。#1833）、古い版・見つからない根拠の件数を「確かめられていない点」として足す。中身をすべて外した節の
+見出しは消すが、番号つきの見出し（「1. **承認の有無の確認**」）は番号が飛ばないよう残す（#1898）。外した段落の
 直後の段落が前の段落を受ける接続の語（「したがって、」「そのため、」など。「ただし」「なお」は残す）で始まれば、その語を
 外す（#1833）。決定的な検査の error も同じく扱い、手順・影響範囲・
 業務ガイドの版の error はどの段落の手順が誤りかを決められないので本文を載せず、要求の error（答えていない要求を

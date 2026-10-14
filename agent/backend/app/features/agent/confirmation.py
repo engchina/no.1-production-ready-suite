@@ -261,6 +261,50 @@ def response_record(
     }
 
 
+# 最終の検証（RAG の `rag_validate_answer` の `premises`）に渡す前提の上限
+# （契約の maxItems・maxLength）。
+MAX_VALIDATION_PREMISES = 10
+_MAX_PREMISE_QUESTION_CHARS = 1000
+_MAX_PREMISE_ANSWER_CHARS = 2000
+
+
+def validation_premises(
+    metadata: Mapping[str, Any], confirmations: Sequence[ConfirmationRequest]
+) -> list[JsonObject]:
+    """利用者が回答前の確認で答えた前提（確認事項の文と答え。#1898）。
+
+    最終の検証（`rag_validate_answer` の `premises`）に渡し、答えをそのまま述べた段落と、資料の
+    規則を答えに当てはめた結論を「根拠で確かめられない」として外さないようにする。出所は、この
+    Run で答えた Agent 自身の確認（`confirmations` の `answered`）と、前の Run の確認に答えて
+    作ったこの Run の metadata `clarification_response`（答えたときだけ。「確認せずに回答」は
+    前提にしない）。
+    """
+    premises: list[JsonObject] = []
+
+    def add(question: object, parts: Sequence[object]) -> None:
+        values = [text for value in parts if (text := _text(value, _MAX_PREMISE_ANSWER_CHARS))]
+        answer = "、".join(values)[:_MAX_PREMISE_ANSWER_CHARS]
+        if answer:
+            premise = {"question": _text(question, _MAX_PREMISE_QUESTION_CHARS), "answer": answer}
+            if premise not in premises:
+                premises.append(premise)
+
+    response = metadata.get(RESPONSE_METADATA_KEY)
+    if isinstance(response, Mapping) and response.get("action") == "answer":
+        for entry in response.get("entries") or []:
+            if isinstance(entry, Mapping):
+                add(entry.get("prompt"), [*(entry.get("selected") or []), entry.get("other_text")])
+    for request in confirmations:
+        if request.status != "answered":
+            continue
+        answers = {answer.item_id: answer for answer in request.answers}
+        for item in request.items:
+            answer = answers.get(item.id)
+            if answer is not None:
+                add(item.prompt, [*answer_labels(item, answer), answer.other_text])
+    return premises[:MAX_VALIDATION_PREMISES]
+
+
 # ---- 業務 Agent の方針と往復 ----
 
 
@@ -358,12 +402,21 @@ def policy_instructions(budget: ConfirmationBudget, *, tool_exposed: bool) -> st
     elif tool_exposed:
         lines.extend(
             [
+                "- 業務の手順・規程・業務データに当たる質問は、曖昧に見えても "
+                f"{CONFIRMATION_TOOL} を呼ぶ前に、先に資料・業務データのツールで調べてください"
+                "（業務ガイド・NL2SQL が確認事項を返したら、それが利用者への確認のカードに"
+                "なります）。ツールの結果を見ても決まらないときだけ "
+                f"{CONFIRMATION_TOOL} で聞いてください。",
                 "- 質問の解釈が割れ（2 つ以上の読み方が同じくらいあり得る）、誤りの代償が大きい"
                 f"ときだけ、答える前に {CONFIRMATION_TOOL} で利用者に 1 件ずつ確かめてください"
                 f"（この質問であと {budget.remaining} 回まで）。",
                 "- 明らかな質問（読み方が 1 つ。質問の言葉・会話の前の往復・ツールの結果で"
                 "決まる）は聞き返さずに答えてください。範囲外・確かめられない質問は確認せずに、答えられない"
                 "ことを伝えてください。",
+                "- 検索・回答プロファイル・業務プロファイルの推薦"
+                "（rag_recommend_search_answer_profile・nl2sql_recommend_profile）が"
+                "1 つに決めず候補が複数のときは、本文の表や箇条書きで"
+                f"選ばせずに {CONFIRMATION_TOOL} で聞いてください（選択肢は候補の名前と説明）。",
                 f"- あなたが確かめたいことは、本文に書いて聞かずに {CONFIRMATION_TOOL} で聞いて"
                 "ください（画面が選択肢と「その他（自由入力）」のカードで聞きます）。"
                 "ツールの結果が確認事項を返したとき（NL2SQL・RAG の確認）は、同じことを "
@@ -704,6 +757,7 @@ __all__ = [
     "CONFIRMATION_TOOL",
     "DEFAULT_MAX_ROUNDS",
     "MAX_ROUNDS_LIMIT",
+    "MAX_VALIDATION_PREMISES",
     "METADATA_KEYS",
     "POLICY_ASSUME",
     "POLICY_CONFIRM",
@@ -738,4 +792,5 @@ __all__ = [
     "used_rounds",
     "validate_answers",
     "validate_max_rounds",
+    "validation_premises",
 ]

@@ -78,9 +78,11 @@ from app.mcp.profile_scope import (
 )
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
+    MAX_PREMISES,
     EvidenceRef,
     GuideCheckRef,
     GuideProfileNotFoundError,
+    is_premise_id,
     validate_answer,
 )
 from app.rag.cross_references import (
@@ -432,6 +434,20 @@ class ValidateGuideInput(BaseModel):
     )
 
 
+class ValidatePremiseInput(BaseModel):
+    """利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え。#1898）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(default="", max_length=1000, description="確認の質問の文。")
+    answer: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="利用者の答え（選んだ選択肢の名前・自由入力）。",
+    )
+
+
 class ValidateAnswerInput(BaseModel):
     """回答の最終の検証の条件（#1246）。
 
@@ -479,6 +495,16 @@ class ValidateAnswerInput(BaseModel):
             "同じ段落は、根拠を今の権限と版で読み直して本文が変わっていなければ、その判定を使って"
             "モデルに渡さない（すべての段落が当たればモデルを呼ばない）。記録は呼び出した利用者が"
             "読めるものだけを使う。"
+        ),
+    )
+    premises: list[ValidatePremiseInput] = Field(
+        default_factory=list,
+        max_length=MAX_PREMISES,
+        description=(
+            "利用者が回答の前の確認で答えた前提（確認の質問と答え。#1898）。資料ではなく利用者の"
+            "状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた"
+            "結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落の"
+            "chunk_id は null。"
         ),
     )
 
@@ -1205,7 +1231,12 @@ class ValidatedClaim(BaseModel):
             "矛盾 / data_confirmation=実データの確認を促すだけ / unassessed=監査されなかった"
         )
     )
-    chunk_id: str | None = Field(default=None, description="裏付け・矛盾の根拠の chunk_id。")
+    chunk_id: str | None = Field(
+        default=None,
+        description=(
+            "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕だけで裏付けた段落は null）。"
+        ),
+    )
     reason: str
 
 
@@ -2688,6 +2719,12 @@ def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput
     check_profile(scope, arguments.search_answer_profile_id)
 
 
+def _claim_chunk_id(source_id: object) -> str | None:
+    """判定の根拠の chunk_id（利用者の前提〔premise:…〕だけで裏付けた段落は None。#1898）。"""
+    value = str(source_id or "")
+    return value if value and not is_premise_id(value) else None
+
+
 def _check_validate_scope(scope: ProfileScope | None, arguments: ValidateAnswerInput) -> None:
     if arguments.guide is not None:
         check_profile(scope, arguments.guide.search_answer_profile_id)
@@ -2846,6 +2883,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 ),
                 gaps=arguments.gaps,
                 answer_trace_ids=arguments.answer_trace_ids,
+                premises=[item.model_dump() for item in arguments.premises],
                 guide=(
                     GuideCheckRef(
                         guide.search_answer_profile_id,
@@ -2869,7 +2907,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 ValidatedClaim(
                     answer_quote=str(claim.get("answer_quote") or ""),
                     status=str(claim.get("status") or ""),
-                    chunk_id=str(claim.get("source_id") or "") or None,
+                    chunk_id=_claim_chunk_id(claim.get("source_id")),
                     reason=str(claim.get("reason") or ""),
                 )
                 for claim in result.claim_checks

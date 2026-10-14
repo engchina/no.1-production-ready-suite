@@ -304,6 +304,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # Agent が MCP（/api/mcp）を Run の利用者として呼ぶサービストークンの署名鍵（#230 / #231）。
     # 共通 .env の PLATFORM_SERVICE_TOKEN_SECRET。空なら MCP は 503 になる。
     app_service_token_secret: str = ""
+    # 外部の MCP クライアントの API キーの 1 分あたりの呼び出しの回数（#1874。0 は上限なし）。
+    app_api_key_calls_per_minute: int = Field(default=60, ge=0, le=100_000)
 
     @model_validator(mode="after")
     def validate_security_boundaries(self) -> Settings:

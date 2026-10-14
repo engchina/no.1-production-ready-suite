@@ -1250,6 +1250,36 @@ def test_withhold_removes_only_the_listed_paragraphs() -> None:
     assert withhold_paragraphs(answer, {"どこにも無い。"}) is None
 
 
+def test_withhold_keeps_numbered_headings_of_emptied_sections() -> None:
+    """中身をすべて外した節の見出しは消すが、番号つきの見出しは番号が飛ぶので残す（#1898）。
+
+    業務 Agent の確認 #1863（run_839d27d75e224dd39e9bb2fdecee1c99）の形。「1. **承認の有無の
+    確認**」の下の段落を外すと、本文が「2. **削除手順の要件**」から始まっていた。番号の無い
+    見出し（「**補足**」）は今までどおり消す。
+    """
+    answer = (
+        "**手順（部門長の承認がない場合）**\n\n"
+        "1. **承認の有無の確認**\n"
+        "   - 利用者の回答により、部門長の承認は取得されていません。\n\n"
+        "2. **削除手順の要件**\n"
+        "   - アカウントを削除するには、所属部署の部門長の承認が必要です。\n\n"
+        "**補足**\n"
+        "- 削除は 1 日で終わります。"
+    )
+
+    kept = withhold_paragraphs(
+        answer,
+        {"- 利用者の回答により、部門長の承認は取得されていません。", "- 削除は 1 日で終わります。"},
+    )
+
+    assert kept == (
+        "**手順（部門長の承認がない場合）**\n\n"
+        "1. **承認の有無の確認**\n\n"
+        "2. **削除手順の要件**\n"
+        "   - アカウントを削除するには、所属部署の部門長の承認が必要です。"
+    )
+
+
 @pytest.mark.parametrize(
     ("answer", "quotes", "expected"),
     [

@@ -69,7 +69,15 @@ export function ApiKeysTable({ keys, t, showOwner, onRevoke, resetKey, empty }: 
       key: "products",
       header: t("apiKeys.column.products"),
       className: "whitespace-nowrap text-xs text-fg",
-      render: (key) => key.products.map((product) => t(`apiKeys.product.${product}`)).join("・"),
+      // 対象を絞った製品は件数を添える（#1874。例: 「Agent（2 件に限定）」）。
+      render: (key) =>
+        key.products
+          .map((product) => {
+            const label = t(`apiKeys.product.${product}`);
+            const scope = key.resource_scopes?.[product];
+            return scope ? t("apiKeys.scope.count", { product: label, count: scope.length }) : label;
+          })
+          .join("・"),
     },
     {
       key: "expires",
