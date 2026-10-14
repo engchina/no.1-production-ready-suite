@@ -280,7 +280,10 @@ test.describe("作業状態の保持", () => {
     );
     await page.route("**/api/documents**", async (route) => {
       const url = new URL(route.request().url());
-      if (url.pathname === "/api/documents") documentRequests.push(url.search);
+      // 絞り込み中の件数の「全 M 件」を数える 1 件の取得（limit=1。#1891）は一覧の取得ではないので数えない。
+      if (url.pathname === "/api/documents" && url.searchParams.get("limit") !== "1") {
+        documentRequests.push(url.search);
+      }
       await route.fulfill(
         pageEnvelope([
           {

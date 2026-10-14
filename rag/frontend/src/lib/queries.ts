@@ -349,6 +349,24 @@ export function useDocuments(
   });
 }
 
+/**
+ * 一覧の件数の「N 件（全 M 件）」の M（条件を外した全件）を数える（#1891）。絞り込み中（`enabled`）だけ取得する。
+ * query key は一覧と同じ接頭辞（`["documents", …]` など）にし、一覧の invalidate で一緒に数え直す。
+ * 一覧の query（ポーリング・`keepPreviousData`）とは別の query にして、一覧の再取得・失敗の扱いに影響させない。
+ */
+export function useListTotal(
+  prefix: string,
+  params: Record<string, unknown>,
+  fetchTotal: () => Promise<number>,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: [prefix, "list-total", params] as const,
+    queryFn: fetchTotal,
+    enabled,
+  });
+}
+
 /** 404 以外の失敗だけを最大 3 回まで再試行する(TanStack Query の既定の回数に合わせる)。 */
 export function retryUnlessNotFound(failureCount: number, error: unknown): boolean {
   if (error instanceof ApiError && error.status === 404) return false;
@@ -1268,8 +1286,13 @@ function supportGuideKeys(searchAnswerProfileId: string) {
 }
 
 /** 業務ガイドの一覧（アーカイブを含めるかを選べる）。 */
-export function useSupportGuides(searchAnswerProfileId: string, includeArchived: boolean) {
+export function useSupportGuides(
+  searchAnswerProfileId: string,
+  includeArchived: boolean,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
+    enabled: options.enabled ?? true,
     queryKey: supportGuideKeys(searchAnswerProfileId).list(includeArchived),
     queryFn: () => api.listSupportGuides(searchAnswerProfileId, includeArchived),
   });

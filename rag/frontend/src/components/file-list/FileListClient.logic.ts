@@ -1,4 +1,7 @@
+import { DEFAULT_PAGE_SIZE } from "@production-ready/ui";
+
 import type { FileStatus, IngestionJob } from "@/lib/api";
+import { isPageSize } from "@/lib/list-paging";
 
 /**
  * 文書インデックス（FileListClient）の純粋ロジック。Vitest で境界を検証する（#281）。
@@ -27,6 +30,8 @@ export interface FileListView {
   q: string;
   knowledgeBaseId: string;
   offset: number;
+  /** 1 ページの件数（表示件数。10 / 25 / 50 / 100。#1891）。 */
+  limit: number;
 }
 
 export const INITIAL_FILE_LIST_VIEW: FileListView = {
@@ -34,6 +39,7 @@ export const INITIAL_FILE_LIST_VIEW: FileListView = {
   q: "",
   knowledgeBaseId: "ALL",
   offset: 0,
+  limit: DEFAULT_PAGE_SIZE,
 };
 
 export function isFileListView(value: unknown): value is FileListView {
@@ -46,7 +52,8 @@ export function isFileListView(value: unknown): value is FileListView {
     view.q.length <= FILE_LIST_QUERY_MAX_LENGTH &&
     typeof view.knowledgeBaseId === "string" &&
     Number.isInteger(view.offset) &&
-    view.offset >= 0
+    view.offset >= 0 &&
+    isPageSize(view.limit)
   );
 }
 

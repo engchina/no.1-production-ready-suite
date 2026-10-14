@@ -10,7 +10,9 @@ import {
   type EntityAction,
   FormStatus,
   ObjectActionBar,
-  PageSizeSelect,
+  ListToolbar,
+  OffsetPagination,
+  offsetForPage,
   RowTitleButton,
   SelectField,
   type SelectFieldOption,
@@ -23,12 +25,9 @@ import {
   useConfirm,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  paginationRange,
 } from "@production-ready/ui";
 import {
   BookmarkPlus,
-  ChevronLeft,
-  ChevronRight,
   ClipboardList,
   ExternalLink,
   FileText,
@@ -45,6 +44,7 @@ import { EmptyState, ErrorState } from "@/components/StateViews";
 import { RagSplitPane } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
+  api,
   ApiError,
   type CitationFeedbackRating,
   type FeedbackDetail,
@@ -53,6 +53,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
@@ -61,6 +62,7 @@ import {
   useFeedbackDetail,
   useFeedbackEvaluationCase,
   usePromoteFeedbackToApprovedFaq,
+  useListTotal,
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { readWorkspace, writeWorkspace } from "@/lib/workspace-state";
@@ -70,13 +72,15 @@ import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 import {
+  FEEDBACK_ALL_PARAMS,
   FEEDBACK_PAGE_SIZES,
   FEEDBACK_PERIODS,
   FEEDBACK_REASON_LABEL_KEYS,
   FEEDBACK_REASONS,
   appendEvaluationCase,
+  defaultFeedbackSearch,
   feedbackListParams,
-  pageWindow,
+  isFeedbackFiltered,
   parseFeedbackUrl,
 } from "./FeedbackClient.logic";
 
@@ -89,6 +93,14 @@ export function FeedbackClient() {
   const revealDetailRef = useRef(false);
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
+  // 件数の「N 件（全 M 件）」の M（条件を外した、見える範囲の全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
+  const filtered = isFeedbackFiltered(urlState);
+  const allTotal = useListTotal(
+    "feedback",
+    {},
+    async () => (await api.listFeedback(FEEDBACK_ALL_PARAMS)).items.total,
+    filtered
+  );
   const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 100, offset: 0 });
   // 見える範囲は backend が決める（SYSTEM_ADMIN は全員の分、ほかのロールは自分が送った分だけ。#408）。
   // 画面はその範囲を案内するだけ。
@@ -139,7 +151,7 @@ export function FeedbackClient() {
   }
 
   function clearFilters() {
-    setSearchParams(new URLSearchParams("period=30&sort=newest&size=50&page=1"));
+    setSearchParams(new URLSearchParams(defaultFeedbackSearch()));
   }
 
   // B 型の選択。行の操作以外の領域のクリック（キーボードは先頭セルの名前のボタン）で選び、
@@ -214,14 +226,16 @@ export function FeedbackClient() {
                 {t("feedback.filters.clear")}
               </Button>
             </div>
-            {/* 1 行目は選択欄 5 つ、2 行目は検索欄（#405）。DOM の順と見た目の順を同じにし、Tab の順をそろえる。 */}
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {/* 1 行目は選択欄 5 つ、2 行目は検索欄（#405）。DOM の順と見た目の順を同じにし、Tab の順をそろえる。
+                欄は値の種類の幅（#1891。対象の選択 lg・理由 md・短い選択 sm）で並べ、入らない欄は折り返す。 */}
+            <div className="flex flex-wrap items-end gap-3">
               <SelectField
                 id="feedback-search-answer-profile"
                 label={t("feedback.filters.searchAnswerProfile")}
                 value={urlState.searchAnswerProfileId}
                 options={searchAnswerProfileOptions}
                 onValueChange={(value) => setParam("search_answer_profile", value)}
+                width="lg"
               />
               <SelectField
                 id="feedback-target"
@@ -229,6 +243,8 @@ export function FeedbackClient() {
                 value={urlState.targetType}
                 options={targetOptions}
                 onValueChange={(value) => setParam("target", value)}
+                // 短い選択だが「回答・引用のすべて」が sm では切れるので md。
+                width="md"
               />
               <SelectField
                 id="feedback-rating"
@@ -236,6 +252,7 @@ export function FeedbackClient() {
                 value={urlState.rating}
                 options={ratingOptions}
                 onValueChange={(value) => setParam("rating", value)}
+                width="sm"
               />
               <SelectField
                 id="feedback-reason"
@@ -243,6 +260,7 @@ export function FeedbackClient() {
                 value={urlState.reason}
                 options={reasonOptions}
                 onValueChange={(value) => setParam("reason", value)}
+                width="md"
               />
               <SelectField
                 id="feedback-sort"
@@ -250,6 +268,7 @@ export function FeedbackClient() {
                 value={urlState.sortOrder}
                 options={sortOptions}
                 onValueChange={(value) => setParam("sort", value)}
+                width="sm"
               />
             </div>
             <SearchField
@@ -258,6 +277,8 @@ export function FeedbackClient() {
               value={urlState.q}
               maxLength={200}
               placeholder={t("feedback.filters.searchPlaceholder")}
+              // 一覧の検索欄の幅（#1891。以前は全幅で 1920px に約 1,560px）。
+              width="lg"
               onSearch={applySearch}
               clearLabel={t("common.clearSearch")}
               resultCountLabel={
@@ -287,29 +308,20 @@ export function FeedbackClient() {
           <>
             <SummaryPanel summary={data.summary} previous={data.previous_summary} />
             <section aria-labelledby="feedback-list-heading">
-              <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <h2 id="feedback-list-heading" className="text-base font-semibold text-fg">
-                    {t("feedback.list.title")}
-                  </h2>
-                  <p className="text-xs tabular-nums text-fg-muted">
-                    {/* 件数の範囲は 3 製品の一覧と同じ文言・桁区切り（「a - b / n 件」。#1266）。 */}
-                    {paginationLabels().summary(
-                      paginationRange(urlState.page, urlState.pageSize, page?.items.length ?? 0, page?.total ?? 0)
-                    )}
-                  </p>
-                </div>
-                <PageSizeSelect
-                  id="feedback-page-size"
-                  value={urlState.pageSize}
-                  options={FEEDBACK_PAGE_SIZES}
-                  labels={{
-                    label: t("feedback.pager.pageSize"),
-                    option: (size) => t("feedback.pager.pageSizeValue", { count: size }),
-                  }}
-                  onValueChange={(size) => setParam("size", String(size))}
-                  // 値（「25件」）とラベル（「1ページの表示件数」）が 1 行に収まる幅（#613）。
-                  width="sm"
+              {/* 見出しの右に一覧の件数（ListCount。#1891）。今のページの範囲と表示件数はページ送り（一覧の直下）が出す。 */}
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h2 id="feedback-list-heading" className="text-base font-semibold text-fg">
+                  {t("feedback.list.title")}
+                </h2>
+                <ListToolbar
+                  count={listCountProps({
+                    matchedTotal: page?.total,
+                    filtered,
+                    allTotal: allTotal.data,
+                  })}
+                  // 見出しの残りの幅を持たせる（ListToolbar は container query の箱なので、幅を内容から決めない）。
+                  className="min-w-0 flex-1"
+                  testId="feedback-list-toolbar"
                 />
               </div>
 
@@ -328,10 +340,18 @@ export function FeedbackClient() {
                         selectedId={urlState.feedbackId || null}
                         onSelect={selectFeedback}
                       />
-                      <Pagination
-                        current={urlState.page}
-                        total={totalPages}
-                        onChange={(nextPage) => setParam("page", String(nextPage), false)}
+                      <OffsetPagination
+                        className="mt-3"
+                        offset={offsetForPage(urlState.page, urlState.pageSize)}
+                        limit={urlState.pageSize}
+                        total={page.total}
+                        count={page.items.length}
+                        onPageChange={(nextPage) => setParam("page", String(nextPage), false)}
+                        pageSizeOptions={FEEDBACK_PAGE_SIZES}
+                        onPageSizeChange={(size) => setParam("size", String(size))}
+                        labels={paginationLabels()}
+                        ariaLabel={t("feedback.pager.label")}
+                        testId="feedback-pagination"
                       />
                     </>
                   }
@@ -575,19 +595,6 @@ function FeedbackCards({
   );
 }
 
-function Pagination({ current, total, onChange }: { current: number; total: number; onChange: (page: number) => void }) {
-  return (
-    <nav className="mt-3 flex flex-wrap items-center justify-center gap-1" aria-label={t("feedback.pager.label")}>
-      <Button type="button" variant="secondary" size="sm" disabled={current <= 1} onClick={() => onChange(current - 1)} icon={ChevronLeft}><span className="sr-only sm:not-sr-only">{t("pager.prev")}</span></Button>
-      {pageWindow(current, total).map((item, index) => item === "ellipsis" ? (
-        <span key={`ellipsis-${index}`} className="flex h-8 min-w-8 items-center justify-center text-sm text-fg-muted" aria-hidden>…</span>
-      ) : (
-        <Button key={item} type="button" variant={item === current ? "primary" : "ghost"} size="sm" className="min-w-8 px-2 tabular-nums" aria-current={item === current ? "page" : undefined} aria-label={t("feedback.pager.page", { count: item })} onClick={() => onChange(item)}>{item}</Button>
-      ))}
-      <Button type="button" variant="secondary" size="sm" disabled={current >= total} onClick={() => onChange(current + 1)} trailingIcon={ChevronRight}><span className="sr-only sm:not-sr-only">{t("pager.next")}</span></Button>
-    </nav>
-  );
-}
 
 /** B 型の詳細側。選んだフィードバックを内容 / 根拠 / 実行情報のタブで見せる。 */
 function FeedbackDetailPanel({

@@ -1,4 +1,4 @@
-import { offsetForPage } from "@production-ready/ui";
+import { DEFAULT_PAGE_SIZE, offsetForPage, PAGE_SIZE_OPTIONS } from "@production-ready/ui";
 
 import type {
   CitationFeedbackRating,
@@ -8,7 +8,8 @@ import type {
 } from "@/lib/api";
 import type { I18nKey } from "@/lib/i18n";
 
-export const FEEDBACK_PAGE_SIZES = [25, 50, 100] as const;
+/** 表示件数は 3 製品の一覧と同じ段（10 / 25 / 50 / 100、既定 10。#1891 で独自の 25 / 50 / 100 をやめた）。 */
+export const FEEDBACK_PAGE_SIZES = PAGE_SIZE_OPTIONS;
 export const FEEDBACK_PERIODS = [7, 30, 90, null] as const;
 
 export interface FeedbackUrlState {
@@ -59,7 +60,11 @@ const REASONS = new Set<CitationFeedbackReason>(FEEDBACK_REASONS);
 export function parseFeedbackUrl(params: URLSearchParams): FeedbackUrlState {
   const period = params.get("period");
   const periodDays = period === "all" ? null : validNumber(period, [7, 30, 90], 30);
-  const pageSize = validNumber(params.get("size"), [...FEEDBACK_PAGE_SIZES], 50) as FeedbackUrlState["pageSize"];
+  const pageSize = validNumber(
+    params.get("size"),
+    [...FEEDBACK_PAGE_SIZES],
+    DEFAULT_PAGE_SIZE
+  ) as FeedbackUrlState["pageSize"];
   const target = params.get("target") ?? "";
   const rating = params.get("rating") ?? "";
   const reason = params.get("reason") ?? "";
@@ -95,20 +100,29 @@ export function feedbackListParams(state: FeedbackUrlState): FeedbackListParams 
   };
 }
 
-export type PageWindowItem = number | "ellipsis";
+/** 期間・検索・回答プロファイル・対象・評価・理由・検索語のどれかで絞り込んでいるか（件数の「N 件（全 M 件）」。#1891）。 */
+export function isFeedbackFiltered(state: FeedbackUrlState): boolean {
+  return (
+    state.periodDays !== null ||
+    Boolean(state.searchAnswerProfileId) ||
+    Boolean(state.targetType) ||
+    Boolean(state.rating) ||
+    Boolean(state.reason) ||
+    Boolean(state.q)
+  );
+}
 
-export function pageWindow(current: number, total: number): PageWindowItem[] {
-  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1);
-  const pages = new Set([1, total, current - 1, current, current + 1]);
-  if (current <= 3) [2, 3, 4].forEach((page) => pages.add(page));
-  if (current >= total - 2) [total - 3, total - 2, total - 1].forEach((page) => pages.add(page));
-  const sorted = [...pages].filter((page) => page >= 1 && page <= total).sort((a, b) => a - b);
-  const result: PageWindowItem[] = [];
-  sorted.forEach((page, index) => {
-    if (index > 0 && page - sorted[index - 1] > 1) result.push("ellipsis");
-    result.push(page);
-  });
-  return result;
+/** 絞り込む前の全件（「全 M 件」）を数える取得の条件。1 件だけ取る。 */
+export const FEEDBACK_ALL_PARAMS: FeedbackListParams = {
+  period_days: null,
+  sort_order: "newest",
+  limit: 1,
+  offset: 0,
+};
+
+/** 条件を初期に戻した URL（期間 30 日・新しい順・既定の表示件数・1 ページ目）。 */
+export function defaultFeedbackSearch(): string {
+  return `period=30&sort=newest&size=${DEFAULT_PAGE_SIZE}&page=1`;
 }
 
 function validNumber(value: string | null, allowed: readonly number[], fallback: number): number {

@@ -17,7 +17,9 @@ import {
   TextareaField,
   useConfirm,
   type SelectFieldOption,
+  ListToolbar,
   PagedDataTable,
+  PAGE_SIZE_OPTIONS,
 } from "@production-ready/ui";
 import {
   BarChart3,
@@ -31,6 +33,7 @@ import {
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
@@ -281,6 +284,8 @@ export function EvaluationClient() {
               onChange={setKnowledgeBaseIds}
               disabled={runMutation.isPending || compareMutation.isPending}
               helper={t("evaluation.knowledgeBaseScope.helper")}
+              // 対象の選択（ナレッジベース）は lg（#1891）。
+              width="lg"
             />
           </CardContent>
         </Card>
@@ -771,13 +776,31 @@ function MetricGroup({
 }
 
 function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
+  const results = metrics.case_results;
+  // 評価の結果ごとに 1 ページ目から。結果は trace の ID（ケースごとに一意）で見分ける（#1891）。
+  const paging = useClientListPaging(
+    "evaluation.casesPaging",
+    `${results.length}:${results[0]?.trace_id ?? ""}:${results.at(-1)?.trace_id ?? ""}`
+  );
   return (
     <section aria-labelledby="evaluation-cases-title">
-      <h3 id="evaluation-cases-title" className="mb-3 text-sm font-semibold text-fg">
-        {t("evaluation.cases")}
-      </h3>
+      {/* 見出しの右に件数（ListCount。#1891）。 */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 id="evaluation-cases-title" className="text-sm font-semibold text-fg">
+          {t("evaluation.cases")}
+        </h3>
+        <ListToolbar
+          count={listCountProps({ matchedTotal: results.length, filtered: false, live: true })}
+          // 見出しの残りの幅を持たせる（ListToolbar は container query の箱なので、幅を内容から決めない）。
+          className="min-w-0 flex-1"
+          testId="evaluation-case-toolbar"
+        />
+      </div>
       <PagedDataTable<EvaluationCaseResult>
         paginationLabels={paginationLabels()}
+        {...paging}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        paginationAriaLabel={t("evaluation.case.paginationLabel")}
         columns={[
           {
             key: "case_id",
@@ -845,9 +868,8 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             render: (result) => result.trace_id.slice(0, 12),
           },
         ]}
-        rows={metrics.case_results}
+        rows={results}
         getRowKey={(result) => result.case_id}
-        resetKey={metrics}
         scrollAriaLabel={t("evaluation.case.scrollLabel")}
         scrollTestId="evaluation-case-scroll-region"
         paginationTestId="evaluation-case-pagination"
@@ -1077,6 +1099,8 @@ function JsonField({
       rows={rows}
       placeholder={placeholder}
       monospace
+      // JSON は長い値（全幅。#1891）。
+      width="full"
       onValueChange={onChange}
     />
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type FieldWidth,
   SearchableMultiSelect,
   type SearchableMultiSelectLabels,
   type SearchableSelectLabels,
@@ -103,6 +104,7 @@ export function KnowledgeBaseMultiSelect({
   onChange,
   selectedItems,
   disabled = false,
+  width,
 }: {
   id: string;
   label: string;
@@ -120,6 +122,8 @@ export function KnowledgeBaseMultiSelect({
   /** 選択済みの KB の名前・状態（候補のページに無い選択済みも chip に出すため）。 */
   selectedItems?: readonly ResolvedKnowledgeBaseRef[];
   disabled?: boolean;
+  /** 欄の幅（呼び出し側が置き場所で選ぶ。対象の選択なので通常は lg。#1891）。 */
+  width?: FieldWidth;
 }) {
   const options = useMemo(
     () => knowledgeBaseOptions(choices.items, { local: !choices.remote }),
@@ -157,6 +161,7 @@ export function KnowledgeBaseMultiSelect({
           : undefined
       }
       disabled={disabled}
+      width={width}
       labels={knowledgeBaseMultiSelectLabels()}
     />
   );

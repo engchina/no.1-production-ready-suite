@@ -7,6 +7,7 @@ import {
   Banner,
   Button,
   FieldActionRow,
+  FormGrid,
   TextareaField,
   Card,
   CardContent,
@@ -511,6 +512,7 @@ export function SearchClient() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <SelectField
                       id="search-top-k"
+                      width="xs"
                       label={t("search.tuning.topK")}
                       value={topK}
                       options={TOP_K_SELECT_OPTIONS}
@@ -542,11 +544,13 @@ export function SearchClient() {
                         <p className="text-xs leading-relaxed text-fg-muted">
                           {t("search.filters.classificationHelper")}
                         </p>
-                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        {/* 分類は名前の段（md）、基準日は日付の段（sm。#1891）。 */}
+                        <FormGrid>
                           {CLASSIFICATION_FILTER_KEYS.map((key) => (
                             <TextField
                               key={key}
                               id={`search-${key}`}
+                              width={key === "as_of" ? "sm" : "md"}
                               type={key === "as_of" ? "date" : "text"}
                               label={t(`search.filters.${key}`)}
                               value={classification[key]}
@@ -555,7 +559,7 @@ export function SearchClient() {
                               }
                             />
                           ))}
-                        </div>
+                        </FormGrid>
                       </div>
                     ) : null}
                   </div>
@@ -693,6 +697,7 @@ export function SearchClient() {
                 >
                   <TextareaField
                     id="search-query"
+                    width="full"
                     label={t("nav.search")}
                     labelHidden
                     value={query}

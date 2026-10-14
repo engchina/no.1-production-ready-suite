@@ -68,6 +68,8 @@ export function AnswerRecordEvaluation({
         onChange={(event) => setStandardAnswer(event.target.value)}
         rows={3}
         maxLength={20000}
+        // 文章（全幅。#1891）。
+        width="full"
         disabled={evaluate.isPending}
         placeholder={t("search.evaluation.standardAnswerPlaceholder")}
       />

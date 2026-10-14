@@ -34,6 +34,8 @@ import {
   SearchField,
   TextField,
   ListToolbar,
+  FormGrid,
+  type FieldWidth,
 } from "@production-ready/ui";
 import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
@@ -55,6 +57,7 @@ import {
 import { useAuth } from "@/components/security/AuthProvider";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
+  api,
   ApiError,
   DEFAULT_SEARCH_ANSWER_PROFILE_NAME,
   type AnswerFlowName,
@@ -71,6 +74,7 @@ import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
+import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
@@ -82,6 +86,7 @@ import {
   useArchiveSearchAnswerProfile,
   useSearchAnswerProfile,
   useSearchAnswerProfiles,
+  useListTotal,
   useCreateSearchAnswerProfile,
   useUpdateSearchAnswerProfile,
 } from "@/lib/queries";
@@ -92,7 +97,6 @@ import { EntityExpansionRow } from "./EntityExpansionRow";
 import { SearchAnswerProfileKnowledgePanel } from "./SearchAnswerProfileKnowledgePanel";
 import { SectionExpansionRow } from "./SectionExpansionRow";
 
-const LIMIT = DEFAULT_PAGE_SIZE;
 
 /**
  * 一覧の絞り込み・検索・ページ。編集対象は URL の `?id=` が唯一の情報源なので、ここには持たない（#147）。
@@ -102,8 +106,10 @@ interface SearchAnswerProfileListView {
   filter: SearchAnswerProfileStatus | "ALL";
   q: string;
   offset: number;
+  /** 1 ページの件数（表示件数。#1891）。 */
+  limit: number;
 }
-const INITIAL_VIEW: SearchAnswerProfileListView = { filter: "ACTIVE", q: "", offset: 0 };
+const INITIAL_VIEW: SearchAnswerProfileListView = { filter: "ACTIVE", q: "", offset: 0, limit: DEFAULT_PAGE_SIZE };
 
 function isSearchAnswerProfileListView(value: unknown): value is SearchAnswerProfileListView {
   const view = value as SearchAnswerProfileListView;
@@ -113,7 +119,8 @@ function isSearchAnswerProfileListView(value: unknown): value is SearchAnswerPro
     (FILTERS as unknown[]).includes(view.filter) &&
     typeof view.q === "string" &&
     Number.isInteger(view.offset) &&
-    view.offset >= 0
+    view.offset >= 0 &&
+    isPageSize(view.limit)
   );
 }
 
@@ -314,14 +321,22 @@ function SearchAnswerProfileList({
 }) {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("searchAnswerProfiles.view", INITIAL_VIEW, isSearchAnswerProfileListView);
-  const { filter, q, offset } = view;
+  const { filter, q, offset, limit } = view;
   const setFilter = (next: SearchAnswerProfileStatus | "ALL") =>
     setView((current) => ({ ...current, filter: next, offset: 0 }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next, offset: 0 }));
   const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
 
   const status = filter === "ALL" ? undefined : filter;
-  const query = useSearchAnswerProfiles({ status, q: q || undefined, limit: LIMIT, offset });
+  const query = useSearchAnswerProfiles({ status, q: q || undefined, limit, offset });
+  // 件数の「N 件（全 M 件）」の M（状態・検索語を外した全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
+  const filtered = q !== "" || filter !== "ALL";
+  const allTotal = useListTotal(
+    "search-answer-profiles",
+    {},
+    async () => (await api.listSearchAnswerProfiles({ limit: 1, offset: 0 })).total,
+    filtered
+  );
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
   const actionsFor = useSearchAnswerProfileActions();
@@ -408,6 +423,11 @@ function SearchAnswerProfileList({
               ))}
             </div>
           }
+          count={listCountProps({
+            matchedTotal: page?.total,
+            filtered,
+            allTotal: allTotal.data,
+          })}
           testId="search-answer-profile-list-toolbar"
         />
 
@@ -489,11 +509,13 @@ function SearchAnswerProfileList({
             />
             <OffsetPagination
               offset={offset}
-              limit={LIMIT}
+              limit={limit}
               total={page?.total ?? 0}
               count={items.length}
               onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
+              onPageSizeChange={(nextLimit) => setView((current) => ({ ...current, limit: nextLimit, offset: 0 }))}
               labels={paginationLabels()}
+              ariaLabel={t("searchAnswerProfiles.paginationLabel")}
               testId="search-answer-profiles-pagination"
             />
           </div>
@@ -835,9 +857,11 @@ function SearchAnswerProfileEditor({
               {editor.restored ? (
                 <FormStatus tone="info" message={t("editor.draftRestored")} />
               ) : null}
-              <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+              {/* 名前は名前の幅（md）、説明は文章（全幅）。フォームの読みやすい最大幅（FormGrid）で止める（#1891）。 */}
+              <FormGrid columns={1}>
                 <TextField
                   id="search-answer-profile-name"
+                  width="md"
                   label={t("searchAnswerProfiles.field.name")}
                   required={!isDefault && !isArchived}
                   value={name}
@@ -853,6 +877,7 @@ function SearchAnswerProfileEditor({
                 />
                 <TextField
                   id="search-answer-profile-description"
+                  width="full"
                   label={t("searchAnswerProfiles.field.description")}
                   required={!isArchived}
                   value={description}
@@ -866,7 +891,7 @@ function SearchAnswerProfileEditor({
                   maxLength={DESCRIPTION_MAX_LENGTH}
                   inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
-              </div>
+              </FormGrid>
 
               <div>
                 <KnowledgeBaseScopePicker
@@ -875,6 +900,8 @@ function SearchAnswerProfileEditor({
                   selectedIds={config.knowledge_base_ids}
                   onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
                   disabled={locked || isDefault}
+                  // 対象の選択（ナレッジベース）は lg（#1891）。
+                  width="lg"
                   label={t("searchAnswerProfiles.field.knowledgeBases")}
                   helper={
                     isDefault
@@ -899,6 +926,7 @@ function SearchAnswerProfileEditor({
                     label={t("searchAnswerProfiles.field.queryStrategy")}
                     value={config.query.query_strategy ?? null}
                     options={QUERY_STRATEGY_OPTIONS}
+                    width="lg"
                     defaultOnOverride="simple_retrieval"
                     disabled={locked}
                     onChange={(value) => updateQuery({ query_strategy: value })}
@@ -908,6 +936,7 @@ function SearchAnswerProfileEditor({
                     label={t("searchAnswerProfiles.field.answerFlow")}
                     value={config.query.answer_flow ?? null}
                     options={ANSWER_FLOW_OPTIONS}
+                    width="lg"
                     defaultOnOverride="standard_rag"
                     disabled={locked}
                     onChange={(value) => updateQuery({ answer_flow: value })}
@@ -921,6 +950,7 @@ function SearchAnswerProfileEditor({
                         : String(config.query.neighbor_child_count)
                     }
                     options={NEIGHBOR_CHILD_COUNT_OPTIONS}
+                    width="xs"
                     defaultOnOverride="3"
                     disabled={locked}
                     onChange={(value) =>
@@ -984,6 +1014,7 @@ function SearchAnswerProfileEditor({
                     label={t("searchAnswerProfiles.field.guardrail")}
                     value={config.query.guardrail_policy}
                     options={GUARDRAIL_OPTIONS}
+                    width="sm"
                     defaultOnOverride="strict"
                     disabled={locked}
                     onChange={(value) => updateQuery({ guardrail_policy: value })}
@@ -1011,6 +1042,7 @@ function SearchAnswerProfileEditor({
                     onValueChange={(value) =>
                       setConfig((current) => ({ ...current, clarification_policy: value }))
                     }
+                    width="md"
                     className="min-w-0 [&>label]:sr-only"
                   />
                 </div>
@@ -1141,6 +1173,7 @@ function QuerySelectRow<T extends string>({
   label,
   value,
   options,
+  width,
   defaultOnOverride,
   disabled = false,
   onChange,
@@ -1149,6 +1182,8 @@ function QuerySelectRow<T extends string>({
   label: string;
   value: T | null;
   options: readonly SelectFieldOption<T>[];
+  /** 選択欄の幅（値の種類。#1891）。 */
+  width: FieldWidth;
   defaultOnOverride: T;
   disabled?: boolean;
   onChange: (value: T | null) => void;
@@ -1182,6 +1217,7 @@ function QuerySelectRow<T extends string>({
             // 継承 / 上書きの切り替えと同じく、保存中・アーカイブ済みは値も変えられないようにする
             // （読み取り専用の画面で未保存の変更を作らない）。
             disabled={disabled}
+            width={width}
             className="[&>label]:sr-only"
           />
         ) : null}
