@@ -104,7 +104,7 @@ echo "oracle-linux: package の名前: pass"
 # ---------------------------------------------------------------- 2. command と構文
 
 # image にあり、スクリプトが入れずに使う command。
-for command_name in bash curl install mktemp runuser sha256sum stat useradd; do
+for command_name in bash curl install mktemp runuser sha256sum stat timeout useradd; do
   command -v "${command_name}" >/dev/null 2>&1 || fail "image に ${command_name} が無い"
 done
 for script in "${repo}"/platform/deploy/*.sh "${repo}"/rag/init_script.sh "${repo}"/rag/scripts/rag-systemd.sh \
