@@ -3147,7 +3147,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
                     "comment": "他人の履歴",
                 },
             )
-            assert other_feedback.status_code == 403
+            assert other_feedback.status_code == 404  # 存在を漏らさない（#1889）
             assert (await client.get("/api/nl2sql/feedback")).status_code == 403
             assert (
                 await client.post(
@@ -3213,10 +3213,10 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
                 json={
                     "history_id": "other-history",
                     "rating": "good",
-                    "comment": "管理者は全履歴を更新可能",
+                    "comment": "管理の権限でも他人の履歴は SQL 生成の評価で更新しない",
                 },
             )
-            assert manager_feedback.status_code == 200
+            assert manager_feedback.status_code == 404  # 「AI 活用」は本人だけ（#1889）
             assert (await client.get("/api/nl2sql/feedback-index")).status_code == 200
 
             await _login_api(client, "data.manager", "DataManagerPass!123")

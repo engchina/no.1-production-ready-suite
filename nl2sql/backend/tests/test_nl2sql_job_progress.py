@@ -421,9 +421,9 @@ def test_progress_routes_check_access_like_get_job(
     job_id = start(service)
     for path in ("progress", "progress/stream"):
         assert client.get(f"/api/nl2sql/jobs/missing/{path}").status_code == 404
-        # 他の利用者のジョブ（チャットは管理の権限でも開かない）。
+        # 他の利用者のジョブは 404（存在を漏らさない。#1889）。
         viewer.user_uuid = "other"
-        assert client.get(f"/api/nl2sql/jobs/{job_id}/{path}").status_code == 403
+        assert client.get(f"/api/nl2sql/jobs/{job_id}/{path}").status_code == 404
         viewer.user_uuid = "user-1"
         # 業務プロファイルの利用権限が外れた。
         viewer.profiles = set()

@@ -25,6 +25,7 @@ from pr_backend_core import ApiResponse
 from pr_backend_core.api import CursorParams, InvalidCursorError, cursor_params
 from pr_backend_core.chat_progress import ChatProgressPage, chat_progress_sse_response
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
+from pr_system_settings.auth.visibility import OWNER_NOT_FOUND_STATUS, can_view_all_users_data
 
 from app.api.concurrency import run_sync_io
 from app.api.problems import invalid_cursor_exception as _invalid_cursor
@@ -384,6 +385,84 @@ def _actor_access_args(request: Request, *, manage_permission: str) -> ActorAcce
     )
 
 
+def _ai_use_access(request: Request) -> ActorAccess:
+    """「AI 活用」の画面の job・履歴の判定（#1889）: system_admin は全員、それ以外は本人だけ。
+
+    製品の管理権限（`nl2sql.feedback.manage` など）は全員を見る理由にしない（改善・運用の
+    フィードバック管理は `_actor_access_args` のまま）。
+    """
+    principal = _principal_from_request(request)
+    if principal is None:
+        # 認証無効（`_actor_access_args` と同じ fail-open）。
+        return ActorAccess(actor_user_uuid="", actor_can_manage=True)
+    return ActorAccess(
+        actor_user_uuid=principal.user_uuid,
+        actor_can_manage=can_view_all_users_data(principal),
+    )
+
+
+_CHAT_NOT_FOUND_DETAIL = "会話が見つかりません。"
+_CHAT_TURN_NOT_FOUND_DETAIL = "指定された会話のターンが見つかりません。"
+
+
+def _chat_not_found() -> HTTPException:
+    return HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_NOT_FOUND_DETAIL)
+
+
+def _chat_all_users(request: Request) -> bool:
+    principal = _principal_from_request(request)
+    return principal is not None and can_view_all_users_data(principal)
+
+
+def _chat_owner_names(owners: list[str]) -> dict[str, str]:
+    identities = get_security_service().display_identities(owners)
+    return {uuid: identity.display_name for uuid, identity in identities.items()}
+
+
+def _with_chat_owners(page: SqlChatPage, *, actor: str, all_users: bool) -> SqlChatPage:
+    """会話の一覧に、本人の会話かと、system_admin には利用者の表示名を足す（#1889・#1696）。"""
+    owners = sorted({item.actor_user_uuid for item in page.items if item.actor_user_uuid})
+    names = _chat_owner_names(owners) if all_users and owners else {}
+    return page.model_copy(
+        update={
+            "items": [
+                _with_chat_owner(item, actor=actor, all_users=all_users, names=names)
+                for item in page.items
+            ]
+        }
+    )
+
+
+def _with_chat_owner(
+    item: SqlChatSummary,
+    *,
+    actor: str,
+    all_users: bool,
+    names: dict[str, str] | None = None,
+) -> SqlChatSummary:
+    owner = item.actor_user_uuid
+    if names is None:
+        names = _chat_owner_names([owner]) if all_users and owner else {}
+    return item.model_copy(
+        update={
+            "owned": owner == actor,
+            "actor_display_name": names.get(owner, "") if all_users else "",
+        }
+    )
+
+
+def _foreign_chat_error(request: Request, detail: str, not_found_detail: str) -> HTTPException:
+    """他の利用者の会話への本人だけの操作（続き・SQL の実行）の拒否（#1889）。
+
+    会話を見られる system_admin には 403 で理由を、見られない利用者には 404 を返す
+    （存在を漏らさない）。
+    """
+    principal = _principal_from_request(request)
+    if principal is not None and can_view_all_users_data(principal):
+        return HTTPException(status_code=403, detail=detail)
+    return HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=not_found_detail)
+
+
 def _profile_access_denied() -> HTTPException:
     return profile_access_denied()
 
@@ -597,7 +676,9 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
             )
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="他の利用者の会話は継続できません。") from exc
+        raise _foreign_chat_error(
+            request, "他の利用者の会話は継続できません。", _CHAT_NOT_FOUND_DETAIL
+        ) from exc
     except SelectAiCredentialMissingError as exc:
         # Select AI / Select AI Agent の生成は Credential が前提（#1688）。
         raise _select_ai_credential_missing_exception(exc) from exc
@@ -622,7 +703,9 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
         # 利用権限を、実行の前に確かめる。
         job = nl2sql_service.get_job(job_id, actor_user_uuid=actor_user_uuid)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="他の利用者の会話は実行できません。") from exc
+        raise _foreign_chat_error(
+            request, "他の利用者の会話は実行できません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定された会話のターンが見つかりません。")
     _assert_profile_access(request, job.profile_id)
@@ -633,7 +716,9 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
             actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="他の利用者の会話は実行できません。") from exc
+        raise _foreign_chat_error(
+            request, "他の利用者の会話は実行できません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
     except LookupError as exc:
         raise HTTPException(
             status_code=404, detail="指定された会話のターンが見つかりません。"
@@ -658,14 +743,18 @@ def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[Sql
     try:
         job = nl2sql_service.get_job(job_id, actor_user_uuid=actor_user_uuid)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="他の利用者の会話は参照できません。") from exc
+        raise _foreign_chat_error(
+            request, "他の利用者の会話の結果は受け取れません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定された会話のターンが見つかりません。")
     _assert_profile_access(request, job.profile_id)
     try:
         data = nl2sql_service.take_chat_execution_result(job_id, actor_user_uuid=actor_user_uuid)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="他の利用者の会話は参照できません。") from exc
+        raise _foreign_chat_error(
+            request, "他の利用者の会話の結果は受け取れません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        ) from exc
     except LookupError as exc:
         raise HTTPException(
             status_code=404,
@@ -679,20 +768,23 @@ def list_sql_chats(
     request: Request,
     paging: Annotated[CursorParams, Depends(cursor_params(default=10, max_limit=100))],
 ) -> ApiResponse[SqlChatPage]:
-    """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す。
+    """会話の一覧を、現在利用できる業務プロファイルの範囲で返す。
 
+    system_admin は全員の会話（利用者の表示名つき）、それ以外は本人の会話だけ（#1889）。
     会話の履歴は 3 製品と同じく 1 ページずつ返す（新しい順、カーソルと全件数。#1265）。
     """
     principal = getattr(request.state, "principal", None)
+    actor = str(getattr(principal, "user_uuid", ""))
+    all_users = _chat_all_users(request)
     try:
-        return ApiResponse(
-            data=nl2sql_service.list_sql_chats(
-                actor=str(getattr(principal, "user_uuid", "")),
-                profile_ids=_allowed_profile_ids_for_request(request),
-                cursor=paging.cursor,
-                limit=paging.limit,
-            )
+        page = nl2sql_service.list_sql_chats(
+            actor=actor,
+            profile_ids=_allowed_profile_ids_for_request(request),
+            cursor=paging.cursor,
+            limit=paging.limit,
+            all_users=all_users,
         )
+        return ApiResponse(data=_with_chat_owners(page, actor=actor, all_users=all_users))
     except InvalidCursorError as exc:
         raise _invalid_cursor(exc) from exc
     except PermissionError as exc:
@@ -701,39 +793,46 @@ def list_sql_chats(
 
 @router.get("/chats/{conversation_id}", response_model=ApiResponse[SqlChatData])
 def get_sql_chat(conversation_id: str, request: Request) -> ApiResponse[SqlChatData]:
+    """会話の内容。system_admin は全員の会話、それ以外は本人の会話だけ（他人は 404。#1889）。"""
     principal = getattr(request.state, "principal", None)
+    actor = str(getattr(principal, "user_uuid", ""))
+    all_users = _chat_all_users(request)
     try:
-        data = nl2sql_service.get_sql_chat(
-            conversation_id,
-            actor=str(getattr(principal, "user_uuid", "")),
-        )
+        data = nl2sql_service.get_sql_chat(conversation_id, actor=actor, all_users=all_users)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise _chat_not_found() from exc
     if data is None:
-        raise HTTPException(status_code=404, detail="会話が見つかりません。")
+        raise _chat_not_found()
     _assert_profile_access(request, data.conversation.profile_id)
-    return ApiResponse(data=data)
-
-
-_CHAT_NOT_FOUND_DETAIL = "会話が見つかりません。"
-_CHAT_FORBIDDEN_DETAIL = "他の利用者の会話は変更できません。"
+    return ApiResponse(
+        data=data.model_copy(
+            update={
+                "conversation": _with_chat_owner(
+                    data.conversation, actor=actor, all_users=all_users
+                )
+            }
+        )
+    )
 
 
 @router.patch("/chats/{conversation_id}", response_model=ApiResponse[SqlChatSummary])
 def rename_sql_chat(
     conversation_id: str, update: SqlChatUpdateRequest, request: Request
 ) -> ApiResponse[SqlChatSummary]:
-    """会話の名前を変える（#1817）。本人の会話だけ（管理者も他人の会話は変えない）。"""
+    """会話の名前を変える（#1817）。system_admin は全員、それ以外は本人の会話だけ（#1889）。"""
     principal = getattr(request.state, "principal", None)
     actor = str(getattr(principal, "user_uuid", ""))
+    all_users = _chat_all_users(request)
     try:
-        current = nl2sql_service.get_sql_chat(conversation_id, actor=actor)
+        current = nl2sql_service.get_sql_chat(conversation_id, actor=actor, all_users=all_users)
         if current is None:
             raise LookupError(conversation_id)
         _assert_profile_access(request, current.conversation.profile_id)
-        data = nl2sql_service.rename_sql_chat(conversation_id, actor=actor, title=update.title)
+        data = nl2sql_service.rename_sql_chat(
+            conversation_id, actor=actor, title=update.title, all_users=all_users
+        )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=_CHAT_FORBIDDEN_DETAIL) from exc
+        raise _chat_not_found() from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=_CHAT_NOT_FOUND_DETAIL) from exc
     except ChatConversationBusyError as exc:
@@ -741,26 +840,27 @@ def rename_sql_chat(
             status_code=409,
             detail="SQL の生成中は会話名を変更できません。生成が終わってから変更してください。",
         ) from exc
-    return ApiResponse(data=data)
+    return ApiResponse(data=_with_chat_owner(data, actor=actor, all_users=all_users))
 
 
 @router.delete("/chats/{conversation_id}", response_model=ApiResponse[None])
 def delete_sql_chat(conversation_id: str, request: Request) -> ApiResponse[None]:
-    """会話を消す（#1817）。本人の会話だけ。
+    """会話を消す（#1817）。system_admin は全員の会話、それ以外は本人の会話だけ（#1889）。
 
     ジョブは監査・フィードバック・実行履歴のために残し、会話の一覧・詳細・続きから外す。
     SQL の生成中のターンがある会話は 409（停止してから消す）。
     """
     principal = getattr(request.state, "principal", None)
     actor = str(getattr(principal, "user_uuid", ""))
+    all_users = _chat_all_users(request)
     try:
-        current = nl2sql_service.get_sql_chat(conversation_id, actor=actor)
+        current = nl2sql_service.get_sql_chat(conversation_id, actor=actor, all_users=all_users)
         if current is None:
             raise LookupError(conversation_id)
         _assert_profile_access(request, current.conversation.profile_id)
-        nl2sql_service.delete_sql_chat(conversation_id, actor=actor)
+        nl2sql_service.delete_sql_chat(conversation_id, actor=actor, all_users=all_users)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=_CHAT_FORBIDDEN_DETAIL) from exc
+        raise _chat_not_found() from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=_CHAT_NOT_FOUND_DETAIL) from exc
     except ChatConversationBusyError as exc:
@@ -776,9 +876,12 @@ def delete_sql_chat(conversation_id: str, request: Request) -> ApiResponse[None]
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])
 def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
-    """NL2SQL の SQL 生成・実行の job の状態・結果を返す。"""
+    """NL2SQL の SQL 生成・実行の job の状態・結果を返す。
+
+    system_admin は全員の job、それ以外は本人の job だけ（他人の job は 404。#1889）。
+    """
     try:
-        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+        access = _ai_use_access(request)
         job = nl2sql_service.get_job(
             job_id,
             actor_user_uuid=access.actor_user_uuid,
@@ -786,8 +889,7 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
         )
     except PermissionError as exc:
         raise HTTPException(
-            status_code=403,
-            detail="他のユーザーのジョブを参照する権限がありません。",
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
@@ -796,17 +898,16 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
     return ApiResponse(data=job)
 
 
-_JOB_PROGRESS_FORBIDDEN_DETAIL = "他のユーザーのジョブを参照する権限がありません。"
 _JOB_PROGRESS_NOT_FOUND_DETAIL = "指定されたジョブが見つかりません。"
 
 
 def _job_progress_for_request(job_id: str, request: Request, since: int) -> JobProgressData:
     """ジョブの処理の段階のイベント（`since` より後）。
 
-    アクセスの判定は `GET /jobs/{job_id}` と同じ（本人のジョブ・管理の権限・業務プロファイル）。
+    アクセスの判定は `GET /jobs/{job_id}` と同じ（本人のジョブか system_admin・業務プロファイル）。
     """
     try:
-        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+        access = _ai_use_access(request)
         progress = nl2sql_service.get_job_progress(
             job_id,
             since=since,
@@ -814,7 +915,9 @@ def _job_progress_for_request(job_id: str, request: Request, since: int) -> JobP
             actor_can_manage=access.actor_can_manage,
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=_JOB_PROGRESS_FORBIDDEN_DETAIL) from exc
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL
+        ) from exc
     if progress is None:
         raise HTTPException(status_code=404, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL)
     if progress.chat:
@@ -850,7 +953,7 @@ async def stream_job_progress(
     job の読み直しは同期 I/O なので threadpool で行う（backend-concurrency-contract）。
     """
     await run_sync_io(_job_progress_for_request, job_id, request, since or 0)
-    access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+    access = _ai_use_access(request)
 
     async def fetch(cursor: int) -> ChatProgressPage | None:
         try:
@@ -873,10 +976,11 @@ def cancel_job(job_id: str, request: Request) -> ApiResponse[JobData]:
     """実行中の NL2SQL の SQL 生成・実行の job の協調キャンセルを要求する。
 
     worker は stage 境界で検出して停止する(実行中 stage の途中では止まらない)。
-    terminal な job には no-op で現在の状態を返す。
+    terminal な job には no-op で現在の状態を返す。system_admin は全員の job、それ以外は本人の
+    job だけ（他人の job は 404。#1889）。
     """
     try:
-        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+        access = _ai_use_access(request)
         job = nl2sql_service.request_job_cancel(
             job_id,
             actor_user_uuid=access.actor_user_uuid,
@@ -884,8 +988,7 @@ def cancel_job(job_id: str, request: Request) -> ApiResponse[JobData]:
         )
     except PermissionError as exc:
         raise HTTPException(
-            status_code=403,
-            detail="他のユーザーのジョブを操作する権限がありません。",
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
@@ -1742,7 +1845,8 @@ def history(
 ) -> ApiResponse[HistoryData]:
     """NL2SQL の実行履歴(cursor page。既定は新しい順)。
 
-    非 system admin は自分の履歴だけ。`next_cursor` が非 None なら続きがある。
+    system_admin は全員の履歴（実行ユーザーの表示名つき）、それ以外は自分の履歴だけ（#1889）。
+    `next_cursor` が非 None なら続きがある。
     `sort`（`created_at` / `question`）と `direction`（`asc` / `desc`）はサーバーで並べ、
     ページをまたいで同じ順にする（#1764）。
     """
@@ -1756,7 +1860,7 @@ def history(
         raise HTTPException(status_code=422, detail="direction が不正です。")
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = ""
-    if principal is not None and not bool(getattr(principal, "is_system_admin", False)):
+    if principal is not None and not can_view_all_users_data(principal):
         actor_user_uuid = str(getattr(principal, "user_uuid", ""))
         if not actor_user_uuid:
             return ApiResponse(data=HistoryData(items=[], total=0))
@@ -1799,9 +1903,12 @@ def history(
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
 def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData]:
-    """実行結果への feedback を保存する。"""
+    """実行結果への feedback を保存する（SQL 生成の画面）。
+
+    system_admin は全員の履歴、それ以外は本人の履歴だけ（他人の履歴は 404。#1889）。
+    """
     try:
-        access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
+        access = _ai_use_access(request)
         data = nl2sql_service.save_feedback(
             req.history_id,
             req.rating,
@@ -1816,8 +1923,7 @@ def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData
         raise _profile_access_denied() from exc
     except PermissionError as exc:
         raise HTTPException(
-            status_code=403,
-            detail="他のユーザーの履歴へフィードバックを登録する権限がありません。",
+            status_code=OWNER_NOT_FOUND_STATUS, detail="対象の SQL 履歴が見つかりません。"
         ) from exc
     return ApiResponse(data=data)
 
