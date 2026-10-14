@@ -14,7 +14,7 @@ import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectedControlHeight } from "./_helpers/control-height";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
-import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
+import { clickOntologyEdge, expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 import { expectToastPlacement } from "./_helpers/toast";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
@@ -6950,6 +6950,22 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   const zoomIn = panel.getByLabel("グラフを拡大");
   await zoomIn.focus();
   await expect(zoomIn).toBeFocused();
+
+  // 線（関係）とノードの詳細は、オントロジー構築と同じ 1 つの詳細のパネルに出す（#1788）。
+  const details = panel.getByTestId("nl2sql-sql-grounding-details");
+  await expect(details.getByRole("heading", { name: "詳細", exact: true })).toBeVisible();
+  await clickOntologyEdge(page, panel.locator('.react-flow__edge[data-id="department-employee-join"]'));
+  await expect(details.getByRole("heading", { name: "関係の詳細", exact: true })).toBeVisible();
+  await expect(details.getByTestId("ontology-edge-details")).toContainText("部署と従業員の Join");
+  await expect(details.getByTestId("ontology-edge-details")).toContainText("結合のキー（Join Key）");
+  await expect(details.getByTestId("ontology-edge-details")).toContainText("部署情報");
+  await expect(details.getByTestId("ontology-edge-details")).not.toContainText("未設定");
+  await details.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("sql-grounding-edge-details.png") });
+  await page.getByTestId("ontology-node-card-employee-table").click();
+  await expect(details.getByRole("heading", { name: "ノード詳細", exact: true })).toBeVisible();
+  await expect(details.getByTestId("ontology-node-details")).toContainText("従業員情報");
+  await expect(details.getByTestId("ontology-edge-details")).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(panel).toBeVisible();

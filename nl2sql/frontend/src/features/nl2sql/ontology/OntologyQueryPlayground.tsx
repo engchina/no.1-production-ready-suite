@@ -1,8 +1,6 @@
-import { DefinitionFields } from "./ontologyResultPresentation";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import {
-  Info,
   MessageSquareText,
   Network,
   RefreshCw,
@@ -51,12 +49,17 @@ import { DbObjectName } from "../components/DbObjectName";
 import { normalizeGroundingText } from "./groundingMatcher";
 import {
   type OntologyContextSearchResult,
+  type OntologyEdge,
   type OntologyGraph,
   type OntologyNode,
   type OntologyRelationshipRow,
-  type OntologyValidationStatus,
 } from "./types";
 import { isOntologyDetailNodeKind, type OntologyGraphViewMode } from "./graphView";
+import {
+  OntologySelectionDetailsPanel,
+  ontologyValidationLabel,
+  ontologyValidationVariant,
+} from "./OntologySelectionDetails";
 
 const LazyOntologyGraphCanvas = lazy(() => import("./OntologyGraphCanvas"));
 
@@ -108,20 +111,6 @@ function erObjectTypeLabel(type: OntologyErDetails["objectType"]): string {
   if (type === "table") return t("nl2sql.ontology.nodeKind.table");
   if (type === "view") return t("nl2sql.ontology.nodeKind.view");
   return t("nl2sql.ontology.nodeKind.unknown");
-}
-
-function validationVariant(status: OntologyValidationStatus) {
-  if (status === "passed") return "success" as const;
-  if (status === "warning") return "warning" as const;
-  if (status === "blocked") return "danger" as const;
-  return "neutral" as const;
-}
-
-function validationLabel(status: OntologyValidationStatus): string {
-  if (status === "passed") return t("nl2sql.ontology.nodeValidation.passed");
-  if (status === "warning") return t("nl2sql.ontology.nodeValidation.warning");
-  if (status === "blocked") return t("nl2sql.ontology.nodeValidation.blocked");
-  return t("nl2sql.ontology.nodeValidation.unreviewed");
 }
 
 function stageLabel(result: PlaygroundResult): string {
@@ -358,7 +347,7 @@ function RelationshipCard({
         <span className="min-w-0 flex-1 break-words text-sm font-semibold text-fg">
           {row.relationship_label}
         </span>
-        <StatusBadge variant={validationVariant(row.validation_status)} label={validationLabel(row.validation_status)} />
+        <StatusBadge variant={ontologyValidationVariant(row.validation_status)} label={ontologyValidationLabel(row.validation_status)} />
       </span>
       <span className="text-xs leading-5 text-fg-muted">
         {row.source_label} → {row.target_label}
@@ -467,13 +456,15 @@ function OntologyGroundingPathPanel({
   );
 }
 
-function OntologyNodeDetailsPanel({
+function OntologyDetailsPanel({
   graph,
   node,
+  edge,
   onSelectNode,
 }: {
   graph: OntologyGraph;
   node: OntologyNode | null;
+  edge: OntologyEdge | null;
   onSelectNode: (nodeId: string) => void;
 }) {
   const selectableNodes = useMemo(
@@ -484,14 +475,11 @@ function OntologyNodeDetailsPanel({
     [graph.nodes]
   );
   return (
-    <section className="grid gap-3 rounded-md border border-border bg-surface p-3" data-testid="ontology-node-details-panel">
-      <div className="flex items-center gap-2">
-        <Info size={16} className="text-accent-fg" aria-hidden="true" />
-        <h3 className="text-sm font-semibold text-fg">
-          {t("ontologyPlayground.inspector.nodeDetails")}
-        </h3>
-      </div>
-      {!node ? (
+    <OntologySelectionDetailsPanel
+      graph={graph}
+      node={node}
+      edge={edge}
+      emptyContent={
         <div className="grid gap-3">
           <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.inspector.nodeEmpty")}</p>
           <div className="grid gap-2" data-testid="ontology-inspector-node-picker">
@@ -525,33 +513,8 @@ function OntologyNodeDetailsPanel({
             </div>
           </div>
         </div>
-      ) : (
-        <div className="grid gap-2">
-          <div className="flex flex-wrap gap-2">
-            <StatusBadge icon={false} variant="info" label={ontologyNodeDisplay(node).kindLabel} />
-            <StatusBadge
-              variant={validationVariant(node.validation_status ?? "unreviewed")}
-              label={validationLabel(node.validation_status ?? "unreviewed")}
-            />
-          </div>
-          <p className="break-words text-sm font-semibold text-fg">{node.business_name_ja}</p>
-          {ontologyNodeDisplay(node).secondaryLabel ? (
-            <p className="break-all font-mono text-xs leading-5 text-fg-muted">
-              {ontologyNodeDisplay(node).secondaryLabel}
-            </p>
-          ) : null}
-          {node.metadata?.definition && typeof node.metadata.definition === "object" && !Array.isArray(node.metadata.definition) ? <DefinitionFields definition={node.metadata.definition as Record<string, unknown>} /> : null}
-          {node.description_ja || node.description ? (
-            <p className="text-sm leading-6 text-fg-muted">{node.description_ja || node.description}</p>
-          ) : null}
-          {node.aliases?.length ? (
-            <p className="text-xs leading-5 text-fg-muted">
-              {t("ontologyPlayground.inspector.aliases")}: {node.aliases.join("、")}
-            </p>
-          ) : null}
-        </div>
-      )}
-    </section>
+      }
+    />
   );
 }
 
@@ -748,6 +711,17 @@ export function OntologyQueryPlayground({
     serverSearchSeqRef.current += 1;
   }, [graphRevisionId]);
 
+  // グラフ・一覧で選んだノードと線（関係）は、同じ詳細のパネルに出すので片方だけを選ぶ（#1788）。
+  // 質問の接地の直後だけは、最初に一致したノードと関係を両方選び、パネルはノードを出す。
+  const selectNode = (nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeId(null);
+  };
+  const selectEdge = (edgeId: string | null) => {
+    setSelectedEdgeId(edgeId);
+    setSelectedNodeId(null);
+  };
+
   const resetGroundingState = ({ clearQuestion = false }: { clearQuestion?: boolean } = {}) => {
     if (clearQuestion) setQuestion("");
     setResult(null);
@@ -852,6 +826,10 @@ export function OntologyQueryPlayground({
   const selectedNode = useMemo(
     () => graph?.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [graph, selectedNodeId]
+  );
+  const selectedEdge = useMemo(
+    () => graph?.edges.find((edge) => edge.id === selectedEdgeId) ?? null,
+    [graph, selectedEdgeId]
   );
   const groundedRows = useMemo(
     () => (graph ? groundedRelationshipRows(graph, result) : []),
@@ -1010,7 +988,6 @@ export function OntologyQueryPlayground({
               testId="ontology-playground-server-search-processing"
             />
           ) : null}
-          {selectedEdgeId && (() => { const definition = graph?.edges.find(e=>e.id===selectedEdgeId)?.metadata?.definition; return definition && typeof definition === "object" && !Array.isArray(definition) ? <section aria-label={t("ontologyResults.kind.link_type")} className="rounded-md border border-border p-3"><h3 className="text-sm font-semibold">{t("ontologyResults.kind.link_type")}</h3><DefinitionFields definition={definition as Record<string, unknown>} /></section> : null; })()}
           {!result ? (
             <div
               data-surface-tint="neutral"
@@ -1048,7 +1025,7 @@ export function OntologyQueryPlayground({
               result={serverSearch.result}
               comparison={groundingComparison}
               graph={graph}
-              onSelectNode={setSelectedNodeId}
+              onSelectNode={selectNode}
             />
           ) : null}
           {graph ? (
@@ -1093,8 +1070,8 @@ export function OntologyQueryPlayground({
                       workspaceKey={`playground:${profileId}`}
                       selectedNodeId={selectedNodeId}
                       selectedEdgeId={selectedEdgeId}
-                      onSelectNode={setSelectedNodeId}
-                      onSelectEdge={setSelectedEdgeId}
+                      onSelectNode={selectNode}
+                      onSelectEdge={selectEdge}
                       highlightNodeIds={highlightNodeIds}
                       highlightEdgeIds={highlightEdgeIds}
                       viewMode={graphViewMode}
@@ -1109,16 +1086,17 @@ export function OntologyQueryPlayground({
                 data-testid="ontology-playground-inspector"
               >
                 <OntologyGroundingPathPanel graph={graph} result={result} rows={groundedRows} />
-                <OntologyNodeDetailsPanel
+                <OntologyDetailsPanel
                   graph={graph}
                   node={selectedNode}
-                  onSelectNode={setSelectedNodeId}
+                  edge={selectedEdge}
+                  onSelectNode={selectNode}
                 />
                 {erDetails ? <OntologyErDetailsPanel details={erDetails} /> : null}
                 <OntologyRelationshipListPanel
                   rows={browseRows}
                   selectedEdgeId={selectedEdgeId}
-                  onSelectEdge={setSelectedEdgeId}
+                  onSelectEdge={selectEdge}
                 />
               </aside>
             </div>
