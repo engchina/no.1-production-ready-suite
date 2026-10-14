@@ -63,7 +63,7 @@ async function mockMyKeys(page: Page) {
       keys.splice(keys.findIndex((item) => item.id === id), 1);
       return route.fulfill({ json: apiEnvelope({ id }) });
     }
-    return route.fulfill({ json: apiEnvelope({ keys }) });
+    return route.fulfill({ json: apiEnvelope({ keys, public_base_url: "https://203.0.113.10" }) });
   });
   return { created, revoked };
 }
@@ -81,6 +81,24 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(page.getByRole("heading", { name: "API キー", level: 1 })).toBeVisible();
     // 開発の dev server（base が /）では開いている製品の URL だけを出す。
     await expect(page.getByTestId("api-keys-endpoint-rag")).toContainText("/api/mcp");
+
+    // 接続先（#1870）: この画面の URL と、配備の公開の URL（PLATFORM_PUBLIC_BASE_URL）を製品ごとに出し、コピーできる。
+    await expect(page.getByTestId("api-keys-endpoint-rag-local")).toContainText("/api/mcp");
+    await expect(page.getByTestId("api-keys-endpoint-rag-public")).toHaveText("https://203.0.113.10/rag/api/mcp");
+    await expect(page.getByTestId("api-keys-endpoint-nl2sql-public")).toHaveText("https://203.0.113.10/nl2sql/api/mcp");
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.getByRole("button", { name: "RAGの公開の URL（OCI）: URL をコピー" }).click();
+    await expect(page.getByText("URL をコピーしました")).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("https://203.0.113.10/rag/api/mcp");
+    await expect(page.getByTestId("api-keys-ca-note")).toContainText("https://203.0.113.10/platform/ca.crt");
+    // 登録の例は skills/README.md と同じ形（サーバー名 rag / nl2sql・単一引用符・待ち時間・自作の CA）。
+    await page.getByText("Claude Code の登録の例").click();
+    const example = page.getByTestId("api-keys-example");
+    await expect(example).toContainText("claude mcp add --scope user --transport http rag https://203.0.113.10/rag/api/mcp");
+    await expect(example).toContainText("claude mcp add --scope user --transport http nl2sql https://203.0.113.10/nl2sql/api/mcp");
+    await expect(example).toContainText("--header 'Authorization: Bearer ${PR_API_KEY}'");
+    await expect(example).toContainText("export MCP_TOOL_TIMEOUT=600000");
+    await expect(example).toContainText("NODE_EXTRA_CA_CERTS");
     await expect(page.getByText("API キーはまだありません。")).toBeVisible();
 
     // 名前が空なら発行しない。

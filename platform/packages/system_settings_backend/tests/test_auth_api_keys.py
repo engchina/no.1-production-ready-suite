@@ -23,6 +23,7 @@ from pr_system_settings.auth.api_keys import (
     OracleApiKeyStore,
     bearer_api_key,
     hash_api_key,
+    normalize_public_base_url,
 )
 from pr_system_settings.auth.dependencies import API_KEY_NOT_ALLOWED_CODE, authorize_request
 from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID, Principal
@@ -450,6 +451,7 @@ def test_api_key_routes_create_list_and_revoke() -> None:
             role_model=_Model,
             role_data=lambda role: _Model(),
             api_keys=True,
+            public_base_url=lambda: "https://203.0.113.10:8443/",
         )
     )
 
@@ -466,7 +468,10 @@ def test_api_key_routes_create_list_and_revoke() -> None:
     body = created.json()["data"]
     token = body["token"]
     assert body["key"]["owner_display_name"] == "searcher さん"
-    listed = client.get("/account/api-keys").json()["data"]["keys"]
+    mine = client.get("/account/api-keys").json()["data"]
+    # 自分の一覧は画面の接続先に出す公開の基底の URL（末尾の / を外す）も返す（#1870）。
+    assert mine["public_base_url"] == "https://203.0.113.10:8443"
+    listed = mine["keys"]
     # 自分の画面は自分のキーだけ。
     assert [item["id"] for item in listed] == [body["key"]["id"]]
     # 一覧は秘密も hash も返さない。
@@ -483,6 +488,23 @@ def test_api_key_routes_create_list_and_revoke() -> None:
     assert client.delete(f"/account/api-keys/{other_id}").status_code == 404
     assert client.delete(f"/security/api-keys/{other_id}").status_code == 200
     assert client.get("/security/api-keys").json()["data"]["keys"] == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", ""),
+        ("  https://203.0.113.10/  ", "https://203.0.113.10"),
+        ("http://10.0.0.5:8080", "http://10.0.0.5:8080"),
+        ("https://203.0.113.10/rag/", ""),
+        ("ftp://203.0.113.10", ""),
+        ("203.0.113.10", ""),
+        ("https://host name", ""),
+    ],
+    ids=["empty", "trailing-slash", "http-port", "path", "scheme", "no-scheme", "space"],
+)
+def test_normalize_public_base_url(value: str, expected: str) -> None:
+    assert normalize_public_base_url(value) == expected
 
 
 # ---- 保存（Oracle）・DDL ------------------------------------------------------------------

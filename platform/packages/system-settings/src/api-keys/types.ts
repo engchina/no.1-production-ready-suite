@@ -39,6 +39,15 @@ export interface ApiKeysList {
   keys: ApiKey[];
 }
 
+/** 自分のキーの一覧。画面の接続先に出す公開の基底の URL も返す（#1870）。 */
+export interface MyApiKeysList extends ApiKeysList {
+  /**
+   * 配備が書く `PLATFORM_PUBLIC_BASE_URL`（例 `https://203.0.113.10`。末尾の `/` なし）。
+   * 未設定なら空（画面は今開いている URL だけを出す）。
+   */
+  public_base_url?: string;
+}
+
 export interface ApiKeyCreateRequest {
   name: string;
   products: ApiKeyProduct[];
@@ -54,7 +63,7 @@ export interface ApiKeyCreated {
 
 /** 自分のキー（`/api/account/api-keys*`。ログインだけで使える）。 */
 export interface MyApiKeysApi {
-  list: () => Promise<ApiKeysList>;
+  list: () => Promise<MyApiKeysList>;
   create: (request: ApiKeyCreateRequest) => Promise<ApiKeyCreated>;
   revoke: (keyId: string) => Promise<unknown>;
 }
@@ -65,8 +74,17 @@ export interface ApiKeysAdminApi {
   revoke: (keyId: string) => Promise<unknown>;
 }
 
-/** 画面に出す MCP の接続先（製品ごと）。 */
+/** 今開いている画面から見た MCP の接続先（製品ごと。`mcpEndpoints` で作る）。 */
 export interface McpEndpoint {
   product: ApiKeyProduct;
   url: string;
+}
+
+/** 画面に出す接続先の行（製品ごと。この画面の URL と公開の URL。#1870）。 */
+export interface McpEndpointRow {
+  product: ApiKeyProduct;
+  /** 今開いている画面から見た URL（分からない製品は null）。 */
+  localUrl: string | null;
+  /** 配備の公開の URL（`PLATFORM_PUBLIC_BASE_URL` が無ければ null）。 */
+  publicUrl: string | null;
 }
