@@ -4,7 +4,7 @@
 // （質問の欄に入れる・チャットで SQL を生成する）だけを画面ごとに持つ。
 // 「SQL の要件（AI の理解）」の一覧（#1718）も両方の画面で同じ部品・同じ振る舞いにする（違いは置き場所と幅だけ）。
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Check, CheckCircle2, MessageSquareText, Pencil, Plus, RotateCcw, Send, X } from "lucide-react";
+import { Check, CheckCircle2, MessageSquareText, Pencil, Plus, RotateCcw, Send, Sparkles, X } from "lucide-react";
 
 import {
   ApiErrorBanner,
@@ -31,6 +31,7 @@ import {
 } from "../ontology/api";
 import type {
   QuerySession,
+  RequirementCandidate,
   RequirementItem,
   RequirementSection,
   RequirementState,
@@ -41,6 +42,9 @@ import {
   KIND_BADGE_VARIANT,
   addConditionItem,
   canAnswerWithCandidate,
+  confirmCorrection,
+  confirmTargetItem,
+  currentCandidateId,
   requirementKindLabel,
   requirementOverview,
   sectionPartLabel,
@@ -105,6 +109,15 @@ export interface RequirementSessionController {
   changeFreeText: (value: string) => void;
   questionHeadingRef: RefObject<HTMLHeadingElement | null>;
   submitAnswer: () => Promise<void>;
+  /**
+   * 確認のカード（確認の質問が無い・全部に答えた後）で選び直せる対象の表（#1761）。AI が決めた表に、業務
+   * プロファイルのほかの表が候補として添えてあるときだけ。
+   */
+  confirmTarget: RequirementItem | null;
+  /** 確認のカードの直し（対象の表の選び直し・「その他（自由入力）」）が入力されている。 */
+  correctionPending: boolean;
+  /** 確認のカードの直しを回答として送る（AI の再検査が要件を直す。#1761）。 */
+  submitCorrection: () => Promise<void>;
   /** 反映して session を閉じる。反映した session（要件の本文を含む）を返す。失敗は null。 */
   applyRequirement: () => Promise<QuerySession | null>;
   /** 開いている session をサーバーで中止する。中止できた（または開いていない）ら true。 */
@@ -234,6 +247,17 @@ export function useRequirementSession(
     });
   };
 
+  const confirmTarget = state && !state.current_item ? confirmTargetItem(items) : null;
+  // 確認のカードの直しは、質問の欄（今の質問・直す項目）を出していないときだけ。
+  const correction = activeItem ? null : confirmCorrection(confirmTarget, selectedCandidateIds, freeText);
+  const submitCorrection = async () => {
+    if (!correction) return;
+    await sendAnswer(correction.item_id, {
+      selected_candidate_ids: correction.selected_candidate_ids,
+      free_text: correction.free_text,
+    });
+  };
+
   const answerWithCandidate = async (item: RequirementItem, candidateId: string) => {
     if (busyAction) return;
     setAnsweringCandidateId(candidateId);
@@ -317,6 +341,9 @@ export function useRequirementSession(
     changeFreeText,
     questionHeadingRef,
     submitAnswer,
+    confirmTarget,
+    correctionPending: Boolean(correction),
+    submitCorrection,
     applyRequirement,
     cancelSession,
     showApply: Boolean(state?.can_apply) && !correctingItem,
@@ -387,46 +414,23 @@ export function useRequirementCheck(initialChecking = false): RequirementCheckRu
 }
 
 /**
- * 検査の後の次の扱い（チャットと SQL 生成の画面で共通。#1442 / #1715）。確認が要らない（`direct`）ときは聞かずに
- * 反映し、反映済み（`applied`）と合わせて `onApplied` で次へ進む（チャットは SQL の生成、SQL 生成の画面は質問の
- * 欄へ反映）。確認が要るときは session を出して 1 問ずつ聞く。反映できなければまとめと「反映」を出してやり直せる。
+ * 検査の後の次の扱い（チャットと SQL 生成の画面で共通。#1442 / #1715 / #1761）。反映済み（`applied`。反映の後、
+ * 次へ進む前に画面を離れた）なら `onApplied` で次へ進む。それ以外は、確認の質問の件数にかかわらず session を
+ * 出し、利用者の確認（「この要件で SQL を生成して実行」）を待つ。聞くことが無くても自動では反映しない（#1761）。
  */
 export function useRequirementProceed(controller: RequirementSessionController) {
-  const { setSession, setError } = controller;
-  const [directing, setDirecting] = useState(false);
+  const { setSession } = controller;
   const proceed = useCallback(
-    async (
-      loaded: QuerySession,
-      onApplied: (applied: QuerySession) => void,
-      isCurrent: () => boolean = () => true
-    ) => {
-      const step = requirementNextStep(loaded);
-      if (step === "applied") {
+    (loaded: QuerySession, onApplied: (applied: QuerySession) => void) => {
+      if (requirementNextStep(loaded) === "applied") {
         onApplied(loaded);
         return;
       }
-      if (step !== "direct") {
-        setSession(loaded);
-        return;
-      }
-      setDirecting(true);
-      try {
-        const applied = await applyQuerySessionRequirement(loaded.id, {
-          base_version: loaded.current_intent_version ?? 1,
-        });
-        if (!isCurrent()) return;
-        onApplied({ ...applied, requirement: applied.requirement ?? loaded.requirement });
-      } catch (cause) {
-        if (!isCurrent()) return;
-        setSession(loaded);
-        setError(cause instanceof Error ? cause : t("nl2sql.clarification.error.apply"));
-      } finally {
-        setDirecting(false);
-      }
+      setSession(loaded);
     },
-    [setError, setSession]
+    [setSession]
   );
-  return { proceed, directing };
+  return { proceed };
 }
 
 /**
@@ -521,7 +525,7 @@ export function RequirementAnswerProgress({ active }: { active: boolean }) {
 export function RequirementQuestionForm({
   controller,
   size = "lg",
-  applyWithRemainingLabel = t("nl2sql.clarification.applyWithRemaining"),
+  applyWithRemainingLabel = t("chat.requirement.generateWithRemaining"),
   onApplyWithRemaining,
   trailingActions,
   idPrefix = "nl2sql-clarification",
@@ -590,44 +594,14 @@ export function RequirementQuestionForm({
       </div>
 
       {activeItem.candidates.length > 0 ? (
-        <div className="grid gap-2 sm:grid-cols-2">
-          {activeItem.candidates.map((candidate) => {
-            const checked = selectedCandidateIds.includes(candidate.id);
-            return (
-              <label
-                key={candidate.id}
-                data-surface-tint="accent"
-                className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-              >
-                <input
-                  type={activeItem.answer_kind === "multi_select" ? "checkbox" : "radio"}
-                  name={`requirement-${activeItem.id}`}
-                  value={candidate.id}
-                  checked={checked}
-                  disabled={Boolean(busyAction)}
-                  onChange={() => controller.selectCandidate(candidate.id)}
-                  className="mt-1 h-4 w-4 accent-accent-emphasis"
-                />
-                <span className="min-w-0">
-                  <span className="block break-words font-medium">{candidate.label_ja}</span>
-                  {candidate.description_ja ? (
-                    <span className="mt-0.5 block text-xs leading-5 text-fg-muted">{candidate.description_ja}</span>
-                  ) : null}
-                  {candidate.refs_ja && candidate.refs_ja !== candidate.label_ja ? (
-                    <span className="mt-0.5 block break-all font-mono text-xs leading-5 text-fg-muted">
-                      {candidate.refs_ja}
-                    </span>
-                  ) : null}
-                  {candidate.evidence_ja ? (
-                    <span className="mt-0.5 block text-xs leading-5 text-fg-subtle">
-                      {t("nl2sql.clarification.evidence", { evidence: candidate.evidence_ja })}
-                    </span>
-                  ) : null}
-                </span>
-              </label>
-            );
-          })}
-        </div>
+        <RequirementCandidateOptions
+          name={`requirement-${activeItem.id}`}
+          type={activeItem.answer_kind === "multi_select" ? "checkbox" : "radio"}
+          candidates={activeItem.candidates}
+          isChecked={(candidate) => selectedCandidateIds.includes(candidate.id)}
+          disabled={Boolean(busyAction)}
+          onSelect={(candidate) => controller.selectCandidate(candidate.id)}
+        />
       ) : null}
 
       <TextareaField
@@ -958,5 +932,158 @@ export function RequirementSummary({
         <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.skeletonNote")}</p>
       </div>
     </section>
+  );
+}
+
+/** 回答の候補（ラジオ・チェックボックス。候補の説明・物理名・根拠つき）。質問の欄と確認のカードで共通。 */
+function RequirementCandidateOptions({
+  name,
+  type,
+  candidates,
+  isChecked,
+  disabled,
+  onSelect,
+}: {
+  name: string;
+  type: "radio" | "checkbox";
+  candidates: RequirementCandidate[];
+  isChecked: (candidate: RequirementCandidate) => boolean;
+  disabled: boolean;
+  onSelect: (candidate: RequirementCandidate) => void;
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {candidates.map((candidate) => (
+        <label
+          key={candidate.id}
+          data-surface-tint="accent"
+          className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
+        >
+          <input
+            type={type}
+            name={name}
+            value={candidate.id}
+            checked={isChecked(candidate)}
+            disabled={disabled}
+            onChange={() => onSelect(candidate)}
+            className="mt-1 h-4 w-4 accent-accent-emphasis"
+          />
+          <span className="min-w-0">
+            <span className="block break-words font-medium">{candidate.label_ja}</span>
+            {candidate.description_ja ? (
+              <span className="mt-0.5 block text-xs leading-5 text-fg-muted">{candidate.description_ja}</span>
+            ) : null}
+            {candidate.refs_ja && candidate.refs_ja !== candidate.label_ja ? (
+              <span className="mt-0.5 block break-all font-mono text-xs leading-5 text-fg-muted">
+                {candidate.refs_ja}
+              </span>
+            ) : null}
+            {candidate.evidence_ja ? (
+              <span className="mt-0.5 block text-xs leading-5 text-fg-subtle">
+                {t("nl2sql.clarification.evidence", { evidence: candidate.evidence_ja })}
+              </span>
+            ) : null}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 確認のカード（#1761）。確認の質問が無い（質問 0 件）・全部に答えた後に、要件のまとめの下で必ず出し、利用者が
+ * 確かめてから SQL の生成に進む（自動では進まない）。AI が決めた対象の表に候補があれば選び直せ、「その他（自由
+ * 入力）」で解釈を直せる。直しは「この内容で回答」で回答として送り、AI の再検査が要件を直す。直しを入力している
+ * 間は「この要件で SQL を生成して実行」を押せない（入力した直しを捨てて進まない）。SQL 生成の画面とチャットで
+ * 同じ部品・同じ文言（違いは置き場所に合わせた操作部品の高さだけ）。
+ */
+export function RequirementConfirmForm({
+  controller,
+  readyLabel,
+  applyLabel,
+  onApply,
+  closeButton,
+  size,
+  idPrefix,
+}: {
+  controller: RequirementSessionController;
+  readyLabel: string;
+  applyLabel: string;
+  onApply: () => void;
+  closeButton: ReactNode;
+  size: ButtonSize;
+  idPrefix: string;
+}) {
+  const { confirmTarget, selectedCandidateIds, freeText, busyAction, correctionPending } = controller;
+  const currentId = confirmTarget ? currentCandidateId(confirmTarget) : "";
+  const checkedId = selectedCandidateIds[0] ?? currentId;
+  const legendId = `${idPrefix}-confirm-title`;
+  return (
+    <fieldset
+      aria-labelledby={legendId}
+      className="grid min-w-0 gap-3 border-t border-border pt-4"
+      data-testid="nl2sql-clarification-confirm"
+    >
+      <p id={legendId} className="flex items-center gap-2 text-sm text-success-fg">
+        <CheckCircle2 size={16} aria-hidden="true" />
+        {readyLabel}
+      </p>
+      {confirmTarget ? (
+        <div
+          role="radiogroup"
+          aria-label={t("nl2sql.clarification.candidates", { label: confirmTarget.label_ja })}
+          className="grid min-w-0 gap-2"
+          data-testid="nl2sql-clarification-confirm-target"
+        >
+          <p className="text-xs font-medium text-fg-muted">
+            {t("nl2sql.clarification.candidates", { label: confirmTarget.label_ja })}
+          </p>
+          <RequirementCandidateOptions
+            name={`${idPrefix}-confirm-target`}
+            type="radio"
+            candidates={confirmTarget.candidates}
+            isChecked={(candidate) => candidate.id === checkedId}
+            disabled={Boolean(busyAction)}
+            onSelect={(candidate) => controller.selectCandidate(candidate.id)}
+          />
+        </div>
+      ) : null}
+      <TextareaField
+        id={`${idPrefix}-confirm-free-text`}
+        label={t("nl2sql.clarification.other")}
+        value={freeText}
+        onChange={(event) => controller.changeFreeText(event.currentTarget.value)}
+        disabled={Boolean(busyAction)}
+        rows={2}
+        placeholder={t("nl2sql.clarification.otherPlaceholder")}
+      />
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          size={size}
+          icon={Send}
+          loading={busyAction === "answer"}
+          disabled={!correctionPending || Boolean(busyAction && busyAction !== "answer")}
+          onClick={() => void controller.submitCorrection()}
+          data-testid="nl2sql-clarification-confirm-answer"
+        >
+          {t("nl2sql.clarification.answer")}
+        </Button>
+        <Button
+          type="button"
+          variant="primary"
+          size={size}
+          loading={busyAction === "apply"}
+          disabled={correctionPending || Boolean(busyAction && busyAction !== "apply")}
+          onClick={onApply}
+          icon={Sparkles}
+          data-testid="nl2sql-clarification-apply"
+        >
+          {applyLabel}
+        </Button>
+        {closeButton}
+      </div>
+    </fieldset>
   );
 }

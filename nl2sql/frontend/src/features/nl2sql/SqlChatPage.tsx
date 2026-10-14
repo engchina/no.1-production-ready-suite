@@ -483,6 +483,16 @@ export function SqlChatPage() {
     setPendingSend({ message, request });
     autoScroll.scrollToLatest();
     send.mutate(request);
+    // 確認のカードの「この要件で SQL を生成して実行」で投入したときは、押したボタンが消えてフォーカスが
+    // 失われるので、送信の直後と同じく入力欄へ戻す（#1761。ほかの所にあるフォーカスは動かさない）。
+    const focused = document.activeElement;
+    if (
+      !focused ||
+      focused === document.body ||
+      focused.closest('[data-testid="sql-chat-requirement-turn"]')
+    ) {
+      requestAnimationFrame(() => composerRef.current?.focus());
+    }
   };
   const requirementFlow = useChatRequirementFlow({
     check: requirementCheck,

@@ -1,5 +1,5 @@
-// チャットの AI要件確認（#1442）の決まりごと: 自動の検査の要求（会話の続き・業務プロファイル）、確認が
-// 要らないときの直行、確認の質問・まとめ・終わった確認の見分け、作業状態から戻した値の検査。
+// チャットの AI要件確認（#1442）の決まりごと: 自動の検査の要求（会話の続き・業務プロファイル）、確認の
+// 質問が 0 件でも直行しないこと（#1761）、確認の質問・まとめ・終わった確認の見分け、作業状態から戻した値の検査。
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -92,8 +92,8 @@ test("自動の検査は会話の続き（前のターン）とチャットの�
   assert.notEqual(chatRequirementIdempotencyKey(request.client_job_id), chatRequirementIdempotencyKey("other"));
 });
 
-test("確認が要らない（SELECT・FROM が明確で不足・あいまいが無く、まだ聞いていない）ときは直行する", () => {
-  assert.equal(chatRequirementStep(session()), "direct");
+test("確認の質問が 0 件でも直行せず、確認のカードで利用者が確かめてから SQL を作る (#1761)", () => {
+  assert.equal(chatRequirementStep(session()), "summary");
 });
 
 test("確認の質問がある・答えられない・最低の基準を満たさないときは会話の中で聞く", () => {
