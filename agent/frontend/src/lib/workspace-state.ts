@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 /**
  * ページ遷移・再読込のときに残す作業状態（platform UX 契約 workspace-state.md。#87）。
@@ -164,36 +164,4 @@ export function useWorkspaceState<P extends WorkspacePage, T>(
   }, [page, field, value]);
 
   return [value, setValue, saved];
-}
-
-/**
- * 復元した選択が今の一覧に存在するかを、一覧の取得後に 1 度だけ検証する。
- * 存在しなければ `onMissing` を呼び、利用者に説明するための `missing` を true にする
- * （選択を黙って別の対象に置き換えない）。
- */
-export function useRestoredSelectionCheck(
-  restoredId: string | null,
-  availableIds: readonly string[] | undefined,
-  onMissing?: () => void
-): { missing: boolean; dismiss: () => void } {
-  const pendingRef = useRef(restoredId);
-  const onMissingRef = useRef(onMissing);
-  // 最新の onMissing を commit 時に入れる（render 中に ref を書かない）。
-  useLayoutEffect(() => {
-    onMissingRef.current = onMissing;
-  });
-  const [missing, setMissing] = useState(false);
-
-  useEffect(() => {
-    const pending = pendingRef.current;
-    if (pending === null || availableIds === undefined) return;
-    pendingRef.current = null;
-    if (!availableIds.includes(pending)) {
-      setMissing(true);
-      onMissingRef.current?.();
-    }
-  }, [availableIds]);
-
-  const dismiss = useCallback(() => setMissing(false), []);
-  return { missing, dismiss };
 }

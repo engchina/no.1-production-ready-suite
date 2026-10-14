@@ -144,7 +144,28 @@ async function installControlPlaneApi(
       runs = [run];
       return respond(run);
     }
-    if (path === "/api/runs") return respond({ runs });
+    // 実行履歴の一覧はサーバー側のページングと要約、詳細は実行 1 件（#1897）。
+    if (path === "/api/runs") {
+      const items = runs.map((item) => ({
+        id: item.id,
+        goal: item.goal,
+        agent_id: item.agent_id,
+        runtime_id: item.runtime_id,
+        status: item.status,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+        pending_approval_count: 0,
+        pending_approval: null,
+        resume_pending: false,
+        source: "user",
+      }));
+      return respond({ items, total: items.length, limit: 10, offset: 0, has_next: false, unfiltered_total: items.length });
+    }
+    const detail = /^\/api\/runs\/([^/]+)$/.exec(path);
+    if (detail && method === "GET") {
+      const found = runs.find((item) => item.id === decodeURIComponent(detail[1]));
+      return found ? respond(found) : respond(null, 404);
+    }
     if (path.includes("/audit")) {
       return respond({ run_id: "run-control-plane-e2e", goal: "", status: "running", records: options?.auditRecords ?? [] });
     }

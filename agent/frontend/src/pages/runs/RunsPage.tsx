@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, PlayCircle, RefreshCw, X } from "lucide-react";
 import {
   Banner,
@@ -8,6 +8,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   FormActionBar,
   FormStatus,
@@ -27,35 +28,30 @@ import {
   PageBody,
   RowTitleButton,
   isSubmitEnter,
+  offsetForPage,
   SelectField,
   TextareaField,
   useActionPending,
 } from "@production-ready/ui";
-import { agentApi, type ApprovalRequest, type RunState } from "@/lib/api";
-import { MissingEditorTarget } from "@/components/EntityLayout";
-import { PagedDataTable, QueryState } from "@/components/ListViews";
 import {
-  FilterChipGroup,
-  ListSearchField,
-  listCountLabel,
-  matchesSearch,
-  NoMatchState,
-  useListSearch,
-} from "@/components/ListFilters";
+  ApiError,
+  agentApi,
+  type RunListFilters,
+  type RunState,
+  type RunSummary,
+  type RunsPage as RunsPageData,
+} from "@/lib/api";
+import { MissingEditorTarget } from "@/components/EntityLayout";
+import { QueryState, ServerPagedDataTable, usePersistedPage } from "@/components/ListViews";
+import { FilterChipGroup, ListSearchField, listCountLabel, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useEditorRoute } from "@/lib/editor-route";
 import { useCapabilities } from "@/lib/permissions";
-import { runSourceLabelOf } from "@/lib/run-source";
+import { runSourceLabel } from "@/lib/run-source";
 import { runStatusView } from "@/lib/status-labels";
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
-import {
-  isNullableString,
-  isOneOf,
-  isString,
-  useRestoredSelectionCheck,
-  useWorkspaceState,
-} from "@/lib/workspace-state";
-import { RunDetail, runCapabilities } from "@/pages/runs/RunDetail";
+import { isNullableString, isOneOf, isString, useWorkspaceState } from "@/lib/workspace-state";
+import { RunDetail, runCapabilities, runSummaryCapabilities } from "@/pages/runs/RunDetail";
 import {
   type RunCommandKind,
   type RunStreamMode,
@@ -77,11 +73,31 @@ type RunStatusFilter = (typeof RUN_STATUS_FILTERS)[number];
 
 const isRunStatusFilter = isOneOf<RunStatusFilter>(RUN_STATUS_FILTERS);
 
-function runMatchesStatusFilter(run: RunState, filter: RunStatusFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "active")
-    return run.status === "queued" || run.status === "running" || run.status === "waiting_confirmation";
-  return run.status === filter;
+/** 一覧の行（要約）と詳細（RunState）のどちらからでも、行の操作に要る事実を読む（#1897）。 */
+type RunRow = RunState | RunSummary;
+
+function runRowFacts(run: RunRow): {
+  canCancel: boolean;
+  canResume: boolean;
+  pendingApproval?: { id: string; toolName: string };
+} {
+  if ("approvals" in run) {
+    const pending = run.approvals.find((approval) => approval.status === "pending");
+    return {
+      ...runCapabilities(run),
+      pendingApproval: pending ? { id: pending.id, toolName: pending.tool_call.name } : undefined,
+    };
+  }
+  const pending = run.pending_approval;
+  return {
+    ...runSummaryCapabilities(run),
+    pendingApproval: pending ? { id: pending.id, toolName: pending.tool_name } : undefined,
+  };
+}
+
+/** 詳細の実行が無い・読めない（別の実行へ暗黙に置換せず、一覧へ戻す案内を出す）。 */
+function isRunGone(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
 function runStatusFilterLabel(filter: RunStatusFilter): string {
@@ -96,10 +112,39 @@ export function RunsPage() {
   const confirm = useConfirm();
   const capabilities = useCapabilities();
   const { user } = useAuth();
+  // 実行履歴の絞り込み（目標・実行 ID・業務 Agent の検索と、状態のチップ。#808）とページは作業状態に残し、
+  // サーバー側で絞り込んでページングする（全 Run を読まない。#1897）。
+  const [runQuery, setRunQuery] = useListSearch("runs");
+  const [runFilter, setRunFilter] = useWorkspaceState(
+    "listFilter",
+    "runs",
+    "all" as RunStatusFilter,
+    isRunStatusFilter
+  );
+  const [runPage, setRunPage] = usePersistedPage("runs");
+  const runFilters: RunListFilters = {
+    status: runFilter === "all" ? undefined : runFilter,
+    q: runQuery.trim() || undefined,
+    limit: DEFAULT_PAGE_SIZE,
+    offset: offsetForPage(runPage, DEFAULT_PAGE_SIZE),
+  };
+  const isList = editor.target.kind === "list";
+  const targetRunId = editor.target.kind === "edit" ? editor.target.id : null;
   const runs = useQuery({
-    queryKey: ["runs"],
-    queryFn: agentApi.listRuns,
+    queryKey: ["runs", "list", runFilters],
+    queryFn: () => agentApi.listRuns(runFilters),
+    // 詳細を開いている間も読んでおき（定期の取り直しはしない）、一覧へ戻ったらすぐ選んだ行へフォーカスを戻す。
+    refetchInterval: isList ? 5000 : false,
+    // ページ・絞り込みを変えている間は今のページを出したまま取り直す（表を Skeleton に戻さない）。
+    placeholderData: keepPreviousData,
+  });
+  // 詳細は URL の実行 1 件だけを読む（一覧と同じく 5 秒ごとに取り直し、Event の受信でも取り直す）。
+  const runDetail = useQuery({
+    queryKey: ["runs", "detail", targetRunId],
+    queryFn: () => agentApi.getRun(targetRunId ?? ""),
+    enabled: targetRunId !== null,
     refetchInterval: 5000,
+    retry: (count, error) => !isRunGone(error) && count < 3,
   });
   // 「最新情報を取得」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
   const manualRefresh = useActionPending();
@@ -119,10 +164,7 @@ export function RunsPage() {
     onSuccess: (run) => {
       toast.success(t("run.createdToast"));
       setSelectedRunId(run.id);
-      queryClient.setQueryData<{ runs: RunState[]; user_display_names?: Record<string, string> }>(["runs"], (current) => ({
-        ...current,
-        runs: [run, ...(current?.runs ?? []).filter((item) => item.id !== run.id)],
-      }));
+      queryClient.setQueryData<RunState>(["runs", "detail", run.id], run);
       editor.openItem(run.id, { replace: true });
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
@@ -150,23 +192,32 @@ export function RunsPage() {
     onError: (error) => toast.error(t("run.replayFailed"), { description: error.message }),
   });
   const decideApproval = useMutation({
-    mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
+    mutationFn: ({ approvalId, approved }: { runId: string; approvalId: string; approved: boolean }) =>
       // 決定者はログイン中の利用者から server が決める（#215）。
-      agentApi.decideApproval(approval.id, { approved }),
+      agentApi.decideApproval(approvalId, { approved }),
     // 判断の結果は返却値の承認の状態で確かめる。先に取り消された・他の操作者が判断した承認は、backend が
     // 状態を変えずに 200 で返すため、成功と案内しない（承認の画面と同じ。#877 / #919）。
-    onSuccess: (updatedRun, { approval, approved }) => {
+    onSuccess: (updatedRun, { approvalId, approved }) => {
       // 押した判断が自分の判断として残ったときだけ成功と案内する（#1119）。
-      if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
+      if (isOwnDecision(updatedRun, approvalId, approved, user?.login_user_id)) {
         toast.success(approved ? t("approval.decided") : t("approval.rejected"));
       } else {
         toast.info(t("approval.changedDuringReview"));
       }
       // 返却値を先に反映し、再取得を待つ間の二重判断を防ぐ。
-      queryClient.setQueryData<{ runs: RunState[]; user_display_names?: Record<string, string> }>(["runs"], (current) => ({
-        ...current,
-        runs: (current?.runs ?? []).map((run) => (run.id === updatedRun.id ? updatedRun : run)),
-      }));
+      queryClient.setQueryData<RunState>(["runs", "detail", updatedRun.id], updatedRun);
+      queryClient.setQueriesData<RunsPageData>({ queryKey: ["runs", "list"] }, (current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((item) =>
+                item.id === updatedRun.id
+                  ? { ...item, status: updatedRun.status, pending_approval_count: 0, pending_approval: null }
+                  : item
+              ),
+            }
+          : current
+      );
       refreshRunQueries();
     },
     onError: (error) => toast.error(t("run.decideFailed"), { description: error.message }),
@@ -194,31 +245,23 @@ export function RunsPage() {
     createRun.isPending
   );
 
-  const runItems = useMemo(() => runs.data?.runs ?? [], [runs.data?.runs]);
   const agentNames = useMemo(
     () => new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name])),
     [agents.data?.agents]
   );
   const agentNameOf = (agentId: string) => agentNames.get(agentId) ?? agentId;
-  // 実行履歴の絞り込み（目標・実行 ID・業務 Agent の検索と、状態のチップ。#808）。どちらも作業状態に残す。
-  const [runQuery, setRunQuery] = useListSearch("runs");
-  const [runFilter, setRunFilter] = useWorkspaceState(
-    "listFilter",
-    "runs",
-    "all" as RunStatusFilter,
-    isRunStatusFilter
-  );
-  const visibleRuns = runItems.filter(
-    (run) =>
-      runMatchesStatusFilter(run, runFilter) &&
-      matchesSearch(runQuery, [run.goal, run.id, run.agent_id, agentNames.get(run.agent_id)])
-  );
-  const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
-  const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
+  // 検索語・絞り込みを変えたら 1 ページ目へ戻す。
+  const changeRunQuery = (value: string) => {
+    setRunQuery(value);
+    setRunPage(1);
+  };
+  const changeRunFilter = (value: RunStatusFilter) => {
+    setRunFilter(value);
+    setRunPage(1);
+  };
   // 詳細の対象は URL の ID。別の実行へ暗黙に置換しない（#875）。
   const viewKind = editor.target.kind;
-  const targetRunId = editor.target.kind === "edit" ? editor.target.id : null;
-  const selectedRun = runItems.find((run) => run.id === targetRunId);
+  const selectedRun = runDetail.data?.id === targetRunId ? runDetail.data : undefined;
   // 利用できるエージェントは backend が絞り込む。既定の Agent を使えない利用者は、使える最初の Agent を選ぶ（#215）。
   // 下書きで実行するのは Agent 管理（admin）だけ（#770）。下書きでなければ公開した版のある Agent だけ選べる。
   const [runDraft, setRunDraft] = useState(false);
@@ -284,10 +327,10 @@ export function RunsPage() {
    * 送る経路は handler の中で選ぶ（buttons.md §5.1。操作のボタンは ObjectActionBar / RowActionMenu の 1 か所）。
    * 詳細で WebSocket の購読が接続済みのときはその接続でコマンドを送り、それ以外は REST を呼ぶ。
    */
-  const viaWebSocket = (run: RunState) =>
+  const viaWebSocket = (run: RunRow) =>
     streamMode === "websocket" && websocketState.status === "open" && run.id === selectedRun?.id;
 
-  async function cancelLatestRun(run: RunState) {
+  async function cancelLatestRun(run: RunRow) {
     const confirmed = await confirm({
       title: t("run.cancelTitle"),
       description: run.id,
@@ -303,7 +346,7 @@ export function RunsPage() {
     }
   }
 
-  function resumeLatestRun(run: RunState) {
+  function resumeLatestRun(run: RunRow) {
     if (viaWebSocket(run)) {
       websocketState.sendResume();
     } else {
@@ -311,28 +354,38 @@ export function RunsPage() {
     }
   }
 
-  async function decideRunApproval(run: RunState, approval: ApprovalRequest, approved: boolean) {
+  async function decideRunApproval(run: RunRow, approval: { id: string; toolName: string }, approved: boolean) {
     const ok = await confirm({
       title: approved ? t("run.approveTitle") : t("run.rejectTitle"),
-      description: approval.tool_call.name,
+      description: approval.toolName,
       confirmLabel: approved ? t("common.approve") : t("common.reject"),
       cancelLabel: t("common.cancel"),
       tone: approved ? "info" : "danger",
     });
     if (!ok) return;
-    // 確認中に再取得で状態が変わっていたら（他の操作者の判断・実行の取消）、古い状態で送らない（#919）。
-    const latest = queryClient
-      .getQueryData<{ runs: RunState[] }>(["runs"])
-      ?.runs.find((item) => item.id === run.id)
-      ?.approvals.find((item) => item.id === approval.id);
+    // 確認中に状態が変わっていたら（他の操作者の判断・実行の取消）、古い状態で送らない（#919）。
+    // 一覧は要約だけを持つため、その実行 1 件を読み直して確かめる（#1897）。
+    let latestRun: RunState;
+    try {
+      latestRun = await queryClient.fetchQuery({
+        queryKey: ["runs", "detail", run.id],
+        queryFn: () => agentApi.getRun(run.id),
+        staleTime: 0,
+      });
+    } catch (error) {
+      toast.error(t("run.decideFailed"), { description: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const latest = latestRun.approvals.find((item) => item.id === approval.id);
     if (!latest || latest.status !== "pending") {
       toast.info(t("approval.changedDuringReview"));
+      void queryClient.invalidateQueries({ queryKey: ["runs", "list"] });
       return;
     }
     if (viaWebSocket(run)) {
       websocketState.sendApprovalDecision(latest.id, approved);
     } else {
-      decideApproval.mutate({ approval: latest, approved });
+      decideApproval.mutate({ runId: run.id, approvalId: latest.id, approved });
     }
   }
 
@@ -350,9 +403,8 @@ export function RunsPage() {
             : "reject"
           : wsCommand;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消・却下は確認してから送る。
-  const runActions = (run: RunState): EntityAction[] => {
-    const { canCancel, canResume } = runCapabilities(run);
-    const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
+  const runActions = (run: RunRow): EntityAction[] => {
+    const { canCancel, canResume, pendingApproval } = runRowFacts(run);
     // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。variables は完了後も前の値が
     // 残るため、処理中の mutation の variables だけを読む（#819）。
     const pendingRunId = cancelRun.isPending
@@ -362,7 +414,7 @@ export function RunsPage() {
         : replayRun.isPending
           ? replayRun.variables
           : decideApproval.isPending
-            ? decideApproval.variables?.approval.run_id
+            ? decideApproval.variables?.runId
             : undefined;
     const isPendingFor = (kind: RunCommandKind | "replay") =>
       pendingAction === kind && (wsCommand === kind ? run.id === selectedRun?.id : pendingRunId === run.id);
@@ -420,7 +472,6 @@ export function RunsPage() {
     ];
   };
 
-  const isList = editor.target.kind === "list";
   return (
     <>
       <PageHeader
@@ -449,7 +500,10 @@ export function RunsPage() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => runs.refetch()),
+            onClick: () =>
+              void manualRefresh.track(async () => {
+                await (isList ? runs.refetch() : targetRunId ? runDetail.refetch() : agents.refetch());
+              }),
           },
           ...(isList && capabilities.operateRuns
             ? [
@@ -573,86 +627,84 @@ export function RunsPage() {
           ) : (
             <Banner severity="warning">{t("run.createForbidden")}</Banner>
           )
-        ) : (
-          <QueryState
-            query={runs}
-            loadingLabel={t("loading.runs")}
-            skeleton={isList ? <RunHistorySkeleton /> : <FormSkeleton fields={4} />}
-          >
-            {isList ? (
-              <>
-                {restoredSelection.missing ? (
-                  <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
-                ) : null}
-                <RunHistoryList
-                  runs={visibleRuns}
-                  resetKey={`${runQuery}\u0000${runFilter}`}
-                  toolbar={
-                    <ListToolbar
-                      search={
-                        <ListSearchField
-                          id="run-search"
-                          label={t("run.search")}
-                          value={runQuery}
-                          onSearch={setRunQuery}
-                          count={visibleRuns.length}
-                        />
-                      }
-                      filters={
-                        <FilterChipGroup label={t("run.filter.label")}>
-                          {RUN_STATUS_FILTERS.map((filter) => (
-                            <ToggleChip
-                              key={filter}
-                              selected={runFilter === filter}
-                              onClick={() => setRunFilter(filter)}
-                            >
-                              {runStatusFilterLabel(filter)}
-                            </ToggleChip>
-                          ))}
-                        </FilterChipGroup>
-                      }
-                      summary={listCountLabel(visibleRuns.length, runItems.length)}
-                      testId="run-list-toolbar"
+        ) : isList ? (
+          <QueryState query={runs} loadingLabel={t("loading.runs")} skeleton={<RunHistorySkeleton />}>
+            {runs.data ? (
+              <RunHistoryList
+                page={runs.data}
+                onPageChange={setRunPage}
+                toolbar={
+                  <ListToolbar
+                    search={
+                      <ListSearchField
+                        id="run-search"
+                        label={t("run.search")}
+                        value={runQuery}
+                        onSearch={changeRunQuery}
+                        count={runs.data.total}
+                      />
+                    }
+                    filters={
+                      <FilterChipGroup label={t("run.filter.label")}>
+                        {RUN_STATUS_FILTERS.map((filter) => (
+                          <ToggleChip
+                            key={filter}
+                            selected={runFilter === filter}
+                            onClick={() => changeRunFilter(filter)}
+                          >
+                            {runStatusFilterLabel(filter)}
+                          </ToggleChip>
+                        ))}
+                      </FilterChipGroup>
+                    }
+                    summary={listCountLabel(runs.data.total, runs.data.unfiltered_total)}
+                    testId="run-list-toolbar"
+                  />
+                }
+                empty={
+                  runs.data.unfiltered_total ? (
+                    <NoMatchState
+                      title={t("run.noMatch")}
+                      clearLabel={runFilter === "all" ? t("common.clearSearch") : t("common.clearFilters")}
+                      onClear={() => {
+                        changeRunQuery("");
+                        changeRunFilter("all");
+                      }}
                     />
-                  }
-                  empty={
-                    runItems.length ? (
-                      <NoMatchState
-                        title={t("run.noMatch")}
-                        clearLabel={runFilter === "all" ? t("common.clearSearch") : t("common.clearFilters")}
-                        onClear={() => {
-                          setRunQuery("");
-                          setRunFilter("all");
-                        }}
-                      />
-                    ) : (
-                      <EmptyState
-                        title={t("run.empty.title")}
-                        hint={capabilities.operateRuns ? t("run.empty.hint") : undefined}
-                      />
-                    )
-                  }
-                  agentNameOf={agentNameOf}
-                  // system_admin は全員の Run を見るので「利用者」の列を出す（#1889）。
-                  creatorNameOf={
-                    user?.is_system_admin
-                      ? (run) =>
-                          (run.created_by_user_uuid &&
-                            runs.data?.creator_display_names?.[run.created_by_user_uuid]) ||
-                          t("run.userUnknown")
-                      : undefined
-                  }
-                  selectedRunId={selectedRunId}
-                  actionsFor={runActions}
-                  hrefFor={editor.itemHref}
-                  onSelect={(runId) => {
-                    restoredSelection.dismiss();
-                    setSelectedRunId(runId);
-                    editor.openItem(runId);
-                  }}
-                />
-              </>
-            ) : selectedRun ? (
+                  ) : (
+                    <EmptyState
+                      title={t("run.empty.title")}
+                      hint={capabilities.operateRuns ? t("run.empty.hint") : undefined}
+                    />
+                  )
+                }
+                agentNameOf={agentNameOf}
+                // system_admin は全員の Run を見るので「利用者」の列を出す（#1889）。
+                creatorNameOf={
+                  user?.is_system_admin
+                    ? (run) =>
+                        (run.created_by_user_uuid && runs.data?.creator_display_names?.[run.created_by_user_uuid]) ||
+                        t("run.userUnknown")
+                    : undefined
+                }
+                selectedRunId={selectedRunId}
+                actionsFor={runActions}
+                hrefFor={editor.itemHref}
+                onSelect={(runId) => {
+                  setSelectedRunId(runId);
+                  editor.openItem(runId);
+                }}
+              />
+            ) : null}
+          </QueryState>
+        ) : runDetail.error && isRunGone(runDetail.error) ? (
+          <MissingEditorTarget
+            id={editor.target.kind === "edit" ? editor.target.id : ""}
+            onBack={() => void backToList()}
+          />
+        ) : (
+          <QueryState query={runDetail} loadingLabel={t("loading.runs")} skeleton={<FormSkeleton fields={4} />}>
+            {selectedRun ? (
               <RunDetail
                 key={selectedRun.id}
                 run={selectedRun}
@@ -664,12 +716,7 @@ export function RunsPage() {
                 sseState={sseState}
                 capabilities={capabilities}
               />
-            ) : (
-              <MissingEditorTarget
-                id={editor.target.kind === "edit" ? editor.target.id : ""}
-                onBack={() => void backToList()}
-              />
-            )}
+            ) : null}
           </QueryState>
         )}
       </PageBody>
@@ -678,8 +725,8 @@ export function RunsPage() {
 }
 
 function RunHistoryList({
-  runs,
-  resetKey,
+  page,
+  onPageChange,
   toolbar,
   empty,
   selectedRunId,
@@ -689,25 +736,25 @@ function RunHistoryList({
   creatorNameOf,
   hrefFor,
 }: {
-  runs: RunState[];
-  /** 検索語・絞り込みが変わったら 1 ページ目へ戻す契機。 */
-  resetKey: unknown;
+  /** サーバーが返した 1 ページ（#1897）。 */
+  page: RunsPageData;
+  onPageChange: (page: number) => void;
   /** 表の上の検索・絞り込み（ListToolbar）。 */
   toolbar: ReactNode;
   empty: ReactNode;
   selectedRunId: string | null;
   onSelect: (runId: string) => void;
-  actionsFor: (run: RunState) => EntityAction[];
+  actionsFor: (run: RunSummary) => EntityAction[];
   /** 業務 Agent の ID を名前にする（一覧に無い・読めないときは ID のまま）。 */
   agentNameOf: (agentId: string) => string;
   /** Run を実行した利用者の表示名（system_admin だけ。無ければ「利用者」の列を出さない。#1889）。 */
-  creatorNameOf?: (run: RunState) => string;
+  creatorNameOf?: (run: RunSummary) => string;
   hrefFor: (id: string) => string;
 }) {
-  const userColumn: DataTableColumn<RunState>[] = creatorNameOf
+  const userColumn: DataTableColumn<RunSummary>[] = creatorNameOf
     ? [{ key: "user", header: t("run.column.user"), render: (run) => creatorNameOf(run) }]
     : [];
-  const columns: DataTableColumn<RunState>[] = [
+  const columns: DataTableColumn<RunSummary>[] = [
     {
       key: "goal",
       header: t("run.form.goal"),
@@ -730,7 +777,7 @@ function RunHistoryList({
       key: "source",
       header: t("run.source"),
       className: "text-xs text-fg",
-      render: (run) => runSourceLabelOf(run.metadata),
+      render: (run) => runSourceLabel(run.source, run.api_key_name),
     },
     {
       key: "status",
@@ -760,10 +807,9 @@ function RunHistoryList({
       <CardContent className="space-y-3">
         {toolbar}
         {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない（戻すのは絞り込みを変えたときだけ）。 */}
-        <PagedDataTable
-          pageKey="runs"
-          resetKey={resetKey}
-          rows={runs}
+        <ServerPagedDataTable
+          page={page}
+          onPageChange={onPageChange}
           columns={columns}
           getRowKey={(run) => run.id}
           selectedRowKey={selectedRunId}

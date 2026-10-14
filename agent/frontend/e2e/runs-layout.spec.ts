@@ -156,14 +156,19 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", { tag
     release = resolve;
   });
   let fail = true;
-  await page.route("**/api/runs", async (route) => {
+  // 一覧はサーバー側のページング（`?limit=10&offset=0`。#1897）。
+  await page.route(/\/api\/runs(\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await gate;
     await route.fulfill({
       status: fail ? 503 : 200,
       json: fail
         ? { data: null, error_messages: ["履歴を取得できません"], warning_messages: [] }
-        : { data: { runs: [] }, error_messages: [], warning_messages: [] },
+        : {
+            data: { items: [], total: 0, limit: 10, offset: 0, has_next: false, unfiltered_total: 0 },
+            error_messages: [],
+            warning_messages: [],
+          },
     });
   });
   await page.goto("/runs");
@@ -273,13 +278,10 @@ test("確認中に他の操作者が判断した承認には、古い状態で�
   const approval = seedPendingApproval(mockApi);
   await page.goto("/runs?id=run-layout");
   await detailAction(page, "却下");
-  const requestCount = mockApi.requests.filter((item) => item.path === "/api/runs").length;
+  // 確認の間に他の操作者が判断した。画面は判断を送る前にその実行を読み直して確かめる（#1897）。
   approval.status = "approved";
   approval.decided_by = "another.reviewer";
   approval.decided_at = MOCK_NOW;
-  await expect
-    .poll(() => mockApi.requests.filter((item) => item.path === "/api/runs").length, { timeout: 8_000 })
-    .toBeGreaterThan(requestCount);
   await page.getByRole("alertdialog").getByRole("button", { name: "却下", exact: true }).click();
   await expect(page.getByText(CHANGED_DURING_REVIEW, { exact: true })).toBeVisible();
   expect(mockApi.lastRequest("POST", "/api/approvals/approval-layout/decision")).toBeUndefined();
@@ -291,6 +293,10 @@ test("一覧の2ページ目から詳細を開いて戻ると、同じページ�
   await page.getByTestId("run-history-pagination").getByRole("button", { name: "次へ", exact: true }).click();
   const link = page.locator('a[data-run-id="run-layout-10"]');
   await expect(link).toBeVisible();
+  // ページはサーバー側で切り出す（1 ページ 10 件。全 Run を読まない。#1897）。
+  const listQuery = mockApi.lastRequest("GET", "/api/runs")?.searchParams;
+  expect([listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["10", "10"]);
+  await expect(page.locator("a[data-run-id]")).toHaveCount(10);
   await link.click();
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByTestId("run-history-pagination")).toContainText("2 / 3");

@@ -132,10 +132,30 @@ def _own(scope_data: ScopeData, user_uuid: str) -> None:
             repository._runs[run.id].created_by_user_uuid = user_uuid  # noqa: SLF001
 
 
+def _all_pages(path: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+    """一覧の全ページ（#1897。repository は同じプロセスのテストと共有するので、件数に依らず読む）。
+
+    各ページの `creator_display_names` は、そのページの行に `creator_display_names` として写す。
+    """
+    items: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        response = client.get(path, params={"limit": 100, "offset": offset}, headers=headers)
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        names = data.get("creator_display_names", {})
+        items.extend({**item, "creator_display_names": names} for item in data["items"])
+        if not data["has_next"]:
+            return items
+        offset += data["limit"]
+
+
 def _run_ids(headers: dict[str, str]) -> set[str]:
-    response = client.get("/api/runs", headers=headers)
-    assert response.status_code == 200, response.text
-    return {item["id"] for item in response.json()["data"]["runs"]}
+    return {item["id"] for item in _all_pages("/api/runs", headers)}
+
+
+def _approval_ids(headers: dict[str, str]) -> set[str]:
+    return {item["id"] for item in _all_pages("/api/approvals", headers)}
 
 
 def test_run_list_and_detail_are_scoped_by_principal(
@@ -157,6 +177,14 @@ def test_run_list_and_detail_are_scoped_by_principal(
     assert scope_data.run_b.id not in ids
 
     assert client.get(f"/api/runs/{scope_data.run_a1.id}", headers=headers).status_code == 200
+    # 承認の一覧・詳細も同じ対象範囲（#1897）。範囲外の承認は詳細も 404。
+    approval_ids = _approval_ids(headers)
+    assert scope_data.run_a1.approvals[0].id in approval_ids
+    assert scope_data.run_b.approvals[0].id not in approval_ids
+    in_scope = client.get(f"/api/approvals/{scope_data.run_a1.approvals[0].id}", headers=headers)
+    assert in_scope.status_code == 200, in_scope.text
+    out_of_scope = client.get(f"/api/approvals/{scope_data.run_b.approvals[0].id}", headers=headers)
+    assert out_of_scope.status_code == 404
     for run in (scope_data.run_b,):
         assert client.get(f"/api/runs/{run.id}", headers=headers).status_code == 403
         artifacts = client.get(f"/api/runs/{run.id}/artifacts", headers=headers)
@@ -199,19 +227,18 @@ def test_only_system_admin_sees_all_runs(auth: ProductionAuth, scope_data: Scope
     assert not expected & _run_ids(login("agent-admin"))
     admin = login_configured_admin()
     assert expected <= _run_ids(admin)
-    runs = client.get("/api/runs", headers=admin).json()["data"]
+    runs = _all_pages("/api/runs", admin)
     # 持ち主の分からない古い Run（created_by なし）は表示名の対応表に入らない（画面は削除済み）。
-    assert all(run["created_by_user_uuid"] is None for run in runs["runs"] if run["id"] in expected)
+    assert all(run["created_by_user_uuid"] is None for run in runs if run["id"] in expected)
     # 一般の利用者には「利用者」の対応表を返さない。
     owner = _scoped_user(auth, "owner-1889", ["agent.runs.view"], owns=scope_data)
     auth.store.users[owner].display_name = "持ち主 太郎"
-    assert (
-        client.get("/api/runs", headers=login("owner-1889")).json()["data"]["creator_display_names"]
-        == {}
+    assert all(
+        run["creator_display_names"] == {} for run in _all_pages("/api/runs", login("owner-1889"))
     )
-    # 並列のテストの Run も見えるので、この利用者の分だけを確かめる。
-    names = client.get("/api/runs", headers=admin).json()["data"]["creator_display_names"]
-    assert names[owner] == "持ち主 太郎"
+    # 対応表はページの行の分（#1897）。この利用者の Run の行のページで確かめる。
+    owned = [run for run in _all_pages("/api/runs", admin) if run["id"] in expected]
+    assert owned and all(run["creator_display_names"][owner] == "持ち主 太郎" for run in owned)
 
 
 def test_audit_is_scoped_by_principal(auth: ProductionAuth, scope_data: ScopeData) -> None:
@@ -588,14 +615,15 @@ def test_approval_decider_and_version_publisher_are_shown_by_display_name(
     )
 
     admin = login_configured_admin()
-    runs = client.get("/api/runs", headers=admin)
-    assert runs.status_code == 200, runs.text
-    data = runs.json()["data"]
-    approvals = {item["id"]: item for run in data["runs"] for item in run["approvals"]}
+    detail = client.get(f"/api/approvals/{approval_id}", headers=admin)
+    assert detail.status_code == 200, detail.text
+    data = detail.json()["data"]
     # 保存するのはログイン ID のまま。
-    assert approvals[approval_id]["decided_by"] == "named-approver"
+    assert data["approval"]["decided_by"] == "named-approver"
     assert data["user_display_names"]["named-approver"] == "承認 花子"
-    assert "deleted.user" not in data["user_display_names"]
+    gone_detail = client.get(f"/api/approvals/{gone.id}", headers=admin).json()["data"]
+    assert gone_detail["approval"]["decided_by"] == "deleted.user"
+    assert "deleted.user" not in gone_detail["user_display_names"]
 
     published = client.post(f"/api/agents/{AGENT_A}/publish", json={}, headers=admin)
     assert published.status_code == 200, published.text
