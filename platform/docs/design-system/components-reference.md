@@ -3333,8 +3333,8 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 | `actions` | `ReactNode` | — | 確定の右に置く製品の操作（NL2SQL の「直しを伝える」。同じ `size` の `Button`）。多用しない |
 | `labels` | `Partial<ClarificationLabels>` | `DEFAULT_CLARIFICATION_LABELS` | 文言。ふつうは `clarificationLabels({ stage, action })` を渡す。`skipHint` / `cancelHint` を空にすると補足を出さない（入力欄に戻らない取り消し） |
 | `size` | `"sm" \| "md" \| "lg"` | `"md"` | ボタンの高さ（チャットの回答の中は md、画面のパネルは lg） |
-| `headingLevel` | `2 \| 3 \| 4` | `3` | 題の見出しの段 |
-| `autoFocus` | `boolean` | `false` | 最初に出たときに題へフォーカスを移す（確認事項が変わったときは常に移す） |
+| `headingLevel` | `2 \| 3 \| 4` | `3` | 題の見出しの段（確認事項の文はその 1 段下） |
+| `autoFocus` | `boolean` | `false` | 最初に出たときに最初の確認事項の文（題の 1 段下の見出し）へフォーカスを移す（確認事項が変わったときは常に移す） |
 | `variant` | `"card" \| "plain"` | `"card"` | `plain` は枠なし（回答の枠の中） |
 | `idPrefix` / `className` / `testId` | `string` | `testId="clarification-card"` | `testId` から `-confirm` / `-skip` / `-cancel` / `-blocked` / `-meta` / `-last-round` / `-item`（`data-item-id`）/ `-option`（`data-option-id`）/ `-other` を作る |
 

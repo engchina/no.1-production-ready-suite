@@ -217,22 +217,23 @@ describe("ClarificationCard", () => {
     expect(byTestId("clarification-card-last-round").textContent).toContain("これが最後の確認です。");
   });
 
-  it("確認事項が変わったら答えを空にし、題へフォーカスを移す", () => {
+  it("確認事項が変わったら答えを空にし、確認事項の文（題の 1 段下の見出し）へフォーカスを移す", () => {
     render();
     click(optionInput("period", "month"));
     const next: ClarificationItem = { ...regions, id: "regions-2" };
     act(() => root.render(<ClarificationCard items={[next]} onConfirm={vi.fn()} />));
     expect(optionInput("regions-2", "east").checked).toBe(false);
-    expect(document.activeElement).toBe(host.querySelector("h3"));
+    expect(document.activeElement).toBe(host.querySelector("h4"));
+    expect(document.activeElement?.textContent).toBe(regions.prompt);
   });
 
   it("autoFocus がなければ最初に出たときはフォーカスを動かさない", () => {
     render();
-    expect(document.activeElement).not.toBe(host.querySelector("h3"));
+    expect(document.activeElement).not.toBe(host.querySelector("h4"));
     act(() => root.unmount());
     root = createRoot(host);
     render({ autoFocus: true });
-    expect(document.activeElement).toBe(host.querySelector("h3"));
+    expect(document.activeElement).toBe(host.querySelector("h4"));
   });
 
   it("受控の答えを使い、変更を onValueChange に渡す", () => {

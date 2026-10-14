@@ -1,5 +1,5 @@
 import { Info, MessageCircleQuestion, Send, SkipForward, X } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -99,7 +99,7 @@ export interface ClarificationCardProps {
   size?: ControlSize;
   /** 題の見出しの段（既定 3。回答の枠の中）。 */
   headingLevel?: 2 | 3 | 4;
-  /** 出たときに題へフォーカスを移す（確認事項が変わったときは常に移す）。 */
+  /** 出たときに最初の確認事項の文へフォーカスを移す（確認事項が変わったときは常に移す）。 */
   autoFocus?: boolean;
   /** `card`（既定）は枠線つきの面、`plain` は枠なし（回答の枠の中に重ねるとき）。 */
   variant?: "card" | "plain";
@@ -137,7 +137,8 @@ export function clarificationAnswers(items: ClarificationItem[], draft: Clarific
  *   複数選ぶ確認事項では併せて答えられる。
  * - 確定を押せない間は、理由を操作の行の下に出し、確定のボタンの aria-describedby で結ぶ（#1772）。
  * - 処理中は押したボタンだけを `loading` にし、ほかの操作と入力を押せなくする（buttons.md §8）。
- * - 確認事項が変わったら答えを空にし、題へフォーカスを移す（読み上げで新しい確認事項に気付ける）。
+ * - 確認事項の文は題の 1 段下の見出し。確認事項が変わったら答えを空にし、最初の確認事項の文へフォーカスを移す
+ *   （読み上げで新しい確認事項をそのまま聞ける）。
  * - 業務の語彙は知らない。製品固有の中身は選択肢の `detail`・確認事項の `meta`・`children` で渡す。
  */
 export function ClarificationCard({
@@ -194,12 +195,12 @@ export function ClarificationCard({
     onValueChange?.(next);
   };
 
-  const titleRef = useRef<HTMLHeadingElement>(null);
+  const promptRef = useRef<HTMLHeadingElement>(null);
   const focusedKeyRef = useRef<string | null>(autoFocus ? null : stepKey);
   useEffect(() => {
     if (focusedKeyRef.current === stepKey) return;
     focusedKeyRef.current = stepKey;
-    titleRef.current?.focus({ preventScroll: true });
+    promptRef.current?.focus({ preventScroll: true });
   }, [stepKey]);
 
   const busy = busyAction !== null;
@@ -239,9 +240,7 @@ export function ClarificationCard({
           </p>
         ) : null}
         <Heading
-          ref={titleRef}
           id={titleId}
-          tabIndex={-1}
           className="flex items-center gap-2 text-sm font-semibold leading-6 text-fg"
         >
           <MessageCircleQuestion size={16} aria-hidden className="shrink-0 text-accent-fg" />
@@ -261,6 +260,8 @@ export function ClarificationCard({
           item={item}
           entry={entryOf(draft, item.id)}
           baseId={`${baseId}-item-${index}`}
+          promptLevel={Math.min(headingLevel + 1, 6) as 3 | 4 | 5}
+          promptRef={index === 0 ? promptRef : undefined}
           labels={labels}
           disabled={inputsDisabled}
           separated={index > 0}
@@ -349,6 +350,8 @@ function ClarificationItemFields({
   item,
   entry,
   baseId,
+  promptLevel,
+  promptRef,
   labels,
   disabled,
   separated,
@@ -358,6 +361,8 @@ function ClarificationItemFields({
   item: ClarificationItem;
   entry: ClarificationDraftEntry;
   baseId: string;
+  promptLevel: 3 | 4 | 5;
+  promptRef?: Ref<HTMLHeadingElement>;
   labels: ClarificationLabels;
   disabled: boolean;
   separated: boolean;
@@ -365,6 +370,7 @@ function ClarificationItemFields({
   onChange: (entry: ClarificationDraftEntry) => void;
 }) {
   const multiple = item.selection === "multiple";
+  const Prompt = `h${promptLevel}` as "h3" | "h4" | "h5";
   const legendId = `${baseId}-prompt`;
   const reasonId = `${baseId}-reason`;
   const hintId = `${baseId}-hint`;
@@ -397,9 +403,14 @@ function ClarificationItemFields({
       <div className="grid min-w-0 gap-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {/* legend は flex の子にできないため、名前は aria-labelledby で付ける。 */}
-          <p id={legendId} className="min-w-0 break-words text-sm font-medium leading-6 text-fg">
+          <Prompt
+            ref={promptRef}
+            id={legendId}
+            tabIndex={-1}
+            className="min-w-0 break-words text-sm font-medium leading-6 text-fg"
+          >
             {item.prompt}
-          </p>
+          </Prompt>
           {item.meta}
         </div>
         {item.reason ? (
