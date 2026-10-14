@@ -366,7 +366,33 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=section_chunk_map_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261015_001_message_clarification",
+            table_name="rag_messages",
+            sql=message_clarification_migration_sql(),
+        )
+    )
     return sections
+
+
+def message_clarification_migration_sql() -> str:
+    """回答前に確認した内容の列（USER のメッセージ）を無ければ足す（#1839）。
+
+    列を足すだけでデータは変えない。JSON 型の列を足すと既存の index の隠し列と ORA-54015 になる
+    （#1193）ため、JSON の文字列を CLOB で持つ。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'CLARIFICATION_JSON';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (clarification_json CLOB)';
+    END IF;
+END;
+/"""
 
 
 def entity_layer_migration_sql() -> str:

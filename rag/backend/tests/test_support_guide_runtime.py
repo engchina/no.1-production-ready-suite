@@ -28,6 +28,7 @@ from app.rag.support_guide_runtime import (
     build_guide_context,
     clarification_questions,
     guide_clarification,
+    guide_clarification_record,
     guide_rule,
     guide_short_circuit_outcome,
     impact_applies,
@@ -251,6 +252,48 @@ def test_chat_clarification_round_trip() -> None:
     assert resolve_guide_clarification(GUIDES, rule_id, ["o9"]) is None
     assert resolve_guide_clarification(GUIDES, "guide:missing:target", ["o1"]) is None
     assert resolve_guide_clarification(GUIDES, "R1", ["o1"]) is None
+
+
+def test_guide_clarification_accepts_other_text_without_setting_the_value() -> None:
+    """業務ガイドの確認にも「その他（自由入力）」を出す（#1839）。値には当てはめず前提の文で渡す。"""
+    match = match_guide(GUIDES, "アクセス権限を付与したい")
+    assert match is not None
+    found = guide_clarification(match)
+    assert found is not None
+    rule_id, _title, clarification = found
+    assert clarification.allow_other is True
+    resolved = resolve_guide_clarification(GUIDES, rule_id, [], "部署の共有フォルダ")
+    assert resolved is not None
+    conditions, context = resolved
+    assert conditions == {}
+    assert "その他（利用者の入力）: 部署の共有フォルダ" in context
+    assert "当てはまる値を確かめる" in context
+    both = resolve_guide_clarification(GUIDES, rule_id, ["o1"], "急ぎ")
+    assert both is not None
+    assert both[0] == {"target": "個別"}
+    assert "その他（利用者の入力）: 急ぎ" in both[1]
+    assert resolve_guide_clarification(GUIDES, rule_id, [], "  ") is None
+
+
+def test_guide_clarification_record_for_the_conversation() -> None:
+    """会話に残す「回答前に確認した内容」（#1839）。"""
+    match = match_guide(GUIDES, "アクセス権限を付与したい")
+    assert match is not None
+    found = guide_clarification(match)
+    assert found is not None
+    rule_id, _title, clarification = found
+    record = guide_clarification_record(GUIDES, rule_id, ["o2"], "急ぎ")
+    assert record == {
+        "outcome": "answered",
+        "entries": [
+            {"prompt": clarification.question, "selected": ["グループ"], "other_text": "急ぎ"}
+        ],
+    }
+    assert guide_clarification_record(GUIDES, rule_id, None) == {
+        "outcome": "skipped",
+        "entries": [{"prompt": clarification.question}],
+    }
+    assert guide_clarification_record(GUIDES, "guide:missing:target", None) is None
 
 
 # ---- 適用範囲・条件の出所・矛盾・分岐の絞り込み（#1278） ---------------------------------
