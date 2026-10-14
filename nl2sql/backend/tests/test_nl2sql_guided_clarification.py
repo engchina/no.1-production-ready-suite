@@ -2018,6 +2018,58 @@ def test_mcp_query_with_assume_policy_skips_check_when_select_and_from_are_uncle
     assert jobs.started[0].requirement_session_id is None
 
 
+def test_mcp_query_skip_clarification_generates_without_asking_after_a_question(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    """利用者が「確認せずに SQL を生成」を選んだら、確認を閉じて前提を示して作る（#1839）。"""
+
+    llm = _ScriptedLlm(_ambiguous_status_output())
+    jobs = mcp_requirement(llm)
+    question = {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
+    is_error, first = _mcp("nl2sql_query", question)
+    assert is_error is False, first
+    assert first["status"] == "needs_clarification"
+    session_id = first["requirement"]["session_id"]
+
+    is_error, done = _mcp(
+        "nl2sql_query",
+        {**question, "requirement_session_id": session_id, "skip_clarification": True},
+    )
+    assert is_error is False, done
+    assert done["status"] == "done"
+    assert done["requirement"]["status"] == "skipped"
+    assert "利用者が確認せずに" in done["requirement"]["message"]
+    assert len(jobs.started) == 1
+    assert jobs.started[0].requirement_session_id is None
+    # 開いていた確認は閉じる（続きで使わない）。
+    is_error, again = _mcp(
+        "nl2sql_query",
+        {
+            **question,
+            "requirement_session_id": session_id,
+            "answer": {"item_id": "x", "free_text": "出荷済み"},
+        },
+    )
+    assert is_error is True, again
+
+
+def test_mcp_query_skip_clarification_cannot_be_combined_with_an_answer(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    mcp_requirement(_ScriptedLlm(_ambiguous_status_output()))
+    is_error, content = _mcp(
+        "nl2sql_query",
+        {
+            "question": "出荷済みの受注金額の合計",
+            "profile_id": "sales",
+            "requirement_session_id": "s1",
+            "answer": {"item_id": "x", "free_text": "y"},
+            "skip_clarification": True,
+        },
+    )
+    assert is_error is True, content
+
+
 def test_mcp_query_unanswerable_closes_session_without_sql(
     mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
 ) -> None:

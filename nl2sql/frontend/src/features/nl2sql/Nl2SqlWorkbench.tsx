@@ -1409,6 +1409,9 @@ function ExecutableNl2SqlWorkbench() {
                                   summary={t("chat.requirement.applied")}
                                   summaryProps={{ "data-testid": "nl2sql-requirement-question" }}
                                 >
+                                  <p className="text-xs leading-5 text-fg-muted">
+                                    {t("nl2sql.clarification.clarifiedQuestion")}
+                                  </p>
                                   <p className="break-words text-sm leading-6 text-fg">
                                     {appliedRequirement.clarifiedQuestion}
                                   </p>

@@ -109,7 +109,7 @@ const nl2sqlJa = {
   "nl2sql.requirementFailure.fallback": `${CONFIRM_FEATURE}の操作に失敗しました。`,
   "chat.requirement.retry": "もう一度確認",
   "chat.requirement.skip": "確認せずに SQL を生成",
-  "chat.requirement.applied": "書き直した質問",
+  "chat.requirement.applied": "SQL の生成前に確認した内容",
   "chat.messages": "会話",
   "chat.latest": "最新のメッセージへ",
   "chat.retry": "再読み込み",

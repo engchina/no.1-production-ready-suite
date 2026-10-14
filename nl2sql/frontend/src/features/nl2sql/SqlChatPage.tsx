@@ -1119,6 +1119,7 @@ function SqlChatTurn({
               summary={t("chat.requirement.applied")}
               summaryProps={{ "data-testid": "sql-chat-turn-requirement" }}
             >
+              <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.clarifiedQuestion")}</p>
               <p className="break-words text-sm leading-6 text-fg">{turn.requirement_question}</p>
             </Disclosure>
           ) : null}

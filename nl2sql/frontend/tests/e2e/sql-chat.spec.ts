@@ -1495,7 +1495,7 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   await expect(record).toContainText("今年度の期間");
   await expect(record).toContainText("2026-04-01〜2027-03-31");
   const applied = answered.getByTestId("sql-chat-turn-requirement");
-  await expect(applied).toHaveText(/書き直した質問/);
+  await expect(applied).toHaveText(/SQL の生成前に確認した内容/);
   await applied.click();
   await expect(answered.getByText(REQUIREMENT_CLARIFIED_QUESTION)).toBeVisible();
   // 回答して確定しても、入力欄に確かめた質問の文を入れない（#1727）。
