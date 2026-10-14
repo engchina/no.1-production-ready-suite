@@ -111,7 +111,7 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "app_auth_argon2_parallelism",
         # サービス間の token の署名鍵（Agent → RAG / NL2SQL の MCP。#230）
         "app_service_token_secret",
-        # 公開の基底の URL（配備の suite-init.sh が公開 IP と公開の port から書く。API キーの画面の接続先。#1870）
+        # 公開の基底の URL（配備の suite-init.sh が公開 IP と port から書く。API キーの画面。#1870）
         "app_public_base_url",
         # チャットの同じ会話の前のターンを LLM に渡す予算（3 製品で同じ値。#1818）
         "chat_history_max_turns",
