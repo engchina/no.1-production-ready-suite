@@ -119,6 +119,11 @@ export function useChatHistoryActions({
     if (editingId) inputRef.current?.focus();
   }, [editingId]);
 
+  // 空の名前・保存の失敗の理由を出したら欄へ戻す（保存中は欄が disabled なので、保存が終わって描いた後）。
+  useEffect(() => {
+    if (error && !saving) inputRef.current?.focus();
+  }, [error, saving]);
+
   function startRename(item: ChatHistoryItem) {
     setEditingId(item.id);
     setDraft(initialTitle ? initialTitle(item) : item.title);
@@ -145,8 +150,6 @@ export function useChatHistoryActions({
       setEditingId(null);
     } catch (caught) {
       setError(errorMessage(caught, labels.renameError));
-      // 失敗した欄へ戻す（保存中は欄が disabled なので、描画の後にフォーカスする）。
-      requestAnimationFrame(() => inputRef.current?.focus());
     } finally {
       setSaving(false);
     }
