@@ -712,7 +712,11 @@ function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; pre
         value={formatNumber(summary.incorrect + summary.uncertain)}
         detail={t("evaluation.summary.uncertainIncluded", { count: summary.uncertain })}
       />
-      <Metric label={t("evaluation.summary.errors")} value={formatNumber(summary.errors)} detail={ofTotal} />
+      <Metric
+        label={t("evaluation.summary.errors")}
+        value={formatNumber(summary.errors)}
+        detail={summary.unjudged ? t("evaluation.summary.unjudgedIncluded", { count: summary.unjudged }) : ofTotal}
+      />
     </div>
   );
 }
@@ -789,13 +793,26 @@ function ToolSelection({ result }: { result: EvaluationCaseResult }) {
       {result.tool_selection_correct === null ? null : (
         <StatusBadge
           variant={result.tool_selection_correct ? "success" : "danger"}
-          label={result.tool_selection_correct ? t("evaluation.tools.correct") : t("evaluation.tools.incorrect")}
+          label={
+            result.tool_selection_correct
+              ? t("evaluation.tools.correct")
+              : // すべて呼んだが順が違うときは、順が違うと出す（#1845）。
+                result.tool_order_correct === false && allExpectedCalled(result)
+                ? t("evaluation.tools.orderIncorrect")
+                : t("evaluation.tools.incorrect")
+          }
         />
       )}
       <span className="break-all font-mono text-fg-muted">
         {result.tool_calls.length ? result.tool_calls.join(", ") : t("evaluation.tools.none")}
       </span>
     </span>
+  );
+}
+
+function allExpectedCalled(result: EvaluationCaseResult): boolean {
+  return result.case.expected_tools.every((tool) =>
+    result.tool_calls.some((called) => called === tool || called.endsWith(`__${tool}`))
   );
 }
 
@@ -872,6 +889,9 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
           <p className="text-fg">
             <span className="text-fg-muted">{`${t("evaluation.detail.expectedTools")}: `}</span>
             <span className="font-mono">{result.case.expected_tools?.length ? result.case.expected_tools.join(", ") : "—"}</span>
+            {result.case.expected_tools_in_order && result.case.expected_tools.length ? (
+              <span className="text-fg-muted">{t("evaluation.detail.expectedToolsInOrder")}</span>
+            ) : null}
           </p>
           <p className="text-fg">
             <span className="text-fg-muted">{`${t("evaluation.detail.calledTools")}: `}</span>
@@ -884,6 +904,11 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
         <DetailSection title={t("evaluation.detail.error")}>
           <p className="break-words text-fg">{result.error}</p>
         </DetailSection>
+      ) : null}
+      {(result.judge_attempts ?? 0) > 1 ? (
+        <p className="text-xs text-fg-muted" data-testid="evaluation-judge-retried">
+          {t("evaluation.detail.judgeRetried", { attempts: result.judge_attempts ?? 0 })}
+        </p>
       ) : null}
       {result.run_id ? (
         <DetailSection title={t("evaluation.detail.run")}>
