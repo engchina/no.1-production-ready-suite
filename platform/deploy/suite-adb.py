@@ -17,10 +17,12 @@ platform/deploy/suite-restart.sh（suite-update.sh も最後にこれを実行�
     - AVAILABLE（と、DB を開いたままの AVAILABLE_NEEDS_ATTENTION・BACKUP_IN_PROGRESS・SCALE_IN_PROGRESS）: そのまま進む。
     - STOPPED: 起動を要求し、AVAILABLE を待つ。STOPPING は STOPPED を待ってから起動する。
     - STARTING・PROVISIONING・RESTARTING・UPDATING など、OCI の作業が終われば使える状態: 待つ。
-    - それ以外（UNAVAILABLE・TERMINATED・RESTORE_FAILED・INACCESSIBLE・STANDBY など）: 理由を出して止める（起動しない）。
-    - 設定が無い・認証の失敗（401）・ADB が見つからないか権限が無い（404）・時間切れ: 理由と手で起動する方法を出して止める。
+    - それ以外（UNAVAILABLE・TERMINATED・RESTORE_FAILED・INACCESSIBLE・STANDBY など）: 起動せず、理由を出して NG で終わる。
+    - 設定が無い・認証の失敗（401）・ADB が見つからないか権限が無い（404）・時間切れ: 理由と手で起動する方法を出して NG で終わる。
+    - NG は best effort の結果（#1756）: suite-restart.sh は warning を出し、build・再起動を続ける（DB に接続できなくても
+      アプリケーションは起動する）。
 - ADB を停止する処理は持たない。認証の値・secret は出さない（OCI の失敗は種類・HTTP status・code・request id だけを出す）。
-- 標準出力の最後の行（[suite-adb] OK / NG）が結果。終了コード: 0 = 使える、1 = 止める（NG）、2 = 引数の誤り、
+- 標準出力の最後の行（[suite-adb] OK / NG）が結果。終了コード: 0 = 使える、1 = NG（使える状態にできない）、2 = 引数の誤り、
   3 = status で ADB が使える状態ではない。
 """
 
@@ -93,7 +95,7 @@ SUPPORTED_AUTH_MODES = ("config_file", "instance_principal")
 
 
 class SuiteAdbError(Exception):
-    """配備を止める誤り（日本語の理由）。"""
+    """ADB を使える状態にできない理由（日本語）。suite-restart.sh は warning にして続ける（#1756）。"""
 
 
 def log(message: str) -> None:
@@ -193,7 +195,7 @@ def is_transient(detail: dict[str, Any]) -> bool:
 
 
 def fatal_reason(exc: BaseException, detail: dict[str, Any], target: AdbTarget) -> str:
-    """止める失敗の理由（日本語）。"""
+    """試し直さない失敗の理由（日本語）。"""
     kind = describe_failure(detail)
     status = detail.get("oci_status")
     if detail.get("exception_type") in CONFIG_ERROR_TYPES:

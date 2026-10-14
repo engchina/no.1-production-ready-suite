@@ -1044,7 +1044,10 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
     main_body = re.search(r"(?ms)^main\(\) \{\n(.*?)^\}", suite_init)
     if main_body is None:
         raise AssertionError("suite-init.sh main not found")
-    _require_in_order(main_body.group(1), ["provision_db_app_user\n", "deploy_products\n"], context="suite-init main")
+    # 失敗しても製品の配備と起動は続ける（#1756。`if ! provision_db_app_user; then` の形）。
+    _require_in_order(
+        main_body.group(1), ["if ! provision_db_app_user; then\n", "deploy_products\n"], context="suite-init main"
+    )
     _require_all(
         suite_init,
         ['"${PROPS_DIR}/adb_admin.env"', 'python "${SUITE_DEPLOY_DIR}/suite-db-user.py" apply'],

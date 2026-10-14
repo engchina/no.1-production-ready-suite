@@ -254,7 +254,9 @@ prepare_case() {
   # main の順: package → firewall → SELinux → 製品の配備（venv・unit の前に context の規則を置く）。
   main_body="$(sed -n '/^main() {$/,/^}$/p' "${repo}/platform/deploy/suite-init.sh")"
   # アプリ用の DB ユーザー（#1668）は、製品の配備（system schema の初期化）の前に作る。
-  printf '%s\n' "${main_body}" | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|deploy_products)$' \
+  # provision_db_app_user は失敗しても続ける（#1756）ため、`if ! provision_db_app_user; then` の形。
+  printf '%s\n' "${main_body}" | sed -E 's/^  if ! (provision_db_app_user); then$/  \1/' \
+    | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|deploy_products)$' \
     | awk '{printf "%s ", $1}' \
     | grep -qx 'install_os_packages configure_firewall configure_selinux provision_db_app_user deploy_products ' \
     || fail "main の順が違う"
@@ -361,7 +363,8 @@ done
 )
 
 # アプリ用の DB ユーザー（#1668）: props の adb_admin.env があるときだけ、製品の配備の前に suite-db-user.py を
-# uv run（固定の python-oracledb）で実行する。無ければ何もしない。失敗したら配備を止め、Wallet の一時の展開を消す。
+# uv run（固定の python-oracledb）で実行する。無ければ何もしない。失敗したら 0 以外を返し、Wallet の一時の展開を消す。
+# main は失敗しても製品の配備と起動を続け、最後に失敗として返す（#1756。ADB に接続できなくてもアプリケーションは起動する）。
 (
   case_dir="${task_dir}/db-user"
   prepare_case "${case_dir}"
@@ -406,6 +409,24 @@ done
   [ "${status}" -eq 1 ] || fail "失敗を返さない（${status}）"
   grep -qF "[suite-init] check: db user NG" "${out}" || fail "NG の行: $(cat "${out}")"
   [ ! -e "$(cat "${case_dir}/wallet-dir")" ] || fail "失敗しても Wallet の一時の directory を消す"
+
+  # main: DB ユーザーの準備が失敗しても（ADB に接続できない）、製品の配備・Nginx・確認まで進み、最後に失敗として返す。
+  steps="${case_dir}/steps.log"
+  for step in load_products validate_ports install_os_packages configure_firewall configure_selinux deploy_products \
+    configure_tls configure_nginx report_urls suite_check_deployment; do
+    eval "${step}() { printf '%s\\n' ${step} >> \"\${steps}\"; }"
+  done
+  status=0
+  UV_STATUS=1 main > "${out}" 2>&1 || status=$?
+  [ "${status}" -eq 1 ] || fail "DB ユーザーの失敗を最後に返さない（${status}）: $(cat "${out}")"
+  [ "$(tr '\n' ' ' < "${steps}")" = "load_products validate_ports install_os_packages configure_firewall configure_selinux deploy_products configure_tls configure_nginx report_urls suite_check_deployment " ] \
+    || fail "DB ユーザーの失敗で配備を止めた: $(tr '\n' ' ' < "${steps}")"
+  grep -qF "WARNING: アプリ用の DB ユーザーを準備できませんでした。製品の配備と起動は続けます" "${out}" || fail "warning: $(cat "${out}")"
+  tail -n 1 "${out}" | grep -qF "[suite-init] check: db user NG" || fail "最後の行: $(tail -n 1 "${out}")"
+  # 成功すれば確認の結果を返す。
+  : > "${steps}"
+  main > "${out}" 2>&1 || fail "DB ユーザーが成功したのに失敗した: $(cat "${out}")"
+  if grep -qF "WARNING: アプリ用の DB ユーザー" "${out}"; then fail "成功したのに warning を出した"; fi
 )
 
 echo "suite-init: pass"
