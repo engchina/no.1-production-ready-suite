@@ -3783,6 +3783,66 @@ test("公開を止める問題があるときは、業務説明に追記する�
   await expect(panel).toHaveCount(0);
 });
 
+test("一意でない列でつなぐリンク型の警告は具体の結合のキーを示し、改善案は押したときだけ業務説明に追記する (#1760)", { tag: "@responsive" }, async ({ context, page }, testInfo) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? "3101"}`,
+  });
+  const state = await mockApi(page);
+  state.jobPolls = 2;
+  state.draftMarkdown = generatedDraftMarkdown;
+  const join = "ADMIN.V_EMP_DEPT.EMPLOYEE_ID = ADMIN.EMPLOYEE.EMPLOYEE_ID";
+  const warning = `主キー・一意キーではない列（V_EMP_DEPT.EMPLOYEE_NAME、EMPLOYEE.EMPLOYEE_NAME）でつないでいます。行が重なって件数が増えることがあるため、「結合のキー」を EMPLOYEE_ID でつなぐ形（${join}）に直してください。`;
+  const suggestion = `従業員部門ビュー（emp_dept_view）と従業員（employee）のリンク型『従業員部門ビューの従業員』（emp_dept_view_to_employee）は、${join} でつなぐ（1 対 1（one-to-one））。`;
+  const preparation = {
+    id: "nonunique-link", status: "ready", draft_etag: state.draftMarkdownEtag, expected_head: "", display_version: 4,
+    findings: [{ severity: "warning", code: "LINK_JOIN_NOT_UNIQUE", definition_id: "link-emp-dept-view", field: "join_expression_sql", message_ja: warning }],
+    definitions: [
+      { kind: "object_type", api_name: "employee", id: "employee", name_ja: "従業員", mappings: [{ owner: "ADMIN", object_name: "EMPLOYEE" }] },
+      { kind: "object_type", api_name: "emp_dept_view", id: "emp_dept_view", name_ja: "従業員部門ビュー", mappings: [{ owner: "ADMIN", object_name: "V_EMP_DEPT" }] },
+      { kind: "link_type", api_name: "emp_dept_view_to_employee", id: "link-emp-dept-view", name_ja: "従業員部門ビューの従業員", source: "emp_dept_view", target: "employee", join_expression_sql: "ADMIN.V_EMP_DEPT.EMPLOYEE_NAME = ADMIN.EMPLOYEE.EMPLOYEE_NAME" },
+    ],
+    differences: [],
+    suggestions: [{ severity: "warning", text: suggestion }],
+    error_message_ja: "",
+  };
+  await page.route("**/ontology-markdown/prepare", route => fulfillJson(route, preparation));
+  await page.route("**/ontology-markdown/preparations/*", route => fulfillJson(route, preparation));
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  const businessText = page.getByRole("textbox", { name: "業務説明(自然言語)", exact: true });
+  await businessText.fill("従業員の業務です。");
+  await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+  const check = page.getByRole("region", { name: "公開前の確認", exact: true });
+  // 警告だけなら公開でき、警告の 2 文に具体の結合のキーを出す。対象は業務の名前、コードは技術的な詳細。
+  await expect(check.getByText(/警告がありますが公開できます/)).toBeVisible();
+  const list = check.getByRole("region", { name: "公開前のエラー・警告", exact: true });
+  await expect(list.getByText(warning, { exact: true })).toBeVisible();
+  await expect(list.getByText("対象: 従業員部門ビューの従業員", { exact: true })).toBeVisible();
+  const technical = "link-emp-dept-view / join_expression_sql / LINK_JOIN_NOT_UNIQUE";
+  await expect(list.getByText(technical, { exact: true })).toBeHidden();
+  await list.getByText("技術的な詳細", { exact: true }).click();
+  await expect(list.getByText(technical, { exact: true })).toBeVisible();
+  // 改善案にリンク型の正しい結合のキーと多重度を出す。押すまで業務説明は書き換えない（#1727）。
+  const panel = check.getByRole("region", { name: "業務説明に追記する改善案", exact: true });
+  await expect(panel.getByTestId("ontology-improvement-suggestion-text")).toHaveText(suggestion);
+  await expect(businessText).toHaveValue("従業員の業務です。");
+  await panel.getByRole("button", { name: "コピー", exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(suggestion);
+  await expect(businessText).toHaveValue("従業員の業務です。");
+  for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await check.screenshot({ path: testInfo.outputPath(`publication-link-suggestion-${width}-${theme}.png`) });
+    }
+  }
+  await panel.getByRole("button", { name: "業務説明に追記", exact: true }).click();
+  await expect(businessText).toHaveValue(`従業員の業務です。\n${suggestion}`);
+  await expect(page.getByText(/業務説明に追記しました。/)).toBeVisible();
+  await expect(panel).toHaveCount(0);
+});
+
 test("取得済みの業務プロファイルの再取得が失敗しても、構築の作業領域と選んだ資料を残す", async ({ page }, testInfo) => {
   await mockApi(page);
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>

@@ -99,7 +99,8 @@ ADMIN を常用しないためです（アプリの不具合・NL2SQL の管理 
   パスワードを合わせて lock を外します。パスワードは `platform/.env`（画面の「システム設定 > データベース」で保存した値）を優先し、無ければ stack の入力です。
   grant は毎回付け直し、最後にアプリ用のユーザーで接続して権限が効いていることを確かめます。
 - **失敗したとき**: ORA の番号と手がかりを `/var/log/suite-init.log` に出し（`[suite-db-user] NG（ORA-01017）: …`・`[suite-init] check: db user NG`）、
-  製品を配備せずに失敗します（ユーザーが無いと 3 製品とも接続できないため）。直したら `sudo .../platform/deploy/suite-restart.sh` でやり直します。
+  warning を出して製品の配備と起動を続け、最後に失敗（0 以外）を返します（ADB に接続できなくてもアプリケーションは起動する。#1756）。
+  ユーザーが無い間は 3 製品とも DB に接続できません。直したら `sudo .../platform/deploy/suite-restart.sh` でやり直します。
 - **ADMIN のパスワードの置き場所**: `platform/.env`・各製品の `backend/.env`・Wallet のパスワード（`PLATFORM_ORACLE_WALLET_PASSWORD` はアプリ用のユーザーのパスワード）には書きません。
   `/u01/aipoc/props/adb_admin.env`（root の 0600）にだけ置き、配備の再実行（`suite-restart.sh` / `suite-update.sh`）のたびに、新しい版が要る権限を付け直します
   （使った後に消すと、再配備で権限を足せなくなるため残します）。値は Terraform の state と、Compute の cloud-init の user_data（インスタンスのメタデータ）にも入るため、
@@ -418,7 +419,7 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 | スクリプト（`platform/deploy/`） | 実行 | 内容 |
 |---|---|---|
 | `suite-pull.sh` | opc か `sudo` | repository の所有者（opc）で `origin/main` を取得し、`main` を付け替える（clone は depth 1）。追跡ファイルに変更があれば中止し、未追跡のファイルは保つ。取得だけで、build・再起動はしない |
-| `suite-restart.sh` | `sudo` | 最初に ADB が止まっていれば起動して `AVAILABLE` を待つ（下の「ADB の自動の起動」。`--status` を除く）。既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に配備全体を確かめる（下の「配備が正常かの確認」）。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は再起動せず、確認だけを 1 回行う |
+| `suite-restart.sh` | `sudo` | 最初に ADB が止まっていれば起動して `AVAILABLE` を待つ（下の「ADB の自動の起動」。`--status` を除く。起動できなくても続ける）。既定: 今のコードから build して再配備する（`suite-init.sh` の再実行。依存の同期・共有 UI と各製品の frontend の build・DB の初期化と migration・systemd・Nginx・再起動）。最後に配備全体を確かめる（下の「配備が正常かの確認」）。`--no-build` は build せずに、有効（enabled）な `production-ready-*` の service と Nginx だけを再起動する。`--status` は再起動せず、確認だけを 1 回行う |
 | `suite-update.sh` | `sudo` | `suite-pull.sh` で取得し、取得した新しい `suite-restart.sh`（既定）を実行する |
 
 - `suite-init.sh` は props（Resource Manager の入力）から、各製品の `backend/.env` を作り直す。
@@ -451,15 +452,20 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 | `AVAILABLE`（と、DB を開いたままの `AVAILABLE_NEEDS_ATTENTION`・`BACKUP_IN_PROGRESS`・`SCALE_IN_PROGRESS`） | そのまま進む |
 | `STOPPED` | 起動を要求し、`AVAILABLE` を待つ |
 | `STARTING`・`STOPPING`（`STOPPED` になってから起動）・`PROVISIONING`・`RESTARTING`・`UPDATING`・`MAINTENANCE_IN_PROGRESS` など | 待つ |
-| `UNAVAILABLE`・`TERMINATED`・`RESTORE_FAILED`・`INACCESSIBLE`・`STANDBY` など | 起動せず、理由を出して止まる |
+| `UNAVAILABLE`・`TERMINATED`・`RESTORE_FAILED`・`INACCESSIBLE`・`STANDBY` など | 起動せず、理由を warning として出して続ける |
 
 - 待つ上限は 600 秒（`SUITE_ADB_START_TIMEOUT_SECONDS`）。15 秒ごとに状態を問い合わせ、状態が変わったときと 60 秒ごとに経過を
   `/var/log/suite-ops.log` に出す。
-- 止まるとき（`PLATFORM_ORACLE_ADB_OCID`・OCI の認証の設定が無い、401・404、時間切れ、上の止まる状態）は、`[suite-adb] NG:` の行に
-  理由と手で起動する方法（OCI のコンソールか `oci db autonomous-database start`）を出し、build・再起動はしない。認証の値・secret は出さない。
+- 確認・起動は best effort（#1756）。使える状態にできないとき（`PLATFORM_ORACLE_ADB_OCID`・OCI の認証の設定が無い、401・404、時間切れ、
+  上の続ける状態）は、`[suite-adb] NG:` の行に理由と起動する方法（画面・OCI のコンソール・`oci db autonomous-database start`）を出し、
+  `[suite-restart] WARNING:` の行を出して、build・再起動をそのまま続ける（DB に接続できなくてもアプリケーションは起動する）。
+  ADB の NG だけでは終了コードを失敗にしない。DB に接続できない間は、各製品の system schema の初期化が warning のまま進み、
+  最後の確認（[配備が正常かの確認](#配備が正常かの確認1642)）が `check: <製品> schema NG` で 0 以外を返す（配備の時点の DB を見た結果）。
+  DB に接続できない間も、構成管理者 `system_admin` はログインできる。`system_admin` で「システム設定 › データベース」から ADB を
+  起動すれば、そのまま DB を使える（`suite-restart.sh` の再実行は要らない。#1762）。認証の値・secret は出さない。
 - `--status` は状態を見るだけで起動しない（結果は確認の終了コードに含めない）。ADB を停止する処理は持たない。
 - OCI の認証を Compute に置かず、ADB を手で起動して運用するときは `SUITE_ADB_AUTOSTART=skip` で確認を飛ばせる
-  （`sudo SUITE_ADB_AUTOSTART=skip .../suite-restart.sh`）。
+  （`sudo SUITE_ADB_AUTOSTART=skip .../suite-restart.sh`。飛ばさなくても warning が出るだけで続く）。
 
 要る IAM の権限（状態の取得 `GetAutonomousDatabase` は `AUTONOMOUS_DATABASE_INSPECT`＝`inspect`、起動 `StartAutonomousDatabase` は
 `AUTONOMOUS_DATABASE_UPDATE`＝`use`）。`use autonomous-databases` は `inspect` を含む:

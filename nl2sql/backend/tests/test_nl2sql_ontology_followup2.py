@@ -210,7 +210,9 @@ def test_user_and_previous_non_unique_links_are_kept_with_a_warning(origin: str)
     # 平易な 2 文。何が問題か（列）と、どうすればよいか。
     message = findings[0].message_ja
     assert message.count("。") == 2
-    assert "DEPARTMENT_NAME" in message and "「結合のキー」を直してください" in message
+    assert "DEPARTMENT_NAME" in message and "「結合のキー」" in message
+    # 付け替え先（同じ両端のキーの列）が無いときは、確かめ方を書く（#1760）。
+    assert "一意につながるかを確かめ" in message
 
 
 def test_keyed_links_have_no_non_unique_warning() -> None:
@@ -332,11 +334,12 @@ def test_oracle_profile_delete_removes_artifacts_and_finished_jobs_in_one_transa
     artifacts = next(i for i, s in enumerate(sql) if "DELETE FROM NL2SQL_ONTOLOGY_ARTIFACTS" in s)
     jobs = next(i for i, s in enumerate(sql) if "DELETE FROM NL2SQL_ONTOLOGY_JOBS" in s)
     # 業務プロファイルを消した後、同じ transaction（commit 1 回）で存在しない業務プロファイルの
-    # 成果物と、この業務プロファイルの終わったジョブを消す。
+    # 成果物と終わったジョブ（この業務プロファイルの分と、前に削除したものの残り。#1758）を消す。
     assert parent < artifacts and parent < jobs
     assert "NOT EXISTS (SELECT 1 FROM NL2SQL_PROFILES" in sql[artifacts]
     assert "STATUS IN ('succeeded', 'succeeded_with_warnings', 'failed', 'cancelled')" in sql[jobs]
-    assert connection.executed[jobs][1] == {"profile_id": "profile-1"}
+    assert "NOT EXISTS (SELECT 1 FROM NL2SQL_PROFILES" in sql[jobs]
+    assert "PROFILE_ID <> '-'" in sql[jobs]
     assert connection.executed[artifacts][1] == {"session_prefix": "profile-ontology:"}
     assert connection.commits == 1
     assert connection.rollbacks == 0

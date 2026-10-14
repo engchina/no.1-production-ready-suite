@@ -2975,7 +2975,8 @@ class PersistenceStatusData(BaseModel):
     )
     reason_code: str | None = None
     checked_at: str
-    state_backend: Literal["incremental", "legacy_snapshot"] = "legacy_snapshot"
+    # incremental: Oracle の entity 単位の repository。snapshot: memory（local / CI）の 1 つの状態。
+    state_backend: Literal["incremental", "snapshot"] = "snapshot"
     circuit_state: Literal["closed", "open", "half_open"] = "closed"
     retry_after_seconds: int = 0
 

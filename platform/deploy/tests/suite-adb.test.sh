@@ -287,7 +287,7 @@ run_adb "${case_dir}" "$(state_json '["STOPPED", "STARTING"]')" ensure --timeout
   --script-name /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh || status=$?
 [ "${status}" -eq 1 ] || fail "時間切れで 1 にならない（${status}）"
 last_line "${case_dir}" | grep -qF "ADB が 0.5 秒以内に AVAILABLE になりません（今の状態 STARTING）" || fail "時間切れの理由: $(cat "${case_dir}/out.log")"
-last_line "${case_dir}" | grep -qF "もう一度 sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh を実行してください" \
+last_line "${case_dir}" | grep -qF "起動すれば、そのまま DB を使えます（sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh の再実行は要りません）" \
   || fail "実行し直すコマンド: $(cat "${case_dir}/out.log")"
 
 # 7. 権限が無い・認証の失敗: 試し直さずに止める（404 は ADB が無いか inspect が無い、起動の 404 は use が無い）。
@@ -335,7 +335,7 @@ write_env "${case_dir}" "PLATFORM_ORACLE_ADB_OCID="
 status=0
 run_adb "${case_dir}" "$(state_json '["AVAILABLE"]')" "${ensure_args[@]}" || status=$?
 [ "${status}" -eq 1 ] && last_line "${case_dir}" | grep -qF "PLATFORM_ORACLE_ADB_OCID がありません" \
-  && last_line "${case_dir}" | grep -qF "手で起動するには" || fail "OCID が無い: $(cat "${case_dir}/out.log")"
+  && last_line "${case_dir}" | grep -qF "「システム設定 › データベース」から起動できます" || fail "OCID が無い: $(cat "${case_dir}/out.log")"
 case_dir="${task_dir}/no-config"
 write_env "${case_dir}" "PLATFORM_OCI_CONFIG_FILE=${task_dir}/missing/config"
 status=0
@@ -382,5 +382,75 @@ status=0
 run_adb "${case_dir}" "$(state_json '["AVAILABLE"]' '"get_errors": [{"status": 404, "code": "NotAuthorizedOrNotFound"}]')" status || status=$?
 [ "${status}" -eq 1 ] || fail "status の失敗が 1 にならない"
 assert_no_secret "${case_dir}"
+
+# 12. suite-restart.sh からの通し（#1756）: 本物の suite-adb.py を suite_run_adb で実行し、OCI の認証が無い・起動が NG の
+#     ときも warning を出して build（ここでは stub）まで進み、終了コードを失敗にしない。認証があり STOPPED なら、起動して
+#     AVAILABLE を待ってから build する。
+(
+  export APP_ROOT="${task_dir}/restart"
+  export SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
+  export PROPS_DIR="${APP_ROOT}/props"
+  export SUITE_OPS_INHERITED=true
+  export SUITE_ADB_START_TIMEOUT_SECONDS=5 SUITE_ADB_POLL_INTERVAL_SECONDS=0
+  mkdir -p "${PROPS_DIR}" "${SUITE_REPO_DIR}/platform"
+  printf 'rag\n' > "${PROPS_DIR}/products.txt"
+  export SUITE_PLATFORM_ENV_FILE="${SUITE_REPO_DIR}/platform/.env"
+  # 製品の venv の Python の代わり（stub の oci と、この test の HOME の ~/.oci/config を使う）。
+  export SUITE_ADB_PYTHON="${task_dir}/restart-python"
+  printf '#!/usr/bin/env bash\nexec env HOME="%s" STUB_OCI_STATE="%s" PYTHONPATH="%s" "%s" "$@"\n' \
+    "${home_dir}" "${task_dir}/restart-state.json" "${task_dir}/stub" "${python_bin}" > "${SUITE_ADB_PYTHON}"
+  chmod +x "${SUITE_ADB_PYTHON}"
+  # shellcheck source=../suite-restart.sh
+  source "${repo}/platform/deploy/suite-restart.sh"
+  calls="${task_dir}/restart-calls.log"
+  id() { printf '0\n'; }
+  # root の分岐（runuser -u opc -- env HOME=… PATH=… timeout …）を通す。runuser は "-u <user> --" を外して実行する。
+  runuser() { shift 3; "$@"; }
+  suite_rebuild_and_restart() { printf 'rebuild\n' >> "${calls}"; }
+  suite_restart_services() { printf 'restart-services\n' >> "${calls}"; }
+  suite_check_deployed() { printf 'check\n' >> "${calls}"; }
+  run_restart() {
+    printf '%s\n' "$1" > "${task_dir}/restart-state.json"
+    : > "${calls}"
+    suite_restart_main "${@:2}" > "${task_dir}/restart-out.log" 2>&1
+  }
+
+  # OCI の認証が無い（~/.oci/config が無い）: warning を出して build まで進む。
+  write_env "${SUITE_REPO_DIR}/platform" "PLATFORM_OCI_CONFIG_FILE=${task_dir}/missing/config"
+  mv "${SUITE_REPO_DIR}/platform/platform.env" "${SUITE_PLATFORM_ENV_FILE}"
+  run_restart "$(state_json '["STOPPED"]')" || fail "OCI の認証が無いと失敗にした: $(cat "${task_dir}/restart-out.log")"
+  grep -qF "[suite-adb] NG: OCI の認証の設定ファイル（${task_dir}/missing/config）がありません" "${task_dir}/restart-out.log" \
+    || fail "認証が無い理由: $(cat "${task_dir}/restart-out.log")"
+  grep -qF "[suite-restart] WARNING: ADB を使える状態にできませんでした" "${task_dir}/restart-out.log" || fail "認証が無いときの warning"
+  [ "$(tr '\n' ' ' < "${calls}")" = "rebuild check " ] || fail "認証が無いと build に進まない: $(cat "${calls}")"
+  grep -q '"op": "start"' "${task_dir}/restart-state.json" && fail "認証が無いのに起動した"
+
+  # ADB の起動が NG（起動の権限が無い 404）: warning を出して build まで進む（--no-build も同じ）。
+  write_env "${SUITE_REPO_DIR}/platform"
+  mv "${SUITE_REPO_DIR}/platform/platform.env" "${SUITE_PLATFORM_ENV_FILE}"
+  for args in "" "--no-build"; do
+    run_restart "$(state_json '["STOPPED"]' '"start_errors": [{"status": 404, "code": "NotAuthorizedOrNotFound"}]')" ${args:+"${args}"} \
+      || fail "起動の NG で失敗にした（${args:-build}）: $(cat "${task_dir}/restart-out.log")"
+    grep -qF "[suite-adb] NG: ADB を起動する権限がありません" "${task_dir}/restart-out.log" || fail "起動の NG の理由: $(cat "${task_dir}/restart-out.log")"
+    grep -qF "[suite-restart] WARNING: ADB を使える状態にできませんでした" "${task_dir}/restart-out.log" || fail "起動の NG の warning"
+    expected="rebuild"
+    [ -z "${args}" ] || expected="restart-services"
+    [ "$(tr '\n' ' ' < "${calls}")" = "${expected} check " ] || fail "起動の NG で続けない（${args:-build}）: $(cat "${calls}")"
+  done
+
+  # 時間切れ（STARTING のまま）: warning を出して build まで進む。
+  SUITE_ADB_START_TIMEOUT_SECONDS=0.3
+  run_restart "$(state_json '["STARTING"]')" || fail "時間切れで失敗にした: $(cat "${task_dir}/restart-out.log")"
+  grep -qF "以内に AVAILABLE になりません" "${task_dir}/restart-out.log" && [ "$(tr '\n' ' ' < "${calls}")" = "rebuild check " ] \
+    || fail "時間切れで続けない: $(cat "${task_dir}/restart-out.log")"
+  SUITE_ADB_START_TIMEOUT_SECONDS=5
+
+  # 認証があり STOPPED: 起動して AVAILABLE を待ってから build する（warning は出さない）。
+  run_restart "$(state_json '["STOPPED", "STARTING", "AVAILABLE"]')" || fail "STOPPED から起動できない: $(cat "${task_dir}/restart-out.log")"
+  grep -q '"op": "start"' "${task_dir}/restart-state.json" || fail "STOPPED なのに起動しない"
+  grep -qF "[suite-adb] OK: ADB SUITEADB（ap-osaka-1） は AVAILABLE です。" "${task_dir}/restart-out.log" || fail "OK の行"
+  if grep -qF "WARNING" "${task_dir}/restart-out.log"; then fail "OK なのに warning を出した"; fi
+  [ "$(tr '\n' ' ' < "${calls}")" = "rebuild check " ] || fail "OK の後に build しない: $(cat "${calls}")"
+)
 
 echo "suite-adb: pass"

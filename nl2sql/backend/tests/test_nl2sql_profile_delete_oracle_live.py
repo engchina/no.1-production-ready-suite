@@ -129,3 +129,74 @@ def test_profile_delete_removes_its_ontology_artifacts_on_oracle(live_settings: 
             current = repository.get_profile(profile.id)
             if current is not None:
                 repository.delete_profile(profile.id, expected_etag=current.etag)
+
+
+def test_system_schema_initialize_purges_orphan_ontology_records_on_oracle(
+    live_settings: Any,
+) -> None:
+    """system schema の初期化で、存在しない業務プロファイルの成果物・終わったジョブを消す（#1758）。
+
+    実行中のジョブ・全体のジョブ・存在する業務プロファイルの記録・所有者の無い成果物は残す。
+    """
+
+    from app.features.settings.system_schema import system_schema_manager
+
+    adapter = OracleNl2SqlAdapter(live_settings)
+    repository = OracleIncrementalNl2SqlRepository(connection_factory=adapter.state_connection)
+    store = OracleOntologyStore(connection_factory=adapter.state_connection)
+    store.ensure_schema()
+    tag = uuid.uuid4().hex[:10]
+    kept_id, ghost_id = str(uuid.uuid4()), str(uuid.uuid4())
+    kept = repository.save_profile(
+        Nl2SqlProfile(id=kept_id, name=f"T1758_KEPT_{tag}"), expected_etag=None
+    )
+    artifacts = {
+        "ghost": _artifact(f"t1758_ghost_{tag}", profile_ontology_session_id(ghost_id), ghost_id),
+        "kept": _artifact(f"t1758_kept_{tag}", profile_ontology_session_id(kept_id), kept_id),
+        "shared": _artifact(f"t1758_shared_{tag}", f"ontology_revision_t1758_{tag}", None),
+    }
+    jobs = {
+        "ghost_done": (ghost_id, "succeeded"),
+        "ghost_failed": (ghost_id, "failed"),
+        "ghost_running": (ghost_id, "running"),
+        "kept_done": (kept_id, "succeeded"),
+        "global": ("-", "succeeded"),
+    }
+    job_ids = {key: f"t1758_{key}_{tag}" for key in jobs}
+    try:
+        for document in artifacts.values():
+            store.save_artifact(document)
+        for key, (profile_id, status) in jobs.items():
+            store.save_job(
+                {
+                    "job_id": job_ids[key],
+                    "job_type": "build",
+                    "profile_id": profile_id,
+                    "status": status,
+                    "payload": {},
+                }
+            )
+
+        result = system_schema_manager.initialize()
+
+        assert result["status"] == "ready"
+        remaining = {
+            key
+            for key, document in artifacts.items()
+            if store.get_artifact(document["artifact_id"])
+        }
+        assert remaining == {"kept", "shared"}
+        assert {key for key in jobs if store.get_job(job_ids[key]) is not None} == {
+            "ghost_running",
+            "kept_done",
+            "global",
+        }
+        assert repository.get_profile(kept_id) is not None
+    finally:
+        for document in artifacts.values():
+            store.delete_documents("artifacts", {"artifact_id": document["artifact_id"]})
+        for job_id in job_ids.values():
+            store.delete_documents("jobs", {"job_id": job_id})
+        current = repository.get_profile(kept.id)
+        if current is not None:
+            repository.delete_profile(kept.id, expected_etag=current.etag)

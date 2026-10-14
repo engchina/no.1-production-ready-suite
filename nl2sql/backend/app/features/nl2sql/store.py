@@ -1,13 +1,11 @@
 """NL2SQL persistence store boundary.
 
-local / CI は memory store を使い、production では Oracle AI Database 内の JSON CLOB
-テーブルへ snapshot を保存する。service 層は Pydantic model の shape を保ったまま
-store を差し替えられる。
+local / CI は memory store に snapshot を保存する。production（oracle）は entity 単位の
+repository（`incremental_store`）を使い、この snapshot の store は使わない（#1758）。
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import threading
@@ -59,8 +57,9 @@ class MemoryNl2SqlStore:
 class OracleJsonNl2SqlStore:
     """Oracle JSON CLOB table backed store.
 
-    旧互換/移行期間だけ 1 row に NL2SQL state snapshot を保存する。DDL は versioned
-    migration の責務であり、この store は既存 table を bounded query で確認するだけ。
+    旧 snapshot の表（1 row に NL2SQL state snapshot）。実行時の経路では使わず、移行の CLI
+    （`nl2sql-migrate-state`）だけが読む（#1758）。DDL は versioned migration の責務であり、この
+    store は既存 table を bounded query で確認するだけ。
     """
 
     mode = "oracle"
@@ -70,13 +69,11 @@ class OracleJsonNl2SqlStore:
         *,
         connection_factory: Callable[[], AbstractContextManager[Any]],
         table_name: str,
-        migration_mirror_enabled: bool = False,
     ) -> None:
         self._connection_factory = connection_factory
         self._table_name = self._validate_table_name(table_name)
         self._initialized = False
         self._lock = threading.RLock()
-        self._migration_mirror_enabled = migration_mirror_enabled
 
     @property
     def table_name(self) -> str:
@@ -129,16 +126,6 @@ class OracleJsonNl2SqlStore:
                         merge_sql,
                         {"state_key": _STATE_KEY, "state_json": payload},
                     )
-                    if self._migration_mirror_enabled:
-                        cursor.execute(
-                            "INSERT INTO NL2SQL_MIGRATION_OUTBOX (SNAPSHOT_VERSION, "
-                            "SNAPSHOT_CHECKSUM, STATE_JSON) VALUES "
-                            "(NL2SQL_MIGRATION_SNAPSHOT_SEQ.NEXTVAL, :checksum, :state_json)",
-                            {
-                                "checksum": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
-                                "state_json": payload,
-                            },
-                        )
                     conn.commit()
                 except Exception:
                     rollback = getattr(conn, "rollback", None)

@@ -457,7 +457,9 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         dropped_count = 0
         before = self._status_on(connection)
         if before["status"] == "ready" and not recreate:
-            return self._no_op_result(connection, owner)
+            result = self._no_op_result(connection, owner)
+            self._purge_orphan_ontology_records(connection)
+            return result
         self._configure_ddl_lock_timeout(connection)
         if recreate:
             self._assert_no_active_jobs(connection)
@@ -477,6 +479,9 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 "SCHEMA_POSTCONDITION_FAILED",
                 "システムテーブル操作は完了しましたが、必須オブジェクトが不足しています。状態を再取得して再試行してください。",
             )
+        if not recreate:
+            # 全再作成の後は表が空のため、掃除は要らない。
+            self._purge_orphan_ontology_records(connection)
         operation = self._operation_name(before["status"], recreate=recreate)
         self._log_operation_succeeded(
             operation,
@@ -497,6 +502,37 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 )
             ),
         }
+
+    def _purge_orphan_ontology_records(self, connection: Any) -> None:
+        """存在しない業務プロファイルのオントロジーの成果物・終わったジョブの記録を消す（#1758）。
+
+        業務プロファイルの削除のときに消せなかったもの（削除が途中で失敗した・#1743 より前に
+        削除した業務プロファイルの残り）を、冪等な初期化（画面の「作成・更新」と配備の
+        `--initialize`）のたびに片づける。実行中のジョブ・全体のジョブ・所有者の無い成果物・他の
+        製品の表には触らない。system table は ready の後なので表はそろっている。失敗しても
+        初期化は失敗にしない（次の初期化か業務プロファイルの削除でやり直す）。
+        """
+
+        from app.features.nl2sql.incremental_store import purge_orphan_profile_ontology_records
+
+        try:
+            with connection.cursor() as cursor:
+                artifacts, jobs = purge_orphan_profile_ontology_records(cursor)
+            connection.commit()
+        except Exception as exc:
+            rollback = getattr(connection, "rollback", None)
+            if callable(rollback):
+                rollback()
+            logger.warning(
+                "nl2sql_orphan_ontology_purge_failed",
+                extra={"error_code": oracle_error_code(exc), "exception_type": type(exc).__name__},
+            )
+            return
+        if artifacts or jobs:
+            logger.info(
+                "nl2sql_orphan_ontology_purged",
+                extra={"artifact_count": artifacts, "job_count": jobs},
+            )
 
     def _plan_migrations(self, status: dict[str, Any]) -> list[MigrationArtifact]:
         """未適用/checksum 不一致と欠損 object の所有 migration だけを選ぶ。"""
