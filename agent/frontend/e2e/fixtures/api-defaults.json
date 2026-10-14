@@ -127,7 +127,7 @@
       "id": "business_rag_research",
       "name": "業務 RAG 調査",
       "description": "業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
-      "instructions": "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。対象の検索・回答プロファイルが分からなければ rag_list_search_answer_profiles で確かめる。",
+      "instructions": "## いつ使うか\n\n業務 RAG（MCP 接続 `rag`）の資料の根拠で答える質問に使う。\n利用者の目的を `rag_search` の `query` として扱い、根拠（evidence）に基づいて答える。\n\n## 手順\n\n### Step 1: 検索の前に確かめる\n\n- 対象の検索・回答プロファイルが分からなければ `rag_list_search_answer_profiles` で確かめる。\n- 次へ進む:\n  - 複数の根拠をつないで初めて答えられる質問（多段の質問）→ Step 2\n  - それ以外 → Step 3\n\n### Step 2: 多段の質問を段に分ける\n\n答えに要る事実を段に分け、前の段の答えが次の段の検索の語になる順に並べる。\n\n### Step 3: `rag_search` で答えを得る\n\n`rag_search` を呼び、`outcome` で答え方を決める（「結果ごとの対応」）。\n\n## 結果ごとの対応\n\n`rag_search` の `outcome`:\n\n- `answered`: 根拠に沿って答える。\n- `needs_clarification`: `clarifications` の問いを利用者にそのまま確かめ、推測で選ばない。\n  1. 答えを得たら `conditions`（条件の id → 値）に入れる。\n  2. `rag_search` を呼び直す。",
       "mcp_requirements": [
         {
           "server_id": "rag",

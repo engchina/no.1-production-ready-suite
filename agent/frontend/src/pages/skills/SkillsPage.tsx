@@ -10,6 +10,7 @@ import {
   FormActionBar,
   FormSkeleton,
   ListToolbar,
+  MarkdownText,
   ObjectActionBar,
   TableSkeleton,
   PageHeader,
@@ -596,7 +597,13 @@ function SkillReadOnlyDetail({ skill }: { skill: AgentSkill }) {
       <Section title={t("skills.instructions")}>
         <Card className="min-w-0">
           <CardContent className="space-y-3 pt-5">
-            <p className="whitespace-pre-wrap text-sm leading-6 text-fg">{skill.instructions || "-"}</p>
+            {/* 指示は Markdown（手順・結果ごとの対応）として表示する（#1795）。 */}
+            {skill.instructions.trim() ? (
+              // 共有の MarkdownText（#1808）。Section（h2）の下なので最上位の見出しは h3。
+              <MarkdownText text={skill.instructions} headingLevel={3} testId="skill-instructions-view" />
+            ) : (
+              <p className="text-sm text-fg">-</p>
+            )}
             <p className="text-xs text-fg-muted">{`${t("skills.tags")}: ${skill.tags.length ? skill.tags.join(", ") : "-"}`}</p>
           </CardContent>
         </Card>
