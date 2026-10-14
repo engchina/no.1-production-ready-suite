@@ -36,7 +36,7 @@ function matches(key: ApiKey, query: string): boolean {
 }
 
 /**
- * 全員の API キー（管理の画面。「ユーザーとロール」の下。RAG / NL2SQL 共通。#1805）。
+ * 全員の API キー（管理の画面。「ユーザーとロール」の下。3 製品共通。#1805）。
  * 一覧と失効だけを持つ（キーの発行は各利用者がアカウントのメニューから行う）。
  */
 export function ApiKeysAdminPage({ api, messages }: ApiKeysAdminPageProps) {

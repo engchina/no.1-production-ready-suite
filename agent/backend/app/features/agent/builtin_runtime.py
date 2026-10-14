@@ -72,7 +72,7 @@ from pr_system_settings.model import (
 
 from app.features.agent import data_scope, tool_grounding
 from app.features.agent.answer_outcome import answer_outcome
-from app.features.agent.answer_passages import is_clarification_only
+from app.features.agent.answer_passages import is_absence_only, is_clarification_only
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
     ANSWER_VALIDATION_NAME,
@@ -80,6 +80,7 @@ from app.features.agent.answer_validation import (
     MAX_ANSWER_CHARS,
     MAX_QUERY_CHARS,
     NO_EVIDENCE_NOTICE,
+    REASON_ABSENCE_ONLY,
     REASON_ANSWER_TOO_LONG,
     REASON_CLARIFICATION_ONLY,
     REASON_CONNECTION_NOT_FOUND,
@@ -94,6 +95,7 @@ from app.features.agent.answer_validation import (
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
     carried_evidence,
+    carried_evidence_groups,
     combine_validations,
     connection_check_inputs,
     run_evidence_groups,
@@ -1783,36 +1785,51 @@ async def _unattended_approvals(
       しないため、承認が要るツールは呼ばない（無人の実行は事前に許可したツールだけを使う）。
       モデルへは「自動実行では使えない」と返し、確かめられなかった点として回答を完成させる。
       step（監査）と Run の経過に、承認が要るため使わなかったことを残す。
+    - 外部の MCP クライアントの Run（#1874。`metadata.source=mcp`）: 承認する人が画面に
+      いるとは限らないため、自動実行と同じく承認が要るツールを呼ばない。
 
-    それ以外の Run（チャット・MCP など）はそのまま返す（承認待ちにする）。
+    それ以外の Run（画面のチャット・実行）はそのまま返す（承認待ちにする）。
     """
     from app.features.agent.runtime import (
         AUTOMATION_APPROVAL_SKIPPED_CODE,
         EVALUATION_DRY_RUN_KEY,
         EVALUATION_DRY_RUN_MESSAGE,
+        MCP_APPROVAL_SKIPPED_CODE,
         automation_approval_message,
         is_automation_run,
+        is_mcp_run,
+        mcp_approval_message,
         runtime_repository,
     )
 
     evaluation = bool(run.metadata.get(EVALUATION_DRY_RUN_KEY))
-    if not evaluation and not is_automation_run(run.metadata):
+    mcp = not evaluation and is_mcp_run(run.metadata)
+    if not evaluation and not mcp and not is_automation_run(run.metadata):
         return result
     for _ in range(_max_turns()):
         interruptions = list(getattr(result, "interruptions", []) or [])
+        if mcp:
+            # MCP の Run は回答前の確認（`ask_user_confirmation`。#1839）を出せる（呼び出し元の
+            # クライアントが agent_answer_confirmation で答える）。確認は残し、承認だけを断る
+            # （SDK は決めていない中断を次の結果にもう一度返す）。
+            interruptions = [
+                item for item in interruptions if _interruption_call(item).name != CONFIRMATION_TOOL
+            ]
         if not interruptions:
             return result
         calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
         if evaluation:
             runtime_repository.record_builtin_dry_run_steps(run.id, calls)
         else:
-            runtime_repository.record_builtin_unattended_skips(run.id, calls)
+            runtime_repository.record_builtin_unattended_skips(run.id, calls, mcp=mcp)
             logger.info(
                 "builtin_runtime_tool_call_rejected",
                 extra={
                     "run_id": run.id,
                     "tool_names": [call.name for call in calls],
-                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
+                    "error_code": (
+                        MCP_APPROVAL_SKIPPED_CODE if mcp else AUTOMATION_APPROVAL_SKIPPED_CODE
+                    ),
                 },
             )
         state = result.to_state()
@@ -1822,6 +1839,8 @@ async def _unattended_approvals(
                 rejection_message=(
                     EVALUATION_DRY_RUN_MESSAGE
                     if evaluation
+                    else mcp_approval_message(call.name)
+                    if mcp
                     else automation_approval_message(call.name)
                 ),
             )
@@ -1853,7 +1872,8 @@ async def _require_tool_grounding(
     差し戻しても呼ばなければ、2 つ目の値を True にして返す（`_finish` が拒答の文に置き換える）。
     差し戻しと元の回答は Run の経過に残す。差し戻しの文は、この Run でモデルに回答前の確認の
     ツール（`ask_user_confirmation`）を渡したかで分ける（#1881。`tool_grounding.retry_message`）。
-    確認のツールを渡したのに本文で確認の質問だけを返した回答は、拒答にせず、Run の経過に残す。
+    差し戻しの後も、確認のツールを渡したのに本文で確認の質問だけを返した回答は、拒答にせず、
+    Run の経過に残す。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -1872,8 +1892,11 @@ async def _require_tool_grounding(
             return result, False
         steps = list(current.steps)
         if not tool_grounding.needs_grounding(answer, steps=steps, tool_names=tool_names):
-            if tool_grounding.clarified_in_text(answer, steps=steps, tool_names=tool_names):
-                # 確認のカードではなく本文で聞き返した（#1881）。拒答にはせず、経過に残す。
+            if tool_grounding.retried(current.metadata) and tool_grounding.clarified_in_text(
+                answer, steps=steps, tool_names=tool_names
+            ):
+                # 差し戻しの後も、確認のカードではなく本文で聞き返した（#1881）。拒答にはせず、
+                # 経過に残す（差し戻していない回答のあいさつ・用件の聞き返しは残さない）。
                 runtime_repository.record_tool_grounding(run.id, "text_clarification", answer)
             return result, False
         if _grounded_in_thread(run.id):
@@ -2153,6 +2176,11 @@ async def _validate_final_answer(
     判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
     「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
+
+    今のターンに根拠が無いとき（#1879）: 資料に無い・答えられないことだけを述べる回答は注記せずに
+    `skipped`（`absence_only`）。会話の続きで、今のターンが根拠・データのツールで結果を得ずに
+    答えた（前の回答の整形・言い換え。#1835 の `grounded_in_thread` で拒答にしない回答）なら、
+    前のターンの検証で裏付けた根拠（`carried_evidence`）だけで検証する。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -2179,6 +2207,13 @@ async def _validate_final_answer(
             return answer, save(
                 validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY)
             )
+        if rag_tools and is_absence_only(answer):
+            # 資料に無い・答えられないことだけを述べる回答（拒答）は資料の主張を含まない（#1879）。
+            return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_ABSENCE_ONLY))
+        if carried and not tool_grounding.grounding_used(run.steps):
+            # 前の回答の整形・言い換え（#1879）は、前のターンで裏付けた根拠で確かめる。
+            groups = carried_evidence_groups(carried, answer)
+    if not groups:
         if rag_tools and answer.strip():
             content = validation_content(
                 STATUS_UNVALIDATED, reason=REASON_NO_RAG_EVIDENCE, message=NO_EVIDENCE_NOTICE

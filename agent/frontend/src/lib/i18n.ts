@@ -684,6 +684,8 @@ const agentJa = {
   "chat.review.message.skipped": "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedEmpty": "回答が空のため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedClarification": "確認の質問だけの回答のため、資料との照らし合わせの対象外です。",
+  "chat.review.message.skippedAbsenceOnly":
+    "資料に根拠が見つからず答えられないことだけを伝えた回答のため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedRagDeclined": "資料の検索は不要とされたため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedNoToolGrounding":
     "社内の資料・業務データのツールで確かめずに作られた回答だったため、推測の回答は出さず、お答えできない旨を返しました。",
@@ -1009,6 +1011,14 @@ const agentJa = {
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
+  // Run のきっかけ（実行履歴・監査ログの列。#1874）。
+  "run.source": "きっかけ",
+  "run.source.user": "画面",
+  "run.source.automation": "自動実行",
+  "run.source.evaluation": "品質評価",
+  "run.source.replay": "再実行",
+  "run.source.mcp": "MCP",
+  "run.source.mcpKey": "MCP（{name}）",
   "run.form.goalDefault": "外部データを確認して要点を整理する",
   "run.goalRequired": "目標を入力してください。",
   "run.form.tool": "ツール",

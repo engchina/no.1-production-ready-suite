@@ -77,9 +77,9 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       // 業務利用者の入口（#768。RAG のチャットと同じアイコン）。
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
+      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
       // Run の一覧（URL・権限コードは変えない）。名前とアイコンは NL2SQL の「実行履歴」と同じ（#791）。
       { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: History, permission: MENU_PERMISSIONS.runs },
-      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
     ],
   },
   {

@@ -1,0 +1,924 @@
+{
+  "server": "production-ready-agent",
+  "tools": [
+    {
+      "name": "agent_answer_confirmation",
+      "description": "回答前の確認（agent_chat / agent_get_run の confirmation）に答える。action=answer はすべての確認事項に、選択肢の ID（option_ids）か自由入力（other_text）で答える。action=skip は確認せずに前提を示して回答させる（can_skip のときだけ）。答えた後の回答を返す。",
+      "inputSchema": {
+        "$defs": {
+          "ConfirmationAnswerInput": {
+            "properties": {
+              "item_id": {
+                "description": "確認事項の ID",
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Item Id",
+                "type": "string"
+              },
+              "option_ids": {
+                "description": "選んだ選択肢の ID",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "title": "Option Ids",
+                "type": "array"
+              },
+              "other_text": {
+                "default": "",
+                "description": "選択肢に無いときの自由入力の答え",
+                "maxLength": 2000,
+                "title": "Other Text",
+                "type": "string"
+              }
+            },
+            "required": [
+              "item_id"
+            ],
+            "title": "ConfirmationAnswerInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "run_id": {
+            "description": "確認を出した Run の ID",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "confirmation_id": {
+            "description": "確認の ID（confirmation.id）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Confirmation Id",
+            "type": "string"
+          },
+          "action": {
+            "default": "answer",
+            "description": "answer は確認事項に答える。skip は確認せずに（前提を示して）回答させる。",
+            "enum": [
+              "answer",
+              "skip"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "answers": {
+            "description": "answer のとき、すべての確認事項への答え（選択肢か自由入力）。",
+            "items": {
+              "$ref": "#/$defs/ConfirmationAnswerInput"
+            },
+            "maxItems": 5,
+            "title": "Answers",
+            "type": "array"
+          },
+          "wait_seconds": {
+            "default": 50,
+            "description": "答えた後の回答を待つ秒数。",
+            "maximum": 300,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "confirmation_id"
+        ],
+        "title": "AgentAnswerConfirmationInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "outputSchema": {
+        "$defs": {
+          "ConfirmationItemOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "prompt": {
+                "title": "Prompt",
+                "type": "string"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "selection": {
+                "default": "single",
+                "title": "Selection",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationOptionOutput"
+                },
+                "title": "Options",
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "prompt"
+            ],
+            "title": "ConfirmationItemOutput",
+            "type": "object"
+          },
+          "ConfirmationOptionOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "title": "ConfirmationOptionOutput",
+            "type": "object"
+          },
+          "ConfirmationOutput": {
+            "description": "回答前の確認（#1839）。agent_answer_confirmation で答える。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "source": {
+                "title": "Source",
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationItemOutput"
+                },
+                "title": "Items",
+                "type": "array"
+              },
+              "round": {
+                "title": "Round",
+                "type": "integer"
+              },
+              "max_rounds": {
+                "title": "Max Rounds",
+                "type": "integer"
+              },
+              "can_skip": {
+                "title": "Can Skip",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "source",
+              "items",
+              "round",
+              "max_rounds",
+              "can_skip"
+            ],
+            "title": "ConfirmationOutput",
+            "type": "object"
+          },
+          "SourceOutput": {
+            "description": "回答の根拠（RAG の資料。回答に使ったもの）。",
+            "properties": {
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "location": {
+                "default": "",
+                "title": "Location",
+                "type": "string"
+              },
+              "excerpt": {
+                "default": "",
+                "title": "Excerpt",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "title": "SourceOutput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "in_progress": {
+            "title": "In Progress",
+            "type": "boolean"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer"
+          },
+          "confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConfirmationOutput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/SourceOutput"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "tools_used": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools Used",
+            "type": "array"
+          },
+          "skipped_approval_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Approval Tools",
+            "type": "array"
+          },
+          "pending_approvals": {
+            "default": 0,
+            "title": "Pending Approvals",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "agent_id",
+          "status",
+          "in_progress",
+          "message"
+        ],
+        "title": "RunOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "agent_chat",
+      "description": "業務 Agent に質問し、回答（根拠つき）を返す。業務 Agent は社内の資料（RAG）・業務データ（NL2SQL）などを調べて答える。thread_id を渡すと同じ会話の続きとして答える。回答の前に確認が要るときは confirmation を返す。wait_seconds までに終わらなければ in_progress=true と run_id を返す（agent_get_run で読む）。承認の要る操作は行わない。",
+      "inputSchema": {
+        "properties": {
+          "agent_id": {
+            "description": "業務 Agent の ID（agent_list の id）",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "question": {
+            "description": "質問",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "pattern": "^thread_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "続ける会話の ID（前の agent_chat / agent_get_run の thread_id）。省略すると新しい会話を始める。前の質問と回答を踏まえて答える。",
+            "title": "Thread Id"
+          },
+          "wait_seconds": {
+            "default": 50,
+            "description": "回答を待つ秒数。終わらなければ途中の状態と run_id を返すので、agent_get_run で読む。",
+            "maximum": 300,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_id",
+          "question"
+        ],
+        "title": "AgentChatInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false
+      },
+      "outputSchema": {
+        "$defs": {
+          "ConfirmationItemOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "prompt": {
+                "title": "Prompt",
+                "type": "string"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "selection": {
+                "default": "single",
+                "title": "Selection",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationOptionOutput"
+                },
+                "title": "Options",
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "prompt"
+            ],
+            "title": "ConfirmationItemOutput",
+            "type": "object"
+          },
+          "ConfirmationOptionOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "title": "ConfirmationOptionOutput",
+            "type": "object"
+          },
+          "ConfirmationOutput": {
+            "description": "回答前の確認（#1839）。agent_answer_confirmation で答える。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "source": {
+                "title": "Source",
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationItemOutput"
+                },
+                "title": "Items",
+                "type": "array"
+              },
+              "round": {
+                "title": "Round",
+                "type": "integer"
+              },
+              "max_rounds": {
+                "title": "Max Rounds",
+                "type": "integer"
+              },
+              "can_skip": {
+                "title": "Can Skip",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "source",
+              "items",
+              "round",
+              "max_rounds",
+              "can_skip"
+            ],
+            "title": "ConfirmationOutput",
+            "type": "object"
+          },
+          "SourceOutput": {
+            "description": "回答の根拠（RAG の資料。回答に使ったもの）。",
+            "properties": {
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "location": {
+                "default": "",
+                "title": "Location",
+                "type": "string"
+              },
+              "excerpt": {
+                "default": "",
+                "title": "Excerpt",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "title": "SourceOutput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "in_progress": {
+            "title": "In Progress",
+            "type": "boolean"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer"
+          },
+          "confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConfirmationOutput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/SourceOutput"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "tools_used": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools Used",
+            "type": "array"
+          },
+          "skipped_approval_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Approval Tools",
+            "type": "array"
+          },
+          "pending_approvals": {
+            "default": 0,
+            "title": "Pending Approvals",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "agent_id",
+          "status",
+          "in_progress",
+          "message"
+        ],
+        "title": "RunOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "agent_get_run",
+      "description": "agent_chat の run_id で、状態・回答・根拠・回答前の確認を返す。まだ終わっていなければ wait_seconds まで待つ。",
+      "inputSchema": {
+        "properties": {
+          "run_id": {
+            "description": "agent_chat の run_id",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "wait_seconds": {
+            "default": 30,
+            "description": "まだ終わっていなければ、終わるまで待つ秒数（0 は今の状態をすぐ返す）。",
+            "maximum": 300,
+            "minimum": 0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "AgentGetRunInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ConfirmationItemOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "prompt": {
+                "title": "Prompt",
+                "type": "string"
+              },
+              "reason": {
+                "default": "",
+                "title": "Reason",
+                "type": "string"
+              },
+              "selection": {
+                "default": "single",
+                "title": "Selection",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationOptionOutput"
+                },
+                "title": "Options",
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "prompt"
+            ],
+            "title": "ConfirmationItemOutput",
+            "type": "object"
+          },
+          "ConfirmationOptionOutput": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "title": "ConfirmationOptionOutput",
+            "type": "object"
+          },
+          "ConfirmationOutput": {
+            "description": "回答前の確認（#1839）。agent_answer_confirmation で答える。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "source": {
+                "title": "Source",
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationItemOutput"
+                },
+                "title": "Items",
+                "type": "array"
+              },
+              "round": {
+                "title": "Round",
+                "type": "integer"
+              },
+              "max_rounds": {
+                "title": "Max Rounds",
+                "type": "integer"
+              },
+              "can_skip": {
+                "title": "Can Skip",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "source",
+              "items",
+              "round",
+              "max_rounds",
+              "can_skip"
+            ],
+            "title": "ConfirmationOutput",
+            "type": "object"
+          },
+          "SourceOutput": {
+            "description": "回答の根拠（RAG の資料。回答に使ったもの）。",
+            "properties": {
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "location": {
+                "default": "",
+                "title": "Location",
+                "type": "string"
+              },
+              "excerpt": {
+                "default": "",
+                "title": "Excerpt",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "title": "SourceOutput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "in_progress": {
+            "title": "In Progress",
+            "type": "boolean"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer"
+          },
+          "confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConfirmationOutput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/SourceOutput"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "tools_used": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools Used",
+            "type": "array"
+          },
+          "skipped_approval_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Approval Tools",
+            "type": "array"
+          },
+          "pending_approvals": {
+            "default": 0,
+            "title": "Pending Approvals",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "agent_id",
+          "status",
+          "in_progress",
+          "message"
+        ],
+        "title": "RunOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "agent_list",
+      "description": "使える業務 Agent（ID・名前・説明・使うスキル）の一覧を返す。質問の内容に合う業務 Agent を選ぶのに使う。",
+      "inputSchema": {
+        "properties": {},
+        "title": "AgentListInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "AgentSummary": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              },
+              "skills": {
+                "items": {
+                  "$ref": "#/$defs/SkillSummary"
+                },
+                "title": "Skills",
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "title": "AgentSummary",
+            "type": "object"
+          },
+          "SkillSummary": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "title": "SkillSummary",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/$defs/AgentSummary"
+            },
+            "title": "Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "title": "AgentListOutput",
+        "type": "object"
+      }
+    }
+  ]
+}

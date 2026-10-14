@@ -301,9 +301,33 @@ def test_clarification_only_answer_is_not_sent_back(
     assert len(model.calls) == 1
     assert run_answer_text(run) == question
     assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
-    # 拒答にはしないが、確認のツールを渡したのに本文で聞き返したことを経過に残す（#1881）。
-    assert _grounding_events(run) == [{"action": "text_clarification", "original_answer": question}]
-    assert run.metadata[tool_grounding.METADATA_KEY] == {"text_clarification": True}
+    assert _grounding_events(run) == []
+
+
+def test_text_clarification_after_the_retry_is_kept_and_recorded(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """差し戻しの後も本文で確認の質問だけを返したら、拒答にせず経過に残す（#1881）。"""
+    question = "どの件のことですか？（経費精算／受注）"
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(UNGROUNDED)], usage=_usage(1, 100, 10)),
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 150, 15)),
+    )
+
+    run = _run("あの件どうなった？")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
+    assert mcp.calls_of("rag_search") == []
+    assert run_answer_text(run) == question
+    assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
+    # 確認のツールを渡したのに、カードではなく本文で聞き返したことを改善の手がかりとして残す。
+    assert _grounding_events(run) == [
+        {"action": "retry", "original_answer": UNGROUNDED},
+        {"action": "text_clarification", "original_answer": question},
+    ]
+    assert run.metadata[tool_grounding.METADATA_KEY] == {"retries": 1, "text_clarification": True}
 
 
 @pytest.mark.parametrize(
@@ -313,20 +337,24 @@ def test_clarification_only_answer_is_not_sent_back(
         pytest.param({EVALUATION_DRY_RUN_KEY: True}, id="evaluation"),
     ],
 )
-def test_unattended_clarification_only_answer_is_not_recorded(
+def test_unattended_text_clarification_after_the_retry_is_not_recorded(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp, metadata: dict[str, Any]
 ) -> None:
     del mcp
     question = "どの件のことですか？（経費精算／受注）"
-    model = _script(monkeypatch, [assistant_message(question)])
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(UNGROUNDED)], usage=_usage(1, 100, 10)),
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 150, 15)),
+    )
 
     run = _run("あの件どうなった？", metadata=metadata)
 
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    assert len(model.calls) == 1
+    assert len(model.calls) == 2
     assert run_answer_text(run) == question
     # 確認のツールを渡さない Run の本文の確認の質問は、記録の対象にしない。
-    assert _grounding_events(run) == []
+    assert _grounding_events(run) == [{"action": "retry", "original_answer": UNGROUNDED}]
 
 
 def test_assume_policy_retries_with_the_message_that_allows_text_clarification(
@@ -351,6 +379,30 @@ def test_assume_policy_retries_with_the_message_that_allows_text_clarification(
     retry = _last_user_message(model.calls[1].input)
     assert retry.startswith(tool_grounding.RETRY_MESSAGE)
     assert "ask_user_confirmation" not in retry
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "こんにちは。お手伝いできることがありましたら、お知らせください。",
+        "こんにちは。ご用件をお知らせください。",
+    ],
+    ids=["help", "request"],
+)
+def test_greeting_that_asks_for_the_request_is_not_sent_back(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str
+) -> None:
+    """あいさつに用件を聞いて答えた回答（#1879）は確認の質問として扱い、差し戻し・拒答にしない。"""
+    del mcp
+    model = _script(monkeypatch, [assistant_message(answer)])
+
+    run = _run("こんにちは")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 1
+    assert run_answer_text(run) == answer
+    assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
+    assert _grounding_events(run) == []
 
 
 def test_answer_with_a_tool_is_not_sent_back(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
