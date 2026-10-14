@@ -467,9 +467,10 @@ export function SearchClient() {
             </Card>
           ) : (
             <>
-          {/* 検索条件 */}
+          {/* 検索条件。カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、
+              チャットの検索・回答プロファイルのカードと 375px でも内側の幅をそろえる（#1778）。 */}
           <Card>
-            <CardContent className="space-y-4 pt-4">
+            <CardContent className="space-y-4 pt-5">
               <SearchAnswerProfileSelect
                 id={SEARCH_ANSWER_PROFILE_SCOPE_INPUT_ID}
                 items={searchAnswerProfiles}
