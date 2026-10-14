@@ -195,9 +195,13 @@ def test_cases_are_run_as_agent_runs_and_judged(monkeypatch: MonkeyPatch, agent:
     assert second.judgement is not None and second.judgement.missing_points == ["契約件数は 12 件"]
     assert third.status == CaseStatus.JUDGE_FAILED
     assert third.error and "判定のモデルの呼び出しに失敗しました" in third.error
+    # 出力の上限で止まったのではないので、再試行しない（#1845）。
+    assert (first.judge_attempts, third.judge_attempts) == (1, 1)
     summary = finished.summary
     assert (summary.total, summary.correct, summary.incorrect, summary.errors) == (3, 1, 1, 1)
-    assert summary.pass_rate == pytest.approx(1 / 3)
+    # 判定できなかったケースは合格率の分母から除く（回答の誤りと区別する。#1845）。
+    assert summary.unjudged == 1
+    assert summary.pass_rate == pytest.approx(1 / 2)
     assert summary.average_score == pytest.approx(0.6)
     # 期待するツールを指定していないケースは、ツールの選択を判定しない。
     assert (summary.tool_cases, summary.tool_accuracy) == (0, None)
@@ -424,7 +428,11 @@ def test_cases_can_be_imported_and_exported_as_excel(agent: None) -> None:
     )
     assert parsed.status_code == 200, parsed.text
     [sample] = parsed.json()["data"]["cases"]
-    assert (sample["id"], sample["expected_tools"]) == ("expense-deadline", ["rag_search"])
+    assert (sample["id"], sample["expected_tools"], sample["expected_tools_in_order"]) == (
+        "expense-deadline",
+        ["rag_retrieve_evidence", "rag_validate_answer"],
+        True,
+    )
 
     set_id = client.post("/api/evaluation-sets", json=SET_BODY).json()["data"]["id"]
     exported = client.get(f"/api/evaluation-sets/{set_id}/cases.xlsx")
@@ -434,6 +442,7 @@ def test_cases_can_be_imported_and_exported_as_excel(agent: None) -> None:
         ("case-1", "今月の売上は？", ["rag_search"]),
         ("custom", "経費は？", []),
     ]
+    assert [case.expected_tools_in_order for case in cases] == [False, False]
 
     broken = client.post(
         "/api/evaluation-sets/parse-xlsx",
@@ -939,3 +948,161 @@ def test_previous_run_is_compared_only_with_the_same_cases(agent: None) -> None:
     assert data["previous_agent_version"] == 1
     assert data["agent_version"] == "draft"
     assert data["previous_created_at"] is not None
+
+
+def _incomplete() -> builtin_runtime.BuiltinRuntimeError:
+    return builtin_runtime.BuiltinRuntimeError(
+        builtin_runtime.MODEL_OUTPUT_INCOMPLETE_CODE,
+        "モデル「judge-model」の応答が出力の上限に達して未完了でした。",
+    )
+
+
+def test_judge_stopped_at_the_output_limit_is_retried_once(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """判定の出力が上限で止まったら広げて 1 回再試行し、それでも止まれば判定できない（#1845）。"""
+    del agent
+    _script(
+        monkeypatch,
+        [assistant_message("第 3 日曜は MES です。")],
+        [assistant_message("経費は 50 万円です。")],
+    )
+    monkeypatch.setattr(evaluation, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: 0)
+    budgets: list[int] = []
+    outcomes: list[Exception | evaluation.EvaluationJudgement] = [
+        _incomplete(),
+        evaluation.EvaluationJudgement(
+            verdict=JudgeVerdict.CORRECT,
+            score=1.0,
+            summary="要点を満たしています。",
+            missing_points=[],
+        ),
+        _incomplete(),
+        _incomplete(),
+    ]
+
+    async def judge_once(
+        _case: EvaluationCase, _answer: str, target: ModelTarget
+    ) -> evaluation.EvaluationJudgement:
+        budgets.append(target.max_output_tokens)
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(evaluation, "_judge_once", judge_once)
+    job = _job(_case("retried", "第 3 日曜は？", "MES"), _case("unjudged", "経費は？", "50 万円"))
+
+    anyio.run(run_evaluation_job, job.id)
+
+    finished = evaluation_store.get(job.id)
+    retried, unjudged = finished.results
+    assert (retried.status, retried.judge_attempts) == (CaseStatus.JUDGED, 2)
+    assert retried.judgement is not None and retried.judgement.verdict == JudgeVerdict.CORRECT
+    assert (unjudged.status, unjudged.judge_attempts) == (CaseStatus.JUDGE_FAILED, 2)
+    assert unjudged.judgement is None
+    assert unjudged.error and "判定できなかった" in unjudged.error
+    # 広げられない（もうモデルの出力の上限）ときは、同じ上限で送り直す。
+    assert len(budgets) == 4 and len(set(budgets)) == 1
+    summary = finished.summary
+    assert (summary.correct, summary.incorrect, summary.unjudged, summary.errors) == (1, 0, 1, 1)
+    assert summary.pass_rate == 1.0
+
+
+def test_judge_retry_widens_the_output_limit(monkeypatch: MonkeyPatch) -> None:
+    """広げられるときはモデルの出力の上限まで広げて送り直す（#1845）。"""
+    target = ModelTarget(
+        model_id="judge-model",
+        endpoint="https://oci.example",
+        project_ocid="",
+        api_key="k",
+        max_output_tokens=8192,
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "enterprise_ai_retry_output_token_budget",
+        lambda _settings, _model, *, current: 32768 if current < 32768 else None,
+    )
+    assert evaluation._retry_target(target).max_output_tokens == 32768  # noqa: SLF001
+    widest = evaluation._retry_target(  # noqa: SLF001
+        ModelTarget(
+            model_id="judge-model",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="k",
+            max_output_tokens=32768,
+        )
+    )
+    assert widest.max_output_tokens == 32768
+
+
+@pytest.mark.parametrize(
+    ("calls", "in_order", "selection", "order"),
+    [
+        (
+            ["rag__rag_retrieve_evidence", "rag__rag_lookup_guides", "rag__rag_search"],
+            True,
+            True,
+            True,
+        ),
+        # 間にほかのツールを挟んでもよい。
+        (
+            ["rag__rag_list_profiles", "rag__rag_retrieve_evidence", "rag__rag_search"],
+            True,
+            True,
+            True,
+        ),
+        (["rag__rag_search", "rag__rag_retrieve_evidence"], True, False, False),
+        (["rag__rag_retrieve_evidence"], True, False, False),
+        # 順を指定しないケースは順を判定しない。
+        (["rag__rag_search", "rag__rag_retrieve_evidence"], False, True, None),
+    ],
+    ids=["in-order", "other-tools-between", "wrong-order", "missing", "order-not-required"],
+)
+def test_expected_tool_order(
+    calls: list[str], in_order: bool, selection: bool, order: bool | None
+) -> None:
+    """期待するツールの順（先頭が最初に呼ぶツール）を判定に使う（#1845）。"""
+    case = EvaluationCase(
+        question="q",
+        expected="x",
+        expected_tools=["rag_retrieve_evidence", "rag_search"],
+        expected_tools_in_order=in_order,
+    )
+    assert evaluation.tool_order_correct(case, calls) is order
+    assert evaluation.tool_selection_correct(case, calls) is selection
+
+
+def test_tool_order_is_judged_in_a_job_and_changes_the_case_fingerprint(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    del agent
+    _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "登録"}, call_id="call-1845")],
+        [assistant_message("登録しました（評価のため実行していません）。")],
+        _judgement("correct", 1.0, "手順を答えています。"),
+    )
+    ordered = EvaluationCase(
+        id="ordered",
+        question="取引先を登録して",
+        expected="登録の手順",
+        expected_tools=["rag_search", WRITE],
+        expected_tools_in_order=True,
+    )
+    job = _job(ordered)
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert result.tool_calls == [WRITE]
+    assert (result.tool_selection_correct, result.tool_order_correct) == (False, False)
+    unordered = ordered.model_copy(update={"expected_tools_in_order": False})
+    reversed_order = ordered.model_copy(update={"expected_tools": [WRITE, "rag_search"]})
+    fingerprints = {
+        evaluation.cases_fingerprint(
+            EvaluationJob(agent_id=AGENT_ID, results=[EvaluationCaseResult(case=item)])
+        )
+        for item in (ordered, unordered, reversed_order)
+    }
+    assert len(fingerprints) == 3

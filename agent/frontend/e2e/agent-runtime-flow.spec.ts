@@ -10,7 +10,7 @@ const agent = {
   name: "資料・データ横断アシスタント",
   description: "業務調査を行う",
   instructions: "根拠を示して回答する。",
-  skill_ids: ["business_rag_research"],
+  skill_ids: ["business-rag-research"],
   migration_required: false,
   enabled: true,
   source: "builtin",
@@ -22,7 +22,7 @@ const agent = {
       name: "資料・データ横断アシスタント",
       description: "業務調査を行う",
       instructions: "根拠を示して回答する。",
-      skill_ids: ["business_rag_research"],
+      skill_ids: ["business-rag-research"],
       model_id: "",
       note: "",
       published_at: now,
@@ -36,7 +36,7 @@ const agent = {
 };
 
 const skill = {
-  id: "business_rag_research",
+  id: "business-rag-research",
   name: "業務 RAG 調査",
   description: "根拠付き情報を検索する",
   instructions: "検索して根拠を返す",

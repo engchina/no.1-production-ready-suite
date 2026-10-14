@@ -159,7 +159,7 @@ holdout の結果（`split_breakdown.holdout`）を分けて書き、dev の結�
 |---|---|
 | A | 業務ガイドなし（全体の既定とナレッジベースの指定。RAG の評価 job） |
 | C | 業務ガイドあり（`support-guides.json` の 2 つを公開した検索・回答プロファイルを指定。RAG の評価 job） |
-| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business_rag_research`。最終の検証は既定の ON）の Run（`agent_evaluation_cli run`） |
+| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`。最終の検証は既定の ON）の Run（`agent_evaluation_cli run`） |
 
 ### 条件
 

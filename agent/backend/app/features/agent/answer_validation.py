@@ -79,6 +79,8 @@ ANSWER_VALIDATION_NAME = "回答の検証"
 VALIDATE_ANSWER_TOOL = "rag_validate_answer"
 # 検証に渡す根拠の参照の上限（`rag_validate_answer` の契約の maxItems）。
 MAX_VALIDATION_EVIDENCE = 30
+# 同じ会話の前のターンから引き継ぐ根拠の参照の上限（接続ごと。#1837）。
+MAX_CARRIED_EVIDENCE = 10
 # 契約の上限（質問は切り詰めて渡す。回答は切り詰めると別の文の検証になるため、超えたら検証しない）。
 MAX_QUERY_CHARS = 8000
 MAX_ANSWER_CHARS = 20000
@@ -249,6 +251,8 @@ class _GroupRef:
     evidence: EvidenceText = field(default_factory=EvidenceText)
     # 文書・章節をまとめて読んだ（rag_read_document / rag_read_section）だけの根拠か。
     bulk_read: bool = True
+    # 同じ会話の前のターンの最終の検証で、回答の段落を裏付けた根拠か（#1837）。
+    carried: bool = False
 
 
 def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
@@ -257,8 +261,9 @@ def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
     1. 回答が `chunk_id` を書いた根拠（新しい呼び出しから順）
     2. 回答に固有の特徴（ID・コード・引用・見出し・同じ並び・「文書名＋第 N 章」の章節の参照）で
        当たった根拠（重みの大きい順）
-    3. 残りの検索・本文の読み取り（rag_read_source）の根拠（当たりの重み、新しい呼び出しの順）
-    4. 残りの、文書・章節をまとめて読んだ chunk（全文を読んだ台帳の行が上限を埋めない）
+    3. 同じ会話の前のターンで回答の段落を裏付けた根拠（#1837。新しいターンから順）
+    4. 残りの検索・本文の読み取り（rag_read_source）の根拠（当たりの重み、新しい呼び出しの順）
+    5. 残りの、文書・章節をまとめて読んだ chunk（全文を読んだ台帳の行が上限を埋めない）
     """
     if not answer:
         return [item.ref for item in refs]
@@ -272,13 +277,61 @@ def _ordered(refs: list[_GroupRef], answer: str) -> list[tuple[str, str]]:
         distinct, weight = weights[index]
         if distinct:
             return (1, -weight, item.order)
-        return (3 if item.bulk_read else 2, -weight, item.order)
+        if item.carried:
+            return (2, 0.0, item.order)
+        return (4 if item.bulk_read else 3, -weight, item.order)
 
     return [refs[index].ref for index in sorted(range(len(refs)), key=key)]
 
 
+def carried_evidence(validations: list[JsonObject]) -> dict[str, list[JsonObject]]:
+    """同じ会話の前のターンの最終の検証で、回答の段落を裏付けた（`supported`）根拠の参照（#1837）。
+
+    `validations` は前のターンの最終の検証の成果物の内容（古い順。`thread_answer_validations`）。
+    返すのは MCP 接続（function tool の名前の接続の部分）ごとの参照で、新しいターンから順、接続の
+    中で重複なし、最大 `MAX_CARRIED_EVIDENCE` 件。会話の続きでモデルが前のターンの事実を言い直すと、
+    今のターンの根拠だけでは裏付けが無く外れるため、前のターンで実際に確かめた根拠も検証に渡す
+    （本文は RAG が今の利用者の権限・データの範囲・版で読み直す。削除・改版されていれば
+    `missing_evidence` / `stale_evidence` になる）。判定が出なかったターン・接続は使わない。
+    """
+    carried: dict[str, list[JsonObject]] = {}
+    for content in reversed(validations):
+        if content.get("status") != STATUS_COMPLETED:
+            continue
+        connections = content.get("connections")
+        for connection in connections if isinstance(connections, list) else []:
+            if not isinstance(connection, dict) or connection.get("status") != STATUS_COMPLETED:
+                continue
+            prefix = _connection_prefix(str(connection.get("tool_name") or ""))
+            result = connection.get("result")
+            evidence = connection.get("evidence")
+            if prefix is None or not isinstance(result, dict) or not isinstance(evidence, list):
+                continue
+            # 判定の chunk_id は検証に渡した根拠のもの（文書の id は渡した参照から引く）。
+            documents = {
+                ref.get("chunk_id"): ref.get("document_id")
+                for ref in evidence
+                if isinstance(ref, dict)
+            }
+            refs = carried.setdefault(prefix, [])
+            claims = result.get("claims")
+            for claim in claims if isinstance(claims, list) else []:
+                if not isinstance(claim, dict) or claim.get("status") != "supported":
+                    continue
+                chunk_id = claim.get("chunk_id")
+                document_id = documents.get(chunk_id)
+                if not isinstance(chunk_id, str) or not isinstance(document_id, str):
+                    continue
+                ref = {"document_id": document_id, "chunk_id": chunk_id}
+                if ref not in refs and len(refs) < MAX_CARRIED_EVIDENCE:
+                    refs.append(ref)
+    return {prefix: refs for prefix, refs in carried.items() if refs}
+
+
 def run_evidence_groups(
-    steps: list[RunStep], answer: str = ""
+    steps: list[RunStep],
+    answer: str = "",
+    carried: dict[str, list[JsonObject]] | None = None,
 ) -> list[tuple[str, list[JsonObject]]]:
     """その Run で RAG が返した根拠の参照を、MCP 接続ごとにまとめる（#1277）。
 
@@ -291,6 +344,9 @@ def run_evidence_groups(
     根拠が古い呼び出しにあり、上限で切ると回答が使った根拠が検証に入らず、正しい結論が「確かめ
     られない」になる）。回答が `chunk_id` を書いた根拠、回答の本文と当たった根拠（`evidence_match`）
     の順に先にし、文書・章節をまとめて読んだ chunk で回答に当たらないものは検索の根拠の後ろに置く。
+    `carried`（`carried_evidence`。#1837）を渡すと、その Run で根拠を返した接続には、同じ会話の前の
+    ターンで回答の段落を裏付けた根拠も入れる（回答に当たる根拠の後ろ、残りの検索の根拠の前）。
+    その Run で根拠を返さなかった接続には入れない（前のターンの根拠だけでは検証を始めない）。
     """
     groups: dict[str, tuple[str, dict[tuple[str, str], _GroupRef]]] = {}
     for step in reversed(steps):
@@ -315,9 +371,15 @@ def run_evidence_groups(
             if tool not in BULK_READ_TOOLS:
                 item.bulk_read = False
     grouped: list[tuple[str, list[JsonObject]]] = []
-    for tool_name, refs in groups.values():
+    for prefix, (tool_name, refs) in groups.items():
         if not refs:
             continue
+        for carried_ref in (carried or {}).get(prefix, []):
+            key = (str(carried_ref["document_id"]), str(carried_ref["chunk_id"]))
+            item = refs.get(key)
+            if item is None:
+                item = refs[key] = _GroupRef(ref=key, order=len(refs))
+            item.carried = True
         ordered = _ordered(list(refs.values()), answer)[:MAX_VALIDATION_EVIDENCE]
         grouped.append(
             (tool_name, [{"document_id": ref[0], "chunk_id": ref[1]} for ref in ordered])

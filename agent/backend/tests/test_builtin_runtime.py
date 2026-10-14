@@ -928,14 +928,14 @@ _BARE_RAG_TOOL = re.compile(
 
 @pytest.fixture
 def business_agent(monkeypatch: MonkeyPatch) -> Iterator[Any]:
-    """組み込みのスキル business_rag_research を持つ業務 Agent（fake の RAG の MCP）。"""
+    """組み込みのスキル business-rag-research を持つ業務 Agent（fake の RAG の MCP）。"""
     mcp = fake_product_mcp(monkeypatch)
     runtime_repository.create_agent(
         AgentProfile(
             id=BUSINESS_AGENT_ID,
             name="業務支援の Agent",
             instructions="rag_search と rag_retrieve_evidence には profile を必ず渡す。",
-            skill_ids=["business_rag_research"],
+            skill_ids=["business-rag-research"],
         )
     )
     try:
@@ -981,7 +981,7 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
     assert "rag__rag_lookup_guides" in instructions
     assert _BARE_RAG_TOOL.search(instructions) is None, instructions
     # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
-    skill = skill_registry.get("business_rag_research")
+    skill = skill_registry.get("business-rag-research")
     assert skill is not None and "`rag_search` の `query`" in skill.instructions
 
 

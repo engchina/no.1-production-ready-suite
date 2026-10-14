@@ -10,6 +10,8 @@
 `PLATFORM_*` と組み込み SYSTEM_ADMIN ロールを先に冪等に用意してから、`AGENT_*` の不足分と
 未適用の migration を当てる。データを消す migration は `--allow-destructive` が無ければ止める
 （画面の確認ダイアログと同じ。#619）。何度実行してもよい。ユーザーは作らない。
+保存済みのデータを書き換えたとき（出力の `rewritten_saved_data`）は、動いている backend のメモリが
+古いままなので、出力の `restart_required` のプロセスを再起動する（#1844）。
 
 `--check` は配備の最後の確認（platform/deploy/suite-health.sh。#1648）が使う。DDL を実行せずに状態を
 読み、ready なら 0、そうでなければ（読めないときも）1 で終わり、1 行の要約を標準出力に出す。
@@ -85,8 +87,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         print(_stable_json({"error": error, "ok": False}))  # noqa: T201
         return 1
+    if not args.status and result.get("rewritten_saved_data"):
+        result = {**result, "restart_required": _restart_required(result.get("restart_required"))}
     print(_stable_json({"data": result, "ok": True}))  # noqa: T201
     return 0
+
+
+def _restart_required(current: object) -> dict[str, object] | None:
+    """保存済みのデータを書き換えたときの再起動の案内に、動いている backend を加える（#1844）。
+
+    CLI は別のプロセスなので、動いている backend のメモリを読み直せない（配備の
+    `init_script.sh` は CLI の後に backend を再起動する）。
+    """
+    from app.features.agent.storage_bootstrap import BACKEND_PROCESS, SavedDataReload
+
+    processes = [BACKEND_PROCESS]
+    if isinstance(current, Mapping):
+        processes += [str(item) for item in current.get("processes") or [] if item not in processes]
+    return SavedDataReload(restart_processes=tuple(processes)).restart_required()
 
 
 def _check() -> int:

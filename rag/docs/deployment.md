@@ -780,7 +780,7 @@ embedding・ベクトル索引は作り直さない。MCP の `rag_outline` は�
    `rag_read_section`）にその文書の分だけ作る。根拠の `section` は対応のある文書にだけ付くので、すぐに全部の文書に付けたい
    ときは、章節の抽出規則の画面（検索・回答設定 > 文書解析の「解析後の処理」）で規則を保存し直す（すべての文書の対応を
    バックグラウンドで作り直す。chunk・embedding は変えない）。
-3. Agent を再起動する（スキル `business_rag_research` が `rag_read_section` を使う。MCP 接続 `rag` のツールの一覧は
+3. Agent を再起動する（スキル `business-rag-research` が `rag_read_section` を使う。MCP 接続 `rag` のツールの一覧は
    接続ごとに読み直す）。
 
 ## 既存環境の更新手順（#1430 品質評価の job の上限を回答の回数に比例させる）

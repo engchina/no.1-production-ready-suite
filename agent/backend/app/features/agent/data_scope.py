@@ -15,7 +15,8 @@
 - 複数: 範囲外の値はツールのエラーにして呼び先へ送らない。値が無ければ Agent の既定を使う
   （NL2SQL の ``"default"`` には落とさない）。
 - 一覧（``nl2sql_list_profiles`` / ``rag_list_search_answer_profiles``）と推薦
-  （``nl2sql_recommend_profile``）の結果は範囲で絞る（推薦が範囲外なら ``null``）。
+  （``nl2sql_recommend_profile`` / ``rag_recommend_search_answer_profile``。#1850）の結果は範囲で
+  絞る（推薦が範囲外なら ``null``）。
 - RAG で範囲を設定したら、モデルが渡す ``knowledge_base_ids`` は使わない（プロファイルの範囲を
   ナレッジベースの直接の指定で迂回させない。schema からも除く）。
 - Run の step（``ToolCall.data_scope``）に、使ったプロファイルと「埋めた / 上書きした / 拒否した /
@@ -117,6 +118,8 @@ _LIST_TOOLS: dict[str, dict[str, _ListTool]] = {
 }
 _RECOMMEND_TOOLS: dict[str, frozenset[str]] = {
     NL2SQL_CONNECTION_ID: frozenset({"nl2sql_recommend_profile"}),
+    # RAG の推薦も同じ形（question・profile_ids → recommended_profile_id・candidates。#1850）。
+    RAG_CONNECTION_ID: frozenset({"rag_recommend_search_answer_profile"}),
 }
 
 ScopeAction = Literal["filled", "overridden", "kept", "rejected", "filtered"]
@@ -455,7 +458,7 @@ def scope_instructions(scopes: AgentDataScopes | None, exposed: list[str]) -> st
             extra = ""
         else:
             argument = "search_answer_profile_id"
-            chooser = "rag_list_search_answer_profiles"
+            chooser = "rag_list_search_answer_profiles / rag_recommend_search_answer_profile"
             extra = "knowledge_base_ids は使えない（検索・回答プロファイルの参照先を検索する）。"
         if len(scope.profile_ids) == 1:
             lines.append(

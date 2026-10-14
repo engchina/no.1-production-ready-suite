@@ -110,6 +110,7 @@ from app.schemas.search_answer_profile import (
     SearchAnswerProfileKnowledgeBaseRef,
     SearchAnswerProfileStatus,
     SearchAnswerProfileSummary,
+    SearchAnswerProfileTarget,
 )
 
 logger = logging.getLogger(__name__)
@@ -2967,6 +2968,121 @@ class OracleClient:
                 "missing_knowledge_base_count": len(missing_ids),
             }
         )
+
+    async def search_answer_profile_targets(
+        self,
+        *,
+        search_answer_profile_ids: Sequence[str] | None = None,
+    ) -> list[SearchAnswerProfileTarget]:
+        """推薦の候補にする ACTIVE の検索・回答プロファイルと、検索できる参照 KB(#1850)。
+
+        プロファイルは利用者が使えるものだけ(監査 context の範囲)。参照 KB は ACTIVE で、利用者が
+        使える KB だけにする(検索の範囲と同じ)。`search_answer_profile_ids` を渡すとその中に絞る。
+        """
+        if search_answer_profile_ids is not None and not search_answer_profile_ids:
+            return []
+        stored = await self._list_search_answer_profiles_with_oracle(
+            status=SearchAnswerProfileStatus.ACTIVE,
+            query=None,
+            limit=None,
+            offset=0,
+            search_answer_profile_ids=search_answer_profile_ids,
+        )
+        referenced = {
+            view.id: parse_search_answer_profile_config(
+                view.profile_config
+            ).normalized_knowledge_base_ids()
+            for view in stored
+        }
+        all_ids = _unique_optional_sequence(
+            [knowledge_base_id for ids in referenced.values() for knowledge_base_id in ids]
+        )
+        refs = await self._resolve_knowledge_base_refs(all_ids) if all_ids else []
+        allowed = current_audit_request_context().allowed_knowledge_base_ids
+        usable = {
+            ref.id: KnowledgeBaseRef(id=ref.id, name=ref.name)
+            for ref in refs
+            if ref.status == KnowledgeBaseStatus.ACTIVE and (allowed is None or ref.id in allowed)
+        }
+        return [
+            SearchAnswerProfileTarget(
+                id=view.id,
+                name=view.name,
+                description=view.description,
+                knowledge_bases=[
+                    usable[knowledge_base_id]
+                    for knowledge_base_id in _unique_optional_sequence(referenced[view.id])
+                    if knowledge_base_id in usable
+                ],
+            )
+            for view in stored
+        ]
+
+    async def knowledge_base_ids_by_retrieved_document(
+        self,
+        document_ids: Sequence[str],
+        knowledge_base_ids: Sequence[str],
+    ) -> dict[str, set[str]]:
+        """検索で当たった文書(chunk の document_id)ごとに、その文書を検索の範囲に入れる KB(#1850)。
+
+        検索の KB の絞り込み(`_oracle_retrieval_where`)と同じく、文書が直接属する KB に加えて、KB に
+        属する重複の文書が正本(当たった文書)の chunk を使うときは、その重複の KB も数える。
+        `knowledge_base_ids` の中の ACTIVE で利用者が使える KB だけを返す。
+        """
+        documents = _unique_optional_sequence(document_ids)
+        knowledge_bases = _unique_optional_sequence(knowledge_base_ids)
+        if not documents or not knowledge_bases:
+            return {}
+        document_sql, document_binds = _oracle_in_predicate(
+            "d.document_id", "hit_document_id", documents
+        )
+        knowledge_base_sql, knowledge_base_binds = _oracle_in_predicate(
+            "dkb.knowledge_base_id", "hit_knowledge_base_id", knowledge_bases
+        )
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT d.document_id, dkb.knowledge_base_id
+            FROM rag_documents d
+            JOIN rag_document_knowledge_bases dkb
+              ON dkb.document_id = d.document_id
+            JOIN rag_knowledge_bases kb
+              ON kb.knowledge_base_id = dkb.knowledge_base_id
+            WHERE {document_sql}
+              AND {knowledge_base_sql}
+              AND kb.status = 'ACTIVE'
+              AND {document_access_sql}
+              AND {knowledge_base_access_sql}
+            UNION
+            SELECT d.document_id, dkb.knowledge_base_id
+            FROM rag_documents d
+            JOIN rag_documents duplicate_d
+              ON duplicate_d.duplicate_of_document_id = d.document_id
+            JOIN rag_document_knowledge_bases dkb
+              ON dkb.document_id = duplicate_d.document_id
+            JOIN rag_knowledge_bases kb
+              ON kb.knowledge_base_id = dkb.knowledge_base_id
+            WHERE {document_sql}
+              AND {knowledge_base_sql}
+              AND kb.status = 'ACTIVE'
+              AND {document_access_sql}
+              AND {duplicate_document_access_sql}
+              AND {duplicate_reuse_sql}
+              AND {knowledge_base_access_sql}
+            """,
+                document_sql=document_sql,
+                knowledge_base_sql=knowledge_base_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                duplicate_document_access_sql=_oracle_access_predicate_sql(alias="duplicate_d"),
+                duplicate_reuse_sql=_duplicate_reuses_canonical_sql(include_superseded=False),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({**document_binds, **knowledge_base_binds}),
+        )
+        result: dict[str, set[str]] = {}
+        for row in rows:
+            result.setdefault(str(row["document_id"]), set()).add(str(row["knowledge_base_id"]))
+        return result
 
     async def list_access_target_ids(self) -> tuple[set[str], set[str]]:
         """tenant 内の全検索・回答プロファイル・全ナレッジベースの ID（アーカイブ済みを含む）。

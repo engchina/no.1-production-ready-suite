@@ -284,7 +284,7 @@ done
 
 ## 業務 Agent と比べる（D）
 
-D は、同じナレッジベースを参照する検索・回答プロファイルを使う業務 Agent（スキル `business_rag_research`）の Run です。
+D は、同じナレッジベースを参照する検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run です。
 この評価セットには業務ガイドが無いため（`evaluation_corpus_cli --guides` は業務ガイドの無いファイルを受け付けない）、
 画面の「検索・回答プロファイル」で、取り込んだナレッジベース（`/tmp/multi-hop.resolved.json` の
 `knowledge_base_ids`）だけを参照するプロファイルを作って公開し、その ID を渡します。

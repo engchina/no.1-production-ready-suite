@@ -163,8 +163,20 @@ for (const viewport of VIEWPORTS) {
       name: "経理の評価",
       description: "",
       cases: [
-        { question: "経費精算の締め日はいつですか？", expected: "毎月 25 日", expected_tools: ["rag_search"], source_run_id: null },
-        { question: "今月の売上の合計はいくらですか？", expected: "合計金額（円）", expected_tools: [], source_run_id: null },
+        {
+          question: "経費精算の締め日はいつですか？",
+          expected: "毎月 25 日",
+          expected_tools: ["rag_search"],
+          expected_tools_in_order: false,
+          source_run_id: null,
+        },
+        {
+          question: "今月の売上の合計はいくらですか？",
+          expected: "合計金額（円）",
+          expected_tools: [],
+          expected_tools_in_order: false,
+          source_run_id: null,
+        },
       ],
     });
 
@@ -230,6 +242,67 @@ for (const viewport of VIEWPORTS) {
       await page.screenshot({ path: testInfo.outputPath(`evaluation-detail-${viewport.name}-${theme}.png`) });
     });
   }
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`期待するツールの順を指定でき、順の違い・判定できなかったケースを誤りと分けて出す (${viewport.name})`, async ({
+    page,
+    mockApi,
+  }, testInfo) => {
+    // #1845: ツールの順（先頭が最初に呼ぶツール）と、判定の打ち切りの再試行の後の「判定できなかった」。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedFinishedJobs(mockApi);
+    const [latest] = mockApi.state.evaluations;
+    const results = latest.results as Record<string, unknown>[];
+    results[0] = {
+      ...results[0],
+      case: { ...SET.cases[0], expected_tools: ["rag_retrieve_evidence", "rag_search"], expected_tools_in_order: true },
+      tool_calls: ["rag__rag_search", "rag__rag_retrieve_evidence"],
+      tool_selection_correct: false,
+      tool_order_correct: false,
+    };
+    results[2] = {
+      ...results[2],
+      status: "judge_failed",
+      judgement: null,
+      judge_attempts: 2,
+      error: "判定のモデルの応答が、2 回送っても出力の上限で止まりました。回答の誤りではなく、判定できなかったケースです。",
+    };
+    latest.summary = evaluationSummary(results);
+    await page.goto("/evaluation");
+
+    const summary = page.getByTestId("evaluation-summary");
+    // 判定できなかったケースは合格率の分母から除く（正しい 1 件 / 判定した 2 件）。
+    await expect(summary).toContainText("50%");
+    await expect(summary).toContainText("うち判定できなかった 1 件（合格率から除く）");
+    const table = page.getByRole("table", { name: "ケース別結果" });
+    await expect(table.getByRole("row", { name: /expense-deadline/ })).toContainText("順が違う");
+    await expect(table.getByRole("row", { name: /register/ })).toContainText("判定できなかった");
+    await expectNoHorizontalOverflow(page);
+
+    await table.getByRole("button", { name: /取引先を登録して/ }).click();
+    const detail = page.getByRole("dialog", { name: "ケースの詳細" });
+    await expect(detail.getByTestId("evaluation-judge-retried")).toContainText("2 回送りました");
+    await expect(detail).toContainText("回答の誤りではなく、判定できなかったケースです。");
+    await page.screenshot({ path: testInfo.outputPath(`evaluation-unjudged-${viewport.name}.png`) });
+    await detail.getByRole("button", { name: "閉じる" }).first().click();
+    await table.getByRole("button", { name: /経費精算の締め日はいつですか？/ }).click();
+    await expect(page.getByRole("dialog", { name: "ケースの詳細" })).toContainText("（この順に呼ぶ）");
+
+    // エディタで順の指定を切り替えて保存する。
+    await page.goto(`/evaluation?id=${SET.id}`);
+    const orderSwitch = page.getByTestId("evaluation-case-1-tools-order");
+    await expect(orderSwitch).toHaveAttribute("aria-checked", "false");
+    await expect(orderSwitch).toHaveAccessibleName("書いた順に呼ぶ");
+    await expect(orderSwitch).toHaveAccessibleDescription(/先頭が最初に呼ぶツール/);
+    await orderSwitch.click();
+    await expect(orderSwitch).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("button", { name: "保存", exact: true }).first().click();
+    await expect(page.getByText("評価セットを保存しました")).toBeVisible();
+    const saved = mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)?.body as { cases: Record<string, unknown>[] };
+    expect(saved.cases.map((item) => item.expected_tools_in_order)).toEqual([true, false, false]);
+    await expectNoHorizontalOverflow(page);
+  });
 }
 
 for (const viewport of VIEWPORTS) {
