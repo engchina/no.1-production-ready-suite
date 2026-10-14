@@ -11,7 +11,6 @@ export function AccountApiKeysPage() {
   return (
     <MyApiKeysPage
       api={myApiKeysApi}
-      product="rag"
       endpoints={mcpEndpoints("rag", APP_BASE_PATH, window.location.origin)}
     />
   );
