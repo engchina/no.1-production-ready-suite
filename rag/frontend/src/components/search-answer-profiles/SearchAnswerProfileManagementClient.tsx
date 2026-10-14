@@ -691,7 +691,7 @@ function SearchAnswerProfileEditor({
   });
 
   const pending = create.isPending || update.isPending;
-  // 保存の失敗は欄に結び付かないため、ヘッダーの直下の 1 か所だけに出す（messaging.md §3.3.1。#585）。
+  // 保存の失敗は欄に結び付かないため、確定の行の直上の 1 か所だけに出す（messaging.md §3.3.1。#585）。
   const saveMutation = mode === "edit" ? update : create;
   const saveError = saveMutation.isError
     ? saveMutation.error instanceof ApiError

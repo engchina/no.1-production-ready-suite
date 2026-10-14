@@ -111,7 +111,7 @@ export function KnowledgeBaseEditor({
       : t(initial ? "knowledgeBases.error.update" : "knowledgeBases.error.create")
     : null;
   // 同じ名前の KB がある（409）ときは、作成・更新とも名前の欄の下に理由を出す。ほかの失敗は欄に結び付かない
-  // ため、ヘッダーの直下の 1 か所だけに出す（messaging.md §3.3.1。#585）。
+  // ため、確定の行の直上の 1 か所だけに出す（messaging.md §3.3.1。#585 / #1786）。
   const conflict = mutation.error instanceof ApiError && mutation.error.status === 409;
   const nameError =
     (!isDefault && touched.name ? validateKnowledgeBaseName(draft.name) : null) ??
