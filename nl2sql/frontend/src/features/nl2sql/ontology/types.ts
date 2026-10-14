@@ -476,6 +476,8 @@ export interface SqlSemanticItem {
   function_name?: string;
   clause?: string;
   is_cte?: boolean;
+  /** SELECT の項目が `*` / `別名.*` の列展開か（`COUNT(*)` は含まない。projections だけが持つ）。 */
+  contains_wildcard?: boolean;
   /**
    * SQL で owner / 表（または別名）/ 列名が二重引用符で囲まれていたか。`SALES."Mixed_Case"` と
    * 大文字の同名表 `SALES.MIXED_CASE` を区別して接地する（#573）。旧 artifact には無い。

@@ -401,9 +401,53 @@ function columnIdentitiesFromItem(item: SqlSemanticItem, aliases: Map<string, Ob
   return dedupe(
     [
       ...identities,
-      ...[...values].map((value) => columnIdentityFromPath(value, aliases)),
+      // 式の中の列展開（旧 artifact の referenced_columns の `dept.*` 等）は列の参照ではない（#1787）。
+      ...[...values].filter((value) => !isWildcardPath(value)).map((value) => columnIdentityFromPath(value, aliases)),
     ].filter((value): value is ColumnIdentity => Boolean(value?.columnName))
   );
+}
+
+/** 識別子パスの末尾が `*`（`*`・`dept.*`・`SALES.ORDERS.*`）か。`COUNT(*)`・`a * b` は含まない。 */
+function isWildcardPath(value: string | undefined | null): boolean {
+  return /^(?:(?:"(?:[^"]|"")*"|[^\s."*()]+)\s*\.\s*)*\*$/u.test(String(value ?? "").trim());
+}
+
+/**
+ * SQL の要素が列展開（`*` / `別名.*` / `owner.表.*`）か（#1787）。
+ * 列展開は「その表の全列」で、列名 `*` の列の参照ではない。列の接地の対象にせず、
+ * 表の接地として扱う（表が接地できなければ、表のループが表の未接地として出す）。
+ */
+function isWildcardItem(item: SqlSemanticItem): boolean {
+  if (item.contains_wildcard) return true;
+  if (String(item.name ?? "").trim() === "*" || String(item.column ?? "").trim() === "*") return true;
+  return isWildcardPath(item.expression_sql || item.expression);
+}
+
+/** 列展開の修飾（`dept.*` の `dept`）が指す表。修飾が無い `*` は、その scope の FROM の表すべて。 */
+function wildcardObjects(
+  item: SqlSemanticItem,
+  aliases: Map<string, ObjectIdentity>,
+  tableScope: TableScope
+): ObjectIdentity[] {
+  let qualifier: string[];
+  if (String(item.name ?? "").trim() === "*" && item.name_quoted !== undefined) {
+    // backend の columns[] は owner / 表（別名）ごとに引用の有無を返す（#573）。
+    qualifier = [
+      sqlIdentifierToken(item.owner, Boolean(item.owner_quoted)),
+      sqlIdentifierToken(item.table, Boolean(item.table_quoted)),
+    ].filter(Boolean);
+  } else if (item.table) {
+    qualifier = [...referenceTokens(item.owner), ...referenceTokens(item.table)];
+  } else {
+    const path = String(item.expression_sql || item.expression || "").trim();
+    qualifier = isWildcardPath(path) ? referenceTokens(path.replace(/\s*\.?\s*\*$/u, "")) : [];
+  }
+  if (qualifier.length === 0) return scopeObjectsForItem(tableScope, item);
+  const direct = aliases.get(qualifier.slice(-2).join(".")) ?? aliases.get(qualifier[qualifier.length - 1] ?? "");
+  if (qualifier.length === 1) return [direct ?? { owner: "", objectName: qualifier[0] ?? "" }];
+  const owner = qualifier[qualifier.length - 2] ?? "";
+  const objectName = qualifier[qualifier.length - 1] ?? "";
+  return [direct && direct.owner === owner ? direct : { owner, objectName }];
 }
 
 function enrichColumnNodeIds(index: GroundingIndex, columnEntries: ColumnEntry[]): string[] {
@@ -587,8 +631,25 @@ export function groundSqlSemanticGraphOnOntologyGraph(
     matchedTables.push({ sql: label, ontologyNodeIds: nodeIds, ontologyLabels: nodeLabels(index, nodeIds) });
   }
 
+  // 列展開（`*` / `別名.*`）は「その表の全列」。表が接地できたら、グラフでその表の列を
+  // 使われた列として示す（未接地の要素にも、別の接地の要素にもしない。#1787）。
+  const wildcardItems = [...(sqlGraph.projections ?? []), ...sqlGraph.columns]
+    .map(normalizeSqlItem)
+    .filter(isWildcardItem);
+  for (const item of wildcardItems) {
+    for (const object of wildcardObjects(item, aliases, tableScope)) {
+      const objectEntries = matchingObjectEntries(index, object);
+      if (objectEntries.length === 0) continue;
+      objectEntries.forEach((entry) => highlightedNodes.add(entry.node.id));
+      index.columnEntries
+        .filter((entry) => objectMatches(entry, object))
+        .forEach((entry) => highlightedNodes.add(entry.node.id));
+    }
+  }
+
   for (const rawItem of sqlItemsForColumnGrounding(sqlGraph)) {
     const item = normalizeSqlItem(rawItem);
+    if (isWildcardItem(item)) continue;
     const label = itemLabel(item);
     const scopeObjects = scopeObjectsForItem(tableScope, item);
     const columnEntries = dedupe(
