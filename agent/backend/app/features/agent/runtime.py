@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -67,6 +67,7 @@ from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
     ToolPolicy,
+    ToolPolicyDecision,
     ToolResult,
     mcp_base_tool_name,
     tool_registry,
@@ -398,6 +399,28 @@ EVALUATION_DRY_RUN_MESSAGE = (
 )
 # 評価の Run の印（`metadata`）。組み込み Runtime は承認が要るツールを実行せずに続ける。
 EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
+# 自動実行から作った Run の印（`metadata`。#784）。無人の実行なので、組み込み Runtime は承認が
+# 要るツールを呼ばずに続ける（#1813。承認待ちで止めない）。
+AUTOMATION_ID_KEY = "automation_id"
+# 自動実行の Run で、承認が要るため使わなかったツールの step の error_code（#1813）。
+AUTOMATION_APPROVAL_SKIPPED_CODE = "automation.approval_required"
+
+
+def automation_approval_message(tool_name: str) -> str:
+    """自動実行の Run で承認が要るツールを呼んだときにモデルへ返す文（#1813）。"""
+    return (
+        f"自動実行では承認の要るツール（{tool_name}）を使えません。"
+        "管理者がツールのポリシーで許可すると使えます。"
+        "このツールで確かめる予定だったことは、回答の「確かめられなかった点」に書き、"
+        "ここまでの情報で回答を完成させてください。"
+    )
+
+
+def is_automation_run(metadata: Mapping[str, Any]) -> bool:
+    """自動実行（スケジュール・今すぐ実行）から作った Run か（#1813）。"""
+    return bool(metadata.get(AUTOMATION_ID_KEY))
+
+
 # Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
 # 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
 # ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
@@ -408,7 +431,7 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         EVALUATION_DRY_RUN_KEY,
         "evaluation_job_id",
         "evaluation_case_id",
-        "automation_id",
+        AUTOMATION_ID_KEY,
         "automation_trigger",
         "source",
         "mcp_session",
@@ -726,6 +749,8 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> list[ThreadSummary]: ...
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
@@ -1465,6 +1490,47 @@ class AgentRuntimeRepository:
 
         モデルがどのツールをどの引数で呼ぼうとしたかを、品質評価のツールの選択の判定に使う。
         """
+        self._record_unexecuted_steps(
+            run_id,
+            calls,
+            error=lambda _call: EVALUATION_DRY_RUN_MESSAGE,
+            error_code="evaluation.dry_run",
+            event=lambda call: (
+                f"評価中のため、承認が要るツール {call.name} を実行しませんでした。",
+                {"tool_name": call.name, "evaluation_dry_run": True},
+            ),
+        )
+
+    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None:
+        """自動実行の Run で、承認が要るため使わなかったツールの呼び出しを残す（#1813）。
+
+        step（監査ログのツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
+        """
+        self._record_unexecuted_steps(
+            run_id,
+            calls,
+            error=lambda call: automation_approval_message(call.name),
+            error_code=AUTOMATION_APPROVAL_SKIPPED_CODE,
+            event=lambda call: (
+                f"自動実行のため、承認が要るツール {call.name} を使いませんでした。",
+                {
+                    "tool_name": call.name,
+                    "severity": "warning",
+                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
+                },
+            ),
+        )
+
+    def _record_unexecuted_steps(
+        self,
+        run_id: str,
+        calls: Sequence[ToolCall],
+        *,
+        error: Callable[[ToolCall], str],
+        error_code: str,
+        event: Callable[[ToolCall], tuple[str, JsonObject]],
+    ) -> None:
+        """承認が要るため実行しなかったツールの呼び出しを、取り消しの step とイベントに残す。"""
         now = _now()
         with self._lock:
             run = self._require_run(run_id)
@@ -1477,8 +1543,9 @@ class AgentRuntimeRepository:
                         tool_result=ToolResult(
                             name=call.name,
                             success=False,
-                            error=EVALUATION_DRY_RUN_MESSAGE,
-                            error_code="evaluation.dry_run",
+                            error=error(call),
+                            error_code=error_code,
+                            policy_decision=ToolPolicyDecision.ASK,
                             started_at=now,
                             completed_at=now,
                         ),
@@ -1486,14 +1553,22 @@ class AgentRuntimeRepository:
                         completed_at=now,
                     )
                 )
-                self._append_event(
-                    run,
-                    RunEventType.RUNTIME_EVENT,
-                    f"評価中のため、承認が要るツール {call.name} を実行しませんでした。",
-                    {"tool_name": call.name, "evaluation_dry_run": True},
-                )
+                message, payload = event(call)
+                self._append_event(run, RunEventType.RUNTIME_EVENT, message, payload)
             run.updated_at = now
             self._persist_locked()
+
+    def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]:
+        """Run の状態をまとめて引く（自動実行の一覧の「前回」。#1812）。
+
+        Run を 1 件ずつ複製せずに、ロックを 1 回だけ取って状態だけを返す。無い Run は含めない。
+        """
+        with self._lock:
+            return {
+                run_id: run.status
+                for run_id in run_ids
+                if (run := self._runs.get(run_id)) is not None
+            }
 
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None:
         """モデルの利用量（再開を含めた累計）を Run に記録する（#772）。"""
