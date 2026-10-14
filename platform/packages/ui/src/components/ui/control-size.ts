@@ -7,6 +7,7 @@
  *   タッチ端末（pointer: coarse）では 3 段とも 44px（--control-height-touch）になるので、行の高さはそろったまま。
  * - 幅は値の長さで決める 5 段（xs 8rem / sm 12rem / md 20rem / lg 28rem / full）。sm（640px）未満は全幅。
  *   フォームの grid のセルに置く欄は指定しない（セルの幅いっぱい = full）。
+ *   段の幅は入力欄・選択欄そのものに付け、ラベルと必須の印は段の幅で折り返さず 1 行で出す（#1746）。
  *
  * Tailwind が dist からクラス名を拾えるように、クラスは文字列のまま書く（組み立てない）。
  */
@@ -41,7 +42,8 @@ export const CONTROL_MIN_HEIGHT_CLASS: Record<ControlSize, string> = {
 
 /**
  * 幅。sm（640px）未満は全幅、sm 以上は段の幅（親より広くはしない）。
- * 欄の外枠（ラベル・補足・エラーを含む）に付け、補足やエラーの文も欄の幅で折り返す。
+ * ラベルを持たない欄（`fieldControlClassName` のネイティブの `<select>` / `<input>`）と、ラベルを持つ欄の
+ * 入力欄・選択欄のボタンそのもの（`FIELD_CONTROL_WIDTH_CLASS`）に付ける。
  */
 export const FIELD_WIDTH_CLASS: Record<FieldWidth, string> = {
   xs: "w-full sm:w-[var(--field-width-xs)] sm:max-w-full",
@@ -54,6 +56,49 @@ export const FIELD_WIDTH_CLASS: Record<FieldWidth, string> = {
 /** 幅の段のクラス。指定が無ければ何も付けない（外枠はブロック要素なので親の幅いっぱい）。 */
 export function fieldWidthClass(width: FieldWidth | undefined) {
   return width ? FIELD_WIDTH_CLASS[width] : undefined;
+}
+
+/**
+ * ラベルを持つ欄（TextField・SelectField・SearchableSelectField・SecretField）の外枠の幅（#1746）。
+ * sm 以上は内容に合わせた幅（`w-fit`）= 「入力欄の段の幅」と「ラベルと必須の印の 1 行の幅」の広いほうで、
+ * ラベルを入力欄の幅で折り返さない。親より広くはしない（`sm:max-w-full`。入らないときだけラベルが折り返す）。
+ * sm 未満はどの段も全幅（ラベルは画面の幅に入らないときだけ折り返す）。
+ */
+export const FIELD_BOX_WIDTH_CLASS: Record<FieldWidth, string> = {
+  xs: "w-full sm:w-fit sm:max-w-full",
+  sm: "w-full sm:w-fit sm:max-w-full",
+  md: "w-full sm:w-fit sm:max-w-full",
+  lg: "w-full sm:w-fit sm:max-w-full",
+  full: "w-full",
+};
+
+/**
+ * ラベルを持つ欄の、入力欄・選択欄のボタンそのものの幅（#1746）。sm 以上は段の幅で、外枠（ラベルの幅まで広がる）
+ * より広くはしない。`full` は外枠の幅いっぱい（何も付けない）。
+ */
+export const FIELD_CONTROL_WIDTH_CLASS: Record<FieldWidth, string | undefined> = {
+  xs: "sm:w-[var(--field-width-xs)] sm:max-w-full",
+  sm: "sm:w-[var(--field-width-sm)] sm:max-w-full",
+  md: "sm:w-[var(--field-width-md)] sm:max-w-full",
+  lg: "sm:w-[var(--field-width-lg)] sm:max-w-full",
+  full: undefined,
+};
+
+/**
+ * 段の幅を持つ欄の補足・エラーなどの文（#1746）。外枠の幅を広げず（`contain: inline-size` で文の長さを外枠の幅の
+ * 計算に入れない）、外枠の幅（入力欄かラベルの広いほう）で折り返す。
+ */
+export const FIELD_TEXT_CONTAIN_CLASS = "sm:[contain:inline-size]";
+
+/**
+ * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら何も付けない
+ * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。
+ */
+export function labeledFieldWidthClasses(width: FieldWidth | undefined) {
+  if (!width || width === "full") {
+    return { box: fieldWidthClass(width), control: undefined, text: undefined };
+  }
+  return { box: FIELD_BOX_WIDTH_CLASS[width], control: FIELD_CONTROL_WIDTH_CLASS[width], text: FIELD_TEXT_CONTAIN_CLASS };
 }
 
 /**

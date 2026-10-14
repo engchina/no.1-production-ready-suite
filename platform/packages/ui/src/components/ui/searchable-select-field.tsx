@@ -14,7 +14,7 @@ import { createPortal } from "react-dom";
 import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 
-import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, fieldWidthClass } from "./control-size";
+import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, labeledFieldWidthClasses } from "./control-size";
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
@@ -403,8 +403,11 @@ export function SearchableSelectField({
         )
       : null;
 
+  const widthClasses = labeledFieldWidthClasses(width);
+
   return (
-    <div ref={rootRef} className={cn("space-y-1.5", fieldWidthClass(width), className)}>
+    // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。
+    <div ref={rootRef} className={cn("space-y-1.5", widthClasses.box, className)}>
       <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
         {/* ボタンは aria-required を持てない（axe の aria-allowed-attr）ので、タグを読み上げ対象に残す（#1595）。 */}
@@ -429,6 +432,7 @@ export function SearchableSelectField({
           "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
           error ? "border-danger-fg" : "border-border-control",
+          widthClasses.control,
           buttonClassName
         )}
       >
@@ -457,11 +461,11 @@ export function SearchableSelectField({
       </button>
       {popover}
       {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+        <p id={hintId} className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)}>
           {helper}
         </p>
       ) : null}
-      <FieldError id={errorId} message={error} />
+      <FieldError id={errorId} message={error} className={widthClasses.text} />
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 import { expectToastPlacement } from "./_helpers/toast";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
+import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -62,6 +63,8 @@ async function expectBoundedRowLimit(input: Locator, action: Locator) {
   await expect(input).toHaveAttribute("min", "1");
   await expect(input).toHaveAttribute("max", "100000");
   await expect(input).toHaveAttribute("step", "1");
+  // 欄は xs の幅でも、ラベル「取得件数上限」と「必須」は 1 行（#1746）。
+  await expectFieldLabelOnOneLine(input);
   // 取得件数上限は共有の TextField（#631）。補足・エラーは TextField の外（行のセルの幅）に置く（input → 枠の div → TextField → セル）。
   const label = input.locator("xpath=../../..");
   const helper = label.locator("p").first();
@@ -152,6 +155,8 @@ async function expectRowLimitActionRow(input: Locator, button: Locator) {
   expect(buttonBox).not.toBeNull();
   // 操作ボタンは取得件数上限（とヘルパーテキスト）の下の行。
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+  // 欄は xs の幅でも、ラベル「取得件数上限」と「必須」は 1 行（#1746）。
+  await expectFieldLabelOnOneLine(input);
   expect(buttonBox!.x).toBeLessThanOrEqual(inputBox!.x + 1);
   // 取得件数上限の欄（input → 枠の div → TextField → 補足を含むセル）の親が操作の行（#631 で共有の TextField に変わった）。
   const rowWidth = await input.evaluate((element) => element.parentElement!.parentElement!.parentElement!.parentElement!.clientWidth);
@@ -8347,6 +8352,36 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
   }
   await expect(adminSql.getByTestId("query-results-table")).toBeVisible();
   await expectMainScrolledBelowTop(page);
+});
+
+// #1746: 取得件数上限の欄は xs の幅（8rem）。ラベル「取得件数上限」と「必須」は欄の幅で折り返さず 1 行に出る。
+// 欄の幅は xs のまま（375px は全幅）で、ラベルが画面をはみ出さない。
+test("管理 SQL・SELECT SQL の取得件数上限のラベルは欄の幅で折り返さず 1 行に出る", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const narrow = (page.viewportSize()?.width ?? 1280) < 640;
+  for (const [path, testId] of [
+    ["/admin-sql", "nl2sql-admin-sql"],
+    ["/direct-sql", "nl2sql-direct-sql"],
+  ] as const) {
+    await page.goto(path);
+    const panel = page.getByTestId(testId);
+    const rowLimitInput = panel.getByRole("spinbutton", { name: "取得件数上限", exact: true });
+    await expect(rowLimitInput).toHaveValue("100");
+    await expectFieldLabelOnOneLine(rowLimitInput);
+    const inputWidth = (await rowLimitInput.boundingBox())!.width;
+    if (narrow) {
+      // 375px は全幅（行のセルの幅）。
+      const cellWidth = await rowLimitInput.evaluate((element) => element.parentElement!.parentElement!.parentElement!.clientWidth);
+      expect(inputWidth).toBeGreaterThan(cellWidth - 1);
+    } else {
+      // 欄の幅は xs（8rem）のまま。ラベルの幅に合わせて広げない。
+      const xsWidth = await page.evaluate(() => 8 * Number.parseFloat(getComputedStyle(document.documentElement).fontSize));
+      expect(Math.abs(inputWidth - xsWidth)).toBeLessThanOrEqual(1);
+      const label = page.locator(`label[for="${await rowLimitInput.getAttribute("id")}"]`);
+      expect((await label.boundingBox())!.width).toBeGreaterThan(xsWidth);
+    }
+    await rowLimitInput.locator("xpath=../../..").screenshot({ path: testInfo.outputPath(`${testId}-row-limit.png`) });
+  }
 });
 
 test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL を実行する", { tag: "@responsive" }, async ({ page }) => {

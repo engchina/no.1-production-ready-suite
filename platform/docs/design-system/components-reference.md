@@ -2350,7 +2350,7 @@ export type FieldWidth = "xs" | "sm" | "md" | "lg" | "full";  // 8 / 12 / 20 / 2
 
 // TextField / SearchField / SecretField / SelectField / SearchableSelectField に追加
 size?: ControlSize;   // 既定 md（SearchableSelectField は最小の高さ。長い名前は折り返して高くなる）
-width?: FieldWidth;   // 既定なし（親の幅いっぱい）。欄の外枠（ラベル・補足・エラーを含む）に付く
+width?: FieldWidth;   // 既定なし（親の幅いっぱい）。入力欄・選択欄のボタンに付き、外枠はラベルの 1 行の幅まで広がる（#1746）
 
 export function FieldActionRow(props: {
   children: ReactNode;   // 入力欄 1 つ（行の残りを埋める）
@@ -2363,8 +2363,13 @@ export function FieldActionRow(props: {
 export function fieldControlClassName(options?: { size?: ControlSize; width?: FieldWidth; className?: string }): string;
 export const CONTROL_HEIGHT_CLASS: Record<ControlSize, string>;      // h-[var(--control-height-*)]
 export const CONTROL_MIN_HEIGHT_CLASS: Record<ControlSize, string>;  // min-h-[var(--control-height-*)]
-export const FIELD_WIDTH_CLASS: Record<FieldWidth, string>;          // w-full sm:w-[var(--field-width-*)] sm:max-w-full
+export const FIELD_WIDTH_CLASS: Record<FieldWidth, string>;          // w-full sm:w-[var(--field-width-*)] sm:max-w-full（ラベルの無い欄・fieldControlClassName）
 export function fieldWidthClass(width?: FieldWidth): string | undefined;
+// ラベルを持つ欄（#1746）: 外枠 / 入力欄・選択欄のボタン / 補足・エラーの文
+export const FIELD_BOX_WIDTH_CLASS: Record<FieldWidth, string>;                // w-full sm:w-fit sm:max-w-full（full は w-full）
+export const FIELD_CONTROL_WIDTH_CLASS: Record<FieldWidth, string | undefined>; // sm:w-[var(--field-width-*)] sm:max-w-full（full は無し）
+export const FIELD_TEXT_CONTAIN_CLASS: string;                                 // sm:[contain:inline-size]（外枠を広げない）
+export function labeledFieldWidthClasses(width?: FieldWidth): { box?: string; control?: string; text?: string };
 ```
 
 | 決めたこと | 理由 |
@@ -2372,7 +2377,7 @@ export function fieldWidthClass(width?: FieldWidth): string | undefined;
 | 高さのトークンを `--control-height-sm` / `md` / `lg`（32 / 36 / 40px）に一本化し、`--button-height-*` と `--field-height` はその別名にした | ボタンと入力欄が同じ値を参照するので、同じ `size` なら必ず同じ高さになる |
 | タッチ端末（`pointer: coarse`）では 3 段とも 44px。**入力欄・選択欄も 44px**（以前は Button だけ） | タッチ端末で入力欄 36px・ボタン 44px とずれていた。Apple HIG 44pt / WCAG 2.5.5。画面幅ではなく入力方式で決める（マウスで狭いウィンドウを使うときは密度を保つ） |
 | `touchTarget`（マウス環境でも 44px）は製品で使わない。`TextField` の `touchTarget` は削除 | 「入力欄の横の操作は 44px」の規則で、同じ画面の入力欄 36px と 44px が混ざっていた |
-| 幅は欄の外枠に付け、sm 未満は `w-full`、sm 以上は段の幅と `max-w-full` | 補足・エラーの文も欄の幅で折り返す。狭い親の中で親より広くならない。375px では全幅（片手で押しやすい） |
+| 幅（段）は入力欄・選択欄のボタンに付け、外枠は sm 以上で `w-fit`（段の幅とラベルの 1 行の幅の広いほう）、sm 未満は `w-full`。外枠も入力欄も `max-w-full`。補足・エラーは `contain: inline-size` で外枠を広げない（#1746。以前は外枠に段の幅を付けていた） | 外枠に段の幅を付けると、`xs`（8rem）の「取得件数上限」のようにラベルと必須の印が段の幅で 2 行に折り返した。入力欄の幅は値の長さのまま、ラベルは 1 行で読める。補足・エラーの文は外枠の幅で折り返す。狭い親の中で親より広くならない。375px では全幅（片手で押しやすい） |
 | `FieldActionRow` は `items-end`。欄の helper / error は `footer` に出す | 上に見えるラベルがある欄でも、複数行の入力欄でも、ボタンの下端が入力欄の下端に合う。欄の下に文があると下端でそろえた操作が文の下端に合ってしまう |
 | `ClearActionButton` の `matchButtonHeight` を削除。既定は `sm`（空の状態の「検索語をクリア」）で、行に置くときは行と同じ `size` を渡す | 以前はマウス環境でも 44px が既定で、`matchButtonHeight` を付け忘れた行がずれた |
 | `fieldControlClassName` は TextField と同じ見た目（枠線 `--color-border-control`・`--radius-control`・地・フォーカス・disabled・read-only）に、高さ・幅・`aria-invalid` の枠線を足す | ネイティブの `<select>` / `<input>` を残す画面も、手書きの `h-10` / `h-11` / `min-h-[44px]`（35 / 38.5 / 44px）をやめて同じ段にする |
