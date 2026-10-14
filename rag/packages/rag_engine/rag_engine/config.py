@@ -330,8 +330,7 @@ class Settings:
     # 出力の token と時間が減る。返った ID は chunk_uid に戻すので、判定の働きは変わらない。
     crag_short_candidate_ids: bool = False
     # 生成後の監査の reason を、判定が通った item（supported かつ matched）と答えている要求（addressed）では空文字に
-    # させる(#1912)。監査の見える出力の約 3 割がその reason で、降格・不足の判定には使わない。降格した item・不足の
-    # 要求の reason は従来どおり書かせる（是正の指摘・本文の不足の説明に使う）。
+    # させる(#1912)。見える出力は減るが、同じ入力の対の比較で監査が甘くなったため既定 OFF（品質評価の比較用）。
     answer_audit_compact_reasons: bool = False
     # 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限(#1912。0〜2)。既定 2 は従来の MAX_ROUNDS と同じ。
     answer_max_correction_rounds: int = 2

@@ -288,9 +288,9 @@ AUDIT_SYSTEM_PROMPT = (
     "個案の最終判断に必要な実データが未閲覧という理由だけで partial や off_target にしない。known_gaps に当たる要求の不足だけを理由に off_target にしない（partial でよい）。\n"
 )
 
-# 監査の reason を詰める出力の規則（#1912。`answer_audit_compact_reasons`）。判定が通った item（supported かつ
-# matched）と答えている要求（addressed）の reason は、降格・不足の判定にも是正の指摘にも使わない。監査の見える
-# 出力の約 3 割がその reason だった（#1864 の記録）。降格・条件つき・不足の reason は従来どおり書かせる。
+# 監査の reason を詰める出力の規則（#1912。`answer_audit_compact_reasons`、既定 OFF）。判定が通った item（supported
+# かつ matched）と答えている要求（addressed）の reason は、降格・不足の判定にも是正の指摘にも使わない。監査の見える
+# 出力は約 5 割減るが、同じ入力の対の比較で通さなかった判定が 5 件 → 1 件と監査が甘くなったので、既定では使わない。
 AUDIT_COMPACT_REASON_RULE = (
     "- reason を書くのは判定が通らなかったものだけ: support=supported かつ applicability=matched の review と、"
     'status=addressed の request_review は reason を空文字（""）にする。それ以外（unsupported・contradicted・'

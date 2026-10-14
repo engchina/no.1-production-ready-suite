@@ -1094,12 +1094,12 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_answer_audit_compact_reasons: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "(既定 ON。#1912)生成後の監査の reason を、判定が通った説明"
+            "(既定 OFF。#1912)生成後の監査の reason を、判定が通った説明"
             "(supported かつ matched)と答えている要求(addressed)では空文字にさせる。"
-            "監査の見える出力の約 3 割がその reason で、降格・不足の判定にも是正の指摘にも"
-            "使わない。降格・条件つき・不足の reason は従来どおり書かせる。"
+            "監査の見える出力は約 5 割減るが、同じ入力の対の比較で監査が甘くなった"
+            "(通らなかった判定が 5 件 → 1 件)ため既定では使わない。品質評価の比較用。"
         ),
     )
     rag_answer_max_correction_rounds: int = Field(

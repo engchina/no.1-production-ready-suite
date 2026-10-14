@@ -2110,20 +2110,20 @@ def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None
 
 
 def test_build_engine_settings_passes_answer_round_latency(tmp_path: Any) -> None:
-    """監査の通った判定の reason を空にする(既定 ON)・是正の組の回数の上限(既定 2)を
+    """監査の通った判定の reason を空にする(既定 OFF)・是正の組の回数の上限(既定 2)を
     rag_engine に渡す(#1912)。"""
     from app.rag.answer_engine import build_engine_settings
 
-    assert Settings().rag_answer_audit_compact_reasons is True
+    assert Settings().rag_answer_audit_compact_reasons is False
     assert Settings().rag_answer_max_correction_rounds == 2
     default = build_engine_settings(Settings(), output_dir=tmp_path)
     changed = build_engine_settings(
-        Settings(rag_answer_audit_compact_reasons=False, rag_answer_max_correction_rounds=1),
+        Settings(rag_answer_audit_compact_reasons=True, rag_answer_max_correction_rounds=1),
         output_dir=tmp_path,
     )
-    assert default.answer_audit_compact_reasons is True
+    assert default.answer_audit_compact_reasons is False
     assert default.answer_max_correction_rounds == 2
-    assert changed.answer_audit_compact_reasons is False
+    assert changed.answer_audit_compact_reasons is True
     assert changed.answer_max_correction_rounds == 1
 
 

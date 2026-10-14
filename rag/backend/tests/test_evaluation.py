@@ -1200,9 +1200,9 @@ def test_evaluation_settings_map_judge_latency_overrides() -> None:
     # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)も比べられる。
     rounds = evaluation_settings(
         base,
-        EvaluationRagOverrides(answer_audit_compact_reasons=False, answer_max_correction_rounds=0),
+        EvaluationRagOverrides(answer_audit_compact_reasons=True, answer_max_correction_rounds=0),
     )
-    assert rounds.rag_answer_audit_compact_reasons is False
+    assert rounds.rag_answer_audit_compact_reasons is True
     assert rounds.rag_answer_max_correction_rounds == 0
     assert untouched.rag_answer_max_correction_rounds == base.rag_answer_max_correction_rounds
 
