@@ -39,6 +39,16 @@ from app.features.agent.feedback import (
     finish_summary,
 )
 from app.features.agent.run_facts import RunFact, fact_from_run
+from app.features.agent.run_signals import (
+    ANY_SIGNAL_CONDITION,
+    SIGNAL_CONDITIONS,
+    SIGNAL_SCOPE_CONDITION,
+    SignalKind,
+    SignalReport,
+    build_signal_report,
+    finish_signal_summary,
+    signal_items,
+)
 from app.features.agent.runtime import FeedbackRating, FeedbackReason, RunFeedback, RunState
 from app.features.agent.usage import (
     AgentUsage,
@@ -64,6 +74,8 @@ _IN_LIST_LIMIT = 1000
 _AGENT_NAME_MAX = 400
 _MODEL_MAX = 256
 _COMMENT_MAX = 1000
+_OUTCOME_MAX = 32
+_VALIDATION_MAX = 16
 _ORACLE_BACKENDS = {"oracle", "oracle_checkpoint", "oracle_normalized"}
 
 UserNames = Callable[[list[str]], Mapping[str, str]]
@@ -101,6 +113,20 @@ class RunFactsStore(Protocol):
         agent_names: Mapping[str, str],
         user_names: UserNames,
     ) -> FeedbackReport: ...
+
+    def signal_report(
+        self,
+        *,
+        days: int,
+        now: datetime,
+        agent_ids: frozenset[str] | None,
+        agent_id: str | None,
+        kind: SignalKind | None,
+        offset: int,
+        limit: int,
+        agent_names: Mapping[str, str],
+        user_names: UserNames,
+    ) -> SignalReport: ...
 
 
 # ---- テスト・開発用の保存先 -------------------------------------------------------------
@@ -174,91 +200,99 @@ class MemoryRunFactsStore:
             source="history",
         )
 
+    def signal_report(
+        self,
+        *,
+        days: int,
+        now: datetime,
+        agent_ids: frozenset[str] | None,
+        agent_id: str | None,
+        kind: SignalKind | None,
+        offset: int,
+        limit: int,
+        agent_names: Mapping[str, str],
+        user_names: UserNames,
+    ) -> SignalReport:
+        return build_signal_report(
+            self._scoped(agent_ids),
+            days=days,
+            now=now,
+            agent_id=agent_id,
+            kind=kind,
+            agent_names=agent_names,
+            user_names=user_names,
+            offset=offset,
+            limit=limit,
+            source="history",
+        )
+
 
 # ---- Oracle ----------------------------------------------------------------------------
 
-# 1 Run = 1 行の MERGE。UPDATED_AT は事実を書いた時刻（UTC）。
-MERGE_SQL = f"""
-MERGE INTO {RUN_FACTS_TABLE} target
-USING (
-    SELECT
-        :run_id AS RUN_ID,
-        :agent_id AS AGENT_ID,
-        :agent_name AS AGENT_NAME,
-        :agent_version AS AGENT_VERSION,
-        :thread_id AS THREAD_ID,
-        :user_uuid AS CREATED_BY_USER_UUID,
-        :status AS STATUS,
-        :run_source AS RUN_SOURCE,
-        :model AS MODEL,
-        :requests AS REQUESTS,
-        :input_tokens AS INPUT_TOKENS,
-        :output_tokens AS OUTPUT_TOKENS,
-        :total_tokens AS TOTAL_TOKENS,
-        :feedback_rating AS FEEDBACK_RATING,
-        :feedback_reason AS FEEDBACK_REASON,
-        :feedback_comment AS FEEDBACK_COMMENT,
-        :feedback_user_uuid AS FEEDBACK_USER_UUID,
-        :feedback_at AS FEEDBACK_AT,
-        :admin_rating AS ADMIN_RATING,
-        :admin_reason AS ADMIN_REASON,
-        :admin_comment AS ADMIN_COMMENT,
-        :admin_user_uuid AS ADMIN_USER_UUID,
-        :admin_at AS ADMIN_AT,
-        :rated_at AS RATED_AT,
-        :question AS QUESTION,
-        :answer AS ANSWER,
-        :created_at AS CREATED_AT,
-        :finished_at AS FINISHED_AT
-    FROM dual
-) source
-ON (target.RUN_ID = source.RUN_ID)
-WHEN MATCHED THEN UPDATE SET
-    target.AGENT_ID = source.AGENT_ID,
-    target.AGENT_NAME = source.AGENT_NAME,
-    target.AGENT_VERSION = source.AGENT_VERSION,
-    target.THREAD_ID = source.THREAD_ID,
-    target.CREATED_BY_USER_UUID = source.CREATED_BY_USER_UUID,
-    target.STATUS = source.STATUS,
-    target.RUN_SOURCE = source.RUN_SOURCE,
-    target.MODEL = source.MODEL,
-    target.REQUESTS = source.REQUESTS,
-    target.INPUT_TOKENS = source.INPUT_TOKENS,
-    target.OUTPUT_TOKENS = source.OUTPUT_TOKENS,
-    target.TOTAL_TOKENS = source.TOTAL_TOKENS,
-    target.FEEDBACK_RATING = source.FEEDBACK_RATING,
-    target.FEEDBACK_REASON = source.FEEDBACK_REASON,
-    target.FEEDBACK_COMMENT = source.FEEDBACK_COMMENT,
-    target.FEEDBACK_USER_UUID = source.FEEDBACK_USER_UUID,
-    target.FEEDBACK_AT = source.FEEDBACK_AT,
-    target.ADMIN_RATING = source.ADMIN_RATING,
-    target.ADMIN_REASON = source.ADMIN_REASON,
-    target.ADMIN_COMMENT = source.ADMIN_COMMENT,
-    target.ADMIN_USER_UUID = source.ADMIN_USER_UUID,
-    target.ADMIN_AT = source.ADMIN_AT,
-    target.RATED_AT = source.RATED_AT,
-    target.QUESTION = source.QUESTION,
-    target.ANSWER = source.ANSWER,
-    target.CREATED_AT = source.CREATED_AT,
-    target.FINISHED_AT = source.FINISHED_AT,
-    target.UPDATED_AT = SYS_EXTRACT_UTC(SYSTIMESTAMP)
-WHEN NOT MATCHED THEN INSERT (
-    RUN_ID, AGENT_ID, AGENT_NAME, AGENT_VERSION, THREAD_ID, CREATED_BY_USER_UUID, STATUS,
-    RUN_SOURCE, MODEL, REQUESTS, INPUT_TOKENS, OUTPUT_TOKENS, TOTAL_TOKENS,
-    FEEDBACK_RATING, FEEDBACK_REASON, FEEDBACK_COMMENT, FEEDBACK_USER_UUID, FEEDBACK_AT,
-    ADMIN_RATING, ADMIN_REASON, ADMIN_COMMENT, ADMIN_USER_UUID, ADMIN_AT, RATED_AT,
-    QUESTION, ANSWER, CREATED_AT, FINISHED_AT, UPDATED_AT
-) VALUES (
-    source.RUN_ID, source.AGENT_ID, source.AGENT_NAME, source.AGENT_VERSION, source.THREAD_ID,
-    source.CREATED_BY_USER_UUID, source.STATUS, source.RUN_SOURCE, source.MODEL,
-    source.REQUESTS, source.INPUT_TOKENS, source.OUTPUT_TOKENS, source.TOTAL_TOKENS,
-    source.FEEDBACK_RATING, source.FEEDBACK_REASON, source.FEEDBACK_COMMENT,
-    source.FEEDBACK_USER_UUID, source.FEEDBACK_AT, source.ADMIN_RATING, source.ADMIN_REASON,
-    source.ADMIN_COMMENT, source.ADMIN_USER_UUID, source.ADMIN_AT, source.RATED_AT,
-    source.QUESTION, source.ANSWER, source.CREATED_AT, source.FINISHED_AT,
-    SYS_EXTRACT_UTC(SYSTIMESTAMP)
+# MERGE の列（bind の名前と列。UPDATED_AT は事実を書いた時刻で SQL が入れる）。
+_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("run_id", "RUN_ID"),
+    ("agent_id", "AGENT_ID"),
+    ("agent_name", "AGENT_NAME"),
+    ("agent_version", "AGENT_VERSION"),
+    ("thread_id", "THREAD_ID"),
+    ("user_uuid", "CREATED_BY_USER_UUID"),
+    ("status", "STATUS"),
+    ("run_source", "RUN_SOURCE"),
+    ("model", "MODEL"),
+    ("requests", "REQUESTS"),
+    ("input_tokens", "INPUT_TOKENS"),
+    ("output_tokens", "OUTPUT_TOKENS"),
+    ("total_tokens", "TOTAL_TOKENS"),
+    ("feedback_rating", "FEEDBACK_RATING"),
+    ("feedback_reason", "FEEDBACK_REASON"),
+    ("feedback_comment", "FEEDBACK_COMMENT"),
+    ("feedback_user_uuid", "FEEDBACK_USER_UUID"),
+    ("feedback_at", "FEEDBACK_AT"),
+    ("admin_rating", "ADMIN_RATING"),
+    ("admin_reason", "ADMIN_REASON"),
+    ("admin_comment", "ADMIN_COMMENT"),
+    ("admin_user_uuid", "ADMIN_USER_UUID"),
+    ("admin_at", "ADMIN_AT"),
+    ("rated_at", "RATED_AT"),
+    ("question", "QUESTION"),
+    ("answer", "ANSWER"),
+    ("created_at", "CREATED_AT"),
+    ("finished_at", "FINISHED_AT"),
 )
-"""
+# 確かめるべき実行のシグナルの列（#1822。migration 012 で足した）。
+_SIGNAL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("answer_outcome", "ANSWER_OUTCOME"),
+    ("validation_result", "VALIDATION_RESULT"),
+    ("tool_failures", "TOOL_FAILURES"),
+    ("approvals_rejected", "APPROVALS_REJECTED"),
+)
+SIGNAL_BINDS = frozenset(name for name, _column in _SIGNAL_MERGE_COLUMNS)
+
+
+def merge_sql(columns: Sequence[tuple[str, str]]) -> str:
+    """1 Run = 1 行の MERGE（列は固定の定数。UPDATED_AT は書いた時刻の UTC）。"""
+    names = [column for _bind, column in columns]
+    selected = ",\n        ".join(f":{bind} AS {column}" for bind, column in columns)
+    updates = ",\n    ".join(
+        f"target.{column} = source.{column}" for column in names if column != "RUN_ID"
+    )
+    return (
+        f"MERGE INTO {RUN_FACTS_TABLE} target\n"  # nosec B608 - 固定のテーブル名と列
+        f"USING (\n    SELECT\n        {selected}\n    FROM dual\n) source\n"
+        "ON (target.RUN_ID = source.RUN_ID)\n"
+        f"WHEN MATCHED THEN UPDATE SET\n    {updates},\n"
+        "    target.UPDATED_AT = SYS_EXTRACT_UTC(SYSTIMESTAMP)\n"
+        f"WHEN NOT MATCHED THEN INSERT ({', '.join(names)}, UPDATED_AT)\n"
+        f"VALUES ({', '.join(f'source.{column}' for column in names)}, "
+        "SYS_EXTRACT_UTC(SYSTIMESTAMP))"
+    )
+
+
+MERGE_SQL = merge_sql((*_MERGE_COLUMNS, *_SIGNAL_MERGE_COLUMNS))
+# migration 012 の前のテーブル（シグナルの列が無い）への MERGE。システムテーブルを更新するまでの
+# 間も、利用状況・フィードバックの事実を書き続ける（ORA-00904 のときだけ使う）。
+LEGACY_MERGE_SQL = merge_sql(_MERGE_COLUMNS)
 
 # 利用量の集計の測度（Run 数・利用量を記録した Run 数・各量の合計）。
 _USAGE_MEASURES = (
@@ -336,6 +370,10 @@ def fact_binds(fact: RunFact) -> dict[str, Any]:
         "answer": fact.answer,
         "created_at": to_utc_naive(fact.created_at),
         "finished_at": to_utc_naive(fact.finished_at),
+        "answer_outcome": _clip(fact.answer_outcome, _OUTCOME_MAX),
+        "validation_result": _clip(fact.validation_result, _VALIDATION_MAX),
+        "tool_failures": fact.tool_failures,
+        "approvals_rejected": fact.approvals_rejected,
     }
 
 
@@ -465,6 +503,77 @@ def feedback_page_sql(where: str) -> str:
     )
 
 
+# 確かめるべき実行（#1822）。対象は期間に作った、終わった Run（品質評価の Run を除く）。
+_SIGNAL_SOURCE_COLUMNS = (
+    "STATUS, FEEDBACK_RATING, ADMIN_RATING, VALIDATION_RESULT, ANSWER_OUTCOME, "
+    "TOOL_FAILURES, APPROVALS_REJECTED"
+)
+_SIGNAL_ITEM_COLUMNS = (
+    "RUN_ID, THREAD_ID, AGENT_ID, AGENT_NAME, CREATED_BY_USER_UUID, QUESTION, ANSWER, "
+    "FEEDBACK_RATING, FEEDBACK_REASON, FEEDBACK_COMMENT, FEEDBACK_USER_UUID, FEEDBACK_AT, "
+    "ADMIN_RATING, ADMIN_REASON, ADMIN_COMMENT, ADMIN_USER_UUID, ADMIN_AT, "
+    "STATUS, CREATED_AT, ANSWER_OUTCOME, VALIDATION_RESULT, TOOL_FAILURES, APPROVALS_REJECTED, "
+    "RUN_SOURCE"
+)
+
+
+def signal_source_sql(filters: str) -> str:
+    """期間と直前の期間の対象の Run（集計の元）。"""
+    return (
+        f"SELECT {_SIGNAL_SOURCE_COLUMNS}, "  # nosec B608 - 固定の列とテーブル名と bind の条件
+        "CASE WHEN CREATED_AT >= :since THEN 1 ELSE 0 END AS IN_PERIOD "
+        f"FROM {RUN_FACTS_TABLE} "
+        f"WHERE CREATED_AT >= :previous_since AND CREATED_AT <= :until "
+        f"AND {SIGNAL_SCOPE_CONDITION}{filters}"
+    )
+
+
+def signal_summary_sql(filters: str) -> str:
+    """期間ごとの対象の Run の数・シグナルのある Run の数・種類ごとの数（`SignalKind` の順）。"""
+    measures = ", ".join(
+        f"SUM(CASE WHEN {SIGNAL_CONDITIONS[kind]} THEN 1 ELSE 0 END)" for kind in SignalKind
+    )
+    return (
+        "SELECT IN_PERIOD, COUNT(*), "  # nosec B608 - 固定の条件
+        f"SUM(CASE WHEN {ANY_SIGNAL_CONDITION} THEN 1 ELSE 0 END), {measures} "
+        f"FROM ({signal_source_sql(filters)}) GROUP BY IN_PERIOD"
+    )
+
+
+def signal_items_where(filters: str, kind: SignalKind | None) -> str:
+    condition = SIGNAL_CONDITIONS[kind] if kind is not None else ANY_SIGNAL_CONDITION
+    return (
+        "WHERE CREATED_AT >= :since AND CREATED_AT <= :until "
+        f"AND {SIGNAL_SCOPE_CONDITION}{filters} AND {condition}"
+    )
+
+
+def signal_page_sql(where: str) -> str:
+    return (
+        f"SELECT {_SIGNAL_ITEM_COLUMNS} FROM {RUN_FACTS_TABLE} {where} "  # nosec B608
+        "ORDER BY CREATED_AT DESC, RUN_ID DESC "
+        + offset_fetch_clause(offset_bind="page_offset", limit_bind="page_limit")
+    )
+
+
+def _int(value: Any) -> int:
+    return int(value or 0)
+
+
+def fact_from_signal_row(row: Sequence[Any]) -> RunFact:
+    """`signal_page_sql` の 1 行（列の順は `_SIGNAL_ITEM_COLUMNS`）。"""
+    fact = fact_from_feedback_row(row[:19])
+    return fact.model_copy(
+        update={
+            "answer_outcome": str(row[19]) if row[19] else None,
+            "validation_result": str(row[20]) if row[20] else None,
+            "tool_failures": _int(row[21]),
+            "approvals_rejected": _int(row[22]),
+            "source": str(row[23] or fact.source),
+        }
+    )
+
+
 def _lob_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -517,13 +626,26 @@ def _is_table_missing(exc: Exception) -> bool:
     return "ORA-00942" in text or "table or view does not exist" in text
 
 
+def _is_column_missing(exc: Exception) -> bool:
+    """列が無い（ORA-00904。シグナルの列を足す migration 012 の前のテーブル）。"""
+    text = str(exc)
+    return "ORA-00904" in text or "invalid identifier" in text
+
+
 def _merge_input_sizes() -> dict[str, Any]:
     """MERGE の bind の型（executemany は先頭の行の値で型を決めるため、None の列も型を固定する）。
 
     質問・回答は 4000 byte を超えうるため CLOB で bind する。
     """
     oracledb = import_module("oracledb")
-    numbers = ("requests", "input_tokens", "output_tokens", "total_tokens")
+    numbers = (
+        "requests",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "tool_failures",
+        "approvals_rejected",
+    )
     timestamps = ("feedback_at", "admin_at", "rated_at", "created_at", "finished_at")
     return {
         "question": oracledb.DB_TYPE_CLOB,
@@ -543,9 +665,26 @@ class OracleRunFactsStore:
         if not facts:
             return
         rows = [fact_binds(fact) for fact in facts]
-        with self._connect() as connection, connection.cursor() as cursor:
-            cursor.setinputsizes(**_merge_input_sizes())
-            cursor.executemany(MERGE_SQL, rows)
+        sizes = _merge_input_sizes()
+        with self._connect() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.setinputsizes(**sizes)
+                    cursor.executemany(MERGE_SQL, rows)
+            except Exception as exc:
+                if not _is_column_missing(exc):
+                    raise
+                # システムテーブルの更新（migration 012）の前: シグナルの列を除いて書く。
+                connection.rollback()
+                legacy_rows = [
+                    {key: value for key, value in row.items() if key not in SIGNAL_BINDS}
+                    for row in rows
+                ]
+                with connection.cursor() as cursor:
+                    cursor.setinputsizes(
+                        **{key: value for key, value in sizes.items() if key not in SIGNAL_BINDS}
+                    )
+                    cursor.executemany(LEGACY_MERGE_SQL, legacy_rows)
             connection.commit()
 
     def _query(self, statements: Sequence[tuple[str, dict[str, Any]]]) -> list[list[Any]]:
@@ -700,6 +839,71 @@ class OracleRunFactsStore:
             **dict(paginate(items, total=total, limit=limit, offset=offset)),
         )
 
+    def signal_report(
+        self,
+        *,
+        days: int,
+        now: datetime,
+        agent_ids: frozenset[str] | None,
+        agent_id: str | None,
+        kind: SignalKind | None,
+        offset: int,
+        limit: int,
+        agent_names: Mapping[str, str],
+        user_names: UserNames,
+    ) -> SignalReport:
+        since = now - timedelta(days=days)
+        previous_since = since - timedelta(days=days)
+        summaries = {1: finish_signal_summary(0, 0, {}), 0: finish_signal_summary(0, 0, {})}
+        facts: list[RunFact] = []
+        total = 0
+        if agent_ids is None or agent_ids:
+            binds: dict[str, Any] = {
+                "since": to_utc_naive(since),
+                "previous_since": to_utc_naive(previous_since),
+                "until": to_utc_naive(now),
+            }
+            filters = feedback_filters(agent_ids=agent_ids, agent_id=agent_id, binds=binds)
+            page_binds = {key: value for key, value in binds.items() if key != "previous_since"}
+            where = signal_items_where(filters, kind)
+            count_binds = dict(page_binds)
+            page_binds.update(
+                offset_fetch_binds(
+                    offset=offset, limit=limit, offset_bind="page_offset", limit_bind="page_limit"
+                )
+            )
+            summary_rows, count_rows, page_rows = self._query(
+                [
+                    (signal_summary_sql(filters), binds),
+                    (feedback_count_sql(where), count_binds),
+                    (signal_page_sql(where), page_binds),
+                ]
+            )
+            for row in summary_rows:
+                counts = {
+                    signal: _int(value) for signal, value in zip(SignalKind, row[3:], strict=False)
+                }
+                summaries[int(row[0])] = finish_signal_summary(_int(row[1]), _int(row[2]), counts)
+            total = _int(count_rows[0][0]) if count_rows else 0
+            facts = [fact_from_signal_row(row) for row in page_rows]
+        return SignalReport(
+            days=days,
+            source="history",
+            since=since,
+            until=now,
+            kind=kind,
+            summary=summaries[1],
+            previous=summaries[0],
+            **dict(
+                paginate(
+                    signal_items(facts, agent_names, user_names),
+                    total=total,
+                    limit=limit,
+                    offset=offset,
+                )
+            ),
+        )
+
 
 # ---- バックグラウンドの書き込み ---------------------------------------------------------
 
@@ -846,6 +1050,7 @@ def flush(timeout: float = 5.0) -> bool:
 
 
 __all__ = [
+    "LEGACY_MERGE_SQL",
     "MERGE_SQL",
     "RUN_FACTS_TABLE",
     "USAGE_DIMENSIONS",

@@ -414,6 +414,99 @@ function feedbackReportFromRuns(
   };
 }
 
+/** 確かめるべき実行のシグナルの種類（表示の順。#1822。backend の `run_signals.SignalKind`）。 */
+export const SIGNAL_KINDS = [
+  "not_helpful",
+  "validation_failed",
+  "unvalidated",
+  "unanswered",
+  "approval_rejected",
+  "tool_failed",
+  "run_failed",
+] as const;
+
+/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証の記録は見ない）。 */
+function runSignals(run: Json): string[] {
+  const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
+  const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+  const outcome = ((answer?.content as Json | undefined)?.outcome as Json | undefined)?.value;
+  const toolFailures = ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length;
+  const rejected = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length;
+  const checks: Record<string, boolean> = {
+    not_helpful: notHelpful,
+    validation_failed: false,
+    unvalidated: false,
+    unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
+    approval_rejected: rejected > 0,
+    tool_failed: toolFailures > 0,
+    run_failed: run.status === "failed" || run.status === "cancelled",
+  };
+  return SIGNAL_KINDS.filter((kind) => checks[kind]);
+}
+
+function signalSummary(runs: Json[]): Json {
+  const flagged = runs.filter((run) => runSignals(run).length > 0);
+  return {
+    runs: runs.length,
+    flagged: flagged.length,
+    flagged_rate: runs.length ? flagged.length / runs.length : null,
+    counts: SIGNAL_KINDS.map((kind) => ({ kind, count: runs.filter((run) => runSignals(run).includes(kind)).length })),
+  };
+}
+
+/** Run から `GET /api/feedback/signals` の応答を作る（前の期間は 0 件。#1822）。 */
+function signalReportFromRuns(
+  runs: Json[],
+  days: number,
+  filters: { agentId: string | null; kind: string | null },
+  page: { offset: number; limit: number }
+): Json {
+  const scoped = runs.filter(
+    (run) =>
+      ["completed", "failed", "cancelled"].includes(String(run.status)) &&
+      !(run.metadata as Json | undefined)?.evaluation_job_id &&
+      (!filters.agentId || run.agent_id === filters.agentId)
+  );
+  const items = scoped
+    .filter((run) => {
+      const signals = runSignals(run);
+      return signals.length > 0 && (!filters.kind || signals.includes(filters.kind));
+    })
+    .map((run) => {
+      const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+      const outcome = ((answer?.content as Json | undefined)?.outcome as Json | undefined)?.value ?? null;
+      return {
+        run_id: run.id,
+        thread_id: run.thread_id ?? null,
+        agent_id: run.agent_id,
+        agent_name: run.agent_id === "default" ? DEFAULT_AGENT_NAME : "",
+        user_uuid: run.created_by_user_uuid ?? null,
+        display_name: "ローカル利用者",
+        question: run.goal,
+        answer: answerTextOf(run),
+        status: run.status,
+        signals: runSignals(run),
+        answer_outcome: outcome,
+        validation_result: null,
+        tool_failures: ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length,
+        approvals_rejected: ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length,
+        feedback: run.feedback ?? null,
+        admin_review: run.admin_review ?? null,
+        created_at: run.created_at ?? MOCK_NOW,
+      };
+    });
+  return {
+    days,
+    source: "memory",
+    since: MOCK_NOW,
+    until: MOCK_NOW,
+    kind: filters.kind,
+    summary: signalSummary(scoped),
+    previous: signalSummary([]),
+    ...pageOfItems(items, page),
+  };
+}
+
 /** 集計で選べる期間（日。#794）。 */
 export const REPORT_PERIOD_DAYS = [7, 30, 90, 180, 365];
 const REPORT_PERIOD_DETAIL = "期間は 7・30・90・180・365 日のどれかにしてください。";
@@ -509,6 +602,8 @@ function createState() {
     dataScopeCandidateErrors: {} as Record<string, { status: number; message: string }>,
     // フィードバック（`GET /api/feedback`。#774）。null なら Run の評価から作る。
     feedbackReport: null as Json | null,
+    // 確かめるべき実行（`GET /api/feedback/signals`。#1822）。null なら Run から作る。
+    signalReport: null as Json | null,
     // 自動実行（#784）。`automationRuns` は自動実行ごとの実行履歴。
     automations: [] as Json[],
     automationsPersistent: true,
@@ -1091,6 +1186,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       { agentId: query.get("agent_id"), rating: query.get("rating"), reason: query.get("reason") },
       page
     );
+  }
+  // 確かめるべき実行（#1822）。`state.signalReport` があればそれを返し（一覧は種類で絞る）、無ければ Run から作る。
+  if (method === "GET" && at("feedback", "signals")) {
+    const days = Number(query.get("days") ?? 30);
+    if (!REPORT_PERIOD_DAYS.includes(days)) throw new HttpError(422, REPORT_PERIOD_DETAIL);
+    const page = pageOf(query);
+    const kind = query.get("kind");
+    if (state.signalReport) {
+      const report = state.signalReport;
+      const all = (report.items as Json[] | undefined) ?? [];
+      const items = kind ? all.filter((item) => (item.signals as string[]).includes(kind)) : all;
+      const total = kind ? items.length : ((report.total as number | undefined) ?? items.length);
+      return { source: "memory", ...report, kind, ...pageOfItems(items, page, total) };
+    }
+    return signalReportFromRuns(state.runs, days, { agentId: query.get("agent_id"), kind }, page);
   }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");

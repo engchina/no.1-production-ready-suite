@@ -907,6 +907,76 @@ export interface FeedbackFilters {
   limit?: number;
 }
 
+/**
+ * 確かめるべき実行のシグナルの種類（表示の順。#1822）。定義は backend の `run_signals.py`。
+ * - not_helpful: 本人か管理者の評価が「役に立たなかった」
+ * - validation_failed: 最終の検証が根拠で確かめられない段落などのために回答を変えた
+ * - unvalidated: 最終の検証そのものが失敗した
+ * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
+ * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し
+ */
+export const SIGNAL_KINDS = [
+  "not_helpful",
+  "validation_failed",
+  "unvalidated",
+  "unanswered",
+  "approval_rejected",
+  "tool_failed",
+  "run_failed",
+] as const;
+export type SignalKind = (typeof SIGNAL_KINDS)[number];
+
+export interface SignalSummary {
+  /** 期間に作った、終わった実行（品質評価の実行を除く）。 */
+  runs: number;
+  /** シグナルのある実行。 */
+  flagged: number;
+  /** 対象の実行が 0 件のときは null。 */
+  flagged_rate: number | null;
+  /** すべての種類（表示の順。0 件も含む。1 つの実行が複数に入る）。 */
+  counts: { kind: SignalKind; count: number }[];
+}
+
+export interface SignalItem {
+  run_id: string;
+  thread_id: string | null;
+  agent_id: string;
+  agent_name: string;
+  user_uuid: string | null;
+  display_name: string;
+  question: string;
+  answer: string;
+  status: RunState["status"];
+  signals: SignalKind[];
+  answer_outcome: string | null;
+  validation_result: string | null;
+  tool_failures: number;
+  approvals_rejected: number;
+  feedback: RunFeedback | null;
+  admin_review: RunFeedback | null;
+  created_at: string;
+}
+
+/** 確かめるべき実行の集計と一覧（#1822）。`total` は種類の絞り込みに合う実行の件数。 */
+export interface SignalReport extends Page<SignalItem> {
+  days: FeedbackPeriodDays;
+  source: ReportSource;
+  since: string;
+  until: string;
+  kind: SignalKind | null;
+  summary: SignalSummary;
+  /** 直前の同じ長さの期間。 */
+  previous: SignalSummary;
+}
+
+export interface SignalFilters {
+  days: FeedbackPeriodDays;
+  agentId?: string;
+  kind?: SignalKind;
+  offset?: number;
+  limit?: number;
+}
+
 export interface ThreadSummary {
   thread_id: string;
   agent_id: string;
@@ -1283,6 +1353,15 @@ export const agentApi = {
     if (filters.offset) query.set("offset", String(filters.offset));
     if (filters.limit) query.set("limit", String(filters.limit));
     return request<FeedbackReport>(`/api/feedback?${query.toString()}`);
+  },
+  /** 確かめるべき実行（暗黙のシグナル。#1822）。 */
+  getFeedbackSignals: (filters: SignalFilters) => {
+    const query = new URLSearchParams({ days: String(filters.days) });
+    if (filters.agentId) query.set("agent_id", filters.agentId);
+    if (filters.kind) query.set("kind", filters.kind);
+    if (filters.offset) query.set("offset", String(filters.offset));
+    if (filters.limit) query.set("limit", String(filters.limit));
+    return request<SignalReport>(`/api/feedback/signals?${query.toString()}`);
   },
   /** 会話（Run の一覧）。チャットは取り直しの `signal`（中止・待ち時間の上限）を渡す（#1160）。 */
   getThread: (threadId: string, options: { signal?: AbortSignal } = {}) =>

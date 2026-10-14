@@ -40,6 +40,7 @@ from app.system_schema import (
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
     RETIRED_TABLES_APPROVAL,
+    RUN_FACTS_SIGNAL_STATEMENTS,
     RUN_FACTS_STATEMENTS,
     RUNTIME_STATEMENTS,
     SystemSchemaError,
@@ -389,7 +390,13 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     assert migration_006.statements == (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS)
     # 既存の DB には migration 007 で Run の事実のテーブルと索引を足す（#794）。
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
-    assert migration_007.statements == RUN_FACTS_STATEMENTS
+    # 007 の DDL は適用済みの checksum を変えないよう、列を足す前の形で固定する（#1822）。
+    assert "CREATE TABLE AGENT_RUN_FACTS" in migration_007.statements[0]
+    assert "VALIDATION_RESULT" not in migration_007.statements[0]
+    assert migration_007.statements[1:] == RUN_FACTS_STATEMENTS[1:]
+    assert migration_007.checksum == (
+        "e68d96b47280b7fd320aaa2eca38504f1226909c942625994c458660ad486581"
+    )
     assert not migration_007.destructive
     # 配布元の機能の削除（#1798）は読まれない設定を消すだけなので、承認を求めない。
     migration_008 = next(item for item in MIGRATIONS if item.name.startswith("20261014_008"))
@@ -409,6 +416,14 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 外部向けの MCP と API キーの削除（#1809）は使えないキーを消すだけなので、承認を求めない。
     migration_011 = next(item for item in MIGRATIONS if item.name.startswith("20261014_011"))
     assert not migration_011.destructive
+    # 確かめるべき実行のシグナルの列（#1822）は列を足すだけ（データを消さない）で、最新の形の
+    # CREATE TABLE にも同じ列がある（未初期化の DB は migration を実行せずに記録する）。
+    migration_012 = next(item for item in MIGRATIONS if item.name.startswith("20261014_012"))
+    assert migration_012.statements == RUN_FACTS_SIGNAL_STATEMENTS
+    assert not migration_012.destructive
+    for column in ("ANSWER_OUTCOME", "VALIDATION_RESULT", "TOOL_FAILURES", "APPROVALS_REJECTED"):
+        assert any(f"ADD ({column} " in statement for statement in migration_012.statements)
+        assert f"{column} " in RUN_FACTS_STATEMENTS[0]
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",

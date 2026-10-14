@@ -23,6 +23,8 @@ import {
   Skeleton,
   StatusBadge,
   TableSkeleton,
+  TabPanel,
+  Tabs,
   type DataTableColumn,
   useActionPending,
 } from "@production-ready/ui";
@@ -32,6 +34,7 @@ import {
   agentApi,
   FEEDBACK_REASONS,
   REPORT_PERIOD_DAYS,
+  SIGNAL_KINDS,
   type FeedbackItem,
   type FeedbackPeriodDays,
   type FeedbackRating,
@@ -40,6 +43,8 @@ import {
   type FeedbackSummary,
   type RunFeedback,
   type RunState,
+  type SignalItem,
+  type SignalKind,
 } from "@/lib/api";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
@@ -47,15 +52,23 @@ import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { useCapabilities } from "@/lib/permissions";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
-import { isString, useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
+import { isOneOf, isString, useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
+import { countDelta, formatRate, Metric, rateDelta } from "@/pages/feedbackMetrics";
+import { SignalDetail, signalLabel, SignalsContent, SignalsSkeleton } from "@/pages/FeedbackSignals";
 
-// フィードバック（#774）。チャットの回答への利用者の評価を集計し、役に立たなかった回答と理由を確かめる。
-// 画面の形は RAG のフィードバック（集計 → 理由 → 一覧 → 詳細）にそろえる。
-// 期間は 365 日まで。Oracle の構成は保存した Run の履歴を集計し、一覧はサーバー側でページングする（#794）。
+// フィードバック（#774）。2 つの見方を `Tabs` で切り替える（#1822）。
+// - 確かめるべき実行（既定）: 評価の付いていない実行も、回答の検証・回答の対応・ツール・承認・実行の状態の
+//   暗黙のシグナルから集める（`FeedbackSignals.tsx`）。明示の評価は回答のごく一部にしか付かないため既定にする。
+// - 利用者の評価: チャットの回答への利用者の評価を集計し、役に立たなかった回答と理由を確かめる。
+//   画面の形は RAG のフィードバック（集計 → 理由 → 一覧 → 詳細）にそろえる。
+// 期間・業務 Agent は 2 つの見方で共通。期間は 365 日まで。Oracle の構成は保存した Run の履歴を集計し、
+// 一覧はサーバー側でページングする（#794）。
 
 const PERIODS: readonly FeedbackPeriodDays[] = REPORT_PERIOD_DAYS;
 const PAGE_SIZE = 10;
 const RATINGS: readonly FeedbackRating[] = ["helpful", "not_helpful"];
+const VIEWS = ["signals", "ratings"] as const;
+type FeedbackView = (typeof VIEWS)[number];
 
 const isPeriod: WorkspaceValidator<FeedbackPeriodDays> = (value): value is FeedbackPeriodDays =>
   PERIODS.includes(value as FeedbackPeriodDays);
@@ -63,6 +76,8 @@ const isRatingFilter: WorkspaceValidator<string> = (value): value is string =>
   value === "" || RATINGS.includes(value as FeedbackRating);
 const isReasonFilter: WorkspaceValidator<string> = (value): value is string =>
   value === "" || FEEDBACK_REASONS.includes(value as FeedbackReason);
+const isSignalFilter: WorkspaceValidator<string> = (value): value is string =>
+  value === "" || SIGNAL_KINDS.includes(value as SignalKind);
 
 export function reasonLabel(reason: FeedbackReason): string {
   return t(`feedback.reason.${reason}` as I18nKey);
@@ -73,13 +88,17 @@ function ratingLabel(rating: FeedbackRating): string {
 }
 
 export function FeedbackPage() {
+  const [view, setView] = useWorkspaceState("feedback", "view", "signals" as FeedbackView, isOneOf(VIEWS));
   const [days, setDays] = useWorkspaceState("feedback", "days", 30 as FeedbackPeriodDays, isPeriod);
   const [agentId, setAgentId] = useWorkspaceState("feedback", "agentId", "", isString);
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);
   const [reason, setReason] = useWorkspaceState("feedback", "reason", "", isReasonFilter);
+  const [signalKind, setSignalKind] = useWorkspaceState("feedback", "signalKind", "", isSignalFilter);
   // 一覧のページ（作業状態。絞り込みを変えたら 1 ページ目へ戻す）。
   const [page, setPage] = usePersistedPage("feedback");
+  const [signalPage, setSignalPage] = usePersistedPage("feedbackSignals");
   const [selected, setSelected] = useState<FeedbackItem | null>(null);
+  const [selectedSignal, setSelectedSignal] = useState<SignalItem | null>(null);
   const queryClient = useQueryClient();
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
@@ -94,19 +113,45 @@ export function FeedbackPage() {
     }),
     [days, agentId, rating, reason, page]
   );
+  const signalFilters = useMemo(
+    () => ({
+      days,
+      agentId: agentId || undefined,
+      kind: (signalKind || undefined) as SignalKind | undefined,
+      offset: offsetForPage(signalPage, PAGE_SIZE),
+      limit: PAGE_SIZE,
+    }),
+    [days, agentId, signalKind, signalPage]
+  );
+  // 見ている見方だけを取得する。
   const report = useQuery({
-    queryKey: ["feedback", filters],
+    queryKey: ["feedback", "ratings", filters],
     queryFn: () => agentApi.getFeedbackReport(filters),
+    enabled: view === "ratings",
     // 絞り込みを変えている間は前の結果を出したまま取り直す（Skeleton に戻さない）。
+    placeholderData: keepPreviousData,
+  });
+  const signals = useQuery({
+    queryKey: ["feedback", "signals", signalFilters],
+    queryFn: () => agentApi.getFeedbackSignals(signalFilters),
+    enabled: view === "signals",
     placeholderData: keepPreviousData,
   });
   // 「最新情報を取得」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
   const manualRefresh = useActionPending();
   const filtered = Boolean(rating || reason);
 
-  // 絞り込みを変えたら 1 ページ目から読む（UX 契約 workspace-state.md）。
-  function changeFilter<T>(set: (value: T) => void) {
+  // 期間・業務 Agent は 2 つの見方で共通。変えたら両方の一覧を 1 ページ目から読む（UX 契約 workspace-state.md）。
+  function changeSharedFilter<T>(set: (value: T) => void) {
     return (value: T) => {
+      set(value);
+      setPage(1);
+      setSignalPage(1);
+    };
+  }
+
+  function changeRatingFilter(set: (value: string) => void) {
+    return (value: string) => {
       set(value);
       setPage(1);
     };
@@ -117,6 +162,34 @@ export function FeedbackPage() {
     setReason("");
     setPage(1);
   }
+
+  function changeSignalKind(value: string) {
+    setSignalKind(value);
+    setSignalPage(1);
+  }
+
+  // 2 つの見方の絞り込みの先頭（タブの中は 1 つだけ描くので、id は同じでよい）。
+  const sharedFilters = (
+    <>
+      <SelectField<string>
+        id="feedback-period"
+        label={t("feedback.filter.period")}
+        value={String(days)}
+        options={PERIODS.map((period) => ({ value: String(period), label: t(`feedback.period.${period}` as I18nKey) }))}
+        onValueChange={(value) => changeSharedFilter(setDays)(Number(value) as FeedbackPeriodDays)}
+      />
+      <SelectField<string>
+        id="feedback-agent"
+        label={t("feedback.filter.agent")}
+        value={agentId}
+        options={[
+          { value: "", label: t("feedback.filter.all") },
+          ...(agents.data?.agents ?? []).map((agent) => ({ value: agent.id, label: agent.name })),
+        ]}
+        onValueChange={changeSharedFilter(setAgentId)}
+      />
+    </>
+  );
 
   return (
     <>
@@ -131,66 +204,98 @@ export function FeedbackPage() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => report.refetch()),
+            onClick: () =>
+              void manualRefresh.track(async () => {
+                await (view === "signals" ? signals.refetch() : report.refetch());
+              }),
           },
         ]}
+        tabs={
+          <Tabs
+            idPrefix="feedback"
+            ariaLabel={t("feedback.view.label")}
+            value={view}
+            onChange={(id) => setView(id as FeedbackView)}
+            items={[
+              { id: "signals", label: t("feedback.view.signals") },
+              { id: "ratings", label: t("feedback.view.ratings") },
+            ]}
+          />
+        }
       />
       <PageBody wide>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="feedback-filters">
-          <SelectField<string>
-            id="feedback-period"
-            label={t("feedback.filter.period")}
-            value={String(days)}
-            options={PERIODS.map((period) => ({ value: String(period), label: t(`feedback.period.${period}` as I18nKey) }))}
-            onValueChange={(value) => changeFilter(setDays)(Number(value) as FeedbackPeriodDays)}
-          />
-          <SelectField<string>
-            id="feedback-agent"
-            label={t("feedback.filter.agent")}
-            value={agentId}
-            options={[
-              { value: "", label: t("feedback.filter.all") },
-              ...(agents.data?.agents ?? []).map((agent) => ({ value: agent.id, label: agent.name })),
-            ]}
-            onValueChange={changeFilter(setAgentId)}
-          />
-          <SelectField<string>
-            id="feedback-rating"
-            label={t("feedback.filter.rating")}
-            value={rating}
-            options={[
-              { value: "", label: t("feedback.filter.all") },
-              ...RATINGS.map((item) => ({ value: item, label: ratingLabel(item) })),
-            ]}
-            onValueChange={changeFilter(setRating)}
-          />
-          <SelectField<string>
-            id="feedback-reason"
-            label={t("feedback.filter.reason")}
-            value={reason}
-            options={[
-              { value: "", label: t("feedback.filter.all") },
-              ...FEEDBACK_REASONS.map((item) => ({ value: item, label: reasonLabel(item) })),
-            ]}
-            onValueChange={changeFilter(setReason)}
-          />
-        </div>
-        <QueryState
-          query={report}
-          loadingLabel={t("loading.feedback")}
-          testId="feedback-loading"
-          skeleton={<FeedbackSkeleton />}
-        >
-          {report.data ? (
-            <FeedbackContent
-              report={report.data}
-              filtered={filtered}
-              onClearFilters={clearListFilters}
-              onOpen={setSelected}
-              onPageChange={setPage}
+        <TabPanel idPrefix="feedback" id="signals" value={view} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="signals-filters">
+            {sharedFilters}
+            <SelectField<string>
+              id="feedback-signal"
+              label={t("feedback.filter.signal")}
+              value={signalKind}
+              options={[
+                { value: "", label: t("feedback.filter.all") },
+                ...SIGNAL_KINDS.map((item) => ({ value: item, label: signalLabel(item) })),
+              ]}
+              onValueChange={changeSignalKind}
             />
-          ) : null}
-        </QueryState>
+          </div>
+          <QueryState
+            query={signals}
+            loadingLabel={t("loading.feedbackSignals")}
+            testId="signals-loading"
+            skeleton={<SignalsSkeleton />}
+          >
+            {signals.data ? (
+              <SignalsContent
+                report={signals.data}
+                filtered={Boolean(signalKind)}
+                onClearFilters={() => changeSignalKind("")}
+                onOpen={setSelectedSignal}
+                onPageChange={setSignalPage}
+              />
+            ) : null}
+          </QueryState>
+        </TabPanel>
+        <TabPanel idPrefix="feedback" id="ratings" value={view} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="feedback-filters">
+            {sharedFilters}
+            <SelectField<string>
+              id="feedback-rating"
+              label={t("feedback.filter.rating")}
+              value={rating}
+              options={[
+                { value: "", label: t("feedback.filter.all") },
+                ...RATINGS.map((item) => ({ value: item, label: ratingLabel(item) })),
+              ]}
+              onValueChange={changeRatingFilter(setRating)}
+            />
+            <SelectField<string>
+              id="feedback-reason"
+              label={t("feedback.filter.reason")}
+              value={reason}
+              options={[
+                { value: "", label: t("feedback.filter.all") },
+                ...FEEDBACK_REASONS.map((item) => ({ value: item, label: reasonLabel(item) })),
+              ]}
+              onValueChange={changeRatingFilter(setReason)}
+            />
+          </div>
+          <QueryState
+            query={report}
+            loadingLabel={t("loading.feedback")}
+            testId="feedback-loading"
+            skeleton={<FeedbackSkeleton />}
+          >
+            {report.data ? (
+              <FeedbackContent
+                report={report.data}
+                filtered={filtered}
+                onClearFilters={clearListFilters}
+                onOpen={setSelected}
+                onPageChange={setPage}
+              />
+            ) : null}
+          </QueryState>
+        </TabPanel>
         <SideSheet
           open={selected !== null}
           onClose={() => setSelected(null)}
@@ -212,6 +317,17 @@ export function FeedbackPage() {
               }}
             />
           ) : null}
+        </SideSheet>
+        <SideSheet
+          open={selectedSignal !== null}
+          onClose={() => setSelectedSignal(null)}
+          title={t("feedback.signals.detail.title")}
+          closeLabel={t("feedback.detail.close")}
+          id="signals-detail"
+          side="right"
+          data-testid="signals-detail"
+        >
+          {selectedSignal ? <SignalDetail item={selectedSignal} /> : null}
         </SideSheet>
       </PageBody>
     </>
@@ -328,18 +444,6 @@ function FeedbackContent({
           )}
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function Metric({ label, value, delta }: { label: string; value: string; delta: string }) {
-  return (
-    <div className="min-w-0 border-l-2 border-accent-emphasis pl-3">
-      <p className="truncate text-xs text-fg-muted" title={label}>
-        {label}
-      </p>
-      <p className="mt-0.5 text-xl font-semibold tabular-nums text-fg">{value}</p>
-      <p className="mt-0.5 text-xs tabular-nums text-fg-muted">{delta}</p>
     </div>
   );
 }
@@ -522,22 +626,4 @@ function RatingSection({
       )}
     </section>
   );
-}
-
-function formatRate(value: number | null): string {
-  return value === null ? "—" : `${Math.round(value * 100)}%`;
-}
-
-function countDelta(current: number, previous: number): string {
-  const delta = current - previous;
-  if (delta === 0) return t("feedback.summary.same");
-  return t("feedback.summary.delta", { value: `${delta > 0 ? "+" : "−"}${formatNumber(Math.abs(delta))}` });
-}
-
-function rateDelta(current: number | null, previous: number | null): string {
-  if (previous === null) return t("feedback.summary.noPrevious");
-  if (current === null) return " ";
-  const delta = Math.round((current - previous) * 100);
-  if (delta === 0) return t("feedback.summary.same");
-  return t("feedback.summary.deltaPoints", { value: `${delta > 0 ? "+" : "−"}${Math.abs(delta)}` });
 }

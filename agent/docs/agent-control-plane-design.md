@@ -400,6 +400,24 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   失敗はログ `agent_run_facts_not_saved` に残して捨てる）。起動時に Runtime repository の全 Run を backfill する。
 - テーブルが無い・DB の障害のあいだは、メモリの Run の集計に戻す（応答の `source` が `memory`。画面に集計元を出す）。
   memory / file の構成は保存せず、メモリの Run を集計する（`source=memory`）。
+- 確かめるべき実行（#1822。フィードバックの既定の見方。`GET /api/feedback/signals`）: 明示の評価は回答のごく一部にしか
+  付かないため、評価の付いていない Run も暗黙のシグナルから集める（モデルは呼ばない。定義は `run_signals.py`、Python の
+  `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則で、テストが SQLite で突き合わせる）。
+  | シグナル | 定義（Run の事実の列） |
+  |---|---|
+  | `not_helpful` 役に立たなかった | 本人か管理者の評価が `not_helpful`（`FEEDBACK_RATING` / `ADMIN_RATING`） |
+  | `validation_failed` 検証で確かめられない内容 | 成果物「回答の検証」が `completed` で、段落を外した・決定的な検査の error・本文を載せなかった・確かめきれなかった点を足した・読めない根拠があった（`VALIDATION_RESULT = 'failed'`） |
+  | `unvalidated` 検証できなかった | 検証そのものが失敗した `unvalidated`（`VALIDATION_RESULT = 'unvalidated'`。資料の根拠を使わなかった回答 `no_rag_evidence` は `ungrounded` として残すが、データだけの質問にも付くのでシグナルにしない） |
+  | `unanswered` 答えられなかった | 回答の対応（#1305）が `insufficient_evidence` / `needs_human`（`ANSWER_OUTCOME`） |
+  | `approval_rejected` 承認の却下 | 承認が `rejected`（`APPROVALS_REJECTED > 0`。終了で無効にした承認は数えない） |
+  | `tool_failed` ツールの失敗 | step が `failed`（`TOOL_FAILURES > 0`） |
+  | `run_failed` 実行の失敗・取り消し | Run の状態が `failed` / `cancelled` |
+
+  対象は期間（Run を作った日時）と業務 Agent で絞った、終わった Run（品質評価の Run を除く）。集計は対象の Run の数・
+  シグナルのある Run の数・種類ごとの数を前の同じ長さの期間と比べ、一覧は種類で絞って `CREATED_AT DESC, RUN_ID DESC` で
+  ページングする。列は migration 012 で足す（データは消さない）。既存の Run の事実の新しい列は起動時の backfill が
+  Runtime repository の Run から書く（Run の snapshot を整理した古い事実は空のままで、シグナルにならない）。migration 012 の
+  前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`）で利用状況・フィードバックの事実を書き続ける。
 - 品質評価（#776）の job は件数（旧 50 件）ではなく期間（終わった job を 365 日。安全のため 2,000 件まで）で残し、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
 - 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。

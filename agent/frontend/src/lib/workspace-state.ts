@@ -24,14 +24,14 @@ export const WORKSPACE_FIELDS = {
   // 承認の一覧で選んだ承認（#808）。判断は確認し直すので残さない。
   approvals: ["selectedId"],
   audit: ["filterForm", "appliedForm", "page"],
-  // フィードバックの絞り込み（#774）。
-  feedback: ["days", "agentId", "rating", "reason"],
+  // フィードバックの絞り込み（#774）と、見方のタブ・確かめるべき実行のシグナルの種類（#1822）。
+  feedback: ["days", "agentId", "rating", "reason", "view", "signalKind"],
   // 品質評価の業務 Agent・表示している評価（#776）。評価ケースは評価セットとして保存する。
   evaluation: ["agentId", "jobId"],
   // 利用状況の期間と内訳のタブ（#772）。
   usage: ["days", "view"],
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
-  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "evaluationSets", "evaluationResults", "evaluationJobs", "automations", "feedback", "usage"],
+  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "evaluationSets", "evaluationResults", "evaluationJobs", "automations", "feedback", "feedbackSignals", "usage"],
   // 一覧の絞り込みの検索語（SearchField が確定した値。#535 / #808）。
   listSearch: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "toolPolicy", "automations"],
   // 一覧の状態の絞り込み（実行履歴の状態・承認の保留中 / 判断済み。#808）。
