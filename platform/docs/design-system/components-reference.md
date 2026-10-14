@@ -3089,8 +3089,8 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
   error={query.isError ? query.error : null}
   onRetry={() => void query.refetch()}
   labels={{ list: "会話の履歴", loading: "会話を読み込んでいます", error: "会話の履歴を読み込めませんでした。", retry: "再試行", empty: "まだ会話がありません" }}
-  renderActions={(item) => <><Button iconOnly icon={Pencil} … /><Button iconOnly tone="danger" icon={Trash2} … /></>}  // API がある製品だけ
-  renderEditor={(item) => (editingId === item.id ? <TitleEditor … /> : null)}
+  renderActions={historyActions.renderActions}   // 名前の変更・削除（useChatHistoryActions。3 製品。#1817）
+  renderEditor={historyActions.renderEditor}
   footer={<Pagination … />}                                  // offset の API は Pagination、カーソルは「さらに読み込む」
 />
 ```
@@ -3104,7 +3104,30 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
 | ページングは `footer` で製品が選ぶ | API に合わせる（page-archetypes.md「一覧の型と、基準から外す例外」） |
 
 - 単体テストは `packages/ui/tests/chat-history-list.test.tsx`。
-- 使う所: RAG（名前の変更・削除・`Pagination`）、NL2SQL（「さらに読み込む」）、Agent（状態のバッジ）。
+- 使う所: 3 製品のチャット（名前の変更・削除・`Pagination`）。Agent は状態のバッジも出す。
+
+## useChatHistoryActions — **新規**（#1817）
+
+会話の履歴の行の「名前の変更」「削除」（3 製品共通）。返す `renderActions` / `renderEditor` を `ChatHistoryList` に渡す。製品は API の呼び出しと、削除の前後の画面の後始末だけを書く。
+
+```tsx
+const historyActions = useChatHistoryActions({
+  onRename: (id, title) => api.renameConversation(id, title),   // 前後の空白を除いた 1〜80 文字
+  onDelete: (id) => api.deleteConversation(id),
+  onBeforeDelete: (item) => { if (item.id === activeId) stopSendingAndClearSelection(); }, // RAG（送信中でも消せる）
+  onDeleted: (item) => { if (item.id === activeId) startNewConversation(); },             // Agent・NL2SQL（作成中は 409）
+  disabled: busy,
+});
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 名前の変更は行をその場の `TextField`（`maxLength` 80・`required`・ラベルは隠す）にし、Enter で保存・Esc で取り消し。空の名前は保存せず欄の下に「会話名を入力してください。」、保存の失敗も欄の下に API の文を出して欄へフォーカスを戻す | 一覧の位置を保ったまま直せる。入力の誤りは欄の直下（messaging.md §10） |
+| 削除は確認のダイアログ（danger・scrim では閉じない）を通し、結果は Toast。失敗は API の文を Toast | 取り消せない操作（buttons.md §5.1）。会話の一覧は残るので Toast で足りる |
+| 文言は `DEFAULT_CHAT_HISTORY_ACTION_LABELS`（RAG の文を正本にした）。確認の説明は「「{title}」を会話の履歴から削除します。削除した会話は開くことも続けることもできません。この操作は取り消せません。」 | 3 製品で同じ機能の文をそろえる（AGENTS.md「言語」）。Agent の Run・NL2SQL のジョブは監査のため残るので、「メッセージをすべて削除」とは書かない |
+| 削除の失敗の文は既定で共通の `apiErrorMessage`（RAG は `ApiError.messages` を「 / 」でつなぐ `errorMessage` を渡す） | 製品の `ApiError` の形に合わせる |
+
+- 単体テストは `packages/ui/tests/chat-history-actions.test.tsx`。e2e は RAG `e2e/chat.spec.ts`・Agent `e2e/chat-history-actions.spec.ts`・NL2SQL `tests/e2e/sql-chat-history-actions.spec.ts`（desktop と 375px）。
 
 ## useChatAutoScroll — **新規**（#1161）
 

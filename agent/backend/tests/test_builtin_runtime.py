@@ -23,11 +23,13 @@ from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
+    DELETED_THREAD_METADATA_KEY,
     AgentProfile,
     AgentProfilePatch,
     ApprovalDecisionRequest,
     RunCreateRequest,
     RunStatus,
+    ThreadBusyError,
     ThreadNotFoundError,
     builtin_resume_pending,
     runtime_repository,
@@ -947,6 +949,83 @@ def test_thread_belongs_to_its_user_and_agent(calls: _Calls) -> None:
         runtime_repository.get_thread(thread_id, user_uuid="99999999-0000-0000-0000-000000000000")
     others = runtime_repository.list_threads(user_uuid="99999999-0000-0000-0000-000000000000")
     assert thread_id not in {item.thread_id for item in others}
+
+
+def test_thread_rename_and_delete_keep_runs(calls: _Calls) -> None:
+    """会話の名前の変更・削除は作った利用者だけ。削除しても Run は残す（#1817）。"""
+    del calls
+    other = "99999999-0000-0000-0000-000000000000"
+    run_id = _create_run("最初の質問")
+    thread_id = runtime_repository.get_run(run_id).thread_id
+    assert thread_id is not None
+
+    summary = runtime_repository.rename_thread(thread_id, user_uuid=USER_UUID, title="売上の確認")
+    assert summary.title == "売上の確認"
+    [listed] = [
+        item
+        for item in runtime_repository.list_threads(user_uuid=USER_UUID)
+        if item.thread_id == thread_id
+    ]
+    assert listed.title == "売上の確認"
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.rename_thread(thread_id, user_uuid=other, title="横取り")
+
+    # 回答の作成中の会話は消さない。
+    with pytest.raises(ThreadBusyError):
+        runtime_repository.delete_thread(thread_id, user_uuid=USER_UUID)
+    runtime_repository.cancel_run(run_id)
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.delete_thread(thread_id, user_uuid=other)
+    runtime_repository.delete_thread(thread_id, user_uuid=USER_UUID)
+
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.get_thread(thread_id, user_uuid=USER_UUID)
+    assert thread_id not in {
+        item.thread_id for item in runtime_repository.list_threads(user_uuid=USER_UUID)
+    }
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="続き", agent_id=AGENT_ID, thread_id=thread_id),
+            created_by_user_uuid=USER_UUID,
+        )
+    # Run は監査・フィードバック・評価のために残る（会話からの参照だけを外す）。
+    kept = runtime_repository.get_run(run_id)
+    assert kept.thread_id is None
+    assert kept.metadata[DELETED_THREAD_METADATA_KEY] == thread_id
+
+
+def test_thread_api_renames_and_deletes(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    """`PATCH` / `DELETE /api/threads/{thread_id}`（#1817）。空の名前は 422、作成中は 409。"""
+    del calls
+    from security_support import client
+
+    monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
+    created = client.post("/api/runs", json={"goal": "最初の質問", "agent_id": AGENT_ID})
+    assert created.status_code == 200, created.text
+    run_id = created.json()["data"]["id"]
+    thread_id = created.json()["data"]["thread_id"]
+
+    renamed = client.patch(f"/api/threads/{thread_id}", json={"title": "  売上の確認  "})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["data"]["title"] == "売上の確認"
+    assert client.patch(f"/api/threads/{thread_id}", json={"title": "   "}).status_code == 422
+    assert client.patch(f"/api/threads/{thread_id}", json={"title": "あ" * 81}).status_code == 422
+    missing = "thread_" + "0" * 32
+    assert client.patch(f"/api/threads/{missing}", json={"title": "x"}).status_code == 404
+    assert client.delete(f"/api/threads/{missing}").status_code == 404
+
+    busy = client.delete(f"/api/threads/{thread_id}")
+    assert busy.status_code == 409
+    assert busy.json()["error_messages"] == [
+        "回答の作成中・承認待ちの会話は削除できません。"
+        "停止するか、回答が終わってから削除してください。"
+    ]
+    assert client.post(f"/api/runs/{run_id}/cancel").status_code == 200
+    deleted = client.delete(f"/api/threads/{thread_id}")
+    assert deleted.status_code == 200, deleted.text
+    assert client.get(f"/api/threads/{thread_id}").status_code == 404
+    listed = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]["items"]
+    assert thread_id not in {item["thread_id"] for item in listed}
 
 
 def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls) -> None:

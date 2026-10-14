@@ -772,6 +772,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/nl2sql/engines"): _allowed(PROFILE_MANAGE_PERMISSION, QUERY_GENERATE_PERMISSION),
     ("GET", "/nl2sql/chats"): _QUERY_GENERATE,
     ("GET", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
+    # 会話の名前の変更・削除（#1817）。本人の会話だけ（handler が利用者で絞る）。
+    ("PATCH", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
+    ("DELETE", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
     ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
     # 処理の段階のイベント（polling・SSE。#1359）。ジョブの取得と同じ権限。
     ("GET", "/nl2sql/jobs/{job_id}/progress"): _QUERY_HISTORY_READ,

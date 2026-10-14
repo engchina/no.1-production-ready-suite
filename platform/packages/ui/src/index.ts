@@ -193,6 +193,14 @@ export {
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";
 export {
+  CHAT_HISTORY_TITLE_MAX_LENGTH,
+  DEFAULT_CHAT_HISTORY_ACTION_LABELS,
+  useChatHistoryActions,
+  type ChatHistoryActionLabels,
+  type ChatHistoryActions,
+  type UseChatHistoryActionsOptions,
+} from "./components/chat/use-chat-history-actions";
+export {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
