@@ -1,11 +1,13 @@
-// AI要件確認の画面（#1439 / #1442 / #1715）。SQL 生成の画面（「AI要件確認」のボタンで開く）とチャット（送信の
-// ときに自動で始める）が、この 1 つの部品で同じ表示・同じ操作を出す。基準は SQL 生成の画面の AI要件確認。
+// AI要件確認の画面（#1439 / #1442 / #1715 / #1761）。SQL 生成の画面（「AI要件確認」のボタンで開く）とチャット
+// （送信のときに自動で始める）が、この 1 つの部品で同じ表示・同じ操作・同じ文言を出す。
 //
-// 画面ごとに違うのは入口（いつ始めるか・session の作り方）と、確定した要件の行き先（SQL 生成の画面は質問の欄へ
-// 反映、チャットは SQL の生成）の文言だけ。検査中・失敗（理由・「詳細」・もう一度確認・確認せずに生成・中止）・
-// 1 問ずつの質問・確認済みの一覧からの直し・要件のまとめ・確定・終わった確認は、ここで決める。
+// 画面ごとに違うのは入口（いつ始めるか・session の作り方・SQL 生成の画面の業務プロファイルの選択）と、置く場所に
+// 合わせた操作部品の高さだけ。検査中・失敗（理由・「詳細」・もう一度確認・確認せずに生成・中止）・1 問ずつの
+// 質問・確認済みの一覧からの直し・要件のまとめ・確認のカード（対象の選び直し・その他（自由入力）・「この要件で
+// SQL を生成して実行」・「確認を中止して閉じる」）・終わった確認は、ここで決める。確認の質問が 0 件でも、利用者が
+// 「この要件で SQL を生成して実行」を押すまで要件を生成に渡さない（#1761）。
 import type { ReactNode } from "react";
-import { CheckCircle2, Sparkles, X } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 
 import { Banner, Button, ProcessingIndicator, StatusBadge } from "@production-ready/ui";
 
@@ -14,6 +16,7 @@ import { t } from "@/lib/i18n";
 import {
   RequirementAnswerProgress,
   RequirementCheckFailure,
+  RequirementConfirmForm,
   RequirementErrorBanner,
   RequirementItemsList,
   RequirementQuestionForm,
@@ -26,19 +29,6 @@ import {
 
 /** 検査の段階（業務プロファイルの推薦 → 確定 → 要件の下書き）。チャットは下書きだけ。 */
 export type RequirementStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
-
-/** 確定した要件の行き先の文言（SQL 生成の画面: 次の SQL の生成に渡す（質問の欄は書き換えない。#1727）、チャット: SQL を生成）。 */
-export interface RequirementApplyLabels {
-  ready: string;
-  apply: string;
-  applyWithRemaining: string;
-}
-
-export const REQUIREMENT_APPLY_TO_GENERATION_LABELS: RequirementApplyLabels = {
-  ready: t("nl2sql.clarification.ready"),
-  apply: t("nl2sql.clarification.apply"),
-  applyWithRemaining: t("nl2sql.clarification.applyWithRemaining"),
-};
 
 const START_PHASE_LABELS: Record<RequirementStartPhase, Parameters<typeof t>[0]> = {
   recommend_profile: "nl2sql.clarification.loading.recommendProfile",
@@ -58,7 +48,11 @@ export interface RequirementClarificationViewProps {
   onApply: () => void;
   /** 「確認を中止して閉じる」。 */
   onClose: () => void;
-  labels: RequirementApplyLabels;
+  /**
+   * SQL を実行できる（実行の権限がある）か。無ければ確定の操作は「この要件で SQL を生成」（生成だけ）にする。
+   * 画面ごとの文言の違いではなく、権限による違い（#1761。文言は両方の画面で同じ）。
+   */
+  canExecuteSql?: boolean;
   /** 入口の前段（SQL 生成の画面の業務プロファイルの選択）。出している間は下の「中止」の行を出さない。 */
   startSlot?: ReactNode;
   /** 操作部品の高さ（置く場所の行に合わせる。SQL 生成の画面は lg、チャットは sm）。 */
@@ -75,13 +69,15 @@ export function RequirementClarificationView({
   onSkip,
   onApply,
   onClose,
-  labels,
+  canExecuteSql = true,
   startSlot,
   size,
   idPrefix,
 }: RequirementClarificationViewProps) {
   const { session, busyAction, error, sessionEnded, state, draft, activeItem, showApply } = controller;
   const badge = state ? requirementPhaseBadge(state) : null;
+  // 確定して進む操作の文言は、SQL 生成の画面とチャットで同じ（#1761。押すと確定した要件で SQL を生成して実行する）。
+  const applyLabel = canExecuteSql ? t("chat.requirement.generate") : t("chat.requirement.generateOnly");
   const titleId = `${idPrefix}-guided-clarification-title`;
   const closeButton = (
     <Button
@@ -164,7 +160,7 @@ export function RequirementClarificationView({
         controller={controller}
         size={size}
         idPrefix={`${idPrefix}-clarification`}
-        applyWithRemainingLabel={labels.applyWithRemaining}
+        applyWithRemainingLabel={t("chat.requirement.generateWithRemaining")}
         onApplyWithRemaining={onApply}
         trailingActions={closeButton}
       />
@@ -174,27 +170,15 @@ export function RequirementClarificationView({
       <RequirementSummary controller={controller} idPrefix={idPrefix} />
 
       {showApply && !activeItem ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <span className="flex items-center gap-2 text-sm text-success-fg">
-            <CheckCircle2 size={16} aria-hidden="true" />
-            {labels.ready}
-          </span>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="primary"
-              size={size}
-              loading={busyAction === "apply"}
-              disabled={Boolean(busyAction && busyAction !== "apply")}
-              onClick={onApply}
-              icon={Sparkles}
-              data-testid="nl2sql-clarification-apply"
-            >
-              {labels.apply}
-            </Button>
-            {closeButton}
-          </div>
-        </div>
+        <RequirementConfirmForm
+          controller={controller}
+          readyLabel={t("chat.requirement.ready")}
+          applyLabel={applyLabel}
+          onApply={onApply}
+          closeButton={closeButton}
+          size={size}
+          idPrefix={idPrefix}
+        />
       ) : null}
 
       {!activeItem && !showApply && !startSlot && !check.checkError ? (

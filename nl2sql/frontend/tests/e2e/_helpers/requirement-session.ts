@@ -26,7 +26,14 @@ export type RequirementStage =
   // #1718: date_column の基準日と日付の列を答えた後。
   | "date_column_answered"
   // #1718: すべての部分が確定。
-  | "all_confirmed";
+  | "all_confirmed"
+  // #1761: 「employee」（業務プロファイル ALL_VIEWS 相当）。確認の質問は 0 件で、AI が推測した表
+  // （ADMIN.V_EMP_DEPT）に、ほかの表（ADMIN.V_DEPT_PROJECT）を選び直す候補が付いている。
+  | "target_choice"
+  // #1761: target_choice で ADMIN.V_DEPT_PROJECT を選び直した後（再検査 1 回）。
+  | "target_chosen"
+  // #1761: target_choice で「その他（自由入力）」に直しを書いた後（再検査 1 回）。
+  | "other_corrected";
 
 export const REQUIREMENT_SESSION_ID = "requirement-session-1";
 export const REQUIREMENT_QUESTION = "今年度の地域ごとの受注金額";
@@ -434,6 +441,86 @@ const employeeTableQuestion = item({
   ],
 });
 
+// --- #1761 の例（ADMIN.V_EMP_DEPT / ADMIN.V_DEPT_PROJECT） -------------------------------------
+
+export const TARGET_QUESTION = "employee";
+export const TARGET_OTHER_TEXT = "部署ごとの社員数を表示してください";
+
+const viewCandidates = [
+  {
+    id: "candidate-v-emp-dept",
+    label_ja: "ADMIN.V_EMP_DEPT",
+    description_ja: "社員と部署",
+    evidence_ja: "業務プロファイルの対象の表",
+    source: "schema",
+    tables: ["ADMIN.V_EMP_DEPT"],
+    columns: [],
+    relationship_ids: [],
+    refs_ja: "ADMIN.V_EMP_DEPT",
+  },
+  {
+    id: "candidate-v-dept-project",
+    label_ja: "ADMIN.V_DEPT_PROJECT",
+    description_ja: "部署とプロジェクト",
+    evidence_ja: "業務プロファイルの対象の表",
+    source: "schema",
+    tables: ["ADMIN.V_DEPT_PROJECT"],
+    columns: [],
+    relationship_ids: [],
+    refs_ja: "ADMIN.V_DEPT_PROJECT",
+  },
+];
+
+const viewFromInferred = item({
+  id: "item-view-from",
+  key: "from_view",
+  section: "from",
+  label_ja: "使用テーブル",
+  value_ja: "ADMIN.V_EMP_DEPT",
+  status: "inferred",
+  source: "schema",
+  answer_kind: "single_select",
+  tables: ["ADMIN.V_EMP_DEPT"],
+  refs_ja: "ADMIN.V_EMP_DEPT",
+  candidates: viewCandidates,
+});
+
+const viewSelectAll = item({
+  id: "item-view-select",
+  key: "select_all",
+  section: "select",
+  label_ja: "表示列",
+  value_ja: "全列",
+  status: "inferred",
+  sql_hint: "*",
+});
+
+const viewFromChosen = item({
+  ...viewFromInferred,
+  value_ja: "ADMIN.V_DEPT_PROJECT",
+  status: "confirmed",
+  source: "user",
+  answered: true,
+  answer_ja: "ADMIN.V_DEPT_PROJECT",
+  tables: ["ADMIN.V_DEPT_PROJECT"],
+  refs_ja: "ADMIN.V_DEPT_PROJECT",
+  candidates: [],
+});
+
+const viewOtherAnswered = item({
+  id: "item-view-other",
+  key: "added_other",
+  section: "other",
+  label_ja: "そのほか",
+  value_ja: TARGET_OTHER_TEXT,
+  status: "confirmed",
+  source: "user",
+  answered: true,
+  answer_ja: TARGET_OTHER_TEXT,
+});
+
+const TARGET_STAGES: RequirementStage[] = ["target_choice", "target_chosen", "other_corrected"];
+
 const employeeWithoutPeriod = employeeUnspecified.filter((value) => value.section !== "period");
 
 const SKELETON = [
@@ -473,6 +560,9 @@ function employeeSkeleton(stage: RequirementStage, ready: boolean) {
 }
 
 export function requirementClarifiedQuestion(stage: RequirementStage) {
+  if (stage === "target_choice") return "ADMIN.V_EMP_DEPT の全列を表示してください。";
+  if (stage === "target_chosen") return "ADMIN.V_DEPT_PROJECT の全列を表示してください。";
+  if (stage === "other_corrected") return "ADMIN.V_EMP_DEPT の部署ごとの社員数を表示してください。";
   if (stage === "date_column" || stage === "date_column_basis_answered" || stage === "date_column_answered") {
     return "EMPLOYEE.HIRE_DATE が直近 1 年（2025-10-12〜2026-10-11）の ADMIN.EMPLOYEE のすべての列を表示してください。";
   }
@@ -500,6 +590,7 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
           stage === "minimum" ||
           stage === "multi_select" ||
           stage === "clear" ||
+          stage === "target_choice" ||
           stage === "select_all_table" ||
           stage === "date_column" ||
           stage === "all_confirmed"
@@ -511,13 +602,15 @@ function stateFor(stage: RequirementStage, items: Record<string, unknown>[]) {
     minimum_missing_ja: minimum,
     can_apply: minimum.length === 0 && (ready || limit),
     summary_ja: "",
-    sql_skeleton: EMPLOYEE_STAGES.includes(stage)
+    sql_skeleton: TARGET_STAGES.includes(stage)
+      ? `SELECT *\nFROM ${stage === "target_chosen" ? "ADMIN.V_DEPT_PROJECT" : "ADMIN.V_EMP_DEPT"}`
+      : EMPLOYEE_STAGES.includes(stage)
       ? employeeSkeleton(stage, ready)
       : ready || limit
         ? SKELETON
         : PENDING_SKELETON,
     message_ja: ready
-      ? "SQL の要件を確認できました。まとめを確かめてから反映してください。"
+      ? "SQL の要件をまとめました。内容を確かめ、違う所があれば直してから SQL を生成してください。"
       : limit
         ? "AI の再検査は上限（3 回）に達しました。まだ確認の要る項目が 1 件あります。"
         : "SQL を正しく作るため、足りない情報・明確でない情報を 1 つずつ確認します。",
@@ -602,6 +695,12 @@ function itemsFor(stage: RequirementStage): Record<string, unknown>[] {
       return [fromItem, selectItem, joinItem, periodAnswered, groupItem, orderItem].map((value) =>
         value.status === "inferred" ? { ...value, status: "confirmed" } : value
       );
+    case "target_choice":
+      return [viewFromInferred, viewSelectAll];
+    case "target_chosen":
+      return [viewFromChosen, viewSelectAll];
+    case "other_corrected":
+      return [viewFromInferred, viewSelectAll, viewOtherAnswered];
     case "minimum":
       return [
         item({

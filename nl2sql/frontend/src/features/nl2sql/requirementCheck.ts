@@ -22,14 +22,14 @@ export function isRequirementCheckUnavailable(error: unknown): boolean {
 /**
  * session の次の扱い。
  *
- * - `direct`: 確認が要らない（SELECT・FROM が明確で、足りない・あいまいな情報が無く、まだ何も聞いていない）。
- *   聞かずに反映して次へ進む（チャットは SQL を作り、SQL 生成の画面は次の SQL の生成に渡す。どちらも利用者の質問は書き換えない。#1727）。
  * - `applied`: 反映済み（反映の後、次へ進む前に画面を離れた）。そのまま次へ進む。
  * - `ask`: 確認の質問がある・答えられない・最低の基準を満たさない（1 問ずつ聞く・知らせる）。
- * - `summary`: 全部に答えた。まとめ（再検査・SQL の骨組み）を確かめてから次へ進む。
+ * - `summary`: 確認の質問が無い（0 件）・全部に答えた。確認のカード（まとめ・対象の選び直し・その他（自由入力））
+ *   で利用者が確かめ、「この要件で SQL を生成して実行」を押してから次へ進む。質問が 0 件でも自動では反映しない
+ *   （#1761。以前の `direct` の自動の反映はやめた）。利用者の質問は書き換えない（#1727）。
  * - `ended`: 中止・期限切れ・失敗で終わった。
  */
-export type RequirementNextStep = "direct" | "applied" | "ask" | "summary" | "ended";
+export type RequirementNextStep = "applied" | "ask" | "summary" | "ended";
 
 export function requirementNextStep(session: QuerySession): RequirementNextStep {
   if (session.status === "cancelled" || session.status === "error") return "ended";
@@ -38,13 +38,5 @@ export function requirementNextStep(session: QuerySession): RequirementNextStep 
   const state = session.requirement_state;
   if (!state) return "ended";
   if (state.status === "unanswerable" || state.current_item || !state.can_apply) return "ask";
-  if (
-    state.status === "ready" &&
-    state.unresolved_items.length === 0 &&
-    state.answered_count === 0 &&
-    state.review_round === 0
-  ) {
-    return "direct";
-  }
   return "summary";
 }

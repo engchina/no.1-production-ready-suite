@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ChatAnswer, ChatTurn } from "@production-ready/ui";
 
-import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 
 import { cancelQuerySession, createQuerySession, getQuerySession } from "../ontology/api";
@@ -19,13 +18,14 @@ import {
   type RequirementCheckRunner,
   type RequirementSessionController,
 } from "./RequirementClarification";
-import { RequirementClarificationView, type RequirementApplyLabels } from "./RequirementClarificationView";
+import { RequirementClarificationView } from "./RequirementClarificationView";
 
 /**
  * チャットの AI要件確認（#1442）。SQL 生成の画面の AI要件確認（`GuidedClarificationPanel`）を基準にし、同じ hook
  * （`useRequirementSession`・`useRequirementCheck`・`useRequirementProceed`）と同じ部品
- * （`RequirementClarificationView`）を使う（#1715）。チャットだけの違いは入口（送信のときに自動で始め、会話の続きを
- * 検査に渡す）と、確定した要件の行き先（SQL の生成）だけ。
+ * （`RequirementClarificationView`）・同じ文言を使う（#1715 / #1761）。チャットだけの違いは入口（送信のときに自動で
+ * 始め、会話の続きを検査に渡す）だけ。確認の質問が 0 件でも、「この要件で SQL を生成して実行」を押すまで SQL を
+ * 作らない。
  */
 export interface ChatRequirementFlow {
   check: ChatRequirementCheck | null;
@@ -76,7 +76,7 @@ export function useChatRequirementFlow({
   const { session, setSession, setError } = controller;
   const requirementCheck = useRequirementCheck();
   const { run: runCheck, reset: resetCheck } = requirementCheck;
-  const { proceed, directing } = useRequirementProceed(controller);
+  const { proceed } = useRequirementProceed(controller);
   // 検査を始めた送信（job ID）。StrictMode・再レンダーで二重に始めない。
   const startedRef = useRef("");
   // 作成の応答の前に中止した送信（応答が届いたら session を中止する）。
@@ -115,11 +115,10 @@ export function useChatRequirementFlow({
     ).then(async (loaded) => {
       if (!loaded) return;
       if (!current.sessionId) setCheck({ ...current, sessionId: loaded.id });
-      await proceed(
-        loaded,
-        (applied) =>
-          onSubmitRef.current(current, applied.id, applied.requirement?.clarified_question_ja),
-        isCurrent
+      if (!isCurrent()) return;
+      // 確認の質問の件数にかかわらず、確認のカードで利用者の確定を待つ（SQL 生成の画面と同じ。#1761）。
+      proceed(loaded, (applied) =>
+        onSubmitRef.current(current, applied.id, applied.requirement?.clarified_question_ja)
       );
     });
   }, [check, enabled, proceed, runCheck, setCheck]);
@@ -134,7 +133,7 @@ export function useChatRequirementFlow({
     resetCheck();
   }
 
-  const running = requirementCheck.checking || directing;
+  const running = requirementCheck.checking;
 
   const retry = () => {
     if (!check) return;
@@ -185,8 +184,7 @@ export function useChatRequirementFlow({
   return {
     check,
     controller,
-    // 自動の反映（確認が要らないとき）の間も検査中として出す。
-    requirementCheck: { ...requirementCheck, checking: running },
+    requirementCheck,
     running,
     scrollKey: [
       running ? "running" : "",
@@ -212,12 +210,6 @@ export function ChatRequirementTurn({
 }) {
   const { check } = flow;
   if (!check) return null;
-  // 確定した要件の行き先は SQL の生成（SQL 生成の画面は質問の欄への反映）。
-  const labels: RequirementApplyLabels = {
-    ready: t("chat.requirement.ready"),
-    apply: canExecuteSql ? t("chat.requirement.generate") : t("chat.requirement.generateOnly"),
-    applyWithRemaining: t("chat.requirement.generateWithRemaining"),
-  };
   return (
     <ChatTurn question={check.request.question} testId="sql-chat-requirement-turn">
       <ChatAnswer testId="sql-chat-requirement">
@@ -230,7 +222,7 @@ export function ChatRequirementTurn({
           onSkip={flow.skip}
           onApply={flow.generate}
           onClose={flow.cancel}
-          labels={labels}
+          canExecuteSql={canExecuteSql}
           size="sm"
           idPrefix="sql-chat"
         />
