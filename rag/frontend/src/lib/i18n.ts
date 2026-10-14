@@ -556,7 +556,7 @@ export const ja = {
   "settings.services.logs.source.journald":
     "journalctl -u {unit} / 最新 {lines} 行",
   "settings.services.logs.loading": "ログを読み込んでいます",
-  "settings.services.logs.refresh": "最新情報を取得",
+  "settings.services.logs.refresh": "ログの最新情報を取得",
   "settings.services.logs.copy": "コピー",
   "settings.services.logs.copied": "ログをコピーしました。",
   "settings.services.logs.copyFailed": "ログをコピーできませんでした。",
@@ -1483,7 +1483,6 @@ export const ja = {
     "登録先にできるナレッジベースがありません。管理者にナレッジベースの利用権限を依頼してください。",
   "upload.knowledgeBases.loadWarningRequiredHint":
     "登録先のナレッジベースを選択できないため、アップロードできません。再読み込みしてください。",
-  "upload.knowledgeBases.reload": "最新情報を取得",
 
   "sourceProfile.documentWorkspaceTitle": "原本情報",
   "sourceProfile.parser": "原本判定",

@@ -784,7 +784,7 @@ export function ViewManagementPage() {
               <span>
                 {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
-                  : t("viewMgmt.action.refresh")}
+                  : t("common.retry")}
               </span>
             </Button>
           }

@@ -1123,7 +1123,7 @@ function ExecutableNl2SqlWorkbench() {
           action={
             visiblePageError ? (
               <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()} icon={RefreshCw}>
-                <span>{t("nl2sql.action.refresh")}</span>
+                <span>{t("common.retry")}</span>
               </Button>
             ) : undefined
           }

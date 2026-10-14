@@ -3843,6 +3843,9 @@ class OracleClient:
             created_at=message.created_at or now,
             progress=message.progress,
             lease_owner=message.lease_owner,
+            # 回答前に確認した内容（#1839）。渡し忘れると clarification_json が
+            # 常に NULL になる（#1877）。
+            clarification=message.clarification,
         )
 
         def operation(connection: OracleConnectionProtocol) -> StoredMessage:
