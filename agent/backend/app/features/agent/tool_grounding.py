@@ -29,6 +29,16 @@ BLOCK と同じ考え方）。
   「前提を示して回答」・確認の上限・無人の Run）ときは、ツールを呼ばずに確認の質問だけを返して
   よいと伝える。差し戻しの後も、確認のツールを渡したのに本文で確認の質問だけを返した回答は、
   拒答にはせず、改善の手がかりとして Run の経過に残す（`clarified_in_text`）。
+- 確認のツールを渡した Run（#1881 の追加）でも、ツールを 1 つも呼ばずに本文で確認の質問だけを返した
+  回答は 1 回差し戻す（確認のツールを渡したときの文。差し戻しの後も本文の聞き返しなら、拒答に
+  せずそのまま出し、`text_clarification` を経過に残す）。あいさつへの返事（「こんにちは。ご用件を
+  お知らせください。」。#1879）は確認の質問ではないので差し戻さない（`is_greeting_reply`）。
+- 利用者に確認しない Run（業務 Agent の方針「前提を示して回答」と、利用者が「確認せずに回答」を
+  選んだ Run。無人の Run は除く。#1903）では、確認の質問だけの回答も差し戻しの対象にし、差し戻しの
+  文は「確認の質問はせず、資料・業務データのツールで調べ、決まらない点は前提を示して答える
+  （条件ごとに分ける）」にする（`RETRY_MESSAGE_ASSUME`）。差し戻しの後も本文の聞き返しだけなら、
+  拒答にはせずそのまま出し、Run の経過に残す（拒答は範囲外・確かめられない質問のためのもので、
+  対象が曖昧な質問の聞き返しを「お答えできません」にすると利用者が次に何をすればよいか分からない）。
 - 回答の対応は `insufficient_evidence`（basis `no_tool_grounding`）。最終の検証の成果物は
   `skipped`（reason `no_tool_grounding`）にする（資料の根拠を使わずに答えた `no_rag_evidence`
   とは分ける。#1834 のシグナルは拒答した Run を「答えられなかった」に数える）。
@@ -42,7 +52,7 @@ from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, OUTCOME_SCHEMA_VERSION
-from app.features.agent.answer_passages import is_clarification_only
+from app.features.agent.answer_passages import greets, is_clarification_only, is_greeting_only
 from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.confirmation import CONFIRMATION_TOOL
 from app.features.agent.support_task import (
@@ -99,6 +109,14 @@ RETRY_MESSAGE = (
     + "質問が曖昧で対象（文書・システム・期間など）が分からないときは、ツールを呼ばずに、"
     "対象を確かめる確認の質問だけを返してかまいません（質問の文だけにし、例・説明・答えた後の"
     "案内は添えない）。" + _RETRY_TAIL
+)
+# 利用者に確認しない Run（方針「前提を示して回答」・利用者が「確認せずに回答」を選んだ。#1903）。
+# 確認の質問をさせず、ツールで調べてから、決まらない点は前提を示して答えさせる。
+RETRY_MESSAGE_ASSUME = (
+    _RETRY_HEAD + "この実行では利用者に確認しません。質問が曖昧に見えるときも、確認の質問はせず"
+    "（本文でも聞き返さない）、まず資料・業務データのツールで調べてください。ツールの結果を見ても"
+    "決まらない点は、何を前提にしたかを回答の中で示して答えてください（条件によって答えが変わる"
+    "ときは、条件ごとに分けて示してください）。" + _RETRY_TAIL
 )
 # 回答前の確認のツール（ask_user_confirmation）を渡した Run（#1881）。本文で聞き返させず、資料・
 # 業務データのツールの確認事項か、確認のツールのカードで確かめさせる。
@@ -178,12 +196,36 @@ def is_exempt_answer(answer: str, steps: list[RunStep]) -> bool:
     return is_clarification_only(answer) or nl2sql_clarification_pending(steps)
 
 
-def needs_grounding(answer: str, *, steps: list[RunStep], tool_names: Collection[str]) -> bool:
-    """ツールで確かめていない回答として、差し戻し・拒答の対象か。"""
+def is_greeting_reply(answer: str, question: str = "") -> bool:
+    """あいさつへの返事か（#1879。あいさつを含む回答か、利用者の質問があいさつだけ）。
+
+    「こんにちは。ご用件をお知らせください。」のように用件を聞く回答は、質問の解釈を確かめる
+    確認の質問ではないので、本文の確認の質問の差し戻し（#1881・#1903）の対象にしない。
+    """
+    return greets(answer) or is_greeting_only(question)
+
+
+def needs_grounding(
+    answer: str,
+    *,
+    steps: list[RunStep],
+    tool_names: Collection[str],
+    clarification_exempt: bool = True,
+    question: str = "",
+) -> bool:
+    """ツールで確かめていない回答として、差し戻し・拒答の対象か。
+
+    `clarification_exempt` が False（確認のツールを渡した Run と、利用者に確認しない Run。
+    #1881・#1903）なら、本文の確認の質問だけの回答も差し戻しの対象にする（あいさつへの返事は
+    除く。`is_greeting_reply`。`question` は利用者の質問）。NL2SQL の SQL の生成前の確認で止まった
+    Run は、ツールを呼んでいるので対象外。
+    """
     if not grounding_tools(tool_names):
         return False
     if grounding_attempted(steps):
         return False
+    if not clarification_exempt and not is_greeting_reply(answer, question):
+        return not nl2sql_clarification_pending(steps)
     return not is_exempt_answer(answer, steps)
 
 
@@ -200,8 +242,14 @@ def clarified_in_text(answer: str, *, steps: list[RunStep], tool_names: Collecti
     return is_clarification_only(answer)
 
 
-def retry_message(*, confirmable: bool) -> str:
-    """差し戻しの文（回答前の確認のツールを渡したかで、曖昧な質問の扱いを分ける。#1881）。"""
+def retry_message(*, confirmable: bool, assume: bool = False) -> str:
+    """差し戻しの文（回答前の確認のツールを渡したかで、曖昧な質問の扱いを分ける。#1881）。
+
+    `assume` は利用者に確認しない Run（#1903）。確認のツールを渡していても（「確認せずに回答」で
+    再開した Run は、答えた呼び出しの再開のためにツールが残る）、確認させない文にする。
+    """
+    if assume:
+        return RETRY_MESSAGE_ASSUME
     return RETRY_MESSAGE_CONFIRMABLE if confirmable else RETRY_MESSAGE
 
 
@@ -209,14 +257,17 @@ def retry_message(*, confirmable: bool) -> str:
 _RETRY_ANSWER_MAX_CHARS = 4000
 
 
-def retry_input(items: list[Any], answer: str, *, confirmable: bool = False) -> list[Any]:
+def retry_input(
+    items: list[Any], answer: str, *, confirmable: bool = False, assume: bool = False
+) -> list[Any]:
     """差し戻して Run を続ける入力（前の入力・ツールの呼び出し・差し戻しの利用者のメッセージ）。
 
     前の応答の assistant のメッセージ（`output_text`）は入力に入れない。OCI Enterprise AI の
     `openai.gpt-oss-120b` は、`input` の `output_text` を「output_text is not supported by model」の
     400 で拒否する（2026-10-14 に実環境で確認）。その直前の reasoning item も、続く出力が無くなる
     ため外す。元の回答は差し戻しのメッセージの中に引用として添える（何を直すかをモデルに示す）。
-    `confirmable` は、この Run でモデルに `ask_user_confirmation` を渡したか（`retry_message`）。
+    `confirmable` は、この Run でモデルに `ask_user_confirmation` を渡したか、`assume` は利用者に
+    確認しない Run か（`retry_message`）。
     """
     kept: list[Any] = []
     for item in items:
@@ -231,7 +282,7 @@ def retry_input(items: list[Any], answer: str, *, confirmable: bool = False) -> 
     quoted = answer.strip()
     if len(quoted) > _RETRY_ANSWER_MAX_CHARS:
         quoted = quoted[: _RETRY_ANSWER_MAX_CHARS - 1] + "…"
-    head = retry_message(confirmable=confirmable)
+    head = retry_message(confirmable=confirmable, assume=assume)
     message = f"{head}\n\n直前の回答（利用者には出していません）:\n{quoted}"
     return [*kept, {"role": "user", "content": message}]
 
@@ -306,6 +357,7 @@ __all__ = [
     "REASON_NO_TOOL_GROUNDING",
     "REFUSAL_HEAD",
     "RETRY_MESSAGE",
+    "RETRY_MESSAGE_ASSUME",
     "RETRY_MESSAGE_CONFIRMABLE",
     "clarified_in_text",
     "grounding_attempted",
@@ -313,6 +365,7 @@ __all__ = [
     "grounding_tools",
     "grounding_used",
     "is_exempt_answer",
+    "is_greeting_reply",
     "is_grounding_tool",
     "needs_grounding",
     "refusal_outcome",
