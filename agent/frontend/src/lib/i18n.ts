@@ -1410,6 +1410,7 @@ const agentJa = {
   "agent.clarification.policyHint":
     "前提を示すときは確認事項を聞かず、何を前提にしたかを回答の中で示します。データベース（NL2SQL）の確認は NL2SQL の業務プロファイルの方針に従います。",
   "agent.clarification.maxRounds": "確認の上限（往復）",
+  "agent.clarification.maxRounds.default": "既定（2 回）",
   "agent.clarification.maxRounds.value": "{count} 回",
   "agent.clarification.maxRoundsHint":
     "最初の確認を 1 回目に数えます。上限の回の後は、決まらない点を前提を示して回答します。",

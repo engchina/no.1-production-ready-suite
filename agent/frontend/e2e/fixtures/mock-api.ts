@@ -1993,7 +1993,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
           : field === "clarification_policy"
             ? (value ?? "confirm")
             : field === "clarification_max_rounds"
-              ? (value ?? 2)
+              ? (value ?? 0)
               : (value ?? null);
       return VERSIONED.some(
         (field) => JSON.stringify(comparable(field, agent[field])) !== JSON.stringify(comparable(field, published[field]))

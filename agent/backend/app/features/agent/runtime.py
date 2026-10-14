@@ -52,7 +52,6 @@ from app.features.agent.clarification_cancel import (
 )
 from app.features.agent.config import runtime_config_store
 from app.features.agent.confirmation import (
-    DEFAULT_MAX_ROUNDS,
     MAX_ROUNDS_LIMIT,
     POLICY_CONFIRM,
     RESPONSE_METADATA_KEY,
@@ -65,6 +64,7 @@ from app.features.agent.confirmation import (
     response_goal,
     response_record,
     validate_answers,
+    validate_max_rounds,
 )
 from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
@@ -233,7 +233,10 @@ class AgentVersion(BaseModel):
     model_id: str = ""
     data_scopes: AgentDataScopes = Field(default_factory=dict)
     clarification_policy: ClarificationPolicy = POLICY_CONFIRM
-    clarification_max_rounds: int = Field(default=DEFAULT_MAX_ROUNDS, ge=1, le=MAX_ROUNDS_LIMIT)
+    clarification_max_rounds: int = Field(default=0, ge=0, le=MAX_ROUNDS_LIMIT)
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        validate_max_rounds
+    )
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
@@ -252,9 +255,13 @@ class AgentProfile(BaseModel):
     # （Run の利用者が使えるすべてのプロファイルから、モデルが選ぶ）。
     data_scopes: AgentDataScopes = Field(default_factory=dict)
     # 回答前の確認（#1839）。曖昧な質問の扱い（`confirm` = 確認してから回答する、`assume` = 前提を
-    # 示して回答する）と、確認の上限（往復）。
+    # 示して回答する）と、確認の上限（往復。最初の確認を 1 回目に数える。0 は既定の 2 回、2〜6。
+    # NL2SQL の業務プロファイルと同じ名前・意味）。
     clarification_policy: ClarificationPolicy = POLICY_CONFIRM
-    clarification_max_rounds: int = Field(default=DEFAULT_MAX_ROUNDS, ge=1, le=MAX_ROUNDS_LIMIT)
+    clarification_max_rounds: int = Field(default=0, ge=0, le=MAX_ROUNDS_LIMIT)
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        validate_max_rounds
+    )
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
@@ -334,7 +341,10 @@ class AgentProfilePatch(BaseModel):
     model_id: str | None = None
     data_scopes: AgentDataScopes | None = None
     clarification_policy: ClarificationPolicy | None = None
-    clarification_max_rounds: int | None = Field(default=None, ge=1, le=MAX_ROUNDS_LIMIT)
+    clarification_max_rounds: int | None = Field(default=None, ge=0, le=MAX_ROUNDS_LIMIT)
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        validate_max_rounds
+    )
     tool_names: list[str] | None = None
     enabled: bool | None = None
 

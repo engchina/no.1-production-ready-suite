@@ -62,9 +62,12 @@ interface AgentDraft {
   clarification_max_rounds: number;
 }
 
-/** 確認の上限（往復）の既定と選択肢（backend の `confirmation.DEFAULT_MAX_ROUNDS` / `MAX_ROUNDS_LIMIT`）。 */
-const DEFAULT_CLARIFICATION_MAX_ROUNDS = 2;
-const CLARIFICATION_MAX_ROUNDS_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
+/**
+ * 確認の上限（往復）の選択肢。0 は既定（2 回）。NL2SQL の業務プロファイルと同じく 0 か 2〜6（1 回は選べない）。
+ * backend の `confirmation.DEFAULT_MAX_ROUNDS` / `MAX_ROUNDS_LIMIT`。
+ */
+const DEFAULT_CLARIFICATION_MAX_ROUNDS = 0;
+const CLARIFICATION_MAX_ROUNDS_OPTIONS = [0, 2, 3, 4, 5, 6] as const;
 
 function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
   return {
@@ -544,9 +547,12 @@ export function AgentEditorView({
                     value={String(clarificationMaxRounds)}
                     options={CLARIFICATION_MAX_ROUNDS_OPTIONS.map((rounds) => ({
                       value: String(rounds),
-                      label: t("agent.clarification.maxRounds.value", { count: rounds }),
+                      label:
+                        rounds === 0
+                          ? t("agent.clarification.maxRounds.default")
+                          : t("agent.clarification.maxRounds.value", { count: rounds }),
                     }))}
-                    onValueChange={(value) => setClarificationMaxRounds(Number(value) || DEFAULT_CLARIFICATION_MAX_ROUNDS)}
+                    onValueChange={(value) => setClarificationMaxRounds(Number(value))}
                   />
                 </CardContent>
               </Card>

@@ -30,6 +30,7 @@ export function PendingConfirmationCard({
   busyAction,
   error,
   actions,
+  autoFocus = false,
   onDecide,
 }: {
   confirmation: ConfirmationRequest;
@@ -37,6 +38,8 @@ export function PendingConfirmationCard({
   busyAction: ClarificationBusyAction | null;
   error: unknown;
   actions?: ReactNode;
+  /** 出たときに確認事項の文へフォーカスを移す（送信の続きで出たとき。UX 契約 §7）。 */
+  autoFocus?: boolean;
   onDecide: (action: ConfirmationAction, answers?: ConfirmationAnswer[]) => void;
 }) {
   const sourceNote =
@@ -57,6 +60,7 @@ export function PendingConfirmationCard({
       onCancel={() => onDecide("cancel")}
       error={error ? <ApiErrorBanner error={error} fallback={t("chat.confirmation.failed")} testId="chat-confirmation-error" /> : null}
       actions={actions}
+      autoFocus={autoFocus}
       idPrefix={`chat-${confirmation.id}`}
       testId="chat-confirmation"
     >

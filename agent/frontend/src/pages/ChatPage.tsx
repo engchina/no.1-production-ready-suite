@@ -140,6 +140,10 @@ export function ChatPage() {
   // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
   // 作れなかったときは残して「再送信」を出す（入力を失わない）。
   const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
+  // この画面で送った（答えで作った）Run。回答前の確認のカードが送信の続きで出たら、確認事項の文へフォーカスを移す
+  // （UX 契約 confirm-before-answer.md §7。履歴から開いた会話のカードでは移さない。#1839）。
+  const [sentRunIds, setSentRunIds] = useState<ReadonlySet<string>>(() => new Set());
+  const rememberSentRun = (runId: string) => setSentRunIds((current) => new Set(current).add(runId));
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
@@ -272,6 +276,7 @@ export function ChatPage() {
         setThreadId(createdThreadId);
       }
       setPending(null);
+      rememberSentRun(run.id);
       void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
       if (stopRequested) cancel.mutate(run.id);
@@ -352,6 +357,8 @@ export function ChatPage() {
             }
           : current
       );
+      rememberSentRun(outcome.run.id);
+      if (outcome.next_run) rememberSentRun(outcome.next_run.id);
       autoScroll.scrollToLatest();
       void queryClient.invalidateQueries({ queryKey: ["thread", outcomeThreadId] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
@@ -688,6 +695,8 @@ export function ChatPage() {
                     decideConfirmation.variables?.run.id === run.id ? decideConfirmation.error : null
                   }
                   onDecideConfirmation={onDecideConfirmation}
+                  // 入力欄に次の質問を書き始めていたら、その位置を奪わない。
+                  confirmationAutoFocus={sentRunIds.has(run.id) && !draft.trim()}
                   canDecide={capabilities.decideApprovals}
                   // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
                   canRate={capabilities.operateRuns}
@@ -722,6 +731,7 @@ function RunChatTurn({
   confirmationBusy,
   confirmationError,
   onDecideConfirmation,
+  confirmationAutoFocus,
   canDecide,
   canRate,
   deciding,
@@ -739,6 +749,8 @@ function RunChatTurn({
   /** この往復の確認で処理中の操作。 */
   confirmationBusy: ClarificationBusyAction | null;
   confirmationError: unknown;
+  /** 確認のカードが出たときに確認事項の文へフォーカスを移すか（この画面で送った往復）。 */
+  confirmationAutoFocus: boolean;
   onDecideConfirmation: (
     run: RunState,
     confirmation: ConfirmationRequest,
@@ -848,6 +860,7 @@ function RunChatTurn({
             disabled={confirmationDisabled}
             busyAction={confirmationBusy}
             error={confirmationError}
+            autoFocus={confirmationAutoFocus}
             actions={
               toolConfirmationKind ? (
                 <Button

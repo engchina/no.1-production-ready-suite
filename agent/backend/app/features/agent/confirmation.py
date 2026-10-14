@@ -52,8 +52,18 @@ CONFIRMATION_TOOL = "ask_user_confirmation"
 ClarificationPolicy = Literal["confirm", "assume"]
 POLICY_CONFIRM: ClarificationPolicy = "confirm"
 POLICY_ASSUME: ClarificationPolicy = "assume"
+# 確認の上限（往復。最初の確認を 1 回目に数える）。業務 Agent の値 0 は既定（2 回）。
+# NL2SQL の業務プロファイルの `clarification_max_rounds` と同じ範囲（0 か 2〜6）。
 DEFAULT_MAX_ROUNDS = 2
 MAX_ROUNDS_LIMIT = 6
+
+
+def validate_max_rounds(value: int | None) -> int | None:
+    """確認の上限は 0（既定）か 2 回以上（NL2SQL の業務プロファイルと同じ。1 回は選べない）。"""
+    if value == 1:
+        raise ValueError("確認の上限は 2 回以上にしてください（0 は既定）。")
+    return value
+
 
 ConfirmationSource = Literal["agent", "nl2sql", "rag"]
 SOURCE_AGENT: ConfirmationSource = "agent"
@@ -241,6 +251,8 @@ def response_record(
         "source_run_id": source_run_id,
         "question_run_id": question_run_id,
         "round": request.round,
+        # 会話に残す記録（RAG・NL2SQL と同じ形: outcome と entries）。
+        "outcome": "skipped" if action == "skip" else "answered",
         "entries": record_entries(request),
         "context": dict(request.context),
     }
@@ -702,4 +714,5 @@ __all__ = [
     "tool_output",
     "used_rounds",
     "validate_answers",
+    "validate_max_rounds",
 ]

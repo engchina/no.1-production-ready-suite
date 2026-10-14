@@ -694,7 +694,7 @@ export interface AgentProfile {
   data_scopes?: AgentDataScopes;
   /** 回答前の確認（#1839）。曖昧な質問の扱い（既定は確認してから回答する）。 */
   clarification_policy?: ClarificationPolicy;
-  /** 確認の上限（往復。既定 2 回）。 */
+  /** 確認の上限（往復。0 は既定の 2 回、2〜6。NL2SQL の業務プロファイルと同じ）。 */
   clarification_max_rounds?: number;
   tool_names?: string[];
   enabled: boolean;

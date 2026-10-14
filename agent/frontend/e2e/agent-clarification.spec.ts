@@ -31,9 +31,10 @@ test("業務 Agent の回答前の確認の方針と上限を保存できる", a
 
   const policy = page.locator(`#${AGENT_ID}-agent-clarification-policy`);
   const rounds = page.locator(`#${AGENT_ID}-agent-clarification-max-rounds`);
-  // 項目の無い業務 Agent は既定（確認してから回答する・2 回）。
+  // 項目の無い業務 Agent は既定（確認してから回答する・上限は既定の 2 回）。
   await expectSelectFieldValue(policy, "confirm");
-  await expectSelectFieldValue(rounds, "2");
+  await expectSelectFieldValue(rounds, "0");
+  await expect(rounds).toHaveText("既定（2 回）");
   await chooseSelectFieldOption(rounds, "3");
   await chooseSelectFieldOption(policy, "assume");
   // 前提を示して回答するときは確認しないので、上限は選べない。

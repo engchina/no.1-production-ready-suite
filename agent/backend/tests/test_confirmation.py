@@ -344,8 +344,12 @@ def test_agent_profile_keeps_the_policy_in_versions(mcp: FakeProductMcp) -> None
     published = agent.published()
     assert published is not None
     assert (published.clarification_policy, published.clarification_max_rounds) == ("assume", 3)
+    # 0 は既定（2 回）。1 回は選べない（NL2SQL の業務プロファイルと同じ）。
+    assert AgentProfilePatch(clarification_max_rounds=0).clarification_max_rounds == 0
     with pytest.raises(ValidationError):
-        AgentProfilePatch(clarification_max_rounds=0)
+        AgentProfilePatch(clarification_max_rounds=1)
+    with pytest.raises(ValidationError):
+        AgentProfilePatch(clarification_max_rounds=7)
     with pytest.raises(ValidationError):
         AgentProfilePatch(clarification_policy="never")
 
@@ -460,15 +464,16 @@ def test_unattended_runs_do_not_offer_the_tool(
 def test_the_round_limit_answers_without_asking(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    _set_policy("confirm", 1)
     model = _script(
         monkeypatch,
         _ask("call-1"),
         _ask("call-2", question="もう 1 つ確認？"),
         [assistant_message("前提を示して答えます。")],
     )
-    run = _run()
+    # 前の往復で 1 回確認した（既定の上限 2 回の 2 回目）。
+    run = _run(metadata={ROUND_METADATA_KEY: 1})
     assert run.status == RunStatus.WAITING_CONFIRMATION
+    assert (run.confirmations[0].round, run.confirmations[0].max_rounds) == (2, 2)
     runtime_repository.decide_confirmation(
         run.id,
         run.confirmations[0].id,
@@ -476,7 +481,7 @@ def test_the_round_limit_answers_without_asking(
         answers=[ConfirmationAnswer(item_id="item_1", other_text="先月")],
     )
     resumed = _resume(run.id)
-    # 上限（1 回）を超えた 2 回目は中断せず、上限に達したことを返す。
+    # 上限（2 回）を超えた呼び出しは中断せず、上限に達したことを返す。
     assert resumed.status == RunStatus.COMPLETED
     assert len(resumed.confirmations) == 1
     assert _tool_output(model, 1, "call-1")["other_text"] == "先月"
@@ -512,11 +517,12 @@ def test_rag_clarification_becomes_a_card_and_the_answer_is_passed_as_conditions
     next_run = outcome.next_run
     assert next_run is not None and next_run.thread_id == first.thread_id
     response = next_run.metadata[RESPONSE_METADATA_KEY]
-    assert (response["source"], response["action"], response["question_run_id"]) == (
+    assert (response["source"], response["action"], response["outcome"]) == (
         "rag",
         "answer",
-        first.id,
+        "answered",
     )
+    assert response["question_run_id"] == first.id
     assert response["entries"][0]["selected"] == ["受注入力"]
     assert next_run.metadata[ROUND_METADATA_KEY] == 1
     assert next_run.goal == "どの画面の操作ですか？: 受注入力"

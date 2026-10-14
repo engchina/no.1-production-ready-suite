@@ -325,7 +325,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     状態から外し、最初の質問を返す（画面が入力欄に戻す）。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は
     `nl2sql_cancel_requirement` で閉じる。
   - **業務 Agent の方針**（`clarification_policy`: `confirm` = 確認してから回答する（既定）/ `assume` = 前提を示して回答する、
-    `clarification_max_rounds`: 確認の上限（往復。既定 2、1〜6））: 確認できる Run にだけ `ask_user_confirmation` を渡す。前提を示す
+    `clarification_max_rounds`: 確認の上限（往復。0 は既定の 2 回、2〜6。NL2SQL の業務プロファイルと同じ））: 確認できる Run にだけ `ask_user_confirmation` を渡す。前提を示す
     Run（方針が `assume`・上限に達した・「確認せずに回答」の次の Run・無人の Run（品質評価・自動実行））は、ツールを渡さず、RAG の
     確認の次の手を `answer_with_assumptions`（聞き返さずに前提を示す）に変え、RAG の確認のカードを出さない。往復は、答えで作った
     Run の始めの `clarification_round` と、その Run の Agent 自身の確認の数で数える。
