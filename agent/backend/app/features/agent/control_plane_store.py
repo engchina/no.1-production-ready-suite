@@ -1,7 +1,7 @@
 """画面・API で変えた Control Plane の定義の保存と復元（#764）。
 
-対象は、画面・API で追加・変更した Skill（runtime）・プラグイン・マーケットプレイス・MCP 接続・
-ツール権限。`.env` の宣言（`AGENT_SKILLS_DIR` / `AGENT_PLUGINS_JSON` など）と組み込みの定義は
+対象は、画面・API で追加・変更した Skill（runtime）・プラグイン・MCP 接続・ツール権限。
+`.env` の宣言（`AGENT_SKILLS_DIR` / `AGENT_PLUGINS_JSON` など）と組み込みの定義は
 起動のたびに読み込むので保存しない。
 
 - 保存先は Run の保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`。`auto` は `storage_backend` が
@@ -9,9 +9,9 @@
   `AGENT_CONTROL_PLANE_ITEMS`（共通の `PLATFORM_ORACLE_*`。テーブルはシステムテーブルが作る）、
   `file` は snapshot の隣の JSON ファイル、`memory` は保存しない（従来どおりプロセス内だけ）。
 - MCP 接続の API キー・OAuth の client secret・セッション ID は `app.secret_box` で暗号化して
-  保存する。プラグインの manifest とマーケットプレイスの一覧の native manifest の
-  `mcp_servers[]` も同じ（#1101）。読み込みでは暗号文と平文（#1101 より前の行）の両方を
-  受け付け、起動時の復元で平文の秘密を見つけたら暗号化して保存し直す。
+  保存する。プラグインの manifest の `mcp_servers[]` も同じ（#1101）。読み込みでは暗号文と
+  平文（#1101 より前の行）の両方を受け付け、起動時の復元で平文の秘密を見つけたら暗号化して
+  保存し直す。
 - 起動時（`app.main` の startup）に `restore_control_plane()` で読み込み、宣言の後に重ねる。
 """
 
@@ -40,7 +40,6 @@ JsonObject = dict[str, Any]
 ItemKind = Literal[
     "skill",
     "plugin",
-    "marketplace",
     "mcp_connection",
     "tool_policy",
     "evaluation_set",
@@ -52,7 +51,6 @@ ITEM_KINDS: tuple[ItemKind, ...] = (
     "mcp_connection",
     "tool_policy",
     "skill",
-    "marketplace",
     "plugin",
     # 業務 Agent の自動実行（#784。スケジュールで実行する）。
     "automation",
@@ -68,7 +66,7 @@ ITEMS_TABLE = "AGENT_CONTROL_PLANE_ITEMS"
 # `mcp_servers[]` にも当てる（#1101）。
 _SECRET_FIELDS = ("api_key", "oauth_client_secret", "session_id")
 # 秘密を持ちうる（MCP 接続の構成を含む）保存の種類。
-_SECRET_KINDS: frozenset[ItemKind] = frozenset({"mcp_connection", "plugin", "marketplace"})
+_SECRET_KINDS: frozenset[ItemKind] = frozenset({"mcp_connection", "plugin"})
 
 
 class ControlPlaneStoreError(RuntimeError):
@@ -304,25 +302,12 @@ def save_plugin(record: Any) -> None:
     document: JsonObject = {
         "manifest": record.manifest.model_dump(mode="json"),
         "enabled": record.enabled,
-        "marketplace_id": record.marketplace_id,
     }
     _put("plugin", record.id, _with_secrets("plugin", document, _sealed_secrets))
 
 
 def delete_plugin(plugin_id: str) -> None:
     _delete("plugin", plugin_id)
-
-
-def save_marketplace(source: Any, listing: Any | None = None) -> None:
-    document: JsonObject = {"source": source.model_dump(mode="json")}
-    # 前回の一覧・固定 revision と失敗状態を URL のある配布元も再起動後に保つ（#862）。
-    if listing is not None:
-        document["listing"] = listing.model_dump(mode="json")
-    _put("marketplace", source.id, _with_secrets("marketplace", document, _sealed_secrets))
-
-
-def delete_marketplace(marketplace_id: str) -> None:
-    _delete("marketplace", marketplace_id)
 
 
 def save_mcp_connection(config: Any) -> None:
@@ -428,13 +413,7 @@ def _reseal_plaintext_secrets(kind: ItemKind, item_id: str, document: JsonObject
 def _restore_item(kind: ItemKind, document: JsonObject) -> None:
     # 登録先は遅延 import（このモジュールは config / skills / plugins から import されない）。
     from app.features.agent.config import McpConnectionConfig, runtime_config_store
-    from app.features.agent.plugins import (
-        MarketplaceListing,
-        MarketplaceSource,
-        PluginManifest,
-        marketplace_registry,
-        plugin_registry,
-    )
+    from app.features.agent.plugins import PluginManifest, plugin_registry
     from app.features.agent.skills import AgentSkillDefinition, skill_registry
 
     document = _with_secrets(kind, document, _opened_secrets)
@@ -463,12 +442,6 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
         )
     elif kind == "skill":
         skill_registry.upsert_custom(AgentSkillDefinition.model_validate(document))
-    elif kind == "marketplace":
-        listing_raw = document.get("listing")
-        marketplace_registry.add(
-            MarketplaceSource.model_validate(document.get("source") or {}),
-            MarketplaceListing.model_validate(listing_raw) if listing_raw else None,
-        )
     elif kind == "automation":
         from app.features.agent.automations import Automation, automation_store
 
@@ -487,9 +460,7 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
         api_key_registry.restore(ApiKeyRecord.model_validate(document))
     elif kind == "plugin":
         manifest = PluginManifest.model_validate(document.get("manifest") or {})
-        record = plugin_registry.install(
-            manifest, marketplace_id=document.get("marketplace_id") or None
-        )
+        record = plugin_registry.install(manifest)
         if document.get("enabled") is False:
             plugin_registry.set_enabled(record.id, False)
 
@@ -504,8 +475,6 @@ def _with_secrets(kind: ItemKind, document: JsonObject, transform: SecretTransfo
 
     - `mcp_connection`: 文書そのもの
     - `plugin`: `manifest.mcp_servers[]`
-    - `marketplace`: `listing.plugins[].mcp_servers[]`（native manifest。外部カタログの項目は
-      持たない）
     """
     if kind == "mcp_connection":
         return transform(document)
@@ -513,14 +482,6 @@ def _with_secrets(kind: ItemKind, document: JsonObject, transform: SecretTransfo
         manifest = document.get("manifest")
         if isinstance(manifest, dict):
             return {**document, "manifest": _manifest_with_secrets(manifest, transform)}
-    elif kind == "marketplace":
-        listing = document.get("listing")
-        if isinstance(listing, dict) and isinstance(listing.get("plugins"), list):
-            plugins = [
-                _manifest_with_secrets(item, transform) if isinstance(item, dict) else item
-                for item in listing["plugins"]
-            ]
-            return {**document, "listing": {**listing, "plugins": plugins}}
     return document
 
 
