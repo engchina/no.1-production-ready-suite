@@ -554,7 +554,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
   });
 
-  test("ツールの注釈の信頼は既定でオンで、接続ごとにオフにでき、標準の接続は常に使う（#1832）", async ({
+  test("ツールの注釈の信頼は既定でオンで、接続ごとにオフにでき、標準の接続は常に使う（#1832）", { tag: "@responsive" }, async ({
     page,
     mockApi,
   }) => {
@@ -585,9 +585,13 @@ test.describe("Agent Runtime settings", () => {
     expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/wiki")?.body).toMatchObject({
       trust_tool_annotations: false,
     });
-    // オフの接続では、読み取り専用の注釈のツールも承認が必要と示す。
+    // オフの接続では、読み取り専用の注釈のツールも承認が必要と示す。一覧は md 以上で表、md 未満でカードを出し
+    // （もう一方は CSS で隠す。#823）、どちらの幅でも判定のバッジは見える。見えている方で確かめる（#1859）。
     await page.getByRole("button", { name: "ツールを取得" }).click();
-    await expect(page.getByText("読み取り専用の注釈（承認が必要）").first()).toBeVisible();
+    const tools = (page.viewportSize()?.width ?? 1280) >= 768
+      ? page.getByRole("table", { name: "ツール" })
+      : page.getByRole("region", { name: /^ツール/ });
+    await expect(tools.getByText("読み取り専用の注釈（承認が必要）")).toBeVisible();
 
     // 標準の接続（RAG / NL2SQL）は注釈を常に使う（オフにできない）。
     await page.goto("/settings/mcp-connections?id=nl2sql");

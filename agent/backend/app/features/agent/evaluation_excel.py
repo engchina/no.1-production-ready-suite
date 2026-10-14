@@ -1,5 +1,6 @@
 """品質評価の評価セットの Excel（#776）。NL2SQL の SQL生成評価と同じく、評価ケースを Excel で
-取り込み・書き出しする（1 行 1 ケース。列は ケースID・質問・期待する回答の要点・期待するツール）。
+取り込み・書き出しする（1 行 1 ケース。列は ケースID・質問・期待する回答の要点・期待するツール・
+ツールの順（「順どおり」なら期待するツールを書いた順に呼ぶ。#1845））。
 """
 
 from __future__ import annotations
@@ -20,19 +21,24 @@ from app.features.agent.evaluation import (
 
 EXCEL_MAX_BYTES = 2 * 1024 * 1024
 SHEET_TITLE = "評価ケース"
-HEADERS = ("ケースID", "質問", "期待する回答の要点", "期待するツール")
+HEADERS = ("ケースID", "質問", "期待する回答の要点", "期待するツール", "ツールの順")
+# 「ツールの順」の列の値（#1845）。書き出しは IN_ORDER_LABEL、読み込みは IN_ORDER_VALUES のどれか。
+IN_ORDER_LABEL = "順どおり"
+IN_ORDER_VALUES = frozenset({IN_ORDER_LABEL, "順番どおり", "はい", "yes", "true", "1", "in_order"})
 # 見出しの別名（英語の列名でも読めるようにする）。
 _ALIASES: dict[str, tuple[str, ...]] = {
     "id": ("ケースid", "ケース id", "id", "case_id"),
     "question": ("質問", "question"),
     "expected": ("期待する回答の要点", "期待する回答", "expected"),
     "expected_tools": ("期待するツール", "expected_tools", "tools"),
+    "expected_tools_in_order": ("ツールの順", "期待するツールの順", "expected_tools_in_order"),
 }
 _SAMPLE = EvaluationCase(
     id="expense-deadline",
     question="経費精算の締め日はいつですか？",
     expected="毎月 25 日が締め日で、過ぎた分は翌月の精算になること",
-    expected_tools=["rag_search"],
+    expected_tools=["rag_retrieve_evidence", "rag_validate_answer"],
+    expected_tools_in_order=True,
 )
 
 
@@ -49,8 +55,16 @@ def _workbook(cases: list[EvaluationCase]) -> bytes:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="DDEBF7")
     for case in cases:
-        sheet.append([case.id, case.question, case.expected, ", ".join(case.expected_tools)])
-    for column, width in zip("ABCD", (18, 48, 56, 28), strict=True):
+        sheet.append(
+            [
+                case.id,
+                case.question,
+                case.expected,
+                ", ".join(case.expected_tools),
+                IN_ORDER_LABEL if case.expected_tools_in_order and case.expected_tools else "",
+            ]
+        )
+    for column, width in zip("ABCDE", (18, 48, 56, 28, 12), strict=True):
         sheet.column_dimensions[column].width = width
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
@@ -113,6 +127,7 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
         if len(cases) >= EVALUATION_MAX_CASES:
             raise EvaluationExcelError(f"評価ケースは {EVALUATION_MAX_CASES} 件までです。")
         tools = _text(values, columns.get("expected_tools"))
+        in_order = _text(values, columns.get("expected_tools_in_order")).lower() in IN_ORDER_VALUES
         try:
             cases.append(
                 EvaluationCase(
@@ -120,6 +135,7 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
                     question=question,
                     expected=expected,
                     expected_tools=[item for item in tools.replace("、", ",").split(",")],
+                    expected_tools_in_order=in_order,
                 )
             )
         except ValidationError as exc:

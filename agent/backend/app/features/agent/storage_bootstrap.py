@@ -14,6 +14,11 @@ DB に接続できないあいだも backend は起動する（RAG / NL2SQL と�
 - 別のスレッドが読み込んでいるあいだの要求は `WAIT_SECONDS` まで待ち、超えたら 503 にする（要求の
   スレッドを塞ぎ続けない）。
 - DB の状態・システム設定・認証・ユーザーとロールの API は読み込みを待たない（`requires_storage`）。
+
+データを書き換える migration（システムテーブルの「作成・更新」・全再作成）は `rewrite_saved_data` で
+包む（#1844）。書き換えの間は読み込み・Run の repository の変更・定義の保存を止め、書き換えの後に
+同じプロセスのメモリを保存先から読み直す。別のプロセス（dispatcher）のメモリは読み直せないので、
+再起動が要ることを結果で返す。
 """
 
 from __future__ import annotations
@@ -21,12 +26,16 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from contextlib import ExitStack
+from dataclasses import dataclass
+from typing import Literal
 
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
 
 from app.features.agent import control_plane_store, runtime, storage_backend
 from app.features.agent.runtime import AgentRuntimeStorageUnavailableError
+from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -212,3 +221,108 @@ def reset(*, ready: bool = False) -> None:
         _ready = ready
         _control_plane_restored = ready
         _failure = None
+
+
+# ---- データを書き換える migration の後の読み直し（#1844） ----------------------------
+
+SavedDataArea = Literal["runtime", "control_plane"]
+# runtime: Run・業務 Agent の checkpoint（AGENT_RUNTIME_CHECKPOINTS）。control_plane: 画面・API で
+# 変えた定義（AGENT_CONTROL_PLANE_ITEMS。スキル・MCP 接続・ツール権限・自動実行・品質評価）。
+SAVED_DATA_AREAS: frozenset[SavedDataArea] = frozenset({"runtime", "control_plane"})
+BACKEND_PROCESS = "Agent の backend（systemd の production-ready-agent-backend.service）"
+DISPATCHER_PROCESS = "実行の dispatcher（python -m app.features.agent.runtime_dispatcher）"
+
+
+@dataclass(frozen=True, slots=True)
+class SavedDataReload:
+    """書き換えの後に、このプロセスで読み直した保存先と、再起動が要るプロセス。"""
+
+    reloaded: tuple[SavedDataArea, ...] = ()
+    restart_processes: tuple[str, ...] = ()
+
+    def restart_required(self) -> dict[str, object] | None:
+        """画面・CLI の結果に出す再起動の案内（要らなければ None）。"""
+        if not self.restart_processes:
+            return None
+        return {
+            "message": (
+                "保存済みのデータを書き換える migration を適用しました。次のプロセスは"
+                "書き換える前の定義をメモリに持っているため、再起動してください。再起動するまで、"
+                "そのプロセスは古い定義で動き、保存すると migration の結果を上書きすることが"
+                "あります。"
+            ),
+            "processes": list(self.restart_processes),
+        }
+
+
+def rewrite_saved_data[T](
+    areas: Collection[str], rewrite: Callable[[], T]
+) -> tuple[T, SavedDataReload]:
+    """保存先を書き換える `rewrite` を実行し、同じプロセスのメモリを保存先から読み直す（#1844）。
+
+    書き換えの間は、読み込み（`ensure_ready`）・Run の repository の変更と保存・定義の保存を止める
+    （待っていた変更は読み直した状態の上で行う。定義の保存は待たずに 503）。書き換えが失敗しても、
+    途中まで書いた分があるので読み直す。読み直せなければ、このプロセスの再起動を求める。
+    まだ読み込んでいない保存先は、次の読み込みで新しい値を読むので読み直さない。
+    """
+    targets = frozenset(areas) & SAVED_DATA_AREAS
+    if not targets:
+        return rewrite(), SavedDataReload()
+    with ExitStack() as stack:
+        # 起動時の読み込みの途中なら、済むのを待つ（書き換える前の値を読み込ませない）。
+        _lock.acquire()
+        stack.callback(_lock.release)
+        reload_runtime: Callable[[], None] | None = None
+        repository = runtime.loaded_runtime_repository()
+        if "runtime" in targets and isinstance(
+            repository, runtime.AgentRuntimeOracleCheckpointRepository
+        ):
+            reload_runtime = stack.enter_context(repository.storage_rewrite())
+        reload_control_plane = "control_plane" in targets and _control_plane_restored
+        if reload_control_plane:
+            stack.enter_context(control_plane_store.writes_paused())
+        try:
+            result = rewrite()
+        except BaseException:
+            _reload_saved_data(reload_runtime, reload_control_plane)
+            raise
+        reloaded, failed = _reload_saved_data(reload_runtime, reload_control_plane)
+    processes: list[str] = []
+    if failed:
+        processes.append(BACKEND_PROCESS)
+    if get_settings().agent_runtime_dispatch_mode.strip().lower() != "in_process":
+        processes.append(DISPATCHER_PROCESS)
+    outcome = SavedDataReload(reloaded=reloaded, restart_processes=tuple(processes))
+    logger.info(
+        "agent_saved_data_reloaded",
+        extra={
+            "areas": sorted(targets),
+            "reloaded": list(reloaded),
+            "failed": failed,
+            "restart_processes": list(processes),
+        },
+    )
+    return result, outcome
+
+
+def _reload_saved_data(
+    reload_runtime: Callable[[], None] | None, reload_control_plane: bool
+) -> tuple[tuple[SavedDataArea, ...], bool]:
+    """読み直す（読み直せた保存先と、失敗があったか）。失敗は記録して続ける。"""
+    reloaded: list[SavedDataArea] = []
+    failed = False
+    if reload_runtime is not None:
+        try:
+            reload_runtime()
+            reloaded.append("runtime")
+        except Exception:  # noqa: BLE001 - 結果で再起動を求める
+            logger.exception("agent_runtime_reload_failed")
+            failed = True
+    if reload_control_plane:
+        try:
+            if control_plane_store.reload_control_plane() is not None:
+                reloaded.append("control_plane")
+        except Exception:  # noqa: BLE001 - 結果で再起動を求める
+            logger.exception("agent_control_plane_reload_failed")
+            failed = True
+    return tuple(reloaded), failed

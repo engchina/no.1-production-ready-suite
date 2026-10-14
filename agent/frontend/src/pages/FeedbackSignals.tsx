@@ -42,6 +42,7 @@ const SIGNAL_VARIANT: Record<SignalKind, StatusVariant> = {
   not_helpful: "danger",
   validation_failed: "warning",
   unvalidated: "neutral",
+  ungrounded_no_tools: "warning",
   unanswered: "warning",
   approval_rejected: "neutral",
   tool_failed: "danger",

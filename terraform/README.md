@@ -426,6 +426,11 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   - そのため `suite-restart.sh` は、build の前に今の `backend/.env` を `/u01/aipoc/props/<製品>.backend.env` へ写す（画面で保存した値を保つ）。
   - 元の props は `/u01/aipoc/recovery/<時刻>/` に退避する。
   - `platform/.env`・Wallet・HTTPS の CA は、`suite-init.sh` がそのまま保つ。
+- 画面の「運用設定 › システムテーブル」の「作成・更新」で、保存済みのデータを書き換える migration（Agent の
+  業務 Agent のスキルの ID の改名など）を適用したとき、Agent の backend は同じプロセスのメモリを保存先から読み直す
+  （再起動は要らない。#1844）。結果に「再起動が必要なプロセスがあります」と出たら、挙げたプロセス（別に動かす
+  dispatcher・読み直せなかった backend）を再起動する（backend は `suite-restart.sh --no-build`）。CLI で適用したときは、
+  動いている backend を再起動する（`suite-restart.sh` は再起動まで行う）。
 - 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
 - cloud-init は `git` と `tmux` を入れる。
 - 製品の `init_script.sh` は backend の `/api/health` を 3 秒ごとに最大 300 秒待ち（`SUITE_BACKEND_HEALTH_TIMEOUT_SECONDS`）、15 秒ごとに経過・状態・

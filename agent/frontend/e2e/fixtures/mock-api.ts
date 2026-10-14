@@ -188,7 +188,7 @@ export const AGENT_TEMPLATES = [
     name: "社内規程の問い合わせ",
     description: "就業規則・各種規程・社内手続きの質問に、規程の条項を示して答えます。",
     instructions: "あなたは総務・人事の問い合わせ窓口です。\n- 業務 RAG で規程を検索し、条項を引用して答える。",
-    skill_ids: ["business_rag_research"],
+    skill_ids: ["business-rag-research"],
     sample_questions: ["育児休業はいつから取得できますか？", "在宅勤務の申請はどのように行いますか？"],
     evaluation_cases: [{ question: "在宅勤務の申請は？", expected: "申請の方法と期限" }],
   },
@@ -198,7 +198,7 @@ export const AGENT_TEMPLATES = [
     name: "営業分析",
     description: "売上・受注・顧客のデータを自然言語で集計し、数字の根拠とともに答えます。",
     instructions: "あなたは営業企画の分析担当です。\n- 構造化データ照会で集計し、期間と単位を示す。",
-    skill_ids: ["structured_data_query"],
+    skill_ids: ["structured-data-query"],
     sample_questions: ["今月の地域別の売上を教えてください。", "売上上位 10 社の顧客は？"],
     evaluation_cases: [{ question: "今月の地域別の売上は？", expected: "地域ごとの金額" }],
   },
@@ -208,7 +208,7 @@ export const AGENT_TEMPLATES = [
     name: "品質管理",
     description: "品質基準・不具合報告の文書と、検査・不良率のデータをあわせて調べます。",
     instructions: "あなたは製造部門の品質管理の担当です。",
-    skill_ids: ["business_rag_research", "quality_lab_only"],
+    skill_ids: ["business-rag-research", "quality_lab_only"],
     sample_questions: ["先月のライン別の不良率を教えてください。", "溶接の外観検査の判定基準は？"],
     evaluation_cases: [{ question: "溶接の判定基準は？", expected: "合否の条件" }],
   },
@@ -247,6 +247,7 @@ function normalizedSet(body: Json): Json {
         question: item.question,
         expected: item.expected,
         expected_tools: item.expected_tools ?? [],
+        expected_tools_in_order: Boolean(item.expected_tools_in_order),
         source_run_id: item.source_run_id ?? null,
       };
     }),
@@ -281,8 +282,10 @@ export function evaluationSummary(results: Json[]): Json {
   const errors = results.filter((item) =>
     ["run_failed", "needs_approval", "timed_out", "judge_failed"].includes(String(item.status))
   ).length;
+  // 判定できなかったケースは合格率の分母から除く（#1845）。
+  const unjudged = results.filter((item) => item.status === "judge_failed").length;
   const scores = judged.map((item) => Number((item.judgement as Json).score));
-  const finished = completed - cancelled;
+  const finished = completed - cancelled - unjudged;
   const toolResults = results.filter((item) => item.tool_selection_correct !== null && item.tool_selection_correct !== undefined);
   const toolCorrect = toolResults.filter((item) => item.tool_selection_correct === true).length;
   return {
@@ -292,6 +295,7 @@ export function evaluationSummary(results: Json[]): Json {
     incorrect: verdict("incorrect"),
     uncertain: verdict("uncertain"),
     errors,
+    unjudged,
     pass_rate: finished > 0 ? verdict("correct") / finished : null,
     average_score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
     tool_cases: toolResults.length,
@@ -419,13 +423,30 @@ export const SIGNAL_KINDS = [
   "not_helpful",
   "validation_failed",
   "unvalidated",
+  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
   "run_failed",
 ] as const;
 
-/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証の記録は見ない）。 */
+/** 業務データの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しの数（backend の `environment_tool_calls`）。 */
+function dataToolCalls(run: Json): number {
+  return ((run.steps as Json[] | undefined) ?? []).filter((step) => {
+    const name = String((step.tool_call as Json | undefined)?.name ?? "");
+    const base = name.includes("__") ? name.split("__").slice(1).join("__") : "";
+    return step.status === "completed" && Boolean(base) && !base.startsWith("rag_");
+  }).length;
+}
+
+/** 最終の検証が「資料の根拠を使わなかった」（`no_rag_evidence`。RAG の根拠のツールの有無を問わない）か。 */
+function ungrounded(run: Json): boolean {
+  const validation = [...((run.artifacts as Json[] | undefined) ?? [])].reverse().find((artifact) => artifact.kind === "answer_validation");
+  const content = validation?.content as Json | undefined;
+  return (content?.status === "unvalidated" || content?.status === "skipped") && content?.reason === "no_rag_evidence";
+}
+
+/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証は根拠の有無だけを見る）。 */
 function runSignals(run: Json): string[] {
   const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
   const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
@@ -436,6 +457,8 @@ function runSignals(run: Json): string[] {
     not_helpful: notHelpful,
     validation_failed: false,
     unvalidated: false,
+    // 拒答した Run（#1835。回答の対応が根拠不足・人への引き継ぎ）は「答えられなかった」だけに数える。
+    ungrounded_no_tools: ungrounded(run) && dataToolCalls(run) === 0 && outcome !== "insufficient_evidence" && outcome !== "needs_human",
     unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
     approval_rejected: rejected > 0,
     tool_failed: toolFailures > 0,
@@ -490,6 +513,7 @@ function signalReportFromRuns(
         validation_result: null,
         tool_failures: ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length,
         approvals_rejected: ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length,
+        data_tool_calls: dataToolCalls(run),
         feedback: run.feedback ?? null,
         admin_review: run.admin_review ?? null,
         created_at: run.created_at ?? MOCK_NOW,
@@ -637,6 +661,8 @@ function createState() {
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
+    // 作成・更新の結果の、再起動が要るプロセス（#1844。spec が設定する）。
+    systemTablesRestartRequired: null as Json | null,
     // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
     databaseStatus: {
       status: "ok",
@@ -1188,7 +1214,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       throw new HttpError(409, "データを削除する未適用の migration があります。内容を確認して承認してください。");
     }
     state.systemTables = clone(SYSTEM_TABLES_READY) as Json;
-    return { ...(state.systemTables as Json), operation: body.recreate ? "recreated" : "migrated", dropped_object_count: 1, created_object_count: 3 };
+    return {
+      ...(state.systemTables as Json),
+      operation: body.recreate ? "recreated" : "migrated",
+      dropped_object_count: 1,
+      created_object_count: 3,
+      restart_required: state.systemTablesRestartRequired,
+    };
   }
 
   // --- 組み込み Runtime（#754） ---

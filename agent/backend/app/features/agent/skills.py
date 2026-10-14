@@ -123,6 +123,24 @@ class SkillRegistry:
             self._skills[stored.id] = stored
             return stored.model_copy(deep=True)
 
+    def replace_runtime(self, skills: list[AgentSkillDefinition]) -> list[str]:
+        """runtime(UI/API)層を保存先の定義で置き換える（migration の後の読み直し。#1844）。
+
+        builtin id の定義は登録せず（起動時の復元と同じ）、その id を返す。
+        """
+        skipped: list[str] = []
+        with self._lock:
+            for skill_id in [sid for sid, item in self._skills.items() if item.source == "runtime"]:
+                del self._skills[skill_id]
+            for skill in skills:
+                if skill.id in self._builtin_ids:
+                    skipped.append(skill.id)
+                    continue
+                self._skills[skill.id] = skill.model_copy(
+                    deep=True, update={"source": "runtime", "updated_at": _now()}
+                )
+        return skipped
+
     def remove(self, skill_id: str) -> None:
         """runtime 層の skill のみ削除する。builtin / 宣言層は拒否。"""
         with self._lock:
@@ -156,110 +174,47 @@ class SkillRegistry:
 
 skill_registry = SkillRegistry()
 
-# 組み込みの Skill の ID（初期の業務 Agent・業種テンプレートが使う）。
-BUSINESS_RAG_RESEARCH_SKILL_ID = "business_rag_research"
-STRUCTURED_DATA_QUERY_SKILL_ID = "structured_data_query"
-RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag_and_structured_data"
-# 改名した組み込みの Skill（旧 ID → 新 ID）。保存済みの業務 Agent とその版の読み込みで置き換える。
-# #1573: 順序を固定した「RAG 後に構造化データ照会」を、順序を決めない横断調査にした。
-RENAMED_SKILL_IDS: dict[str, str] = {
-    "rag_then_structured_data": RAG_AND_STRUCTURED_DATA_SKILL_ID,
-}
+# 組み込みの Skill の ID（初期の業務 Agent・業種テンプレートが使う）。Agent Skills の `name`
+# （小文字・数字・ハイフン。フォルダ名と同じ）で、定義は repo 直下の
+# `skills/<name>/SKILL.md`（#1816）。
+BUSINESS_RAG_RESEARCH_SKILL_ID = "business-rag-research"
+STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
+RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag-and-structured-data"
+BUILTIN_SKILL_IDS: tuple[str, ...] = (
+    BUSINESS_RAG_RESEARCH_SKILL_ID,
+    STRUCTURED_DATA_QUERY_SKILL_ID,
+    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+)
+
+# 組み込みのスキルの置き場所（repo 直下の `skills/`。3 製品のどれにも属さず、Claude Code・
+# Codex などの外部の Agent にも同じフォルダを入れる。#1816）。
+# `agent/backend/app/features/agent/skills.py` から 5 段上。
+BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[5] / "skills"
 
 
-# 組み込みの Skill の指示（Markdown）の置き場所。ID ごとに 1 ファイル（#1795）。
-BUILTIN_SKILL_INSTRUCTIONS_DIR = Path(__file__).with_name("builtin_skills")
+def register_builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[str]:
+    """`skills/<name>/SKILL.md` の組み込みのスキルを登録する。
 
+    指示・説明・使うツールはコードに持たず、SKILL.md を正本にする。
 
-def _builtin_instructions(skill_id: str) -> str:
-    """組み込みの Skill の指示を `builtin_skills/<id>.md` から読む（#1795）。
-
-    指示は手順で進める Markdown で書く（見出しの並びと書き方は
-    docs/agent-control-plane-design.md）。Python の文字列の連結では改行・見出し・箇条書きを
-    保てず、画面でも 1 つの段落になっていた。
+    組み込みの Agent・業種テンプレートが使う `BUILTIN_SKILL_IDS` が欠けたら起動を止める（配備で
+    `skills/` が読めないまま、スキルの無い業務 Agent を動かさない）。
     """
-    path = BUILTIN_SKILL_INSTRUCTIONS_DIR / f"{skill_id}.md"
-    return path.read_text(encoding="utf-8").strip()
+    from app.features.agent.skills_loader import load_skills_from_dir
+
+    skills = load_skills_from_dir(str(directory), source="builtin")
+    missing = sorted(set(BUILTIN_SKILL_IDS) - {skill.id for skill in skills})
+    if missing:
+        raise RuntimeError(
+            f"組み込みのスキル（{', '.join(missing)}）が {directory} にありません。"
+            "repo 直下の skills/<name>/SKILL.md を配備してください。"
+        )
+    for skill in skills:
+        skill_registry.register(skill)
+    return [skill.id for skill in skills]
 
 
-def migrate_skill_ids(skill_ids: list[str]) -> list[str]:
-    """旧 ID を新 ID に置き換える（順序を保ち、置き換えで重なった ID は 1 つにする）。"""
-    migrated: list[str] = []
-    for skill_id in skill_ids:
-        current = RENAMED_SKILL_IDS.get(skill_id, skill_id)
-        if current not in migrated:
-            migrated.append(current)
-    return migrated
-
-
-skill_registry.register(
-    AgentSkillDefinition(
-        id=BUSINESS_RAG_RESEARCH_SKILL_ID,
-        name="業務 RAG 調査",
-        description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
-        instructions=_builtin_instructions(BUSINESS_RAG_RESEARCH_SKILL_ID),
-        mcp_requirements=[
-            SkillMcpRequirement(
-                server_id="rag",
-                tool_names=[
-                    "rag_search",
-                    "rag_list_search_answer_profiles",
-                    "rag_read_source",
-                    "rag_lookup_guides",
-                    "rag_retrieve_evidence",
-                    "rag_outline",
-                    "rag_read_document",
-                    "rag_read_section",
-                ],
-            )
-        ],
-        tags=["rag", "research", "business-data"],
-    )
-)
-skill_registry.register(
-    AgentSkillDefinition(
-        id=STRUCTURED_DATA_QUERY_SKILL_ID,
-        name="構造化データ照会",
-        description="NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
-        instructions=_builtin_instructions(STRUCTURED_DATA_QUERY_SKILL_ID),
-        mcp_requirements=[
-            SkillMcpRequirement(
-                server_id="nl2sql",
-                tool_names=[
-                    "nl2sql_query",
-                    "nl2sql_get_job",
-                    "nl2sql_list_profiles",
-                    "nl2sql_recommend_profile",
-                ],
-            )
-        ],
-        tags=["nl2sql", "structured-data", "audit-sql"],
-    )
-)
-skill_registry.register(
-    AgentSkillDefinition(
-        id=RAG_AND_STRUCTURED_DATA_SKILL_ID,
-        name="資料とデータの横断調査",
-        description=(
-            "業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、"
-            "順序を決めずに繰り返し使って調べる。"
-        ),
-        instructions=_builtin_instructions(RAG_AND_STRUCTURED_DATA_SKILL_ID),
-        mcp_requirements=[
-            SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
-            SkillMcpRequirement(
-                server_id="nl2sql",
-                tool_names=[
-                    "nl2sql_query",
-                    "nl2sql_get_job",
-                    "nl2sql_list_profiles",
-                    "nl2sql_recommend_profile",
-                ],
-            ),
-        ],
-        tags=["rag", "nl2sql", "business-data"],
-    )
-)
+register_builtin_skills()
 
 
 def reload_declared_skills() -> dict[str, int]:

@@ -267,7 +267,10 @@ _SIGNAL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("tool_failures", "TOOL_FAILURES"),
     ("approvals_rejected", "APPROVALS_REJECTED"),
 )
-SIGNAL_BINDS = frozenset(name for name, _column in _SIGNAL_MERGE_COLUMNS)
+# 業務データの道具の成功した呼び出しの数（#1834。migration 014 で足した）。
+_DATA_TOOL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (("data_tool_calls", "DATA_TOOL_CALLS"),)
+DATA_TOOL_BINDS = frozenset(name for name, _column in _DATA_TOOL_MERGE_COLUMNS)
+SIGNAL_BINDS = frozenset(name for name, _column in _SIGNAL_MERGE_COLUMNS) | DATA_TOOL_BINDS
 
 
 def merge_sql(columns: Sequence[tuple[str, str]]) -> str:
@@ -289,10 +292,20 @@ def merge_sql(columns: Sequence[tuple[str, str]]) -> str:
     )
 
 
-MERGE_SQL = merge_sql((*_MERGE_COLUMNS, *_SIGNAL_MERGE_COLUMNS))
-# migration 012 の前のテーブル（シグナルの列が無い）への MERGE。システムテーブルを更新するまでの
-# 間も、利用状況・フィードバックの事実を書き続ける（ORA-00904 のときだけ使う）。
+MERGE_SQL = merge_sql((*_MERGE_COLUMNS, *_SIGNAL_MERGE_COLUMNS, *_DATA_TOOL_MERGE_COLUMNS))
+# システムテーブルを更新するまでの古いテーブルへの MERGE（ORA-00904 のときだけ、新しい方から
+# 順に試す）。
+# 更新するまでの間も、利用状況・フィードバックと、あるだけのシグナルの事実を書き続ける。
+# migration 014 の前（業務データの道具の列が無い）。
+MERGE_SQL_012 = merge_sql((*_MERGE_COLUMNS, *_SIGNAL_MERGE_COLUMNS))
+# migration 012 の前（シグナルの列が無い）。
 LEGACY_MERGE_SQL = merge_sql(_MERGE_COLUMNS)
+# (SQL, 除く bind)。最新の形から古い形の順。
+MERGE_FALLBACKS: tuple[tuple[str, frozenset[str]], ...] = (
+    (MERGE_SQL, frozenset()),
+    (MERGE_SQL_012, DATA_TOOL_BINDS),
+    (LEGACY_MERGE_SQL, SIGNAL_BINDS),
+)
 
 # 利用量の集計の測度（Run 数・利用量を記録した Run 数・各量の合計）。
 _USAGE_MEASURES = (
@@ -374,6 +387,7 @@ def fact_binds(fact: RunFact) -> dict[str, Any]:
         "validation_result": _clip(fact.validation_result, _VALIDATION_MAX),
         "tool_failures": fact.tool_failures,
         "approvals_rejected": fact.approvals_rejected,
+        "data_tool_calls": fact.data_tool_calls,
     }
 
 
@@ -508,14 +522,14 @@ def feedback_page_sql(where: str) -> str:
 # 確かめるべき実行（#1822）。対象は期間に作った、終わった Run（品質評価の Run を除く）。
 _SIGNAL_SOURCE_COLUMNS = (
     "STATUS, FEEDBACK_RATING, ADMIN_RATING, VALIDATION_RESULT, ANSWER_OUTCOME, "
-    "TOOL_FAILURES, APPROVALS_REJECTED"
+    "TOOL_FAILURES, APPROVALS_REJECTED, DATA_TOOL_CALLS"
 )
 _SIGNAL_ITEM_COLUMNS = (
     "RUN_ID, THREAD_ID, AGENT_ID, AGENT_NAME, CREATED_BY_USER_UUID, QUESTION, ANSWER, "
     "FEEDBACK_RATING, FEEDBACK_REASON, FEEDBACK_COMMENT, FEEDBACK_USER_UUID, FEEDBACK_AT, "
     "ADMIN_RATING, ADMIN_REASON, ADMIN_COMMENT, ADMIN_USER_UUID, ADMIN_AT, "
     "STATUS, CREATED_AT, ANSWER_OUTCOME, VALIDATION_RESULT, TOOL_FAILURES, APPROVALS_REJECTED, "
-    "RUN_SOURCE"
+    "RUN_SOURCE, DATA_TOOL_CALLS"
 )
 
 
@@ -572,6 +586,7 @@ def fact_from_signal_row(row: Sequence[Any]) -> RunFact:
             "tool_failures": _int(row[21]),
             "approvals_rejected": _int(row[22]),
             "source": str(row[23] or fact.source),
+            "data_tool_calls": None if row[24] is None else _int(row[24]),
         }
     )
 
@@ -647,6 +662,7 @@ def _merge_input_sizes() -> dict[str, Any]:
         "total_tokens",
         "tool_failures",
         "approvals_rejected",
+        "data_tool_calls",
     )
     timestamps = ("feedback_at", "admin_at", "rated_at", "created_at", "finished_at")
     return {
@@ -669,24 +685,25 @@ class OracleRunFactsStore:
         rows = [fact_binds(fact) for fact in facts]
         sizes = _merge_input_sizes()
         with self._connect() as connection:
-            try:
-                with connection.cursor() as cursor:
-                    cursor.setinputsizes(**sizes)
-                    cursor.executemany(MERGE_SQL, rows)
-            except Exception as exc:
-                if not _is_column_missing(exc):
-                    raise
-                # システムテーブルの更新（migration 012）の前: シグナルの列を除いて書く。
-                connection.rollback()
-                legacy_rows = [
-                    {key: value for key, value in row.items() if key not in SIGNAL_BINDS}
-                    for row in rows
-                ]
-                with connection.cursor() as cursor:
-                    cursor.setinputsizes(
-                        **{key: value for key, value in sizes.items() if key not in SIGNAL_BINDS}
-                    )
-                    cursor.executemany(LEGACY_MERGE_SQL, legacy_rows)
+            for index, (sql, excluded) in enumerate(MERGE_FALLBACKS):
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.setinputsizes(
+                            **{key: value for key, value in sizes.items() if key not in excluded}
+                        )
+                        cursor.executemany(
+                            sql,
+                            [
+                                {key: value for key, value in row.items() if key not in excluded}
+                                for row in rows
+                            ],
+                        )
+                    break
+                except Exception as exc:
+                    # システムテーブルの更新（migration 012 / 014）の前: 無い列を除いて書き直す。
+                    if index == len(MERGE_FALLBACKS) - 1 or not _is_column_missing(exc):
+                        raise
+                    connection.rollback()
             connection.commit()
 
     def _query(self, statements: Sequence[tuple[str, dict[str, Any]]]) -> list[list[Any]]:
@@ -1053,7 +1070,9 @@ def flush(timeout: float = 5.0) -> bool:
 
 __all__ = [
     "LEGACY_MERGE_SQL",
+    "MERGE_FALLBACKS",
     "MERGE_SQL",
+    "MERGE_SQL_012",
     "RUN_FACTS_TABLE",
     "USAGE_DIMENSIONS",
     "MemoryRunFactsStore",

@@ -330,7 +330,23 @@ install_runtime_env() {
   find "${WALLET_DIR}" -type f -exec chmod 0600 {} \;
 }
 
+# 組み込みのスキル（Agent Skills の形式。repo 直下の skills/<name>/SKILL.md）は backend が起動時に読む。
+# repo を丸ごと配備するので通常はあるが、欠けると backend が起動で止まるため、配備の途中で先に知らせる（#1816）。
+BUILTIN_SKILLS_DIR="${SUITE_REPO_DIR}/skills"
+BUILTIN_SKILL_NAMES=(business-rag-research structured-data-query rag-and-structured-data)
+
+check_builtin_skills() {
+  local name
+  for name in "${BUILTIN_SKILL_NAMES[@]}"; do
+    if [ ! -r "${BUILTIN_SKILLS_DIR}/${name}/SKILL.md" ]; then
+      log "ERROR: built-in skill ${BUILTIN_SKILLS_DIR}/${name}/SKILL.md is missing or unreadable."
+      return 1
+    fi
+  done
+}
+
 install_backend() {
+  check_builtin_skills
   log "Installing backend dependencies with uv."
   run_as_app_user_in_dir "${BACKEND_DIR}" "uv python install 3.12"
   run_as_app_user_in_dir "${BACKEND_DIR}" "uv sync --locked --no-dev --python 3.12"

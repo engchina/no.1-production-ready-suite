@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.features.agent.answer_outcome import environment_tool_calls
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
     REASON_NO_RAG_EVIDENCE,
@@ -53,6 +54,9 @@ VALIDATION_UNVALIDATED = "unvalidated"
 VALIDATION_UNGROUNDED = "ungrounded"
 # 確かめる対象が無い（確認の質問だけ・RAG の根拠のツールを持たない Agent など）。
 VALIDATION_SKIPPED = "skipped"
+# RAG の根拠のツールを持たない Agent が、資料の根拠なしに答えた（`skipped` の `no_rag_evidence`。
+# #1834）。
+VALIDATION_NO_EVIDENCE_TOOLS = "no_rag_tools"  # 列は VARCHAR2(16)
 
 _TERMINAL_EVENTS = {
     RunEventType.RUN_COMPLETED,
@@ -92,6 +96,9 @@ class RunFact(BaseModel):
     # 失敗したツールの呼び出しの数と、却下した承認の数（#1822）。
     tool_failures: int = 0
     approvals_rejected: int = 0
+    # 業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）の成功した呼び出しの数（#1834）。
+    # 記録していない古い事実は None（「根拠を使わずに答えた」にしない）。
+    data_tool_calls: int | None = None
     created_at: datetime
     finished_at: datetime | None = None
 
@@ -167,6 +174,8 @@ def run_validation_result(run: RunState) -> str | None:
             return VALIDATION_UNGROUNDED
         return VALIDATION_UNVALIDATED
     if status == STATUS_SKIPPED:
+        if content.get("reason") == REASON_NO_RAG_EVIDENCE:
+            return VALIDATION_NO_EVIDENCE_TOOLS
         return VALIDATION_SKIPPED
     if status != STATUS_COMPLETED:
         return None
@@ -221,6 +230,7 @@ def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
         validation_result=run_validation_result(run),
         tool_failures=run_tool_failures(run),
         approvals_rejected=run_approvals_rejected(run),
+        data_tool_calls=environment_tool_calls(run.steps),
         created_at=run.created_at,
         finished_at=_finished_at(run),
     )
@@ -235,6 +245,7 @@ __all__ = [
     "RUN_SOURCE_USER",
     "VALIDATION_FAILED",
     "VALIDATION_PASSED",
+    "VALIDATION_NO_EVIDENCE_TOOLS",
     "VALIDATION_SKIPPED",
     "VALIDATION_UNGROUNDED",
     "VALIDATION_UNVALIDATED",
