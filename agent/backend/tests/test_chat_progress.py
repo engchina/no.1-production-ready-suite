@@ -434,7 +434,7 @@ def test_broken_saved_progress_events_are_dropped() -> None:
 # --------------------------------------------------------------------------------------------
 
 
-def _completed_api_run(monkeypatch: MonkeyPatch) -> str:
+def _completed_api_run(monkeypatch: MonkeyPatch, owner: str = LOCAL_DEBUG_USER_UUID) -> str:
     _script(
         monkeypatch,
         [function_call(LOOKUP, {"query": "売上"}, call_id="call-1")],
@@ -443,7 +443,7 @@ def _completed_api_run(monkeypatch: MonkeyPatch) -> str:
     # 会話は作った利用者だけが読む（local はローカル利用者）。
     run_id = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="今月の売上を教えて", agent_id=AGENT_ID),
-        created_by_user_uuid=LOCAL_DEBUG_USER_UUID,
+        created_by_user_uuid=owner,
     ).id
     anyio.run(builtin_runtime.execute_run, run_id)
     return run_id
@@ -545,20 +545,28 @@ def auth(monkeypatch: MonkeyPatch) -> Any:
 def test_progress_endpoints_follow_the_run_scope(
     monkeypatch: MonkeyPatch, auth: ProductionAuth
 ) -> None:
-    run_id = _completed_api_run(monkeypatch)
+    owner = auth.user_with_permissions(
+        "progress-chat", ["agent.runs.operate"], agent_ids=[AGENT_ID]
+    )
+    run_id = _completed_api_run(monkeypatch, owner=owner.user_uuid)
     paths = [f"/api/runs/{run_id}/progress", f"/api/runs/{run_id}/progress/stream?since=0"]
 
-    # チャットの利用者（業務 Agent の実行）は、対象範囲の Agent の Run を読める。
-    auth.user_with_permissions("progress-chat", ["agent.runs.operate"], agent_ids=[AGENT_ID])
+    # チャットの利用者（業務 Agent の実行）は、対象範囲の Agent の自分の Run を読める。
     headers = login("progress-chat")
     for path in paths:
         assert client.get(path, headers=headers).status_code == 200, path
 
-    # 対象範囲の外の Agent の Run は 403。
+    # 同じ範囲でも、ほかの利用者の Run は 404（存在を漏らさない。#1889）。
+    auth.user_with_permissions("progress-peer", ["agent.runs.operate"], agent_ids=[AGENT_ID])
+    peer = login("progress-peer")
+    for path in paths:
+        assert client.get(path, headers=peer).status_code == 404, path
+
+    # 対象範囲の外の Agent の、ほかの利用者の Run も 404。
     auth.user_with_permissions("progress-other", ["agent.runs.operate"], agent_ids=["other"])
     other = login("progress-other")
     for path in paths:
-        assert client.get(path, headers=other).status_code == 403, path
+        assert client.get(path, headers=other).status_code == 404, path
 
     # メニューも capability も無い利用者は経路で 403。
     auth.user_with_permissions("progress-none", [], agent_ids=[AGENT_ID])

@@ -50,6 +50,11 @@ from pr_backend_core.chat_progress import (
     chat_progress_sse_response,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_system_settings.auth.visibility import (
+    OWNER_NOT_FOUND_STATUS,
+    can_access_user_data,
+    can_view_all_users_data,
+)
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
@@ -1620,12 +1625,23 @@ async def list_runs(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RunsData]:
-    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    """実行履歴・承認の画面の Run（#1889）。
+
+    system_admin は全員の Run（実行した利用者の表示名つき）、それ以外は自分の Run だけ。
+    どちらも業務 Agent の対象範囲で絞る。
+    """
+    runs = _ai_use_runs_for_actor(request, runtime_repository.list_runs())
     deciders = sorted(
         {approval.decided_by for run in runs for approval in run.approvals if approval.decided_by}
     )
     names = await run_in_threadpool(login_display_names, deciders) if deciders else {}
-    return ApiResponse(data=RunsData(runs=runs, user_display_names=names))
+    creators: dict[str, str] = {}
+    if _sees_all_users(request):
+        owners = sorted({run.created_by_user_uuid for run in runs if run.created_by_user_uuid})
+        creators = await run_in_threadpool(user_display_names, owners) if owners else {}
+    return ApiResponse(
+        data=RunsData(runs=runs, user_display_names=names, creator_display_names=creators)
+    )
 
 
 @router.post("/runs", response_model=ApiResponse[RunState])
@@ -1715,23 +1731,36 @@ async def list_threads(
     paging: Annotated[OffsetParams, Depends(_threads_paging)],
     agent_id: str | None = None,
 ) -> ApiResponse[ThreadsData]:
-    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。
+    """会話の一覧（チャット。#768）。使えなくなった Agent の会話は出さない。
 
-    会話の履歴は 3 製品と同じく、サーバー側でページングする
+    system_admin は全員の会話（利用者の表示名つき）、それ以外はログイン中の利用者の会話だけ
+    （#1889）。会話の履歴は 3 製品と同じく、サーバー側でページングする
     （新しい順、共通の `offset_params` / `Page`。#1265 / #1266）。
     """
     policy = _actor_policy(request)
+    viewer = _run_creator_user_uuid(request)
+    all_users = _sees_all_users(request)
     threads = [
         thread
         for thread in runtime_repository.list_threads(
-            user_uuid=_run_creator_user_uuid(request), agent_id=agent_id
+            user_uuid=viewer, agent_id=agent_id, all_users=all_users
         )
         if _policy_allows_agent(policy, thread.agent_id)
     ]
     page = paginate_slice(threads, paging)
+    owners = sorted({item.owner_user_uuid for item in page.items if item.owner_user_uuid})
+    names = await run_in_threadpool(user_display_names, owners) if all_users and owners else {}
     return ApiResponse(
         data=ThreadsData(
-            items=page.items,
+            items=[
+                item.model_copy(
+                    update={
+                        "owned": item.owner_user_uuid == viewer,
+                        "actor_display_name": names.get(item.owner_user_uuid or "", ""),
+                    }
+                )
+                for item in page.items
+            ],
             total=page.total,
             limit=page.limit,
             offset=page.offset,
@@ -1742,44 +1771,60 @@ async def list_threads(
 
 @router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])
 async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData]:
-    """会話の Run（古い順）。作った利用者だけが読める。"""
+    """会話の Run（古い順）。作った利用者と system_admin だけが読める（ほかは 404。#1889）。"""
+    viewer = _run_creator_user_uuid(request)
+    all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=_run_creator_user_uuid(request))
+        thread = runtime_repository.get_thread(thread_id, user_uuid=viewer, all_users=all_users)
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     _require_agent_access(request, thread.agent_id)
-    return ApiResponse(data=thread)
+    owner = thread.owner_user_uuid
+    names = await run_in_threadpool(user_display_names, [owner]) if all_users and owner else {}
+    return ApiResponse(
+        data=thread.model_copy(
+            update={"owned": owner == viewer, "actor_display_name": names.get(owner or "", "")}
+        )
+    )
 
 
 @router.patch("/threads/{thread_id}", response_model=ApiResponse[ThreadSummary])
 async def rename_thread(
     thread_id: str, update: ThreadUpdateRequest, request: Request
 ) -> ApiResponse[ThreadSummary]:
-    """会話の名前を変える（#1817）。作った利用者だけ（管理者も他人の会話は変えない）。"""
+    """会話の名前を変える（#1817）。作った利用者と system_admin だけ（ほかは 404。#1889）。"""
     user_uuid = _run_creator_user_uuid(request)
+    all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid)
+        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
         _require_agent_access(request, thread.agent_id)
         summary = runtime_repository.rename_thread(
-            thread_id, user_uuid=user_uuid, title=update.title
+            thread_id, user_uuid=user_uuid, title=update.title, all_users=all_users
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
-    return ApiResponse(data=summary)
+    owner = summary.owner_user_uuid
+    names = await run_in_threadpool(user_display_names, [owner]) if all_users and owner else {}
+    return ApiResponse(
+        data=summary.model_copy(
+            update={"owned": owner == user_uuid, "actor_display_name": names.get(owner or "", "")}
+        )
+    )
 
 
 @router.delete("/threads/{thread_id}", response_model=ApiResponse[None])
 async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
-    """会話を消す（#1817）。作った利用者だけ。
+    """会話を消す（#1817）。作った利用者と system_admin だけ（ほかは 404。#1889）。
 
     Run は監査・フィードバック・評価のために残し、会話からの参照だけを外す。回答の作成中・
     承認待ちの Run がある会話は 409（止めてから消す）。
     """
     user_uuid = _run_creator_user_uuid(request)
+    all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid)
+        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
         _require_agent_access(request, thread.agent_id)
-        runtime_repository.delete_thread(thread_id, user_uuid=user_uuid)
+        runtime_repository.delete_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except ThreadBusyError as exc:
@@ -1808,6 +1853,9 @@ async def put_run_feedback(
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    if not _run_visible_to(request, run):
+        # ほかの利用者の Run は存在を漏らさない（system_admin は見られるので下の 403。#1889）。
+        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=RUN_NOT_FOUND_MESSAGE)
     _require_agent_access(request, run.agent_id)
     user_uuid = _run_creator_user_uuid(request)
     if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
@@ -2000,12 +2048,8 @@ async def get_run(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RunState]:
-    try:
-        run = runtime_repository.get_run(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    _require_agent_access(request, run.agent_id)
-    return ApiResponse(data=run)
+    """Run の詳細（実行した利用者と system_admin だけ。ほかは 404。#1889）。"""
+    return ApiResponse(data=_readable_run(request, run_id))
 
 
 @router.get("/runs/{run_id}/audit", response_model=ApiResponse[RunAuditData])
@@ -2014,12 +2058,8 @@ async def get_run_audit(
     request: Request,
     _: None = Depends(require_auditor),
 ) -> ApiResponse[RunAuditData]:
-    try:
-        run = runtime_repository.get_run(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    _require_agent_access(request, run.agent_id)
-    return ApiResponse(data=_run_audit_data(run))
+    """実行履歴の詳細の監査（Run の詳細と同じく、実行した利用者と system_admin だけ。#1889）。"""
+    return ApiResponse(data=_run_audit_data(_readable_run(request, run_id)))
 
 
 @router.get("/agent-templates", response_model=ApiResponse[AgentTemplatesData])
@@ -2655,12 +2695,11 @@ async def list_run_artifacts(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[ArtifactsData]:
+    _readable_run(request, run_id)
     try:
-        run = runtime_repository.get_run(run_id)
         artifacts = runtime_repository.list_artifacts(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    _require_agent_access(request, run.agent_id)
     return ApiResponse(data=ArtifactsData(artifacts=artifacts))
 
 
@@ -2671,9 +2710,8 @@ async def get_run_artifact(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[Artifact]:
+    _readable_run(request, run_id)
     try:
-        run = runtime_repository.get_run(run_id)
-        _require_agent_access(request, run.agent_id)
         return ApiResponse(data=runtime_repository.get_artifact(run_id, artifact_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
@@ -2691,13 +2729,9 @@ async def get_run_figure_url(
     """Run の RAG の図の根拠を開く短命の URL（#1311）。
 
     画面を見ている利用者として RAG に作らせる（Run の利用者の権限は借りない）。URL は保存せず、
-    期限（5 分）が切れたら画面が取り直す。
+    期限（5 分）が切れたら画面が取り直す。Run は実行した利用者と system_admin だけ（#1889）。
     """
-    try:
-        run = runtime_repository.get_run(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    _require_agent_access(request, run.agent_id)
+    run = _readable_run(request, run_id)
     viewer = _run_creator_user_uuid(request)
     if not viewer:
         raise HTTPException(status_code=401, detail="ログインしてください。")
@@ -2734,9 +2768,8 @@ async def stream_run_events(
     after_event_id: str | None = Query(default=None),
     _: None = Depends(require_viewer),
 ) -> Response:
+    _readable_run(request, run_id)
     try:
-        run = runtime_repository.get_run(run_id)
-        _require_agent_access(request, run.agent_id)
         events = runtime_repository.iter_events(
             run_id,
             after_event_id=after_event_id,
@@ -2757,14 +2790,17 @@ async def stream_run_events(
 
 
 def _readable_run(request: Request, run_id: str) -> RunState:
-    """画面が読む Run（無ければ 404、業務 Agent の対象外なら 403）。
+    """「AI 活用」の画面が読む・操作する Run（#1889）。
 
-    `GET /runs/{run_id}` と同じ判定。
+    無い・ほかの利用者の Run（system_admin でない利用者）は 404（存在を漏らさない）、業務 Agent の
+    対象外は 403。実行履歴・承認・チャットの Run の詳細・成果物・イベント・操作が同じ判定を使う。
     """
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    if not _run_visible_to(request, run):
+        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=RUN_NOT_FOUND_MESSAGE)
     _require_agent_access(request, run.agent_id)
     return run
 
@@ -2839,6 +2875,9 @@ async def stream_run_events_websocket(
         return
     try:
         run = runtime_repository.get_run(run_id)
+        # ほかの利用者の Run は存在を漏らさない（system_admin は全員。#1889）。
+        if not _run_visible_to(websocket, run):
+            raise KeyError(run_id)
     except KeyError:
         await websocket.send_json(
             {
@@ -2895,9 +2934,8 @@ async def cancel_run(
     request: Request,
     _: None = Depends(require_operator),
 ) -> ApiResponse[RunState]:
+    run = _readable_run(request, run_id)
     try:
-        run = runtime_repository.get_run(run_id)
-        _require_agent_access(request, run.agent_id)
         # 終了した Run は取り消さない（完了の結果を取消済みで上書きしない。#911）。
         if run.status in _TERMINAL_RUN_STATUSES:
             raise HTTPException(
@@ -2995,9 +3033,8 @@ async def resume_run(
     request: Request,
     _: None = Depends(require_operator),
 ) -> ApiResponse[RunState]:
+    run = _readable_run(request, run_id)
     try:
-        run = runtime_repository.get_run(run_id)
-        _require_agent_access(request, run.agent_id)
         # 組み込み Runtime は承認がすべて決まると自動で再開する。止まっている Run だけ再開を
         # 起動し直す。旧エンジンの Run（#756 で削除）は読み取りだけ。
         if not builtin_resume_pending(run):
@@ -3020,11 +3057,7 @@ async def replay_run(
     request: Request,
     _: None = Depends(require_operator),
 ) -> ApiResponse[RunState]:
-    try:
-        run = runtime_repository.get_run(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    _require_agent_access(request, run.agent_id)
+    run = _readable_run(request, run_id)
     # 再実行は利用者の Run（公開中の版で実行する）。`POST /runs` と同じく、無効・移行が要る・
     # 公開した版の無い業務 Agent は理由を返す（500 にしない。#911）。
     try:
@@ -3071,6 +3104,10 @@ async def decide_approval(
 ) -> ApiResponse[RunState]:
     try:
         run = _run_for_approval(approval_id)
+        # 承認は自分の Run の承認だけ（承認の権限を持つ人も、ほかの利用者の Run は 404）。
+        # ほかの利用者の Run の承認は system_admin だけ（#1889）。
+        if not _run_visible_to(http_request, run):
+            raise KeyError(approval_id)
         _require_agent_access(http_request, run.agent_id)
         always_allow = request.approved and request.always_allow
         if always_allow:
@@ -3817,6 +3854,12 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             return
         try:
             approval_run = _run_for_approval(approval_id)
+            # 接続の後に権限・範囲が変わっていても、承認ごとに持ち主と業務 Agent の範囲を
+            # 確かめ直す（HTTP の決定と同じ。#1889）。
+            if not _run_visible_to(websocket, approval_run) or not _websocket_has_agent_access(
+                websocket, approval_run.agent_id
+            ):
+                raise KeyError(approval_id)
         except KeyError:
             await websocket.send_json(
                 _websocket_error_payload(
@@ -4034,6 +4077,27 @@ def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunSt
     if policy.agent_ids is None:
         return runs
     return [run for run in runs if _policy_allows_agent(policy, run.agent_id)]
+
+
+def _sees_all_users(connection: object) -> bool:
+    """「AI 活用」の画面で全員のデータを見られるか（system_admin だけ。#1889）。"""
+    return can_view_all_users_data(_request_principal(connection))
+
+
+def _run_visible_to(connection: object, run: RunState) -> bool:
+    """「AI 活用」の画面で Run を見て操作してよいか（実行した利用者か system_admin。#1889）。
+
+    `agent.admin` などの管理権限は理由にしない。持ち主の分からない古い Run は system_admin だけ。
+    """
+    return can_access_user_data(_request_principal(connection), run.created_by_user_uuid)
+
+
+def _ai_use_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunState]:
+    """実行履歴・承認の一覧の Run（業務 Agent の範囲と、system_admin でなければ自分の Run。#1889）。
+
+    改善・運用（フィードバック・利用状況・監査ログ）の集計は `_filter_runs_for_actor` のまま。
+    """
+    return [run for run in _filter_runs_for_actor(request, runs) if _run_visible_to(request, run)]
 
 
 def _require_agent_access(request: Request, agent_id: str) -> None:

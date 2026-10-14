@@ -204,6 +204,8 @@ export function ChatPage() {
   const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
   const prerequisitesLoading = agentsLoading || threadLoading;
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
+  // system_admin が開いた他の利用者の会話は見るだけ（続き・回答前の確認・評価は本人だけ。#1889）。
+  const readOnly = Boolean(threadId) && thread.data?.owned === false;
   // 処理の段階の終端が届いたら、回答・成果物を待たずに取り直す（#1359）。応答しない取得（取得中は interval が
   // 次を始めない）は打ち切って取り直す（#1160）。
   const refetchThread = thread.refetch;
@@ -477,7 +479,13 @@ export function ChatPage() {
       items={(threads.data?.items ?? []).map((item) => ({
         id: item.thread_id,
         title: item.title,
-        meta: `${formatTime(item.updated_at)}・${t("chat.threads.turns", { count: item.run_count })}`,
+        meta: user?.is_system_admin && item.owned === false
+          ? // system_admin が見る他の利用者の会話には、利用者の表示名を添える（#1889）。
+            t("chat.threads.owner", {
+              meta: `${formatTime(item.updated_at)}・${t("chat.threads.turns", { count: item.run_count })}`,
+              name: item.actor_display_name || t("chat.threads.ownerMissing"),
+            })
+          : `${formatTime(item.updated_at)}・${t("chat.threads.turns", { count: item.run_count })}`,
         badge:
           item.last_status === "completed" ? undefined : (
             <StatusBadge variant={runStatusView(item.last_status).variant} label={t(`chat.status.${item.last_status}`)} />
@@ -629,7 +637,7 @@ export function ChatPage() {
                   onSubmit={submit}
                   onStop={stop}
                   running={stoppable}
-                  submitBlocked={composerBlocked || threadLoading || threadFailed}
+                  submitBlocked={composerBlocked || threadLoading || threadFailed || readOnly}
                   disabled={agentsLoading}
                   label={t("chat.composer.label")}
                   placeholder={t("chat.composer.placeholder")}
@@ -637,10 +645,13 @@ export function ChatPage() {
                   stopLabel={t("chat.stop")}
                   sendTestId="chat-send"
                   footer={
-                    cancel.error ? (
-                      // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
-                      <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
-                    ) : null
+                    <>
+                      {readOnly ? <Banner severity="info">{t("chat.readOnly")}</Banner> : null}
+                      {cancel.error ? (
+                        // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
+                        <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
+                      ) : null}
+                    </>
                   }
                 />
               </>
@@ -683,9 +694,9 @@ export function ChatPage() {
                   run={run}
                   // 取り消しの操作は、利用者の答えを待っている最後の回答だけに出す（送信中・実行中は押せない）。
                   latest={index === runs.length - 1 && !pending}
-                  cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
+                  cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed || readOnly}
                   onCancelClarification={cancelClarification}
-                  confirmationDisabled={send.isPending || threadLoading || threadFailed}
+                  confirmationDisabled={send.isPending || threadLoading || threadFailed || readOnly}
                   confirmationBusy={
                     decideConfirmation.isPending && decideConfirmation.variables?.run.id === run.id
                       ? clarificationBusyAction(decideConfirmation.variables.action)
@@ -699,7 +710,7 @@ export function ChatPage() {
                   confirmationAutoFocus={sentRunIds.has(run.id) && !draft.trim()}
                   canDecide={capabilities.decideApprovals}
                   // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
-                  canRate={capabilities.operateRuns}
+                  canRate={capabilities.operateRuns && !readOnly}
                   deciding={decide.isPending}
                   onDecide={(approval, approved) => decide.mutate({ approval, approved })}
                   onFeedbackSaved={replaceRun}
