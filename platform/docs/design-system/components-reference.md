@@ -3174,3 +3174,34 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
 - 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
+
+---
+
+## MarkdownText — **新規**（#1808）
+
+LLM の回答など Markdown の本文を、記号のまま出さずに要素で描く。決めたことと理由は README §4「`MarkdownText`」。
+
+```tsx
+import { MarkdownText, ResultTable, splitMarkdownTables } from "@production-ready/ui";
+
+// 表は先に取り出して共通の結果の表で出し、残りを MarkdownText で描く（Agent の AnswerBody）。
+{splitMarkdownTables(answer).map((segment, index) =>
+  segment.kind === "text" ? (
+    <MarkdownText key={index} text={segment.text} headingLevel={3} />
+  ) : (
+    <ResultTable key={index} columns={segment.data.columns} rows={segment.data.rows} … />
+  ),
+)}
+```
+
+### MarkdownText の props
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `text` | `string` | — | Markdown の本文。空なら何も描かない |
+| `headingLevel` | `2 \| 3 \| 4 \| 5 \| 6` | `3` | 本文の最上位の見出しの HTML の段。置く場所の見出しの下の段を渡す（カードの h2 の下なら 3、h1 だけの画面なら 2） |
+| `labels` | `Partial<MarkdownTextLabels>` | `{ newTab: "（新しいタブで開きます）" }` | 新しいタブで開くリンクの読み上げの補足 |
+| `className` / `testId` | `string` | — | 外側の `div`（`data-markdown-text`）に付ける |
+
+- 描くもの: 見出し（`#`〜`######`）・段落（中の改行は `<br>`）・`-` / `*` / `+` / `1.` の箇条書き（字下げで入れ子）・` ``` ` / `~~~` のコードブロック（`data-language`）・`>` の引用・`---` の区切り線、行の中の `` `code` ``・`**強調**`・`*斜体*`・`[文字](https://…)`・`<https://…>`・裸の URL、`\*` の取り消し。
+- 描かないもの: 生の HTML（文字のまま）・表（段落の文字のまま。`splitMarkdownTables` で先に取り出す）・画像・`_斜体_`（識別子の `_` を斜体にしない）・`http(s)` / `mailto` 以外のリンク。

@@ -1,5 +1,6 @@
 import { Table2 } from "lucide-react";
 import {
+  cn,
   MarkdownText,
   ResultTable as SharedResultTable,
   splitMarkdownTables,
@@ -60,11 +61,13 @@ export function ToolResultTable({ data, toolName, testId }: { data: TabularData;
 export function AnswerBody({
   text,
   headingLevel,
+  className,
   testId,
 }: {
   text: string;
   /** 本文の最上位の見出しの段（置く場所の見出しの下。既定 3）。 */
   headingLevel?: 2 | 3;
+  className?: string;
   testId?: string;
 }) {
   const segments = splitMarkdownTables(text);
@@ -74,7 +77,7 @@ export function AnswerBody({
   );
   const tableCount = tableNumbers.filter((value) => value > 0).length;
   return (
-    <div className="min-w-0 space-y-3" data-testid={testId}>
+    <div className={cn("min-w-0 space-y-3", className)} data-testid={testId}>
       {segments.map((segment, index) =>
         segment.kind === "text" ? (
           <MarkdownText key={index} text={segment.text} headingLevel={headingLevel} />

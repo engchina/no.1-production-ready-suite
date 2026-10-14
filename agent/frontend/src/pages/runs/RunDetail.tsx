@@ -741,6 +741,8 @@ function ArtifactsPanel({
                   // （チャットと同じ。#1808）。見出しはカードの見出し（h2）の下の h3 から始める。
                   <AnswerBody
                     text={String(artifact.content.text ?? artifact.content.answer)}
+                    // ほかの成果物（根拠・確かめ）と同じく、名前と日時の下を空ける。
+                    className="mt-3"
                     testId={`run-answer-${artifact.id}`}
                   />
                 ) : artifact.kind === "rag_evidence" ? (
