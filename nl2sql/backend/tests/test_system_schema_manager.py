@@ -1111,3 +1111,48 @@ def test_cli_check_requires_system_and_security_tables(
     error = json.loads(capsys.readouterr().out)["error"]
     assert error["code"] == "ORA-01031"
     assert "hint" not in error
+
+
+def test_cli_reports_real_cause_of_pool_timeout_without_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """pool の時間切れ（DPY-4005）は、直接 1 回だけ接続して本当の原因を出す（#1744）。"""
+    from pr_backend_core import oracle_connect_diagnosis
+
+    from app.cli import nl2sql_system_schema
+
+    calls: list[dict[str, Any]] = []
+
+    class _Oracledb:
+        def connect(self, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            raise RuntimeError("DPY-6005: cannot connect to database (CONNECTION_ID=x).\ntimed out")
+
+    class _Manager:
+        def status(self) -> dict[str, Any]:
+            raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+
+    monkeypatch.setattr(oracle_connect_diagnosis, "_default_oracledb_loader", lambda: _Oracledb())
+    monkeypatch.setattr(
+        nl2sql_system_schema,
+        "_connect_kwargs",
+        lambda: {"user": "APP", "password": "Pa55-word-x", "dsn": "db_high"},
+    )
+    monkeypatch.setattr(nl2sql_system_schema, "system_schema_manager", _Manager())
+
+    monkeypatch.setattr("sys.argv", ["nl2sql_system_schema", "--status"])
+    assert nl2sql_system_schema.main() == 1
+    output = capsys.readouterr().out
+    error = json.loads(output)["error"]
+    assert error["code"] == "DPY-6005"
+    assert error["cause"] == "unreachable"
+    assert error["hint"].startswith("ADB が停止しているか、この接続元から DB に届きません。")
+    assert "起動" in error["hint"]
+    assert "Pa55-word-x" not in output
+    assert len(calls) == 1 and calls[0]["retry_count"] == 0
+
+    monkeypatch.setattr("sys.argv", ["nl2sql_system_schema", "--check"])
+    assert nl2sql_system_schema.main() == 1
+    output = capsys.readouterr().out
+    assert output.startswith("状態を読めません（DPY-6005: ADB が停止しているか")
+    assert "Pa55-word-x" not in output

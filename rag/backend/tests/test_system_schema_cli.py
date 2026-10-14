@@ -148,3 +148,58 @@ def test_initialize_reports_ora_code_for_unexpected_errors(
     monkeypatch.setattr(system_schema_manager, "initialize", initialize)
     assert system_schema_cli.main(["initialize"]) == 1
     assert json.loads(capsys.readouterr().err)["error_code"] == "ORA-01031"
+
+
+def test_pool_timeout_reports_real_cause_without_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """pool の時間切れ（DPY-4005）は、直接 1 回だけ接続して本当の原因を出す（#1744）。"""
+    from pr_backend_core import oracle_connect_diagnosis
+
+    calls: list[dict[str, Any]] = []
+
+    class _Oracledb:
+        def connect(self, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            raise RuntimeError(
+                'DPY-6001: Service "x_high" is not registered with the listener at host '
+                '"adb.example.com" port 1522. (Similar to ORA-12514)'
+            )
+
+    def timeout(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+
+    monkeypatch.setattr(oracle_connect_diagnosis, "_default_oracledb_loader", lambda: _Oracledb())
+    monkeypatch.setattr(
+        system_schema_cli,
+        "_connect_kwargs",
+        lambda: {"user": "APP", "password": "Pa55-word-x", "dsn": "db_high", "min": 1},
+    )
+    monkeypatch.setattr(system_schema_manager, "initialize", timeout)
+    monkeypatch.setattr(system_schema_manager, "status", lambda: timeout())
+
+    assert system_schema_cli.main(["initialize"]) == 1
+    captured = capsys.readouterr()
+    # stderr には、診断の 1 行の log（JSON Lines）の後に、CLI の結果（整形した JSON）が出る。
+    error = json.loads(captured.err[captured.err.index("{\n") :])
+    assert error["error_code"] == "DPY-6001"
+    assert error["cause"] == "service_unavailable"
+    assert "ADB の停止" in error["hint"]
+    assert "起動" in error["hint"]
+    assert "Pa55-word-x" not in captured.err + captured.out
+    assert len(calls) == 1
+    assert calls[0]["retry_count"] == 0 and "min" not in calls[0]
+
+    assert system_schema_cli.main(["check"]) == 1
+    output = capsys.readouterr().out
+    assert output.startswith("状態を読めません（DPY-6001: DB のサービスが接続を受け付けていません")
+    assert "Pa55-word-x" not in output
+
+
+def test_shared_pool_connect_kwargs_match_the_pool() -> None:
+    """診断の直接の接続は、共有 pool と同じ接続先・利用者を使う（#1744）。"""
+    from app.clients.oracle import _oracle_connect_kwargs, shared_pool_connect_kwargs
+    from app.config import get_settings
+
+    settings = get_settings()
+    assert shared_pool_connect_kwargs(settings) == _oracle_connect_kwargs(settings)
