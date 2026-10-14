@@ -928,6 +928,24 @@ def test_select_and_from_must_be_clear_before_apply() -> None:
     assert raised.value.code == "GUIDED_CLARIFICATION_INCOMPLETE"
 
 
+def test_profile_clarification_max_rounds_sets_the_review_limit() -> None:
+    """業務プロファイルの「確認の上限（往復）」は AI の再検査の上限 + 1（#1839）。
+
+    0 はシステムの既定。
+    """
+
+    runtime = _runtime(_ScriptedLlm(_ambiguous_status_output()))
+    legacy = runtime.legacy_service
+    default = int(get_settings().nl2sql_requirement_max_review_rounds)
+    assert runtime._requirement_max_review_rounds("sales") == default
+    legacy.profile = legacy.profile.model_copy(update={"clarification_max_rounds": 2})
+    assert runtime._requirement_max_review_rounds("sales") == 1
+    data = _create(runtime)
+    assert _state(data).max_review_rounds == 1
+    # 業務プロファイルが見つからないときはシステムの既定。
+    assert runtime._requirement_max_review_rounds("missing") == default
+
+
 def test_review_limit_still_blocks_apply_without_select() -> None:
     llm = _ScriptedLlm(_output(_from_orders(), _where_shipped()))
     state = _create(_runtime(llm)).requirement_state
@@ -1755,9 +1773,18 @@ class _McpJobs:
 
     def __init__(self) -> None:
         self.started: list[Any] = []
+        # 業務プロファイルの「曖昧な質問の扱い」（#1839）。
+        self.clarification_policy = "confirm"
 
     def ensure_persistence_available(self) -> None:
         return None
+
+    def get_profile(self, profile_id: str, **_kwargs: Any) -> Any:
+        from app.features.nl2sql.models import Nl2SqlProfile
+
+        return Nl2SqlProfile(
+            id=profile_id, name=profile_id.upper(), clarification_policy=self.clarification_policy
+        )
 
     def start_job(self, request: Any, **_kwargs: Any) -> Any:
         from app.features.nl2sql.models import JobCreateData, JobStatus
@@ -1933,6 +1960,62 @@ def test_mcp_query_does_not_generate_until_select_and_from_are_clear(
     assert len(requirement["minimum_missing"]) == 2
     assert requirement["question"]["section"] in {"from", "select"}
     assert jobs.started == []
+
+
+def test_mcp_query_with_assume_policy_does_not_ask_and_generates_without_check(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    """業務プロファイルが「前提を示して SQL を生成する」なら、確認事項があっても聞かない（#1839）。
+
+    要件をまだ反映できない（確認事項が残り、再検査の上限の前）ので、確認を使わずに作る。
+    """
+
+    llm = _ScriptedLlm(_ambiguous_status_output())
+    jobs = mcp_requirement(llm)
+    jobs.clarification_policy = "assume"
+    is_error, content = _mcp(
+        "nl2sql_query", {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
+    )
+    assert is_error is False, content
+    assert content["status"] == "done"
+    assert content["requirement"]["status"] == "skipped"
+    assert len(jobs.started) == 1
+    assert jobs.started[0].requirement_session_id is None
+
+
+def test_mcp_query_with_assume_policy_still_applies_a_clear_requirement(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped(), clarified="出荷済みの合計")
+    )
+    jobs = mcp_requirement(llm)
+    jobs.clarification_policy = "assume"
+    is_error, content = _mcp(
+        "nl2sql_query", {"question": "出荷済みの受注金額の合計", "profile_id": "sales"}
+    )
+    assert is_error is False, content
+    assert content["requirement"]["status"] == "applied"
+    assert jobs.started[0].requirement_session_id == content["requirement"]["session_id"]
+
+
+def test_mcp_query_with_assume_policy_skips_check_when_select_and_from_are_unclear(
+    mcp_requirement: Callable[[_ScriptedLlm], _McpJobs],
+) -> None:
+    """SELECT / FROM が決まらず要件を反映できないときは、確認を使わずに作る（#1839）。"""
+
+    llm = _ScriptedLlm(_output(_item("from_tables", "from", "missing", question="どの表？")))
+    jobs = mcp_requirement(llm)
+    jobs.clarification_policy = "assume"
+    is_error, content = _mcp(
+        "nl2sql_query", {"question": "いい感じに出して", "profile_id": "sales"}
+    )
+    assert is_error is False, content
+    assert content["status"] == "done"
+    assert content["requirement"]["status"] == "skipped"
+    assert "前提" in content["requirement"]["message"]
+    assert len(jobs.started) == 1
+    assert jobs.started[0].requirement_session_id is None
 
 
 def test_mcp_query_unanswerable_closes_session_without_sql(

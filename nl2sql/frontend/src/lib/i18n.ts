@@ -1909,6 +1909,20 @@ const nl2sqlJa = {
   "profiles.field.nameHint":
     "英字で開始し、英字・数字・アンダースコアのみ使用できます。小文字は自動で大文字になります。",
   "profiles.field.category": "カテゴリ",
+  // 回答前の確認（#1839）。用語は 3 製品で同じ（platform の UX 契約 confirm-before-answer.md）。
+  "profiles.clarification.title": "回答前の確認",
+  "profiles.clarification.description":
+    "曖昧な質問に SQL を生成する前に、確認事項を利用者に確かめるかを決めます。チャットと Agent からの問い合わせに使い、SQL 生成の画面の「AI要件確認」のボタンは変わりません。",
+  "profiles.clarification.policy": "曖昧な質問の扱い",
+  "profiles.clarification.policy.confirm": "確認してから SQL を生成する",
+  "profiles.clarification.policy.assume": "前提を示して SQL を生成する",
+  "profiles.clarification.policyHint":
+    "前提を示すときは確認事項を聞かず、決まらない点を AI の推測のまま SQL を生成します。",
+  "profiles.clarification.maxRounds": "確認の上限（往復）",
+  "profiles.clarification.maxRounds.default": "システムの既定",
+  "profiles.clarification.maxRounds.value": "{count} 回",
+  "profiles.clarification.maxRoundsHint":
+    "最初の確認を 1 回目に数えます。上限の回の後は、決まらない点を前提を示して SQL を生成します。",
   "profiles.field.defaultEngine": "既定の生成方式",
   "profiles.field.defaultEngineHint":
     "SQL 生成・チャットで最初に選ばれる方式です。方式を指定しない問い合わせ（Agent からの問い合わせ）もこの方式で SQL を生成します。この環境で使える方式だけを選べます。",

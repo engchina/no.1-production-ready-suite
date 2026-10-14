@@ -567,6 +567,11 @@ export function SqlChatPage() {
     const sent = createOptimisticChatMessage(question);
     const check: ChatRequirementCheck = { request, sentAtMs: sent.sentAtMs, sessionId: "" };
     setDraft("");
+    // 業務プロファイルの方針が「前提を示して SQL を生成する」なら確認事項を聞かずに作る（#1839）。
+    if (detail.data?.profile.clarification_policy === "assume") {
+      submitJob(check, null);
+      return;
+    }
     setRequirementCheck(check);
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();

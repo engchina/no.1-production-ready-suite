@@ -144,6 +144,13 @@ export interface Nl2SqlProfile {
   default_engine?: Nl2SqlEngine;
   /** 保存（Oracle 反映）のたびに Select AI Agent アセットも再構築するか（#1690）。 */
   rebuild_agent_assets_on_save?: boolean;
+  /**
+   * 回答前の確認（#1839）の方針。`confirm` は曖昧な質問を確認してから SQL を生成し、`assume` は確認せずに
+   * 前提を示して生成する（チャットと Agent の MCP。SQL 生成の画面の「AI要件確認」のボタンは変えない）。
+   */
+  clarification_policy?: ClarificationPolicy;
+  /** 確認の上限（往復。最初の確認を 1 回目に数える）。0 はシステムの既定。 */
+  clarification_max_rounds?: number;
   archived: boolean;
   object_scope_version?: number;
   version?: number;
@@ -182,6 +189,8 @@ export interface ProfileUsageContext {
   allowed_views: string[];
   /** 既定の生成方式（#1524）。SQL 生成・チャットの初期の選択。 */
   default_engine?: Nl2SqlEngine;
+  /** 回答前の確認の方針（#1839）。`assume` ならチャットは確認事項を聞かずに作る。 */
+  clarification_policy?: ClarificationPolicy;
   archived: boolean;
   object_scope_version: number;
   version: number;
@@ -290,7 +299,12 @@ export interface ProfileUpsertPayload {
   select_ai_config: ProfileSelectAiConfig;
   default_engine: Nl2SqlEngine;
   rebuild_agent_assets_on_save: boolean;
+  clarification_policy: ClarificationPolicy;
+  clarification_max_rounds: number;
 }
+
+/** 回答前の確認の方針（#1839）。 */
+export type ClarificationPolicy = "confirm" | "assume";
 
 export interface ProfileLearningMaterialImportData {
   profile_id: string;

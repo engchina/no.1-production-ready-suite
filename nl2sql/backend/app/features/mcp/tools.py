@@ -54,6 +54,7 @@ from app.features.nl2sql.models import (
     JobCreateRequest,
     JobData,
     JobStatus,
+    Nl2SqlProfile,
     ProfileRecommendationRequest,
 )
 from app.features.nl2sql.ontology_models import (
@@ -112,6 +113,12 @@ _REQUIREMENT_CLOSED_MESSAGE = (
 )
 _REQUIREMENT_SKIPPED_MESSAGE = (
     "OCI Enterprise AI が設定されていないため、AI要件確認をせずに SQL を生成しました。"
+)
+# 業務プロファイルの「曖昧な質問の扱い」が「前提を示して SQL を生成する」（#1839）で、
+# 確認せずに作った。
+_REQUIREMENT_ASSUMED_MESSAGE = (
+    "業務プロファイルの方針（前提を示して SQL を生成する）により、確認せずに SQL を生成しました。"
+    "回答では、確かめていない前提（AI の推測）を利用者に示してください。"
 )
 REQUIREMENT_AI_NOT_CONFIGURED_CODE = "REQUIREMENT_AI_NOT_CONFIGURED"
 # この業務プロファイルの範囲では SQL を作れない（AI要件確認。#1441）。
@@ -356,7 +363,8 @@ class RequirementOutput(BaseModel):
     status: str = Field(
         description=(
             "needs_answer / ready / unanswerable / applied / cancelled / skipped"
-            "（OCI Enterprise AI が無い構成で確かめなかった）"
+            "（OCI Enterprise AI が無い構成・業務プロファイルの方針が"
+            "「前提を示して SQL を生成する」で確かめなかった）"
         )
     )
     question: RequirementQuestionOutput | None = None
@@ -549,6 +557,16 @@ def _requirement_output(data: QuerySessionData) -> RequirementOutput:
         or (draft.sql_skeleton if draft is not None else ""),
         message=state.message_ja if state is not None else "",
     )
+
+
+def _profile_assumes(profile_id: str) -> bool:
+    """業務プロファイルの「曖昧な質問の扱い」が「前提を示して SQL を生成する」か（#1839）。"""
+
+    try:
+        profile = Nl2SqlProfile.model_validate(nl2sql_service.get_profile(profile_id))
+    except (KeyError, ValueError):
+        return False
+    return profile.clarification_policy == "assume"
 
 
 def _requirement_ready(data: QuerySessionData) -> bool:
@@ -789,7 +807,32 @@ def build_mcp_server(request: Request) -> McpServer:
             )
             return result
         if data.session.requirement_applied_at is None:
-            if not _requirement_ready(data):
+            # 業務プロファイルの方針が「前提を示して SQL を生成する」なら利用者に聞かない（#1839）。
+            # 要件を反映できる（確認事項が無い・再検査の上限で残りを AI に任せられる）なら反映し、
+            # できないなら確認を使わずに作る（画面の「確認せずに SQL を生成」と同じ）。
+            assume = await run_sync_io(_profile_assumes, arguments.profile_id)
+            state = data.requirement_state
+            if (
+                assume
+                and not _requirement_ready(data)
+                and not (state is not None and state.can_apply)
+            ):
+                if data.session.status not in _CLOSED_SESSION_STATUSES:
+                    await run_sync_io(runtime.cancel_session, data.session.id)
+                remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
+                result = await start_and_wait(
+                    JobCreateRequest(
+                        question=arguments.question,
+                        profile_id=arguments.profile_id,
+                        row_limit=arguments.row_limit,
+                    ),
+                    remaining,
+                )
+                result.requirement = RequirementOutput(
+                    session_id="", status="skipped", message=_REQUIREMENT_ASSUMED_MESSAGE
+                )
+                return result
+            if not _requirement_ready(data) and not assume:
                 requirement = _requirement_output(data)
                 if requirement.question is not None:
                     # 確認の要る項目がある: SQL を作らずに 1 問だけ返す。

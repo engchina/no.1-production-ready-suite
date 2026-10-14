@@ -359,6 +359,19 @@ class ProfileSelectAiConfigPatch(BaseModel):
     additional_instructions: str | None = None
 
 
+ClarificationPolicy = Literal["confirm", "assume"]
+# 回答前の確認の往復の上限（業務プロファイルで選べる最大。#1839）。
+CLARIFICATION_MAX_ROUNDS_LIMIT = 6
+
+
+def _validate_clarification_max_rounds(value: int | None) -> int | None:
+    """確認の上限は 0（システムの既定）か 2 回以上（1 回は AI の再検査が 0 回になり使えない）。"""
+
+    if value is not None and value == 1:
+        raise ValueError("確認の上限は 2 回以上にしてください（0 はシステムの既定）。")
+    return value
+
+
 class Nl2SqlProfile(BaseModel):
     """業務/Profile 単位の NL2SQL 設定。"""
 
@@ -382,6 +395,13 @@ class Nl2SqlProfile(BaseModel):
     # 画面を開き直しても保つ。
     # オフにしても既存のアセットは消さない（削除は Select AI Agent アセットの cleanup の操作）。
     rebuild_agent_assets_on_save: bool = False
+    # 回答前の確認（#1839。NL2SQL の AI要件確認）の業務プロファイルの方針。`confirm` は曖昧な質問を
+    # 確認してから SQL を生成し、`assume` は確認せずに前提を示して生成する（チャットと MCP の
+    # `nl2sql_query`。SQL 生成の画面の「AI要件確認」のボタンは利用者の明示の操作なので変えない）。
+    clarification_policy: ClarificationPolicy = "confirm"
+    # 確認の上限（往復。最初の確認を 1 回目に数える）。0 はシステムの既定
+    # （`NL2SQL_REQUIREMENT_MAX_REVIEW_ROUNDS` + 1）。AI の再検査の上限はこの値 - 1。
+    clarification_max_rounds: int = Field(default=0, ge=0, le=CLARIFICATION_MAX_ROUNDS_LIMIT)
     archived: bool = False
     version: int = Field(default=1, ge=1)
     etag: str = ""
@@ -432,6 +452,8 @@ class ProfileUsageContext(BaseModel):
     allowed_views: list[str] = Field(default_factory=list)
     # 既定の生成方式（#1524）。SQL 生成・チャットの画面の初期の選択。
     default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    # 回答前の確認の方針（#1839）。チャットは `assume` なら確認事項を聞かずに作る。
+    clarification_policy: ClarificationPolicy = "confirm"
     archived: bool = False
     object_scope_version: int = 1
     version: int = 1
@@ -547,6 +569,12 @@ class ProfileUpsertRequest(BaseModel):
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
     default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     rebuild_agent_assets_on_save: bool = False
+    clarification_policy: ClarificationPolicy = "confirm"
+    clarification_max_rounds: int = Field(default=0, ge=0, le=CLARIFICATION_MAX_ROUNDS_LIMIT)
+
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        _validate_clarification_max_rounds
+    )
 
     @field_validator("name", mode="before")
     @classmethod
@@ -589,6 +617,14 @@ class ProfilePatchRequest(BaseModel):
     select_ai_config: ProfileSelectAiConfigPatch | None = None
     default_engine: Nl2SqlEngine | None = None
     rebuild_agent_assets_on_save: bool | None = None
+    clarification_policy: ClarificationPolicy | None = None
+    clarification_max_rounds: int | None = Field(
+        default=None, ge=0, le=CLARIFICATION_MAX_ROUNDS_LIMIT
+    )
+
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        _validate_clarification_max_rounds
+    )
 
     @field_validator("name", mode="before")
     @classmethod

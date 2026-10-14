@@ -682,6 +682,26 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   ).toBeLessThanOrEqual(0);
 });
 
+test("業務プロファイルの方針が「前提を示して SQL を生成する」なら、確認事項を聞かずに SQL を作る (#1839)", async ({
+  page,
+}) => {
+  const state = await setup(page, { create: "needs_answer" });
+  await page.route("**/api/nl2sql/profiles/*/usage-context", (route) =>
+    route.fulfill({ json: { data: { ...profile, clarification_policy: "assume" } } }),
+  );
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await composer.fill("今年度の地域ごとの受注金額");
+  await composer.press("Enter");
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
+  expect(state.requirement.creates).toHaveLength(0);
+  expect(state.requests[0]).toMatchObject({ question: "今年度の地域ごとの受注金額", chat: true });
+  expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
+  // 利用者が飛ばしたのではないので、「確認せずに…」は残さない。
+  await expect(page.getByTestId("sql-chat-turn-clarification")).toHaveCount(0);
+});
+
 test("生成方法の初期の選択は業務プロファイルの既定の生成方式 (#1524)", async ({
   page,
 }) => {

@@ -125,7 +125,7 @@
                 "type": "string"
               },
               "status": {
-                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成で確かめなかった）",
+                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成・業務プロファイルの方針が「前提を示して SQL を生成する」で確かめなかった）",
                 "title": "Status",
                 "type": "string"
               },
@@ -691,7 +691,7 @@
                 "type": "string"
               },
               "status": {
-                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成で確かめなかった）",
+                "description": "needs_answer / ready / unanswerable / applied / cancelled / skipped（OCI Enterprise AI が無い構成・業務プロファイルの方針が「前提を示して SQL を生成する」で確かめなかった）",
                 "title": "Status",
                 "type": "string"
               },
