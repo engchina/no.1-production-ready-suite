@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { ClipboardList, Download, Eye, FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Banner,
@@ -81,6 +82,22 @@ export function EvaluationPage() {
   const editor = useEditorRoute();
   const [agentId, setAgentId] = useWorkspaceState("evaluation", "agentId", "", isString);
   const [jobId, setJobId] = useWorkspaceState<"evaluation", string | null>("evaluation", "jobId", null, isNullableString);
+  // 業務 Agent の画面の「品質評価で比べる」（`?agent=<id>`。#1867）。その業務 Agent を選び、URL からは外す。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedAgentId = searchParams.get("agent");
+  useEffect(() => {
+    if (!linkedAgentId) return;
+    setAgentId(linkedAgentId);
+    setJobId(null);
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("agent");
+        return next;
+      },
+      { replace: true }
+    );
+  }, [linkedAgentId, setAgentId, setJobId, setSearchParams]);
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(

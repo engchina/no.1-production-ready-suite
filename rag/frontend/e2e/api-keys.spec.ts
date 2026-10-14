@@ -88,13 +88,17 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(page.getByText("名前を入力してください。")).toBeVisible();
     expect(calls.created).toHaveLength(0);
 
+    // 発行の既定の製品は、開いている製品によらず RAG と NL2SQL の両方（#1869）。
+    await expect(page.getByTestId("api-key-product-rag")).toBeChecked();
+    await expect(page.getByTestId("api-key-product-nl2sql")).toBeChecked();
     await page.getByLabel("名前（用途）").fill("会社の PC の Claude Code");
-    await page.getByTestId("api-key-product-nl2sql").check();
+    await page.getByTestId("api-key-product-nl2sql").uncheck();
     await page.getByTestId("api-key-create").click();
     await expect(page.getByTestId("api-key-token")).toHaveValue(TOKEN);
-    expect(calls.created).toEqual([
-      { name: "会社の PC の Claude Code", products: ["rag", "nl2sql"], expires_in_days: 90 },
-    ]);
+    expect(calls.created).toEqual([{ name: "会社の PC の Claude Code", products: ["rag"], expires_in_days: 90 }]);
+    // 発行の後は欄を既定（両方）へ戻す。
+    await expect(page.getByTestId("api-key-product-rag")).toBeChecked();
+    await expect(page.getByTestId("api-key-product-nl2sql")).toBeChecked();
     const list = page.getByRole("table", { name: "API キーの一覧" });
     await expect(list.getByText("会社の PC の Claude Code")).toBeVisible();
     // 一覧は秘密を出さない（見分けるための先頭だけ）。

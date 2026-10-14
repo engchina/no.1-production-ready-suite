@@ -38,6 +38,7 @@ import { AgentEditorView } from "@/pages/agents/AgentEditorView";
 import { formatDate } from "@/pages/shared/page-helpers";
 import { actorDisplayName } from "@/pages/shared/user-names";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
+import { SkillUpdatesPanel } from "@/components/agents/SkillUpdatesPanel";
 
 export function AgentsPage() {
   const queryClient = useQueryClient();
@@ -124,6 +125,8 @@ export function AgentsPage() {
         <PageBody wide>
           <NonPersistentStorageNotice />
           {skills.error ? <ApiErrorBanner error={skills.error} fallback={t("common.error.load")} /> : null}
+          {/* スキルの更新があります（N 件）と、確かめてまとめて再公開する（#1867）。 */}
+          <SkillUpdatesPanel agents={agentList} skills={skills.data?.skills ?? []} canManage={canManage} />
           <Section title={t("agent.list")}>
             <ListToolbar
               search={
@@ -222,6 +225,10 @@ export function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
       {/* 公開中の版に固定したスキルが変わった（#1855）。再公開で取り込む。 */}
       {agent.skill_updates?.length ? (
         <StatusBadge variant="warning" label={t("agent.version.skillsUpdated")} />
+      ) : null}
+      {/* 常に最新のスキルを使う業務 Agent（#1867）。 */}
+      {agent.skill_policy === "latest" ? (
+        <StatusBadge variant="info" label={t("agent.version.latestBadge")} icon={false} />
       ) : null}
     </span>
   );

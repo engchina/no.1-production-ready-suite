@@ -313,7 +313,9 @@ for (const viewport of [
       page.getByText("journalctl -u production-ready-rag-parser-docling.service / 最新 200 行")
     ).toBeVisible();
     await expect(page.getByText("parser-docling boot complete")).toBeVisible();
-    await expect(page.locator('[data-surface="code"]').getByRole("button", { name: "最新情報を取得" })).toBeVisible();
+    await expect(page.locator('[data-surface="code"]').getByRole("button", { name: "ログの最新情報を取得" })).toBeVisible();
+    // サービスの一覧とログの取り直しは名前で区別する（同じ名前のボタンを 2 つ出さない。#1868）。
+    await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "コピー" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });

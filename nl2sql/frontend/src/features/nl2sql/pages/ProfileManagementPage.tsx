@@ -2277,7 +2277,7 @@ export function ProfileManagementPage() {
         onClick={() => void load(false, "notice")}
         icon={RefreshCw}
       >
-        <span>{t("profiles.action.refresh")}</span>
+        <span>{t("common.retry")}</span>
       </Button>
     );
 
@@ -2313,7 +2313,7 @@ export function ProfileManagementPage() {
                   icon: RefreshCw,
                   onClick: () => load(true, "header"),
                   // 押した再読込の間だけ回す。定期・他の操作の後の一覧の取り直し（profileListRefreshing）と、
-                  // 失敗の案内の「最新情報を取得」の再読込では回さない（#819）。
+                  // 失敗の案内の「再試行」の再読込では回さない（#819）。
                   loading: loading === "load" && loadOrigin === "header" && !profileListShowsSpinner,
                   disabled: profileListShowsSpinner || (loading === "load" && loadOrigin !== "header"),
                 },

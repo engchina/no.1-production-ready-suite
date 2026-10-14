@@ -72,7 +72,7 @@ from pr_system_settings.model import (
 
 from app.features.agent import data_scope, tool_grounding
 from app.features.agent.answer_outcome import answer_outcome
-from app.features.agent.answer_passages import is_clarification_only
+from app.features.agent.answer_passages import is_absence_only, is_clarification_only
 from app.features.agent.answer_validation import (
     ANSWER_VALIDATION_KIND,
     ANSWER_VALIDATION_NAME,
@@ -80,6 +80,7 @@ from app.features.agent.answer_validation import (
     MAX_ANSWER_CHARS,
     MAX_QUERY_CHARS,
     NO_EVIDENCE_NOTICE,
+    REASON_ABSENCE_ONLY,
     REASON_ANSWER_TOO_LONG,
     REASON_CLARIFICATION_ONLY,
     REASON_CONNECTION_NOT_FOUND,
@@ -94,6 +95,7 @@ from app.features.agent.answer_validation import (
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
     carried_evidence,
+    carried_evidence_groups,
     combine_validations,
     connection_check_inputs,
     run_evidence_groups,
@@ -1433,6 +1435,10 @@ def _support_task_run(run: Any, agent: Any = None) -> _SupportTaskRun:
             goal=goal,
             max_rag_calls_per_run=max_rag,
             max_tool_calls_per_task=max_task,
+            # 範囲で 1 つに決まっている接続は、前のプロファイルを出さない（#1880）。
+            fixed_profile_connections=data_scope.fixed_profile_connections(
+                getattr(agent, "data_scopes", None)
+            ),
         ),
         max_rag_calls_per_run=max_rag,
         max_tool_calls_per_task=max_task,
@@ -2144,6 +2150,11 @@ async def _validate_final_answer(
     判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
     「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
+
+    今のターンに根拠が無いとき（#1879）: 資料に無い・答えられないことだけを述べる回答は注記せずに
+    `skipped`（`absence_only`）。会話の続きで、今のターンが根拠・データのツールで結果を得ずに
+    答えた（前の回答の整形・言い換え。#1835 の `grounded_in_thread` で拒答にしない回答）なら、
+    前のターンの検証で裏付けた根拠（`carried_evidence`）だけで検証する。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -2170,6 +2181,13 @@ async def _validate_final_answer(
             return answer, save(
                 validation_content(STATUS_SKIPPED, reason=REASON_CLARIFICATION_ONLY)
             )
+        if rag_tools and is_absence_only(answer):
+            # 資料に無い・答えられないことだけを述べる回答（拒答）は資料の主張を含まない（#1879）。
+            return answer, save(validation_content(STATUS_SKIPPED, reason=REASON_ABSENCE_ONLY))
+        if carried and not tool_grounding.grounding_used(run.steps):
+            # 前の回答の整形・言い換え（#1879）は、前のターンで裏付けた根拠で確かめる。
+            groups = carried_evidence_groups(carried, answer)
+    if not groups:
         if rag_tools and answer.strip():
             content = validation_content(
                 STATUS_UNVALIDATED, reason=REASON_NO_RAG_EVIDENCE, message=NO_EVIDENCE_NOTICE

@@ -105,10 +105,19 @@ OracleConnectFactory = Callable[[], Any]
 # 組み込み Runtime（#754）の Runtime ID と、承認待ちの Run に保存する SDK の状態の key。
 BUILTIN_RUNTIME_ID = "builtin"
 _BUILTIN_STATE_KEY = "_builtin_sdk_state"
+# backend の再起動で実行が中断した Run の失敗（#1894。in_process の実行は backend のプロセスの
+# task だけで、再起動の後に拾い直す仕組みが無い）。
+INTERRUPTED_ERROR_CODE = "runtime.interrupted"
+INTERRUPTED_MESSAGE = "サーバーの再起動で実行が中断されました。もう一度送信してください。"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _aware(value: datetime) -> datetime:
+    """時差の無い日時（古い保存の値）は UTC とみなす（比べられるようにする）。"""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class RunStatus(StrEnum):
@@ -211,6 +220,12 @@ class ApprovalRequest(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+# スキルの更新の扱い（#1867）。pinned = 公開の版に固定した中身で動く（既定・推奨。#1855）、
+# latest = 公開中の版でも今のスキルで動く（開発・検証用。更新の印を出さない）。
+SkillPolicy = Literal["pinned", "latest"]
+SKILL_POLICY_PINNED: SkillPolicy = "pinned"
+SKILL_POLICY_LATEST: SkillPolicy = "latest"
+
 # 版に残す業務 Agent の項目（下書き = AgentProfile の同名の項目。#770）。
 AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "name",
@@ -221,6 +236,7 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "data_scopes",
     "clarification_policy",
     "clarification_max_rounds",
+    "skill_policy",
 )
 
 
@@ -244,6 +260,8 @@ class AgentVersion(BaseModel):
     _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
         validate_max_rounds
     )
+    # スキルの更新の扱い（#1867。latest は公開中の版でも今のスキルで動く）。
+    skill_policy: SkillPolicy = SKILL_POLICY_PINNED
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
@@ -277,6 +295,9 @@ class AgentProfile(BaseModel):
     _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
         validate_max_rounds
     )
+    # スキルの更新の扱い（#1867）。pinned（既定）は公開の版に固定したスキル、latest は今のスキル。
+    # 版の項目なので、変えたら公開して反映する。
+    skill_policy: SkillPolicy = SKILL_POLICY_PINNED
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
@@ -315,7 +336,12 @@ class AgentProfile(BaseModel):
         固定していない版（#1855 より前）は比べない（空）。再公開で今のスキルを固定し直す。
         """
         published = self.published()
-        if published is None or published.skills is None:
+        # 常に最新を使う版（#1867）は今のスキルで動くので、更新の印を出さない。
+        if (
+            published is None
+            or published.skills is None
+            or published.skill_policy == SKILL_POLICY_LATEST
+        ):
             return []
         return skill_updates(published.skills)
 
@@ -394,6 +420,7 @@ class AgentProfilePatch(BaseModel):
     _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
         validate_max_rounds
     )
+    skill_policy: SkillPolicy | None = None
     tool_names: list[str] | None = None
     enabled: bool | None = None
 
@@ -931,6 +958,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         decided_by: str | None = None,
     ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
@@ -980,6 +1008,10 @@ class AgentRuntimeRepositoryContract(Protocol):
     def restore_agent_version(
         self, agent_id: str, version: int, *, published_by: str | None = None
     ) -> AgentProfile: ...
+    def publish_skill_updates(
+        self, agent_id: str, *, note: str = "", published_by: str | None = None
+    ) -> tuple[AgentProfile, int]: ...
+    def set_published_version(self, agent_id: str, version: int) -> AgentProfile: ...
     def delete_agent(self, agent_id: str) -> None: ...
     def export_snapshot(self) -> AgentRuntimeSnapshot: ...
     def validate_snapshot(
@@ -1973,6 +2005,54 @@ class AgentRuntimeRepository:
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
 
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]:
+        """前のプロセスが実行していた `running` / `queued` の Run を失敗にする（#1894）。
+
+        in_process の backend の起動で、保存先を読み込んだ後に 1 回だけ呼ぶ（呼び出しは
+        `storage_bootstrap`）。`updated_before`（このプロセスの起動の時刻）より後に作った・
+        変えた Run は、このプロセスか別のプロセスが動かしている途中かもしれないので触らない。
+        承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
+        失敗にした Run の ID を返す。
+        """
+        with self._lock:
+            interrupted = [
+                run
+                for run in self._sorted_runs_locked()
+                if run.status in {RunStatus.RUNNING, RunStatus.QUEUED}
+                and _aware(run.updated_at) < _aware(updated_before)
+            ]
+            for run in interrupted:
+                self._fail_interrupted_locked(run)
+            if interrupted:
+                self._persist_locked()
+                for run in interrupted:
+                    self._record_fact_locked(run)
+            return [run.id for run in interrupted]
+
+    def _fail_interrupted_locked(self, run: RunState) -> None:
+        now = _now()
+        previous_status = run.status.value
+        for step in run.steps:
+            if step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
+                step.status = StepStatus.FAILED
+                step.completed_at = step.completed_at or now
+        run.pending_tool_calls.clear()
+        run.metadata.pop("_runtime_dispatch_lease", None)
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        run.status = RunStatus.FAILED
+        run.updated_at = now
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_FAILED,
+            INTERRUPTED_MESSAGE,
+            {
+                "error_code": INTERRUPTED_ERROR_CODE,
+                "runtime_id": run.runtime_id,
+                "previous_status": previous_status,
+                "source": "startup",
+            },
+        )
+
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState:
@@ -2211,6 +2291,57 @@ class AgentRuntimeRepository:
             )
             agent.published_version = version
             agent.versioned = True
+            agent.updated_at = _now()
+            self._persist_locked()
+            return agent.model_copy(deep=True)
+
+    def publish_skill_updates(
+        self, agent_id: str, *, note: str = "", published_by: str | None = None
+    ) -> tuple[AgentProfile, int]:
+        """公開中の版にスキルの更新だけを取り込んだ新しい版を公開する（#1867）。
+
+        新しい版は公開中の版の項目（指示・スキルの選択など）のまま、スキルの今の中身を固定し直す。
+        下書きの変更は公開しない（まとめての再公開で、確かめていない下書きを出さない）。
+        戻り値は（業務 Agent、前の公開中の版の番号）。取り込む更新が無ければ ValueError。
+        """
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                raise KeyError(agent_id)
+            published = agent.published()
+            if published is None:
+                raise ValueError("公開した版がありません。")
+            if not agent.skill_updates:
+                raise ValueError("取り込むスキルの更新がありません。")
+            self._validate_agent_skills(published.skill_ids)
+            previous = published.version
+            version = max((item.version for item in agent.versions), default=0) + 1
+            agent.versions.append(
+                published.model_copy(
+                    deep=True,
+                    update={
+                        "version": version,
+                        "note": note.strip() or f"スキルの更新を取り込む（v{previous} から）",
+                        "published_at": _now(),
+                        "published_by": published_by,
+                        "skills": pin_skills(published.skill_ids),
+                    },
+                )
+            )
+            agent.published_version = version
+            agent.updated_at = _now()
+            self._persist_locked()
+            return agent.model_copy(deep=True), previous
+
+    def set_published_version(self, agent_id: str, version: int) -> AgentProfile:
+        """公開中の版だけを前の版にする（まとめての再公開を戻す。下書きは変えない。#1867）。"""
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                raise KeyError(agent_id)
+            if not any(item.version == version for item in agent.versions):
+                raise KeyError(f"{agent_id}@{version}")
+            agent.published_version = version
             agent.updated_at = _now()
             self._persist_locked()
             return agent.model_copy(deep=True)
@@ -4221,8 +4352,10 @@ def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
         deep=True,
         update={
             **{field: getattr(target, field) for field in AGENT_VERSIONED_FIELDS},
-            # 版に固定したスキル（#1855。固定していない版は None で今のスキル）。
-            "pinned_skills": deepcopy(target.skills),
+            # 版に固定したスキル（#1855）。固定なし・常に最新の版は None で今のスキル（#1867）。
+            "pinned_skills": (
+                None if target.skill_policy == SKILL_POLICY_LATEST else deepcopy(target.skills)
+            ),
         },
     )
 

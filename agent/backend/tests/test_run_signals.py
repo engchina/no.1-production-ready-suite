@@ -151,6 +151,8 @@ def _fact(
         (_validation("unvalidated", reason="validator_unavailable"), VALIDATION_UNVALIDATED),
         (_validation("unvalidated", reason="no_rag_evidence"), VALIDATION_UNGROUNDED),
         (_validation("skipped", reason="clarification_only"), VALIDATION_SKIPPED),
+        # 資料に無い・答えられないことだけを述べる拒答（#1879。根拠を使わずに答えたに数えない）。
+        (_validation("skipped", reason="absence_only"), VALIDATION_SKIPPED),
         # RAG の根拠のツールを持たない Agent の根拠の無い回答（#1834）。
         (_validation("skipped", reason="no_rag_evidence"), VALIDATION_NO_EVIDENCE_TOOLS),
     ],
@@ -165,6 +167,7 @@ def _fact(
         "validator-failed",
         "no-rag-evidence",
         "skipped",
+        "absence-only",
         "no-evidence-tools",
     ],
 )

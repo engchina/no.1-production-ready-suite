@@ -206,6 +206,11 @@ INSTRUCTIONS = (
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。"
+    # 会話の続きは前のターンのプロファイルを使う（#1880。指示語のままの質問で推薦し直さない）。
+    "同じ会話の続きの質問では、前のターンで使った検索・回答プロファイルをそのまま使い、"
+    "推薦し直すのは話題が変わったときだけにしてください。推薦し直すときは、"
+    "rag_recommend_search_answer_profile の question に、指示語・省略を前の質問で補った、"
+    "それだけで意味の通る質問を渡してください。"
     "回答の根拠は evidence にあり、used_in_answer が回答に使った根拠です。"
     "根拠の excerpt が切り詰められている（truncated）ときや、前後の文脈が要るときは、"
     "rag_read_source に document_id と chunk_id を渡して本文と親の本文を読んでください。"
@@ -249,7 +254,12 @@ class RecommendSearchAnswerProfileInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    question: str = Field(..., min_length=1, max_length=4000, description="利用者の質問。")
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description="利用者の質問（指示語・省略は前の質問で補い、それだけで意味の通る文にする）。",
+    )
     profile_ids: list[str] | None = Field(
         default=None,
         min_length=1,
@@ -2900,6 +2910,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "呼びません）。"
                     "候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が null"
                     "です。profile_ids を渡すと、その中からだけ推薦します。"
+                    "同じ会話の続きの質問では前のターンと同じプロファイルを使い、推薦し直すのは"
+                    "話題が変わったときだけです。question には、指示語・省略を前の質問で補った、"
+                    "それだけで意味の通る質問を渡します。"
                 ),
                 input_model=RecommendSearchAnswerProfileInput,
                 handler=scoped(recommend_search_answer_profile),

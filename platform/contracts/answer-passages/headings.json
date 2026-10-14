@@ -1,5 +1,5 @@
 {
-  "description": "回答の検証で主張として数えない見出しの名詞句・導入の文と、見出しに見えても主張として残す行の事例（#1469）。RAG（rag_engine.generation.operation_audit.is_heading / is_non_claim_passage / list_heading_lines）と Agent（app.features.agent.answer_passages.is_heading / passage_kind / non_claim_passages / list_heading_lines）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。見出しの名詞句は、句点で終わらない短い名詞句で、項目・区分・資料の名前か分岐・問いの形（「…とき」「…か」）で終わり、述語・操作・数量・言い切りの「は」を含まないもの（強調・後ろの注記の括弧は除いて確かめる）。heading_passages は段落だけで見出しになる、番号・箇条書きの印の無い行。番号つきの行は段落だけでは決めず、終わりの語が一覧にあるか、一覧に無くても「…の…」の名詞句で、次の（空でない）行がその下の内容（字下げした行か箇条書き・「→」の行）のときだけ見出し（RAG と Agent の list_heading_lines。#1481 / #1482）。番号の行が続く一覧の項目（「申請書に書く 4 項目」の「1. 変更の内容と理由」）と、下に内容の無い行は、終わりの語が一覧にあっても主張のまま（#1482）。人・組織・役職の名前で終わる「…の…」の行も主張のまま。numbered_heading_passages はその行（passage の次に下の内容の行を置くと見出し、単独・一覧の中では主張）。箇条書きの行（「- 」「* 」「+ 」「・」「•」。強調の「**」は印ではない）も段落だけでは決めず、同じ語の行で、次の（空でない）行がより深く字下げした行（下位の箇条書き）か「→」の行のときだけ見出し（#1486）。同じ字下げの箇条書きの行は同じ一覧の次の項目なので、その前の行は主張のまま（「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」）。bullet_heading_passages はその行（passage の次に下位の行を置くと見出し、単独・同じ字下げの箇条書きの前では主張）。claim_passages は、次に下の内容の行を置いても主張のまま。導入の文は「…は次のとおりです。」「以下に示します。」のように以降の箇条書きを導くだけの文（先頭の接続の語「そのため、」「なお、」の後の「、」は許す。#1481）と、礼・締めくくりの定型の文（「以上、資料に基づく回答です。」。#1833）。heading_passages・numbered_heading_passages・bullet_heading_passages の多くは #1362 の deepseek-flash の評価（e1467、main f83ebbda）の D の Run の回答の段落そのもの。#1481 の事例は e1481 の評価（main 05b35c37、deepseek-flash）の D の Run の回答の段落。",
+  "description": "回答の検証で主張として数えない見出しの名詞句・導入の文と、見出しに見えても主張として残す行の事例（#1469）。RAG（rag_engine.generation.operation_audit.is_heading / is_non_claim_passage / list_heading_lines）と Agent（app.features.agent.answer_passages.is_heading / passage_kind / non_claim_passages / list_heading_lines）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。見出しの名詞句は、句点で終わらない短い名詞句で、項目・区分・資料の名前か分岐・問いの形（「…とき」「…か」）で終わり、述語・操作・数量・言い切りの「は」を含まないもの（強調・後ろの注記の括弧は除いて確かめる）。heading_passages は段落だけで見出しになる、番号・箇条書きの印の無い行。番号つきの行は段落だけでは決めず、終わりの語が一覧にあるか、一覧に無くても「…の…」の名詞句で、次の（空でない）行がその下の内容（字下げした行か箇条書き・「→」の行）のときだけ見出し（RAG と Agent の list_heading_lines。#1481 / #1482）。番号の行が続く一覧の項目（「申請書に書く 4 項目」の「1. 変更の内容と理由」）と、下に内容の無い行は、終わりの語が一覧にあっても主張のまま（#1482）。人・組織・役職の名前で終わる「…の…」の行も主張のまま。numbered_heading_passages はその行（passage の次に下の内容の行を置くと見出し、単独・一覧の中では主張）。箇条書きの行（「- 」「* 」「+ 」「・」「•」。強調の「**」は印ではない）も段落だけでは決めず、同じ語の行で、次の（空でない）行がより深く字下げした行（下位の箇条書き）か「→」の行のときだけ見出し（#1486）。同じ字下げの箇条書きの行は同じ一覧の次の項目なので、その前の行は主張のまま（「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」）。bullet_heading_passages はその行（passage の次に下位の行を置くと見出し、単独・同じ字下げの箇条書きの前では主張）。claim_passages は、次に下の内容の行を置いても主張のまま。導入の文は「…は次のとおりです。」「以下に示します。」のように以降の箇条書きを導くだけの文（先頭の接続の語「そのため、」「なお、」の後の「、」は許す。#1481）と、礼・締めくくりの定型の文（「以上、資料に基づく回答です。」。#1833）と、前の内容をまとめて指すだけの結びの文（「以上が、締め日を過ぎた場合の取扱いです。」。指す対象に言い切りの「は」・数量・操作・引用を含むものは主張）・結びのあいさつ（「ご参考になれば幸いです。」。#1879）。heading_passages・numbered_heading_passages・bullet_heading_passages の多くは #1362 の deepseek-flash の評価（e1467、main f83ebbda）の D の Run の回答の段落そのもの。#1481 の事例は e1481 の評価（main 05b35c37、deepseek-flash）の D の Run の回答の段落。",
   "heading_passages": [
     {
       "id": "bold-case-with-location",
@@ -85,6 +85,23 @@
     {
       "id": "closing-searched-materials",
       "passage": "以上が検索した資料に基づく回答です。"
+    },
+    {
+      "id": "closing-summary-topic",
+      "note": "#1879（#1863 の実機の回答 run_6e6aaf7a68994d41a07db330278bf3d9）。前の内容をまとめて指すだけの結びの文が unassessed で外されていた。",
+      "passage": "以上が、締め日を過ぎた場合の取扱いです。"
+    },
+    {
+      "id": "closing-summary-plain",
+      "passage": "以上が回答です。"
+    },
+    {
+      "id": "closing-wish",
+      "passage": "ご参考になれば幸いです。"
+    },
+    {
+      "id": "closing-wish-helpful",
+      "passage": "お役に立てれば幸いです。"
     }
   ],
   "numbered_heading_passages": [
@@ -294,6 +311,19 @@
     {
       "id": "closing-with-following-claim",
       "passage": "以上、資料に基づく回答ですが、締め日は 25 日です。"
+    },
+    {
+      "id": "closing-summary-with-fact",
+      "note": "まとめて指す形でも、言い切りの「は」・数量・操作を含む文は主張（#1879）。",
+      "passage": "以上が、締め日は毎月末という取扱いです。"
+    },
+    {
+      "id": "closing-summary-with-quantity",
+      "passage": "以上が、30 日以内に申請する手順です。"
+    },
+    {
+      "id": "closing-summary-with-operation",
+      "passage": "以上が、管理画面で削除ボタンを押す手順です。"
     }
   ],
   "answers": [

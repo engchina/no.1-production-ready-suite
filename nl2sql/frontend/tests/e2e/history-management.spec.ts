@@ -889,7 +889,7 @@ test("実行履歴は読込失敗を既存データなしでも再試行でき�
   await expect(page.getByText("履歴はまだありません")).toHaveCount(0);
   await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
   shouldFail = false;
-  await alert.getByRole("button", { name: "最新情報を取得" }).click();
+  await alert.getByRole("button", { name: "再試行" }).click();
   await expect(historyRows(page)).toHaveCount(3);
 });
 
@@ -924,7 +924,7 @@ test("絞り込みの取得が失敗したら前の条件の一覧を新しい�
 
   // 再試行で今の条件の結果に置き換わる。
   failBad = false;
-  await page.getByRole("alert").getByRole("button", { name: "最新情報を取得" }).click();
+  await page.getByRole("alert").getByRole("button", { name: "再試行" }).click();
   // historyItems のうち利用者評価が「違う」（bad）は「請求金額を確認」の 1 件。
   await expect(historyRows(page)).toHaveCount(1);
   await expect(historyRows(page).first()).toContainText("請求金額を確認");
