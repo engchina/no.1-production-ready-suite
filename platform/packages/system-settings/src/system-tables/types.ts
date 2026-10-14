@@ -99,10 +99,23 @@ export interface SystemTablesInitializeRequest {
   allow_destructive?: boolean;
 }
 
+/**
+ * 保存済みのデータを書き換えた後に、再起動が要るプロセス（Agent だけが返す。#1844）。
+ * 操作を処理した backend のメモリは読み直し済みで、読み直せない別のプロセスだけを挙げる。
+ */
+export interface SystemTableRestartRequired {
+  /** 再起動が要る理由（製品が日本語で返す）。 */
+  message: string;
+  /** 再起動するプロセス（名前と、systemd の unit・起動の command）。 */
+  processes: string[];
+}
+
 export interface SystemTablesOperationData extends SystemTablesStatusData {
   operation: SystemTableOperationResult;
   dropped_object_count: number;
   created_object_count: number;
+  /** 再起動が要るプロセス（無ければ null か無し。Agent。#1844）。 */
+  restart_required?: SystemTableRestartRequired | null;
 }
 
 /** 参照先のない行の削除（#511）。`expected_orphan_rows` は利用者が確認した件数。 */

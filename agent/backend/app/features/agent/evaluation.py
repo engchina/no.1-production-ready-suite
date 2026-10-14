@@ -27,7 +27,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
@@ -574,6 +574,11 @@ class EvaluationSetStore:
         with self._lock:
             self._sets[item.id] = item
 
+    def replace_all(self, items: Sequence[EvaluationSet]) -> None:
+        """保存先の評価セットで置き換える（migration の後の読み直し。#1844）。"""
+        with self._lock:
+            self._sets = {item.id: item for item in items}
+
     def clear(self) -> None:
         with self._lock:
             self._sets.clear()
@@ -797,16 +802,36 @@ class EvaluationStore:
 
     def restore(self, job: EvaluationJob) -> None:
         """保存した job を戻す。実行中だった job は再起動で中断したものとして終える。"""
-        if job.status in ACTIVE_JOB_STATUSES:
-            job.status = JobStatus.FAILED
-            job.error = "バックエンドの再起動で評価が中断しました。もう一度始めてください。"
-            job.finished_at = job.finished_at or _now()
-            for result in job.results:
-                if result.status in _UNFINISHED_STATUSES:
-                    result.status = CaseStatus.CANCELLED
+        _finish_interrupted(job)
         with self._lock:
             self._jobs[job.id] = job
             ordered = sorted(self._jobs.values(), key=lambda item: item.created_at)
+            self._jobs = OrderedDict((item.id, item) for item in ordered)
+
+    def replace_all(self, jobs: Sequence[EvaluationJob]) -> None:
+        """保存先の job で置き換える（migration の後の読み直し。#1844）。
+
+        このプロセスで実行中の job はメモリの値を残す（実行が続きを書く。保存先の途中の値で
+        戻さない）。それ以外の、保存先で実行中のままの job は起動時の復元と同じく中断として終える。
+        """
+        with self._lock:
+            active = {
+                job_id: job
+                for job_id, job in self._jobs.items()
+                if job.status in ACTIVE_JOB_STATUSES
+            }
+        replaced: dict[str, EvaluationJob] = {}
+        for job in jobs:
+            if job.id in active:
+                continue
+            _finish_interrupted(job)
+            replaced[job.id] = job
+        with self._lock:
+            # 読み直しの間に終わった job も、メモリの値（実行の結果）を残す。
+            for job_id in active:
+                if job_id in self._jobs:
+                    replaced[job_id] = self._jobs[job_id]
+            ordered = sorted(replaced.values(), key=lambda item: item.created_at)
             self._jobs = OrderedDict((item.id, item) for item in ordered)
 
     def prune(self, now: datetime | None = None) -> tuple[str, ...]:
@@ -823,6 +848,18 @@ class EvaluationStore:
     def clear(self) -> None:
         with self._lock:
             self._jobs.clear()
+
+
+def _finish_interrupted(job: EvaluationJob) -> None:
+    """保存先で実行中のままの job（このプロセスで動いていない）を、中断したものとして終える。"""
+    if job.status not in ACTIVE_JOB_STATUSES:
+        return
+    job.status = JobStatus.FAILED
+    job.error = "バックエンドの再起動で評価が中断しました。もう一度始めてください。"
+    job.finished_at = job.finished_at or _now()
+    for result in job.results:
+        if result.status in _UNFINISHED_STATUSES:
+            result.status = CaseStatus.CANCELLED
 
 
 evaluation_set_store = EvaluationSetStore()

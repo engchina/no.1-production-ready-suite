@@ -657,6 +657,8 @@ function createState() {
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
+    // 作成・更新の結果の、再起動が要るプロセス（#1844。spec が設定する）。
+    systemTablesRestartRequired: null as Json | null,
     // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
     databaseStatus: {
       status: "ok",
@@ -1208,7 +1210,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       throw new HttpError(409, "データを削除する未適用の migration があります。内容を確認して承認してください。");
     }
     state.systemTables = clone(SYSTEM_TABLES_READY) as Json;
-    return { ...(state.systemTables as Json), operation: body.recreate ? "recreated" : "migrated", dropped_object_count: 1, created_object_count: 3 };
+    return {
+      ...(state.systemTables as Json),
+      operation: body.recreate ? "recreated" : "migrated",
+      dropped_object_count: 1,
+      created_object_count: 3,
+      restart_required: state.systemTablesRestartRequired,
+    };
   }
 
   // --- 組み込み Runtime（#754） ---

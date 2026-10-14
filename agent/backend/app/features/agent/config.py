@@ -117,19 +117,8 @@ def _product_connections() -> list[McpConnectionConfig]:
 
 class AgentRuntimeConfigStore:
     def __init__(self) -> None:
-        settings = get_settings()
         self._lock = Lock()
-        # RAG / NL2SQL は常駐し（削除できない）、AGENT_EXTERNAL_MCP_SERVERS_JSON の宣言を重ねる。
-        self._mcp_servers: dict[str, McpConnectionConfig] = {
-            config.server_id: config for config in _product_connections()
-        }
-        for declared in _mcp_servers_from_json(settings.agent_external_mcp_servers_json):
-            if declared.server_id in PRODUCT_MCP_CONNECTION_IDS:
-                continue
-            self._mcp_servers[declared.server_id] = declared
-        self._tool_policy = ToolPolicyRuntimeConfig(
-            default_mode=settings.agent_permission_default_mode
-        )
+        self._mcp_servers, self._tool_policy = _declared_state()
 
     def get_mcp(self, server_id: str) -> McpConnectionConfig:
         with self._lock:
@@ -204,32 +193,24 @@ class AgentRuntimeConfigStore:
         名前・認証と、配備が決めた URL は保存した値で上書きしない（#1325）。
         """
         with self._lock:
-            current = self._mcp_servers.get(stored.server_id)
-            if current is None:
-                self._mcp_servers[stored.server_id] = stored.model_copy(
-                    deep=True, update={"source": "runtime", "base_url_locked": False}
-                )
-                return
-            fields = {
-                "label": stored.label,
-                "base_url": stored.base_url,
-                "timeout_seconds": stored.timeout_seconds,
-                "session_id": stored.session_id,
-                "api_key": stored.api_key,
-                "oauth_token_url": stored.oauth_token_url,
-                "oauth_client_id": stored.oauth_client_id,
-                "oauth_client_secret": stored.oauth_client_secret,
-                "oauth_scope": stored.oauth_scope,
-            }
-            if current.source == "builtin":
-                del fields["label"]
-                if current.base_url_locked:
-                    del fields["base_url"]
-            else:
-                fields["auth_mode"] = stored.auth_mode
-                fields["service_audience"] = stored.service_audience
-                fields["trust_tool_annotations"] = stored.trust_tool_annotations
-            self._mcp_servers[stored.server_id] = current.model_copy(update=fields)
+            _overlay_mcp_server(self._mcp_servers, stored)
+
+    def replace_restored(
+        self,
+        mcp_servers: list[McpConnectionConfig],
+        tool_policy: ToolPolicyRuntimeConfig | None,
+    ) -> None:
+        """宣言（RAG / NL2SQL・`.env`）に、保存先の接続とツール権限を重ねた状態へ置き換える。
+
+        データを書き換える migration の後の読み直し（#1844）。保存先から消えた接続・変更は宣言の
+        値に戻る。途中の状態を見せないよう、作り終えてから入れ替える。
+        """
+        servers, policy = _declared_state()
+        for stored in mcp_servers:
+            _overlay_mcp_server(servers, stored)
+        with self._lock:
+            self._mcp_servers = servers
+            self._tool_policy = tool_policy.model_copy(deep=True) if tool_policy else policy
 
     def remove_mcp_server(self, server_id: str) -> None:
         """画面・API で追加した接続だけを削除する（RAG / NL2SQL・宣言の接続は不可）。"""
@@ -273,6 +254,54 @@ class AgentRuntimeConfigStore:
             if deny is not None:
                 self._tool_policy.deny = set(deny)
             return self._tool_policy.model_copy(deep=True)
+
+
+def _declared_state() -> tuple[dict[str, McpConnectionConfig], ToolPolicyRuntimeConfig]:
+    """設定から決まる接続とツール権限（保存先の定義を重ねる前の状態）。
+
+    RAG / NL2SQL は常駐し（削除できない）、AGENT_EXTERNAL_MCP_SERVERS_JSON の宣言を重ねる。
+    """
+    settings = get_settings()
+    servers: dict[str, McpConnectionConfig] = {
+        config.server_id: config for config in _product_connections()
+    }
+    for declared in _mcp_servers_from_json(settings.agent_external_mcp_servers_json):
+        if declared.server_id in PRODUCT_MCP_CONNECTION_IDS:
+            continue
+        servers[declared.server_id] = declared
+    return servers, ToolPolicyRuntimeConfig(default_mode=settings.agent_permission_default_mode)
+
+
+def _overlay_mcp_server(
+    servers: dict[str, McpConnectionConfig], stored: McpConnectionConfig
+) -> None:
+    """保存した接続を重ねる（呼び出し側が lock を持つ。規則は `restore_mcp_server`）。"""
+    current = servers.get(stored.server_id)
+    if current is None:
+        servers[stored.server_id] = stored.model_copy(
+            deep=True, update={"source": "runtime", "base_url_locked": False}
+        )
+        return
+    fields = {
+        "label": stored.label,
+        "base_url": stored.base_url,
+        "timeout_seconds": stored.timeout_seconds,
+        "session_id": stored.session_id,
+        "api_key": stored.api_key,
+        "oauth_token_url": stored.oauth_token_url,
+        "oauth_client_id": stored.oauth_client_id,
+        "oauth_client_secret": stored.oauth_client_secret,
+        "oauth_scope": stored.oauth_scope,
+    }
+    if current.source == "builtin":
+        del fields["label"]
+        if current.base_url_locked:
+            del fields["base_url"]
+    else:
+        fields["auth_mode"] = stored.auth_mode
+        fields["service_audience"] = stored.service_audience
+        fields["trust_tool_annotations"] = stored.trust_tool_annotations
+    servers[stored.server_id] = current.model_copy(update=fields)
 
 
 def _mcp_servers_from_json(raw: str | None) -> list[McpConnectionConfig]:
